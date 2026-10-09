@@ -10,6 +10,6 @@ set -eu
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml
 
-POSTGRES_PASSWORD=x APP_DB_PASSWORD=x SETUP_TOKEN=x EXCALIBASE_DOMAIN=example.test EXCALIBASE_TLS=internal \
-STUDIO_ALLOW_CIDRS=0.0.0.0/0 ADMIN_EMAIL=a@example.test GRAPHQL_PROJECT_ID=x ENGINE_SOCKET=/var/run/docker.sock ENGINE_SOCKET_GID=999 \
+POSTGRES_PASSWORD=x SETUP_TOKEN=x EXCALIBASE_DOMAIN=example.test EXCALIBASE_TLS=internal \
+STUDIO_ALLOW_CIDRS=0.0.0.0/0 ADMIN_EMAIL=a@example.test ENGINE_SOCKET=/var/run/docker.sock ENGINE_SOCKET_GID=999 \
   docker compose -f "$DIR/../compose.yaml" config | python3 "$DIR/edge_listener_check.py"

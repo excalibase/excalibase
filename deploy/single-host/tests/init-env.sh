@@ -15,10 +15,11 @@ sh "$DIR/../init.sh" --env-file "$WORK/.env" --domain example.com --admin-email 
 [ "$(stat -c %a "$WORK/.env")" = 600 ] || fail ".env is readable by others"
 
 value() { sed -n "s/^$1=//p" "$WORK/.env"; }
-for key in POSTGRES_PASSWORD APP_DB_PASSWORD SETUP_TOKEN; do
+for key in POSTGRES_PASSWORD SETUP_TOKEN; do
   echo "$(value $key)" | grep -Eq '^[0-9a-f]{64}$' || fail "$key is not 64 random hex characters"
 done
-[ "$(value POSTGRES_PASSWORD)" != "$(value APP_DB_PASSWORD)" ] || fail "two secrets are equal"
+[ "$(value POSTGRES_PASSWORD)" != "$(value SETUP_TOKEN)" ] || fail "two secrets are equal"
+! grep -q '^BACKUP_DEFAULT_' "$WORK/.env" || fail "init.sh wrote a backup target"
 [ "$(value EXCALIBASE_DOMAIN)" = example.com ] || fail "domain not written"
 [ "$(value ADMIN_EMAIL)" = me@example.com ] || fail "admin email not written"
 [ "$(value EXCALIBASE_TLS)" = me@example.com ] || fail "a public domain must get ACME certificates for the admin address"
@@ -36,6 +37,7 @@ fi
 sh "$DIR/../init.sh" --env-file "$WORK/local.env" --domain localhost --admin-email me@example.com \
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 >/dev/null
 grep -q '^EXCALIBASE_TLS=internal$' "$WORK/local.env" || fail "localhost must use the internal CA"
+
 
 # A bare address has no subdomains for Studio and the API.
 if sh "$DIR/../init.sh" --env-file "$WORK/ip.env" --domain 203.0.113.7 --admin-email me@example.com \

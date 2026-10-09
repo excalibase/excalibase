@@ -19,7 +19,6 @@ services:
     image: alpine:3.20
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./init.sh first}
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run ./init.sh first}
       SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     command: ["sh", "/preflight.sh"]
@@ -29,28 +28,21 @@ services:
     <<: *hardened
     restart: "no"
 
+  # The platform's own state (users, orgs, projects, vault). Projects get
+  # their own containers; nothing of theirs lives here.
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     container_name: excalibase-postgres
     environment:
-      POSTGRES_DB: hana
-      POSTGRES_USER: hana001
+      POSTGRES_DB: excalibase_platform
+      POSTGRES_USER: excalibase
       # Hex only (init.sh): also embedded in PLATFORM_DB_URL below.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./init.sh first}
-      # Password of the non-superuser app_user role graphql and rest connect as;
-      # read by initdb/01-roles.sh on the first start of a fresh volume.
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run ./init.sh first}
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./initdb:/docker-entrypoint-initdb.d:ro,z
-    command: >
-      postgres
-      -c wal_level=logical
-      -c max_replication_slots=10
-      -c max_wal_senders=10
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hana001 -d hana"]
+      test: ["CMD-SHELL", "pg_isready -U excalibase -d excalibase_platform"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -118,9 +110,8 @@ services:
       PORT: "24005"
       PUBLIC_PORT: "24006"
       TRUSTED_PROXY_CIDRS: ${AIO_EDGE_SUBNET:-10.203.250.0/28}
-      # Postgres platform store (control-plane metadata) — its own database,
-      # separate from the tenant data DB. Created by initdb/02-platform-db.sql.
-      PLATFORM_DB_URL: "postgres://hana001:${POSTGRES_PASSWORD:?run ./init.sh first}@postgres:5432/excalibase_platform?sslmode=disable"
+      # Platform store (control-plane metadata and vault).
+      PLATFORM_DB_URL: "postgres://excalibase:${POSTGRES_PASSWORD:?run ./init.sh first}@postgres:5432/excalibase_platform?sslmode=disable"
       # bbolt vault backend lives here (selfhosted, no external VAULT_URL).
       STORAGE_PATH: /var/lib/excalibase
       # Studio is provisioning's only browser origin.
@@ -154,8 +145,8 @@ services:
       EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-support@excalibase.io}
       EMAIL_FROM_NAME: Excalibase
       RESEND_API_KEY: ${RESEND_API_KEY:-}
-      # S3-compatible bucket for backups (R2, B2, S3, MinIO), from .env.
-      # Projects are refused without one.
+      # S3-compatible bucket for backups, from .env (R2, B2, S3, your own
+      # S3-compatible store). Projects are refused without one.
       BACKUP_DEFAULT_ACCESS_KEY_ID: ${BACKUP_DEFAULT_ACCESS_KEY_ID:-}
       BACKUP_DEFAULT_SECRET_ACCESS_KEY: ${BACKUP_DEFAULT_SECRET_ACCESS_KEY:-}
       BACKUP_DEFAULT_ENDPOINT: ${BACKUP_DEFAULT_ENDPOINT:-}
@@ -257,93 +248,41 @@ services:
       - tenants
     restart: unless-stopped
 
-  watcher:
-    image: excalibase/excalibase-watcher:${TAG:-latest}
-    container_name: excalibase-watcher
-    environment:
-      APP_CDC_POSTGRES_URL: jdbc:postgresql://postgres:5432/hana
-      APP_CDC_POSTGRES_USERNAME: hana001
-      APP_CDC_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./init.sh first}
-      APP_CDC_POSTGRES_ENABLED: "true"
-      APP_CDC_SLOT_NAME: cdc_slot
-      APP_CDC_PUBLICATION_NAME: cdc_publication
-      APP_CDC_CREATE_SLOT_IF_NOT_EXISTS: "true"
-      APP_CDC_CREATE_PUBLICATION_IF_NOT_EXISTS: "true"
-      APP_CDC_POSTGRES_CAPTURE_DDL: "true"
-      APP_NATS_URL: nats://nats:4222
-      APP_NATS_STREAM_NAME: CDC
-      APP_NATS_SUBJECT_PREFIX: cdc
-      APP_NATS_ENABLED: "true"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      nats:
-        condition: service_healthy
-    security_opt:
-      - no-new-privileges:true
-    networks:
-      - platform
-    restart: unless-stopped
-
-  rest:
-    image: excalibase/excalibase-rest:${TAG:-latest}
-    container_name: excalibase-rest
-    environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/hana
-      SPRING_DATASOURCE_USERNAME: app_user
-      SPRING_DATASOURCE_PASSWORD: ${APP_DB_PASSWORD:?run ./init.sh first}
-      APP_SECURITY_USER_CONTEXT_ENABLED: "true"
-      APP_SECURITY_USER_ID_EXTRACTOR_TYPE: header
-      APP_SECURITY_USER_ID_HEADER: X-User-Id
-      APP_NATS_ENABLED: "true"
-      APP_NATS_URL: nats://nats:4222
-      CORS_ORIGINS: "*"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      nats:
-        condition: service_healthy
-    security_opt:
-      - no-new-privileges:true
-    networks:
-      - platform
-    restart: unless-stopped
-
+  # Serves every project Studio creates at /{projectId}/graphql and
+  # /{projectId}/api/v1, with the project's database credentials and
+  # permissions read from provisioning per request. No default database.
   graphql:
     image: excalibase/excalibase-graphql:${TAG:-latest}
     container_name: excalibase-graphql
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/hana
-      SPRING_DATASOURCE_USERNAME: app_user
-      SPRING_DATASOURCE_PASSWORD: ${APP_DB_PASSWORD:?run ./init.sh first}
       SERVER_PORT: "10000"
       APP_DATABASE_TYPE: postgres
       APP_MAX_ROWS: "30"
-      # Single-database mode serves exactly one project: hana is served under
-      # this id and any other /{projectId}/ path is a 404.
-      APP_PROJECT_ID: ${GRAPHQL_PROJECT_ID:?run ./init.sh first}
-      # Tokens are verified against the bundled auth service's signing keys.
+      # No default datasource: health reflects the app, not a phantom database.
+      MANAGEMENT_HEALTH_DB_ENABLED: "false"
       APP_SECURITY_JWT_ENABLED: "true"
       APP_SECURITY_AUTH_JWKS_URL: http://auth:24000/.well-known/jwks.json
       APP_SECURITY_AUTH_ISSUER: excalibase
+      APP_SECURITY_MULTI_TENANT_PROVISIONING_URL: http://provisioning:24005/api
+      APP_SECURITY_RLS_POLICY_URL: http://provisioning:24005/api
+      # Capability token of the svc-graphql principal; the engine re-reads the file.
+      APP_SECURITY_MULTI_TENANT_PROVISIONING_PAT_FILE: /var/run/excalibase/graphql-token
+      APP_SECURITY_RLS_POLICY_PAT_FILE: /var/run/excalibase/graphql-token
       APP_NATS_ENABLED: "true"
       APP_NATS_URL: nats://nats:4222
       APP_NATS_STREAM_NAME: CDC
       APP_NATS_SUBJECT_PREFIX: cdc
+      APP_NATS_TENANT_IN_SUBJECT: "true"
       CORS_ORIGINS: "*"
-      # Capability token of the svc-graphql principal; the engine re-reads the file.
-      APP_SECURITY_MULTI_TENANT_PROVISIONING_PAT_FILE: /var/run/excalibase/graphql-token
-      APP_SECURITY_RLS_POLICY_PAT_FILE: /var/run/excalibase/graphql-token
       # Docker-mode tenant databases serve no TLS, so no client certificate either.
       TENANT_DB_SSLMODE: disable
+      SERVER_SHUTDOWN: graceful
     volumes:
       - excalibase_secrets:/var/run/excalibase:ro
     depends_on:
-      postgres:
-        condition: service_healthy
       nats:
         condition: service_healthy
-      watcher:
+      provisioning:
         condition: service_started
       bootstrap:
         condition: service_completed_successfully

@@ -75,6 +75,28 @@ for key, volume in cfg.get("volumes", {}).items():
     if not (volume or {}).get("name", "").startswith("excalibase-platform-"):
         failures.append(f"volume {key} is not named excalibase-platform-*")
 
+# EXC-573: graphql serves the projects Studio creates, not a bundled database.
+gql = services["graphql"]["environment"]
+for key in ("SPRING_DATASOURCE_URL", "APP_PROJECT_ID"):
+    if key in gql:
+        failures.append(f"graphql still sets {key}; it must run multi-tenant")
+for key in ("APP_SECURITY_MULTI_TENANT_PROVISIONING_URL", "APP_SECURITY_RLS_POLICY_URL"):
+    if gql.get(key) != "http://provisioning:24005/api":
+        failures.append(f"graphql {key}={gql.get(key)!r}, want provisioning")
+if gql.get("APP_NATS_TENANT_IN_SUBJECT") != "true":
+    failures.append("graphql does not scope change events by tenant")
+for gone in ("rest", "watcher"):
+    if gone in services:
+        failures.append(f"{gone} is still in the stack")
+if services["postgres"]["environment"].get("POSTGRES_DB") != "excalibase_platform":
+    failures.append("postgres holds more than the platform's own database")
+if any("initdb" in (v.get("source") or "") for v in services["postgres"].get("volumes") or []):
+    failures.append("postgres still runs init scripts for a data database")
+
+# The opt-in local backup store is internal and unpublished.
+if any(k.startswith("R2_") for k in services["provisioning"]["environment"]):
+    failures.append("provisioning still reads R2_*; backups use BACKUP_DEFAULT_*")
+
 if failures:
     sys.exit("\n".join(failures))
 print("single-host hardening ok")

@@ -18,8 +18,8 @@ one machine.
 | `studio` | no | edge | Studio SPA; proxies `/api` to provisioning |
 | `provisioning` | no | platform, engine, tenants, edge | control plane |
 | `engine-proxy` | no | engine | holds the Docker socket; forwards only what provisioning needs |
-| `auth`, `graphql` | no | platform, dataplane, tenants | data plane |
-| `postgres`, `nats` | no | platform | platform state, change events |
+| `auth`, `graphql` | no | platform, dataplane, tenants | data plane: every project at `/{projectId}/graphql`, `/{projectId}/api/v1`, `/auth/{org}/{projectId}` |
+| `postgres`, `nats` | no | platform | the platform's own state, change events |
 | `bootstrap`, `preflight` | no | platform / none | one-shot: first admin + service tokens; secret check |
 
 Only the edge is published. `platform`, `engine` and `dataplane` are internal
@@ -55,8 +55,8 @@ cannot reach the host through the engine.
   `localhost`: browsers resolve `*.localhost` to the machine, and the edge uses
   its own CA (your browser will warn until you trust it).
 - An S3-compatible bucket for backups (Cloudflare R2, Backblaze B2, AWS S3, a
-  MinIO you run). Every plan backs projects up; project creation is refused
-  without a backup target.
+  S3-compatible store you run), off this machine. Every plan backs projects up;
+  project creation is refused without a backup target.
 - 4 CPU / 8 GiB RAM is comfortable for the platform plus a few projects.
 
 ## Install
@@ -87,9 +87,10 @@ BACKUP_DEFAULT_REGION=auto
 EOF
 ```
 
-Optional: email for invitations and password resets
-(`EMAIL_PROVIDER=resend`, `RESEND_API_KEY=...`, `EMAIL_FROM_ADDRESS=...`).
-Without it email is off: invitations and resets cannot be sent.
+Optional: email for invitations and password resets — `EMAIL_PROVIDER=resend`
+with `RESEND_API_KEY`, or `EMAIL_PROVIDER=smtp` with your server's settings, and
+`EMAIL_FROM_ADDRESS`. Without it email is off: invitations and resets cannot be
+sent.
 
 Start it:
 
@@ -99,6 +100,11 @@ docker compose logs bootstrap      # the first admin's generated password, print
 ```
 
 Open `https://studio.<domain>` and sign in as `admin` with that password.
+Create a project; its API is `https://api.<domain>/<projectId>/graphql` and
+`https://api.<domain>/<projectId>/api/v1/<table>`. Each project's database is a
+container named `excalibase-<projectId>-postgres` with the tier's memory and
+CPU; its port is published on `127.0.0.1` only (reach it from elsewhere with an
+SSH tunnel).
 
 ### Settings
 
@@ -123,12 +129,13 @@ Open `https://studio.<domain>` and sign in as `admin` with that password.
 | | |
 |---|---|
 | Studio, sign-in, invitations (with email), organisations | yes |
-| Postgres projects (create, pause, resume, delete, backups to your bucket) | yes |
-| GraphQL / REST for Studio-created projects | not yet — graphql still serves only the bundled database |
+| Postgres projects (create, pause, resume, delete, backups to your bucket) | yes, at the tier's memory and CPU |
+| GraphQL / REST / end-user auth for every project, through `api.<domain>` | yes |
+| SDK keys (publishable, secret) | yes |
 | Containers (app hosting) | not yet |
 | DocumentDB projects | not yet |
 | Edge functions, realtime | no (Kubernetes only) |
-| High availability (3/5 instances) | no — one machine has one disk and one kernel; use Kubernetes across nodes |
+| High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
 
 ## Operations
 
