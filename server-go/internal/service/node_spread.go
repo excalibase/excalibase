@@ -42,8 +42,8 @@ func (s *ProvisioningService) RequireNodesForTier(ctx context.Context, tierType 
 // RequireNodeCount refuses a tier with more instances than the platform has
 // nodes that can take one. It asks nothing about current room, so it suits a
 // plan change as well as a new cluster. A single instance has nothing to
-// spread; without a Kubernetes client (docker mode) there are no CNPG
-// instances to place.
+// spread; without a Kubernetes client (a single Docker/Podman host) there is
+// one node (ADR 0038).
 func (s *ProvisioningService) RequireNodeCount(ctx context.Context, tierType domain.TierType, instances int) error {
 	_, err := s.usableNodes(ctx, tierType, instances)
 	return err
@@ -81,8 +81,11 @@ func (s *ProvisioningService) RequireNodeSpread(ctx context.Context, tierType do
 // instances to spread, refusing when there are fewer than instances. It
 // returns nothing, and no error, when there is nothing to spread.
 func (s *ProvisioningService) usableNodes(ctx context.Context, tierType domain.TierType, instances int) ([]k8s.NodeCapacity, error) {
-	if instances <= 1 || s.k8sClient == nil {
+	if instances <= 1 {
 		return nil, nil
+	}
+	if s.k8sClient == nil {
+		return nil, &NotEnoughNodesError{Tier: tierType, Instances: instances, Nodes: 1}
 	}
 	capacity, err := s.k8sClient.GetClusterCapacity(ctx)
 	if err != nil {

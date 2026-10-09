@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -48,5 +49,21 @@ func TestResourcesCapMemoryAndSwapTogether(t *testing.T) {
 	res := ContainerLimits{MemoryBytes: 512 << 20, NanoCPUs: 500_000_000}.resources()
 	if res.Memory != 512<<20 || res.MemorySwap != 512<<20 || res.NanoCPUs != 500_000_000 {
 		t.Fatalf("resources = memory %d swap %d cpus %d", res.Memory, res.MemorySwap, res.NanoCPUs)
+	}
+}
+
+// ADR 0038: copies on one machine share its disk and kernel, so a tier with
+// more than one copy is refused rather than quietly run as one.
+func TestLimitsForTierRefusesMoreThanOneCopy(t *testing.T) {
+	for _, copies := range []int{2, 3, 5} {
+		_, err := LimitsForTier(config.TierConfig{Memory: "4Gi", CPU: "2", Instances: copies})
+		if err == nil || !strings.Contains(err.Error(), "machines") {
+			t.Errorf("%d copies: err = %v, want refused naming machines", copies, err)
+		}
+	}
+	for _, copies := range []int{0, 1} {
+		if _, err := LimitsForTier(config.TierConfig{Memory: "4Gi", CPU: "2", Instances: copies}); err != nil {
+			t.Errorf("%d copies refused: %v", copies, err)
+		}
 	}
 }
