@@ -212,12 +212,21 @@ services:
       # docker-mode tenant Postgres has no TLS (unlike CNPG in k8s); the schema
       # editor and migration runner connect with sslmode=disable.
       SCHEMA_DB_SSLMODE: disable
-      # Transactional email: set EMAIL_PROVIDER=resend and RESEND_API_KEY in .env
-      # to send invitations and password resets. noop sends nothing.
+      # Transactional email (invitations, verification, password resets):
+      # EMAIL_PROVIDER=smtp with SMTP_* (your own relay, EXC-580), ses with
+      # SES_*, or resend with RESEND_API_KEY, in .env. noop sends nothing.
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-noop}
       EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-support@excalibase.io}
-      EMAIL_FROM_NAME: Excalibase
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-Excalibase}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_TLS: ${SMTP_TLS:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SES_ACCESS_KEY_ID: ${SES_ACCESS_KEY_ID:-}
+      SES_SECRET_ACCESS_KEY: ${SES_SECRET_ACCESS_KEY:-}
+      SES_REGION: ${SES_REGION:-us-east-1}
       # Backups go to the bundled store unless .env names an outside
       # S3-compatible bucket (R2, B2, S3) with all of BACKUP_DEFAULT_*.
       BACKUP_DEFAULT_ACCESS_KEY_ID: ${BACKUP_DEFAULT_ACCESS_KEY_ID:-excalibase-backups}
