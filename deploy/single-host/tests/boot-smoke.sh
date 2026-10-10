@@ -20,6 +20,9 @@ P="-p excalibase-smoke --env-file $W/.env -f $BUNDLE/compose.yaml -f $W/override
 pass=0; fail=0
 ok() { echo "PASS $*"; pass=$((pass+1)); }
 ko() { echo "FAIL $*"; fail=$((fail+1)); }
+# Logs are read whole before matching: with pipefail, `logs | grep -q` fails
+# when grep stops early and the engine's log writer gets SIGPIPE (Podman 4.9).
+logs_have() { local out; out=$($DOCKER logs "$1" 2>&1); grep -qF -- "$2" <<< "$out"; }
 c() { curl -sk --max-time 30 --resolve studio.localhost:$PORT:127.0.0.1 --resolve api.localhost:$PORT:127.0.0.1 --resolve files.localhost:$PORT:127.0.0.1 "$@"; }
 status() { c https://studio.localhost:$PORT/api/vault/status | python3 -c 'import json,sys;d=json.load(sys.stdin);print("uninitialized" if not d["initialized"] else ("sealed" if d["sealed"] else "open"))' 2>/dev/null; }
 
@@ -38,7 +41,7 @@ echo "== weak secret is refused"
 sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=password123/' "$W/.env"
 timeout 300 $COMPOSE $P up preflight >/dev/null 2>&1
 pcode=$($DOCKER inspect excalibase-preflight --format '{{.State.ExitCode}}' 2>/dev/null)
-if [ -n "$pcode" ] && [ "$pcode" != 0 ] && $DOCKER logs excalibase-preflight 2>&1 | grep -q POSTGRES_PASSWORD; then ok "preflight refused password123"; else ko "preflight did not refuse password123 (exit '$pcode')"; fi
+if [ -n "$pcode" ] && [ "$pcode" != 0 ] && logs_have excalibase-preflight POSTGRES_PASSWORD; then ok "preflight refused password123"; else ko "preflight did not refuse password123 (exit '$pcode')"; fi
 $COMPOSE $P down -v >/dev/null 2>&1; rm -f "$W/.env"
 
 echo "== install"
@@ -47,7 +50,7 @@ sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUB
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"
 timeout 900 $COMPOSE $P up -d > "$W/up.log" 2>&1; echo "up exit $?"; grep -iE "^Error|error:" "$W/up.log" | sort -u | head -5
 for i in $(seq 90); do [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.Status}}' 2>/dev/null)" = exited ] && break; sleep 2; done
-if [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.ExitCode}}' 2>/dev/null)" = 0 ] && $DOCKER logs excalibase-objectstore-setup 2>&1 | grep -q 'OBJECT STORE READY'; then
+if [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.ExitCode}}' 2>/dev/null)" = 0 ] && logs_have excalibase-objectstore-setup 'OBJECT STORE READY'; then
   ok "bundled object store set up"
 else
   ko "objectstore-setup: $($DOCKER logs excalibase-objectstore-setup 2>&1 | tail -3)"
@@ -70,7 +73,8 @@ T=$(c -X POST https://studio.localhost:$PORT/api/auth/login -H 'Content-Type: ap
 if [ -n "${MANUAL_UNSEAL:-}" ]; then
   echo "== manual unseal: the admin initializes the vault"
   [ "$(status)" = uninitialized ] && ok "manual install waits uninitialized" || ko "vault is $(status) on a manual install"
-  $DOCKER logs excalibase-bootstrap 2>&1 | grep -q 'the vault is uninitialized' && ok "bootstrap says the vault waits for the admin" || ko "bootstrap did not report the waiting vault"
+  blog=$($DOCKER logs excalibase-bootstrap 2>&1)
+  case "$blog" in *"the vault is uninitialized"*) ok "bootstrap says the vault waits for the admin" ;; *) ko "bootstrap did not report the waiting vault: $(echo "$blog" | tail -8)" ;; esac
   UNSEAL_KEY=$(c -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' https://studio.localhost:$PORT/api/vault/init -d '{"shares":1,"threshold":1}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["shares"][0])' 2>/dev/null)
   [ -n "$UNSEAL_KEY" ] && [ "$(status)" = open ] && ok "vault initialized by the admin" || ko "vault init: $(status)"
 fi
@@ -148,7 +152,7 @@ if [ -n "${MANUAL_UNSEAL:-}" ]; then
   AT2=$(c -X POST -H 'Content-Type: application/json' https://api.localhost:$PORT/auth/$SLUG/$PID/token -d "{\"grant_type\":\"api_key\",\"api_key\":\"$KEY\"}" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("accessToken",""))' 2>/dev/null)
   [ -n "$AT2" ] && ok "a new key exchange works after the unseal" || ko "key exchange after the unseal failed"
   leaked=0
-  for name in excalibase-provisioning excalibase-auth excalibase-bootstrap; do $DOCKER logs "$name" 2>&1 | grep -qF "$UNSEAL_KEY" && leaked=1; done
+  for name in excalibase-provisioning excalibase-auth excalibase-bootstrap; do logs_have "$name" "$UNSEAL_KEY" && leaked=1; done
   $DOCKER exec excalibase-provisioning grep -rqF "$UNSEAL_KEY" /var/lib/excalibase 2>/dev/null && leaked=1
   [ "$leaked" = 0 ] && ok "the unseal key is in no log and not on provisioning's volume" || ko "the unseal key leaked"
 fi

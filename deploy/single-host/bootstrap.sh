@@ -61,9 +61,18 @@ signing_key_present() {
     -H "Authorization: Bearer $1" 2>/dev/null | jq -r '.key // empty' | head -c 10
 }
 
-# vault_state: open, sealed or uninitialized.
+# vault_state: open, sealed or uninitialized. A provisioning that does not
+# answer yet is retried; one that never answers stops bootstrap rather than
+# being taken for a waiting vault.
 vault_state() {
-  curl -fsS "$PROV_URL/api/vault/status" | jq -r 'if (.initialized|not) then "uninitialized" elif .sealed then "sealed" else "open" end'
+  for _ in $(seq 1 60); do
+    state=$(curl -fsS "$PROV_URL/api/vault/status" 2>/dev/null |
+      jq -r 'if (.initialized|not) then "uninitialized" elif .sealed then "sealed" else "open" end' 2>/dev/null) || state=
+    case "$state" in open | sealed | uninitialized) echo "$state"; return 0 ;; esac
+    sleep 2
+  done
+  echo "ERROR: provisioning did not report the vault state at $PROV_URL/api/vault/status" >&2
+  return 1
 }
 waiting_for_admin() {
   echo "  the vault is $1: sign in to Studio (/setup) as the platform admin to"
@@ -74,7 +83,7 @@ waiting_for_admin() {
 echo "[2/5] checking the stored service tokens ..."
 if token_valid "$AUTH_TOKEN_FILE" && token_valid "$GRAPHQL_TOKEN_FILE"; then
   echo "  both service tokens are valid"
-  VAULT=$(vault_state)
+  VAULT=$(vault_state) || exit 1
   if [ "$VAULT" != open ]; then
     waiting_for_admin "$VAULT"
     echo "BOOTSTRAP COMPLETE"
@@ -153,7 +162,7 @@ else
 fi
 
 echo "[5/5] signing key ..."
-VAULT=$(vault_state)
+VAULT=$(vault_state) || exit 1
 if [ "$VAULT" != open ]; then
   waiting_for_admin "$VAULT"
 elif [ -z "$(signing_key_present "$SESSION")" ]; then
