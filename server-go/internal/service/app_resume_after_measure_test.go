@@ -31,7 +31,7 @@ func TestResumeApp_WaitsForADiskMeasurementInsteadOfRefusing(t *testing.T) {
 	f.app.Status = apphost.StatusStopped
 	setStoredApp(f.svc, f.app)
 	probe := &slowDiskProbe{MockClient: f.kube, started: make(chan struct{}), finish: make(chan struct{})}
-	f.svc.kube = probe
+	f.svc.runtime = probe
 
 	measured := make(chan error, 1)
 	go func() {

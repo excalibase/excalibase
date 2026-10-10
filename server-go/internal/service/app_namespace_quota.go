@@ -36,7 +36,7 @@ func (s *AppDeployService) syncNamespaceQuota(ctx context.Context, namespace, pr
 		Apps:           max(plan.MaxApps, len(held)),
 		AppMaxReplicas: appTier.MaxReplicas,
 	})
-	if err := s.kube.EnsureNamespaceQuota(ctx, namespace, quota); err != nil {
+	if err := s.runtime.EnsureNamespaceQuota(ctx, namespace, quota); err != nil {
 		return fmt.Errorf("size the project's namespace quota: %w", err)
 	}
 	return nil

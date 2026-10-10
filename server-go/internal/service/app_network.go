@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
-	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -37,24 +36,24 @@ type AppNetworkView struct {
 type AppNetworkService struct {
 	settings storage.ProjectAppNetworkStore
 	projects AppNetworkProjectFinder
-	kube     k8s.KubeClient
+	runtime  AppRuntime
 	claimer  ProjectOperationClaimer
 }
 
 func NewAppNetworkService(settings storage.ProjectAppNetworkStore, projects AppNetworkProjectFinder,
-	kube k8s.KubeClient, claimer ProjectOperationClaimer) *AppNetworkService {
-	return &AppNetworkService{settings: settings, projects: projects, kube: kube, claimer: claimerOrInProcess(claimer)}
+	runtime AppRuntime, claimer ProjectOperationClaimer) *AppNetworkService {
+	return &AppNetworkService{settings: settings, projects: projects, runtime: runtime, claimer: claimerOrInProcess(claimer)}
 }
 
 // AppNetworkServiceFor builds the service only when the platform store can
 // record the setting and a cluster client exists; otherwise there is none.
 func AppNetworkServiceFor(platform any, projects AppNetworkProjectFinder,
-	kube k8s.KubeClient, claimer ProjectOperationClaimer) (*AppNetworkService, bool) {
+	runtime AppRuntime, claimer ProjectOperationClaimer) (*AppNetworkService, bool) {
 	settings, ok := platform.(storage.ProjectAppNetworkStore)
-	if !ok || kube == nil || projects == nil {
+	if !ok || runtime == nil || projects == nil {
 		return nil, false
 	}
-	return NewAppNetworkService(settings, projects, kube, claimer), true
+	return NewAppNetworkService(settings, projects, runtime, claimer), true
 }
 
 func (s *AppNetworkService) Describe(ctx context.Context, projectID string) (AppNetworkView, error) {
@@ -97,11 +96,11 @@ func (s *AppNetworkService) open(ctx context.Context, inst *domain.DatabaseInsta
 	if inst.Status != string(domain.StatusActive) {
 		return fmt.Errorf("project %s is %s; %w", inst.ProjectID, inst.Status, ErrProjectNotActive)
 	}
-	if err := s.kube.SetAppPrivateNetwork(ctx, inst.Namespace, true); err != nil {
+	if err := s.runtime.SetAppPrivateNetwork(ctx, inst.Namespace, true); err != nil {
 		return fmt.Errorf("open the app private network: %w", err)
 	}
 	if err := s.settings.SetAppPrivateNetwork(ctx, inst.ProjectID, true); err != nil {
-		if closeErr := s.kube.SetAppPrivateNetwork(ctx, inst.Namespace, false); closeErr != nil {
+		if closeErr := s.runtime.SetAppPrivateNetwork(ctx, inst.Namespace, false); closeErr != nil {
 			return errors.Join(err, fmt.Errorf("close the network the setting could not record: %w", closeErr))
 		}
 		return err
@@ -111,7 +110,7 @@ func (s *AppNetworkService) open(ctx context.Context, inst *domain.DatabaseInsta
 
 // close is allowed in any project state: it only ever narrows what apps accept.
 func (s *AppNetworkService) close(ctx context.Context, inst *domain.DatabaseInstance) error {
-	if err := s.kube.SetAppPrivateNetwork(ctx, inst.Namespace, false); err != nil {
+	if err := s.runtime.SetAppPrivateNetwork(ctx, inst.Namespace, false); err != nil {
 		return fmt.Errorf("close the app private network: %w", err)
 	}
 	return s.settings.SetAppPrivateNetwork(ctx, inst.ProjectID, false)
@@ -122,7 +121,7 @@ func (s *AppNetworkService) view(ctx context.Context, inst *domain.DatabaseInsta
 	if err != nil {
 		return AppNetworkView{}, err
 	}
-	applied, err := s.kube.AppPrivateNetworkOpen(ctx, inst.Namespace)
+	applied, err := s.runtime.AppPrivateNetworkOpen(ctx, inst.Namespace)
 	if err != nil {
 		return AppNetworkView{}, err
 	}

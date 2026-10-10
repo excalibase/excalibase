@@ -13,11 +13,11 @@ import (
 type AppLogService struct {
 	apps      apphost.Store
 	instances storage.InstanceStore
-	kube      k8s.KubeClient
+	runtime   AppRuntime
 }
 
-func NewAppLogService(apps apphost.Store, instances storage.InstanceStore, kube k8s.KubeClient) *AppLogService {
-	return &AppLogService{apps: apps, instances: instances, kube: kube}
+func NewAppLogService(apps apphost.Store, instances storage.InstanceStore, runtime AppRuntime) *AppLogService {
+	return &AppLogService{apps: apps, instances: instances, runtime: runtime}
 }
 
 // Logs answers ErrAppNotFound for an app the project does not hold, and no
@@ -37,5 +37,5 @@ func (s *AppLogService) Logs(ctx context.Context, projectID, appID string, opts 
 	if inst == nil || inst.Namespace == "" {
 		return k8s.AppLogPage{Lines: []k8s.AppLogLine{}}, nil
 	}
-	return s.kube.AppLogs(ctx, inst.Namespace, app.ID, opts)
+	return s.runtime.AppLogs(ctx, inst.Namespace, app.ID, opts)
 }

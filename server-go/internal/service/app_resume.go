@@ -29,7 +29,7 @@ type resumeSize struct {
 // admitResume holds a resume to the plan and the room a deploy is held to.
 // The pods come back at the organisation's current plan size, so that is the size admitted.
 func (s *AppDeployService) admitResume(ctx context.Context, namespace string, app *apphost.App) (resumeSize, error) {
-	replicas, err := s.kube.PausedAppReplicas(ctx, namespace, app.ID, app.Name)
+	replicas, err := s.runtime.PausedAppReplicas(ctx, namespace, app.ID, app.Name)
 	if err != nil {
 		return resumeSize{}, err
 	}

@@ -38,7 +38,7 @@ type DomainView struct {
 type AppDomainService struct {
 	apps      apphost.Store
 	domains   apphost.DomainStore
-	kube      k8s.KubeClient
+	runtime   AppRuntime
 	instances storage.InstanceStore
 	dns       CNAMEResolver
 	leases    *AppDeployService
@@ -47,9 +47,9 @@ type AppDomainService struct {
 	now       func() time.Time
 }
 
-func NewAppDomainService(apps apphost.Store, domains apphost.DomainStore, kube k8s.KubeClient, instances storage.InstanceStore,
+func NewAppDomainService(apps apphost.Store, domains apphost.DomainStore, runtime AppRuntime, instances storage.InstanceStore,
 	dns CNAMEResolver, leases *AppDeployService, route apphost.Route, opts k8s.AppDomainOptions) *AppDomainService {
-	return &AppDomainService{apps: apps, domains: domains, kube: kube, instances: instances, dns: dns,
+	return &AppDomainService{apps: apps, domains: domains, runtime: runtime, instances: instances, dns: dns,
 		leases: leases, route: route, opts: opts, now: func() time.Time { return time.Now().UTC() }}
 }
 
@@ -210,7 +210,7 @@ func (s *AppDomainService) SyncApp(ctx context.Context, namespace string, app *a
 			hosts = append(hosts, domain.Hostname)
 		}
 	}
-	return s.kube.SyncAppDomains(ctx, namespace, app, hosts, s.opts)
+	return s.runtime.SyncAppDomains(ctx, namespace, app, hosts, s.opts)
 }
 
 // HostCertificateNone: the app's hostname has no certificate yet (never deployed), or none at all (internal).
@@ -244,7 +244,7 @@ func (s *AppDomainService) HostCertificate(ctx context.Context, projectID, appID
 	if inst == nil || inst.Namespace == "" {
 		return view, nil
 	}
-	state, err := s.kube.AppHostCertificate(ctx, inst.Namespace, app.Name)
+	state, err := s.runtime.AppHostCertificate(ctx, inst.Namespace, app.Name)
 	switch {
 	case errors.Is(err, k8s.ErrNoCertificate):
 		return view, nil
@@ -265,7 +265,7 @@ func (s *AppDomainService) HostCertificate(ctx context.Context, projectID, appID
 // CNAME still names the app; after DomainDetachAfter failures in a row the
 // route is taken away.
 func (s *AppDomainService) Sweep(ctx context.Context) {
-	if err := s.kube.AttachIssuedAppHostCertificates(ctx); err != nil {
+	if err := s.runtime.AttachIssuedAppHostCertificates(ctx); err != nil {
 		log.Printf("app hostname certificate sweep: %v", err)
 	}
 	domains, err := s.domains.ListRoutable()
@@ -329,7 +329,7 @@ func (s *AppDomainService) recheck(ctx context.Context, namespace string, app *a
 }
 
 func (s *AppDomainService) followCertificate(ctx context.Context, namespace string, app *apphost.App, domain *apphost.Domain) error {
-	state, err := s.kube.AppDomainCertificate(ctx, namespace, app.Name, domain.Hostname)
+	state, err := s.runtime.AppDomainCertificate(ctx, namespace, app.Name, domain.Hostname)
 	if err != nil {
 		return err
 	}
