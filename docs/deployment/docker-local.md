@@ -82,9 +82,13 @@ was created with those secrets.
 `--manual-unseal` makes the vault start sealed after every restart and keeps
 its key off the host; see [Manual vault unseal](#manual-vault-unseal).
 
-Optional: email for invitations and password resets — `EMAIL_PROVIDER=resend`
-with `RESEND_API_KEY`, or `EMAIL_PROVIDER=smtp` with your server's settings, and
-`EMAIL_FROM_ADDRESS`. Without it email is off: invitations and resets cannot be
+Optional: email for invitations and password resets — `EMAIL_PROVIDER=smtp`
+with `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS` (`starttls`, `tls` or `none`),
+`SMTP_USERNAME` and `SMTP_PASSWORD` (see [self-host.md](./self-host.md#email-through-your-own-smtp-relay));
+`EMAIL_PROVIDER=ses` with `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY` and
+`SES_REGION`; or `EMAIL_PROVIDER=resend` with `RESEND_API_KEY`. Set
+`EMAIL_FROM_ADDRESS` (and optionally `EMAIL_FROM_NAME`) to an address your
+provider may send as. Without it email is off: invitations and resets cannot be
 sent.
 
 Start it:
