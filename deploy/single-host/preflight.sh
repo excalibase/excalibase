@@ -36,8 +36,13 @@ check_secret() {
 
 check_secret POSTGRES_PASSWORD "${POSTGRES_PASSWORD:-}"
 check_secret SETUP_TOKEN "${SETUP_TOKEN:-}"
-if [ "${POSTGRES_PASSWORD:-}" = "${SETUP_TOKEN:-}" ]; then
-  complain "POSTGRES_PASSWORD and SETUP_TOKEN must differ"
+check_secret OBJECTSTORE_ROOT_SECRET "${OBJECTSTORE_ROOT_SECRET:-}"
+check_secret OBJECTSTORE_BACKUPS_SECRET "${OBJECTSTORE_BACKUPS_SECRET:-}"
+check_secret OBJECTSTORE_FILES_SECRET "${OBJECTSTORE_FILES_SECRET:-}"
+distinct=$(printf '%s\n' "${POSTGRES_PASSWORD:-}" "${SETUP_TOKEN:-}" "${OBJECTSTORE_ROOT_SECRET:-}" \
+  "${OBJECTSTORE_BACKUPS_SECRET:-}" "${OBJECTSTORE_FILES_SECRET:-}" | sort -u | wc -l)
+if [ "$distinct" -ne 5 ]; then
+  complain "every secret in .env must differ from the others"
 fi
 
 # Optional: unset means bootstrap generates one and prints it once.

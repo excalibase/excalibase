@@ -54,3 +54,16 @@ api.{$EXCALIBASE_DOMAIN} {
 		respond 404
 	}
 }
+
+# Customer files: signed links into the bundled store's file bucket only.
+# The signature covers this host, so it is passed on unchanged.
+files.{$EXCALIBASE_DOMAIN} {
+	import tls_mode
+	import security_headers
+	handle /excalibase-storage/* {
+		reverse_proxy objectstore:9000
+	}
+	handle {
+		respond 404
+	}
+}

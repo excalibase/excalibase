@@ -25,6 +25,11 @@ type R2Config struct {
 	Region          string // R2 ignores; SDK requires non-empty. Default "auto".
 	Bucket          string // single platform bucket; per-project namespace via key prefix
 	PublicURL       string // optional CDN/custom domain in front of public objects
+	// InternalEndpoint, when set, takes the platform's own calls (head, list,
+	// copy, delete) while links stay signed for Endpoint, the address browsers
+	// use. A single host's store is reachable from provisioning only by its
+	// internal name (EXC-578).
+	InternalEndpoint string
 }
 
 // R2Client wraps the S3 SDK against an R2 endpoint. The presign client
@@ -59,14 +64,21 @@ func NewR2Client(cfg R2Config) (*R2Client, error) {
 			cfg.AccessKeyID, cfg.SecretAccessKey, "",
 		),
 	}
-	s3Client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(cfg.Endpoint)
-		o.UsePathStyle = true
-	})
+	clientFor := func(endpoint string) *s3.Client {
+		return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+			o.BaseEndpoint = aws.String(endpoint)
+			o.UsePathStyle = true
+		})
+	}
+	signing := clientFor(cfg.Endpoint)
+	calls := signing
+	if cfg.InternalEndpoint != "" {
+		calls = clientFor(cfg.InternalEndpoint)
+	}
 	return &R2Client{
 		cfg:     cfg,
-		s3:      s3Client,
-		presign: s3.NewPresignClient(s3Client),
+		s3:      calls,
+		presign: s3.NewPresignClient(signing),
 	}, nil
 }
 

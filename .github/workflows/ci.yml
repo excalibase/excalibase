@@ -73,16 +73,21 @@ jobs:
     needs: changes
     if: needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Build provisioning and Studio from this checkout
         run: |
           docker build -q -t docker.io/excalibase/provisioning:ci server-go
           docker build -q -t docker.io/excalibase/studio:ci frontend
-      - name: Fresh install, project, GraphQL/REST, backup
+      - name: Fresh install, project, GraphQL/REST, backup, files
         env:
           PLATFORM_TAG: ci
+        run: bash deploy/single-host/tests/boot-smoke.sh docker
+      - name: Fresh install with manual vault unseal (init, restart, CLI unseal)
+        env:
+          PLATFORM_TAG: ci
+          MANUAL_UNSEAL: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
 
   go-lint:

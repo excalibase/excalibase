@@ -22,6 +22,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./init.sh first}
       SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      OBJECTSTORE_ROOT_SECRET: ${OBJECTSTORE_ROOT_SECRET:?run ./init.sh first}
+      OBJECTSTORE_BACKUPS_SECRET: ${OBJECTSTORE_BACKUPS_SECRET:?run ./init.sh first}
+      OBJECTSTORE_FILES_SECRET: ${OBJECTSTORE_FILES_SECRET:?run ./init.sh first}
     command: ["sh", "/preflight.sh"]
     volumes:
       - ./preflight.sh:/preflight.sh:ro,z
@@ -72,6 +75,60 @@ services:
     networks:
       - platform
     restart: unless-stopped
+
+  # The bundled S3-compatible store (RustFS, Apache-2.0; EXC-578): project
+  # backups and customer files without a cloud bucket. Never published; the
+  # edge reaches only the file bucket, over the internal dataplane network.
+  # Tenant containers cannot reach it. Its data is on this host's disk: copy
+  # the volume off the host, or point backups at an outside bucket in .env.
+  objectstore:
+    image: docker.io/rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
+    container_name: excalibase-objectstore
+    environment:
+      RUSTFS_ACCESS_KEY: excalibase-root
+      RUSTFS_SECRET_KEY: ${OBJECTSTORE_ROOT_SECRET:?run ./init.sh first}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "false"
+    volumes:
+      - objectstore_data:/data
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+    <<: *hardened
+    networks:
+      - platform
+      - dataplane
+    restart: unless-stopped
+
+  # One-shot: buckets, one user per bucket whose policy covers that bucket
+  # alone, and the file bucket's CORS. Idempotent; it waits for the store.
+  objectstore-setup:
+    image: docker.io/rustfs/rc:v0.1.36@sha256:ab024bfebee49a750ce886b4c70963ccd9ddaa03f491704a90710641d7a26699
+    container_name: excalibase-objectstore-setup
+    entrypoint: ["sh", "/objectstore-setup.sh"]
+    environment:
+      HOME: /tmp
+      ENDPOINT: http://objectstore:9000
+      ROOT_ID: excalibase-root
+      ROOT_SECRET: ${OBJECTSTORE_ROOT_SECRET:?run ./init.sh first}
+      BACKUPS_ID: excalibase-backups
+      BACKUPS_SECRET: ${OBJECTSTORE_BACKUPS_SECRET:?run ./init.sh first}
+      BACKUPS_BUCKET: excalibase-backups
+      FILES_ID: excalibase-files
+      FILES_SECRET: ${OBJECTSTORE_FILES_SECRET:?run ./init.sh first}
+      FILES_BUCKET: excalibase-storage
+      # Signed links are the authorization; CORS only lets browsers use them.
+      CORS_ORIGINS: ${FILES_CORS_ORIGINS:-*}
+    volumes:
+      - ./objectstore-setup.sh:/objectstore-setup.sh:ro,z
+    depends_on:
+      objectstore:
+        condition: service_started
+    <<: *hardened
+    networks:
+      - platform
+    restart: "no"
 
   # Holds the engine socket so provisioning does not. Forwards only the calls
   # provisioning makes, only for containers labelled excalibase.managed, and
@@ -152,19 +209,28 @@ services:
       EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-support@excalibase.io}
       EMAIL_FROM_NAME: Excalibase
       RESEND_API_KEY: ${RESEND_API_KEY:-}
-      # S3-compatible bucket for backups, from .env (R2, B2, S3, your own
-      # S3-compatible store). Projects are refused without one.
-      BACKUP_DEFAULT_ACCESS_KEY_ID: ${BACKUP_DEFAULT_ACCESS_KEY_ID:-}
-      BACKUP_DEFAULT_SECRET_ACCESS_KEY: ${BACKUP_DEFAULT_SECRET_ACCESS_KEY:-}
-      BACKUP_DEFAULT_ENDPOINT: ${BACKUP_DEFAULT_ENDPOINT:-}
+      # Backups go to the bundled store unless .env names an outside
+      # S3-compatible bucket (R2, B2, S3) with all of BACKUP_DEFAULT_*.
+      BACKUP_DEFAULT_ACCESS_KEY_ID: ${BACKUP_DEFAULT_ACCESS_KEY_ID:-excalibase-backups}
+      BACKUP_DEFAULT_SECRET_ACCESS_KEY: ${BACKUP_DEFAULT_SECRET_ACCESS_KEY:-${OBJECTSTORE_BACKUPS_SECRET:?run ./init.sh first}}
+      BACKUP_DEFAULT_ENDPOINT: ${BACKUP_DEFAULT_ENDPOINT:-http://objectstore:9000}
       BACKUP_DEFAULT_BUCKET: ${BACKUP_DEFAULT_BUCKET:-excalibase-backups}
-      BACKUP_DEFAULT_REGION: ${BACKUP_DEFAULT_REGION:-auto}
-      # Customer files (EXC-560): a bucket and key of their own; unset leaves Storage off.
-      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-}
-      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
-      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:-}
-      STORAGE_BUCKET: ${STORAGE_BUCKET:-}
-      STORAGE_REGION: ${STORAGE_REGION:-}
+      BACKUP_DEFAULT_REGION: ${BACKUP_DEFAULT_REGION:-us-east-1}
+      # Customer files (EXC-560): the bundled store's file bucket, signed for
+      # browsers at files.<domain>, unless .env names an outside bucket.
+      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-excalibase-files}
+      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-${OBJECTSTORE_FILES_SECRET:?run ./init.sh first}}
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:-${FILES_PUBLIC_URL:?run ./init.sh first}}
+      # provisioning's own calls reach the bundled store by its internal name;
+      # links stay signed for STORAGE_ENDPOINT. Empty when .env names an outside bucket.
+      STORAGE_INTERNAL_ENDPOINT: ${STORAGE_INTERNAL_ENDPOINT-http://objectstore:9000}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-excalibase-storage}
+      STORAGE_REGION: ${STORAGE_REGION:-us-east-1}
+      # EXC-579: "manual" starts the vault sealed after every restart; the
+      # admin unseals it in Studio or with `excalibase-provisioning vault
+      # unseal`, and the key is never on this host. Unset keeps a key file in
+      # provisioning's volume and unseals by itself.
+      VAULT_UNSEAL_PROVIDER: ${VAULT_UNSEAL_PROVIDER:-}
     volumes:
       - provisioning_data:/var/lib/excalibase
     depends_on:
@@ -340,6 +406,8 @@ volumes:
     name: excalibase-platform-postgres
   provisioning_data:
     name: excalibase-platform-provisioning
+  objectstore_data:
+    name: excalibase-platform-objectstore
   # Shared between bootstrap (writer) and auth + graphql (readers): holds ONLY
   # the two service tokens. Admin credentials are printed to the bootstrap
   # log, never written here.

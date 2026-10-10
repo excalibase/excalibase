@@ -146,8 +146,9 @@ kubectl -n excalibase-platform exec -it deploy/provisioning -- excalibase-provis
 # Unseal key (1 of 1):
 ```
 
-Single host (docker provisioner): `docker exec -it <provisioning container>
-excalibase-provisioning vault unseal`.
+Single host (`deploy/single-host`): `./init.sh ... --manual-unseal`, then
+`docker exec -it excalibase-provisioning excalibase-provisioning vault unseal`;
+see [docker-local.md](./docker-local.md#manual-vault-unseal).
 
 Unseal, init, seal and rekey are allowed to platform admins only, limited to
 10 calls per minute per address, and written to the platform audit log
@@ -207,6 +208,12 @@ helm upgrade --install platform-aio charts/platform-aio -n excalibase-platform \
 
 The Barman Cloud plugin must be installed for the platform database's
 backups (`charts/background/barman-cloud-plugin/install.sh`).
+
+### Single host
+
+`deploy/single-host` bundles the same store by default, with no setting:
+backups and customer files, served at `https://files.<domain>`. See
+[docker-local.md](./docker-local.md#object-storage).
 
 ### Using R2 or S3 instead
 

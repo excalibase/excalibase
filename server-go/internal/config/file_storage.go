@@ -15,15 +15,19 @@ type FileStorageConfig struct {
 	Endpoint        string
 	Bucket          string
 	Region          string
+	// InternalEndpoint (STORAGE_INTERNAL_ENDPOINT): where provisioning itself
+	// reaches the store when Endpoint is an address only browsers reach.
+	InternalEndpoint string
 }
 
 func loadFileStorage() FileStorageConfig {
 	return FileStorageConfig{
-		AccessKeyID:     os.Getenv("STORAGE_ACCESS_KEY_ID"),
-		SecretAccessKey: os.Getenv("STORAGE_SECRET_ACCESS_KEY"),
-		Endpoint:        os.Getenv("STORAGE_ENDPOINT"),
-		Bucket:          os.Getenv("STORAGE_BUCKET"),
-		Region:          os.Getenv("STORAGE_REGION"),
+		AccessKeyID:      os.Getenv("STORAGE_ACCESS_KEY_ID"),
+		SecretAccessKey:  os.Getenv("STORAGE_SECRET_ACCESS_KEY"),
+		Endpoint:         os.Getenv("STORAGE_ENDPOINT"),
+		Bucket:           os.Getenv("STORAGE_BUCKET"),
+		Region:           os.Getenv("STORAGE_REGION"),
+		InternalEndpoint: os.Getenv("STORAGE_INTERNAL_ENDPOINT"),
 	}
 }
 
