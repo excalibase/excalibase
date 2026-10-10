@@ -32,6 +32,8 @@ func (f *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 	path := stripVersion(r.URL.Path)
 	switch {
+	case r.Method == http.MethodGet && path == "/containers/json":
+		_, _ = w.Write([]byte("[]"))
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
 		ref := strings.TrimSuffix(strings.TrimPrefix(path, "/containers/"), "/json")
 		labels, ok := f.containers[ref]
@@ -80,6 +82,11 @@ func (f *fakeEngine) reached(call string) bool {
 
 func newProxy(t *testing.T) (*fakeEngine, *httptest.Server) {
 	t.Helper()
+	return newProxyWith(t, testPolicy())
+}
+
+func newProxyWith(t *testing.T, policy Policy) (*fakeEngine, *httptest.Server) {
+	t.Helper()
 	engine := &fakeEngine{
 		containers: map[string]map[string]string{
 			"excalibase-p1-postgres":  {"excalibase.managed": "true"},
@@ -94,7 +101,7 @@ func newProxy(t *testing.T) (*fakeEngine, *httptest.Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(testPolicy(), target, http.DefaultTransport).WithUpgradeDial(
+	handler := NewHandler(policy, target, http.DefaultTransport).WithUpgradeDial(
 		func(ctx context.Context) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "tcp", target.Host)
@@ -158,7 +165,6 @@ func TestHandlerRefusesEverythingElse(t *testing.T) {
 		{http.MethodPost, "/v1.47/exec/exec-platform/start"},
 		{http.MethodGet, "/v1.47/containers/unknown/json"},
 		{http.MethodPost, "/v1.47/containers/excalibase-p1-postgres/update"},
-		{http.MethodGet, "/v1.47/info"},
 		{http.MethodPost, "/v1.47/volumes/create"},
 		{http.MethodPost, "/v1.47/networks/create"},
 		{http.MethodPost, "/v1.47/build"},

@@ -8,6 +8,7 @@
 //	PROXY_VOLUME_PREFIX   named volumes containers may mount (optional; none without it)
 //	PROXY_PORT_BIND_IPS   host addresses ports may publish on (default 127.0.0.1)
 //	PROXY_RUNTIMES        OCI runtimes containers may ask for (optional, e.g. runsc)
+//	PROXY_EDGE_CONTAINER  the edge, the one unmanaged container that may join project networks (optional)
 package main
 
 import (
@@ -19,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,6 +29,8 @@ import (
 
 // containerPrefix is the name every provisioned container starts with.
 const containerPrefix = "excalibase-"
+
+var containerName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
 type config struct {
 	socket string
@@ -74,6 +78,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	edge := getenv("PROXY_EDGE_CONTAINER")
+	if edge != "" && !containerName.MatchString(edge) {
+		return config{}, fmt.Errorf("PROXY_EDGE_CONTAINER %q is not a container name", edge)
+	}
 	bindIPs := splitList(getenv("PROXY_PORT_BIND_IPS"))
 	if len(bindIPs) == 0 {
 		bindIPs = []string{"127.0.0.1"}
@@ -89,6 +97,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 			PortBindIPs:     bindIPs,
 			Runtimes:        splitList(getenv("PROXY_RUNTIMES")),
 			ContainerPrefix: containerPrefix,
+			EdgeContainer:   edge,
 		},
 	}, nil
 }

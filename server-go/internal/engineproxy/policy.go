@@ -36,6 +36,9 @@ type Policy struct {
 	// ContainerPrefix is the name every created container must start with,
 	// so a create cannot take a platform service's name.
 	ContainerPrefix string
+	// EdgeContainer is the one unmanaged container that may join and leave
+	// project networks, to route to their apps; empty admits none.
+	EdgeContainer string
 }
 
 // ErrRefused wraps every policy refusal.
@@ -66,6 +69,7 @@ var hostConfigFields = map[string]hostConfigCheck{
 	"Ulimits":           allow,
 	"ShmSize":           allow,
 	"CapDrop":           allow,
+	"CapAdd":            checkCapAdd,
 	"Init":              allow,
 	"ReadonlyRootfs":    allow,
 	"AutoRemove":        allow,
@@ -172,10 +176,24 @@ func (p Policy) networkAllowed(network string) bool {
 
 func checkNetworkMode(p Policy, value any) error {
 	mode, _ := value.(string)
-	if mode == "default" || mode == "bridge" || p.networkAllowed(mode) {
+	if mode == "default" || mode == "bridge" || mode == "none" || p.networkAllowed(mode) {
 		return nil
 	}
 	return refuse("network mode %q is not one containers may use", mode)
+}
+
+// addableCapabilities: an app that drops ALL may still bind ports below 1024.
+var addableCapabilities = []string{"NET_BIND_SERVICE", "CAP_NET_BIND_SERVICE"}
+
+func checkCapAdd(_ Policy, value any) error {
+	capabilities, _ := value.([]any)
+	for _, entry := range capabilities {
+		capability, _ := entry.(string)
+		if !slices.Contains(addableCapabilities, strings.ToUpper(capability)) {
+			return refuse("HostConfig.CapAdd %q is not allowed", capability)
+		}
+	}
+	return nil
 }
 
 func checkRuntime(p Policy, value any) error {
