@@ -135,7 +135,7 @@ services:
   # refuses any container that asks for host access (privileged, host paths,
   # devices, host namespaces, other networks).
   engine-proxy:
-    image: docker.io/excalibase/provisioning:${TAG:-latest}
+    image: docker.io/excalibase/provisioning:${TAG:-1.4.0}
     container_name: excalibase-engine-proxy
     entrypoint: ["/bin/excalibase-engine-proxy"]
     # The socket's group on Docker (init.sh reads it); the owner on rootless Podman.
@@ -171,7 +171,7 @@ services:
     restart: unless-stopped
 
   provisioning:
-    image: docker.io/excalibase/provisioning:${TAG:-latest}
+    image: docker.io/excalibase/provisioning:${TAG:-1.4.0}
     container_name: excalibase-provisioning
     environment:
       # PORT serves the other services and ignores X-Forwarded-For.
@@ -251,7 +251,7 @@ services:
       APP_EDGE_TLS_ADDR: edge:443
       APP_EDGE_TLS: ${EXCALIBASE_TLS:?run ./init.sh first}
       # Sizes and copies app disks; provisioning's own image, already on the host.
-      APP_DISK_TOOLS_IMAGE: ${APP_DISK_TOOLS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-latest}}
+      APP_DISK_TOOLS_IMAGE: ${APP_DISK_TOOLS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.4.0}}
       # Where custom domains' CNAMEs are looked up; the host's resolver when unset.
       APP_DOMAIN_RESOLVER: ${APP_DOMAIN_RESOLVER:-}
     volumes:
@@ -271,7 +271,7 @@ services:
     restart: unless-stopped
 
   studio:
-    image: docker.io/excalibase/studio:${TAG:-latest}
+    image: docker.io/excalibase/studio:${TAG:-1.4.0}
     container_name: excalibase-studio
     depends_on:
       provisioning:
@@ -317,7 +317,7 @@ services:
     restart: "no"
 
   auth:
-    image: docker.io/excalibase/excalibase-auth:${TAG:-latest}
+    image: docker.io/excalibase/excalibase-auth:${TAG:-1.4.0}
     container_name: excalibase-auth
     environment:
       PORT: "24000"
@@ -349,7 +349,7 @@ services:
   # /{projectId}/api/v1, with the project's database credentials and
   # permissions read from provisioning per request. No default database.
   graphql:
-    image: docker.io/excalibase/excalibase-graphql:${TAG:-latest}
+    image: docker.io/excalibase/excalibase-graphql:${TAG:-1.4.0}
     container_name: excalibase-graphql
     environment:
       SERVER_PORT: "10000"
