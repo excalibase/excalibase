@@ -4,6 +4,7 @@
 # overwrite an existing .env, whose secrets the database was created with.
 #
 #   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman] [--manual-unseal]
+#             [--apps] [--app-domain apps.example.com] [--app-sandbox runsc|none]
 #
 # Studio:     https://studio.<domain>
 # Data plane: https://api.<domain>   (/{projectId}/graphql, /{projectId}/api/v1, /auth)
@@ -11,6 +12,9 @@
 # --manual-unseal: the vault starts sealed and the admin unseals it after every
 # restart (Studio /setup or `excalibase-provisioning vault unseal`); the key is
 # never stored on the host.
+# --apps: Containers (app hosting) on this host, each app at <app>-<project>.<app domain>
+# (default apps.<domain>; point *.<app domain> at this host). Apps run under
+# gVisor (runsc must be installed); --app-sandbox none runs them without a sandbox.
 # A public domain gets Let's Encrypt certificates for the admin address;
 # localhost gets certificates from the edge's own CA.
 set -eu
@@ -29,6 +33,9 @@ engine_socket_uid=
 engine_socket_gid=
 studio_allow="0.0.0.0/0 ::/0"
 manual_unseal=
+apps=
+app_domain=
+app_sandbox=runsc
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -40,6 +47,9 @@ while [ $# -gt 0 ]; do
     --engine-socket-gid) engine_socket_gid=$2; shift 2 ;;
     --studio-allow) studio_allow=$2; shift 2 ;;
     --manual-unseal) manual_unseal="VAULT_UNSEAL_PROVIDER=manual"; shift ;;
+    --apps) apps="APP_HOSTING_ENABLED=true"; shift ;;
+    --app-domain) app_domain=$2; shift 2 ;;
+    --app-sandbox) app_sandbox=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -49,6 +59,15 @@ if [ -e "$env_file" ]; then
   echo "init.sh: $env_file exists; its secrets are the ones the database was created with. Remove it only together with the volumes." >&2
   exit 1
 fi
+
+app_domain=${app_domain:-apps.$domain}
+case $app_domain in
+  *[!a-z0-9.-]* | .* | *. | *..*) echo "init.sh: --app-domain must be a lowercase DNS name" >&2; exit 2 ;;
+esac
+case $app_sandbox in
+  runsc | none) ;;
+  *) echo "init.sh: --app-sandbox must be runsc (gVisor) or none" >&2; exit 2 ;;
+esac
 
 case $engine in
   docker)
@@ -123,8 +142,11 @@ FILES_PUBLIC_URL=https://files.$domain${edge_ports:+:8443}
 ENGINE_SOCKET=$engine_socket
 ENGINE_SOCKET_UID=$engine_socket_uid
 ENGINE_SOCKET_GID=$engine_socket_gid
+# Apps are served at <app>-<project>.$app_domain; point *.$app_domain at this host.
+APP_DOMAIN=$app_domain
+APP_SANDBOX_RUNTIME=$app_sandbox
 ENV
-for line in "$edge_ports" "$selinux_label" "$manual_unseal"; do
+for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps"; do
   [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
 done
 chmod 600 "$env_file"

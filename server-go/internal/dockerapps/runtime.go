@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/docker/docker/api/types/network"
+
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
@@ -143,6 +145,26 @@ func (r *Runtime) VerifyEngine(ctx context.Context) error {
 	}
 	if _, err := r.runTool(ctx, k8s.DiskJobOptions{Timeout: toolCheckTimeout}, []string{"true"}); err != nil {
 		return fmt.Errorf("the disk tools image %s does not run here (APP_DISK_TOOLS_IMAGE): %w", r.opts.ToolsImage, err)
+	}
+	return r.verifyNames(ctx)
+}
+
+// verifyNames: apps reach their database by its container name through the
+// engine's resolver, which gVisor's own network stack cannot reach.
+func (r *Runtime) verifyNames(ctx context.Context) error {
+	check := r.opts.NetworkPrefix + "check-" + shortHash(fmt.Sprint(time.Now().UnixNano()), 8)
+	if _, err := r.engine.NetworkCreate(ctx, check, network.CreateOptions{
+		Driver: "bridge", Internal: true, Labels: map[string]string{labelManaged: "true", labelComponent: componentDiskTool},
+	}); err != nil {
+		return fmt.Errorf("create a network to check name resolution: %w", err)
+	}
+	defer func() { _ = r.engine.NetworkRemove(context.WithoutCancel(ctx), check) }()
+	// The tool asks the resolver for its own name (no search domain), as an app asks for its database's.
+	tool := toolContainer{name: "excalibase-app-disk-tool-" + strings.TrimPrefix(check, r.opts.NetworkPrefix), network: check}
+	if _, err := r.runToolOn(ctx, k8s.DiskJobOptions{Timeout: toolCheckTimeout}, tool, []string{"nslookup", tool.name + "."}); err != nil {
+		return fmt.Errorf("a container under runtime %q cannot resolve container names, so apps could not reach their database: "+
+			"configure gVisor with --network=host (sudo runsc install -- --network=host), or set APP_SANDBOX_RUNTIME=none: %w",
+			r.opts.SandboxRuntime, err)
 	}
 	return nil
 }

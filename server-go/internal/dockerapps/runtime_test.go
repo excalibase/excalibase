@@ -290,7 +290,7 @@ func TestVerifyEngineRunsTheToolsImageInTheSandbox(t *testing.T) {
 	h := newHarness(t, nil)
 	var ran [][]string
 	h.engine.toolOutput = func(cmd []string) (string, int) { ran = append(ran, cmd); return "", 0 }
-	if err := h.rt.VerifyEngine(context.Background()); err != nil || len(ran) != 1 {
+	if err := h.rt.VerifyEngine(context.Background()); err != nil || len(ran) != 2 || ran[0][0] != "true" {
 		t.Fatalf("verify: %v, tool runs %v", err, ran)
 	}
 	h.engine.toolOutput = func([]string) (string, int) { return "", 1 }
@@ -301,6 +301,39 @@ func TestVerifyEngineRunsTheToolsImageInTheSandbox(t *testing.T) {
 	h.engine.toolOutput = nil
 	if err := h.rt.VerifyEngine(context.Background()); err == nil {
 		t.Fatal("a missing tools image passed")
+	}
+}
+
+// Apps reach their database by its container name. gVisor's own network stack
+// cannot reach the engine's resolver, so a sandbox that cannot resolve names is refused.
+func TestVerifyEngineRefusesASandboxThatCannotResolveContainerNames(t *testing.T) {
+	h := newHarness(t, nil)
+	var lookups []string
+	h.engine.toolOutput = func(cmd []string) (string, int) {
+		if cmd[0] != "nslookup" {
+			return "", 0
+		}
+		lookups = append(lookups, strings.Join(cmd, " "))
+		for _, c := range h.engine.containers {
+			if c.config.Cmd != nil && slices.Equal(append(slices.Clone(c.config.Entrypoint), c.config.Cmd...), cmd) &&
+				(c.host.Runtime != "runsc" || !strings.HasPrefix(string(c.host.NetworkMode), "excalibase-net-check-")) {
+				return "", 9
+			}
+		}
+		return "", 2
+	}
+	err := h.rt.VerifyEngine(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--network=host") || len(lookups) != 1 {
+		t.Fatalf("err = %v after %v, want the remedy named", err, lookups)
+	}
+	for name := range h.engine.networks {
+		if strings.HasPrefix(name, "excalibase-net-check-") {
+			t.Fatalf("the check left network %s", name)
+		}
+	}
+	h.engine.toolOutput = func(cmd []string) (string, int) { return "", 0 }
+	if err := h.rt.VerifyEngine(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -84,5 +84,36 @@ the other containers can read them under SELinux.
 | Tenant CPU limits | always | needs the `cpu` controller delegated |
 | Image healthchecks | kept | dropped for OCI-format images (Podman); the bundle declares every health gate it relies on in `compose.yaml` |
 
+## Apps (containers)
+
+The same as on Docker (see [Apps in docker-local.md](docker-local.md#apps-containers)),
+with one difference that matters: **rootless Podman cannot run apps under
+gVisor with their plan's limits.** `runsc` started by rootless Podman cannot
+create cgroups (`systemd error: Interactive authentication required`, or
+`cgroup.subtree_control: permission denied` with cgroupfs); it runs only with
+`--ignore-cgroups`, and then an app has no memory or CPU limit at all. So on
+rootless Podman install apps without the sandbox, knowingly:
+
+```bash
+./init.sh --engine podman --domain example.com --admin-email you@example.com --apps --app-sandbox none
+podman compose up -d
+```
+
+Apps then run with every capability dropped but `NET_BIND_SERVICE`,
+`no-new-privileges`, the plan's memory, CPU and 1024 processes, under crun:
+they share the host's kernel. Run only code you trust, or use Docker with
+gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
+`--ignore-cgroups` for apps: provisioning cannot tell, and the limits would be gone.
+
+- With `APP_EGRESS=internet` each project network is created with netavark's
+  `isolate` option, so a project's bridge cannot reach another's; without
+  egress the networks are internal and have no route anywhere.
+- App hostnames carry the edge's port when it is above 1024
+  (`https://<app>-<project>.apps.localhost:8443`).
+- The image's root directory may be read-only to an app without capabilities
+  (Podman keeps the image's `/` mode): write to `/tmp` or the app's disk.
+- Logs: Podman's `journald` or `k8s-file` driver; set `log_size_max` in
+  `containers.conf` to bound `k8s-file`.
+
 Running Docker and Podman stacks side by side on one host needs different
 `AIO_EDGE_SUBNET` / `AIO_DATAPLANE_SUBNET` values: both claim the same subnets.

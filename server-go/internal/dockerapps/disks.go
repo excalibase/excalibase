@@ -175,29 +175,26 @@ func (r *Runtime) RepointAppDisk(ctx context.Context, _ string, appID, claim str
 // runTool runs one command in a throwaway container of the tools image: no
 // network, the sandbox, nothing mounted but the disks named. It answers stdout.
 func (r *Runtime) runTool(ctx context.Context, opts k8s.DiskJobOptions, cmd []string, mounts ...mount.Mount) (string, error) {
+	name := "excalibase-app-disk-tool-" + shortHash(fmt.Sprint(time.Now().UnixNano(), cmd), 12)
+	return r.runToolOn(ctx, opts, toolContainer{name: name, network: "none"}, cmd, mounts...)
+}
+
+// toolContainer names a tool container and the network it runs on ("none", or one it joins).
+type toolContainer struct{ name, network string }
+
+func (r *Runtime) runToolOn(ctx context.Context, opts k8s.DiskJobOptions, tool toolContainer, cmd []string, mounts ...mount.Mount) (string, error) {
 	if opts.Timeout <= 0 {
 		return "", fmt.Errorf("%w: a disk job needs a timeout", k8s.ErrAppDiskJob)
 	}
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
-	pids := int64(64)
-	// The command replaces the image's entrypoint: the tools image may be provisioning's own.
-	config := &container.Config{Image: r.opts.ToolsImage, Entrypoint: cmd[:1], Cmd: cmd[1:], User: "0",
-		Labels: map[string]string{labelManaged: "true", labelComponent: componentDiskTool}}
-	host := &container.HostConfig{
-		NetworkMode: "none", Mounts: mounts, Runtime: r.opts.SandboxRuntime,
-		// cp -a keeps the default capabilities: it must read and chown files the app's user owns.
-		SecurityOpt: []string{"no-new-privileges"}, CapDrop: []string{"NET_RAW"},
-		Resources: container.Resources{Memory: 64 << 20, MemorySwap: 64 << 20, NanoCPUs: 500_000_000, PidsLimit: &pids},
-	}
-	name := "excalibase-app-disk-tool-" + shortHash(fmt.Sprint(time.Now().UnixNano(), cmd), 12)
-	created, err := r.engine.ContainerCreate(ctx, config, host, &network.NetworkingConfig{}, nil, name)
+	id, err := r.createTool(ctx, tool, cmd, mounts)
 	if err != nil {
-		return "", fmt.Errorf("%w: create the disk tool: %v", k8s.ErrAppDiskJob, err)
+		return "", err
 	}
-	defer func() { _ = r.remove(context.WithoutCancel(ctx), created.ID) }()
-	results, failures := r.engine.ContainerWait(ctx, created.ID, container.WaitConditionNextExit)
-	if err := r.engine.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	defer func() { _ = r.remove(context.WithoutCancel(ctx), id) }()
+	results, failures := r.engine.ContainerWait(ctx, id, container.WaitConditionNextExit)
+	if err := r.engine.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
 		return "", fmt.Errorf("%w: start the disk tool: %v", k8s.ErrAppDiskJob, err)
 	}
 	var status container.WaitResponse
@@ -206,7 +203,7 @@ func (r *Runtime) runTool(ctx context.Context, opts k8s.DiskJobOptions, cmd []st
 	case err := <-failures:
 		return "", fmt.Errorf("%w: wait for the disk tool: %v", k8s.ErrAppDiskJob, err)
 	}
-	stdout, stderr, err := r.toolOutput(ctx, created.ID)
+	stdout, stderr, err := r.toolOutput(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -214,6 +211,24 @@ func (r *Runtime) runTool(ctx context.Context, opts k8s.DiskJobOptions, cmd []st
 		return "", fmt.Errorf("%w: %s exited %d: %s", k8s.ErrAppDiskJob, cmd[0], status.StatusCode, strings.TrimSpace(stderr+stdout))
 	}
 	return stdout, nil
+}
+
+func (r *Runtime) createTool(ctx context.Context, tool toolContainer, cmd []string, mounts []mount.Mount) (string, error) {
+	pids := int64(64)
+	// The command replaces the image's entrypoint: the tools image may be provisioning's own.
+	config := &container.Config{Image: r.opts.ToolsImage, Entrypoint: cmd[:1], Cmd: cmd[1:], User: "0",
+		Labels: map[string]string{labelManaged: "true", labelComponent: componentDiskTool}}
+	host := &container.HostConfig{
+		NetworkMode: container.NetworkMode(tool.network), Mounts: mounts, Runtime: r.opts.SandboxRuntime,
+		// cp -a keeps the default capabilities: it must read and chown files the app's user owns.
+		SecurityOpt: []string{"no-new-privileges"}, CapDrop: []string{"NET_RAW"},
+		Resources: container.Resources{Memory: 64 << 20, MemorySwap: 64 << 20, NanoCPUs: 500_000_000, PidsLimit: &pids},
+	}
+	created, err := r.engine.ContainerCreate(ctx, config, host, &network.NetworkingConfig{}, nil, tool.name)
+	if err != nil {
+		return "", fmt.Errorf("%w: create the disk tool: %v", k8s.ErrAppDiskJob, err)
+	}
+	return created.ID, nil
 }
 
 func (r *Runtime) toolOutput(ctx context.Context, id string) (string, string, error) {

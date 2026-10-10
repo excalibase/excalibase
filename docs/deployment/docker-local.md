@@ -168,9 +168,84 @@ Lose every copy of the key and the vault, with the projects' credentials in
 it, cannot be recovered. Unseal attempts are limited to 10 a minute per address
 and recorded in the audit log, without the key.
 
+## Apps (containers)
+
+Containers (app hosting) run on the same host when the install asks for them
+(ADR 0039). Studio and the API are the ones a Kubernetes install has: deploy an
+image, open it at its hostname over HTTPS, read logs, redeploy and roll back,
+pause, resume, delete, a disk, custom domains.
+
+```bash
+# gVisor (recommended): apps run under runsc, a user-space kernel.
+# Debian/Ubuntu, from gVisor's apt repository (others: https://gvisor.dev/docs/user_guide/install/)
+curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+  | sudo tee /etc/apt/sources.list.d/gvisor.list
+sudo apt-get update && sudo apt-get install -y runsc
+# --network=host: apps find their database by name through Docker's resolver,
+# which gVisor's own network stack cannot reach. Provisioning checks it at startup.
+sudo runsc install -- --network=host && sudo systemctl restart docker
+docker info | grep runsc              # must list it
+
+./init.sh --domain example.com --admin-email you@example.com --apps
+# point *.apps.example.com at this host (a wildcard DNS record), then
+docker compose up -d
+```
+
+`--app-domain run.example.org` serves apps elsewhere than `apps.<domain>`.
+Without gVisor provisioning refuses to start with apps on and says so;
+`--app-sandbox none` (`APP_SANDBOX_RUNTIME=none`) runs apps without it, with
+every capability dropped but `NET_BIND_SERVICE`: their code then shares the
+host's kernel directly. Choose it only for code you trust.
+
+Each app is a container named `excalibase-app-...`, labelled
+`excalibase.managed=true`, at the plan's memory and CPU, no swap, at most 1024
+processes, `no-new-privileges`, no published port and no host path. The edge
+serves `https://<app>-<project>.<app domain>` with a certificate of its own for
+each host (Let's Encrypt for a public domain, its own CA for `localhost`). Studio shows a host or custom domain as
+issued once the edge serves a certificate for it that a browser would accept;
+with the edge's own CA (`EXCALIBASE_TLS=internal`), as soon as it is routed.
+
+| | Kubernetes | Single host |
+|---|---|---|
+| Sandbox | gVisor RuntimeClass | gVisor `runsc` with `--network=host` (gVisor's syscall sandbox; sockets use the host kernel's network stack inside the app's namespace), or the opt-out |
+| Between projects | NetworkPolicy | one internal network per project (`excalibase-net-<project>`): only its apps, its database and the edge are on it |
+| Between a project's apps | closed until the project turns its private network on | always open: they share the project's network, and the private-network switch is not offered |
+| Internet from an app | allowed, private ranges denied | none; `APP_EGRESS=internet` in `.env` gives every project's network a route out (Podman: an isolated bridge) |
+| Disk | a volume of the size asked | a named volume (`excalibase-vol-...`) on the host's disk; the size is recorded, not enforced by the filesystem |
+| Readiness | kubelet probe | the platform's probe, copied into the container, on the app's health check path |
+| Rollout | rolling update; with a disk, recreate | the same: new containers beside the old, the route moves when they are ready |
+| Certificates | cert-manager | the edge, one per hostname |
+| Copies | up to the plan's | one host: a plan with more copies is refused |
+
+```bash
+docker ps --filter label=excalibase.component=app    # running apps
+docker network ls --filter label=excalibase.managed=true
+docker volume ls --filter label=excalibase.managed=true
+docker compose exec edge ls /etc/caddy/apps            # one route file per app
+```
+
+Deleting a project removes its apps' containers, disks, routes and network.
+Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
+`log-opts` (`max-size`, `max-file`).
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `APP_HOSTING_ENABLED` | `false` (`true` with `--apps`) | Containers on this host |
+| `APP_DOMAIN` | `apps.<domain>` | Parent of every app hostname |
+| `APP_SANDBOX_RUNTIME` | `runsc` | `none` runs apps without gVisor |
+| `APP_EGRESS` | `none` | `internet` lets apps call out |
+| `APP_DOMAIN_RESOLVER` | the host's | `host:port` of the DNS server custom domains' CNAMEs are checked against |
+
 ## Refusals you may see
 
 - `run ./init.sh first` — a required value is missing from `.env`.
+- `app hosting: the engine has no "runsc" runtime` — apps are on and gVisor is
+  not installed: install it, or set `APP_SANDBOX_RUNTIME=none` knowingly.
+- `a container under runtime "runsc" cannot resolve container names` — gVisor
+  runs with its own network stack: reinstall it with `sudo runsc install -- --network=host`
+  and restart Docker. Its sockets then use the host kernel's network stack,
+  still inside the app's own network namespace.
 - `preflight: ... is a known default` / `must be at least 32 hex characters` /
   `must all differ` — the stack does not start on a weak or reused secret.
   `docker compose logs preflight` names it.
@@ -184,38 +259,22 @@ and recorded in the audit log, without the key.
 | Storage (customer files, signed links at `files.<domain>`) | yes |
 | GraphQL / REST / end-user auth for every project, through `api.<domain>` | yes |
 | SDK keys (publishable, secret) | yes |
-| Containers (app hosting) | not yet |
+| Containers (app hosting) | yes, with `--apps` (see Apps) |
 | DocumentDB projects | not yet |
 | Edge functions, realtime | no (Kubernetes only) |
-| High availability (3/5 copies) | no — see [High availability](#high-availability) |
-
-## High availability
-
-Not offered on a single host, by decision (ADR 0038).
-
-- **Why:** extra copies on one machine share its disk, kernel, power, network
-  card and engine daemon. The failures high availability exists for — disk
-  loss, host crash, reboot for updates, provider outage — take every copy down
-  together. What copies on one box would add (surviving a single Postgres
-  crash) the restart policy already covers in seconds, at three times the
-  memory and disk, with a failover component to operate.
-- **What happens:** the single host counts as one node. A plan with more than
-  one copy (Standard: 3) is refused when a project is requested or an
-  organization is moved to it — "the standard plan runs 3 database instances,
-  each on its own node, but this platform has only 1 node(s)…" — never quietly
-  created as one copy.
-- **What protects data here:** backups (every plan) and restore. Point backups
-  at a bucket **off this machine** for disaster recovery; the bundled store
-  shares the databases' disk.
-- **When you need copies on separate machines:** run the Kubernetes install on
-  three or more nodes (a small k3s/RKE2 cluster is enough).
+| High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
 
 ## Checking a change
 
 `deploy/single-host/tests/boot-smoke.sh docker` boots the bundle from fresh
 state and walks the first hour (weak secret refused, install, sign-in, project,
 GraphQL/REST with a secret key, backup, a file uploaded and downloaded through
-`files.<domain>`). `MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
+`files.<domain>`). `APPS=1` installs with `--apps` and walks Containers: a
+busybox image by digest deployed, opened at its host, its logs read, a second
+revision and a rollback, data kept on its disk, another project unable to reach
+the app or its database, pause, resume and delete (under gVisor where the
+engine has `runsc`, else with `--app-sandbox none`, which the run prints).
+`MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
 initializes, restarts and unseals the vault with the CLI. It destroys the bundle's containers and
 volumes: never run it on an install you keep. CI runs it on every change to the
 bundle or the engine path; for Podman, `COMPOSE="podman compose" DOCKER=podman
@@ -231,7 +290,12 @@ docker compose down -v               # also delete the platform's volumes
 docker ps -a --filter label=excalibase.managed=true   # tenant containers
 ```
 
-`down -v` does not remove tenant containers (they are created by provisioning,
-not by Compose). Remove them with
-`docker rm -f -v $(docker ps -aq --filter label=excalibase.managed=true)`.
+`down -v` does not remove tenant containers, apps' disks or project networks
+(provisioning creates them, not Compose). Remove them with
+
+```bash
+docker rm -f -v $(docker ps -aq --filter label=excalibase.managed=true)
+docker volume rm $(docker volume ls -q --filter label=excalibase.managed=true)
+docker network rm $(docker network ls -q --filter label=excalibase.managed=true)
+```
 Keep `.env` with the volumes: a fresh `.env` cannot open an existing database.
