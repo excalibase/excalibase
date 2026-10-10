@@ -292,7 +292,7 @@ func TestDeployApp_ACredentialRemovedMidDeployIsNotLeftBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.SetRegistryCredentials(registries)
-	svc.kube = removingDuringApply{MockClient: kube, store: store}
+	svc.runtime = removingDuringApply{MockClient: kube, store: store}
 
 	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
 	if err != nil {

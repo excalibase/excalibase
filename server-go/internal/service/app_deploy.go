@@ -30,7 +30,7 @@ type activeRollout struct {
 type AppDeployService struct {
 	apps      apphost.Store
 	deploys   apphost.DeployStore
-	kube      k8s.KubeClient
+	runtime   AppRuntime
 	instances storage.InstanceStore
 	resolver  k8s.Resolver
 	// render carries the sandbox runtime class and extra egress deny ranges.
@@ -75,13 +75,13 @@ type AppDeployService struct {
 func NewAppDeployService(
 	apps apphost.Store,
 	deploys apphost.DeployStore,
-	kube k8s.KubeClient,
+	runtime AppRuntime,
 	instances storage.InstanceStore,
 	resolver k8s.Resolver,
 	render k8s.AppRenderOptions,
 ) *AppDeployService {
 	return &AppDeployService{
-		apps: apps, deploys: deploys, kube: kube, instances: instances, resolver: resolver,
+		apps: apps, deploys: deploys, runtime: runtime, instances: instances, resolver: resolver,
 		render:             render,
 		timeout:            defaultAppRolloutTimeout,
 		stopTimeout:        defaultAppStopTimeout,
@@ -149,7 +149,7 @@ func (s *AppDeployService) confirmPullAuth(ctx context.Context, projectID, names
 	if err == nil && cred != nil && cred.Username == used.Username && cred.Password == used.Password {
 		return nil
 	}
-	if delErr := s.kube.DeleteRegistryPullSecrets(ctx, namespace, used.Registry); delErr != nil {
+	if delErr := s.runtime.DeleteRegistryPullSecrets(ctx, namespace, used.Registry); delErr != nil {
 		return errors.Join(errPullAuthChanged, fmt.Errorf("remove the stale pull secret: %w", delErr))
 	}
 	if err != nil {
@@ -342,11 +342,11 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}
-	if err := s.kube.CreateAppDisk(ctx, namespace, target, s.render.DiskStorageClass, s.diskJobs); err != nil {
+	if err := s.runtime.CreateAppDisk(ctx, namespace, target, s.render.DiskStorageClass, s.diskJobs); err != nil {
 		s.fail(ctx, deploy, fmt.Errorf("create the app's disk: %w", err), namespace, name)
 		return deploy, nil, nil
 	}
-	if err := s.kube.ApplyAppWorkload(ctx, namespace, workload); err != nil {
+	if err := s.runtime.ApplyAppWorkload(ctx, namespace, workload); err != nil {
 		s.fail(ctx, deploy, fmt.Errorf("apply app workload: %w", err), namespace, name)
 		return deploy, nil, nil
 	}
@@ -372,7 +372,7 @@ func (s *AppDeployService) releaseDiskFromEarlierNames(ctx context.Context, name
 	if app.Disk == nil {
 		return nil
 	}
-	if err := s.kube.PruneAppWorkload(ctx, namespace, app.ID, app.Name, s.stopTimeout); err != nil {
+	if err := s.runtime.PruneAppWorkload(ctx, namespace, app.ID, app.Name, s.stopTimeout); err != nil {
 		return fmt.Errorf("stop what the app ran under an earlier name, which holds its disk: %w", err)
 	}
 	return nil
@@ -392,7 +392,7 @@ func (s *AppDeployService) watch(ctx context.Context, deploy apphost.Deploy, nam
 	s.async(func() {
 		defer cancel()
 		defer s.clearActive(deploy.AppID, entry)
-		err := s.kube.WaitForAppRollout(rolloutCtx, namespace, name, deploy.ID, timeout)
+		err := s.runtime.WaitForAppRollout(rolloutCtx, namespace, name, deploy.ID, timeout)
 		if rolloutCtx.Err() != nil {
 			return // superseded; the store would refuse this write anyway
 		}
@@ -424,7 +424,7 @@ func (s *AppDeployService) finishRollout(ctx context.Context, deploy *apphost.De
 		return
 	}
 	name := k8s.AppObjectName(appName)
-	if err := s.kube.PruneAppWorkload(ctx, namespace, deploy.AppID, appName, s.stopTimeout); err != nil {
+	if err := s.runtime.PruneAppWorkload(ctx, namespace, deploy.AppID, appName, s.stopTimeout); err != nil {
 		s.fail(ctx, deploy, fmt.Errorf("remove what the app ran under an earlier name: %w", err), namespace, name)
 		return
 	}
@@ -599,7 +599,7 @@ func (s *AppDeployService) failWithoutWorkload(deploy *apphost.Deploy, err error
 // statusAfterFailure asks the cluster rather than assuming; when it cannot
 // answer, the app's status is left as it is.
 func (s *AppDeployService) statusAfterFailure(ctx context.Context, namespace, name string) string {
-	available, err := s.kube.AppAvailableReplicas(ctx, namespace, name)
+	available, err := s.runtime.AppAvailableReplicas(ctx, namespace, name)
 	if err != nil {
 		log.Printf("app %s/%s: read serving replicas: %v", namespace, name, err)
 		return ""

@@ -23,7 +23,7 @@ func (s *AppDeployService) StopProjectWorkloads(ctx context.Context, projectID s
 	if err != nil {
 		return err
 	}
-	if err := s.kube.WithdrawProjectWorkloads(ctx, namespace, k8s.WithdrawOptions{AppRoutes: s.appRoutes}); err != nil {
+	if err := s.runtime.WithdrawProjectWorkloads(ctx, namespace, k8s.WithdrawOptions{AppRoutes: s.appRoutes}); err != nil {
 		return fmt.Errorf("withdraw the project's apps: %w", err)
 	}
 	apps, err := s.apps.List(projectID)
@@ -55,7 +55,7 @@ func (s *AppDeployService) pauseServing(ctx context.Context, projectID, namespac
 			} else {
 				// Not ACTIVE yet (a first rollout) or already stopped: the
 				// withdrawal scaled it to zero; wait for any pods it still has.
-				err = s.kube.WaitForAppPodsGone(ctx, namespace, appID, s.stopTimeout)
+				err = s.runtime.WaitForAppPodsGone(ctx, namespace, appID, s.stopTimeout)
 			}
 			if err != nil && !errors.Is(err, k8s.ErrAppNotDeployed) {
 				mu.Lock()
@@ -82,7 +82,7 @@ func (s *AppDeployService) RestartFunctionRuntime(ctx context.Context, projectID
 	if err != nil {
 		return err
 	}
-	return s.kube.RestartFunctionRuntime(ctx, namespace)
+	return s.runtime.RestartFunctionRuntime(ctx, namespace)
 }
 
 // restoreRoutes serves a resumed app at its URL and custom domains again,
@@ -98,7 +98,7 @@ func (s *AppDeployService) restoreRoutes(ctx context.Context, namespace string, 
 		served.Disk = app.Disk
 		app = served
 	}
-	if err := s.kube.RestoreAppRoute(ctx, namespace, app, s.render.Route); err != nil {
+	if err := s.runtime.RestoreAppRoute(ctx, namespace, app, s.render.Route); err != nil {
 		return fmt.Errorf("restore the app's route: %w", err)
 	}
 	if s.domainSync == nil {

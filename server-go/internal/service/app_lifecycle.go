@@ -100,10 +100,10 @@ func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string
 		return nil, err
 	}
 	s.cancelActive(appID)
-	if err := s.kube.PauseAppWorkload(ctx, namespace, appID); err != nil {
+	if err := s.runtime.PauseAppWorkload(ctx, namespace, appID); err != nil {
 		return nil, s.putBack(projectID, appID, apphost.StatusPausing, app.Status, err, k8s.ErrAppNotDeployed)
 	}
-	if err := s.kube.WaitForAppPodsGone(ctx, namespace, appID, s.stopTimeout); err != nil {
+	if err := s.runtime.WaitForAppPodsGone(ctx, namespace, appID, s.stopTimeout); err != nil {
 		return nil, err
 	}
 	return s.apps.Transition(projectID, appID, []string{apphost.StatusPausing}, apphost.StatusStopped)
@@ -144,14 +144,14 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, acto
 	}
 	app = fitted
 	if app.Disk != nil {
-		if err := s.kube.RepointAppDisk(ctx, namespace, appID, k8s.AppDiskClaimName(appID, app.Disk.Generation)); err != nil {
+		if err := s.runtime.RepointAppDisk(ctx, namespace, appID, k8s.AppDiskClaimName(appID, app.Disk.Generation)); err != nil {
 			return nil, err
 		}
 	}
 	if err := s.recordResize(app, size, actor); err != nil {
 		return nil, err
 	}
-	err = s.kube.ResumeAppWorkload(ctx, namespace, appID, app.Name, size.tier, s.timeout)
+	err = s.runtime.ResumeAppWorkload(ctx, namespace, appID, app.Name, size.tier, s.timeout)
 	switch {
 	case err == nil:
 		if err := s.restoreRoutes(ctx, namespace, app); err != nil {
@@ -217,7 +217,7 @@ func (s *AppDeployService) deleteWorkload(ctx context.Context, projectID, appID 
 	if err != nil {
 		return err
 	}
-	return s.kube.DeleteAppWorkload(ctx, namespace, appID, s.stopTimeout)
+	return s.runtime.DeleteAppWorkload(ctx, namespace, appID, s.stopTimeout)
 }
 
 func (s *AppDeployService) lookupApp(projectID, appID string) (*apphost.App, error) {

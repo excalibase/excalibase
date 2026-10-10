@@ -107,7 +107,7 @@ func (s *AppDeployService) admit(ctx context.Context, namespace string, deploy *
 	if replicas == 0 {
 		return nil
 	}
-	placement, err := s.kube.RuntimeClassPlacement(ctx, s.render.RuntimeClass)
+	placement, err := s.runtime.RuntimeClassPlacement(ctx, s.render.RuntimeClass)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
@@ -115,7 +115,7 @@ func (s *AppDeployService) admit(ctx context.Context, namespace string, deploy *
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
-	live, err := s.kube.LiveAppPods(ctx, namespace, deploy.AppID)
+	live, err := s.runtime.LiveAppPods(ctx, namespace, deploy.AppID)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
@@ -133,7 +133,7 @@ type podNeed struct{ cpu, mem, perCPU, perMem int64 }
 // clusterHolds is the room check every admission ends in; anything the cluster cannot answer refuses.
 func (s *AppDeployService) clusterHolds(ctx context.Context, placement k8s.RuntimePlacement, need podNeed,
 	reservedCPU, reservedMem int64, who string) error {
-	capacity, err := s.kube.GetClusterCapacity(ctx)
+	capacity, err := s.runtime.GetClusterCapacity(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
@@ -172,7 +172,7 @@ func (s *AppDeployService) AdmitNewApps(ctx context.Context, projectID string, r
 	if err != nil {
 		return err
 	}
-	placement, err := s.kube.RuntimeClassPlacement(ctx, s.render.RuntimeClass)
+	placement, err := s.runtime.RuntimeClassPlacement(ctx, s.render.RuntimeClass)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}

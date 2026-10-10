@@ -142,7 +142,7 @@ func (s *AppDeployService) fitDiskToPlan(ctx context.Context, namespace string, 
 
 // diskUsed reads what the disk holds; created is false when no deploy has made it.
 func (s *AppDeployService) diskUsed(ctx context.Context, namespace string, app *apphost.App) (int64, bool, error) {
-	usage, err := s.kube.AppDiskUsage(ctx, namespace, app.ID, *app.Disk, s.diskJobs)
+	usage, err := s.runtime.AppDiskUsage(ctx, namespace, app.ID, *app.Disk, s.diskJobs)
 	if errors.Is(err, k8s.ErrAppDiskNotCreated) {
 		return 0, false, nil
 	}
@@ -162,23 +162,23 @@ func (s *AppDeployService) moveDisk(ctx context.Context, namespace string, app *
 	}
 	// The record is the authority: an earlier move that stopped part way may have repointed the Deployment.
 	oldClaim := k8s.AppDiskClaimName(app.ID, app.Disk.Generation)
-	if err := s.kube.RepointAppDisk(ctx, namespace, app.ID, oldClaim); err != nil {
+	if err := s.runtime.RepointAppDisk(ctx, namespace, app.ID, oldClaim); err != nil {
 		return nil, fmt.Errorf("mount the app's recorded disk: %w", err)
 	}
-	if err := s.kube.DeleteOtherAppDisks(ctx, namespace, app.ID, app.Disk.Generation, s.diskJobs.Timeout); err != nil {
+	if err := s.runtime.DeleteOtherAppDisks(ctx, namespace, app.ID, app.Disk.Generation, s.diskJobs.Timeout); err != nil {
 		return nil, fmt.Errorf("remove an unfinished copy of the app's disk: %w", err)
 	}
-	if err := s.kube.CopyAppDisk(ctx, namespace, app, target, s.render.DiskStorageClass, s.diskJobs); err != nil {
+	if err := s.runtime.CopyAppDisk(ctx, namespace, app, target, s.render.DiskStorageClass, s.diskJobs); err != nil {
 		return nil, fmt.Errorf("copy the app's disk onto a %s volume: %w", target.Size, err)
 	}
-	if err := s.kube.RepointAppDisk(ctx, namespace, app.ID, k8s.AppDiskClaimName(app.ID, target.Generation)); err != nil {
+	if err := s.runtime.RepointAppDisk(ctx, namespace, app.ID, k8s.AppDiskClaimName(app.ID, target.Generation)); err != nil {
 		return nil, s.repointBack(ctx, namespace, app.ID, oldClaim, fmt.Errorf("mount the app's smaller disk: %w", err))
 	}
 	moved, err := s.recordDisk(app, target)
 	if err != nil {
 		return nil, s.repointBack(ctx, namespace, app.ID, oldClaim, err)
 	}
-	if err := s.kube.DeleteOtherAppDisks(ctx, namespace, app.ID, target.Generation, s.diskJobs.Timeout); err != nil {
+	if err := s.runtime.DeleteOtherAppDisks(ctx, namespace, app.ID, target.Generation, s.diskJobs.Timeout); err != nil {
 		log.Printf("app %s/%s: the disk moved to %s but its old volume was not removed; the next resize removes it: %v",
 			app.ProjectID, app.ID, target.Size, err)
 	}
@@ -187,17 +187,17 @@ func (s *AppDeployService) moveDisk(ctx context.Context, namespace string, app *
 
 // stopForDisk scales the app to zero and waits until no pod holds its disk.
 func (s *AppDeployService) stopForDisk(ctx context.Context, namespace, appID string) error {
-	if err := s.kube.PauseAppWorkload(ctx, namespace, appID); err != nil && !errors.Is(err, k8s.ErrAppNotDeployed) {
+	if err := s.runtime.PauseAppWorkload(ctx, namespace, appID); err != nil && !errors.Is(err, k8s.ErrAppNotDeployed) {
 		return fmt.Errorf("stop the app before its disk is measured or copied: %w", err)
 	}
-	if err := s.kube.WaitForAppPodsGone(ctx, namespace, appID, s.stopTimeout); err != nil {
+	if err := s.runtime.WaitForAppPodsGone(ctx, namespace, appID, s.stopTimeout); err != nil {
 		return fmt.Errorf("stop the app before its disk is measured or copied: %w", err)
 	}
 	return nil
 }
 
 func (s *AppDeployService) repointBack(ctx context.Context, namespace, appID, claim string, cause error) error {
-	if err := s.kube.RepointAppDisk(ctx, namespace, appID, claim); err != nil {
+	if err := s.runtime.RepointAppDisk(ctx, namespace, appID, claim); err != nil {
 		return errors.Join(cause, fmt.Errorf("mount the app's old disk again: %w", err))
 	}
 	return cause
@@ -313,7 +313,7 @@ func (s *AppDeployService) growClaim(ctx context.Context, app *apphost.App, size
 	if err != nil {
 		return err
 	}
-	err = s.kube.GrowAppDisk(ctx, namespace, app.ID, app.Disk.Generation, size)
+	err = s.runtime.GrowAppDisk(ctx, namespace, app.ID, app.Disk.Generation, size)
 	if errors.Is(err, k8s.ErrAppDiskNotCreated) {
 		return nil
 	}
@@ -369,7 +369,7 @@ func (s *AppDeployService) AppDiskStatus(ctx context.Context, projectID, appID s
 	if err != nil {
 		return nil, err
 	}
-	usage, err := s.kube.AppDiskUsage(ctx, namespace, app.ID, *app.Disk, s.diskJobs)
+	usage, err := s.runtime.AppDiskUsage(ctx, namespace, app.ID, *app.Disk, s.diskJobs)
 	if errors.Is(err, k8s.ErrAppDiskNotCreated) {
 		return report, nil
 	}

@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
-	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
@@ -31,11 +30,11 @@ var errRegistryStoreUnreadable = errors.New("the credential store could not be r
 type RegistryCredentialService struct {
 	vault     vaultclient.VaultClient
 	instances storage.InstanceStore
-	kube      k8s.KubeClient
+	runtime   AppRuntime
 }
 
-func NewRegistryCredentialService(vault vaultclient.VaultClient, instances storage.InstanceStore, kube k8s.KubeClient) *RegistryCredentialService {
-	return &RegistryCredentialService{vault: vault, instances: instances, kube: kube}
+func NewRegistryCredentialService(vault vaultclient.VaultClient, instances storage.InstanceStore, runtime AppRuntime) *RegistryCredentialService {
+	return &RegistryCredentialService{vault: vault, instances: instances, runtime: runtime}
 }
 
 // Set stores the credential, replacing any the registry had, and returns the
@@ -96,7 +95,7 @@ func (s *RegistryCredentialService) Remove(ctx context.Context, projectID, regis
 	if inst == nil || inst.Namespace == "" {
 		return nil
 	}
-	if err := s.kube.DeleteRegistryPullSecrets(ctx, inst.Namespace, normalized); err != nil {
+	if err := s.runtime.DeleteRegistryPullSecrets(ctx, inst.Namespace, normalized); err != nil {
 		return fmt.Errorf("remove the credential from the cluster: %w", err)
 	}
 	return nil
