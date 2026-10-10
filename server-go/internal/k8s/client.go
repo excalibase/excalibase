@@ -776,9 +776,9 @@ const podListPage = 500
 // accumulatePodRequests sums what the scheduler charges every pod that has not
 // finished, including one marked for deletion: it holds its request until it
 // exits. The pods are read a page at a time.
-func (c *Client) accumulatePodRequests(ctx context.Context, cap *ClusterCapacity) error {
-	byNode := make(map[string]int, len(cap.Nodes))
-	for i, node := range cap.Nodes {
+func (c *Client) accumulatePodRequests(ctx context.Context, capacity *ClusterCapacity) error {
+	byNode := make(map[string]int, len(capacity.Nodes))
+	for i, node := range capacity.Nodes {
 		byNode[node.Name] = i
 	}
 	opts := metav1.ListOptions{Limit: podListPage}
@@ -788,7 +788,7 @@ func (c *Client) accumulatePodRequests(ctx context.Context, cap *ClusterCapacity
 			return fmt.Errorf("list pods: %w", err)
 		}
 		for i := range pods.Items {
-			addPodRequest(cap, byNode, &pods.Items[i])
+			addPodRequest(capacity, byNode, &pods.Items[i])
 		}
 		if pods.Continue == "" {
 			return nil
@@ -797,16 +797,16 @@ func (c *Client) accumulatePodRequests(ctx context.Context, cap *ClusterCapacity
 	}
 }
 
-func addPodRequest(cap *ClusterCapacity, byNode map[string]int, p *corev1.Pod) {
+func addPodRequest(capacity *ClusterCapacity, byNode map[string]int, p *corev1.Pod) {
 	if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
 		return
 	}
 	cpu, mem := podRequest(p)
-	cap.RequestedCPUMilli += cpu
-	cap.RequestedMemBytes += mem
+	capacity.RequestedCPUMilli += cpu
+	capacity.RequestedMemBytes += mem
 	if i, ok := byNode[p.Spec.NodeName]; ok {
-		cap.Nodes[i].RequestedCPUMilli += cpu
-		cap.Nodes[i].RequestedMemBytes += mem
+		capacity.Nodes[i].RequestedCPUMilli += cpu
+		capacity.Nodes[i].RequestedMemBytes += mem
 	}
 }
 
