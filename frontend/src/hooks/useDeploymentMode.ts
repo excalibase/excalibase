@@ -4,7 +4,7 @@ import { api } from '../api/client';
 export type DeploymentMode = 'selfhosted' | 'cloud';
 
 // Features that ship dark and are turned on per installation (EXC-554).
-export type Feature = 'mcp' | 'pipeline' | 'appstorage';
+export type Feature = 'mcp' | 'pipeline' | 'appstorage' | 'mysql';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;

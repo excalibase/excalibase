@@ -170,3 +170,48 @@ func TestMinorUpgrade_DockerProjectIsRefused(t *testing.T) {
 		t.Errorf("status: got %d, want 400", w.Code)
 	}
 }
+
+// ADR 0041: a MySQL project's minor upgrade is the newest catalogue version
+// of its series, read off the catalogue, never off the request.
+func TestMinorUpgrade_MySQLMovesToTheNewestCatalogueVersion(t *testing.T) {
+	store, _ := storage.NewFileSystemStore(t.TempDir())
+	mock := k8s.NewMockClient()
+	svc := service.NewProvisioningService(store, provisioner.NewFactory(provisioner.NewMySQLProvisioner(mock)), mock)
+	svc.SetBackgroundRunner(func(func()) {})
+	h := NewProvisioningHandler(svc, nil)
+	h.SetInstanceStore(store)
+	r := chi.NewRouter()
+	r.Route("/api/provision", func(r chi.Router) { h.Routes(r) })
+
+	inst := &domain.DatabaseInstance{ProjectID: "my-1", OrgID: "o", Status: "ACTIVE", DBType: domain.MySQL,
+		DeploymentMode: domain.ModeK8s, Tier: domain.Free, Namespace: "o-my-1", MySQLVersion: "8.4.9"}
+	if err := store.Create(inst); err != nil {
+		t.Fatal(err)
+	}
+	oldImage, _ := config.MySQLImage("8.4.9")
+	cluster, err := k8s.BuildMySQLCluster(k8s.MySQLClusterOpts{ProjectID: "my-1", Namespace: "o-my-1", Image: oldImage,
+		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ApplyCRD(context.Background(), k8s.MOCOClusterGVR, "o-my-1", cluster); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		w := postUpgrade(t, r, "my-1")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+		}
+		var body map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if body["mysqlVersion"] != config.DefaultMySQLVersion() {
+			t.Errorf("answered %v", body)
+		}
+	}
+	got, _ := mock.GetCRD(context.Background(), k8s.MOCOClusterGVR, "o-my-1", "my-1-mysql")
+	newest, _ := config.MySQLImage(config.DefaultMySQLVersion())
+	if k8s.MySQLClusterImage(got) != newest {
+		t.Errorf("image %s", k8s.MySQLClusterImage(got))
+	}
+}

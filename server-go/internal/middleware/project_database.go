@@ -4,11 +4,15 @@ import (
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/routepolicy"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
 var errBodyNoDatabase = `{"error":"` + domain.ErrNoDatabase.Error() + `"}`
+
+// errBodyNotForMySQL refuses a Postgres-only database route on a MySQL project.
+const errBodyNotForMySQL = `{"error":"not available for MySQL projects"}`
 
 // RequireProjectDatabase refuses, with 409, a route that works on the
 // project's database when the project was created without one (EXC-426). It
@@ -38,6 +42,16 @@ func RequireProjectDatabase(instances storage.InstanceStore) func(http.Handler) 
 				w.WriteHeader(http.StatusConflict)
 				_, _ = w.Write([]byte(errBodyNoDatabase))
 				return
+			}
+			// A MySQL project reaches only the database routes the route
+			// table says serve it; an unknown route is refused (ADR 0041).
+			if inst.DBType == domain.MySQL {
+				if row, known := routepolicy.Lookup(r.Method, r.URL.Path); !known || !row.MySQL {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusConflict)
+					_, _ = w.Write([]byte(errBodyNotForMySQL))
+					return
+				}
 			}
 			next.ServeHTTP(w, r)
 		})

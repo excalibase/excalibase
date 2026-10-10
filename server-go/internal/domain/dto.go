@@ -24,9 +24,12 @@ type ProvisioningRequest struct {
 	WebhookURL      string                   `json:"webhookUrl,omitempty"`
 	StorageClass    string                   `json:"storageClassName,omitempty"`
 	PostgresVersion string                   `json:"postgresVersion,omitempty"`
-	DatabaseName    string                   `json:"databaseName,omitempty"`
-	MasterUsername  string                   `json:"masterUsername,omitempty"`
-	ParameterGroup  string                   `json:"parameterGroupName,omitempty"`
+	// MySQLVersion is the catalogue version a MySQL project is created on;
+	// empty takes the catalogue's newest (ADR 0041).
+	MySQLVersion   string `json:"mysqlVersion,omitempty"`
+	DatabaseName   string `json:"databaseName,omitempty"`
+	MasterUsername string `json:"masterUsername,omitempty"`
+	ParameterGroup string `json:"parameterGroupName,omitempty"`
 	// DocumentDB asks for a project whose image carries the DocumentDB
 	// extension. It is a create-time choice and only a create-time choice: the
 	// image a cluster runs is fixed when the cluster is provisioned, so a

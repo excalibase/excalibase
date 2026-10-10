@@ -378,6 +378,9 @@ func (c *Client) ApplyCRD(ctx context.Context, gvr schema.GroupVersionResource, 
 	if gvr == CNPGClusterGVR && c.storage != nil {
 		return c.applyClusterWithinBudget(ctx, namespace, obj)
 	}
+	if gvr == MOCOClusterGVR && c.storage != nil {
+		return c.applyMySQLClusterWithinBudget(ctx, namespace, obj)
+	}
 	return c.applyCRD(ctx, gvr, namespace, obj)
 }
 

@@ -29,6 +29,9 @@ const (
 // UpgradeVersion re-pins the CNPG Cluster onto the catalogue's image for the
 // project's own major, which triggers a rolling restart onto the newest patch.
 func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, newVersion string) error {
+	if inst, err := s.GetInstance(projectID); err == nil && inst.DBType == domain.MySQL {
+		return s.upgradeMySQL(ctx, projectID, newVersion)
+	}
 	// Resolve before touching the cluster: an unsupported major must fail
 	// without having patched anything.
 	image, err := config.PostgresImage(newVersion)
@@ -278,6 +281,12 @@ func validateProjectIdentity(req domain.ProvisioningRequest) error {
 
 // validateDatabaseRequest checks the settings a database is created with.
 func validateDatabaseRequest(req domain.ProvisioningRequest) error {
+	if req.DBType == domain.MySQL {
+		return validateMySQLDatabaseRequest(req)
+	}
+	if req.MySQLVersion != "" {
+		return fmt.Errorf("mysqlVersion applies only to a MySQL project")
+	}
 	// EXC-408: the major is required and is checked against the image
 	// catalogue. There is deliberately no default: silently provisioning on a
 	// major the caller did not ask for is how a project ends up on bits nobody

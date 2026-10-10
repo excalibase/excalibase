@@ -67,6 +67,8 @@ type MockClient struct {
 	// "<cluster>-ca" Secret, as when the operator has not issued one.
 	NoClusterCA       bool
 	WildcardExecError error // ExecInPod returns this for any pod not in ExecError
+	// WildcardExecOutput is what ExecInPod prints for any pod not in ExecOutput.
+	WildcardExecOutput string
 
 	// DenoRuntimes — set of namespaces where EnsureDenoRuntime has been called.
 	DenoRuntimes map[string]bool
@@ -425,6 +427,9 @@ func (m *MockClient) ApplyCRD(ctx context.Context, gvr schema.GroupVersionResour
 	if m.AutoReconcileClusters && obj.GetKind() == "Cluster" {
 		markClusterHealthy(obj)
 	}
+	if m.AutoReconcileClusters && obj.GetKind() == "MySQLCluster" {
+		markMySQLClusterHealthy(obj)
+	}
 	return nil
 }
 
@@ -452,6 +457,18 @@ func markClusterHealthy(obj *unstructured.Unstructured) {
 		"phase":          "Cluster in healthy state",
 		"currentPrimary": obj.GetName() + "-1",
 		"readyInstances": int64(1),
+	}, "status")
+}
+
+// markMySQLClusterHealthy stamps what MOCO reports for a serving cluster.
+func markMySQLClusterHealthy(obj *unstructured.Unstructured) {
+	_ = unstructured.SetNestedField(obj.Object, map[string]interface{}{
+		"currentPrimaryIndex": int64(0),
+		"conditions": []interface{}{
+			map[string]interface{}{"type": "Available", "status": "True"},
+			map[string]interface{}{"type": "Healthy", "status": "True"},
+			map[string]interface{}{"type": "StatefulSetReady", "status": "True"},
+		},
 	}, "status")
 }
 
@@ -627,7 +644,7 @@ func (m *MockClient) exec(namespace, pod string, cmd []string, stdin string) (st
 	if out, ok := m.ExecOutput[key]; ok {
 		return out, nil
 	}
-	return "", nil
+	return m.WildcardExecOutput, nil
 }
 
 func (m *MockClient) GetPodMetrics(ctx context.Context, namespace string) ([]PodResourceMetrics, error) {

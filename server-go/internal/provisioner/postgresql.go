@@ -731,22 +731,26 @@ func (p *PostgreSQLProvisioner) waitForNamespaceGone(ctx context.Context, namesp
 // holds its CPU request, which is the number capacity admission plans new
 // projects against, and a surviving claim still holds its volume.
 func (p *PostgreSQLProvisioner) namespaceRemnants(ctx context.Context, namespace string) ([]string, error) {
+	return namespaceRemnants(ctx, p.client, namespace)
+}
+
+func namespaceRemnants(ctx context.Context, client k8s.KubeClient, namespace string) ([]string, error) {
 	var left []string
-	exists, err := p.client.NamespaceExists(ctx, namespace)
+	exists, err := client.NamespaceExists(ctx, namespace)
 	if err != nil {
 		return nil, err
 	}
 	if exists {
 		left = append(left, "namespace/"+namespace)
 	}
-	pods, err := p.client.GetPods(ctx, namespace, "")
+	pods, err := client.GetPods(ctx, namespace, "")
 	if err != nil {
 		return nil, err
 	}
 	for _, pod := range pods {
 		left = append(left, "pod/"+pod.Name)
 	}
-	pvcs, err := p.client.ListPVCs(ctx, namespace)
+	pvcs, err := client.ListPVCs(ctx, namespace)
 	if err != nil {
 		return nil, err
 	}

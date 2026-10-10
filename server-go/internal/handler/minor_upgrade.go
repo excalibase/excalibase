@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/go-chi/chi/v5"
 )
@@ -49,6 +50,12 @@ func (h *ProvisioningHandler) UpgradeMinorVersion(w http.ResponseWriter, r *http
 		httpError(w, "project is "+inst.Status+"; a minor upgrade needs an active project", http.StatusConflict)
 		return
 	}
+	// A MySQL project moves to the newest catalogue version of its series
+	// (ADR 0041); the series is the only one offered.
+	if inst.DBType == domain.MySQL {
+		h.upgradeMySQLMinor(w, r, projectID)
+		return
+	}
 	// Without a recorded major there is nothing to resolve the newest patch
 	// of, and picking one would put bits under a tenant's data that nobody
 	// chose.
@@ -72,5 +79,23 @@ func (h *ProvisioningHandler) UpgradeMinorVersion(w http.ResponseWriter, r *http
 		"status":          got.Status,
 		"currentStage":    got.CurrentStage,
 		"postgresVersion": got.PostgresVersion,
+	})
+}
+
+func (h *ProvisioningHandler) upgradeMySQLMinor(w http.ResponseWriter, r *http.Request, projectID string) {
+	if err := h.svc.UpgradeVersion(r.Context(), projectID, config.DefaultMySQLVersion()); err != nil {
+		httpError(w, safeError(err), unsettledOr(err, http.StatusInternalServerError))
+		return
+	}
+	got, err := h.instances.FindByProjectID(projectID)
+	if err != nil || got == nil {
+		httpError(w, "project not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"projectId":    got.ProjectID,
+		"status":       got.Status,
+		"currentStage": got.CurrentStage,
+		"mysqlVersion": got.MySQLVersion,
 	})
 }

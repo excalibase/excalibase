@@ -27,7 +27,12 @@ var (
 	ErrStorageCapacityUnknown = errors.New("the storage layer does not report its capacity")
 )
 
-const cnpgClusterLabel = "cnpg.io/cluster"
+const (
+	cnpgClusterLabel = "cnpg.io/cluster"
+	// MOCO labels a MySQL cluster's claims with its name (ADR 0041).
+	mocoCreatedByLabel = "app.kubernetes.io/created-by"
+	mocoInstanceLabel  = "app.kubernetes.io/instance"
+)
 
 // StorageAllocation is what the platform's volumes reserve, in bytes.
 type StorageAllocation struct {
@@ -116,6 +121,9 @@ func (c *Client) StorageAllocated(ctx context.Context) (StorageAllocation, error
 		if cluster := pvc.Labels[cnpgClusterLabel]; cluster != "" {
 			claimed[pvc.Namespace+"/"+cluster] += bytes
 		}
+		if cluster := pvc.Labels[mocoInstanceLabel]; cluster != "" && pvc.Labels[mocoCreatedByLabel] == "moco" {
+			claimed[pvc.Namespace+"/mysql/"+cluster] += bytes
+		}
 	}
 	for namespace := range isProject {
 		pending, err := c.clusterBytesStillToClaim(ctx, namespace, claimed)
@@ -142,7 +150,55 @@ func (c *Client) clusterBytesStillToClaim(ctx context.Context, namespace string,
 			pending += want
 		}
 	}
+	mysql, err := c.mysqlBytesStillToClaim(ctx, namespace, claimed)
+	if err != nil {
+		return 0, err
+	}
+	return pending + mysql, nil
+}
+
+// mysqlBytesStillToClaim is clusterBytesStillToClaim for MOCO clusters. A
+// cluster without MOCO installed lists nothing.
+func (c *Client) mysqlBytesStillToClaim(ctx context.Context, namespace string, claimed map[string]int64) (int64, error) {
+	clusters, err := c.dynamicClient.Resource(MOCOClusterGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if apierrors.IsNotFound(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("list MySQL clusters in %s: %w", namespace, err)
+	}
+	var pending int64
+	for _, cluster := range clusters.Items {
+		bytes, err := MySQLClusterStorageBytes(&cluster)
+		if err != nil {
+			return 0, err
+		}
+		if want := bytes - claimed[namespace+"/mysql/"+cluster.GetName()]; want > 0 {
+			pending += want
+		}
+	}
 	return pending, nil
+}
+
+// applyMySQLClusterWithinBudget reserves what a MySQL cluster adds before
+// creating or replacing it.
+func (c *Client) applyMySQLClusterWithinBudget(ctx context.Context, namespace string, obj *unstructured.Unstructured) error {
+	want, err := MySQLClusterStorageBytes(obj)
+	if err != nil {
+		return err
+	}
+	var have int64
+	existing, err := c.dynamicClient.Resource(MOCOClusterGVR).Namespace(namespace).Get(ctx, obj.GetName(), metav1.GetOptions{})
+	switch {
+	case err == nil:
+		if have, err = MySQLClusterStorageBytes(existing); err != nil {
+			return err
+		}
+	case !apierrors.IsNotFound(err):
+		return fmt.Errorf("read MySQL cluster %s/%s: %w", namespace, obj.GetName(), err)
+	}
+	what := fmt.Sprintf("the MySQL cluster %s/%s", namespace, obj.GetName())
+	return c.reserve(ctx, want-have, what, func() error { return c.applyCRD(ctx, MOCOClusterGVR, namespace, obj) })
 }
 
 // claimBytes is what a claim reserves: its capacity once bound, its request

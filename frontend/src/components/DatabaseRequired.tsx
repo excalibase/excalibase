@@ -3,6 +3,7 @@ import { Database, Loader2 } from 'lucide-react';
 import { useInstance } from '../hooks/useProvisioning';
 import { secondaryButton } from './containers/ContainerBits';
 import { apiErrorMessage } from '../api/apps';
+import { isMySQLProject } from '../utils/engine';
 
 // Wraps the pages that work on the project's database (EXC-426). A project
 // created without one gets a plain statement and the way to add one, instead
@@ -26,6 +27,7 @@ export function DatabaseRequired() {
       </div>
     );
   }
+  if (isMySQLProject(project)) return <PostgresRequired projectId={projectId} />;
   if (!project.noDatabase) return <Outlet />;
   return (
     <div data-testid="database-required" className="max-w-xl mx-auto py-16 text-center space-y-4">
@@ -36,6 +38,23 @@ export function DatabaseRequired() {
       </p>
       <Link to={project.canAddDatabase ? `/project/${projectId}/database/add` : `/project/${projectId}`} className={secondaryButton}>
         {project.canAddDatabase ? 'Add database' : 'Back to overview'}
+      </Link>
+    </div>
+  );
+}
+
+// The pages behind this guard work on a PostgreSQL database; a MySQL project
+// (ADR 0041) is told so rather than shown a page that fails.
+function PostgresRequired({ projectId }: { readonly projectId: string }) {
+  return (
+    <div data-testid="postgres-required" className="max-w-xl mx-auto py-16 text-center space-y-4">
+      <Database className="w-10 h-10 mx-auto text-text-tertiary" />
+      <h2 className="text-lg font-semibold text-text-primary">Not available for MySQL projects</h2>
+      <p className="text-sm text-text-secondary">
+        This page works on a PostgreSQL database. Connect to your MySQL database with any MySQL client.
+      </p>
+      <Link to={`/project/${projectId}`} className={secondaryButton}>
+        Back to overview
       </Link>
     </div>
   );

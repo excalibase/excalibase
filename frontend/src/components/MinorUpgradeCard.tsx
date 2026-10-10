@@ -4,6 +4,7 @@ import { useUpgradeMinorVersion } from '../hooks/useProvisioning';
 import { ConfirmModal } from './ui/ConfirmModal';
 import type { DatabaseInstance } from '../types';
 import { serverErrorMessage } from '../utils/serverError';
+import { isMySQLProject } from '../utils/engine';
 
 interface MinorUpgradeCardProps {
   readonly project: DatabaseInstance;
@@ -21,16 +22,20 @@ export function MinorUpgradeCard({ project }: MinorUpgradeCardProps) {
   const [confirming, setConfirming] = useState(false);
   const upgrade = useUpgradeMinorVersion();
 
-  const major = project.postgresVersion;
+  const mysql = isMySQLProject(project);
+  const engine = mysql ? 'MySQL' : 'PostgreSQL';
+  const major = mysql ? project.mysqlVersion : project.postgresVersion;
   const blocked = project.status !== 'ACTIVE' || !major;
+  // A MySQL project stays on its 8.4 LTS series; Postgres on its major.
+  const scope = mysql
+    ? `This project runs MySQL ${major}. A minor upgrade takes the newest 8.4 release; the series does not change.`
+    : `This project runs PostgreSQL ${major}. A minor upgrade takes the newest patch release of ${major} — the major does not change.`;
 
   return (
     <div className="rounded-lg border border-border-primary bg-surface-card p-4" data-testid="minor-upgrade-card">
-      <h4 className="text-sm font-medium text-text-primary mb-2">PostgreSQL Version</h4>
+      <h4 className="text-sm font-medium text-text-primary mb-2">{engine} Version</h4>
       <p className="text-xs text-text-secondary mb-3">
-        {major
-          ? `This project runs PostgreSQL ${major}. A minor upgrade takes the newest patch release of ${major} — the major does not change.`
-          : 'This project records no PostgreSQL major, so its newest patch cannot be resolved.'}
+        {major ? scope : `This project records no ${engine} version, so its newest patch cannot be resolved.`}
         {project.status !== 'ACTIVE' && ' The project must be active before it can be upgraded.'}
       </p>
 
@@ -53,7 +58,7 @@ export function MinorUpgradeCard({ project }: MinorUpgradeCardProps) {
 
       {upgrade.isSuccess && upgrade.data && (
         <p className="text-xs text-text-secondary mt-3" data-testid="minor-upgrade-result">
-          Upgrade requested. The project reports status {upgrade.data.status} on PostgreSQL {upgrade.data.postgresVersion}
+          Upgrade requested. The project reports status {upgrade.data.status} on {engine} {upgrade.data.mysqlVersion ?? upgrade.data.postgresVersion}
           {upgrade.data.currentStage ? ` (${upgrade.data.currentStage})` : ''}. The restart is rolling; the project page
           shows it as it settles.
         </p>
@@ -67,7 +72,7 @@ export function MinorUpgradeCard({ project }: MinorUpgradeCardProps) {
           upgrade.mutate(project.projectId);
         }}
         title="Upgrade to the newest patch"
-        message={`This restarts the database for "${project.projectId}" onto the newest patch release of PostgreSQL ${major}. Connections drop while each instance restarts.`}
+        message={`This restarts the database for "${project.projectId}" onto the newest patch release of ${engine} ${major}. Connections drop while each instance restarts.`}
         confirmLabel="Upgrade"
         loading={upgrade.isPending}
       />

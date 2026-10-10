@@ -45,7 +45,7 @@ const OperationAddDatabase ProjectOperation = "database add"
 // databaseSettingsNamed reports whether a request names anything about a
 // database.
 func databaseSettingsNamed(req domain.ProvisioningRequest) bool {
-	return req.DBType != "" || strings.TrimSpace(req.PostgresVersion) != "" || req.DocumentDB ||
+	return req.DBType != "" || strings.TrimSpace(req.PostgresVersion) != "" || req.MySQLVersion != "" || req.DocumentDB ||
 		req.Backup != nil || req.Pooler != nil || req.Network != nil || req.Maintenance != nil ||
 		len(req.Parameters) > 0 || req.StorageClass != "" || req.DatabaseName != "" ||
 		req.MasterUsername != "" || req.ParameterGroup != ""
@@ -318,11 +318,11 @@ func (s *ProvisioningService) recoverInterruptedAdd(ctx context.Context, project
 		return nil
 	}
 	if inst.DeploymentMode == domain.ModeK8s {
-		pg, err := s.postgresProvisioner()
+		remover, err := s.databaseRemover(inst.DBType)
 		if err != nil {
 			return err
 		}
-		if err := pg.RemoveDatabase(ctx, inst.Namespace, inst.ProjectID); err != nil {
+		if err := remover.RemoveDatabase(ctx, inst.Namespace, inst.ProjectID); err != nil {
 			return err
 		}
 	}
@@ -339,6 +339,19 @@ func (s *ProvisioningService) recoverInterruptedAdd(ctx context.Context, project
 	inst.Port = nil
 	inst.BackupEnabled, inst.BackupSchedule, inst.BackupRetentionDays = nil, "", nil
 	return s.store.UpdateIfStatus(inst, string(domain.StatusProvisioning))
+}
+
+// databaseRemover tears down a database added into a project's namespace,
+// by the provisioner of the engine the add recorded.
+type databaseRemover interface {
+	RemoveDatabase(ctx context.Context, namespace, projectID string) error
+}
+
+func (s *ProvisioningService) databaseRemover(dbType domain.DatabaseType) (databaseRemover, error) {
+	if dbType == domain.MySQL {
+		return s.mysqlProvisioner()
+	}
+	return s.postgresProvisioner()
 }
 
 // requireBuilding admits only a project whose build is recorded in flight.

@@ -54,11 +54,14 @@ const (
 // stopped before the project is recorded PAUSED. A project is never PAUSED
 // on the strength of an accepted request.
 type PauseService struct {
-	instances   storage.InstanceStore
-	pausers     map[domain.DeploymentMode]provisioner.Pauser
-	backups     PrePauseBackup
-	replication ReplicationRestarter
-	poller      provisioner.Poller
+	instances storage.InstanceStore
+	pausers   map[domain.DeploymentMode]provisioner.Pauser
+	// enginePausers serve every engine other than Postgres (ADR 0041); a
+	// project's engine picks here first, its deployment mode only for Postgres.
+	enginePausers map[domain.DatabaseType]provisioner.Pauser
+	backups       PrePauseBackup
+	replication   ReplicationRestarter
+	poller        provisioner.Poller
 	// claimer serialises lifecycle operations per project across replicas.
 	// The process-local mutex below only orders the goroutines in THIS
 	// process; the lease is what stops two replicas interleaving.
@@ -109,11 +112,13 @@ type ReplicationRestarter interface {
 // PauseServiceConfig wires the dependencies. Instances and Pausers are
 // required; Backups, Replication and Poller have working defaults.
 type PauseServiceConfig struct {
-	Instances   storage.InstanceStore
-	Pausers     map[domain.DeploymentMode]provisioner.Pauser
-	Backups     PrePauseBackup
-	Replication ReplicationRestarter
-	Poller      provisioner.Poller
+	Instances storage.InstanceStore
+	Pausers   map[domain.DeploymentMode]provisioner.Pauser
+	// EnginePausers are the pausers of engines other than Postgres.
+	EnginePausers map[domain.DatabaseType]provisioner.Pauser
+	Backups       PrePauseBackup
+	Replication   ReplicationRestarter
+	Poller        provisioner.Poller
 	// Claimer must be the SAME claimer the provisioning service holds, or
 	// pause and deletion will not exclude one another. Defaults to an
 	// in-process claimer, which is correct for a single replica.
@@ -139,14 +144,27 @@ func NewPauseService(c PauseServiceConfig) *PauseService {
 		claimer = newInProcessOperationClaimer()
 	}
 	return &PauseService{
-		claimer:     claimer,
-		instances:   c.Instances,
-		pausers:     c.Pausers,
-		backups:     c.Backups,
-		replication: c.Replication,
-		poller:      poller,
-		endpoints:   c.Endpoints,
+		claimer:       claimer,
+		instances:     c.Instances,
+		pausers:       c.Pausers,
+		enginePausers: c.EnginePausers,
+		backups:       c.Backups,
+		replication:   c.Replication,
+		poller:        poller,
+		endpoints:     c.Endpoints,
 	}
+}
+
+// pauserFor picks the pauser of the project's engine: Postgres by its
+// deployment mode, any other engine by its own. An engine with none is not
+// handed to another engine's.
+func (s *PauseService) pauserFor(inst *domain.DatabaseInstance) (provisioner.Pauser, bool) {
+	if inst.DBType != "" && inst.DBType != domain.PostgreSQL {
+		pauser, ok := s.enginePausers[inst.DBType]
+		return pauser, ok
+	}
+	pauser, ok := s.pausers[inst.DeploymentMode]
+	return pauser, ok
 }
 
 // ErrPauseUnsupported is returned when a project's deployment mode has no
@@ -273,7 +291,7 @@ func (s *PauseService) admitPause(ctx context.Context, projectID, reason string)
 		// Pause and resume stop and start the database; there is none.
 		return nil, fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
 	}
-	pauser, ok := s.pausers[inst.DeploymentMode]
+	pauser, ok := s.pauserFor(inst)
 	if !ok {
 		return nil, ErrPauseUnsupported
 	}
@@ -562,7 +580,7 @@ func (s *PauseService) admitResume(ctx context.Context, projectID string) (func(
 		// Pause and resume stop and start the database; there is none.
 		return nil, fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
 	}
-	pauser, ok := s.pausers[inst.DeploymentMode]
+	pauser, ok := s.pauserFor(inst)
 	if !ok {
 		return nil, ErrPauseUnsupported
 	}

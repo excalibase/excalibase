@@ -10,6 +10,7 @@ export function engineLabel(project: EngineFields): string {
   if (project.noDatabase === true) return 'No database';
   if (project.documentDb === true) return DOCUMENTDB_LABEL;
   if (project.databaseType === 'POSTGRESQL') return 'PostgreSQL';
+  if (project.databaseType === 'MYSQL') return 'MySQL';
   return project.databaseType;
 }
 
@@ -19,4 +20,9 @@ export function engineIcon(project: EngineFields): string {
   if (project.databaseType === 'POSTGRESQL') return '🐘';
   if (project.databaseType === 'MYSQL') return '🐬';
   return '🗄️';
+}
+
+// A MySQL project (ADR 0041) has no Postgres pages.
+export function isMySQLProject(project: { databaseType?: string } | undefined): boolean {
+  return project?.databaseType === 'MYSQL';
 }
