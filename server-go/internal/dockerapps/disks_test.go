@@ -154,3 +154,15 @@ func TestDiskRemovalKeepsToItsOwnPrefix(t *testing.T) {
 		t.Fatal("removed a volume outside the volume prefix")
 	}
 }
+
+// An app without a disk deploys: there is nothing to create, as on Kubernetes.
+func TestCreateAppDiskWithoutADiskDoesNothing(t *testing.T) {
+	h := newHarness(t, nil)
+	h.engine.toolOutput = func(cmd []string) (string, int) { t.Errorf("ran %v for an app without a disk", cmd); return "", 0 }
+	if err := h.rt.CreateAppDisk(context.Background(), testDB, freeApp(), "", diskJobs); err != nil {
+		t.Fatalf("an app without a disk: %v", err)
+	}
+	if len(h.engine.volumes) != 0 {
+		t.Fatalf("volumes %v", h.engine.volumes)
+	}
+}
