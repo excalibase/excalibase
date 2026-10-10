@@ -33,6 +33,7 @@ var errNoVault = errors.New("no vault is configured to read it from")
 
 type databaseLogin struct {
 	host, port, database, username, password, sslMode string
+	mysql                                             bool
 }
 
 func (r *AppEnvResolver) ResolveReference(projectID string, ref apphost.ResolvedReference) (string, error) {
@@ -45,6 +46,9 @@ func (r *AppEnvResolver) ResolveReference(projectID string, ref apphost.Resolved
 	login, err := r.databaseLogin(projectID, ref.Target.SourceName)
 	if err != nil {
 		return "", err
+	}
+	if login.mysql {
+		return login.mysqlVariable(ref.Target.Variable)
 	}
 	switch ref.Target.Variable {
 	case "DATABASE_URL":
@@ -93,6 +97,7 @@ func (r *AppEnvResolver) databaseLogin(projectID, databaseName string) (database
 	login := databaseLogin{
 		host: record["host"], port: record["port"], database: record["database"],
 		username: record["username"], password: record["password"], sslMode: inst.SSLMode,
+		mysql: domain.IsMySQLRecord(record),
 	}
 	for field, value := range map[string]string{
 		"host": login.host, "port": login.port, "database": login.database,
@@ -103,6 +108,26 @@ func (r *AppEnvResolver) databaseLogin(projectID, databaseName string) (database
 		}
 	}
 	return login, nil
+}
+
+// mysqlVariable is one variable of a MySQL database (ADR 0041).
+func (l databaseLogin) mysqlVariable(variable string) (string, error) {
+	switch variable {
+	case "DATABASE_URL":
+		return domain.MySQLURL(l.host, l.port, l.username, l.password, l.database), nil
+	case "MYSQL_HOST":
+		return l.host, nil
+	case "MYSQL_PORT":
+		return l.port, nil
+	case "MYSQL_DATABASE":
+		return l.database, nil
+	case "MYSQL_USER":
+		return l.username, nil
+	case "MYSQL_PASSWORD":
+		return l.password, nil
+	default:
+		return "", fmt.Errorf("a MySQL database exposes no variable %q", variable)
+	}
 }
 
 func (l databaseLogin) url() string {

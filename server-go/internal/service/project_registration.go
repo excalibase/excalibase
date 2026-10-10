@@ -219,8 +219,7 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 		return pc.Fail(fmt.Errorf("%w: the vault is not available", ErrOwnerCredentialUnavailable))
 	}
 	if inst.DBType == domain.MySQL {
-		// MySQL users and their vault records come with EXC-584.
-		return nil
+		return s.setupMySQLCredentials(ctx, inst, pc)
 	}
 	port := 5432
 	if inst.Port != nil {

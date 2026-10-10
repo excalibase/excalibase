@@ -119,6 +119,12 @@ export function SettingsPage() {
       </div>
       </>)}
 
+      {!noDatabase && isMySQLProject(project) && (
+        <div className="mb-8">
+          <ConnectionStrings projectId={project.projectId} documentDb={false} />
+        </div>
+      )}
+
       <AppNetworkSection projectId={project.projectId} status={project.status} />
 
       <div className="mb-8">

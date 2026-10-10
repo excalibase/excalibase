@@ -5,7 +5,7 @@ import { emptyEnvRow, type EnvRow } from './appFormModel';
 
 const row = (patch: Partial<EnvRow>): EnvRow => ({ ...emptyEnvRow(), ...patch });
 
-function mount(rows: EnvRow[], extra: { errors?: Record<number, string>; databaseName?: string } = {}) {
+function mount(rows: EnvRow[], extra: { errors?: Record<number, string>; databaseName?: string; mysql?: boolean } = {}) {
   const onChange = vi.fn();
   render(<EnvVarEditor rows={rows} onChange={onChange} {...extra} />);
   return onChange;
@@ -53,6 +53,21 @@ describe('EnvVarEditor', () => {
     expect(screen.getByTestId('env-row-0')).toHaveTextContent('database main');
     fireEvent.change(screen.getByTestId('env-variable-0'), { target: { value: 'PGHOST' } });
     expect(onChange).toHaveBeenCalledWith([{ ...reference, variable: 'PGHOST' }]);
+  });
+
+  // ADR 0041: a MySQL database offers MySQL variables, a Postgres one PG ones.
+  test('a MySQL database offers MySQL variables only', () => {
+    mount([row({ kind: 'reference' })], { databaseName: 'app', mysql: true });
+    const offered = screen.getAllByRole('option').map((option) => option.textContent);
+    expect(offered).toEqual(expect.arrayContaining(['DATABASE_URL', 'MYSQL_HOST', 'MYSQL_PASSWORD']));
+    expect(offered).not.toContain('PGHOST');
+  });
+
+  test('a Postgres database offers no MySQL variable', () => {
+    mount([row({ kind: 'reference' })], { databaseName: 'main' });
+    const offered = screen.getAllByRole('option').map((option) => option.textContent);
+    expect(offered).toContain('PGHOST');
+    expect(offered).not.toContain('MYSQL_HOST');
   });
 
   test('a new secret takes a hidden value', () => {

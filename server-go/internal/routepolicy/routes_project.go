@@ -15,8 +15,8 @@ var provisionRows = []Row{
 
 	{Methods: del, Pattern: "/api/provision/{projectId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "stops the project and hard-deletes it after the grace period"},
 	{Methods: post, Pattern: "/api/provision/{projectId}/deletion/cancel", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleOwner},
-	{Methods: get, Pattern: "/api/provision/{projectId}/credentials", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Discloses: Secret, Note: "hands out the tenant database's superuser password", Database: true},
-	{Methods: post, Pattern: "/api/provision/{projectId}/credentials/rotate", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true},
+	{Methods: get, Pattern: "/api/provision/{projectId}/credentials", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Discloses: Secret, Note: "hands out the tenant database's superuser password", Database: true, MySQL: true},
+	{Methods: post, Pattern: "/api/provision/{projectId}/credentials/rotate", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true, MySQL: true},
 	{Methods: get, Pattern: "/api/provision/{projectId}/documentdb/users/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Discloses: NoSecret, Note: "names and roles only; a password is shown once, at create or rotate", Database: true},
 	{Methods: post, Pattern: "/api/provision/{projectId}/documentdb/users/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "creates a Mongo-only login in the project's cluster", Database: true},
 	{Methods: post, Pattern: "/api/provision/{projectId}/documentdb/users/{username}/rotate", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true},

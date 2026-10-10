@@ -1445,6 +1445,9 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 	if err != nil {
 		return nil, err
 	}
+	if inst.DBType == domain.MySQL {
+		return mysqlCredentials(inst, password), nil
+	}
 	port := 5432
 	if inst.Port != nil {
 		port = *inst.Port

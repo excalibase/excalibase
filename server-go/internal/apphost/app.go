@@ -198,6 +198,7 @@ const (
 // refused here rather than resolving to an empty string at deploy time.
 var databaseSourceVariables = []string{
 	"DATABASE_URL", "PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD",
+	"MYSQL_HOST", "MYSQL_PORT", "MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD",
 }
 
 // DatabaseSourceVariables returns the variables a database source exposes.

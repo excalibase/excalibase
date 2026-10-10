@@ -277,6 +277,13 @@ func (s *ProvisioningService) resumePendingPassword(pendingPath string, filed bo
 // client puts every argument into the exec request's URL, where the API
 // server records it in its audit log.
 func (s *ProvisioningService) alterRolePassword(ctx context.Context, inst *domain.DatabaseInstance, username, password string) error {
+	if inst.DBType == domain.MySQL {
+		mysql, err := s.mysqlProvisioner()
+		if err != nil {
+			return err
+		}
+		return mysql.SetUserPassword(ctx, inst.Namespace, inst.ProjectID, username, password)
+	}
 	sqlText := pgroles.PinnedSearchPath + alterRolePasswordSQL(username, password) + "\n"
 	_, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, inst.ProjectID+"-postgres-1", "postgres",
 		[]string{"psql", "-U", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}, sqlText)
@@ -315,6 +322,9 @@ func (s *ProvisioningService) announceCredentialRotation(ctx context.Context, pr
 // roleCredentialRecord builds the vault record for a role, in the shape
 // provisioning files credentials in.
 func roleCredentialRecord(inst *domain.DatabaseInstance, username, password string) map[string]string {
+	if inst.DBType == domain.MySQL {
+		return mysqlCredentialRecord(inst, username, password)
+	}
 	port := 5432
 	if inst.Port != nil {
 		port = *inst.Port
@@ -361,6 +371,9 @@ func NewTenantRoleVerifier() *TenantRoleVerifier {
 // a trivial query. Errors name the role and nothing else — the connection
 // string carries the password being proved.
 func (v *TenantRoleVerifier) VerifyRole(ctx context.Context, inst *domain.DatabaseInstance, username, password string) error {
+	if inst.DBType == domain.MySQL {
+		return v.verifyMySQLUser(ctx, inst, username, password)
+	}
 	overrides := v.overrides
 	if overrides.sslmode == "" && overrides.host == "" && inst.SSLMode != "" {
 		overrides.sslmode = inst.SSLMode

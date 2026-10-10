@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -142,6 +143,7 @@ func (p *MySQLProvisioner) createDatabase(ctx context.Context, namespace, projec
 		ReadOnlyHost: k8s.MySQLReplicaHost(projectID, namespace),
 		Port:         mysqlPort,
 		DatabaseName: database,
+		Username:     MySQLUserAdmin,
 		SSLMode:      "REQUIRED",
 		Namespace:    namespace,
 	}, nil
@@ -202,6 +204,48 @@ func (p *MySQLProvisioner) query(ctx context.Context, namespace, projectID, stat
 	}
 	cmd := []string{"mysql", "--defaults-extra-file=" + mysqlAdminCnf, "--batch", "--skip-column-names", "-e", statement}
 	return p.client.ExecInPod(ctx, namespace, k8s.MySQLPrimaryPod(cluster), mysqlContainer, cmd)
+}
+
+// EnsurePlatformUsers creates the platform's databases and users on the
+// primary, or resets the passwords of users a restored cluster brought.
+func (p *MySQLProvisioner) EnsurePlatformUsers(ctx context.Context, namespace, projectID, database string, passwords MySQLPasswords) error {
+	err := p.execSecret(ctx, namespace, projectID, MySQLPlatformUsersSQL(database, passwords),
+		passwords.Admin, passwords.App, passwords.AuthAdmin, passwords.Watcher)
+	if err != nil {
+		return fmt.Errorf("create the platform users: %w", err)
+	}
+	return nil
+}
+
+// SetUserPassword sets one platform user's password.
+func (p *MySQLProvisioner) SetUserPassword(ctx context.Context, namespace, projectID, user, password string) error {
+	if err := p.execSecret(ctx, namespace, projectID, MySQLAlterUserSQL(user, password), password); err != nil {
+		return fmt.Errorf("set the %s password: %w", user, err)
+	}
+	return nil
+}
+
+// execSecret runs statements that carry passwords on the primary. They go on
+// stdin, never as exec arguments, which the API server's audit log records;
+// mysql echoes a failed statement, so the error is logged with the secrets
+// scrubbed and reported only as a failure.
+func (p *MySQLProvisioner) execSecret(ctx context.Context, namespace, projectID, statements string, secrets ...string) error {
+	cluster, err := p.client.GetCRD(ctx, k8s.MOCOClusterGVR, namespace, k8s.MySQLClusterName(projectID))
+	if err != nil {
+		return fmt.Errorf("read MySQL cluster: %w", err)
+	}
+	cmd := []string{"mysql", "--defaults-extra-file=" + mysqlAdminCnf, "--batch"}
+	if _, err := p.client.ExecInPodStdin(ctx, namespace, k8s.MySQLPrimaryPod(cluster), mysqlContainer, cmd, statements); err != nil {
+		reported := err.Error()
+		for _, secret := range secrets {
+			if secret != "" {
+				reported = strings.ReplaceAll(reported, secret, "[redacted]")
+			}
+		}
+		log.Printf("WARN: mysql on %s/%s: %s", namespace, k8s.MySQLPrimaryPod(cluster), reported)
+		return errors.New("the statements were refused or could not be run on the primary")
+	}
+	return nil
 }
 
 // serving reports whether every instance pod is ready, MOCO reports a

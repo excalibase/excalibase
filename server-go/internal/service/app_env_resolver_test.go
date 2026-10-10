@@ -195,3 +195,39 @@ func TestAppEnvResolver_NoVaultRefusesInsteadOfPanicking(t *testing.T) {
 		t.Error("a secret with no vault must be refused")
 	}
 }
+
+// ADR 0041: a container linked to a MySQL project's database gets MySQL
+// variables and a mysql:// DATABASE_URL, from the owner's login.
+func TestAppEnvResolver_MySQLVariables(t *testing.T) {
+	resolver, vault, instances := resolverFixture()
+	vault.data[vaultCredentialPath(resolverProject, roleAdmin)] = map[string]string{
+		"engine": "mysql", "tls": "required", "host": "moco-p-mysql-primary", "port": "3306",
+		"database": resolverDatabase, "username": "admin", "password": ownerPassword,
+	}
+	instances.Items[resolverProject].DBType = domain.MySQL
+	instances.Items[resolverProject].SSLMode = "REQUIRED"
+	want := map[string]string{
+		"DATABASE_URL":   domain.MySQLURL("moco-p-mysql-primary", "3306", "admin", ownerPassword, resolverDatabase),
+		"MYSQL_HOST":     "moco-p-mysql-primary",
+		"MYSQL_PORT":     "3306",
+		"MYSQL_DATABASE": resolverDatabase,
+		"MYSQL_USER":     "admin",
+		"MYSQL_PASSWORD": ownerPassword,
+	}
+	for variable, value := range want {
+		got, err := resolver.ResolveReference(resolverProject, databaseRef(variable))
+		if err != nil || got != value {
+			t.Errorf("%s = %q, %v; want %q", variable, got, err, value)
+		}
+	}
+	if _, err := resolver.ResolveReference(resolverProject, databaseRef("PGHOST")); err == nil {
+		t.Error("a MySQL database answered PGHOST")
+	}
+}
+
+func TestAppEnvResolver_PostgresRefusesMySQLVariables(t *testing.T) {
+	resolver, _, _ := resolverFixture()
+	if _, err := resolver.ResolveReference(resolverProject, databaseRef("MYSQL_HOST")); err == nil {
+		t.Error("a Postgres database answered MYSQL_HOST")
+	}
+}

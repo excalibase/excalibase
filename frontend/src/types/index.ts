@@ -120,6 +120,10 @@ export interface CredentialsResponse {
   // The control plane serves this as `connectionUrl`; `connectionString` was
   // never a field it sent.
   connectionUrl: string;
+  // 'mysql' on a MySQL project (ADR 0041), absent on Postgres; jdbcUrl is its
+  // Connector/J URL, credentials passed separately.
+  engine?: 'mysql';
+  jdbcUrl?: string;
 }
 
 export interface BackupConfig {

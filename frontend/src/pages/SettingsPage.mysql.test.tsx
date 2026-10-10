@@ -13,9 +13,17 @@ const MYSQL_PROJECT = {
   deletionProtection: true,
 };
 
+const MYSQL_CREDENTIALS = {
+  projectId: 'p-my', host: MYSQL_PROJECT.host, port: 3306, databaseName: 'app', username: 'admin',
+  password: 's3cr3t', sslMode: 'REQUIRED', engine: 'mysql',
+  connectionUrl: `mysql://admin:s3cr3t@${MYSQL_PROJECT.host}:3306/app?ssl-mode=REQUIRED`,
+  jdbcUrl: `jdbc:mysql://${MYSQL_PROJECT.host}:3306/app?sslMode=REQUIRED`,
+};
+
 function renderSettings() {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/provision/p-my') return Promise.resolve({ data: MYSQL_PROJECT } as never);
+    if (url === '/provision/p-my/credentials') return Promise.resolve({ data: MYSQL_CREDENTIALS } as never);
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -45,8 +53,24 @@ describe('SettingsPage — MySQL', () => {
     for (const id of ['connect-section', 'public-port-card', 'cluster-settings-card', 'backup-config-card']) {
       expect(screen.queryByTestId(id)).not.toBeInTheDocument();
     }
-    for (const url of ['/projects/p-my/db-endpoint', '/provision/p-my/credentials', '/provision/p-my/cluster']) {
+    for (const url of ['/projects/p-my/db-endpoint', '/provision/p-my/cluster']) {
       expect(api.get).not.toHaveBeenCalledWith(url);
     }
+  });
+
+  // EXC-584: the owner's login, as MySQL clients take it, TLS required.
+  test('shows the MySQL login and its connection strings, password masked', async () => {
+    renderSettings();
+    expect(await screen.findByTestId('conn-mysql-section')).toBeInTheDocument();
+    expect(screen.getByTestId('conn-username')).toHaveTextContent('admin');
+    expect(screen.getByTestId('conn-mysql-internal')).toHaveTextContent(
+      `mysql://admin:••••••••@${MYSQL_PROJECT.host}:3306/app?ssl-mode=REQUIRED`,
+    );
+    expect(screen.getByTestId('conn-mysql-jdbc')).toHaveTextContent(
+      `jdbc:mysql://${MYSQL_PROJECT.host}:3306/app?sslMode=REQUIRED`,
+    );
+    expect(screen.getByTestId('conn-mysql-section')).toHaveTextContent('TLS required');
+    expect(screen.queryByTestId('conn-postgres-section')).not.toBeInTheDocument();
+    expect(screen.queryByText(/postgresql:\/\//)).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { Plus, Trash2 } from 'lucide-react';
-import { DATABASE_VARIABLES, type VarKind } from '../../api/apps';
+import { DATABASE_VARIABLES, MYSQL_DATABASE_VARIABLES, type VarKind } from '../../api/apps';
 import { emptyEnvRow, needsSecretValue, type EnvRow } from './appFormModel';
 import { cn } from '../../utils/cn';
 
@@ -10,6 +10,7 @@ interface EnvVarEditorProps {
   readonly rows: EnvRow[];
   readonly errors?: Record<number, string>;
   readonly databaseName?: string;
+  readonly mysql?: boolean;
   readonly onChange: (rows: EnvRow[]) => void;
 }
 
@@ -17,6 +18,7 @@ interface RowProps {
   readonly index: number;
   readonly row: EnvRow;
   readonly databaseName?: string;
+  readonly mysql?: boolean;
   readonly update: (patch: Partial<EnvRow>) => void;
 }
 
@@ -25,7 +27,7 @@ const smallButton =
 
 // The value is never shown: a stored secret reads "Set" and can only be
 // replaced by typing a new one.
-function SecretField({ index, row, update }: Omit<RowProps, 'databaseName'>) {
+function SecretField({ index, row, update }: Omit<RowProps, 'databaseName' | 'mysql'>) {
   if (!needsSecretValue(row)) {
     return (
       <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -69,7 +71,7 @@ function SecretField({ index, row, update }: Omit<RowProps, 'databaseName'>) {
   );
 }
 
-function ValueField({ index, row, databaseName, update }: RowProps) {
+function ValueField({ index, row, databaseName, mysql, update }: RowProps) {
   if (row.kind === 'reference') {
     return (
       <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -83,7 +85,7 @@ function ValueField({ index, row, databaseName, update }: RowProps) {
           className={inputClass}
           data-testid={`env-variable-${index}`}
         >
-          {DATABASE_VARIABLES.map((name) => (
+          {(mysql ? MYSQL_DATABASE_VARIABLES : DATABASE_VARIABLES).map((name) => (
             <option key={name} value={name}>
               {name}
             </option>
@@ -105,7 +107,7 @@ function ValueField({ index, row, databaseName, update }: RowProps) {
   );
 }
 
-export function EnvVarEditor({ rows, errors, databaseName, onChange }: EnvVarEditorProps) {
+export function EnvVarEditor({ rows, errors, databaseName, mysql, onChange }: EnvVarEditorProps) {
   const updateRow = (index: number, patch: Partial<EnvRow>) =>
     onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   const removeRow = (index: number) => onChange(rows.filter((_, i) => i !== index));
@@ -145,6 +147,7 @@ export function EnvVarEditor({ rows, errors, databaseName, onChange }: EnvVarEdi
               index={index}
               row={row}
               databaseName={databaseName}
+              mysql={mysql}
               update={(patch) => updateRow(index, patch)}
             />
             <button

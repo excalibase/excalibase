@@ -315,3 +315,106 @@ func TestMySQLProjectsOutliveTheFeatureBeingTurnedOff(t *testing.T) {
 		t.Error("the cluster was left behind")
 	}
 }
+
+// ADR 0041 decision 5: the platform users exist and their logins are filed in
+// vault as MySQL records, each on the database it works in.
+func TestMySQLProjectFilesItsPlatformLogins(t *testing.T) {
+	svc, store, mock := setupMySQLTest(t)
+	inst := provisionMySQL(t, svc, store, "")
+	vault := svc.vault.(*fakeVault)
+	databases := map[string]string{roleAdmin: "app", roleApp: "app", roleAuthAdmin: "auth", roleWatcher: "app"}
+	for role, database := range databases {
+		record, err := vault.Get(vaultCredentialPath(inst.ProjectID, role))
+		if err != nil {
+			t.Fatalf("%s: %v", role, err)
+		}
+		if record["engine"] != "mysql" || record["tls"] != "required" || record["database"] != database ||
+			record["username"] != role || record["port"] != "3306" || len(record["password"]) < 32 ||
+			record["host"] != k8s.MySQLPrimaryHost(inst.ProjectID, inst.Namespace) {
+			t.Errorf("%s record %v", role, record)
+		}
+	}
+	if inst.Username != roleAdmin {
+		t.Errorf("owner login %q", inst.Username)
+	}
+	created := strings.Join(mock.ExecStdin, "\n")
+	for role := range databases {
+		if !strings.Contains(created, "CREATE USER IF NOT EXISTS '"+role+"'@'%'") {
+			t.Errorf("%s was not created", role)
+		}
+	}
+}
+
+func TestMySQLCredentialsAreMySQLConnectionStrings(t *testing.T) {
+	svc, store, _ := setupMySQLTest(t)
+	inst := provisionMySQL(t, svc, store, "")
+	creds, err := svc.GetCredentials(inst.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := svc.OwnerPassword(inst.ProjectID)
+	if creds.Engine != "mysql" || creds.Username != "admin" || creds.Password != password || creds.SSLMode != "REQUIRED" ||
+		creds.ConnectionURL != domain.MySQLURL(inst.Host, "3306", "admin", password, "app") ||
+		creds.JDBCURL != domain.MySQLJDBCURL(inst.Host, "3306", "app") {
+		t.Errorf("credentials %+v", creds)
+	}
+}
+
+// Rotation replaces the MySQL logins through ALTER USER on the primary, sent
+// on stdin, and files them back as MySQL records; the watcher is left as is.
+func TestRotatingMySQLCredentials(t *testing.T) {
+	svc, store, mock := setupMySQLTest(t)
+	svc.SetCredentialVerifier(&fakeRoleVerifier{})
+	inst := provisionMySQL(t, svc, store, "")
+	vault := svc.vault.(*fakeVault)
+	before := map[string]string{}
+	for _, role := range []string{roleAdmin, roleApp, roleAuthAdmin, roleWatcher} {
+		record, _ := vault.Get(vaultCredentialPath(inst.ProjectID, role))
+		before[role] = record["password"]
+	}
+	stdinBefore := len(mock.ExecStdin)
+	creds, err := svc.RotateCredentials(context.Background(), inst.ProjectID)
+	if err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+	for _, role := range []string{roleAdmin, roleApp, roleAuthAdmin} {
+		record, _ := vault.Get(vaultCredentialPath(inst.ProjectID, role))
+		if record["password"] == before[role] || record["engine"] != "mysql" || record["username"] != role {
+			t.Errorf("%s not rotated as a MySQL login: %v", role, record)
+		}
+		if !strings.Contains(strings.Join(mock.ExecStdin[stdinBefore:], "\n"), "ALTER USER '"+role+"'@'%' IDENTIFIED BY '"+record["password"]+"'") {
+			t.Errorf("%s: no ALTER USER on stdin", role)
+		}
+	}
+	if record, _ := vault.Get(vaultCredentialPath(inst.ProjectID, roleAuthAdmin)); record["database"] != "auth" {
+		t.Errorf("auth_admin record moved off its database: %v", record)
+	}
+	if record, _ := vault.Get(vaultCredentialPath(inst.ProjectID, roleWatcher)); record["password"] != before[roleWatcher] {
+		t.Error("the watcher login was rotated")
+	}
+	if creds.Engine != "mysql" || !strings.HasPrefix(creds.ConnectionURL, "mysql://admin:") {
+		t.Errorf("answered %+v", creds)
+	}
+	for _, cmd := range mock.ExecCommands {
+		if strings.Contains(cmd, "psql") {
+			t.Errorf("Postgres ran against a MySQL project: %s", cmd)
+		}
+	}
+}
+
+// The verifier opens MySQL over TLS without verifying the certificate (what
+// ssl-mode=REQUIRED means) and names no database, so every platform user,
+// auth_admin included, can be proved.
+func TestMySQLVerifyConfig(t *testing.T) {
+	port := 3306
+	inst := &domain.DatabaseInstance{DBType: domain.MySQL, Host: "moco-p-mysql-primary.ns.svc.cluster.local", Port: &port}
+	config := mysqlVerifyConfig(inst, "auth_admin", "pw", dsnOverrides{})
+	if config.Addr != "moco-p-mysql-primary.ns.svc.cluster.local:3306" || config.User != "auth_admin" ||
+		config.Passwd != "pw" || config.DBName != "" || config.TLSConfig != "skip-verify" || config.Net != "tcp" {
+		t.Errorf("config %+v", config)
+	}
+	forwarded := mysqlVerifyConfig(inst, "admin", "pw", dsnOverrides{host: "127.0.0.1", port: "13306"})
+	if forwarded.Addr != "127.0.0.1:13306" {
+		t.Errorf("override ignored: %s", forwarded.Addr)
+	}
+}
