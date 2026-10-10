@@ -49,6 +49,8 @@ var containerRoutes = map[string]route{
 	"GET /archive":  routeManaged,
 	"HEAD /archive": routeManaged,
 	"POST /exec":    routeExecCreate,
+	"GET /logs":     routeManaged,
+	"POST /wait":    routeManaged,
 }
 
 // Handler is the proxy. Build it with NewHandler.
@@ -111,6 +113,9 @@ func (h *Handler) authorize(r *http.Request) error {
 		return h.checkBody(r, func(body []byte) error {
 			return h.policy.CheckCreate(names[0], body)
 		})
+	}
+	if handled, err := h.authorizeApps(r, api); handled {
+		return err
 	}
 	if match := execPath.FindStringSubmatch(api); match != nil {
 		return h.authorizeExec(r, match[1], match[2])

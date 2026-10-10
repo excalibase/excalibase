@@ -20,6 +20,7 @@ func TestLoadConfigReadsThePolicyFromTheEnvironment(t *testing.T) {
 		"PROXY_PORT_BIND_IPS":  "127.0.0.1,0.0.0.0",
 		"PROXY_RUNTIMES":       "runsc",
 		"PROXY_VOLUME_PREFIX":  "excalibase-proj-",
+		"PROXY_EDGE_CONTAINER": "excalibase-edge",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -32,6 +33,7 @@ func TestLoadConfigReadsThePolicyFromTheEnvironment(t *testing.T) {
 		Runtimes:        []string{"runsc"},
 		VolumePrefix:    "excalibase-proj-",
 		ContainerPrefix: "excalibase-",
+		EdgeContainer:   "excalibase-edge",
 	}
 	if !reflect.DeepEqual(cfg.policy, want) {
 		t.Fatalf("policy = %+v\nwant %+v", cfg.policy, want)
@@ -67,6 +69,15 @@ func TestLoadConfigRefusesAPrefixThatAdmitsEverything(t *testing.T) {
 			if err == nil {
 				t.Errorf("%s %q accepted", key, prefix)
 			}
+		}
+	}
+}
+
+func TestLoadConfigRefusesAnEdgeContainerThatIsNotAName(t *testing.T) {
+	for _, edge := range []string{"../edge", "edge/x", "-edge", "edge x"} {
+		_, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_EDGE_CONTAINER": edge}))
+		if err == nil || !strings.Contains(err.Error(), "PROXY_EDGE_CONTAINER") {
+			t.Errorf("edge %q: err = %v, want refused", edge, err)
 		}
 	}
 }
