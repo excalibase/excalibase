@@ -138,6 +138,7 @@ func browserErrorStatus(err error) int {
 		{docbrowser.ErrDocumentNotFound, http.StatusNotFound},
 		{docbrowser.ErrNotServable, http.StatusConflict},
 		{docbrowser.ErrGatewayNotReady, http.StatusServiceUnavailable},
+		{docbrowser.ErrSingleHostUnwired, http.StatusServiceUnavailable},
 		{docbrowser.ErrTimeout, http.StatusGatewayTimeout},
 		{docbrowser.ErrUnavailable, http.StatusBadGateway},
 	}

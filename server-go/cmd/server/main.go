@@ -214,6 +214,9 @@ func runServer(cfg config.AppConfig) {
 		deps.provHandler.SetDBEndpointService(dbEndpointSvc)
 		provSvc.SetPublicEndpointReconciler(dbEndpointSvc)
 	}
+	if singleHostEndpoints := buildSingleHostEndpoints(cfg, store, dockerClientRef); singleHostEndpoints != nil {
+		deps.provHandler.SetDBEndpointService(singleHostEndpoints)
+	}
 
 	stopCallout := startNatsAuthCallout(cfg, sqlStore)
 	defer stopCallout()
@@ -294,6 +297,8 @@ func runServer(cfg config.AppConfig) {
 	defer stopCredentialRenewal()
 	stopRoleCertRenewal := startRoleCertificateRenewer(cfg, sqlStore, store, k8sClient, vc, provSvc)
 	defer stopRoleCertRenewal()
+	stopGatewayWatch := startDocumentDBGatewayWatch(cfg, sqlStore, provSvc)
+	defer stopGatewayWatch()
 	stopDomainSweep := startAppDomainSweeper(cfg, sqlStore, deps.appDomainSvc)
 	defer stopDomainSweep()
 
@@ -1379,7 +1384,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
-	snapshotSvc := buildSnapshotService(store, k8sClient, cfg.StoragePath, buildDocumentConnector(k8sClient, vc, store))
+	// Snapshot exports stay Kubernetes-only: no engine for the connector.
+	snapshotSvc := buildSnapshotService(store, k8sClient, cfg.StoragePath, buildDocumentConnector(k8sClient, nil, vc, store))
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
@@ -1503,7 +1509,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		pgHandler:           handler.NewParameterGroupHandler(pgStore),
 		emailTokensHandler:  emailTokensHandler,
 		storageHandler:      storageHandler,
-		documentsHandler:    buildDocumentBrowser(k8sClient, vc, store),
+		documentsHandler:    buildDocumentBrowser(k8sClient, a.dockerClient, vc, store),
 		adminHandler:        adminHandler,
 		authHandler:         authHandler,
 		oauthHandler:        buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
@@ -2382,10 +2388,10 @@ func buildK8sClient(cfg config.AppConfig) k8s.KubeClient {
 }
 
 // buildDocumentBrowser wires the document browser, which reaches a project's
-// gateway as its own Mongo login from vault. It needs Kubernetes to find the
-// gateway and the cluster CA, so a deployment without one mounts nothing.
-func buildDocumentBrowser(k8sClient k8s.KubeClient, vc vaultclient.VaultClient, store storage.InstanceStore) *handler.DocumentBrowserHandler {
-	connector := buildDocumentConnector(k8sClient, vc, store)
+// gateway as its own Mongo login from vault. It needs Kubernetes, or a single
+// host's engine, to find the gateway and its CA; without either it mounts nothing.
+func buildDocumentBrowser(k8sClient k8s.KubeClient, docker provisioner.DockerClient, vc vaultclient.VaultClient, store storage.InstanceStore) *handler.DocumentBrowserHandler {
+	connector := buildDocumentConnector(k8sClient, docker, vc, store)
 	if connector == nil {
 		return nil
 	}
@@ -2393,14 +2399,16 @@ func buildDocumentBrowser(k8sClient k8s.KubeClient, vc vaultclient.VaultClient, 
 }
 
 // buildDocumentConnector reaches a project's gateway as the document
-// browser's login, or is nil without Kubernetes and a vault.
-func buildDocumentConnector(k8sClient k8s.KubeClient, vc vaultclient.VaultClient, store storage.InstanceStore) *docbrowser.GatewayConnector {
-	if k8sClient == nil || vc == nil {
+// browser's login, or is nil without a vault and a way to find gateways.
+func buildDocumentConnector(k8sClient k8s.KubeClient, docker provisioner.DockerClient, vc vaultclient.VaultClient, store storage.InstanceStore) *docbrowser.GatewayConnector {
+	if vc == nil || (k8sClient == nil && docker == nil) {
 		return nil
 	}
-	return docbrowser.NewGatewayConnector(docbrowser.GatewayConnectorConfig{
-		Projects: store, Credentials: vc, Cluster: k8sClient,
-	})
+	config := docbrowser.GatewayConnectorConfig{Projects: store, Credentials: vc, Cluster: k8sClient}
+	if docker != nil {
+		config.SingleHost = singleHostGateways{docker: docker}
+	}
+	return docbrowser.NewGatewayConnector(config)
 }
 
 // buildSnapshotService exports through the gateway connector when there is

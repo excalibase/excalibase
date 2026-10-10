@@ -94,6 +94,8 @@ const (
 	SSLModeVerifyFull = "verify-full"
 	SSLModePrefer     = "prefer"
 	SSLModeRequire    = "require"
+	// SSLModeDisable is a single host's database, which serves no TLS (EXC-576).
+	SSLModeDisable = "disable"
 )
 
 // DBEndpoint is a project's public database endpoint setting.

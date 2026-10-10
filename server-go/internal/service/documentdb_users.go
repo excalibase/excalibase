@@ -64,7 +64,7 @@ var (
 	ErrMongoUserExists       = errors.New("a user with this name already exists in the project")
 	ErrMongoUserNotFound     = errors.New("no such Mongo user in this project")
 	ErrMongoUserLimit        = fmt.Errorf("a project can have at most %d Mongo users", MaxMongoUsersPerProject)
-	ErrMongoUsersUnavailable = errors.New("the platform needs its Kubernetes client and an unsealed vault to manage Mongo users")
+	ErrMongoUsersUnavailable = errors.New("the platform needs its container engine or Kubernetes, and an unsealed vault, to manage Mongo users")
 )
 
 var mongoUsernamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{2,62}$`)
@@ -254,7 +254,7 @@ func (s *ProvisioningService) DeleteMongoUser(ctx context.Context, projectID, us
 }
 
 func (s *ProvisioningService) mongoUsersAvailable() error {
-	if s.k8sClient == nil || s.vault == nil || s.vault.Sealed() {
+	if (s.k8sClient == nil && s.dockerClient == nil) || s.vault == nil || s.vault.Sealed() {
 		return ErrMongoUsersUnavailable
 	}
 	return nil
@@ -338,6 +338,10 @@ func (s *ProvisioningService) filedMongoUser(projectID, username string) (map[st
 // currentPrimary is the pod CNPG reports as primary; after a switchover it is
 // not instance 1, and a statement run on a replica would be refused.
 func (s *ProvisioningService) currentPrimary(ctx context.Context, inst *domain.DatabaseInstance) (string, error) {
+	if inst.DeploymentMode == domain.ModeDocker {
+		// A single host's database is its one container.
+		return inst.Namespace, nil
+	}
 	cluster, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, inst.ProjectID+postgresClusterSuffix)
 	if err != nil {
 		return "", fmt.Errorf("read cluster of %s: %w", inst.ProjectID, err)
@@ -352,9 +356,19 @@ func (s *ProvisioningService) currentPrimary(ctx context.Context, inst *domain.D
 // execMongoUserSQL streams the statement on stdin, never as an exec argument:
 // arguments land in the exec URL, which the API server audits.
 func (s *ProvisioningService) execMongoUserSQL(ctx context.Context, inst *domain.DatabaseInstance, primary, statement string) error {
-	_, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, primary, "postgres",
-		[]string{"psql", "-U", "postgres", "-d", config.DocumentDBDatabase, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"},
-		pgroles.PinnedSearchPath+statement+"\n")
+	psql := []string{"psql", "-U", "postgres", "-d", config.DocumentDBDatabase, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}
+	input := pgroles.PinnedSearchPath + statement + "\n"
+	if inst.DeploymentMode == domain.ModeDocker {
+		if s.dockerClient == nil {
+			return ErrMongoUsersUnavailable
+		}
+		_, err := s.dockerClient.ExecInContainerStdin(ctx, primary, psql, input)
+		return err
+	}
+	if s.k8sClient == nil {
+		return ErrMongoUsersUnavailable
+	}
+	_, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, primary, "postgres", psql, input)
 	return err
 }
 

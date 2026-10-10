@@ -223,11 +223,12 @@ func TestConnectorRefusals(t *testing.T) {
 		mutate func(*connectorFixture)
 		want   error
 	}{
-		"missing project":  {func(f *connectorFixture) { f.projects.inst = nil }, ErrProjectNotFound},
-		"not documentdb":   {func(f *connectorFixture) { f.projects.inst.DocumentDB = false }, ErrNotDocumentDB},
-		"not k8s":          {func(f *connectorFixture) { f.projects.inst.DeploymentMode = domain.ModeDocker }, ErrNotDocumentDB},
-		"paused":           {func(f *connectorFixture) { f.projects.inst.Status = "PAUSED" }, ErrNotServable},
-		"gateway starting": {func(f *connectorFixture) { f.cluster.addrErr = k8s.ErrDocumentDBGatewayNotReady }, ErrGatewayNotReady},
+		"missing project":     {func(f *connectorFixture) { f.projects.inst = nil }, ErrProjectNotFound},
+		"not documentdb":      {func(f *connectorFixture) { f.projects.inst.DocumentDB = false }, ErrNotDocumentDB},
+		"single host unwired": {func(f *connectorFixture) { f.projects.inst.DeploymentMode = domain.ModeDocker }, ErrSingleHostUnwired},
+		"other mode":          {func(f *connectorFixture) { f.projects.inst.DeploymentMode = "elsewhere" }, ErrNotDocumentDB},
+		"paused":              {func(f *connectorFixture) { f.projects.inst.Status = "PAUSED" }, ErrNotServable},
+		"gateway starting":    {func(f *connectorFixture) { f.cluster.addrErr = k8s.ErrDocumentDBGatewayNotReady }, ErrGatewayNotReady},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -482,6 +482,10 @@ func (s *ProvisioningService) RestartReplication(ctx context.Context, inst *doma
 	if inst == nil {
 		return ErrProjectRegistrationInvalid
 	}
+	if inst.DeploymentMode == domain.ModeDocker {
+		// A single host runs no CDC watcher; registration deploys none there.
+		return nil
+	}
 	pg, err := s.postgresProvisioner()
 	if err != nil {
 		return err

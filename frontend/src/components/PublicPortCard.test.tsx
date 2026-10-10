@@ -125,4 +125,13 @@ describe('PublicPortCard', () => {
     expect(await screen.findByTestId('public-port-state')).toHaveTextContent(/private/i);
     expect(screen.queryByTestId('public-port-toggle')).toBeNull();
   });
+
+  // EXC-576: a single host publishes the port itself, on its own loopback.
+  test('a single host shows its loopback port and the SSH tunnel, with nothing to toggle', async () => {
+    renderCard({ ...open, singleHost: true, host: '127.0.0.1', port: 32801, canChange: false });
+    expect(await screen.findByTestId('public-port-state')).toHaveTextContent('127.0.0.1:32801');
+    expect(screen.getByTestId('conn-ssh-tunnel')).toHaveTextContent('ssh -N -L 32801:127.0.0.1:32801');
+    expect(screen.queryByTestId('public-port-toggle')).toBeNull();
+    expect(screen.queryByTestId('public-port-admin-only')).toBeNull();
+  });
 });

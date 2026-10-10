@@ -69,7 +69,7 @@ func PublicMessage(err error) string {
 	if errors.As(err, &queryErr) {
 		return queryErr.Message
 	}
-	for _, known := range []error{ErrTimeout, ErrUnavailable, ErrGatewayNotReady, ErrNotServable, ErrNotDocumentDB, ErrProjectNotFound, ErrDocumentNotFound} {
+	for _, known := range []error{ErrTimeout, ErrUnavailable, ErrGatewayNotReady, ErrSingleHostUnwired, ErrNotServable, ErrNotDocumentDB, ErrProjectNotFound, ErrDocumentNotFound} {
 		if errors.Is(err, known) {
 			return known.Error()
 		}

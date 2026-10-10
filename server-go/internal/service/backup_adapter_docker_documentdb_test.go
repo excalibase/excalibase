@@ -23,6 +23,8 @@ type recordingDocker struct {
 	calls   []string
 	copies  []recordedCopy
 	removed []string
+	// stdin is every statement fed to an exec, with the container it ran in.
+	stdin []recordedCopy
 	// failGatewayStart makes the gateway's start fail.
 	failGatewayStart bool
 }
@@ -71,8 +73,9 @@ func (r *recordingDocker) ExecInContainer(_ context.Context, id string, cmd []st
 	r.calls = append(r.calls, "exec:"+id+":"+cmd[0])
 	return 0, nil
 }
-func (r *recordingDocker) ExecInContainerStdin(_ context.Context, id string, _ []string, _ string) (string, error) {
+func (r *recordingDocker) ExecInContainerStdin(_ context.Context, id string, _ []string, stdin string) (string, error) {
 	r.calls = append(r.calls, "stdin:"+id)
+	r.stdin = append(r.stdin, recordedCopy{container: id, body: []byte(stdin)})
 	return "", nil
 }
 func (r *recordingDocker) CopyToContainer(_ context.Context, id, dst string, content io.Reader) error {
