@@ -51,6 +51,14 @@ func (c AppConfig) validateAppRoute() error {
 	if !c.AppHostingEnabled {
 		return nil
 	}
+	if c.AppDomainResolver != "" {
+		if _, _, err := net.SplitHostPort(c.AppDomainResolver); err != nil {
+			return fmt.Errorf("APP_DOMAIN_RESOLVER %q must be host:port: %w", c.AppDomainResolver, err)
+		}
+	}
+	if c.ProvisionerMode == "docker" {
+		return c.validateSingleHostApps()
+	}
 	settings := []routeSetting{
 		{"APP_DOMAIN", c.AppDomain, validation.IsDNS1123Subdomain},
 		{"APP_INGRESS_CLASS", c.AppIngressClass, validation.IsDNS1123Subdomain},
@@ -58,11 +66,6 @@ func (c AppConfig) validateAppRoute() error {
 	}
 	if c.AppDomainIssuer != "" {
 		settings = append(settings, routeSetting{"APP_DOMAIN_ISSUER", c.AppDomainIssuer, validation.IsDNS1123Subdomain})
-	}
-	if c.AppDomainResolver != "" {
-		if _, _, err := net.SplitHostPort(c.AppDomainResolver); err != nil {
-			return fmt.Errorf("APP_DOMAIN_RESOLVER %q must be host:port: %w", c.AppDomainResolver, err)
-		}
 	}
 	for _, setting := range settings {
 		if setting.value == "" {

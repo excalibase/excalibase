@@ -78,6 +78,8 @@ type ProvisioningService struct {
 	appPurger ProjectAppPurger
 	// workloads stops a deleted project's apps and function runtime (EXC-567).
 	workloads ProjectWorkloadStopper
+	// workloadTeardown removes app workloads no namespace deletion takes (single host).
+	workloadTeardown ProjectWorkloadTeardown
 	// backupPurger deletes a project's backup objects on request at
 	// deprovision time. nil means confirmDeleteBackups is refused.
 	backupPurger *BackupPurger
@@ -1163,10 +1165,12 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	if s.endpoints != nil {
 		steps = append(steps, deletionStep{domain.DeletionStepReleaseEndpoint, s.releasePublicEndpoint})
 	}
-	steps = append(steps,
-		deletionStep{domain.DeletionStepRevokeNats, s.revokeNatsCredentials},
-		deletionStep{domain.DeletionStepDeleteResources, s.deleteDatabaseResources},
-	)
+	steps = append(steps, deletionStep{domain.DeletionStepRevokeNats, s.revokeNatsCredentials})
+	// On a single host the apps share the database's network, so they go while it stands.
+	if s.workloadTeardown != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepDeleteAppWorkloads, s.teardownAppWorkloads})
+	}
+	steps = append(steps, deletionStep{domain.DeletionStepDeleteResources, s.deleteDatabaseResources})
 	if deleteBackups {
 		steps = append(steps, deletionStep{domain.DeletionStepDeleteBackups, s.purgeBackups})
 	}

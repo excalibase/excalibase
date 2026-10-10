@@ -24,14 +24,15 @@ const (
 	systemResolvConf             = "/etc/resolv.conf"
 )
 
-// customDomainsOn: custom domains need app hosting and an ACME issuer; without an issuer they stay off.
+// customDomainsOn: custom domains need app hosting and an ACME issuer; without
+// an issuer they stay off. A single host's edge is its own issuer.
 func customDomainsOn(cfg config.AppConfig) bool {
-	return cfg.AppHostingEnabled && cfg.AppDomainIssuer != ""
+	return cfg.AppHostingEnabled && (cfg.AppDomainIssuer != "" || cfg.ProvisionerMode == "docker")
 }
 
 // verifyAppDomainIssuer refuses to start custom domains when their issuer cannot issue.
 func verifyAppDomainIssuer(ctx context.Context, cfg config.AppConfig, kube k8s.KubeClient) error {
-	if !customDomainsOn(cfg) {
+	if !customDomainsOn(cfg) || cfg.ProvisionerMode == "docker" {
 		return nil
 	}
 	if kube == nil {
@@ -40,7 +41,7 @@ func verifyAppDomainIssuer(ctx context.Context, cfg config.AppConfig, kube k8s.K
 	return kube.ClusterIssuerReady(ctx, cfg.AppDomainIssuer)
 }
 
-func buildAppDomainService(cfg config.AppConfig, db *sql.DB, kube k8s.KubeClient, instances storage.InstanceStore,
+func buildAppDomainService(cfg config.AppConfig, db *sql.DB, runtime service.AppRuntime, instances storage.InstanceStore,
 	deploys *service.AppDeployService) *service.AppDomainService {
 	if !customDomainsOn(cfg) {
 		return nil
@@ -49,8 +50,8 @@ func buildAppDomainService(cfg config.AppConfig, db *sql.DB, kube k8s.KubeClient
 	if err != nil {
 		log.Fatalf("custom domains: %v", err)
 	}
-	route := appRoute(cfg)
-	domains := service.NewAppDomainService(apphost.NewPostgresAppStore(db), apphost.NewPostgresDomainStore(db), kube, instances,
+	route := appRenderOptions(cfg).Route
+	domains := service.NewAppDomainService(apphost.NewPostgresAppStore(db), apphost.NewPostgresDomainStore(db), runtime, instances,
 		dnscname.Resolver{Server: server, Timeout: appDomainLookupTimeout}, deploys, route.Public(),
 		k8s.AppDomainOptions{Issuer: cfg.AppDomainIssuer, Route: route})
 	deploys.SetDomainSync(domains.SyncApp)

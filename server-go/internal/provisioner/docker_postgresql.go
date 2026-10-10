@@ -162,6 +162,8 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 		Username:     defaultPostgresSuperuser,
 		Password:     password,
 		Namespace:    containerID,
+		// The container serves no TLS: it is reached only on the host's own networks.
+		SSLMode: "disable",
 	}, nil
 }
 

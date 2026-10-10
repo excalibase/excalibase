@@ -57,6 +57,21 @@ type ProjectWorkloadStopper interface {
 	RestartFunctionRuntime(ctx context.Context, projectID string) error
 }
 
+// ProjectWorkloadTeardown removes what a project's apps left where no
+// namespace deletion takes it: a single host's containers, disks and network.
+type ProjectWorkloadTeardown interface {
+	TeardownProject(ctx context.Context, projectID, namespace string) error
+}
+
+// SetProjectWorkloadTeardown wires the removal of a deleted project's app workloads.
+func (s *ProvisioningService) SetProjectWorkloadTeardown(t ProjectWorkloadTeardown) {
+	s.workloadTeardown = t
+}
+
+func (s *ProvisioningService) teardownAppWorkloads(ctx context.Context, inst *domain.DatabaseInstance) error {
+	return s.workloadTeardown.TeardownProject(ctx, inst.ProjectID, inst.Namespace)
+}
+
 // SetProjectWorkloadStopper wires the stop a deletion runs before anything else.
 func (s *ProvisioningService) SetProjectWorkloadStopper(w ProjectWorkloadStopper) { s.workloads = w }
 

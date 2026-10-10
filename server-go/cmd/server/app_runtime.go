@@ -17,7 +17,8 @@ import (
 
 // verifyAppRuntime refuses to host apps on a cluster that cannot sandbox them.
 func verifyAppRuntime(ctx context.Context, cfg config.AppConfig, kube k8s.KubeClient) error {
-	if !cfg.AppHostingEnabled {
+	// A single host's runtime checks its own sandbox when it is built.
+	if !cfg.AppHostingEnabled || cfg.ProvisionerMode == "docker" {
 		return nil
 	}
 	if kube == nil {
@@ -65,11 +66,11 @@ func wireAppLifecycle(apps *service.AppDeployService, claimer service.ProjectOpe
 }
 
 // registryCredentials is nil without a vault: there is nowhere to keep a credential.
-func registryCredentials(vc vaultclient.VaultClient, instances storage.InstanceStore, kube k8s.KubeClient) *service.RegistryCredentialService {
+func registryCredentials(vc vaultclient.VaultClient, instances storage.InstanceStore, runtime service.AppRuntime) *service.RegistryCredentialService {
 	if vc == nil {
 		return nil
 	}
-	return service.NewRegistryCredentialService(vc, instances, kube)
+	return service.NewRegistryCredentialService(vc, instances, runtime)
 }
 
 func newRegistryCredentialHandler(creds *service.RegistryCredentialService) *handler.RegistryCredentialHandler {
