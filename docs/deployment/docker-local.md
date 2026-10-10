@@ -109,7 +109,7 @@ SSH tunnel).
 | `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` | `80` / `443` | Host ports of the edge |
 | `REGISTRATION_MODE` | `invite` | `open` lets anyone who reaches Studio sign up |
 | `ADMIN_PASSWORD` | generated | First admin's password (12+ characters) |
-| `TAG` | the release this bundle came with (`1.4.0`) | Image tag of the platform services; set it to move to another release |
+| `TAG` | the release this bundle came with (`1.5.0`) | Image tag of the platform services; set it to move to another release |
 | `AIO_EDGE_SUBNET` / `AIO_DATAPLANE_SUBNET` | `10.203.250.0/28` / `10.203.250.16/28` | Change if they clash with your network |
 
 ## Object storage
@@ -250,7 +250,7 @@ container in the database's network namespace, as the sidecar does in a pod.
 docker compose up -d
 ```
 
-It needs a platform release after 1.4.0 (`TAG` in `.env`): 1.4.0 does not run
+It needs release 1.5.0 or later (the bundle's default); 1.4.0 does not run
 DocumentDB on a single host.
 
 `--documentdb` writes `DOCUMENTDB_ENABLED=true` to `.env`; delete that line
