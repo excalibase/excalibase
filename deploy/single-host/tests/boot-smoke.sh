@@ -9,6 +9,9 @@
 # APPS=1 installs with --apps and walks Containers (EXC-575, apps-journey.sh):
 # under gVisor where the engine has runsc, else the documented opt-out
 # (--app-sandbox none), which the run says. APP_SANDBOX forces either.
+# DOCUMENTDB=1 installs with --documentdb and walks DocumentDB (EXC-576,
+# documentdb-journey.sh): mongosh on the host, Studio's browser, Mongo users,
+# pause, resume, backup and restore.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG).
 # Destroys the bundle's containers and volumes; never run it on an install you keep.
 set -uo pipefail
@@ -31,6 +34,8 @@ c() { curl -sk --max-time 30 --resolve studio.localhost:$PORT:127.0.0.1 --resolv
 # Apps leave per-project networks and disks; they go with the managed containers.
 wipe_managed() {
   $DOCKER rm -f "$SMOKE_DNS" >/dev/null 2>&1
+  # A DocumentDB gateway holds its database's network namespace: Podman removes it first.
+  $DOCKER rm -f $($DOCKER ps -aq --filter label=excalibase.managed=true --filter name=-documentdb) >/dev/null 2>&1
   $DOCKER rm -f -v $($DOCKER ps -aq --filter label=excalibase.managed=true) >/dev/null 2>&1
   $DOCKER volume rm $($DOCKER volume ls -q --filter label=excalibase.managed=true) >/dev/null 2>&1
   $DOCKER network rm $($DOCKER network ls -q --filter label=excalibase.managed=true) >/dev/null 2>&1
@@ -66,7 +71,7 @@ if [ -n "$pcode" ] && [ "$pcode" != 0 ] && logs_have excalibase-preflight POSTGR
 $COMPOSE $P down -v >/dev/null 2>&1; rm -f "$W/.env"
 
 echo "== install"
-./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS || exit 1
+./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS ${DOCUMENTDB:+--documentdb} || exit 1
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"
@@ -180,6 +185,7 @@ if [ -n "${MANUAL_UNSEAL:-}" ]; then
 fi
 
 [ -n "${APPS:-}" ] && . "$TESTS/apps-journey.sh"
+[ -n "${DOCUMENTDB:-}" ] && . "$TESTS/documentdb-journey.sh"
 
 echo "== studio health"
 code=$(c -o /dev/null -w '%{http_code}' https://studio.localhost:$PORT/); h=$($DOCKER inspect excalibase-studio --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null)

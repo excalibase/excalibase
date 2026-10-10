@@ -185,6 +185,12 @@ if routes and prov_mounts.get(penv.get("APP_EDGE_ROUTES_DIR")) != routes.get("so
 if "--watch" not in (services["edge"].get("command") or []):
     failures.append("the edge does not reload app routes")
 
+# EXC-576: DocumentDB is off by default, and the proxy admits no namespace join then.
+if penv.get("DOCUMENTDB_ENABLED") != "false":
+    failures.append(f"DOCUMENTDB_ENABLED={penv.get('DOCUMENTDB_ENABLED')!r} by default, want false")
+if penv_proxy.get("PROXY_NETNS_JOIN_IMAGES"):
+    failures.append("the proxy admits namespace joins with DocumentDB off")
+
 if failures:
     sys.exit("\n".join(failures))
 print("single-host hardening ok")

@@ -95,6 +95,12 @@ if sh "$DIR/../init.sh" --env-file "$WORK/apps3.env" --domain example.com --admi
   fail "an app domain that is not a DNS name was accepted"
 fi
 
+# DocumentDB (EXC-576): off unless asked.
+! grep -q '^DOCUMENTDB_ENABLED' "$WORK/.env" || fail "DocumentDB turned on without --documentdb"
+sh "$DIR/../init.sh" --env-file "$WORK/docdb.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --documentdb >/dev/null || fail "--documentdb refused"
+grep -qx 'DOCUMENTDB_ENABLED=true' "$WORK/docdb.env" || fail "--documentdb not written"
+
 # Required arguments.
 if sh "$DIR/../init.sh" --env-file "$WORK/none.env" --admin-email me@example.com >/dev/null 2>&1; then
   fail "init.sh ran without a domain"
