@@ -59,10 +59,6 @@ const defaultRestoreDatabase = "app"
 // backup surface (operator owns it).
 var ErrUnsupportedBackupMode = errors.New("backup not supported for this deployment mode")
 
-// ErrDocumentDBRestoreNeedsKubernetes refuses a DocumentDB restore in docker
-// mode, which runs no DocumentDB gateway to restore into.
-var ErrDocumentDBRestoreNeedsKubernetes = errors.New("restoring a DocumentDB project needs Kubernetes: docker mode runs no DocumentDB gateway")
-
 // ErrRestoreOwnerCredentialMissing refuses a restore whose recovered cluster
 // has no owner credential of its own. The only other one is the source's,
 // which still opens the source.

@@ -105,8 +105,8 @@ func (m *adminDockerMock) RemoveContainer(context.Context, string) error {
 	m.removed = true
 	return nil
 }
-func (m *adminDockerMock) ContainerStatus(context.Context, string) (string, error) {
-	if m.removed {
+func (m *adminDockerMock) ContainerStatus(_ context.Context, id string) (string, error) {
+	if m.removed || strings.HasSuffix(id, "-documentdb") {
 		return "not_found", nil
 	}
 	return "running", nil
@@ -120,6 +120,15 @@ func (adminDockerMock) CopyToContainer(context.Context, string, string, io.Reade
 }
 func (adminDockerMock) CopyFromContainer(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, nil
+}
+func (adminDockerMock) CreateContainerSpec(context.Context, provisioner.ContainerSpec) (string, error) {
+	return "ctr", nil
+}
+func (adminDockerMock) ContainerState(context.Context, string) (provisioner.ContainerState, error) {
+	return provisioner.ContainerState{}, nil
+}
+func (adminDockerMock) ExecInContainerStdin(context.Context, string, []string, string) (string, error) {
+	return "", nil
 }
 
 func newDockerProvSvc(t *testing.T, store *inMemoryInstanceStore) *service.ProvisioningService {

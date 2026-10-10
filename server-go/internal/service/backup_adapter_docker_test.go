@@ -371,6 +371,15 @@ func (f *fakeDockerClientForAdapter) CopyToContainer(_ context.Context, _ string
 	return nil
 }
 
+func (f *fakeDockerClientForAdapter) CreateContainerSpec(ctx context.Context, spec provisioner.ContainerSpec) (string, error) {
+	return f.CreateContainer(ctx, spec.Name, spec.Image, spec.Env, spec.Ports, spec.Limits)
+}
+func (f *fakeDockerClientForAdapter) ContainerState(context.Context, string) (provisioner.ContainerState, error) {
+	return provisioner.ContainerState{Found: true, Running: true}, nil
+}
+func (f *fakeDockerClientForAdapter) ExecInContainerStdin(context.Context, string, []string, string) (string, error) {
+	return "", nil
+}
 func (f *fakeDockerClientForAdapter) CopyFromContainer(_ context.Context, _ string, _ string) (io.ReadCloser, error) {
 	if f.failOn == "copyFrom" {
 		return nil, errors.New("copy from failed")
@@ -445,31 +454,6 @@ func TestDockerAdapter_Restore_HappyPath(t *testing.T) {
 	// here we only assert the source project is untouched.
 	if got, _ := store.FindByProjectID("dk-1"); got == nil {
 		t.Error("source instance was deleted (must remain)")
-	}
-}
-
-// TestDockerAdapter_Restore_RefusesDocumentDBProject: docker mode has no
-// DocumentDB gateway to restore into (EXC-522 restores DocumentDB on
-// Kubernetes), so it is refused, with that reason, before touching docker.
-func TestDockerAdapter_Restore_RefusesDocumentDBProject(t *testing.T) {
-	adapter, store, _, _, _ := setupDockerAdapter(t)
-	adapter.SetInstanceStore(store)
-	dc := &fakeDockerClientForAdapter{}
-	adapter.SetDockerClient(dc)
-	adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
-
-	src, _ := store.FindByProjectID("dk-1")
-	src.DocumentDB = true
-
-	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dk-restored", TargetProjectID: "dk-restored"})
-	if !errors.Is(err, ErrDocumentDBRestoreNeedsKubernetes) {
-		t.Fatalf("err: got %v, want ErrDocumentDBRestoreNeedsKubernetes", err)
-	}
-	if dc.createdName != "" {
-		t.Errorf("no container must be created for a refused DocumentDB restore, got %q", dc.createdName)
-	}
-	if got, _ := store.FindByProjectID("dk-restored"); got != nil {
-		t.Error("no project row must be registered for a refused DocumentDB restore")
 	}
 }
 

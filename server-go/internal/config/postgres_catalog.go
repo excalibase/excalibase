@@ -206,3 +206,31 @@ func DockerPostgresImage(major string) (string, error) {
 	}
 	return "postgres:" + entry.Major, nil
 }
+
+// DockerDocumentDBImage is the catalogue's image for a DocumentDB-capable
+// major as a single host runs it: the same digest Kubernetes pins, named with
+// its registry because Podman resolves no short names. A major without
+// DocumentDB, or not published, is refused.
+func DockerDocumentDBImage(major string) (string, error) {
+	entry, ok := LookupPostgresMajor(major)
+	if !ok {
+		return "", fmt.Errorf("postgres version %q is not supported (supported: %s)", major, SupportedPostgresMajorsMessage())
+	}
+	if !entry.DocumentDB {
+		return "", fmt.Errorf("DocumentDB is not available on postgres %s (available on: %s)", entry.Major, DocumentDBMajorsMessage())
+	}
+	if entry.Image == "" {
+		return "", fmt.Errorf("postgres major %s has no published image", entry.Major)
+	}
+	return registryQualified(entry.Image), nil
+}
+
+// registryQualified names Docker Hub for a reference whose first segment is
+// not a registry host.
+func registryQualified(reference string) string {
+	first, _, _ := strings.Cut(reference, "/")
+	if strings.ContainsAny(first, ".:") || first == "localhost" {
+		return reference
+	}
+	return "docker.io/" + reference
+}

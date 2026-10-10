@@ -468,7 +468,7 @@ const restoreFailedReason = "the restore did not complete; start it again, and i
 var publicRestoreFailures = []error{
 	ErrRestoreNotObserved, ErrRestoreTargetDeleting, ErrRestoreTargetInFuture,
 	ErrRestoreTargetNotArchived, ErrRestoreTargetNotReached, ErrRestoreBackupUnusable,
-	ErrRestoreDiskAbovePlan, ErrBackupStorageNotConfigured, ErrDocumentDBRestoreNeedsKubernetes,
+	ErrRestoreDiskAbovePlan, ErrBackupStorageNotConfigured,
 	ErrInPlaceRestoreUnsupported, ErrInPlaceNoBackups, ErrProjectOperationRunning,
 }
 

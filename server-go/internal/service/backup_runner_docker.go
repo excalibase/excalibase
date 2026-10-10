@@ -80,6 +80,8 @@ func (r *DockerBackupRunner) BasebackupTo(ctx context.Context, inst *domain.Data
 		"-F", "tar",
 		"-X", "fetch",
 		"-z",
+		// Taken on request: do not wait out a spread checkpoint first.
+		"--checkpoint=fast",
 	}
 	exec, err := r.sdk.ContainerExecCreate(ctx, inst.Namespace, container.ExecOptions{
 		Cmd:          cmd,

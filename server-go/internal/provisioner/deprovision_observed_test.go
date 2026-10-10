@@ -47,8 +47,8 @@ func (d *deprovisionDocker) RemoveContainer(context.Context, string) error {
 	d.removed = true
 	return nil
 }
-func (d *deprovisionDocker) ContainerStatus(context.Context, string) (string, error) {
-	if d.missing || (d.removed && !d.stuck) {
+func (d *deprovisionDocker) ContainerStatus(_ context.Context, id string) (string, error) {
+	if strings.HasSuffix(id, "-documentdb") || d.missing || (d.removed && !d.stuck) {
 		return containerNotFound, nil
 	}
 	return "running", nil
@@ -62,6 +62,15 @@ func (d *deprovisionDocker) CopyToContainer(context.Context, string, string, io.
 }
 func (d *deprovisionDocker) CopyFromContainer(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, nil
+}
+func (d *deprovisionDocker) CreateContainerSpec(context.Context, ContainerSpec) (string, error) {
+	return "ctr", nil
+}
+func (d *deprovisionDocker) ContainerState(context.Context, string) (ContainerState, error) {
+	return ContainerState{}, nil
+}
+func (d *deprovisionDocker) ExecInContainerStdin(context.Context, string, []string, string) (string, error) {
+	return "", nil
 }
 
 func newDockerProv(t *testing.T, docker DockerClient) *DockerPostgreSQLProvisioner {

@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
@@ -147,37 +148,53 @@ func networkingConfig(netName string) *network.NetworkingConfig {
 // returns its ID. Does not start the container. ports maps "containerPort" →
 // "hostPort" (empty hostPort = random free port).
 func (r *RealDockerClient) CreateContainer(ctx context.Context, name, img string, env, ports map[string]string, limits ContainerLimits) (string, error) {
-	if err := r.ensureImage(ctx, img); err != nil {
+	return r.CreateContainerSpec(ctx, ContainerSpec{Name: name, Image: img, Env: env, Ports: ports, Limits: limits})
+}
+
+// CreateContainerSpec creates (does not start) the container spec describes.
+func (r *RealDockerClient) CreateContainerSpec(ctx context.Context, spec ContainerSpec) (string, error) {
+	if err := r.ensureImage(ctx, spec.Image); err != nil {
 		return "", err
 	}
-
-	envSlice := make([]string, 0, len(env))
-	for k, v := range env {
-		envSlice = append(envSlice, k+"="+v)
-	}
-
-	exposed, bindings, err := portBindings(ports, r.bindAddr)
+	exposed, bindings, err := portBindings(spec.Ports, r.bindAddr)
 	if err != nil {
 		return "", err
 	}
-
 	cfg := &container.Config{
-		Image:        img,
-		Env:          envSlice,
+		Image:        spec.Image,
+		Env:          envList(spec.Env),
+		Cmd:          spec.Cmd,
 		ExposedPorts: exposed,
 		Labels:       map[string]string{excalibaseLabel: "true"},
+		StopSignal:   spec.StopSignal,
 	}
 	hostCfg := &container.HostConfig{
 		PortBindings:  bindings,
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
-		Resources:     limits.resources(),
+		Resources:     spec.Limits.resources(),
 	}
-
-	resp, err := r.c.ContainerCreate(ctx, cfg, hostCfg, networkingConfig(r.netName), nil, name)
+	if spec.DataVolume != "" {
+		// Anonymous: removed with the container, like the official image's VOLUME.
+		hostCfg.Mounts = []mount.Mount{{Type: mount.TypeVolume, Target: spec.DataVolume}}
+	}
+	netCfg := networkingConfig(r.netName)
+	if spec.NetnsOf != "" {
+		hostCfg.NetworkMode = container.NetworkMode("container:" + spec.NetnsOf)
+		netCfg = nil
+	}
+	resp, err := r.c.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, spec.Name)
 	if err != nil {
 		return "", fmt.Errorf("create container: %w", err)
 	}
 	return resp.ID, nil
+}
+
+func envList(env map[string]string) []string {
+	list := make([]string, 0, len(env))
+	for key, value := range env {
+		list = append(list, key+"="+value)
+	}
+	return list
 }
 
 func (r *RealDockerClient) StartContainer(ctx context.Context, id string) error {
