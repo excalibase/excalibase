@@ -1,3 +1,4 @@
+import re
 import sys
 
 import yaml
@@ -68,6 +69,12 @@ for name in ("provisioning", "engine-proxy", "auth", "graphql"):
         failures.append(f"{name} keeps its capabilities")
 if "label=type:container_t" not in (proxy.get("security_opt") or []):
     failures.append("engine-proxy keeps the default SELinux type unless init.sh says otherwise")
+# Unpinned, an install follows whatever was published last: the platform's
+# images default to a released version, never latest or a trunk build.
+for name, svc in services.items():
+    image = svc.get("image", "")
+    if image.startswith("docker.io/excalibase/") and not re.search(r":[0-9]+\.[0-9]+\.[0-9]+$", image):
+        failures.append(f"{name}: image {image!r} is not pinned to a released version")
 # Podman refuses short image names without a terminal to ask on (Fedora,
 # RHEL): every image names its registry.
 for name, svc in services.items():
