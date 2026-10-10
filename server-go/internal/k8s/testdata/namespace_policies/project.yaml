@@ -26,6 +26,9 @@ spec:
           kubernetes.io/metadata.name: cnpg-system
     - namespaceSelector:
         matchLabels:
+          kubernetes.io/metadata.name: moco-system
+    - namespaceSelector:
+        matchLabels:
           kubernetes.io/metadata.name: monitoring
   podSelector:
     matchExpressions:
