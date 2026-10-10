@@ -187,7 +187,28 @@ and recorded in the audit log, without the key.
 | Containers (app hosting) | not yet |
 | DocumentDB projects | not yet |
 | Edge functions, realtime | no (Kubernetes only) |
-| High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
+| High availability (3/5 copies) | no — see [High availability](#high-availability) |
+
+## High availability
+
+Not offered on a single host, by decision (ADR 0038).
+
+- **Why:** extra copies on one machine share its disk, kernel, power, network
+  card and engine daemon. The failures high availability exists for — disk
+  loss, host crash, reboot for updates, provider outage — take every copy down
+  together. What copies on one box would add (surviving a single Postgres
+  crash) the restart policy already covers in seconds, at three times the
+  memory and disk, with a failover component to operate.
+- **What happens:** the single host counts as one node. A plan with more than
+  one copy (Standard: 3) is refused when a project is requested or an
+  organization is moved to it — "the standard plan runs 3 database instances,
+  each on its own node, but this platform has only 1 node(s)…" — never quietly
+  created as one copy.
+- **What protects data here:** backups (every plan) and restore. Point backups
+  at a bucket **off this machine** for disaster recovery; the bundled store
+  shares the databases' disk.
+- **When you need copies on separate machines:** run the Kubernetes install on
+  three or more nodes (a small k3s/RKE2 cluster is enough).
 
 ## Checking a change
 
