@@ -155,13 +155,15 @@ const (
 	// stalls leaves nothing the outside world can still dial.
 	DeletionStepReleaseEndpoint = "RELEASE_PUBLIC_ENDPOINT"
 	DeletionStepRevokeNats      = "REVOKE_NATS_CREDENTIALS"
-	DeletionStepDeleteResources = "DELETE_DATABASE_RESOURCES"
-	DeletionStepDeleteBackups   = "DELETE_BACKUPS"
-	DeletionStepDeleteObjects   = "DELETE_PROJECT_OBJECTS"
-	DeletionStepDeleteApps      = "DELETE_APPS"
-	DeletionStepDeleteVault     = "DELETE_VAULT_CREDENTIALS"
-	DeletionStepRetainBackups   = "RECORD_RETAINED_BACKUPS"
-	DeletionStepDeleteRecord    = "DELETE_PROJECT_RECORD"
+	// DeletionStepDeleteAppWorkloads removes a single host's app containers, disks and network (EXC-575).
+	DeletionStepDeleteAppWorkloads = "DELETE_APP_WORKLOADS"
+	DeletionStepDeleteResources    = "DELETE_DATABASE_RESOURCES"
+	DeletionStepDeleteBackups      = "DELETE_BACKUPS"
+	DeletionStepDeleteObjects      = "DELETE_PROJECT_OBJECTS"
+	DeletionStepDeleteApps         = "DELETE_APPS"
+	DeletionStepDeleteVault        = "DELETE_VAULT_CREDENTIALS"
+	DeletionStepRetainBackups      = "RECORD_RETAINED_BACKUPS"
+	DeletionStepDeleteRecord       = "DELETE_PROJECT_RECORD"
 )
 
 // Pause reasons recorded on database_instances.pause_reason. Empty

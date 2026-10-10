@@ -152,6 +152,10 @@ func TestDockerProvisioner_Provision(t *testing.T) {
 	if result.Host == "" {
 		t.Error("expected non-empty host")
 	}
+	// The container serves no TLS; saying so lets an app's database reference resolve (EXC-575).
+	if result.SSLMode != "disable" {
+		t.Errorf("SSLMode = %q, want disable", result.SSLMode)
+	}
 
 	// Verify stages
 	expected := []domain.ProvisioningStage{

@@ -602,3 +602,18 @@ func TestDeployTemplate_ASecretThatCannotBeDrawnIsNotARefusal(t *testing.T) {
 	}
 	rig.expectNothingDone(t)
 }
+
+// A single host runs apps too (EXC-575): its projects are not refused for want of a cluster.
+func TestDescribeTemplates_ASingleHostProjectCanRunThem(t *testing.T) {
+	rig := newTemplateRig(t)
+	rig.project.DeploymentMode = domain.ModeDocker
+	views, err := rig.svc.List(context.Background(), tplProject, false)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, view := range views {
+		if view.ID == "redis" && len(view.Fit.Refusals) != 0 {
+			t.Fatalf("redis on a single host: %v", view.Fit.Refusals)
+		}
+	}
+}

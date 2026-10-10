@@ -326,6 +326,8 @@ type AppConfig struct {
 	// TenantSizedProvisioners, which make volumes of exactly their size.
 	TenantStorageRequireSized bool
 	TenantSizedProvisioners   []string
+	// SingleHostApps is how apps run when PROVISIONER_MODE=docker (EXC-575).
+	SingleHostApps SingleHostAppsConfig
 	// AppDiskToolsImage runs the app-disk usage probe and lowering copy.
 	AppDiskToolsImage string
 	// StorageBudgetPercent is the share of the storage every volume together
@@ -390,6 +392,7 @@ func (c AppConfig) Validate() error {
 func Load() AppConfig {
 	cfg := load()
 	loadTenantStorage(&cfg)
+	cfg.SingleHostApps = loadSingleHostApps()
 	return cfg
 }
 

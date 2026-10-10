@@ -19,6 +19,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/docbrowser"
+	"github.com/excalibase/provisioning-poc/internal/dockerapps"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/email"
@@ -151,6 +152,11 @@ func runServer(cfg config.AppConfig) {
 		log.Fatalf("custom domains: %v", err)
 	}
 	factory, dockerClientRef := buildProvisionerFactory(cfg, k8sClient)
+	singleHostApps, err := buildSingleHostAppRuntime(context.Background(), cfg, dockerClientRef, store)
+	if err != nil {
+		log.Fatalf("app hosting: %v", err)
+	}
+	startSingleHostReconcile(singleHostApps)
 
 	// One way to reach a tenant database, shared by the schema migrator,
 	// the cron sync and the scheduler sweep.
@@ -175,19 +181,20 @@ func runServer(cfg config.AppConfig) {
 	provSvc.AddDeletionObserver(projectDB)
 
 	deps := buildHandlerDeps(handlerDepsArgs{
-		cfg:          cfg,
-		store:        store,
-		sqlStore:     sqlStore,
-		k8sClient:    k8sClient,
-		vc:           vc,
-		localVault:   localVault,
-		unsealKMS:    unsealKMS,
-		provSvc:      provSvc,
-		pgStore:      pgStore,
-		dockerClient: dockerClientRef,
-		claimer:      lifecycleClaimer,
-		budget:       storageBudget,
-		projectDB:    projectDB,
+		cfg:            cfg,
+		store:          store,
+		sqlStore:       sqlStore,
+		k8sClient:      k8sClient,
+		vc:             vc,
+		localVault:     localVault,
+		unsealKMS:      unsealKMS,
+		provSvc:        provSvc,
+		pgStore:        pgStore,
+		dockerClient:   dockerClientRef,
+		claimer:        lifecycleClaimer,
+		budget:         storageBudget,
+		projectDB:      projectDB,
+		singleHostApps: singleHostApps,
 	})
 	deps.fnHandler = fnHandler
 	// The schema browser holds one connection per project for ten minutes.
@@ -1196,6 +1203,8 @@ type handlerDepsArgs struct {
 	budget *storagebudget.Budget
 	// projectDB reaches tenant databases; tracking a function reads its live definition.
 	projectDB permissions.ProjectPools
+	// singleHostApps runs apps on the Docker or Podman host; nil on Kubernetes or with apps off.
+	singleHostApps *dockerapps.Runtime
 }
 
 // buildBackupService wires the BackupService with the right adapter
@@ -1340,22 +1349,21 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provSvc, pgStore := a.provSvc, a.pgStore
 
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
+	appRuntime := appRuntimeFor(k8sClient, a.singleHostApps)
 	appDeploySvc := service.NewAppDeployService(
 		apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
-		k8sClient, store, service.NewAppEnvResolver(vc, store), k8s.AppRenderOptions{
-			RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Edge: edgePeer(cfg), Route: appRoute(cfg),
-			DiskStorageClass: cfg.TenantStorageClass,
-		})
+		appRuntime, store, service.NewAppEnvResolver(vc, store), appRenderOptions(cfg))
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
 	appDeploySvc.SetNamespaceQuotaTiers(provSvc)
 	provSvc.SetProjectQuotaSync(appDeploySvc.SyncProjectQuota)
 	wireProjectWorkloadStop(cfg, k8sClient, provSvc, appDeploySvc)
+	wireSingleHostTeardown(a.singleHostApps, provSvc, appDeploySvc)
 	appDiskLimits := service.NewAppDiskLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc)
 	appDeploySvc.SetDiskLimits(appDiskLimits)
 	appDeploySvc.SetDiskJobs(k8s.DiskJobOptions{Image: cfg.AppDiskToolsImage, RuntimeClass: cfg.AppRuntimeClass, Timeout: appDiskJobTimeout})
 	appDeploySvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
-	appDomainSvc := buildAppDomainService(cfg, sqlStore.DB(), k8sClient, store, appDeploySvc)
+	appDomainSvc := buildAppDomainService(cfg, sqlStore.DB(), appRuntime, store, appDeploySvc)
 	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
 	// A restore finishes the way a provision does: the adapters hand the
 	// recovered database to the provisioning service's registration path
@@ -1471,13 +1479,13 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// marker straight away so idle-pause never sees them as stale.
 	provSvc.SetActivityRecorder(activityRecorder)
 
-	registryCreds := registryCredentials(vc, store, k8sClient)
+	registryCreds := registryCredentials(vc, store, appRuntime)
 	withRegistryCredentials(appDeploySvc, registryCreds)
 	if origins, ok := sqlStore.(storage.ProjectCorsEditor); ok {
 		appDeploySvc.SetCorsOriginReleaser(origins)
 	}
 	appDeploySvc.SetImageResolver(imagedigest.NewResolver())
-	appNetworkSvc := newAppNetworkService(sqlStore, store, k8sClient, a.claimer)
+	appNetworkSvc := newAppNetworkService(sqlStore, store, appRuntime, a.claimer)
 	schemaHandler := newSchemaHandler(cfg, vc, store)
 	return &handlerDeps{
 		provHandler:         provHandler,
@@ -1514,7 +1522,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appDeployHandler:    newAppDeployHandler(appDeploySvc, cfg.Features(), cfg.DeployWait),
 		registryCredHandler: newRegistryCredentialHandler(registryCreds),
 		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(
-			apphost.NewPostgresAppStore(sqlStore.DB()), store, k8sClient)),
+			apphost.NewPostgresAppStore(sqlStore.DB()), store, appRuntime)),
 		appDomainSvc:      appDomainSvc,
 		appDomainHandler:  newAppDomainHandler(appDomainSvc),
 		appNetworkHandler: newAppNetworkHandler(appNetworkSvc),

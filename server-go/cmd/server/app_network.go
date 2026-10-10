@@ -7,7 +7,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/apptemplate"
 	"github.com/excalibase/provisioning-poc/internal/handler"
-	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
@@ -17,8 +16,8 @@ import (
 // newAppNetworkService is the per-project private network between apps
 // (EXC-524); nil without the Postgres platform store or a cluster client.
 func newAppNetworkService(sqlStore storage.PlatformStore, projects storage.InstanceStore,
-	kube k8s.KubeClient, claimer service.ProjectOperationClaimer) *service.AppNetworkService {
-	svc, ok := service.AppNetworkServiceFor(sqlStore, projects, kube, claimer)
+	runtime service.AppRuntime, claimer service.ProjectOperationClaimer) *service.AppNetworkService {
+	svc, ok := service.AppNetworkServiceFor(sqlStore, projects, runtime, claimer)
 	if !ok {
 		log.Println("WARN: no Postgres platform store or cluster client — the app private network API is unavailable")
 		return nil

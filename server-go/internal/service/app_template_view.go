@@ -150,7 +150,7 @@ func (s *AppTemplateService) refusals(ctx context.Context, projectID string, tpl
 	facts apptemplate.Facts, inst *domain.DatabaseInstance, held []*apphost.App, check *templateCheck) error {
 	fit := &check.fit
 	refuse := func(format string, args ...any) { fit.Refusals = append(fit.Refusals, fmt.Sprintf(format, args...)) }
-	if inst.DeploymentMode != domain.ModeK8s || inst.Namespace == "" {
+	if inst.Namespace == "" {
 		refuse("the project has nowhere to run apps yet")
 	}
 	if fit.AppsHeld+fit.AppsNeeded > fit.AppsAllowed {
