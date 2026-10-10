@@ -16,7 +16,7 @@ import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { serverErrorMessage } from '../utils/serverError';
-import { engineLabel } from '../utils/engine';
+import { engineLabel, isMySQLProject } from '../utils/engine';
 import { projectOperationMessage } from '../hooks/projectFollow';
 
 interface RollbackResult {
@@ -30,7 +30,9 @@ function projectInfo(project: DatabaseInstance) {
     { icon: Server, label: 'Display Name', value: project.projectName || '-' },
     { icon: Database, label: 'Database Type', value: engineLabel(project) },
     { icon: Shield, label: 'Tier', value: project.tier },
-    { icon: Database, label: 'PostgreSQL Version', value: project.postgresVersion || '-' },
+    isMySQLProject(project)
+      ? { icon: Database, label: 'MySQL Version', value: project.mysqlVersion || '-' }
+      : { icon: Database, label: 'PostgreSQL Version', value: project.postgresVersion || '-' },
     { icon: Server, label: 'Namespace', value: project.namespace },
     { icon: Server, label: 'Host', value: project.host || '-' },
     { icon: Server, label: 'Port', value: project.port || '-' },
@@ -57,7 +59,7 @@ export function SettingsPage() {
   // control plane. A failed read leaves this undefined, and the connection
   // card falls back to the in-cluster details rather than guessing. A project
   // without a database has no endpoint to read.
-  const endpoint = useProjectEndpoint(project && !project.noDatabase ? projectId : undefined);
+  const endpoint = useProjectEndpoint(project && !project.noDatabase && !isMySQLProject(project) ? projectId : undefined);
 
   if (loadError && !project) {
     return (
@@ -77,6 +79,9 @@ export function SettingsPage() {
 
   const info = projectInfo(project);
   const noDatabase = project.noDatabase === true;
+  // MySQL (ADR 0041) has its lifecycle here; the API, connection and cluster
+  // cards are Postgres ones.
+  const postgres = !noDatabase && !isMySQLProject(project);
 
 
   return (
@@ -99,7 +104,7 @@ export function SettingsPage() {
         </div>
       )}
 
-      {!noDatabase && (<>
+      {postgres && (<>
       <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8" data-testid="connect-section">
         <h4 className="text-sm font-medium text-text-primary mb-3">Connect to your project</h4>
         <ConnectSnippets projectId={project.projectId} />
@@ -131,7 +136,8 @@ export function SettingsPage() {
       </div>
 
       {!noDatabase && (<>
-      <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8">
+      {postgres && (
+      <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8" data-testid="backup-config-card">
         <h4 className="text-sm font-medium text-text-primary mb-2">Backup Configuration</h4>
         <div className="grid grid-cols-3 gap-4 text-sm">
           <div>
@@ -148,14 +154,17 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
+      )}
 
       <div className="mb-8">
         <MinorUpgradeCard project={project} />
       </div>
 
+      {postgres && (
       <div className="mb-8">
         <ClusterSettingsCard project={project} />
       </div>
+      )}
 
       <LifecycleSection project={project} />
       </>)}

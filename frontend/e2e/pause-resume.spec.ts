@@ -148,11 +148,12 @@ test.describe('Project Pause / Resume', () => {
   });
 
   test('Resume click triggers POST and surfaces the new ACTIVE status', async ({ page }) => {
-    let getCalls = 0;
+    // The project reads PAUSED until the resume POST lands; the page reads it
+    // from more than one place, so a count of GETs says nothing.
+    let resumed = false;
     await page.route(`**/api/provision/${PROJECT}*`, (route: Route) => {
       if (route.request().method() === 'GET') {
-        getCalls++;
-        const status = getCalls < 2 ? 'PAUSED' : 'ACTIVE';
+        const status = resumed ? 'ACTIVE' : 'PAUSED';
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -168,7 +169,14 @@ test.describe('Project Pause / Resume', () => {
       }
       return route.continue();
     });
-    await mockResumeEndpoint(page);
+    await page.route(`**/api/provision/${PROJECT}/resume`, (route: Route) => {
+      resumed = true;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ projectId: PROJECT, status: 'ACTIVE' }),
+      });
+    });
 
     await page.goto(SETTINGS_URL);
     await page.getByTestId('resume-project-btn').click();

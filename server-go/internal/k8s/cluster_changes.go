@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"sort"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -124,7 +125,7 @@ func setPostgresParameters(spec map[string]interface{}, params map[string]interf
 // every one of them is on a storage class that allows expansion.
 func (c *Client) ClusterVolumesExpandable(ctx context.Context, namespace, clusterName string) error {
 	claims, err := c.clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx,
-		metav1.ListOptions{LabelSelector: "cnpg.io/cluster=" + clusterName})
+		metav1.ListOptions{LabelSelector: clusterVolumeSelector(clusterName)})
 	if err != nil {
 		return fmt.Errorf("list the database's volumes: %w", err)
 	}
@@ -149,6 +150,16 @@ func (c *Client) ClusterVolumesExpandable(ctx context.Context, namespace, cluste
 		}
 	}
 	return nil
+}
+
+// clusterVolumeSelector matches a database cluster's claims: CNPG labels them
+// with the cluster, MOCO with its instance name (the platform names a MySQL
+// cluster <project>-mysql).
+func clusterVolumeSelector(clusterName string) string {
+	if strings.HasSuffix(clusterName, mysqlClusterSuffix) {
+		return mocoCreatedByLabel + "=moco," + mocoInstanceLabel + "=" + clusterName
+	}
+	return "cnpg.io/cluster=" + clusterName
 }
 
 func (c *Client) storageClassExpandable(ctx context.Context, name string) error {

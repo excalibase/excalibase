@@ -218,6 +218,10 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 	if s.vault == nil || s.vault.Sealed() {
 		return pc.Fail(fmt.Errorf("%w: the vault is not available", ErrOwnerCredentialUnavailable))
 	}
+	if inst.DBType == domain.MySQL {
+		// MySQL users and their vault records come with EXC-584.
+		return nil
+	}
 	port := 5432
 	if inst.Port != nil {
 		port = *inst.Port
@@ -484,6 +488,10 @@ func (s *ProvisioningService) RestartReplication(ctx context.Context, inst *doma
 	}
 	if inst.DeploymentMode == domain.ModeDocker {
 		// A single host runs no CDC watcher; registration deploys none there.
+		return nil
+	}
+	if inst.DBType == domain.MySQL {
+		// No CDC watcher runs for MySQL yet (ADR 0041 phase 2).
 		return nil
 	}
 	pg, err := s.postgresProvisioner()

@@ -80,6 +80,9 @@ func (s *ProvisioningService) ClusterSettings(ctx context.Context, projectID str
 	if err := s.requireKubernetes(inst); err != nil {
 		return nil, err
 	}
+	if inst.DBType == domain.MySQL {
+		return s.mysqlClusterSettings(ctx, inst)
+	}
 	tier, err := s.tierConfig(ctx, inst.Tier)
 	if err != nil {
 		return nil, err
@@ -122,6 +125,9 @@ func (s *ProvisioningService) ResizeStorage(ctx context.Context, projectID, size
 	}
 	defer release()
 	if err := s.requireKubernetes(inst); err != nil {
+		return err
+	}
+	if err := requirePostgres(inst); err != nil {
 		return err
 	}
 	tier, err := s.tierConfig(ctx, inst.Tier)
@@ -216,6 +222,9 @@ func (s *ProvisioningService) ApplyOrgTier(ctx context.Context, projectID string
 	}
 	if err := k8s.ValidateTierSizing(plan); err != nil {
 		return err
+	}
+	if inst.DBType == domain.MySQL {
+		return s.applyMySQLTier(ctx, inst, orgTier, plan)
 	}
 	cluster, err := s.projectCluster(ctx, inst)
 	if err != nil {
@@ -397,6 +406,9 @@ func (s *ProvisioningService) TuneParameters(ctx context.Context, projectID stri
 	}
 	defer release()
 	if err := s.requireKubernetes(inst); err != nil {
+		return err
+	}
+	if err := requirePostgres(inst); err != nil {
 		return err
 	}
 	recorder, ok := s.store.(storage.ProjectParametersStore)

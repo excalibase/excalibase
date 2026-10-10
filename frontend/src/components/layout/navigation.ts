@@ -38,6 +38,8 @@ export interface NavItem {
   to: string;
   // Shown only for projects created with DocumentDB.
   documentDbOnly?: boolean;
+  // Works only on a PostgreSQL database; hidden for MySQL projects (ADR 0041).
+  postgresOnly?: boolean;
 }
 
 export interface NavSection {
@@ -48,20 +50,25 @@ export interface NavSection {
   children?: NavItem[];
   // Shown only when the server reports the capability as enabled.
   requires?: keyof NavCapabilities;
+  // Works only on a PostgreSQL database; hidden for MySQL projects (ADR 0041).
+  postgresOnly?: boolean;
 }
 
 export interface NavCapabilities {
   appHosting: boolean;
   // MCP for coding tools ships dark (EXC-554).
   mcp: boolean;
+  // False for a MySQL project: the Postgres-only pages are not listed.
+  postgres?: boolean;
 }
 
 export const PROJECT_NAV: NavSection[] = [
   { key: 'home', label: 'Overview', icon: Home, to: '' },
-  { key: 'sql', label: 'SQL Editor', icon: Terminal, to: 'sql' },
-  { key: 'schema', label: 'Schema', icon: GitBranch, to: 'schema' },
+  { key: 'sql', label: 'SQL Editor', icon: Terminal, to: 'sql', postgresOnly: true },
+  { key: 'schema', label: 'Schema', icon: GitBranch, to: 'schema', postgresOnly: true },
   {
     key: 'database',
+    postgresOnly: true,
     label: 'Databases',
     icon: Database,
     children: [
@@ -82,6 +89,7 @@ export const PROJECT_NAV: NavSection[] = [
   { key: 'containers', label: 'Containers', icon: Container, to: 'containers', requires: 'appHosting' },
   {
     key: 'auth',
+    postgresOnly: true,
     label: 'Authentication',
     icon: Lock,
     children: [
@@ -95,21 +103,22 @@ export const PROJECT_NAV: NavSection[] = [
   // { key: 'api', label: 'API', icon: Globe, to: 'api' },
   // { key: 'realtime', label: 'Realtime', icon: Radio, to: 'realtime' },
   { key: 'storage', label: 'Storage', icon: FolderOpen, to: 'storage' },
-  { key: 'api-keys', label: 'API Keys', icon: KeyRound, to: 'api-keys' },
+  { key: 'api-keys', label: 'API Keys', icon: KeyRound, to: 'api-keys', postgresOnly: true },
   { key: 'ai-tools', label: 'AI Tools', icon: Bot, to: 'ai-tools', requires: 'mcp' },
   {
     key: 'monitoring',
     label: 'Monitoring',
     icon: Activity,
     children: [
-      { label: 'Metrics', icon: BarChart2, to: 'monitoring/metrics' },
-      { label: 'Performance', icon: Zap, to: 'monitoring/performance' },
+      { label: 'Metrics', icon: BarChart2, to: 'monitoring/metrics', postgresOnly: true },
+      { label: 'Performance', icon: Zap, to: 'monitoring/performance', postgresOnly: true },
       { label: 'Alerts', icon: Bell, to: 'monitoring/alerts' },
-      { label: 'Logs', icon: FileText, to: 'monitoring/logs' },
+      { label: 'Logs', icon: FileText, to: 'monitoring/logs', postgresOnly: true },
     ],
   },
   {
     key: 'operations',
+    postgresOnly: true,
     label: 'Operations',
     icon: Wrench,
     children: [
@@ -122,9 +131,13 @@ export const PROJECT_NAV: NavSection[] = [
   { key: 'settings', label: 'Settings', icon: Settings, to: 'settings' },
 ];
 
-export function visibleNavItems(items: readonly NavItem[], documentDb: boolean): NavItem[] {
-  return items.filter((item) => !item.documentDbOnly || documentDb);
+export function visibleNavItems(items: readonly NavItem[], documentDb: boolean, postgres = true): NavItem[] {
+  return items.filter((item) => (!item.documentDbOnly || documentDb) && (!item.postgresOnly || postgres));
 }
 
 export const visibleProjectNav = (capabilities: NavCapabilities): NavSection[] =>
-  PROJECT_NAV.filter((section) => !section.requires || capabilities[section.requires]);
+  PROJECT_NAV.filter(
+    (section) =>
+      (!section.requires || capabilities[section.requires]) &&
+      (!section.postgresOnly || capabilities.postgres !== false)
+  );

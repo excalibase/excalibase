@@ -78,6 +78,9 @@ type DatabaseInstance struct {
 	// so one recorded major cannot mean two different things. Restore reads it
 	// back to recover into the same major the backup was taken from.
 	PostgresVersion string `json:"postgresVersion,omitempty"`
+	// MySQLVersion is the full version a MySQL project runs ("8.4.10"), in
+	// the MySQL catalogue's spelling; a minor upgrade moves it (ADR 0041).
+	MySQLVersion string `json:"mysqlVersion,omitempty"`
 	// DocumentDB reports whether this project's database carries the
 	// DocumentDB extension. It is decided when the project is created and
 	// never afterwards — the cluster's preloaded libraries are fixed at

@@ -72,6 +72,7 @@ var platformRows = []Row{
 	{Methods: post, Pattern: "/api/email/verify/send", Auth: AuthSession, Owner: OwnerNone, Note: "mails only the caller's own verified-address flow, so a read-only token may not trigger a send"},
 	{Methods: get, Pattern: "/api/tiers/", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "tier specs feed the provision page's selector; editing lives under /api/admin/tiers"},
 	{Methods: get, Pattern: "/api/postgres/catalog", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "the supported PostgreSQL majors and their DocumentDB availability; the create-project form reads it instead of carrying its own copy"},
+	{Methods: get, Pattern: "/api/mysql/catalog", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "the MySQL versions a project may be created on (ADR 0041); dark until the mysql feature is on"},
 	{Methods: get, Pattern: "/api/alerts/", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "the handler scopes the list to the caller's own projects; PermViewAny sees every tenant's"},
 	{Methods: get, Pattern: "/api/alerts/history", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "scoped like the active list"},
 	{Methods: post, Pattern: "/api/setup/install/{databaseType}", Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole, Note: "applies a remote YAML cluster-wide"},

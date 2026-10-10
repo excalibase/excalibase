@@ -30,8 +30,8 @@ export const ProvisioningStage = {
 
 export type ProvisioningStage = typeof ProvisioningStage[keyof typeof ProvisioningStage];
 
-export interface DatabaseSettings {
-  databaseType: DatabaseType;
+export interface PostgresSettings {
+  databaseType: typeof DatabaseType.POSTGRESQL;
   // The PostgreSQL major, in the catalogue's spelling. Required: the API has
   // no default and refuses a request that names none.
   postgresVersion: string;
@@ -39,6 +39,14 @@ export interface DatabaseSettings {
   // the image a cluster runs is fixed when it is provisioned.
   documentDb?: boolean;
 }
+
+// A MySQL project (ADR 0041) names a version from the MySQL catalogue.
+export interface MySQLSettings {
+  databaseType: typeof DatabaseType.MYSQL;
+  mysqlVersion: string;
+}
+
+export type DatabaseSettings = PostgresSettings | MySQLSettings;
 
 // A project is created either with its database or without one
 // (noDatabase), in which case it names no database settings at all.
@@ -56,6 +64,8 @@ export interface DatabaseInstance {
   // The PostgreSQL major this project's data lives on, in the catalogue's
   // spelling. Absent on projects created before the major was recorded.
   postgresVersion?: string;
+  // The MySQL version a MySQL project runs ("8.4.10").
+  mysqlVersion?: string;
   // Whether this project was created with the DocumentDB extension.
   documentDb?: boolean;
   // True for a project created without a database (only containers,

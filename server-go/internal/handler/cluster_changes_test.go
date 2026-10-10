@@ -268,3 +268,56 @@ func TestGetClusterSettingsSaysWhetherTheCallerMayChangeThem(t *testing.T) {
 		})
 	}
 }
+
+// ADR 0041: a MySQL project moves onto its org's plan through the same route;
+// the answer is the plan it now runs, and a Standard → Free move is refused
+// with the way out (restore into a new project), not a platform error.
+func TestChangeTier_MySQL(t *testing.T) {
+	store, _ := storage.NewFileSystemStore(t.TempDir())
+	if err := store.Create(&domain.DatabaseInstance{
+		ProjectID: "my-db", OrgID: "org1", DBType: domain.MySQL, Tier: domain.Free,
+		Namespace: "org1-my-db", Status: "ACTIVE", MySQLVersion: "8.4.10",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mock := k8s.NewMockClient()
+	image, _ := config.MySQLImage("8.4.10")
+	cluster, _ := k8s.BuildMySQLCluster(k8s.MySQLClusterOpts{ProjectID: "my-db", Namespace: "org1-my-db", Image: image,
+		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"}})
+	if err := mock.ApplyCRD(context.Background(), k8s.MOCOClusterGVR, "org1-my-db", cluster); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		mock.Capacity.Nodes = append(mock.Capacity.Nodes, k8s.NodeCapacity{
+			Name: fmt.Sprintf("node-%d", i), AllocatableCPUMilli: 8000, AllocatableMemBytes: 32 << 30})
+	}
+	orgs := fakestore.NewOrgs()
+	orgs.AddOrg("org1", domain.Standard)
+	svc := service.NewProvisioningService(store, provisioner.NewFactory(provisioner.NewMySQLProvisioner(mock)), mock)
+	svc.SetOrgStore(orgs)
+	svc.SetBackgroundRunner(func(func()) {})
+	h := NewProvisioningHandler(svc, &adminOrgStore{})
+	h.SetInstanceStore(store)
+	r := chi.NewRouter()
+	r.Post("/api/provision/{projectId}/tier", h.ChangeTier)
+
+	post := func(tier string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/provision/my-db/tier", strings.NewReader(`{"tier":"`+tier+`"}`)))
+		return w
+	}
+	w := post("STANDARD")
+	if w.Code != http.StatusOK {
+		t.Fatalf("STANDARD: %d %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["tier"] != "STANDARD" || body["instances"] != float64(3) {
+		t.Errorf("answered %v", body)
+	}
+	orgs.AddOrg("org1", domain.Free)
+	w = post("FREE")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "restore it into a new project") {
+		t.Errorf("FREE: %d %s", w.Code, w.Body.String())
+	}
+}

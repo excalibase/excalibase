@@ -147,6 +147,10 @@ type Row struct {
 	// (middleware.RequireProjectDatabase), never a crash against a cluster
 	// or credential that does not exist (EXC-426).
 	Database bool
+	// MySQL marks a database route that also serves a MySQL project (ADR
+	// 0041). Every other database route answers a MySQL project 409 "not
+	// available for MySQL projects" before its handler runs Postgres against it.
+	MySQL bool
 	// Discloses is required on every row that serves a read method.
 	Discloses Disclosure
 	// Note records the non-obvious reason for this row's contract.

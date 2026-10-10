@@ -22,6 +22,7 @@ func budgetFakeClient(objects ...runtime.Object) (*Client, *fake.Clientset, *dyn
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
 			CNPGClusterGVR: "ClusterList",
+			MOCOClusterGVR: "MySQLClusterList",
 			LVMNodeGVR:     "LVMNodeList",
 		})
 	return NewClientFromInterfaces(clientset, dyn), clientset, dyn

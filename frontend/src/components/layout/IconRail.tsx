@@ -3,6 +3,8 @@ import { useLocation, useParams, useNavigate, Link } from 'react-router-dom';
 import { visibleProjectNav, type NavSection } from './navigation';
 import { useAppHostingEnabled, useFeatureEnabled } from '../../hooks/useDeploymentMode';
 import { cn } from '../../utils/cn';
+import { useInstance } from '../../hooks/useProvisioning';
+import { isMySQLProject } from '../../utils/engine';
 import { PanelLeftDashed } from 'lucide-react';
 
 type SidebarMode = 'expanded' | 'collapsed' | 'expandable';
@@ -21,7 +23,8 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
   const basePath = `/project/${projectId}`;
   const { enabled: appHosting } = useAppHostingEnabled();
   const { enabled: mcp } = useFeatureEnabled('mcp');
-  const sections = visibleProjectNav({ appHosting, mcp });
+  const { data: project } = useInstance(projectId ?? '');
+  const sections = visibleProjectNav({ appHosting, mcp, postgres: !isMySQLProject(project) });
 
   const [mode, setMode] = useState<SidebarMode>(() => {
     return (localStorage.getItem(STORAGE_KEY) as SidebarMode) ?? 'expandable';

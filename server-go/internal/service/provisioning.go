@@ -27,6 +27,9 @@ type ProvisioningService struct {
 	// documentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin; off unless the installation says so (EXC-394).
 	documentDBEnabled bool
+	// mysqlCreation is the mysql feature: new MySQL projects may be created.
+	// Existing ones are looked after either way (ADR 0041).
+	mysqlCreation bool
 	// runInBackground starts an accepted project build; nil runs it on its own goroutine.
 	runInBackground func(func())
 	// storageBudget holds every database volume to the platform's share of its storage.
@@ -543,6 +546,11 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 	if err := validateProvisioningRequest(*req); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
+	// An engine this platform does not create (MySQL with its feature off)
+	// is refused before any row, credential or capacity is touched.
+	if !s.creates(req.DBType) {
+		return nil, nil, config.TierConfig{}, fmt.Errorf("unsupported database type: %s", req.DBType)
+	}
 	if err := s.requireDocumentDBInstalled(*req); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
@@ -614,6 +622,9 @@ func (s *ProvisioningService) databaseTier(ctx context.Context, req *domain.Prov
 	if err != nil {
 		return config.TierConfig{}, err
 	}
+	if req.DBType == domain.MySQL {
+		return config.MySQLPlan(tier)
+	}
 	req.Parameters = config.NormalizeTenantParameters(req.Parameters)
 	if err := config.ValidateTenantParameters(req.Parameters, tier); err != nil {
 		return config.TierConfig{}, err
@@ -626,19 +637,12 @@ func (s *ProvisioningService) databaseTier(ctx context.Context, req *domain.Prov
 // project and adding a database to one are admitted by the same rules.
 func (s *ProvisioningService) admitDatabase(ctx context.Context, req *domain.ProvisioningRequest, tierType domain.TierType,
 	tier config.TierConfig, projectRef string) (provisioner.DatabaseProvisioner, string, error) {
-	s.applyBackupDefaults(req, tier)
-
-	if err := s.enforceBackupTierPolicy(req, tierType, tier); err != nil {
-		return nil, "", err
-	}
-	if err := s.settleBackupSchedule(req); err != nil {
-		return nil, "", err
-	}
-	if err := s.requireBackupTarget(req, tier); err != nil {
-		return nil, "", err
-	}
-	if err := s.issueBackupCredentials(ctx, req, projectRef); err != nil {
-		return nil, "", err
+	// MySQL backups come with their own ticket (EXC-586); until then a MySQL
+	// project gets none rather than a Postgres backup it cannot run.
+	if req.DBType != domain.MySQL {
+		if err := s.admitBackups(ctx, req, tierType, tier, projectRef); err != nil {
+			return nil, "", err
+		}
 	}
 
 	if err := s.RequireNodeSpread(ctx, tierType, tier); err != nil {
@@ -654,10 +658,13 @@ func (s *ProvisioningService) admitDatabase(ctx context.Context, req *domain.Pro
 	}
 
 	prov, ok := s.factory.Get(req.DBType)
-	if !ok {
+	if !ok || !s.creates(req.DBType) {
 		return nil, "", fmt.Errorf("unsupported database type: %s", req.DBType)
 	}
 
+	if req.DBType == domain.MySQL {
+		return prov, mysqlVersionOf(*req), nil
+	}
 	// Recorded, not recomputed later: the image a project runs is chosen from
 	// this major once, and restore has to land the data back on the same one.
 	major, err := canonicalPostgresMajor(req.PostgresVersion)
@@ -667,10 +674,31 @@ func (s *ProvisioningService) admitDatabase(ctx context.Context, req *domain.Pro
 	return prov, major, nil
 }
 
-// applyDatabaseChoices stamps what the database is created with onto the row.
-func applyDatabaseChoices(inst *domain.DatabaseInstance, req domain.ProvisioningRequest, tier config.TierConfig, major string) {
+// admitBackups settles the backups a new Postgres database gets.
+func (s *ProvisioningService) admitBackups(ctx context.Context, req *domain.ProvisioningRequest, tierType domain.TierType,
+	tier config.TierConfig, projectRef string) error {
+	s.applyBackupDefaults(req, tier)
+	if err := s.enforceBackupTierPolicy(req, tierType, tier); err != nil {
+		return err
+	}
+	if err := s.settleBackupSchedule(req); err != nil {
+		return err
+	}
+	if err := s.requireBackupTarget(req, tier); err != nil {
+		return err
+	}
+	return s.issueBackupCredentials(ctx, req, projectRef)
+}
+
+// applyDatabaseChoices stamps what the database is created with onto the row;
+// version is the Postgres major or the MySQL version, by engine.
+func applyDatabaseChoices(inst *domain.DatabaseInstance, req domain.ProvisioningRequest, tier config.TierConfig, version string) {
 	inst.DBType = req.DBType
-	inst.PostgresVersion = major
+	if req.DBType == domain.MySQL {
+		inst.MySQLVersion = version
+	} else {
+		inst.PostgresVersion = version
+	}
 	// Recorded here and nowhere else. The cluster's preloaded libraries
 	// are fixed when it is provisioned, so the choice cannot be revisited
 	// later and the store leaves the column out of every UPDATE to keep
@@ -919,6 +947,10 @@ func applyProvisioningResult(inst *domain.DatabaseInstance, req domain.Provision
 	inst.SSLMode = result.SSLMode
 	if result.Namespace != "" {
 		inst.Namespace = result.Namespace
+	}
+	if req.DBType == domain.MySQL {
+		// MOCO's metrics are scraped through its PodMonitors, not this field.
+		return
 	}
 	inst.MetricsEndpoint = fmt.Sprintf("http://%s-postgres-1.%s.svc.cluster.local:9187/metrics", req.ProjectName, inst.Namespace)
 }

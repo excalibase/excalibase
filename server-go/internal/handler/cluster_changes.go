@@ -131,6 +131,8 @@ func clusterChangeStatus(err error) int {
 	case errors.Is(err, service.ErrInvalidStorageSize), errors.Is(err, service.ErrStorageShrink),
 		errors.Is(err, config.ErrTenantParameter), errors.Is(err, service.ErrKubernetesOnly):
 		return http.StatusBadRequest
+	case errors.Is(err, k8s.ErrMySQLScaleDown), errors.Is(err, service.ErrNotForMySQL):
+		return http.StatusConflict
 	case errors.Is(err, service.ErrStorageAbovePlan), errors.Is(err, service.ErrTierNotOrgPlan),
 		errors.Is(err, service.ErrDiskAbovePlanMax), errors.Is(err, service.ErrTierParametersOutOfBounds),
 		errors.Is(err, service.ErrPlanDoesNotFit), errors.Is(err, storagebudget.ErrExceeded),

@@ -1,0 +1,10 @@
+# The MySQL versions this platform provisions on MOCO (ADR 0041): 8.4 LTS only,
+# newest first; the first entry is what a new project gets when it names none.
+# Images are MOCO's builds (ENTRYPOINT mysqld, USER 10000, `sleep` in PATH),
+# pinned by digest beside their tag. A minor upgrade moves a project to a later
+# entry; a version is never downgraded.
+versions:
+  - version: "8.4.10"
+    image: ghcr.io/cybozu-go/moco/mysql:8.4.10@sha256:6a8b7362a5b15dd5343c69f316adfc5d1798924470b1d38ce9cad85febb23120
+  - version: "8.4.9"
+    image: ghcr.io/cybozu-go/moco/mysql:8.4.9@sha256:f32deb585c9d16e1cd1bbc4768be1ea0fc33fd6798c6d9952bfd573ce9e5c792

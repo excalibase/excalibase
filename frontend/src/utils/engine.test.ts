@@ -12,7 +12,7 @@ describe('engineLabel', () => {
   });
 
   test('passes an engine it does not know through unchanged', () => {
-    expect(engineLabel({ databaseType: 'MYSQL' })).toBe('MYSQL');
+    expect(engineLabel({ databaseType: 'ORACLE' })).toBe('ORACLE');
   });
 });
 

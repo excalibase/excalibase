@@ -8,6 +8,10 @@ import { listMyOrgs, type Org } from '../api/orgs';
 import { useTiers, type TierConfig } from '../api/tiers';
 import { usePostgresCatalog, findMajor, type PostgresMajor } from '../api/postgresCatalog';
 import { PostgresVersionPicker } from '../components/PostgresVersionPicker';
+import { MySQLVersionPicker } from '../components/MySQLVersionPicker';
+import { useMySQLCatalog } from '../api/mysqlCatalog';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
+import type { DatabaseSettings } from '../types';
 import { DOCUMENTDB_LABEL } from '../utils/engine';
 import { serverErrorMessage } from '../utils/serverError';
 
@@ -47,17 +51,18 @@ interface FormFields {
   orgId: string;
   postgresVersion: string;
   needsVersion: boolean;
+  engineLabel: string;
 }
 
 type FieldErrors = Partial<Record<'projectName' | 'orgId' | 'postgresVersion', string>>;
 
-function validateFields({ projectName, orgId, postgresVersion, needsVersion }: FormFields): FieldErrors {
+function validateFields({ projectName, orgId, postgresVersion, needsVersion, engineLabel }: FormFields): FieldErrors {
   const errors: FieldErrors = {};
   const name = projectName.trim();
   if (!name) errors.projectName = 'Enter a project name.';
   else if (name.length > PROJECT_NAME_MAX) errors.projectName = `Project name must be ${PROJECT_NAME_MAX} characters or fewer.`;
   if (!orgId) errors.orgId = 'Choose an organization for the project.';
-  if (needsVersion && !postgresVersion) errors.postgresVersion = 'Choose a PostgreSQL version.';
+  if (needsVersion && !postgresVersion) errors.postgresVersion = `Choose a ${engineLabel} version.`;
   return errors;
 }
 
@@ -68,13 +73,23 @@ function tierLabel(tier: string): string {
   return tier.charAt(0) + tier.slice(1).toLowerCase();
 }
 
-function tierFeatures(tc: TierConfig): string[] {
+// MySQL runs on at least 1Gi (the server raises a smaller plan) and has no
+// backups yet.
+const MYSQL_MIN_MEMORY = '1Gi';
+
+function belowOneGi(memory: string): boolean {
+  const mebibytes = /^(\d+)Mi$/.exec(memory);
+  return mebibytes !== null && Number(mebibytes[1]) < 1024;
+}
+
+function tierFeatures(tc: TierConfig, mysql: boolean): string[] {
+  const memory = mysql && belowOneGi(tc.memory) ? MYSQL_MIN_MEMORY : tc.memory;
   return [
     tc.instances === 1 ? '1 instance' : `${tc.instances} instances`,
     `${tc.storageSize} storage`,
-    `${tc.memory} RAM`,
+    `${memory} RAM`,
     `${tc.cpu} vCPU`,
-    ...(tc.backupEnabled ? ['Backups'] : []),
+    ...(tc.backupEnabled && !mysql ? ['Backups'] : []),
   ];
 }
 
@@ -94,6 +109,9 @@ export function ProvisionPage() {
   // No default major, on purpose: see PostgresVersionPicker.
   const [postgresVersion, setPostgresVersion] = useState('');
   const [documentDb, setDocumentDb] = useState(false);
+  const [mysqlVersion, setMySQLVersion] = useState('');
+  const { enabled: mysqlOn } = useFeatureEnabled('mysql');
+  const mysqlCatalog = useMySQLCatalog(mysqlOn);
 
   const catalog = usePostgresCatalog();
   // Where no major offers DocumentDB (the installation does not run it), the
@@ -101,8 +119,11 @@ export function ProvisionPage() {
   const documentDbClosed = catalog.data && !catalog.data.majors.some((entry) => entry.documentDb)
     ? catalog.data.majors[0]?.documentDbUnavailableReason ?? 'DocumentDB is not available on this platform.'
     : null;
-  const engines = ENGINES.map((card) =>
-    card.engine === 'DOCUMENTDB' && documentDbClosed ? { ...card, desc: documentDbClosed, disabled: true } : card);
+  const engines = ENGINES.map((card) => {
+    if (card.engine === 'DOCUMENTDB' && documentDbClosed) return { ...card, desc: documentDbClosed, disabled: true };
+    if (card.engine === 'MYSQL' && mysqlOn) return { ...card, desc: 'MOCO operator, MySQL 8.4', disabled: false };
+    return card;
+  });
 
   // A major that cannot carry DocumentDB clears the choice instead of leaving
   // it set and invisible, so what the form shows is what it will send.
@@ -119,9 +140,16 @@ export function ProvisionPage() {
     setEngine(next);
     setDocumentDb(false);
     if (next === 'DOCUMENTDB' && !findMajor(catalog.data, postgresVersion)?.documentDb) setPostgresVersion('');
+    if (next === 'MYSQL' && !mysqlVersion) setMySQLVersion(mysqlCatalog.data?.defaultVersion ?? '');
   };
   const isDocumentDbEngine = engine === 'DOCUMENTDB';
+  const isMySQL = engine === 'MYSQL';
   const withoutDatabase = engine === 'NONE';
+  const chosenVersion = isMySQL ? mysqlVersion : postgresVersion;
+  const databaseSettings = (): DatabaseSettings =>
+    isMySQL
+      ? { databaseType: DatabaseType.MYSQL, mysqlVersion }
+      : { databaseType: DatabaseType.POSTGRESQL, postgresVersion, documentDb: isDocumentDbEngine || documentDb };
 
   // The organisation's plan decides the project's tier; the form only shows it.
   const { data: tierConfigs } = useTiers();
@@ -144,13 +172,13 @@ export function ProvisionPage() {
   const error = provision.error;
   const noOrgs = orgsLoaded && orgs.length === 0;
   const fieldErrors = attempted
-    ? validateFields({ projectName, orgId, postgresVersion, needsVersion: !withoutDatabase })
+    ? validateFields({ projectName, orgId, postgresVersion: chosenVersion, needsVersion: !withoutDatabase, engineLabel: isMySQL ? 'MySQL' : 'PostgreSQL' })
     : {};
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAttempted(true);
-    const missing = validateFields({ projectName, orgId, postgresVersion, needsVersion: !withoutDatabase });
+    const missing = validateFields({ projectName, orgId, postgresVersion: chosenVersion, needsVersion: !withoutDatabase, engineLabel: isMySQL ? 'MySQL' : 'PostgreSQL' });
     if (Object.keys(missing).length > 0) return;
     const name = projectName.trim();
     let result: { projectId: string };
@@ -158,13 +186,7 @@ export function ProvisionPage() {
       result = await provision.mutateAsync(
       withoutDatabase
         ? { projectName: name, orgId, noDatabase: true }
-        : {
-            projectName: name,
-            orgId,
-            databaseType: isDocumentDbEngine ? DatabaseType.POSTGRESQL : (engine as DatabaseType),
-            postgresVersion,
-            documentDb: isDocumentDbEngine || documentDb,
-          },
+        : { projectName: name, orgId, ...databaseSettings() },
       );
     } catch {
       return; // shown below the form from provision.error
@@ -279,12 +301,22 @@ export function ProvisionPage() {
               </div>
             </div>
 
-            {withoutDatabase ? (
+            {withoutDatabase && (
               <p data-testid="no-database-note" className="text-sm text-text-secondary">
                 The project starts with no database: run containers, functions and storage in it, and add a database
                 later from the project overview. It counts toward your organization&apos;s projects either way.
               </p>
-            ) : (
+            )}
+            {isMySQL && (
+              <MySQLVersionPicker
+                catalog={mysqlCatalog.data}
+                isLoading={mysqlCatalog.isLoading}
+                error={mysqlCatalog.error}
+                version={mysqlVersion}
+                onVersionChange={setMySQLVersion}
+              />
+            )}
+            {!withoutDatabase && !isMySQL && (
               <PostgresVersionPicker
                 catalog={catalog.data}
                 isLoading={catalog.isLoading}
@@ -307,7 +339,7 @@ export function ProvisionPage() {
                   <p className="font-semibold text-text-primary mb-2">{tierLabel(selectedOrg.tier)}</p>
                   {planConfig && (
                     <ul className="space-y-1">
-                      {tierFeatures(planConfig).map((f) => (<li key={f} className="text-xs text-text-secondary">{'\u00b7'} {f}</li>))}
+                      {tierFeatures(planConfig, isMySQL).map((f) => (<li key={f} className="text-xs text-text-secondary">{'\u00b7'} {f}</li>))}
                     </ul>
                   )}
                   <p className="text-xs text-text-tertiary mt-2">Projects take their organization&apos;s plan.</p>

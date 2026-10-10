@@ -248,13 +248,14 @@ func runServer(cfg config.AppConfig) {
 
 	// Wire pause/resume — backup must run before pause, so PauseService
 	// depends on the BackupService that backupHandler exposes.
-	pausers := buildPausers(cfg, factory, dockerClientRef)
+	pausers, enginePausers := buildPausers(cfg, factory)
 	var pauseSvc *service.PauseService
 	if len(pausers) > 0 {
 		pauseSvc = service.NewPauseService(service.PauseServiceConfig{
-			Instances: store,
-			Pausers:   pausers,
-			Backups:   deps.backupHandler.Service(),
+			Instances:     store,
+			Pausers:       pausers,
+			EnginePausers: enginePausers,
+			Backups:       deps.backupHandler.Service(),
 			// A resume puts the CDC watcher back only after the primary is
 			// serving; the control plane holds its credentials (EXC-363).
 			Replication: provSvc,
@@ -1037,6 +1038,7 @@ func buildProvisioningService(
 	// database is the only thing that can say so.
 	provSvc.SetCredentialVerifier(service.NewTenantRoleVerifier())
 	provSvc.SetOrgStore(sqlStore)
+	provSvc.AllowMySQLCreation(mysqlCreationAllowed(cfg))
 	provSvc.SetTierStore(sqlStore)
 	provSvc.SetStorageClassPolicy(cfg.TenantStorageClassPolicy())
 	provSvc.SetSelfHostedMode(!cfg.IsCloud())
@@ -1755,6 +1757,12 @@ func mountSimpleAuthRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 	r.Route("/api/postgres", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		d.pgCatalogHandler.Routes(r)
+	})
+	// The MySQL versions a project may be created on (ADR 0041), dark until
+	// the mysql feature is on.
+	r.Route("/api/mysql", func(r chi.Router) {
+		r.Use(features.Require(d.features, features.MySQL), auth.RequireAuth)
+		handler.NewMySQLCatalogHandler().Routes(r)
 	})
 	r.Route("/api/alerts", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
@@ -2482,12 +2490,23 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*p
 		dockerProvisioner.SetDeletionPoller(deletionPoller())
 		return provisioner.NewFactory(dockerProvisioner), dockerClient
 	}
+	return buildK8sFactory(cfg, k8sClient), nil
+}
+
+// buildK8sFactory registers CNPG for Postgres and MOCO for MySQL (ADR 0041).
+func buildK8sFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) *provisioner.Factory {
 	log.Println("Provisioner mode: k8s (CNPG)")
 	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
 	pgProvisioner.SetWatcherImage(cfg.WatcherImage)
 	pgProvisioner.SetPublicDomainSuffix(cfg.DBEndpointDomain)
 	pgProvisioner.SetDeletionPoller(deletionPoller())
-	return provisioner.NewFactory(pgProvisioner), nil
+	return provisioner.NewFactory(pgProvisioner, provisioner.NewMySQLProvisioner(k8sClient))
+}
+
+// mysqlCreationAllowed is the mysql feature: whether new MySQL projects may be
+// created. Existing ones are paused, resumed and deleted either way.
+func mysqlCreationAllowed(cfg config.AppConfig) bool {
+	return features.Enabled(context.Background(), cfg.Features(), features.MySQL)
 }
 
 // Teardown wait budget. CNPG finalizers plus PVC release routinely take a
@@ -2516,29 +2535,29 @@ func deletionPoller() provisioner.Poller {
 	return poller
 }
 
-// buildPausers extracts the Pauser-implementing provisioners from
-// the factory + docker client. Returns an empty map when no pauser
-// is wired. PauseService consults this map
-// at request time to pick the right Pauser per instance's mode.
-func buildPausers(cfg config.AppConfig, factory *provisioner.Factory, dc provisioner.DockerClient) map[domain.DeploymentMode]provisioner.Pauser {
-	out := map[domain.DeploymentMode]provisioner.Pauser{}
-	// Iterate the factory's registered provisioners and cherry-pick
-	// those that satisfy the optional Pauser interface.
+// buildPausers picks the pausers out of the factory: Postgres by the
+// deployment mode it runs in, every other engine by its own type, so a
+// MySQL project is never paused by the Postgres provisioner (ADR 0041).
+func buildPausers(cfg config.AppConfig, factory *provisioner.Factory) (
+	map[domain.DeploymentMode]provisioner.Pauser, map[domain.DatabaseType]provisioner.Pauser) {
+	byMode := map[domain.DeploymentMode]provisioner.Pauser{}
+	byEngine := map[domain.DatabaseType]provisioner.Pauser{}
 	for _, p := range factory.Registered() {
-		if pauser, ok := p.(provisioner.Pauser); ok {
-			// Both K8s and Docker postgres provisioners now implement
-			// Pauser. The mode to register under depends on which
-			// provisioner shipped the implementation, which mirrors
-			// cfg.ProvisionerMode for the active path.
-			if cfg.ProvisionerMode == "docker" {
-				out[domain.ModeDocker] = pauser
-			} else {
-				out[domain.ModeK8s] = pauser
-			}
+		pauser, ok := p.(provisioner.Pauser)
+		if !ok {
+			continue
+		}
+		if p.SupportedType() != domain.PostgreSQL {
+			byEngine[p.SupportedType()] = pauser
+			continue
+		}
+		if cfg.ProvisionerMode == "docker" {
+			byMode[domain.ModeDocker] = pauser
+		} else {
+			byMode[domain.ModeK8s] = pauser
 		}
 	}
-	_ = dc // dockerClient already wrapped inside DockerPostgreSQLProvisioner
-	return out
+	return byMode, byEngine
 }
 
 // envOr returns os.Getenv(key) or fallback when empty. Local helper to keep

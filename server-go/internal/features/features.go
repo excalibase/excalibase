@@ -18,11 +18,13 @@ const (
 	Pipeline Feature = "pipeline"
 	// AppStorage is the app-user storage API at /storage/v1/{projectId} and its bucket access rules (EXC-560).
 	AppStorage Feature = "appstorage"
+	// MySQL is creating MySQL projects on MOCO and their Studio card (ADR 0041, EXC-583).
+	MySQL Feature = "mysql"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL}
 }
 
 type Flags interface {

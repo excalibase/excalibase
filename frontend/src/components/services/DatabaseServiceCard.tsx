@@ -4,7 +4,7 @@ import { useInstance } from '../../hooks/useProvisioning';
 import { useProjectEndpoint } from '../../api/projectEndpoint';
 import { apiErrorMessage } from '../../api/apps';
 import { ToneBadge, secondaryButton } from '../containers/ContainerBits';
-import { engineLabel } from '../../utils/engine';
+import { engineLabel, isMySQLProject } from '../../utils/engine';
 import { databaseServiceStatus } from './serviceStatus';
 import type { DatabaseInstance } from '../../types';
 import { AccessNote, ServiceCard } from './ServiceCard';
@@ -67,6 +67,25 @@ function NoDatabase({ project }: { readonly project: DatabaseInstance }) {
   );
 }
 
+function projectVersion(project: DatabaseInstance): string {
+  const version = isMySQLProject(project) ? project.mysqlVersion : project.postgresVersion;
+  return version ? ` ${version}` : '';
+}
+
+// Where a MySQL project's database answers inside the platform (ADR 0041).
+// Every connection must use TLS; the server refuses one without it.
+function MySQLEndpoint({ project }: { readonly project: DatabaseInstance }) {
+  return (
+    <AccessNote testId="service-database-mysql-endpoint">
+      Reachable inside this project at{' '}
+      <code className="font-mono">
+        {project.host}:{project.port}
+      </code>
+      , database <code className="font-mono">{project.databaseName}</code>. TLS required.
+    </AccessNote>
+  );
+}
+
 export function DatabaseServiceCard({ projectId }: { readonly projectId: string }) {
   const { data: project, error } = useInstance(projectId);
   const status = project ? databaseServiceStatus(project) : undefined;
@@ -76,7 +95,11 @@ export function DatabaseServiceCard({ projectId }: { readonly projectId: string 
       testId="service-database"
       icon={Database}
       title="Database"
-      description="A managed database with its generated GraphQL and REST API."
+      description={
+        isMySQLProject(project)
+          ? 'A managed MySQL database.'
+          : 'A managed database with its generated GraphQL and REST API.'
+      }
       badge={status && <ToneBadge {...status} testId="service-database-status" />}
     >
       {!project && !error && <Loader2 className="w-5 h-5 animate-spin text-text-tertiary" />}
@@ -93,7 +116,7 @@ export function DatabaseServiceCard({ projectId }: { readonly projectId: string 
               <dt className="text-xs text-text-tertiary">Engine</dt>
               <dd className="text-text-primary">
                 {engineLabel(project)}
-                {project.postgresVersion ? ` ${project.postgresVersion}` : ''}
+                {projectVersion(project)}
               </dd>
             </div>
             <div>
@@ -104,12 +127,18 @@ export function DatabaseServiceCard({ projectId }: { readonly projectId: string 
           {project.failureReason && project.currentStage === 'FAILED' && (
             <p className="text-xs text-red-400 break-words">{project.failureReason}</p>
           )}
-          <div>
-            <Link to={`/project/${projectId}/database/overview`} className={secondaryButton}>
-              Open database
-            </Link>
-          </div>
-          <DatabaseAccess projectId={projectId} />
+          {isMySQLProject(project) ? (
+            <MySQLEndpoint project={project} />
+          ) : (
+            <>
+              <div>
+                <Link to={`/project/${projectId}/database/overview`} className={secondaryButton}>
+                  Open database
+                </Link>
+              </div>
+              <DatabaseAccess projectId={projectId} />
+            </>
+          )}
         </>
       )}
     </ServiceCard>

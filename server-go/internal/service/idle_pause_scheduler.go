@@ -278,6 +278,11 @@ func (s *IdlePauseScheduler) sweepOne(ctx context.Context, inst *domain.Database
 	if inst.Status != "ACTIVE" || s.resumedRecently(inst, now) {
 		return
 	}
+	if inst.DBType == domain.MySQL {
+		// Its apps connect to MySQL directly; none of that activity is seen
+		// yet, so it would be paused while in use (ADR 0041).
+		return
+	}
 	lastSeen, ok := effectiveLastSeen(inst, row, seen)
 	if !ok {
 		return

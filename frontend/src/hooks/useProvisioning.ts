@@ -182,7 +182,9 @@ export interface UpgradeResponse {
   projectId: string;
   status: string;
   currentStage?: string;
-  postgresVersion: string;
+  // One of the two, by engine.
+  postgresVersion?: string;
+  mysqlVersion?: string;
 }
 
 // useUpgradeMinorVersion moves a project onto the newest patch of the major it

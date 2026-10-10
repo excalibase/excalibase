@@ -52,8 +52,8 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 			pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 			created_at, updated_at, last_health_check,
 			storage_class, parameters,
-			deletion_scheduled_at, deletion_due_at, storage_size, no_database
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58)`,
+			deletion_scheduled_at, deletion_due_at, storage_size, no_database, mysql_version
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username,
@@ -71,7 +71,7 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
 		flexTimePtr(inst.CreatedAt), flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 		inst.StorageClass, parameters,
-		inst.DeletionScheduledAt, inst.DeletionDueAt, inst.StorageSize, inst.NoDatabase,
+		inst.DeletionScheduledAt, inst.DeletionDueAt, inst.StorageSize, inst.NoDatabase, inst.MySQLVersion,
 	)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && string(pqErr.Code) == uniqueViolation {
@@ -218,7 +218,8 @@ func updateInstance(q execQuerier, inst *domain.DatabaseInstance, expectedStatus
 			pause_backup_at = $50,
 			deletion_delete_backups = $51,
 			deletion_scheduled_at = $52,
-			deletion_due_at = $53
+			deletion_due_at = $53,
+			mysql_version = $54
 		WHERE project_id = $1 AND status <> ALL($45)
 		  AND ($48 = '' OR status = $48)`,
 		inst.ProjectID, inst.ProjectName, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
@@ -240,6 +241,7 @@ func updateInstance(q execQuerier, inst *domain.DatabaseInstance, expectedStatus
 		expectedStatus,
 		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
 		inst.DeletionDeleteBackups, inst.DeletionScheduledAt, inst.DeletionDueAt,
+		inst.MySQLVersion,
 	)
 	if err != nil {
 		return err
@@ -432,7 +434,7 @@ const pgInstanceColumns = `
 	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 	created_at, updated_at, last_health_check,
 	storage_class, parameters,
-	deletion_scheduled_at, deletion_due_at, storage_size, no_database`
+	deletion_scheduled_at, deletion_due_at, storage_size, no_database, mysql_version`
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
 	row := s.db.QueryRow(`SELECT`+pgInstanceColumns+`
@@ -566,7 +568,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&pauseAttempts, &pauseLastAttemptAt, &pauseBackupID, &pauseBackupAt,
 		&createdAt, &updatedAt, &lastHealth,
 		&inst.StorageClass, &parameters,
-		&deletionScheduledAt, &deletionDueAt, &inst.StorageSize, &inst.NoDatabase,
+		&deletionScheduledAt, &deletionDueAt, &inst.StorageSize, &inst.NoDatabase, &inst.MySQLVersion,
 	)
 	if err != nil {
 		return nil, err
