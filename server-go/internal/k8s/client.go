@@ -225,6 +225,8 @@ const (
 //   - the platform namespace (provisioning → deno /deploy /invoke, and the
 //     schema handler's direct connection to the project's Postgres)
 //   - cnpg-system (the CloudNativePG operator managing the Postgres cluster)
+//   - moco-system (the MOCO operator managing a MySQL cluster: agent gRPC and
+//     the mysqld admin port, ADR 0041)
 //   - monitoring (Prometheus scraping, when observability is enabled)
 //
 // Apps are left out because allow policies add together: an app's only allow
@@ -300,6 +302,7 @@ func buildNamespaceIsolationPolicy(namespace string) *networkingv1.NetworkPolicy
 					{PodSelector: &metav1.LabelSelector{}},
 					nsPeer(platformNamespace()),
 					nsPeer("cnpg-system"),
+					nsPeer("moco-system"),
 					nsPeer("monitoring"),
 				},
 			}},

@@ -25,7 +25,8 @@ func NewOperatorSetupService(k8sClient k8s.KubeClient) *OperatorSetupService {
 
 var operatorURLs = map[domain.DatabaseType]string{
 	domain.PostgreSQL: "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml",
-	domain.MySQL:      "https://raw.githubusercontent.com/planetscale/vitess-operator/main/deploy/operator.yaml",
+	// MOCO (ADR 0041); its manifest needs cert-manager installed first.
+	domain.MySQL: "https://github.com/cybozu-go/moco/releases/download/v0.37.0/moco.yaml",
 }
 
 var operatorDeployments = map[domain.DatabaseType]struct {
@@ -33,7 +34,7 @@ var operatorDeployments = map[domain.DatabaseType]struct {
 	namespace string
 }{
 	domain.PostgreSQL: {name: "cnpg-controller-manager", namespace: "cnpg-system"},
-	domain.MySQL:      {name: "vitess-operator", namespace: "vitess"},
+	domain.MySQL:      {name: "moco-controller", namespace: "moco-system"},
 }
 
 func (s *OperatorSetupService) InstallOperator(ctx context.Context, dbType domain.DatabaseType) error {

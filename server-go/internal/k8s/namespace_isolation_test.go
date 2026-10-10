@@ -39,15 +39,15 @@ func TestCreateProjectNamespace_AppliesIsolationPolicy(t *testing.T) {
 	if !sameNS {
 		t.Error("policy must allow same-namespace ingress (postgres replication, watcher→pg)")
 	}
-	for _, want := range []string{platformNamespace(), "cnpg-system", "monitoring"} {
+	for _, want := range []string{platformNamespace(), "cnpg-system", "moco-system", "monitoring"} {
 		if !allowed[want] {
 			t.Errorf("policy must allow ingress from %q namespace", want)
 		}
 	}
 	// Crucially, no OTHER tenant namespace is allowed: the only namespace peers
-	// are the three operators, plus same-namespace.
-	if len(allowed) != 3 {
-		t.Errorf("expected exactly 3 namespace peers (platform, cnpg-system, monitoring), got %v", allowed)
+	// are the platform, the two database operators and monitoring, plus same-namespace.
+	if len(allowed) != 4 {
+		t.Errorf("expected exactly 4 namespace peers (platform, cnpg-system, moco-system, monitoring), got %v", allowed)
 	}
 }
 
