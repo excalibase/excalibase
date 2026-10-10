@@ -434,9 +434,6 @@ func (a *DockerBackupAdapter) List(ctx context.Context, inst *domain.DatabaseIns
 // RestoreJob COMPLETED. A failure after the container exists leaves it
 // running for inspection with no project row, and fails the job.
 func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
-	if inst.DocumentDB {
-		return nil, ErrDocumentDBRestoreNeedsKubernetes
-	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -489,23 +486,26 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	if dbName == "" {
 		dbName = defaultRestoreDatabase
 	}
-	containerName := fmt.Sprintf("excalibase-%s-postgres", newProject)
+	containerName := provisioner.DatabaseContainerName(newProject)
 	newPassword := generateRestorePassword()
-	image, err := restoreImage(inst.PostgresVersion)
-	if err != nil {
-		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
-	}
-	containerID, err := a.createAndSeedRestoreContainer(ctx, dc, restoreContainerSpec{
+	spec := restoreContainerSpec{
 		containerName:   containerName,
 		dbName:          dbName,
 		newPassword:     newPassword,
-		image:           image,
 		newProject:      newProject,
 		sourceProjectID: inst.ProjectID,
 		body:            body,
 		req:             req,
 		limits:          limits,
-	})
+		documentDB:      inst.DocumentDB,
+		major:           inst.PostgresVersion,
+	}
+	if !inst.DocumentDB {
+		if spec.image, err = restoreImage(inst.PostgresVersion); err != nil {
+			return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
+		}
+	}
+	containerID, err := a.createAndSeedRestoreContainer(ctx, dc, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +526,8 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		password:      newPassword,
 		backupID:      srcRec.ID,
 	})
-	if err := a.startAndVerify(ctx, pc, restoreDeps{dc: dc, store: store, registrar: registrar, probe: probe}, containerID, dbName, newInst); err != nil {
+	deps := restoreDeps{dc: dc, store: store, registrar: registrar, probe: probe, gatewayLimits: spec.gatewayLimits()}
+	if err := a.startAndVerify(ctx, pc, deps, containerID, dbName, newInst); err != nil {
 		return nil, failRestore(ctx, pc, newProject, err)
 	}
 
@@ -554,6 +555,8 @@ type restoreDeps struct {
 	store     storage.InstanceStore
 	registrar ProjectRegistrar
 	probe     DatabaseProbe
+	// gatewayLimits sizes a DocumentDB project's gateway.
+	gatewayLimits provisioner.ContainerLimits
 }
 
 func (a *DockerBackupAdapter) startAndVerify(
@@ -571,6 +574,9 @@ func (a *DockerBackupAdapter) startAndVerify(
 		return fmt.Errorf("restored container did not become healthy: %w", err)
 	}
 	if err := a.waitForPromotedPostgres(ctx, dc, containerID, dbName); err != nil {
+		return err
+	}
+	if err := startRestoredGateway(ctx, pc, deps, newInst, containerID); err != nil {
 		return err
 	}
 	return registerVerifiedProject(ctx, pc, registrar, store, probe, newInst,
@@ -609,6 +615,7 @@ func restoredDockerInstance(src *domain.DatabaseInstance, spec restoredDockerSpe
 		PostgresVersion:       src.PostgresVersion,
 		RestoredFromProjectID: src.ProjectID,
 		RestoredFromBackupID:  spec.backupID,
+		DocumentDB:            src.DocumentDB,
 		CreatedAt:             &domain.FlexTime{Time: time.Now()},
 	}
 }
@@ -684,6 +691,9 @@ type restoreContainerSpec struct {
 	body            io.Reader
 	req             domain.RestoreRequest
 	limits          provisioner.ContainerLimits
+	// documentDB restores into the catalogue image of major with a gateway.
+	documentDB bool
+	major      string
 }
 
 // restoreLimits sizes a restored container by the plan a new project of the
@@ -709,49 +719,46 @@ func restoreLimits(ctx context.Context, plans RestorePlanSource, src *domain.Dat
 // returns a wrapped error. The returned containerID is left stopped for the
 // caller to start.
 func (a *DockerBackupAdapter) createAndSeedRestoreContainer(ctx context.Context, dc provisioner.DockerClient, spec restoreContainerSpec) (string, error) {
-	// Generate a fresh password — the restored cluster keeps its old DB
-	// users/passwords from the backup, but the platform's superuser env
-	// still needs a value for the image's healthcheck path.
-	env := map[string]string{
-		"POSTGRES_DB":       spec.dbName,
-		"POSTGRES_USER":     "postgres",
-		"POSTGRES_PASSWORD": spec.newPassword,
-	}
-	log.Printf("docker restore: image=%q for new project %q", spec.image, spec.newProject)
-	containerID, err := dc.CreateContainer(ctx, spec.containerName, spec.image, env, map[string]string{"5432": ""}, spec.limits)
+	log.Printf("docker restore: new project %q (DocumentDB %v)", spec.newProject, spec.documentDB)
+	containerID, owner, err := createRestoreContainer(ctx, dc, spec)
 	if err != nil {
-		return "", fmt.Errorf("create restore container: %w", err)
+		return "", err
 	}
+	if err := a.seedRestoreContainer(ctx, dc, containerID, owner, spec); err != nil {
+		_ = dc.RemoveContainer(ctx, containerID)
+		return "", err
+	}
+	return containerID, nil
+}
 
-	// Gunzip + extract into PGDATA before postgres starts. If initdb were
-	// to run first it would fail on a non-empty data dir.
+// seedRestoreContainer extracts the base backup into PGDATA before postgres
+// starts (initdb would refuse a non-empty data dir), downloads archived WALs
+// and writes recovery directives, all owned by the image's postgres user.
+func (a *DockerBackupAdapter) seedRestoreContainer(ctx context.Context, dc provisioner.DockerClient, containerID string, owner provisioner.FileOwner, spec restoreContainerSpec) error {
+	if err := prepareDataDir(ctx, dc, containerID, spec); err != nil {
+		return err
+	}
 	gz, err := gzip.NewReader(spec.body)
 	if err != nil {
-		_ = dc.RemoveContainer(ctx, containerID)
-		return "", fmt.Errorf("gunzip backup stream: %w", err)
+		return fmt.Errorf("gunzip backup stream: %w", err)
 	}
 	defer gz.Close()
 	if err := dc.CopyToContainer(ctx, containerID, pgDataPath, gz); err != nil {
-		_ = dc.RemoveContainer(ctx, containerID)
-		return "", fmt.Errorf("extract backup into container: %w", err)
+		return fmt.Errorf("extract backup into container: %w", err)
 	}
-
 	// PITR: download every archived WAL segment for the source project so
 	// recovery has the complete WAL stream from backup-time forward.
-	if err := a.downloadWALsIntoContainer(ctx, dc, containerID, spec.sourceProjectID); err != nil {
-		_ = dc.RemoveContainer(ctx, containerID)
-		return "", fmt.Errorf("download archived WALs: %w", err)
+	if err := a.downloadWALsIntoContainer(ctx, dc, containerID, spec.sourceProjectID, owner); err != nil {
+		return fmt.Errorf("download archived WALs: %w", err)
 	}
-
 	// Recovery directives: recovery.signal + postgresql.auto.conf land in
 	// PGDATA so postgres enters archive recovery and stops at the target.
-	if recoveryTarBytes := buildRecoveryTar(spec.req); recoveryTarBytes != nil {
+	if recoveryTarBytes := buildRecoveryTarFor(spec.req, owner); recoveryTarBytes != nil {
 		if err := dc.CopyToContainer(ctx, containerID, pgDataPath, bytes.NewReader(recoveryTarBytes)); err != nil {
-			_ = dc.RemoveContainer(ctx, containerID)
-			return "", fmt.Errorf("write recovery config: %w", err)
+			return fmt.Errorf("write recovery config: %w", err)
 		}
 	}
-	return containerID, nil
+	return nil
 }
 
 // pickLatestCompletedBackup picks the most recent COMPLETED record
@@ -788,7 +795,7 @@ func pickLatestCompletedBackup(records []domain.BackupRecord) (*domain.BackupRec
 // Empty when the project never produced archived WALs (archive_mode
 // wasn't enabled). Returns nil so restore continues without PITR-able
 // WALs — recovery will replay only the basebackup-bundled segments.
-func (a *DockerBackupAdapter) downloadWALsIntoContainer(ctx context.Context, dc provisioner.DockerClient, containerID, sourceProjectID string) error {
+func (a *DockerBackupAdapter) downloadWALsIntoContainer(ctx context.Context, dc provisioner.DockerClient, containerID, sourceProjectID string, owner provisioner.FileOwner) error {
 	prefix := fmt.Sprintf("%s%s/wals/", a.keyPrefix, sourceProjectID)
 	objects, err := a.uploader.List(ctx, a.bucket, prefix)
 	if err != nil {
@@ -800,7 +807,7 @@ func (a *DockerBackupAdapter) downloadWALsIntoContainer(ctx context.Context, dc 
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, obj := range objects {
-		if err := a.addWALToTar(ctx, tw, obj.Key); err != nil {
+		if err := a.addWALToTar(ctx, tw, obj.Key, owner); err != nil {
 			return err
 		}
 	}
@@ -816,7 +823,7 @@ func (a *DockerBackupAdapter) downloadWALsIntoContainer(ctx context.Context, dc 
 // addWALToTar downloads + gunzips a single archived WAL object and writes it
 // into tw under wal_restore/<segment>. Objects with an empty base name (e.g. a
 // directory marker) are skipped.
-func (a *DockerBackupAdapter) addWALToTar(ctx context.Context, tw *tar.Writer, objectKey string) error {
+func (a *DockerBackupAdapter) addWALToTar(ctx context.Context, tw *tar.Writer, objectKey string, owner provisioner.FileOwner) error {
 	// objectKey is e.g. "backups/{srcProjectId}/wals/000000010000000000000003.gz"
 	base := objectKey
 	if i := strings.LastIndex(base, "/"); i >= 0 {
@@ -845,7 +852,7 @@ func (a *DockerBackupAdapter) addWALToTar(ctx context.Context, tw *tar.Writer, o
 		Name: "wal_restore/" + base,
 		Mode: 0600,
 		Size: int64(len(data)),
-		Uid:  999, Gid: 999,
+		Uid:  owner.UID, Gid: owner.GID,
 		ModTime: time.Now(),
 	}
 	if err := tw.WriteHeader(hdr); err != nil {
@@ -878,6 +885,11 @@ func generateRestorePassword() string {
 // postgres image's user. Without those permissions postgres refuses
 // to start (PGDATA must be 0700; files within must be owned by pg).
 func buildRecoveryTar(req domain.RestoreRequest) []byte {
+	return buildRecoveryTarFor(req, officialImageOwner)
+}
+
+// buildRecoveryTarFor writes the recovery files owned by the image's user.
+func buildRecoveryTarFor(req domain.RestoreRequest, owner provisioner.FileOwner) []byte {
 	var directives string
 	switch {
 	case req.TargetTime != nil:
@@ -914,7 +926,7 @@ func buildRecoveryTar(req domain.RestoreRequest) []byte {
 		Name: "recovery.signal",
 		Mode: 0600,
 		Size: 0,
-		Uid:  999, Gid: 999, // postgres image's uid:gid (Debian-based)
+		Uid:  owner.UID, Gid: owner.GID,
 		ModTime: time.Now(),
 	}
 	if err := tw.WriteHeader(hdr); err != nil {
@@ -932,7 +944,7 @@ func buildRecoveryTar(req domain.RestoreRequest) []byte {
 		Name: "postgresql.auto.conf",
 		Mode: 0600,
 		Size: int64(len(body)),
-		Uid:  999, Gid: 999,
+		Uid:  owner.UID, Gid: owner.GID,
 		ModTime: time.Now(),
 	}
 	if err := tw.WriteHeader(hdr); err != nil {

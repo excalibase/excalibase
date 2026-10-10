@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -80,34 +79,33 @@ func TestBackupHandler_Restore_AcceptsKubernetesDocumentDBProject(t *testing.T) 
 	}
 }
 
-// TestBackupHandler_Restore_RefusesDockerDocumentDBProject: docker mode has
-// no DocumentDB restore, so it is refused at submission, with the reason,
-// before a job is filed or a project id consumed.
-func TestBackupHandler_Restore_RefusesDockerDocumentDBProject(t *testing.T) {
-	r, jobs, store := setupBackupHandlerForDocumentDB(t, domain.ModeDocker, true)
+// TestBackupHandler_Restore_AcceptsDockerDocumentDBProject: EXC-576 — a
+// single host restores a DocumentDB project with its gateway.
+func TestBackupHandler_Restore_AcceptsDockerDocumentDBProject(t *testing.T) {
+	r, jobs, _ := setupBackupHandlerForDocumentDB(t, domain.ModeDocker, true)
 
 	w := postRestore(r)
 
-	if w.Code != 409 {
-		t.Fatalf("status: got %d, want 409 (body=%s)", w.Code, w.Body.String())
+	if w.Code != 200 {
+		t.Fatalf("status: got %d, want 200 (body=%s)", w.Code, w.Body.String())
 	}
-	var body map[string]interface{}
-	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if msg, _ := body["error"].(string); !strings.Contains(msg, "DocumentDB") || !strings.Contains(msg, "Kubernetes") {
-		t.Errorf("error message must explain the refusal, got %q", msg)
-	}
-	if filedJobs(jobs) != 0 {
-		t.Errorf("no restore job must be filed, got %d", filedJobs(jobs))
-	}
-	if got, _ := store.FindByProjectID("copy"); got != nil {
-		t.Error("no project row must exist for a refused restore")
+	if filedJobs(jobs) != 1 {
+		t.Errorf("one restore job must be filed, got %d", filedJobs(jobs))
 	}
 }
 
-// TestBackupHandler_Restore_StillProceedsForPlainPostgres pins that the
-// docker DocumentDB refusal does not catch an ordinary project.
+// TestBackupHandler_Restore_RefusesDockerDocumentDBWhereItIsNotInstalled: a
+// single host with DocumentDB off refuses it like Kubernetes does.
+func TestBackupHandler_Restore_RefusesDockerDocumentDBWhereItIsNotInstalled(t *testing.T) {
+	r, jobs, _ := setupBackupHandlerForDocumentDBOn(t, domain.ModeDocker, true, false)
+	w := postRestore(r)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "DocumentDB is not installed") || filedJobs(jobs) != 0 {
+		t.Fatalf("got %d %s jobs %d", w.Code, w.Body.String(), filedJobs(jobs))
+	}
+}
+
+// TestBackupHandler_Restore_StillProceedsForPlainPostgres pins that an
+// ordinary docker project is restored.
 func TestBackupHandler_Restore_StillProceedsForPlainPostgres(t *testing.T) {
 	r, _, _ := setupBackupHandlerForDocumentDB(t, domain.ModeDocker, false)
 

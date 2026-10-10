@@ -344,3 +344,24 @@ func TestMustAtoiMajorRejectsANonNumericMajor(t *testing.T) {
 		t.Errorf("got %d, want 0", got)
 	}
 }
+
+func TestDockerDocumentDBImageIsTheCataloguesDigestWithItsRegistry(t *testing.T) {
+	for _, major := range DocumentDBMajors() {
+		entry, _ := LookupPostgresMajor(major)
+		image, err := DockerDocumentDBImage(major)
+		if err != nil {
+			t.Fatalf("%s: %v", major, err)
+		}
+		if image != "docker.io/"+entry.Image {
+			t.Fatalf("%s: image %q, want docker.io/%s", major, image, entry.Image)
+		}
+	}
+}
+
+func TestDockerDocumentDBImageRefusesAMajorWithoutDocumentDB(t *testing.T) {
+	for _, major := range []string{"14", "13", ""} {
+		if image, err := DockerDocumentDBImage(major); err == nil {
+			t.Fatalf("%q: got %q, want refused", major, image)
+		}
+	}
+}

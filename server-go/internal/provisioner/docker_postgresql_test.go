@@ -115,6 +115,20 @@ func (m *mockDockerClient) CopyFromContainer(_ context.Context, _ string, _ stri
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
+func (m *mockDockerClient) CreateContainerSpec(ctx context.Context, spec ContainerSpec) (string, error) {
+	return m.CreateContainer(ctx, spec.Name, spec.Image, spec.Env, spec.Ports, spec.Limits)
+}
+
+func (m *mockDockerClient) ContainerState(ctx context.Context, containerID string) (ContainerState, error) {
+	status, err := m.ContainerStatus(ctx, containerID)
+	return ContainerState{Found: status != containerNotFound, Running: status == containerRunning}, err
+}
+
+func (m *mockDockerClient) ExecInContainerStdin(_ context.Context, _ string, cmd []string, _ string) (string, error) {
+	m.execLog = append(m.execLog, cmd)
+	return "", nil
+}
+
 func TestDockerProvisioner_SupportedType(t *testing.T) {
 	p := NewDockerPostgreSQLProvisioner(newMockDocker())
 	if p.SupportedType() != domain.PostgreSQL {

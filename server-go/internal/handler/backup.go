@@ -130,12 +130,6 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "project not found", http.StatusNotFound)
 		return
 	}
-	// Docker mode cannot restore a DocumentDB project; refused before a job
-	// is filed or a project id is allocated.
-	if inst.DocumentDB && inst.DeploymentMode == domain.ModeDocker {
-		httpError(w, service.ErrDocumentDBRestoreNeedsKubernetes.Error(), http.StatusConflict)
-		return
-	}
 	if inst.DocumentDB && !h.documentDBEnabled {
 		httpError(w, service.ErrDocumentDBNotInstalled.Error(), http.StatusConflict)
 		return

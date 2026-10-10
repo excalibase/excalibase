@@ -40,6 +40,15 @@ type DockerClient interface {
 	// dropped completed WAL segments), iterate the tar, gzip + upload
 	// each entry to S3 so PITR has the WALs to replay on restore.
 	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, error)
+	// CreateContainerSpec creates (does not start) the container spec
+	// describes: a command, a data volume, a stop signal, another
+	// container's network namespace.
+	CreateContainerSpec(ctx context.Context, spec ContainerSpec) (string, error)
+	// ContainerState inspects a container; one the engine lacks is not found.
+	ContainerState(ctx context.Context, containerID string) (ContainerState, error)
+	// ExecInContainerStdin runs cmd with stdin fed to it and returns its
+	// output; a non-zero exit is an error carrying the output.
+	ExecInContainerStdin(ctx context.Context, containerID string, cmd []string, stdin string) (string, error)
 }
 
 // defaultPostgresSuperuser is the well-known username used by the
@@ -54,6 +63,10 @@ const containerNotFound = "not_found"
 
 // containerRunning is the ContainerStatus value for a live container.
 const containerRunning = "running"
+
+// postgresReadyTimeout bounds the official image's start; its entrypoint
+// initialises the data directory before postgres takes TCP connections.
+const postgresReadyTimeout = 30 * time.Second
 
 // DockerPostgreSQLProvisioner provisions PostgreSQL via Docker containers.
 type DockerPostgreSQLProvisioner struct {
@@ -84,6 +97,9 @@ func (p *DockerPostgreSQLProvisioner) SupportedType() domain.DatabaseType {
 
 func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, cb StageCallback) (*ProvisioningResult, error) {
 	cb(domain.StageValidating)
+	if req.DocumentDB {
+		return p.provisionDocumentDB(ctx, req, tier, cb)
+	}
 
 	// EXC-408: the major comes from the request. No implicit default — a
 	// request that names none, or one the catalogue does not list, is refused
@@ -97,16 +113,13 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 		return nil, err
 	}
 
-	dbName := req.DatabaseName
-	if dbName == "" {
-		dbName = "app"
-	}
+	dbName := databaseNameOrDefault(req.DatabaseName)
 	password := generatePassword()
 
 	// Stage: Container creation
 	cb(domain.StageContainerCreation)
 
-	containerName := fmt.Sprintf("excalibase-%s-postgres", req.ProjectName)
+	containerName := DatabaseContainerName(req.ProjectName)
 	env := map[string]string{
 		"POSTGRES_DB":       dbName,
 		"POSTGRES_USER":     defaultPostgresSuperuser,
@@ -129,29 +142,13 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	// listening on 5432. Without this probe, a fast invoke right after
 	// Provision could race against Postgres startup.
 	cb(domain.StageWaitingForReady)
-	if err := p.docker.WaitForHealthy(ctx, containerID); err != nil {
-		return nil, fmt.Errorf("wait for healthy: %w", err)
-	}
-	if err := p.waitForPostgresReady(ctx, containerID, dbName); err != nil {
-		return nil, fmt.Errorf("wait for postgres ready: %w", err)
+	if err := p.startDatabase(ctx, containerID, dbName, postgresReadyTimeout); err != nil {
+		return nil, err
 	}
 
 	// Stage: Credential generation
 	cb(domain.StageCredentialGeneration)
-
-	// PITR groundwork: enable WAL archiving when backup is requested.
-	// archive_mode=on requires a postgres restart so we do this here,
-	// before the container is handed back to the user. Best-effort:
-	// failure logs but doesn't block provisioning. Backup itself
-	// works without this; PITR specifically requires it.
-	if req.Backup != nil && req.Backup.Enabled {
-		if err := p.ConfigureArchive(ctx, containerID, "cp %p /walarchive/%f", defaultPostgresSuperuser); err != nil {
-			fmt.Printf("WARN: configure archive for %s: %v\n", req.ProjectName, err)
-		} else {
-			// Re-probe readiness after the restart.
-			_ = p.waitForPostgresReady(ctx, containerID, dbName)
-		}
-	}
+	p.enableArchive(ctx, req, containerID, dbName, postgresReadyTimeout)
 
 	cb(domain.StageCompleted)
 
@@ -167,6 +164,41 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	}, nil
 }
 
+func databaseNameOrDefault(name string) string {
+	if name == "" {
+		return "app"
+	}
+	return name
+}
+
+// startDatabase waits for the started container to run and its postgres to
+// answer queries in dbName.
+func (p *DockerPostgreSQLProvisioner) startDatabase(ctx context.Context, containerID, dbName string, timeout time.Duration) error {
+	if err := p.docker.WaitForHealthy(ctx, containerID); err != nil {
+		return fmt.Errorf("wait for healthy: %w", err)
+	}
+	if err := p.waitForPostgresReady(ctx, containerID, dbName, timeout); err != nil {
+		return fmt.Errorf("wait for postgres ready: %w", err)
+	}
+	return nil
+}
+
+// enableArchive is PITR groundwork: WAL archiving when backup is requested.
+// archive_mode=on requires a postgres restart, so this runs before the
+// container is handed back to the user. Best-effort: failure logs but doesn't
+// block provisioning. Backup itself works without this; PITR requires it.
+func (p *DockerPostgreSQLProvisioner) enableArchive(ctx context.Context, req domain.ProvisioningRequest, containerID, dbName string, timeout time.Duration) {
+	if req.Backup == nil || !req.Backup.Enabled {
+		return
+	}
+	if err := p.ConfigureArchive(ctx, containerID, "cp %p /walarchive/%f", defaultPostgresSuperuser); err != nil {
+		fmt.Printf("WARN: configure archive for %s: %v\n", req.ProjectName, err)
+		return
+	}
+	// Re-probe readiness after the restart.
+	_ = p.waitForPostgresReady(ctx, containerID, dbName, timeout)
+}
+
 // Pause stops the project's postgres container without removing it.
 // Volumes persist so Resume reopens the same data dir. Idempotent —
 // stopping an already-stopped container is fine.
@@ -177,41 +209,75 @@ func (p *DockerPostgreSQLProvisioner) StopReplication(context.Context, string, s
 	return nil
 }
 
-// Pause stops the container and returns only once the daemon reports it out
-// of the running state. StopContainer returning is not proof the process is
-// down — postgres gets a shutdown grace period.
-func (p *DockerPostgreSQLProvisioner) Pause(ctx context.Context, namespace, _ string) error {
+// Pause stops the project's containers, a DocumentDB gateway before its
+// database, and returns only once the daemon reports none of them running.
+// StopContainer returning is not proof the process is down — postgres gets a
+// shutdown grace period.
+func (p *DockerPostgreSQLProvisioner) Pause(ctx context.Context, namespace, projectID string) error {
 	if namespace == "" {
 		return fmt.Errorf("docker pause: container id missing on instance.Namespace")
 	}
-	if err := p.docker.StopContainer(ctx, namespace); err != nil {
-		return fmt.Errorf("stop container: %w", err)
+	containers, err := p.projectContainers(ctx, namespace, projectID)
+	if err != nil {
+		return err
+	}
+	for _, id := range containers {
+		if err := p.docker.StopContainer(ctx, id); err != nil {
+			return fmt.Errorf("stop container: %w", err)
+		}
 	}
 	return p.pausePoller.WaitUntilClear(ctx, "running container "+namespace,
-		func(ctx context.Context) ([]string, error) {
-			status, err := p.docker.ContainerStatus(ctx, namespace)
-			if err != nil {
-				return nil, err
-			}
-			if status == containerRunning {
-				return []string{namespace + " (" + status + ")"}, nil
-			}
-			return nil, nil
-		})
+		func(ctx context.Context) ([]string, error) { return p.running(ctx, containers) })
 }
 
-// WorkloadStopped reports whether the container has left the running state.
-// A container the daemon no longer knows about is stopped as far as the
-// project is concerned.
-func (p *DockerPostgreSQLProvisioner) WorkloadStopped(ctx context.Context, namespace, _ string) (bool, error) {
+// projectContainers are the project's containers in stopping order: its
+// DocumentDB gateway, if it has one, then its database.
+func (p *DockerPostgreSQLProvisioner) projectContainers(ctx context.Context, namespace, projectID string) ([]string, error) {
+	if projectID == "" {
+		return nil, fmt.Errorf("docker: project id missing for container %s", namespace)
+	}
+	gateway := DocumentDBGatewayName(projectID)
+	status, err := p.docker.ContainerStatus(ctx, gateway)
+	if err != nil {
+		return nil, fmt.Errorf("container status: %w", err)
+	}
+	if status == containerNotFound {
+		return []string{namespace}, nil
+	}
+	return []string{gateway, namespace}, nil
+}
+
+// running lists the containers still in the running state.
+func (p *DockerPostgreSQLProvisioner) running(ctx context.Context, containers []string) ([]string, error) {
+	var still []string
+	for _, id := range containers {
+		status, err := p.docker.ContainerStatus(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if status == containerRunning {
+			still = append(still, id+" ("+status+")")
+		}
+	}
+	return still, nil
+}
+
+// WorkloadStopped reports whether every container of the project has left
+// the running state. A container the daemon no longer knows about is stopped
+// as far as the project is concerned.
+func (p *DockerPostgreSQLProvisioner) WorkloadStopped(ctx context.Context, namespace, projectID string) (bool, error) {
 	if namespace == "" {
 		return false, fmt.Errorf("docker workload state: container id missing on instance.Namespace")
 	}
-	status, err := p.docker.ContainerStatus(ctx, namespace)
+	containers, err := p.projectContainers(ctx, namespace, projectID)
+	if err != nil {
+		return false, err
+	}
+	still, err := p.running(ctx, containers)
 	if err != nil {
 		return false, fmt.Errorf("container status: %w", err)
 	}
-	return status != containerRunning, nil
+	return len(still) == 0, nil
 }
 
 // SetPausePoller overrides how long a pause waits for the container to stop.
@@ -222,9 +288,15 @@ func (p *DockerPostgreSQLProvisioner) SetPausePoller(poller Poller) {
 // Resume starts a previously-paused container and waits for postgres
 // to accept queries. Caller must run capacity + tier pre-checks
 // before calling so we don't bring up a workload that exceeds limits.
-func (p *DockerPostgreSQLProvisioner) Resume(ctx context.Context, namespace, _ string) error {
+// A DocumentDB gateway is restarted after its database, whose restart gave
+// the pair a new network namespace.
+func (p *DockerPostgreSQLProvisioner) Resume(ctx context.Context, namespace, projectID string) error {
 	if namespace == "" {
 		return fmt.Errorf("docker resume: container id missing on instance.Namespace")
+	}
+	containers, err := p.projectContainers(ctx, namespace, projectID)
+	if err != nil {
+		return err
 	}
 	if err := p.docker.StartContainer(ctx, namespace); err != nil {
 		return fmt.Errorf("start container: %w", err)
@@ -232,33 +304,58 @@ func (p *DockerPostgreSQLProvisioner) Resume(ctx context.Context, namespace, _ s
 	if err := p.docker.WaitForHealthy(ctx, namespace); err != nil {
 		return fmt.Errorf("wait healthy after resume: %w", err)
 	}
+	if len(containers) == 1 {
+		return nil
+	}
+	if err := RestartDocumentDBGateway(ctx, p.docker, projectID); err != nil {
+		return fmt.Errorf("restart the DocumentDB gateway after resume: %w", err)
+	}
 	return nil
 }
 
-// Deprovision removes the project's container and returns only once the
-// daemon reports it gone. A container that is already absent counts as
-// removed, so a retried teardown is idempotent.
+// Deprovision removes the project's containers, a DocumentDB gateway first
+// (Podman refuses to remove a container another joined), and returns only
+// once the daemon reports them gone. A container that is already absent
+// counts as removed, so a retried teardown is idempotent.
 func (p *DockerPostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, projectID string) error {
-	status, err := p.docker.ContainerStatus(ctx, namespace)
+	containers, err := p.projectContainers(ctx, namespace, projectID)
+	if err != nil {
+		return err
+	}
+	// A provision that failed before recording the container id left the
+	// admitted namespace on the row; the container is still named for it.
+	if named := DatabaseContainerName(projectID); named != namespace {
+		containers = append(containers, named)
+	}
+	for _, id := range containers {
+		if err := p.removeObserved(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *DockerPostgreSQLProvisioner) removeObserved(ctx context.Context, id string) error {
+	status, err := p.docker.ContainerStatus(ctx, id)
 	if err != nil {
 		return fmt.Errorf("container status: %w", err)
 	}
 	if status == containerNotFound {
 		return nil
 	}
-	if err := p.docker.StopContainer(ctx, namespace); err != nil {
+	if err := p.docker.StopContainer(ctx, id); err != nil {
 		return fmt.Errorf("stop container: %w", err)
 	}
-	if err := p.docker.RemoveContainer(ctx, namespace); err != nil {
+	if err := p.docker.RemoveContainer(ctx, id); err != nil {
 		return fmt.Errorf("remove container: %w", err)
 	}
-	return p.deletionPoller.WaitUntilClear(ctx, "container "+namespace,
+	return p.deletionPoller.WaitUntilClear(ctx, "container "+id,
 		func(ctx context.Context) ([]string, error) {
-			status, err := p.docker.ContainerStatus(ctx, namespace)
+			status, err := p.docker.ContainerStatus(ctx, id)
 			if err != nil || status == containerNotFound {
 				return nil, err
 			}
-			return []string{namespace + " (" + status + ")"}, nil
+			return []string{id + " (" + status + ")"}, nil
 		})
 }
 
@@ -350,8 +447,8 @@ func quoteSQLString(s string) string {
 // Two-phase probe: pg_isready first (cheap), then a real `psql -c "SELECT 1"`
 // against the target DB to confirm the rebooted server actually accepts
 // queries. Caps at 30s. Runs after WaitForHealthy so the container is up.
-func (p *DockerPostgreSQLProvisioner) waitForPostgresReady(ctx context.Context, containerID, dbName string) error {
-	deadline := time.Now().Add(30 * time.Second)
+func (p *DockerPostgreSQLProvisioner) waitForPostgresReady(ctx context.Context, containerID, dbName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	pgIsReady := []string{"pg_isready", "-U", "postgres", "-d", dbName}
 	psqlProbe := []string{"psql", "-U", "postgres", "-d", dbName, "-tAc", "SELECT 1"}
 	var lastErr error
@@ -374,9 +471,9 @@ func (p *DockerPostgreSQLProvisioner) waitForPostgresReady(ctx context.Context, 
 		time.Sleep(500 * time.Millisecond)
 	}
 	if lastErr != nil {
-		return fmt.Errorf("postgres did not become query-ready within 30s: %w", lastErr)
+		return fmt.Errorf("postgres did not become query-ready within %s: %w", timeout, lastErr)
 	}
-	return fmt.Errorf("postgres did not become query-ready within 30s")
+	return fmt.Errorf("postgres did not become query-ready within %s", timeout)
 }
 
 func generatePassword() string {
