@@ -3,6 +3,7 @@ import { Globe, Loader2, Lock } from 'lucide-react';
 import { useProjectEndpoint, useSetProjectEndpointPublic } from '../api/projectEndpoint';
 import { refusalMessage } from '../api/clusterSettings';
 import { Button } from './Button';
+import { SshTunnelNote } from './SshTunnelNote';
 
 interface PublicPortCardProps {
   readonly projectId: string;
@@ -26,6 +27,7 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
   const offered = endpoint.data?.publicOffered !== false;
   const current = offered ? endpoint.data : undefined;
   const canChange = current?.canChange === true;
+  if (current?.singleHost) return <SingleHostPort host={current.host} port={current.port} available={current.available} />;
 
   const toggle = () => {
     if (!current) return;
@@ -127,6 +129,28 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
           {refusalMessage(change.error)}
         </p>
       )}
+    </div>
+  );
+}
+
+// A single host publishes the port on its own loopback when the database
+// container is created; there is nothing to open or close (EXC-576).
+function SingleHostPort({ host, port, available }: { readonly host: string; readonly port: number; readonly available: boolean }) {
+  return (
+    <div className="rounded-lg border border-border-primary bg-surface-card p-4" data-testid="public-port-card">
+      <h4 className="flex items-center gap-2 text-sm font-medium text-text-primary mb-2">
+        <Lock className="w-4 h-4" /> Database port
+      </h4>
+      <p className="text-sm text-text-primary mb-2" data-testid="public-port-state">
+        {available ? (
+          <>
+            On this host only, at <code className="font-mono text-xs">{host}:{port}</code>
+          </>
+        ) : (
+          'Not answering right now: the database is not running.'
+        )}
+      </p>
+      {available && <SshTunnelNote port={port} />}
     </div>
   );
 }

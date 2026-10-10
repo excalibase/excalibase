@@ -42,7 +42,12 @@ func (w identWait) orDefaults() identWait {
 }
 
 // mapMongoUser adds the user's peer line and waits until the primary serves it.
+// A single host's container trusts its own socket (provisioner.DocumentDBHBA),
+// which only its postgres user reaches, so there is no line to add.
 func (s *ProvisioningService) mapMongoUser(ctx context.Context, inst *domain.DatabaseInstance, primary, username string) error {
+	if inst.DeploymentMode == domain.ModeDocker {
+		return nil
+	}
 	if err := s.setMongoUserPeerLine(ctx, inst, username, true); err != nil {
 		return err
 	}
@@ -64,6 +69,9 @@ func (s *ProvisioningService) undoMongoUser(ctx context.Context, inst *domain.Da
 // setMongoUserPeerLine writes the line in or out of the Cluster's pg_ident,
 // re-reading the Cluster on each attempt so the operator's own writes win.
 func (s *ProvisioningService) setMongoUserPeerLine(ctx context.Context, inst *domain.DatabaseInstance, username string, present bool) error {
+	if inst.DeploymentMode == domain.ModeDocker {
+		return nil
+	}
 	var lastErr error
 	for range peerLineAttempts {
 		cluster, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, inst.ProjectID+postgresClusterSuffix)

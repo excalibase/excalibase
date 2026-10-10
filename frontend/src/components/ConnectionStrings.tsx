@@ -3,6 +3,7 @@ import { Copy, Check, Eye, EyeOff, Loader2, Download } from 'lucide-react';
 import { useCredentials } from '../hooks/useProvisioning';
 import type { ProjectEndpoint } from '../api/projectEndpoint';
 import type { CredentialsResponse } from '../types';
+import { SshTunnelNote } from './SshTunnelNote';
 
 interface ConnectionStringsProps {
   readonly projectId: string;
@@ -62,6 +63,24 @@ function mongoPublicTarget(endpoint?: ProjectEndpoint): Target | null {
   const mongo = endpoint?.mongo;
   if (!external || !mongo?.available || !mongo.port) return null;
   return { host: external.host, port: mongo.port };
+}
+
+// Labels for where each string works. A single host's "public" port is on
+// the host itself, and its internal address is the container's name.
+function labels(endpoint?: ProjectEndpoint): { internal: string; external: string } {
+  if (endpoint?.singleHost) {
+    return { internal: 'Internal — from containers on this host', external: 'On the host — 127.0.0.1' };
+  }
+  return { internal: 'Internal — from inside the cluster', external: 'Public — from outside the cluster' };
+}
+
+// A single host's Postgres serves no TLS; its strings say so rather than prefer it.
+function postgresModes(credentials: CredentialsResponse, endpoint?: ProjectEndpoint): { internal: string; external: string } {
+  if (endpoint?.singleHost) return { internal: 'disable', external: 'disable' };
+  return {
+    internal: endpoint ? 'prefer' : (credentials.sslMode ?? 'require'),
+    external: endpoint?.requireTls ? 'verify-full' : 'prefer',
+  };
 }
 
 function mongoInternalTarget(endpoint?: ProjectEndpoint): Target | null {
@@ -158,8 +177,8 @@ interface SectionProps {
 function PostgresSection({ projectId, credentials, endpoint, shownPassword }: SectionProps) {
   const internal = internalTarget(credentials, endpoint);
   const external = publicTarget(endpoint);
-  const internalMode = endpoint ? 'prefer' : (credentials.sslMode ?? 'require');
-  const publicMode = endpoint?.requireTls ? 'verify-full' : 'prefer';
+  const modes = postgresModes(credentials, endpoint);
+  const label = labels(endpoint);
   const row = (target: Target, mode: string) => ({
     shown: postgresUri(credentials, target, shownPassword, mode),
     copied: postgresUri(credentials, target, credentials.password, mode),
@@ -168,16 +187,17 @@ function PostgresSection({ projectId, credentials, endpoint, shownPassword }: Se
   return (
     <div className="space-y-2" data-testid="conn-postgres-section">
       <h5 className="text-sm font-medium text-text-primary">PostgreSQL</h5>
-      <StringRow testId="conn-postgres-internal" label="Internal — from inside the cluster" {...row(internal, internalMode)} />
+      <StringRow testId="conn-postgres-internal" label={label.internal} {...row(internal, modes.internal)} />
       {external ? (
-        <StringRow testId="conn-postgres-public" label="Public — from outside the cluster" {...row(external, publicMode)} />
+        <StringRow testId="conn-postgres-public" label={label.external} {...row(external, modes.external)} />
       ) : (
         <p className="text-xs text-text-tertiary" data-testid="conn-postgres-public-absent">
           This project publishes no public port. Use the internal address, or ask an admin to open one under Public
           database port.
         </p>
       )}
-      <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />
+      {external && endpoint?.singleHost && <SshTunnelNote port={external.port} />}
+      {!endpoint?.singleHost && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}
     </div>
   );
 }
@@ -185,6 +205,7 @@ function PostgresSection({ projectId, credentials, endpoint, shownPassword }: Se
 function MongoSection({ projectId, credentials, endpoint, shownPassword }: SectionProps) {
   const internal = mongoInternalTarget(endpoint);
   const external = mongoPublicTarget(endpoint);
+  const label = labels(endpoint);
   const row = (target: Target, tls: boolean) => ({
     shown: mongoUri(credentials, target, shownPassword, tls),
     copied: mongoUri(credentials, target, credentials.password, tls),
@@ -194,16 +215,17 @@ function MongoSection({ projectId, credentials, endpoint, shownPassword }: Secti
     <div className="border-t border-border-primary pt-4 space-y-2" data-testid="conn-mongo-section">
       <h5 className="text-sm font-medium text-text-primary">MongoDB (DocumentDB)</h5>
       {internal && (
-        <StringRow testId="conn-mongo-internal" label="Internal — from inside the cluster" {...row(internal, true)} />
+        <StringRow testId="conn-mongo-internal" label={label.internal} {...row(internal, true)} />
       )}
       {external && (
         <StringRow
           testId="conn-mongo-public"
-          label="Public — from outside the cluster"
+          label={label.external}
           // The gateway takes TLS only; Require TLS changes Postgres alone (EXC-530).
           {...row(external, true)}
         />
       )}
+      {external && endpoint?.singleHost && <SshTunnelNote port={external.port} />}
       {(internal || external) && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}
       {!external && (!internal || endpoint?.mongo?.port) && (
         <p className="text-xs text-text-tertiary" data-testid="conn-mongo-unavailable">

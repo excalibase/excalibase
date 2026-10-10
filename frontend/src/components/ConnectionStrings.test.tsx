@@ -259,3 +259,41 @@ describe('ConnectionStrings — certificate authority', () => {
     expect(screen.queryByTestId('conn-ca-download')).not.toBeInTheDocument();
   });
 });
+
+// EXC-576: a single host publishes its ports on its own 127.0.0.1. Postgres
+// there serves no TLS; the Mongo gateway does, with a CA of its own.
+const SINGLE_HOST: ProjectEndpoint = {
+  projectId: 'p-1',
+  singleHost: true,
+  publicOffered: true,
+  publicEnabled: true,
+  available: true,
+  host: '127.0.0.1',
+  port: 32801,
+  requireTls: false,
+  database: 'appdb',
+  username: 'postgres',
+  connectionStrings: { requireTls: '', allowPlaintext: 'postgresql://postgres@127.0.0.1:32801/appdb?sslmode=disable' },
+  caCertificate: '-----BEGIN CERTIFICATE-----\nGW\n-----END CERTIFICATE-----\n',
+  internal: { host: 'excalibase-p-1-postgres', port: 5432, connectionString: '' },
+  mongo: { available: true, port: 32802, internal: { host: 'excalibase-p-1-postgres', port: 10260 } },
+};
+
+describe('ConnectionStrings — single host', () => {
+  test('gives the host loopback strings and says how to reach them from elsewhere', async () => {
+    renderStrings({ documentDb: true, endpoint: SINGLE_HOST });
+    expect(await screen.findByTestId('conn-postgres-public')).toHaveTextContent('@127.0.0.1:32801/appdb?sslmode=disable');
+    expect(screen.getByTestId('conn-postgres-public-label')).toHaveTextContent('On the host');
+    expect(screen.getByTestId('conn-postgres-internal')).toHaveTextContent('@excalibase-p-1-postgres:5432/appdb?sslmode=disable');
+    expect(screen.getByTestId('conn-mongo-public')).toHaveTextContent('@127.0.0.1:32802/?tls=true');
+    expect(screen.getAllByTestId('conn-ssh-tunnel')[0]).toHaveTextContent('ssh -N -L 32801:127.0.0.1:32801');
+  });
+
+  test('offers the gateway CA beside the Mongo string only, since Postgres there has no TLS', async () => {
+    renderStrings({ documentDb: true, endpoint: SINGLE_HOST });
+    const postgres = await screen.findByTestId('conn-postgres-section');
+    expect(postgres.querySelector('[data-testid="conn-ca-download"]')).toBeNull();
+    const mongo = screen.getByTestId('conn-mongo-section');
+    expect(mongo.querySelector('[data-testid="conn-ca-download"]')).not.toBeNull();
+  });
+});

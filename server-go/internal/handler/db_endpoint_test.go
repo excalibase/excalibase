@@ -248,3 +248,21 @@ func TestGetDBEndpointSaysWhetherPublicPortsAreOffered(t *testing.T) {
 		}
 	}
 }
+
+// EXC-576: a single host's ports are the host's, so even an admin is told it
+// cannot change them, and Studio is told to show the SSH tunnel.
+func TestASingleHostEndpointIsMarkedAndNotChangeable(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/proj-abc/db-endpoint/", nil)
+	req = req.WithContext(custommw.WithProjectAccess(req.Context(), &custommw.ProjectAccess{PlatformAdmin: true}))
+	w := httptest.NewRecorder()
+	view := service.DBEndpointView{ProjectID: "proj-abc", SingleHost: true, Host: "127.0.0.1", Port: 32801}
+	dbEndpointRouter(&fakeDBEndpoints{view: view}).ServeHTTP(w, req)
+	body := decodeDBEndpoint(t, w)
+	if body["singleHost"] != true || body["canChange"] != false || body["host"] != "127.0.0.1" {
+		t.Fatalf("body %v", body)
+	}
+	w = dbEndpointCall(t, &fakeDBEndpoints{view: service.DBEndpointView{ProjectID: "proj-abc"}}, http.MethodGet, "")
+	if _, present := decodeDBEndpoint(t, w)["singleHost"]; present {
+		t.Fatal("singleHost reported for a Kubernetes project")
+	}
+}

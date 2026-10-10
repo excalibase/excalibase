@@ -57,6 +57,9 @@ export interface ProjectEndpoint {
   caCertificate: string;
   internal: ProjectEndpointInternal;
   mongo?: ProjectMongoEndpoint;
+  // A project on one Docker or Podman host: its ports are on the host's
+  // 127.0.0.1, reached from elsewhere over an SSH tunnel (EXC-576).
+  singleHost?: boolean;
   // Whether this caller may open or close the public port (Admin and up).
   // Only an explicit true shows the control; the server refuses writes anyway.
   canChange?: boolean;

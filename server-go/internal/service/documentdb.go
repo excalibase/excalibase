@@ -86,7 +86,10 @@ func (s *ProvisioningService) enableDocumentDB(ctx context.Context, inst *domain
 	if err := s.grantDocumentDBAccess(ctx, inst, primaryPod, pc); err != nil {
 		return err
 	}
-	// Studio's document browser is Kubernetes-only.
+	if inst.DeploymentMode == domain.ModeDocker {
+		// A single host's database is its one container.
+		return s.createDocBrowserLogin(ctx, inst, inst.Namespace, pc)
+	}
 	if s.k8sClient == nil {
 		return nil
 	}

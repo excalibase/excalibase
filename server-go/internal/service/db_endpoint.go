@@ -173,6 +173,9 @@ type DBEndpointView struct {
 	// that has opted into public access (EXC-409).
 	MongoPort      int
 	MongoAvailable bool
+	// SingleHost is a project on one Docker or Podman host, whose ports are
+	// published on the host's loopback and reached elsewhere over SSH.
+	SingleHost bool
 }
 
 // DBEndpointConnectionStrings is every string a client might need for this

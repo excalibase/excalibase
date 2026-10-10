@@ -101,6 +101,9 @@ type dbEndpointResponse struct {
 	// canChange says whether this caller may open or close the port (Admin
 	// and up, the route's write policy), so Studio shows the control only to them.
 	CanChange bool `json:"canChange"`
+	// singleHost marks a project on one Docker or Podman host: its ports are
+	// on the host's 127.0.0.1, reached from elsewhere over an SSH tunnel.
+	SingleHost bool `json:"singleHost,omitempty"`
 }
 
 // dbEndpointRequest is the PUT body. Both fields are optional: a body that
@@ -220,7 +223,8 @@ func callerMayChangeDBEndpoint(r *http.Request) bool {
 
 func dbEndpointResponseFor(view service.DBEndpointView, canChange bool) dbEndpointResponse {
 	return dbEndpointResponse{
-		CanChange:     canChange,
+		// A single host's ports are the host's to publish, not a caller's.
+		CanChange:     canChange && !view.SingleHost,
 		ProjectID:     view.ProjectID,
 		PublicOffered: view.PublicOffered,
 		PublicEnabled: view.Enabled,
@@ -246,6 +250,7 @@ func dbEndpointResponseFor(view service.DBEndpointView, canChange bool) dbEndpoi
 		},
 		MongoPort:      view.MongoPort,
 		MongoAvailable: mongoAvailable(view),
+		SingleHost:     view.SingleHost,
 	}
 }
 
