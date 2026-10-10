@@ -145,6 +145,12 @@ services:
       LISTEN_ADDR: ":2375"
       PROXY_NETWORKS: excalibase-tenants
       PROXY_PORT_BIND_IPS: 127.0.0.1
+      # Apps (EXC-575): one internal network and named disks per project, the
+      # edge joining the networks it routes to, and the sandbox runtime.
+      PROXY_NETWORK_PREFIX: excalibase-net-
+      PROXY_VOLUME_PREFIX: excalibase-vol-
+      PROXY_EDGE_CONTAINER: excalibase-edge
+      PROXY_RUNTIMES: ${APP_SANDBOX_RUNTIME:-runsc}
     volumes:
       - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
     read_only: true
@@ -231,8 +237,26 @@ services:
       # unseal`, and the key is never on this host. Unset keeps a key file in
       # provisioning's volume and unseals by itself.
       VAULT_UNSEAL_PROVIDER: ${VAULT_UNSEAL_PROVIDER:-}
+      # Apps (EXC-575, ADR 0039): off unless .env says "true" (init.sh --apps).
+      APP_HOSTING_ENABLED: ${APP_HOSTING_ENABLED:-false}
+      APP_DOMAIN: ${APP_DOMAIN:-apps.${EXCALIBASE_DOMAIN:?run ./init.sh first}}
+      # gVisor's runsc, or "none" to run apps without a sandbox (the operator's choice).
+      APP_SANDBOX_RUNTIME: ${APP_SANDBOX_RUNTIME:-runsc}
+      # "internet" lets apps call out; by default they reach only their project.
+      APP_EGRESS: ${APP_EGRESS:-none}
+      APP_NETWORK_PREFIX: excalibase-net-
+      APP_VOLUME_PREFIX: excalibase-vol-
+      APP_EDGE_CONTAINER: excalibase-edge
+      APP_EDGE_ROUTES_DIR: /srv/excalibase-app-routes
+      APP_EDGE_TLS_ADDR: edge:443
+      APP_EDGE_TLS: ${EXCALIBASE_TLS:?run ./init.sh first}
+      # Sizes and copies app disks; provisioning's own image, already on the host.
+      APP_DISK_TOOLS_IMAGE: ${APP_DISK_TOOLS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-latest}}
+      # Where custom domains' CNAMEs are looked up; the host's resolver when unset.
+      APP_DOMAIN_RESOLVER: ${APP_DOMAIN_RESOLVER:-}
     volumes:
       - provisioning_data:/var/lib/excalibase
+      - app_routes:/srv/excalibase-app-routes
     depends_on:
       postgres:
         condition: service_healthy
@@ -374,6 +398,8 @@ services:
   edge:
     image: docker.io/library/caddy:2.11
     container_name: excalibase-edge
+    # --watch reloads when provisioning writes an app's route; the admin API stays off.
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile", "--watch"]
     environment:
       EXCALIBASE_DOMAIN: ${EXCALIBASE_DOMAIN:?run ./init.sh first}
       EXCALIBASE_TLS: ${EXCALIBASE_TLS:?run ./init.sh first}
@@ -383,6 +409,7 @@ services:
       - "${EDGE_BIND_ADDRESS:-0.0.0.0}:${EDGE_HTTPS_PORT:-443}:443"
     volumes:
       - ./edge/Caddyfile:/etc/caddy/Caddyfile:ro,z
+      - app_routes:/etc/caddy/apps:ro
       - edge_data:/data
       - edge_config:/config
     depends_on:
@@ -417,6 +444,9 @@ volumes:
     name: excalibase-platform-edge-data
   edge_config:
     name: excalibase-platform-edge-config
+  # Apps' routes: provisioning writes them, the edge reads them.
+  app_routes:
+    name: excalibase-platform-app-routes
 
 networks:
   # Platform services and their state. Internal: no route in or out.

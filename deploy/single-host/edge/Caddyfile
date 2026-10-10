@@ -67,3 +67,7 @@ files.{$EXCALIBASE_DOMAIN} {
 		respond 404
 	}
 }
+
+# Apps (EXC-575): one file per app, written by provisioning when an app is
+# deployed, paused, given a domain or deleted.
+import /etc/caddy/apps/*.caddy

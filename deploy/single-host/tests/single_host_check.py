@@ -147,6 +147,37 @@ if not all(secrets) or len(set(secrets)) != 3:
 if penv.get("VAULT_UNSEAL_PROVIDER", "") != "":
     failures.append(f"VAULT_UNSEAL_PROVIDER={penv.get('VAULT_UNSEAL_PROVIDER')!r} by default, want unset")
 
+# EXC-575: apps are off by default; when on, they get per-project networks and
+# disks under prefixes the platform's own never match, and the edge reads the
+# routes provisioning writes from a volume it cannot write.
+if penv.get("APP_HOSTING_ENABLED") != "false":
+    failures.append(f"APP_HOSTING_ENABLED={penv.get('APP_HOSTING_ENABLED')!r} by default, want false")
+if penv.get("APP_DOMAIN") != "apps.example.test":
+    failures.append(f"APP_DOMAIN={penv.get('APP_DOMAIN')!r}, want apps.<domain> by default")
+if penv.get("APP_SANDBOX_RUNTIME") != "runsc" or penv.get("APP_EGRESS") != "none":
+    failures.append("apps default to gVisor and no egress")
+penv_proxy = proxy["environment"]
+for app_key, proxy_key in (("APP_NETWORK_PREFIX", "PROXY_NETWORK_PREFIX"), ("APP_VOLUME_PREFIX", "PROXY_VOLUME_PREFIX"),
+                           ("APP_EDGE_CONTAINER", "PROXY_EDGE_CONTAINER")):
+    if not penv.get(app_key) or penv.get(app_key) != penv_proxy.get(proxy_key):
+        failures.append(f"{app_key}={penv.get(app_key)!r} and the proxy's {proxy_key}={penv_proxy.get(proxy_key)!r} differ")
+if penv.get("APP_EDGE_CONTAINER") != services["edge"].get("container_name"):
+    failures.append("the edge the proxy admits is not the edge container")
+for prefix in (penv.get("APP_NETWORK_PREFIX", ""), penv.get("APP_VOLUME_PREFIX", "")):
+    if not prefix.startswith("excalibase-") or prefix.startswith("excalibase-platform"):
+        failures.append(f"app prefix {prefix!r} could match the platform's own names")
+if penv_proxy.get("PROXY_RUNTIMES") != penv.get("APP_SANDBOX_RUNTIME"):
+    failures.append("the proxy does not admit the apps' sandbox runtime")
+edge_mounts = {v.get("target"): v for v in services["edge"].get("volumes") or []}
+routes = edge_mounts.get("/etc/caddy/apps")
+if not routes or not routes.get("read_only"):
+    failures.append("the edge does not read app routes read-only")
+prov_mounts = {v.get("target"): v.get("source") for v in services["provisioning"].get("volumes") or []}
+if routes and prov_mounts.get(penv.get("APP_EDGE_ROUTES_DIR")) != routes.get("source"):
+    failures.append("provisioning does not write the routes the edge reads")
+if "--watch" not in (services["edge"].get("command") or []):
+    failures.append("the edge does not reload app routes")
+
 if failures:
     sys.exit("\n".join(failures))
 print("single-host hardening ok")

@@ -6,11 +6,15 @@
 #   boot-smoke.sh <docker|podman>      (COMPOSE="podman compose" DOCKER=podman for Podman)
 # MANUAL_UNSEAL=1 installs with --manual-unseal (EXC-579): the admin initializes
 # the vault, a provisioning restart seals it, and the CLI unseals it.
+# APPS=1 installs with --apps and walks Containers (EXC-575, apps-journey.sh):
+# under gVisor where the engine has runsc, else the documented opt-out
+# (--app-sandbox none), which the run says. APP_SANDBOX forces either.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG).
 # Destroys the bundle's containers and volumes; never run it on an install you keep.
 set -uo pipefail
 ENGINE=${1:-docker}
 BUNDLE=$(cd "$(dirname "$0")/.." && pwd)
+TESTS=$BUNDLE/tests
 W=$(mktemp -d)
 cp "$(dirname "$0")/boot-smoke.override.yml" "$W/override.yml"
 PORT=${EDGE_PORT:-28443}
@@ -24,12 +28,29 @@ ko() { echo "FAIL $*"; fail=$((fail+1)); }
 # when grep stops early and the engine's log writer gets SIGPIPE (Podman 4.9).
 logs_have() { local out; out=$($DOCKER logs "$1" 2>&1); grep -qF -- "$2" <<< "$out"; }
 c() { curl -sk --max-time 30 --resolve studio.localhost:$PORT:127.0.0.1 --resolve api.localhost:$PORT:127.0.0.1 --resolve files.localhost:$PORT:127.0.0.1 "$@"; }
+# Apps leave per-project networks and disks; they go with the managed containers.
+wipe_managed() {
+  $DOCKER rm -f "$SMOKE_DNS" >/dev/null 2>&1
+  $DOCKER rm -f -v $($DOCKER ps -aq --filter label=excalibase.managed=true) >/dev/null 2>&1
+  $DOCKER volume rm $($DOCKER volume ls -q --filter label=excalibase.managed=true) >/dev/null 2>&1
+  $DOCKER network rm $($DOCKER network ls -q --filter label=excalibase.managed=true) >/dev/null 2>&1
+}
+APP_ARGS=
+if [ -n "${APPS:-}" ]; then
+  if [ -z "${APP_SANDBOX:-}" ]; then
+    if $DOCKER info 2>/dev/null | grep -q runsc; then APP_SANDBOX=runsc; else APP_SANDBOX=none; fi
+  fi
+  [ "$APP_SANDBOX" = none ] && echo "info: no runsc on this engine: apps run with the documented opt-out, --app-sandbox none (no gVisor)"
+  APP_ARGS="--apps --app-sandbox $APP_SANDBOX"
+fi
+# The DNS server the apps journey verifies a custom domain against.
+SMOKE_DNS=smoke-dns-excalibase
 status() { c https://studio.localhost:$PORT/api/vault/status | python3 -c 'import json,sys;d=json.load(sys.stdin);print("uninitialized" if not d["initialized"] else ("sealed" if d["sealed"] else "open"))' 2>/dev/null; }
 
 echo "== fresh state"
 cd "$BUNDLE"
 $COMPOSE $P down -v --remove-orphans >/dev/null 2>&1
-$DOCKER rm -f -v $($DOCKER ps -aq --filter label=excalibase.managed=true) >/dev/null 2>&1
+wipe_managed
 rm -f "$W/.env"
 # Container names are fixed: another stack holding them would answer instead.
 for name in excalibase-preflight excalibase-provisioning excalibase-edge; do
@@ -45,8 +66,9 @@ if [ -n "$pcode" ] && [ "$pcode" != 0 ] && logs_have excalibase-preflight POSTGR
 $COMPOSE $P down -v >/dev/null 2>&1; rm -f "$W/.env"
 
 echo "== install"
-./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} || exit 1
+./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS || exit 1
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
+[ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"
 timeout 900 $COMPOSE $P up -d > "$W/up.log" 2>&1; echo "up exit $?"; grep -iE "^Error|error:" "$W/up.log" | sort -u | head -5
 for i in $(seq 90); do [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.Status}}' 2>/dev/null)" = exited ] && break; sleep 2; done
@@ -157,6 +179,8 @@ if [ -n "${MANUAL_UNSEAL:-}" ]; then
   [ "$leaked" = 0 ] && ok "the unseal key is in no log and not on provisioning's volume" || ko "the unseal key leaked"
 fi
 
+[ -n "${APPS:-}" ] && . "$TESTS/apps-journey.sh"
+
 echo "== studio health"
 code=$(c -o /dev/null -w '%{http_code}' https://studio.localhost:$PORT/); h=$($DOCKER inspect excalibase-studio --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null)
 [ "$code" = 200 ] && ok "studio serves through the edge (container health: $h)" || ko "studio $code"
@@ -166,5 +190,5 @@ if [ "$fail" -gt 0 ]; then
   $COMPOSE $P ps -a 2>&1 | tail -20
   $COMPOSE $P logs --tail 40 provisioning engine-proxy 2>&1 | tail -80
 fi
-[ -n "${KEEP:-}" ] || { $COMPOSE $P down -v >/dev/null 2>&1; $DOCKER rm -f -v $($DOCKER ps -aq --filter label=excalibase.managed=true) >/dev/null 2>&1; }
+[ -n "${KEEP:-}" ] || { $COMPOSE $P down -v >/dev/null 2>&1; wipe_managed; }
 [ "$fail" -eq 0 ]

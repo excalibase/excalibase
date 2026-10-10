@@ -77,6 +77,24 @@ UNPRIVILEGED_PORT_START=80 CGROUP_CONTROLLERS="cpu memory pids" SELINUX_MODE=Enf
 grep -q '^ENGINE_PROXY_SELINUX_LABEL=disable$' "$WORK/pm4.env" || fail "SELinux host: the proxy cannot reach the socket"
 ! grep -q '^EDGE_HTTP_PORT' "$WORK/pm4.env" || fail "ports moved although 80/443 are reachable"
 
+# Apps (EXC-575): off and at apps.<domain> unless asked; the sandbox is gVisor unless opted out.
+[ "$(value APP_DOMAIN)" = apps.example.com ] || fail "apps are not at apps.<domain> by default"
+! grep -q '^APP_HOSTING_ENABLED' "$WORK/.env" || fail "apps turned on without --apps"
+sh "$DIR/../init.sh" --env-file "$WORK/apps.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 \
+  --apps --app-domain run.example.org --app-sandbox none >/dev/null || fail "--apps refused"
+apps() { sed -n "s/^$1=//p" "$WORK/apps.env"; }
+[ "$(apps APP_HOSTING_ENABLED):$(apps APP_DOMAIN):$(apps APP_SANDBOX_RUNTIME)" = true:run.example.org:none ] \
+  || fail "--apps, --app-domain and --app-sandbox not written"
+if sh "$DIR/../init.sh" --env-file "$WORK/apps2.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --apps --app-sandbox kata >/dev/null 2>&1; then
+  fail "an unknown sandbox was accepted"
+fi
+if sh "$DIR/../init.sh" --env-file "$WORK/apps3.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --app-domain 'bad domain' >/dev/null 2>&1; then
+  fail "an app domain that is not a DNS name was accepted"
+fi
+
 # Required arguments.
 if sh "$DIR/../init.sh" --env-file "$WORK/none.env" --admin-email me@example.com >/dev/null 2>&1; then
   fail "init.sh ran without a domain"
