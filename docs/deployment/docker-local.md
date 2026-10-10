@@ -237,6 +237,74 @@ Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
 | `APP_EGRESS` | `none` | `internet` lets apps call out |
 | `APP_DOMAIN_RESOLVER` | the host's | `host:port` of the DNS server custom domains' CNAMEs are checked against |
 
+## DocumentDB projects
+
+A project can carry DocumentDB, the MongoDB-compatible API over its Postgres
+database, when the install asks for it (EXC-576). It is the Kubernetes shape
+without the operator: the database container runs the catalogue's DocumentDB
+image, and the gateway that speaks the MongoDB wire protocol runs as a second
+container in the database's network namespace, as the sidecar does in a pod.
+
+```bash
+./init.sh --domain example.com --admin-email you@example.com --documentdb
+docker compose up -d
+```
+
+It needs a platform release after 1.4.0 (`TAG` in `.env`): 1.4.0 does not run
+DocumentDB on a single host.
+
+`--documentdb` writes `DOCUMENTDB_ENABLED=true` to `.env`; delete that line
+(not set it to `false`) and run `docker compose up -d` to turn it off. It lets
+the engine proxy admit exactly one more thing: the catalogue's gateway image,
+pinned by digest, joining the network namespace of a container provisioning
+manages, with no port and no network of its own.
+
+In Studio, create a project and tick DocumentDB. Its Connect card shows
+`127.0.0.1:<port>` strings for Postgres and Mongo, and the gateway's
+certificate authority; the ports are published on the host's loopback only.
+From the host:
+
+```bash
+# the CA from Studio's Connect card saved as ca.crt; user and password from the same card
+mongosh --host 127.0.0.1 --port <mongo port> --tls --tlsCAFile ca.crt \
+  --authenticationMechanism SCRAM-SHA-256 -u postgres -p '<password>'
+# or without installing mongosh:
+docker run --rm -it --network host -v "$PWD/ca.crt:/ca.crt:ro" \
+  docker.io/library/mongo@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c \
+  mongosh --host 127.0.0.1 --port <mongo port> --tls --tlsCAFile /ca.crt \
+  --authenticationMechanism SCRAM-SHA-256 -u postgres -p '<password>'
+```
+
+From another machine, forward the port over SSH and use the same command there
+(the certificate names `127.0.0.1`):
+
+```bash
+ssh -N -L <mongo port>:127.0.0.1:<mongo port> you@your-server
+```
+
+Studio's document browser, Mongo users (Database, Mongo users), pause, resume,
+backups and restore work as on Kubernetes; a restored project gets a gateway of
+its own.
+
+| | Kubernetes | Single host |
+|---|---|---|
+| Containers | one pod: database and gateway sidecar | `excalibase-<project>-postgres` and `excalibase-<project>-documentdb`, the gateway in the database's network namespace |
+| Mongo port | a public port when the project opens one | `127.0.0.1:<port>` on the host, always; SSH tunnel from elsewhere |
+| Gateway certificate | the cluster's CA | a CA made for the project when the gateway is created, valid 10 years, not rotated; Studio serves it |
+| Postgres TLS | yes | no: the database is on loopback and the project network only |
+| Memory and CPU | the tier's, for the pod | the tier's, split: the gateway a quarter, the database the rest |
+| Database restarted by the engine | the pod restarts as one | provisioning restarts the gateway within 30 seconds (it holds the old namespace until then) |
+
+```bash
+docker ps --filter name=-documentdb                 # gateways
+docker inspect excalibase-<project>-documentdb --format '{{.HostConfig.NetworkMode}}'
+docker port excalibase-<project>-postgres           # 5432 and 10260 on 127.0.0.1
+```
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `DOCUMENTDB_ENABLED` | unset (`true` with `--documentdb`) | DocumentDB projects on this host |
+
 ## Refusals you may see
 
 - `run ./init.sh first` — a required value is missing from `.env`.
@@ -260,7 +328,7 @@ Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
 | GraphQL / REST / end-user auth for every project, through `api.<domain>` | yes |
 | SDK keys (publishable, secret) | yes |
 | Containers (app hosting) | yes, with `--apps` (see Apps) |
-| DocumentDB projects | not yet |
+| DocumentDB projects | yes, with `--documentdb` (see DocumentDB projects) |
 | Edge functions, realtime | no (Kubernetes only) |
 | High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
 
@@ -274,6 +342,10 @@ busybox image by digest deployed, opened at its host, its logs read, a second
 revision and a rollback, data kept on its disk, another project unable to reach
 the app or its database, pause, resume and delete (under gVisor where the
 engine has `runsc`, else with `--app-sandbox none`, which the run prints).
+`DOCUMENTDB=1` installs with `--documentdb` and walks DocumentDB: a project
+created through Studio's API, mongosh on the host inserting and finding over
+verified TLS, Studio's document browser, a read-only Mongo user, pause, resume,
+a backup restored into a new project that serves Mongo again, and a delete.
 `MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
 initializes, restarts and unseals the vault with the CLI. It destroys the bundle's containers and
 volumes: never run it on an install you keep. CI runs it on every change to the
@@ -294,6 +366,7 @@ docker ps -a --filter label=excalibase.managed=true   # tenant containers
 (provisioning creates them, not Compose). Remove them with
 
 ```bash
+docker rm -f $(docker ps -aq --filter label=excalibase.managed=true --filter name=-documentdb)
 docker rm -f -v $(docker ps -aq --filter label=excalibase.managed=true)
 docker volume rm $(docker volume ls -q --filter label=excalibase.managed=true)
 docker network rm $(docker network ls -q --filter label=excalibase.managed=true)

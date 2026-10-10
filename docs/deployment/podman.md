@@ -117,3 +117,26 @@ gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
 
 Running Docker and Podman stacks side by side on one host needs different
 `AIO_EDGE_SUBNET` / `AIO_DATAPLANE_SUBNET` values: both claim the same subnets.
+
+## DocumentDB projects
+
+The same as on Docker (see [DocumentDB projects in docker-local.md](docker-local.md#documentdb-projects)):
+
+```bash
+./init.sh --engine podman --domain example.com --admin-email you@example.com --documentdb
+podman compose up -d
+# the CA from Studio's Connect card saved as ca.crt
+podman run --rm -it --network host -v "$PWD/ca.crt:/ca.crt:ro,z" \
+  docker.io/library/mongo@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c \
+  mongosh --host 127.0.0.1 --port <mongo port> --tls --tlsCAFile /ca.crt \
+  --authenticationMechanism SCRAM-SHA-256 -u postgres -p '<password>'
+```
+
+- Podman refuses to remove a database container while its gateway exists
+  (the gateway depends on its network namespace). Provisioning removes the
+  gateway first; by hand, remove `excalibase-<project>-documentdb` before
+  `excalibase-<project>-postgres`:
+  `podman rm -f $(podman ps -aq --filter label=excalibase.managed=true --filter name=-documentdb)`.
+- The Mongo port is forwarded by Podman's rootless port forwarder on the host's
+  `127.0.0.1`; `--network host` above is the user's own network namespace,
+  which reaches it.

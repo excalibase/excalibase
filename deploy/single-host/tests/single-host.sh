@@ -38,4 +38,13 @@ render BACKUP_DEFAULT_ENDPOINT=https://acct.r2.cloudflarestorage.com BACKUP_DEFA
 # Manual unseal (EXC-579) reaches provisioning when chosen.
 render VAULT_UNSEAL_PROVIDER=manual | grep -q 'VAULT_UNSEAL_PROVIDER: manual' \
   || { echo "VAULT_UNSEAL_PROVIDER=manual does not reach provisioning" >&2; exit 1; }
+# DocumentDB (EXC-576) reaches provisioning, and the proxy admits exactly the
+# catalogue's gateway, so the two cannot drift apart.
+gateway=$(sed -n 's/^documentDBGatewayImage: //p' "$DIR/../../../server-go/internal/config/postgres_catalog.yaml")
+[ -n "$gateway" ] || { echo "no gateway image in the catalogue" >&2; exit 1; }
+documentdb=$(render DOCUMENTDB_ENABLED=true)
+echo "$documentdb" | grep -q 'DOCUMENTDB_ENABLED: "true"' \
+  || { echo "DOCUMENTDB_ENABLED=true does not reach provisioning" >&2; exit 1; }
+echo "$documentdb" | grep -q "PROXY_NETNS_JOIN_IMAGES: $gateway\$" \
+  || { echo "the proxy does not admit the catalogue's gateway $gateway" >&2; exit 1; }
 echo "single-host required settings ok"
