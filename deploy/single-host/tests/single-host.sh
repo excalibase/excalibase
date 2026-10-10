@@ -48,3 +48,12 @@ echo "$documentdb" | grep -q 'DOCUMENTDB_ENABLED: "true"' \
 echo "$documentdb" | grep -q "PROXY_NETNS_JOIN_IMAGES: $gateway\$" \
   || { echo "the proxy does not admit the catalogue's gateway $gateway" >&2; exit 1; }
 echo "single-host required settings ok"
+# Email through the operator's own relay (EXC-580) or SES: every setting in .env reaches provisioning.
+out=$(render EMAIL_PROVIDER=smtp SMTP_HOST=mail.example.test SMTP_PORT=2587 SMTP_TLS=starttls \
+  SMTP_USERNAME=relay-user SMTP_PASSWORD=relay-pass EMAIL_FROM_ADDRESS=noreply@example.test EMAIL_FROM_NAME=Acme \
+  SES_ACCESS_KEY_ID=ses-id SES_SECRET_ACCESS_KEY=ses-secret SES_REGION=eu-west-1)
+for want in 'EMAIL_PROVIDER: smtp' 'SMTP_HOST: mail.example.test' 'SMTP_PORT: "2587"' 'SMTP_TLS: starttls' \
+  'SMTP_USERNAME: relay-user' 'SMTP_PASSWORD: relay-pass' 'EMAIL_FROM_NAME: Acme' \
+  'SES_ACCESS_KEY_ID: ses-id' 'SES_SECRET_ACCESS_KEY: ses-secret' 'SES_REGION: eu-west-1'; do
+  printf '%s\n' "$out" | grep -qF "$want" || { echo "email setting does not reach provisioning: $want" >&2; exit 1; }
+done
