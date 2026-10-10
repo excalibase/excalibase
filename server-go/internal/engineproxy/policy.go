@@ -39,6 +39,9 @@ type Policy struct {
 	// EdgeContainer is the one unmanaged container that may join and leave
 	// project networks, to route to their apps; empty admits none.
 	EdgeContainer string
+	// NetnsJoinImages are the digest-pinned images that may run in a managed
+	// container's network namespace (netns_join.go); empty admits none.
+	NetnsJoinImages []string
 }
 
 // ErrRefused wraps every policy refusal.
@@ -93,6 +96,7 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 		return refuse("container name %q must start with %q", name, p.ContainerPrefix)
 	}
 	var create struct {
+		Image            string
 		Labels           map[string]string
 		HostConfig       map[string]any
 		NetworkingConfig struct {
@@ -107,6 +111,9 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 	}
 	if create.HostConfig == nil {
 		return refuse("container create must send a HostConfig")
+	}
+	if err := p.checkNetnsJoin(create.Image, create.HostConfig, create.NetworkingConfig.EndpointsConfig); err != nil {
+		return err
 	}
 	for field, value := range create.HostConfig {
 		if err := p.checkHostConfigField(field, value); err != nil {
@@ -176,7 +183,7 @@ func (p Policy) networkAllowed(network string) bool {
 
 func checkNetworkMode(p Policy, value any) error {
 	mode, _ := value.(string)
-	if mode == "default" || mode == "bridge" || mode == "none" || p.networkAllowed(mode) {
+	if mode == "default" || mode == "bridge" || mode == "none" || p.networkAllowed(mode) || p.netnsJoinAdmitted(mode) {
 		return nil
 	}
 	return refuse("network mode %q is not one containers may use", mode)

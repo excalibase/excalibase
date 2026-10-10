@@ -81,3 +81,28 @@ func TestLoadConfigRefusesAnEdgeContainerThatIsNotAName(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfigReadsTheImagesThatMayJoinANetworkNamespace(t *testing.T) {
+	image := "ghcr.io/documentdb/documentdb-kubernetes-operator/gateway@sha256:" + strings.Repeat("ab", 32)
+	cfg, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_NETNS_JOIN_IMAGES": " " + image + " "}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.policy.NetnsJoinImages, []string{image}) {
+		t.Fatalf("images = %v", cfg.policy.NetnsJoinImages)
+	}
+}
+
+func TestLoadConfigRefusesANetnsJoinImageNotPinnedByDigest(t *testing.T) {
+	for _, image := range []string{
+		"ghcr.io/documentdb/documentdb-kubernetes-operator/gateway:0.117.0",
+		"ghcr.io/documentdb/documentdb-kubernetes-operator/gateway",
+		"ghcr.io/documentdb/gateway@sha256:abc",
+		"gateway@sha256:" + strings.Repeat("ab", 32),
+	} {
+		_, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_NETNS_JOIN_IMAGES": image}))
+		if err == nil || !strings.Contains(err.Error(), "PROXY_NETNS_JOIN_IMAGES") {
+			t.Errorf("%s: err = %v, want refused", image, err)
+		}
+	}
+}

@@ -111,7 +111,10 @@ func (h *Handler) authorize(r *http.Request) error {
 			return refuse("a container create names exactly one container")
 		}
 		return h.checkBody(r, func(body []byte) error {
-			return h.policy.CheckCreate(names[0], body)
+			if err := h.policy.CheckCreate(names[0], body); err != nil {
+				return err
+			}
+			return h.requireManagedJoin(r.Context(), body)
 		})
 	}
 	if handled, err := h.authorizeApps(r, api); handled {
@@ -167,6 +170,16 @@ func (h *Handler) requireManaged(ctx context.Context, id string) error {
 		return fmt.Errorf("%w: %s", errNotManaged, id)
 	}
 	return nil
+}
+
+// requireManagedJoin refuses a create that joins the network namespace of a
+// container provisioning does not manage, such as a platform service.
+func (h *Handler) requireManagedJoin(ctx context.Context, body []byte) error {
+	target := NetnsJoinTarget(body)
+	if target == "" {
+		return nil
+	}
+	return h.requireManaged(ctx, target)
 }
 
 // inspect reads an engine object the proxy needs to decide on a call.

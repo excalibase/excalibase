@@ -9,6 +9,8 @@
 //	PROXY_PORT_BIND_IPS   host addresses ports may publish on (default 127.0.0.1)
 //	PROXY_RUNTIMES        OCI runtimes containers may ask for (optional, e.g. runsc)
 //	PROXY_EDGE_CONTAINER  the edge, the one unmanaged container that may join project networks (optional)
+//	PROXY_NETNS_JOIN_IMAGES digest-pinned images that may join a managed
+//	                      container's network namespace (optional; the DocumentDB gateway)
 package main
 
 import (
@@ -82,6 +84,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if edge != "" && !containerName.MatchString(edge) {
 		return config{}, fmt.Errorf("PROXY_EDGE_CONTAINER %q is not a container name", edge)
 	}
+	joinImages, err := digestPinned(getenv, "PROXY_NETNS_JOIN_IMAGES")
+	if err != nil {
+		return config{}, err
+	}
 	bindIPs := splitList(getenv("PROXY_PORT_BIND_IPS"))
 	if len(bindIPs) == 0 {
 		bindIPs = []string{"127.0.0.1"}
@@ -98,6 +104,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 			Runtimes:        splitList(getenv("PROXY_RUNTIMES")),
 			ContainerPrefix: containerPrefix,
 			EdgeContainer:   edge,
+			NetnsJoinImages: joinImages,
 		},
 	}, nil
 }
@@ -115,6 +122,21 @@ func scopedPrefix(getenv func(string) string, key string) (string, error) {
 		return "", fmt.Errorf("%s %q must extend %q with a project segment ending in '-'", key, prefix, containerPrefix)
 	}
 	return prefix, nil
+}
+
+// pinnedImage is a registry-qualified image reference fixed by its digest.
+var pinnedImage = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[^@\s:]+@sha256:[0-9a-f]{64}$`)
+
+// digestPinned reads a list of images, each pinned by digest: a tag would let
+// the bits that are admitted change without the setting changing.
+func digestPinned(getenv func(string) string, key string) ([]string, error) {
+	images := splitList(getenv(key))
+	for _, image := range images {
+		if !pinnedImage.MatchString(image) {
+			return nil, fmt.Errorf("%s: %q must be a registry-qualified image pinned by digest (name@sha256:...)", key, image)
+		}
+	}
+	return images, nil
 }
 
 func envOr(getenv func(string) string, key, fallback string) string {
