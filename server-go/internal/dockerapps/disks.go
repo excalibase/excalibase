@@ -25,10 +25,11 @@ import (
 const maxToolOutput = 64 << 10
 
 // CreateAppDisk makes the app's named volume once and opens it to whatever
-// user the image runs as, as the Kubernetes init Job does.
+// user the image runs as, as the Kubernetes init Job does. An app without a
+// disk has nothing to create.
 func (r *Runtime) CreateAppDisk(ctx context.Context, namespace string, app *apphost.App, _ string, opts k8s.DiskJobOptions) error {
 	if app.Disk == nil {
-		return errors.New("the app has no disk")
+		return nil
 	}
 	if err := r.requireProject(namespace, app.ProjectID); err != nil {
 		return err
