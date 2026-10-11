@@ -34,6 +34,17 @@ type ObjectDeleter interface {
 	DeleteKeys(ctx context.Context, bucket string, keys []string) error
 }
 
+// StoredObject is one listed object and its size in bytes.
+type StoredObject struct {
+	Key  string
+	Size int64
+}
+
+// ObjectLister is a store whose listing carries each object's size.
+type ObjectLister interface {
+	ListObjects(ctx context.Context, bucket, prefix, continuationToken string, maxKeys int32) ([]StoredObject, string, error)
+}
+
 // ObjectDeleterFactory opens a deleter for the resolved backup store.
 type ObjectDeleterFactory func(ctx context.Context, creds *domain.S3Credentials) (ObjectDeleter, error)
 

@@ -13,10 +13,10 @@ const PROJECT = {
   namespace: 'ns', host: 'h', port: '5432', databaseName: 'app', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
 };
 
-async function openBackups() {
+async function openBackups(backups: unknown[] = []) {
   vi.mocked(api.get).mockImplementation(async (url: string) => {
     if (url === '/provision/p-1') return { data: PROJECT } as never;
-    if (url.includes('/backup/list')) return { data: { backups: [], backupEnabled: true, schedule: '', retentionDays: 7 } } as never;
+    if (url.includes('/backup/list')) return { data: { backups, backupEnabled: true, schedule: '', retentionDays: 7 } } as never;
     return { data: [] } as never;
   });
   render(
@@ -50,5 +50,15 @@ describe('InstanceDetailPage — trigger backup', () => {
     });
     await userEvent.click(screen.getByRole('button', { name: /trigger backup/i }));
     expect(await screen.findByTestId('backup-trigger-result')).toHaveTextContent('a backup is already running');
+  });
+});
+
+// EXC-586: the server reports sizeBytes; the size column read a field never sent.
+describe('InstanceDetailPage — backup history', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('each backup shows its size', async () => {
+    await openBackups([{ id: 'b-1', timestamp: '2026-10-11T06:00:00Z', status: 'COMPLETED', sizeBytes: 2048 }]);
+    expect((await screen.findByText('b-1')).closest('tr')!).toHaveTextContent('2.0 KB');
   });
 });

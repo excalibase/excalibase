@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -107,6 +108,8 @@ func formatTimestamp(v interface{}) string {
 		return ""
 	case string:
 		return t
+	case time.Time:
+		return t.UTC().Format(time.RFC3339)
 	default:
 		// time.Time and other Stringer implementations.
 		if s, ok := v.(fmt.Stringer); ok {

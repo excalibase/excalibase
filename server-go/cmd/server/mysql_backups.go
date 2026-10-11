@@ -12,7 +12,8 @@ import (
 // MOCO (ADR 0041 decision 6). The bucket is listed with the platform key,
 // addressed as the platform addresses it.
 func registerMySQLBackups(backupSvc *service.BackupService, mysql *provisioner.MySQLProvisioner,
-	k8sClient k8s.KubeClient, store storage.InstanceStore, backupStorage service.BackupStorageSource) {
+	k8sClient k8s.KubeClient, store storage.InstanceStore, backupStorage service.BackupStorageSource,
+	records storage.BackupRecordStore) {
 	if mysql == nil {
 		return
 	}
@@ -22,5 +23,6 @@ func registerMySQLBackups(backupSvc *service.BackupService, mysql *provisioner.M
 		Storage:   backupStorage,
 		OpenStore: service.AWSObjectDeleterFactory(backupUsePathStyle()),
 		Instances: store,
+		Records:   records,
 	}))
 }

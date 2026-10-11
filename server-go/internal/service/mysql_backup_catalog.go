@@ -44,13 +44,25 @@ type mysqlBackup struct {
 	Dump   bool
 	Binlog bool
 	Keys   []string
+	// Size is the bytes the run's directory holds.
+	Size int64
 }
 
 // readMySQLBackups groups the keys under prefix into runs, oldest first.
-// Anything not in a run's directory is ignored, as MOCO's restore does.
 func readMySQLBackups(keys []string, prefix string) []mysqlBackup {
-	runs := map[string]*mysqlBackup{}
+	objects := make([]StoredObject, 0, len(keys))
 	for _, key := range keys {
+		objects = append(objects, StoredObject{Key: key})
+	}
+	return readMySQLBackupObjects(objects, prefix)
+}
+
+// readMySQLBackupObjects groups the objects under prefix into runs, oldest
+// first. Anything not in a run's directory is ignored, as MOCO's restore does.
+func readMySQLBackupObjects(objects []StoredObject, prefix string) []mysqlBackup {
+	runs := map[string]*mysqlBackup{}
+	for _, object := range objects {
+		key := object.Key
 		directory, file, ok := strings.Cut(strings.TrimPrefix(key, prefix), "/")
 		if !ok || strings.Contains(file, "/") {
 			continue
@@ -65,6 +77,7 @@ func readMySQLBackups(keys []string, prefix string) []mysqlBackup {
 			runs[directory] = run
 		}
 		run.Keys = append(run.Keys, key)
+		run.Size += object.Size
 		run.Dump = run.Dump || file == k8s.MOCODumpFile
 		run.Binlog = run.Binlog || file == k8s.MOCOBinlogFile
 	}

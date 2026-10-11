@@ -70,3 +70,23 @@ func put(ctx context.Context, t *testing.T, uploader *AWSS3Uploader, bucket, key
 		t.Fatalf("upload %s: %v", key, err)
 	}
 }
+
+// TestListObjects_LocalStack: a listing carries each object's size, which is
+// how a MySQL run's size is reported (EXC-586).
+func TestListObjects_LocalStack(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	const bucket = "sizes-bucket"
+	uploader := newLocalStackUploader(ctx, t, bucket)
+	if _, err := uploader.Upload(ctx, bucket, "moco/ns/p/run/dump.tar", strings.NewReader("12345")); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	put(ctx, t, uploader, bucket, "moco/other/p/run/dump.tar")
+	objects, next, err := uploader.ListObjects(ctx, bucket, "moco/ns/", "", 10)
+	if err != nil || next != "" {
+		t.Fatalf("ListObjects: %v next=%q", err, next)
+	}
+	if len(objects) != 1 || objects[0].Key != "moco/ns/p/run/dump.tar" || objects[0].Size != 5 {
+		t.Fatalf("objects %+v", objects)
+	}
+}

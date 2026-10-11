@@ -121,6 +121,19 @@ func (u *AWSS3Uploader) Delete(ctx context.Context, bucket, key string) error {
 // ListKeys returns one page of keys under prefix (ObjectDeleter). A page is
 // at most maxKeys entries; the returned token continues the listing.
 func (u *AWSS3Uploader) ListKeys(ctx context.Context, bucket, prefix, continuationToken string, maxKeys int32) ([]string, string, error) {
+	objects, next, err := u.ListObjects(ctx, bucket, prefix, continuationToken, maxKeys)
+	if err != nil {
+		return nil, "", err
+	}
+	keys := make([]string, 0, len(objects))
+	for _, obj := range objects {
+		keys = append(keys, obj.Key)
+	}
+	return keys, next, nil
+}
+
+// ListObjects is ListKeys with each object's size (ObjectLister).
+func (u *AWSS3Uploader) ListObjects(ctx context.Context, bucket, prefix, continuationToken string, maxKeys int32) ([]StoredObject, string, error) {
 	input := &s3.ListObjectsV2Input{
 		Bucket:  aws.String(bucket),
 		Prefix:  aws.String(prefix),
@@ -133,17 +146,17 @@ func (u *AWSS3Uploader) ListKeys(ctx context.Context, bucket, prefix, continuati
 	if err != nil {
 		return nil, "", fmt.Errorf("s3 list %s/%s: %w", bucket, prefix, err)
 	}
-	keys := make([]string, 0, len(page.Contents))
+	objects := make([]StoredObject, 0, len(page.Contents))
 	for _, obj := range page.Contents {
 		if obj.Key != nil {
-			keys = append(keys, *obj.Key)
+			objects = append(objects, StoredObject{Key: *obj.Key, Size: aws.ToInt64(obj.Size)})
 		}
 	}
 	next := ""
 	if page.IsTruncated != nil && *page.IsTruncated && page.NextContinuationToken != nil {
 		next = *page.NextContinuationToken
 	}
-	return keys, next, nil
+	return objects, next, nil
 }
 
 // DeleteKeys removes up to 1000 keys in one DeleteObjects call
