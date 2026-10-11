@@ -70,10 +70,10 @@ func TestMySQLRestoreIntoANewProject(t *testing.T) {
 		t.Errorf("a Free copy of a Standard project runs %d instances", replicas)
 	}
 	sourcePrefix, ownPrefix := k8s.MOCOBackupPrefix(mysqlSourceNS, mysqlSourceProject), k8s.MOCOBackupPrefix(restoredNS, restoredProject)
-	if got := string(lab.mock.Secrets[restoredNS+"/"+k8s.MySQLRestoreSourceCredentialsSecret]["AWS_ACCESS_KEY_ID"]); got != "tmp-"+sourcePrefix {
+	if got := string(lab.mock.Secrets[restoredNS+"/"+k8s.MySQLRestoreSourceAccessName]["AWS_ACCESS_KEY_ID"]); got != "tmp-"+sourcePrefix {
 		t.Errorf("source credential for %q", got)
 	}
-	if got := string(lab.mock.Secrets[restoredNS+"/"+k8s.MySQLBackupCredentialsSecret]["AWS_ACCESS_KEY_ID"]); got != "tmp-"+ownPrefix {
+	if got := string(lab.mock.Secrets[restoredNS+"/"+k8s.MySQLBackupAccessName]["AWS_ACCESS_KEY_ID"]); got != "tmp-"+ownPrefix {
 		t.Errorf("own credential for %q", got)
 	}
 	scopes := minter.minted()

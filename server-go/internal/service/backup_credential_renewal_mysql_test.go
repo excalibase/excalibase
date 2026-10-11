@@ -20,21 +20,21 @@ func TestRenewalRenewsAMySQLProjectForItsMOCOPrefix(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	data, err := k8s.MySQLBackupCredentialsSecretData(&domain.S3Credentials{
+	data, err := k8s.MySQLBackupAccessNameData(&domain.S3Credentials{
 		AccessKeyID: "old", SecretAccessKey: "old", SessionToken: "old", ExpiresAt: lab.now.Add(time.Hour),
 		IssuedBy: k8s.BackupKeyFingerprint(platformStore()), Bucket: platformStore().Bucket, Endpoint: platformStore().Endpoint,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	lab.mock.Secrets["org-my/"+k8s.MySQLBackupCredentialsSecret] = data
+	lab.mock.Secrets["org-my/"+k8s.MySQLBackupAccessName] = data
 
 	report := lab.renewer.RenewDue(context.Background())
 	if len(report.Failed) != 0 || report.Renewed != 1 {
 		t.Fatalf("report %+v", report)
 	}
 	prefix := k8s.MOCOBackupPrefix("org-my", "my")
-	renewed := lab.mock.Secrets["org-my/"+k8s.MySQLBackupCredentialsSecret]
+	renewed := lab.mock.Secrets["org-my/"+k8s.MySQLBackupAccessName]
 	if string(renewed["AWS_SESSION_TOKEN"]) != "token-"+prefix {
 		t.Errorf("renewed token %q, want one for %s", renewed["AWS_SESSION_TOKEN"], prefix)
 	}

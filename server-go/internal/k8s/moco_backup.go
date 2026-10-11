@@ -28,12 +28,12 @@ const (
 	// MySQLBackupServiceAccount runs the backup and restore jobs; MOCO binds
 	// the role they need to it.
 	MySQLBackupServiceAccount = "mysql-backup"
-	// MySQLBackupCredentialsSecret holds the project's read-write credential
-	// for its own prefix, as the AWS variables the job reads.
-	MySQLBackupCredentialsSecret = "mysql-backup-creds"
-	// MySQLRestoreSourceCredentialsSecret holds a restore's read-only
-	// credential for the source's prefix.
-	MySQLRestoreSourceCredentialsSecret = "mysql-restore-source-creds"
+	// MySQLBackupAccessName is the Secret with the project's read-write
+	// object-store access to its own prefix, as the AWS variables the job reads.
+	MySQLBackupAccessName = "mysql-backup-creds"
+	// MySQLRestoreSourceAccessName is the Secret with a restore's read-only
+	// access to the source's prefix.
+	MySQLRestoreSourceAccessName = "mysql-restore-source-creds"
 
 	mocoBackupKeyRoot      = "moco"
 	mocoBackupJobPrefix    = "moco-backup-"
@@ -112,7 +112,7 @@ func BuildMySQLBackupPolicy(opts MySQLBackupOpts) (*unstructured.Unstructured, e
 	if err := validateBackupOpts(opts); err != nil {
 		return nil, err
 	}
-	job, err := mysqlJobConfig(opts, MySQLBackupCredentialsSecret)
+	job, err := mysqlJobConfig(opts, MySQLBackupAccessName)
 	if err != nil {
 		return nil, err
 	}
@@ -193,10 +193,10 @@ func BuildMySQLBackupServiceAccount(namespace string) *unstructured.Unstructured
 	}}
 }
 
-// MySQLBackupCredentialsSecretData is the Secret content for a temporary
+// MySQLBackupAccessNameData is the Secret content for a temporary
 // credential, as the AWS SDK's environment chain reads it, with the metadata
 // renewal reads.
-func MySQLBackupCredentialsSecretData(creds *domain.S3Credentials) (map[string][]byte, error) {
+func MySQLBackupAccessNameData(creds *domain.S3Credentials) (map[string][]byte, error) {
 	if creds == nil || creds.SessionToken == "" || creds.ExpiresAt.IsZero() {
 		return nil, ErrLongLivedBackupKey
 	}

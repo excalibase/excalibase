@@ -137,7 +137,7 @@ func TestMySQLReplaceDatabaseRebuildsTheClusterFromItsOwnBackups(t *testing.T) {
 		t.Errorf("restore %v", restore)
 	}
 	envFrom, _, _ := unstructured.NestedSlice(restore, "jobConfig", "envFrom")
-	if envFrom[0].(map[string]interface{})["secretRef"].(map[string]interface{})["name"] != k8s.MySQLBackupCredentialsSecret {
+	if envFrom[0].(map[string]interface{})["secretRef"].(map[string]interface{})["name"] != k8s.MySQLBackupAccessName {
 		t.Errorf("the restore reads with %v", envFrom)
 	}
 	if name, _, _ := unstructured.NestedString(cluster.Object, "spec", "backupPolicyName"); name != k8s.MySQLBackupPolicyName(mysqlSourceProject) {

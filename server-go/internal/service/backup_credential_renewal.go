@@ -99,9 +99,9 @@ type projectCredentials struct {
 func credentialsOf(inst *domain.DatabaseInstance) projectCredentials {
 	if inst.DBType == domain.MySQL {
 		return projectCredentials{
-			secret: k8s.MySQLBackupCredentialsSecret,
+			secret: k8s.MySQLBackupAccessName,
 			prefix: k8s.MOCOBackupPrefix(inst.Namespace, inst.ProjectID),
-			render: k8s.MySQLBackupCredentialsSecretData,
+			render: k8s.MySQLBackupAccessNameData,
 		}
 	}
 	return projectCredentials{

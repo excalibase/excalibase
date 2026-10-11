@@ -155,11 +155,11 @@ func (a *MySQLBackupAdapter) createRestoredCluster(ctx context.Context, pc *prov
 	pc.RegisterCleanup("delete restore namespace", func(ctx context.Context) error {
 		return a.kube.DeleteNamespace(ctx, target.namespace)
 	})
-	if err := a.mysql.WriteBackupAccess(ctx, target.namespace, k8s.MySQLRestoreSourceCredentialsSecret, target.sourceCreds); err != nil {
+	if err := a.mysql.WriteBackupAccess(ctx, target.namespace, k8s.MySQLRestoreSourceAccessName, target.sourceCreds); err != nil {
 		return err
 	}
 	if target.ownCreds != nil {
-		if err := a.mysql.WriteBackupAccess(ctx, target.namespace, k8s.MySQLBackupCredentialsSecret, target.ownCreds); err != nil {
+		if err := a.mysql.WriteBackupAccess(ctx, target.namespace, k8s.MySQLBackupAccessName, target.ownCreds); err != nil {
 			return err
 		}
 	}
@@ -169,7 +169,7 @@ func (a *MySQLBackupAdapter) createRestoredCluster(ctx context.Context, pc *prov
 	}
 	source := k8s.MySQLRestoreSource{
 		Namespace: inst.Namespace, ProjectID: inst.ProjectID, Point: target.point,
-		CredentialsSecret: k8s.MySQLRestoreSourceCredentialsSecret,
+		CredentialsSecret: k8s.MySQLRestoreSourceAccessName,
 	}
 	return a.mysql.ApplyRestoredCluster(ctx, opts, source, a.backupOpts(inst, target))
 }

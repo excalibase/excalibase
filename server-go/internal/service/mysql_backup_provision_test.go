@@ -23,7 +23,7 @@ func TestMySQLProjectBacksUpWithItsOwnPrefixCredential(t *testing.T) {
 		t.Fatalf("the platform key reached %v", leaked)
 	}
 	prefix := k8s.MOCOBackupPrefix(inst.Namespace, inst.ProjectID)
-	data := projectSecret(t, mock, inst.Namespace, k8s.MySQLBackupCredentialsSecret)
+	data := projectSecret(t, mock, inst.Namespace, k8s.MySQLBackupAccessName)
 	if string(data["AWS_ACCESS_KEY_ID"]) != "tmp-"+prefix {
 		t.Errorf("credential minted for %q, want %q", data["AWS_ACCESS_KEY_ID"], prefix)
 	}

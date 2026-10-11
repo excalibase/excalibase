@@ -41,7 +41,7 @@ func validateMySQLBackup(backup *domain.BackupSettings) error {
 // WriteBackupAccess puts a temporary credential into the namespace as the
 // named Secret and makes sure the account the jobs run as exists.
 func (p *MySQLProvisioner) WriteBackupAccess(ctx context.Context, namespace, secret string, creds *domain.S3Credentials) error {
-	data, err := k8s.MySQLBackupCredentialsSecretData(creds)
+	data, err := k8s.MySQLBackupAccessNameData(creds)
 	if err != nil {
 		return err
 	}
@@ -192,7 +192,7 @@ func (p *MySQLProvisioner) removeBackupObjects(ctx context.Context, namespace, p
 	if err := p.client.DeleteCRD(ctx, k8s.MOCOBackupPolicyGVR, namespace, k8s.MySQLBackupPolicyName(projectID)); err != nil {
 		return fmt.Errorf("delete the backup policy: %w", err)
 	}
-	if err := p.client.DeleteSecret(ctx, namespace, k8s.MySQLBackupCredentialsSecret); err != nil {
+	if err := p.client.DeleteSecret(ctx, namespace, k8s.MySQLBackupAccessName); err != nil {
 		return fmt.Errorf("delete the backup credentials: %w", err)
 	}
 	if err := p.client.DeleteCRD(ctx, k8s.ServiceAccountGVR, namespace, k8s.MySQLBackupServiceAccount); err != nil {

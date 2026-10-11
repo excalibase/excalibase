@@ -55,7 +55,7 @@ func TestBuildMySQLBackupPolicy(t *testing.T) {
 		t.Errorf("bucket %v", bucket)
 	}
 	envFrom, _, _ := unstructured.NestedSlice(job, "envFrom")
-	if len(envFrom) != 1 || envFrom[0].(map[string]interface{})["secretRef"].(map[string]interface{})["name"] != MySQLBackupCredentialsSecret {
+	if len(envFrom) != 1 || envFrom[0].(map[string]interface{})["secretRef"].(map[string]interface{})["name"] != MySQLBackupAccessName {
 		t.Errorf("envFrom %v", envFrom)
 	}
 	if _, ok := job["workVolume"]; !ok {
@@ -103,12 +103,12 @@ func TestBuildMySQLBackupPolicy_RefusesIncomplete(t *testing.T) {
 
 // The job reads AWS_* from its environment (AWS SDK default chain); the
 // metadata renewal reads sits beside them. A long-lived key is refused.
-func TestMySQLBackupCredentialsSecretData(t *testing.T) {
+func TestMySQLBackupAccessNameData(t *testing.T) {
 	creds := &domain.S3Credentials{
 		AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "ST", Region: "auto",
 		ExpiresAt: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), IssuedBy: "abc", Bucket: "backups", Endpoint: "https://s3.example",
 	}
-	data, err := MySQLBackupCredentialsSecretData(creds)
+	data, err := MySQLBackupAccessNameData(creds)
 	if err != nil {
 		t.Fatalf("data: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestMySQLBackupCredentialsSecretData(t *testing.T) {
 		}
 	}
 	creds.SessionToken = ""
-	if _, err := MySQLBackupCredentialsSecretData(creds); !errors.Is(err, ErrLongLivedBackupKey) {
+	if _, err := MySQLBackupAccessNameData(creds); !errors.Is(err, ErrLongLivedBackupKey) {
 		t.Errorf("long-lived key: %v", err)
 	}
 }
@@ -149,7 +149,7 @@ func TestWithMySQLRestore(t *testing.T) {
 	point := time.Date(2026, 10, 11, 9, 30, 15, 0, time.FixedZone("x", 3600))
 	opts := backupOpts("free")
 	restored, err := WithMySQLRestore(cluster, MySQLRestoreSource{
-		Namespace: "org-src", ProjectID: "proj-src", Point: point, CredentialsSecret: MySQLRestoreSourceCredentialsSecret,
+		Namespace: "org-src", ProjectID: "proj-src", Point: point, CredentialsSecret: MySQLRestoreSourceAccessName,
 	}, opts)
 	if err != nil {
 		t.Fatalf("WithMySQLRestore: %v", err)
@@ -159,7 +159,7 @@ func TestWithMySQLRestore(t *testing.T) {
 		t.Errorf("restore %v", restore)
 	}
 	envFrom, _, _ := unstructured.NestedSlice(restore, "jobConfig", "envFrom")
-	if len(envFrom) != 1 || envFrom[0].(map[string]interface{})["secretRef"].(map[string]interface{})["name"] != MySQLRestoreSourceCredentialsSecret {
+	if len(envFrom) != 1 || envFrom[0].(map[string]interface{})["secretRef"].(map[string]interface{})["name"] != MySQLRestoreSourceAccessName {
 		t.Errorf("envFrom %v", envFrom)
 	}
 	if _, found, _ := unstructured.NestedString(restored.Object, "spec", "backupPolicyName"); found {

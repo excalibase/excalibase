@@ -100,7 +100,7 @@ func (a *MySQLBackupAdapter) ReplaceDatabase(ctx context.Context, inst *domain.D
 	}
 	source := k8s.MySQLRestoreSource{
 		Namespace: inst.Namespace, ProjectID: inst.ProjectID, Point: point,
-		CredentialsSecret: k8s.MySQLBackupCredentialsSecret,
+		CredentialsSecret: k8s.MySQLBackupAccessName,
 	}
 	if err := a.mysql.ApplyRestore(ctx, freshMySQLCluster(template), source, job); err != nil {
 		return err

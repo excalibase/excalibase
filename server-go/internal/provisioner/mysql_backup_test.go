@@ -35,7 +35,7 @@ func TestMySQLProvision_WithBackups(t *testing.T) {
 	if _, err := prov.ProvisionWithRollback(context.Background(), mysqlBackupRequest(), mysqlFree, recordingContext()); err != nil {
 		t.Fatalf("ProvisionWithRollback: %v", err)
 	}
-	secret := mock.Secrets[mysqlTestNS+"/"+k8s.MySQLBackupCredentialsSecret]
+	secret := mock.Secrets[mysqlTestNS+"/"+k8s.MySQLBackupAccessName]
 	if string(secret["AWS_ACCESS_KEY_ID"]) != "tmp-key" || string(secret["AWS_SESSION_TOKEN"]) != "tmp-token" {
 		t.Errorf("credentials secret %v", secret)
 	}
@@ -67,7 +67,7 @@ func TestMySQLProvision_RefusesALongLivedKey(t *testing.T) {
 	if _, err := prov.ProvisionWithRollback(context.Background(), req, mysqlFree, recordingContext()); err == nil {
 		t.Fatal("a long-lived key was accepted")
 	}
-	if _, ok := mock.Secrets[mysqlTestNS+"/"+k8s.MySQLBackupCredentialsSecret]; ok {
+	if _, ok := mock.Secrets[mysqlTestNS+"/"+k8s.MySQLBackupAccessName]; ok {
 		t.Error("the key was written into the namespace")
 	}
 }
@@ -135,7 +135,7 @@ func TestMySQLApplyRestoredCluster(t *testing.T) {
 	mock, prov := newMySQLTest(t)
 	image := mysqlTestImage(t)
 	opts := k8s.MySQLClusterOpts{ProjectID: mysqlTestProject, Namespace: mysqlTestNS, Tier: mysqlFree, Image: image}
-	source := k8s.MySQLRestoreSource{Namespace: "org1-proj-src", ProjectID: "proj-src", Point: time.Now(), CredentialsSecret: k8s.MySQLRestoreSourceCredentialsSecret}
+	source := k8s.MySQLRestoreSource{Namespace: "org1-proj-src", ProjectID: "proj-src", Point: time.Now(), CredentialsSecret: k8s.MySQLRestoreSourceAccessName}
 	if err := prov.ApplyRestoredCluster(context.Background(), opts, source, restoreJobOpts()); err != nil {
 		t.Fatalf("ApplyRestoredCluster: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestMySQLAwaitRestored_FailsWithTheRestoreJob(t *testing.T) {
 	mock, prov := newMySQLTest(t)
 	mock.AutoReconcileClusters = false
 	opts := k8s.MySQLClusterOpts{ProjectID: mysqlTestProject, Namespace: mysqlTestNS, Tier: mysqlFree, Image: mysqlTestImage(t)}
-	source := k8s.MySQLRestoreSource{Namespace: "org1-proj-src", ProjectID: "proj-src", Point: time.Now(), CredentialsSecret: k8s.MySQLRestoreSourceCredentialsSecret}
+	source := k8s.MySQLRestoreSource{Namespace: "org1-proj-src", ProjectID: "proj-src", Point: time.Now(), CredentialsSecret: k8s.MySQLRestoreSourceAccessName}
 	if err := prov.ApplyRestoredCluster(context.Background(), opts, source, restoreJobOpts()); err != nil {
 		t.Fatalf("ApplyRestoredCluster: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestMySQLRemoveDatabase_RemovesBackupObjects(t *testing.T) {
 	if _, ok := mock.CRDs[mysqlTestNS+"/"+k8s.MySQLBackupPolicyName(mysqlTestProject)]; ok {
 		t.Error("backup policy left behind")
 	}
-	if _, ok := mock.Secrets[mysqlTestNS+"/"+k8s.MySQLBackupCredentialsSecret]; ok {
+	if _, ok := mock.Secrets[mysqlTestNS+"/"+k8s.MySQLBackupAccessName]; ok {
 		t.Error("backup credentials left behind")
 	}
 }

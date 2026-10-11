@@ -100,7 +100,9 @@ func validateMySQLRequest(req domain.ProvisioningRequest) (database, image strin
 
 // Provision builds the project without stage rollback.
 func (p *MySQLProvisioner) Provision(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, cb StageCallback) (*ProvisioningResult, error) {
-	pc := NewProvisionContext(cb, func(string) {})
+	pc := NewProvisionContext(cb, func(string) {
+		// No step reporting outside a rollback-tracked provision.
+	})
 	return p.ProvisionWithRollback(ctx, req, tier, pc)
 }
 
@@ -121,7 +123,7 @@ func (p *MySQLProvisioner) ProvisionWithRollback(ctx context.Context, req domain
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		pc.SetStep("write the backup credentials")
-		if err := p.WriteBackupAccess(ctx, namespace, k8s.MySQLBackupCredentialsSecret, req.Backup.S3); err != nil {
+		if err := p.WriteBackupAccess(ctx, namespace, k8s.MySQLBackupAccessName, req.Backup.S3); err != nil {
 			return nil, pc.Fail(err)
 		}
 	}
