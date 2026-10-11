@@ -180,7 +180,7 @@ func (s *BackupScheduler) fireOne(projectID string) {
 		return
 	}
 
-	if _, err := s.backups.TriggerManualBackup(ctx, projectID); err != nil {
+	if _, err := s.backups.TriggerScheduledBackup(ctx, projectID); err != nil {
 		s.logger.Printf("scheduler: backup trigger %s failed: %v", projectID, err)
 	}
 }

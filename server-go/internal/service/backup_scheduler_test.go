@@ -247,3 +247,23 @@ type refusingLock struct{}
 func (l *refusingLock) Acquire(context.Context) (storage.LeaderLease, bool, error) {
 	return nil, false, nil
 }
+
+// EXC-593: a paused project's database is stopped and has written nothing
+// since its pause backup; its schedule passes over it rather than failing.
+func TestScheduler_SkipsAPausedProject(t *testing.T) {
+	scheduler, _, instances, adapter, _ := setupScheduler(t)
+	instances.Create(&domain.DatabaseInstance{BackupEnabled: boolPtr(true),
+		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: string(domain.StatusPaused),
+	})
+	scheduler.fireOne("p1")
+	if adapter.triggerCalls != 0 {
+		t.Fatalf("backed up a paused project %d times", adapter.triggerCalls)
+	}
+	instances.Create(&domain.DatabaseInstance{BackupEnabled: boolPtr(true),
+		ProjectID: "p2", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
+	})
+	scheduler.fireOne("p2")
+	if adapter.triggerCalls != 1 {
+		t.Fatalf("running project backed up %d times", adapter.triggerCalls)
+	}
+}

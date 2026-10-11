@@ -350,6 +350,10 @@ type fakeDockerClientForAdapter struct {
 	// execCode is what ExecInContainer reports; non-zero stands for a
 	// postgres that has not finished recovery.
 	execCode int
+	// walArchive is the container's /walarchive; nil has none.
+	walArchive map[string][]byte
+	execs      [][]string
+	copyDsts   []string
 }
 
 func (f *fakeDockerClientForAdapter) CreateContainer(_ context.Context, name, img string, env map[string]string, _ map[string]string, limits provisioner.ContainerLimits) (string, error) {
@@ -381,7 +385,13 @@ func (f *fakeDockerClientForAdapter) WaitForHealthy(_ context.Context, _ string)
 	f.healthy = true
 	return nil
 }
-func (f *fakeDockerClientForAdapter) ExecInContainer(_ context.Context, _ string, _ []string) (int, error) {
+func (f *fakeDockerClientForAdapter) ExecInContainer(_ context.Context, _ string, cmd []string) (int, error) {
+	f.execs = append(f.execs, cmd)
+	if len(cmd) > 2 && cmd[0] == "rm" {
+		for _, path := range cmd[3:] {
+			delete(f.walArchive, strings.TrimPrefix(path, "/walarchive/"))
+		}
+	}
 	return f.execCode, nil
 }
 func (f *fakeDockerClientForAdapter) CopyToContainer(_ context.Context, _ string, dst string, content io.Reader) error {
@@ -389,6 +399,7 @@ func (f *fakeDockerClientForAdapter) CopyToContainer(_ context.Context, _ string
 		return errors.New("copy failed")
 	}
 	f.copyDst = dst
+	f.copyDsts = append(f.copyDsts, dst)
 	n, _ := io.Copy(io.Discard, content)
 	f.copyBytes += n
 	f.copyCalls++
@@ -408,8 +419,23 @@ func (f *fakeDockerClientForAdapter) CopyFromContainer(_ context.Context, _ stri
 	if f.failOn == "copyFrom" {
 		return nil, errors.New("copy from failed")
 	}
-	// Return an empty tar so the iteration finishes cleanly.
-	return io.NopCloser(strings.NewReader("")), nil
+	if f.walArchive == nil {
+		return io.NopCloser(strings.NewReader("")), nil
+	}
+	return io.NopCloser(bytes.NewReader(walArchiveTar(f.walArchive))), nil
+}
+
+// walArchiveTar is /walarchive as the engine's archive API returns it.
+func walArchiveTar(files map[string][]byte) []byte {
+	var raw bytes.Buffer
+	writer := tar.NewWriter(&raw)
+	_ = writer.WriteHeader(&tar.Header{Name: "walarchive/", Typeflag: tar.TypeDir, Mode: 0o700})
+	for name, body := range files {
+		_ = writer.WriteHeader(&tar.Header{Name: "walarchive/" + name, Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(len(body))})
+		_, _ = writer.Write(body)
+	}
+	_ = writer.Close()
+	return raw.Bytes()
 }
 
 // minimalGzippedTar produces a one-entry tar.gz so tests have a real
@@ -590,7 +616,7 @@ func TestDockerAdapter_Restore_WithTargetTime_WritesRecoveryTar(t *testing.T) {
 	uploader.objects["test-backups/backups/dk-1/manual/backup-pitr.tar.gz"] = minimalGzippedTar(t)
 	records.Save(context.Background(), &domain.BackupRecord{
 		ID: "backup-pitr", ProjectID: "dk-1", Status: "COMPLETED", Type: "MANUAL",
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339),
 	})
 
 	target := time.Now().UTC().Add(-1 * time.Hour)

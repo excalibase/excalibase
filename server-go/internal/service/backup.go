@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -192,6 +193,21 @@ func (s *BackupService) TriggerManualBackup(ctx context.Context, projectID strin
 		return nil, err
 	}
 	return refToMap(ref), nil
+}
+
+// TriggerScheduledBackup is a schedule's backup of a running project. A
+// project that is not running (paused, being restored or deleted) is passed
+// over: a paused one wrote nothing since its pause backup (EXC-593).
+func (s *BackupService) TriggerScheduledBackup(ctx context.Context, projectID string) (map[string]interface{}, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+	if inst.Status != string(domain.StatusActive) {
+		log.Printf("scheduled backup of %s passed over: it is %s", projectID, inst.Status)
+		return nil, nil
+	}
+	return s.TriggerManualBackup(ctx, projectID)
 }
 
 func (s *BackupService) ListBackups(projectID string) ([]map[string]interface{}, error) {

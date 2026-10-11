@@ -82,9 +82,10 @@ jobs:
         run: |
           docker build -q -t docker.io/excalibase/provisioning:ci server-go
           docker build -q -t docker.io/excalibase/studio:ci frontend
-      - name: Fresh install, project, GraphQL/REST, backup, files
+      - name: Fresh install, project, GraphQL/REST, backups by default (WAL archive, point-in-time and in-place restore, purge), files
         env:
           PLATFORM_TAG: ci
+          PG_BACKUPS: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
       - name: Fresh install with manual vault unseal (init, restart, CLI unseal)
         env:

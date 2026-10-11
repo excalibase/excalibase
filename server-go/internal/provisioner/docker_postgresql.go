@@ -148,7 +148,9 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 
 	// Stage: Credential generation
 	cb(domain.StageCredentialGeneration)
-	p.enableArchive(ctx, req, containerID, dbName, postgresReadyTimeout)
+	if err := p.enableArchive(ctx, req, containerID, dbName, PostgresImageOwner, postgresReadyTimeout); err != nil {
+		return nil, err
+	}
 
 	cb(domain.StageCompleted)
 
@@ -181,22 +183,6 @@ func (p *DockerPostgreSQLProvisioner) startDatabase(ctx context.Context, contain
 		return fmt.Errorf("wait for postgres ready: %w", err)
 	}
 	return nil
-}
-
-// enableArchive is PITR groundwork: WAL archiving when backup is requested.
-// archive_mode=on requires a postgres restart, so this runs before the
-// container is handed back to the user. Best-effort: failure logs but doesn't
-// block provisioning. Backup itself works without this; PITR requires it.
-func (p *DockerPostgreSQLProvisioner) enableArchive(ctx context.Context, req domain.ProvisioningRequest, containerID, dbName string, timeout time.Duration) {
-	if req.Backup == nil || !req.Backup.Enabled {
-		return
-	}
-	if err := p.ConfigureArchive(ctx, containerID, "cp %p /walarchive/%f", defaultPostgresSuperuser); err != nil {
-		fmt.Printf("WARN: configure archive for %s: %v\n", req.ProjectName, err)
-		return
-	}
-	// Re-probe readiness after the restart.
-	_ = p.waitForPostgresReady(ctx, containerID, dbName, timeout)
 }
 
 // Pause stops the project's postgres container without removing it.
@@ -375,63 +361,6 @@ func (p *DockerPostgreSQLProvisioner) ConfigureBackup(ctx context.Context, names
 	// Docker mode backup is configured via WAL-G sidecars at the daemon level;
 	// the provisioner does not manage backup containers directly.
 	return nil
-}
-
-// ConfigureArchive enables continuous WAL archiving on the project's
-// postgres container. Must be called *after* the container is up and
-// pg is query-ready. The container is restarted at the end because
-// `archive_mode` is changed only on (re)start, not on reload.
-//
-// Order:
-//
-//  1. ALTER SYSTEM SET wal_level = 'replica'    (safe to reload)
-//  2. ALTER SYSTEM SET archive_mode = 'on'      (needs restart)
-//  3. ALTER SYSTEM SET archive_command = '...'  (safe to reload)
-//  4. Stop + start container
-//
-// After the restart, pg picks up archive_mode=on and starts shipping
-// WAL segments via archive_command. The platform's WAL-G sidecar
-// then ships them to S3.
-func (p *DockerPostgreSQLProvisioner) ConfigureArchive(ctx context.Context, containerID, archiveCommand, superuser string) error {
-	// Build a single SQL string with three ALTER SYSTEMs so we minimise
-	// docker exec round trips (each exec carries 1-2s of overhead).
-	sql := fmt.Sprintf(
-		"ALTER SYSTEM SET wal_level = 'replica'; "+
-			"ALTER SYSTEM SET archive_mode = 'on'; "+
-			"ALTER SYSTEM SET archive_command = %s;",
-		quoteSQLString(archiveCommand))
-	if _, err := p.docker.ExecInContainer(ctx, containerID, []string{"psql", "-U", superuser, "-c", sql}); err != nil {
-		return fmt.Errorf("psql ALTER SYSTEM: %w", err)
-	}
-
-	// archive_mode is read at startup only — reload won't pick it up.
-	// Stop + start gives pg a clean restart cycle.
-	if err := p.docker.StopContainer(ctx, containerID); err != nil {
-		return fmt.Errorf("stop for archive restart: %w", err)
-	}
-	if err := p.docker.StartContainer(ctx, containerID); err != nil {
-		return fmt.Errorf("start after archive ALTER: %w", err)
-	}
-	return nil
-}
-
-// quoteSQLString single-quote-escapes a string for safe inclusion in
-// an ALTER SYSTEM SET statement. archive_command is operator-controlled
-// (not user input) but we still want to avoid surprising breakage if
-// the value contains a single quote — wrap in '...' and double any
-// embedded quote per Postgres lexical rules.
-func quoteSQLString(s string) string {
-	out := make([]byte, 0, len(s)+2)
-	out = append(out, '\'')
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\'' {
-			out = append(out, '\'', '\'')
-			continue
-		}
-		out = append(out, s[i])
-	}
-	out = append(out, '\'')
-	return string(out)
 }
 
 // waitForPostgresReady polls Postgres readiness inside the container and

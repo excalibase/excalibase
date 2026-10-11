@@ -86,6 +86,8 @@ type ProvisioningService struct {
 	// backupPurger deletes a project's backup objects on request at
 	// deprovision time. nil means confirmDeleteBackups is refused.
 	backupPurger *BackupPurger
+	// backupSchedules runs a single host's Postgres projects' backups (EXC-593).
+	backupSchedules BackupSchedules
 	// deletionPauser stops a project for its deletion grace period.
 	deletionPauser DeletionPauser
 	// retainedBackups dates the kept backups of deleted projects for purging.
@@ -816,7 +818,7 @@ func (s *ProvisioningService) settleBackupSchedule(req *domain.ProvisioningReque
 		req.Backup.Schedule = s.backupDefaults.Schedule
 	}
 	if req.Backup.Schedule == "" && s.defaultDeploymentMode == domain.ModeDocker {
-		return nil
+		req.Backup.Schedule = defaultBackupSchedule
 	}
 	return k8s.ValidateBackupSchedule(req.Backup.Schedule)
 }
@@ -1196,6 +1198,9 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	// quarantine here, not back into the pool.
 	if s.endpoints != nil {
 		steps = append(steps, deletionStep{domain.DeletionStepReleaseEndpoint, s.releasePublicEndpoint})
+	}
+	if s.backupSchedules != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepStopBackupSchedule, s.stopBackupSchedule})
 	}
 	steps = append(steps, deletionStep{domain.DeletionStepRevokeNats, s.revokeNatsCredentials})
 	// On a single host the apps share the database's network, so they go while it stands.
