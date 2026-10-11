@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
@@ -22,4 +23,21 @@ func MySQLBackupSchedule(tier domain.TierType) (string, error) {
 		return "", fmt.Errorf("no MySQL backup schedule for tier %s", tier)
 	}
 	return schedule, nil
+}
+
+// mysqlBackupIntervals are the schedules' periods: a single host takes MySQL
+// backups itself and runs one once the last is this old.
+var mysqlBackupIntervals = map[domain.TierType]time.Duration{
+	domain.Free:       6 * time.Hour,
+	domain.Standard:   time.Hour,
+	domain.Enterprise: time.Hour,
+}
+
+// MySQLBackupInterval is how often a MySQL project of tier is backed up.
+func MySQLBackupInterval(tier domain.TierType) (time.Duration, error) {
+	interval, ok := mysqlBackupIntervals[tier]
+	if !ok {
+		return 0, fmt.Errorf("no MySQL backup interval for tier %s", tier)
+	}
+	return interval, nil
 }

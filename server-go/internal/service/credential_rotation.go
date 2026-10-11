@@ -278,7 +278,7 @@ func (s *ProvisioningService) resumePendingPassword(pendingPath string, filed bo
 // server records it in its audit log.
 func (s *ProvisioningService) alterRolePassword(ctx context.Context, inst *domain.DatabaseInstance, username, password string) error {
 	if inst.DBType == domain.MySQL {
-		mysql, err := s.mysqlProvisioner()
+		mysql, err := s.mysqlServerOf()
 		if err != nil {
 			return err
 		}

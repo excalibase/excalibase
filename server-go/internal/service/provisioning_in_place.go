@@ -74,11 +74,11 @@ func (s *ProvisioningService) AnnounceDatabaseReplaced(ctx context.Context, proj
 // sign in with a client certificate are left alone: the kept CA still signs
 // their certificates. See InPlaceProjects.
 func (s *ProvisioningService) ReapplyCredentials(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if inst.DBType == domain.MySQL && s.vault != nil {
+		return s.reapplyMySQLCredentials(ctx, inst)
+	}
 	if s.vault == nil || s.k8sClient == nil {
 		return ErrCredentialRotationUnavailable
-	}
-	if inst.DBType == domain.MySQL {
-		return s.reapplyMySQLCredentials(ctx, inst)
 	}
 	filed, err := s.filedCredentialPaths(inst.ProjectID)
 	if err != nil {

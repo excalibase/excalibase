@@ -52,34 +52,42 @@ func (p *DockerMySQLProvisioner) Provision(ctx context.Context, req domain.Provi
 	if err != nil {
 		return nil, err
 	}
-	spec, err := MySQLContainerSpec(req.ProjectName, image, tier)
+	cb(domain.StageContainerCreation)
+	container, err := p.StartEmpty(ctx, req.ProjectName, image, tier)
 	if err != nil {
 		return nil, err
 	}
-	cb(domain.StageContainerCreation)
-	if _, err := p.docker.CreateContainerSpec(ctx, spec); err != nil {
-		return nil, fmt.Errorf("create container: %w", err)
-	}
-	if err := p.docker.StartContainer(ctx, spec.Name); err != nil {
-		return nil, fmt.Errorf("start container: %w", err)
-	}
 	cb(domain.StageWaitingForReady)
-	if err := p.AwaitServing(ctx, spec.Name); err != nil {
-		return nil, err
-	}
 	cb(domain.StageCredentialGeneration)
-	if _, err := p.run(ctx, spec.Name, "CREATE DATABASE IF NOT EXISTS "+mysqlIdent(database)+";"); err != nil {
+	if _, err := p.run(ctx, container, "CREATE DATABASE IF NOT EXISTS "+mysqlIdent(database)+";"); err != nil {
 		return nil, fmt.Errorf("create database %s: %w", database, err)
 	}
 	cb(domain.StageCompleted)
 	return &ProvisioningResult{
-		Host:         spec.Name,
+		Host:         container,
 		Port:         mysqlPort,
 		DatabaseName: database,
 		Username:     MySQLUserAdmin,
 		SSLMode:      "REQUIRED",
-		Namespace:    spec.Name,
+		Namespace:    container,
 	}, nil
+}
+
+// StartEmpty creates and starts the project's container on image and returns
+// once mysqld answers. A container that was created is named even on failure,
+// so the caller can remove it.
+func (p *DockerMySQLProvisioner) StartEmpty(ctx context.Context, projectID, image string, plan config.TierConfig) (string, error) {
+	spec, err := MySQLContainerSpec(projectID, image, plan)
+	if err != nil {
+		return "", err
+	}
+	if _, err := p.docker.CreateContainerSpec(ctx, spec); err != nil {
+		return "", fmt.Errorf("create container: %w", err)
+	}
+	if err := p.docker.StartContainer(ctx, spec.Name); err != nil {
+		return spec.Name, fmt.Errorf("start container: %w", err)
+	}
+	return spec.Name, p.AwaitServing(ctx, spec.Name)
 }
 
 // AwaitServing returns once a query answers over the socket.
@@ -198,4 +206,10 @@ func (p *DockerMySQLProvisioner) RemoveContainer(ctx context.Context, container 
 		}
 		return []string{container + " (" + status + ")"}, nil
 	})
+}
+
+// RemoveDatabase removes a database added to a project: on a single host the
+// container is the database.
+func (p *DockerMySQLProvisioner) RemoveDatabase(ctx context.Context, namespace, projectID string) error {
+	return p.Deprovision(ctx, namespace, projectID)
 }

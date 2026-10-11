@@ -26,7 +26,7 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 	if err := s.assertNoStoredCredentials(inst.ProjectID); err != nil {
 		return pc.Fail(err)
 	}
-	mysql, err := s.mysqlProvisioner()
+	mysql, err := s.mysqlServerOf()
 	if err != nil {
 		return pc.Fail(err)
 	}
@@ -155,7 +155,7 @@ func (s *ProvisioningService) reapplyMySQLCredentials(ctx context.Context, inst 
 	if len(passwords) == 0 {
 		return nil
 	}
-	mysql, err := s.mysqlProvisioner()
+	mysql, err := s.mysqlServerOf()
 	if err != nil {
 		return err
 	}
