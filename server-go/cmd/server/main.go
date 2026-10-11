@@ -151,7 +151,7 @@ func runServer(cfg config.AppConfig) {
 	if err := verifyAppDomainIssuer(context.Background(), cfg, k8sClient); err != nil {
 		log.Fatalf("custom domains: %v", err)
 	}
-	factory, dockerClientRef := buildProvisionerFactory(cfg, k8sClient)
+	factory, dockerClientRef := buildProvisionerFactory(cfg, k8sClient, sqlStore)
 	singleHostApps, err := buildSingleHostAppRuntime(context.Background(), cfg, dockerClientRef, store)
 	if err != nil {
 		log.Fatalf("app hosting: %v", err)
@@ -2490,7 +2490,7 @@ func dbBindAddr(cfg config.AppConfig) string {
 	return "127.0.0.1"
 }
 
-func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*provisioner.Factory, provisioner.DockerClient) {
+func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient, sqlStore storage.PlatformStore) (*provisioner.Factory, provisioner.DockerClient) {
 	if cfg.ProvisionerMode == "docker" {
 		dockerClient, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
 			Host:        cfg.DockerHost,
@@ -2505,7 +2505,13 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*p
 		log.Printf("Provisioner mode: docker (host=%s)", cfg.DockerHost)
 		dockerProvisioner := provisioner.NewDockerPostgreSQLProvisioner(dockerClient)
 		dockerProvisioner.SetDeletionPoller(deletionPoller())
-		return provisioner.NewFactory(dockerProvisioner, provisioner.NewDockerMySQLProvisioner(dockerClient)), dockerClient
+		mysql := provisioner.NewDockerMySQLProvisioner(dockerClient)
+		ports, err := singleHostPorts(cfg, sqlStore)
+		if err != nil {
+			log.Fatalf("single-host MySQL: %v", err)
+		}
+		mysql.SetHostPorts(ports)
+		return provisioner.NewFactory(dockerProvisioner, mysql), dockerClient
 	}
 	return buildK8sFactory(cfg, k8sClient), nil
 }

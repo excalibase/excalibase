@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,6 +89,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	hostPorts, err := hostPortRange(getenv("PROXY_HOST_PORTS"))
+	if err != nil {
+		return config{}, err
+	}
 	bindIPs := splitList(getenv("PROXY_PORT_BIND_IPS"))
 	if len(bindIPs) == 0 {
 		bindIPs = []string{"127.0.0.1"}
@@ -101,12 +106,28 @@ func loadConfig(getenv func(string) string) (config, error) {
 			NetworkPrefix:   networkPrefix,
 			VolumePrefix:    volumePrefix,
 			PortBindIPs:     bindIPs,
+			HostPorts:       hostPorts,
 			Runtimes:        splitList(getenv("PROXY_RUNTIMES")),
 			ContainerPrefix: containerPrefix,
 			EdgeContainer:   edge,
 			NetnsJoinImages: joinImages,
 		},
 	}, nil
+}
+
+// hostPortRange reads "low-high", the host ports tenants may be published
+// on by number; unset admits none. Privileged ports are never admitted.
+func hostPortRange(raw string) (engineproxy.HostPortRange, error) {
+	if strings.TrimSpace(raw) == "" {
+		return engineproxy.HostPortRange{}, nil
+	}
+	lowRaw, highRaw, found := strings.Cut(raw, "-")
+	low, lowErr := strconv.Atoi(strings.TrimSpace(lowRaw))
+	high, highErr := strconv.Atoi(strings.TrimSpace(highRaw))
+	if !found || lowErr != nil || highErr != nil || low < 1024 || high > 65535 || high < low {
+		return engineproxy.HostPortRange{}, fmt.Errorf("PROXY_HOST_PORTS %q is not a range of unprivileged ports like 30000-30999", raw)
+	}
+	return engineproxy.HostPortRange{Low: low, High: high}, nil
 }
 
 // scopedPrefix reads a per-project name prefix. It must extend the container

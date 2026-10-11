@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -35,4 +37,15 @@ func startHostMySQLBackups(adapter *service.HostMySQLBackupAdapter, store storag
 	}
 	go service.NewHostMySQLBackupSweep(adapter, store).Run(context.Background(), hostMySQLSweepInterval)
 	log.Printf("Single-host MySQL backups: sweep every %s", hostMySQLSweepInterval)
+}
+
+// singleHostPorts holds each single-host MySQL project's host port in the
+// platform store's port allocator (EXC-592), from the window the engine proxy
+// admits.
+func singleHostPorts(cfg config.AppConfig, sqlStore storage.PlatformStore) (*service.HostPortAllocator, error) {
+	endpoints, ok := sqlStore.(storage.DatabaseEndpointStore)
+	if !ok {
+		return nil, errors.New("the platform store holds no port allocator, so projects could not keep their host port")
+	}
+	return service.NewHostPortAllocator(endpoints, cfg.DBEndpointPorts, cfg.DBEndpointPortQuarantine), nil
 }

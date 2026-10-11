@@ -3,6 +3,8 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -19,7 +21,19 @@ type DockerMySQLProvisioner struct {
 	// the container to stop or go.
 	readyPoller Poller
 	stopPoller  Poller
+	// hostPorts holds each project's host port; nil lets the engine pick one
+	// on every start.
+	hostPorts HostPortAllocator
 }
+
+// HostPortAllocator holds one host port per project until it is deleted.
+type HostPortAllocator interface {
+	Allocate(ctx context.Context, projectID string) (int, error)
+	Release(ctx context.Context, projectID string) error
+}
+
+// SetHostPorts publishes every container on its project's own host port.
+func (p *DockerMySQLProvisioner) SetHostPorts(ports HostPortAllocator) { p.hostPorts = ports }
 
 // defaultDockerMySQLReady covers an image pull and datadir initialisation on
 // a slow disk.
@@ -81,13 +95,37 @@ func (p *DockerMySQLProvisioner) StartEmpty(ctx context.Context, projectID, imag
 	if err != nil {
 		return "", err
 	}
+	if p.hostPorts != nil {
+		port, err := p.hostPorts.Allocate(ctx, projectID)
+		if err != nil {
+			return "", fmt.Errorf("host port of %s: %w", projectID, err)
+		}
+		spec.Ports[strconv.Itoa(mysqlPort)] = strconv.Itoa(port)
+	}
 	if _, err := p.docker.CreateContainerSpec(ctx, spec); err != nil {
 		return "", fmt.Errorf("create container: %w", err)
 	}
-	if err := p.docker.StartContainer(ctx, spec.Name); err != nil {
+	if err := p.start(ctx, spec.Name); err != nil {
 		return spec.Name, fmt.Errorf("start container: %w", err)
 	}
 	return spec.Name, p.AwaitServing(ctx, spec.Name)
+}
+
+// start starts the container, waiting out a host port its predecessor has
+// just freed: rootless Podman's port forwarder can hold it a moment longer.
+func (p *DockerMySQLProvisioner) start(ctx context.Context, container string) error {
+	var last error
+	err := p.readyPoller.WaitUntilReady(ctx, "host port of "+container, func(ctx context.Context) (bool, error) {
+		last = p.docker.StartContainer(ctx, container)
+		if last != nil && strings.Contains(last.Error(), "address already in use") {
+			return false, nil
+		}
+		return true, last
+	})
+	if err != nil && last != nil {
+		return last
+	}
+	return err
 }
 
 // AwaitServing returns once a query answers over the socket.
@@ -181,7 +219,16 @@ func (p *DockerMySQLProvisioner) Deprovision(ctx context.Context, namespace, pro
 	if container == "" {
 		container = MySQLContainerName(projectID)
 	}
-	return p.RemoveContainer(ctx, container)
+	if err := p.RemoveContainer(ctx, container); err != nil {
+		return err
+	}
+	if p.hostPorts == nil {
+		return nil
+	}
+	if err := p.hostPorts.Release(ctx, projectID); err != nil {
+		return fmt.Errorf("release the host port of %s: %w", projectID, err)
+	}
+	return nil
 }
 
 // RemoveContainer stops and removes a container and waits until it is gone.
