@@ -42,7 +42,7 @@ func TestPublishingAMySQLProjectFrontsMOCOsPrimaryOn3306(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetPublic: %v", err)
 	}
-	spec, ok := f.kube.PublicDBServices[f.inst.Namespace+"/"+domain.DBEndpointServiceName(f.inst.ProjectID)]
+	spec, ok := f.kube.PublicDBServices[f.inst.Namespace+"/"+f.inst.ProjectID+"-mysql-public"]
 	if !ok || spec.ReadWriteService != "moco-proj-my0001-mysql-primary" || spec.TargetPort != 3306 ||
 		spec.PortName != "mysql" || spec.Port != view.Port {
 		t.Errorf("service %+v", spec)
@@ -84,7 +84,7 @@ func TestAMySQLEndpointIsWithdrawnOnPauseAndBackOnResume(t *testing.T) {
 	if _, err := f.svc.SetPublic(ctx, f.inst.ProjectID, true); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
-	name := f.inst.Namespace + "/" + domain.DBEndpointServiceName(f.inst.ProjectID)
+	name := f.inst.Namespace + "/" + f.inst.ProjectID + "-mysql-public"
 	if err := f.svc.Withdraw(ctx, f.inst); err != nil {
 		t.Fatalf("withdraw: %v", err)
 	}

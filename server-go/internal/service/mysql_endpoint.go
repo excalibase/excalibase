@@ -20,7 +20,7 @@ const mysqlPort = 3306
 // current primary, so a switchover moves the public port with it.
 func (s *DBEndpointService) mysqlServiceSpec(inst *domain.DatabaseInstance, port int) k8s.PublicDBServiceSpec {
 	return k8s.PublicDBServiceSpec{
-		Name:             domain.DBEndpointServiceName(inst.ProjectID),
+		Name:             publicServiceName(inst),
 		Port:             port,
 		TargetPort:       mysqlPort,
 		PortName:         "mysql",
@@ -52,7 +52,7 @@ func (s *DBEndpointService) mysqlView(ctx context.Context, inst *domain.Database
 		return DBEndpointView{}, err
 	}
 	if endpoint.IsPublic() {
-		view.Available, err = s.kube.PublicDBServiceExists(ctx, inst.Namespace, domain.DBEndpointServiceName(inst.ProjectID))
+		view.Available, err = s.kube.PublicDBServiceExists(ctx, inst.Namespace, publicServiceName(inst))
 		if err != nil {
 			return DBEndpointView{}, fmt.Errorf("read database endpoint state: %w", err)
 		}
@@ -68,4 +68,12 @@ func (s *DBEndpointService) mysqlView(ctx context.Context, inst *domain.Database
 // Postgres strings on this Developer-level surface do.
 func mysqlEndpointString(host string, port int, user, database string) string {
 	return "mysql://" + user + "@" + host + ":" + strconv.Itoa(port) + "/" + database + "?ssl-mode=REQUIRED"
+}
+
+// publicServiceName is the project's public Service, named for its engine.
+func publicServiceName(inst *domain.DatabaseInstance) string {
+	if inst.DBType == domain.MySQL {
+		return inst.ProjectID + "-mysql-public"
+	}
+	return domain.DBEndpointServiceName(inst.ProjectID)
 }

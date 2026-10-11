@@ -452,7 +452,7 @@ func (s *DBEndpointService) ensureObserved(ctx context.Context, inst *domain.Dat
 // closeIngressIfUnpublished withdraws the ingress rule a failed publish
 // opened, unless an earlier Service for the project is still answering.
 func (s *DBEndpointService) closeIngressIfUnpublished(ctx context.Context, inst *domain.DatabaseInstance, cause error) error {
-	exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, domain.DBEndpointServiceName(inst.ProjectID))
+	exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, publicServiceName(inst))
 	if err != nil {
 		return errors.Join(cause, fmt.Errorf("confirm database endpoint: %w", err))
 	}
@@ -471,7 +471,7 @@ func (s *DBEndpointService) publishServices(ctx context.Context, inst *domain.Da
 		return s.ensureServiceObserved(ctx, inst, s.mysqlServiceSpec(inst, port))
 	}
 	if err := s.ensureServiceObserved(ctx, inst, k8s.PublicDBServiceSpec{
-		Name:             domain.DBEndpointServiceName(inst.ProjectID),
+		Name:             publicServiceName(inst),
 		Port:             port,
 		ReadWriteService: inst.ProjectID + "-postgres-rw",
 		SharedIPKey:      s.sharedIPKey,
@@ -532,7 +532,7 @@ func (s *DBEndpointService) deleteObserved(ctx context.Context, inst *domain.Dat
 	// Both Services go. A Mongo Service left behind would publish a port
 	// whose gateway is gone, and the port could not be safely reissued while
 	// it still answered.
-	names := []string{domain.DBEndpointServiceName(inst.ProjectID)}
+	names := []string{publicServiceName(inst)}
 	if inst.DocumentDB {
 		names = append(names, domain.DBEndpointMongoServiceName(inst.ProjectID))
 	}
@@ -644,7 +644,7 @@ func (s *DBEndpointService) addPublicEndpoint(
 		return err
 	}
 	if endpoint.IsPublic() {
-		view.Available, err = s.kube.PublicDBServiceExists(ctx, inst.Namespace, domain.DBEndpointServiceName(inst.ProjectID))
+		view.Available, err = s.kube.PublicDBServiceExists(ctx, inst.Namespace, publicServiceName(inst))
 		if err != nil {
 			return fmt.Errorf("read database endpoint state: %w", err)
 		}
