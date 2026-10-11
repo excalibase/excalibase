@@ -108,7 +108,7 @@ export function ProvisionPage() {
   // No default major, on purpose: see PostgresVersionPicker.
   const [postgresVersion, setPostgresVersion] = useState('');
   const [documentDb, setDocumentDb] = useState(false);
-  const [mysqlVersion, setMySQLVersion] = useState('');
+  const [mysqlVersion, setMysqlVersion] = useState('');
   const { enabled: mysqlOn } = useFeatureEnabled('mysql');
   const mysqlCatalog = useMySQLCatalog(mysqlOn);
 
@@ -120,7 +120,7 @@ export function ProvisionPage() {
     : null;
   const engines = ENGINES.map((card) => {
     if (card.engine === 'DOCUMENTDB' && documentDbClosed) return { ...card, desc: documentDbClosed, disabled: true };
-    if (card.engine === 'MYSQL' && mysqlOn) return { ...card, desc: 'MOCO operator, MySQL 8.4', disabled: false };
+    if (card.engine === 'MYSQL' && mysqlOn) return { ...card, desc: 'MySQL 8.4, TLS required', disabled: false };
     return card;
   });
 
@@ -139,7 +139,7 @@ export function ProvisionPage() {
     setEngine(next);
     setDocumentDb(false);
     if (next === 'DOCUMENTDB' && !findMajor(catalog.data, postgresVersion)?.documentDb) setPostgresVersion('');
-    if (next === 'MYSQL' && !mysqlVersion) setMySQLVersion(mysqlCatalog.data?.defaultVersion ?? '');
+    if (next === 'MYSQL' && !mysqlVersion) setMysqlVersion(mysqlCatalog.data?.defaultVersion ?? '');
   };
   const isDocumentDbEngine = engine === 'DOCUMENTDB';
   const isMySQL = engine === 'MYSQL';
@@ -312,7 +312,7 @@ export function ProvisionPage() {
                 isLoading={mysqlCatalog.isLoading}
                 error={mysqlCatalog.error}
                 version={mysqlVersion}
-                onVersionChange={setMySQLVersion}
+                onVersionChange={setMysqlVersion}
               />
             )}
             {!withoutDatabase && !isMySQL && (

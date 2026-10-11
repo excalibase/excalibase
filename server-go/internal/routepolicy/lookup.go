@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
@@ -40,6 +41,14 @@ func buildLookup() {
 // reported as such; a caller deciding access treats that as a refusal.
 func Lookup(method, path string) (Row, bool) {
 	lookupOnce.Do(buildLookup)
+	if row, ok := lookupExact(method, path); ok || strings.HasSuffix(path, "/") {
+		return row, ok
+	}
+	// A subtree's root is served with and without its slash.
+	return lookupExact(method, path+"/")
+}
+
+func lookupExact(method, path string) (Row, bool) {
 	var matched Row
 	ctx := context.WithValue(context.Background(), matchedRowKey{}, &matched)
 	request := (&http.Request{Method: method, URL: &url.URL{Path: path}, Header: http.Header{}}).WithContext(ctx)
@@ -52,4 +61,6 @@ type discardResponse struct{}
 
 func (discardResponse) Header() http.Header         { return http.Header{} }
 func (discardResponse) Write(b []byte) (int, error) { return len(b), nil }
-func (discardResponse) WriteHeader(int)             {}
+func (discardResponse) WriteHeader(int) {
+	// A lookup reads the matched row, never the status.
+}

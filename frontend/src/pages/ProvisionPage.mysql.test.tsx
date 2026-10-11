@@ -54,6 +54,9 @@ describe('ProvisionPage — MySQL', () => {
     const user = userEvent.setup();
     const card = await screen.findByTestId('engine-MYSQL');
     await vi.waitFor(() => expect(card).toBeEnabled());
+    // The same card on Kubernetes and on a single host: no operator named.
+    expect(card).toHaveTextContent('MySQL 8.4');
+    expect(card).not.toHaveTextContent('MOCO');
     await user.click(card);
     expect(await screen.findByTestId('mysql-version-8.4.10')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByTestId('pg-version-section')).not.toBeInTheDocument();

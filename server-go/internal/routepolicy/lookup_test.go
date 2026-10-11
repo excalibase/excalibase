@@ -34,3 +34,12 @@ func TestLookupFindsEveryRowByItsOwnPath(t *testing.T) {
 		}
 	}
 }
+
+// Studio asks for ".../db-endpoint" while the row is ".../db-endpoint/"; the
+// router serves both, so the table must answer both (EXC-592).
+func TestLookupFindsASlashRowWithoutItsSlash(t *testing.T) {
+	row, ok := Lookup("GET", "/api/projects/proj-1/db-endpoint")
+	if !ok || !row.MySQL {
+		t.Fatalf("found %v, row %+v", ok, row)
+	}
+}

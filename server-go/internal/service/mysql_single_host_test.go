@@ -235,3 +235,17 @@ func tarOf(name string, body []byte) io.Reader {
 	_ = writer.Close()
 	return &buffer
 }
+
+func TestSingleHostMySQLIsTheInstallationsMySQLServer(t *testing.T) {
+	svc, _, _ := setupSingleHostMySQL(t)
+	if svc.SingleHostMySQL() == nil || svc.MySQLWorkReader() == nil {
+		t.Fatal("a single host serves MySQL through its container provisioner")
+	}
+	if NewMySQLEngineActivity(svc.MySQLWorkReader()) == nil {
+		t.Fatal("no activity reader")
+	}
+	k8s, _, _ := setupMySQLTest(t)
+	if k8s.SingleHostMySQL() != nil || k8s.MySQLWorkReader() == nil {
+		t.Fatal("Kubernetes serves MySQL through MOCO")
+	}
+}

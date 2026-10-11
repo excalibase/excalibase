@@ -43,6 +43,9 @@ func (s *SingleHostEndpointService) Describe(ctx context.Context, projectID stri
 	if err != nil {
 		return DBEndpointView{}, fmt.Errorf("read the database container of %s: %w", projectID, err)
 	}
+	if inst.DBType == domain.MySQL {
+		return singleHostMySQLView(inst, database), nil
+	}
 	view := DBEndpointView{
 		ProjectID:     inst.ProjectID,
 		PublicOffered: true,
@@ -67,6 +70,32 @@ func (s *SingleHostEndpointService) Describe(ctx context.Context, projectID stri
 		}
 	}
 	return view, nil
+}
+
+// singleHostMySQLView is the loopback port mysqld publishes; every platform
+// user requires TLS, so there is no plaintext string.
+func singleHostMySQLView(inst *domain.DatabaseInstance, database provisioner.ContainerState) DBEndpointView {
+	view := DBEndpointView{
+		ProjectID:     inst.ProjectID,
+		PublicOffered: true,
+		Enabled:       true,
+		SingleHost:    true,
+		RequireTLS:    true,
+		Host:          singleHostLoopback,
+		Database:      inst.DatabaseName,
+		Username:      inst.Username,
+		Engine:        domain.CredentialEngineMySQL,
+		Internal: DBEndpointInternal{
+			Host:             inst.Host,
+			Port:             mysqlPort,
+			ConnectionString: mysqlEndpointString(inst.Host, mysqlPort, inst.Username, inst.DatabaseName),
+		},
+	}
+	if port := database.HostPorts[strconv.Itoa(mysqlPort)]; database.Running && port > 0 {
+		view.Available, view.Port = true, port
+		view.Connection.RequireTLS = mysqlEndpointString(singleHostLoopback, port, inst.Username, inst.DatabaseName)
+	}
+	return view
 }
 
 // addMongo fills in the gateway's port and the CA its certificate is signed

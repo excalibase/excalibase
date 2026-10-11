@@ -201,6 +201,7 @@ services:
       # Features that ship dark (EXC-554): off unless the env file says "true".
       FEATURE_MCP: ${FEATURE_MCP:-false}
       FEATURE_PIPELINE: ${FEATURE_PIPELINE:-false}
+      FEATURE_MYSQL: ${FEATURE_MYSQL:-false}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.
       SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}

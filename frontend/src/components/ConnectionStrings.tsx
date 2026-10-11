@@ -258,6 +258,7 @@ function MySQLSection({ credentials, endpoint, shownPassword }: SectionProps) {
           database port.
         </p>
       )}
+      {external && endpoint?.singleHost && <SshTunnelNote port={external.port} />}
       {credentials.jdbcUrl && (
         <StringRow testId="conn-mysql-jdbc" label="JDBC (Connector/J) — pass the username and password separately" shown={credentials.jdbcUrl} copied={credentials.jdbcUrl} />
       )}
