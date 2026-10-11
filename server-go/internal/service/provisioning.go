@@ -637,12 +637,12 @@ func (s *ProvisioningService) databaseTier(ctx context.Context, req *domain.Prov
 // project and adding a database to one are admitted by the same rules.
 func (s *ProvisioningService) admitDatabase(ctx context.Context, req *domain.ProvisioningRequest, tierType domain.TierType,
 	tier config.TierConfig, projectRef string) (provisioner.DatabaseProvisioner, string, error) {
-	// MySQL backups come with their own ticket (EXC-586); until then a MySQL
-	// project gets none rather than a Postgres backup it cannot run.
-	if req.DBType != domain.MySQL {
-		if err := s.admitBackups(ctx, req, tierType, tier, projectRef); err != nil {
-			return nil, "", err
-		}
+	admit := s.admitBackups
+	if req.DBType == domain.MySQL {
+		admit = s.admitMySQLBackups
+	}
+	if err := admit(ctx, req, tierType, tier, projectRef); err != nil {
+		return nil, "", err
 	}
 
 	if err := s.RequireNodeSpread(ctx, tierType, tier); err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -44,13 +45,12 @@ func (p *MySQLProvisioner) WriteBackupAccess(ctx context.Context, namespace, sec
 	if err != nil {
 		return err
 	}
-	if _, err := p.client.GetSecret(ctx, namespace, secret); err == nil {
+	err = p.client.CreateSecret(ctx, namespace, secret, data)
+	if apierrors.IsAlreadyExists(err) {
 		err = p.client.UpdateSecret(ctx, namespace, secret, data)
-		if err != nil {
-			return fmt.Errorf("update %s: %w", secret, err)
-		}
-	} else if err := p.client.CreateSecret(ctx, namespace, secret, data); err != nil {
-		return fmt.Errorf("create %s: %w", secret, err)
+	}
+	if err != nil {
+		return fmt.Errorf("write %s: %w", secret, err)
 	}
 	if err := p.client.ApplyCRD(ctx, k8s.ServiceAccountGVR, namespace, k8s.BuildMySQLBackupServiceAccount(namespace)); err != nil {
 		return fmt.Errorf("create the backup service account: %w", err)

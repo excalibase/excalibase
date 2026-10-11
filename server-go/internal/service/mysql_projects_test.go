@@ -51,7 +51,9 @@ func TestValidateMySQLRequest(t *testing.T) {
 		"postgres settings": func(r *domain.ProvisioningRequest) {
 			r.Parameters = map[string]string{"work_mem": "4MB"}
 		},
-		"backups": func(r *domain.ProvisioningRequest) { r.Backup = &domain.BackupSettings{Enabled: true} },
+		"a backup schedule": func(r *domain.ProvisioningRequest) {
+			r.Backup = &domain.BackupSettings{Enabled: true, Schedule: "0 3 * * *"}
+		},
 	}
 	for name, change := range refused {
 		req := mysqlProvisionRequest("")
@@ -113,8 +115,8 @@ func TestProvisionMySQLProject(t *testing.T) {
 	if inst.Host != k8s.MySQLPrimaryHost(inst.ProjectID, inst.Namespace) || inst.Port == nil || *inst.Port != 3306 {
 		t.Errorf("endpoint %s:%v", inst.Host, inst.Port)
 	}
-	if inst.BackupEnabled != nil && *inst.BackupEnabled {
-		t.Error("a MySQL project recorded backups it does not have yet")
+	if inst.BackupEnabled == nil || !*inst.BackupEnabled || inst.BackupSchedule != "0 */6 * * *" {
+		t.Errorf("a Free MySQL project is backed up every 6 hours; recorded %v %q", inst.BackupEnabled, inst.BackupSchedule)
 	}
 	for _, cmd := range mock.ExecCommands {
 		if strings.Contains(cmd, "psql") {
