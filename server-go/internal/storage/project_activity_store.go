@@ -25,3 +25,12 @@ type ProjectActivityStore interface {
 	// ListProjectActivity returns every marker keyed by project id.
 	ListProjectActivity(ctx context.Context) (map[string]domain.ProjectActivity, error)
 }
+
+// DatabaseWorkStore keeps the last reading of a project's client work, read
+// from its database by the idle sweep (EXC-588).
+type DatabaseWorkStore interface {
+	// DatabaseWork is the last stored reading; false when there is none.
+	DatabaseWork(ctx context.Context, projectID string) (int64, bool, error)
+	// SaveDatabaseWork stores a reading in place of the last one.
+	SaveDatabaseWork(ctx context.Context, projectID string, work int64, readAt time.Time) error
+}

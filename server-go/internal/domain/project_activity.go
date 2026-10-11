@@ -36,6 +36,9 @@ const (
 	ActivitySourceBackup         ActivitySource = "backup"
 	ActivitySourceRealtime       ActivitySource = "realtime"
 	ActivitySourceStorage        ActivitySource = "storage"
+	// ActivitySourceDatabase is client work read from the database itself,
+	// for engines whose apps connect directly (MySQL, EXC-588).
+	ActivitySourceDatabase ActivitySource = "database"
 )
 
 // String returns the canonical literal for a known source. Anything outside
@@ -61,6 +64,8 @@ func (s ActivitySource) String() string {
 		return "realtime"
 	case ActivitySourceStorage:
 		return "storage"
+	case ActivitySourceDatabase:
+		return "database"
 	default:
 		return "api"
 	}

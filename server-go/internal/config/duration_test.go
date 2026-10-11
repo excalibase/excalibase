@@ -119,3 +119,15 @@ func TestLoadReadsThePlatformDBMaxConns(t *testing.T) {
 		t.Errorf("PlatformDBMaxConns: got %d, want 33", got)
 	}
 }
+
+// EXC-588: the idle sweep's period, hourly unless the operator sets it.
+func TestLoadReadsTheAutoPauseInterval(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.excalibase.io")
+	if got := Load().AutoPauseInterval; got != time.Hour {
+		t.Errorf("AutoPauseInterval default: got %v, want 1h", got)
+	}
+	t.Setenv("EXCALIBASE_AUTOPAUSE_INTERVAL", "2m")
+	if got := Load().AutoPauseInterval; got != 2*time.Minute {
+		t.Errorf("AutoPauseInterval: got %v, want 2m", got)
+	}
+}

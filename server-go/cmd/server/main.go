@@ -637,9 +637,10 @@ func startIdlePauseScheduler(
 		Pauser:    pauseSvc,
 		// A project left in RESUMING has its database up and no CDC, and
 		// nothing else would ever notice (EXC-403).
-		Resumer: pauseSvc,
-		Audit:   sqlStore,
-		Lock:    lock,
+		Resumer:  pauseSvc,
+		Audit:    sqlStore,
+		Lock:     lock,
+		Interval: cfg.AutoPauseInterval,
 		Notifier: service.NewIdleWarnEmail(service.IdleWarnEmailConfig{
 			Users:        sqlStore,
 			Sender:       sender,
@@ -647,8 +648,11 @@ func startIdlePauseScheduler(
 			DashboardURL: studioURL(cfg),
 		}),
 	})
+	if reader := mysqlIdleActivity(cfg, provSvc.MySQLProvisioner()); reader != nil {
+		scheduler.SetEngineActivity(domain.MySQL, reader, sqlStore)
+	}
 	scheduler.Start(context.Background())
-	log.Printf("Idle auto-pause sweep started (every %s; warning at N-1 days, pause at N per tier)", service.DefaultIdlePauseInterval)
+	log.Printf("Idle auto-pause sweep started (every %s; warning at N-1 days, pause at N per tier)", cfg.AutoPauseInterval)
 	return scheduler.Stop
 }
 
@@ -2504,6 +2508,16 @@ func buildK8sFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) *provisione
 	mysql := provisioner.NewMySQLProvisioner(k8sClient)
 	mysql.SetBackupPathStyle(backupUsePathStyle())
 	return provisioner.NewFactory(pgProvisioner, mysql)
+}
+
+// mysqlIdleActivity is what the idle sweep judges MySQL projects by: their
+// clients' work read from MOCO's mysqld (EXC-588), behind the mysql feature.
+// Without it MySQL projects are never paused for idleness.
+func mysqlIdleActivity(cfg config.AppConfig, mysql *provisioner.MySQLProvisioner) service.EngineActivityReader {
+	if mysql == nil || !mysqlCreationAllowed(cfg) {
+		return nil
+	}
+	return service.NewMySQLEngineActivity(mysql)
 }
 
 // mysqlCreationAllowed is the mysql feature: whether new MySQL projects may be

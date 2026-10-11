@@ -19,6 +19,7 @@ type PlatformStore interface {
 	OrgStore
 	TierConfigStore
 	ProjectActivityStore
+	DatabaseWorkStore
 	EmailVerificationStore
 	StudioIdentityStore
 	io.Closer
