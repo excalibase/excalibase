@@ -73,6 +73,16 @@ func (p *MySQLProvisioner) AttachBackups(ctx context.Context, opts k8s.MySQLBack
 	})
 }
 
+// LinkBackupPolicy links the cluster to the policy already in its namespace.
+func (p *MySQLProvisioner) LinkBackupPolicy(ctx context.Context, namespace, projectID string) error {
+	if _, err := p.client.GetCRD(ctx, k8s.MOCOBackupPolicyGVR, namespace, k8s.MySQLBackupPolicyName(projectID)); err != nil {
+		return fmt.Errorf("read the backup policy: %w", err)
+	}
+	return p.updateCluster(ctx, namespace, projectID, func(cluster *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+		return k8s.WithMySQLBackupPolicy(cluster, projectID), nil
+	})
+}
+
 // attachProvisionedBackups starts a new project's backups once it serves.
 func (p *MySQLProvisioner) attachProvisionedBackups(ctx context.Context, req domain.ProvisioningRequest, opts k8s.MySQLClusterOpts, pc *ProvisionContext) error {
 	if req.Backup == nil || !req.Backup.Enabled {
@@ -135,10 +145,11 @@ func (p *MySQLProvisioner) ApplyRestoredCluster(ctx context.Context, opts k8s.My
 	if err != nil {
 		return err
 	}
-	return p.applyRestore(ctx, cluster, source, job)
+	return p.ApplyRestore(ctx, cluster, source, job)
 }
 
-func (p *MySQLProvisioner) applyRestore(ctx context.Context, cluster *unstructured.Unstructured, source k8s.MySQLRestoreSource, job k8s.MySQLBackupOpts) error {
+// ApplyRestore creates cluster as one MOCO fills from source.
+func (p *MySQLProvisioner) ApplyRestore(ctx context.Context, cluster *unstructured.Unstructured, source k8s.MySQLRestoreSource, job k8s.MySQLBackupOpts) error {
 	restoring, err := k8s.WithMySQLRestore(cluster, source, job)
 	if err != nil {
 		return err

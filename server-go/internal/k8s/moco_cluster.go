@@ -68,6 +68,12 @@ func MySQLPodName(projectID string, n int64) string {
 	return fmt.Sprintf("moco-%s-%d", MySQLClusterName(projectID), n)
 }
 
+// MySQLDataClaimPrefix starts the name of every data volume of the
+// project's cluster: <claim>-moco-<cluster>-<n>, the StatefulSet's naming.
+func MySQLDataClaimPrefix(projectID string) string {
+	return mysqlDataClaim + "-moco-" + MySQLClusterName(projectID) + "-"
+}
+
 // MySQLPodSelector matches every instance of the project's cluster.
 func MySQLPodSelector(projectID string) string {
 	return "app.kubernetes.io/name=mysql,app.kubernetes.io/created-by=moco,app.kubernetes.io/instance=" + MySQLClusterName(projectID)
