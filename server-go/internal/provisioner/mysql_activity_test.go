@@ -28,7 +28,7 @@ func TestMySQLClientWork_SumsEveryInstance(t *testing.T) {
 	if len(queries) != 3 {
 		t.Fatalf("queries %v", mock.ExecCommands)
 	}
-	for _, excluded := range []string{"'moco-%'", "'mysql.%'", "'" + MySQLUserWatcher + "'"} {
+	for _, excluded := range []string{"'moco-%'", "'mysql.%'", "'root'", "'event_scheduler'", "'" + MySQLUserWatcher + "'"} {
 		if !strings.Contains(queries[0], excluded) {
 			t.Errorf("platform user %s is counted: %s", excluded, queries[0])
 		}

@@ -9,9 +9,11 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
-// mysqlClientUsers excludes the work MOCO (moco-*), mysqld itself (mysql.*,
-// and NULL for its background threads) and the platform's CDC watcher do.
-const mysqlClientUsers = "USER IS NOT NULL AND USER NOT LIKE 'moco-%' AND USER NOT LIKE 'mysql.%' AND USER <> '" + MySQLUserWatcher + "'"
+// mysqlClientUsers excludes the work MOCO (moco-*, and root while it
+// initializes the data directory), mysqld itself (mysql.*, event_scheduler,
+// NULL for background threads) and the platform's CDC watcher do.
+const mysqlClientUsers = "USER IS NOT NULL AND USER NOT LIKE 'moco-%' AND USER NOT LIKE 'mysql.%' " +
+	"AND USER NOT IN ('root', 'event_scheduler', '" + MySQLUserWatcher + "')"
 
 // mysqlClientWorkSQL is the statements the clients ran plus the connections
 // they opened since mysqld started; both only grow while it runs.
