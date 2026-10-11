@@ -218,7 +218,7 @@ func (p *DockerMySQLProvisioner) Resume(ctx context.Context, namespace, _ string
 	if namespace == "" {
 		return fmt.Errorf("docker resume: the project's container is not recorded")
 	}
-	if err := p.docker.StartContainer(ctx, namespace); err != nil {
+	if err := p.start(ctx, namespace); err != nil {
 		return fmt.Errorf("start container: %w", err)
 	}
 	return p.AwaitServing(ctx, namespace)
