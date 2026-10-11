@@ -285,10 +285,10 @@ type AppConfig struct {
 	// AutoPauseInterval is how often the idle sweep runs
 	// (EXCALIBASE_AUTOPAUSE_INTERVAL, default hourly).
 	AutoPauseInterval time.Duration
-	// ResumeRetryAfter is how long a project sits in RESUMING, its row
-	// unwritten, before the sweep retries the resume
-	// (EXCALIBASE_RESUME_RETRY_AFTER, default 10m, EXC-590).
-	ResumeRetryAfter time.Duration
+	// StuckRetryAfter is how long a project sits in PAUSING or RESUMING, its
+	// row unwritten, before the sweep retries the operation
+	// (EXCALIBASE_STUCK_RETRY_AFTER, default 10m, EXC-590).
+	StuckRetryAfter time.Duration
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
@@ -408,7 +408,7 @@ func load() AppConfig {
 	return AppConfig{
 		AutoPauseEnabled:         envBool("EXCALIBASE_AUTOPAUSE_ENABLED", deploymentMode == "cloud"),
 		AutoPauseInterval:        envDuration("EXCALIBASE_AUTOPAUSE_INTERVAL", defaultAutoPauseInterval),
-		ResumeRetryAfter:         envDuration("EXCALIBASE_RESUME_RETRY_AFTER", defaultResumeRetryAfter),
+		StuckRetryAfter:          envDuration("EXCALIBASE_STUCK_RETRY_AFTER", defaultStuckRetryAfter),
 		Port:                     envOr("PORT", "24005"),
 		StoragePath:              envOr("STORAGE_PATH", "../provisioning-data"),
 		LogLevel:                 envOr("LOG_LEVEL", "debug"),
@@ -722,8 +722,8 @@ const defaultDeployWait = 11 * time.Minute
 // defaultAutoPauseInterval is the idle sweep's period (EXC-280).
 const defaultAutoPauseInterval = time.Hour
 
-// defaultResumeRetryAfter matches the bound on each wait inside a resume.
-const defaultResumeRetryAfter = 10 * time.Minute
+// defaultStuckRetryAfter matches the bound on each wait inside a pause or resume.
+const defaultStuckRetryAfter = 10 * time.Minute
 
 // DefaultPlatformDBMaxConns is the platform database pool size. It leaves
 // room for roughly a dozen concurrent lifecycle operations alongside ordinary
