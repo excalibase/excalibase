@@ -174,7 +174,9 @@ func (p *DockerPostgreSQLProvisioner) provisionDocumentDB(ctx context.Context, r
 		return nil, err
 	}
 	cb(domain.StageCredentialGeneration)
-	p.enableArchive(ctx, req, containerID, dbName, documentDBReadyTimeout)
+	if err := p.enableArchive(ctx, req, containerID, dbName, DocumentDBImageOwner, documentDBReadyTimeout); err != nil {
+		return nil, err
+	}
 	if err := p.bootstrapDocumentDB(ctx, containerID); err != nil {
 		return nil, err
 	}

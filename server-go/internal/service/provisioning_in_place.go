@@ -77,34 +77,23 @@ func (s *ProvisioningService) ReapplyCredentials(ctx context.Context, inst *doma
 	if inst.DBType == domain.MySQL && s.vault != nil {
 		return s.reapplyMySQLCredentials(ctx, inst)
 	}
-	if s.vault == nil || s.k8sClient == nil {
+	if s.vault == nil || (s.k8sClient == nil && s.dockerClient == nil) {
 		return ErrCredentialRotationUnavailable
 	}
-	filed, err := s.filedCredentialPaths(inst.ProjectID)
-	if err != nil {
+	roles, err := s.filedPasswordRoles(inst.ProjectID)
+	if err != nil || len(roles) == 0 {
 		return err
 	}
-	roles := []RolePassword{}
-	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher} {
-		path := vaultCredentialPath(inst.ProjectID, role)
-		if !filed[path] {
-			continue
-		}
-		record, err := s.vault.Get(path)
-		if err != nil {
-			return fmt.Errorf("read %s credential: %w", role, err)
-		}
-		if _, err := tenantcert.FromRecord(record); err == nil || record["password"] == "" {
-			continue
-		}
-		roles = append(roles, RolePassword{Role: record["username"], Password: record["password"]})
-	}
-	if len(roles) == 0 {
-		return nil
-	}
 	statement := pgroles.PinnedSearchPath + BuildProjectRoleResetSQL(roles) + "\n"
-	_, err = s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, inst.ProjectID+primaryPodSuffix, "postgres",
-		[]string{"psql", "-U", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}, statement)
+	psql := []string{"psql", "-U", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}
+	switch {
+	case inst.DeploymentMode == domain.ModeDocker && s.dockerClient != nil:
+		_, err = s.dockerClient.ExecInContainerStdin(ctx, inst.Namespace, psql, statement)
+	case s.k8sClient != nil:
+		_, err = s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, inst.ProjectID+primaryPodSuffix, "postgres", psql, statement)
+	default:
+		return ErrCredentialRotationUnavailable
+	}
 	if err != nil {
 		message := err.Error()
 		for _, role := range roles {
@@ -113,4 +102,29 @@ func (s *ProvisioningService) ReapplyCredentials(ctx context.Context, inst *doma
 		return errors.New("set the filed passwords back: " + message)
 	}
 	return nil
+}
+
+// filedPasswordRoles are the project's password-authenticated roles with the
+// passwords on file; certificate roles are left out.
+func (s *ProvisioningService) filedPasswordRoles(projectID string) ([]RolePassword, error) {
+	filed, err := s.filedCredentialPaths(projectID)
+	if err != nil {
+		return nil, err
+	}
+	roles := []RolePassword{}
+	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher} {
+		path := vaultCredentialPath(projectID, role)
+		if !filed[path] {
+			continue
+		}
+		record, err := s.vault.Get(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s credential: %w", role, err)
+		}
+		if _, err := tenantcert.FromRecord(record); err == nil || record["password"] == "" {
+			continue
+		}
+		roles = append(roles, RolePassword{Role: record["username"], Password: record["password"]})
+	}
+	return roles, nil
 }

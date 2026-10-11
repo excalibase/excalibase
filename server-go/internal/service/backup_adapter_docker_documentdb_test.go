@@ -112,7 +112,7 @@ func restoreDocumentDBSource(t *testing.T, req domain.RestoreRequest) (*recordin
 	uploader.objects["test-backups/backups/dk-1/manual/backup-2026.tar.gz"] = minimalGzippedTar(t)
 	_ = records.Save(context.Background(), &domain.BackupRecord{
 		ID: "backup-2026", ProjectID: "dk-1", Status: "COMPLETED", Type: "MANUAL",
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
 	})
 	req.NewProjectName, req.TargetProjectID = "dk-restored", "dk-restored"
 	_, err := adapter.Restore(context.Background(), src, req)

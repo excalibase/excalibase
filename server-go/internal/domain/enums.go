@@ -155,6 +155,8 @@ const (
 	// stalls leaves nothing the outside world can still dial.
 	DeletionStepReleaseEndpoint = "RELEASE_PUBLIC_ENDPOINT"
 	DeletionStepRevokeNats      = "REVOKE_NATS_CREDENTIALS"
+	// DeletionStepStopBackupSchedule stops a single host's scheduled backups (EXC-593).
+	DeletionStepStopBackupSchedule = "STOP_BACKUP_SCHEDULE"
 	// DeletionStepDeleteAppWorkloads removes a single host's app containers, disks and network (EXC-575).
 	DeletionStepDeleteAppWorkloads = "DELETE_APP_WORKLOADS"
 	DeletionStepDeleteResources    = "DELETE_DATABASE_RESOURCES"

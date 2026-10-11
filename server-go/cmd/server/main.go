@@ -238,6 +238,8 @@ func runServer(cfg config.AppConfig) {
 	defer schedulerStop()
 	if scheduler != nil {
 		deps.backupHandler.SetScheduler(scheduler)
+		// A single host's Postgres projects run their plan's schedule from create (EXC-593).
+		provSvc.SetBackupSchedules(scheduler)
 	}
 
 	fnSchedHandles := startFunctionScheduler(cfg, sqlStore, fnHandler, projectDB)
@@ -1283,20 +1285,7 @@ func buildBackupService(
 					UsePathStyle:    backupUsePathStyle(),
 				})
 				if err == nil {
-					dockerAdapter := service.NewDockerBackupAdapter(service.DockerBackupAdapterConfig{
-						Runner:    runner,
-						Uploader:  uploader,
-						Records:   sqlStore.BackupRecords(),
-						Bucket:    defaults.Bucket,
-						KeyPrefix: dockerBackupKeyPrefix,
-						Instances: store,
-					})
-					// Wire the docker client so Restore can create +
-					// populate the new container. dockerClient is the
-					// abstracted interface used by DockerProvisioner;
-					// DockerBackupAdapter calls CreateContainer +
-					// CopyToContainer + StartContainer + WaitForHealthy.
-					dockerAdapter.SetDockerClient(dockerClient)
+					dockerAdapter := hostPostgresBackupAdapter(sqlStore.BackupRecords(), mustSingleHostPorts(cfg, sqlStore), store, runner, uploader, defaults.Bucket, dockerClient)
 					adapters[domain.ModeDocker] = dockerAdapter
 					hostMySQL = hostMySQLBackupAdapter(singleHostMySQL, dockerClient, service.NewDockerStreamer(dockerSDK.RawClient()), uploader, sqlStore.BackupRecords(), defaults.Bucket, store)
 				}
@@ -1401,6 +1390,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		log.Fatalf("restore verification: %v", err)
 	}
 	startHostMySQLBackups(hostMySQLBackups, store)
+	startHostPostgresWAL(backupSvc.DockerPostgres(), store)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	// Snapshot exports stay Kubernetes-only: no engine for the connector.
@@ -2506,11 +2496,9 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient, sql
 		dockerProvisioner := provisioner.NewDockerPostgreSQLProvisioner(dockerClient)
 		dockerProvisioner.SetDeletionPoller(deletionPoller())
 		mysql := provisioner.NewDockerMySQLProvisioner(dockerClient)
-		ports, err := singleHostPorts(cfg, sqlStore)
-		if err != nil {
-			log.Fatalf("single-host MySQL: %v", err)
-		}
+		ports := mustSingleHostPorts(cfg, sqlStore)
 		mysql.SetHostPorts(ports)
+		dockerProvisioner.SetHostPorts(ports)
 		return provisioner.NewFactory(dockerProvisioner, mysql), dockerClient
 	}
 	return buildK8sFactory(cfg, k8sClient), nil

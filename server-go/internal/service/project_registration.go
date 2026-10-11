@@ -127,6 +127,9 @@ func (s *ProvisioningService) RegisterProject(ctx context.Context, inst *domain.
 	if err := s.markDatabaseAdded(inst, opts); err != nil {
 		return rollbackIfOwned(ctx, pc, owned, err)
 	}
+	if err := s.scheduleBackups(ctx, inst, pc); err != nil {
+		return rollbackIfOwned(ctx, pc, owned, err)
+	}
 	s.announceProject(ctx, inst)
 	return nil
 }

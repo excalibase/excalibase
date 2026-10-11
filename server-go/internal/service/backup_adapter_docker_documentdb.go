@@ -41,7 +41,7 @@ func createRestoreContainer(ctx context.Context, dc provisioner.DockerClient, sp
 		"POSTGRES_USER":     defaultPostgresSuperuser,
 		"POSTGRES_PASSWORD": spec.newPassword,
 	}
-	id, err := dc.CreateContainer(ctx, spec.containerName, spec.image, env, map[string]string{"5432": ""}, spec.limits)
+	id, err := dc.CreateContainer(ctx, spec.containerName, spec.image, env, map[string]string{"5432": spec.hostPort}, spec.limits)
 	if err != nil {
 		return "", provisioner.FileOwner{}, fmt.Errorf("create restore container: %w", err)
 	}

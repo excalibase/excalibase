@@ -12,6 +12,9 @@
 # DOCUMENTDB=1 installs with --documentdb and walks DocumentDB (EXC-576,
 # documentdb-journey.sh): mongosh on the host, Studio's browser, Mongo users,
 # pause, resume, backup and restore.
+# PG_BACKUPS=1 walks the Postgres project's default backups (EXC-593,
+# postgres-backup-journey.sh): schedule, WAL archive, point-in-time and
+# in-place restore, pause, purge.
 # MYSQL=1 turns the mysql feature on and walks MySQL (EXC-592, mysql-journey.sh):
 # TLS clients, backups, point-in-time and in-place restore, pause, purge.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG).
@@ -190,6 +193,7 @@ fi
 [ -n "${APPS:-}" ] && . "$TESTS/apps-journey.sh"
 [ -n "${DOCUMENTDB:-}" ] && . "$TESTS/documentdb-journey.sh"
 [ -n "${MYSQL:-}" ] && . "$TESTS/mysql-journey.sh"
+[ -n "${PG_BACKUPS:-}" ] && . "$TESTS/postgres-backup-journey.sh"
 
 echo "== studio health"
 code=$(c -o /dev/null -w '%{http_code}' https://studio.localhost:$PORT/); h=$($DOCKER inspect excalibase-studio --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null)

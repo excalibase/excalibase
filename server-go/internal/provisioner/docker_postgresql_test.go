@@ -28,10 +28,17 @@ type mockDockerClient struct {
 	// stopKeepsRunning models a container the daemon accepts a stop for but
 	// which is still running while postgres shuts down.
 	stopKeepsRunning bool
+	// copied are the tar streams CopyToContainer received, by destination.
+	copied map[string][]byte
+	// execCode is the exit code an ALTER SYSTEM exec returns.
+	execCode  int
+	lastPorts map[string]string
+	// portBusy is how many starts still fail as a just-freed host port does.
+	portBusy int
 }
 
 func newMockDocker() *mockDockerClient {
-	return &mockDockerClient{containers: make(map[string]string)}
+	return &mockDockerClient{containers: make(map[string]string), copied: map[string][]byte{}}
 }
 
 func (m *mockDockerClient) CreateContainer(_ context.Context, name, image string, env map[string]string, ports map[string]string, limits ContainerLimits) (string, error) {
@@ -41,6 +48,7 @@ func (m *mockDockerClient) CreateContainer(_ context.Context, name, image string
 	m.lastImage = image
 	m.lastEnv = env
 	m.lastLimits = limits
+	m.lastPorts = ports
 	id := "container-" + name
 	m.containers[id] = "created"
 	return id, nil
@@ -49,6 +57,10 @@ func (m *mockDockerClient) CreateContainer(_ context.Context, name, image string
 func (m *mockDockerClient) StartContainer(_ context.Context, containerID string) error {
 	if m.failOn == "start" {
 		return fmt.Errorf("start failed")
+	}
+	if m.portBusy > 0 {
+		m.portBusy--
+		return fmt.Errorf("rootlessport listen tcp 127.0.0.1:30001: bind: address already in use")
 	}
 	m.containers[containerID] = "running"
 	m.starts++
@@ -94,6 +106,9 @@ func (m *mockDockerClient) ExecInContainer(_ context.Context, containerID string
 	if m.failOn == "exec" {
 		return 2, nil // pg_isready exit 2 = no connection attempt
 	}
+	if strings.Contains(strings.Join(cmd, " "), "ALTER SYSTEM") {
+		return m.execCode, nil
+	}
 	return 0, nil
 }
 
@@ -103,8 +118,9 @@ func (m *mockDockerClient) CopyToContainer(_ context.Context, _ string, dstPath 
 	if m.failOn == "copy" {
 		return fmt.Errorf("copy failed")
 	}
-	n, _ := io.Copy(io.Discard, content)
-	m.copyBytes += n
+	data, _ := io.ReadAll(content)
+	m.copyBytes += int64(len(data))
+	m.copied[dstPath] = append(m.copied[dstPath], data...)
 	return nil
 }
 
