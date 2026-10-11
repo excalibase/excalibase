@@ -43,6 +43,7 @@ const (
 	maxLabelValueLength = 63
 	dnsPortNumber       = 53
 	postgresPortNumber  = 5432
+	mysqlPortNumber     = 3306
 )
 
 // namespacePattern is the DNS-1123 label a project namespace must be; an

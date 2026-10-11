@@ -160,6 +160,14 @@ spec:
     - ports:
       - port: "5432"
         protocol: TCP
+  - toEndpoints:
+    - matchLabels:
+        app.kubernetes.io/created-by: moco
+        app.kubernetes.io/name: mysql
+    toPorts:
+    - ports:
+      - port: "3306"
+        protocol: TCP
   - toEntities:
     - world
   egressDeny:

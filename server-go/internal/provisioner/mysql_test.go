@@ -327,3 +327,40 @@ func TestMySQLApplyPlan_WaitsForTheRolloutToFinish(t *testing.T) {
 		t.Fatal("the plan was reported applied while MOCO was still rolling it out")
 	}
 }
+
+// Statements carrying passwords reach the primary on stdin only: exec
+// arguments land in the API server's audit log.
+func TestMySQLEnsurePlatformUsers_SendsPasswordsOnStdinToThePrimary(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	applyTestCluster(t, mock, mysqlFree)
+	_ = unstructured.SetNestedField(mock.CRDs[mysqlClusterKey].Object, int64(0), "status", "currentPrimaryIndex")
+	passwords := MySQLPasswords{Admin: "secret-admin", App: "secret-app", AuthAdmin: "secret-auth", Watcher: "secret-cdc"}
+	if err := prov.EnsurePlatformUsers(context.Background(), mysqlTestNS, mysqlTestProject, "app", passwords); err != nil {
+		t.Fatalf("EnsurePlatformUsers: %v", err)
+	}
+	if len(mock.ExecStdin) != 1 || !strings.Contains(mock.ExecStdin[0], "IDENTIFIED BY 'secret-admin'") {
+		t.Fatalf("stdin %v", mock.ExecStdin)
+	}
+	for _, cmd := range mock.ExecCommands {
+		if strings.Contains(cmd, "secret-") {
+			t.Errorf("a password reached an exec argument: %s", cmd)
+		}
+	}
+	if err := prov.SetUserPassword(context.Background(), mysqlTestNS, mysqlTestProject, MySQLUserApp, "rotated-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if last := mock.ExecStdin[len(mock.ExecStdin)-1]; !strings.Contains(last, "ALTER USER 'excalibase_app'@'%' IDENTIFIED BY 'rotated-secret'") {
+		t.Errorf("stdin %s", last)
+	}
+}
+
+func TestMySQLEnsurePlatformUsers_ErrorsNeverCarryThePassword(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	applyTestCluster(t, mock, mysqlFree)
+	mock.WildcardExecError = errors.New("ERROR 1064 near 'IDENTIFIED BY 'secret-admin''")
+	err := prov.EnsurePlatformUsers(context.Background(), mysqlTestNS, mysqlTestProject, "app",
+		MySQLPasswords{Admin: "secret-admin", App: "a", AuthAdmin: "b", Watcher: "c"})
+	if err == nil || strings.Contains(err.Error(), "secret-admin") {
+		t.Errorf("err = %v", err)
+	}
+}

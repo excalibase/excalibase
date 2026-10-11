@@ -355,3 +355,21 @@ func TestProjectStatusChanged_KeepsThePoolOfARunningProject(t *testing.T) {
 		t.Error("an ACTIVE project's pool was closed")
 	}
 }
+
+// The opener speaks Postgres. A MySQL project (ADR 0041) is refused by name
+// and left out of every sweep, rather than failing on a missing certificate.
+func TestOpener_RefusesMySQLProjects(t *testing.T) {
+	o := NewOpener(testStore(t,
+		&domain.DatabaseInstance{ProjectID: "proj_pg", Status: "ACTIVE"},
+		&domain.DatabaseInstance{ProjectID: "proj_my", Status: "ACTIVE", DBType: domain.MySQL},
+	), fakeVault{data: appCreds()}, Overrides{}, PoolLimits{})
+	defer o.Close()
+
+	if _, err := o.Open(context.Background(), "proj_my"); !errors.Is(err, domain.ErrPostgresOnly) {
+		t.Fatalf("err: got %v, want ErrPostgresOnly", err)
+	}
+	ids, err := o.ServableProjectIDs(context.Background())
+	if err != nil || len(ids) != 1 || ids[0] != "proj_pg" {
+		t.Fatalf("servable = %v, %v; want proj_pg only", ids, err)
+	}
+}

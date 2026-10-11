@@ -45,7 +45,8 @@ func TestDatabaseRoutesRefuseAMySQLProjectUnlessTheyServeIt(t *testing.T) {
 	}
 }
 
-// What MySQL projects are served on EXC-583: their lifecycle.
+// What MySQL projects are served: their lifecycle (EXC-583) and their
+// logins (EXC-584).
 func TestMySQLLifecycleRoutesServeMySQL(t *testing.T) {
 	index, err := routepolicy.Index()
 	if err != nil {
@@ -56,6 +57,8 @@ func TestMySQLLifecycleRoutesServeMySQL(t *testing.T) {
 		{Method: "POST", Pattern: "/api/provision/{projectId}/resume"},
 		{Method: "POST", Pattern: "/api/provision/{projectId}/upgrade"},
 		{Method: "POST", Pattern: "/api/provision/{projectId}/tier"},
+		{Method: "GET", Pattern: "/api/provision/{projectId}/credentials"},
+		{Method: "POST", Pattern: "/api/provision/{projectId}/credentials/rotate"},
 	} {
 		if row, ok := index[key]; !ok || !row.MySQL {
 			t.Errorf("%s does not serve MySQL projects", key)

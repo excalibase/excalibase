@@ -116,6 +116,10 @@ type CredentialsResponse struct {
 	Password      string `json:"password"`
 	SSLMode       string `json:"sslMode"`
 	ConnectionURL string `json:"connectionUrl"`
+	// Engine is "mysql" for a MySQL project, absent for Postgres; JDBCURL is
+	// its Connector/J URL.
+	Engine  string `json:"engine,omitempty"`
+	JDBCURL string `json:"jdbcUrl,omitempty"`
 }
 
 type CredentialsData struct {

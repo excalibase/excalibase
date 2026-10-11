@@ -238,6 +238,22 @@ function MongoSection({ projectId, credentials, endpoint, shownPassword }: Secti
   );
 }
 
+// MySQLSection shows the strings a MySQL client takes. Every login requires
+// TLS, so each string asks for it.
+function MySQLSection({ credentials, shownPassword }: SectionProps) {
+  const uri = (password: string) =>
+    `mysql://${credentials.username}:${password}@${credentials.host}:${credentials.port}/${credentials.databaseName}?ssl-mode=REQUIRED`;
+  return (
+    <div className="space-y-2" data-testid="conn-mysql-section">
+      <h5 className="text-sm font-medium text-text-primary">MySQL — TLS required</h5>
+      <StringRow testId="conn-mysql-internal" label="Internal — from inside the cluster" shown={uri(shownPassword)} copied={uri(credentials.password)} />
+      {credentials.jdbcUrl && (
+        <StringRow testId="conn-mysql-jdbc" label="JDBC (Connector/J) — pass the username and password separately" shown={credentials.jdbcUrl} copied={credentials.jdbcUrl} />
+      )}
+    </div>
+  );
+}
+
 // ConnectionStrings shows the project's one credential and, beside it, the
 // strings a client pastes: PostgreSQL always, MongoDB only on a project whose
 // image carries DocumentDB.
@@ -288,8 +304,14 @@ export function ConnectionStrings({ projectId, documentDb, endpoint }: Connectio
         <CredentialField testId="conn-password" label="Password" value={shownPassword} />
       </div>
 
-      <PostgresSection {...sectionProps} />
-      {documentDb && <MongoSection {...sectionProps} />}
+      {credentials.engine === 'mysql' ? (
+        <MySQLSection {...sectionProps} />
+      ) : (
+        <>
+          <PostgresSection {...sectionProps} />
+          {documentDb && <MongoSection {...sectionProps} />}
+        </>
+      )}
     </div>
   );
 }

@@ -18,6 +18,7 @@ import { cn } from '../../utils/cn';
 interface AppFormProps {
   readonly tier?: TierType;
   readonly databaseName?: string;
+  readonly mysql?: boolean;
   readonly initial?: App;
   readonly submitLabel: string;
   readonly submitting: boolean;
@@ -209,6 +210,7 @@ function ExposureChoice({
 export function AppForm({
   tier,
   databaseName,
+  mysql,
   initial,
   submitLabel,
   submitting,
@@ -395,6 +397,7 @@ export function AppForm({
           rows={values.env}
           errors={errors.env}
           databaseName={databaseName}
+          mysql={mysql}
           onChange={(env) => set({ env })}
         />
       </div>

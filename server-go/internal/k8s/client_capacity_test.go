@@ -139,13 +139,13 @@ func TestEnsureDenoRuntime_CreatesEgressPolicy(t *testing.T) {
 	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != "Egress" {
 		t.Errorf("expected Egress-only policy (ingress must stay open for /invoke), got %v", np.Spec.PolicyTypes)
 	}
-	if len(np.Spec.Egress) != 3 {
-		t.Fatalf("expected 3 egress allowances (DNS + own-namespace Postgres + provisioning callback), got %d",
+	if len(np.Spec.Egress) != 4 {
+		t.Fatalf("expected 4 egress allowances (DNS + own-namespace Postgres + MySQL + provisioning callback), got %d",
 			len(np.Spec.Egress))
 	}
 	// The metadata callback to provisioning must be allowed, or an enforcing CNI
 	// silently drops it (the runtime treats that POST as fire-and-forget).
-	prov := np.Spec.Egress[2]
+	prov := np.Spec.Egress[3]
 	if len(prov.To) != 1 || prov.To[0].NamespaceSelector == nil ||
 		prov.To[0].PodSelector.MatchLabels["app"] != "provisioning" {
 		t.Errorf("provisioning callback peer must be ns-scoped to the provisioning pod, got %+v", prov.To)
@@ -163,6 +163,15 @@ func TestEnsureDenoRuntime_CreatesEgressPolicy(t *testing.T) {
 	}
 	if len(pg.Ports) != 1 || pg.Ports[0].Port.IntValue() != 5432 {
 		t.Errorf("expected only port 5432 for the DB rule, got %+v", pg.Ports)
+	}
+	// A MySQL project's functions reach MOCO's mysqld on 3306 (ADR 0041).
+	mysql := np.Spec.Egress[2]
+	if len(mysql.To) != 1 || mysql.To[0].PodSelector == nil || mysql.To[0].NamespaceSelector != nil ||
+		!maps.Equal(mysql.To[0].PodSelector.MatchLabels, map[string]string{"app.kubernetes.io/created-by": "moco", "app.kubernetes.io/name": "mysql"}) {
+		t.Errorf("MySQL egress must select this namespace's MOCO pods only, got %+v", mysql.To)
+	}
+	if len(mysql.Ports) != 1 || mysql.Ports[0].Port.IntValue() != 3306 {
+		t.Errorf("expected only port 3306 for the MySQL rule, got %+v", mysql.Ports)
 	}
 }
 

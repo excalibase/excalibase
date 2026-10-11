@@ -513,6 +513,7 @@ func (h *FunctionHandler) injectedDBTarget(projectID string) (dbTarget, bool) {
 	target := dbTarget{
 		host: creds["host"], port: creds["port"],
 		user: creds["username"], pass: creds["password"], db: creds["database"],
+		mysql: domain.IsMySQLRecord(creds),
 	}
 	if target.host == "" || target.user == "" || target.db == "" {
 		return dbTarget{}, false
@@ -526,11 +527,15 @@ func (h *FunctionHandler) injectedDBTarget(projectID string) (dbTarget, bool) {
 // dbTarget is the vault-stored app credential set a deploy DSN is built from.
 type dbTarget struct {
 	host, port, user, pass, db string
+	mysql                      bool
 }
 
 // url renders the DSN. Intentionally sslmode=require — managed project
 // databases terminate TLS inside the cluster.
 func (t dbTarget) url(host string) string {
+	if t.mysql {
+		return domain.MySQLURL(host, t.port, t.user, t.pass, t.db)
+	}
 	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=require",
 		t.user, t.pass, net.JoinHostPort(host, t.port), t.db)
 }
@@ -748,6 +753,10 @@ func (h *FunctionHandler) applyExtractedSchema(w http.ResponseWriter, r *http.Re
 		if errors.Is(dbErr, domain.ErrNoDatabase) {
 			// The function declares tables, and there is no database to hold them.
 			httpError(w, domain.ErrNoDatabase.Error(), http.StatusConflict)
+			return false
+		}
+		if errors.Is(dbErr, domain.ErrPostgresOnly) {
+			httpError(w, "declared schemas are not available for MySQL projects yet", http.StatusConflict)
 			return false
 		}
 		httpError(w, "failed to open project db for migration: "+safeError(dbErr), http.StatusBadGateway)

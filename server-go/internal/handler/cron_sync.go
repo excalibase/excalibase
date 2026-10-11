@@ -7,9 +7,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
 )
 
@@ -36,6 +39,10 @@ func (h *FunctionHandler) beginCronSync(
 		return nil, noop, nil
 	}
 	db, err := h.projectDBFn(ctx, projectID)
+	if errors.Is(err, domain.ErrPostgresOnly) && !declaresCronJobs(cronJobs) {
+		// A MySQL project has no cron tables, and this function adds none.
+		return nil, noop, nil
+	}
 	if err != nil {
 		return nil, noop, fmt.Errorf("open project db: %w", err)
 	}
@@ -80,4 +87,10 @@ func rollbackCronSync(tx *sql.Tx) error {
 		return err
 	}
 	return nil
+}
+
+// declaresCronJobs reports whether a bundle's cron registry names any job.
+func declaresCronJobs(cronJobs json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(cronJobs))
+	return trimmed != "" && trimmed != "null" && trimmed != "[]"
 }

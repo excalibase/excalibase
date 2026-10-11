@@ -631,12 +631,13 @@ func TestRenderAppWorkloadEgressPolicyIsCilium(t *testing.T) {
 func TestRenderAppWorkloadEgressPolicy(t *testing.T) {
 	spec := egressSpec(t, mustRender(t, fullApp(), newResolver()))
 
-	if len(spec.Egress) != 3 {
-		t.Fatalf("expected a DNS rule, a database rule and an internet rule, got %d", len(spec.Egress))
+	if len(spec.Egress) != 4 {
+		t.Fatalf("expected a DNS rule, two database rules and an internet rule, got %d", len(spec.Egress))
 	}
 	assertDNSRule(t, spec.Egress[0])
 	assertDatabaseRuleIsLocal(t, spec.Egress[1])
-	assertInternetRuleIsWorldOnly(t, spec.Egress[2])
+	assertMySQLRuleIsLocal(t, spec.Egress[2])
+	assertInternetRuleIsWorldOnly(t, spec.Egress[3])
 	assertDenyRules(t, spec.EgressDeny, wantDeniedRanges)
 }
 
@@ -663,6 +664,19 @@ func assertDatabaseRuleIsLocal(t *testing.T, rule ciliumEgressRule) {
 		t.Errorf("the database rule must select this namespace's database pods only, got %+v", rule.ToEndpoints)
 	}
 	assertPorts(t, "database", rule.ToPorts, ciliumPort{Port: "5432", Protocol: "TCP"})
+	assertNoAddressPeers(t, rule)
+}
+
+// A MySQL project's database (ADR 0041) is MOCO's mysqld pods on 3306, in
+// this namespace only; MOCO's admin and agent ports stay closed.
+func assertMySQLRuleIsLocal(t *testing.T, rule ciliumEgressRule) {
+	t.Helper()
+	if len(rule.ToEndpoints) != 1 || !maps.Equal(rule.ToEndpoints[0].MatchLabels,
+		map[string]string{"app.kubernetes.io/created-by": "moco", "app.kubernetes.io/name": "mysql"}) ||
+		len(rule.ToEndpoints[0].MatchExpressions) != 0 {
+		t.Errorf("the MySQL rule must select this namespace's MOCO pods only, got %+v", rule.ToEndpoints)
+	}
+	assertPorts(t, "MySQL", rule.ToPorts, ciliumPort{Port: "3306", Protocol: "TCP"})
 	assertNoAddressPeers(t, rule)
 }
 
@@ -732,13 +746,14 @@ func TestRenderAppWorkloadEgressPolicyReachesTheEdge(t *testing.T) {
 		t.Fatalf("RenderAppWorkload: %v", err)
 	}
 	spec := egressSpec(t, workload)
-	if len(spec.Egress) != 4 {
-		t.Fatalf("expected DNS, database, edge and internet rules, got %d", len(spec.Egress))
+	if len(spec.Egress) != 5 {
+		t.Fatalf("expected DNS, two database, edge and internet rules, got %d", len(spec.Egress))
 	}
 	assertDNSRule(t, spec.Egress[0])
 	assertDatabaseRuleIsLocal(t, spec.Egress[1])
-	assertCiliumEdgeRule(t, spec.Egress[2])
-	assertInternetRuleIsWorldOnly(t, spec.Egress[3])
+	assertMySQLRuleIsLocal(t, spec.Egress[2])
+	assertCiliumEdgeRule(t, spec.Egress[3])
+	assertInternetRuleIsWorldOnly(t, spec.Egress[4])
 	assertDenyRules(t, spec.EgressDeny, wantDeniedRanges)
 }
 

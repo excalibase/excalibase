@@ -14,6 +14,16 @@ export const DATABASE_VARIABLES = [
   'PGPASSWORD',
 ] as const;
 
+// A MySQL project's database (ADR 0041) offers these instead of the PG ones.
+export const MYSQL_DATABASE_VARIABLES = [
+  'DATABASE_URL',
+  'MYSQL_HOST',
+  'MYSQL_PORT',
+  'MYSQL_DATABASE',
+  'MYSQL_USER',
+  'MYSQL_PASSWORD',
+] as const;
+
 export interface ReferenceTarget {
   sourceKind: 'database';
   sourceName: string;

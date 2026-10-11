@@ -9,6 +9,7 @@ import {
   type AppSubmission,
 } from '../api/apps';
 import { useInstance } from '../hooks/useProvisioning';
+import { isMySQLProject } from '../utils/engine';
 import { AppForm } from '../components/containers/AppForm';
 import { ContainersHeader, HostingGate, Spinner } from '../components/containers/ContainerBits';
 import type { TierType } from '../types';
@@ -18,9 +19,10 @@ interface FormProps {
   readonly projectId: string;
   readonly tier?: TierType;
   readonly databaseName?: string;
+  readonly mysql?: boolean;
 }
 
-function CreateForm({ projectId, tier, databaseName }: FormProps) {
+function CreateForm({ projectId, tier, databaseName, mysql }: FormProps) {
   const navigate = useNavigate();
   const create = useCreateApp(projectId);
   const submit = (submission: AppSubmission) =>
@@ -46,6 +48,7 @@ function CreateForm({ projectId, tier, databaseName }: FormProps) {
         registryCredentialsHref={`/project/${projectId}/containers#registry-credentials`}
         tier={tier}
         databaseName={databaseName}
+        mysql={mysql}
         submitLabel="Create container"
         submitting={create.isPending}
         serverError={
@@ -60,7 +63,7 @@ function CreateForm({ projectId, tier, databaseName }: FormProps) {
   );
 }
 
-function EditForm({ projectId, app, databaseName }: FormProps & { readonly app: App }) {
+function EditForm({ projectId, app, databaseName, mysql }: FormProps & { readonly app: App }) {
   const navigate = useNavigate();
   const update = useUpdateApp(projectId, app.id);
   const detailPath = `/project/${projectId}/containers/${app.id}`;
@@ -80,6 +83,7 @@ function EditForm({ projectId, app, databaseName }: FormProps & { readonly app: 
         registryCredentialsHref={`/project/${projectId}/containers#registry-credentials`}
         tier={app.tier}
         databaseName={databaseName}
+        mysql={mysql}
         initial={app}
         submitLabel="Save changes"
         submitting={update.isPending}
@@ -93,7 +97,7 @@ function EditForm({ projectId, app, databaseName }: FormProps & { readonly app: 
   );
 }
 
-function EditLoader({ projectId, appId, databaseName }: FormProps & { readonly appId: string }) {
+function EditLoader({ projectId, appId, databaseName, mysql }: FormProps & { readonly appId: string }) {
   const { data: app, isLoading, error } = useApp(projectId, appId);
   if (isLoading) return <Spinner />;
   if (error || !app) {
@@ -103,13 +107,14 @@ function EditLoader({ projectId, appId, databaseName }: FormProps & { readonly a
       </div>
     );
   }
-  return <EditForm projectId={projectId} app={app} databaseName={databaseName} />;
+  return <EditForm projectId={projectId} app={app} databaseName={databaseName} mysql={mysql} />;
 }
 
 export function ContainerFormPage() {
   const { projectId = '', appId } = useParams<{ projectId: string; appId?: string }>();
   const { data: instance } = useInstance(projectId);
   const databaseName = instance?.databaseName || undefined;
+  const mysql = isMySQLProject(instance);
 
   return (
     <div data-testid="container-form-page">
@@ -122,9 +127,9 @@ export function ContainerFormPage() {
       <div className="mt-3">
         <HostingGate>
           {appId ? (
-            <EditLoader projectId={projectId} appId={appId} databaseName={databaseName} />
+            <EditLoader projectId={projectId} appId={appId} databaseName={databaseName} mysql={mysql} />
           ) : (
-            <CreateForm projectId={projectId} tier={instance?.tier} databaseName={databaseName} />
+            <CreateForm projectId={projectId} tier={instance?.tier} databaseName={databaseName} mysql={mysql} />
           )}
         </HostingGate>
       </div>

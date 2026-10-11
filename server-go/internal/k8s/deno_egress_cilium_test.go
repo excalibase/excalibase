@@ -73,13 +73,14 @@ func TestDenoCiliumFenceAdmitsTheAllowlistByName(t *testing.T) {
 	if len(spec.Ingress) != 0 {
 		t.Fatalf("the fence is egress only, so provisioning still reaches /deploy and /invoke: %+v", spec.Ingress)
 	}
-	if len(spec.Egress) != 7 {
-		t.Fatalf("want DNS, database, provisioning, edge and three allowlist rules, got %d: %+v", len(spec.Egress), spec.Egress)
+	if len(spec.Egress) != 8 {
+		t.Fatalf("want DNS, two database, provisioning, edge and three allowlist rules, got %d: %+v", len(spec.Egress), spec.Egress)
 	}
 	assertDNSProxyRule(t, spec.Egress[0])
 	assertDatabaseRuleIsLocal(t, spec.Egress[1])
-	assertProvisioningRule(t, spec.Egress[2])
-	assertCiliumEdgeRule(t, spec.Egress[3])
+	assertMySQLRuleIsLocal(t, spec.Egress[2])
+	assertProvisioningRule(t, spec.Egress[3])
+	assertCiliumEdgeRule(t, spec.Egress[4])
 	wantAllowlist := []ciliumEgressRule{
 		{
 			ToFQDNs: []ciliumFQDNSelector{{MatchPattern: "**.github.com"}, {MatchName: "api.stripe.com"}},
@@ -94,8 +95,8 @@ func TestDenoCiliumFenceAdmitsTheAllowlistByName(t *testing.T) {
 			ToPorts: []ciliumPortRule{{Ports: []ciliumPort{{Port: "8443", Protocol: "TCP"}}}},
 		},
 	}
-	if !reflect.DeepEqual(spec.Egress[4:], wantAllowlist) {
-		t.Errorf("allowlist rules = %+v, want %+v", spec.Egress[4:], wantAllowlist)
+	if !reflect.DeepEqual(spec.Egress[5:], wantAllowlist) {
+		t.Errorf("allowlist rules = %+v, want %+v", spec.Egress[5:], wantAllowlist)
 	}
 	for _, rule := range spec.Egress {
 		if len(rule.ToEntities) != 0 {
@@ -125,8 +126,8 @@ func TestDenoCiliumFenceIPv6Literal(t *testing.T) {
 // A new project's functions reach no other host: no name, no range, no edge unless one is named.
 func TestDenoCiliumFenceWithoutAllowlistOpensNoHost(t *testing.T) {
 	spec := mustDenoCiliumPolicy(t, nil, EdgePeer{})
-	if len(spec.Egress) != 3 {
-		t.Fatalf("want DNS, database and provisioning only, got %+v", spec.Egress)
+	if len(spec.Egress) != 4 {
+		t.Fatalf("want DNS, two database and provisioning only, got %+v", spec.Egress)
 	}
 	for _, rule := range spec.Egress {
 		if len(rule.ToFQDNs) != 0 || len(rule.ToCIDRSet) != 0 || len(rule.ToEntities) != 0 {
