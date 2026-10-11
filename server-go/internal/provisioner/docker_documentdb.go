@@ -56,7 +56,7 @@ func DocumentDBGatewayName(projectID string) string {
 
 // DocumentDBDatabaseSpec is the database container of a DocumentDB project,
 // for a new project and a restored one alike.
-func DocumentDBDatabaseSpec(projectID, major, dbName, password string, limits ContainerLimits) (ContainerSpec, error) {
+func DocumentDBDatabaseSpec(projectID, major, dbName, password string, limits ContainerLimits, ports DocumentDBPorts) (ContainerSpec, error) {
 	image, err := config.DockerDocumentDBImage(major)
 	if err != nil {
 		return ContainerSpec{}, err
@@ -70,7 +70,7 @@ func DocumentDBDatabaseSpec(projectID, major, dbName, password string, limits Co
 			"POSTGRES_PASSWORD": password,
 		},
 		Cmd:        []string{"bash", "-c", documentDBStartScript()},
-		Ports:      map[string]string{"5432": "", strconv.Itoa(config.DocumentDBGatewayPort): ""},
+		Ports:      map[string]string{"5432": ports.Postgres, strconv.Itoa(config.DocumentDBGatewayPort): ports.Mongo},
 		Limits:     limits,
 		DataVolume: documentDBDataVolume,
 		StopSignal: documentDBStopSignal,
@@ -157,7 +157,11 @@ func (p *DockerPostgreSQLProvisioner) provisionDocumentDB(ctx context.Context, r
 	databaseLimits, gatewayLimits := DocumentDBLimits(limits)
 	dbName := databaseNameOrDefault(req.DatabaseName)
 	password := generatePassword()
-	spec, err := DocumentDBDatabaseSpec(req.ProjectName, req.PostgresVersion, dbName, password, databaseLimits)
+	ports, err := p.DocumentDBPorts(ctx, req.ProjectName)
+	if err != nil {
+		return nil, err
+	}
+	spec, err := DocumentDBDatabaseSpec(req.ProjectName, req.PostgresVersion, dbName, password, databaseLimits, ports)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +170,7 @@ func (p *DockerPostgreSQLProvisioner) provisionDocumentDB(ctx context.Context, r
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
-	if err := p.docker.StartContainer(ctx, containerID); err != nil {
+	if err := p.StartHoldingPort(ctx, containerID); err != nil {
 		return nil, fmt.Errorf("start container: %w", err)
 	}
 	cb(domain.StageWaitingForReady)

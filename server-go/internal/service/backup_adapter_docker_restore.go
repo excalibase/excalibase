@@ -64,7 +64,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		return nil, err
 	}
 	pc := provisioner.NewProvisionContext(nil, nil)
-	hostPort, err := a.heldPort(ctx, newProject)
+	ports, err := a.heldPorts(ctx, newProject, inst.DocumentDB)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		projectID:     newProject,
 		containerName: provisioner.DatabaseContainerName(newProject),
 		limits:        limits,
-		hostPort:      hostPort,
+		ports:         ports,
 	})
 	if err != nil {
 		pc.Rollback(ctx)
@@ -130,8 +130,8 @@ type recoveryTarget struct {
 	projectID     string
 	containerName string
 	limits        provisioner.ContainerLimits
-	// hostPort is the host port 5432 is published on; "" for any.
-	hostPort string
+	// ports are the host ports it publishes on; "" for any.
+	ports provisioner.DocumentDBPorts
 }
 
 // recovered is a container recovered from a project's backups.
@@ -183,7 +183,7 @@ func recoverySpec(source *domain.DatabaseInstance, req domain.RestoreRequest, ta
 		limits:          target.limits,
 		documentDB:      source.DocumentDB,
 		major:           source.PostgresVersion,
-		hostPort:        target.hostPort,
+		ports:           target.ports,
 	}
 	if !source.DocumentDB {
 		image, err := restoreImage(source.PostgresVersion)
@@ -359,8 +359,8 @@ type restoreContainerSpec struct {
 	// documentDB restores into the catalogue image of major with a gateway.
 	documentDB bool
 	major      string
-	// hostPort is the host port 5432 is published on; "" for any.
-	hostPort string
+	// ports are the host ports it publishes on; "" for any.
+	ports provisioner.DocumentDBPorts
 }
 
 // restoreStartPoller bounds the wait for a held host port to come free.

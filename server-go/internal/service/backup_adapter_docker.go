@@ -166,18 +166,25 @@ func (a *DockerBackupAdapter) SetHostPorts(ports provisioner.HostPortAllocator) 
 }
 
 // heldPort is the host port projectID publishes on; "" without an allocator.
-func (a *DockerBackupAdapter) heldPort(ctx context.Context, projectID string) (string, error) {
+func (a *DockerBackupAdapter) heldPorts(ctx context.Context, projectID string, documentDB bool) (provisioner.DocumentDBPorts, error) {
 	a.mu.RLock()
 	ports := a.hostPorts
 	a.mu.RUnlock()
 	if ports == nil {
-		return "", nil
+		return provisioner.DocumentDBPorts{}, nil
+	}
+	if documentDB {
+		held, err := provisioner.HeldDocumentDBPorts(ctx, ports, projectID)
+		if err != nil {
+			return held, fmt.Errorf("hold the host ports of %s: %w", projectID, err)
+		}
+		return held, nil
 	}
 	port, err := ports.Allocate(ctx, projectID)
 	if err != nil {
-		return "", fmt.Errorf("hold the host port of %s: %w", projectID, err)
+		return provisioner.DocumentDBPorts{}, fmt.Errorf("hold the host port of %s: %w", projectID, err)
 	}
-	return strconv.Itoa(port), nil
+	return provisioner.DocumentDBPorts{Postgres: strconv.Itoa(port)}, nil
 }
 
 // releasePort gives a copy that never came up its port back.

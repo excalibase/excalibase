@@ -31,3 +31,24 @@ func TestHostPortsAreHeldUntilTheProjectGoes(t *testing.T) {
 		t.Fatalf("released port not quarantined: %v", store.deletes)
 	}
 }
+
+// EXC-594: a DocumentDB project's gateway holds a second port, released with
+// the first.
+func TestADocumentDBProjectHoldsAMongoPortToo(t *testing.T) {
+	store := newFakeEndpointStore()
+	window, _ := domain.NewPortRange(30000, 30999)
+	ports := NewHostPortAllocator(store, window, 30*24*time.Hour)
+	ctx := context.Background()
+	postgres, _ := ports.Allocate(ctx, "p1")
+	mongo, err := ports.AllocateMongo(ctx, "p1")
+	again, _ := ports.AllocateMongo(ctx, "p1")
+	if err != nil || mongo == postgres || again != mongo {
+		t.Fatalf("postgres %d mongo %d again %d %v", postgres, mongo, again, err)
+	}
+	if err := ports.Release(ctx, "p1"); err != nil {
+		t.Fatal(err)
+	}
+	if !store.quarantined(postgres) || !store.quarantined(mongo) {
+		t.Fatal("both ports must be quarantined")
+	}
+}

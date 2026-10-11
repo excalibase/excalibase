@@ -26,8 +26,15 @@ func (h *heldPorts) Allocate(_ context.Context, projectID string) (int, error) {
 	return h.held[projectID], nil
 }
 
+func (h *heldPorts) AllocateMongo(ctx context.Context, projectID string) (int, error) {
+	return h.Allocate(ctx, projectID+mongoHeldKey)
+}
+
+const mongoHeldKey = "#mongo"
+
 func (h *heldPorts) Release(_ context.Context, projectID string) error {
 	delete(h.held, projectID)
+	delete(h.held, projectID+mongoHeldKey)
 	h.released = append(h.released, projectID)
 	return nil
 }
@@ -99,10 +106,6 @@ func TestDockerInPlaceRestoreRefusesWhatItCannotReach(t *testing.T) {
 	var target *RestoreTargetError
 	if _, err := f.adapter.InPlaceRecoveryTarget(ctx, f.inst, early); !errors.As(err, &target) {
 		t.Fatalf("a point before every backup: %v", err)
-	}
-	f.inst.DocumentDB = true
-	if _, err := f.adapter.InPlaceRecoveryTarget(ctx, f.inst, domain.RestoreRequest{}); !errors.Is(err, ErrInPlaceRestoreUnsupported) {
-		t.Fatalf("DocumentDB in place: %v", err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,8 @@ type recordingDocker struct {
 	stdin []recordedCopy
 	// failGatewayStart makes the gateway's start fail.
 	failGatewayStart bool
+	// served is what a copy out of a container answers, by container and path.
+	served map[string][]byte
 }
 
 type recordedCopy struct {
@@ -88,7 +91,16 @@ func (r *recordingDocker) CopyToContainer(_ context.Context, id, dst string, con
 	return nil
 }
 func (r *recordingDocker) CopyFromContainer(_ context.Context, id, src string) (io.ReadCloser, error) {
-	return nil, fmt.Errorf("copy from %s:%s not recorded", id, src)
+	body, ok := r.served[id+":"+src]
+	if !ok {
+		return nil, fmt.Errorf("copy from %s:%s not recorded", id, src)
+	}
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	_ = writer.WriteHeader(&tar.Header{Name: path.Base(src), Mode: 0o600, Size: int64(len(body))})
+	_, _ = writer.Write(body)
+	_ = writer.Close()
+	return io.NopCloser(&buffer), nil
 }
 
 func (r *recordingDocker) index(call string) int {

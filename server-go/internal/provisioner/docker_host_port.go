@@ -36,3 +36,20 @@ func heldPort(ctx context.Context, ports HostPortAllocator, projectID string) (s
 	}
 	return strconv.Itoa(port), nil
 }
+
+// DocumentDBPorts are the host ports a DocumentDB project publishes Postgres
+// and its gateway on; "" is any free port.
+type DocumentDBPorts struct{ Postgres, Mongo string }
+
+// HeldDocumentDBPorts are the ports projectID holds, taken the first time.
+func HeldDocumentDBPorts(ctx context.Context, ports HostPortAllocator, projectID string) (DocumentDBPorts, error) {
+	postgres, err := heldPort(ctx, ports, projectID)
+	if err != nil || ports == nil {
+		return DocumentDBPorts{Postgres: postgres}, err
+	}
+	mongo, err := ports.AllocateMongo(ctx, projectID)
+	if err != nil {
+		return DocumentDBPorts{}, err
+	}
+	return DocumentDBPorts{Postgres: postgres, Mongo: strconv.Itoa(mongo)}, nil
+}

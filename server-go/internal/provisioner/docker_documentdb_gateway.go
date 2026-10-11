@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strconv"
 	"time"
 
@@ -49,14 +50,24 @@ func DocumentDBLimits(tier ContainerLimits) (database, gateway ContainerLimits) 
 // dials, starts it and waits until it listens. A gateway left over from an
 // earlier attempt is replaced.
 func StartDocumentDBGateway(ctx context.Context, docker DockerClient, projectID, databaseContainer string, limits ContainerLimits) error {
-	name := DocumentDBGatewayName(projectID)
-	if err := docker.RemoveContainer(ctx, name); err != nil {
-		return fmt.Errorf("remove earlier gateway: %w", err)
-	}
 	material, err := newGatewayTLS(DatabaseContainerName(projectID), time.Now())
 	if err != nil {
 		return err
 	}
+	return StartDocumentDBGatewayWithTLS(ctx, docker, projectID, databaseContainer, limits, GatewayTLS{material})
+}
+
+// GatewayTLS is the certificate material a gateway presents.
+type GatewayTLS struct{ material gatewayTLS }
+
+// StartDocumentDBGatewayWithTLS is StartDocumentDBGateway presenting kept
+// material, so a rebuilt project's clients keep the CA they saved (EXC-594).
+func StartDocumentDBGatewayWithTLS(ctx context.Context, docker DockerClient, projectID, databaseContainer string, limits ContainerLimits, kept GatewayTLS) error {
+	name := DocumentDBGatewayName(projectID)
+	if err := docker.RemoveContainer(ctx, name); err != nil {
+		return fmt.Errorf("remove earlier gateway: %w", err)
+	}
+	material := kept.material
 	id, err := docker.CreateContainerSpec(ctx, ContainerSpec{
 		Name:  name,
 		Image: config.DocumentDBGatewayImage(),
@@ -133,20 +144,47 @@ func DocumentDBGatewayStale(ctx context.Context, docker DockerClient, projectID,
 // DocumentDBGatewayCA reads the CA the project's gateway certificate is
 // signed by, from the gateway itself.
 func DocumentDBGatewayCA(ctx context.Context, docker DockerClient, projectID string) ([]byte, error) {
-	stream, err := docker.CopyFromContainer(ctx, DocumentDBGatewayName(projectID), DocumentDBGatewayCAPath)
+	return readGatewayFile(ctx, docker, projectID, "ca.crt")
+}
+
+// ReadDocumentDBGatewayTLS reads what the project's gateway presents; found
+// is false when it has no gateway.
+func ReadDocumentDBGatewayTLS(ctx context.Context, docker DockerClient, projectID string) (GatewayTLS, bool, error) {
+	state, err := docker.ContainerState(ctx, DocumentDBGatewayName(projectID))
+	if err != nil || !state.Found {
+		return GatewayTLS{}, false, err
+	}
+	var files [3][]byte
+	for i, name := range []string{"ca.crt", "tls.crt", "tls.key"} {
+		if files[i], err = readGatewayFile(ctx, docker, projectID, name); err != nil {
+			return GatewayTLS{}, false, err
+		}
+	}
+	return GatewayTLS{gatewayTLS{caPEM: files[0], certPEM: files[1], keyPEM: files[2]}}, true, nil
+}
+
+// readGatewayFile reads one file of the gateway's tls directory.
+func readGatewayFile(ctx context.Context, docker DockerClient, projectID, file string) ([]byte, error) {
+	stream, err := docker.CopyFromContainer(ctx, DocumentDBGatewayName(projectID), documentDBGatewayTLSDir+"/"+file)
 	if err != nil {
-		return nil, fmt.Errorf("read the gateway CA of %s: %w", projectID, err)
+		return nil, fmt.Errorf("read the gateway %s of %s: %w", file, projectID, err)
 	}
 	defer stream.Close()
 	reader := tar.NewReader(stream)
-	if _, err := reader.Next(); err != nil {
-		return nil, fmt.Errorf("read the gateway CA of %s: %w", projectID, err)
+	for {
+		header, err := reader.Next()
+		if err != nil {
+			return nil, fmt.Errorf("read the gateway %s of %s: %w", file, projectID, err)
+		}
+		if header.Typeflag != tar.TypeReg || path.Base(header.Name) != file {
+			continue
+		}
+		body, err := io.ReadAll(io.LimitReader(reader, 64<<10))
+		if err != nil || len(body) == 0 {
+			return nil, fmt.Errorf("the gateway %s of %s is empty or unreadable: %v", file, projectID, err)
+		}
+		return body, nil
 	}
-	pem, err := io.ReadAll(io.LimitReader(reader, 64<<10))
-	if err != nil || len(pem) == 0 {
-		return nil, fmt.Errorf("the gateway CA of %s is empty or unreadable: %v", projectID, err)
-	}
-	return pem, nil
 }
 
 // tarball packs the gateway's tls directory, readable by its user only.

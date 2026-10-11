@@ -2,7 +2,8 @@
 # host. A Studio user creates a DocumentDB project, a Mongo client on the host
 # writes and reads it over TLS at 127.0.0.1, Studio browses it, a Mongo user is
 # created and used, it is paused, resumed, backed up and restored into a new
-# project that serves Mongo again, and deleting that one stops both containers.
+# project that serves Mongo again and in place, and deleting the copy stops both
+# containers. Its two host ports and its CA stay the same throughout (EXC-594).
 # Needs from boot-smoke.sh: c ok ko DOCKER PORT T ORG W.
 
 MONGO_IMAGE=docker.io/library/mongo@sha256:d0d926f94df099bff534b7ee5b5986458131a22489dfff8664509af0c1e2ca9c
@@ -31,6 +32,17 @@ mongo() {
        --authenticationMechanism SCRAM-SHA-256 -u "$MUSER" -p "$MPASS" --eval "$0"' "$4" 2>&1
 }
 
+# endpoint_of <project>: its Postgres port, Mongo port and a digest of its CA.
+endpoint_of() {
+  dapi "$DAPI/projects/$1/db-endpoint" | djson '"%s %s %s" % (d.get("port"), d.get("mongoPort"), __import__("hashlib").sha256(d.get("caCertificate","").encode()).hexdigest()[:12])'
+}
+# kept_endpoint <when>: the project answers on the ports and CA it had at create.
+kept_endpoint() {
+  local now
+  now=$(endpoint_of "$DPID")
+  [ "$now" = "$DENDPOINT" ] && ok "$1 kept both host ports and the CA ($now)" || ko "$1 moved the endpoint: $DENDPOINT -> $now"
+}
+
 echo "== documentdb project"
 $DOCKER pull -q "$MONGO_IMAGE" >/dev/null 2>&1
 R=$(dapi -X POST "$DAPI/provision/" -d "{\"projectName\":\"docs\",\"orgId\":\"$ORG\",\"databaseType\":\"POSTGRESQL\",\"postgresVersion\":\"17\",\"documentDb\":true}")
@@ -50,6 +62,10 @@ echo "== mongo from the host"
 E=$(dapi "$DAPI/projects/$DPID/db-endpoint")
 [ "$(echo "$E" | djson 'd.get("singleHost") and d["host"]=="127.0.0.1" and d.get("mongoAvailable") and bool(d["caCertificate"])')" = True ] \
   && ok "Studio shows 127.0.0.1 with the Mongo port and gateway CA" || ko "endpoint: ${E:0:400}"
+DENDPOINT=$(endpoint_of "$DPID")
+read -r dpg dmg _ <<< "$DENDPOINT"
+[ "${dpg:-0}" -ge 30000 ] && [ "${dpg:-0}" -le 30999 ] && [ "${dmg:-0}" -ge 30000 ] && [ "${dmg:-0}" -le 30999 ] && [ "$dpg" != "$dmg" ] \
+  && ok "Postgres and Mongo hold ports in the tenant range ($dpg, $dmg)" || ko "host ports: $DENDPOINT"
 CRED=$(dapi "$DAPI/provision/$DPID/credentials")
 DUSER=$(echo "$CRED" | djson 'd["username"]'); DPASS=$(echo "$CRED" | djson 'd["password"]')
 out=$(mongo "$DPID" "$DUSER" "$DPASS" 'db.getSiblingDB("shop").items.insertOne({sku:"a1",qty:3}); print("count=" + db.getSiblingDB("shop").items.countDocuments({sku:"a1"}))')
@@ -79,12 +95,14 @@ dapi -X POST "$DAPI/provision/$DPID/resume" -o /dev/null
 st=$(wait_status "$DPID" ACTIVE)
 out=$(mongo "$DPID" "$DUSER" "$DPASS" 'print("count=" + db.getSiblingDB("shop").items.countDocuments({}))')
 case "$st$out" in ACTIVE*count=2*) ok "resumed: Mongo answers with the data" ;; *) ko "resume: $st ${out:0:300}"; $DOCKER logs excalibase-provisioning 2>&1 | grep -i "resume $DPID" | tail -3 ;; esac
+kept_endpoint "pause and resume"
 
 echo "== backup and restore"
 B=$(dapi -X POST "$DAPI/provision/$DPID/backup/trigger" -w ' %{http_code}')
 case "$B" in *" 200"|*" 201"|*" 202") ok "DocumentDB backup taken" ;; *) ko "backup: ${B:0:300}" ;; esac
 for i in $(seq 40); do dapi "$DAPI/provision/$DPID/backup/list" | grep -q '"COMPLETED"' && break; sleep 3; done
 dapi "$DAPI/provision/$DPID/backup/list" | grep -q '"COMPLETED"' && ok "DocumentDB backup COMPLETED" || ko "backup not completed"
+DB1=$(dapi "$DAPI/provision/$DPID/backup/list" | djson 'max((b for b in (d if isinstance(d,list) else d.get("backups",[])) if b.get("status")=="COMPLETED"), key=lambda b: b.get("timestamp",""))["id"]')
 RJ=$(dapi -X POST "$DAPI/provision/$DPID/backup/restore" -d '{"newProjectName":"docs-restored"}')
 RPID=$(echo "$RJ" | djson 'd.get("newProjectId","")'); JOB=$(echo "$RJ" | djson 'd.get("id","")')
 for i in $(seq 100); do
@@ -98,6 +116,30 @@ st=$(wait_status "$RPID" ACTIVE)
 RCRED=$(dapi "$DAPI/provision/$RPID/credentials")
 out=$(mongo "$RPID" "$(echo "$RCRED" | djson 'd["username"]')" "$(echo "$RCRED" | djson 'd["password"]')" 'print("count=" + db.getSiblingDB("shop").items.countDocuments({}))')
 case "$st$out" in ACTIVE*count=2*) ok "restored project serves Mongo through its own gateway" ;; *) ko "restored: $st ${out:0:300}" ;; esac
+read -r rpg rmg _ <<< "$(endpoint_of "$RPID")"
+case " $dpg $dmg " in *" $rpg "*|*" $rmg "*) ko "the copy took the source's ports ($rpg $rmg)" ;; *) [ "$rpg" != "$rmg" ] && ok "the copy holds ports of its own ($rpg, $rmg)" || ko "copy ports: $rpg $rmg" ;; esac
+
+echo "== restore in place"
+out=$(mongo "$DPID" "$DUSER" "$DPASS" 'db.getSiblingDB("shop").items.insertOne({sku:"c3"}); print("count=" + db.getSiblingDB("shop").items.countDocuments({}))')
+case "$out" in *count=3*) ok "a document written after the backup" ;; *) ko "write after backup: ${out:0:300}" ;; esac
+IJ=$(dapi -X POST "$DAPI/provision/$DPID/backup/restore" -d "{\"mode\":\"in_place\",\"backupId\":\"$DB1\",\"confirmReplace\":true}")
+IJOB=$(echo "$IJ" | djson 'd.get("id","")')
+for i in $(seq 200); do
+  js=$(dapi "$DAPI/provision/$DPID/backup/restore/$IJOB" | djson 'd.get("status","")+" "+(d.get("failureReason") or "")')
+  case "$js" in COMPLETED*|FAILED*) break ;; esac
+  sleep 3
+done
+st=$(wait_status "$DPID" ACTIVE)
+out=$(mongo "$DPID" "$DUSER" "$DPASS" 'print("count=" + db.getSiblingDB("shop").items.countDocuments({}))')
+case "$js $st $out" in COMPLETED*ACTIVE*count=2*) ok "restored in place: the backup's 2 documents, same credentials" ;; *) ko "in-place restore: ${js:-$IJ} / $st / ${out:0:300}" ;; esac
+kept_endpoint "the in-place restore"
+out=$(mongo "$DPID" reporting "$MPASS" 'print("count=" + db.getSiblingDB("shop").items.countDocuments({}))')
+case "$out" in *count=2*) ok "the Mongo user still signs in after the in-place restore" ;; *) ko "Mongo user after in-place: ${out:0:300}" ;; esac
+found=$(dapi "$DAPI/projects/$DPID/documentdb/databases/shop/collections/items/documents?limit=10")
+case "$found" in *a1*b2*|*b2*a1*) ok "Studio browses the restored project" ;; *) ko "browse after in-place: ${found:0:300}" ;; esac
+mode=$($DOCKER inspect "$GW" --format '{{.HostConfig.NetworkMode}}' 2>/dev/null)
+dbid=$($DOCKER inspect "$DB" --format '{{.Id}}' 2>/dev/null)
+case "$mode" in "container:"*"${dbid:-none}"*) ok "the rebuilt gateway joined the rebuilt database" ;; *) ko "gateway network after in-place: $mode (database $dbid)" ;; esac
 
 echo "== delete"
 # Deletion keeps a grace period: the project stops now and is removed later

@@ -103,6 +103,11 @@ func (p *DockerPostgreSQLProvisioner) HostPort(ctx context.Context, projectID st
 	return heldPort(ctx, p.hostPorts, projectID)
 }
 
+// DocumentDBPorts are the host ports the project's DocumentDB publishes on.
+func (p *DockerPostgreSQLProvisioner) DocumentDBPorts(ctx context.Context, projectID string) (DocumentDBPorts, error) {
+	return HeldDocumentDBPorts(ctx, p.hostPorts, projectID)
+}
+
 // StartHoldingPort starts one of this host's database containers.
 func (p *DockerPostgreSQLProvisioner) StartHoldingPort(ctx context.Context, container string) error {
 	return StartHoldingPort(ctx, p.docker, p.startPoller, container)
