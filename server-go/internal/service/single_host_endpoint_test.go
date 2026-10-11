@@ -117,3 +117,30 @@ func TestTheSingleHostEndpointRefusesOtherProjects(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+// EXC-592: a MySQL project on one host is reached on the loopback too, and
+// only over TLS: mysqld refuses a plaintext client.
+func TestASingleHostMySQLProjectIsReachedOverTLSOnly(t *testing.T) {
+	h := newSingleHostHarness(t)
+	inst, _ := h.svc.GetInstance("proj-docsvc001")
+	inst.DBType, inst.Host, inst.Username, inst.DatabaseName = domain.MySQL, singleHostContainer, "admin", "shop"
+	if err := h.svc.store.Update(inst); err != nil {
+		t.Fatal(err)
+	}
+	docker := &gatewayStates{recordingDocker: h.docker, states: map[string]provisioner.ContainerState{
+		inst.Namespace: runningWithPorts(map[string]int{"3306": 33061}),
+	}}
+	view, err := NewSingleHostEndpointService(h.svc.store, docker).Describe(context.Background(), "proj-docsvc001")
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	if view.Engine != "mysql" || !view.RequireTLS || !view.Available || view.Port != 33061 || view.Host != "127.0.0.1" {
+		t.Fatalf("view %+v", view)
+	}
+	if view.Connection.RequireTLS != "mysql://admin@127.0.0.1:33061/shop?ssl-mode=REQUIRED" || view.Connection.AllowPlaintext != "" {
+		t.Fatalf("connection %+v", view.Connection)
+	}
+	if view.Internal.Port != 3306 || view.Internal.ConnectionString != "mysql://admin@"+singleHostContainer+":3306/shop?ssl-mode=REQUIRED" {
+		t.Fatalf("internal %+v", view.Internal)
+	}
+}

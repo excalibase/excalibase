@@ -23,11 +23,22 @@ type EngineActivityReader interface {
 // DatabaseWorkCounters keeps the last reading per project.
 type DatabaseWorkCounters = storage.DatabaseWorkStore
 
-// MySQLEngineActivity reads a MySQL project's client work from its cluster.
-type MySQLEngineActivity struct{ mysql *provisioner.MySQLProvisioner }
+// MySQLWorkReader reads a MySQL project's client work counters, on MOCO or
+// on a single host.
+type MySQLWorkReader interface {
+	ClientWork(ctx context.Context, namespace, projectID string) (int64, error)
+}
 
-// NewMySQLEngineActivity reads through the MOCO provisioner.
-func NewMySQLEngineActivity(mysql *provisioner.MySQLProvisioner) *MySQLEngineActivity {
+var (
+	_ MySQLWorkReader = (*provisioner.MySQLProvisioner)(nil)
+	_ MySQLWorkReader = (*provisioner.DockerMySQLProvisioner)(nil)
+)
+
+// MySQLEngineActivity reads a MySQL project's client work from its server.
+type MySQLEngineActivity struct{ mysql MySQLWorkReader }
+
+// NewMySQLEngineActivity reads through the engine's MySQL provisioner.
+func NewMySQLEngineActivity(mysql MySQLWorkReader) *MySQLEngineActivity {
 	return &MySQLEngineActivity{mysql: mysql}
 }
 

@@ -297,3 +297,28 @@ describe('ConnectionStrings — single host', () => {
     expect(mongo.querySelector('[data-testid="conn-ca-download"]')).not.toBeNull();
   });
 });
+
+// EXC-592: MySQL on a single host is published on 127.0.0.1 too, TLS required.
+describe('ConnectionStrings — single-host MySQL', () => {
+  test('gives the loopback string with TLS and says how to tunnel to it', async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: { ...CREDENTIALS, engine: 'mysql', host: 'excalibase-p-1-mysql', port: 3306, username: 'admin', databaseName: 'shop' },
+    } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ConnectionStrings
+          projectId="p-1"
+          documentDb={false}
+          endpoint={{
+            ...SINGLE_HOST, port: 33061, requireTls: true, username: 'admin', database: 'shop',
+            caCertificate: '', mongo: undefined, internal: { host: 'excalibase-p-1-mysql', port: 3306, connectionString: '' },
+          }}
+        />
+      </QueryClientProvider>
+    );
+    expect(await screen.findByTestId('conn-mysql-public')).toHaveTextContent('@127.0.0.1:33061/shop?ssl-mode=REQUIRED');
+    expect(screen.getByTestId('conn-mysql-internal')).toHaveTextContent('@excalibase-p-1-mysql:3306/shop?ssl-mode=REQUIRED');
+    expect(screen.getByTestId('conn-ssh-tunnel')).toHaveTextContent('ssh -N -L 33061:127.0.0.1:33061');
+  });
+});

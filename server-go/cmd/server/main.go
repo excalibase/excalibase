@@ -650,7 +650,7 @@ func startIdlePauseScheduler(
 			DashboardURL: studioURL(cfg),
 		}),
 	})
-	if reader := mysqlIdleActivity(cfg, provSvc.MySQLProvisioner()); reader != nil {
+	if reader := mysqlIdleActivity(cfg, provSvc.MySQLWorkReader()); reader != nil {
 		scheduler.SetEngineActivity(domain.MySQL, reader, sqlStore)
 	}
 	scheduler.Start(context.Background())
@@ -1253,7 +1253,9 @@ func buildBackupService(
 	k8sClient k8s.KubeClient,
 	dockerClient provisioner.DockerClient,
 	backupStorage service.BackupStorageSource,
-) *service.BackupService {
+	singleHostMySQL *provisioner.DockerMySQLProvisioner,
+) (*service.BackupService, *service.HostMySQLBackupAdapter) {
+	var hostMySQL *service.HostMySQLBackupAdapter
 	k8sAdapter := service.NewK8sBackupAdapter(k8sClient, backupStorage)
 	k8sAdapter.SetInstanceStore(store)
 	k8sAdapter.SetPublicDomainSuffix(cfg.DBEndpointDomain)
@@ -1296,12 +1298,17 @@ func buildBackupService(
 					// CopyToContainer + StartContainer + WaitForHealthy.
 					dockerAdapter.SetDockerClient(dockerClient)
 					adapters[domain.ModeDocker] = dockerAdapter
+					hostMySQL = hostMySQLBackupAdapter(singleHostMySQL, dockerClient, dockerSDK, uploader, sqlStore.BackupRecords(), defaults.Bucket, store)
 				}
 			}
 		}
 	}
 
-	return service.NewBackupServiceWithAdapters(store, adapters, cfg.StoragePath)
+	backupSvc := service.NewBackupServiceWithAdapters(store, adapters, cfg.StoragePath)
+	if hostMySQL != nil {
+		backupSvc.RegisterEngineAdapter(domain.ModeDocker, domain.MySQL, hostMySQL)
+	}
+	return backupSvc, hostMySQL
 }
 
 // buildHandlerDeps constructs every HTTP handler the router needs.
@@ -1379,7 +1386,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	appDeploySvc.SetDiskJobs(k8s.DiskJobOptions{Image: cfg.AppDiskToolsImage, RuntimeClass: cfg.AppRuntimeClass, Timeout: appDiskJobTimeout})
 	appDeploySvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
 	appDomainSvc := buildAppDomainService(cfg, sqlStore.DB(), appRuntime, store, appDeploySvc)
-	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
+	backupSvc, hostMySQLBackups := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc, provSvc.SingleHostMySQL())
 	registerMySQLBackups(backupSvc, provSvc.MySQLProvisioner(), k8sClient, store, provSvc, sqlStore.BackupRecords())
 	// A restore finishes the way a provision does: the adapters hand the
 	// recovered database to the provisioning service's registration path
@@ -1393,6 +1400,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	if err := wireRestoreVerification(backupSvc, vc, cfg.RestoreReadyTimeout); err != nil {
 		log.Fatalf("restore verification: %v", err)
 	}
+	startHostMySQLBackups(hostMySQLBackups, store)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	// Snapshot exports stay Kubernetes-only: no engine for the connector.
@@ -2497,7 +2505,7 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*p
 		log.Printf("Provisioner mode: docker (host=%s)", cfg.DockerHost)
 		dockerProvisioner := provisioner.NewDockerPostgreSQLProvisioner(dockerClient)
 		dockerProvisioner.SetDeletionPoller(deletionPoller())
-		return provisioner.NewFactory(dockerProvisioner), dockerClient
+		return provisioner.NewFactory(dockerProvisioner, provisioner.NewDockerMySQLProvisioner(dockerClient)), dockerClient
 	}
 	return buildK8sFactory(cfg, k8sClient), nil
 }
@@ -2515,9 +2523,9 @@ func buildK8sFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) *provisione
 }
 
 // mysqlIdleActivity is what the idle sweep judges MySQL projects by: their
-// clients' work read from MOCO's mysqld (EXC-588), behind the mysql feature.
+// clients' work read from mysqld (EXC-588, EXC-592), behind the mysql feature.
 // Without it MySQL projects are never paused for idleness.
-func mysqlIdleActivity(cfg config.AppConfig, mysql *provisioner.MySQLProvisioner) service.EngineActivityReader {
+func mysqlIdleActivity(cfg config.AppConfig, mysql service.MySQLWorkReader) service.EngineActivityReader {
 	if mysql == nil || !mysqlCreationAllowed(cfg) {
 		return nil
 	}

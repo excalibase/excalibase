@@ -12,6 +12,8 @@
 # DOCUMENTDB=1 installs with --documentdb and walks DocumentDB (EXC-576,
 # documentdb-journey.sh): mongosh on the host, Studio's browser, Mongo users,
 # pause, resume, backup and restore.
+# MYSQL=1 turns the mysql feature on and walks MySQL (EXC-592, mysql-journey.sh):
+# TLS clients, backups, point-in-time and in-place restore, pause, purge.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG).
 # Destroys the bundle's containers and volumes; never run it on an install you keep.
 set -uo pipefail
@@ -74,6 +76,7 @@ echo "== install"
 ./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS ${DOCUMENTDB:+--documentdb} || exit 1
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
+[ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"
 timeout 900 $COMPOSE $P up -d > "$W/up.log" 2>&1; echo "up exit $?"; grep -iE "^Error|error:" "$W/up.log" | sort -u | head -5
 for i in $(seq 90); do [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.Status}}' 2>/dev/null)" = exited ] && break; sleep 2; done
@@ -186,6 +189,7 @@ fi
 
 [ -n "${APPS:-}" ] && . "$TESTS/apps-journey.sh"
 [ -n "${DOCUMENTDB:-}" ] && . "$TESTS/documentdb-journey.sh"
+[ -n "${MYSQL:-}" ] && . "$TESTS/mysql-journey.sh"
 
 echo "== studio health"
 code=$(c -o /dev/null -w '%{http_code}' https://studio.localhost:$PORT/); h=$($DOCKER inspect excalibase-studio --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null)

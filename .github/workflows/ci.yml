@@ -91,6 +91,11 @@ jobs:
           PLATFORM_TAG: ci
           MANUAL_UNSEAL: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
+      - name: Fresh install with MySQL (TLS clients, backups, point-in-time and in-place restore, purge)
+        env:
+          PLATFORM_TAG: ci
+          MYSQL: "1"
+        run: bash deploy/single-host/tests/boot-smoke.sh docker
       # Containers on a single host (EXC-575) run under gVisor; the runner gets it from gVisor's apt repository.
       - name: Install gVisor (runsc) into Docker
         run: |

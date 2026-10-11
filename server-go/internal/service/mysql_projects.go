@@ -114,6 +114,27 @@ func (s *ProvisioningService) MySQLProvisioner() *provisioner.MySQLProvisioner {
 	return mysql
 }
 
+// SingleHostMySQL is the single host's MySQL provisioner, or nil elsewhere.
+func (s *ProvisioningService) SingleHostMySQL() *provisioner.DockerMySQLProvisioner {
+	server, err := s.mysqlServerOf()
+	if err != nil {
+		return nil
+	}
+	mysql, _ := server.(*provisioner.DockerMySQLProvisioner)
+	return mysql
+}
+
+// MySQLWorkReader reads MySQL projects' client work on this installation, or
+// is nil where MySQL is not served.
+func (s *ProvisioningService) MySQLWorkReader() MySQLWorkReader {
+	server, err := s.mysqlServerOf()
+	if err != nil {
+		return nil
+	}
+	reader, _ := server.(MySQLWorkReader)
+	return reader
+}
+
 // AllowMySQLCreation turns the creation of new MySQL projects on or off.
 func (s *ProvisioningService) AllowMySQLCreation(allowed bool) { s.mysqlCreation = allowed }
 

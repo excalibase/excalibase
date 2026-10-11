@@ -120,7 +120,7 @@ export function ProvisionPage() {
     : null;
   const engines = ENGINES.map((card) => {
     if (card.engine === 'DOCUMENTDB' && documentDbClosed) return { ...card, desc: documentDbClosed, disabled: true };
-    if (card.engine === 'MYSQL' && mysqlOn) return { ...card, desc: 'MOCO operator, MySQL 8.4', disabled: false };
+    if (card.engine === 'MYSQL' && mysqlOn) return { ...card, desc: 'MySQL 8.4, TLS required', disabled: false };
     return card;
   });
 
