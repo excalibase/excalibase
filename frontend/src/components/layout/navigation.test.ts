@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { PROJECT_NAV, visibleProjectNav } from './navigation';
+import { PROJECT_NAV, visibleNavItems, visibleProjectNav } from './navigation';
 
 describe('project navigation', () => {
   test('the project home is the project, not its database', () => {
@@ -22,5 +22,13 @@ describe('project navigation', () => {
     const keys = (mcp: boolean) => visibleProjectNav({ appHosting: true, mcp }).map((section) => section.key);
     expect(keys(false)).not.toContain('ai-tools');
     expect(keys(true)).toContain('ai-tools');
+  });
+
+  // EXC-586: a MySQL project is backed up; snapshots and migrations stay Postgres pages.
+  test('a MySQL project lists Backups and no other operation', () => {
+    const operations = visibleProjectNav({ appHosting: true, mcp: false, postgres: false }).find((section) => section.key === 'operations');
+    expect(operations).toBeDefined();
+    expect(visibleNavItems(operations?.children ?? [], false, false).map((item) => item.label)).toEqual(['Backups']);
+    expect(visibleNavItems(operations?.children ?? [], false, true).map((item) => item.label)).toEqual(['Backups', 'Snapshots', 'Migrations']);
   });
 });

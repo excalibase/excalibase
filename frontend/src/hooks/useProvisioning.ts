@@ -228,11 +228,21 @@ export const useTriggerBackup = () => {
   });
 };
 
+// What GET /backup/list answers. restoreWindow is set for MySQL, whose
+// point-in-time reach is bounded by its oldest and newest runs.
+export interface BackupList {
+  backups: BackupInfo[];
+  backupEnabled: boolean;
+  schedule: string;
+  retentionDays: number;
+  restoreWindow?: { earliest: string; latest: string };
+}
+
 export const useListBackups = (projectId: string) => {
   return useQuery({
     queryKey: ['backups', projectId],
     queryFn: async () => {
-      const response = await api.get<{ backups: BackupInfo[]; backupEnabled: boolean; schedule: string; retentionDays: number }>(
+      const response = await api.get<BackupList>(
         `/provision/${projectId}/backup/list`
       );
       return response.data;

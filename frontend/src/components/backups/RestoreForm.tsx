@@ -10,7 +10,7 @@ import {
   type RestoreResult,
 } from '../../hooks/useProvisioning';
 import { Button } from '../Button';
-import { toZonedInstant } from '../../utils/zonedInstant';
+import { toLocalInput, toZonedInstant } from '../../utils/zonedInstant';
 import { serverErrorCode, serverErrorMessage } from '../../utils/serverError';
 
 type RestoreTone = 'pending' | 'ok' | 'error';
@@ -110,9 +110,61 @@ function ModeChoice({ mode, onChange }: { readonly mode: RestoreMode; readonly o
   );
 }
 
+export interface RestoreWindow {
+  readonly earliest: string;
+  readonly latest: string;
+}
+
+interface RestoreFormProps {
+  readonly projectId: string;
+  // A MySQL project restores to a time inside its backup window only (ADR 0041).
+  readonly engine?: 'mysql';
+  readonly restoreWindow?: RestoreWindow;
+}
+
+function MySQLWindowNote({ window }: { readonly window?: RestoreWindow }) {
+  return (
+    <p data-testid="restore-window" className="text-sm text-text-secondary">
+      {window
+        ? `Point-in-time within the backup window: ${new Date(window.earliest).toLocaleString()} – ${new Date(window.latest).toLocaleString()}. Leave the target time blank to restore the latest backup.`
+        : 'No backup has completed yet, so there is nothing to restore.'}
+    </p>
+  );
+}
+
+interface TargetTimeProps {
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly mysql: boolean;
+  readonly window?: RestoreWindow;
+}
+
+function TargetTimeField({ value, onChange, mysql, window }: TargetTimeProps) {
+  const bounds = mysql && window ? { min: toLocalInput(window.earliest), max: toLocalInput(window.latest) } : {};
+  return (
+    <div>
+      <label htmlFor="restore-target-time" className="text-xs text-text-secondary block mb-1 flex items-center gap-1.5">
+        <Clock className="w-3 h-3" />
+        {mysql ? 'Target time — leave blank for the latest backup' : 'Target Time (PITR) — leave blank for latest backup'}
+      </label>
+      <input
+        id="restore-target-time"
+        type="datetime-local"
+        step={1}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={inputClass}
+        {...bounds}
+      />
+      {value.trim() !== '' && !mysql && <p className="text-xs text-accent-primary mt-1">Point-in-Time Recovery mode enabled</p>}
+    </div>
+  );
+}
+
 // Restores this project's backups into a new project, or into this project
 // itself, which a plan with no free project slot can still do.
-export function RestoreForm({ projectId }: { readonly projectId: string }) {
+export function RestoreForm({ projectId, engine, restoreWindow }: RestoreFormProps) {
+  const mysql = engine === 'mysql';
   const restore = useRestoreFromBackup(projectId);
   const [mode, setMode] = useState<RestoreMode>('new_project');
   const [newProjectName, setNewProjectName] = useState('');
@@ -153,9 +205,13 @@ export function RestoreForm({ projectId }: { readonly projectId: string }) {
 
   return (
     <div className="max-w-lg space-y-5">
-      <p className="text-sm text-text-secondary">
-        Leave the target time blank to restore the latest backup, or set a time for Point-in-Time Recovery (PITR).
-      </p>
+      {mysql ? (
+        <MySQLWindowNote window={restoreWindow} />
+      ) : (
+        <p className="text-sm text-text-secondary">
+          Leave the target time blank to restore the latest backup, or set a time for Point-in-Time Recovery (PITR).
+        </p>
+      )}
 
       <div className="space-y-4">
         <ModeChoice mode={mode} onChange={chooseMode} />
@@ -173,20 +229,7 @@ export function RestoreForm({ projectId }: { readonly projectId: string }) {
           </div>
         )}
 
-        <div>
-          <label htmlFor="restore-target-time" className="text-xs text-text-secondary block mb-1 flex items-center gap-1.5">
-            <Clock className="w-3 h-3" /> Target Time (PITR) — leave blank for latest backup
-          </label>
-          <input
-            id="restore-target-time"
-            type="datetime-local"
-            step={1}
-            value={targetTime}
-            onChange={(e) => setTargetTime(e.target.value)}
-            className={inputClass}
-          />
-          {isPitr && <p className="text-xs text-accent-primary mt-1">Point-in-Time Recovery mode enabled</p>}
-        </div>
+        <TargetTimeField value={targetTime} onChange={setTargetTime} mysql={mysql} window={restoreWindow} />
 
         {inPlace && (
           <label className="flex items-start gap-2 text-sm text-text-primary">

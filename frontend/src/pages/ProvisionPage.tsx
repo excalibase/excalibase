@@ -73,8 +73,7 @@ function tierLabel(tier: string): string {
   return tier.charAt(0) + tier.slice(1).toLowerCase();
 }
 
-// MySQL runs on at least 1Gi (the server raises a smaller plan) and has no
-// backups yet.
+// MySQL runs on at least 1Gi (the server raises a smaller plan).
 const MYSQL_MIN_MEMORY = '1Gi';
 
 function belowOneGi(memory: string): boolean {
@@ -89,7 +88,7 @@ function tierFeatures(tc: TierConfig, mysql: boolean): string[] {
     `${tc.storageSize} storage`,
     `${memory} RAM`,
     `${tc.cpu} vCPU`,
-    ...(tc.backupEnabled && !mysql ? ['Backups'] : []),
+    ...(tc.backupEnabled ? ['Backups'] : []),
   ];
 }
 

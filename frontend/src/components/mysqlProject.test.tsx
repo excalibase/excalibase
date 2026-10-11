@@ -32,6 +32,9 @@ function renderWithProject(ui: React.ReactElement, path = '/project/p-my') {
           <Route path="/project/:projectId/sql" element={<DatabaseRequired />}>
             <Route index element={<p>sql editor</p>} />
           </Route>
+          <Route path="/project/:projectId/operations/backups" element={<DatabaseRequired mysql />}>
+            <Route index element={<p>backups page</p>} />
+          </Route>
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>
@@ -45,13 +48,20 @@ describe('MySQL projects in Studio', () => {
     expect(engineLabel({ databaseType: 'MYSQL' })).toBe('MySQL');
   });
 
+  // EXC-586: backups work on MySQL, so their page is reachable.
+  test('the Backups page opens on a MySQL project', async () => {
+    renderWithProject(<p>overview</p>, '/project/p-my/operations/backups');
+    expect(await screen.findByText('backups page')).toBeInTheDocument();
+    expect(screen.queryByTestId('postgres-required')).not.toBeInTheDocument();
+  });
+
   test('the navigation lists only what works on MySQL', () => {
     const sections = visibleProjectNav({ appHosting: true, mcp: false, postgres: false });
     const keys = sections.map((section) => section.key);
-    for (const hidden of ['sql', 'schema', 'database', 'auth', 'api-keys', 'operations']) {
+    for (const hidden of ['sql', 'schema', 'database', 'auth', 'api-keys']) {
       expect(keys).not.toContain(hidden);
     }
-    for (const shown of ['home', 'containers', 'storage', 'vault', 'settings', 'monitoring']) {
+    for (const shown of ['home', 'containers', 'storage', 'vault', 'settings', 'monitoring', 'operations']) {
       expect(keys).toContain(shown);
     }
     const monitoring = PROJECT_NAV.find((section) => section.key === 'monitoring');

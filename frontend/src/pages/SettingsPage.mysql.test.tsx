@@ -60,7 +60,9 @@ describe('SettingsPage — MySQL', () => {
     expect(screen.getByTestId('minor-upgrade-btn')).toBeEnabled();
     expect(screen.getAllByText('MySQL Version').length).toBeGreaterThan(0);
     expect(screen.queryByText('PostgreSQL Version')).not.toBeInTheDocument();
-    for (const id of ['connect-section', 'cluster-settings-card', 'backup-config-card']) {
+    // EXC-586: backups are read-only here, as for Postgres; Backups is where they are used.
+    expect(screen.getByTestId('backup-config-card')).toBeInTheDocument();
+    for (const id of ['connect-section', 'cluster-settings-card']) {
       expect(screen.queryByTestId(id)).not.toBeInTheDocument();
     }
     for (const url of ['/provision/p-my/cluster']) {

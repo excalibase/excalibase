@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RestoreForm } from './RestoreForm';
 import { api } from '../../api/client';
+import { toLocalInput } from '../../utils/zonedInstant';
 
 vi.mock('../../api/client', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 
@@ -150,5 +151,38 @@ describe('RestoreForm progress', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('already running');
     expect(screen.queryByRole('button', { name: /Restore into this project instead/i })).not.toBeInTheDocument();
+  });
+});
+
+// Owner decision (ADR 0041): a MySQL project restores to a time inside its
+// backup window, and says which window that is.
+describe('RestoreForm on a MySQL project', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function renderMySQL(window?: { earliest: string; latest: string }) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <RestoreForm projectId="p1" engine="mysql" restoreWindow={window} />
+      </QueryClientProvider>,
+    );
+  }
+
+  test('names the backup window and bounds the time to it', () => {
+    const window = { earliest: '2026-10-11T00:00:00Z', latest: '2026-10-11T12:00:00Z' };
+    renderMySQL(window);
+    const note = screen.getByTestId('restore-window');
+    expect(note).toHaveTextContent(
+      `Point-in-time within the backup window: ${new Date(window.earliest).toLocaleString()} – ${new Date(window.latest).toLocaleString()}`,
+    );
+    const time = screen.getByLabelText(/Target time/i);
+    expect(time).toHaveAttribute('min', toLocalInput(window.earliest));
+    expect(time).toHaveAttribute('max', toLocalInput(window.latest));
+    expect(screen.queryByText(/Point-in-Time Recovery \(PITR\)/)).not.toBeInTheDocument();
+  });
+
+  test('says when no backup has completed yet', () => {
+    renderMySQL(undefined);
+    expect(screen.getByTestId('restore-window')).toHaveTextContent('No backup has completed yet');
   });
 });

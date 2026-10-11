@@ -6,6 +6,7 @@ const restoreMutate = vi.fn();
 
 vi.mock('../hooks/useRouteProjectId', () => ({ useRouteProjectId: () => 'p1' }));
 vi.mock('../hooks/useProvisioning', () => ({
+  useInstance: () => ({ data: { projectId: 'p1', databaseType: 'POSTGRESQL' } }),
   useListBackups: () => ({ data: { backups: [], backupEnabled: true, schedule: '', retentionDays: 0 }, isLoading: false }),
   useTriggerBackup: () => ({ mutate: vi.fn(), isPending: false }),
   useRestoreFromBackup: () => ({ mutate: restoreMutate, isPending: false, data: undefined }),
