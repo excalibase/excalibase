@@ -1074,8 +1074,10 @@ func buildProvisioningService(
 	provSvc.SetBackupCredentials(buildBackupCredentialIssuer(cfg))
 	// Deprovision with confirmDeleteBackups resolves the store through
 	// provSvc.BackupStorage() — the same source backups are written with.
-	provSvc.SetBackupPurger(service.NewBackupPurger(provSvc, dockerBackupKeyPrefix,
-		service.AWSObjectDeleterFactory(backupUsePathStyle())))
+	purger := service.NewBackupPurger(provSvc, dockerBackupKeyPrefix, service.AWSObjectDeleterFactory(backupUsePathStyle()))
+	// A project's backup records go with its backups (EXC-586).
+	purger.SetRecords(sqlStore.BackupRecords())
+	provSvc.SetBackupPurger(purger)
 	// A database add that a dead process left half built is rolled back so
 	// the project is usable and the add can be retried (EXC-426). Each one
 	// takes the project's lease, so a live add on another replica is left.

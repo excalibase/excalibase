@@ -70,3 +70,41 @@ func TestRetainedBackupPrefixOfAMySQLProject(t *testing.T) {
 		t.Errorf("prefix %q %v", prefix, ok)
 	}
 }
+
+// EXC-586: when a project's backups go, so do its backup records, and only
+// once the objects are gone.
+func TestPurgeDropsTheProjectsBackupRecords(t *testing.T) {
+	ctx := context.Background()
+	inst := &domain.DatabaseInstance{ProjectID: "proj-1", OrgID: "org1", DBType: domain.MySQL, DeploymentMode: domain.ModeK8s}
+	purges := map[string]func(*BackupPurger) error{
+		"purge": func(p *BackupPurger) error { _, err := p.Purge(ctx, inst); return err },
+		"retained": func(p *BackupPurger) error {
+			_, err := p.PurgeRetained(ctx, storage.RetainedBackup{ProjectID: "proj-1", OrgID: "org1", DeploymentMode: domain.ModeK8s})
+			return err
+		},
+	}
+	for name, purge := range purges {
+		t.Run(name, func(t *testing.T) {
+			records := &fakeBackupRecordStore{}
+			_ = records.Save(ctx, &domain.BackupRecord{ID: "a", ProjectID: "proj-1", Type: backupTypeManual})
+			_ = records.Save(ctx, &domain.BackupRecord{ID: "b", ProjectID: "proj-10", Type: backupTypeManual})
+			deleter := newFakeObjectDeleter("moco/org1-proj-1/proj-1-mysql/20261011-000000/dump.tar")
+			deleter.deleteErr = errors.New("store down")
+			purger := newTestPurger(deleter)
+			purger.SetRecords(records)
+			if err := purge(purger); err == nil {
+				t.Fatal("no error from a failed purge")
+			}
+			if len(records.records) != 2 {
+				t.Fatalf("records went before the backups: %+v", records.records)
+			}
+			deleter.deleteErr = nil
+			if err := purge(purger); err != nil {
+				t.Fatalf("purge: %v", err)
+			}
+			if len(records.records) != 1 || records.records[0].ProjectID != "proj-10" {
+				t.Errorf("records left %+v", records.records)
+			}
+		})
+	}
+}

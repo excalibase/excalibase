@@ -244,8 +244,9 @@ func (a *MySQLBackupAdapter) PurgeExpired(ctx context.Context, inst *domain.Data
 		return 0, err
 	}
 	cutoff := a.now().Add(-time.Duration(*inst.BackupRetentionDays) * 24 * time.Hour)
+	expired := expiredMySQLBackups(backups, cutoff)
 	var doomed []string
-	for _, backup := range expiredMySQLBackups(backups, cutoff) {
+	for _, backup := range expired {
 		doomed = append(doomed, backup.Keys...)
 	}
 	store, objects, err := a.openBucket(ctx)
@@ -258,7 +259,7 @@ func (a *MySQLBackupAdapter) PurgeExpired(ctx context.Context, inst *domain.Data
 			return start, fmt.Errorf("delete expired backups of %s: %w", inst.ProjectID, err)
 		}
 	}
-	return len(doomed), nil
+	return len(doomed), a.dropManualRecordsThrough(ctx, inst.ProjectID, expired)
 }
 
 // backups reads the project's runs from the bucket with the platform key.
