@@ -1167,11 +1167,11 @@ func (s *ProvisioningService) RetainedBackupPrefix(inst *domain.DatabaseInstance
 		// Without one, any prefix we returned would name the wrong place.
 		return "", false
 	}
-	prefix, err := ProjectBackupPrefix(inst.DeploymentMode, inst.ProjectID, keyPrefix)
-	if err != nil {
+	prefixes, err := projectBackupPrefixes(inst.DeploymentMode, engineOf(inst), inst.OrgID, inst.ProjectID, keyPrefix)
+	if err != nil || len(prefixes) == 0 {
 		return "", false
 	}
-	return prefix, true
+	return prefixes[0], true
 }
 
 // backupKeyPrefix is the docker-mode key prefix the purger was wired with,

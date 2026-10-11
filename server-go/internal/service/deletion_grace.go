@@ -464,8 +464,7 @@ func (s *ProvisioningService) purgeRetained(ctx context.Context, kept storage.Re
 	if s.backupPurger == nil {
 		return ErrBackupPurgeNotConfigured
 	}
-	gone := &domain.DatabaseInstance{ProjectID: kept.ProjectID, DeploymentMode: kept.DeploymentMode}
-	deleted, err := s.backupPurger.Purge(ctx, gone)
+	deleted, err := s.backupPurger.PurgeRetained(ctx, kept)
 	if err != nil && !errors.Is(err, ErrNoBackupsForMode) {
 		return err
 	}
