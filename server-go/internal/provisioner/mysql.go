@@ -47,6 +47,8 @@ type MySQLProvisioner struct {
 	// for pods or the namespace to go.
 	readyPoller Poller
 	stopPoller  Poller
+	// backupPathStyle addresses the backup store path-style.
+	backupPathStyle bool
 }
 
 func NewMySQLProvisioner(client k8s.KubeClient) *MySQLProvisioner {
@@ -72,8 +74,8 @@ func mysqlNamespace(req domain.ProvisioningRequest) string {
 // validateMySQLRequest refuses, before anything exists, what MySQL projects
 // do not offer and a database name that is not a plain identifier.
 func validateMySQLRequest(req domain.ProvisioningRequest) (database, image string, err error) {
-	if req.Backup != nil && req.Backup.Enabled {
-		return "", "", fmt.Errorf("backups are %w yet", ErrMySQLUnsupported)
+	if err := validateMySQLBackup(req.Backup); err != nil {
+		return "", "", err
 	}
 	if req.DocumentDB {
 		return "", "", fmt.Errorf("DocumentDB is %w", ErrMySQLUnsupported)
@@ -116,6 +118,12 @@ func (p *MySQLProvisioner) ProvisionWithRollback(ctx context.Context, req domain
 	if err := p.ensureNamespace(ctx, req, namespace, pc); err != nil {
 		return nil, err
 	}
+	if req.Backup != nil && req.Backup.Enabled {
+		pc.SetStep("write the backup credentials")
+		if err := p.WriteBackupAccess(ctx, namespace, k8s.MySQLBackupCredentialsSecret, req.Backup.S3); err != nil {
+			return nil, pc.Fail(err)
+		}
+	}
 	pc.SetStage(domain.StageCRDDeployment)
 	opts := k8s.MySQLClusterOpts{ProjectID: projectID, Namespace: namespace, Tier: tier, StorageClass: req.StorageClass, Image: image}
 	if err := p.applyCluster(ctx, opts, pc); err != nil {
@@ -126,7 +134,14 @@ func (p *MySQLProvisioner) ProvisionWithRollback(ctx context.Context, req domain
 	if err := p.waitServing(ctx, namespace, projectID, tier.Instances); err != nil {
 		return nil, pc.Fail(err)
 	}
-	return p.createDatabase(ctx, namespace, projectID, database, pc)
+	result, err := p.createDatabase(ctx, namespace, projectID, database, pc)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.attachProvisionedBackups(ctx, req, opts, pc); err != nil {
+		return nil, pc.Fail(err)
+	}
+	return result, nil
 }
 
 // createDatabase creates the project's database on the serving cluster and
@@ -301,11 +316,6 @@ func (p *MySQLProvisioner) GetStatus(ctx context.Context, namespace, projectID s
 		return &ProvisioningStatus{Phase: "Pending"}, nil
 	}
 	return &ProvisioningStatus{Phase: "Running", Ready: true}, nil
-}
-
-// ConfigureBackup is refused until MySQL backups exist (EXC-586).
-func (p *MySQLProvisioner) ConfigureBackup(context.Context, string, string, string, int) error {
-	return fmt.Errorf("backups are %w yet", ErrMySQLUnsupported)
 }
 
 // StopReplication has nothing to stop: no CDC watcher runs for MySQL yet.
@@ -528,7 +538,7 @@ func (p *MySQLProvisioner) RemoveDatabase(ctx context.Context, namespace, projec
 	if err := p.client.DeleteCRD(ctx, k8s.ConfigMapGVR, namespace, k8s.MySQLConfigName(projectID)); err != nil {
 		return fmt.Errorf("delete mysqld settings: %w", err)
 	}
-	return nil
+	return p.removeBackupObjects(ctx, namespace, projectID)
 }
 
 func (p *MySQLProvisioner) deleteClusterAndWait(ctx context.Context, namespace, projectID string) error {

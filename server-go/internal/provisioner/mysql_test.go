@@ -111,16 +111,11 @@ func TestMySQLProvision_DefaultsToNewestVersionAndRefusesUnknown(t *testing.T) {
 	}
 }
 
-// MySQL backups arrive with their own ticket (EXC-586); until then a request
-// for them is refused rather than silently ignored.
-func TestMySQLProvision_RefusesBackupsAndDocumentDB(t *testing.T) {
+// DocumentDB is a Postgres extension; a MySQL request for it is refused
+// rather than silently ignored.
+func TestMySQLProvision_RefusesDocumentDB(t *testing.T) {
 	_, prov := newMySQLTest(t)
 	req := mysqlRequest("")
-	req.Backup = &domain.BackupSettings{Enabled: true}
-	if _, err := prov.ProvisionWithRollback(context.Background(), req, mysqlFree, recordingContext()); !errors.Is(err, ErrMySQLUnsupported) {
-		t.Errorf("backups: %v", err)
-	}
-	req = mysqlRequest("")
 	req.DocumentDB = true
 	if _, err := prov.ProvisionWithRollback(context.Background(), req, mysqlFree, recordingContext()); !errors.Is(err, ErrMySQLUnsupported) {
 		t.Errorf("documentdb: %v", err)
