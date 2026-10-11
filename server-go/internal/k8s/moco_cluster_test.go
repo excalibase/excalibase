@@ -270,3 +270,22 @@ func TestMySQLServiceNames(t *testing.T) {
 		t.Errorf("replica %s", got)
 	}
 }
+
+func TestMySQLSettingsAreTheConfigMapsData(t *testing.T) {
+	for _, plan := range []config.TierConfig{freePlan, standardPlan} {
+		settings, err := MySQLSettings(plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cm, _ := BuildMySQLConfig(mysqlOpts(plan))
+		data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+		if len(settings) != len(data) {
+			t.Fatalf("settings %v, config map %v", settings, data)
+		}
+		for k, v := range data {
+			if settings[k] != v {
+				t.Errorf("%s=%q, config map has %q", k, settings[k], v)
+			}
+		}
+	}
+}

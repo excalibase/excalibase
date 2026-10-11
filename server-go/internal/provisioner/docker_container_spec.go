@@ -19,6 +19,8 @@ type ContainerSpec struct {
 	Name  string
 	Image string
 	Env   map[string]string
+	// Entrypoint replaces the image's entrypoint; nil keeps it.
+	Entrypoint []string
 	// Cmd replaces the image's command; nil keeps it.
 	Cmd []string
 	// Ports maps container port to host port ("" lets the engine choose),

@@ -20,6 +20,8 @@ type fakeEngine struct {
 	copied     map[string][]byte
 	// execCode answers an exec; nil answers 0.
 	execCode func(container string, cmd []string) int
+	// stdinAnswer answers an exec fed stdin; nil answers "" and no error.
+	stdinAnswer func(container string, cmd []string, stdin string) (string, error)
 	// failOn makes the named call ("create:<name>", "start:<name>") fail.
 	failOn string
 	clock  time.Time
@@ -146,6 +148,9 @@ func (f *fakeEngine) ExecInContainerStdin(_ context.Context, id string, cmd []st
 		return "", err
 	}
 	f.stdin = append(f.stdin, stdin)
+	if f.stdinAnswer != nil {
+		return f.stdinAnswer(id, cmd, stdin)
+	}
 	return "", nil
 }
 
