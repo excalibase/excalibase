@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -236,6 +237,25 @@ func (p *MySQLProvisioner) EnsurePlatformUsers(ctx context.Context, namespace, p
 func (p *MySQLProvisioner) SetUserPassword(ctx context.Context, namespace, projectID, user, password string) error {
 	if err := p.execSecret(ctx, namespace, projectID, MySQLAlterUserSQL(user, password), password); err != nil {
 		return fmt.Errorf("set the %s password: %w", user, err)
+	}
+	return nil
+}
+
+// SetUserPasswords sets several platform users' passwords in one batch.
+func (p *MySQLProvisioner) SetUserPasswords(ctx context.Context, namespace, projectID string, passwords map[string]string) error {
+	users := make([]string, 0, len(passwords))
+	for user := range passwords {
+		users = append(users, user)
+	}
+	sort.Strings(users)
+	var statements strings.Builder
+	secrets := make([]string, 0, len(users))
+	for _, user := range users {
+		statements.WriteString(MySQLAlterUserSQL(user, passwords[user]) + "\n")
+		secrets = append(secrets, passwords[user])
+	}
+	if err := p.execSecret(ctx, namespace, projectID, statements.String(), secrets...); err != nil {
+		return fmt.Errorf("set the platform users' passwords: %w", err)
 	}
 	return nil
 }
