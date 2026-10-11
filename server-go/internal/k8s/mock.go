@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -103,8 +104,10 @@ type MockClient struct {
 	EnsureDocumentDBServiceError error
 
 	// PublicDBIngress — open ports per "namespace/projectID".
-	PublicDBIngress      map[string][]int
-	PublicDBIngressError error
+	PublicDBIngress map[string][]int
+	// PublicDBIngressSelectors — the pods each open ingress selects.
+	PublicDBIngressSelectors map[string]map[string]string
+	PublicDBIngressError     error
 
 	// OmitClusterAppSecret models an operator that writes no owner Secret
 	// for a Cluster it bootstraps.
@@ -234,8 +237,9 @@ func NewMockClient() *MockClient {
 		PublicDBServices: make(map[string]PublicDBServiceSpec),
 		GatewayReady:     make(map[string]bool),
 
-		DocumentDBServices: make(map[string]bool),
-		PublicDBIngress:    make(map[string][]int),
+		DocumentDBServices:       make(map[string]bool),
+		PublicDBIngress:          make(map[string][]int),
+		PublicDBIngressSelectors: make(map[string]map[string]string),
 
 		AppWorkloads:  make(map[string]*AppWorkload),
 		AppRolloutErr: make(map[string]error),
@@ -294,7 +298,7 @@ func (m *MockClient) EnsureDocumentDBService(ctx context.Context, namespace, pro
 }
 
 // EnsurePublicDBIngressPolicy records the ports opened to outside traffic.
-func (m *MockClient) EnsurePublicDBIngressPolicy(ctx context.Context, namespace, projectID string, ports []int) error {
+func (m *MockClient) EnsurePublicDBIngressPolicy(ctx context.Context, namespace, projectID string, selector map[string]string, ports []int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "EnsurePublicDBIngressPolicy:"+namespace+"/"+projectID)
@@ -302,6 +306,7 @@ func (m *MockClient) EnsurePublicDBIngressPolicy(ctx context.Context, namespace,
 		return m.PublicDBIngressError
 	}
 	m.PublicDBIngress[namespace+"/"+projectID] = append([]int(nil), ports...)
+	m.PublicDBIngressSelectors[namespace+"/"+projectID] = maps.Clone(selector)
 	return nil
 }
 
@@ -314,6 +319,7 @@ func (m *MockClient) DeletePublicDBIngressPolicy(ctx context.Context, namespace,
 		return m.PublicDBIngressError
 	}
 	delete(m.PublicDBIngress, namespace+"/"+projectID)
+	delete(m.PublicDBIngressSelectors, namespace+"/"+projectID)
 	return nil
 }
 

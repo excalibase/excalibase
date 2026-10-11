@@ -59,7 +59,7 @@ export function SettingsPage() {
   // control plane. A failed read leaves this undefined, and the connection
   // card falls back to the in-cluster details rather than guessing. A project
   // without a database has no endpoint to read.
-  const endpoint = useProjectEndpoint(project && !project.noDatabase && !isMySQLProject(project) ? projectId : undefined);
+  const endpoint = useProjectEndpoint(project && !project.noDatabase ? projectId : undefined);
 
   if (loadError && !project) {
     return (
@@ -119,11 +119,14 @@ export function SettingsPage() {
       </div>
       </>)}
 
-      {!noDatabase && isMySQLProject(project) && (
+      {!noDatabase && isMySQLProject(project) && (<>
         <div className="mb-8">
-          <ConnectionStrings projectId={project.projectId} documentDb={false} />
+          <ConnectionStrings projectId={project.projectId} documentDb={false} endpoint={endpoint.data} />
         </div>
-      )}
+        <div className="mb-8">
+          <PublicPortCard projectId={project.projectId} status={project.status} />
+        </div>
+      </>)}
 
       <AppNetworkSection projectId={project.projectId} status={project.status} />
 

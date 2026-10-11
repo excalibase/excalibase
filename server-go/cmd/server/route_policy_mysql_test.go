@@ -59,6 +59,8 @@ func TestMySQLLifecycleRoutesServeMySQL(t *testing.T) {
 		{Method: "POST", Pattern: "/api/provision/{projectId}/tier"},
 		{Method: "GET", Pattern: "/api/provision/{projectId}/credentials"},
 		{Method: "POST", Pattern: "/api/provision/{projectId}/credentials/rotate"},
+		{Method: "GET", Pattern: "/api/projects/{projectId}/db-endpoint/"},
+		{Method: "PUT", Pattern: "/api/projects/{projectId}/db-endpoint/"},
 	} {
 		if row, ok := index[key]; !ok || !row.MySQL {
 			t.Errorf("%s does not serve MySQL projects", key)

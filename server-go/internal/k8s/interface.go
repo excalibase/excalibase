@@ -108,7 +108,7 @@ type KubeClient interface {
 	EnsureDocumentDBService(ctx context.Context, namespace, projectID string) error
 	// EnsurePublicDBIngressPolicy lets traffic from outside the cluster reach
 	// the project's database on the given ports while its endpoint is public.
-	EnsurePublicDBIngressPolicy(ctx context.Context, namespace, projectID string, ports []int) error
+	EnsurePublicDBIngressPolicy(ctx context.Context, namespace, projectID string, selector map[string]string, ports []int) error
 	DeletePublicDBIngressPolicy(ctx context.Context, namespace, projectID string) error
 
 	// GetClusterCapacity returns aggregate Allocatable + already-Requested

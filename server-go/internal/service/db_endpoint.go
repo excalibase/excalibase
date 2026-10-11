@@ -176,6 +176,8 @@ type DBEndpointView struct {
 	// SingleHost is a project on one Docker or Podman host, whose ports are
 	// published on the host's loopback and reached elsewhere over SSH.
 	SingleHost bool
+	// Engine is "mysql" for a MySQL project, empty for Postgres.
+	Engine string
 }
 
 // DBEndpointConnectionStrings is every string a client might need for this
@@ -268,8 +270,12 @@ func (s *DBEndpointService) SetRequireTLS(ctx context.Context, projectID string,
 	if !s.publicOffered() {
 		return DBEndpointView{}, ErrDBEndpointNotConfigured
 	}
-	if _, err := s.project(projectID); err != nil {
+	current, err := s.project(projectID)
+	if err != nil {
 		return DBEndpointView{}, err
+	}
+	if current.DBType == domain.MySQL {
+		return DBEndpointView{}, fmt.Errorf("%w: TLS is always required", ErrNotForMySQL)
 	}
 	release, claimed, err := s.claimer.Claim(ctx, projectID, OperationTLSChange)
 	if err != nil {
@@ -461,6 +467,9 @@ func (s *DBEndpointService) closeIngressIfUnpublished(ctx context.Context, inst 
 
 // publishServices creates the project's Services and confirms they exist.
 func (s *DBEndpointService) publishServices(ctx context.Context, inst *domain.DatabaseInstance, port, mongoPort int) error {
+	if inst.DBType == domain.MySQL {
+		return s.ensureServiceObserved(ctx, inst, s.mysqlServiceSpec(inst, port))
+	}
 	if err := s.ensureServiceObserved(ctx, inst, k8s.PublicDBServiceSpec{
 		Name:             domain.DBEndpointServiceName(inst.ProjectID),
 		Port:             port,
@@ -489,11 +498,14 @@ func (s *DBEndpointService) publishServices(ctx context.Context, inst *domain.Da
 // openIngress lets outside traffic through the project's namespace isolation
 // to the ports its public Services forward to.
 func (s *DBEndpointService) openIngress(ctx context.Context, inst *domain.DatabaseInstance, mongoPort int) error {
-	ports := []int{postgresPort}
+	selector, ports := k8s.PostgresInstanceSelector(inst.ProjectID), []int{postgresPort}
 	if mongoPort != 0 {
 		ports = append(ports, config.DocumentDBGatewayPort)
 	}
-	if err := s.kube.EnsurePublicDBIngressPolicy(ctx, inst.Namespace, inst.ProjectID, ports); err != nil {
+	if inst.DBType == domain.MySQL {
+		selector, ports = k8s.MySQLInstanceSelector(inst.ProjectID), []int{mysqlPort}
+	}
+	if err := s.kube.EnsurePublicDBIngressPolicy(ctx, inst.Namespace, inst.ProjectID, selector, ports); err != nil {
 		return fmt.Errorf("open public database ingress: %w", err)
 	}
 	return nil
@@ -589,6 +601,9 @@ func servableNow(status string) bool {
 // in-cluster half is described whether or not the installation offers
 // public ports at all.
 func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInstance, endpoint domain.DBEndpoint) (DBEndpointView, error) {
+	if inst.DBType == domain.MySQL {
+		return s.mysqlView(ctx, inst, endpoint)
+	}
 	view := DBEndpointView{
 		ProjectID:     inst.ProjectID,
 		PublicOffered: s.publicOffered(),

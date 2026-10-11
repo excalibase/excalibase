@@ -104,6 +104,8 @@ type dbEndpointResponse struct {
 	// singleHost marks a project on one Docker or Podman host: its ports are
 	// on the host's 127.0.0.1, reached from elsewhere over an SSH tunnel.
 	SingleHost bool `json:"singleHost,omitempty"`
+	// engine is "mysql" on a MySQL project (ADR 0041), absent on Postgres.
+	Engine string `json:"engine,omitempty"`
 }
 
 // dbEndpointRequest is the PUT body. Both fields are optional: a body that
@@ -205,6 +207,7 @@ func writeDBEndpointError(w http.ResponseWriter, err error) {
 		httpError(w, safeError(err), http.StatusServiceUnavailable)
 	case errors.Is(err, service.ErrDBEndpointUnsupported),
 		errors.Is(err, service.ErrProjectNotActive),
+		errors.Is(err, service.ErrNotForMySQL),
 		errors.Is(err, storage.ErrProjectBusy):
 		httpError(w, safeError(err), http.StatusConflict)
 	case errors.Is(err, service.ErrDBEndpointNotObserved),
@@ -251,6 +254,7 @@ func dbEndpointResponseFor(view service.DBEndpointView, canChange bool) dbEndpoi
 		MongoPort:      view.MongoPort,
 		MongoAvailable: mongoAvailable(view),
 		SingleHost:     view.SingleHost,
+		Engine:         view.Engine,
 	}
 }
 

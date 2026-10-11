@@ -25,7 +25,7 @@ func readIngressPolicy(t *testing.T, c *Client) *unstructured.Unstructured {
 
 func TestPublicDBIngressOpensOnlyTheDatabasePortsToTheWorld(t *testing.T) {
 	c := newFakeClient()
-	if err := c.EnsurePublicDBIngressPolicy(context.Background(), testNamespace, ingressProject, []int{5432, 10260}); err != nil {
+	if err := c.EnsurePublicDBIngressPolicy(context.Background(), testNamespace, ingressProject, PostgresInstanceSelector(ingressProject), []int{5432, 10260}); err != nil {
 		t.Fatalf("EnsurePublicDBIngressPolicy: %v", err)
 	}
 
@@ -73,10 +73,10 @@ func ingressPorts(t *testing.T, rule map[string]interface{}) []string {
 func TestPublicDBIngressIsReRenderedAndRemoved(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
-	if err := c.EnsurePublicDBIngressPolicy(ctx, testNamespace, ingressProject, []int{5432, 10260}); err != nil {
+	if err := c.EnsurePublicDBIngressPolicy(ctx, testNamespace, ingressProject, PostgresInstanceSelector(ingressProject), []int{5432, 10260}); err != nil {
 		t.Fatalf("first ensure: %v", err)
 	}
-	if err := c.EnsurePublicDBIngressPolicy(ctx, testNamespace, ingressProject, []int{5432}); err != nil {
+	if err := c.EnsurePublicDBIngressPolicy(ctx, testNamespace, ingressProject, PostgresInstanceSelector(ingressProject), []int{5432}); err != nil {
 		t.Fatalf("second ensure: %v", err)
 	}
 	rules, _, _ := unstructured.NestedSlice(readIngressPolicy(t, c).Object, "spec", "ingress")
@@ -99,7 +99,7 @@ func TestPublicDBIngressIsReRenderedAndRemoved(t *testing.T) {
 func TestPublicDBIngressErrorsPropagate(t *testing.T) {
 	for verb, call := range map[string]func(*Client) error{
 		"create": func(c *Client) error {
-			return c.EnsurePublicDBIngressPolicy(context.Background(), testNamespace, ingressProject, []int{5432})
+			return c.EnsurePublicDBIngressPolicy(context.Background(), testNamespace, ingressProject, PostgresInstanceSelector(ingressProject), []int{5432})
 		},
 		"delete": func(c *Client) error {
 			return c.DeletePublicDBIngressPolicy(context.Background(), testNamespace, ingressProject)
@@ -118,7 +118,7 @@ func TestPublicDBIngressErrorsPropagate(t *testing.T) {
 func TestMockRecordsThePublicDBIngressPolicy(t *testing.T) {
 	mock := NewMockClient()
 	ctx := context.Background()
-	if err := mock.EnsurePublicDBIngressPolicy(ctx, testNamespace, ingressProject, []int{5432}); err != nil {
+	if err := mock.EnsurePublicDBIngressPolicy(ctx, testNamespace, ingressProject, PostgresInstanceSelector(ingressProject), []int{5432}); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 	if got := mock.PublicDBIngress[testNamespace+"/"+ingressProject]; !reflect.DeepEqual(got, []int{5432}) {
@@ -131,10 +131,25 @@ func TestMockRecordsThePublicDBIngressPolicy(t *testing.T) {
 		t.Error("the policy was not removed")
 	}
 	mock.PublicDBIngressError = context.Canceled
-	if err := mock.EnsurePublicDBIngressPolicy(ctx, testNamespace, ingressProject, nil); err != context.Canceled {
+	if err := mock.EnsurePublicDBIngressPolicy(ctx, testNamespace, ingressProject, PostgresInstanceSelector(ingressProject), nil); err != context.Canceled {
 		t.Errorf("ensure error: %v", err)
 	}
 	if err := mock.DeletePublicDBIngressPolicy(ctx, testNamespace, ingressProject); err != context.Canceled {
 		t.Errorf("delete error: %v", err)
+	}
+}
+
+// A MySQL project's ingress selects its MOCO mysqld pods and nothing else.
+func TestPublicDBIngressSelectsTheGivenDatabasePods(t *testing.T) {
+	c := newFakeClient()
+	if err := c.EnsurePublicDBIngressPolicy(context.Background(), testNamespace, ingressProject,
+		MySQLInstanceSelector(ingressProject), []int{3306}); err != nil {
+		t.Fatalf("EnsurePublicDBIngressPolicy: %v", err)
+	}
+	selector, _, _ := unstructured.NestedStringMap(readIngressPolicy(t, c).Object, "spec", "endpointSelector", "matchLabels")
+	want := map[string]string{"app.kubernetes.io/created-by": "moco", "app.kubernetes.io/name": "mysql",
+		"app.kubernetes.io/instance": ingressProject + "-mysql"}
+	if !reflect.DeepEqual(selector, want) {
+		t.Errorf("selector: got %v, want %v", selector, want)
 	}
 }

@@ -22,10 +22,24 @@ func PublicDBIngressPolicyName(projectID string) string {
 	return projectID + "-db-public-ingress"
 }
 
+// PostgresInstanceSelector selects a project's CNPG instance pods.
+func PostgresInstanceSelector(projectID string) map[string]string {
+	return map[string]string{"cnpg.io/cluster": projectID + postgresSuffix, "cnpg.io/podRole": "instance"}
+}
+
+// MySQLInstanceSelector selects a MySQL project's MOCO mysqld pods (ADR 0041).
+func MySQLInstanceSelector(projectID string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/created-by": "moco",
+		"app.kubernetes.io/name":       "mysql",
+		"app.kubernetes.io/instance":   MySQLClusterName(projectID),
+	}
+}
+
 // EnsurePublicDBIngressPolicy admits traffic from outside the cluster to the
-// project's database instances on the given ports, and nothing else.
-func (c *Client) EnsurePublicDBIngressPolicy(ctx context.Context, namespace, projectID string, ports []int) error {
-	policy, err := buildPublicDBIngressPolicy(namespace, projectID, ports)
+// selected database pods on the given ports, and nothing else.
+func (c *Client) EnsurePublicDBIngressPolicy(ctx context.Context, namespace, projectID string, selector map[string]string, ports []int) error {
+	policy, err := buildPublicDBIngressPolicy(namespace, projectID, selector, ports)
 	if err != nil {
 		return err
 	}
@@ -43,17 +57,14 @@ func (c *Client) DeletePublicDBIngressPolicy(ctx context.Context, namespace, pro
 	return nil
 }
 
-func buildPublicDBIngressPolicy(namespace, projectID string, ports []int) (*unstructured.Unstructured, error) {
+func buildPublicDBIngressPolicy(namespace, projectID string, selector map[string]string, ports []int) (*unstructured.Unstructured, error) {
 	rule := ciliumPortRule{Ports: make([]ciliumPort, 0, len(ports))}
 	for _, port := range ports {
 		rule.Ports = append(rule.Ports, ciliumPort{Port: strconv.Itoa(port), Protocol: protocolTCP})
 	}
 	spec := ciliumIngressPolicySpec{
-		EndpointSelector: metav1.LabelSelector{MatchLabels: map[string]string{
-			"cnpg.io/cluster": projectID + postgresSuffix,
-			"cnpg.io/podRole": "instance",
-		}},
-		Ingress: []ciliumIngressRule{{FromEntities: []string{worldEntity}, ToPorts: []ciliumPortRule{rule}}},
+		EndpointSelector: metav1.LabelSelector{MatchLabels: selector},
+		Ingress:          []ciliumIngressRule{{FromEntities: []string{worldEntity}, ToPorts: []ciliumPortRule{rule}}},
 	}
 	content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&spec)
 	if err != nil {
