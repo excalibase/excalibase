@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -104,10 +105,27 @@ func (p *DockerMySQLProvisioner) StartEmpty(ctx context.Context, projectID, imag
 	if _, err := p.docker.CreateContainerSpec(ctx, spec); err != nil {
 		return "", fmt.Errorf("create container: %w", err)
 	}
-	if err := p.docker.StartContainer(ctx, spec.Name); err != nil {
+	if err := p.start(ctx, spec.Name); err != nil {
 		return spec.Name, fmt.Errorf("start container: %w", err)
 	}
 	return spec.Name, p.AwaitServing(ctx, spec.Name)
+}
+
+// start starts the container, waiting out a host port its predecessor has
+// just freed: rootless Podman's port forwarder can hold it a moment longer.
+func (p *DockerMySQLProvisioner) start(ctx context.Context, container string) error {
+	var last error
+	err := p.readyPoller.WaitUntilReady(ctx, "host port of "+container, func(ctx context.Context) (bool, error) {
+		last = p.docker.StartContainer(ctx, container)
+		if last != nil && strings.Contains(last.Error(), "address already in use") {
+			return false, nil
+		}
+		return true, last
+	})
+	if err != nil && last != nil {
+		return last
+	}
+	return err
 }
 
 // AwaitServing returns once a query answers over the socket.

@@ -76,3 +76,23 @@ func TestDockerMySQLWithoutAPortCreatesNothing(t *testing.T) {
 		t.Fatalf("created %v", engine.specs)
 	}
 }
+
+// A rebuilt container takes the port its predecessor just freed; rootless
+// Podman can hold it a moment longer, so the start is retried, not failed.
+func TestDockerMySQLStartWaitsForItsJustFreedPort(t *testing.T) {
+	engine := newFakeEngine()
+	engine.portBusy = 2
+	mysql := newTestDockerMySQL(engine)
+	mysql.SetHostPorts(&fakeHostPorts{held: map[string]int{}})
+	image, _ := config.MySQLImage(config.DefaultMySQLVersion())
+	if _, err := mysql.StartEmpty(context.Background(), "p1", image, testTier); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if !engine.containers["excalibase-p1-mysql"].running {
+		t.Fatal("not running")
+	}
+	engine.failOn = "start:excalibase-p2-mysql"
+	if _, err := mysql.StartEmpty(context.Background(), "p2", image, testTier); err == nil {
+		t.Fatal("any other start failure is retried")
+	}
+}

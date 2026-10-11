@@ -24,7 +24,9 @@ type fakeEngine struct {
 	stdinAnswer func(container string, cmd []string, stdin string) (string, error)
 	// failOn makes the named call ("create:<name>", "start:<name>") fail.
 	failOn string
-	clock  time.Time
+	// portBusy is how many starts still fail as a just-freed host port does.
+	portBusy int
+	clock    time.Time
 }
 
 type fakeContainer struct {
@@ -72,6 +74,10 @@ func (f *fakeEngine) StartContainer(_ context.Context, id string) error {
 	defer f.mu.Unlock()
 	if err := f.record("start:" + id); err != nil {
 		return err
+	}
+	if f.portBusy > 0 {
+		f.portBusy--
+		return fmt.Errorf("start container %s: rootlessport listen tcp 127.0.0.1:30001: bind: address already in use", id)
 	}
 	c, ok := f.containers[id]
 	if !ok {
