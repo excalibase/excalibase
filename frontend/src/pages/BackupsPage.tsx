@@ -7,6 +7,7 @@ import { Button } from '../components/Button';
 import { RestoreForm } from '../components/backups/RestoreForm';
 import { Archive, RefreshCw, RotateCcw, type LucideIcon } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
+import { formatBytes } from '../utils/formatBytes';
 
 type Tab = 'backups' | 'restore';
 
@@ -112,7 +113,7 @@ export function BackupsPage() {
                     <td className="py-3 font-mono text-xs text-text-primary">{b.id}</td>
                     <td className="py-3 text-text-secondary">{new Date(b.timestamp).toLocaleString()}</td>
                     <td className="py-3 text-text-tertiary">{b.type ?? 'MANUAL'}</td>
-                    <td className="py-3 text-text-secondary">{b.size}</td>
+                    <td className="py-3 text-text-secondary">{formatBytes(b.sizeBytes ?? 0)}</td>
                     <td className="py-3"><StatusBadge status={b.status} /></td>
                   </tr>
                 ))}

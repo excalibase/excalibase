@@ -11,6 +11,7 @@ import { CredentialsViewer } from '../components/CredentialsViewer';
 import { Button } from '../components/Button';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { ArrowLeft, Cpu, Database, HardDrive, Users, Loader2, Trash2, RefreshCw, Archive, FileText } from 'lucide-react';
+import { formatBytes } from '../utils/formatBytes';
 import { engineLabel } from '../utils/engine';
 
 type Tab = 'overview' | 'credentials' | 'backups' | 'logs';
@@ -208,7 +209,7 @@ export function InstanceDetailPage() {
                       <tr key={b.id} className="border-b border-border-primary last:border-0">
                         <td className="py-3 font-mono text-xs text-text-primary">{b.id}</td>
                         <td className="py-3 text-text-secondary">{new Date(b.timestamp).toLocaleString()}</td>
-                        <td className="py-3 text-text-secondary">{b.size}</td>
+                        <td className="py-3 text-text-secondary">{formatBytes(b.sizeBytes ?? 0)}</td>
                         <td className="py-3"><StatusBadge status={b.status} /></td>
                       </tr>
                     ))}

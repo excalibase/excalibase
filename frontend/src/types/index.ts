@@ -134,7 +134,7 @@ export interface BackupConfig {
 export interface BackupInfo {
   id: string;
   timestamp: string;
-  size: string;
+  sizeBytes?: number;
   status: string;
   type?: string;
 }

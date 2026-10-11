@@ -16,6 +16,7 @@ import (
 type fakeObjectDeleter struct {
 	mu          sync.Mutex
 	keys        []string
+	sizes       map[string]int64
 	lastBucket  string
 	listCalls   int
 	deleteCalls [][]string
@@ -50,6 +51,20 @@ func (f *fakeObjectDeleter) ListKeys(_ context.Context, bucket, prefix, token st
 		page = append(page, key)
 	}
 	return page, next, nil
+}
+
+func (f *fakeObjectDeleter) ListObjects(ctx context.Context, bucket, prefix, token string, maxKeys int32) ([]StoredObject, string, error) {
+	keys, next, err := f.ListKeys(ctx, bucket, prefix, token, maxKeys)
+	if err != nil {
+		return nil, "", err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	objects := make([]StoredObject, 0, len(keys))
+	for _, key := range keys {
+		objects = append(objects, StoredObject{Key: key, Size: f.sizes[key]})
+	}
+	return objects, next, nil
 }
 
 func (f *fakeObjectDeleter) DeleteKeys(_ context.Context, _ string, keys []string) error {

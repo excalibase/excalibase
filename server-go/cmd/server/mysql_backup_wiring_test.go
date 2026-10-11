@@ -15,7 +15,7 @@ func TestMySQLBackupsAreServedOnKubernetes(t *testing.T) {
 	backupSvc := bootBackupService(t, domain.ModeK8s)
 	mysql := provisioner.NewMySQLProvisioner(k8s.NewMockClient())
 	storageSource := service.StaticBackupStorage(&domain.S3Credentials{AccessKeyID: "k", SecretAccessKey: "s", Endpoint: "https://r2", Bucket: "b"})
-	registerMySQLBackups(backupSvc, mysql, k8s.NewMockClient(), nil, storageSource)
+	registerMySQLBackups(backupSvc, mysql, k8s.NewMockClient(), nil, storageSource, nil)
 
 	inst := &domain.DatabaseInstance{ProjectID: "p", DBType: domain.MySQL, DeploymentMode: domain.ModeK8s}
 	if !backupSvc.SupportsInPlaceRestoreFor(inst) {
@@ -29,7 +29,7 @@ func TestMySQLBackupsAreServedOnKubernetes(t *testing.T) {
 // Without a MySQL provisioner (single host) nothing is registered.
 func TestMySQLBackupsNeedTheProvisioner(t *testing.T) {
 	backupSvc := bootBackupService(t, domain.ModeK8s)
-	registerMySQLBackups(backupSvc, nil, k8s.NewMockClient(), nil, nil)
+	registerMySQLBackups(backupSvc, nil, k8s.NewMockClient(), nil, nil, nil)
 	if backupSvc.SupportsInPlaceRestoreFor(&domain.DatabaseInstance{ProjectID: "p", DBType: domain.MySQL, DeploymentMode: domain.ModeK8s}) {
 		t.Error("an adapter was registered with no MySQL provisioner")
 	}

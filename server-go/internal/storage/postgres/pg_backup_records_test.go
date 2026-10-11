@@ -61,3 +61,23 @@ func TestBackupRecords_UpdateStatus(t *testing.T) {
 		t.Errorf("status: got %q", got[0].Status)
 	}
 }
+
+// A record's time reads back as RFC 3339, the format it was written in.
+func TestBackupRecords_TimestampReadsBackAsRFC3339(t *testing.T) {
+	store := testStore(t)
+	br := NewBackupRecords(store)
+	ctx := context.Background()
+	if err := br.Save(ctx, &domain.BackupRecord{
+		ID: "ts1", ProjectID: "pts", Timestamp: "2026-10-11T12:00:05Z", Type: "MANUAL", Status: "IN_PROGRESS",
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := br.ListByProject(ctx, "pts")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ListByProject: %v %+v", err, got)
+	}
+	when, err := time.Parse(time.RFC3339, got[0].Timestamp)
+	if err != nil || !when.Equal(time.Date(2026, 10, 11, 12, 0, 5, 0, time.UTC)) {
+		t.Errorf("timestamp %q: %v", got[0].Timestamp, err)
+	}
+}

@@ -1372,7 +1372,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	appDeploySvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
 	appDomainSvc := buildAppDomainService(cfg, sqlStore.DB(), appRuntime, store, appDeploySvc)
 	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
-	registerMySQLBackups(backupSvc, provSvc.MySQLProvisioner(), k8sClient, store, provSvc)
+	registerMySQLBackups(backupSvc, provSvc.MySQLProvisioner(), k8sClient, store, provSvc, sqlStore.BackupRecords())
 	// A restore finishes the way a provision does: the adapters hand the
 	// recovered database to the provisioning service's registration path
 	// (EXC-366) instead of writing a half-project row themselves.

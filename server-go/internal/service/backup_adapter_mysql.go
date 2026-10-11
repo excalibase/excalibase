@@ -24,6 +24,7 @@ type MySQLBackupAdapter struct {
 	storage   BackupStorageSource
 	openStore ObjectDeleterFactory
 	instances storage.InstanceStore
+	records   storage.BackupRecordStore
 	registrar ProjectRegistrar
 	probe     DatabaseProbe
 	plans     RestorePlanSource
@@ -39,6 +40,8 @@ type MySQLBackupAdapterConfig struct {
 	Storage   BackupStorageSource
 	OpenStore ObjectDeleterFactory
 	Instances storage.InstanceStore
+	// Records keeps which runs were started by hand once MOCO drops their Jobs.
+	Records storage.BackupRecordStore
 }
 
 var (
@@ -52,8 +55,9 @@ var (
 func NewMySQLBackupAdapter(cfg MySQLBackupAdapterConfig) *MySQLBackupAdapter {
 	return &MySQLBackupAdapter{
 		kube: cfg.Kube, mysql: cfg.MySQL, storage: cfg.Storage, openStore: cfg.OpenStore, instances: cfg.Instances,
-		poller: provisioner.NewPoller(defaultRestoreReadyPoll, defaultRestoreReadyTimeout),
-		now:    time.Now,
+		records: cfg.Records,
+		poller:  provisioner.NewPoller(defaultRestoreReadyPoll, defaultRestoreReadyTimeout),
+		now:     time.Now,
 	}
 }
 
@@ -105,8 +109,12 @@ func (a *MySQLBackupAdapter) TriggerManual(ctx context.Context, inst *domain.Dat
 	if err != nil {
 		return BackupRef{}, err
 	}
+	if err := a.recordManualRun(ctx, inst.ProjectID, job.GetName(), started); err != nil {
+		return BackupRef{}, err
+	}
 	if err := a.kube.ApplyCRD(ctx, k8s.JobGVR, inst.Namespace, job); err != nil {
-		return BackupRef{}, fmt.Errorf("start the backup: %w", err)
+		return BackupRef{}, errors.Join(fmt.Errorf("start the backup: %w", err),
+			a.records.UpdateStatus(ctx, job.GetName(), backupStatusFailed))
 	}
 	return BackupRef{
 		ID: job.GetName(), ProjectID: inst.ProjectID, Type: backupTypeManual,
@@ -124,7 +132,12 @@ func (a *MySQLBackupAdapter) List(ctx context.Context, inst *domain.DatabaseInst
 	if err != nil {
 		return nil, err
 	}
-	refs := completedRefs(inst.ProjectID, completedMySQLBackups(backups), jobs)
+	completed := completedMySQLBackups(backups)
+	manual, err := a.manualRuns(ctx, inst.ProjectID, completed, jobs)
+	if err != nil {
+		return nil, err
+	}
+	refs := completedRefs(inst.ProjectID, completed, manual)
 	for _, job := range jobs {
 		state := k8s.MySQLBackupJobState(job)
 		if state.Phase == k8s.MySQLJobSucceeded {
@@ -136,33 +149,20 @@ func (a *MySQLBackupAdapter) List(ctx context.Context, inst *domain.DatabaseInst
 	return refs, nil
 }
 
-// completedRefs names each run by its time; a run a manual Job made is MANUAL.
-func completedRefs(projectID string, completed []mysqlBackup, jobs []*unstructured.Unstructured) []BackupRef {
+// completedRefs names each run by its time; a run started by hand is MANUAL.
+func completedRefs(projectID string, completed []mysqlBackup, manual map[string]bool) []BackupRef {
 	refs := make([]BackupRef, 0, len(completed))
 	for _, backup := range completed {
 		kind := backupTypeScheduled
-		if madeByManualJob(backup.At, jobs) {
+		if manual[backup.ID] {
 			kind = backupTypeManual
 		}
 		refs = append(refs, BackupRef{
 			ID: backup.ID, ProjectID: projectID, Type: kind, Status: backupStatusCompleted,
-			StartedAt: backup.At.UTC().Format(time.RFC3339),
+			StartedAt: backup.At.UTC().Format(time.RFC3339), SizeBytes: backup.Size,
 		})
 	}
 	return refs
-}
-
-func madeByManualJob(at time.Time, jobs []*unstructured.Unstructured) bool {
-	for _, job := range jobs {
-		state := k8s.MySQLBackupJobState(job)
-		if !k8s.IsManualMySQLBackupJob(job) || state.Phase != k8s.MySQLJobSucceeded {
-			continue
-		}
-		if !at.Before(state.Started) && !at.After(state.Finished) {
-			return true
-		}
-	}
-	return false
 }
 
 func jobRef(projectID string, job *unstructured.Unstructured, state k8s.MySQLJobState) BackupRef {
@@ -271,18 +271,35 @@ func (a *MySQLBackupAdapter) backups(ctx context.Context, inst *domain.DatabaseI
 		return nil, err
 	}
 	prefix := k8s.MOCOBackupPrefix(inst.Namespace, inst.ProjectID)
-	var keys []string
+	list := listObjectsOf(objects)
+	var all []StoredObject
 	token := ""
 	for {
-		page, next, err := objects.ListKeys(ctx, store.Bucket, prefix, token, maxDeleteBatch)
+		page, next, err := list(ctx, store.Bucket, prefix, token, maxDeleteBatch)
 		if err != nil {
 			return nil, fmt.Errorf("list the backups of %s: %w", inst.ProjectID, err)
 		}
-		keys = append(keys, page...)
+		all = append(all, page...)
 		if next == "" {
-			return readMySQLBackups(keys, prefix), nil
+			return readMySQLBackupObjects(all, prefix), nil
 		}
 		token = next
+	}
+}
+
+// listObjectsOf lists with sizes where the store reports them, else keys
+// alone and runs carry no size.
+func listObjectsOf(objects ObjectDeleter) func(context.Context, string, string, string, int32) ([]StoredObject, string, error) {
+	if lister, ok := objects.(ObjectLister); ok {
+		return lister.ListObjects
+	}
+	return func(ctx context.Context, bucket, prefix, token string, maxKeys int32) ([]StoredObject, string, error) {
+		keys, next, err := objects.ListKeys(ctx, bucket, prefix, token, maxKeys)
+		page := make([]StoredObject, 0, len(keys))
+		for _, key := range keys {
+			page = append(page, StoredObject{Key: key})
+		}
+		return page, next, err
 	}
 }
 
