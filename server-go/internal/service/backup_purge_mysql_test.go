@@ -108,3 +108,21 @@ func TestPurgeDropsTheProjectsBackupRecords(t *testing.T) {
 		})
 	}
 }
+
+// EXC-592: a single host's MySQL backups are under the project's own docker
+// prefix, as its Postgres backups are; purging clears the runs and binlogs.
+func TestPurgeClearsASingleHostMySQLProjectsPrefix(t *testing.T) {
+	deleter := newFakeObjectDeleter(
+		"backups/proj-1/mysql/runs/20261011-000000-"+serverA+"/dump.sql.gz",
+		"backups/proj-1/mysql/binlogs/"+serverA+"/binlog.000003.gz",
+		"backups/proj-10/mysql/runs/20261011-000000-"+serverA+"/dump.sql.gz",
+	)
+	inst := &domain.DatabaseInstance{ProjectID: "proj-1", OrgID: "org1", DBType: domain.MySQL, DeploymentMode: domain.ModeDocker}
+	deleted, err := newTestPurger(deleter).Purge(context.Background(), inst)
+	if err != nil || deleted != 2 {
+		t.Fatalf("deleted %d, %v", deleted, err)
+	}
+	if got := deleter.remaining(); len(got) != 1 {
+		t.Errorf("remaining %v", got)
+	}
+}

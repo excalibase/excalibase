@@ -75,6 +75,36 @@ func (s *ProvisioningService) mysqlProvisioner() (*provisioner.MySQLProvisioner,
 	return mysql, nil
 }
 
+// mysqlServer is what the platform runs on a project's mysqld, on MOCO or on
+// a single host.
+type mysqlServer interface {
+	EnsurePlatformUsers(ctx context.Context, namespace, projectID, database string, passwords provisioner.MySQLPasswords) error
+	SetUserPassword(ctx context.Context, namespace, projectID, user, password string) error
+	SetUserPasswords(ctx context.Context, namespace, projectID string, passwords map[string]string) error
+	RemoveDatabase(ctx context.Context, namespace, projectID string) error
+}
+
+var (
+	_ mysqlServer = (*provisioner.MySQLProvisioner)(nil)
+	_ mysqlServer = (*provisioner.DockerMySQLProvisioner)(nil)
+)
+
+// mysqlServerOf is the provisioner that runs this installation's MySQL.
+func (s *ProvisioningService) mysqlServerOf() (mysqlServer, error) {
+	if s.factory == nil {
+		return nil, fmt.Errorf("unsupported database type: %s", domain.MySQL)
+	}
+	prov, ok := s.factory.Get(domain.MySQL)
+	if !ok {
+		return nil, fmt.Errorf("unsupported database type: %s", domain.MySQL)
+	}
+	server, ok := prov.(mysqlServer)
+	if !ok {
+		return nil, fmt.Errorf("unsupported database type: %s", domain.MySQL)
+	}
+	return server, nil
+}
+
 // MySQLProvisioner is the MOCO provisioner, or nil where MySQL is not served.
 func (s *ProvisioningService) MySQLProvisioner() *provisioner.MySQLProvisioner {
 	mysql, err := s.mysqlProvisioner()

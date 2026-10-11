@@ -349,7 +349,7 @@ type databaseRemover interface {
 
 func (s *ProvisioningService) databaseRemover(dbType domain.DatabaseType) (databaseRemover, error) {
 	if dbType == domain.MySQL {
-		return s.mysqlProvisioner()
+		return s.mysqlServerOf()
 	}
 	return s.postgresProvisioner()
 }

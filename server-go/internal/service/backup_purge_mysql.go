@@ -26,10 +26,8 @@ func mocoProjectPrefix(orgID, projectID string) (string, error) {
 // engine's, or every engine's when the engine is unknown (a deleted
 // project's record keeps none).
 func projectBackupPrefixes(mode domain.DeploymentMode, engine domain.DatabaseType, orgID, projectID, dockerKeyPrefix string) ([]string, error) {
-	if engine == domain.MySQL {
-		if mode == domain.ModeDocker {
-			return nil, fmt.Errorf("%w: single-host MySQL", ErrNoBackupsForMode)
-		}
+	// A single host keeps every engine's backups under the project's prefix.
+	if engine == domain.MySQL && mode != domain.ModeDocker {
 		prefix, err := mocoProjectPrefix(orgID, projectID)
 		if err != nil {
 			return nil, err

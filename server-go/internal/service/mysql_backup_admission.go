@@ -31,7 +31,8 @@ func (s *ProvisioningService) admitMySQLBackups(ctx context.Context, req *domain
 	}
 	req.Backup.Schedule = schedule
 	if s.defaultDeploymentMode == domain.ModeDocker {
-		return fmt.Errorf("backups of a single-host MySQL project are %w yet", ErrNotForMySQL)
+		// A single host's platform writes the backups with its own key.
+		return nil
 	}
 	if s.backupCreds == nil {
 		return ErrBackupCredentialsNotConfigured

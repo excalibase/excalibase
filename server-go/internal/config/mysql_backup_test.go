@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
@@ -19,5 +20,16 @@ func TestMySQLBackupSchedule(t *testing.T) {
 	}
 	if _, err := MySQLBackupSchedule("GOLD"); err == nil {
 		t.Error("an unknown tier got a schedule")
+	}
+}
+
+func TestMySQLBackupIntervalMatchesTheSchedule(t *testing.T) {
+	for tier, want := range map[domain.TierType]time.Duration{domain.Free: 6 * time.Hour, domain.Standard: time.Hour, domain.Enterprise: time.Hour} {
+		if got, err := MySQLBackupInterval(tier); err != nil || got != want {
+			t.Errorf("%s: %v %v", tier, got, err)
+		}
+	}
+	if _, err := MySQLBackupInterval("GOLD"); err == nil {
+		t.Error("a tier without a schedule got an interval")
 	}
 }
