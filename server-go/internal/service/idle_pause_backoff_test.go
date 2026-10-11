@@ -158,13 +158,7 @@ func TestIdleSweepSkipsProjectsThatAreNotServable(t *testing.T) {
 // there forever. It gets the same persisted backoff.
 func TestTheSweepRetriesAStuckResume(t *testing.T) {
 	f := newIdleFixture(t)
-	f.project(t, "stuck-resume", domain.Free, 8*day)
-	inst, _ := f.instances.FindByProjectID("stuck-resume")
-	inst.Status = string(domain.StatusResuming)
-	inst.CurrentStep = resumeStepReplication
-	if err := f.instances.Update(inst); err != nil {
-		t.Fatalf("stick in RESUMING: %v", err)
-	}
+	f.resumingSince(t, "stuck-resume", DefaultResumeRetryAfter)
 
 	report := f.run(t)
 	if len(f.resumer.calls) != 1 || f.resumer.calls[0] != "stuck-resume" {
@@ -183,9 +177,8 @@ func TestTheSweepRetriesAStuckResume(t *testing.T) {
 
 func TestTheSweepBacksOffStuckResumesToo(t *testing.T) {
 	f := newIdleFixture(t)
-	f.project(t, "stuck-resume", domain.Free, 8*day)
+	f.resumingSince(t, "stuck-resume", DefaultResumeRetryAfter)
 	inst, _ := f.instances.FindByProjectID("stuck-resume")
-	inst.Status = string(domain.StatusResuming)
 	inst.PauseAttempts = 1
 	inst.PauseLastAttemptAt = &domain.FlexTime{Time: f.clock.Now()}
 	if err := f.instances.Update(inst); err != nil {
