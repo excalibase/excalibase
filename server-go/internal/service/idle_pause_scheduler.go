@@ -24,13 +24,13 @@ const (
 	// DefaultResumeGrace keeps a freshly resumed project out of the sweep so a
 	// resume can never be undone by the very next tick.
 	DefaultResumeGrace = 24 * time.Hour
-	// DefaultResumeRetryAfter is how long a project must sit in RESUMING with
-	// its row unwritten before the sweep treats the resume as stuck (EXC-590).
-	// It matches the bound on each wait inside a resume, so a resume still
-	// running is never retried underneath itself.
-	DefaultResumeRetryAfter = 10 * time.Minute
-	idlePauseTickBudget     = 30 * time.Minute
-	idleDay                 = 24 * time.Hour
+	// DefaultStuckRetryAfter is how long a project must sit in PAUSING or
+	// RESUMING with its row unwritten before the sweep treats the operation as
+	// stuck (EXC-590). It matches the bound on each wait inside a pause or
+	// resume, so one still running is not retried underneath itself.
+	DefaultStuckRetryAfter = 10 * time.Minute
+	idlePauseTickBudget    = 30 * time.Minute
+	idleDay                = 24 * time.Hour
 
 	// A pause that fails leaves the project in PAUSING, and only another
 	// pause can move it. The sweep retries those, but a pause that fails
@@ -115,9 +115,9 @@ type IdlePauseSchedulerConfig struct {
 	Interval time.Duration
 	// ResumeGrace defaults to DefaultResumeGrace.
 	ResumeGrace time.Duration
-	// ResumeRetryAfter defaults to DefaultResumeRetryAfter.
-	ResumeRetryAfter time.Duration
-	Logger           *log.Logger
+	// StuckRetryAfter defaults to DefaultStuckRetryAfter.
+	StuckRetryAfter time.Duration
+	Logger          *log.Logger
 }
 
 // IdlePauseReport lists what one sweep did, by project id.
@@ -147,7 +147,7 @@ type IdlePauseScheduler struct {
 	resumeGrace time.Duration
 	logger      *log.Logger
 
-	resumeRetryAfter time.Duration
+	stuckRetryAfter time.Duration
 
 	engineActivity map[domain.DatabaseType]engineActivitySource
 
@@ -162,10 +162,10 @@ func NewIdlePauseScheduler(c IdlePauseSchedulerConfig) *IdlePauseScheduler {
 		instances: c.Instances, activity: c.Activity, tiers: c.Tiers, pauser: c.Pauser, resumer: c.Resumer,
 		notifier: c.Notifier, audit: c.Audit, leadership: NewLeadership(c.Lock),
 		now: c.Now, interval: c.Interval, resumeGrace: c.ResumeGrace, logger: c.Logger,
-		resumeRetryAfter: c.ResumeRetryAfter,
+		stuckRetryAfter: c.StuckRetryAfter,
 	}
-	if s.resumeRetryAfter <= 0 {
-		s.resumeRetryAfter = DefaultResumeRetryAfter
+	if s.stuckRetryAfter <= 0 {
+		s.stuckRetryAfter = DefaultStuckRetryAfter
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -314,7 +314,7 @@ func (s *IdlePauseScheduler) sweepOne(ctx context.Context, inst *domain.Database
 // PAUSED. Left alone it would sit in PAUSING forever: the sweep's ordinary
 // path only looks at ACTIVE projects, and nothing else calls pause for it.
 func (s *IdlePauseScheduler) retryStuckPause(ctx context.Context, inst *domain.DatabaseInstance, now time.Time, report *IdlePauseReport) {
-	if !pauseRetryDue(inst, now) {
+	if !s.stuck(inst, now) || !pauseRetryDue(inst, now) {
 		return
 	}
 	attempts, err := s.instances.RecordPauseAttempt(inst.ProjectID, now)
@@ -342,7 +342,7 @@ func (s *IdlePauseScheduler) retryStuckPause(ctx context.Context, inst *domain.D
 // would sit in RESUMING indefinitely with its database running and no CDC —
 // a degraded tenant nobody is told about.
 func (s *IdlePauseScheduler) retryStuckResume(ctx context.Context, inst *domain.DatabaseInstance, now time.Time, report *IdlePauseReport) {
-	if s.resumer == nil || !s.resumeStuck(inst, now) || !pauseRetryDue(inst, now) {
+	if s.resumer == nil || !s.stuck(inst, now) || !pauseRetryDue(inst, now) {
 		return
 	}
 	attempts, err := s.instances.RecordPauseAttempt(inst.ProjectID, now)
@@ -360,12 +360,12 @@ func (s *IdlePauseScheduler) retryStuckResume(ctx context.Context, inst *domain.
 	report.Resumed = append(report.Resumed, inst.ProjectID)
 }
 
-// resumeStuck reports whether a RESUMING project's row has gone unwritten for
-// resumeRetryAfter: a resume in progress writes it as it moves, so one that is
-// fresh is still running and is not the sweep's to retry. A row with no write
-// time is treated as stuck, as it was before.
-func (s *IdlePauseScheduler) resumeStuck(inst *domain.DatabaseInstance, now time.Time) bool {
-	return inst.UpdatedAt == nil || now.Sub(inst.UpdatedAt.Time) >= s.resumeRetryAfter
+// stuck reports whether a PAUSING or RESUMING project's row has gone
+// unwritten for stuckRetryAfter: a pause or resume in progress writes it as it
+// moves, so one that is fresh is still running and is not the sweep's to
+// retry. A row with no write time is treated as stuck, as it was before.
+func (s *IdlePauseScheduler) stuck(inst *domain.DatabaseInstance, now time.Time) bool {
+	return inst.UpdatedAt == nil || now.Sub(inst.UpdatedAt.Time) >= s.stuckRetryAfter
 }
 
 // autoPauseDays resolves the tier threshold; false when the tier is unknown
