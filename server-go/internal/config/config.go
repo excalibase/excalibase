@@ -287,7 +287,7 @@ type AppConfig struct {
 	AutoPauseInterval time.Duration
 	// StuckRetryAfter is how long a project sits in PAUSING or RESUMING, its
 	// row unwritten, before the sweep retries the operation
-	// (EXCALIBASE_STUCK_RETRY_AFTER, default 10m, EXC-590).
+	// (EXCALIBASE_STUCK_RETRY_AFTER, default twice the pause timeout, EXC-590).
 	StuckRetryAfter time.Duration
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
@@ -398,6 +398,7 @@ func (c AppConfig) Validate() error {
 
 func Load() AppConfig {
 	cfg := load()
+	cfg.StuckRetryAfter = envDuration("EXCALIBASE_STUCK_RETRY_AFTER", stuckRetryAfter(cfg.PauseTimeout))
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
 	return cfg
@@ -408,7 +409,6 @@ func load() AppConfig {
 	return AppConfig{
 		AutoPauseEnabled:         envBool("EXCALIBASE_AUTOPAUSE_ENABLED", deploymentMode == "cloud"),
 		AutoPauseInterval:        envDuration("EXCALIBASE_AUTOPAUSE_INTERVAL", defaultAutoPauseInterval),
-		StuckRetryAfter:          envDuration("EXCALIBASE_STUCK_RETRY_AFTER", defaultStuckRetryAfter),
 		Port:                     envOr("PORT", "24005"),
 		StoragePath:              envOr("STORAGE_PATH", "../provisioning-data"),
 		LogLevel:                 envOr("LOG_LEVEL", "debug"),
@@ -722,8 +722,11 @@ const defaultDeployWait = 11 * time.Minute
 // defaultAutoPauseInterval is the idle sweep's period (EXC-280).
 const defaultAutoPauseInterval = time.Hour
 
-// defaultStuckRetryAfter matches the bound on each wait inside a pause or resume.
-const defaultStuckRetryAfter = 10 * time.Minute
+// stuckRetryAfter outlasts a pause's two waits without a row write, for the
+// pre-pause backup and then the workload stop, each bounded by pauseTimeout.
+func stuckRetryAfter(pauseTimeout time.Duration) time.Duration {
+	return 2 * pauseTimeout
+}
 
 // DefaultPlatformDBMaxConns is the platform database pool size. It leaves
 // room for roughly a dozen concurrent lifecycle operations alongside ordinary

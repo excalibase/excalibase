@@ -26,9 +26,10 @@ const (
 	DefaultResumeGrace = 24 * time.Hour
 	// DefaultStuckRetryAfter is how long a project must sit in PAUSING or
 	// RESUMING with its row unwritten before the sweep treats the operation as
-	// stuck (EXC-590). It matches the bound on each wait inside a pause or
-	// resume, so one still running is not retried underneath itself.
-	DefaultStuckRetryAfter = 10 * time.Minute
+	// stuck (EXC-590). A pause waits for its backup and then for the workload
+	// to stop, each up to the 10m pause timeout, without writing its row in
+	// between, so one still running is not retried underneath itself.
+	DefaultStuckRetryAfter = 2 * 10 * time.Minute
 	idlePauseTickBudget    = 30 * time.Minute
 	idleDay                = 24 * time.Hour
 

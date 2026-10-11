@@ -136,8 +136,12 @@ func TestLoadReadsTheAutoPauseInterval(t *testing.T) {
 // retries it.
 func TestLoadReadsTheStuckRetryAfter(t *testing.T) {
 	t.Setenv("CORS_ORIGINS", "https://app.excalibase.io")
-	if got := Load().StuckRetryAfter; got != 10*time.Minute {
-		t.Errorf("StuckRetryAfter default: got %v, want 10m", got)
+	if got := Load().StuckRetryAfter; got != 20*time.Minute {
+		t.Errorf("StuckRetryAfter default: got %v, want 20m (the backup and stop waits)", got)
+	}
+	t.Setenv("EXCALIBASE_PAUSE_TIMEOUT", "15m")
+	if got := Load().StuckRetryAfter; got != 30*time.Minute {
+		t.Errorf("StuckRetryAfter must follow the pause timeout: got %v, want 30m", got)
 	}
 	t.Setenv("EXCALIBASE_STUCK_RETRY_AFTER", "3m")
 	if got := Load().StuckRetryAfter; got != 3*time.Minute {
