@@ -641,6 +641,8 @@ func startIdlePauseScheduler(
 		Audit:    sqlStore,
 		Lock:     lock,
 		Interval: cfg.AutoPauseInterval,
+		// A resume still running is not retried underneath itself (EXC-590).
+		ResumeRetryAfter: cfg.ResumeRetryAfter,
 		Notifier: service.NewIdleWarnEmail(service.IdleWarnEmailConfig{
 			Users:        sqlStore,
 			Sender:       sender,

@@ -131,3 +131,15 @@ func TestLoadReadsTheAutoPauseInterval(t *testing.T) {
 		t.Errorf("AutoPauseInterval: got %v, want 2m", got)
 	}
 }
+
+// EXC-590: how long a resume may sit in RESUMING before the sweep retries it.
+func TestLoadReadsTheResumeRetryAfter(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.excalibase.io")
+	if got := Load().ResumeRetryAfter; got != 10*time.Minute {
+		t.Errorf("ResumeRetryAfter default: got %v, want 10m", got)
+	}
+	t.Setenv("EXCALIBASE_RESUME_RETRY_AFTER", "3m")
+	if got := Load().ResumeRetryAfter; got != 3*time.Minute {
+		t.Errorf("ResumeRetryAfter: got %v, want 3m", got)
+	}
+}
