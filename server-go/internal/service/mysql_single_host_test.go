@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -28,13 +29,16 @@ type hostEngine struct {
 	// answer replies to a statement batch fed on stdin.
 	answer func(container, stdin string) (string, error)
 	copied map[string][]string // container → tar entry names copied in
-	files  map[string][]byte   // container:path → bytes a CopyFromContainer returns
+	// volumes are the named volumes that exist; removedVolumes those removed.
+	volumes        map[string]bool
+	removedVolumes []string
+	files          map[string][]byte // container:path → bytes a CopyFromContainer returns
 }
 
 func newHostEngine() *hostEngine {
 	return &hostEngine{
 		containers: map[string]bool{}, specs: map[string]provisioner.ContainerSpec{},
-		copied: map[string][]string{}, files: map[string][]byte{},
+		copied: map[string][]string{}, files: map[string][]byte{}, volumes: map[string]bool{},
 	}
 }
 
@@ -142,6 +146,21 @@ func (h *hostEngine) CopyFromContainer(_ context.Context, id, src string) (io.Re
 	return io.NopCloser(tarOf(src[strings.LastIndex(src, "/")+1:], body)), nil
 }
 
+func (h *hostEngine) CreateVolume(_ context.Context, name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.volumes[name] = true
+	return nil
+}
+
+func (h *hostEngine) RemoveVolume(_ context.Context, name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.volumes, name)
+	h.removedVolumes = append(h.removedVolumes, name)
+	return nil
+}
+
 func (h *hostEngine) fed() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -247,5 +266,28 @@ func TestSingleHostMySQLIsTheInstallationsMySQLServer(t *testing.T) {
 	k8s, _, _ := setupMySQLTest(t)
 	if k8s.SingleHostMySQL() != nil || k8s.MySQLWorkReader() == nil {
 		t.Fatal("Kubernetes serves MySQL through MOCO")
+	}
+}
+
+// EXC-592: a single host's MySQL project moves to the newest catalogue
+// version on its own data: the container is recreated on the new image over
+// the same volume, and the version is recorded once mysqld answers on it.
+func TestSingleHostMySQLMinorUpgradeKeepsItsData(t *testing.T) {
+	svc, store, engine := setupSingleHostMySQL(t)
+	inst := provisionMySQL(t, svc, store, "8.4.9")
+	container := "excalibase-" + inst.ProjectID + "-mysql"
+	if err := svc.UpgradeVersion(context.Background(), inst.ProjectID, config.DefaultMySQLVersion()); err != nil {
+		t.Fatalf("UpgradeVersion: %v", err)
+	}
+	newest, _ := config.MySQLImage(config.DefaultMySQLVersion())
+	if engine.specs[container].Image != newest || !engine.containers[container] {
+		t.Fatalf("container on %q", engine.specs[container].Image)
+	}
+	if len(engine.removedVolumes) != 0 {
+		t.Fatalf("the upgrade removed data: %v", engine.removedVolumes)
+	}
+	got, _ := store.FindByProjectID(inst.ProjectID)
+	if got.MySQLVersion != config.DefaultMySQLVersion() || got.Status != string(domain.StatusActive) {
+		t.Fatalf("recorded %q %s", got.MySQLVersion, got.Status)
 	}
 }

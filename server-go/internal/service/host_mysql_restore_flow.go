@@ -137,8 +137,8 @@ func (a *HostMySQLBackupAdapter) ReplaceDatabase(ctx context.Context, inst *doma
 	}
 	unlock := a.lock(inst.ProjectID)
 	defer unlock()
-	if err := a.mysql.RemoveContainer(ctx, inst.Namespace); err != nil {
-		return fmt.Errorf("remove the project's container: %w", err)
+	if err := a.mysql.RemoveData(ctx, inst.ProjectID); err != nil {
+		return fmt.Errorf("remove the project's database: %w", err)
 	}
 	pc := provisioner.NewProvisionContext(nil, nil)
 	if _, err := a.build(ctx, pc, inst.ProjectID, restore); err != nil {

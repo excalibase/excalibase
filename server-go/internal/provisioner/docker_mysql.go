@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -30,6 +31,20 @@ type DockerMySQLProvisioner struct {
 type HostPortAllocator interface {
 	Allocate(ctx context.Context, projectID string) (int, error)
 	Release(ctx context.Context, projectID string) error
+}
+
+// VolumeClient holds named volumes, which outlive the containers using them.
+type VolumeClient interface {
+	CreateVolume(ctx context.Context, name string) error
+	RemoveVolume(ctx context.Context, name string) error
+}
+
+func (p *DockerMySQLProvisioner) volumes() (VolumeClient, error) {
+	volumes, ok := p.docker.(VolumeClient)
+	if !ok {
+		return nil, errors.New("the engine client cannot hold a data volume")
+	}
+	return volumes, nil
 }
 
 // SetHostPorts publishes every container on its project's own host port.
@@ -67,7 +82,7 @@ func (p *DockerMySQLProvisioner) Provision(ctx context.Context, req domain.Provi
 		return nil, err
 	}
 	cb(domain.StageContainerCreation)
-	container, err := p.StartEmpty(ctx, req.ProjectName, image, tier)
+	container, err := p.StartOnVolume(ctx, req.ProjectName, image, tier)
 	if err != nil {
 		return nil, err
 	}
@@ -87,10 +102,10 @@ func (p *DockerMySQLProvisioner) Provision(ctx context.Context, req domain.Provi
 	}, nil
 }
 
-// StartEmpty creates and starts the project's container on image and returns
-// once mysqld answers. A container that was created is named even on failure,
+// StartOnVolume creates and starts the project's container on image over its
+// data volume (initialised when empty) and returns once mysqld answers. A container that was created is named even on failure,
 // so the caller can remove it.
-func (p *DockerMySQLProvisioner) StartEmpty(ctx context.Context, projectID, image string, plan config.TierConfig) (string, error) {
+func (p *DockerMySQLProvisioner) StartOnVolume(ctx context.Context, projectID, image string, plan config.TierConfig) (string, error) {
 	spec, err := MySQLContainerSpec(projectID, image, plan)
 	if err != nil {
 		return "", err
@@ -101,6 +116,13 @@ func (p *DockerMySQLProvisioner) StartEmpty(ctx context.Context, projectID, imag
 			return "", fmt.Errorf("host port of %s: %w", projectID, err)
 		}
 		spec.Ports[strconv.Itoa(mysqlPort)] = strconv.Itoa(port)
+	}
+	volumes, err := p.volumes()
+	if err != nil {
+		return "", err
+	}
+	if err := volumes.CreateVolume(ctx, spec.DataVolumeName); err != nil {
+		return "", err
 	}
 	if _, err := p.docker.CreateContainerSpec(ctx, spec); err != nil {
 		return "", fmt.Errorf("create container: %w", err)
@@ -222,6 +244,9 @@ func (p *DockerMySQLProvisioner) Deprovision(ctx context.Context, namespace, pro
 	if err := p.RemoveContainer(ctx, container); err != nil {
 		return err
 	}
+	if err := p.removeVolume(ctx, projectID); err != nil {
+		return err
+	}
 	if p.hostPorts == nil {
 		return nil
 	}
@@ -229,6 +254,34 @@ func (p *DockerMySQLProvisioner) Deprovision(ctx context.Context, namespace, pro
 		return fmt.Errorf("release the host port of %s: %w", projectID, err)
 	}
 	return nil
+}
+
+// RemoveData removes the project's container and its data, leaving its host
+// port held: an in-place restore starts from empty under the same name.
+func (p *DockerMySQLProvisioner) RemoveData(ctx context.Context, projectID string) error {
+	if err := p.RemoveContainer(ctx, MySQLContainerName(projectID)); err != nil {
+		return err
+	}
+	return p.removeVolume(ctx, projectID)
+}
+
+// ReplaceImage recreates the project's container on image over the same data
+// and port, and returns once mysqld answers; mysqld upgrades the data
+// dictionary of a newer minor version itself.
+func (p *DockerMySQLProvisioner) ReplaceImage(ctx context.Context, projectID, image string, plan config.TierConfig) error {
+	if err := p.RemoveContainer(ctx, MySQLContainerName(projectID)); err != nil {
+		return err
+	}
+	_, err := p.StartOnVolume(ctx, projectID, image, plan)
+	return err
+}
+
+func (p *DockerMySQLProvisioner) removeVolume(ctx context.Context, projectID string) error {
+	volumes, err := p.volumes()
+	if err != nil {
+		return err
+	}
+	return volumes.RemoveVolume(ctx, MySQLVolumeName(projectID))
 }
 
 // RemoveContainer stops and removes a container and waits until it is gone.

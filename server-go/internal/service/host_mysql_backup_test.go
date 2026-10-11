@@ -339,6 +339,9 @@ func TestHostMySQLInPlaceRestoreRebuildsTheContainerUnderItsName(t *testing.T) {
 	if !f.engine.containers["excalibase-p1-mysql"] {
 		t.Fatal("the rebuilt container is not running")
 	}
+	if len(f.engine.removedVolumes) != 1 || f.engine.removedVolumes[0] != "excalibase-vol-p1-mysql" || !f.engine.volumes["excalibase-vol-p1-mysql"] {
+		t.Fatalf("the restore did not start from empty data: removed %v", f.engine.removedVolumes)
+	}
 	copied := strings.Join(f.engine.copied["excalibase-p1-mysql"], ",")
 	if !strings.Contains(copied, "dump.sql.gz") || strings.Contains(copied, "binlog") {
 		t.Fatalf("a backup-time restore loads the dump alone: %s", copied)

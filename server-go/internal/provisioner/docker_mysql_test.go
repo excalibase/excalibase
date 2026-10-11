@@ -252,10 +252,10 @@ func TestDockerMySQLRemovingTheDatabaseRemovesTheContainer(t *testing.T) {
 	}
 }
 
-func TestDockerMySQLStartEmptyLeavesAnAnsweringServerWithoutTheDatabase(t *testing.T) {
+func TestDockerMySQLStartOnVolumeLeavesAnAnsweringServerWithoutTheDatabase(t *testing.T) {
 	engine := newFakeEngine()
 	image, _ := config.MySQLImage(config.DefaultMySQLVersion())
-	container, err := newTestDockerMySQL(engine).StartEmpty(context.Background(), "p2", image, testTier)
+	container, err := newTestDockerMySQL(engine).StartOnVolume(context.Background(), "p2", image, testTier)
 	if err != nil || container != "excalibase-p2-mysql" || !engine.containers[container].running {
 		t.Fatalf("container %q err %v", container, err)
 	}
@@ -263,7 +263,7 @@ func TestDockerMySQLStartEmptyLeavesAnAnsweringServerWithoutTheDatabase(t *testi
 		t.Fatalf("an empty server got statements: %v", engine.stdin)
 	}
 	engine.failOn = "start:excalibase-p3-mysql"
-	if container, err := newTestDockerMySQL(engine).StartEmpty(context.Background(), "p3", image, testTier); err == nil || container != "excalibase-p3-mysql" {
+	if container, err := newTestDockerMySQL(engine).StartOnVolume(context.Background(), "p3", image, testTier); err == nil || container != "excalibase-p3-mysql" {
 		t.Fatalf("a created container that failed to start is still named for cleanup: %q %v", container, err)
 	}
 }

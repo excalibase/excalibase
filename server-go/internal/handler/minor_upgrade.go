@@ -38,10 +38,12 @@ func (h *ProvisioningHandler) UpgradeMinorVersion(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Only the Kubernetes path has a CNPG Cluster to re-pin. Answering 200 for
-	// a docker project would report an upgrade that never happened.
-	if inst.DeploymentMode != "" && inst.DeploymentMode != domain.ModeK8s {
-		httpError(w, "minor upgrades are available on Kubernetes projects only", http.StatusBadRequest)
+	// Only the Kubernetes path has a CNPG Cluster to re-pin, and a single
+	// host's MySQL its own volume (EXC-592). Answering 200 for another docker
+	// project would report an upgrade that never happened.
+	singleHostMySQL := inst.DeploymentMode == domain.ModeDocker && inst.DBType == domain.MySQL
+	if inst.DeploymentMode != "" && inst.DeploymentMode != domain.ModeK8s && !singleHostMySQL {
+		httpError(w, "minor upgrades are available on Kubernetes projects and single-host MySQL projects only", http.StatusBadRequest)
 		return
 	}
 	// A project mid-provision, paused or failing is not in a state a rolling

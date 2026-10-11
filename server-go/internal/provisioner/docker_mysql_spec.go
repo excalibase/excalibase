@@ -50,6 +50,12 @@ func MySQLContainerName(projectID string) string {
 }
 
 // MySQLContainerSpec is the container of a MySQL project, new or restored.
+// MySQLVolumeName is the project's data volume, under the engine proxy's
+// volume prefix; it outlives the container so a new image can open it.
+func MySQLVolumeName(projectID string) string {
+	return "excalibase-vol-" + projectID + "-mysql"
+}
+
 func MySQLContainerSpec(projectID, image string, plan config.TierConfig) (ContainerSpec, error) {
 	plan, err := config.MySQLPlan(plan)
 	if err != nil {
@@ -64,13 +70,14 @@ func MySQLContainerSpec(projectID, image string, plan config.TierConfig) (Contai
 		return ContainerSpec{}, err
 	}
 	return ContainerSpec{
-		Name:       MySQLContainerName(projectID),
-		Image:      image,
-		Entrypoint: []string{"sh", "-c"},
-		Cmd:        []string{mysqlStartScript(args)},
-		Ports:      map[string]string{strconv.Itoa(mysqlPort): ""},
-		Limits:     limits,
-		DataVolume: MySQLDataDir,
+		Name:           MySQLContainerName(projectID),
+		Image:          image,
+		Entrypoint:     []string{"sh", "-c"},
+		Cmd:            []string{mysqlStartScript(args)},
+		Ports:          map[string]string{strconv.Itoa(mysqlPort): ""},
+		Limits:         limits,
+		DataVolume:     MySQLDataDir,
+		DataVolumeName: MySQLVolumeName(projectID),
 	}, nil
 }
 

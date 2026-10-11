@@ -197,6 +197,10 @@ tenant_ports = penv_proxy.get("PROXY_HOST_PORTS", "")
 if tenant_ports != penv.get("EXCALIBASE_DB_ENDPOINT_PORT_RANGE") or tenant_ports != "30000-30999":
     failures.append(f"tenant port window: proxy {tenant_ports!r}, allocator {penv.get('EXCALIBASE_DB_ENDPOINT_PORT_RANGE')!r}")
 
+# EXC-592: a MySQL project's data volume is named under this prefix.
+if penv_proxy.get("PROXY_VOLUME_PREFIX") != "excalibase-vol-":
+    failures.append(f"PROXY_VOLUME_PREFIX={penv_proxy.get('PROXY_VOLUME_PREFIX')!r}; MySQL data volumes are excalibase-vol-<project>-mysql")
+
 if failures:
     sys.exit("\n".join(failures))
 print("single-host hardening ok")

@@ -36,7 +36,7 @@ func TestHostMySQLBackupRestoresToAPointAndInPlace(t *testing.T) {
 	plan := config.TierConfig{Memory: "1Gi", CPU: "1", Instances: 1}
 	result, err := mysqlProv.Provision(ctx, domain.ProvisioningRequest{ProjectName: source, DBType: domain.MySQL, DatabaseName: "shop"}, plan, func(domain.ProvisioningStage) {})
 	for _, project := range []string{source, copy} {
-		t.Cleanup(func() { _ = mysqlProv.RemoveContainer(context.Background(), provisioner.MySQLContainerName(project)) })
+		t.Cleanup(func() { _ = mysqlProv.RemoveData(context.Background(), project) })
 	}
 	if err != nil {
 		t.Fatalf("Provision: %v", err)

@@ -15,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
@@ -175,8 +176,9 @@ func (r *RealDockerClient) CreateContainerSpec(ctx context.Context, spec Contain
 		Resources:     spec.Limits.resources(),
 	}
 	if spec.DataVolume != "" {
-		// Anonymous: removed with the container, like the official image's VOLUME.
-		hostCfg.Mounts = []mount.Mount{{Type: mount.TypeVolume, Target: spec.DataVolume}}
+		// Anonymous unless named: removed with the container, like the
+		// official image's VOLUME. A named one outlives it.
+		hostCfg.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: spec.DataVolumeName, Target: spec.DataVolume}}
 	}
 	netCfg := networkingConfig(r.netName)
 	if spec.NetnsOf != "" {
@@ -225,6 +227,22 @@ func (r *RealDockerClient) RemoveContainer(ctx context.Context, id string) error
 	})
 	if err != nil && !errdefs.IsNotFound(err) {
 		return fmt.Errorf("remove container %s: %w", id, err)
+	}
+	return nil
+}
+
+// CreateVolume creates a managed local volume; an existing one is kept.
+func (r *RealDockerClient) CreateVolume(ctx context.Context, name string) error {
+	if _, err := r.c.VolumeCreate(ctx, volume.CreateOptions{Name: name, Labels: map[string]string{excalibaseLabel: "true"}}); err != nil {
+		return fmt.Errorf("create volume %s: %w", name, err)
+	}
+	return nil
+}
+
+// RemoveVolume removes a volume; a missing one counts as removed.
+func (r *RealDockerClient) RemoveVolume(ctx context.Context, name string) error {
+	if err := r.c.VolumeRemove(ctx, name, false); err != nil && !errdefs.IsNotFound(err) {
+		return fmt.Errorf("remove volume %s: %w", name, err)
 	}
 	return nil
 }

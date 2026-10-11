@@ -27,8 +27,10 @@ type ContainerSpec struct {
 	// published on the client's bind address.
 	Ports  map[string]string
 	Limits ContainerLimits
-	// DataVolume mounts an anonymous volume there, removed with the container.
-	DataVolume string
+	// DataVolume mounts a volume there: anonymous and removed with the
+	// container, or DataVolumeName, which outlives it.
+	DataVolume     string
+	DataVolumeName string
 	// StopSignal replaces the image's; empty keeps it.
 	StopSignal string
 	// NetnsOf runs the container in that container's network namespace

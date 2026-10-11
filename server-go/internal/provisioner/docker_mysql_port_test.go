@@ -54,7 +54,7 @@ func TestDockerMySQLPublishesOnTheProjectsOwnHostPort(t *testing.T) {
 		t.Fatalf("a rebuild gave the port back: %v %v", err, ports.released)
 	}
 	image, _ := config.MySQLImage(config.DefaultMySQLVersion())
-	if _, err := mysql.StartEmpty(context.Background(), "p1", image, testTier); err != nil {
+	if _, err := mysql.StartOnVolume(context.Background(), "p1", image, testTier); err != nil {
 		t.Fatal(err)
 	}
 	if got := engine.specs[result.Namespace].Ports["3306"]; got != "30001" {

@@ -215,3 +215,22 @@ func TestMinorUpgrade_MySQLMovesToTheNewestCatalogueVersion(t *testing.T) {
 		t.Errorf("image %s", k8s.MySQLClusterImage(got))
 	}
 }
+
+// EXC-592: a single host's MySQL project is upgraded too, on its own volume;
+// a single-host Postgres project still is not.
+func TestMinorUpgrade_SingleHostMySQLIsAccepted(t *testing.T) {
+	store, _ := storage.NewFileSystemStore(t.TempDir())
+	svc := service.NewProvisioningService(store, provisioner.NewFactory(provisioner.NewDockerMySQLProvisioner(nil)), nil)
+	h := NewProvisioningHandler(svc, nil)
+	h.SetInstanceStore(store)
+	r := chi.NewRouter()
+	r.Route("/api/provision", func(r chi.Router) { h.Routes(r) })
+	inst := &domain.DatabaseInstance{ProjectID: "my-2", OrgID: "o", Status: "ACTIVE", DBType: domain.MySQL,
+		DeploymentMode: domain.ModeDocker, Tier: domain.Free, Namespace: "excalibase-my-2-mysql", MySQLVersion: config.DefaultMySQLVersion()}
+	if err := store.Create(inst); err != nil {
+		t.Fatal(err)
+	}
+	if w := postUpgrade(t, r, "my-2"); w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+}
