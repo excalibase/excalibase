@@ -74,3 +74,27 @@ func TestDockerPostgresWithoutBackupsDoesNotArchive(t *testing.T) {
 		t.Fatal("archive directory created for a project without backups")
 	}
 }
+
+// ALTER SYSTEM cannot run inside a transaction block, and psql runs one -c
+// string as a single transaction: each setting goes in a -c of its own.
+func TestDockerPostgresSetsEachArchiveSettingOutsideATransaction(t *testing.T) {
+	docker := newMockDocker()
+	docker.containers["c1"] = "running"
+	if err := NewDockerPostgreSQLProvisioner(docker).ConfigureArchive(context.Background(), "c1", "cp %p /x/%f", "postgres"); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range docker.execLog {
+		statements := 0
+		for i, arg := range cmd {
+			if arg == "-c" {
+				statements++
+				if strings.Count(cmd[i+1], "ALTER SYSTEM") > 1 {
+					t.Fatalf("settings batched in one transaction: %q", cmd[i+1])
+				}
+			}
+		}
+		if strings.Contains(strings.Join(cmd, " "), "ALTER SYSTEM") && statements != 4 {
+			t.Fatalf("%d statements: %v", statements, cmd)
+		}
+	}
+}

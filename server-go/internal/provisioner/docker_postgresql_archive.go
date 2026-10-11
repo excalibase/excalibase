@@ -72,13 +72,18 @@ func archiveDirTar(owner FileOwner) ([]byte, error) {
 // pg is query-ready. The container is restarted at the end because
 // `archive_mode` is changed only on (re)start, not on reload.
 func (p *DockerPostgreSQLProvisioner) ConfigureArchive(ctx context.Context, containerID, archiveCommand, superuser string) error {
-	sql := fmt.Sprintf(
-		"ALTER SYSTEM SET wal_level = 'replica'; "+
-			"ALTER SYSTEM SET archive_mode = 'on'; "+
-			"ALTER SYSTEM SET archive_command = %s; "+
-			"ALTER SYSTEM SET archive_timeout = %s;",
-		quoteSQLString(archiveCommand), quoteSQLString(walArchiveTimeout))
-	code, err := p.docker.ExecInContainer(ctx, containerID, []string{"psql", "-U", superuser, "-v", "ON_ERROR_STOP=1", "-c", sql})
+	// ALTER SYSTEM refuses a transaction block, and psql runs a single -c
+	// string as one: each setting gets a -c of its own.
+	cmd := []string{"psql", "-U", superuser, "-v", "ON_ERROR_STOP=1"}
+	for _, setting := range []string{
+		"wal_level = 'replica'",
+		"archive_mode = 'on'",
+		"archive_command = " + quoteSQLString(archiveCommand),
+		"archive_timeout = " + quoteSQLString(walArchiveTimeout),
+	} {
+		cmd = append(cmd, "-c", "ALTER SYSTEM SET "+setting)
+	}
+	code, err := p.docker.ExecInContainer(ctx, containerID, cmd)
 	if err != nil {
 		return fmt.Errorf("psql ALTER SYSTEM: %w", err)
 	}
