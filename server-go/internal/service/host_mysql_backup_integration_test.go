@@ -31,11 +31,11 @@ func TestHostMySQLBackupRestoresToAPointAndInPlace(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	suffix := time.Now().UnixNano() % 1_000_000
-	source, copy := fmt.Sprintf("it-mys-%d", suffix), fmt.Sprintf("it-myc-%d", suffix)
+	source, restoredID := fmt.Sprintf("it-mys-%d", suffix), fmt.Sprintf("it-myc-%d", suffix)
 	mysqlProv := provisioner.NewDockerMySQLProvisioner(docker)
 	plan := config.TierConfig{Memory: "1Gi", CPU: "1", Instances: 1}
 	result, err := mysqlProv.Provision(ctx, domain.ProvisioningRequest{ProjectName: source, DBType: domain.MySQL, DatabaseName: "shop"}, plan, func(domain.ProvisioningStage) {})
-	for _, project := range []string{source, copy} {
+	for _, project := range []string{source, restoredID} {
 		t.Cleanup(func() { _ = mysqlProv.RemoveData(context.Background(), project) })
 	}
 	if err != nil {
@@ -75,7 +75,7 @@ func TestHostMySQLBackupRestoresToAPointAndInPlace(t *testing.T) {
 		t.Fatalf("second backup: %v", err)
 	}
 
-	restored, err := adapter.Restore(ctx, inst, domain.RestoreRequest{NewProjectName: copy, TargetProjectID: copy, TargetTime: &domain.ZonedTime{Time: point}})
+	restored, err := adapter.Restore(ctx, inst, domain.RestoreRequest{NewProjectName: restoredID, TargetProjectID: restoredID, TargetTime: &domain.ZonedTime{Time: point}})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}

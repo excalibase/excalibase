@@ -26,8 +26,16 @@ func volumeAPI(t *testing.T, created map[string]map[string]string, removed *[]st
 				Labels map[string]string
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.Name == "refused" {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"message":"disk full"}`))
+				return
+			}
 			created[body.Name] = body.Labels
 			_ = json.NewEncoder(w).Encode(map[string]string{"Name": body.Name})
+		case r.Method == http.MethodDelete && path == "/volumes/busy":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"message":"volume is in use"}`))
 		case r.Method == http.MethodDelete && path == "/volumes/gone":
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"message":"no such volume"}`))
@@ -63,6 +71,9 @@ func TestRealClientCreatesAndRemovesManagedVolumes(t *testing.T) {
 	}
 	if err := c.RemoveVolume(context.Background(), "gone"); err != nil {
 		t.Fatalf("a missing volume: %v", err)
+	}
+	if c.CreateVolume(context.Background(), "refused") == nil || c.RemoveVolume(context.Background(), "busy") == nil {
+		t.Fatal("an engine error was swallowed")
 	}
 }
 

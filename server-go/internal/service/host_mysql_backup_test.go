@@ -101,7 +101,7 @@ func newHostBackupFixture(t *testing.T) *hostBackupFixture {
 	return f
 }
 
-func (f *hostBackupFixture) answer(_ string, stdin string) (string, error) {
+func (f *hostBackupFixture) answer(_, stdin string) (string, error) {
 	switch {
 	case strings.Contains(stdin, "FLUSH BINARY LOGS"):
 		f.current++

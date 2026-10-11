@@ -56,3 +56,19 @@ func TestDockerMySQLMinorUpgradeOpensTheSameDataOnTheNewImage(t *testing.T) {
 		}
 	}
 }
+
+// A container that cannot be removed stops a rebuild before the data is
+// touched.
+func TestDockerMySQLRebuildStopsWhenTheOldContainerStays(t *testing.T) {
+	engine := newFakeEngine()
+	result := provisionDockerMySQL(t, engine)
+	engine.failOn = "remove:" + result.Namespace
+	mysql := newTestDockerMySQL(engine)
+	image, _ := config.MySQLImage(config.DefaultMySQLVersion())
+	if err := mysql.ReplaceImage(context.Background(), "p1", image, testTier); err == nil {
+		t.Fatal("replaced the image of a container that stayed")
+	}
+	if err := mysql.RemoveData(context.Background(), "p1"); err == nil || !engine.volumes[p1Volume] {
+		t.Fatalf("data removed under a container that stayed: %v", err)
+	}
+}
