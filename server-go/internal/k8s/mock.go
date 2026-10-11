@@ -83,7 +83,10 @@ type MockClient struct {
 	// PublicDBServices — the spec of each project's public database
 	// endpoint Service, keyed "namespace/name". A missing key means no
 	// Service exists, which is a project refusing connections (EXC-410).
-	PublicDBServices           map[string]PublicDBServiceSpec
+	PublicDBServices map[string]PublicDBServiceSpec
+	// LingeringPublicDBServices — how many more existence checks a deleted
+	// Service still answers, as one held by a finalizer does.
+	LingeringPublicDBServices  map[string]int
 	EnsurePublicDBError        error
 	DeletePublicDBError        error
 	PublicDBServiceExistsError error
@@ -234,8 +237,9 @@ func NewMockClient() *MockClient {
 		DenoRuntimes:    make(map[string]bool),
 		DenoSpecs:       make(map[string]DenoRuntimeSpec),
 
-		PublicDBServices: make(map[string]PublicDBServiceSpec),
-		GatewayReady:     make(map[string]bool),
+		PublicDBServices:          make(map[string]PublicDBServiceSpec),
+		LingeringPublicDBServices: make(map[string]int),
+		GatewayReady:              make(map[string]bool),
 
 		DocumentDBServices:       make(map[string]bool),
 		PublicDBIngress:          make(map[string][]int),
@@ -343,7 +347,12 @@ func (m *MockClient) PublicDBServiceExists(ctx context.Context, namespace, name 
 	if m.PublicDBServiceExistsError != nil {
 		return false, m.PublicDBServiceExistsError
 	}
-	_, ok := m.PublicDBServices[namespace+"/"+name]
+	key := namespace + "/" + name
+	if m.LingeringPublicDBServices[key] > 0 {
+		m.LingeringPublicDBServices[key]--
+		return true, nil
+	}
+	_, ok := m.PublicDBServices[key]
 	return ok, nil
 }
 

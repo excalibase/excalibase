@@ -98,3 +98,24 @@ func TestAMySQLEndpointIsWithdrawnOnPauseAndBackOnResume(t *testing.T) {
 		t.Errorf("resumed service %+v", spec)
 	}
 }
+
+// A deleted LoadBalancer Service can linger while a cloud controller clears
+// its finalizer (k3s does). Withdrawing waits for it to be observed gone, and
+// still refuses when it never goes.
+func TestWithdrawWaitsForALingeringService(t *testing.T) {
+	for _, tc := range []struct {
+		lingers int
+		wantErr error
+	}{{lingers: 3}, {lingers: 1000, wantErr: ErrDBEndpointNotObserved}} {
+		f := newMySQLEndpointFixture(t)
+		f.svc.goneTimeout, f.svc.gonePoll = 50*time.Millisecond, time.Millisecond
+		ctx := context.Background()
+		if _, err := f.svc.SetPublic(ctx, f.inst.ProjectID, true); err != nil {
+			t.Fatalf("enable: %v", err)
+		}
+		f.kube.LingeringPublicDBServices[f.inst.Namespace+"/"+f.inst.ProjectID+"-mysql-public"] = tc.lingers
+		if err := f.svc.Withdraw(ctx, f.inst); !errors.Is(err, tc.wantErr) {
+			t.Errorf("lingers %d: Withdraw = %v, want %v", tc.lingers, err, tc.wantErr)
+		}
+	}
+}

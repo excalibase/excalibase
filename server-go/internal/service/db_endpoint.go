@@ -106,7 +106,16 @@ type DBEndpointService struct {
 	quarantine   time.Duration
 	sharedIPKey  string
 	claimer      ProjectOperationClaimer
+	// goneTimeout bounds the wait for a deleted Service to be observed gone;
+	// a cloud controller may hold one by its finalizer for a moment.
+	goneTimeout time.Duration
+	gonePoll    time.Duration
 }
+
+const (
+	defaultServiceGoneTimeout = 30 * time.Second
+	defaultServiceGonePoll    = 500 * time.Millisecond
+)
 
 func NewDBEndpointService(c DBEndpointServiceConfig) *DBEndpointService {
 	return &DBEndpointService{
@@ -118,6 +127,8 @@ func NewDBEndpointService(c DBEndpointServiceConfig) *DBEndpointService {
 		quarantine:   c.Quarantine,
 		sharedIPKey:  c.SharedIPKey,
 		claimer:      claimerOrInProcess(c.Claimer),
+		goneTimeout:  defaultServiceGoneTimeout,
+		gonePoll:     defaultServiceGonePoll,
 	}
 }
 
@@ -540,12 +551,8 @@ func (s *DBEndpointService) deleteObserved(ctx context.Context, inst *domain.Dat
 		if err := s.kube.DeletePublicDBService(ctx, inst.Namespace, name); err != nil {
 			return fmt.Errorf("withdraw database endpoint: %w", err)
 		}
-		exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, name)
-		if err != nil {
-			return fmt.Errorf("confirm database endpoint withdrawal: %w", err)
-		}
-		if exists {
-			return ErrDBEndpointNotObserved
+		if err := s.awaitServiceGone(ctx, inst.Namespace, name); err != nil {
+			return err
 		}
 	}
 	if err := s.kube.DeletePublicDBIngressPolicy(ctx, inst.Namespace, inst.ProjectID); err != nil {
