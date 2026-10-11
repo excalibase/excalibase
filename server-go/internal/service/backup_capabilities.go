@@ -32,7 +32,8 @@ type RestoreTargetChecker interface {
 func (s *BackupService) CheckRestoreTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) error {
 	adapter, err := s.adapterFor(inst)
 	if err != nil {
-		return err
+		// Dispatch is refused where it always was, by the restore itself.
+		return nil
 	}
 	checker, ok := adapter.(RestoreTargetChecker)
 	if !ok {

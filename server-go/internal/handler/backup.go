@@ -93,12 +93,34 @@ func (h *BackupHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 			retentionDays = *inst.BackupRetentionDays
 		}
 	}
-	writeJSON(w, map[string]interface{}{
+	body := map[string]interface{}{
 		"backups":       backups,
 		"backupEnabled": backupEnabled,
 		"schedule":      schedule,
 		"retentionDays": retentionDays,
-	})
+	}
+	if inst != nil {
+		window, err := h.svc.RestoreWindow(r.Context(), projectID)
+		if err != nil {
+			httpError(w, safeError(err), http.StatusInternalServerError)
+			return
+		}
+		if window != nil {
+			body["restoreWindow"] = window
+		}
+	}
+	writeJSON(w, body)
+}
+
+// writeRestoreTargetError answers a target the project's backups cannot
+// reach with what they can.
+func writeRestoreTargetError(w http.ResponseWriter, err error) {
+	if errors.Is(err, service.ErrRestoreTargetInvalid) {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("restore: check the target: %v", err)
+	httpError(w, safeError(err), http.StatusInternalServerError)
 }
 
 func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +154,10 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 	if inst.DocumentDB && !h.documentDBEnabled {
 		httpError(w, service.ErrDocumentDBNotInstalled.Error(), http.StatusConflict)
+		return
+	}
+	if err := h.svc.CheckRestoreTarget(r.Context(), inst, req); err != nil {
+		writeRestoreTargetError(w, err)
 		return
 	}
 	if req.InPlace() {
@@ -181,7 +207,7 @@ const restoreLimitCode = "project_limit_reached"
 func (h *BackupHandler) writeRestoreCapacityError(w http.ResponseWriter, inst *domain.DatabaseInstance, err error) {
 	var limit *service.OrgProjectLimitError
 	switch {
-	case errors.As(err, &limit) && h.svc.SupportsInPlaceRestore(inst.DeploymentMode):
+	case errors.As(err, &limit) && h.svc.SupportsInPlaceRestoreFor(inst):
 		writeJSONStatus(w, http.StatusConflict, map[string]any{
 			"error": limit.Error() + "; restore into this project instead, which replaces its current data",
 			"code":  restoreLimitCode, "status": http.StatusConflict,
@@ -217,7 +243,7 @@ func (h *BackupHandler) restoreInPlace(w http.ResponseWriter, r *http.Request, i
 // or nil.
 func inPlaceRefusal(svc *service.BackupService, inst *domain.DatabaseInstance) error {
 	switch {
-	case !svc.SupportsInPlaceRestore(inst.DeploymentMode):
+	case !svc.SupportsInPlaceRestoreFor(inst):
 		return service.ErrInPlaceRestoreUnsupported
 	case inst.BackupEnabled == nil || !*inst.BackupEnabled:
 		return service.ErrInPlaceNoBackups

@@ -121,3 +121,19 @@ func TestMySQLRestoreThatFailsRegistrationIsRolledBack(t *testing.T) {
 		t.Error("the restore's namespace was left behind")
 	}
 }
+
+// Owner decision: Standard → Free is a restore into a new Free project. A
+// MySQL restore loads a logical dump, so the copy gets the largest disk the
+// plan allows rather than being refused for the source's larger disk.
+func TestMySQLRestoreDiskFitsTheSmallerPlan(t *testing.T) {
+	free := config.TierConfig{StorageSize: "5Gi", MaxStorageSize: "5Gi"}
+	source := &domain.DatabaseInstance{ProjectID: "big", DBType: domain.MySQL, StorageSize: "50Gi"}
+	disk, err := restoreDisk(source, free)
+	if err != nil || disk != "5Gi" {
+		t.Fatalf("disk %q %v", disk, err)
+	}
+	source.DBType = domain.PostgreSQL
+	if _, err := restoreDisk(source, free); !errors.Is(err, ErrRestoreDiskAbovePlan) {
+		t.Errorf("a Postgres physical restore still needs the source's disk: %v", err)
+	}
+}

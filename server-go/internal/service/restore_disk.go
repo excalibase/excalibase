@@ -53,6 +53,11 @@ func restoreDisk(source *domain.DatabaseInstance, tier config.TierConfig) (strin
 	if err != nil {
 		return "", fmt.Errorf("plan maximum disk %q: %w", tier.MaxStorageSize, err)
 	}
+	if recorded.Cmp(limit) > 0 && source.DBType == domain.MySQL {
+		// A logical dump needs room for the data, not the source's disk;
+		// the restore proves the data fits or is rolled back.
+		return tier.MaxStorageSize, nil
+	}
 	if recorded.Cmp(limit) > 0 {
 		return "", fmt.Errorf("%w: the plan allows up to %s and the source's disk is %s", ErrRestoreDiskAbovePlan, tier.MaxStorageSize, source.StorageSize)
 	}
