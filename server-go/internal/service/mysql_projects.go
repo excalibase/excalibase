@@ -23,6 +23,10 @@ import (
 // ErrNotForMySQL refuses an operation that only a Postgres project has.
 var ErrNotForMySQL = errors.New("not available for MySQL projects")
 
+// ErrMySQLBackupScheduleFixed refuses a schedule in a MySQL request: the plan
+// sets it, and the interval is how far back a restore can reach.
+var ErrMySQLBackupScheduleFixed = errors.New("MySQL backups run on the plan's schedule (hourly on Standard, every 6 hours on Free); remove backup.schedule")
+
 // validateMySQLDatabaseRequest checks the settings a MySQL database is
 // created with: a catalogued version (or none, for the newest) and nothing
 // that only Postgres has.
@@ -42,8 +46,8 @@ func validateMySQLDatabaseRequest(req domain.ProvisioningRequest) error {
 	if len(req.Parameters) > 0 {
 		return fmt.Errorf("parameters are Postgres settings; they are %w", ErrNotForMySQL)
 	}
-	if req.Backup != nil && req.Backup.Enabled {
-		return fmt.Errorf("backups are %w yet", ErrNotForMySQL)
+	if req.Backup != nil && strings.TrimSpace(req.Backup.Schedule) != "" {
+		return ErrMySQLBackupScheduleFixed
 	}
 	return validateOwnerAndTags(req)
 }
@@ -69,6 +73,15 @@ func (s *ProvisioningService) mysqlProvisioner() (*provisioner.MySQLProvisioner,
 		return nil, fmt.Errorf("unsupported database type: %s", domain.MySQL)
 	}
 	return mysql, nil
+}
+
+// MySQLProvisioner is the MOCO provisioner, or nil where MySQL is not served.
+func (s *ProvisioningService) MySQLProvisioner() *provisioner.MySQLProvisioner {
+	mysql, err := s.mysqlProvisioner()
+	if err != nil {
+		return nil
+	}
+	return mysql
 }
 
 // AllowMySQLCreation turns the creation of new MySQL projects on or off.
@@ -150,10 +163,13 @@ func (s *ProvisioningService) applyMySQLTier(ctx context.Context, inst *domain.D
 	if err := s.reserveMySQLPlan(ctx, inst, mysql, orgTier, plan); err != nil {
 		return err
 	}
-	previous := inst.Tier
+	previous, previousSchedule := inst.Tier, inst.BackupSchedule
+	if err := s.moveMySQLBackupPlan(ctx, inst, mysql, orgTier, plan); err != nil {
+		return err
+	}
 	inst.Tier = orgTier
 	if err := s.store.UpdateIfStatus(inst, inst.Status); err != nil {
-		inst.Tier = previous
+		inst.Tier, inst.BackupSchedule = previous, previousSchedule
 		return fmt.Errorf("record the %s plan: %w", orgTier, err)
 	}
 	namespace, projectID, instances := inst.Namespace, inst.ProjectID, plan.Instances

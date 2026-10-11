@@ -24,6 +24,8 @@ const (
 type BackupService struct {
 	store    storage.InstanceStore
 	adapters map[domain.DeploymentMode]BackupAdapter
+	// engineAdapters serve engines other than Postgres (backup_dispatch.go).
+	engineAdapters map[engineAdapterKey]BackupAdapter
 	// capacity meters a restore against the source organisation's tier
 	// limit. A restore creates a project, so it is admitted on the same
 	// terms as a provision.
@@ -56,7 +58,7 @@ func (s *BackupService) RestoreInPlace(ctx context.Context, projectID string, re
 	if err != nil || inst == nil {
 		return fmt.Errorf("project not found: %s", projectID)
 	}
-	adapter, err := resolveAdapter(s.adapters, inst)
+	adapter, err := s.adapterFor(inst)
 	if err != nil {
 		return err
 	}
@@ -106,7 +108,7 @@ func NewBackupServiceWithAdapters(store storage.InstanceStore, adapters map[doma
 // that restores into a new project. Without it a restore refuses to run
 // rather than producing a database no API route can reach.
 func (s *BackupService) SetProjectRegistrar(r ProjectRegistrar) {
-	for _, adapter := range s.adapters {
+	for _, adapter := range s.everyAdapter() {
 		if setter, ok := adapter.(interface{ SetProjectRegistrar(ProjectRegistrar) }); ok {
 			setter.SetProjectRegistrar(r)
 		}
@@ -116,7 +118,7 @@ func (s *BackupService) SetProjectRegistrar(r ProjectRegistrar) {
 // SetRestorePlanSource hands every adapter that plans a restored project what
 // decides its tier and backups.
 func (s *BackupService) SetRestorePlanSource(p RestorePlanSource) {
-	for _, adapter := range s.adapters {
+	for _, adapter := range s.everyAdapter() {
 		if setter, ok := adapter.(interface{ SetRestorePlanSource(RestorePlanSource) }); ok {
 			setter.SetRestorePlanSource(p)
 		}
@@ -126,7 +128,7 @@ func (s *BackupService) SetRestorePlanSource(p RestorePlanSource) {
 // SetBackupCredentials hands every adapter that writes object-store
 // credentials into a namespace the issuer that mints them.
 func (s *BackupService) SetBackupCredentials(i *BackupCredentialIssuer) {
-	for _, adapter := range s.adapters {
+	for _, adapter := range s.everyAdapter() {
 		if setter, ok := adapter.(interface{ SetBackupCredentials(*BackupCredentialIssuer) }); ok {
 			setter.SetBackupCredentials(i)
 		}
@@ -143,10 +145,10 @@ func (s *BackupService) SetDatabaseProbe(p DatabaseProbe) error {
 	if p == nil {
 		return fmt.Errorf("%w: no probe was supplied", ErrDatabaseProbeNotConfigured)
 	}
-	if len(s.adapters) == 0 {
+	if len(s.everyAdapter()) == 0 {
 		return fmt.Errorf("%w: no backup adapters are registered", ErrDatabaseProbeNotConfigured)
 	}
-	for mode, adapter := range s.adapters {
+	for mode, adapter := range s.everyAdapter() {
 		setter, ok := adapter.(interface{ SetDatabaseProbe(DatabaseProbe) })
 		if !ok {
 			return fmt.Errorf("%w: the %s adapter cannot verify a restore", ErrDatabaseProbeNotConfigured, mode)
@@ -159,7 +161,7 @@ func (s *BackupService) SetDatabaseProbe(p DatabaseProbe) error {
 // SetRestoreReadyTimeout bounds how long every adapter waits for a recovered
 // database to be observed ready.
 func (s *BackupService) SetRestoreReadyTimeout(d time.Duration) {
-	for _, adapter := range s.adapters {
+	for _, adapter := range s.everyAdapter() {
 		if setter, ok := adapter.(interface{ SetRestoreReadyTimeout(time.Duration) }); ok {
 			setter.SetRestoreReadyTimeout(d)
 		}
@@ -178,7 +180,7 @@ func (s *BackupService) TriggerManualBackup(ctx context.Context, projectID strin
 	if err != nil || inst == nil {
 		return nil, fmt.Errorf("project not found: %s", projectID)
 	}
-	adapter, err := resolveAdapter(s.adapters, inst)
+	adapter, err := s.adapterFor(inst)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +199,7 @@ func (s *BackupService) ListBackups(projectID string) ([]map[string]interface{},
 	if err != nil || inst == nil {
 		return []map[string]interface{}{}, nil
 	}
-	adapter, err := resolveAdapter(s.adapters, inst)
+	adapter, err := s.adapterFor(inst)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +231,7 @@ func (s *BackupService) BackupsConfigured(projectID string) (bool, error) {
 	if !backupsOn(inst) {
 		return false, nil
 	}
-	adapter, err := resolveAdapter(s.adapters, inst)
+	adapter, err := s.adapterFor(inst)
 	if err != nil {
 		return false, err
 	}
@@ -244,7 +246,7 @@ func (s *BackupService) LatestBackupID(ctx context.Context, projectID string) (s
 	if err != nil || inst == nil {
 		return "", fmt.Errorf("project not found: %s", projectID)
 	}
-	adapter, err := resolveAdapter(s.adapters, inst)
+	adapter, err := s.adapterFor(inst)
 	if err != nil {
 		return "", err
 	}
@@ -270,9 +272,12 @@ func (s *BackupService) BackupStatus(ctx context.Context, projectID, backupID st
 	if err != nil || inst == nil {
 		return "", fmt.Errorf("project not found: %s", projectID)
 	}
-	adapter, err := resolveAdapter(s.adapters, inst)
+	adapter, err := s.adapterFor(inst)
 	if err != nil {
 		return "", err
+	}
+	if resolver, ok := adapter.(BackupStatusResolver); ok {
+		return resolver.BackupStatusOf(ctx, inst, backupID)
 	}
 	refs, err := adapter.List(ctx, inst)
 	if err != nil {
@@ -291,7 +296,7 @@ func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string,
 	if err != nil || inst == nil {
 		return nil, fmt.Errorf("project not found: %s", projectID)
 	}
-	adapter, err := resolveAdapter(s.adapters, inst)
+	adapter, err := s.adapterFor(inst)
 	if err != nil {
 		return nil, err
 	}

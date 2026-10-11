@@ -62,4 +62,37 @@ test.describe('MySQL projects', () => {
     await page.goto(`/project/${PROJECT_ID}/sql`);
     await expect(page.getByTestId('postgres-required')).toBeVisible({ timeout: FIRST_RENDER });
   });
+
+  // EXC-586: backups on the plan, and restores to a time inside the backup window.
+  test('a MySQL project restores within its backup window', async ({ page }) => {
+    await loginAs(page);
+    await mockPlatform(page, true);
+    await mockSchemaEndpoints(page, PROJECT_ID);
+    await json(page, `**/api/provision/${PROJECT_ID}`, {
+      projectId: PROJECT_ID, orgId: 'org-1', databaseType: 'MYSQL', mysqlVersion: '8.4.10', tier: 'FREE',
+      namespace: 'org-1-shop-mysql', status: 'ACTIVE', currentStage: 'COMPLETED', host: HOST, port: 3306,
+      databaseName: 'app', backupEnabled: true, backupSchedule: '0 */6 * * *', backupRetentionDays: 7,
+    });
+    await json(page, `**/api/provision/${PROJECT_ID}/backup/list`, {
+      backups: [{ id: '20261011-060000', timestamp: '2026-10-11T06:00:00Z', size: '', status: 'COMPLETED', type: 'SCHEDULED' }],
+      backupEnabled: true, schedule: '0 */6 * * *', retentionDays: 7,
+      restoreWindow: { earliest: '2026-10-11T00:00:00Z', latest: '2026-10-11T06:00:00Z' },
+    });
+    let requested: unknown;
+    await page.route(`**/api/provision/${PROJECT_ID}/backup/restore`, (route) => {
+      requested = route.request().postDataJSON();
+      return route.fulfill({ status: 400, contentType: 'application/json',
+        body: JSON.stringify({ error: 'point-in-time within the backup window: 2026-10-11T00:00:00Z – 2026-10-11T06:00:00Z' }) });
+    });
+    await page.goto(`/project/${PROJECT_ID}/operations/backups`);
+    await expect(page.getByText('20261011-060000')).toBeVisible({ timeout: FIRST_RENDER });
+    await page.getByRole('button', { name: 'Restore', exact: true }).click();
+    await expect(page.getByTestId('restore-window')).toContainText('Point-in-time within the backup window:');
+    await expect(page.getByText(/PITR/)).toHaveCount(0);
+    await page.getByLabel('New project name *').fill('shop copy');
+    await page.getByLabel(/Target time/).fill('2026-10-11T09:00');
+    await page.getByRole('button', { name: /Restore to Point in Time/ }).click();
+    await expect.poll(() => (requested as { targetTime?: string } | undefined)?.targetTime).toBeTruthy();
+    await expect(page.getByRole('alert')).toContainText('point-in-time within the backup window');
+  });
 });

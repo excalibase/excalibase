@@ -45,6 +45,10 @@ func admitInPlaceRestore(projectID, status string) error {
 
 // StopReplication removes the project's CDC watcher. See InPlaceProjects.
 func (s *ProvisioningService) StopReplication(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if inst.DBType == domain.MySQL {
+		// No CDC watcher runs for MySQL yet (ADR 0041 phase 2).
+		return nil
+	}
 	pg, err := s.postgresProvisioner()
 	if err != nil {
 		return err
@@ -72,6 +76,9 @@ func (s *ProvisioningService) AnnounceDatabaseReplaced(ctx context.Context, proj
 func (s *ProvisioningService) ReapplyCredentials(ctx context.Context, inst *domain.DatabaseInstance) error {
 	if s.vault == nil || s.k8sClient == nil {
 		return ErrCredentialRotationUnavailable
+	}
+	if inst.DBType == domain.MySQL {
+		return s.reapplyMySQLCredentials(ctx, inst)
 	}
 	filed, err := s.filedCredentialPaths(inst.ProjectID)
 	if err != nil {

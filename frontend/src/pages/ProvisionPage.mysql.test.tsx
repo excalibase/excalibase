@@ -57,9 +57,9 @@ describe('ProvisionPage — MySQL', () => {
     await user.click(card);
     expect(await screen.findByTestId('mysql-version-8.4.10')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByTestId('pg-version-section')).not.toBeInTheDocument();
-    // MySQL runs on at least 1Gi, and has no backups yet.
+    // MySQL runs on at least 1Gi, and is backed up like Postgres (EXC-586).
     await vi.waitFor(() => expect(screen.getByTestId('provision-org-plan')).toHaveTextContent('1Gi RAM'));
-    expect(screen.getByTestId('provision-org-plan')).not.toHaveTextContent('Backups');
+    expect(screen.getByTestId('provision-org-plan')).toHaveTextContent('Backups');
     await user.click(screen.getByTestId('mysql-version-8.4.9'));
     await user.type(screen.getByLabelText('Project Name'), 'shop');
     await vi.waitFor(() => expect(screen.getByLabelText('Organization')).toHaveValue('org-1'));

@@ -129,3 +129,35 @@ func mysqlVerifyConfig(inst *domain.DatabaseInstance, username, password string,
 	config.TLSConfig = "skip-verify"
 	return config
 }
+
+// reapplyMySQLCredentials sets every filed platform login back to its vault
+// password after the database was replaced by a backup of another time.
+func (s *ProvisioningService) reapplyMySQLCredentials(ctx context.Context, inst *domain.DatabaseInstance) error {
+	filed, err := s.filedCredentialPaths(inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	passwords := map[string]string{}
+	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher} {
+		path := vaultCredentialPath(inst.ProjectID, role)
+		if !filed[path] {
+			continue
+		}
+		record, err := s.vault.Get(path)
+		if err != nil {
+			return fmt.Errorf("read %s credential: %w", role, err)
+		}
+		if record["password"] == "" {
+			return fmt.Errorf("the filed %s credential has no password", role)
+		}
+		passwords[record["username"]] = record["password"]
+	}
+	if len(passwords) == 0 {
+		return nil
+	}
+	mysql, err := s.mysqlProvisioner()
+	if err != nil {
+		return err
+	}
+	return mysql.SetUserPasswords(ctx, inst.Namespace, inst.ProjectID, passwords)
+}

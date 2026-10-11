@@ -145,7 +145,6 @@ export function SettingsPage() {
       </div>
 
       {!noDatabase && (<>
-      {postgres && (
       <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8" data-testid="backup-config-card">
         <h4 className="text-sm font-medium text-text-primary mb-2">Backup Configuration</h4>
         <div className="grid grid-cols-3 gap-4 text-sm">
@@ -163,7 +162,6 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
-      )}
 
       <div className="mb-8">
         <MinorUpgradeCard project={project} />

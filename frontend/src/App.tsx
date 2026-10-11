@@ -143,8 +143,11 @@ export default function App() {
               <Route path="api" element={<ApiInfoPage />} />
               <Route path="monitoring/metrics" element={<MetricsPage />} />
               <Route path="monitoring/logs" element={<LogExplorerPage />} />
-              <Route path="operations/backups" element={<BackupsPage />} />
               <Route path="operations/snapshots" element={<SnapshotsPage />} />
+            </Route>
+            {/* Backups work on MySQL projects too (EXC-586). */}
+            <Route element={<DatabaseRequired mysql />}>
+              <Route path="operations/backups" element={<BackupsPage />} />
             </Route>
             {/* Containers */}
             <Route path="containers" element={<ContainersPage />} />

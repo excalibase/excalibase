@@ -9,7 +9,8 @@ import { isMySQLProject } from '../utils/engine';
 // created without one gets a plain statement and the way to add one, instead
 // of each page failing against a database that does not exist. The server
 // refuses those calls with 409 regardless; this only saves the round trip.
-export function DatabaseRequired() {
+// mysql marks pages that also work on a MySQL project (EXC-586: backups).
+export function DatabaseRequired({ mysql = false }: { readonly mysql?: boolean }) {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: project, error } = useInstance(projectId);
 
@@ -27,7 +28,7 @@ export function DatabaseRequired() {
       </div>
     );
   }
-  if (isMySQLProject(project)) return <PostgresRequired projectId={projectId} />;
+  if (isMySQLProject(project)) return mysql ? <Outlet /> : <PostgresRequired projectId={projectId} />;
   if (!project.noDatabase) return <Outlet />;
   return (
     <div data-testid="database-required" className="max-w-xl mx-auto py-16 text-center space-y-4">

@@ -130,23 +130,20 @@ func validateBackupPrefix(prefix, projectID string) error {
 // successful no-op, so calling it twice is safe. Returns the number of
 // objects deleted.
 func (p *BackupPurger) Purge(ctx context.Context, inst *domain.DatabaseInstance) (int, error) {
-	prefix, err := ProjectBackupPrefix(inst.DeploymentMode, inst.ProjectID, p.dockerKeyPrefix)
+	prefixes, err := projectBackupPrefixes(inst.DeploymentMode, engineOf(inst), inst.OrgID, inst.ProjectID, p.dockerKeyPrefix)
 	if err != nil {
 		return 0, err
 	}
-	creds, ok := p.storage.BackupStorage()
-	if !ok {
-		return 0, ErrBackupStorageNotConfigured
+	return p.purgePrefixes(ctx, prefixes)
+}
+
+// engineOf is the row's engine; a row from before engines were recorded is
+// a Postgres one.
+func engineOf(inst *domain.DatabaseInstance) domain.DatabaseType {
+	if inst.DBType == "" {
+		return domain.PostgreSQL
 	}
-	bucket, err := resolveBucket(creds)
-	if err != nil {
-		return 0, err
-	}
-	deleter, err := p.openDeleter(ctx, creds)
-	if err != nil {
-		return 0, fmt.Errorf("open backup store: %w", err)
-	}
-	return deleteAllUnderPrefix(ctx, deleter, bucket, prefix, p.pageSize)
+	return inst.DBType
 }
 
 // resolveBucket picks the bucket the backups were written to. Nothing is

@@ -9,3 +9,11 @@ export function toZonedInstant(value: string | undefined): string | undefined {
   }
   return instant.toISOString();
 }
+
+// The datetime-local value that displays an instant in the browser's zone,
+// to the second.
+export function toLocalInput(instant: string): string {
+  const at = new Date(instant);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+}

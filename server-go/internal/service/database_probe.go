@@ -5,7 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
 
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
@@ -48,13 +53,9 @@ func (p *VaultDatabaseProbe) Probe(ctx context.Context, projectID string) error 
 	if err != nil {
 		return fmt.Errorf("read %s credentials: %w", roleApp, err)
 	}
-	dsn, err := buildTenantDSN(creds, p.overrides)
+	db, err := p.open(creds)
 	if err != nil {
 		return err
-	}
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return fmt.Errorf("open restored database: %w", err)
 	}
 	defer db.Close()
 
@@ -65,4 +66,30 @@ func (p *VaultDatabaseProbe) Probe(ctx context.Context, projectID string) error 
 		return fmt.Errorf("query restored database: %w", err)
 	}
 	return nil
+}
+
+// open connects as the record's engine says: MySQL with its password over
+// TLS, Postgres with the role's client certificate.
+func (p *VaultDatabaseProbe) open(creds map[string]string) (*sql.DB, error) {
+	if domain.IsMySQLRecord(creds) {
+		port, err := strconv.Atoi(creds["port"])
+		if err != nil {
+			return nil, fmt.Errorf("read %s credentials: the port is not a number", roleApp)
+		}
+		inst := &domain.DatabaseInstance{Host: creds["host"], Port: &port}
+		connector, err := mysql.NewConnector(mysqlVerifyConfig(inst, creds["username"], creds["password"], p.overrides))
+		if err != nil {
+			return nil, fmt.Errorf("open restored database as %s", creds["username"])
+		}
+		return sql.OpenDB(connector), nil
+	}
+	dsn, err := buildTenantDSN(creds, p.overrides)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open restored database: %w", err)
+	}
+	return db, nil
 }

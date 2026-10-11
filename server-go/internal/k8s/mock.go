@@ -485,6 +485,9 @@ func markMySQLClusterHealthy(obj *unstructured.Unstructured) {
 			map[string]interface{}{"type": "StatefulSetReady", "status": "True"},
 		},
 	}, "status")
+	if _, restoring, _ := unstructured.NestedMap(obj.Object, "spec", "restore"); restoring {
+		_ = unstructured.SetNestedField(obj.Object, "2026-01-01T00:00:00Z", "status", "restoredTime")
+	}
 }
 
 func (m *MockClient) GetCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {

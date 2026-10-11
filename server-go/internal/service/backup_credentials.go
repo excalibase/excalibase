@@ -69,30 +69,46 @@ func (i *BackupCredentialIssuer) RenewWithin() time.Duration { return i.cfg.TTL 
 // ForNewProject proves the project's prefix unused, then mints read-write
 // credentials confined to it.
 func (i *BackupCredentialIssuer) ForNewProject(ctx context.Context, store *domain.S3Credentials, projectID string) (*domain.S3Credentials, error) {
-	if err := i.ensurePrefixUnused(ctx, store, projectID); err != nil {
+	return i.ForNewPrefix(ctx, store, projectID, k8s.BarmanObjectPrefix(projectID))
+}
+
+// ForNewPrefix proves prefix unused, then mints read-write credentials
+// confined to it for projectID.
+func (i *BackupCredentialIssuer) ForNewPrefix(ctx context.Context, store *domain.S3Credentials, projectID, prefix string) (*domain.S3Credentials, error) {
+	if err := i.ensurePrefixUnused(ctx, store, projectID, prefix); err != nil {
 		return nil, err
 	}
-	return i.mint(ctx, store, projectID, objectcreds.ReadWrite, i.cfg.TTL)
+	return i.mint(ctx, store, projectID, prefix, objectcreds.ReadWrite, i.cfg.TTL)
 }
 
 // Renew mints fresh read-write credentials for a running project's prefix.
 func (i *BackupCredentialIssuer) Renew(ctx context.Context, store *domain.S3Credentials, projectID string) (*domain.S3Credentials, error) {
-	return i.mint(ctx, store, projectID, objectcreds.ReadWrite, i.cfg.TTL)
+	return i.RenewPrefix(ctx, store, projectID, k8s.BarmanObjectPrefix(projectID))
+}
+
+// RenewPrefix mints fresh read-write credentials for prefix.
+func (i *BackupCredentialIssuer) RenewPrefix(ctx context.Context, store *domain.S3Credentials, projectID, prefix string) (*domain.S3Credentials, error) {
+	return i.mint(ctx, store, projectID, prefix, objectcreds.ReadWrite, i.cfg.TTL)
 }
 
 // ForRestoreSource mints read-only credentials for the source's prefix.
 func (i *BackupCredentialIssuer) ForRestoreSource(ctx context.Context, store *domain.S3Credentials, sourceProjectID string) (*domain.S3Credentials, error) {
-	return i.mint(ctx, store, sourceProjectID, objectcreds.ReadOnly, i.cfg.SourceTTL)
+	return i.ForRestoreSourcePrefix(ctx, store, sourceProjectID, k8s.BarmanObjectPrefix(sourceProjectID))
 }
 
-func (i *BackupCredentialIssuer) mint(ctx context.Context, store *domain.S3Credentials, projectID string, access objectcreds.Access, ttl time.Duration) (*domain.S3Credentials, error) {
+// ForRestoreSourcePrefix mints read-only credentials for a source's prefix.
+func (i *BackupCredentialIssuer) ForRestoreSourcePrefix(ctx context.Context, store *domain.S3Credentials, sourceProjectID, prefix string) (*domain.S3Credentials, error) {
+	return i.mint(ctx, store, sourceProjectID, prefix, objectcreds.ReadOnly, i.cfg.SourceTTL)
+}
+
+func (i *BackupCredentialIssuer) mint(ctx context.Context, store *domain.S3Credentials, projectID, prefix string, access objectcreds.Access, ttl time.Duration) (*domain.S3Credentials, error) {
 	if store == nil {
 		return nil, ErrBackupStorageNotConfigured
 	}
 	creds, err := i.cfg.Minter.Mint(ctx, objectcreds.Parent{
 		AccessKeyID: store.AccessKeyID, SecretAccessKey: store.SecretAccessKey,
 		Endpoint: store.Endpoint, Bucket: store.Bucket, Region: store.Region,
-	}, objectcreds.Scope{Prefix: k8s.BarmanObjectPrefix(projectID), Access: access, TTL: ttl})
+	}, objectcreds.Scope{Prefix: prefix, Access: access, TTL: ttl})
 	if err != nil {
 		return nil, unavailable(projectID, "mint", err)
 	}
@@ -110,7 +126,7 @@ func (i *BackupCredentialIssuer) mint(ctx context.Context, store *domain.S3Crede
 
 // ensurePrefixUnused stands in for barman-cloud-check-wal-archive, which the
 // clusters skip because a prefix-scoped credential cannot run it.
-func (i *BackupCredentialIssuer) ensurePrefixUnused(ctx context.Context, store *domain.S3Credentials, projectID string) error {
+func (i *BackupCredentialIssuer) ensurePrefixUnused(ctx context.Context, store *domain.S3Credentials, projectID, prefix string) error {
 	if store == nil {
 		return ErrBackupStorageNotConfigured
 	}
@@ -118,7 +134,6 @@ func (i *BackupCredentialIssuer) ensurePrefixUnused(ctx context.Context, store *
 	if err != nil {
 		return unavailable(projectID, "open the backup store", err)
 	}
-	prefix := k8s.BarmanObjectPrefix(projectID)
 	keys, _, err := objects.ListKeys(ctx, store.Bucket, prefix, "", 1)
 	if err != nil {
 		return unavailable(projectID, "check the backup prefix", err)

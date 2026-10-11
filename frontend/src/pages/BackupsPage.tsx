@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useListBackups, useTriggerBackup } from '../hooks/useProvisioning';
+import { useInstance, useListBackups, useTriggerBackup } from '../hooks/useProvisioning';
+import { isMySQLProject } from '../utils/engine';
 import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
@@ -14,6 +15,8 @@ export function BackupsPage() {
   const [tab, setTab] = useState<Tab>('backups');
 
   const { data: backupData, isLoading } = useListBackups(projectId);
+  // MySQL restores within its backup window only (ADR 0041).
+  const mysql = isMySQLProject(useInstance(projectId).data);
   const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
   const triggerBackup = useTriggerBackup();
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
@@ -54,7 +57,7 @@ export function BackupsPage() {
         <div className="flex border-b border-border-primary px-4 gap-1">
           {([
             { key: 'backups', label: 'Backup History', icon: Archive },
-            { key: 'restore', label: 'Restore / PITR', icon: RotateCcw },
+            { key: 'restore', label: mysql ? 'Restore' : 'Restore / PITR', icon: RotateCcw },
           ] as { key: Tab; label: string; icon: LucideIcon }[]).map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -117,7 +120,9 @@ export function BackupsPage() {
             </table>
           )}
 
-          {tab === 'restore' && <RestoreForm projectId={projectId} />}
+          {tab === 'restore' && (
+            <RestoreForm projectId={projectId} engine={mysql ? 'mysql' : undefined} restoreWindow={mysql ? backupData?.restoreWindow : undefined} />
+          )}
         </div>
       </div>
     </div>

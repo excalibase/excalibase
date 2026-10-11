@@ -118,13 +118,13 @@ export const PROJECT_NAV: NavSection[] = [
   },
   {
     key: 'operations',
-    postgresOnly: true,
     label: 'Operations',
     icon: Wrench,
     children: [
+      // MySQL projects are backed up and restored too (EXC-586).
       { label: 'Backups', icon: HardDrive, to: 'operations/backups' },
-      { label: 'Snapshots', icon: Camera, to: 'operations/snapshots' },
-      { label: 'Migrations', icon: ArrowUpDown, to: 'operations/migrations' },
+      { label: 'Snapshots', icon: Camera, to: 'operations/snapshots', postgresOnly: true },
+      { label: 'Migrations', icon: ArrowUpDown, to: 'operations/migrations', postgresOnly: true },
     ],
   },
   { key: 'vault', label: 'Vault', icon: KeyRound, to: 'vault' },
