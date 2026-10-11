@@ -163,6 +163,7 @@ func (r *RealDockerClient) CreateContainerSpec(ctx context.Context, spec Contain
 	cfg := &container.Config{
 		Image:        spec.Image,
 		Env:          envList(spec.Env),
+		Entrypoint:   spec.Entrypoint,
 		Cmd:          spec.Cmd,
 		ExposedPorts: exposed,
 		Labels:       map[string]string{excalibaseLabel: "true"},

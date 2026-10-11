@@ -220,37 +220,50 @@ func smallMySQLPlan(plan config.TierConfig) (bool, error) {
 	return memory.Cmp(resource.MustParse(smallPlanMemory)) < 0, nil
 }
 
-// BuildMySQLConfig renders the mysqld settings the cluster reads: the
-// connection cap, the plan's statement budget as max_execution_time, and the
-// small buffer pool on a small plan.
-func BuildMySQLConfig(opts MySQLClusterOpts) (*unstructured.Unstructured, error) {
-	plan, err := config.MySQLPlan(opts.Tier)
+// MySQLSettings are the mysqld settings a plan gets: the connection cap, the
+// plan's statement budget as max_execution_time, and the small buffer pool on
+// a small plan. Kubernetes and a single host apply the same ones.
+func MySQLSettings(tier config.TierConfig) (map[string]string, error) {
+	plan, err := config.MySQLPlan(tier)
 	if err != nil {
 		return nil, err
 	}
-	opts.Tier = plan
-	data := map[string]interface{}{"max_connections": mysqlMaxConnections}
-	small, err := smallMySQLPlan(opts.Tier)
+	settings := map[string]string{"max_connections": mysqlMaxConnections}
+	small, err := smallMySQLPlan(plan)
 	if err != nil {
 		return nil, err
 	}
 	if small {
-		data["innodb_buffer_pool_size"] = smallBufferPool
-		data["innodb_log_buffer_size"] = smallLogBuffer
-		data["table_open_cache"] = smallTableCache
+		settings["innodb_buffer_pool_size"] = smallBufferPool
+		settings["innodb_log_buffer_size"] = smallLogBuffer
+		settings["table_open_cache"] = smallTableCache
 	}
-	memory, err := resource.ParseQuantity(opts.Tier.Memory)
+	memory, err := resource.ParseQuantity(plan.Memory)
 	if err != nil {
-		return nil, fmt.Errorf("plan memory %q: %w", opts.Tier.Memory, err)
+		return nil, fmt.Errorf("plan memory %q: %w", plan.Memory, err)
 	}
 	// In-memory temp tables default to 1GiB and would OOM a small instance.
-	data["temptable_max_ram"] = strconv.FormatInt(max(memory.Value()/16, minTempTableMemory), 10)
-	if opts.Tier.StatementTimeout != "" {
-		timeout, err := time.ParseDuration(opts.Tier.StatementTimeout)
+	settings["temptable_max_ram"] = strconv.FormatInt(max(memory.Value()/16, minTempTableMemory), 10)
+	if plan.StatementTimeout != "" {
+		timeout, err := time.ParseDuration(plan.StatementTimeout)
 		if err != nil {
-			return nil, fmt.Errorf("plan statement timeout %q: %w", opts.Tier.StatementTimeout, err)
+			return nil, fmt.Errorf("plan statement timeout %q: %w", plan.StatementTimeout, err)
 		}
-		data["max_execution_time"] = strconv.FormatInt(timeout.Milliseconds(), 10)
+		settings["max_execution_time"] = strconv.FormatInt(timeout.Milliseconds(), 10)
+	}
+	return settings, nil
+}
+
+// BuildMySQLConfig renders the plan's mysqld settings as the ConfigMap the
+// cluster reads.
+func BuildMySQLConfig(opts MySQLClusterOpts) (*unstructured.Unstructured, error) {
+	settings, err := MySQLSettings(opts.Tier)
+	if err != nil {
+		return nil, err
+	}
+	data := make(map[string]interface{}, len(settings))
+	for key, value := range settings {
+		data[key] = value
 	}
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1",
