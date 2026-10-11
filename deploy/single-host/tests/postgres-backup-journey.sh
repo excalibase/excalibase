@@ -60,13 +60,24 @@ archived() {
   return 1
 }
 
+# pg_port <project>: the host port its 5432 is published on.
+pg_port() { $DOCKER port "excalibase-$1-postgres" 5432 2>/dev/null | head -1 | sed 's/.*://'; }
+# kept_port <step>: the project's clients keep their connection string.
+kept_port() {
+  local now
+  now=$(pg_port "$PID")
+  [ "$now" = "$PPORT" ] && ok "port $PPORT kept after $1" || ko "port moved from $PPORT to '$now' after $1"
+}
+
 echo "== postgres backups by default"
+PPORT=$(pg_port "$PID")
+[ "${PPORT:-0}" -ge 30000 ] && [ "$PPORT" -le 30999 ] && ok "the project holds port $PPORT from the tenant window" || ko "port '$PPORT' outside 30000-30999"
 SCH=$($DOCKER exec excalibase-postgres psql -qtAX -U excalibase -d excalibase_platform \
   -c "SELECT cron_spec FROM backup_schedules WHERE project_id = '$PID' AND enabled")
 REC=$(papi "$PAPI/provision/$PID/" | pjson 'str(d.get("backupEnabled"))+" "+(d.get("backupSchedule") or "")')
 [ -n "$SCH" ] && [ "$REC" = "True $SCH" ] && ok "the project runs its plan's backup schedule ($SCH)" || ko "schedule: '$SCH', project says '$REC'"
 arch=$(psql_on "$PID" "SELECT current_setting('archive_mode')||' '||(current_setting('archive_command')<>'')")
-[ "$arch" = "on t" ] && ok "WAL archiving is on" || ko "archive settings: $arch"
+[ "$arch" = "on true" ] && ok "WAL archiving is on" || ko "archive settings: $arch"
 psql_on "$PID" "CREATE TABLE ledger (id serial PRIMARY KEY, body text); INSERT INTO ledger (body) VALUES ('a'),('b'),('c')" >/dev/null
 P1=$(pg_backup_now "$PID")
 [ -n "$P1" ] && ok "Postgres backup COMPLETED ($P1)" || ko "no Postgres backup"
@@ -91,6 +102,7 @@ out=$(psql_on "$PID" "SELECT count(*) FROM ledger")
 case "$js $st $out" in COMPLETED*ACTIVE*" 5") ok "restored in place to $PPOINT: 5 rows" ;; *) ko "in-place restore: $js / $st / ${out:0:200}" ;; esac
 arch=$(psql_on "$PID" "SELECT current_setting('archive_mode')")
 [ "$arch" = on ] && archived "$PID" && ok "the restored project archives WAL" || ko "after the in-place restore archive_mode=$arch"
+kept_port "the in-place restore"
 
 echo "== postgres pause and resume"
 papi -X POST "$PAPI/provision/$PID/pause" -o /dev/null
@@ -101,6 +113,7 @@ st=$(pwait "$PID" ACTIVE)
 out=$(psql_on "$PID" "SELECT count(*) FROM ledger")
 case "$st $out" in ACTIVE*" 5") ok "resumed with its rows" ;; *) ko "resume: $st ${out:0:200}" ;; esac
 archived "$PID" && ok "archiving goes on after the resume" || ko "no WAL shipped after the resume"
+kept_port "pause and resume"
 
 echo "== postgres delete purges backups"
 pg_backup_now "$PRPID" >/dev/null
