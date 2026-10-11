@@ -22,7 +22,9 @@ var ErrBackupSchedulerNotConfigured = errors.New("backups are required but this 
 
 // SetBackupSchedules wires the scheduler a single host's Postgres projects
 // are backed up by.
-func (s *ProvisioningService) SetBackupSchedules(schedules BackupSchedules) { s.backupSchedules = schedules }
+func (s *ProvisioningService) SetBackupSchedules(schedules BackupSchedules) {
+	s.backupSchedules = schedules
+}
 
 // platformScheduled is a project whose backups the platform itself runs: a
 // single host's Postgres (MySQL has its own sweep; a cluster, its operator).

@@ -63,15 +63,24 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	if err != nil {
 		return nil, err
 	}
+	pc := provisioner.NewProvisionContext(nil, nil)
+	hostPort, err := a.heldPort(ctx, newProject)
+	if err != nil {
+		return nil, err
+	}
+	pc.RegisterCleanup("release the copy's host port", func(ctx context.Context) error {
+		return a.releasePort(ctx, newProject)
+	})
 	recovered, err := a.recoverContainer(ctx, dc, inst, req, recoveryTarget{
 		projectID:     newProject,
 		containerName: provisioner.DatabaseContainerName(newProject),
 		limits:        limits,
+		hostPort:      hostPort,
 	})
 	if err != nil {
+		pc.Rollback(ctx)
 		return nil, err
 	}
-	pc := provisioner.NewProvisionContext(nil, nil)
 	pc.RegisterCleanup("remove restored container", func(ctx context.Context) error {
 		return dc.RemoveContainer(ctx, recovered.containerID)
 	})
@@ -121,6 +130,8 @@ type recoveryTarget struct {
 	projectID     string
 	containerName string
 	limits        provisioner.ContainerLimits
+	// hostPort is the host port 5432 is published on; "" for any.
+	hostPort string
 }
 
 // recovered is a container recovered from a project's backups.
@@ -172,6 +183,7 @@ func recoverySpec(source *domain.DatabaseInstance, req domain.RestoreRequest, ta
 		limits:          target.limits,
 		documentDB:      source.DocumentDB,
 		major:           source.PostgresVersion,
+		hostPort:        target.hostPort,
 	}
 	if !source.DocumentDB {
 		image, err := restoreImage(source.PostgresVersion)
@@ -187,7 +199,7 @@ func recoverySpec(source *domain.DatabaseInstance, req domain.RestoreRequest, ta
 // recovery in it; with archive, it then archives WAL as a new project does.
 func (a *DockerBackupAdapter) bringUp(ctx context.Context, dc provisioner.DockerClient, seeded recovered, archive bool) error {
 	containerID, dbName := seeded.containerID, seeded.spec.dbName
-	if err := dc.StartContainer(ctx, containerID); err != nil {
+	if err := provisioner.StartHoldingPort(ctx, dc, restoreStartPoller, containerID); err != nil {
 		return fmt.Errorf("start restored container: %w", err)
 	}
 	if err := dc.WaitForHealthy(ctx, containerID); err != nil {
@@ -347,7 +359,12 @@ type restoreContainerSpec struct {
 	// documentDB restores into the catalogue image of major with a gateway.
 	documentDB bool
 	major      string
+	// hostPort is the host port 5432 is published on; "" for any.
+	hostPort string
 }
+
+// restoreStartPoller bounds the wait for a held host port to come free.
+var restoreStartPoller = provisioner.NewPoller(time.Second, 30*time.Second)
 
 // restorePlanOf is the plan a new project of the source's org gets, and the
 // container limits it sizes a restored container by.
@@ -611,4 +628,3 @@ func buildRecoveryTarFor(req domain.RestoreRequest, owner provisioner.FileOwner)
 	}
 	return buf.Bytes()
 }
-

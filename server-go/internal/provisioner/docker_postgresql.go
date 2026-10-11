@@ -75,6 +75,11 @@ type DockerPostgreSQLProvisioner struct {
 	// pausePoller bounds the wait for a stopped container to actually
 	// leave the running state.
 	pausePoller Poller
+	// startPoller bounds the wait for a held host port to come free.
+	startPoller Poller
+	// hostPorts holds each project's host port (EXC-593); nil publishes on
+	// any free port.
+	hostPorts HostPortAllocator
 }
 
 func NewDockerPostgreSQLProvisioner(docker DockerClient) *DockerPostgreSQLProvisioner {
@@ -82,7 +87,25 @@ func NewDockerPostgreSQLProvisioner(docker DockerClient) *DockerPostgreSQLProvis
 		docker:         docker,
 		deletionPoller: NewPoller(defaultDeletionPoll, defaultDeletionTimeout),
 		pausePoller:    NewPoller(defaultDeletionPoll, defaultDeletionTimeout),
+		startPoller:    NewPoller(time.Second, postgresReadyTimeout),
 	}
+}
+
+// SetHostPorts publishes every project on the host port it holds.
+func (p *DockerPostgreSQLProvisioner) SetHostPorts(ports HostPortAllocator) { p.hostPorts = ports }
+
+// SetStartPoller overrides how long a start waits for a held port.
+func (p *DockerPostgreSQLProvisioner) SetStartPoller(poller Poller) { p.startPoller = poller }
+
+// HostPort is the host port the project's Postgres publishes 5432 on; ""
+// where projects publish on any free port.
+func (p *DockerPostgreSQLProvisioner) HostPort(ctx context.Context, projectID string) (string, error) {
+	return heldPort(ctx, p.hostPorts, projectID)
+}
+
+// StartHoldingPort starts one of this host's database containers.
+func (p *DockerPostgreSQLProvisioner) StartHoldingPort(ctx context.Context, container string) error {
+	return StartHoldingPort(ctx, p.docker, p.startPoller, container)
 }
 
 // SetDeletionPoller overrides how long teardown waits for the project's
@@ -125,14 +148,18 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 		"POSTGRES_USER":     defaultPostgresSuperuser,
 		"POSTGRES_PASSWORD": password,
 	}
-	ports := map[string]string{"5432": ""}
+	hostPort, err := p.HostPort(ctx, req.ProjectName)
+	if err != nil {
+		return nil, fmt.Errorf("hold the project's host port: %w", err)
+	}
+	ports := map[string]string{"5432": hostPort}
 
 	containerID, err := p.docker.CreateContainer(ctx, containerName, image, env, ports, limits)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
 
-	if err := p.docker.StartContainer(ctx, containerID); err != nil {
+	if err := p.StartHoldingPort(ctx, containerID); err != nil {
 		return nil, fmt.Errorf("start container: %w", err)
 	}
 
@@ -284,7 +311,7 @@ func (p *DockerPostgreSQLProvisioner) Resume(ctx context.Context, namespace, pro
 	if err != nil {
 		return err
 	}
-	if err := p.docker.StartContainer(ctx, namespace); err != nil {
+	if err := p.StartHoldingPort(ctx, namespace); err != nil {
 		return fmt.Errorf("start container: %w", err)
 	}
 	if err := p.docker.WaitForHealthy(ctx, namespace); err != nil {
@@ -317,6 +344,12 @@ func (p *DockerPostgreSQLProvisioner) Deprovision(ctx context.Context, namespace
 		if err := p.removeObserved(ctx, id); err != nil {
 			return err
 		}
+	}
+	if p.hostPorts == nil {
+		return nil
+	}
+	if err := p.hostPorts.Release(ctx, projectID); err != nil {
+		return fmt.Errorf("release the project's host port: %w", err)
 	}
 	return nil
 }

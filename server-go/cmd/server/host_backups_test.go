@@ -24,3 +24,13 @@ func TestSingleHostPortsNeedThePlatformStoresAllocator(t *testing.T) {
 		t.Fatal("ports without an allocator")
 	}
 }
+
+// EXC-593: a single host's Postgres backups restore onto held ports and ship
+// WAL only where the host has them.
+func TestHostPostgresBackupsAreWiredWithTheirPorts(t *testing.T) {
+	startHostPostgresWAL(nil, nil)
+	adapter := hostPostgresBackupAdapter(nil, nil, nil, nil, nil, "b", nil)
+	if adapter == nil || adapter.BackupsConfigured() {
+		t.Fatal("an adapter with no store must not claim it can back up")
+	}
+}

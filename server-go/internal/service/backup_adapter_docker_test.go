@@ -354,13 +354,18 @@ type fakeDockerClientForAdapter struct {
 	walArchive map[string][]byte
 	execs      [][]string
 	copyDsts   []string
+	ports      map[string]string
+	removed    []string
+	// walName is the segment the database is writing.
+	walName string
 }
 
-func (f *fakeDockerClientForAdapter) CreateContainer(_ context.Context, name, img string, env map[string]string, _ map[string]string, limits provisioner.ContainerLimits) (string, error) {
+func (f *fakeDockerClientForAdapter) CreateContainer(_ context.Context, name, img string, env map[string]string, ports map[string]string, limits provisioner.ContainerLimits) (string, error) {
 	if f.failOn == "create" {
 		return "", errors.New("create failed")
 	}
 	f.limits = limits
+	f.ports = ports
 	f.createdName = name
 	f.createdImg = img
 	f.createdEnv = env
@@ -373,8 +378,11 @@ func (f *fakeDockerClientForAdapter) StartContainer(_ context.Context, _ string)
 	f.started = true
 	return nil
 }
-func (f *fakeDockerClientForAdapter) StopContainer(_ context.Context, _ string) error   { return nil }
-func (f *fakeDockerClientForAdapter) RemoveContainer(_ context.Context, _ string) error { return nil }
+func (f *fakeDockerClientForAdapter) StopContainer(_ context.Context, _ string) error { return nil }
+func (f *fakeDockerClientForAdapter) RemoveContainer(_ context.Context, id string) error {
+	f.removed = append(f.removed, id)
+	return nil
+}
 func (f *fakeDockerClientForAdapter) ContainerStatus(_ context.Context, _ string) (string, error) {
 	return "running", nil
 }
@@ -412,7 +420,11 @@ func (f *fakeDockerClientForAdapter) CreateContainerSpec(ctx context.Context, sp
 func (f *fakeDockerClientForAdapter) ContainerState(context.Context, string) (provisioner.ContainerState, error) {
 	return provisioner.ContainerState{Found: true, Running: true}, nil
 }
-func (f *fakeDockerClientForAdapter) ExecInContainerStdin(context.Context, string, []string, string) (string, error) {
+func (f *fakeDockerClientForAdapter) ExecInContainerStdin(_ context.Context, _ string, cmd []string, _ string) (string, error) {
+	f.execs = append(f.execs, cmd)
+	if strings.Contains(strings.Join(cmd, " "), "pg_walfile_name") {
+		return f.walName + "\n", nil
+	}
 	return "", nil
 }
 func (f *fakeDockerClientForAdapter) CopyFromContainer(_ context.Context, _ string, _ string) (io.ReadCloser, error) {

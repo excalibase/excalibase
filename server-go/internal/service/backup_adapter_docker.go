@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -63,7 +64,10 @@ type DockerBackupAdapter struct {
 	// cleared by two passes at once.
 	shipping sync.Mutex
 
-	mu        sync.RWMutex
+	mu sync.RWMutex
+	// hostPorts holds each project's host port (EXC-593); nil publishes on
+	// any free port.
+	hostPorts provisioner.HostPortAllocator
 	instances storage.InstanceStore
 	docker    provisioner.DockerClient // optional; required for Restore
 	// registrar finishes a restore the way a provision ends: roles, vault,
@@ -154,6 +158,39 @@ func NewDockerBackupAdapter(cfg DockerBackupAdapterConfig) *DockerBackupAdapter 
 // SetInstanceStore wires the store post-construction (matches the
 // pattern used elsewhere in the service package — main.go builds
 // the adapter early then sets the store once it's ready).
+// SetHostPorts publishes restored containers on their project's held port.
+func (a *DockerBackupAdapter) SetHostPorts(ports provisioner.HostPortAllocator) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.hostPorts = ports
+}
+
+// heldPort is the host port projectID publishes on; "" without an allocator.
+func (a *DockerBackupAdapter) heldPort(ctx context.Context, projectID string) (string, error) {
+	a.mu.RLock()
+	ports := a.hostPorts
+	a.mu.RUnlock()
+	if ports == nil {
+		return "", nil
+	}
+	port, err := ports.Allocate(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("hold the host port of %s: %w", projectID, err)
+	}
+	return strconv.Itoa(port), nil
+}
+
+// releasePort gives a copy that never came up its port back.
+func (a *DockerBackupAdapter) releasePort(ctx context.Context, projectID string) error {
+	a.mu.RLock()
+	ports := a.hostPorts
+	a.mu.RUnlock()
+	if ports == nil {
+		return nil
+	}
+	return ports.Release(ctx, projectID)
+}
+
 func (a *DockerBackupAdapter) SetInstanceStore(s storage.InstanceStore) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -196,6 +233,7 @@ func (a *DockerBackupAdapter) TriggerManual(ctx context.Context, inst *domain.Da
 		return BackupRef{}, fmt.Errorf("save backup record: %w", err)
 	}
 
+	a.noteStartSegment(ctx, inst, id)
 	key := a.objectKey(inst.ProjectID, "manual", id)
 	pr, pw := io.Pipe()
 

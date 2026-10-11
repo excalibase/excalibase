@@ -89,7 +89,7 @@ func (p *DockerPostgreSQLProvisioner) ConfigureArchive(ctx context.Context, cont
 	if err := p.docker.StopContainer(ctx, containerID); err != nil {
 		return fmt.Errorf("stop for archive restart: %w", err)
 	}
-	if err := p.docker.StartContainer(ctx, containerID); err != nil {
+	if err := p.StartHoldingPort(ctx, containerID); err != nil {
 		return fmt.Errorf("start after archive ALTER: %w", err)
 	}
 	return nil

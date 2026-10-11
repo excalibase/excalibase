@@ -31,7 +31,10 @@ type mockDockerClient struct {
 	// copied are the tar streams CopyToContainer received, by destination.
 	copied map[string][]byte
 	// execCode is the exit code an ALTER SYSTEM exec returns.
-	execCode int
+	execCode  int
+	lastPorts map[string]string
+	// portBusy is how many starts still fail as a just-freed host port does.
+	portBusy int
 }
 
 func newMockDocker() *mockDockerClient {
@@ -45,6 +48,7 @@ func (m *mockDockerClient) CreateContainer(_ context.Context, name, image string
 	m.lastImage = image
 	m.lastEnv = env
 	m.lastLimits = limits
+	m.lastPorts = ports
 	id := "container-" + name
 	m.containers[id] = "created"
 	return id, nil
@@ -53,6 +57,10 @@ func (m *mockDockerClient) CreateContainer(_ context.Context, name, image string
 func (m *mockDockerClient) StartContainer(_ context.Context, containerID string) error {
 	if m.failOn == "start" {
 		return fmt.Errorf("start failed")
+	}
+	if m.portBusy > 0 {
+		m.portBusy--
+		return fmt.Errorf("rootlessport listen tcp 127.0.0.1:30001: bind: address already in use")
 	}
 	m.containers[containerID] = "running"
 	m.starts++

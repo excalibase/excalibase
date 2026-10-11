@@ -139,3 +139,25 @@ func hexOf(s string) string {
 	}
 	return string(out)
 }
+
+// EXC-593: a single host's rebuilt Postgres gets the filed passwords back in
+// its own container, the way a cluster's primary does.
+func TestReapplyCredentialsOnASingleHostRunsInTheProjectsContainer(t *testing.T) {
+	h := newRotationHarness(t)
+	engine := newHostEngine()
+	h.svc.SetDockerClient(engine)
+	inst, _ := h.store.FindByProjectID(rotProject)
+	inst.DeploymentMode = domain.ModeDocker
+	inst.Namespace = "excalibase-" + rotProject + "-postgres"
+	if err := h.svc.ReapplyCredentials(context.Background(), inst); err != nil {
+		t.Fatalf("ReapplyCredentials: %v", err)
+	}
+	if len(engine.stdin) != 1 || len(h.kube.ExecStdin) != 0 {
+		t.Fatalf("container batches %d, cluster batches %d", len(engine.stdin), len(h.kube.ExecStdin))
+	}
+	for _, want := range []string{rotOwner, roleAuthAdmin, roleApp} {
+		if !strings.Contains(engine.stdin[0], hexOf(testutil.FixturePassword(want))) {
+			t.Errorf("the %s password on file must be set back", want)
+		}
+	}
+}

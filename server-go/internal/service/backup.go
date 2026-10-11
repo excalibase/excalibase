@@ -195,6 +195,13 @@ func (s *BackupService) TriggerManualBackup(ctx context.Context, projectID strin
 	return refToMap(ref), nil
 }
 
+// DockerPostgres is the single host's Postgres backup adapter; nil where the
+// platform has none.
+func (s *BackupService) DockerPostgres() *DockerBackupAdapter {
+	adapter, _ := s.adapters[domain.ModeDocker].(*DockerBackupAdapter)
+	return adapter
+}
+
 // TriggerScheduledBackup is a schedule's backup of a running project. A
 // project that is not running (paused, being restored or deleted) is passed
 // over: a paused one wrote nothing since its pause backup (EXC-593).
