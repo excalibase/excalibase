@@ -29,8 +29,16 @@ func (f *fakeHostPorts) Allocate(_ context.Context, projectID string) (int, erro
 	return f.held[projectID], nil
 }
 
+// AllocateMongo holds a DocumentDB project's second port under its own key.
+func (f *fakeHostPorts) AllocateMongo(ctx context.Context, projectID string) (int, error) {
+	return f.Allocate(ctx, projectID+mongoPortKey)
+}
+
+const mongoPortKey = "#mongo"
+
 func (f *fakeHostPorts) Release(_ context.Context, projectID string) error {
 	delete(f.held, projectID)
+	delete(f.held, projectID+mongoPortKey)
 	f.released = append(f.released, projectID)
 	return nil
 }

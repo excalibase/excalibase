@@ -1,9 +1,11 @@
 package provisioner
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -177,7 +179,18 @@ func (f *fakeEngine) CopyToContainer(_ context.Context, id, dst string, content 
 	return nil
 }
 
+// CopyFromContainer hands back the tar written into a directory above src,
+// whose entries the reader filters by name.
 func (f *fakeEngine) CopyFromContainer(_ context.Context, id, src string) (io.ReadCloser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.containers[id]; ok {
+		for dir := path.Dir(src); dir != "/"; dir = path.Dir(dir) {
+			if body, ok := f.copied[id+":"+dir]; ok {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			}
+		}
+	}
 	return io.NopCloser(strings.NewReader("")), fmt.Errorf("copy from %s:%s not faked", id, src)
 }
 

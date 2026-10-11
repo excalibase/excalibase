@@ -10,8 +10,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 )
 
-// A single host's Postgres project restored in place (EXC-593): its own
-// container is rebuilt from its backups under the same name and host port.
+// A single host's project restored in place (EXC-593): its own container is
+// rebuilt from its backups under the same name and host port. A DocumentDB
+// project's gateway is rebuilt too, keeping its port and certificate (EXC-594).
 
 var _ InPlaceCluster = (*DockerBackupAdapter)(nil)
 
@@ -25,9 +26,6 @@ var errInPlaceTargetMalformed = errors.New("the in-place restore target carries 
 // InPlaceRecoveryTarget resolves req against the project's own backups before
 // anything changes. See InPlaceCluster.
 func (a *DockerBackupAdapter) InPlaceRecoveryTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (map[string]interface{}, error) {
-	if inst.DocumentDB {
-		return nil, fmt.Errorf("%w: a single host's DocumentDB project is restored into a new project", ErrInPlaceRestoreUnsupported)
-	}
 	base, err := a.resolveSourceBackup(ctx, inst.ProjectID, req)
 	if err != nil {
 		return nil, err
@@ -63,7 +61,11 @@ func (a *DockerBackupAdapter) ReplaceDatabase(ctx context.Context, inst *domain.
 	if err != nil {
 		return err
 	}
-	hostPort, err := a.heldPort(ctx, inst.ProjectID)
+	ports, err := a.heldPorts(ctx, inst.ProjectID, inst.DocumentDB)
+	if err != nil {
+		return err
+	}
+	gatewayTLS, err := keptGatewayTLS(ctx, dc, inst)
 	if err != nil {
 		return err
 	}
@@ -74,7 +76,7 @@ func (a *DockerBackupAdapter) ReplaceDatabase(ctx context.Context, inst *domain.
 		projectID:     inst.ProjectID,
 		containerName: provisioner.DatabaseContainerName(inst.ProjectID),
 		limits:        limits,
-		hostPort:      hostPort,
+		ports:         ports,
 	})
 	if err != nil {
 		return err
@@ -82,7 +84,45 @@ func (a *DockerBackupAdapter) ReplaceDatabase(ctx context.Context, inst *domain.
 	if err := a.bringUp(ctx, dc, seeded, backupsOn(inst)); err != nil {
 		return err
 	}
+	if err := rebuildGateway(ctx, dc, inst, seeded, gatewayTLS); err != nil {
+		return err
+	}
 	return a.recordContainer(inst, seeded.containerID)
+}
+
+// keptGatewayTLS is what a DocumentDB project's gateway presents now, read
+// before anything is replaced; nil when it has no gateway to keep.
+func keptGatewayTLS(ctx context.Context, dc provisioner.DockerClient, inst *domain.DatabaseInstance) (*provisioner.GatewayTLS, error) {
+	if !inst.DocumentDB {
+		return nil, nil
+	}
+	kept, found, err := provisioner.ReadDocumentDBGatewayTLS(ctx, dc, inst.ProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("read the DocumentDB gateway's certificate: %w", err)
+	}
+	if !found {
+		return nil, nil
+	}
+	return &kept, nil
+}
+
+// rebuildGateway gives a rebuilt DocumentDB project its gateway again, with
+// the certificate it had, or a new one when it had no gateway.
+func rebuildGateway(ctx context.Context, dc provisioner.DockerClient, inst *domain.DatabaseInstance, seeded recovered, kept *provisioner.GatewayTLS) error {
+	if !inst.DocumentDB {
+		return nil
+	}
+	limits := seeded.spec.gatewayLimits()
+	var err error
+	if kept == nil {
+		err = provisioner.StartDocumentDBGateway(ctx, dc, inst.ProjectID, seeded.containerID, limits)
+	} else {
+		err = provisioner.StartDocumentDBGatewayWithTLS(ctx, dc, inst.ProjectID, seeded.containerID, limits, *kept)
+	}
+	if err != nil {
+		return fmt.Errorf("start the rebuilt DocumentDB gateway: %w", err)
+	}
+	return nil
 }
 
 // retireContainer ships what the running database archived since the safety
@@ -97,7 +137,12 @@ func (a *DockerBackupAdapter) retireContainer(ctx context.Context, dc provisione
 			return fmt.Errorf("ship the database's last WAL before replacing it: %w", err)
 		}
 	}
-	for _, container := range []string{inst.Namespace, provisioner.DatabaseContainerName(inst.ProjectID)} {
+	// Podman refuses to remove a container another joined: the gateway first.
+	containers := []string{inst.Namespace, provisioner.DatabaseContainerName(inst.ProjectID)}
+	if inst.DocumentDB {
+		containers = append([]string{provisioner.DocumentDBGatewayName(inst.ProjectID)}, containers...)
+	}
+	for _, container := range containers {
 		if err := dc.RemoveContainer(ctx, container); err != nil {
 			return fmt.Errorf("remove the project's database: %w", err)
 		}

@@ -24,7 +24,7 @@ var officialImageOwner = provisioner.FileOwner{UID: 999, GID: 999}
 func createRestoreContainer(ctx context.Context, dc provisioner.DockerClient, spec restoreContainerSpec) (string, provisioner.FileOwner, error) {
 	if spec.documentDB {
 		databaseLimits, _ := provisioner.DocumentDBLimits(spec.limits)
-		containerSpec, err := provisioner.DocumentDBDatabaseSpec(spec.newProject, spec.major, spec.dbName, spec.newPassword, databaseLimits)
+		containerSpec, err := provisioner.DocumentDBDatabaseSpec(spec.newProject, spec.major, spec.dbName, spec.newPassword, databaseLimits, spec.ports)
 		if err != nil {
 			return "", provisioner.FileOwner{}, fmt.Errorf("restore %s: %w", spec.sourceProjectID, err)
 		}
@@ -41,7 +41,7 @@ func createRestoreContainer(ctx context.Context, dc provisioner.DockerClient, sp
 		"POSTGRES_USER":     defaultPostgresSuperuser,
 		"POSTGRES_PASSWORD": spec.newPassword,
 	}
-	id, err := dc.CreateContainer(ctx, spec.containerName, spec.image, env, map[string]string{"5432": spec.hostPort}, spec.limits)
+	id, err := dc.CreateContainer(ctx, spec.containerName, spec.image, env, map[string]string{"5432": spec.ports.Postgres}, spec.limits)
 	if err != nil {
 		return "", provisioner.FileOwner{}, fmt.Errorf("create restore container: %w", err)
 	}

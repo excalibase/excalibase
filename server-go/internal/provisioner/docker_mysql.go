@@ -29,6 +29,9 @@ type DockerMySQLProvisioner struct {
 // HostPortAllocator holds one host port per project until it is deleted.
 type HostPortAllocator interface {
 	Allocate(ctx context.Context, projectID string) (int, error)
+	// AllocateMongo is a DocumentDB project's second port, for its gateway.
+	AllocateMongo(ctx context.Context, projectID string) (int, error)
+	// Release gives back every port the project holds.
 	Release(ctx context.Context, projectID string) error
 }
 
