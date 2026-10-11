@@ -88,8 +88,32 @@ func archivesToObjectStore(inst *domain.DatabaseInstance) bool {
 		!domain.IsDeletionStatus(inst.Status) && inst.Status != string(domain.StageFailed)
 }
 
+// projectCredentials is where a project's credential lives and how it is
+// written, by engine: CNPG reads its own key names, MOCO's jobs the AWS ones.
+type projectCredentials struct {
+	secret string
+	prefix string
+	render func(*domain.S3Credentials) (map[string][]byte, error)
+}
+
+func credentialsOf(inst *domain.DatabaseInstance) projectCredentials {
+	if inst.DBType == domain.MySQL {
+		return projectCredentials{
+			secret: k8s.MySQLBackupCredentialsSecret,
+			prefix: k8s.MOCOBackupPrefix(inst.Namespace, inst.ProjectID),
+			render: k8s.MySQLBackupCredentialsSecretData,
+		}
+	}
+	return projectCredentials{
+		secret: k8s.BackupCredentialsSecretName,
+		prefix: k8s.BarmanObjectPrefix(inst.ProjectID),
+		render: k8s.BackupCredentialsSecretData,
+	}
+}
+
 func (r *BackupCredentialRenewer) renewProject(ctx context.Context, inst *domain.DatabaseInstance) (bool, error) {
-	current, err := r.cfg.Kube.GetSecret(ctx, inst.Namespace, k8s.BackupCredentialsSecretName)
+	held := credentialsOf(inst)
+	current, err := r.cfg.Kube.GetSecret(ctx, inst.Namespace, held.secret)
 	if err != nil {
 		if domain.IsBuildingStatus(inst.Status) || inst.Status == string(domain.StatusRestoring) {
 			return false, nil // its pipeline has not written the secret yet
@@ -106,15 +130,15 @@ func (r *BackupCredentialRenewer) renewProject(ctx context.Context, inst *domain
 	if !r.due(inst.ProjectID, current, store) {
 		return false, nil
 	}
-	creds, err := r.cfg.Issuer.Renew(ctx, store, inst.ProjectID)
+	creds, err := r.cfg.Issuer.RenewPrefix(ctx, store, inst.ProjectID, held.prefix)
 	if err != nil {
 		return false, err
 	}
-	data, err := k8s.BackupCredentialsSecretData(creds)
+	data, err := held.render(creds)
 	if err != nil {
 		return false, err
 	}
-	if err := r.cfg.Kube.UpdateSecret(ctx, inst.Namespace, k8s.BackupCredentialsSecretName, data); err != nil {
+	if err := r.cfg.Kube.UpdateSecret(ctx, inst.Namespace, held.secret, data); err != nil {
 		return false, fmt.Errorf("write backup credentials: %w", err)
 	}
 	metrics.SetBackupCredentialsExpiry(inst.ProjectID, creds.ExpiresAt)
