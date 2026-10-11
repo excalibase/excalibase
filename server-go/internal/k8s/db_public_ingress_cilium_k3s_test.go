@@ -42,7 +42,7 @@ func TestK3sCiliumPublicDBIngress(t *testing.T) {
 	lab.expectStaysRefused(t, publicDBNodePort)
 	lab.expectStaysRefused(t, publicMongoNodePort)
 
-	if err := client.EnsurePublicDBIngressPolicy(ctx, publicDBNamespace, publicDBProject, []int{postgresPort, config.DocumentDBGatewayPort}); err != nil {
+	if err := client.EnsurePublicDBIngressPolicy(ctx, publicDBNamespace, publicDBProject, PostgresInstanceSelector(publicDBProject), []int{postgresPort, config.DocumentDBGatewayPort}); err != nil {
 		t.Fatalf("EnsurePublicDBIngressPolicy: %v", err)
 	}
 	lab.expectOutside(t, "postgres is reachable from outside", publicDBNodePort, true)

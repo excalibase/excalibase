@@ -168,6 +168,7 @@ func TestDBEndpointErrorsMapToTheirMeaning(t *testing.T) {
 		{"TLS change not observed", service.ErrTLSSettingNotObserved, http.StatusBadGateway},
 		{"project not active", fmt.Errorf("project p is PAUSED; %w", service.ErrProjectNotActive), http.StatusConflict},
 		{"project busy", fmt.Errorf("%w (p)", service.ErrProjectOperationRunning), http.StatusConflict},
+		{"TLS on a MySQL project", fmt.Errorf("%w: TLS is always required", service.ErrNotForMySQL), http.StatusConflict},
 		{"anything else", errors.New("boom"), http.StatusInternalServerError},
 	}
 	for _, tc := range cases {
@@ -264,5 +265,14 @@ func TestASingleHostEndpointIsMarkedAndNotChangeable(t *testing.T) {
 	w = dbEndpointCall(t, &fakeDBEndpoints{view: service.DBEndpointView{ProjectID: "proj-abc"}}, http.MethodGet, "")
 	if _, present := decodeDBEndpoint(t, w)["singleHost"]; present {
 		t.Fatal("singleHost reported for a Kubernetes project")
+	}
+}
+
+// A MySQL project's endpoint says which engine it is, so Studio renders
+// mysql strings and no TLS switch (ADR 0041).
+func TestDBEndpointNamesTheEngine(t *testing.T) {
+	w := dbEndpointCall(t, &fakeDBEndpoints{view: service.DBEndpointView{ProjectID: "proj-my", Engine: "mysql", RequireTLS: true}}, http.MethodGet, "")
+	if !strings.Contains(w.Body.String(), `"engine":"mysql"`) {
+		t.Errorf("body %s", w.Body.String())
 	}
 }

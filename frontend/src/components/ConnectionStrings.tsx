@@ -240,13 +240,24 @@ function MongoSection({ projectId, credentials, endpoint, shownPassword }: Secti
 
 // MySQLSection shows the strings a MySQL client takes. Every login requires
 // TLS, so each string asks for it.
-function MySQLSection({ credentials, shownPassword }: SectionProps) {
-  const uri = (password: string) =>
-    `mysql://${credentials.username}:${password}@${credentials.host}:${credentials.port}/${credentials.databaseName}?ssl-mode=REQUIRED`;
+function MySQLSection({ credentials, endpoint, shownPassword }: SectionProps) {
+  const uri = (target: Target, password: string) =>
+    `mysql://${credentials.username}:${password}@${target.host}:${target.port}/${credentials.databaseName}?ssl-mode=REQUIRED`;
+  const row = (target: Target) => ({ shown: uri(target, shownPassword), copied: uri(target, credentials.password) });
+  const external = publicTarget(endpoint);
+  const label = labels(endpoint);
   return (
     <div className="space-y-2" data-testid="conn-mysql-section">
       <h5 className="text-sm font-medium text-text-primary">MySQL — TLS required</h5>
-      <StringRow testId="conn-mysql-internal" label="Internal — from inside the cluster" shown={uri(shownPassword)} copied={uri(credentials.password)} />
+      <StringRow testId="conn-mysql-internal" label={label.internal} {...row(internalTarget(credentials, endpoint))} />
+      {external ? (
+        <StringRow testId="conn-mysql-public" label={label.external} {...row(external)} />
+      ) : (
+        <p className="text-xs text-text-tertiary" data-testid="conn-mysql-public-absent">
+          This project publishes no public port. Use the internal address, or ask an admin to open one under Public
+          database port.
+        </p>
+      )}
       {credentials.jdbcUrl && (
         <StringRow testId="conn-mysql-jdbc" label="JDBC (Connector/J) — pass the username and password separately" shown={credentials.jdbcUrl} copied={credentials.jdbcUrl} />
       )}

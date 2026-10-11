@@ -20,10 +20,20 @@ const MYSQL_CREDENTIALS = {
   jdbcUrl: `jdbc:mysql://${MYSQL_PROJECT.host}:3306/app?sslMode=REQUIRED`,
 };
 
+// EXC-585: published on its own port, TLS always required, no CA to offer.
+const MYSQL_ENDPOINT = {
+  projectId: 'p-my', publicOffered: true, publicEnabled: true, available: true, canChange: true,
+  host: 'p-my.db.example.com', port: 32010, requireTls: true, engine: 'mysql', database: 'app', username: 'admin',
+  connectionStrings: { requireTls: 'mysql://admin@p-my.db.example.com:32010/app?ssl-mode=REQUIRED', allowPlaintext: '' },
+  caCertificate: '',
+  internal: { host: MYSQL_PROJECT.host, port: 3306, connectionString: '' },
+};
+
 function renderSettings() {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/provision/p-my') return Promise.resolve({ data: MYSQL_PROJECT } as never);
     if (url === '/provision/p-my/credentials') return Promise.resolve({ data: MYSQL_CREDENTIALS } as never);
+    if (url === '/projects/p-my/db-endpoint') return Promise.resolve({ data: MYSQL_ENDPOINT } as never);
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -50,10 +60,10 @@ describe('SettingsPage — MySQL', () => {
     expect(screen.getByTestId('minor-upgrade-btn')).toBeEnabled();
     expect(screen.getAllByText('MySQL Version').length).toBeGreaterThan(0);
     expect(screen.queryByText('PostgreSQL Version')).not.toBeInTheDocument();
-    for (const id of ['connect-section', 'public-port-card', 'cluster-settings-card', 'backup-config-card']) {
+    for (const id of ['connect-section', 'cluster-settings-card', 'backup-config-card']) {
       expect(screen.queryByTestId(id)).not.toBeInTheDocument();
     }
-    for (const url of ['/projects/p-my/db-endpoint', '/provision/p-my/cluster']) {
+    for (const url of ['/provision/p-my/cluster']) {
       expect(api.get).not.toHaveBeenCalledWith(url);
     }
   });
@@ -72,5 +82,14 @@ describe('SettingsPage — MySQL', () => {
     expect(screen.getByTestId('conn-mysql-section')).toHaveTextContent('TLS required');
     expect(screen.queryByTestId('conn-postgres-section')).not.toBeInTheDocument();
     expect(screen.queryByText(/postgresql:\/\//)).not.toBeInTheDocument();
+  });
+
+  test('offers the public port and its MySQL string, TLS required, no CA', async () => {
+    renderSettings();
+    expect(await screen.findByTestId('public-port-card')).toBeInTheDocument();
+    expect(await screen.findByTestId('conn-mysql-public')).toHaveTextContent(
+      'mysql://admin:••••••••@p-my.db.example.com:32010/app?ssl-mode=REQUIRED',
+    );
+    expect(screen.queryByTestId('conn-ca-download')).not.toBeInTheDocument();
   });
 });

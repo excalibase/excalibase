@@ -106,7 +106,16 @@ type DBEndpointService struct {
 	quarantine   time.Duration
 	sharedIPKey  string
 	claimer      ProjectOperationClaimer
+	// goneTimeout bounds the wait for a deleted Service to be observed gone;
+	// a cloud controller may hold one by its finalizer for a moment.
+	goneTimeout time.Duration
+	gonePoll    time.Duration
 }
+
+const (
+	defaultServiceGoneTimeout = 30 * time.Second
+	defaultServiceGonePoll    = 500 * time.Millisecond
+)
 
 func NewDBEndpointService(c DBEndpointServiceConfig) *DBEndpointService {
 	return &DBEndpointService{
@@ -118,6 +127,8 @@ func NewDBEndpointService(c DBEndpointServiceConfig) *DBEndpointService {
 		quarantine:   c.Quarantine,
 		sharedIPKey:  c.SharedIPKey,
 		claimer:      claimerOrInProcess(c.Claimer),
+		goneTimeout:  defaultServiceGoneTimeout,
+		gonePoll:     defaultServiceGonePoll,
 	}
 }
 
@@ -176,6 +187,8 @@ type DBEndpointView struct {
 	// SingleHost is a project on one Docker or Podman host, whose ports are
 	// published on the host's loopback and reached elsewhere over SSH.
 	SingleHost bool
+	// Engine is "mysql" for a MySQL project, empty for Postgres.
+	Engine string
 }
 
 // DBEndpointConnectionStrings is every string a client might need for this
@@ -268,8 +281,12 @@ func (s *DBEndpointService) SetRequireTLS(ctx context.Context, projectID string,
 	if !s.publicOffered() {
 		return DBEndpointView{}, ErrDBEndpointNotConfigured
 	}
-	if _, err := s.project(projectID); err != nil {
+	current, err := s.project(projectID)
+	if err != nil {
 		return DBEndpointView{}, err
+	}
+	if current.DBType == domain.MySQL {
+		return DBEndpointView{}, fmt.Errorf("%w: TLS is always required", ErrNotForMySQL)
 	}
 	release, claimed, err := s.claimer.Claim(ctx, projectID, OperationTLSChange)
 	if err != nil {
@@ -446,7 +463,7 @@ func (s *DBEndpointService) ensureObserved(ctx context.Context, inst *domain.Dat
 // closeIngressIfUnpublished withdraws the ingress rule a failed publish
 // opened, unless an earlier Service for the project is still answering.
 func (s *DBEndpointService) closeIngressIfUnpublished(ctx context.Context, inst *domain.DatabaseInstance, cause error) error {
-	exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, domain.DBEndpointServiceName(inst.ProjectID))
+	exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, publicServiceName(inst))
 	if err != nil {
 		return errors.Join(cause, fmt.Errorf("confirm database endpoint: %w", err))
 	}
@@ -461,8 +478,11 @@ func (s *DBEndpointService) closeIngressIfUnpublished(ctx context.Context, inst 
 
 // publishServices creates the project's Services and confirms they exist.
 func (s *DBEndpointService) publishServices(ctx context.Context, inst *domain.DatabaseInstance, port, mongoPort int) error {
+	if inst.DBType == domain.MySQL {
+		return s.ensureServiceObserved(ctx, inst, s.mysqlServiceSpec(inst, port))
+	}
 	if err := s.ensureServiceObserved(ctx, inst, k8s.PublicDBServiceSpec{
-		Name:             domain.DBEndpointServiceName(inst.ProjectID),
+		Name:             publicServiceName(inst),
 		Port:             port,
 		ReadWriteService: inst.ProjectID + "-postgres-rw",
 		SharedIPKey:      s.sharedIPKey,
@@ -489,11 +509,14 @@ func (s *DBEndpointService) publishServices(ctx context.Context, inst *domain.Da
 // openIngress lets outside traffic through the project's namespace isolation
 // to the ports its public Services forward to.
 func (s *DBEndpointService) openIngress(ctx context.Context, inst *domain.DatabaseInstance, mongoPort int) error {
-	ports := []int{postgresPort}
+	selector, ports := k8s.PostgresInstanceSelector(inst.ProjectID), []int{postgresPort}
 	if mongoPort != 0 {
 		ports = append(ports, config.DocumentDBGatewayPort)
 	}
-	if err := s.kube.EnsurePublicDBIngressPolicy(ctx, inst.Namespace, inst.ProjectID, ports); err != nil {
+	if inst.DBType == domain.MySQL {
+		selector, ports = k8s.MySQLInstanceSelector(inst.ProjectID), []int{mysqlPort}
+	}
+	if err := s.kube.EnsurePublicDBIngressPolicy(ctx, inst.Namespace, inst.ProjectID, selector, ports); err != nil {
 		return fmt.Errorf("open public database ingress: %w", err)
 	}
 	return nil
@@ -520,7 +543,7 @@ func (s *DBEndpointService) deleteObserved(ctx context.Context, inst *domain.Dat
 	// Both Services go. A Mongo Service left behind would publish a port
 	// whose gateway is gone, and the port could not be safely reissued while
 	// it still answered.
-	names := []string{domain.DBEndpointServiceName(inst.ProjectID)}
+	names := []string{publicServiceName(inst)}
 	if inst.DocumentDB {
 		names = append(names, domain.DBEndpointMongoServiceName(inst.ProjectID))
 	}
@@ -528,12 +551,8 @@ func (s *DBEndpointService) deleteObserved(ctx context.Context, inst *domain.Dat
 		if err := s.kube.DeletePublicDBService(ctx, inst.Namespace, name); err != nil {
 			return fmt.Errorf("withdraw database endpoint: %w", err)
 		}
-		exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, name)
-		if err != nil {
-			return fmt.Errorf("confirm database endpoint withdrawal: %w", err)
-		}
-		if exists {
-			return ErrDBEndpointNotObserved
+		if err := s.awaitServiceGone(ctx, inst.Namespace, name); err != nil {
+			return err
 		}
 	}
 	if err := s.kube.DeletePublicDBIngressPolicy(ctx, inst.Namespace, inst.ProjectID); err != nil {
@@ -589,6 +608,9 @@ func servableNow(status string) bool {
 // in-cluster half is described whether or not the installation offers
 // public ports at all.
 func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInstance, endpoint domain.DBEndpoint) (DBEndpointView, error) {
+	if inst.DBType == domain.MySQL {
+		return s.mysqlView(ctx, inst, endpoint)
+	}
 	view := DBEndpointView{
 		ProjectID:     inst.ProjectID,
 		PublicOffered: s.publicOffered(),
@@ -629,7 +651,7 @@ func (s *DBEndpointService) addPublicEndpoint(
 		return err
 	}
 	if endpoint.IsPublic() {
-		view.Available, err = s.kube.PublicDBServiceExists(ctx, inst.Namespace, domain.DBEndpointServiceName(inst.ProjectID))
+		view.Available, err = s.kube.PublicDBServiceExists(ctx, inst.Namespace, publicServiceName(inst))
 		if err != nil {
 			return fmt.Errorf("read database endpoint state: %w", err)
 		}
