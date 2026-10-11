@@ -16,13 +16,13 @@ const hostMySQLSweepInterval = 5 * time.Minute
 
 // hostMySQLBackupAdapter backs a single host's MySQL projects up into the
 // platform bucket (EXC-592); nil where the host serves no MySQL.
-func hostMySQLBackupAdapter(mysql *provisioner.DockerMySQLProvisioner, docker provisioner.DockerClient, sdk *provisioner.RealDockerClient,
+func hostMySQLBackupAdapter(mysql *provisioner.DockerMySQLProvisioner, docker provisioner.DockerClient, streamer service.ContainerStreamer,
 	uploader service.S3Uploader, records storage.BackupRecordStore, bucket string, store storage.InstanceStore) *service.HostMySQLBackupAdapter {
 	if mysql == nil {
 		return nil
 	}
 	return service.NewHostMySQLBackupAdapter(service.HostMySQLBackupAdapterConfig{
-		Docker: docker, MySQL: mysql, Streamer: service.NewDockerStreamer(sdk.RawClient()), Uploader: uploader,
+		Docker: docker, MySQL: mysql, Streamer: streamer, Uploader: uploader,
 		Records: records, Bucket: bucket, KeyPrefix: dockerBackupKeyPrefix, Instances: store,
 	})
 }

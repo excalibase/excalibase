@@ -61,4 +61,6 @@ type discardResponse struct{}
 
 func (discardResponse) Header() http.Header         { return http.Header{} }
 func (discardResponse) Write(b []byte) (int, error) { return len(b), nil }
-func (discardResponse) WriteHeader(int)             {}
+func (discardResponse) WriteHeader(int) {
+	// A lookup reads the matched row, never the status.
+}

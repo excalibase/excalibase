@@ -45,3 +45,13 @@ func TestHostMySQLSweepBacksUpDueRunningProjectsOnly(t *testing.T) {
 		t.Fatalf("a Free project is backed up after 6 hours: %v", runs)
 	}
 }
+
+func TestHostMySQLSweepRunsOnceMoreThenStopsWithItsContext(t *testing.T) {
+	f := newHostBackupFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	NewHostMySQLBackupSweep(f.adapter, f.adapter.instances).Run(ctx, time.Hour)
+	if runs := f.keys("backups/p1/mysql/runs/"); len(runs) != 2 {
+		t.Fatalf("runs %v", runs)
+	}
+}

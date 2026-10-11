@@ -1298,7 +1298,7 @@ func buildBackupService(
 					// CopyToContainer + StartContainer + WaitForHealthy.
 					dockerAdapter.SetDockerClient(dockerClient)
 					adapters[domain.ModeDocker] = dockerAdapter
-					hostMySQL = hostMySQLBackupAdapter(singleHostMySQL, dockerClient, dockerSDK, uploader, sqlStore.BackupRecords(), defaults.Bucket, store)
+					hostMySQL = hostMySQLBackupAdapter(singleHostMySQL, dockerClient, service.NewDockerStreamer(dockerSDK.RawClient()), uploader, sqlStore.BackupRecords(), defaults.Bucket, store)
 				}
 			}
 		}
