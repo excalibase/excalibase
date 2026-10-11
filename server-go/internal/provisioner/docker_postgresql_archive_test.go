@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
@@ -96,5 +97,21 @@ func TestDockerPostgresSetsEachArchiveSettingOutsideATransaction(t *testing.T) {
 		if strings.Contains(strings.Join(cmd, " "), "ALTER SYSTEM") && statements != 4 {
 			t.Fatalf("%d statements: %v", statements, cmd)
 		}
+	}
+}
+
+func TestDockerPostgresArchiveStopsAtTheFirstFailure(t *testing.T) {
+	for _, step := range []string{"copy", "stop", "start"} {
+		docker := newMockDocker()
+		docker.containers["c1"] = "running"
+		docker.failOn = step
+		p := NewDockerPostgreSQLProvisioner(docker)
+		p.SetStartPoller(NewPoller(time.Millisecond, time.Millisecond))
+		if err := p.EnableWALArchive(context.Background(), "c1", PostgresImageOwner); err == nil {
+			t.Errorf("%s failure swallowed", step)
+		}
+	}
+	if got := quoteSQLString("it's"); got != "'it''s'" {
+		t.Errorf("quoted %s", got)
 	}
 }
