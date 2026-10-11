@@ -222,6 +222,7 @@ func (s *ProvisioningService) upgradeSingleHostMySQL(ctx context.Context, inst *
 		ctx := context.WithoutCancel(ctx)
 		if err := mysql.ReplaceImage(ctx, inst.ProjectID, image, plan); err != nil {
 			log.Printf("ERROR: mysql upgrade of %s to %s: %v", inst.ProjectID, version, err)
+			s.restoreMySQLImage(ctx, mysql, inst, plan)
 			return
 		}
 		// The row is read again: it may have moved on while the image changed.
@@ -237,6 +238,18 @@ func (s *ProvisioningService) upgradeSingleHostMySQL(ctx context.Context, inst *
 		}
 	})
 	return nil
+}
+
+// restoreMySQLImage puts the project back on the image it ran before an
+// upgrade that did not complete, over the same data and port.
+func (s *ProvisioningService) restoreMySQLImage(ctx context.Context, mysql *provisioner.DockerMySQLProvisioner, inst *domain.DatabaseInstance, plan config.TierConfig) {
+	previous, err := config.MySQLImage(inst.MySQLVersion)
+	if err == nil {
+		err = mysql.ReplaceImage(ctx, inst.ProjectID, previous, plan)
+	}
+	if err != nil {
+		log.Printf("ERROR: mysql %s could not be put back on %s after a failed upgrade: %v", inst.ProjectID, inst.MySQLVersion, err)
+	}
 }
 
 // planOf is the plan the project's organisation is on.

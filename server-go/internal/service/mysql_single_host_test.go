@@ -33,6 +33,8 @@ type hostEngine struct {
 	volumes        map[string]bool
 	removedVolumes []string
 	files          map[string][]byte // container:path → bytes a CopyFromContainer returns
+	// refuseImage makes a create on this image fail.
+	refuseImage string
 }
 
 func newHostEngine() *hostEngine {
@@ -51,6 +53,9 @@ func (h *hostEngine) CreateContainerSpec(_ context.Context, spec provisioner.Con
 	defer h.mu.Unlock()
 	if _, taken := h.containers[spec.Name]; taken {
 		return "", fmt.Errorf("container name %s is in use", spec.Name)
+	}
+	if h.refuseImage != "" && spec.Image == h.refuseImage {
+		return "", fmt.Errorf("the engine refused %s", spec.Image)
 	}
 	h.containers[spec.Name] = false
 	h.specs[spec.Name] = spec
@@ -289,5 +294,36 @@ func TestSingleHostMySQLMinorUpgradeKeepsItsData(t *testing.T) {
 	got, _ := store.FindByProjectID(inst.ProjectID)
 	if got.MySQLVersion != config.DefaultMySQLVersion() || got.Status != string(domain.StatusActive) {
 		t.Fatalf("recorded %q %s", got.MySQLVersion, got.Status)
+	}
+}
+
+// An upgrade the engine cannot carry out leaves the version on record as it
+// was and frees the project for the next operation.
+func TestSingleHostMySQLFailedUpgradeKeepsTheRecordedVersion(t *testing.T) {
+	svc, store, engine := setupSingleHostMySQL(t)
+	inst := provisionMySQL(t, svc, store, "8.4.9")
+	engine.refuseImage, _ = config.MySQLImage(config.DefaultMySQLVersion())
+	if err := svc.UpgradeVersion(context.Background(), inst.ProjectID, config.DefaultMySQLVersion()); err != nil {
+		t.Fatalf("UpgradeVersion: %v", err)
+	}
+	got, _ := store.FindByProjectID(inst.ProjectID)
+	older, _ := config.MySQLImage("8.4.9")
+	container := "excalibase-" + inst.ProjectID + "-mysql"
+	if got.MySQLVersion != "8.4.9" || engine.specs[container].Image != older || !engine.containers[container] {
+		t.Fatalf("recorded %q, running %v on %q after a failed upgrade", got.MySQLVersion, engine.containers[container], engine.specs[container].Image)
+	}
+	engine.refuseImage = ""
+	if err := svc.UpgradeVersion(context.Background(), inst.ProjectID, config.DefaultMySQLVersion()); err != nil {
+		t.Fatalf("the project stayed held: %v", err)
+	}
+}
+
+// Already on the version asked for: nothing to do.
+func TestSingleHostMySQLUpgradeToItsOwnVersionIsANoop(t *testing.T) {
+	svc, store, engine := setupSingleHostMySQL(t)
+	inst := provisionMySQL(t, svc, store, "")
+	engine.refuseImage, _ = config.MySQLImage(inst.MySQLVersion)
+	if err := svc.UpgradeVersion(context.Background(), inst.ProjectID, inst.MySQLVersion); err != nil {
+		t.Fatalf("UpgradeVersion: %v", err)
 	}
 }
