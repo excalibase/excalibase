@@ -37,7 +37,7 @@ func (s *BackupService) GetWalLag(ctx context.Context, projectID string) (WalLag
 	if err != nil || inst == nil {
 		return WalLagInfo{}, fmt.Errorf("project not found: %s", projectID)
 	}
-	adapter, err := resolveAdapter(s.adapters, inst)
+	adapter, err := s.adapterFor(inst)
 	if err != nil {
 		return WalLagInfo{}, err
 	}
