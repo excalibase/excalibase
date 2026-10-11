@@ -276,7 +276,7 @@ func runServer(cfg config.AppConfig) {
 		// DELETE stops a project with the same pause before its grace period.
 		provSvc.SetDeletionPauser(pauseSvc)
 	}
-	stopDeletionSweep := startDeletionSweeper(cfg, sqlStore, provSvc)
+	stopDeletionSweep := startDeletionSweeper(cfg, sqlStore, provSvc, deps.backupHandler.Service())
 	defer stopDeletionSweep()
 	stopIdlePause := startIdlePauseScheduler(cfg, sqlStore, store, provSvc, pauseSvc, deps.emailSender)
 	defer stopIdlePause()
@@ -1372,6 +1372,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	appDeploySvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
 	appDomainSvc := buildAppDomainService(cfg, sqlStore.DB(), appRuntime, store, appDeploySvc)
 	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
+	registerMySQLBackups(backupSvc, provSvc.MySQLProvisioner(), k8sClient, store, provSvc)
 	// A restore finishes the way a provision does: the adapters hand the
 	// recovered database to the provisioning service's registration path
 	// (EXC-366) instead of writing a half-project row themselves.
@@ -2500,7 +2501,9 @@ func buildK8sFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) *provisione
 	pgProvisioner.SetWatcherImage(cfg.WatcherImage)
 	pgProvisioner.SetPublicDomainSuffix(cfg.DBEndpointDomain)
 	pgProvisioner.SetDeletionPoller(deletionPoller())
-	return provisioner.NewFactory(pgProvisioner, provisioner.NewMySQLProvisioner(k8sClient))
+	mysql := provisioner.NewMySQLProvisioner(k8sClient)
+	mysql.SetBackupPathStyle(backupUsePathStyle())
+	return provisioner.NewFactory(pgProvisioner, mysql)
 }
 
 // mysqlCreationAllowed is the mysql feature: whether new MySQL projects may be

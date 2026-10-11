@@ -75,6 +75,15 @@ func (s *ProvisioningService) mysqlProvisioner() (*provisioner.MySQLProvisioner,
 	return mysql, nil
 }
 
+// MySQLProvisioner is the MOCO provisioner, or nil where MySQL is not served.
+func (s *ProvisioningService) MySQLProvisioner() *provisioner.MySQLProvisioner {
+	mysql, err := s.mysqlProvisioner()
+	if err != nil {
+		return nil
+	}
+	return mysql
+}
+
 // AllowMySQLCreation turns the creation of new MySQL projects on or off.
 func (s *ProvisioningService) AllowMySQLCreation(allowed bool) { s.mysqlCreation = allowed }
 

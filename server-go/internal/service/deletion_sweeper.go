@@ -26,16 +26,20 @@ type DeletionSweepWork interface {
 
 // DeletionSweeperConfig wires the sweeper. Work and Lock are required.
 type DeletionSweeperConfig struct {
-	Work     DeletionSweepWork
-	Lock     storage.LeaderLock
-	Interval time.Duration
-	Logger   *log.Logger
+	Work DeletionSweepWork
+	// Retention, when set, deletes backups past retention for engines that
+	// never delete their own (MySQL on MOCO).
+	Retention BackupRetentionWork
+	Lock      storage.LeaderLock
+	Interval  time.Duration
+	Logger    *log.Logger
 }
 
 // DeletionSweeper hard-deletes projects whose grace period has ended and
 // purges kept backups whose retention has ended, on the leading replica only.
 type DeletionSweeper struct {
 	work       DeletionSweepWork
+	retention  BackupRetentionWork
 	leadership *Leadership
 	interval   time.Duration
 	logger     *log.Logger
@@ -48,7 +52,7 @@ type DeletionSweeper struct {
 
 // NewDeletionSweeper builds the sweeper; it does nothing until Start.
 func NewDeletionSweeper(c DeletionSweeperConfig) *DeletionSweeper {
-	s := &DeletionSweeper{work: c.Work, leadership: NewLeadership(c.Lock), interval: c.Interval, logger: c.Logger}
+	s := &DeletionSweeper{work: c.Work, retention: c.Retention, leadership: NewLeadership(c.Lock), interval: c.Interval, logger: c.Logger}
 	if s.interval <= 0 {
 		s.interval = DefaultDeletionSweepInterval
 	}
@@ -117,5 +121,10 @@ func (s *DeletionSweeper) tick(parent context.Context) {
 	if len(deletions.Deleted)+len(deletions.Failed)+len(purges.Purged)+len(purges.Failed) > 0 {
 		s.logger.Printf("deletion-sweep: deleted=%d failed=%d backups_purged=%d backups_failed=%d",
 			len(deletions.Deleted), len(deletions.Failed), len(purges.Purged), len(purges.Failed))
+	}
+	if s.retention != nil {
+		if report := s.retention.PurgeExpiredBackups(ctx); report.Objects > 0 || len(report.Failed) > 0 {
+			s.logger.Printf("deletion-sweep: backup retention %s", report)
+		}
 	}
 }
