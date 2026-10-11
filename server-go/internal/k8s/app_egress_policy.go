@@ -85,7 +85,7 @@ type ciliumPort struct {
 func buildAppEgressPolicy(namespace string, app *apphost.App, extraDenyCIDRs []string, edge EdgePeer) (*unstructured.Unstructured, error) {
 	allow := []ciliumEgressRule{appDNSRule()}
 	if referencesDatabase(app) {
-		allow = append(allow, appOwnDatabaseRule())
+		allow = append(allow, appOwnDatabaseRule(), appOwnMySQLRule())
 	}
 	if edge.configured() {
 		allow = append(allow, edge.ciliumEgressRule())
@@ -138,6 +138,19 @@ func appOwnDatabaseRule() ciliumEgressRule {
 	return ciliumEgressRule{
 		ToEndpoints: []metav1.LabelSelector{{MatchLabels: databasePodLabels()}},
 		ToPorts:     []ciliumPortRule{{Ports: []ciliumPort{{Port: strconv.Itoa(postgresPortNumber), Protocol: protocolTCP}}}},
+	}
+}
+
+// mysqlPodLabels select a MySQL project's database pods: MOCO's mysqld
+// instances (ADR 0041). Only 3306 is opened to them.
+func mysqlPodLabels() map[string]string {
+	return map[string]string{"app.kubernetes.io/created-by": "moco", "app.kubernetes.io/name": "mysql"}
+}
+
+func appOwnMySQLRule() ciliumEgressRule {
+	return ciliumEgressRule{
+		ToEndpoints: []metav1.LabelSelector{{MatchLabels: mysqlPodLabels()}},
+		ToPorts:     []ciliumPortRule{{Ports: []ciliumPort{{Port: strconv.Itoa(mysqlPortNumber), Protocol: protocolTCP}}}},
 	}
 }
 

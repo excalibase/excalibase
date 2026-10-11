@@ -755,6 +755,10 @@ func (h *FunctionHandler) applyExtractedSchema(w http.ResponseWriter, r *http.Re
 			httpError(w, domain.ErrNoDatabase.Error(), http.StatusConflict)
 			return false
 		}
+		if errors.Is(dbErr, domain.ErrPostgresOnly) {
+			httpError(w, "declared schemas are not available for MySQL projects yet", http.StatusConflict)
+			return false
+		}
 		httpError(w, "failed to open project db for migration: "+safeError(dbErr), http.StatusBadGateway)
 		return false
 	}

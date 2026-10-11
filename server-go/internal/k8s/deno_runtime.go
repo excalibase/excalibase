@@ -361,7 +361,7 @@ func (c *Client) applyDenoEgressPolicy(ctx context.Context, namespace string, sp
 // that ignores policies the object is created but not enforced.
 func buildDenoEgressPolicy(namespace string, allowedHosts []string, edge EdgePeer) *networkingv1.NetworkPolicy {
 	rules := []networkingv1.NetworkPolicyEgressRule{
-		denoDNSRule(), denoOwnPostgresRule(), denoProvisioningRule(),
+		denoDNSRule(), denoOwnPostgresRule(), denoOwnMySQLRule(), denoProvisioningRule(),
 	}
 	if edge.configured() {
 		rules = append(rules, edge.networkPolicyEgressRule())
@@ -410,6 +410,14 @@ func denoOwnPostgresRule() networkingv1.NetworkPolicyEgressRule {
 	return networkingv1.NetworkPolicyEgressRule{
 		To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: databasePodLabels()}}},
 		Ports: []networkingv1.NetworkPolicyPort{tcpPort(5432)},
+	}
+}
+
+// denoOwnMySQLRule allows this project's own MySQL pods on 3306 (ADR 0041).
+func denoOwnMySQLRule() networkingv1.NetworkPolicyEgressRule {
+	return networkingv1.NetworkPolicyEgressRule{
+		To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: mysqlPodLabels()}}},
+		Ports: []networkingv1.NetworkPolicyPort{tcpPort(mysqlPortNumber)},
 	}
 }
 

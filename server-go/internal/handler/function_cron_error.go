@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
 	"github.com/lib/pq"
 )
@@ -19,6 +20,9 @@ func cronSyncFailure(err error) (string, int) {
 			msg = msg[at:]
 		}
 		return msg, http.StatusBadRequest
+	}
+	if errors.Is(err, domain.ErrPostgresOnly) {
+		return "scheduled functions are not available for MySQL projects yet", http.StatusConflict
 	}
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Code == "55P03" {

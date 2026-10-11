@@ -1,9 +1,14 @@
 package domain
 
 import (
+	"errors"
 	"net"
 	"net/url"
 )
+
+// ErrPostgresOnly is what a Postgres-only platform feature (the scheduler's
+// tables, declared schemas, the project-DB opener) answers for a MySQL project.
+var ErrPostgresOnly = errors.New("not available for MySQL projects")
 
 // Vault credential records of a MySQL project carry these keys beside host,
 // port, database, username and password (ADR 0041 decision 5). A record

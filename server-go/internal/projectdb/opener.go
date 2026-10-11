@@ -360,6 +360,9 @@ func (o *Opener) checkServable(projectID string) error {
 	if inst.NoDatabase {
 		return fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
 	}
+	if inst.DBType == domain.MySQL {
+		return fmt.Errorf("%w: %s", domain.ErrPostgresOnly, projectID)
+	}
 	return nil
 }
 
@@ -376,7 +379,7 @@ func (o *Opener) ServableProjectIDs(_ context.Context) ([]string, error) {
 	}
 	ids := make([]string, 0, len(insts))
 	for _, inst := range insts {
-		if inst == nil || !domain.IsActive(inst.Status) || inst.NoDatabase {
+		if inst == nil || !domain.IsActive(inst.Status) || inst.NoDatabase || inst.DBType == domain.MySQL {
 			continue
 		}
 		ids = append(ids, inst.ProjectID)

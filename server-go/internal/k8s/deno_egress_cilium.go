@@ -40,7 +40,7 @@ func (c *Client) applyDenoCiliumFence(ctx context.Context, namespace string, spe
 // The platform's peers are the same as the NetworkPolicy fence's; the private
 // ranges are denied, so a name that resolves into them stays closed.
 func buildDenoCiliumEgressPolicy(namespace string, allowedHosts []string, edge EdgePeer) (*unstructured.Unstructured, error) {
-	allow := []ciliumEgressRule{denoDNSProxyRule(), appOwnDatabaseRule(), denoCiliumProvisioningRule()}
+	allow := []ciliumEgressRule{denoDNSProxyRule(), appOwnDatabaseRule(), appOwnMySQLRule(), denoCiliumProvisioningRule()}
 	if edge.configured() {
 		allow = append(allow, edge.ciliumEgressRule())
 	}

@@ -3,8 +3,13 @@ package handler
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 // TestBeginCronSync_NoProjectDBFnReturnsNoop — when the handler hasn't
@@ -50,5 +55,28 @@ func TestBeginCronSync_DBOpenError(t *testing.T) {
 func TestRollbackCronSync_NilTxIsSafe(t *testing.T) {
 	if err := rollbackCronSync(nil); err != nil {
 		t.Errorf("rollbackCronSync(nil) returned: %v", err)
+	}
+}
+
+// A MySQL project (ADR 0041) has no Postgres cron tables. A function without
+// schedules deploys with no sync; one with schedules is refused with 409.
+func TestBeginCronSync_MySQLProject(t *testing.T) {
+	h := &FunctionHandler{
+		projectDBFn: func(_ context.Context, _ string) (*sql.DB, error) {
+			return nil, fmt.Errorf("open: %w", domain.ErrPostgresOnly)
+		},
+	}
+	for _, none := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage("[]")} {
+		tx, commit, err := h.beginCronSync(context.Background(), "proj", "fn", none)
+		if err != nil || tx != nil || commit() != nil {
+			t.Errorf("no schedules %q: tx=%v err=%v", none, tx, err)
+		}
+	}
+	_, _, err := h.beginCronSync(context.Background(), "proj", "fn", json.RawMessage(`[{"name":"n","schedule":"* * * * *"}]`))
+	if !errors.Is(err, domain.ErrPostgresOnly) {
+		t.Fatalf("err = %v", err)
+	}
+	if msg, code := cronSyncFailure(err); code != http.StatusConflict || msg != "scheduled functions are not available for MySQL projects yet" {
+		t.Errorf("answered %d %q", code, msg)
 	}
 }
