@@ -191,6 +191,12 @@ if penv.get("DOCUMENTDB_ENABLED") != "false":
 if penv_proxy.get("PROXY_NETNS_JOIN_IMAGES"):
     failures.append("the proxy admits namespace joins with DocumentDB off")
 
+# EXC-592: a project's fixed host port comes from the one window both the
+# allocator and the proxy use, below the engine's random ports (32768 up).
+tenant_ports = penv_proxy.get("PROXY_HOST_PORTS", "")
+if tenant_ports != penv.get("EXCALIBASE_DB_ENDPOINT_PORT_RANGE") or tenant_ports != "30000-30999":
+    failures.append(f"tenant port window: proxy {tenant_ports!r}, allocator {penv.get('EXCALIBASE_DB_ENDPOINT_PORT_RANGE')!r}")
+
 if failures:
     sys.exit("\n".join(failures))
 print("single-host hardening ok")

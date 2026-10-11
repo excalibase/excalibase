@@ -24,9 +24,11 @@ type Policy struct {
 	Networks []string
 	// NetworkPrefix admits per-project networks; empty admits none.
 	NetworkPrefix string
-	// PortBindIPs are the host addresses a published port may bind; the host
-	// port itself is always the engine's choice.
+	// PortBindIPs are the host addresses a published port may bind.
 	PortBindIPs []string
+	// HostPorts are the host ports a create may name; any other is the
+	// engine's choice.
+	HostPorts HostPortRange
 	// VolumePrefix is the name every named volume must start with, so a
 	// container cannot mount the platform's own volumes. Empty admits only
 	// anonymous volumes.
@@ -224,8 +226,8 @@ func checkPortBindings(p Policy, value any) error {
 			if !slices.Contains(p.PortBindIPs, hostIP) {
 				return refuse("port %s may not be published on %q", port, hostIP)
 			}
-			if hostPort, _ := binding["HostPort"].(string); hostPort != "" {
-				return refuse("port %s may not take host port %s; the engine picks one", port, hostPort)
+			if hostPort, _ := binding["HostPort"].(string); hostPort != "" && !p.HostPorts.admits(hostPort) {
+				return refuse("port %s may not take host port %s; only the tenant range is admitted", port, hostPort)
 			}
 		}
 	}

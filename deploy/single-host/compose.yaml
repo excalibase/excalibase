@@ -145,6 +145,9 @@ services:
       LISTEN_ADDR: ":2375"
       PROXY_NETWORKS: excalibase-tenants
       PROXY_PORT_BIND_IPS: 127.0.0.1
+      # A MySQL project keeps one loopback port for its life (EXC-592), taken
+      # from this window by provisioning; below the engine's own random ports.
+      PROXY_HOST_PORTS: ${TENANT_PORT_RANGE:-30000-30999}
       # Apps (EXC-575): one internal network and named disks per project, the
       # edge joining the networks it routes to, and the sandbox runtime.
       PROXY_NETWORK_PREFIX: excalibase-net-
@@ -202,6 +205,7 @@ services:
       FEATURE_MCP: ${FEATURE_MCP:-false}
       FEATURE_PIPELINE: ${FEATURE_PIPELINE:-false}
       FEATURE_MYSQL: ${FEATURE_MYSQL:-false}
+      EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.
       SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}

@@ -73,6 +73,14 @@ case "$mlim" in "0 0"|"") ko "mysql has no limits" ;; *) ok "mysql limited: memo
 E=$(mapi "$MAPI/projects/$MPID/db-endpoint")
 [ "$(echo "$E" | mjson 'd.get("engine")=="mysql" and d.get("requireTls") and d["host"]=="127.0.0.1" and d.get("available")')" = True ] \
   && ok "Studio shows the TLS-only loopback endpoint" || ko "endpoint: ${E:0:400}"
+MPORT=$(echo "$E" | mjson 'd["port"]')
+[ "${MPORT:-0}" -ge 30000 ] && [ "$MPORT" -le 30999 ] && ok "the project holds port $MPORT from the tenant window" || ko "port '$MPORT' outside 30000-30999"
+# same_port <step>: the customer's connection string survives the step.
+same_port() {
+  local now
+  now=$(mapi "$MAPI/projects/$MPID/db-endpoint" | mjson 'd["port"]')
+  [ "$now" = "$MPORT" ] && ok "port $MPORT kept after $1" || ko "port moved from $MPORT to '$now' after $1"
+}
 CR=$(mapi "$MAPI/provision/$MPID/credentials")
 [ "$(echo "$CR" | mjson 'd.get("engine")')" = mysql ] && ok "credentials carry the mysql engine" || ko "credentials: $(echo "$CR" | mjson 'd.get("engine")')"
 
@@ -105,6 +113,7 @@ js=$(restore_job "$MPID" "$IJ")
 st=$(mwait "$MPID" ACTIVE)
 out=$(mysql_on "$MPID" host REQUIRED "SELECT COUNT(*) FROM notes")
 case "$js $st $out" in COMPLETED*ACTIVE*" 3") ok "restored in place to $B1: 3 rows" ;; *) ko "in-place restore: $js / $st / ${out:0:200}" ;; esac
+same_port "the in-place restore"
 
 echo "== mysql pause and resume"
 mapi -X POST "$MAPI/provision/$MPID/pause" -o /dev/null
@@ -115,6 +124,7 @@ mapi -X POST "$MAPI/provision/$MPID/resume" -o /dev/null
 st=$(mwait "$MPID" ACTIVE)
 out=$(mysql_on "$MPID" host REQUIRED "SELECT COUNT(*) FROM notes")
 case "$st $out" in ACTIVE*" 3") ok "resumed with its rows" ;; *) ko "resume: $st ${out:0:200}" ;; esac
+same_port "pause and resume"
 
 echo "== mysql delete purges backups"
 backup_now "$RPID" >/dev/null

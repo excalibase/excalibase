@@ -106,3 +106,20 @@ func TestLoadConfigRefusesANetnsJoinImageNotPinnedByDigest(t *testing.T) {
 		}
 	}
 }
+
+// EXC-592: the tenant host-port range, the same one provisioning allocates from.
+func TestLoadConfigReadsTheTenantHostPortRange(t *testing.T) {
+	cfg, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_HOST_PORTS": " 30000 - 30999 "}))
+	if err != nil || cfg.policy.HostPorts != (engineproxy.HostPortRange{Low: 30000, High: 30999}) {
+		t.Fatalf("range %+v err %v", cfg.policy.HostPorts, err)
+	}
+	for _, raw := range []string{"30000", "a-b", "30999-30000", "80-1000", "30000-70000"} {
+		if _, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_HOST_PORTS": raw})); err == nil {
+			t.Errorf("%q accepted", raw)
+		}
+	}
+	cfg, _ = loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants"}))
+	if cfg.policy.HostPorts != (engineproxy.HostPortRange{}) {
+		t.Fatalf("unset admits %+v", cfg.policy.HostPorts)
+	}
+}

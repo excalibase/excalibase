@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 )
 
@@ -15,5 +16,11 @@ func TestHostMySQLBackupsAreWiredOnlyWhereMySQLIsServed(t *testing.T) {
 	adapter := hostMySQLBackupAdapter(provisioner.NewDockerMySQLProvisioner(nil), nil, nil, nil, nil, "b", nil)
 	if adapter == nil {
 		t.Fatal("no adapter for a host that serves MySQL")
+	}
+}
+
+func TestSingleHostPortsNeedThePlatformStoresAllocator(t *testing.T) {
+	if _, err := singleHostPorts(config.AppConfig{}, nil); err == nil {
+		t.Fatal("ports without an allocator")
 	}
 }
