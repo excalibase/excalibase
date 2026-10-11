@@ -150,9 +150,9 @@ func (p *MySQLProvisioner) applyRestore(ctx context.Context, cluster *unstructur
 }
 
 // AwaitRestored returns once MOCO reports the restore done and the cluster
-// serves; a failed restore Job ends the wait at once.
-func (p *MySQLProvisioner) AwaitRestored(ctx context.Context, namespace, projectID string, instances int) error {
-	return p.readyPoller.WaitUntilReady(ctx, "restore of "+k8s.MySQLClusterName(projectID), func(ctx context.Context) (bool, error) {
+// serves, within poller's budget; a failed restore Job ends the wait at once.
+func (p *MySQLProvisioner) AwaitRestored(ctx context.Context, poller Poller, namespace, projectID string, instances int) error {
+	return poller.WaitUntilReady(ctx, "restore of "+k8s.MySQLClusterName(projectID), func(ctx context.Context) (bool, error) {
 		if err := p.restoreJobFailure(ctx, namespace, projectID); err != nil {
 			return false, err
 		}

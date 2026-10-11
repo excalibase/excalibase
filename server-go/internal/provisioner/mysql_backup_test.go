@@ -143,7 +143,7 @@ func TestMySQLApplyRestoredCluster(t *testing.T) {
 	if name, _, _ := unstructured.NestedString(cluster.Object, "spec", "restore", "sourceName"); name != "proj-src-mysql" {
 		t.Errorf("restore source %q", name)
 	}
-	if err := prov.AwaitRestored(context.Background(), mysqlTestNS, mysqlTestProject, 1); err != nil {
+	if err := prov.AwaitRestored(context.Background(), mysqlPoller(), mysqlTestNS, mysqlTestProject, 1); err != nil {
 		t.Fatalf("AwaitRestored: %v", err)
 	}
 }
@@ -164,7 +164,7 @@ func TestMySQLAwaitRestored_FailsWithTheRestoreJob(t *testing.T) {
 			map[string]interface{}{"type": "Failed", "status": "True", "message": "no available backup"}}},
 	}}
 	mock.CRDs[mysqlTestNS+"/"+failed.GetName()] = failed
-	err := prov.AwaitRestored(context.Background(), mysqlTestNS, mysqlTestProject, 1)
+	err := prov.AwaitRestored(context.Background(), mysqlPoller(), mysqlTestNS, mysqlTestProject, 1)
 	if err == nil || !strings.Contains(err.Error(), "no available backup") {
 		t.Fatalf("err %v, want the restore job's failure", err)
 	}
