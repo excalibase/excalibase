@@ -396,8 +396,9 @@ func TestIdlePause_StartIsIdempotentAndStopIsSafeTwice(t *testing.T) {
 	f.scheduler.Stop()
 }
 
-// A MySQL project's apps talk to the database directly, so the platform sees
-// none of its activity yet: idleness would pause a database in use (ADR 0041).
+// A MySQL project's apps talk to the database directly, so the platform API
+// sees none of its use: without a reading of its database (the mysql feature
+// off) idleness would pause a database in use (ADR 0041, EXC-588).
 func TestIdlePause_SkipsMySQLProjects(t *testing.T) {
 	f := newIdleFixture(t)
 	f.project(t, "my1", domain.Free, 30*day)

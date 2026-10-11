@@ -140,6 +140,8 @@ type IdlePauseScheduler struct {
 	resumeGrace time.Duration
 	logger      *log.Logger
 
+	engineActivity map[domain.DatabaseType]engineActivitySource
+
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	done    chan struct{}
@@ -278,9 +280,8 @@ func (s *IdlePauseScheduler) sweepOne(ctx context.Context, inst *domain.Database
 	if inst.Status != "ACTIVE" || s.resumedRecently(inst, now) {
 		return
 	}
-	if inst.DBType == domain.MySQL {
-		// Its apps connect to MySQL directly; none of that activity is seen
-		// yet, so it would be paused while in use (ADR 0041).
+	row, seen, judged := s.withEngineActivity(ctx, inst, row, seen, now)
+	if !judged {
 		return
 	}
 	lastSeen, ok := effectiveLastSeen(inst, row, seen)

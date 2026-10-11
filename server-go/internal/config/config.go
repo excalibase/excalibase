@@ -282,6 +282,9 @@ type AppConfig struct {
 	// at N. EXCALIBASE_AUTOPAUSE_ENABLED overrides; defaults on in cloud mode,
 	// off self-hosted (a single operator owns their own projects).
 	AutoPauseEnabled bool
+	// AutoPauseInterval is how often the idle sweep runs
+	// (EXCALIBASE_AUTOPAUSE_INTERVAL, default hourly).
+	AutoPauseInterval time.Duration
 
 	// DocumentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
@@ -400,6 +403,7 @@ func load() AppConfig {
 	deploymentMode := envOr("DEPLOYMENT_MODE", "selfhosted")
 	return AppConfig{
 		AutoPauseEnabled:         envBool("EXCALIBASE_AUTOPAUSE_ENABLED", deploymentMode == "cloud"),
+		AutoPauseInterval:        envDuration("EXCALIBASE_AUTOPAUSE_INTERVAL", defaultAutoPauseInterval),
 		Port:                     envOr("PORT", "24005"),
 		StoragePath:              envOr("STORAGE_PATH", "../provisioning-data"),
 		LogLevel:                 envOr("LOG_LEVEL", "debug"),
@@ -709,6 +713,9 @@ const defaultPauseTimeout = 10 * time.Minute
 // defaultDeployWait outlasts the app rollout timeout (10 minutes), so a
 // waited deploy normally finishes inside it.
 const defaultDeployWait = 11 * time.Minute
+
+// defaultAutoPauseInterval is the idle sweep's period (EXC-280).
+const defaultAutoPauseInterval = time.Hour
 
 // DefaultPlatformDBMaxConns is the platform database pool size. It leaves
 // room for roughly a dozen concurrent lifecycle operations alongside ordinary
