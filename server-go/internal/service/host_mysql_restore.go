@@ -206,10 +206,10 @@ func (a *HostMySQLBackupAdapter) planRestore(ctx context.Context, inst *domain.D
 
 // build starts an empty container for projectID and loads the backup into it.
 func (a *HostMySQLBackupAdapter) build(ctx context.Context, pc *provisioner.ProvisionContext, projectID string, restore plannedRestore) (string, error) {
-	container, err := a.mysql.StartEmpty(ctx, projectID, restore.image, restore.plan.Config)
+	container, err := a.mysql.StartOnVolume(ctx, projectID, restore.image, restore.plan.Config)
 	if container != "" {
-		pc.RegisterCleanup("remove the restored container", func(ctx context.Context) error {
-			return a.mysql.RemoveContainer(ctx, container)
+		pc.RegisterCleanup("remove the restored database", func(ctx context.Context) error {
+			return a.mysql.RemoveData(ctx, projectID)
 		})
 	}
 	if err != nil {

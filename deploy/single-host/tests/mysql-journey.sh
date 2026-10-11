@@ -61,7 +61,7 @@ backup_keys() {
 }
 
 echo "== mysql project"
-R=$(mapi -X POST "$MAPI/provision/" -d "{\"projectName\":\"orders\",\"orgId\":\"$ORG\",\"databaseType\":\"MYSQL\"}")
+R=$(mapi -X POST "$MAPI/provision/" -d "{\"projectName\":\"orders\",\"orgId\":\"$ORG\",\"databaseType\":\"MYSQL\",\"mysqlVersion\":\"8.4.9\"}")
 MPID=$(echo "$R" | mjson 'd.get("projectId","")')
 [ -n "$MPID" ] || ko "MySQL provision refused: ${R:0:300}"
 st=$(mwait "$MPID" ACTIVE)
@@ -125,6 +125,17 @@ st=$(mwait "$MPID" ACTIVE)
 out=$(mysql_on "$MPID" host REQUIRED "SELECT COUNT(*) FROM notes")
 case "$st $out" in ACTIVE*" 3") ok "resumed with its rows" ;; *) ko "resume: $st ${out:0:200}" ;; esac
 same_port "pause and resume"
+
+echo "== mysql minor upgrade"
+up=$(mapi -X POST "$MAPI/provision/$MPID/upgrade" -w ' %{http_code}')
+case "$up" in *" 200") ok "minor upgrade accepted" ;; *) ko "upgrade: ${up:0:300}" ;; esac
+for i in $(seq 60); do
+  [ "$(mapi "$MAPI/provision/$MPID/" | mjson 'd.get("mysqlVersion")')" = 8.4.10 ] && break
+  sleep 5
+done
+out=$(mysql_on "$MPID" host REQUIRED "SELECT CONCAT(VERSION(), ' ', (SELECT COUNT(*) FROM notes))")
+[ "$out" = "8.4.10 3" ] && ok "upgraded to 8.4.10 with its rows" || ko "after the upgrade: ${out:0:300}"
+same_port "the minor upgrade"
 
 echo "== mysql delete purges backups"
 backup_now "$RPID" >/dev/null

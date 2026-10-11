@@ -103,3 +103,43 @@ func mustExec(ctx context.Context, t *testing.T, db *sql.DB, statement string) {
 		t.Fatalf("%s: %v", statement, err)
 	}
 }
+
+// EXC-592: a minor upgrade opens the same data on the newer image.
+func TestDockerMySQLMinorUpgradeKeepsTheRows(t *testing.T) {
+	docker := requireDocker(t)
+	defer docker.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	projectID := fmt.Sprintf("it-myup-%d", time.Now().UnixNano()%1_000_000)
+	p := NewDockerMySQLProvisioner(docker)
+	plan := config.TierConfig{Memory: "1Gi", CPU: "1", Instances: 1}
+	req := domain.ProvisioningRequest{ProjectName: projectID, DBType: domain.MySQL, DatabaseName: "shop", MySQLVersion: "8.4.9"}
+	result, err := p.Provision(ctx, req, plan, func(domain.ProvisioningStage) {})
+	t.Cleanup(func() { _ = p.Deprovision(context.Background(), MySQLContainerName(projectID), projectID) })
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	passwords := MySQLPasswords{Admin: "Adm1n-" + projectID, App: "app-" + projectID, AuthAdmin: "auth-" + projectID, Watcher: "cdc-" + projectID}
+	if err := p.EnsurePlatformUsers(ctx, result.Namespace, projectID, "shop", passwords); err != nil {
+		t.Fatalf("EnsurePlatformUsers: %v", err)
+	}
+	db := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, "skip-verify")
+	mustExec(ctx, t, db, "CREATE TABLE notes (id INT PRIMARY KEY)")
+	mustExec(ctx, t, db, "INSERT INTO notes VALUES (1), (2)")
+	_ = db.Close()
+
+	newest, _ := config.MySQLImage("8.4.10")
+	if err := p.ReplaceImage(ctx, projectID, newest, plan); err != nil {
+		t.Fatalf("ReplaceImage: %v", err)
+	}
+	db = mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, "skip-verify")
+	defer db.Close()
+	var version string
+	var rows int
+	if err := db.QueryRowContext(ctx, "SELECT VERSION(), (SELECT COUNT(*) FROM notes)").Scan(&version, &rows); err != nil || version != "8.4.10" || rows != 2 {
+		t.Fatalf("after the upgrade: version %q rows %d err %v", version, rows, err)
+	}
+	if err := p.Deprovision(ctx, result.Namespace, projectID); err != nil {
+		t.Fatalf("Deprovision: %v", err)
+	}
+}

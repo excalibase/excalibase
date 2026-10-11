@@ -162,18 +162,16 @@ func (s *ProvisioningService) upgradeMySQL(ctx context.Context, projectID, versi
 	if err != nil {
 		return err
 	}
-	defer release()
-	if inst.MySQLVersion == version {
+	image, err := mysqlUpgradeImage(inst, version)
+	if err != nil || inst.MySQLVersion == version {
 		// Already there: the same call is how a client converges.
-		return nil
-	}
-	if err := config.MySQLUpgradeAllowed(inst.MySQLVersion, version); err != nil {
+		release()
 		return err
 	}
-	image, err := config.MySQLImage(version)
-	if err != nil {
-		return err
+	if inst.DeploymentMode == domain.ModeDocker {
+		return s.upgradeSingleHostMySQL(ctx, inst, release, version, image)
 	}
+	defer release()
 	mysql, err := s.mysqlProvisioner()
 	if err != nil {
 		return err
@@ -181,11 +179,8 @@ func (s *ProvisioningService) upgradeMySQL(ctx context.Context, projectID, versi
 	if err := mysql.PinImage(ctx, inst.Namespace, projectID, image); err != nil {
 		return err
 	}
-	previous := inst.MySQLVersion
-	inst.MySQLVersion = version
-	if err := s.store.UpdateIfStatus(inst, inst.Status); err != nil {
-		inst.MySQLVersion = previous
-		return fmt.Errorf("record mysql %s: %w", version, err)
+	if err := s.recordMySQLVersion(inst, version); err != nil {
+		return err
 	}
 	namespace := inst.Namespace
 	s.startInBackground(func() {
@@ -193,6 +188,86 @@ func (s *ProvisioningService) upgradeMySQL(ctx context.Context, projectID, versi
 			log.Printf("WARN: mysql upgrade of %s to %s not observed complete: %v", projectID, version, err)
 		}
 	})
+	return nil
+}
+
+// mysqlUpgradeImage is the catalogue image of version, refused unless it is
+// a move within the project's series.
+func mysqlUpgradeImage(inst *domain.DatabaseInstance, version string) (string, error) {
+	if inst.MySQLVersion == version {
+		return "", nil
+	}
+	if err := config.MySQLUpgradeAllowed(inst.MySQLVersion, version); err != nil {
+		return "", err
+	}
+	return config.MySQLImage(version)
+}
+
+// upgradeSingleHostMySQL recreates the container on image over the project's
+// data and port, in the background and under the project's hold, and records
+// the version once mysqld answers on it (EXC-592).
+func (s *ProvisioningService) upgradeSingleHostMySQL(ctx context.Context, inst *domain.DatabaseInstance, release func(), version, image string) error {
+	mysql := s.SingleHostMySQL()
+	if mysql == nil {
+		release()
+		return fmt.Errorf("unsupported database type: %s", domain.MySQL)
+	}
+	plan, err := s.planOf(ctx, inst)
+	if err != nil {
+		release()
+		return err
+	}
+	s.startInBackground(func() {
+		defer release()
+		ctx := context.WithoutCancel(ctx)
+		if err := mysql.ReplaceImage(ctx, inst.ProjectID, image, plan); err != nil {
+			log.Printf("ERROR: mysql upgrade of %s to %s: %v", inst.ProjectID, version, err)
+			s.restoreMySQLImage(ctx, mysql, inst, plan)
+			return
+		}
+		// The row is read again: it may have moved on while the image changed.
+		current, err := s.store.FindByProjectID(inst.ProjectID)
+		if err == nil && current == nil {
+			err = ErrProjectNotFound
+		}
+		if err == nil {
+			err = s.recordMySQLVersion(current, version)
+		}
+		if err != nil {
+			log.Printf("ERROR: mysql upgrade of %s: %v", inst.ProjectID, err)
+		}
+	})
+	return nil
+}
+
+// restoreMySQLImage puts the project back on the image it ran before an
+// upgrade that did not complete, over the same data and port.
+func (s *ProvisioningService) restoreMySQLImage(ctx context.Context, mysql *provisioner.DockerMySQLProvisioner, inst *domain.DatabaseInstance, plan config.TierConfig) {
+	previous, err := config.MySQLImage(inst.MySQLVersion)
+	if err == nil {
+		err = mysql.ReplaceImage(ctx, inst.ProjectID, previous, plan)
+	}
+	if err != nil {
+		log.Printf("ERROR: mysql %s could not be put back on %s after a failed upgrade: %v", inst.ProjectID, inst.MySQLVersion, err)
+	}
+}
+
+// planOf is the plan the project's organisation is on.
+func (s *ProvisioningService) planOf(ctx context.Context, inst *domain.DatabaseInstance) (config.TierConfig, error) {
+	tier, err := s.orgTier(ctx, inst.OrgID)
+	if err != nil {
+		return config.TierConfig{}, err
+	}
+	return s.tierConfig(ctx, tier)
+}
+
+func (s *ProvisioningService) recordMySQLVersion(inst *domain.DatabaseInstance, version string) error {
+	previous := inst.MySQLVersion
+	inst.MySQLVersion = version
+	if err := s.store.UpdateIfStatus(inst, inst.Status); err != nil {
+		inst.MySQLVersion = previous
+		return fmt.Errorf("record mysql %s: %w", version, err)
+	}
 	return nil
 }
 

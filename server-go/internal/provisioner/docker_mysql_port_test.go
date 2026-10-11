@@ -54,7 +54,7 @@ func TestDockerMySQLPublishesOnTheProjectsOwnHostPort(t *testing.T) {
 		t.Fatalf("a rebuild gave the port back: %v %v", err, ports.released)
 	}
 	image, _ := config.MySQLImage(config.DefaultMySQLVersion())
-	if _, err := mysql.StartEmpty(context.Background(), "p1", image, testTier); err != nil {
+	if _, err := mysql.StartOnVolume(context.Background(), "p1", image, testTier); err != nil {
 		t.Fatal(err)
 	}
 	if got := engine.specs[result.Namespace].Ports["3306"]; got != "30001" {
@@ -85,14 +85,27 @@ func TestDockerMySQLStartWaitsForItsJustFreedPort(t *testing.T) {
 	mysql := newTestDockerMySQL(engine)
 	mysql.SetHostPorts(&fakeHostPorts{held: map[string]int{}})
 	image, _ := config.MySQLImage(config.DefaultMySQLVersion())
-	if _, err := mysql.StartEmpty(context.Background(), "p1", image, testTier); err != nil {
+	if _, err := mysql.StartOnVolume(context.Background(), "p1", image, testTier); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	if !engine.containers["excalibase-p1-mysql"].running {
 		t.Fatal("not running")
 	}
 	engine.failOn = "start:excalibase-p2-mysql"
-	if _, err := mysql.StartEmpty(context.Background(), "p2", image, testTier); err == nil {
+	if _, err := mysql.StartOnVolume(context.Background(), "p2", image, testTier); err == nil {
 		t.Fatal("any other start failure is retried")
+	}
+}
+
+func TestDockerMySQLResumeWaitsForItsHeldPort(t *testing.T) {
+	engine := newFakeEngine()
+	result := provisionDockerMySQL(t, engine)
+	mysql := newTestDockerMySQL(engine)
+	if err := mysql.Pause(context.Background(), result.Namespace, "p1"); err != nil {
+		t.Fatal(err)
+	}
+	engine.portBusy = 2
+	if err := mysql.Resume(context.Background(), result.Namespace, "p1"); err != nil {
+		t.Fatalf("resume: %v", err)
 	}
 }
