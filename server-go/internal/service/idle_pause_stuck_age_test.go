@@ -72,3 +72,11 @@ func TestTheSweepLeavesAFreshPauseAlone(t *testing.T) {
 		t.Fatalf("a pause stuck past %v was not retried: %d", DefaultStuckRetryAfter, f.pauser.attempts())
 	}
 }
+
+// A pause waits for its backup and then for the workload to stop, each up to
+// the pause timeout, without writing its row in between.
+func TestDefaultStuckRetryAfterOutlastsAPausesTwoWaits(t *testing.T) {
+	if DefaultStuckRetryAfter != 20*time.Minute {
+		t.Errorf("DefaultStuckRetryAfter %v, want 20m", DefaultStuckRetryAfter)
+	}
+}
