@@ -138,3 +138,16 @@ func firstRunBetween(completed []mysqlBackup, from, until time.Time) (mysqlBacku
 	}
 	return mysqlBackup{}, false
 }
+
+// dropManualRecordsThrough removes the records of manual runs retention
+// deleted: every record asked for by the newest deleted run claims a run no
+// later than it, and every run up to it is gone.
+func (a *MySQLBackupAdapter) dropManualRecordsThrough(ctx context.Context, projectID string, expired []mysqlBackup) error {
+	if a.records == nil || len(expired) == 0 {
+		return nil
+	}
+	if err := a.records.DeleteThrough(ctx, projectID, expired[len(expired)-1].At); err != nil {
+		return fmt.Errorf("delete the records of expired backups of %s: %w", projectID, err)
+	}
+	return nil
+}

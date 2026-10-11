@@ -81,3 +81,37 @@ func TestBackupRecords_TimestampReadsBackAsRFC3339(t *testing.T) {
 		t.Errorf("timestamp %q: %v", got[0].Timestamp, err)
 	}
 }
+
+// EXC-586: records go with the backups they describe, by project or up to a
+// time, and never another project's.
+func TestBackupRecords_DeleteByProjectAndThrough(t *testing.T) {
+	store := testStore(t)
+	br := NewBackupRecords(store)
+	ctx := context.Background()
+	for _, r := range []domain.BackupRecord{
+		{ID: "d1", ProjectID: "pd", Timestamp: "2026-10-01T00:00:00Z", Type: "MANUAL"},
+		{ID: "d2", ProjectID: "pd", Timestamp: "2026-10-05T00:00:00Z", Type: "MANUAL"},
+		{ID: "d3", ProjectID: "pd", Timestamp: "2026-10-09T00:00:00Z", Type: "MANUAL"},
+		{ID: "o1", ProjectID: "pd-other", Timestamp: "2026-10-01T00:00:00Z", Type: "MANUAL"},
+	} {
+		r := r
+		if err := br.Save(ctx, &r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := br.DeleteThrough(ctx, "pd", time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("DeleteThrough: %v", err)
+	}
+	if got, _ := br.ListByProject(ctx, "pd"); len(got) != 1 || got[0].ID != "d3" {
+		t.Errorf("after DeleteThrough: %+v", got)
+	}
+	if err := br.DeleteByProject(ctx, "pd"); err != nil {
+		t.Fatalf("DeleteByProject: %v", err)
+	}
+	if got, _ := br.ListByProject(ctx, "pd"); len(got) != 0 {
+		t.Errorf("after DeleteByProject: %+v", got)
+	}
+	if got, _ := br.ListByProject(ctx, "pd-other"); len(got) != 1 {
+		t.Errorf("another project's records went: %+v", got)
+	}
+}

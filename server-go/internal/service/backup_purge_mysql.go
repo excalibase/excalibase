@@ -58,7 +58,11 @@ func (p *BackupPurger) PurgeRetained(ctx context.Context, kept storage.RetainedB
 	if err != nil {
 		return 0, err
 	}
-	return p.purgePrefixes(ctx, prefixes)
+	deleted, err := p.purgePrefixes(ctx, prefixes)
+	if err != nil {
+		return deleted, err
+	}
+	return deleted, p.dropRecords(ctx, kept.ProjectID)
 }
 
 // purgePrefixes deletes everything under each prefix, in pages.

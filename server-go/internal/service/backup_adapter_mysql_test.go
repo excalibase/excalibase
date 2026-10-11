@@ -385,3 +385,29 @@ func (k keysOnly) ListKeys(ctx context.Context, bucket, prefix, token string, ma
 func (k keysOnly) DeleteKeys(ctx context.Context, bucket string, keys []string) error {
 	return k.store.DeleteKeys(ctx, bucket, keys)
 }
+
+// EXC-586: retention takes the records of the manual runs it deleted with
+// them, and keeps the records of runs still in the bucket.
+func TestMySQLAdapterRetentionDropsTheRecordsOfPurgedRuns(t *testing.T) {
+	lab := newMySQLAdapterLab(t, sourceKeys()...)
+	ctx := context.Background()
+	for id, asked := range map[string]time.Time{"job-purged": at(0, 0).Add(-time.Minute), "job-kept": at(5, 59)} {
+		_ = lab.records.Save(ctx, &domain.BackupRecord{ID: id, ProjectID: mysqlSourceProject,
+			Timestamp: asked.Format(time.RFC3339), Type: backupTypeManual, Status: backupStatusInProgress})
+	}
+	_ = lab.records.Save(ctx, &domain.BackupRecord{ID: "other-project", ProjectID: "proj2",
+		Timestamp: at(0, 0).Format(time.RFC3339), Type: backupTypeManual, Status: backupStatusCompleted})
+	days := 1
+	lab.source.BackupRetentionDays = &days
+	lab.now = at(7, 0).Add(24 * time.Hour)
+	if _, err := lab.adapter.PurgeExpired(ctx, lab.source); err != nil {
+		t.Fatalf("PurgeExpired: %v", err)
+	}
+	left := map[string]bool{}
+	for _, record := range lab.records.records {
+		left[record.ID] = true
+	}
+	if left["job-purged"] || !left["job-kept"] || !left["other-project"] {
+		t.Errorf("records left %v", left)
+	}
+}

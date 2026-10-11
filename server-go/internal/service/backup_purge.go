@@ -8,6 +8,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 // maxDeleteBatch is the S3 DeleteObjects hard limit per request.
@@ -57,6 +58,22 @@ type BackupPurger struct {
 	dockerKeyPrefix string
 	openDeleter     ObjectDeleterFactory
 	pageSize        int32
+	records         storage.BackupRecordStore
+}
+
+// SetRecords wires the backup records that go once a project's backups are
+// gone (EXC-586).
+func (p *BackupPurger) SetRecords(records storage.BackupRecordStore) { p.records = records }
+
+// dropRecords removes a purged project's backup records.
+func (p *BackupPurger) dropRecords(ctx context.Context, projectID string) error {
+	if p.records == nil {
+		return nil
+	}
+	if err := p.records.DeleteByProject(ctx, projectID); err != nil {
+		return fmt.Errorf("delete the backup records of %s: %w", projectID, err)
+	}
+	return nil
 }
 
 // NewBackupPurger wires a purger. dockerKeyPrefix must equal the
@@ -145,7 +162,11 @@ func (p *BackupPurger) Purge(ctx context.Context, inst *domain.DatabaseInstance)
 	if err != nil {
 		return 0, err
 	}
-	return p.purgePrefixes(ctx, prefixes)
+	deleted, err := p.purgePrefixes(ctx, prefixes)
+	if err != nil {
+		return deleted, err
+	}
+	return deleted, p.dropRecords(ctx, inst.ProjectID)
 }
 
 // engineOf is the row's engine; a row from before engines were recorded is

@@ -360,6 +360,10 @@ type BackupRecordStore interface {
 	Save(ctx context.Context, record *domain.BackupRecord) error
 	ListByProject(ctx context.Context, projectID string) ([]domain.BackupRecord, error)
 	UpdateStatus(ctx context.Context, id, status string) error
+	// DeleteByProject removes every record of a project whose backups are gone.
+	DeleteByProject(ctx context.Context, projectID string) error
+	// DeleteThrough removes a project's records timed at or before through.
+	DeleteThrough(ctx context.Context, projectID string, through time.Time) error
 }
 
 // BackupScheduleStore persists per-project backup schedules so the

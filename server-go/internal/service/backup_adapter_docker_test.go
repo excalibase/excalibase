@@ -145,6 +145,30 @@ func (s *fakeBackupRecordStore) ListByProject(_ context.Context, projectID strin
 	return out, nil
 }
 
+func (s *fakeBackupRecordStore) DeleteByProject(_ context.Context, projectID string) error {
+	return s.deleteWhere(func(r domain.BackupRecord) bool { return r.ProjectID == projectID })
+}
+
+func (s *fakeBackupRecordStore) DeleteThrough(_ context.Context, projectID string, through time.Time) error {
+	return s.deleteWhere(func(r domain.BackupRecord) bool {
+		at, err := time.Parse(time.RFC3339, r.Timestamp)
+		return r.ProjectID == projectID && err == nil && !at.After(through)
+	})
+}
+
+func (s *fakeBackupRecordStore) deleteWhere(doomed func(domain.BackupRecord) bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.records[:0:0]
+	for _, r := range s.records {
+		if !doomed(r) {
+			kept = append(kept, r)
+		}
+	}
+	s.records = kept
+	return nil
+}
+
 func (s *fakeBackupRecordStore) UpdateStatus(_ context.Context, id, status string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

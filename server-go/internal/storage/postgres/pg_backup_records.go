@@ -32,6 +32,17 @@ func (b *BackupRecordsStore) UpdateStatus(ctx context.Context, id, status string
 	return b.s.updateBackupStatus(ctx, id, status)
 }
 
+func (b *BackupRecordsStore) DeleteByProject(ctx context.Context, projectID string) error {
+	_, err := b.s.db.ExecContext(ctx, `DELETE FROM backup_records WHERE project_id = $1`, projectID)
+	return err
+}
+
+func (b *BackupRecordsStore) DeleteThrough(ctx context.Context, projectID string, through time.Time) error {
+	_, err := b.s.db.ExecContext(ctx,
+		`DELETE FROM backup_records WHERE project_id = $1 AND timestamp <= $2`, projectID, through.UTC())
+	return err
+}
+
 // saveBackupRecord upserts a backup_records row.
 func (s *Store) saveBackupRecord(ctx context.Context, r *domain.BackupRecord) error {
 	_, err := s.db.ExecContext(ctx, `
