@@ -50,6 +50,30 @@ case "$cert" in *"DNS:$HOST"*) ok "the edge serves a certificate for the app hos
 logs=$(api "$API/projects/$PID/apps/$AID/logs?tail=50")
 case "$logs" in *"serving one"*) ok "logs read through the API" ;; *) ko "logs: ${logs:0:300}" ;; esac
 
+echo "== apps: create_app through MCP answers the https URL the edge serves and allows that origin (EXC-606)"
+PAT=$(api -X POST "$API/auth/tokens/" -d "{\"name\":\"smoke-mcp\",\"projectId\":\"$PID\",\"scopes\":[\"read\",\"write\"]}" | json 'd["token"]')
+[ -n "$PAT" ] || ko "no personal access token for MCP"
+# mcp_call <tool> <arguments JSON>: the tool's own JSON answer.
+mcp_call() {
+  c --max-time 120 -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+    "https://studio.localhost:$PORT/mcp" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}" \
+    | json 'd["result"]["content"][0]["text"]'
+}
+M=$(mcp_call create_app "{\"name\":\"site\",\"image\":\"$APP_IMAGE\",\"port\":8080,\"health_check_path\":\"/\"}")
+MURL=$(echo "$M" | json 'd["app"]["url"]')
+MID=$(echo "$M" | json 'd["app"]["id"]')
+case "$MURL" in https://site-*.apps.localhost) ok "create_app answers the app's https URL ($MURL)" ;; *) ko "create_app URL: '$MURL' ${M:0:300}" ;; esac
+[ -n "$MURL" ] && [ "$(echo "$M" | json 'd.get("corsOriginAdded","")')" = "$MURL" ] && ok "the app's https origin was added to CORS" || ko "CORS origin added: ${M:0:300}"
+# What a browser on the app's page sends before a credentialed GraphQL call; a CORS change reaches the
+# data plane within about a minute (create_app says so), so the page is retried as a user would.
+preflight() {
+  c -o /dev/null -D - -X OPTIONS "https://api.localhost:$PORT/$PID/graphql" -H "Origin: $MURL" \
+    -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: authorization,content-type' | tr -d '\r'
+}
+for i in $(seq 40); do pre=$(preflight); grep -qixF "access-control-allow-origin: $MURL" <<< "$pre" && break; sleep 3; done
+grep -qixF "access-control-allow-origin: $MURL" <<< "$pre" && ok "a browser preflight from the app's https origin is allowed" || ko "preflight from $MURL: $(head -c 400 <<< "$pre")"
+[ -n "$MID" ] && api -X DELETE "$API/projects/$PID/apps/$MID/" -d '{}' -o /dev/null
+
 echo "== apps: a second revision, then a rollback"
 FIRST=$(deploys "$PID" "$AID" | json 'd[0]["id"]')
 VER=$(api "$API/projects/$PID/apps/$AID/" | json 'd["version"]')
