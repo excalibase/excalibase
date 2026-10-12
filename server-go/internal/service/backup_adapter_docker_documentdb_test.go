@@ -230,3 +230,22 @@ func enterprisePlanConfig(t *testing.T) config.TierConfig {
 	t.Helper()
 	return enterprisePlan().plan.Config
 }
+
+// The restored gateway opens sessions as the source's owner, the login the
+// copy is registered with (EXC-604).
+func TestDockerAdapterRestoredDocumentDBTrustsTheSourcesOwnerOnLoopback(t *testing.T) {
+	docker, _, restored, err := restoreDocumentDBSource(t, domain.RestoreRequest{})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if restored == nil || restored.Username == "" || restored.Username == "postgres" {
+		t.Fatalf("restored row %+v must keep the source's owner", restored)
+	}
+	script := strings.Join(docker.specs["excalibase-dk-restored-postgres"].Cmd, " ")
+	if !strings.Contains(script, "host all "+restored.Username+" 127.0.0.1/32 trust") {
+		t.Fatalf("the restored database does not let the gateway in as %s:\n%s", restored.Username, script)
+	}
+	if strings.Contains(script, "host all postgres ") {
+		t.Fatal("the restored database trusts the superuser on loopback")
+	}
+}

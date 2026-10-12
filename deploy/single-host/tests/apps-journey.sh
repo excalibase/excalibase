@@ -94,6 +94,39 @@ DBHOST=$($DOCKER ps --filter label=excalibase.managed=true --format '{{.Names}}'
 $DOCKER exec "$AC" nc -z -w 3 "$DBHOST" 5432 && ok "the app reaches its own project's database" || ko "app cannot reach $DBHOST"
 $DOCKER exec "$AC" wget -q -T 3 -O /dev/null http://example.com/ 2>/dev/null && ko "the app reached the internet without APP_EGRESS" || ok "no egress by default"
 
+echo "== apps: DATABASE_URL is the restricted project login (EXC-604)"
+DBREF='{"name":"DATABASE_URL","kind":"reference","reference":{"sourceKind":"database","sourceName":"app","variable":"DATABASE_URL"}}'
+VER=$(api "$API/projects/$PID/apps/$AID/" | json 'd["version"]')
+up=$(api -X PATCH -H "If-Match: $VER" "$API/projects/$PID/apps/$AID/" -d '{"env":[{"name":"BODY","kind":"literal","value":"one"},'"$DBREF"']}' -w ' %{http_code}')
+case "$up" in *" 200") ;; *) ko "attach DATABASE_URL: ${up:0:300}" ;; esac
+api -X POST "$API/projects/$PID/apps/$AID/deploy" >/dev/null
+[ "$(wait_deploy "$PID" "$AID")" = succeeded ] || ko "deploy with DATABASE_URL: $(deploys "$PID" "$AID" | head -c 300)"
+AC=$(app_container "$AID")
+# The app's own value, read from its container into a 0600 file; never printed.
+( umask 077; $DOCKER inspect "$AC" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^DATABASE_URL=' > "$W/app-db.env" )
+[ -s "$W/app-db.env" ] && ok "the app received DATABASE_URL" || ko "the app has no DATABASE_URL"
+grep -q '^DATABASE_URL=postgresql://postgres:' "$W/app-db.env" && ko "DATABASE_URL carries the postgres superuser" || ok "DATABASE_URL is not the superuser"
+# as_app <sql>: psql with the app's DATABASE_URL, on the app's own network.
+as_app() {
+  $DOCKER run --rm --network "excalibase-net-$PID" --env-file "$W/app-db.env" docker.io/library/postgres:17-alpine \
+    sh -c 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tAc "$0"' "$1" 2>&1
+}
+[ "$(as_app "SELECT rolsuper OR rolbypassrls OR rolreplication FROM pg_roles WHERE rolname = current_user")" = f ] && ok "the app login is no superuser" || ko "the app login: $(as_app 'SELECT current_user')"
+out=$(as_app "INSERT INTO notes (body) VALUES ('from the app') RETURNING body")
+[ "$out" = "from the app" ] && ok "the app writes a migrated table" || ko "app write: ${out:0:300}"
+out=$(as_app "SELECT count(*) FROM notes")
+[ "${out:-0}" -ge 2 ] 2>/dev/null && ok "the app reads a migrated table ($out rows)" || ko "app read: ${out:0:300}"
+for sql in "SELECT count(*) FROM auth.users" "CREATE TABLE excalibase.planted (id int)" "CREATE TABLE auth.planted (id int)"; do
+  out=$(as_app "$sql")
+  case "$out" in *"permission denied"*) ok "refused: $sql" ;; *) ko "allowed: $sql -> ${out:0:200}" ;; esac
+done
+out=$(as_app "CREATE FUNCTION public.app_steal() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN RETURN NEW; END \$\$; CREATE TRIGGER app_steal BEFORE INSERT ON notes FOR EACH ROW EXECUTE FUNCTION public.app_steal()")
+case "$out" in *"permission denied"*|*"must be owner"*) ok "the app cannot attach a trigger to a migrated table" ;; *) ko "trigger: ${out:0:300}" ;; esac
+leak=0
+for name in excalibase-provisioning excalibase-engine-proxy; do logs_have "$name" "$(sed 's/^DATABASE_URL=//' "$W/app-db.env")" && leak=1; done
+[ "$leak" = 0 ] && ok "the app's DATABASE_URL is in no platform log" || ko "DATABASE_URL leaked into a log"
+rm -f "$W/app-db.env"
+
 echo "== apps: another project cannot reach this one"
 # The single host's one organisation is on the Free plan, one project; the operator raises it.
 FREE=$(api "$API/admin/tiers/" | json 'json.dumps(dict([t for t in (d if isinstance(d,list) else d.get("tiers")) if t["tier"]=="FREE"][0], maxProjects=2))')

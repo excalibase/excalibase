@@ -55,8 +55,8 @@ func DocumentDBGatewayName(projectID string) string {
 }
 
 // DocumentDBDatabaseSpec is the database container of a DocumentDB project,
-// for a new project and a restored one alike.
-func DocumentDBDatabaseSpec(projectID, major, dbName, password string, limits ContainerLimits, ports DocumentDBPorts) (ContainerSpec, error) {
+// for a new project and a restored one alike; owner is the project's login.
+func DocumentDBDatabaseSpec(projectID, major, dbName, password, owner string, limits ContainerLimits, ports DocumentDBPorts) (ContainerSpec, error) {
 	image, err := config.DockerDocumentDBImage(major)
 	if err != nil {
 		return ContainerSpec{}, err
@@ -69,7 +69,7 @@ func DocumentDBDatabaseSpec(projectID, major, dbName, password string, limits Co
 			"POSTGRES_DB":       dbName,
 			"POSTGRES_PASSWORD": password,
 		},
-		Cmd:        []string{"bash", "-c", documentDBStartScript()},
+		Cmd:        []string{"bash", "-c", documentDBStartScript(owner)},
 		Ports:      map[string]string{"5432": ports.Postgres, strconv.Itoa(config.DocumentDBGatewayPort): ports.Mongo},
 		Limits:     limits,
 		DataVolume: documentDBDataVolume,
@@ -80,7 +80,7 @@ func DocumentDBDatabaseSpec(projectID, major, dbName, password string, limits Co
 // documentDBStartScript initialises an empty data directory the way the
 // official image's entrypoint does (superuser password, the project's
 // database), writes the platform's pg_hba and runs postgres.
-func documentDBStartScript() string {
+func documentDBStartScript(owner string) string {
 	return `set -eu
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
   pwfile=$(mktemp)
@@ -90,7 +90,7 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
   printf 'CREATE DATABASE "%s";\n' "${POSTGRES_DB//\"/\"\"}" | postgres --single -D "$PGDATA" postgres >/dev/null
 fi
 cat > ` + documentDBHBAFile + ` <<'HBA'
-` + strings.Join(DocumentDBHBA(), "\n") + `
+` + strings.Join(DocumentDBHBA(owner), "\n") + `
 HBA
 exec postgres -D "$PGDATA" ` + strings.Join(documentDBServerArgs(), " ")
 }
@@ -114,12 +114,18 @@ func documentDBServerArgs() []string {
 }
 
 // DocumentDBHBA is the database's pg_hba. Kubernetes' rules for the network
-// and loopback; the socket, which only the container's own postgres user can
-// reach (the gateway shares the network, not the filesystem), is trusted, as
-// the official image trusts it.
-func DocumentDBHBA() []string {
+// and loopback, where the gateway opens sessions as itself and as the roles
+// clients log in as: the owner and the Mongo users, never the superuser. The
+// socket, which only the container's own postgres user can reach (the gateway
+// shares the network, not the filesystem), is trusted, as the official image
+// trusts it. An owner that is not a plain role name gets no line.
+func DocumentDBHBA(owner string) []string {
 	lines := []string{"local all all trust", "local replication all trust"}
-	for _, role := range []string{config.DocumentDBGatewayRole, defaultPostgresSuperuser, "+" + config.DocumentDBMongoUsersGroup} {
+	roles := []string{config.DocumentDBGatewayRole}
+	if domain.ValidateMasterUsername(owner) == nil {
+		roles = append(roles, owner)
+	}
+	for _, role := range append(roles, "+"+config.DocumentDBMongoUsersGroup) {
 		lines = append(lines, "host all "+role+" 127.0.0.1/32 trust", "host all "+role+" ::1/128 trust")
 	}
 	return append(lines,
@@ -149,19 +155,19 @@ const documentDBReadyTimeout = 3 * time.Minute
 // provisionDocumentDB builds a DocumentDB project: the database, the objects
 // the gateway needs, then the gateway. A failure leaves the containers for the
 // provision's failure handling, as a Postgres project's is left.
-func (p *DockerPostgreSQLProvisioner) provisionDocumentDB(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, cb StageCallback) (*ProvisioningResult, error) {
+func (p *DockerPostgreSQLProvisioner) provisionDocumentDB(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, owner string, cb StageCallback) (*ProvisioningResult, error) {
 	limits, err := LimitsForTier(tier)
 	if err != nil {
 		return nil, err
 	}
 	databaseLimits, gatewayLimits := DocumentDBLimits(limits)
 	dbName := databaseNameOrDefault(req.DatabaseName)
-	password := generatePassword()
+	superuserPassword := generatePassword()
 	ports, err := p.DocumentDBPorts(ctx, req.ProjectName)
 	if err != nil {
 		return nil, err
 	}
-	spec, err := DocumentDBDatabaseSpec(req.ProjectName, req.PostgresVersion, dbName, password, databaseLimits, ports)
+	spec, err := DocumentDBDatabaseSpec(req.ProjectName, req.PostgresVersion, dbName, superuserPassword, owner, databaseLimits, ports)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +190,10 @@ func (p *DockerPostgreSQLProvisioner) provisionDocumentDB(ctx context.Context, r
 	if err := p.bootstrapDocumentDB(ctx, containerID); err != nil {
 		return nil, err
 	}
+	ownerPassword, err := p.createOwner(ctx, containerID, dbName, owner)
+	if err != nil {
+		return nil, err
+	}
 	if err := StartDocumentDBGateway(ctx, p.docker, req.ProjectName, containerID, gatewayLimits); err != nil {
 		return nil, err
 	}
@@ -192,8 +202,8 @@ func (p *DockerPostgreSQLProvisioner) provisionDocumentDB(ctx context.Context, r
 		Host:         spec.Name,
 		Port:         5432,
 		DatabaseName: dbName,
-		Username:     defaultPostgresSuperuser,
-		Password:     password,
+		Username:     owner,
+		Password:     ownerPassword,
 		Namespace:    containerID,
 		// Postgres serves no TLS here, as for a Postgres project; the gateway does.
 		SSLMode: "disable",

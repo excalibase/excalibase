@@ -125,8 +125,12 @@ func (p *DockerPostgreSQLProvisioner) SupportedType() domain.DatabaseType {
 
 func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, cb StageCallback) (*ProvisioningResult, error) {
 	cb(domain.StageValidating)
+	owner, err := ownerOf(req)
+	if err != nil {
+		return nil, err
+	}
 	if req.DocumentDB {
-		return p.provisionDocumentDB(ctx, req, tier, cb)
+		return p.provisionDocumentDB(ctx, req, tier, owner, cb)
 	}
 
 	// EXC-408: the major comes from the request. No implicit default — a
@@ -142,7 +146,7 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	}
 
 	dbName := databaseNameOrDefault(req.DatabaseName)
-	password := generatePassword()
+	superuserPassword := generatePassword()
 
 	// Stage: Container creation
 	cb(domain.StageContainerCreation)
@@ -151,7 +155,7 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	env := map[string]string{
 		"POSTGRES_DB":       dbName,
 		"POSTGRES_USER":     defaultPostgresSuperuser,
-		"POSTGRES_PASSWORD": password,
+		"POSTGRES_PASSWORD": superuserPassword,
 	}
 	hostPort, err := p.HostPort(ctx, req.ProjectName)
 	if err != nil {
@@ -184,14 +188,19 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 		return nil, err
 	}
 
+	ownerPassword, err := p.createOwner(ctx, containerID, dbName, owner)
+	if err != nil {
+		return nil, err
+	}
+
 	cb(domain.StageCompleted)
 
 	return &ProvisioningResult{
 		Host:         containerName,
 		Port:         5432,
 		DatabaseName: dbName,
-		Username:     defaultPostgresSuperuser,
-		Password:     password,
+		Username:     owner,
+		Password:     ownerPassword,
 		Namespace:    containerID,
 		// The container serves no TLS: it is reached only on the host's own networks.
 		SSLMode: "disable",

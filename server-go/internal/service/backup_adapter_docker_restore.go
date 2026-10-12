@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -93,7 +94,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		containerID:   recovered.containerID,
 		containerName: recovered.spec.containerName,
 		dbName:        recovered.spec.dbName,
-		password:      recovered.spec.newPassword,
+		password:      generateRestorePassword(),
 		backupID:      recovered.backupID,
 		backup:        plan.Backup,
 	})
@@ -167,7 +168,14 @@ func (a *DockerBackupAdapter) recoverContainer(ctx context.Context, dc provision
 	return recovered{containerID: containerID, backupID: base.ID, owner: owner, spec: spec}, nil
 }
 
+// errRestoreSourceHasNoOwner refuses a source with no owner login on record:
+// the copy would have no login to register.
+var errRestoreSourceHasNoOwner = errors.New("the source project has no owner login on record")
+
 func recoverySpec(source *domain.DatabaseInstance, req domain.RestoreRequest, target recoveryTarget, body io.Reader) (restoreContainerSpec, error) {
+	if source.Username == "" {
+		return restoreContainerSpec{}, fmt.Errorf("restore %s: %w", source.ProjectID, errRestoreSourceHasNoOwner)
+	}
 	dbName := source.DatabaseName
 	if dbName == "" {
 		dbName = defaultRestoreDatabase
@@ -183,6 +191,7 @@ func recoverySpec(source *domain.DatabaseInstance, req domain.RestoreRequest, ta
 		limits:          target.limits,
 		documentDB:      source.DocumentDB,
 		major:           source.PostgresVersion,
+		owner:           source.Username,
 		ports:           target.ports,
 	}
 	if !source.DocumentDB {
@@ -246,7 +255,7 @@ func restoredDockerInstance(src *domain.DatabaseInstance, spec restoredDockerSpe
 		Host:                  spec.containerName,
 		Port:                  &port,
 		DatabaseName:          spec.dbName,
-		Username:              defaultPostgresSuperuser,
+		Username:              src.Username,
 		Password:              spec.password,
 		PostgresVersion:       src.PostgresVersion,
 		RestoredFromProjectID: src.ProjectID,
@@ -359,6 +368,8 @@ type restoreContainerSpec struct {
 	// documentDB restores into the catalogue image of major with a gateway.
 	documentDB bool
 	major      string
+	// owner is the project's login, which a DocumentDB gateway opens sessions as.
+	owner string
 	// ports are the host ports it publishes on; "" for any.
 	ports provisioner.DocumentDBPorts
 }
@@ -534,8 +545,9 @@ func (a *DockerBackupAdapter) addWALToTar(ctx context.Context, tw *tar.Writer, o
 	return nil
 }
 
-// generateRestorePassword produces the restored project's superuser password;
-// registration resets the admin role to it and files it in vault.
+// generateRestorePassword produces a restored project's random passwords: the
+// container's superuser placeholder, and the owner's, which registration
+// resets the owner role to and files in vault.
 func generateRestorePassword() string {
 	return generatePassword(32)
 }

@@ -93,6 +93,13 @@ secure=$(mysql_on "$MPID" host REQUIRED "SELECT @@require_secure_transport")
 case "$secure $out" in "1 "*"insecure transport"*|"1 "*"Access denied"*) ok "plaintext is refused (require_secure_transport on)" ;; *) ko "plaintext: $secure ${out:0:300}" ;; esac
 out=$(mysql_on "$MPID" app REQUIRED "SELECT COUNT(*) FROM notes")
 [ "$out" = 3 ] && ok "an app container reads it over TLS" || ko "app client: ${out:0:300}"
+# EXC-604: the login apps get is the project's own user, never root, and holds nothing beyond the project's database.
+who=$(mysql_on "$MPID" app REQUIRED "SELECT CURRENT_USER()")
+case "$who" in root@*|"") ko "the app login is '$who'" ;; *) ok "the app login is $who, not root" ;; esac
+grants=$(mysql_on "$MPID" app REQUIRED "SHOW GRANTS")
+case "$grants" in *" ON *.* "*ALL*|*"ALL PRIVILEGES ON *.*"*|*"SUPER"*) ko "the app login holds global privileges: ${grants:0:300}" ;; *) ok "no global privileges for the app login" ;; esac
+out=$(mysql_on "$MPID" app REQUIRED "SELECT COUNT(*) FROM excalibase.migrations")
+case "$out" in *"denied"*) ok "the app login is refused on the platform database" ;; *) ko "platform database: ${out:0:300}" ;; esac
 
 echo "== mysql backups and restores"
 B1=$(backup_now "$MPID")
