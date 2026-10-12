@@ -19,8 +19,8 @@ func authGuide(urls map[string]string) map[string]any {
 		"userIdType": "userId is numeric (the user's database id, e.g. 42) but travels as a string claim (\"42\"), never a JSON number: " +
 			"test_auth_flow shows the real claims of a test sign-in. See permissions.ownerColumnType for comparing it with an owner column.",
 		"verifyOffline": "A backend verifies an access token without calling auth: fetch the public keys (JWKS) from " + auth + "/.well-known/jwks.json, " +
-			"check the ES256 signature and exp, and that aud includes this project's audience (the aud of a token test_auth_flow shows). " +
-			"Cache the keys and fetch them again when a token names a kid you do not have.",
+			"check the ES256 signature and exp, and that aud includes exactly this project's audience (excalibase:<projectId> by default; the aud of a token test_auth_flow shows): " +
+			"the key signs every project's tokens, so the aud check is what keeps another project's users out. Cache the keys for a few minutes and fetch them again when a signature does not verify.",
 		"cors": "The browser calls these from the page's origin, so that origin must be on the project's CORS list (list_cors_origins, add_cors_origin); " +
 			"test_api_request with origin checks the sign-in call too.",
 		"settings": "Email verification and the site URL in verification and password-reset links are project sign-in settings; MCP does not change them. " +

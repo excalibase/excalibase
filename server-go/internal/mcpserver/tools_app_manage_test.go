@@ -193,3 +193,16 @@ func TestUpdateAppReportsAnUndeployedAppAsNotDeployed(t *testing.T) {
 		t.Fatalf("status = %v", app["status"])
 	}
 }
+
+// The change is stored before the status is read; a failed read must not make
+// the agent retry a change that already happened.
+func TestUpdateAppKeepsTheStoredChangeWhenTheStatusCannotBeRead(t *testing.T) {
+	routes := newFakeRoutes()
+	routes.on(http.MethodGet, projectsA+"/apps/web/", 200, storedWeb)
+	routes.on(http.MethodPatch, projectsA+"/apps/web/", 200, `{"id":"web","status":"PROVISIONING","version":8}`)
+	routes.on(http.MethodGet, projectsA+"/apps/web/deploys", 500, `{"error":"boom"}`)
+	out := updateSession(t, routes)(map[string]any{"port": 3000})
+	if out["app"] == nil || out["statusError"] == nil {
+		t.Fatalf("out = %v", out)
+	}
+}

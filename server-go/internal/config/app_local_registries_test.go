@@ -32,7 +32,8 @@ func TestValidate_RefusesLocalRegistriesInCloudMode(t *testing.T) {
 }
 
 func TestValidate_RefusesALocalRegistryThatIsNotAHost(t *testing.T) {
-	for _, bad := range []string{"http://localhost:5000", "localhost:5000/team", "localhost:99999", "a b"} {
+	for _, bad := range []string{"http://localhost:5000", "localhost:5000/team", "localhost:99999", "a b",
+		"docker.io", "index.docker.io", "registry-1.docker.io"} {
 		cfg := AppConfig{AppLocalRegistries: []string{bad}}
 		if err := cfg.validateAppLocalRegistries(); err == nil {
 			t.Errorf("%q was accepted", bad)

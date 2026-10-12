@@ -24,6 +24,10 @@ func loadAppLocalRegistries() []string {
 	return hosts
 }
 
+// dockerHubHosts are Docker Hub's names: listing one would skip the digest
+// check for every Hub image.
+var dockerHubHosts = map[string]bool{"docker.io": true, "index.docker.io": true, "registry-1.docker.io": true}
+
 func (c AppConfig) validateAppLocalRegistries() error {
 	if len(c.AppLocalRegistries) == 0 {
 		return nil
@@ -32,6 +36,9 @@ func (c AppConfig) validateAppLocalRegistries() error {
 		return fmt.Errorf("APP_LOCAL_REGISTRIES is for a self-hosted platform: in cloud mode it would let any tenant deploy from those addresses")
 	}
 	for _, host := range c.AppLocalRegistries {
+		if dockerHubHosts[host] {
+			return fmt.Errorf("APP_LOCAL_REGISTRIES: %q is Docker Hub, not a registry on this host", host)
+		}
 		match := registryHost.FindStringSubmatch(host)
 		if match == nil {
 			return fmt.Errorf("APP_LOCAL_REGISTRIES: %q is not a registry host (host or host:port)", host)

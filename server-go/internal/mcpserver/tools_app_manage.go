@@ -69,7 +69,7 @@ func updateApp(ctx context.Context, c *call, in updateAppArgs) (any, error) {
 			return nil, err
 		}
 		if _, err := markNotDeployed(ctx, c, projectID, &app.appView); err != nil {
-			return nil, err
+			out["statusError"] = "the change is stored, but whether the app has been deployed could not be read: " + err.Error()
 		}
 		out["app"] = app.appView
 		out["next"] = "the change is stored; call deploy_app to run it"
