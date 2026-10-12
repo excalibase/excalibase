@@ -68,6 +68,21 @@ files.{$EXCALIBASE_DOMAIN} {
 	}
 }
 
+# The root of the edge's own CA (EXCALIBASE_TLS=internal; absent with Let's Encrypt): a public
+# certificate provisioning hands to apps so their server-side calls to api.<domain> verify (EXC-608).
+# Port 8081 is not published: only the platform's and the projects' internal networks reach it.
+:8081 {
+	handle /root.crt {
+		# The directory also holds the CA's keys: the server may only ever open this one file.
+		rewrite * /root.crt
+		root * /data/caddy/pki/authorities/local
+		file_server
+	}
+	handle {
+		respond 404
+	}
+}
+
 # Apps (EXC-575): one file per app, written by provisioning when an app is
 # deployed, paused, given a domain or deleted.
 import /etc/caddy/apps/*.caddy

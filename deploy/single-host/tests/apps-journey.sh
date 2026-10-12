@@ -74,6 +74,25 @@ for i in $(seq 40); do pre=$(preflight); grep -qixF "access-control-allow-origin
 grep -qixF "access-control-allow-origin: $MURL" <<< "$pre" && ok "a browser preflight from the app's https origin is allowed" || ko "preflight from $MURL: $(head -c 400 <<< "$pre")"
 [ -n "$MID" ] && api -X DELETE "$API/projects/$PID/apps/$MID/" -d '{}' -o /dev/null
 
+echo "== apps: an app's server calls the platform by its public name, and MCP's probes reach it (EXC-608)"
+NODE_IMAGE=docker.io/library/node@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+N=$(api -X POST "$API/projects/$PID/apps/" -d '{"name":"caller","image":"'"$NODE_IMAGE"'","port":8080,"healthCheckPath":"/","replicas":1,"args":["node","-e","require(\"http\").createServer((q,s)=>s.end(\"ok\")).listen(8080)"]}')
+NID=$(echo "$N" | json 'd["id"]')
+api -X POST "$API/projects/$PID/apps/$NID/deploy" >/dev/null
+[ "$(wait_deploy "$PID" "$NID")" = succeeded ] || ko "caller app: ${N:0:200} $(deploys "$PID" "$NID" | head -c 300)"
+NC=$(app_container "$NID")
+# A server-side fetch, as the app's own code makes it: name resolution, the route and the certificate.
+called=$($DOCKER exec "$NC" node -e '
+fetch(process.argv[1], {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({query: "{__typename}"})})
+  .then(r => r.text().then(t => console.log(r.status, t)))
+  .catch(e => console.log("ERR", (e.cause && (e.cause.code || e.cause.message)) || e.message))' "https://api.localhost/$PID/graphql" 2>&1)
+case "$called" in "200 "*__typename*) ok "the app's server reaches https://api.localhost and trusts its certificate" ;; *) ko "server-side call from the app: ${called:0:300}" ;; esac
+st=$(mcp_call get_deploy_status "{\"app_id\":\"$NID\"}")
+[ "$(echo "$st" | json 'd["state"]')" = succeeded ] && ok "get_deploy_status: the app's URL answers" || ko "get_deploy_status: ${st:0:400}"
+pr=$(mcp_call test_api_request "{\"api\":\"graphql\",\"body\":\"{\\\"query\\\":\\\"{__typename}\\\"}\"}")
+case "$pr" in *__typename*) ok "test_api_request reaches the data API" ;; *) ko "test_api_request: ${pr:0:400}" ;; esac
+api -X DELETE "$API/projects/$PID/apps/$NID/" -d '{}' -o /dev/null
+
 echo "== apps: a second revision, then a rollback"
 FIRST=$(deploys "$PID" "$AID" | json 'd[0]["id"]')
 VER=$(api "$API/projects/$PID/apps/$AID/" | json 'd["version"]')

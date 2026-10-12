@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,19 +49,38 @@ func (r *Runtime) ensureProjectNetwork(ctx context.Context, project, database st
 	if !public {
 		return nil
 	}
-	if err := r.join(ctx, inspect, r.opts.EdgeContainer); err != nil {
+	if err := r.joinEdge(ctx, inspect); err != nil {
 		return fmt.Errorf("attach the edge to the project's network: %w", err)
 	}
 	return nil
 }
 
+// joinEdge puts the edge on the network under the platform's hostnames, so apps reach them through it.
+func (r *Runtime) joinEdge(ctx context.Context, inspect network.Inspect) error {
+	if isMember(inspect, r.opts.EdgeContainer) {
+		return nil
+	}
+	return r.connect(ctx, inspect.Name, r.opts.EdgeContainer, &network.EndpointSettings{Aliases: slices.Clone(r.opts.EdgeAliases)})
+}
+
 func (r *Runtime) join(ctx context.Context, inspect network.Inspect, container string) error {
+	if isMember(inspect, container) {
+		return nil
+	}
+	return r.connect(ctx, inspect.Name, container, nil)
+}
+
+func isMember(inspect network.Inspect, container string) bool {
 	for id, member := range inspect.Containers {
 		if id == container || member.Name == container {
-			return nil
+			return true
 		}
 	}
-	err := r.engine.NetworkConnect(ctx, inspect.Name, container, nil)
+	return false
+}
+
+func (r *Runtime) connect(ctx context.Context, networkName, container string, settings *network.EndpointSettings) error {
+	err := r.engine.NetworkConnect(ctx, networkName, container, settings)
 	if err != nil && !alreadyMember(err) {
 		return err
 	}

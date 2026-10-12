@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"log"
 	"net"
 	"net/http"
@@ -85,6 +86,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if edge != "" && !containerName.MatchString(edge) {
 		return config{}, fmt.Errorf("PROXY_EDGE_CONTAINER %q is not a container name", edge)
 	}
+	aliases, err := edgeAliases(getenv("PROXY_EDGE_ALIASES"), edge)
+	if err != nil {
+		return config{}, err
+	}
 	joinImages, err := digestPinned(getenv, "PROXY_NETNS_JOIN_IMAGES")
 	if err != nil {
 		return config{}, err
@@ -110,9 +115,24 @@ func loadConfig(getenv func(string) string) (config, error) {
 			Runtimes:        splitList(getenv("PROXY_RUNTIMES")),
 			ContainerPrefix: containerPrefix,
 			EdgeContainer:   edge,
+			EdgeAliases:     aliases,
 			NetnsJoinImages: joinImages,
 		},
 	}, nil
+}
+
+// edgeAliases reads the hostnames the edge may answer to on project networks; they need the edge.
+func edgeAliases(raw, edge string) ([]string, error) {
+	aliases := splitList(raw)
+	if len(aliases) > 0 && edge == "" {
+		return nil, errors.New("PROXY_EDGE_ALIASES needs PROXY_EDGE_CONTAINER: only the edge may take a name")
+	}
+	for _, alias := range aliases {
+		if problems := validation.IsDNS1123Subdomain(alias); len(problems) > 0 {
+			return nil, fmt.Errorf("PROXY_EDGE_ALIASES: %q is not a hostname: %s", alias, strings.Join(problems, "; "))
+		}
+	}
+	return aliases, nil
 }
 
 // hostPortRange reads "low-high", the host ports tenants may be published

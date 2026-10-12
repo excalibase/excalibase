@@ -48,6 +48,11 @@ type Options struct {
 	// cannot fail; EdgeRoots verifies what it serves otherwise (nil: the system's roots).
 	EdgeIssuesLocally bool
 	EdgeRoots         *x509.CertPool
+	// EdgeAliases are the platform's hostnames (api., studio., files.<domain>): on a project network
+	// they name the edge, so an app calling the platform by its public name reaches it (EXC-608).
+	EdgeAliases []string
+	// EdgeCA reads the root of the edge's own CA, which apps are given when EdgeIssuesLocally.
+	EdgeCA func(context.Context) ([]byte, error)
 	// RoutesDir holds the edge's route files and each app's runtime record.
 	RoutesDir string
 	// SandboxRuntime is the OCI runtime apps run under; empty is the operator's opt-out.

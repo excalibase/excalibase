@@ -28,6 +28,7 @@ type fakeContainer struct {
 	config   container.Config
 	host     container.HostConfig
 	networks []string
+	aliases  map[string][]string // network -> aliases it was connected with
 	state    string
 	restarts int
 	created  time.Time
@@ -210,7 +211,7 @@ func (f *fakeEngine) ContainerInspect(_ context.Context, id string) (container.I
 	config, host := c.config, c.host
 	networks := map[string]*network.EndpointSettings{}
 	for _, net := range c.networks {
-		networks[net] = &network.EndpointSettings{}
+		networks[net] = &network.EndpointSettings{Aliases: slices.Clone(c.aliases[net])}
 	}
 	return container.InspectResponse{
 		ContainerJSONBase: &container.ContainerJSONBase{ID: c.id, Name: "/" + c.name, RestartCount: c.restarts, HostConfig: &host,
@@ -368,7 +369,7 @@ func (f *fakeEngine) NetworkRemove(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeEngine) NetworkConnect(_ context.Context, name, ref string, _ *network.EndpointSettings) error {
+func (f *fakeEngine) NetworkConnect(_ context.Context, name, ref string, settings *network.EndpointSettings) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	net, ok := f.networks[name]
@@ -384,6 +385,12 @@ func (f *fakeEngine) NetworkConnect(_ context.Context, name, ref string, _ *netw
 	}
 	net.members = append(net.members, c.id)
 	c.networks = append(c.networks, name)
+	if settings != nil && len(settings.Aliases) > 0 {
+		if c.aliases == nil {
+			c.aliases = map[string][]string{}
+		}
+		c.aliases[name] = slices.Clone(settings.Aliases)
+	}
 	f.record("connect %s %s", name, c.name)
 	return nil
 }
@@ -401,6 +408,7 @@ func (f *fakeEngine) NetworkDisconnect(_ context.Context, name, ref string, _ bo
 	}
 	net.members = slices.DeleteFunc(net.members, func(m string) bool { return m == c.id })
 	c.networks = slices.DeleteFunc(c.networks, func(n string) bool { return n == name })
+	delete(c.aliases, name)
 	f.record("disconnect %s %s", name, c.name)
 	return nil
 }

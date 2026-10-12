@@ -30,7 +30,12 @@ type SingleHostAppsConfig struct {
 	EdgeRoutesDir               string
 	EdgeTLSAddress              string
 	// EdgeTLS is how the edge gets certificates: "internal" (its own CA) or an ACME account address.
-	EdgeTLS     string
+	EdgeTLS string
+	// EdgeCAURL is where the edge serves its own CA's root, for apps and probes to trust (EXC-608).
+	EdgeCAURL string
+	// EdgeAliases are the platform's hostnames the edge answers to on project networks (EXC-608);
+	// the engine proxy admits exactly these.
+	EdgeAliases []string
 	ProbeBinary string
 }
 
@@ -46,6 +51,8 @@ func loadSingleHostApps() SingleHostAppsConfig {
 		EdgeRoutesDir:  strings.TrimSpace(os.Getenv("APP_EDGE_ROUTES_DIR")),
 		EdgeTLSAddress: strings.TrimSpace(os.Getenv("APP_EDGE_TLS_ADDR")),
 		EdgeTLS:        strings.TrimSpace(os.Getenv("APP_EDGE_TLS")),
+		EdgeCAURL:      strings.TrimSpace(os.Getenv("APP_EDGE_CA_URL")),
+		EdgeAliases:    splitTrimmed(os.Getenv("APP_EDGE_ALIASES")),
 		ProbeBinary:    envOr("APP_PROBE_BINARY", defaultAppProbeBinary),
 	}
 	if cfg.SandboxRuntime == appSandboxOptOut {
@@ -74,9 +81,17 @@ func (c AppConfig) validateSingleHostApps() error {
 		{"APP_EDGE_TLS_ADDR", apps.EdgeTLSAddress}, {"APP_EDGE_TLS", apps.EdgeTLS}, {"APP_PROBE_BINARY", apps.ProbeBinary},
 		{"APP_DISK_TOOLS_IMAGE", c.AppDiskToolsImage},
 	}
+	if apps.EdgeIssuesLocally() {
+		required = append(required, struct{ env, value string }{"APP_EDGE_CA_URL", apps.EdgeCAURL})
+	}
 	for _, setting := range required {
 		if setting.value == "" {
 			return fmt.Errorf("APP_HOSTING_ENABLED on a single host needs %s", setting.env)
+		}
+	}
+	for _, alias := range apps.EdgeAliases {
+		if problems := validation.IsDNS1123Subdomain(alias); len(problems) > 0 {
+			return fmt.Errorf("APP_EDGE_ALIASES %q: %s", alias, strings.Join(problems, "; "))
 		}
 	}
 	if problems := validation.IsDNS1123Subdomain(c.AppDomain); len(problems) > 0 {
@@ -89,4 +104,15 @@ func (c AppConfig) validateSingleHostApps() error {
 		return fmt.Errorf("APP_EDGE_TLS_ADDR %q must be host:port: %w", apps.EdgeTLSAddress, err)
 	}
 	return nil
+}
+
+// splitTrimmed reads a comma-separated list, dropping blanks.
+func splitTrimmed(raw string) []string {
+	var items []string
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			items = append(items, item)
+		}
+	}
+	return items
 }

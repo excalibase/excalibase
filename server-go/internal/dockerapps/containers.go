@@ -24,6 +24,10 @@ const (
 	// probePath is where the readiness probe is copied in before a container starts.
 	probeDir  = ".excalibase"
 	probePath = "/" + probeDir + "/probe"
+	// edgeCAPath holds the edge's own CA root in an app when the edge issues locally; Node reads it
+	// through NODE_EXTRA_CA_CERTS, other runtimes can be pointed at the same file.
+	edgeCAPath   = "/" + probeDir + "/edge-ca.crt"
+	nodeExtraCAs = "NODE_EXTRA_CA_CERTS"
 	// execWait bounds one probe; the probe itself times out after three seconds.
 	execWait = 10 * time.Second
 )
@@ -119,7 +123,11 @@ func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
 
 // createAppContainer creates one replica with the probe copied in; it is not started.
 func (r *Runtime) createAppContainer(ctx context.Context, spec containerSpec, replica int) (string, error) {
-	config := &container.Config{Image: spec.Image, Env: spec.Env, Labels: r.appLabels(spec, replica)}
+	edgeCA, err := r.edgeCA(ctx)
+	if err != nil {
+		return "", err
+	}
+	config := &container.Config{Image: spec.Image, Env: withEdgeCA(spec.Env, edgeCA), Labels: r.appLabels(spec, replica)}
 	if len(spec.Args) > 0 {
 		config.Cmd = spec.Args
 	}
@@ -129,13 +137,33 @@ func (r *Runtime) createAppContainer(ctx context.Context, spec containerSpec, re
 	if err != nil {
 		return "", fmt.Errorf("create %s: %w", name, err)
 	}
-	if err := r.injectProbe(ctx, created.ID); err != nil {
+	if err := r.injectProbe(ctx, created.ID, edgeCA); err != nil {
 		return "", errors.Join(err, r.remove(ctx, created.ID))
 	}
 	return created.ID, nil
 }
 
-func (r *Runtime) injectProbe(ctx context.Context, id string) error {
+// edgeCA is the edge's own CA root when it issues locally, else nil: then a public CA signs its certificates.
+func (r *Runtime) edgeCA(ctx context.Context) ([]byte, error) {
+	if !r.opts.EdgeIssuesLocally || r.opts.EdgeCA == nil {
+		return nil, nil
+	}
+	root, err := r.opts.EdgeCA(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the edge's CA root for the app: %w", err)
+	}
+	return root, nil
+}
+
+// withEdgeCA points Node at the edge's CA root, unless the app names its own extra CAs.
+func withEdgeCA(env []string, edgeCA []byte) []string {
+	if edgeCA == nil || slices.ContainsFunc(env, func(entry string) bool { return strings.HasPrefix(entry, nodeExtraCAs+"=") }) {
+		return env
+	}
+	return append(slices.Clone(env), nodeExtraCAs+"="+edgeCAPath)
+}
+
+func (r *Runtime) injectProbe(ctx context.Context, id string, edgeCA []byte) error {
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
 	entries := []struct {
@@ -144,6 +172,12 @@ func (r *Runtime) injectProbe(ctx context.Context, id string) error {
 	}{
 		{tar.Header{Name: probeDir + "/", Mode: 0o755, Typeflag: tar.TypeDir}, nil},
 		{tar.Header{Name: probeDir + "/probe", Mode: 0o755, Typeflag: tar.TypeReg, Size: int64(len(r.opts.ProbeBinary))}, r.opts.ProbeBinary},
+	}
+	if edgeCA != nil {
+		entries = append(entries, struct {
+			header tar.Header
+			body   []byte
+		}{tar.Header{Name: probeDir + "/edge-ca.crt", Mode: 0o644, Typeflag: tar.TypeReg, Size: int64(len(edgeCA))}, edgeCA})
 	}
 	for _, entry := range entries {
 		if err := writer.WriteHeader(&entry.header); err != nil {

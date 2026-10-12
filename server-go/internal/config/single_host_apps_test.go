@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -13,6 +14,7 @@ func singleHostHosting() AppConfig {
 			SandboxRuntime: "runsc", NetworkPrefix: "excalibase-net-", VolumePrefix: "excalibase-vol-",
 			EdgeContainer: "excalibase-edge", EdgeRoutesDir: "/var/lib/excalibase/app-routes",
 			EdgeTLSAddress: "edge:443", ProbeBinary: "/usr/local/bin/excalibase-app-probe", EdgeTLS: "internal",
+			EdgeCAURL: "http://edge:8081/root.crt", EdgeAliases: []string{"studio.example.com", "api.example.com"},
 		},
 	}
 }
@@ -23,9 +25,14 @@ func TestLoadSingleHostApps(t *testing.T) {
 	t.Setenv("APP_NETWORK_PREFIX", "excalibase-net-")
 	t.Setenv("APP_EDGE_TLS_ADDR", "edge:443")
 	t.Setenv("APP_EDGE_TLS", "internal")
+	t.Setenv("APP_EDGE_CA_URL", "http://edge:8081/root.crt")
+	t.Setenv("APP_EDGE_ALIASES", " studio.localhost, api.localhost ,files.localhost")
 	cfg := Load().SingleHostApps
+	if !slices.Equal(cfg.EdgeAliases, []string{"studio.localhost", "api.localhost", "files.localhost"}) {
+		t.Fatalf("edge aliases %v", cfg.EdgeAliases)
+	}
 	if cfg.SandboxRuntime != "" || !cfg.Egress || cfg.NetworkPrefix != "excalibase-net-" || cfg.EdgeTLSAddress != "edge:443" ||
-		!cfg.EdgeIssuesLocally() {
+		!cfg.EdgeIssuesLocally() || cfg.EdgeCAURL != "http://edge:8081/root.crt" {
 		t.Fatalf("loaded %+v", cfg)
 	}
 	t.Setenv("APP_SANDBOX_RUNTIME", "")
@@ -51,6 +58,8 @@ func TestValidateSingleHostAppHosting(t *testing.T) {
 		"APP_DISK_TOOLS_IMAGE": func(c *AppConfig) { c.AppDiskToolsImage = "" },
 		"APP_EGRESS":           func(c *AppConfig) { c.SingleHostApps.EgressInvalid = "anything" },
 		"APP_EDGE_TLS":         func(c *AppConfig) { c.SingleHostApps.EdgeTLS = "" },
+		"APP_EDGE_CA_URL":      func(c *AppConfig) { c.SingleHostApps.EdgeCAURL = "" },
+		"APP_EDGE_ALIASES":     func(c *AppConfig) { c.SingleHostApps.EdgeAliases = []string{"api.example.com", "not a host"} },
 	}
 	for env, mutate := range cases {
 		cfg := singleHostHosting()
@@ -64,6 +73,15 @@ func TestValidateSingleHostAppHosting(t *testing.T) {
 	off.AppHostingEnabled, off.SingleHostApps = false, SingleHostAppsConfig{}
 	if err := off.Validate(); err != nil {
 		t.Fatalf("with apps off nothing is needed: %v", err)
+	}
+}
+
+// An edge on a public CA needs no root handed out.
+func TestAnACMEEdgeNeedsNoCAURL(t *testing.T) {
+	cfg := singleHostHosting()
+	cfg.SingleHostApps.EdgeTLS, cfg.SingleHostApps.EdgeCAURL = "admin@example.com", ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 

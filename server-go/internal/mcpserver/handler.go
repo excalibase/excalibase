@@ -33,6 +33,8 @@ type Settings struct {
 	// DataPlaneURL is where this server itself reaches the data plane for
 	// test_api_request; empty turns the probe off.
 	DataPlaneURL string
+	// Edge, on a single host, is where the platform's own names are served; nil on Kubernetes.
+	Edge *EdgeRoute
 }
 
 // AuditLogger records one entry per tool call.
