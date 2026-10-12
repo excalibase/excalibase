@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
 // DefaultPublicationName is the production-default publication name.
@@ -12,12 +14,11 @@ import (
 const DefaultPublicationName = "cdc_watcher_pub"
 
 // realtimeUserSchemaPredicate decides which schemas hold user tables that may
-// be published, over pg_namespace aliased n. The listing spells it out as a
+// be published, over pg_namespace aliased n: the same user schemas the owner
+// is given access to. The listing spells it out as a
 // literal (a test keeps them equal) so the page never offers a table the
 // provisioning-time function refuses.
-const realtimeUserSchemaPredicate = `n.nspname NOT IN ('auth', 'excalibase', 'information_schema')
-    AND NOT starts_with(n.nspname, 'pg_')
-    AND NOT starts_with(n.nspname, 'excalibase_')`
+const realtimeUserSchemaPredicate = pgroles.UserSchemaPredicate
 
 const setRealtimeTableSQL = `SELECT excalibase.set_realtime_table($1, $2, $3)`
 

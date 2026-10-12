@@ -193,3 +193,27 @@ func TestBuildProjectRoleSQL_RealtimeTablesPublishCompleteOldRows(t *testing.T) 
 		}
 	}
 }
+
+// A migration runs as excalibase_app; CREATE SCHEMA needs CREATE on the
+// database (EXC-599).
+func TestBuildProjectRoleSQL_PlatformRoleMayCreateSchemas(t *testing.T) {
+	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
+	if !strings.Contains(sql, `GRANT CREATE ON DATABASE "app" TO "excalibase_app";`) {
+		t.Fatalf("excalibase_app cannot create a schema:\n%s", sql)
+	}
+}
+
+// Every registration shares the platform's user tables with the owner, after
+// the customer role functions exist (EXC-599).
+func TestProjectRoleSQL_SharesPlatformTablesWithTheOwner(t *testing.T) {
+	spec := projectRoleSpec{databaseName: "app", adminUsername: "owner_x"}
+	creds := projectRoleCredentials{authPassword: "a", appPassword: "b", watcherPassword: "c"}
+	sql := projectRoleSQL(spec, creds, "pub")
+	access := strings.Index(sql, pgroles.OwnerAccessSQL("owner_x"))
+	if access < 0 {
+		t.Fatal("owner access is not installed")
+	}
+	if functions := strings.Index(sql, pgroles.CustomerRoleSQL("owner_x")); access < functions {
+		t.Fatal("owner access is installed before the reserved schema grants")
+	}
+}

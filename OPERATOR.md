@@ -1022,6 +1022,19 @@ signal consumers need to drop a cached credential rather than wait out their
 TTL; wiring it up on the engine and the auth service is tracked separately,
 so for now assume those caches still converge on their own TTL.
 
+## 6.7. Who owns migrated tables
+
+Migrations, Studio and the SQL editor run as `excalibase_app`, which owns what
+they create and holds CREATE on the database, so a migration can create a
+schema. The project's own login (the one `DATABASE_URL` hands an app
+container) gets every privilege on those tables and sequences, in `public` and
+in any schema `excalibase_app` creates (an event trigger shares a new schema
+as it is created). It gets no membership in `excalibase_app` and nothing in the
+reserved `auth`, `excalibase` and `excalibase_*` schemas. Ownership stays with
+the platform role, so the project login cannot ALTER or DROP a migrated table;
+change the schema through migrations. Registration and restore apply this, so
+a project created before it gets it on its next restore.
+
 ## 7. Image upgrade
 
 The 5 images that ship in lockstep:
