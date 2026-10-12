@@ -27,6 +27,10 @@ type functionPermissionArgs struct {
 func dbFunctionTools() []entry {
 	return []entry{
 		tool("track_db_function", "Serve a database function through the API (REST <rest>/rpc/<name>, GraphQL root field) and let the given roles call it. "+
+			"The function must return rows of a table or view (RETURNS SETOF <table|view>, or one <table|view> row): "+
+			"RETURNS TABLE(...) is refused with a 400, because permissions apply to a row type. For a custom shape, "+
+			"CREATE VIEW with those columns, give the view a select permission, and return SETOF that view. "+
+			"In GraphQL its arguments go directly on the field (publicMySearch(search_text: \"x\")), not in Hasura's args: {...}. "+
 			"Create the function first (apply_migration). A function that only reads (STABLE/IMMUTABLE) is a query, any other a mutation. "+
 			"A SECURITY DEFINER function runs with its owner's privileges, so check its arguments.", writeTool, trackDBFunction),
 		tool("set_db_function_permission", "Let one role call a tracked database function, or take that away.", writeTool, setDBFunctionPermission),

@@ -780,6 +780,8 @@ func TestToolDescriptionsSteerTheClient(t *testing.T) {
 		"list_apps":           {"same build"},
 		"get_graphql_schema":  {"Changes"},
 		"add_cors_origin":     {"capacitor://localhost", "tauri://localhost", "null"},
+		// EXC-610: the return shape the API needs is said before the 400 that refuses RETURNS TABLE.
+		"track_db_function": {"SETOF", "RETURNS TABLE", "view", "directly on the field"},
 	}
 	for _, tool := range listed.Tools {
 		for _, want := range wants[tool.Name] {

@@ -74,7 +74,11 @@ func (s *PostgresAppStore) Create(app *App, maxApps int) error {
 		return fmt.Errorf("count project apps: %w", err)
 	}
 	if held >= maxApps {
-		return AppLimitError{Limit: maxApps}
+		holders, err := slotHolders(tx, app.ProjectID)
+		if err != nil {
+			return err
+		}
+		return AppLimitError{Limit: maxApps, Holders: holders}
 	}
 
 	blob, err := json.Marshal(app)
@@ -401,4 +405,24 @@ func decodeApp(blob []byte) (*App, error) {
 		return nil, fmt.Errorf("unmarshal app: %w", err)
 	}
 	return &app, nil
+}
+
+// slotHolders are the project's apps in the order they were created, for the limit's refusal to name.
+func slotHolders(tx *sql.Tx, projectID string) ([]SlotHolder, error) {
+	rows, err := tx.Query(`
+SELECT a.name, EXISTS (SELECT 1 FROM app_deploys d WHERE d.app_id = a.id AND d.status = $2)
+FROM apps a WHERE a.project_id = $1 ORDER BY a.created_at, a.name`, projectID, DeployStatusSucceeded)
+	if err != nil {
+		return nil, fmt.Errorf("list the apps holding the project's slots: %w", err)
+	}
+	defer rows.Close()
+	var holders []SlotHolder
+	for rows.Next() {
+		var holder SlotHolder
+		if err := rows.Scan(&holder.Name, &holder.Deployed); err != nil {
+			return nil, fmt.Errorf("read an app holding a slot: %w", err)
+		}
+		holders = append(holders, holder)
+	}
+	return holders, rows.Err()
 }

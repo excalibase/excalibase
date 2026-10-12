@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Store is the persistence contract for customer applications.
@@ -64,11 +65,32 @@ type Store interface {
 // Compile-time check.
 var _ Store = (*PostgresAppStore)(nil)
 
-// AppLimitError names the plan's limit the create ran into.
-type AppLimitError struct{ Limit int }
+// AppLimitError names the plan's limit the create ran into and the apps holding its slots.
+type AppLimitError struct {
+	Limit   int
+	Holders []SlotHolder
+}
+
+// SlotHolder is one app counted against the plan's limit; Deployed is false until a deploy has succeeded.
+type SlotHolder struct {
+	Name     string
+	Deployed bool
+}
 
 func (e AppLimitError) Error() string {
-	return fmt.Sprintf("the project already has %d apps, the most its plan allows; delete one or move the organisation to a larger plan", e.Limit)
+	message := fmt.Sprintf("the project already has %d apps, the most its plan allows", e.Limit)
+	if len(e.Holders) > 0 {
+		names := make([]string, 0, len(e.Holders))
+		for _, holder := range e.Holders {
+			if holder.Deployed {
+				names = append(names, holder.Name)
+			} else {
+				names = append(names, holder.Name+" (never deployed)")
+			}
+		}
+		message += ": " + strings.Join(names, ", ") + ". An app holds a slot from creation, deployed or not"
+	}
+	return message + "; delete one or move the organisation to a larger plan"
 }
 
 func (e AppLimitError) Is(target error) bool { return target == ErrAppLimitReached }
