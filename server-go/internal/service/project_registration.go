@@ -375,6 +375,7 @@ func (s *ProvisioningService) execProjectRoleSQL(ctx context.Context, spec proje
 func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicationName string) string {
 	roleSQL := pgroles.PinnedSearchPath + pgroles.SquatGuardSQL() +
 		BuildProjectRoleSQL(creds.authPassword, creds.appPassword, creds.watcherPassword, spec.databaseName, publicationName) +
+		realtimeIdentitySQL(publicationName) +
 		pgroles.CustomerRoleSQL(spec.adminUsername) +
 		pgroles.OwnerAccessSQL(spec.adminUsername)
 	if spec.resetPasswords {

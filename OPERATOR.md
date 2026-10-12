@@ -1038,6 +1038,24 @@ the schema through migrations. (It owns `public` on Postgres 15+, so it can
 still drop a table there, as before.) Registration and restore apply this, so a
 project created before it gets it on its next restore.
 
+## 6.8. Realtime tables log complete old rows
+
+Turning realtime on for a table (Studio, `set_realtime`, `PUT /realtime/tables/...`)
+adds it to the CDC publication and sets `REPLICA IDENTITY FULL`; turning it off
+restores `DEFAULT`. The engine sends a delete to a subscriber only after judging
+it against the subscriber's select permission, which needs the whole old row; a
+key-only delete is withheld, so a published table must stay FULL. An
+`ALTER TABLE` that would leave a published table short of FULL is refused (event
+trigger `excalibase_keep_realtime_identity`), and registration and restore put
+FULL back on any published table that lost it.
+
+Cost: every UPDATE and DELETE on a published table writes the full old row to WAL
+(large TOASTed values included), so WAL volume and the watcher's decoding work
+grow with row size and write rate; inserts cost nothing extra. Tables without
+realtime are unaffected. A table with wide rows and heavy update traffic is
+the case to watch: check WAL growth (`pg_stat_wal`) before turning realtime on
+for it.
+
 ## 7. Image upgrade
 
 The 5 images that ship in lockstep:
