@@ -148,8 +148,10 @@ ALTER PUBLICATION %s OWNER TO CURRENT_USER;
 -- toggle a user table in this publication. Platform and system schemas stay out.
 -- A published table logs complete old rows (REPLICA IDENTITY FULL): realtime
 -- judges each delete against the subscriber's permission, which reads columns
--- outside the key. Unpublishing restores the default.
-CREATE OR REPLACE FUNCTION excalibase.set_realtime_table(target_schema text, target_table text, publish boolean)
+-- outside the key. Unpublishing restores the default. It is dropped, not
+-- replaced, so whatever excalibase_app left under its name goes with it.
+DROP ROUTINE IF EXISTS excalibase.set_realtime_table(text, text, boolean);
+CREATE FUNCTION excalibase.set_realtime_table(target_schema text, target_table text, publish boolean)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
