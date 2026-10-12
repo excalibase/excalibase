@@ -52,7 +52,7 @@ func alterRolePasswordSQL(role, password string) string {
 // superuser at provisioning time. Output:
 //
 //   - auth_admin   — owns the auth schema (used by excalibase-auth)
-//   - excalibase_app — DML on public, read-only on auth. NO REPLICATION.
+//   - excalibase_app — DML on public, CREATE on the database, read-only on auth. NO REPLICATION.
 //   - cdc_watcher  — REPLICATION attribute, used by the watcher daemon
 //     to consume the logical slot. Writes only its own excalibase_cdc schema.
 //   - empty publication, owned by the superuser. excalibase_app changes its
@@ -94,6 +94,8 @@ DO $$ BEGIN
     EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s);
   END IF;
 END $$;
+-- CREATE on the database lets a migration create a schema (EXC-599).
+GRANT CREATE ON DATABASE %s TO %s;
 GRANT ALL ON SCHEMA public TO %s;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO %s;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %s;
@@ -190,6 +192,7 @@ GRANT EXECUTE ON FUNCTION excalibase.set_realtime_table(text, text, boolean) TO 
 		dbIdent, authRole, // GRANT CREATE ON DATABASE
 		authRole, authRole, // GRANT auth schema
 		appRole, safeAppPass, // excalibase_app DO block
+		dbIdent, appRole, // GRANT CREATE ON DATABASE
 		appRole, appRole, appRole, appRole, appRole, // GRANT public
 		appRole, appRole, appRole, // GRANT auth read
 		appRole, appRole, appRole, // GRANT reserved excalibase schema

@@ -369,13 +369,14 @@ func (s *ProvisioningService) execProjectRoleSQL(ctx context.Context, spec proje
 
 // projectRoleSQL pins the search_path and refuses platform role names a
 // customer took, then runs the create-if-absent platform role SQL, the owner's
-// own role management, then the password reset when the cluster
+// own role management and access to what the platform role creates, then the password reset when the cluster
 // arrived with roles already in it. Roles the owner created are left as the
 // backup had them.
 func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicationName string) string {
 	roleSQL := pgroles.PinnedSearchPath + pgroles.SquatGuardSQL() +
 		BuildProjectRoleSQL(creds.authPassword, creds.appPassword, creds.watcherPassword, spec.databaseName, publicationName) +
-		pgroles.CustomerRoleSQL(spec.adminUsername)
+		pgroles.CustomerRoleSQL(spec.adminUsername) +
+		pgroles.OwnerAccessSQL(spec.adminUsername)
 	if spec.resetPasswords {
 		roleSQL += BuildProjectRoleResetSQL(resetTargets(spec, creds))
 	}

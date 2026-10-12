@@ -49,7 +49,7 @@ const appRole = "excalibase_app"
 // functions. A role is the owner's when the owner holds ADMIN OPTION on it, as
 // Postgres 16 grants a CREATEROLE role for each role it creates. The bodies
 // call only pg_catalog: excalibase_app can create objects in their schema,
-// which is also why an existing function is dropped rather than replaced.
+// which is also why an existing routine of any kind is dropped rather than replaced.
 func CustomerRoleSQL(owner string) string {
 	replacer := strings.NewReplacer(
 		"{{OWNER}}", textLiteral(owner),
@@ -111,7 +111,7 @@ BEGIN
 END
 $excalibase_owner$;
 
-DROP FUNCTION IF EXISTS {{CREATE}};
+DROP ROUTINE IF EXISTS {{CREATE}};
 CREATE FUNCTION excalibase.create_role(role_name text, role_password text DEFAULT NULL,
   can_login boolean DEFAULT true, member_of text[] DEFAULT '{}')
 RETURNS void
@@ -156,7 +156,7 @@ $fn$;
 ALTER FUNCTION {{CREATE}} OWNER TO CURRENT_USER;
 REVOKE ALL ON FUNCTION {{CREATE}} FROM PUBLIC;
 
-DROP FUNCTION IF EXISTS {{ALTER}};
+DROP ROUTINE IF EXISTS {{ALTER}};
 CREATE FUNCTION excalibase.alter_role_password(role_name text, role_password text)
 RETURNS void
 LANGUAGE plpgsql
@@ -178,7 +178,7 @@ $fn$;
 ALTER FUNCTION {{ALTER}} OWNER TO CURRENT_USER;
 REVOKE ALL ON FUNCTION {{ALTER}} FROM PUBLIC;
 
-DROP FUNCTION IF EXISTS {{DROP}};
+DROP ROUTINE IF EXISTS {{DROP}};
 CREATE FUNCTION excalibase.drop_role(role_name text)
 RETURNS void
 LANGUAGE plpgsql
