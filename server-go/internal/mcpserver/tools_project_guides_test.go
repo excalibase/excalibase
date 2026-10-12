@@ -41,3 +41,16 @@ func TestProjectInfoSaysCorsChangesTakeAboutAMinute(t *testing.T) {
 		t.Fatalf("note = %q", note)
 	}
 }
+
+// A customer backend verifies end-user tokens offline against the public keys.
+func TestProjectInfoNamesThePublicKeysABackendVerifiesWith(t *testing.T) {
+	out := projectInfo(t)
+	auth, _ := out["endUserAuth"].(map[string]any)
+	urls, _ := out["endpoints"].(map[string]any)
+	verify, _ := auth["verifyOffline"].(string)
+	for _, want := range []string{urls["auth"].(string) + "/.well-known/jwks.json", "ES256", "aud", "exp"} {
+		if !strings.Contains(verify, want) {
+			t.Errorf("verifyOffline lacks %q: %s", want, verify)
+		}
+	}
+}

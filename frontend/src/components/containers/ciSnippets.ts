@@ -88,19 +88,19 @@ const indent = (text: string, spaces: number) =>
 
 function githubLogin(registry: string | null): string {
   if (registry === 'ghcr.io') {
-    return `      - uses: docker/login-action@v3
+    return `      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: \${{ github.actor }}
           password: \${{ secrets.GITHUB_TOKEN }}`;
   }
   if (registry === null) {
-    return `      - uses: docker/login-action@v3
+    return `      - uses: docker/login-action@v4
         with:
           username: \${{ secrets.DOCKERHUB_USERNAME }}
           password: \${{ secrets.DOCKERHUB_TOKEN }}`;
   }
-  return `      - uses: docker/login-action@v3
+  return `      - uses: docker/login-action@v4
         with:
           registry: ${registry}
           username: \${{ secrets.REGISTRY_USERNAME }}
@@ -226,11 +226,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
 ${githubLogin(registry)}
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: "${buildContext(target.build)}"${file}
           push: true

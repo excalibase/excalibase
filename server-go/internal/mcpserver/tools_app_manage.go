@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 )
 
@@ -22,12 +23,13 @@ type updateAppArgs struct {
 	HealthCheckPath string       `json:"health_check_path,omitempty" jsonschema:"a path that answers 200 when the app is ready"`
 	SetEnv          []envSetting `json:"set_env,omitempty" jsonschema:"literal environment variables to add or replace by name; the others are kept"`
 	RemoveEnv       []string     `json:"remove_env,omitempty" jsonschema:"names of environment variables to remove"`
+	DatabaseEnv     []string     `json:"database_env,omitempty" jsonschema:"variables to fill from the project's own database at deploy time, e.g. DATABASE_URL (Postgres: DATABASE_URL, PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD; MySQL: DATABASE_URL, MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD); the credential never passes through MCP"`
 	PrivateNetwork  *bool        `json:"private_network,omitempty" jsonschema:"let the project's apps reach each other by name; a project-wide switch that needs the admin role"`
 }
 
 func appManageTools() []entry {
 	return []entry{
-		tool("update_app", "Change a container app's image or tag, port, replicas (within the plan), health check path, environment variables, or the project's private network between apps. "+
+		tool("update_app", "Change a container app's image or tag, port, replicas (within the plan), health check path, environment variables, the database variables it reads (database_env, e.g. DATABASE_URL for a backend), or the project's private network between apps. "+
 			"Only what you pass changes; variables not named are kept and secrets stay as they are. A change reaches the running app on the next deploy_app.", writeTool, updateApp),
 		tool("delete_app", "Delete one container app: it stops, and the CORS origin its create_app added goes with it. Other apps, the database and the rest of the CORS list are untouched. "+
 			"An app that has a disk is refused: its data would be lost, so that one is deleted in Studio.", writeTool, deleteApp),
@@ -41,7 +43,11 @@ type storedApp struct {
 }
 
 func (in updateAppArgs) changesApp() bool {
-	return in.Image != "" || in.Port != 0 || in.Replicas != nil || in.HealthCheckPath != "" || len(in.SetEnv) > 0 || len(in.RemoveEnv) > 0
+	return in.Image != "" || in.Port != 0 || in.Replicas != nil || in.HealthCheckPath != "" || in.changesEnv()
+}
+
+func (in updateAppArgs) changesEnv() bool {
+	return len(in.SetEnv) > 0 || len(in.RemoveEnv) > 0 || len(in.DatabaseEnv) > 0
 }
 
 func updateApp(ctx context.Context, c *call, in updateAppArgs) (any, error) {
@@ -54,12 +60,15 @@ func updateApp(ctx context.Context, c *call, in updateAppArgs) (any, error) {
 		return nil, err
 	}
 	if !in.changesApp() && in.PrivateNetwork == nil {
-		return nil, errors.New("nothing to change: pass image, port, replicas, health_check_path, set_env, remove_env or private_network")
+		return nil, errors.New("nothing to change: pass image, port, replicas, health_check_path, set_env, remove_env, database_env or private_network")
 	}
 	out := map[string]any{}
 	if in.changesApp() {
-		app, err := patchApp(ctx, c, path, in)
+		app, err := patchApp(ctx, c, projectID, path, in)
 		if err != nil {
+			return nil, err
+		}
+		if _, err := markNotDeployed(ctx, c, projectID, &app.appView); err != nil {
 			return nil, err
 		}
 		out["app"] = app.appView
@@ -81,7 +90,14 @@ func updateApp(ctx context.Context, c *call, in updateAppArgs) (any, error) {
 
 // patchApp reads the app, builds a partial body, and sends it at the version
 // it read, so a change made meanwhile is refused rather than overwritten.
-func patchApp(ctx context.Context, c *call, path string, in updateAppArgs) (storedApp, error) {
+func patchApp(ctx context.Context, c *call, projectID, path string, in updateAppArgs) (storedApp, error) {
+	var references []json.RawMessage
+	if len(in.DatabaseEnv) > 0 {
+		var err error
+		if references, err = databaseReferences(ctx, c, projectID, in); err != nil {
+			return storedApp{}, err
+		}
+	}
 	var current storedApp
 	if err := c.get(ctx, path+"/", nil, &current); err != nil {
 		return current, err
@@ -99,12 +115,12 @@ func patchApp(ctx context.Context, c *call, path string, in updateAppArgs) (stor
 	if in.HealthCheckPath != "" {
 		body["healthCheckPath"] = in.HealthCheckPath
 	}
-	if len(in.SetEnv) > 0 || len(in.RemoveEnv) > 0 {
-		env, err := mergeEnv(current.Env, in.SetEnv, in.RemoveEnv)
+	if in.changesEnv() {
+		env, err := mergeEnv(current.Env, in.SetEnv, append(slices.Clone(in.RemoveEnv), in.DatabaseEnv...))
 		if err != nil {
 			return current, err
 		}
-		body["env"] = env
+		body["env"] = append(env, references...)
 	}
 	header := http.Header{"If-Match": {strconv.Itoa(current.Version)}}
 	var updated storedApp

@@ -273,6 +273,8 @@ services:
       APP_DISK_TOOLS_IMAGE: ${APP_DISK_TOOLS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.5.0}}
       # Where custom domains' CNAMEs are looked up; the host's resolver when unset.
       APP_DOMAIN_RESOLVER: ${APP_DOMAIN_RESOLVER:-}
+      # Registries on this host (e.g. localhost:5000) that apps deploy from by digest; never dialled by the platform.
+      APP_LOCAL_REGISTRIES: ${APP_LOCAL_REGISTRIES:-}
     volumes:
       - provisioning_data:/var/lib/excalibase
       - app_routes:/srv/excalibase-app-routes

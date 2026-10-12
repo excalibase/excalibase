@@ -8,8 +8,8 @@ import (
 )
 
 type dockerfileArgs struct {
-	Stack   string `json:"stack,omitempty" jsonschema:"node, nextjs, vite, static, python, go or java; leave it out when unsure to get what to look for and what to ask"`
-	Variant string `json:"variant,omitempty" jsonschema:"node, nextjs, vite: npm or pnpm; python: gunicorn or uvicorn; java: spring-boot, spring-boot-gradle or quarkus"`
+	Stack   string `json:"stack,omitempty" jsonschema:"node, nestjs, nextjs, vite, static, python, go or java; leave it out when unsure to get what to look for and what to ask"`
+	Variant string `json:"variant,omitempty" jsonschema:"node, nestjs, nextjs, vite: npm or pnpm; python: gunicorn or uvicorn; java: spring-boot, spring-boot-gradle or quarkus"`
 }
 
 type ciArgs struct {

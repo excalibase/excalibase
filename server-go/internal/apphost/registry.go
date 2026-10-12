@@ -21,6 +21,10 @@ var dockerHubAliases = map[string]bool{
 	dockerHub: true, "index.docker.io": true, "registry-1.docker.io": true,
 }
 
+// ErrLocalRegistryNeedsDigest refuses a tag on an operator's own registry
+// (APP_LOCAL_REGISTRIES): the platform never dials it to learn the digest.
+var ErrLocalRegistryNeedsDigest = errors.New("an image on the host's own registry is deployed by digest (image@sha256:...): the platform does not ask that registry what a tag names")
+
 // RegistryCredential is what a project stores to pull from a private registry.
 // It lives only in the project's vault; nothing returns it.
 type RegistryCredential struct {

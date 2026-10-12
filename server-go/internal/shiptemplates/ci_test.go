@@ -240,3 +240,22 @@ func stepText(value any) string {
 	}
 	return out.String()
 }
+
+// Every action the pipeline uses is pinned to a major that runs on Node 24;
+// the Node 20 majors print deprecation warnings on every run (EXC-600).
+func TestGitHubPipelinePinsCurrentActionMajors(t *testing.T) {
+	snippet, err := CI("github-actions", goldenTarget("ghcr.io/acme/web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"actions/checkout@v7", "docker/setup-buildx-action@v4", "docker/build-push-action@v7", "docker/login-action@v4"} {
+		if !strings.Contains(snippet.Content, want) {
+			t.Errorf("missing %s:\n%s", want, snippet.Content)
+		}
+	}
+	for _, old := range []string{"checkout@v4", "setup-buildx-action@v3", "build-push-action@v6", "login-action@v3"} {
+		if strings.Contains(snippet.Content, old) {
+			t.Errorf("still pins %s", old)
+		}
+	}
+}

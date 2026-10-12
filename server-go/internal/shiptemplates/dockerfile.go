@@ -46,6 +46,7 @@ var nodeVariants = []string{"npm", "pnpm"}
 func Stacks() []Stack {
 	return []Stack{
 		{Name: "node", Variants: nodeVariants},
+		{Name: "nestjs", Variants: nodeVariants},
 		{Name: "nextjs", Variants: nodeVariants},
 		{Name: "vite", Variants: nodeVariants},
 		{Name: "static", Variants: []string{"default"}},
@@ -60,7 +61,7 @@ func Stacks() []Stack {
 func Dockerfile(stack, variant string) (File, error) {
 	index := slices.IndexFunc(Stacks(), func(s Stack) bool { return s.Name == stack })
 	if index < 0 {
-		return File{}, fmt.Errorf("unknown stack %q: use node, nextjs, vite, static, python, go or java", stack)
+		return File{}, fmt.Errorf("unknown stack %q: use node, nestjs, nextjs, vite, static, python, go or java", stack)
 	}
 	known := Stacks()[index].Variants
 	if variant == "" {
@@ -97,7 +98,7 @@ func healthCheck(stack, variant string) (string, string) {
 
 func render(stack, variant string) (string, []string) {
 	switch stack {
-	case "node", "nextjs", "vite":
+	case "node", "nestjs", "nextjs", "vite":
 		return renderNode(stack, nodeTools[variant])
 	case "python":
 		return renderPython(variant)
@@ -110,9 +111,12 @@ func render(stack, variant string) (string, []string) {
 }
 
 func renderNode(stack string, tool nodeTool) (string, []string) {
-	templates := map[string]string{"node": nodeDockerfile, "nextjs": nextDockerfile, "vite": viteDockerfile}
+	templates := map[string]string{"node": nodeDockerfile, "nestjs": nestDockerfile, "nextjs": nextDockerfile, "vite": viteDockerfile}
 	notes := map[string][]string{
-		"node":   {"Runs the start script of package.json; the server must listen on process.env.PORT."},
+		"node": {"Runs node on package.json's main file (node .), so set main to the server's entry, e.g. dist/server.js; " +
+			"the server must listen on process.env.PORT. tini is PID 1 and passes SIGTERM on, so the server stops when the platform asks."},
+		"nestjs": {"Builds with the build script (nest build) and runs node dist/main.js; the dev CLI is pruned from the image. " +
+			"main.ts must listen on process.env.PORT. tini is PID 1 and passes SIGTERM on; call app.enableShutdownHooks() to close the database pool on it."},
 		"nextjs": {`Needs output: "standalone" in next.config, and a public/ directory (an empty one is fine).`},
 		"vite":   {"Serves the built dist/ with nginx and falls back to index.html for client-side routes."},
 	}
@@ -168,9 +172,33 @@ FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production PORT=8080
 COPY --from=build --chown=node:node /app ./
+RUN apk add --no-cache tini
 USER node
 EXPOSE 8080
-CMD ["npm", "start"]
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "."]
+`
+
+const nestDockerfile = `# syntax=docker/dockerfile:1
+FROM node:22-alpine AS build
+WORKDIR /app
+{{setup}}COPY package.json {{lock}} ./
+RUN {{install}}
+COPY . .
+RUN {{run}} build
+RUN {{prune}}
+
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production PORT=8080
+COPY --from=build --chown=node:node /app/package.json ./
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/dist ./dist
+RUN apk add --no-cache tini
+USER node
+EXPOSE 8080
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "dist/main.js"]
 `
 
 const nextDockerfile = `# syntax=docker/dockerfile:1

@@ -14,6 +14,7 @@ func Questions() StackQuestions {
 		Detect: map[string]string{
 			"nextjs": "package.json depends on next (next.config.*)",
 			"vite":   "package.json depends on vite and builds a browser app (index.html at the root, dist/ output)",
+			"nestjs": "package.json depends on @nestjs/core (nest-cli.json)",
 			"node":   "package.json with a start script that runs a server (express, fastify, hono, ...)",
 			"static": "plain .html, .css and .js files and no package.json, or a ready folder such as public/",
 			"python": "requirements.txt; gunicorn for Flask or Django, uvicorn for FastAPI or Starlette",
@@ -22,7 +23,7 @@ func Questions() StackQuestions {
 		},
 		Ask: []string{
 			"Which folder holds the app, if the repository has more than one?",
-			"Is it a browser-only page (vite or static) or a server that must run (node, nextjs, python, go, java)?",
+			"Is it a browser-only page (vite or static) or a server that must run (node, nestjs, nextjs, python, go, java)?",
 			"Which package manager does a Node app use: npm (package-lock.json) or pnpm (pnpm-lock.yaml)?",
 		},
 		Stacks: Stacks(),
