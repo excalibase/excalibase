@@ -2,6 +2,8 @@ package provisioner
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -61,7 +63,7 @@ func ownerSQL(owner, database, password string) (string, error) {
 // createOwner runs ownerSQL as the superuser over the container's socket and
 // returns the owner's new password.
 func (p *DockerPostgreSQLProvisioner) createOwner(ctx context.Context, containerID, database, owner string) (string, error) {
-	password := generatePassword()
+	password := NewOwnerPassword()
 	statement, err := ownerSQL(owner, database, password)
 	if err != nil {
 		return "", err
@@ -70,6 +72,14 @@ func (p *DockerPostgreSQLProvisioner) createOwner(ctx context.Context, container
 		return "", fmt.Errorf("create the owner login %s: %w", owner, err)
 	}
 	return password, nil
+}
+
+// NewOwnerPassword is 256 random bits as hex: customers pass it to psql,
+// mongosh and drivers, where a value starting with '-' reads as an option.
+func NewOwnerPassword() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func pgIdent(name string) string { return `"` + strings.ReplaceAll(name, `"`, `""`) + `"` }

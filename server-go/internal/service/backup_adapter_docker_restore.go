@@ -94,7 +94,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		containerID:   recovered.containerID,
 		containerName: recovered.spec.containerName,
 		dbName:        recovered.spec.dbName,
-		password:      generateRestorePassword(),
+		password:      provisioner.NewOwnerPassword(),
 		backupID:      recovered.backupID,
 		backup:        plan.Backup,
 	})
@@ -545,9 +545,8 @@ func (a *DockerBackupAdapter) addWALToTar(ctx context.Context, tw *tar.Writer, o
 	return nil
 }
 
-// generateRestorePassword produces a restored project's random passwords: the
-// container's superuser placeholder, and the owner's, which registration
-// resets the owner role to and files in vault.
+// generateRestorePassword is the restored container's superuser placeholder;
+// a seeded data directory keeps its own, and neither is handed out.
 func generateRestorePassword() string {
 	return generatePassword(32)
 }

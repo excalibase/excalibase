@@ -111,3 +111,14 @@ func TestSingleHostRejectsTheSuperuserOverTheNetwork(t *testing.T) {
 		t.Fatalf("a DocumentDB database lets the superuser in over the network: %v", hba)
 	}
 }
+
+// An owner password is handed to CLIs (psql, mongosh, mysql) as an argument
+// value; a leading '-' reads as an option there.
+func TestOwnerPasswordIsLongHex(t *testing.T) {
+	for range 200 {
+		password := NewOwnerPassword()
+		if len(password) != 64 || strings.Trim(password, "0123456789abcdef") != "" {
+			t.Fatalf("owner password %d chars, not lowercase hex", len(password))
+		}
+	}
+}

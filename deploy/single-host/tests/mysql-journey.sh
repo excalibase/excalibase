@@ -97,7 +97,8 @@ out=$(mysql_on "$MPID" app REQUIRED "SELECT COUNT(*) FROM notes")
 who=$(mysql_on "$MPID" app REQUIRED "SELECT CURRENT_USER()")
 case "$who" in root@*|"") ko "the app login is '$who'" ;; *) ok "the app login is $who, not root" ;; esac
 grants=$(mysql_on "$MPID" app REQUIRED "SHOW GRANTS")
-case "$grants" in *" ON *.* "*ALL*|*"ALL PRIVILEGES ON *.*"*|*"SUPER"*) ko "the app login holds global privileges: ${grants:0:300}" ;; *) ok "no global privileges for the app login" ;; esac
+global=$(grep -F ' ON *.* ' <<< "$grants" | grep -v '^GRANT USAGE ON ')
+[ -z "$global" ] && [ -n "$grants" ] && ok "no global privileges for the app login" || ko "the app login holds global privileges: ${global:0:300}"
 out=$(mysql_on "$MPID" app REQUIRED "SELECT COUNT(*) FROM excalibase.migrations")
 case "$out" in *"denied"*) ok "the app login is refused on the platform database" ;; *) ko "platform database: ${out:0:300}" ;; esac
 
