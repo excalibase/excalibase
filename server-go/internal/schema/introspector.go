@@ -313,28 +313,33 @@ WHERE table_schema = $1
 AND table_type IN ('BASE TABLE', 'VIEW')
 ORDER BY table_name`
 
+// columnsQuery flags a column unique only when a UNIQUE constraint covers it
+// alone: one that is unique only together with others is not, and a column in
+// several constraints is still one row (EXC-598).
 const columnsQuery = `
 SELECT c.column_name, c.data_type, c.is_nullable, c.column_default,
        c.ordinal_position, c.character_maximum_length,
        c.numeric_precision, c.numeric_scale,
-       COALESCE(
-           (SELECT true FROM pg_constraint con
-            JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
-            WHERE con.contype = 'p'
-            AND con.conrelid = (SELECT oid FROM pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = c.table_schema))
-            AND a.attname = c.column_name), false
+       EXISTS (
+           SELECT 1 FROM pg_constraint con
+           JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+           WHERE con.contype = 'p' AND con.conrelid = cls.oid AND a.attname = c.column_name
        ) AS is_primary_key,
-       COALESCE(
-           (SELECT true FROM pg_constraint con
-            JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
-            WHERE con.contype = 'u'
-            AND con.conrelid = (SELECT oid FROM pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = c.table_schema))
-            AND a.attname = c.column_name), false
+       EXISTS (
+           SELECT 1 FROM pg_constraint con
+           JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
+           WHERE con.contype = 'u' AND cardinality(con.conkey) = 1
+             AND con.conrelid = cls.oid AND a.attname = c.column_name
        ) AS is_unique
 FROM information_schema.columns c
+JOIN pg_namespace ns ON ns.nspname = c.table_schema
+JOIN pg_class cls ON cls.relnamespace = ns.oid AND cls.relname = c.table_name
 WHERE c.table_schema = $1 AND c.table_name = $2
 ORDER BY c.ordinal_position`
 
+// relationshipsQuery lists one row per column pair of each foreign key, the
+// source and target columns paired by position, so a composite key is not a
+// cross product (EXC-598).
 const relationshipsQuery = `
 SELECT
     c.conname AS constraint_name,
@@ -356,10 +361,11 @@ FROM pg_constraint c
 JOIN pg_class src ON src.oid = c.conrelid
 JOIN pg_class tgt ON tgt.oid = c.confrelid
 JOIN pg_namespace n ON n.oid = src.relnamespace
-JOIN pg_attribute sa ON sa.attrelid = c.conrelid AND sa.attnum = ANY(c.conkey)
-JOIN pg_attribute ta ON ta.attrelid = c.confrelid AND ta.attnum = ANY(c.confkey)
+CROSS JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY AS k(source_attnum, target_attnum, position)
+JOIN pg_attribute sa ON sa.attrelid = c.conrelid AND sa.attnum = k.source_attnum
+JOIN pg_attribute ta ON ta.attrelid = c.confrelid AND ta.attnum = k.target_attnum
 WHERE c.contype = 'f' AND n.nspname = $1
-ORDER BY c.conname`
+ORDER BY c.conname, k.position`
 
 const indexesQuery = `
 SELECT indexname, tablename, indexdef
