@@ -115,7 +115,8 @@ func documentDBServerArgs() []string {
 
 // DocumentDBHBA is the database's pg_hba. Kubernetes' rules for the network
 // and loopback, where the gateway opens sessions as itself and as the roles
-// clients log in as: the owner and the Mongo users, never the superuser. The
+// clients log in as: the owner and the Mongo users, never the superuser, whom
+// no password admits from the network. The
 // socket, which only the container's own postgres user can reach (the gateway
 // shares the network, not the filesystem), is trusted, as the official image
 // trusts it. An owner that is not a plain role name gets no line.
@@ -130,6 +131,7 @@ func DocumentDBHBA(owner string) []string {
 	}
 	return append(lines,
 		"host all +"+config.DocumentDBMongoUsersGroup+" all reject",
+		superuserNetworkReject,
 		"host all all all scram-sha-256")
 }
 

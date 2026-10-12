@@ -245,7 +245,7 @@ func TestDockerAdapterRestoredDocumentDBTrustsTheSourcesOwnerOnLoopback(t *testi
 	if !strings.Contains(script, "host all "+restored.Username+" 127.0.0.1/32 trust") {
 		t.Fatalf("the restored database does not let the gateway in as %s:\n%s", restored.Username, script)
 	}
-	if strings.Contains(script, "host all postgres ") {
+	if strings.Contains(script, "host all postgres 127.0.0.1/32 trust") {
 		t.Fatal("the restored database trusts the superuser on loopback")
 	}
 }

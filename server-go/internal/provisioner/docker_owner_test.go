@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -87,5 +88,26 @@ func TestSingleHostRefusesAPlatformRoleAsOwnerBeforeAnyContainer(t *testing.T) {
 		if len(engine.specs) != 0 {
 			t.Fatalf("owner %q: a container was created before the refusal", owner)
 		}
+	}
+}
+
+// The superuser is the platform's, over the socket only: no password opens it
+// from the network, as CloudNativePG keeps superuser access off (EXC-604).
+func TestSingleHostRejectsTheSuperuserOverTheNetwork(t *testing.T) {
+	engine := newFakeEngine()
+	provisionSingleHost(t, engine, domain.ProvisioningRequest{ProjectName: "p1", DBType: domain.PostgreSQL, PostgresVersion: "17"})
+	found := false
+	for _, script := range engine.stdin {
+		if strings.Contains(script, "host all postgres all reject") && strings.Contains(script, "pg_reload_conf") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("pg_hba was not told to reject the superuser; scripts %q", engine.stdin)
+	}
+	hba := DocumentDBHBA("app")
+	reject, catchAll := slices.Index(hba, "host all postgres all reject"), slices.Index(hba, "host all all all scram-sha-256")
+	if reject < 0 || reject > catchAll {
+		t.Fatalf("a DocumentDB database lets the superuser in over the network: %v", hba)
 	}
 }

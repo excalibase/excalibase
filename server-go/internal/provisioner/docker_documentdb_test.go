@@ -88,7 +88,7 @@ func TestDocumentDBHBATrustsTheOwnerOnLoopbackAndNoSuperuser(t *testing.T) {
 		t.Fatalf("the owner is not trusted on loopback: %v", hba)
 	}
 	for _, line := range hba {
-		if strings.HasPrefix(line, "host all postgres ") || strings.Contains(line, " excalibase_app ") {
+		if (strings.HasPrefix(line, "host all postgres ") && strings.HasSuffix(line, " trust")) || strings.Contains(line, " excalibase_app ") {
 			t.Errorf("a superuser or platform role is trusted: %q", line)
 		}
 	}

@@ -791,16 +791,22 @@ func TestDockerAdapter_Restore_RegistersTheSourcesOwnerNotTheSuperuser(t *testin
 	}
 }
 
-// A source with no owner on record is refused before any container exists:
-// there is no login to register the copy with.
+// A source with no usable owner on record is refused before any container
+// exists: the copy would be registered with no login, or with the superuser.
 func TestDockerAdapter_Restore_RefusesASourceWithoutAnOwner(t *testing.T) {
+	for _, owner := range []string{"", "postgres", "excalibase_app"} {
+		t.Run("owner "+owner, func(t *testing.T) { restoreRefusesOwner(t, owner) })
+	}
+}
+
+func restoreRefusesOwner(t *testing.T, owner string) {
 	adapter, store, _, uploader, records := setupDockerAdapter(t)
 	adapter.SetInstanceStore(store)
 	dc := &fakeDockerClientForAdapter{}
 	adapter.SetDockerClient(dc)
 	adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
 	src, _ := store.FindByProjectID("dk-1")
-	src.Username = ""
+	src.Username = owner
 	uploader.objects["test-backups/backups/dk-1/manual/backup-2026.tar.gz"] = minimalGzippedTar(t)
 	records.Save(context.Background(), &domain.BackupRecord{
 		ID: "backup-2026", ProjectID: "dk-1", Status: "COMPLETED", Type: "MANUAL",

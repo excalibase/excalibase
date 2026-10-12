@@ -168,12 +168,12 @@ func (a *DockerBackupAdapter) recoverContainer(ctx context.Context, dc provision
 	return recovered{containerID: containerID, backupID: base.ID, owner: owner, spec: spec}, nil
 }
 
-// errRestoreSourceHasNoOwner refuses a source with no owner login on record:
-// the copy would have no login to register.
+// errRestoreSourceHasNoOwner refuses a source with no usable owner login on
+// record: the copy would be registered with none, or with the superuser.
 var errRestoreSourceHasNoOwner = errors.New("the source project has no owner login on record")
 
 func recoverySpec(source *domain.DatabaseInstance, req domain.RestoreRequest, target recoveryTarget, body io.Reader) (restoreContainerSpec, error) {
-	if source.Username == "" {
+	if provisioner.ValidateOwner(source.Username) != nil {
 		return restoreContainerSpec{}, fmt.Errorf("restore %s: %w", source.ProjectID, errRestoreSourceHasNoOwner)
 	}
 	dbName := source.DatabaseName

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,9 +66,24 @@ func TestSingleHostAppLoginIsTheRestrictedOwner(t *testing.T) {
 	mustFail(t, app, "CREATE TABLE auth.planted (id int)", "permission denied")
 	mustFail(t, app, "CREATE TRIGGER steal BEFORE INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION public.steal()", "")
 	mustFail(t, app, "ALTER ROLE excalibase_app PASSWORD 'x'", "")
+
+	superuserLogin := *result
+	superuserLogin.Username, superuserLogin.Password = "postgres", "any-password"
+	if err := openSingleHost(ctx, t, docker, &superuserLogin).PingContext(ctx); err == nil || !strings.Contains(err.Error(), "rejects connection") {
+		t.Fatalf("the superuser is not rejected over the network: %v", err)
+	}
 }
 
 func connectSingleHost(ctx context.Context, t *testing.T, docker *provisioner.RealDockerClient, result *provisioner.ProvisioningResult) *sql.DB {
+	t.Helper()
+	db := openSingleHost(ctx, t, docker, result)
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatalf("app login does not open the database: %v", err)
+	}
+	return db
+}
+
+func openSingleHost(ctx context.Context, t *testing.T, docker *provisioner.RealDockerClient, result *provisioner.ProvisioningResult) *sql.DB {
 	t.Helper()
 	state, err := docker.ContainerState(ctx, result.Namespace)
 	if err != nil {
@@ -87,8 +103,5 @@ func connectSingleHost(ctx context.Context, t *testing.T, docker *provisioner.Re
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if err := db.PingContext(ctx); err != nil {
-		t.Fatalf("app login does not open the database: %v", err)
-	}
 	return db
 }

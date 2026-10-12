@@ -69,3 +69,32 @@ func TestValidateCountsProjectNameInCharacters(t *testing.T) {
 		t.Error("101 characters accepted")
 	}
 }
+
+// EXC-604: an owner named after a platform role would be adopted by the
+// platform's create-if-absent step and filed as the project's own login.
+func TestValidateRefusesAPlatformRoleAsMasterUsername(t *testing.T) {
+	for _, name := range []string{"excalibase_app", "auth_admin", "cdc_watcher", "documentdb_gateway", "cnpg_pooler"} {
+		req := provisionRequest(supportedMajor(t))
+		req.MasterUsername = name
+		if err := validateProvisioningRequest(req); err == nil || !strings.Contains(err.Error(), "masterUsername") {
+			t.Errorf("%q: got %v, want a masterUsername refusal", name, err)
+		}
+	}
+}
+
+// The database name reaches psql's -d, which reads "host=..." or a URI as
+// connection settings; only a plain identifier is accepted.
+func TestValidateRefusesADatabaseNameThatIsNotAPlainIdentifier(t *testing.T) {
+	for _, name := range []string{"host=attacker.example user=x", "postgresql://x@y/z", "Shop", "my-db", "1db", strings.Repeat("a", 64)} {
+		req := provisionRequest(supportedMajor(t))
+		req.DatabaseName = name
+		if err := validateProvisioningRequest(req); err == nil || !strings.Contains(err.Error(), "databaseName") {
+			t.Errorf("%q: got %v, want a databaseName refusal", name, err)
+		}
+	}
+	req := provisionRequest(supportedMajor(t))
+	req.DatabaseName = "shop_db"
+	if err := validateProvisioningRequest(req); err != nil {
+		t.Errorf("plain database name refused: %v", err)
+	}
+}

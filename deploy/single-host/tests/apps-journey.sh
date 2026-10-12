@@ -109,7 +109,7 @@ grep -q '^DATABASE_URL=postgresql://postgres:' "$W/app-db.env" && ko "DATABASE_U
 # as_app <sql>: psql with the app's DATABASE_URL, on the app's own network.
 as_app() {
   $DOCKER run --rm --network "excalibase-net-$PID" --env-file "$W/app-db.env" docker.io/library/postgres:17-alpine \
-    sh -c 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tAc "$0"' "$1" 2>&1
+    sh -c 'psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -tAc "$0"' "$1" 2>&1
 }
 [ "$(as_app "SELECT rolsuper OR rolbypassrls OR rolreplication FROM pg_roles WHERE rolname = current_user")" = f ] && ok "the app login is no superuser" || ko "the app login: $(as_app 'SELECT current_user')"
 out=$(as_app "INSERT INTO notes (body) VALUES ('from the app') RETURNING body")
@@ -122,10 +122,15 @@ for sql in "SELECT count(*) FROM auth.users" "CREATE TABLE excalibase.planted (i
 done
 out=$(as_app "CREATE FUNCTION public.app_steal() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN RETURN NEW; END \$\$; CREATE TRIGGER app_steal BEFORE INSERT ON notes FOR EACH ROW EXECUTE FUNCTION public.app_steal()")
 case "$out" in *"permission denied"*|*"must be owner"*) ok "the app cannot attach a trigger to a migrated table" ;; *) ko "trigger: ${out:0:300}" ;; esac
+# The password is matched from a 0600 file, never passed as an argument.
+( umask 077; sed 's/^DATABASE_URL=//' "$W/app-db.env" | python3 -c 'import sys,urllib.parse as u;print(u.urlparse(sys.stdin.read().strip()).password or "")' > "$W/app-db.secret" )
 leak=0
-for name in excalibase-provisioning excalibase-engine-proxy; do logs_have "$name" "$(sed 's/^DATABASE_URL=//' "$W/app-db.env")" && leak=1; done
-[ "$leak" = 0 ] && ok "the app's DATABASE_URL is in no platform log" || ko "DATABASE_URL leaked into a log"
-rm -f "$W/app-db.env"
+for name in excalibase-provisioning excalibase-engine-proxy excalibase-studio; do
+  logged=$($DOCKER logs "$name" 2>&1)
+  [ -s "$W/app-db.secret" ] && grep -qFf "$W/app-db.secret" <<< "$logged" && leak=1
+done
+[ -s "$W/app-db.secret" ] && [ "$leak" = 0 ] && ok "the app's database password is in no platform log" || ko "the app's database password leaked into a log (or was empty)"
+rm -f "$W/app-db.env" "$W/app-db.secret"
 
 echo "== apps: another project cannot reach this one"
 # The single host's one organisation is on the Free plan, one project; the operator raises it.
