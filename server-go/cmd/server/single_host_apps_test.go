@@ -118,3 +118,24 @@ func TestWireSingleHostTeardown(t *testing.T) {
 		t.Fatal("wired without a single-host runtime")
 	}
 }
+
+// TestAppPublicRouteFollowsTheEdgesScheme pins EXC-606: the single host's edge always serves apps over
+// https, so the URL create_app returns (and the CORS origin it adds) is https; Kubernetes is unchanged.
+func TestAppPublicRouteFollowsTheEdgesScheme(t *testing.T) {
+	docker := config.AppConfig{ProvisionerMode: "docker", AppDomain: "apps.localhost"}
+	if got, err := appPublicRoute(docker).URL("web", "proj-abc"); err != nil || got != "https://web-abc.apps.localhost" {
+		t.Fatalf("single-host app URL = %q, %v; want https", got, err)
+	}
+	plain := config.AppConfig{ProvisionerMode: "k8s", AppDomain: "apps.example.com", AppIngressClass: "haproxy"}
+	if got, _ := appPublicRoute(plain).URL("web", "proj-abc"); got != "http://web-abc.apps.example.com" {
+		t.Fatalf("kubernetes without TLS = %q, want http", got)
+	}
+	plain.AppWildcardTLS = true
+	if got, _ := appPublicRoute(plain).URL("web", "proj-abc"); got != "https://web-abc.apps.example.com" {
+		t.Fatalf("kubernetes with wildcard TLS = %q, want https", got)
+	}
+	issued := config.AppConfig{ProvisionerMode: "k8s", AppDomain: "apps.example.com", AppIngressClass: "haproxy", AppDomainIssuer: "letsencrypt"}
+	if got, _ := appPublicRoute(issued).URL("web", "proj-abc"); got != "https://web-abc.apps.example.com" {
+		t.Fatalf("kubernetes with an issuer = %q, want https", got)
+	}
+}

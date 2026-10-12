@@ -1339,7 +1339,7 @@ func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore s
 	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget) *handler.AppHandler {
 	plans := service.NewOrgPlanTiers(store, sqlStore)
 	h := handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
-		handler.NewProjectSourceLookup(store, plans), appRoute(cfg).Public())
+		handler.NewProjectSourceLookup(store, plans), appPublicRoute(cfg))
 	h.SetDiskLimits(disks)
 	h.SetAppLimits(service.NewAppLimits(plans, tiers))
 	h.SetStorageBudget(budget)

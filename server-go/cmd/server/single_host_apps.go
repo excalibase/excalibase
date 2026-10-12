@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker/client"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/dockerapps"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -91,7 +92,7 @@ func buildSingleHostAppRuntime(ctx context.Context, cfg config.AppConfig, docker
 		EdgeIssuesLocally: apps.EdgeIssuesLocally(),
 		SandboxRuntime:    apps.SandboxRuntime, Egress: apps.Egress, Isolate: podman,
 		ProbeBinary: probe, ToolsImage: cfg.AppDiskToolsImage,
-		Route: appRenderOptions(cfg).Route.Public(), ReservedHosts: platformHosts(cfg),
+		Route: appPublicRoute(cfg), ReservedHosts: platformHosts(cfg),
 		Projects: projectScopes{instances: instances}, MinReady: dockerapps.DefaultMinReady,
 	})
 	if err != nil {
@@ -152,4 +153,9 @@ func startSingleHostReconcile(runtime *dockerapps.Runtime) {
 	go runtime.KeepReconciled(context.Background(), appNetworkReconcile, func(err error) {
 		log.Printf("WARN: app networks: %v", err)
 	})
+}
+
+// appPublicRoute is where apps answer, as the edge in front of them serves it.
+func appPublicRoute(cfg config.AppConfig) apphost.Route {
+	return appRenderOptions(cfg).Route.Public()
 }
