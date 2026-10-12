@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,5 +143,66 @@ func TestListMigrations_OldSecondPrecisionIdsStillReadInOrder(t *testing.T) {
 	records, err := NewMigrationService(nil, nil, root).ListMigrations("proj-old")
 	if err != nil || len(records) != 2 || records[0].Name != "old" || records[1].Name != "new" {
 		t.Fatalf("records = %+v err = %v", records, err)
+	}
+}
+
+func TestSaveMigrationRecord_RefusesWhatItCannotWriteAndNeverOverwrites(t *testing.T) {
+	instant := time.Date(2026, 10, 13, 3, 0, 0, 0, time.Local)
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveMigrationRecord(filepath.Join(file, "migrations"), instant, &domain.MigrationRecord{}); err == nil {
+		t.Error("a directory that cannot be made was not reported")
+	}
+
+	full := t.TempDir()
+	for nanos := 0; nanos < maxIDAttempts; nanos++ {
+		name := filepath.Join(full, "mig-20261013-030000-"+leftPad(nanos)+".json")
+		if err := os.WriteFile(name, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := saveMigrationRecord(full, instant, &domain.MigrationRecord{}); err == nil || !strings.Contains(err.Error(), "no free migration id") {
+		t.Errorf("every id taken: err = %v", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(full, "mig-20261013-030000-000000000.json")); string(data) != "{}" {
+		t.Errorf("an existing record was overwritten: %s", data)
+	}
+
+	if os.Geteuid() != 0 {
+		locked := t.TempDir()
+		if err := os.Chmod(locked, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+		if err := saveMigrationRecord(locked, instant, &domain.MigrationRecord{}); err == nil || strings.Contains(err.Error(), "no free") {
+			t.Errorf("an unwritable directory: err = %v", err)
+		}
+	}
+}
+
+func leftPad(n int) string {
+	return fmt.Sprintf("%09d", n)
+}
+
+// A record that cannot be saved does not hide that the migration ran: the caller still gets its result.
+func TestApplyMigration_AnUnsavableRecordStillAnswersTheResult(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := storage.NewFileSystemStore(dir)
+	store.Create(&domain.DatabaseInstance{ProjectID: "unsaved", Namespace: "ns", Status: "ACTIVE"})
+	vault := newFakeVault()
+	vault.Put("projects/unsaved/credentials/excalibase_app", map[string]string{
+		"host": "127.0.0.1", "port": "1", "username": "excalibase_app", "password": "x", "database": "app",
+		"sslcert": "CERT-PEM", "sslkey": "KEY-PEM", "sslrootcert": "CA-PEM",
+	})
+	blocked := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMigrationService(store, vault, blocked)
+	rec, err := svc.ApplyMigration(context.Background(), "unsaved", domain.MigrationRequest{SQL: "select 1"})
+	if err != nil || rec == nil || rec.ID != "" {
+		t.Fatalf("rec = %+v, err = %v; want the result with no saved id", rec, err)
 	}
 }
