@@ -10,8 +10,8 @@ func TestOwnerAccessSQLReplacesWhatThePlatformRoleCouldHavePlanted(t *testing.T)
 	sql := OwnerAccessSQL("app")
 	for _, want := range []string{
 		"DROP EVENT TRIGGER IF EXISTS " + ownerAccessTrigger + ";",
-		"DROP FUNCTION IF EXISTS " + ShareWithOwnerSignature + ";",
-		"DROP FUNCTION IF EXISTS " + shareCreatedSchemaSignature + ";",
+		"DROP ROUTINE IF EXISTS " + ShareWithOwnerSignature + ";",
+		"DROP ROUTINE IF EXISTS " + shareCreatedSchemaSignature + ";",
 		"ALTER FUNCTION " + ShareWithOwnerSignature + " OWNER TO CURRENT_USER",
 		"ALTER FUNCTION " + shareCreatedSchemaSignature + " OWNER TO CURRENT_USER",
 		"REVOKE ALL ON FUNCTION " + ShareWithOwnerSignature + " FROM PUBLIC",

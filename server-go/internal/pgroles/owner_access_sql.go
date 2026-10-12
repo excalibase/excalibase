@@ -16,11 +16,11 @@ const (
 
 // OwnerAccessSQL lets the project's own login use what migrations and Studio
 // create. Those run as excalibase_app, which keeps ownership; the owner gets
-// privileges on its user schemas and tables, never membership in the
+// DML on its user schemas' tables and their sequences, never membership in the
 // platform role, and nothing in the reserved schemas. Public is shared at
 // registration, a schema excalibase_app creates later by an event trigger.
-// Both functions run with the caller's rights and are dropped first, since
-// excalibase_app can create objects in the excalibase schema.
+// Both functions run with the caller's rights and are dropped first, as any
+// routine kind, since excalibase_app can create objects in the excalibase schema.
 func OwnerAccessSQL(owner string) string {
 	replacer := strings.NewReplacer(
 		"{{OWNER}}", textLiteral(owner),
@@ -35,8 +35,8 @@ func OwnerAccessSQL(owner string) string {
 
 const ownerAccessTemplate = `
 DROP EVENT TRIGGER IF EXISTS {{TRIGGER}};
-DROP FUNCTION IF EXISTS {{SHARE_CREATED}};
-DROP FUNCTION IF EXISTS {{SHARE}};
+DROP ROUTINE IF EXISTS {{SHARE_CREATED}};
+DROP ROUTINE IF EXISTS {{SHARE}};
 CREATE FUNCTION excalibase.share_with_owner(target_schema oid)
 RETURNS void
 LANGUAGE plpgsql
@@ -46,6 +46,9 @@ AS $fn$
 DECLARE
   owner_role CONSTANT text := {{OWNER}};
   platform_role CONSTANT text := {{APP_ROLE}};
+  -- Never TRIGGER: a trigger runs as whoever writes the row, so one the owner
+  -- attached would run its code as the platform role on every API write.
+  table_privileges CONSTANT text := 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE';
   schema_name text;
   relation record;
 BEGIN
@@ -57,7 +60,7 @@ BEGIN
     RETURN;
   END IF;
   EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', schema_name, owner_role);
-  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT ALL ON TABLES TO %I', platform_role, schema_name, owner_role);
+  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT ' || table_privileges || ' ON TABLES TO %I', platform_role, schema_name, owner_role);
   EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT ALL ON SEQUENCES TO %I', platform_role, schema_name, owner_role);
   FOR relation IN
     SELECT c.relname, c.relkind FROM pg_class c
@@ -67,7 +70,7 @@ BEGIN
     IF relation.relkind = 'S' THEN
       EXECUTE format('GRANT ALL ON SEQUENCE %I.%I TO %I', schema_name, relation.relname, owner_role);
     ELSE
-      EXECUTE format('GRANT ALL ON TABLE %I.%I TO %I', schema_name, relation.relname, owner_role);
+      EXECUTE format('GRANT ' || table_privileges || ' ON TABLE %I.%I TO %I', schema_name, relation.relname, owner_role);
     END IF;
   END LOOP;
 END

@@ -10,7 +10,7 @@ func TestCustomerRoleSQLDefinesThreeLockedDownFunctions(t *testing.T) {
 	sql := CustomerRoleSQL("app")
 	for _, signature := range []string{CreateRoleSignature, AlterRolePasswordSignature, DropRoleSignature} {
 		for _, want := range []string{
-			"DROP FUNCTION IF EXISTS " + signature + ";\nCREATE FUNCTION " + strings.SplitN(signature, "(", 2)[0] + "(role_name text",
+			"DROP ROUTINE IF EXISTS " + signature + ";\nCREATE FUNCTION " + strings.SplitN(signature, "(", 2)[0] + "(role_name text",
 			"ALTER FUNCTION " + signature + " OWNER TO CURRENT_USER",
 			"REVOKE ALL ON FUNCTION " + signature + " FROM PUBLIC",
 			"GRANT EXECUTE ON FUNCTION " + signature + " TO %I, %I",
@@ -67,7 +67,7 @@ func TestCustomerRoleSQLNeverCallsOutOfPgCatalog(t *testing.T) {
 	body := sql[strings.Index(sql, "CREATE FUNCTION"):]
 	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.Contains(trimmed, "excalibase.") && !strings.HasPrefix(trimmed, "CREATE FUNCTION") && !strings.HasPrefix(trimmed, "DROP FUNCTION") &&
+		if strings.Contains(trimmed, "excalibase.") && !strings.HasPrefix(trimmed, "CREATE FUNCTION") && !strings.HasPrefix(trimmed, "DROP ROUTINE") &&
 			!strings.HasPrefix(trimmed, "ALTER FUNCTION") && !strings.HasPrefix(trimmed, "REVOKE ALL ON FUNCTION") &&
 			!strings.HasPrefix(trimmed, "EXECUTE format('GRANT EXECUTE ON FUNCTION") {
 			t.Errorf("a function body refers to the excalibase schema: %s", trimmed)

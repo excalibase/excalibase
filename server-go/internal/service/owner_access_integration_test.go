@@ -45,7 +45,48 @@ func ownerAccessSuite(t *testing.T, image string) {
 	t.Run("owner reaches no platform bookkeeping", c.ownerReachesNoBookkeeping)
 	t.Run("neither role becomes the other", c.noMembershipEitherWay)
 	t.Run("owner DDL is unaffected", c.ownerDDLUnaffected)
+	t.Run("owner gets no trigger on a migrated table", c.ownerGetsNoTrigger)
+	t.Run("owner uses a migrated view", c.ownerUsesView)
 	t.Run("re-registration keeps access", c.reRegistrationKeepsAccess)
+	t.Run("a routine planted under a platform name cannot stop registration", c.plantedRoutinesAreReplaced)
+}
+
+// A trigger runs as whoever writes the row: one the owner could attach to a
+// migrated table would run its code as excalibase_app on every API write.
+func (c *ownerAccessCase) ownerGetsNoTrigger(t *testing.T) {
+	for _, privilege := range []string{"TRIGGER", "REFERENCES"} {
+		if scanBool(t, c.admin, "SELECT has_table_privilege($1, 'public.teams', $2)", customerOwner, privilege) {
+			t.Errorf("the owner holds %s on a migrated table", privilege)
+		}
+	}
+	mustExec(t, c.owner, "CREATE FUNCTION public.steal() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$")
+	mustFail(t, c.owner, "CREATE TRIGGER steal BEFORE INSERT ON public.teams FOR EACH ROW EXECUTE FUNCTION public.steal()", "")
+	mustExec(t, c.owner, "TRUNCATE public.teams")
+}
+
+func (c *ownerAccessCase) ownerUsesView(t *testing.T) {
+	mustExec(t, c.app, "CREATE VIEW league.match_homes AS SELECT home FROM league.matches")
+	if got := scanString(t, c.owner, "SELECT count(*)::text FROM league.match_homes"); got == "" {
+		t.Fatal("the owner could not read a migrated view")
+	}
+}
+
+// excalibase_app can create objects in the excalibase schema; a procedure or
+// aggregate it left under a platform function's name must not abort the
+// registration that replaces it.
+func (c *ownerAccessCase) plantedRoutinesAreReplaced(t *testing.T) {
+	c.pg.psql(t, "DROP EVENT TRIGGER excalibase_share_created_schema; DROP FUNCTION excalibase.share_created_schema(); DROP FUNCTION excalibase.share_with_owner(oid); DROP FUNCTION excalibase.drop_role(text)")
+	mustExec(t, c.app, "CREATE PROCEDURE excalibase.share_with_owner(oid) LANGUAGE sql AS $$ SELECT 1 $$")
+	mustExec(t, c.app, "CREATE PROCEDURE excalibase.share_created_schema() LANGUAGE sql AS $$ SELECT 1 $$")
+	mustExec(t, c.app, "CREATE PROCEDURE excalibase.drop_role(text) LANGUAGE sql AS $$ SELECT 1 $$")
+	restore := c.spec
+	restore.resetPasswords = true
+	if err := c.pg.psqlErr(projectRoleSQL(restore, c.creds, "cdc_watcher_pub")); err != nil {
+		t.Fatalf("registration failed on a planted routine: %v", err)
+	}
+	mustExec(t, c.app, "CREATE SCHEMA after_plant")
+	mustExec(t, c.app, "CREATE TABLE after_plant.items (id int)")
+	mustExec(t, c.owner, "INSERT INTO after_plant.items VALUES (1)")
 }
 
 func (c *ownerAccessCase) migrationCreatesSchema(t *testing.T) {
