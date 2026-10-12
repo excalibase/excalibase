@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -23,6 +25,7 @@ type MigrationService struct {
 	vault       vaultclient.VaultClient
 	storagePath string
 	overrides   dsnOverrides
+	now         func() time.Time
 }
 
 // dsnOverrides lets local dev point the tenant connection at a port-forward
@@ -38,6 +41,7 @@ func NewMigrationService(store storage.InstanceStore, vault vaultclient.VaultCli
 		store:       store,
 		vault:       vault,
 		storagePath: storagePath,
+		now:         time.Now,
 		overrides: dsnOverrides{
 			host:    os.Getenv("SCHEMA_DB_HOST"),
 			port:    os.Getenv("SCHEMA_DB_PORT"),
@@ -86,8 +90,7 @@ func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string,
 	}
 	defer db.Close()
 
-	now := time.Now()
-	migID := fmt.Sprintf("mig-%s", now.Format("20060102-150405"))
+	now := s.now()
 
 	start := time.Now()
 	// Runs as excalibase_app (non-superuser). lib/pq sends the whole SQL as a
@@ -99,7 +102,6 @@ func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string,
 	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(req.SQL)))[:8]
 
 	record := &domain.MigrationRecord{
-		ID:              migID,
 		ProjectID:       projectID,
 		Version:         req.Version,
 		Name:            req.Name,
@@ -120,19 +122,49 @@ func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string,
 		record.AppliedAt = ft
 	}
 
-	// Save to disk
 	dir := filepath.Join(s.storagePath, "projects", projectID, "migrations")
-	if mkErr := os.MkdirAll(dir, 0755); mkErr != nil {
-		log.Printf("WARN: mkdir %s: %v", dir, mkErr)
-	}
-	data, marshalErr := json.MarshalIndent(record, "", "  ")
-	if marshalErr != nil {
-		log.Printf("WARN: marshal migration record %s: %v", migID, marshalErr)
-	} else if writeErr := os.WriteFile(filepath.Join(dir, migID+".json"), data, 0644); writeErr != nil {
-		log.Printf("WARN: write %s: %v", filepath.Join(dir, migID+".json"), writeErr)
+	if err := saveMigrationRecord(dir, now, record); err != nil {
+		log.Printf("WARN: migration record for %s not saved: %v", projectID, err)
 	}
 
 	return record, nil
+}
+
+// maxIDAttempts bounds the search for a free id among migrations recorded in the same nanosecond.
+const maxIDAttempts = 1000
+
+// saveMigrationRecord gives record the first free id at or after now and writes it without ever
+// replacing another record. Ids are mig-<yyyymmdd-hhmmss>-<nanoseconds, 9 digits>, so file-name order is
+// application order, and second-precision ids written before EXC-605 still sort by their time.
+func saveMigrationRecord(dir string, now time.Time, record *domain.MigrationRecord) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	stamp := now.Format("20060102-150405")
+	nanos := now.Nanosecond()
+	for attempt := 0; attempt < maxIDAttempts; attempt++ {
+		record.ID = fmt.Sprintf("mig-%s-%09d", stamp, nanos+attempt)
+		data, err := json.MarshalIndent(record, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal %s: %w", record.ID, err)
+		}
+		file, err := os.OpenFile(filepath.Join(dir, record.ID+".json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("create %s: %w", record.ID, err)
+		}
+		_, writeErr := file.Write(data)
+		if closeErr := file.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		if writeErr != nil {
+			return fmt.Errorf("write %s: %w", record.ID, writeErr)
+		}
+		return nil
+	}
+	return fmt.Errorf("no free migration id at %s", stamp)
 }
 
 func (s *MigrationService) ListMigrations(projectID string) ([]domain.MigrationRecord, error) {
