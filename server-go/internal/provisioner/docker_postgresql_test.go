@@ -173,8 +173,8 @@ func TestDockerProvisioner_Provision(t *testing.T) {
 	if result.DatabaseName != "app" {
 		t.Errorf("expected db=app, got %s", result.DatabaseName)
 	}
-	if result.Username != "postgres" {
-		t.Errorf("expected user=postgres, got %s", result.Username)
+	if result.Username != "app" {
+		t.Errorf("expected the owner login app, got %s", result.Username)
 	}
 	if result.Password == "" {
 		t.Error("expected non-empty password")
@@ -222,8 +222,8 @@ func TestDockerProvisioner_EachProjectGetsItsOwnRandomSuperuserPassword(t *testi
 			t.Fatalf("Provision: %v", err)
 		}
 		password := docker.lastEnv["POSTGRES_PASSWORD"]
-		if password != result.Password {
-			t.Error("the container's superuser password must be the one handed back for the vault")
+		if password == result.Password {
+			t.Error("the container's superuser password must never be handed back for the vault")
 		}
 		if len(password) < 32 {
 			t.Errorf("superuser password is %d chars, want at least 32", len(password))

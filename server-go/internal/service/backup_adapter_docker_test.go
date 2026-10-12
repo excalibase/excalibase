@@ -201,6 +201,7 @@ func setupDockerAdapter(t *testing.T) (*DockerBackupAdapter, *storage.FileSystem
 		OrgID:           "org",
 		Namespace:       "excalibase-dk-1-postgres",
 		DatabaseName:    "app",
+		Username:        "app",
 		Password:        "pw",
 		DeploymentMode:  domain.ModeDocker,
 		Status:          "ACTIVE",
@@ -752,5 +753,70 @@ func TestDockerAdapter_Restore_RefusesWithoutAPlan(t *testing.T) {
 	}
 	if dc.createdName != "" {
 		t.Fatalf("container %q created anyway", dc.createdName)
+	}
+}
+
+// A restored copy keeps the source's owner login (EXC-604): registration
+// resets that role's password, and the container's superuser stays unfiled.
+func TestDockerAdapter_Restore_RegistersTheSourcesOwnerNotTheSuperuser(t *testing.T) {
+	adapter, store, _, uploader, records := setupDockerAdapter(t)
+	adapter.SetInstanceStore(store)
+	dc := &fakeDockerClientForAdapter{}
+	adapter.SetDockerClient(dc)
+	registrar := &fakeRegistrar{store: store}
+	adapter.SetProjectRegistrar(registrar)
+	src, _ := store.FindByProjectID("dk-1")
+	src.Username = "shop_owner"
+	uploader.objects["test-backups/backups/dk-1/manual/backup-2026.tar.gz"] = minimalGzippedTar(t)
+	records.Save(context.Background(), &domain.BackupRecord{
+		ID: "backup-2026", ProjectID: "dk-1", Status: "COMPLETED", Type: "MANUAL",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	if _, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dk-restored", TargetProjectID: "dk-restored"}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if len(registrar.calls) != 1 {
+		t.Fatalf("registered %d times", len(registrar.calls))
+	}
+	registered := registrar.calls[0]
+	if registered.Username != "shop_owner" {
+		t.Fatalf("registered login %q, want the source's owner", registered.Username)
+	}
+	if !registrar.opts[0].ResetAdminPassword || registered.Password == "" {
+		t.Fatal("the owner's password must be reset to a new filed one")
+	}
+	if registered.Password == dc.createdEnv["POSTGRES_PASSWORD"] {
+		t.Fatal("the owner's password must not be the container's superuser password")
+	}
+}
+
+// A source with no usable owner on record is refused before any container
+// exists: the copy would be registered with no login, or with the superuser.
+func TestDockerAdapter_Restore_RefusesASourceWithoutAnOwner(t *testing.T) {
+	for _, owner := range []string{"", "postgres", "excalibase_app"} {
+		t.Run("owner "+owner, func(t *testing.T) { restoreRefusesOwner(t, owner) })
+	}
+}
+
+func restoreRefusesOwner(t *testing.T, owner string) {
+	adapter, store, _, uploader, records := setupDockerAdapter(t)
+	adapter.SetInstanceStore(store)
+	dc := &fakeDockerClientForAdapter{}
+	adapter.SetDockerClient(dc)
+	adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
+	src, _ := store.FindByProjectID("dk-1")
+	src.Username = owner
+	uploader.objects["test-backups/backups/dk-1/manual/backup-2026.tar.gz"] = minimalGzippedTar(t)
+	records.Save(context.Background(), &domain.BackupRecord{
+		ID: "backup-2026", ProjectID: "dk-1", Status: "COMPLETED", Type: "MANUAL",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dk-restored", TargetProjectID: "dk-restored"})
+	if err == nil || !strings.Contains(err.Error(), "owner") {
+		t.Fatalf("a source without an owner was restored: %v", err)
+	}
+	if dc.createdName != "" {
+		t.Fatal("a container was created before the refusal")
 	}
 }

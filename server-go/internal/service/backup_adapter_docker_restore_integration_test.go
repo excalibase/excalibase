@@ -70,6 +70,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 	if err := dockerExecPSQL(ctx, srcID, pgPwd, "CREATE TABLE smoke (n int); INSERT INTO smoke VALUES (4242);"); err != nil {
 		t.Fatalf("seed source: %v", err)
 	}
+	seedProjectOwner(ctx, t, srcID, pgPwd)
 	// Force a checkpoint so the basebackup captures the row.
 	_ = dockerExecPSQL(ctx, srcID, pgPwd, "CHECKPOINT;")
 
@@ -85,7 +86,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 		StorageSize:     "50Gi",
 		Namespace:       srcID,
 		DatabaseName:    "app",
-		Username:        defaultPostgresSuperuser,
+		Username:        projectOwnerFixture,
 		Password:        pgPwd,
 		PostgresVersion: "16",
 		DeploymentMode:  domain.ModeDocker,
@@ -205,6 +206,7 @@ func TestDockerBackupAdapter_RestoreRejectedCredentialsE2E(t *testing.T) {
 	if err := dockerExecPSQL(ctx, srcID, pgPwd, "CREATE TABLE smoke (n int); INSERT INTO smoke VALUES (4242);"); err != nil {
 		t.Fatalf("seed source: %v", err)
 	}
+	seedProjectOwner(ctx, t, srcID, pgPwd)
 	_ = dockerExecPSQL(ctx, srcID, pgPwd, "CHECKPOINT;")
 
 	bucket := "excalibase-restore-reject-e2e"
@@ -219,7 +221,7 @@ func TestDockerBackupAdapter_RestoreRejectedCredentialsE2E(t *testing.T) {
 		StorageSize:     "50Gi",
 		Namespace:       srcID,
 		DatabaseName:    "app",
-		Username:        defaultPostgresSuperuser,
+		Username:        projectOwnerFixture,
 		Password:        pgPwd,
 		PostgresVersion: "16",
 		DeploymentMode:  domain.ModeDocker,
@@ -257,5 +259,17 @@ func TestDockerBackupAdapter_RestoreRejectedCredentialsE2E(t *testing.T) {
 	if out, err := exec.CommandContext(ctx, "docker", "inspect",
 		"excalibase-"+target+"-postgres").CombinedOutput(); err == nil {
 		t.Errorf("the restored container was not removed: %s", strings.TrimSpace(string(out)))
+	}
+}
+
+// projectOwnerFixture is the source's own login, as a single host provisions
+// it (EXC-604): a restore registers the copy with it, never the superuser.
+const projectOwnerFixture = "app"
+
+func seedProjectOwner(ctx context.Context, t *testing.T, containerID, superuserPassword string) {
+	t.Helper()
+	sql := "CREATE ROLE " + projectOwnerFixture + " LOGIN PASSWORD '" + testutil.FixturePassword("pg-owner") + "'; ALTER DATABASE app OWNER TO " + projectOwnerFixture + ";"
+	if err := dockerExecPSQL(ctx, containerID, superuserPassword, sql); err != nil {
+		t.Fatalf("seed the project owner: %v", err)
 	}
 }

@@ -24,7 +24,7 @@ var officialImageOwner = provisioner.FileOwner{UID: 999, GID: 999}
 func createRestoreContainer(ctx context.Context, dc provisioner.DockerClient, spec restoreContainerSpec) (string, provisioner.FileOwner, error) {
 	if spec.documentDB {
 		databaseLimits, _ := provisioner.DocumentDBLimits(spec.limits)
-		containerSpec, err := provisioner.DocumentDBDatabaseSpec(spec.newProject, spec.major, spec.dbName, spec.newPassword, databaseLimits, spec.ports)
+		containerSpec, err := provisioner.DocumentDBDatabaseSpec(spec.newProject, spec.major, spec.dbName, spec.newPassword, spec.owner, databaseLimits, spec.ports)
 		if err != nil {
 			return "", provisioner.FileOwner{}, fmt.Errorf("restore %s: %w", spec.sourceProjectID, err)
 		}

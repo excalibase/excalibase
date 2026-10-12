@@ -50,6 +50,7 @@ func TestDockerBackupAdapter_PITR_TargetName(t *testing.T) {
 	// --- Source postgres with /walarchive prepared -----------------------
 	pgPwd := testutil.FixturePassword("pg-pitr-int")
 	_, srcID := startArchivingPostgres(ctx, t, pgPwd)
+	seedProjectOwner(ctx, t, srcID, pgPwd)
 
 	// --- LocalStack S3 + adapter wiring ----------------------------------
 	bucket := "excalibase-pitr-e2e"
@@ -58,7 +59,7 @@ func TestDockerBackupAdapter_PITR_TargetName(t *testing.T) {
 
 	src := &domain.DatabaseInstance{
 		ProjectID: "src-pitr", OrgID: "org", Namespace: srcID, Tier: domain.Standard, StorageSize: "50Gi",
-		DatabaseName: "app", Username: defaultPostgresSuperuser, Password: pgPwd,
+		DatabaseName: "app", Username: projectOwnerFixture, Password: pgPwd,
 		PostgresVersion: "17", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	}
 	store.Create(src)
@@ -157,6 +158,7 @@ func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) { //NOSONAR seque
 	// --- Source + LocalStack + adapter (same pattern as TargetName) ------
 	pgPwd := testutil.FixturePassword("pg-pitr-variants")
 	pgC, srcID := startArchivingPostgres(ctx, t, pgPwd)
+	seedProjectOwner(ctx, t, srcID, pgPwd)
 
 	bucket := "excalibase-pitr-variants"
 	uploader := newLocalStackUploader(ctx, t, bucket)
@@ -164,7 +166,7 @@ func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) { //NOSONAR seque
 
 	src := &domain.DatabaseInstance{
 		ProjectID: "src-variants", OrgID: "org", Namespace: srcID, Tier: domain.Standard, StorageSize: "50Gi",
-		DatabaseName: "app", Username: defaultPostgresSuperuser, Password: pgPwd,
+		DatabaseName: "app", Username: projectOwnerFixture, Password: pgPwd,
 		PostgresVersion: "17", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	}
 	store.Create(src)

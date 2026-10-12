@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
@@ -49,10 +50,16 @@ func reservedLabelPrefix(key string) bool {
 }
 
 // validateOwnerAndTags checks the request fields that are written verbatim
-// into the cluster: the owner role (pg_hba) and the tags (labels).
+// into the cluster: the owner role (pg_hba), the database name (psql -d) and
+// the tags (labels).
 func validateOwnerAndTags(req domain.ProvisioningRequest) error {
 	if req.MasterUsername != "" {
-		if err := domain.ValidateMasterUsername(req.MasterUsername); err != nil {
+		if err := provisioner.ValidateOwner(req.MasterUsername); err != nil {
+			return err
+		}
+	}
+	if req.DatabaseName != "" {
+		if err := domain.ValidateDatabaseName(req.DatabaseName); err != nil {
 			return err
 		}
 	}

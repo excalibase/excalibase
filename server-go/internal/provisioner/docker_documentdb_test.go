@@ -50,8 +50,8 @@ func TestDocumentDBProjectRunsTheCatalogueImageWithItsOwnStartScript(t *testing.
 	if _, ok := spec.Ports["10260"]; !ok {
 		t.Fatalf("gateway port not published from the database container: %v", spec.Ports)
 	}
-	if spec.Env["POSTGRES_PASSWORD"] != result.Password || result.Username != "postgres" {
-		t.Fatal("the superuser password handed back must be the container's")
+	if spec.Env["POSTGRES_PASSWORD"] == "" || spec.Env["POSTGRES_PASSWORD"] == result.Password || result.Username != "app" {
+		t.Fatal("the owner login, never the container's superuser, is handed back")
 	}
 	if result.Host != "excalibase-p1-postgres" || result.Namespace != "excalibase-p1-postgres" || result.Port != 5432 || result.SSLMode != "disable" {
 		t.Fatalf("result %+v", result)
@@ -59,7 +59,7 @@ func TestDocumentDBProjectRunsTheCatalogueImageWithItsOwnStartScript(t *testing.
 }
 
 func TestDocumentDBStartScriptSetsWhatKubernetesSets(t *testing.T) {
-	script := documentDBStartScript()
+	script := documentDBStartScript("app")
 	for _, want := range []string{
 		"shared_preload_libraries=" + strings.Join(config.DocumentDBPreloadLibraries(), ","),
 		config.DocumentDBCronDatabaseSetting + "=" + config.DocumentDBDatabase,
@@ -73,15 +73,32 @@ func TestDocumentDBStartScriptSetsWhatKubernetesSets(t *testing.T) {
 			t.Errorf("start script lacks %q", want)
 		}
 	}
-	for _, line := range DocumentDBHBA() {
+	for _, line := range DocumentDBHBA("app") {
 		if !strings.Contains(script, line+"\n") {
 			t.Errorf("start script does not write %q", line)
 		}
 	}
 }
 
+// The gateway opens its session as the client's role, the owner included, as
+// on Kubernetes; the superuser and platform roles are not trusted (EXC-604).
+func TestDocumentDBHBATrustsTheOwnerOnLoopbackAndNoSuperuser(t *testing.T) {
+	hba := DocumentDBHBA("shop_owner")
+	if !slices.Contains(hba, "host all shop_owner 127.0.0.1/32 trust") || !slices.Contains(hba, "host all shop_owner ::1/128 trust") {
+		t.Fatalf("the owner is not trusted on loopback: %v", hba)
+	}
+	for _, line := range hba {
+		if (strings.HasPrefix(line, "host all postgres ") && strings.HasSuffix(line, " trust")) || strings.Contains(line, " excalibase_app ") {
+			t.Errorf("a superuser or platform role is trusted: %q", line)
+		}
+	}
+	if got := DocumentDBHBA("Bad Name"); slices.ContainsFunc(got, func(line string) bool { return strings.Contains(line, "Bad") }) {
+		t.Fatalf("an unsafe owner name was written: %v", got)
+	}
+}
+
 func TestDocumentDBHBATrustsTheGatewayAndMongoUsersOnLoopbackOnly(t *testing.T) {
-	hba := DocumentDBHBA()
+	hba := DocumentDBHBA("app")
 	group := "+" + config.DocumentDBMongoUsersGroup
 	for _, role := range []string{config.DocumentDBGatewayRole, group} {
 		for _, line := range hba {

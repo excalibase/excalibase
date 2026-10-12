@@ -45,6 +45,18 @@ func ValidateMasterUsername(name string) error {
 	return nil
 }
 
+// ErrDatabaseName refuses a database name that is not a plain identifier.
+var ErrDatabaseName = errors.New("databaseName must be 1-63 characters of lowercase letters, digits and underscore, not starting with a digit")
+
+// ValidateDatabaseName refuses a database name psql could read as connection
+// settings ("host=...", a URI) or that needs quoting anywhere it is written.
+func ValidateDatabaseName(name string) error {
+	if !masterUsernamePattern.MatchString(name) {
+		return ErrDatabaseName
+	}
+	return nil
+}
+
 // Recovery targets are written into postgresql.auto.conf inside quotes, so
 // each is held to the shape Postgres itself accepts for it.
 var (

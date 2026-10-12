@@ -40,7 +40,12 @@ func TestDockerDocumentDBProjectServesMongoClientsFromTheHost(t *testing.T) {
 		t.Fatalf("Provision: %v", err)
 	}
 
-	client := mongoFromHost(ctx, t, docker, projectID, result.Namespace, result.Password)
+	// Registration makes the owner a DocumentDB user; the superuser is never handed out.
+	grant := "GRANT " + config.DocumentDBExtension + "_admin_role TO \"" + result.Username + "\";\n"
+	if _, err := docker.ExecInContainerStdin(ctx, result.Namespace, psqlScript(config.DocumentDBDatabase), grant); err != nil {
+		t.Fatalf("grant the owner DocumentDB access: %v", err)
+	}
+	client := mongoFromHost(ctx, t, docker, projectID, result.Namespace, result.Username, result.Password)
 	items := client.Database("shop").Collection("items")
 	if _, err := items.InsertOne(ctx, bson.M{"sku": "a1", "qty": 3}); err != nil {
 		t.Fatalf("insert: %v", err)
@@ -57,7 +62,7 @@ func TestDockerDocumentDBProjectServesMongoClientsFromTheHost(t *testing.T) {
 	if err := p.Resume(ctx, result.Namespace, projectID); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	client = mongoFromHost(ctx, t, docker, projectID, result.Namespace, result.Password)
+	client = mongoFromHost(ctx, t, docker, projectID, result.Namespace, result.Username, result.Password)
 	assertCount(ctx, t, client.Database("shop").Collection("items"), 1)
 	_ = client.Disconnect(ctx)
 
@@ -95,7 +100,7 @@ func TestDockerExecInContainerStdinReportsWhatPsqlSays(t *testing.T) {
 	}
 }
 
-func mongoFromHost(ctx context.Context, t *testing.T, docker *RealDockerClient, projectID, database, password string) *mongo.Client {
+func mongoFromHost(ctx context.Context, t *testing.T, docker *RealDockerClient, projectID, database, username, password string) *mongo.Client {
 	t.Helper()
 	state, err := docker.ContainerState(ctx, database)
 	if err != nil {
@@ -116,7 +121,7 @@ func mongoFromHost(ctx context.Context, t *testing.T, docker *RealDockerClient, 
 	client, err := mongo.Connect(options.Client().
 		SetHosts([]string{net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}).
 		SetDirect(true).
-		SetAuth(options.Credential{AuthMechanism: "SCRAM-SHA-256", Username: "postgres", Password: password}).
+		SetAuth(options.Credential{AuthMechanism: "SCRAM-SHA-256", Username: username, Password: password}).
 		SetTLSConfig(&tls.Config{RootCAs: roots, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12}).
 		SetServerSelectionTimeout(30 * time.Second))
 	if err != nil {
