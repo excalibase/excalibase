@@ -5,13 +5,13 @@ import "strings"
 func githubLogin(registry string) string {
 	switch registry {
 	case "ghcr.io":
-		return "      - uses: docker/login-action@v3\n        with:\n          registry: ghcr.io\n" +
+		return "      - uses: docker/login-action@v4\n        with:\n          registry: ghcr.io\n" +
 			"          username: ${{ github.actor }}\n          password: ${{ secrets.GITHUB_TOKEN }}"
 	case "":
-		return "      - uses: docker/login-action@v3\n        with:\n" +
+		return "      - uses: docker/login-action@v4\n        with:\n" +
 			"          username: ${{ secrets.DOCKERHUB_USERNAME }}\n          password: ${{ secrets.DOCKERHUB_TOKEN }}"
 	}
-	return "      - uses: docker/login-action@v3\n        with:\n          registry: " + registry + "\n" +
+	return "      - uses: docker/login-action@v4\n        with:\n          registry: " + registry + "\n" +
 		"          username: ${{ secrets.REGISTRY_USERNAME }}\n          password: ${{ secrets.REGISTRY_PASSWORD }}"
 }
 
@@ -76,11 +76,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
 ` + githubLogin(registry) + `
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: "` + buildContext(target.Build) + `"` + file + `
           push: true

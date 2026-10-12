@@ -50,7 +50,9 @@ type AppDeployService struct {
 	// corsOrigins releases the allowlist origin an app added; nil leaves it.
 	corsOrigins CorsOriginReleaser
 	// images resolves a named image to the digest a deploy pins.
-	images          ImageResolver
+	images ImageResolver
+	// localRegistries are operator registries never dialled (self-host only).
+	localRegistries []string
 	plans           PlanTiers
 	headroomPercent int
 	// quotaTiers sizes the namespace quota from the plan (EXC-524).

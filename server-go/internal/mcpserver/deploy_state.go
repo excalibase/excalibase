@@ -45,7 +45,7 @@ func ciliumMissing(text string) bool {
 // names one is not served: store it on the app, then deploy the app as it
 // stands. A 404 for an app that does not exist stays the original refusal.
 func deployViaUpdate(ctx context.Context, c *call, path, image string, refused error) (map[string]any, error) {
-	if _, err := patchApp(ctx, c, path, updateAppArgs{Image: image}); err != nil {
+	if _, err := patchApp(ctx, c, "", path, updateAppArgs{Image: image}); err != nil {
 		if isStatus(err, http.StatusNotFound) {
 			return nil, refused
 		}

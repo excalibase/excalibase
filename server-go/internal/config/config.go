@@ -333,6 +333,9 @@ type AppConfig struct {
 	// TenantSizedProvisioners, which make volumes of exactly their size.
 	TenantStorageRequireSized bool
 	TenantSizedProvisioners   []string
+	// AppLocalRegistries are registries a self-hosted operator runs beside the
+	// platform (APP_LOCAL_REGISTRIES); refused in cloud mode.
+	AppLocalRegistries []string
 	// SingleHostApps is how apps run when PROVISIONER_MODE=docker (EXC-575).
 	SingleHostApps SingleHostAppsConfig
 	// AppDiskToolsImage runs the app-disk usage probe and lowering copy.
@@ -393,6 +396,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateFunctionEgress(); err != nil {
 		return err
 	}
+	if err := c.validateAppLocalRegistries(); err != nil {
+		return err
+	}
 	return c.validateAppRoute()
 }
 
@@ -401,6 +407,7 @@ func Load() AppConfig {
 	cfg.StuckRetryAfter = envDuration("EXCALIBASE_STUCK_RETRY_AFTER", stuckRetryAfter(cfg.PauseTimeout))
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
+	cfg.AppLocalRegistries = loadAppLocalRegistries()
 	return cfg
 }
 

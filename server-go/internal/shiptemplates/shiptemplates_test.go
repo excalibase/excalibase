@@ -108,3 +108,37 @@ func TestDockerfileDefaultsAndRefusals(t *testing.T) {
 		t.Errorf("an unknown variant must be refused")
 	}
 }
+
+// A server image runs node itself under an init, never a package manager:
+// npm as PID 1 forwards SIGTERM poorly, and the build's dev tools (nest,
+// tsc) are pruned from the image (EXC-600).
+func TestNodeServersRunNodeUnderAnInit(t *testing.T) {
+	for _, stack := range []string{"node", "nestjs"} {
+		for _, variant := range nodeVariants {
+			file, err := Dockerfile(stack, variant)
+			if err != nil {
+				t.Fatalf("%s/%s: %v", stack, variant, err)
+			}
+			for _, want := range []string{`ENTRYPOINT ["/sbin/tini", "--"]`, `CMD ["node", `, "apk add --no-cache tini"} {
+				if !strings.Contains(file.Content, want) {
+					t.Errorf("%s/%s lacks %q:\n%s", stack, variant, want, file.Content)
+				}
+			}
+			for _, refused := range []string{`"npm", "start"`, `"pnpm", "start"`, `"start"]`} {
+				if strings.Contains(file.Content, refused) {
+					t.Errorf("%s/%s still starts through the package manager:\n%s", stack, variant, file.Content)
+				}
+			}
+		}
+	}
+}
+
+func TestNestJSRunsItsBuiltMain(t *testing.T) {
+	file, err := Dockerfile("nestjs", "")
+	if err != nil || !strings.Contains(file.Content, `CMD ["node", "dist/main.js"]`) || !strings.Contains(file.Content, "npm run build") {
+		t.Fatalf("nestjs: %v\n%s", err, file.Content)
+	}
+	if detect := Questions().Detect["nestjs"]; !strings.Contains(detect, "@nestjs/core") {
+		t.Fatalf("the questions do not tell NestJS apart: %q", detect)
+	}
+}

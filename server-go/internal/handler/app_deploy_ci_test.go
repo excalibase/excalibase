@@ -133,6 +133,7 @@ func TestDeploy_RegistryAnswersMapToStatuses(t *testing.T) {
 		imagedigest.ErrNotFound:                            http.StatusUnprocessableEntity,
 		imagedigest.ErrDenied:                              http.StatusUnprocessableEntity,
 		imagedigest.ErrNotPublic:                           http.StatusUnprocessableEntity,
+		apphost.ErrLocalRegistryNeedsDigest:                http.StatusUnprocessableEntity,
 		imagedigest.ErrRateLimited:                         http.StatusServiceUnavailable,
 		imagedigest.ErrUnavailable:                         http.StatusBadGateway,
 		apphost.ErrAppVersionConflict:                      http.StatusConflict,

@@ -35,6 +35,12 @@ func (s *AppDeployService) DeployImage(ctx context.Context, projectID, appID, im
 	if _, err := s.lookupApp(projectID, appID); err != nil {
 		return nil, err
 	}
+	if digest, local, err := s.localRegistryDigest(image); local {
+		if err != nil {
+			return nil, err
+		}
+		return s.deployDigest(ctx, projectID, appID, image, digest, origin, nil)
+	}
 	digest, err := s.resolveImage(ctx, projectID, image)
 	if err != nil {
 		return nil, err

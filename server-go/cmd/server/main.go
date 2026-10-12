@@ -1500,6 +1500,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appDeploySvc.SetCorsOriginReleaser(origins)
 	}
 	appDeploySvc.SetImageResolver(imagedigest.NewResolver())
+	appDeploySvc.SetLocalRegistries(cfg.AppLocalRegistries)
 	appNetworkSvc := newAppNetworkService(sqlStore, store, appRuntime, a.claimer)
 	schemaHandler := newSchemaHandler(cfg, vc, store)
 	return &handlerDeps{

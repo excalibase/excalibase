@@ -120,3 +120,89 @@ func TestDeleteAppWithADiskIsRefusedByTheRoute(t *testing.T) {
 		t.Fatalf("result = %s", resultText(res))
 	}
 }
+
+const projectListA = `[{"projectId":"` + testProjectA + `","status":"ACTIVE","databaseName":"app","databaseType":"POSTGRESQL"},{"projectId":"other","databaseName":"x"}]`
+
+// A bring-your-own backend reads its database from DATABASE_URL: the tool
+// declares a reference the deploy resolves, so no credential passes through MCP.
+func TestUpdateAppAttachesTheDatabaseAsAReference(t *testing.T) {
+	routes := newFakeRoutes()
+	routes.on(http.MethodGet, provisionAPI, 200, projectListA)
+	routes.on(http.MethodGet, projectsA+"/apps/web/", 200, storedWeb)
+	routes.on(http.MethodPatch, projectsA+"/apps/web/", 200, `{"id":"web","status":"ACTIVE","version":8}`)
+	updateSession(t, routes)(map[string]any{"database_env": []string{"DATABASE_URL"}})
+	patch := routes.calls[len(routes.calls)-1]
+	want := `{"name":"DATABASE_URL","kind":"reference","reference":{"sourceKind":"database","sourceName":"app","variable":"DATABASE_URL"}}`
+	if patch.Method != http.MethodPatch || !strings.Contains(patch.Body, want) {
+		t.Fatalf("patch = %s", patch.Body)
+	}
+	if !strings.Contains(patch.Body, `"name":"KEEP"`) || !strings.Contains(patch.Body, `"path":"projects/p/apps/web/DB"`) {
+		t.Fatalf("other variables must be kept: %s", patch.Body)
+	}
+}
+
+func TestUpdateAppDatabaseEnvReplacesAVariableOfTheSameName(t *testing.T) {
+	routes := newFakeRoutes()
+	routes.on(http.MethodGet, provisionAPI, 200, projectListA)
+	routes.on(http.MethodGet, projectsA+"/apps/web/", 200, storedWeb)
+	routes.on(http.MethodPatch, projectsA+"/apps/web/", 200, `{"id":"web","version":8}`)
+	updateSession(t, routes)(map[string]any{"database_env": []string{"PGHOST"}, "remove_env": []string{"OLD"}})
+	body := routes.calls[len(routes.calls)-1].Body
+	if strings.Contains(body, `"OLD"`) || strings.Count(body, `"PGHOST"`) != 2 {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestUpdateAppDatabaseEnvRefusesWhatTheDatabaseDoesNotExpose(t *testing.T) {
+	routes := newFakeRoutes()
+	routes.on(http.MethodGet, provisionAPI, 200, projectListA)
+	cs := session(t, routes, &recordingAudit{}, writeCaller())
+	res := callTool(t, cs, "update_app", map[string]any{"project_id": testProjectA, "app_id": "web", "database_env": []string{"MYSQL_HOST"}})
+	if !res.IsError || !strings.Contains(resultText(res), "DATABASE_URL") {
+		t.Fatalf("result = %s", resultText(res))
+	}
+}
+
+func TestUpdateAppDatabaseEnvNeedsADatabase(t *testing.T) {
+	routes := newFakeRoutes()
+	routes.on(http.MethodGet, provisionAPI, 200, `[{"projectId":"`+testProjectA+`","noDatabase":true}]`)
+	cs := session(t, routes, &recordingAudit{}, writeCaller())
+	res := callTool(t, cs, "update_app", map[string]any{"project_id": testProjectA, "app_id": "web", "database_env": []string{"DATABASE_URL"}})
+	if !res.IsError || !strings.Contains(resultText(res), "no database") {
+		t.Fatalf("result = %s", resultText(res))
+	}
+}
+
+func TestUpdateAppRefusesTheSameNameAsLiteralAndDatabase(t *testing.T) {
+	cs := session(t, newFakeRoutes(), &recordingAudit{}, writeCaller())
+	res := callTool(t, cs, "update_app", map[string]any{"project_id": testProjectA, "app_id": "web",
+		"database_env": []string{"DATABASE_URL"}, "set_env": []map[string]any{{"name": "DATABASE_URL", "value": "x"}}})
+	if !res.IsError || !strings.Contains(resultText(res), "DATABASE_URL") {
+		t.Fatalf("result = %s", resultText(res))
+	}
+}
+
+// An app no deploy has run reads NOT_DEPLOYED here as it does in list_apps.
+func TestUpdateAppReportsAnUndeployedAppAsNotDeployed(t *testing.T) {
+	routes := newFakeRoutes()
+	routes.on(http.MethodGet, projectsA+"/apps/web/", 200, storedWeb)
+	routes.on(http.MethodPatch, projectsA+"/apps/web/", 200, `{"id":"web","status":"PROVISIONING","version":8}`)
+	routes.on(http.MethodGet, projectsA+"/apps/web/deploys", 200, `[]`)
+	out := updateSession(t, routes)(map[string]any{"port": 3000})
+	if app := out["app"].(map[string]any); app["status"] != statusNotDeployed {
+		t.Fatalf("status = %v", app["status"])
+	}
+}
+
+// The change is stored before the status is read; a failed read must not make
+// the agent retry a change that already happened.
+func TestUpdateAppKeepsTheStoredChangeWhenTheStatusCannotBeRead(t *testing.T) {
+	routes := newFakeRoutes()
+	routes.on(http.MethodGet, projectsA+"/apps/web/", 200, storedWeb)
+	routes.on(http.MethodPatch, projectsA+"/apps/web/", 200, `{"id":"web","status":"PROVISIONING","version":8}`)
+	routes.on(http.MethodGet, projectsA+"/apps/web/deploys", 500, `{"error":"boom"}`)
+	out := updateSession(t, routes)(map[string]any{"port": 3000})
+	if out["app"] == nil || out["statusError"] == nil {
+		t.Fatalf("out = %v", out)
+	}
+}
