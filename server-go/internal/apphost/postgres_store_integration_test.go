@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -144,6 +146,11 @@ func TestPGAppStore_PlanAppLimit(t *testing.T) {
 	var limitErr apphost.AppLimitError
 	if !errors.Is(err, apphost.ErrAppLimitReached) || !errors.As(err, &limitErr) || limitErr.Limit != 2 {
 		t.Fatalf("third create must report the limit of 2, got %v", err)
+	}
+	// EXC-610: the refusal names the apps holding the slots, an app never deployed included.
+	if !slices.Equal(limitErr.Holders, []apphost.SlotHolder{{Name: "first", Deployed: false}, {Name: "second", Deployed: false}}) ||
+		!strings.Contains(err.Error(), "first (never deployed), second (never deployed)") {
+		t.Fatalf("the refusal must name the apps holding the slots: %v (%+v)", err, limitErr.Holders)
 	}
 
 	apps, err := s.List(projectID)
