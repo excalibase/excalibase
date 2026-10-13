@@ -252,10 +252,18 @@ size_free_tier() {
     -d '{"maxProjects":4,"instances":1,"storageSize":"2Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.5","backupEnabled":false,"autoPauseAfterDays":7}'
 }
 
+# The example images this run built and the stack's local tags go with the stack.
+forget_images() {
+  docker images --format '{{.Repository}}:{{.Tag}}' \
+    | grep -E "^localhost:500[0-9]/[a-z-]+:gate-|^docker.io/excalibase/[a-z-]+:$RUN_TAG\$|^excalibase/[a-z-]+:$RUN_TAG\$" \
+    | xargs -r docker rmi -f >/dev/null 2>&1 || true
+  rm -rf "$W"
+}
+
 case $LEG in
-  docker) docker_guard; trap 'docker_down; rm -rf "$W"' EXIT; pin_images; docker_up; single_host_ready ;;
-  podman) podman_guard; trap 'podman_down; rm -rf "$W"' EXIT; pin_images; podman_up; single_host_ready ;;
-  k3d) k3d_guard; trap 'k3d_down; rm -rf "$W"' EXIT; pin_images; k3d_up ;;
+  docker) docker_guard; trap 'docker_down; forget_images' EXIT; pin_images; docker_up; single_host_ready ;;
+  podman) podman_guard; trap 'podman_down; forget_images' EXIT; pin_images; podman_up; single_host_ready ;;
+  k3d) k3d_guard; trap 'k3d_down; forget_images' EXIT; pin_images; k3d_up ;;
   *) echo "unknown leg $LEG" >&2; exit 2 ;;
 esac
 examples_checkout
