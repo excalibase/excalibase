@@ -76,7 +76,8 @@ func (p *DockerPostgreSQLProvisioner) ConfigureArchive(ctx context.Context, cont
 	// string as one: each setting gets a -c of its own.
 	cmd := []string{"psql", "-U", superuser, "-v", "ON_ERROR_STOP=1"}
 	for _, setting := range []string{
-		"wal_level = 'replica'",
+		// Logical, not replica: realtime decodes this WAL too (EXC-612).
+		"wal_level = 'logical'",
 		"archive_mode = 'on'",
 		"archive_command = " + quoteSQLString(archiveCommand),
 		"archive_timeout = " + quoteSQLString(walArchiveTimeout),

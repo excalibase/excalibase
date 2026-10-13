@@ -10,6 +10,10 @@
 # The platform's names the edge alone answers to on project networks (EXC-608): provisioning
 # joins it under them and the engine proxy admits exactly them.
 x-edge-aliases: &edge_aliases studio.${EXCALIBASE_DOMAIN:?run ./init.sh first},api.${EXCALIBASE_DOMAIN:?run ./init.sh first},files.${EXCALIBASE_DOMAIN:?run ./init.sh first}
+# The CDC watcher every Postgres project runs (EXC-612), as Kubernetes pins it:
+# provisioning starts it and the engine proxy admits this image, and only it,
+# to the bus network NATS listens on.
+x-watcher-image: &watcher_image docker.io/excalibase/excalibase-watcher-go@sha256:7b2f9feb21b2a92b34c3f7b136399c619d460bf5d296215b8662a7a334126d9e
 x-hardened: &hardened
   security_opt:
     - no-new-privileges:true
@@ -66,7 +70,10 @@ services:
   nats:
     image: docker.io/library/nats:2.10
     container_name: excalibase-nats
-    command: ["-js", "-m", "8222"]
+    # JetStream on a volume: a restart keeps the CDC stream (EXC-612).
+    command: ["-js", "-m", "8222", "-sd", "/data"]
+    volumes:
+      - nats_data:/data
     healthcheck:
       test: ["CMD", "/nats-server", "--help"]
       interval: 5s
@@ -74,10 +81,43 @@ services:
       retries: 5
     security_opt:
       - no-new-privileges:true
-    # Only its clients share this network (EXC-507): tenant containers cannot reach it.
+    # Only its clients share these networks (EXC-507): graphql on platform, the
+    # projects' watchers on cdc. Tenant databases and apps reach neither.
     networks:
       - platform
+      - cdc
     restart: unless-stopped
+
+  # One-shot: the CDC stream every project's watcher publishes to and graphql
+  # reads realtime from, or its limits brought up to date. Kubernetes runs the
+  # same as the platform chart's nats-stream-init Job.
+  nats-stream-init:
+    image: docker.io/natsio/nats-box:0.14.5@sha256:0784ab710aefaf6ef037ed797ee7dcde613c6ad208c4dbff1945fc7c1b5b5375
+    container_name: excalibase-nats-stream-init
+    environment:
+      NATS_URL: nats://nats:4222
+      # Whichever limit is hit first drops the oldest changes, for every project together.
+      CDC_STREAM_MAX_AGE: ${CDC_STREAM_MAX_AGE:-24h}
+      CDC_STREAM_MAX_BYTES: ${CDC_STREAM_MAX_BYTES:-1073741824}
+    command:
+      - sh
+      - -ec
+      - |
+        until nats server check connection >/dev/null 2>&1; do sleep 1; done
+        if nats stream info CDC >/dev/null 2>&1; then
+          nats stream edit CDC --force --subjects='cdc.>' --max-age="$$CDC_STREAM_MAX_AGE" --max-bytes="$$CDC_STREAM_MAX_BYTES" --dupe-window=15m
+        else
+          nats stream add CDC --subjects='cdc.>' --storage=file --replicas=1 --discard=old --retention=limits \
+            --max-age="$$CDC_STREAM_MAX_AGE" --max-bytes="$$CDC_STREAM_MAX_BYTES" --max-msgs=-1 --max-msg-size=-1 --dupe-window=15m --defaults
+        fi
+        nats stream info CDC >/dev/null && echo "CDC STREAM READY"
+    depends_on:
+      nats:
+        condition: service_healthy
+    <<: *hardened
+    networks:
+      - platform
+    restart: "no"
 
   # The bundled S3-compatible store (RustFS, Apache-2.0; EXC-578): project
   # backups and customer files without a cloud bucket. Never published; the
@@ -161,6 +201,9 @@ services:
       PROXY_RUNTIMES: ${APP_SANDBOX_RUNTIME:-runsc}
       # DocumentDB (EXC-576): the catalogue's gateway may join its project
       # database's network namespace, and only while DOCUMENTDB_ENABLED is set.
+      # Project watchers alone reach NATS on the bus network (EXC-612).
+      PROXY_CDC_NETWORK: excalibase-cdc
+      PROXY_CDC_IMAGES: *watcher_image
       PROXY_NETNS_JOIN_IMAGES: ${DOCUMENTDB_ENABLED:+ghcr.io/documentdb/documentdb-kubernetes-operator/gateway@sha256:8a5c7e533dc0fbed8ed780b22e31001a6b12ae0eb670f4aac62c1ded782742ed}
     volumes:
       - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
@@ -199,6 +242,11 @@ services:
       CORS_ORIGINS: https://studio.${EXCALIBASE_DOMAIN:?run ./init.sh first}
       PUBLIC_BASE_URL: https://api.${EXCALIBASE_DOMAIN:?run ./init.sh first}
       WATCHER_CHART_PATH: ""
+      # Each Postgres project's watcher (EXC-612): this image, publishing to
+      # NATS on the bus network. Must match the proxy's PROXY_CDC_* above.
+      WATCHER_IMAGE: *watcher_image
+      WATCHER_NATS_URL: nats://nats:4222
+      DOCKER_CDC_NETWORK: excalibase-cdc
       PROVISIONER_MODE: docker
       DEPLOYMENT_MODE: selfhosted
       # Accounts by invitation; the first admin registers with the setup token.
@@ -407,8 +455,9 @@ services:
     volumes:
       - excalibase_secrets:/var/run/excalibase:ro
     depends_on:
-      nats:
-        condition: service_healthy
+      # Realtime subscribes once at start, to a stream that must exist (EXC-612).
+      nats-stream-init:
+        condition: service_completed_successfully
       provisioning:
         condition: service_started
       bootstrap:
@@ -465,6 +514,8 @@ volumes:
     name: excalibase-platform-provisioning
   objectstore_data:
     name: excalibase-platform-objectstore
+  nats_data:
+    name: excalibase-platform-nats
   # Shared between bootstrap (writer) and auth + graphql (readers): holds ONLY
   # the two service tokens. Admin credentials are printed to the bootstrap
   # log, never written here.
@@ -507,6 +558,11 @@ networks:
     ipam:
       config:
         - subnet: ${AIO_DATAPLANE_SUBNET:-10.203.250.16/28}
+  # NATS and the projects' CDC watchers alone (EXC-612). Internal: no route
+  # out. The engine proxy admits only the watcher image to it.
+  cdc:
+    name: excalibase-cdc
+    internal: true
   # Outbound only, for the one-shot bootstrap's package install.
   egress:
     name: excalibase-egress

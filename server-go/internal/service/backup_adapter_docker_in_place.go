@@ -57,7 +57,7 @@ func (a *DockerBackupAdapter) ReplaceDatabase(ctx context.Context, inst *domain.
 	if dc == nil {
 		return fmt.Errorf("docker restore: docker client not configured (call SetDockerClient)")
 	}
-	_, limits, err := restorePlanOf(ctx, plans, inst)
+	plan, limits, err := restorePlanOf(ctx, plans, inst)
 	if err != nil {
 		return err
 	}
@@ -77,6 +77,7 @@ func (a *DockerBackupAdapter) ReplaceDatabase(ctx context.Context, inst *domain.
 		containerName: provisioner.DatabaseContainerName(inst.ProjectID),
 		limits:        limits,
 		ports:         ports,
+		command:       provisioner.PostgresCommand(plan.Config),
 	})
 	if err != nil {
 		return err

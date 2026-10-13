@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -94,6 +95,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	cdcNetwork, cdcImages, err := busNetwork(getenv, networks, networkPrefix)
+	if err != nil {
+		return config{}, err
+	}
 	hostPorts, err := hostPortRange(getenv("PROXY_HOST_PORTS"))
 	if err != nil {
 		return config{}, err
@@ -117,8 +122,28 @@ func loadConfig(getenv func(string) string) (config, error) {
 			EdgeContainer:   edge,
 			EdgeAliases:     aliases,
 			NetnsJoinImages: joinImages,
+			CDCNetwork:      cdcNetwork,
+			CDCImages:       cdcImages,
 		},
 	}, nil
+}
+
+// busNetwork reads the network CDC watchers reach NATS on (EXC-612) and the
+// digest-pinned images admitted to it; one without the other is refused, and
+// so is a network every container may join.
+func busNetwork(getenv func(string) string, networks []string, networkPrefix string) (string, []string, error) {
+	network := strings.TrimSpace(getenv("PROXY_CDC_NETWORK"))
+	images, err := digestPinned(getenv, "PROXY_CDC_IMAGES")
+	if err != nil {
+		return "", nil, err
+	}
+	if (network == "") != (len(images) == 0) {
+		return "", nil, errors.New("PROXY_CDC_NETWORK and PROXY_CDC_IMAGES go together: the bus network admits only the watcher image")
+	}
+	if slices.Contains(networks, network) || (network != "" && networkPrefix != "" && strings.HasPrefix(network, networkPrefix)) {
+		return "", nil, fmt.Errorf("PROXY_CDC_NETWORK %q is one every container may join (PROXY_NETWORKS or PROXY_NETWORK_PREFIX)", network)
+	}
+	return network, images, nil
 }
 
 // edgeAliases reads the hostnames the edge may answer to on project networks; they need the edge.

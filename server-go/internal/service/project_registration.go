@@ -238,6 +238,7 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 		adminPassword:  inst.Password,
 		resetPasswords: opts.ResetRolePasswords,
 		resetAdmin:     opts.ResetAdminPassword,
+		documentDB:     inst.DocumentDB,
 	}
 	canExecSQL := (s.k8sClient != nil) || (s.dockerClient != nil)
 	if !canExecSQL {
@@ -303,6 +304,8 @@ type projectRoleSpec struct {
 	adminPassword  string
 	resetPasswords bool
 	resetAdmin     bool
+	// documentDB projects run no watcher on a single host.
+	documentDB bool
 }
 
 // createProjectRoles executes the role SQL in the project's database and files
@@ -343,7 +346,7 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, spec proje
 	}
 
 	log.Printf("Created project roles for %s and stored in vault", spec.projectID)
-	return s.deployWatcher(ctx, spec, pc, certificates[roleWatcher])
+	return s.deployWatcher(ctx, spec, pc, certificates[roleWatcher], creds.watcherPassword)
 }
 
 // fileOwnerCredential files the owner credential in vault under a project id
@@ -439,11 +442,12 @@ func (s *ProvisioningService) putCredentialRecord(projectID, role string, record
 }
 
 // deployWatcher starts the per-project CDC watcher now that cdc_watcher
-// exists. The chart install itself is best-effort — a project without
-// realtime still works — but minting its NATS bus identity is not: a watcher
-// started without one is unauthenticated against auth_callout (EXC-324), so
-// that failure fails registration instead of deploying a broken watcher.
-func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRoleSpec, pc *provisioner.ProvisionContext, watcherCert tenantcert.Material) error {
+// exists: a chart on Kubernetes, a container on a single host (EXC-612). The
+// start itself is best-effort — a project without realtime still works — but
+// minting a Kubernetes watcher's NATS bus identity is not: a watcher started
+// without one is unauthenticated against auth_callout (EXC-324), so that
+// failure fails registration instead of deploying a broken watcher.
+func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRoleSpec, pc *provisioner.ProvisionContext, watcherCert tenantcert.Material, watcherPassword string) error {
 	if s.factory == nil {
 		return nil
 	}
@@ -451,10 +455,22 @@ func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRol
 	if !ok {
 		return nil
 	}
-	pg, ok := pgProv.(*provisioner.PostgreSQLProvisioner)
-	if !ok {
-		return nil
+	switch pg := pgProv.(type) {
+	case *provisioner.PostgreSQLProvisioner:
+		return s.deployClusterWatcher(ctx, pg, spec, pc, watcherCert)
+	case *provisioner.DockerPostgreSQLProvisioner:
+		if spec.documentDB {
+			return nil
+		}
+		watcherSpec := singleHostWatcherSpec(spec.projectID, spec.host, spec.port, spec.databaseName, watcherPassword)
+		if err := pg.DeployWatcher(ctx, watcherSpec); err != nil {
+			log.Printf("WARN: watcher deployment for %s: %v", spec.projectID, err)
+		}
 	}
+	return nil
+}
+
+func (s *ProvisioningService) deployClusterWatcher(ctx context.Context, pg *provisioner.PostgreSQLProvisioner, spec projectRoleSpec, pc *provisioner.ProvisionContext, watcherCert tenantcert.Material) error {
 	// Mint the watcher's bus identity before the pod starts. Rotating here
 	// means a re-provision (or restore) invalidates the old pod's credential.
 	natsUser, natsPass, err := s.natsCreds.MintTenantWatcher(ctx, spec.projectID)
@@ -476,6 +492,19 @@ func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRol
 	return nil
 }
 
+// singleHostWatcherSpec is a single host's watcher login: its database serves
+// no TLS, so cdc_watcher logs in with its password over the tenants network.
+func singleHostWatcherSpec(projectID, host string, port int, database, password string) provisioner.WatcherSpec {
+	return provisioner.WatcherSpec{
+		ProjectID: projectID,
+		DBName:    database,
+		Host:      host,
+		Port:      port,
+		Username:  roleWatcher,
+		Password:  password,
+	}
+}
+
 // ErrReplicationRestartUnavailable is returned when the platform cannot put
 // a resumed project's CDC watcher back. There is no partial answer: a resume
 // that silently leaves realtime off is a project that looks healthy and
@@ -490,13 +519,12 @@ func (s *ProvisioningService) RestartReplication(ctx context.Context, inst *doma
 	if inst == nil {
 		return ErrProjectRegistrationInvalid
 	}
-	if inst.DeploymentMode == domain.ModeDocker {
-		// A single host runs no CDC watcher; registration deploys none there.
-		return nil
-	}
 	if inst.DBType == domain.MySQL {
 		// No CDC watcher runs for MySQL yet (ADR 0041 phase 2).
 		return nil
+	}
+	if inst.DeploymentMode == domain.ModeDocker {
+		return s.restartSingleHostWatcher(ctx, inst)
 	}
 	pg, err := s.postgresProvisioner()
 	if err != nil {
@@ -526,6 +554,46 @@ func (s *ProvisioningService) RestartReplication(ctx context.Context, inst *doma
 		NatsPassword: natsPass,
 		ClientCert:   watcherCert,
 	})
+}
+
+// restartSingleHostWatcher recreates a single host's watcher from the login
+// vault filed for it; a DocumentDB project runs none (EXC-612).
+func (s *ProvisioningService) restartSingleHostWatcher(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if inst.DocumentDB {
+		return nil
+	}
+	pg, err := s.singleHostProvisioner()
+	if err != nil {
+		return err
+	}
+	if s.vault == nil {
+		return ErrReplicationRestartUnavailable
+	}
+	creds, err := s.vault.Get(vaultCredentialPath(inst.ProjectID, roleWatcher))
+	if err != nil {
+		return fmt.Errorf("read %s credentials: %w", roleWatcher, err)
+	}
+	port := 5432
+	if inst.Port != nil {
+		port = *inst.Port
+	}
+	return pg.DeployWatcher(ctx, singleHostWatcherSpec(inst.ProjectID, inst.Host, port, inst.DatabaseName, creds["password"]))
+}
+
+// singleHostProvisioner resolves the Docker provisioner a single host's watcher runs through.
+func (s *ProvisioningService) singleHostProvisioner() (*provisioner.DockerPostgreSQLProvisioner, error) {
+	if s.factory == nil {
+		return nil, ErrReplicationRestartUnavailable
+	}
+	prov, ok := s.factory.Get(domain.PostgreSQL)
+	if !ok {
+		return nil, ErrReplicationRestartUnavailable
+	}
+	pg, ok := prov.(*provisioner.DockerPostgreSQLProvisioner)
+	if !ok {
+		return nil, ErrReplicationRestartUnavailable
+	}
+	return pg, nil
 }
 
 // postgresProvisioner resolves the CNPG provisioner the watcher chart is

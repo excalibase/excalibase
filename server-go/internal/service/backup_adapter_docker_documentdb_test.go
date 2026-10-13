@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,8 +66,21 @@ func (r *recordingDocker) RemoveContainer(_ context.Context, id string) error {
 	r.removed = append(r.removed, id)
 	return nil
 }
-func (r *recordingDocker) ContainerStatus(context.Context, string) (string, error) {
+func (r *recordingDocker) ContainerStatus(_ context.Context, id string) (string, error) {
+	if slices.Contains(r.removed, id) && r.index("create:"+id) < r.lastIndex("remove:"+id) {
+		return "not_found", nil
+	}
 	return "running", nil
+}
+
+func (r *recordingDocker) lastIndex(call string) int {
+	last := -1
+	for i, c := range r.calls {
+		if c == call {
+			last = i
+		}
+	}
+	return last
 }
 func (r *recordingDocker) ContainerState(context.Context, string) (provisioner.ContainerState, error) {
 	return provisioner.ContainerState{Found: true, Running: true}, nil

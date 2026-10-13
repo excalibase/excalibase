@@ -103,6 +103,10 @@ case "$js $st $out" in COMPLETED*ACTIVE*" 5") ok "restored in place to $PPOINT: 
 arch=$(psql_on "$PID" "SELECT current_setting('archive_mode')")
 [ "$arch" = on ] && archived "$PID" && ok "the restored project archives WAL" || ko "after the in-place restore archive_mode=$arch"
 kept_port "the in-place restore"
+# The restore's new database gets the watcher back, on a fresh slot (EXC-612).
+streaming=
+for i in $(seq 40); do streaming=$(psql_on "$PID" "SELECT string_agg(slot_name || ':' || active, ',') FROM pg_replication_slots"); [ "$streaming" = cdc_watcher:t ] && break; sleep 3; done
+[ "$streaming" = cdc_watcher:t ] && ok "the watcher streams the restored database, one slot" || ko "after the in-place restore slots: '$streaming'"
 
 echo "== postgres pause and resume"
 papi -X POST "$PAPI/provision/$PID/pause" -o /dev/null

@@ -18,6 +18,8 @@
 # MYSQL=1 turns the mysql feature on and walks MySQL (EXC-592, mysql-journey.sh):
 # TLS clients, backups, point-in-time and in-place restore, pause, purge.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG).
+# Every run walks realtime (EXC-612, realtime-journey.sh): a subscriber receives
+# a table's changes across a NATS restart, a pause and a resume.
 # Destroys the bundle's containers and volumes; never run it on an install you keep.
 set -uo pipefail
 ENGINE=${1:-docker}
@@ -122,7 +124,7 @@ PID=$(echo "$R" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("pr
 st=
 for i in $(seq 60); do st=$(c -H "Authorization: Bearer $T" https://studio.localhost:$PORT/api/provision/$PID/ | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("status"),d.get("failureReason") or "")' 2>/dev/null); case "$st" in ACTIVE*|FAILED*) break;; esac; sleep 3; done
 case "$st" in ACTIVE*) ok "project ACTIVE" ;; *) ko "project status: $st" ;; esac
-TC=$($DOCKER ps --filter label=excalibase.managed=true --format '{{.Names}}' | head -1)
+TC=$($DOCKER ps --filter label=excalibase.managed=true --filter name=-postgres --format '{{.Names}}' | head -1)
 [ -n "$TC" ] && ok "tenant container $TC created through the proxy" || ko "no tenant container"
 nets=$($DOCKER inspect "$TC" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null)
 [ "$nets" = "excalibase-tenants " ] && ok "tenant on excalibase-tenants only" || ko "tenant networks: $nets"
@@ -149,6 +151,8 @@ RS=$(c -H "Authorization: Bearer $AT" https://api.localhost:$PORT/$PID/api/v1/no
 echo "$RS" | grep -q 'hello from a single host' && ok "REST answers through the edge" || ko "REST: $RS"
 AN=$(c -X POST -H 'Content-Type: application/json' https://api.localhost:$PORT/$PID/graphql -d '{"query":"{ publicNotes { id body } }"}' -w ' %{http_code}')
 echo "$AN" | grep -q 'hello from a single host' && ko "anonymous read without a grant: $AN" || ok "no token, no rows (${AN: -3})"
+
+. "$TESTS/realtime-journey.sh"
 
 echo "== backups"
 B=$(c -X POST -H "Authorization: Bearer $T" https://studio.localhost:$PORT/api/provision/$PID/backup/trigger -w ' %{http_code}')

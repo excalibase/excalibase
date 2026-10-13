@@ -49,6 +49,13 @@ func (s *ProvisioningService) StopReplication(ctx context.Context, inst *domain.
 		// No CDC watcher runs for MySQL yet (ADR 0041 phase 2).
 		return nil
 	}
+	if inst.DeploymentMode == domain.ModeDocker {
+		pg, err := s.singleHostProvisioner()
+		if err != nil {
+			return err
+		}
+		return pg.StopReplication(ctx, inst.Namespace, inst.ProjectID)
+	}
 	pg, err := s.postgresProvisioner()
 	if err != nil {
 		return err

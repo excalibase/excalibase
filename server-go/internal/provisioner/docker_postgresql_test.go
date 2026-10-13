@@ -25,6 +25,7 @@ type mockDockerClient struct {
 	lastImage  string     // image of the most recent CreateContainer call
 	lastEnv    map[string]string
 	lastLimits ContainerLimits
+	lastCmd    []string
 	// stopKeepsRunning models a container the daemon accepts a stop for but
 	// which is still running while postgres shuts down.
 	stopKeepsRunning bool
@@ -132,6 +133,7 @@ func (m *mockDockerClient) CopyFromContainer(_ context.Context, _ string, _ stri
 }
 
 func (m *mockDockerClient) CreateContainerSpec(ctx context.Context, spec ContainerSpec) (string, error) {
+	m.lastCmd = spec.Cmd
 	return m.CreateContainer(ctx, spec.Name, spec.Image, spec.Env, spec.Ports, spec.Limits)
 }
 

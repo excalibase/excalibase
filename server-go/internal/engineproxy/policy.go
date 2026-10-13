@@ -47,6 +47,10 @@ type Policy struct {
 	// NetnsJoinImages are the digest-pinned images that may run in a managed
 	// container's network namespace (netns_join.go); empty admits none.
 	NetnsJoinImages []string
+	// CDCNetwork is the network NATS listens on for CDC watchers (EXC-612);
+	// only CDCImages, digest-pinned, may join it (cdc_network.go).
+	CDCNetwork string
+	CDCImages  []string
 }
 
 // ErrRefused wraps every policy refusal.
@@ -102,6 +106,7 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 	}
 	var create struct {
 		Image            string
+		Entrypoint       any
 		Labels           map[string]string
 		HostConfig       map[string]any
 		NetworkingConfig struct {
@@ -120,13 +125,16 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 	if err := p.checkNetnsJoin(create.Image, create.HostConfig, create.NetworkingConfig.EndpointsConfig); err != nil {
 		return err
 	}
+	if err := p.checkCDCNetwork(create.Image, create.Entrypoint, create.HostConfig, create.NetworkingConfig.EndpointsConfig); err != nil {
+		return err
+	}
 	for field, value := range create.HostConfig {
 		if err := p.checkHostConfigField(field, value); err != nil {
 			return err
 		}
 	}
 	for network, endpoint := range create.NetworkingConfig.EndpointsConfig {
-		if !p.networkAllowed(network) {
+		if !p.networkAllowed(network) && !p.cdcNetworkAdmitted(network, create.Image) {
 			return refuse("network %q is not one containers may join", network)
 		}
 		if err := checkEndpoint(network, endpoint); err != nil {
