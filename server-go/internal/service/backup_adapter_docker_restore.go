@@ -77,6 +77,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		containerName: provisioner.DatabaseContainerName(newProject),
 		limits:        limits,
 		ports:         ports,
+		command:       provisioner.PostgresCommand(plan.Config),
 	})
 	if err != nil {
 		pc.Rollback(ctx)
@@ -133,6 +134,8 @@ type recoveryTarget struct {
 	limits        provisioner.ContainerLimits
 	// ports are the host ports it publishes on; "" for any.
 	ports provisioner.DocumentDBPorts
+	// command starts postgres as the tier's new projects start (EXC-612).
+	command []string
 }
 
 // recovered is a container recovered from a project's backups.
@@ -193,6 +196,7 @@ func recoverySpec(source *domain.DatabaseInstance, req domain.RestoreRequest, ta
 		major:           source.PostgresVersion,
 		owner:           source.Username,
 		ports:           target.ports,
+		command:         target.command,
 	}
 	if !source.DocumentDB {
 		image, err := restoreImage(source.PostgresVersion)
@@ -372,6 +376,8 @@ type restoreContainerSpec struct {
 	owner string
 	// ports are the host ports it publishes on; "" for any.
 	ports provisioner.DocumentDBPorts
+	// command replaces the official image's, as Provision's does.
+	command []string
 }
 
 // restoreStartPoller bounds the wait for a held host port to come free.

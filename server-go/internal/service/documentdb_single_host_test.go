@@ -101,8 +101,8 @@ func TestMongoUsersNeedAnEngineAndAVault(t *testing.T) {
 	}
 }
 
-// A single host runs no CDC watcher (registration deploys none), so a resume
-// has no replication to restart rather than failing on it.
+// A single host's DocumentDB project runs no CDC watcher (registration deploys
+// none), so a resume has no replication to restart rather than failing on it.
 func TestASingleHostProjectHasNoReplicationToRestart(t *testing.T) {
 	h := newSingleHostHarness(t)
 	if err := h.svc.RestartReplication(context.Background(), singleHostDocumentDBProject()); err != nil {

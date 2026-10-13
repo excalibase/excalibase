@@ -41,7 +41,11 @@ type AppConfig struct {
 	WatcherChartPath      string
 	// WatcherImage is the pinned reference every tenant watcher runs,
 	// e.g. excalibase/excalibase-watcher-go:1.0.0@sha256:… (EXC-346).
-	WatcherImage      string
+	WatcherImage string
+	// WatcherNatsURL and DockerCDCNetwork are where a single host's watchers
+	// reach NATS (EXC-612): its URL on the bus network, and that network.
+	WatcherNatsURL    string
+	DockerCDCNetwork  string
 	DenoRuntimeURL    string
 	DenoRuntimeSecret string
 	DenoNamespace     string
@@ -443,6 +447,8 @@ func load() AppConfig {
 		CORSOrigins:                    parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
 		WatcherChartPath:               envOr("WATCHER_CHART_PATH", "/charts/excalibase-watcher"),
 		WatcherImage:                   os.Getenv("WATCHER_IMAGE"),
+		WatcherNatsURL:                 os.Getenv("WATCHER_NATS_URL"),
+		DockerCDCNetwork:               os.Getenv("DOCKER_CDC_NETWORK"),
 		DenoRuntimeURL:                 envOr("DENO_RUNTIME_URL", "http://deno-runtime.serverless.svc.cluster.local:8000"),
 		DenoRuntimeSecret:              envOr("DENO_RUNTIME_SECRET", ""),
 		DenoNamespace:                  envOr("DENO_NAMESPACE", "serverless"),

@@ -137,10 +137,15 @@ func portBindings(ports map[string]string, hostIP string) (nat.PortSet, nat.Port
 // networkingConfig attaches the container to a user-defined network so
 // consumers can resolve it by name (tenant DB creds are stored as
 // containerName:5432). Empty netName → no endpoints (default bridge).
-func networkingConfig(netName string) *network.NetworkingConfig {
+// hardenedPidsLimit bounds a hardened container's processes.
+const hardenedPidsLimit int64 = 128
+
+func networkingConfig(netNames ...string) *network.NetworkingConfig {
 	nc := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{}}
-	if netName != "" {
-		nc.EndpointsConfig[netName] = &network.EndpointSettings{}
+	for _, netName := range netNames {
+		if netName != "" {
+			nc.EndpointsConfig[netName] = &network.EndpointSettings{}
+		}
 	}
 	return nc
 }
@@ -169,6 +174,7 @@ func (r *RealDockerClient) CreateContainerSpec(ctx context.Context, spec Contain
 		ExposedPorts: exposed,
 		Labels:       map[string]string{excalibaseLabel: "true"},
 		StopSignal:   spec.StopSignal,
+		User:         spec.User,
 	}
 	hostCfg := &container.HostConfig{
 		PortBindings:  bindings,
@@ -180,7 +186,13 @@ func (r *RealDockerClient) CreateContainerSpec(ctx context.Context, spec Contain
 		// official image's VOLUME. A named one outlives it.
 		hostCfg.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: spec.DataVolumeName, Target: spec.DataVolume}}
 	}
-	netCfg := networkingConfig(r.netName)
+	if spec.Hardened {
+		hostCfg.CapDrop = []string{"ALL"}
+		hostCfg.SecurityOpt = []string{"no-new-privileges"}
+		pids := hardenedPidsLimit
+		hostCfg.PidsLimit = &pids
+	}
+	netCfg := networkingConfig(append([]string{r.netName}, spec.Networks...)...)
 	if spec.NetnsOf != "" {
 		hostCfg.NetworkMode = container.NetworkMode("container:" + spec.NetnsOf)
 		netCfg = nil

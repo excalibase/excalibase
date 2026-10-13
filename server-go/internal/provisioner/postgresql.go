@@ -794,6 +794,11 @@ type WatcherSpec struct {
 	NatsPassword string
 	// ClientCert is cdc_watcher's login; pg_hba refuses it a password.
 	ClientCert tenantcert.Material
+	// Host, Port and Password reach a single host's database, which serves
+	// no TLS: there cdc_watcher logs in with its password (EXC-612).
+	Host     string
+	Port     int
+	Password string
 }
 
 // WatcherComponentLabel marks a pod as a tenant CDC watcher: the platform

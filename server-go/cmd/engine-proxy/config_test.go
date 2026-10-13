@@ -136,3 +136,35 @@ func TestLoadConfigRefusesEdgeAliasesThatAreNotHostnamesOrHaveNoEdge(t *testing.
 		}
 	}
 }
+
+const watcherImage = "docker.io/excalibase/excalibase-watcher-go@sha256:7b2f9feb21b2a92b34c3f7b136399c619d460bf5d296215b8662a7a334126d9e"
+
+func TestLoadConfigReadsTheBusNetworkAndItsWatcherImage(t *testing.T) {
+	cfg, err := loadConfig(env(map[string]string{
+		"PROXY_NETWORKS": "excalibase-tenants", "PROXY_CDC_NETWORK": "excalibase-cdc", "PROXY_CDC_IMAGES": watcherImage,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.policy.CDCNetwork != "excalibase-cdc" || !reflect.DeepEqual(cfg.policy.CDCImages, []string{watcherImage}) {
+		t.Fatalf("bus network %q images %v", cfg.policy.CDCNetwork, cfg.policy.CDCImages)
+	}
+}
+
+func TestLoadConfigRefusesALooseBusNetwork(t *testing.T) {
+	cases := map[string]map[string]string{
+		"no watcher image":       {"PROXY_CDC_NETWORK": "excalibase-cdc"},
+		"image without network":  {"PROXY_CDC_IMAGES": watcherImage},
+		"image by tag":           {"PROXY_CDC_NETWORK": "excalibase-cdc", "PROXY_CDC_IMAGES": "docker.io/excalibase/excalibase-watcher-go:1.5.1"},
+		"a network anyone joins": {"PROXY_CDC_NETWORK": "excalibase-tenants", "PROXY_CDC_IMAGES": watcherImage},
+		"a project network":      {"PROXY_CDC_NETWORK": "excalibase-net-cdc", "PROXY_NETWORK_PREFIX": "excalibase-net-", "PROXY_CDC_IMAGES": watcherImage},
+	}
+	for name, values := range cases {
+		t.Run(name, func(t *testing.T) {
+			values["PROXY_NETWORKS"] = "excalibase-tenants"
+			if _, err := loadConfig(env(values)); err == nil || !strings.Contains(err.Error(), "PROXY_CDC") {
+				t.Fatalf("want a refusal naming PROXY_CDC_*, got %v", err)
+			}
+		})
+	}
+}

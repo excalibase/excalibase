@@ -36,6 +36,12 @@ type ContainerSpec struct {
 	// NetnsOf runs the container in that container's network namespace
 	// instead of on a network; it then publishes no ports of its own.
 	NetnsOf string
+	// Networks are joined besides the client's own network.
+	Networks []string
+	// Hardened drops every capability, forbids privilege escalation and caps processes.
+	Hardened bool
+	// User runs the container as this uid:gid; empty keeps the image's.
+	User string
 }
 
 // ContainerState is what an inspect reports about a container.

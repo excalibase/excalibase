@@ -80,6 +80,8 @@ type DockerPostgreSQLProvisioner struct {
 	// hostPorts holds each project's host port (EXC-593); nil publishes on
 	// any free port.
 	hostPorts HostPortAllocator
+	// watcher is the CDC watcher every project runs (docker_watcher.go).
+	watcher DockerWatcherConfig
 }
 
 func NewDockerPostgreSQLProvisioner(docker DockerClient) *DockerPostgreSQLProvisioner {
@@ -163,7 +165,10 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	}
 	ports := map[string]string{"5432": hostPort}
 
-	containerID, err := p.docker.CreateContainer(ctx, containerName, image, env, ports, limits)
+	containerID, err := p.docker.CreateContainerSpec(ctx, ContainerSpec{
+		Name: containerName, Image: image, Env: env, Ports: ports, Limits: limits,
+		Cmd: PostgresCommand(tier),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
@@ -210,6 +215,17 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	}, nil
 }
 
+// PostgresCommand starts postgres decoding logically, so realtime's watcher can
+// stream it (EXC-612), with the WAL a stalled slot may hold capped as on
+// Kubernetes. A tier without a disk size leaves the cap at postgres' default.
+func PostgresCommand(tier config.TierConfig) []string {
+	command := []string{"postgres", "-c", "wal_level=logical"}
+	if walCap, err := tier.SlotWALKeepSize(); err == nil {
+		command = append(command, "-c", "max_slot_wal_keep_size="+walCap)
+	}
+	return command
+}
+
 func databaseNameOrDefault(name string) string {
 	if name == "" {
 		return "app"
@@ -226,16 +242,6 @@ func (p *DockerPostgreSQLProvisioner) startDatabase(ctx context.Context, contain
 	if err := p.waitForPostgresReady(ctx, containerID, dbName, timeout); err != nil {
 		return fmt.Errorf("wait for postgres ready: %w", err)
 	}
-	return nil
-}
-
-// Pause stops the project's postgres container without removing it.
-// Volumes persist so Resume reopens the same data dir. Idempotent —
-// stopping an already-stopped container is fine.
-// StopReplication is a no-op in Docker mode: the single-tenant deployment
-// runs no per-project CDC watcher, so nothing holds a replication session
-// open against the container.
-func (p *DockerPostgreSQLProvisioner) StopReplication(context.Context, string, string) error {
 	return nil
 }
 
@@ -352,6 +358,8 @@ func (p *DockerPostgreSQLProvisioner) Deprovision(ctx context.Context, namespace
 	if err != nil {
 		return err
 	}
+	// The watcher goes first: its session would hold the database's stop open.
+	containers = append([]string{WatcherContainerName(projectID)}, containers...)
 	// A provision that failed before recording the container id left the
 	// admitted namespace on the row; the container is still named for it.
 	if named := DatabaseContainerName(projectID); named != namespace {

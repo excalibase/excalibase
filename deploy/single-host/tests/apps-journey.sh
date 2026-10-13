@@ -136,6 +136,13 @@ echo "info: app runtime/memory/pids: $rt (sandbox: $APP_SANDBOX)"
 DBHOST=$($DOCKER ps --filter label=excalibase.managed=true --format '{{.Names}}' | grep -- '-postgres$' | head -1)
 $DOCKER exec "$AC" nc -z -w 3 "$DBHOST" 5432 && ok "the app reaches its own project's database" || ko "app cannot reach $DBHOST"
 $DOCKER exec "$AC" wget -q -T 3 -O /dev/null http://example.com/ 2>/dev/null && ko "the app reached the internet without APP_EGRESS" || ok "no egress by default"
+# NATS has no per-client login: only the projects' watchers may reach it (EXC-612).
+bus=
+for ip in $($DOCKER inspect excalibase-nats --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'); do
+  $DOCKER exec "$AC" nc -z -w 3 "$ip" 4222 2>/dev/null && bus="$bus $ip"
+done
+$DOCKER exec "$AC" nc -z -w 3 nats 4222 2>/dev/null && bus="$bus nats"
+[ -z "$bus" ] && ok "the app cannot reach NATS" || ko "the app reaches NATS at$bus"
 
 echo "== apps: DATABASE_URL is the restricted project login (EXC-604)"
 DBREF='{"name":"DATABASE_URL","kind":"reference","reference":{"sourceKind":"database","sourceName":"app","variable":"DATABASE_URL"}}'

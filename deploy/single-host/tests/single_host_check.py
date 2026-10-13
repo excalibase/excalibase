@@ -56,9 +56,8 @@ if prov.get("REGISTRATION_MODE") != "invite":
 for name in ("platform", "engine", "dataplane"):
     if not networks[name].get("internal"):
         failures.append(f"network {name} is not internal")
-for name in ("postgres", "nats"):
-    if nets(name) != {"platform"}:
-        failures.append(f"{name} networks {sorted(nets(name))}, want only platform")
+if nets("postgres") != {"platform"}:
+    failures.append(f"postgres networks {sorted(nets('postgres'))}, want only platform")
 if nets("edge") != {"edge", "dataplane"}:
     failures.append(f"edge networks {sorted(nets('edge'))}, want edge and dataplane")
 
@@ -200,6 +199,40 @@ if tenant_ports != penv.get("EXCALIBASE_DB_ENDPOINT_PORT_RANGE") or tenant_ports
 # EXC-592: a MySQL project's data volume is named under this prefix.
 if penv_proxy.get("PROXY_VOLUME_PREFIX") != "excalibase-vol-":
     failures.append(f"PROXY_VOLUME_PREFIX={penv_proxy.get('PROXY_VOLUME_PREFIX')!r}; MySQL data volumes are excalibase-vol-<project>-mysql")
+
+# EXC-612: every Postgres project's watcher publishes its changes to NATS over
+# an internal bus network that only NATS and watchers share: the proxy admits
+# it for the watcher image alone, the very image provisioning runs, pinned.
+# Tenant databases and apps never join it, and NATS joins nothing else.
+bus = networks.get("cdc") or {}
+if bus.get("name") != "excalibase-cdc" or not bus.get("internal"):
+    failures.append("no internal excalibase-cdc network")
+if nets("nats") != {"platform", "cdc"}:
+    failures.append(f"nats networks {sorted(nets('nats'))}, want platform and cdc")
+if {n for n, s in services.items() if "cdc" in (s.get("networks") or {})} != {"nats"}:
+    failures.append("only NATS joins the bus network among the platform's services")
+watcher_image = penv.get("WATCHER_IMAGE", "")
+if not re.fullmatch(r"docker\.io/excalibase/excalibase-watcher-go@sha256:[0-9a-f]{64}", watcher_image):
+    failures.append(f"WATCHER_IMAGE={watcher_image!r}, want the watcher pinned by digest")
+if penv_proxy.get("PROXY_CDC_IMAGES") != watcher_image or penv_proxy.get("PROXY_CDC_NETWORK") != bus.get("name"):
+    failures.append("the proxy does not admit exactly provisioning's watcher image to the bus network")
+if penv.get("DOCKER_CDC_NETWORK") != bus.get("name") or penv.get("WATCHER_NATS_URL") != "nats://nats:4222":
+    failures.append("provisioning does not point watchers at NATS on the bus network")
+if bus.get("name") in penv_proxy.get("PROXY_NETWORKS", "").split(","):
+    failures.append("the bus network is one every container may join")
+nats = services["nats"]
+if "/data" not in (nats.get("command") or []) or not any(v.get("target") == "/data" for v in nats.get("volumes") or []):
+    failures.append("NATS keeps its JetStream store on no volume: a restart loses the CDC stream")
+init = services.get("nats-stream-init") or {}
+if not init or "@sha256:" not in init.get("image", "") or nets("nats-stream-init") != {"platform"}:
+    failures.append("no digest-pinned nats-stream-init on the platform network")
+else:
+    ienv = init.get("environment") or {}
+    if ienv.get("CDC_STREAM_MAX_AGE") != "24h" or str(ienv.get("CDC_STREAM_MAX_BYTES")) != "1073741824":
+        failures.append(f"CDC stream limits {ienv.get('CDC_STREAM_MAX_AGE')!r}/{ienv.get('CDC_STREAM_MAX_BYTES')!r}, want 24h/1 GiB by default")
+waits = (services["graphql"].get("depends_on") or {}).get("nats-stream-init", {})
+if waits.get("condition") != "service_completed_successfully":
+    failures.append("graphql starts before the CDC stream exists")
 
 if failures:
     sys.exit("\n".join(failures))

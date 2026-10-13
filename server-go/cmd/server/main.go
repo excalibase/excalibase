@@ -2499,9 +2499,28 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient, sql
 		ports := mustSingleHostPorts(cfg, sqlStore)
 		mysql.SetHostPorts(ports)
 		dockerProvisioner.SetHostPorts(ports)
+		watcher, err := dockerWatcherConfig(cfg)
+		if err != nil {
+			log.Fatalf("docker provisioner: %v", err)
+		}
+		dockerProvisioner.SetWatcher(watcher)
 		return provisioner.NewFactory(dockerProvisioner, mysql), dockerClient
 	}
 	return buildK8sFactory(cfg, k8sClient), nil
+}
+
+// dockerWatcherConfig is the CDC watcher a single host runs per project
+// (EXC-612); no WATCHER_IMAGE runs none, and an image without its bus is refused.
+func dockerWatcherConfig(cfg config.AppConfig) (provisioner.DockerWatcherConfig, error) {
+	if cfg.WatcherImage == "" {
+		return provisioner.DockerWatcherConfig{}, nil
+	}
+	if cfg.WatcherNatsURL == "" || cfg.DockerCDCNetwork == "" {
+		return provisioner.DockerWatcherConfig{}, errors.New("WATCHER_IMAGE needs WATCHER_NATS_URL and DOCKER_CDC_NETWORK: where its watchers reach NATS")
+	}
+	return provisioner.DockerWatcherConfig{
+		Image: cfg.WatcherImage, NatsURL: cfg.WatcherNatsURL, Network: cfg.DockerCDCNetwork, Stream: cfg.NatsCDCStream,
+	}, nil
 }
 
 // buildK8sFactory registers CNPG for Postgres and MOCO for MySQL (ADR 0041).

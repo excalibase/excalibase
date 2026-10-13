@@ -57,6 +57,14 @@ dports=$($DOCKER port "$DB" 2>/dev/null | tr '\n' ' ')
 case "$dports" in *0.0.0.0*|*"[::]"*|"") ko "database ports: '$dports'" ;; *10260*) ok "Postgres and Mongo published on loopback ($dports)" ;; *) ko "no Mongo port: $dports" ;; esac
 limits=$($DOCKER inspect "$DB" "$GW" --format '{{.HostConfig.Memory}}' 2>/dev/null | paste -sd' ')
 case "$limits" in *" "*) [ "${limits#0 }" = "$limits" ] && ok "tier split between database and gateway (memory $limits)" || ko "limits: $limits" ;; *) ko "limits: $limits" ;; esac
+# The gateway shares the database's network namespace: neither reaches NATS (EXC-612).
+$DOCKER exec "$DB" timeout 3 bash -c "</dev/tcp/127.0.0.1/5432" >/dev/null 2>&1 || ko "the probe cannot run in $DB"
+bus=
+for ip in $($DOCKER inspect excalibase-nats --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'); do
+  $DOCKER exec "$DB" timeout 3 bash -c "</dev/tcp/$ip/4222" >/dev/null 2>&1 && bus="$bus $ip"
+done
+[ -z "$bus" ] && ok "the DocumentDB database and its gateway cannot reach NATS" || ko "DocumentDB reaches NATS at$bus"
+[ -z "$($DOCKER ps -aq --filter name="excalibase-$DPID-watcher")" ] && ok "a DocumentDB project runs no watcher" || ko "a DocumentDB project got a watcher"
 
 echo "== mongo from the host"
 E=$(dapi "$DAPI/projects/$DPID/db-endpoint")
