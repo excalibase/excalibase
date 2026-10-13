@@ -17,7 +17,8 @@
 # in-place restore, pause, purge.
 # MYSQL=1 turns the mysql feature on and walks MySQL (EXC-592, mysql-journey.sh):
 # TLS clients, backups, point-in-time and in-place restore, pause, purge.
-# PLATFORM_TAG names locally built provisioning/studio images (default: TAG).
+# PLATFORM_TAG names locally built provisioning/studio images (default: TAG);
+# GRAPHQL_IMAGE a locally built engine image.
 # Every run walks realtime (EXC-612, realtime-journey.sh): a subscriber receives
 # a table's changes across a NATS restart, a pause and a resume.
 # Destroys the bundle's containers and volumes; never run it on an install you keep.

@@ -66,8 +66,13 @@ wnets=$($DOCKER inspect "$(watcher_of "$PID")" --format '{{range $k,$v := .Netwo
 [ "$wnets" = "excalibase-cdc excalibase-tenants " ] && ok "watcher on excalibase-cdc and excalibase-tenants only" || ko "watcher networks: '$wnets'"
 wports=$($DOCKER port "$(watcher_of "$PID")" 2>/dev/null)
 [ -z "$wports" ] && ok "watcher publishes no port" || ko "watcher publishes $wports"
-wcaps=$($DOCKER inspect "$(watcher_of "$PID")" --format '{{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}} {{.HostConfig.Memory}}' 2>/dev/null)
-case "$wcaps" in *ALL*no-new-privileges*" 0") ko "watcher has no memory limit: $wcaps" ;; *ALL*no-new-privileges*) ok "watcher drops capabilities, no new privileges, limited ($wcaps)" ;; *) ko "watcher hardening: $wcaps" ;; esac
+wcaps=$($DOCKER inspect "$(watcher_of "$PID")" --format '{{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}} {{.HostConfig.Memory}} {{.Config.User}}' 2>/dev/null)
+# Podman lists every capability it dropped instead of ALL; what remains is the proof there.
+if [ "$DOCKER" = podman ]; then
+  remaining=$($DOCKER inspect "$(watcher_of "$PID")" --format '{{.EffectiveCaps}}' 2>/dev/null)
+  [ "$remaining" = "[]" ] && wcaps="ALL(effective none) $wcaps"
+fi
+case "$wcaps" in *ALL*no-new-privileges*" 0 "*) ko "watcher has no memory limit: $wcaps" ;; *ALL*no-new-privileges*" 65532:65532") ok "watcher drops capabilities, no new privileges, limited, nonroot ($wcaps)" ;; *) ko "watcher hardening: $wcaps" ;; esac
 echo "info: watcher memory $($DOCKER stats --no-stream --format '{{.MemUsage}}' "$(watcher_of "$PID")" 2>/dev/null)"
 slot_streaming "$PID" && ok "the cdc_watcher slot is streaming" || ko "slot: $(tenant_sql "$PID" 'SELECT slot_name, active FROM pg_replication_slots')"
 identity=$(tenant_sql "$PID" "SELECT relreplident FROM pg_class WHERE oid = 'public.notes'::regclass")
