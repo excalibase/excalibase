@@ -15,6 +15,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/dockerapps"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/mcpserver"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -89,8 +90,8 @@ func buildSingleHostAppRuntime(ctx context.Context, cfg config.AppConfig, docker
 	runtime, err := dockerapps.New(engine, dockerapps.Options{
 		NetworkPrefix: apps.NetworkPrefix, VolumePrefix: apps.VolumePrefix,
 		EdgeContainer: apps.EdgeContainer, EdgeTLSAddress: apps.EdgeTLSAddress, RoutesDir: apps.EdgeRoutesDir,
-		EdgeIssuesLocally: apps.EdgeIssuesLocally(),
-		SandboxRuntime:    apps.SandboxRuntime, Egress: apps.Egress, Isolate: podman,
+		EdgeIssuesLocally: apps.EdgeIssuesLocally(), EdgeAliases: apps.EdgeAliases, EdgeCA: edgeCA(apps),
+		SandboxRuntime: apps.SandboxRuntime, Egress: apps.Egress, Isolate: podman,
 		ProbeBinary: probe, ToolsImage: cfg.AppDiskToolsImage,
 		Route: appPublicRoute(cfg), ReservedHosts: platformHosts(cfg),
 		Projects: projectScopes{instances: instances}, MinReady: dockerapps.DefaultMinReady,
@@ -158,4 +159,25 @@ func startSingleHostReconcile(runtime *dockerapps.Runtime) {
 // appPublicRoute is where apps answer, as the edge in front of them serves it.
 func appPublicRoute(cfg config.AppConfig) apphost.Route {
 	return appRenderOptions(cfg).Route.Public()
+}
+
+// edgeCA reads the edge's own CA root when it issues locally; nil when a public CA signs.
+func edgeCA(apps config.SingleHostAppsConfig) func(context.Context) ([]byte, error) {
+	if !apps.EdgeIssuesLocally() || apps.EdgeCAURL == "" {
+		return nil
+	}
+	return dockerapps.EdgeCAReader(apps.EdgeCAURL)
+}
+
+// mcpSettings: on a single host the probes reach the platform's names and its apps through the edge
+// (EXC-608); elsewhere they go where DNS says.
+func mcpSettings(cfg config.AppConfig) mcpserver.Settings {
+	settings := mcpserver.Settings{PublicBaseURL: cfg.PublicBaseURL, StudioURL: cfg.StudioURL, DataPlaneURL: cfg.MCPDataPlaneURL}
+	apps := cfg.SingleHostApps
+	if cfg.ProvisionerMode != "docker" || apps.EdgeTLSAddress == "" {
+		return settings
+	}
+	settings.Edge = &mcpserver.EdgeRoute{TLSAddress: apps.EdgeTLSAddress, Hosts: apps.EdgeAliases, Domain: cfg.AppDomain,
+		Root: edgeCA(apps)}
+	return settings
 }

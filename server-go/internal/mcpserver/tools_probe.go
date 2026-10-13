@@ -102,7 +102,11 @@ func testAPIRequest(ctx context.Context, c *call, in probeArgs) (any, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	client := &http.Client{CheckRedirect: noRedirects}
+	client, err := c.settings.probeClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer client.CloseIdleConnections()
 	tokenURL := endpoints(base, info.OrgSlug, projectID)["auth"] + "/token"
 	token := in.AccessToken
 	if token == "" && in.PublishableKey != "" {

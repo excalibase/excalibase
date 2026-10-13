@@ -21,6 +21,7 @@ func TestLoadConfigReadsThePolicyFromTheEnvironment(t *testing.T) {
 		"PROXY_RUNTIMES":       "runsc",
 		"PROXY_VOLUME_PREFIX":  "excalibase-proj-",
 		"PROXY_EDGE_CONTAINER": "excalibase-edge",
+		"PROXY_EDGE_ALIASES":   "studio.localhost, api.localhost",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +35,7 @@ func TestLoadConfigReadsThePolicyFromTheEnvironment(t *testing.T) {
 		VolumePrefix:    "excalibase-proj-",
 		ContainerPrefix: "excalibase-",
 		EdgeContainer:   "excalibase-edge",
+		EdgeAliases:     []string{"studio.localhost", "api.localhost"},
 	}
 	if !reflect.DeepEqual(cfg.policy, want) {
 		t.Fatalf("policy = %+v\nwant %+v", cfg.policy, want)
@@ -121,5 +123,16 @@ func TestLoadConfigReadsTheTenantHostPortRange(t *testing.T) {
 	cfg, _ = loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants"}))
 	if cfg.policy.HostPorts != (engineproxy.HostPortRange{}) {
 		t.Fatalf("unset admits %+v", cfg.policy.HostPorts)
+	}
+}
+
+func TestLoadConfigRefusesEdgeAliasesThatAreNotHostnamesOrHaveNoEdge(t *testing.T) {
+	for name, values := range map[string]map[string]string{
+		"not a hostname": {"PROXY_NETWORKS": "n", "PROXY_EDGE_CONTAINER": "excalibase-edge", "PROXY_EDGE_ALIASES": "api.localhost,bad name"},
+		"no edge":        {"PROXY_NETWORKS": "n", "PROXY_EDGE_ALIASES": "api.localhost"},
+	} {
+		if _, err := loadConfig(env(values)); err == nil || !strings.Contains(err.Error(), "PROXY_EDGE_ALIASES") {
+			t.Errorf("%s: err = %v", name, err)
+		}
 	}
 }

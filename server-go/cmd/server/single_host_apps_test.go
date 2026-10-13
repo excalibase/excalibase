@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -137,5 +138,31 @@ func TestAppPublicRouteFollowsTheEdgesScheme(t *testing.T) {
 	issued := config.AppConfig{ProvisionerMode: "k8s", AppDomain: "apps.example.com", AppIngressClass: "haproxy", AppDomainIssuer: "letsencrypt"}
 	if got, _ := appPublicRoute(issued).URL("web", "proj-abc"); got != "https://web-abc.apps.example.com" {
 		t.Fatalf("kubernetes with an issuer = %q, want https", got)
+	}
+}
+
+// TestMCPProbesGoThroughTheEdgeOnASingleHost pins EXC-608: the probes reach the platform's names and app
+// hosts through the edge (and trust its own CA on localhost); on Kubernetes they use DNS as before.
+func TestMCPProbesGoThroughTheEdgeOnASingleHost(t *testing.T) {
+	cfg := config.AppConfig{
+		ProvisionerMode: "docker", AppDomain: "apps.localhost", PublicBaseURL: "https://api.localhost",
+		StudioURL: "https://studio.localhost",
+	}
+	cfg.SingleHostApps.EdgeTLSAddress, cfg.SingleHostApps.EdgeTLS = "edge:443", "internal"
+	cfg.SingleHostApps.EdgeCAURL = "http://edge:8081/root.crt"
+	cfg.SingleHostApps.EdgeAliases = []string{"studio.localhost", "api.localhost"}
+	// An outside bucket is a platform address but not the edge's: its name must keep resolving by DNS.
+	cfg.FileStorage.Endpoint = "https://acct.r2.cloudflarestorage.com"
+	edge := mcpSettings(cfg).Edge
+	if edge == nil || edge.TLSAddress != "edge:443" || edge.Domain != "apps.localhost" || edge.Root == nil ||
+		!slices.Equal(edge.Hosts, []string{"studio.localhost", "api.localhost"}) {
+		t.Fatalf("single-host edge route %+v", edge)
+	}
+	cfg.SingleHostApps.EdgeTLS = "admin@example.com"
+	if mcpSettings(cfg).Edge.Root != nil {
+		t.Fatal("an edge on a public CA has no root to trust")
+	}
+	if mcpSettings(config.AppConfig{ProvisionerMode: "k8s", AppDomain: "apps.example.com"}).Edge != nil {
+		t.Fatal("Kubernetes probes must not be routed to a single-host edge")
 	}
 }

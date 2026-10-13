@@ -7,6 +7,9 @@
 # edge (HTTPS on 80/443) is published; every other service sits on internal
 # networks. provisioning creates tenant containers through engine-proxy, which
 # holds the engine socket and forwards only the calls provisioning makes.
+# The platform's names the edge alone answers to on project networks (EXC-608): provisioning
+# joins it under them and the engine proxy admits exactly them.
+x-edge-aliases: &edge_aliases studio.${EXCALIBASE_DOMAIN:?run ./init.sh first},api.${EXCALIBASE_DOMAIN:?run ./init.sh first},files.${EXCALIBASE_DOMAIN:?run ./init.sh first}
 x-hardened: &hardened
   security_opt:
     - no-new-privileges:true
@@ -153,6 +156,8 @@ services:
       PROXY_NETWORK_PREFIX: excalibase-net-
       PROXY_VOLUME_PREFIX: excalibase-vol-
       PROXY_EDGE_CONTAINER: excalibase-edge
+      # The platform's names the edge alone answers to on project networks (EXC-608).
+      PROXY_EDGE_ALIASES: *edge_aliases
       PROXY_RUNTIMES: ${APP_SANDBOX_RUNTIME:-runsc}
       # DocumentDB (EXC-576): the catalogue's gateway may join its project
       # database's network namespace, and only while DOCUMENTDB_ENABLED is set.
@@ -269,6 +274,10 @@ services:
       APP_EDGE_ROUTES_DIR: /srv/excalibase-app-routes
       APP_EDGE_TLS_ADDR: edge:443
       APP_EDGE_TLS: ${EXCALIBASE_TLS:?run ./init.sh first}
+      # The edge's own CA root (EXCALIBASE_TLS=internal), handed to apps and trusted by MCP probes (EXC-608).
+      APP_EDGE_CA_URL: http://edge:8081/root.crt
+      # Apps reach these names through the edge; the engine proxy admits exactly them (EXC-608).
+      APP_EDGE_ALIASES: *edge_aliases
       # Sizes and copies app disks; provisioning's own image, already on the host.
       APP_DISK_TOOLS_IMAGE: ${APP_DISK_TOOLS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.5.0}}
       # Where custom domains' CNAMEs are looked up; the host's resolver when unset.

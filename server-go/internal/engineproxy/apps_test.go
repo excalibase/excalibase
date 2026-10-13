@@ -83,6 +83,39 @@ func TestCheckNetworkCreateRefuses(t *testing.T) {
 	}
 }
 
+// TestTheEdgeAloneAnswersToThePlatformsNamesOnAProjectNetwork pins EXC-608: the edge may join with the
+// platform's hostnames as aliases, so apps reach api.<domain> through it; nothing else may take a name.
+func TestTheEdgeAloneAnswersToThePlatformsNamesOnAProjectNetwork(t *testing.T) {
+	policy := appsPolicy()
+	policy.EdgeAliases = []string{"api.localhost", "studio.localhost"}
+	aliased := func(container string, endpoint map[string]any) []byte {
+		return mustJSON(t, map[string]any{"Container": container, "EndpointConfig": endpoint})
+	}
+	if err := policy.CheckNetworkConnect(aliased("excalibase-edge", map[string]any{"Aliases": []any{"api.localhost", "studio.localhost"}})); err != nil {
+		t.Fatalf("the edge with the platform's names refused: %v", err)
+	}
+	for name, body := range map[string][]byte{
+		"another container":   aliased("excalibase-app-x", map[string]any{"Aliases": []any{"api.localhost"}}),
+		"a name not listed":   aliased("excalibase-edge", map[string]any{"Aliases": []any{"api.localhost", "postgres"}}),
+		"an alias and an IP":  aliased("excalibase-edge", map[string]any{"Aliases": []any{"api.localhost"}, "IPAddress": "10.0.0.9"}),
+		"an alias and a link": aliased("excalibase-edge", map[string]any{"Aliases": []any{"api.localhost"}, "Links": []any{"x:y"}}),
+		"aliases not a list":  aliased("excalibase-edge", map[string]any{"Aliases": "api.localhost"}),
+		"a non-string alias":  aliased("excalibase-edge", map[string]any{"Aliases": []any{7}}),
+		"endpoint not a map":  aliased("excalibase-edge", nil),
+	} {
+		if name == "endpoint not a map" {
+			body = []byte(`{"Container":"excalibase-edge","EndpointConfig":"x"}`)
+		}
+		if err := policy.CheckNetworkConnect(body); err == nil {
+			t.Errorf("%s: connect allowed", name)
+		}
+	}
+	policy.EdgeAliases = nil
+	if err := policy.CheckNetworkConnect(aliased("excalibase-edge", map[string]any{"Aliases": []any{"api.localhost"}})); err == nil {
+		t.Fatal("with no names listed the edge took one")
+	}
+}
+
 func TestCheckNetworkConnectAllowsOnlyAnEmptyEndpoint(t *testing.T) {
 	policy := appsPolicy()
 	if err := policy.CheckNetworkConnect(mustJSON(t, map[string]any{"Container": "excalibase-edge"})); err != nil {
@@ -225,6 +258,7 @@ func TestHandlerRefusesAppCallsOutsideTheScope(t *testing.T) {
 		{http.MethodPost, "/v1.47/networks/excalibase-proj-p1/connect", `{"Container":"excalibase-provisioning"}`},
 		{http.MethodPost, "/v1.47/networks/excalibase-proj-p1/connect", `{"Container":"excalibase-edge","EndpointConfig":{"Aliases":["studio"]}}`},
 		{http.MethodPost, "/v1.47/networks/excalibase-proj-p1/disconnect", `{"Container":"excalibase-provisioning"}`},
+		{http.MethodPost, "/v1.47/networks/excalibase-proj-p1/disconnect", `{"Container":"excalibase-edge","EndpointConfig":{"Aliases":["studio"]}}`},
 		{http.MethodPost, "/v1.47/networks/prune", ""},
 		{http.MethodPost, "/v1.47/volumes/create", `{"Name":"excalibase-platform-postgres","Labels":{"excalibase.managed":"true"}}`},
 		{http.MethodGet, "/v1.47/volumes/excalibase-platform-secrets", ""},
@@ -243,6 +277,27 @@ func TestHandlerRefusesAppCallsOutsideTheScope(t *testing.T) {
 		"DELETE /v1.47/networks/excalibase-tenants", "POST /v1.47/containers/excalibase-edge/stop"} {
 		if engine.reached(mutating) {
 			t.Errorf("%s reached the engine", mutating)
+		}
+	}
+}
+
+// EXC-608: through the proxy the edge joins a project network under the listed platform names, and a
+// managed container never takes a name, listed or not.
+func TestHandlerLetsTheEdgeAloneJoinUnderThePlatformsNames(t *testing.T) {
+	policy := appsPolicy()
+	policy.EdgeAliases = []string{"api.localhost", "studio.localhost"}
+	engine, proxy := newProxyWith(t, policy)
+	engine.containers["excalibase-edge"] = map[string]string{"com.docker.compose.service": "edge"}
+	path := "/v1.47/networks/excalibase-proj-p1/connect"
+	if resp := call(t, proxy.URL, http.MethodPost, path, `{"Container":"excalibase-edge","EndpointConfig":{"Aliases":["api.localhost","studio.localhost"]}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the edge under the platform's names = %d, want forwarded", resp.StatusCode)
+	}
+	for _, body := range []string{
+		`{"Container":"excalibase-p1-postgres","EndpointConfig":{"Aliases":["api.localhost"]}}`,
+		`{"Container":"excalibase-edge","EndpointConfig":{"Aliases":["excalibase-p1-postgres"]}}`,
+	} {
+		if resp := call(t, proxy.URL, http.MethodPost, path, body); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s = %d, want refused", body, resp.StatusCode)
 		}
 	}
 }

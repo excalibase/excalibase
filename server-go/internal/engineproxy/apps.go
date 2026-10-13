@@ -64,9 +64,66 @@ func (p Policy) CheckNetworkCreate(body []byte) error {
 
 // CheckNetworkConnect admits joining a container with no endpoint settings:
 // an alias or a fixed address would answer for something else on the network.
+// The one exception is the edge, under the platform's own hostnames (EXC-608).
 func (p Policy) CheckNetworkConnect(body []byte) error {
-	_, err := networkMember(body, false)
+	var member map[string]any
+	if err := json.Unmarshal(body, &member); err != nil {
+		return refuse("network member body: %v", err)
+	}
+	endpoint, aliased := member["EndpointConfig"]
+	if !aliased || isZero(endpoint) {
+		_, err := networkMember(body, false)
+		return err
+	}
+	if container, _ := member["Container"].(string); container == "" || container != p.EdgeContainer {
+		return refuse("network EndpointConfig may be set only for the edge")
+	}
+	if err := p.checkEdgeEndpoint(endpoint); err != nil {
+		return err
+	}
+	_, err := networkMember(withoutEndpoint(body), false)
 	return err
+}
+
+// withoutEndpoint is a connect body with its endpoint settings removed, once CheckNetworkConnect admitted them.
+func withoutEndpoint(body []byte) []byte {
+	var member map[string]any
+	if json.Unmarshal(body, &member) != nil {
+		return body
+	}
+	if _, ok := member["EndpointConfig"]; !ok {
+		return body
+	}
+	delete(member, "EndpointConfig")
+	rest, err := json.Marshal(member)
+	if err != nil {
+		return body
+	}
+	return rest
+}
+
+// checkEdgeEndpoint admits endpoint settings that only name aliases, each one of EdgeAliases.
+func (p Policy) checkEdgeEndpoint(endpoint any) error {
+	settings, ok := endpoint.(map[string]any)
+	if !ok {
+		return refuse("network EndpointConfig must be an object")
+	}
+	for field, value := range settings {
+		if field != "Aliases" && !isZero(value) {
+			return refuse("network EndpointConfig %s may not be set", field)
+		}
+	}
+	aliases, ok := settings["Aliases"].([]any)
+	if !ok || len(aliases) == 0 {
+		return refuse("network EndpointConfig may only name aliases")
+	}
+	for _, alias := range aliases {
+		name, _ := alias.(string)
+		if !slices.Contains(p.EdgeAliases, name) {
+			return refuse("the edge may not answer to %v on a project network", alias)
+		}
+	}
+	return nil
 }
 
 // networkMember reads the container a connect or disconnect names; besides it
@@ -223,6 +280,12 @@ func (h *Handler) authorizeNetwork(r *http.Request, name, action string) error {
 
 // checkMember admits the named edge or a managed container, and nothing else.
 func (h *Handler) checkMember(r *http.Request, body []byte, disconnect bool) error {
+	if !disconnect {
+		if err := h.policy.CheckNetworkConnect(body); err != nil {
+			return err
+		}
+		body = withoutEndpoint(body)
+	}
 	container, err := networkMember(body, disconnect)
 	if err != nil {
 		return err

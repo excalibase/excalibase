@@ -41,6 +41,9 @@ type Policy struct {
 	// EdgeContainer is the one unmanaged container that may join and leave
 	// project networks, to route to their apps; empty admits none.
 	EdgeContainer string
+	// EdgeAliases are the platform's hostnames the edge alone may answer to on a
+	// project network, so apps reach api.<domain> through it (EXC-608).
+	EdgeAliases []string
 	// NetnsJoinImages are the digest-pinned images that may run in a managed
 	// container's network namespace (netns_join.go); empty admits none.
 	NetnsJoinImages []string

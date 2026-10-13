@@ -84,7 +84,11 @@ func testAuthFlow(ctx context.Context, c *call, in authFlowArgs) (any, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	client := &http.Client{CheckRedirect: noRedirects}
+	client, err := c.settings.probeClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer client.CloseIdleConnections()
 	target := endpoints(base, info.OrgSlug, projectID)["auth"]
 	if in.Flow == flowRegister {
 		target += "/register"

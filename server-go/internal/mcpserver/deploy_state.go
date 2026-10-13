@@ -104,14 +104,13 @@ type urlProbe struct {
 
 // probeAppURL asks the app's own address once, with a short timeout. An edge
 // that answers 502, 503 or 504 has no ready app behind it yet.
-func probeAppURL(ctx context.Context, address string) urlProbe {
+func probeAppURL(ctx context.Context, client *http.Client, address string) urlProbe {
 	ctx, cancel := context.WithTimeout(ctx, urlProbeTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil || (request.URL.Scheme != "http" && request.URL.Scheme != "https") {
 		return urlProbe{Reason: "the app's address is not an http or https URL"}
 	}
-	client := &http.Client{CheckRedirect: noRedirects}
 	answer, err := client.Do(request)
 	if err != nil {
 		return urlProbe{Reason: unreachableReason(err)}
@@ -173,18 +172,25 @@ func describeDeploy(ctx context.Context, c *call, path string, app appView, depl
 		}
 	case state.Status == apphost.DeployStatusSucceeded:
 		addCertificate(ctx, c, path, app, deploy, out)
-		describeSucceeded(ctx, app, out)
+		describeSucceeded(ctx, c.settings, app, out)
 	default:
 		out["state"] = state.Status
 	}
 }
 
-func describeSucceeded(ctx context.Context, app appView, out map[string]any) {
+func describeSucceeded(ctx context.Context, settings Settings, app appView, out map[string]any) {
 	out["state"] = apphost.DeployStatusSucceeded
 	if app.URL == "" {
 		return
 	}
-	probe := probeAppURL(ctx, app.URL)
+	client, err := settings.probeClient(ctx)
+	if err != nil {
+		out["state"] = stateNotAnswered
+		out["urlProbe"] = urlProbe{Reason: err.Error()}
+		return
+	}
+	defer client.CloseIdleConnections()
+	probe := probeAppURL(ctx, client, app.URL)
 	if !probe.Answered {
 		if https, _ := out["https"].(map[string]any); https != nil && https["status"] == "certificate_pending" {
 			probe.Reason = "the HTTPS certificate is still being issued (cert pending): " + probe.Reason
