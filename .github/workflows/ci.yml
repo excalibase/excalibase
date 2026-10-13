@@ -75,7 +75,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Four fresh installs, each walking realtime too (EXC-612).
+    timeout-minutes: 130
     steps:
       - uses: actions/checkout@v4
       - name: Build provisioning and Studio from this checkout
