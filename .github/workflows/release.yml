@@ -1,7 +1,8 @@
 name: Release
 
 # Tags an already-proven build. Nothing is built here: a release must be the
-# bits a green AIO nightly installed, and two builds of one commit do not
+# bits a green AIO nightly installed and a green user-journey gate walked
+# (user-journeys.yml; the gate job refuses otherwise), and two builds of one commit do not
 # produce the same digest (EXC-433). imagetools copies the manifest, so the
 # released image and the tested image are the same object.
 on:
@@ -19,15 +20,63 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  # No release without a green user-journey gate (EXC-611): every image this release would promote
+  # must be in the list a fully green, scheduled or dispatched run of user-journeys.yml uploaded, on
+  # a commit main contains. Retag then promotes exactly the digests this job approved, so a tag
+  # that moves in between changes nothing.
+  gate:
+    name: A green user-journey gate tested these images
+    runs-on: ubuntu-latest
+    outputs:
+      approved: ${{ steps.find.outputs.approved }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SERVICES: ${{ inputs.services }}
+      SOURCE_TAG: ${{ inputs.source_tag }}
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Find the run that tested every image
+        id: find
+        run: |
+          set -eu
+          wanted="" approved=""
+          for service in $(printf '%s' "$SERVICES" | tr ',' ' '); do
+            digest=$(docker buildx imagetools inspect "excalibase/$service:$SOURCE_TAG" | awk '/^Digest:/ { print $2; exit }')
+            case $digest in sha256:*) ;; *) echo "::error::excalibase/$service:$SOURCE_TAG has no digest"; exit 1 ;; esac
+            wanted="$wanted docker.io/excalibase/$service@$digest"
+            approved="$approved $service@$digest"
+          done
+          [ -n "$wanted" ] || { echo "::error::no services to release"; exit 1; }
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/user-journeys.yml/runs?branch=main&status=success&per_page=30" \
+            -q '.workflow_runs[] | select(.event == "schedule" or .event == "workflow_dispatch") | "\(.id) \(.head_sha)"')
+          while read -r run sha; do
+            [ -n "$run" ] || continue
+            # A run of a commit main does not contain (a tag or ref that only looks like main) never counts.
+            main_has=$(gh api "repos/$GITHUB_REPOSITORY/compare/$sha...main" -q .status 2>/dev/null || true)
+            case $main_has in ahead|identical) ;; *) continue ;; esac
+            rm -rf tested && gh run download "$run" -R "$GITHUB_REPOSITORY" -n user-journeys-tested-images -D tested 2>/dev/null || continue
+            missing=0
+            for image in $wanted; do grep -qxF "$image" tested/tested-images.txt || missing=1; done
+            if [ "$missing" = 0 ]; then
+              echo "gate run $run tested every image:$wanted" | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "approved=${approved# }" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done <<< "$runs"
+          echo "::error::no green user-journeys run on main tested${wanted}; run the gate on $SOURCE_TAG first"
+          exit 1
+
   retag:
     name: Retag ${{ inputs.version }}
+    needs: gate
     runs-on: ubuntu-latest
     steps:
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -36,8 +85,10 @@ jobs:
       # consumer follows: 1.2.0-rc.1 gets its own tag and nothing else.
       - name: Work out which tags this version carries
         id: plan
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          version='${{ inputs.version }}'
+          version=$VERSION
           case "$version" in
             v*) echo "::error::drop the v prefix: the git tag is v$version, the image tag is ${version#v}"; exit 1 ;;
             *+*) echo "::error::a docker tag cannot contain '+'; use '-' or an OCI label"; exit 1 ;;
@@ -54,35 +105,38 @@ jobs:
           fi
 
       - name: Retag each service
+        env:
+          APPROVED: ${{ needs.gate.outputs.approved }}
+          VERSION: ${{ inputs.version }}
+          TAGS: ${{ steps.plan.outputs.tags }}
         run: |
           set -eu
+          [ -n "$APPROVED" ] || { echo "::error::the gate approved no images"; exit 1; }
           summary=""
-          for service in $(printf '%s' '${{ inputs.services }}' | tr ',' ' '); do
+          # Exactly the digests the gate approved, never the source tag looked up again.
+          for pair in $APPROVED; do
+            service=${pair%%@*}
+            digest=${pair#*@}
             repository="excalibase/$service"
             # A released version never moves: the chart pins it by tag alone.
-            if docker buildx imagetools inspect "$repository:${{ inputs.version }}" >/dev/null 2>&1; then
-              echo "::error::$repository:${{ inputs.version }} already exists; cut a new version instead"
+            if docker buildx imagetools inspect "$repository:$VERSION" >/dev/null 2>&1; then
+              echo "::error::$repository:$VERSION already exists; cut a new version instead"
               exit 1
             fi
-            # `inspect` prints "Digest: sha256:…". Parsed rather than asked
-            # for as a Go template: Actions evaluates that brace syntax first,
-            # even inside a shell comment, and fails to parse the workflow.
-            digest=$(docker buildx imagetools inspect "$repository:${{ inputs.source_tag }}" \
-              | awk '/^Digest:/ { print $2; exit }')
-            test -n "$digest" && test "$digest" != "null"
+            case $digest in sha256:*) ;; *) echo "::error::no approved digest for $service"; exit 1 ;; esac
 
             refs=""
-            for tag in ${{ steps.plan.outputs.tags }}; do refs="$refs -t $repository:$tag"; done
+            for tag in $TAGS; do refs="$refs -t $repository:$tag"; done
             # shellcheck disable=SC2086
             docker buildx imagetools create $refs "$repository@$digest"
 
-            echo "released $repository@$digest as ${{ steps.plan.outputs.tags }}"
+            echo "released $repository@$digest as $TAGS"
             summary="$summary- \`$repository@$digest\`\n"
           done
           {
-            echo "### Released ${{ inputs.version }}"
+            echo "### Released $VERSION"
             echo ""
-            echo "Tags: ${{ steps.plan.outputs.tags }}"
+            echo "Tags: $TAGS"
             echo ""
             printf "%b" "$summary"
           } >> "$GITHUB_STEP_SUMMARY"
