@@ -13,8 +13,6 @@ import (
 )
 
 const (
-	// MaxSitesPerProject bounds how many user Workers one project holds in the shared namespace.
-	MaxSitesPerProject = 5
 	// MaxDeployDuration is the lease one deploy or deletion holds on its site.
 	MaxDeployDuration = 15 * time.Minute
 	// publishTimeout ends every call to Cloudflare well inside the lease, so a
@@ -66,6 +64,14 @@ func (s *Service) limitsFor(ctx context.Context, projectID string) (Limits, erro
 		return Limits{}, fmt.Errorf("read the project's deploy limits: %w", err)
 	}
 	return limits, nil
+}
+
+// Limits answers what the project's plan lets its sites hold.
+func (s *Service) Limits(ctx context.Context, projectID string) (Limits, error) {
+	if !s.Available() {
+		return Limits{}, ErrSitesUnavailable
+	}
+	return s.limitsFor(ctx, projectID)
 }
 
 // MaxUploadBytes bounds a deploy's request body before the archive is read.
@@ -146,6 +152,10 @@ func (s *Service) Create(ctx context.Context, projectID, name string, spaFallbac
 	if err := ValidateName(name); err != nil {
 		return nil, &InputError{Reason: err.Error()}
 	}
+	limits, err := s.limitsFor(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
 	now := s.now().UTC()
 	site := &Site{
 		ID: uuid.NewString(), ProjectID: projectID, Name: name,
@@ -153,7 +163,7 @@ func (s *Service) Create(ctx context.Context, projectID, name string, spaFallbac
 		SPAFallback: spaFallback == nil || *spaFallback,
 		CreatedBy:   actor, CreatedAt: now, UpdatedAt: now,
 	}
-	if err := s.store.Create(ctx, site, MaxSitesPerProject); err != nil {
+	if err := s.store.Create(ctx, site, limits.MaxSites); err != nil {
 		return nil, err
 	}
 	return site, nil

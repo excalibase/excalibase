@@ -30,6 +30,14 @@ interface Recorded {
   rollbacks: string[];
   patches: unknown[];
   deleted: boolean;
+  tokensMade: unknown[];
+  tokensRevoked: string[];
+}
+
+interface TokenState {
+  id: string;
+  name: string;
+  tokenPrefix: string;
 }
 
 async function mockConfig(page: Page, sites: boolean) {
@@ -57,8 +65,18 @@ async function mockSitesApi(
     rollbacks: [],
     patches: [],
     deleted: false,
+    tokensMade: [],
+    tokensRevoked: [],
   };
   let site: SiteState | null = initialSite;
+  let tokens: TokenState[] = [];
+  const presentToken = (token: TokenState) => ({
+    ...token,
+    siteId: 'site-1',
+    projectId: 'test-project',
+    createdBy: 'u1',
+    createdAt: '2026-10-16T10:00:00Z',
+  });
   let deploys = [...initialDeploys];
   const present = () => ({
     ...site,
@@ -80,6 +98,32 @@ async function mockSitesApi(
     const path = new URL(request.url()).pathname.replace(SITES_PATH, '');
     const method = request.method();
     if (path === '/' && method === 'GET') return json(route, site ? [present()] : []);
+    if (path === '/limits' && method === 'GET')
+      return json(route, {
+        maxSites: 5,
+        maxDeployBytes: 104857600,
+        maxFiles: 20000,
+        maxFileBytes: 26214400,
+        maxDeploysPerHour: 30,
+      });
+    if (path === '/site-1/tokens' && method === 'GET') return json(route, tokens.map(presentToken));
+    if (path === '/site-1/tokens' && method === 'POST') {
+      const body = request.postDataJSON() as { name: string };
+      recorded.tokensMade.push(body);
+      const token = {
+        id: `tok-${tokens.length + 1}`,
+        name: body.name,
+        tokenPrefix: 'excd_4f1e9a2',
+      };
+      tokens = [...tokens, token];
+      return json(route, { ...presentToken(token), token: 'excd_4f1e9a2c-shown-once' }, 201);
+    }
+    const revoked = /^\/site-1\/tokens\/([^/]+)$/.exec(path);
+    if (revoked && method === 'DELETE') {
+      recorded.tokensRevoked.push(revoked[1]);
+      tokens = tokens.filter((token) => token.id !== revoked[1]);
+      return route.fulfill({ status: 204 });
+    }
     if (path === '/' && method === 'POST') {
       const body = request.postDataJSON() as { name: string; spaFallback: boolean };
       recorded.created.push(body);
@@ -156,6 +200,9 @@ test.describe('Sites', () => {
     await page.goto('/project/test-project');
     await page.getByTestId('nav-sites').click();
     await expect(page.getByTestId('sites-empty')).toBeVisible();
+    // EXC-620: the plan's limits sit under the list.
+    await expect(page.getByTestId('sites-limits')).toContainText('0 of 5 sites');
+    await expect(page.getByTestId('sites-limits')).toContainText('30 deploys an hour');
 
     await page.getByTestId('sites-new').click();
     await page.getByTestId('site-name').fill('studio');
@@ -202,6 +249,37 @@ test.describe('Sites', () => {
     await expect.poll(() => recorded.deleted).toBe(true);
   });
 
+  // EXC-620: CI deploys with a token that can only deploy this site, shown once.
+  test('make a deploy token for CI, see it once, and revoke it', async ({ page }) => {
+    await mockProjectRole(page, 'developer');
+    await mockConfig(page, true);
+    const recorded = await mockSitesApi(page, [], {
+      id: 'site-1',
+      name: 'shop',
+      hostname: 'shop.example.app',
+      url: 'https://shop.example.app',
+      spaFallback: true,
+    });
+    await page.goto('/project/test-project/sites/site-1');
+    await expect(page.getByTestId('site-ci-snippet')).toContainText('$EXCALIBASE_DEPLOY_TOKEN');
+    await expect(page.getByTestId('site-deploy-tokens-empty')).toBeVisible();
+
+    await page.getByTestId('site-deploy-token-name').fill('github actions');
+    await page.getByTestId('site-deploy-token-create').click();
+    await expect(page.getByTestId('site-deploy-token-issued')).toContainText(
+      'excd_4f1e9a2c-shown-once',
+    );
+    expect(recorded.tokensMade).toEqual([{ name: 'github actions' }]);
+    await expect(page.getByTestId('site-deploy-token-tok-1')).toContainText('excd_4f1e9a2');
+    await page.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByText('excd_4f1e9a2c-shown-once')).toHaveCount(0);
+
+    await page.getByTestId('site-deploy-token-revoke-tok-1').click();
+    await page.getByTestId('modal-confirm').click();
+    await expect(page.getByTestId('site-deploy-tokens-empty')).toBeVisible();
+    expect(recorded.tokensRevoked).toEqual(['tok-1']);
+  });
+
   // The server refuses a viewer every change (403); Studio offers none.
   test('a viewer sees the site, its routing and history, and no control that changes it', async ({
     page,
@@ -236,7 +314,13 @@ test.describe('Sites', () => {
     await page.goto('/project/test-project/sites/site-1');
     await expect(page.getByTestId('site-deploy-row-dep-1')).toBeVisible();
     await expect(page.getByTestId('site-spa-state')).toContainText('on');
-    for (const id of ['site-upload', 'site-delete', 'site-spa-toggle', 'site-rollback-dep-1']) {
+    for (const id of [
+      'site-upload',
+      'site-delete',
+      'site-spa-toggle',
+      'site-rollback-dep-1',
+      'site-deploy-tokens',
+    ]) {
       await expect(page.getByTestId(id)).toHaveCount(0);
     }
 

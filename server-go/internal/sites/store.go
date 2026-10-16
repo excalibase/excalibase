@@ -34,4 +34,17 @@ type Store interface {
 	GetDeploy(ctx context.Context, projectID, siteID, id string) (*Deploy, error)
 	// ListDeploys answers the newest first, at most limit.
 	ListDeploys(ctx context.Context, projectID, siteID string, limit int) ([]*Deploy, error)
+	// TakeDeploySlot records one deploy attempt for the project at now unless
+	// max attempts already fall in the window before it; then it answers how
+	// long until the oldest of them leaves the window. Atomic across replicas.
+	TakeDeploySlot(ctx context.Context, projectID string, now time.Time, window time.Duration, max int) (time.Duration, error)
+	// CreateDeployToken refuses with ErrDeployTokenLimitReached past maxPerSite,
+	// and with ErrSiteNotFound when the project holds no such site.
+	CreateDeployToken(ctx context.Context, token *DeployToken, maxPerSite int) error
+	ListDeployTokens(ctx context.Context, projectID, siteID string) ([]*DeployToken, error)
+	// DeleteDeployToken refuses with ErrDeployTokenNotFound when the site holds no such token.
+	DeleteDeployToken(ctx context.Context, projectID, siteID, id string) error
+	// FindDeployToken answers nil, no error, when no token has that hash.
+	FindDeployToken(ctx context.Context, hash string) (*DeployToken, error)
+	TouchDeployToken(ctx context.Context, id string, at time.Time) error
 }

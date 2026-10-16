@@ -27,6 +27,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/routepolicy"
+	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
@@ -68,16 +69,17 @@ type principal struct {
 // "project not found" 404 must never be read as a gate refusal, and a gate
 // refusal must never be read as the handler answering.
 var gateRefusalBodies = map[string]bool{
-	`{"error":"authentication required"}`:                                true,
-	`{"code":"token_expired","error":"token expired"}`:                   true,
-	`{"error":"unauthenticated"}`:                                        true,
-	`{"error":"project not found"}`:                                      true,
-	`{"error":"insufficient project role"}`:                              true,
-	`{"error":"insufficient permissions"}`:                               true,
-	`{"error":"token lacks required scope: write"}`:                      true,
-	`{"error":"this route requires a session or an unrestricted token"}`: true,
-	`{"error":"this route requires a write-capable credential"}`:         true,
-	`{"error":"token is not permitted to call this endpoint"}`:           true,
+	`{"error":"authentication required"}`:                                          true,
+	`{"code":"token_expired","error":"token expired"}`:                             true,
+	`{"error":"unauthenticated"}`:                                                  true,
+	`{"error":"project not found"}`:                                                true,
+	`{"error":"insufficient project role"}`:                                        true,
+	`{"error":"insufficient permissions"}`:                                         true,
+	`{"error":"token lacks required scope: write"}`:                                true,
+	`{"error":"this route requires a session or an unrestricted token"}`:           true,
+	`{"error":"this route requires a write-capable credential"}`:                   true,
+	`{"error":"token is not permitted to call this endpoint"}`:                     true,
+	`{"error":"a deploy token may only deploy its own site and read its deploys"}`: true,
 	// Refusals the handlers write themselves, in their own words.
 	`{"error":"org not found","status":404}`:                 true,
 	`{"error":"insufficient permissions","status":403}`:      true,
@@ -207,6 +209,10 @@ func policyPrincipals(platform *fakePlatform) []principal {
 	// destroy platform-wide authority must refuse it.
 	add(routepolicy.Principal{Name: "platformAdminBoundPAT", PlatformAdmin: true, Restricted: true, ForeignProject: true},
 		matrixAdminID+"-bound", "platform_admin", domain.AccessToken{ProjectID: matrixProjectB})
+	// EXC-620: a site's CI deploy token, made by the org-A developer for site
+	// "x" of project A, the site every {siteId} in the matrix renders as.
+	out = append(out, principal{Principal: routepolicy.Principal{Name: "siteDeployToken", OrgRole: domain.OrgRoleDeveloper,
+		Restricted: true, SiteDeployToken: true}, token: policyDeployToken})
 	addCapability(platform, &out, "svcAuthToken", policySvcAuthID, chartPermissions[svcAuth])
 	addCapability(platform, &out, "svcGraphqlToken", policySvcGqlID, chartPermissions[svcGraphql])
 	return out
@@ -247,6 +253,7 @@ func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlat
 	deps.internalEmail = handler.NewInternalEmailHandler(&countingSender{})
 	deps.emailTokensHandler = handler.NewEmailTokensHandler(offlineDB(t), nil, nil, "", "")
 	deps.capDeps = &capacityDeps{k8sClient: k8s.NewMockClient(), store: instances}
+	deps.siteDeployTokens = policyDeployTokens{}
 	// The matrix fires thousands of requests as the same user against the same
 	// project; the production limits would answer 429 instead of the
 	// authorization outcome under test.
@@ -371,6 +378,21 @@ func policyVaultHandler(t *testing.T) *handler.VaultHandler {
 	t.Cleanup(func() { localVault.Close() })
 	return handler.NewVaultHandler(localVault)
 }
+
+// policyDeployToken is the raw deploy token the siteDeployToken principal sends.
+const policyDeployToken = sites.DeployTokenPrefix + "policy-matrix"
+
+// policyDeployTokens resolves the one deploy token the matrix holds.
+type policyDeployTokens struct{}
+
+func (policyDeployTokens) ResolveDeployToken(_ context.Context, raw string) (*sites.DeployToken, error) {
+	if raw != policyDeployToken {
+		return nil, nil
+	}
+	return &sites.DeployToken{ID: "policy-token", SiteID: "x", ProjectID: matrixProjectA, Name: "ci", CreatedBy: matrixDevID}, nil
+}
+
+func (policyDeployTokens) RecordDeployTokenUse(context.Context, *sites.DeployToken) {}
 
 // policyTokenStore completes fakestore.Tokens into a storage.TokenStore so the
 // token routes resolve ownership for real instead of panicking.

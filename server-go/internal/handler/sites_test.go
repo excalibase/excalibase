@@ -80,7 +80,8 @@ func TestSitesAnswerNotAvailableWithoutCloudflare(t *testing.T) {
 		for _, call := range []struct{ method, path string }{
 			{http.MethodGet, "/"}, {http.MethodPost, "/"}, {http.MethodGet, "/s1"}, {http.MethodPatch, "/s1"},
 			{http.MethodDelete, "/s1"}, {http.MethodPost, "/s1/deploy"}, {http.MethodGet, "/s1/deploys"},
-			{http.MethodGet, "/s1/deploys/d1"}, {http.MethodPost, "/s1/deploys/d1/rollback"},
+			{http.MethodGet, "/s1/deploys/d1"}, {http.MethodPost, "/s1/deploys/d1/rollback"}, {http.MethodGet, "/limits"},
+			{http.MethodGet, "/s1/tokens"}, {http.MethodPost, "/s1/tokens"}, {http.MethodDelete, "/s1/tokens/t1"},
 		} {
 			response := h.do(t, call.method, call.path, []byte(`{}`))
 			if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "not available on this install") {
@@ -242,7 +243,7 @@ func TestSiteDeployOverTheBodyCeilingIsTooLarge(t *testing.T) {
 type tinyLimits struct{}
 
 func (tinyLimits) DeployLimits(context.Context, string) (sites.Limits, error) {
-	return sites.Limits{MaxFiles: 2, MaxFileBytes: 1 << 10, MaxTotalBytes: 1 << 10}, nil
+	return sites.Limits{MaxFiles: 2, MaxFileBytes: 1 << 10, MaxTotalBytes: 1 << 10, MaxSites: 1, MaxDeploysPerHour: 1}, nil
 }
 
 func TestSiteRoutesForAMissingSiteAreNotFound(t *testing.T) {

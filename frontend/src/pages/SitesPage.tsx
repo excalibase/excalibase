@@ -1,11 +1,11 @@
 import { Link, useParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { apiErrorMessage } from '../api/apps';
-import { useSites, type Site } from '../api/sites';
+import { useSiteLimits, useSites, type Site } from '../api/sites';
 import { useSitesEnabled } from '../hooks/useDeploymentMode';
 import { useProjectRole } from '../hooks/useProjectRole';
 import { Spinner, ToneBadge, primaryButton } from '../components/containers/ContainerBits';
-import { SitesGate, SitesHeader } from '../components/sites/SiteBits';
+import { SiteLimitsNote, SitesGate, SitesHeader } from '../components/sites/SiteBits';
 
 function SiteRow({ projectId, site }: { readonly projectId: string; readonly site: Site }) {
   return (
@@ -75,6 +75,7 @@ function SitesList({
   readonly canDevelop: boolean;
 }) {
   const { data: sites, error } = useSites(projectId);
+  const { data: limits } = useSiteLimits(projectId);
   if (error) {
     return (
       <div role="alert" className="text-sm text-red-400 py-6">
@@ -83,13 +84,19 @@ function SitesList({
     );
   }
   if (!sites) return <Spinner />;
-  if (sites.length === 0) return <EmptyState projectId={projectId} canDevelop={canDevelop} />;
   return (
-    <div className="space-y-2" data-testid="sites-list">
-      {sites.map((site) => (
-        <SiteRow key={site.id} projectId={projectId} site={site} />
-      ))}
-    </div>
+    <>
+      {sites.length === 0 ? (
+        <EmptyState projectId={projectId} canDevelop={canDevelop} />
+      ) : (
+        <div className="space-y-2" data-testid="sites-list">
+          {sites.map((site) => (
+            <SiteRow key={site.id} projectId={projectId} site={site} />
+          ))}
+        </div>
+      )}
+      {limits && <SiteLimitsNote limits={limits} held={sites.length} />}
+    </>
   );
 }
 

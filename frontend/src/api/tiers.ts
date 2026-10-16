@@ -22,6 +22,13 @@ export interface TierConfig {
   backupEnabled: boolean;
   // Idle days before an ACTIVE project is auto-paused (warning one day earlier); 0 = never.
   autoPauseAfterDays: number;
+  // A project's Sites on the plan (EXC-620): how many, each deploy's size and file
+  // limits, and deploys an hour. 0 sites offers none.
+  maxSites: number;
+  maxSiteDeployBytes: number;
+  maxSiteFiles: number;
+  maxSiteFileBytes: number;
+  maxSiteDeploysPerHour: number;
 }
 
 export type TierConfigInput = Omit<TierConfig, 'tier'>;

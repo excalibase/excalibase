@@ -20,10 +20,10 @@ jobs:
           npm run build
       - name: Deploy
         env:
-          EXCALIBASE_TOKEN: ${{ secrets.EXCALIBASE_TOKEN }}
+          EXCALIBASE_DEPLOY_TOKEN: ${{ secrets.EXCALIBASE_DEPLOY_TOKEN }}
         run: |
           tar czf site.tgz -C "apps/web/build" .
           curl --fail-with-body -sS -X POST "https://app.example.test/api/projects/proj-a/sites/0b8f2c1e-5d1a-4c7e-9f2a-3b4c5d6e7f80/deploy?label=$GITHUB_SHA" \
-            -H "Authorization: Bearer $EXCALIBASE_TOKEN" \
+            -H "Authorization: Bearer $EXCALIBASE_DEPLOY_TOKEN" \
             -H "Content-Type: application/gzip" \
             --data-binary @site.tgz

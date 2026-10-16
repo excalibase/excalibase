@@ -29,7 +29,7 @@ type SiteBuild struct {
 const (
 	sitePlaceholder = "<site id>"
 	siteArchive     = "site.tgz"
-	siteTokenSecret = "EXCALIBASE_TOKEN: a personal access token bound to this project with the write scope, of a Developer or above"
+	siteTokenSecret = "EXCALIBASE_DEPLOY_TOKEN: the site's deploy token, made under Deploy tokens on the site's page in Studio and shown once; it can only deploy this site"
 )
 
 // SiteCI renders the pipeline that builds the frontend, packs its output
@@ -52,7 +52,7 @@ func SiteCI(provider string, target SiteTarget) (Snippet, error) {
 	case "jenkins":
 		return Snippet{
 			Path: "Jenkinsfile", Content: siteJenkins(target),
-			Secrets: []string{"excalibase-token: a Secret text credential holding " + strings.TrimPrefix(siteTokenSecret, "EXCALIBASE_TOKEN: ")},
+			Secrets: []string{"excalibase-deploy-token: a Secret text credential holding " + strings.TrimPrefix(siteTokenSecret, "EXCALIBASE_DEPLOY_TOKEN: ")},
 			Notes:   append(notes, "The agent needs Node.js 24 with npm, tar and curl 7.76 or later."),
 		}, nil
 	case "curl":
@@ -101,7 +101,7 @@ func siteDeployURL(target SiteTarget) string {
 func siteUpload(target SiteTarget, commitVar string) string {
 	return `tar czf ` + siteArchive + ` -C "` + siteOutput(target.Build) + `" .
 curl --fail-with-body -sS -X POST "` + siteDeployURL(target) + `?label=` + commitVar + `" \
-  -H "Authorization: Bearer $EXCALIBASE_TOKEN" \
+  -H "Authorization: Bearer $EXCALIBASE_DEPLOY_TOKEN" \
   -H "Content-Type: application/gzip" \
   --data-binary @` + siteArchive
 }
@@ -144,7 +144,7 @@ jobs:
           npm run build
       - name: Deploy
         env:
-          EXCALIBASE_TOKEN: ${{ secrets.EXCALIBASE_TOKEN }}
+          EXCALIBASE_DEPLOY_TOKEN: ${{ secrets.EXCALIBASE_DEPLOY_TOKEN }}
         run: |
 ` + indent(siteUpload(target, "$GITHUB_SHA"), 10) + "\n"
 }
@@ -173,7 +173,7 @@ func siteGitLabCI(target SiteTarget) string {
 }
 
 // siteJenkins needs a Node-capable agent and a secret-text credential
-// "excalibase-token". Backslashes are doubled for Groovy's triple-quoted strings.
+// "excalibase-deploy-token". Backslashes are doubled for Groovy's triple-quoted strings.
 func siteJenkins(target SiteTarget) string {
 	script := strings.Join(append(siteShellBuild(target.Build, "$WORKSPACE"), siteUpload(target, "$GIT_COMMIT")), "\n")
 	when := ""
@@ -186,7 +186,7 @@ func siteJenkins(target SiteTarget) string {
     disableConcurrentBuilds()
   }
   environment {
-    EXCALIBASE_TOKEN = credentials('excalibase-token')
+    EXCALIBASE_DEPLOY_TOKEN = credentials('excalibase-deploy-token')
   }
   stages {
     stage('Build and deploy the site') {` + when + `
@@ -203,8 +203,8 @@ func siteJenkins(target SiteTarget) string {
 
 func siteCurlScript(target SiteTarget) string {
 	return "# Run from the repository root after building the site, with these set:\n" +
-		"#   EXCALIBASE_TOKEN  a write token bound to this project, kept as a CI secret\n" +
-		"#   COMMIT_SHA        the commit the build came from, shown in the deploy history\n" +
+		"#   EXCALIBASE_DEPLOY_TOKEN  the site's deploy token, kept as a CI secret\n" +
+		"#   COMMIT_SHA               the commit the build came from, shown in the deploy history\n" +
 		"# It answers once the deploy is live, and fails the step when it is not.\n" +
 		siteUpload(target, "$COMMIT_SHA") + "\n"
 }

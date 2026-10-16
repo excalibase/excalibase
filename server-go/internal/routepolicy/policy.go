@@ -151,6 +151,9 @@ type Row struct {
 	// 0041). Every other database route answers a MySQL project 409 "not
 	// available for MySQL projects" before its handler runs Postgres against it.
 	MySQL bool
+	// SiteDeployToken marks a route a site's deploy token may call for its own
+	// site (EXC-620); middleware.SiteDeployTokenGate refuses it everywhere else.
+	SiteDeployToken bool
 	// Discloses is required on every row that serves a read method.
 	Discloses Disclosure
 	// Note records the non-obvious reason for this row's contract.

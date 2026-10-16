@@ -32,9 +32,38 @@ export interface SiteDeploy {
   createdBy: string;
   // The deployer's username; absent once their account is gone.
   createdByName?: string;
+  // The deploy token CI made it with, if any (EXC-620).
+  deployTokenId?: string;
+  deployTokenName?: string;
   createdAt: string;
   finishedAt?: string;
   live: boolean;
+}
+
+// What the project's plan lets its sites hold (EXC-620).
+export interface SiteLimits {
+  maxSites: number;
+  maxDeployBytes: number;
+  maxFiles: number;
+  maxFileBytes: number;
+  maxDeploysPerHour: number;
+}
+
+// A CI credential that can only deploy one site and read its deploys.
+export interface DeployToken {
+  id: string;
+  siteId: string;
+  projectId: string;
+  name: string;
+  tokenPrefix: string;
+  createdBy: string;
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
+// The raw token is in the create answer only; it is never shown again.
+export interface IssuedDeployToken extends DeployToken {
+  token: string;
 }
 
 export interface SiteInput {
@@ -51,6 +80,9 @@ const sitesKey = (projectId: string) => ['sites', projectId] as const;
 const siteKey = (projectId: string, siteId: string) => ['sites', projectId, siteId] as const;
 const deploysKey = (projectId: string, siteId: string) =>
   ['sites', projectId, siteId, 'deploys'] as const;
+const limitsKey = (projectId: string) => ['site-limits', projectId] as const;
+const tokensKey = (projectId: string, siteId: string) =>
+  ['site-tokens', projectId, siteId] as const;
 
 export const listSites = async (projectId: string): Promise<Site[]> =>
   (await api.get<Site[]>(`${sitesBase(projectId)}/`)).data;
@@ -102,6 +134,57 @@ export const rollbackSite = async (
       timeout: PUBLISH_TIMEOUT_MS,
     })
   ).data;
+
+export const getSiteLimits = async (projectId: string): Promise<SiteLimits> =>
+  (await api.get<SiteLimits>(`${sitesBase(projectId)}/limits`)).data;
+
+export const listDeployTokens = async (projectId: string, siteId: string): Promise<DeployToken[]> =>
+  (await api.get<DeployToken[]>(`${siteBase(projectId, siteId)}/tokens`)).data;
+
+export const createDeployToken = async (
+  projectId: string,
+  siteId: string,
+  name: string,
+): Promise<IssuedDeployToken> =>
+  (await api.post<IssuedDeployToken>(`${siteBase(projectId, siteId)}/tokens`, { name })).data;
+
+export const revokeDeployToken = async (
+  projectId: string,
+  siteId: string,
+  tokenId: string,
+): Promise<void> => {
+  await api.delete(`${siteBase(projectId, siteId)}/tokens/${tokenId}`);
+};
+
+export const useSiteLimits = (projectId: string) =>
+  useQuery({
+    queryKey: limitsKey(projectId),
+    queryFn: () => getSiteLimits(projectId),
+    enabled: !!projectId,
+  });
+
+export const useDeployTokens = (projectId: string, siteId: string, enabled = true) =>
+  useQuery({
+    queryKey: tokensKey(projectId, siteId),
+    queryFn: () => listDeployTokens(projectId, siteId),
+    enabled: enabled && !!projectId && !!siteId,
+  });
+
+export const useCreateDeployToken = (projectId: string, siteId: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => createDeployToken(projectId, siteId, name),
+    onSettled: () => qc.invalidateQueries({ queryKey: tokensKey(projectId, siteId) }),
+  });
+};
+
+export const useRevokeDeployToken = (projectId: string, siteId: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (tokenId: string) => revokeDeployToken(projectId, siteId, tokenId),
+    onSettled: () => qc.invalidateQueries({ queryKey: tokensKey(projectId, siteId) }),
+  });
+};
 
 export const useSites = (projectId: string) =>
   useQuery({

@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { Copy } from 'lucide-react';
 import { API_BASE } from '../../api/base';
 import { secondaryButton } from '../containers/ContainerBits';
@@ -15,7 +14,7 @@ interface CiKind {
   readonly id: string;
   readonly label: string;
   readonly file: string;
-  // Where this CI keeps the token, so no snippet ever carries one.
+  // Where this CI keeps the site's deploy token, so no snippet ever carries one.
   readonly secret: string;
   readonly render: (target: SiteSnippetTarget) => string;
 }
@@ -25,28 +24,28 @@ const CI_KINDS: CiKind[] = [
     id: 'github',
     label: 'GitHub Actions',
     file: '.github/workflows/deploy-site.yml',
-    secret: 'a repository secret named EXCALIBASE_TOKEN',
+    secret: 'a repository secret named EXCALIBASE_DEPLOY_TOKEN',
     render: siteGithubActionsSnippet,
   },
   {
     id: 'gitlab',
     label: 'GitLab CI',
     file: '.gitlab-ci.yml',
-    secret: 'a masked CI/CD variable named EXCALIBASE_TOKEN',
+    secret: 'a masked CI/CD variable named EXCALIBASE_DEPLOY_TOKEN',
     render: siteGitlabCiSnippet,
   },
   {
     id: 'jenkins',
     label: 'Jenkins',
     file: 'Jenkinsfile',
-    secret: 'a secret text credential with the ID excalibase-token',
+    secret: 'a secret text credential with the ID excalibase-deploy-token',
     render: siteJenkinsSnippet,
   },
   {
     id: 'curl',
     label: 'Any CI',
     file: 'a step after the build',
-    secret: 'a secret exposed to the step as EXCALIBASE_TOKEN',
+    secret: 'a secret exposed to the step as EXCALIBASE_DEPLOY_TOKEN',
     render: siteCurlSnippet,
   },
 ];
@@ -100,13 +99,13 @@ export function SiteCiSnippet({
           <Copy className="w-3.5 h-3.5" /> {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <ol className="list-decimal list-inside text-sm text-text-secondary space-y-1">
+      <ol
+        className="list-decimal list-inside text-sm text-text-secondary space-y-1"
+        data-testid="site-ci-steps"
+      >
         <li>
-          <Link to="/account/tokens" className="text-purple-400 hover:underline">
-            Create an access token
-          </Link>{' '}
-          with write access, bound to this project, and keep it as{' '}
-          <span data-testid="site-ci-secret">{kind.secret}</span>.
+          Create a deploy token for this site under Deploy tokens (a Developer can) and keep it as{' '}
+          <span data-testid="site-ci-secret">{kind.secret}</span>. It can only deploy this site.
         </li>
         <li>
           Add this as{' '}

@@ -67,9 +67,12 @@ type Deploy struct {
 	FailureReason string `json:"failureReason,omitempty"`
 	CreatedBy     string `json:"createdBy"`
 	// CreatedByName is the deployer's username, read with the history; empty once the account is gone.
-	CreatedByName string     `json:"createdByName,omitempty"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
+	CreatedByName string `json:"createdByName,omitempty"`
+	// DeployTokenID and DeployTokenName name the deploy token CI made it with, if any (EXC-620).
+	DeployTokenID   string     `json:"deployTokenId,omitempty"`
+	DeployTokenName string     `json:"deployTokenName,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
 }
 
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)

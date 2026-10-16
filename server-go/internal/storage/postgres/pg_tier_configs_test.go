@@ -50,6 +50,10 @@ func TestTierConfigs_SeededDefaults(t *testing.T) {
 		if stored.MaxAppDiskSize != builtin.MaxAppDiskSize {
 			t.Errorf("%s: stored app disk cap %q, built-in %q", tier, stored.MaxAppDiskSize, builtin.MaxAppDiskSize)
 		}
+		// Each plan's Sites limits, as the built-in catalogue says (EXC-620).
+		if stored.Sites != builtin.Sites {
+			t.Errorf("%s: stored site limits %+v, built-in %+v", tier, stored.Sites, builtin.Sites)
+		}
 	}
 }
 
@@ -57,7 +61,8 @@ func TestTierConfigs_UpsertRoundTrip(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	want := config.TierConfig{MaxProjects: 10, Instances: 3, StorageSize: "100Gi", MaxStorageSize: "300Gi", MaxAppDiskSize: "40Gi", MaxApps: 7, Memory: "8Gi", CPU: "4", BackupEnabled: true}
+	want := config.TierConfig{MaxProjects: 10, Instances: 3, StorageSize: "100Gi", MaxStorageSize: "300Gi", MaxAppDiskSize: "40Gi", MaxApps: 7, Memory: "8Gi", CPU: "4", BackupEnabled: true,
+		Sites: config.SiteTierLimits{MaxSites: 9, MaxDeployBytes: 200 << 20, MaxFiles: 30_000, MaxFileBytes: 10 << 20, MaxDeploysPerHour: 45}}
 	if err := store.UpsertTierConfig(ctx, domain.Standard, want); err != nil {
 		t.Fatalf("UpsertTierConfig: %v", err)
 	}

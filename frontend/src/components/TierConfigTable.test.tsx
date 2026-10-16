@@ -19,10 +19,19 @@ const standard = {
   cpu: '2',
   backupEnabled: true,
   autoPauseAfterDays: 0,
+  maxSites: 20,
+  maxSiteDeployBytes: 104857600,
+  maxSiteFiles: 20000,
+  maxSiteFileBytes: 26214400,
+  maxSiteDeploysPerHour: 120,
 };
 
-function renderTable() {
-  vi.mocked(api.get).mockResolvedValue({ data: [standard] } as never);
+function renderTable({ sites = true } = {}) {
+  vi.mocked(api.get).mockImplementation((url: string) =>
+    Promise.resolve({
+      data: url === '/config' ? { deploymentMode: 'cloud', sites } : [standard],
+    } as never),
+  );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -86,6 +95,42 @@ describe('TierConfigTable', () => {
     await waitFor(() =>
       expect(api.put).toHaveBeenCalledWith('/admin/tiers/STANDARD', expect.objectContaining({ maxApps: 8, maxAppDiskSize: '20Gi' })),
     );
+  });
+
+  // A plan's site count and deploy rate (EXC-620), saved with the rest of the plan.
+  test('edits and saves the site count and deploy rate with the rest of the plan', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable();
+
+    const sitesCount = await screen.findByLabelText('Max sites for STANDARD');
+    await user.clear(sitesCount);
+    await user.type(sitesCount, '25');
+    const rate = screen.getByLabelText('Site deploys an hour for STANDARD');
+    await user.clear(rate);
+    await user.type(rate, '60');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/admin/tiers/STANDARD',
+        expect.objectContaining({
+          maxSites: 25,
+          maxSiteDeploysPerHour: 60,
+          maxSiteDeployBytes: 104857600,
+          maxSiteFiles: 20000,
+          maxSiteFileBytes: 26214400,
+          maxApps: 5,
+        }),
+      ),
+    );
+  });
+
+  // Sites stays behind its install flag: no Sites, no site columns.
+  test('shows no site limits on an install without Sites', async () => {
+    renderTable({ sites: false });
+    expect(await screen.findByLabelText('Max apps for STANDARD')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Max sites for STANDARD')).not.toBeInTheDocument();
   });
 
   // Small plans may cap app disks in mebibytes (EXC-523).

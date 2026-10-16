@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,6 +64,13 @@ type tierConfigDTO struct {
 	// AutoPauseAfterDays: idle days before an ACTIVE project is auto-paused
 	// (warning one day earlier). 0 = never.
 	AutoPauseAfterDays int `json:"autoPauseAfterDays"`
+	// A project's Sites limits (EXC-620). Each one left out keeps the plan's
+	// current value: they came after every script that sizes a plan.
+	MaxSites              *int   `json:"maxSites"`
+	MaxSiteDeployBytes    *int64 `json:"maxSiteDeployBytes"`
+	MaxSiteFiles          *int   `json:"maxSiteFiles"`
+	MaxSiteFileBytes      *int64 `json:"maxSiteFileBytes"`
+	MaxSiteDeploysPerHour *int   `json:"maxSiteDeploysPerHour"`
 }
 
 func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
@@ -79,6 +87,12 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 		BackupEnabled:  tc.BackupEnabled,
 
 		AutoPauseAfterDays: tc.AutoPauseAfterDays,
+
+		MaxSites:              &tc.Sites.MaxSites,
+		MaxSiteDeployBytes:    &tc.Sites.MaxDeployBytes,
+		MaxSiteFiles:          &tc.Sites.MaxFiles,
+		MaxSiteFileBytes:      &tc.Sites.MaxFileBytes,
+		MaxSiteDeploysPerHour: &tc.Sites.MaxDeploysPerHour,
 	}
 }
 
@@ -122,6 +136,12 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 		AutoPauseAfterDays: dto.AutoPauseAfterDays,
 	}
+	sites, err := h.currentSiteLimits(r.Context(), tier)
+	if err != nil {
+		httpError(w, "read tier: "+safeError(err), http.StatusInternalServerError)
+		return
+	}
+	tc.Sites = dto.siteLimits(sites)
 	if err := validateTierConfig(tc); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
@@ -146,6 +166,43 @@ func requiredCount(value *int) int {
 		return -1
 	}
 	return *value
+}
+
+// currentSiteLimits is the plan's stored Sites limits, else its built-in ones.
+func (h *TierHandler) currentSiteLimits(ctx context.Context, tier domain.TierType) (config.SiteTierLimits, error) {
+	stored, found, err := h.store.GetTierConfig(ctx, tier)
+	if err != nil {
+		return config.SiteTierLimits{}, err
+	}
+	if found {
+		return stored.Sites, nil
+	}
+	if builtin, err := config.GetTierConfig(tier); err == nil {
+		return builtin.Sites, nil
+	}
+	// A plan with no row and no built-in has no limits to keep: the body must name them all.
+	return config.SiteTierLimits{}, nil
+}
+
+// siteLimits overlays the limits the body names on the plan's current ones.
+func (dto tierConfigDTO) siteLimits(current config.SiteTierLimits) config.SiteTierLimits {
+	out := current
+	if dto.MaxSites != nil {
+		out.MaxSites = *dto.MaxSites
+	}
+	if dto.MaxSiteDeployBytes != nil {
+		out.MaxDeployBytes = *dto.MaxSiteDeployBytes
+	}
+	if dto.MaxSiteFiles != nil {
+		out.MaxFiles = *dto.MaxSiteFiles
+	}
+	if dto.MaxSiteFileBytes != nil {
+		out.MaxFileBytes = *dto.MaxSiteFileBytes
+	}
+	if dto.MaxSiteDeploysPerHour != nil {
+		out.MaxDeploysPerHour = *dto.MaxSiteDeploysPerHour
+	}
+	return out
 }
 
 // maxAppsPerProjectCeiling bounds an admin's edit; a project's namespace quota
@@ -186,6 +243,36 @@ func validateTierConfig(tc config.TierConfig) error {
 	}
 	if _, err := apphost.PlanDiskBytes(tc.MaxAppDiskSize); err != nil {
 		return errors.New("maxAppDiskSize must be a whole number of gibibytes such as 20Gi (0Gi offers no app disks)")
+	}
+	return validateSiteLimits(tc.Sites)
+}
+
+// Bounds on an admin's Sites edit. A file above 25 MiB is refused by
+// Cloudflare whatever the plan; a deploy is spooled to our disk whole.
+const (
+	maxSitesCeiling          = 1000
+	minSiteDeployBytes       = int64(1) << 20
+	maxSiteDeployBytesCeil   = int64(1) << 30
+	maxSiteFilesCeiling      = 100_000
+	maxSiteFileBytesCeiling  = int64(25) << 20
+	maxSiteDeploysPerHourCap = 1000
+)
+
+func validateSiteLimits(limits config.SiteTierLimits) error {
+	if limits.MaxSites < 0 || limits.MaxSites > maxSitesCeiling {
+		return fmt.Errorf("maxSites must be between 0 and %d (0 offers no sites)", maxSitesCeiling)
+	}
+	if limits.MaxDeployBytes < minSiteDeployBytes || limits.MaxDeployBytes > maxSiteDeployBytesCeil {
+		return fmt.Errorf("maxSiteDeployBytes must be between %d (1 MiB) and %d (1 GiB)", minSiteDeployBytes, maxSiteDeployBytesCeil)
+	}
+	if limits.MaxFiles < 1 || limits.MaxFiles > maxSiteFilesCeiling {
+		return fmt.Errorf("maxSiteFiles must be between 1 and %d", maxSiteFilesCeiling)
+	}
+	if limits.MaxFileBytes < 1 || limits.MaxFileBytes > maxSiteFileBytesCeiling {
+		return fmt.Errorf("maxSiteFileBytes must be between 1 and %d (25 MiB, the CDN's own limit)", maxSiteFileBytesCeiling)
+	}
+	if limits.MaxDeploysPerHour < 1 || limits.MaxDeploysPerHour > maxSiteDeploysPerHourCap {
+		return fmt.Errorf("maxSiteDeploysPerHour must be between 1 and %d", maxSiteDeploysPerHourCap)
 	}
 	return nil
 }

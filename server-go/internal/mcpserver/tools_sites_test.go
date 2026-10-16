@@ -1,8 +1,10 @@
 package mcpserver
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -319,5 +321,31 @@ func TestTheLargestSiteArchiveFitsOneMCPMessage(t *testing.T) {
 	}
 	if got := <-received; got != maxSiteArchiveBytes {
 		t.Fatalf("the route received %d bytes, want %d", got, maxSiteArchiveBytes)
+	}
+}
+
+// EXC-620: a site's pipeline holds the site's deploy token, and the tools that
+// point there say so; MCP's own deploys keep the caller's personal token.
+func TestSiteCISnippetUsesTheSitesDeployToken(t *testing.T) {
+	cs := session(t, newFakeRoutes(), &recordingAudit{}, writeCaller())
+	out := structured(t, callTool(t, cs, "get_ci_snippet", siteCallArgs(map[string]any{"kind": "site", "provider": "curl"})))
+	content, _ := out["content"].(string)
+	secrets := fmt.Sprint(out["secrets"])
+	if !strings.Contains(content, "$EXCALIBASE_DEPLOY_TOKEN") || !strings.Contains(secrets, "EXCALIBASE_DEPLOY_TOKEN") || !strings.Contains(secrets, "deploy token") {
+		t.Fatalf("content %q secrets %s", content, secrets)
+	}
+	listed, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, listedTool := range listed.Tools {
+		if listedTool.Name == "get_ci_snippet" && !strings.Contains(listedTool.Description, "EXCALIBASE_DEPLOY_TOKEN") {
+			t.Errorf("get_ci_snippet does not name the site's deploy token: %s", listedTool.Description)
+		}
+	}
+	oversized := base64.StdEncoding.EncodeToString(make([]byte, maxSiteArchiveBytes+1))
+	res := callTool(t, cs, "deploy_site", siteCallArgs(map[string]any{"site_id": "s1", "archive_base64": oversized}))
+	if !strings.Contains(resultText(res), "deploy token") {
+		t.Errorf("a build too large for MCP must point to the site's deploy token: %s", resultText(res))
 	}
 }

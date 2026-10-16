@@ -19,7 +19,11 @@ type MemoryStore struct {
 	Sites   map[string]sites.Site
 	Leases  map[string]Lease
 	Deploys map[string]sites.Deploy
-	Now     func() time.Time
+	// Tokens are the sites' deploy tokens by id; deleting a site deletes its tokens.
+	Tokens map[string]sites.DeployToken
+	// Attempts are each project's deploy attempts, for the hourly rate.
+	Attempts map[string][]time.Time
+	Now      func() time.Time
 }
 
 // Lease is who holds a site and until when.
@@ -29,7 +33,8 @@ type Lease struct {
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{Sites: map[string]sites.Site{}, Leases: map[string]Lease{}, Deploys: map[string]sites.Deploy{}, Now: time.Now}
+	return &MemoryStore{Sites: map[string]sites.Site{}, Leases: map[string]Lease{}, Deploys: map[string]sites.Deploy{}, Tokens: map[string]sites.DeployToken{},
+		Attempts: map[string][]time.Time{}, Now: time.Now}
 }
 
 // ExpireLease ends a site's lease now, as a deploy outliving it would see.
@@ -129,6 +134,11 @@ func (m *MemoryStore) Delete(_ context.Context, projectID, id, lease string) err
 			delete(m.Deploys, deployID)
 		}
 	}
+	for tokenID, token := range m.Tokens {
+		if token.SiteID == id {
+			delete(m.Tokens, tokenID)
+		}
+	}
 	return nil
 }
 
@@ -225,6 +235,91 @@ func (m *MemoryStore) ListDeploys(_ context.Context, projectID, siteID string, l
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+func (m *MemoryStore) TakeDeploySlot(_ context.Context, projectID string, now time.Time, window time.Duration, maxSlots int) (time.Duration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kept := []time.Time{}
+	for _, at := range m.Attempts[projectID] {
+		if at.After(now.Add(-window)) {
+			kept = append(kept, at)
+		}
+	}
+	m.Attempts[projectID] = kept
+	if len(kept) >= maxSlots {
+		sort.Slice(kept, func(i, j int) bool { return kept[i].After(kept[j]) })
+		return kept[maxSlots-1].Add(window).Sub(now), nil
+	}
+	m.Attempts[projectID] = append(kept, now)
+	return 0, nil
+}
+
+func (m *MemoryStore) CreateDeployToken(_ context.Context, token *sites.DeployToken, maxPerSite int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	site, ok := m.Sites[token.SiteID]
+	if !ok || site.ProjectID != token.ProjectID {
+		return sites.ErrSiteNotFound
+	}
+	held := 0
+	for _, existing := range m.Tokens {
+		if existing.SiteID == token.SiteID {
+			held++
+		}
+	}
+	if held >= maxPerSite {
+		return sites.ErrDeployTokenLimitReached
+	}
+	m.Tokens[token.ID] = *token
+	return nil
+}
+
+func (m *MemoryStore) ListDeployTokens(_ context.Context, projectID, siteID string) ([]*sites.DeployToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*sites.DeployToken{}
+	for _, token := range m.Tokens {
+		if token.ProjectID == projectID && token.SiteID == siteID {
+			copied := token
+			out = append(out, &copied)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (m *MemoryStore) DeleteDeployToken(_ context.Context, projectID, siteID, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	token, ok := m.Tokens[id]
+	if !ok || token.ProjectID != projectID || token.SiteID != siteID {
+		return sites.ErrDeployTokenNotFound
+	}
+	delete(m.Tokens, id)
+	return nil
+}
+
+func (m *MemoryStore) FindDeployToken(_ context.Context, hash string) (*sites.DeployToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, token := range m.Tokens {
+		if token.Hash == hash {
+			copied := token
+			return &copied, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MemoryStore) TouchDeployToken(_ context.Context, id string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if token, ok := m.Tokens[id]; ok {
+		token.LastUsedAt = &at
+		m.Tokens[id] = token
+	}
+	return nil
 }
 
 // Publisher stands in for Cloudflare; it asks for every hash it has not stored yet.

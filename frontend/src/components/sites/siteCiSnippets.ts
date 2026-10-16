@@ -53,7 +53,7 @@ function upload(target: SiteSnippetTarget, commitVar: string): string {
   validateSiteBuild(target.build);
   return `tar czf ${ARCHIVE} -C "${siteOutput(target.build)}" .
 curl --fail-with-body -sS -X POST "${deployUrl(target)}?label=${commitVar}" \\
-  -H "Authorization: Bearer $EXCALIBASE_TOKEN" \\
+  -H "Authorization: Bearer $EXCALIBASE_DEPLOY_TOKEN" \\
   -H "Content-Type: application/gzip" \\
   --data-binary @${ARCHIVE}`;
 }
@@ -91,7 +91,7 @@ jobs:
           npm run build
       - name: Deploy
         env:
-          EXCALIBASE_TOKEN: \${{ secrets.EXCALIBASE_TOKEN }}
+          EXCALIBASE_DEPLOY_TOKEN: \${{ secrets.EXCALIBASE_DEPLOY_TOKEN }}
         run: |
 ${indent(deploy, 10)}
 `;
@@ -115,7 +115,7 @@ ${indent(curl.join('\n'), 6)}
 `;
 }
 
-// Needs a Node-capable agent and a secret-text credential "excalibase-token";
+// Needs a Node-capable agent and a secret-text credential "excalibase-deploy-token";
 // backslashes are doubled for Groovy's triple-quoted strings.
 export function siteJenkinsSnippet(target: SiteSnippetTarget): string {
   const script = [...shellBuild(target.build, '$WORKSPACE'), upload(target, '$GIT_COMMIT')].join(
@@ -131,7 +131,7 @@ export function siteJenkinsSnippet(target: SiteSnippetTarget): string {
     disableConcurrentBuilds()
   }
   environment {
-    EXCALIBASE_TOKEN = credentials('excalibase-token')
+    EXCALIBASE_DEPLOY_TOKEN = credentials('excalibase-deploy-token')
   }
   stages {
     stage('Build and deploy the site') {${when}
@@ -148,8 +148,8 @@ ${indent(script.replaceAll('\\', '\\\\'), 10)}
 
 export function siteCurlSnippet(target: SiteSnippetTarget): string {
   return `# Run from the repository root after building the site, with these set:
-#   EXCALIBASE_TOKEN  a write token bound to this project, kept as a CI secret
-#   COMMIT_SHA        the commit the build came from, shown in the deploy history
+#   EXCALIBASE_DEPLOY_TOKEN  the site's deploy token, kept as a CI secret
+#   COMMIT_SHA               the commit the build came from, shown in the deploy history
 # It answers once the deploy is live, and fails the step when it is not.
 ${upload(target, '$COMMIT_SHA')}
 `;

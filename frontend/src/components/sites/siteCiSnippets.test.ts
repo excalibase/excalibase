@@ -9,7 +9,9 @@ describe('site CI snippets', () => {
     expect(snippet).toContain(
       '"https://app.example.test/api/projects/proj-a/sites/site-1/deploy?label=$COMMIT_SHA"',
     );
-    expect(snippet).toContain('-H "Authorization: Bearer $EXCALIBASE_TOKEN"');
+    expect(snippet).toContain('-H "Authorization: Bearer $EXCALIBASE_DEPLOY_TOKEN"');
+    // EXC-620: the site's own deploy token, never a personal access token.
+    expect(snippet).not.toContain('$EXCALIBASE_TOKEN');
     expect(snippet.match(/curl /g)).toHaveLength(1);
   });
 

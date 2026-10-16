@@ -63,7 +63,7 @@ func TestCreateRefusesABadNameAndTheLimit(t *testing.T) {
 	if _, err := h.service.Create(context.Background(), testProject, "Bad Name", nil, testActor); err == nil {
 		t.Fatal("a bad name was accepted")
 	}
-	for i := range sites.MaxSitesPerProject {
+	for i := range sites.DefaultLimits.MaxSites {
 		h.createSite(t, "site"+string(rune('a'+i)))
 	}
 	_, err := h.service.Create(context.Background(), testProject, "one-more", nil, testActor)
@@ -311,7 +311,7 @@ func (f fixedLimits) DeployLimits(context.Context, string) (sites.Limits, error)
 func TestDeployHoldsTheArchiveToTheProjectsLimits(t *testing.T) {
 	store, publisher, origins := sitestest.NewMemoryStore(), sitestest.NewPublisher(), sitestest.NewOrigins()
 	service, err := sites.NewService(store, publisher, origins, sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(),
-		DeployLimits: fixedLimits{sites.Limits{MaxFiles: 2, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}}})
+		DeployLimits: fixedLimits{sites.Limits{MaxFiles: 2, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20, MaxSites: 1, MaxDeploysPerHour: 1}}})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

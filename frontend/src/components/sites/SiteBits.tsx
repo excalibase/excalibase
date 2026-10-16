@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Globe } from 'lucide-react';
 import { useSitesEnabled } from '../../hooks/useDeploymentMode';
-import type { SiteDeploy } from '../../api/sites';
+import type { SiteDeploy, SiteLimits } from '../../api/sites';
 import type { Tone } from '../containers/appCopy';
 import { Spinner } from '../containers/ContainerBits';
 
@@ -60,4 +60,25 @@ export function deployStatus(deploy: SiteDeploy): { label: string; tone: Tone } 
   if (deploy.status === 'PENDING') return { label: 'Publishing', tone: 'progress' };
   if (deploy.status === 'FAILED') return { label: 'Failed', tone: 'error' };
   return { label: 'Succeeded', tone: 'neutral' };
+}
+
+// Limits are set in whole mebibytes; one decimal covers an admin's odd value.
+const mebibytes = (bytes: number) => `${Number((bytes / 1048576).toFixed(1))} MiB`;
+
+// The plan's Sites limits (EXC-620), so a refused create or deploy is no surprise.
+export function SiteLimitsNote({
+  limits,
+  held,
+}: {
+  readonly limits: SiteLimits;
+  readonly held: number;
+}) {
+  return (
+    <p className="mt-4 text-xs text-text-tertiary" data-testid="sites-limits">
+      {held} of {limits.maxSites} sites on your plan. Each deploy up to{' '}
+      {mebibytes(limits.maxDeployBytes)}, {limits.maxFiles.toLocaleString('en-US')} files,{' '}
+      {mebibytes(limits.maxFileBytes)} per file; {limits.maxDeploysPerHour} deploys an hour per
+      project.
+    </p>
+  );
 }

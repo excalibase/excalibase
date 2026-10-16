@@ -45,6 +45,9 @@ type Principal struct {
 	// Capabilities is the permission list of a platform service token. A
 	// non-empty list makes this a capability token, which is default-deny.
 	Capabilities []string
+	// SiteDeployToken is a site's CI deploy token for the site in the path,
+	// default-deny like a capability token; past its gate it is its creator.
+	SiteDeployToken bool
 }
 
 // IsCapabilityToken reports whether the principal authenticates with a
@@ -60,6 +63,9 @@ func Expect(row Row, method string, p Principal) Expectation {
 	}
 	if p.IsCapabilityToken() {
 		return expectCapabilityToken(row)
+	}
+	if p.SiteDeployToken && !row.SiteDeployToken {
+		return Deny403
 	}
 	switch row.Auth {
 	case AuthPublic:

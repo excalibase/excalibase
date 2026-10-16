@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
 func (s *PostgresStore) CreateDeploy(ctx context.Context, deploy *Deploy) error {
@@ -14,10 +15,10 @@ func (s *PostgresStore) CreateDeploy(ctx context.Context, deploy *Deploy) error 
 		return fmt.Errorf("encode deploy manifest: %w", err)
 	}
 	result, err := s.db.ExecContext(ctx, `INSERT INTO site_deploys
-		(id, site_id, project_id, status, manifest, file_count, total_bytes, spa_fallback, label, created_by, created_at)
-		SELECT $1, id, project_id, $4, $5, $6, $7, $8, NULLIF($9, ''), $10, $11 FROM sites WHERE id = $2 AND project_id = $3`,
+		(id, site_id, project_id, status, manifest, file_count, total_bytes, spa_fallback, label, created_by, created_at, deploy_token_id, deploy_token_name)
+		SELECT $1, id, project_id, $4, $5, $6, $7, $8, NULLIF($9, ''), $10, $11, NULLIF($12, ''), NULLIF($13, '') FROM sites WHERE id = $2 AND project_id = $3`,
 		deploy.ID, deploy.SiteID, deploy.ProjectID, deploy.Status, manifest, deploy.FileCount, deploy.TotalBytes,
-		deploy.SPAFallback, deploy.Label, deploy.CreatedBy, deploy.CreatedAt)
+		deploy.SPAFallback, deploy.Label, deploy.CreatedBy, deploy.CreatedAt, deploy.DeployTokenID, deploy.DeployTokenName)
 	if err != nil {
 		return fmt.Errorf("create site deploy: %w", err)
 	}
@@ -79,7 +80,7 @@ func scanDeploy(row rowScanner) (*Deploy, error) {
 	var finishedAt sql.NullTime
 	err := row.Scan(&deploy.ID, &deploy.SiteID, &deploy.ProjectID, &deploy.Status, &manifest, &deploy.FileCount,
 		&deploy.TotalBytes, &deploy.SPAFallback, &deploy.Label, &deploy.FailureReason, &deploy.CreatedBy,
-		&deploy.CreatedByName, &deploy.CreatedAt, &finishedAt)
+		&deploy.CreatedByName, &deploy.CreatedAt, &finishedAt, &deploy.DeployTokenID, &deploy.DeployTokenName)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +96,8 @@ func scanDeploy(row rowScanner) (*Deploy, error) {
 
 func (s *PostgresStore) GetDeploy(ctx context.Context, projectID, siteID, id string) (*Deploy, error) {
 	deploy, err := scanDeploy(s.db.QueryRowContext(ctx, `SELECT d.id, d.site_id, d.project_id, d.status, d.manifest, d.file_count, d.total_bytes, d.spa_fallback,
-		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at
+		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at,
+		COALESCE(d.deploy_token_id, ''), COALESCE(d.deploy_token_name, '')
 		FROM site_deploys d LEFT JOIN users u ON u.id = d.created_by
 		WHERE d.project_id = $1 AND d.site_id = $2 AND d.id = $3`, projectID, siteID, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -109,7 +111,8 @@ func (s *PostgresStore) GetDeploy(ctx context.Context, projectID, siteID, id str
 
 func (s *PostgresStore) ListDeploys(ctx context.Context, projectID, siteID string, limit int) ([]*Deploy, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT d.id, d.site_id, d.project_id, d.status, d.manifest, d.file_count, d.total_bytes, d.spa_fallback,
-		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at
+		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at,
+		COALESCE(d.deploy_token_id, ''), COALESCE(d.deploy_token_name, '')
 		FROM site_deploys d LEFT JOIN users u ON u.id = d.created_by
 		WHERE d.project_id = $1 AND d.site_id = $2 ORDER BY d.created_at DESC, d.id LIMIT $3`, projectID, siteID, limit)
 	if err != nil {
@@ -125,4 +128,37 @@ func (s *PostgresStore) ListDeploys(ctx context.Context, projectID, siteID strin
 		out = append(out, deploy)
 	}
 	return out, rows.Err()
+}
+
+// deployRateLockSpace keeps the per-project deploy count apart from other advisory locks.
+const deployRateLockSpace = 621
+
+// TakeDeploySlot counts and records under a per-project lock, so replicas cannot both take the last slot.
+func (s *PostgresStore) TakeDeploySlot(ctx context.Context, projectID string, now time.Time, window time.Duration, maxSlots int) (time.Duration, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin deploy slot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, deployRateLockSpace, projectID); err != nil {
+		return 0, fmt.Errorf("lock project deploy rate: %w", err)
+	}
+	since := now.Add(-window)
+	// Every project's attempts past the window go, so a deleted project's rows do not stay.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM site_deploy_attempts WHERE attempted_at <= $1`, since); err != nil {
+		return 0, fmt.Errorf("forget old deploy attempts: %w", err)
+	}
+	var oldest time.Time
+	err = tx.QueryRowContext(ctx, `SELECT attempted_at FROM site_deploy_attempts WHERE project_id = $1
+		ORDER BY attempted_at DESC OFFSET $2 LIMIT 1`, projectID, maxSlots-1).Scan(&oldest)
+	if err == nil {
+		return oldest.Add(window).Sub(now), nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("count the project's deploy attempts: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO site_deploy_attempts (project_id, attempted_at) VALUES ($1, $2)`, projectID, now); err != nil {
+		return 0, fmt.Errorf("record deploy attempt: %w", err)
+	}
+	return 0, tx.Commit()
 }

@@ -43,6 +43,9 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 		return nil, err
 	}
 	defer admitted()
+	if err := s.takeDeploySlot(ctx, request.ProjectID, limits.MaxDeploysPerHour); err != nil {
+		return nil, err
+	}
 	bundle, err := ReadArchive(request.Body, limits, s.spoolDir())
 	if err != nil {
 		return nil, err
@@ -57,6 +60,9 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 		return nil, err
 	}
 	deploy := s.newDeploy(site, bundle, request)
+	if token := DeployTokenFrom(ctx); token != nil {
+		deploy.DeployTokenID, deploy.DeployTokenName = token.ID, token.Name
+	}
 	if err := s.store.CreateDeploy(ctx, deploy); err != nil {
 		return nil, err
 	}

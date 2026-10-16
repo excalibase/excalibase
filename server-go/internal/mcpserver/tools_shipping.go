@@ -32,7 +32,8 @@ func shippingTools() []entry {
 			"it answers what to look for and what to ask the user, instead of guessing.", readTool, getDockerfileTemplate),
 		tool("get_ci_snippet", "A CI pipeline (GitHub Actions, GitLab CI, Jenkins, or a curl step for any other CI) that builds the image, pushes it to your registry and deploys it to an app by digest. The same pipeline Studio's pipeline page shows. Call it after the app exists (create_app, list_apps). "+
 			"GitHub deploys with the excalibase/deploy-action action; the others with one curl that waits until the deploy is live. For a monorepo pass context and dockerfile; deploys run one at a time. "+
-			"With kind site it is the pipeline for a site instead: npm ci and npm run build in context, tar czf of the output folder, and one curl that uploads it to the site, live when it answers.", readTool, getCISnippet),
+			"With kind site it is the pipeline for a site instead: npm ci and npm run build in context, tar czf of the output folder, and one curl that uploads it to the site, live when it answers. "+
+			"A site's pipeline authenticates with the site's deploy token in the EXCALIBASE_DEPLOY_TOKEN secret, made by a Developer in Studio under the site's Deploy tokens: it can only deploy that site.", readTool, getCISnippet),
 	}
 }
 

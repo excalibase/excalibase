@@ -159,7 +159,7 @@ func decodeArchive(encoded string) ([]byte, error) {
 
 func tooLargeForMCP() error {
 	return fmt.Errorf("the archive is larger than the %d MiB a deploy through MCP carries. "+
-		"Deploy it from CI or a shell instead: get_ci_snippet with kind site gives the pipeline, or a curl script (provider curl) to run with a project token", maxSiteArchiveBytes>>20)
+		"Deploy it from CI or a shell instead: get_ci_snippet with kind site gives the pipeline, or a curl script (provider curl) to run with the site's deploy token (Studio, the site's Deploy tokens)", maxSiteArchiveBytes>>20)
 }
 
 func listSiteDeploys(ctx context.Context, c *call, in siteArgs) (any, error) {

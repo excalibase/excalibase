@@ -278,3 +278,85 @@ func TestTierHandler_Update_TellsThePlatformThePlanChanged(t *testing.T) {
 		t.Fatalf("a refused edit ran the hook: %d, %d", rec.Code, changed)
 	}
 }
+
+// A plan's Sites limits are bounded (EXC-620): 25 MiB a file is Cloudflare's
+// own ceiling, and 0 sites is a plan that offers none.
+func TestTierHandler_Update_SiteLimits(t *testing.T) {
+	const base = `"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.5"`
+	valid := map[string]string{
+		"maxSites": "5", "maxSiteDeployBytes": "104857600", "maxSiteFiles": "20000",
+		"maxSiteFileBytes": "26214400", "maxSiteDeploysPerHour": "30",
+	}
+	body := func(field, value string) string {
+		out := "{" + base
+		for name, v := range valid {
+			switch {
+			case name != field:
+				out += `,"` + name + `":` + v
+			case value != "":
+				out += `,"` + name + `":` + value
+			}
+		}
+		return out + "}"
+	}
+	refused := map[string][]string{
+		"maxSites":              {"-1", "1001"},
+		"maxSiteDeployBytes":    {"0", "1048575", "1073741825"},
+		"maxSiteFiles":          {"0", "100001"},
+		"maxSiteFileBytes":      {"0", "26214401"},
+		"maxSiteDeploysPerHour": {"0", "1001"},
+	}
+	for field, values := range refused {
+		for _, value := range values {
+			t.Run(field+"="+value, func(t *testing.T) {
+				store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+				rec := httptest.NewRecorder()
+				NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", body(field, value), string(domain.Free)))
+				if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), field) {
+					t.Errorf("got %d %s, want 400 naming %s", rec.Code, rec.Body.String(), field)
+				}
+				if len(store.m) != 0 {
+					t.Error("a refused spec was stored")
+				}
+			})
+		}
+	}
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+	rec := httptest.NewRecorder()
+	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", body("maxSites", "0"), string(domain.Free)))
+	want := config.SiteTierLimits{MaxSites: 0, MaxDeployBytes: 100 << 20, MaxFiles: 20_000, MaxFileBytes: 25 << 20, MaxDeploysPerHour: 30}
+	if rec.Code != http.StatusOK || store.m[domain.Free].Sites != want {
+		t.Fatalf("got %d %s, stored %+v; want the plan's site limits kept", rec.Code, rec.Body.String(), store.m[domain.Free].Sites)
+	}
+	for _, echoed := range []string{`"maxSites":0`, `"maxSiteDeployBytes":104857600`, `"maxSiteFiles":20000`, `"maxSiteFileBytes":26214400`, `"maxSiteDeploysPerHour":30`} {
+		if !strings.Contains(rec.Body.String(), echoed) {
+			t.Errorf("response %s does not echo %s", rec.Body.String(), echoed)
+		}
+	}
+}
+
+// Sites limits came after every script that sizes a plan, so a body without
+// them keeps the plan's current ones instead of being refused or zeroed.
+func TestTierHandler_Update_KeepsSiteLimitsLeftOut(t *testing.T) {
+	const body = `{"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.25","maxSiteDeploysPerHour":12}`
+	stored := config.SiteTierLimits{MaxSites: 7, MaxDeployBytes: 50 << 20, MaxFiles: 900, MaxFileBytes: 5 << 20, MaxDeploysPerHour: 3}
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Sites: stored}}}
+	rec := httptest.NewRecorder()
+	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", body, string(domain.Free)))
+	want := stored
+	want.MaxDeploysPerHour = 12
+	if rec.Code != http.StatusOK || store.m[domain.Free].Sites != want {
+		t.Fatalf("got %d %s, stored %+v; want %+v", rec.Code, rec.Body.String(), store.m[domain.Free].Sites, want)
+	}
+
+	// A plan with no row yet starts from its built-in limits.
+	store = &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+	rec = httptest.NewRecorder()
+	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", body, string(domain.Standard)))
+	builtin, _ := config.GetTierConfig(domain.Standard)
+	want = builtin.Sites
+	want.MaxDeploysPerHour = 12
+	if rec.Code != http.StatusOK || store.m[domain.Standard].Sites != want {
+		t.Fatalf("got %d %s, stored %+v; want %+v", rec.Code, rec.Body.String(), store.m[domain.Standard].Sites, want)
+	}
+}
