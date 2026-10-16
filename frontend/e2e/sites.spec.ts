@@ -38,6 +38,7 @@ interface TokenState {
   id: string;
   name: string;
   tokenPrefix: string;
+  expiresAt: string;
 }
 
 async function mockConfig(page: Page, sites: boolean) {
@@ -76,6 +77,7 @@ async function mockSitesApi(
     projectId: 'test-project',
     createdBy: 'u1',
     createdAt: '2026-10-16T10:00:00Z',
+    creatorCanDeploy: true,
   });
   let deploys = [...initialDeploys];
   const present = () => ({
@@ -108,12 +110,13 @@ async function mockSitesApi(
       });
     if (path === '/site-1/tokens' && method === 'GET') return json(route, tokens.map(presentToken));
     if (path === '/site-1/tokens' && method === 'POST') {
-      const body = request.postDataJSON() as { name: string };
+      const body = request.postDataJSON() as { name: string; expiresInDays: number };
       recorded.tokensMade.push(body);
       const token = {
         id: `tok-${tokens.length + 1}`,
         name: body.name,
         tokenPrefix: 'excd_4f1e9a2',
+        expiresAt: new Date(Date.now() + body.expiresInDays * 86_400_000).toISOString(),
       };
       tokens = [...tokens, token];
       return json(route, { ...presentToken(token), token: 'excd_4f1e9a2c-shown-once' }, 201);
@@ -265,12 +268,14 @@ test.describe('Sites', () => {
     await expect(page.getByTestId('site-deploy-tokens-empty')).toBeVisible();
 
     await page.getByTestId('site-deploy-token-name').fill('github actions');
+    await page.getByTestId('site-deploy-token-expiry').selectOption('30');
     await page.getByTestId('site-deploy-token-create').click();
     await expect(page.getByTestId('site-deploy-token-issued')).toContainText(
       'excd_4f1e9a2c-shown-once',
     );
-    expect(recorded.tokensMade).toEqual([{ name: 'github actions' }]);
+    expect(recorded.tokensMade).toEqual([{ name: 'github actions', expiresInDays: 30 }]);
     await expect(page.getByTestId('site-deploy-token-tok-1')).toContainText('excd_4f1e9a2');
+    await expect(page.getByTestId('site-deploy-token-tok-1')).toContainText('Expires');
     await page.getByRole('button', { name: 'Done' }).click();
     await expect(page.getByText('excd_4f1e9a2c-shown-once')).toHaveCount(0);
 

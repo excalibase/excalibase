@@ -6,6 +6,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/handler"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -40,8 +41,10 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 }
 
 // newSiteHandler serves Sites and audits its deploy tokens (EXC-620).
-func newSiteHandler(service *sites.Service, sqlStore storage.PlatformStore) *handler.SiteHandler {
+func newSiteHandler(service *sites.Service, sqlStore storage.PlatformStore, instances storage.InstanceStore) *handler.SiteHandler {
 	h := handler.NewSiteHandler(service)
 	h.SetAuditLog(sqlStore)
+	// The same checks the deploy route runs, so Studio and enforcement agree.
+	h.SetTokenStanding(custommw.DeployTokenStanding{Users: sqlStore, Instances: instances, Orgs: sqlStore})
 	return h
 }

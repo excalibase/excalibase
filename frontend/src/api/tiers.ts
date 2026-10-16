@@ -8,6 +8,8 @@ import type { TierType } from '../types';
 // (1 = no HA on the current single-node alpha).
 export interface TierConfig {
   tier: TierType;
+  // Sent back as If-Match: a save made from an older version is refused (412).
+  version: number;
   maxProjects: number;
   instances: number;
   storageSize: string;
@@ -31,15 +33,23 @@ export interface TierConfig {
   maxSiteDeploysPerHour: number;
 }
 
-export type TierConfigInput = Omit<TierConfig, 'tier'>;
+export type TierConfigInput = Omit<TierConfig, 'tier' | 'version'>;
 
 // Read is available to any authenticated user (the provision page selector).
 export const listTiers = async (): Promise<TierConfig[]> =>
   (await api.get<TierConfig[]>('/tiers')).data;
 
 // Edit is platform_admin only (PermManageSetup), enforced server-side.
-export const updateTier = async (tier: TierType, body: TierConfigInput): Promise<TierConfig> =>
-  (await api.put<TierConfig>(`/admin/tiers/${tier}`, body)).data;
+export const updateTier = async (
+  tier: TierType,
+  body: TierConfigInput,
+  version: number,
+): Promise<TierConfig> =>
+  (
+    await api.put<TierConfig>(`/admin/tiers/${tier}`, body, {
+      headers: { 'If-Match': String(version) },
+    })
+  ).data;
 
 export const useTiers = () =>
   useQuery({
@@ -51,8 +61,10 @@ export const useTiers = () =>
 export const useUpdateTier = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ tier, body }: { tier: TierType; body: TierConfigInput }) => updateTier(tier, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['tiers'] }),
+    mutationFn: ({ tier, body, version }: { tier: TierType; body: TierConfigInput; version: number }) =>
+      updateTier(tier, body, version),
+    // A refused save reloads too, so the next edit starts from the current version.
+    onSettled: () => qc.invalidateQueries({ queryKey: ['tiers'] }),
   });
 };
 

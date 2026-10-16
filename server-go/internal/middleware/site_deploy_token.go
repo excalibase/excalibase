@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/sites"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 // A site deploy token (EXC-620) is default-deny, like a capability token: it
@@ -99,18 +101,50 @@ func deployTokenContext(w http.ResponseWriter, r *http.Request, tokens DeployTok
 // asDeployTokenCreator is the request as the token's creator, narrowed to its
 // project; an account gone or deactivated leaves it unauthenticated.
 func asDeployTokenCreator(ctx context.Context, users auth.TokenLookup, token *sites.DeployToken) context.Context {
-	user, err := users.FindUserByID(ctx, token.CreatedBy)
+	user, err := deployTokenCreator(ctx, users, token)
 	if err != nil {
 		log.Printf("deploy token %s: read its creator: %v", token.ID, err)
 		return ctx
 	}
-	if user == nil || !user.Active {
+	if user == nil {
 		return ctx
 	}
-	ctx = auth.SetUser(ctx, user)
-	return auth.SetToken(ctx, &domain.AccessToken{
-		UserID: user.ID, Name: "deploy token " + token.Name, Scopes: auth.ScopeWrite, ProjectID: token.ProjectID,
-	})
+	return auth.SetToken(auth.SetUser(ctx, user), creatorAccessToken(user, token))
+}
+
+// deployTokenCreator is the account a token acts as, nil once it is gone or deactivated.
+func deployTokenCreator(ctx context.Context, users auth.TokenLookup, token *sites.DeployToken) (*domain.User, error) {
+	user, err := users.FindUserByID(ctx, token.CreatedBy)
+	if err != nil || user == nil || !user.Active {
+		return nil, err
+	}
+	return user, nil
+}
+
+func creatorAccessToken(user *domain.User, token *sites.DeployToken) *domain.AccessToken {
+	return &domain.AccessToken{UserID: user.ID, Name: "deploy token " + token.Name, Scopes: auth.ScopeWrite, ProjectID: token.ProjectID}
+}
+
+// DeployTokenStanding answers whether a token's creator may still deploy, by
+// the same checks the deploy route runs: an active account, then project
+// access and the developer rung (RequireProjectAccess, RequireProjectRole).
+type DeployTokenStanding struct {
+	Users     auth.TokenLookup
+	Instances storage.InstanceStore
+	Orgs      storage.OrgStore
+}
+
+// CreatorCanDeploy is false when the creator lost the role or was deactivated.
+func (s DeployTokenStanding) CreatorCanDeploy(ctx context.Context, token *sites.DeployToken) (bool, error) {
+	user, err := deployTokenCreator(ctx, s.Users, token)
+	if err != nil {
+		return false, fmt.Errorf("read the creator of deploy token %s: %w", token.ID, err)
+	}
+	if user == nil {
+		return false, nil
+	}
+	access := ResolveProjectAccess(ctx, user, creatorAccessToken(user, token), token.ProjectID, s.Instances, s.Orgs)
+	return access != nil && access.RoleAtLeast(domain.OrgRoleDeveloper), nil
 }
 
 func writeGateError(w http.ResponseWriter, status int, message string) {

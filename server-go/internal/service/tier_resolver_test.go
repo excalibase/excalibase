@@ -23,9 +23,9 @@ func (f fakeTierStore) GetTierConfig(_ context.Context, tier domain.TierType) (c
 	return tc, ok, nil
 }
 
-func (f fakeTierStore) UpsertTierConfig(_ context.Context, tier domain.TierType, tc config.TierConfig) error {
+func (f fakeTierStore) UpsertTierConfig(_ context.Context, tier domain.TierType, tc config.TierConfig, _ *int) (int, error) {
 	f.m[tier] = tc
-	return nil
+	return tc.Version, nil
 }
 
 func TestTierConfig_PrefersDBOverDefaults(t *testing.T) {

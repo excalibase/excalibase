@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -24,9 +26,14 @@ func (f *fakeTierStore) GetTierConfig(_ context.Context, tier domain.TierType) (
 	tc, ok := f.m[tier]
 	return tc, ok, nil
 }
-func (f *fakeTierStore) UpsertTierConfig(_ context.Context, tier domain.TierType, tc config.TierConfig) error {
+func (f *fakeTierStore) UpsertTierConfig(_ context.Context, tier domain.TierType, tc config.TierConfig, expectedVersion *int) (int, error) {
+	current := f.m[tier].Version
+	if expectedVersion != nil && *expectedVersion != current {
+		return 0, fmt.Errorf("%w: it is at version %d", storage.ErrTierVersionConflict, current)
+	}
+	tc.Version = current + 1
 	f.m[tier] = tc
-	return nil
+	return tc.Version, nil
 }
 
 func newTierReqWithParam(method, body, tier string) *http.Request {
@@ -356,5 +363,59 @@ func TestTierHandler_Update_KeepsSiteLimitsLeftOut(t *testing.T) {
 	want.MaxDeploysPerHour = 12
 	if rec.Code != http.StatusOK || store.m[domain.Standard].Sites != want {
 		t.Fatalf("got %d %s, stored %+v; want %+v", rec.Code, rec.Body.String(), store.m[domain.Standard].Sites, want)
+	}
+}
+
+func putTier(h *TierHandler, ifMatch string) *httptest.ResponseRecorder {
+	request := newTierReqWithParam("PUT", siteLimitsBody("maxSites", "7"), string(domain.Free))
+	if ifMatch != "" {
+		request.Header.Set("If-Match", ifMatch)
+	}
+	recorder := httptest.NewRecorder()
+	h.Update(recorder, request)
+	return recorder
+}
+
+// Two admins editing one plan: the second save, made from the version before
+// the first, is refused instead of silently undoing it (EXC-620).
+func TestTierHandler_Update_RefusesAnEditFromAStaleVersion(t *testing.T) {
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Version: 3}}}
+	h := NewTierHandler(store)
+	first := putTier(h, `"3"`)
+	var saved tierConfigDTO
+	if err := json.Unmarshal(first.Body.Bytes(), &saved); first.Code != http.StatusOK || err != nil || saved.Version != 4 {
+		t.Fatalf("first save = %d %s", first.Code, first.Body)
+	}
+	if etag := first.Header().Get("ETag"); etag != "4" {
+		t.Fatalf("ETag = %q, want the new version", etag)
+	}
+	stale := putTier(h, "3")
+	if stale.Code != http.StatusPreconditionFailed || !strings.Contains(stale.Body.String(), "version 4") {
+		t.Fatalf("stale save = %d %s, want 412 naming the current version", stale.Code, stale.Body)
+	}
+	if store.m[domain.Free].Version != 4 {
+		t.Fatalf("the stale save was stored: %+v", store.m[domain.Free])
+	}
+	if bad := putTier(h, "four"); bad.Code != http.StatusBadRequest {
+		t.Fatalf("unreadable If-Match = %d", bad.Code)
+	}
+}
+
+// A script that sizes a plan sends no If-Match and writes unconditionally.
+func TestTierHandler_Update_WithoutIfMatchStillWrites(t *testing.T) {
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Version: 2}}}
+	if response := putTier(NewTierHandler(store), ""); response.Code != http.StatusOK || store.m[domain.Free].Version != 3 {
+		t.Fatalf("unconditional save = %d %s", response.Code, response.Body)
+	}
+}
+
+// The list carries each plan's version, which Studio sends back as If-Match.
+func TestTierHandler_List_CarriesEachVersion(t *testing.T) {
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Version: 5}}}
+	recorder := httptest.NewRecorder()
+	NewTierHandler(store).List(recorder, httptest.NewRequest("GET", "/", nil))
+	var listed []tierConfigDTO
+	if err := json.Unmarshal(recorder.Body.Bytes(), &listed); err != nil || len(listed) != 1 || listed[0].Version != 5 {
+		t.Fatalf("listed = %s", recorder.Body)
 	}
 }

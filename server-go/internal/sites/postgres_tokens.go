@@ -11,13 +11,13 @@ import (
 // siteTokenLockSpace keeps the per-site token count apart from other advisory locks.
 const siteTokenLockSpace = 620
 
-const tokenColumns = `id, site_id, project_id, name, token_prefix, token_hash, created_by, created_at, last_used_at`
+const tokenColumns = `id, site_id, project_id, name, token_prefix, token_hash, created_by, created_at, expires_at, last_used_at`
 
 func scanDeployToken(row rowScanner) (*DeployToken, error) {
 	token := &DeployToken{}
 	var lastUsed sql.NullTime
 	if err := row.Scan(&token.ID, &token.SiteID, &token.ProjectID, &token.Name, &token.Prefix, &token.Hash,
-		&token.CreatedBy, &token.CreatedAt, &lastUsed); err != nil {
+		&token.CreatedBy, &token.CreatedAt, &token.ExpiresAt, &lastUsed); err != nil {
 		return nil, err
 	}
 	if lastUsed.Valid {
@@ -44,9 +44,9 @@ func (s *PostgresStore) CreateDeployToken(ctx context.Context, token *DeployToke
 	if held >= maxPerSite {
 		return ErrDeployTokenLimitReached
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO site_deploy_tokens (id, site_id, project_id, name, token_prefix, token_hash, created_by, created_at)
-		SELECT $1, id, project_id, $4, $5, $6, $7, $8 FROM sites WHERE id = $2 AND project_id = $3`,
-		token.ID, token.SiteID, token.ProjectID, token.Name, token.Prefix, token.Hash, token.CreatedBy, token.CreatedAt)
+	result, err := tx.ExecContext(ctx, `INSERT INTO site_deploy_tokens (id, site_id, project_id, name, token_prefix, token_hash, created_by, created_at, expires_at)
+		SELECT $1, id, project_id, $4, $5, $6, $7, $8, $9 FROM sites WHERE id = $2 AND project_id = $3`,
+		token.ID, token.SiteID, token.ProjectID, token.Name, token.Prefix, token.Hash, token.CreatedBy, token.CreatedAt, token.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("create site deploy token: %w", err)
 	}

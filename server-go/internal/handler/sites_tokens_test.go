@@ -1,7 +1,12 @@
 package handler
 
 import (
+	"errors"
+	"net/http/httptest"
+	"time"
+
 	"context"
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"net/http"
 	"strings"
 	"testing"
@@ -100,5 +105,103 @@ func TestSiteDeployTokensAreAudited(t *testing.T) {
 		if entry.ProjectID != sitesTestProject || entry.ResourceID != issued.ID || strings.Contains(entry.Details, issued.Token) || !strings.Contains(entry.Details, site.ID) {
 			t.Errorf("entry = %+v", entry)
 		}
+	}
+}
+
+func createTokenAs(t *testing.T, h *sitesHarness, siteID, body string, caller *domain.AccessToken) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/api/projects/"+sitesTestProject+"/sites/"+siteID+"/tokens", strings.NewReader(body))
+	if caller != nil {
+		request = request.WithContext(auth.SetToken(request.Context(), caller))
+	}
+	recorder := httptest.NewRecorder()
+	h.router.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// The expiry is chosen at creation, 90 days unless said, a year at most.
+func TestSiteDeployTokenExpiryIsChosenAtCreation(t *testing.T) {
+	h := newSitesHarness(t)
+	site := h.createSite(t, "shop")
+	for body, days := range map[string]int{`{"name":"ci"}`: 90, `{"name":"ci","expiresInDays":30}`: 30, `{"name":"ci","expiresInDays":365}`: 365} {
+		response := createTokenAs(t, h, site.ID, body, nil)
+		var issued issuedDeployToken
+		decodeSiteBody(t, response, &issued)
+		want := time.Now().Add(time.Duration(days) * 24 * time.Hour)
+		if response.Code != http.StatusCreated || issued.ExpiresAt.Sub(want).Abs() > time.Minute {
+			t.Errorf("%s: %d expires %v, want about %v", body, response.Code, issued.ExpiresAt, want)
+		}
+	}
+	for _, body := range []string{`{"name":"ci","expiresInDays":366}`, `{"name":"ci","expiresInDays":-1}`} {
+		if response := createTokenAs(t, h, site.ID, body, nil); response.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s, want 400", body, response.Code, response.Body)
+		}
+	}
+}
+
+// Made through a personal access token, it never outlives that token; a
+// Studio session's own expiry does not shorten it.
+func TestSiteDeployTokenNeverOutlivesTheCallersPAT(t *testing.T) {
+	h := newSitesHarness(t)
+	site := h.createSite(t, "shop")
+	patExpiry := time.Now().Add(5 * 24 * time.Hour).UTC().Truncate(time.Second)
+	response := createTokenAs(t, h, site.ID, `{"name":"ci"}`, &domain.AccessToken{Scopes: auth.ScopeWrite, ExpiresAt: &patExpiry})
+	var issued issuedDeployToken
+	decodeSiteBody(t, response, &issued)
+	if response.Code != http.StatusCreated || !issued.ExpiresAt.Equal(patExpiry) {
+		t.Fatalf("%d expires %v, want the PAT's %v", response.Code, issued.ExpiresAt, patExpiry)
+	}
+	sessionExpiry := time.Now().Add(24 * time.Hour)
+	response = createTokenAs(t, h, site.ID, `{"name":"ci"}`, &domain.AccessToken{Scopes: auth.ScopeSession, ExpiresAt: &sessionExpiry})
+	decodeSiteBody(t, response, &issued)
+	if response.Code != http.StatusCreated || issued.ExpiresAt.Before(time.Now().Add(89*24*time.Hour)) {
+		t.Fatalf("a session's expiry shortened the token: %v", issued.ExpiresAt)
+	}
+}
+
+type fixedStanding struct {
+	canDeploy bool
+	err       error
+}
+
+func (f fixedStanding) CreatorCanDeploy(context.Context, *sites.DeployToken) (bool, error) {
+	return f.canDeploy, f.err
+}
+
+func listedTokens(t *testing.T, standing tokenStanding) (int, []listedDeployToken) {
+	t.Helper()
+	service, err := sites.NewService(sitestest.NewMemoryStore(), sitestest.NewPublisher(), sitestest.NewOrigins(), sites.Options{BaseDomain: "excalibase.app", SpoolDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	handler := NewSiteHandler(service)
+	handler.SetTokenStanding(standing)
+	h := &sitesHarness{router: sitesRouter(handler)}
+	site := h.createSite(t, "shop")
+	h.do(t, http.MethodPost, "/"+site.ID+"/tokens", []byte(`{"name":"ci"}`))
+	response := h.do(t, http.MethodGet, "/"+site.ID+"/tokens", nil)
+	var listed []listedDeployToken
+	if response.Code == http.StatusOK {
+		decodeSiteBody(t, response, &listed)
+	}
+	return response.Code, listed
+}
+
+type listedDeployToken struct {
+	sites.DeployToken
+	CreatorCanDeploy bool `json:"creatorCanDeploy"`
+}
+
+// Each listed token says whether its creator may still deploy, so Studio can
+// mark one inactive the way the deploy route would refuse it (EXC-620).
+func TestSiteDeployTokensListSayWhetherTheirCreatorCanStillDeploy(t *testing.T) {
+	for _, canDeploy := range []bool{true, false} {
+		code, listed := listedTokens(t, fixedStanding{canDeploy: canDeploy})
+		if code != http.StatusOK || len(listed) != 1 || listed[0].CreatorCanDeploy != canDeploy {
+			t.Fatalf("standing %v: %d %+v", canDeploy, code, listed)
+		}
+	}
+	if code, _ := listedTokens(t, fixedStanding{err: errors.New("database down")}); code != http.StatusInternalServerError {
+		t.Fatalf("an unreadable standing answered %d", code)
 	}
 }

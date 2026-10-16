@@ -25,6 +25,8 @@ type SiteHandler struct {
 	sites *sites.Service
 	// audit records deploy tokens made and revoked (EXC-620); nil records nothing.
 	audit auditWriter
+	// standing says whether a listed token's creator may still deploy.
+	standing tokenStanding
 }
 
 // SetAuditLog records every deploy token made or revoked.

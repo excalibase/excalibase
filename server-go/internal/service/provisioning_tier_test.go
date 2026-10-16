@@ -21,8 +21,8 @@ func (erroringTierStore) GetTierConfig(context.Context, domain.TierType) (config
 	return config.TierConfig{}, false, errors.New("db down")
 }
 
-func (erroringTierStore) UpsertTierConfig(context.Context, domain.TierType, config.TierConfig) error {
-	return errors.New("db down")
+func (erroringTierStore) UpsertTierConfig(context.Context, domain.TierType, config.TierConfig, *int) (int, error) {
+	return 0, errors.New("db down")
 }
 
 // The exported wrapper is what the capacity report calls; it must return the

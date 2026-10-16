@@ -1,13 +1,15 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
-
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/go-chi/chi/v5"
 )
@@ -17,6 +19,40 @@ import (
 
 type deployTokenRequest struct {
 	Name string `json:"name"`
+	// ExpiresInDays is the token's lifetime; absent is 90 days, 365 at most.
+	ExpiresInDays *int `json:"expiresInDays,omitempty"`
+}
+
+// deployTokenFor turns the body into a request, capping the expiry at the
+// caller's own token unless it is a Studio session, which is renewed by login.
+func deployTokenFor(r *http.Request, siteID string, body deployTokenRequest) (sites.DeployTokenRequest, error) {
+	request := sites.DeployTokenRequest{ProjectID: chi.URLParam(r, "projectId"), SiteID: siteID, Name: body.Name, Actor: actorID(r)}
+	if body.ExpiresInDays != nil {
+		days := *body.ExpiresInDays
+		if days < 1 || days > int(sites.MaxDeployTokenLifetime/(24*time.Hour)) {
+			return request, &sites.InputError{Reason: "expiresInDays must be between 1 and 365"}
+		}
+		request.Lifetime = time.Duration(days) * 24 * time.Hour
+	}
+	if caller := auth.GetToken(r.Context()); caller != nil && !auth.IsSessionToken(caller) {
+		request.NotAfter = caller.ExpiresAt
+	}
+	return request, nil
+}
+
+// tokenStanding answers whether a token's creator may still deploy; the
+// middleware's DeployTokenStanding runs the deploy route's own checks.
+type tokenStanding interface {
+	CreatorCanDeploy(ctx context.Context, token *sites.DeployToken) (bool, error)
+}
+
+// SetTokenStanding wires the check the token list reports.
+func (h *SiteHandler) SetTokenStanding(standing tokenStanding) { h.standing = standing }
+
+type listedDeployTokenResponse struct {
+	sites.DeployToken
+	// CreatorCanDeploy is false once the creator lost the developer role or was deactivated.
+	CreatorCanDeploy bool `json:"creatorCanDeploy"`
 }
 
 type issuedDeployTokenResponse struct {
@@ -34,7 +70,28 @@ func (h *SiteHandler) listTokens(w http.ResponseWriter, r *http.Request) {
 		writeSiteError(w, err)
 		return
 	}
-	writeJSON(w, tokens)
+	listed, err := h.withStanding(r.Context(), tokens)
+	if err != nil {
+		log.Printf("site deploy tokens: %v", err)
+		httpError(w, "could not check who may still deploy with these tokens", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, listed)
+}
+
+func (h *SiteHandler) withStanding(ctx context.Context, tokens []*sites.DeployToken) ([]listedDeployTokenResponse, error) {
+	if h.standing == nil {
+		return nil, errors.New("no token standing check is wired")
+	}
+	listed := make([]listedDeployTokenResponse, 0, len(tokens))
+	for _, token := range tokens {
+		canDeploy, err := h.standing.CreatorCanDeploy(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+		listed = append(listed, listedDeployTokenResponse{DeployToken: *token, CreatorCanDeploy: canDeploy})
+	}
+	return listed, nil
 }
 
 func (h *SiteHandler) createToken(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +104,12 @@ func (h *SiteHandler) createToken(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
-	raw, token, err := h.sites.CreateDeployToken(r.Context(), chi.URLParam(r, "projectId"), siteID, body.Name, actorID(r))
+	request, err := deployTokenFor(r, siteID, body)
+	if err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	raw, token, err := h.sites.CreateDeployToken(r.Context(), request)
 	if err != nil {
 		writeSiteError(w, err)
 		return

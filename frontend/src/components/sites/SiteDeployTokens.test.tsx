@@ -20,6 +20,8 @@ const tokenFixture = (overrides: Partial<DeployToken> = {}): DeployToken => ({
   tokenPrefix: 'excd_1a2b3c4',
   createdBy: 'u1',
   createdAt: '2026-10-15T10:00:00Z',
+  expiresAt: '2027-01-13T10:00:00Z',
+  creatorCanDeploy: true,
   ...overrides,
 });
 
@@ -72,7 +74,7 @@ describe('SiteDeployTokens', () => {
     } as never);
     await user.type(await screen.findByTestId('site-deploy-token-name'), 'ci');
     await user.click(screen.getByTestId('site-deploy-token-create'));
-    expect(api.post).toHaveBeenCalledWith(TOKENS_URL, { name: 'ci' });
+    expect(api.post).toHaveBeenCalledWith(TOKENS_URL, { name: 'ci', expiresInDays: 90 });
     const issued = await screen.findByTestId('site-deploy-token-issued');
     expect(issued).toHaveTextContent('excd_the-secret');
     expect(issued).toHaveTextContent('EXCALIBASE_DEPLOY_TOKEN');
@@ -110,5 +112,33 @@ describe('SiteDeployTokens', () => {
     expect(api.delete).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Revoke token' }));
     await waitFor(() => expect(api.delete).toHaveBeenCalledWith(`${TOKENS_URL}/tok-1`));
+  });
+
+  test('shows when each token expires, and an expired one as expired', async () => {
+    renderTokens([
+      tokenFixture(),
+      tokenFixture({ id: 'tok-old', name: 'old ci', expiresAt: '2020-01-01T00:00:00Z' }),
+    ]);
+    expect(await screen.findByTestId('site-deploy-token-tok-1')).toHaveTextContent(/expires/i);
+    expect(screen.getByTestId('site-deploy-token-tok-old')).toHaveTextContent(/expired/i);
+  });
+
+  test('marks a token inactive when its creator can no longer deploy', async () => {
+    renderTokens([tokenFixture({ creatorCanDeploy: false })]);
+    expect(await screen.findByTestId('site-deploy-token-tok-1')).toHaveTextContent(
+      'inactive (creator no longer a Developer)',
+    );
+  });
+
+  test('the expiry is chosen when the token is made, up to a year', async () => {
+    const user = userEvent.setup();
+    renderTokens([]);
+    vi.mocked(api.post).mockResolvedValue({
+      data: { ...tokenFixture({ id: 'tok-9', name: 'ci' }), token: 'excd_the-secret' },
+    } as never);
+    await user.type(await screen.findByTestId('site-deploy-token-name'), 'ci');
+    await user.selectOptions(screen.getByTestId('site-deploy-token-expiry'), '365');
+    await user.click(screen.getByTestId('site-deploy-token-create'));
+    expect(api.post).toHaveBeenCalledWith(TOKENS_URL, { name: 'ci', expiresInDays: 365 });
   });
 });

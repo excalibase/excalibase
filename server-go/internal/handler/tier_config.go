@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -47,10 +49,12 @@ func (h *TierHandler) Routes(r chi.Router) {
 }
 
 type tierConfigDTO struct {
-	Tier        domain.TierType `json:"tier"`
-	MaxProjects int             `json:"maxProjects"`
-	Instances   int             `json:"instances"`
-	StorageSize string          `json:"storageSize"`
+	Tier domain.TierType `json:"tier"`
+	// Version is sent back as If-Match so a save from an older read is refused.
+	Version     int    `json:"version"`
+	MaxProjects int    `json:"maxProjects"`
+	Instances   int    `json:"instances"`
+	StorageSize string `json:"storageSize"`
 	// MaxStorageSize is the disk a project may grow to (EXC-492).
 	MaxStorageSize string `json:"maxStorageSize"`
 	// MaxAppDiskSize is the largest disk one app may have (EXC-523).
@@ -76,6 +80,7 @@ type tierConfigDTO struct {
 func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 	return tierConfigDTO{
 		Tier:           tier,
+		Version:        tc.Version,
 		MaxProjects:    tc.MaxProjects,
 		Instances:      tc.Instances,
 		StorageSize:    tc.StorageSize,
@@ -118,6 +123,10 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "unknown tier: "+string(tier), http.StatusBadRequest)
 		return
 	}
+	expectedVersion, ok := tierVersionPrecondition(w, r)
+	if !ok {
+		return
+	}
 	var dto tierConfigDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		httpError(w, "bad request body: "+safeError(err), http.StatusBadRequest)
@@ -149,14 +158,37 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !h.instancesFitThePlatform(w, r, tier, tc.Instances) {
 		return
 	}
-	if err := h.store.UpsertTierConfig(r.Context(), tier, tc); err != nil {
+	version, err := h.store.UpsertTierConfig(r.Context(), tier, tc, expectedVersion)
+	if errors.Is(err, storage.ErrTierVersionConflict) {
+		httpError(w, err.Error(), http.StatusPreconditionFailed)
+		return
+	}
+	if err != nil {
 		httpError(w, "update tier: "+safeError(err), http.StatusInternalServerError)
 		return
 	}
 	if h.planChanged != nil {
 		h.planChanged()
 	}
+	tc.Version = version
+	w.Header().Set("ETag", strconv.Itoa(version))
 	writeJSON(w, toTierDTO(tier, tc))
+}
+
+// tierVersionPrecondition reads If-Match, the version the edit was made from,
+// as apps do. Without one the write is unconditional: scripts that size a plan
+// send a literal spec, while Studio always sends the version it read.
+func tierVersionPrecondition(w http.ResponseWriter, r *http.Request) (*int, bool) {
+	raw := strings.Trim(strings.TrimSpace(r.Header.Get("If-Match")), `"`)
+	if raw == "" {
+		return nil, true
+	}
+	version, err := strconv.Atoi(raw)
+	if err != nil || version < 0 {
+		httpError(w, "If-Match must be the version the tier was read at", http.StatusBadRequest)
+		return nil, false
+	}
+	return &version, true
 }
 
 // requiredCount reads an omitted count as -1, which validation refuses, so an

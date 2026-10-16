@@ -11,6 +11,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/sites"
+	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
+	"github.com/go-chi/chi/v5"
 )
 
 const (
@@ -234,4 +237,66 @@ func TestDeployTokenNeverRidesOnASession(t *testing.T) {
 	if !seen.called || seen.user != nil {
 		t.Fatalf("user = %+v, want no one", seen.user)
 	}
+}
+
+// The standing Studio shows for a token is what the deploy route enforces:
+// the gate, project access and the developer rung, run for real (EXC-620).
+func TestDeployTokenStandingMatchesWhatTheDeployRouteEnforces(t *testing.T) {
+	for _, creator := range []struct {
+		name, role, orgRole string
+		active, canDeploy   bool
+	}{
+		{"developer", "user", domain.OrgRoleDeveloper, true, true},
+		{"owner", "user", domain.OrgRoleOwner, true, true},
+		{"demoted to viewer", "user", domain.OrgRoleViewer, true, false},
+		{"removed from the org", "user", "", true, false},
+		{"deactivated developer", "user", domain.OrgRoleDeveloper, false, false},
+		{"platform admin outside the org", "platform_admin", "", true, true},
+	} {
+		t.Run(creator.name, func(t *testing.T) {
+			tokens, users := gateFixtures()
+			users.users[gateCreator] = &domain.User{ID: gateCreator, Role: creator.role, Active: creator.active}
+			instances := fakestore.NewInstances()
+			instances.Create(&domain.DatabaseInstance{ProjectID: gateProject, OrgID: testOrg})
+			orgs := fakestore.NewOrgs()
+			if creator.orgRole != "" {
+				orgs.AddMember(testOrg, gateCreator, creator.orgRole)
+			}
+			standing := DeployTokenStanding{Users: users, Instances: instances, Orgs: orgs}
+			canDeploy, err := standing.CreatorCanDeploy(context.Background(), tokens.tokens[gateRawToken])
+			if err != nil || canDeploy != creator.canDeploy {
+				t.Fatalf("standing = %v, %v; want %v", canDeploy, err, creator.canDeploy)
+			}
+			if enforced := deployRouteAllows(tokens, users, instances, orgs); enforced != canDeploy {
+				t.Fatalf("the route allowed %v but the standing says %v", enforced, canDeploy)
+			}
+		})
+	}
+}
+
+// A creator that cannot be read is an error, never a guess either way.
+func TestDeployTokenStandingFailsWhenTheCreatorCannotBeRead(t *testing.T) {
+	tokens, _ := gateFixtures()
+	standing := DeployTokenStanding{Users: failingUsers{}, Instances: fakestore.NewInstances(), Orgs: fakestore.NewOrgs()}
+	if _, err := standing.CreatorCanDeploy(context.Background(), tokens.tokens[gateRawToken]); err == nil {
+		t.Fatal("an unreadable creator answered a standing")
+	}
+}
+
+type failingUsers struct{ fakeUsers }
+
+func (failingUsers) FindUserByID(context.Context, string) (*domain.User, error) {
+	return nil, errors.New("database down")
+}
+
+func deployRouteAllows(tokens fakeDeployTokens, users fakeUsers, instances storage.InstanceStore, orgs storage.OrgStore) bool {
+	router := chi.NewRouter()
+	router.Use(SiteDeployTokenGate(tokens, users))
+	router.With(auth.RequireAuth, RequireProjectAccess(instances, orgs), RequireProjectRole(domain.OrgRoleDeveloper, instances, orgs)).
+		Post("/api/projects/{projectId}/sites/{siteId}/deploy", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	request := httptest.NewRequest(http.MethodPost, sitePrefix+"/deploy", nil)
+	request.Header.Set("Authorization", "Bearer "+gateRawToken)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder.Code == http.StatusOK
 }

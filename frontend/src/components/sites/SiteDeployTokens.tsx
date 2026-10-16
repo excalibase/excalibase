@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Copy, KeyRound, Trash2 } from 'lucide-react';
 import { apiErrorMessage } from '../../api/apps';
 import {
+  DEFAULT_DEPLOY_TOKEN_DAYS,
+  DEPLOY_TOKEN_EXPIRY_DAYS,
   useCreateDeployToken,
   useDeployTokens,
   useRevokeDeployToken,
@@ -54,6 +56,17 @@ function IssuedToken({
   );
 }
 
+// tokenStatus is why a token would be refused now, or how long it has left.
+function tokenStatus(token: DeployToken): { readonly text: string; readonly refused: boolean } {
+  if (new Date(token.expiresAt).getTime() <= Date.now()) {
+    return { text: `Expired ${formatWhen(token.expiresAt)}`, refused: true };
+  }
+  if (token.creatorCanDeploy === false) {
+    return { text: 'inactive (creator no longer a Developer)', refused: true };
+  }
+  return { text: `Expires ${formatWhen(token.expiresAt)}`, refused: false };
+}
+
 function TokenRow({
   token,
   onRevoke,
@@ -61,6 +74,7 @@ function TokenRow({
   readonly token: DeployToken;
   readonly onRevoke: () => void;
 }) {
+  const status = tokenStatus(token);
   return (
     <li
       className="flex items-center justify-between gap-3 px-3 py-2"
@@ -72,6 +86,9 @@ function TokenRow({
           <span className="font-mono">{token.tokenPrefix}…</span> · made{' '}
           {formatWhen(token.createdAt)} ·{' '}
           {token.lastUsedAt ? `Last used ${formatWhen(token.lastUsedAt)}` : 'Never used'}
+        </p>
+        <p className={`text-xs ${status.refused ? 'text-amber-400' : 'text-text-tertiary'}`}>
+          {status.text}
         </p>
       </div>
       <button
@@ -93,16 +110,20 @@ function CreateToken({
 }: SiteRef & { readonly onIssued: (issued: IssuedDeployToken) => void }) {
   const create = useCreateDeployToken(projectId, siteId);
   const [name, setName] = useState('');
+  const [expiresInDays, setExpiresInDays] = useState<number>(DEFAULT_DEPLOY_TOKEN_DAYS);
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    create.mutate(name.trim(), {
-      onSuccess: (issued) => {
-        setName('');
-        onIssued(issued);
-        // The raw token lives only in the panel that shows it once, not in the mutation cache.
-        create.reset();
+    create.mutate(
+      { name: name.trim(), expiresInDays },
+      {
+        onSuccess: (issued) => {
+          setName('');
+          onIssued(issued);
+          // The raw token lives only in the panel that shows it once, not in the mutation cache.
+          create.reset();
+        },
       },
-    });
+    );
   };
   return (
     <form onSubmit={submit} className="space-y-2">
@@ -117,6 +138,19 @@ function CreateToken({
           className="flex-1 min-w-0 px-3 py-1.5 text-sm rounded-lg bg-bg-tertiary border border-border-primary text-text-primary focus:outline-none focus:border-purple-500/50"
           data-testid="site-deploy-token-name"
         />
+        <select
+          value={expiresInDays}
+          onChange={(event) => setExpiresInDays(Number(event.target.value))}
+          aria-label="Deploy token expires after"
+          className="px-2 py-1.5 text-sm rounded-lg bg-bg-tertiary border border-border-primary text-text-primary focus:outline-none focus:border-purple-500/50"
+          data-testid="site-deploy-token-expiry"
+        >
+          {DEPLOY_TOKEN_EXPIRY_DAYS.map((days) => (
+            <option key={days} value={days}>
+              {days === 365 ? '1 year' : `${days} days`}
+            </option>
+          ))}
+        </select>
         <button
           type="submit"
           disabled={!name.trim() || create.isPending}
@@ -150,7 +184,8 @@ export function SiteDeployTokens({ projectId, siteId }: SiteRef) {
     >
       <p className="text-xs text-text-tertiary">
         A deploy token can deploy this site and read its deploys, nothing else. It acts for the
-        Developer who made it and stops working if they leave the project.
+        Developer who made it, stops working if they leave the project, and expires when chosen
+        (never later than the access token that made it).
       </p>
       {issued && <IssuedToken issued={issued} onDone={() => setIssued(null)} />}
       <CreateToken projectId={projectId} siteId={siteId} onIssued={setIssued} />
@@ -181,11 +216,12 @@ export function SiteDeployTokens({ projectId, siteId }: SiteRef) {
         open={revoking !== null}
         onClose={() => setRevoking(null)}
         onConfirm={() =>
-          revoking &&
-          revoke.mutateAsync(revoking.id).then(
-            () => setRevoking(null),
-            () => setRevoking(null),
-          )
+          revoking
+            ? revoke.mutateAsync(revoking.id).then(
+                () => setRevoking(null),
+                () => setRevoking(null),
+              )
+            : undefined
         }
         title={`Revoke ${revoking?.name ?? 'this token'}?`}
         message="Any CI using it is refused from its next request. This cannot be undone."

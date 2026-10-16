@@ -41,7 +41,7 @@ func TestPostgresDeployTokenIsKeptAsItsHash(t *testing.T) {
 	ctx := context.Background()
 	seedUser(t, "token-u1")
 	seedSite(t, store, newSite("token-1", "proj-token", "token-shop"))
-	raw, token, err := service.CreateDeployToken(ctx, "proj-token", "token-1", "ci", "token-u1")
+	raw, token, err := service.CreateDeployToken(ctx, sites.DeployTokenRequest{ProjectID: "proj-token", SiteID: "token-1", Name: "ci", Actor: "token-u1"})
 	if err != nil {
 		t.Fatalf("CreateDeployToken: %v", err)
 	}
@@ -71,6 +71,9 @@ func TestPostgresDeployTokenIsKeptAsItsHash(t *testing.T) {
 	if err != nil || len(listed) != 1 || listed[0].LastUsedAt == nil {
 		t.Fatalf("listed = %+v, %v; want its use recorded", listed, err)
 	}
+	if gap := listed[0].ExpiresAt.Sub(token.ExpiresAt); gap > time.Millisecond || gap < -time.Millisecond {
+		t.Fatalf("stored expiry %v, made with %v", listed[0].ExpiresAt, token.ExpiresAt)
+	}
 	if err := store.DeleteDeployToken(ctx, "proj-other", "token-1", token.ID); !errors.Is(err, sites.ErrDeployTokenNotFound) {
 		t.Fatalf("revoke through another project: %v", err)
 	}
@@ -89,7 +92,7 @@ func TestPostgresDeployTokenNeedsTheProjectsSiteAndHoldsTheCap(t *testing.T) {
 	seedSite(t, store, newSite("token-2", "proj-token-cap", "token-cap"))
 	token := func(id, project string) *sites.DeployToken {
 		return &sites.DeployToken{ID: id, SiteID: "token-2", ProjectID: project, Name: "ci", Prefix: "excd_x", Hash: "hash-" + id,
-			CreatedBy: "token-u2", CreatedAt: time.Now()}
+			CreatedBy: "token-u2", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
 	}
 	if err := store.CreateDeployToken(ctx, token("cap-x", "proj-elsewhere"), 1); !errors.Is(err, sites.ErrSiteNotFound) {
 		t.Fatalf("another project's site: %v", err)
@@ -110,8 +113,8 @@ func TestPostgresDeployTokenGoesWithItsSiteAndItsCreator(t *testing.T) {
 	seedSite(t, store, newSite("token-3", "proj-token-del", "token-del"))
 	seedSite(t, store, newSite("token-4", "proj-token-del", "token-del-two"))
 	seedSite(t, store, newSite("token-5", "proj-token-user", "token-user"))
-	rawSite, _, _ := service.CreateDeployToken(ctx, "proj-token-del", "token-3", "ci", "token-u3")
-	rawProject, _, _ := service.CreateDeployToken(ctx, "proj-token-del", "token-4", "ci", "token-u3")
+	rawSite, _, _ := service.CreateDeployToken(ctx, sites.DeployTokenRequest{ProjectID: "proj-token-del", SiteID: "token-3", Name: "ci", Actor: "token-u3"})
+	rawProject, _, _ := service.CreateDeployToken(ctx, sites.DeployTokenRequest{ProjectID: "proj-token-del", SiteID: "token-4", Name: "ci", Actor: "token-u3"})
 	if err := service.Delete(ctx, "proj-token-del", "token-3"); err != nil {
 		t.Fatalf("delete site: %v", err)
 	}
@@ -124,7 +127,7 @@ func TestPostgresDeployTokenGoesWithItsSiteAndItsCreator(t *testing.T) {
 	if resolved, _ := service.ResolveDeployToken(ctx, rawProject); resolved != nil {
 		t.Fatal("a deleted project's token still resolves")
 	}
-	rawUser, _, _ := service.CreateDeployToken(ctx, "proj-token-user", "token-5", "ci", "token-u3")
+	rawUser, _, _ := service.CreateDeployToken(ctx, sites.DeployTokenRequest{ProjectID: "proj-token-user", SiteID: "token-5", Name: "ci", Actor: "token-u3"})
 	if _, err := platformDB(t).DB().ExecContext(ctx, `DELETE FROM users WHERE id = 'token-u3'`); err != nil {
 		t.Fatalf("delete user: %v", err)
 	}

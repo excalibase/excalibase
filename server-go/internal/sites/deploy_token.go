@@ -28,6 +28,9 @@ const (
 	maxTokenNameLength     = 64
 	// tokenTouchInterval throttles last-used writes to one a minute per token.
 	tokenTouchInterval = time.Minute
+	// DefaultDeployTokenLifetime and MaxDeployTokenLifetime bound how long a token lives.
+	DefaultDeployTokenLifetime = 90 * 24 * time.Hour
+	MaxDeployTokenLifetime     = 365 * 24 * time.Hour
 )
 
 var (
@@ -45,7 +48,39 @@ type DeployToken struct {
 	Hash       string     `json:"-"`
 	CreatedBy  string     `json:"createdBy"`
 	CreatedAt  time.Time  `json:"createdAt"`
+	ExpiresAt  time.Time  `json:"expiresAt"`
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+}
+
+// DeployTokenRequest is one deploy token to make.
+type DeployTokenRequest struct {
+	ProjectID string
+	SiteID    string
+	Name      string
+	Actor     string
+	// Lifetime is how long it lives; 0 is DefaultDeployTokenLifetime.
+	Lifetime time.Duration
+	// NotAfter caps the expiry at the credential that made it, so it never outlives it.
+	NotAfter *time.Time
+}
+
+// expiry answers when the requested token expires, refusing a lifetime past a year.
+func (request DeployTokenRequest) expiry(now time.Time) (time.Time, error) {
+	lifetime := request.Lifetime
+	if lifetime == 0 {
+		lifetime = DefaultDeployTokenLifetime
+	}
+	if lifetime < 0 || lifetime > MaxDeployTokenLifetime {
+		return time.Time{}, &InputError{Reason: "a deploy token lives at most 365 days"}
+	}
+	expires := now.Add(lifetime)
+	if request.NotAfter != nil && request.NotAfter.Before(expires) {
+		expires = request.NotAfter.UTC()
+	}
+	if !expires.After(now) {
+		return time.Time{}, &InputError{Reason: "the credential making this deploy token has expired"}
+	}
+	return expires, nil
 }
 
 // IsDeployToken reports whether raw is shaped as a deploy token.
@@ -71,14 +106,19 @@ func validateTokenName(name string) error {
 }
 
 // CreateDeployToken answers the raw token, which is never stored or shown again.
-func (s *Service) CreateDeployToken(ctx context.Context, projectID, siteID, name, actor string) (string, *DeployToken, error) {
+func (s *Service) CreateDeployToken(ctx context.Context, request DeployTokenRequest) (string, *DeployToken, error) {
 	if !s.Available() {
 		return "", nil, ErrSitesUnavailable
 	}
-	if err := validateTokenName(name); err != nil {
+	if err := validateTokenName(request.Name); err != nil {
 		return "", nil, &InputError{Reason: err.Error()}
 	}
-	if _, err := s.mustGet(ctx, projectID, siteID); err != nil {
+	now := s.now().UTC()
+	expires, err := request.expiry(now)
+	if err != nil {
+		return "", nil, err
+	}
+	if _, err := s.mustGet(ctx, request.ProjectID, request.SiteID); err != nil {
 		return "", nil, err
 	}
 	raw, err := generateDeployToken()
@@ -86,8 +126,8 @@ func (s *Service) CreateDeployToken(ctx context.Context, projectID, siteID, name
 		return "", nil, err
 	}
 	token := &DeployToken{
-		ID: uuid.NewString(), SiteID: siteID, ProjectID: projectID, Name: strings.TrimSpace(name),
-		Prefix: auth.TokenPrefix(raw), Hash: auth.HashToken(raw), CreatedBy: actor, CreatedAt: s.now().UTC(),
+		ID: uuid.NewString(), SiteID: request.SiteID, ProjectID: request.ProjectID, Name: strings.TrimSpace(request.Name),
+		Prefix: auth.TokenPrefix(raw), Hash: auth.HashToken(raw), CreatedBy: request.Actor, CreatedAt: now, ExpiresAt: expires,
 	}
 	if err := s.store.CreateDeployToken(ctx, token, MaxDeployTokensPerSite); err != nil {
 		return "", nil, err
@@ -118,7 +158,14 @@ func (s *Service) ResolveDeployToken(ctx context.Context, raw string) (*DeployTo
 	if s == nil || !IsDeployToken(raw) {
 		return nil, nil
 	}
-	return s.store.FindDeployToken(ctx, auth.HashToken(raw))
+	token, err := s.store.FindDeployToken(ctx, auth.HashToken(raw))
+	if err != nil || token == nil {
+		return nil, err
+	}
+	if !s.now().Before(token.ExpiresAt) {
+		return nil, nil
+	}
+	return token, nil
 }
 
 // RecordDeployTokenUse marks the token used, at most once a minute; best

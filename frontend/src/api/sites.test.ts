@@ -129,6 +129,12 @@ describe('sites limits and deploy tokens api (EXC-620)', () => {
     });
     expect(api.post).toHaveBeenCalledWith('/projects/proj-1/sites/site-1/tokens', {
       name: 'github',
+      expiresInDays: 90,
+    });
+    await createDeployToken('proj-1', 'site-1', 'github', 365);
+    expect(api.post).toHaveBeenLastCalledWith('/projects/proj-1/sites/site-1/tokens', {
+      name: 'github',
+      expiresInDays: 365,
     });
 
     vi.mocked(api.delete).mockResolvedValue({} as never);

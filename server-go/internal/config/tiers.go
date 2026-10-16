@@ -7,6 +7,9 @@ import (
 )
 
 type TierConfig struct {
+	// Version is the stored row's edit count, 0 for a built-in; a tier edit
+	// sent from an older version is refused (EXC-620).
+	Version     int
 	MaxProjects int
 	Instances   int
 	StorageSize string

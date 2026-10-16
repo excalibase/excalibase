@@ -1539,7 +1539,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:     realtimeHandler,
 		permissionHandler:   newPermissionHandler(cfg, sqlStore, store, a.projectDB),
 		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget),
-		siteHandler:         newSiteHandler(sitesSvc, sqlStore),
+		siteHandler:         newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:    sitesSvc,
 		storageBudgetH:      handler.NewStorageBudgetHandler(a.budget),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),

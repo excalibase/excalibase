@@ -35,7 +35,9 @@ func newSitesHarness(t *testing.T) *sitesHarness {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	return &sitesHarness{router: sitesRouter(NewSiteHandler(service)), publisher: publisher, origins: origins}
+	handler := NewSiteHandler(service)
+	handler.SetTokenStanding(fixedStanding{canDeploy: true})
+	return &sitesHarness{router: sitesRouter(handler), publisher: publisher, origins: origins}
 }
 
 func sitesRouter(h *SiteHandler) chi.Router {

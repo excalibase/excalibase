@@ -17,6 +17,8 @@ ALTER TABLE tier_configs ALTER COLUMN max_site_deploy_bytes SET NOT NULL;
 ALTER TABLE tier_configs ALTER COLUMN max_site_files SET NOT NULL;
 ALTER TABLE tier_configs ALTER COLUMN max_site_file_bytes SET NOT NULL;
 ALTER TABLE tier_configs ALTER COLUMN max_site_deploys_per_hour SET NOT NULL;
+-- Each edit bumps it; an admin's save made from an older version is refused.
+ALTER TABLE tier_configs ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
 
 -- Every deploy upload a project starts, refused or not, for its plan's deploys
 -- per hour. Rows older than the hour are deleted on every attempt, any project's.
@@ -39,6 +41,8 @@ CREATE TABLE IF NOT EXISTS site_deploy_tokens (
     token_prefix TEXT NOT NULL,
     created_by   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- At most a year, and never past the personal access token that made it.
+    expires_at   TIMESTAMPTZ NOT NULL,
     last_used_at TIMESTAMPTZ
 );
 

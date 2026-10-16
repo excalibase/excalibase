@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -17,6 +18,11 @@ type TierConfigStore interface {
 	// GetTierConfig returns the stored spec for one tier. The bool is false
 	// (with nil error) when no row exists — callers fall back to defaults.
 	GetTierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, bool, error)
-	// UpsertTierConfig inserts or replaces the spec for one tier.
-	UpsertTierConfig(ctx context.Context, tier domain.TierType, tc config.TierConfig) error
+	// UpsertTierConfig inserts or replaces the spec for one tier and answers its
+	// new version. With expectedVersion set, a row at another version is left
+	// alone and ErrTierVersionConflict is returned.
+	UpsertTierConfig(ctx context.Context, tier domain.TierType, tc config.TierConfig, expectedVersion *int) (int, error)
 }
+
+// ErrTierVersionConflict is a tier edit made from a version someone else replaced.
+var ErrTierVersionConflict = errors.New("the tier was changed by someone else")

@@ -51,9 +51,14 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     const body = draft[t.tier];
     if (body == null) return;
     try {
-      await update.mutateAsync({ tier: t.tier, body });
+      await update.mutateAsync({ tier: t.tier, body, version: t.version });
     } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } }; message?: string };
+      const err = e as { response?: { status?: number; data?: { error?: string } }; message?: string };
+      if (err.response?.status === 412) {
+        setDraft(({ [t.tier]: _stale, ...rest }) => rest);
+        alert(`${t.tier} was changed by someone else while you edited it. The plan was reloaded; make your change again.`);
+        return;
+      }
       alert(`Save failed: ${serverErrorMessage(err, 'no reason given')}`);
     }
   };

@@ -58,8 +58,16 @@ export interface DeployToken {
   tokenPrefix: string;
   createdBy: string;
   createdAt: string;
+  // At most a year after it was made, and never past the access token that made it.
+  expiresAt: string;
   lastUsedAt?: string;
+  // On the list only: false once the creator lost the Developer role or was
+  // deactivated, the same check the deploy route runs.
+  creatorCanDeploy?: boolean;
 }
+
+export const DEFAULT_DEPLOY_TOKEN_DAYS = 90;
+export const DEPLOY_TOKEN_EXPIRY_DAYS = [7, 30, 90, 180, 365] as const;
 
 // The raw token is in the create answer only; it is never shown again.
 export interface IssuedDeployToken extends DeployToken {
@@ -145,8 +153,14 @@ export const createDeployToken = async (
   projectId: string,
   siteId: string,
   name: string,
+  expiresInDays: number = DEFAULT_DEPLOY_TOKEN_DAYS,
 ): Promise<IssuedDeployToken> =>
-  (await api.post<IssuedDeployToken>(`${siteBase(projectId, siteId)}/tokens`, { name })).data;
+  (
+    await api.post<IssuedDeployToken>(`${siteBase(projectId, siteId)}/tokens`, {
+      name,
+      expiresInDays,
+    })
+  ).data;
 
 export const revokeDeployToken = async (
   projectId: string,
@@ -173,7 +187,8 @@ export const useDeployTokens = (projectId: string, siteId: string, enabled = tru
 export const useCreateDeployToken = (projectId: string, siteId: string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => createDeployToken(projectId, siteId, name),
+    mutationFn: ({ name, expiresInDays }: { name: string; expiresInDays: number }) =>
+      createDeployToken(projectId, siteId, name, expiresInDays),
     onSettled: () => qc.invalidateQueries({ queryKey: tokensKey(projectId, siteId) }),
   });
 };
