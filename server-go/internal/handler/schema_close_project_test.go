@@ -45,6 +45,8 @@ func (f *fakeProjectDB) OpenMySQL(_ context.Context, projectID string, script bo
 	return nil, errors.New("no MySQL pool in this test")
 }
 
+func (f *fakeProjectDB) KillMySQLQuery(context.Context, *sql.DB, int64) error { return nil }
+
 func (f *fakeProjectDB) Evict(projectID string) { f.evicted = append(f.evicted, projectID) }
 
 func (f *fakeProjectDB) ProjectStatusChanged(projectID, status string) {

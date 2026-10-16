@@ -5,9 +5,11 @@ package schema
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +24,13 @@ const mysqlTestImage = "mysql:8.4"
 // login like a provisioned project's, and opens it the way projectdb does:
 // over TLS, one pool for single statements and one for scripts.
 func mysqlProject(t *testing.T) (single, script *sql.DB) {
+	t.Helper()
+	single, script, _ = mysqlServer(t)
+	return single, script
+}
+
+// mysqlServer is mysqlProject with the server's address.
+func mysqlServer(t *testing.T) (single, script *sql.DB, address string) {
 	t.Helper()
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -45,8 +54,8 @@ func mysqlProject(t *testing.T) (single, script *sql.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	address := fmt.Sprintf("%s:%s", host, port.Port())
-	root := openMySQL(t, address, "root", "root-pw", false)
+	address = fmt.Sprintf("%s:%s", host, port.Port())
+	root, _ := openMySQL(t, address, "root", "root-pw", false)
 	for _, statement := range []string{
 		"CREATE USER 'excalibase_app'@'%' IDENTIFIED BY 'app-pw' REQUIRE SSL",
 		"GRANT ALL PRIVILEGES ON `app`.* TO 'excalibase_app'@'%'",
@@ -55,10 +64,25 @@ func mysqlProject(t *testing.T) (single, script *sql.DB) {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
-	return openMySQL(t, address, "excalibase_app", "app-pw", false), openMySQL(t, address, "excalibase_app", "app-pw", true)
+	single, _ = openMySQL(t, address, "excalibase_app", "app-pw", false)
+	script, _ = openMySQL(t, address, "excalibase_app", "app-pw", true)
+	return single, script, address
 }
 
-func openMySQL(t *testing.T, address, user, password string, multiStatements bool) *sql.DB {
+// cappedProject is a project whose script pool holds two connections, as
+// projectdb's does, with a catalogue that kills through the pool's connector.
+func cappedProject(t *testing.T, timeout time.Duration) (watcher, script *sql.DB, catalog *MySQLCatalog) {
+	t.Helper()
+	watcher, _, address := mysqlServer(t)
+	script, connector := openMySQL(t, address, "excalibase_app", "app-pw", true)
+	script.SetMaxOpenConns(2)
+	catalog = NewMySQLCatalog().WithStatementTimeout(timeout).WithKiller(func(ctx context.Context, _ *sql.DB, threadID int64) error {
+		return KillMySQLQuery(ctx, connector, threadID)
+	})
+	return watcher, script, catalog
+}
+
+func openMySQL(t *testing.T, address, user, password string, multiStatements bool) (*sql.DB, driver.Connector) {
 	t.Helper()
 	config := mysql.NewConfig()
 	config.Net, config.Addr, config.User, config.Passwd, config.DBName = "tcp", address, user, password, "app"
@@ -71,7 +95,7 @@ func openMySQL(t *testing.T, address, user, password string, multiStatements boo
 	}
 	db := sql.OpenDB(connector)
 	t.Cleanup(func() { _ = db.Close() })
-	return db
+	return db, connector
 }
 
 const mysqlFixture = `
@@ -315,4 +339,42 @@ func eventually(check func() bool) bool {
 		}
 	}
 	return false
+}
+
+// Two runner requests that both outlive their limit fill the capped pool;
+// each is still stopped on the server, through a connection of its own.
+func TestIntegration_MySQLRunnerStopsConcurrentRunaways(t *testing.T) {
+	watcher, script, catalog := cappedProject(t, time.Second)
+	var wait sync.WaitGroup
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			catalog.ExecuteQuery(context.Background(), script, "DO SLEEP(30)")
+		}()
+	}
+	wait.Wait()
+	requireNoSleeper(t, watcher)
+}
+
+// A client that goes away stops its statement too.
+func TestIntegration_MySQLRunnerStopsWhenTheClientLeaves(t *testing.T) {
+	watcher, script, catalog := cappedProject(t, 30*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(500*time.Millisecond, cancel)
+	if left := catalog.ExecuteQuery(ctx, script, "DO SLEEP(30)"); left.Error == "" {
+		t.Fatalf("a cancelled statement answered: %+v", left)
+	}
+	requireNoSleeper(t, watcher)
+}
+
+func requireNoSleeper(t *testing.T, watcher *sql.DB) {
+	t.Helper()
+	if !eventually(func() bool {
+		var sleeping int
+		err := watcher.QueryRow("SELECT COUNT(*) FROM information_schema.processlist WHERE info = 'DO SLEEP(30)'").Scan(&sleeping)
+		return err == nil && sleeping == 0
+	}) {
+		t.Fatal("a statement still runs on the server")
+	}
 }

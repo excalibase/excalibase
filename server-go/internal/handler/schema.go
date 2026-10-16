@@ -31,6 +31,8 @@ type projectPools interface {
 	// OpenMySQL is a MySQL project's pool; a script pool takes several
 	// statements per request (EXC-619).
 	OpenMySQL(ctx context.Context, projectID string, script bool) (*sql.DB, error)
+	// KillMySQLQuery stops a runaway statement from outside its pool.
+	KillMySQLQuery(ctx context.Context, db *sql.DB, threadID int64) error
 	Evict(projectID string)
 	ProjectStatusChanged(projectID, status string)
 }
@@ -99,7 +101,7 @@ func NewSchemaHandler(pools projectPools, statementTimeout time.Duration) *Schem
 	return &SchemaHandler{
 		pools:        pools,
 		introspector: schema.NewIntrospector().WithStatementTimeout(statementTimeout),
-		mysql:        schema.NewMySQLCatalog().WithStatementTimeout(statementTimeout),
+		mysql:        schema.NewMySQLCatalog().WithStatementTimeout(statementTimeout).WithKiller(pools.KillMySQLQuery),
 	}
 }
 

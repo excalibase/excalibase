@@ -15,10 +15,11 @@ import (
 // a request names must be public (Studio's default) or that database.
 type MySQLCatalog struct {
 	statementTimeout time.Duration
+	kill             MySQLKiller
 }
 
 func NewMySQLCatalog() *MySQLCatalog {
-	return &MySQLCatalog{statementTimeout: defaultStatementTimeout}
+	return &MySQLCatalog{statementTimeout: defaultStatementTimeout, kill: killThroughPool}
 }
 
 // WithStatementTimeout bounds every statement the SQL runner executes.

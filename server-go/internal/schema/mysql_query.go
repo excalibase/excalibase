@@ -81,8 +81,7 @@ func (m *MySQLCatalog) runScript(ctx context.Context, db *sql.DB, query string) 
 	if err != nil {
 		return QueryResult{Error: mysqlMessage(err)}
 	}
-	defer discard(conn)
-	defer killIfPastDeadline(ctx, db, connectionID)
+	defer m.release(ctx, db, conn, connectionID)
 	if mysqlScriptReturnsRows(query) {
 		return readScript(ctx, conn, query)
 	}
@@ -115,8 +114,7 @@ func (m *MySQLCatalog) ExecuteReadOnlyQuery(ctx context.Context, db *sql.DB, que
 	if err != nil {
 		return QueryResult{Error: mysqlMessage(err)}
 	}
-	defer discard(conn)
-	defer killIfPastDeadline(ctx, db, connectionID)
+	defer m.release(ctx, db, conn, connectionID)
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return QueryResult{Error: mysqlMessage(fmt.Errorf("begin tx: %w", err))}
@@ -149,17 +147,52 @@ func (m *MySQLCatalog) session(ctx context.Context, db *sql.DB) (*sql.Conn, int6
 	return conn, connectionID, nil
 }
 
-// killIfPastDeadline stops a statement the deadline abandoned: the driver
-// only drops the connection, and MySQL would keep running what it was sent.
-func killIfPastDeadline(ctx context.Context, db *sql.DB, connectionID int64) {
-	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+// release discards the connection, and when the call ended early (its
+// deadline passed or the client left) stops its statement on the server: the
+// driver only drops the connection, and MySQL would keep running what it was
+// sent. The connection is released first so the kill never waits behind it.
+func (m *MySQLCatalog) release(ctx context.Context, db *sql.DB, conn *sql.Conn, connectionID int64) {
+	discard(conn)
+	if ctx.Err() == nil {
 		return
 	}
 	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killGrace)
 	defer cancel()
-	if _, err := db.ExecContext(killCtx, fmt.Sprintf("KILL QUERY %d", connectionID)); err != nil {
-		log.Printf("mysql: stop statement past its deadline: %v", err)
+	if err := m.kill(killCtx, db, connectionID); err != nil {
+		log.Printf("mysql: stop a statement its caller abandoned: %v", err)
 	}
+}
+
+// MySQLKiller stops a server thread's statement. The platform's sends the
+// KILL on a connection outside the pool, which a runaway may have filled.
+type MySQLKiller func(ctx context.Context, db *sql.DB, threadID int64) error
+
+// WithKiller sets how abandoned statements are stopped.
+func (m *MySQLCatalog) WithKiller(kill MySQLKiller) *MySQLCatalog {
+	m.kill = kill
+	return m
+}
+
+// killThroughPool is the default killer, for a pool with room to spare.
+func killThroughPool(ctx context.Context, db *sql.DB, threadID int64) error {
+	_, err := db.ExecContext(ctx, fmt.Sprintf("KILL QUERY %d", threadID))
+	return err
+}
+
+// KillMySQLQuery stops a thread's statement over a new connection from the
+// connector, outside any pool.
+func KillMySQLQuery(ctx context.Context, connector driver.Connector, threadID int64) error {
+	conn, err := connector.Connect(ctx)
+	if err != nil {
+		return fmt.Errorf("connect to stop a statement: %w", err)
+	}
+	defer conn.Close()
+	execer, ok := conn.(driver.ExecerContext)
+	if !ok {
+		return errors.New("the MySQL driver cannot send KILL")
+	}
+	_, err = execer.ExecContext(ctx, fmt.Sprintf("KILL QUERY %d", threadID), nil)
+	return err
 }
 
 // readScript keeps the last result set that has columns.

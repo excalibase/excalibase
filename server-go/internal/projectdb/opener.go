@@ -9,6 +9,7 @@ package projectdb
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"os"
@@ -219,6 +220,8 @@ type Opener struct {
 
 	mu    sync.Mutex
 	pools map[string]*pool
+	// connectors are the MySQL pools' own, for a KILL outside the pool.
+	connectors map[*sql.DB]driver.Connector
 }
 
 // pool is one project's cached handle plus when it was last handed out, so
@@ -241,7 +244,8 @@ func NewOpener(
 		overrides: overrides,
 		limits:    limits.withDefaults(),
 		now:       time.Now,
-		pools:     make(map[string]*pool),
+		pools:      make(map[string]*pool),
+		connectors: make(map[*sql.DB]driver.Connector),
 	}
 }
 
@@ -250,12 +254,12 @@ func (o *Opener) Open(_ context.Context, projectID string) (*sql.DB, error) {
 	if err := o.checkServable(projectID); err != nil {
 		return nil, err
 	}
-	return o.cached(projectID, projectID, o.openPostgres)
+	return o.cached(projectID, projectID, appRole, o.openPostgres)
 }
 
 // cached hands out the pool under key, opening it with open on first use or
 // once it is older than MaxPoolAge.
-func (o *Opener) cached(projectID, key string, open func(creds map[string]string) (*sql.DB, error)) (*sql.DB, error) {
+func (o *Opener) cached(projectID, key, role string, open func(creds map[string]string) (*sql.DB, error)) (*sql.DB, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if p, ok := o.pools[key]; ok {
@@ -264,11 +268,11 @@ func (o *Opener) cached(projectID, key string, open func(creds map[string]string
 			return p.db, nil
 		}
 		delete(o.pools, key)
-		time.AfterFunc(retireGrace, func() { _ = p.db.Close() })
+		time.AfterFunc(retireGrace, func() { o.closePool(p.db) })
 	}
-	creds, err := o.vault.Get(fmt.Sprintf("projects/%s/credentials/%s", projectID, appRole))
+	creds, err := o.vault.Get(fmt.Sprintf("projects/%s/credentials/%s", projectID, role))
 	if err != nil {
-		return nil, fmt.Errorf("read %s credentials for %s: %w", appRole, projectID, err)
+		return nil, fmt.Errorf("read %s credentials for %s: %w", role, projectID, err)
 	}
 	db, err := open(creds)
 	if err != nil {
@@ -309,7 +313,7 @@ func (o *Opener) evictOldestLocked() {
 		if oldestID == "" {
 			return
 		}
-		_ = o.pools[oldestID].db.Close()
+		o.closePoolLocked(o.pools[oldestID].db)
 		delete(o.pools, oldestID)
 	}
 }
@@ -335,7 +339,7 @@ func (o *Opener) Evict(projectID string) {
 	}
 	o.mu.Unlock()
 	for _, p := range closing {
-		_ = p.db.Close()
+		o.closePool(p.db)
 	}
 }
 
@@ -420,7 +424,20 @@ func (o *Opener) Close() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for id, p := range o.pools {
-		_ = p.db.Close()
+		o.closePoolLocked(p.db)
 		delete(o.pools, id)
 	}
+}
+
+// closePool closes a pool and forgets its connector.
+func (o *Opener) closePool(db *sql.DB) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.closePoolLocked(db)
+}
+
+// closePoolLocked is closePool with the lock held.
+func (o *Opener) closePoolLocked(db *sql.DB) {
+	delete(o.connectors, db)
+	_ = db.Close()
 }
