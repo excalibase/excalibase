@@ -165,3 +165,8 @@ export const visibleProjectNav = (capabilities: NavCapabilities): NavSection[] =
       (!section.requires || capabilities[section.requires]) &&
       (!section.postgresOnly || capabilities.postgres !== false)
   );
+
+// Where a section with sub-pages opens: its first page the engine offers.
+export function sectionLanding(section: NavSection, postgres: boolean): string | undefined {
+  return visibleNavItems(section.children ?? [], false, postgres)[0]?.to;
+}

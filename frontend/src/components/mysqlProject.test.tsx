@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { api } from '../api/client';
 import { DatabaseRequired } from './DatabaseRequired';
 import { DatabaseServiceCard } from './services/DatabaseServiceCard';
-import { PROJECT_NAV, mysqlUnavailableReason, visibleNavItems, visibleProjectNav } from './layout/navigation';
+import { PROJECT_NAV, mysqlUnavailableReason, sectionLanding, visibleNavItems, visibleProjectNav } from './layout/navigation';
 import { engineLabel } from '../utils/engine';
 
 vi.mock('../api/client', () => ({ api: { get: vi.fn() } }));
@@ -80,6 +80,12 @@ describe('MySQL projects in Studio', () => {
     expect(visibleNavItems(database?.children ?? [], false, true).map((item) => item.label)).toEqual([
       'Overview', 'Tables', 'Functions', 'Extensions', 'Roles', 'RLS Policies', 'Triggers', 'Indexes', 'Types', 'Advisors',
     ]);
+  });
+
+  test('Databases opens on Tables for MySQL and on the overview for Postgres', () => {
+    const database = PROJECT_NAV.find((section) => section.key === 'database');
+    expect(database && sectionLanding(database, false)).toBe('database/tables');
+    expect(database && sectionLanding(database, true)).toBe('database/overview');
   });
 
   test('every page hidden on MySQL has a one-line reason', () => {
