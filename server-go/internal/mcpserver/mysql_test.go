@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -138,5 +139,19 @@ func TestAuthFlowRefusesAMySQLProject(t *testing.T) {
 		if strings.HasSuffix(call.Path, "/info/") {
 			t.Fatal("the probe went ahead")
 		}
+	}
+}
+
+// get_project_info names a MySQL table's root fields by its database, the
+// schema the engine reads it under.
+func TestProjectInfoNamesMySQLTablesByTheirDatabase(t *testing.T) {
+	out := map[string]any{}
+	routes := newFakeRoutes()
+	routes.on(http.MethodGet, schemaA+"/tables", 200, `[{"name":"orders","schema":"app","type":"BASE TABLE"}]`)
+	c := &call{dispatcher: dispatcher{router: routes, caller: writeCaller(), answered: &[]routeReply{}}, settings: testSettings}
+	addGraphQLFields(context.Background(), c, testProjectA, out)
+	fields, _ := out["graphqlFields"].(map[string]rootFields)
+	if _, ok := fields["app.orders"]; !ok {
+		t.Fatalf("fields = %v", out)
 	}
 }
