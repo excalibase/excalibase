@@ -22,6 +22,7 @@ jobs:
       hosting: ${{ steps.filter.outputs.hosting }}
       singlehost: ${{ steps.filter.outputs.singlehost }}
       singlehostboot: ${{ steps.filter.outputs.singlehostboot }}
+      sitesrouter: ${{ steps.filter.outputs.sitesrouter }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -50,6 +51,8 @@ jobs:
               - 'server-go/internal/provisioner/docker*'
               - 'server-go/internal/service/backup_*docker*'
               - 'frontend/Dockerfile'
+            sitesrouter:
+              - 'edge/sites-router/**'
             hosting:
               - 'server-go/internal/k8s/app_*'
               - 'server-go/internal/k8s/*_k3s_test.go'
@@ -71,6 +74,26 @@ jobs:
           done
       - name: Sites deploy upload on the edge (real Caddy)
         run: sh deploy/single-host/tests/sites-edge.sh docker
+
+  sites-router:
+    name: Sites router Worker
+    needs: changes
+    if: needs.changes.outputs.sitesrouter == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: edge/sites-router
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: edge/sites-router/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: Deploy script (curl faked, nothing reaches Cloudflare)
+        run: sh test/deploy.sh
 
   single-host-boot:
     name: Single-host boot (Docker)
