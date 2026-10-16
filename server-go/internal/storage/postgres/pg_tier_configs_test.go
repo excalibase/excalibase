@@ -69,7 +69,7 @@ func TestTierConfigs_UpsertRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	want := config.TierConfig{MaxProjects: 10, Instances: 3, StorageSize: "100Gi", MaxStorageSize: "300Gi", MaxAppDiskSize: "40Gi", MaxApps: 7, Memory: "8Gi", CPU: "4", BackupEnabled: true,
-		Sites: config.SiteTierLimits{MaxSites: 9, MaxDeployBytes: 200 << 20, MaxFiles: 30_000, MaxFileBytes: 10 << 20, MaxDeploysPerHour: 45}}
+		Sites: config.SiteTierLimits{MaxSites: 9, MaxDeployBytes: 200 << 20, MaxFiles: 30_000, MaxFileBytes: 10 << 20, MaxDeploysPerHour: 45, MaxCustomDomains: 6}}
 	version, err := store.UpsertTierConfig(ctx, domain.Standard, want, nil)
 	if err != nil {
 		t.Fatalf("UpsertTierConfig: %v", err)

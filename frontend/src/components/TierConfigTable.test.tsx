@@ -25,6 +25,7 @@ const standard = {
   maxSiteFiles: 20000,
   maxSiteFileBytes: 26214400,
   maxSiteDeploysPerHour: 120,
+  maxSiteCustomDomains: 5,
 };
 
 function renderTable({ sites = true } = {}) {
@@ -124,6 +125,27 @@ describe('TierConfigTable', () => {
           maxSiteFileBytes: 26214400,
           maxApps: 5,
         }), ifMatchVersion4,),
+    );
+  });
+
+  // Custom domains per project follow the plan too (EXC-614).
+  test('edits and saves the custom domains a project may hold', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable();
+
+    const domains = await screen.findByLabelText('Custom domains per project for STANDARD');
+    expect(domains).toHaveValue(5);
+    await user.clear(domains);
+    await user.type(domains, '8');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/admin/tiers/STANDARD',
+        expect.objectContaining({ maxSiteCustomDomains: 8, maxSites: 20 }),
+        ifMatchVersion4,
+      ),
     );
   });
 

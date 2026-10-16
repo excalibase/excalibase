@@ -147,7 +147,8 @@ for key, value in want.items():
 # Sites (EXC-353): off, with no Cloudflare settings, unless .env names them.
 sites = {k: v for k, v in penv.items() if k.startswith("SITES_")}
 want_sites = {"SITES_ENABLED": "false", "SITES_CLOUDFLARE_ACCOUNT_ID": "", "SITES_CLOUDFLARE_API_TOKEN": "",
-              "SITES_DISPATCH_NAMESPACE": "", "SITES_HOSTS_KV_NAMESPACE_ID": "", "SITES_BASE_DOMAIN": ""}
+              "SITES_DISPATCH_NAMESPACE": "", "SITES_HOSTS_KV_NAMESPACE_ID": "", "SITES_BASE_DOMAIN": "",
+              "SITES_ZONE_ID": "", "SITES_CUSTOM_DOMAIN_TARGET": ""}
 if sites != want_sites:
     failures.append(f"provisioning SITES_* = {sites}, want {want_sites} by default")
 secrets = [penv.get("BACKUP_DEFAULT_SECRET_ACCESS_KEY"), penv.get("STORAGE_SECRET_ACCESS_KEY"),

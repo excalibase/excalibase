@@ -1508,6 +1508,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	appNetworkSvc := newAppNetworkService(sqlStore, store, appRuntime, a.claimer)
 	schemaHandler := newSchemaHandler(cfg, vc, store)
 	sitesSvc := newSitesService(cfg, sqlStore, service.NewSiteLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc))
+	startHostnameSweep(context.Background(), sitesSvc)
 	provSvc.SetSitePurger(sitesSvc)
 	provSvc.SetSiteRouter(sitesSvc)
 	return &handlerDeps{
@@ -1599,6 +1600,8 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 		// Sites is whether this install can publish sites (EXC-353).
 		Sites         bool `json:"sites"`
 		CustomDomains bool `json:"customDomains"`
+		// SiteCustomDomains is whether sites may take custom domains (EXC-614).
+		SiteCustomDomains bool `json:"siteCustomDomains"`
 		// Features is what ships dark and whether it is on (EXC-554).
 		Features map[string]bool `json:"features"`
 		// The public API base Studio's connect snippets point at (the SDK's url).
@@ -1606,7 +1609,7 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled, Sites: cfg.SitesAvailable(),
-			CustomDomains: customDomainsOn(cfg), Features: features.Snapshot(r.Context(), flags),
+			CustomDomains: customDomainsOn(cfg), SiteCustomDomains: cfg.SitesCustomDomainsAvailable(), Features: features.Snapshot(r.Context(), flags),
 			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/")}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {

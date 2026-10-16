@@ -28,6 +28,10 @@ func TestSiteRowsSitOnTheAuthoringRung(t *testing.T) {
 		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/sites/{siteId}/tokens"}:                       domain.OrgRoleDeveloper,
 		{Method: http.MethodPost, Pattern: "/api/projects/{projectId}/sites/{siteId}/tokens"}:                      domain.OrgRoleDeveloper,
 		{Method: http.MethodDelete, Pattern: "/api/projects/{projectId}/sites/{siteId}/tokens/{tokenId}"}:          domain.OrgRoleDeveloper,
+		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/sites/{siteId}/domains"}:                      domain.OrgRoleViewer,
+		{Method: http.MethodPost, Pattern: "/api/projects/{projectId}/sites/{siteId}/domains"}:                     domain.OrgRoleDeveloper,
+		{Method: http.MethodPost, Pattern: "/api/projects/{projectId}/sites/{siteId}/domains/{domainId}/refresh"}:  domain.OrgRoleDeveloper,
+		{Method: http.MethodDelete, Pattern: "/api/projects/{projectId}/sites/{siteId}/domains/{domainId}"}:        domain.OrgRoleDeveloper,
 	}
 	for key, role := range want {
 		row, ok := index[key]

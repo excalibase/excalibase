@@ -18,6 +18,21 @@ type SitesConfig struct {
 	BaseDomain string
 	// HostsKVNamespaceID is the Workers KV namespace the dispatch Worker reads hostname → script from.
 	HostsKVNamespaceID string
+	// ZoneID is the user-content zone's id; custom domains (EXC-614) are offered only with it.
+	ZoneID string
+	// CustomTarget is the hostname customers CNAME to, the zone's fallback origin; "" is cname.<BaseDomain>.
+	CustomTarget string
+}
+
+// DefaultCustomTargetLabel is the label of the default CNAME target under the base domain.
+const DefaultCustomTargetLabel = "cname"
+
+// CustomDomainTarget is the hostname customers point their CNAME at.
+func (s SitesConfig) CustomDomainTarget() string {
+	if s.CustomTarget != "" {
+		return s.CustomTarget
+	}
+	return DefaultCustomTargetLabel + "." + s.BaseDomain
 }
 
 func loadSites() SitesConfig {
@@ -27,6 +42,8 @@ func loadSites() SitesConfig {
 		DispatchNamespace:  strings.TrimSpace(os.Getenv("SITES_DISPATCH_NAMESPACE")),
 		BaseDomain:         strings.ToLower(strings.TrimSpace(os.Getenv("SITES_BASE_DOMAIN"))),
 		HostsKVNamespaceID: strings.TrimSpace(os.Getenv("SITES_HOSTS_KV_NAMESPACE_ID")),
+		ZoneID:             strings.TrimSpace(os.Getenv("SITES_ZONE_ID")),
+		CustomTarget:       strings.ToLower(strings.TrimSpace(os.Getenv("SITES_CUSTOM_DOMAIN_TARGET"))),
 	}
 }
 
@@ -36,8 +53,8 @@ func (s SitesConfig) Complete() bool {
 }
 
 func (s SitesConfig) String() string {
-	return fmt.Sprintf("{AccountID:%s APIToken:[redacted] DispatchNamespace:%s BaseDomain:%s HostsKVNamespaceID:%s}",
-		s.AccountID, s.DispatchNamespace, s.BaseDomain, s.HostsKVNamespaceID)
+	return fmt.Sprintf("{AccountID:%s APIToken:[redacted] DispatchNamespace:%s BaseDomain:%s HostsKVNamespaceID:%s ZoneID:%s CustomTarget:%s}",
+		s.AccountID, s.DispatchNamespace, s.BaseDomain, s.HostsKVNamespaceID, s.ZoneID, s.CustomTarget)
 }
 
 func (s SitesConfig) GoString() string { return "config.SitesConfig" + s.String() }
@@ -46,6 +63,13 @@ func (s SitesConfig) GoString() string { return "config.SitesConfig" + s.String(
 func (c AppConfig) SitesAvailable() bool {
 	return c.SitesEnabled && c.Sites.Complete()
 }
+
+// SitesCustomDomainsAvailable is whether sites may take custom domains here.
+func (c AppConfig) SitesCustomDomainsAvailable() bool {
+	return c.SitesAvailable() && c.Sites.ZoneID != ""
+}
+
+var zoneIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 var baseDomainPattern = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
@@ -59,6 +83,22 @@ func (c AppConfig) validateSites() error {
 	}
 	if domainsOverlap(c.Sites.BaseDomain, strings.ToLower(strings.TrimSpace(c.AppDomain))) {
 		return fmt.Errorf("SITES_BASE_DOMAIN %q must not be APP_DOMAIN or share a subtree with it: a site name could take an app's hostname", c.Sites.BaseDomain)
+	}
+	return c.Sites.validateCustomDomains()
+}
+
+// validateCustomDomains refuses a zone id that is not Cloudflare's shape and a
+// CNAME target outside the zone, which Cloudflare could not use as the fallback origin.
+func (s SitesConfig) validateCustomDomains() error {
+	if s.ZoneID == "" {
+		return nil
+	}
+	if !zoneIDPattern.MatchString(s.ZoneID) {
+		return fmt.Errorf("SITES_ZONE_ID must be the zone's 32-hex id, not its name")
+	}
+	target := s.CustomDomainTarget()
+	if !baseDomainPattern.MatchString(target) || !strings.HasSuffix(target, "."+s.BaseDomain) {
+		return fmt.Errorf("SITES_CUSTOM_DOMAIN_TARGET %q must be a hostname under SITES_BASE_DOMAIN %q", target, s.BaseDomain)
 	}
 	return nil
 }

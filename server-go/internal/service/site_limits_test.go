@@ -12,11 +12,11 @@ import (
 
 // A project's Sites limits follow its organisation's plan now, admin edits included (EXC-620).
 func TestSiteLimits_ReadTheOrganisationsPlan(t *testing.T) {
-	standard := config.SiteTierLimits{MaxSites: 20, MaxDeployBytes: 100 << 20, MaxFiles: 20_000, MaxFileBytes: 25 << 20, MaxDeploysPerHour: 120}
+	standard := config.SiteTierLimits{MaxSites: 20, MaxDeployBytes: 100 << 20, MaxFiles: 20_000, MaxFileBytes: 25 << 20, MaxDeploysPerHour: 120, MaxCustomDomains: 5}
 	limits := NewSiteLimits(fixedPlan{tier: domain.Standard},
 		fixedTierConfigs{domain.Free: {Sites: config.SiteTierLimits{MaxSites: 5}}, domain.Standard: {Sites: standard}})
 	got, err := limits.DeployLimits(context.Background(), "p1")
-	want := sites.Limits{MaxSites: 20, MaxTotalBytes: 100 << 20, MaxFiles: 20_000, MaxFileBytes: 25 << 20, MaxDeploysPerHour: 120}
+	want := sites.Limits{MaxSites: 20, MaxTotalBytes: 100 << 20, MaxFiles: 20_000, MaxFileBytes: 25 << 20, MaxDeploysPerHour: 120, MaxCustomDomains: 5}
 	if err != nil || got != want {
 		t.Fatalf("DeployLimits = %+v, %v; want %+v", got, err, want)
 	}

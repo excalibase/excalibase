@@ -47,12 +47,15 @@ type SiteTierLimits struct {
 	MaxFileBytes   int64
 	// MaxDeploysPerHour is how many deploys one project may start in any hour.
 	MaxDeploysPerHour int
+	// MaxCustomDomains is how many custom domains one project's sites may hold (EXC-614);
+	// Cloudflare includes 100 per zone and bills each one after.
+	MaxCustomDomains int
 }
 
 // siteLimits holds every plan to Cloudflare's per-deploy limits; plans differ in sites and deploy rate.
-func siteLimits(maxSites, deploysPerHour int) SiteTierLimits {
+func siteLimits(maxSites, deploysPerHour, customDomains int) SiteTierLimits {
 	return SiteTierLimits{MaxSites: maxSites, MaxDeployBytes: 100 * mebibyte, MaxFiles: 20_000,
-		MaxFileBytes: 25 * mebibyte, MaxDeploysPerHour: deploysPerHour}
+		MaxFileBytes: 25 * mebibyte, MaxDeploysPerHour: deploysPerHour, MaxCustomDomains: customDomains}
 }
 
 // CPUString returns CPU as configured (e.g. "0.5", "2"). Provided as a method
@@ -78,7 +81,7 @@ var tiers = map[domain.TierType]TierConfig{
 		BackupEnabled:      true,
 		StatementTimeout:   "15s",
 		AutoPauseAfterDays: 7,
-		Sites:              siteLimits(5, 30),
+		Sites:              siteLimits(5, 30, 2),
 	},
 	domain.Standard: {
 		MaxProjects:      5,
@@ -91,7 +94,7 @@ var tiers = map[domain.TierType]TierConfig{
 		CPU:              "2",
 		BackupEnabled:    true,
 		StatementTimeout: "30s",
-		Sites:            siteLimits(20, 120),
+		Sites:            siteLimits(20, 120, 5),
 	},
 	domain.Enterprise: {
 		MaxProjects:      0, // unlimited
@@ -104,7 +107,7 @@ var tiers = map[domain.TierType]TierConfig{
 		CPU:              "4",
 		BackupEnabled:    true,
 		StatementTimeout: "60s",
-		Sites:            siteLimits(50, 300),
+		Sites:            siteLimits(50, 300, 10),
 	},
 }
 

@@ -316,6 +316,10 @@ services:
       SITES_DISPATCH_NAMESPACE: ${SITES_DISPATCH_NAMESPACE:-}
       SITES_HOSTS_KV_NAMESPACE_ID: ${SITES_HOSTS_KV_NAMESPACE_ID:-}
       SITES_BASE_DOMAIN: ${SITES_BASE_DOMAIN:-}
+      # Custom domains of sites (EXC-614): offered only with the zone id of
+      # SITES_BASE_DOMAIN, prepared once with `sites-zone-setup --apply`.
+      SITES_ZONE_ID: ${SITES_ZONE_ID:-}
+      SITES_CUSTOM_DOMAIN_TARGET: ${SITES_CUSTOM_DOMAIN_TARGET:-}
       # DocumentDB projects (EXC-576): off unless .env says "true" (init.sh --documentdb).
       DOCUMENTDB_ENABLED: ${DOCUMENTDB_ENABLED:-false}
       # Apps (EXC-575, ADR 0039): off unless .env says "true" (init.sh --apps).

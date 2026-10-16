@@ -31,6 +31,8 @@ export interface TierConfig {
   maxSiteFiles: number;
   maxSiteFileBytes: number;
   maxSiteDeploysPerHour: number;
+  // Custom domains one project's sites may hold (EXC-614); 0 offers none.
+  maxSiteCustomDomains: number;
 }
 
 export type TierConfigInput = Omit<TierConfig, 'tier' | 'version'>;

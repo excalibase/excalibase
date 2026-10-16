@@ -41,14 +41,95 @@ interface TokenState {
   expiresAt: string;
 }
 
-async function mockConfig(page: Page, sites: boolean) {
+async function mockConfig(page: Page, sites: boolean, siteCustomDomains = false) {
   await page.route('**/api/config', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ deploymentMode: 'cloud', appHosting: true, sites, features: {} }),
+      body: JSON.stringify({
+        deploymentMode: 'cloud',
+        appHosting: true,
+        sites,
+        siteCustomDomains,
+        features: {},
+      }),
     }),
   );
+}
+
+interface DomainRecorded {
+  added: unknown[];
+  checked: string[];
+  removed: string[];
+}
+
+// Custom domains (EXC-614): one domain that waits for DNS until it is checked.
+async function mockSiteDomainsApi(page: Page): Promise<DomainRecorded> {
+  const recorded: DomainRecorded = { added: [], checked: [], removed: [] };
+  let domains: Array<Record<string, unknown>> = [];
+  const domain = (hostname: string, validation: string, status: string) => ({
+    id: 'dom-1',
+    siteId: 'site-1',
+    projectId: 'test-project',
+    hostname,
+    validation,
+    status,
+    hostnameStatus: status === 'ACTIVE' ? 'active' : 'pending',
+    certificateStatus: status === 'ACTIVE' ? 'active' : 'pending_validation',
+    records: [
+      { type: 'CNAME', name: hostname, value: 'cname.example.app', purpose: 'routing' },
+      ...(status === 'ACTIVE'
+        ? []
+        : [
+            {
+              type: 'TXT',
+              name: `_excalibase-challenge.${hostname}`,
+              value: 'excalibase-verification=tok-1',
+              purpose: 'verification',
+            },
+          ]),
+      ...(validation === 'txt' && status !== 'ACTIVE'
+        ? [
+            {
+              type: 'TXT',
+              name: `_acme-challenge.${hostname}`,
+              value: 'dcv-1',
+              purpose: 'certificate',
+            },
+          ]
+        : []),
+    ],
+    errors: [],
+    createdBy: 'u1',
+    createdAt: '2026-10-17T10:00:00Z',
+    updatedAt: '2026-10-17T10:00:00Z',
+    checkedAt: '2026-10-17T10:00:00Z',
+  });
+  await page.route(new RegExp(`${SITES_PATH}/site-1/domains(/.*)?$`), async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname.replace(`${SITES_PATH}/site-1/domains`, '');
+    const method = request.method();
+    if (path === '' && method === 'GET') return json(route, domains);
+    if (path === '' && method === 'POST') {
+      const body = request.postDataJSON() as { hostname: string; validation: string };
+      recorded.added.push(body);
+      domains = [domain(body.hostname, body.validation, 'PENDING')];
+      return json(route, domains[0], 201);
+    }
+    if (path === '/dom-1/refresh' && method === 'POST') {
+      recorded.checked.push('dom-1');
+      const current = domains[0] as { hostname: string; validation: string };
+      domains = [domain(current.hostname, current.validation, 'ACTIVE')];
+      return json(route, domains[0]);
+    }
+    if (path === '/dom-1' && method === 'DELETE') {
+      recorded.removed.push('dom-1');
+      domains = [];
+      return route.fulfill({ status: 204 });
+    }
+    return json(route, { error: `unmocked ${method} ${path}` }, 500);
+  });
+  return recorded;
 }
 
 const json = (route: Route, body: unknown, status = 200) =>
@@ -332,6 +413,43 @@ test.describe('Sites', () => {
     await page.goto('/project/test-project/sites/new');
     await expect(page.getByTestId('site-create-not-allowed')).toBeVisible();
     await expect(page.getByTestId('site-create')).toHaveCount(0);
+  });
+
+  test('add a custom domain, see its DNS records, check it live and remove it', async ({
+    page,
+  }) => {
+    await mockProjectRole(page, 'developer');
+    await mockConfig(page, true, true);
+    await mockSitesApi(page, [], {
+      id: 'site-1',
+      name: 'shop',
+      hostname: 'shop.example.app',
+      url: 'https://shop.example.app',
+      spaFallback: true,
+    });
+    const recorded = await mockSiteDomainsApi(page);
+
+    await page.goto('/project/test-project/sites/site-1');
+    await page.getByTestId('site-domain-input').fill('www.example.com');
+    await page.getByTestId('site-domain-validation').selectOption('txt');
+    await page.getByTestId('site-domain-add').click();
+    await expect
+      .poll(() => recorded.added)
+      .toEqual([{ hostname: 'www.example.com', validation: 'txt' }]);
+
+    const records = page.getByTestId('site-domain-records-dom-1');
+    await expect(records).toContainText('cname.example.app');
+    await expect(records).toContainText('_acme-challenge.www.example.com');
+    await expect(page.getByTestId('site-domain-status-dom-1')).toHaveText('Waiting for DNS');
+
+    await page.getByTestId('site-domain-check-dom-1').click();
+    await expect(page.getByTestId('site-domain-status-dom-1')).toHaveText('Live');
+    await expect(page.getByRole('link', { name: 'https://www.example.com' })).toBeVisible();
+
+    await page.getByTestId('site-domain-remove-dom-1').click();
+    await page.getByTestId('modal-confirm').click();
+    await expect(page.getByTestId('site-domain-www.example.com')).toHaveCount(0);
+    expect(recorded.removed).toEqual(['dom-1']);
   });
 
   test('an install without Sites hides the tab and points frontends at containers', async ({

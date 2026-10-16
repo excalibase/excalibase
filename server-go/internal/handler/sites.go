@@ -50,6 +50,7 @@ func (h *SiteHandler) Routes(r chi.Router, developer func(http.Handler) http.Han
 		r.With(developer).Get("/tokens", h.available(h.listTokens))
 		r.With(developer).Post("/tokens", h.available(h.createToken))
 		r.With(developer).Delete("/tokens/{tokenId}", h.available(h.revokeToken))
+		h.domainRoutes(r, developer)
 	})
 }
 
@@ -169,6 +170,7 @@ type limitsResponse struct {
 	MaxFiles          int   `json:"maxFiles"`
 	MaxFileBytes      int64 `json:"maxFileBytes"`
 	MaxDeploysPerHour int   `json:"maxDeploysPerHour"`
+	MaxCustomDomains  int   `json:"maxCustomDomains"`
 }
 
 func (h *SiteHandler) limits(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +180,7 @@ func (h *SiteHandler) limits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, limitsResponse{MaxSites: limits.MaxSites, MaxDeployBytes: limits.MaxTotalBytes, MaxFiles: limits.MaxFiles,
-		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour})
+		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour, MaxCustomDomains: limits.MaxCustomDomains})
 }
 
 // sitePathID refuses an id that is not a plain identifier before any lookup.
@@ -201,10 +203,14 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, sites.ErrSitesUnavailable):
 		httpError(w, sites.ErrSitesUnavailable.Error(), http.StatusServiceUnavailable)
-	case errors.Is(err, sites.ErrSiteNotFound), errors.Is(err, sites.ErrDeployNotFound), errors.Is(err, sites.ErrDeployTokenNotFound):
+	case errors.Is(err, sites.ErrCustomDomainsUnavailable):
+		httpError(w, sites.ErrCustomDomainsUnavailable.Error()+"; the site's own hostname still serves it", http.StatusServiceUnavailable)
+	case errors.Is(err, sites.ErrSiteNotFound), errors.Is(err, sites.ErrDeployNotFound), errors.Is(err, sites.ErrDeployTokenNotFound),
+		errors.Is(err, sites.ErrHostnameNotFound):
 		httpError(w, errNotFound, http.StatusNotFound)
 	case errors.Is(err, sites.ErrSiteNameTaken), errors.Is(err, sites.ErrSiteLimitReached), errors.Is(err, sites.ErrSiteBusy), errors.Is(err, sites.ErrLeaseLost),
-		errors.Is(err, sites.ErrDeployNotServable), errors.Is(err, sites.ErrRollbackNeedsFiles), errors.Is(err, sites.ErrDeployTokenLimitReached):
+		errors.Is(err, sites.ErrDeployNotServable), errors.Is(err, sites.ErrRollbackNeedsFiles), errors.Is(err, sites.ErrDeployTokenLimitReached),
+		errors.Is(err, sites.ErrHostnameTaken), errors.Is(err, sites.ErrHostnameLimitReached):
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.As(err, &rateErr):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(rateErr.RetryAfter.Seconds())), 10))

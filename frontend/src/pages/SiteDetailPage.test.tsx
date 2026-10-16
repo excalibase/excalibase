@@ -220,6 +220,11 @@ describe('SiteDetailPage', () => {
     expect(await screen.findByTestId('sites-list')).toBeInTheDocument();
   });
 
+  test('shows the custom domains section beside the site', async () => {
+    renderPage();
+    expect(await screen.findByTestId('site-domains-unavailable')).toBeInTheDocument();
+  });
+
   test('a site never deployed explains how to put it live', async () => {
     renderPage({ site: siteFixture({ liveDeployId: undefined }), deploys: [] });
     expect(await screen.findByTestId('site-deploys-empty')).toHaveTextContent(/upload/i);

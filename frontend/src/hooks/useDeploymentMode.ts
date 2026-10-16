@@ -12,6 +12,8 @@ interface ConfigResponse {
   // Static frontend hosting: on only where SITES_ENABLED and a Cloudflare account are set (EXC-353).
   sites?: boolean;
   customDomains?: boolean;
+  // Sites may take custom domains: the Cloudflare zone is set up for them (EXC-614).
+  siteCustomDomains?: boolean;
   features?: Partial<Record<Feature, boolean>>;
   // The public API base the SDK, REST and GraphQL calls go to.
   apiUrl?: string;
@@ -44,6 +46,12 @@ export function useAppHostingEnabled(): { enabled: boolean; isLoading: boolean }
 export function useSitesEnabled(): { enabled: boolean; isLoading: boolean } {
   const { data, isLoading } = useStudioConfig();
   return { enabled: data?.sites === true, isLoading };
+}
+
+// Off until the server reports a zone set up for site custom domains.
+export function useSiteCustomDomainsEnabled(): { enabled: boolean; isLoading: boolean } {
+  const { data, isLoading } = useStudioConfig();
+  return { enabled: data?.siteCustomDomains === true, isLoading };
 }
 
 // Off unless the server has an ACME issuer for custom domains.

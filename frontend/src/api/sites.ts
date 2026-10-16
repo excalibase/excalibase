@@ -47,6 +47,7 @@ export interface SiteLimits {
   maxFiles: number;
   maxFileBytes: number;
   maxDeploysPerHour: number;
+  maxCustomDomains: number;
 }
 
 // A CI credential that can only deploy one site and read its deploys.

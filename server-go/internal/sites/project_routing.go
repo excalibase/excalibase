@@ -19,6 +19,27 @@ func (s *Service) UnrouteProjectSites(ctx context.Context, projectID string) err
 		if err := s.publisher.DeleteKV(cdnCtx, site.Hostname); err != nil {
 			return publishFailure(site, stepUnroute, err)
 		}
+		if err := s.unrouteSiteHostnames(cdnCtx, site); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unrouteSiteHostnames forgets every custom hostname of the site in the
+// router; the hostnames stay on the zone for a cancelled deletion.
+func (s *Service) unrouteSiteHostnames(ctx context.Context, site *Site) error {
+	if s.options.Hostnames == nil {
+		return nil
+	}
+	held, err := s.options.Hostnames.ListHostnames(ctx, site.ProjectID, site.ID)
+	if err != nil {
+		return err
+	}
+	for _, hostname := range held {
+		if err := s.publisher.DeleteKV(ctx, hostname.Hostname); err != nil {
+			return publishFailure(site, stepUnroute, err)
+		}
 	}
 	return nil
 }
@@ -37,6 +58,9 @@ func (s *Service) RouteProjectSites(ctx context.Context, projectID string) error
 		}
 		if err := s.publisher.PutKV(cdnCtx, site.Hostname, ScriptName(site)); err != nil {
 			return publishFailure(site, stepRoute, err)
+		}
+		if err := s.routeActiveHostnames(cdnCtx, site); err != nil {
+			return err
 		}
 	}
 	return nil
