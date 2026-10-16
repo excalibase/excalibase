@@ -11,6 +11,9 @@
 const SITE_LABEL = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 // The platform names a site's Worker "site-" + its id; script names stop at 63 characters.
 const SITE_SCRIPT = /^site-[a-z0-9][a-z0-9-]{0,57}$/;
+// A customer's own hostname (EXC-614): the platform writes it into SITE_HOSTS
+// only once Cloudflare for SaaS reports it and its certificate active.
+const CUSTOM_HOSTNAME = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const INTERNAL_HEADER_PREFIX = "x-excalibase-";
 const LOOKUP_CACHE_SECONDS = 60;
 
@@ -34,11 +37,11 @@ export default {
       return plainError(503, "This site is temporarily unavailable.");
     }
     const hostname = new URL(request.url).hostname;
-    const label = siteLabel(hostname, baseDomain);
-    if (!label) {
+    const key = hostKey(hostname, baseDomain);
+    if (!key) {
       return notFound(env.ABUSE_URL);
     }
-    const script = await lookupScript(env.SITE_HOSTS, `${label}.${baseDomain}`);
+    const script = await lookupScript(env.SITE_HOSTS, key);
     if (!script) {
       return notFound(env.ABUSE_URL);
     }
@@ -55,6 +58,20 @@ export default {
     return withSiteHeaders(response, hostname);
   },
 };
+
+// hostKey is the SITE_HOSTS key for a request's host: <site>.<base domain>, or
+// a custom hostname outside the base domain. Anything else under the base
+// domain (the apex, nested names) has no site.
+export function hostKey(hostname, baseDomain) {
+  const label = siteLabel(hostname, baseDomain);
+  if (label) {
+    return `${label}.${baseDomain}`;
+  }
+  if (hostname === baseDomain || hostname.endsWith(`.${baseDomain}`)) {
+    return null;
+  }
+  return CUSTOM_HOSTNAME.test(hostname) ? hostname : null;
+}
 
 async function lookupScript(table, hostname) {
   const script = await table.get(hostname, { cacheTtl: LOOKUP_CACHE_SECONDS });
