@@ -39,10 +39,10 @@ export function nameserver(resolvConf: string, override?: string): Address {
   return parseAddress(/^nameserver\s+(\S+)/m.exec(resolvConf)?.[1], "53");
 }
 
-// answers is whether a TCP connection opens within dialMillis; a late one is dropped.
-export function answers([hostname, port]: Address): Promise<boolean> {
+// answers is whether a TCP connection opens within the timeout; a late one is dropped.
+export function answers([hostname, port]: Address, timeoutMillis = dialMillis): Promise<boolean> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), dialMillis);
+    const timer = setTimeout(() => resolve(false), timeoutMillis);
     Deno.connect({ hostname, port }).then(
       (conn) => {
         conn.close();
@@ -78,9 +78,9 @@ export async function waitForFence(check: FenceCheck, start = check.now()): Prom
 
 // main reads the pod's environment and reports; its exit code is 0 only once fenced.
 export async function main(
-  env: { get(name: string): string | undefined } = Deno.env,
-  readResolvConf: () => Promise<string> = () => Deno.readTextFile("/etc/resolv.conf"),
-  log: (line: string) => void = console.log,
+  env: { get(name: string): string | undefined },
+  readResolvConf: () => Promise<string>,
+  log: (line: string) => void,
 ): Promise<number> {
   const dnsOverride = env.get("FENCE_DNS");
   const result = await waitForFence({
@@ -97,8 +97,6 @@ export async function main(
 
 if (import.meta.main) {
   // Exit at once: a dial still pending on a dropped packet must not hold the pod.
-  main().then(Deno.exit, (error) => {
-    console.error(String(error));
-    Deno.exit(2);
-  });
+  const readResolvConf = () => Deno.readTextFile("/etc/resolv.conf");
+  Deno.exit(await main(Deno.env, readResolvConf, console.log).catch((error) => (console.log(String(error)), 2)));
 }

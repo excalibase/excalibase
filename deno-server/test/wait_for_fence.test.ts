@@ -126,3 +126,4 @@ Deno.test("main reads the pod's environment and exits 0 only once fenced", async
   listener.close();
   await accepting.catch(() => {});
 });
+
