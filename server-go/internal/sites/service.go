@@ -17,7 +17,10 @@ const (
 	MaxSitesPerProject = 5
 	// MaxDeployDuration is the lease one deploy or deletion holds on its site.
 	MaxDeployDuration = 15 * time.Minute
-	deployListLimit   = 50
+	// publishTimeout ends every call to Cloudflare well inside the lease, so a
+	// slow deploy cannot publish after a deletion has taken the site over.
+	publishTimeout  = MaxDeployDuration - 3*time.Minute
+	deployListLimit = 50
 )
 
 // Publisher is the Workers for Platforms API a site is served through.
@@ -202,22 +205,24 @@ func (s *Service) Delete(ctx context.Context, projectID, id string) error {
 	if err != nil {
 		return err
 	}
-	release, err := s.claim(ctx, site)
+	lease, err := s.claim(ctx, site)
 	if err != nil {
 		return err
 	}
-	defer release()
-	return s.remove(ctx, site)
+	defer lease.release()
+	return s.remove(ctx, site, lease)
 }
 
-func (s *Service) remove(ctx context.Context, site *Site) error {
-	if err := s.publisher.DeleteScript(ctx, ScriptName(site)); err != nil {
+func (s *Service) remove(ctx context.Context, site *Site, lease *siteLease) error {
+	cdnCtx, cancel := context.WithTimeout(ctx, publishTimeout)
+	defer cancel()
+	if err := s.publisher.DeleteScript(cdnCtx, ScriptName(site)); err != nil {
 		return publishFailure(site, stepDelete, err)
 	}
 	if _, err := s.origins.ReleaseAppCorsOrigins(ctx, site.ProjectID, CorsOwner(site)); err != nil {
 		return fmt.Errorf("release the site's CORS origin: %w", err)
 	}
-	return s.store.Delete(ctx, site.ProjectID, site.ID)
+	return s.store.Delete(ctx, site.ProjectID, site.ID, lease.token)
 }
 
 // PurgeProjectSites removes every site of a project being deleted.
@@ -248,14 +253,21 @@ func (s *Service) mustGet(ctx context.Context, projectID, id string) (*Site, err
 	return site, nil
 }
 
-// claim takes the site's lease; release survives a caller that went away.
-func (s *Service) claim(ctx context.Context, site *Site) (func(), error) {
-	if err := s.store.ClaimDeploy(ctx, site.ProjectID, site.ID, s.now().Add(MaxDeployDuration)); err != nil {
+// siteLease is one held claim on a site; release survives a caller that went away.
+type siteLease struct {
+	token   string
+	release func()
+}
+
+// claim takes the site's lease under a fresh token, so only this holder can write under it.
+func (s *Service) claim(ctx context.Context, site *Site) (*siteLease, error) {
+	token := uuid.NewString()
+	if err := s.store.ClaimDeploy(ctx, site.ProjectID, site.ID, token, s.now().Add(MaxDeployDuration)); err != nil {
 		return nil, err
 	}
-	return func() {
-		if err := s.store.ReleaseDeploy(context.WithoutCancel(ctx), site.ProjectID, site.ID); err != nil {
+	return &siteLease{token: token, release: func() {
+		if err := s.store.ReleaseDeploy(context.WithoutCancel(ctx), site.ProjectID, site.ID, token); err != nil {
 			log.Printf("site %s: release deploy lease: %v", site.ID, err)
 		}
-	}, nil
+	}}, nil
 }

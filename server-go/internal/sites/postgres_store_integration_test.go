@@ -60,10 +60,10 @@ func TestPostgresSiteReadsAndWritesAreScopedByProject(t *testing.T) {
 	if _, err := store.UpdateSettings(ctx, "proj-scope-b", "scope-1", false); !errors.Is(err, sites.ErrSiteNotFound) {
 		t.Fatalf("err = %v, want not found", err)
 	}
-	if err := store.SetLive(ctx, "proj-scope-b", "scope-1", "d1"); !errors.Is(err, sites.ErrSiteNotFound) {
+	if err := store.SetLive(ctx, "proj-scope-b", "scope-1", "d1", "lease"); !errors.Is(err, sites.ErrSiteNotFound) {
 		t.Fatalf("err = %v, want not found", err)
 	}
-	if err := store.Delete(ctx, "proj-scope-b", "scope-1"); !errors.Is(err, sites.ErrSiteNotFound) {
+	if err := store.Delete(ctx, "proj-scope-b", "scope-1", "lease"); !errors.Is(err, sites.ErrSiteNotFound) {
 		t.Fatalf("err = %v, want not found", err)
 	}
 }
@@ -89,23 +89,64 @@ func TestPostgresSiteLease(t *testing.T) {
 	ctx := context.Background()
 	seedSite(t, store, newSite("lease-1", "proj-lease", "lease-shop"))
 	soon := func() time.Time { return time.Now().Add(time.Minute) }
-	if err := store.ClaimDeploy(ctx, "proj-lease", "lease-1", soon()); err != nil {
+	if err := store.ClaimDeploy(ctx, "proj-lease", "lease-1", "lease-a", soon()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	if err := store.ClaimDeploy(ctx, "proj-lease", "lease-1", soon()); !errors.Is(err, sites.ErrSiteBusy) {
+	if err := store.ClaimDeploy(ctx, "proj-lease", "lease-1", "lease-b", soon()); !errors.Is(err, sites.ErrSiteBusy) {
 		t.Fatalf("err = %v, want busy", err)
 	}
-	if err := store.ClaimDeploy(ctx, "proj-other", "lease-1", soon()); !errors.Is(err, sites.ErrSiteNotFound) {
+	if err := store.ClaimDeploy(ctx, "proj-other", "lease-1", "lease-b", soon()); !errors.Is(err, sites.ErrSiteNotFound) {
 		t.Fatalf("err = %v, want not found", err)
 	}
-	if err := store.ReleaseDeploy(ctx, "proj-lease", "lease-1"); err != nil {
+	if err := store.ReleaseDeploy(ctx, "proj-lease", "lease-1", "lease-b"); err != nil {
+		t.Fatalf("release by another holder: %v", err)
+	}
+	if err := store.ClaimDeploy(ctx, "proj-lease", "lease-1", "lease-b", soon()); !errors.Is(err, sites.ErrSiteBusy) {
+		t.Fatalf("another holder's release freed the lease: %v", err)
+	}
+	if err := store.ReleaseDeploy(ctx, "proj-lease", "lease-1", "lease-a"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if err := store.ClaimDeploy(ctx, "proj-lease", "lease-1", time.Now().Add(-time.Second)); err != nil {
+	if err := store.ClaimDeploy(ctx, "proj-lease", "lease-1", "lease-c", time.Now().Add(-time.Second)); err != nil {
 		t.Fatalf("claim after release: %v", err)
 	}
-	if err := store.ClaimDeploy(ctx, "proj-lease", "lease-1", soon()); err != nil {
+	if err := store.ClaimDeploy(ctx, "proj-lease", "lease-1", "lease-d", soon()); err != nil {
 		t.Fatalf("an expired lease must not hold the site: %v", err)
+	}
+}
+
+// A deploy whose lease expired and was taken over may not move the live pointer or delete the site.
+func TestPostgresSiteStaleLeaseCannotWrite(t *testing.T) {
+	store := sites.NewPostgresStore(platformDB(t).DB())
+	ctx := context.Background()
+	seedSite(t, store, newSite("stale-1", "proj-stale", "stale-shop"))
+	if err := store.ClaimDeploy(ctx, "proj-stale", "stale-1", "lease-old", time.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := store.ClaimDeploy(ctx, "proj-stale", "stale-1", "lease-new", time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("take over: %v", err)
+	}
+	deploy := &sites.Deploy{ID: "stale-d1", SiteID: "stale-1", ProjectID: "proj-stale", Status: sites.DeployPending,
+		Manifest: map[string]cfworkers.ManifestEntry{}, CreatedBy: "dev", CreatedAt: time.Now()}
+	if err := store.CreateDeploy(ctx, deploy); err != nil {
+		t.Fatalf("create deploy: %v", err)
+	}
+	finished := time.Now()
+	deploy.Status, deploy.FinishedAt = sites.DeploySucceeded, &finished
+	if err := store.FinishDeploy(ctx, deploy, "lease-old"); !errors.Is(err, sites.ErrLeaseLost) {
+		t.Fatalf("finish with a lost lease: %v", err)
+	}
+	if err := store.SetLive(ctx, "proj-stale", "stale-1", "stale-d1", "lease-old"); !errors.Is(err, sites.ErrLeaseLost) {
+		t.Fatalf("set live with a lost lease: %v", err)
+	}
+	if err := store.Delete(ctx, "proj-stale", "stale-1", "lease-old"); !errors.Is(err, sites.ErrLeaseLost) {
+		t.Fatalf("delete with a lost lease: %v", err)
+	}
+	if site, _ := store.Get(ctx, "proj-stale", "stale-1"); site == nil || site.LiveDeployID != "" {
+		t.Fatalf("site = %+v, want it kept and not live", site)
+	}
+	if err := store.FinishDeploy(ctx, deploy, "lease-new"); err != nil {
+		t.Fatalf("finish with the current lease: %v", err)
 	}
 }
 
@@ -152,13 +193,16 @@ func TestPostgresSiteDeleteRemovesTheHistory(t *testing.T) {
 	seedSite(t, store, newSite("delete-1", "proj-delete", "delete-shop"))
 	finishDeploy(t, store, &sites.Deploy{ID: "delete-d1", SiteID: "delete-1", ProjectID: "proj-delete",
 		Manifest: map[string]cfworkers.ManifestEntry{}, CreatedBy: "dev", CreatedAt: time.Now()}, sites.DeploySucceeded)
-	if err := store.Delete(ctx, "proj-delete", "delete-1"); err != nil {
+	if err := store.ClaimDeploy(ctx, "proj-delete", "delete-1", "lease-del", time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := store.Delete(ctx, "proj-delete", "delete-1", "lease-del"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if read, _ := store.GetDeploy(ctx, "proj-delete", "delete-1", "delete-d1"); read != nil {
 		t.Fatal("deploys outlived their site")
 	}
-	if err := store.ReleaseDeploy(ctx, "proj-delete", "delete-1"); err != nil {
+	if err := store.ReleaseDeploy(ctx, "proj-delete", "delete-1", "lease-del"); err != nil {
 		t.Fatalf("release of a deleted site: %v", err)
 	}
 }
@@ -174,8 +218,15 @@ func finishDeploy(t *testing.T, store *sites.PostgresStore, deploy *sites.Deploy
 	if status == sites.DeployFailed {
 		deploy.FailureReason = "cdn down"
 	}
-	if err := store.FinishDeploy(context.Background(), deploy); err != nil {
+	lease := "lease-" + deploy.ID
+	if err := store.ClaimDeploy(context.Background(), deploy.ProjectID, deploy.SiteID, lease, time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("claim for %s: %v", deploy.ID, err)
+	}
+	if err := store.FinishDeploy(context.Background(), deploy, lease); err != nil {
 		t.Fatalf("finish deploy %s: %v", deploy.ID, err)
+	}
+	if err := store.ReleaseDeploy(context.Background(), deploy.ProjectID, deploy.SiteID, lease); err != nil {
+		t.Fatalf("release for %s: %v", deploy.ID, err)
 	}
 }
 

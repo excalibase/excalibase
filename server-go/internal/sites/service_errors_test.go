@@ -106,7 +106,7 @@ func TestMissingSiteIsNotFound(t *testing.T) {
 func TestDeleteRefusesWhileADeployRuns(t *testing.T) {
 	h := newHarness(t)
 	site := h.createSite(t, "shop")
-	if err := h.store.ClaimDeploy(context.Background(), testProject, site.ID, time.Now().Add(time.Minute)); err != nil {
+	if err := h.store.ClaimDeploy(context.Background(), testProject, site.ID, "other-holder", time.Now().Add(time.Minute)); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	if err := h.service.Delete(context.Background(), testProject, site.ID); !errors.Is(err, sites.ErrSiteBusy) {
@@ -122,20 +122,6 @@ func TestPublishErrorsUnwrapToTheCause(t *testing.T) {
 	}
 	if (&sites.InputError{Reason: "bad name"}).Error() != "bad name" {
 		t.Fatal("an input error must read as its reason")
-	}
-}
-
-func TestALongFailureReasonIsCutToValidText(t *testing.T) {
-	h := newHarness(t)
-	h.publisher.FailPut = errors.New(strings.Repeat("é", 400))
-	site := h.createSite(t, "shop")
-	if _, err := h.deploy(t, site, viteDist(t)); err == nil {
-		t.Fatal("want the publish failure")
-	}
-	deploys, _ := h.service.ListDeploys(context.Background(), testProject, site.ID)
-	reason := deploys[0].FailureReason
-	if len(reason) > 500 || !strings.HasSuffix(reason, "é") {
-		t.Fatalf("reason has %d bytes, ends %q", len(reason), reason[len(reason)-3:])
 	}
 }
 

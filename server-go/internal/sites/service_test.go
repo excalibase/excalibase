@@ -192,7 +192,7 @@ func TestAnInvalidArchiveCreatesNoDeploy(t *testing.T) {
 func TestDeployRefusesWhileTheSiteIsBusy(t *testing.T) {
 	h := newHarness(t)
 	site := h.createSite(t, "shop")
-	if err := h.store.ClaimDeploy(context.Background(), testProject, site.ID, h.store.Now().Add(sites.MaxDeployDuration)); err != nil {
+	if err := h.store.ClaimDeploy(context.Background(), testProject, site.ID, "other-holder", h.store.Now().Add(sites.MaxDeployDuration)); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	if _, err := h.deploy(t, site, viteDist(t)); !errors.Is(err, sites.ErrSiteBusy) {

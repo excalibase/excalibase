@@ -32,7 +32,7 @@ func (s *PostgresStore) CreateDeploy(ctx context.Context, deploy *Deploy) error 
 }
 
 // FinishDeploy writes the outcome and, for a success, the live pointer in one transaction.
-func (s *PostgresStore) FinishDeploy(ctx context.Context, deploy *Deploy) error {
+func (s *PostgresStore) FinishDeploy(ctx context.Context, deploy *Deploy, lease string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin deploy finish: %w", err)
@@ -48,12 +48,29 @@ func (s *PostgresStore) FinishDeploy(ctx context.Context, deploy *Deploy) error 
 		return errors.Join(ErrDeployNotFound, err)
 	}
 	if deploy.Status == DeploySucceeded {
-		if _, err := tx.ExecContext(ctx, `UPDATE sites SET live_deploy_id = $3, updated_at = NOW() WHERE id = $1 AND project_id = $2`,
-			deploy.SiteID, deploy.ProjectID, deploy.ID); err != nil {
-			return fmt.Errorf("make deploy live: %w", err)
+		if err := makeLive(ctx, tx, deploy, lease); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// makeLive points the site at deploy only while lease still holds it.
+func makeLive(ctx context.Context, tx *sql.Tx, deploy *Deploy, lease string) error {
+	result, err := tx.ExecContext(ctx, `UPDATE sites SET live_deploy_id = $3, updated_at = NOW()
+		WHERE id = $1 AND project_id = $2 AND deploy_lease = $4 AND deploying_until > NOW()`,
+		deploy.SiteID, deploy.ProjectID, deploy.ID, lease)
+	if err != nil {
+		return fmt.Errorf("make deploy live: %w", err)
+	}
+	touched, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("make deploy live: %w", err)
+	}
+	if touched == 0 {
+		return ErrLeaseLost
+	}
+	return nil
 }
 
 func scanDeploy(row rowScanner) (*Deploy, error) {

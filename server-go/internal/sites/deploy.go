@@ -2,17 +2,15 @@ package sites
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 	"github.com/google/uuid"
 )
-
-const maxFailureReasonLength = 500
 
 // DeployRequest is one upload of build output to a site.
 type DeployRequest struct {
@@ -45,11 +43,11 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 		return nil, err
 	}
 	defer closeBundle(bundle, site)
-	release, err := s.claim(ctx, site)
+	lease, err := s.claim(ctx, site)
 	if err != nil {
 		return nil, err
 	}
-	defer release()
+	defer lease.release()
 	if err := s.ensureOrigin(ctx, site); err != nil {
 		return nil, err
 	}
@@ -57,8 +55,8 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 	if err := s.store.CreateDeploy(ctx, deploy); err != nil {
 		return nil, err
 	}
-	publishErr := s.publish(ctx, site, deploy.Manifest, bundleAssets(bundle), deploy.SPAFallback)
-	return s.finish(ctx, deploy, publishErr)
+	publishErr := s.publishInTime(ctx, site, deploy.Manifest, bundleAssets(bundle), deploy.SPAFallback)
+	return s.finish(ctx, deploy, lease, publishErr)
 }
 
 // Rollback publishes an earlier deploy's manifest again and makes it live.
@@ -77,19 +75,20 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 	if target.Status != DeploySucceeded {
 		return nil, ErrDeployNotServable
 	}
-	release, err := s.claim(ctx, site)
+	lease, err := s.claim(ctx, site)
 	if err != nil {
 		return nil, err
 	}
-	defer release()
+	defer lease.release()
 	// File bodies are not kept here, so files Cloudflare asks for again cannot be sent.
-	if err := s.publish(ctx, site, target.Manifest, nil, target.SPAFallback); err != nil {
+	if err := s.publishInTime(ctx, site, target.Manifest, nil, target.SPAFallback); err != nil {
 		return nil, err
 	}
-	if err := s.store.SetLive(ctx, projectID, siteID, deployID); err != nil {
+	// The CDN already switched; the record follows even if the caller has gone.
+	if err := s.store.SetLive(context.WithoutCancel(ctx), projectID, siteID, deployID, lease.token); err != nil {
 		return nil, err
 	}
-	return s.mustGet(ctx, projectID, siteID)
+	return s.mustGet(context.WithoutCancel(ctx), projectID, siteID)
 }
 
 func (s *Service) spoolDir() string {
@@ -125,22 +124,36 @@ func (s *Service) newDeploy(site *Site, bundle *Bundle, request DeployRequest) *
 	}
 }
 
-// finish records the outcome even when the caller has gone away.
-func (s *Service) finish(ctx context.Context, deploy *Deploy, publishErr error) (*Deploy, error) {
+// finish records the outcome even when the caller has gone away. A deploy
+// whose lease was taken over is recorded FAILED and never goes live.
+func (s *Service) finish(ctx context.Context, deploy *Deploy, lease *siteLease, publishErr error) (*Deploy, error) {
 	finishedAt := s.now().UTC()
 	deploy.FinishedAt = &finishedAt
 	deploy.Status = DeploySucceeded
 	if publishErr != nil {
 		deploy.Status = DeployFailed
-		deploy.FailureReason = truncate(publishErr.Error(), maxFailureReasonLength)
+		deploy.FailureReason = publishErr.Error()
 	}
-	if err := s.store.FinishDeploy(context.WithoutCancel(ctx), deploy); err != nil {
+	err := s.store.FinishDeploy(context.WithoutCancel(ctx), deploy, lease.token)
+	if errors.Is(err, ErrLeaseLost) {
+		deploy.Status, deploy.FailureReason, publishErr = DeployFailed, ErrLeaseLost.Error(), ErrLeaseLost
+		err = s.store.FinishDeploy(context.WithoutCancel(ctx), deploy, lease.token)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("record the deploy's outcome: %w", err)
 	}
 	if publishErr != nil {
 		return nil, publishErr
 	}
 	return deploy, nil
+}
+
+// publishInTime bounds every Cloudflare call by publishTimeout, inside the lease.
+func (s *Service) publishInTime(ctx context.Context, site *Site, manifest map[string]cfworkers.ManifestEntry,
+	assetsFor func([]string) ([]cfworkers.Asset, error), spaFallback bool) error {
+	publishCtx, cancel := context.WithTimeout(ctx, publishTimeout)
+	defer cancel()
+	return s.publish(publishCtx, site, manifest, assetsFor, spaFallback)
 }
 
 // publish runs Cloudflare's upload session, the bucket uploads and the
@@ -210,11 +223,4 @@ func bundleAssets(bundle *Bundle) func([]string) ([]cfworkers.Asset, error) {
 		}
 		return assets, nil
 	}
-}
-
-func truncate(text string, limit int) string {
-	if len(text) <= limit {
-		return text
-	}
-	return strings.ToValidUTF8(text[:limit], "")
 }

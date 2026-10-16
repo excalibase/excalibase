@@ -170,7 +170,7 @@ func writeSiteError(w http.ResponseWriter, err error) {
 		httpError(w, sites.ErrSitesUnavailable.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, sites.ErrSiteNotFound), errors.Is(err, sites.ErrDeployNotFound):
 		httpError(w, errNotFound, http.StatusNotFound)
-	case errors.Is(err, sites.ErrSiteNameTaken), errors.Is(err, sites.ErrSiteLimitReached), errors.Is(err, sites.ErrSiteBusy),
+	case errors.Is(err, sites.ErrSiteNameTaken), errors.Is(err, sites.ErrSiteLimitReached), errors.Is(err, sites.ErrSiteBusy), errors.Is(err, sites.ErrLeaseLost),
 		errors.Is(err, sites.ErrDeployNotServable), errors.Is(err, sites.ErrRollbackNeedsFiles):
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.As(err, &tooLarge):

@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS sites (
     -- Set once the site's origin was offered to the project's CORS list.
     cors_claimed    BOOLEAN NOT NULL DEFAULT FALSE,
     -- The lease one deploy, rollback or deletion holds; NULL or past is free.
+    -- deploy_lease is the holder's token, so a stale holder cannot write over the next one.
     deploying_until TIMESTAMPTZ,
+    deploy_lease    TEXT,
     created_by      TEXT NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),

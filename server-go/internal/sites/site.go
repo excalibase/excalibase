@@ -19,7 +19,9 @@ var (
 	ErrSiteNameTaken    = errors.New("that site name is already taken")
 	ErrSiteLimitReached = errors.New("the project already holds as many sites as it may")
 	ErrSiteBusy         = errors.New("another deploy or deletion of this site is running; try again when it finishes")
-	ErrDeployNotFound   = errors.New("deploy not found")
+	// ErrLeaseLost is a deploy or deletion that outlived its lease, so another one now owns the site.
+	ErrLeaseLost      = errors.New("the deploy took longer than allowed and another change now owns the site; deploy again")
+	ErrDeployNotFound = errors.New("deploy not found")
 	// ErrDeployNotServable is a rollback to a deploy that never went live.
 	ErrDeployNotServable = errors.New("only a deploy that succeeded can go live again")
 	// ErrRollbackNeedsFiles is Cloudflare asking for files again; their bodies are not kept here.

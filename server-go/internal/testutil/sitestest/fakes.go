@@ -17,13 +17,41 @@ import (
 type MemoryStore struct {
 	mu      sync.Mutex
 	Sites   map[string]sites.Site
-	Leases  map[string]time.Time
+	Leases  map[string]Lease
 	Deploys map[string]sites.Deploy
 	Now     func() time.Time
 }
 
+// Lease is who holds a site and until when.
+type Lease struct {
+	Token string
+	Until time.Time
+}
+
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{Sites: map[string]sites.Site{}, Leases: map[string]time.Time{}, Deploys: map[string]sites.Deploy{}, Now: time.Now}
+	return &MemoryStore{Sites: map[string]sites.Site{}, Leases: map[string]Lease{}, Deploys: map[string]sites.Deploy{}, Now: time.Now}
+}
+
+// ExpireLease ends a site's lease now, as a deploy outliving it would see.
+func (m *MemoryStore) ExpireLease(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lease := m.Leases[id]
+	lease.Until = m.Now().Add(-time.Second)
+	m.Leases[id] = lease
+}
+
+// LeaseHolder is the token holding the site, "" when none.
+func (m *MemoryStore) LeaseHolder(id string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.Leases[id].Token
+}
+
+// holds reports whether lease is the site's current, unexpired lease; mu must be held.
+func (m *MemoryStore) holds(id, lease string) bool {
+	held, ok := m.Leases[id]
+	return ok && held.Token == lease && held.Until.After(m.Now())
 }
 
 func (m *MemoryStore) Create(_ context.Context, site *sites.Site, maxSites int) error {
@@ -85,12 +113,15 @@ func (m *MemoryStore) edit(projectID, id string, change func(*sites.Site)) (*sit
 	return &site, nil
 }
 
-func (m *MemoryStore) Delete(_ context.Context, projectID, id string) error {
+func (m *MemoryStore) Delete(_ context.Context, projectID, id, lease string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	site, ok := m.Sites[id]
 	if !ok || site.ProjectID != projectID {
 		return sites.ErrSiteNotFound
+	}
+	if !m.holds(id, lease) {
+		return sites.ErrLeaseLost
 	}
 	delete(m.Sites, id)
 	for deployID, deploy := range m.Deploys {
@@ -101,24 +132,26 @@ func (m *MemoryStore) Delete(_ context.Context, projectID, id string) error {
 	return nil
 }
 
-func (m *MemoryStore) ClaimDeploy(_ context.Context, projectID, id string, until time.Time) error {
+func (m *MemoryStore) ClaimDeploy(_ context.Context, projectID, id, lease string, until time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	site, ok := m.Sites[id]
 	if !ok || site.ProjectID != projectID {
 		return sites.ErrSiteNotFound
 	}
-	if held, ok := m.Leases[id]; ok && held.After(m.Now()) {
+	if held, ok := m.Leases[id]; ok && held.Until.After(m.Now()) {
 		return sites.ErrSiteBusy
 	}
-	m.Leases[id] = until
+	m.Leases[id] = Lease{Token: lease, Until: until}
 	return nil
 }
 
-func (m *MemoryStore) ReleaseDeploy(_ context.Context, _, id string) error {
+func (m *MemoryStore) ReleaseDeploy(_ context.Context, _, id, lease string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.Leases, id)
+	if m.Leases[id].Token == lease {
+		delete(m.Leases, id)
+	}
 	return nil
 }
 
@@ -134,8 +167,16 @@ func (m *MemoryStore) CreateDeploy(_ context.Context, deploy *sites.Deploy) erro
 	return nil
 }
 
-func (m *MemoryStore) FinishDeploy(_ context.Context, deploy *sites.Deploy) error {
+// FinishDeploy honours a cancelled context as the database driver would.
+func (m *MemoryStore) FinishDeploy(ctx context.Context, deploy *sites.Deploy, lease string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
+	if deploy.Status == sites.DeploySucceeded && !m.holds(deploy.SiteID, lease) {
+		m.mu.Unlock()
+		return sites.ErrLeaseLost
+	}
 	m.Deploys[deploy.ID] = *deploy
 	m.mu.Unlock()
 	if deploy.Status != sites.DeploySucceeded {
@@ -145,7 +186,16 @@ func (m *MemoryStore) FinishDeploy(_ context.Context, deploy *sites.Deploy) erro
 	return err
 }
 
-func (m *MemoryStore) SetLive(_ context.Context, projectID, siteID, deployID string) error {
+func (m *MemoryStore) SetLive(ctx context.Context, projectID, siteID, deployID, lease string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	held := m.holds(siteID, lease)
+	m.mu.Unlock()
+	if !held {
+		return sites.ErrLeaseLost
+	}
 	_, err := m.edit(projectID, siteID, func(site *sites.Site) { site.LiveDeployID = deployID })
 	return err
 }
@@ -186,6 +236,8 @@ type Publisher struct {
 	Sessions  int
 	FailPut   error
 	Forget    bool
+	// BeforePut runs at the start of PutScript, with the context it was called with.
+	BeforePut func(ctx context.Context)
 }
 
 func NewPublisher() *Publisher {
@@ -235,7 +287,10 @@ func (f *Publisher) UploadBucket(_ context.Context, uploadJWT string, assets []c
 	return "completion-from-upload", nil
 }
 
-func (f *Publisher) PutScript(_ context.Context, script, completionJWT string, config cfworkers.AssetConfig) error {
+func (f *Publisher) PutScript(ctx context.Context, script, completionJWT string, config cfworkers.AssetConfig) error {
+	if f.BeforePut != nil {
+		f.BeforePut(ctx)
+	}
 	if f.FailPut != nil {
 		return f.FailPut
 	}

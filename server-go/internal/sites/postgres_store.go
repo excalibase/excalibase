@@ -103,13 +103,14 @@ func (s *PostgresStore) UpdateSettings(ctx context.Context, projectID, id string
 	return site, nil
 }
 
-func (s *PostgresStore) Delete(ctx context.Context, projectID, id string) error {
-	return s.execOne(ctx, "delete site", `DELETE FROM sites WHERE project_id = $1 AND id = $2`, projectID, id)
+func (s *PostgresStore) Delete(ctx context.Context, projectID, id, lease string) error {
+	return s.execUnderLease(ctx, "delete site", projectID, id, `DELETE FROM sites
+		WHERE project_id = $1 AND id = $2 AND deploy_lease = $3 AND deploying_until > NOW()`, projectID, id, lease)
 }
 
-func (s *PostgresStore) ClaimDeploy(ctx context.Context, projectID, id string, until time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE sites SET deploying_until = $3
-		WHERE project_id = $1 AND id = $2 AND (deploying_until IS NULL OR deploying_until < NOW())`, projectID, id, until)
+func (s *PostgresStore) ClaimDeploy(ctx context.Context, projectID, id, lease string, until time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE sites SET deploying_until = $3, deploy_lease = $4
+		WHERE project_id = $1 AND id = $2 AND (deploying_until IS NULL OR deploying_until < NOW())`, projectID, id, until, lease)
 	if err != nil {
 		return fmt.Errorf("claim site deploy: %w", err)
 	}
@@ -126,8 +127,9 @@ func (s *PostgresStore) ClaimDeploy(ctx context.Context, projectID, id string, u
 	return ErrSiteBusy
 }
 
-func (s *PostgresStore) ReleaseDeploy(ctx context.Context, projectID, id string) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE sites SET deploying_until = NULL WHERE project_id = $1 AND id = $2`, projectID, id); err != nil {
+func (s *PostgresStore) ReleaseDeploy(ctx context.Context, projectID, id, lease string) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE sites SET deploying_until = NULL, deploy_lease = NULL
+		WHERE project_id = $1 AND id = $2 AND deploy_lease = $3`, projectID, id, lease); err != nil {
 		return fmt.Errorf("release site deploy: %w", err)
 	}
 	return nil
@@ -137,9 +139,25 @@ func (s *PostgresStore) MarkCorsClaimed(ctx context.Context, projectID, id strin
 	return s.execOne(ctx, "mark site origin", `UPDATE sites SET cors_claimed = TRUE WHERE project_id = $1 AND id = $2`, projectID, id)
 }
 
-func (s *PostgresStore) SetLive(ctx context.Context, projectID, siteID, deployID string) error {
-	return s.execOne(ctx, "set live deploy", `UPDATE sites SET live_deploy_id = $3, updated_at = NOW()
-		WHERE project_id = $1 AND id = $2`, projectID, siteID, deployID)
+func (s *PostgresStore) SetLive(ctx context.Context, projectID, siteID, deployID, lease string) error {
+	return s.execUnderLease(ctx, "set live deploy", projectID, siteID, `UPDATE sites SET live_deploy_id = $4, updated_at = NOW()
+		WHERE project_id = $1 AND id = $2 AND deploy_lease = $3 AND deploying_until > NOW()`, projectID, siteID, lease, deployID)
+}
+
+// execUnderLease runs a write guarded by the lease, telling a lost lease from a missing site.
+func (s *PostgresStore) execUnderLease(ctx context.Context, what, projectID, siteID, query string, args ...any) error {
+	err := s.execOne(ctx, what, query, args...)
+	if !errors.Is(err, ErrSiteNotFound) {
+		return err
+	}
+	site, getErr := s.Get(ctx, projectID, siteID)
+	if getErr != nil {
+		return getErr
+	}
+	if site != nil {
+		return ErrLeaseLost
+	}
+	return ErrSiteNotFound
 }
 
 // execOne runs a write that must touch exactly the named site.
