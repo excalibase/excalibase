@@ -307,6 +307,15 @@ services:
       # unseal`, and the key is never on this host. Unset keeps a key file in
       # provisioning's volume and unseals by itself.
       VAULT_UNSEAL_PROVIDER: ${VAULT_UNSEAL_PROVIDER:-}
+      # Sites (EXC-353): a project's built frontend, served by Cloudflare Workers
+      # for Platforms. Off unless .env says "true" and names every setting below;
+      # SITES_BASE_DOMAIN must not be APP_DOMAIN or share a subtree with it.
+      SITES_ENABLED: ${SITES_ENABLED:-false}
+      SITES_CLOUDFLARE_ACCOUNT_ID: ${SITES_CLOUDFLARE_ACCOUNT_ID:-}
+      SITES_CLOUDFLARE_API_TOKEN: ${SITES_CLOUDFLARE_API_TOKEN:-}
+      SITES_DISPATCH_NAMESPACE: ${SITES_DISPATCH_NAMESPACE:-}
+      SITES_HOSTS_KV_NAMESPACE_ID: ${SITES_HOSTS_KV_NAMESPACE_ID:-}
+      SITES_BASE_DOMAIN: ${SITES_BASE_DOMAIN:-}
       # DocumentDB projects (EXC-576): off unless .env says "true" (init.sh --documentdb).
       DOCUMENTDB_ENABLED: ${DOCUMENTDB_ENABLED:-false}
       # Apps (EXC-575, ADR 0039): off unless .env says "true" (init.sh --apps).

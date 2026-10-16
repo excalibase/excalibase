@@ -57,3 +57,10 @@ for want in 'EMAIL_PROVIDER: smtp' 'SMTP_HOST: mail.example.test' 'SMTP_PORT: "2
   'SES_ACCESS_KEY_ID: ses-id' 'SES_SECRET_ACCESS_KEY: ses-secret' 'SES_REGION: eu-west-1'; do
   printf '%s\n' "$out" | grep -qF "$want" || { echo "email setting does not reach provisioning: $want" >&2; exit 1; }
 done
+# Sites (EXC-353): every Cloudflare setting in .env reaches provisioning.
+out=$(render SITES_ENABLED=true SITES_CLOUDFLARE_ACCOUNT_ID=acct-9f3e SITES_CLOUDFLARE_API_TOKEN=cf-token \
+  SITES_DISPATCH_NAMESPACE=excalibase-sites SITES_HOSTS_KV_NAMESPACE_ID=kv-7c21 SITES_BASE_DOMAIN=example.site)
+for want in 'SITES_ENABLED: "true"' 'SITES_CLOUDFLARE_ACCOUNT_ID: acct-9f3e' 'SITES_CLOUDFLARE_API_TOKEN: cf-token' \
+  'SITES_DISPATCH_NAMESPACE: excalibase-sites' 'SITES_HOSTS_KV_NAMESPACE_ID: kv-7c21' 'SITES_BASE_DOMAIN: example.site'; do
+  printf '%s\n' "$out" | grep -qF "$want" || { echo "sites setting does not reach provisioning: $want" >&2; exit 1; }
+done
