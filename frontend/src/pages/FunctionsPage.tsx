@@ -7,6 +7,8 @@ import { useProjectRole } from '../hooks/useProjectRole';
 import { FunctionApiAccess } from '../components/permissions/FunctionApiAccess';
 import { SidePanel } from '../components/ui/SidePanel';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
+import { useInstance } from '../hooks/useProvisioning';
+import { isMySQLProject } from '../utils/engine';
 
 function getVolatilityClass(volatility: string): string {
   if (volatility === 'IMMUTABLE') return 'bg-green-500/10 text-green-400';
@@ -15,6 +17,30 @@ function getVolatilityClass(volatility: string): string {
 }
 
 export function FunctionsPage() {
+  const { projectId = '' } = useParams<{ projectId: string }>();
+  const { data: project, isLoading } = useInstance(projectId);
+  if (isLoading) {
+    return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
+  }
+  return isMySQLProject(project) ? <MySQLFunctionsNotice /> : <PostgresFunctionsPage />;
+}
+
+// ADR 0036/0041: a tracked function is served with the select permission of
+// the rows it returns, and a MySQL function returns one scalar.
+function MySQLFunctionsNotice() {
+  return (
+    <div data-testid="mysql-functions-notice" className="max-w-xl mx-auto py-16 text-center space-y-3">
+      <FunctionSquare className="w-10 h-10 mx-auto text-text-tertiary" />
+      <h3 className="text-lg font-semibold text-text-primary">Tracked functions are not offered on MySQL</h3>
+      <p className="text-sm text-text-secondary">
+        MySQL functions return scalars, and API permissions apply to rows, so a MySQL function cannot be served
+        through the API. Create and call functions in the SQL editor, or serve the data through a table or view.
+      </p>
+    </div>
+  );
+}
+
+function PostgresFunctionsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const { data: functions = [], isLoading } = useFunctions(projectId || '');
   const createFn = useCreateFunction(projectId || '');

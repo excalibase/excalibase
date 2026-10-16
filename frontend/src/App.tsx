@@ -114,7 +114,8 @@ export default function App() {
             <Route path="database/add" element={<AddDatabasePage />} />
             {/* Pages that work on the project's database: a project created
                 without one gets a notice instead (EXC-426). */}
-            <Route element={<DatabaseRequired />}>
+            {/* Engine-aware pages: they work on MySQL projects too (ADR 0041). */}
+            <Route element={<DatabaseRequired mysql />}>
               {/* Pages that connect to the database: only an ACTIVE project's
                   is served, so other states say why (EXC-555). */}
               <Route element={<DatabaseRunning />}>
@@ -123,11 +124,15 @@ export default function App() {
                 <Route path="database/tables" element={<TablesPage />} />
                 <Route path="database/tables/:schema/:table/permissions" element={<TablePermissionsPage />} />
                 <Route path="database/functions" element={<FunctionsPage />} />
+                <Route path="database/indexes" element={<IndexesPage />} />
+              </Route>
+            </Route>
+            <Route element={<DatabaseRequired />}>
+              <Route element={<DatabaseRunning />}>
                 <Route path="database/extensions" element={<ExtensionsPage />} />
                 <Route path="database/roles" element={<RolesPage />} />
                 <Route path="database/rls" element={<RlsPage />} />
                 <Route path="database/triggers" element={<TriggersPage />} />
-                <Route path="database/indexes" element={<IndexesPage />} />
                 <Route path="database/types" element={<TypesPage />} />
                 <Route path="database/advisors" element={<AdvisorsPage />} />
                 <Route path="database/documents" element={<DocumentsPage />} />

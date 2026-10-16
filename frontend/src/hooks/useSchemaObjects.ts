@@ -233,8 +233,10 @@ export function useCreateIndex(projectId: string) {
 export function useDropIndex(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ name, schema }: { name: string; schema?: string }) => {
-      await api.delete(`/schema/${projectId}/indexes/${name}`, { params: { schema: schema || 'public' } });
+    // A MySQL index is named per table, so the table is sent when known.
+    mutationFn: async ({ name, schema, table }: { name: string; schema?: string; table?: string }) => {
+      const params = { schema: schema || 'public', ...(table ? { table } : {}) };
+      await api.delete(`/schema/${projectId}/indexes/${name}`, { params });
     },
     onSuccess: () => { toast.success('Index dropped'); qc.invalidateQueries({ queryKey: ['schema-indexes', projectId] }); },
     onError: onMutationError('drop index'),

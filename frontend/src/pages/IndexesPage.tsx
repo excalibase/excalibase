@@ -4,6 +4,9 @@ import { Plus, Trash2, Loader2, List } from 'lucide-react';
 import { useTables, useIndexes, useCreateIndex, useDropIndex, useColumns } from '../hooks/useSchema';
 import { SidePanel } from '../components/ui/SidePanel';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
+import { useInstance } from '../hooks/useProvisioning';
+import { isMySQLProject } from '../utils/engine';
+import { indexTypesFor } from '../utils/engineSql';
 
 interface IndexForm {
   name: string;
@@ -13,11 +16,10 @@ interface IndexForm {
   type: string;
 }
 
-const INDEX_TYPES = ['btree', 'hash', 'gin', 'gist', 'brin'];
-
 export function IndexesPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const { data: tables = [] } = useTables(projectId ?? '');
+  const { data: project } = useInstance(projectId ?? '');
 
   const [selectedTable, setSelectedTable] = useState('');
   const { data: indexes = [], isLoading } = useIndexes(projectId ?? '', selectedTable);
@@ -63,7 +65,7 @@ export function IndexesPage() {
   const handleDrop = () => {
     if (!dropTarget || dropInFlight.current) return;
     dropInFlight.current = true;
-    dropIndex.mutate({ name: dropTarget }, {
+    dropIndex.mutate({ name: dropTarget, table: selectedTable }, {
       onSuccess: () => setDropTarget(null),
       onSettled: () => { dropInFlight.current = false; },
     });
@@ -138,6 +140,7 @@ export function IndexesPage() {
                     <td className="px-4 py-3 text-right">
                       <button
                         onClick={() => setDropTarget(idx.name)}
+                        aria-label={`Drop index ${idx.name}`}
                         className="p-1 text-text-tertiary hover:text-red-400 transition-colors"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -206,7 +209,7 @@ export function IndexesPage() {
             <label htmlFor="index-type-select" className="block text-sm font-medium text-text-secondary mb-1">Type</label>
             <select id="index-type-select" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
-              {INDEX_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              {indexTypesFor(isMySQLProject(project)).map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
         </div>
