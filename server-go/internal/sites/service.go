@@ -49,9 +49,6 @@ type DeployLimiter interface {
 	DeployLimits(ctx context.Context, projectID string) (Limits, error)
 }
 
-// tarFramingBytes covers tar headers and padding on top of the files themselves.
-const tarFramingBytes = 1024
-
 func (s *Service) limitsFor(ctx context.Context, projectID string) (Limits, error) {
 	if s.options.DeployLimits == nil {
 		return DefaultLimits, nil
@@ -69,7 +66,7 @@ func (s *Service) MaxUploadBytes(ctx context.Context, projectID string) (int64, 
 	if err != nil {
 		return 0, err
 	}
-	return limits.MaxTotalBytes + int64(2*limits.MaxFiles+2)*tarFramingBytes, nil
+	return MaxArchiveBytes(limits), nil
 }
 
 // PublishError is Cloudflare refusing or failing a deploy step.

@@ -5,11 +5,14 @@ import (
 	"bufio"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,6 +36,38 @@ var DefaultLimits = Limits{
 }
 
 const maxPathLength = 1024
+
+// tarFramingBytes covers tar headers and padding on top of the files themselves.
+const tarFramingBytes = 1024
+
+// MaxArchiveBytes bounds the archive as read, compressed or not: the files plus framing for every entry.
+func MaxArchiveBytes(limits Limits) int64 {
+	return limits.MaxTotalBytes + int64(2*limits.MaxFiles+2)*tarFramingBytes
+}
+
+var errArchiveInflated = errors.New("archive larger than its limit once decompressed")
+
+// cappedReader fails once more than limit bytes have been read through it.
+type cappedReader struct {
+	source io.Reader
+	limit  int64
+	read   int64
+}
+
+func (c *cappedReader) Read(buffer []byte) (int, error) {
+	if c.read > c.limit {
+		return 0, errArchiveInflated
+	}
+	if remaining := c.limit + 1 - c.read; int64(len(buffer)) > remaining {
+		buffer = buffer[:remaining]
+	}
+	count, err := c.source.Read(buffer)
+	c.read += int64(count)
+	if c.read > c.limit {
+		return count, errArchiveInflated
+	}
+	return count, err
+}
 
 // ArchiveError is a refusal of the uploaded archive, worded for the person who built it.
 type ArchiveError struct {
@@ -111,12 +146,16 @@ func (b *Bundle) fill(body io.Reader, limits Limits) error {
 	if err != nil {
 		return err
 	}
-	reader := tar.NewReader(stream)
+	// Pax and GNU long-name headers never surface as entries, so the inflated stream itself is capped.
+	reader := tar.NewReader(&cappedReader{source: stream, limit: MaxArchiveBytes(limits)})
 	seen := map[string]bool{}
 	for entries := 1; ; entries++ {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
 			break
+		}
+		if errors.Is(err, errArchiveInflated) {
+			return refuseSize("the archive is larger than %d bytes once decompressed", MaxArchiveBytes(limits))
 		}
 		if err != nil {
 			return refuseRead(err, "the upload is not a readable tar or tar.gz archive: %v", err)
@@ -225,8 +264,8 @@ func cleanPath(name string, isDir bool) (string, error) {
 	return "/" + trimmed, nil
 }
 
-// spoolFile copies one file to disk while hashing it. Cloudflare takes any 32
-// hex characters; the content's SHA-256 keeps the hash stable across deploys.
+// spoolFile copies one file to disk while hashing it as Wrangler does:
+// SHA-256 of base64(content) + extension, first 32 hex characters.
 func (b *Bundle) spoolFile(reader io.Reader, sitePath string, declared int64) error {
 	spool := strconv.Itoa(len(b.Files))
 	out, err := os.OpenFile(filepath.Join(b.dir, spool), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -234,8 +273,12 @@ func (b *Bundle) spoolFile(reader io.Reader, sitePath string, declared int64) er
 		return fmt.Errorf("spool %s: %w", sitePath, err)
 	}
 	hasher := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(out, hasher), io.LimitReader(reader, declared))
+	encoder := base64.NewEncoder(base64.StdEncoding, hasher)
+	written, copyErr := io.Copy(io.MultiWriter(out, encoder), io.LimitReader(reader, declared))
 	closeErr := out.Close()
+	if errors.Is(copyErr, errArchiveInflated) {
+		return refuseSize("the archive is larger than its limit once decompressed")
+	}
 	if copyErr != nil {
 		return refuseRead(copyErr, "could not read %s from the archive: %v", sitePath, copyErr)
 	}
@@ -247,11 +290,19 @@ func (b *Bundle) spoolFile(reader io.Reader, sitePath string, declared int64) er
 	}
 	b.Files = append(b.Files, BundleFile{
 		Path:        sitePath,
-		Hash:        hex.EncodeToString(hasher.Sum(nil))[:32],
+		Hash:        assetHash(encoder, hasher, sitePath),
 		Size:        written,
 		ContentType: contentTypeFor(sitePath),
 		spool:       spool,
 	})
 	b.TotalBytes += written
 	return nil
+}
+
+// assetHash finishes the base64 stream into the hash, then adds the extension.
+func assetHash(encoder io.Closer, hasher hash.Hash, sitePath string) string {
+	// Closing a base64 encoder over a hash only flushes padding, which cannot fail.
+	_ = encoder.Close()
+	hasher.Write([]byte(strings.TrimPrefix(path.Ext(sitePath), ".")))
+	return hex.EncodeToString(hasher.Sum(nil))[:32]
 }

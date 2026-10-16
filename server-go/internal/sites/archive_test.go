@@ -4,10 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -74,17 +77,72 @@ func TestReadArchiveAcceptsAPlainTar(t *testing.T) {
 }
 
 // Cloudflare takes any 32 hex characters; the content's SHA-256 keeps a hash stable across deploys.
-func TestReadArchiveHashesTheContent(t *testing.T) {
+// Wrangler's rule: SHA-256 of base64(content) + extension, so equal bytes under two types stay two assets.
+func TestReadArchiveHashesTheContentWithItsExtension(t *testing.T) {
 	content := "body{margin:0}"
 	bundle, err := readTestArchive(t, sitestest.Tar(t, sitestest.File("index.html", "x"), sitestest.File("style.css", content)), sites.DefaultLimits)
 	if err != nil {
 		t.Fatalf("sites.ReadArchive: %v", err)
 	}
-	sum := sha256.Sum256([]byte(content))
+	sum := sha256.Sum256([]byte(base64.StdEncoding.EncodeToString([]byte(content)) + "css"))
 	want := hex.EncodeToString(sum[:])[:32]
 	if got := bundle.Manifest()["/style.css"].Hash; got != want {
 		t.Fatalf("hash = %q, want %q", got, want)
 	}
+}
+
+func TestReadArchiveKeepsEqualBytesUnderTwoTypesApart(t *testing.T) {
+	bundle, err := readTestArchive(t, sitestest.Tar(t, sitestest.File("index.html", "x"),
+		sitestest.File("data.json", "{}"), sitestest.File("data.txt", "{}")), sites.DefaultLimits)
+	if err != nil {
+		t.Fatalf("sites.ReadArchive: %v", err)
+	}
+	manifest := bundle.Manifest()
+	if manifest["/data.json"].Hash == manifest["/data.txt"].Hash {
+		t.Fatal("equal bytes with different extensions share one hash, so one content type")
+	}
+}
+
+// Go's tar reader folds pax and GNU long-name headers into the next entry, up
+// to 1 MiB each, so they never show as files: the inflated stream itself is capped.
+func TestReadArchiveRefusesChainedPaxHeaders(t *testing.T) {
+	var raw bytes.Buffer
+	for range 8 {
+		raw.Write(paxHeader(t, map[string]string{"comment": strings.Repeat("A", 64*1024)}))
+	}
+	raw.Write(sitestest.Tar(t, sitestest.File("index.html", "x")))
+	limits := sites.Limits{MaxFiles: 2, MaxFileBytes: 1 << 10, MaxTotalBytes: 1 << 10}
+	_, err := readTestArchive(t, sitestest.Gzip(t, raw.Bytes()), limits)
+	var archiveErr *sites.ArchiveError
+	if !errors.As(err, &archiveErr) || !archiveErr.TooLarge {
+		t.Fatalf("err = %v, want a too-large refusal", err)
+	}
+}
+
+// paxHeader is one raw 'x' header block and its records, as a tar writer
+// would not emit it on its own.
+func paxHeader(t *testing.T, records map[string]string) []byte {
+	t.Helper()
+	var body strings.Builder
+	for key, value := range records {
+		line := " " + key + "=" + value + "\n"
+		// A record's length counts its own digits.
+		size := len(line) + 1
+		for size != len(line)+len(strconv.Itoa(size)) {
+			size = len(line) + len(strconv.Itoa(size))
+		}
+		body.WriteString(strconv.Itoa(size) + line)
+	}
+	block := sitestest.Tar(t, sitestest.Entry{Header: tar.Header{Name: "PaxHeaders/x", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(body.Len())}, Body: body.String()})
+	block = block[:len(block)-1024] // drop the end-of-archive blocks
+	block[156] = tar.TypeXHeader
+	copy(block[148:156], []byte("        "))
+	sum := 0
+	for _, value := range block[:512] {
+		sum += int(value)
+	}
+	copy(block[148:156], []byte(fmt.Sprintf("%06o\x00 ", sum)))
+	return block
 }
 
 func TestReadArchiveKeepsContentAndType(t *testing.T) {
