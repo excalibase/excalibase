@@ -17,6 +17,23 @@ import { SitesGate, SitesHeader } from '../components/sites/SiteBits';
 import { SiteDeployHistory } from '../components/sites/SiteDeployHistory';
 import { SiteUpload } from '../components/sites/SiteUpload';
 import { SiteCiSnippet } from '../components/sites/SiteCiSnippet';
+import { useProjectRole } from '../hooks/useProjectRole';
+
+// What a caller who may not change the site sees of its routing.
+function RoutingState({ site }: { readonly site: Site }) {
+  return (
+    <section className="bg-surface-card border border-border-primary rounded-lg p-4 space-y-2">
+      <p className="text-sm text-text-primary" data-testid="site-spa-state">
+        Single-page app fallback is {site.spaFallback ? 'on' : 'off'}
+      </p>
+      <p className="text-xs text-text-tertiary">
+        {site.spaFallback
+          ? 'Unknown paths load index.html.'
+          : 'Unknown paths answer with the nearest 404.html.'}
+      </p>
+    </section>
+  );
+}
 
 function Routing({ projectId, site }: { readonly projectId: string; readonly site: Site }) {
   const update = useSetSpaFallback(projectId, site.id);
@@ -98,6 +115,7 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
   const { data: deploys = [] } = useSiteDeploys(projectId, siteId);
   const deploy = useDeploySite(projectId, siteId);
   const rollback = useRollbackSite(projectId, siteId);
+  const { canDevelop } = useProjectRole(projectId);
 
   if (error) {
     return (
@@ -121,7 +139,7 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
                 : { label: 'Not deployed', tone: 'neutral' })}
               testId="site-status"
             />
-            <DeleteSite projectId={projectId} site={site} />
+            {canDevelop && <DeleteSite projectId={projectId} site={site} />}
           </>
         }
       />
@@ -137,16 +155,22 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
         </a>
       </p>
       <div className="grid gap-6 lg:grid-cols-2 mb-6">
-        <section className="space-y-2">
-          <h4 className="text-sm font-semibold text-text-primary">Deploy</h4>
-          <SiteUpload
-            deploying={deploy.isPending}
-            onDeploy={(archive) => deploy.mutateAsync(archive)}
-          />
-        </section>
+        {canDevelop && (
+          <section className="space-y-2">
+            <h4 className="text-sm font-semibold text-text-primary">Deploy</h4>
+            <SiteUpload
+              deploying={deploy.isPending}
+              onDeploy={(archive) => deploy.mutateAsync(archive)}
+            />
+          </section>
+        )}
         <section className="space-y-2">
           <h4 className="text-sm font-semibold text-text-primary">Routing</h4>
-          <Routing projectId={projectId} site={site} />
+          {canDevelop ? (
+            <Routing projectId={projectId} site={site} />
+          ) : (
+            <RoutingState site={site} />
+          )}
         </section>
       </div>
       <section className="space-y-2 mb-6">
@@ -167,7 +191,7 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
           <SiteDeployHistory
             deploys={deploys}
             rollingBack={rollback.isPending}
-            onRollback={(id) => rollback.mutate(id)}
+            onRollback={canDevelop ? (id) => rollback.mutate(id) : undefined}
           />
         </div>
       </section>

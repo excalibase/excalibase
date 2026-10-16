@@ -1,3 +1,4 @@
+import { useAuthStore } from '../stores/auth-store';
 import type { Site, SiteDeploy } from '../api/sites';
 
 // Shared shapes for the Sites tests, as the server presents them.
@@ -29,3 +30,17 @@ export const siteDeployFixture = (overrides: Partial<SiteDeploy> = {}): SiteDepl
   live: false,
   ...overrides,
 });
+
+// The project proj-1 sits in org o1, where the signed-in member is a developer.
+export const developerRole = (url: string): Promise<never> | undefined => {
+  if (url === '/provision/proj-1')
+    return Promise.resolve({ data: { projectId: 'proj-1', orgId: 'o1' } } as never);
+  if (url === '/orgs')
+    return Promise.resolve({
+      data: [{ id: 'o1', name: 'O', slug: 'o', role: 'developer' }],
+    } as never);
+  return undefined;
+};
+
+export const signInAsMember = () =>
+  useAuthStore.getState().setAuth({ id: 'u1', username: 'dev', email: 'd@x.test', role: 'user' });

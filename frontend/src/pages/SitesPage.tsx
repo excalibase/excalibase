@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react';
 import { apiErrorMessage } from '../api/apps';
 import { useSites, type Site } from '../api/sites';
 import { useSitesEnabled } from '../hooks/useDeploymentMode';
+import { useProjectRole } from '../hooks/useProjectRole';
 import { Spinner, ToneBadge, primaryButton } from '../components/containers/ContainerBits';
 import { SitesGate, SitesHeader } from '../components/sites/SiteBits';
 
@@ -38,7 +39,13 @@ function SiteRow({ projectId, site }: { readonly projectId: string; readonly sit
   );
 }
 
-function EmptyState({ projectId }: { readonly projectId: string }) {
+function EmptyState({
+  projectId,
+  canDevelop,
+}: {
+  readonly projectId: string;
+  readonly canDevelop: boolean;
+}) {
   return (
     <div
       className="bg-surface-card border border-border-primary rounded-lg p-8 text-center"
@@ -49,16 +56,24 @@ function EmptyState({ projectId }: { readonly projectId: string }) {
         A site serves your frontend&apos;s build output (Vite, Astro, a static Next export, plain
         HTML) from a global CDN. For a server-rendered app, use a container instead.
       </p>
-      <div className="mt-5 flex justify-center">
-        <Link to={`/project/${projectId}/sites/new`} className={primaryButton}>
-          <Plus className="w-4 h-4" /> New site
-        </Link>
-      </div>
+      {canDevelop && (
+        <div className="mt-5 flex justify-center">
+          <Link to={`/project/${projectId}/sites/new`} className={primaryButton}>
+            <Plus className="w-4 h-4" /> New site
+          </Link>
+        </div>
+      )}
     </div>
   );
 }
 
-function SitesList({ projectId }: { readonly projectId: string }) {
+function SitesList({
+  projectId,
+  canDevelop,
+}: {
+  readonly projectId: string;
+  readonly canDevelop: boolean;
+}) {
   const { data: sites, error } = useSites(projectId);
   if (error) {
     return (
@@ -68,7 +83,7 @@ function SitesList({ projectId }: { readonly projectId: string }) {
     );
   }
   if (!sites) return <Spinner />;
-  if (sites.length === 0) return <EmptyState projectId={projectId} />;
+  if (sites.length === 0) return <EmptyState projectId={projectId} canDevelop={canDevelop} />;
   return (
     <div className="space-y-2" data-testid="sites-list">
       {sites.map((site) => (
@@ -81,13 +96,15 @@ function SitesList({ projectId }: { readonly projectId: string }) {
 export function SitesPage() {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { enabled } = useSitesEnabled();
+  const { canDevelop } = useProjectRole(projectId);
   return (
     <div data-testid="sites-page">
       <SitesHeader
         title="Sites"
         subtitle="Your frontend's build output, served from a global CDN."
         actions={
-          enabled && (
+          enabled &&
+          canDevelop && (
             <Link
               to={`/project/${projectId}/sites/new`}
               className={primaryButton}
@@ -99,7 +116,7 @@ export function SitesPage() {
         }
       />
       <SitesGate projectId={projectId}>
-        <SitesList projectId={projectId} />
+        <SitesList projectId={projectId} canDevelop={canDevelop} />
       </SitesGate>
     </div>
   );

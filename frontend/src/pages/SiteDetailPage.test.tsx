@@ -6,7 +6,12 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { SiteDetailPage } from './SiteDetailPage';
 import { api } from '../api/client';
 import type { Site, SiteDeploy } from '../api/sites';
-import { siteDeployFixture, siteFixture } from '../test/siteFixtures';
+import {
+  developerRole,
+  signInAsMember,
+  siteDeployFixture,
+  siteFixture,
+} from '../test/siteFixtures';
 
 vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -38,6 +43,8 @@ function renderPage({
     if (url === '/projects/proj-1/sites/site-1/deploys')
       return Promise.resolve({ data: deploys } as never);
     if (url === '/projects/proj-1/sites/') return Promise.resolve({ data: [] } as never);
+    const role = developerRole(url);
+    if (role) return role;
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -58,6 +65,7 @@ function renderPage({
 
 describe('SiteDetailPage', () => {
   beforeEach(() => {
+    signInAsMember();
     vi.mocked(api.get).mockReset();
     vi.mocked(api.post).mockReset();
     vi.mocked(api.patch).mockReset();

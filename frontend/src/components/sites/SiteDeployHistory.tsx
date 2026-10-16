@@ -9,7 +9,8 @@ import { deployStatus } from './SiteBits';
 interface HistoryProps {
   readonly deploys: SiteDeploy[];
   readonly rollingBack: boolean;
-  readonly onRollback: (deployId: string) => void;
+  // Absent for a caller who may not change the site: no rollback is offered.
+  readonly onRollback?: (deployId: string) => void;
 }
 
 const fileCount = (count: number) => `${count} ${count === 1 ? 'file' : 'files'}`;
@@ -58,6 +59,7 @@ function DeployRow({
   deploy,
   confirming,
   rollingBack,
+  mayRollBack,
   onAsk,
   onCancel,
   onConfirm,
@@ -65,12 +67,13 @@ function DeployRow({
   readonly deploy: SiteDeploy;
   readonly confirming: boolean;
   readonly rollingBack: boolean;
+  readonly mayRollBack: boolean;
   readonly onAsk: () => void;
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }) {
   const status = deployStatus(deploy);
-  const canRollBack = deploy.status === 'SUCCEEDED' && !deploy.live;
+  const canRollBack = mayRollBack && deploy.status === 'SUCCEEDED' && !deploy.live;
   return (
     <li
       className="px-4 py-3 border-b border-border-primary last:border-b-0"
@@ -134,11 +137,12 @@ export function SiteDeployHistory({ deploys, rollingBack, onRollback }: HistoryP
           deploy={deploy}
           confirming={confirmingId === deploy.id}
           rollingBack={rollingBack}
+          mayRollBack={onRollback !== undefined}
           onAsk={() => setConfirmingId(deploy.id)}
           onCancel={() => setConfirmingId(null)}
           onConfirm={() => {
             setConfirmingId(null);
-            onRollback(deploy.id);
+            onRollback?.(deploy.id);
           }}
         />
       ))}
