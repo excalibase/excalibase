@@ -7,12 +7,61 @@ import (
 	"strings"
 )
 
+// mysqlTable is a table as the catalogue names it. Row SQL is built from
+// these names, never from the request's, so an unknown table or column is a
+// 400 and no request text becomes an identifier.
+type mysqlTable struct {
+	name    string
+	columns map[string]string
+}
+
+// column is a column's quoted catalogue name.
+func (t mysqlTable) column(requested string) (string, error) {
+	name, ok := t.columns[requested]
+	if !ok {
+		return "", invalidInput("table %s has no column %q", t.name, requested)
+	}
+	return QuoteMySQLIdent(name), nil
+}
+
+func (t mysqlTable) quoted() string { return QuoteMySQLIdent(t.name) }
+
+// tableOf reads a table and its columns from the project's database.
+func (m *MySQLCatalog) tableOf(ctx context.Context, db *sql.DB, schemaName, table string) (mysqlTable, string, error) {
+	database, err := m.database(ctx, db, schemaName)
+	if err != nil {
+		return mysqlTable{}, "", err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT table_name, column_name FROM information_schema.columns
+WHERE table_schema = ? AND table_name = ?`, database, table)
+	if err != nil {
+		return mysqlTable{}, "", fmt.Errorf("read table: %w", err)
+	}
+	defer rows.Close()
+	found := mysqlTable{columns: map[string]string{}}
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&found.name, &column); err != nil {
+			return mysqlTable{}, "", fmt.Errorf("read table: %w", err)
+		}
+		found.columns[column] = column
+	}
+	if err := rows.Err(); err != nil {
+		return mysqlTable{}, "", fmt.Errorf("read table: %w", err)
+	}
+	if found.name == "" {
+		return mysqlTable{}, "", invalidInput("no table %q", table)
+	}
+	return found, database, nil
+}
+
 // GetRows returns a page of a table's rows.
 func (m *MySQLCatalog) GetRows(ctx context.Context, db *sql.DB, schemaName, table string, opts RowQueryOpts) (*RowsResult, error) {
-	if _, err := m.database(ctx, db, schemaName); err != nil {
+	target, _, err := m.tableOf(ctx, db, schemaName, table)
+	if err != nil {
 		return nil, err
 	}
-	dataSQL, countSQL, dataArgs, countArgs, err := buildMySQLSelect(table, applyRowDefaults(opts))
+	dataSQL, countSQL, dataArgs, countArgs, err := buildMySQLSelect(target, applyRowDefaults(opts))
 	if err != nil {
 		return nil, err
 	}
@@ -32,47 +81,56 @@ func (m *MySQLCatalog) GetRows(ctx context.Context, db *sql.DB, schemaName, tabl
 	return &RowsResult{Columns: columns, Rows: values, TotalCount: total}, nil
 }
 
-func buildMySQLSelect(table string, opts RowQueryOpts) (dataSQL, countSQL string, dataArgs, countArgs []interface{}, err error) {
-	where, countArgs, err := mysqlWhere(opts.Filters)
+func buildMySQLSelect(target mysqlTable, opts RowQueryOpts) (dataSQL, countSQL string, dataArgs, countArgs []interface{}, err error) {
+	where, countArgs, err := mysqlWhere(target, opts.Filters)
 	if err != nil {
 		return "", "", nil, nil, err
 	}
-	from := " FROM " + QuoteMySQLIdent(table) + where
+	from := " FROM " + target.quoted() + where
 	countSQL = "SELECT COUNT(*)" + from
 	dataSQL = "SELECT *" + from
 	if opts.Sort != "" {
-		if err := ValidateColumnName(opts.Sort); err != nil {
-			return "", "", nil, nil, fmt.Errorf("invalid sort column: %w", err)
+		order, err := mysqlOrder(target, opts)
+		if err != nil {
+			return "", "", nil, nil, err
 		}
-		order := "ASC"
-		if opts.Order != "" {
-			if err := validateSortOrder(opts.Order); err != nil {
-				return "", "", nil, nil, err
-			}
-			order = strings.ToUpper(opts.Order)
-		}
-		dataSQL += " ORDER BY " + QuoteMySQLIdent(opts.Sort) + " " + order
+		dataSQL += order
 	}
 	dataSQL += " LIMIT ? OFFSET ?"
 	dataArgs = append(append([]interface{}{}, countArgs...), opts.Limit, opts.Offset)
 	return dataSQL, countSQL, dataArgs, countArgs, nil
 }
 
+func mysqlOrder(target mysqlTable, opts RowQueryOpts) (string, error) {
+	column, err := target.column(opts.Sort)
+	if err != nil {
+		return "", err
+	}
+	direction := "ASC"
+	if opts.Order != "" {
+		if err := validateSortOrder(opts.Order); err != nil {
+			return "", err
+		}
+		direction = strings.ToUpper(opts.Order)
+	}
+	return " ORDER BY " + column + " " + direction, nil
+}
+
 // mysqlWhere is the filters as MySQL takes them; ilike compares lower case,
 // whatever the column's collation.
-func mysqlWhere(filters []RowFilter) (string, []interface{}, error) {
+func mysqlWhere(target mysqlTable, filters []RowFilter) (string, []interface{}, error) {
 	clauses := make([]string, 0, len(filters))
 	var args []interface{}
 	for _, filter := range filters {
-		if err := ValidateColumnName(filter.Column); err != nil {
-			return "", nil, fmt.Errorf("invalid filter column: %w", err)
-		}
 		operator := strings.ToLower(filter.Operator)
 		sqlOperator, ok := allowedOperators[operator]
 		if !ok {
 			return "", nil, invalidInput("invalid operator: %q", filter.Operator)
 		}
-		column := QuoteMySQLIdent(filter.Column)
+		column, err := target.column(filter.Column)
+		if err != nil {
+			return "", nil, err
+		}
 		switch operator {
 		case "is_null", "is_not_null":
 			clauses = append(clauses, column+" "+sqlOperator)
@@ -90,22 +148,33 @@ func mysqlWhere(filters []RowFilter) (string, []interface{}, error) {
 	return sqlWhere + strings.Join(clauses, " AND "), args, nil
 }
 
-func buildMySQLInsert(table string, data map[string]interface{}) (string, []interface{}, error) {
+// assignments are "column = ?" for each sent column, with their values.
+func assignments(target mysqlTable, data map[string]interface{}) ([]string, []interface{}, error) {
 	keys := sortedKeys(data)
 	columns := make([]string, 0, len(keys))
-	placeholders := make([]string, 0, len(keys))
 	args := make([]interface{}, 0, len(keys))
 	for _, key := range keys {
+		column, err := target.column(key)
+		if err != nil {
+			return nil, nil, err
+		}
 		value, err := rowArg(data[key])
 		if err != nil {
-			return "", nil, fmt.Errorf("column %q: %w", key, err)
+			return nil, nil, fmt.Errorf("column %q: %w", key, err)
 		}
-		columns = append(columns, QuoteMySQLIdent(key))
-		placeholders = append(placeholders, "?")
+		columns = append(columns, column)
 		args = append(args, value)
 	}
-	return "INSERT INTO " + QuoteMySQLIdent(table) + " (" + strings.Join(columns, ", ") + ") VALUES (" +
-		strings.Join(placeholders, ", ") + ")", args, nil
+	return columns, args, nil
+}
+
+func buildMySQLInsert(target mysqlTable, data map[string]interface{}) (string, []interface{}, error) {
+	columns, args, err := assignments(target, data)
+	if err != nil {
+		return "", nil, err
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(columns)), ", ")
+	return "INSERT INTO " + target.quoted() + " (" + strings.Join(columns, ", ") + ") VALUES (" + placeholders + ")", args, nil
 }
 
 // InsertRow inserts a row and reads it back by its primary key: the values
@@ -113,11 +182,11 @@ func buildMySQLInsert(table string, data map[string]interface{}) (string, []inte
 // known (no key, or one filled by an expression) is reported as inserted
 // without being read back.
 func (m *MySQLCatalog) InsertRow(ctx context.Context, db *sql.DB, schemaName, table string, data map[string]interface{}) (*QueryResult, error) {
-	database, err := m.database(ctx, db, schemaName)
+	target, database, err := m.tableOf(ctx, db, schemaName, table)
 	if err != nil {
 		return nil, err
 	}
-	statement, args, err := buildMySQLInsert(table, data)
+	statement, args, err := buildMySQLInsert(target, data)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +194,7 @@ func (m *MySQLCatalog) InsertRow(ctx context.Context, db *sql.DB, schemaName, ta
 	if err != nil {
 		return nil, fmt.Errorf("insert row: %w", err)
 	}
-	keys, err := queryStrings(ctx, db, mysqlPrimaryKeyQuery, database, table)
+	keys, err := queryStrings(ctx, db, mysqlPrimaryKeyQuery, database, target.name)
 	if err != nil {
 		return nil, fmt.Errorf("read primary key: %w", err)
 	}
@@ -133,7 +202,7 @@ func (m *MySQLCatalog) InsertRow(ctx context.Context, db *sql.DB, schemaName, ta
 	if !known {
 		return &QueryResult{Command: "INSERT", AffectedRows: 1}, nil
 	}
-	return m.readRow(ctx, db, table, keys, keyValues)
+	return readRow(ctx, db, target, keys, keyValues)
 }
 
 // insertedKey is the new row's key values, when they can be known.
@@ -166,12 +235,16 @@ func insertedKey(keys []string, data map[string]interface{}, result sql.Result) 
 	return []interface{}{generated}, true
 }
 
-func (m *MySQLCatalog) readRow(ctx context.Context, db *sql.DB, table string, keys []string, values []interface{}) (*QueryResult, error) {
+func readRow(ctx context.Context, db *sql.DB, target mysqlTable, keys []string, values []interface{}) (*QueryResult, error) {
 	conditions := make([]string, len(keys))
 	for index, key := range keys {
-		conditions[index] = QuoteMySQLIdent(key) + " = ?"
+		column, err := target.column(key)
+		if err != nil {
+			return nil, err
+		}
+		conditions[index] = column + " = ?"
 	}
-	rows, err := db.QueryContext(ctx, "SELECT * FROM "+QuoteMySQLIdent(table)+sqlWhere+strings.Join(conditions, " AND "), values...)
+	rows, err := db.QueryContext(ctx, "SELECT * FROM "+target.quoted()+sqlWhere+strings.Join(conditions, " AND "), values...)
 	if err != nil {
 		return nil, fmt.Errorf("read inserted row: %w", err)
 	}
@@ -188,22 +261,19 @@ func (m *MySQLCatalog) UpdateRow(ctx context.Context, db *sql.DB, schemaName, ta
 	if len(data) == 0 {
 		return invalidInput("data is required")
 	}
-	if _, err := m.database(ctx, db, schemaName); err != nil {
+	target, _, err := m.tableOf(ctx, db, schemaName, table)
+	if err != nil {
 		return err
 	}
-	keys := sortedKeys(data)
-	assignments := make([]string, 0, len(keys))
-	args := make([]interface{}, 0, len(keys)+1)
-	for _, key := range keys {
-		value, err := rowArg(data[key])
-		if err != nil {
-			return fmt.Errorf("column %q: %w", key, err)
-		}
-		assignments = append(assignments, QuoteMySQLIdent(key)+" = ?")
-		args = append(args, value)
+	columns, args, err := assignments(target, data)
+	if err != nil {
+		return err
 	}
-	statement := "UPDATE " + QuoteMySQLIdent(table) + " SET " + strings.Join(assignments, ", ") +
-		sqlWhere + QuoteMySQLIdent(keyColumn) + " = ?"
+	key, err := target.column(keyColumn)
+	if err != nil {
+		return err
+	}
+	statement := "UPDATE " + target.quoted() + " SET " + strings.Join(columns, " = ?, ") + " = ?" + sqlWhere + key + " = ?"
 	if _, err := db.ExecContext(ctx, statement, append(args, keyValue)...); err != nil {
 		return fmt.Errorf("update row: %w", err)
 	}
@@ -212,11 +282,15 @@ func (m *MySQLCatalog) UpdateRow(ctx context.Context, db *sql.DB, schemaName, ta
 
 // DeleteRow deletes a row by primary key.
 func (m *MySQLCatalog) DeleteRow(ctx context.Context, db *sql.DB, schemaName, table, keyColumn, keyValue string) error {
-	if _, err := m.database(ctx, db, schemaName); err != nil {
+	target, _, err := m.tableOf(ctx, db, schemaName, table)
+	if err != nil {
 		return err
 	}
-	statement := "DELETE FROM " + QuoteMySQLIdent(table) + sqlWhere + QuoteMySQLIdent(keyColumn) + " = ?"
-	if _, err := db.ExecContext(ctx, statement, keyValue); err != nil {
+	key, err := target.column(keyColumn)
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, "DELETE FROM "+target.quoted()+sqlWhere+key+" = ?", keyValue); err != nil {
 		return fmt.Errorf("delete row: %w", err)
 	}
 	return nil

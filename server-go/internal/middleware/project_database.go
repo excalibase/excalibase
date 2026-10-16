@@ -46,15 +46,23 @@ func RequireProjectDatabase(instances storage.InstanceStore) func(http.Handler) 
 			}
 			// A MySQL project reaches only the database routes the route
 			// table says serve it; an unknown route is refused (ADR 0041).
-			if inst.DBType == domain.MySQL {
-				if row, known := routepolicy.Lookup(r.Method, r.URL.Path); !known || !row.MySQL {
-					refuseForMySQL(w, row.MySQLRefusal)
-					return
-				}
+			if inst.DBType == domain.MySQL && !servesMySQL(w, r) {
+				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// servesMySQL reports whether the route serves a MySQL project, and refuses
+// the request with the route's reason when it does not.
+func servesMySQL(w http.ResponseWriter, r *http.Request) bool {
+	row, known := routepolicy.Lookup(r.Method, r.URL.Path)
+	if known && row.MySQL {
+		return true
+	}
+	refuseForMySQL(w, row.MySQLRefusal)
+	return false
 }
 
 // refuseForMySQL answers 409 with the route's reason when it has one.

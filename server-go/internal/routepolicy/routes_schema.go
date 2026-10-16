@@ -57,7 +57,7 @@ func schemaReadRows() []Row {
 		mysqlCapable(schemaRead("/tables/{tableName}/columns")),
 		mysqlCapable(schemaRead("/tables/{tableName}/indexes")),
 		mysqlCapable(schemaRead("/tables/{tableName}/checks")),
-		mysqlCapable(schemaRead("/tables/{tableName}/rows")),
+		mysqlCapable(schemaRead(tableRowsPattern)),
 		refusedOnMySQL(schemaRead("/triggers"), mysqlNoTriggers),
 		refusedOnMySQL(schemaRead("/types"), mysqlNoTypes),
 	}
@@ -79,10 +79,10 @@ func schemaWriteRows() []Row {
 		mysqlCapable(schemaWrite(http.MethodPost, "/tables")),
 		refusedOnMySQL(schemaWrite(http.MethodPost, "/triggers"), mysqlNoTriggers),
 		mysqlCapable(schemaWrite(http.MethodPost, "/tables/{tableName}/columns")),
-		mysqlCapable(schemaWrite(http.MethodPost, "/tables/{tableName}/rows")),
+		mysqlCapable(schemaWrite(http.MethodPost, tableRowsPattern)),
 		schemaWrite(http.MethodPatch, "/tables/{tableName}"),
 		schemaWrite(http.MethodPatch, "/tables/{tableName}/columns/{columnName}"),
-		mysqlCapable(schemaWrite(http.MethodPatch, "/tables/{tableName}/rows")),
+		mysqlCapable(schemaWrite(http.MethodPatch, tableRowsPattern)),
 		refusedOnMySQL(schemaWrite(http.MethodDelete, "/extensions/{extName}"), mysqlNoExtensions),
 		refusedOnMySQL(schemaWrite(http.MethodDelete, "/functions/{funcName}"), MySQLNoTrackedFunctions),
 		mysqlCapable(schemaWrite(http.MethodDelete, "/indexes/{indexName}")),
@@ -91,9 +91,11 @@ func schemaWriteRows() []Row {
 		refusedOnMySQL(schemaWrite(http.MethodDelete, "/triggers/{triggerName}"), mysqlNoTriggers),
 		mysqlCapable(schemaWrite(http.MethodDelete, "/tables/{tableName}")),
 		mysqlCapable(schemaWrite(http.MethodDelete, "/tables/{tableName}/columns/{columnName}")),
-		mysqlCapable(schemaWrite(http.MethodDelete, "/tables/{tableName}/rows")),
+		mysqlCapable(schemaWrite(http.MethodDelete, tableRowsPattern)),
 	}
 }
+
+const tableRowsPattern = "/tables/{tableName}/rows"
 
 // mysqlCapable marks a schema route the MySQL catalogue serves (EXC-619).
 func mysqlCapable(row Row) Row {

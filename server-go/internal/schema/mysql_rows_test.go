@@ -2,12 +2,17 @@ package schema
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 )
 
+var ordersTable = mysqlTable{name: "orders", columns: map[string]string{
+	"id": "id", "status": "status", "note": "note", "deleted_at": "deleted_at", "total": "total", "meta": "meta",
+}}
+
 func TestBuildMySQLSelect(t *testing.T) {
-	dataSQL, countSQL, dataArgs, countArgs, err := buildMySQLSelect("orders", RowQueryOpts{
+	dataSQL, countSQL, dataArgs, countArgs, err := buildMySQLSelect(ordersTable, RowQueryOpts{
 		Limit: 20, Offset: 40, Sort: "id", Order: "desc",
 		Filters: []RowFilter{{Column: "status", Operator: "=", Value: "paid"}, {Column: "note", Operator: "ilike", Value: "%Rush%"}, {Column: "deleted_at", Operator: "is_null"}},
 	})
@@ -24,20 +29,31 @@ func TestBuildMySQLSelect(t *testing.T) {
 	if !reflect.DeepEqual(countArgs, []interface{}{"paid", "%Rush%"}) || !reflect.DeepEqual(dataArgs, []interface{}{"paid", "%Rush%", 20, 40}) {
 		t.Errorf("args: %v %v", countArgs, dataArgs)
 	}
-	if _, _, _, _, err := buildMySQLSelect("orders", RowQueryOpts{Filters: []RowFilter{{Column: "x", Operator: "~"}}}); err == nil {
+	if _, _, _, _, err := buildMySQLSelect(ordersTable, RowQueryOpts{Filters: []RowFilter{{Column: "status", Operator: "~"}}}); err == nil {
 		t.Error("an unknown operator was accepted")
 	}
 }
 
+// Only the catalogue's own names reach the SQL.
+func TestMySQLRowSQLRefusesAColumnTheTableLacks(t *testing.T) {
+	var input *InputError
+	if _, _, _, _, err := buildMySQLSelect(ordersTable, RowQueryOpts{Sort: "id`; DROP TABLE x"}); !errors.As(err, &input) {
+		t.Errorf("sort: %v", err)
+	}
+	if _, _, err := buildMySQLInsert(ordersTable, map[string]interface{}{"nope": 1}); !errors.As(err, &input) {
+		t.Errorf("insert: %v", err)
+	}
+}
+
 func TestBuildMySQLInsert(t *testing.T) {
-	statement, args, err := buildMySQLInsert("orders", map[string]interface{}{"total": json.Number("12345678901234567890"), "meta": map[string]interface{}{"a": 1.0}})
+	statement, args, err := buildMySQLInsert(ordersTable, map[string]interface{}{"total": json.Number("12345678901234567890"), "meta": map[string]interface{}{"a": 1.0}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if statement != "INSERT INTO `orders` (`meta`, `total`) VALUES (?, ?)" || !reflect.DeepEqual(args, []interface{}{`{"a":1}`, "12345678901234567890"}) {
 		t.Fatalf("%s %v", statement, args)
 	}
-	statement, args, _ = buildMySQLInsert("orders", map[string]interface{}{})
+	statement, args, _ = buildMySQLInsert(ordersTable, map[string]interface{}{})
 	if statement != "INSERT INTO `orders` () VALUES ()" || len(args) != 0 {
 		t.Fatalf("defaults: %s %v", statement, args)
 	}

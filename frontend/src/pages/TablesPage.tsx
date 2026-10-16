@@ -24,12 +24,19 @@ import { useInstance } from '../hooks/useProvisioning';
 import { isMySQLProject } from '../utils/engine';
 import { columnTypesFor } from '../utils/engineSql';
 
+// Where a new table goes: a MySQL project's tables live in its one database.
+function newTableTarget(project: { databaseType?: string; databaseName?: string } | undefined) {
+  if (!isMySQLProject(project)) return { mysql: false, schema: 'public', key: 'postgres' };
+  return { mysql: true, schema: project?.databaseName ?? '', key: 'mysql' };
+}
+
 export function TablesPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const pid = projectId ?? '';
   const { data: tables = [], isLoading, error: tablesError } = useTables(pid);
   const { data: project } = useInstance(pid);
-  const mysql = isMySQLProject(project);
+  const target = newTableTarget(project);
+  const mysql = target.mysql;
   const [selectedTable, setSelectedTable] = useState<string>('');
   const { data: columns = [] } = useColumns(pid, selectedTable);
   const dropTable = useDropTable(pid);
@@ -281,7 +288,7 @@ export function TablesPage() {
 
       {/* Create Table SidePanel */}
       <CreateTablePanel open={showCreateTable} onClose={() => setShowCreateTable(false)} projectId={pid} canGrantRead={canDevelop}
-        mysql={mysql} schema={mysql ? project?.databaseName ?? '' : 'public'} key={mysql ? 'mysql' : 'postgres'} />
+        mysql={mysql} schema={target.schema} key={target.key} />
       <ImportTablePanel open={showImport} onClose={() => setShowImport(false)} projectId={pid} />
 
       {/* Add Column SidePanel */}

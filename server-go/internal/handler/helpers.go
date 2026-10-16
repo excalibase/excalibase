@@ -82,18 +82,18 @@ func safeLog(s string) string {
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	json.NewEncoder(w).Encode(v)
 }
 
 func writeJSONStatus(w http.ResponseWriter, code int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(v)
 }
 
 func httpError(w http.ResponseWriter, msg string, code int) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"error":  msg,

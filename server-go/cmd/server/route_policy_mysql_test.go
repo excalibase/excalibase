@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -29,15 +30,8 @@ func TestDatabaseRoutesRefuseAMySQLProjectUnlessTheyServeIt(t *testing.T) {
 		}
 		t.Run(key.String(), func(t *testing.T) {
 			code, body := harness.request(key.Method, concreteRequestPath(key.Pattern), owner.token)
-			refused := code == 409 && strings.Contains(body, mysqlRefusal)
-			if row.MySQL && refused {
-				t.Fatalf("a route the table says serves MySQL refused it: %d %s", code, strings.TrimSpace(body))
-			}
-			if !row.MySQL && !refused {
-				t.Fatalf("a Postgres-only route answered %d (%s); want 409 %s", code, strings.TrimSpace(body), mysqlRefusal)
-			}
-			if row.MySQLRefusal != "" && !strings.Contains(body, row.MySQLRefusal[:20]) {
-				t.Fatalf("the refusal does not say why: %s", strings.TrimSpace(body))
+			if problem := mysqlAnswerProblem(row, code, body); problem != "" {
+				t.Fatal(problem)
 			}
 		})
 		if row.MySQL {
@@ -75,4 +69,19 @@ func TestMySQLLifecycleRoutesServeMySQL(t *testing.T) {
 			t.Errorf("%s does not serve MySQL projects", key)
 		}
 	}
+}
+
+// mysqlAnswerProblem is what is wrong with a route's answer to a MySQL
+// project, or "".
+func mysqlAnswerProblem(row routepolicy.Row, code int, body string) string {
+	refused := code == 409 && strings.Contains(body, mysqlRefusal)
+	switch {
+	case row.MySQL && refused:
+		return fmt.Sprintf("a route the table says serves MySQL refused it: %d %s", code, strings.TrimSpace(body))
+	case !row.MySQL && !refused:
+		return fmt.Sprintf("a Postgres-only route answered %d (%s); want 409 %s", code, strings.TrimSpace(body), mysqlRefusal)
+	case row.MySQLRefusal != "" && !strings.Contains(body, row.MySQLRefusal[:20]):
+		return "the refusal does not say why: " + strings.TrimSpace(body)
+	}
+	return ""
 }

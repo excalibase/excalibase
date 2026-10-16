@@ -105,119 +105,130 @@ func TestIntegration_MySQLCatalog(t *testing.T) {
 		t.Fatalf("a script's last result set: %+v", seeded)
 	}
 
-	t.Run("tables of the one database", func(t *testing.T) {
-		tables, err := catalog.GetTables(ctx, single, "public")
-		if err != nil || len(tables) != 2 || tables[0].Name != "customers" || tables[0].Schema != "app" {
-			t.Fatalf("tables %+v, %v", tables, err)
-		}
-		if _, err := catalog.GetTables(ctx, single, "app"); err != nil {
-			t.Fatalf("by its own name: %v", err)
-		}
-		var input *InputError
-		if _, err := catalog.GetTables(ctx, single, "auth"); !errors.As(err, &input) {
-			t.Fatalf("another schema: %v", err)
-		}
-	})
+	t.Run("tables of the one database", func(t *testing.T) { mysqlCatalogTablesOfTheOneDatabase(t, catalog, single) })
+	t.Run("columns carry the full MySQL type", func(t *testing.T) { mysqlCatalogColumnsCarryTheFullMysqlType(t, catalog, single) })
+	t.Run("relationships, indexes and checks", func(t *testing.T) { mysqlCatalogRelationshipsIndexesAndChecks(t, catalog, single) })
+	t.Run("table editor DDL", func(t *testing.T) { mysqlCatalogTableEditorDdl(t, catalog, single) })
+	t.Run("rows", func(t *testing.T) { mysqlCatalogRows(t, catalog, single) })
+}
 
-	t.Run("columns carry the full MySQL type", func(t *testing.T) {
-		columns, err := catalog.GetColumns(ctx, single, "public", "orders")
-		if err != nil {
-			t.Fatal(err)
-		}
-		byName := map[string]ColumnInfo{}
-		for _, column := range columns {
-			byName[column.Name] = column
-		}
-		if byName["status"].DataType != "enum('draft','paid')" || byName["meta"].DataType != "json" || !byName["meta"].Nullable {
-			t.Errorf("columns %+v", byName)
-		}
-		if !byName["id"].PrimaryKey || byName["id"].DefaultValue == nil || *byName["id"].DefaultValue != "AUTO_INCREMENT" {
-			t.Errorf("id %+v", byName["id"])
-		}
-		customers, _ := catalog.GetColumns(ctx, single, "public", "customers")
-		if customers[1].Name != "email" || !customers[1].Unique || customers[2].DataType != "tinyint(1)" {
-			t.Errorf("customers %+v", customers)
-		}
-	})
+func mysqlCatalogTablesOfTheOneDatabase(t *testing.T, catalog *MySQLCatalog, single *sql.DB) {
+	ctx := context.Background()
+	tables, err := catalog.GetTables(ctx, single, "public")
+	if err != nil || len(tables) != 2 || tables[0].Name != "customers" || tables[0].Schema != "app" {
+		t.Fatalf("tables %+v, %v", tables, err)
+	}
+	if _, err := catalog.GetTables(ctx, single, "app"); err != nil {
+		t.Fatalf("by its own name: %v", err)
+	}
+	var input *InputError
+	if _, err := catalog.GetTables(ctx, single, "auth"); !errors.As(err, &input) {
+		t.Fatalf("another schema: %v", err)
+	}
+}
 
-	t.Run("relationships, indexes and checks", func(t *testing.T) {
-		relationships, err := catalog.GetRelationships(ctx, single, "public")
-		if err != nil || len(relationships) != 1 || relationships[0] != (RelationshipInfo{
-			ConstraintName: "orders_customer", SourceTable: "orders", SourceColumn: "customer_id",
-			TargetTable: "customers", TargetColumn: "id", OnDelete: "CASCADE", OnUpdate: "NO ACTION",
-		}) {
-			t.Fatalf("relationships %+v, %v", relationships, err)
-		}
-		indexes, err := catalog.GetIndexes(ctx, single, "public", "orders")
-		if err != nil {
-			t.Fatal(err)
-		}
-		found := false
-		for _, index := range indexes {
-			if index.Name == "orders_status_total" {
-				found = !index.Unique && index.Type == "btree" && strings.Join(index.Columns, ",") == "status,total"
-			}
-		}
-		if !found {
-			t.Fatalf("indexes %+v", indexes)
-		}
-		checks, err := catalog.GetCheckConstraints(ctx, single, "public", "orders")
-		if err != nil || len(checks) != 1 || checks[0].Name != "orders_total_positive" || strings.Join(checks[0].Columns, ",") != "total" {
-			t.Fatalf("checks %+v, %v", checks, err)
-		}
-	})
+func mysqlCatalogColumnsCarryTheFullMysqlType(t *testing.T, catalog *MySQLCatalog, single *sql.DB) {
+	ctx := context.Background()
+	columns, err := catalog.GetColumns(ctx, single, "public", "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]ColumnInfo{}
+	for _, column := range columns {
+		byName[column.Name] = column
+	}
+	if byName["status"].DataType != "enum('draft','paid')" || byName["meta"].DataType != "json" || !byName["meta"].Nullable {
+		t.Errorf("columns %+v", byName)
+	}
+	if !byName["id"].PrimaryKey || byName["id"].DefaultValue == nil || *byName["id"].DefaultValue != "AUTO_INCREMENT" {
+		t.Errorf("id %+v", byName["id"])
+	}
+	customers, _ := catalog.GetColumns(ctx, single, "public", "customers")
+	if customers[1].Name != "email" || !customers[1].Unique || customers[2].DataType != "tinyint(1)" {
+		t.Errorf("customers %+v", customers)
+	}
+}
 
-	t.Run("table editor DDL", func(t *testing.T) {
-		draft := "'draft'"
-		if err := catalog.CreateTable(ctx, single, CreateTableRequest{Name: "notes", Schema: "public", Columns: []CreateColumnDef{
-			{Name: "id", Type: "char(36)", PrimaryKey: true, Default: ptr("(UUID())")},
-			{Name: "state", Type: "enum('draft','done')", Default: &draft},
-		}}); err != nil {
-			t.Fatal(err)
+func mysqlCatalogRelationshipsIndexesAndChecks(t *testing.T, catalog *MySQLCatalog, single *sql.DB) {
+	ctx := context.Background()
+	relationships, err := catalog.GetRelationships(ctx, single, "public")
+	if err != nil || len(relationships) != 1 || relationships[0] != (RelationshipInfo{
+		ConstraintName: "orders_customer", SourceTable: "orders", SourceColumn: "customer_id",
+		TargetTable: "customers", TargetColumn: "id", OnDelete: "CASCADE", OnUpdate: "NO ACTION",
+	}) {
+		t.Fatalf("relationships %+v, %v", relationships, err)
+	}
+	indexes, err := catalog.GetIndexes(ctx, single, "public", "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, index := range indexes {
+		if index.Name == "orders_status_total" {
+			found = !index.Unique && index.Type == "btree" && strings.Join(index.Columns, ",") == "status,total"
 		}
-		if err := catalog.AddColumn(ctx, single, "public", "notes", AddColumnRequest{Name: "body", Type: "text", Nullable: true}); err != nil {
-			t.Fatal(err)
-		}
-		if err := catalog.CreateIndex(ctx, single, CreateIndexRequest{Name: "notes_state", Table: "notes", Columns: []string{"state"}}); err != nil {
-			t.Fatal(err)
-		}
-		if err := catalog.DropIndex(ctx, single, "public", "notes_state"); err != nil {
-			t.Fatal(err)
-		}
-		if err := catalog.DropColumn(ctx, single, "public", "notes", "body"); err != nil {
-			t.Fatal(err)
-		}
-		inserted, err := catalog.InsertRow(ctx, single, "public", "notes", map[string]interface{}{})
-		if err != nil || inserted.Command != "INSERT" || len(inserted.Rows) != 0 {
-			t.Fatalf("a row keyed by an expression is not read back: %+v, %v", inserted, err)
-		}
-		if err := catalog.DropTable(ctx, single, "public", "notes", true); err != nil {
-			t.Fatal(err)
-		}
-	})
+	}
+	if !found {
+		t.Fatalf("indexes %+v", indexes)
+	}
+	checks, err := catalog.GetCheckConstraints(ctx, single, "public", "orders")
+	if err != nil || len(checks) != 1 || checks[0].Name != "orders_total_positive" || strings.Join(checks[0].Columns, ",") != "total" {
+		t.Fatalf("checks %+v, %v", checks, err)
+	}
+}
 
-	t.Run("rows", func(t *testing.T) {
-		inserted, err := catalog.InsertRow(ctx, single, "public", "customers", map[string]interface{}{"email": "cy@example.com"})
-		if err != nil || len(inserted.Rows) != 1 || inserted.Rows[0][1] != "cy@example.com" {
-			t.Fatalf("auto id read back: %+v, %v", inserted, err)
-		}
-		chosen, err := catalog.InsertRow(ctx, single, "public", "customers", map[string]interface{}{"id": 40, "email": "d@example.com"})
-		if err != nil || len(chosen.Rows) != 1 {
-			t.Fatalf("given id read back: %+v, %v", chosen, err)
-		}
-		if err := catalog.UpdateRow(ctx, single, "public", "customers", "id", "40", map[string]interface{}{"active": false}); err != nil {
-			t.Fatal(err)
-		}
-		page, err := catalog.GetRows(ctx, single, "public", "customers", RowQueryOpts{
-			Sort: "id", Order: "desc", Filters: []RowFilter{{Column: "email", Operator: "ilike", Value: "%EXAMPLE%"}},
-		})
-		if err != nil || page.TotalCount != 4 || len(page.Rows) != 4 || fmt.Sprint(page.Rows[0][2]) != "0" {
-			t.Fatalf("page %+v, %v", page, err)
-		}
-		if err := catalog.DeleteRow(ctx, single, "public", "customers", "id", "40"); err != nil {
-			t.Fatal(err)
-		}
+func mysqlCatalogTableEditorDdl(t *testing.T, catalog *MySQLCatalog, single *sql.DB) {
+	ctx := context.Background()
+	draft := "'draft'"
+	if err := catalog.CreateTable(ctx, single, CreateTableRequest{Name: "notes", Schema: "public", Columns: []CreateColumnDef{
+		{Name: "id", Type: "char(36)", PrimaryKey: true, Default: ptr("(UUID())")},
+		{Name: "state", Type: "enum('draft','done')", Default: &draft},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.AddColumn(ctx, single, "public", "notes", AddColumnRequest{Name: "body", Type: "text", Nullable: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.CreateIndex(ctx, single, CreateIndexRequest{Name: "notes_state", Table: "notes", Columns: []string{"state"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.DropIndex(ctx, single, "public", "notes_state"); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.DropColumn(ctx, single, "public", "notes", "body"); err != nil {
+		t.Fatal(err)
+	}
+	inserted, err := catalog.InsertRow(ctx, single, "public", "notes", map[string]interface{}{})
+	if err != nil || inserted.Command != "INSERT" || len(inserted.Rows) != 0 {
+		t.Fatalf("a row keyed by an expression is not read back: %+v, %v", inserted, err)
+	}
+	if err := catalog.DropTable(ctx, single, "public", "notes", true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mysqlCatalogRows(t *testing.T, catalog *MySQLCatalog, single *sql.DB) {
+	ctx := context.Background()
+	inserted, err := catalog.InsertRow(ctx, single, "public", "customers", map[string]interface{}{"email": "cy@example.com"})
+	if err != nil || len(inserted.Rows) != 1 || inserted.Rows[0][1] != "cy@example.com" {
+		t.Fatalf("auto id read back: %+v, %v", inserted, err)
+	}
+	chosen, err := catalog.InsertRow(ctx, single, "public", "customers", map[string]interface{}{"id": 40, "email": "d@example.com"})
+	if err != nil || len(chosen.Rows) != 1 {
+		t.Fatalf("given id read back: %+v, %v", chosen, err)
+	}
+	if err := catalog.UpdateRow(ctx, single, "public", "customers", "id", "40", map[string]interface{}{"active": false}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := catalog.GetRows(ctx, single, "public", "customers", RowQueryOpts{
+		Sort: "id", Order: "desc", Filters: []RowFilter{{Column: "email", Operator: "ilike", Value: "%EXAMPLE%"}},
 	})
+	if err != nil || page.TotalCount != 4 || len(page.Rows) != 4 || fmt.Sprint(page.Rows[0][2]) != "0" {
+		t.Fatalf("page %+v, %v", page, err)
+	}
+	if err := catalog.DeleteRow(ctx, single, "public", "customers", "id", "40"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func ptr(value string) *string { return &value }

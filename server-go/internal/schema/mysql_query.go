@@ -155,7 +155,7 @@ func killIfPastDeadline(ctx context.Context, db *sql.DB, connectionID int64) {
 	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return
 	}
-	killCtx, cancel := context.WithTimeout(context.Background(), killGrace)
+	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killGrace)
 	defer cancel()
 	if _, err := db.ExecContext(killCtx, fmt.Sprintf("KILL QUERY %d", connectionID)); err != nil {
 		log.Printf("mysql: stop statement past its deadline: %v", err)
