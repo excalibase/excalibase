@@ -81,6 +81,8 @@ func table(deps Deps) map[string][]Dependency {
 		// The app handler is always constructed; the flag only decides
 		// whether its routes are mounted.
 		"APP_HOSTING_ENABLED": {},
+		// Its Cloudflare settings are checked with the providers below.
+		"SITES_ENABLED": {},
 		// Changes how each app's route is rendered; needs nothing of this process.
 		"APP_WILDCARD_TLS": {},
 		// Only gates requests: the gateway plugin it vouches for is the
@@ -125,7 +127,7 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 		}
 		return true
 	}
-	any := func(values ...string) bool {
+	anySet := func(values ...string) bool {
 		for _, v := range values {
 			if v != "" {
 				return true
@@ -134,6 +136,17 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 		return false
 	}
 	return []Feature{
+		{
+			Flag:    "SITES_ENABLED=true",
+			Enabled: cfg.SitesEnabled,
+			Requires: []Dependency{
+				{Name: "Cloudflare account and token (SITES_CLOUDFLARE_ACCOUNT_ID, SITES_CLOUDFLARE_API_TOKEN)",
+					Wired: set(cfg.Sites.AccountID, cfg.Sites.APIToken)},
+				{Name: "dispatch namespace (SITES_DISPATCH_NAMESPACE)", Wired: set(cfg.Sites.DispatchNamespace)},
+				{Name: "user-content domain (SITES_BASE_DOMAIN)", Wired: set(cfg.Sites.BaseDomain)},
+				{Name: "hosts KV namespace the dispatch Worker reads (SITES_HOSTS_KV_NAMESPACE_ID)", Wired: set(cfg.Sites.HostsKVNamespaceID)},
+			},
+		},
 		{
 			Flag:    "EMAIL_PROVIDER=ses",
 			Enabled: cfg.EmailProvider == "ses",
@@ -167,7 +180,7 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 		},
 		{
 			Flag:    "R2_*",
-			Enabled: any(cfg.R2AccessKeyID, cfg.R2SecretAccessKey, cfg.R2Endpoint, cfg.R2Bucket),
+			Enabled: anySet(cfg.R2AccessKeyID, cfg.R2SecretAccessKey, cfg.R2Endpoint, cfg.R2Bucket),
 			Requires: []Dependency{
 				{Name: "complete object-storage settings (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT, R2_BUCKET)",
 					Wired: set(cfg.R2AccessKeyID, cfg.R2SecretAccessKey, cfg.R2Endpoint, cfg.R2Bucket)},
@@ -175,7 +188,7 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 		},
 		{
 			Flag:    "BACKUP_DEFAULT_*",
-			Enabled: any(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint),
+			Enabled: anySet(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint),
 			Requires: []Dependency{
 				{Name: "complete backup destination (access key, secret, endpoint, bucket)",
 					Wired: set(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint, cfg.BackupBucket)},
@@ -185,7 +198,7 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 			// Kubernetes projects only ever receive temporary credentials minted
 			// from the backup key; Docker keeps the key in this process.
 			Flag:    "BACKUP_DEFAULT_* in Kubernetes mode",
-			Enabled: cfg.ProvisionerMode != "docker" && any(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint),
+			Enabled: cfg.ProvisionerMode != "docker" && anySet(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint),
 			Requires: []Dependency{
 				{Name: "a temporary-credential provider (BACKUP_CREDENTIALS_PROVIDER=r2 or sts)",
 					Wired: cfg.BackupCredentialsProvider == "r2" || cfg.BackupCredentialsProvider == "sts"},

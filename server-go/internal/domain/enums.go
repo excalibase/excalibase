@@ -154,7 +154,9 @@ const (
 	// answering and puts it in quarantine. It runs first so a teardown that
 	// stalls leaves nothing the outside world can still dial.
 	DeletionStepReleaseEndpoint = "RELEASE_PUBLIC_ENDPOINT"
-	DeletionStepRevokeNats      = "REVOKE_NATS_CREDENTIALS"
+	// DeletionStepDeleteSites removes the project's sites and their Workers (EXC-353).
+	DeletionStepDeleteSites = "DELETE_SITES"
+	DeletionStepRevokeNats  = "REVOKE_NATS_CREDENTIALS"
 	// DeletionStepStopBackupSchedule stops a single host's scheduled backups (EXC-593).
 	DeletionStepStopBackupSchedule = "STOP_BACKUP_SCHEDULE"
 	// DeletionStepDeleteAppWorkloads removes a single host's app containers, disks and network (EXC-575).

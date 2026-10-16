@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS site_deploys;
+DROP TABLE IF EXISTS sites;

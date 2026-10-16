@@ -79,6 +79,8 @@ type ProvisioningService struct {
 	objectPurger ProjectObjectPurger
 	// appPurger removes the project's app records and their deploy history.
 	appPurger ProjectAppPurger
+	// sitePurger removes the project's sites and the Workers that serve them.
+	sitePurger ProjectSitePurger
 	// workloads stops a deleted project's apps and function runtime (EXC-567).
 	workloads ProjectWorkloadStopper
 	// workloadTeardown removes app workloads no namespace deletion takes (single host).
@@ -435,7 +437,7 @@ type admittedProject struct {
 }
 
 func (a *admittedProject) build(ctx context.Context) (*domain.ProvisioningResponse, error) {
-	return a.svc.buildDatabase(ctx, a.start, a.inst, a.req, a.prov, a.tier, a.fail, a.opts)
+	return a.svc.buildDatabase(ctx, a)
 }
 
 // admitProject validates the request and creates the project's row, which is
@@ -485,9 +487,9 @@ type provisionFailureHandler func(ctx context.Context, inst *domain.DatabaseInst
 // buildDatabase runs the provisioning pipeline for a project whose row is
 // already written: the cluster, then registration. It is the one path a
 // database comes into being by, whether with its project or added later.
-func (s *ProvisioningService) buildDatabase(ctx context.Context, start time.Time, inst *domain.DatabaseInstance,
-	req domain.ProvisioningRequest, prov provisioner.DatabaseProvisioner, tier config.TierConfig,
-	fail provisionFailureHandler, opts RegistrationOptions) (*domain.ProvisioningResponse, error) {
+func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admittedProject) (*domain.ProvisioningResponse, error) {
+	start, inst, req, prov := admitted.start, admitted.inst, admitted.req, admitted.prov
+	tier, fail, opts := admitted.tier, admitted.fail, admitted.opts
 	// A teardown that claims the project mid-build owns it from that moment.
 	// The pipeline must stop rather than keep creating resources the
 	// teardown has already looked for and not found: it cancels the
@@ -1013,6 +1015,57 @@ type ProjectAppPurger interface {
 	PurgeProjectApps(projectID string) (int, error)
 }
 
+// ProjectSitePurger removes every site a project holds, Worker first (EXC-353).
+type ProjectSitePurger interface {
+	PurgeProjectSites(ctx context.Context, projectID string) (int, error)
+}
+
+// checkDeletable runs before the first claim only: once a teardown owns the
+// row the decision to delete has been made and recorded, and a protection
+// flag set meanwhile must not strand it half torn down.
+func (s *ProvisioningService) checkDeletable(projectID string, opts DeprovisionOptions) error {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
+	}
+	if !domain.IsDeletionStatus(inst.Status) && inst.DeletionProtection != nil && *inst.DeletionProtection {
+		return fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
+	}
+	if opts.DeleteBackups != nil && *opts.DeleteBackups && s.backupPurger == nil {
+		return ErrBackupPurgeNotConfigured
+	}
+	return nil
+}
+
+// recheckUnderLease re-reads the row once the lease is held: a cancel that
+// won the race has turned protection back on, and a sweep that listed the
+// project earlier may find it no longer due.
+func (s *ProvisioningService) recheckUnderLease(projectID string, opts DeprovisionOptions) (*domain.DatabaseInstance, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
+	}
+	if !domain.IsDeletionStatus(inst.Status) && isProtected(inst) {
+		return nil, fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
+	}
+	if opts.dueAt != nil && !deletionDue(inst, *opts.dueAt) {
+		return nil, fmt.Errorf("%w: %s", ErrDeletionNotDue, projectID)
+	}
+	return inst, nil
+}
+
+// SetSitePurger wires the removal of a deleted project's sites.
+func (s *ProvisioningService) SetSitePurger(p ProjectSitePurger) { s.sitePurger = p }
+
+func (s *ProvisioningService) purgeProjectSites(ctx context.Context, inst *domain.DatabaseInstance) error {
+	removed, err := s.sitePurger.PurgeProjectSites(ctx, inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	log.Printf("site purge for %s removed %d sites", inst.ProjectID, removed)
+	return nil
+}
+
 // SetAppPurger wires the removal of a deleted project's apps.
 func (s *ProvisioningService) SetAppPurger(p ProjectAppPurger) { s.appPurger = p }
 
@@ -1063,18 +1116,8 @@ type deletionStep struct {
 // (BACKUPS_PENDING_DELETE, retried via PurgeBackups) because by then the
 // project's resources really are gone; it still reports the failure.
 func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projectID string, opts DeprovisionOptions) error {
-	inst, err := s.store.FindByProjectID(projectID)
-	if err != nil || inst == nil {
-		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
-	}
-	// Protection is checked before the first claim only: once a teardown
-	// owns the row the decision to delete has been made and recorded, and a
-	// protection flag set meanwhile must not strand it half torn down.
-	if !domain.IsDeletionStatus(inst.Status) && inst.DeletionProtection != nil && *inst.DeletionProtection {
-		return fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
-	}
-	if opts.DeleteBackups != nil && *opts.DeleteBackups && s.backupPurger == nil {
-		return ErrBackupPurgeNotConfigured
+	if err := s.checkDeletable(projectID, opts); err != nil {
+		return err
 	}
 
 	// DELETE takes the same per-project lease as pause and resume. A delete
@@ -1094,18 +1137,9 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 		return fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
 	}
 	defer release()
-	// Re-read under the lease: a cancel that won the race has turned
-	// protection back on.
-	if inst, err = s.store.FindByProjectID(projectID); err != nil || inst == nil {
-		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
-	}
-	if !domain.IsDeletionStatus(inst.Status) && isProtected(inst) {
-		return fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
-	}
-	// The sweep listed this project before taking the lease; a cancel or a
-	// fresh schedule since then means it is not due any more.
-	if opts.dueAt != nil && !deletionDue(inst, *opts.dueAt) {
-		return fmt.Errorf("%w: %s", ErrDeletionNotDue, projectID)
+	inst, err := s.recheckUnderLease(projectID, opts)
+	if err != nil {
+		return err
 	}
 
 	deleteBackups, err := s.store.BeginDeletion(projectID, opts.DeleteBackups)
@@ -1198,6 +1232,10 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	// quarantine here, not back into the pool.
 	if s.endpoints != nil {
 		steps = append(steps, deletionStep{domain.DeletionStepReleaseEndpoint, s.releasePublicEndpoint})
+	}
+	// Sites are public too, so they stop being served next.
+	if s.sitePurger != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepDeleteSites, s.purgeProjectSites})
 	}
 	if s.backupSchedules != nil {
 		steps = append(steps, deletionStep{domain.DeletionStepStopBackupSchedule, s.stopBackupSchedule})

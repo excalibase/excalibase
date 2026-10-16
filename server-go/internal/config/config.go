@@ -303,6 +303,9 @@ type AppConfig struct {
 	// any install until the epic is finished, so it defaults off; only the
 	// exact value "true" turns it on.
 	AppHostingEnabled bool
+	// SitesEnabled offers Sites (EXC-353) when the Cloudflare settings in Sites are complete too.
+	SitesEnabled bool
+	Sites        SitesConfig
 	// DarkFeatures are the features shipped dark that this install turned on
 	// (EXC-554); feature code asks Features(), never this list.
 	DarkFeatures []features.Feature
@@ -401,6 +404,9 @@ func (c AppConfig) Validate() error {
 		return err
 	}
 	if err := c.validateAppLocalRegistries(); err != nil {
+		return err
+	}
+	if err := c.validateSites(); err != nil {
 		return err
 	}
 	return c.validateAppRoute()
@@ -534,6 +540,8 @@ func load() AppConfig {
 		FnReplayEnabled:                envBool("EXCALIBASE_FN_REPLAY_ENABLED", true),
 		FnReplayPollInterval:           envMillis("EXCALIBASE_FN_REPLAY_POLL_MS", defaultReplayPoll),
 		AppHostingEnabled:              envOr("APP_HOSTING_ENABLED", "") == "true",
+		SitesEnabled:                   os.Getenv("SITES_ENABLED") == "true",
+		Sites:                          loadSites(),
 		DarkFeatures:                   loadDarkFeatures(),
 		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
 		AppRuntimeClass:                envOr("APP_RUNTIME_CLASS", "gvisor"),
@@ -628,6 +636,7 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: "DOCKER_DB_PUBLIC", Field: "DockerDBPublic", Enabled: c.DockerDBPublic},
 		{Env: "DOCKER_TLS_VERIFY", Field: "DockerTLSVerify", Enabled: c.DockerTLSVerify},
 		{Env: "APP_HOSTING_ENABLED", Field: "AppHostingEnabled", Enabled: c.AppHostingEnabled},
+		{Env: "SITES_ENABLED", Field: "SitesEnabled", Enabled: c.SitesEnabled},
 		{Env: "APP_WILDCARD_TLS", Field: "AppWildcardTLS", Enabled: c.AppWildcardTLS},
 		{Env: "DOCUMENTDB_ENABLED", Field: "DocumentDBEnabled", Enabled: c.DocumentDBEnabled},
 		{Env: "TENANT_STORAGE_REQUIRE_SIZED", Field: "TenantStorageRequireSized", Enabled: c.TenantStorageRequireSized},

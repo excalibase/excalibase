@@ -831,10 +831,12 @@ type handlerDeps struct {
 	// permissions (EXC-370 step C).
 	permissionHandler *handler.PermissionHandler
 	appHandler        *handler.AppHandler
-	storageBudgetH    *handler.StorageBudgetHandler
-	appDeploySvc      *service.AppDeployService
-	appDeployHandler  *handler.AppDeployHandler
-	appSecretHandler  *handler.AppSecretHandler
+	// siteHandler serves Sites (EXC-353); it answers 503 where Cloudflare is not configured.
+	siteHandler      *handler.SiteHandler
+	storageBudgetH   *handler.StorageBudgetHandler
+	appDeploySvc     *service.AppDeployService
+	appDeployHandler *handler.AppDeployHandler
+	appSecretHandler *handler.AppSecretHandler
 	// registryCredHandler stores a project's private-registry credentials, write-only.
 	registryCredHandler *handler.RegistryCredentialHandler
 	appLogHandler       *handler.AppLogHandler
@@ -1503,6 +1505,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	appDeploySvc.SetLocalRegistries(cfg.AppLocalRegistries)
 	appNetworkSvc := newAppNetworkService(sqlStore, store, appRuntime, a.claimer)
 	schemaHandler := newSchemaHandler(cfg, vc, store)
+	sitesSvc := newSitesService(cfg, sqlStore)
+	provSvc.SetSitePurger(sitesSvc)
 	return &handlerDeps{
 		provHandler:         provHandler,
 		sdkKeysHandler:      handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
@@ -1532,6 +1536,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:     realtimeHandler,
 		permissionHandler:   newPermissionHandler(cfg, sqlStore, store, a.projectDB),
 		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget),
+		siteHandler:         handler.NewSiteHandler(sitesSvc),
 		storageBudgetH:      handler.NewStorageBudgetHandler(a.budget),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
 		appDeploySvc:        appDeploySvc,
@@ -1587,14 +1592,16 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 	type configBody struct {
 		DeploymentMode string `json:"deploymentMode"`
 		AppHosting     bool   `json:"appHosting"`
-		CustomDomains  bool   `json:"customDomains"`
+		// Sites is whether this install can publish sites (EXC-353).
+		Sites         bool `json:"sites"`
+		CustomDomains bool `json:"customDomains"`
 		// Features is what ships dark and whether it is on (EXC-554).
 		Features map[string]bool `json:"features"`
 		// The public API base Studio's connect snippets point at (the SDK's url).
 		APIURL string `json:"apiUrl"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled,
+		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled, Sites: cfg.SitesAvailable(),
 			CustomDomains: customDomainsOn(cfg), Features: features.Snapshot(r.Context(), flags),
 			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/")}
 		w.Header().Set("Content-Type", "application/json")
@@ -2048,6 +2055,15 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.With(dev).Delete("/{registry}", d.registryCredHandler.Remove)
 		})
 	}
+	// Sites (EXC-353): mounted on every install so callers learn it is not
+	// available here; reads = any member, writes = Developer+.
+	r.Route("/api/projects/{projectId}/sites", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(d.activity)
+		d.siteHandler.Routes(r, custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+	})
 	r.Route("/api/projects/{projectId}/schema", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
