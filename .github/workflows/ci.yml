@@ -77,6 +77,8 @@ jobs:
           done
       - name: Sites deploy upload on the edge (real Caddy)
         run: sh deploy/single-host/tests/sites-edge.sh docker
+      - name: API upload size on the edge (real Caddy and Studio nginx)
+        run: sh deploy/single-host/tests/api-upload-edge.sh docker
 
   sites-router:
     name: Sites router Worker

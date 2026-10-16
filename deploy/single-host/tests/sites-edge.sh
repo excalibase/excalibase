@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Sites (EXC-353) on the single-host edge: the real Caddyfile in the compose
 # file's Caddy image, with stand-ins for Studio and provisioning. Only a site
-# deploy upload passes the 10 MB cap (up to 150 MiB) and goes straight to
+# deploy upload passes the 10 MiB cap (up to 150 MiB) and goes straight to
 # provisioning's edge listener; Studio's nginx in front of the rest of /api
 # keeps its own limit.
 #
@@ -67,8 +67,8 @@ expect "a 140 MiB site deploy (provisioning's ceiling) passes" "provisioning 200
 expect "a site deploy past 150 MiB is refused" " 413" $DEPLOY 151
 expect "a small site deploy goes to provisioning too" "provisioning 200" $DEPLOY 1
 expect "the rest of /api still goes through Studio" "studio 200" /api/projects/p1/sites 1
-expect "an app deploy keeps the 10 MB cap" " 413" /api/projects/p1/apps/a1/deploy 20
-expect "a deploy listing keeps the 10 MB cap" " 413" /api/projects/p1/sites/s1/deploys 20
+expect "an app deploy keeps the 10 MiB cap" " 413" /api/projects/p1/apps/a1/deploy 20
+expect "a deploy listing keeps the 10 MiB cap" " 413" /api/projects/p1/sites/s1/deploys 20
 
 PORT=$FENCED_PORT
 expect "a site deploy from outside the Studio allowlist is refused" " 403" $DEPLOY 1
