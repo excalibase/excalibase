@@ -177,6 +177,10 @@ func (s *Service) publish(ctx context.Context, site *Site, manifest map[string]c
 	if err := s.publisher.PutScript(ctx, script, completion, assetConfig(spaFallback)); err != nil {
 		return publishFailure(site, stepPublish, err)
 	}
+	// Written on every publish: idempotent, and it heals a missing entry.
+	if err := s.publisher.PutKV(ctx, site.Hostname, script); err != nil {
+		return publishFailure(site, stepRoute, err)
+	}
 	return nil
 }
 

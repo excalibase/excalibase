@@ -144,6 +144,7 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 					Wired: set(cfg.Sites.AccountID, cfg.Sites.APIToken)},
 				{Name: "dispatch namespace (SITES_DISPATCH_NAMESPACE)", Wired: set(cfg.Sites.DispatchNamespace)},
 				{Name: "user-content domain (SITES_BASE_DOMAIN)", Wired: set(cfg.Sites.BaseDomain)},
+				{Name: "hosts KV namespace the dispatch Worker reads (SITES_HOSTS_KV_NAMESPACE_ID)", Wired: set(cfg.Sites.HostsKVNamespaceID)},
 			},
 		},
 		{

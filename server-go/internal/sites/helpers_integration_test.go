@@ -81,6 +81,10 @@ func (acceptingPublisher) PutScript(context.Context, string, string, cfworkers.A
 
 func (acceptingPublisher) DeleteScript(context.Context, string) error { return nil }
 
+func (acceptingPublisher) PutKV(context.Context, string, string) error { return nil }
+
+func (acceptingPublisher) DeleteKV(context.Context, string) error { return nil }
+
 func sampleArchive(t *testing.T) []byte {
 	t.Helper()
 	var raw bytes.Buffer

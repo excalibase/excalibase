@@ -13,6 +13,7 @@ func setSitesEnv(t *testing.T) {
 	t.Setenv("SITES_CLOUDFLARE_API_TOKEN", "cf-token")
 	t.Setenv("SITES_DISPATCH_NAMESPACE", "excalibase-sites")
 	t.Setenv("SITES_BASE_DOMAIN", "excalibase.app")
+	t.Setenv("SITES_HOSTS_KV_NAMESPACE_ID", "kv-hosts-1")
 }
 
 func TestSites_ReadItsSettings(t *testing.T) {
@@ -20,7 +21,7 @@ func TestSites_ReadItsSettings(t *testing.T) {
 	cfg := Load()
 	got := cfg.Sites
 	if !cfg.SitesEnabled || got.AccountID != "acct123" || got.APIToken != "cf-token" ||
-		got.DispatchNamespace != "excalibase-sites" || got.BaseDomain != "excalibase.app" {
+		got.DispatchNamespace != "excalibase-sites" || got.BaseDomain != "excalibase.app" || got.HostsKVNamespaceID != "kv-hosts-1" {
 		t.Fatalf("sites settings: %+v", got)
 	}
 	if !cfg.SitesAvailable() {
@@ -29,9 +30,17 @@ func TestSites_ReadItsSettings(t *testing.T) {
 }
 
 func TestSites_OffUnlessSwitchedOnWithEverySetting(t *testing.T) {
-	complete := SitesConfig{AccountID: "a", APIToken: "t", DispatchNamespace: "n", BaseDomain: "excalibase.app"}
+	complete := SitesConfig{AccountID: "a", APIToken: "t", DispatchNamespace: "n", BaseDomain: "excalibase.app", HostsKVNamespaceID: "k"}
 	if (AppConfig{Sites: complete}).SitesAvailable() {
 		t.Error("settings without SITES_ENABLED offered Sites")
+	}
+	if !(AppConfig{SitesEnabled: true, Sites: complete}).SitesAvailable() {
+		t.Error("complete settings did not offer Sites")
+	}
+	missingHosts := complete
+	missingHosts.HostsKVNamespaceID = ""
+	if (AppConfig{SitesEnabled: true, Sites: missingHosts}).SitesAvailable() {
+		t.Error("a missing hosts KV namespace offered Sites")
 	}
 	missingToken := complete
 	missingToken.APIToken = ""

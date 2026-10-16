@@ -29,6 +29,9 @@ type Publisher interface {
 	UploadBucket(ctx context.Context, uploadJWT string, assets []cfworkers.Asset) (string, error)
 	PutScript(ctx context.Context, script, completionJWT string, config cfworkers.AssetConfig) error
 	DeleteScript(ctx context.Context, script string) error
+	// PutKV and DeleteKV keep the hosts table the dispatch Worker routes by: hostname → script.
+	PutKV(ctx context.Context, key, value string) error
+	DeleteKV(ctx context.Context, key string) error
 }
 
 // CorsOrigins is the project's CORS list, where an owner key marks the origins a site added.
@@ -80,6 +83,8 @@ const (
 	stepUploadFiles = "upload the files"
 	stepPublish     = "publish the site"
 	stepDelete      = "delete the site"
+	stepRoute       = "route the hostname"
+	stepUnroute     = "stop routing the hostname"
 )
 
 // PublishError is Cloudflare refusing or failing a deploy step. Its message
@@ -220,6 +225,10 @@ func (s *Service) Delete(ctx context.Context, projectID, id string) error {
 func (s *Service) remove(ctx context.Context, site *Site, lease *siteLease) error {
 	cdnCtx, cancel := context.WithTimeout(ctx, publishTimeout)
 	defer cancel()
+	// The router stops sending traffic first, then the Worker goes.
+	if err := s.publisher.DeleteKV(cdnCtx, site.Hostname); err != nil {
+		return publishFailure(site, stepUnroute, err)
+	}
 	if err := s.publisher.DeleteScript(cdnCtx, ScriptName(site)); err != nil {
 		return publishFailure(site, stepDelete, err)
 	}

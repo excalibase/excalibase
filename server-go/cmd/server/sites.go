@@ -21,6 +21,7 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore) *site
 	if cfg.SitesAvailable() {
 		client, err := cfworkers.New(cfworkers.Config{
 			AccountID: cfg.Sites.AccountID, APIToken: cfg.Sites.APIToken, Namespace: cfg.Sites.DispatchNamespace,
+			KVNamespace: cfg.Sites.HostsKVNamespaceID,
 		})
 		if err != nil {
 			log.Fatalf("sites: %v", err)

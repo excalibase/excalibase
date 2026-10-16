@@ -16,24 +16,28 @@ type SitesConfig struct {
 	DispatchNamespace string
 	// BaseDomain is the user-content domain each site is a hostname under.
 	BaseDomain string
+	// HostsKVNamespaceID is the Workers KV namespace the dispatch Worker reads hostname → script from.
+	HostsKVNamespaceID string
 }
 
 func loadSites() SitesConfig {
 	return SitesConfig{
-		AccountID:         strings.TrimSpace(os.Getenv("SITES_CLOUDFLARE_ACCOUNT_ID")),
-		APIToken:          strings.TrimSpace(os.Getenv("SITES_CLOUDFLARE_API_TOKEN")),
-		DispatchNamespace: strings.TrimSpace(os.Getenv("SITES_DISPATCH_NAMESPACE")),
-		BaseDomain:        strings.ToLower(strings.TrimSpace(os.Getenv("SITES_BASE_DOMAIN"))),
+		AccountID:          strings.TrimSpace(os.Getenv("SITES_CLOUDFLARE_ACCOUNT_ID")),
+		APIToken:           strings.TrimSpace(os.Getenv("SITES_CLOUDFLARE_API_TOKEN")),
+		DispatchNamespace:  strings.TrimSpace(os.Getenv("SITES_DISPATCH_NAMESPACE")),
+		BaseDomain:         strings.ToLower(strings.TrimSpace(os.Getenv("SITES_BASE_DOMAIN"))),
+		HostsKVNamespaceID: strings.TrimSpace(os.Getenv("SITES_HOSTS_KV_NAMESPACE_ID")),
 	}
 }
 
 // Complete reports whether every Cloudflare setting is given.
 func (s SitesConfig) Complete() bool {
-	return s.AccountID != "" && s.APIToken != "" && s.DispatchNamespace != "" && s.BaseDomain != ""
+	return s.AccountID != "" && s.APIToken != "" && s.DispatchNamespace != "" && s.BaseDomain != "" && s.HostsKVNamespaceID != ""
 }
 
 func (s SitesConfig) String() string {
-	return fmt.Sprintf("{AccountID:%s APIToken:[redacted] DispatchNamespace:%s BaseDomain:%s}", s.AccountID, s.DispatchNamespace, s.BaseDomain)
+	return fmt.Sprintf("{AccountID:%s APIToken:[redacted] DispatchNamespace:%s BaseDomain:%s HostsKVNamespaceID:%s}",
+		s.AccountID, s.DispatchNamespace, s.BaseDomain, s.HostsKVNamespaceID)
 }
 
 func (s SitesConfig) GoString() string { return "config.SitesConfig" + s.String() }

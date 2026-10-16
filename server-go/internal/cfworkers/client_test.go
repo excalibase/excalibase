@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	testAccount   = "acct123"
-	testNamespace = "sites-ns"
-	testToken     = "cf-api-token-never-shown"
-	testScript    = "site-abc"
+	testAccount     = "acct123"
+	testNamespace   = "sites-ns"
+	testToken       = "cf-api-token-never-shown"
+	testScript      = "site-abc"
+	testKVNamespace = "kv-hosts-1"
 )
 
 // fakeCloudflare records what the client sent and answers like the Workers API.
@@ -45,7 +46,7 @@ func newFake(t *testing.T, handle func(w http.ResponseWriter, r *http.Request, b
 		fake.handle(w, r, body)
 	}))
 	t.Cleanup(server.Close)
-	client, err := New(Config{BaseURL: server.URL, AccountID: testAccount, APIToken: testToken, Namespace: testNamespace})
+	client, err := New(Config{BaseURL: server.URL, AccountID: testAccount, APIToken: testToken, Namespace: testNamespace, KVNamespace: testKVNamespace})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -60,9 +61,10 @@ func writeEnvelope(w http.ResponseWriter, status int, result any) {
 
 func TestNewRefusesMissingSettings(t *testing.T) {
 	for _, cfg := range []Config{
-		{AccountID: "", APIToken: "t", Namespace: "n"},
-		{AccountID: "a", APIToken: "", Namespace: "n"},
-		{AccountID: "a", APIToken: "t", Namespace: ""},
+		{AccountID: "", APIToken: "t", Namespace: "n", KVNamespace: "k"},
+		{AccountID: "a", APIToken: "", Namespace: "n", KVNamespace: "k"},
+		{AccountID: "a", APIToken: "t", Namespace: "", KVNamespace: "k"},
+		{AccountID: "a", APIToken: "t", Namespace: "n", KVNamespace: ""},
 	} {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("New(%+v) accepted a missing setting", cfg)
@@ -236,7 +238,7 @@ func TestErrorsCarryCloudflareMessageButNeverTheToken(t *testing.T) {
 }
 
 func TestUnreachableCloudflareNeverEchoesTheToken(t *testing.T) {
-	client, err := New(Config{BaseURL: "http://127.0.0.1:1", AccountID: testAccount, APIToken: testToken, Namespace: testNamespace})
+	client, err := New(Config{BaseURL: "http://127.0.0.1:1", AccountID: testAccount, APIToken: testToken, Namespace: testNamespace, KVNamespace: testKVNamespace})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -282,7 +284,7 @@ func readFormParts(t *testing.T, r *http.Request, body []byte) []formPart {
 }
 
 func TestNewDefaultsToTheCloudflareAPI(t *testing.T) {
-	client, err := New(Config{AccountID: testAccount, APIToken: testToken, Namespace: testNamespace})
+	client, err := New(Config{AccountID: testAccount, APIToken: testToken, Namespace: testNamespace, KVNamespace: testKVNamespace})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -347,14 +349,64 @@ func TestTheLastUploadWithoutACompletionTokenIsAnError(t *testing.T) {
 	}
 }
 
-func TestRedactedPathDropsTheQuery(t *testing.T) {
-	if got := redactedPath("https://api.cloudflare.com/client/v4/x?secret=1"); got != "/client/v4/x" {
-		t.Fatalf("got %q", got)
-	}
-	if got := redactedPath("://bad"); got != "(unparseable url)" {
-		t.Fatalf("got %q", got)
-	}
+func TestUnwrapKeepsAPlainError(t *testing.T) {
 	if err := unwrapURLError(errors.New("plain")); err.Error() != "plain" {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestPutKVWritesTheScriptUnderTheHostname(t *testing.T) {
+	fake, client := newFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		writeEnvelope(w, http.StatusOK, nil)
+	})
+	if err := client.PutKV(context.Background(), "shop.excalibase.app", testScript); err != nil {
+		t.Fatalf("PutKV: %v", err)
+	}
+	got := fake.requests[0]
+	if got.method != http.MethodPut || got.path != "/client/v4/accounts/acct123/storage/kv/namespaces/kv-hosts-1/values/shop.excalibase.app" {
+		t.Fatalf("request = %s %s", got.method, got.path)
+	}
+	if string(got.body) != testScript || got.auth != "Bearer "+testToken {
+		t.Fatalf("body = %q auth = %q", got.body, got.auth)
+	}
+}
+
+func TestDeleteKVTreatsAMissingKeyAsGone(t *testing.T) {
+	fake, client := newFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"success":false,"errors":[{"code":10009,"message":"key not found"}]}`))
+	})
+	if err := client.DeleteKV(context.Background(), "shop.excalibase.app"); err != nil {
+		t.Fatalf("DeleteKV: %v", err)
+	}
+	if got := fake.requests[0]; got.method != http.MethodDelete || !strings.HasSuffix(got.path, "/storage/kv/namespaces/kv-hosts-1/values/shop.excalibase.app") {
+		t.Fatalf("request = %s %s", got.method, got.path)
+	}
+}
+
+func TestKVErrorsNeverNameTheAccount(t *testing.T) {
+	client, err := New(Config{BaseURL: "http://127.0.0.1:1", AccountID: "acct-9f3e", APIToken: testToken, Namespace: testNamespace, KVNamespace: testKVNamespace})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, err := range []error{
+		client.PutKV(context.Background(), "shop.excalibase.app", testScript),
+		client.DeleteKV(context.Background(), "shop.excalibase.app"),
+	} {
+		if err == nil || strings.Contains(err.Error(), "acct-9f3e") || strings.Contains(err.Error(), testToken) {
+			t.Errorf("err = %v", err)
+		}
+	}
+}
+
+func TestAKeyThatIsNotAHostnameNeverReachesCloudflare(t *testing.T) {
+	fake, client := newFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		writeEnvelope(w, http.StatusOK, nil)
+	})
+	if err := client.PutKV(context.Background(), "../../tokens", testScript); err == nil {
+		t.Error("PutKV accepted a key that is not a hostname")
+	}
+	if len(fake.requests) != 0 {
+		t.Fatalf("requests = %d", len(fake.requests))
 	}
 }

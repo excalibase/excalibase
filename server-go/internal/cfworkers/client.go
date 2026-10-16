@@ -39,7 +39,9 @@ type Config struct {
 	AccountID string
 	APIToken  string
 	Namespace string
-	HTTP      *http.Client
+	// KVNamespace is the Workers KV namespace the dispatch Worker reads hostname → script from.
+	KVNamespace string
+	HTTP        *http.Client
 }
 
 // Client calls the Workers API with the platform's token.
@@ -48,13 +50,14 @@ type Client struct {
 	accountID string
 	token     string
 	namespace string
+	kv        string
 	http      *http.Client
 }
 
 // New refuses a config missing any setting rather than calling Cloudflare half-configured.
 func New(cfg Config) (*Client, error) {
-	if cfg.AccountID == "" || cfg.APIToken == "" || cfg.Namespace == "" {
-		return nil, errors.New("cloudflare workers client needs an account id, an API token and a dispatch namespace")
+	if cfg.AccountID == "" || cfg.APIToken == "" || cfg.Namespace == "" || cfg.KVNamespace == "" {
+		return nil, errors.New("cloudflare workers client needs an account id, an API token, a dispatch namespace and a KV namespace")
 	}
 	baseURL := strings.TrimRight(cfg.BaseURL, "/")
 	if baseURL == "" {
@@ -64,7 +67,7 @@ func New(cfg Config) (*Client, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: requestTimeout}
 	}
-	return &Client{baseURL: baseURL, accountID: cfg.AccountID, token: cfg.APIToken, namespace: cfg.Namespace, http: httpClient}, nil
+	return &Client{baseURL: baseURL, accountID: cfg.AccountID, token: cfg.APIToken, namespace: cfg.Namespace, kv: cfg.KVNamespace, http: httpClient}, nil
 }
 
 // APIError is a refusal Cloudflare answered; it carries Cloudflare's own message, never a credential.
@@ -122,7 +125,8 @@ func (c *Client) call(ctx context.Context, method, target, bearer, contentType s
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return 0, nil, fmt.Errorf("call cloudflare %s %s: %w", method, redactedPath(target), unwrapURLError(err))
+		// The URL names the account and namespaces, so only the method is kept.
+		return 0, nil, fmt.Errorf("call cloudflare %s: %w", method, unwrapURLError(err))
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
@@ -151,15 +155,6 @@ func apiError(status int, messages []apiMessage) *APIError {
 		apiErr.Message = strings.Join(texts, "; ")
 	}
 	return apiErr
-}
-
-// redactedPath keeps the path of a target for an error without its query.
-func redactedPath(target string) string {
-	parsed, err := url.Parse(target)
-	if err != nil {
-		return "(unparseable url)"
-	}
-	return parsed.Path
 }
 
 // unwrapURLError drops the *url.Error wrapper, which would repeat the full URL.

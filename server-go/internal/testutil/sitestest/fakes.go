@@ -238,10 +238,37 @@ type Publisher struct {
 	Forget    bool
 	// BeforePut runs at the start of PutScript, with the context it was called with.
 	BeforePut func(ctx context.Context)
+	// Hosts is the hostname → script table; FailKV fails every write to it.
+	Hosts  map[string]string
+	FailKV error
+	// Calls records publish, delete and host writes in order.
+	Calls []string
 }
 
 func NewPublisher() *Publisher {
-	return &Publisher{Stored: map[string]string{}, Published: map[string]cfworkers.AssetConfig{}}
+	return &Publisher{Stored: map[string]string{}, Published: map[string]cfworkers.AssetConfig{}, Hosts: map[string]string{}}
+}
+
+func (f *Publisher) PutKV(_ context.Context, key, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailKV != nil {
+		return f.FailKV
+	}
+	f.Calls = append(f.Calls, "put-host")
+	f.Hosts[key] = value
+	return nil
+}
+
+func (f *Publisher) DeleteKV(_ context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailKV != nil {
+		return f.FailKV
+	}
+	f.Calls = append(f.Calls, "delete-host")
+	delete(f.Hosts, key)
+	return nil
 }
 
 func (f *Publisher) StartUploadSession(_ context.Context, _ string, manifest map[string]cfworkers.ManifestEntry) (cfworkers.UploadSession, error) {
@@ -299,6 +326,7 @@ func (f *Publisher) PutScript(ctx context.Context, script, completionJWT string,
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, "put-script")
 	f.Published[script] = config
 	return nil
 }
@@ -306,6 +334,7 @@ func (f *Publisher) PutScript(ctx context.Context, script, completionJWT string,
 func (f *Publisher) DeleteScript(_ context.Context, script string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, "delete-script")
 	f.Deleted = append(f.Deleted, script)
 	delete(f.Published, script)
 	return nil
