@@ -323,3 +323,13 @@ func TestSiteDeployFailureShowsNoAccountDetail(t *testing.T) {
 		t.Fatalf("history shows account detail: %s", history)
 	}
 }
+
+func TestSiteDeployAdmissionRefusalsAreTooManyRequests(t *testing.T) {
+	for _, err := range []error{sites.ErrTooManyDeploys, sites.ErrProjectDeployRunning} {
+		recorder := httptest.NewRecorder()
+		writeSiteError(recorder, err)
+		if recorder.Code != http.StatusTooManyRequests {
+			t.Errorf("%v = %d, want 429", err, recorder.Code)
+		}
+	}
+}

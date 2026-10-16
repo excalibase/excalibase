@@ -45,6 +45,8 @@ type Options struct {
 	SpoolDir string
 	// DeployLimits answers a project's limits; nil holds every project to DefaultLimits.
 	DeployLimits DeployLimiter
+	// MaxDeploysInFlight caps uploads at once across the process; 0 is DefaultDeploysInFlight.
+	MaxDeploysInFlight int
 }
 
 // DeployLimiter answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.
@@ -114,6 +116,7 @@ type Service struct {
 	publisher Publisher
 	origins   CorsOrigins
 	options   Options
+	admission *admission
 	now       func() time.Time
 }
 
@@ -124,7 +127,8 @@ func NewService(store Store, publisher Publisher, origins CorsOrigins, options O
 	if publisher != nil && strings.TrimSpace(options.BaseDomain) == "" {
 		return nil, errors.New("sites need a user-content base domain")
 	}
-	return &Service{store: store, publisher: publisher, origins: origins, options: options, now: time.Now}, nil
+	return &Service{store: store, publisher: publisher, origins: origins, options: options,
+		admission: newAdmission(options.MaxDeploysInFlight), now: time.Now}, nil
 }
 
 // Available reports whether this install has a Cloudflare account to publish sites with.

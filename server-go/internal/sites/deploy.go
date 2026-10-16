@@ -38,6 +38,11 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 	if err != nil {
 		return nil, err
 	}
+	admitted, err := s.admission.admit(request.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer admitted()
 	bundle, err := ReadArchive(request.Body, limits, s.spoolDir())
 	if err != nil {
 		return nil, err

@@ -173,6 +173,9 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	case errors.Is(err, sites.ErrSiteNameTaken), errors.Is(err, sites.ErrSiteLimitReached), errors.Is(err, sites.ErrSiteBusy), errors.Is(err, sites.ErrLeaseLost),
 		errors.Is(err, sites.ErrDeployNotServable), errors.Is(err, sites.ErrRollbackNeedsFiles):
 		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, sites.ErrTooManyDeploys), errors.Is(err, sites.ErrProjectDeployRunning):
+		w.Header().Set("Retry-After", "60")
+		httpError(w, err.Error(), http.StatusTooManyRequests)
 	case errors.As(err, &tooLarge):
 		httpError(w, "the upload is larger than this project's deploys may be", http.StatusRequestEntityTooLarge)
 	case errors.As(err, &archiveErr) && archiveErr.TooLarge:
