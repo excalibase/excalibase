@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/excalibase/provisioning-poc/internal/testutil/sitestest"
 )
@@ -115,8 +116,8 @@ func TestDeleteRefusesWhileADeployRuns(t *testing.T) {
 
 func TestPublishErrorsUnwrapToTheCause(t *testing.T) {
 	cause := errors.New("cloudflare answered 500")
-	err := error(&sites.PublishError{Err: cause})
-	if !errors.Is(err, cause) || !strings.Contains(err.Error(), "cloudflare answered 500") {
+	err := error(&sites.PublishError{Step: "publish the site", Err: cause})
+	if !errors.Is(err, cause) || strings.Contains(err.Error(), "cloudflare answered 500") {
 		t.Fatalf("err = %v", err)
 	}
 	if (&sites.InputError{Reason: "bad name"}).Error() != "bad name" {
@@ -149,5 +150,38 @@ func TestDeployWithoutASpoolDirUsesTheSystemTemp(t *testing.T) {
 	}
 	if _, err := service.Deploy(context.Background(), sites.DeployRequest{ProjectID: testProject, SiteID: site.ID, Body: bytes.NewReader(viteDist(t))}); err != nil {
 		t.Fatalf("Deploy: %v", err)
+	}
+}
+
+// Cloudflare's errors name the account and namespace in their paths; viewers read failure reasons.
+func TestPublishFailuresNeverShowTheAccountOrNamespace(t *testing.T) {
+	leaky := []error{
+		errors.New("call cloudflare PUT /client/v4/accounts/acct-9f3e/workers/dispatch/namespaces/ns-prod-7/scripts/site-x: dial tcp: timeout"),
+		&cfworkers.APIError{Status: 400, Codes: []int{10021}, Message: "namespace ns-prod-7 in account acct-9f3e: bad jwt"},
+	}
+	for _, cause := range leaky {
+		h := newHarness(t)
+		h.publisher.FailPut = cause
+		site := h.createSite(t, "shop")
+		_, err := h.deploy(t, site, viteDist(t))
+		deploys, _ := h.service.ListDeploys(context.Background(), testProject, site.ID)
+		for _, shown := range []string{err.Error(), deploys[0].FailureReason} {
+			if strings.Contains(shown, "acct-9f3e") || strings.Contains(shown, "ns-prod-7") {
+				t.Errorf("shown to users: %q", shown)
+			}
+			if !strings.Contains(shown, "publish the site") {
+				t.Errorf("message %q does not name the step", shown)
+			}
+		}
+	}
+}
+
+func TestARefusalNamesCloudflaresCode(t *testing.T) {
+	h := newHarness(t)
+	h.publisher.FailPut = &cfworkers.APIError{Status: 400, Codes: []int{10021}, Message: "bad jwt"}
+	site := h.createSite(t, "shop")
+	_, err := h.deploy(t, site, viteDist(t))
+	if err == nil || err.Error() != "the CDN refused to publish the site (code 10021)" {
+		t.Fatalf("err = %v", err)
 	}
 }

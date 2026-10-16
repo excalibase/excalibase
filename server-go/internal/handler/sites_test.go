@@ -309,3 +309,17 @@ func TestSiteStoreFailureIsAnInternalErrorWithoutDetail(t *testing.T) {
 		}
 	}
 }
+
+func TestSiteDeployFailureShowsNoAccountDetail(t *testing.T) {
+	h := newSitesHarness(t)
+	h.publisher.FailPut = errors.New("PUT /client/v4/accounts/acct-9f3e/workers/dispatch/namespaces/ns-prod-7/scripts/x: timeout")
+	site := h.createSite(t, "shop")
+	response := h.do(t, http.MethodPost, "/"+site.ID+"/deploy", sitestest.Dist(t, "x"))
+	if response.Code != http.StatusBadGateway || strings.Contains(response.Body.String(), "acct-9f3e") || strings.Contains(response.Body.String(), "ns-prod-7") {
+		t.Fatalf("deploy = %d %s", response.Code, response.Body)
+	}
+	history := h.do(t, http.MethodGet, "/"+site.ID+"/deploys", nil).Body.String()
+	if strings.Contains(history, "acct-9f3e") || strings.Contains(history, "ns-prod-7") {
+		t.Fatalf("history shows account detail: %s", history)
+	}
+}

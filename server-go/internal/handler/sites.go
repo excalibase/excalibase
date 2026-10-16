@@ -180,8 +180,8 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	case errors.As(err, &archiveErr), errors.As(err, &inputErr):
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.As(err, &publishErr):
-		log.Printf("site publish: %v", err)
-		httpError(w, safeError(err), http.StatusBadGateway)
+		// The service logged the cause; the caller gets the fixed message for the step.
+		httpError(w, publishErr.Error(), http.StatusBadGateway)
 	default:
 		log.Printf("sites: %v", err)
 		httpError(w, "internal error", http.StatusInternalServerError)

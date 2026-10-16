@@ -69,11 +69,41 @@ func (s *Service) MaxUploadBytes(ctx context.Context, projectID string) (int64, 
 	return MaxArchiveBytes(limits), nil
 }
 
-// PublishError is Cloudflare refusing or failing a deploy step.
-type PublishError struct{ Err error }
+// Steps a PublishError names.
+const (
+	stepStartUpload = "start the upload"
+	stepUploadFiles = "upload the files"
+	stepPublish     = "publish the site"
+	stepDelete      = "delete the site"
+)
 
-func (e *PublishError) Error() string { return "the CDN did not take the deploy: " + e.Err.Error() }
+// PublishError is Cloudflare refusing or failing a deploy step. Its message
+// is fixed per step: Cloudflare's own text and paths name our account and
+// namespace, so they go to the log only.
+type PublishError struct {
+	Step string
+	Err  error
+}
+
+func (e *PublishError) Error() string {
+	var apiErr *cfworkers.APIError
+	if errors.As(e.Err, &apiErr) {
+		code := apiErr.Status
+		if len(apiErr.Codes) > 0 {
+			code = apiErr.Codes[0]
+		}
+		return fmt.Sprintf("the CDN refused to %s (code %d)", e.Step, code)
+	}
+	return "the CDN could not be reached to " + e.Step
+}
+
 func (e *PublishError) Unwrap() error { return e.Err }
+
+// publishFailure logs the full cause and answers the message users may see.
+func publishFailure(site *Site, step string, err error) error {
+	log.Printf("site %s: %s: %v", site.ID, step, err)
+	return &PublishError{Step: step, Err: err}
+}
 
 // Service runs the Sites API. With no Publisher, Sites is not available on this install.
 type Service struct {
@@ -182,7 +212,7 @@ func (s *Service) Delete(ctx context.Context, projectID, id string) error {
 
 func (s *Service) remove(ctx context.Context, site *Site) error {
 	if err := s.publisher.DeleteScript(ctx, ScriptName(site)); err != nil {
-		return &PublishError{Err: err}
+		return publishFailure(site, stepDelete, err)
 	}
 	if _, err := s.origins.ReleaseAppCorsOrigins(ctx, site.ProjectID, CorsOwner(site)); err != nil {
 		return fmt.Errorf("release the site's CORS origin: %w", err)

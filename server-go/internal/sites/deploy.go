@@ -150,19 +150,19 @@ func (s *Service) publish(ctx context.Context, site *Site, manifest map[string]c
 	script := ScriptName(site)
 	session, err := s.publisher.StartUploadSession(ctx, script, manifest)
 	if err != nil {
-		return &PublishError{Err: err}
+		return publishFailure(site, stepStartUpload, err)
 	}
-	completion, err := s.uploadBuckets(ctx, session, assetsFor)
+	completion, err := s.uploadBuckets(ctx, site, session, assetsFor)
 	if err != nil {
 		return err
 	}
 	if err := s.publisher.PutScript(ctx, script, completion, assetConfig(spaFallback)); err != nil {
-		return &PublishError{Err: err}
+		return publishFailure(site, stepPublish, err)
 	}
 	return nil
 }
 
-func (s *Service) uploadBuckets(ctx context.Context, session cfworkers.UploadSession,
+func (s *Service) uploadBuckets(ctx context.Context, site *Site, session cfworkers.UploadSession,
 	assetsFor func([]string) ([]cfworkers.Asset, error)) (string, error) {
 	if len(session.Buckets) == 0 {
 		return session.JWT, nil
@@ -178,14 +178,14 @@ func (s *Service) uploadBuckets(ctx context.Context, session cfworkers.UploadSes
 		}
 		token, err := s.publisher.UploadBucket(ctx, session.JWT, assets)
 		if err != nil {
-			return "", &PublishError{Err: err}
+			return "", publishFailure(site, stepUploadFiles, err)
 		}
 		if token != "" {
 			completion = token
 		}
 	}
 	if completion == "" {
-		return "", &PublishError{Err: fmt.Errorf("every file was sent but the upload was not confirmed")}
+		return "", publishFailure(site, stepUploadFiles, fmt.Errorf("every file was sent but the upload was not confirmed"))
 	}
 	return completion, nil
 }
@@ -201,7 +201,7 @@ func bundleAssets(bundle *Bundle) func([]string) ([]cfworkers.Asset, error) {
 		for _, hash := range hashes {
 			file, ok := byHash[hash]
 			if !ok {
-				return nil, &PublishError{Err: fmt.Errorf("the CDN asked for a file this deploy does not hold")}
+				return nil, &PublishError{Step: stepUploadFiles, Err: fmt.Errorf("the CDN asked for a file this deploy does not hold")}
 			}
 			assets = append(assets, cfworkers.Asset{
 				Hash: hash, ContentType: file.ContentType,
