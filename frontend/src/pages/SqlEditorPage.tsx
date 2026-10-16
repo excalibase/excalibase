@@ -297,6 +297,11 @@ export function ResultPanel({ result }: ResultPanelProps) {
   return (
     <div className="rounded-lg border border-border-primary overflow-hidden" data-testid="query-results">
       <ResultBody result={result} />
+      {result.notice && (
+        <div className="px-4 py-2 border-t border-border-primary text-xs text-amber-400" data-testid="query-notice">
+          {result.notice}
+        </div>
+      )}
     </div>
   );
 }
