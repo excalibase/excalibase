@@ -4,16 +4,21 @@ import { Database, Loader2 } from 'lucide-react';
 import { useAddDatabase, useInstance } from '../hooks/useProvisioning';
 import { usePostgresCatalog, findMajor } from '../api/postgresCatalog';
 import { PostgresVersionPicker } from '../components/PostgresVersionPicker';
+import { MySQLVersionPicker } from '../components/MySQLVersionPicker';
+import { useMySQLCatalog } from '../api/mysqlCatalog';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
+import type { DatabaseSettings } from '../types';
 import { apiErrorMessage } from '../api/apps';
 import { DOCUMENTDB_LABEL } from '../utils/engine';
 import { Button } from '../components/Button';
 import { secondaryButton } from '../components/containers/ContainerBits';
 
-type Engine = 'POSTGRESQL' | 'DOCUMENTDB';
+type Engine = 'POSTGRESQL' | 'DOCUMENTDB' | 'MYSQL';
 
 const ENGINES: readonly { engine: Engine; icon: string; label: string; desc: string }[] = [
   { engine: 'POSTGRESQL', icon: '🐘', label: 'PostgreSQL', desc: 'CloudNativePG operator' },
   { engine: 'DOCUMENTDB', icon: '🍃', label: DOCUMENTDB_LABEL, desc: 'MongoDB wire protocol on PostgreSQL' },
+  { engine: 'MYSQL', icon: '🐬', label: 'MySQL', desc: 'MySQL 8.4, TLS required' },
 ];
 
 function tileClass(selected: boolean): string {
@@ -31,6 +36,10 @@ export function AddDatabasePage() {
   const { data: project } = useInstance(projectId);
   const catalog = usePostgresCatalog();
   const addDatabase = useAddDatabase(projectId);
+  // MySQL ships dark behind its feature (ADR 0041), as on the create page.
+  const { enabled: mysqlOn } = useFeatureEnabled('mysql');
+  const mysqlCatalog = useMySQLCatalog(mysqlOn);
+  const [mysqlVersion, setMysqlVersion] = useState('');
 
   const [engine, setEngine] = useState<Engine>('POSTGRESQL');
   const [postgresVersion, setPostgresVersion] = useState('');
@@ -41,6 +50,7 @@ export function AddDatabasePage() {
   const chooseEngine = (next: Engine) => {
     setEngine(next);
     setDocumentDb(false);
+    if (next === 'MYSQL' && !mysqlVersion) setMysqlVersion(mysqlCatalog.data?.defaultVersion ?? '');
     if (next === 'DOCUMENTDB' && !findMajor(catalog.data, postgresVersion)?.documentDb) setPostgresVersion('');
   };
   const chooseVersion = (version: string) => {
@@ -73,14 +83,17 @@ export function AddDatabasePage() {
     );
   }
 
+  const isMySQL = engine === 'MYSQL';
+  const chosenVersion = isMySQL ? mysqlVersion : postgresVersion;
+  const databaseSettings = (): DatabaseSettings =>
+    isMySQL
+      ? { databaseType: 'MYSQL', mysqlVersion }
+      : { databaseType: 'POSTGRESQL', postgresVersion, documentDb: documentDbOnly || documentDb };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFailure('');
-    const result = await addDatabase.mutateAsync({
-      databaseType: 'POSTGRESQL',
-      postgresVersion,
-      documentDb: documentDbOnly || documentDb,
-    });
+    const result = await addDatabase.mutateAsync(databaseSettings());
     if (result.noDatabase && result.status !== 'PROVISIONING') {
       setFailure(result.failureReason || 'The database could not be created.');
       return;
@@ -100,7 +113,7 @@ export function AddDatabasePage() {
         </p>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        {ENGINES.map(({ engine: option, icon, label, desc }) => (
+        {ENGINES.filter(({ engine: option }) => option !== 'MYSQL' || mysqlOn).map(({ engine: option, icon, label, desc }) => (
           <button key={option} type="button" onClick={() => chooseEngine(option)} aria-pressed={engine === option}
             data-testid={`add-engine-${option}`}
             className={`p-4 rounded-xl border-2 text-left transition-all ${tileClass(engine === option)}`}
@@ -111,16 +124,26 @@ export function AddDatabasePage() {
           </button>
         ))}
       </div>
-      <PostgresVersionPicker
-        catalog={catalog.data}
-        isLoading={catalog.isLoading}
-        error={catalog.error}
-        version={postgresVersion}
-        onVersionChange={chooseVersion}
-        documentDb={documentDb}
-        onDocumentDbChange={setDocumentDb}
-        documentDbOnly={documentDbOnly}
-      />
+      {isMySQL ? (
+        <MySQLVersionPicker
+          catalog={mysqlCatalog.data}
+          isLoading={mysqlCatalog.isLoading}
+          error={mysqlCatalog.error}
+          version={mysqlVersion}
+          onVersionChange={setMysqlVersion}
+        />
+      ) : (
+        <PostgresVersionPicker
+          catalog={catalog.data}
+          isLoading={catalog.isLoading}
+          error={catalog.error}
+          version={postgresVersion}
+          onVersionChange={chooseVersion}
+          documentDb={documentDb}
+          onDocumentDbChange={setDocumentDb}
+          documentDbOnly={documentDbOnly}
+        />
+      )}
       {errorText && (
         <p role="alert" className="text-sm text-red-400 break-words">
           {errorText}
@@ -130,7 +153,7 @@ export function AddDatabasePage() {
         <Link to={`/project/${projectId}`} className={secondaryButton}>
           Cancel
         </Link>
-        <Button type="submit" data-testid="add-database-submit" disabled={addDatabase.isPending || !postgresVersion}>
+        <Button type="submit" data-testid="add-database-submit" disabled={addDatabase.isPending || !chosenVersion}>
           {addDatabase.isPending
             ? <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Creating the database...</>
             : <><Database className="w-4 h-4 mr-2 inline" /> Add database</>}

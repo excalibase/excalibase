@@ -19,9 +19,11 @@ type mockPools struct {
 	err error
 }
 
-func (p mockPools) Open(context.Context, string) (*sql.DB, error) { return p.db, p.err }
-func (mockPools) Evict(string)                                    {}
-func (mockPools) ProjectStatusChanged(string, string)             {}
+func (p mockPools) Open(context.Context, string) (*sql.DB, error)            { return p.db, p.err }
+func (p mockPools) OpenMySQL(context.Context, string, bool) (*sql.DB, error) { return p.db, p.err }
+func (mockPools) KillMySQLQuery(context.Context, *sql.DB, int64) error       { return nil }
+func (mockPools) Evict(string)                                               {}
+func (mockPools) ProjectStatusChanged(string, string)                        {}
 
 func targetOver(t *testing.T, storage string, err error) (TableLoader, sqlmock.Sqlmock) {
 	t.Helper()

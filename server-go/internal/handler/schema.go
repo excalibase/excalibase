@@ -28,6 +28,11 @@ const (
 // platform's statement and lock timeouts (projectdb.Opener).
 type projectPools interface {
 	Open(ctx context.Context, projectID string) (*sql.DB, error)
+	// OpenMySQL is a MySQL project's pool; a script pool takes several
+	// statements per request (EXC-619).
+	OpenMySQL(ctx context.Context, projectID string, script bool) (*sql.DB, error)
+	// KillMySQLQuery stops a runaway statement from outside its pool.
+	KillMySQLQuery(ctx context.Context, db *sql.DB, threadID int64) error
 	Evict(projectID string)
 	ProjectStatusChanged(projectID, status string)
 }
@@ -35,6 +40,7 @@ type projectPools interface {
 type SchemaHandler struct {
 	pools        projectPools
 	introspector *schema.Introspector
+	mysql        *schema.MySQLCatalog
 	instances    storage.InstanceStore
 	publisher    PolicyChangePublisher // optional
 }
@@ -95,6 +101,7 @@ func NewSchemaHandler(pools projectPools, statementTimeout time.Duration) *Schem
 	return &SchemaHandler{
 		pools:        pools,
 		introspector: schema.NewIntrospector().WithStatementTimeout(statementTimeout),
+		mysql:        schema.NewMySQLCatalog().WithStatementTimeout(statementTimeout).WithKiller(pools.KillMySQLQuery),
 	}
 }
 
@@ -195,12 +202,12 @@ func (h *SchemaHandler) routes(r chi.Router) {
 // --- Tables ---
 
 func (h *SchemaHandler) GetTables(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
-	tables, err := h.introspector.GetTables(r.Context(), db, schemaParam(r))
+	tables, err := catalog.GetTables(r.Context(), db, schemaParam(r))
 	if err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
@@ -209,12 +216,12 @@ func (h *SchemaHandler) GetTables(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) GetColumns(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
-	cols, err := h.introspector.GetColumns(r.Context(), db, schemaParam(r), chi.URLParam(r, "tableName"))
+	cols, err := catalog.GetColumns(r.Context(), db, schemaParam(r), chi.URLParam(r, "tableName"))
 	if err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
@@ -223,12 +230,12 @@ func (h *SchemaHandler) GetColumns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) GetRelationships(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
-	rels, err := h.introspector.GetRelationships(r.Context(), db, schemaParam(r))
+	rels, err := catalog.GetRelationships(r.Context(), db, schemaParam(r))
 	if err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
@@ -237,12 +244,12 @@ func (h *SchemaHandler) GetRelationships(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *SchemaHandler) GetIndexes(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
-	indexes, err := h.introspector.GetIndexes(r.Context(), db, schemaParam(r), chi.URLParam(r, "tableName"))
+	indexes, err := catalog.GetIndexes(r.Context(), db, schemaParam(r), chi.URLParam(r, "tableName"))
 	if err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
@@ -251,12 +258,12 @@ func (h *SchemaHandler) GetIndexes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) GetCheckConstraints(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
-	checks, err := h.introspector.GetCheckConstraints(r.Context(), db, schemaParam(r), chi.URLParam(r, "tableName"))
+	checks, err := catalog.GetCheckConstraints(r.Context(), db, schemaParam(r), chi.URLParam(r, "tableName"))
 	if err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
@@ -265,7 +272,7 @@ func (h *SchemaHandler) GetCheckConstraints(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *SchemaHandler) CreateTable(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -279,7 +286,7 @@ func (h *SchemaHandler) CreateTable(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	if err := h.introspector.CreateTable(r.Context(), db, req); err != nil {
+	if err := catalog.CreateTable(r.Context(), db, req); err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -308,14 +315,14 @@ func (h *SchemaHandler) UpdateTable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropTable(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	tableName := chi.URLParam(r, "tableName")
 	cascade := r.URL.Query().Get("cascade") == "true"
-	if err := h.introspector.DropTable(r.Context(), db, schemaParam(r), tableName, cascade); err != nil {
+	if err := catalog.DropTable(r.Context(), db, schemaParam(r), tableName, cascade); err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -325,7 +332,7 @@ func (h *SchemaHandler) DropTable(w http.ResponseWriter, r *http.Request) {
 // --- Columns ---
 
 func (h *SchemaHandler) AddColumn(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -340,7 +347,7 @@ func (h *SchemaHandler) AddColumn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tableName := chi.URLParam(r, "tableName")
-	if err := h.introspector.AddColumn(r.Context(), db, schemaParam(r), tableName, req); err != nil {
+	if err := catalog.AddColumn(r.Context(), db, schemaParam(r), tableName, req); err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -370,14 +377,14 @@ func (h *SchemaHandler) AlterColumn(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropColumn(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	tableName := chi.URLParam(r, "tableName")
 	columnName := chi.URLParam(r, "columnName")
-	if err := h.introspector.DropColumn(r.Context(), db, schemaParam(r), tableName, columnName); err != nil {
+	if err := catalog.DropColumn(r.Context(), db, schemaParam(r), tableName, columnName); err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -396,6 +403,67 @@ func indexOfByte(s string, sep byte) int {
 	return -1
 }
 
+// schemaCatalog is what the table editor and SQL runner need from an engine:
+// the Postgres introspector or the MySQL catalogue (ADR 0041, EXC-619).
+type schemaCatalog interface {
+	GetTables(ctx context.Context, db *sql.DB, schemaName string) ([]schema.TableInfo, error)
+	GetColumns(ctx context.Context, db *sql.DB, schemaName, table string) ([]schema.ColumnInfo, error)
+	GetRelationships(ctx context.Context, db *sql.DB, schemaName string) ([]schema.RelationshipInfo, error)
+	GetIndexes(ctx context.Context, db *sql.DB, schemaName, table string) ([]schema.IndexInfo, error)
+	GetCheckConstraints(ctx context.Context, db *sql.DB, schemaName, table string) ([]schema.CheckConstraint, error)
+	CreateTable(ctx context.Context, db *sql.DB, req schema.CreateTableRequest) error
+	DropTable(ctx context.Context, db *sql.DB, schemaName, name string, cascade bool) error
+	AddColumn(ctx context.Context, db *sql.DB, schemaName, table string, req schema.AddColumnRequest) error
+	DropColumn(ctx context.Context, db *sql.DB, schemaName, table, column string) error
+	CreateIndex(ctx context.Context, db *sql.DB, req schema.CreateIndexRequest) error
+	DropIndex(ctx context.Context, db *sql.DB, schemaName, name string) error
+	GetRows(ctx context.Context, db *sql.DB, schemaName, table string, opts schema.RowQueryOpts) (*schema.RowsResult, error)
+	InsertRow(ctx context.Context, db *sql.DB, schemaName, table string, data map[string]interface{}) (*schema.QueryResult, error)
+	UpdateRow(ctx context.Context, db *sql.DB, schemaName, table, keyColumn, keyValue string, data map[string]interface{}) error
+	DeleteRow(ctx context.Context, db *sql.DB, schemaName, table, keyColumn, keyValue string) error
+	ExecuteQuery(ctx context.Context, db *sql.DB, query string) schema.QueryResult
+	ExecuteDDL(ctx context.Context, db *sql.DB, ddl string) schema.DDLResult
+	ExecuteReadOnlyQuery(ctx context.Context, db *sql.DB, query string) schema.QueryResult
+	TestConnection(ctx context.Context, db *sql.DB) bool
+}
+
+var (
+	_ schemaCatalog = (*schema.Introspector)(nil)
+	_ schemaCatalog = (*schema.MySQLCatalog)(nil)
+)
+
+// catalogFor picks the request's project engine and opens its pool. A
+// script is SQL that may carry several statements (the runner, /ddl).
+func (h *SchemaHandler) catalogFor(r *http.Request, script bool) (schemaCatalog, *sql.DB, error) {
+	projectID := chi.URLParam(r, "projectId")
+	if !isValidID(projectID) {
+		return nil, nil, fmt.Errorf("invalid project id")
+	}
+	mysqlProject, err := h.isMySQL(projectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !mysqlProject {
+		db, err := h.pools.Open(r.Context(), projectID)
+		return h.introspector, db, err
+	}
+	db, err := h.pools.OpenMySQL(r.Context(), projectID, script)
+	return h.mysql, db, err
+}
+
+// isMySQL reads the project's engine. Without a store the pools decide, and
+// the Postgres pool refuses a MySQL project by name.
+func (h *SchemaHandler) isMySQL(projectID string) (bool, error) {
+	if h.instances == nil {
+		return false, nil
+	}
+	inst, err := h.instances.FindByProjectID(projectID)
+	if err != nil {
+		return false, fmt.Errorf("read project %s: %w", projectID, err)
+	}
+	return inst != nil && inst.DBType == domain.MySQL, nil
+}
+
 func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 	if !isValidID(projectId) {
 		return nil, fmt.Errorf("invalid project id")
@@ -406,6 +474,8 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 func (h *SchemaHandler) handleDBError(w http.ResponseWriter, err error) {
 	msg := err.Error()
 	switch {
+	case errors.Is(err, domain.ErrPostgresOnly):
+		httpError(w, domain.ErrPostgresOnly.Error(), http.StatusConflict)
 	case errors.Is(err, projectdb.ErrNotServable):
 		httpError(w, "project is not running", http.StatusConflict)
 	case errors.Is(err, domain.ErrNoDatabase):

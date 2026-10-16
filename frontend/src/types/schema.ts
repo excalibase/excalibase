@@ -52,6 +52,8 @@ export interface QueryResult {
   error?: string;
   // The server kept only the first rows (a row or size cap was reached).
   truncated?: boolean;
+  // What the engine does not undo or bound, said by the server (MySQL).
+  notice?: string;
 }
 
 // Roles

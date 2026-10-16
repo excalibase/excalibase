@@ -20,11 +20,23 @@ import { AccessSummary } from '../components/tables/AccessSummary';
 import { usePermissionDocument } from '../hooks/usePermissions';
 import { useProjectRole } from '../hooks/useProjectRole';
 import { rolesWithSelect, tableKey } from '../utils/permissionModel';
+import { useInstance } from '../hooks/useProvisioning';
+import { isMySQLProject } from '../utils/engine';
+import { columnTypesFor } from '../utils/engineSql';
+
+// Where a new table goes: a MySQL project's tables live in its one database.
+function newTableTarget(project: { databaseType?: string; databaseName?: string } | undefined) {
+  if (!isMySQLProject(project)) return { mysql: false, schema: 'public', key: 'postgres' };
+  return { mysql: true, schema: project?.databaseName ?? '', key: 'mysql' };
+}
 
 export function TablesPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const pid = projectId ?? '';
   const { data: tables = [], isLoading, error: tablesError } = useTables(pid);
+  const { data: project } = useInstance(pid);
+  const target = newTableTarget(project);
+  const mysql = target.mysql;
   const [selectedTable, setSelectedTable] = useState<string>('');
   const { data: columns = [] } = useColumns(pid, selectedTable);
   const dropTable = useDropTable(pid);
@@ -156,9 +168,11 @@ export function TablesPage() {
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-primary">
           <span className="text-sm font-medium text-text-primary">Tables ({tables.length})</span>
           <div className="flex items-center gap-1">
-            <button onClick={() => setShowImport(true)} className="p-1.5 rounded-lg text-purple-400 hover:bg-purple-500/10" data-testid="import-table-btn" title="Import CSV, Excel or Google Sheets">
-              <Upload className="w-4 h-4" />
-            </button>
+            {!mysql && (
+              <button onClick={() => setShowImport(true)} className="p-1.5 rounded-lg text-purple-400 hover:bg-purple-500/10" data-testid="import-table-btn" title="Import CSV, Excel or Google Sheets">
+                <Upload className="w-4 h-4" />
+              </button>
+            )}
             <button onClick={() => setShowCreateTable(true)} className="p-1.5 rounded-lg text-purple-400 hover:bg-purple-500/10" data-testid="new-table-btn">
               <Plus className="w-4 h-4" />
             </button>
@@ -273,7 +287,8 @@ export function TablesPage() {
       </div>
 
       {/* Create Table SidePanel */}
-      <CreateTablePanel open={showCreateTable} onClose={() => setShowCreateTable(false)} projectId={pid} canGrantRead={canDevelop} />
+      <CreateTablePanel open={showCreateTable} onClose={() => setShowCreateTable(false)} projectId={pid} canGrantRead={canDevelop}
+        mysql={mysql} schema={target.schema} key={target.key} />
       <ImportTablePanel open={showImport} onClose={() => setShowImport(false)} projectId={pid} />
 
       {/* Add Column SidePanel */}
@@ -288,7 +303,7 @@ export function TablesPage() {
           <div>
             <label htmlFor="col-type-select" className="block text-sm font-medium text-text-secondary mb-1">Type</label>
             <select id="col-type-select" value={newColType} onChange={e => setNewColType(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm">
-              {['text', 'integer', 'bigint', 'serial', 'boolean', 'timestamp', 'timestamptz', 'date', 'numeric', 'uuid', 'jsonb', 'varchar(255)'].map(t => <option key={t} value={t}>{t}</option>)}
+              {columnTypesFor(mysql).map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <label className="flex items-center gap-2 text-sm text-text-secondary"><input type="checkbox" checked={newColNullable} onChange={e => setNewColNullable(e.target.checked)} className="rounded" /> Nullable</label>

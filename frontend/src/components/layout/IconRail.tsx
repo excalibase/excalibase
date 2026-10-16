@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useParams, useNavigate, Link } from 'react-router-dom';
-import { visibleProjectNav, type NavSection } from './navigation';
+import { sectionLanding, visibleProjectNav, type NavSection } from './navigation';
 import { useAppHostingEnabled, useFeatureEnabled, useSitesEnabled } from '../../hooks/useDeploymentMode';
 import { cn } from '../../utils/cn';
 import { useInstance } from '../../hooks/useProvisioning';
@@ -25,7 +25,8 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
   const { enabled: mcp } = useFeatureEnabled('mcp');
   const { enabled: sites } = useSitesEnabled();
   const { data: project } = useInstance(projectId ?? '');
-  const sections = visibleProjectNav({ appHosting, mcp, sites, postgres: !isMySQLProject(project) });
+  const postgres = !isMySQLProject(project);
+  const sections = visibleProjectNav({ appHosting, mcp, sites, postgres });
 
   const [mode, setMode] = useState<SidebarMode>(() => {
     return (localStorage.getItem(STORAGE_KEY) as SidebarMode) ?? 'expandable';
@@ -42,8 +43,9 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
   const handleClick = (section: NavSection) => {
     if (section.children) {
       onSectionClick(section.key === activeSection ? '' : section.key);
-      if (section.key !== activeSection) {
-        navigate(`${basePath}/${section.children[0].to}`);
+      const landing = sectionLanding(section, postgres);
+      if (section.key !== activeSection && landing !== undefined) {
+        navigate(`${basePath}/${landing}`);
       }
     } else if (section.to !== undefined) {
       onSectionClick('');

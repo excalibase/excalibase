@@ -66,6 +66,13 @@ func testAuthFlow(ctx context.Context, c *call, in authFlowArgs) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	engine, err := projectEngine(ctx, c, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if engine == engineMySQL {
+		return nil, errors.New(mysqlNoEndUserAuth)
+	}
 	base, err := dataPlaneBase(c.settings)
 	if err != nil {
 		return nil, err

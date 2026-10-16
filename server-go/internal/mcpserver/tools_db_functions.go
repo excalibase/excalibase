@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/routepolicy"
 )
 
 type trackFunctionArgs struct {
@@ -32,7 +34,8 @@ func dbFunctionTools() []entry {
 			"CREATE VIEW with those columns, give the view a select permission, and return SETOF that view. "+
 			"In GraphQL its arguments go directly on the field (publicMySearch(search_text: \"x\")), not in Hasura's args: {...}. "+
 			"Create the function first (apply_migration). A function that only reads (STABLE/IMMUTABLE) is a query, any other a mutation. "+
-			"A SECURITY DEFINER function runs with its owner's privileges, so check its arguments.", writeTool, trackDBFunction),
+			"A SECURITY DEFINER function runs with its owner's privileges, so check its arguments. "+
+			"Tracked functions are not offered on MySQL projects: MySQL functions return scalars, and permissions apply to rows.", writeTool, trackDBFunction),
 		tool("set_db_function_permission", "Let one role call a tracked database function, or take that away.", writeTool, setDBFunctionPermission),
 	}
 }
@@ -56,6 +59,14 @@ func trackDBFunction(ctx context.Context, c *call, in trackFunctionArgs) (any, e
 		if _, err := segment("role", role); err != nil {
 			return nil, err
 		}
+	}
+	// A 409 below means "already tracked"; a MySQL project is refused first.
+	engine, err := projectEngine(ctx, c, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if engine == engineMySQL {
+		return nil, errors.New(routepolicy.MySQLNoTrackedFunctions)
 	}
 	body := map[string]any{"function": in.Function, "inferPermissions": in.InferPermissions, "sessionArgument": in.SessionArgument}
 	if in.InferPermissions == nil {

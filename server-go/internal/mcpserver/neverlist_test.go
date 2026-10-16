@@ -27,6 +27,8 @@ var offeredTools = []string{
 // access token), so it holds no more than the page would (tools_probe_test.go).
 var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^GET /api/provision/$`),
+	// The project's row, read for its database engine (EXC-619).
+	regexp.MustCompile(`^GET /api/provision/[^/]+$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/info/$`),
 	// Publishable SDK keys only: they ship inside client apps and grant what
 	// the anon role grants. Secret keys and personal access tokens stay out.

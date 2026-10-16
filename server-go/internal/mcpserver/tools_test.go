@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -38,6 +39,8 @@ type cannedReply struct {
 	body   string
 }
 
+var projectRow = regexp.MustCompile(`^/api/provision/[^/]+$`)
+
 func newFakeRoutes() *fakeRoutes {
 	return &fakeRoutes{replies: map[string]cannedReply{}}
 }
@@ -55,6 +58,10 @@ func (f *fakeRoutes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	f.mu.Unlock()
 	reply, ok := f.replies[r.Method+" "+r.URL.Path]
+	if !ok && r.Method == http.MethodGet && projectRow.MatchString(r.URL.Path) {
+		// A project the test did not describe is a Postgres one.
+		reply, ok = cannedReply{status: http.StatusOK, body: `{"databaseType":"POSTGRESQL"}`}, true
+	}
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"not found"}`))
@@ -347,7 +354,7 @@ func baseRouteCases() []routeCase {
 				f.on(http.MethodGet, schemaA+"/tables", 200, `[{"name":"order_items","schema":"public","type":"table"}]`)
 				f.on(http.MethodGet, schemaA+"/tables/order_items/columns", 200, `[{"name":"id","dataType":"bigint","nullable":false},{"name":"note","dataType":"text","nullable":true}]`)
 			},
-			expect: []string{"GET " + schemaA + "/tables?schema=public", "GET " + schemaA + "/tables/order_items/columns?schema=public"},
+			expect: []string{"GET " + provisionA, "GET " + schemaA + "/tables?schema=public", "GET " + schemaA + "/tables/order_items/columns?schema=public"},
 			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
 				ts, _ := out["typescript"].(string)
 				if !strings.Contains(ts, "export interface OrderItems") || !strings.Contains(ts, "note: string | null;") {
@@ -544,13 +551,14 @@ func baseRouteCases() []routeCase {
 				f.on(http.MethodPut, "/api/provision/proj-a/function-permissions/public.short_code/roles/user", 200, `{}`)
 			},
 			expect: []string{
+				"GET /api/provision/proj-a",
 				"POST /api/provision/proj-a/tracked-functions/",
 				"PUT /api/provision/proj-a/function-permissions/public.short_code/roles/anon",
 				"PUT /api/provision/proj-a/function-permissions/public.short_code/roles/user",
 			},
 			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
-				if calls[0].Body != `{"function":"public.short_code","inferPermissions":true,"sessionArgument":null}` {
-					t.Errorf("body = %s", calls[0].Body)
+				if calls[1].Body != `{"function":"public.short_code","inferPermissions":true,"sessionArgument":null}` {
+					t.Errorf("body = %s", calls[1].Body)
 				}
 				if out["graphqlField"] != "publicShortCode" || out["rest"] != "<rest>/rpc/short_code" {
 					t.Errorf("out = %v", out)
@@ -781,10 +789,13 @@ func TestToolDescriptionsSteerTheClient(t *testing.T) {
 		"get_graphql_schema":  {"Changes"},
 		"add_cors_origin":     {"capacitor://localhost", "tauri://localhost", "null"},
 		// EXC-610: the return shape the API needs is said before the 400 that refuses RETURNS TABLE.
-		"track_db_function": {"SETOF", "RETURNS TABLE", "view", "directly on the field"},
+		"track_db_function": {"SETOF", "RETURNS TABLE", "view", "directly on the field", "not offered on MySQL"},
 		// EXC-353: a site is files only; a server-rendered app stays a container.
 		"create_site": {"container", "create_app"},
 		"deploy_site": {"tar czf", "base64", "get_ci_snippet"},
+		// EXC-619: a MySQL migration runs here, and its DDL is not rolled back.
+		"execute_sql":               {"MySQL", "max_execution_time", "not transactional"},
+		"generate_typescript_types": {"MySQL", "tinyint(1)"},
 	}
 	for _, tool := range listed.Tools {
 		for _, want := range wants[tool.Name] {

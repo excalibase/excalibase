@@ -69,3 +69,25 @@ func TestRequireProjectDatabaseAnswers503WhenTheStoreCannotSay(t *testing.T) {
 		t.Fatalf("got %d, want 503", w.Code)
 	}
 }
+
+// EXC-619: a refused MySQL route says why, so Studio and MCP can show it.
+func TestRequireProjectDatabaseNamesWhyAMySQLProjectIsRefused(t *testing.T) {
+	instances := fakestore.NewInstances()
+	instances.Create(&domain.DatabaseInstance{ProjectID: "proj-m", OrgID: "o", Status: "ACTIVE", DBType: domain.MySQL})
+	r := chi.NewRouter()
+	r.With(RequireProjectDatabase(instances)).Get("/api/schema/{projectId}/extensions",
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.With(RequireProjectDatabase(instances)).Get("/api/schema/{projectId}/tables",
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	refused := httptest.NewRecorder()
+	r.ServeHTTP(refused, httptest.NewRequest(http.MethodGet, "/api/schema/proj-m/extensions", nil))
+	if refused.Code != http.StatusConflict || !strings.Contains(refused.Body.String(), "not available for MySQL projects: MySQL has no extensions") {
+		t.Fatalf("extensions: %d %s", refused.Code, refused.Body.String())
+	}
+	served := httptest.NewRecorder()
+	r.ServeHTTP(served, httptest.NewRequest(http.MethodGet, "/api/schema/proj-m/tables", nil))
+	if served.Code != http.StatusOK {
+		t.Fatalf("tables: %d %s", served.Code, served.Body.String())
+	}
+}

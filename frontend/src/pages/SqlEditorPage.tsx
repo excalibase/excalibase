@@ -3,13 +3,17 @@ import { useParams } from 'react-router-dom';
 import { Play, Clock, Trash2, Loader2, Plus, X } from 'lucide-react';
 import { EditorView, keymap } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
-import { sql, PostgreSQL } from '@codemirror/lang-sql';
+import { sql } from '@codemirror/lang-sql';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { basicSetup } from 'codemirror';
 import { useExecuteQuery, useTables } from '../hooks/useSchema';
 import type { QueryResult } from '../types/schema';
 import { cn } from '../utils/cn';
 import { serverErrorMessage } from '../utils/serverError';
+import { useInstance } from '../hooks/useProvisioning';
+import { isMySQLProject } from '../utils/engine';
+import { sqlDialectFor } from '../utils/engineSql';
+import { SqlEngineNote } from '../components/sql/SqlEngineNote';
 
 const TABS_KEY = 'sql_editor_tabs';
 const HISTORY_KEY = 'sql_editor_history';
@@ -77,6 +81,8 @@ export function SqlEditorPage() {
   const viewRef = useRef<EditorView | null>(null);
   const executeQuery = useExecuteQuery(projectId ?? '');
   const { data: tableList = [] } = useTables(projectId ?? '');
+  const { data: project } = useInstance(projectId ?? '');
+  const dialect = sqlDialectFor(project);
 
   // Build schema object for autocomplete
   const [schemaMap, setSchemaMap] = useState<Record<string, string[]>>({});
@@ -145,7 +151,7 @@ export function SqlEditorPage() {
       doc: activeTab?.content ?? '',
       extensions: [
         basicSetup,
-        sql({ dialect: PostgreSQL, schema: schemaMap }),
+        sql({ dialect, schema: schemaMap }),
         oneDark,
         keymap.of([{
           key: 'Ctrl-Enter',
@@ -168,7 +174,7 @@ export function SqlEditorPage() {
     viewRef.current = view;
     return () => view.destroy();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTabId, schemaMap]);
+  }, [activeTabId, schemaMap, dialect]);
 
   const addTab = () => {
     const id = String(Date.now());
@@ -254,6 +260,7 @@ export function SqlEditorPage() {
           <Clock className="w-4 h-4" />
           History ({history.length})
         </button>
+        <SqlEngineNote mysql={isMySQLProject(project)} />
         <span className="ml-auto text-[10px] text-text-tertiary">
           Select text to run partial query
         </span>
@@ -290,6 +297,11 @@ export function ResultPanel({ result }: ResultPanelProps) {
   return (
     <div className="rounded-lg border border-border-primary overflow-hidden" data-testid="query-results">
       <ResultBody result={result} />
+      {result.notice && (
+        <div className="px-4 py-2 border-t border-border-primary text-xs text-amber-400" data-testid="query-notice">
+          {result.notice}
+        </div>
+      )}
     </div>
   );
 }

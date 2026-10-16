@@ -154,6 +154,9 @@ type Row struct {
 	// SiteDeployToken marks a route a site's deploy token may call for its own
 	// site (EXC-620); middleware.SiteDeployTokenGate refuses it everywhere else.
 	SiteDeployToken bool
+	// MySQLRefusal is why a MySQL project is refused this database route,
+	// appended to the 409 so Studio and MCP can show it (EXC-619).
+	MySQLRefusal string
 	// Discloses is required on every row that serves a read method.
 	Discloses Disclosure
 	// Note records the non-obvious reason for this row's contract.

@@ -42,7 +42,9 @@ func schemaTools() []entry {
 				"its exact GraphQL root field names (query, connection, aggregate, mutations, subscription ...Changes), REST path and realtime state. "+
 				"The engine builds the GraphQL schema per role from these tables and the project's permissions; the returned introspection command fetches the exact schema a role sees.",
 			readTool, getGraphQLSchema),
-		tool("generate_typescript_types", "TypeScript row types for every table in a schema, generated from the database columns.", readTool, generateTypeScriptTypes),
+		tool("generate_typescript_types", "TypeScript row types for every table in a schema, generated from the database columns. "+
+			"On a MySQL project the MySQL types are mapped: tinyint(1) is boolean, an enum a union of its values, json unknown, "+
+			"date and time types string.", readTool, generateTypeScriptTypes),
 	}
 }
 
@@ -107,6 +109,7 @@ func relationsOf(table string, all []schema.RelationshipInfo) (outgoing, incomin
 // tableColumns is one table with the columns the routes report for it.
 type tableColumns struct {
 	Name    string              `json:"name"`
+	Schema  string              `json:"-"`
 	Type    string              `json:"type"`
 	Columns []schema.ColumnInfo `json:"columns"`
 }
@@ -185,7 +188,7 @@ func readTables(ctx context.Context, c *call, projectID string, in schemaArgs, b
 		if err := c.get(ctx, tablePath(projectID, name)+"/columns", in.query(), &columns); err != nil {
 			return nil, err
 		}
-		out = append(out, tableColumns{Name: table.Name, Type: table.Type, Columns: columns})
+		out = append(out, tableColumns{Name: table.Name, Schema: table.Schema, Type: table.Type, Columns: columns})
 	}
 	return out, nil
 }
@@ -223,11 +226,20 @@ func generateTypeScriptTypes(ctx context.Context, c *call, in schemaArgs) (any, 
 	if err != nil {
 		return nil, err
 	}
+	engine, err := projectEngine(ctx, c, projectID)
+	if err != nil {
+		return nil, err
+	}
 	tables, err := readTables(ctx, c, projectID, in, nil)
 	if err != nil {
 		return nil, err
 	}
+	schemaName := in.schemaName()
+	if engine == engineMySQL && len(tables) > 0 {
+		// A MySQL project's tables live in its one database, named by the routes.
+		schemaName = tables[0].Schema
+	}
 	return map[string]any{
-		"path": "src/database.types.ts", "typescript": typeScriptFor(in.schemaName(), tables), "tables": len(tables),
+		"path": "src/database.types.ts", "typescript": typeScriptForEngine(schemaName, tables, engine), "tables": len(tables),
 	}, nil
 }

@@ -65,6 +65,9 @@ type QueryResult struct {
 	Error        string          `json:"error,omitempty"`
 	// Truncated says Rows stops at the runner's row or byte cap.
 	Truncated bool `json:"truncated,omitempty"`
+	// Notice is what the engine wants the caller to know about how the SQL
+	// ran: on MySQL, that DDL is not transactional (EXC-619).
+	Notice string `json:"notice,omitempty"`
 }
 
 // --- Table CRUD types ---

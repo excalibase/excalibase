@@ -9,6 +9,7 @@ package projectdb
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"os"
@@ -219,6 +220,8 @@ type Opener struct {
 
 	mu    sync.Mutex
 	pools map[string]*pool
+	// connectors are the MySQL pools' own, for a KILL outside the pool.
+	connectors map[*sql.DB]driver.Connector
 }
 
 // pool is one project's cached handle plus when it was last handed out, so
@@ -236,12 +239,13 @@ func NewOpener(
 	limits PoolLimits,
 ) *Opener {
 	return &Opener{
-		instances: instances,
-		vault:     vault,
-		overrides: overrides,
-		limits:    limits.withDefaults(),
-		now:       time.Now,
-		pools:     make(map[string]*pool),
+		instances:  instances,
+		vault:      vault,
+		overrides:  overrides,
+		limits:     limits.withDefaults(),
+		now:        time.Now,
+		pools:      make(map[string]*pool),
+		connectors: make(map[*sql.DB]driver.Connector),
 	}
 }
 
@@ -250,34 +254,48 @@ func (o *Opener) Open(_ context.Context, projectID string) (*sql.DB, error) {
 	if err := o.checkServable(projectID); err != nil {
 		return nil, err
 	}
+	return o.cached(projectID, projectID, appRole, o.openPostgres)
+}
+
+// cached hands out the pool under key, opening it with open on first use or
+// once it is older than MaxPoolAge.
+func (o *Opener) cached(projectID, key, role string, open func(creds map[string]string) (*sql.DB, error)) (*sql.DB, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if p, ok := o.pools[projectID]; ok {
+	if p, ok := o.pools[key]; ok {
 		if o.now().Sub(p.opened) < o.limits.MaxPoolAge {
 			p.lastUsed = o.now()
 			return p.db, nil
 		}
-		delete(o.pools, projectID)
-		time.AfterFunc(retireGrace, func() { _ = p.db.Close() })
+		delete(o.pools, key)
+		time.AfterFunc(retireGrace, func() { o.closePool(p.db) })
 	}
-	creds, err := o.vault.Get(fmt.Sprintf("projects/%s/credentials/%s", projectID, appRole))
+	creds, err := o.vault.Get(fmt.Sprintf("projects/%s/credentials/%s", projectID, role))
 	if err != nil {
-		return nil, fmt.Errorf("read %s credentials for %s: %w", appRole, projectID, err)
+		return nil, fmt.Errorf("read %s credentials for %s: %w", role, projectID, err)
 	}
-	dsn, err := poolDSN(creds, o.overrides, o.limits)
+	db, err := open(creds)
 	if err != nil {
 		return nil, err
-	}
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open database for %s: %w", projectID, err)
 	}
 	db.SetMaxOpenConns(o.limits.MaxOpenConns)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxIdleTime(o.limits.ConnMaxIdleTime)
 	db.SetConnMaxLifetime(o.limits.ConnMaxLifetime)
 	o.evictOldestLocked()
-	o.pools[projectID] = &pool{db: db, opened: o.now(), lastUsed: o.now()}
+	o.pools[key] = &pool{db: db, opened: o.now(), lastUsed: o.now()}
+	return db, nil
+}
+
+func (o *Opener) openPostgres(creds map[string]string) (*sql.DB, error) {
+	dsn, err := poolDSN(creds, o.overrides, o.limits)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
 	return db, nil
 }
 
@@ -295,7 +313,7 @@ func (o *Opener) evictOldestLocked() {
 		if oldestID == "" {
 			return
 		}
-		_ = o.pools[oldestID].db.Close()
+		o.closePoolLocked(o.pools[oldestID].db)
 		delete(o.pools, oldestID)
 	}
 }
@@ -312,11 +330,16 @@ func (o *Opener) CachedPools() int {
 // being one the platform may reach.
 func (o *Opener) Evict(projectID string) {
 	o.mu.Lock()
-	p, ok := o.pools[projectID]
-	delete(o.pools, projectID)
+	var closing []*pool
+	for _, key := range []string{projectID, mysqlScriptKey(projectID)} {
+		if p, ok := o.pools[key]; ok {
+			closing = append(closing, p)
+			delete(o.pools, key)
+		}
+	}
 	o.mu.Unlock()
-	if ok {
-		_ = p.db.Close()
+	for _, p := range closing {
+		o.closePool(p.db)
 	}
 }
 
@@ -341,29 +364,38 @@ func (o *Opener) ProjectStatusChanged(projectID, status string) {
 // checkServable refuses a project that has no row or that the platform must
 // not serve.
 func (o *Opener) checkServable(projectID string) error {
-	if o.instances == nil {
-		return errors.New("no instance store configured")
-	}
-	inst, err := o.instances.FindByProjectID(projectID)
+	inst, err := o.servableInstance(projectID)
 	if err != nil {
-		return fmt.Errorf("read project %s: %w", projectID, err)
-	}
-	if inst == nil {
-		return fmt.Errorf("unknown project %s", projectID)
-	}
-	// Allow-list, not deny-list: a paused or still-provisioning project has
-	// no database to reach, and a deny-list would let every future status
-	// through by default.
-	if !domain.IsActive(inst.Status) {
-		return fmt.Errorf("%w: %s is %s", ErrNotServable, projectID, inst.Status)
-	}
-	if inst.NoDatabase {
-		return fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
+		return err
 	}
 	if inst.DBType == domain.MySQL {
 		return fmt.Errorf("%w: %s", domain.ErrPostgresOnly, projectID)
 	}
 	return nil
+}
+
+// servableInstance is the project's row when its database may be reached.
+func (o *Opener) servableInstance(projectID string) (*domain.DatabaseInstance, error) {
+	if o.instances == nil {
+		return nil, errors.New("no instance store configured")
+	}
+	inst, err := o.instances.FindByProjectID(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("read project %s: %w", projectID, err)
+	}
+	if inst == nil {
+		return nil, fmt.Errorf("unknown project %s", projectID)
+	}
+	// Allow-list, not deny-list: a paused or still-provisioning project has
+	// no database to reach, and a deny-list would let every future status
+	// through by default.
+	if !domain.IsActive(inst.Status) {
+		return nil, fmt.Errorf("%w: %s is %s", ErrNotServable, projectID, inst.Status)
+	}
+	if inst.NoDatabase {
+		return nil, fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
+	}
+	return inst, nil
 }
 
 // ServableProjectIDs lists the projects whose databases may be reached now.
@@ -392,7 +424,20 @@ func (o *Opener) Close() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for id, p := range o.pools {
-		_ = p.db.Close()
+		o.closePoolLocked(p.db)
 		delete(o.pools, id)
 	}
+}
+
+// closePool closes a pool and forgets its connector.
+func (o *Opener) closePool(db *sql.DB) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.closePoolLocked(db)
+}
+
+// closePoolLocked is closePool with the lock held.
+func (o *Opener) closePoolLocked(db *sql.DB) {
+	delete(o.connectors, db)
+	_ = db.Close()
 }

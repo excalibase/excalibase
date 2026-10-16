@@ -41,6 +41,8 @@ export interface NavItem {
   documentDbOnly?: boolean;
   // Works only on a PostgreSQL database; hidden for MySQL projects (ADR 0041).
   postgresOnly?: boolean;
+  // Hidden for MySQL projects, and this one line says why when it is opened.
+  mysqlUnavailable?: string;
 }
 
 export interface NavSection {
@@ -65,28 +67,39 @@ export interface NavCapabilities {
   postgres?: boolean;
 }
 
+// Why a database page is not offered on a MySQL project (ADR 0041 decision 9).
+const MYSQL_REASONS = {
+  overview: 'The database overview reads Postgres metrics and logs; the project overview and Settings show this MySQL database.',
+  extensions: 'MySQL has no extensions; its features ship built in.',
+  roles: 'MySQL users are created and rotated by the platform.',
+  rls: "CREATE POLICY is Postgres row-level security; on MySQL, API access is set in each table's permissions.",
+  triggers: "Studio's trigger editor builds Postgres trigger functions; create MySQL triggers in the SQL editor.",
+  types: 'MySQL has no user-defined types; ENUM and SET are column types.',
+  advisors: 'The advisors read Postgres statistics catalogs.',
+  documentDb: 'DocumentDB runs on Postgres.',
+} as const;
+
 export const PROJECT_NAV: NavSection[] = [
   { key: 'home', label: 'Overview', icon: Home, to: '' },
-  { key: 'sql', label: 'SQL Editor', icon: Terminal, to: 'sql', postgresOnly: true },
-  { key: 'schema', label: 'Schema', icon: GitBranch, to: 'schema', postgresOnly: true },
+  { key: 'sql', label: 'SQL Editor', icon: Terminal, to: 'sql' },
+  { key: 'schema', label: 'Schema', icon: GitBranch, to: 'schema' },
   {
     key: 'database',
-    postgresOnly: true,
     label: 'Databases',
     icon: Database,
     children: [
-      { label: 'Overview', icon: LayoutDashboard, to: 'database/overview' },
+      { label: 'Overview', icon: LayoutDashboard, to: 'database/overview', mysqlUnavailable: MYSQL_REASONS.overview },
       { label: 'Tables', icon: Table2, to: 'database/tables' },
       { label: 'Functions', icon: Code, to: 'database/functions' },
-      { label: 'Extensions', icon: Package, to: 'database/extensions' },
-      { label: 'Roles', icon: Users, to: 'database/roles' },
-      { label: 'RLS Policies', icon: Shield, to: 'database/rls' },
-      { label: 'Triggers', icon: Zap, to: 'database/triggers' },
+      { label: 'Extensions', icon: Package, to: 'database/extensions', mysqlUnavailable: MYSQL_REASONS.extensions },
+      { label: 'Roles', icon: Users, to: 'database/roles', mysqlUnavailable: MYSQL_REASONS.roles },
+      { label: 'RLS Policies', icon: Shield, to: 'database/rls', mysqlUnavailable: MYSQL_REASONS.rls },
+      { label: 'Triggers', icon: Zap, to: 'database/triggers', mysqlUnavailable: MYSQL_REASONS.triggers },
       { label: 'Indexes', icon: List, to: 'database/indexes' },
-      { label: 'Types', icon: Hash, to: 'database/types' },
-      { label: 'Advisors', icon: AlertTriangle, to: 'database/advisors' },
-      { label: 'Documents', icon: FileJson, to: 'database/documents', documentDbOnly: true },
-      { label: 'Mongo Users', icon: UserCog, to: 'database/mongo-users', documentDbOnly: true },
+      { label: 'Types', icon: Hash, to: 'database/types', mysqlUnavailable: MYSQL_REASONS.types },
+      { label: 'Advisors', icon: AlertTriangle, to: 'database/advisors', mysqlUnavailable: MYSQL_REASONS.advisors },
+      { label: 'Documents', icon: FileJson, to: 'database/documents', documentDbOnly: true, mysqlUnavailable: MYSQL_REASONS.documentDb },
+      { label: 'Mongo Users', icon: UserCog, to: 'database/mongo-users', documentDbOnly: true, mysqlUnavailable: MYSQL_REASONS.documentDb },
     ],
   },
   { key: 'containers', label: 'Containers', icon: Container, to: 'containers', requires: 'appHosting' },
@@ -136,7 +149,14 @@ export const PROJECT_NAV: NavSection[] = [
 ];
 
 export function visibleNavItems(items: readonly NavItem[], documentDb: boolean, postgres = true): NavItem[] {
-  return items.filter((item) => (!item.documentDbOnly || documentDb) && (!item.postgresOnly || postgres));
+  return items.filter(
+    (item) => (!item.documentDbOnly || documentDb) && (postgres || (!item.postgresOnly && !item.mysqlUnavailable))
+  );
+}
+
+// The reason a page is hidden on MySQL, by its path below the project.
+export function mysqlUnavailableReason(path: string): string | undefined {
+  return PROJECT_NAV.flatMap((section) => section.children ?? []).find((item) => item.to === path)?.mysqlUnavailable;
 }
 
 export const visibleProjectNav = (capabilities: NavCapabilities): NavSection[] =>
@@ -145,3 +165,8 @@ export const visibleProjectNav = (capabilities: NavCapabilities): NavSection[] =
       (!section.requires || capabilities[section.requires]) &&
       (!section.postgresOnly || capabilities.postgres !== false)
   );
+
+// Where a section with sub-pages opens: its first page the engine offers.
+export function sectionLanding(section: NavSection, postgres: boolean): string | undefined {
+  return visibleNavItems(section.children ?? [], false, postgres)[0]?.to;
+}

@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { api } from '../api/client';
 import { DatabaseRequired } from './DatabaseRequired';
 import { DatabaseServiceCard } from './services/DatabaseServiceCard';
-import { PROJECT_NAV, visibleNavItems, visibleProjectNav } from './layout/navigation';
+import { PROJECT_NAV, mysqlUnavailableReason, sectionLanding, visibleNavItems, visibleProjectNav } from './layout/navigation';
 import { engineLabel } from '../utils/engine';
 
 vi.mock('../api/client', () => ({ api: { get: vi.fn() } }));
@@ -29,8 +29,11 @@ function renderWithProject(ui: React.ReactElement, path = '/project/p-my') {
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/project/:projectId" element={ui} />
-          <Route path="/project/:projectId/sql" element={<DatabaseRequired />}>
+          <Route path="/project/:projectId/sql" element={<DatabaseRequired mysql />}>
             <Route index element={<p>sql editor</p>} />
+          </Route>
+          <Route path="/project/:projectId/database/rls" element={<DatabaseRequired />}>
+            <Route index element={<p>rls page</p>} />
           </Route>
           <Route path="/project/:projectId/operations/backups" element={<DatabaseRequired mysql />}>
             <Route index element={<p>backups page</p>} />
@@ -58,14 +61,44 @@ describe('MySQL projects in Studio', () => {
   test('the navigation lists only what works on MySQL', () => {
     const sections = visibleProjectNav({ appHosting: true, mcp: false, postgres: false });
     const keys = sections.map((section) => section.key);
-    for (const hidden of ['sql', 'schema', 'database', 'auth', 'api-keys']) {
+    for (const hidden of ['auth', 'api-keys']) {
       expect(keys).not.toContain(hidden);
     }
-    for (const shown of ['home', 'containers', 'storage', 'vault', 'settings', 'monitoring', 'operations']) {
+    for (const shown of ['home', 'sql', 'schema', 'database', 'containers', 'storage', 'vault', 'settings', 'monitoring', 'operations']) {
       expect(keys).toContain(shown);
     }
     const monitoring = PROJECT_NAV.find((section) => section.key === 'monitoring');
     expect(visibleNavItems(monitoring?.children ?? [], false, false).map((item) => item.label)).toEqual(['Alerts']);
+  });
+
+  // ADR 0041 decision 9: the database pages that read MySQL stay, the rest say why not.
+  test('Databases lists the pages that work on MySQL', () => {
+    const database = PROJECT_NAV.find((section) => section.key === 'database');
+    expect(visibleNavItems(database?.children ?? [], false, false).map((item) => item.label)).toEqual([
+      'Tables', 'Functions', 'Indexes',
+    ]);
+    expect(visibleNavItems(database?.children ?? [], false, true).map((item) => item.label)).toEqual([
+      'Overview', 'Tables', 'Functions', 'Extensions', 'Roles', 'RLS Policies', 'Triggers', 'Indexes', 'Types', 'Advisors',
+    ]);
+  });
+
+  test('Databases opens on Tables for MySQL and on the overview for Postgres', () => {
+    const database = PROJECT_NAV.find((section) => section.key === 'database');
+    expect(database && sectionLanding(database, false)).toBe('database/tables');
+    expect(database && sectionLanding(database, true)).toBe('database/overview');
+  });
+
+  test('every page hidden on MySQL has a one-line reason', () => {
+    expect(mysqlUnavailableReason('database/extensions')).toMatch(/MySQL has no extensions/);
+    expect(mysqlUnavailableReason('database/rls')).toMatch(/CREATE POLICY is Postgres row-level security/);
+    expect(mysqlUnavailableReason('database/types')).toMatch(/MySQL has no user-defined types/);
+    expect(mysqlUnavailableReason('database/advisors')).toMatch(/Postgres statistics catalogs/);
+    expect(mysqlUnavailableReason('database/documents')).toMatch(/DocumentDB runs on Postgres/);
+    expect(mysqlUnavailableReason('database/mongo-users')).toMatch(/DocumentDB runs on Postgres/);
+    expect(mysqlUnavailableReason('database/roles')).toMatch(/created and rotated by the platform/);
+    expect(mysqlUnavailableReason('database/triggers')).toMatch(/SQL editor/);
+    expect(mysqlUnavailableReason('database/tables')).toBeUndefined();
+    expect(mysqlUnavailableReason('somewhere/else')).toBeUndefined();
   });
 
   test('a Postgres project keeps every page', () => {
@@ -73,10 +106,17 @@ describe('MySQL projects in Studio', () => {
     expect(keys).toEqual(expect.arrayContaining(['sql', 'schema', 'database', 'auth', 'api-keys', 'operations']));
   });
 
-  test('a Postgres-only page says so instead of failing', async () => {
+  test('the SQL editor opens on a MySQL project', async () => {
     renderWithProject(<p>home</p>, '/project/p-my/sql');
-    expect(await screen.findByTestId('postgres-required')).toHaveTextContent(/not available for MySQL projects/i);
-    expect(screen.queryByText('sql editor')).not.toBeInTheDocument();
+    expect(await screen.findByText('sql editor')).toBeInTheDocument();
+  });
+
+  test('a Postgres-only page says why instead of failing', async () => {
+    renderWithProject(<p>home</p>, '/project/p-my/database/rls');
+    const notice = await screen.findByTestId('postgres-required');
+    expect(notice).toHaveTextContent(/not available for MySQL projects/i);
+    expect(screen.getByTestId('postgres-required-reason')).toHaveTextContent(/CREATE POLICY is Postgres row-level security/);
+    expect(screen.queryByText('rls page')).not.toBeInTheDocument();
   });
 
   test('the overview shows the MySQL version and where to connect', async () => {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -8,7 +9,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/routepolicy"
 )
 
-const mysqlRefusal = `"not available for MySQL projects"`
+// mysqlRefusal opens every refusal; a row with a reason appends it (EXC-619).
+const mysqlRefusal = `"not available for MySQL projects`
 
 // ADR 0041, EXC-583: a database route answers a MySQL project only when its
 // row says it serves MySQL; every other one is refused with 409 before a
@@ -28,12 +30,8 @@ func TestDatabaseRoutesRefuseAMySQLProjectUnlessTheyServeIt(t *testing.T) {
 		}
 		t.Run(key.String(), func(t *testing.T) {
 			code, body := harness.request(key.Method, concreteRequestPath(key.Pattern), owner.token)
-			refused := code == 409 && strings.Contains(body, mysqlRefusal)
-			if row.MySQL && refused {
-				t.Fatalf("a route the table says serves MySQL refused it: %d %s", code, strings.TrimSpace(body))
-			}
-			if !row.MySQL && !refused {
-				t.Fatalf("a Postgres-only route answered %d (%s); want 409 %s", code, strings.TrimSpace(body), mysqlRefusal)
+			if problem := mysqlAnswerProblem(row, code, body); problem != "" {
+				t.Fatal(problem)
 			}
 		})
 		if row.MySQL {
@@ -71,4 +69,19 @@ func TestMySQLLifecycleRoutesServeMySQL(t *testing.T) {
 			t.Errorf("%s does not serve MySQL projects", key)
 		}
 	}
+}
+
+// mysqlAnswerProblem is what is wrong with a route's answer to a MySQL
+// project, or "".
+func mysqlAnswerProblem(row routepolicy.Row, code int, body string) string {
+	refused := code == 409 && strings.Contains(body, mysqlRefusal)
+	switch {
+	case row.MySQL && refused:
+		return fmt.Sprintf("a route the table says serves MySQL refused it: %d %s", code, strings.TrimSpace(body))
+	case !row.MySQL && !refused:
+		return fmt.Sprintf("a Postgres-only route answered %d (%s); want 409 %s", code, strings.TrimSpace(body), mysqlRefusal)
+	case row.MySQLRefusal != "" && !strings.Contains(body, row.MySQLRefusal[:20]):
+		return "the refusal does not say why: " + strings.TrimSpace(body)
+	}
+	return ""
 }

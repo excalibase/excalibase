@@ -139,7 +139,12 @@ func addGraphQLFields(ctx context.Context, c *call, projectID string, out map[st
 	}
 	fields := make(map[string]rootFields, len(tables))
 	for _, table := range tables {
-		fields["public."+table.Name] = graphQLFields("public", table.Name, strings.EqualFold(table.Type, "VIEW"))
+		// A MySQL project's tables report its database as their schema.
+		schemaName := table.Schema
+		if schemaName == "" {
+			schemaName = "public"
+		}
+		fields[schemaName+"."+table.Name] = graphQLFields(schemaName, table.Name, strings.EqualFold(table.Type, "VIEW"))
 	}
 	out["graphqlFields"] = fields
 	out["graphqlNaming"] = namingRule

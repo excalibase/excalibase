@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -11,8 +12,8 @@ import (
 
 var errBodyNoDatabase = `{"error":"` + domain.ErrNoDatabase.Error() + `"}`
 
-// errBodyNotForMySQL refuses a Postgres-only database route on a MySQL project.
-const errBodyNotForMySQL = `{"error":"not available for MySQL projects"}`
+// notForMySQL refuses a Postgres-only database route on a MySQL project.
+const notForMySQL = "not available for MySQL projects"
 
 // RequireProjectDatabase refuses, with 409, a route that works on the
 // project's database when the project was created without one (EXC-426). It
@@ -45,15 +46,33 @@ func RequireProjectDatabase(instances storage.InstanceStore) func(http.Handler) 
 			}
 			// A MySQL project reaches only the database routes the route
 			// table says serve it; an unknown route is refused (ADR 0041).
-			if inst.DBType == domain.MySQL {
-				if row, known := routepolicy.Lookup(r.Method, r.URL.Path); !known || !row.MySQL {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusConflict)
-					_, _ = w.Write([]byte(errBodyNotForMySQL))
-					return
-				}
+			if inst.DBType == domain.MySQL && !servesMySQL(w, r) {
+				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// servesMySQL reports whether the route serves a MySQL project, and refuses
+// the request with the route's reason when it does not.
+func servesMySQL(w http.ResponseWriter, r *http.Request) bool {
+	row, known := routepolicy.Lookup(r.Method, r.URL.Path)
+	if known && row.MySQL {
+		return true
+	}
+	refuseForMySQL(w, row.MySQLRefusal)
+	return false
+}
+
+// refuseForMySQL answers 409 with the route's reason when it has one.
+func refuseForMySQL(w http.ResponseWriter, reason string) {
+	message := notForMySQL
+	if reason != "" {
+		message += ": " + reason
+	}
+	body, _ := json.Marshal(map[string]string{"error": message})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_, _ = w.Write(body)
 }

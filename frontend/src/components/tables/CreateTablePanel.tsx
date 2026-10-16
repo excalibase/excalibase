@@ -9,6 +9,7 @@ import { DEFAULT_ROLES, fullAccess, tableKey } from '../../utils/permissionModel
 import { serverErrorMessage } from '../../utils/serverError';
 import { newNameError } from '../../utils/names';
 import { NameLengthHint } from '../ui/NameLengthHint';
+import { columnTypesFor, idColumnTypeFor } from '../../utils/engineSql';
 
 interface ColumnDraft {
   // _key is a stable identity for React keys, since column names + positions
@@ -27,9 +28,9 @@ function newColKey(): string {
   return `col-${__nextColKey}`;
 }
 
-const DEFAULT_COLUMNS: ColumnDraft[] = [
-  { _key: 'col-default-id', name: 'id', type: 'serial', primaryKey: true, nullable: false, unique: false },
-];
+function defaultColumns(mysql: boolean): ColumnDraft[] {
+  return [{ _key: 'col-default-id', name: 'id', type: idColumnTypeFor(mysql), primaryKey: true, nullable: false, unique: false }];
+}
 
 function submitLabel(grantError: string | null, busy: boolean): string {
   if (grantError) return 'Close';
@@ -51,13 +52,18 @@ interface CreateTablePanelProps {
   readonly projectId: string;
   // Developer and up may write permissions; others are not offered public read.
   readonly canGrantRead?: boolean;
+  // A MySQL project's types (ADR 0041); its tables live in its database, named as schema.
+  readonly mysql?: boolean;
+  readonly schema?: string;
 }
 
-export function CreateTablePanel({ open, onClose, projectId, canGrantRead = false }: CreateTablePanelProps) {
+export function CreateTablePanel({
+  open, onClose, projectId, canGrantRead = false, mysql = false, schema = 'public',
+}: CreateTablePanelProps) {
   const createTable = useCreateTable(projectId);
   const qc = useQueryClient();
   const [newTableName, setNewTableName] = useState('');
-  const [newCols, setNewCols] = useState<ColumnDraft[]>([...DEFAULT_COLUMNS]);
+  const [newCols, setNewCols] = useState<ColumnDraft[]>(() => defaultColumns(mysql));
   // Hasura's default: a new table is reachable by nobody until a permission says so.
   const [readRoles, setReadRoles] = useState<Record<ReadRole, boolean>>(NO_READ);
   const [granting, setGranting] = useState(false);
@@ -68,7 +74,7 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
 
   const reset = () => {
     setNewTableName('');
-    setNewCols([...DEFAULT_COLUMNS]);
+    setNewCols(defaultColumns(mysql));
     setReadRoles(NO_READ);
     setGrantError(null);
     setCreateError(null);
@@ -84,7 +90,7 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
     const failures: string[] = [];
     for (const { role } of READ_OPTIONS.filter((option) => canGrantRead && readRoles[option.role])) {
       try {
-        await putTablePermission(projectId, tableKey('public', tableName), role, 'select', fullAccess('select'));
+        await putTablePermission(projectId, tableKey(schema, tableName), role, 'select', fullAccess('select'));
       } catch (err) {
         failures.push(`${role} read could not be granted (${apiErrorMessage(err, 'unknown error')})`);
       }
@@ -194,6 +200,8 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
                 }}
                 className="flex-1 px-2 py-1.5 rounded border border-border-primary bg-bg-primary text-text-primary text-xs"
                 placeholder="e.g. text"
+                list="column-type-options"
+                aria-label="Column type"
               />
               {i > 0 && (
                 <button onClick={() => setNewCols(newCols.filter((_, j) => j !== i))} className="p-1 text-red-400" aria-label="Remove column">
@@ -206,6 +214,9 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
             )}
             </div>
           ))}
+          <datalist id="column-type-options">
+            {columnTypesFor(mysql).map((type) => <option key={type} value={type} />)}
+          </datalist>
           <button
             onClick={() => setNewCols([...newCols, { _key: newColKey(), name: '', type: 'text', primaryKey: false, nullable: true, unique: false }])}
             className="text-xs text-purple-400 hover:text-purple-300"

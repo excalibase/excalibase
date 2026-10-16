@@ -322,3 +322,36 @@ describe('ConnectionStrings — single-host MySQL', () => {
     expect(screen.getByTestId('conn-ssh-tunnel')).toHaveTextContent('ssh -N -L 33061:127.0.0.1:33061');
   });
 });
+
+// ADR 0041 decision 9: a MySQL project shows how its drivers connect, TLS on.
+describe('ConnectionStrings — MySQL driver examples', () => {
+  test('gives a Node (mysql2) and a Connector/J example on the internal address', async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: {
+        ...CREDENTIALS, engine: 'mysql', host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, username: 'admin',
+        databaseName: 'shop', jdbcUrl: 'jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=REQUIRED',
+      },
+    } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ConnectionStrings projectId="p-1" documentDb={false} />
+      </QueryClientProvider>
+    );
+    expect(await screen.findByTestId('conn-mysql-internal')).toHaveTextContent(
+      'mysql://admin:••••••••@moco-p-1-mysql-primary.o-p-1.svc:3306/shop?ssl-mode=REQUIRED',
+    );
+    const node = screen.getByTestId('conn-mysql-node');
+    expect(node).toHaveTextContent("import mysql from 'mysql2/promise'");
+    expect(node).toHaveTextContent("host: 'moco-p-1-mysql-primary.o-p-1.svc'");
+    expect(node).toHaveTextContent("user: 'admin'");
+    expect(node).toHaveTextContent("database: 'shop'");
+    expect(node).toHaveTextContent('password: process.env.MYSQL_PASSWORD');
+    expect(node).toHaveTextContent('ssl: { rejectUnauthorized: false }');
+    expect(node).not.toHaveTextContent('s3cret');
+    const java = screen.getByTestId('conn-mysql-connectorj');
+    expect(java).toHaveTextContent('"jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=REQUIRED"');
+    expect(java).toHaveTextContent('DriverManager.getConnection(url, "admin", System.getenv("MYSQL_PASSWORD"))');
+    expect(screen.getByTestId('conn-mysql-tls-note')).toHaveTextContent(/not verified/);
+  });
+});
