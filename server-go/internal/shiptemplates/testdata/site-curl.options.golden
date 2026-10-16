@@ -1,0 +1,9 @@
+# Run from the repository root after building the site, with these set:
+#   EXCALIBASE_TOKEN  a write token bound to this project, kept as a CI secret
+#   COMMIT_SHA        the commit the build came from, shown in the deploy history
+# It answers once the deploy is live, and fails the step when it is not.
+tar czf site.tgz -C "apps/web/build" .
+curl --fail-with-body -sS -X POST "https://app.example.test/api/projects/proj-a/sites/0b8f2c1e-5d1a-4c7e-9f2a-3b4c5d6e7f80/deploy?label=$COMMIT_SHA" \
+  -H "Authorization: Bearer $EXCALIBASE_TOKEN" \
+  -H "Content-Type: application/gzip" \
+  --data-binary @site.tgz

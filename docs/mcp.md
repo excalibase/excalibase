@@ -64,7 +64,16 @@ apps and grant what the anon role grants.
 | `get_logs` | database: `GET /api/provision/{id}/logs`; app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs`. A log backend that does not answer gives "not available", never its address |
 | `test_api_request` | `GET /api/projects/{id}/info/`, then one request to the project's own data API (below) |
 | `get_dockerfile_template` | none: Dockerfiles for node, nextjs, vite, python, go, java |
-| `get_ci_snippet` | `GET .../apps/{app}/` for the app's image; renders the same GitHub Actions, GitLab CI, Jenkins or curl pipeline as Studio's pipeline page |
+| `list_sites` / `create_site` / `delete_site` | `GET`/`POST /api/projects/{id}/sites/`, `DELETE .../sites/{site}/`. Sites serve built files from the CDN (ADR 0043); the site's origin joins the project's CORS list on its first deploy |
+| `deploy_site` | `POST .../sites/{site}/deploy?label=` with the archive as the raw body, then `GET .../sites/{site}/` for its URL. The tool takes the build output as a base64 gzipped tar (`tar czf - -C dist . \| base64`), at most 1 MiB before encoding so it fits one MCP message; the route and the sites service check it exactly as an upload from CI. A bigger build goes up from CI or a shell (`get_ci_snippet` with `kind: site`) |
+| `list_site_deploys` / `rollback_site` | `GET .../sites/{site}/deploys`; `POST .../sites/{site}/deploys/{deploy}/rollback` |
+| `get_ci_snippet` | `kind: app` (default): `GET .../apps/{app}/` for the app's image; renders the same GitHub Actions, GitLab CI, Jenkins or curl pipeline as Studio's pipeline page. `kind: site`: `GET .../sites/{site}/` when a site is named; the pipeline runs `npm ci` and `npm run build` in `context`, packs `output` (default `dist`) with `tar czf` and uploads it with one curl using the `EXCALIBASE_TOKEN` CI secret |
+
+Site writes need Developer or above, as on the HTTP routes. Where Sites is off (no Cloudflare
+account configured, the default for Docker/Podman and self-hosted Kubernetes) every site tool
+answers that Sites is not available on this install and points to a container
+(`get_dockerfile_template`, `create_app`, `deploy_app`). Routing settings (`PATCH .../sites/{site}/`)
+stay in Studio.
 
 ## The REST surface a page uses
 

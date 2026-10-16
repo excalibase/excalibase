@@ -12,11 +12,11 @@ import (
 // list on purpose: the endpoint is built for coding, and every addition is a
 // decision about what an AI tool may do with a person's credential.
 var offeredTools = []string{
-	"add_cors_origin", "apply_migration", "create_app", "create_publishable_key", "delete_app", "delete_function", "deploy_app",
-	"deploy_function", "describe_table", "execute_sql", "generate_typescript_types", "get_ci_snippet",
+	"add_cors_origin", "apply_migration", "create_app", "create_publishable_key", "create_site", "delete_app", "delete_function",
+	"delete_site", "deploy_app", "deploy_function", "deploy_site", "describe_table", "execute_sql", "generate_typescript_types", "get_ci_snippet",
 	"get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_project_info",
 	"list_apps", "list_cors_origins", "list_functions", "list_migrations", "list_permissions", "list_projects",
-	"list_tables", "remove_cors_origin", "set_db_function_permission", "set_function_outbound_hosts",
+	"list_site_deploys", "list_sites", "list_tables", "remove_cors_origin", "rollback_site", "set_db_function_permission", "set_function_outbound_hosts",
 	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "test_auth_flow", "track_db_function", "update_app",
 }
 
@@ -64,6 +64,12 @@ var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/$`),
 	regexp.MustCompile(`^POST /api/projects/[^/]+/apps/[^/]+/deploy$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/(deploys|deploys/[^/]+|logs)(\?.*)?$`),
+	// Sites (EXC-353): the build output goes up as the deploy body; routing settings stay in Studio.
+	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/sites/$`),
+	regexp.MustCompile(`^(GET|DELETE) /api/projects/[^/]+/sites/[^/]+/$`),
+	regexp.MustCompile(`^POST /api/projects/[^/]+/sites/[^/]+/deploy(\?label=[^&]*)?$`),
+	regexp.MustCompile(`^GET /api/projects/[^/]+/sites/[^/]+/deploys$`),
+	regexp.MustCompile(`^POST /api/projects/[^/]+/sites/[^/]+/deploys/[^/]+/rollback$`),
 }
 
 // neverReached is the surface ADR 0037 keeps out of MCP: project lifecycle,

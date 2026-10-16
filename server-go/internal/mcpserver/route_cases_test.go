@@ -5,7 +5,8 @@ import "net/http"
 // routeCases is every tool's routing case: the long-standing ones and the
 // tools added since.
 func routeCases() []routeCase {
-	return append(append(baseRouteCases(), appManageRouteCases()...), authFlowRouteCases()...)
+	cases := append(append(baseRouteCases(), appManageRouteCases()...), authFlowRouteCases()...)
+	return append(cases, sitesRouteCases()...)
 }
 
 func appManageRouteCases() []routeCase {

@@ -12,7 +12,7 @@ import (
 )
 
 // maxRequestBytes bounds one MCP message; a function deploy carries up to
-// 512 KiB of source.
+// 512 KiB of source and a site deploy a base64 archive of up to 1 MiB.
 const maxRequestBytes = 2 << 20
 
 const (

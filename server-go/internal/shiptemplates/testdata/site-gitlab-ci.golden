@@ -1,0 +1,15 @@
+deploy-site:
+  stage: deploy
+  image: node:24
+  resource_group: excalibase-site-deploy
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - npm ci
+    - npm run build
+    - tar czf site.tgz -C "dist" .
+    - |
+      curl --fail-with-body -sS -X POST "https://app.example.test/api/projects/proj-a/sites/0b8f2c1e-5d1a-4c7e-9f2a-3b4c5d6e7f80/deploy?label=$CI_COMMIT_SHA" \
+        -H "Authorization: Bearer $EXCALIBASE_TOKEN" \
+        -H "Content-Type: application/gzip" \
+        --data-binary @site.tgz
