@@ -75,14 +75,28 @@ func (s *ProvisioningService) teardownAppWorkloads(ctx context.Context, inst *do
 // SetProjectWorkloadStopper wires the stop a deletion runs before anything else.
 func (s *ProvisioningService) SetProjectWorkloadStopper(w ProjectWorkloadStopper) { s.workloads = w }
 
+// ProjectSiteRouter takes a project's sites off their hostnames for its
+// deletion grace period and serves them again on a cancel (EXC-353).
+type ProjectSiteRouter interface {
+	UnrouteProjectSites(ctx context.Context, projectID string) error
+	RouteProjectSites(ctx context.Context, projectID string) error
+}
+
+// SetSiteRouter wires the sites a scheduled deletion takes offline.
+func (s *ProvisioningService) SetSiteRouter(r ProjectSiteRouter) { s.siteRouter = r }
+
 // stopWorkloads takes a project being deleted off the internet. The grace
 // period keeps data only: nothing of the project may answer while it runs.
 func (s *ProvisioningService) stopWorkloads(ctx context.Context, projectID string) error {
-	if s.workloads == nil {
-		return nil
+	if s.workloads != nil {
+		if err := s.workloads.StopProjectWorkloads(ctx, projectID); err != nil {
+			return fmt.Errorf("%w: stop the project's apps: %w", ErrDeletionStopFailed, err)
+		}
 	}
-	if err := s.workloads.StopProjectWorkloads(ctx, projectID); err != nil {
-		return fmt.Errorf("%w: stop the project's apps: %w", ErrDeletionStopFailed, err)
+	if s.siteRouter != nil {
+		if err := s.siteRouter.UnrouteProjectSites(ctx, projectID); err != nil {
+			return fmt.Errorf("%w: take the project's sites offline: %w", ErrDeletionStopFailed, err)
+		}
 	}
 	return nil
 }
@@ -355,14 +369,39 @@ func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID stri
 	if err != nil {
 		return err
 	}
-	switch err := s.store.UpdateIfStatusWithinOrgLimit(inst, string(domain.StatusPendingDeletion), limit); {
-	case errors.Is(err, storage.ErrOrgProjectLimitReached):
-		return &RestoreProjectLimitError{Limit: limit}
-	case err != nil:
+	// Before the write, like the runtime, so a failed cancel can be retried.
+	if err := s.routeSites(ctx, projectID); err != nil {
+		return err
+	}
+	if err := s.store.UpdateIfStatusWithinOrgLimit(inst, string(domain.StatusPendingDeletion), limit); err != nil {
+		s.unrouteSitesAfterFailedCancel(ctx, projectID)
+		if errors.Is(err, storage.ErrOrgProjectLimitReached) {
+			return &RestoreProjectLimitError{Limit: limit}
+		}
 		return err
 	}
 	log.Printf("action=cancel_deletion project=%s", projectID)
 	return nil
+}
+
+func (s *ProvisioningService) routeSites(ctx context.Context, projectID string) error {
+	if s.siteRouter == nil {
+		return nil
+	}
+	if err := s.siteRouter.RouteProjectSites(ctx, projectID); err != nil {
+		return fmt.Errorf("serve the project's sites again: %w", err)
+	}
+	return nil
+}
+
+// unrouteSitesAfterFailedCancel takes the sites offline again: the project is still scheduled.
+func (s *ProvisioningService) unrouteSitesAfterFailedCancel(ctx context.Context, projectID string) {
+	if s.siteRouter == nil {
+		return
+	}
+	if err := s.siteRouter.UnrouteProjectSites(context.WithoutCancel(ctx), projectID); err != nil {
+		log.Printf("action=cancel_deletion project=%s status=sites_left_routed err=%v", projectID, err)
+	}
 }
 
 // DeletionSweepReport lists what one pass of RunDueDeletions did.
