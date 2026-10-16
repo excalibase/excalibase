@@ -23,6 +23,8 @@ const live = siteDeployFixture({
   live: true,
   label: 'abc1234',
   totalBytes: 2 * 1024 * 1024,
+  createdBy: 'd8dc33f93ea9f4d0c1a6e6cf59b338cf',
+  createdByName: 'maria',
 });
 const older = siteDeployFixture({ id: 'dep-1', createdAt: '2026-10-11T10:00:00Z' });
 const failed = siteDeployFixture({
@@ -92,12 +94,16 @@ describe('SiteDetailPage', () => {
     expect(liveRow.getByTestId('site-deploy-status-dep-2')).toHaveTextContent('Live');
     expect(rows[1]).toHaveTextContent('2.0 MB');
     expect(rows[1]).toHaveTextContent('12 files');
-    expect(rows[1]).toHaveTextContent('user-1');
+    expect(rows[1]).toHaveTextContent('by maria');
+    expect(rows[1]).not.toHaveTextContent('d8dc33f93ea9f4d0c1a6e6cf59b338cf');
     expect(rows[1]).toHaveTextContent('abc1234');
     expect(rows[1]).toHaveTextContent(new Date(live.createdAt).toLocaleString());
     expect(within(rows[0]).getByTestId('site-deploy-status-dep-3')).toHaveTextContent('Failed');
     expect(rows[0]).toHaveTextContent('the CDN refused the upload');
     expect(within(rows[2]).getByTestId('site-deploy-status-dep-1')).toHaveTextContent('Succeeded');
+    // A deployer whose account is gone has no name: the opaque id is not shown in its place.
+    expect(rows[2]).not.toHaveTextContent('by');
+    expect(rows[2]).not.toHaveTextContent('user-1');
   });
 
   test('offers rollback only to an earlier deploy that succeeded, and asks first', async () => {

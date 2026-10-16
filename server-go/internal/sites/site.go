@@ -62,10 +62,12 @@ type Deploy struct {
 	FileCount  int                                `json:"fileCount"`
 	TotalBytes int64                              `json:"totalBytes"`
 	// SPAFallback is the routing this deploy was published with; a rollback brings it back.
-	SPAFallback   bool       `json:"spaFallback"`
-	Label         string     `json:"label,omitempty"`
-	FailureReason string     `json:"failureReason,omitempty"`
-	CreatedBy     string     `json:"createdBy"`
+	SPAFallback   bool   `json:"spaFallback"`
+	Label         string `json:"label,omitempty"`
+	FailureReason string `json:"failureReason,omitempty"`
+	CreatedBy     string `json:"createdBy"`
+	// CreatedByName is the deployer's username, read with the history; empty once the account is gone.
+	CreatedByName string     `json:"createdByName,omitempty"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
 }

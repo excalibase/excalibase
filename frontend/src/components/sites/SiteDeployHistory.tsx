@@ -88,7 +88,8 @@ function DeployRow({
             )}
           </p>
           <p className="text-xs text-text-tertiary">
-            {formatBytes(deploy.totalBytes)} · {fileCount(deploy.fileCount)} · by {deploy.createdBy}
+            {formatBytes(deploy.totalBytes)} · {fileCount(deploy.fileCount)}
+            {deploy.createdByName && ` · by ${deploy.createdByName}`}
           </p>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
