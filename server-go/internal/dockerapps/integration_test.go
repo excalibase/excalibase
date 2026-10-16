@@ -41,6 +41,12 @@ type realRig struct {
 
 func newRealRig(t *testing.T) *realRig {
 	t.Helper()
+	return newRealRigWith(t, nil)
+}
+
+// newRealRigWith lets a test change the runtime's options and what its database container runs.
+func newRealRigWith(t *testing.T, configure func(*Options), dbCommand ...string) *realRig {
+	t.Helper()
 	direct, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		t.Skipf("no engine: %v", err)
@@ -58,15 +64,19 @@ func newRealRig(t *testing.T) *realRig {
 	})
 	// Registered after the proxy, so it runs while the proxy still serves.
 	t.Cleanup(rig.cleanup)
-	rig.run(rig.db, map[string]string{labelManaged: "true"})
+	rig.run(rig.db, map[string]string{labelManaged: "true"}, dbCommand...)
 	rig.run(rig.edge, nil)
 	routes := t.TempDir()
-	rig.rt, err = New(proxied, Options{
+	options := Options{
 		NetworkPrefix: prefix + "-net-", VolumePrefix: prefix + "-vol-", EdgeContainer: rig.edge,
 		EdgeTLSAddress: "127.0.0.1:1", RoutesDir: routes, ProbeBinary: buildProbe(t), ToolsImage: itBusybox,
 		Route: apphost.Route{Domain: "apps.example.com", TLS: true}, Projects: fakeScopes{rig.db: "proj-it"},
 		PollInterval: 200 * time.Millisecond, MinReady: time.Second,
-	})
+	}
+	if configure != nil {
+		configure(&options)
+	}
+	rig.rt, err = New(proxied, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,9 +97,12 @@ func pullDirect(t *testing.T, engine *client.Client, ref string) {
 }
 
 // run starts a long-lived busybox the test owns, standing in for a database or the edge.
-func (r *realRig) run(name string, labels map[string]string) {
+func (r *realRig) run(name string, labels map[string]string, command ...string) {
 	ctx := context.Background()
-	created, err := r.direct.ContainerCreate(ctx, &container.Config{Image: itBusybox, Cmd: []string{"sleep", "3600"}, Labels: labels},
+	if len(command) == 0 {
+		command = []string{"sleep", "3600"}
+	}
+	created, err := r.direct.ContainerCreate(ctx, &container.Config{Image: itBusybox, Cmd: command, Labels: labels},
 		&container.HostConfig{}, nil, nil, name)
 	if err != nil {
 		r.t.Fatal(err)
