@@ -79,6 +79,8 @@ type ProvisioningService struct {
 	objectPurger ProjectObjectPurger
 	// appPurger removes the project's app records and their deploy history.
 	appPurger ProjectAppPurger
+	// sitePurger removes the project's sites and the Workers that serve them.
+	sitePurger ProjectSitePurger
 	// workloads stops a deleted project's apps and function runtime (EXC-567).
 	workloads ProjectWorkloadStopper
 	// workloadTeardown removes app workloads no namespace deletion takes (single host).
@@ -1013,6 +1015,23 @@ type ProjectAppPurger interface {
 	PurgeProjectApps(projectID string) (int, error)
 }
 
+// ProjectSitePurger removes every site a project holds, Worker first (EXC-353).
+type ProjectSitePurger interface {
+	PurgeProjectSites(ctx context.Context, projectID string) (int, error)
+}
+
+// SetSitePurger wires the removal of a deleted project's sites.
+func (s *ProvisioningService) SetSitePurger(p ProjectSitePurger) { s.sitePurger = p }
+
+func (s *ProvisioningService) purgeProjectSites(ctx context.Context, inst *domain.DatabaseInstance) error {
+	removed, err := s.sitePurger.PurgeProjectSites(ctx, inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	log.Printf("site purge for %s removed %d sites", inst.ProjectID, removed)
+	return nil
+}
+
 // SetAppPurger wires the removal of a deleted project's apps.
 func (s *ProvisioningService) SetAppPurger(p ProjectAppPurger) { s.appPurger = p }
 
@@ -1198,6 +1217,10 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	// quarantine here, not back into the pool.
 	if s.endpoints != nil {
 		steps = append(steps, deletionStep{domain.DeletionStepReleaseEndpoint, s.releasePublicEndpoint})
+	}
+	// Sites are public too, so they stop being served next.
+	if s.sitePurger != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepDeleteSites, s.purgeProjectSites})
 	}
 	if s.backupSchedules != nil {
 		steps = append(steps, deletionStep{domain.DeletionStepStopBackupSchedule, s.stopBackupSchedule})

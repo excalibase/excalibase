@@ -132,6 +132,7 @@ func TestCheck_ProviderSelectedWithoutItsSettings(t *testing.T) {
 		"EMAIL_PROVIDER=smtp":   {EmailProvider: "smtp"},
 		"R2_*":                  {R2Bucket: "uploads"},
 		"BACKUP_DEFAULT_*":      {BackupEndpoint: "https://r2", BackupBucket: "backups"},
+		"SITES_ENABLED":         {SitesEnabled: true, Sites: config.SitesConfig{AccountID: "acct"}},
 	}
 	for flag, cfg := range cases {
 		t.Run(flag, func(t *testing.T) {
