@@ -81,6 +81,8 @@ type ProvisioningService struct {
 	appPurger ProjectAppPurger
 	// sitePurger removes the project's sites and the Workers that serve them.
 	sitePurger ProjectSitePurger
+	// siteRouter takes the project's sites offline while its deletion is pending.
+	siteRouter ProjectSiteRouter
 	// workloads stops a deleted project's apps and function runtime (EXC-567).
 	workloads ProjectWorkloadStopper
 	// workloadTeardown removes app workloads no namespace deletion takes (single host).

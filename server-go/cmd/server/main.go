@@ -1507,6 +1507,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	schemaHandler := newSchemaHandler(cfg, vc, store)
 	sitesSvc := newSitesService(cfg, sqlStore)
 	provSvc.SetSitePurger(sitesSvc)
+	provSvc.SetSiteRouter(sitesSvc)
 	return &handlerDeps{
 		provHandler:         provHandler,
 		sdkKeysHandler:      handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
