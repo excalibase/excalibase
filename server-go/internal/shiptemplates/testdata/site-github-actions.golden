@@ -1,0 +1,28 @@
+name: Deploy site to Excalibase
+on:
+  push:
+    branches: ["main"]
+permissions:
+  contents: read
+concurrency: excalibase-site-deploy
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+      - name: Deploy
+        env:
+          EXCALIBASE_TOKEN: ${{ secrets.EXCALIBASE_TOKEN }}
+        run: |
+          tar czf site.tgz -C "dist" .
+          curl --fail-with-body -sS -X POST "https://app.example.test/api/projects/proj-a/sites/0b8f2c1e-5d1a-4c7e-9f2a-3b4c5d6e7f80/deploy?label=$GITHUB_SHA" \
+            -H "Authorization: Bearer $EXCALIBASE_TOKEN" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @site.tgz

@@ -1,0 +1,24 @@
+pipeline {
+  agent any
+  options {
+    disableConcurrentBuilds()
+  }
+  environment {
+    EXCALIBASE_TOKEN = credentials('excalibase-token')
+  }
+  stages {
+    stage('Build and deploy the site') {
+      steps {
+        sh '''
+          npm ci
+          npm run build
+          tar czf site.tgz -C "dist" .
+          curl --fail-with-body -sS -X POST "https://app.example.test/api/projects/proj-a/sites/0b8f2c1e-5d1a-4c7e-9f2a-3b4c5d6e7f80/deploy?label=$GIT_COMMIT" \\
+            -H "Authorization: Bearer $EXCALIBASE_TOKEN" \\
+            -H "Content-Type: application/gzip" \\
+            --data-binary @site.tgz
+        '''
+      }
+    }
+  }
+}

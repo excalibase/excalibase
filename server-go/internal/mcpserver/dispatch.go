@@ -36,6 +36,9 @@ type request struct {
 	query  url.Values
 	body   any
 	header http.Header
+	// raw, when set, is sent as the body as it is, typed contentType.
+	raw         []byte
+	contentType string
 }
 
 // dispatcher sends in-process requests through the router as the caller.
@@ -88,7 +91,10 @@ func (d dispatcher) do(ctx context.Context, req request, out any) error {
 
 func (d dispatcher) build(ctx context.Context, req request) (*http.Request, error) {
 	var body io.Reader = http.NoBody
-	if req.body != nil {
+	contentType := "application/json"
+	if req.raw != nil {
+		body, contentType = bytes.NewReader(req.raw), req.contentType
+	} else if req.body != nil {
 		encoded, err := json.Marshal(req.body)
 		if err != nil {
 			return nil, fmt.Errorf("encode request: %w", err)
@@ -111,7 +117,7 @@ func (d dispatcher) build(ctx context.Context, req request) (*http.Request, erro
 			httpReq.Header.Add(name, value)
 		}
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Content-Type", contentType)
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.RemoteAddr = net.JoinHostPort(d.caller.ClientAddr, "0")
 	return httpReq, nil

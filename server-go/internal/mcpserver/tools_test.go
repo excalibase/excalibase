@@ -782,6 +782,9 @@ func TestToolDescriptionsSteerTheClient(t *testing.T) {
 		"add_cors_origin":     {"capacitor://localhost", "tauri://localhost", "null"},
 		// EXC-610: the return shape the API needs is said before the 400 that refuses RETURNS TABLE.
 		"track_db_function": {"SETOF", "RETURNS TABLE", "view", "directly on the field"},
+		// EXC-353: a site is files only; a server-rendered app stays a container.
+		"create_site": {"container", "create_app"},
+		"deploy_site": {"tar czf", "base64", "get_ci_snippet"},
 	}
 	for _, tool := range listed.Tools {
 		for _, want := range wants[tool.Name] {
@@ -813,6 +816,7 @@ func TestReadOnlyConnectionOffersNoWriteTool(t *testing.T) {
 		"apply_migration", "set_permission", "deploy_function", "set_function_secret", "deploy_app", "create_publishable_key",
 		"add_cors_origin", "remove_cors_origin", "set_realtime", "delete_function", "set_function_outbound_hosts",
 		"track_db_function", "set_db_function_permission", "update_app", "delete_app",
+		"create_site", "deploy_site", "rollback_site", "delete_site",
 	} {
 		if offered[name] {
 			t.Errorf("%s must not be offered on a read-only connection", name)
