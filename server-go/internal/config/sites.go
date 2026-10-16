@@ -53,5 +53,16 @@ func (c AppConfig) validateSites() error {
 	if !baseDomainPattern.MatchString(c.Sites.BaseDomain) {
 		return fmt.Errorf("SITES_BASE_DOMAIN %q is not a domain such as excalibase.app", c.Sites.BaseDomain)
 	}
+	if domainsOverlap(c.Sites.BaseDomain, strings.ToLower(strings.TrimSpace(c.AppDomain))) {
+		return fmt.Errorf("SITES_BASE_DOMAIN %q must not be APP_DOMAIN or share a subtree with it: a site name could take an app's hostname", c.Sites.BaseDomain)
+	}
 	return nil
+}
+
+// domainsOverlap is one domain equal to, or under, the other.
+func domainsOverlap(first, second string) bool {
+	if first == "" || second == "" {
+		return false
+	}
+	return first == second || strings.HasSuffix(first, "."+second) || strings.HasSuffix(second, "."+first)
 }

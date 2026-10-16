@@ -72,9 +72,14 @@ var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
 
 // reservedNames are hostnames a site could pass off as the platform's own.
 var reservedNames = map[string]bool{
-	"www": true, "api": true, "app": true, "admin": true, "studio": true, "auth": true,
-	"mail": true, "status": true, "docs": true, "dashboard": true, "console": true,
-	"excalibase": true, "support": true, "billing": true, "login": true, "cdn": true,
+	"www": true, "api": true, "admin": true, "studio": true, "mail": true, "status": true, "docs": true,
+	"dashboard": true, "console": true, "support": true, "billing": true, "login": true, "ns": true,
+	"ns1": true, "ns2": true, "mx": true, "smtp": true, "imap": true, "pop": true, "webmail": true,
+	"autodiscover": true, "autoconfig": true, "static": true, "assets": true, "cdn": true, "sso": true,
+	"oauth": true, "auth": true, "id": true, "account": true, "accounts": true, "security": true, "help": true,
+	"blog": true, "graphql": true, "rest": true, "realtime": true, "storage": true, "functions": true,
+	"edge": true, "gateway": true, "internal": true, "staging": true, "dev": true, "beta": true, "app": true,
+	"apps": true,
 }
 
 // ValidateName holds a site name to one DNS label, since it is the hostname's first label.
@@ -85,7 +90,7 @@ func ValidateName(name string) error {
 	if strings.Contains(name, "--") {
 		return errors.New("a site name may not contain two hyphens in a row")
 	}
-	if reservedNames[name] {
+	if reservedNames[name] || strings.Contains(name, "excalibase") {
 		return fmt.Errorf("%q is reserved; choose another site name", name)
 	}
 	return nil

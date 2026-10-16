@@ -270,7 +270,7 @@ func TestUnavailableServiceRefusesEverything(t *testing.T) {
 
 func TestPurgeProjectSitesDeletesEveryScript(t *testing.T) {
 	h := newHarness(t)
-	shop, blog := h.createSite(t, "shop"), h.createSite(t, "blog")
+	shop, blog := h.createSite(t, "shop"), h.createSite(t, "journal")
 	removed, err := h.service.PurgeProjectSites(context.Background(), testProject)
 	if err != nil || removed != 2 {
 		t.Fatalf("removed=%d err=%v", removed, err)

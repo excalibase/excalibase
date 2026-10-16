@@ -17,6 +17,11 @@ func TestValidateNameRefuses(t *testing.T) {
 	for _, name := range []string{
 		"", "ab", "Shop", "-shop", "shop-", "my_shop", "my.shop", "xn--shop", "a--b",
 		strings.Repeat("a", 64), "www", "api", "admin", "studio",
+		"ns", "ns1", "ns2", "mx", "smtp", "imap", "pop", "webmail", "autodiscover", "autoconfig", "static", "assets",
+		"cdn", "sso", "oauth", "auth", "id", "account", "accounts", "security", "help", "support", "blog", "docs",
+		"status", "graphql", "rest", "realtime", "storage", "functions", "edge", "gateway", "internal", "staging",
+		"dev", "beta", "app", "apps", "dashboard", "console", "billing", "login",
+		"excalibase", "my-excalibase-app", "excalibase-login",
 	} {
 		if err := ValidateName(name); err == nil {
 			t.Errorf("ValidateName(%q) accepted", name)

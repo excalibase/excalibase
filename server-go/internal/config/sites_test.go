@@ -59,3 +59,24 @@ func TestValidateSites_RefusesABaseDomainThatIsNotAHostname(t *testing.T) {
 }
 
 func sprintf(verb string, value any) string { return fmt.Sprintf(verb, value) }
+
+// Apps are <app>-<id>.<APP_DOMAIN>; a site under the same domain could take an app's hostname.
+func TestValidateSites_RefusesABaseDomainOverlappingTheAppDomain(t *testing.T) {
+	sites := SitesConfig{AccountID: "a", APIToken: "t", DispatchNamespace: "n"}
+	for _, pair := range [][2]string{
+		{"excalibase.app", "excalibase.app"},
+		{"sites.excalibase.app", "excalibase.app"},
+		{"excalibase.app", "apps.excalibase.app"},
+	} {
+		sites.BaseDomain = pair[0]
+		cfg := AppConfig{SitesEnabled: true, Sites: sites, AppDomain: pair[1]}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "APP_DOMAIN") {
+			t.Errorf("sites %q, apps %q: err = %v", pair[0], pair[1], err)
+		}
+	}
+	sites.BaseDomain = "excalibase.app"
+	cfg := AppConfig{SitesEnabled: true, Sites: sites, AppDomain: "notexcalibase.app"}
+	if err := cfg.validateSites(); err != nil {
+		t.Errorf("unrelated domains refused: %v", err)
+	}
+}
