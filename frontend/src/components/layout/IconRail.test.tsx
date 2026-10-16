@@ -52,6 +52,17 @@ describe('IconRail services', () => {
     expect(screen.queryByTestId('nav-containers')).not.toBeInTheDocument();
   });
 
+  test('shows Sites only when the server reports sites', async () => {
+    renderRail({ deploymentMode: 'cloud', appHosting: true, sites: true });
+    expect(await screen.findByTestId('nav-sites')).toBeInTheDocument();
+  });
+
+  test('hides Sites when the server reports sites off', async () => {
+    renderRail({ deploymentMode: 'cloud', appHosting: true, sites: false });
+    expect(await screen.findByTestId('nav-containers')).toBeInTheDocument();
+    expect(screen.queryByTestId('nav-sites')).not.toBeInTheDocument();
+  });
+
   test('hides Containers when the server does not report the capability', async () => {
     renderRail(new Error('network down'));
     await waitFor(() => expect(api.get).toHaveBeenCalledWith('/config'));

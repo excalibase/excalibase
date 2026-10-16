@@ -9,6 +9,8 @@ export type Feature = 'mcp' | 'pipeline' | 'appstorage' | 'mysql';
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
   appHosting?: boolean;
+  // Static frontend hosting: on only where SITES_ENABLED and a Cloudflare account are set (EXC-353).
+  sites?: boolean;
   customDomains?: boolean;
   features?: Partial<Record<Feature, boolean>>;
   // The public API base the SDK, REST and GraphQL calls go to.
@@ -36,6 +38,12 @@ export function useDeploymentMode(): DeploymentMode {
 export function useAppHostingEnabled(): { enabled: boolean; isLoading: boolean } {
   const { data, isLoading } = useStudioConfig();
   return { enabled: data?.appHosting === true, isLoading };
+}
+
+// Off until the server reports sites, so prod and installs without Cloudflare never show the tab.
+export function useSitesEnabled(): { enabled: boolean; isLoading: boolean } {
+  const { data, isLoading } = useStudioConfig();
+  return { enabled: data?.sites === true, isLoading };
 }
 
 // Off unless the server has an ACME issuer for custom domains.

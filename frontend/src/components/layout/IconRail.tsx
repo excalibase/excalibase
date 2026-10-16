@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useParams, useNavigate, Link } from 'react-router-dom';
 import { visibleProjectNav, type NavSection } from './navigation';
-import { useAppHostingEnabled, useFeatureEnabled } from '../../hooks/useDeploymentMode';
+import { useAppHostingEnabled, useFeatureEnabled, useSitesEnabled } from '../../hooks/useDeploymentMode';
 import { cn } from '../../utils/cn';
 import { useInstance } from '../../hooks/useProvisioning';
 import { isMySQLProject } from '../../utils/engine';
@@ -23,8 +23,9 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
   const basePath = `/project/${projectId}`;
   const { enabled: appHosting } = useAppHostingEnabled();
   const { enabled: mcp } = useFeatureEnabled('mcp');
+  const { enabled: sites } = useSitesEnabled();
   const { data: project } = useInstance(projectId ?? '');
-  const sections = visibleProjectNav({ appHosting, mcp, postgres: !isMySQLProject(project) });
+  const sections = visibleProjectNav({ appHosting, mcp, sites, postgres: !isMySQLProject(project) });
 
   const [mode, setMode] = useState<SidebarMode>(() => {
     return (localStorage.getItem(STORAGE_KEY) as SidebarMode) ?? 'expandable';

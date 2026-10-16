@@ -52,6 +52,7 @@ const succeeded: Deploy = {
 
 interface Stub {
   appHosting?: boolean;
+  sites?: boolean;
   project?: Record<string, unknown> | Error;
   apps?: App[] | Error;
   endpoint?: Record<string, unknown> | Error;
@@ -60,6 +61,7 @@ interface Stub {
 
 function renderPage({
   appHosting = true,
+  sites = false,
   project = instance(),
   apps = [app()],
   endpoint,
@@ -68,7 +70,7 @@ function renderPage({
   vi.mocked(api.get).mockImplementation((url: string) => {
     const answer = (value: unknown) =>
       value instanceof Error ? Promise.reject(value) : Promise.resolve({ data: value } as never);
-    if (url === '/config') return answer({ deploymentMode: 'cloud', appHosting });
+    if (url === '/config') return answer({ deploymentMode: 'cloud', appHosting, sites });
     if (url === '/provision/proj-1') return answer(project);
     if (url === '/projects/proj-1/apps/') return answer(apps);
     if (url.startsWith('/projects/proj-1/apps/app-1/deploys')) return answer([succeeded]);
@@ -130,6 +132,22 @@ describe('ProjectOverviewPage', () => {
     await waitFor(() => expect(api.get).toHaveBeenCalledWith('/config'));
     expect(screen.queryByTestId('service-containers')).not.toBeInTheDocument();
     expect(api.get).not.toHaveBeenCalledWith('/projects/proj-1/apps/');
+  });
+
+  test('points frontends at containers when the install has no static hosting', async () => {
+    renderPage({ sites: false });
+    const pointer = await screen.findByTestId('sites-unavailable');
+    expect(pointer).toHaveTextContent(
+      "Static frontend hosting isn't available on this install; deploy your frontend as a container.",
+    );
+    expect(within(pointer).getByRole('link', { name: /container/i })).toHaveAttribute('href', '/project/proj-1/containers');
+  });
+
+  test('says nothing about static hosting when the install offers Sites', async () => {
+    renderPage({ sites: true });
+    expect(await screen.findByTestId('service-database')).toBeInTheDocument();
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/config'));
+    expect(screen.queryByTestId('sites-unavailable')).not.toBeInTheDocument();
   });
 
   test('a failed database does not make the containers look broken', async () => {

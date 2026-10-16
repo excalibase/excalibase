@@ -27,6 +27,7 @@ import {
   FileJson,
   UserCog,
   Container,
+  Globe,
   LayoutDashboard,
   Bot,
   type LucideIcon,
@@ -58,6 +59,8 @@ export interface NavCapabilities {
   appHosting: boolean;
   // MCP for coding tools ships dark (EXC-554).
   mcp: boolean;
+  // Static frontend hosting, only where the server reports it (EXC-353).
+  sites?: boolean;
   // False for a MySQL project: the Postgres-only pages are not listed.
   postgres?: boolean;
 }
@@ -87,6 +90,7 @@ export const PROJECT_NAV: NavSection[] = [
     ],
   },
   { key: 'containers', label: 'Containers', icon: Container, to: 'containers', requires: 'appHosting' },
+  { key: 'sites', label: 'Sites', icon: Globe, to: 'sites', requires: 'sites' },
   {
     key: 'auth',
     postgresOnly: true,

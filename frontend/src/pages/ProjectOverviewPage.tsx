@@ -1,5 +1,5 @@
-import { useParams } from 'react-router-dom';
-import { useAppHostingEnabled } from '../hooks/useDeploymentMode';
+import { Link, useParams } from 'react-router-dom';
+import { useAppHostingEnabled, useSitesEnabled } from '../hooks/useDeploymentMode';
 import { useInstance } from '../hooks/useProvisioning';
 import { DatabaseServiceCard } from '../components/services/DatabaseServiceCard';
 import { ContainersServiceCard } from '../components/services/ContainersServiceCard';
@@ -10,6 +10,7 @@ import { ContainersServiceCard } from '../components/services/ContainersServiceC
 export function ProjectOverviewPage() {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { enabled: appHosting } = useAppHostingEnabled();
+  const sites = useSitesEnabled();
   const { data: project } = useInstance(projectId);
   const projectName = project?.projectName || projectId;
 
@@ -30,6 +31,15 @@ export function ProjectOverviewPage() {
         <DatabaseServiceCard projectId={projectId} />
         {appHosting && <ContainersServiceCard projectId={projectId} />}
       </div>
+      {!sites.isLoading && !sites.enabled && (
+        <p className="text-xs text-text-tertiary" data-testid="sites-unavailable">
+          Static frontend hosting isn&apos;t available on this install; deploy your frontend as a{' '}
+          <Link to={`/project/${projectId}/containers`} className="text-purple-400 hover:underline">
+            container
+          </Link>
+          .
+        </p>
+      )}
     </div>
   );
 }

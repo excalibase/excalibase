@@ -137,6 +137,11 @@ export default defineConfig({
         'src/components/AllowList.tsx',
         'src/components/CorsOriginsCard.tsx',
         'src/components/FunctionEgressCard.tsx',
+        'src/api/sites.ts',
+        'src/components/sites/**/*.{ts,tsx}',
+        'src/pages/SitesPage.tsx',
+        'src/pages/SiteFormPage.tsx',
+        'src/pages/SiteDetailPage.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {
