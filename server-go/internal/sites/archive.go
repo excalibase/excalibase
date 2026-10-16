@@ -20,19 +20,26 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 )
 
-// Limits bound one deploy's build output. Files and file size are Cloudflare's
-// own static-assets limits; the total keeps one upload off our disk's budget.
+// Limits bound a project's sites and each deploy's build output. Files and
+// file size start at Cloudflare's own static-assets limits; the total keeps
+// one upload off our disk's budget. The plan sets them (EXC-620).
 type Limits struct {
 	MaxFiles      int
 	MaxFileBytes  int64
 	MaxTotalBytes int64
+	// MaxSites is how many sites the project may hold; 0 offers none.
+	MaxSites int
+	// MaxDeploysPerHour is how many deploys the project may start in any hour.
+	MaxDeploysPerHour int
 }
 
-// DefaultLimits is what every deploy is held to.
+// DefaultLimits is the FREE plan's, for a service built without a limits source.
 var DefaultLimits = Limits{
-	MaxFiles:      20_000,
-	MaxFileBytes:  25 << 20,
-	MaxTotalBytes: 100 << 20,
+	MaxFiles:          20_000,
+	MaxFileBytes:      25 << 20,
+	MaxTotalBytes:     100 << 20,
+	MaxSites:          5,
+	MaxDeploysPerHour: 30,
 }
 
 const maxPathLength = 1024

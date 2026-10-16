@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -46,10 +49,12 @@ func (h *TierHandler) Routes(r chi.Router) {
 }
 
 type tierConfigDTO struct {
-	Tier        domain.TierType `json:"tier"`
-	MaxProjects int             `json:"maxProjects"`
-	Instances   int             `json:"instances"`
-	StorageSize string          `json:"storageSize"`
+	Tier domain.TierType `json:"tier"`
+	// Version is sent back as If-Match so a save from an older read is refused.
+	Version     int    `json:"version"`
+	MaxProjects int    `json:"maxProjects"`
+	Instances   int    `json:"instances"`
+	StorageSize string `json:"storageSize"`
 	// MaxStorageSize is the disk a project may grow to (EXC-492).
 	MaxStorageSize string `json:"maxStorageSize"`
 	// MaxAppDiskSize is the largest disk one app may have (EXC-523).
@@ -63,11 +68,19 @@ type tierConfigDTO struct {
 	// AutoPauseAfterDays: idle days before an ACTIVE project is auto-paused
 	// (warning one day earlier). 0 = never.
 	AutoPauseAfterDays int `json:"autoPauseAfterDays"`
+	// A project's Sites limits (EXC-620). Each one left out keeps the plan's
+	// current value: they came after every script that sizes a plan.
+	MaxSites              *int   `json:"maxSites"`
+	MaxSiteDeployBytes    *int64 `json:"maxSiteDeployBytes"`
+	MaxSiteFiles          *int   `json:"maxSiteFiles"`
+	MaxSiteFileBytes      *int64 `json:"maxSiteFileBytes"`
+	MaxSiteDeploysPerHour *int   `json:"maxSiteDeploysPerHour"`
 }
 
 func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 	return tierConfigDTO{
 		Tier:           tier,
+		Version:        tc.Version,
 		MaxProjects:    tc.MaxProjects,
 		Instances:      tc.Instances,
 		StorageSize:    tc.StorageSize,
@@ -79,6 +92,12 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 		BackupEnabled:  tc.BackupEnabled,
 
 		AutoPauseAfterDays: tc.AutoPauseAfterDays,
+
+		MaxSites:              &tc.Sites.MaxSites,
+		MaxSiteDeployBytes:    &tc.Sites.MaxDeployBytes,
+		MaxSiteFiles:          &tc.Sites.MaxFiles,
+		MaxSiteFileBytes:      &tc.Sites.MaxFileBytes,
+		MaxSiteDeploysPerHour: &tc.Sites.MaxDeploysPerHour,
 	}
 }
 
@@ -104,6 +123,10 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "unknown tier: "+string(tier), http.StatusBadRequest)
 		return
 	}
+	expectedVersion, ok := tierVersionPrecondition(w, r)
+	if !ok {
+		return
+	}
 	var dto tierConfigDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		httpError(w, "bad request body: "+safeError(err), http.StatusBadRequest)
@@ -122,6 +145,12 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 		AutoPauseAfterDays: dto.AutoPauseAfterDays,
 	}
+	sites, err := h.currentSiteLimits(r.Context(), tier)
+	if err != nil {
+		httpError(w, "read tier: "+safeError(err), http.StatusInternalServerError)
+		return
+	}
+	tc.Sites = dto.siteLimits(sites)
 	if err := validateTierConfig(tc); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
@@ -129,14 +158,37 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !h.instancesFitThePlatform(w, r, tier, tc.Instances) {
 		return
 	}
-	if err := h.store.UpsertTierConfig(r.Context(), tier, tc); err != nil {
+	version, err := h.store.UpsertTierConfig(r.Context(), tier, tc, expectedVersion)
+	if errors.Is(err, storage.ErrTierVersionConflict) {
+		httpError(w, err.Error(), http.StatusPreconditionFailed)
+		return
+	}
+	if err != nil {
 		httpError(w, "update tier: "+safeError(err), http.StatusInternalServerError)
 		return
 	}
 	if h.planChanged != nil {
 		h.planChanged()
 	}
+	tc.Version = version
+	w.Header().Set("ETag", strconv.Itoa(version))
 	writeJSON(w, toTierDTO(tier, tc))
+}
+
+// tierVersionPrecondition reads If-Match, the version the edit was made from,
+// as apps do. Without one the write is unconditional: scripts that size a plan
+// send a literal spec, while Studio always sends the version it read.
+func tierVersionPrecondition(w http.ResponseWriter, r *http.Request) (*int, bool) {
+	raw := strings.Trim(strings.TrimSpace(r.Header.Get("If-Match")), `"`)
+	if raw == "" {
+		return nil, true
+	}
+	version, err := strconv.Atoi(raw)
+	if err != nil || version < 0 {
+		httpError(w, "If-Match must be the version the tier was read at", http.StatusBadRequest)
+		return nil, false
+	}
+	return &version, true
 }
 
 // requiredCount reads an omitted count as -1, which validation refuses, so an
@@ -146,6 +198,43 @@ func requiredCount(value *int) int {
 		return -1
 	}
 	return *value
+}
+
+// currentSiteLimits is the plan's stored Sites limits, else its built-in ones.
+func (h *TierHandler) currentSiteLimits(ctx context.Context, tier domain.TierType) (config.SiteTierLimits, error) {
+	stored, found, err := h.store.GetTierConfig(ctx, tier)
+	if err != nil {
+		return config.SiteTierLimits{}, err
+	}
+	if found {
+		return stored.Sites, nil
+	}
+	if builtin, err := config.GetTierConfig(tier); err == nil {
+		return builtin.Sites, nil
+	}
+	// A plan with no row and no built-in has no limits to keep: the body must name them all.
+	return config.SiteTierLimits{}, nil
+}
+
+// siteLimits overlays the limits the body names on the plan's current ones.
+func (dto tierConfigDTO) siteLimits(current config.SiteTierLimits) config.SiteTierLimits {
+	out := current
+	if dto.MaxSites != nil {
+		out.MaxSites = *dto.MaxSites
+	}
+	if dto.MaxSiteDeployBytes != nil {
+		out.MaxDeployBytes = *dto.MaxSiteDeployBytes
+	}
+	if dto.MaxSiteFiles != nil {
+		out.MaxFiles = *dto.MaxSiteFiles
+	}
+	if dto.MaxSiteFileBytes != nil {
+		out.MaxFileBytes = *dto.MaxSiteFileBytes
+	}
+	if dto.MaxSiteDeploysPerHour != nil {
+		out.MaxDeploysPerHour = *dto.MaxSiteDeploysPerHour
+	}
+	return out
 }
 
 // maxAppsPerProjectCeiling bounds an admin's edit; a project's namespace quota
@@ -186,6 +275,36 @@ func validateTierConfig(tc config.TierConfig) error {
 	}
 	if _, err := apphost.PlanDiskBytes(tc.MaxAppDiskSize); err != nil {
 		return errors.New("maxAppDiskSize must be a whole number of gibibytes such as 20Gi (0Gi offers no app disks)")
+	}
+	return validateSiteLimits(tc.Sites)
+}
+
+// Bounds on an admin's Sites edit. A file above 25 MiB is refused by
+// Cloudflare whatever the plan; a deploy is spooled to our disk whole.
+const (
+	maxSitesCeiling          = 1000
+	minSiteDeployBytes       = int64(1) << 20
+	maxSiteDeployBytesCeil   = int64(1) << 30
+	maxSiteFilesCeiling      = 100_000
+	maxSiteFileBytesCeiling  = int64(25) << 20
+	maxSiteDeploysPerHourCap = 1000
+)
+
+func validateSiteLimits(limits config.SiteTierLimits) error {
+	if limits.MaxSites < 0 || limits.MaxSites > maxSitesCeiling {
+		return fmt.Errorf("maxSites must be between 0 and %d (0 offers no sites)", maxSitesCeiling)
+	}
+	if limits.MaxDeployBytes < minSiteDeployBytes || limits.MaxDeployBytes > maxSiteDeployBytesCeil {
+		return fmt.Errorf("maxSiteDeployBytes must be between %d (1 MiB) and %d (1 GiB)", minSiteDeployBytes, maxSiteDeployBytesCeil)
+	}
+	if limits.MaxFiles < 1 || limits.MaxFiles > maxSiteFilesCeiling {
+		return fmt.Errorf("maxSiteFiles must be between 1 and %d", maxSiteFilesCeiling)
+	}
+	if limits.MaxFileBytes < 1 || limits.MaxFileBytes > maxSiteFileBytesCeiling {
+		return fmt.Errorf("maxSiteFileBytes must be between 1 and %d (25 MiB, the CDN's own limit)", maxSiteFileBytesCeiling)
+	}
+	if limits.MaxDeploysPerHour < 1 || limits.MaxDeploysPerHour > maxSiteDeploysPerHourCap {
+		return fmt.Errorf("maxSiteDeploysPerHour must be between 1 and %d", maxSiteDeploysPerHourCap)
 	}
 	return nil
 }

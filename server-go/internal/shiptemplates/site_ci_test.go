@@ -41,7 +41,7 @@ func TestSiteCIBuildsPacksAndUploads(t *testing.T) {
 		wants := []string{
 			`tar czf site.tgz -C "apps/web/build" .`,
 			`curl --fail-with-body -sS -X POST "https://app.example.test/api/projects/proj-a/sites/0b8f2c1e-5d1a-4c7e-9f2a-3b4c5d6e7f80/deploy?label=`,
-			`-H "Authorization: Bearer $EXCALIBASE_TOKEN"`, `--data-binary @site.tgz`, `-H "Content-Type: application/gzip"`,
+			`-H "Authorization: Bearer $EXCALIBASE_DEPLOY_TOKEN"`, `--data-binary @site.tgz`, `-H "Content-Type: application/gzip"`,
 		}
 		if provider != "curl" {
 			wants = append(wants, "npm ci", "npm run build")
@@ -51,8 +51,13 @@ func TestSiteCIBuildsPacksAndUploads(t *testing.T) {
 				t.Errorf("%s: missing %q:\n%s", provider, want, snippet.Content)
 			}
 		}
-		if len(snippet.Secrets) == 0 || !strings.Contains(strings.Join(snippet.Secrets, " "), "EXCALIBASE_TOKEN") && !strings.Contains(strings.Join(snippet.Secrets, " "), "excalibase-token") {
+		secrets := strings.Join(snippet.Secrets, " ")
+		if !strings.Contains(secrets, "EXCALIBASE_DEPLOY_TOKEN") && !strings.Contains(secrets, "excalibase-deploy-token") {
 			t.Errorf("%s: the snippet must say which secret to create: %v", provider, snippet.Secrets)
+		}
+		// EXC-620: the pipeline holds the site's deploy token, never a personal access token.
+		if !strings.Contains(secrets, "deploy token") || strings.Contains(secrets, "personal access token") || strings.Contains(snippet.Content, "EXCALIBASE_TOKEN") {
+			t.Errorf("%s: the snippet must use the site's deploy token: %v", provider, snippet.Secrets)
 		}
 	}
 }

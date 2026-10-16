@@ -62,7 +62,7 @@ func TestAppLimit_FreePlanFromThePlatformDatabase(t *testing.T) {
 		t.Fatalf("GetTierConfig: %v", err)
 	}
 	free.MaxApps = 3
-	if err := store.UpsertTierConfig(ctx, domain.Free, free); err != nil {
+	if _, err := store.UpsertTierConfig(ctx, domain.Free, free, nil); err != nil {
 		t.Fatalf("UpsertTierConfig: %v", err)
 	}
 	if code := create("worker"); code != http.StatusCreated {

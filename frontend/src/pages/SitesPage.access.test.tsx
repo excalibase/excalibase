@@ -35,6 +35,8 @@ function render_(path: string, orgRole: string, list: Site[] = [siteFixture()]) 
       return Promise.resolve({ data: siteFixture() } as never);
     if (url === '/projects/proj-1/sites/site-1/deploys')
       return Promise.resolve({ data: [live, older] } as never);
+    if (url === '/projects/proj-1/sites/site-1/tokens')
+      return Promise.resolve({ data: [] } as never);
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -51,7 +53,13 @@ function render_(path: string, orgRole: string, list: Site[] = [siteFixture()]) 
   );
 }
 
-const writeControls = ['site-upload', 'site-delete', 'site-spa-toggle', 'site-rollback-dep-1'];
+const writeControls = [
+  'site-upload',
+  'site-delete',
+  'site-spa-toggle',
+  'site-rollback-dep-1',
+  'site-deploy-tokens',
+];
 
 describe('Sites for a viewer', () => {
   beforeEach(() => {
@@ -79,6 +87,8 @@ describe('Sites for a viewer', () => {
     expect(await screen.findByTestId('site-deploy-row-dep-1')).toBeInTheDocument();
     expect(screen.getByTestId('site-spa-state')).toHaveTextContent(/on/i);
     for (const id of writeControls) expect(screen.queryByTestId(id)).not.toBeInTheDocument();
+    // Deploy tokens are a Developer's: a viewer's Studio never asks for them.
+    expect(api.get).not.toHaveBeenCalledWith('/projects/proj-1/sites/site-1/tokens');
   });
 
   test('the new-site address says a developer creates sites, with no form', async () => {

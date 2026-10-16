@@ -9,6 +9,7 @@ vi.mock('../api/client', () => ({ api: { get: vi.fn(), put: vi.fn() } }));
 
 const standard = {
   tier: 'STANDARD',
+  version: 4,
   maxProjects: 5,
   instances: 3,
   storageSize: '50Gi',
@@ -19,10 +20,19 @@ const standard = {
   cpu: '2',
   backupEnabled: true,
   autoPauseAfterDays: 0,
+  maxSites: 20,
+  maxSiteDeployBytes: 104857600,
+  maxSiteFiles: 20000,
+  maxSiteFileBytes: 26214400,
+  maxSiteDeploysPerHour: 120,
 };
 
-function renderTable() {
-  vi.mocked(api.get).mockResolvedValue({ data: [standard] } as never);
+function renderTable({ sites = true } = {}) {
+  vi.mocked(api.get).mockImplementation((url: string) =>
+    Promise.resolve({
+      data: url === '/config' ? { deploymentMode: 'cloud', sites } : [standard],
+    } as never),
+  );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -30,6 +40,9 @@ function renderTable() {
     </QueryClientProvider>,
   );
 }
+
+// Studio sends back the version it read, so a save never undoes another admin's (EXC-620).
+const ifMatchVersion4 = { headers: { 'If-Match': '4' } };
 
 describe('TierConfigTable', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -48,8 +61,7 @@ describe('TierConfigTable', () => {
     await waitFor(() =>
       expect(api.put).toHaveBeenCalledWith(
         '/admin/tiers/STANDARD',
-        expect.objectContaining({ storageSize: '50Gi', maxStorageSize: '1Ti' }),
-      ),
+        expect.objectContaining({ storageSize: '50Gi', maxStorageSize: '1Ti' }), ifMatchVersion4,),
     );
   });
 
@@ -67,8 +79,7 @@ describe('TierConfigTable', () => {
     await waitFor(() =>
       expect(api.put).toHaveBeenCalledWith(
         '/admin/tiers/STANDARD',
-        expect.objectContaining({ maxStorageSize: '500Gi', maxAppDiskSize: '40Gi' }),
-      ),
+        expect.objectContaining({ maxStorageSize: '500Gi', maxAppDiskSize: '40Gi' }), ifMatchVersion4,),
     );
   });
 
@@ -84,8 +95,43 @@ describe('TierConfigTable', () => {
     await user.click(screen.getByRole('button', { name: /save/i }));
 
     await waitFor(() =>
-      expect(api.put).toHaveBeenCalledWith('/admin/tiers/STANDARD', expect.objectContaining({ maxApps: 8, maxAppDiskSize: '20Gi' })),
+      expect(api.put).toHaveBeenCalledWith('/admin/tiers/STANDARD', expect.objectContaining({ maxApps: 8, maxAppDiskSize: '20Gi' }), ifMatchVersion4),
     );
+  });
+
+  // A plan's site count and deploy rate (EXC-620), saved with the rest of the plan.
+  test('edits and saves the site count and deploy rate with the rest of the plan', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable();
+
+    const sitesCount = await screen.findByLabelText('Max sites for STANDARD');
+    await user.clear(sitesCount);
+    await user.type(sitesCount, '25');
+    const rate = screen.getByLabelText('Site deploys an hour for STANDARD');
+    await user.clear(rate);
+    await user.type(rate, '60');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/admin/tiers/STANDARD',
+        expect.objectContaining({
+          maxSites: 25,
+          maxSiteDeploysPerHour: 60,
+          maxSiteDeployBytes: 104857600,
+          maxSiteFiles: 20000,
+          maxSiteFileBytes: 26214400,
+          maxApps: 5,
+        }), ifMatchVersion4,),
+    );
+  });
+
+  // Sites stays behind its install flag: no Sites, no site columns.
+  test('shows no site limits on an install without Sites', async () => {
+    renderTable({ sites: false });
+    expect(await screen.findByLabelText('Max apps for STANDARD')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Max sites for STANDARD')).not.toBeInTheDocument();
   });
 
   // Small plans may cap app disks in mebibytes (EXC-523).
@@ -101,8 +147,7 @@ describe('TierConfigTable', () => {
     await waitFor(() =>
       expect(api.put).toHaveBeenCalledWith(
         '/admin/tiers/STANDARD',
-        expect.objectContaining({ maxAppDiskSize: '500Mi' }),
-      ),
+        expect.objectContaining({ maxAppDiskSize: '500Mi' }), ifMatchVersion4,),
     );
     expect(screen.getByRole('columnheader', { name: /max app disk/i })).toHaveAttribute(
       'title',
@@ -152,8 +197,7 @@ describe('TierConfigTable', () => {
       '/admin/tiers/STANDARD',
       expect.objectContaining({
         cpu: '4', memory: '8Gi', storageSize: '60Gi', instances: 4, maxProjects: 9, autoPauseAfterDays: 7, backupEnabled: false,
-      }),
-    );
+      }), ifMatchVersion4,);
     alert.mockRestore();
   });
 
@@ -191,5 +235,26 @@ describe('TierConfigTable', () => {
       await user.type(screen.getAllByRole('spinbutton')[spinIndex], '1');
     }
     expect(screen.getByRole('button', { name: /save/i })).toBeEnabled();
+  });
+
+  test('a save made from a version someone else replaced is refused and the plan reloaded', async () => {
+    const user = userEvent.setup();
+    const alert = vi.spyOn(globalThis, 'alert').mockImplementation(() => {});
+    vi.mocked(api.put).mockRejectedValueOnce({
+      message: 'Request failed with status code 412',
+      response: { status: 412, data: { error: 'the tier was changed by someone else: it is now at version 5' } },
+    });
+    renderTable();
+    const max = await screen.findByDisplayValue('500Gi');
+    await user.clear(max);
+    await user.type(max, '1Ti');
+    const listCalls = vi.mocked(api.get).mock.calls.filter(([url]) => url === '/tiers').length;
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/changed by someone else.*reloaded/i)));
+    await waitFor(() =>
+      expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/tiers').length).toBeGreaterThan(listCalls),
+    );
+    alert.mockRestore();
   });
 });

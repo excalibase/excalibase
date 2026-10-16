@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math"
 	"net/http"
+	"strconv"
 
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/go-chi/chi/v5"
@@ -21,7 +23,14 @@ const maxSiteBodyBytes = 4 * 1024
 // SiteHandler serves the Sites API; a nil or unavailable service means Sites is off here.
 type SiteHandler struct {
 	sites *sites.Service
+	// audit records deploy tokens made and revoked (EXC-620); nil records nothing.
+	audit auditWriter
+	// standing says whether a listed token's creator may still deploy.
+	standing tokenStanding
 }
+
+// SetAuditLog records every deploy token made or revoked.
+func (h *SiteHandler) SetAuditLog(audit auditWriter) { h.audit = audit }
 
 func NewSiteHandler(service *sites.Service) *SiteHandler { return &SiteHandler{sites: service} }
 
@@ -29,6 +38,7 @@ func NewSiteHandler(service *sites.Service) *SiteHandler { return &SiteHandler{s
 func (h *SiteHandler) Routes(r chi.Router, developer func(http.Handler) http.Handler) {
 	r.Get("/", h.available(h.list))
 	r.With(developer).Post("/", h.available(h.create))
+	r.Get("/limits", h.available(h.limits))
 	r.Route("/{siteId}", func(r chi.Router) {
 		r.Get("/", h.available(h.get))
 		r.With(developer).Patch("/", h.available(h.update))
@@ -37,6 +47,9 @@ func (h *SiteHandler) Routes(r chi.Router, developer func(http.Handler) http.Han
 		r.Get("/deploys", h.available(h.listDeploys))
 		r.Get("/deploys/{deployId}", h.available(h.getDeploy))
 		r.With(developer).Post("/deploys/{deployId}/rollback", h.available(h.rollback))
+		r.With(developer).Get("/tokens", h.available(h.listTokens))
+		r.With(developer).Post("/tokens", h.available(h.createToken))
+		r.With(developer).Delete("/tokens/{tokenId}", h.available(h.revokeToken))
 	})
 }
 
@@ -149,6 +162,25 @@ func (h *SiteHandler) remove(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// limitsResponse is what the project's plan lets its sites hold (EXC-620).
+type limitsResponse struct {
+	MaxSites          int   `json:"maxSites"`
+	MaxDeployBytes    int64 `json:"maxDeployBytes"`
+	MaxFiles          int   `json:"maxFiles"`
+	MaxFileBytes      int64 `json:"maxFileBytes"`
+	MaxDeploysPerHour int   `json:"maxDeploysPerHour"`
+}
+
+func (h *SiteHandler) limits(w http.ResponseWriter, r *http.Request) {
+	limits, err := h.sites.Limits(r.Context(), chi.URLParam(r, "projectId"))
+	if err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	writeJSON(w, limitsResponse{MaxSites: limits.MaxSites, MaxDeployBytes: limits.MaxTotalBytes, MaxFiles: limits.MaxFiles,
+		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour})
+}
+
 // sitePathID refuses an id that is not a plain identifier before any lookup.
 func sitePathID(w http.ResponseWriter, r *http.Request, param string) (string, bool) {
 	id := chi.URLParam(r, param)
@@ -165,14 +197,18 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	var inputErr *sites.InputError
 	var publishErr *sites.PublishError
 	var tooLarge *http.MaxBytesError
+	var rateErr *sites.RateLimitError
 	switch {
 	case errors.Is(err, sites.ErrSitesUnavailable):
 		httpError(w, sites.ErrSitesUnavailable.Error(), http.StatusServiceUnavailable)
-	case errors.Is(err, sites.ErrSiteNotFound), errors.Is(err, sites.ErrDeployNotFound):
+	case errors.Is(err, sites.ErrSiteNotFound), errors.Is(err, sites.ErrDeployNotFound), errors.Is(err, sites.ErrDeployTokenNotFound):
 		httpError(w, errNotFound, http.StatusNotFound)
 	case errors.Is(err, sites.ErrSiteNameTaken), errors.Is(err, sites.ErrSiteLimitReached), errors.Is(err, sites.ErrSiteBusy), errors.Is(err, sites.ErrLeaseLost),
-		errors.Is(err, sites.ErrDeployNotServable), errors.Is(err, sites.ErrRollbackNeedsFiles):
+		errors.Is(err, sites.ErrDeployNotServable), errors.Is(err, sites.ErrRollbackNeedsFiles), errors.Is(err, sites.ErrDeployTokenLimitReached):
 		httpError(w, err.Error(), http.StatusConflict)
+	case errors.As(err, &rateErr):
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(rateErr.RetryAfter.Seconds())), 10))
+		httpError(w, err.Error(), http.StatusTooManyRequests)
 	case errors.Is(err, sites.ErrTooManyDeploys), errors.Is(err, sites.ErrProjectDeployRunning):
 		w.Header().Set("Retry-After", "60")
 		httpError(w, err.Error(), http.StatusTooManyRequests)

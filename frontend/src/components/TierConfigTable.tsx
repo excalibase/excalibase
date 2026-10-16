@@ -3,6 +3,7 @@ import { Loader2, Save } from 'lucide-react';
 import { Button } from './Button';
 import { useTiers, useUpdateTier, sortTiers, type TierConfig, type TierConfigInput } from '../api/tiers';
 import { serverErrorMessage } from '../utils/serverError';
+import { useSitesEnabled } from '../hooks/useDeploymentMode';
 
 // The server takes the app disk cap in whole Mi or whole Gi; "0Gi" offers no app disks.
 const APP_DISK_CAP = /^\d+(Mi|Gi)$/;
@@ -15,6 +16,7 @@ const APP_DISK_CAP_HELP = 'The largest disk one container may have, in whole Mi 
 export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) {
   const { data: tiers, isLoading } = useTiers();
   const update = useUpdateTier();
+  const { enabled: sitesEnabled } = useSitesEnabled();
 
   // Local draft of edits keyed by tier. A row with no entry renders the server
   // value (see `toInput` fallback below), so there's no need to pre-seed from
@@ -26,6 +28,8 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     maxAppDiskSize: t.maxAppDiskSize, maxApps: t.maxApps,
     memory: t.memory, cpu: t.cpu, backupEnabled: t.backupEnabled,
     autoPauseAfterDays: t.autoPauseAfterDays ?? 0,
+    maxSites: t.maxSites, maxSiteDeployBytes: t.maxSiteDeployBytes, maxSiteFiles: t.maxSiteFiles,
+    maxSiteFileBytes: t.maxSiteFileBytes, maxSiteDeploysPerHour: t.maxSiteDeploysPerHour,
   });
 
   const setField = (tier: string, base: TierConfigInput, patch: Partial<TierConfigInput>) =>
@@ -38,7 +42,8 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
       d.cpu !== t.cpu || d.memory !== t.memory || d.storageSize !== t.storageSize || d.maxStorageSize !== t.maxStorageSize ||
       d.maxAppDiskSize !== t.maxAppDiskSize || d.maxApps !== t.maxApps ||
       d.maxProjects !== t.maxProjects || d.instances !== t.instances || d.backupEnabled !== t.backupEnabled ||
-      d.autoPauseAfterDays !== (t.autoPauseAfterDays ?? 0)
+      d.autoPauseAfterDays !== (t.autoPauseAfterDays ?? 0) ||
+      d.maxSites !== t.maxSites || d.maxSiteDeploysPerHour !== t.maxSiteDeploysPerHour
     );
   };
 
@@ -46,9 +51,14 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     const body = draft[t.tier];
     if (body == null) return;
     try {
-      await update.mutateAsync({ tier: t.tier, body });
+      await update.mutateAsync({ tier: t.tier, body, version: t.version });
     } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } }; message?: string };
+      const err = e as { response?: { status?: number; data?: { error?: string } }; message?: string };
+      if (err.response?.status === 412) {
+        setDraft(({ [t.tier]: _stale, ...rest }) => rest);
+        alert(`${t.tier} was changed by someone else while you edited it. The plan was reloaded; make your change again.`);
+        return;
+      }
       alert(`Save failed: ${serverErrorMessage(err, 'no reason given')}`);
     }
   };
@@ -82,6 +92,12 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
               <th className="text-left px-4 py-3 font-medium">Max projects</th>
               <th className="text-left px-4 py-3 font-medium">Backup</th>
               <th className="text-left px-4 py-3 font-medium" title="Idle days before auto-pause (0 = never)">Auto-pause (days)</th>
+              {sitesEnabled && (
+                <>
+                  <th className="text-left px-4 py-3 font-medium" title="How many sites one project may hold (0 = none); deploy size and file limits are set through the API">Max sites</th>
+                  <th className="text-left px-4 py-3 font-medium" title="How many site deploys one project may start in any hour">Site deploys/h</th>
+                </>
+              )}
               <th className="px-4 py-3" />
             </tr>
           </thead>
@@ -115,6 +131,12 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                     />
                   </td>
                   <td className="px-4 py-3"><NumInput value={d.autoPauseAfterDays} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { autoPauseAfterDays: v })} /></td>
+                  {sitesEnabled && (
+                    <>
+                      <td className="px-4 py-3"><NumInput label={`Max sites for ${t.tier}`} value={d.maxSites} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxSites: v })} /></td>
+                      <td className="px-4 py-3"><NumInput label={`Site deploys an hour for ${t.tier}`} value={d.maxSiteDeploysPerHour} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { maxSiteDeploysPerHour: v })} /></td>
+                    </>
+                  )}
                   <td className="px-4 py-3 text-right">
                     <Button
                       size="sm"

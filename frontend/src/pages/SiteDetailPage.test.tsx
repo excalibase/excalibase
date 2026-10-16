@@ -25,6 +25,7 @@ const live = siteDeployFixture({
   totalBytes: 2 * 1024 * 1024,
   createdBy: 'd8dc33f93ea9f4d0c1a6e6cf59b338cf',
   createdByName: 'maria',
+  deployTokenName: 'github actions',
 });
 const older = siteDeployFixture({ id: 'dep-1', createdAt: '2026-10-11T10:00:00Z' });
 const failed = siteDeployFixture({
@@ -45,6 +46,8 @@ function renderPage({
     if (url === '/projects/proj-1/sites/site-1/deploys')
       return Promise.resolve({ data: deploys } as never);
     if (url === '/projects/proj-1/sites/') return Promise.resolve({ data: [] } as never);
+    if (url === '/projects/proj-1/sites/site-1/tokens')
+      return Promise.resolve({ data: [] } as never);
     const role = developerRole(url);
     if (role) return role;
     return Promise.reject(new Error(`unexpected GET ${url}`));
@@ -95,6 +98,7 @@ describe('SiteDetailPage', () => {
     expect(rows[1]).toHaveTextContent('2.0 MB');
     expect(rows[1]).toHaveTextContent('12 files');
     expect(rows[1]).toHaveTextContent('by maria');
+    expect(rows[1]).toHaveTextContent('with deploy token github actions');
     expect(rows[1]).not.toHaveTextContent('d8dc33f93ea9f4d0c1a6e6cf59b338cf');
     expect(rows[1]).toHaveTextContent('abc1234');
     expect(rows[1]).toHaveTextContent(new Date(live.createdAt).toLocaleString());
@@ -184,18 +188,23 @@ describe('SiteDetailPage', () => {
     );
   });
 
-  test('shows the Deploy from CI pipelines for this site, the token kept as a CI secret', async () => {
+  test("shows the Deploy from CI pipelines for this site, the site's deploy token kept as a CI secret", async () => {
     const user = userEvent.setup();
     renderPage();
     const snippet = await screen.findByTestId('site-ci-snippet');
     expect(snippet).toHaveTextContent('name: Deploy site to Excalibase');
     expect(snippet).toHaveTextContent('/projects/proj-1/sites/site-1/deploy?label=$GITHUB_SHA');
-    expect(snippet).toHaveTextContent('Bearer $EXCALIBASE_TOKEN');
+    expect(snippet).toHaveTextContent('Bearer $EXCALIBASE_DEPLOY_TOKEN');
+    expect(screen.getByTestId('site-ci-secret')).toHaveTextContent('EXCALIBASE_DEPLOY_TOKEN');
+    expect(screen.getByTestId('site-ci-steps')).toHaveTextContent(/deploy token/i);
+    expect(screen.getByTestId('site-ci-steps')).not.toHaveTextContent(/access token/i);
+    expect(screen.getByTestId('site-deploy-tokens')).toBeInTheDocument();
     await user.click(screen.getByTestId('site-ci-tab-curl'));
     expect(screen.getByTestId('site-ci-snippet')).toHaveTextContent('label=$COMMIT_SHA');
-    expect(screen.getByTestId('site-ci-secret')).toHaveTextContent('EXCALIBASE_TOKEN');
+    expect(screen.getByTestId('site-ci-secret')).toHaveTextContent('EXCALIBASE_DEPLOY_TOKEN');
     await user.click(screen.getByTestId('site-ci-tab-jenkins'));
     expect(screen.getByTestId('site-ci-file')).toHaveTextContent('Jenkinsfile');
+    expect(screen.getByTestId('site-ci-secret')).toHaveTextContent('excalibase-deploy-token');
   });
 
   test('deletes the site only once its name is typed', async () => {

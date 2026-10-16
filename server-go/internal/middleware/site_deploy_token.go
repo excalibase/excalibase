@@ -1,0 +1,154 @@
+package middleware
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"regexp"
+	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/sites"
+	"github.com/excalibase/provisioning-poc/internal/storage"
+)
+
+// A site deploy token (EXC-620) is default-deny, like a capability token: it
+// may deploy its own site and read that site's deploys, and every other route
+// refuses it. Past this gate it is its creator, bound to the site's project
+// with the write scope, so the usual project and role gates still apply.
+
+const errDeployTokenScope = "a deploy token may only deploy its own site and read its deploys"
+
+// deployTokenRoute names a site's deploy upload and its deploy history.
+var deployTokenRoute = regexp.MustCompile(`^/api/projects/([^/]+)/sites/([^/]+)/(deploy|deploys|deploys/[^/]+)$`)
+
+// DeployTokenResolver answers the live deploy token a raw credential names, nil for none.
+type DeployTokenResolver interface {
+	ResolveDeployToken(ctx context.Context, raw string) (*sites.DeployToken, error)
+	RecordDeployTokenUse(ctx context.Context, token *sites.DeployToken)
+}
+
+// deployTokenTarget answers the project and site a request a deploy token may
+// make names; ok is false for any request no deploy token may make.
+func deployTokenTarget(r *http.Request) (projectID, siteID string, ok bool) {
+	// chi routes on the escaped path; refuse any path the gate could read differently.
+	if r.URL.RawPath != "" || hasDotSegment(r.URL.Path) {
+		return "", "", false
+	}
+	match := deployTokenRoute.FindStringSubmatch(r.URL.Path)
+	if match == nil {
+		return "", "", false
+	}
+	if match[3] == "deploy" && r.Method != http.MethodPost {
+		return "", "", false
+	}
+	if match[3] != "deploy" && r.Method != http.MethodGet {
+		return "", "", false
+	}
+	return match[1], match[2], true
+}
+
+// SiteDeployTokenGate authenticates a deploy token and refuses it on every
+// route but its own. Mount it on the root router right after auth.ExtractAuth.
+func SiteDeployTokenGate(tokens DeployTokenResolver, users auth.TokenLookup) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !sites.IsDeployToken(raw) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if ctx, ok := deployTokenContext(w, r, tokens, users, raw); ok {
+				next.ServeHTTP(w, r.WithContext(ctx))
+			}
+		})
+	}
+}
+
+// deployTokenContext answers the request's context as the deploy token, or
+// unauthenticated when the token names no one; ok is false once it refused.
+func deployTokenContext(w http.ResponseWriter, r *http.Request, tokens DeployTokenResolver, users auth.TokenLookup, raw string) (context.Context, bool) {
+	// Nothing else authenticates this request: a deploy token never rides on a session.
+	ctx := auth.SetToken(auth.SetUser(r.Context(), nil), nil)
+	projectID, siteID, ok := deployTokenTarget(r)
+	if !ok {
+		writeGateError(w, http.StatusForbidden, errDeployTokenScope)
+		return nil, false
+	}
+	if tokens == nil {
+		return ctx, true
+	}
+	token, err := tokens.ResolveDeployToken(ctx, raw)
+	if err != nil {
+		log.Printf("deploy token: %v", err)
+		writeGateError(w, http.StatusInternalServerError, "internal error")
+		return nil, false
+	}
+	if token == nil {
+		return ctx, true
+	}
+	if token.ProjectID != projectID || token.SiteID != siteID {
+		writeGateError(w, http.StatusForbidden, errDeployTokenScope)
+		return nil, false
+	}
+	tokens.RecordDeployTokenUse(ctx, token)
+	return asDeployTokenCreator(sites.WithDeployToken(ctx, token), users, token), true
+}
+
+// asDeployTokenCreator is the request as the token's creator, narrowed to its
+// project; an account gone or deactivated leaves it unauthenticated.
+func asDeployTokenCreator(ctx context.Context, users auth.TokenLookup, token *sites.DeployToken) context.Context {
+	user, err := deployTokenCreator(ctx, users, token)
+	if err != nil {
+		log.Printf("deploy token %s: read its creator: %v", token.ID, err)
+		return ctx
+	}
+	if user == nil {
+		return ctx
+	}
+	return auth.SetToken(auth.SetUser(ctx, user), creatorAccessToken(user, token))
+}
+
+// deployTokenCreator is the account a token acts as, nil once it is gone or deactivated.
+func deployTokenCreator(ctx context.Context, users auth.TokenLookup, token *sites.DeployToken) (*domain.User, error) {
+	user, err := users.FindUserByID(ctx, token.CreatedBy)
+	if err != nil || user == nil || !user.Active {
+		return nil, err
+	}
+	return user, nil
+}
+
+func creatorAccessToken(user *domain.User, token *sites.DeployToken) *domain.AccessToken {
+	return &domain.AccessToken{UserID: user.ID, Name: "deploy token " + token.Name, Scopes: auth.ScopeWrite, ProjectID: token.ProjectID}
+}
+
+// DeployTokenStanding answers whether a token's creator may still deploy, by
+// the same checks the deploy route runs: an active account, then project
+// access and the developer rung (RequireProjectAccess, RequireProjectRole).
+type DeployTokenStanding struct {
+	Users     auth.TokenLookup
+	Instances storage.InstanceStore
+	Orgs      storage.OrgStore
+}
+
+// CreatorCanDeploy is false when the creator lost the role or was deactivated.
+func (s DeployTokenStanding) CreatorCanDeploy(ctx context.Context, token *sites.DeployToken) (bool, error) {
+	user, err := deployTokenCreator(ctx, s.Users, token)
+	if err != nil {
+		return false, fmt.Errorf("read the creator of deploy token %s: %w", token.ID, err)
+	}
+	if user == nil {
+		return false, nil
+	}
+	access := ResolveProjectAccess(ctx, user, creatorAccessToken(user, token), token.ProjectID, s.Instances, s.Orgs)
+	return access != nil && access.RoleAtLeast(domain.OrgRoleDeveloper), nil
+}
+
+func writeGateError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}

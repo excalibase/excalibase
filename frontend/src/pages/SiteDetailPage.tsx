@@ -17,6 +17,7 @@ import { SitesGate, SitesHeader } from '../components/sites/SiteBits';
 import { SiteDeployHistory } from '../components/sites/SiteDeployHistory';
 import { SiteUpload } from '../components/sites/SiteUpload';
 import { SiteCiSnippet } from '../components/sites/SiteCiSnippet';
+import { SiteDeployTokens } from '../components/sites/SiteDeployTokens';
 import { useProjectRole } from '../hooks/useProjectRole';
 
 // What a caller who may not change the site sees of its routing.
@@ -55,7 +56,7 @@ function Routing({ projectId, site }: { readonly projectId: string; readonly sit
           data-testid="site-spa-toggle"
         />
         <span>
-          Single-page app fallback
+          Single-page app fallback{' '}
           <span className="block text-xs text-text-tertiary" data-testid="site-spa-note">
             Unknown paths load index.html instead of your 404.html. A change applies from the next
             deploy; a rollback brings back the routing its deploy had.
@@ -177,6 +178,12 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
         <h4 className="text-sm font-semibold text-text-primary">Deploy from CI</h4>
         <SiteCiSnippet projectId={projectId} siteId={siteId} />
       </section>
+      {canDevelop && (
+        <section className="space-y-2 mb-6">
+          <h4 className="text-sm font-semibold text-text-primary">Deploy tokens</h4>
+          <SiteDeployTokens projectId={projectId} siteId={siteId} />
+        </section>
+      )}
       <section className="space-y-2">
         <h4 className="text-sm font-semibold text-text-primary">Deployments</h4>
         {rollback.error && (

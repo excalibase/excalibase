@@ -17,6 +17,16 @@ function renderPage({ sites = true, list = [siteFixture()] as Site[] | Error } =
       return Promise.resolve({
         data: { deploymentMode: 'cloud', appHosting: true, sites },
       } as never);
+    if (url === '/projects/proj-1/sites/limits')
+      return Promise.resolve({
+        data: {
+          maxSites: 5,
+          maxDeployBytes: 104857600,
+          maxFiles: 20000,
+          maxFileBytes: 26214400,
+          maxDeploysPerHour: 30,
+        },
+      } as never);
     if (url === '/projects/proj-1/sites/') {
       return list instanceof Error
         ? Promise.reject(list)
@@ -59,6 +69,15 @@ describe('SitesPage', () => {
     expect(screen.getByTestId('sites-new')).toHaveAttribute('href', '/project/proj-1/sites/new');
   });
 
+  // EXC-620: the plan's limits, so a refused create or deploy is no surprise.
+  test("shows the plan's site limits", async () => {
+    renderPage();
+    const limits = await screen.findByTestId('sites-limits');
+    expect(limits).toHaveTextContent('1 of 5 sites');
+    expect(limits).toHaveTextContent('Each deploy up to 100 MiB, 20,000 files, 25 MiB per file');
+    expect(limits).toHaveTextContent('30 deploys an hour per project');
+  });
+
   test('marks a site that has never been deployed', async () => {
     renderPage({ list: [siteFixture({ liveDeployId: undefined })] });
     expect(await screen.findByTestId('site-status-site-1')).toHaveTextContent('Not deployed');
@@ -84,6 +103,7 @@ describe('SitesPage', () => {
     );
     await waitFor(() => expect(api.get).toHaveBeenCalledWith('/config'));
     expect(api.get).not.toHaveBeenCalledWith('/projects/proj-1/sites/');
+    expect(api.get).not.toHaveBeenCalledWith('/projects/proj-1/sites/limits');
     expect(screen.queryByTestId('sites-new')).not.toBeInTheDocument();
   });
 });

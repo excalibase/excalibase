@@ -118,3 +118,23 @@ func TestTiersCapAppsPerProject(t *testing.T) {
 		}
 	}
 }
+
+// EXC-620: a plan's Sites limits. FREE keeps the numbers Sites shipped with
+// (ADR 0043 decision 11); 25 MiB a file is Cloudflare's own ceiling on every plan.
+func TestTiersCarryTheirSiteLimits(t *testing.T) {
+	const mib = int64(1) << 20
+	want := map[domain.TierType]SiteTierLimits{
+		domain.Free:       {MaxSites: 5, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 30},
+		domain.Standard:   {MaxSites: 20, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 120},
+		domain.Enterprise: {MaxSites: 50, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 300},
+	}
+	for tier, limits := range want {
+		tc, err := GetTierConfig(tier)
+		if err != nil {
+			t.Fatalf("%s: %v", tier, err)
+		}
+		if tc.Sites != limits {
+			t.Errorf("%s: site limits %+v, want %+v", tier, tc.Sites, limits)
+		}
+	}
+}

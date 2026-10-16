@@ -1,8 +1,12 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { api } from './client';
 import {
+  createDeployToken,
   createSite,
   deleteSite,
+  getSiteLimits,
+  listDeployTokens,
+  revokeDeployToken,
   deploySite,
   listSiteDeploys,
   listSites,
@@ -94,5 +98,47 @@ describe('sites api', () => {
       undefined,
       expect.anything(),
     );
+  });
+});
+
+describe('sites limits and deploy tokens api (EXC-620)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test("reads the project's site limits", async () => {
+    const limits = {
+      maxSites: 5,
+      maxDeployBytes: 104857600,
+      maxFiles: 20000,
+      maxFileBytes: 26214400,
+      maxDeploysPerHour: 30,
+    };
+    vi.mocked(api.get).mockResolvedValue({ data: limits } as never);
+    await expect(getSiteLimits('proj-1')).resolves.toEqual(limits);
+    expect(api.get).toHaveBeenCalledWith('/projects/proj-1/sites/limits');
+  });
+
+  test("lists, creates and revokes a site's deploy tokens", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: [{ id: 'tok-1' }] } as never);
+    await expect(listDeployTokens('proj-1', 'site-1')).resolves.toEqual([{ id: 'tok-1' }]);
+    expect(api.get).toHaveBeenCalledWith('/projects/proj-1/sites/site-1/tokens');
+
+    vi.mocked(api.post).mockResolvedValue({ data: { id: 'tok-2', token: 'excd_secret' } } as never);
+    await expect(createDeployToken('proj-1', 'site-1', 'github')).resolves.toEqual({
+      id: 'tok-2',
+      token: 'excd_secret',
+    });
+    expect(api.post).toHaveBeenCalledWith('/projects/proj-1/sites/site-1/tokens', {
+      name: 'github',
+      expiresInDays: 90,
+    });
+    await createDeployToken('proj-1', 'site-1', 'github', 365);
+    expect(api.post).toHaveBeenLastCalledWith('/projects/proj-1/sites/site-1/tokens', {
+      name: 'github',
+      expiresInDays: 365,
+    });
+
+    vi.mocked(api.delete).mockResolvedValue({} as never);
+    await revokeDeployToken('proj-1', 'site-1', 'tok-2');
+    expect(api.delete).toHaveBeenCalledWith('/projects/proj-1/sites/site-1/tokens/tok-2');
   });
 });

@@ -1,0 +1,10 @@
+ALTER TABLE site_deploys DROP COLUMN IF EXISTS deploy_token_name;
+ALTER TABLE site_deploys DROP COLUMN IF EXISTS deploy_token_id;
+DROP TABLE IF EXISTS site_deploy_tokens;
+DROP TABLE IF EXISTS site_deploy_attempts;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS version;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS max_site_deploys_per_hour;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS max_site_file_bytes;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS max_site_files;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS max_site_deploy_bytes;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS max_sites;

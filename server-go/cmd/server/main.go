@@ -832,7 +832,9 @@ type handlerDeps struct {
 	permissionHandler *handler.PermissionHandler
 	appHandler        *handler.AppHandler
 	// siteHandler serves Sites (EXC-353); it answers 503 where Cloudflare is not configured.
-	siteHandler      *handler.SiteHandler
+	siteHandler *handler.SiteHandler
+	// siteDeployTokens resolves a site's CI deploy token (EXC-620) for the root gate.
+	siteDeployTokens custommw.DeployTokenResolver
 	storageBudgetH   *handler.StorageBudgetHandler
 	appDeploySvc     *service.AppDeployService
 	appDeployHandler *handler.AppDeployHandler
@@ -1505,7 +1507,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	appDeploySvc.SetLocalRegistries(cfg.AppLocalRegistries)
 	appNetworkSvc := newAppNetworkService(sqlStore, store, appRuntime, a.claimer)
 	schemaHandler := newSchemaHandler(cfg, vc, store)
-	sitesSvc := newSitesService(cfg, sqlStore)
+	sitesSvc := newSitesService(cfg, sqlStore, service.NewSiteLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc))
 	provSvc.SetSitePurger(sitesSvc)
 	provSvc.SetSiteRouter(sitesSvc)
 	return &handlerDeps{
@@ -1537,7 +1539,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:     realtimeHandler,
 		permissionHandler:   newPermissionHandler(cfg, sqlStore, store, a.projectDB),
 		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget),
-		siteHandler:         handler.NewSiteHandler(sitesSvc),
+		siteHandler:         newSiteHandler(sitesSvc, sqlStore, store),
+		siteDeployTokens:    sitesSvc,
 		storageBudgetH:      handler.NewStorageBudgetHandler(a.budget),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
 		appDeploySvc:        appDeploySvc,
@@ -1628,6 +1631,8 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	r.Use(custommw.ExceptPathPrefix("/functions/v1/", custommw.ExceptPathPrefix("/storage/v1/", custommw.CORS(cfg.CORSOrigins))))
 	r.Use(custommw.RequireTrustedOriginForCookies(custommw.TrustedOrigins(cfg.StudioURL, cfg.CORSOrigins)))
 	r.Use(auth.ExtractAuth(sqlStore))
+	// A site deploy token (EXC-620) reaches only its own site's deploys.
+	r.Use(custommw.SiteDeployTokenGate(d.siteDeployTokens, sqlStore))
 	// Capability tokens (the platform's own service principals) are
 	// default-deny: mounted here, the gate covers every route including ones
 	// added later. Human PATs and sessions pass straight through.

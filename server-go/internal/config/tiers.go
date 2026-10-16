@@ -7,6 +7,9 @@ import (
 )
 
 type TierConfig struct {
+	// Version is the stored row's edit count, 0 for a built-in; a tier edit
+	// sent from an older version is refused (EXC-620).
+	Version     int
 	MaxProjects int
 	Instances   int
 	StorageSize string
@@ -29,6 +32,27 @@ type TierConfig struct {
 	// AutoPauseAfterDays pauses an ACTIVE project once nothing has touched it
 	// for this many days (warning one day earlier). 0 = never auto-pause.
 	AutoPauseAfterDays int
+	// Sites is what one project's static sites may hold on the plan (EXC-620).
+	Sites SiteTierLimits
+}
+
+// SiteTierLimits bound a project's Sites. Files and file size start at
+// Cloudflare's static-assets limits; the total keeps one upload off our disk.
+// Sites above MaxSites after a downgrade are kept; only new ones are refused.
+type SiteTierLimits struct {
+	// MaxSites is how many sites one project may hold; 0 offers none.
+	MaxSites       int
+	MaxDeployBytes int64
+	MaxFiles       int
+	MaxFileBytes   int64
+	// MaxDeploysPerHour is how many deploys one project may start in any hour.
+	MaxDeploysPerHour int
+}
+
+// siteLimits holds every plan to Cloudflare's per-deploy limits; plans differ in sites and deploy rate.
+func siteLimits(maxSites, deploysPerHour int) SiteTierLimits {
+	return SiteTierLimits{MaxSites: maxSites, MaxDeployBytes: 100 * mebibyte, MaxFiles: 20_000,
+		MaxFileBytes: 25 * mebibyte, MaxDeploysPerHour: deploysPerHour}
 }
 
 // CPUString returns CPU as configured (e.g. "0.5", "2"). Provided as a method
@@ -54,6 +78,7 @@ var tiers = map[domain.TierType]TierConfig{
 		BackupEnabled:      true,
 		StatementTimeout:   "15s",
 		AutoPauseAfterDays: 7,
+		Sites:              siteLimits(5, 30),
 	},
 	domain.Standard: {
 		MaxProjects:      5,
@@ -66,6 +91,7 @@ var tiers = map[domain.TierType]TierConfig{
 		CPU:              "2",
 		BackupEnabled:    true,
 		StatementTimeout: "30s",
+		Sites:            siteLimits(20, 120),
 	},
 	domain.Enterprise: {
 		MaxProjects:      0, // unlimited
@@ -78,6 +104,7 @@ var tiers = map[domain.TierType]TierConfig{
 		CPU:              "4",
 		BackupEnabled:    true,
 		StatementTimeout: "60s",
+		Sites:            siteLimits(50, 300),
 	},
 }
 
