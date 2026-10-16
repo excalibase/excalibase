@@ -1,0 +1,44 @@
+package schema
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+)
+
+func TestBuildMySQLSelect(t *testing.T) {
+	dataSQL, countSQL, dataArgs, countArgs, err := buildMySQLSelect("orders", RowQueryOpts{
+		Limit: 20, Offset: 40, Sort: "id", Order: "desc",
+		Filters: []RowFilter{{Column: "status", Operator: "=", Value: "paid"}, {Column: "note", Operator: "ilike", Value: "%Rush%"}, {Column: "deleted_at", Operator: "is_null"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	where := " WHERE `status` = ? AND LOWER(`note`) LIKE LOWER(?) AND `deleted_at` IS NULL"
+	if countSQL != "SELECT COUNT(*) FROM `orders`"+where {
+		t.Errorf("count: %s", countSQL)
+	}
+	if dataSQL != "SELECT * FROM `orders`"+where+" ORDER BY `id` DESC LIMIT ? OFFSET ?" {
+		t.Errorf("data: %s", dataSQL)
+	}
+	if !reflect.DeepEqual(countArgs, []interface{}{"paid", "%Rush%"}) || !reflect.DeepEqual(dataArgs, []interface{}{"paid", "%Rush%", 20, 40}) {
+		t.Errorf("args: %v %v", countArgs, dataArgs)
+	}
+	if _, _, _, _, err := buildMySQLSelect("orders", RowQueryOpts{Filters: []RowFilter{{Column: "x", Operator: "~"}}}); err == nil {
+		t.Error("an unknown operator was accepted")
+	}
+}
+
+func TestBuildMySQLInsert(t *testing.T) {
+	statement, args, err := buildMySQLInsert("orders", map[string]interface{}{"total": json.Number("12345678901234567890"), "meta": map[string]interface{}{"a": 1.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statement != "INSERT INTO `orders` (`meta`, `total`) VALUES (?, ?)" || !reflect.DeepEqual(args, []interface{}{`{"a":1}`, "12345678901234567890"}) {
+		t.Fatalf("%s %v", statement, args)
+	}
+	statement, args, _ = buildMySQLInsert("orders", map[string]interface{}{})
+	if statement != "INSERT INTO `orders` () VALUES ()" || len(args) != 0 {
+		t.Fatalf("defaults: %s %v", statement, args)
+	}
+}

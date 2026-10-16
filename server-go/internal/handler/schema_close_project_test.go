@@ -19,6 +19,14 @@ type fakeProjectDB struct {
 	opened   []string
 	evicted  []string
 	statuses map[string]string
+	// mysqlOpened records each MySQL pool asked for; mysqlDB answers it.
+	mysqlOpened []mysqlOpen
+	mysqlDB     *sql.DB
+}
+
+type mysqlOpen struct {
+	projectID string
+	script    bool
 }
 
 func (f *fakeProjectDB) Open(_ context.Context, projectID string) (*sql.DB, error) {
@@ -27,6 +35,14 @@ func (f *fakeProjectDB) Open(_ context.Context, projectID string) (*sql.DB, erro
 		return nil, f.openErr
 	}
 	return sql.Open("postgres", "postgres://nobody@127.0.0.1:1/none?sslmode=disable")
+}
+
+func (f *fakeProjectDB) OpenMySQL(_ context.Context, projectID string, script bool) (*sql.DB, error) {
+	f.mysqlOpened = append(f.mysqlOpened, mysqlOpen{projectID, script})
+	if f.mysqlDB != nil {
+		return f.mysqlDB, nil
+	}
+	return nil, errors.New("no MySQL pool in this test")
 }
 
 func (f *fakeProjectDB) Evict(projectID string) { f.evicted = append(f.evicted, projectID) }

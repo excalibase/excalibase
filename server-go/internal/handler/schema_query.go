@@ -12,7 +12,7 @@ import (
 // --- Query Execution ---
 
 func (h *SchemaHandler) ExecuteDDL(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, true)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -24,12 +24,12 @@ func (h *SchemaHandler) ExecuteDDL(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	result := h.introspector.ExecuteDDL(r.Context(), db, body.SQL)
+	result := catalog.ExecuteDDL(r.Context(), db, body.SQL)
 	writeJSON(w, result)
 }
 
 func (h *SchemaHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, true)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -45,7 +45,7 @@ func (h *SchemaHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "query is required", http.StatusBadRequest)
 		return
 	}
-	result := h.introspector.ExecuteQuery(r.Context(), db, body.Query)
+	result := catalog.ExecuteQuery(r.Context(), db, body.Query)
 	writeJSON(w, result)
 }
 
@@ -67,22 +67,22 @@ func (h *SchemaHandler) ExecuteReadOnlyQuery(w http.ResponseWriter, r *http.Requ
 		httpError(w, "sql is too long", http.StatusRequestURITooLong)
 		return
 	}
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
-	writeJSON(w, h.introspector.ExecuteReadOnlyQuery(r.Context(), db, query))
+	writeJSON(w, catalog.ExecuteReadOnlyQuery(r.Context(), db, query))
 }
 
 func (h *SchemaHandler) TestConnection(w http.ResponseWriter, r *http.Request) {
 	projectId := chi.URLParam(r, "projectId")
-	db, err := h.getDB(projectId)
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
-	connected := h.introspector.TestConnection(r.Context(), db)
+	connected := catalog.TestConnection(r.Context(), db)
 	writeJSON(w, map[string]interface{}{
 		"connected": connected,
 		"projectId": projectId,

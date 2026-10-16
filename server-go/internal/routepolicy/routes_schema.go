@@ -40,57 +40,87 @@ var schemaRows = append(schemaReadRows(), schemaWriteRows()...)
 
 func schemaReadRows() []Row {
 	return []Row{
-		schemaRead("/advisors/performance"),
-		schemaRead("/advisors/security"),
-		schemaRead("/connection-test"),
-		schemaRead("/extensions"),
-		schemaRead("/functions"),
-		schemaRead("/policies"),
+		refusedOnMySQL(schemaRead("/advisors/performance"), mysqlNoAdvisors),
+		refusedOnMySQL(schemaRead("/advisors/security"), mysqlNoAdvisors),
+		mysqlCapable(schemaRead("/connection-test")),
+		refusedOnMySQL(schemaRead("/extensions"), mysqlNoExtensions),
+		refusedOnMySQL(schemaRead("/functions"), MySQLNoTrackedFunctions),
+		refusedOnMySQL(schemaRead("/policies"), mysqlNoPolicies),
 		{
 			Methods: get, Pattern: "/api/schema/{projectId}/query",
 			Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, Discloses: NoSecret,
-			Note: "read-only SQL in a read-only transaction (EXC-544): a read, yet on the rung that may run SQL at all",
+			Note: "read-only SQL in a read-only transaction (EXC-544): a read, yet on the rung that may run SQL at all", MySQL: true,
 		},
-		schemaRead("/relationships"),
-		schemaRead("/roles"),
-		schemaRead("/tables"),
-		schemaRead("/tables/{tableName}/columns"),
-		schemaRead("/tables/{tableName}/indexes"),
-		schemaRead("/tables/{tableName}/checks"),
-		schemaRead("/tables/{tableName}/rows"),
-		schemaRead("/triggers"),
-		schemaRead("/types"),
+		mysqlCapable(schemaRead("/relationships")),
+		refusedOnMySQL(schemaRead("/roles"), mysqlNoRoles),
+		mysqlCapable(schemaRead("/tables")),
+		mysqlCapable(schemaRead("/tables/{tableName}/columns")),
+		mysqlCapable(schemaRead("/tables/{tableName}/indexes")),
+		mysqlCapable(schemaRead("/tables/{tableName}/checks")),
+		mysqlCapable(schemaRead("/tables/{tableName}/rows")),
+		refusedOnMySQL(schemaRead("/triggers"), mysqlNoTriggers),
+		refusedOnMySQL(schemaRead("/types"), mysqlNoTypes),
 	}
 }
 
 func schemaWriteRows() []Row {
 	return []Row{
-		schemaWrite(http.MethodPost, "/ddl"),
+		mysqlCapable(schemaWrite(http.MethodPost, "/ddl")),
 		// Table import (EXC-368): the preview writes nothing but parses an
 		// upload or fetches a sheet, so it sits with the writes.
 		schemaWrite(http.MethodPost, "/import"),
 		schemaWrite(http.MethodPost, "/import/preview"),
-		schemaWrite(http.MethodPost, "/query"),
-		schemaWrite(http.MethodPost, "/extensions"),
-		schemaWrite(http.MethodPost, "/functions"),
-		schemaWrite(http.MethodPost, "/indexes"),
-		schemaWrite(http.MethodPost, "/policies"),
-		schemaWrite(http.MethodPost, "/roles"),
-		schemaWrite(http.MethodPost, "/tables"),
-		schemaWrite(http.MethodPost, "/triggers"),
-		schemaWrite(http.MethodPost, "/tables/{tableName}/columns"),
-		schemaWrite(http.MethodPost, "/tables/{tableName}/rows"),
+		mysqlCapable(schemaWrite(http.MethodPost, "/query")),
+		refusedOnMySQL(schemaWrite(http.MethodPost, "/extensions"), mysqlNoExtensions),
+		refusedOnMySQL(schemaWrite(http.MethodPost, "/functions"), MySQLNoTrackedFunctions),
+		mysqlCapable(schemaWrite(http.MethodPost, "/indexes")),
+		refusedOnMySQL(schemaWrite(http.MethodPost, "/policies"), mysqlNoPolicies),
+		refusedOnMySQL(schemaWrite(http.MethodPost, "/roles"), mysqlNoRoles),
+		mysqlCapable(schemaWrite(http.MethodPost, "/tables")),
+		refusedOnMySQL(schemaWrite(http.MethodPost, "/triggers"), mysqlNoTriggers),
+		mysqlCapable(schemaWrite(http.MethodPost, "/tables/{tableName}/columns")),
+		mysqlCapable(schemaWrite(http.MethodPost, "/tables/{tableName}/rows")),
 		schemaWrite(http.MethodPatch, "/tables/{tableName}"),
 		schemaWrite(http.MethodPatch, "/tables/{tableName}/columns/{columnName}"),
-		schemaWrite(http.MethodPatch, "/tables/{tableName}/rows"),
-		schemaWrite(http.MethodDelete, "/extensions/{extName}"),
-		schemaWrite(http.MethodDelete, "/functions/{funcName}"),
-		schemaWrite(http.MethodDelete, "/indexes/{indexName}"),
-		schemaWrite(http.MethodDelete, "/policies/{policyName}"),
-		schemaWrite(http.MethodDelete, "/roles/{roleName}"),
-		schemaWrite(http.MethodDelete, "/triggers/{triggerName}"),
-		schemaWrite(http.MethodDelete, "/tables/{tableName}"),
-		schemaWrite(http.MethodDelete, "/tables/{tableName}/columns/{columnName}"),
-		schemaWrite(http.MethodDelete, "/tables/{tableName}/rows"),
+		mysqlCapable(schemaWrite(http.MethodPatch, "/tables/{tableName}/rows")),
+		refusedOnMySQL(schemaWrite(http.MethodDelete, "/extensions/{extName}"), mysqlNoExtensions),
+		refusedOnMySQL(schemaWrite(http.MethodDelete, "/functions/{funcName}"), MySQLNoTrackedFunctions),
+		mysqlCapable(schemaWrite(http.MethodDelete, "/indexes/{indexName}")),
+		refusedOnMySQL(schemaWrite(http.MethodDelete, "/policies/{policyName}"), mysqlNoPolicies),
+		refusedOnMySQL(schemaWrite(http.MethodDelete, "/roles/{roleName}"), mysqlNoRoles),
+		refusedOnMySQL(schemaWrite(http.MethodDelete, "/triggers/{triggerName}"), mysqlNoTriggers),
+		mysqlCapable(schemaWrite(http.MethodDelete, "/tables/{tableName}")),
+		mysqlCapable(schemaWrite(http.MethodDelete, "/tables/{tableName}/columns/{columnName}")),
+		mysqlCapable(schemaWrite(http.MethodDelete, "/tables/{tableName}/rows")),
 	}
 }
+
+// mysqlCapable marks a schema route the MySQL catalogue serves (EXC-619).
+func mysqlCapable(row Row) Row {
+	row.MySQL = true
+	return row
+}
+
+// refusedOnMySQL names why a MySQL project cannot use the route.
+func refusedOnMySQL(row Row, reason string) Row {
+	row.MySQLRefusal = reason
+	return row
+}
+
+// Why the Postgres-only database routes refuse a MySQL project (ADR 0041
+// decision 9).
+const (
+	mysqlNoExtensions = "MySQL has no extensions; its features ship built in"
+	mysqlNoPolicies   = "CREATE POLICY is Postgres row-level security; on MySQL, API access is set in each table's permissions"
+	mysqlNoTypes      = "MySQL has no user-defined types; ENUM and SET are column types"
+	mysqlNoAdvisors   = "the advisors read Postgres statistics catalogs"
+	mysqlNoRoles      = "MySQL users are created and rotated by the platform"
+	mysqlNoTriggers   = "Studio's trigger editor builds Postgres trigger functions; create MySQL triggers with SQL"
+	// MySQLNoTrackedFunctions is also MCP's answer to track_db_function.
+	MySQLNoTrackedFunctions = "tracked functions are not offered on MySQL: MySQL functions return scalars, and API permissions apply to rows"
+	// MySQLNoMigrations is also MCP's answer to apply_migration.
+	MySQLNoMigrations = "migration history is Postgres-only for now; run a MySQL migration with the SQL runner, " +
+		"and note MySQL DDL is not transactional, so a failed migration is not rolled back"
+	mysqlNoLogs     = "the log explorer reads Postgres's log files; MySQL server logs are not collected yet"
+	mysqlNoRealtime = "realtime on MySQL reads the binlog through the watcher, which is not served yet"
+)

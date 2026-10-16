@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"errors"
-	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"net/http"
 	"regexp"
@@ -13,6 +12,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
+	"github.com/go-sql-driver/mysql"
 	"github.com/lib/pq"
 )
 
@@ -184,7 +185,32 @@ func schemaError(w http.ResponseWriter, err error, code int) {
 		httpError(w, truncate(pqErr.Message, 200), code)
 		return
 	}
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) && mysqlErr.Message != "" {
+		if code == http.StatusInternalServerError {
+			code = mysqlRefusalStatus(mysqlErr.Number)
+		}
+		httpError(w, truncate(mysqlErr.Message, 200), code)
+		return
+	}
 	httpError(w, safeError(err), code)
+}
+
+// mysqlRefusalStatus sorts MySQL's server errors as postgresRefusalStatus
+// sorts SQLSTATEs (EXC-619).
+func mysqlRefusalStatus(number uint16) int {
+	switch number {
+	case 1050, 1060, 1061, 1062, 1586, 1826:
+		return http.StatusConflict
+	case 1044, 1142, 1143, 1227:
+		return http.StatusForbidden
+	case 1205, 1213, 2013, 3024:
+		return http.StatusInternalServerError
+	}
+	if number >= 1000 && number < 2000 || number >= 3000 && number < 5000 {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }
 
 func postgresRefusalStatus(code pq.ErrorCode) int {

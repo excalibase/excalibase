@@ -38,7 +38,7 @@ func decodeKeepingNumbers(body io.Reader, v interface{}) error {
 }
 
 func (h *SchemaHandler) GetRows(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -51,7 +51,7 @@ func (h *SchemaHandler) GetRows(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tableName := chi.URLParam(r, "tableName")
-	result, err := h.introspector.GetRows(r.Context(), db, schemaParam(r), tableName, opts)
+	result, err := catalog.GetRows(r.Context(), db, schemaParam(r), tableName, opts)
 	if err != nil {
 		schemaError(w, err, http.StatusBadRequest)
 		return
@@ -108,7 +108,7 @@ func parseRowFilters(q url.Values) []schema.RowFilter {
 }
 
 func (h *SchemaHandler) InsertRow(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -121,7 +121,7 @@ func (h *SchemaHandler) InsertRow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tableName := chi.URLParam(r, "tableName")
-	result, err := h.introspector.InsertRow(r.Context(), db, schemaParam(r), tableName, data)
+	result, err := catalog.InsertRow(r.Context(), db, schemaParam(r), tableName, data)
 	if err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
@@ -132,7 +132,7 @@ func (h *SchemaHandler) InsertRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) UpdateRow(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -159,7 +159,7 @@ func (h *SchemaHandler) UpdateRow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tableName := chi.URLParam(r, "tableName")
-	if err := h.introspector.UpdateRow(r.Context(), db, schemaParam(r), tableName, body.PK.Column, body.PK.Value, body.Data); err != nil {
+	if err := catalog.UpdateRow(r.Context(), db, schemaParam(r), tableName, body.PK.Column, body.PK.Value, body.Data); err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -167,7 +167,7 @@ func (h *SchemaHandler) UpdateRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DeleteRow(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -189,7 +189,7 @@ func (h *SchemaHandler) DeleteRow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tableName := chi.URLParam(r, "tableName")
-	if err := h.introspector.DeleteRow(r.Context(), db, schemaParam(r), tableName, body.PK.Column, body.PK.Value); err != nil {
+	if err := catalog.DeleteRow(r.Context(), db, schemaParam(r), tableName, body.PK.Column, body.PK.Value); err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}

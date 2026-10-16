@@ -250,34 +250,48 @@ func (o *Opener) Open(_ context.Context, projectID string) (*sql.DB, error) {
 	if err := o.checkServable(projectID); err != nil {
 		return nil, err
 	}
+	return o.cached(projectID, projectID, o.openPostgres)
+}
+
+// cached hands out the pool under key, opening it with open on first use or
+// once it is older than MaxPoolAge.
+func (o *Opener) cached(projectID, key string, open func(creds map[string]string) (*sql.DB, error)) (*sql.DB, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if p, ok := o.pools[projectID]; ok {
+	if p, ok := o.pools[key]; ok {
 		if o.now().Sub(p.opened) < o.limits.MaxPoolAge {
 			p.lastUsed = o.now()
 			return p.db, nil
 		}
-		delete(o.pools, projectID)
+		delete(o.pools, key)
 		time.AfterFunc(retireGrace, func() { _ = p.db.Close() })
 	}
 	creds, err := o.vault.Get(fmt.Sprintf("projects/%s/credentials/%s", projectID, appRole))
 	if err != nil {
 		return nil, fmt.Errorf("read %s credentials for %s: %w", appRole, projectID, err)
 	}
-	dsn, err := poolDSN(creds, o.overrides, o.limits)
+	db, err := open(creds)
 	if err != nil {
 		return nil, err
-	}
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open database for %s: %w", projectID, err)
 	}
 	db.SetMaxOpenConns(o.limits.MaxOpenConns)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxIdleTime(o.limits.ConnMaxIdleTime)
 	db.SetConnMaxLifetime(o.limits.ConnMaxLifetime)
 	o.evictOldestLocked()
-	o.pools[projectID] = &pool{db: db, opened: o.now(), lastUsed: o.now()}
+	o.pools[key] = &pool{db: db, opened: o.now(), lastUsed: o.now()}
+	return db, nil
+}
+
+func (o *Opener) openPostgres(creds map[string]string) (*sql.DB, error) {
+	dsn, err := poolDSN(creds, o.overrides, o.limits)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
 	return db, nil
 }
 
@@ -312,10 +326,15 @@ func (o *Opener) CachedPools() int {
 // being one the platform may reach.
 func (o *Opener) Evict(projectID string) {
 	o.mu.Lock()
-	p, ok := o.pools[projectID]
-	delete(o.pools, projectID)
+	var closing []*pool
+	for _, key := range []string{projectID, mysqlScriptKey(projectID)} {
+		if p, ok := o.pools[key]; ok {
+			closing = append(closing, p)
+			delete(o.pools, key)
+		}
+	}
 	o.mu.Unlock()
-	if ok {
+	for _, p := range closing {
 		_ = p.db.Close()
 	}
 }
@@ -341,29 +360,38 @@ func (o *Opener) ProjectStatusChanged(projectID, status string) {
 // checkServable refuses a project that has no row or that the platform must
 // not serve.
 func (o *Opener) checkServable(projectID string) error {
-	if o.instances == nil {
-		return errors.New("no instance store configured")
-	}
-	inst, err := o.instances.FindByProjectID(projectID)
+	inst, err := o.servableInstance(projectID)
 	if err != nil {
-		return fmt.Errorf("read project %s: %w", projectID, err)
-	}
-	if inst == nil {
-		return fmt.Errorf("unknown project %s", projectID)
-	}
-	// Allow-list, not deny-list: a paused or still-provisioning project has
-	// no database to reach, and a deny-list would let every future status
-	// through by default.
-	if !domain.IsActive(inst.Status) {
-		return fmt.Errorf("%w: %s is %s", ErrNotServable, projectID, inst.Status)
-	}
-	if inst.NoDatabase {
-		return fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
+		return err
 	}
 	if inst.DBType == domain.MySQL {
 		return fmt.Errorf("%w: %s", domain.ErrPostgresOnly, projectID)
 	}
 	return nil
+}
+
+// servableInstance is the project's row when its database may be reached.
+func (o *Opener) servableInstance(projectID string) (*domain.DatabaseInstance, error) {
+	if o.instances == nil {
+		return nil, errors.New("no instance store configured")
+	}
+	inst, err := o.instances.FindByProjectID(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("read project %s: %w", projectID, err)
+	}
+	if inst == nil {
+		return nil, fmt.Errorf("unknown project %s", projectID)
+	}
+	// Allow-list, not deny-list: a paused or still-provisioning project has
+	// no database to reach, and a deny-list would let every future status
+	// through by default.
+	if !domain.IsActive(inst.Status) {
+		return nil, fmt.Errorf("%w: %s is %s", ErrNotServable, projectID, inst.Status)
+	}
+	if inst.NoDatabase {
+		return nil, fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
+	}
+	return inst, nil
 }
 
 // ServableProjectIDs lists the projects whose databases may be reached now.

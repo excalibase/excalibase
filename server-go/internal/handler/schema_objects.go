@@ -332,7 +332,7 @@ func (h *SchemaHandler) DropTrigger(w http.ResponseWriter, r *http.Request) {
 // --- Indexes (create/drop) ---
 
 func (h *SchemaHandler) CreateIndex(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -347,7 +347,7 @@ func (h *SchemaHandler) CreateIndex(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "name, table, and columns are required", http.StatusBadRequest)
 		return
 	}
-	if err := h.introspector.CreateIndex(r.Context(), db, req); err != nil {
+	if err := catalog.CreateIndex(r.Context(), db, req); err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -357,13 +357,13 @@ func (h *SchemaHandler) CreateIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropIndex(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	catalog, db, err := h.catalogFor(r, false)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	indexName := chi.URLParam(r, "indexName")
-	if err := h.introspector.DropIndex(r.Context(), db, schemaParam(r), indexName); err != nil {
+	if err := catalog.DropIndex(r.Context(), db, schemaParam(r), indexName); err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}

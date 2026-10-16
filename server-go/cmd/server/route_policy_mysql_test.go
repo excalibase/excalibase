@@ -8,7 +8,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/routepolicy"
 )
 
-const mysqlRefusal = `"not available for MySQL projects"`
+// mysqlRefusal opens every refusal; a row with a reason appends it (EXC-619).
+const mysqlRefusal = `"not available for MySQL projects`
 
 // ADR 0041, EXC-583: a database route answers a MySQL project only when its
 // row says it serves MySQL; every other one is refused with 409 before a
@@ -34,6 +35,9 @@ func TestDatabaseRoutesRefuseAMySQLProjectUnlessTheyServeIt(t *testing.T) {
 			}
 			if !row.MySQL && !refused {
 				t.Fatalf("a Postgres-only route answered %d (%s); want 409 %s", code, strings.TrimSpace(body), mysqlRefusal)
+			}
+			if row.MySQLRefusal != "" && !strings.Contains(body, row.MySQLRefusal[:20]) {
+				t.Fatalf("the refusal does not say why: %s", strings.TrimSpace(body))
 			}
 		})
 		if row.MySQL {
