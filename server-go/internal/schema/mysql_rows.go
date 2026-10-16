@@ -236,15 +236,11 @@ func insertedKey(keys []string, data map[string]interface{}, result sql.Result) 
 }
 
 func readRow(ctx context.Context, db *sql.DB, target mysqlTable, keys []string, values []interface{}) (*QueryResult, error) {
-	conditions := make([]string, len(keys))
-	for index, key := range keys {
-		column, err := target.column(key)
-		if err != nil {
-			return nil, err
-		}
-		conditions[index] = column + " = ?"
+	query, err := buildMySQLReadBack(target, keys)
+	if err != nil {
+		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, "SELECT * FROM "+target.quoted()+sqlWhere+strings.Join(conditions, " AND "), values...)
+	rows, err := db.QueryContext(ctx, query, values...)
 	if err != nil {
 		return nil, fmt.Errorf("read inserted row: %w", err)
 	}
@@ -256,6 +252,18 @@ func readRow(ctx context.Context, db *sql.DB, target mysqlTable, keys []string, 
 	return &QueryResult{Columns: columns, Rows: found}, nil
 }
 
+func buildMySQLReadBack(target mysqlTable, keys []string) (string, error) {
+	conditions := make([]string, len(keys))
+	for index, key := range keys {
+		column, err := target.column(key)
+		if err != nil {
+			return "", err
+		}
+		conditions[index] = column + " = ?"
+	}
+	return "SELECT * FROM " + target.quoted() + sqlWhere + strings.Join(conditions, " AND "), nil
+}
+
 // UpdateRow updates a row by primary key.
 func (m *MySQLCatalog) UpdateRow(ctx context.Context, db *sql.DB, schemaName, table, keyColumn, keyValue string, data map[string]interface{}) error {
 	if len(data) == 0 {
@@ -265,19 +273,26 @@ func (m *MySQLCatalog) UpdateRow(ctx context.Context, db *sql.DB, schemaName, ta
 	if err != nil {
 		return err
 	}
-	columns, args, err := assignments(target, data)
+	statement, args, err := buildMySQLUpdate(target, data, keyColumn)
 	if err != nil {
 		return err
 	}
-	key, err := target.column(keyColumn)
-	if err != nil {
-		return err
-	}
-	statement := "UPDATE " + target.quoted() + " SET " + strings.Join(columns, " = ?, ") + " = ?" + sqlWhere + key + " = ?"
 	if _, err := db.ExecContext(ctx, statement, append(args, keyValue)...); err != nil {
 		return fmt.Errorf("update row: %w", err)
 	}
 	return nil
+}
+
+func buildMySQLUpdate(target mysqlTable, data map[string]interface{}, keyColumn string) (string, []interface{}, error) {
+	columns, args, err := assignments(target, data)
+	if err != nil {
+		return "", nil, err
+	}
+	key, err := target.column(keyColumn)
+	if err != nil {
+		return "", nil, err
+	}
+	return "UPDATE " + target.quoted() + " SET " + strings.Join(columns, " = ?, ") + " = ?" + sqlWhere + key + " = ?", args, nil
 }
 
 // DeleteRow deletes a row by primary key.
@@ -286,14 +301,22 @@ func (m *MySQLCatalog) DeleteRow(ctx context.Context, db *sql.DB, schemaName, ta
 	if err != nil {
 		return err
 	}
-	key, err := target.column(keyColumn)
+	statement, err := buildMySQLDelete(target, keyColumn)
 	if err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, "DELETE FROM "+target.quoted()+sqlWhere+key+" = ?", keyValue); err != nil {
+	if _, err := db.ExecContext(ctx, statement, keyValue); err != nil {
 		return fmt.Errorf("delete row: %w", err)
 	}
 	return nil
+}
+
+func buildMySQLDelete(target mysqlTable, keyColumn string) (string, error) {
+	key, err := target.column(keyColumn)
+	if err != nil {
+		return "", err
+	}
+	return "DELETE FROM " + target.quoted() + sqlWhere + key + " = ?", nil
 }
 
 const mysqlPrimaryKeyQuery = `

@@ -58,3 +58,21 @@ func TestBuildMySQLInsert(t *testing.T) {
 		t.Fatalf("defaults: %s %v", statement, args)
 	}
 }
+
+func TestBuildMySQLKeyedStatements(t *testing.T) {
+	update, args, err := buildMySQLUpdate(ordersTable, map[string]interface{}{"status": "paid", "note": nil}, "id")
+	if err != nil || update != "UPDATE `orders` SET `note` = ?, `status` = ? WHERE `id` = ?" || len(args) != 2 {
+		t.Errorf("update: %s %v %v", update, args, err)
+	}
+	remove, err := buildMySQLDelete(ordersTable, "id")
+	if err != nil || remove != "DELETE FROM `orders` WHERE `id` = ?" {
+		t.Errorf("delete: %s %v", remove, err)
+	}
+	read, err := buildMySQLReadBack(ordersTable, []string{"id"})
+	if err != nil || read != "SELECT * FROM `orders` WHERE `id` = ?" {
+		t.Errorf("read back: %s %v", read, err)
+	}
+	if _, err := buildMySQLDelete(ordersTable, "nope"); err == nil {
+		t.Error("an unknown key column was accepted")
+	}
+}
