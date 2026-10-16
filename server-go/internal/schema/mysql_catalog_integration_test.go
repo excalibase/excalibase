@@ -280,9 +280,12 @@ func TestIntegration_MySQLRunnerBounds(t *testing.T) {
 	if stopped.Error == "" || time.Since(started) > 10*time.Second {
 		t.Fatalf("sleep: %+v after %s", stopped, time.Since(started))
 	}
-	var sleeping int
-	if err := single.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.processlist WHERE info = 'DO SLEEP(30)'").Scan(&sleeping); err != nil || sleeping != 0 {
-		t.Fatalf("the statement still runs: %d %v", sleeping, err)
+	if !eventually(func() bool {
+		var sleeping int
+		err := single.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.processlist WHERE info = 'DO SLEEP(30)'").Scan(&sleeping)
+		return err == nil && sleeping == 0
+	}) {
+		t.Fatal("the statement still runs on the server")
 	}
 	if set := catalog.ExecuteQuery(ctx, script, "SET SESSION max_execution_time = 0"); set.Error != "" {
 		t.Fatal(set.Error)
@@ -291,4 +294,14 @@ func TestIntegration_MySQLRunnerBounds(t *testing.T) {
 	if fmt.Sprint(limit.Rows) != "[[30000]]" {
 		t.Fatalf("session setting leaked: %+v", limit)
 	}
+}
+
+// eventually polls for up to five seconds: a KILL lands asynchronously.
+func eventually(check func() bool) bool {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if check() {
+			return true
+		}
+	}
+	return false
 }
