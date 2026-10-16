@@ -279,26 +279,23 @@ func TestTierHandler_Update_TellsThePlatformThePlanChanged(t *testing.T) {
 	}
 }
 
-// A plan's Sites limits are bounded (EXC-620): 25 MiB a file is Cloudflare's
-// own ceiling, and 0 sites is a plan that offers none.
-func TestTierHandler_Update_SiteLimits(t *testing.T) {
-	const base = `"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.5"`
-	valid := map[string]string{
+// siteLimitsBody is a valid plan with one Sites field set to value.
+func siteLimitsBody(field, value string) string {
+	fields := map[string]string{
 		"maxSites": "5", "maxSiteDeployBytes": "104857600", "maxSiteFiles": "20000",
 		"maxSiteFileBytes": "26214400", "maxSiteDeploysPerHour": "30",
 	}
-	body := func(field, value string) string {
-		out := "{" + base
-		for name, v := range valid {
-			switch {
-			case name != field:
-				out += `,"` + name + `":` + v
-			case value != "":
-				out += `,"` + name + `":` + value
-			}
-		}
-		return out + "}"
+	fields[field] = value
+	out := `{"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.5"`
+	for name, v := range fields {
+		out += `,"` + name + `":` + v
 	}
+	return out + "}"
+}
+
+// A plan's Sites limits are bounded (EXC-620): 25 MiB a file is Cloudflare's
+// own ceiling.
+func TestTierHandler_Update_RefusesSiteLimitsOutOfBounds(t *testing.T) {
 	refused := map[string][]string{
 		"maxSites":              {"-1", "1001"},
 		"maxSiteDeployBytes":    {"0", "1048575", "1073741825"},
@@ -311,19 +308,20 @@ func TestTierHandler_Update_SiteLimits(t *testing.T) {
 			t.Run(field+"="+value, func(t *testing.T) {
 				store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
 				rec := httptest.NewRecorder()
-				NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", body(field, value), string(domain.Free)))
-				if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), field) {
-					t.Errorf("got %d %s, want 400 naming %s", rec.Code, rec.Body.String(), field)
-				}
-				if len(store.m) != 0 {
-					t.Error("a refused spec was stored")
+				NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", siteLimitsBody(field, value), string(domain.Free)))
+				if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), field) || len(store.m) != 0 {
+					t.Errorf("got %d %s, stored %d; want 400 naming %s and nothing stored", rec.Code, rec.Body.String(), len(store.m), field)
 				}
 			})
 		}
 	}
+}
+
+// 0 sites is a plan that offers none; every limit is stored and echoed.
+func TestTierHandler_Update_StoresAndEchoesSiteLimits(t *testing.T) {
 	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
 	rec := httptest.NewRecorder()
-	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", body("maxSites", "0"), string(domain.Free)))
+	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", siteLimitsBody("maxSites", "0"), string(domain.Free)))
 	want := config.SiteTierLimits{MaxSites: 0, MaxDeployBytes: 100 << 20, MaxFiles: 20_000, MaxFileBytes: 25 << 20, MaxDeploysPerHour: 30}
 	if rec.Code != http.StatusOK || store.m[domain.Free].Sites != want {
 		t.Fatalf("got %d %s, stored %+v; want the plan's site limits kept", rec.Code, rec.Body.String(), store.m[domain.Free].Sites)

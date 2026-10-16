@@ -32,28 +32,31 @@ func TestTierConfigs_SeededDefaults(t *testing.T) {
 	if len(all) != 3 {
 		t.Errorf("expected 3 seeded tiers, got %d", len(all))
 	}
-	// One instance per node on paid tiers, as the built-in catalogue says.
 	for tier, stored := range all {
 		builtin, _ := config.GetTierConfig(tier)
-		if stored.Instances != builtin.Instances {
-			t.Errorf("%s: stored instances %d, built-in %d", tier, stored.Instances, builtin.Instances)
-		}
-		// Each plan's growth ceiling, as the built-in catalogue says (EXC-492).
-		if stored.MaxStorageSize != builtin.MaxStorageSize {
-			t.Errorf("%s: stored max disk %q, built-in %q", tier, stored.MaxStorageSize, builtin.MaxStorageSize)
-		}
-		// Each plan's app disk cap, as the built-in catalogue says (EXC-523).
-		// Each plan's app count, as the built-in catalogue says (EXC-524).
-		if stored.MaxApps != builtin.MaxApps {
-			t.Errorf("%s: stored max apps %d, built-in %d", tier, stored.MaxApps, builtin.MaxApps)
-		}
-		if stored.MaxAppDiskSize != builtin.MaxAppDiskSize {
-			t.Errorf("%s: stored app disk cap %q, built-in %q", tier, stored.MaxAppDiskSize, builtin.MaxAppDiskSize)
-		}
-		// Each plan's Sites limits, as the built-in catalogue says (EXC-620).
-		if stored.Sites != builtin.Sites {
-			t.Errorf("%s: stored site limits %+v, built-in %+v", tier, stored.Sites, builtin.Sites)
-		}
+		assertSeededLikeBuiltin(t, tier, stored, builtin)
+	}
+}
+
+// assertSeededLikeBuiltin checks a seeded plan against the built-in catalogue:
+// instances (one per node), growth ceiling (EXC-492), app disk cap (EXC-523),
+// app count (EXC-524) and Sites limits (EXC-620).
+func assertSeededLikeBuiltin(t *testing.T, tier domain.TierType, stored, builtin config.TierConfig) {
+	t.Helper()
+	if stored.Instances != builtin.Instances {
+		t.Errorf("%s: stored instances %d, built-in %d", tier, stored.Instances, builtin.Instances)
+	}
+	if stored.MaxStorageSize != builtin.MaxStorageSize {
+		t.Errorf("%s: stored max disk %q, built-in %q", tier, stored.MaxStorageSize, builtin.MaxStorageSize)
+	}
+	if stored.MaxApps != builtin.MaxApps {
+		t.Errorf("%s: stored max apps %d, built-in %d", tier, stored.MaxApps, builtin.MaxApps)
+	}
+	if stored.MaxAppDiskSize != builtin.MaxAppDiskSize {
+		t.Errorf("%s: stored app disk cap %q, built-in %q", tier, stored.MaxAppDiskSize, builtin.MaxAppDiskSize)
+	}
+	if stored.Sites != builtin.Sites {
+		t.Errorf("%s: stored site limits %+v, built-in %+v", tier, stored.Sites, builtin.Sites)
 	}
 }
 

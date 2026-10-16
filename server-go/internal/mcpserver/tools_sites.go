@@ -18,6 +18,9 @@ const maxSiteArchiveBytes = 1 << 20
 const sitesUnavailableMessage = "sites are not available on this install: it has no Cloudflare account configured for them. " +
 	"Host the frontend as a container instead: get_dockerfile_template (stack vite or static), then create_app and deploy_app"
 
+// sitesSegment follows a project id in every Sites route.
+const sitesSegment = "/sites/"
+
 const archiveHowTo = "pack the build output folder with `tar czf - -C dist . | base64` (dist being where the build writes)"
 
 type siteArgs struct {
@@ -65,7 +68,7 @@ func sitePath(c *call, projectArgument, siteID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return projectsAPI + projectID + "/sites/" + site, nil
+	return projectsAPI + projectID + sitesSegment + site, nil
 }
 
 // siteFailure says plainly when the install has no Sites, and where a frontend goes instead.
@@ -82,7 +85,7 @@ func listSites(ctx context.Context, c *call, in projectArg) (any, error) {
 		return nil, err
 	}
 	var listed []map[string]any
-	if err := c.get(ctx, projectsAPI+projectID+"/sites/", nil, &listed); err != nil {
+	if err := c.get(ctx, projectsAPI+projectID+sitesSegment, nil, &listed); err != nil {
 		return nil, siteFailure(err)
 	}
 	if listed == nil {
@@ -101,7 +104,7 @@ func createSite(ctx context.Context, c *call, in createSiteArgs) (any, error) {
 		body["spaFallback"] = *in.SPAFallback
 	}
 	var site map[string]any
-	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+"/sites/", nil, body, &site); err != nil {
+	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+sitesSegment, nil, body, &site); err != nil {
 		return nil, siteFailure(err)
 	}
 	return map[string]any{"site": site, "next": "build the frontend, then call deploy_site with this site's id: " + archiveHowTo}, nil

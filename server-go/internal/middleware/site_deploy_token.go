@@ -59,36 +59,41 @@ func SiteDeployTokenGate(tokens DeployTokenResolver, users auth.TokenLookup) fun
 				next.ServeHTTP(w, r)
 				return
 			}
-			// Nothing else authenticates this request: a deploy token never rides on a session.
-			ctx := auth.SetToken(auth.SetUser(r.Context(), nil), nil)
-			projectID, siteID, ok := deployTokenTarget(r)
-			if !ok {
-				writeGateError(w, http.StatusForbidden, errDeployTokenScope)
-				return
-			}
-			if tokens == nil {
+			if ctx, ok := deployTokenContext(w, r, tokens, users, raw); ok {
 				next.ServeHTTP(w, r.WithContext(ctx))
-				return
 			}
-			token, err := tokens.ResolveDeployToken(ctx, raw)
-			if err != nil {
-				log.Printf("deploy token: %v", err)
-				writeGateError(w, http.StatusInternalServerError, "internal error")
-				return
-			}
-			if token == nil {
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-			if token.ProjectID != projectID || token.SiteID != siteID {
-				writeGateError(w, http.StatusForbidden, errDeployTokenScope)
-				return
-			}
-			tokens.RecordDeployTokenUse(ctx, token)
-			ctx = sites.WithDeployToken(ctx, token)
-			next.ServeHTTP(w, r.WithContext(asDeployTokenCreator(ctx, users, token)))
 		})
 	}
+}
+
+// deployTokenContext answers the request's context as the deploy token, or
+// unauthenticated when the token names no one; ok is false once it refused.
+func deployTokenContext(w http.ResponseWriter, r *http.Request, tokens DeployTokenResolver, users auth.TokenLookup, raw string) (context.Context, bool) {
+	// Nothing else authenticates this request: a deploy token never rides on a session.
+	ctx := auth.SetToken(auth.SetUser(r.Context(), nil), nil)
+	projectID, siteID, ok := deployTokenTarget(r)
+	if !ok {
+		writeGateError(w, http.StatusForbidden, errDeployTokenScope)
+		return nil, false
+	}
+	if tokens == nil {
+		return ctx, true
+	}
+	token, err := tokens.ResolveDeployToken(ctx, raw)
+	if err != nil {
+		log.Printf("deploy token: %v", err)
+		writeGateError(w, http.StatusInternalServerError, "internal error")
+		return nil, false
+	}
+	if token == nil {
+		return ctx, true
+	}
+	if token.ProjectID != projectID || token.SiteID != siteID {
+		writeGateError(w, http.StatusForbidden, errDeployTokenScope)
+		return nil, false
+	}
+	tokens.RecordDeployTokenUse(ctx, token)
+	return asDeployTokenCreator(sites.WithDeployToken(ctx, token), users, token), true
 }
 
 // asDeployTokenCreator is the request as the token's creator, narrowed to its

@@ -7,6 +7,7 @@ import {
   siteGithubActionsSnippet,
   siteGitlabCiSnippet,
   siteJenkinsSnippet,
+  trimTrailingSlashes,
   type SiteSnippetTarget,
 } from './siteCiSnippets';
 
@@ -51,7 +52,8 @@ const CI_KINDS: CiKind[] = [
 ];
 
 // The API as CI reaches it: absolute, whatever origin Studio is served from.
-const absoluteApiUrl = () => new URL(API_BASE, globalThis.location.origin).href.replace(/\/+$/, '');
+const absoluteApiUrl = () =>
+  trimTrailingSlashes(new URL(API_BASE, globalThis.location.origin).href);
 
 export function SiteCiSnippet({
   projectId,
@@ -112,8 +114,8 @@ export function SiteCiSnippet({
           <span className="font-mono" data-testid="site-ci-file">
             {kind.file}
           </span>
-          . It builds with npm, packs <span className="font-mono">dist</span> and uploads it; the
-          upload goes live. Change the build step or folder if yours differ.
+          {'. '}It builds with npm, packs <span className="font-mono">dist</span> and uploads it;
+          the upload goes live. Change the build step or folder if yours differ.
         </li>
       </ol>
       <pre

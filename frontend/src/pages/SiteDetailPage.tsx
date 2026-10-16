@@ -56,7 +56,7 @@ function Routing({ projectId, site }: { readonly projectId: string; readonly sit
           data-testid="site-spa-toggle"
         />
         <span>
-          Single-page app fallback
+          Single-page app fallback{' '}
           <span className="block text-xs text-text-tertiary" data-testid="site-spa-note">
             Unknown paths load index.html instead of your 404.html. A change applies from the next
             deploy; a rollback brings back the routing its deploy had.

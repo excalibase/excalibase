@@ -10,7 +10,8 @@ UPDATE tier_configs SET max_sites = 20, max_site_deploys_per_hour = 120 WHERE ti
 UPDATE tier_configs SET max_sites = 50, max_site_deploys_per_hour = 300 WHERE tier = 'ENTERPRISE';
 UPDATE tier_configs SET max_sites = 0 WHERE max_sites IS NULL;
 UPDATE tier_configs SET max_site_deploys_per_hour = 30 WHERE max_site_deploys_per_hour IS NULL;
-UPDATE tier_configs SET max_site_deploy_bytes = 104857600, max_site_files = 20000, max_site_file_bytes = 26214400;
+UPDATE tier_configs SET max_site_deploy_bytes = 104857600, max_site_files = 20000, max_site_file_bytes = 26214400
+    WHERE max_site_deploy_bytes IS NULL;
 ALTER TABLE tier_configs ALTER COLUMN max_sites SET NOT NULL;
 ALTER TABLE tier_configs ALTER COLUMN max_site_deploy_bytes SET NOT NULL;
 ALTER TABLE tier_configs ALTER COLUMN max_site_files SET NOT NULL;

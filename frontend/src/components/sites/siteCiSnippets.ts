@@ -45,22 +45,29 @@ const cleanJoin = (...parts: string[]) =>
 const siteOutput = (build: SiteBuild = {}) =>
   cleanJoin(build.context ?? '', build.output || 'dist');
 
+// Drops trailing slashes without a regular expression that could backtrack.
+export function trimTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === '/') end -= 1;
+  return url.slice(0, end);
+}
+
 const deployUrl = ({ apiUrl, projectId, siteId }: SiteSnippetTarget) =>
-  `${apiUrl.replace(/\/+$/, '')}/projects/${projectId}/sites/${siteId}/deploy`;
+  `${trimTrailingSlashes(apiUrl)}/projects/${projectId}/sites/${siteId}/deploy`;
 
 // The API answers once the deploy is live, and an error status (a failed step) when it is not.
 function upload(target: SiteSnippetTarget, commitVar: string): string {
   validateSiteBuild(target.build);
-  return `tar czf ${ARCHIVE} -C "${siteOutput(target.build)}" .
-curl --fail-with-body -sS -X POST "${deployUrl(target)}?label=${commitVar}" \\
-  -H "Authorization: Bearer $EXCALIBASE_DEPLOY_TOKEN" \\
-  -H "Content-Type: application/gzip" \\
+  return String.raw`tar czf ${ARCHIVE} -C "${siteOutput(target.build)}" .
+curl --fail-with-body -sS -X POST "${deployUrl(target)}?label=${commitVar}" \
+  -H "Authorization: Bearer $EXCALIBASE_DEPLOY_TOKEN" \
+  -H "Content-Type: application/gzip" \
   --data-binary @${ARCHIVE}`;
 }
 
 // Builds in the context and returns to the repository root at rootVar.
-function shellBuild(build: SiteBuild = {}, rootVar: string): string[] {
-  if (!build.context) return ['npm ci', 'npm run build'];
+function shellBuild(build: SiteBuild | undefined, rootVar: string): string[] {
+  if (!build?.context) return ['npm ci', 'npm run build'];
   return [`cd "${build.context}"`, 'npm ci', 'npm run build', `cd "${rootVar}"`];
 }
 
