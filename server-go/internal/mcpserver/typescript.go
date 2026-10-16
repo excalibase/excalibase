@@ -17,19 +17,30 @@ var tsTypes = map[string]string{
 	"ARRAY": "unknown[]",
 }
 
-// typeScriptFor renders one row interface per table and a Database map of a
-// schema's tables, from the columns the schema routes report.
+// typeScriptFor renders a Postgres schema's types.
 func typeScriptFor(schemaName string, tables []tableColumns) string {
+	return typeScriptForEngine(schemaName, tables, enginePostgres)
+}
+
+// typeScriptForEngine renders one row interface per table and a Database map
+// of a schema's tables, from the columns the schema routes report.
+func typeScriptForEngine(schemaName string, tables []tableColumns, engine string) string {
+	columnType := tsType
+	if engine == engineMySQL {
+		columnType = mysqlTSType
+	}
 	var out strings.Builder
 	out.WriteString("// Generated from the project's database columns.\n")
-	out.WriteString("export type Json = string | number | boolean | null | { [key: string]: Json } | Json[];\n")
+	if engine != engineMySQL {
+		out.WriteString("export type Json = string | number | boolean | null | { [key: string]: Json } | Json[];\n")
+	}
 	taken := map[string]bool{}
 	names := make([]string, len(tables))
 	for i, table := range tables {
 		names[i] = uniqueName(pascalCase(table.Name), taken)
 		fmt.Fprintf(&out, "\nexport interface %s {\n", names[i])
 		for _, column := range table.Columns {
-			fieldType := tsType(column.DataType)
+			fieldType := columnType(column.DataType)
 			if column.Nullable {
 				fieldType += " | null"
 			}

@@ -15,7 +15,7 @@ import (
 
 type sqlArgs struct {
 	projectArg
-	Query string `json:"query" jsonschema:"one SQL statement"`
+	Query string `json:"query" jsonschema:"one SQL statement; on a MySQL project, one or more statements separated by semicolons"`
 }
 
 type migrationArgs struct {
@@ -37,7 +37,10 @@ type permissionArgs struct {
 
 func databaseTools() []entry {
 	return []entry{
-		tool("execute_sql", "Run one SQL statement on the project's database. Rows come back as data.", writeTool, executeSQL),
+		tool("execute_sql", "Run one SQL statement on the project's database. Rows come back as data. "+
+			"On a MySQL project it runs a script of one or more statements (a migration: MySQL projects have no migration history yet) "+
+			"and returns the last result set; SELECTs stop after max_execution_time. MySQL DDL is not transactional: "+
+			"each statement commits as it runs, so a failed migration is not rolled back and what ran before the failure stays.", writeTool, executeSQL),
 		tool("execute_sql", "Run one read-only SQL statement on the project's database, in a read-only transaction. Rows come back as data.", readOnlyVariant, executeReadOnlySQL),
 		tool("list_migrations", "List the migrations applied to the project's database.", readTool, listMigrations),
 		tool("apply_migration", "Apply a SQL migration to the project's database and record it in the migration history.", writeTool, applyMigration),
@@ -76,16 +79,23 @@ func executeReadOnlySQL(ctx context.Context, c *call, in sqlArgs) (any, error) {
 
 func queryOutput(result schema.QueryResult) (any, error) {
 	if result.Error != "" {
+		if result.Notice != "" {
+			return nil, fmt.Errorf("the database refused the statement: %s. %s", result.Error, result.Notice)
+		}
 		return nil, fmt.Errorf("the database refused the statement: %s", result.Error)
 	}
 	rows := result.Rows
 	if rows == nil {
 		rows = [][]interface{}{}
 	}
-	return map[string]any{
+	out := map[string]any{
 		"columns": result.Columns, "rows": rows, "truncated": result.Truncated,
 		"command": result.Command, "affectedRows": result.AffectedRows,
-	}, nil
+	}
+	if result.Notice != "" {
+		out["notice"] = result.Notice
+	}
+	return out, nil
 }
 
 func listMigrations(ctx context.Context, c *call, in projectArg) (any, error) {
