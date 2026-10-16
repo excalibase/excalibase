@@ -1,0 +1,84 @@
+name: User-journey gate setup
+description: The example repos, Node and, on request, branch-built images or the Kubernetes tools.
+inputs:
+  build:
+    description: Build provisioning and Studio from this checkout
+    default: "false"
+  kubernetes:
+    description: Install k3d and check out excalibase-service (the runner image has kubectl and Helm)
+    default: "false"
+  service-key:
+    description: Read-only deploy key for excalibase/excalibase-service
+    default: ""
+  lecture-search-key:
+    description: Read-only deploy key for excalibase/example-lecture-search
+    required: true
+  live-sports-key:
+    description: Read-only deploy key for excalibase/example-live-sports-dashboard
+    required: true
+  bookshelf-key:
+    description: Read-only deploy key for excalibase/example-nestjs-api
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - name: Free runner disk
+      shell: bash
+      run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+    - name: The example repos are private; their read-only keys must be set
+      shell: bash
+      env:
+        KEYS: ${{ inputs.lecture-search-key != '' && inputs.live-sports-key != '' && inputs.bookshelf-key != '' }}
+      run: |
+        if [ "$KEYS" != true ]; then
+          echo "::error::set EXAMPLE_LECTURE_SEARCH_DEPLOY_KEY, EXAMPLE_LIVE_SPORTS_DEPLOY_KEY and EXAMPLE_NESTJS_API_DEPLOY_KEY (read-only deploy keys)"
+          exit 1
+        fi
+    - uses: actions/checkout@v4
+      with:
+        repository: excalibase/example-lecture-search
+        ssh-key: ${{ inputs.lecture-search-key }}
+        persist-credentials: false
+        path: examples/lecture-search
+    - uses: actions/checkout@v4
+      with:
+        repository: excalibase/example-live-sports-dashboard
+        ssh-key: ${{ inputs.live-sports-key }}
+        persist-credentials: false
+        path: examples/live-sports
+    - uses: actions/checkout@v4
+      with:
+        repository: excalibase/example-nestjs-api
+        ssh-key: ${{ inputs.bookshelf-key }}
+        persist-credentials: false
+        path: examples/bookshelf
+    - name: Where the run keeps its examples and artifacts
+      shell: bash
+      run: |
+        echo "EXAMPLES_DIR=$GITHUB_WORKSPACE/examples" >> "$GITHUB_ENV"
+        echo "ARTIFACTS=$RUNNER_TEMP/artifacts" >> "$GITHUB_ENV"
+    - name: Build provisioning and Studio from this ref
+      if: inputs.build == 'true'
+      shell: bash
+      run: |
+        docker build -q -t docker.io/excalibase/provisioning:gate server-go
+        docker build -q -t docker.io/excalibase/studio:gate frontend
+        echo "PLATFORM_TAG=gate" >> "$GITHUB_ENV"
+    - uses: actions/checkout@v4
+      if: inputs.kubernetes == 'true'
+      with:
+        repository: excalibase/excalibase-service
+        ssh-key: ${{ inputs.service-key }}
+        persist-credentials: false
+        path: excalibase-service
+    - name: Install k3d
+      if: inputs.kubernetes == 'true'
+      shell: bash
+      run: |
+        curl -fsSL -o "$RUNNER_TEMP/k3d" https://github.com/k3d-io/k3d/releases/download/v5.9.0/k3d-linux-amd64
+        echo "06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0  $RUNNER_TEMP/k3d" | sha256sum -c -
+        sudo install -m 0755 "$RUNNER_TEMP/k3d" /usr/local/bin/k3d
+        kubectl version --client && helm version --short

@@ -1,0 +1,181 @@
+name: User journeys (release gate)
+
+# EXC-611: every night, and before any release, the example apps are built, deployed and walked
+# the way their builders do, on fresh stacks: a single host on Docker, the same on Podman, and
+# platform-aio on k3d. Each leg drives the apps through MCP (migrations back to back, permissions,
+# keys, CORS, realtime), checks calls from inside the app's container and a browser preflight from
+# its origin, then runs the example repo's own Playwright journeys at the app's real URL
+# (tests/user-journeys). Legs run one after another, never beside each other or another heavy run.
+# release.yml refuses to promote images no green run of this workflow tested.
+on:
+  schedule:
+    # 18:00 UTC (01:00 Asia/Ho_Chi_Minh), after the AIO nightly.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Images under test (e.g. main, main-<sha>, 1.6.0-rc.1)"
+        default: main
+      build:
+        description: "Build provisioning and Studio from this ref instead (proves a branch)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: user-journeys
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || 'main' }}
+
+jobs:
+  # The images under test, resolved once by digest: every leg runs exactly these, and the verdict
+  # records them, never a list a leg (which runs the example repos' code) wrote.
+  pin:
+    name: Images under test
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.resolve.outputs.images }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - id: resolve
+        run: |
+          set -eu
+          images=""
+          for service in provisioning studio excalibase-auth excalibase-graphql; do
+            digest=$(docker buildx imagetools inspect "docker.io/excalibase/$service:$TAG" | awk '/^Digest:/ { print $2; exit }')
+            case $digest in sha256:*) ;; *) echo "::error::excalibase/$service:$TAG has no digest"; exit 1 ;; esac
+            images="$images docker.io/excalibase/$service@$digest"
+          done
+          echo "images=${images# }" >> "$GITHUB_OUTPUT"
+
+  single-host-docker:
+    name: Single host (Docker)
+    needs: pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/user-journeys-setup
+        with:
+          build: ${{ inputs.build || false }}
+          lecture-search-key: ${{ secrets.EXAMPLE_LECTURE_SEARCH_DEPLOY_KEY }}
+          live-sports-key: ${{ secrets.EXAMPLE_LIVE_SPORTS_DEPLOY_KEY }}
+          bookshelf-key: ${{ secrets.EXAMPLE_NESTJS_API_DEPLOY_KEY }}
+      - name: Walk the example apps
+        env:
+          IMAGES: ${{ needs.pin.outputs.images }}
+        run: tests/user-journeys/run.sh docker
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: user-journeys-docker
+          path: ${{ runner.temp }}/artifacts
+          retention-days: 30
+
+  single-host-podman:
+    name: Single host (Podman)
+    needs: [pin, single-host-docker]
+    if: ${{ !cancelled() && needs.pin.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/user-journeys-setup
+        with:
+          build: ${{ inputs.build || false }}
+          lecture-search-key: ${{ secrets.EXAMPLE_LECTURE_SEARCH_DEPLOY_KEY }}
+          live-sports-key: ${{ secrets.EXAMPLE_LIVE_SPORTS_DEPLOY_KEY }}
+          bookshelf-key: ${{ secrets.EXAMPLE_NESTJS_API_DEPLOY_KEY }}
+      - name: Walk the example apps
+        env:
+          IMAGES: ${{ needs.pin.outputs.images }}
+        run: tests/user-journeys/run.sh podman
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: user-journeys-podman
+          path: ${{ runner.temp }}/artifacts
+          retention-days: 30
+
+  kubernetes:
+    name: Kubernetes (k3d platform-aio)
+    needs: [pin, single-host-podman]
+    if: ${{ !cancelled() && needs.pin.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/user-journeys-setup
+        with:
+          build: ${{ inputs.build || false }}
+          kubernetes: true
+          service-key: ${{ secrets.EXCALIBASE_SERVICE_DEPLOY_KEY }}
+          lecture-search-key: ${{ secrets.EXAMPLE_LECTURE_SEARCH_DEPLOY_KEY }}
+          live-sports-key: ${{ secrets.EXAMPLE_LIVE_SPORTS_DEPLOY_KEY }}
+          bookshelf-key: ${{ secrets.EXAMPLE_NESTJS_API_DEPLOY_KEY }}
+      - name: Walk the example apps
+        env:
+          IMAGES: ${{ needs.pin.outputs.images }}
+          SERVICE_DIR: ${{ github.workspace }}/excalibase-service
+        run: tests/user-journeys/run.sh k3d
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: user-journeys-k3d
+          path: ${{ runner.temp }}/artifacts
+          retention-days: 30
+
+  verdict:
+    name: Gate verdict
+    needs: [pin, single-host-docker, single-host-podman, kubernetes]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    env:
+      IMAGES: ${{ needs.pin.outputs.images }}
+      RESULTS: ${{ needs.single-host-docker.result }} ${{ needs.single-host-podman.result }} ${{ needs.kubernetes.result }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: legs
+      - name: Summarize and fail unless every leg passed
+        run: |
+          {
+            echo "### User-journey gate: $TAG"
+            for leg in docker podman k3d; do
+              echo ""
+              echo "**$leg**"
+              echo '```'
+              cat "legs/user-journeys-$leg/verdicts.json" 2>/dev/null || echo "no verdicts: the stack did not come up"
+              echo '```'
+            done
+            echo ""
+            echo "Images:"
+            for image in $IMAGES; do echo "- \`$image\`"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$RESULTS" = "success success success"
+      # The list release.yml checks: only a fully green run of published images uploads it, and only
+      # after every leg reports having run exactly the pinned images.
+      - name: Record the images this green run tested
+        if: ${{ inputs.build != true }}
+        run: |
+          set -eu
+          printf '%s\n' $IMAGES | sort > tested-images.txt
+          for leg in docker podman k3d; do
+            sort "legs/user-journeys-$leg/images.txt" | diff -u tested-images.txt -
+          done
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.build != true }}
+        with:
+          name: user-journeys-tested-images
+          path: tested-images.txt
+          retention-days: 90
