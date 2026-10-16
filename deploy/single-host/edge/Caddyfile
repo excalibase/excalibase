@@ -22,12 +22,28 @@
 studio.{$EXCALIBASE_DOMAIN} {
 	import tls_mode
 	import security_headers
+	# A handle of its own and first: handle runs before a bare respond, so the
+	# allowlist must be one of the handles to cover every route below.
 	@outside not remote_ip {$STUDIO_ALLOW_CIDRS}
-	respond @outside 403
-	request_body {
-		max_size 10MB
+	handle @outside {
+		respond 403
 	}
-	reverse_proxy studio:80
+	# A site deploy uploads the whole build (EXC-353): that route alone takes up
+	# to 150 MiB (provisioning's ceiling is about 139 MiB) and goes straight to
+	# provisioning's edge listener, past Studio's nginx and its body limit.
+	@sitesDeploy path_regexp ^/api/projects/[^/]+/sites/[^/]+/deploy$
+	handle @sitesDeploy {
+		request_body {
+			max_size 150MiB
+		}
+		reverse_proxy provisioning:24006
+	}
+	handle {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy studio:80
+	}
 }
 
 api.{$EXCALIBASE_DOMAIN} {

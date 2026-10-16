@@ -69,6 +69,8 @@ jobs:
           for t in single-host edge-listener init-env preflight; do
             sh deploy/single-host/tests/$t.sh
           done
+      - name: Sites deploy upload on the edge (real Caddy)
+        run: sh deploy/single-host/tests/sites-edge.sh docker
 
   single-host-boot:
     name: Single-host boot (Docker)
