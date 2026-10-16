@@ -79,7 +79,7 @@ func scanDeploy(row rowScanner) (*Deploy, error) {
 	var finishedAt sql.NullTime
 	err := row.Scan(&deploy.ID, &deploy.SiteID, &deploy.ProjectID, &deploy.Status, &manifest, &deploy.FileCount,
 		&deploy.TotalBytes, &deploy.SPAFallback, &deploy.Label, &deploy.FailureReason, &deploy.CreatedBy,
-		&deploy.CreatedAt, &finishedAt)
+		&deploy.CreatedByName, &deploy.CreatedAt, &finishedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -94,10 +94,10 @@ func scanDeploy(row rowScanner) (*Deploy, error) {
 }
 
 func (s *PostgresStore) GetDeploy(ctx context.Context, projectID, siteID, id string) (*Deploy, error) {
-	deploy, err := scanDeploy(s.db.QueryRowContext(ctx, `SELECT id, site_id, project_id, status, manifest, file_count, total_bytes, spa_fallback,
-		COALESCE(label, ''), COALESCE(failure_reason, ''), created_by, created_at, finished_at
-		FROM site_deploys
-		WHERE project_id = $1 AND site_id = $2 AND id = $3`, projectID, siteID, id))
+	deploy, err := scanDeploy(s.db.QueryRowContext(ctx, `SELECT d.id, d.site_id, d.project_id, d.status, d.manifest, d.file_count, d.total_bytes, d.spa_fallback,
+		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at
+		FROM site_deploys d LEFT JOIN users u ON u.id = d.created_by
+		WHERE d.project_id = $1 AND d.site_id = $2 AND d.id = $3`, projectID, siteID, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -108,10 +108,10 @@ func (s *PostgresStore) GetDeploy(ctx context.Context, projectID, siteID, id str
 }
 
 func (s *PostgresStore) ListDeploys(ctx context.Context, projectID, siteID string, limit int) ([]*Deploy, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, site_id, project_id, status, manifest, file_count, total_bytes, spa_fallback,
-		COALESCE(label, ''), COALESCE(failure_reason, ''), created_by, created_at, finished_at
-		FROM site_deploys
-		WHERE project_id = $1 AND site_id = $2 ORDER BY created_at DESC, id LIMIT $3`, projectID, siteID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id, d.site_id, d.project_id, d.status, d.manifest, d.file_count, d.total_bytes, d.spa_fallback,
+		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at
+		FROM site_deploys d LEFT JOIN users u ON u.id = d.created_by
+		WHERE d.project_id = $1 AND d.site_id = $2 ORDER BY d.created_at DESC, d.id LIMIT $3`, projectID, siteID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list site deploys: %w", err)
 	}

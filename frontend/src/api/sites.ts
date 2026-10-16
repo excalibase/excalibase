@@ -30,6 +30,8 @@ export interface SiteDeploy {
   label?: string;
   failureReason?: string;
   createdBy: string;
+  // The deployer's username; absent once their account is gone.
+  createdByName?: string;
   createdAt: string;
   finishedAt?: string;
   live: boolean;
