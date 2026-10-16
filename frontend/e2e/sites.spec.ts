@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
-import { loginAs, mockProject, mockSchemaEndpoints } from './helpers';
+import { loginAs, mockProject, mockProjectRole, mockSchemaEndpoints } from './helpers';
 
 // Sites (EXC-353): static frontend hosting, shown only when /api/config reports sites.
 const SITES_PATH = '/api/projects/test-project/sites';
@@ -46,7 +46,11 @@ const json = (route: Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
 // A stateful stand-in for the Sites API: create, upload, roll back, toggle, delete.
-async function mockSitesApi(page: Page, initialDeploys: DeployState[] = []): Promise<Recorded> {
+async function mockSitesApi(
+  page: Page,
+  initialDeploys: DeployState[] = [],
+  initialSite: SiteState | null = null,
+): Promise<Recorded> {
   const recorded: Recorded = {
     created: [],
     uploads: [],
@@ -54,7 +58,7 @@ async function mockSitesApi(page: Page, initialDeploys: DeployState[] = []): Pro
     patches: [],
     deleted: false,
   };
-  let site: SiteState | null = null;
+  let site: SiteState | null = initialSite;
   let deploys = [...initialDeploys];
   const present = () => ({
     ...site,
@@ -145,6 +149,7 @@ test.describe('Sites', () => {
   test('create a site, deploy a build, roll back, change routing and delete it', async ({
     page,
   }) => {
+    await mockProjectRole(page, 'developer');
     await mockConfig(page, true);
     const recorded = await mockSitesApi(page);
 
@@ -195,6 +200,49 @@ test.describe('Sites', () => {
     await page.getByTestId('modal-confirm').click();
     await expect(page.getByTestId('sites-empty')).toBeVisible();
     await expect.poll(() => recorded.deleted).toBe(true);
+  });
+
+  // The server refuses a viewer every change (403); Studio offers none.
+  test('a viewer sees the site, its routing and history, and no control that changes it', async ({
+    page,
+  }) => {
+    await mockProjectRole(page, 'viewer');
+    await mockConfig(page, true);
+    const deploy = (id: string, createdAt: string): DeployState => ({
+      id,
+      status: 'SUCCEEDED',
+      fileCount: 3,
+      totalBytes: 2048,
+      spaFallback: true,
+      createdBy: 'dev',
+      createdAt,
+    });
+    await mockSitesApi(
+      page,
+      [deploy('dep-2', '2026-10-12T10:00:00Z'), deploy('dep-1', '2026-10-11T10:00:00Z')],
+      {
+        id: 'site-1',
+        name: 'shop',
+        hostname: 'shop.example.app',
+        url: 'https://shop.example.app',
+        spaFallback: true,
+        liveDeployId: 'dep-2',
+      },
+    );
+    await page.goto('/project/test-project/sites');
+    await expect(page.getByTestId('site-row-site-1')).toBeVisible();
+    await expect(page.getByTestId('sites-new')).toHaveCount(0);
+
+    await page.goto('/project/test-project/sites/site-1');
+    await expect(page.getByTestId('site-deploy-row-dep-1')).toBeVisible();
+    await expect(page.getByTestId('site-spa-state')).toContainText('on');
+    for (const id of ['site-upload', 'site-delete', 'site-spa-toggle', 'site-rollback-dep-1']) {
+      await expect(page.getByTestId(id)).toHaveCount(0);
+    }
+
+    await page.goto('/project/test-project/sites/new');
+    await expect(page.getByTestId('site-create-not-allowed')).toBeVisible();
+    await expect(page.getByTestId('site-create')).toHaveCount(0);
   });
 
   test('an install without Sites hides the tab and points frontends at containers', async ({

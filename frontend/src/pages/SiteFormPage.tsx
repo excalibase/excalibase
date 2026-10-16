@@ -5,6 +5,7 @@ import { useCreateSite } from '../api/sites';
 import { primaryButton, secondaryButton } from '../components/containers/ContainerBits';
 import { SitesGate, SitesHeader } from '../components/sites/SiteBits';
 import { siteNameProblem } from '../components/sites/siteName';
+import { useProjectRole } from '../hooks/useProjectRole';
 
 function CreateSiteForm({ projectId }: { readonly projectId: string }) {
   const navigate = useNavigate();
@@ -93,6 +94,19 @@ function CreateSiteForm({ projectId }: { readonly projectId: string }) {
   );
 }
 
+function CreateSiteOrNotice({ projectId }: { readonly projectId: string }) {
+  const { canDevelop, isLoading } = useProjectRole(projectId);
+  if (isLoading) return null;
+  if (!canDevelop) {
+    return (
+      <p className="text-sm text-text-secondary" data-testid="site-create-not-allowed">
+        Creating a site takes the developer role in this project&apos;s organization.
+      </p>
+    );
+  }
+  return <CreateSiteForm projectId={projectId} />;
+}
+
 export function SiteFormPage() {
   const { projectId = '' } = useParams<{ projectId: string }>();
   return (
@@ -109,7 +123,7 @@ export function SiteFormPage() {
           subtitle="A name for its address, and how unknown paths are answered."
         />
         <SitesGate projectId={projectId}>
-          <CreateSiteForm projectId={projectId} />
+          <CreateSiteOrNotice projectId={projectId} />
         </SitesGate>
       </div>
     </div>

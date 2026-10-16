@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { SitesPage } from './SitesPage';
 import { api } from '../api/client';
 import type { Site } from '../api/sites';
-import { siteFixture } from '../test/siteFixtures';
+import { developerRole, signInAsMember, siteFixture } from '../test/siteFixtures';
 
 vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -22,6 +22,8 @@ function renderPage({ sites = true, list = [siteFixture()] as Site[] | Error } =
         ? Promise.reject(list)
         : Promise.resolve({ data: list } as never);
     }
+    const role = developerRole(url);
+    if (role) return role;
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -38,6 +40,7 @@ function renderPage({ sites = true, list = [siteFixture()] as Site[] | Error } =
 
 describe('SitesPage', () => {
   beforeEach(() => {
+    signInAsMember();
     vi.mocked(api.get).mockReset();
   });
 
