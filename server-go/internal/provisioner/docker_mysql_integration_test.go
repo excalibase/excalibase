@@ -44,6 +44,12 @@ func TestDockerMySQLProjectServesTLSClientsFromTheHost(t *testing.T) {
 	db := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, "skip-verify")
 	mustExec(ctx, t, db, "CREATE TABLE notes (id INT AUTO_INCREMENT PRIMARY KEY, body TEXT)")
 	mustExec(ctx, t, db, "INSERT INTO notes (body) VALUES ('hello'), ('world')")
+	mustExec(ctx, t, db, "CREATE TRIGGER notes_body BEFORE INSERT ON notes FOR EACH ROW SET NEW.body = UPPER(NEW.body)")
+	mustExec(ctx, t, db, "CREATE FUNCTION twice(n INT) RETURNS INT DETERMINISTIC RETURN n * 2")
+	var doubled int
+	if err := db.QueryRowContext(ctx, "SELECT twice(21)").Scan(&doubled); err != nil || doubled != 42 {
+		t.Fatalf("twice(21)=%d err=%v", doubled, err)
+	}
 	_ = db.Close()
 
 	plain := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, "false")
