@@ -3,6 +3,7 @@ package schema
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"log"
@@ -31,9 +32,15 @@ func mysqlLeadingWord(query string) string {
 	return strings.ToUpper(firstWord.FindString(rest))
 }
 
-// mysqlScriptReturnsRows says whether a script's first statement reads.
+// mysqlScriptReturnsRows says whether any statement of a script reads, so
+// its rows are kept rather than discarded by an Exec.
 func mysqlScriptReturnsRows(query string) bool {
-	return mysqlReads[mysqlLeadingWord(query)]
+	for _, statement := range mysqlStatements(query) {
+		if mysqlReads[mysqlLeadingWord(statement)] {
+			return true
+		}
+	}
+	return false
 }
 
 // mysqlReadOnlyRefusal is why a read-only call refuses the statement, or "".
@@ -79,11 +86,11 @@ func (m *MySQLCatalog) runScript(ctx context.Context, db *sql.DB, query string) 
 	if mysqlScriptReturnsRows(query) {
 		return readScript(ctx, conn, query)
 	}
-	executed, err := conn.ExecContext(ctx, query)
+	affected, err := execScript(ctx, conn, query)
 	if err != nil {
 		return QueryResult{Error: mysqlMessage(err)}
 	}
-	return QueryResult{Command: "EXEC", AffectedRows: affectedRows(executed)}
+	return QueryResult{Command: "EXEC", AffectedRows: affected}
 }
 
 // ExecuteDDL runs a script for its effect.
@@ -200,17 +207,32 @@ func readSet(rows *sql.Rows) (QueryResult, error) {
 	return QueryResult{Columns: columns, Rows: kept, Truncated: truncated}, nil
 }
 
-// affectedRows adds up every statement's count in a script.
-func affectedRows(result sql.Result) int64 {
-	if all, ok := result.(interface{ AllRowsAffected() []int64 }); ok {
-		var total int64
-		for _, count := range all.AllRowsAffected() {
+// execScript runs a script for its effect and adds up every statement's
+// count; database/sql's result shows only the last one, so the driver's own
+// result is read.
+func execScript(ctx context.Context, conn *sql.Conn, query string) (int64, error) {
+	var total int64
+	err := conn.Raw(func(driverConn any) error {
+		execer, ok := driverConn.(driver.ExecerContext)
+		if !ok {
+			return errors.New("the MySQL driver cannot run a script")
+		}
+		result, err := execer.ExecContext(ctx, query, nil)
+		if err != nil {
+			return err
+		}
+		counts := []int64{}
+		if all, ok := result.(mysql.Result); ok {
+			counts = all.AllRowsAffected()
+		} else if count, err := result.RowsAffected(); err == nil {
+			counts = append(counts, count)
+		}
+		for _, count := range counts {
 			total += count
 		}
-		return total
-	}
-	count, _ := result.RowsAffected()
-	return count
+		return nil
+	})
+	return total, err
 }
 
 // mysqlMessage is a MySQL refusal as the user reads it, with its error number.

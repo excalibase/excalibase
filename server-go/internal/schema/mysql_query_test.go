@@ -19,12 +19,31 @@ func TestMySQLScriptReturnsRows(t *testing.T) {
 	for query, want := range map[string]bool{
 		"SELECT 1":                             true,
 		"/* c */ show tables":                  true,
-		"CREATE TABLE t (a int); SELECT 1":     false,
+		"CREATE TABLE t (a int); SELECT 1":     true,
 		"INSERT INTO t VALUES (1)":             false,
 		"WITH x AS (SELECT 1) SELECT * FROM x": true,
 	} {
 		if got := mysqlScriptReturnsRows(query); got != want {
 			t.Errorf("%q: got %v", query, got)
 		}
+	}
+}
+
+func TestMySQLStatements(t *testing.T) {
+	script := "CREATE TABLE a (x varchar(9) DEFAULT ';'); -- a; comment\n" +
+		"INSERT INTO a VALUES ('it\\'s; fine'), (\"q;\"); # hash; comment\n" +
+		"/* block; */ SELECT `we;ird` FROM a;  "
+	got := mysqlStatements(script)
+	if len(got) != 3 || mysqlLeadingWord(got[2]) != "SELECT" || mysqlLeadingWord(got[1]) != "INSERT" {
+		t.Fatalf("statements %q", got)
+	}
+}
+
+func TestMySQLScriptReturnsRowsReadsEveryStatement(t *testing.T) {
+	if !mysqlScriptReturnsRows("CREATE TABLE t (a int); INSERT INTO t VALUES (1); SELECT * FROM t") {
+		t.Error("a script ending in SELECT returns rows")
+	}
+	if mysqlScriptReturnsRows("CREATE TABLE t (a int); INSERT INTO t VALUES (';SELECT')") {
+		t.Error("a SELECT inside a literal is not a statement")
 	}
 }
