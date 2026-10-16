@@ -80,7 +80,7 @@ export function deployCommand(target: SnippetTarget, commitVar: string): string 
   -d "{\\"image\\":\\"$IMAGE\\",\\"commitSha\\":\\"${commitVar}\\"}"`;
 }
 
-const indent = (text: string, spaces: number) =>
+export const indent = (text: string, spaces: number) =>
   text
     .split('\n')
     .map((line) => (line === '' ? line : ' '.repeat(spaces) + line))

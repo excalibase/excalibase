@@ -31,4 +31,13 @@ describe('project navigation', () => {
     expect(visibleNavItems(operations?.children ?? [], false, false).map((item) => item.label)).toEqual(['Backups']);
     expect(visibleNavItems(operations?.children ?? [], false, true).map((item) => item.label)).toEqual(['Backups', 'Snapshots', 'Migrations']);
   });
+
+  // EXC-353: Sites follows the server's sites config, which is off unless Cloudflare is set up.
+  test('Sites is listed only when the server reports sites', () => {
+    const keys = (sites?: boolean) => visibleProjectNav({ appHosting: true, mcp: false, sites }).map((section) => section.key);
+    expect(keys(undefined)).not.toContain('sites');
+    expect(keys(false)).not.toContain('sites');
+    expect(keys(true)).toContain('sites');
+    expect(PROJECT_NAV.find((section) => section.key === 'sites')).toMatchObject({ label: 'Sites', to: 'sites' });
+  });
 });

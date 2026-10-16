@@ -59,6 +59,9 @@ const ContainersPage = lazy(() => import('./pages/ContainersPage').then(m => ({ 
 const ContainerTemplatesPage = lazy(() => import('./pages/ContainerTemplatesPage').then(m => ({ default: m.ContainerTemplatesPage })));
 const ContainerFormPage = lazy(() => import('./pages/ContainerFormPage').then(m => ({ default: m.ContainerFormPage })));
 const ContainerDetailPage = lazy(() => import('./pages/ContainerDetailPage').then(m => ({ default: m.ContainerDetailPage })));
+const SitesPage = lazy(() => import('./pages/SitesPage').then(m => ({ default: m.SitesPage })));
+const SiteFormPage = lazy(() => import('./pages/SiteFormPage').then(m => ({ default: m.SiteFormPage })));
+const SiteDetailPage = lazy(() => import('./pages/SiteDetailPage').then(m => ({ default: m.SiteDetailPage })));
 const ContainerPipelinePage = lazy(() => import('./pages/ContainerPipelinePage').then(m => ({ default: m.ContainerPipelinePage })));
 const ConnectAiToolPage = lazy(() => import('./pages/ConnectAiToolPage').then(m => ({ default: m.ConnectAiToolPage })));
 const SdkKeysPage = lazy(() => import('./pages/SdkKeysPage').then(m => ({ default: m.SdkKeysPage })));
@@ -156,6 +159,10 @@ export default function App() {
             <Route path="containers/:appId" element={<ContainerDetailPage />} />
             <Route path="containers/:appId/edit" element={<ContainerFormPage />} />
             <Route path="containers/:appId/pipeline" element={<FeatureGate feature="pipeline"><ContainerPipelinePage /></FeatureGate>} />
+            {/* Sites (EXC-353): each page explains itself when the server has Sites off */}
+            <Route path="sites" element={<SitesPage />} />
+            <Route path="sites/new" element={<SiteFormPage />} />
+            <Route path="sites/:siteId" element={<SiteDetailPage />} />
             {/* Edge Functions */}
             <Route path="edge-functions" element={<EdgeFunctionsPage />} />
             {/* Storage */}
