@@ -57,9 +57,11 @@ test.describe('MySQL projects', () => {
     await page.goto(`/project/${PROJECT_ID}`);
     await expect(page.getByTestId('service-database-mysql-endpoint')).toContainText(`${HOST}:3306`, { timeout: FIRST_RENDER });
     await expect(page.getByTestId('nav-settings')).toBeVisible();
-    await expect(page.getByTestId('nav-sql')).toHaveCount(0);
-    await expect(page.getByTestId('nav-database')).toHaveCount(0);
-    await page.goto(`/project/${PROJECT_ID}/sql`);
+    // ADR 0041 decision 9: the engine-aware pages are listed, the Postgres-only ones are not.
+    await expect(page.getByTestId('nav-sql')).toBeVisible();
+    await expect(page.getByTestId('nav-database')).toBeVisible();
+    await expect(page.getByTestId('nav-auth')).toHaveCount(0);
+    await page.goto(`/project/${PROJECT_ID}/auth/users`);
     await expect(page.getByTestId('postgres-required')).toBeVisible({ timeout: FIRST_RENDER });
   });
 
