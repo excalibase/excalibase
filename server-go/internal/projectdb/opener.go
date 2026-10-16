@@ -239,11 +239,11 @@ func NewOpener(
 	limits PoolLimits,
 ) *Opener {
 	return &Opener{
-		instances: instances,
-		vault:     vault,
-		overrides: overrides,
-		limits:    limits.withDefaults(),
-		now:       time.Now,
+		instances:  instances,
+		vault:      vault,
+		overrides:  overrides,
+		limits:     limits.withDefaults(),
+		now:        time.Now,
 		pools:      make(map[string]*pool),
 		connectors: make(map[*sql.DB]driver.Connector),
 	}
