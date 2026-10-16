@@ -127,7 +127,7 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 		}
 		return true
 	}
-	any := func(values ...string) bool {
+	anySet := func(values ...string) bool {
 		for _, v := range values {
 			if v != "" {
 				return true
@@ -179,7 +179,7 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 		},
 		{
 			Flag:    "R2_*",
-			Enabled: any(cfg.R2AccessKeyID, cfg.R2SecretAccessKey, cfg.R2Endpoint, cfg.R2Bucket),
+			Enabled: anySet(cfg.R2AccessKeyID, cfg.R2SecretAccessKey, cfg.R2Endpoint, cfg.R2Bucket),
 			Requires: []Dependency{
 				{Name: "complete object-storage settings (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT, R2_BUCKET)",
 					Wired: set(cfg.R2AccessKeyID, cfg.R2SecretAccessKey, cfg.R2Endpoint, cfg.R2Bucket)},
@@ -187,7 +187,7 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 		},
 		{
 			Flag:    "BACKUP_DEFAULT_*",
-			Enabled: any(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint),
+			Enabled: anySet(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint),
 			Requires: []Dependency{
 				{Name: "complete backup destination (access key, secret, endpoint, bucket)",
 					Wired: set(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint, cfg.BackupBucket)},
@@ -197,7 +197,7 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 			// Kubernetes projects only ever receive temporary credentials minted
 			// from the backup key; Docker keeps the key in this process.
 			Flag:    "BACKUP_DEFAULT_* in Kubernetes mode",
-			Enabled: cfg.ProvisionerMode != "docker" && any(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint),
+			Enabled: cfg.ProvisionerMode != "docker" && anySet(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint),
 			Requires: []Dependency{
 				{Name: "a temporary-credential provider (BACKUP_CREDENTIALS_PROVIDER=r2 or sts)",
 					Wired: cfg.BackupCredentialsProvider == "r2" || cfg.BackupCredentialsProvider == "sts"},

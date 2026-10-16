@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/sites"
-	"github.com/excalibase/provisioning-poc/internal/sites/sitestest"
+	"github.com/excalibase/provisioning-poc/internal/testutil/sitestest"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -242,4 +243,69 @@ type tinyLimits struct{}
 
 func (tinyLimits) DeployLimits(context.Context, string) (sites.Limits, error) {
 	return sites.Limits{MaxFiles: 2, MaxFileBytes: 1 << 10, MaxTotalBytes: 1 << 10}, nil
+}
+
+func TestSiteRoutesForAMissingSiteAreNotFound(t *testing.T) {
+	h := newSitesHarness(t)
+	for _, call := range []struct{ method, path, body string }{
+		{http.MethodPatch, "/missing", `{"spaFallback":true}`},
+		{http.MethodDelete, "/missing", ``},
+		{http.MethodGet, "/missing/deploys", ``},
+		{http.MethodGet, "/missing/deploys/d1", ``},
+		{http.MethodPost, "/missing/deploy", ``},
+	} {
+		if response := h.do(t, call.method, call.path, []byte(call.body)); response.Code != http.StatusNotFound {
+			t.Errorf("%s %s = %d %s", call.method, call.path, response.Code, response.Body)
+		}
+	}
+}
+
+func TestSiteRoutesRefuseBadIDs(t *testing.T) {
+	h := newSitesHarness(t)
+	for _, call := range []struct{ method, path string }{
+		{http.MethodPatch, "/bad%20id"}, {http.MethodDelete, "/bad%20id"}, {http.MethodPost, "/bad%20id/deploy"},
+		{http.MethodGet, "/bad%20id/deploys"}, {http.MethodGet, "/s1/deploys/bad%20id"}, {http.MethodGet, "/bad%20id/deploys/d1"},
+		{http.MethodPost, "/s1/deploys/bad%20id/rollback"}, {http.MethodPost, "/bad%20id/deploys/d1/rollback"},
+	} {
+		if response := h.do(t, call.method, call.path, []byte(`{}`)); response.Code != http.StatusBadRequest {
+			t.Errorf("%s %s = %d %s", call.method, call.path, response.Code, response.Body)
+		}
+	}
+	if response := h.do(t, http.MethodPatch, "/s1", []byte(`{`)); response.Code != http.StatusBadRequest {
+		t.Errorf("bad json patch = %d", response.Code)
+	}
+}
+
+func TestSiteGetDeployMarksTheLiveOne(t *testing.T) {
+	h := newSitesHarness(t)
+	site := h.createSite(t, "shop")
+	created := h.do(t, http.MethodPost, "/"+site.ID+"/deploy", sitestest.Dist(t, "x"))
+	var deploy sites.Deploy
+	decodeSiteBody(t, created, &deploy)
+	response := h.do(t, http.MethodGet, "/"+site.ID+"/deploys/"+deploy.ID, nil)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"live":true`) {
+		t.Fatalf("get deploy = %d %s", response.Code, response.Body)
+	}
+}
+
+func TestSiteStoreFailureIsAnInternalErrorWithoutDetail(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeSiteError(recorder, errors.New("pq: connection refused 10.0.0.1"))
+	if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), "10.0.0.1") {
+		t.Fatalf("answer = %d %s", recorder.Code, recorder.Body)
+	}
+	for err, status := range map[error]int{
+		sites.ErrSitesUnavailable:                        http.StatusServiceUnavailable,
+		sites.ErrSiteBusy:                                http.StatusConflict,
+		sites.ErrRollbackNeedsFiles:                      http.StatusConflict,
+		&sites.ArchiveError{Reason: "x", TooLarge: true}: http.StatusRequestEntityTooLarge,
+		&http.MaxBytesError{Limit: 1}:                    http.StatusRequestEntityTooLarge,
+		&sites.InputError{Reason: "bad"}:                 http.StatusBadRequest,
+	} {
+		recorder := httptest.NewRecorder()
+		writeSiteError(recorder, err)
+		if recorder.Code != status {
+			t.Errorf("%v = %d, want %d", err, recorder.Code, status)
+		}
+	}
 }

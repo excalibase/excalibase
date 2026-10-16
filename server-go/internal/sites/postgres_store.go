@@ -13,11 +13,6 @@ import (
 // siteLimitLockSpace keeps the per-project site count apart from other advisory locks.
 const siteLimitLockSpace = 353
 
-const siteColumns = `id, project_id, name, hostname, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at`
-
-const deployColumns = `id, site_id, project_id, status, manifest, file_count, total_bytes, spa_fallback,
-	COALESCE(label, ''), COALESCE(failure_reason, ''), created_by, created_at, finished_at`
-
 // PostgresStore keeps sites in the platform database.
 type PostgresStore struct {
 	db *sql.DB
@@ -67,7 +62,8 @@ func (s *PostgresStore) Create(ctx context.Context, site *Site, maxSites int) er
 }
 
 func (s *PostgresStore) Get(ctx context.Context, projectID, id string) (*Site, error) {
-	site, err := scanSite(s.db.QueryRowContext(ctx, `SELECT `+siteColumns+` FROM sites WHERE project_id = $1 AND id = $2`, projectID, id))
+	site, err := scanSite(s.db.QueryRowContext(ctx, `SELECT id, project_id, name, hostname, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at
+		FROM sites WHERE project_id = $1 AND id = $2`, projectID, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -78,7 +74,8 @@ func (s *PostgresStore) Get(ctx context.Context, projectID, id string) (*Site, e
 }
 
 func (s *PostgresStore) List(ctx context.Context, projectID string) ([]*Site, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+siteColumns+` FROM sites WHERE project_id = $1 ORDER BY name`, projectID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, project_id, name, hostname, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at
+		FROM sites WHERE project_id = $1 ORDER BY name`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list sites: %w", err)
 	}
@@ -96,7 +93,7 @@ func (s *PostgresStore) List(ctx context.Context, projectID string) ([]*Site, er
 
 func (s *PostgresStore) UpdateSettings(ctx context.Context, projectID, id string, spaFallback bool) (*Site, error) {
 	site, err := scanSite(s.db.QueryRowContext(ctx, `UPDATE sites SET spa_fallback = $3, updated_at = NOW()
-		WHERE project_id = $1 AND id = $2 RETURNING `+siteColumns, projectID, id, spaFallback))
+		WHERE project_id = $1 AND id = $2 RETURNING id, project_id, name, hostname, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at`, projectID, id, spaFallback))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSiteNotFound
 	}

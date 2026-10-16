@@ -103,23 +103,9 @@ func TestStartUploadSessionSendsTheManifest(t *testing.T) {
 }
 
 func TestUploadBucketSendsBase64PartsWithTheUploadToken(t *testing.T) {
-	var parts = map[string]string{}
-	var types = map[string]string{}
+	var parts []formPart
 	fake, client := newFake(t, func(w http.ResponseWriter, r *http.Request, body []byte) {
-		_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil {
-			t.Errorf("content type: %v", err)
-		}
-		reader := multipart.NewReader(strings.NewReader(string(body)), params["boundary"])
-		for {
-			part, err := reader.NextPart()
-			if err != nil {
-				break
-			}
-			content, _ := io.ReadAll(part)
-			parts[part.FormName()] = string(content)
-			types[part.FormName()] = part.Header.Get("Content-Type")
-		}
+		parts = readFormParts(t, r, body)
 		writeEnvelope(w, http.StatusCreated, map[string]any{"jwt": "completion-jwt"})
 	})
 	completion, err := client.UploadBucket(context.Background(), "upload-jwt", []Asset{
@@ -138,11 +124,14 @@ func TestUploadBucketSendsBase64PartsWithTheUploadToken(t *testing.T) {
 	if got.auth != "Bearer upload-jwt" {
 		t.Errorf("auth = %q, want the upload token, not the API token", got.auth)
 	}
-	if parts["aaa"] != base64.StdEncoding.EncodeToString([]byte("<p>hi</p>")) {
-		t.Errorf("part = %q", parts["aaa"])
+	if len(parts) != 1 || parts[0].name != "aaa" {
+		t.Fatalf("parts = %+v", parts)
 	}
-	if types["aaa"] != "text/html; charset=utf-8" {
-		t.Errorf("part type = %q", types["aaa"])
+	if parts[0].content != base64.StdEncoding.EncodeToString([]byte("<p>hi</p>")) {
+		t.Errorf("part = %q", parts[0].content)
+	}
+	if parts[0].contentType != "text/html; charset=utf-8" {
+		t.Errorf("part type = %q", parts[0].contentType)
 	}
 }
 
@@ -167,22 +156,9 @@ func TestUploadBucketReportsAFileThatCannotBeOpened(t *testing.T) {
 }
 
 func TestPutScriptPublishesAnAssetsOnlyWorker(t *testing.T) {
-	var metadata map[string]any
-	var partNames []string
+	var parts []formPart
 	fake, client := newFake(t, func(w http.ResponseWriter, r *http.Request, body []byte) {
-		_, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		reader := multipart.NewReader(strings.NewReader(string(body)), params["boundary"])
-		for {
-			part, err := reader.NextPart()
-			if err != nil {
-				break
-			}
-			partNames = append(partNames, part.FormName())
-			content, _ := io.ReadAll(part)
-			if part.FormName() == "metadata" {
-				_ = json.Unmarshal(content, &metadata)
-			}
-		}
+		parts = readFormParts(t, r, body)
 		writeEnvelope(w, http.StatusOK, map[string]any{"id": testScript})
 	})
 	err := client.PutScript(context.Background(), testScript, "completion-jwt", AssetConfig{HTMLHandling: HTMLAutoTrailingSlash, NotFoundHandling: NotFoundSinglePage})
@@ -196,8 +172,12 @@ func TestPutScriptPublishesAnAssetsOnlyWorker(t *testing.T) {
 	if got.auth != "Bearer "+testToken {
 		t.Errorf("auth = %q", got.auth)
 	}
-	if strings.Join(partNames, ",") != "metadata" {
-		t.Errorf("parts = %v, want only metadata", partNames)
+	if len(parts) != 1 || parts[0].name != "metadata" {
+		t.Fatalf("parts = %+v, want only metadata", parts)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(parts[0].content), &metadata); err != nil {
+		t.Fatalf("metadata: %v", err)
 	}
 	if _, hasModule := metadata["main_module"]; hasModule || metadata["compatibility_date"] == "" {
 		t.Errorf("metadata = %v", metadata)
@@ -277,4 +257,104 @@ func TestScriptNameIsEscapedIntoThePath(t *testing.T) {
 
 func openString(content string) func() (io.ReadCloser, error) {
 	return func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(content)), nil }
+}
+
+type formPart struct{ name, contentType, content string }
+
+// readFormParts decodes a multipart request body in order.
+func readFormParts(t *testing.T, r *http.Request, body []byte) []formPart {
+	t.Helper()
+	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil {
+		t.Errorf("content type: %v", err)
+		return nil
+	}
+	reader := multipart.NewReader(strings.NewReader(string(body)), params["boundary"])
+	var parts []formPart
+	for {
+		part, err := reader.NextPart()
+		if err != nil {
+			return parts
+		}
+		content, _ := io.ReadAll(part)
+		parts = append(parts, formPart{name: part.FormName(), contentType: part.Header.Get("Content-Type"), content: string(content)})
+	}
+}
+
+func TestNewDefaultsToTheCloudflareAPI(t *testing.T) {
+	client, err := New(Config{AccountID: testAccount, APIToken: testToken, Namespace: testNamespace})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if client.baseURL != DefaultBaseURL || client.http == nil {
+		t.Fatalf("client = %+v", client.baseURL)
+	}
+}
+
+func TestAnInvalidScriptNameNeverReachesCloudflare(t *testing.T) {
+	fake, client := newFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		writeEnvelope(w, http.StatusOK, nil)
+	})
+	ctx := context.Background()
+	if _, err := client.StartUploadSession(ctx, "Bad/Name", nil); err == nil {
+		t.Error("upload session accepted an invalid script name")
+	}
+	if err := client.PutScript(ctx, "Bad/Name", "jwt", AssetConfig{}); err == nil {
+		t.Error("publish accepted an invalid script name")
+	}
+	if len(fake.requests) != 0 {
+		t.Fatalf("requests = %d, want none", len(fake.requests))
+	}
+}
+
+func TestAnUploadSessionWithoutATokenIsAnError(t *testing.T) {
+	_, client := newFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		writeEnvelope(w, http.StatusOK, map[string]any{"jwt": "", "buckets": [][]string{}})
+	})
+	if _, err := client.StartUploadSession(context.Background(), testScript, map[string]ManifestEntry{}); err == nil {
+		t.Fatal("want a missing token reported")
+	}
+}
+
+func TestAnAnswerThatIsNotJSONIsAnError(t *testing.T) {
+	_, client := newFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		_, _ = w.Write([]byte("<html>edge page</html>"))
+	})
+	if _, err := client.StartUploadSession(context.Background(), testScript, map[string]ManifestEntry{}); err == nil {
+		t.Fatal("want an undecodable answer reported")
+	}
+}
+
+func TestPutScriptReportsARefusal(t *testing.T) {
+	_, client := newFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"success":false,"errors":[{"code":10021,"message":"bad assets jwt"}]}`))
+	})
+	err := client.PutScript(context.Background(), testScript, "jwt", AssetConfig{})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Codes[0] != 10021 {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTheLastUploadWithoutACompletionTokenIsAnError(t *testing.T) {
+	_, client := newFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		writeEnvelope(w, http.StatusCreated, map[string]any{"jwt": ""})
+	})
+	_, err := client.UploadBucket(context.Background(), "upload-jwt", []Asset{{Hash: "a", ContentType: "text/plain", Open: openString("x")}})
+	if err == nil {
+		t.Fatal("want a missing completion token reported")
+	}
+}
+
+func TestRedactedPathDropsTheQuery(t *testing.T) {
+	if got := redactedPath("https://api.cloudflare.com/client/v4/x?secret=1"); got != "/client/v4/x" {
+		t.Fatalf("got %q", got)
+	}
+	if got := redactedPath("://bad"); got != "(unparseable url)" {
+		t.Fatalf("got %q", got)
+	}
+	if err := unwrapURLError(errors.New("plain")); err.Error() != "plain" {
+		t.Fatalf("got %v", err)
+	}
 }

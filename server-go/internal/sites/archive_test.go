@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/sites"
-	"github.com/excalibase/provisioning-poc/internal/sites/sitestest"
+	"github.com/excalibase/provisioning-poc/internal/testutil/sitestest"
 )
 
 func readTestArchive(t *testing.T, raw []byte, limits sites.Limits) (*sites.Bundle, error) {

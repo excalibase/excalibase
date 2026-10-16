@@ -41,11 +41,11 @@ type Options struct {
 	// SpoolDir holds an upload while it is checked and sent; "" is the system temp dir.
 	SpoolDir string
 	// DeployLimits answers a project's limits; nil holds every project to DefaultLimits.
-	DeployLimits DeployLimits
+	DeployLimits DeployLimiter
 }
 
-// DeployLimits answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.
-type DeployLimits interface {
+// DeployLimiter answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.
+type DeployLimiter interface {
 	DeployLimits(ctx context.Context, projectID string) (Limits, error)
 }
 

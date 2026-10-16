@@ -7,10 +7,62 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
+	"net/url"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/testcontainers/testcontainers-go"
+	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
+	"github.com/excalibase/provisioning-poc/internal/storage/postgres"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
+
+// One migrated platform database serves every test in the package; each test uses its own ids.
+var (
+	sharedPlatformOnce sync.Once
+	sharedPlatform     *postgres.Store
+	sharedPlatformErr  error
+)
+
+func platformDB(t *testing.T) *postgres.Store {
+	t.Helper()
+	sharedPlatformOnce.Do(func() { sharedPlatform, sharedPlatformErr = startPlatformDB() })
+	if sharedPlatformErr != nil {
+		t.Fatalf("start platform database: %v", sharedPlatformErr)
+	}
+	return sharedPlatform
+}
+
+func startPlatformDB() (*postgres.Store, error) {
+	ctx := context.Background()
+	password := testutil.FixturePassword("sites-itest")
+	container, err := pgmod.Run(ctx, "postgres:16-alpine",
+		pgmod.WithDatabase("platform_test"),
+		pgmod.WithUsername("platform"),
+		pgmod.WithPassword(password),
+		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
+			WithOccurrence(2).WithStartupTimeout(60*time.Second)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	host, err := container.Host(ctx)
+	if err != nil {
+		return nil, err
+	}
+	port, err := container.MappedPort(ctx, "5432/tcp")
+	if err != nil {
+		return nil, err
+	}
+	dsn := url.URL{Scheme: "postgres", User: url.UserPassword("platform", password),
+		Host: fmt.Sprintf("%s:%s", host, port.Port()), Path: "platform_test", RawQuery: "sslmode=disable"}
+	return postgres.New(dsn.String())
+}
 
 // acceptingPublisher is a CDN that already holds every file.
 type acceptingPublisher struct{}
