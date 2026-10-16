@@ -37,6 +37,7 @@ jobs:
               - 'server-go/internal/shiptemplates/testdata/**'
             deno:
               - 'deno-server/**'
+              - 'server-go/internal/k8s/deno_fence.ts'
             ci:
               - '.github/workflows/**'
             singlehost:
