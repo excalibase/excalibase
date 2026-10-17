@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import router, { siteLabel } from "../src/index.js";
+import router, { hostKey, siteLabel } from "../src/index.js";
 
 const BASE = "excalibase.app";
 const SCRIPT = "site-0b6f2c9e-6a51-4c07-9a3c-7f1d2e3a4b5c";
@@ -71,7 +71,7 @@ describe("routing", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("<h1>shop</h1>");
-    expect(calls.lookups).toEqual([{ key: `shop.${BASE}`, options: { cacheTtl: 60 } }]);
+    expect(calls.lookups).toEqual([{ key: `shop.${BASE}`, options: { cacheTtl: 30 } }]);
     expect(calls.get.map((call) => call.script)).toEqual([SCRIPT]);
     expect(calls.fetch[0].url).toBe(`https://shop.${BASE}/dashboard/1?x=1`);
   });
@@ -90,7 +90,7 @@ describe("routing", () => {
     expect(calls.get[0].options).toBeUndefined();
   });
 
-  it.each([`a.b.${BASE}`, BASE, "shop.example.com", `www.shop.${BASE}`])(
+  it.each([`a.b.${BASE}`, BASE, `www.shop.${BASE}`])(
     "answers 404 for %s without looking anything up",
     async (host) => {
       const { env, calls } = fakeEnv();
@@ -251,4 +251,42 @@ describe("the default 404 page", () => {
       expect(body).not.toContain("javascript:");
     },
   );
+});
+
+describe("custom hostnames (EXC-614)", () => {
+  it("looks a customer's own hostname up as it is", () => {
+    expect(hostKey("www.example.com", BASE)).toBe("www.example.com");
+    expect(hostKey(`shop.${BASE}`, BASE)).toBe(`shop.${BASE}`);
+  });
+
+  it.each([BASE, `a.b.${BASE}`, `ab.${BASE}`, "localhost", "10.0.0.1"])("has no key for %s", (hostname) => {
+    expect(hostKey(hostname, BASE)).toBeNull();
+  });
+
+  it("serves an active custom hostname from its site's Worker", async () => {
+    const { env, calls } = fakeEnv({ hosts: { "www.example.com": SCRIPT } });
+    const response = await router.fetch(new Request("https://www.example.com/"), env);
+    expect(response.status).toBe(200);
+    expect(calls.lookups[0].key).toBe("www.example.com");
+    expect(calls.get[0].script).toBe(SCRIPT);
+  });
+
+  it("answers 404 for a custom hostname the platform has not routed", async () => {
+    const { env, calls } = fakeEnv({ hosts: {} });
+    const response = await router.fetch(new Request("https://pending.example.com/"), env);
+    expect(response.status).toBe(404);
+    expect(calls.get).toHaveLength(0);
+  });
+
+  it("keeps a cookie on the custom hostname it was set for", async () => {
+    const site = async () => {
+      const headers = new Headers();
+      headers.append("set-cookie", "a=1; Domain=www.example.com");
+      headers.append("set-cookie", "b=2; Domain=example.com");
+      return new Response("ok", { headers });
+    };
+    const { env } = fakeEnv({ hosts: { "www.example.com": SCRIPT }, site });
+    const response = await router.fetch(new Request("https://www.example.com/"), env);
+    expect(response.headers.getSetCookie()).toEqual(["a=1; Domain=www.example.com"]);
+  });
 });

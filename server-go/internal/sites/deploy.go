@@ -43,7 +43,8 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 		return nil, err
 	}
 	defer admitted()
-	if err := s.takeDeploySlot(ctx, request.ProjectID, limits.MaxDeploysPerHour); err != nil {
+	giveBackSlot, err := s.takeDeploySlot(ctx, request.ProjectID, limits.MaxDeploysPerHour)
+	if err != nil {
 		return nil, err
 	}
 	bundle, err := ReadArchive(request.Body, limits, s.spoolDir())
@@ -56,6 +57,13 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 		return nil, err
 	}
 	defer lease.release()
+	released, err := s.holdServingProject(ctx, site.ProjectID)
+	if err != nil {
+		// Refused for the project's lifecycle, not the upload: the attempt does not count.
+		giveBackSlot()
+		return nil, err
+	}
+	defer released()
 	if err := s.ensureOrigin(ctx, site); err != nil {
 		return nil, err
 	}
@@ -86,11 +94,22 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 	if target.Status != DeploySucceeded {
 		return nil, ErrDeployNotServable
 	}
+	// A rollback publishes like an upload, so it shares the in-flight cap.
+	admitted, err := s.admission.admit(projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer admitted()
 	lease, err := s.claim(ctx, site)
 	if err != nil {
 		return nil, err
 	}
 	defer lease.release()
+	released, err := s.holdServingProject(ctx, site.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer released()
 	// File bodies are not kept here, so files Cloudflare asks for again cannot be sent.
 	if err := s.publishInTime(ctx, site, target.Manifest, nil, target.SPAFallback); err != nil {
 		return nil, err
@@ -187,7 +206,7 @@ func (s *Service) publish(ctx context.Context, site *Site, manifest map[string]c
 	if err := s.publisher.PutKV(ctx, site.Hostname, script); err != nil {
 		return publishFailure(site, stepRoute, err)
 	}
-	return nil
+	return s.routeAfterPublish(ctx, site)
 }
 
 func (s *Service) uploadBuckets(ctx context.Context, site *Site, session cfworkers.UploadSession,

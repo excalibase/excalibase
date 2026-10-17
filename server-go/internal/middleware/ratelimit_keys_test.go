@@ -76,3 +76,17 @@ func TestProjectIDFromURL(t *testing.T) {
 		t.Errorf("projectIDFromURL without tenant: got %q", got)
 	}
 }
+
+// PerProject shares one bucket among every member of a project.
+func TestPerProject(t *testing.T) {
+	alice := reqWithTenant("proj-1")
+	alice = alice.WithContext(auth.SetUser(alice.Context(), &domain.User{ID: "alice"}))
+	bob := reqWithTenant("proj-1")
+	bob = bob.WithContext(auth.SetUser(bob.Context(), &domain.User{ID: "bob"}))
+	if PerProject(alice) != "p:proj-1" || PerProject(bob) != "p:proj-1" {
+		t.Errorf("PerProject: alice %q bob %q", PerProject(alice), PerProject(bob))
+	}
+	if got := PerProject(reqWithUser("solo")); got != "" {
+		t.Errorf("PerProject without a project: got %q, want empty", got)
+	}
+}

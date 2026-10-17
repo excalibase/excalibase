@@ -134,6 +134,15 @@ func (s *PostgresStore) ListDeploys(ctx context.Context, projectID, siteID strin
 const deployRateLockSpace = 621
 
 // TakeDeploySlot counts and records under a per-project lock, so replicas cannot both take the last slot.
+func (s *PostgresStore) ReturnDeploySlot(ctx context.Context, projectID string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM site_deploy_attempts WHERE ctid = (
+		SELECT ctid FROM site_deploy_attempts WHERE project_id = $1 AND attempted_at = $2 LIMIT 1)`, projectID, at)
+	if err != nil {
+		return fmt.Errorf("return deploy slot: %w", err)
+	}
+	return nil
+}
+
 func (s *PostgresStore) TakeDeploySlot(ctx context.Context, projectID string, now time.Time, window time.Duration, maxSlots int) (time.Duration, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

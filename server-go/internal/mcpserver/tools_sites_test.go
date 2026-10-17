@@ -21,10 +21,45 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const storedDomain = `{"id":"h1","hostname":"www.example.com","status":"PENDING","records":[{"type":"CNAME","name":"www.example.com","value":"cname.example.app","purpose":"routing"}]}`
+
 const storedSite = `{"id":"s1","name":"shop","hostname":"shop.example.app","url":"https://shop.example.app","spaFallback":true}`
 
 // gzipMagic is the archive the route cases upload: the route answers from a canned reply.
 var gzipMagic = []byte{0x1f, 0x8b, 0x08, 0x00}
+
+func siteDomainRouteCases() []routeCase {
+	return []routeCase{
+		{
+			name: "add_site_domain", tool: "add_site_domain",
+			args:   map[string]any{"project_id": testProjectA, "site_id": "s1", "hostname": "www.example.com", "validation": "txt"},
+			setup:  func(f *fakeRoutes) { f.on(http.MethodPost, projectsA+"/sites/s1/domains", 201, storedDomain) },
+			expect: []string{"POST " + projectsA + "/sites/s1/domains"},
+			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
+				if calls[0].Body != `{"hostname":"www.example.com","validation":"txt"}` || out["domain"] == nil || out["next"] == nil {
+					t.Errorf("body %s out %v", calls[0].Body, out)
+				}
+			},
+		},
+		{
+			name: "list_site_domains", tool: "list_site_domains", args: map[string]any{"project_id": testProjectA, "site_id": "s1"},
+			setup:  func(f *fakeRoutes) { f.on(http.MethodGet, projectsA+"/sites/s1/domains", 200, "["+storedDomain+"]") },
+			expect: []string{"GET " + projectsA + "/sites/s1/domains"},
+		},
+		{
+			name: "check_site_domain", tool: "check_site_domain", args: map[string]any{"project_id": testProjectA, "site_id": "s1", "domain_id": "h1"},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodPost, projectsA+"/sites/s1/domains/h1/refresh", 200, storedDomain)
+			},
+			expect: []string{"POST " + projectsA + "/sites/s1/domains/h1/refresh"},
+		},
+		{
+			name: "remove_site_domain", tool: "remove_site_domain", args: map[string]any{"project_id": testProjectA, "site_id": "s1", "domain_id": "h1"},
+			setup:  func(f *fakeRoutes) { f.on(http.MethodDelete, projectsA+"/sites/s1/domains/h1", 204, ``) },
+			expect: []string{"DELETE " + projectsA + "/sites/s1/domains/h1"},
+		},
+	}
+}
 
 func sitesRouteCases() []routeCase {
 	archive := base64.StdEncoding.EncodeToString(gzipMagic)
@@ -112,7 +147,8 @@ func newSitesStack(t *testing.T, role string, available bool) sitesStack {
 	if available {
 		publisher = sitestest.NewPublisher()
 		service, err = sites.NewService(sitestest.NewMemoryStore(), publisher, sitestest.NewOrigins(),
-			sites.Options{BaseDomain: "example.app", SpoolDir: t.TempDir()})
+			sites.Options{BaseDomain: "example.app", SpoolDir: t.TempDir(), Hostnames: sitestest.NewMemoryHostnames(),
+				CustomDomains: &sites.CustomDomainOptions{Zone: sitestest.NewZone(), Target: "cname.example.app", Resolver: sitestest.NewResolver()}})
 	} else {
 		service, err = sites.NewService(sitestest.NewMemoryStore(), nil, sitestest.NewOrigins(), sites.Options{})
 	}
@@ -184,10 +220,13 @@ func TestSiteToolsRefuseAViewerEveryChangeButLetThemRead(t *testing.T) {
 		t.Fatalf("a viewer reads the sites: %v", out)
 	}
 	for name, args := range map[string]map[string]any{
-		"create_site":   {"name": "shop"},
-		"deploy_site":   {"site_id": "s1", "archive_base64": encodedDist(t)},
-		"rollback_site": {"site_id": "s1", "deploy_id": "d1"},
-		"delete_site":   {"site_id": "s1"},
+		"create_site":        {"name": "shop"},
+		"deploy_site":        {"site_id": "s1", "archive_base64": encodedDist(t)},
+		"rollback_site":      {"site_id": "s1", "deploy_id": "d1"},
+		"delete_site":        {"site_id": "s1"},
+		"add_site_domain":    {"site_id": "s1", "hostname": "www.example.com"},
+		"check_site_domain":  {"site_id": "s1", "domain_id": "h1"},
+		"remove_site_domain": {"site_id": "s1", "domain_id": "h1"},
 	} {
 		res := callTool(t, cs, name, siteCallArgs(args))
 		if !res.IsError || !strings.Contains(resultText(res), "403") {
@@ -196,6 +235,34 @@ func TestSiteToolsRefuseAViewerEveryChangeButLetThemRead(t *testing.T) {
 	}
 	if stack.publisher.Sessions != 0 {
 		t.Fatalf("a viewer's deploy reached the CDN")
+	}
+}
+
+func TestSiteDomainToolsAddCheckAndRemoveThroughTheRealRoute(t *testing.T) {
+	stack := newSitesStack(t, domain.OrgRoleDeveloper, true)
+	cs := session(t, stack.router, &recordingAudit{}, writeCaller())
+	created := structured(t, callTool(t, cs, "create_site", siteCallArgs(map[string]any{"name": "shop"})))
+	siteID := created["site"].(map[string]any)["id"]
+	added := structured(t, callTool(t, cs, "add_site_domain", siteCallArgs(map[string]any{"site_id": siteID, "hostname": "www.example.com"})))
+	hostname, _ := added["domain"].(map[string]any)
+	records, _ := hostname["records"].([]any)
+	next, _ := added["next"].(string)
+	if hostname["status"] != "PENDING" || len(records) != 2 || !strings.Contains(next, "cname.example.app") ||
+		!strings.Contains(next, "TXT _excalibase-challenge.www.example.com") {
+		t.Fatalf("added = %v", added)
+	}
+	listed := structured(t, callTool(t, cs, "list_site_domains", siteCallArgs(map[string]any{"site_id": siteID})))
+	if domains, _ := listed["domains"].([]any); len(domains) != 1 {
+		t.Fatalf("listed = %v", listed)
+	}
+	structured(t, callTool(t, cs, "check_site_domain", siteCallArgs(map[string]any{"site_id": siteID, "domain_id": hostname["id"]})))
+	structured(t, callTool(t, cs, "remove_site_domain", siteCallArgs(map[string]any{"site_id": siteID, "domain_id": hostname["id"]})))
+	if listed := structured(t, callTool(t, cs, "list_site_domains", siteCallArgs(map[string]any{"site_id": siteID}))); len(listed["domains"].([]any)) != 0 {
+		t.Fatalf("after remove = %v", listed)
+	}
+	res := callTool(t, cs, "add_site_domain", siteCallArgs(map[string]any{"site_id": siteID, "hostname": "shop.excalibase.io"}))
+	if !res.IsError || !strings.Contains(resultText(res), "400") {
+		t.Fatalf("a platform domain = %s", resultText(res))
 	}
 }
 
@@ -347,5 +414,17 @@ func TestSiteCISnippetUsesTheSitesDeployToken(t *testing.T) {
 	res := callTool(t, cs, "deploy_site", siteCallArgs(map[string]any{"site_id": "s1", "archive_base64": oversized}))
 	if !strings.Contains(resultText(res), "deploy token") {
 		t.Errorf("a build too large for MCP must point to the site's deploy token: %s", resultText(res))
+	}
+}
+
+// An install with Sites but no zone for custom domains says so, not that Sites is missing.
+func TestSiteDomainToolsSayWhenCustomDomainsAreNotSetUp(t *testing.T) {
+	routes := newFakeRoutes()
+	routes.on(http.MethodPost, projectsA+"/sites/s1/domains", 503,
+		`{"error":"custom domains are not available on this install; the site's own hostname still serves it"}`)
+	cs := session(t, routes, &recordingAudit{}, writeCaller())
+	res := callTool(t, cs, "add_site_domain", siteCallArgs(map[string]any{"site_id": "s1", "hostname": "www.example.com"}))
+	if text := resultText(res); !res.IsError || !strings.Contains(text, "custom domains are not set up") || strings.Contains(text, "create_app") {
+		t.Fatalf("add_site_domain = %s", text)
 	}
 }

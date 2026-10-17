@@ -24,6 +24,8 @@ type MemoryStore struct {
 	// Attempts are each project's deploy attempts, for the hourly rate.
 	Attempts map[string][]time.Time
 	Now      func() time.Time
+	// OnClaim runs as a lease is taken, before it is granted, for tests that change things meanwhile.
+	OnClaim func()
 }
 
 // Lease is who holds a site and until when.
@@ -143,6 +145,9 @@ func (m *MemoryStore) Delete(_ context.Context, projectID, id, lease string) err
 }
 
 func (m *MemoryStore) ClaimDeploy(_ context.Context, projectID, id, lease string, until time.Time) error {
+	if m.OnClaim != nil {
+		m.OnClaim()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	site, ok := m.Sites[id]
@@ -235,6 +240,19 @@ func (m *MemoryStore) ListDeploys(_ context.Context, projectID, siteID string, l
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+func (m *MemoryStore) ReturnDeploySlot(_ context.Context, projectID string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempts := m.Attempts[projectID]
+	for i, attempt := range attempts {
+		if attempt.Equal(at) {
+			m.Attempts[projectID] = append(append([]time.Time{}, attempts[:i]...), attempts[i+1:]...)
+			return nil
+		}
+	}
+	return nil
 }
 
 func (m *MemoryStore) TakeDeploySlot(_ context.Context, projectID string, now time.Time, window time.Duration, maxSlots int) (time.Duration, error) {

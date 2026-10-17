@@ -175,3 +175,24 @@ func TestPostgresTakeDeploySlotHoldsTheProjectsRate(t *testing.T) {
 		t.Fatalf("%d of 10 concurrent attempts got a slot, want 3", taken)
 	}
 }
+
+// A slot given back frees exactly that attempt, even when two attempts share the instant.
+func TestPostgresReturnDeploySlotFreesOneAttempt(t *testing.T) {
+	_, store := postgresService(t)
+	ctx := context.Background()
+	at := time.Now().UTC()
+	for range 2 {
+		if wait, err := store.TakeDeploySlot(ctx, "proj-return", at, time.Hour, 2); err != nil || wait != 0 {
+			t.Fatalf("take: wait %v err %v", wait, err)
+		}
+	}
+	if err := store.ReturnDeploySlot(ctx, "proj-return", at); err != nil {
+		t.Fatalf("ReturnDeploySlot: %v", err)
+	}
+	if wait, err := store.TakeDeploySlot(ctx, "proj-return", at, time.Hour, 2); err != nil || wait != 0 {
+		t.Fatalf("take after the return: wait %v err %v", wait, err)
+	}
+	if wait, err := store.TakeDeploySlot(ctx, "proj-return", at, time.Hour, 2); err != nil || wait == 0 {
+		t.Fatalf("a third attempt: wait %v err %v, want the rate", wait, err)
+	}
+}

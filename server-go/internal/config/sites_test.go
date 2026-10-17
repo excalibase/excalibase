@@ -89,3 +89,57 @@ func TestValidateSites_RefusesABaseDomainOverlappingTheAppDomain(t *testing.T) {
 		t.Errorf("unrelated domains refused: %v", err)
 	}
 }
+
+// Custom domains (EXC-614) need the zone id on top of Sites; the CNAME target defaults under the base domain.
+func TestSites_CustomDomainsNeedTheZone(t *testing.T) {
+	setSitesEnv(t)
+	cfg := Load()
+	if cfg.SitesCustomDomainsAvailable() {
+		t.Fatal("custom domains offered without a zone id")
+	}
+	t.Setenv("SITES_ZONE_ID", "0123456789abcdef0123456789abcdef")
+	cfg = Load()
+	if !cfg.SitesCustomDomainsAvailable() || cfg.Sites.CustomDomainTarget() != "cname.excalibase.app" {
+		t.Fatalf("custom domains: available=%v target=%q", cfg.SitesCustomDomainsAvailable(), cfg.Sites.CustomDomainTarget())
+	}
+	t.Setenv("SITES_CUSTOM_DOMAIN_TARGET", "Customers.Excalibase.App")
+	cfg = Load()
+	if cfg.Sites.CustomDomainTarget() != "customers.excalibase.app" {
+		t.Fatalf("target=%q", cfg.Sites.CustomDomainTarget())
+	}
+}
+
+func TestValidateSites_RefusesABadZoneOrTarget(t *testing.T) {
+	base := SitesConfig{AccountID: "a", APIToken: "t", DispatchNamespace: "n", BaseDomain: "excalibase.app", HostsKVNamespaceID: "k"}
+	for name, change := range map[string]func(*SitesConfig){
+		"SITES_ZONE_ID": func(s *SitesConfig) { s.ZoneID = "excalibase.app" },
+		"SITES_CUSTOM_DOMAIN_TARGET": func(s *SitesConfig) {
+			s.ZoneID, s.CustomTarget = "0123456789abcdef0123456789abcdef", "cname.example.com"
+		},
+	} {
+		settings := base
+		change(&settings)
+		err := (AppConfig{SitesEnabled: true, Sites: settings}).Validate()
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
+
+// The zone's custom hostnames stay under the 100 Cloudflare includes unless an operator says otherwise.
+func TestSitesConfigReadsTheZoneCap(t *testing.T) {
+	setSitesEnv(t)
+	if cfg := Load(); cfg.Sites.MaxZoneHostnames != DefaultMaxZoneHostnames || DefaultMaxZoneHostnames != 90 {
+		t.Fatalf("cap = %d, want the default %d", cfg.Sites.MaxZoneHostnames, DefaultMaxZoneHostnames)
+	}
+	t.Setenv("SITES_MAX_ZONE_HOSTNAMES", "50")
+	if cfg := Load(); cfg.Sites.MaxZoneHostnames != 50 {
+		t.Fatalf("cap = %d", cfg.Sites.MaxZoneHostnames)
+	}
+	for _, bad := range []string{"0", "-3", "many"} {
+		t.Setenv("SITES_MAX_ZONE_HOSTNAMES", bad)
+		if err := (AppConfig{SitesEnabled: true, Sites: Load().Sites}).Validate(); err == nil || !strings.Contains(err.Error(), "SITES_MAX_ZONE_HOSTNAMES") {
+			t.Errorf("%q: err = %v", bad, err)
+		}
+	}
+}

@@ -20,4 +20,9 @@ var siteRows = []Row{
 	{Methods: post, Pattern: "/api/projects/{projectId}/sites/{siteId}/tokens", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "mints a deploy token scoped to this site; kept only as its SHA-256"},
 	{Methods: del, Pattern: "/api/projects/{projectId}/sites/{siteId}/tokens/{tokenId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "revocation is immediate: every request looks the token up"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/sites/{siteId}/deploys/{deployId}/rollback", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "publishes an earlier deploy's files again and makes it live"},
+	// Custom domains (EXC-614): a hostname is unique across projects; only an active one is routed.
+	{Methods: get, Pattern: "/api/projects/{projectId}/sites/{siteId}/domains", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "the DNS records a user adds are not secrets"},
+	{Methods: post, Pattern: "/api/projects/{projectId}/sites/{siteId}/domains", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "claims the hostname for every project and creates it on the Cloudflare zone; refuses addresses and platform domains"},
+	{Methods: post, Pattern: "/api/projects/{projectId}/sites/{siteId}/domains/{domainId}/refresh", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "asks Cloudflare to validate again and routes the hostname once it is active"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/sites/{siteId}/domains/{domainId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "unroutes, then deletes the hostname and its certificate"},
 }

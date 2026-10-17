@@ -85,7 +85,7 @@ var reservedNames = map[string]bool{
 	"autodiscover": true, "autoconfig": true, "static": true, "assets": true, "cdn": true, "sso": true,
 	"oauth": true, "auth": true, "id": true, "account": true, "accounts": true, "security": true, "help": true,
 	"blog": true, "graphql": true, "rest": true, "realtime": true, "storage": true, "functions": true,
-	"edge": true, "gateway": true, "internal": true, "staging": true, "dev": true, "beta": true, "app": true,
+	"edge": true, "gateway": true, "cname": true, "internal": true, "staging": true, "dev": true, "beta": true, "app": true,
 	"apps": true,
 }
 

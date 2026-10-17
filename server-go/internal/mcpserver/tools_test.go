@@ -796,6 +796,9 @@ func TestToolDescriptionsSteerTheClient(t *testing.T) {
 		// EXC-619: a MySQL migration runs here, and its DDL is not rolled back.
 		"execute_sql":               {"MySQL", "max_execution_time", "not transactional"},
 		"generate_typescript_types": {"MySQL", "tinyint(1)"},
+		// EXC-614: the user adds DNS records; the tool names them and how to check.
+		"add_site_domain":   {"CNAME", "check_site_domain", "www.", "TXT", "nothing is set up"},
+		"check_site_domain": {"active"},
 	}
 	for _, tool := range listed.Tools {
 		for _, want := range wants[tool.Name] {
@@ -827,7 +830,7 @@ func TestReadOnlyConnectionOffersNoWriteTool(t *testing.T) {
 		"apply_migration", "set_permission", "deploy_function", "set_function_secret", "deploy_app", "create_publishable_key",
 		"add_cors_origin", "remove_cors_origin", "set_realtime", "delete_function", "set_function_outbound_hosts",
 		"track_db_function", "set_db_function_permission", "update_app", "delete_app",
-		"create_site", "deploy_site", "rollback_site", "delete_site",
+		"create_site", "deploy_site", "rollback_site", "delete_site", "add_site_domain", "check_site_domain", "remove_site_domain",
 	} {
 		if offered[name] {
 			t.Errorf("%s must not be offered on a read-only connection", name)

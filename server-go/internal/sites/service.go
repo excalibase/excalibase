@@ -48,6 +48,12 @@ type Options struct {
 	DeployLimits DeployLimiter
 	// MaxDeploysInFlight caps uploads at once across the process; 0 is DefaultDeploysInFlight.
 	MaxDeploysInFlight int
+	// Hostnames keeps custom hostnames; deleting a site or project removes them through it.
+	Hostnames HostnameStore
+	// CustomDomains is the Cloudflare for SaaS zone; nil means custom domains are not offered.
+	CustomDomains *CustomDomainOptions
+	// Projects is the project lifecycle every route write follows; nil serves every project and holds nothing.
+	Projects ProjectGate
 }
 
 // DeployLimiter answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.
@@ -138,6 +144,9 @@ func NewService(store Store, publisher Publisher, origins CorsOrigins, options O
 	if publisher != nil && strings.TrimSpace(options.BaseDomain) == "" {
 		return nil, errors.New("sites need a user-content base domain")
 	}
+	if custom := options.CustomDomains; custom != nil && (custom.Zone == nil || custom.Target == "" || custom.Resolver == nil || options.Hostnames == nil) {
+		return nil, errors.New("custom domains need the zone, the CNAME target, a DNS resolver and a hostname store")
+	}
 	return &Service{store: store, publisher: publisher, origins: origins, options: options,
 		admission: newAdmission(options.MaxDeploysInFlight), now: time.Now}, nil
 }
@@ -151,6 +160,9 @@ func (s *Service) Create(ctx context.Context, projectID, name string, spaFallbac
 	}
 	if err := ValidateName(name); err != nil {
 		return nil, &InputError{Reason: err.Error()}
+	}
+	if custom := s.options.CustomDomains; custom != nil && name+"."+s.options.BaseDomain == custom.Target {
+		return nil, &InputError{Reason: fmt.Sprintf("%q is reserved; choose another site name", name)}
 	}
 	limits, err := s.limitsFor(ctx, projectID)
 	if err != nil {
@@ -233,6 +245,10 @@ func (s *Service) Delete(ctx context.Context, projectID, id string) error {
 }
 
 func (s *Service) remove(ctx context.Context, site *Site, lease *siteLease) error {
+	// Custom hostnames go first: each leaves the router, then the zone.
+	if err := s.removeSiteHostnames(ctx, site); err != nil {
+		return err
+	}
 	cdnCtx, cancel := context.WithTimeout(ctx, publishTimeout)
 	defer cancel()
 	// The router stops sending traffic first, then the Worker goes.

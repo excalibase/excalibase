@@ -75,6 +75,7 @@ type tierConfigDTO struct {
 	MaxSiteFiles          *int   `json:"maxSiteFiles"`
 	MaxSiteFileBytes      *int64 `json:"maxSiteFileBytes"`
 	MaxSiteDeploysPerHour *int   `json:"maxSiteDeploysPerHour"`
+	MaxSiteCustomDomains  *int   `json:"maxSiteCustomDomains"`
 }
 
 func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
@@ -98,6 +99,7 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 		MaxSiteFiles:          &tc.Sites.MaxFiles,
 		MaxSiteFileBytes:      &tc.Sites.MaxFileBytes,
 		MaxSiteDeploysPerHour: &tc.Sites.MaxDeploysPerHour,
+		MaxSiteCustomDomains:  &tc.Sites.MaxCustomDomains,
 	}
 }
 
@@ -234,6 +236,9 @@ func (dto tierConfigDTO) siteLimits(current config.SiteTierLimits) config.SiteTi
 	if dto.MaxSiteDeploysPerHour != nil {
 		out.MaxDeploysPerHour = *dto.MaxSiteDeploysPerHour
 	}
+	if dto.MaxSiteCustomDomains != nil {
+		out.MaxCustomDomains = *dto.MaxSiteCustomDomains
+	}
 	return out
 }
 
@@ -288,9 +293,14 @@ const (
 	maxSiteFilesCeiling      = 100_000
 	maxSiteFileBytesCeiling  = int64(25) << 20
 	maxSiteDeploysPerHourCap = 1000
+	// Cloudflare includes 100 custom hostnames per zone; every one after is billed.
+	maxSiteCustomDomainsCap = 100
 )
 
 func validateSiteLimits(limits config.SiteTierLimits) error {
+	if limits.MaxCustomDomains < 0 || limits.MaxCustomDomains > maxSiteCustomDomainsCap {
+		return fmt.Errorf("maxSiteCustomDomains must be between 0 and %d (0 offers none)", maxSiteCustomDomainsCap)
+	}
 	if limits.MaxSites < 0 || limits.MaxSites > maxSitesCeiling {
 		return fmt.Errorf("maxSites must be between 0 and %d (0 offers no sites)", maxSitesCeiling)
 	}

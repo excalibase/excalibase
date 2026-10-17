@@ -66,3 +66,36 @@ func TestUploadsInFlightAreBoundedPerProjectAndOverall(t *testing.T) {
 		t.Fatalf("after the first finished: %v", err)
 	}
 }
+
+// A rollback publishes too, so it counts against the same in-flight cap as an upload.
+func TestRollbacksCountAgainstTheInFlightCap(t *testing.T) {
+	store, publisher, origins := sitestest.NewMemoryStore(), sitestest.NewPublisher(), sitestest.NewOrigins()
+	service, err := sites.NewService(store, publisher, origins, sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(), MaxDeploysInFlight: 1})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	ctx := context.Background()
+	other, _ := service.Create(ctx, "proj-other", "other-shop", nil, testActor)
+	first, err := service.Deploy(ctx, sites.DeployRequest{ProjectID: "proj-other", SiteID: other.ID, Body: bytes.NewReader(viteDist(t))})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	shop, _ := service.Create(ctx, testProject, "shop", nil, testActor)
+	held := newHeldBody(viteDist(t))
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Deploy(ctx, sites.DeployRequest{ProjectID: testProject, SiteID: shop.ID, Body: held})
+		done <- err
+	}()
+	<-held.started
+	if _, err := service.Rollback(ctx, "proj-other", other.ID, first.ID); !errors.Is(err, sites.ErrTooManyDeploys) {
+		t.Errorf("rollback while the cap is full: err = %v, want the overall cap", err)
+	}
+	close(held.release)
+	if err := <-done; err != nil {
+		t.Fatalf("held deploy: %v", err)
+	}
+	if _, err := service.Rollback(ctx, "proj-other", other.ID, first.ID); err != nil {
+		t.Fatalf("rollback after the upload finished: %v", err)
+	}
+}
