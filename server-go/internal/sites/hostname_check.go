@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 )
@@ -76,6 +77,12 @@ func (s *Service) holdProject(ctx context.Context, projectID string) (func(), er
 // looks for its TXT proof; a proven one whose proof is gone leaves the zone.
 func (s *Service) refreshHeld(ctx context.Context, site *Site, hostname *CustomHostname, route routing) (*CustomHostname, error) {
 	ctx = context.WithoutCancel(ctx)
+	if hostname.VerifiedAt == nil && hostname.WithdrawnAt != nil {
+		if again := hostname.WithdrawnAt.Add(WithdrawnHostnameCooldown); s.now().Before(again) {
+			return s.recordCheck(ctx, hostname, fmt.Sprintf("this domain was taken off at %s; it is proven again from %s",
+				hostname.WithdrawnAt.UTC().Format(time.RFC3339), again.UTC().Format(time.RFC3339)))
+		}
+	}
 	proof := s.lookupProof(ctx, hostname)
 	if hostname.VerifiedAt == nil {
 		if proof != proofSeen {
@@ -134,18 +141,21 @@ func (e *createRefused) Error() string { return e.err.Error() }
 func (e *createRefused) Unwrap() error { return e.err }
 
 // recordZoneFailure stores a failed check so the sweep moves on and callers
-// stay throttled. A refused create releases the name: nothing is on the zone.
+// stay throttled. A refused create releases the proof the way a withdraw does:
+// off the router, off the CORS list, nothing left on the zone.
 func (s *Service) recordZoneFailure(ctx context.Context, site *Site, hostname *CustomHostname, zoneErr error) error {
+	var refused *createRefused
+	var apiErr *cfworkers.APIError
+	if errors.As(zoneErr, &refused) && errors.As(zoneErr, &apiErr) {
+		if _, err := s.withdraw(ctx, site, hostname, "the CDN refused this domain: "+apiErr.Message); err != nil {
+			log.Printf("site %s: take off %s, which the CDN refused: %v", site.ID, hostname.Hostname, err)
+		}
+		return publishFailure(site, stepCheckHostname, zoneErr)
+	}
 	now := s.now().UTC()
 	next := *hostname
 	next.CheckedAt, next.UpdatedAt = now, now
 	next.Errors = []string{"the CDN could not be asked about this domain; it is checked again in a few minutes"}
-	var refused *createRefused
-	var apiErr *cfworkers.APIError
-	if errors.As(zoneErr, &refused) && errors.As(zoneErr, &apiErr) {
-		next.VerifiedAt = nil
-		next.Errors = []string{"the CDN refused this domain: " + apiErr.Message}
-	}
 	if err := s.options.Hostnames.UpdateHostname(ctx, &next); err != nil {
 		log.Printf("site %s: record the failed check of %s: %v", site.ID, hostname.Hostname, err)
 	}
@@ -169,7 +179,13 @@ func (s *Service) readZone(ctx context.Context, hostname *CustomHostname) (cfwor
 	if err != nil || hostnameStatus(answer) == HostnameActive {
 		return answer, err
 	}
-	return zone.RevalidateCustomHostname(cdnCtx, hostname.CloudflareID, hostname.Validation)
+	// The GET decides: a failed nudge must not hide a moved or blocked hostname.
+	revalidated, err := zone.RevalidateCustomHostname(cdnCtx, hostname.CloudflareID, hostname.Validation)
+	if err != nil {
+		log.Printf("site %s: ask Cloudflare to validate %s again: %v", hostname.SiteID, hostname.Hostname, err)
+		return answer, nil
+	}
+	return revalidated, nil
 }
 
 // createOnZone creates the proven hostname, adopting the zone's own copy when
@@ -196,10 +212,12 @@ func (s *Service) createOnZone(ctx context.Context, hostname *CustomHostname) (c
 	return *existing, nil
 }
 
-// definiteRefusal is Cloudflare answering that it did not create the hostname.
+// definiteRefusal is Cloudflare answering that it will not create the
+// hostname. A rate limit, like an outage, is transient: the next check tries again.
 func definiteRefusal(err error) bool {
 	var apiErr *cfworkers.APIError
-	return errors.As(err, &apiErr) && apiErr.Status >= 400 && apiErr.Status < 500 && !cfworkers.IsDuplicateCustomHostname(err)
+	return errors.As(err, &apiErr) && apiErr.Status >= 400 && apiErr.Status < 500 &&
+		apiErr.Status != http.StatusTooManyRequests && !cfworkers.IsDuplicateCustomHostname(err)
 }
 
 // applyAnswer records Cloudflare's answer and routes an active hostname of a
@@ -243,7 +261,7 @@ func (s *Service) withdraw(ctx context.Context, site *Site, hostname *CustomHost
 	}
 	now := s.now().UTC()
 	next := *hostname
-	next.VerifiedAt, next.CloudflareID, next.Status = nil, "", HostnamePending
+	next.VerifiedAt, next.CloudflareID, next.Status, next.WithdrawnAt = nil, "", HostnamePending, &now
 	next.HostnameStatus, next.CertificateStatus = "", ""
 	if next.InactiveSince == nil {
 		next.InactiveSince = &now
@@ -257,9 +275,9 @@ func (s *Service) withdraw(ctx context.Context, site *Site, hostname *CustomHost
 	return &next, nil
 }
 
-// routeHostname writes an active hostname into the router. A deletion
-// unroutes before it records its status, so a route written as it is
-// scheduled is checked again and undone.
+// routeHostname writes an active hostname into the router. Every caller holds
+// the project's lifecycle lease, which a deletion holds from its unroute to
+// its status write, so the serving check cannot fall between the two.
 func (s *Service) routeHostname(ctx context.Context, site *Site, hostname *CustomHostname, previous string, route routing) error {
 	if hostname.Status != HostnameActive {
 		return nil
@@ -281,14 +299,7 @@ func (s *Service) routeHostname(ctx context.Context, site *Site, hostname *Custo
 	if err := s.publisher.PutKV(cdnCtx, hostname.Hostname, ScriptName(site)); err != nil {
 		return publishFailure(site, stepRoute, err)
 	}
-	still, err := route.serving(ctx, site.ProjectID)
-	if err == nil && still {
-		return nil
-	}
-	if undoErr := s.publisher.DeleteKV(cdnCtx, hostname.Hostname); undoErr != nil {
-		return publishFailure(site, stepUnroute, errors.Join(err, undoErr))
-	}
-	return err
+	return nil
 }
 
 func (s *Service) projectServing(ctx context.Context, projectID string) (bool, error) {
@@ -323,4 +334,23 @@ func (s *Service) refreshSiteHostnames(ctx context.Context, site *Site, route ro
 		}
 	}
 	return nil
+}
+
+// routeAfterPublish checks and routes the site's custom hostnames under the
+// project's lifecycle lease: a deletion holds it from its unroute to its
+// status write, so a deploy cannot route a domain back between the two.
+// While another operation holds it the domains stay as they are; the site
+// itself is published and the sweep checks them again.
+func (s *Service) routeAfterPublish(ctx context.Context, site *Site) error {
+	if s.options.Hostnames == nil || s.options.CustomDomains == nil {
+		return nil
+	}
+	release, err := s.holdProject(ctx, site.ProjectID)
+	if err != nil {
+		log.Printf("site %s: custom domains not routed by this deploy: %v", site.ID, err)
+		return nil
+	}
+	defer release()
+	// The site's Worker exists now, whatever the stored site says.
+	return s.refreshSiteHostnames(ctx, site, routing{serving: s.projectServing, live: true})
 }

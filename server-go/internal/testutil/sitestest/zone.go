@@ -22,6 +22,8 @@ type Zone struct {
 	FailCreate error
 	FailDelete error
 	FailGet    error
+	// FailRevalidate answers the re-validate PATCH with this error.
+	FailRevalidate error
 	// FailCreateAfterStore creates the hostname, then answers this error, as a lost answer would.
 	FailCreateAfterStore error
 }
@@ -139,7 +141,11 @@ func (z *Zone) RevalidateCustomHostname(ctx context.Context, id, _ string) (cfwo
 	z.mu.Lock()
 	z.revalidns++
 	z.reads--
+	fail := z.FailRevalidate
 	z.mu.Unlock()
+	if fail != nil {
+		return cfworkers.CustomHostname{}, fail
+	}
 	return z.GetCustomHostname(ctx, id)
 }
 

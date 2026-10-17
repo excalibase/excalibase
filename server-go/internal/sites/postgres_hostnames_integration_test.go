@@ -114,6 +114,7 @@ func TestPostgresHostnameRoundTripsItsStateAndIsScopedBySite(t *testing.T) {
 	updated.CloudflareID, updated.Status = "0d89c70d-ad9f-4843-b99f-6cc0252067e9", sites.HostnameActive
 	updated.HostnameStatus, updated.CertificateStatus = "active", "active"
 	updated.Errors, updated.CheckedAt, updated.VerifiedAt, updated.InactiveSince = []string{"none"}, activated, &activated, nil
+	updated.WithdrawnAt = &activated
 	if err := store.UpdateHostname(ctx, &updated); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -122,6 +123,7 @@ func TestPostgresHostnameRoundTripsItsStateAndIsScopedBySite(t *testing.T) {
 		t.Fatalf("get = %v err = %v", got, err)
 	}
 	if got.CloudflareID != updated.CloudflareID || got.Status != sites.HostnameActive || got.VerifiedAt == nil || got.InactiveSince != nil ||
+		got.WithdrawnAt == nil || !got.WithdrawnAt.Equal(activated) ||
 		!got.CheckedAt.Equal(activated) || len(got.Records) != 1 || got.Records[0].Value != "cname.example.app" || got.Errors[0] != "none" {
 		t.Fatalf("got = %+v", got)
 	}

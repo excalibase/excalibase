@@ -29,6 +29,8 @@ type SiteHandler struct {
 	standing tokenStanding
 	// domainWrites rate-limits adding and removing custom domains (EXC-614); nil limits nothing.
 	domainWrites func(http.Handler) http.Handler
+	// domainChecks rate-limits checking custom domains; nil limits nothing.
+	domainChecks func(http.Handler) http.Handler
 }
 
 // SetAuditLog records every deploy token made or revoked.

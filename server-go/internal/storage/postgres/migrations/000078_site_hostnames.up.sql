@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS site_hostnames (
     verified_at        TIMESTAMPTZ,
     -- When it was added or stopped serving; NULL while active. Dropped after a week.
     inactive_since     TIMESTAMPTZ,
+    -- When it last left the zone; it is not proven again for a cooldown after.
+    withdrawn_at       TIMESTAMPTZ,
     CONSTRAINT site_hostnames_project_hostname_key UNIQUE (project_id, hostname)
 );
 

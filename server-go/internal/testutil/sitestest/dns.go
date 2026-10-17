@@ -73,13 +73,11 @@ type Projects struct {
 	mu      sync.Mutex
 	stopped map[string]bool
 	busy    map[string]bool
-	// servingLeft counts the answers a project still serves before it is stopped.
-	servingLeft map[string]int
-	holds       int
+	holds   int
 }
 
 func NewProjects() *Projects {
-	return &Projects{stopped: map[string]bool{}, busy: map[string]bool{}, servingLeft: map[string]int{}}
+	return &Projects{stopped: map[string]bool{}, busy: map[string]bool{}}
 }
 
 // Stop schedules the project for deletion.
@@ -87,13 +85,6 @@ func (p *Projects) Stop(projectID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stopped[projectID] = true
-}
-
-// StopAfter answers that the project serves count more times, then that it is scheduled for deletion.
-func (p *Projects) StopAfter(projectID string, count int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.servingLeft[projectID] = count
 }
 
 // Busy marks the project's lifecycle lease as held by another operation.
@@ -123,11 +114,5 @@ func (p *Projects) HoldProject(_ context.Context, projectID string) (func(), boo
 func (p *Projects) ProjectServing(_ context.Context, projectID string) (bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if left, counting := p.servingLeft[projectID]; counting {
-		if left == 0 {
-			return false, nil
-		}
-		p.servingLeft[projectID] = left - 1
-	}
 	return !p.stopped[projectID], nil
 }

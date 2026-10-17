@@ -17,6 +17,9 @@ const (
 	// ActiveHostnameRecheckInterval spaces the checks of a serving hostname:
 	// its proof, Cloudflare's state and its certificate.
 	ActiveHostnameRecheckInterval = time.Hour
+	// WithdrawnHostnameCooldown spaces a withdrawn hostname's next proof, so an
+	// answer flipping every few seconds cannot make Cloudflare re-issue its certificate each time.
+	WithdrawnHostnameCooldown = 15 * time.Minute
 	// DefaultMaxZoneHostnames keeps the zone under the 100 custom hostnames
 	// Cloudflare includes; every one after is billed.
 	DefaultMaxZoneHostnames = 90

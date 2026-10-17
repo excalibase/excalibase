@@ -78,6 +78,8 @@ type CustomHostname struct {
 	VerifiedAt        *time.Time `json:"verifiedAt,omitempty"`
 	// InactiveSince is when it was added or stopped serving; nil while active.
 	InactiveSince *time.Time `json:"-"`
+	// WithdrawnAt is when it last left the zone; it is not proven again within WithdrawnHostnameCooldown.
+	WithdrawnAt *time.Time `json:"-"`
 }
 
 // DNSInstruction is one record the user adds at their DNS provider.

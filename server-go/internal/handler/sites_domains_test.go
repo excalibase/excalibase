@@ -16,6 +16,7 @@ type domainsHarness struct {
 	*sitesHarness
 	zone     *sitestest.Zone
 	resolver *sitestest.Resolver
+	handler  *SiteHandler
 }
 
 func newDomainsHarness(t *testing.T, developer func(http.Handler) http.Handler) *domainsHarness {
@@ -36,9 +37,16 @@ func newDomainsHarnessWith(t *testing.T, developer, limiter func(http.Handler) h
 	if limiter != nil {
 		handler.SetDomainWriteLimiter(limiter)
 	}
+	h := &domainsHarness{sitesHarness: &sitesHarness{publisher: publisher, origins: origins}, zone: zone, resolver: resolver, handler: handler}
+	h.mount(developer)
+	return h
+}
+
+// mount routes the handler as it is configured now.
+func (h *domainsHarness) mount(developer func(http.Handler) http.Handler) {
 	router := chi.NewRouter()
-	router.Route("/api/projects/{projectId}/sites", func(r chi.Router) { handler.Routes(r, developer) })
-	return &domainsHarness{sitesHarness: &sitesHarness{router: router, publisher: publisher, origins: origins}, zone: zone, resolver: resolver}
+	router.Route("/api/projects/{projectId}/sites", func(r chi.Router) { h.handler.Routes(r, developer) })
+	h.router = router
 }
 
 // addProven adds the domain over the API, publishes its TXT proof and checks it.
@@ -162,23 +170,27 @@ func TestAFullZoneIsAConflictThatSaysSo(t *testing.T) {
 	}
 }
 
-// Adding and removing are rate limited; reading and checking are not.
-func TestSiteDomainWritesGoThroughTheLimiter(t *testing.T) {
+// Adding and removing share one budget, checking has its own (it is what calls Cloudflare); reading has none.
+func TestSiteDomainCallsGoThroughTheirLimiters(t *testing.T) {
 	limited := []string{}
-	limiter := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			limited = append(limited, r.Method)
-			w.WriteHeader(http.StatusTooManyRequests)
-		})
+	limiter := func(name string) func(http.Handler) http.Handler {
+		return func(http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				limited = append(limited, name+":"+r.Method)
+				w.WriteHeader(http.StatusTooManyRequests)
+			})
+		}
 	}
-	h := newDomainsHarnessWith(t, passThrough, limiter, 0)
+	h := newDomainsHarnessWith(t, passThrough, limiter("writes"), 0)
+	h.handler.SetDomainCheckLimiter(limiter("checks"))
+	h.mount(passThrough)
 	for _, call := range []struct{ method, path string }{
 		{http.MethodPost, "/s1/domains"}, {http.MethodDelete, "/s1/domains/d1"},
 		{http.MethodGet, "/s1/domains"}, {http.MethodPost, "/s1/domains/d1/refresh"},
 	} {
 		h.do(t, call.method, call.path, []byte(`{}`))
 	}
-	if strings.Join(limited, ",") != "POST,DELETE" {
-		t.Fatalf("limited = %v, want the add and the remove only", limited)
+	if strings.Join(limited, ",") != "writes:POST,writes:DELETE,checks:POST" {
+		t.Fatalf("limited = %v", limited)
 	}
 }

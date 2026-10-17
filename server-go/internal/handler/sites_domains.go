@@ -22,14 +22,23 @@ func (h *SiteHandler) SetDomainWriteLimiter(limiter func(http.Handler) http.Hand
 	h.domainWrites = limiter
 }
 
-func (h *SiteHandler) domainRoutes(r chi.Router, developer func(http.Handler) http.Handler) {
-	writes := h.domainWrites
-	if writes == nil {
-		writes = func(next http.Handler) http.Handler { return next }
+// SetDomainCheckLimiter bounds checks: since a check is what calls Cloudflare, it has its own budget.
+func (h *SiteHandler) SetDomainCheckLimiter(limiter func(http.Handler) http.Handler) {
+	h.domainChecks = limiter
+}
+
+func orPassThrough(limiter func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	if limiter == nil {
+		return func(next http.Handler) http.Handler { return next }
 	}
+	return limiter
+}
+
+func (h *SiteHandler) domainRoutes(r chi.Router, developer func(http.Handler) http.Handler) {
+	writes, checks := orPassThrough(h.domainWrites), orPassThrough(h.domainChecks)
 	r.Get("/domains", h.available(h.listDomains))
 	r.With(developer, writes).Post("/domains", h.available(h.addDomain))
-	r.With(developer).Post("/domains/{domainId}/refresh", h.available(h.refreshDomain))
+	r.With(developer, checks).Post("/domains/{domainId}/refresh", h.available(h.refreshDomain))
 	r.With(developer, writes).Delete("/domains/{domainId}", h.available(h.removeDomain))
 }
 

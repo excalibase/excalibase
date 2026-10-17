@@ -26,16 +26,16 @@ func isUniqueViolation(err error) bool {
 var _ HostnameStore = (*PostgresStore)(nil)
 
 const hostnameColumns = `id, site_id, project_id, hostname, validation, status, COALESCE(cloudflare_id, ''), hostname_status,
-	certificate_status, records, errors, created_by, created_at, updated_at, checked_at, verification_token, verified_at, inactive_since`
+	certificate_status, records, errors, created_by, created_at, updated_at, checked_at, verification_token, verified_at, inactive_since, withdrawn_at`
 
 func scanHostname(row rowScanner) (*CustomHostname, error) {
 	hostname := &CustomHostname{}
 	var records, failures []byte
-	var verifiedAt, inactiveSince sql.NullTime
+	var verifiedAt, inactiveSince, withdrawnAt sql.NullTime
 	err := row.Scan(&hostname.ID, &hostname.SiteID, &hostname.ProjectID, &hostname.Hostname, &hostname.Validation, &hostname.Status,
 		&hostname.CloudflareID, &hostname.HostnameStatus, &hostname.CertificateStatus, &records, &failures,
 		&hostname.CreatedBy, &hostname.CreatedAt, &hostname.UpdatedAt, &hostname.CheckedAt, &hostname.VerificationToken,
-		&verifiedAt, &inactiveSince)
+		&verifiedAt, &inactiveSince, &withdrawnAt)
 	if err != nil {
 		return nil, err
 	}
@@ -47,6 +47,7 @@ func scanHostname(row rowScanner) (*CustomHostname, error) {
 	}
 	hostname.VerifiedAt = timeOrNil(verifiedAt)
 	hostname.InactiveSince = timeOrNil(inactiveSince)
+	hostname.WithdrawnAt = timeOrNil(withdrawnAt)
 	return hostname, nil
 }
 
@@ -222,10 +223,10 @@ func (s *PostgresStore) UpdateHostname(ctx context.Context, hostname *CustomHost
 	}
 	err = s.execHostname(ctx, "update custom domain", `UPDATE site_hostnames SET cloudflare_id = NULLIF($4, ''), status = $5,
 		hostname_status = $6, certificate_status = $7, records = $8, errors = $9, updated_at = $10, checked_at = $11,
-		verified_at = $12, inactive_since = $13
+		verified_at = $12, inactive_since = $13, withdrawn_at = $14
 		WHERE project_id = $1 AND site_id = $2 AND id = $3`,
 		hostname.ProjectID, hostname.SiteID, hostname.ID, hostname.CloudflareID, hostname.Status, hostname.HostnameStatus,
-		hostname.CertificateStatus, records, failures, hostname.UpdatedAt, hostname.CheckedAt, hostname.VerifiedAt, hostname.InactiveSince)
+		hostname.CertificateStatus, records, failures, hostname.UpdatedAt, hostname.CheckedAt, hostname.VerifiedAt, hostname.InactiveSince, hostname.WithdrawnAt)
 	if isUniqueViolation(err) {
 		return ErrHostnameTaken
 	}

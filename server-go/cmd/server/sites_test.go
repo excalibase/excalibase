@@ -124,3 +124,29 @@ func TestSiteDomainWritesAreLimitedPerProject(t *testing.T) {
 		t.Fatalf("another project's write = %d", code)
 	}
 }
+
+// Checking a domain is what calls Cloudflare, so it has its own per-project budget.
+func TestSiteDomainChecksAreLimitedPerProject(t *testing.T) {
+	limiter := newSiteDomainCheckLimiter()
+	router := chi.NewRouter()
+	router.Route("/api/projects/{projectId}", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.With(limiter).Post("/refresh", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	})
+	post := func(project string) int {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/projects/"+project+"/refresh", nil))
+		return recorder.Code
+	}
+	for i := 0; i < siteDomainCheckBudget; i++ {
+		if code := post("p1"); code != http.StatusOK {
+			t.Fatalf("check %d = %d", i, code)
+		}
+	}
+	if code := post("p1"); code != http.StatusTooManyRequests {
+		t.Fatalf("check past the budget = %d, want 429", code)
+	}
+	if code := post("p2"); code != http.StatusOK {
+		t.Fatalf("another project's check = %d", code)
+	}
+}

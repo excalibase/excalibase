@@ -61,6 +61,7 @@ func newSiteHandler(service *sites.Service, sqlStore storage.PlatformStore, inst
 	// The same checks the deploy route runs, so Studio and enforcement agree.
 	h.SetTokenStanding(custommw.DeployTokenStanding{Users: sqlStore, Instances: instances, Orgs: sqlStore})
 	h.SetDomainWriteLimiter(newSiteDomainWriteLimiter())
+	h.SetDomainCheckLimiter(newSiteDomainCheckLimiter())
 	return h
 }
 
@@ -70,6 +71,15 @@ const siteDomainWriteBudget = 6
 
 func newSiteDomainWriteLimiter() func(http.Handler) http.Handler {
 	return custommw.RateLimit(custommw.PerProject, siteDomainWriteBudget, time.Hour)
+}
+
+// siteDomainCheckBudget is how many custom domain checks one project may ask
+// for an hour: each is a DNS lookup and Cloudflare calls on the platform's one
+// token. The sweeper checks waiting domains on its own.
+const siteDomainCheckBudget = 30
+
+func newSiteDomainCheckLimiter() func(http.Handler) http.Handler {
+	return custommw.RateLimit(custommw.PerProject, siteDomainCheckBudget, time.Hour)
 }
 
 // customDomainOptions is the Cloudflare for SaaS zone (EXC-614); nil leaves custom domains off.

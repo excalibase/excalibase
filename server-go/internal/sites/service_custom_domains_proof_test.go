@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 )
 
@@ -61,10 +62,58 @@ func TestAnActiveDomainCloudflareCallsMovedIsWithdrawnAndProvenAgain(t *testing.
 	h.zone.SetState("www.example.com", "moved", "active")
 	h.refresh(t, site, active.ID)
 	assertWithdrawn(t, h, site, active.ID)
-	// The owner's record is still there: the next check proves it again and creates it anew.
+	// The owner's record is still there, but a withdrawn domain waits out a cooldown first:
+	// an answer that flips every few seconds cannot make Cloudflare re-issue a certificate each time.
+	waiting := h.refresh(t, site, active.ID)
+	if waiting.VerifiedAt != nil || len(h.zone.Created()) != 1 {
+		t.Fatalf("proven again within the cooldown: %+v created = %v", waiting, h.zone.Created())
+	}
+	*h.clock = h.clock.Add(sites.WithdrawnHostnameCooldown)
 	again := h.refresh(t, site, active.ID)
 	if again.VerifiedAt == nil || !h.zone.Holds("www.example.com") || len(h.zone.Created()) != 2 {
 		t.Fatalf("again = %+v created = %v", again, h.zone.Created())
+	}
+}
+
+// The GET decides: a moved domain is withdrawn even when the re-validate PATCH fails.
+func TestAMovedDomainIsWithdrawnEvenWhenTheRevalidateFails(t *testing.T) {
+	h := newDomainHarness(t)
+	site, active := activeDomain(t, h)
+	h.zone.SetState("www.example.com", "moved", "active")
+	h.zone.FailRevalidate = errors.New("cloudflare down")
+	h.refresh(t, site, active.ID)
+	assertWithdrawn(t, h, site, active.ID)
+}
+
+// A re-create Cloudflare refuses outright releases the proof, and so leaves the router and CORS as a withdraw does.
+func TestARefusedRecreateTakesTheDomainOffLikeAWithdraw(t *testing.T) {
+	h := newDomainHarness(t)
+	site, active := activeDomain(t, h)
+	h.zone.Forget("www.example.com")
+	h.zone.FailCreate = &cfworkers.APIError{Status: 400, Codes: []int{1411}, Message: "hostname not allowed"}
+	if _, err := h.tryRefresh(site, active.ID); err == nil {
+		t.Fatal("want the refusal")
+	}
+	assertWithdrawn(t, h, site, active.ID)
+	if stored := h.stored(t, site, active.ID); !strings.Contains(strings.Join(stored.Errors, " "), "hostname not allowed") {
+		t.Fatalf("errors = %v", stored.Errors)
+	}
+}
+
+// A rate limit or a Cloudflare outage on a re-create is transient: the proof, the route and the origin stay.
+func TestATransientRecreateFailureKeepsTheDomainServing(t *testing.T) {
+	for _, status := range []int{429, 503} {
+		h := newDomainHarness(t)
+		site, active := activeDomain(t, h)
+		h.zone.Forget("www.example.com")
+		h.zone.FailCreate = &cfworkers.APIError{Status: status, Message: "try later"}
+		if _, err := h.tryRefresh(site, active.ID); err == nil {
+			t.Fatalf("%d: want the failure", status)
+		}
+		stored := h.stored(t, site, active.ID)
+		if stored.VerifiedAt == nil || stored.Status != sites.HostnameActive || !h.routed("www.example.com") {
+			t.Fatalf("%d: stored = %+v hosts = %v", status, stored, h.publisher.Hosts)
+		}
 	}
 }
 
@@ -174,17 +223,24 @@ func TestARefreshTakesTheProjectsLifecycleLease(t *testing.T) {
 	}
 }
 
-// F4: a project scheduled while its domain was being routed is unrouted again.
-func TestARouteWrittenAsTheProjectIsScheduledIsUndone(t *testing.T) {
+// F4, in the deletion's real order: holding the lifecycle lease, it unroutes the
+// project's sites, then writes PENDING_DELETION. A deploy between the two must
+// not route the custom domain back, or it serves through the grace period.
+func TestADeployDuringADeletionsUnrouteLeavesCustomDomainsOff(t *testing.T) {
 	h := newDomainHarness(t)
-	site := h.liveSite(t, "shop")
-	added := h.add(t, site, "www.example.com")
-	h.zone.SetState("www.example.com", "active", "active")
-	h.publisher.Calls = nil
-	h.projects.StopAfter(testProject, 1)
-	h.refresh(t, site, added.ID)
-	if h.routed("www.example.com") || strings.Join(h.publisher.Calls, ",") != "put-host,delete-host" {
-		t.Fatalf("calls = %v hosts = %v", h.publisher.Calls, h.publisher.Hosts)
+	site, _ := activeDomain(t, h)
+	h.projects.Busy(testProject, true)
+	if err := h.service.UnrouteProjectSites(context.Background(), testProject); err != nil {
+		t.Fatalf("Unroute: %v", err)
+	}
+	*h.clock = h.clock.Add(time.Minute)
+	if _, err := h.deploy(t, site, viteDist(t)); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	h.projects.Stop(testProject)
+	h.projects.Busy(testProject, false)
+	if h.routed("www.example.com") {
+		t.Fatalf("hosts = %v, want the custom domain left off for the grace period", h.publisher.Hosts)
 	}
 }
 
