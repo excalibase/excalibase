@@ -13,6 +13,7 @@ var featureEnv = map[features.Feature]string{
 	features.Pipeline:   "FEATURE_PIPELINE",
 	features.AppStorage: "FEATURE_APPSTORAGE",
 	features.MySQL:      "FEATURE_MYSQL",
+	features.MySQLPITR:  "FEATURE_MYSQLPITR",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.

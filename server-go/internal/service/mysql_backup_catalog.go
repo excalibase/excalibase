@@ -46,6 +46,10 @@ type mysqlBackup struct {
 	Keys   []string
 	// Size is the bytes the run's directory holds.
 	Size int64
+	// Shipped are the binlogs the platform shipped after the run, by file
+	// name, and ShipMark the key of how far they reach (EXC-587).
+	Shipped  map[string]StoredObject
+	ShipMark string
 }
 
 // readMySQLBackups groups the keys under prefix into runs, oldest first.
@@ -63,18 +67,18 @@ func readMySQLBackupObjects(objects []StoredObject, prefix string) []mysqlBackup
 	runs := map[string]*mysqlBackup{}
 	for _, object := range objects {
 		key := object.Key
-		directory, file, ok := strings.Cut(strings.TrimPrefix(key, prefix), "/")
+		rest := strings.TrimPrefix(key, prefix)
+		if shipped, ok := strings.CutPrefix(rest, mysqlShippedDir+"/"); ok {
+			addShippedObject(runs, shipped, object)
+			continue
+		}
+		directory, file, ok := strings.Cut(rest, "/")
 		if !ok || strings.Contains(file, "/") {
 			continue
 		}
-		when, err := time.Parse(k8s.MOCOBackupTimeFormat, directory)
-		if err != nil {
+		run := mysqlRunOf(runs, directory)
+		if run == nil {
 			continue
-		}
-		run, seen := runs[directory]
-		if !seen {
-			run = &mysqlBackup{ID: directory, At: when}
-			runs[directory] = run
 		}
 		run.Keys = append(run.Keys, key)
 		run.Size += object.Size
@@ -89,6 +93,46 @@ func readMySQLBackupObjects(objects []StoredObject, prefix string) []mysqlBackup
 	return backups
 }
 
+// mysqlRunOf is the run a directory names, nil when it names none.
+func mysqlRunOf(runs map[string]*mysqlBackup, directory string) *mysqlBackup {
+	when, err := time.Parse(k8s.MOCOBackupTimeFormat, directory)
+	if err != nil {
+		return nil
+	}
+	run, seen := runs[directory]
+	if !seen {
+		run = &mysqlBackup{ID: directory, At: when}
+		runs[directory] = run
+	}
+	return run
+}
+
+// addShippedObject files "<run>/<file>" under its run: a shipped binlog or
+// the run's ship mark. Its keys go with the run when retention removes it.
+func addShippedObject(runs map[string]*mysqlBackup, shipped string, object StoredObject) {
+	directory, file, ok := strings.Cut(shipped, "/")
+	if !ok || strings.Contains(file, "/") {
+		return
+	}
+	run := mysqlRunOf(runs, directory)
+	if run == nil {
+		return
+	}
+	run.Keys = append(run.Keys, object.Key)
+	if file == mysqlShipMarkFile {
+		run.ShipMark = object.Key
+		return
+	}
+	name, gzipped := strings.CutSuffix(file, ".gz")
+	if _, err := binlogIndex(name); err != nil || !gzipped {
+		return
+	}
+	if run.Shipped == nil {
+		run.Shipped = map[string]StoredObject{}
+	}
+	run.Shipped[name] = object
+}
+
 // completedMySQLBackups are the runs whose dump is in the bucket.
 func completedMySQLBackups(backups []mysqlBackup) []mysqlBackup {
 	completed := make([]mysqlBackup, 0, len(backups))
@@ -100,22 +144,29 @@ func completedMySQLBackups(backups []mysqlBackup) []mysqlBackup {
 	return completed
 }
 
-func mysqlRestoreWindow(backups []mysqlBackup) (RestoreWindow, bool) {
+// mysqlRestoreWindow reaches from the first run to the newest run or, past
+// it, to the last ship of that run's binlogs (EXC-587).
+func mysqlRestoreWindow(backups []mysqlBackup, marks map[string]mysqlShipMark) (RestoreWindow, bool) {
 	completed := completedMySQLBackups(backups)
 	if len(completed) == 0 {
 		return RestoreWindow{}, false
 	}
-	return RestoreWindow{Earliest: completed[0].At, Latest: completed[len(completed)-1].At}, true
+	newest := completed[len(completed)-1]
+	window := RestoreWindow{Earliest: completed[0].At, Latest: newest.At}
+	if mark, ok := marks[newest.ID]; ok && mark.Through.After(window.Latest) {
+		window.Latest = mark.Through
+	}
+	return window, true
 }
 
 // resolveMySQLRestorePoint is the time a restore asks for: a backup's own
 // time, a time inside the window, or the newest backup when nothing is named.
-func resolveMySQLRestorePoint(backups []mysqlBackup, req domain.RestoreRequest) (time.Time, error) {
+func resolveMySQLRestorePoint(backups []mysqlBackup, marks map[string]mysqlShipMark, req domain.RestoreRequest) (time.Time, error) {
 	if req.TargetXID != "" || req.TargetLSN != "" || req.TargetName != "" {
 		return time.Time{}, &RestoreTargetError{"a MySQL project restores to a time only; transaction ids, LSNs and restore point names are Postgres targets"}
 	}
 	completed := completedMySQLBackups(backups)
-	window, ok := mysqlRestoreWindow(completed)
+	window, ok := mysqlRestoreWindow(completed, marks)
 	if !ok {
 		return time.Time{}, &RestoreTargetError{"this project has no completed backup to restore from yet"}
 	}
@@ -128,14 +179,15 @@ func resolveMySQLRestorePoint(backups []mysqlBackup, req domain.RestoreRequest) 
 		}
 		return time.Time{}, &RestoreTargetError{fmt.Sprintf("backup %s is not one of this project's completed backups", req.BackupID)}
 	case req.TargetTime != nil:
-		return pointInWindow(completed, window, req.TargetTime.Time)
+		return pointInWindow(completed, marks, window, req.TargetTime.Time)
 	}
 	return window.Latest, nil
 }
 
-// pointInWindow accepts a time MOCO can reach: a run's own time, or a time
-// after a run whose binlogs reach to the next one. MOCO reads it to the second.
-func pointInWindow(completed []mysqlBackup, window RestoreWindow, wanted time.Time) (time.Time, error) {
+// pointInWindow accepts a time MOCO can reach: a run's own time, a time
+// after a run whose binlogs reach to the next one, or a time the binlogs
+// shipped after the run reach. MOCO reads it to the second.
+func pointInWindow(completed []mysqlBackup, marks map[string]mysqlShipMark, window RestoreWindow, wanted time.Time) (time.Time, error) {
 	point := wanted.UTC().Truncate(time.Second)
 	if point.Before(window.Earliest) || point.After(window.Latest) {
 		return time.Time{}, &RestoreTargetError{fmt.Sprintf("%s is outside the %s", point.Format(time.RFC3339), window)}
@@ -148,6 +200,9 @@ func pointInWindow(completed []mysqlBackup, window RestoreWindow, wanted time.Ti
 		base = backup
 	}
 	if base.At.Equal(point) || base.Binlog {
+		return point, nil
+	}
+	if mark, ok := marks[base.ID]; ok && !mark.Through.Before(point) {
 		return point, nil
 	}
 	return time.Time{}, &RestoreTargetError{fmt.Sprintf(

@@ -13,16 +13,22 @@ import (
 // addressed as the platform addresses it.
 func registerMySQLBackups(backupSvc *service.BackupService, mysql *provisioner.MySQLProvisioner,
 	k8sClient k8s.KubeClient, store storage.InstanceStore, backupStorage service.BackupStorageSource,
-	records storage.BackupRecordStore) {
+	records storage.BackupRecordStore) *service.MySQLBackupAdapter {
 	if mysql == nil {
-		return
+		return nil
 	}
-	backupSvc.RegisterEngineAdapter(domain.ModeK8s, domain.MySQL, service.NewMySQLBackupAdapter(service.MySQLBackupAdapterConfig{
+	adapter := service.NewMySQLBackupAdapter(service.MySQLBackupAdapterConfig{
 		Kube:      k8sClient,
 		MySQL:     mysql,
 		Storage:   backupStorage,
 		OpenStore: service.AWSObjectDeleterFactory(backupUsePathStyle()),
 		Instances: store,
 		Records:   records,
-	}))
+	})
+	// Shipping binlogs and replaying them stream through pod exec (EXC-587).
+	if streamer, ok := k8sClient.(service.PodStreamer); ok {
+		adapter.SetPodStreamer(streamer)
+	}
+	backupSvc.RegisterEngineAdapter(domain.ModeK8s, domain.MySQL, adapter)
+	return adapter
 }

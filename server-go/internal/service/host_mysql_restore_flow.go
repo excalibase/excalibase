@@ -91,15 +91,18 @@ const (
 	hostTargetCover  = "cover"
 	hostTargetPoint  = "point"
 	hostTargetReplay = "replay"
+	// hostTargetShippedTo is set when the point is past the newest run of
+	// its server and the shipped binlogs reach it (EXC-587).
+	hostTargetShippedTo = "shippedTo"
 )
 
 // InPlaceRecoveryTarget resolves req against the project's own runs.
 func (a *HostMySQLBackupAdapter) InPlaceRecoveryTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (map[string]interface{}, error) {
-	runs, err := a.listRuns(ctx, inst.ProjectID)
+	runs, marks, err := a.catalog(ctx, inst.ProjectID)
 	if err != nil {
 		return nil, err
 	}
-	point, err := resolveHostMySQLPoint(runs, req)
+	point, err := resolveHostMySQLPoint(runs, marks, req)
 	if err != nil {
 		return nil, err
 	}
@@ -107,10 +110,11 @@ func (a *HostMySQLBackupAdapter) InPlaceRecoveryTarget(ctx context.Context, inst
 		return nil, err
 	}
 	return map[string]interface{}{
-		hostTargetBase:   hostMySQLRunDirectory(point.Base.ID, point.Base.Server),
-		hostTargetCover:  hostMySQLRunDirectory(point.Cover.ID, point.Cover.Server),
-		hostTargetPoint:  point.Point.UTC().Format(time.RFC3339),
-		hostTargetReplay: point.Replay,
+		hostTargetBase:      hostMySQLRunDirectory(point.Base.ID, point.Base.Server),
+		hostTargetCover:     hostMySQLRunDirectory(point.Cover.ID, point.Cover.Server),
+		hostTargetPoint:     point.Point.UTC().Format(time.RFC3339),
+		hostTargetReplay:    point.Replay,
+		hostTargetShippedTo: point.ShippedTo,
 	}, nil
 }
 
@@ -153,6 +157,7 @@ func (a *HostMySQLBackupAdapter) pointOf(ctx context.Context, inst *domain.Datab
 	cover, _ := target[hostTargetCover].(string)
 	raw, _ := target[hostTargetPoint].(string)
 	replay, _ := target[hostTargetReplay].(bool)
+	shippedTo, _ := target[hostTargetShippedTo].(string)
 	when, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
 		return hostMySQLPoint{}, fmt.Errorf("in-place restore %s: unreadable restore point %q", inst.ProjectID, raw)
@@ -161,7 +166,7 @@ func (a *HostMySQLBackupAdapter) pointOf(ctx context.Context, inst *domain.Datab
 	if err != nil {
 		return hostMySQLPoint{}, err
 	}
-	point := hostMySQLPoint{Point: when, Replay: replay}
+	point := hostMySQLPoint{Point: when, Replay: replay, ShippedTo: shippedTo}
 	for _, run := range completedHostMySQLRuns(runs) {
 		directory := hostMySQLRunDirectory(run.ID, run.Server)
 		if directory == base {

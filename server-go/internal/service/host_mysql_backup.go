@@ -181,11 +181,11 @@ func (a *HostMySQLBackupAdapter) BackupStatusOf(ctx context.Context, inst *domai
 
 // RestoreWindow is the span the project's runs reach, or nil before the first.
 func (a *HostMySQLBackupAdapter) RestoreWindow(ctx context.Context, inst *domain.DatabaseInstance) (*RestoreWindow, error) {
-	runs, err := a.listRuns(ctx, inst.ProjectID)
+	runs, marks, err := a.catalog(ctx, inst.ProjectID)
 	if err != nil {
 		return nil, err
 	}
-	window, ok := hostMySQLWindow(runs)
+	window, ok := hostMySQLWindow(runs, marks)
 	if !ok {
 		return nil, nil
 	}
@@ -194,12 +194,25 @@ func (a *HostMySQLBackupAdapter) RestoreWindow(ctx context.Context, inst *domain
 
 // CheckRestoreTarget refuses a target the runs cannot reach.
 func (a *HostMySQLBackupAdapter) CheckRestoreTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) error {
-	runs, err := a.listRuns(ctx, inst.ProjectID)
+	runs, marks, err := a.catalog(ctx, inst.ProjectID)
 	if err != nil {
 		return err
 	}
-	_, err = resolveHostMySQLPoint(runs, req)
+	_, err = resolveHostMySQLPoint(runs, marks, req)
 	return err
+}
+
+// catalog is the project's runs and its servers' ship marks.
+func (a *HostMySQLBackupAdapter) catalog(ctx context.Context, projectID string) ([]hostMySQLRun, map[string]hostMySQLShipMark, error) {
+	runs, err := a.listRuns(ctx, projectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	marks, err := a.shipMarks(ctx, projectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return runs, marks, nil
 }
 
 // projectPrefix is where everything of the project's lives in the bucket.

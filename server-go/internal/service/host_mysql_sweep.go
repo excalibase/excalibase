@@ -69,3 +69,46 @@ func (s *HostMySQLBackupSweep) sweepProject(ctx context.Context, inst *domain.Da
 		log.Printf("ERROR: mysql backup sweep %s: %v", inst.ProjectID, err)
 	}
 }
+
+// HostMySQLBinlogSweep ships a single host's MySQL binlogs between backups
+// (EXC-587), so a restore reaches the last ship. A paused project is skipped:
+// its container is down and has committed nothing since.
+type HostMySQLBinlogSweep struct {
+	adapter   *HostMySQLBackupAdapter
+	instances storage.InstanceStore
+}
+
+func NewHostMySQLBinlogSweep(adapter *HostMySQLBackupAdapter, instances storage.InstanceStore) *HostMySQLBinlogSweep {
+	return &HostMySQLBinlogSweep{adapter: adapter, instances: instances}
+}
+
+// Run sweeps every interval until ctx ends.
+func (s *HostMySQLBinlogSweep) Run(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		s.Sweep(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// Sweep is one pass; a project's failure is logged and the next goes on.
+func (s *HostMySQLBinlogSweep) Sweep(ctx context.Context) {
+	projects, err := s.instances.FindAll()
+	if err != nil {
+		log.Printf("ERROR: mysql binlog sweep: list projects: %v", err)
+		return
+	}
+	for _, inst := range projects {
+		if !hostMySQLBackedUp(inst) {
+			continue
+		}
+		if err := s.adapter.ShipBinlogs(ctx, inst); err != nil {
+			log.Printf("ERROR: mysql binlog sweep %s: %v", inst.ProjectID, err)
+		}
+	}
+}

@@ -20,11 +20,14 @@ const (
 	AppStorage Feature = "appstorage"
 	// MySQL is creating MySQL projects on MOCO and their Studio card (ADR 0041, EXC-583).
 	MySQL Feature = "mysql"
+	// MySQLPITR ships MySQL binlogs between backups, so a point-in-time
+	// restore reaches about a minute ago instead of the last backup (EXC-587).
+	MySQLPITR Feature = "mysqlpitr"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR}
 }
 
 type Flags interface {

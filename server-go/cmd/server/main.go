@@ -1380,7 +1380,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	appDeploySvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
 	appDomainSvc := buildAppDomainService(cfg, sqlStore.DB(), appRuntime, store, appDeploySvc)
 	backupSvc, hostMySQLBackups := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc, provSvc.SingleHostMySQL())
-	registerMySQLBackups(backupSvc, provSvc.MySQLProvisioner(), k8sClient, store, provSvc, sqlStore.BackupRecords())
+	mysqlBackups := registerMySQLBackups(backupSvc, provSvc.MySQLProvisioner(), k8sClient, store, provSvc, sqlStore.BackupRecords())
 	// A restore finishes the way a provision does: the adapters hand the
 	// recovered database to the provisioning service's registration path
 	// (EXC-366) instead of writing a half-project row themselves.
@@ -1395,6 +1395,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 	startHostMySQLBackups(hostMySQLBackups, store)
 	startHostPostgresWAL(backupSvc.DockerPostgres(), store)
+	startMySQLBinlogShipping(cfg.Features(), mysqlBinlogShipLock(cfg, sqlStore), mysqlBackups, hostMySQLBackups, store)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	// Snapshot exports stay Kubernetes-only: no engine for the connector.

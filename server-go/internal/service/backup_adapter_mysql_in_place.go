@@ -25,11 +25,11 @@ const mysqlRestorePointKey = "restorePoint"
 
 // InPlaceRecoveryTarget resolves req against the project's own runs.
 func (a *MySQLBackupAdapter) InPlaceRecoveryTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (map[string]interface{}, error) {
-	backups, err := a.backups(ctx, inst)
+	backups, marks, err := a.catalog(ctx, inst)
 	if err != nil {
 		return nil, err
 	}
-	point, err := resolveMySQLRestorePoint(backups, req)
+	point, err := resolveMySQLRestorePoint(backups, marks, req)
 	if err != nil {
 		return nil, err
 	}
@@ -87,6 +87,15 @@ func (a *MySQLBackupAdapter) ReplaceDatabase(ctx context.Context, inst *domain.D
 	if err != nil {
 		return fmt.Errorf("in-place restore %s: unreadable restore point %q", inst.ProjectID, raw)
 	}
+	// Read now, after the safety backup: its run may have made the tail MOCO's.
+	backups, marks, err := a.catalog(ctx, inst)
+	if err != nil {
+		return err
+	}
+	point, tail, err := mysqlRestoreAt(backups, marks, point)
+	if err != nil {
+		return fmt.Errorf("in-place restore %s: %w", inst.ProjectID, err)
+	}
 	template, err := a.clusterTemplate(ctx, inst)
 	if err != nil {
 		return err
@@ -106,6 +115,9 @@ func (a *MySQLBackupAdapter) ReplaceDatabase(ctx context.Context, inst *domain.D
 		return err
 	}
 	if err := a.mysql.AwaitRestored(ctx, a.poller, inst.Namespace, inst.ProjectID, mysqlReplicas(template)); err != nil {
+		return err
+	}
+	if err := a.replayTail(ctx, inst.Namespace, inst.ProjectID, tail); err != nil {
 		return err
 	}
 	if err := a.mysql.LinkBackupPolicy(ctx, inst.Namespace, inst.ProjectID); err != nil {
