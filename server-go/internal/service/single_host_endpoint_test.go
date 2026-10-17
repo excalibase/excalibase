@@ -155,3 +155,25 @@ func TestASingleHostMySQLProjectIsReachedOverTLSOnly(t *testing.T) {
 		t.Fatalf("internal %+v", view.Internal)
 	}
 }
+
+// The container's CA read failing reaches the caller as a fixed answer, not
+// the engine's error.
+func TestASingleHostMySQLCAThatCannotBeReadIsAFixedAnswer(t *testing.T) {
+	h := newSingleHostHarness(t)
+	inst, _ := h.svc.GetInstance("proj-docsvc001")
+	inst.DBType, inst.Host, inst.Username, inst.DatabaseName = domain.MySQL, singleHostContainer, "admin", "shop"
+	if err := h.svc.store.Update(inst); err != nil {
+		t.Fatal(err)
+	}
+	docker := &gatewayStates{recordingDocker: h.docker, states: map[string]provisioner.ContainerState{
+		inst.Namespace: runningWithPorts(map[string]int{"3306": 33061}),
+	}}
+	endpoints := NewSingleHostEndpointService(h.svc.store, docker)
+	endpoints.mysqlCA = func(context.Context, string) (string, error) {
+		return "", errors.New("Error response from daemon: No such container: excalibase-proj-docsvc001-mysql")
+	}
+	_, err := endpoints.Describe(context.Background(), "proj-docsvc001")
+	if !errors.Is(err, ErrServerCAUnavailable) || err.Error() != ErrServerCAUnavailable.Error() {
+		t.Fatalf("err %v", err)
+	}
+}

@@ -6,7 +6,9 @@ package mysqltls
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"time"
 )
 
 // ErrNoServerCA is a record or server that hands out no CA to verify with.
@@ -24,4 +26,18 @@ func ClientConfig(rootPEM, serverName string) (*tls.Config, error) {
 		return nil, errors.New("no MySQL server name to verify")
 	}
 	return &tls.Config{RootCAs: roots, ServerName: serverName, MinVersion: tls.VersionTLS12}, nil
+}
+
+// CertificateNotAfter is when the first certificate in certPEM stops being
+// valid.
+func CertificateNotAfter(certPEM string) (time.Time, error) {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return time.Time{}, errors.New("no certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return cert.NotAfter, nil
 }

@@ -1,6 +1,8 @@
 package provisioner
 
 import (
+	"github.com/excalibase/provisioning-poc/internal/testutil/testca"
+
 	"archive/tar"
 	"bytes"
 	"context"
@@ -106,4 +108,17 @@ func tarOfFiles(t *testing.T, files map[string]string) []byte {
 	}
 	_ = writer.Close()
 	return buffer.Bytes()
+}
+
+func TestDockerMySQLServerCertificateExpiry(t *testing.T) {
+	engine := newFakeEngine()
+	provisionDockerMySQL(t, engine)
+	server := testca.New(t, "expiry").Issue(t, "db")
+	engine.mu.Lock()
+	engine.copied["excalibase-p1-mysql:"+MySQLTLSDir] = tarOfFiles(t, map[string]string{"tls.crt": server.CertPEM})
+	engine.mu.Unlock()
+	got, err := newTestDockerMySQL(engine).ServerCertificateExpiry(context.Background(), "excalibase-p1-mysql", "p1")
+	if err != nil || !got.Equal(server.Cert.NotAfter) {
+		t.Fatalf("got %v, %v", got, err)
+	}
 }

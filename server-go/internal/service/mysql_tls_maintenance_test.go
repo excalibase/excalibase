@@ -209,3 +209,23 @@ func reloadsIn(commands []string) int {
 	}
 	return reloads
 }
+
+// A certificate cert-manager has stopped renewing is reported while there is
+// still time to act, not discovered when clients start failing.
+func TestMaintainMySQLTLS_ReportsACertificateNearItsEnd(t *testing.T) {
+	svc, store, mock := setupMySQLTest(t)
+	inst := provisionMySQL(t, svc, store, "")
+	if report := svc.MaintainMySQLTLS(context.Background()); len(report.Failed) != 0 {
+		t.Fatalf("a fresh certificate was reported: %v", report.Failed)
+	}
+	expiring := testca.New(t, "stalled").Issue(t, "db") // valid for a day
+	mock.Secrets[inst.Namespace+"/"+k8s.MySQLServerTLSSecretName(inst.ProjectID)] = map[string][]byte{"tls.crt": []byte(expiring.CertPEM)}
+
+	report := svc.MaintainMySQLTLS(context.Background())
+	if len(report.Failed) != 1 || !strings.Contains(report.Failed[0].Error(), "expires") || !strings.Contains(report.Failed[0].Error(), inst.ProjectID) {
+		t.Fatalf("report %+v", report)
+	}
+	if got := reloadsIn(mock.ExecCommands); got < 2 {
+		t.Errorf("the reload was skipped: %d", got)
+	}
+}

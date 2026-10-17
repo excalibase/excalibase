@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/mysqltls"
 )
 
 // A single host has no cert-manager: the platform issues a MySQL project's
@@ -61,6 +63,15 @@ func MySQLServerCA(ctx context.Context, docker DockerClient, container string) (
 		return "", fmt.Errorf("read the MySQL CA of %s: %w", container, err)
 	}
 	return string(ca), nil
+}
+
+// ServerCertificateExpiry is when the certificate the container serves runs out.
+func (p *DockerMySQLProvisioner) ServerCertificateExpiry(ctx context.Context, container, _ string) (time.Time, error) {
+	cert, err := readContainerFile(ctx, p.docker, container, MySQLTLSDir+"/tls.crt")
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read the MySQL server certificate of %s: %w", container, err)
+	}
+	return mysqltls.CertificateNotAfter(string(cert))
 }
 
 // ReloadTLS has nothing to do: the certificate is not renewed on a single host.

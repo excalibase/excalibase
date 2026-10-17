@@ -120,3 +120,17 @@ func TestWithdrawWaitsForALingeringService(t *testing.T) {
 		}
 	}
 }
+
+// A CA that cannot be read is a fixed answer to the caller; what the cluster
+// said stays in the log (EXC-589 review).
+func TestAnUnreadableMySQLCAIsReportedWithoutTheClustersError(t *testing.T) {
+	f := newMySQLEndpointFixture(t)
+	f.kube.NoClusterCA = true
+	_, err := f.svc.Describe(context.Background(), f.inst.ProjectID)
+	if !errors.Is(err, ErrServerCAUnavailable) {
+		t.Fatalf("err %v, want ErrServerCAUnavailable", err)
+	}
+	if err.Error() != ErrServerCAUnavailable.Error() {
+		t.Fatalf("the caller sees %q", err)
+	}
+}

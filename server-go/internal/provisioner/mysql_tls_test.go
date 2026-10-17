@@ -1,6 +1,8 @@
 package provisioner
 
 import (
+	"github.com/excalibase/provisioning-poc/internal/testutil/testca"
+
 	"context"
 	"errors"
 	"slices"
@@ -124,5 +126,30 @@ func TestMySQLRemoveDatabase_ReportsACertificateLeftBehind(t *testing.T) {
 	mock.DeleteCRDError = errors.New("forbidden")
 	if err := prov.removeTLS(context.Background(), mysqlTestNS, mysqlTestProject); err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// An instance whose readiness cannot be read is a failure of the sweep, not
+// an instance to skip quietly.
+func TestMySQLReloadTLS_ReportsAnUnreadableInstance(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	if _, err := prov.ProvisionWithRollback(context.Background(), mysqlRequest(""), mysqlFree, recordingContext()); err != nil {
+		t.Fatalf("ProvisionWithRollback: %v", err)
+	}
+	mock.PodReadyError = errors.New("the API server timed out")
+	err := prov.ReloadTLS(context.Background(), mysqlTestNS, mysqlTestProject)
+	if err == nil || !strings.Contains(err.Error(), "moco-proj-my1-mysql-0") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+// The sweep reads when the certificate cert-manager last issued runs out.
+func TestMySQLServerCertificateExpiry(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	server := testca.New(t, "expiry").Issue(t, "db")
+	mock.Secrets[mysqlTestNS+"/"+k8s.MySQLServerTLSSecretName(mysqlTestProject)] = map[string][]byte{"tls.crt": []byte(server.CertPEM)}
+	got, err := prov.ServerCertificateExpiry(context.Background(), mysqlTestNS, mysqlTestProject)
+	if err != nil || !got.Equal(server.Cert.NotAfter) {
+		t.Fatalf("got %v, %v", got, err)
 	}
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -105,7 +106,8 @@ func (s *SingleHostEndpointService) singleHostMySQLView(ctx context.Context, ins
 	}
 	ca, err := s.mysqlCA(ctx, inst.Namespace)
 	if err != nil {
-		return DBEndpointView{}, err
+		log.Printf("ERROR: read the MySQL CA of %s: %v", inst.ProjectID, err)
+		return DBEndpointView{}, ErrServerCAUnavailable
 	}
 	view.CACertificate = ca
 	return view, nil

@@ -69,3 +69,13 @@ func MockMySQLCA() map[string][]byte {
 	ca := MockClusterCA()
 	return map[string][]byte{"tls.crt": ca[mockCACertKey], mockCACertKey: ca[mockCACertKey], "tls.key": ca["ca.key"]}
 }
+
+// mysqlServerTLSSuffix names the Secret cert-manager keeps a MySQL project's
+// server certificate in.
+const mysqlServerTLSSuffix = "-mysql-tls"
+
+// MockMySQLServerTLS stands in for that Secret; only its validity matters to
+// the platform, which never serves it.
+func MockMySQLServerTLS() map[string][]byte {
+	return map[string][]byte{"tls.crt": MockClusterCA()[mockCACertKey]}
+}

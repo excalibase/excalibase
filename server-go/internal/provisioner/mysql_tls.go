@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/mysqltls"
 )
 
 // A MySQL project's server certificate comes from its own cert-manager CA
@@ -44,6 +46,16 @@ func (p *MySQLProvisioner) ServerCA(ctx context.Context, namespace, projectID st
 	return k8s.MySQLServerCA(secret)
 }
 
+// ServerCertificateExpiry is when the certificate cert-manager last issued
+// for the project runs out.
+func (p *MySQLProvisioner) ServerCertificateExpiry(ctx context.Context, namespace, projectID string) (time.Time, error) {
+	secret, err := p.client.GetSecret(ctx, namespace, k8s.MySQLServerTLSSecretName(projectID))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read the MySQL server certificate of %s: %w", projectID, err)
+	}
+	return mysqltls.CertificateNotAfter(string(secret["tls.crt"]))
+}
+
 // ReloadTLS has every running instance read its certificate again. An
 // instance that is not ready reads it when it starts.
 func (p *MySQLProvisioner) ReloadTLS(ctx context.Context, namespace, projectID string) error {
@@ -54,7 +66,12 @@ func (p *MySQLProvisioner) ReloadTLS(ctx context.Context, namespace, projectID s
 	var failed []error
 	for i := 0; i < instances; i++ {
 		pod := k8s.MySQLPodName(projectID, int64(i))
-		if ready, err := p.client.IsPodReady(ctx, namespace, pod); err != nil || !ready {
+		ready, err := p.client.IsPodReady(ctx, namespace, pod)
+		if err != nil {
+			failed = append(failed, fmt.Errorf("read the readiness of %s: %w", pod, err))
+			continue
+		}
+		if !ready {
 			continue
 		}
 		cmd := []string{"mysql", "--defaults-extra-file=" + mysqlAdminCnf, "--batch", "-e", mysqlReloadTLS}

@@ -17,6 +17,11 @@ import (
 // sweep does both, under the project's lease so it never races a rotation
 // writing the same records.
 
+// mysqlCertificateWarning is how long before its end a server certificate
+// that has not been renewed is reported. cert-manager renews 30 days ahead
+// (k8s.BuildMySQLTLS), so this only fires once renewal has stalled.
+const mysqlCertificateWarning = 14 * 24 * time.Hour
+
 // mysqlTLSRoles are the logins whose records carry the server CA.
 var mysqlTLSRoles = []string{roleAdmin, roleApp, roleAuthAdmin, roleWatcher}
 
@@ -65,14 +70,33 @@ func (s *ProvisioningService) maintainMySQLTLSOf(ctx context.Context, projectID 
 	}
 	defer release()
 	refiled, err := s.refileMySQLServerCA(ctx, inst)
-	if err != nil || inst.Status != string(domain.StatusActive) {
+	if err != nil {
 		return refiled, err
 	}
 	mysql, err := s.mysqlServerOf()
 	if err != nil {
 		return refiled, err
 	}
-	return refiled, mysql.ReloadTLS(ctx, inst.Namespace, inst.ProjectID)
+	var failed []error
+	if inst.Status == string(domain.StatusActive) {
+		failed = append(failed, mysql.ReloadTLS(ctx, inst.Namespace, inst.ProjectID))
+	}
+	failed = append(failed, checkMySQLCertificateExpiry(ctx, mysql, inst, time.Now()))
+	return refiled, errors.Join(failed...)
+}
+
+// checkMySQLCertificateExpiry fails when the server certificate ends within
+// mysqlCertificateWarning, which means its renewal has stalled.
+func checkMySQLCertificateExpiry(ctx context.Context, mysql mysqlServer, inst *domain.DatabaseInstance, now time.Time) error {
+	notAfter, err := mysql.ServerCertificateExpiry(ctx, inst.Namespace, inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	if left := notAfter.Sub(now); left < mysqlCertificateWarning {
+		return fmt.Errorf("the server certificate expires %s (%.0f hours left) and has not been renewed",
+			notAfter.UTC().Format(time.RFC3339), left.Hours())
+	}
+	return nil
 }
 
 // refileMySQLServerCA puts the CA the server presents into every filed login

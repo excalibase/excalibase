@@ -586,6 +586,9 @@ func (m *MockClient) GetSecret(ctx context.Context, namespace, name string) (map
 	if strings.HasSuffix(name, mysqlCASuffix) && !m.NoClusterCA {
 		return MockMySQLCA(), nil
 	}
+	if strings.HasSuffix(name, mysqlServerTLSSuffix) && !m.NoClusterCA {
+		return MockMySQLServerTLS(), nil
+	}
 	if m.WildcardSecret != nil {
 		return m.WildcardSecret, nil
 	}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -89,10 +90,14 @@ func mysqlEndpointString(host string, port int, user, database string) string {
 // mysqlCA is the CA cert-manager issued the project's server certificate from.
 func (s *DBEndpointService) mysqlCA(ctx context.Context, inst *domain.DatabaseInstance) (string, error) {
 	secret, err := s.kube.GetSecret(ctx, inst.Namespace, k8s.MySQLCASecretName(inst.ProjectID))
-	if err != nil {
-		return "", fmt.Errorf("read the MySQL CA of %s: %w", inst.ProjectID, err)
+	if err == nil {
+		var ca string
+		if ca, err = k8s.MySQLServerCA(secret); err == nil {
+			return ca, nil
+		}
 	}
-	return k8s.MySQLServerCA(secret)
+	log.Printf("ERROR: read the MySQL CA of %s: %v", inst.ProjectID, err)
+	return "", ErrServerCAUnavailable
 }
 
 // publicServiceName is the project's public Service, named for its engine.

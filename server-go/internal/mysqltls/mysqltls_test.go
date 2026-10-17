@@ -59,3 +59,14 @@ func TestClientConfig_RefusesWhatIsNotACA(t *testing.T) {
 		t.Error("no name to verify was accepted")
 	}
 }
+
+func TestCertificateNotAfter(t *testing.T) {
+	server := testca.New(t, "expiry").Issue(t, "db")
+	got, err := CertificateNotAfter(server.CertPEM)
+	if err != nil || !got.Equal(server.Cert.NotAfter) {
+		t.Fatalf("got %v, %v; want %v", got, err, server.Cert.NotAfter)
+	}
+	if _, err := CertificateNotAfter("not a certificate"); err == nil {
+		t.Fatal("read an expiry from no certificate")
+	}
+}
