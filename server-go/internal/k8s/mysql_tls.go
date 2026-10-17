@@ -82,8 +82,9 @@ func BuildMySQLTLS(opts MySQLClusterOpts) []MySQLTLSObject {
 	caIssuer := mysqlTLSResource("Issuer", mysqlCAIssuer(id), opts, map[string]interface{}{
 		"ca": map[string]interface{}{"secretName": MySQLCASecretName(id)},
 	})
+	// No commonName: cert-manager caps it at 64 bytes, which a Service name in
+	// a real namespace exceeds; clients verify against dnsNames.
 	server := mysqlTLSResource("Certificate", mysqlServerCertificate(id), opts, map[string]interface{}{
-		"commonName":  MySQLPrimaryHost(id, namespace),
 		"dnsNames":    toInterfaces(MySQLServerNames(id, namespace, opts.PublicNames)),
 		"secretName":  MySQLServerTLSSecretName(id),
 		"duration":    mysqlServerDuration,

@@ -77,6 +77,28 @@ func TestBuildMySQLTLS(t *testing.T) {
 	}
 }
 
+// cert-manager refuses a commonName over 64 bytes, and a real project's
+// namespace is a 32-hex org id plus the project id, so the Service name never
+// fits there: the names a client verifies live in dnsNames only.
+func TestMySQLTLSCommonNamesFitCertManagerLimit(t *testing.T) {
+	opts := mysqlOpts(freePlan)
+	opts.ProjectID = "proj-so9odu5s4g"
+	opts.Namespace = "983442e2d6488cf64859fd451b977e96-proj-so9odu5s4g"
+	for _, object := range BuildMySQLTLS(opts) {
+		if object.Object.GetKind() != "Certificate" {
+			continue
+		}
+		if cn, _, _ := unstructured.NestedString(object.Object.Object, "spec", "commonName"); len(cn) > 64 {
+			t.Errorf("%s commonName is %d bytes, cert-manager allows 64: %q", object.Object.GetName(), len(cn), cn)
+		}
+	}
+	server := tlsObject(t, BuildMySQLTLS(opts), "Certificate", "proj-so9odu5s4g-mysql-server")
+	names, _, _ := unstructured.NestedStringSlice(server.Object, "spec", "dnsNames")
+	if !slices.Contains(names, MySQLPrimaryHost(opts.ProjectID, opts.Namespace)) {
+		t.Errorf("server certificate lacks the primary host: %v", names)
+	}
+}
+
 // The cluster presents the issued certificate: the secret is mounted into
 // mysqld and the settings point mysqld at it.
 func TestMySQLClusterServesTheIssuedCertificate(t *testing.T) {
