@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -45,15 +46,19 @@ func runSuperuserRoleSQL(ctx context.Context, exec roleSQLExecer, dbName string,
 	return err
 }
 
+// lockTimeoutError matches a lock_timeout as psql reports it with
+// VERBOSITY=verbose: the SQLSTATE straight after the ERROR prefix. Text
+// elsewhere in the output (a NOTICE, a message quoting "55P03") never counts.
+var lockTimeoutError = regexp.MustCompile(`(?m)ERROR:\s+55P03:`)
+
 // isLockTimeout reports whether a role-SQL failure is a lock_timeout (55P03).
 // statement_timeout and transaction_timeout are pinned to 0, so a timeout can
 // only be a held lock.
 func isLockTimeout(output string, err error) bool {
-	haystack := strings.ToLower(output)
-	if err != nil {
-		haystack += " " + strings.ToLower(err.Error())
+	if lockTimeoutError.MatchString(output) {
+		return true
 	}
-	return strings.Contains(haystack, "lock timeout") || strings.Contains(haystack, "55p03")
+	return err != nil && lockTimeoutError.MatchString(err.Error())
 }
 
 // probeServerVersionNum reads server_version_num with a connect-safe command.

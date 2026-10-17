@@ -136,10 +136,20 @@ func (c *platformSchemaCase) assertSchemaTakenBack(t *testing.T) {
 	if scanBool(t, c.admin, "SELECT has_schema_privilege($1, 'excalibase', 'CREATE')", roleApp) {
 		t.Error("excalibase_app can still create in the excalibase schema")
 	}
-	for _, privilege := range []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE", "TRIGGER"} {
-		if scanBool(t, c.admin, "SELECT has_table_privilege($1, 'excalibase.excalibase_scheduled_functions', $2)", roleApp, privilege) {
-			t.Errorf("excalibase_app still holds %s on the scheduler table", privilege)
+	// After a rebuild that the squat guard then stopped, the scheduler tables
+	// are not back yet; the app role can hold nothing on a table that is gone.
+	if scanBool(t, c.admin, "SELECT to_regclass('excalibase.excalibase_scheduled_functions') IS NOT NULL") {
+		for _, privilege := range []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE", "TRIGGER"} {
+			if scanBool(t, c.admin, "SELECT has_table_privilege($1, 'excalibase.excalibase_scheduled_functions', $2)", roleApp, privilege) {
+				t.Errorf("excalibase_app still holds %s on the scheduler table", privilege)
+			}
 		}
+	}
+	if scanBool(t, c.admin, "SELECT EXISTS (SELECT 1 FROM pg_namespace n JOIN pg_class c ON c.relnamespace = n.oid JOIN pg_roles r ON r.oid = c.relowner WHERE n.nspname = 'excalibase' AND NOT r.rolsuper)") {
+		t.Error("an object in the excalibase schema still belongs to a non-superuser")
+	}
+	if !scanBool(t, c.admin, "SELECT EXISTS (SELECT 1 FROM pg_event_trigger WHERE evtname = 'excalibase_guard_reserved_schemas')") {
+		t.Error("the CREATE EXTENSION guard is not installed")
 	}
 	if !scanBool(t, c.admin, "SELECT r.rolsuper FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE n.nspname = 'excalibase'") {
 		t.Error("the excalibase schema is not the superuser's")
@@ -197,6 +207,12 @@ type lockBlocker struct {
 	name string
 	// setup runs as the superuser before the blocker connects.
 	setup []string
+	// ownerSetup runs as the owner, after setup: what an owner with
+	// CREATEROLE (16+) can do on its own.
+	ownerSetup []string
+	// squatted is true when the blocker squats a platform role name, so the
+	// second script must still refuse — after the lockdown has landed.
+	squatted bool
 	// the blocker connects as this role and holds the statements open in one
 	// transaction while the rebuild runs.
 	role     string
@@ -239,6 +255,25 @@ func lockHolderSuite(t *testing.T, start func(*testing.T) *rolePostgres, major i
 			stmts:    []string{"LOCK TABLE public.dep IN ACCESS SHARE MODE"},
 		},
 		{
+			// The owner squats the not-yet-created scheduler login and holds a
+			// dependent's lock as it; a service name the platform does not hold
+			// is not spared (fourth-pass finding).
+			name: "the owner squats excalibase_scheduler and holds a lock as it",
+			setup: []string{
+				"CREATE TABLE public.dep (c excalibase.app_planted)",
+				"GRANT SELECT ON public.dep TO " + customerOwner + " WITH GRANT OPTION",
+			},
+			ownerSetup: []string{
+				"CREATE ROLE " + roleScheduler + " LOGIN PASSWORD 'Squat-Held-1'",
+				"GRANT SELECT ON public.dep TO " + roleScheduler,
+			},
+			role:     roleScheduler,
+			password: "Squat-Held-1",
+			stmts:    []string{"LOCK TABLE public.dep IN ACCESS SHARE MODE"},
+			squatted: true,
+			minMajor: 16,
+		},
+		{
 			name:       "the owner holds its own catalog row the second script resets",
 			role:       customerOwner,
 			password:   customerOwnerPassword,
@@ -271,6 +306,12 @@ func lockHolderCase(t *testing.T, pg *rolePostgres, blocker lockBlocker) {
 	for _, statement := range blocker.setup {
 		mustExec(t, c.admin, statement)
 	}
+	if len(blocker.ownerSetup) > 0 {
+		owner := c.pg.connect(t, customerOwner, customerOwnerPassword)
+		for _, statement := range blocker.ownerSetup {
+			mustExec(t, owner, statement)
+		}
+	}
 
 	held := c.pg.connect(t, blocker.role, blocker.password)
 	tx, err := held.BeginTx(context.Background(), nil)
@@ -290,8 +331,14 @@ func lockHolderCase(t *testing.T, pg *rolePostgres, blocker lockBlocker) {
 		spec.resetAdmin = true
 		spec.adminPassword = customerOwnerPassword
 	}
-	if err := runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app",
-		reservedSchemaFirstSQL(), projectRoleSQL(spec, c.creds, "cdc_watcher_pub")); err != nil {
+	err = runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app",
+		reservedSchemaFirstSQL(), projectRoleSQL(spec, c.creds, "cdc_watcher_pub"))
+	switch {
+	case blocker.squatted && err == nil:
+		t.Fatal("registration went on over a squatted platform role")
+	case blocker.squatted && isLockTimeout("", err):
+		t.Fatalf("the squatted login was spared and kept blocking the lockdown: %v", err)
+	case !blocker.squatted && err != nil:
 		t.Fatalf("a lock holder blocked the rebuild: %v", err)
 	}
 	c.assertSchemaTakenBack(t)

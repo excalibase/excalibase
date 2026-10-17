@@ -1121,7 +1121,14 @@ times out, after which the reconcile terminates every client backend that is
 not a platform service and retries. A platform service is identified by its
 login role, one a customer can neither create nor assume (`auth_admin`,
 `cdc_watcher`, `excalibase_scheduler`, the DocumentDB roles, `streaming_replica`,
-`postgres`) plus any superuser; those are spared. `excalibase_app` is not a
+`postgres`) plus any superuser; those are spared — but only while the platform
+holds the name. A service name some non-superuser holds ADMIN over (on 16+ an
+owner with CREATEROLE gets ADMIN on every role it creates, so this is how a
+pre-EXC-623 owner could squat `excalibase_scheduler`) is the squat guard's
+case: its backends are terminated like a customer's. The first script also
+reports such a squat with a WARNING, without aborting the lockdown; the second
+script still refuses on it. A lock timeout is recognised only by SQLSTATE
+55P03 after the ERROR prefix (psql runs with `VERBOSITY=verbose`). `excalibase_app` is not a
 service for this purpose — customer SQL runs as it — nor is the owner login,
 so both are terminated when they block the rebuild. The lockdown also takes
 USAGE on the excalibase schema's own types from PUBLIC, so a customer cannot

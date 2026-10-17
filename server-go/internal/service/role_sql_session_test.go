@@ -8,7 +8,7 @@ import (
 func TestSuperuserPsqlCommandPinsTheSession(t *testing.T) {
 	cmd := superuserPsqlCommand("app", 150000, "SELECT 1;", "SELECT 2;")
 	joined := strings.Join(cmd, "\x00")
-	for _, want := range []string{"-X", "ON_ERROR_STOP=1", "-c role=none", "-c default_transaction_read_only=off",
+	for _, want := range []string{"-X", "ON_ERROR_STOP=1", "VERBOSITY=verbose", "-c role=none", "-c default_transaction_read_only=off",
 		"-c statement_timeout=0", "-c lock_timeout=", "-c plpgsql.extra_errors=none", "-c exit_on_error=off",
 		"-c local_preload_libraries=", "-c session_preload_libraries=",
 		"-c password_encryption=scram-sha-256", "-c default_tablespace=", "-c temp_tablespaces="} {
@@ -79,8 +79,8 @@ func TestRoleScriptsTakeTheSchemaBackFirst(t *testing.T) {
 			t.Errorf("first transaction lacks %q", want)
 		}
 	}
-	if strings.Contains(first, "excalibase_squat") {
-		t.Error("the squat guard must not run in the first transaction")
+	if strings.Contains(first, "$excalibase_squat$") {
+		t.Error("the aborting squat guard must not run in the first transaction")
 	}
 }
 
@@ -108,5 +108,28 @@ func TestSuperuserConninfoPinsScramIterationsFrom16(t *testing.T) {
 	}
 	if strings.Contains(superuserConninfo("app", 150000), "scram_iterations") {
 		t.Fatal("Postgres 15 refuses a connection that names scram_iterations")
+	}
+}
+
+// A service name is spared only while the platform holds it: a role some
+// non-superuser administers (on 16+ the owner gets ADMIN on what it creates)
+// is a squat, and its backends are terminated like any customer's.
+func TestTerminateTreatsASquattedServiceNameAsACustomer(t *testing.T) {
+	sql := terminateNonServiceBackendsSQL
+	for _, want := range []string{"pg_auth_members", "admin_option", "NOT u.rolsuper"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("terminate SQL lacks the squat check %q", want)
+		}
+	}
+}
+
+// The first script reports a squat early but never aborts on it.
+func TestFirstScriptWarnsOfASquatWithoutAborting(t *testing.T) {
+	first := reservedSchemaFirstSQL()
+	if !strings.Contains(first, "excalibase_squat_warning") || !strings.Contains(first, "RAISE WARNING") {
+		t.Fatal("the first script does not report a squatted platform role")
+	}
+	if strings.Contains(first, "$excalibase_squat$") {
+		t.Fatal("the aborting squat guard must stay out of the first script")
 	}
 }

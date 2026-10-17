@@ -37,7 +37,7 @@ func isTerminate(cmd []string) bool {
 // A lock timeout is the only failure that warrants terminating backends and
 // retrying; the terminate lands between the attempts.
 func TestRunSuperuserRoleSQL_TerminatesOnLockTimeoutThenRetries(t *testing.T) {
-	lockErr := errors.New(`psql exit 3: ERROR:  canceling statement due to lock timeout`)
+	lockErr := errors.New(`psql exit 3: ERROR:  55P03: canceling statement due to lock timeout`)
 	e := &scriptedExecer{
 		// probe, attempt 1 (lock timeout), terminate, attempt 2 (ok)
 		outputs: []string{"160004", "", "", ""},
@@ -88,14 +88,24 @@ func TestProbeServerVersionNum(t *testing.T) {
 }
 
 func TestIsLockTimeout(t *testing.T) {
-	if !isLockTimeout("ERROR:  canceling statement due to lock timeout", nil) {
-		t.Error("the lock-timeout message is not recognised")
+	if !isLockTimeout("ERROR:  55P03: canceling statement due to lock timeout", nil) {
+		t.Error("a verbose 55P03 error is not recognised")
 	}
-	if !isLockTimeout("", errors.New("psql exit 3: ... SQLSTATE 55P03")) {
-		t.Error("the 55P03 SQLSTATE is not recognised")
+	if !isLockTimeout("", errors.New("psql exit 1: psql:<stdin>:3: ERROR:  55P03: canceling statement due to lock timeout")) {
+		t.Error("a 55P03 error carried in the exec error is not recognised")
 	}
-	if isLockTimeout("ERROR: syntax error", errors.New("psql exit 1")) {
-		t.Error("an unrelated error was taken for a lock timeout")
+	// Only the SQLSTATE after an ERROR prefix counts: text anywhere else in
+	// the output, such as a NOTICE or a role's name, must not trigger a
+	// terminate.
+	for _, noise := range []string{
+		"ERROR:  42601: syntax error",
+		"NOTICE:  waiting on a lock timeout setting",
+		"ERROR:  P0001: 55P03 appears in this message",
+		"canceling statement due to lock timeout",
+	} {
+		if isLockTimeout(noise, errors.New("psql exit 1")) {
+			t.Errorf("%q was taken for a lock timeout", noise)
+		}
 	}
 }
 
@@ -114,7 +124,7 @@ func TestRoleSQLExecerPrefersDockerThenK8s(t *testing.T) {
 // When every attempt still lock-times out, the error is returned, and a
 // failing terminate is logged, not fatal.
 func TestRunSuperuserRoleSQL_ReturnsAfterExhaustingRetries(t *testing.T) {
-	lockErr := errors.New("psql exit 3: canceling statement due to lock timeout")
+	lockErr := errors.New("psql exit 3: ERROR:  55P03: canceling statement due to lock timeout")
 	termErr := errors.New("terminate failed")
 	e := &scriptedExecer{
 		// probe, attempt1, terminate(fail), attempt2, terminate(fail), attempt3

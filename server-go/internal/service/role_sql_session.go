@@ -76,7 +76,7 @@ $excalibase_session$;
 // stops the rest. serverVersionNum is the server_version_num the probe read,
 // or 0 when it is unknown.
 func superuserPsqlCommand(dbName string, serverVersionNum int, scripts ...string) []string {
-	cmd := []string{"psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", superuserConninfo(dbName, serverVersionNum)}
+	cmd := []string{"psql", "-X", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose", "-U", "postgres", "-d", superuserConninfo(dbName, serverVersionNum)}
 	for _, script := range scripts {
 		cmd = append(cmd, "-c", sessionGuardSQL+script)
 	}
@@ -131,8 +131,19 @@ WHERE a.datname = current_database()
   AND a.pid <> pg_backend_pid()
   AND a.backend_type = 'client backend'
   AND a.usename IS NOT NULL
-  AND a.usename <> ALL (` + serviceRoleArray() + `)
-  AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = a.usename AND r.rolsuper);
+  AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = a.usename AND r.rolsuper)
+  AND NOT (
+    a.usename = ANY (` + serviceRoleArray() + `)
+    -- A service name is the platform's only while no non-superuser holds
+    -- ADMIN over it — the squat guard's own test. On 16+ an owner with
+    -- CREATEROLE gets ADMIN on every role it creates, so a squatted service
+    -- name is a customer's login and its backends are terminated.
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_auth_members m
+      JOIN pg_roles r ON r.oid = m.roleid
+      JOIN pg_roles u ON u.oid = m.member
+      WHERE r.rolname = a.usename AND m.admin_option AND NOT u.rolsuper)
+  );
 `
 
 // serviceRoleArray is the SQL text[] of the platform service logins the
@@ -158,6 +169,8 @@ func serviceRoleArray() string {
 // customer can make fail: it runs as its own transaction ahead of the squat
 // guard, so a project whose registration stops still loses every write path
 // its app role had into the schema and still gets the CREATE EXTENSION guard.
+// A squatted platform role is reported here with a WARNING, early, but only
+// the second script refuses on it: the lockdown must land regardless.
 func reservedSchemaFirstSQL() string {
-	return reservedSchemaRebuildSQL + reservedSchemaLockdownSQL(roleApp) + reservedSchemaGuardSQL
+	return reservedSchemaRebuildSQL + reservedSchemaLockdownSQL(roleApp) + reservedSchemaGuardSQL + pgroles.SquatWarningSQL()
 }
