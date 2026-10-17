@@ -28,6 +28,9 @@ func TestSchemaRoutesThatServeMySQL(t *testing.T) {
 		{"GET", "/api/schema/p1/query"},
 		{"POST", "/api/schema/p1/ddl"},
 		{"GET", "/api/schema/p1/connection-test"},
+		// The engine and the grid read the whole set here; without it a MySQL
+		// project's API answers 503 permissions_unavailable to every role.
+		{"GET", "/api/provision/p1/permissions/"},
 		{"PUT", "/api/provision/p1/permissions/tables/app.orders/roles/anon/select"},
 		{"DELETE", "/api/provision/p1/permissions/tables/app.orders/roles/anon/select"},
 	} {
