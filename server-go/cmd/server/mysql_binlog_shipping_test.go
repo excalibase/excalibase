@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -26,5 +27,16 @@ func TestMySQLBinlogShippingStartsOnlyWithItsFeature(t *testing.T) {
 	}
 	if started := startMySQLBinlogShipping(on, service.AlwaysLeader{}, nil, host, bootInstanceStore(t)); started != 1 {
 		t.Fatalf("started %d sweeps on a single host, want 1", started)
+	}
+}
+
+// Replicas side by side in cloud lead the ship by an advisory lock; a single
+// process needs none.
+func TestMySQLBinlogShipLockLeadsOnlyWhereReplicasRun(t *testing.T) {
+	if _, ok := mysqlBinlogShipLock(config.AppConfig{DeploymentMode: "selfhosted"}, nil).(service.AlwaysLeader); !ok {
+		t.Error("a single process waits for a lock")
+	}
+	if _, ok := mysqlBinlogShipLock(config.AppConfig{DeploymentMode: "cloud"}, nil).(service.AlwaysLeader); !ok {
+		t.Error("no store, no lock to take")
 	}
 }

@@ -67,6 +67,9 @@ type fakeMOCOPods struct {
 	gtid     string
 	source   string
 	lagging  bool
+	oldest   int
+	basename string
+	failOn   string
 	current  int
 	flushes  int
 	replays  []string
@@ -84,6 +87,9 @@ func (p *fakeMOCOPods) StreamExecInPod(_ context.Context, namespace, pod, contai
 	if stdin != nil && !strings.Contains(script, "mysqlbinlog") {
 		content, _ := io.ReadAll(stdin)
 		input = string(content)
+	}
+	if p.failOn != "" && strings.Contains(script, p.failOn) {
+		return errors.New("command terminated with exit code 1")
 	}
 	switch {
 	case strings.Contains(script, "mysqlbinlog"):
@@ -105,10 +111,18 @@ func (p *fakeMOCOPods) StreamExecInPod(_ context.Context, namespace, pod, contai
 	case strings.Contains(input, "FLUSH BINARY LOGS"):
 		p.flushes++
 		p.current++
-		_, err := fmt.Fprintf(stdout, "/var/lib/mysql/data/binlog\t%s\n", binlogName(p.current))
+		basename := p.basename
+		if basename == "" {
+			basename = "/var/lib/mysql/data/binlog"
+		}
+		_, err := fmt.Fprintf(stdout, "%s\t%s\n", basename, binlogName(p.current))
 		return err
 	case strings.Contains(input, "SHOW BINARY LOGS"):
-		for index := 2; index <= p.current; index++ {
+		oldest := p.oldest
+		if oldest == 0 {
+			oldest = 2
+		}
+		for index := oldest; index <= p.current; index++ {
 			fmt.Fprintf(stdout, "%s\t100\tNo\n", binlogName(index))
 		}
 		return nil
