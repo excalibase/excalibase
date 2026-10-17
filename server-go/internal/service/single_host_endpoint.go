@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -19,6 +20,7 @@ type SingleHostEndpointService struct {
 	instances storage.InstanceStore
 	docker    provisioner.DockerClient
 	gatewayCA func(ctx context.Context, projectID string) ([]byte, error)
+	mysqlCA   func(ctx context.Context, container string) (string, error)
 }
 
 const singleHostLoopback = "127.0.0.1"
@@ -29,6 +31,9 @@ func NewSingleHostEndpointService(instances storage.InstanceStore, docker provis
 		docker:    docker,
 		gatewayCA: func(ctx context.Context, projectID string) ([]byte, error) {
 			return provisioner.DocumentDBGatewayCA(ctx, docker, projectID)
+		},
+		mysqlCA: func(ctx context.Context, container string) (string, error) {
+			return provisioner.MySQLServerCA(ctx, docker, container)
 		},
 	}
 }
@@ -44,7 +49,7 @@ func (s *SingleHostEndpointService) Describe(ctx context.Context, projectID stri
 		return DBEndpointView{}, fmt.Errorf("read the database container of %s: %w", projectID, err)
 	}
 	if inst.DBType == domain.MySQL {
-		return singleHostMySQLView(inst, database), nil
+		return s.singleHostMySQLView(ctx, inst, database)
 	}
 	view := DBEndpointView{
 		ProjectID:     inst.ProjectID,
@@ -73,8 +78,9 @@ func (s *SingleHostEndpointService) Describe(ctx context.Context, projectID stri
 }
 
 // singleHostMySQLView is the loopback port mysqld publishes; every platform
-// user requires TLS, so there is no plaintext string.
-func singleHostMySQLView(inst *domain.DatabaseInstance, database provisioner.ContainerState) DBEndpointView {
+// user requires TLS, so there is no plaintext string, and the CA the
+// container's certificate was issued from verifies the server (EXC-589).
+func (s *SingleHostEndpointService) singleHostMySQLView(ctx context.Context, inst *domain.DatabaseInstance, database provisioner.ContainerState) (DBEndpointView, error) {
 	view := DBEndpointView{
 		ProjectID:     inst.ProjectID,
 		PublicOffered: true,
@@ -95,7 +101,16 @@ func singleHostMySQLView(inst *domain.DatabaseInstance, database provisioner.Con
 		view.Available, view.Port = true, port
 		view.Connection.RequireTLS = mysqlEndpointString(singleHostLoopback, port, inst.Username, inst.DatabaseName)
 	}
-	return view
+	if !database.Running {
+		return view, nil
+	}
+	ca, err := s.mysqlCA(ctx, inst.Namespace)
+	if err != nil {
+		log.Printf("ERROR: read the MySQL CA of %s: %v", inst.ProjectID, err)
+		return DBEndpointView{}, ErrServerCAUnavailable
+	}
+	view.CACertificate = ca
+	return view, nil
 }
 
 // addMongo fills in the gateway's port and the CA its certificate is signed

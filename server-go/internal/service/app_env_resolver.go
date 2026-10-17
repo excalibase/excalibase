@@ -33,7 +33,9 @@ var errNoVault = errors.New("no vault is configured to read it from")
 
 type databaseLogin struct {
 	host, port, database, username, password, sslMode string
-	mysql                                             bool
+	// serverCA is a MySQL server's CA, which its clients verify it with.
+	serverCA string
+	mysql    bool
 }
 
 func (r *AppEnvResolver) ResolveReference(projectID string, ref apphost.ResolvedReference) (string, error) {
@@ -97,7 +99,7 @@ func (r *AppEnvResolver) databaseLogin(projectID, databaseName string) (database
 	login := databaseLogin{
 		host: record["host"], port: record["port"], database: record["database"],
 		username: record["username"], password: record["password"], sslMode: inst.SSLMode,
-		mysql: domain.IsMySQLRecord(record),
+		serverCA: record[domain.CredentialServerCAKey], mysql: domain.IsMySQLRecord(record),
 	}
 	for field, value := range map[string]string{
 		"host": login.host, "port": login.port, "database": login.database,
@@ -125,6 +127,11 @@ func (l databaseLogin) mysqlVariable(variable string) (string, error) {
 		return l.username, nil
 	case "MYSQL_PASSWORD":
 		return l.password, nil
+	case "MYSQL_SSL_CA":
+		if l.serverCA == "" {
+			return "", errors.New("the stored database login carries no server CA")
+		}
+		return l.serverCA, nil
 	default:
 		return "", fmt.Errorf("a MySQL database exposes no variable %q", variable)
 	}

@@ -99,7 +99,7 @@ func (p *DockerMySQLProvisioner) Provision(ctx context.Context, req domain.Provi
 		Port:         mysqlPort,
 		DatabaseName: database,
 		Username:     MySQLUserAdmin,
-		SSLMode:      "REQUIRED",
+		SSLMode:      domain.MySQLSSLMode,
 		Namespace:    container,
 	}, nil
 }
@@ -128,6 +128,10 @@ func (p *DockerMySQLProvisioner) StartOnVolume(ctx context.Context, projectID, i
 	}
 	if _, err := p.docker.CreateContainerSpec(ctx, spec); err != nil {
 		return "", fmt.Errorf("create container: %w", err)
+	}
+	// The certificate names the container, which is what clients dial.
+	if err := writeMySQLTLS(ctx, p.docker, spec.Name); err != nil {
+		return spec.Name, err
 	}
 	if err := p.start(ctx, spec.Name); err != nil {
 		return spec.Name, fmt.Errorf("start container: %w", err)

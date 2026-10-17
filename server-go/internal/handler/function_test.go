@@ -1347,20 +1347,24 @@ func TestFunctionHandler_PublicInvoke_RuntimeFailureDoesNotLeak(t *testing.T) {
 	}
 }
 
-// ADR 0041: a MySQL project's functions get a mysql:// URL requiring TLS.
+// ADR 0041: a MySQL project's functions get a mysql:// URL that verifies the
+// server, and the CA to verify it with (EXC-589).
 func TestFunctionHandler_BuiltinEnv_MySQLURL(t *testing.T) {
 	v := newFakeVault()
 	v.data["projects/proj_my/credentials/admin"] = map[string]string{
 		"engine": "mysql", "tls": "required", "host": "moco-proj_my-mysql-primary.org-proj_my.svc.cluster.local",
-		"port": "3306", "database": "app", "username": "admin", "password": "p4ss/w0rd",
+		"port": "3306", "database": "app", "username": "admin", "password": "p4ss/w0rd", "sslrootcert": "CA-PEM",
 	}
 	h := NewFunctionHandler(edgefn.NewFunctionStore(t.TempDir()), edgefn.NewSecretsStore(v), nil,
 		&inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{"proj_my": {ProjectID: "proj_my", OrgID: "default"}}},
 		nil, testAPIBase)
 	h.SetVault(v)
-	got := h.builtinEnv(context.Background(), "proj_my")["EXCALIBASE_DB_URL"]
-	want := "mysql://admin:p4ss%2Fw0rd@moco-proj_my-mysql-primary.org-proj_my.svc.cluster.local:3306/app?ssl-mode=REQUIRED"
-	if got != want {
+	env := h.builtinEnv(context.Background(), "proj_my")
+	want := "mysql://admin:p4ss%2Fw0rd@moco-proj_my-mysql-primary.org-proj_my.svc.cluster.local:3306/app?ssl-mode=VERIFY_IDENTITY"
+	if got := env["EXCALIBASE_DB_URL"]; got != want {
 		t.Errorf("EXCALIBASE_DB_URL\n got:  %q\n want: %q", got, want)
+	}
+	if env["EXCALIBASE_DB_CA_CERT"] != "CA-PEM" {
+		t.Errorf("EXCALIBASE_DB_CA_CERT = %q", env["EXCALIBASE_DB_CA_CERT"])
 	}
 }

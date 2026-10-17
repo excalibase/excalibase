@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -11,8 +12,8 @@ import (
 
 // A MySQL project's endpoint (ADR 0041): the same LoadBalancer and port
 // allocator as Postgres, fronting MOCO's primary on 3306. Every platform user
-// is REQUIRE SSL, so TLS is not a choice, and mysqld's own self-signed
-// certificate leaves no CA to hand out: ssl-mode=REQUIRED is the honest string.
+// is REQUIRE SSL, so TLS is not a choice, and the server certificate comes
+// from the project's own CA, handed out here so clients verify it (EXC-589).
 
 const mysqlPort = 3306
 
@@ -31,6 +32,22 @@ func (s *DBEndpointService) mysqlServiceSpec(inst *domain.DatabaseInstance, port
 }
 
 func (s *DBEndpointService) mysqlView(ctx context.Context, inst *domain.DatabaseInstance, endpoint domain.DBEndpoint) (DBEndpointView, error) {
+	view, err := s.mysqlEndpoints(ctx, inst, endpoint)
+	if err != nil {
+		return DBEndpointView{}, err
+	}
+	// Every login needs TLS, in-cluster ones too, so the CA goes with any
+	// running database, published or not.
+	if view.Available || servableNow(inst.Status) {
+		if view.CACertificate, err = s.mysqlCA(ctx, inst); err != nil {
+			return DBEndpointView{}, err
+		}
+	}
+	return view, nil
+}
+
+// mysqlEndpoints fills in the internal address and, when offered, the public one.
+func (s *DBEndpointService) mysqlEndpoints(ctx context.Context, inst *domain.DatabaseInstance, endpoint domain.DBEndpoint) (DBEndpointView, error) {
 	view := DBEndpointView{
 		ProjectID:     inst.ProjectID,
 		PublicOffered: s.publicOffered(),
@@ -67,7 +84,20 @@ func (s *DBEndpointService) mysqlView(ctx context.Context, inst *domain.Database
 // mysqlEndpointString names the user and leaves the password out, as the
 // Postgres strings on this Developer-level surface do.
 func mysqlEndpointString(host string, port int, user, database string) string {
-	return "mysql://" + user + "@" + host + ":" + strconv.Itoa(port) + "/" + database + "?ssl-mode=REQUIRED"
+	return "mysql://" + user + "@" + host + ":" + strconv.Itoa(port) + "/" + database + "?ssl-mode=" + domain.MySQLSSLMode
+}
+
+// mysqlCA is the CA cert-manager issued the project's server certificate from.
+func (s *DBEndpointService) mysqlCA(ctx context.Context, inst *domain.DatabaseInstance) (string, error) {
+	secret, err := s.kube.GetSecret(ctx, inst.Namespace, k8s.MySQLCASecretName(inst.ProjectID))
+	if err == nil {
+		var ca string
+		if ca, err = k8s.MySQLServerCA(secret); err == nil {
+			return ca, nil
+		}
+	}
+	log.Printf("ERROR: read the MySQL CA of %s: %v", inst.ProjectID, err)
+	return "", ErrServerCAUnavailable
 }
 
 // publicServiceName is the project's public Service, named for its engine.

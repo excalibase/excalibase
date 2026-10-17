@@ -5,6 +5,7 @@ import { loginAs } from './helpers';
 const FIRST_RENDER = 20_000;
 const PROJECT_ID = 'shop-mysql';
 const HOST = 'moco-shop-mysql-mysql-primary.org-1-shop-mysql.svc.cluster.local';
+const CA_PEM = '-----BEGIN CERTIFICATE-----\nMYSQLCA\n-----END CERTIFICATE-----\n';
 
 async function json(page: Page, pattern: string, body: unknown) {
   await page.route(pattern, (route) =>
@@ -91,15 +92,30 @@ test.describe('Studio on a MySQL project', () => {
     });
   });
 
-  test('shows mysql://, Node and Connector/J connection examples', async ({ page }) => {
+  // EXC-589: every MySQL string verifies the server against the project CA.
+  test('shows verifying mysql://, Node and Connector/J examples and the CA', async ({ page }) => {
     await mockMySQLProject(page);
     await json(page, `**/api/provision/${PROJECT_ID}/credentials`, {
       projectId: PROJECT_ID, host: HOST, port: 3306, databaseName: 'shop', username: 'admin', password: 's3cret',
-      engine: 'mysql', jdbcUrl: `jdbc:mysql://${HOST}:3306/shop?sslMode=REQUIRED`,
+      engine: 'mysql', jdbcUrl: `jdbc:mysql://${HOST}:3306/shop?sslMode=VERIFY_IDENTITY`,
+    });
+    await json(page, `**/api/projects/${PROJECT_ID}/db-endpoint`, {
+      projectId: PROJECT_ID, publicOffered: true, publicEnabled: false, available: false, host: '', port: 0,
+      requireTls: true, database: 'shop', username: 'admin', connectionStrings: { requireTls: '', allowPlaintext: '' },
+      caCertificate: CA_PEM, internal: { host: HOST, port: 3306, connectionString: '' },
     });
     await page.goto(`/project/${PROJECT_ID}/settings`);
-    await expect(page.getByTestId('conn-mysql-internal')).toContainText(`@${HOST}:3306/shop?ssl-mode=REQUIRED`, { timeout: FIRST_RENDER });
+    await expect(page.getByTestId('conn-mysql-internal')).toContainText(
+      `@${HOST}:3306/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=${PROJECT_ID}-ca.crt`,
+      { timeout: FIRST_RENDER },
+    );
+    await expect(page.getByTestId('conn-mysql-section').getByTestId('conn-ca-download')).toHaveAttribute(
+      'download', `${PROJECT_ID}-ca.crt`,
+    );
+    await expect(page.getByTestId('conn-mysql-connectorj')).toContainText('sslMode=VERIFY_IDENTITY');
     await expect(page.getByTestId('conn-mysql-node')).toContainText("import mysql from 'mysql2/promise'");
+    await expect(page.getByTestId('conn-mysql-node')).toContainText(`ssl: { ca: readFileSync('${PROJECT_ID}-ca.crt') }`);
+    await expect(page.getByTestId('conn-mysql-node')).not.toContainText('rejectUnauthorized');
     await expect(page.getByTestId('conn-mysql-connectorj')).toContainText('DriverManager.getConnection(url, "admin"');
     await expect(page.getByTestId('conn-mysql-node')).not.toContainText('s3cret');
   });

@@ -82,14 +82,13 @@ func MySQLContainerSpec(projectID, image string, plan config.TierConfig) (Contai
 }
 
 // mysqlStartScript initialises an empty datadir, root with no password on the
-// socket alone, and runs mysqld. mysqld writes its TLS certificate into the
-// datadir on first start.
+// socket alone, installs the server certificate once, and runs mysqld.
 func mysqlStartScript(args []string) string {
 	return `set -eu
 if [ ! -d ` + MySQLDataDir + `/mysql ]; then
   mysqld --initialize-insecure --datadir=` + MySQLDataDir + `
 fi
-exec mysqld ` + strings.Join(args, " ")
+` + mysqlTLSScript() + `exec mysqld ` + strings.Join(args, " ")
 }
 
 // mysqlServerArgs are MOCO's settings that matter here and the plan's,
@@ -112,6 +111,8 @@ func mysqlServerArgs(plan config.TierConfig) ([]string, error) {
 		"skip_name_resolve":          "ON",
 		"mysqlx":                     "OFF",
 		"require_secure_transport":   "ON",
+		"ssl_cert":                   MySQLTLSDir + "/tls.crt",
+		"ssl_key":                    MySQLTLSDir + "/tls.key",
 		"gtid_mode":                  "ON",
 		"enforce_gtid_consistency":   "ON",
 		"log_bin":                    "binlog",

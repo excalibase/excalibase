@@ -42,7 +42,8 @@ var ErrCredentialRotationUnavailable = errors.New("credential rotation: vault an
 // RoleCredentialVerifier proves a password opens a project's database as a
 // given role. Implemented by *TenantRoleVerifier; tests substitute their own.
 type RoleCredentialVerifier interface {
-	VerifyRole(ctx context.Context, inst *domain.DatabaseInstance, username, password string) error
+	// serverCA is what a MySQL server is verified against; Postgres ignores it.
+	VerifyRole(ctx context.Context, inst *domain.DatabaseInstance, username, password, serverCA string) error
 }
 
 // SetCredentialVerifier wires the check that proves a rotated password works.
@@ -59,6 +60,9 @@ type credentialRotationTarget struct {
 	// name for the platform's own roles and inst.Username for the owner,
 	// whose name is chosen per project.
 	username string
+	// serverCA is a MySQL project's server CA, carried into the rotated
+	// record and used to verify the new password.
+	serverCA string
 }
 
 // RotateCredentials replaces the passwords of every platform role filed under
@@ -90,7 +94,12 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 	if err != nil {
 		return nil, err
 	}
+	serverCA, err := s.rotationServerCA(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
 	for _, target := range rotationTargets(inst, filed) {
+		target.serverCA = serverCA
 		authenticatesByCertificate, err := s.authenticatesByCertificate(projectID, target.role)
 		if err != nil {
 			return nil, err
@@ -167,7 +176,7 @@ func (s *ProvisioningService) rotateRoleCredential(ctx context.Context, inst *do
 	}
 	if password == "" {
 		password = generatePassword(rotatedPasswordLength)
-		record := roleCredentialRecord(inst, target.username, password)
+		record := roleCredentialRecord(inst, target.username, password, target.serverCA)
 		record["state"] = pendingCredentialState
 		if err := s.vault.Put(pendingPath, record); err != nil {
 			return fmt.Errorf("record pending credential: %w", err)
@@ -195,7 +204,7 @@ func (s *ProvisioningService) applyAndVerify(ctx context.Context, inst *domain.D
 	target credentialRotationTarget, password, pendingPath string) error {
 
 	alterErr := s.alterRolePassword(ctx, inst, target.username, password)
-	verifyErr := s.credVerifier.VerifyRole(ctx, inst, target.username, password)
+	verifyErr := s.credVerifier.VerifyRole(ctx, inst, target.username, password, target.serverCA)
 	if verifyErr == nil {
 		return nil
 	}
@@ -221,7 +230,7 @@ func (s *ProvisioningService) recordedCredentialStillOpensTheDatabase(ctx contex
 	if err != nil || record["password"] == "" {
 		return false
 	}
-	return s.credVerifier.VerifyRole(ctx, inst, target.username, record["password"]) == nil
+	return s.credVerifier.VerifyRole(ctx, inst, target.username, record["password"], target.serverCA) == nil
 }
 
 // promoteCredential makes the proved password the current one: the vault copy
@@ -232,7 +241,7 @@ func (s *ProvisioningService) promoteCredential(ctx context.Context, inst *domai
 	target credentialRotationTarget, password, pendingPath string) error {
 
 	if err := s.vault.Put(vaultCredentialPath(inst.ProjectID, target.role),
-		roleCredentialRecord(inst, target.username, password)); err != nil {
+		roleCredentialRecord(inst, target.username, password, target.serverCA)); err != nil {
 		return fmt.Errorf("promote credential: %w", err)
 	}
 	if err := s.vault.Delete(pendingPath); err != nil {
@@ -319,11 +328,24 @@ func (s *ProvisioningService) announceCredentialRotation(ctx context.Context, pr
 	})
 }
 
+// rotationServerCA is the CA a MySQL project's server presents now; Postgres
+// projects have none to carry.
+func (s *ProvisioningService) rotationServerCA(ctx context.Context, inst *domain.DatabaseInstance) (string, error) {
+	if inst.DBType != domain.MySQL {
+		return "", nil
+	}
+	mysql, err := s.mysqlServerOf()
+	if err != nil {
+		return "", err
+	}
+	return mysql.ServerCA(ctx, inst.Namespace, inst.ProjectID)
+}
+
 // roleCredentialRecord builds the vault record for a role, in the shape
 // provisioning files credentials in.
-func roleCredentialRecord(inst *domain.DatabaseInstance, username, password string) map[string]string {
+func roleCredentialRecord(inst *domain.DatabaseInstance, username, password, serverCA string) map[string]string {
 	if inst.DBType == domain.MySQL {
-		return mysqlCredentialRecord(inst, username, password)
+		return mysqlCredentialRecord(inst, username, password, serverCA)
 	}
 	port := 5432
 	if inst.Port != nil {
@@ -370,15 +392,15 @@ func NewTenantRoleVerifier() *TenantRoleVerifier {
 // VerifyRole opens the project's database as username with password and runs
 // a trivial query. Errors name the role and nothing else — the connection
 // string carries the password being proved.
-func (v *TenantRoleVerifier) VerifyRole(ctx context.Context, inst *domain.DatabaseInstance, username, password string) error {
+func (v *TenantRoleVerifier) VerifyRole(ctx context.Context, inst *domain.DatabaseInstance, username, password, serverCA string) error {
 	if inst.DBType == domain.MySQL {
-		return v.verifyMySQLUser(ctx, inst, username, password)
+		return v.verifyMySQLUser(ctx, inst, username, password, serverCA)
 	}
 	overrides := v.overrides
 	if overrides.sslmode == "" && overrides.host == "" && inst.SSLMode != "" {
 		overrides.sslmode = inst.SSLMode
 	}
-	dsn, err := buildTenantDSN(roleCredentialRecord(inst, username, password), overrides)
+	dsn, err := buildTenantDSN(roleCredentialRecord(inst, username, password, ""), overrides)
 	if err != nil {
 		return fmt.Errorf("open project database as %s: connection could not be established", username)
 	}

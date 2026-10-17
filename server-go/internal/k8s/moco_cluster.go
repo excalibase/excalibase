@@ -55,6 +55,9 @@ type MySQLClusterOpts struct {
 	StorageClass string
 	// Image is the catalogue's digest-pinned image (config.MySQLImage).
 	Image string
+	// PublicNames are the public endpoint names the server certificate also
+	// carries; empty where the platform offers no public endpoints.
+	PublicNames []string
 }
 
 // MySQLClusterName is the project's MySQLCluster.
@@ -125,6 +128,12 @@ func BuildMySQLCluster(opts MySQLClusterOpts) (*unstructured.Unstructured, error
 			},
 		},
 	}}
+	podSpec := cluster.Object["spec"].(map[string]interface{})["podTemplate"].(map[string]interface{})["spec"].(map[string]interface{})
+	mysqld, err := mysqldOf(podSpec)
+	if err != nil {
+		return nil, err
+	}
+	mountMySQLTLS(podSpec, mysqld, opts.ProjectID)
 	sized, err := applyMySQLPlan(cluster, opts.Tier, opts.Tier.StorageSize, opts.StorageClass)
 	if err != nil {
 		return nil, err
@@ -263,8 +272,11 @@ func BuildMySQLConfig(opts MySQLClusterOpts) (*unstructured.Unstructured, error)
 	if err != nil {
 		return nil, err
 	}
-	data := make(map[string]interface{}, len(settings))
+	data := make(map[string]interface{}, len(settings)+2)
 	for key, value := range settings {
+		data[key] = value
+	}
+	for key, value := range mysqlTLSSettings() {
 		data[key] = value
 	}
 	return &unstructured.Unstructured{Object: map[string]interface{}{

@@ -80,7 +80,7 @@ func StartDocumentDBGatewayWithTLS(ctx context.Context, docker DockerClient, pro
 	if err != nil {
 		return fmt.Errorf("create gateway: %w", err)
 	}
-	archive, err := material.tarball()
+	archive, err := material.tarball("tls", documentDBGatewayOwner)
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func DocumentDBGatewayStale(ctx context.Context, docker DockerClient, projectID,
 // DocumentDBGatewayCA reads the CA the project's gateway certificate is
 // signed by, from the gateway itself.
 func DocumentDBGatewayCA(ctx context.Context, docker DockerClient, projectID string) ([]byte, error) {
-	return readGatewayFile(ctx, docker, projectID, "ca.crt")
+	return readGatewayFile(ctx, docker, projectID, tlsCAFile)
 }
 
 // ReadDocumentDBGatewayTLS reads what the project's gateway presents; found
@@ -155,7 +155,7 @@ func ReadDocumentDBGatewayTLS(ctx context.Context, docker DockerClient, projectI
 		return GatewayTLS{}, false, err
 	}
 	var files [3][]byte
-	for i, name := range []string{"ca.crt", "tls.crt", "tls.key"} {
+	for i, name := range []string{tlsCAFile, tlsCertFile, tlsKeyFile} {
 		if files[i], err = readGatewayFile(ctx, docker, projectID, name); err != nil {
 			return GatewayTLS{}, false, err
 		}
@@ -165,41 +165,50 @@ func ReadDocumentDBGatewayTLS(ctx context.Context, docker DockerClient, projectI
 
 // readGatewayFile reads one file of the gateway's tls directory.
 func readGatewayFile(ctx context.Context, docker DockerClient, projectID, file string) ([]byte, error) {
-	stream, err := docker.CopyFromContainer(ctx, DocumentDBGatewayName(projectID), documentDBGatewayTLSDir+"/"+file)
+	body, err := readContainerFile(ctx, docker, DocumentDBGatewayName(projectID), documentDBGatewayTLSDir+"/"+file)
 	if err != nil {
 		return nil, fmt.Errorf("read the gateway %s of %s: %w", file, projectID, err)
+	}
+	return body, nil
+}
+
+// readContainerFile reads one small file out of a container.
+func readContainerFile(ctx context.Context, docker DockerClient, container, filePath string) ([]byte, error) {
+	file := path.Base(filePath)
+	stream, err := docker.CopyFromContainer(ctx, container, filePath)
+	if err != nil {
+		return nil, err
 	}
 	defer stream.Close()
 	reader := tar.NewReader(stream)
 	for {
 		header, err := reader.Next()
 		if err != nil {
-			return nil, fmt.Errorf("read the gateway %s of %s: %w", file, projectID, err)
+			return nil, err
 		}
 		if header.Typeflag != tar.TypeReg || path.Base(header.Name) != file {
 			continue
 		}
 		body, err := io.ReadAll(io.LimitReader(reader, 64<<10))
 		if err != nil || len(body) == 0 {
-			return nil, fmt.Errorf("the gateway %s of %s is empty or unreadable: %v", file, projectID, err)
+			return nil, fmt.Errorf("%s is empty or unreadable: %v", file, err)
 		}
 		return body, nil
 	}
 }
 
-// tarball packs the gateway's tls directory, readable by its user only.
-func (m gatewayTLS) tarball() (io.Reader, error) {
+// tarball packs the material as directory dir, readable by owner only.
+func (m gatewayTLS) tarball(dir string, owner FileOwner) (io.Reader, error) {
 	var buffer bytes.Buffer
 	writer := tar.NewWriter(&buffer)
-	owner := documentDBGatewayOwner
-	if err := writer.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: "tls/", Mode: 0o700, Uid: owner.UID, Gid: owner.GID, ModTime: time.Now()}); err != nil {
+	if err := writer.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: dir + "/", Mode: 0o700, Uid: owner.UID, Gid: owner.GID, ModTime: time.Now()}); err != nil {
 		return nil, err
 	}
 	for _, file := range []struct {
 		name string
 		body []byte
-	}{{"ca.crt", m.caPEM}, {"tls.crt", m.certPEM}, {"tls.key", m.keyPEM}} {
-		header := &tar.Header{Name: "tls/" + file.name, Mode: 0o600, Size: int64(len(file.body)), Uid: owner.UID, Gid: owner.GID, ModTime: time.Now()}
+	}{{tlsCAFile, m.caPEM}, {tlsCertFile, m.certPEM}, {tlsKeyFile, m.keyPEM}} {
+		header := &tar.Header{Name: dir + "/" + file.name, Mode: 0o600, Size: int64(len(file.body)), Uid: owner.UID, Gid: owner.GID, ModTime: time.Now()}
 		if err := writer.WriteHeader(header); err != nil {
 			return nil, err
 		}

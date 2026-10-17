@@ -2,19 +2,23 @@ package service
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/mysqltls"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/testutil/testca"
 )
 
 // ADR 0041, EXC-583: MySQL projects on MOCO.
@@ -330,6 +334,9 @@ func TestMySQLProjectFilesItsPlatformLogins(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", role, err)
 		}
+		if record["sslrootcert"] != string(k8s.MockMySQLCA()["tls.crt"]) {
+			t.Errorf("%s record does not carry the project's server CA (EXC-589)", role)
+		}
 		if record["engine"] != "mysql" || record["tls"] != "required" || record["database"] != database ||
 			record["username"] != role || record["port"] != "3306" || len(record["password"]) < 32 ||
 			record["host"] != k8s.MySQLPrimaryHost(inst.ProjectID, inst.Namespace) {
@@ -355,7 +362,7 @@ func TestMySQLCredentialsAreMySQLConnectionStrings(t *testing.T) {
 		t.Fatal(err)
 	}
 	password, _ := svc.OwnerPassword(inst.ProjectID)
-	if creds.Engine != "mysql" || creds.Username != "admin" || creds.Password != password || creds.SSLMode != "REQUIRED" ||
+	if creds.Engine != "mysql" || creds.Username != "admin" || creds.Password != password || creds.SSLMode != "VERIFY_IDENTITY" ||
 		creds.ConnectionURL != domain.MySQLURL(inst.Host, "3306", "admin", password, "app") ||
 		creds.JDBCURL != domain.MySQLJDBCURL(inst.Host, "3306", "app") {
 		t.Errorf("credentials %+v", creds)
@@ -404,19 +411,55 @@ func TestRotatingMySQLCredentials(t *testing.T) {
 	}
 }
 
-// The verifier opens MySQL over TLS without verifying the certificate (what
-// ssl-mode=REQUIRED means) and names no database, so every platform user,
-// auth_admin included, can be proved.
+// EXC-589: a rotated login keeps the CA its clients verify the server with.
+func TestRotatingMySQLCredentialsKeepsTheServerCA(t *testing.T) {
+	svc, store, _ := setupMySQLTest(t)
+	svc.SetCredentialVerifier(&fakeRoleVerifier{})
+	inst := provisionMySQL(t, svc, store, "")
+	if _, err := svc.RotateCredentials(context.Background(), inst.ProjectID); err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+	for _, role := range []string{roleAdmin, roleApp, roleAuthAdmin} {
+		record, _ := svc.vault.Get(vaultCredentialPath(inst.ProjectID, role))
+		if record["sslrootcert"] != string(k8s.MockMySQLCA()["tls.crt"]) {
+			t.Errorf("%s lost its server CA in the rotation", role)
+		}
+	}
+}
+
+// The verifier opens MySQL over TLS, verifying the server against the
+// project's CA and its recorded host even through a port-forward (EXC-589),
+// and names no database, so every platform user, auth_admin included, can be
+// proved.
 func TestMySQLVerifyConfig(t *testing.T) {
 	port := 3306
-	inst := &domain.DatabaseInstance{DBType: domain.MySQL, Host: "moco-p-mysql-primary.ns.svc.cluster.local", Port: &port}
-	config := mysqlVerifyConfig(inst, "auth_admin", "pw", dsnOverrides{})
-	if config.Addr != "moco-p-mysql-primary.ns.svc.cluster.local:3306" || config.User != "auth_admin" ||
-		config.Passwd != "pw" || config.DBName != "" || config.TLSConfig != "skip-verify" || config.Net != "tcp" {
+	host := "moco-p-mysql-primary.ns.svc.cluster.local"
+	inst := &domain.DatabaseInstance{DBType: domain.MySQL, Host: host, Port: &port}
+	ca := testca.New(t, "p MySQL CA")
+	config, err := mysqlVerifyConfig(inst, "auth_admin", "pw", dsnOverrides{}, ca.PEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Addr != host+":3306" || config.User != "auth_admin" ||
+		config.Passwd != "pw" || config.DBName != "" || config.Net != "tcp" {
 		t.Errorf("config %+v", config)
 	}
-	forwarded := mysqlVerifyConfig(inst, "admin", "pw", dsnOverrides{host: "127.0.0.1", port: "13306"})
-	if forwarded.Addr != "127.0.0.1:13306" {
-		t.Errorf("override ignored: %s", forwarded.Addr)
+	forwarded, err := mysqlVerifyConfig(inst, "admin", "pw", dsnOverrides{host: "127.0.0.1", port: "13306"}, ca.PEM)
+	if err != nil || forwarded.Addr != "127.0.0.1:13306" {
+		t.Fatalf("override: %v %v", forwarded, err)
+	}
+	for _, c := range []*mysql.Config{config, forwarded} {
+		if c.TLS == nil || c.TLS.ServerName != host {
+			t.Fatalf("TLS %+v", c.TLS)
+		}
+		if _, err := ca.Issue(t, host).Cert.Verify(x509.VerifyOptions{Roots: c.TLS.RootCAs, DNSName: host}); err != nil {
+			t.Errorf("the project's certificate is refused: %v", err)
+		}
+		if _, err := testca.New(t, "other").Issue(t, host).Cert.Verify(x509.VerifyOptions{Roots: c.TLS.RootCAs, DNSName: host}); err == nil {
+			t.Error("another CA's certificate is accepted")
+		}
+	}
+	if _, err := mysqlVerifyConfig(inst, "admin", "pw", dsnOverrides{}, ""); !errors.Is(err, mysqltls.ErrNoServerCA) {
+		t.Errorf("no CA: %v", err)
 	}
 }

@@ -15,17 +15,17 @@ const MYSQL_PROJECT = {
 
 const MYSQL_CREDENTIALS = {
   projectId: 'p-my', host: MYSQL_PROJECT.host, port: 3306, databaseName: 'app', username: 'admin',
-  password: 's3cr3t', sslMode: 'REQUIRED', engine: 'mysql',
-  connectionUrl: `mysql://admin:s3cr3t@${MYSQL_PROJECT.host}:3306/app?ssl-mode=REQUIRED`,
-  jdbcUrl: `jdbc:mysql://${MYSQL_PROJECT.host}:3306/app?sslMode=REQUIRED`,
+  password: 's3cr3t', sslMode: 'VERIFY_IDENTITY', engine: 'mysql',
+  connectionUrl: `mysql://admin:s3cr3t@${MYSQL_PROJECT.host}:3306/app?ssl-mode=VERIFY_IDENTITY`,
+  jdbcUrl: `jdbc:mysql://${MYSQL_PROJECT.host}:3306/app?sslMode=VERIFY_IDENTITY`,
 };
 
-// EXC-585: published on its own port, TLS always required, no CA to offer.
+// EXC-585: published on its own port, TLS always required; EXC-589: the project CA verifies it.
 const MYSQL_ENDPOINT = {
   projectId: 'p-my', publicOffered: true, publicEnabled: true, available: true, canChange: true,
   host: 'p-my.db.example.com', port: 32010, requireTls: true, engine: 'mysql', database: 'app', username: 'admin',
-  connectionStrings: { requireTls: 'mysql://admin@p-my.db.example.com:32010/app?ssl-mode=REQUIRED', allowPlaintext: '' },
-  caCertificate: '',
+  connectionStrings: { requireTls: 'mysql://admin@p-my.db.example.com:32010/app?ssl-mode=VERIFY_IDENTITY', allowPlaintext: '' },
+  caCertificate: '-----BEGIN CERTIFICATE-----\nMYSQLCA\n-----END CERTIFICATE-----\n',
   internal: { host: MYSQL_PROJECT.host, port: 3306, connectionString: '' },
 };
 
@@ -76,22 +76,22 @@ describe('SettingsPage — MySQL', () => {
     expect(await screen.findByTestId('conn-mysql-section')).toBeInTheDocument();
     expect(screen.getByTestId('conn-username')).toHaveTextContent('admin');
     expect(screen.getByTestId('conn-mysql-internal')).toHaveTextContent(
-      `mysql://admin:••••••••@${MYSQL_PROJECT.host}:3306/app?ssl-mode=REQUIRED`,
+      `mysql://admin:••••••••@${MYSQL_PROJECT.host}:3306/app?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-my-ca.crt`,
     );
     expect(screen.getByTestId('conn-mysql-jdbc')).toHaveTextContent(
-      `jdbc:mysql://${MYSQL_PROJECT.host}:3306/app?sslMode=REQUIRED`,
+      `jdbc:mysql://${MYSQL_PROJECT.host}:3306/app?sslMode=VERIFY_IDENTITY`,
     );
     expect(screen.getByTestId('conn-mysql-section')).toHaveTextContent('TLS required');
     expect(screen.queryByTestId('conn-postgres-section')).not.toBeInTheDocument();
     expect(screen.queryByText(/postgresql:\/\//)).not.toBeInTheDocument();
   });
 
-  test('offers the public port and its MySQL string, TLS required, no CA', async () => {
+  test('offers the public port, its verifying MySQL string and the project CA', async () => {
     renderSettings();
     expect(await screen.findByTestId('public-port-card')).toBeInTheDocument();
     expect(await screen.findByTestId('conn-mysql-public')).toHaveTextContent(
-      'mysql://admin:••••••••@p-my.db.example.com:32010/app?ssl-mode=REQUIRED',
+      'mysql://admin:••••••••@p-my.db.example.com:32010/app?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-my-ca.crt',
     );
-    expect(screen.queryByTestId('conn-ca-download')).not.toBeInTheDocument();
+    expect(screen.getByTestId('conn-ca-download')).toHaveAttribute('download', 'p-my-ca.crt');
   });
 });

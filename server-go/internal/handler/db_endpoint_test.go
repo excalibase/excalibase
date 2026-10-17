@@ -166,6 +166,7 @@ func TestDBEndpointErrorsMapToTheirMeaning(t *testing.T) {
 		{"ports exhausted", storage.ErrDBEndpointPortsExhausted, http.StatusServiceUnavailable},
 		{"not observed", service.ErrDBEndpointNotObserved, http.StatusBadGateway},
 		{"TLS change not observed", service.ErrTLSSettingNotObserved, http.StatusBadGateway},
+		{"server CA unreadable", service.ErrServerCAUnavailable, http.StatusServiceUnavailable},
 		{"project not active", fmt.Errorf("project p is PAUSED; %w", service.ErrProjectNotActive), http.StatusConflict},
 		{"project busy", fmt.Errorf("%w (p)", service.ErrProjectOperationRunning), http.StatusConflict},
 		{"TLS on a MySQL project", fmt.Errorf("%w: TLS is always required", service.ErrNotForMySQL), http.StatusConflict},

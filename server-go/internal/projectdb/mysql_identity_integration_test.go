@@ -16,19 +16,28 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/schema"
+	"github.com/excalibase/provisioning-poc/internal/testutil/testca"
 )
 
 // provisionedMySQL starts MySQL 8.4 with the platform's databases and users
-// exactly as provisioning creates them, and an opener whose vault holds them.
+// exactly as provisioning creates them, presenting a certificate from a
+// project CA the vault records carry (EXC-589), and an opener over them.
 func provisionedMySQL(t *testing.T) *Opener {
 	t.Helper()
 	ctx := context.Background()
+	ca := testca.New(t, "proj_my MySQL CA")
+	server := ca.Issue(t, "localhost")
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "mysql:8.4",
 			Env:          map[string]string{"MYSQL_ROOT_PASSWORD": "root-pw", "MYSQL_DATABASE": "app"},
 			ExposedPorts: []string{"3306/tcp"},
-			WaitingFor:   wait.ForLog("port: 3306  MySQL Community Server").WithStartupTimeout(3 * time.Minute),
+			Files: []testcontainers.ContainerFile{
+				{Reader: strings.NewReader(server.CertPEM), ContainerFilePath: "/etc/mysql-tls/tls.crt", FileMode: 0o644},
+				{Reader: strings.NewReader(server.KeyPEM), ContainerFilePath: "/etc/mysql-tls/tls.key", FileMode: 0o644},
+			},
+			Cmd:        []string{"--ssl-cert=/etc/mysql-tls/tls.crt", "--ssl-key=/etc/mysql-tls/tls.key"},
+			WaitingFor: wait.ForLog("port: 3306  MySQL Community Server").WithStartupTimeout(3 * time.Minute),
 		},
 		Started: true,
 	})
@@ -36,7 +45,7 @@ func provisionedMySQL(t *testing.T) *Opener {
 		t.Fatalf("start mysql: %v", err)
 	}
 	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
-	host, _ := container.Host(ctx)
+	host := "localhost"
 	port, _ := container.MappedPort(ctx, "3306/tcp")
 	config := mysql.NewConfig()
 	config.Net, config.Addr, config.User, config.Passwd = "tcp", host+":"+port.Port(), "root", "root-pw"
@@ -56,7 +65,7 @@ func provisionedMySQL(t *testing.T) *Opener {
 	}
 	record := func(user, password string) map[string]string {
 		return map[string]string{"engine": "mysql", "tls": "required", "host": host, "port": port.Port(),
-			"username": user, "password": password, "database": "app"}
+			"username": user, "password": password, "database": "app", "sslrootcert": ca.PEM}
 	}
 	vault := fakeVault{data: map[string]map[string]string{
 		"projects/proj_my/credentials/admin":          record("admin", "admin-pw"),

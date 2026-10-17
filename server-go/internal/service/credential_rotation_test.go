@@ -37,7 +37,7 @@ type fakeRoleVerifier struct {
 	calls  int
 }
 
-func (f *fakeRoleVerifier) VerifyRole(_ context.Context, _ *domain.DatabaseInstance, username, password string) error {
+func (f *fakeRoleVerifier) VerifyRole(_ context.Context, _ *domain.DatabaseInstance, username, password, _ string) error {
 	f.calls++
 	if f.accept == nil {
 		return nil
@@ -735,7 +735,7 @@ func TestTenantRoleVerifierRejectsACredentialThatCannotConnect(t *testing.T) {
 		DatabaseName: "app", SSLMode: "require",
 	}
 	secret := testutil.FixturePassword("verifier")
-	err := v.VerifyRole(context.Background(), inst, roleApp, secret)
+	err := v.VerifyRole(context.Background(), inst, roleApp, secret, "")
 	if err == nil {
 		t.Fatal("a credential that cannot connect must not verify")
 	}
@@ -757,7 +757,7 @@ func TestTenantRoleVerifierFallsBackToTheProjectSSLMode(t *testing.T) {
 		ProjectID: rotProject, Host: "127.0.0.1", Port: &port,
 		DatabaseName: "app", SSLMode: "disable",
 	}
-	if err := v.VerifyRole(context.Background(), inst, roleApp, testutil.FixturePassword("verifier")); err == nil {
+	if err := v.VerifyRole(context.Background(), inst, roleApp, testutil.FixturePassword("verifier"), ""); err == nil {
 		t.Fatal("no database is listening, so this must not verify")
 	}
 	if v.overrides.sslmode != "" {

@@ -203,7 +203,8 @@ func (h *ProvisioningHandler) dbEndpointRequestProject(w http.ResponseWriter, r 
 func writeDBEndpointError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrDBEndpointNotConfigured),
-		errors.Is(err, storage.ErrDBEndpointPortsExhausted):
+		errors.Is(err, storage.ErrDBEndpointPortsExhausted),
+		errors.Is(err, service.ErrServerCAUnavailable):
 		httpError(w, safeError(err), http.StatusServiceUnavailable)
 	case errors.Is(err, service.ErrDBEndpointUnsupported),
 		errors.Is(err, service.ErrProjectNotActive),

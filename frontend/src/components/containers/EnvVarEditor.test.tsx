@@ -59,7 +59,7 @@ describe('EnvVarEditor', () => {
   test('a MySQL database offers MySQL variables only', () => {
     mount([row({ kind: 'reference' })], { databaseName: 'app', mysql: true });
     const offered = screen.getAllByRole('option').map((option) => option.textContent);
-    expect(offered).toEqual(expect.arrayContaining(['DATABASE_URL', 'MYSQL_HOST', 'MYSQL_PASSWORD']));
+    expect(offered).toEqual(expect.arrayContaining(['DATABASE_URL', 'MYSQL_HOST', 'MYSQL_PASSWORD', 'MYSQL_SSL_CA']));
     expect(offered).not.toContain('PGHOST');
   });
 

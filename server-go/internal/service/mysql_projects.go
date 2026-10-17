@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -82,6 +83,12 @@ type mysqlServer interface {
 	SetUserPassword(ctx context.Context, namespace, projectID, user, password string) error
 	SetUserPasswords(ctx context.Context, namespace, projectID string, passwords map[string]string) error
 	RemoveDatabase(ctx context.Context, namespace, projectID string) error
+	// ServerCA is the CA the project's server certificate is signed by.
+	ServerCA(ctx context.Context, namespace, projectID string) (string, error)
+	// ServerCertificateExpiry is when the server certificate runs out.
+	ServerCertificateExpiry(ctx context.Context, namespace, projectID string) (time.Time, error)
+	// ReloadTLS has the running server read a renewed certificate.
+	ReloadTLS(ctx context.Context, namespace, projectID string) error
 }
 
 var (

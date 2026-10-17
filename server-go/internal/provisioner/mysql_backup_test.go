@@ -143,6 +143,9 @@ func TestMySQLApplyRestoredCluster(t *testing.T) {
 	if name, _, _ := unstructured.NestedString(cluster.Object, "spec", "restore", "sourceName"); name != "proj-src-mysql" {
 		t.Errorf("restore source %q", name)
 	}
+	if _, ok := mock.CRDs[mysqlTestNS+"/proj-my1-mysql-server"]; !ok {
+		t.Error("the restored cluster has no server certificate of its own (EXC-589)")
+	}
 	if err := prov.AwaitRestored(context.Background(), mysqlPoller(), mysqlTestNS, mysqlTestProject, 1); err != nil {
 		t.Fatalf("AwaitRestored: %v", err)
 	}

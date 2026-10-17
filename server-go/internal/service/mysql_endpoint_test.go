@@ -21,7 +21,7 @@ func newMySQLEndpointFixture(t *testing.T) *mongoEndpointFixture {
 		ProjectID: "proj-my0001", Namespace: "org-a-proj-my0001", DBType: domain.MySQL,
 		Host:         k8s.MySQLPrimaryHost("proj-my0001", "org-a-proj-my0001"),
 		Port:         &port,
-		DatabaseName: "app", Username: "admin", SSLMode: "REQUIRED",
+		DatabaseName: "app", Username: "admin", SSLMode: domain.MySQLSSLMode,
 		DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
 	}
 	kube := k8s.NewMockClient()
@@ -64,11 +64,12 @@ func TestAMySQLEndpointAlwaysRequiresTLS(t *testing.T) {
 		t.Fatalf("SetPublic: %v", err)
 	}
 	host, _ := domain.DBEndpointHost(f.inst.ProjectID, "db.example.com")
-	if !view.RequireTLS || view.Engine != "mysql" || view.CACertificate != "" || view.Connection.AllowPlaintext != "" ||
-		view.Connection.RequireTLS != "mysql://admin@"+host+":"+strconv.Itoa(view.Port)+"/app?ssl-mode=REQUIRED" {
+	// EXC-589: the strings verify the server, and the CA they verify it with is handed out.
+	if !view.RequireTLS || view.Engine != "mysql" || view.CACertificate != string(k8s.MockMySQLCA()["tls.crt"]) || view.Connection.AllowPlaintext != "" ||
+		view.Connection.RequireTLS != "mysql://admin@"+host+":"+strconv.Itoa(view.Port)+"/app?ssl-mode=VERIFY_IDENTITY" {
 		t.Errorf("public view %+v", view)
 	}
-	if view.Internal.Port != 3306 || view.Internal.ConnectionString != "mysql://admin@"+f.inst.Host+":3306/app?ssl-mode=REQUIRED" {
+	if view.Internal.Port != 3306 || view.Internal.ConnectionString != "mysql://admin@"+f.inst.Host+":3306/app?ssl-mode=VERIFY_IDENTITY" {
 		t.Errorf("internal %+v", view.Internal)
 	}
 	for _, want := range []bool{false, true} {
@@ -117,5 +118,19 @@ func TestWithdrawWaitsForALingeringService(t *testing.T) {
 		if err := f.svc.Withdraw(ctx, f.inst); !errors.Is(err, tc.wantErr) {
 			t.Errorf("lingers %d: Withdraw = %v, want %v", tc.lingers, err, tc.wantErr)
 		}
+	}
+}
+
+// A CA that cannot be read is a fixed answer to the caller; what the cluster
+// said stays in the log (EXC-589 review).
+func TestAnUnreadableMySQLCAIsReportedWithoutTheClustersError(t *testing.T) {
+	f := newMySQLEndpointFixture(t)
+	f.kube.NoClusterCA = true
+	_, err := f.svc.Describe(context.Background(), f.inst.ProjectID)
+	if !errors.Is(err, ErrServerCAUnavailable) {
+		t.Fatalf("err %v, want ErrServerCAUnavailable", err)
+	}
+	if err.Error() != ErrServerCAUnavailable.Error() {
+		t.Fatalf("the caller sees %q", err)
 	}
 }

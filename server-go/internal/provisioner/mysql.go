@@ -57,6 +57,9 @@ type MySQLProvisioner struct {
 	stopPoller  Poller
 	// backupPathStyle addresses the backup store path-style.
 	backupPathStyle bool
+	// publicDomainSuffix is the suffix public endpoint names hang off; empty
+	// when the platform offers no public endpoints.
+	publicDomainSuffix string
 }
 
 func NewMySQLProvisioner(client k8s.KubeClient) *MySQLProvisioner {
@@ -169,7 +172,7 @@ func (p *MySQLProvisioner) createDatabase(ctx context.Context, namespace, projec
 		Port:         mysqlPort,
 		DatabaseName: database,
 		Username:     MySQLUserAdmin,
-		SSLMode:      "REQUIRED",
+		SSLMode:      domain.MySQLSSLMode,
 		Namespace:    namespace,
 	}, nil
 }
@@ -202,6 +205,10 @@ func (p *MySQLProvisioner) ensureNamespace(ctx context.Context, req domain.Provi
 }
 
 func (p *MySQLProvisioner) applyCluster(ctx context.Context, opts k8s.MySQLClusterOpts, pc *ProvisionContext) error {
+	pc.SetStep("issue the server certificate")
+	if err := p.applyTLS(ctx, opts); err != nil {
+		return err
+	}
 	pc.SetStep("apply mysqld settings")
 	settings, err := k8s.BuildMySQLConfig(opts)
 	if err != nil {
@@ -566,6 +573,9 @@ func (p *MySQLProvisioner) RemoveDatabase(ctx context.Context, namespace, projec
 	}
 	if err := p.client.DeleteCRD(ctx, k8s.ConfigMapGVR, namespace, k8s.MySQLConfigName(projectID)); err != nil {
 		return fmt.Errorf("delete mysqld settings: %w", err)
+	}
+	if err := p.removeTLS(ctx, namespace, projectID); err != nil {
+		return err
 	}
 	return p.removeBackupObjects(ctx, namespace, projectID)
 }

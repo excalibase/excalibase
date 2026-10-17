@@ -51,6 +51,10 @@ var ErrDBEndpointUnsupported = errors.New("public database endpoints are not sup
 // setting is left as it was and the same call retried converges.
 var ErrDBEndpointNotObserved = errors.New("the public database endpoint was not confirmed; retry to continue")
 
+// ErrServerCAUnavailable is what a caller is told when the CA that verifies
+// the database could not be read; the cause is logged, never returned.
+var ErrServerCAUnavailable = errors.New("the database's certificate authority could not be read; retry shortly")
+
 // ErrTLSSettingNotObserved is returned when the cluster, read back after the
 // update, does not carry the TLS rule that was asked for.
 var ErrTLSSettingNotObserved = errors.New("the database TLS setting was not confirmed; retry to continue")

@@ -15,6 +15,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/mysqltls"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 )
 
@@ -203,16 +204,26 @@ func countNotes(ctx context.Context, t *testing.T, docker *provisioner.RealDocke
 	return rows
 }
 
-// hostMySQL opens the container's published port as admin over TLS.
+// hostMySQL opens the container's published port as admin over TLS,
+// verifying the server against the container's own CA under the name the
+// platform records for it (EXC-589).
 func hostMySQL(ctx context.Context, t *testing.T, docker *provisioner.RealDockerClient, container, password string) *sql.DB {
 	t.Helper()
 	state, err := docker.ContainerState(ctx, container)
 	if err != nil || state.HostPorts["3306"] == 0 {
 		t.Fatalf("published port of %s: %+v %v", container, state, err)
 	}
+	ca, err := provisioner.MySQLServerCA(ctx, docker, container)
+	if err != nil {
+		t.Fatalf("server CA of %s: %v", container, err)
+	}
+	tlsConfig, err := mysqltls.ClientConfig(ca, container)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := mysql.NewConfig()
 	cfg.User, cfg.Passwd, cfg.DBName = provisioner.MySQLUserAdmin, password, "shop"
-	cfg.Net, cfg.Addr, cfg.TLSConfig = "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(state.HostPorts["3306"])), "skip-verify"
+	cfg.Net, cfg.Addr, cfg.TLS = "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(state.HostPorts["3306"])), tlsConfig
 	connector, err := mysql.NewConnector(cfg)
 	if err != nil {
 		t.Fatalf("connector: %v", err)

@@ -13,6 +13,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/mysqltls"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 )
 
@@ -74,8 +75,10 @@ func (o *Opener) KillMySQLQuery(ctx context.Context, db *sql.DB, threadID int64)
 func mysqlScriptKey(projectID string) string { return projectID + "#script" }
 
 // MySQLConfigFor is the connection a MySQL pool opens. max_execution_time
-// bounds SELECTs and the lock waits bound DDL and row locks; the server
-// certificate is not verified yet (ssl-mode=REQUIRED, EXC-589).
+// bounds SELECTs and the lock waits bound DDL and row locks. The server is
+// verified against the record's CA and host (EXC-589) whatever the ssl mode
+// override says: MySQL serves TLS everywhere, and a port-forward is dialled
+// while the record's name is checked.
 func MySQLConfigFor(creds map[string]string, o Overrides, l PoolLimits, multiStatements bool) (*mysql.Config, error) {
 	host, port := creds["host"], creds["port"]
 	if o.Host != "" {
@@ -90,10 +93,11 @@ func MySQLConfigFor(creds map[string]string, o Overrides, l PoolLimits, multiSta
 	config := mysql.NewConfig()
 	config.Net, config.Addr = "tcp", net.JoinHostPort(host, port)
 	config.User, config.Passwd, config.DBName = creds["username"], creds["password"], creds["database"]
-	config.TLSConfig = "skip-verify"
-	if o.SSLMode == "disable" {
-		config.TLSConfig = "false"
+	tlsConfig, err := mysqltls.ClientConfig(creds[domain.CredentialServerCAKey], creds["host"])
+	if err != nil {
+		return nil, err
 	}
+	config.TLS = tlsConfig
 	config.MultiStatements = multiStatements
 	config.Timeout = 10 * time.Second
 	lockSeconds := strconv.Itoa(wholeSeconds(l.LockTimeout))

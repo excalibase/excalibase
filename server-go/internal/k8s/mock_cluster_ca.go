@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const mockCACertKey = "ca.crt"
+
 // clusterCASuffix names the Secret CNPG keeps each cluster's CA in.
 const clusterCASuffix = "-postgres-ca"
 
@@ -47,8 +49,8 @@ func MockClusterCA() map[string][]byte {
 			panic(err)
 		}
 		mockClusterCA = map[string][]byte{
-			"ca.crt": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
-			"ca.key": pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}),
+			mockCACertKey: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+			"ca.key":      pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}),
 		}
 	})
 	return mockClusterCA
@@ -56,4 +58,24 @@ func MockClusterCA() map[string][]byte {
 
 func isClusterCASecret(name string) bool {
 	return strings.HasSuffix(name, clusterCASuffix)
+}
+
+// mysqlCASuffix names the Secret cert-manager keeps a MySQL project's CA in.
+const mysqlCASuffix = "-mysql-ca"
+
+// MockMySQLCA is that Secret as cert-manager writes it for a CA certificate:
+// tls.crt is the CA itself.
+func MockMySQLCA() map[string][]byte {
+	ca := MockClusterCA()
+	return map[string][]byte{"tls.crt": ca[mockCACertKey], mockCACertKey: ca[mockCACertKey], "tls.key": ca["ca.key"]}
+}
+
+// mysqlServerTLSSuffix names the Secret cert-manager keeps a MySQL project's
+// server certificate in.
+const mysqlServerTLSSuffix = "-mysql-tls"
+
+// MockMySQLServerTLS stands in for that Secret; only its validity matters to
+// the platform, which never serves it.
+func MockMySQLServerTLS() map[string][]byte {
+	return map[string][]byte{"tls.crt": MockClusterCA()[mockCACertKey]}
 }

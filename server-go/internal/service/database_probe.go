@@ -77,7 +77,11 @@ func (p *VaultDatabaseProbe) open(creds map[string]string) (*sql.DB, error) {
 			return nil, fmt.Errorf("read %s credentials: the port is not a number", roleApp)
 		}
 		inst := &domain.DatabaseInstance{Host: creds["host"], Port: &port}
-		connector, err := mysql.NewConnector(mysqlVerifyConfig(inst, creds["username"], creds["password"], p.overrides))
+		config, err := mysqlVerifyConfig(inst, creds["username"], creds["password"], p.overrides, creds[domain.CredentialServerCAKey])
+		if err != nil {
+			return nil, fmt.Errorf("open restored database as %s: %w", creds["username"], err)
+		}
+		connector, err := mysql.NewConnector(config)
 		if err != nil {
 			return nil, fmt.Errorf("open restored database as %s", creds["username"])
 		}

@@ -22,6 +22,8 @@ export const MYSQL_DATABASE_VARIABLES = [
   'MYSQL_DATABASE',
   'MYSQL_USER',
   'MYSQL_PASSWORD',
+  // The project CA as PEM text, so the app can verify the server (EXC-589).
+  'MYSQL_SSL_CA',
 ] as const;
 
 export interface ReferenceTarget {

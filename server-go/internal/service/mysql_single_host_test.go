@@ -131,14 +131,28 @@ func (h *hostEngine) ExecInContainerStdin(_ context.Context, id string, _ []stri
 }
 
 func (h *hostEngine) CopyToContainer(_ context.Context, id, _ string, content io.Reader) error {
-	names, err := tarNames(content)
+	entries, err := tarEntries(content)
 	if err != nil {
 		return err
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.copied[id] = append(h.copied[id], names...)
+	for _, entry := range entries {
+		h.copied[id] = append(h.copied[id], entry.name)
+	}
+	h.installStagedCA(id, entries)
 	return nil
+}
+
+// installStagedCA does what the start script does with staged TLS material:
+// the volume keeps the CA it already holds.
+func (h *hostEngine) installStagedCA(id string, entries []tarEntry) {
+	installed := id + ":" + provisioner.MySQLTLSDir + "/ca.crt"
+	for _, entry := range entries {
+		if _, held := h.files[installed]; !held && entry.name == "excalibase-mysql-tls/ca.crt" {
+			h.files[installed] = entry.body
+		}
+	}
 }
 
 func (h *hostEngine) CopyFromContainer(_ context.Context, id, src string) (io.ReadCloser, error) {
@@ -192,7 +206,7 @@ func TestSingleHostMySQLProjectFilesItsPlatformLogins(t *testing.T) {
 	inst := provisionMySQL(t, svc, store, "")
 	container := "excalibase-" + inst.ProjectID + "-mysql"
 	if inst.DeploymentMode != domain.ModeDocker || inst.Namespace != container || inst.Host != container ||
-		inst.Port == nil || *inst.Port != 3306 || inst.SSLMode != "REQUIRED" {
+		inst.Port == nil || *inst.Port != 3306 || inst.SSLMode != "VERIFY_IDENTITY" {
 		t.Fatalf("row %+v", inst)
 	}
 	if !engine.containers[container] {
@@ -209,6 +223,10 @@ func TestSingleHostMySQLProjectFilesItsPlatformLogins(t *testing.T) {
 		record, err := svc.vault.Get(vaultCredentialPath(inst.ProjectID, role))
 		if err != nil || record["engine"] != "mysql" || record["host"] != container || record["port"] != "3306" {
 			t.Errorf("%s record %v %v", role, record, err)
+		}
+		// EXC-589: the CA the container's certificate was issued from.
+		if want := string(engine.files[container+":"+provisioner.MySQLTLSDir+"/ca.crt"]); want == "" || record["sslrootcert"] != want {
+			t.Errorf("%s record does not carry the container's server CA", role)
 		}
 	}
 }
@@ -234,19 +252,28 @@ func TestSingleHostMySQLRotationAndReappliedPasswordsGoToTheContainer(t *testing
 	}
 }
 
-// tarNames lists the entries of a tar stream.
-func tarNames(content io.Reader) ([]string, error) {
+// tarEntries reads the entries of a tar stream.
+type tarEntry struct {
+	name string
+	body []byte
+}
+
+func tarEntries(content io.Reader) ([]tarEntry, error) {
 	reader := tar.NewReader(content)
-	var names []string
+	var entries []tarEntry
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
-			return names, nil
+			return entries, nil
 		}
 		if err != nil {
 			return nil, err
 		}
-		names = append(names, header.Name)
+		body, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, tarEntry{name: header.Name, body: body})
 	}
 }
 
