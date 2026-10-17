@@ -60,13 +60,16 @@ func (a *HostMySQLBackupAdapter) planLoad(ctx context.Context, projectID string,
 	if err != nil {
 		return hostMySQLLoad{}, err
 	}
-	end, err := a.manifestOf(ctx, projectID, point.Cover)
+	end, err := a.replayEnd(ctx, projectID, point, first.FirstBinlog)
 	if err != nil {
 		return hostMySQLLoad{}, err
 	}
-	files, err := binlogRange(first.FirstBinlog, end.FirstBinlog)
+	files, err := binlogRange(first.FirstBinlog, end)
 	if err != nil {
 		return hostMySQLLoad{}, err
+	}
+	if len(files) == 0 {
+		return load, nil
 	}
 	shipped, err := a.uploader.List(ctx, a.bucket, a.binlogsPrefix(projectID, point.Base.Server))
 	if err != nil {
@@ -86,6 +89,27 @@ func (a *HostMySQLBackupAdapter) planLoad(ctx context.Context, projectID string,
 	}
 	load.stopAt = point.Point.UTC().Format(mysqlbinlogTimeFormat)
 	return load, nil
+}
+
+// replayEnd is the file the replay stops before: the one Cover's flush
+// opened or the one the last ship opened. A ship mark older than the base's
+// flush means nothing was committed after the base's dump, so nothing replays.
+func (a *HostMySQLBackupAdapter) replayEnd(ctx context.Context, projectID string, point hostMySQLPoint, first string) (string, error) {
+	if point.ShippedTo == "" {
+		cover, err := a.manifestOf(ctx, projectID, point.Cover)
+		if err != nil {
+			return "", err
+		}
+		return cover.FirstBinlog, nil
+	}
+	end, err := binlogIndex(point.ShippedTo)
+	if err != nil {
+		return "", err
+	}
+	if start, _ := binlogIndex(first); end < start {
+		return first, nil
+	}
+	return point.ShippedTo, nil
 }
 
 func (a *HostMySQLBackupAdapter) manifestOf(ctx context.Context, projectID string, run hostMySQLRun) (hostMySQLManifest, error) {
@@ -193,11 +217,11 @@ type plannedRestore struct {
 }
 
 func (a *HostMySQLBackupAdapter) planRestore(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (plannedRestore, error) {
-	runs, err := a.listRuns(ctx, inst.ProjectID)
+	runs, marks, err := a.catalog(ctx, inst.ProjectID)
 	if err != nil {
 		return plannedRestore{}, err
 	}
-	point, err := resolveHostMySQLPoint(runs, req)
+	point, err := resolveHostMySQLPoint(runs, marks, req)
 	if err != nil {
 		return plannedRestore{}, err
 	}

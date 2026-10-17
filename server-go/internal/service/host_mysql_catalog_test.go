@@ -49,7 +49,7 @@ func TestHostMySQLRunsAreReadFromTheirKeys(t *testing.T) {
 	if completed := completedHostMySQLRuns(runs); len(completed) != 4 {
 		t.Fatalf("completed %d", len(completed))
 	}
-	window, ok := hostMySQLWindow(runs)
+	window, ok := hostMySQLWindow(runs, nil)
 	if !ok || !window.Earliest.Equal(at(0, 0)) || !window.Latest.Equal(at(8, 30)) {
 		t.Fatalf("window %+v %v", window, ok)
 	}
@@ -60,32 +60,32 @@ func TestHostMySQLRestorePointNeedsTheSameServersLaterRun(t *testing.T) {
 	at := func(hour, minute int) *domain.ZonedTime {
 		return &domain.ZonedTime{Time: time.Date(2026, 10, 11, hour, minute, 7, 500, time.UTC)}
 	}
-	point, err := resolveHostMySQLPoint(runs, domain.RestoreRequest{TargetTime: at(3, 0)})
+	point, err := resolveHostMySQLPoint(runs, nil, domain.RestoreRequest{TargetTime: at(3, 0)})
 	if err != nil || point.Base.ID != "20261011-000000" || point.Cover.ID != "20261011-060000" || !point.Replay ||
 		!point.Point.Equal(time.Date(2026, 10, 11, 3, 0, 7, 0, time.UTC)) {
 		t.Fatalf("03:00 → %+v %v", point, err)
 	}
-	if point, err = resolveHostMySQLPoint(runs, domain.RestoreRequest{TargetTime: at(8, 10)}); err == nil {
+	if point, err = resolveHostMySQLPoint(runs, nil, domain.RestoreRequest{TargetTime: at(8, 10)}); err == nil {
 		t.Fatalf("08:10 lies after A's last run and before B's first; got %+v", point)
 	} else if !errors.Is(err, ErrRestoreTargetInvalid) {
 		t.Fatalf("08:10: %v", err)
 	}
-	if _, err = resolveHostMySQLPoint(runs, domain.RestoreRequest{TargetTime: at(9, 0)}); err == nil {
+	if _, err = resolveHostMySQLPoint(runs, nil, domain.RestoreRequest{TargetTime: at(9, 0)}); err == nil {
 		t.Fatal("09:00 is after the last complete run")
 	}
-	point, err = resolveHostMySQLPoint(runs, domain.RestoreRequest{BackupID: "20261011-083000"})
+	point, err = resolveHostMySQLPoint(runs, nil, domain.RestoreRequest{BackupID: "20261011-083000"})
 	if err != nil || point.Base.Server != serverB || point.Replay {
 		t.Fatalf("a backup id restores its dump alone: %+v %v", point, err)
 	}
-	if point, err = resolveHostMySQLPoint(runs, domain.RestoreRequest{}); err != nil || point.Base.ID != "20261011-083000" {
+	if point, err = resolveHostMySQLPoint(runs, nil, domain.RestoreRequest{}); err != nil || point.Base.ID != "20261011-083000" {
 		t.Fatalf("no target takes the newest backup: %+v %v", point, err)
 	}
 	for _, req := range []domain.RestoreRequest{{BackupID: "20261011-120000"}, {TargetXID: "42"}, {TargetLSN: "0/1"}, {TargetName: "x"}} {
-		if _, err := resolveHostMySQLPoint(runs, req); !errors.Is(err, ErrRestoreTargetInvalid) {
+		if _, err := resolveHostMySQLPoint(runs, nil, req); !errors.Is(err, ErrRestoreTargetInvalid) {
 			t.Errorf("%+v: %v", req, err)
 		}
 	}
-	if _, err := resolveHostMySQLPoint(nil, domain.RestoreRequest{}); err == nil || !strings.Contains(err.Error(), "no completed backup") {
+	if _, err := resolveHostMySQLPoint(nil, nil, domain.RestoreRequest{}); err == nil || !strings.Contains(err.Error(), "no completed backup") {
 		t.Fatalf("no runs: %v", err)
 	}
 }

@@ -16,8 +16,10 @@ type mysqlRestoreTarget struct {
 	project   string
 	namespace string
 	plan      RestorePlan
-	point     time.Time
-	image     string
+	// point is what MOCO restores to; tail, when set, is replayed after it.
+	point time.Time
+	tail  *mysqlTail
+	image string
 	// store is the platform's; only its location reaches the namespace.
 	store       *domain.S3Credentials
 	sourceCreds *domain.S3Credentials
@@ -79,11 +81,15 @@ func (a *MySQLBackupAdapter) planRestore(ctx context.Context, inst *domain.Datab
 	if err != nil {
 		return mysqlRestoreTarget{}, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
 	}
-	backups, err := a.backups(ctx, inst)
+	backups, marks, err := a.catalog(ctx, inst)
 	if err != nil {
 		return mysqlRestoreTarget{}, err
 	}
-	point, err := resolveMySQLRestorePoint(backups, req)
+	wanted, err := resolveMySQLRestorePoint(backups, marks, req)
+	if err != nil {
+		return mysqlRestoreTarget{}, err
+	}
+	point, tail, err := mysqlRestoreAt(backups, marks, wanted)
 	if err != nil {
 		return mysqlRestoreTarget{}, err
 	}
@@ -102,7 +108,7 @@ func (a *MySQLBackupAdapter) planRestore(ctx context.Context, inst *domain.Datab
 	store, _ := a.storage.BackupStorage()
 	return mysqlRestoreTarget{
 		project: req.TargetProjectID, namespace: fmt.Sprintf("%s-%s", inst.OrgID, req.TargetProjectID),
-		plan: plan, point: point, image: image, store: store,
+		plan: plan, point: point, tail: tail, image: image, store: store,
 	}, nil
 }
 
@@ -132,6 +138,9 @@ func (a *MySQLBackupAdapter) runRestore(ctx context.Context, pc *provisioner.Pro
 		return nil, err
 	}
 	if err := a.mysql.AwaitRestored(ctx, a.poller, target.namespace, target.project, target.plan.Config.Instances); err != nil {
+		return nil, err
+	}
+	if err := a.replayTail(ctx, target.namespace, target.project, target.tail); err != nil {
 		return nil, err
 	}
 	if target.ownCreds != nil {

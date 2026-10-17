@@ -47,8 +47,9 @@ func TestFunctionCronAdvisoryKeyIsDistinct(t *testing.T) {
 		appRolloutSweepLockID: "app rollout sweeper",
 		restoreSweepLockID:    "restore sweeper",
 		functionCronLockID:    "function cron",
+		mysqlBinlogShipLockID: "mysql binlog shipping",
 	}
-	if len(keys) != 6 {
+	if len(keys) != 7 {
 		t.Fatalf("advisory keys collide: %v", keys)
 	}
 	if functionCronLockID <= 0 {

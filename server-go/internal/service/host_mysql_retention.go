@@ -48,7 +48,8 @@ func (a *HostMySQLBackupAdapter) PurgeExpired(ctx context.Context, inst *domain.
 }
 
 // unneededBinlogs are the binlogs older than the first one a kept run of
-// their server replays from; a server with no kept run needs none.
+// their server replays from; a server with no kept run needs none, nor its
+// ship mark.
 func (a *HostMySQLBackupAdapter) unneededBinlogs(ctx context.Context, projectID string, kept []hostMySQLRun) ([]string, error) {
 	oldest := map[string]int{}
 	for _, run := range kept {
@@ -69,6 +70,10 @@ func (a *HostMySQLBackupAdapter) unneededBinlogs(ctx context.Context, projectID 
 	var unneeded []string
 	for _, object := range objects {
 		server, file, ok := strings.Cut(strings.TrimPrefix(object.Key, prefix), "/")
+		if _, needed := oldest[server]; ok && !needed && file == hostMySQLShipMarkFile {
+			unneeded = append(unneeded, object.Key)
+			continue
+		}
 		index, err := binlogIndex(strings.TrimSuffix(path.Base(file), ".gz"))
 		if !ok || err != nil {
 			continue

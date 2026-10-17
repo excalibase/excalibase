@@ -37,11 +37,11 @@ func TestReadMySQLBackups(t *testing.T) {
 	if backups[2].Binlog {
 		t.Error("the newest run has no binlogs yet")
 	}
-	window, ok := mysqlRestoreWindow(backups)
+	window, ok := mysqlRestoreWindow(backups, nil)
 	if !ok || !window.Earliest.Equal(at(0, 0)) || !window.Latest.Equal(at(12, 0)) {
 		t.Errorf("window %+v %v", window, ok)
 	}
-	if _, ok := mysqlRestoreWindow(nil); ok {
+	if _, ok := mysqlRestoreWindow(nil, nil); ok {
 		t.Error("a window without backups")
 	}
 }
@@ -63,7 +63,7 @@ func TestResolveMySQLRestorePoint(t *testing.T) {
 		"the newest":     {domain.RestoreRequest{TargetTime: zoned(at(12, 0))}, at(12, 0)},
 		"sub-second off": {domain.RestoreRequest{TargetTime: zoned(at(7, 30).Add(400 * time.Millisecond))}, at(7, 30)},
 	} {
-		got, err := resolveMySQLRestorePoint(backups, tc.req)
+		got, err := resolveMySQLRestorePoint(backups, nil, tc.req)
 		if err != nil || !got.Equal(tc.want) {
 			t.Errorf("%s: %v %v, want %v", name, got, err, tc.want)
 		}
@@ -86,7 +86,7 @@ func TestResolveMySQLRestorePoint_Refusals(t *testing.T) {
 		"none yet":     {domain.RestoreRequest{}, nil, "no completed backup"},
 		"binlogs lost": {domain.RestoreRequest{TargetTime: zoned(at(3, 0))}, withoutBinlog(backups, 0), "binlogs"},
 	} {
-		_, err := resolveMySQLRestorePoint(tc.backups, tc.req)
+		_, err := resolveMySQLRestorePoint(tc.backups, nil, tc.req)
 		if !errors.Is(err, ErrRestoreTargetInvalid) || !strings.Contains(err.Error(), tc.contains) {
 			t.Errorf("%s: %v, want an invalid target naming %q", name, err, tc.contains)
 		}

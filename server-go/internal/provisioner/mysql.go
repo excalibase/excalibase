@@ -22,6 +22,13 @@ import (
 // project in its namespace. Every lifecycle step waits on observed state —
 // the instance pods and a real query on the primary — never on the CR alone.
 
+// MOCOMySQLContainer is the mysqld container of a MOCO pod, and
+// MOCOAdminDefaultsFile MOCO's own admin login file inside it.
+const (
+	MOCOMySQLContainer    = "mysqld"
+	MOCOAdminDefaultsFile = "/mysql-credentials/moco-admin-my.cnf"
+)
+
 // ErrMySQLUnsupported refuses what a MySQL project does not offer (yet).
 var ErrMySQLUnsupported = errors.New("not available for MySQL projects")
 
@@ -30,8 +37,8 @@ const (
 	mysqlDefaultDatabase = "app"
 	// mysqlAdminCnf is MOCO's own admin login file inside the mysqld
 	// container; the platform runs its setup SQL through it over the socket.
-	mysqlAdminCnf      = "/mysql-credentials/moco-admin-my.cnf"
-	mysqlContainer     = "mysqld"
+	mysqlAdminCnf      = MOCOAdminDefaultsFile
+	mysqlContainer     = MOCOMySQLContainer
 	mysqlBackupJobName = "moco-backup-"
 
 	defaultMySQLReadyTimeout = 10 * time.Minute

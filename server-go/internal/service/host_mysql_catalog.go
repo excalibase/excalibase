@@ -101,31 +101,51 @@ func completedHostMySQLRuns(runs []hostMySQLRun) []hostMySQLRun {
 	return completed
 }
 
-func hostMySQLWindow(runs []hostMySQLRun) (RestoreWindow, bool) {
+// hostMySQLWindow reaches from the oldest run to the newest run or, past it,
+// to the last ship of a server that has a run to replay onto (EXC-587).
+func hostMySQLWindow(runs []hostMySQLRun, marks map[string]hostMySQLShipMark) (RestoreWindow, bool) {
 	completed := completedHostMySQLRuns(runs)
 	if len(completed) == 0 {
 		return RestoreWindow{}, false
 	}
-	return RestoreWindow{Earliest: completed[0].At, Latest: completed[len(completed)-1].At}, true
+	window := RestoreWindow{Earliest: completed[0].At, Latest: completed[len(completed)-1].At}
+	for _, mark := range marks {
+		if mark.Through.After(window.Latest) && hasHostMySQLRunBy(completed, mark.Server, mark.Through) {
+			window.Latest = mark.Through
+		}
+	}
+	return window, true
+}
+
+// hasHostMySQLRunBy reports whether server has a run at or before at.
+func hasHostMySQLRunBy(completed []hostMySQLRun, server string, at time.Time) bool {
+	for _, run := range completed {
+		if run.Server == server && !run.At.After(at) {
+			return true
+		}
+	}
+	return false
 }
 
 // hostMySQLPoint is a resolved restore: the dump to load and, when Replay,
-// the binlogs up to Cover's flush replayed until Point.
+// the binlogs up to Cover's flush (or, when ShippedTo is set, up to that
+// file the last ship opened) replayed until Point.
 type hostMySQLPoint struct {
-	Point  time.Time
-	Base   hostMySQLRun
-	Cover  hostMySQLRun
-	Replay bool
+	Point     time.Time
+	Base      hostMySQLRun
+	Cover     hostMySQLRun
+	Replay    bool
+	ShippedTo string
 }
 
 // resolveHostMySQLPoint is the point a restore asks for: a backup's own time,
 // a time a run and a later run of the same server reach, or the newest backup.
-func resolveHostMySQLPoint(runs []hostMySQLRun, req domain.RestoreRequest) (hostMySQLPoint, error) {
+func resolveHostMySQLPoint(runs []hostMySQLRun, marks map[string]hostMySQLShipMark, req domain.RestoreRequest) (hostMySQLPoint, error) {
 	if req.TargetXID != "" || req.TargetLSN != "" || req.TargetName != "" {
 		return hostMySQLPoint{}, &RestoreTargetError{"a MySQL project restores to a time only; transaction ids, LSNs and restore point names are Postgres targets"}
 	}
 	completed := completedHostMySQLRuns(runs)
-	window, ok := hostMySQLWindow(completed)
+	window, ok := hostMySQLWindow(completed, marks)
 	if !ok {
 		return hostMySQLPoint{}, &RestoreTargetError{"this project has no completed backup to restore from yet"}
 	}
@@ -138,14 +158,14 @@ func resolveHostMySQLPoint(runs []hostMySQLRun, req domain.RestoreRequest) (host
 		}
 		return hostMySQLPoint{}, &RestoreTargetError{fmt.Sprintf("backup %s is not one of this project's completed backups", req.BackupID)}
 	case req.TargetTime != nil:
-		return hostMySQLPointInWindow(completed, window, req.TargetTime.Time)
+		return hostMySQLPointInWindow(completed, marks, window, req.TargetTime.Time)
 	}
 	newest := completed[len(completed)-1]
 	return hostMySQLPoint{Point: newest.At, Base: newest, Cover: newest}, nil
 }
 
 // hostMySQLPointInWindow reads the time to the second, as mysqlbinlog does.
-func hostMySQLPointInWindow(completed []hostMySQLRun, window RestoreWindow, wanted time.Time) (hostMySQLPoint, error) {
+func hostMySQLPointInWindow(completed []hostMySQLRun, marks map[string]hostMySQLShipMark, window RestoreWindow, wanted time.Time) (hostMySQLPoint, error) {
 	point := wanted.UTC().Truncate(time.Second)
 	if point.Before(window.Earliest) || point.After(window.Latest) {
 		return hostMySQLPoint{}, &RestoreTargetError{fmt.Sprintf("%s is outside the %s", point.Format(time.RFC3339), window)}
@@ -165,8 +185,11 @@ func hostMySQLPointInWindow(completed []hostMySQLRun, window RestoreWindow, want
 			return hostMySQLPoint{Point: point, Base: base, Cover: run, Replay: true}, nil
 		}
 	}
+	if mark, ok := marks[base.Server]; ok && !mark.Through.Before(point) {
+		return hostMySQLPoint{Point: point, Base: base, Cover: base, Replay: true, ShippedTo: mark.NextBinlog}, nil
+	}
 	return hostMySQLPoint{}, &RestoreTargetError{fmt.Sprintf(
-		"%s cannot be reached: no later backup of the database that took backup %s shipped its binlogs; restore to a backup time instead (%s)",
+		"%s cannot be reached: the binlogs of the database that took backup %s are not shipped that far; restore to a backup time instead (%s)",
 		point.Format(time.RFC3339), base.ID, window)}
 }
 

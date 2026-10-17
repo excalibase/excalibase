@@ -62,9 +62,15 @@ func probeDark(router http.Handler, probe darkProbe, token string) *httptest.Res
 	return w
 }
 
+// darkWork is every feature that gates background work, not a route; its
+// wiring test proves the work does not start while it is off.
+var darkWork = map[features.Feature]string{
+	features.MySQLPITR: "TestMySQLBinlogShippingStartsOnlyWithItsFeature",
+}
+
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {
 	for _, feature := range features.All() {
-		if len(darkRoutes[feature]) == 0 {
+		if len(darkRoutes[feature]) == 0 && darkWork[feature] == "" {
 			t.Errorf("feature %s hides no route this test probes", feature)
 		}
 	}

@@ -30,6 +30,7 @@ type MySQLBackupAdapter struct {
 	plans     RestorePlanSource
 	creds     *BackupCredentialIssuer
 	poller    provisioner.Poller
+	streamer  PodStreamer
 	now       func() time.Time
 }
 
@@ -208,11 +209,11 @@ func (a *MySQLBackupAdapter) BackupStatusOf(ctx context.Context, inst *domain.Da
 
 // RestoreWindow is the span the project's runs reach, or nil before the first.
 func (a *MySQLBackupAdapter) RestoreWindow(ctx context.Context, inst *domain.DatabaseInstance) (*RestoreWindow, error) {
-	backups, err := a.backups(ctx, inst)
+	backups, marks, err := a.catalog(ctx, inst)
 	if err != nil {
 		return nil, err
 	}
-	window, ok := mysqlRestoreWindow(backups)
+	window, ok := mysqlRestoreWindow(backups, marks)
 	if !ok {
 		return nil, nil
 	}
@@ -221,11 +222,11 @@ func (a *MySQLBackupAdapter) RestoreWindow(ctx context.Context, inst *domain.Dat
 
 // CheckRestoreTarget refuses a target outside the window, or not a time.
 func (a *MySQLBackupAdapter) CheckRestoreTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) error {
-	backups, err := a.backups(ctx, inst)
+	backups, marks, err := a.catalog(ctx, inst)
 	if err != nil {
 		return err
 	}
-	_, err = resolveMySQLRestorePoint(backups, req)
+	_, err = resolveMySQLRestorePoint(backups, marks, req)
 	return err
 }
 

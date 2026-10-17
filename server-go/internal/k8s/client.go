@@ -540,7 +540,34 @@ func (c *Client) ExecInPodStdin(ctx context.Context, namespace, pod, container s
 	return c.exec(ctx, namespace, pod, container, cmd, stdin)
 }
 
-func (c *Client) exec(ctx context.Context, namespace, pod, container string, cmd []string, stdin string) (string, error) {
+// StreamExecInPod runs a command inside a pod with stdin (when not nil)
+// streamed in and stdout streamed out, for payloads too large to buffer.
+func (c *Client) StreamExecInPod(ctx context.Context, namespace, pod, container string, cmd []string, stdin io.Reader, stdout io.Writer) error {
+	exec, err := c.executor(namespace, pod, container, cmd, stdin != nil)
+	if err != nil {
+		return err
+	}
+	stderr := &cappedBuffer{limit: 4096}
+	if err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: stderr}); err != nil {
+		return fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
+	}
+	return nil
+}
+
+// cappedBuffer keeps the first limit bytes written to it.
+type cappedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - b.Len(); room > 0 {
+		b.Buffer.Write(p[:min(room, len(p))])
+	}
+	return len(p), nil
+}
+
+func (c *Client) executor(namespace, pod, container string, cmd []string, stdin bool) (remotecommand.Executor, error) {
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(pod).
@@ -549,17 +576,23 @@ func (c *Client) exec(ctx context.Context, namespace, pod, container string, cmd
 		Param("container", container).
 		Param("stdout", "true").
 		Param("stderr", "true")
-	if stdin != "" {
+	if stdin {
 		req = req.Param("stdin", "true")
 	}
-
-	for _, c := range cmd {
-		req = req.Param("command", c)
+	for _, arg := range cmd {
+		req = req.Param("command", arg)
 	}
-
 	exec, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
 	if err != nil {
-		return "", fmt.Errorf("create executor: %w", err)
+		return nil, fmt.Errorf("create executor: %w", err)
+	}
+	return exec, nil
+}
+
+func (c *Client) exec(ctx context.Context, namespace, pod, container string, cmd []string, stdin string) (string, error) {
+	exec, err := c.executor(namespace, pod, container, cmd, stdin != "")
+	if err != nil {
+		return "", err
 	}
 
 	var stdout, stderr bytes.Buffer
