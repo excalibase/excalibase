@@ -40,7 +40,7 @@ studio.{$EXCALIBASE_DOMAIN} {
 	}
 	handle {
 		request_body {
-			max_size 10MB
+			max_size 10MiB
 		}
 		reverse_proxy studio:80
 	}
@@ -50,7 +50,7 @@ api.{$EXCALIBASE_DOMAIN} {
 	import tls_mode
 	import security_headers
 	request_body {
-		max_size 10MB
+		max_size 10MiB
 	}
 	# Per-project GraphQL (and its realtime WebSocket) and REST.
 	@project path_regexp ^/[^/]+/(graphql|api/v1)(/|$)
