@@ -126,11 +126,11 @@ func (p *DockerMySQLProvisioner) StartOnVolume(ctx context.Context, projectID, i
 	if err := volumes.CreateVolume(ctx, spec.DataVolumeName); err != nil {
 		return "", err
 	}
-	id, err := p.docker.CreateContainerSpec(ctx, spec)
-	if err != nil {
+	if _, err := p.docker.CreateContainerSpec(ctx, spec); err != nil {
 		return "", fmt.Errorf("create container: %w", err)
 	}
-	if err := writeMySQLTLS(ctx, p.docker, id); err != nil {
+	// The certificate names the container, which is what clients dial.
+	if err := writeMySQLTLS(ctx, p.docker, spec.Name); err != nil {
 		return spec.Name, err
 	}
 	if err := p.start(ctx, spec.Name); err != nil {

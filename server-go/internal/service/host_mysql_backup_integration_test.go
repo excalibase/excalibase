@@ -205,7 +205,8 @@ func countNotes(ctx context.Context, t *testing.T, docker *provisioner.RealDocke
 }
 
 // hostMySQL opens the container's published port as admin over TLS,
-// verifying the server against the container's own CA (EXC-589).
+// verifying the server against the container's own CA under the name the
+// platform records for it (EXC-589).
 func hostMySQL(ctx context.Context, t *testing.T, docker *provisioner.RealDockerClient, container, password string) *sql.DB {
 	t.Helper()
 	state, err := docker.ContainerState(ctx, container)
@@ -216,7 +217,7 @@ func hostMySQL(ctx context.Context, t *testing.T, docker *provisioner.RealDocker
 	if err != nil {
 		t.Fatalf("server CA of %s: %v", container, err)
 	}
-	tlsConfig, err := mysqltls.ClientConfig(ca, "localhost")
+	tlsConfig, err := mysqltls.ClientConfig(ca, container)
 	if err != nil {
 		t.Fatal(err)
 	}

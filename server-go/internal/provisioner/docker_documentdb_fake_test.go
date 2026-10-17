@@ -20,6 +20,9 @@ type fakeEngine struct {
 	calls      []string
 	stdin      []string
 	copied     map[string][]byte
+	// engineIDs makes create return an engine id unlike the name, as a
+	// real engine does, so a caller that confuses the two is caught.
+	engineIDs bool
 	// execCode answers an exec; nil answers 0.
 	execCode func(container string, cmd []string) int
 	// stdinAnswer answers an exec fed stdin; nil answers "" and no error.
@@ -71,6 +74,9 @@ func (f *fakeEngine) CreateContainerSpec(_ context.Context, spec ContainerSpec) 
 	}
 	f.containers[spec.Name] = &fakeContainer{}
 	f.specs[spec.Name] = spec
+	if f.engineIDs {
+		return "4f9c2e" + spec.Name, nil
+	}
 	return spec.Name, nil
 }
 

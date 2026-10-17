@@ -40,9 +40,11 @@ func mysqlTLSFiles(t *testing.T, engine *fakeEngine, container string) map[strin
 // EXC-589: a single host has no cert-manager, so the platform issues the
 // project's CA and server certificate itself (like the DocumentDB gateway,
 // ADR 0039). They are written in before mysqld first starts, kept on the data
-// volume so a recreated container keeps them, and mysqld presents them.
+// volume so a recreated container keeps them, and mysqld presents them. The
+// certificate names the container, never the engine's id for it.
 func TestDockerMySQLPresentsACertificateFromTheProjectsCA(t *testing.T) {
 	engine := newFakeEngine()
+	engine.engineIDs = true
 	provisionDockerMySQL(t, engine)
 	container := "excalibase-p1-mysql"
 	if copied, started := engine.indexOf("copy:"+container+":/tmp"), engine.indexOf("start:"); copied < 0 || started < 0 || copied > started {
