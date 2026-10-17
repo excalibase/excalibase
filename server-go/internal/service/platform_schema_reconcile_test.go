@@ -53,10 +53,14 @@ func TestReconcileProjectRoles_BringsAnOlderProjectUpToDate(t *testing.T) {
 	if report.Reconciled != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(h.kube.ExecCommands) != 1 {
-		t.Fatalf("exec calls = %d, want the registration SQL once", len(h.kube.ExecCommands))
+	// The reconcile probes the server version, then runs the registration SQL.
+	if len(h.kube.ExecCommands) != 2 {
+		t.Fatalf("exec calls = %d, want a version probe then the registration SQL", len(h.kube.ExecCommands))
 	}
-	sqlText := h.kube.ExecCommands[0]
+	if !strings.Contains(h.kube.ExecCommands[0], "server_version_num") {
+		t.Fatalf("first exec is not the version probe: %q", h.kube.ExecCommands[0])
+	}
+	sqlText := h.kube.ExecCommands[1]
 	for _, part := range []string{"excalibase_reserved_rebuild", "CREATE SCHEMA IF NOT EXISTS excalibase", "excalibase_scheduler_role", "excalibase.create_role", "excalibase_share_created_schema", "ALTER ROLE %I WITH LOGIN PASSWORD"} {
 		if !strings.Contains(sqlText, part) {
 			t.Errorf("reconcile SQL lacks %q", part)
@@ -82,12 +86,13 @@ func TestReconcileProjectRoles_LeavesAReconciledProjectAlone(t *testing.T) {
 	h.svc.ReconcileProjectRoles(context.Background())
 	filed := h.vault.data[rotSchedulerCurrent]["password"]
 	hba := h.clusterHBA(t)
+	execsAfterFirst := len(h.kube.ExecCommands)
 
 	report := h.svc.ReconcileProjectRoles(context.Background())
 	if report.Reconciled != 0 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(h.kube.ExecCommands) != 1 {
+	if len(h.kube.ExecCommands) != execsAfterFirst {
 		t.Fatal("a second pass reached the database")
 	}
 	if got := h.vault.data[rotSchedulerCurrent]["password"]; got != filed {
@@ -217,8 +222,11 @@ func TestReconcileProjectRoles_SingleHostFilesAPasswordLogin(t *testing.T) {
 	if report := h.svc.ReconcileProjectRoles(context.Background()); report.Reconciled != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(docker.execs) != 1 || !strings.Contains(strings.Join(docker.execs[0], " "), "excalibase_scheduler_role") {
+	if len(docker.execs) != 2 || !strings.Contains(strings.Join(docker.execs[1], " "), "excalibase_scheduler_role") {
 		t.Fatalf("container execs = %d", len(docker.execs))
+	}
+	if !strings.Contains(strings.Join(docker.execs[0], " "), "server_version_num") {
+		t.Fatalf("first container exec is not the version probe: %v", docker.execs[0])
 	}
 	record := h.vault.data[rotSchedulerCurrent]
 	if record["username"] != roleScheduler || record["password"] == "" {

@@ -1967,15 +1967,17 @@ async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<
  * flushCommittedSchedules sends the ctx.scheduler calls of a mutation that
  * just committed. It returns why they were not recorded, or null.
  */
-async function flushCommittedSchedules(id: string, entry: ActiveTxn): Promise<string | null> {
-  if (!entry.schedules || entry.schedules.length === 0) return null;
+async function flushCommittedSchedules(id: string, entry: ActiveTxn): Promise<boolean> {
+  if (!entry.schedules || entry.schedules.length === 0) return true;
   try {
     await sendSchedulerOps(entry.projectId, entry.schedules);
-    return null;
+    return true;
   } catch (scheduleErr) {
+    // The detail can name the internal provisioning endpoint, so it stays in
+    // the server log; the caller gets only the fixed message below.
     const reason = scheduleErr instanceof Error ? scheduleErr.message : String(scheduleErr);
     console.warn(`[runtime] ${id} committed but its scheduled functions were not recorded:`, reason);
-    return reason;
+    return false;
   }
 }
 
@@ -2523,7 +2525,7 @@ class FunctionRuntime {
     // Set when a mutation committed but provisioning refused or missed the
     // ctx.scheduler calls it made; the caller gets an error, not a success
     // that scheduled nothing.
-    let scheduleFailure: string | null = null;
+    let scheduleFailed = false;
     // finalize closes the txn. On success path it tries to COMMIT and
     // surfaces any retryable conflict back to the retry loop via a
     // returned sentinel. On error path it rolls back. Either way, the
@@ -2569,7 +2571,7 @@ class FunctionRuntime {
           console.warn(`[runtime] commit failed for ${id}:`, commitErr);
           return null;
         }
-        scheduleFailure = await flushCommittedSchedules(id, entry);
+        scheduleFailed = !(await flushCommittedSchedules(id, entry));
         return null;
       }
       await rollbackTxn(entry.sql);
@@ -2617,13 +2619,13 @@ class FunctionRuntime {
       } catch (_) { /* non-JSON body — treat as success */ }
     }
     const conflict = await finalize(isError ? "error" : "success");
-    if (scheduleFailure !== null) {
+    if (scheduleFailed) {
       return {
         ...res,
         status: 500,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          error: `the mutation committed but its scheduled functions were not recorded: ${scheduleFailure}`,
+          error: "the mutation committed but its scheduled functions were not recorded",
         }),
         __reactiveReads: capturedReads,
         __reactiveWrites: capturedWrites,

@@ -1,23 +1,33 @@
 package service
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
 // The role SQL runs as the superuser in a database the customer owns, and an
-// owner can attach settings to that database: read-only transactions, a role
-// to switch to, timeouts, PL/pgSQL extra errors. Any of them would make the
-// role SQL fail on every pass and leave a project on whatever grants it had
-// (EXC-623). Client options outrank database settings, so the command pins
-// every setting the SQL depends on.
+// owner can attach settings to that database with ALTER DATABASE: a role to
+// switch to, read-only transactions, timeouts, PL/pgSQL extra errors, and —
+// the nastiest — a preload library, which makes every new backend FATAL
+// before it runs a line, the superuser's reconcile included. Any of them
+// would leave a project on whatever grants it had (EXC-623). Client startup
+// options outrank per-database settings, so the command pins every setting
+// the SQL depends on, and every connect-time setting a non-superuser could
+// poison.
 var pinnedSessionOptions = []string{
+	// A poisoned preload library FATALs the connection at startup; pinned
+	// empty, the owner's value never loads. session_preload_libraries is
+	// superuser-only, but we connect as the superuser, so pin it too.
+	"local_preload_libraries=",
+	"session_preload_libraries=",
 	"role=none",
 	"default_transaction_read_only=off",
 	"statement_timeout=0",
-	"lock_timeout=0",
+	// Finite, never 0: a customer holding a lock on an excalibase object (or
+	// a view over one) must not block the rebuild forever. On a timeout the
+	// caller terminates the customer's backends and retries.
+	"lock_timeout=3s",
 	"idle_in_transaction_session_timeout=0",
 	"idle_session_timeout=0",
 	"exit_on_error=off",
@@ -27,14 +37,16 @@ var pinnedSessionOptions = []string{
 	"search_path=pg_catalog,pg_temp",
 }
 
-// transactionTimeoutMajor is the first Postgres major with transaction_timeout;
-// an older server refuses the connection when a client names it.
-const transactionTimeoutMajor = 17
+// transactionTimeoutMinVersion is the server_version_num of the first release
+// with transaction_timeout (17.0). Naming it on an older server FATALs the
+// connection, so it is pinned only when the probe reports at least this.
+const transactionTimeoutMinVersion = 170000
 
 // sessionGuardSQL starts every script: it refuses to go on unless the session
-// is the superuser itself, not a role the session was switched to, and turns
-// transaction_timeout off where the server has it and the client options
-// could not name it.
+// is the superuser itself, not a role the session was switched to, in a
+// writable transaction. It also turns transaction_timeout off for the
+// transaction where the server has it, in case the connect-time option could
+// not name it (an unknown server version).
 const sessionGuardSQL = pgroles.PinnedSearchPath + `
 DO $excalibase_session$
 BEGIN
@@ -51,21 +63,29 @@ $excalibase_session$;
 
 // superuserPsqlCommand is psql as postgres in dbName with the session pinned.
 // Each script is its own -c, so its own transaction, and the first failure
-// stops the rest.
-func superuserPsqlCommand(dbName, postgresMajor string, scripts ...string) []string {
-	cmd := []string{"psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", superuserConninfo(dbName, postgresMajor)}
+// stops the rest. serverVersionNum is the server_version_num the probe read,
+// or 0 when it is unknown.
+func superuserPsqlCommand(dbName string, serverVersionNum int, scripts ...string) []string {
+	cmd := []string{"psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", superuserConninfo(dbName, serverVersionNum)}
 	for _, script := range scripts {
 		cmd = append(cmd, "-c", sessionGuardSQL+script)
 	}
 	return cmd
 }
 
-func superuserConninfo(dbName, postgresMajor string) string {
+// serverVersionProbeCommand reads server_version_num with the connect-safe
+// options, which never name a versioned setting, so it survives both an old
+// server and an owner's poisoned preload library.
+func serverVersionProbeCommand(dbName string) []string {
+	return []string{"psql", "-X", "-tA", "-U", "postgres", "-d", superuserConninfo(dbName, 0), "-c", "SHOW server_version_num"}
+}
+
+func superuserConninfo(dbName string, serverVersionNum int) string {
 	options := make([]string, 0, len(pinnedSessionOptions)+1)
 	for _, option := range pinnedSessionOptions {
 		options = append(options, "-c "+option)
 	}
-	if major, err := strconv.Atoi(postgresMajor); err == nil && major >= transactionTimeoutMajor {
+	if serverVersionNum >= transactionTimeoutMinVersion {
 		options = append(options, "-c transaction_timeout=0")
 	}
 	return "dbname=" + conninfoValue(dbName) + " options=" + conninfoValue(strings.Join(options, " "))
@@ -77,10 +97,49 @@ func conninfoValue(value string) string {
 	return "'" + escaped + "'"
 }
 
+// terminateReservedSchemaBlockersCommand kills the non-platform, non-superuser
+// backends that hold a lock on an excalibase object or the excalibase schema
+// itself — a customer's or the owner's open transaction that would block the
+// rebuild. It never touches a platform session: superusers and the platform
+// logins are excluded by name.
+func terminateReservedSchemaBlockersCommand(dbName string) []string {
+	return []string{"psql", "-X", "-U", "postgres", "-d", superuserConninfo(dbName, 0), "-c", reservedSchemaBlockersSQL}
+}
+
+var reservedSchemaBlockersSQL = `
+SELECT pg_terminate_backend(a.pid)
+FROM pg_stat_activity a
+WHERE a.datname = current_database()
+  AND a.pid <> pg_backend_pid()
+  AND a.usename IS NOT NULL
+  AND a.usename <> ALL (` + platformRoleArray() + `)
+  AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = a.usename AND r.rolsuper)
+  AND EXISTS (
+    SELECT 1 FROM pg_locks l
+    WHERE l.pid = a.pid AND (
+      (l.locktype = 'relation' AND l.relation IN (
+        SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'excalibase'))
+      OR (l.locktype = 'object' AND l.classid = 'pg_catalog.pg_namespace'::regclass
+          AND l.objid = (SELECT oid FROM pg_namespace WHERE nspname = 'excalibase'))
+    )
+  );
+`
+
+// platformRoleArray is the SQL text[] of logins the terminate step must never
+// kill: every platform cert-login role plus the superuser bootstrap login.
+func platformRoleArray() string {
+	roles := append(pgroles.ReservedNames(), roleAdmin)
+	quoted := make([]string, 0, len(roles))
+	for _, role := range roles {
+		quoted = append(quoted, "'"+strings.ReplaceAll(role, "'", "''")+"'")
+	}
+	return "ARRAY[" + strings.Join(quoted, ", ") + "]::text[]"
+}
+
 // reservedSchemaFirstSQL takes the excalibase schema back before anything a
 // customer can make fail: it runs as its own transaction ahead of the squat
 // guard, so a project whose registration stops still loses every write path
-// its app role had into the schema.
+// its app role had into the schema and still gets the CREATE EXTENSION guard.
 func reservedSchemaFirstSQL() string {
-	return reservedSchemaRebuildSQL + reservedSchemaLockdownSQL(roleApp)
+	return reservedSchemaRebuildSQL + reservedSchemaLockdownSQL(roleApp) + reservedSchemaGuardSQL
 }

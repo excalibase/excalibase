@@ -35,6 +35,9 @@ type scheduleOp struct {
 	ExportName     string          `json:"exportName"`
 	Args           json.RawMessage `json:"args"`
 	ScheduledForMs *int64          `json:"scheduledForMs"`
+	// compactArgs is Args with insignificant whitespace removed, so the size
+	// limit is measured against what jsonb stores rather than the wire bytes.
+	compactArgs []byte
 }
 
 var errBadScheduleOp = errors.New("invalid scheduler call")
@@ -91,6 +94,20 @@ func decodeScheduleOps(w http.ResponseWriter, r *http.Request) ([]scheduleOp, er
 		if err := validScheduleOp(body.Ops[i]); err != nil {
 			return nil, fmt.Errorf("call %d: %w", i, err)
 		}
+		if body.Ops[i].Op != "schedule" {
+			continue
+		}
+		// Measure the limit against the normalised form, so a task the worker
+		// would accept is not refused here for its wire whitespace, nor one it
+		// would silently close accepted here (the minor finding).
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, body.Ops[i].Args); err != nil {
+			return nil, fmt.Errorf("call %d: %w: args", i, errBadScheduleOp)
+		}
+		if compact.Len() > scheduler.DefaultMaxArgsBytes {
+			return nil, fmt.Errorf("call %d: %w: args", i, errBadScheduleOp)
+		}
+		body.Ops[i].compactArgs = append([]byte(nil), compact.Bytes()...)
 	}
 	return body.Ops, nil
 }
@@ -112,8 +129,7 @@ func validScheduleOp(op scheduleOp) error {
 	if op.ScheduledForMs == nil {
 		return fmt.Errorf("%w: scheduledForMs", errBadScheduleOp)
 	}
-	args := bytes.TrimSpace(op.Args)
-	if len(args) == 0 || len(args) > scheduler.DefaultMaxArgsBytes {
+	if len(bytes.TrimSpace(op.Args)) == 0 {
 		return fmt.Errorf("%w: args", errBadScheduleOp)
 	}
 	return nil
@@ -146,7 +162,7 @@ func applyScheduleOp(ctx context.Context, tx *sql.Tx, projectID string, op sched
 			(id, project_id, module_name, export_name, args, scheduled_for, status)
 		VALUES ($1, $2, $3, $4, $5::jsonb, $6, 'pending')
 		ON CONFLICT (id) DO NOTHING`,
-		op.ID, projectID, op.ModuleName, op.ExportName, string(bytes.TrimSpace(op.Args)),
+		op.ID, projectID, op.ModuleName, op.ExportName, string(op.compactArgs),
 		time.UnixMilli(*op.ScheduledForMs).UTC())
 	return err
 }

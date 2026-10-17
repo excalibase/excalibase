@@ -222,6 +222,9 @@ Deno.test({
       assertEquals(prov.calls.length, 1);
       assertEquals(res.status, 500);
       assert(res.body.includes("scheduled functions were not recorded"), res.body);
+      // The caller must not learn the internal provisioning endpoint.
+      assert(!res.body.includes("http"), `error body leaked a URL: ${res.body}`);
+      assert(!prov.url.includes("127.0.0.1") || !res.body.includes("127.0.0.1"), res.body);
     }, 500);
   },
   sanitizeOps: false,

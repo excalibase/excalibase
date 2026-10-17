@@ -41,9 +41,12 @@ type ownerAttack struct {
 var ownerAttacks = []ownerAttack{
 	{name: "no attack"},
 	{name: "read-only default", statements: []string{"ALTER DATABASE app SET default_transaction_read_only = on"}},
+	{name: "poisoned preload library", statements: []string{"ALTER DATABASE app SET local_preload_libraries = 'no_such_excalibase_lib'"}},
 	{name: "role switch on connect", statements: []string{"ALTER DATABASE app SET role = '" + customerOwner + "'"}},
 	{name: "timeouts", statements: []string{"ALTER DATABASE app SET statement_timeout = '1ms'", "ALTER DATABASE app SET lock_timeout = '1ms'"}},
 	{name: "PL/pgSQL extra errors and exit on error", statements: []string{"DO $$ BEGIN END $$", "ALTER DATABASE app SET plpgsql.extra_errors = 'all'", "ALTER DATABASE app SET exit_on_error = on"}},
+	// The command pins transaction_timeout only when the version probe finds a
+	// server that has it; no stored major is consulted (finding 4).
 	{name: "transaction timeout", statements: []string{"ALTER DATABASE app SET transaction_timeout = '1ms'"}, minMajor: 17},
 	{name: "scheduler role squatted", statements: []string{"CREATE ROLE " + roleScheduler + " LOGIN PASSWORD 'Squat-1'"}, blocksRegistration: true, minMajor: 16},
 }
@@ -57,7 +60,6 @@ func roleReconcileAttackSuite(t *testing.T, start func(*testing.T) *rolePostgres
 		}
 		t.Run(attack.name, func(t *testing.T) {
 			c := newPlatformSchemaCaseOn(t, start(t))
-			c.spec.postgresMajor = major
 			c.registerAsBeforeEXC623(t)
 			// One admin session opened before the attack, so the owner's
 			// database settings do not reach the assertions.
@@ -71,7 +73,8 @@ func roleReconcileAttackSuite(t *testing.T, start func(*testing.T) *rolePostgres
 				mustExec(t, owner, statement)
 			}
 
-			err := c.pg.execCommand(superuserPsqlCommand("app", major, reservedSchemaFirstSQL(), projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub")))
+			err := runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app",
+				reservedSchemaFirstSQL(), projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub"))
 			if attack.blocksRegistration {
 				if err == nil {
 					t.Fatal("registration went on over a squatted platform role")
@@ -80,6 +83,18 @@ func roleReconcileAttackSuite(t *testing.T, start func(*testing.T) *rolePostgres
 				t.Fatalf("the owner's setting stopped the registration SQL: %v", err)
 			}
 			c.assertSchemaTakenBack(t)
+			if attack.blocksRegistration {
+				// The squat stops the second script, but the CREATE EXTENSION
+				// guard landed in the first one, so excalibase_app still cannot
+				// place an extension in a reserved schema (finding 2).
+				app := c.pg.connect(t, roleApp, customerAppPassword)
+				if _, err := app.Exec("CREATE EXTENSION pgcrypto SCHEMA excalibase"); err == nil {
+					t.Error("excalibase_app placed an extension in excalibase after a squat")
+				}
+				if _, err := app.Exec("CREATE EXTENSION hstore SCHEMA auth"); err == nil {
+					t.Error("excalibase_app placed an extension in auth after a squat")
+				}
+			}
 			if !attack.blocksRegistration {
 				// The settings would reach the scheduler's own sessions too;
 				// they are the owner's to undo, so the test undoes them.
@@ -109,7 +124,11 @@ func (c *platformSchemaCase) registerAsBeforeEXC623(t *testing.T) {
 	c.pg.psql(t, "DROP OWNED BY "+roleScheduler+"; DROP ROLE "+roleScheduler+";"+
 		"GRANT CREATE ON SCHEMA excalibase TO "+roleApp+";"+
 		"GRANT ALL ON ALL TABLES IN SCHEMA excalibase TO "+roleApp+";"+
-		"GRANT ALL ON ALL SEQUENCES IN SCHEMA excalibase TO "+roleApp)
+		"GRANT ALL ON ALL SEQUENCES IN SCHEMA excalibase TO "+roleApp+";"+
+		// The CREATE EXTENSION guard is new in EXC-623; an older project has
+		// none, so the reconcile must install it.
+		"DROP EVENT TRIGGER IF EXISTS excalibase_guard_reserved_schemas;"+
+		"DROP ROUTINE IF EXISTS excalibase.guard_reserved_schemas()")
 }
 
 func (c *platformSchemaCase) assertSchemaTakenBack(t *testing.T) {
@@ -138,6 +157,70 @@ func (p *rolePostgres) execCommand(argv []string) error {
 		return fmt.Errorf("psql exit %d: %s", code, body)
 	}
 	return nil
+}
+
+// execer drives role SQL through the container the way the service drives it
+// through a pod or a docker container.
+func (p *rolePostgres) execer() roleSQLExecer {
+	return func(ctx context.Context, cmd []string) (string, error) {
+		return p.execOutput(ctx, cmd)
+	}
+}
+
+func (p *rolePostgres) execOutput(ctx context.Context, cmd []string) (string, error) {
+	code, out, err := p.container.Exec(ctx, cmd, tcexec.Multiplexed())
+	if err != nil {
+		return "", err
+	}
+	body, _ := io.ReadAll(out)
+	if code != 0 {
+		return string(body), fmt.Errorf("psql exit %d: %s", code, body)
+	}
+	return string(body), nil
+}
+
+// A customer holding a lock on an excalibase object must not block the
+// rebuild: with a finite lock_timeout the first attempt times out, the
+// orchestration terminates the customer backend, and the retry lands. The
+// platform roles are never terminated.
+func TestRoleReconcileTerminatesALockHolder_Postgres15(t *testing.T) {
+	roleReconcileLockHolderCase(t, startRolePostgresImage(t, "postgres:15-alpine"))
+}
+
+func TestRoleReconcileTerminatesALockHolder_CNPGPostgres17(t *testing.T) {
+	roleReconcileLockHolderCase(t, startCNPGRolePostgres(t, "17"))
+}
+
+func roleReconcileLockHolderCase(t *testing.T, pg *rolePostgres) {
+	c := newPlatformSchemaCaseOn(t, pg)
+	c.registerAsBeforeEXC623(t)
+	c.admin.SetMaxOpenConns(1)
+	c.admin.SetMaxIdleConns(1)
+	if err := c.admin.Ping(); err != nil {
+		t.Fatal(err)
+	}
+	// Taint the schema so the rebuild must DROP it, which needs an exclusive
+	// lock on a table a customer session is about to hold.
+	app := c.pg.connect(t, roleApp, customerAppPassword)
+	mustExec(t, app, "CREATE TABLE excalibase.app_planted (id int)")
+	mustExec(t, c.admin, "GRANT USAGE ON SCHEMA excalibase TO "+customerOwner)
+	mustExec(t, c.admin, "GRANT SELECT ON excalibase.app_planted TO "+customerOwner)
+
+	owner := c.pg.connect(t, customerOwner, customerOwnerPassword)
+	tx, err := owner.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec("SELECT count(*) FROM excalibase.app_planted"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app",
+		reservedSchemaFirstSQL(), projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub")); err != nil {
+		t.Fatalf("a customer lock holder blocked the rebuild: %v", err)
+	}
+	c.assertSchemaTakenBack(t)
 }
 
 // startCNPGRolePostgres runs the CloudNativePG operand image a project of

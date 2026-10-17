@@ -1095,14 +1095,24 @@ pass is retried at a later one. Look for `platform role reconcile:` in the log.
 
 The owner holds the database, so it can attach settings to it that would make
 that SQL fail: read-only transactions, a role to switch to on connect,
-timeouts, PL/pgSQL extra errors. The superuser's psql therefore pins those
-settings as connection options, checks it runs as the superuser itself, and
-takes the schema back (ownership, CREATE revoked from every other role, all
-table and sequence grants revoked from `excalibase_app`) in a first
-transaction of its own. Anything later that the owner can still make fail,
-such as a Postgres 16+ owner creating `excalibase_scheduler` itself, stops
-registration after that lockdown has landed. Default privileges another role
-set in the schema are cleared and do not trigger the rebuild.
+timeouts, PL/pgSQL extra errors, and a preload library, which makes every new
+backend FATAL before it runs a line. The superuser's psql therefore pins all
+of those as connection startup options (including `local_preload_libraries`),
+checks it runs as the superuser itself in a writable transaction, and takes
+the schema back — ownership, CREATE revoked from every other role, all table
+and sequence grants revoked from `excalibase_app`, and the CREATE EXTENSION
+guard installed — in a first transaction of its own. Anything later that the
+owner can still make fail, such as a Postgres 16+ owner creating
+`excalibase_scheduler` itself, stops registration only after that lockdown and
+guard have landed. Default privileges another role set in the schema are
+cleared and do not trigger the rebuild.
+
+The version that decides whether `transaction_timeout` can be pinned at
+connect is read from the server with a first probe connection, not from any
+stored value. `lock_timeout` is finite: a customer that holds a lock on an
+excalibase object (or a view over one) makes the first attempt time out, after
+which the reconcile terminates that customer or owner backend — never a
+platform one — and retries.
 
 ## 7. Image upgrade
 

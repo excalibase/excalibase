@@ -13,6 +13,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/scheduler"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -117,6 +118,31 @@ func TestInternalSchedule_WritesTheOpsInOneTransaction(t *testing.T) {
 	body := `{"ops":[{"op":"schedule","id":"abc123","moduleName":"jobs","exportName":"send","args":{"to":"ada"},"scheduledForMs":1700000000000},{"op":"cancel","id":"abc123"}]}`
 	w := postSchedule(r, "proj_a", edgefn.DeriveRuntimeSecret(schedulerTestMaster, "proj_a"), body)
 	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Whitespace is not content: a task whose wire bytes exceed the limit only
+// because of indentation is accepted, since jsonb stores the compact form,
+// which is what the sweep measures (the minor finding).
+func TestInternalSchedule_MeasuresArgsAfterCompaction(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, r := schedulerRouteHandler(t, db)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO excalibase.excalibase_scheduled_functions")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	padding := strings.Repeat(" ", scheduler.DefaultMaxArgsBytes)
+	body := `{"ops":[{"op":"schedule","id":"abc123","moduleName":"jobs","exportName":"send","scheduledForMs":1,"args":` + padding + `{"to":"ada"}` + padding + `}]}`
+	if w := postSchedule(r, "proj_a", edgefn.DeriveRuntimeSecret(schedulerTestMaster, "proj_a"), body); w.Code != http.StatusNoContent {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

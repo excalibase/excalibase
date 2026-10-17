@@ -107,8 +107,8 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	if mintScheduler {
 		roleSQL += BuildProjectRoleResetSQL([]RolePassword{{Role: roleScheduler, Password: creds.schedulerPassword}})
 	}
-	cmd := superuserPsqlCommand(spec.databaseName, spec.postgresMajor, reservedSchemaFirstSQL(), roleSQL)
-	if err := s.execRoleSQL(ctx, spec.namespace, spec.projectID+primaryPodSuffix, cmd); err != nil {
+	exec := s.roleSQLExecer(spec.namespace, spec.projectID+primaryPodSuffix)
+	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL); err != nil {
 		return fmt.Errorf("re-run registration SQL: %w", err)
 	}
 	if err := s.ensureClusterCertLogins(ctx, inst); err != nil {
@@ -133,7 +133,6 @@ func reconcileSpec(inst *domain.DatabaseInstance) projectRoleSpec {
 		databaseName:  inst.DatabaseName,
 		adminUsername: inst.Username,
 		documentDB:    inst.DocumentDB,
-		postgresMajor: inst.PostgresVersion,
 	}
 }
 
