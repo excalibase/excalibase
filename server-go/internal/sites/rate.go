@@ -46,3 +46,18 @@ func (s *Service) takeDeploySlot(ctx context.Context, projectID string, perHour 
 	}
 	return giveBack, nil
 }
+
+// TakeDeploySlot counts a deploy started elsewhere, a git build when it is
+// queued (EXC-354), against the project's deploys per hour.
+func (s *Service) TakeDeploySlot(ctx context.Context, projectID string) error {
+	if !s.Available() {
+		return ErrSitesUnavailable
+	}
+	limits, err := s.limitsFor(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	// A queued build keeps its slot even when it fails later, as a refused upload does.
+	_, err = s.takeDeploySlot(ctx, projectID, limits.MaxDeploysPerHour)
+	return err
+}

@@ -14,6 +14,8 @@ interface ConfigResponse {
   customDomains?: boolean;
   // Sites may take custom domains: the Cloudflare zone is set up for them (EXC-614).
   siteCustomDomains?: boolean;
+  // Git builds of sites are switched on (EXC-354); single-host still refuses them by name.
+  siteGitBuilds?: boolean;
   features?: Partial<Record<Feature, boolean>>;
   // The public API base the SDK, REST and GraphQL calls go to.
   apiUrl?: string;
@@ -52,6 +54,12 @@ export function useSitesEnabled(): { enabled: boolean; isLoading: boolean } {
 export function useSiteCustomDomainsEnabled(): { enabled: boolean; isLoading: boolean } {
   const { data, isLoading } = useStudioConfig();
   return { enabled: data?.siteCustomDomains === true, isLoading };
+}
+
+// Off until the server switches git builds on (SITES_GIT_BUILDS_ENABLED).
+export function useSiteGitBuildsEnabled(): boolean {
+  const { data } = useStudioConfig();
+  return data?.siteGitBuilds === true;
 }
 
 // Off unless the server has an ACME issuer for custom domains.
