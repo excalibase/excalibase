@@ -112,7 +112,7 @@ func TestEnableDocumentDBCreatesTheExtensionInThePostgresDatabase(t *testing.T) 
 		t.Fatalf("enableDocumentDB: %v", err)
 	}
 
-	created := execCommandsMentioning(kube, "CREATE EXTENSION")
+	created := execCommandsMentioning(kube, "CREATE EXTENSION IF NOT EXISTS")
 	if len(created) != 1 {
 		t.Fatalf("CREATE EXTENSION ran %d times: %v", len(created), kube.ExecCommands)
 	}
@@ -263,7 +263,7 @@ func TestRegisterProjectWithoutDocumentDBRunsNoExtensionSQL(t *testing.T) {
 		t.Fatalf("RegisterProject: %v", err)
 	}
 
-	if len(execCommandsMentioning(kube, "CREATE EXTENSION")) != 0 {
+	if len(execCommandsMentioning(kube, "CREATE EXTENSION IF NOT EXISTS")) != 0 {
 		t.Errorf("extension SQL ran for a plain project: %v", kube.ExecCommands)
 	}
 	if inst.Status != "ACTIVE" {

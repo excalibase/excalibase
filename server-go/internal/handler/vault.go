@@ -142,7 +142,7 @@ func projectIDForSecretPrefix(prefix string) string {
 // are not the database's.
 func isDatabaseLogin(path, projectID string) bool {
 	switch strings.TrimPrefix(path, "projects/"+projectID+"/credentials/") {
-	case "admin", "auth_admin", "excalibase_app", "cdc_watcher":
+	case "admin", "auth_admin", "excalibase_app", "cdc_watcher", "excalibase_scheduler":
 		return true
 	}
 	return false

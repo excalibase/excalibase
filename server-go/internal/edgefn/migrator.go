@@ -9,8 +9,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-
-	"github.com/excalibase/provisioning-poc/internal/platformdb"
 )
 
 // nosqlSchemaName is the postgres schema under which the NoSQL tables live.
@@ -58,22 +56,14 @@ func quoteIdent(ident string) string {
 // have their own database, so collisions within nosql.* would only happen
 // across different schemas the user themselves declared.
 //
-// Phase 8: ApplySchema also creates the Phase 8 scheduler/cron tables on
-// every deploy. Being platform metadata rather than user data, they live
-// in the reserved `excalibase` schema — not under `nosql.*` and never in
-// the tenant's `public` schema, which the generated APIs expose. The DDL
-// is idempotent so re-application is free.
+// The scheduler/cron tables are not created here: db is the app role, which
+// customer SQL also runs as, so it may not create in the reserved schema.
+// Registration creates them (EXC-623).
 func ApplySchema(ctx context.Context, db *sql.DB, projectID string, schema Schema) error {
 	// Short-circuit on empty schema BEFORE any DB access so callers (and
 	// unit tests) can pass a nil DB when there's nothing to migrate.
 	if len(schema.Tables) == 0 {
 		return nil
-	}
-	// Phase 8: ensure scheduler tables exist on every real migration.
-	// Safe to run before the user-schema DDL because it doesn't touch
-	// the `nosql.*` schema or any user tables.
-	if err := ensureSchedulerTables(ctx, db); err != nil {
-		return fmt.Errorf("ensure scheduler tables: %w", err)
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -281,15 +271,4 @@ func applyVectorIndexes(ctx context.Context, tx *sql.Tx, tableName string, index
 // already controlled — this is defence-in-depth.
 func quoteLiteral(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-}
-
-// ensureSchedulerTables creates the Phase 8 scheduler bookkeeping tables
-// on the project database. Idempotent: every statement is guarded, so
-// re-application during normal deploys is a no-op.
-//
-// The DDL lives in internal/platformdb — a dependency-free package shared
-// with the runtime worker's scheduler.EnsureTables, so both call sites get
-// byte-identical schema instead of two copies that drift apart.
-func ensureSchedulerTables(ctx context.Context, db *sql.DB) error {
-	return platformdb.EnsureSchedulerTables(ctx, db)
 }

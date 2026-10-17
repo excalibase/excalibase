@@ -233,3 +233,27 @@ func TestAProjectWithoutADatabaseHasNoCertificatesToRenew(t *testing.T) {
 		t.Fatalf("report %+v", report)
 	}
 }
+
+// A project the platform role reconcile has not reached has no scheduler
+// login filed yet; renewal leaves it to the reconcile and renews the rest.
+func TestRenewal_LeavesAnUnfiledSchedulerLoginToTheReconcile(t *testing.T) {
+	h := newRenewalHarness(t, string(domain.StatusActive))
+	delete(h.vault.data, vaultCredentialPath(renewProject, roleScheduler))
+	h.now = h.now.Add(tenantcert.Validity)
+
+	report := h.renewer.RenewDue(context.Background())
+	if len(report.Failed) != 0 || report.Renewed != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	if _, filed := h.vault.data[vaultCredentialPath(renewProject, roleScheduler)]; filed {
+		t.Fatal("renewal filed a scheduler login with no connection details")
+	}
+}
+
+func TestRenewal_StillFailsOnAMissingAppLogin(t *testing.T) {
+	h := newRenewalHarness(t, string(domain.StatusActive))
+	delete(h.vault.data, vaultCredentialPath(renewProject, roleApp))
+	if report := h.renewer.RenewDue(context.Background()); len(report.Failed) != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+}

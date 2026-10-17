@@ -457,7 +457,7 @@ is up — the CNPG primary pod Ready in K8s mode, postgres out of recovery in
 Docker mode — the platform runs the same registration path a new project goes
 through:
 
-1. Platform roles (`auth_admin`, `excalibase_app`, `cdc_watcher`) are created,
+1. Platform roles (`auth_admin`, `excalibase_app`, `cdc_watcher`, `excalibase_scheduler`) are created,
    and — because a restored database arrives carrying the source project's
    roles and passwords — their passwords are **reset** to freshly generated
    ones. The restored project therefore has its own credentials; leaking the
@@ -993,8 +993,9 @@ seeded by the bootstrap Job.
 
 `POST /api/provision/{id}/credentials/rotate` replaces the passwords of every
 platform role filed under `projects/{id}/credentials/` — `auth_admin`, then
-`excalibase_app`, then the project owner, which is the credential the call
-returns. `cdc_watcher` is not rotated: its password is baked into the deployed
+`excalibase_app`, then `excalibase_scheduler`, then the project owner, which is
+the credential the call returns. A role that logs in by client certificate has
+no password to rotate and is skipped. `cdc_watcher` is not rotated: its password is baked into the deployed
 watcher's configuration, so changing it would stop the project's replication.
 
 Each role is rotated in one order: the new password is written to
@@ -1055,6 +1056,42 @@ grow with row size and write rate; inserts cost nothing extra. Tables without
 realtime are unaffected. A table with wide rows and heavy update traffic is
 the case to watch: check WAL growth (`pg_stat_wal`) before turning realtime on
 for it.
+
+## 6.9. The excalibase schema belongs to the platform
+
+Customer-written SQL — Studio's SQL editor, MCP `execute_sql` and
+`apply_migration`, table import — runs as `excalibase_app`. That role reads the
+project's `auth` tables (as Supabase's SQL editor does) and works in `public`
+and any schema it creates, but in the reserved `excalibase` schema it holds
+USAGE only (EXC-623): no CREATE, no ownership and no DML. It can still call
+the guarded functions there (`create_role`, `set_realtime_table`, ...), which
+the superuser owns. `excalibase_cdc` is the watcher's alone.
+
+The superuser owns the schema and everything in it, the scheduler tables
+included. Their only writer is `excalibase_scheduler`, a login used by the
+function scheduler and the deploy-time cron sync and by nothing that runs
+customer SQL. It logs in by client certificate on Kubernetes, has its
+search_path pinned to `pg_catalog`, and holds DML on those two tables only.
+
+Registration enforces this. If anything in the schema belongs to a role that
+is not a superuser, or the schema itself does, or any trigger sits on a table
+there, registration drops the schema with everything in it and recreates the
+platform's objects. It logs a WARNING when it does. A clean schema is left
+alone, so the scheduler's rows survive. On a project registered before
+EXC-623 the scheduler tables belonged to `excalibase_app`, so that rebuild
+drops pending scheduled tasks. Cron rows come back on each function's next
+deploy. An event trigger also refuses a non-superuser's `CREATE EXTENSION` /
+`ALTER EXTENSION` into `auth`, `excalibase` or `excalibase_*`. A trusted
+extension checks CREATE on the database, not on the schema, so a revoke alone
+would not stop it.
+
+Projects registered before EXC-623 are found by their missing
+`projects/{id}/credentials/excalibase_scheduler` record. Every 10 minutes the
+leading replica re-runs registration on each such ACTIVE Postgres project,
+adds the role's certificate login to the cluster's pg_hba (only when the
+cluster already admits platform roles by certificate), and then files the
+login. Filing comes last, so a project that was paused, busy or failing at one
+pass is retried at a later one. Look for `platform role reconcile:` in the log.
 
 ## 7. Image upgrade
 

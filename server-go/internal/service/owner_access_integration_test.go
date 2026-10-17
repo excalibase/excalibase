@@ -71,11 +71,13 @@ func (c *ownerAccessCase) ownerUsesView(t *testing.T) {
 	}
 }
 
-// excalibase_app can create objects in the excalibase schema; a procedure or
-// aggregate it left under a platform function's name must not abort the
-// registration that replaces it.
+// Before EXC-623 excalibase_app could create objects in the excalibase
+// schema; a procedure it left under a platform function's name must not abort
+// the registration that replaces it, and must not survive it.
 func (c *ownerAccessCase) plantedRoutinesAreReplaced(t *testing.T) {
 	c.pg.psql(t, "DROP EVENT TRIGGER excalibase_share_created_schema; DROP FUNCTION excalibase.share_created_schema(); DROP FUNCTION excalibase.share_with_owner(oid); DROP FUNCTION excalibase.drop_role(text)")
+	mustFail(t, c.app, "CREATE PROCEDURE excalibase.share_with_owner(oid) LANGUAGE sql AS $$ SELECT 1 $$", "permission denied")
+	c.pg.psql(t, "GRANT CREATE ON SCHEMA excalibase TO excalibase_app")
 	mustExec(t, c.app, "CREATE PROCEDURE excalibase.share_with_owner(oid) LANGUAGE sql AS $$ SELECT 1 $$")
 	mustExec(t, c.app, "CREATE PROCEDURE excalibase.share_created_schema() LANGUAGE sql AS $$ SELECT 1 $$")
 	mustExec(t, c.app, "CREATE PROCEDURE excalibase.drop_role(text) LANGUAGE sql AS $$ SELECT 1 $$")
@@ -83,6 +85,9 @@ func (c *ownerAccessCase) plantedRoutinesAreReplaced(t *testing.T) {
 	restore.resetPasswords = true
 	if err := c.pg.psqlErr(projectRoleSQL(restore, c.creds, "cdc_watcher_pub")); err != nil {
 		t.Fatalf("registration failed on a planted routine: %v", err)
+	}
+	if got := scanString(t, c.admin, "SELECT count(*)::text FROM pg_proc WHERE pronamespace = 'excalibase'::regnamespace AND prokind = 'p'"); got != "0" {
+		t.Fatalf("%s planted procedure(s) survived registration", got)
 	}
 	mustExec(t, c.app, "CREATE SCHEMA after_plant")
 	mustExec(t, c.app, "CREATE TABLE after_plant.items (id int)")
@@ -128,7 +133,7 @@ func (c *ownerAccessCase) platformKeepsAccess(t *testing.T) {
 // The reserved schemas hold scheduler and cron state the platform writes;
 // a table the platform creates there stays the platform's.
 func (c *ownerAccessCase) ownerReachesNoBookkeeping(t *testing.T) {
-	mustExec(t, c.app, "CREATE TABLE excalibase.job_runs (id int)")
+	c.pg.psql(t, "CREATE TABLE excalibase.job_runs (id int)")
 	mustFail(t, c.owner, "SELECT * FROM excalibase.job_runs", "permission denied")
 	mustFail(t, c.owner, "CREATE TABLE excalibase.planted (id int)", "permission denied")
 }

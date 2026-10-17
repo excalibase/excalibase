@@ -50,7 +50,7 @@ func TestCreateFunction_CronSyncFailureIsPlainAndRollsBack(t *testing.T) {
 	var orgStore storage.OrgStore
 	h := NewFunctionHandler(store, edgefn.NewSecretsStore(newFakeVault()), edgefn.NewRuntimeClient("http://127.0.0.1:1", ""),
 		instStore, orgStore, "https://api.test.io")
-	h.projectDBFn = func(context.Context, string) (*sql.DB, error) {
+	h.schedulerDBFn = func(context.Context, string) (*sql.DB, error) {
 		return nil, errors.New("dial tcp 10.0.0.7:5432: connection refused")
 	}
 	router := chi.NewRouter()
