@@ -271,6 +271,20 @@ func TestMySQLServiceNames(t *testing.T) {
 	}
 }
 
+// Binary logging is on, and the customer's admin has no SUPER: without this
+// CREATE TRIGGER and CREATE FUNCTION fail with error 1419.
+func TestMySQLSettingsTrustFunctionCreators(t *testing.T) {
+	for _, plan := range []config.TierConfig{freePlan, standardPlan} {
+		settings, err := MySQLSettings(plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settings["log_bin_trust_function_creators"] != "1" {
+			t.Errorf("log_bin_trust_function_creators=%q", settings["log_bin_trust_function_creators"])
+		}
+	}
+}
+
 func TestMySQLSettingsAreTheConfigMapsData(t *testing.T) {
 	for _, plan := range []config.TierConfig{freePlan, standardPlan} {
 		settings, err := MySQLSettings(plan)

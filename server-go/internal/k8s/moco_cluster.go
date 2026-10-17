@@ -228,7 +228,9 @@ func MySQLSettings(tier config.TierConfig) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	settings := map[string]string{"max_connections": mysqlMaxConnections}
+	// Binary logging is on and the customer's admin has no SUPER, so triggers
+	// and stored functions need this (error 1419). Each project has its own server.
+	settings := map[string]string{"max_connections": mysqlMaxConnections, "log_bin_trust_function_creators": "1"}
 	small, err := smallMySQLPlan(plan)
 	if err != nil {
 		return nil, err

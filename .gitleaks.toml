@@ -18,4 +18,5 @@ paths = [
   '''server-go/internal/storage/postgres/pg_test\.go''',
   '''server-go/internal/storage/sqlite/sqlite_test\.go''',
   '''server-go/internal/k8s/testdata/app_workload/.*\.yaml''',
+  '''server-go/internal/config/sites_git_test\.go''',
 ]
