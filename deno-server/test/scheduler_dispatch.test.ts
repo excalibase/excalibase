@@ -266,3 +266,41 @@ Deno.test({
   sanitizeOps: false,
   sanitizeResources: false,
 });
+
+// Validation and configuration errors: an action's ctx.scheduler call that is
+// malformed, or made with no provisioning URL configured, is rejected before
+// anything is sent. No Postgres is needed — actions open no transaction.
+Deno.test({
+  name: "ctx.scheduler rejects malformed calls and a missing provisioning URL",
+  async fn() {
+    const rt = await startRuntime({ v2Enabled: true });
+    try {
+      const cases: Array<[string, string]> = [
+        ["missing ref", `await ctx.scheduler.runAfter(1000, undefined, {})`],
+        ["bad time", `await ctx.scheduler.runAt(NaN, { moduleName: "jobs", exportName: "send" }, {})`],
+        ["empty cancel id", `await ctx.scheduler.cancel("")`],
+        ["not configured", `await ctx.scheduler.runAfter(1000, { moduleName: "jobs", exportName: "send" }, {})`],
+      ];
+      for (const [name, call] of cases) {
+        const id = `proj_badsched_${name.replace(/[^a-z]/g, "")}__caller`;
+        await rt.deploy(id, bundleDefault(`{
+          kind: "action",
+          args: { parse: (a) => a },
+          handler: async (ctx, _args) => {
+            try { ${call}; return { ok: true }; }
+            catch (err) { return { error: String(err && err.message ? err.message : err) }; }
+          },
+        }`));
+        const res = await rt.invoke(id, { args: {} });
+        const parsed = JSON.parse(res.body) as { data?: { ok?: boolean; error?: string } };
+        if (!parsed.data || !parsed.data.error) {
+          throw new Error(`${name}: expected a rejection, got ${res.body}`);
+        }
+      }
+    } finally {
+      await rt.stop();
+    }
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});

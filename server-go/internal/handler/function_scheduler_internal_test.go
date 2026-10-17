@@ -211,3 +211,13 @@ func TestInternalSchedule_UnavailableWithoutTheSchedulerLogin(t *testing.T) {
 		t.Fatalf("status %d, want 503", w.Code)
 	}
 }
+
+func TestInternalSchedule_UnavailableWhenTheSchedulerLoginCannotOpen(t *testing.T) {
+	// schedulerRouteHandler(nil) files a schedulerDBFn that errors, standing
+	// in for a login the platform could not open.
+	_, r := schedulerRouteHandler(t, nil)
+	w := postSchedule(r, "proj_a", edgefn.DeriveRuntimeSecret(schedulerTestMaster, "proj_a"), oneSchedule)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503: %s", w.Code, w.Body.String())
+	}
+}

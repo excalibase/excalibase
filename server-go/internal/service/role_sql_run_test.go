@@ -110,3 +110,27 @@ func TestRoleSQLExecerPrefersDockerThenK8s(t *testing.T) {
 		t.Fatalf("docker execs = %d, want the command through the container", len(docker.execs))
 	}
 }
+
+// When every attempt still lock-times out, the error is returned, and a
+// failing terminate is logged, not fatal.
+func TestRunSuperuserRoleSQL_ReturnsAfterExhaustingRetries(t *testing.T) {
+	lockErr := errors.New("psql exit 3: canceling statement due to lock timeout")
+	termErr := errors.New("terminate failed")
+	e := &scriptedExecer{
+		// probe, attempt1, terminate(fail), attempt2, terminate(fail), attempt3
+		outputs: []string{"150000", "", "", "", "", ""},
+		errs:    []error{nil, lockErr, termErr, lockErr, termErr, lockErr},
+	}
+	if err := runSuperuserRoleSQL(context.Background(), e.exec, "app", "SELECT 1;"); err == nil {
+		t.Fatal("expected the lock-timeout error after exhausting retries")
+	}
+	terminateCalls := 0
+	for _, c := range e.calls {
+		if isTerminate(c) {
+			terminateCalls++
+		}
+	}
+	if terminateCalls != 2 {
+		t.Fatalf("terminate attempts = %d, want one between each of the 3 tries", terminateCalls)
+	}
+}
