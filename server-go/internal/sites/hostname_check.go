@@ -176,10 +176,11 @@ func (s *Service) readZone(ctx context.Context, hostname *CustomHostname) (cfwor
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
 		return s.createOnZone(ctx, hostname)
 	}
-	if err != nil || hostnameStatus(answer) == HostnameActive {
+	// The GET decides: only a hostname still pending validation is nudged, so
+	// neither a failed nor an "active" PATCH can hide a moved or blocked one.
+	if err != nil || hostnameStatus(answer) != HostnamePending {
 		return answer, err
 	}
-	// The GET decides: a failed nudge must not hide a moved or blocked hostname.
 	revalidated, err := zone.RevalidateCustomHostname(cdnCtx, hostname.CloudflareID, hostname.Validation)
 	if err != nil {
 		log.Printf("site %s: ask Cloudflare to validate %s again: %v", hostname.SiteID, hostname.Hostname, err)

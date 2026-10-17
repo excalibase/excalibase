@@ -242,6 +242,19 @@ func (m *MemoryStore) ListDeploys(_ context.Context, projectID, siteID string, l
 	return out, nil
 }
 
+func (m *MemoryStore) ReturnDeploySlot(_ context.Context, projectID string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempts := m.Attempts[projectID]
+	for i, attempt := range attempts {
+		if attempt.Equal(at) {
+			m.Attempts[projectID] = append(append([]time.Time{}, attempts[:i]...), attempts[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
 func (m *MemoryStore) TakeDeploySlot(_ context.Context, projectID string, now time.Time, window time.Duration, maxSlots int) (time.Duration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

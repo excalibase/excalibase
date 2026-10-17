@@ -38,6 +38,8 @@ type Store interface {
 	// max attempts already fall in the window before it; then it answers how
 	// long until the oldest of them leaves the window. Atomic across replicas.
 	TakeDeploySlot(ctx context.Context, projectID string, now time.Time, window time.Duration, max int) (time.Duration, error)
+	// ReturnDeploySlot forgets one attempt TakeDeploySlot recorded at that instant.
+	ReturnDeploySlot(ctx context.Context, projectID string, at time.Time) error
 	// CreateDeployToken refuses with ErrDeployTokenLimitReached past maxPerSite,
 	// and with ErrSiteNotFound when the project holds no such site.
 	CreateDeployToken(ctx context.Context, token *DeployToken, maxPerSite int) error

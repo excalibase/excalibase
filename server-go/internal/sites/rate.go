@@ -3,6 +3,7 @@ package sites
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 )
 
@@ -25,16 +26,23 @@ func (e *RateLimitError) Is(target error) bool { return target == ErrDeployRateL
 
 // takeDeploySlot counts this upload against the project's deploys per hour
 // before its body is read, so a refused archive counts as much as a good one.
-func (s *Service) takeDeploySlot(ctx context.Context, projectID string, perHour int) error {
+// takeDeploySlot records the attempt and answers how to give it back.
+func (s *Service) takeDeploySlot(ctx context.Context, projectID string, perHour int) (func(), error) {
 	if perHour <= 0 {
-		return &RateLimitError{RetryAfter: deployRateWindow}
+		return nil, &RateLimitError{RetryAfter: deployRateWindow}
 	}
-	wait, err := s.store.TakeDeploySlot(ctx, projectID, s.now().UTC(), deployRateWindow, perHour)
+	at := s.now().UTC()
+	wait, err := s.store.TakeDeploySlot(ctx, projectID, at, deployRateWindow, perHour)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if wait > 0 {
-		return &RateLimitError{RetryAfter: max(wait, time.Second)}
+		return nil, &RateLimitError{RetryAfter: max(wait, time.Second)}
 	}
-	return nil
+	giveBack := func() {
+		if err := s.store.ReturnDeploySlot(context.WithoutCancel(ctx), projectID, at); err != nil {
+			log.Printf("project %s: give back a deploy slot: %v", projectID, err)
+		}
+	}
+	return giveBack, nil
 }

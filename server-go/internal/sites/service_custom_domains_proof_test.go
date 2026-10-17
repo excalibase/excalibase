@@ -85,6 +85,45 @@ func TestAMovedDomainIsWithdrawnEvenWhenTheRevalidateFails(t *testing.T) {
 	assertWithdrawn(t, h, site, active.ID)
 }
 
+// A deploy refused because the project is busy publishes nothing, so it does
+// not use up the hour's deploy: on a 1-per-hour plan the retry still goes out.
+func TestABusyRefusalGivesTheDeploySlotBack(t *testing.T) {
+	limits := sites.DefaultLimits
+	limits.MaxDeploysPerHour = 1
+	h := newDomainHarnessWith(t, func(options *sites.Options) { options.DeployLimits = fixedLimits{limits} })
+	site := h.liveSite(t, "shop")
+	*h.clock = h.clock.Add(time.Hour + time.Minute)
+	h.projects.Busy(testProject, true)
+	if _, err := h.deploy(t, site, viteDist(t)); !errors.Is(err, sites.ErrSiteBusy) {
+		t.Fatalf("deploy while busy: err = %v, want the project busy", err)
+	}
+	h.projects.Busy(testProject, false)
+	if _, err := h.deploy(t, site, viteDist(t)); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if _, err := h.deploy(t, site, viteDist(t)); !errors.Is(err, sites.ErrDeployRateLimited) {
+		t.Fatalf("third deploy: err = %v, want the hourly rate", err)
+	}
+}
+
+// A blocked, moved or deleted GET decides even when a PATCH would answer
+// active: the PATCH is only for a hostname still pending validation.
+func TestAFailedGetDecidesOverARevalidateThatAnswersActive(t *testing.T) {
+	for _, state := range []string{"blocked", "moved", "deleted"} {
+		h := newDomainHarness(t)
+		site, active := activeDomain(t, h)
+		h.zone.SetState("www.example.com", state, "active")
+		h.zone.RevalidateAnswer = &cfworkers.CustomHostname{ID: active.CloudflareID, Hostname: "www.example.com",
+			Status: "active", SSL: cfworkers.HostnameSSL{Status: "active"}}
+		before := h.zone.Revalidations()
+		h.refresh(t, site, active.ID)
+		assertWithdrawn(t, h, site, active.ID)
+		if h.zone.Revalidations() != before {
+			t.Fatalf("%s: re-validated %d times, want no PATCH", state, h.zone.Revalidations()-before)
+		}
+	}
+}
+
 // A re-create Cloudflare refuses outright releases the proof, and so leaves the router and CORS as a withdraw does.
 func TestARefusedRecreateTakesTheDomainOffLikeAWithdraw(t *testing.T) {
 	h := newDomainHarness(t)
