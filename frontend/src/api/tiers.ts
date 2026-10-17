@@ -33,6 +33,13 @@ export interface TierConfig {
   maxSiteDeploysPerHour: number;
   // Custom domains one project's sites may hold (EXC-614); 0 offers none.
   maxSiteCustomDomains: number;
+  // One git build of a site on the plan (EXC-354): its CPU, memory, disk and time,
+  // and how many of a project's builds run at once. Builds count toward deploys an hour.
+  siteBuildCpuMillis?: number;
+  siteBuildMemory?: string;
+  siteBuildDisk?: string;
+  siteBuildTimeoutSeconds?: number;
+  siteBuildConcurrency?: number;
 }
 
 export type TierConfigInput = Omit<TierConfig, 'tier' | 'version'>;

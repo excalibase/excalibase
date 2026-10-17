@@ -62,6 +62,9 @@ func assertSeededLikeBuiltin(t *testing.T, tier domain.TierType, stored, builtin
 	if stored.Sites != builtin.Sites {
 		t.Errorf("%s: stored site limits %+v, built-in %+v", tier, stored.Sites, builtin.Sites)
 	}
+	if stored.SiteBuilds != builtin.SiteBuilds {
+		t.Errorf("%s: stored build limits %+v, built-in %+v (EXC-354)", tier, stored.SiteBuilds, builtin.SiteBuilds)
+	}
 }
 
 func TestTierConfigs_UpsertRoundTrip(t *testing.T) {
@@ -69,7 +72,8 @@ func TestTierConfigs_UpsertRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	want := config.TierConfig{MaxProjects: 10, Instances: 3, StorageSize: "100Gi", MaxStorageSize: "300Gi", MaxAppDiskSize: "40Gi", MaxApps: 7, Memory: "8Gi", CPU: "4", BackupEnabled: true,
-		Sites: config.SiteTierLimits{MaxSites: 9, MaxDeployBytes: 200 << 20, MaxFiles: 30_000, MaxFileBytes: 10 << 20, MaxDeploysPerHour: 45, MaxCustomDomains: 6}}
+		Sites:      config.SiteTierLimits{MaxSites: 9, MaxDeployBytes: 200 << 20, MaxFiles: 30_000, MaxFileBytes: 10 << 20, MaxDeploysPerHour: 45, MaxCustomDomains: 6},
+		SiteBuilds: config.SiteBuildTierLimits{CPUMillis: 3000, Memory: "6Gi", Disk: "12Gi", TimeoutSeconds: 1500, Concurrency: 3}}
 	version, err := store.UpsertTierConfig(ctx, domain.Standard, want, nil)
 	if err != nil {
 		t.Fatalf("UpsertTierConfig: %v", err)

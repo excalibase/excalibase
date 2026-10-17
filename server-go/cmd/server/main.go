@@ -307,7 +307,12 @@ func runServer(cfg config.AppConfig) {
 	stopDomainSweep := startAppDomainSweeper(cfg, sqlStore, deps.appDomainSvc)
 	defer stopDomainSweep()
 
-	checkFeatureWiring(cfg, featureWiringDeps(fnHandler, projectDB, pauseSvc))
+	stopSiteBuilds := startSiteBuildDispatcher(deps.siteBuilds)
+	defer stopSiteBuilds()
+
+	wiringDeps := featureWiringDeps(fnHandler, projectDB, pauseSvc)
+	wiringDeps.SitesAvailable, wiringDeps.SiteBuildRunner = cfg.SitesAvailable(), deps.siteBuilds.wired
+	checkFeatureWiring(cfg, wiringDeps)
 
 	r := buildRouter(cfg, sqlStore, store, deps)
 
@@ -855,6 +860,8 @@ type handlerDeps struct {
 	siteHandler *handler.SiteHandler
 	// siteDeployTokens resolves a site's CI deploy token (EXC-620) for the root gate.
 	siteDeployTokens custommw.DeployTokenResolver
+	// siteBuilds is git builds of sites (EXC-354): its routes and its dispatcher.
+	siteBuilds       siteBuilds
 	storageBudgetH   *handler.StorageBudgetHandler
 	appDeploySvc     *service.AppDeployService
 	appDeployHandler *handler.AppDeployHandler
@@ -1533,7 +1540,11 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	startHostnameSweep(context.Background(), sitesSvc)
 	provSvc.SetSitePurger(sitesSvc)
 	provSvc.SetSiteRouter(sitesSvc)
+	builds := newSiteBuilds(siteBuildArgs{cfg: cfg, sqlStore: sqlStore, kube: k8sClient, vault: vc, sites: sitesSvc,
+		limits:  service.NewSiteBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
+		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}})
 	return &handlerDeps{
+		siteBuilds:          builds,
 		provHandler:         provHandler,
 		sdkKeysHandler:      handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
 		aiActivityHandler:   newAIActivityHandler(sqlStore),
@@ -1620,7 +1631,9 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 		DeploymentMode string `json:"deploymentMode"`
 		AppHosting     bool   `json:"appHosting"`
 		// Sites is whether this install can publish sites (EXC-353).
-		Sites         bool `json:"sites"`
+		Sites bool `json:"sites"`
+		// SiteGitBuilds is git builds switched on (EXC-354); single-host then answers why it offers none.
+		SiteGitBuilds bool `json:"siteGitBuilds"`
 		CustomDomains bool `json:"customDomains"`
 		// SiteCustomDomains is whether sites may take custom domains (EXC-614).
 		SiteCustomDomains bool `json:"siteCustomDomains"`
@@ -1631,6 +1644,7 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled, Sites: cfg.SitesAvailable(),
+			SiteGitBuilds: cfg.SiteGitBuildsOn(),
 			CustomDomains: customDomainsOn(cfg), SiteCustomDomains: cfg.SitesCustomDomainsAvailable(), Features: features.Snapshot(r.Context(), flags),
 			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/")}
 		w.Header().Set("Content-Type", "application/json")
@@ -1645,8 +1659,7 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 // this top-level remains a manifest of which features are exposed.
 func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.InstanceStore, d *handlerDeps) *chi.Mux {
 	r := chi.NewRouter()
-	// Read-only SQL travels in the query string; the access log never keeps it.
-	r.Use(custommw.RedactQueryParams("sql"))
+	r.Use(custommw.RedactQueryParams(accessLogRedactedParams...))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(metrics.Middleware)
@@ -2097,7 +2110,10 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(d.activity)
 		d.siteHandler.Routes(r, custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+		d.siteBuilds.handler.Routes(r, custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 	})
+	// The git host's webhook and sign-in callback (EXC-354): a signature or a single-use state is the credential.
+	r.With(siteGitWebhookRate).Route("/api/sites/github", d.siteBuilds.handler.PublicRoutes)
 	r.Route("/api/projects/{projectId}/schema", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)

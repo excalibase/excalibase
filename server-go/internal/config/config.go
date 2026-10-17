@@ -306,6 +306,9 @@ type AppConfig struct {
 	// SitesEnabled offers Sites (EXC-353) when the Cloudflare settings in Sites are complete too.
 	SitesEnabled bool
 	Sites        SitesConfig
+	// SitesGitBuildsEnabled offers git builds of sites (EXC-354) where Sites itself is offered.
+	SitesGitBuildsEnabled bool
+	SiteGit               SiteGitConfig
 	// DarkFeatures are the features shipped dark that this install turned on
 	// (EXC-554); feature code asks Features(), never this list.
 	DarkFeatures []features.Feature
@@ -409,6 +412,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateSites(); err != nil {
 		return err
 	}
+	if err := c.validateSiteGit(); err != nil {
+		return err
+	}
 	return c.validateAppRoute()
 }
 
@@ -417,6 +423,8 @@ func Load() AppConfig {
 	cfg.StuckRetryAfter = envDuration("EXCALIBASE_STUCK_RETRY_AFTER", stuckRetryAfter(cfg.PauseTimeout))
 	loadTenantStorage(&cfg)
 	cfg.SingleHostApps = loadSingleHostApps()
+	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"
+	cfg.SiteGit = loadSiteGit()
 	cfg.AppLocalRegistries = loadAppLocalRegistries()
 	return cfg
 }
@@ -637,6 +645,7 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: "DOCKER_TLS_VERIFY", Field: "DockerTLSVerify", Enabled: c.DockerTLSVerify},
 		{Env: "APP_HOSTING_ENABLED", Field: "AppHostingEnabled", Enabled: c.AppHostingEnabled},
 		{Env: "SITES_ENABLED", Field: "SitesEnabled", Enabled: c.SitesEnabled},
+		{Env: "SITES_GIT_BUILDS_ENABLED", Field: "SitesGitBuildsEnabled", Enabled: c.SitesGitBuildsEnabled},
 		{Env: "APP_WILDCARD_TLS", Field: "AppWildcardTLS", Enabled: c.AppWildcardTLS},
 		{Env: "DOCUMENTDB_ENABLED", Field: "DocumentDBEnabled", Enabled: c.DocumentDBEnabled},
 		{Env: "TENANT_STORAGE_REQUIRE_SIZED", Field: "TenantStorageRequireSized", Enabled: c.TenantStorageRequireSized},

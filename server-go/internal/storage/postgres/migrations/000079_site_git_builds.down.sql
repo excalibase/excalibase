@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS site_git_deliveries;
+DROP TABLE IF EXISTS site_git_grants;
+DROP TABLE IF EXISTS site_git_states;
+DROP TABLE IF EXISTS site_build_visible_secrets;
+DROP TABLE IF EXISTS site_builds;
+DROP TABLE IF EXISTS site_git_connections;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS site_build_concurrency;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS site_build_timeout_seconds;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS site_build_disk;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS site_build_memory;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS site_build_cpu_millis;
