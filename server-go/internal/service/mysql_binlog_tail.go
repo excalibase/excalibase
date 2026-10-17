@@ -209,8 +209,7 @@ func (s *MySQLBinlogSweep) Sweep(ctx context.Context) {
 		return
 	}
 	for _, inst := range projects {
-		if inst.DBType != domain.MySQL || inst.DeploymentMode != domain.ModeK8s || inst.NoDatabase ||
-			!domain.IsActive(inst.Status) || !backupsOn(inst) {
+		if !runningKubeMySQLWithBackups(inst) {
 			continue
 		}
 		if err := s.adapter.ShipBinlogs(ctx, inst); err != nil {

@@ -196,3 +196,118 @@ func TestMySQLRemoveDatabase_RemovesBackupObjects(t *testing.T) {
 		t.Error("backup credentials left behind")
 	}
 }
+
+func backupCronJobKey() string {
+	return mysqlTestNS + "/" + k8s.MySQLBackupCronJobName(mysqlTestProject)
+}
+
+func hasEgressWait(cronJob *unstructured.Unstructured) bool {
+	inits, _, _ := unstructured.NestedSlice(cronJob.Object, "spec", "jobTemplate", "spec", "template", "spec", "initContainers")
+	for _, raw := range inits {
+		if container, ok := raw.(map[string]interface{}); ok && container["name"] == k8s.MySQLEgressWaitContainerName {
+			return true
+		}
+	}
+	return false
+}
+
+// EXC-586: provisioning returns once MOCO's backup CronJob exists and its runs
+// wait for their egress, so not even the first scheduled run dials too early.
+func TestMySQLProvision_BackupRunsWaitForEgress(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	if _, err := prov.ProvisionWithRollback(context.Background(), mysqlBackupRequest(), mysqlFree, recordingContext()); err != nil {
+		t.Fatalf("ProvisionWithRollback: %v", err)
+	}
+	cron, ok := mock.CRDs[backupCronJobKey()]
+	if !ok || !hasEgressWait(cron) {
+		t.Fatalf("backup CronJob %v does not wait for egress", cron)
+	}
+}
+
+// A reattached policy (in-place restore) gets the wait on MOCO's new CronJob.
+func TestMySQLLinkBackupPolicy_WaitsForEgress(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	if _, err := prov.ProvisionWithRollback(context.Background(), mysqlBackupRequest(), mysqlFree, recordingContext()); err != nil {
+		t.Fatalf("ProvisionWithRollback: %v", err)
+	}
+	cluster := mock.CRDs[mysqlClusterKey]
+	if err := mock.UpdateCRD(context.Background(), k8s.MOCOClusterGVR, mysqlTestNS, k8s.WithoutMySQLBackupPolicy(cluster)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mock.CRDs[backupCronJobKey()]; ok {
+		t.Fatal("the mock's MOCO kept the CronJob of an unlinked cluster")
+	}
+	if err := prov.LinkBackupPolicy(context.Background(), mysqlTestNS, mysqlTestProject); err != nil {
+		t.Fatalf("LinkBackupPolicy: %v", err)
+	}
+	if cron, ok := mock.CRDs[backupCronJobKey()]; !ok || !hasEgressWait(cron) {
+		t.Errorf("relinked CronJob %v does not wait for egress", cron)
+	}
+}
+
+// Attaching fails when MOCO never makes the CronJob: no backup would run.
+func TestMySQLAttachBackups_FailsWithoutMOCOsCronJob(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	if _, err := prov.ProvisionWithRollback(context.Background(), mysqlRequest("8.4.9"), mysqlFree, recordingContext()); err != nil {
+		t.Fatalf("ProvisionWithRollback: %v", err)
+	}
+	mock.AutoReconcileClusters = false
+	opts := k8s.MySQLBackupOpts{ProjectID: mysqlTestProject, Namespace: mysqlTestNS, Schedule: "0 */6 * * *",
+		Plan: mysqlFree, Disk: "1Gi", Store: prov.BackupStore(projectBackupCreds())}
+	err := prov.AttachBackups(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "backup schedule") {
+		t.Errorf("AttachBackups without a CronJob: %v", err)
+	}
+}
+
+// The sweep's entry point: absent is no error, present gets the wait once.
+func TestMySQLEnsureBackupEgressWait(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	ctx := context.Background()
+	if found, err := prov.EnsureBackupEgressWait(ctx, mysqlTestNS, mysqlTestProject); err != nil || found {
+		t.Fatalf("no CronJob yet: found=%v err=%v", found, err)
+	}
+	if _, err := prov.ProvisionWithRollback(ctx, mysqlBackupRequest(), mysqlFree, recordingContext()); err != nil {
+		t.Fatalf("ProvisionWithRollback: %v", err)
+	}
+	// A CronJob made before EXC-586, as MOCO renders it.
+	cron := mock.CRDs[backupCronJobKey()].DeepCopy()
+	unstructured.RemoveNestedField(cron.Object, "spec", "jobTemplate", "spec", "template", "spec", "initContainers")
+	mock.CRDs[backupCronJobKey()] = cron
+	if found, err := prov.EnsureBackupEgressWait(ctx, mysqlTestNS, mysqlTestProject); err != nil || !found {
+		t.Fatalf("EnsureBackupEgressWait: found=%v err=%v", found, err)
+	}
+	if !hasEgressWait(mock.CRDs[backupCronJobKey()]) {
+		t.Error("CronJob not given the wait")
+	}
+	mock.Calls = nil
+	if _, err := prov.EnsureBackupEgressWait(ctx, mysqlTestNS, mysqlTestProject); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range mock.Calls {
+		if strings.HasPrefix(call, "UpdateCRD:") {
+			t.Errorf("a CronJob that waits was written again: %v", mock.Calls)
+		}
+	}
+}
+
+// MOCO writes the CronJob too: a conflict is re-read and retried, a lasting
+// one is reported.
+func TestMySQLEnsureBackupEgressWait_RetriesConflicts(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	ctx := context.Background()
+	applyTestCluster(t, mock, mysqlFree)
+	seedBackupCronJob(mock, false)
+	mock.UpdateCRDConflicts = 1
+	if found, err := prov.EnsureBackupEgressWait(ctx, mysqlTestNS, mysqlTestProject); err != nil || !found {
+		t.Fatalf("one conflict: found=%v err=%v", found, err)
+	}
+	if !hasEgressWait(mock.CRDs[backupCronJobKey()]) {
+		t.Error("CronJob not given the wait after a conflict")
+	}
+	seedBackupCronJob(mock, false)
+	mock.UpdateCRDConflicts = mysqlCronJobWriteAttempts
+	if _, err := prov.EnsureBackupEgressWait(ctx, mysqlTestNS, mysqlTestProject); err == nil {
+		t.Error("a lasting conflict was not reported")
+	}
+}

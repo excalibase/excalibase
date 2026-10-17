@@ -164,12 +164,18 @@ func applyTestCluster(t *testing.T, mock *k8s.MockClient, plan config.TierConfig
 	_ = mock.ApplyCRD(context.Background(), k8s.MOCOClusterGVR, mysqlTestNS, cluster)
 }
 
+// seedBackupCronJob links the cluster to its policy and puts the CronJob MOCO
+// makes for it in place; MOCO removes it from a cluster that is not linked.
+func seedBackupCronJob(mock *k8s.MockClient, suspend bool) {
+	mock.CRDs[mysqlClusterKey] = k8s.WithMySQLBackupPolicy(mock.CRDs[mysqlClusterKey], mysqlTestProject)
+	mock.CRDs[mysqlTestNS+"/moco-backup-proj-my1-mysql"] = backupCronJob(suspend)
+}
+
+// backupCronJob is MOCO's CronJob as it renders one, before EXC-586.
 func backupCronJob(suspend bool) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "batch/v1", "kind": "CronJob",
-		"metadata": map[string]interface{}{"name": "moco-backup-proj-my1-mysql", "namespace": mysqlTestNS},
-		"spec":     map[string]interface{}{"suspend": suspend, "schedule": "0 * * * *"},
-	}}
+	cron := k8s.MockMOCOBackupCronJob(mysqlTestNS, k8s.MySQLClusterName(mysqlTestProject), "ghcr.io/cybozu-go/moco-backup:0.37.0", "https://s3.example")
+	_ = unstructured.SetNestedField(cron.Object, suspend, "spec", "suspend")
+	return cron
 }
 
 // Pause stops the instances (MOCO offline keeps the volumes) and suspends
@@ -177,7 +183,7 @@ func backupCronJob(suspend bool) *unstructured.Unstructured {
 func TestMySQLPause_OfflineAndSuspendsBackups(t *testing.T) {
 	mock, prov := newMySQLTest(t)
 	applyTestCluster(t, mock, mysqlFree)
-	mock.CRDs[mysqlTestNS+"/moco-backup-proj-my1-mysql"] = backupCronJob(false)
+	seedBackupCronJob(mock, false)
 	if err := prov.StopReplication(context.Background(), mysqlTestNS, mysqlTestProject); err != nil {
 		t.Fatalf("StopReplication: %v", err)
 	}
@@ -210,15 +216,20 @@ func TestMySQLResume_OnlineResumesBackupsAndQueries(t *testing.T) {
 	mock, prov := newMySQLTest(t)
 	applyTestCluster(t, mock, mysqlFree)
 	mock.CRDs[mysqlClusterKey] = k8s.WithMySQLOffline(mock.CRDs[mysqlClusterKey], true)
-	mock.CRDs[mysqlTestNS+"/moco-backup-proj-my1-mysql"] = backupCronJob(true)
+	seedBackupCronJob(mock, true)
 	if err := prov.Resume(context.Background(), mysqlTestNS, mysqlTestProject); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
 	if offline, _, _ := unstructured.NestedBool(mock.CRDs[mysqlClusterKey].Object, "spec", "offline"); offline {
 		t.Error("the cluster is still offline")
 	}
-	if suspended, _, _ := unstructured.NestedBool(mock.CRDs[mysqlTestNS+"/moco-backup-proj-my1-mysql"].Object, "spec", "suspend"); suspended {
+	resumed := mock.CRDs[mysqlTestNS+"/moco-backup-proj-my1-mysql"]
+	if suspended, _, _ := unstructured.NestedBool(resumed.Object, "spec", "suspend"); suspended {
 		t.Error("the backup CronJob is still suspended")
+	}
+	// EXC-586: a CronJob paused before the wait existed runs again with it.
+	if !hasEgressWait(resumed) {
+		t.Error("the resumed backup CronJob does not wait for egress")
 	}
 	if len(execsMatching(mock, "SELECT 1")) == 0 {
 		t.Error("resume did not prove the database answers")

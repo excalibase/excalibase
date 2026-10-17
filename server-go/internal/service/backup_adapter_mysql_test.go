@@ -68,14 +68,8 @@ func sourceKeys() []string {
 }
 
 func (lab *mysqlAdapterLab) cronJob() {
-	cron := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "batch/v1", "kind": "CronJob",
-		"metadata": map[string]interface{}{"name": k8s.MySQLBackupCronJobName(mysqlSourceProject), "namespace": mysqlSourceNS, "uid": "cron-uid"},
-		"spec": map[string]interface{}{"jobTemplate": map[string]interface{}{
-			"metadata": map[string]interface{}{"labels": map[string]interface{}{"app.kubernetes.io/name": "mysql-backup"}},
-			"spec":     map[string]interface{}{"template": map[string]interface{}{}},
-		}},
-	}}
+	cron := k8s.MockMOCOBackupCronJob(mysqlSourceNS, k8s.MySQLClusterName(mysqlSourceProject), "ghcr.io/cybozu-go/moco-backup:0.37.0", "https://s3.example")
+	cron.SetUID("cron-uid")
 	lab.mock.CRDs[mysqlSourceNS+"/"+cron.GetName()] = cron
 }
 

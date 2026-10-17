@@ -276,7 +276,12 @@ func MySQLClusterRestored(cluster *unstructured.Unstructured) bool {
 
 // BuildManualMySQLBackupJob is a backup started now from the CronJob's
 // template and owned by it, as `kubectl create job --from=cronjob` makes one.
+// It waits for its egress whether or not the CronJob does yet (EXC-586).
 func BuildManualMySQLBackupJob(cronJob *unstructured.Unstructured, at time.Time) (*unstructured.Unstructured, error) {
+	cronJob, _, err := WithMySQLBackupEgressWait(cronJob)
+	if err != nil {
+		return nil, err
+	}
 	template, found, err := unstructured.NestedMap(cronJob.Object, "spec", "jobTemplate")
 	if err != nil || !found {
 		return nil, fmt.Errorf("backup CronJob %s has no job template", cronJob.GetName())

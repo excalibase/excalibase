@@ -1396,6 +1396,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	startHostMySQLBackups(hostMySQLBackups, store)
 	startHostPostgresWAL(backupSvc.DockerPostgres(), store)
 	startMySQLBinlogShipping(cfg.Features(), mysqlBinlogShipLock(cfg, sqlStore), mysqlBackups, hostMySQLBackups, store)
+	startMySQLBackupWaitSweep(mysqlBackupWaitLock(cfg, sqlStore), provSvc.MySQLProvisioner(), store)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	// Snapshot exports stay Kubernetes-only: no engine for the connector.
