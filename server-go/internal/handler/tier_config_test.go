@@ -346,7 +346,8 @@ func TestTierHandler_Update_StoresAndEchoesSiteLimits(t *testing.T) {
 func TestTierHandler_Update_KeepsSiteLimitsLeftOut(t *testing.T) {
 	const body = `{"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.25","maxSiteDeploysPerHour":12}`
 	stored := config.SiteTierLimits{MaxSites: 7, MaxDeployBytes: 50 << 20, MaxFiles: 900, MaxFileBytes: 5 << 20, MaxDeploysPerHour: 3, MaxCustomDomains: 4}
-	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Sites: stored}}}
+	freeBuiltin, _ := config.GetTierConfig(domain.Free)
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Sites: stored, SiteBuilds: freeBuiltin.SiteBuilds}}}
 	rec := httptest.NewRecorder()
 	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", body, string(domain.Free)))
 	want := stored
@@ -367,6 +368,13 @@ func TestTierHandler_Update_KeepsSiteLimitsLeftOut(t *testing.T) {
 	}
 }
 
+// storedFree is the FREE plan as its database row holds it, at version.
+func storedFree(version int) config.TierConfig {
+	plan, _ := config.GetTierConfig(domain.Free)
+	plan.Version = version
+	return plan
+}
+
 func putTier(h *TierHandler, ifMatch string) *httptest.ResponseRecorder {
 	request := newTierReqWithParam("PUT", siteLimitsBody("maxSites", "7"), string(domain.Free))
 	if ifMatch != "" {
@@ -380,7 +388,7 @@ func putTier(h *TierHandler, ifMatch string) *httptest.ResponseRecorder {
 // Two admins editing one plan: the second save, made from the version before
 // the first, is refused instead of silently undoing it (EXC-620).
 func TestTierHandler_Update_RefusesAnEditFromAStaleVersion(t *testing.T) {
-	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Version: 3}}}
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: storedFree(3)}}
 	h := NewTierHandler(store)
 	first := putTier(h, `"3"`)
 	var saved tierConfigDTO
@@ -404,7 +412,7 @@ func TestTierHandler_Update_RefusesAnEditFromAStaleVersion(t *testing.T) {
 
 // A script that sizes a plan sends no If-Match and writes unconditionally.
 func TestTierHandler_Update_WithoutIfMatchStillWrites(t *testing.T) {
-	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Version: 2}}}
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: storedFree(2)}}
 	if response := putTier(NewTierHandler(store), ""); response.Code != http.StatusOK || store.m[domain.Free].Version != 3 {
 		t.Fatalf("unconditional save = %d %s", response.Code, response.Body)
 	}
@@ -418,5 +426,44 @@ func TestTierHandler_List_CarriesEachVersion(t *testing.T) {
 	var listed []tierConfigDTO
 	if err := json.Unmarshal(recorder.Body.Bytes(), &listed); err != nil || len(listed) != 1 || listed[0].Version != 5 {
 		t.Fatalf("listed = %s", recorder.Body)
+	}
+}
+
+// A plan's build limits (EXC-354) are bounded: at least the 2 CPUs gVisor needs.
+func TestTierHandler_Update_RefusesBuildLimitsOutOfBounds(t *testing.T) {
+	refused := map[string][]string{
+		"siteBuildCpuMillis":      {"1999", "16001"},
+		"siteBuildMemory":         {`"256Mi"`, `"64Gi"`, `"lots"`},
+		"siteBuildDisk":           {`"512Mi"`, `"1Ti"`},
+		"siteBuildTimeoutSeconds": {"59", "7201"},
+		"siteBuildConcurrency":    {"0", "21"},
+	}
+	for field, values := range refused {
+		for _, value := range values {
+			t.Run(field+"="+value, func(t *testing.T) {
+				store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+				rec := httptest.NewRecorder()
+				NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", siteLimitsBody(field, value), string(domain.Free)))
+				if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), field) || len(store.m) != 0 {
+					t.Errorf("got %d %s; want 400 naming %s and nothing stored", rec.Code, rec.Body.String(), field)
+				}
+			})
+		}
+	}
+}
+
+// Build limits left out keep the plan's; the ones named are stored and echoed.
+func TestTierHandler_Update_StoresBuildLimits(t *testing.T) {
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+	rec := httptest.NewRecorder()
+	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", siteLimitsBody("siteBuildMemory", `"3Gi"`), string(domain.Free)))
+	want := config.SiteBuildTierLimits{CPUMillis: 2000, Memory: "3Gi", Disk: "5Gi", TimeoutSeconds: 600, Concurrency: 1}
+	if rec.Code != http.StatusOK || store.m[domain.Free].SiteBuilds != want {
+		t.Fatalf("got %d %s, stored %+v; want %+v", rec.Code, rec.Body.String(), store.m[domain.Free].SiteBuilds, want)
+	}
+	for _, echoed := range []string{`"siteBuildCpuMillis":2000`, `"siteBuildMemory":"3Gi"`, `"siteBuildDisk":"5Gi"`, `"siteBuildTimeoutSeconds":600`, `"siteBuildConcurrency":1`} {
+		if !strings.Contains(rec.Body.String(), echoed) {
+			t.Errorf("response %s does not echo %s", rec.Body.String(), echoed)
+		}
 	}
 }

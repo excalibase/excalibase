@@ -26,12 +26,17 @@ const standard = {
   maxSiteFileBytes: 26214400,
   maxSiteDeploysPerHour: 120,
   maxSiteCustomDomains: 5,
+  siteBuildCpuMillis: 2000,
+  siteBuildMemory: '4Gi',
+  siteBuildDisk: '10Gi',
+  siteBuildTimeoutSeconds: 1200,
+  siteBuildConcurrency: 2,
 };
 
-function renderTable({ sites = true } = {}) {
+function renderTable({ sites = true, siteGitBuilds = false } = {}) {
   vi.mocked(api.get).mockImplementation((url: string) =>
     Promise.resolve({
-      data: url === '/config' ? { deploymentMode: 'cloud', sites } : [standard],
+      data: url === '/config' ? { deploymentMode: 'cloud', sites, siteGitBuilds } : [standard],
     } as never),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -147,6 +152,33 @@ describe('TierConfigTable', () => {
         ifMatchVersion4,
       ),
     );
+  });
+
+  // A git build's limits come from the plan (EXC-354); the time is edited in minutes.
+  test('edits a git build memory and minutes with the plan', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable({ siteGitBuilds: true });
+
+    const minutes = await screen.findByLabelText('Build minutes for STANDARD');
+    expect(minutes).toHaveValue(20);
+    await user.clear(minutes);
+    await user.type(minutes, '30');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/admin/tiers/STANDARD',
+        expect.objectContaining({ siteBuildTimeoutSeconds: 1800, siteBuildMemory: '4Gi', siteBuildCpuMillis: 2000 }),
+        ifMatchVersion4,
+      ),
+    );
+  });
+
+  test('shows no build limits while git builds are off', async () => {
+    renderTable();
+    expect(await screen.findByLabelText('Max sites for STANDARD')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Build minutes for STANDARD')).not.toBeInTheDocument();
   });
 
   // Sites stays behind its install flag: no Sites, no site columns.

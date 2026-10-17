@@ -3,7 +3,7 @@ import { Loader2, Save } from 'lucide-react';
 import { Button } from './Button';
 import { useTiers, useUpdateTier, sortTiers, type TierConfig, type TierConfigInput } from '../api/tiers';
 import { serverErrorMessage } from '../utils/serverError';
-import { useSitesEnabled } from '../hooks/useDeploymentMode';
+import { useSiteGitBuildsEnabled, useSitesEnabled } from '../hooks/useDeploymentMode';
 
 // The server takes the app disk cap in whole Mi or whole Gi; "0Gi" offers no app disks.
 const APP_DISK_CAP = /^\d+(Mi|Gi)$/;
@@ -17,6 +17,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
   const { data: tiers, isLoading } = useTiers();
   const update = useUpdateTier();
   const { enabled: sitesEnabled } = useSitesEnabled();
+  const gitBuildsEnabled = useSiteGitBuildsEnabled();
 
   // Local draft of edits keyed by tier. A row with no entry renders the server
   // value (see `toInput` fallback below), so there's no need to pre-seed from
@@ -31,6 +32,8 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     maxSites: t.maxSites, maxSiteDeployBytes: t.maxSiteDeployBytes, maxSiteFiles: t.maxSiteFiles,
     maxSiteFileBytes: t.maxSiteFileBytes, maxSiteDeploysPerHour: t.maxSiteDeploysPerHour,
     maxSiteCustomDomains: t.maxSiteCustomDomains,
+    siteBuildCpuMillis: t.siteBuildCpuMillis, siteBuildMemory: t.siteBuildMemory, siteBuildDisk: t.siteBuildDisk,
+    siteBuildTimeoutSeconds: t.siteBuildTimeoutSeconds, siteBuildConcurrency: t.siteBuildConcurrency,
   });
 
   const setField = (tier: string, base: TierConfigInput, patch: Partial<TierConfigInput>) =>
@@ -45,7 +48,8 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
       d.maxProjects !== t.maxProjects || d.instances !== t.instances || d.backupEnabled !== t.backupEnabled ||
       d.autoPauseAfterDays !== (t.autoPauseAfterDays ?? 0) ||
       d.maxSites !== t.maxSites || d.maxSiteDeploysPerHour !== t.maxSiteDeploysPerHour ||
-      d.maxSiteCustomDomains !== t.maxSiteCustomDomains
+      d.maxSiteCustomDomains !== t.maxSiteCustomDomains ||
+      d.siteBuildMemory !== t.siteBuildMemory || d.siteBuildTimeoutSeconds !== t.siteBuildTimeoutSeconds
     );
   };
 
@@ -101,6 +105,12 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                   <th className="text-left px-4 py-3 font-medium" title="How many custom domains one project's sites may hold (0 = none); Cloudflare includes 100 per zone and bills each one after">Custom domains</th>
                 </>
               )}
+              {gitBuildsEnabled && (
+                <>
+                  <th className="text-left px-4 py-3 font-medium" title="Memory of one git build of a site; CPU, disk and concurrency are set through the API">Build memory</th>
+                  <th className="text-left px-4 py-3 font-medium" title="How long one git build of a site may run">Build minutes</th>
+                </>
+              )}
               <th className="px-4 py-3" />
             </tr>
           </thead>
@@ -139,6 +149,12 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                       <td className="px-4 py-3"><NumInput label={`Max sites for ${t.tier}`} value={d.maxSites} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxSites: v })} /></td>
                       <td className="px-4 py-3"><NumInput label={`Site deploys an hour for ${t.tier}`} value={d.maxSiteDeploysPerHour} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { maxSiteDeploysPerHour: v })} /></td>
                       <td className="px-4 py-3"><NumInput label={`Custom domains per project for ${t.tier}`} value={d.maxSiteCustomDomains} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxSiteCustomDomains: v })} /></td>
+                    </>
+                  )}
+                  {gitBuildsEnabled && (
+                    <>
+                      <td className="px-4 py-3"><QtyInput value={d.siteBuildMemory ?? ''} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { siteBuildMemory: v })} placeholder="4Gi" /></td>
+                      <td className="px-4 py-3"><NumInput label={`Build minutes for ${t.tier}`} value={Math.round((d.siteBuildTimeoutSeconds ?? 0) / 60)} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { siteBuildTimeoutSeconds: v * 60 })} /></td>
                     </>
                   )}
                   <td className="px-4 py-3 text-right">

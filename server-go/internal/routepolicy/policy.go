@@ -175,6 +175,7 @@ func Table() []Row {
 	rows = append(rows, projectRows...)
 	rows = append(rows, appRows...)
 	rows = append(rows, siteRows...)
+	rows = append(rows, siteBuildRows...)
 	rows = append(rows, runtimeRows...)
 	return rows
 }

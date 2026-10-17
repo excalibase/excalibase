@@ -270,6 +270,11 @@ func TestDeployTokenStandingMatchesWhatTheDeployRouteEnforces(t *testing.T) {
 			if enforced := deployRouteAllows(tokens, users, instances, orgs); enforced != canDeploy {
 				t.Fatalf("the route allowed %v but the standing says %v", enforced, canDeploy)
 			}
+			// A git connection's connector is judged the same way (EXC-354).
+			member, err := standing.Standing(context.Background(), gateCreator, gateProject)
+			if err != nil || member.CanDeploy != creator.canDeploy {
+				t.Fatalf("member standing = %+v, %v; want %v", member, err, creator.canDeploy)
+			}
 		})
 	}
 }
@@ -299,4 +304,14 @@ func deployRouteAllows(tokens fakeDeployTokens, users fakeUsers, instances stora
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	return recorder.Code == http.StatusOK
+}
+
+// A connector whose account is gone can deploy nothing, and is named by id.
+func TestMemberStandingOfAMissingUser(t *testing.T) {
+	_, users := gateFixtures()
+	standing := DeployTokenStanding{Users: users, Instances: fakestore.NewInstances(), Orgs: fakestore.NewOrgs()}
+	member, err := standing.Standing(context.Background(), "no-such-user", gateProject)
+	if err != nil || member.CanDeploy || member.Name != "" {
+		t.Fatalf("member %+v %v", member, err)
+	}
 }

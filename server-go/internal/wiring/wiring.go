@@ -50,6 +50,10 @@ type Deps struct {
 	PauseService bool
 	// FunctionRuntime is the runtime the cold-start replay re-deploys into.
 	FunctionRuntime bool
+	// SitesAvailable is Sites switched on with a complete Cloudflare account.
+	SitesAvailable bool
+	// SiteBuildRunner runs git builds of sites as Jobs, or is single-host, where they are refused by name.
+	SiteBuildRunner bool
 }
 
 // table declares, for every flag the platform has, what turning it on
@@ -83,6 +87,11 @@ func table(deps Deps) map[string][]Dependency {
 		"APP_HOSTING_ENABLED": {},
 		// Its Cloudflare settings are checked with the providers below.
 		"SITES_ENABLED": {},
+		// Its GitHub App settings are checked with the providers below.
+		"SITES_GIT_BUILDS_ENABLED": {
+			{Name: "Sites (SITES_ENABLED with its Cloudflare settings)", Wired: deps.SitesAvailable},
+			{Name: "site build runner (Kubernetes mode, the build namespace and the sandbox RuntimeClass)", Wired: deps.SiteBuildRunner},
+		},
 		// Changes how each app's route is rendered; needs nothing of this process.
 		"APP_WILDCARD_TLS": {},
 		// Only gates requests: the gateway plugin it vouches for is the
@@ -145,6 +154,16 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 				{Name: "dispatch namespace (SITES_DISPATCH_NAMESPACE)", Wired: set(cfg.Sites.DispatchNamespace)},
 				{Name: "user-content domain (SITES_BASE_DOMAIN)", Wired: set(cfg.Sites.BaseDomain)},
 				{Name: "hosts KV namespace the dispatch Worker reads (SITES_HOSTS_KV_NAMESPACE_ID)", Wired: set(cfg.Sites.HostsKVNamespaceID)},
+			},
+		},
+		{
+			Flag:    "SITES_GIT_BUILDS_ENABLED=true",
+			Enabled: cfg.SitesGitBuildsEnabled,
+			Requires: []Dependency{
+				{Name: "GitHub App id and slug (SITES_GITHUB_APP_ID, SITES_GITHUB_APP_SLUG)", Wired: cfg.SiteGit.AppID > 0 && set(cfg.SiteGit.AppSlug)},
+				{Name: "GitHub App client id and secret (SITES_GITHUB_CLIENT_ID, SITES_GITHUB_CLIENT_SECRET)", Wired: set(cfg.SiteGit.ClientID, cfg.SiteGit.ClientSecret)},
+				{Name: "GitHub App private key (SITES_GITHUB_APP_PRIVATE_KEY or _FILE)", Wired: set(cfg.SiteGit.PrivateKeyPEM)},
+				{Name: "GitHub webhook secret (SITES_GITHUB_WEBHOOK_SECRET)", Wired: set(cfg.SiteGit.WebhookSecret)},
 			},
 		},
 		{

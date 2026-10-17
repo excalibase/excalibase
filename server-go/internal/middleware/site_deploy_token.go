@@ -11,6 +11,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -132,6 +133,26 @@ type DeployTokenStanding struct {
 	Users     auth.TokenLookup
 	Instances storage.InstanceStore
 	Orgs      storage.OrgStore
+}
+
+// Standing answers a git connection's connector (EXC-354) by the deploy route's own checks:
+// an active account with project access on the developer rung.
+func (s DeployTokenStanding) Standing(ctx context.Context, userID, projectID string) (sitebuilds.MemberStanding, error) {
+	user, err := s.Users.FindUserByID(ctx, userID)
+	if err != nil {
+		return sitebuilds.MemberStanding{}, fmt.Errorf("read the connector %s: %w", userID, err)
+	}
+	if user == nil {
+		return sitebuilds.MemberStanding{}, nil
+	}
+	standing := sitebuilds.MemberStanding{Name: user.Username}
+	if !user.Active {
+		return standing, nil
+	}
+	token := &domain.AccessToken{UserID: user.ID, Name: "site git connection", Scopes: auth.ScopeWrite, ProjectID: projectID}
+	access := ResolveProjectAccess(ctx, user, token, projectID, s.Instances, s.Orgs)
+	standing.CanDeploy = access != nil && access.RoleAtLeast(domain.OrgRoleDeveloper)
+	return standing, nil
 }
 
 // CreatorCanDeploy is false when the creator lost the role or was deactivated.
