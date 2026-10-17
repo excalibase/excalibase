@@ -4,6 +4,7 @@ package provisioner
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"fmt"
 	"net"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/mysqltls"
 )
 
 // A MySQL project on a real engine (EXC-592): provisioned, its platform users
@@ -41,7 +43,8 @@ func TestDockerMySQLProjectServesTLSClientsFromTheHost(t *testing.T) {
 		t.Fatalf("EnsurePlatformUsers: %v", err)
 	}
 
-	db := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, "skip-verify")
+	verified := hostTLS(ctx, t, p, result.Namespace, "localhost")
+	db := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, verified)
 	mustExec(ctx, t, db, "CREATE TABLE notes (id INT AUTO_INCREMENT PRIMARY KEY, body TEXT)")
 	mustExec(ctx, t, db, "INSERT INTO notes (body) VALUES ('hello'), ('world')")
 	mustExec(ctx, t, db, "CREATE TRIGGER notes_body BEFORE INSERT ON notes FOR EACH ROW SET NEW.body = UPPER(NEW.body)")
@@ -52,11 +55,17 @@ func TestDockerMySQLProjectServesTLSClientsFromTheHost(t *testing.T) {
 	}
 	_ = db.Close()
 
-	plain := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, "false")
+	plain := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, nil)
 	if err := plain.PingContext(ctx); err == nil {
 		t.Fatal("a client without TLS was let in")
 	}
 	_ = plain.Close()
+	// EXC-589: the server is verified, so another CA or another name is refused.
+	foreign := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, hostTLS(ctx, t, p, result.Namespace, "db.example.com"))
+	if err := foreign.PingContext(ctx); err == nil {
+		t.Fatal("a certificate that does not name the dialled host was accepted")
+	}
+	_ = foreign.Close()
 
 	if err := p.Pause(ctx, result.Namespace, projectID); err != nil {
 		t.Fatalf("Pause: %v", err)
@@ -67,7 +76,7 @@ func TestDockerMySQLProjectServesTLSClientsFromTheHost(t *testing.T) {
 	if err := p.Resume(ctx, result.Namespace, projectID); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	db = mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, "skip-verify")
+	db = mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, verified)
 	var rows int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM notes").Scan(&rows); err != nil || rows != 2 {
 		t.Fatalf("after resume rows=%d err=%v", rows, err)
@@ -85,8 +94,23 @@ func TestDockerMySQLProjectServesTLSClientsFromTheHost(t *testing.T) {
 	}
 }
 
-// mysqlFromHost opens the project's published port as admin with tls.
-func mysqlFromHost(ctx context.Context, t *testing.T, docker *RealDockerClient, container, password, tls string) *sql.DB {
+// hostTLS verifies the project's server against its CA, as serverName.
+func hostTLS(ctx context.Context, t *testing.T, p *DockerMySQLProvisioner, container, serverName string) *tls.Config {
+	t.Helper()
+	ca, err := p.ServerCA(ctx, container, "")
+	if err != nil {
+		t.Fatalf("ServerCA: %v", err)
+	}
+	config, err := mysqltls.ClientConfig(ca, serverName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return config
+}
+
+// mysqlFromHost opens the project's published port as admin over tlsConfig, or
+// without TLS when it is nil.
+func mysqlFromHost(ctx context.Context, t *testing.T, docker *RealDockerClient, container, password string, tlsConfig *tls.Config) *sql.DB {
 	t.Helper()
 	state, err := docker.ContainerState(ctx, container)
 	if err != nil || state.HostPorts["3306"] == 0 {
@@ -95,7 +119,7 @@ func mysqlFromHost(ctx context.Context, t *testing.T, docker *RealDockerClient, 
 	cfg := mysql.NewConfig()
 	cfg.User, cfg.Passwd, cfg.DBName = MySQLUserAdmin, password, "shop"
 	cfg.Net, cfg.Addr = "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(state.HostPorts["3306"]))
-	cfg.TLSConfig = tls
+	cfg.TLS = tlsConfig
 	connector, err := mysql.NewConnector(cfg)
 	if err != nil {
 		t.Fatalf("connector: %v", err)
@@ -129,7 +153,11 @@ func TestDockerMySQLMinorUpgradeKeepsTheRows(t *testing.T) {
 	if err := p.EnsurePlatformUsers(ctx, result.Namespace, projectID, "shop", passwords); err != nil {
 		t.Fatalf("EnsurePlatformUsers: %v", err)
 	}
-	db := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, "skip-verify")
+	caBefore, err := p.ServerCA(ctx, result.Namespace, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, hostTLS(ctx, t, p, result.Namespace, "localhost"))
 	mustExec(ctx, t, db, "CREATE TABLE notes (id INT PRIMARY KEY)")
 	mustExec(ctx, t, db, "INSERT INTO notes VALUES (1), (2)")
 	_ = db.Close()
@@ -138,7 +166,11 @@ func TestDockerMySQLMinorUpgradeKeepsTheRows(t *testing.T) {
 	if err := p.ReplaceImage(ctx, projectID, newest, plan); err != nil {
 		t.Fatalf("ReplaceImage: %v", err)
 	}
-	db = mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, "skip-verify")
+	// The recreated container serves the same CA from the volume (EXC-589).
+	if caAfter, err := p.ServerCA(ctx, result.Namespace, projectID); err != nil || caAfter != caBefore {
+		t.Fatalf("the CA changed across the upgrade (err %v)", err)
+	}
+	db = mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, hostTLS(ctx, t, p, result.Namespace, "localhost"))
 	defer db.Close()
 	var version string
 	var rows int

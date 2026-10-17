@@ -82,6 +82,10 @@ type mysqlServer interface {
 	SetUserPassword(ctx context.Context, namespace, projectID, user, password string) error
 	SetUserPasswords(ctx context.Context, namespace, projectID string, passwords map[string]string) error
 	RemoveDatabase(ctx context.Context, namespace, projectID string) error
+	// ServerCA is the CA the project's server certificate is signed by.
+	ServerCA(ctx context.Context, namespace, projectID string) (string, error)
+	// ReloadTLS has the running server read a renewed certificate.
+	ReloadTLS(ctx context.Context, namespace, projectID string) error
 }
 
 var (

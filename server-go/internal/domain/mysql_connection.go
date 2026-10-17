@@ -18,6 +18,11 @@ const (
 	CredentialTLSKey      = "tls"
 	CredentialEngineMySQL = "mysql"
 	CredentialTLSRequired = "required"
+	// CredentialServerCAKey holds the PEM of the CA the project's MySQL server
+	// certificate is signed by, named like the Postgres records' root CA.
+	CredentialServerCAKey = "sslrootcert"
+	// MySQLSSLMode is what every MySQL client of the platform asks for.
+	MySQLSSLMode = "VERIFY_IDENTITY"
 )
 
 // IsMySQLRecord reports whether a vault credential record is a MySQL login.
@@ -25,14 +30,15 @@ func IsMySQLRecord(record map[string]string) bool {
 	return record[CredentialEngineKey] == CredentialEngineMySQL
 }
 
-// MySQLURL is a mysql:// connection string that requires TLS.
+// MySQLURL is a mysql:// connection string that verifies the server's
+// certificate and name; the client is given the project's CA separately.
 func MySQLURL(host, port, username, password, database string) string {
 	u := url.URL{
 		Scheme:   "mysql",
 		User:     url.UserPassword(username, password),
 		Host:     net.JoinHostPort(host, port),
 		Path:     "/" + database,
-		RawQuery: "ssl-mode=REQUIRED",
+		RawQuery: "ssl-mode=" + MySQLSSLMode,
 	}
 	return u.String()
 }
@@ -40,5 +46,5 @@ func MySQLURL(host, port, username, password, database string) string {
 // MySQLJDBCURL is the Connector/J URL of the same database, credentials
 // passed separately.
 func MySQLJDBCURL(host, port, database string) string {
-	return "jdbc:mysql://" + net.JoinHostPort(host, port) + "/" + database + "?sslMode=REQUIRED"
+	return "jdbc:mysql://" + net.JoinHostPort(host, port) + "/" + database + "?sslMode=" + MySQLSSLMode
 }

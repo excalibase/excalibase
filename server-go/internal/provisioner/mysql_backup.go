@@ -134,6 +134,9 @@ func (p *MySQLProvisioner) updatePolicy(ctx context.Context, namespace, projectI
 // ApplyRestoredCluster creates the settings and a cluster MOCO fills from a
 // backup; it has no backups of its own until AttachBackups.
 func (p *MySQLProvisioner) ApplyRestoredCluster(ctx context.Context, opts k8s.MySQLClusterOpts, source k8s.MySQLRestoreSource, job k8s.MySQLBackupOpts) error {
+	if err := p.applyTLS(ctx, opts); err != nil {
+		return err
+	}
 	settings, err := k8s.BuildMySQLConfig(opts)
 	if err != nil {
 		return err

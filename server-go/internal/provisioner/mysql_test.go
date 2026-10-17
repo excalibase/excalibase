@@ -91,7 +91,7 @@ func TestMySQLProvision_FreeCluster(t *testing.T) {
 	}
 	if result.Host != k8s.MySQLPrimaryHost(mysqlTestProject, mysqlTestNS) || result.Port != 3306 ||
 		result.ReadOnlyHost != k8s.MySQLReplicaHost(mysqlTestProject, mysqlTestNS) ||
-		result.DatabaseName != "app" || result.SSLMode != "REQUIRED" || result.Namespace != mysqlTestNS {
+		result.DatabaseName != "app" || result.SSLMode != "VERIFY_IDENTITY" || result.Namespace != mysqlTestNS {
 		t.Errorf("result %+v", result)
 	}
 }

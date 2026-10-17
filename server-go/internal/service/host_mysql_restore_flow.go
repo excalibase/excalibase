@@ -71,7 +71,7 @@ func hostMySQLRestoredRow(src *domain.DatabaseInstance, req domain.RestoreReques
 	restored := &domain.DatabaseInstance{
 		ProjectID: req.TargetProjectID, ProjectName: req.NewProjectName, OrgID: src.OrgID, OwnerID: src.OwnerID,
 		DBType: domain.MySQL, Tier: plan.Tier, DeploymentMode: domain.ModeDocker, Namespace: container, Host: container,
-		Port: &port, DatabaseName: database, Username: provisioner.MySQLUserAdmin, SSLMode: "REQUIRED",
+		Port: &port, DatabaseName: database, Username: provisioner.MySQLUserAdmin, SSLMode: domain.MySQLSSLMode,
 		MySQLVersion: src.MySQLVersion, StorageClass: src.StorageClass, StorageSize: plan.Config.StorageSize,
 		RestoredFromProjectID: src.ProjectID, RestoredFromBackupID: req.BackupID,
 		CreatedAt: &domain.FlexTime{Time: time.Now()},

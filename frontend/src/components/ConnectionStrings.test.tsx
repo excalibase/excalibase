@@ -299,6 +299,8 @@ describe('ConnectionStrings — single host', () => {
 });
 
 // EXC-592: MySQL on a single host is published on 127.0.0.1 too, TLS required.
+const MYSQL_CA = '-----BEGIN CERTIFICATE-----\nMYSQLCA\n-----END CERTIFICATE-----\n';
+
 describe('ConnectionStrings — single-host MySQL', () => {
   test('gives the loopback string with TLS and says how to tunnel to it', async () => {
     vi.mocked(api.get).mockResolvedValue({
@@ -312,14 +314,22 @@ describe('ConnectionStrings — single-host MySQL', () => {
           documentDb={false}
           endpoint={{
             ...SINGLE_HOST, port: 33061, requireTls: true, username: 'admin', database: 'shop',
-            caCertificate: '', mongo: undefined, internal: { host: 'excalibase-p-1-mysql', port: 3306, connectionString: '' },
+            caCertificate: MYSQL_CA, mongo: undefined, internal: { host: 'excalibase-p-1-mysql', port: 3306, connectionString: '' },
           }}
         />
       </QueryClientProvider>
     );
-    expect(await screen.findByTestId('conn-mysql-public')).toHaveTextContent('@127.0.0.1:33061/shop?ssl-mode=REQUIRED');
-    expect(screen.getByTestId('conn-mysql-internal')).toHaveTextContent('@excalibase-p-1-mysql:3306/shop?ssl-mode=REQUIRED');
+    expect(await screen.findByTestId('conn-mysql-public')).toHaveTextContent(
+      '@127.0.0.1:33061/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-1-ca.crt',
+    );
+    expect(screen.getByTestId('conn-mysql-internal')).toHaveTextContent(
+      '@excalibase-p-1-mysql:3306/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-1-ca.crt',
+    );
     expect(screen.getByTestId('conn-ssh-tunnel')).toHaveTextContent('ssh -N -L 33061:127.0.0.1:33061');
+    // EXC-589: unlike a single host's Postgres, its MySQL serves TLS, so the CA is offered.
+    const download = screen.getByTestId('conn-mysql-section').querySelector('[data-testid="conn-ca-download"]');
+    expect(download).toHaveAttribute('download', 'p-1-ca.crt');
+    expect(download).toHaveAttribute('href', `data:application/x-pem-file;base64,${btoa(MYSQL_CA)}`);
   });
 });
 
@@ -329,7 +339,7 @@ describe('ConnectionStrings — MySQL driver examples', () => {
     vi.mocked(api.get).mockResolvedValue({
       data: {
         ...CREDENTIALS, engine: 'mysql', host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, username: 'admin',
-        databaseName: 'shop', jdbcUrl: 'jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=REQUIRED',
+        databaseName: 'shop', jdbcUrl: 'jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=VERIFY_IDENTITY',
       },
     } as never);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -339,7 +349,7 @@ describe('ConnectionStrings — MySQL driver examples', () => {
       </QueryClientProvider>
     );
     expect(await screen.findByTestId('conn-mysql-internal')).toHaveTextContent(
-      'mysql://admin:••••••••@moco-p-1-mysql-primary.o-p-1.svc:3306/shop?ssl-mode=REQUIRED',
+      'mysql://admin:••••••••@moco-p-1-mysql-primary.o-p-1.svc:3306/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-1-ca.crt',
     );
     const node = screen.getByTestId('conn-mysql-node');
     expect(node).toHaveTextContent("import mysql from 'mysql2/promise'");
@@ -347,11 +357,37 @@ describe('ConnectionStrings — MySQL driver examples', () => {
     expect(node).toHaveTextContent("user: 'admin'");
     expect(node).toHaveTextContent("database: 'shop'");
     expect(node).toHaveTextContent('password: process.env.MYSQL_PASSWORD');
-    expect(node).toHaveTextContent('ssl: { rejectUnauthorized: false }');
+    expect(node).toHaveTextContent("import { readFileSync } from 'node:fs'");
+    expect(node).toHaveTextContent("ssl: { ca: readFileSync('p-1-ca.crt') }");
+    expect(node).not.toHaveTextContent('rejectUnauthorized');
     expect(node).not.toHaveTextContent('s3cret');
     const java = screen.getByTestId('conn-mysql-connectorj');
-    expect(java).toHaveTextContent('"jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=REQUIRED"');
+    expect(java).toHaveTextContent('"jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=VERIFY_IDENTITY"');
     expect(java).toHaveTextContent('DriverManager.getConnection(url, "admin", System.getenv("MYSQL_PASSWORD"))');
-    expect(screen.getByTestId('conn-mysql-tls-note')).toHaveTextContent(/not verified/);
+    expect(screen.getByTestId('conn-mysql-connectorj-truststore')).toHaveTextContent(
+      'keytool -importcert -alias excalibase-ca -file p-1-ca.crt -keystore p-1-ca.p12 -storetype PKCS12',
+    );
+    expect(screen.getByTestId('conn-mysql-connectorj-truststore')).toHaveTextContent(
+      'trustCertificateKeyStoreUrl=file:p-1-ca.p12&trustCertificateKeyStoreType=PKCS12&trustCertificateKeyStorePassword',
+    );
+    const note = screen.getByTestId('conn-mysql-tls-note');
+    expect(note).toHaveTextContent(/verified against the project's certificate authority/);
+    expect(note).not.toHaveTextContent(/not verified/);
+  });
+
+  test('builds a verifying JDBC URL itself when the credentials carry none', async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: { ...CREDENTIALS, engine: 'mysql', host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, username: 'admin', databaseName: 'shop' },
+    } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ConnectionStrings projectId="p-1" documentDb={false} />
+      </QueryClientProvider>
+    );
+    expect(await screen.findByTestId('conn-mysql-connectorj')).toHaveTextContent(
+      '"jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=VERIFY_IDENTITY"',
+    );
+    expect(screen.queryByTestId('conn-ca-download')).not.toBeInTheDocument();
   });
 });

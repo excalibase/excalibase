@@ -130,17 +130,28 @@ func TestASingleHostMySQLProjectIsReachedOverTLSOnly(t *testing.T) {
 	docker := &gatewayStates{recordingDocker: h.docker, states: map[string]provisioner.ContainerState{
 		inst.Namespace: runningWithPorts(map[string]int{"3306": 33061}),
 	}}
-	view, err := NewSingleHostEndpointService(h.svc.store, docker).Describe(context.Background(), "proj-docsvc001")
+	endpoints := NewSingleHostEndpointService(h.svc.store, docker)
+	endpoints.mysqlCA = func(_ context.Context, container string) (string, error) {
+		if container != inst.Namespace {
+			t.Errorf("CA read from %s", container)
+		}
+		return "MYSQL-CA", nil
+	}
+	view, err := endpoints.Describe(context.Background(), "proj-docsvc001")
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
 	if view.Engine != "mysql" || !view.RequireTLS || !view.Available || view.Port != 33061 || view.Host != "127.0.0.1" {
 		t.Fatalf("view %+v", view)
 	}
-	if view.Connection.RequireTLS != "mysql://admin@127.0.0.1:33061/shop?ssl-mode=REQUIRED" || view.Connection.AllowPlaintext != "" {
+	// EXC-589: the container's own CA, so the strings below verify the server.
+	if view.CACertificate != "MYSQL-CA" {
+		t.Fatalf("CA %q", view.CACertificate)
+	}
+	if view.Connection.RequireTLS != "mysql://admin@127.0.0.1:33061/shop?ssl-mode=VERIFY_IDENTITY" || view.Connection.AllowPlaintext != "" {
 		t.Fatalf("connection %+v", view.Connection)
 	}
-	if view.Internal.Port != 3306 || view.Internal.ConnectionString != "mysql://admin@"+singleHostContainer+":3306/shop?ssl-mode=REQUIRED" {
+	if view.Internal.Port != 3306 || view.Internal.ConnectionString != "mysql://admin@"+singleHostContainer+":3306/shop?ssl-mode=VERIFY_IDENTITY" {
 		t.Fatalf("internal %+v", view.Internal)
 	}
 }

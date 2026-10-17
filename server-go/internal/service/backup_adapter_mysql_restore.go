@@ -208,7 +208,7 @@ func mysqlRestoredRow(src *domain.DatabaseInstance, req domain.RestoreRequest, t
 		DBType: domain.MySQL, Tier: target.plan.Tier, DeploymentMode: domain.ModeK8s, Namespace: target.namespace,
 		Host:         k8s.MySQLPrimaryHost(target.project, target.namespace),
 		ReadOnlyHost: k8s.MySQLReplicaHost(target.project, target.namespace),
-		Port:         &port, DatabaseName: database, Username: provisioner.MySQLUserAdmin, SSLMode: "REQUIRED",
+		Port:         &port, DatabaseName: database, Username: provisioner.MySQLUserAdmin, SSLMode: domain.MySQLSSLMode,
 		MySQLVersion: src.MySQLVersion, StorageClass: src.StorageClass, StorageSize: target.plan.Config.StorageSize,
 		RestoredFromProjectID: src.ProjectID, RestoredFromBackupID: req.BackupID,
 		CreatedAt: &domain.FlexTime{Time: time.Now()},

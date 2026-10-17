@@ -2,10 +2,11 @@ package domain
 
 import "testing"
 
-// ADR 0041 decision 5: MySQL logins are passwords over TLS.
+// ADR 0041 decision 5: MySQL logins are passwords over TLS, and the client
+// verifies the server against the project's CA (EXC-589).
 func TestMySQLURL(t *testing.T) {
 	got := MySQLURL("moco-p-mysql-primary.ns.svc.cluster.local", "3306", "admin", "p@ss/w:rd", "app")
-	want := "mysql://admin:p%40ss%2Fw%3Ard@moco-p-mysql-primary.ns.svc.cluster.local:3306/app?ssl-mode=REQUIRED"
+	want := "mysql://admin:p%40ss%2Fw%3Ard@moco-p-mysql-primary.ns.svc.cluster.local:3306/app?ssl-mode=VERIFY_IDENTITY"
 	if got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
@@ -13,7 +14,7 @@ func TestMySQLURL(t *testing.T) {
 
 func TestMySQLJDBCURL(t *testing.T) {
 	got := MySQLJDBCURL("db.example.com", "3306", "app")
-	if got != "jdbc:mysql://db.example.com:3306/app?sslMode=REQUIRED" {
+	if got != "jdbc:mysql://db.example.com:3306/app?sslMode=VERIFY_IDENTITY" {
 		t.Errorf("got %s", got)
 	}
 }

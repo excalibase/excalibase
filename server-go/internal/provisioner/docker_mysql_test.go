@@ -51,7 +51,7 @@ func TestDockerMySQLRunsTheCatalogueImageWithItsOwnStartScript(t *testing.T) {
 		t.Fatalf("memory %d, want the 1Gi MySQL floor", spec.Limits.MemoryBytes)
 	}
 	if result.Host != "excalibase-p1-mysql" || result.Namespace != "excalibase-p1-mysql" || result.Port != 3306 ||
-		result.DatabaseName != "shop" || result.Username != MySQLUserAdmin || result.SSLMode != "REQUIRED" || result.Password != "" {
+		result.DatabaseName != "shop" || result.Username != MySQLUserAdmin || result.SSLMode != "VERIFY_IDENTITY" || result.Password != "" {
 		t.Fatalf("result %+v", result)
 	}
 }

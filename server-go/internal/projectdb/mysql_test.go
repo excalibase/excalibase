@@ -2,20 +2,42 @@ package projectdb
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/mysqltls"
+	"github.com/excalibase/provisioning-poc/internal/testutil/testca"
 )
+
+var mysqlTestCA = testca.New(&testing.T{}, "proj_my MySQL CA")
 
 func mysqlCreds() map[string]map[string]string {
 	return map[string]map[string]string{
 		"projects/proj_my/credentials/admin": {
 			"engine": "mysql", "tls": "required", "host": "moco-proj-my-primary", "port": "3306",
-			"username": "admin", "password": "pw", "database": "app",
+			"username": "admin", "password": "pw", "database": "app", "sslrootcert": mysqlTestCA.PEM,
 		},
 	}
+}
+
+// verifiesAs reports whether the config accepts a certificate the project's
+// CA issued for name, and refuses one another CA issued for the same name.
+func verifiesAs(t *testing.T, config *mysql.Config, name string) bool {
+	t.Helper()
+	if config.TLS == nil || config.TLS.InsecureSkipVerify || config.TLS.ServerName != name {
+		return false
+	}
+	verify := func(server testca.Server) error {
+		_, err := server.Cert.Verify(x509.VerifyOptions{Roots: config.TLS.RootCAs, DNSName: config.TLS.ServerName})
+		return err
+	}
+	return verify(mysqlTestCA.Issue(t, name)) == nil && verify(testca.New(t, "other").Issue(t, name)) != nil
 }
 
 // EXC-619: Studio reaches a MySQL project as the project's admin login over TLS, with
@@ -29,8 +51,8 @@ func TestMySQLConfigFor_BoundsTheSessionAndRequiresTLS(t *testing.T) {
 	if config.Addr != "moco-proj-my-primary:3306" || config.User != "admin" || config.DBName != "app" {
 		t.Fatalf("target: %+v", config)
 	}
-	if config.TLSConfig != "skip-verify" {
-		t.Errorf("TLS: %q", config.TLSConfig)
+	if !verifiesAs(t, config, "moco-proj-my-primary") {
+		t.Errorf("TLS does not verify the server against the project's CA: %+v", config.TLS)
 	}
 	if config.MultiStatements {
 		t.Error("a single-statement pool allows several statements")
@@ -51,9 +73,23 @@ func TestMySQLConfigFor_AnOverrideStatesItsTransport(t *testing.T) {
 	if _, err := MySQLConfigFor(creds, Overrides{Host: "127.0.0.1", Port: "13306"}, PoolLimits{}, false); !errors.Is(err, ErrTransportSecurityUnstated) {
 		t.Fatalf("err = %v", err)
 	}
-	config, err := MySQLConfigFor(creds, Overrides{Host: "127.0.0.1", Port: "13306", SSLMode: "disable"}, PoolLimits{}.withDefaults(), false)
-	if err != nil || config.Addr != "127.0.0.1:13306" || config.TLSConfig != "false" {
-		t.Fatalf("config %+v, %v", config, err)
+	// MySQL serves TLS everywhere, so even "disable" (Postgres on a single host)
+	// verifies, and a port-forward still checks the name the record dials.
+	for _, mode := range []string{"disable", "require", "verify-ca", "verify-full"} {
+		config, err := MySQLConfigFor(creds, Overrides{Host: "127.0.0.1", Port: "13306", SSLMode: mode}, PoolLimits{}.withDefaults(), false)
+		if err != nil || config.Addr != "127.0.0.1:13306" || !verifiesAs(t, config, "moco-proj-my-primary") {
+			t.Fatalf("%s: config %+v, %v", mode, config, err)
+		}
+	}
+}
+
+// EXC-589: a record without the project's CA opens nothing; there is no
+// unverified fallback.
+func TestMySQLConfigFor_RefusesARecordWithoutTheServerCA(t *testing.T) {
+	creds := maps.Clone(mysqlCreds()["projects/proj_my/credentials/admin"])
+	delete(creds, "sslrootcert")
+	if _, err := MySQLConfigFor(creds, Overrides{}, PoolLimits{}, false); !errors.Is(err, mysqltls.ErrNoServerCA) {
+		t.Fatalf("err = %v", err)
 	}
 }
 

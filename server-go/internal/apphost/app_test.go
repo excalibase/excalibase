@@ -655,7 +655,7 @@ func TestLifecycleStatuses(t *testing.T) {
 // ADR 0041: a MySQL project's database exposes MySQL variables.
 func TestDatabaseSourceVariablesIncludeMySQL(t *testing.T) {
 	variables := strings.Join(apphost.DatabaseSourceVariables(), " ")
-	for _, want := range []string{"MYSQL_HOST", "MYSQL_PORT", "MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD"} {
+	for _, want := range []string{"MYSQL_HOST", "MYSQL_PORT", "MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_SSL_CA"} {
 		if !strings.Contains(variables, want) {
 			t.Errorf("missing %s", want)
 		}

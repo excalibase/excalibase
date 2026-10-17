@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
+	"slices"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -47,5 +51,27 @@ func TestBuildPausersKeysPostgresByModeAndOthersByEngine(t *testing.T) {
 		if _, ok := byEngine[domain.MySQL].(*provisioner.MySQLProvisioner); !ok {
 			t.Fatalf("the MySQL pauser is %T", byEngine[domain.MySQL])
 		}
+	}
+}
+
+// EXC-589: the MySQL server certificate carries the public endpoint name, so
+// a client dialling the public port verifies the name it dialled.
+func TestMySQLCertificateNamesThePublicEndpoint(t *testing.T) {
+	mock := k8s.NewMockClient()
+	mock.AutoReconcileClusters, mock.WildcardPodReady, mock.WildcardExecOutput = true, true, "1\n"
+	factory := buildK8sFactory(config.AppConfig{DBEndpointDomain: "db.example.com"}, mock)
+	prov, _ := factory.Get(domain.MySQL)
+	req := domain.ProvisioningRequest{ProjectName: "proj-tls1", OrgID: "org1", DBType: domain.MySQL}
+	if _, err := prov.Provision(context.Background(), req, config.TierConfig{Instances: 1, StorageSize: "5Gi", CPU: "0.5", Memory: "512Mi"},
+		func(domain.ProvisioningStage) {}); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	server := mock.CRDs["org1-proj-tls1/proj-tls1-mysql-server"]
+	if server == nil {
+		t.Fatal("no server certificate")
+	}
+	names, _, _ := unstructured.NestedStringSlice(server.Object, "spec", "dnsNames")
+	if !slices.Contains(names, "proj-tls1.db.example.com") {
+		t.Errorf("names %v", names)
 	}
 }

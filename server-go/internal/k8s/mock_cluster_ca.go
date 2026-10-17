@@ -57,3 +57,13 @@ func MockClusterCA() map[string][]byte {
 func isClusterCASecret(name string) bool {
 	return strings.HasSuffix(name, clusterCASuffix)
 }
+
+// mysqlCASuffix names the Secret cert-manager keeps a MySQL project's CA in.
+const mysqlCASuffix = "-mysql-ca"
+
+// MockMySQLCA is that Secret as cert-manager writes it for a CA certificate:
+// tls.crt is the CA itself.
+func MockMySQLCA() map[string][]byte {
+	ca := MockClusterCA()
+	return map[string][]byte{"tls.crt": ca["ca.crt"], "ca.crt": ca["ca.crt"], "tls.key": ca["ca.key"]}
+}

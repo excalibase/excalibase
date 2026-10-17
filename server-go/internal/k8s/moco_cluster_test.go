@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"errors"
+	"maps"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -285,12 +286,14 @@ func TestMySQLSettingsTrustFunctionCreators(t *testing.T) {
 	}
 }
 
+// The ConfigMap is the plan's settings plus the certificate mysqld presents.
 func TestMySQLSettingsAreTheConfigMapsData(t *testing.T) {
 	for _, plan := range []config.TierConfig{freePlan, standardPlan} {
 		settings, err := MySQLSettings(plan)
 		if err != nil {
 			t.Fatal(err)
 		}
+		maps.Copy(settings, mysqlTLSSettings())
 		cm, _ := BuildMySQLConfig(mysqlOpts(plan))
 		data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
 		if len(settings) != len(data) {

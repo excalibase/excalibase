@@ -477,6 +477,8 @@ func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) (str
 //     platform's roles log in by certificate only and are never handed to
 //     customer code (EXC-410).
 //     Absent if vault is sealed or the role doesn't exist.
+//   - DB_CA_CERT   — a MySQL project's server CA (PEM), which a client of
+//     DB_URL (ssl-mode=VERIFY_IDENTITY) verifies the server with.
 //
 // No API key is injected: SDK keys are minted by auth and shown once, so a
 // function that calls its project's API stores its own key as a secret.
@@ -495,6 +497,9 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[
 
 	if target, ok := h.injectedDBTarget(projectID); ok {
 		env["EXCALIBASE_DB_URL"] = target.url(target.host)
+		if target.mysql && target.serverCA != "" {
+			env["EXCALIBASE_DB_CA_CERT"] = target.serverCA
+		}
 	}
 	return env
 }
@@ -513,7 +518,7 @@ func (h *FunctionHandler) injectedDBTarget(projectID string) (dbTarget, bool) {
 	target := dbTarget{
 		host: creds["host"], port: creds["port"],
 		user: creds["username"], pass: creds["password"], db: creds["database"],
-		mysql: domain.IsMySQLRecord(creds),
+		mysql: domain.IsMySQLRecord(creds), serverCA: creds[domain.CredentialServerCAKey],
 	}
 	if target.host == "" || target.user == "" || target.db == "" {
 		return dbTarget{}, false
@@ -527,7 +532,9 @@ func (h *FunctionHandler) injectedDBTarget(projectID string) (dbTarget, bool) {
 // dbTarget is the vault-stored app credential set a deploy DSN is built from.
 type dbTarget struct {
 	host, port, user, pass, db string
-	mysql                      bool
+	// serverCA is a MySQL server's CA, handed to the function beside the URL.
+	serverCA string
+	mysql    bool
 }
 
 // url renders the DSN. Intentionally sslmode=require — managed project

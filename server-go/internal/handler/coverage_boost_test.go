@@ -162,7 +162,7 @@ func TestGetLogs_NotFound_Returns500(t *testing.T) {
 // password opens the project's database.
 type acceptingRoleVerifier struct{}
 
-func (acceptingRoleVerifier) VerifyRole(context.Context, *domain.DatabaseInstance, string, string) error {
+func (acceptingRoleVerifier) VerifyRole(context.Context, *domain.DatabaseInstance, string, string, string) error {
 	return nil
 }
 

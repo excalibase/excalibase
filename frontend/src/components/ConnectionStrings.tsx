@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Eye, EyeOff, Loader2, Download } from 'lucide-react';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { useCredentials } from '../hooks/useProvisioning';
 import type { ProjectEndpoint } from '../api/projectEndpoint';
 import type { CredentialsResponse } from '../types';
 import { SshTunnelNote } from './SshTunnelNote';
+import { CertificateAuthority } from './CertificateAuthority';
 import { StringRow, internalTarget, labels, publicTarget, type SectionProps, type Target } from './ConnectionParts';
 import { MySQLSection } from './MySQLConnection';
 
@@ -70,25 +71,6 @@ function CredentialField({ testId, label, value }: { readonly testId: string; re
         {value}
       </code>
     </div>
-  );
-}
-
-// Full verification needs the certificate authority as a file on the client,
-// not a value inside the URI — which is why it sits beside the Mongo string
-// as well as the Postgres one. Every login needs TLS, in-cluster ones too, so
-// it is offered whether or not the project publishes a port.
-function CertificateAuthority({ projectId, pem }: { readonly projectId: string; readonly pem: string }) {
-  if (!pem) return null;
-  const href = `data:application/x-pem-file;base64,${btoa(pem)}`;
-  return (
-    <a
-      href={href}
-      download={`${projectId}-ca.crt`}
-      data-testid="conn-ca-download"
-      className="inline-flex items-center gap-2 px-3 py-2 rounded border border-border-primary text-sm text-text-secondary hover:text-text-primary hover:border-text-secondary transition-colors"
-    >
-      <Download className="w-4 h-4" /> Download certificate authority
-    </a>
   );
 }
 

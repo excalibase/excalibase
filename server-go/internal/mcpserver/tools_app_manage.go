@@ -23,7 +23,7 @@ type updateAppArgs struct {
 	HealthCheckPath string       `json:"health_check_path,omitempty" jsonschema:"a path that answers 200 when the app is ready"`
 	SetEnv          []envSetting `json:"set_env,omitempty" jsonschema:"literal environment variables to add or replace by name; the others are kept"`
 	RemoveEnv       []string     `json:"remove_env,omitempty" jsonschema:"names of environment variables to remove"`
-	DatabaseEnv     []string     `json:"database_env,omitempty" jsonschema:"variables to fill from the project's own database at deploy time, e.g. DATABASE_URL (Postgres: DATABASE_URL, PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD; MySQL: DATABASE_URL, MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD); the credential never passes through MCP"`
+	DatabaseEnv     []string     `json:"database_env,omitempty" jsonschema:"variables to fill from the project's own database at deploy time, e.g. DATABASE_URL (Postgres: DATABASE_URL, PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD; MySQL: DATABASE_URL, MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, MYSQL_SSL_CA, the CA PEM a client verifies the server with); the credential never passes through MCP"`
 	PrivateNetwork  *bool        `json:"private_network,omitempty" jsonschema:"let the project's apps reach each other by name; a project-wide switch that needs the admin role"`
 }
 

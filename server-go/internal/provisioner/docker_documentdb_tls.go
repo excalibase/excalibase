@@ -24,10 +24,15 @@ type gatewayTLS struct {
 	caPEM, certPEM, keyPEM []byte
 }
 
-// newGatewayTLS issues a CA and a server certificate for the names a client
+// newGatewayTLS issues the DocumentDB gateway's CA and certificate.
+func newGatewayTLS(host string, now time.Time) (gatewayTLS, error) {
+	return newServerTLS(host, "DocumentDB", now)
+}
+
+// newServerTLS issues a CA and a server certificate for the names a client
 // dials: the database container's name on the platform network, and loopback
 // on the host where the port is published.
-func newGatewayTLS(host string, now time.Time) (gatewayTLS, error) {
+func newServerTLS(host, service string, now time.Time) (gatewayTLS, error) {
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return gatewayTLS{}, fmt.Errorf("gateway CA key: %w", err)
@@ -38,7 +43,7 @@ func newGatewayTLS(host string, now time.Time) (gatewayTLS, error) {
 	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          caSerial,
-		Subject:               pkix.Name{CommonName: host + " DocumentDB CA"},
+		Subject:               pkix.Name{CommonName: host + " " + service + " CA"},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(gatewayTLSValidity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,

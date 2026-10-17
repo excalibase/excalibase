@@ -197,16 +197,18 @@ func TestAppEnvResolver_NoVaultRefusesInsteadOfPanicking(t *testing.T) {
 }
 
 // ADR 0041: a container linked to a MySQL project's database gets MySQL
-// variables and a mysql:// DATABASE_URL, from the owner's login.
+// variables and a mysql:// DATABASE_URL, from the owner's login, and the CA
+// its client verifies the server with (EXC-589).
 func TestAppEnvResolver_MySQLVariables(t *testing.T) {
 	resolver, vault, instances := resolverFixture()
 	vault.data[vaultCredentialPath(resolverProject, roleAdmin)] = map[string]string{
 		"engine": "mysql", "tls": "required", "host": "moco-p-mysql-primary", "port": "3306",
-		"database": resolverDatabase, "username": "admin", "password": ownerPassword,
+		"database": resolverDatabase, "username": "admin", "password": ownerPassword, "sslrootcert": "CA-PEM",
 	}
 	instances.Items[resolverProject].DBType = domain.MySQL
-	instances.Items[resolverProject].SSLMode = "REQUIRED"
+	instances.Items[resolverProject].SSLMode = domain.MySQLSSLMode
 	want := map[string]string{
+		"MYSQL_SSL_CA":   "CA-PEM",
 		"DATABASE_URL":   domain.MySQLURL("moco-p-mysql-primary", "3306", "admin", ownerPassword, resolverDatabase),
 		"MYSQL_HOST":     "moco-p-mysql-primary",
 		"MYSQL_PORT":     "3306",
@@ -222,6 +224,23 @@ func TestAppEnvResolver_MySQLVariables(t *testing.T) {
 	}
 	if _, err := resolver.ResolveReference(resolverProject, databaseRef("PGHOST")); err == nil {
 		t.Error("a MySQL database answered PGHOST")
+	}
+	if url, _ := resolver.ResolveReference(resolverProject, databaseRef("DATABASE_URL")); !strings.HasSuffix(url, "ssl-mode=VERIFY_IDENTITY") {
+		t.Errorf("DATABASE_URL %q does not verify the server", url)
+	}
+}
+
+// A MySQL login filed without its CA hands a container no CA rather than an empty one.
+func TestAppEnvResolver_MySQLWithoutCARefusesTheCA(t *testing.T) {
+	resolver, vault, instances := resolverFixture()
+	vault.data[vaultCredentialPath(resolverProject, roleAdmin)] = map[string]string{
+		"engine": "mysql", "host": "moco-p-mysql-primary", "port": "3306",
+		"database": resolverDatabase, "username": "admin", "password": ownerPassword,
+	}
+	instances.Items[resolverProject].DBType = domain.MySQL
+	instances.Items[resolverProject].SSLMode = domain.MySQLSSLMode
+	if _, err := resolver.ResolveReference(resolverProject, databaseRef("MYSQL_SSL_CA")); err == nil {
+		t.Error("an empty CA was handed out")
 	}
 }
 

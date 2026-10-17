@@ -300,6 +300,8 @@ func runServer(cfg config.AppConfig) {
 	defer stopCredentialRenewal()
 	stopRoleCertRenewal := startRoleCertificateRenewer(cfg, sqlStore, store, k8sClient, vc, provSvc)
 	defer stopRoleCertRenewal()
+	stopMySQLTLS := startMySQLTLSMaintenance(cfg, sqlStore, vc, provSvc)
+	defer stopMySQLTLS()
 	stopGatewayWatch := startDocumentDBGatewayWatch(cfg, sqlStore, provSvc)
 	defer stopGatewayWatch()
 	stopDomainSweep := startAppDomainSweeper(cfg, sqlStore, deps.appDomainSvc)
@@ -474,6 +476,29 @@ func startRoleCertificateRenewer(cfg config.AppConfig, sqlStore storage.Platform
 const (
 	roleCertRenewLockID   int64 = 0x7263_6572_7431_0410
 	roleCertRenewInterval       = 6 * time.Hour
+)
+
+// startMySQLTLSMaintenance reloads renewed MySQL server certificates and
+// refiles a changed server CA (EXC-589); one replica runs it at a time.
+func startMySQLTLSMaintenance(cfg config.AppConfig, sqlStore storage.PlatformStore, vc vaultclient.VaultClient,
+	provSvc *service.ProvisioningService) func() {
+	if vc == nil {
+		return func() {
+			// no vault records to keep current
+		}
+	}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() && sqlStore != nil {
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), mysqlTLSLockID)
+	}
+	log.Printf("MySQL TLS maintenance started (every %s)", mysqlTLSInterval)
+	return service.NewMySQLTLSMaintenance(provSvc).Start(context.Background(), service.NewLeadership(lock), mysqlTLSInterval)
+}
+
+// cert-manager renews 30 days ahead, so a 6-hour pass leaves ample margin.
+const (
+	mysqlTLSLockID   int64 = 0x6d79_746c_7335_0589
+	mysqlTLSInterval       = 6 * time.Hour
 )
 
 // backupCredentialRenewLockID is the advisory lock the renewer leads on.
@@ -2558,6 +2583,7 @@ func buildK8sFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) *provisione
 	pgProvisioner.SetDeletionPoller(deletionPoller())
 	mysql := provisioner.NewMySQLProvisioner(k8sClient)
 	mysql.SetBackupPathStyle(backupUsePathStyle())
+	mysql.SetPublicDomainSuffix(cfg.DBEndpointDomain)
 	return provisioner.NewFactory(pgProvisioner, mysql)
 }
 
