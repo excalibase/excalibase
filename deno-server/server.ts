@@ -1897,7 +1897,7 @@ async function dispatchScheduler(
   const op = schedulerOpFor(msg);
   const txn = owningTxn(txnRefId);
   if (txn) {
-    (txn.schedules ??= []).push(op);
+    txn.schedules = [...(txn.schedules ?? []), op];
   } else {
     await sendSchedulerOps(projectID, [op]);
   }
@@ -1923,7 +1923,7 @@ function schedulerOpFor(msg: SchedulerMessage): SchedulerOp {
     ? Date.now() + Math.max(0, Number(msg.payload.delayMs ?? 0))
     : Number(msg.payload.timestamp ?? Date.now());
   if (!Number.isFinite(scheduledForMs)) {
-    throw new Error(`scheduler.${msg.op}: time is not a number`);
+    throw new TypeError(`scheduler.${msg.op}: time is not a number`);
   }
   return {
     op: "schedule",
@@ -1961,6 +1961,22 @@ async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<
     throw new Error(`ctx.scheduler HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
   await res.body?.cancel();
+}
+
+/**
+ * flushCommittedSchedules sends the ctx.scheduler calls of a mutation that
+ * just committed. It returns why they were not recorded, or null.
+ */
+async function flushCommittedSchedules(id: string, entry: ActiveTxn): Promise<string | null> {
+  if (!entry.schedules || entry.schedules.length === 0) return null;
+  try {
+    await sendSchedulerOps(entry.projectId, entry.schedules);
+    return null;
+  } catch (scheduleErr) {
+    const reason = scheduleErr instanceof Error ? scheduleErr.message : String(scheduleErr);
+    console.warn(`[runtime] ${id} committed but its scheduled functions were not recorded:`, reason);
+    return reason;
+  }
 }
 
 class FunctionRuntime {
@@ -2553,14 +2569,7 @@ class FunctionRuntime {
           console.warn(`[runtime] commit failed for ${id}:`, commitErr);
           return null;
         }
-        if (entry.schedules && entry.schedules.length > 0) {
-          try {
-            await sendSchedulerOps(entry.projectId, entry.schedules);
-          } catch (scheduleErr) {
-            scheduleFailure = scheduleErr instanceof Error ? scheduleErr.message : String(scheduleErr);
-            console.warn(`[runtime] ${id} committed but its scheduled functions were not recorded:`, scheduleFailure);
-          }
-        }
+        scheduleFailure = await flushCommittedSchedules(id, entry);
         return null;
       }
       await rollbackTxn(entry.sql);
@@ -2609,7 +2618,8 @@ class FunctionRuntime {
     }
     const conflict = await finalize(isError ? "error" : "success");
     if (scheduleFailure !== null) {
-      return Object.assign({}, res, {
+      return {
+        ...res,
         status: 500,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -2617,7 +2627,7 @@ class FunctionRuntime {
         }),
         __reactiveReads: capturedReads,
         __reactiveWrites: capturedWrites,
-      });
+      };
     }
     if (conflict) {
       // Encode the conflict into the InvokeResponse so the retry loop
