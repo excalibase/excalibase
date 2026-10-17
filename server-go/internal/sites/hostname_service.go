@@ -43,8 +43,6 @@ type CustomDomainOptions struct {
 	ReservedDomains []string
 	// Resolver reads the owner's TXT proof.
 	Resolver TXTResolver
-	// Projects is the project lifecycle; nil serves every project and holds nothing.
-	Projects ProjectGate
 	// MaxOnZone bounds the install's custom hostnames; 0 is DefaultMaxZoneHostnames.
 	MaxOnZone int
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -192,5 +193,16 @@ func TestSiteDomainCallsGoThroughTheirLimiters(t *testing.T) {
 	}
 	if strings.Join(limited, ",") != "writes:POST,writes:DELETE,checks:POST" {
 		t.Fatalf("limited = %v", limited)
+	}
+}
+
+// A deploy to a project being deleted, or during another lifecycle operation, is a conflict that says why.
+func TestSiteLifecycleRefusalsAreConflicts(t *testing.T) {
+	for _, err := range []error{sites.ErrProjectNotServing, fmt.Errorf("%w: the project is busy", sites.ErrSiteBusy)} {
+		recorder := httptest.NewRecorder()
+		writeSiteError(recorder, err)
+		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), err.Error()) {
+			t.Errorf("%v = %d %s", err, recorder.Code, recorder.Body)
+		}
 	}
 }

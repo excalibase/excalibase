@@ -46,7 +46,8 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 	}
 	store := sites.NewPostgresStore(sqlStore.DB())
 	service, err := sites.NewService(store, publisher, origins, sites.Options{
-		BaseDomain: cfg.Sites.BaseDomain, Hostnames: store, DeployLimits: limits, CustomDomains: customDomainOptions(cfg, sqlStore, claimer),
+		BaseDomain: cfg.Sites.BaseDomain, Hostnames: store, DeployLimits: limits, CustomDomains: customDomainOptions(cfg),
+		Projects: projectGate{instances: sqlStore, claimer: claimer},
 	})
 	if err != nil {
 		log.Fatalf("sites: %v", err)
@@ -83,7 +84,7 @@ func newSiteDomainCheckLimiter() func(http.Handler) http.Handler {
 }
 
 // customDomainOptions is the Cloudflare for SaaS zone (EXC-614); nil leaves custom domains off.
-func customDomainOptions(cfg config.AppConfig, instances projectFinder, claimer service.ProjectOperationClaimer) *sites.CustomDomainOptions {
+func customDomainOptions(cfg config.AppConfig) *sites.CustomDomainOptions {
 	if !cfg.SitesCustomDomainsAvailable() {
 		return nil
 	}
@@ -94,7 +95,7 @@ func customDomainOptions(cfg config.AppConfig, instances projectFinder, claimer 
 	log.Printf("INFO: site custom domains enabled; customers point a CNAME at %s", cfg.Sites.CustomDomainTarget())
 	return &sites.CustomDomainOptions{Zone: zone, Target: cfg.Sites.CustomDomainTarget(),
 		ReservedDomains: platformDomains(cfg), MaxOnZone: cfg.Sites.MaxZoneHostnames,
-		Resolver: net.DefaultResolver, Projects: projectGate{instances: instances, claimer: claimer}}
+		Resolver: net.DefaultResolver}
 }
 
 type projectFinder interface {

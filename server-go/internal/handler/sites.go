@@ -214,7 +214,8 @@ func writeSiteError(w http.ResponseWriter, err error) {
 		httpError(w, errNotFound, http.StatusNotFound)
 	case errors.Is(err, sites.ErrSiteNameTaken), errors.Is(err, sites.ErrSiteLimitReached), errors.Is(err, sites.ErrSiteBusy), errors.Is(err, sites.ErrLeaseLost),
 		errors.Is(err, sites.ErrDeployNotServable), errors.Is(err, sites.ErrRollbackNeedsFiles), errors.Is(err, sites.ErrDeployTokenLimitReached),
-		errors.Is(err, sites.ErrHostnameTaken), errors.Is(err, sites.ErrHostnameLimitReached), errors.Is(err, sites.ErrCustomDomainsFull):
+		errors.Is(err, sites.ErrHostnameTaken), errors.Is(err, sites.ErrHostnameLimitReached), errors.Is(err, sites.ErrCustomDomainsFull),
+		errors.Is(err, sites.ErrProjectNotServing):
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.As(err, &rateErr):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(rateErr.RetryAfter.Seconds())), 10))

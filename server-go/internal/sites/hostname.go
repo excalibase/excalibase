@@ -19,6 +19,8 @@ var (
 	ErrHostnameLimitReached = errors.New("the project already holds as many custom domains as it may")
 	// ErrCustomDomainsUnavailable is an install whose Cloudflare zone is not set up for custom hostnames.
 	ErrCustomDomainsUnavailable = errors.New("custom domains are not available on this install")
+	// ErrProjectNotServing is a deploy or rollback to a project scheduled for or under deletion.
+	ErrProjectNotServing = errors.New("the project is scheduled for deletion; its sites cannot be deployed or routed")
 	// ErrCustomDomainsFull is the install's zone holding as many custom hostnames as it may.
 	ErrCustomDomainsFull = errors.New("this install has no room for another custom domain right now; try again later or ask its operator")
 )

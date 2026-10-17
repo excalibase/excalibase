@@ -57,9 +57,9 @@ func (s *Service) RefreshHostname(ctx context.Context, projectID, siteID, id str
 	return s.refreshHeld(ctx, site, hostname, s.routingFor(site))
 }
 
-// holdProject takes the project's lifecycle lease; ErrSiteBusy while another operation holds it.
+// holdProject takes the project's lifecycle lease; ErrSiteBusy, saying the project is busy, while another operation holds it.
 func (s *Service) holdProject(ctx context.Context, projectID string) (func(), error) {
-	gate := s.options.CustomDomains.Projects
+	gate := s.options.Projects
 	if gate == nil {
 		return func() {}, nil
 	}
@@ -68,7 +68,7 @@ func (s *Service) holdProject(ctx context.Context, projectID string) (func(), er
 		return nil, fmt.Errorf("hold the project's lifecycle: %w", err)
 	}
 	if !held {
-		return nil, fmt.Errorf("%w: another operation on the project is running", ErrSiteBusy)
+		return nil, fmt.Errorf("%w: the project is busy with another operation; try again when it finishes", ErrSiteBusy)
 	}
 	return release, nil
 }
@@ -303,7 +303,7 @@ func (s *Service) routeHostname(ctx context.Context, site *Site, hostname *Custo
 }
 
 func (s *Service) projectServing(ctx context.Context, projectID string) (bool, error) {
-	gate := s.options.CustomDomains.Projects
+	gate := s.options.Projects
 	if gate == nil {
 		return true, nil
 	}
@@ -336,21 +336,31 @@ func (s *Service) refreshSiteHostnames(ctx context.Context, site *Site, route ro
 	return nil
 }
 
-// routeAfterPublish checks and routes the site's custom hostnames under the
-// project's lifecycle lease: a deletion holds it from its unroute to its
-// status write, so a deploy cannot route a domain back between the two.
-// While another operation holds it the domains stay as they are; the site
-// itself is published and the sweep checks them again.
+// holdServingProject takes the project's lifecycle lease for a deploy or a
+// rollback and refuses a project that may not serve. A deletion holds the
+// lease from its unroute to its PENDING_DELETION write, so no route a publish
+// writes can fall between the two.
+func (s *Service) holdServingProject(ctx context.Context, projectID string) (func(), error) {
+	release, err := s.holdProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	serving, err := s.projectServing(ctx, projectID)
+	if err == nil && !serving {
+		err = ErrProjectNotServing
+	}
+	if err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+
+// routeAfterPublish checks and routes the site's custom hostnames; the publish holds the lifecycle lease.
 func (s *Service) routeAfterPublish(ctx context.Context, site *Site) error {
 	if s.options.Hostnames == nil || s.options.CustomDomains == nil {
 		return nil
 	}
-	release, err := s.holdProject(ctx, site.ProjectID)
-	if err != nil {
-		log.Printf("site %s: custom domains not routed by this deploy: %v", site.ID, err)
-		return nil
-	}
-	defer release()
 	// The site's Worker exists now, whatever the stored site says.
 	return s.refreshSiteHostnames(ctx, site, routing{serving: s.projectServing, live: true})
 }

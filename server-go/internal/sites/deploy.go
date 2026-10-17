@@ -56,6 +56,11 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 		return nil, err
 	}
 	defer lease.release()
+	released, err := s.holdServingProject(ctx, site.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer released()
 	if err := s.ensureOrigin(ctx, site); err != nil {
 		return nil, err
 	}
@@ -91,6 +96,11 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 		return nil, err
 	}
 	defer lease.release()
+	released, err := s.holdServingProject(ctx, site.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer released()
 	// File bodies are not kept here, so files Cloudflare asks for again cannot be sent.
 	if err := s.publishInTime(ctx, site, target.Manifest, nil, target.SPAFallback); err != nil {
 		return nil, err

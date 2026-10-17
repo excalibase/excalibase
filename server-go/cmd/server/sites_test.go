@@ -25,13 +25,13 @@ func sitesConfig(zoneID string) config.AppConfig {
 }
 
 func TestSiteCustomDomainsNeedTheZone(t *testing.T) {
-	if customDomainOptions(sitesConfig(""), fakestore.NewInstances(), nil) != nil {
+	if customDomainOptions(sitesConfig("")) != nil {
 		t.Fatal("custom domains wired without a zone id")
 	}
 	withZone := sitesConfig("0123456789abcdef0123456789abcdef")
 	withZone.Sites.MaxZoneHostnames = 40
-	options := customDomainOptions(withZone, fakestore.NewInstances(), &fakeClaimer{})
-	if options == nil || options.Target != "cname.excalibase.app" || options.Zone == nil || options.Resolver == nil || options.Projects == nil ||
+	options := customDomainOptions(withZone)
+	if options == nil || options.Target != "cname.excalibase.app" || options.Zone == nil || options.Resolver == nil ||
 		options.MaxOnZone != 40 {
 		t.Fatalf("options = %+v", options)
 	}

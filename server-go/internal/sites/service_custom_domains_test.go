@@ -40,9 +40,9 @@ func newDomainHarnessWith(t *testing.T, configure func(*sites.Options)) *domainH
 		projects: sitestest.NewProjects(), clock: &now}
 	store.Now = func() time.Time { return *h.clock }
 	options := sites.Options{
-		BaseDomain: testDomain, SpoolDir: t.TempDir(), Hostnames: h.hostnames,
+		BaseDomain: testDomain, SpoolDir: t.TempDir(), Hostnames: h.hostnames, Projects: h.projects,
 		CustomDomains: &sites.CustomDomainOptions{Zone: h.zone, Target: testTarget, ReservedDomains: []string{"excalibase.io"},
-			Resolver: h.resolver, Projects: h.projects},
+			Resolver: h.resolver},
 	}
 	configure(&options)
 	service, err := sites.NewService(store, publisher, origins, options)

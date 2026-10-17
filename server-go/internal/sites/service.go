@@ -52,6 +52,8 @@ type Options struct {
 	Hostnames HostnameStore
 	// CustomDomains is the Cloudflare for SaaS zone; nil means custom domains are not offered.
 	CustomDomains *CustomDomainOptions
+	// Projects is the project lifecycle every route write follows; nil serves every project and holds nothing.
+	Projects ProjectGate
 }
 
 // DeployLimiter answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.

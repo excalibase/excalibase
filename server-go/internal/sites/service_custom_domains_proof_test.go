@@ -223,24 +223,44 @@ func TestARefreshTakesTheProjectsLifecycleLease(t *testing.T) {
 	}
 }
 
-// F4, in the deletion's real order: holding the lifecycle lease, it unroutes the
-// project's sites, then writes PENDING_DELETION. A deploy between the two must
-// not route the custom domain back, or it serves through the grace period.
-func TestADeployDuringADeletionsUnrouteLeavesCustomDomainsOff(t *testing.T) {
+// In the deletion's real order: holding the lifecycle lease, it unroutes the
+// project's sites, then writes PENDING_DELETION. A deploy or a rollback between
+// the two is refused and routes nothing, base host included; once the status
+// is written, neither can route the project again.
+func TestADeployOrRollbackDuringADeletionRoutesNothing(t *testing.T) {
 	h := newDomainHarness(t)
 	site, _ := activeDomain(t, h)
+	first, err := h.deploy(t, site, viteDist(t))
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
 	h.projects.Busy(testProject, true)
 	if err := h.service.UnrouteProjectSites(context.Background(), testProject); err != nil {
 		t.Fatalf("Unroute: %v", err)
 	}
+	h.publisher.Calls = nil
 	*h.clock = h.clock.Add(time.Minute)
-	if _, err := h.deploy(t, site, viteDist(t)); err != nil {
-		t.Fatalf("Deploy: %v", err)
+	if _, err := h.deploy(t, site, viteDist(t)); !errors.Is(err, sites.ErrSiteBusy) || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("deploy during the unroute: err = %v, want the project busy", err)
+	}
+	if _, err := h.service.Rollback(context.Background(), testProject, site.ID, first.ID); !errors.Is(err, sites.ErrSiteBusy) {
+		t.Fatalf("rollback during the unroute: err = %v, want the project busy", err)
 	}
 	h.projects.Stop(testProject)
 	h.projects.Busy(testProject, false)
-	if h.routed("www.example.com") {
-		t.Fatalf("hosts = %v, want the custom domain left off for the grace period", h.publisher.Hosts)
+	if _, err := h.deploy(t, site, viteDist(t)); !errors.Is(err, sites.ErrProjectNotServing) {
+		t.Fatalf("deploy once scheduled: err = %v, want refused", err)
+	}
+	if _, err := h.service.Rollback(context.Background(), testProject, site.ID, first.ID); !errors.Is(err, sites.ErrProjectNotServing) {
+		t.Fatalf("rollback once scheduled: err = %v, want refused", err)
+	}
+	for _, call := range h.publisher.Calls {
+		if call == "put-host" {
+			t.Fatalf("calls = %v, want no route written", h.publisher.Calls)
+		}
+	}
+	if len(h.publisher.Hosts) != 0 {
+		t.Fatalf("hosts = %v, want the project left off for the grace period", h.publisher.Hosts)
 	}
 }
 
