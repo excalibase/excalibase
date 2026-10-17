@@ -25,8 +25,8 @@ func (e *RateLimitError) Error() string {
 func (e *RateLimitError) Is(target error) bool { return target == ErrDeployRateLimited }
 
 // takeDeploySlot counts this upload against the project's deploys per hour
-// before its body is read, so a refused archive counts as much as a good one.
-// takeDeploySlot records the attempt and answers how to give it back.
+// before its body is read, so a refused archive counts as much as a good one,
+// and answers how to give the attempt back.
 func (s *Service) takeDeploySlot(ctx context.Context, projectID string, perHour int) (func(), error) {
 	if perHour <= 0 {
 		return nil, &RateLimitError{RetryAfter: deployRateWindow}
