@@ -18,6 +18,13 @@ import (
 // fresh ones (see ADR 0039).
 const gatewayTLSValidity = 10 * 365 * 24 * time.Hour
 
+// The files a server's TLS material is written as.
+const (
+	tlsCAFile   = "ca.crt"
+	tlsCertFile = "tls.crt"
+	tlsKeyFile  = "tls.key"
+)
+
 // gatewayTLS is a project's own CA and the gateway's certificate from it.
 // The CA's key is discarded once the certificate is signed.
 type gatewayTLS struct {

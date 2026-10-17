@@ -391,9 +391,6 @@ func TestRotatingMySQLCredentials(t *testing.T) {
 		if record["password"] == before[role] || record["engine"] != "mysql" || record["username"] != role {
 			t.Errorf("%s not rotated as a MySQL login: %v", role, record)
 		}
-		if record["sslrootcert"] != string(k8s.MockMySQLCA()["tls.crt"]) {
-			t.Errorf("%s lost its server CA in the rotation", role)
-		}
 		if !strings.Contains(strings.Join(mock.ExecStdin[stdinBefore:], "\n"), "ALTER USER '"+role+"'@'%' IDENTIFIED BY '"+record["password"]+"'") {
 			t.Errorf("%s: no ALTER USER on stdin", role)
 		}
@@ -410,6 +407,22 @@ func TestRotatingMySQLCredentials(t *testing.T) {
 	for _, cmd := range mock.ExecCommands {
 		if strings.Contains(cmd, "psql") {
 			t.Errorf("Postgres ran against a MySQL project: %s", cmd)
+		}
+	}
+}
+
+// EXC-589: a rotated login keeps the CA its clients verify the server with.
+func TestRotatingMySQLCredentialsKeepsTheServerCA(t *testing.T) {
+	svc, store, _ := setupMySQLTest(t)
+	svc.SetCredentialVerifier(&fakeRoleVerifier{})
+	inst := provisionMySQL(t, svc, store, "")
+	if _, err := svc.RotateCredentials(context.Background(), inst.ProjectID); err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+	for _, role := range []string{roleAdmin, roleApp, roleAuthAdmin} {
+		record, _ := svc.vault.Get(vaultCredentialPath(inst.ProjectID, role))
+		if record["sslrootcert"] != string(k8s.MockMySQLCA()["tls.crt"]) {
+			t.Errorf("%s lost its server CA in the rotation", role)
 		}
 	}
 }

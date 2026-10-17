@@ -144,7 +144,7 @@ func DocumentDBGatewayStale(ctx context.Context, docker DockerClient, projectID,
 // DocumentDBGatewayCA reads the CA the project's gateway certificate is
 // signed by, from the gateway itself.
 func DocumentDBGatewayCA(ctx context.Context, docker DockerClient, projectID string) ([]byte, error) {
-	return readGatewayFile(ctx, docker, projectID, "ca.crt")
+	return readGatewayFile(ctx, docker, projectID, tlsCAFile)
 }
 
 // ReadDocumentDBGatewayTLS reads what the project's gateway presents; found
@@ -155,7 +155,7 @@ func ReadDocumentDBGatewayTLS(ctx context.Context, docker DockerClient, projectI
 		return GatewayTLS{}, false, err
 	}
 	var files [3][]byte
-	for i, name := range []string{"ca.crt", "tls.crt", "tls.key"} {
+	for i, name := range []string{tlsCAFile, tlsCertFile, tlsKeyFile} {
 		if files[i], err = readGatewayFile(ctx, docker, projectID, name); err != nil {
 			return GatewayTLS{}, false, err
 		}
@@ -207,7 +207,7 @@ func (m gatewayTLS) tarball(dir string, owner FileOwner) (io.Reader, error) {
 	for _, file := range []struct {
 		name string
 		body []byte
-	}{{"ca.crt", m.caPEM}, {"tls.crt", m.certPEM}, {"tls.key", m.keyPEM}} {
+	}{{tlsCAFile, m.caPEM}, {tlsCertFile, m.certPEM}, {tlsKeyFile, m.keyPEM}} {
 		header := &tar.Header{Name: dir + "/" + file.name, Mode: 0o600, Size: int64(len(file.body)), Uid: owner.UID, Gid: owner.GID, ModTime: time.Now()}
 		if err := writer.WriteHeader(header); err != nil {
 			return nil, err

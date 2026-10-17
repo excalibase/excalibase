@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const mockCACertKey = "ca.crt"
+
 // clusterCASuffix names the Secret CNPG keeps each cluster's CA in.
 const clusterCASuffix = "-postgres-ca"
 
@@ -47,8 +49,8 @@ func MockClusterCA() map[string][]byte {
 			panic(err)
 		}
 		mockClusterCA = map[string][]byte{
-			"ca.crt": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
-			"ca.key": pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}),
+			mockCACertKey: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+			"ca.key":      pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}),
 		}
 	})
 	return mockClusterCA
@@ -65,5 +67,5 @@ const mysqlCASuffix = "-mysql-ca"
 // tls.crt is the CA itself.
 func MockMySQLCA() map[string][]byte {
 	ca := MockClusterCA()
-	return map[string][]byte{"tls.crt": ca["ca.crt"], "ca.crt": ca["ca.crt"], "tls.key": ca["ca.key"]}
+	return map[string][]byte{"tls.crt": ca[mockCACertKey], mockCACertKey: ca[mockCACertKey], "tls.key": ca["ca.key"]}
 }

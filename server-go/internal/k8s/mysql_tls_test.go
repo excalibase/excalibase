@@ -25,7 +25,13 @@ func TestBuildMySQLTLS(t *testing.T) {
 	opts := mysqlOpts(freePlan)
 	opts.PublicNames = []string{"proj-abc.db.example.com"}
 	objects := BuildMySQLTLS(opts)
+	assertMySQLTLSOrder(t, objects)
+	assertMySQLCA(t, objects)
+	assertMySQLServerCertificate(t, objects)
+}
 
+func assertMySQLTLSOrder(t *testing.T, objects []MySQLTLSObject) {
+	t.Helper()
 	order := make([]string, 0, len(objects))
 	for _, object := range objects {
 		if object.Object.GetNamespace() != "org-proj-abc" || object.Object.GetLabels()["excalibase.io/project"] != "proj-abc" {
@@ -37,7 +43,10 @@ func TestBuildMySQLTLS(t *testing.T) {
 	if !slices.Equal(order, want) {
 		t.Fatalf("objects %v, want %v", order, want)
 	}
+}
 
+func assertMySQLCA(t *testing.T, objects []MySQLTLSObject) {
+	t.Helper()
 	ca := tlsObject(t, objects, "Certificate", "proj-abc-mysql-ca")
 	if isCA, _, _ := unstructured.NestedBool(ca.Object, "spec", "isCA"); !isCA {
 		t.Error("the CA certificate is not a CA")
@@ -51,19 +60,20 @@ func TestBuildMySQLTLS(t *testing.T) {
 	if issuer, _, _ := unstructured.NestedString(tlsObject(t, objects, "Issuer", "proj-abc-mysql-ca-issuer").Object, "spec", "ca", "secretName"); issuer != MySQLCASecretName("proj-abc") {
 		t.Errorf("CA issuer signs with %q", issuer)
 	}
+}
 
+func assertMySQLServerCertificate(t *testing.T, objects []MySQLTLSObject) {
+	t.Helper()
 	server := tlsObject(t, objects, "Certificate", "proj-abc-mysql-server")
-	if secret, _, _ := unstructured.NestedString(server.Object, "spec", "secretName"); secret != MySQLServerTLSSecretName("proj-abc") {
-		t.Errorf("server secret %q", secret)
+	for field, want := range map[string]string{
+		"secretName": MySQLServerTLSSecretName("proj-abc"), "duration": "2160h", "renewBefore": "720h",
+	} {
+		if got, _, _ := unstructured.NestedString(server.Object, "spec", field); got != want {
+			t.Errorf("server %s %q, want %q", field, got, want)
+		}
 	}
 	if issuer, _, _ := unstructured.NestedString(server.Object, "spec", "issuerRef", "name"); issuer != "proj-abc-mysql-ca-issuer" {
 		t.Errorf("server issuer %q", issuer)
-	}
-	if duration, _, _ := unstructured.NestedString(server.Object, "spec", "duration"); duration != "2160h" {
-		t.Errorf("server duration %q", duration)
-	}
-	if renew, _, _ := unstructured.NestedString(server.Object, "spec", "renewBefore"); renew != "720h" {
-		t.Errorf("renewBefore %q", renew)
 	}
 	names, _, _ := unstructured.NestedStringSlice(server.Object, "spec", "dnsNames")
 	for _, name := range []string{

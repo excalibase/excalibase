@@ -56,7 +56,7 @@ func (p *DockerMySQLProvisioner) ServerCA(ctx context.Context, container, _ stri
 
 // MySQLServerCA reads a MySQL container's CA.
 func MySQLServerCA(ctx context.Context, docker DockerClient, container string) (string, error) {
-	ca, err := readContainerFile(ctx, docker, container, MySQLTLSDir+"/ca.crt")
+	ca, err := readContainerFile(ctx, docker, container, MySQLTLSDir+"/"+tlsCAFile)
 	if err != nil {
 		return "", fmt.Errorf("read the MySQL CA of %s: %w", container, err)
 	}
