@@ -236,3 +236,42 @@ func TestReconcileProjectRoles_SingleHostFilesAPasswordLogin(t *testing.T) {
 		t.Fatal("a single-host login was given a client certificate")
 	}
 }
+
+// Filing the scheduler login comes last; when vault refuses it the project is
+// reported failed, so a later pass mints and files it again.
+func TestReconcileProjectRoles_ReportsAFailedFiling(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedPreSchedulerCluster(t)
+	h.vault.putErr = errors.New("vault refused")
+	report := h.svc.ReconcileProjectRoles(context.Background())
+	if report.Reconciled != 0 || len(report.Failed) != 1 || !strings.Contains(report.Failed[0].Error(), "excalibase_scheduler credential") {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+// A pg_hba the cluster refuses to take is a failure, not a silent pass.
+func TestReconcileProjectRoles_ReportsACertLoginUpdateFailure(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedPreSchedulerCluster(t)
+	h.kube.UpdateCRDError = errors.New("conflict forever")
+	report := h.svc.ReconcileProjectRoles(context.Background())
+	if report.Reconciled != 0 || len(report.Failed) != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	if _, filed := h.vault.data[rotSchedulerCurrent]; filed {
+		t.Fatal("the scheduler login was filed although its pg_hba line never landed")
+	}
+}
+
+// A filed record with no password is not reused: the role gets a fresh one.
+func TestReconcileProjectRoles_RegeneratesAnEmptyFiledPassword(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedPreSchedulerCluster(t)
+	h.vault.data[rotAppCurrent]["password"] = ""
+	if report := h.svc.ReconcileProjectRoles(context.Background()); report.Reconciled != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	if !strings.Contains(h.kube.ExecCommands[len(h.kube.ExecCommands)-1], "CREATE ROLE") {
+		t.Fatal("the registration SQL did not run")
+	}
+}

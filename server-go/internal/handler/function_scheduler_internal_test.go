@@ -221,3 +221,39 @@ func TestInternalSchedule_UnavailableWhenTheSchedulerLoginCannotOpen(t *testing.
 		t.Fatalf("status %d, want 503: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestInternalSchedule_RefusesAScheduleWithNoArgs(t *testing.T) {
+	_, r := schedulerRouteHandler(t, nil)
+	body := `{"ops":[{"op":"schedule","id":"abc","moduleName":"jobs","exportName":"send","scheduledForMs":1}]}`
+	if w := postSchedule(r, "proj_a", edgefn.DeriveRuntimeSecret(schedulerTestMaster, "proj_a"), body); w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", w.Code)
+	}
+}
+
+// A database that cannot begin, or cannot measure the args, is a 500 that
+// names no internal detail.
+func TestInternalSchedule_DatabaseFailuresAre500s(t *testing.T) {
+	for name, arrange := range map[string]func(sqlmock.Sqlmock){
+		"begin fails": func(m sqlmock.Sqlmock) { m.ExpectBegin().WillReturnError(errors.New("internal begin detail")) },
+		"size check fails": func(m sqlmock.Sqlmock) {
+			m.ExpectBegin()
+			m.ExpectQuery(regexp.QuoteMeta("octet_length")).WillReturnError(errors.New("internal size detail"))
+			m.ExpectRollback()
+		},
+	} {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		arrange(mock)
+		_, r := schedulerRouteHandler(t, db)
+		w := postSchedule(r, "proj_a", edgefn.DeriveRuntimeSecret(schedulerTestMaster, "proj_a"), oneSchedule)
+		if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "internal") && strings.Contains(w.Body.String(), "detail") {
+			t.Errorf("%s: status %d body %s", name, w.Code, w.Body.String())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		db.Close()
+	}
+}
