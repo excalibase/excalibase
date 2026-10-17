@@ -6,7 +6,7 @@ database**, in the reserved `excalibase` schema:
 
 | Table | Written by | Read by |
 | --- | --- | --- |
-| `excalibase.excalibase_scheduled_functions` | the runtime's scheduler RPCs, and the cron sweep | the task sweep |
+| `excalibase.excalibase_scheduled_functions` | provisioning, for the runtime's `ctx.scheduler` calls, and the cron sweep | the task sweep |
 | `excalibase.excalibase_cron_jobs` | the deploy-time cron sync | the cron sweep |
 
 Because the rows live per tenant, the control plane sweeps **every servable
@@ -18,6 +18,17 @@ which may not write them (EXC-623). Registration creates the tables, owned by
 the superuser, and the deploy-time cron sync writes through the same scheduler
 login. A project whose database carries no scheduler tables is left alone; one
 that is DELETING or RESTORING is never listed.
+
+The runtime's own database login is the project owner's, which cannot write
+these tables either. `ctx.scheduler.runAfter` / `runAt` / `cancel` therefore
+go to provisioning's `POST /internal/runtime/projects/{projectId}/scheduler`,
+authenticated by that project's runtime token, which validates each call and
+writes it as the scheduler login; the project comes from the path, never the
+body. A mutation's calls are held until its transaction commits and then sent
+in one request, so a rolled-back or retried mutation schedules nothing. If
+that request fails after the commit, the caller gets an error rather than a
+success that scheduled nothing. An action's calls are sent at once and stand
+whatever the action does next.
 
 ## The two halves
 

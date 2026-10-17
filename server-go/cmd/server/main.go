@@ -1686,6 +1686,9 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	// Authenticates via X-Excalibase-Runtime-Token (shared runtime secret),
 	// not JWT — this is server-to-server only.
 	r.Post("/internal/runtime/functions/{fnId}/metadata", d.fnHandler.ReceiveExportMetadata)
+	// ctx.scheduler from a project's runtime: recorded as the scheduler's
+	// login, which alone writes the platform's scheduler tables (EXC-623).
+	r.Post("/internal/runtime/projects/{projectId}/scheduler", d.fnHandler.InternalSchedule)
 	// Phase 7: server-to-server bridge used by ctx.runQuery/runMutation/
 	// runAction to invoke a sibling function. Same shared-secret auth as
 	// the metadata callback above.

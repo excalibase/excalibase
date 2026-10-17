@@ -1093,6 +1093,17 @@ cluster already admits platform roles by certificate), and then files the
 login. Filing comes last, so a project that was paused, busy or failing at one
 pass is retried at a later one. Look for `platform role reconcile:` in the log.
 
+The owner holds the database, so it can attach settings to it that would make
+that SQL fail: read-only transactions, a role to switch to on connect,
+timeouts, PL/pgSQL extra errors. The superuser's psql therefore pins those
+settings as connection options, checks it runs as the superuser itself, and
+takes the schema back (ownership, CREATE revoked from every other role, all
+table and sequence grants revoked from `excalibase_app`) in a first
+transaction of its own. Anything later that the owner can still make fail,
+such as a Postgres 16+ owner creating `excalibase_scheduler` itself, stops
+registration after that lockdown has landed. Default privileges another role
+set in the schema are cleared and do not trigger the rebuild.
+
 ## 7. Image upgrade
 
 The 5 images that ship in lockstep:

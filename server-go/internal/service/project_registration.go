@@ -239,6 +239,7 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 		resetPasswords: opts.ResetRolePasswords,
 		resetAdmin:     opts.ResetAdminPassword,
 		documentDB:     inst.DocumentDB,
+		postgresMajor:  inst.PostgresVersion,
 	}
 	canExecSQL := (s.k8sClient != nil) || (s.dockerClient != nil)
 	if !canExecSQL {
@@ -308,6 +309,8 @@ type projectRoleSpec struct {
 	resetAdmin     bool
 	// documentDB projects run no watcher on a single host.
 	documentDB bool
+	// postgresMajor decides which session settings the role SQL can pin.
+	postgresMajor string
 }
 
 // createProjectRoles executes the role SQL in the project's database and files
@@ -369,7 +372,8 @@ func (s *ProvisioningService) fileOwnerCredential(spec projectRoleSpec, pc *prov
 // execProjectRoleSQL runs the role SQL in the project's database.
 func (s *ProvisioningService) execProjectRoleSQL(ctx context.Context, spec projectRoleSpec, creds projectRoleCredentials) error {
 	primaryPod := spec.projectID + primaryPodSuffix
-	cmd := []string{"psql", "-U", "postgres", "-d", spec.databaseName, "-c", projectRoleSQL(spec, creds, s.publicationName)}
+	cmd := superuserPsqlCommand(spec.databaseName, spec.postgresMajor,
+		reservedSchemaFirstSQL(), projectRoleSQL(spec, creds, s.publicationName))
 	return s.execRoleSQL(ctx, spec.namespace, primaryPod, cmd)
 }
 

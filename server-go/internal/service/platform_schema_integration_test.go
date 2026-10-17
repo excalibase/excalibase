@@ -31,7 +31,11 @@ type platformSchemaCase struct {
 
 func newPlatformSchemaCase(t *testing.T) *platformSchemaCase {
 	t.Helper()
-	pg := startRolePostgres(t)
+	return newPlatformSchemaCaseOn(t, startRolePostgres(t))
+}
+
+func newPlatformSchemaCaseOn(t *testing.T, pg *rolePostgres) *platformSchemaCase {
+	t.Helper()
 	pg.psql(t, customerClusterSetupSQL())
 	return &platformSchemaCase{
 		pg:   pg,
@@ -210,6 +214,33 @@ func TestPlatformSchema_ReregistrationClearsWhatTheAppRolePlanted(t *testing.T) 
 	c.register(t)
 	if !scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM excalibase.excalibase_cron_jobs WHERE name = 'n')`) {
 		t.Fatal("re-registering a clean project dropped the scheduler's rows")
+	}
+}
+
+// Customer SQL may still record default privileges for itself in the schema;
+// they are not objects there, so they must not make the next registration
+// drop the scheduler's rows, and registration clears them.
+func TestPlatformSchema_AppRoleDefaultPrivilegesDoNotCostTheSchedulerItsRows(t *testing.T) {
+	c := newPlatformSchemaCase(t)
+	c.register(t)
+	mustExec(t, c.scheduler, `INSERT INTO excalibase.excalibase_scheduled_functions
+		(id, project_id, module_name, export_name, args, scheduled_for) VALUES ('kept', 'p', 'm', 'e', '{}', now())`)
+	for _, statement := range []string{
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA excalibase GRANT SELECT ON TABLES TO PUBLIC`,
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA excalibase GRANT USAGE ON SEQUENCES TO PUBLIC`,
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA excalibase GRANT EXECUTE ON FUNCTIONS TO ` + customerOwner,
+	} {
+		mustExec(t, c.app, statement)
+	}
+
+	c.register(t)
+
+	if !scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM excalibase.excalibase_scheduled_functions WHERE id = 'kept')`) {
+		t.Fatal("a default privilege the app role set made registration drop the scheduler's rows")
+	}
+	if scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
+		WHERE n.nspname = 'excalibase')`) {
+		t.Fatal("registration left the app role's default privileges in the excalibase schema")
 	}
 }
 

@@ -1,13 +1,14 @@
 // Phase 8 — scheduler dispatch tests.
 //
 // `ctx.scheduler.runAfter` / `runAt` / `cancel` post RPC messages from the
-// worker; the main thread translates them into INSERT/UPDATE statements on
-// `excalibase.excalibase_scheduled_functions` in the project database —
-// the reserved schema, never the tenant's user-facing `public`. Calling the
-// scheduler from a mutation must respect the mutation's transactional
-// boundary — a rollback unrolls the insert too.
+// worker; the main thread sends them to provisioning's
+// /internal/runtime/projects/{projectId}/scheduler route, which writes the
+// platform's scheduler tables as the scheduler's own login. The runtime never
+// writes those tables: the project's login has no write path into the
+// excalibase schema (EXC-623). A mutation's calls are sent only after its
+// transaction commits, so a rollback schedules nothing.
 
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { startRuntime } from "./harness.ts";
 import { startPostgres } from "./pg_harness.ts";
 
@@ -15,250 +16,213 @@ function bundleDefault(expr: string): string {
   return `globalThis.__excalibase_default = ${expr};`;
 }
 
-async function ensureSchedulerTables(pgUrl: string): Promise<void> {
-  const postgres = (await import("npm:postgres@3.4.4")).default;
-  const sql = postgres(pgUrl, { onnotice: () => {} });
+interface SchedulerCall {
+  projectId: string;
+  token: string | null;
+  ops: Array<Record<string, unknown>>;
+}
+
+interface MockProvisioning {
+  url: string;
+  calls: SchedulerCall[];
+  stop: () => Promise<void>;
+}
+
+async function startMockProvisioning(status = 204): Promise<MockProvisioning> {
+  const calls: SchedulerCall[] = [];
+  const ac = new AbortController();
+  let server!: Deno.HttpServer;
+  const ready = new Promise<number>((resolve) => {
+    server = Deno.serve({
+      port: 0,
+      signal: ac.signal,
+      onListen({ port }) {
+        resolve(port);
+      },
+    }, async (req) => {
+      const match = new URL(req.url).pathname.match(/^\/internal\/runtime\/projects\/([^/]+)\/scheduler$/);
+      if (match && req.method === "POST") {
+        const body = await req.json() as { ops: Array<Record<string, unknown>> };
+        calls.push({
+          projectId: decodeURIComponent(match[1]!),
+          token: req.headers.get("X-Excalibase-Runtime-Token"),
+          ops: body.ops,
+        });
+        return new Response(status === 204 ? null : "refused", { status });
+      }
+      return new Response("not found", { status: 404 });
+    });
+  });
+  const port = await ready;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    calls,
+    stop: async () => {
+      ac.abort();
+      await server.finished;
+    },
+  };
+}
+
+// withRuntime runs body against a runtime wired to a Postgres (so mutations
+// open a transaction) and a mock provisioning.
+async function withRuntime(
+  body: (rt: Awaited<ReturnType<typeof startRuntime>>, prov: MockProvisioning) => Promise<void>,
+  provisioningStatus = 204,
+): Promise<void> {
+  const pg = await startPostgres();
+  const prov = await startMockProvisioning(provisioningStatus);
   try {
-    await sql.unsafe(`
-      CREATE SCHEMA IF NOT EXISTS excalibase;
-      CREATE TABLE IF NOT EXISTS excalibase.excalibase_scheduled_functions (
-        id text PRIMARY KEY,
-        project_id text NOT NULL,
-        module_name text NOT NULL,
-        export_name text NOT NULL,
-        args jsonb NOT NULL,
-        scheduled_for timestamptz NOT NULL,
-        status text NOT NULL DEFAULT 'pending',
-        attempts int NOT NULL DEFAULT 0,
-        last_error text,
-        created_at timestamptz NOT NULL DEFAULT now()
-      );
-    `);
+    const rt = await startRuntime({ v2Enabled: true, dbUrl: pg.url, provisioningUrl: prov.url });
+    try {
+      await body(rt, prov);
+    } finally {
+      await rt.stop();
+    }
   } finally {
-    await sql.end({ timeout: 1 });
+    await prov.stop();
+    await pg.stop();
   }
 }
 
-async function queryScheduled(
-  pgUrl: string,
-  where: string,
-  ...params: unknown[]
-): Promise<Array<Record<string, unknown>>> {
-  const postgres = (await import("npm:postgres@3.4.4")).default;
-  const sql = postgres(pgUrl, { onnotice: () => {} });
-  try {
-    // postgres.js .unsafe params is typed against the `Sql` template
-    // generic; cast through `any` so heterogeneous values pass cleanly.
-    // deno-lint-ignore no-explicit-any
-    const rows = await (sql as any).unsafe(
-      `SELECT id, project_id, module_name, export_name, status, args
-       FROM excalibase.excalibase_scheduled_functions WHERE ${where}`,
-      params,
-    );
-    return rows as unknown as Array<Record<string, unknown>>;
-  } finally {
-    await sql.end({ timeout: 1 });
-  }
-}
-
 Deno.test({
-  name: "ctx.scheduler.runAfter from a mutation inserts a pending row",
+  name: "ctx.scheduler.runAfter from a mutation is sent to provisioning after commit",
   async fn() {
-    const pg = await startPostgres();
-    try {
-      await ensureSchedulerTables(pg.url);
-      const rt = await startRuntime({ v2Enabled: true, dbUrl: pg.url });
-      try {
-        const callerCode = bundleDefault(`{
-          kind: "mutation",
-          args: { parse: (a) => a },
-          handler: async (ctx, args) => {
-            const id = await ctx.scheduler.runAfter(
-              5000,
-              { moduleName: "jobs", exportName: "send" },
-              { to: args.to }
-            );
-            return { id };
-          },
-        }`);
-        await rt.deploy("proj_sched__caller", callerCode);
-        const res = await rt.invoke("proj_sched__caller", { args: { to: "ada@example.com" } });
-        assertEquals(res.status, 200);
-        const parsed = JSON.parse(res.body) as { data: { id: string } };
-        const idResult = parsed.data.id;
-        const rows = await queryScheduled(pg.url, "id = $1", idResult);
-        assertEquals(rows.length, 1);
-        assertEquals(rows[0].project_id, "proj_sched");
-        assertEquals(rows[0].module_name, "jobs");
-        assertEquals(rows[0].export_name, "send");
-        assertEquals(rows[0].status, "pending");
-      } finally {
-        await rt.stop();
-      }
-    } finally {
-      await pg.stop();
-    }
+    await withRuntime(async (rt, prov) => {
+      await rt.deploy("proj_sched__caller", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, args) => {
+          const id = await ctx.scheduler.runAfter(5000, { moduleName: "jobs", exportName: "send" }, { to: args.to });
+          return { id };
+        },
+      }`));
+      const before = Date.now();
+      const res = await rt.invoke("proj_sched__caller", { args: { to: "ada@example.com" } });
+      assertEquals(res.status, 200);
+      const id = (JSON.parse(res.body) as { data: { id: string } }).data.id;
+      assertEquals(prov.calls.length, 1);
+      const call = prov.calls[0];
+      assertEquals(call.projectId, "proj_sched");
+      assert(call.token, "the call carries the runtime token");
+      assertEquals(call.ops.length, 1);
+      const op = call.ops[0];
+      assertEquals(op.op, "schedule");
+      assertEquals(op.id, id);
+      assertEquals(op.moduleName, "jobs");
+      assertEquals(op.exportName, "send");
+      assertEquals(op.args, { to: "ada@example.com" });
+      assert((op.scheduledForMs as number) >= before + 5000);
+    });
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "ctx.scheduler.runAfter from a mutation rolls back when the handler throws",
+  name: "ctx.scheduler.runAfter from a mutation that throws schedules nothing",
   async fn() {
-    const pg = await startPostgres();
-    try {
-      await ensureSchedulerTables(pg.url);
-      const rt = await startRuntime({ v2Enabled: true, dbUrl: pg.url });
-      try {
-        const callerCode = bundleDefault(`{
-          kind: "mutation",
-          args: { parse: (a) => a },
-          handler: async (ctx, _args) => {
-            await ctx.scheduler.runAfter(
-              5000,
-              { moduleName: "jobs", exportName: "send" },
-              { to: "rollback@example.com" }
-            );
-            throw new Error("rollback-after-schedule");
-          },
-        }`);
-        await rt.deploy("proj_rollback__caller", callerCode);
-        await rt.invoke("proj_rollback__caller", { args: {} });
-        // The mutation throws; transactional roll-back must purge the insert.
-        const rows = await queryScheduled(
-          pg.url,
-          "project_id = $1 AND args->>'to' = $2",
-          "proj_rollback",
-          "rollback@example.com",
-        );
-        assertEquals(rows.length, 0, `expected 0 rows, got ${rows.length}`);
-      } finally {
-        await rt.stop();
-      }
-    } finally {
-      await pg.stop();
-    }
+    await withRuntime(async (rt, prov) => {
+      await rt.deploy("proj_rollback__caller", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, _args) => {
+          await ctx.scheduler.runAfter(5000, { moduleName: "jobs", exportName: "send" }, { to: "rollback@example.com" });
+          throw new Error("rollback-after-schedule");
+        },
+      }`));
+      await rt.invoke("proj_rollback__caller", { args: {} });
+      assertEquals(prov.calls.length, 0, "a rolled-back mutation must not schedule");
+    });
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "ctx.scheduler.runAfter from an action commits regardless of action outcome",
+  name: "ctx.scheduler.runAfter from an action is sent regardless of the action's outcome",
   async fn() {
-    const pg = await startPostgres();
-    try {
-      await ensureSchedulerTables(pg.url);
-      const rt = await startRuntime({ v2Enabled: true, dbUrl: pg.url });
-      try {
-        const callerCode = bundleDefault(`{
-          kind: "action",
-          args: { parse: (a) => a },
-          handler: async (ctx, _args) => {
-            const id = await ctx.scheduler.runAfter(
-              60_000,
-              { moduleName: "jobs", exportName: "send" },
-              { to: "action@example.com" }
-            );
-            // Action throws after scheduling — but Convex parity says the
-            // schedule still commits because actions have no transactional
-            // boundary on the scheduler write.
-            throw new Error("post-schedule-action-fail");
-          },
-        }`);
-        await rt.deploy("proj_action__caller", callerCode);
-        await rt.invoke("proj_action__caller", { args: {} });
-        const rows = await queryScheduled(
-          pg.url,
-          "project_id = $1 AND args->>'to' = $2",
-          "proj_action",
-          "action@example.com",
-        );
-        assertEquals(rows.length, 1, "action-side schedule must commit");
-      } finally {
-        await rt.stop();
-      }
-    } finally {
-      await pg.stop();
-    }
+    await withRuntime(async (rt, prov) => {
+      await rt.deploy("proj_action__caller", bundleDefault(`{
+        kind: "action",
+        args: { parse: (a) => a },
+        handler: async (ctx, _args) => {
+          await ctx.scheduler.runAfter(60_000, { moduleName: "jobs", exportName: "send" }, { to: "action@example.com" });
+          throw new Error("post-schedule-action-fail");
+        },
+      }`));
+      await rt.invoke("proj_action__caller", { args: {} });
+      assertEquals(prov.calls.length, 1, "an action's schedule stands on its own");
+      assertEquals(prov.calls[0].ops[0].args, { to: "action@example.com" });
+    });
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "ctx.scheduler.cancel marks a pending row cancelled",
+  name: "ctx.scheduler.cancel in the same mutation is sent after the schedule it cancels",
   async fn() {
-    const pg = await startPostgres();
-    try {
-      await ensureSchedulerTables(pg.url);
-      const rt = await startRuntime({ v2Enabled: true, dbUrl: pg.url });
-      try {
-        const callerCode = bundleDefault(`{
-          kind: "mutation",
-          args: { parse: (a) => a },
-          handler: async (ctx, _args) => {
-            const id = await ctx.scheduler.runAfter(
-              60_000,
-              { moduleName: "jobs", exportName: "send" },
-              {}
-            );
-            await ctx.scheduler.cancel(id);
-            return { id };
-          },
-        }`);
-        await rt.deploy("proj_cancel__caller", callerCode);
-        const res = await rt.invoke("proj_cancel__caller", { args: {} });
-        const parsed = JSON.parse(res.body) as { data: { id: string } };
-        const rows = await queryScheduled(pg.url, "id = $1", parsed.data.id);
-        assertEquals(rows.length, 1);
-        assertEquals(rows[0].status, "cancelled");
-      } finally {
-        await rt.stop();
-      }
-    } finally {
-      await pg.stop();
-    }
+    await withRuntime(async (rt, prov) => {
+      await rt.deploy("proj_cancel__caller", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, _args) => {
+          const id = await ctx.scheduler.runAfter(60_000, { moduleName: "jobs", exportName: "send" }, {});
+          await ctx.scheduler.cancel(id);
+          return { id };
+        },
+      }`));
+      const res = await rt.invoke("proj_cancel__caller", { args: {} });
+      const id = (JSON.parse(res.body) as { data: { id: string } }).data.id;
+      assertEquals(prov.calls.length, 1, "one mutation, one call");
+      assertEquals(prov.calls[0].ops.map((op) => op.op), ["schedule", "cancel"]);
+      assertEquals(prov.calls[0].ops[1].id, id);
+    });
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "ctx.scheduler.runAt accepts an absolute millisecond timestamp",
+  name: "ctx.scheduler.runAt sends the absolute millisecond timestamp",
   async fn() {
-    const pg = await startPostgres();
-    try {
-      await ensureSchedulerTables(pg.url);
-      const rt = await startRuntime({ v2Enabled: true, dbUrl: pg.url });
-      try {
-        const callerCode = bundleDefault(`{
-          kind: "mutation",
-          args: { parse: (a) => a },
-          handler: async (ctx, args) => {
-            const id = await ctx.scheduler.runAt(
-              args.at,
-              { moduleName: "jobs", exportName: "ping" },
-              { mark: "at-test" }
-            );
-            return { id };
-          },
-        }`);
-        await rt.deploy("proj_runat__caller", callerCode);
-        const at = Date.now() + 86_400_000;
-        const res = await rt.invoke("proj_runat__caller", { args: { at } });
-        assertEquals(res.status, 200);
-        const parsed = JSON.parse(res.body) as { data: { id: string } };
-        const rows = await queryScheduled(pg.url, "id = $1", parsed.data.id);
-        assertEquals(rows.length, 1);
-        assertEquals(rows[0].status, "pending");
-      } finally {
-        await rt.stop();
-      }
-    } finally {
-      await pg.stop();
-    }
+    await withRuntime(async (rt, prov) => {
+      await rt.deploy("proj_runat__caller", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, args) => {
+          const id = await ctx.scheduler.runAt(args.at, { moduleName: "jobs", exportName: "ping" }, { mark: "at-test" });
+          return { id };
+        },
+      }`));
+      const at = Date.now() + 86_400_000;
+      const res = await rt.invoke("proj_runat__caller", { args: { at } });
+      assertEquals(res.status, 200);
+      assertEquals(prov.calls[0].ops[0].scheduledForMs, at);
+    });
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name: "a mutation whose schedule provisioning refuses reports an error, not success",
+  async fn() {
+    await withRuntime(async (rt, prov) => {
+      await rt.deploy("proj_refused__caller", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, _args) => {
+          const id = await ctx.scheduler.runAfter(1000, { moduleName: "jobs", exportName: "send" }, {});
+          return { id };
+        },
+      }`));
+      const res = await rt.invoke("proj_refused__caller", { args: {} });
+      assertEquals(prov.calls.length, 1);
+      assertEquals(res.status, 500);
+      assert(res.body.includes("scheduled functions were not recorded"), res.body);
+    }, 500);
   },
   sanitizeOps: false,
   sanitizeResources: false,

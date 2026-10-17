@@ -60,6 +60,9 @@ func alterRolePasswordSQL(role, password string) string {
 // excalibase_app owned, so pending tasks go and cron rows come back on the
 // function's next deploy. Copying the rows out first would read tables the
 // app role shaped, as the superuser. No project runs on that state.
+//
+// Default privileges a role set in the schema are not objects in it and do not
+// count: the lockdown clears them instead of costing the scheduler its rows.
 const reservedSchemaRebuildSQL = `
 DO $excalibase_reserved_rebuild$
 BEGIN
@@ -73,6 +76,7 @@ BEGIN
       AND s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
     JOIN pg_roles r ON r.oid = s.refobjid
     WHERE n.nspname = 'excalibase' AND NOT r.rolsuper
+      AND d.classid <> 'pg_catalog.pg_default_acl'::regclass
   ) OR EXISTS (
     SELECT 1 FROM pg_trigger t
     JOIN pg_class c ON c.oid = t.tgrelid
@@ -84,6 +88,64 @@ BEGIN
   END IF;
 END
 $excalibase_reserved_rebuild$;
+`
+
+// reservedSchemaLockdownSQL leaves the excalibase schema the superuser's: it
+// takes the schema, takes CREATE from every other role and leaves the app role
+// USAGE and nothing on its tables. It stands alone so the reconcile can apply
+// it before anything a customer can make fail (EXC-623). appRoleName is the
+// bare role name; the SQL quotes it.
+func reservedSchemaLockdownSQL(appRoleName string) string {
+	return strings.ReplaceAll(reservedSchemaLockdownTemplate, "{{APP}}", sqlTextLiteral(appRoleName))
+}
+
+const reservedSchemaLockdownTemplate = `
+-- Reserved schema for platform bookkeeping, outside public, which the
+-- generated APIs expose. The superuser alone creates and owns what is in it
+-- (EXC-623): customer SQL runs as excalibase_app, which only reaches the
+-- guarded functions here, so no role but the superuser may CREATE. Default
+-- privileges another role set in the schema are cleared: they could only
+-- apply to objects that role can no longer create there.
+CREATE SCHEMA IF NOT EXISTS excalibase;
+ALTER SCHEMA excalibase OWNER TO CURRENT_USER;
+DO $excalibase_reserved_create$
+DECLARE
+  grantee text;
+  acl record;
+BEGIN
+  FOR grantee IN
+    SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END
+    FROM pg_namespace n
+    CROSS JOIN LATERAL aclexplode(n.nspacl) a
+    LEFT JOIN pg_roles r ON r.oid = a.grantee
+    WHERE n.nspname = 'excalibase' AND a.privilege_type = 'CREATE' AND a.grantee <> n.nspowner
+  LOOP
+    EXECUTE 'REVOKE CREATE ON SCHEMA excalibase FROM ' || grantee || ' CASCADE';
+  END LOOP;
+  FOR acl IN
+    SELECT DISTINCT quote_ident(owner.rolname) AS owner_name,
+      CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES'
+        WHEN 'f' THEN 'FUNCTIONS' WHEN 'T' THEN 'TYPES' END AS kind,
+      CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(g.rolname) END AS grantee_name
+    FROM pg_default_acl d
+    JOIN pg_namespace n ON n.oid = d.defaclnamespace
+    JOIN pg_roles owner ON owner.oid = d.defaclrole
+    CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+    LEFT JOIN pg_roles g ON g.oid = a.grantee
+    WHERE n.nspname = 'excalibase' AND NOT owner.rolsuper AND d.defaclobjtype IN ('r', 'S', 'f', 'T')
+  LOOP
+    EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE ' || acl.owner_name || ' IN SCHEMA excalibase REVOKE ALL ON '
+      || acl.kind || ' FROM ' || acl.grantee_name || ' CASCADE';
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {{APP}}) THEN
+    EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA excalibase FROM %I', {{APP}});
+    EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA excalibase FROM %I', {{APP}});
+    EXECUTE format('GRANT USAGE ON SCHEMA excalibase TO %I', {{APP}});
+  ELSE
+    RAISE NOTICE 'excalibase_app does not exist yet; registration grants it USAGE';
+  END IF;
+END
+$excalibase_reserved_create$;
 `
 
 // reservedSchemaGuardSQL refuses a non-superuser's CREATE EXTENSION or ALTER
@@ -186,31 +248,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
 -- The auth service creates its tables as auth_admin after registration.
 ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
 
--- Reserved schema for platform bookkeeping, outside public, which the
--- generated APIs expose. The superuser alone creates and owns what is in it
--- (EXC-623): customer SQL runs as excalibase_app, which only reaches the
--- guarded functions here, so no role but the superuser may CREATE.
-CREATE SCHEMA IF NOT EXISTS excalibase;
-ALTER SCHEMA excalibase OWNER TO CURRENT_USER;
-DO $excalibase_reserved_create$
-DECLARE
-  grantee text;
-BEGIN
-  FOR grantee IN
-    SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END
-    FROM pg_namespace n
-    CROSS JOIN LATERAL aclexplode(n.nspacl) a
-    LEFT JOIN pg_roles r ON r.oid = a.grantee
-    WHERE n.nspname = 'excalibase' AND a.privilege_type = 'CREATE' AND a.grantee <> n.nspowner
-  LOOP
-    EXECUTE 'REVOKE CREATE ON SCHEMA excalibase FROM ' || grantee || ' CASCADE';
-  END LOOP;
-END
-$excalibase_reserved_create$;
-REVOKE ALL ON ALL TABLES IN SCHEMA excalibase FROM %s;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA excalibase FROM %s;
-GRANT USAGE ON SCHEMA excalibase TO %s;
 
+%s
 -- cdc_watcher: dedicated role with REPLICATION attribute used ONLY by the
 -- watcher daemon to consume the logical slot. No DML grants. Separating
 -- this from excalibase_app means a leaked excalibase_app credential cannot
@@ -293,8 +332,8 @@ GRANT EXECUTE ON FUNCTION excalibase.set_realtime_table(text, text, boolean) TO 
 		appRole, appRole, appRole, appRole, appRole, // GRANT public
 		appRole, appRole, appRole, // GRANT auth read
 		authRole, appRole, // auth_admin's tables readable
-		appRole, appRole, appRole, // reserved excalibase schema: USAGE only
-		watcherRole, safeWatcherPass, // cdc_watcher DO block
+		reservedSchemaLockdownSQL(roleApp), // reserved excalibase schema: USAGE only
+		watcherRole, safeWatcherPass,       // cdc_watcher DO block
 		watcherRole, watcherRole, dbIdent, // cdc_watcher registry schema + search_path
 		pubName, pubName, // pubname check + CREATE PUBLICATION
 		pubIdent,                             // ALTER PUBLICATION ... OWNER TO

@@ -72,6 +72,18 @@ func validExportName(name string) bool {
 	return exportPattern.MatchString(name)
 }
 
+// ValidTarget reports whether a module and export name are ones the sweep
+// would dispatch. Callers that record a task check it up front, so a refused
+// task is refused to the caller instead of closed later by the sweep.
+func ValidTarget(moduleName, exportName string) bool {
+	return validModuleName(moduleName) && validExportName(exportName)
+}
+
+// ValidTaskID reports whether id fits the size the sweep reads.
+func ValidTaskID(id string) bool {
+	return id != "" && len(id) <= maxTaskIDLen
+}
+
 // splitPath splits a module name on "/" without pulling in path semantics.
 func splitPath(name string) []string {
 	var out []string
