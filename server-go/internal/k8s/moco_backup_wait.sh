@@ -8,11 +8,14 @@ set -u
 deadline=$((SECONDS + ${EGRESS_WAIT_SECONDS:-60}))
 
 answers() {
-  timeout 1 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$1" "$2" 2> /dev/null
+  local host=$1 port=$2
+  timeout 1 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" 2> /dev/null
+  return $?
 }
 
 store_answers() {
   answers "${EGRESS_WAIT_STORE%:*}" "${EGRESS_WAIT_STORE##*:}"
+  return $?
 }
 
 database_answers() {

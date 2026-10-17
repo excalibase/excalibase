@@ -18,7 +18,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -203,8 +202,7 @@ func (lab *mocoLab) startStore(t *testing.T) {
 	lab.applyStorePolicy(t, store)
 	setup := "until rc alias set store http://rustfs:9000 " + mocoLabKey + " " + mocoLabSecret +
 		" && rc ls store/; do sleep 2; done; rc mb store/" + mocoLabBucket
-	runPodWithImage(lab.ctx, t, lab.cs, mocoLabStoreNS, "objectstore-setup", mocoLabRustFSCli,
-		map[string]string{"app": "objectstore-setup"}, []string{"sh", "-c", setup})
+	lab.runOnce(t, mocoLabStoreNS, "objectstore-setup", mocoLabRustFSCli, []string{"sh", "-c", setup})
 	eventually(t, "bucket made", 4*time.Minute, func() bool {
 		got, err := lab.cs.CoreV1().Pods(mocoLabStoreNS).Get(lab.ctx, "objectstore-setup", metav1.GetOptions{})
 		return err == nil && got.Status.Phase == corev1.PodSucceeded
@@ -404,17 +402,17 @@ func (lab *mocoLab) events() string {
 	return out.String()
 }
 
-// runPodWithImage starts a pod that runs command once in image.
-func runPodWithImage(ctx context.Context, t *testing.T, cs kubernetes.Interface, namespace, name, image string, labels map[string]string, command []string) {
+// runOnce starts a pod, labelled app=<name>, that runs command once in image.
+func (lab *mocoLab) runOnce(t *testing.T, namespace, name, image string, command []string) {
 	t.Helper()
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: map[string]string{"app": name}},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers:    []corev1.Container{{Name: name, Image: image, Command: command}},
 		},
 	}
-	if _, err := cs.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+	if _, err := lab.cs.CoreV1().Pods(namespace).Create(lab.ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod %s/%s: %v", namespace, name, err)
 	}
 }
