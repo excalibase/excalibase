@@ -68,3 +68,45 @@ func TestRunSuperuserRoleSQL_DoesNotTerminateOnOtherFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestProbeServerVersionNum(t *testing.T) {
+	cases := []struct {
+		out  string
+		err  error
+		want int
+	}{
+		{out: "170004\n", want: 170004},
+		{out: "", err: errors.New("unreachable"), want: 0},
+		{out: "not-a-number", want: 0},
+	}
+	for _, tc := range cases {
+		e := &scriptedExecer{outputs: []string{tc.out}, errs: []error{tc.err}}
+		if got := probeServerVersionNum(context.Background(), e.exec, "app"); got != tc.want {
+			t.Errorf("probe(%q,%v) = %d, want %d", tc.out, tc.err, got, tc.want)
+		}
+	}
+}
+
+func TestIsLockTimeout(t *testing.T) {
+	if !isLockTimeout("ERROR:  canceling statement due to lock timeout", nil) {
+		t.Error("the lock-timeout message is not recognised")
+	}
+	if !isLockTimeout("", errors.New("psql exit 3: ... SQLSTATE 55P03")) {
+		t.Error("the 55P03 SQLSTATE is not recognised")
+	}
+	if isLockTimeout("ERROR: syntax error", errors.New("psql exit 1")) {
+		t.Error("an unrelated error was taken for a lock timeout")
+	}
+}
+
+func TestRoleSQLExecerPrefersDockerThenK8s(t *testing.T) {
+	docker := &fakeDockerClientForAdapter{}
+	svc := NewProvisioningService(nil, nil, nil)
+	svc.SetDockerClient(docker)
+	if _, err := svc.roleSQLExecer("c1", "pod")(context.Background(), []string{"psql", "-c", "SELECT 1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(docker.execs) != 1 {
+		t.Fatalf("docker execs = %d, want the command through the container", len(docker.execs))
+	}
+}

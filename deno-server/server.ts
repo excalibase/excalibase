@@ -2938,8 +2938,8 @@ async function dispatchStorage(
         body: JSON.stringify({ contentType, size }),
       });
       if (!res.ok) {
-        console.warn(`[runtime] ctx.storage.generateUploadUrl: provisioning returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
-        throw new Error(`ctx.storage.generateUploadUrl: the storage service returned ${res.status}`);
+        const text = await res.text();
+        throw new Error(`generateUploadUrl HTTP ${res.status}: ${text.slice(0, 200)}`);
       }
       return await res.json();
     }
@@ -2957,8 +2957,8 @@ async function dispatchStorage(
         body: JSON.stringify({ storageId, uploadId }),
       });
       if (!res.ok) {
-        console.warn(`[runtime] ctx.storage.completeUpload: provisioning returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
-        throw new Error(`ctx.storage.completeUpload: the storage service returned ${res.status}`);
+        const text = await res.text();
+        throw new Error(`completeUpload HTTP ${res.status}: ${text.slice(0, 200)}`);
       }
       await res.body?.cancel();
       return storageId;
@@ -2974,8 +2974,8 @@ async function dispatchStorage(
         return null;
       }
       if (!res.ok) {
-        console.warn(`[runtime] ctx.storage.getUrl: provisioning returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
-        throw new Error(`ctx.storage.getUrl: the storage service returned ${res.status}`);
+        const text = await res.text();
+        throw new Error(`getUrl HTTP ${res.status}: ${text.slice(0, 200)}`);
       }
       const body = await res.json() as { url: string };
       return body.url;
@@ -2990,9 +2990,8 @@ async function dispatchStorage(
         return null;
       }
       if (!r.ok) {
-        console.warn(`[runtime] ctx.storage.get: object store returned ${r.status}`);
-        await r.body?.cancel();
-        throw new Error(`ctx.storage.get: the storage service returned ${r.status}`);
+        const text = await r.text();
+        throw new Error(`get HTTP ${r.status}: ${text.slice(0, 200)}`);
       }
       const ct = r.headers.get("content-type") || "application/octet-stream";
       const buf = new Uint8Array(await r.arrayBuffer());
@@ -3010,8 +3009,8 @@ async function dispatchStorage(
         return null;
       }
       if (!res.ok) {
-        console.warn(`[runtime] ctx.storage.getMetadata: provisioning returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
-        throw new Error(`ctx.storage.getMetadata: the storage service returned ${res.status}`);
+        const text = await res.text();
+        throw new Error(`getMetadata HTTP ${res.status}: ${text.slice(0, 200)}`);
       }
       return await res.json();
     }
@@ -3028,8 +3027,8 @@ async function dispatchStorage(
         body: JSON.stringify({ contentType, size: bytes.byteLength }),
       });
       if (!mint.ok) {
-        console.warn(`[runtime] ctx.storage.store: provisioning returned ${mint.status}: ${(await mint.text()).slice(0, 200)}`);
-        throw new Error(`ctx.storage.store: the storage service returned ${mint.status}`);
+        const text = await mint.text();
+        throw new Error(`store/upload-url HTTP ${mint.status}: ${text.slice(0, 200)}`);
       }
       const mintBody = await mint.json() as { url: string; storageId: string; uploadId: string };
       if (!mintBody.uploadId) {
@@ -3048,7 +3047,7 @@ async function dispatchStorage(
       });
       if (!put.ok) {
         await put.body?.cancel();
-        throw new Error(`ctx.storage.store: the storage service returned ${put.status}`);
+        throw new Error(`store/PUT HTTP ${put.status}`);
       }
       await put.body?.cancel();
       // 3. Confirm.
@@ -3062,8 +3061,8 @@ async function dispatchStorage(
         }),
       });
       if (!confirm.ok) {
-        console.warn(`[runtime] ctx.storage.store confirm: provisioning returned ${confirm.status}: ${(await confirm.text()).slice(0, 200)}`);
-        throw new Error(`ctx.storage.store: the storage service returned ${confirm.status}`);
+        const text = await confirm.text();
+        throw new Error(`store/confirm-upload HTTP ${confirm.status}: ${text.slice(0, 200)}`);
       }
       await confirm.body?.cancel();
       return mintBody.storageId;
