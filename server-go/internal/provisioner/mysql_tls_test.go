@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -87,5 +88,41 @@ func TestMySQLRemoveDatabase_RemovesTheCertificates(t *testing.T) {
 		if !slices.Contains(mock.Calls, "DeleteSecret:"+mysqlTestNS+"/"+secret) {
 			t.Errorf("secret %s left behind", secret)
 		}
+	}
+}
+
+// An instance that is not ready reads its certificate when it starts; one
+// that refuses the reload is reported with its name.
+func TestMySQLReloadTLS_SkipsUnreadyAndReportsFailures(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	if _, err := prov.ProvisionWithRollback(context.Background(), mysqlRequest(""), mysqlStandard, recordingContext()); err != nil {
+		t.Fatalf("ProvisionWithRollback: %v", err)
+	}
+	mock.PodReady[mysqlTestNS+"/moco-proj-my1-mysql-1"] = false
+	mock.ExecError[mysqlTestNS+"/moco-proj-my1-mysql-2"] = errors.New("access denied")
+	before := len(mock.Calls)
+
+	err := prov.ReloadTLS(context.Background(), mysqlTestNS, mysqlTestProject)
+	if err == nil || !strings.Contains(err.Error(), "moco-proj-my1-mysql-2") {
+		t.Fatalf("err %v", err)
+	}
+	if slices.Contains(mock.Calls[before:], "ExecInPod:"+mysqlTestNS+"/moco-proj-my1-mysql-1") {
+		t.Error("reloaded an instance that is not ready")
+	}
+}
+
+func TestMySQLServerCA_MissingSecret(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	mock.NoClusterCA = true
+	if _, err := prov.ServerCA(context.Background(), mysqlTestNS, mysqlTestProject); err == nil {
+		t.Fatal("served a CA that does not exist")
+	}
+}
+
+func TestMySQLRemoveDatabase_ReportsACertificateLeftBehind(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	mock.DeleteCRDError = errors.New("forbidden")
+	if err := prov.removeTLS(context.Background(), mysqlTestNS, mysqlTestProject); err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("err %v", err)
 	}
 }

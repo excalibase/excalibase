@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -112,4 +114,98 @@ func TestReapplyMySQLCredentialsRefilesTheServerCA(t *testing.T) {
 	if record["sslrootcert"] != restored {
 		t.Error("the app login still carries the old CA")
 	}
+}
+
+// A CA the platform cannot refile is reported, so the leader logs it before
+// clients start failing on the expired certificate.
+func TestMaintainMySQLTLS_ReportsARefileThatFails(t *testing.T) {
+	svc, store, mock := setupMySQLTest(t)
+	inst := provisionMySQL(t, svc, store, "")
+	mock.Secrets[inst.Namespace+"/"+k8s.MySQLCASecretName(inst.ProjectID)] = map[string][]byte{"tls.crt": []byte(testca.New(t, "renewed").PEM)}
+	svc.vault.(*fakeVault).putErr = errors.New("vault sealed")
+
+	report := svc.MaintainMySQLTLS(context.Background())
+	if len(report.Failed) != 1 || !strings.Contains(report.Failed[0].Error(), inst.ProjectID) {
+		t.Fatalf("report %+v", report)
+	}
+}
+
+// A server whose CA cannot be read is reported and not reloaded.
+func TestMaintainMySQLTLS_ReportsAnUnreadableCA(t *testing.T) {
+	svc, store, mock := setupMySQLTest(t)
+	provisionMySQL(t, svc, store, "")
+	mock.NoClusterCA = true
+	before := len(mock.ExecCommands)
+
+	report := svc.MaintainMySQLTLS(context.Background())
+	if len(report.Failed) != 1 {
+		t.Fatalf("report %+v", report)
+	}
+	for _, cmd := range mock.ExecCommands[before:] {
+		if strings.Contains(cmd, "RELOAD TLS") {
+			t.Errorf("reloaded without a CA: %s", cmd)
+		}
+	}
+}
+
+type stubLeader struct {
+	leader bool
+	err    error
+}
+
+func (s stubLeader) IsLeader(context.Context) (bool, error) { return s.leader, s.err }
+
+// Only the leading replica sweeps; a failed leadership check skips the tick.
+func TestMySQLTLSMaintenance_SweepsOnlyWhileLeading(t *testing.T) {
+	cases := []struct {
+		name   string
+		leader stubLeader
+		want   int
+	}{
+		{"leader", stubLeader{leader: true}, 1},
+		{"follower", stubLeader{}, 0},
+		{"check failed", stubLeader{err: errors.New("lock unreachable")}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, store, mock := setupMySQLTest(t)
+			provisionMySQL(t, svc, store, "")
+			before := len(mock.ExecCommands)
+			NewMySQLTLSMaintenance(svc).runIfLeader(context.Background(), tc.leader)
+			if got := reloadsIn(mock.ExecCommands[before:]); got != tc.want {
+				t.Errorf("%d reloads, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+type signallingLeader chan struct{}
+
+func (s signallingLeader) IsLeader(context.Context) (bool, error) {
+	s <- struct{}{}
+	return false, nil
+}
+
+// Start checks at once rather than waiting a whole interval after a restart,
+// and stop ends the timer.
+func TestMySQLTLSMaintenance_StartChecksAtOnce(t *testing.T) {
+	svc, _, _ := setupMySQLTest(t)
+	checked := make(signallingLeader, 1)
+	stop := NewMySQLTLSMaintenance(svc).Start(context.Background(), checked, time.Hour)
+	defer stop()
+	select {
+	case <-checked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no check after Start")
+	}
+}
+
+func reloadsIn(commands []string) int {
+	reloads := 0
+	for _, cmd := range commands {
+		if strings.Contains(cmd, "ALTER INSTANCE RELOAD TLS") {
+			reloads++
+		}
+	}
+	return reloads
 }
