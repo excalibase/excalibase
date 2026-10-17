@@ -20,6 +20,7 @@ jobs:
       deno: ${{ steps.filter.outputs.deno }}
       ci: ${{ steps.filter.outputs.ci }}
       hosting: ${{ steps.filter.outputs.hosting }}
+      mysqlbackup: ${{ steps.filter.outputs.mysqlbackup }}
       singlehost: ${{ steps.filter.outputs.singlehost }}
       singlehostboot: ${{ steps.filter.outputs.singlehostboot }}
       sitesrouter: ${{ steps.filter.outputs.sitesrouter }}
@@ -62,6 +63,8 @@ jobs:
               - 'server-go/internal/k8s/testdata/app_workload/**'
               - 'server-go/internal/apphost/**'
               - 'server-go/internal/service/app_deploy*'
+            mysqlbackup:
+              - 'server-go/internal/k8s/moco_*'
 
   single-host:
     name: Single-host bundle
@@ -466,7 +469,7 @@ jobs:
         with:
           go-version: '1.24'
       - name: Run live cluster tests
-        run: go test -tags=live ./internal/k8s/ -run 'TestK3s' -skip 'StartFence' -v -timeout 40m
+        run: go test -tags=live ./internal/k8s/ -run 'TestK3s' -skip 'StartFence|MySQLBackup' -v -timeout 40m
 
   live-start-fence:
     name: Live cluster tests (start fence)
@@ -484,6 +487,23 @@ jobs:
           go-version: '1.24'
       - name: Run start-fence probes
         run: go test -tags=live ./internal/k8s/ -run 'TestK3s.*StartFence' -v -timeout 30m
+
+  live-mysql-backup:
+    name: Live cluster tests (MySQL backup)
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    # EXC-586: MOCO's real backup Job under the project policies, on kube-router and on production Cilium.
+    if: needs.changes.outputs.mysqlbackup == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Run MySQL backup egress probes
+        run: go test -tags=live ./internal/k8s/ -run 'TestK3s.*MySQLBackup' -v -timeout 40m
 
   sonarcloud:
     name: SonarCloud Scan

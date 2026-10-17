@@ -180,14 +180,8 @@ func TestWithMySQLRestore(t *testing.T) {
 // A manual backup is a Job from the CronJob's template, owned by it like
 // `kubectl create job --from=cronjob` makes one.
 func TestBuildManualMySQLBackupJob(t *testing.T) {
-	cron := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "batch/v1", "kind": "CronJob",
-		"metadata": map[string]interface{}{"name": "moco-backup-proj-abc-mysql", "namespace": "org-proj-abc", "uid": "u-1"},
-		"spec": map[string]interface{}{"jobTemplate": map[string]interface{}{
-			"metadata": map[string]interface{}{"labels": map[string]interface{}{"app.kubernetes.io/name": "mysql-backup"}},
-			"spec":     map[string]interface{}{"template": map[string]interface{}{"spec": map[string]interface{}{}}},
-		}},
-	}}
+	cron := MockMOCOBackupCronJob("org-proj-abc", "proj-abc-mysql", testMOCOBackupImage, "https://s3.example")
+	cron.SetUID("u-1")
 	at := time.Date(2026, 10, 11, 15, 4, 5, 0, time.UTC)
 	job, err := BuildManualMySQLBackupJob(cron, at)
 	if err != nil {
@@ -205,6 +199,11 @@ func TestBuildManualMySQLBackupJob(t *testing.T) {
 	}
 	if _, found, _ := unstructured.NestedMap(job.Object, "spec", "template"); !found {
 		t.Error("job has no pod template")
+	}
+	// EXC-586: a manual run waits for its egress even before the CronJob does.
+	inits, _, _ := unstructured.NestedSlice(job.Object, "spec", "template", "spec", "initContainers")
+	if len(inits) != 1 || inits[0].(map[string]interface{})["name"] != MySQLEgressWaitContainerName {
+		t.Errorf("init containers %v", inits)
 	}
 }
 

@@ -71,7 +71,7 @@ func (lab *egressLab) startCiliumCluster(t *testing.T) {
 	lab.startCiliumClusterWith(t)
 }
 
-func (lab *egressLab) startCiliumClusterWith(t *testing.T, extra ...testcontainers.ContainerCustomizer) {
+func (lab *egressLab) startCiliumClusterWith(t *testing.T, extra ...testcontainers.ContainerCustomizer) *k3s.K3sContainer {
 	t.Helper()
 	options := append([]testcontainers.ContainerCustomizer{
 		testcontainers.WithCmdArgs("--flannel-backend=none", "--disable-network-policy"),
@@ -108,6 +108,7 @@ func (lab *egressLab) startCiliumClusterWith(t *testing.T, extra ...testcontaine
 		t.Fatalf("k3s container IP: %v", err)
 	}
 	lab.installCilium(t, nodeIP)
+	return container
 }
 
 func (lab *egressLab) installCilium(t *testing.T, apiServerHost string) {

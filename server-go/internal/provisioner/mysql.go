@@ -37,9 +37,8 @@ const (
 	mysqlDefaultDatabase = "app"
 	// mysqlAdminCnf is MOCO's own admin login file inside the mysqld
 	// container; the platform runs its setup SQL through it over the socket.
-	mysqlAdminCnf      = MOCOAdminDefaultsFile
-	mysqlContainer     = MOCOMySQLContainer
-	mysqlBackupJobName = "moco-backup-"
+	mysqlAdminCnf  = MOCOAdminDefaultsFile
+	mysqlContainer = MOCOMySQLContainer
 
 	defaultMySQLReadyTimeout = 10 * time.Minute
 	defaultMySQLPoll         = 5 * time.Second
@@ -380,6 +379,10 @@ func (p *MySQLProvisioner) Resume(ctx context.Context, namespace, projectID stri
 	if err := p.suspendBackups(ctx, namespace, projectID, false); err != nil {
 		return err
 	}
+	// A CronJob paused before EXC-586 runs again waiting for its egress.
+	if _, err := p.EnsureBackupEgressWait(ctx, namespace, projectID); err != nil {
+		return err
+	}
 	instances, err := p.clusterInstances(ctx, namespace, projectID)
 	if err != nil {
 		return err
@@ -440,24 +443,34 @@ func (p *MySQLProvisioner) setOffline(ctx context.Context, namespace, projectID 
 
 // suspendBackups flips MOCO's backup CronJob for the cluster, when one exists.
 func (p *MySQLProvisioner) suspendBackups(ctx context.Context, namespace, projectID string, suspend bool) error {
-	jobs, err := p.client.ListCRDs(ctx, k8s.CronJobGVR, namespace)
-	if err != nil {
-		return fmt.Errorf("list backup CronJobs: %w", err)
+	job, err := p.backupCronJob(ctx, namespace, projectID)
+	if err != nil || job == nil {
+		return err
 	}
-	name := mysqlBackupJobName + k8s.MySQLClusterName(projectID)
-	for _, job := range jobs {
-		if job.GetName() != name {
-			continue
-		}
-		flipped := job.DeepCopy()
-		if err := unstructured.SetNestedField(flipped.Object, suspend, "spec", "suspend"); err != nil {
-			return err
-		}
-		if err := p.client.UpdateCRD(ctx, k8s.CronJobGVR, namespace, flipped); err != nil {
-			return fmt.Errorf("set backup CronJob suspend=%v: %w", suspend, err)
-		}
+	flipped := job.DeepCopy()
+	if err := unstructured.SetNestedField(flipped.Object, suspend, "spec", "suspend"); err != nil {
+		return err
+	}
+	if err := p.client.UpdateCRD(ctx, k8s.CronJobGVR, namespace, flipped); err != nil {
+		return fmt.Errorf("set backup CronJob suspend=%v: %w", suspend, err)
 	}
 	return nil
+}
+
+// backupCronJob is MOCO's backup CronJob for the cluster, nil when MOCO has
+// not made one.
+func (p *MySQLProvisioner) backupCronJob(ctx context.Context, namespace, projectID string) (*unstructured.Unstructured, error) {
+	jobs, err := p.client.ListCRDs(ctx, k8s.CronJobGVR, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("list backup CronJobs: %w", err)
+	}
+	name := k8s.MySQLBackupCronJobName(projectID)
+	for _, job := range jobs {
+		if job.GetName() == name {
+			return job, nil
+		}
+	}
+	return nil, nil
 }
 
 // UpgradeMinor re-pins the cluster onto image and returns once every

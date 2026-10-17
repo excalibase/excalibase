@@ -10,6 +10,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -50,6 +51,7 @@ type MockClient struct {
 	CRDError              error                             // if non-nil, ApplyCRD returns this error
 	DeleteCRDError        error                             // if non-nil, DeleteCRD returns this error
 	UpdateCRDError        error                             // if non-nil, UpdateCRD returns this error
+	UpdateCRDConflicts    int                               // UpdateCRD calls a concurrent writer wins, each a conflict
 	UninstallHelmError    error                             // if non-nil, UninstallHelmChart returns this error
 	NamespaceExistsError  error                             // if non-nil, NamespaceExists returns this error
 	GetPodsError          error                             // if non-nil, GetPods returns this error
@@ -444,6 +446,7 @@ func (m *MockClient) ApplyCRD(ctx context.Context, gvr schema.GroupVersionResour
 	}
 	if m.AutoReconcileClusters && obj.GetKind() == "MySQLCluster" {
 		markMySQLClusterHealthy(obj)
+		m.reconcileMOCOBackupJob(namespace, obj)
 	}
 	return nil
 }
@@ -509,10 +512,17 @@ func (m *MockClient) UpdateCRD(ctx context.Context, gvr schema.GroupVersionResou
 	if m.UpdateCRDError != nil {
 		return m.UpdateCRDError
 	}
+	if m.UpdateCRDConflicts > 0 {
+		m.UpdateCRDConflicts--
+		return apierrors.NewConflict(gvr.GroupResource(), obj.GetName(), fmt.Errorf("the object has been modified"))
+	}
 	if _, ok := m.CRDs[key]; !ok {
 		return fmt.Errorf("not found: %s", key)
 	}
 	m.CRDs[key] = obj
+	if m.AutoReconcileClusters && obj.GetKind() == "MySQLCluster" {
+		m.reconcileMOCOBackupJob(namespace, obj)
+	}
 	return nil
 }
 

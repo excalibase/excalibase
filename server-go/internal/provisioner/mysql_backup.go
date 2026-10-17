@@ -68,9 +68,7 @@ func (p *MySQLProvisioner) AttachBackups(ctx context.Context, opts k8s.MySQLBack
 	if err := p.client.ApplyCRD(ctx, k8s.MOCOBackupPolicyGVR, opts.Namespace, policy); err != nil {
 		return fmt.Errorf("apply the backup policy: %w", err)
 	}
-	return p.updateCluster(ctx, opts.Namespace, opts.ProjectID, func(cluster *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-		return k8s.WithMySQLBackupPolicy(cluster, opts.ProjectID), nil
-	})
+	return p.linkBackupPolicy(ctx, opts.Namespace, opts.ProjectID)
 }
 
 // LinkBackupPolicy links the cluster to the policy already in its namespace.
@@ -78,9 +76,50 @@ func (p *MySQLProvisioner) LinkBackupPolicy(ctx context.Context, namespace, proj
 	if _, err := p.client.GetCRD(ctx, k8s.MOCOBackupPolicyGVR, namespace, k8s.MySQLBackupPolicyName(projectID)); err != nil {
 		return fmt.Errorf("read the backup policy: %w", err)
 	}
-	return p.updateCluster(ctx, namespace, projectID, func(cluster *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	return p.linkBackupPolicy(ctx, namespace, projectID)
+}
+
+// linkBackupPolicy links the cluster and returns once MOCO's CronJob for it
+// waits for egress (EXC-586), so not even its first run dials too early.
+func (p *MySQLProvisioner) linkBackupPolicy(ctx context.Context, namespace, projectID string) error {
+	err := p.updateCluster(ctx, namespace, projectID, func(cluster *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 		return k8s.WithMySQLBackupPolicy(cluster, projectID), nil
 	})
+	if err != nil {
+		return err
+	}
+	return p.readyPoller.WaitUntilReady(ctx, "backup schedule of "+k8s.MySQLClusterName(projectID), func(ctx context.Context) (bool, error) {
+		return p.EnsureBackupEgressWait(ctx, namespace, projectID)
+	})
+}
+
+// mysqlCronJobWriteAttempts bounds the re-reads of a CronJob MOCO keeps writing.
+const mysqlCronJobWriteAttempts = 5
+
+// EnsureBackupEgressWait makes the runs of MOCO's backup CronJob wait until
+// the store and the database answer them; false when MOCO has made no CronJob.
+func (p *MySQLProvisioner) EnsureBackupEgressWait(ctx context.Context, namespace, projectID string) (bool, error) {
+	for attempt := 0; ; attempt++ {
+		cronJob, err := p.backupCronJob(ctx, namespace, projectID)
+		if err != nil || cronJob == nil {
+			return false, err
+		}
+		waited, changed, err := k8s.WithMySQLBackupEgressWait(cronJob)
+		if err != nil {
+			return false, err
+		}
+		if !changed {
+			return true, nil
+		}
+		err = p.client.UpdateCRD(ctx, k8s.CronJobGVR, namespace, waited)
+		if err == nil {
+			return true, nil
+		}
+		// MOCO writes the CronJob too; a conflict re-reads it.
+		if !apierrors.IsConflict(err) || attempt+1 >= mysqlCronJobWriteAttempts {
+			return false, fmt.Errorf("make the backup CronJob wait for egress: %w", err)
+		}
+	}
 }
 
 // attachProvisionedBackups starts a new project's backups once it serves.
