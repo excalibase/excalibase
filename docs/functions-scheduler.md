@@ -6,15 +6,29 @@ database**, in the reserved `excalibase` schema:
 
 | Table | Written by | Read by |
 | --- | --- | --- |
-| `excalibase.excalibase_scheduled_functions` | the runtime's scheduler RPCs, and the cron sweep | the task sweep |
+| `excalibase.excalibase_scheduled_functions` | provisioning, for the runtime's `ctx.scheduler` calls, and the cron sweep | the task sweep |
 | `excalibase.excalibase_cron_jobs` | the deploy-time cron sync | the cron sweep |
 
 Because the rows live per tenant, the control plane sweeps **every servable
 project**, not one database. Projects are listed from the platform's project
-rows and opened with the excalibase_app credentials filed in vault — the same
-way the schema browser, migrations and the restore probe reach a tenant. A
-project whose database carries no scheduler tables is left alone; one that is
-DELETING or RESTORING is never listed.
+rows and opened with the `excalibase_scheduler` credentials filed in vault.
+That login holds DML on these two tables and nothing else; customer-written
+SQL (Studio, MCP `execute_sql`, `apply_migration`) runs as `excalibase_app`,
+which may not write them (EXC-623). Registration creates the tables, owned by
+the superuser, and the deploy-time cron sync writes through the same scheduler
+login. A project whose database carries no scheduler tables is left alone; one
+that is DELETING or RESTORING is never listed.
+
+The runtime's own database login is the project owner's, which cannot write
+these tables either. `ctx.scheduler.runAfter` / `runAt` / `cancel` therefore
+go to provisioning's `POST /internal/runtime/projects/{projectId}/scheduler`,
+authenticated by that project's runtime token, which validates each call and
+writes it as the scheduler login; the project comes from the path, never the
+body. A mutation's calls are held until its transaction commits and then sent
+in one request, so a rolled-back or retried mutation schedules nothing. If
+that request fails after the commit, the caller gets an error rather than a
+success that scheduled nothing. An action's calls are sent at once and stand
+whatever the action does next.
 
 ## The two halves
 
@@ -29,10 +43,11 @@ DELETING or RESTORING is never listed.
   Postgres advisory lock in cloud mode and is a no-op claim in a
   single-process deployment.
 
-## The tenant owns these tables
+## Rows are still input
 
-The project holds its database's credentials, so it can write any row into
-the reserved `excalibase` schema. Nothing read from there is authority:
+Customer SQL can no longer write the reserved schema, but the tables sit in a
+database the tenant administers, and a restore brings rows back from a backup
+the tenant could have shaped. Nothing read from there is authority:
 
 | Column | Read as | Why |
 | --- | --- | --- |

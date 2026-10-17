@@ -29,14 +29,12 @@ const (
 	cronJobsTable           = "excalibase_cron_jobs"
 )
 
-// schedulerDDL is the single source of truth for the scheduler/cron
-// bookkeeping schema. Every statement is idempotent, so callers may run it
-// on every deploy:
+// SchedulerTablesSQL is the single source of truth for the scheduler/cron
+// bookkeeping schema. It is run by the superuser when a project is
+// registered, so the superuser owns both tables and the only writer granted
+// on them is the excalibase_scheduler login (EXC-623). Every statement is
+// idempotent:
 //
-//   - the reserved schema is created if absent;
-//   - tables left in `public` by pre-reserved-schema releases are moved
-//     into it, guarded so the move is a no-op on a fresh tenant (nothing
-//     to move) and on an already-migrated one (destination occupied);
 //   - the tables and the due-task index are created if absent;
 //   - `excalibase_cron_jobs.function_id` is added if absent, upgrading
 //     databases created before deploy-scoped cron sync existed;
@@ -45,9 +43,9 @@ const (
 //     fail on the unknown column, which is deliberate: the sweep says so and
 //     backs the project off rather than guessing a claim is fresh.
 //
-// Ordering matters: the move runs before the CREATE TABLE statements,
-// otherwise a fresh empty table would occupy the destination and strand
-// the legacy rows in `public`.
+// Nothing is ever moved in from `public`: a table there belongs to the
+// customer, and moving it would bring a customer-owned object, with whatever
+// triggers it carries, into the platform's schema.
 //
 //	excalibase.excalibase_scheduled_functions
 //	  id              text PRIMARY KEY
@@ -75,29 +73,8 @@ const (
 //
 // `function_id` is written by SyncCronJobs at deploy time so a redeploy can
 // scope its DELETE/UPSERT to rows owned by the same function.
-const schedulerDDL = `
-	-- The create stays behind a catalog guard because the IF NOT EXISTS form
-	-- still checks CREATE on the database even when the schema is already
-	-- there, and the tenant app role deliberately lacks that. Provisioning
-	-- pre-creates the schema, so this only fires on a database provisioned
-	-- before it did.
-	DO $$
-	BEGIN
-		IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'excalibase') THEN
-			EXECUTE 'CREATE SCHEMA excalibase';
-		END IF;
-	END $$;
-	DO $$
-	BEGIN
-		IF to_regclass('public.excalibase_scheduled_functions') IS NOT NULL
-		   AND to_regclass('excalibase.excalibase_scheduled_functions') IS NULL THEN
-			ALTER TABLE public.excalibase_scheduled_functions SET SCHEMA excalibase;
-		END IF;
-		IF to_regclass('public.excalibase_cron_jobs') IS NOT NULL
-		   AND to_regclass('excalibase.excalibase_cron_jobs') IS NULL THEN
-			ALTER TABLE public.excalibase_cron_jobs SET SCHEMA excalibase;
-		END IF;
-	END $$;
+const SchedulerTablesSQL = `
+	CREATE SCHEMA IF NOT EXISTS excalibase;
 	CREATE TABLE IF NOT EXISTS excalibase.excalibase_scheduled_functions (
 		id text PRIMARY KEY,
 		project_id text NOT NULL,
@@ -131,9 +108,10 @@ const schedulerDDL = `
 		ADD COLUMN IF NOT EXISTS function_id text NOT NULL DEFAULT '';
 `
 
-// EnsureSchedulerTables applies schedulerDDL to the given tenant database.
-// Idempotent and safe to call on every deploy and on every worker boot.
+// EnsureSchedulerTables applies SchedulerTablesSQL over db. It needs a role
+// that may create in the excalibase schema, which in a tenant database is the
+// superuser alone; registration runs the same SQL there.
 func EnsureSchedulerTables(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, schedulerDDL)
+	_, err := db.ExecContext(ctx, SchedulerTablesSQL)
 	return err
 }

@@ -49,6 +49,7 @@ spec:
     - hostssl all excalibase_app all cert
     - hostssl all auth_admin all cert
     - hostssl all cdc_watcher all cert
+    - hostssl all excalibase_scheduler all cert
     - hostssl replication cdc_watcher all cert
     - host all excalibase_app all reject
     - host replication excalibase_app all reject
@@ -56,6 +57,8 @@ spec:
     - host replication auth_admin all reject
     - host all cdc_watcher all reject
     - host replication cdc_watcher all reject
+    - host all excalibase_scheduler all reject
+    - host replication excalibase_scheduler all reject
     - hostssl all app all scram-sha-256
     - hostnossl all all all reject
     - hostnossl replication all all reject

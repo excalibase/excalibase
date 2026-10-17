@@ -37,13 +37,13 @@ func TestBeginCronSync_NoProjectDBFnReturnsNoop(t *testing.T) {
 // fails, beginCronSync surfaces the error wrapped with context.
 func TestBeginCronSync_DBOpenError(t *testing.T) {
 	h := &FunctionHandler{
-		projectDBFn: func(_ context.Context, _ string) (*sql.DB, error) {
+		schedulerDBFn: func(_ context.Context, _ string) (*sql.DB, error) {
 			return nil, errors.New("vault unreachable")
 		},
 	}
 	tx, _, err := h.beginCronSync(context.Background(), "proj", "fn", nil)
 	if err == nil {
-		t.Fatal("expected error when projectDBFn returns error")
+		t.Fatal("expected error when schedulerDBFn returns error")
 	}
 	if tx != nil {
 		t.Errorf("expected nil tx on error, got %v", tx)
@@ -62,7 +62,7 @@ func TestRollbackCronSync_NilTxIsSafe(t *testing.T) {
 // schedules deploys with no sync; one with schedules is refused with 409.
 func TestBeginCronSync_MySQLProject(t *testing.T) {
 	h := &FunctionHandler{
-		projectDBFn: func(_ context.Context, _ string) (*sql.DB, error) {
+		schedulerDBFn: func(_ context.Context, _ string) (*sql.DB, error) {
 			return nil, fmt.Errorf("open: %w", domain.ErrPostgresOnly)
 		},
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -103,6 +104,10 @@ func (r *RoleCertificateRenewer) renewRole(projectID, role string, ca tenantcert
 	path := vaultCredentialPath(projectID, role)
 	record, err := r.cfg.Vault.Get(path)
 	if err != nil {
+		if role == roleScheduler && !r.filed(projectID, path) {
+			// Not filed yet: the platform role reconcile files it with its certificate.
+			return false, nil
+		}
 		return false, fmt.Errorf("read %s credential: %w", role, err)
 	}
 	if !tenantcert.RenewalDue(record, string(ca.CertPEM), r.cfg.Now()) {
@@ -116,6 +121,12 @@ func (r *RoleCertificateRenewer) renewRole(projectID, role string, ca tenantcert
 		return false, fmt.Errorf("file renewed %s certificate: %w", role, err)
 	}
 	return true, nil
+}
+
+// filed reports whether vault lists path among the project's credentials.
+func (r *RoleCertificateRenewer) filed(projectID, path string) bool {
+	paths, err := r.cfg.Vault.List(vaultCredentialPrefix(projectID))
+	return err == nil && slices.Contains(paths, path)
 }
 
 // Start renews on a timer while this replica leads; the first pass runs at once.

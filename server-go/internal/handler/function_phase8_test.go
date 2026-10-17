@@ -107,6 +107,9 @@ func buildPhase8Router(t *testing.T, db *sql.DB) (*chi.Mux, *edgefn.FunctionStor
 	h.SetProjectDBFn(func(_ context.Context, _ string) (*sql.DB, error) {
 		return db, nil
 	})
+	h.SetSchedulerDBFn(func(_ context.Context, _ string) (*sql.DB, error) {
+		return db, nil
+	})
 	h.SetAutoMigrate(true)
 
 	r := chi.NewRouter()

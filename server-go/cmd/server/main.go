@@ -298,6 +298,8 @@ func runServer(cfg config.AppConfig) {
 	defer stopImageWatcher()
 	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
 	defer stopCredentialRenewal()
+	stopRoleReconcile := startPlatformRoleReconcile(cfg, sqlStore, provSvc)
+	defer stopRoleReconcile()
 	stopRoleCertRenewal := startRoleCertificateRenewer(cfg, sqlStore, store, k8sClient, vc, provSvc)
 	defer stopRoleCertRenewal()
 	stopGatewayWatch := startDocumentDBGatewayWatch(cfg, sqlStore, provSvc)
@@ -470,6 +472,24 @@ func startRoleCertificateRenewer(cfg config.AppConfig, sqlStore storage.Platform
 	log.Printf("Role certificate renewal started (every %s)", roleCertRenewInterval)
 	return renewer.Start(context.Background(), service.NewLeadership(lock), roleCertRenewInterval)
 }
+
+// startPlatformRoleReconcile re-runs the registration SQL on running projects
+// registered before EXC-623, so they lose the app role's write access to the
+// excalibase schema; one replica runs it, at start and then on a timer.
+func startPlatformRoleReconcile(cfg config.AppConfig, sqlStore storage.PlatformStore, provSvc *service.ProvisioningService) func() {
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() && sqlStore != nil {
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), platformRoleReconcileLockID)
+	}
+	return provSvc.StartRoleReconcile(context.Background(), service.NewLeadership(lock), platformRoleReconcileInterval)
+}
+
+const (
+	// platformRoleReconcileLockID is the advisory lock the reconcile leads on.
+	platformRoleReconcileLockID int64 = 0x7263_6f6e_6369_0623
+	// platformRoleReconcileInterval is how soon a resumed or skipped project is reached.
+	platformRoleReconcileInterval = 10 * time.Minute
+)
 
 const (
 	roleCertRenewLockID   int64 = 0x7263_6572_7431_0410
@@ -753,7 +773,7 @@ func startFunctionScheduler(
 	}
 	if projectDB != nil {
 		boot.Projects = projectDB.ServableProjectIDs
-		boot.ProjectDB = projectDB.Open
+		boot.ProjectDB = projectDB.OpenScheduler
 	}
 	handles, err := bootstrap.StartScheduler(context.Background(), boot)
 	if err != nil {
@@ -961,6 +981,7 @@ func buildFunctionHandler(
 	// opening a project database is the one wired here.
 	if projectDB != nil {
 		fnHandler.SetProjectDBFn(projectDB.Open)
+		fnHandler.SetSchedulerDBFn(projectDB.OpenScheduler)
 	}
 	fnHandler.SetAutoMigrate(cfg.AutoMigrate)
 	// EXC-11: end-user tokens must name this project in their aud claim.
@@ -1669,6 +1690,9 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	// Authenticates via X-Excalibase-Runtime-Token (shared runtime secret),
 	// not JWT — this is server-to-server only.
 	r.Post("/internal/runtime/functions/{fnId}/metadata", d.fnHandler.ReceiveExportMetadata)
+	// ctx.scheduler from a project's runtime: recorded as the scheduler's
+	// login, which alone writes the platform's scheduler tables (EXC-623).
+	r.Post("/internal/runtime/projects/{projectId}/scheduler", d.fnHandler.InternalSchedule)
 	// Phase 7: server-to-server bridge used by ctx.runQuery/runMutation/
 	// runAction to invoke a sibling function. Same shared-secret auth as
 	// the metadata callback above.

@@ -10,16 +10,20 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 )
 
-// A handler with no resolver applies no schema and cannot answer
-// schema/apply — boot needs to be able to see that.
-func TestHasProjectDB_ReportsWhetherAResolverIsWired(t *testing.T) {
+// A handler missing either resolver applies no schema or syncs no cron, and
+// boot needs to be able to see that.
+func TestHasProjectDB_ReportsWhetherBothResolversAreWired(t *testing.T) {
 	h := NewFunctionHandler(edgefn.NewFunctionStore(t.TempDir()), nil, nil, nil, nil, "")
 	if h.HasProjectDB() {
 		t.Fatal("a handler with no resolver reported one")
 	}
 	h.SetProjectDBFn(func(context.Context, string) (*sql.DB, error) { return nil, nil })
+	if h.HasProjectDB() {
+		t.Fatal("a handler without the scheduler resolver was reported wired")
+	}
+	h.SetSchedulerDBFn(func(context.Context, string) (*sql.DB, error) { return nil, nil })
 	if !h.HasProjectDB() {
-		t.Fatal("a wired resolver was not reported")
+		t.Fatal("wired resolvers were not reported")
 	}
 }
 

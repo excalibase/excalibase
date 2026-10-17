@@ -250,16 +250,18 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 // projectRoleCredentials holds the generated passwords for the roles
 // createProjectRoles creates.
 type projectRoleCredentials struct {
-	authPassword    string
-	appPassword     string
-	watcherPassword string
+	authPassword      string
+	appPassword       string
+	watcherPassword   string
+	schedulerPassword string
 }
 
 func newProjectRoleCredentials() projectRoleCredentials {
 	return projectRoleCredentials{
-		authPassword:    generatePassword(32),
-		appPassword:     generatePassword(32),
-		watcherPassword: generatePassword(32),
+		authPassword:      generatePassword(32),
+		appPassword:       generatePassword(32),
+		watcherPassword:   generatePassword(32),
+		schedulerPassword: generatePassword(32),
 	}
 }
 
@@ -333,8 +335,9 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, spec proje
 		roleAuthAdmin: creds.authPassword,
 		roleApp:       creds.appPassword,
 		roleWatcher:   creds.watcherPassword,
+		roleScheduler: creds.schedulerPassword,
 	}
-	for _, role := range []string{roleAuthAdmin, roleApp, roleWatcher} {
+	for _, role := range []string{roleAuthAdmin, roleApp, roleWatcher, roleScheduler} {
 		pc.SetStep("store " + role + " credentials")
 		record := specCredentialRecord(spec, role, passwords[role])
 		if material, ok := certificates[role]; ok {
@@ -365,9 +368,9 @@ func (s *ProvisioningService) fileOwnerCredential(spec projectRoleSpec, pc *prov
 
 // execProjectRoleSQL runs the role SQL in the project's database.
 func (s *ProvisioningService) execProjectRoleSQL(ctx context.Context, spec projectRoleSpec, creds projectRoleCredentials) error {
-	primaryPod := spec.projectID + primaryPodSuffix
-	cmd := []string{"psql", "-U", "postgres", "-d", spec.databaseName, "-c", projectRoleSQL(spec, creds, s.publicationName)}
-	return s.execRoleSQL(ctx, spec.namespace, primaryPod, cmd)
+	exec := s.roleSQLExecer(spec.namespace, spec.projectID+primaryPodSuffix)
+	return runSuperuserRoleSQL(ctx, exec, spec.databaseName,
+		reservedSchemaFirstSQL(), projectRoleSQL(spec, creds, s.publicationName))
 }
 
 // projectRoleSQL pins the search_path and refuses platform role names a
@@ -378,6 +381,7 @@ func (s *ProvisioningService) execProjectRoleSQL(ctx context.Context, spec proje
 func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicationName string) string {
 	roleSQL := pgroles.PinnedSearchPath + pgroles.SquatGuardSQL() +
 		BuildProjectRoleSQL(creds.authPassword, creds.appPassword, creds.watcherPassword, spec.databaseName, publicationName) +
+		BuildSchedulerRoleSQL(creds.schedulerPassword, spec.databaseName) +
 		realtimeIdentitySQL(publicationName) +
 		pgroles.CustomerRoleSQL(spec.adminUsername) +
 		pgroles.OwnerAccessSQL(spec.adminUsername)
@@ -394,6 +398,7 @@ func resetTargets(spec projectRoleSpec, creds projectRoleCredentials) []RolePass
 		{Role: roleAuthAdmin, Password: creds.authPassword},
 		{Role: roleApp, Password: creds.appPassword},
 		{Role: roleWatcher, Password: creds.watcherPassword},
+		{Role: roleScheduler, Password: creds.schedulerPassword},
 	}
 	if spec.resetAdmin {
 		targets = append(targets, RolePassword{Role: spec.adminUsername, Password: spec.adminPassword})

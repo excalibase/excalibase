@@ -32,6 +32,11 @@ import (
 // a superuser would bring.
 const appRole = "excalibase_app"
 
+// schedulerRole is the login the scheduler's bookkeeping is written as. Only
+// it may write the excalibase schema's tables; customer SQL runs as appRole
+// and may not (EXC-623).
+const schedulerRole = "excalibase_scheduler"
+
 // ErrNotServable is returned for a project the platform must not serve: a
 // teardown or an unconfirmed restore owns it, so its database is either
 // going away or has not been proved usable.
@@ -257,6 +262,19 @@ func (o *Opener) Open(_ context.Context, projectID string) (*sql.DB, error) {
 	return o.cached(projectID, projectID, appRole, o.openPostgres)
 }
 
+// OpenScheduler returns the project's pool for the scheduler's bookkeeping in
+// the excalibase schema, logged in as excalibase_scheduler. It is never handed
+// to a path that runs customer SQL.
+func (o *Opener) OpenScheduler(_ context.Context, projectID string) (*sql.DB, error) {
+	if err := o.checkServable(projectID); err != nil {
+		return nil, err
+	}
+	return o.cached(projectID, schedulerKey(projectID), schedulerRole, o.openPostgres)
+}
+
+// schedulerKey caches the scheduler's pool apart from the app role's.
+func schedulerKey(projectID string) string { return projectID + "#scheduler" }
+
 // cached hands out the pool under key, opening it with open on first use or
 // once it is older than MaxPoolAge.
 func (o *Opener) cached(projectID, key, role string, open func(creds map[string]string) (*sql.DB, error)) (*sql.DB, error) {
@@ -331,7 +349,7 @@ func (o *Opener) CachedPools() int {
 func (o *Opener) Evict(projectID string) {
 	o.mu.Lock()
 	var closing []*pool
-	for _, key := range []string{projectID, mysqlScriptKey(projectID)} {
+	for _, key := range []string{projectID, mysqlScriptKey(projectID), schedulerKey(projectID)} {
 		if p, ok := o.pools[key]; ok {
 			closing = append(closing, p)
 			delete(o.pools, key)

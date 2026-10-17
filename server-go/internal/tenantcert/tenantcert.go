@@ -31,7 +31,7 @@ const (
 
 // PlatformRoles are the roles the platform itself logs in as. pg_hba refuses
 // each of them a password over the network.
-var PlatformRoles = []string{"excalibase_app", "auth_admin", "cdc_watcher"}
+var PlatformRoles = []string{"excalibase_app", "auth_admin", "cdc_watcher", "excalibase_scheduler"}
 
 // IsPlatformRole reports whether username is one of PlatformRoles.
 func IsPlatformRole(username string) bool {

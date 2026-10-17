@@ -108,6 +108,7 @@ psql -v ON_ERROR_STOP=1 -U postgres -d app <<EOF
 CREATE ROLE excalibase_app LOGIN PASSWORD 'app-pw';
 CREATE ROLE auth_admin LOGIN PASSWORD 'auth-pw';
 CREATE ROLE cdc_watcher LOGIN REPLICATION PASSWORD 'watcher-pw';
+CREATE ROLE excalibase_scheduler LOGIN PASSWORD 'scheduler-pw';
 CREATE ROLE app LOGIN PASSWORD 'customer-pw';
 EOF
 `
@@ -176,7 +177,7 @@ func (p certPostgres) passwordDSN(user, password, sslmode string) string {
 
 func TestAPlatformRoleIsAdmittedOnlyWithItsCertificate(t *testing.T) {
 	p := startCertPostgres(t)
-	passwords := map[string]string{"excalibase_app": "app-pw", "auth_admin": "auth-pw", "cdc_watcher": "watcher-pw"}
+	passwords := map[string]string{"excalibase_app": "app-pw", "auth_admin": "auth-pw", "cdc_watcher": "watcher-pw", "excalibase_scheduler": "scheduler-pw"}
 
 	for role, password := range passwords {
 		for _, sslmode := range []string{"require", "disable"} {

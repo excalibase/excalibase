@@ -9,10 +9,10 @@ import (
 // the scheduler tables are defined — including on a database created before
 // the lease did, which the ALTER upgrades.
 func TestSchedulerDDL_DeclaresTheClaimLeaseColumn(t *testing.T) {
-	if !strings.Contains(schedulerDDL, "claimed_at timestamptz") {
+	if !strings.Contains(SchedulerTablesSQL, "claimed_at timestamptz") {
 		t.Error("the scheduled-functions table has no claimed_at column")
 	}
-	if !strings.Contains(schedulerDDL, "ADD COLUMN IF NOT EXISTS claimed_at timestamptz") {
+	if !strings.Contains(SchedulerTablesSQL, "ADD COLUMN IF NOT EXISTS claimed_at timestamptz") {
 		t.Error("a database created before the lease is never upgraded")
 	}
 }

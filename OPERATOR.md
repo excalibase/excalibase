@@ -457,7 +457,7 @@ is up — the CNPG primary pod Ready in K8s mode, postgres out of recovery in
 Docker mode — the platform runs the same registration path a new project goes
 through:
 
-1. Platform roles (`auth_admin`, `excalibase_app`, `cdc_watcher`) are created,
+1. Platform roles (`auth_admin`, `excalibase_app`, `cdc_watcher`, `excalibase_scheduler`) are created,
    and — because a restored database arrives carrying the source project's
    roles and passwords — their passwords are **reset** to freshly generated
    ones. The restored project therefore has its own credentials; leaking the
@@ -993,8 +993,9 @@ seeded by the bootstrap Job.
 
 `POST /api/provision/{id}/credentials/rotate` replaces the passwords of every
 platform role filed under `projects/{id}/credentials/` — `auth_admin`, then
-`excalibase_app`, then the project owner, which is the credential the call
-returns. `cdc_watcher` is not rotated: its password is baked into the deployed
+`excalibase_app`, then `excalibase_scheduler`, then the project owner, which is
+the credential the call returns. A role that logs in by client certificate has
+no password to rotate and is skipped. `cdc_watcher` is not rotated: its password is baked into the deployed
 watcher's configuration, so changing it would stop the project's replication.
 
 Each role is rotated in one order: the new password is written to
@@ -1055,6 +1056,83 @@ grow with row size and write rate; inserts cost nothing extra. Tables without
 realtime are unaffected. A table with wide rows and heavy update traffic is
 the case to watch: check WAL growth (`pg_stat_wal`) before turning realtime on
 for it.
+
+## 6.9. The excalibase schema belongs to the platform
+
+Customer-written SQL — Studio's SQL editor, MCP `execute_sql` and
+`apply_migration`, table import — runs as `excalibase_app`. That role reads the
+project's `auth` tables (as Supabase's SQL editor does) and works in `public`
+and any schema it creates, but in the reserved `excalibase` schema it holds
+USAGE only (EXC-623): no CREATE, no ownership and no DML. It can still call
+the guarded functions there (`create_role`, `set_realtime_table`, ...), which
+the superuser owns. `excalibase_cdc` is the watcher's alone.
+
+The superuser owns the schema and everything in it, the scheduler tables
+included. Their only writer is `excalibase_scheduler`, a login used by the
+function scheduler and the deploy-time cron sync and by nothing that runs
+customer SQL. It logs in by client certificate on Kubernetes, has its
+search_path pinned to `pg_catalog`, and holds DML on those two tables only.
+
+Registration enforces this. If anything in the schema belongs to a role that
+is not a superuser, or the schema itself does, or any trigger sits on a table
+there, registration drops the schema with everything in it and recreates the
+platform's objects. It logs a WARNING when it does. A clean schema is left
+alone, so the scheduler's rows survive. On a project registered before
+EXC-623 the scheduler tables belonged to `excalibase_app`, so that rebuild
+drops pending scheduled tasks. Cron rows come back on each function's next
+deploy. An event trigger also refuses a non-superuser's `CREATE EXTENSION` /
+`ALTER EXTENSION` into `auth`, `excalibase` or `excalibase_*`. A trusted
+extension checks CREATE on the database, not on the schema, so a revoke alone
+would not stop it.
+
+Projects registered before EXC-623 are found by their missing
+`projects/{id}/credentials/excalibase_scheduler` record. Every 10 minutes the
+leading replica re-runs registration on each such ACTIVE Postgres project,
+adds the role's certificate login to the cluster's pg_hba (only when the
+cluster already admits platform roles by certificate), and then files the
+login. Filing comes last, so a project that was paused, busy or failing at one
+pass is retried at a later one. Look for `platform role reconcile:` in the log.
+
+The owner holds the database, so it can attach settings to it that would make
+that SQL fail: read-only transactions, a role to switch to on connect,
+timeouts, PL/pgSQL extra errors, and a preload library, which makes every new
+backend FATAL before it runs a line. The superuser's psql therefore pins all
+of those as connection startup options (including `local_preload_libraries`),
+checks it runs as the superuser itself in a writable transaction, and takes
+the schema back — ownership, CREATE revoked from every other role, all table
+and sequence grants revoked from `excalibase_app`, and the CREATE EXTENSION
+guard installed — in a first transaction of its own. Anything later that the
+owner can still make fail, such as a Postgres 16+ owner creating
+`excalibase_scheduler` itself, stops registration only after that lockdown and
+guard have landed. Default privileges another role set in the schema are
+cleared and do not trigger the rebuild.
+
+Those connection options also pin `local_preload_libraries` and
+`session_preload_libraries` empty, `password_encryption` to `scram-sha-256`,
+`default_tablespace` and `temp_tablespaces` empty, and, where the server has
+them, `scram_iterations` (16+) and `transaction_timeout` (17+). The version
+that gates the last two is read from the server with a first probe
+connection, not from any stored value.
+
+`lock_timeout` is finite. A customer or the owner can hold a lock that blocks
+the rebuild — on an excalibase object, on a dependent object in another
+schema, or on a catalog row the second script needs — so the first attempt
+times out, after which the reconcile terminates every client backend that is
+not a platform service and retries. A platform service is identified by its
+login role, one a customer can neither create nor assume (`auth_admin`,
+`cdc_watcher`, `excalibase_scheduler`, the DocumentDB roles, `streaming_replica`,
+`postgres`) plus any superuser; those are spared — but only while the platform
+holds the name. A service name some non-superuser holds ADMIN over (on 16+ an
+owner with CREATEROLE gets ADMIN on every role it creates, so this is how a
+pre-EXC-623 owner could squat `excalibase_scheduler`) is the squat guard's
+case: its backends are terminated like a customer's. The first script also
+reports such a squat with a WARNING, without aborting the lockdown; the second
+script still refuses on it. A lock timeout is recognised only by SQLSTATE
+55P03 after the ERROR prefix (psql runs with `VERBOSITY=verbose`). `excalibase_app` is not a
+service for this purpose — customer SQL runs as it — nor is the owner login,
+so both are terminated when they block the rebuild. The lockdown also takes
+USAGE on the excalibase schema's own types from PUBLIC, so a customer cannot
+type an object elsewhere on one and make it a new dependent.
 
 ## 7. Image upgrade
 

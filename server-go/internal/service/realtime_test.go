@@ -25,8 +25,8 @@ RESET ROLE;
 CREATE SCHEMA nosql AUTHORIZATION excalibase_app;
 SET ROLE excalibase_app;
 CREATE TABLE nosql.notes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), data JSONB);
-CREATE TABLE excalibase.jobs (id int PRIMARY KEY);
 RESET ROLE;
+CREATE TABLE excalibase.jobs (id int PRIMARY KEY);
 SET ROLE auth_admin;
 CREATE TABLE auth.users (id int PRIMARY KEY, password_hash text);
 `)

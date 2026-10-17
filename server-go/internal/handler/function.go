@@ -94,6 +94,10 @@ type FunctionHandler struct {
 	// schema is stored but never applied).
 	projectDBFn func(ctx context.Context, projectID string) (*sql.DB, error)
 
+	// schedulerDBFn resolves the pool the cron sync writes the excalibase
+	// schema's bookkeeping with: a login no customer SQL runs as (EXC-623).
+	schedulerDBFn func(ctx context.Context, projectID string) (*sql.DB, error)
+
 	// autoMigrate gates whether ApplySchema runs at deploy time. Default
 	// true; flip to false (EXCALIBASE_AUTO_MIGRATE=false) to defer migration
 	// to an explicit POST /api/projects/{projectId}/schema/apply call.
@@ -239,11 +243,17 @@ func (h *FunctionHandler) SetProjectDBFn(fn func(ctx context.Context, projectID 
 	h.projectDBFn = fn
 }
 
-// HasProjectDB reports whether a project-database resolver is wired. Boot
-// checks it: with none, deploy-time schema application and cron sync are
-// silently skipped and schema/apply answers 503.
+// SetSchedulerDBFn registers the resolver for the scheduler's own login,
+// which the deploy-time cron sync writes excalibase.excalibase_cron_jobs as.
+func (h *FunctionHandler) SetSchedulerDBFn(fn func(ctx context.Context, projectID string) (*sql.DB, error)) {
+	h.schedulerDBFn = fn
+}
+
+// HasProjectDB reports whether both project-database resolvers are wired.
+// Boot checks it: without them, deploy-time schema application and cron sync
+// are silently skipped and schema/apply answers 503.
 func (h *FunctionHandler) HasProjectDB() bool {
-	return h.projectDBFn != nil
+	return h.projectDBFn != nil && h.schedulerDBFn != nil
 }
 
 // AutoMigrates reports whether a deploy applies the bundle's declared

@@ -17,6 +17,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
@@ -26,10 +27,18 @@ import (
 
 const wiringProjectID = "proj_wiring"
 
-// startProjectPG runs a Postgres that stands in for one tenant's database
-// and returns a pool plus the credentials an operator would have filed in
-// vault for it.
-func startProjectPG(t *testing.T) (*sql.DB, map[string]string) {
+// Passwords the registration SQL gives the platform roles in these tests.
+const (
+	wiringAppPassword       = "wiring-app-pass"
+	wiringSchedulerPassword = "wiring-scheduler-pass"
+	wiringAuthPassword      = "wiring-auth-pass"
+)
+
+// startProjectPG runs a Postgres that stands in for one tenant's database,
+// registered with the platform's own role SQL. It returns a superuser pool
+// for seeding and asserting, and the credentials vault holds for the
+// excalibase_app, excalibase_scheduler and auth_admin logins.
+func startProjectPG(t *testing.T) (*sql.DB, map[string]map[string]string) {
 	t.Helper()
 	ctx := context.Background()
 	container, err := postgres.Run(ctx, "postgres:16-alpine",
@@ -54,10 +63,23 @@ func startProjectPG(t *testing.T) (*sql.DB, map[string]string) {
 	if err != nil {
 		t.Fatalf("port: %v", err)
 	}
-	creds := map[string]string{
-		"host": host, "port": port.Port(),
-		"username": "postgres", "password": "postgres", "database": "tenant",
+	login := func(user, password string) map[string]string {
+		return map[string]string{"host": host, "port": port.Port(), "username": user, "password": password, "database": "tenant"}
 	}
+	db := openWiringDB(t, login("postgres", "postgres"))
+	if _, err := db.ExecContext(ctx, service.BuildProjectRoleSQL(wiringAuthPassword, wiringAppPassword, "wiring-watcher-pass", "tenant", "cdc_watcher_pub")+
+		service.BuildSchedulerRoleSQL(wiringSchedulerPassword, "tenant")); err != nil {
+		t.Fatalf("register project roles: %v", err)
+	}
+	return db, map[string]map[string]string{
+		"excalibase_app":       login("excalibase_app", wiringAppPassword),
+		"excalibase_scheduler": login("excalibase_scheduler", wiringSchedulerPassword),
+		"auth_admin":           login("auth_admin", wiringAuthPassword),
+	}
+}
+
+func openWiringDB(t *testing.T, creds map[string]string) *sql.DB {
+	t.Helper()
 	dsn, err := projectdb.DSNFor(creds, projectdb.Overrides{SSLMode: "disable"})
 	if err != nil {
 		t.Fatalf("dsn: %v", err)
@@ -66,24 +88,32 @@ func startProjectPG(t *testing.T) (*sql.DB, map[string]string) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if err := db.PingContext(ctx); err != nil {
+	if err := db.PingContext(context.Background()); err != nil {
 		t.Fatalf("ping: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return db, creds
+	return db
+}
+
+// wiringVault files a project's logins the way registration does.
+func wiringVault(logins map[string]map[string]string, projectIDs ...string) *e2eFakeVault {
+	vault := &e2eFakeVault{data: map[string]map[string]string{}}
+	for _, projectID := range projectIDs {
+		for role, creds := range logins {
+			vault.data[fmt.Sprintf("projects/%s/credentials/%s", projectID, role)] = creds
+		}
+	}
+	return vault
 }
 
 // wiringOpener builds the production project-database opener over one
 // project whose credentials are in vault.
-func wiringOpener(t *testing.T, creds map[string]string, status string) *projectdb.Opener {
+func wiringOpener(t *testing.T, logins map[string]map[string]string, status string) *projectdb.Opener {
 	t.Helper()
 	instances := &e2eInstanceStore{insts: map[string]*domain.DatabaseInstance{
 		wiringProjectID: {ProjectID: wiringProjectID, OrgID: "default", Status: status},
 	}}
-	vault := &e2eFakeVault{data: map[string]map[string]string{
-		fmt.Sprintf("projects/%s/credentials/excalibase_app", wiringProjectID): creds,
-	}}
-	opener := projectdb.NewOpener(instances, vault, projectdb.Overrides{SSLMode: "disable"}, projectdb.PoolLimits{})
+	opener := projectdb.NewOpener(instances, wiringVault(logins, wiringProjectID), projectdb.Overrides{SSLMode: "disable"}, projectdb.PoolLimits{})
 	t.Cleanup(opener.Close)
 	return opener
 }
@@ -100,6 +130,7 @@ func deployHandler(t *testing.T, opener *projectdb.Opener, runtimeURL, status st
 	client := edgefn.NewRuntimeClient(runtimeURL, "runtime-shared")
 	h := NewFunctionHandler(store, nil, client, instances, nil, "")
 	h.SetProjectDBFn(opener.Open)
+	h.SetSchedulerDBFn(opener.OpenScheduler)
 	h.SetAutoMigrate(true)
 	return h
 }
@@ -116,7 +147,7 @@ func deployModule(t *testing.T, h *FunctionHandler, projectID, moduleName string
 	}
 }
 
-// With the resolver wired, a deploy that declares a table creates it and
+// With the resolvers wired, a deploy that declares a table creates it and
 // the cron sync reaches the project's reserved schema. Both were skipped in
 // silence while the production builder left the resolver nil.
 func TestDeploy_AppliesSchemaAndSyncsCronsThroughTheOpener(t *testing.T) {
@@ -163,14 +194,15 @@ export default defineSchema({
 		t.Error("the declared table was not created in the project database")
 	}
 
-	var cronTable bool
-	if err := db.QueryRow(
-		`SELECT to_regclass('excalibase.excalibase_cron_jobs') IS NOT NULL`,
-	).Scan(&cronTable); err != nil {
-		t.Fatalf("query cron table: %v", err)
+	// The deploy ran as the app role and the cron sync as the scheduler's
+	// login; neither left an object of its own in the reserved schema.
+	var appOwned int
+	if err := db.QueryRow(`SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'excalibase' AND pg_get_userbyid(c.relowner) <> 'postgres'`).Scan(&appOwned); err != nil {
+		t.Fatalf("query reserved schema: %v", err)
 	}
-	if !cronTable {
-		t.Error("the cron sync did not reach the project database")
+	if appOwned != 0 {
+		t.Errorf("%d relation(s) in the excalibase schema belong to a platform login", appOwned)
 	}
 }
 
@@ -179,9 +211,6 @@ export default defineSchema({
 // runtime through the production invoker.
 func TestScheduledTask_RunsThroughTheProductionInvoker(t *testing.T) {
 	db, creds := startProjectPG(t)
-	if err := scheduler.EnsureTables(context.Background(), db); err != nil {
-		t.Fatalf("ensure tables: %v", err)
-	}
 	opener := wiringOpener(t, creds, "ACTIVE")
 
 	var received []runtimeCall
@@ -199,7 +228,7 @@ func TestScheduledTask_RunsThroughTheProductionInvoker(t *testing.T) {
 
 	fanout := scheduler.NewFanout(scheduler.FanoutConfig{
 		Projects:   opener.ServableProjectIDs,
-		DB:         opener.Open,
+		DB:         opener.OpenScheduler,
 		Invoker:    h.SchedulerInvoker(),
 		Functions:  h.SchedulerFunctions(),
 		CronLeader: alwaysLeaderForTest{},
@@ -226,9 +255,6 @@ func TestScheduledTask_RunsThroughTheProductionInvoker(t *testing.T) {
 // and then dispatched by the next task sweep.
 func TestCronEntry_IsEnqueuedAndDispatched(t *testing.T) {
 	db, creds := startProjectPG(t)
-	if err := scheduler.EnsureTables(context.Background(), db); err != nil {
-		t.Fatalf("ensure tables: %v", err)
-	}
 	opener := wiringOpener(t, creds, "ACTIVE")
 
 	var received []runtimeCall
@@ -246,7 +272,7 @@ func TestCronEntry_IsEnqueuedAndDispatched(t *testing.T) {
 
 	fanout := scheduler.NewFanout(scheduler.FanoutConfig{
 		Projects:   opener.ServableProjectIDs,
-		DB:         opener.Open,
+		DB:         opener.OpenScheduler,
 		Invoker:    h.SchedulerInvoker(),
 		Functions:  h.SchedulerFunctions(),
 		CronLeader: alwaysLeaderForTest{},
@@ -283,9 +309,6 @@ func TestCronEntry_IsEnqueuedAndDispatched(t *testing.T) {
 // dispatched and the row is closed as skipped rather than retried.
 func TestScheduledTask_NotServableProjectIsSkipped(t *testing.T) {
 	db, creds := startProjectPG(t)
-	if err := scheduler.EnsureTables(context.Background(), db); err != nil {
-		t.Fatalf("ensure tables: %v", err)
-	}
 	opener := wiringOpener(t, creds, string(domain.StatusDeleting))
 
 	var received []runtimeCall
@@ -349,20 +372,13 @@ func taskStatus(t *testing.T, db *sql.DB, id string) string {
 // failed with the platform's own reason.
 func TestScheduledTask_RowNamingAnotherProjectNeverReachesThatProject(t *testing.T) {
 	db, creds := startProjectPG(t)
-	if err := scheduler.EnsureTables(context.Background(), db); err != nil {
-		t.Fatalf("ensure tables: %v", err)
-	}
 
 	const victimID = "proj_victim"
 	instances := &e2eInstanceStore{insts: map[string]*domain.DatabaseInstance{
 		wiringProjectID: {ProjectID: wiringProjectID, OrgID: "default", Status: "ACTIVE"},
 		victimID:        {ProjectID: victimID, OrgID: "default", Status: "ACTIVE"},
 	}}
-	vault := &e2eFakeVault{data: map[string]map[string]string{
-		fmt.Sprintf("projects/%s/credentials/excalibase_app", wiringProjectID): creds,
-		fmt.Sprintf("projects/%s/credentials/excalibase_app", victimID):        creds,
-	}}
-	opener := projectdb.NewOpener(instances, vault, projectdb.Overrides{SSLMode: "disable"}, projectdb.PoolLimits{})
+	opener := projectdb.NewOpener(instances, wiringVault(creds, wiringProjectID, victimID), projectdb.Overrides{SSLMode: "disable"}, projectdb.PoolLimits{})
 	defer opener.Close()
 
 	var received []runtimeCall
@@ -371,6 +387,7 @@ func TestScheduledTask_RowNamingAnotherProjectNeverReachesThatProject(t *testing
 	client := edgefn.NewRuntimeClient(runtime.URL, "runtime-shared")
 	h := NewFunctionHandler(store, nil, client, instances, nil, "")
 	h.SetProjectDBFn(opener.Open)
+	h.SetSchedulerDBFn(opener.OpenScheduler)
 	// The victim really does have this function deployed — the refusal must
 	// not depend on the module being unknown.
 	deployModule(t, h, victimID, "jobs")
@@ -388,7 +405,7 @@ func TestScheduledTask_RowNamingAnotherProjectNeverReachesThatProject(t *testing
 		// The sweep only ever hands the worker the project whose database it
 		// opened; here that is the attacker's project.
 		Projects:   func(context.Context) ([]string, error) { return []string{wiringProjectID}, nil },
-		DB:         opener.Open,
+		DB:         opener.OpenScheduler,
 		Invoker:    h.SchedulerInvoker(),
 		Functions:  h.SchedulerFunctions(),
 		CronLeader: alwaysLeaderForTest{},
@@ -409,9 +426,6 @@ func TestScheduledTask_RowNamingAnotherProjectNeverReachesThatProject(t *testing
 // module name is tenant input, checked against the platform's own registry.
 func TestScheduledTask_UndeployedModuleIsRefused(t *testing.T) {
 	db, creds := startProjectPG(t)
-	if err := scheduler.EnsureTables(context.Background(), db); err != nil {
-		t.Fatalf("ensure tables: %v", err)
-	}
 	opener := wiringOpener(t, creds, "ACTIVE")
 
 	var received []runtimeCall
@@ -428,7 +442,7 @@ func TestScheduledTask_UndeployedModuleIsRefused(t *testing.T) {
 
 	fanout := scheduler.NewFanout(scheduler.FanoutConfig{
 		Projects:   opener.ServableProjectIDs,
-		DB:         opener.Open,
+		DB:         opener.OpenScheduler,
 		Invoker:    h.SchedulerInvoker(),
 		Functions:  h.SchedulerFunctions(),
 		CronLeader: alwaysLeaderForTest{},
@@ -441,5 +455,34 @@ func TestScheduledTask_UndeployedModuleIsRefused(t *testing.T) {
 	}
 	if got := taskStatus(t, db, "task_ghost"); got != "failed" {
 		t.Errorf("task status: got %q, want failed", got)
+	}
+}
+
+// A deploy that declares a schedule syncs it through the scheduler's own
+// login, which is the only login allowed to write the cron table (EXC-623).
+func TestDeploy_CronSyncWritesAsTheSchedulerLogin(t *testing.T) {
+	db, creds := startProjectPG(t)
+	opener := wiringOpener(t, creds, "ACTIVE")
+	var received []runtimeCall
+	runtime := fakeRuntime(t, http.StatusOK, &received)
+	h := deployHandler(t, opener, runtime.URL, "ACTIVE")
+
+	r := chi.NewRouter()
+	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) { r.Post("/", h.Create) })
+	w := deployFn(t, r, wiringProjectID, "nightly", cronBundle(`
+{ name: "nightly-sweep",
+  schedule: { kind: "daily", hourUTC: 3, minuteUTC: 0 },
+  fnRef: { moduleName: "nightly", exportName: "default" },
+  args: {} }`))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("deploy: got %d, body %s", w.Code, w.Body.String())
+	}
+	if rows := listCronRows(t, db, wiringProjectID); len(rows) != 1 || rows[0]["name"] != "nightly-sweep" {
+		t.Fatalf("cron rows = %v", rows)
+	}
+
+	app := openWiringDB(t, creds["excalibase_app"])
+	if _, err := app.Exec(`DELETE FROM excalibase.excalibase_cron_jobs`); err == nil {
+		t.Fatal("the app role, which customer SQL runs as, deleted the platform's cron rows")
 	}
 }

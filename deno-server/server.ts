@@ -126,6 +126,11 @@ interface ActiveTxn {
    * own conflict since they share the parent's connection.
    */
   conflict?: { sqlState: string; message: string };
+  /**
+   * ctx.scheduler calls a mutation made, sent to provisioning only once its
+   * transaction commits, so a rolled-back mutation schedules nothing.
+   */
+  schedules?: SchedulerOp[];
 }
 
 /**
@@ -268,6 +273,21 @@ function markConflict(
     }
     cursor = entry.parentRefId;
   }
+}
+
+/**
+ * owningTxn returns the entry that holds the open transaction a ref runs in,
+ * walking alias entries up to their owner, or null outside a transaction.
+ */
+function owningTxn(txnRefId: string | undefined | null): ActiveTxn | null {
+  let cursor: string | undefined = txnRefId ?? undefined;
+  for (let i = 0; i < 16 && cursor; i++) {
+    const entry = txnMap.get(cursor);
+    if (!entry) return null;
+    if (entry.owned) return entry.sql ? entry : null;
+    cursor = entry.parentRefId;
+  }
+  return null;
 }
 
 interface DeployRequest {
@@ -1841,71 +1861,141 @@ interface SchedulerMessage {
 }
 
 /**
- * dispatchScheduler executes one `ctx.scheduler.*` op against the supplied
- * Sql handle. Resolves with the result that the worker's promise should
- * receive (a `ScheduledId` for `runAfter`/`runAt`, `null` for `cancel`).
- *
- * Phase 8.5: `sql` is the active mutation transaction handle when the
- * caller is a mutation (sqlFor(msg.txnRefId)) or the singleton pool
- * otherwise. The caller passes the right handle so this function stays
- * pool-agnostic and we can reuse the same SQL composition for both.
+ * SchedulerOp is one ctx.scheduler call as provisioning records it. The
+ * runtime never writes the scheduler's tables itself: they belong to the
+ * platform, and the project's own login has no write path into them
+ * (EXC-623). Provisioning writes them as the scheduler's login.
+ */
+type SchedulerOp =
+  | {
+    op: "schedule";
+    id: string;
+    moduleName: string;
+    exportName: string;
+    args: unknown;
+    scheduledForMs: number;
+  }
+  | { op: "cancel"; id: string };
+
+/**
+ * dispatchScheduler turns one `ctx.scheduler.*` call into a SchedulerOp and
+ * resolves with what the worker's promise receives (a `ScheduledId` for
+ * `runAfter`/`runAt`, `null` for `cancel`). Inside a mutation the op waits
+ * for the transaction to commit; anywhere else it is sent at once, so an
+ * action's schedule stands whatever the action does next (Convex parity).
  */
 async function dispatchScheduler(
   callerRuntimeID: string,
   msg: SchedulerMessage,
-  sql: Sql,
+  txnRefId: string | undefined,
 ): Promise<unknown> {
   const sep = callerRuntimeID.indexOf("__");
   if (sep < 0) {
     throw new Error("scheduler: caller runtime id missing project separator");
   }
   const projectID = callerRuntimeID.slice(0, sep);
-  if (msg.op === "runAfter") {
-    const delayMs = msg.payload.delayMs ?? 0;
-    const ref = msg.payload.ref;
-    if (!ref) throw new Error("scheduler.runAfter: missing ref");
-    const args = msg.payload.args ?? {};
-    const id = newId();
-    const scheduledForMs = Date.now() + Math.max(0, delayMs);
-    await sql`
-      INSERT INTO excalibase.excalibase_scheduled_functions
-        (id, project_id, module_name, export_name, args, scheduled_for, status)
-      VALUES
-        (${id}, ${projectID}, ${ref.moduleName}, ${ref.exportName},
-         ${sql.json(args as Record<string, unknown>)},
-         to_timestamp(${scheduledForMs / 1000}), 'pending')
-    `;
-    return id;
+  const op = schedulerOpFor(msg);
+  const txn = owningTxn(txnRefId);
+  if (txn) {
+    txn.schedules = [...(txn.schedules ?? []), op];
+  } else {
+    await sendSchedulerOps(projectID, [op]);
   }
-  if (msg.op === "runAt") {
-    const ts = msg.payload.timestamp ?? Date.now();
-    const ref = msg.payload.ref;
-    if (!ref) throw new Error("scheduler.runAt: missing ref");
-    const args = msg.payload.args ?? {};
-    const id = newId();
-    await sql`
-      INSERT INTO excalibase.excalibase_scheduled_functions
-        (id, project_id, module_name, export_name, args, scheduled_for, status)
-      VALUES
-        (${id}, ${projectID}, ${ref.moduleName}, ${ref.exportName},
-         ${sql.json(args as Record<string, unknown>)},
-         to_timestamp(${ts / 1000}), 'pending')
-    `;
-    return id;
-  }
+  return op.op === "schedule" ? op.id : null;
+}
+
+function schedulerOpFor(msg: SchedulerMessage): SchedulerOp {
   if (msg.op === "cancel") {
     const id = msg.payload.id;
     if (typeof id !== "string" || id.length === 0) {
       throw new Error("scheduler.cancel: id required");
     }
-    await sql`
-      UPDATE excalibase.excalibase_scheduled_functions
-         SET status = 'cancelled'
-       WHERE id = ${id} AND status = 'pending'
-    `;
-    return null;
+    return { op: "cancel", id };
   }
-  throw new Error(`scheduler: unknown op ${msg.op}`);
+  if (msg.op !== "runAfter" && msg.op !== "runAt") {
+    throw new Error(`scheduler: unknown op ${msg.op}`);
+  }
+  const ref = msg.payload.ref;
+  if (!ref || typeof ref.moduleName !== "string" || typeof ref.exportName !== "string") {
+    throw new Error(`scheduler.${msg.op}: missing ref`);
+  }
+  const scheduledForMs = msg.op === "runAfter"
+    ? Date.now() + Math.max(0, Number(msg.payload.delayMs ?? 0))
+    : Number(msg.payload.timestamp ?? Date.now());
+  if (!Number.isFinite(scheduledForMs)) {
+    throw new TypeError(`scheduler.${msg.op}: time is not a number`);
+  }
+  return {
+    op: "schedule",
+    id: newId(),
+    moduleName: ref.moduleName,
+    exportName: ref.exportName,
+    args: msg.payload.args ?? {},
+    scheduledForMs: Math.trunc(scheduledForMs),
+  };
+}
+
+/**
+ * callProvisioning performs a fetch to the platform and, on a network-level
+ * failure, logs the detail (which can name the internal endpoint) and throws
+ * a fixed message, so customer function code never receives the URL
+ * (EXC-623). HTTP error statuses are left for the caller to handle.
+ */
+async function callProvisioning(label: string, url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    console.warn(`[runtime] ${label}: could not reach the platform:`, err instanceof Error ? err.message : err);
+    throw new Error(`${label}: the platform could not be reached`);
+  }
+}
+
+/**
+ * sendSchedulerOps records ops through provisioning's
+ * /internal/runtime/projects/{projectId}/scheduler route, in order and in
+ * one transaction there. Auth is this project's runtime token.
+ */
+async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<void> {
+  if (PROVISIONING_URL === "") {
+    throw new Error("ctx.scheduler: EXCALIBASE_PROVISIONING_URL is not configured");
+  }
+  if (!projectId) {
+    throw new Error("ctx.scheduler: projectId missing from invocation context");
+  }
+  const url = `${PROVISIONING_URL.replace(/\/$/, "")}/internal/runtime/projects/${encodeURIComponent(projectId)}/scheduler`;
+  const res = await callProvisioning("ctx.scheduler", url, {
+    method: "POST",
+    headers: {
+      "X-Excalibase-Runtime-Token": RUNTIME_SECRET,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ops }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    console.warn(`[runtime] ctx.scheduler: provisioning returned ${res.status}: ${text.slice(0, 200)}`);
+    await res.body?.cancel();
+    throw new Error(`ctx.scheduler: the platform rejected the request (status ${res.status})`);
+  }
+  await res.body?.cancel();
+}
+
+/**
+ * flushCommittedSchedules sends the ctx.scheduler calls of a mutation that
+ * just committed. It returns why they were not recorded, or null.
+ */
+async function flushCommittedSchedules(id: string, entry: ActiveTxn): Promise<boolean> {
+  if (!entry.schedules || entry.schedules.length === 0) return true;
+  try {
+    await sendSchedulerOps(entry.projectId, entry.schedules);
+    return true;
+  } catch (scheduleErr) {
+    // The detail can name the internal provisioning endpoint, so it stays in
+    // the server log; the caller gets only the fixed message below.
+    const reason = scheduleErr instanceof Error ? scheduleErr.message : String(scheduleErr);
+    console.warn(`[runtime] ${id} committed but its scheduled functions were not recorded:`, reason);
+    return false;
+  }
 }
 
 class FunctionRuntime {
@@ -2188,27 +2278,16 @@ class FunctionRuntime {
       if (msg.type === "scheduler") {
         // Phase 8: ctx.scheduler.{runAfter,runAt,cancel}.
         //
-        // Phase 8.5: route the INSERT/UPDATE through the active mutation
-        // txn when the caller is a mutation (txnMap has an entry for the
-        // worker's txnRefId). Action handlers carry no txnRefId, so they
-        // route through the pool and commit independently — Convex parity.
+        // A mutation's calls wait for its commit; an action's are sent to
+        // provisioning at once and stand on their own — Convex parity.
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
         void (async () => {
           let result: { ok: true; data: unknown } | { ok: false; error: string };
           try {
-            const sql = sqlFor(msg.txnRefId as string | undefined);
-            const data = await dispatchScheduler(meta.id, msg, sql);
+            const data = await dispatchScheduler(meta.id, msg, msg.txnRefId as string | undefined);
             result = { ok: true, data };
           } catch (err) {
-            // Phase 9a: scheduler INSERTs ride the mutation txn under
-            // SERIALIZABLE, so SSI can raise 40001 here too. Mark the
-            // conflict so finalize() will retry, just like db ops.
-            const code = (err as { code?: unknown }).code;
-            if (typeof code === "string" && RETRYABLE_SQLSTATES.has(code)) {
-              markConflict(msg.txnRefId as string | undefined, code,
-                err instanceof Error ? err.message : String(err));
-            }
             result = {
               ok: false,
               error: String((err instanceof Error ? err.message : err) ?? "scheduler error"),
@@ -2460,6 +2539,10 @@ class FunctionRuntime {
     // allocated (e.g. v1 fetch handlers).
     let capturedReads: Set<string> = new Set();
     let capturedWrites: Set<string> = new Set();
+    // Set when a mutation committed but provisioning refused or missed the
+    // ctx.scheduler calls it made; the caller gets an error, not a success
+    // that scheduled nothing.
+    let scheduleFailed = false;
     // finalize closes the txn. On success path it tries to COMMIT and
     // surfaces any retryable conflict back to the retry loop via a
     // returned sentinel. On error path it rolls back. Either way, the
@@ -2496,7 +2579,6 @@ class FunctionRuntime {
       if (settled === "success") {
         try {
           await commitTxn(entry.sql);
-          return null;
         } catch (commitErr) {
           if (commitErr instanceof MutationConflict) {
             // COMMIT itself raised 40001/40P01 — classic SSI surface.
@@ -2506,6 +2588,8 @@ class FunctionRuntime {
           console.warn(`[runtime] commit failed for ${id}:`, commitErr);
           return null;
         }
+        scheduleFailed = !(await flushCommittedSchedules(id, entry));
+        return null;
       }
       await rollbackTxn(entry.sql);
       return null;
@@ -2552,6 +2636,18 @@ class FunctionRuntime {
       } catch (_) { /* non-JSON body — treat as success */ }
     }
     const conflict = await finalize(isError ? "error" : "success");
+    if (scheduleFailed) {
+      return {
+        ...res,
+        status: 500,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          error: "the mutation committed but its scheduled functions were not recorded",
+        }),
+        __reactiveReads: capturedReads,
+        __reactiveWrites: capturedWrites,
+      };
+    }
     if (conflict) {
       // Encode the conflict into the InvokeResponse so the retry loop
       // upstairs can pick it up without changing the public shape on
@@ -2836,7 +2932,7 @@ async function dispatchStorage(
       if (contentType === "" || size <= 0) {
         throw new Error("generateUploadUrl: contentType and size are required");
       }
-      const res = await fetch(`${base}/upload-url`, {
+      const res = await callProvisioning("ctx.storage.generateUploadUrl", `${base}/upload-url`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ contentType, size }),
@@ -2855,7 +2951,7 @@ async function dispatchStorage(
       if (typeof uploadId !== "string" || uploadId.length === 0) {
         throw new Error("completeUpload: uploadId required");
       }
-      const res = await fetch(`${base}/confirm-upload`, {
+      const res = await callProvisioning("ctx.storage.completeUpload", `${base}/confirm-upload`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ storageId, uploadId }),
@@ -2868,7 +2964,7 @@ async function dispatchStorage(
       return storageId;
     }
     case "getUrl": {
-      const res = await fetch(`${base}/download-url`, {
+      const res = await callProvisioning("ctx.storage.getUrl", `${base}/download-url`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ storageId }),
@@ -2888,7 +2984,7 @@ async function dispatchStorage(
       // Two-step: ask provisioning for a signed GET URL, then fetch it.
       const signed = await dispatchStorage(projectId, { op: "getUrl", payload: { storageId } }) as string | null;
       if (signed === null) return null;
-      const r = await fetch(signed);
+      const r = await callProvisioning("ctx.storage.get", signed);
       if (r.status === 404) {
         await r.body?.cancel();
         return null;
@@ -2905,7 +3001,7 @@ async function dispatchStorage(
       if (typeof storageId !== "string" || storageId.length === 0) {
         throw new Error("getMetadata: storageId required");
       }
-      const res = await fetch(`${base}/metadata/${encodeURIComponent(storageId)}`, {
+      const res = await callProvisioning("ctx.storage.getMetadata", `${base}/metadata/${encodeURIComponent(storageId)}`, {
         headers: tokenHeaders,
       });
       if (res.status === 404) {
@@ -2925,7 +3021,7 @@ async function dispatchStorage(
         throw new Error("store: payload.bytes (Uint8Array) required");
       }
       // 1. Mint upload-url + storageId.
-      const mint = await fetch(`${base}/upload-url`, {
+      const mint = await callProvisioning("ctx.storage.store", `${base}/upload-url`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ contentType, size: bytes.byteLength }),
@@ -2941,13 +3037,13 @@ async function dispatchStorage(
       // 2. PUT the bytes to the signed URL. The signature covers both
       //    headers, so they must be exactly what was declared at mint time —
       //    the same type, and the same number of bytes.
-      const put = await fetch(mintBody.url, {
+      const put = await callProvisioning("ctx.storage.store", mintBody.url, {
         method: "PUT",
         headers: {
           "Content-Type": contentType,
           "Content-Length": String(bytes.byteLength),
         },
-        body: bytes,
+        body: bytes as BodyInit,
       });
       if (!put.ok) {
         await put.body?.cancel();
@@ -2955,7 +3051,7 @@ async function dispatchStorage(
       }
       await put.body?.cancel();
       // 3. Confirm.
-      const confirm = await fetch(`${base}/confirm-upload`, {
+      const confirm = await callProvisioning("ctx.storage.store", `${base}/confirm-upload`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({

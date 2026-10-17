@@ -148,3 +148,52 @@ func ClusterRequiresTLS(cluster *unstructured.Unstructured) bool {
 	}
 	return networkLines > 0
 }
+
+// EnsurePlatformCertLogins rewrites a cluster's pg_hba so every platform role
+// has its certificate login and rejects, in the order a new cluster gets them.
+// A cluster rendered before a platform role existed (EXC-623) gains its lines;
+// one that already has them, or that predates certificate logins altogether,
+// is left as it is and reported unchanged.
+func EnsurePlatformCertLogins(cluster *unstructured.Unstructured) (bool, error) {
+	lines, found, err := unstructured.NestedStringSlice(cluster.Object, "spec", "postgresql", "pg_hba")
+	if err != nil {
+		return false, err
+	}
+	if !found || len(lines) == 0 {
+		return false, ErrClusterHasNoHBA
+	}
+	block := platformCertLogins()
+	managed := make(map[string]bool, len(block))
+	for _, line := range block {
+		managed[line.(string)] = true
+	}
+	rewritten := make([]interface{}, 0, len(lines)+len(block))
+	insertAt := -1
+	for _, line := range lines {
+		if managed[line] {
+			if insertAt < 0 {
+				insertAt = len(rewritten)
+			}
+			continue
+		}
+		rewritten = append(rewritten, line)
+	}
+	if insertAt < 0 {
+		// No platform role logs in by certificate here yet; adding the rejects
+		// would lock out logins whose records carry no certificate.
+		return false, nil
+	}
+	rewritten = append(rewritten[:insertAt], append(block, rewritten[insertAt:]...)...)
+	if slices.Equal(lines, toStrings(rewritten)) {
+		return false, nil
+	}
+	return true, unstructured.SetNestedSlice(cluster.Object, rewritten, "spec", "postgresql", "pg_hba")
+}
+
+func toStrings(values []interface{}) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, value.(string))
+	}
+	return out
+}

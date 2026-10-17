@@ -169,6 +169,7 @@ var runtimeRows = []Row{
 
 	{Methods: post, Pattern: "/internal/runtime/functions/{fnId}/metadata", Auth: AuthRuntimeToken, Owner: OwnerRuntimeSecret, Note: "the project is named in the BODY, not the path, and the token must match that project's derived secret"},
 	{Methods: post, Pattern: "/internal/invoke/{projectId}/{fnId}", Auth: AuthRuntimeToken, Param: ParamProject, Owner: OwnerRuntimeSecret},
+	{Methods: post, Pattern: "/internal/runtime/projects/{projectId}/scheduler", Auth: AuthRuntimeToken, Param: ParamProject, Owner: OwnerRuntimeSecret, Note: "ctx.scheduler; written as the scheduler login, never the project's own"},
 	{Methods: post, Pattern: "/internal/storage/{projectId}/upload-url", Auth: AuthRuntimeToken, Param: ParamProject, Owner: OwnerRuntimeSecret},
 	{Methods: post, Pattern: "/internal/storage/{projectId}/confirm-upload", Auth: AuthRuntimeToken, Param: ParamProject, Owner: OwnerRuntimeSecret},
 	{Methods: post, Pattern: "/internal/storage/{projectId}/download-url", Auth: AuthRuntimeToken, Param: ParamProject, Owner: OwnerRuntimeSecret},

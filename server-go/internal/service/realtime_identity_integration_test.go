@@ -100,6 +100,9 @@ func (c *realtimeIdentityCase) disablingRestoresDefault(t *testing.T) {
 
 func (c *realtimeIdentityCase) plantedRealtimeRoutine(t *testing.T) {
 	c.pg.psql(t, "DROP FUNCTION excalibase.set_realtime_table(text, text, boolean)")
+	mustFail(t, c.app, "CREATE PROCEDURE excalibase.set_realtime_table(text, text, boolean) LANGUAGE sql AS $$ SELECT 1 $$", "permission denied")
+	// What excalibase_app could do before EXC-623.
+	c.pg.psql(t, "GRANT CREATE ON SCHEMA excalibase TO excalibase_app")
 	mustExec(t, c.app, "CREATE PROCEDURE excalibase.set_realtime_table(text, text, boolean) LANGUAGE sql AS $$ SELECT 1 $$")
 	restore := c.spec
 	restore.resetPasswords = true

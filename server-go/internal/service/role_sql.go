@@ -48,11 +48,163 @@ func alterRolePasswordSQL(role, password string) string {
 		sqlTextLiteral(role), sqlTextLiteral(password))
 }
 
+// reservedSchemaRebuildSQL drops the excalibase schema when anything in it, or
+// the schema itself, belongs to a role that is not a superuser. Before EXC-623
+// excalibase_app could create there, and an object it planted (a SECURITY
+// DEFINER function, a trigger on a table it owned, an overload) would outlive
+// a revoke. The rest of the registration SQL recreates every platform object,
+// so a clean schema is never dropped and its scheduler rows stay.
+//
+// A table or other object the drop takes with it is lost, rows included: on a
+// project registered before EXC-623 that is the scheduler's tables, which
+// excalibase_app owned, so pending tasks go and cron rows come back on the
+// function's next deploy. Copying the rows out first would read tables the
+// app role shaped, as the superuser. No project runs on that state.
+//
+// Default privileges a role set in the schema are not objects in it and do not
+// count: the lockdown clears them instead of costing the scheduler its rows.
+const reservedSchemaRebuildSQL = `
+DO $excalibase_reserved_rebuild$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner
+    WHERE n.nspname = 'excalibase' AND NOT r.rolsuper
+  ) OR EXISTS (
+    SELECT 1 FROM pg_namespace n
+    JOIN pg_depend d ON d.refclassid = 'pg_catalog.pg_namespace'::regclass AND d.refobjid = n.oid
+    JOIN pg_shdepend s ON s.classid = d.classid AND s.objid = d.objid AND s.deptype = 'o'
+      AND s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+    JOIN pg_roles r ON r.oid = s.refobjid
+    WHERE n.nspname = 'excalibase' AND NOT r.rolsuper
+      AND d.classid <> 'pg_catalog.pg_default_acl'::regclass
+  ) OR EXISTS (
+    SELECT 1 FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'excalibase' AND NOT t.tgisinternal
+  ) THEN
+    RAISE WARNING 'the excalibase schema held objects a non-superuser owned; it is dropped and rebuilt';
+    DROP SCHEMA excalibase CASCADE;
+  END IF;
+END
+$excalibase_reserved_rebuild$;
+`
+
+// reservedSchemaLockdownSQL leaves the excalibase schema the superuser's: it
+// takes the schema, takes CREATE from every other role and leaves the app role
+// USAGE and nothing on its tables. It stands alone so the reconcile can apply
+// it before anything a customer can make fail (EXC-623). appRoleName is the
+// bare role name; the SQL quotes it.
+func reservedSchemaLockdownSQL(appRoleName string) string {
+	return strings.ReplaceAll(reservedSchemaLockdownTemplate, "{{APP}}", sqlTextLiteral(appRoleName))
+}
+
+const reservedSchemaLockdownTemplate = `
+-- Reserved schema for platform bookkeeping, outside public, which the
+-- generated APIs expose. The superuser alone creates and owns what is in it
+-- (EXC-623): customer SQL runs as excalibase_app, which only reaches the
+-- guarded functions here, so no role but the superuser may CREATE. Default
+-- privileges another role set in the schema are cleared: they could only
+-- apply to objects that role can no longer create there.
+CREATE SCHEMA IF NOT EXISTS excalibase;
+ALTER SCHEMA excalibase OWNER TO CURRENT_USER;
+DO $excalibase_reserved_create$
+DECLARE
+  grantee text;
+  acl record;
+BEGIN
+  FOR grantee IN
+    SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END
+    FROM pg_namespace n
+    CROSS JOIN LATERAL aclexplode(n.nspacl) a
+    LEFT JOIN pg_roles r ON r.oid = a.grantee
+    WHERE n.nspname = 'excalibase' AND a.privilege_type = 'CREATE' AND a.grantee <> n.nspowner
+  LOOP
+    EXECUTE 'REVOKE CREATE ON SCHEMA excalibase FROM ' || grantee || ' CASCADE';
+  END LOOP;
+  FOR acl IN
+    SELECT DISTINCT quote_ident(owner.rolname) AS owner_name,
+      CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES'
+        WHEN 'f' THEN 'FUNCTIONS' WHEN 'T' THEN 'TYPES' END AS kind,
+      CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(g.rolname) END AS grantee_name
+    FROM pg_default_acl d
+    JOIN pg_namespace n ON n.oid = d.defaclnamespace
+    JOIN pg_roles owner ON owner.oid = d.defaclrole
+    CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+    LEFT JOIN pg_roles g ON g.oid = a.grantee
+    WHERE n.nspname = 'excalibase' AND NOT owner.rolsuper AND d.defaclobjtype IN ('r', 'S', 'f', 'T')
+  LOOP
+    EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE ' || acl.owner_name || ' IN SCHEMA excalibase REVOKE ALL ON '
+      || acl.kind || ' FROM ' || acl.grantee_name || ' CASCADE';
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {{APP}}) THEN
+    EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA excalibase FROM %I', {{APP}});
+    EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA excalibase FROM %I', {{APP}});
+    EXECUTE format('GRANT USAGE ON SCHEMA excalibase TO %I', {{APP}});
+  ELSE
+    RAISE NOTICE 'excalibase_app does not exist yet; registration grants it USAGE';
+  END IF;
+  -- Take USAGE on the schema's own types from PUBLIC so no customer can type
+  -- an object elsewhere on one, which would make that object a dependent the
+  -- next rebuild must lock. DML on the platform tables does not need it.
+  FOR acl IN
+    SELECT quote_ident(t.typname) AS name
+    FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'excalibase' AND t.typtype IN ('c', 'e', 'd', 'r')
+      AND has_type_privilege('public', t.oid, 'USAGE')
+  LOOP
+    EXECUTE 'REVOKE USAGE ON TYPE excalibase.' || acl.name || ' FROM PUBLIC';
+  END LOOP;
+END
+$excalibase_reserved_create$;
+`
+
+// reservedSchemaGuardSQL refuses a non-superuser's CREATE EXTENSION or ALTER
+// EXTENSION that puts anything in a reserved schema. Creating a trusted
+// extension checks CREATE on the database, not on the schema it names, and
+// its script runs as the superuser, so a revoke alone does not keep
+// excalibase_app from installing one into excalibase or auth.
+const reservedSchemaGuardSQL = `
+DROP EVENT TRIGGER IF EXISTS excalibase_guard_reserved_schemas;
+DROP ROUTINE IF EXISTS excalibase.guard_reserved_schemas();
+CREATE FUNCTION excalibase.guard_reserved_schemas()
+RETURNS event_trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+  placed text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_user AND rolsuper) THEN
+    RETURN;
+  END IF;
+  SELECT n.nspname INTO placed
+  FROM pg_event_trigger_ddl_commands() d
+  LEFT JOIN pg_extension e ON d.classid = 'pg_catalog.pg_extension'::regclass AND e.oid = d.objid
+  JOIN pg_namespace n ON n.nspname = d.schema_name OR n.oid = e.extnamespace
+  WHERE n.nspname IN ('auth', 'excalibase') OR starts_with(n.nspname, 'excalibase_')
+  LIMIT 1;
+  IF placed IS NOT NULL THEN
+    RAISE EXCEPTION 'permission denied for schema %', placed USING ERRCODE = 'insufficient_privilege';
+  END IF;
+END
+$fn$;
+ALTER FUNCTION excalibase.guard_reserved_schemas() OWNER TO CURRENT_USER;
+REVOKE ALL ON FUNCTION excalibase.guard_reserved_schemas() FROM PUBLIC;
+CREATE EVENT TRIGGER excalibase_guard_reserved_schemas ON ddl_command_end
+  WHEN TAG IN ('CREATE EXTENSION', 'ALTER EXTENSION')
+  EXECUTE FUNCTION excalibase.guard_reserved_schemas();
+`
+
 // BuildProjectRoleSQL produces the role-creation SQL run as the postgres
 // superuser at provisioning time. Output:
 //
 //   - auth_admin   — owns the auth schema (used by excalibase-auth)
 //   - excalibase_app — DML on public, CREATE on the database, read-only on auth. NO REPLICATION.
+//     Customer-written SQL runs as this role, so it holds no write, CREATE or
+//     ownership in the excalibase schema (EXC-623); it only calls the guarded
+//     functions there.
 //   - cdc_watcher  — REPLICATION attribute, used by the watcher daemon
 //     to consume the logical slot. Writes only its own excalibase_cdc schema.
 //   - empty publication, owned by the superuser. excalibase_app changes its
@@ -77,7 +229,7 @@ func BuildProjectRoleSQL(authPass, appPass, watcherPass, dbName, publicationName
 	safeWatcherPass := sqlTextLiteral(watcherPass)
 	dbIdent := schema.QuoteIdent(dbName)
 
-	return fmt.Sprintf(`
+	return reservedSchemaRebuildSQL + fmt.Sprintf(`
 CREATE SCHEMA IF NOT EXISTS auth;
 
 DO $$ BEGIN
@@ -104,18 +256,11 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %s;
 GRANT USAGE ON SCHEMA auth TO %s;
 GRANT SELECT ON ALL TABLES IN SCHEMA auth TO %s;
 ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
+-- The auth service creates its tables as auth_admin after registration.
+ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
 
--- Reserved schema for platform bookkeeping (scheduler and cron tables). It is
--- deliberately outside public, which the generated APIs expose. excalibase_app
--- needs CREATE here because it both applies the table DDL and moves the legacy
--- public tables in with ALTER TABLE ... SET SCHEMA, which requires CREATE on
--- the destination. Owning what it creates also means no default-privilege
--- grant is required for it to read its own tables afterwards.
-CREATE SCHEMA IF NOT EXISTS excalibase;
-GRANT USAGE, CREATE ON SCHEMA excalibase TO %s;
-GRANT ALL ON ALL TABLES IN SCHEMA excalibase TO %s;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA excalibase TO %s;
 
+%s
 -- cdc_watcher: dedicated role with REPLICATION attribute used ONLY by the
 -- watcher daemon to consume the logical slot. No DML grants. Separating
 -- this from excalibase_app means a leaked excalibase_app credential cannot
@@ -197,12 +342,13 @@ GRANT EXECUTE ON FUNCTION excalibase.set_realtime_table(text, text, boolean) TO 
 		dbIdent, appRole, // GRANT CREATE ON DATABASE
 		appRole, appRole, appRole, appRole, appRole, // GRANT public
 		appRole, appRole, appRole, // GRANT auth read
-		appRole, appRole, appRole, // GRANT reserved excalibase schema
-		watcherRole, safeWatcherPass, // cdc_watcher DO block
+		authRole, appRole, // auth_admin's tables readable
+		reservedSchemaLockdownSQL(roleApp), // reserved excalibase schema: USAGE only
+		watcherRole, safeWatcherPass,       // cdc_watcher DO block
 		watcherRole, watcherRole, dbIdent, // cdc_watcher registry schema + search_path
 		pubName, pubName, // pubname check + CREATE PUBLICATION
 		pubIdent,                             // ALTER PUBLICATION ... OWNER TO
 		pubName, realtimeUserSchemaPredicate, // set_realtime_table body
 		appRole, // GRANT EXECUTE
-	)
+	) + reservedSchemaGuardSQL
 }

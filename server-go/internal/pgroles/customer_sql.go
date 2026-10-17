@@ -42,6 +42,27 @@ $excalibase_squat$;
 `
 }
 
+// SquatWarningSQL reports the same squat SquatGuardSQL refuses on, as a
+// WARNING, so the first role-SQL transaction surfaces it without aborting.
+func SquatWarningSQL() string {
+	return `
+DO $excalibase_squat_warning$
+DECLARE
+  squatted text;
+BEGIN
+  SELECT string_agg(r.rolname, ', ') INTO squatted
+  FROM pg_auth_members m
+  JOIN pg_roles r ON r.oid = m.roleid
+  JOIN pg_roles u ON u.oid = m.member
+  WHERE r.rolname = ANY (` + textArray(reservedNames) + `) AND m.admin_option AND NOT u.rolsuper;
+  IF squatted IS NOT NULL THEN
+    RAISE WARNING 'platform role(s) % were created outside the platform; registration will refuse after the schema lockdown', squatted;
+  END IF;
+END
+$excalibase_squat_warning$;
+`
+}
+
 // appRole is the platform role Studio runs as; it calls the functions for the owner.
 const appRole = "excalibase_app"
 

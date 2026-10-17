@@ -93,92 +93,34 @@ func TestEnsureSchedulerTables_FreshTenantUsesReservedSchema(t *testing.T) {
 	}
 }
 
-// An existing tenant already has the tables (and rows) in public. They must
-// be moved, data intact, leaving nothing behind in user space.
-func TestEnsureSchedulerTables_MovesLegacyPublicTables(t *testing.T) {
+// A customer table in public that shares a scheduler table's name stays
+// where it is, and the platform's own table is created beside it.
+func TestEnsureSchedulerTables_LeavesAPublicTableOfTheSameNameAlone(t *testing.T) {
 	db, teardown := startPG(t)
 	defer teardown()
 	ctx := context.Background()
 
-	if _, err := db.ExecContext(ctx, `
-		CREATE TABLE excalibase_scheduled_functions (
-			id text PRIMARY KEY,
-			project_id text NOT NULL,
-			module_name text NOT NULL,
-			export_name text NOT NULL,
-			args jsonb NOT NULL,
-			scheduled_for timestamptz NOT NULL,
-			status text NOT NULL DEFAULT 'pending',
-			attempts int NOT NULL DEFAULT 0,
-			last_error text,
-			created_at timestamptz NOT NULL DEFAULT now()
-		);
-		CREATE TABLE excalibase_cron_jobs (
-			name text NOT NULL,
-			project_id text NOT NULL,
-			module_name text NOT NULL,
-			export_name text NOT NULL,
-			args jsonb NOT NULL,
-			schedule jsonb NOT NULL,
-			last_enqueued_at timestamptz,
-			PRIMARY KEY (project_id, name)
-		);
-		INSERT INTO excalibase_scheduled_functions
-			(id, project_id, module_name, export_name, args, scheduled_for)
-		VALUES ('task-1', 'proj-1', 'jobs', 'send', '{}'::jsonb, now());
-		INSERT INTO excalibase_cron_jobs
-			(name, project_id, module_name, export_name, args, schedule)
-		VALUES ('nightly', 'proj-1', 'jobs', 'sweep', '{}'::jsonb, '{"kind":"hourly"}'::jsonb);
-	`); err != nil {
-		t.Fatalf("seed legacy tables: %v", err)
+	if _, err := db.ExecContext(ctx, `CREATE TABLE public.excalibase_cron_jobs (planted int)`); err != nil {
+		t.Fatalf("seed public table: %v", err)
 	}
-
 	if err := EnsureSchedulerTables(ctx, db); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
-
-	for _, table := range []string{scheduledFunctionsTable, cronJobsTable} {
-		if got := schemaOf(t, db, table); got != ReservedSchema {
-			t.Errorf("legacy table %s stayed in schema %q, want %q", table, got, ReservedSchema)
+	var schemas []string
+	rows, err := db.QueryContext(ctx, `SELECT table_schema FROM information_schema.tables
+		WHERE table_name = $1 ORDER BY table_schema`, cronJobsTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var schema string
+		if err := rows.Scan(&schema); err != nil {
+			t.Fatal(err)
 		}
+		schemas = append(schemas, schema)
 	}
-
-	var tasks, crons int
-	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM excalibase.excalibase_scheduled_functions`).Scan(&tasks); err != nil {
-		t.Fatalf("count tasks: %v", err)
-	}
-	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM excalibase.excalibase_cron_jobs`).Scan(&crons); err != nil {
-		t.Fatalf("count crons: %v", err)
-	}
-	if tasks != 1 || crons != 1 {
-		t.Errorf("rows lost in the move: tasks=%d crons=%d, want 1 and 1", tasks, crons)
-	}
-
-	// The drifted copy of the DDL lacked function_id; the moved table must
-	// end up with the reconciled column.
-	var hasFunctionID bool
-	if err := db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			 WHERE table_schema = 'excalibase'
-			   AND table_name = 'excalibase_cron_jobs'
-			   AND column_name = 'function_id')
-	`).Scan(&hasFunctionID); err != nil {
-		t.Fatalf("check function_id: %v", err)
-	}
-	if !hasFunctionID {
-		t.Error("migrated cron table is missing the function_id column")
-	}
-
-	// Re-running after the move must not fail or resurrect a public copy.
-	if err := EnsureSchedulerTables(ctx, db); err != nil {
-		t.Fatalf("ensure (after move): %v", err)
-	}
-	for _, table := range []string{scheduledFunctionsTable, cronJobsTable} {
-		if got := schemaOf(t, db, table); got != ReservedSchema {
-			t.Errorf("after rerun, table %s is in schema %q, want %q", table, got, ReservedSchema)
-		}
+	if len(schemas) != 2 || schemas[0] != ReservedSchema || schemas[1] != "public" {
+		t.Fatalf("cron table copies = %v, want the platform's in excalibase and the customer's left in public", schemas)
 	}
 }

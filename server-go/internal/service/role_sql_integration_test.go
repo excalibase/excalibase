@@ -37,7 +37,7 @@ var hostilePasswords = map[string][3]string{
 }
 
 type rolePostgres struct {
-	container *postgres.PostgresContainer
+	container testcontainers.Container
 	host      string
 	port      string
 }

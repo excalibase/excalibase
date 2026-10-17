@@ -373,3 +373,57 @@ func TestOpener_RefusesMySQLProjects(t *testing.T) {
 		t.Fatalf("servable = %v, %v; want proj_pg only", ids, err)
 	}
 }
+
+func schedulerCreds() map[string]map[string]string {
+	creds := appCreds()
+	creds["projects/proj_a/credentials/excalibase_scheduler"] = map[string]string{
+		"host": "db.internal", "port": "5432",
+		"username": "excalibase_scheduler", "password": "spw", "database": "proj_a",
+		"sslcert": "CERT-PEM", "sslkey": "KEY-PEM", "sslrootcert": "CA-PEM",
+	}
+	return creds
+}
+
+// The scheduler's bookkeeping pool logs in as its own role and is never the
+// pool customer SQL runs on (EXC-623).
+func TestOpenScheduler_IsItsOwnPoolAndIsEvictedWithTheProject(t *testing.T) {
+	store := testStore(t, &domain.DatabaseInstance{ProjectID: "proj_a", Status: "ACTIVE"})
+	o := NewOpener(store, fakeVault{data: schedulerCreds()}, Overrides{}, PoolLimits{})
+	defer o.Close()
+
+	app, err := o.Open(context.Background(), "proj_a")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	scheduler, err := o.OpenScheduler(context.Background(), "proj_a")
+	if err != nil {
+		t.Fatalf("open scheduler: %v", err)
+	}
+	if app == scheduler {
+		t.Fatal("the scheduler shares the pool customer SQL runs on")
+	}
+	o.ProjectDeleting("proj_a")
+	if got := o.CachedPools(); got != 0 {
+		t.Errorf("cached pools after teardown: got %d, want 0", got)
+	}
+}
+
+func TestOpenScheduler_NeedsTheSchedulerCredential(t *testing.T) {
+	store := testStore(t, &domain.DatabaseInstance{ProjectID: "proj_a", Status: "ACTIVE"})
+	o := NewOpener(store, fakeVault{data: appCreds()}, Overrides{}, PoolLimits{})
+	defer o.Close()
+
+	if _, err := o.OpenScheduler(context.Background(), "proj_a"); err == nil || !strings.Contains(err.Error(), "excalibase_scheduler") {
+		t.Fatalf("opened without a scheduler credential: %v", err)
+	}
+}
+
+func TestOpenScheduler_RefusesNotServableProject(t *testing.T) {
+	store := testStore(t, &domain.DatabaseInstance{ProjectID: "proj_a", Status: "DELETING"})
+	o := NewOpener(store, fakeVault{data: schedulerCreds()}, Overrides{}, PoolLimits{})
+	defer o.Close()
+
+	if _, err := o.OpenScheduler(context.Background(), "proj_a"); err == nil {
+		t.Fatal("opened the scheduler pool of a project under teardown")
+	}
+}

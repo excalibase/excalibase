@@ -16,13 +16,14 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
 )
 
-// beginCronSync opens a transaction on the project DB, ensures the
-// scheduler tables exist, and synchronises the bundle's cron registry
-// with the cron_jobs table inside that transaction. Returns the open
+// beginCronSync opens a transaction on the project DB as the scheduler's
+// login and synchronises the bundle's cron registry with the cron_jobs table
+// inside that transaction. Registration created the table; this login could
+// not create it (EXC-623). Returns the open
 // transaction and a commit callback so the caller can commit only on
 // successful deploy.
 //
-// When the handler has no project-DB resolver (h.projectDBFn == nil) or
+// When the handler has no scheduler resolver (h.schedulerDBFn == nil) or
 // the bundle declared no crons, this returns (nil, no-op, nil) — the
 // caller still drives the same flow but the rollback path is a no-op.
 func (h *FunctionHandler) beginCronSync(
@@ -35,10 +36,10 @@ func (h *FunctionHandler) beginCronSync(
 	// the sync but stay on the same code path so a redeploy that drops
 	// crons doesn't accidentally leave a stale row table behind in
 	// environments that do have a DB.
-	if h.projectDBFn == nil {
+	if h.schedulerDBFn == nil {
 		return nil, noop, nil
 	}
-	db, err := h.projectDBFn(ctx, projectID)
+	db, err := h.schedulerDBFn(ctx, projectID)
 	if errors.Is(err, domain.ErrPostgresOnly) && !declaresCronJobs(cronJobs) {
 		// A MySQL project has no cron tables, and this function adds none.
 		return nil, noop, nil
@@ -46,10 +47,6 @@ func (h *FunctionHandler) beginCronSync(
 	if err != nil {
 		return nil, noop, fmt.Errorf("open project db: %w", err)
 	}
-	if err := scheduler.EnsureTables(ctx, db); err != nil {
-		return nil, noop, fmt.Errorf("ensure cron tables: %w", err)
-	}
-
 	// Empty registry path: still open a tx so the redeploy-without-crons
 	// case can DELETE this function's rows atomically with the deploy.
 	var rows []scheduler.CronJobRow
