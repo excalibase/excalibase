@@ -76,6 +76,10 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 		return fmt.Errorf("check existing deployment: %w", err)
 	}
 
+	// The fence first: the runtime's pod must never start without it.
+	if err := c.applyDenoEgressPolicy(ctx, namespace, spec); err != nil {
+		return err
+	}
 	dep := buildDenoDeployment(namespace, spec)
 	if _, err := c.clientset.AppsV1().Deployments(namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create deno deployment: %w", err)
@@ -84,7 +88,7 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 	if _, err := c.clientset.CoreV1().Services(namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create deno service: %w", err)
 	}
-	return c.applyDenoEgressPolicy(ctx, namespace, spec)
+	return nil
 }
 
 func (c *Client) restartAndReconcile(ctx context.Context, namespace string, spec DenoRuntimeSpec) error {
@@ -110,12 +114,18 @@ func (c *Client) reconcileDenoEgress(ctx context.Context, namespace string, dep 
 	}
 	want := workerAllowedHosts(spec)
 	settings := runtimeSettingsEnv(spec)
-	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) {
+	fenced := hasDenoFence(dep.Spec.Template.Spec)
+	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) && fenced {
 		return nil
 	}
 	updated := dep.DeepCopy()
 	setAllowedHosts(updated, want)
 	setEnv(updated, settings)
+	if !fenced {
+		// A runtime made before EXC-622 starts waiting for its fence.
+		updated.Spec.Template.Spec.InitContainers = append(updated.Spec.Template.Spec.InitContainers,
+			denoFenceContainer(updated.Spec.Template.Spec.Containers[0].Image))
+	}
 	if _, err := c.clientset.AppsV1().Deployments(namespace).Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update deno deployment: %w", err)
 	}
@@ -238,7 +248,9 @@ func buildDenoDeployment(namespace string, spec DenoRuntimeSpec) *appsv1.Deploym
 					// the k8s API — don't mount a service-account token it could pivot
 					// with if a function escapes its isolate (EXC-322).
 					AutomountServiceAccountToken: &falseVal,
-					Containers:                   []corev1.Container{buildDenoContainer(spec, allowed)},
+					// A policy controller may fence a new pod only after it starts (EXC-622).
+					InitContainers: []corev1.Container{denoFenceContainer(spec.Image)},
+					Containers:     []corev1.Container{buildDenoContainer(spec, allowed)},
 				},
 			},
 		},

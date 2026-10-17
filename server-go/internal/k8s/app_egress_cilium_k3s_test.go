@@ -112,10 +112,14 @@ func (lab *egressLab) startCiliumClusterWith(t *testing.T, extra ...testcontaine
 
 func (lab *egressLab) installCilium(t *testing.T, apiServerHost string) {
 	t.Helper()
-	locate := action.ChartPathOptions{RepoURL: ciliumChartRepo, Version: ciliumChartVersion}
+	version := ciliumChartVersion
+	if lab.ciliumChart != "" {
+		version = lab.ciliumChart
+	}
+	locate := action.ChartPathOptions{RepoURL: ciliumChartRepo, Version: version}
 	chartPath, err := locate.LocateChart("cilium", cli.New())
 	if err != nil {
-		t.Fatalf("fetch cilium chart %s: %v", ciliumChartVersion, err)
+		t.Fatalf("fetch cilium chart %s: %v", version, err)
 	}
 	values := map[string]interface{}{
 		"ipam":           map[string]interface{}{"mode": "kubernetes"},
