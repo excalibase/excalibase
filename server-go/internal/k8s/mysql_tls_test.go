@@ -141,6 +141,11 @@ func TestMySQLClusterServesTheIssuedCertificate(t *testing.T) {
 	if data["ssl_cert"] != MySQLTLSDir+"/tls.crt" || data["ssl_key"] != MySQLTLSDir+"/tls.key" {
 		t.Errorf("settings %v", data)
 	}
+	// MySQL refuses ALTER INSTANCE RELOAD TLS for a certificate it cannot
+	// chain to a CA, so a renewed certificate would never be served.
+	if data["ssl_ca"] != MySQLTLSDir+"/ca.crt" {
+		t.Errorf("ssl_ca %q: the reload sweep cannot pick up a renewed certificate without it", data["ssl_ca"])
+	}
 	if _, set := data["require_secure_transport"]; set {
 		t.Error("MOCO's controller talks to mysqld without TLS; the platform users are REQUIRE SSL instead")
 	}

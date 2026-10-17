@@ -139,9 +139,13 @@ func mountMySQLTLS(podSpec, mysqld map[string]interface{}, projectID string) {
 	}}
 }
 
-// mysqlTLSSettings point mysqld at the mounted certificate.
+// mysqlTLSSettings point mysqld at the mounted certificate. ssl_ca is the
+// issuing CA cert-manager writes beside it: without it MySQL refuses
+// ALTER INSTANCE RELOAD TLS, so a renewed certificate is never served.
 func mysqlTLSSettings() map[string]string {
-	return map[string]string{"ssl_cert": MySQLTLSDir + "/tls.crt", "ssl_key": MySQLTLSDir + "/tls.key"}
+	return map[string]string{
+		"ssl_ca": MySQLTLSDir + "/ca.crt", "ssl_cert": MySQLTLSDir + "/tls.crt", "ssl_key": MySQLTLSDir + "/tls.key",
+	}
 }
 
 // MySQLServerCA reads the CA certificate out of the CA secret.
