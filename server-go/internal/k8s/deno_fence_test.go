@@ -10,6 +10,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 	psaapi "k8s.io/pod-security-admission/api"
@@ -170,4 +171,47 @@ func closedAddress(t *testing.T) string {
 	address := listener.Addr().String()
 	_ = listener.Close()
 	return address
+}
+
+// The fence runs before the runtime, so the scheduler reserves the larger of
+// the two: it must never ask for more than the runtime does, or each FREE
+// project's functions reserve ten times their size (nightly 39055302492).
+func TestDenoFence_ReservesNoMoreThanTheRuntime(t *testing.T) {
+	for _, tier := range []string{"FREE", "STANDARD", "ENTERPRISE"} {
+		t.Run(tier, func(t *testing.T) {
+			deployment := buildDenoDeployment(testNamespace, DenoRuntimeSpec{Image: egressImage, RuntimeSecret: "s", Tier: tier})
+			pod := &corev1.Pod{Spec: deployment.Spec.Template.Spec}
+			runtime := pod.Spec.Containers[0].Resources.Requests
+			cpu, memory := podRequest(pod)
+			if cpu != runtime.Cpu().MilliValue() || memory != runtime.Memory().Value() {
+				t.Errorf("pod reserves %dm/%d, want the runtime's own %dm/%d", cpu, memory, runtime.Cpu().MilliValue(), runtime.Memory().Value())
+			}
+			fence := fenceInit(t, pod.Spec)
+			for name, request := range fence.Resources.Requests {
+				if limit := fence.Resources.Limits[name]; request.Cmp(limit) > 0 {
+					t.Errorf("fence %s request %s exceeds its limit %s", name, request.String(), limit.String())
+				}
+			}
+		})
+	}
+}
+
+// A runtime fenced before the fence was sized to the tier is resized.
+func TestEnsureDenoRuntime_OversizedFenceIsResized(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	spec := DenoRuntimeSpec{Image: egressImage, RuntimeSecret: "s", ProvisioningURL: runtimeProvisioningURL}
+	old := buildDenoDeployment(egressNS, spec)
+	oversized := resource.MustParse("100m")
+	old.Spec.Template.Spec.InitContainers[0].Resources.Requests[corev1.ResourceCPU] = oversized
+	if _, err := c.clientset.AppsV1().Deployments(egressNS).Create(ctx, old, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EnsureDenoRuntime(ctx, egressNS, spec); err != nil {
+		t.Fatal(err)
+	}
+	fence := fenceInit(t, denoDeployment(t, c).Spec.Template.Spec)
+	if got := fence.Resources.Requests.Cpu().MilliValue(); got != 10 {
+		t.Errorf("fence cpu request = %dm, want the FREE runtime's 10m", got)
+	}
 }

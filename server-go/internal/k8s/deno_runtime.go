@@ -114,18 +114,16 @@ func (c *Client) reconcileDenoEgress(ctx context.Context, namespace string, dep 
 	}
 	want := workerAllowedHosts(spec)
 	settings := runtimeSettingsEnv(spec)
-	fenced := hasDenoFence(dep.Spec.Template.Spec)
-	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) && fenced {
+	// A runtime made before EXC-622, or fenced with an oversized request, gets the wanted fence.
+	fence := denoFenceContainer(dep.Spec.Template.Spec.Containers[0].Image, spec.Tier)
+	initContainers, fenceChanged := withDenoFence(dep.Spec.Template.Spec.InitContainers, fence)
+	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) && !fenceChanged {
 		return nil
 	}
 	updated := dep.DeepCopy()
 	setAllowedHosts(updated, want)
 	setEnv(updated, settings)
-	if !fenced {
-		// A runtime made before EXC-622 starts waiting for its fence.
-		updated.Spec.Template.Spec.InitContainers = append(updated.Spec.Template.Spec.InitContainers,
-			denoFenceContainer(updated.Spec.Template.Spec.Containers[0].Image))
-	}
+	updated.Spec.Template.Spec.InitContainers = initContainers
 	if _, err := c.clientset.AppsV1().Deployments(namespace).Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update deno deployment: %w", err)
 	}
@@ -249,7 +247,7 @@ func buildDenoDeployment(namespace string, spec DenoRuntimeSpec) *appsv1.Deploym
 					// with if a function escapes its isolate (EXC-322).
 					AutomountServiceAccountToken: &falseVal,
 					// A policy controller may fence a new pod only after it starts (EXC-622).
-					InitContainers: []corev1.Container{denoFenceContainer(spec.Image)},
+					InitContainers: []corev1.Container{denoFenceContainer(spec.Image, spec.Tier)},
 					Containers:     []corev1.Container{buildDenoContainer(spec, allowed)},
 				},
 			},
