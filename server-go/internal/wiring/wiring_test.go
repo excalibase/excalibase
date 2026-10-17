@@ -16,6 +16,8 @@ func fullyWired() Deps {
 		CronLeader:        true,
 		PauseService:      true,
 		FunctionRuntime:   true,
+		SitesAvailable:    true,
+		SiteBuildRunner:   true,
 	}
 }
 
@@ -27,6 +29,10 @@ func allOn() config.AppConfig {
 		AutoPauseEnabled: true,
 		JWTRequireAud:    true,
 		FnReplayEnabled:  true,
+		// Git builds on, with the whole GitHub App given.
+		SitesGitBuildsEnabled: true,
+		SiteGit: config.SiteGitConfig{AppID: 1, AppSlug: "s", ClientID: "c", ClientSecret: "cs",
+			PrivateKeyPEM: "pem", WebhookSecret: "w"},
 	}
 }
 
@@ -44,6 +50,7 @@ func TestCheck_FailsForEachEnabledButUnwiredFeature(t *testing.T) {
 		"EXCALIBASE_AUTO_MIGRATE":      func(d *Deps) { d.ProjectDB = false },
 		"EXCALIBASE_AUTOPAUSE_ENABLED": func(d *Deps) { d.PauseService = false },
 		"EXCALIBASE_FN_REPLAY_ENABLED": func(d *Deps) { d.FunctionRuntime = false },
+		"SITES_GIT_BUILDS_ENABLED":     func(d *Deps) { d.SiteBuildRunner = false },
 	}
 	for flag, strip := range cases {
 		t.Run(flag, func(t *testing.T) {
@@ -133,6 +140,10 @@ func TestCheck_ProviderSelectedWithoutItsSettings(t *testing.T) {
 		"R2_*":                  {R2Bucket: "uploads"},
 		"BACKUP_DEFAULT_*":      {BackupEndpoint: "https://r2", BackupBucket: "backups"},
 		"SITES_ENABLED":         {SitesEnabled: true, Sites: config.SitesConfig{AccountID: "acct"}},
+		"SITES_GITHUB_WEBHOOK_SECRET": {SitesGitBuildsEnabled: true, SiteGit: config.SiteGitConfig{AppID: 1, AppSlug: "s",
+			ClientID: "c", ClientSecret: "cs", PrivateKeyPEM: "pem"}},
+		"SITES_GITHUB_APP_PRIVATE_KEY": {SitesGitBuildsEnabled: true, SiteGit: config.SiteGitConfig{AppID: 1, AppSlug: "s",
+			ClientID: "c", ClientSecret: "cs", WebhookSecret: "w"}},
 		"SITES_HOSTS_KV_NAMESPACE_ID": {SitesEnabled: true, Sites: config.SitesConfig{AccountID: "acct", APIToken: "t",
 			DispatchNamespace: "n", BaseDomain: "excalibase.app"}},
 	}

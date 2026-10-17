@@ -76,6 +76,12 @@ type tierConfigDTO struct {
 	MaxSiteFileBytes      *int64 `json:"maxSiteFileBytes"`
 	MaxSiteDeploysPerHour *int   `json:"maxSiteDeploysPerHour"`
 	MaxSiteCustomDomains  *int   `json:"maxSiteCustomDomains"`
+	// One git build's limits (EXC-354); each one left out keeps the plan's current value.
+	SiteBuildCPUMillis      *int    `json:"siteBuildCpuMillis"`
+	SiteBuildMemory         *string `json:"siteBuildMemory"`
+	SiteBuildDisk           *string `json:"siteBuildDisk"`
+	SiteBuildTimeoutSeconds *int    `json:"siteBuildTimeoutSeconds"`
+	SiteBuildConcurrency    *int    `json:"siteBuildConcurrency"`
 }
 
 func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
@@ -100,6 +106,12 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 		MaxSiteFileBytes:      &tc.Sites.MaxFileBytes,
 		MaxSiteDeploysPerHour: &tc.Sites.MaxDeploysPerHour,
 		MaxSiteCustomDomains:  &tc.Sites.MaxCustomDomains,
+
+		SiteBuildCPUMillis:      &tc.SiteBuilds.CPUMillis,
+		SiteBuildMemory:         &tc.SiteBuilds.Memory,
+		SiteBuildDisk:           &tc.SiteBuilds.Disk,
+		SiteBuildTimeoutSeconds: &tc.SiteBuilds.TimeoutSeconds,
+		SiteBuildConcurrency:    &tc.SiteBuilds.Concurrency,
 	}
 }
 
@@ -147,12 +159,13 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 		AutoPauseAfterDays: dto.AutoPauseAfterDays,
 	}
-	sites, err := h.currentSiteLimits(r.Context(), tier)
+	current, err := h.currentPlan(r.Context(), tier)
 	if err != nil {
 		httpError(w, "read tier: "+safeError(err), http.StatusInternalServerError)
 		return
 	}
-	tc.Sites = dto.siteLimits(sites)
+	tc.Sites = dto.siteLimits(current.Sites)
+	tc.SiteBuilds = dto.siteBuildLimits(current.SiteBuilds)
 	if err := validateTierConfig(tc); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
@@ -202,20 +215,41 @@ func requiredCount(value *int) int {
 	return *value
 }
 
-// currentSiteLimits is the plan's stored Sites limits, else its built-in ones.
-func (h *TierHandler) currentSiteLimits(ctx context.Context, tier domain.TierType) (config.SiteTierLimits, error) {
+// currentPlan is the plan as stored, else its built-in one, for the limits an edit leaves out.
+func (h *TierHandler) currentPlan(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
 	stored, found, err := h.store.GetTierConfig(ctx, tier)
 	if err != nil {
-		return config.SiteTierLimits{}, err
+		return config.TierConfig{}, err
 	}
 	if found {
-		return stored.Sites, nil
+		return stored, nil
 	}
 	if builtin, err := config.GetTierConfig(tier); err == nil {
-		return builtin.Sites, nil
+		return builtin, nil
 	}
 	// A plan with no row and no built-in has no limits to keep: the body must name them all.
-	return config.SiteTierLimits{}, nil
+	return config.TierConfig{}, nil
+}
+
+// siteBuildLimits overlays the build limits the body names on the plan's current ones.
+func (dto tierConfigDTO) siteBuildLimits(current config.SiteBuildTierLimits) config.SiteBuildTierLimits {
+	out := current
+	if dto.SiteBuildCPUMillis != nil {
+		out.CPUMillis = *dto.SiteBuildCPUMillis
+	}
+	if dto.SiteBuildMemory != nil {
+		out.Memory = *dto.SiteBuildMemory
+	}
+	if dto.SiteBuildDisk != nil {
+		out.Disk = *dto.SiteBuildDisk
+	}
+	if dto.SiteBuildTimeoutSeconds != nil {
+		out.TimeoutSeconds = *dto.SiteBuildTimeoutSeconds
+	}
+	if dto.SiteBuildConcurrency != nil {
+		out.Concurrency = *dto.SiteBuildConcurrency
+	}
+	return out
 }
 
 // siteLimits overlays the limits the body names on the plan's current ones.
@@ -281,7 +315,10 @@ func validateTierConfig(tc config.TierConfig) error {
 	if _, err := apphost.PlanDiskBytes(tc.MaxAppDiskSize); err != nil {
 		return errors.New("maxAppDiskSize must be a whole number of gibibytes such as 20Gi (0Gi offers no app disks)")
 	}
-	return validateSiteLimits(tc.Sites)
+	if err := validateSiteLimits(tc.Sites); err != nil {
+		return err
+	}
+	return validateSiteBuildLimits(tc.SiteBuilds)
 }
 
 // Bounds on an admin's Sites edit. A file above 25 MiB is refused by
@@ -357,4 +394,47 @@ func (h *TierHandler) instancesFitThePlatform(w http.ResponseWriter, r *http.Req
 		httpError(w, errNodePlacementUnchecked, http.StatusServiceUnavailable)
 	}
 	return false
+}
+
+// Bounds on an admin's build edit: at least the 2 CPUs gVisor needs, at most what one build node can give.
+const (
+	maxSiteBuildCPUMillis   = 16_000
+	minSiteBuildTimeout     = 60
+	maxSiteBuildTimeout     = 2 * 60 * 60
+	maxSiteBuildConcurrency = 20
+)
+
+var (
+	minSiteBuildMemory = resource.MustParse("512Mi")
+	maxSiteBuildMemory = resource.MustParse("32Gi")
+	minSiteBuildDisk   = resource.MustParse("1Gi")
+	maxSiteBuildDisk   = resource.MustParse("100Gi")
+)
+
+func validateSiteBuildLimits(limits config.SiteBuildTierLimits) error {
+	if limits.CPUMillis < config.MinSiteBuildCPUMillis || limits.CPUMillis > maxSiteBuildCPUMillis {
+		return fmt.Errorf("siteBuildCpuMillis must be between %d and %d: gVisor bills its overhead to the build's own CPU",
+			config.MinSiteBuildCPUMillis, maxSiteBuildCPUMillis)
+	}
+	if err := quantityBetween("siteBuildMemory", limits.Memory, minSiteBuildMemory, maxSiteBuildMemory); err != nil {
+		return err
+	}
+	if err := quantityBetween("siteBuildDisk", limits.Disk, minSiteBuildDisk, maxSiteBuildDisk); err != nil {
+		return err
+	}
+	if limits.TimeoutSeconds < minSiteBuildTimeout || limits.TimeoutSeconds > maxSiteBuildTimeout {
+		return fmt.Errorf("siteBuildTimeoutSeconds must be between %d and %d", minSiteBuildTimeout, maxSiteBuildTimeout)
+	}
+	if limits.Concurrency < 1 || limits.Concurrency > maxSiteBuildConcurrency {
+		return fmt.Errorf("siteBuildConcurrency must be between 1 and %d", maxSiteBuildConcurrency)
+	}
+	return nil
+}
+
+func quantityBetween(field, raw string, low, high resource.Quantity) error {
+	parsed, err := resource.ParseQuantity(raw)
+	if err != nil || parsed.Cmp(low) < 0 || parsed.Cmp(high) > 0 {
+		return fmt.Errorf("%s must be a size between %s and %s", field, low.String(), high.String())
+	}
+	return nil
 }

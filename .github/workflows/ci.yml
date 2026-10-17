@@ -24,6 +24,7 @@ jobs:
       singlehost: ${{ steps.filter.outputs.singlehost }}
       singlehostboot: ${{ steps.filter.outputs.singlehostboot }}
       sitesrouter: ${{ steps.filter.outputs.sitesrouter }}
+      sitebuilds: ${{ steps.filter.outputs.sitebuilds }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -55,6 +56,11 @@ jobs:
               - 'frontend/Dockerfile'
             sitesrouter:
               - 'edge/sites-router/**'
+            sitebuilds:
+              - 'server-go/internal/k8s/site_build*'
+              - 'server-go/internal/k8s/testdata/site_build_vite/**'
+              - 'server-go/internal/k8s/gvisor_k3s_test.go'
+              - 'server-go/internal/sitebuilds/**'
             hosting:
               - 'server-go/internal/k8s/app_*'
               - 'server-go/internal/k8s/*_k3s_test.go'
@@ -469,7 +475,7 @@ jobs:
         with:
           go-version: '1.24'
       - name: Run live cluster tests
-        run: go test -tags=live ./internal/k8s/ -run 'TestK3s' -skip 'StartFence|MySQLBackup' -v -timeout 40m
+        run: go test -tags=live ./internal/k8s/ -run 'TestK3s' -skip 'StartFence|MySQLBackup|TestK3sSiteBuild' -v -timeout 40m
 
   live-start-fence:
     name: Live cluster tests (start fence)
@@ -504,6 +510,23 @@ jobs:
           go-version: '1.24'
       - name: Run MySQL backup egress probes
         run: go test -tags=live ./internal/k8s/ -run 'TestK3s.*MySQLBackup' -v -timeout 40m
+
+  live-site-builds:
+    name: Live site builds (gVisor)
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    # A real Vite build through the site build Job under gVisor (EXC-354); its own job so the hosting suite keeps its time.
+    if: needs.changes.outputs.sitebuilds == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Run the site build Job under gVisor
+        run: go test -tags=live ./internal/k8s/ -run 'TestK3sSiteBuild' -v -timeout 30m
 
   sonarcloud:
     name: SonarCloud Scan

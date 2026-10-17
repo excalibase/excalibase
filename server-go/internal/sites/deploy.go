@@ -19,6 +19,9 @@ type DeployRequest struct {
 	Actor     string
 	Label     string
 	Body      io.Reader
+	// SlotTaken is a git build's deploy: the build took its slot of the hourly
+	// limit when it was queued (EXC-354). Never set from a request.
+	SlotTaken bool
 }
 
 // Deploy checks the archive, uploads what Cloudflare lacks, publishes the
@@ -43,9 +46,12 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 		return nil, err
 	}
 	defer admitted()
-	giveBackSlot, err := s.takeDeploySlot(ctx, request.ProjectID, limits.MaxDeploysPerHour)
-	if err != nil {
-		return nil, err
+	giveBackSlot := func() {}
+	if !request.SlotTaken {
+		giveBackSlot, err = s.takeDeploySlot(ctx, request.ProjectID, limits.MaxDeploysPerHour)
+		if err != nil {
+			return nil, err
+		}
 	}
 	bundle, err := ReadArchive(request.Body, limits, s.spoolDir())
 	if err != nil {
