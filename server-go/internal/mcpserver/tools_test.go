@@ -797,7 +797,7 @@ func TestToolDescriptionsSteerTheClient(t *testing.T) {
 		"execute_sql":               {"MySQL", "max_execution_time", "not transactional"},
 		"generate_typescript_types": {"MySQL", "tinyint(1)"},
 		// EXC-614: the user adds DNS records; the tool names them and how to check.
-		"add_site_domain":   {"CNAME", "check_site_domain", "www."},
+		"add_site_domain":   {"CNAME", "check_site_domain", "www.", "TXT", "nothing is set up"},
 		"check_site_domain": {"active"},
 	}
 	for _, tool := range listed.Tools {

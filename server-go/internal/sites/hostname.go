@@ -19,7 +19,12 @@ var (
 	ErrHostnameLimitReached = errors.New("the project already holds as many custom domains as it may")
 	// ErrCustomDomainsUnavailable is an install whose Cloudflare zone is not set up for custom hostnames.
 	ErrCustomDomainsUnavailable = errors.New("custom domains are not available on this install")
+	// ErrCustomDomainsFull is the install's zone holding as many custom hostnames as it may.
+	ErrCustomDomainsFull = errors.New("this install has no room for another custom domain right now; try again later or ask its operator")
 )
+
+// maxHostnameLength leaves room for the challenge label within DNS's 253 characters.
+const maxHostnameLength = 253 - len(verificationLabel)
 
 // Custom hostname statuses: ACTIVE once Cloudflare proxies the hostname and its certificate is deployed.
 const (
@@ -83,11 +88,19 @@ type DNSInstruction struct {
 	Purpose string `json:"purpose"`
 }
 
-// HostnameStore persists custom hostnames. Every lookup is scoped by project and site.
+// HostnameStore persists custom hostnames. Every lookup is scoped by project
+// and site. A hostname is held by its one proven row; unproven claims hold nothing.
 type HostnameStore interface {
-	// CreateHostname refuses with ErrHostnameTaken when any project holds the
-	// hostname and ErrHostnameLimitReached past maxPerProject.
+	// CreateHostname refuses with ErrHostnameTaken when the project already
+	// claims the hostname or any project proved it, and with
+	// ErrHostnameLimitReached past maxPerProject claims, proven or not.
 	CreateHostname(ctx context.Context, hostname *CustomHostname, maxPerProject int) error
+	// VerifyHostname records the proof at hostname.VerifiedAt: ErrHostnameTaken
+	// when another row holds a proof for it, ErrCustomDomainsFull once
+	// maxOnZone rows hold one.
+	VerifyHostname(ctx context.Context, hostname *CustomHostname, maxOnZone int) error
+	// CountVerifiedHostnames counts proven rows: every hostname on the zone is one.
+	CountVerifiedHostnames(ctx context.Context) (int, error)
 	// GetHostname answers nil, no error, when the site holds no such hostname.
 	GetHostname(ctx context.Context, projectID, siteID, id string) (*CustomHostname, error)
 	ListHostnames(ctx context.Context, projectID, siteID string) ([]*CustomHostname, error)
@@ -95,9 +108,10 @@ type HostnameStore interface {
 	// UpdateHostname writes the Cloudflare id and state; ErrHostnameNotFound once it is gone.
 	UpdateHostname(ctx context.Context, hostname *CustomHostname) error
 	DeleteHostname(ctx context.Context, projectID, siteID, id string) error
-	// PendingHostnames answers hostnames not yet active, least recently checked
-	// first, leaving out projects scheduled for deletion.
-	PendingHostnames(ctx context.Context, limit int) ([]*CustomHostname, error)
+	// DueHostnames answers hostnames not active, and active ones last checked
+	// before activeCheckedBefore, least recently checked first, leaving out
+	// projects scheduled for deletion.
+	DueHostnames(ctx context.Context, activeCheckedBefore time.Time, limit int) ([]*CustomHostname, error)
 }
 
 // HostnameAPI is Cloudflare for SaaS on the user-content zone.
@@ -116,6 +130,9 @@ func NormalizeHostname(raw, baseDomain string, reserved []string) (string, error
 	host, err := apphost.NormalizeCustomDomain(raw, baseDomain)
 	if err != nil {
 		return "", errors.New(strings.Replace(err.Error(), apphost.ErrInvalidDomain.Error()+": ", "", 1))
+	}
+	if len(host) > maxHostnameLength {
+		return "", fmt.Errorf("a custom domain is at most %d characters", maxHostnameLength)
 	}
 	// The router and its hosts table take only letter top-level domains.
 	if tld := host[strings.LastIndex(host, ".")+1:]; strings.Trim(tld, "abcdefghijklmnopqrstuvwxyz") != "" {
@@ -155,14 +172,14 @@ func hostnameStatus(answer cfworkers.CustomHostname) string {
 }
 
 // dnsInstructions is the CNAME every custom hostname needs, the platform's own
-// TXT proof until it is seen, and, for TXT validation, Cloudflare's tokens
+// TXT proof, and, for TXT validation, Cloudflare's tokens
 // still to prove. HTTP validation needs nothing more: Cloudflare answers its
 // own token once the CNAME is in place.
 func dnsInstructions(hostname *CustomHostname, target string, answer cfworkers.CustomHostname) []DNSInstruction {
-	records := []DNSInstruction{{Type: "CNAME", Name: hostname.Hostname, Value: target, Purpose: PurposeRouting}}
-	if hostname.VerifiedAt == nil {
-		records = append(records, DNSInstruction{Type: "TXT", Name: VerificationName(hostname.Hostname),
-			Value: verificationPrefix + hostname.VerificationToken, Purpose: PurposeVerification})
+	// The platform's own proof is checked again while the domain serves, so it stays listed.
+	records := []DNSInstruction{
+		{Type: "CNAME", Name: hostname.Hostname, Value: target, Purpose: PurposeRouting},
+		{Type: "TXT", Name: VerificationName(hostname.Hostname), Value: verificationPrefix + hostname.VerificationToken, Purpose: PurposeVerification},
 	}
 	if hostname.Validation != cfworkers.ValidationTXT {
 		return records

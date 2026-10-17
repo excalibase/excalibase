@@ -26,8 +26,9 @@ func (s *Service) UnrouteProjectSites(ctx context.Context, projectID string) err
 	return nil
 }
 
-// unrouteSiteHostnames forgets every custom hostname of the site in the
-// router; the hostnames stay on the zone for a cancelled deletion.
+// unrouteSiteHostnames forgets every proven custom hostname of the site in
+// the router; they stay on the zone for a cancelled deletion. An unproven
+// claim was never routed, and the name may be another project's.
 func (s *Service) unrouteSiteHostnames(ctx context.Context, site *Site) error {
 	if s.options.Hostnames == nil {
 		return nil
@@ -37,6 +38,9 @@ func (s *Service) unrouteSiteHostnames(ctx context.Context, site *Site) error {
 		return err
 	}
 	for _, hostname := range held {
+		if hostname.VerifiedAt == nil {
+			continue
+		}
 		if err := s.publisher.DeleteKV(ctx, hostname.Hostname); err != nil {
 			return publishFailure(site, stepUnroute, err)
 		}
@@ -45,6 +49,9 @@ func (s *Service) unrouteSiteHostnames(ctx context.Context, site *Site) error {
 }
 
 // RouteProjectSites serves again every site of the project with a live deploy.
+// The cancel calling it holds the project's lifecycle lease and has not yet
+// written the project's status, so its custom hostnames are checked again
+// and routed as if the project serves.
 func (s *Service) RouteProjectSites(ctx context.Context, projectID string) error {
 	held, err := s.projectSitesForRouting(ctx, projectID)
 	if err != nil {
@@ -59,7 +66,7 @@ func (s *Service) RouteProjectSites(ctx context.Context, projectID string) error
 		if err := s.publisher.PutKV(cdnCtx, site.Hostname, ScriptName(site)); err != nil {
 			return publishFailure(site, stepRoute, err)
 		}
-		if err := s.routeActiveHostnames(cdnCtx, site); err != nil {
+		if err := s.routeSiteHostnames(cdnCtx, site); err != nil {
 			return err
 		}
 	}
@@ -77,4 +84,17 @@ func (s *Service) projectSitesForRouting(ctx context.Context, projectID string) 
 		return nil, fmt.Errorf("%w: the project has %d sites this install cannot reach", ErrSitesUnavailable, len(held))
 	}
 	return held, nil
+}
+
+// routeSiteHostnames checks the site's custom hostnames under its lease, then routes the active ones.
+func (s *Service) routeSiteHostnames(ctx context.Context, site *Site) error {
+	if s.options.Hostnames == nil || s.options.CustomDomains == nil {
+		return nil
+	}
+	lease, err := s.claim(ctx, site)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
+	return s.refreshSiteHostnames(ctx, site, routing{serving: assumeServing, live: true})
 }

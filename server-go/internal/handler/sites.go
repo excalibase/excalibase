@@ -27,6 +27,8 @@ type SiteHandler struct {
 	audit auditWriter
 	// standing says whether a listed token's creator may still deploy.
 	standing tokenStanding
+	// domainWrites rate-limits adding and removing custom domains (EXC-614); nil limits nothing.
+	domainWrites func(http.Handler) http.Handler
 }
 
 // SetAuditLog records every deploy token made or revoked.
@@ -210,7 +212,7 @@ func writeSiteError(w http.ResponseWriter, err error) {
 		httpError(w, errNotFound, http.StatusNotFound)
 	case errors.Is(err, sites.ErrSiteNameTaken), errors.Is(err, sites.ErrSiteLimitReached), errors.Is(err, sites.ErrSiteBusy), errors.Is(err, sites.ErrLeaseLost),
 		errors.Is(err, sites.ErrDeployNotServable), errors.Is(err, sites.ErrRollbackNeedsFiles), errors.Is(err, sites.ErrDeployTokenLimitReached),
-		errors.Is(err, sites.ErrHostnameTaken), errors.Is(err, sites.ErrHostnameLimitReached):
+		errors.Is(err, sites.ErrHostnameTaken), errors.Is(err, sites.ErrHostnameLimitReached), errors.Is(err, sites.ErrCustomDomainsFull):
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.As(err, &rateErr):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(rateErr.RetryAfter.Seconds())), 10))

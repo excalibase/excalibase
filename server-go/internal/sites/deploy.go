@@ -187,7 +187,8 @@ func (s *Service) publish(ctx context.Context, site *Site, manifest map[string]c
 	if err := s.publisher.PutKV(ctx, site.Hostname, script); err != nil {
 		return publishFailure(site, stepRoute, err)
 	}
-	return s.routeActiveHostnames(ctx, site)
+	// The site's Worker exists now, whatever the stored site says.
+	return s.refreshSiteHostnames(ctx, site, routing{serving: s.projectServing, live: true})
 }
 
 func (s *Service) uploadBuckets(ctx context.Context, site *Site, session cfworkers.UploadSession,

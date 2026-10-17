@@ -24,7 +24,7 @@ const STATUS: Record<SiteDomainStatus, { label: string; tone: Tone }> = {
 
 const PURPOSE: Record<DnsInstruction['purpose'], string> = {
   routing: 'Sends the domain to your site',
-  verification: 'Proves you control the domain; nothing is served until it is seen',
+  verification: 'Proves you control the domain; keep it while the domain is in use',
   ownership: 'Proves the domain is yours to the CDN',
   certificate: 'Lets the certificate be issued',
 };
@@ -113,12 +113,19 @@ function DomainRow({ domain, canDevelop, busy, onCheck, onRemove }: RowProps) {
       {domain.status !== 'ACTIVE' && (
         <>
           <p className="text-xs text-text-tertiary">
-            Add these records at your DNS provider. The domain goes live once Cloudflare sees them
-            and issues its certificate; this is checked every few minutes, and a domain not live
-            within seven days is removed.
+            Add these records at your DNS provider. Nothing is set up until the TXT record is
+            seen; the domain then goes live once Cloudflare sees the CNAME and issues its
+            certificate. This is checked every few minutes, and a domain not live within seven
+            days is removed.
           </p>
           <Records domain={domain} />
         </>
+      )}
+      {domain.status === 'ACTIVE' && (
+        <p className="text-xs text-text-tertiary">
+          Keep its CNAME and TXT records in place: the domain is checked again every hour and stops
+          serving once either is gone.
+        </p>
       )}
       {domain.errors.map((message) => (
         <p key={message} className="text-xs text-amber-400">

@@ -71,7 +71,7 @@ describe("routing", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("<h1>shop</h1>");
-    expect(calls.lookups).toEqual([{ key: `shop.${BASE}`, options: { cacheTtl: 60 } }]);
+    expect(calls.lookups).toEqual([{ key: `shop.${BASE}`, options: { cacheTtl: 30 } }]);
     expect(calls.get.map((call) => call.script)).toEqual([SCRIPT]);
     expect(calls.fetch[0].url).toBe(`https://shop.${BASE}/dashboard/1?x=1`);
   });

@@ -47,6 +47,15 @@ func PerProjectAndUser(r *http.Request) string {
 	return "p:" + pid + "/u:" + uid
 }
 
+// PerProject keys by the project alone, so every member shares its budget:
+// for writes whose cost lands on the platform, not on one caller.
+func PerProject(r *http.Request) string {
+	if pid := projectIDFromURL(r); pid != "" {
+		return "p:" + pid
+	}
+	return ""
+}
+
 // projectIDFromURL reads the project ID that TenantContext middleware
 // already attached. Returns "" on routes where TenantContext didn't fire.
 func projectIDFromURL(r *http.Request) string {

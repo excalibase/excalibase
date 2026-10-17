@@ -1507,7 +1507,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	appDeploySvc.SetLocalRegistries(cfg.AppLocalRegistries)
 	appNetworkSvc := newAppNetworkService(sqlStore, store, appRuntime, a.claimer)
 	schemaHandler := newSchemaHandler(cfg, vc, store)
-	sitesSvc := newSitesService(cfg, sqlStore, service.NewSiteLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc))
+	sitesSvc := newSitesService(cfg, sqlStore, service.NewSiteLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc), a.claimer)
 	startHostnameSweep(context.Background(), sitesSvc)
 	provSvc.SetSitePurger(sitesSvc)
 	provSvc.SetSiteRouter(sitesSvc)

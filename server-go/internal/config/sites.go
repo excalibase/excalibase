@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -22,7 +23,12 @@ type SitesConfig struct {
 	ZoneID string
 	// CustomTarget is the hostname customers CNAME to, the zone's fallback origin; "" is cname.<BaseDomain>.
 	CustomTarget string
+	// MaxZoneHostnames bounds the custom hostnames on the zone, across every project; 0 is the default.
+	MaxZoneHostnames int
 }
+
+// DefaultMaxZoneHostnames keeps the zone under the 100 custom hostnames Cloudflare includes.
+const DefaultMaxZoneHostnames = 90
 
 // DefaultCustomTargetLabel is the label of the default CNAME target under the base domain.
 const DefaultCustomTargetLabel = "cname"
@@ -44,7 +50,21 @@ func loadSites() SitesConfig {
 		HostsKVNamespaceID: strings.TrimSpace(os.Getenv("SITES_HOSTS_KV_NAMESPACE_ID")),
 		ZoneID:             strings.TrimSpace(os.Getenv("SITES_ZONE_ID")),
 		CustomTarget:       strings.ToLower(strings.TrimSpace(os.Getenv("SITES_CUSTOM_DOMAIN_TARGET"))),
+		MaxZoneHostnames:   zoneHostnameCap(os.Getenv("SITES_MAX_ZONE_HOSTNAMES")),
 	}
+}
+
+// zoneHostnameCap is the default when unset and -1, for Validate to refuse, when not a count above 0.
+func zoneHostnameCap(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultMaxZoneHostnames
+	}
+	count, err := strconv.Atoi(raw)
+	if err != nil || count < 1 {
+		return -1
+	}
+	return count
 }
 
 // Complete reports whether every Cloudflare setting is given.
@@ -53,8 +73,8 @@ func (s SitesConfig) Complete() bool {
 }
 
 func (s SitesConfig) String() string {
-	return fmt.Sprintf("{AccountID:%s APIToken:[redacted] DispatchNamespace:%s BaseDomain:%s HostsKVNamespaceID:%s ZoneID:%s CustomTarget:%s}",
-		s.AccountID, s.DispatchNamespace, s.BaseDomain, s.HostsKVNamespaceID, s.ZoneID, s.CustomTarget)
+	return fmt.Sprintf("{AccountID:%s APIToken:[redacted] DispatchNamespace:%s BaseDomain:%s HostsKVNamespaceID:%s ZoneID:%s CustomTarget:%s MaxZoneHostnames:%d}",
+		s.AccountID, s.DispatchNamespace, s.BaseDomain, s.HostsKVNamespaceID, s.ZoneID, s.CustomTarget, s.MaxZoneHostnames)
 }
 
 func (s SitesConfig) GoString() string { return "config.SitesConfig" + s.String() }
@@ -90,6 +110,9 @@ func (c AppConfig) validateSites() error {
 // validateCustomDomains refuses a zone id that is not Cloudflare's shape and a
 // CNAME target outside the zone, which Cloudflare could not use as the fallback origin.
 func (s SitesConfig) validateCustomDomains() error {
+	if s.MaxZoneHostnames < 0 {
+		return fmt.Errorf("SITES_MAX_ZONE_HOSTNAMES must be a whole number above 0 (default %d)", DefaultMaxZoneHostnames)
+	}
 	if s.ZoneID == "" {
 		return nil
 	}

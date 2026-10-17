@@ -6,7 +6,7 @@ import (
 	"log"
 )
 
-// SweepReport is what one pass over the waiting custom hostnames did.
+// SweepReport is what one pass over the custom hostnames did.
 type SweepReport struct {
 	Checked   int
 	Activated int
@@ -15,21 +15,23 @@ type SweepReport struct {
 }
 
 // RefreshPendingHostnames checks the hostnames that are not serving, so one
-// goes live without its owner coming back to Studio, and drops those that
-// have not served for PendingHostnameLifetime. A site busy with a deploy is
-// skipped until the next pass.
+// goes live without its owner coming back to Studio, and every serving one
+// once per ActiveHostnameRecheckInterval, so a lost proof, a moved domain or
+// a lapsed certificate takes it off the router. Hostnames that have not
+// served for PendingHostnameLifetime are dropped. A project or site busy with
+// another operation is skipped until the next pass.
 func (s *Service) RefreshPendingHostnames(ctx context.Context) SweepReport {
 	report := SweepReport{}
 	if !s.CustomDomainsAvailable() {
 		return report
 	}
-	pending, err := s.options.Hostnames.PendingHostnames(ctx, pendingSweepBatch)
+	due, err := s.options.Hostnames.DueHostnames(ctx, s.now().Add(-ActiveHostnameRecheckInterval), pendingSweepBatch)
 	if err != nil {
-		log.Printf("sites: list waiting custom domains: %v", err)
+		log.Printf("sites: list custom domains due a check: %v", err)
 		report.Failed++
 		return report
 	}
-	for _, listed := range pending {
+	for _, listed := range due {
 		if !s.expired(listed) && s.now().Sub(listed.CheckedAt) < hostnameRecheckInterval {
 			continue
 		}
@@ -43,9 +45,19 @@ func (s *Service) expired(hostname *CustomHostname) bool {
 		s.now().Sub(*hostname.InactiveSince) > PendingHostnameLifetime
 }
 
-// sweepOne acts only on the hostname as it is once the site's lease is held:
-// a removal or a re-add may have happened since it was listed.
+// sweepOne acts only on the hostname as it is once the project's lifecycle
+// lease and the site's lease are held: a removal or a deletion may have happened since it was listed.
 func (s *Service) sweepOne(ctx context.Context, listed *CustomHostname, report *SweepReport) {
+	release, err := s.holdProject(ctx, listed.ProjectID)
+	if errors.Is(err, ErrSiteBusy) {
+		return
+	}
+	if err != nil {
+		log.Printf("sites: custom domain %s: %v", listed.Hostname, err)
+		report.Failed++
+		return
+	}
+	defer release()
 	site, err := s.mustGet(ctx, listed.ProjectID, listed.SiteID)
 	if err != nil {
 		log.Printf("sites: custom domain %s: read its site: %v", listed.Hostname, err)
@@ -62,6 +74,10 @@ func (s *Service) sweepOne(ctx context.Context, listed *CustomHostname, report *
 		return
 	}
 	defer lease.release()
+	s.sweepHeld(ctx, listed, report)
+}
+
+func (s *Service) sweepHeld(ctx context.Context, listed *CustomHostname, report *SweepReport) {
 	site, hostname, err := s.lookupHostname(ctx, listed.ProjectID, listed.SiteID, listed.ID)
 	if errors.Is(err, ErrHostnameNotFound) || errors.Is(err, ErrSiteNotFound) {
 		return
@@ -71,20 +87,17 @@ func (s *Service) sweepOne(ctx context.Context, listed *CustomHostname, report *
 		report.Failed++
 		return
 	}
-	if hostname.Status == HostnameActive {
-		return
-	}
 	if s.expired(hostname) {
 		s.expire(ctx, site, hostname, report)
 		return
 	}
 	report.Checked++
-	refreshed, err := s.refreshHeld(ctx, site, hostname)
+	refreshed, err := s.refreshHeld(ctx, site, hostname, s.routingFor(site))
 	if err != nil {
 		report.Failed++
 		return
 	}
-	if refreshed.Status == HostnameActive {
+	if hostname.Status != HostnameActive && refreshed.Status == HostnameActive {
 		report.Activated++
 	}
 }

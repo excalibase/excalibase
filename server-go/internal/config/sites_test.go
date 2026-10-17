@@ -125,3 +125,21 @@ func TestValidateSites_RefusesABadZoneOrTarget(t *testing.T) {
 		}
 	}
 }
+
+// The zone's custom hostnames stay under the 100 Cloudflare includes unless an operator says otherwise.
+func TestSitesConfigReadsTheZoneCap(t *testing.T) {
+	setSitesEnv(t)
+	if cfg := Load(); cfg.Sites.MaxZoneHostnames != DefaultMaxZoneHostnames || DefaultMaxZoneHostnames != 90 {
+		t.Fatalf("cap = %d, want the default %d", cfg.Sites.MaxZoneHostnames, DefaultMaxZoneHostnames)
+	}
+	t.Setenv("SITES_MAX_ZONE_HOSTNAMES", "50")
+	if cfg := Load(); cfg.Sites.MaxZoneHostnames != 50 {
+		t.Fatalf("cap = %d", cfg.Sites.MaxZoneHostnames)
+	}
+	for _, bad := range []string{"0", "-3", "many"} {
+		t.Setenv("SITES_MAX_ZONE_HOSTNAMES", bad)
+		if err := (AppConfig{SitesEnabled: true, Sites: Load().Sites}).Validate(); err == nil || !strings.Contains(err.Error(), "SITES_MAX_ZONE_HOSTNAMES") {
+			t.Errorf("%q: err = %v", bad, err)
+		}
+	}
+}

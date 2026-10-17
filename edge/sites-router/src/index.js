@@ -15,7 +15,9 @@ const SITE_SCRIPT = /^site-[a-z0-9][a-z0-9-]{0,57}$/;
 // only once Cloudflare for SaaS reports it and its certificate active.
 const CUSTOM_HOSTNAME = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const INTERNAL_HEADER_PREFIX = "x-excalibase-";
-const LOOKUP_CACHE_SECONDS = 60;
+// KV's minimum: an unrouted host keeps serving for at most this long. KV bills
+// each get the same whether it is answered from cache or not.
+const LOOKUP_CACHE_SECONDS = 30;
 
 export function siteLabel(hostname, baseDomain) {
   const suffix = `.${baseDomain}`;

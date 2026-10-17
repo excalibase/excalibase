@@ -12,7 +12,10 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/testutil/sitestest"
 )
 
-const testTarget = "cname.excalibase.app"
+const (
+	testTarget   = "cname.excalibase.app"
+	otherProject = "proj-other"
+)
 
 type domainHarness struct {
 	*serviceHarness
@@ -21,67 +24,62 @@ type domainHarness struct {
 	resolver  *sitestest.Resolver
 	projects  *sitestest.Projects
 	clock     *time.Time
-	// unproven leaves the owner's TXT record out when a hostname is added.
-	unproven bool
 }
 
-func newDomainHarness(t *testing.T, existingOrigins ...string) *domainHarness {
+func newDomainHarness(t *testing.T) *domainHarness {
+	return newDomainHarnessWith(t, func(*sites.Options) {})
+}
+
+// newDomainHarnessWith lets a test change the service's options before it is built.
+func newDomainHarnessWith(t *testing.T, configure func(*sites.Options)) *domainHarness {
 	t.Helper()
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	clock := func() time.Time { return now }
-	store, publisher, origins := sitestest.NewMemoryStore(), sitestest.NewPublisher(), sitestest.NewOrigins(existingOrigins...)
-	store.Now = clock
-	zone, hostnames, resolver, projects := sitestest.NewZone(), sitestest.NewMemoryHostnames(), sitestest.NewResolver(), sitestest.NewProjects()
-	service, err := sites.NewService(store, publisher, origins, sites.Options{
-		BaseDomain: testDomain, SpoolDir: t.TempDir(),
-		CustomDomains: &sites.CustomDomainOptions{Zone: zone, Target: testTarget, ReservedDomains: []string{"excalibase.io"},
-			Resolver: resolver, Projects: projects},
-		Hostnames: hostnames,
-	})
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
+	store, publisher, origins := sitestest.NewMemoryStore(), sitestest.NewPublisher(), sitestest.NewOrigins()
+	h := &domainHarness{serviceHarness: &serviceHarness{store: store, publisher: publisher, origins: origins},
+		zone: sitestest.NewZone(), hostnames: sitestest.NewMemoryHostnames(), resolver: sitestest.NewResolver(),
+		projects: sitestest.NewProjects(), clock: &now}
+	store.Now = func() time.Time { return *h.clock }
+	options := sites.Options{
+		BaseDomain: testDomain, SpoolDir: t.TempDir(), Hostnames: h.hostnames,
+		CustomDomains: &sites.CustomDomainOptions{Zone: h.zone, Target: testTarget, ReservedDomains: []string{"excalibase.io"},
+			Resolver: h.resolver, Projects: h.projects},
 	}
-	h := &domainHarness{serviceHarness: &serviceHarness{service: service, store: store, publisher: publisher, origins: origins},
-		zone: zone, hostnames: hostnames, resolver: resolver, projects: projects, clock: &now}
-	service.SetNow(clock)
-	return h
-}
-
-// withLimits rebuilds the harness's service on the same fakes with the plan's limits.
-func (h *domainHarness) withLimits(t *testing.T, limits sites.DeployLimiter) *sites.Service {
-	t.Helper()
-	service, err := sites.NewService(h.store, h.publisher, h.origins, sites.Options{
-		BaseDomain: testDomain, SpoolDir: t.TempDir(), DeployLimits: limits,
-		CustomDomains: &sites.CustomDomainOptions{Zone: h.zone, Target: testTarget, Resolver: h.resolver, Projects: h.projects},
-		Hostnames:     h.hostnames,
-	})
+	configure(&options)
+	service, err := sites.NewService(store, publisher, origins, options)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 	service.SetNow(func() time.Time { return *h.clock })
-	return service
+	h.service = service
+	return h
 }
 
-func (h *domainHarness) add(t *testing.T, site *sites.Site, hostname string) *sites.CustomHostname {
+// claim adds the domain without its proof: nothing reaches Cloudflare yet.
+func (h *domainHarness) claim(t *testing.T, site *sites.Site, hostname string) *sites.CustomHostname {
 	t.Helper()
 	added, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
-		ProjectID: testProject, SiteID: site.ID, Hostname: hostname, Actor: testActor,
+		ProjectID: site.ProjectID, SiteID: site.ID, Hostname: hostname, Actor: testActor,
 	})
 	if err != nil {
 		t.Fatalf("AddHostname(%s): %v", hostname, err)
 	}
-	if !h.unproven {
-		h.prove(t, added)
-	}
 	return added
 }
 
-// prove adds the TXT record the platform asked the owner for.
+// add claims the domain, publishes its TXT proof and checks it, which creates it on the zone.
+func (h *domainHarness) add(t *testing.T, site *sites.Site, hostname string) *sites.CustomHostname {
+	t.Helper()
+	added := h.claim(t, site, hostname)
+	h.prove(t, added)
+	return h.refresh(t, site, added.ID)
+}
+
+// prove publishes the TXT record the platform asked the owner for.
 func (h *domainHarness) prove(t *testing.T, added *sites.CustomHostname) {
 	t.Helper()
 	for _, record := range added.Records {
 		if record.Purpose == sites.PurposeVerification {
-			h.resolver.Set(record.Name, record.Value)
+			h.resolver.Add(record.Name, record.Value)
 			return
 		}
 	}
@@ -90,12 +88,25 @@ func (h *domainHarness) prove(t *testing.T, added *sites.CustomHostname) {
 
 func (h *domainHarness) refresh(t *testing.T, site *sites.Site, id string) *sites.CustomHostname {
 	t.Helper()
-	*h.clock = h.clock.Add(time.Minute)
-	refreshed, err := h.service.RefreshHostname(context.Background(), testProject, site.ID, id)
+	refreshed, err := h.tryRefresh(site, id)
 	if err != nil {
 		t.Fatalf("RefreshHostname: %v", err)
 	}
 	return refreshed
+}
+
+func (h *domainHarness) tryRefresh(site *sites.Site, id string) (*sites.CustomHostname, error) {
+	*h.clock = h.clock.Add(time.Minute)
+	return h.service.RefreshHostname(context.Background(), site.ProjectID, site.ID, id)
+}
+
+func (h *domainHarness) stored(t *testing.T, site *sites.Site, id string) *sites.CustomHostname {
+	t.Helper()
+	stored, err := h.hostnames.GetHostname(context.Background(), site.ProjectID, site.ID, id)
+	if err != nil || stored == nil {
+		t.Fatalf("stored hostname %s: %v %v", id, stored, err)
+	}
+	return stored
 }
 
 func (h *domainHarness) liveSite(t *testing.T, name string) *sites.Site {
@@ -107,30 +118,82 @@ func (h *domainHarness) liveSite(t *testing.T, name string) *sites.Site {
 	return site
 }
 
-func TestAddHostnameCreatesACustomHostnameValidatedOverHTTPAndRoutesNothingYet(t *testing.T) {
+// otherSite is a site of another project, stored directly.
+func (h *domainHarness) otherSite(t *testing.T, project, name string) *sites.Site {
+	t.Helper()
+	site := &sites.Site{ID: "site-" + project + "-" + name, ProjectID: project, Name: name, Hostname: name + "." + testDomain}
+	if err := h.store.Create(context.Background(), site, 5); err != nil {
+		t.Fatal(err)
+	}
+	return site
+}
+
+func (h *domainHarness) routed(hostname string) bool {
+	_, ok := h.publisher.Hosts[hostname]
+	return ok
+}
+
+func recordKinds(records []sites.DNSInstruction) string {
+	kinds := []string{}
+	for _, record := range records {
+		kinds = append(kinds, record.Type+":"+record.Purpose)
+	}
+	return strings.Join(kinds, ",")
+}
+
+// Adding only claims the name: no Cloudflare call until whoever added it proves control.
+func TestAddingADomainAsksForItsRecordsAndCallsNoCloudflare(t *testing.T) {
 	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
-	added := h.add(t, site, "WWW.Example.com")
-	if added.Hostname != "www.example.com" || added.Status != sites.HostnamePending || added.Validation != "http" {
+	added := h.claim(t, site, "WWW.Example.com")
+	if added.Hostname != "www.example.com" || added.Status != sites.HostnamePending || added.Validation != "http" || added.VerifiedAt != nil {
 		t.Fatalf("added = %+v", added)
 	}
-	created := h.zone.Created()
-	if len(created) != 1 || created[0] != "www.example.com/http" {
-		t.Fatalf("cloudflare got %v", created)
+	if len(h.zone.Created()) != 0 || h.zone.Reads() != 0 {
+		t.Fatalf("cloudflare was called for an unproven claim: %v", h.zone.Created())
 	}
-	if len(added.Records) != 2 || added.Records[0].Type != "CNAME" || added.Records[0].Value != testTarget {
+	if recordKinds(added.Records) != "CNAME:routing,TXT:verification" || added.Records[0].Value != testTarget {
 		t.Fatalf("records = %+v", added.Records)
 	}
-	if verify := added.Records[1]; verify.Type != "TXT" || verify.Name != "_excalibase-challenge.www.example.com" ||
-		!strings.HasPrefix(verify.Value, "excalibase-verification=") || verify.Purpose != sites.PurposeVerification {
+	if verify := added.Records[1]; verify.Name != "_excalibase-challenge.www.example.com" || !strings.HasPrefix(verify.Value, "excalibase-verification=") {
 		t.Fatalf("verification record = %+v", verify)
 	}
-	if _, routed := h.publisher.Hosts["www.example.com"]; routed {
-		t.Fatal("a pending hostname was written to the hosts table")
+	if h.routed("www.example.com") {
+		t.Fatal("an unproven claim was written to the hosts table")
 	}
 }
 
-func TestAddHostnameWithTXTShowsTheValidationRecords(t *testing.T) {
+func TestACheckWithoutTheProofCallsNoCloudflare(t *testing.T) {
+	h := newDomainHarness(t)
+	site := h.liveSite(t, "shop")
+	added := h.claim(t, site, "www.example.com")
+	h.resolver.Set("_excalibase-challenge.www.example.com", "excalibase-verification=someone-elses")
+	got := h.refresh(t, site, added.ID)
+	if got.VerifiedAt != nil || got.Status != sites.HostnamePending || len(h.zone.Created()) != 0 || h.zone.Reads() != 0 {
+		t.Fatalf("got = %+v created = %v", got, h.zone.Created())
+	}
+	if !strings.Contains(strings.Join(got.Errors, " "), "_excalibase-challenge.www.example.com") {
+		t.Fatalf("errors = %v, want the TXT record named", got.Errors)
+	}
+}
+
+func TestTheProofCreatesTheHostnameOnTheZone(t *testing.T) {
+	h := newDomainHarness(t)
+	site := h.liveSite(t, "shop")
+	added := h.add(t, site, "www.example.com")
+	if added.VerifiedAt == nil || added.Status != sites.HostnamePending {
+		t.Fatalf("added = %+v", added)
+	}
+	if created := h.zone.Created(); len(created) != 1 || created[0] != "www.example.com/http" {
+		t.Fatalf("cloudflare got %v", created)
+	}
+	// The proof is checked again while the domain serves, so its record stays listed.
+	if recordKinds(added.Records) != "CNAME:routing,TXT:verification" {
+		t.Fatalf("records = %+v", added.Records)
+	}
+}
+
+func TestTXTValidationShowsCloudflaresRecordsOnceProven(t *testing.T) {
 	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
 	added, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
@@ -139,12 +202,10 @@ func TestAddHostnameWithTXTShowsTheValidationRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddHostname: %v", err)
 	}
-	types := []string{}
-	for _, record := range added.Records {
-		types = append(types, record.Type+":"+record.Purpose)
-	}
-	if strings.Join(types, ",") != "CNAME:routing,TXT:verification,TXT:ownership,TXT:certificate" {
-		t.Fatalf("records = %v", types)
+	h.prove(t, added)
+	got := h.refresh(t, site, added.ID)
+	if recordKinds(got.Records) != "CNAME:routing,TXT:verification,TXT:ownership,TXT:certificate" {
+		t.Fatalf("records = %v", recordKinds(got.Records))
 	}
 	if h.zone.Created()[0] != "www.example.com/txt" {
 		t.Fatalf("cloudflare got %v", h.zone.Created())
@@ -154,9 +215,10 @@ func TestAddHostnameWithTXTShowsTheValidationRecords(t *testing.T) {
 func TestAddHostnameRefusesBadInput(t *testing.T) {
 	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
+	long := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 36) + ".com"
 	for _, request := range []sites.AddHostnameRequest{
 		{Hostname: "1.2.3.4"}, {Hostname: "other.excalibase.app"}, {Hostname: "www.excalibase.io"},
-		{Hostname: "example.com"}, {Hostname: "www.example.com", Validation: "email"},
+		{Hostname: "example.com"}, {Hostname: "www.example.com", Validation: "email"}, {Hostname: long},
 	} {
 		request.ProjectID, request.SiteID, request.Actor = testProject, site.ID, testActor
 		_, err := h.service.AddHostname(context.Background(), request)
@@ -165,35 +227,44 @@ func TestAddHostnameRefusesBadInput(t *testing.T) {
 			t.Errorf("%+v: err = %v, want an input refusal", request, err)
 		}
 	}
-	if len(h.zone.Created()) != 0 {
-		t.Fatalf("cloudflare was called: %v", h.zone.Created())
-	}
 }
 
-func TestAHostnameIsHeldByOneProjectOnly(t *testing.T) {
+// An unproven claim holds nothing: whoever proves control first gets the domain.
+func TestAnUnprovenClaimHoldsNothing(t *testing.T) {
 	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
-	h.add(t, site, "www.example.com")
-	other := &sites.Site{ID: "other-site", ProjectID: "proj-other", Name: "other", Hostname: "other.excalibase.app"}
-	if err := h.store.Create(context.Background(), other, 5); err != nil {
-		t.Fatal(err)
+	squatter := h.claim(t, site, "www.example.com")
+	if _, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
+		ProjectID: testProject, SiteID: site.ID, Hostname: "www.example.com", Actor: testActor,
+	}); !errors.Is(err, sites.ErrHostnameTaken) {
+		t.Fatalf("err = %v, want one claim per project", err)
 	}
-	_, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
-		ProjectID: "proj-other", SiteID: other.ID, Hostname: "www.example.com", Actor: testActor,
-	})
-	if !errors.Is(err, sites.ErrHostnameTaken) {
-		t.Fatalf("err = %v, want taken", err)
+	owner := h.otherSite(t, otherProject, "owner")
+	proven := h.add(t, owner, "www.example.com")
+	if proven.VerifiedAt == nil {
+		t.Fatalf("the owner's proof was not taken: %+v", proven)
+	}
+	h.prove(t, squatter)
+	if _, err := h.tryRefresh(site, squatter.ID); !errors.Is(err, sites.ErrHostnameTaken) {
+		t.Fatalf("err = %v, want the name held by the proven claim", err)
 	}
 	if len(h.zone.Created()) != 1 {
-		t.Fatalf("cloudflare got a second create: %v", h.zone.Created())
+		t.Fatalf("cloudflare got %v", h.zone.Created())
+	}
+	late := h.otherSite(t, "proj-late", "late")
+	if _, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
+		ProjectID: late.ProjectID, SiteID: late.ID, Hostname: "www.example.com", Actor: testActor,
+	}); !errors.Is(err, sites.ErrHostnameTaken) {
+		t.Fatalf("err = %v, want a proven name refused to everyone else", err)
 	}
 }
 
+// The limit counts claims waiting for their proof too.
 func TestAProjectHoldsAtMostThePlansLimitAcrossItsSites(t *testing.T) {
 	h := newDomainHarness(t)
 	shop, blog := h.liveSite(t, "shop"), h.liveSite(t, "journal")
-	h.add(t, shop, "www.example.com")
-	h.add(t, blog, "blog.example.com")
+	h.claim(t, shop, "www.example.com")
+	h.claim(t, blog, "blog.example.com")
 	_, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
 		ProjectID: testProject, SiteID: blog.ID, Hostname: "news.example.com", Actor: testActor,
 	})
@@ -206,11 +277,10 @@ func TestAProjectHoldsAtMostThePlansLimitAcrossItsSites(t *testing.T) {
 func TestTheCustomDomainLimitFollowsThePlan(t *testing.T) {
 	limits := sites.DefaultLimits
 	limits.MaxSites, limits.MaxCustomDomains = 5, 3
-	h := newDomainHarness(t)
-	h.service = h.withLimits(t, fixedLimits{limits})
+	h := newDomainHarnessWith(t, func(options *sites.Options) { options.DeployLimits = fixedLimits{limits} })
 	shop := h.liveSite(t, "shop")
 	for _, host := range []string{"a.example.com", "b.example.com", "c.example.com"} {
-		h.add(t, shop, host)
+		h.claim(t, shop, host)
 	}
 	if _, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
 		ProjectID: testProject, SiteID: shop.ID, Hostname: "d.example.com", Actor: testActor,
@@ -218,34 +288,17 @@ func TestTheCustomDomainLimitFollowsThePlan(t *testing.T) {
 		t.Fatalf("err = %v, want the plan's limit of 3", err)
 	}
 	limits.MaxCustomDomains = 0
-	none := newDomainHarness(t)
-	none.service = none.withLimits(t, fixedLimits{limits})
+	none := newDomainHarnessWith(t, func(options *sites.Options) { options.DeployLimits = fixedLimits{limits} })
 	site := none.liveSite(t, "shop")
 	if _, err := none.service.AddHostname(context.Background(), sites.AddHostnameRequest{
 		ProjectID: testProject, SiteID: site.ID, Hostname: "a.example.com", Actor: testActor,
-	}); !errors.Is(err, sites.ErrHostnameLimitReached) || len(none.zone.Created()) != 0 {
-		t.Fatalf("err = %v created = %v, want a plan without custom domains refused before Cloudflare", err, none.zone.Created())
+	}); !errors.Is(err, sites.ErrHostnameLimitReached) {
+		t.Fatalf("err = %v, want a plan without custom domains refused", err)
 	}
 }
 
-func TestACloudflareRefusalOnAddLeavesNoClaim(t *testing.T) {
-	h := newDomainHarness(t)
-	site := h.liveSite(t, "shop")
-	h.zone.FailCreate = errors.New("cloudflare down")
-	_, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
-		ProjectID: testProject, SiteID: site.ID, Hostname: "www.example.com", Actor: testActor,
-	})
-	var publishErr *sites.PublishError
-	if !errors.As(err, &publishErr) {
-		t.Fatalf("err = %v, want the CDN failure", err)
-	}
-	if listed, _ := h.service.ListHostnames(context.Background(), testProject, site.ID); len(listed) != 0 {
-		t.Fatalf("hostnames = %+v, want the claim dropped", listed)
-	}
-}
-
-// A create that reached Cloudflare but whose answer was lost is adopted on the next try, not refused.
-func TestAddHostnameAdoptsTheZonesOwnCopyOfAHostnameItHolds(t *testing.T) {
+// A create that reached Cloudflare but whose answer was lost is adopted, not refused.
+func TestTheProofAdoptsTheZonesOwnCopyOfAHostnameItHolds(t *testing.T) {
 	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
 	existing := h.zone.Seed("www.example.com", "pending", "pending_validation")
@@ -256,17 +309,17 @@ func TestAddHostnameAdoptsTheZonesOwnCopyOfAHostnameItHolds(t *testing.T) {
 }
 
 func TestRefreshRoutesTheHostnameOnceItAndItsCertificateAreActive(t *testing.T) {
-	h := newDomainHarness(t, "http://localhost:5173")
+	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
 	added := h.add(t, site, "www.example.com")
 	h.zone.SetState("www.example.com", "active", "pending_validation")
 	if got := h.refresh(t, site, added.ID); got.Status != sites.HostnamePending {
 		t.Fatalf("status = %s with the certificate still pending", got.Status)
 	}
-	if _, routed := h.publisher.Hosts["www.example.com"]; routed {
+	if h.routed("www.example.com") {
 		t.Fatal("routed before the certificate was active")
 	}
-	if h.zone.Revalidations() != 1 {
+	if h.zone.Revalidations() < 1 {
 		t.Fatalf("revalidations = %d, want a nudge while pending", h.zone.Revalidations())
 	}
 	h.zone.SetState("www.example.com", "active", "active")
@@ -287,7 +340,7 @@ func TestAnActiveHostnameOfASiteNeverDeployedWaitsForTheFirstDeploy(t *testing.T
 	if got := h.refresh(t, site, added.ID); got.Status != sites.HostnameActive {
 		t.Fatalf("status = %s", got.Status)
 	}
-	if _, routed := h.publisher.Hosts["www.example.com"]; routed {
+	if h.routed("www.example.com") {
 		t.Fatal("routed to a Worker that does not exist yet")
 	}
 	if _, err := h.deploy(t, site, viteDist(t)); err != nil {
@@ -298,31 +351,16 @@ func TestAnActiveHostnameOfASiteNeverDeployedWaitsForTheFirstDeploy(t *testing.T
 	}
 }
 
-func TestAHostnameThatStopsBeingActiveLeavesTheRouter(t *testing.T) {
-	h := newDomainHarness(t)
-	site := h.liveSite(t, "shop")
-	added := h.add(t, site, "www.example.com")
-	h.zone.SetState("www.example.com", "active", "active")
-	h.refresh(t, site, added.ID)
-	h.zone.SetState("www.example.com", "moved", "active")
-	if got := h.refresh(t, site, added.ID); got.Status != sites.HostnameFailed {
-		t.Fatalf("status = %s", got.Status)
-	}
-	if _, routed := h.publisher.Hosts["www.example.com"]; routed {
-		t.Fatal("a moved hostname is still routed")
-	}
-}
-
 func TestRefreshWithinSecondsAnswersTheStoredStateWithoutCallingCloudflare(t *testing.T) {
 	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
 	added := h.add(t, site, "www.example.com")
-	reads := h.zone.Reads()
+	reads, lookups := h.zone.Reads(), len(h.resolver.Lookups())
 	if _, err := h.service.RefreshHostname(context.Background(), testProject, site.ID, added.ID); err != nil {
 		t.Fatalf("RefreshHostname: %v", err)
 	}
-	if h.zone.Reads() != reads {
-		t.Fatal("a refresh right after the last check called Cloudflare again")
+	if h.zone.Reads() != reads || len(h.resolver.Lookups()) != lookups {
+		t.Fatal("a refresh right after the last check looked again")
 	}
 }
 
@@ -343,8 +381,27 @@ func TestRemoveHostnameUnroutesThenDeletesTheCustomHostname(t *testing.T) {
 	if h.zone.Holds("www.example.com") || strings.Contains(strings.Join(h.origins.Origins, ","), "www.example.com") {
 		t.Fatalf("zone or CORS still hold the hostname: %v", h.origins.Origins)
 	}
-	if _, err := h.service.RefreshHostname(context.Background(), testProject, site.ID, added.ID); !errors.Is(err, sites.ErrHostnameNotFound) {
+	if _, err := h.tryRefresh(site, added.ID); !errors.Is(err, sites.ErrHostnameNotFound) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Removing an unproven claim touches neither the router nor the zone: the name there may be someone else's.
+func TestRemovingAnUnprovenClaimLeavesTheProvenOwnerServing(t *testing.T) {
+	h := newDomainHarness(t)
+	site := h.liveSite(t, "shop")
+	squatter := h.claim(t, site, "www.example.com")
+	owner := h.otherSite(t, otherProject, "owner")
+	proven := h.add(t, owner, "www.example.com")
+	h.zone.SetState("www.example.com", "active", "active")
+	h.publisher.Hosts["www.example.com"] = sites.ScriptName(owner)
+	h.refresh(t, owner, proven.ID)
+	h.publisher.Calls, h.zone.Log = nil, nil
+	if err := h.service.RemoveHostname(context.Background(), testProject, site.ID, squatter.ID); err != nil {
+		t.Fatalf("RemoveHostname: %v", err)
+	}
+	if len(h.publisher.Calls) != 0 || len(h.zone.Log) != 0 || !h.zone.Holds("www.example.com") || !h.routed("www.example.com") {
+		t.Fatalf("calls = %v zone = %v", h.publisher.Calls, h.zone.Log)
 	}
 }
 
@@ -365,6 +422,7 @@ func TestDeletingASiteRemovesItsHostnamesFirst(t *testing.T) {
 	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
 	added := h.add(t, site, "www.example.com")
+	h.claim(t, site, "waiting.example.com")
 	h.zone.SetState("www.example.com", "active", "active")
 	h.refresh(t, site, added.ID)
 	if err := h.service.Delete(context.Background(), testProject, site.ID); err != nil {
@@ -408,6 +466,9 @@ func TestGracePeriodUnroutesCustomHostnamesAndACancelRoutesTheActiveOnes(t *test
 	if !h.zone.Holds("www.example.com") {
 		t.Fatal("the grace period removed the custom hostname; a cancel could not bring it back")
 	}
+	// The cancel runs while the project still reads as scheduled for deletion.
+	h.projects.Stop(testProject)
+	*h.clock = h.clock.Add(time.Minute)
 	if err := h.service.RouteProjectSites(context.Background(), testProject); err != nil {
 		t.Fatalf("Route: %v", err)
 	}
@@ -416,11 +477,27 @@ func TestGracePeriodUnroutesCustomHostnamesAndACancelRoutesTheActiveOnes(t *test
 	}
 }
 
-func TestRefreshPendingChecksWaitingHostnamesAndDropsAbandonedOnes(t *testing.T) {
+// A project's grace period leaves alone a name another project proved: its own claim on it is unproven.
+func TestGracePeriodLeavesAnotherProjectsProvenNameRouted(t *testing.T) {
+	h := newDomainHarness(t)
+	site := h.liveSite(t, "shop")
+	h.claim(t, site, "www.example.com")
+	owner := h.otherSite(t, otherProject, "owner")
+	h.add(t, owner, "www.example.com")
+	h.publisher.Hosts["www.example.com"] = sites.ScriptName(owner)
+	if err := h.service.UnrouteProjectSites(context.Background(), testProject); err != nil {
+		t.Fatalf("Unroute: %v", err)
+	}
+	if h.publisher.Hosts["www.example.com"] != sites.ScriptName(owner) {
+		t.Fatalf("hosts = %v, want the owner still routed", h.publisher.Hosts)
+	}
+}
+
+func TestTheSweepChecksWaitingHostnamesAndDropsAbandonedOnes(t *testing.T) {
 	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
 	h.add(t, site, "www.example.com")
-	h.add(t, site, "old.example.com")
+	h.claim(t, site, "old.example.com")
 	h.hostnames.Age("old.example.com", sites.PendingHostnameLifetime+time.Hour)
 	h.zone.SetState("www.example.com", "active", "active")
 	*h.clock = h.clock.Add(time.Minute)
@@ -428,8 +505,11 @@ func TestRefreshPendingChecksWaitingHostnamesAndDropsAbandonedOnes(t *testing.T)
 	if report.Activated != 1 || report.Expired != 1 || report.Failed != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if h.publisher.Hosts["www.example.com"] != sites.ScriptName(site) || h.zone.Holds("old.example.com") {
-		t.Fatalf("hosts = %v, old still held = %v", h.publisher.Hosts, h.zone.Holds("old.example.com"))
+	if h.publisher.Hosts["www.example.com"] != sites.ScriptName(site) {
+		t.Fatalf("hosts = %v", h.publisher.Hosts)
+	}
+	if listed, _ := h.hostnames.ListProjectHostnames(context.Background(), testProject); len(listed) != 1 {
+		t.Fatalf("hostnames = %+v, want the abandoned claim dropped", listed)
 	}
 }
 
@@ -451,90 +531,38 @@ func TestASiteCannotTakeTheCNAMETargetsName(t *testing.T) {
 	}
 }
 
-// A CNAME left behind by an earlier owner validates on Cloudflare by itself, so
-// nothing is routed until whoever adds the domain proves it with their own TXT record.
-func TestAnActiveHostnameIsNotRoutedUntilItsOwnerProvesTheDomain(t *testing.T) {
+// A create whose answer was lost may have reached the zone: the proof is kept and the next check adopts it.
+func TestAnUnansweredCreateIsAdoptedOnTheNextCheck(t *testing.T) {
 	h := newDomainHarness(t)
-	h.unproven = true
 	site := h.liveSite(t, "shop")
-	added := h.add(t, site, "www.example.com")
-	h.zone.SetState("www.example.com", "active", "active")
-	got := h.refresh(t, site, added.ID)
-	if got.Status != sites.HostnamePending || got.VerifiedAt != nil {
-		t.Fatalf("status = %s verified = %v without the owner's TXT record", got.Status, got.VerifiedAt)
-	}
-	if _, routed := h.publisher.Hosts["www.example.com"]; routed {
-		t.Fatal("routed on a CNAME alone")
-	}
-	if !strings.Contains(strings.Join(got.Errors, " "), "_excalibase-challenge.www.example.com") {
-		t.Fatalf("errors = %v, want the missing TXT record named", got.Errors)
-	}
-	h.resolver.Set("_excalibase-challenge.www.example.com", "excalibase-verification=someone-elses")
-	if got := h.refresh(t, site, added.ID); got.Status != sites.HostnamePending {
-		t.Fatalf("another token proved it: %s", got.Status)
-	}
+	added := h.claim(t, site, "www.example.com")
 	h.prove(t, added)
-	got = h.refresh(t, site, added.ID)
-	if got.Status != sites.HostnameActive || got.VerifiedAt == nil || h.publisher.Hosts["www.example.com"] != sites.ScriptName(site) {
-		t.Fatalf("status = %s hosts = %v", got.Status, h.publisher.Hosts)
-	}
-	for _, record := range got.Records {
-		if record.Purpose == sites.PurposeVerification {
-			t.Fatalf("a proven domain still asks for its TXT record: %+v", got.Records)
-		}
-	}
-}
-
-// A create whose answer was lost may still have reached the zone: it is found and removed before the claim goes.
-func TestAnUnansweredCreateLeavesNothingOnTheZone(t *testing.T) {
-	h := newDomainHarness(t)
-	site := h.liveSite(t, "shop")
 	h.zone.FailCreateAfterStore = context.DeadlineExceeded
-	if _, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
-		ProjectID: testProject, SiteID: site.ID, Hostname: "www.example.com", Actor: testActor,
-	}); err == nil {
+	if _, err := h.tryRefresh(site, added.ID); err == nil {
 		t.Fatal("want the failure")
 	}
-	if h.zone.Holds("www.example.com") {
-		t.Fatal("the hostname was left on the zone")
+	if stored := h.stored(t, site, added.ID); stored.VerifiedAt == nil || len(stored.Errors) == 0 {
+		t.Fatalf("stored = %+v, want the proof kept and the failure shown", stored)
 	}
-	if listed, _ := h.hostnames.ListProjectHostnames(context.Background(), testProject); len(listed) != 0 {
-		t.Fatalf("claim kept: %+v", listed)
-	}
-}
-
-// When the zone cannot be cleaned either, the claim stays so a later check finds the hostname again.
-func TestAnUnansweredCreateThatCannotBeCleanedKeepsTheClaim(t *testing.T) {
-	h := newDomainHarness(t)
-	site := h.liveSite(t, "shop")
-	h.zone.FailCreateAfterStore, h.zone.FailDelete = context.DeadlineExceeded, errors.New("down")
-	if _, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
-		ProjectID: testProject, SiteID: site.ID, Hostname: "www.example.com", Actor: testActor,
-	}); err == nil {
-		t.Fatal("want the failure")
-	}
-	listed, _ := h.hostnames.ListProjectHostnames(context.Background(), testProject)
-	if len(listed) != 1 || listed[0].Status != sites.HostnamePending {
-		t.Fatalf("claim = %+v, want it kept pending", listed)
-	}
-	h.zone.FailCreateAfterStore, h.zone.FailDelete = nil, nil
-	got := h.refresh(t, site, listed[0].ID)
+	h.zone.FailCreateAfterStore = nil
+	got := h.refresh(t, site, added.ID)
 	if h.hostnames.CloudflareID(got.ID) == "" || len(h.zone.Created()) != 0 {
 		t.Fatalf("the zone's copy was not adopted: id=%q created=%v", h.hostnames.CloudflareID(got.ID), h.zone.Created())
 	}
 }
 
-func TestADefiniteRefusalOnAddDropsTheClaim(t *testing.T) {
+// A definite refusal created nothing: the claim stays, unproven, with Cloudflare's reason.
+func TestADefiniteRefusalReleasesTheProof(t *testing.T) {
 	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
+	added := h.claim(t, site, "www.example.com")
+	h.prove(t, added)
 	h.zone.FailCreate = &cfworkers.APIError{Status: 400, Codes: []int{1411}, Message: "hostname not allowed"}
-	if _, err := h.service.AddHostname(context.Background(), sites.AddHostnameRequest{
-		ProjectID: testProject, SiteID: site.ID, Hostname: "www.example.com", Actor: testActor,
-	}); err == nil {
+	if _, err := h.tryRefresh(site, added.ID); err == nil {
 		t.Fatal("want the refusal")
 	}
-	if listed, _ := h.hostnames.ListProjectHostnames(context.Background(), testProject); len(listed) != 0 {
-		t.Fatalf("claim kept: %+v", listed)
+	if stored := h.stored(t, site, added.ID); stored.VerifiedAt != nil || len(stored.Errors) == 0 {
+		t.Fatalf("stored = %+v, want the name released and the reason shown", stored)
 	}
 }
 
@@ -553,7 +581,7 @@ func TestTheSweepRereadsAHostnameOnceItHoldsTheSite(t *testing.T) {
 	if report.Activated != 0 || report.Failed != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if _, routed := h.publisher.Hosts["www.example.com"]; routed {
+	if h.routed("www.example.com") {
 		t.Fatal("a removed hostname was routed")
 	}
 }
@@ -568,7 +596,7 @@ func TestAHostnameOfAProjectBeingDeletedIsNotRouted(t *testing.T) {
 	if got := h.refresh(t, site, added.ID); got.Status != sites.HostnameActive {
 		t.Fatalf("status = %s", got.Status)
 	}
-	if _, routed := h.publisher.Hosts["www.example.com"]; routed {
+	if h.routed("www.example.com") {
 		t.Fatal("routed while the project is scheduled for deletion")
 	}
 }
@@ -579,12 +607,10 @@ func TestAFailedCheckIsRecorded(t *testing.T) {
 	site := h.liveSite(t, "shop")
 	added := h.add(t, site, "www.example.com")
 	h.zone.FailGet = errors.New("down")
-	*h.clock = h.clock.Add(time.Minute)
-	if _, err := h.service.RefreshHostname(context.Background(), testProject, site.ID, added.ID); err == nil {
+	if _, err := h.tryRefresh(site, added.ID); err == nil {
 		t.Fatal("want the failure")
 	}
-	stored, _ := h.hostnames.GetHostname(context.Background(), testProject, site.ID, added.ID)
-	if !stored.CheckedAt.Equal(*h.clock) || len(stored.Errors) == 0 {
+	if stored := h.stored(t, site, added.ID); !stored.CheckedAt.Equal(*h.clock) || len(stored.Errors) == 0 {
 		t.Fatalf("stored = %+v", stored)
 	}
 }
@@ -601,18 +627,11 @@ func TestAHostnameGoneFromTheZoneIsCreatedAgain(t *testing.T) {
 	}
 }
 
-// A domain that stopped serving releases its CORS origin, and one down for the whole lifetime is dropped.
+// A domain not serving for the whole lifetime is dropped, from the zone too.
 func TestAHostnameDownForTheLifetimeIsDropped(t *testing.T) {
 	h := newDomainHarness(t)
 	site := h.liveSite(t, "shop")
-	added := h.add(t, site, "www.example.com")
-	h.zone.SetState("www.example.com", "active", "active")
-	h.refresh(t, site, added.ID)
-	h.zone.SetState("www.example.com", "moved", "active")
-	h.refresh(t, site, added.ID)
-	if strings.Contains(strings.Join(h.origins.Origins, ","), "www.example.com") {
-		t.Fatalf("origins = %v, want the custom origin released", h.origins.Origins)
-	}
+	h.add(t, site, "www.example.com")
 	*h.clock = h.clock.Add(sites.PendingHostnameLifetime + time.Hour)
 	if report := h.service.RefreshPendingHostnames(context.Background()); report.Expired != 1 {
 		t.Fatalf("report = %+v", report)

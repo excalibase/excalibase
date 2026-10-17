@@ -8,9 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 )
 
@@ -21,11 +25,14 @@ func sitesConfig(zoneID string) config.AppConfig {
 }
 
 func TestSiteCustomDomainsNeedTheZone(t *testing.T) {
-	if customDomainOptions(sitesConfig(""), fakestore.NewInstances()) != nil {
+	if customDomainOptions(sitesConfig(""), fakestore.NewInstances(), nil) != nil {
 		t.Fatal("custom domains wired without a zone id")
 	}
-	options := customDomainOptions(sitesConfig("0123456789abcdef0123456789abcdef"), fakestore.NewInstances())
-	if options == nil || options.Target != "cname.excalibase.app" || options.Zone == nil || options.Resolver == nil || options.Projects == nil {
+	withZone := sitesConfig("0123456789abcdef0123456789abcdef")
+	withZone.Sites.MaxZoneHostnames = 40
+	options := customDomainOptions(withZone, fakestore.NewInstances(), &fakeClaimer{})
+	if options == nil || options.Target != "cname.excalibase.app" || options.Zone == nil || options.Resolver == nil || options.Projects == nil ||
+		options.MaxOnZone != 40 {
 		t.Fatalf("options = %+v", options)
 	}
 	for _, domain := range []string{"apps.example.test", "api.example.test", "studio.example.test"} {
@@ -56,5 +63,64 @@ func TestProjectGateStopsAProjectBeingDeleted(t *testing.T) {
 		if err != nil || serving != want {
 			t.Errorf("%s: serving=%v err=%v, want %v", project, serving, err, want)
 		}
+	}
+}
+
+// fakeClaimer is the project lifecycle lease: busy while another operation holds it.
+type fakeClaimer struct {
+	busy    bool
+	claimed []string
+}
+
+func (f *fakeClaimer) Claim(_ context.Context, projectID string, _ service.ProjectOperation) (func(), bool, error) {
+	if f.busy {
+		return nil, false, nil
+	}
+	f.claimed = append(f.claimed, projectID)
+	return func() {}, true, nil
+}
+
+// A custom domain's check takes the same lease deletion, pause and resume take.
+func TestProjectGateHoldsTheLifecycleLease(t *testing.T) {
+	claimer := &fakeClaimer{}
+	gate := projectGate{instances: fakestore.NewInstances(), claimer: claimer}
+	release, held, err := gate.HoldProject(context.Background(), "p1")
+	if err != nil || !held || release == nil || !slices.Equal(claimer.claimed, []string{"p1"}) {
+		t.Fatalf("held=%v err=%v claimed=%v", held, err, claimer.claimed)
+	}
+	release()
+	claimer.busy = true
+	if _, held, err := gate.HoldProject(context.Background(), "p1"); err != nil || held {
+		t.Fatalf("held=%v err=%v while another operation runs", held, err)
+	}
+	unleased := projectGate{instances: fakestore.NewInstances()}
+	if release, held, err := unleased.HoldProject(context.Background(), "p1"); err != nil || !held || release == nil {
+		t.Fatalf("without a claimer: held=%v err=%v", held, err)
+	}
+}
+
+// Adding and removing custom domains is bounded per project: each one is Cloudflare calls on one token.
+func TestSiteDomainWritesAreLimitedPerProject(t *testing.T) {
+	limiter := newSiteDomainWriteLimiter()
+	router := chi.NewRouter()
+	router.Route("/api/projects/{projectId}", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.With(limiter).Post("/domains", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusCreated) })
+	})
+	post := func(project string) int {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/projects/"+project+"/domains", nil))
+		return recorder.Code
+	}
+	for i := 0; i < siteDomainWriteBudget; i++ {
+		if code := post("p1"); code != http.StatusCreated {
+			t.Fatalf("write %d = %d", i, code)
+		}
+	}
+	if code := post("p1"); code != http.StatusTooManyRequests {
+		t.Fatalf("write past the budget = %d, want 429", code)
+	}
+	if code := post("p2"); code != http.StatusCreated {
+		t.Fatalf("another project's write = %d", code)
 	}
 }

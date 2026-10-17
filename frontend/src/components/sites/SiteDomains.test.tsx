@@ -93,9 +93,12 @@ describe('SiteDomains', () => {
     expect(records).toHaveTextContent('dcv-1');
     expect(records).toHaveTextContent('excalibase-verification=tok-1');
     expect(records).toHaveTextContent(/proves you control the domain/i);
+    expect(row).toHaveTextContent(/nothing is set up until the TXT record is seen/i);
     expect(row).toHaveTextContent('custom hostname does not CNAME to this zone.');
     const live = screen.getByTestId('site-domain-shop.example.com');
     expect(within(live).getByTestId('site-domain-status-dom-2')).toHaveTextContent('Live');
+    // The proof is checked again while the domain serves.
+    expect(live).toHaveTextContent(/keep its CNAME and TXT records in place/i);
     expect(within(live).getByRole('link', { name: 'https://shop.example.com' })).toHaveAttribute(
       'href',
       'https://shop.example.com',

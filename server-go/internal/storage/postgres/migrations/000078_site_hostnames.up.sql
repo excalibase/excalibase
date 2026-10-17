@@ -1,6 +1,7 @@
 -- Custom hostnames of sites (EXC-614): a customer's own domain, added to the
--- user-content zone through Cloudflare for SaaS. A hostname is unique across
--- every project. No ON DELETE CASCADE: a site is deleted only after each of
+-- user-content zone through Cloudflare for SaaS. A project claims a hostname
+-- once; across projects only the row whose owner proved control (verified_at)
+-- holds it, so an unproven claim cannot squat a name. No ON DELETE CASCADE: a site is deleted only after each of
 -- its hostnames left the zone, so none is left there untracked.
 CREATE TABLE IF NOT EXISTS site_hostnames (
     id                 TEXT PRIMARY KEY,
@@ -26,11 +27,13 @@ CREATE TABLE IF NOT EXISTS site_hostnames (
     verified_at        TIMESTAMPTZ,
     -- When it was added or stopped serving; NULL while active. Dropped after a week.
     inactive_since     TIMESTAMPTZ,
-    CONSTRAINT site_hostnames_hostname_key UNIQUE (hostname)
+    CONSTRAINT site_hostnames_project_hostname_key UNIQUE (project_id, hostname)
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS site_hostnames_proven_hostname_key ON site_hostnames(hostname) WHERE verified_at IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_site_hostnames_site ON site_hostnames(project_id, site_id);
-CREATE INDEX IF NOT EXISTS idx_site_hostnames_waiting ON site_hostnames(checked_at) WHERE status <> 'ACTIVE';
+CREATE INDEX IF NOT EXISTS idx_site_hostnames_checked ON site_hostnames(checked_at);
 
 -- Custom domains per project follow the plan with the other Sites limits
 -- (EXC-620). Cloudflare includes 100 per zone and bills each one after.

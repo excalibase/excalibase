@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"slices"
 	"time"
@@ -17,26 +18,44 @@ type TXTResolver interface {
 	LookupTXT(ctx context.Context, name string) ([]string, error)
 }
 
-// checkOwnership looks for the owner's TXT proof until it is seen once.
-// Cloudflare activates a hostname on its CNAME alone, so a CNAME an earlier
-// owner left behind would otherwise hand the domain to whoever adds it next.
-func (s *Service) checkOwnership(ctx context.Context, hostname *CustomHostname) {
-	if hostname.VerifiedAt != nil {
-		return
-	}
-	name, want := VerificationName(hostname.Hostname), verificationPrefix+hostname.VerificationToken
+// proofState is what one lookup of the owner's TXT proof found.
+type proofState int
+
+const (
+	// proofUnknown is a lookup that failed for another reason than a missing record: nothing changes.
+	proofUnknown proofState = iota
+	proofSeen
+	proofGone
+)
+
+// lookupProof reads the owner's TXT proof. Cloudflare activates a hostname on
+// its CNAME alone, so a CNAME an earlier owner left behind would otherwise
+// hand the domain to whoever adds it next. The name is fully qualified, so no
+// search domain is appended to it.
+func (s *Service) lookupProof(ctx context.Context, hostname *CustomHostname) proofState {
 	lookupCtx, cancel := context.WithTimeout(ctx, ownershipLookupTimeout)
 	defer cancel()
-	values, err := s.options.CustomDomains.Resolver.LookupTXT(lookupCtx, name)
-	if err == nil && slices.Contains(values, want) {
-		verifiedAt := s.now().UTC()
-		hostname.VerifiedAt = &verifiedAt
-		return
+	values, err := s.options.CustomDomains.Resolver.LookupTXT(lookupCtx, VerificationName(hostname.Hostname)+".")
+	if err == nil {
+		if slices.Contains(values, verificationPrefix+hostname.VerificationToken) {
+			return proofSeen
+		}
+		return proofGone
 	}
 	var dnsErr *net.DNSError
-	if err != nil && (!errors.As(err, &dnsErr) || !dnsErr.IsNotFound) {
-		hostname.Errors = append(hostname.Errors, fmt.Sprintf("the TXT record %s could not be looked up yet; it is tried again", name))
-		return
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return proofGone
 	}
-	hostname.Errors = append(hostname.Errors, fmt.Sprintf("add the TXT record %s with the value %s to prove the domain is yours", name, want))
+	log.Printf("site %s: look up the proof of %s: %v", hostname.SiteID, hostname.Hostname, err)
+	return proofUnknown
+}
+
+// proofMissing tells the owner what an unproven claim still needs.
+func proofMissing(hostname *CustomHostname, state proofState) string {
+	name := VerificationName(hostname.Hostname)
+	if state == proofUnknown {
+		return fmt.Sprintf("the TXT record %s could not be looked up yet; it is tried again", name)
+	}
+	return fmt.Sprintf("add the TXT record %s with the value %s%s to prove the domain is yours; nothing is set up until it is seen",
+		name, verificationPrefix, hostname.VerificationToken)
 }

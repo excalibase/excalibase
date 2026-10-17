@@ -17,11 +17,20 @@ type siteDomainRequest struct {
 	Validation string `json:"validation"`
 }
 
+// SetDomainWriteLimiter bounds adds and removes: each one is Cloudflare calls on the platform's one token.
+func (h *SiteHandler) SetDomainWriteLimiter(limiter func(http.Handler) http.Handler) {
+	h.domainWrites = limiter
+}
+
 func (h *SiteHandler) domainRoutes(r chi.Router, developer func(http.Handler) http.Handler) {
+	writes := h.domainWrites
+	if writes == nil {
+		writes = func(next http.Handler) http.Handler { return next }
+	}
 	r.Get("/domains", h.available(h.listDomains))
-	r.With(developer).Post("/domains", h.available(h.addDomain))
+	r.With(developer, writes).Post("/domains", h.available(h.addDomain))
 	r.With(developer).Post("/domains/{domainId}/refresh", h.available(h.refreshDomain))
-	r.With(developer).Delete("/domains/{domainId}", h.available(h.removeDomain))
+	r.With(developer, writes).Delete("/domains/{domainId}", h.available(h.removeDomain))
 }
 
 func (h *SiteHandler) listDomains(w http.ResponseWriter, r *http.Request) {

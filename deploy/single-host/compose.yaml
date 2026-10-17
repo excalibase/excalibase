@@ -320,6 +320,7 @@ services:
       # SITES_BASE_DOMAIN, prepared once with `sites-zone-setup --apply`.
       SITES_ZONE_ID: ${SITES_ZONE_ID:-}
       SITES_CUSTOM_DOMAIN_TARGET: ${SITES_CUSTOM_DOMAIN_TARGET:-}
+      SITES_MAX_ZONE_HOSTNAMES: ${SITES_MAX_ZONE_HOSTNAMES:-}
       # DocumentDB projects (EXC-576): off unless .env says "true" (init.sh --documentdb).
       DOCUMENTDB_ENABLED: ${DOCUMENTDB_ENABLED:-false}
       # Apps (EXC-575, ADR 0039): off unless .env says "true" (init.sh --apps).

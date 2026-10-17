@@ -20,17 +20,75 @@ func newHostname(id, site, project, host string) *sites.CustomHostname {
 		Errors: []string{}, CreatedBy: "dev", CreatedAt: now, UpdatedAt: now, VerificationToken: "tok-" + id, InactiveSince: &now}
 }
 
-func TestPostgresHostnameIsGlobalAndTheProjectLimitHolds(t *testing.T) {
+// Only a proven row holds a name across projects; a project claims a name once.
+func TestPostgresOnlyAProvenClaimHoldsAHostname(t *testing.T) {
+	store := sites.NewPostgresStore(platformDB(t).DB())
+	ctx := context.Background()
+	seedSite(t, store, newSite("hn-pr-a", "proj-hn-pr-a", "hn-pr-a"))
+	seedSite(t, store, newSite("hn-pr-b", "proj-hn-pr-b", "hn-pr-b"))
+	seedSite(t, store, newSite("hn-pr-c", "proj-hn-pr-c", "hn-pr-c"))
+	squatter, owner := newHostname("hn-pr-1", "hn-pr-a", "proj-hn-pr-a", "www.hn-pr.com"), newHostname("hn-pr-2", "hn-pr-b", "proj-hn-pr-b", "www.hn-pr.com")
+	for _, claim := range []*sites.CustomHostname{squatter, owner} {
+		if err := store.CreateHostname(ctx, claim, 2); err != nil {
+			t.Fatalf("an unproven claim refused another: %v", err)
+		}
+	}
+	if err := store.CreateHostname(ctx, newHostname("hn-pr-3", "hn-pr-a", "proj-hn-pr-a", "www.hn-pr.com"), 2); !errors.Is(err, sites.ErrHostnameTaken) {
+		t.Fatalf("err = %v, want one claim per project", err)
+	}
+	proven := time.Now().UTC().Truncate(time.Microsecond)
+	owner.VerifiedAt = &proven
+	if err := store.VerifyHostname(ctx, owner, 90); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	squatter.VerifiedAt = &proven
+	if err := store.VerifyHostname(ctx, squatter, 90); !errors.Is(err, sites.ErrHostnameTaken) {
+		t.Fatalf("err = %v, want the proven claim to hold the name", err)
+	}
+	if err := store.UpdateHostname(ctx, squatter); !errors.Is(err, sites.ErrHostnameTaken) {
+		t.Fatalf("err = %v, want an update unable to prove it either", err)
+	}
+	if err := store.CreateHostname(ctx, newHostname("hn-pr-4", "hn-pr-c", "proj-hn-pr-c", "www.hn-pr.com"), 2); !errors.Is(err, sites.ErrHostnameTaken) {
+		t.Fatalf("err = %v, want a proven name refused to a new claim", err)
+	}
+}
+
+// The zone's cap counts proven rows across every project.
+func TestPostgresVerifyHostnameHoldsTheZoneCap(t *testing.T) {
+	db := platformDB(t).DB()
+	store := sites.NewPostgresStore(db)
+	ctx := context.Background()
+	var held int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM site_hostnames WHERE verified_at IS NOT NULL`).Scan(&held); err != nil {
+		t.Fatal(err)
+	}
+	seedSite(t, store, newSite("hn-cap", "proj-hn-cap", "hn-cap"))
+	first, second := newHostname("hn-cap-1", "hn-cap", "proj-hn-cap", "a.hn-cap.com"), newHostname("hn-cap-2", "hn-cap", "proj-hn-cap", "b.hn-cap.com")
+	proven := time.Now().UTC()
+	for _, claim := range []*sites.CustomHostname{first, second} {
+		claim.VerifiedAt = &proven
+		if err := store.CreateHostname(ctx, claim, 5); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+	if err := store.VerifyHostname(ctx, first, held+1); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if err := store.VerifyHostname(ctx, second, held+1); !errors.Is(err, sites.ErrCustomDomainsFull) {
+		t.Fatalf("err = %v, want the zone full", err)
+	}
+	if count, err := store.CountVerifiedHostnames(ctx); err != nil || count != held+1 {
+		t.Fatalf("count = %d, %v", count, err)
+	}
+}
+
+func TestPostgresTheProjectLimitCountsEveryClaim(t *testing.T) {
 	store := sites.NewPostgresStore(platformDB(t).DB())
 	ctx := context.Background()
 	seedSite(t, store, newSite("hn-site-a", "proj-hn-a", "hn-shop"))
 	seedSite(t, store, newSite("hn-site-a2", "proj-hn-a", "hn-blog"))
-	seedSite(t, store, newSite("hn-site-b", "proj-hn-b", "hn-other"))
 	if err := store.CreateHostname(ctx, newHostname("hn-1", "hn-site-a", "proj-hn-a", "www.hn-example.com"), 2); err != nil {
 		t.Fatalf("create: %v", err)
-	}
-	if err := store.CreateHostname(ctx, newHostname("hn-2", "hn-site-b", "proj-hn-b", "www.hn-example.com"), 2); !errors.Is(err, sites.ErrHostnameTaken) {
-		t.Fatalf("err = %v, want taken", err)
 	}
 	if err := store.CreateHostname(ctx, newHostname("hn-3", "hn-site-a2", "proj-hn-a", "blog.hn-example.com"), 2); err != nil {
 		t.Fatalf("second create: %v", err)
@@ -97,7 +155,7 @@ func TestPostgresSiteDeletionNeedsItsHostnamesGoneFirst(t *testing.T) {
 	}
 }
 
-func TestPostgresPendingHostnamesLeaveOutProjectsBeingDeleted(t *testing.T) {
+func TestPostgresDueHostnamesLeaveOutProjectsBeingDeletedAndRecentlyCheckedActiveOnes(t *testing.T) {
 	db := platformDB(t).DB()
 	store := sites.NewPostgresStore(db)
 	ctx := context.Background()
@@ -116,15 +174,27 @@ func TestPostgresPendingHostnamesLeaveOutProjectsBeingDeleted(t *testing.T) {
 		VALUES ('proj-hn-gone', 'org-hn', 'POSTGRESQL', 'k8s', 'PENDING_DELETION', '5Gi', true)`); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
-	pending, err := store.PendingHostnames(ctx, 500)
+	seedSite(t, store, newSite("hn-pend-act", "proj-hn-live", "hn-pend-act"))
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for id, checked := range map[string]time.Time{"hn-pend-fresh": now, "hn-pend-stale": now.Add(-2 * time.Hour)} {
+		active := newHostname(id, "hn-pend-act", "proj-hn-live", id+".example.com")
+		if err := store.CreateHostname(ctx, active, 10); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		active.Status, active.CheckedAt, active.InactiveSince = sites.HostnameActive, checked, nil
+		if err := store.UpdateHostname(ctx, active); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+	}
+	due, err := store.DueHostnames(ctx, now.Add(-time.Hour), 500)
 	if err != nil {
-		t.Fatalf("pending: %v", err)
+		t.Fatalf("due: %v", err)
 	}
 	seen := map[string]bool{}
-	for _, host := range pending {
+	for _, host := range due {
 		seen[host.ID] = true
 	}
-	if !seen["hn-pend-1"] || seen["hn-pend-2"] {
-		t.Fatalf("pending = %v", seen)
+	if !seen["hn-pend-1"] || seen["hn-pend-2"] || seen["hn-pend-fresh"] || !seen["hn-pend-stale"] {
+		t.Fatalf("due = %v", seen)
 	}
 }

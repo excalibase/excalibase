@@ -25,9 +25,11 @@ func siteDomainTools() []entry {
 	return []entry{
 		tool("list_site_domains", "List a site's custom domains with their status (PENDING, ACTIVE or FAILED) and the DNS records each needs.", readTool, listSiteDomains),
 		tool("add_site_domain", "Add the user's own domain to a site, such as www.example.com (a subdomain: a bare example.com cannot point a CNAME). "+
-			"The answer lists the DNS records the user adds at their DNS provider: always a CNAME to the platform's target, plus TXT records with txt validation. "+
-			"Cloudflare issues and renews the certificate. The domain serves once it is active: call check_site_domain after the records are in place.", writeTool, addSiteDomain),
-		tool("check_site_domain", "Check a custom domain now and route it once it and its certificate are active; while pending, this asks Cloudflare to validate again. "+
+			"The answer lists the DNS records the user adds at their DNS provider: a CNAME to the platform's target and a TXT record proving they control the domain, "+
+			"plus Cloudflare's TXT records with txt validation. Until check_site_domain sees that TXT record nothing is set up, and it must stay in place while the domain serves. "+
+			"Cloudflare issues and renews the certificate. Adding and removing domains is limited to a few an hour per project.", writeTool, addSiteDomain),
+		tool("check_site_domain", "Check a custom domain now: the first check that sees its TXT proof sets it up on the CDN, and it is routed once it and its certificate are active; "+
+			"while pending, this asks Cloudflare to validate again. "+
 			"DNS changes can take minutes to hours to be seen.", writeTool, checkSiteDomain),
 		tool("remove_site_domain", "Remove a custom domain from a site: it stops serving at once and its certificate is revoked.", writeTool, removeSiteDomain),
 	}

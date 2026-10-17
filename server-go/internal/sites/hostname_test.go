@@ -88,8 +88,28 @@ func TestDNSRecordsNameTheCNAMETheOwnersProofAndTXTValidationTokens(t *testing.T
 	verified := time.Now()
 	host.VerifiedAt = &verified
 	answer.Status, answer.SSL.Status = "active", "active"
-	if done := dnsInstructions(host, "cname.excalibase.app", answer); len(done) != 1 {
-		t.Errorf("an active, proven hostname still asks for records: %+v", done)
+	// The proof is checked again while the domain serves, so it stays listed.
+	if done := dnsInstructions(host, "cname.excalibase.app", answer); len(done) != 2 || done[1].Purpose != PurposeVerification {
+		t.Errorf("an active, proven hostname lists %+v", done)
+	}
+}
+
+// The challenge name, 22 characters longer, must fit DNS's 253.
+func TestNormalizeHostnameKeepsRoomForTheChallengeName(t *testing.T) {
+	label := func(n int, c string) string { return strings.Repeat(c, n) }
+	fits := label(63, "a") + "." + label(63, "b") + "." + label(63, "c") + "." + label(35, "d") + ".com"
+	if len(fits) != 231 {
+		t.Fatalf("len = %d", len(fits))
+	}
+	if _, err := NormalizeHostname(fits, "excalibase.app", nil); err != nil {
+		t.Fatalf("231 characters refused: %v", err)
+	}
+	tooLong := label(63, "a") + "." + label(63, "b") + "." + label(63, "c") + "." + label(36, "d") + ".com"
+	if got, err := NormalizeHostname(tooLong, "excalibase.app", nil); err == nil || !strings.Contains(err.Error(), "231") {
+		t.Fatalf("232 characters = %q, %v; want a refusal naming the limit", got, err)
+	}
+	if len(VerificationName(fits)) > 253 {
+		t.Fatalf("challenge name is %d long", len(VerificationName(fits)))
 	}
 }
 
