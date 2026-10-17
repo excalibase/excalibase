@@ -179,19 +179,84 @@ func (p *rolePostgres) execOutput(ctx context.Context, cmd []string) (string, er
 	return string(body), nil
 }
 
-// A customer holding a lock on an excalibase object must not block the
-// rebuild: with a finite lock_timeout the first attempt times out, the
-// orchestration terminates the customer backend, and the retry lands. The
-// platform roles are never terminated.
+// A customer or owner holding a lock that blocks the rebuild must not stop it:
+// the finite lock_timeout turns the wait into a timeout, the orchestration
+// terminates the non-service backend, and the retry lands. Every kind of
+// blocker the review raised is covered — the app role itself, an owner named
+// "admin", a dependent object in another schema, and a catalog row the second
+// script needs.
 func TestRoleReconcileTerminatesALockHolder_Postgres15(t *testing.T) {
-	roleReconcileLockHolderCase(t, startRolePostgresImage(t, "postgres:15-alpine"))
+	lockHolderSuite(t, func(t *testing.T) *rolePostgres { return startRolePostgresImage(t, "postgres:15-alpine") }, 15)
 }
 
 func TestRoleReconcileTerminatesALockHolder_CNPGPostgres17(t *testing.T) {
-	roleReconcileLockHolderCase(t, startCNPGRolePostgres(t, "17"))
+	lockHolderSuite(t, func(t *testing.T) *rolePostgres { return startCNPGRolePostgres(t, "17") }, 17)
 }
 
-func roleReconcileLockHolderCase(t *testing.T, pg *rolePostgres) {
+type lockBlocker struct {
+	name string
+	// setup runs as the superuser before the blocker connects.
+	setup []string
+	// the blocker connects as this role and holds the statements open in one
+	// transaction while the rebuild runs.
+	role     string
+	password string
+	stmts    []string
+	// resetAdmin makes the registration reset the owner's password, so an
+	// owner holding its own pg_authid row blocks the second script on a
+	// catalog lock rather than an object lock.
+	resetAdmin bool
+	minMajor   int
+}
+
+func lockHolderSuite(t *testing.T, start func(*testing.T) *rolePostgres, major int) {
+	blockers := []lockBlocker{
+		{
+			name:     "the app role holds a lock on an excalibase table",
+			role:     roleApp,
+			password: customerAppPassword,
+			stmts:    []string{"LOCK TABLE excalibase.app_planted IN ACCESS SHARE MODE"},
+		},
+		{
+			name: "an owner named admin holds a lock",
+			setup: []string{
+				"CREATE ROLE admin LOGIN PASSWORD 'Admin-Held-1'",
+				"GRANT USAGE ON SCHEMA excalibase TO admin",
+				"GRANT SELECT ON excalibase.app_planted TO admin",
+			},
+			role:     "admin",
+			password: "Admin-Held-1",
+			stmts:    []string{"SELECT count(*) FROM excalibase.app_planted"},
+		},
+		{
+			name: "a dependent object in public is locked",
+			setup: []string{
+				"CREATE TABLE public.dep (data excalibase.app_planted)",
+				"GRANT SELECT ON public.dep TO " + customerOwner,
+			},
+			role:     customerOwner,
+			password: customerOwnerPassword,
+			stmts:    []string{"LOCK TABLE public.dep IN ACCESS SHARE MODE"},
+		},
+		{
+			name:       "the owner holds its own catalog row the second script resets",
+			role:       customerOwner,
+			password:   customerOwnerPassword,
+			stmts:      []string{"ALTER ROLE " + customerOwner + " PASSWORD 'Owner-Self-Held-1'"},
+			resetAdmin: true,
+		},
+	}
+	for _, blocker := range blockers {
+		if major < blocker.minMajor {
+			continue
+		}
+		t.Run(blocker.name, func(t *testing.T) {
+			lockHolderCase(t, start(t), blocker)
+		})
+	}
+}
+
+func lockHolderCase(t *testing.T, pg *rolePostgres, blocker lockBlocker) {
 	c := newPlatformSchemaCaseOn(t, pg)
 	c.registerAsBeforeEXC623(t)
 	c.admin.SetMaxOpenConns(1)
@@ -200,30 +265,39 @@ func roleReconcileLockHolderCase(t *testing.T, pg *rolePostgres) {
 		t.Fatal(err)
 	}
 	// Taint the schema so the rebuild must DROP it, which needs an exclusive
-	// lock on a table a customer session is about to hold.
+	// lock a customer session is about to block.
 	app := c.pg.connect(t, roleApp, customerAppPassword)
 	mustExec(t, app, "CREATE TABLE excalibase.app_planted (id int)")
-	mustExec(t, c.admin, "GRANT USAGE ON SCHEMA excalibase TO "+customerOwner)
-	mustExec(t, c.admin, "GRANT SELECT ON excalibase.app_planted TO "+customerOwner)
+	for _, statement := range blocker.setup {
+		mustExec(t, c.admin, statement)
+	}
 
-	owner := c.pg.connect(t, customerOwner, customerOwnerPassword)
-	tx, err := owner.BeginTx(context.Background(), nil)
+	held := c.pg.connect(t, blocker.role, blocker.password)
+	tx, err := held.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec("SELECT count(*) FROM excalibase.app_planted"); err != nil {
-		t.Fatal(err)
+	for _, statement := range blocker.stmts {
+		if _, err := tx.Exec(statement); err != nil {
+			t.Fatalf("hold %q: %v", statement, err)
+		}
 	}
 
+	spec := c.spec
+	if blocker.resetAdmin {
+		spec.resetPasswords = true
+		spec.resetAdmin = true
+		spec.adminPassword = customerOwnerPassword
+	}
 	if err := runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app",
-		reservedSchemaFirstSQL(), projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub")); err != nil {
-		t.Fatalf("a customer lock holder blocked the rebuild: %v", err)
+		reservedSchemaFirstSQL(), projectRoleSQL(spec, c.creds, "cdc_watcher_pub")); err != nil {
+		t.Fatalf("a lock holder blocked the rebuild: %v", err)
 	}
 	c.assertSchemaTakenBack(t)
 }
 
-// startCNPGRolePostgres runs the CloudNativePG operand image a project of
+// startCNPGRolePostgres runs the CloudNativePG operand image// startCNPGRolePostgres runs the CloudNativePG operand image a project of
 // that major runs on. It has no entrypoint of its own, so the test initialises
 // the cluster and creates the app database itself.
 func startCNPGRolePostgres(t *testing.T, major string) *rolePostgres {

@@ -144,6 +144,17 @@ BEGIN
   ELSE
     RAISE NOTICE 'excalibase_app does not exist yet; registration grants it USAGE';
   END IF;
+  -- Take USAGE on the schema's own types from PUBLIC so no customer can type
+  -- an object elsewhere on one, which would make that object a dependent the
+  -- next rebuild must lock. DML on the platform tables does not need it.
+  FOR acl IN
+    SELECT quote_ident(t.typname) AS name
+    FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'excalibase' AND t.typtype IN ('c', 'e', 'd', 'r')
+      AND has_type_privilege('public', t.oid, 'USAGE')
+  LOOP
+    EXECUTE 'REVOKE USAGE ON TYPE excalibase.' || acl.name || ' FROM PUBLIC';
+  END LOOP;
 END
 $excalibase_reserved_create$;
 `

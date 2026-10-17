@@ -42,6 +42,10 @@ type scheduleOp struct {
 
 var errBadScheduleOp = errors.New("invalid scheduler call")
 
+// errArgsTooLarge is a schedule op whose args, measured as the sweep measures
+// them — the octet length of the jsonb text — exceed the limit.
+var errArgsTooLarge = errors.New("scheduled call args exceed the size limit")
+
 // InternalSchedule serves POST /internal/runtime/projects/{projectId}/scheduler
 // for the project's runtime, authenticated by that project's runtime token.
 // The ops are applied in order in one transaction.
@@ -70,6 +74,10 @@ func (h *FunctionHandler) InternalSchedule(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := applyScheduleOps(r.Context(), db, projectID, ops); err != nil {
+		if errors.Is(err, errArgsTooLarge) {
+			httpError(w, "a scheduled call's args are too large", http.StatusBadRequest)
+			return
+		}
 		log.Printf("scheduler: record calls for %s: %v", projectID, err)
 		httpError(w, "could not record the scheduler calls", http.StatusInternalServerError)
 		return
@@ -97,14 +105,11 @@ func decodeScheduleOps(w http.ResponseWriter, r *http.Request) ([]scheduleOp, er
 		if body.Ops[i].Op != "schedule" {
 			continue
 		}
-		// Measure the limit against the normalised form, so a task the worker
-		// would accept is not refused here for its wire whitespace, nor one it
-		// would silently close accepted here (the minor finding).
+		// Normalise the args; the authoritative size limit is measured in
+		// Postgres as the sweep measures it (the jsonb text octet length), so
+		// the handler and the sweep never disagree on what fits.
 		var compact bytes.Buffer
 		if err := json.Compact(&compact, body.Ops[i].Args); err != nil {
-			return nil, fmt.Errorf("call %d: %w: args", i, errBadScheduleOp)
-		}
-		if compact.Len() > scheduler.DefaultMaxArgsBytes {
 			return nil, fmt.Errorf("call %d: %w: args", i, errBadScheduleOp)
 		}
 		body.Ops[i].compactArgs = append([]byte(nil), compact.Bytes()...)
@@ -157,6 +162,17 @@ func applyScheduleOp(ctx context.Context, tx *sql.Tx, projectID string, op sched
 			SET status = 'cancelled'
 			WHERE id = $1 AND project_id = $2 AND status = 'pending'`, op.ID, projectID)
 		return err
+	}
+	// Measure the args exactly as the sweep's close-oversized predicate does,
+	// octet_length(args::text) on the stored jsonb, so a task accepted here is
+	// one the sweep will run (the minor finding).
+	var tooLarge bool
+	if err := tx.QueryRowContext(ctx, `SELECT octet_length(($1::jsonb)::text) > $2`,
+		string(op.compactArgs), scheduler.DefaultMaxArgsBytes).Scan(&tooLarge); err != nil {
+		return err
+	}
+	if tooLarge {
+		return errArgsTooLarge
 	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO excalibase.excalibase_scheduled_functions
 			(id, project_id, module_name, export_name, args, scheduled_for, status)

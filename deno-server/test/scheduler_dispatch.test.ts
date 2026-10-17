@@ -207,6 +207,42 @@ Deno.test({
 });
 
 Deno.test({
+  name: "an action whose schedule cannot reach provisioning never leaks the URL",
+  async fn() {
+    const pg = await startPostgres();
+    // A provisioning URL that nothing answers, so the fetch fails at the
+    // network level — the path that used to carry the URL into the error.
+    const deadURL = "http://127.0.0.1:1";
+    try {
+      const rt = await startRuntime({ v2Enabled: true, dbUrl: pg.url, provisioningUrl: deadURL });
+      try {
+        await rt.deploy("proj_leak__caller", bundleDefault(`{
+          kind: "action",
+          args: { parse: (a) => a },
+          handler: async (ctx, _args) => {
+            try {
+              await ctx.scheduler.runAfter(1000, { moduleName: "jobs", exportName: "send" }, {});
+              return { scheduled: true };
+            } catch (err) {
+              return { error: String(err && err.message ? err.message : err) };
+            }
+          },
+        }`));
+        const res = await rt.invoke("proj_leak__caller", { args: {} });
+        assert(!res.body.includes("127.0.0.1:1"), `error leaked the URL: ${res.body}`);
+        assert(!res.body.includes("http://"), `error leaked a URL: ${res.body}`);
+      } finally {
+        await rt.stop();
+      }
+    } finally {
+      await pg.stop();
+    }
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
   name: "a mutation whose schedule provisioning refuses reports an error, not success",
   async fn() {
     await withRuntime(async (rt, prov) => {

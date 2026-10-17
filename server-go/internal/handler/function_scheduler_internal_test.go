@@ -81,7 +81,6 @@ func TestInternalSchedule_RefusesOpsTheSweepWouldNotRun(t *testing.T) {
 		"long id":          `{"ops":[{"op":"cancel","id":"` + strings.Repeat("a", 65) + `"}]}`,
 		"no time":          `{"ops":[{"op":"schedule","id":"abc","moduleName":"jobs","exportName":"send","args":{}}]}`,
 		"unknown field":    `{"ops":[{"op":"cancel","id":"abc","projectId":"proj_b"}]}`,
-		"args too large":   `{"ops":[{"op":"schedule","id":"abc","moduleName":"jobs","exportName":"send","scheduledForMs":1,"args":"` + strings.Repeat("x", 1024*1024+1) + `"}]}`,
 		"too many ops":     `{"ops":[` + strings.TrimSuffix(strings.Repeat(`{"op":"cancel","id":"a"},`, maxScheduleOps+1), ",") + `]}`,
 		"bad project path": ``,
 	}
@@ -107,6 +106,9 @@ func TestInternalSchedule_WritesTheOpsInOneTransaction(t *testing.T) {
 	_, r := schedulerRouteHandler(t, db)
 	when := time.UnixMilli(1700000000000).UTC()
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("octet_length(($1::jsonb)::text)")).
+		WithArgs(`{"to":"ada"}`, scheduler.DefaultMaxArgsBytes).
+		WillReturnRows(sqlmock.NewRows([]string{"too_large"}).AddRow(false))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO excalibase.excalibase_scheduled_functions")).
 		WithArgs("abc123", "proj_a", "jobs", "send", `{"to":"ada"}`, when).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -125,10 +127,9 @@ func TestInternalSchedule_WritesTheOpsInOneTransaction(t *testing.T) {
 	}
 }
 
-// Whitespace is not content: a task whose wire bytes exceed the limit only
-// because of indentation is accepted, since jsonb stores the compact form,
-// which is what the sweep measures (the minor finding).
-func TestInternalSchedule_MeasuresArgsAfterCompaction(t *testing.T) {
+// Wire whitespace is not content: it is compacted away before the args reach
+// Postgres, so an indented-but-small payload is accepted.
+func TestInternalSchedule_CompactsWhitespaceBeforeMeasuring(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -136,6 +137,9 @@ func TestInternalSchedule_MeasuresArgsAfterCompaction(t *testing.T) {
 	defer db.Close()
 	_, r := schedulerRouteHandler(t, db)
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("octet_length(($1::jsonb)::text)")).
+		WithArgs(`{"to":"ada"}`, scheduler.DefaultMaxArgsBytes).
+		WillReturnRows(sqlmock.NewRows([]string{"too_large"}).AddRow(false))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO excalibase.excalibase_scheduled_functions")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -150,6 +154,29 @@ func TestInternalSchedule_MeasuresArgsAfterCompaction(t *testing.T) {
 	}
 }
 
+// The jsonb-text size is what the sweep measures; when Postgres reports the
+// args over the limit the whole request is a 400, never a silent close.
+func TestInternalSchedule_RejectsArgsTheSweepWouldClose(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, r := schedulerRouteHandler(t, db)
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("octet_length(($1::jsonb)::text)")).
+		WillReturnRows(sqlmock.NewRows([]string{"too_large"}).AddRow(true))
+	mock.ExpectRollback()
+
+	body := `{"ops":[{"op":"schedule","id":"abc123","moduleName":"jobs","exportName":"send","scheduledForMs":1,"args":{"a":"b"}}]}`
+	if w := postSchedule(r, "proj_a", edgefn.DeriveRuntimeSecret(schedulerTestMaster, "proj_a"), body); w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInternalSchedule_RollsBackWhenAWriteFails(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -158,6 +185,8 @@ func TestInternalSchedule_RollsBackWhenAWriteFails(t *testing.T) {
 	defer db.Close()
 	_, r := schedulerRouteHandler(t, db)
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("octet_length(($1::jsonb)::text)")).
+		WillReturnRows(sqlmock.NewRows([]string{"too_large"}).AddRow(false))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO excalibase.excalibase_scheduled_functions")).
 		WillReturnError(errors.New("pq: connection reset with internal detail"))
 	mock.ExpectRollback()

@@ -1107,12 +1107,25 @@ owner can still make fail, such as a Postgres 16+ owner creating
 guard have landed. Default privileges another role set in the schema are
 cleared and do not trigger the rebuild.
 
-The version that decides whether `transaction_timeout` can be pinned at
-connect is read from the server with a first probe connection, not from any
-stored value. `lock_timeout` is finite: a customer that holds a lock on an
-excalibase object (or a view over one) makes the first attempt time out, after
-which the reconcile terminates that customer or owner backend — never a
-platform one — and retries.
+Those connection options also pin `local_preload_libraries` and
+`session_preload_libraries` empty, `password_encryption` to `scram-sha-256`,
+`default_tablespace` and `temp_tablespaces` empty, and, where the server has
+them, `scram_iterations` (16+) and `transaction_timeout` (17+). The version
+that gates the last two is read from the server with a first probe
+connection, not from any stored value.
+
+`lock_timeout` is finite. A customer or the owner can hold a lock that blocks
+the rebuild — on an excalibase object, on a dependent object in another
+schema, or on a catalog row the second script needs — so the first attempt
+times out, after which the reconcile terminates every client backend that is
+not a platform service and retries. A platform service is identified by its
+login role, one a customer can neither create nor assume (`auth_admin`,
+`cdc_watcher`, `excalibase_scheduler`, the DocumentDB roles, `streaming_replica`,
+`postgres`) plus any superuser; those are spared. `excalibase_app` is not a
+service for this purpose — customer SQL runs as it — nor is the owner login,
+so both are terminated when they block the rebuild. The lockdown also takes
+USAGE on the excalibase schema's own types from PUBLIC, so a customer cannot
+type an object elsewhere on one and make it a new dependent.
 
 ## 7. Image upgrade
 

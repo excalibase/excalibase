@@ -10,7 +10,8 @@ func TestSuperuserPsqlCommandPinsTheSession(t *testing.T) {
 	joined := strings.Join(cmd, "\x00")
 	for _, want := range []string{"-X", "ON_ERROR_STOP=1", "-c role=none", "-c default_transaction_read_only=off",
 		"-c statement_timeout=0", "-c lock_timeout=", "-c plpgsql.extra_errors=none", "-c exit_on_error=off",
-		"-c local_preload_libraries=", "-c session_preload_libraries="} {
+		"-c local_preload_libraries=", "-c session_preload_libraries=",
+		"-c password_encryption=scram-sha-256", "-c default_tablespace=", "-c temp_tablespaces="} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("command lacks %q: %q", want, cmd)
 		}
@@ -83,12 +84,29 @@ func TestRoleScriptsTakeTheSchemaBackFirst(t *testing.T) {
 	}
 }
 
-func TestReservedSchemaBlockersTerminateOnlyCustomerSessions(t *testing.T) {
-	cmd := terminateReservedSchemaBlockersCommand("app")
+func TestTerminateSparesServicesButNotTheAppRoleOrOwner(t *testing.T) {
+	cmd := terminateNonServiceBackendsCommand("app")
 	sql := cmd[len(cmd)-1]
-	for _, want := range []string{"pg_terminate_backend", "pg_backend_pid()", "rolsuper", "excalibase", "excalibase_app", "auth_admin", "excalibase_scheduler", "cdc_watcher"} {
+	for _, want := range []string{"pg_terminate_backend", "pg_backend_pid()", "rolsuper", "client backend", "auth_admin", "excalibase_scheduler", "cdc_watcher", "streaming_replica"} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("terminate SQL lacks %q", want)
 		}
+	}
+	// excalibase_app is customer SQL's own role, and admin can be an owner
+	// login name; neither may be spared.
+	spared := sql[strings.Index(sql, "ARRAY["):]
+	for _, mustKill := range []string{"'excalibase_app'", "'admin'"} {
+		if strings.Contains(spared, mustKill) {
+			t.Errorf("terminate SQL spares %s", mustKill)
+		}
+	}
+}
+
+func TestSuperuserConninfoPinsScramIterationsFrom16(t *testing.T) {
+	if !strings.Contains(superuserConninfo("app", 160004), "-c scram_iterations=4096") {
+		t.Fatal("Postgres 16 has scram_iterations and the owner can lower it")
+	}
+	if strings.Contains(superuserConninfo("app", 150000), "scram_iterations") {
+		t.Fatal("Postgres 15 refuses a connection that names scram_iterations")
 	}
 }

@@ -1936,6 +1936,21 @@ function schedulerOpFor(msg: SchedulerMessage): SchedulerOp {
 }
 
 /**
+ * callProvisioning performs a fetch to the platform and, on a network-level
+ * failure, logs the detail (which can name the internal endpoint) and throws
+ * a fixed message, so customer function code never receives the URL
+ * (EXC-623). HTTP error statuses are left for the caller to handle.
+ */
+async function callProvisioning(label: string, url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    console.warn(`[runtime] ${label}: could not reach the platform:`, err instanceof Error ? err.message : err);
+    throw new Error(`${label}: the platform could not be reached`);
+  }
+}
+
+/**
  * sendSchedulerOps records ops through provisioning's
  * /internal/runtime/projects/{projectId}/scheduler route, in order and in
  * one transaction there. Auth is this project's runtime token.
@@ -1948,7 +1963,7 @@ async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<
     throw new Error("ctx.scheduler: projectId missing from invocation context");
   }
   const url = `${PROVISIONING_URL.replace(/\/$/, "")}/internal/runtime/projects/${encodeURIComponent(projectId)}/scheduler`;
-  const res = await fetch(url, {
+  const res = await callProvisioning("ctx.scheduler", url, {
     method: "POST",
     headers: {
       "X-Excalibase-Runtime-Token": RUNTIME_SECRET,
@@ -1958,7 +1973,9 @@ async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`ctx.scheduler HTTP ${res.status}: ${text.slice(0, 200)}`);
+    console.warn(`[runtime] ctx.scheduler: provisioning returned ${res.status}: ${text.slice(0, 200)}`);
+    await res.body?.cancel();
+    throw new Error(`ctx.scheduler: the platform rejected the request (status ${res.status})`);
   }
   await res.body?.cancel();
 }
@@ -2915,14 +2932,14 @@ async function dispatchStorage(
       if (contentType === "" || size <= 0) {
         throw new Error("generateUploadUrl: contentType and size are required");
       }
-      const res = await fetch(`${base}/upload-url`, {
+      const res = await callProvisioning("ctx.storage.generateUploadUrl", `${base}/upload-url`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ contentType, size }),
       });
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`generateUploadUrl HTTP ${res.status}: ${text.slice(0, 200)}`);
+        console.warn(`[runtime] ctx.storage.generateUploadUrl: provisioning returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+        throw new Error(`ctx.storage.generateUploadUrl: the storage service returned ${res.status}`);
       }
       return await res.json();
     }
@@ -2934,20 +2951,20 @@ async function dispatchStorage(
       if (typeof uploadId !== "string" || uploadId.length === 0) {
         throw new Error("completeUpload: uploadId required");
       }
-      const res = await fetch(`${base}/confirm-upload`, {
+      const res = await callProvisioning("ctx.storage.completeUpload", `${base}/confirm-upload`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ storageId, uploadId }),
       });
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`completeUpload HTTP ${res.status}: ${text.slice(0, 200)}`);
+        console.warn(`[runtime] ctx.storage.completeUpload: provisioning returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+        throw new Error(`ctx.storage.completeUpload: the storage service returned ${res.status}`);
       }
       await res.body?.cancel();
       return storageId;
     }
     case "getUrl": {
-      const res = await fetch(`${base}/download-url`, {
+      const res = await callProvisioning("ctx.storage.getUrl", `${base}/download-url`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ storageId }),
@@ -2957,8 +2974,8 @@ async function dispatchStorage(
         return null;
       }
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`getUrl HTTP ${res.status}: ${text.slice(0, 200)}`);
+        console.warn(`[runtime] ctx.storage.getUrl: provisioning returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+        throw new Error(`ctx.storage.getUrl: the storage service returned ${res.status}`);
       }
       const body = await res.json() as { url: string };
       return body.url;
@@ -2967,14 +2984,15 @@ async function dispatchStorage(
       // Two-step: ask provisioning for a signed GET URL, then fetch it.
       const signed = await dispatchStorage(projectId, { op: "getUrl", payload: { storageId } }) as string | null;
       if (signed === null) return null;
-      const r = await fetch(signed);
+      const r = await callProvisioning("ctx.storage.get", signed);
       if (r.status === 404) {
         await r.body?.cancel();
         return null;
       }
       if (!r.ok) {
-        const text = await r.text();
-        throw new Error(`get HTTP ${r.status}: ${text.slice(0, 200)}`);
+        console.warn(`[runtime] ctx.storage.get: object store returned ${r.status}`);
+        await r.body?.cancel();
+        throw new Error(`ctx.storage.get: the storage service returned ${r.status}`);
       }
       const ct = r.headers.get("content-type") || "application/octet-stream";
       const buf = new Uint8Array(await r.arrayBuffer());
@@ -2984,7 +3002,7 @@ async function dispatchStorage(
       if (typeof storageId !== "string" || storageId.length === 0) {
         throw new Error("getMetadata: storageId required");
       }
-      const res = await fetch(`${base}/metadata/${encodeURIComponent(storageId)}`, {
+      const res = await callProvisioning("ctx.storage.getMetadata", `${base}/metadata/${encodeURIComponent(storageId)}`, {
         headers: tokenHeaders,
       });
       if (res.status === 404) {
@@ -2992,8 +3010,8 @@ async function dispatchStorage(
         return null;
       }
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`getMetadata HTTP ${res.status}: ${text.slice(0, 200)}`);
+        console.warn(`[runtime] ctx.storage.getMetadata: provisioning returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+        throw new Error(`ctx.storage.getMetadata: the storage service returned ${res.status}`);
       }
       return await res.json();
     }
@@ -3004,14 +3022,14 @@ async function dispatchStorage(
         throw new Error("store: payload.bytes (Uint8Array) required");
       }
       // 1. Mint upload-url + storageId.
-      const mint = await fetch(`${base}/upload-url`, {
+      const mint = await callProvisioning("ctx.storage.store", `${base}/upload-url`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ contentType, size: bytes.byteLength }),
       });
       if (!mint.ok) {
-        const text = await mint.text();
-        throw new Error(`store/upload-url HTTP ${mint.status}: ${text.slice(0, 200)}`);
+        console.warn(`[runtime] ctx.storage.store: provisioning returned ${mint.status}: ${(await mint.text()).slice(0, 200)}`);
+        throw new Error(`ctx.storage.store: the storage service returned ${mint.status}`);
       }
       const mintBody = await mint.json() as { url: string; storageId: string; uploadId: string };
       if (!mintBody.uploadId) {
@@ -3020,21 +3038,21 @@ async function dispatchStorage(
       // 2. PUT the bytes to the signed URL. The signature covers both
       //    headers, so they must be exactly what was declared at mint time —
       //    the same type, and the same number of bytes.
-      const put = await fetch(mintBody.url, {
+      const put = await callProvisioning("ctx.storage.store", mintBody.url, {
         method: "PUT",
         headers: {
           "Content-Type": contentType,
           "Content-Length": String(bytes.byteLength),
         },
-        body: bytes,
+        body: bytes as BodyInit,
       });
       if (!put.ok) {
         await put.body?.cancel();
-        throw new Error(`store/PUT HTTP ${put.status}`);
+        throw new Error(`ctx.storage.store: the storage service returned ${put.status}`);
       }
       await put.body?.cancel();
       // 3. Confirm.
-      const confirm = await fetch(`${base}/confirm-upload`, {
+      const confirm = await callProvisioning("ctx.storage.store", `${base}/confirm-upload`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({
@@ -3044,8 +3062,8 @@ async function dispatchStorage(
         }),
       });
       if (!confirm.ok) {
-        const text = await confirm.text();
-        throw new Error(`store/confirm-upload HTTP ${confirm.status}: ${text.slice(0, 200)}`);
+        console.warn(`[runtime] ctx.storage.store confirm: provisioning returned ${confirm.status}: ${(await confirm.text()).slice(0, 200)}`);
+        throw new Error(`ctx.storage.store: the storage service returned ${confirm.status}`);
       }
       await confirm.body?.cancel();
       return mintBody.storageId;

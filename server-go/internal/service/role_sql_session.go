@@ -23,6 +23,12 @@ var pinnedSessionOptions = []string{
 	"session_preload_libraries=",
 	"role=none",
 	"default_transaction_read_only=off",
+	// Passwords are set by the role SQL; pin the hash so an owner's
+	// password_encryption=md5 cannot weaken them, and keep CREATE off an
+	// owner-chosen or invalid tablespace.
+	"password_encryption=scram-sha-256",
+	"default_tablespace=",
+	"temp_tablespaces=",
 	"statement_timeout=0",
 	// Finite, never 0: a customer holding a lock on an excalibase object (or
 	// a view over one) must not block the rebuild forever. On a timeout the
@@ -41,6 +47,10 @@ var pinnedSessionOptions = []string{
 // with transaction_timeout (17.0). Naming it on an older server FATALs the
 // connection, so it is pinned only when the probe reports at least this.
 const transactionTimeoutMinVersion = 170000
+
+// scramIterationsMinVersion is the server_version_num of the first release
+// with scram_iterations (16.0); older servers FATAL when a client names it.
+const scramIterationsMinVersion = 160000
 
 // sessionGuardSQL starts every script: it refuses to go on unless the session
 // is the superuser itself, not a role the session was switched to, in a
@@ -85,6 +95,10 @@ func superuserConninfo(dbName string, serverVersionNum int) string {
 	for _, option := range pinnedSessionOptions {
 		options = append(options, "-c "+option)
 	}
+	if serverVersionNum >= scramIterationsMinVersion {
+		// Fix the SCRAM work factor to the default so an owner cannot lower it.
+		options = append(options, "-c scram_iterations=4096")
+	}
 	if serverVersionNum >= transactionTimeoutMinVersion {
 		options = append(options, "-c transaction_timeout=0")
 	}
@@ -97,40 +111,44 @@ func conninfoValue(value string) string {
 	return "'" + escaped + "'"
 }
 
-// terminateReservedSchemaBlockersCommand kills the non-platform, non-superuser
-// backends that hold a lock on an excalibase object or the excalibase schema
-// itself — a customer's or the owner's open transaction that would block the
-// rebuild. It never touches a platform session: superusers and the platform
-// logins are excluded by name.
-func terminateReservedSchemaBlockersCommand(dbName string) []string {
-	return []string{"psql", "-X", "-U", "postgres", "-d", superuserConninfo(dbName, 0), "-c", reservedSchemaBlockersSQL}
+// terminateNonServiceBackendsCommand kills every client backend that is not a
+// platform service — so the blocker is cleared whatever it holds: a lock on an
+// excalibase object, a dependent object elsewhere, or a catalog row the second
+// script needs (pg_blocking_pids could not see the last two). A customer can
+// only be behind a non-service backend: customer SQL runs as excalibase_app,
+// and the owner login is the owner's. Platform services (auth_admin,
+// cdc_watcher, excalibase_scheduler, the DocumentDB roles, streaming_replica,
+// postgres) are roles a customer can neither create nor assume, so they alone
+// are spared, together with any superuser.
+func terminateNonServiceBackendsCommand(dbName string) []string {
+	return []string{"psql", "-X", "-U", "postgres", "-d", superuserConninfo(dbName, 0), "-c", terminateNonServiceBackendsSQL}
 }
 
-var reservedSchemaBlockersSQL = `
+var terminateNonServiceBackendsSQL = `
 SELECT pg_terminate_backend(a.pid)
 FROM pg_stat_activity a
 WHERE a.datname = current_database()
   AND a.pid <> pg_backend_pid()
+  AND a.backend_type = 'client backend'
   AND a.usename IS NOT NULL
-  AND a.usename <> ALL (` + platformRoleArray() + `)
-  AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = a.usename AND r.rolsuper)
-  AND EXISTS (
-    SELECT 1 FROM pg_locks l
-    WHERE l.pid = a.pid AND (
-      (l.locktype = 'relation' AND l.relation IN (
-        SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'excalibase'))
-      OR (l.locktype = 'object' AND l.classid = 'pg_catalog.pg_namespace'::regclass
-          AND l.objid = (SELECT oid FROM pg_namespace WHERE nspname = 'excalibase'))
-    )
-  );
+  AND a.usename <> ALL (` + serviceRoleArray() + `)
+  AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = a.usename AND r.rolsuper);
 `
 
-// platformRoleArray is the SQL text[] of logins the terminate step must never
-// kill: every platform cert-login role plus the superuser bootstrap login.
-func platformRoleArray() string {
-	roles := append(pgroles.ReservedNames(), roleAdmin)
-	quoted := make([]string, 0, len(roles))
-	for _, role := range roles {
+// serviceRoleArray is the SQL text[] of the platform service logins the
+// terminate step must never kill. excalibase_app is NOT among them: it is the
+// role customer SQL runs as, so during a rebuild a customer backend wears it.
+// The owner login is not here either.
+func serviceRoleArray() string {
+	spared := make([]string, 0)
+	for _, role := range pgroles.ReservedNames() {
+		if role == roleApp {
+			continue
+		}
+		spared = append(spared, role)
+	}
+	quoted := make([]string, 0, len(spared))
+	for _, role := range spared {
 		quoted = append(quoted, "'"+strings.ReplaceAll(role, "'", "''")+"'")
 	}
 	return "ARRAY[" + strings.Join(quoted, ", ") + "]::text[]"
