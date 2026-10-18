@@ -21,12 +21,17 @@ const (
 )
 
 // applyDenoDBSecret files the URL in the namespace's runtime Secret, creating
-// it or rewriting a differing one. An empty URL leaves whatever is there.
+// it or rewriting a differing one. An empty URL means the project has no
+// login for the runtime, and any Secret left from one is deleted.
 func (c *Client) applyDenoDBSecret(ctx context.Context, namespace, url string) error {
+	secrets := c.clientset.CoreV1().Secrets(namespace)
 	if url == "" {
+		err := secrets.Delete(ctx, denoDBSecretName, metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete runtime database secret: %w", err)
+		}
 		return nil
 	}
-	secrets := c.clientset.CoreV1().Secrets(namespace)
 	existing, err := secrets.Get(ctx, denoDBSecretName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		if _, err := secrets.Create(ctx, buildDenoDBSecret(namespace, url), metav1.CreateOptions{}); err != nil {
@@ -73,7 +78,8 @@ func denoDBEnv() corev1.EnvVar {
 // is in place and the pod was started with the URL's fingerprint.
 func hasDBEnv(dep *appsv1.Deployment, url string) bool {
 	if url == "" {
-		return true
+		_, stamped := dep.Spec.Template.Annotations[dbURLHashAnnotation]
+		return !stamped && !hasEnvNamed(dep, dbURLEnvName)
 	}
 	if dep.Spec.Template.Annotations[dbURLHashAnnotation] != egressHash(url) {
 		return false
@@ -87,9 +93,12 @@ func hasDBEnv(dep *appsv1.Deployment, url string) bool {
 	return false
 }
 
-// setDBEnv points the runtime at the Secret and stamps the URL's fingerprint.
+// setDBEnv points the runtime at the Secret and stamps the URL's fingerprint,
+// or removes both when there is no URL.
 func setDBEnv(dep *appsv1.Deployment, url string) {
 	if url == "" {
+		removeEnv(dep, dbURLEnvName)
+		delete(dep.Spec.Template.Annotations, dbURLHashAnnotation)
 		return
 	}
 	setEnv(dep, []corev1.EnvVar{denoDBEnv()})
@@ -97,4 +106,27 @@ func setDBEnv(dep *appsv1.Deployment, url string) {
 		dep.Spec.Template.Annotations = map[string]string{}
 	}
 	dep.Spec.Template.Annotations[dbURLHashAnnotation] = egressHash(url)
+}
+
+func hasEnvNamed(dep *appsv1.Deployment, name string) bool {
+	for _, env := range dep.Spec.Template.Spec.Containers[0].Env {
+		if env.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// removeEnv drops the variable from every container (there is one).
+func removeEnv(dep *appsv1.Deployment, name string) {
+	for ci := range dep.Spec.Template.Spec.Containers {
+		container := &dep.Spec.Template.Spec.Containers[ci]
+		kept := make([]corev1.EnvVar, 0, len(container.Env))
+		for _, env := range container.Env {
+			if env.Name != name {
+				kept = append(kept, env)
+			}
+		}
+		container.Env = kept
+	}
 }

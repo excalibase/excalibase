@@ -14,7 +14,10 @@ func TestRuntimeSpecNamesProvisioningAndCarriesTheProjectToken(t *testing.T) {
 	h.SetK8sClient(k8s.NewMockClient(), testDenoImage, "master")
 	h.SetRuntimeProvisioningURL("http://provisioning.platform.svc:24005")
 
-	spec := h.denoRuntimeSpecFor("proj_a")
+	spec, err := h.denoRuntimeSpecFor("proj_a")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if spec.ProvisioningURL != "http://provisioning.platform.svc:24005" {
 		t.Fatalf("ProvisioningURL = %q", spec.ProvisioningURL)
 	}

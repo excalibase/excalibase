@@ -129,3 +129,27 @@ func TestEnsureDenoRuntime_RotatedDatabaseURLRollsTheRuntime(t *testing.T) {
 		t.Fatal("the fingerprint must not carry the password")
 	}
 }
+
+// A project whose database login is gone keeps no login in its namespace.
+func TestEnsureDenoRuntime_LoginGoneRemovesTheSecretAndReference(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	spec := DenoRuntimeSpec{Image: egressImage, RuntimeSecret: "s", DatabaseURL: runtimeDBURL}
+	if err := c.EnsureDenoRuntime(ctx, egressNS, spec); err != nil {
+		t.Fatal(err)
+	}
+	spec.DatabaseURL = ""
+	if err := c.EnsureDenoRuntime(ctx, egressNS, spec); err != nil {
+		t.Fatal(err)
+	}
+	dep := denoDeployment(t, c)
+	if _, ok := containerEnv(dep)["EXCALIBASE_DB_URL"]; ok {
+		t.Fatal("the reference must go with the login")
+	}
+	if _, ok := dep.Spec.Template.Annotations["excalibase.io/db-url-hash"]; ok {
+		t.Fatal("the fingerprint must go with the login")
+	}
+	if _, err := c.clientset.CoreV1().Secrets(egressNS).Get(ctx, "deno-runtime-db", metav1.GetOptions{}); err == nil {
+		t.Fatal("the secret must be deleted")
+	}
+}

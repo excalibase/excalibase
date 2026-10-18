@@ -164,7 +164,7 @@ func (h *FunctionHandler) PutEgress(w http.ResponseWriter, r *http.Request) {
 		// replay. Surface the rollout failure without failing the write.
 		log.Printf("WARN: render runtime for %s: %v", projectID, err)
 	}
-	h.redeployAll(r, projectID)
+	h.redeployAll(r.Context(), projectID)
 	writeJSON(w, h.egressResponseFor(hosts))
 }
 
@@ -193,7 +193,11 @@ func (h *FunctionHandler) effectiveEgressHosts(projectID string) []string {
 
 // denoRuntimeSpecFor assembles the per-project runtime spec (EXC-348 adds the
 // allowlist; SEC-C5 keeps the master secret out of tenant pods).
-func (h *FunctionHandler) denoRuntimeSpecFor(projectID string) k8s.DenoRuntimeSpec {
+func (h *FunctionHandler) denoRuntimeSpecFor(projectID string) (k8s.DenoRuntimeSpec, error) {
+	poolURL, err := h.runtimePoolURL(projectID)
+	if err != nil {
+		return k8s.DenoRuntimeSpec{}, err
+	}
 	return k8s.DenoRuntimeSpec{
 		Image:           h.runtimeImage,
 		RuntimeSecret:   edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID),
@@ -203,19 +207,19 @@ func (h *FunctionHandler) denoRuntimeSpecFor(projectID string) k8s.DenoRuntimeSp
 		Edge:            h.runtimeEdge,
 		CiliumFQDN:      h.runtimeCiliumFQDN,
 		ProvisioningURL: h.runtimeProvisioningURL,
-		DatabaseURL:     h.runtimePoolURL(projectID),
-	}
+		DatabaseURL:     poolURL,
+	}, nil
 }
 
 // runtimePoolURL is the URL the runtime's ctx.db pool opens (EXC-625): the
 // same owner login the functions are handed, Postgres only, since the pool
 // is postgres.js. Empty when vault holds no complete login.
-func (h *FunctionHandler) runtimePoolURL(projectID string) string {
-	target, ok := h.injectedDBTarget(projectID)
-	if !ok || target.mysql {
-		return ""
+func (h *FunctionHandler) runtimePoolURL(projectID string) (string, error) {
+	target, ok, err := h.readDBTarget(projectID)
+	if err != nil || !ok || target.mysql {
+		return "", err
 	}
-	return target.url(target.host)
+	return target.url(target.host), nil
 }
 
 // renderRuntime pushes the current allowlist and database login into an
@@ -235,7 +239,11 @@ func (h *FunctionHandler) renderRuntime(ctx context.Context, projectID string) e
 	if err != nil || !exists {
 		return err
 	}
-	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.denoRuntimeSpecFor(projectID)); err != nil {
+	spec, err := h.denoRuntimeSpecFor(projectID)
+	if err != nil {
+		return err
+	}
+	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, spec); err != nil {
 		return err
 	}
 	// A changed allowlist replaces the pod: the redeploy that follows must
@@ -265,9 +273,9 @@ func unreachableImportsMessage(imports []string) string {
 // filed: the pod rolls onto the new URL and every function is redeployed with
 // it (EXC-625). The rotation itself already succeeded, so a failure here is
 // logged and the next deploy or replay catches up.
-func (h *FunctionHandler) CredentialsRotated(r *http.Request, projectID string) {
-	if err := h.renderRuntime(r.Context(), projectID); err != nil {
+func (h *FunctionHandler) CredentialsRotated(ctx context.Context, projectID string) {
+	if err := h.renderRuntime(ctx, projectID); err != nil {
 		log.Printf("WARN: render runtime for %s after credential rotation: %v", projectID, err)
 	}
-	h.redeployAll(r, projectID)
+	h.redeployAll(ctx, projectID)
 }

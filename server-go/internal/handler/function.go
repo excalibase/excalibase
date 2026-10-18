@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -311,7 +313,11 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if namespace == "" {
 		return nil, fmt.Errorf("no namespace for project %s", projectID)
 	}
-	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.denoRuntimeSpecFor(projectID)); err != nil {
+	spec, err := h.denoRuntimeSpecFor(projectID)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, spec); err != nil {
 		return nil, fmt.Errorf("ensure deno runtime: %w", err)
 	}
 	// EnsureDenoRuntime may have just created the runtime or rolled its pod
@@ -517,13 +523,26 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[
 // injectedDBTarget is the owner login EXCALIBASE_DB_URL is built from, when a
 // function gets one: secrets are wired and vault holds a complete login.
 func (h *FunctionHandler) injectedDBTarget(projectID string) (dbTarget, bool) {
+	target, ok, _ := h.readDBTarget(projectID)
+	return target, ok
+}
+
+// readDBTarget reads the owner login, telling a project that has none
+// (ok=false, nil error) from a vault that could not be read (error).
+func (h *FunctionHandler) readDBTarget(projectID string) (dbTarget, bool, error) {
 	if h.secrets == nil || h.vault == nil {
-		return dbTarget{}, false
+		return dbTarget{}, false, nil
 	}
 	path := fmt.Sprintf("projects/%s/credentials/admin", projectID)
 	creds, err := h.vault.Get(path)
-	if err != nil || creds == nil {
-		return dbTarget{}, false
+	if errors.Is(err, vault.ErrNotFound) {
+		return dbTarget{}, false, nil
+	}
+	if err != nil {
+		return dbTarget{}, false, fmt.Errorf("read the project's database login: %w", err)
+	}
+	if creds == nil {
+		return dbTarget{}, false, nil
 	}
 	target := dbTarget{
 		host: creds["host"], port: creds["port"],
@@ -531,12 +550,12 @@ func (h *FunctionHandler) injectedDBTarget(projectID string) (dbTarget, bool) {
 		mysql: domain.IsMySQLRecord(creds), serverCA: creds[domain.CredentialServerCAKey],
 	}
 	if target.host == "" || target.user == "" || target.db == "" {
-		return dbTarget{}, false
+		return dbTarget{}, false, nil
 	}
 	if target.port == "" {
 		target.port = "5432"
 	}
-	return target, true
+	return target, true, nil
 }
 
 // dbTarget is the vault-stored app credential set a deploy DSN is built from.
@@ -553,8 +572,14 @@ func (t dbTarget) url(host string) string {
 	if t.mysql {
 		return domain.MySQLURL(host, t.port, t.user, t.pass, t.db)
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=require",
-		t.user, t.pass, net.JoinHostPort(host, t.port), t.db)
+	dsn := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(t.user, t.pass),
+		Host:     net.JoinHostPort(host, t.port),
+		Path:     "/" + t.db,
+		RawQuery: "sslmode=require",
+	}
+	return dsn.String()
 }
 
 // List returns all functions belonging to the project.
@@ -1391,7 +1416,7 @@ func (h *FunctionHandler) SetSecret(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
-	h.redeployAll(r, projectID)
+	h.redeployAll(r.Context(), projectID)
 	writeJSON(w, map[string]string{"status": "set", "key": body.Key})
 }
 
@@ -1403,24 +1428,24 @@ func (h *FunctionHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
-	h.redeployAll(r, projectID)
+	h.redeployAll(r.Context(), projectID)
 	writeJSON(w, map[string]string{"status": "deleted", "key": key})
 }
 
 // redeployAll re-pushes every function of the project to the runtime so the
 // latest env (user secrets + builtins) is picked up. Errors are logged and
 // not surfaced — secret write succeeded, so the admin UI should still 200.
-func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
+func (h *FunctionHandler) redeployAll(ctx context.Context, projectID string) {
 	list, err := h.store.List(projectID)
 	if err != nil || len(list) == 0 {
 		return
 	}
-	env, err := h.deployEnv(r.Context(), projectID)
+	env, err := h.deployEnv(ctx, projectID)
 	if err != nil {
 		log.Printf("WARN: redeploy build env: %v", err)
 		return
 	}
-	client, cerr := h.runtimeClientFor(r.Context(), projectID)
+	client, cerr := h.runtimeClientFor(ctx, projectID)
 	if cerr != nil {
 		log.Printf("WARN: redeploy runtime client: %v", cerr)
 		return
@@ -1433,7 +1458,7 @@ func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
 			log.Printf("WARN: redeploy bundle %s: %v", fn.ID, err)
 			continue
 		}
-		if err := client.Deploy(r.Context(), deployRequestFor(fn, code, env, allowedHosts)); err != nil {
+		if err := client.Deploy(ctx, deployRequestFor(fn, code, env, allowedHosts)); err != nil {
 			log.Printf("WARN: redeploy %s: %v", fn.RuntimeID(), err)
 		}
 	}

@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net/http"
-	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -63,8 +65,7 @@ func TestCredentialsRotated_RendersTheNewURLAndRedeploys(t *testing.T) {
 	deployEgressFn(t, f, "hello")
 
 	vault.data[path]["password"] = "new"
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	f.handler.CredentialsRotated(req, testEgressProject)
+	f.handler.CredentialsRotated(context.Background(), testEgressProject)
 
 	want := "postgres://owner:new@" + testEgressDBHost + ":5432/app?sslmode=require"
 	if got := f.k8s.DenoSpecs[testEgressNS].DatabaseURL; got != want {
@@ -79,8 +80,46 @@ func TestCredentialsRotated_RendersTheNewURLAndRedeploys(t *testing.T) {
 func TestCredentialsRotated_NoRuntimeIsLeftAlone(t *testing.T) {
 	f := setupEgressHandler(t)
 	f.handler.SetVault(newFakeVault())
-	f.handler.CredentialsRotated(httptest.NewRequest(http.MethodPost, "/", nil), testEgressProject)
+	f.handler.CredentialsRotated(context.Background(), testEgressProject)
 	if _, ok := f.k8s.DenoSpecs[testEgressNS]; ok {
 		t.Fatal("no function deployed, no runtime created")
+	}
+}
+
+// erroringVault fails every read the way a sealed or unreachable vault does.
+type erroringVault struct{ *fakeVault }
+
+func (erroringVault) Get(string) (map[string]string, error) {
+	return nil, errors.New("vault is sealed")
+}
+
+// A vault that cannot be read is not "no database": the runtime is not
+// rendered without its login (no fallback).
+func TestRuntimeSpec_UnreadableVaultFailsTheDeploy(t *testing.T) {
+	f := setupEgressHandler(t)
+	f.handler.SetVault(erroringVault{newFakeVault()})
+	body := map[string]interface{}{
+		"id": "hello", "name": "hello",
+		"files": []map[string]string{{"path": testIndexTS, "content": testDefaultHandler}},
+	}
+	if w := doJSON(f.router, "POST", "/api/projects/"+testEgressProject+"/functions/", body); w.Code == http.StatusCreated {
+		t.Fatal("a deploy must fail when the project's login cannot be read")
+	}
+	if _, ok := f.k8s.DenoSpecs[testEgressNS]; ok {
+		t.Fatal("the runtime must not be rendered without its login")
+	}
+}
+
+// A password with URL-reserved characters stays a password.
+func TestDBTargetURL_EscapesTheLogin(t *testing.T) {
+	target := dbTarget{host: "db.ns.svc.cluster.local", port: "5432", user: "owner", pass: "p@ss/w:rd?#", db: "app"}
+	parsed, err := url.Parse(target.url(target.host))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass, _ := parsed.User.Password()
+	if parsed.Hostname() != "db.ns.svc.cluster.local" || parsed.User.Username() != "owner" || pass != "p@ss/w:rd?#" ||
+		parsed.Path != "/app" || parsed.Query().Get("sslmode") != "require" {
+		t.Fatalf("login not preserved: host=%q user=%q path=%q", parsed.Hostname(), parsed.User.Username(), parsed.Path)
 	}
 }
