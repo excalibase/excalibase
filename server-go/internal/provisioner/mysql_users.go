@@ -22,6 +22,11 @@ const (
 // use in the auth database, and nothing more (EXC-626).
 const MySQLAuthAdminPrivileges = "SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES"
 
+// MySQLAppAuthRevokeSQL takes from excalibase_app the read grant on the auth
+// database it held before EXC-628: only auth_admin reaches the end users'
+// tables, and a cluster restored from an older backup still carries it.
+const MySQLAppAuthRevokeSQL = "REVOKE IF EXISTS ALL PRIVILEGES ON `" + MySQLAuthDatabase + "`.* FROM '" + MySQLUserApp + "'@'%' IGNORE UNKNOWN USER;"
+
 // MySQLPasswords are the passwords the platform users are created with.
 type MySQLPasswords struct {
 	Admin, App, AuthAdmin, Watcher string
@@ -46,13 +51,13 @@ func MySQLPlatformUsersSQL(projectDatabase string, passwords MySQLPasswords) str
 		grantOn(all, project, MySQLUserAdmin),
 		grantOn(all, project, MySQLUserApp),
 		grantOn(all, platform, MySQLUserApp),
-		grantOn("SELECT", auth, MySQLUserApp),
 		grantOn(MySQLAuthAdminPrivileges, auth, MySQLUserAuthAdmin),
 		"REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO " + mysqlAccount(MySQLUserWatcher),
 		grantOn("SELECT", project, MySQLUserWatcher),
 	} {
 		fmt.Fprintf(&sql, "GRANT %s;\n", grant)
 	}
+	sql.WriteString(MySQLAppAuthRevokeSQL + "\n")
 	return sql.String()
 }
 

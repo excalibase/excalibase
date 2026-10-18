@@ -256,7 +256,8 @@ func (p *MySQLProvisioner) SetUserPassword(ctx context.Context, namespace, proje
 	return nil
 }
 
-// SetUserPasswords sets several platform users' passwords in one batch.
+// SetUserPasswords sets several platform users' passwords in one batch, and
+// takes away excalibase_app's old auth read grant (EXC-628).
 func (p *MySQLProvisioner) SetUserPasswords(ctx context.Context, namespace, projectID string, passwords map[string]string) error {
 	users := make([]string, 0, len(passwords))
 	for user := range passwords {
@@ -269,6 +270,8 @@ func (p *MySQLProvisioner) SetUserPasswords(ctx context.Context, namespace, proj
 		statements.WriteString(MySQLAlterUserSQL(user, passwords[user]) + "\n")
 		secrets = append(secrets, passwords[user])
 	}
+	// This is the in-place restore's reset; the backup may predate EXC-628.
+	statements.WriteString(MySQLAppAuthRevokeSQL + "\n")
 	if err := p.execSecret(ctx, namespace, projectID, statements.String(), secrets...); err != nil {
 		return fmt.Errorf("set the platform users' passwords: %w", err)
 	}

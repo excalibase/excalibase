@@ -370,3 +370,18 @@ func TestMySQLEnsurePlatformUsers_ErrorsNeverCarryThePassword(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// EXC-628: SetUserPasswords is what an in-place restore runs on a cluster that
+// came back from a backup, possibly one taken while excalibase_app could still
+// read auth; the same batch takes that grant away.
+func TestMySQLSetUserPasswords_RevokesTheAppRolesAuthAccess(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	applyTestCluster(t, mock, mysqlFree)
+	_ = unstructured.SetNestedField(mock.CRDs[mysqlClusterKey].Object, int64(0), "status", "currentPrimaryIndex")
+	if err := prov.SetUserPasswords(context.Background(), mysqlTestNS, mysqlTestProject, map[string]string{MySQLUserApp: "b2"}); err != nil {
+		t.Fatalf("SetUserPasswords: %v", err)
+	}
+	if last := mock.ExecStdin[len(mock.ExecStdin)-1]; !strings.Contains(last, MySQLAppAuthRevokeSQL) {
+		t.Fatalf("the restore's batch keeps excalibase_app's auth access:\n%s", last)
+	}
+}

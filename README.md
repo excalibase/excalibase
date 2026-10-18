@@ -255,7 +255,7 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | GET | `/api/provision/{id}/performance/top-queries` | Yes | Top queries by time |
 | GET | `/api/provision/{id}/audit` | Yes | Per-project audit log |
 | POST | `/api/provision/{id}/migrations` | Yes | Apply SQL migration |
-| POST | `/api/provision/{id}/snapshot/export` | Yes | pg_dump export |
+| POST | `/api/provision/{id}/snapshot/export` | Yes | pg_dump export (never the `auth` schema) |
 | GET | `/api/projects/{id}/info` | Yes | Combined project + org metadata (for auth-service JWT mint); carries `corsAllowedOrigins` (which excalibase-graphql reads to answer CORS per project), `requireEmailVerification` and `siteUrl` |
 | GET | `/api/projects/{id}/cors` | Yes | Browser-origin allowlist for the project's data plane (Developer+). `{"allowedOrigins": [...], "allowWildcard": bool}` |
 | PUT | `/api/projects/{id}/cors` | Yes | Replace the allowlist (Developer+). Absolute origins only (`scheme://host[:port]`, max 32); `"*"` needs `"allowWildcard": true` and must be the only entry. Empty = no CORS headers (browser apps blocked). See `docs/project-cors.md` |

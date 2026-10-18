@@ -461,7 +461,10 @@ through:
    and — because a restored database arrives carrying the source project's
    roles and passwords — their passwords are **reset** to freshly generated
    ones. The restored project therefore has its own credentials; leaking the
-   source's does not grant access to it, and vice versa.
+   source's does not grant access to it, and vice versa. Grants are put back
+   to the current ones too: a backup from before EXC-628 let `excalibase_app`
+   read the auth schema, and the registration SQL revokes that, so only
+   `auth_admin` reaches the end users' tables.
 2. Those credentials are written to vault under
    `projects/{restoredProjectId}/credentials/{role}`, which is what the schema
    plane, graphql and auth read. Without this step the project exists but

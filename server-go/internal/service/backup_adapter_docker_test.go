@@ -426,6 +426,9 @@ func (f *fakeDockerClientForAdapter) ExecInContainerStdin(_ context.Context, _ s
 	if strings.Contains(strings.Join(cmd, " "), "pg_walfile_name") {
 		return f.walName + "\n", nil
 	}
+	if strings.Contains(strings.Join(cmd, " "), "has_schema_privilege") {
+		return "f\n", nil // the auth probe: excalibase_app reaches nothing there
+	}
 	return "", nil
 }
 func (f *fakeDockerClientForAdapter) CopyFromContainer(_ context.Context, _ string, _ string) (io.ReadCloser, error) {

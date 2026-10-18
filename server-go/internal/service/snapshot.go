@@ -106,7 +106,11 @@ func snapshotFormat(req domain.SnapshotExportRequest) (string, error) {
 }
 
 func pgDumpCommand(database, format string, req domain.SnapshotExportRequest) []string {
-	cmd := []string{"pg_dump", "-U", "postgres", "-d", database, fmt.Sprintf("--format=%s", format)}
+	// Project Admins download the dump, and only auth_admin reaches the end
+	// users' tables (EXC-628). -t outranks --exclude-schema, so the auth
+	// tables are excluded by name as well.
+	cmd := []string{"pg_dump", "-U", "postgres", "-d", database, fmt.Sprintf("--format=%s", format),
+		"--exclude-schema=auth", "--exclude-table=auth.*"}
 	if req.SchemaOnly {
 		cmd = append(cmd, "--schema-only")
 	}

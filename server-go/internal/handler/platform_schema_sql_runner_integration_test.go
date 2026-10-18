@@ -15,9 +15,9 @@ import (
 
 // EXC-623: Studio's SQL runner (and MCP execute_sql, which calls the same
 // route) runs customer SQL as excalibase_app. Against a database registered
-// with the platform's own role SQL, it reads the project's auth users and
-// works in its own schemas, and every write to the excalibase schema is
-// refused by Postgres.
+// with the platform's own role SQL, it works in its own schemas, every write to
+// the excalibase schema is refused by Postgres, and so is any read of the
+// project's auth tables, which only auth_admin reaches (EXC-628).
 func TestStudioSQLRunner_PlatformSchemaIsReadOnlyToCustomerSQL(t *testing.T) {
 	db, creds := startProjectPG(t)
 	opener := wiringOpener(t, creds, "ACTIVE")
@@ -48,6 +48,7 @@ func TestStudioSQLRunner_PlatformSchemaIsReadOnlyToCustomerSQL(t *testing.T) {
 		`DELETE FROM excalibase.excalibase_cron_jobs`,
 		`ALTER TABLE excalibase.excalibase_cron_jobs OWNER TO excalibase_app`,
 		`INSERT INTO auth.users (email) VALUES ('mallory@example.test')`,
+		`SELECT email FROM auth.users`,
 	} {
 		if code, result := run(statement); code == http.StatusOK && result.Error == "" {
 			t.Errorf("customer SQL was allowed: %s", statement)
@@ -56,9 +57,6 @@ func TestStudioSQLRunner_PlatformSchemaIsReadOnlyToCustomerSQL(t *testing.T) {
 		}
 	}
 
-	if code, result := run(`SELECT email FROM auth.users`); code != http.StatusOK || result.Error != "" || len(result.Rows) != 1 {
-		t.Fatalf("reading the project's auth users: %d %+v", code, result)
-	}
 	for _, statement := range []string{
 		`CREATE TABLE public.notes (id serial PRIMARY KEY, body text)`,
 		`INSERT INTO public.notes (body) VALUES ('hello')`,
