@@ -101,6 +101,27 @@ sh "$DIR/../init.sh" --env-file "$WORK/docdb.env" --domain example.com --admin-e
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --documentdb >/dev/null || fail "--documentdb refused"
 grep -qx 'DOCUMENTDB_ENABLED=true' "$WORK/docdb.env" || fail "--documentdb not written"
 
+# macOS (EXC-629): the socket's group is read without GNU-only stat flags. A BSD
+# stat on PATH refuses -c, as macOS's does.
+mkdir "$WORK/bsd"
+cat > "$WORK/bsd/stat" <<'STAT'
+#!/bin/sh
+case $1 in -c|--format*|--printf*) echo "stat: illegal option -- c" >&2; exit 1 ;; esac
+echo "stat: unsupported in this test" >&2; exit 1
+STAT
+chmod +x "$WORK/bsd/stat"
+: > "$WORK/owned.sock"
+for path in "$WORK/bsd:$PATH" "$PATH"; do
+  rm -f "$WORK/gid.env"
+  PATH=$path sh "$DIR/../init.sh" --env-file "$WORK/gid.env" --domain example.com --admin-email me@example.com \
+    --engine docker --engine-socket "$WORK/owned.sock" >/dev/null || fail "init.sh failed to read the socket's group (PATH=$path)"
+  [ "$(sed -n 's/^ENGINE_SOCKET_GID=//p' "$WORK/gid.env")" = "$(id -g)" ] || fail "wrong engine socket group (PATH=$path)"
+done
+if sh "$DIR/../init.sh" --env-file "$WORK/nosock.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/missing.sock" >/dev/null 2>&1; then
+  fail "init.sh accepted an engine socket that does not exist"
+fi
+
 # Required arguments.
 if sh "$DIR/../init.sh" --env-file "$WORK/none.env" --admin-email me@example.com >/dev/null 2>&1; then
   fail "init.sh ran without a domain"

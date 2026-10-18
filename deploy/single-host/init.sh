@@ -77,7 +77,11 @@ case $engine in
   docker)
     engine_socket=${engine_socket:-/var/run/docker.sock}
     engine_socket_uid=1000
-    engine_socket_gid=${engine_socket_gid:-$(stat -c %g "$engine_socket")}
+    if [ -z "${engine_socket_gid:-}" ]; then
+      # ls -n is POSIX; stat -c is GNU only and fails on macOS.
+      [ -e "$engine_socket" ] || { echo "init.sh: no engine socket at $engine_socket (set --engine-socket)" >&2; exit 2; }
+      engine_socket_gid=$(ls -nd -- "$engine_socket" | awk '{print $4}')
+    fi
     ;;
   podman)
     # Rootless: the container's root is this unprivileged user, the socket's owner.
