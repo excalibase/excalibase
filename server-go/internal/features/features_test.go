@@ -45,9 +45,10 @@ func TestAll_NamesAreUniqueAndLowercase(t *testing.T) {
 			t.Errorf("%s declared twice", feature)
 		}
 		seen[feature] = true
-		for _, c := range feature {
-			if c < 'a' || c > 'z' {
-				t.Errorf("%s: feature names are lowercase words, as Studio reads them", feature)
+		for i, c := range feature {
+			letter := c >= 'a' && c <= 'z'
+			if !letter && (i == 0 || c < '0' || c > '9') {
+				t.Errorf("%s: feature names are a lowercase letter then letters or digits, as Studio reads them", feature)
 			}
 		}
 	}
@@ -82,5 +83,18 @@ func TestRequire_PassesThroughWhenOn(t *testing.T) {
 	Require(NewStatic(MCP), MCP)(next).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/mcp", nil))
 	if rec.Code != http.StatusTeapot {
 		t.Fatalf("on: %d", rec.Code)
+	}
+}
+
+func TestS3IsDeclaredAndOffByDefault(t *testing.T) {
+	declared := false
+	for _, feature := range All() {
+		declared = declared || feature == S3
+	}
+	if !declared || S3 != "s3" {
+		t.Fatal("s3 is a declared feature named s3")
+	}
+	if NewStatic().Enabled(context.Background(), S3) {
+		t.Fatal("s3 ships dark")
 	}
 }

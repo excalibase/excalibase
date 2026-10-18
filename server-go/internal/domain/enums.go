@@ -156,7 +156,9 @@ const (
 	DeletionStepReleaseEndpoint = "RELEASE_PUBLIC_ENDPOINT"
 	// DeletionStepDeleteSites removes the project's sites and their Workers (EXC-353).
 	DeletionStepDeleteSites = "DELETE_SITES"
-	DeletionStepRevokeNats  = "REVOKE_NATS_CREDENTIALS"
+	// DeletionStepRevokeS3Keys removes the project's S3 access keys (EXC-630).
+	DeletionStepRevokeS3Keys = "REVOKE_S3_KEYS"
+	DeletionStepRevokeNats   = "REVOKE_NATS_CREDENTIALS"
 	// DeletionStepStopBackupSchedule stops a single host's scheduled backups (EXC-593).
 	DeletionStepStopBackupSchedule = "STOP_BACKUP_SCHEDULE"
 	// DeletionStepDeleteAppWorkloads removes a single host's app containers, disks and network (EXC-575).

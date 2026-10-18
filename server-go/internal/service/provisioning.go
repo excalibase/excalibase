@@ -81,6 +81,8 @@ type ProvisioningService struct {
 	appPurger ProjectAppPurger
 	// sitePurger removes the project's sites and the Workers that serve them.
 	sitePurger ProjectSitePurger
+	// s3KeyPurger revokes a deleted project's S3 access keys (EXC-630).
+	s3KeyPurger ProjectS3KeyPurger
 	// siteRouter takes the project's sites offline while its deletion is pending.
 	siteRouter ProjectSiteRouter
 	// workloads stops a deleted project's apps and function runtime (EXC-567).
@@ -1017,6 +1019,11 @@ type ProjectAppPurger interface {
 	PurgeProjectApps(projectID string) (int, error)
 }
 
+// ProjectS3KeyPurger revokes every S3 access key a project holds (EXC-630).
+type ProjectS3KeyPurger interface {
+	PurgeProject(ctx context.Context, projectID string) (int, error)
+}
+
 // ProjectSitePurger removes every site a project holds, Worker first (EXC-353).
 type ProjectSitePurger interface {
 	PurgeProjectSites(ctx context.Context, projectID string) (int, error)
@@ -1065,6 +1072,18 @@ func (s *ProvisioningService) purgeProjectSites(ctx context.Context, inst *domai
 		return err
 	}
 	log.Printf("site purge for %s removed %d sites", inst.ProjectID, removed)
+	return nil
+}
+
+// SetS3KeyPurger wires the revocation of a deleted project's S3 access keys.
+func (s *ProvisioningService) SetS3KeyPurger(p ProjectS3KeyPurger) { s.s3KeyPurger = p }
+
+func (s *ProvisioningService) purgeProjectS3Keys(ctx context.Context, inst *domain.DatabaseInstance) error {
+	removed, err := s.s3KeyPurger.PurgeProject(ctx, inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	log.Printf("s3 key purge for %s revoked %d keys", inst.ProjectID, removed)
 	return nil
 }
 
@@ -1234,6 +1253,10 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	// quarantine here, not back into the pool.
 	if s.endpoints != nil {
 		steps = append(steps, deletionStep{domain.DeletionStepReleaseEndpoint, s.releasePublicEndpoint})
+	}
+	// S3 keys reach the project's files from outside; they stop working next.
+	if s.s3KeyPurger != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepRevokeS3Keys, s.purgeProjectS3Keys})
 	}
 	// Sites are public too, so they stop being served next.
 	if s.sitePurger != nil {

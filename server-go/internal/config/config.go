@@ -105,6 +105,9 @@ type AppConfig struct {
 	EmailProductName string
 	EmailReplyTo     string
 	StoragePublicURL string
+	// S3PublicURL is where S3 clients reach the S3 gateway (EXC-630), e.g.
+	// https://s3.example.com; Studio shows it with every key.
+	S3PublicURL string
 
 	// LokiURL points at the cluster's Loki HTTP endpoint. When set, the
 	// admin /logs endpoint proxies queries to Loki and the per-project
@@ -488,6 +491,7 @@ func load() AppConfig {
 		EmailProductName:               envOr("EMAIL_PRODUCT_NAME", "Excalibase"),
 		EmailReplyTo:                   envOr("EMAIL_REPLY_TO", ""),
 		StoragePublicURL:               envOr("STORAGE_PUBLIC_URL", ""),
+		S3PublicURL:                    envOr("S3_PUBLIC_URL", ""),
 		LokiURL:                        envOr("LOKI_URL", ""),
 		PromURL:                        envOr("PROM_URL", ""),
 		FnEgressDefaultHosts:           envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),

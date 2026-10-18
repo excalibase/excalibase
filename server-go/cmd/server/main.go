@@ -862,6 +862,8 @@ type handlerDeps struct {
 	emailTokensHandler *handler.EmailTokensHandler
 	internalEmail      *handler.InternalEmailHandler
 	storageHandler     *handler.StorageHandler
+	// s3KeysHandler issues S3 access keys (EXC-630); nil without storage and a vault.
+	s3KeysHandler *handler.S3KeysHandler
 	// documentsHandler is Studio's DocumentDB document browser; nil without
 	// Kubernetes, which is where DocumentDB projects run.
 	documentsHandler *handler.DocumentBrowserHandler
@@ -1586,6 +1588,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		pgHandler:           handler.NewParameterGroupHandler(pgStore),
 		emailTokensHandler:  emailTokensHandler,
 		storageHandler:      storageHandler,
+		s3KeysHandler:       wireS3Keys(cfg, newS3Keys(sqlStore, store, vc, storageSvc), sqlStore, provSvc),
 		documentsHandler:    buildDocumentBrowser(k8sClient, a.dockerClient, vc, store),
 		adminHandler:        adminHandler,
 		authHandler:         authHandler,
@@ -2267,6 +2270,9 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Use(d.activity)
 			d.storageHandler.Routes(r)
 			r.With(features.Require(d.features, features.AppStorage)).Put("/buckets/{bucket}/access", d.storageHandler.UpdateBucketAccess)
+			if d.s3KeysHandler != nil {
+				r.With(features.Require(d.features, features.S3)).Group(d.s3KeysHandler.Routes)
+			}
 		})
 		mountAppStorage(r, sqlStore, store, d)
 		// The public object path is anonymous, so it sits outside the

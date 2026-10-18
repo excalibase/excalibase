@@ -15,8 +15,8 @@ var offeredTools = []string{
 	"add_cors_origin", "add_site_domain", "apply_migration", "check_site_domain", "connect_site_repo", "create_app", "create_publishable_key", "create_site", "delete_app", "delete_function",
 	"delete_site", "deploy_app", "deploy_function", "deploy_site", "describe_table", "execute_sql", "generate_typescript_types", "get_ci_snippet",
 	"get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_project_info",
-	"list_apps", "list_cors_origins", "list_functions", "list_migrations", "list_permissions", "list_projects",
-	"list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_tables", "remove_cors_origin", "remove_site_domain", "rollback_site", "set_db_function_permission", "set_function_outbound_hosts",
+	"list_apps", "list_cors_origins", "list_functions", "list_migrations", "list_permissions", "list_projects", "list_s3_keys",
+	"list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_tables", "remove_cors_origin", "remove_site_domain", "revoke_s3_key", "rollback_site", "set_db_function_permission", "set_function_outbound_hosts",
 	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "test_auth_flow", "track_db_function", "update_app",
 }
 
@@ -79,6 +79,10 @@ var allowedRoutes = []*regexp.Regexp{
 	// Git builds (EXC-354): connect a repository and read builds; the GitHub sign-in happens in Studio only.
 	regexp.MustCompile(`^(GET|PUT) /api/projects/[^/]+/sites/[^/]+/git$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/sites/[^/]+/builds(/[^/]+)?$`),
+	// S3 access keys (EXC-630): listed and revoked. Issuing one is a credential
+	// mint, which ADR 0037 keeps in Studio.
+	regexp.MustCompile(`^GET /api/projects/[^/]+/storage/s3-keys$`),
+	regexp.MustCompile(`^DELETE /api/projects/[^/]+/storage/s3-keys/[^/]+$`),
 }
 
 // neverReached is the surface ADR 0037 keeps out of MCP: project lifecycle,

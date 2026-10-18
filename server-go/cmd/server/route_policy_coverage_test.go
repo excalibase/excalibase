@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/s3keys"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -254,6 +255,7 @@ func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlat
 	deps.emailTokensHandler = handler.NewEmailTokensHandler(offlineDB(t), nil, nil, "", "")
 	deps.capDeps = &capacityDeps{k8sClient: k8s.NewMockClient(), store: instances}
 	deps.siteDeployTokens = policyDeployTokens{}
+	deps.s3KeysHandler = handler.NewS3KeysHandler(policyS3Keys{}, "https://s3.example.test")
 	// The matrix fires thousands of requests as the same user against the same
 	// project; the production limits would answer 429 instead of the
 	// authorization outcome under test.
@@ -381,6 +383,20 @@ func policyVaultHandler(t *testing.T) *handler.VaultHandler {
 
 // policyDeployToken is the raw deploy token the siteDeployToken principal sends.
 const policyDeployToken = sites.DeployTokenPrefix + "policy-matrix"
+
+// policyS3Keys answers every S3 key call with nothing in particular: the
+// matrix asserts who reaches the routes, not what they do.
+type policyS3Keys struct{}
+
+func (policyS3Keys) Create(_ context.Context, request s3keys.CreateRequest) (string, *s3keys.Key, error) {
+	return "secret", &s3keys.Key{ID: "s3k_policy", ProjectID: request.ProjectID, Buckets: []string{}}, nil
+}
+
+func (policyS3Keys) List(context.Context, string) ([]*s3keys.Key, error) { return []*s3keys.Key{}, nil }
+
+func (policyS3Keys) Revoke(_ context.Context, projectID, id string) (*s3keys.Key, error) {
+	return &s3keys.Key{ID: id, ProjectID: projectID}, nil
+}
 
 // policyDeployTokens resolves the one deploy token the matrix holds.
 type policyDeployTokens struct{}

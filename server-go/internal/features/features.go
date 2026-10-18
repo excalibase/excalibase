@@ -23,11 +23,14 @@ const (
 	// MySQLPITR ships MySQL binlogs between backups, so a point-in-time
 	// restore reaches about a minute ago instead of the last backup (EXC-587).
 	MySQLPITR Feature = "mysqlpitr"
+	// S3 is the S3-compatible storage endpoint, its access keys and their
+	// Studio tab and MCP tools (EXC-630, ADR 0044).
+	S3 Feature = "s3"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, S3}
 }
 
 type Flags interface {
