@@ -70,9 +70,8 @@ var ErrLogsUnavailable = errors.New("the database's logs are not available right
 const maxLokiAnswer = 32 << 20
 
 // GetLogs returns the last N lines of the project's postgres pod log.
-// Prefers Loki when configured (sees logs across pod restarts, doesn't hang
-// on busy minikube apiservers); falls back to kubectl-exec tail in dev/test
-// environments without Loki.
+// Prefers Loki when configured (it keeps logs across pod restarts) and reads
+// the pod's log through the Kubernetes API when Loki is unset or does not answer.
 func (s *ProvisioningService) GetLogs(ctx context.Context, projectID string, lines int) (string, error) {
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
@@ -80,12 +79,18 @@ func (s *ProvisioningService) GetLogs(ctx context.Context, projectID string, lin
 	}
 
 	if s.lokiURL != "" {
-		return s.getLogsFromLoki(ctx, inst.Namespace, projectID, lines)
+		if out, err := s.getLogsFromLoki(ctx, inst.Namespace, projectID, lines); err == nil {
+			return out, nil
+		}
 	}
 
-	pod := projectID + "-postgres-1"
-	return s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, "postgres",
-		[]string{"sh", "-c", fmt.Sprintf("tail -%d /controller/log/postgres.csv", lines)})
+	// Never a command on /controller/log/postgres.csv: CNPG's collector reads that pipe.
+	out, err := s.k8sClient.PodLogTail(ctx, inst.Namespace, projectID+primaryPodSuffix, "postgres", int64(lines))
+	if err != nil {
+		log.Printf("logs of %s: pod log: %v", projectID, err)
+		return "", ErrLogsUnavailable
+	}
+	return out, nil
 }
 
 // getLogsFromLoki queries Loki for the last N postgres pod lines from the

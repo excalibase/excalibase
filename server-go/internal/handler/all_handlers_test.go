@@ -447,7 +447,7 @@ func TestSetDeletionProtectionHandler(t *testing.T) {
 func TestAuditGetLogsHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
-	mock.ExecOutput[testDBPodName] = "AUDIT: line1"
+	mock.PodLogs[testDBPodName] = "AUDIT: line1"
 
 	w := doRequest(r, "GET", "/api/provision/test-db/audit/logs?lines=50", "")
 	if w.Code != 200 {
@@ -707,6 +707,7 @@ func TestAuditConfigNotFound(t *testing.T) {
 func TestAuditGetLogsDefaultLines(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	mock.PodLogs[testDBPodName] = "AUDIT: line1"
 
 	// no "lines" query param — uses default 100
 	w := doRequest(r, "GET", "/api/provision/test-db/audit/logs", "")

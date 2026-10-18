@@ -114,7 +114,7 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 func TestGetLogs_Success(t *testing.T) {
 	r, store, mock := fullRouterWithOpsRoutes(t)
 	seedInstance(store, mock)
-	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = "log line 1\nlog line 2"
+	mock.PodLogs["org1-test-db/test-db-postgres-1"] = "log line 1\nlog line 2"
 
 	w := doRequest(r, "GET", "/api/provision/test-db/logs?lines=50", "")
 	if w.Code != 200 {
@@ -130,6 +130,7 @@ func TestGetLogs_Success(t *testing.T) {
 func TestGetLogs_DefaultLines(t *testing.T) {
 	r, store, mock := fullRouterWithOpsRoutes(t)
 	seedInstance(store, mock)
+	mock.PodLogs["org1-test-db/test-db-postgres-1"] = "log line 1"
 
 	// No "lines" param — defaults to 100
 	w := doRequest(r, "GET", "/api/provision/test-db/logs", "")
@@ -141,6 +142,7 @@ func TestGetLogs_DefaultLines(t *testing.T) {
 func TestGetLogs_InvalidLinesParam_UsesDefault(t *testing.T) {
 	r, store, mock := fullRouterWithOpsRoutes(t)
 	seedInstance(store, mock)
+	mock.PodLogs["org1-test-db/test-db-postgres-1"] = "log line 1"
 
 	// Non-numeric lines — should fall back to 100
 	w := doRequest(r, "GET", "/api/provision/test-db/logs?lines=notanumber", "")
