@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -63,5 +64,25 @@ func TestMySQLRegistrationEndsTheSourcesSessionsOnlyForARestoredCopy(t *testing.
 	}
 	if !strings.Contains(engine.fed(), provisioner.MySQLEndUserSessionsRevokeSQL) {
 		t.Fatal("the restored copy kept the source's sessions")
+	}
+}
+
+// A copy whose sessions could not be ended is not registered.
+func TestMySQLRegistrationFailsWhenTheSourcesSessionsCannotBeEnded(t *testing.T) {
+	svc, store, engine := setupSingleHostMySQL(t)
+	source := provisionMySQL(t, svc, store, "")
+	engine.answer = func(_, stdin string) (string, error) {
+		if stdin == provisioner.MySQLEndUserSessionsRevokeSQL {
+			return "", errors.New("exit code 1")
+		}
+		return "", nil
+	}
+	restored := *source
+	restored.ProjectID, restored.OrgID, restored.RestoredFromProjectID, restored.CreatedAt = "copy-1", "org2", source.ProjectID, nil
+	if err := svc.RegisterProject(context.Background(), &restored, RegistrationOptions{}); err == nil {
+		t.Fatal("the copy was registered with the source's sessions")
+	}
+	if row, _ := store.FindByProjectID("copy-1"); row != nil {
+		t.Fatalf("a row was left: %+v", row)
 	}
 }

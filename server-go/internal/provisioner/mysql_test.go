@@ -412,3 +412,12 @@ func TestMySQLEndUserSessionsRevokeSQL_KeepsTheUsers(t *testing.T) {
 		t.Error("the end users themselves must be kept")
 	}
 }
+
+func TestMySQLForgetEndUserSessions_ReportsARefusal(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	applyTestCluster(t, mock, mysqlFree)
+	mock.WildcardExecError = errors.New("ERROR 1146")
+	if err := prov.ForgetEndUserSessions(context.Background(), mysqlTestNS, mysqlTestProject); err == nil {
+		t.Fatal("a refused statement was reported done")
+	}
+}

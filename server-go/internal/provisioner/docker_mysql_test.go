@@ -271,3 +271,20 @@ func TestDockerMySQLStartOnVolumeLeavesAnAnsweringServerWithoutTheDatabase(t *te
 		t.Fatalf("a created container that failed to start is still named for cleanup: %q %v", container, err)
 	}
 }
+
+// EXC-635: a restored copy's end-user sessions are ended in its container.
+func TestDockerMySQLForgetEndUserSessions(t *testing.T) {
+	engine := newFakeEngine()
+	p := newTestDockerMySQL(engine)
+	result := provisionDockerMySQL(t, engine)
+	if err := p.ForgetEndUserSessions(context.Background(), result.Namespace, "p1"); err != nil {
+		t.Fatalf("ForgetEndUserSessions: %v", err)
+	}
+	if last := engine.stdin[len(engine.stdin)-1]; last != MySQLEndUserSessionsRevokeSQL {
+		t.Fatalf("stdin %s", last)
+	}
+	engine.stdinAnswer = func(string, []string, string) (string, error) { return "", errors.New("exit code 1") }
+	if err := p.ForgetEndUserSessions(context.Background(), result.Namespace, "p1"); err == nil {
+		t.Fatal("a refused statement was reported done")
+	}
+}
