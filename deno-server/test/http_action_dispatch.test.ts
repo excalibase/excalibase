@@ -51,34 +51,6 @@ Deno.test({
 });
 
 Deno.test({
-  name: "httpAction: ctx.db is null (action parity)",
-  async fn() {
-    const rt = await startRuntime({ v2Enabled: true });
-    try {
-      const fnCode = bundleDefault(`{
-        kind: "httpAction",
-        __metadata: {},
-        handler: async (ctx, _req) => {
-          return new Response(
-            JSON.stringify({ dbIsNull: ctx.db === null }),
-            { status: 200, headers: { "content-type": "application/json" } }
-          );
-        },
-      }`);
-      await rt.deploy("proj_f__nodb", fnCode);
-      const res = await rt.invoke("proj_f__nodb", "");
-      assertEquals(res.status, 200);
-      const parsed = JSON.parse(res.body) as { dbIsNull: boolean };
-      assertEquals(parsed.dbIsNull, true);
-    } finally {
-      await rt.stop();
-    }
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
   name: "httpAction: non-Response return surfaces as 500",
   async fn() {
     const rt = await startRuntime({ v2Enabled: true });

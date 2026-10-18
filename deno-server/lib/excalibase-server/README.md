@@ -39,7 +39,8 @@ import { query } from "@excalibase/server";
 export default query({
   args: z.object({ id: z.string() }),
   handler: async (ctx, args) => {
-    // ctx.db is provided by the runtime at request time.
+    // Data lives behind the project's GraphQL and REST API: call it with a
+    // project key kept as a function secret. ctx.db is not available.
     return { id: args.id };
   },
 });

@@ -5,12 +5,11 @@
 // /internal/runtime/projects/{projectId}/scheduler route, which writes the
 // platform's scheduler tables as the scheduler's own login. The runtime never
 // writes those tables: the project's login has no write path into the
-// excalibase schema (EXC-623). A mutation's calls are sent only after its
-// transaction commits, so a rollback schedules nothing.
+// excalibase schema (EXC-623). A mutation's calls are sent only after it
+// succeeds, so a mutation that throws schedules nothing.
 
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { startRuntime } from "./harness.ts";
-import { startPostgres } from "./pg_harness.ts";
 
 function bundleDefault(expr: string): string {
   return `globalThis.__excalibase_default = ${expr};`;
@@ -64,16 +63,14 @@ async function startMockProvisioning(status = 204): Promise<MockProvisioning> {
   };
 }
 
-// withRuntime runs body against a runtime wired to a Postgres (so mutations
-// open a transaction) and a mock provisioning.
+// withRuntime runs body against a runtime wired to a mock provisioning.
 async function withRuntime(
   body: (rt: Awaited<ReturnType<typeof startRuntime>>, prov: MockProvisioning) => Promise<void>,
   provisioningStatus = 204,
 ): Promise<void> {
-  const pg = await startPostgres();
   const prov = await startMockProvisioning(provisioningStatus);
   try {
-    const rt = await startRuntime({ v2Enabled: true, dbUrl: pg.url, provisioningUrl: prov.url });
+    const rt = await startRuntime({ v2Enabled: true, provisioningUrl: prov.url });
     try {
       await body(rt, prov);
     } finally {
@@ -81,12 +78,11 @@ async function withRuntime(
     }
   } finally {
     await prov.stop();
-    await pg.stop();
   }
 }
 
 Deno.test({
-  name: "ctx.scheduler.runAfter from a mutation is sent to provisioning after commit",
+  name: "ctx.scheduler.runAfter from a mutation is sent to provisioning after it succeeds",
   async fn() {
     await withRuntime(async (rt, prov) => {
       await rt.deploy("proj_sched__caller", bundleDefault(`{
@@ -133,6 +129,38 @@ Deno.test({
       }`));
       await rt.invoke("proj_rollback__caller", { args: {} });
       assertEquals(prov.calls.length, 0, "a rolled-back mutation must not schedule");
+    });
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+// A nested mutation's schedule joins the outermost mutation: it is sent once
+// the outer one succeeds, and dropped when the outer one throws.
+Deno.test({
+  name: "ctx.scheduler from a nested mutation waits for the outer mutation",
+  async fn() {
+    await withRuntime(async (rt, prov) => {
+      await rt.deploy("proj_nest__inner", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, args) => ctx.scheduler.runAfter(0, { moduleName: "jobs", exportName: "send" }, { n: args.n }),
+      }`));
+      await rt.deploy("proj_nest__outer", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, args) => {
+          await ctx.runMutation({ moduleName: "inner", exportName: "default" }, { n: args.n });
+          if (args.fail) throw new Error("outer-fails");
+          return { ok: true };
+        },
+      }`));
+      await rt.invoke("proj_nest__outer", { args: { n: 1, fail: true } });
+      assertEquals(prov.calls.length, 0, "the outer mutation threw, so nothing is scheduled");
+      const res = await rt.invoke("proj_nest__outer", { args: { n: 2, fail: false } });
+      assertEquals(res.status, 200, res.body);
+      assertEquals(prov.calls.length, 1);
+      assertEquals(prov.calls[0].ops.map((op) => op.args), [{ n: 2 }]);
     });
   },
   sanitizeOps: false,
@@ -209,33 +237,28 @@ Deno.test({
 Deno.test({
   name: "an action whose schedule cannot reach provisioning never leaks the URL",
   async fn() {
-    const pg = await startPostgres();
     // A provisioning URL that nothing answers, so the fetch fails at the
     // network level — the path that used to carry the URL into the error.
     const deadURL = "http://127.0.0.1:1";
+    const rt = await startRuntime({ v2Enabled: true, provisioningUrl: deadURL });
     try {
-      const rt = await startRuntime({ v2Enabled: true, dbUrl: pg.url, provisioningUrl: deadURL });
-      try {
-        await rt.deploy("proj_leak__caller", bundleDefault(`{
-          kind: "action",
-          args: { parse: (a) => a },
-          handler: async (ctx, _args) => {
-            try {
-              await ctx.scheduler.runAfter(1000, { moduleName: "jobs", exportName: "send" }, {});
-              return { scheduled: true };
-            } catch (err) {
-              return { error: String(err && err.message ? err.message : err) };
-            }
-          },
-        }`));
-        const res = await rt.invoke("proj_leak__caller", { args: {} });
-        assert(!res.body.includes("127.0.0.1:1"), `error leaked the URL: ${res.body}`);
-        assert(!res.body.includes("http://"), `error leaked a URL: ${res.body}`);
-      } finally {
-        await rt.stop();
-      }
+      await rt.deploy("proj_leak__caller", bundleDefault(`{
+        kind: "action",
+        args: { parse: (a) => a },
+        handler: async (ctx, _args) => {
+          try {
+            await ctx.scheduler.runAfter(1000, { moduleName: "jobs", exportName: "send" }, {});
+            return { scheduled: true };
+          } catch (err) {
+            return { error: String(err && err.message ? err.message : err) };
+          }
+        },
+      }`));
+      const res = await rt.invoke("proj_leak__caller", { args: {} });
+      assert(!res.body.includes("127.0.0.1:1"), `error leaked the URL: ${res.body}`);
+      assert(!res.body.includes("http://"), `error leaked a URL: ${res.body}`);
     } finally {
-      await pg.stop();
+      await rt.stop();
     }
   },
   sanitizeOps: false,

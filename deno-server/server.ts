@@ -25,12 +25,9 @@
 // filesystem, env, run, ffi, or write permission. Secrets are injected as
 // a Deno.env mock so user code sees only its own project's env vars.
 //
-// Phase 1 ctx.db: queries and mutations receive a DbClient facade in the
-// worker that RPCs back to the main thread. The main thread owns the
-// postgres.js pool (see runtime/pool.ts) and executes each op against it,
-// posting the result back over postMessage. Actions still see ctx.db=null
-// (Convex pattern). The worker itself never opens a network socket — all
-// DB I/O happens here in the privileged main thread.
+// ctx.db was removed with the document data plane (@excalibase/server 0.11.0): every ctx
+// carries a ctx.db that refuses use, and functions reach their project's
+// data through its GraphQL or REST API (EXC-625).
 //
 // Local @excalibase/server resolution: the worker template doesn't import
 // @excalibase/server directly — Phase 1 contract types are defined in the
@@ -38,125 +35,39 @@
 // workspace; once the worker bundler is added (Phase 2/3) it will resolve
 // via a `file:` spec rather than the npm registry.
 
-import { executeDbOp, newCache } from "./runtime/db.ts";
-import type { DbOp } from "./runtime/db.ts";
 import { newId } from "./runtime/ids.ts";
-import { closePool, getPool } from "./runtime/pool.ts";
 import { drainThenExit, shutdownDrainMs } from "./runtime/shutdown.ts";
-import type { Sql } from "./runtime/pool.ts";
-import type { ValidatorCache } from "./runtime/validator.ts";
 import { runXFailure, runXTargetError, withoutCrashDetail } from "./runtime/invoke_errors.ts";
 import type { InvokeResponse, RunXFailure } from "./runtime/invoke_errors.ts";
 import { outboundDeniedMessage } from "./runtime/outbound_denied.ts";
 
 // ---------------------------------------------------------------------------
-// Phase 8.5 — Shared mutation transaction map.
+// Mutation scopes.
 //
-// Convex parity: when a mutation handler runs, every ctx.db.* and
-// ctx.scheduler.* op it performs (and every op performed by mutations it
-// invokes via ctx.runMutation) must ride the SAME Postgres transaction.
-// On handler return, the txn commits; on throw/timeout, it rolls back.
-//
-// We assign each invocation a unique `txnRefId` and stash the connection
-// in `txnMap`. The worker echoes `txnRefId` on every db/scheduler RPC so
-// the main-thread dispatch consults the map and routes through the txn
-// handle (or the pool, when no txn is active).
-//
-// For nested ctx.runMutation, the new invocation gets a fresh `txnRefId`
-// whose ActiveTxn shares the parent's `sql` handle. `owned=false` on the
-// alias entry means COMMIT/ROLLBACK is the parent's responsibility — the
-// nested call just clears its alias when it returns.
-//
-// Actions DO NOT open a txn. ActionCtx.runMutation calls the mutation
-// without forwarding a parent ref, so the mutation opens a fresh
-// top-level txn (Convex parity: the action's call-boundary is the new
-// top-level).
+// A mutation's ctx.scheduler calls are sent to provisioning only once its
+// handler succeeds, so a mutation that throws schedules nothing. Each
+// top-level mutation gets a scope keyed by a `txnRefId` the worker echoes on
+// every scheduler/runX RPC. A nested ctx.runMutation gets an alias entry
+// (`owned=false`) pointing at its parent, so its calls join the outermost
+// mutation's scope. Actions open no scope: an action's ctx.runMutation is a
+// new top level, and an action's own schedules are sent at once.
 // ---------------------------------------------------------------------------
 
-interface ActiveTxn {
-  /**
-   * Reserved Postgres connection with BEGIN already issued — or null for
-   * tracking-only entries (query/action v2 invocations that don't open a
-   * txn but still want their reads tracked for the Phase 15b envelope
-   * response). `sqlFor()` falls back to the pool when this is null.
-   */
-  sql: Sql | null;
-  /** True when this entry opened the txn — only owners commit/rollback. */
+interface MutationScope {
+  /** True for the top-level mutation that sends the scope's schedules. */
   owned: boolean;
   /** Non-empty for alias entries; carries the parent's txnRefId. */
   parentRefId?: string;
-  /** Millisecond timestamp at which the txn was opened (or aliased). */
-  openedAt: number;
-  /**
-   * Function kind that owns this entry — `"query"` or `"mutation"`. Lets
-   * `finalize()` distinguish tracking-only entries from owning ones.
-   * Empty for v1 fetch handlers / aliases that don't carry a kind hint.
-   */
-  kind: string;
-  /**
-   * Id-of-the-function-that-was-invoked. Carried for observability /
-   * future use; never leaves this process today.
-   */
-  fnId: string;
-  /**
-   * Project id parsed from the runtime id at invocation time, so the
-   * dispatch never has to re-split. Carried for observability / future
-   * tenant-scoped diagnostics.
-   */
+  /** Project id parsed from the runtime id at invocation time. */
   projectId: string;
-  /**
-   * Phase 15b: collections written to inside this txn (INSERT/UPDATE/
-   * DELETE only). Captured before `txnMap.delete(...)` so the
-   * `__reactiveWrites` field on the InvokeResponse envelope reflects
-   * exactly what landed in the committed txn. Reads MUST NOT land here.
-   */
-  writes: Set<string>;
-  /**
-   * Phase 15b: collections read inside this invocation (find / findOne /
-   * getById / count / search / vectorSearch / query). Flows into the
-   * `{result, reads}` envelope response when the caller opted in via
-   * `X-Excalibase-Envelope: v1` — graphql's subscription registry
-   * consumes this for precise dep matching.
-   */
-  reads: Set<string>;
-  /**
-   * Phase 9a: marked when a db/scheduler op fails with a retryable
-   * SQLSTATE (40001/40P01) inside this txn. Owners check this on
-   * finalize and signal the retry loop. Aliases never observe their
-   * own conflict since they share the parent's connection.
-   */
-  conflict?: { sqlState: string; message: string };
-  /**
-   * ctx.scheduler calls a mutation made, sent to provisioning only once its
-   * transaction commits, so a rolled-back mutation schedules nothing.
-   */
+  /** ctx.scheduler calls waiting for the mutation to succeed. */
   schedules?: SchedulerOp[];
 }
 
-/**
- * Phase 9a — internal-only sentinel thrown out of `invokeOnce` when the
- * mutation hit a retryable Postgres conflict (40001 or 40P01). The
- * outer `invoke` retry loop catches this and either retries or
- * surfaces a 409 ConflictError envelope to the caller.
- *
- * Never escapes the runtime; the HTTP layer never sees this class.
- */
-class MutationConflict extends Error {
-  readonly sqlState: string;
-  readonly pgMessage: string;
-  constructor(sqlState: string, pgMessage: string) {
-    super(`mutation conflict ${sqlState}: ${pgMessage}`);
-    this.name = "MutationConflict";
-    this.sqlState = sqlState;
-    this.pgMessage = pgMessage;
-  }
-}
-
-const txnMap: Map<string, ActiveTxn> = new Map();
+const txnMap: Map<string, MutationScope> = new Map();
 
 // nextTxnRefSeq generates a monotonically-increasing, process-unique key
-// for each top-level/alias txn entry. Globally unique across all
-// scripts; the `t` prefix makes a debug log line unambiguous.
+// for each top-level/alias scope entry.
 let nextTxnRefSeq = 1;
 function newTxnRefId(): string {
   const id = `t${nextTxnRefSeq.toString(36)}_${Date.now().toString(36)}`;
@@ -165,126 +76,15 @@ function newTxnRefId(): string {
 }
 
 /**
- * Open a new Postgres transaction by reserving a connection from the
- * singleton pool and issuing BEGIN. Returns the reserved sql handle —
- * caller must commit or rollback exactly once.
- *
- * Phase 9a: BEGIN now carries the configured isolation level
- * (EXCALIBASE_MUTATION_ISOLATION; default SERIALIZABLE) so SSI catches
- * read-write conflicts the way Convex's OCC catches its own conflicts.
- * Operators can drop to REPEATABLE READ or READ COMMITTED via env when
- * contention overhead is a documented and measured concern.
+ * owningScope returns the top-level mutation scope a ref runs in, walking
+ * alias entries up to their owner, or null outside a mutation.
  */
-async function openTxn(): Promise<Sql> {
-  const pool = getPool();
-  // deno-lint-ignore no-explicit-any
-  const reserved = await (pool as any).reserve();
-  // MUTATION_ISOLATION is validated at boot against ALLOWED_MUTATION_ISOLATIONS
-  // so this template string can never carry attacker-controlled SQL.
-  // deno-lint-ignore no-explicit-any
-  await (reserved as any).unsafe(`BEGIN ISOLATION LEVEL ${MUTATION_ISOLATION}`);
-  return reserved;
-}
-
-/**
- * Commit a txn opened by openTxn and release the underlying connection.
- *
- * Phase 9a: COMMIT itself can raise 40001 / 40P01 under SERIALIZABLE
- * (the famous "conflict surfaces at commit time" property of SSI). When
- * that happens we throw a `MutationConflict` so the outer retry loop
- * can route through rollback + backoff. All other commit failures are
- * left as plain Errors — they aren't retryable.
- */
-async function commitTxn(sql: Sql): Promise<void> {
-  try {
-    // deno-lint-ignore no-explicit-any
-    await (sql as any).unsafe("COMMIT");
-  } catch (err) {
-    const code = (err as { code?: unknown }).code;
-    if (typeof code === "string" && RETRYABLE_SQLSTATES.has(code)) {
-      const pgMsg = (err instanceof Error ? err.message : String(err)) || "commit conflict";
-      throw new MutationConflict(code, pgMsg);
-    }
-    throw err;
-  } finally {
-    // Release the connection back to the pool. After a failed COMMIT
-    // the session is in an aborted state — the pool will hand out a
-    // fresh connection on the retry; we don't try to reuse this one.
-    // Wrapping in try/catch since release() is a postgres.js extension
-    // and a noop on plain Sql handles in some test paths.
-    // deno-lint-ignore no-explicit-any
-    try { (sql as any).release?.(); } catch (_) { /* ignore */ }
-  }
-}
-
-/** Roll back a txn opened by openTxn and release the underlying connection. */
-async function rollbackTxn(sql: Sql): Promise<void> {
-  try {
-    // deno-lint-ignore no-explicit-any
-    await (sql as any).unsafe("ROLLBACK");
-  } catch (_) {
-    // Best-effort; if rollback fails the connection is destroyed on release
-    // anyway. We don't want the rollback path to throw and mask the
-    // user-handler error that triggered it.
-  } finally {
-    // deno-lint-ignore no-explicit-any
-    try { (sql as any).release?.(); } catch (_) { /* ignore */ }
-  }
-}
-
-/**
- * Return the Sql handle that the given txnRefId should use.
- * Falls back to the pool when the ref is unknown / undefined (e.g.
- * legacy v1 handlers, queries, actions).
- */
-function sqlFor(txnRefId: string | undefined | null): Sql {
-  if (txnRefId && txnMap.has(txnRefId)) {
-    const entry = txnMap.get(txnRefId)!;
-    // Phase 15b — tracking-only entries (queries/actions) have `sql:null`
-    // because they never opened a connection. Fall back to the pool so the
-    // db dispatch issues an autocommit read; the dispatcher still picks up
-    // the entry for `reads` tracking on success.
-    if (entry.sql) return entry.sql;
-  }
-  return getPool();
-}
-
-/**
- * Phase 9a: stamp a retryable SQLSTATE on the active txn entry so
- * finalize() / the retry loop knows to roll back and re-invoke. Walks
- * up alias chains so a conflict observed on a nested-mutation alias is
- * recorded on the actual owning txn (which is the one that will be
- * rolled back). Safe no-op when the ref is unknown.
- */
-function markConflict(
-  txnRefId: string | undefined | null,
-  sqlState: string,
-  message: string,
-): void {
-  if (!txnRefId) return;
-  let cursor: string | undefined = txnRefId;
-  // bound the walk so a corrupted parent chain can't loop forever.
-  for (let i = 0; i < 16 && cursor; i++) {
-    const entry = txnMap.get(cursor);
-    if (!entry) return;
-    if (entry.owned) {
-      if (!entry.conflict) entry.conflict = { sqlState, message };
-      return;
-    }
-    cursor = entry.parentRefId;
-  }
-}
-
-/**
- * owningTxn returns the entry that holds the open transaction a ref runs in,
- * walking alias entries up to their owner, or null outside a transaction.
- */
-function owningTxn(txnRefId: string | undefined | null): ActiveTxn | null {
+function owningScope(txnRefId: string | undefined | null): MutationScope | null {
   let cursor: string | undefined = txnRefId ?? undefined;
   for (let i = 0; i < 16 && cursor; i++) {
     const entry = txnMap.get(cursor);
     if (!entry) return null;
-    if (entry.owned) return entry.sql ? entry : null;
+    if (entry.owned) return entry;
     cursor = entry.parentRefId;
   }
   return null;
@@ -332,13 +132,10 @@ interface ScriptMetadata {
   nextReqId: number;
   // Ring buffer of recent user-code log lines. Capped at LOG_RING_SIZE.
   logs: LogEntry[];
-  // Per-worker JSON Schema validator cache. Lives for the lifetime of the
-  // deployed function; refreshed only when the function is redeployed.
-  dbCache: ValidatorCache;
   // Phase 8 — recorded from the metadata callback. The main thread uses
   // this for runX read-only enforcement (query handlers can't call
-  // mutations/actions) and for shared-transaction routing (mutation→
-  // mutation rides the caller's txn). One of `"query"|"mutation"|"action"
+  // mutations/actions) and for scope routing (a mutation→mutation call
+  // joins the caller's mutation scope). One of `"query"|"mutation"|"action"
   // |"httpAction"|"httpRouter"|""` (empty for v1 fetch handlers).
   kind: string;
 }
@@ -465,52 +262,6 @@ const V2_KINDS = ["query", "mutation", "action", "httpAction", "httpRouter"];
 // carries the caller's depth + 1 in its envelope; the dispatcher rejects
 // any value above the limit before the message reaches the target worker.
 const RUN_MAX_DEPTH = Math.max(1, Number(Deno.env.get("EXCALIBASE_RUN_MAX_DEPTH") || "8"));
-
-// Phase 9a — mutation isolation level + retry-on-conflict tuning.
-//
-// EXCALIBASE_MUTATION_ISOLATION sets the BEGIN ISOLATION LEVEL clause for
-// every top-level mutation. Default SERIALIZABLE matches Convex semantics
-// (the commit boundary is the ordering boundary; SSI surfaces conflicts
-// at COMMIT time). Operators with bench-proven contention costs can drop
-// to REPEATABLE READ or READ COMMITTED at the cost of weaker guarantees.
-// Validated at boot — an unknown value crashes the process so a typo in
-// a Helm value doesn't silently downgrade isolation in prod.
-const ALLOWED_MUTATION_ISOLATIONS = new Set([
-  "SERIALIZABLE",
-  "REPEATABLE READ",
-  "READ COMMITTED",
-]);
-const MUTATION_ISOLATION_RAW = (Deno.env.get("EXCALIBASE_MUTATION_ISOLATION") || "SERIALIZABLE")
-  .toUpperCase()
-  .trim();
-if (!ALLOWED_MUTATION_ISOLATIONS.has(MUTATION_ISOLATION_RAW)) {
-  console.error(
-    `FATAL: EXCALIBASE_MUTATION_ISOLATION="${MUTATION_ISOLATION_RAW}" is invalid; ` +
-      `allowed: ${Array.from(ALLOWED_MUTATION_ISOLATIONS).join(", ")}`,
-  );
-  Deno.exit(1);
-}
-const MUTATION_ISOLATION: string = MUTATION_ISOLATION_RAW;
-
-// EXCALIBASE_MUTATION_RETRY_MAX caps the retry-loop attempt count. 1 means
-// "try once, never retry"; 5 (default) means up to 4 retries on
-// 40001/40P01. Above 50 makes no operational sense — clamp.
-const MUTATION_RETRY_MAX = Math.max(
-  1,
-  Math.min(50, Number(Deno.env.get("EXCALIBASE_MUTATION_RETRY_MAX") || "5")),
-);
-// EXCALIBASE_MUTATION_RETRY_BACKOFF_MS is the base for the exponential +
-// jitter backoff: sleepMs = base * 2^(attempt-1) * (0.5 + random()),
-// capped at 5000ms. Default 50.
-const MUTATION_RETRY_BACKOFF_MS = Math.max(
-  1,
-  Number(Deno.env.get("EXCALIBASE_MUTATION_RETRY_BACKOFF_MS") || "50"),
-);
-const MUTATION_RETRY_BACKOFF_CAP_MS = 5_000;
-// SQLSTATE codes the retry loop treats as retryable conflicts.
-//  40001 — serialization_failure (SSI / RR ordering)
-//  40P01 — deadlock_detected
-const RETRYABLE_SQLSTATES = new Set(["40001", "40P01"]);
 
 // Phase 9b.G — vendored @excalibase/server library resolution.
 //
@@ -843,300 +594,19 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       };
     }
 
-    // --- ctx.db RPC facade ---
-    // The worker holds no DB connection of its own. Each ctx.db.<op>() call
-    // posts a {type:"db", rpcId, op, ...} message to the main thread; the
-    // main thread executes SQL against its singleton postgres.js pool and
-    // posts {type:"dbResult", rpcId, result} back. We keep a pending map
-    // keyed by rpcId so multiple concurrent calls inside one invocation
-    // can race without overwriting each other's resolvers.
-    const __dbPending = new Map();
-    let __nextDbRpcId = 1;
-    // Phase 8.5: per-invocation txn ref. Set by __dispatchV2/__dispatchHttp
-    // before calling the user handler so every db/scheduler/runX RPC the
-    // handler posts can be routed to the right Postgres connection on the
-    // main thread. Empty string means "no active txn" (use pool).
+    // --- ctx.db (removed in @excalibase/server 0.11.0) ---
+    // Any use names what to do instead, rather than failing on a null.
+    const __removedDbMessage = "ctx.db is not available: read and write your project's data through its GraphQL or REST API with a project key";
+    // Symbol keys pass so console.log(ctx) and other inspection still work.
+    const __removedDb = new Proxy({}, {
+      get(_target, key) {
+        if (typeof key === 'symbol') return undefined;
+        throw new Error(__removedDbMessage);
+      },
+    });
+    // The invocation's mutation-scope ref, set by __dispatchV2/__dispatchHttp
+    // and echoed on every scheduler/runX RPC. Empty outside a mutation.
     let __currentTxnRefId = '';
-
-    function __dbCall(op, collection, payload) {
-      const rpcId = __nextDbRpcId++;
-      return new Promise((resolve, reject) => {
-        __dbPending.set(rpcId, { resolve, reject });
-        self.postMessage({ type: 'db', rpcId, op, collection,
-          txnRefId: __currentTxnRefId,
-          ...payload });
-      });
-    }
-
-    // __schemaConfig — the worker reads the bundler-injected metadata at
-    // globalThis.__excalibase_function_metadata.schemaJson on first
-    // ctx.db.collection call. When absent, the runtime stays permissive
-    // (any collection name OK). When present, an unknown collection name
-    // throws a friendly error before any SQL is issued, and search and
-    // vectorSearch are pre-flighted against the declared index lists.
-    // This mirrors Phase 5a schema-driven migration so the runtime and
-    // DB shape stay in lock-step.
-    function __schemaTables() {
-      const meta = globalThis.__excalibase_function_metadata;
-      if (!meta || meta.schemaJson === null || meta.schemaJson === undefined) return null;
-      const raw = meta.schemaJson;
-      if (typeof raw !== 'object' || !raw) return null;
-      const tables = raw.tables;
-      if (!tables || typeof tables !== 'object') return null;
-      return tables;
-    }
-
-    function __assertCollectionInSchema(name) {
-      const tables = __schemaTables();
-      if (tables === null) return; // permissive mode
-      if (!Object.prototype.hasOwnProperty.call(tables, name)) {
-        throw new Error("Collection '" + name + "' is not in schema; declare it in schema.ts and redeploy");
-      }
-    }
-
-    function __assertSearchable(name) {
-      const tables = __schemaTables();
-      if (tables === null) return; // permissive mode — surface 42703 from PG
-      const def = tables[name];
-      if (!def || !Array.isArray(def.searchIndexes) || def.searchIndexes.length === 0) {
-        throw new Error("Collection '" + name + "' has no search index; declare one via defineTable(...).searchIndex(...) and redeploy");
-      }
-    }
-
-    function __assertVectorable(name) {
-      const tables = __schemaTables();
-      if (tables === null) return; // permissive mode
-      const def = tables[name];
-      if (!def || !Array.isArray(def.vectorIndexes) || def.vectorIndexes.length === 0) {
-        throw new Error("Collection '" + name + "' has no vector index; declare one via defineTable(...).vectorIndex(...) and redeploy");
-      }
-    }
-
-    function __makeCollectionApi(name) {
-      // Preflight at construction so an unknown collection fails fast even
-      // before the user calls any specific op. The error propagates
-      // through the user's await chain naturally.
-      __assertCollectionInSchema(name);
-      return {
-        insert: (doc) => __dbCall('insert', name, { doc }),
-        insertMany: (docs) => __dbCall('insertMany', name, { docs }),
-        find: (filter, options) => __dbCall('find', name, { filter, options }),
-        findOne: (filter) => __dbCall('findOne', name, { filter }),
-        getById: (id) => __dbCall('getById', name, { id }),
-        update: (filter, patch) => __dbCall('update', name, { filter, patch }),
-        delete: (filter) => __dbCall('delete', name, { filter }),
-        count: (filter) => __dbCall('count', name, { filter }),
-        // search/vectorSearch are pre-flighted against the schema's
-        // index declarations. In permissive mode (no schema), an actual
-        // missing column surfaces as SQLSTATE 42703 from postgres.js.
-        search: (query, options) => {
-          __assertSearchable(name);
-          return __dbCall('search', name, { query, options });
-        },
-        vectorSearch: (embedding, options) => {
-          __assertVectorable(name);
-          const opts = options || {};
-          const payload = { embedding, options: { topK: opts.topK }, filter: opts.filter };
-          return __dbCall('vectorSearch', name, payload);
-        },
-      };
-    }
-
-    // __makeQuery — Convex-shape chainable query builder, Phase 6.
-    // Mirrors @excalibase/server@0.5.0's Query<TDoc> exactly:
-    //   ctx.db.query("posts")
-    //     .withIndex("by_author", q => q.eq("author", uid))
-    //     .filter(q => q.gt(q.field("votes"), 10))
-    //     .order("desc")
-    //     .paginate({ cursor, numItems: 20 });
-    //
-    // Each chainable method returns a new builder whose plan carries the
-    // accumulated state. Terminal methods (.first/.unique/.collect/.take/
-    // .paginate) post a {type:'db', op:'query', plan, terminal, extra}
-    // RPC to the main thread, which compiles the plan to SQL.
-    //
-    // Phase 6.5 — automatic index selection. Mirrors Convex's behaviour:
-    // when the user writes .filter(q.eq("author", uid)) and a declared
-    // index covers a leading eq prefix, the worker stamps plan.index
-    // on the way out. Explicit .withIndex(...) always wins (caller-
-    // supplied index is final). The pure selector lives in
-    // runtime/index_selector.ts for unit-test friendliness; the worker
-    // shim re-implements the same algorithm inline since workers cannot
-    // import the runtime module directly.
-    function __makeQuery(name) {
-      __assertCollectionInSchema(name);
-
-      // Pull declared indexes off the bundled schema. Empty array when
-      // permissive (no schema) or when the table declares none.
-      function __declaredIndexes() {
-        const tables = __schemaTables();
-        if (tables === null) return [];
-        const def = tables[name];
-        if (!def || !Array.isArray(def.indexes)) return [];
-        return def.indexes;
-      }
-
-      // Collect top-level eq predicates from a FilterExpr AST. Returns
-      // null when the tree contains OR/NOT at any walked level (those
-      // break the prefix-match contract). Mirrors collectTopLevelEqs
-      // in runtime/index_selector.ts — keep the two in lock-step.
-      function __collectEqs(expr) {
-        if (!expr) return new Map();
-        const out = new Map();
-        function walk(node) {
-          if (!node || typeof node !== 'object') return true;
-          if (node.kind === 'eq') {
-            if (node.left && node.left.kind === 'field') {
-              out.set(node.left.name, node.right);
-            }
-            return true;
-          }
-          if (node.kind === 'and') {
-            if (!Array.isArray(node.args)) return true;
-            for (const a of node.args) { if (!walk(a)) return false; }
-            return true;
-          }
-          if (node.kind === 'or' || node.kind === 'not') return false;
-          return true;
-        }
-        return walk(expr) ? out : null;
-      }
-
-      // Greedy longest-prefix selector. Returns { name, bounds } or null.
-      function __selectIndex(plan) {
-        const indexes = __declaredIndexes();
-        if (indexes.length === 0) return null;
-        const eqs = __collectEqs(plan.filter);
-        if (eqs === null || eqs.size === 0) return null;
-        const scored = [];
-        for (const def of indexes) {
-          if (!Array.isArray(def.fields) || def.fields.length === 0) continue;
-          let p = 0;
-          for (; p < def.fields.length; p++) {
-            if (!eqs.has(def.fields[p])) break;
-          }
-          if (p > 0) scored.push({ def, prefix: p });
-        }
-        if (scored.length === 0) return null;
-        scored.sort((a, b) => {
-          if (b.prefix !== a.prefix) return b.prefix - a.prefix;
-          return a.def.name < b.def.name ? -1 : a.def.name > b.def.name ? 1 : 0;
-        });
-        const w = scored[0];
-        const bounds = [];
-        for (let i = 0; i < w.prefix; i++) {
-          const field = w.def.fields[i];
-          bounds.push({ field, op: 'eq', value: eqs.get(field) });
-        }
-        return { name: w.def.name, bounds };
-      }
-
-      function __maybeAutoIndex(plan) {
-        // Explicit hint wins — caller's choice is final.
-        if (plan.index) return plan;
-        const sel = __selectIndex(plan);
-        if (sel === null) return plan;
-        return Object.assign({}, plan, { index: sel, autoSelectedIndex: sel.name });
-      }
-
-      function __terminal(plan, terminal, extra) {
-        const finalPlan = __maybeAutoIndex(plan);
-        return __dbCall('query', name, { plan: finalPlan, terminal, extra });
-      }
-
-      function __indexQ(initial) {
-        const bounds = initial || [];
-        function push(b) { return __indexQ([...bounds, b]); }
-        return {
-          eq: (field, value) => push({ field, op: 'eq', value }),
-          gt: (field, value) => push({ field, op: 'gt', value }),
-          gte: (field, value) => push({ field, op: 'gte', value }),
-          lt: (field, value) => push({ field, op: 'lt', value }),
-          lte: (field, value) => push({ field, op: 'lte', value }),
-          range: (field, lo, hi) =>
-            __indexQ([...bounds, { field, op: 'gte', value: lo }, { field, op: 'lte', value: hi }]),
-          __bounds: () => bounds,
-        };
-      }
-
-      function __searchQ(field, queryText, filters) {
-        return {
-          search: (f, q) => __searchQ(f, q, filters),
-          eq: (f, v) => __searchQ(field, queryText, [...filters, { field: f, value: v }]),
-          __field: field, __query: queryText, __filters: filters,
-        };
-      }
-
-      function __vectorQ(embedding, k, filters) {
-        return {
-          vector: (e, k2) => __vectorQ(e, k2, filters),
-          eq: (f, v) => __vectorQ(embedding, k, [...filters, { field: f, value: v }]),
-          __embedding: embedding, __k: k, __filters: filters,
-        };
-      }
-
-      // filterQ — pure AST constructor (no accumulation; expressions are
-      // composed by the caller's lambda).
-      const filterQ = {
-        field: (n) => ({ kind: 'field', name: n }),
-        eq:  (l, r) => ({ kind: 'eq',  left: l, right: r }),
-        neq: (l, r) => ({ kind: 'neq', left: l, right: r }),
-        gt:  (l, r) => ({ kind: 'gt',  left: l, right: r }),
-        gte: (l, r) => ({ kind: 'gte', left: l, right: r }),
-        lt:  (l, r) => ({ kind: 'lt',  left: l, right: r }),
-        lte: (l, r) => ({ kind: 'lte', left: l, right: r }),
-        and: function() { return { kind: 'and', args: Array.prototype.slice.call(arguments) }; },
-        or:  function() { return { kind: 'or',  args: Array.prototype.slice.call(arguments) }; },
-        not: (a) => ({ kind: 'not', arg: a }),
-      };
-
-      function __buildQuery(plan) {
-        return {
-          withIndex: (idxName, builder) => {
-            const seed = __indexQ();
-            const built = builder ? builder(seed) : seed;
-            const bounds = (built && typeof built.__bounds === 'function') ? built.__bounds() : [];
-            return __buildQuery(Object.assign({}, plan, { index: { name: idxName, bounds } }));
-          },
-          withSearchIndex: (idxName, builder) => {
-            const out = builder(__searchQ('', '', []));
-            return __buildQuery(Object.assign({}, plan, {
-              search: { name: idxName, field: out.__field, query: out.__query, filters: out.__filters },
-            }));
-          },
-          withVectorIndex: (idxName, builder) => {
-            const out = builder(__vectorQ([], 0, []));
-            return __buildQuery(Object.assign({}, plan, {
-              vector: { name: idxName, embedding: out.__embedding, k: out.__k, filters: out.__filters },
-            }));
-          },
-          filter: (pred) => {
-            const expr = pred(filterQ);
-            const merged = plan.filter
-              ? { kind: 'and', args: [plan.filter, expr] }
-              : expr;
-            return __buildQuery(Object.assign({}, plan, { filter: merged }));
-          },
-          order: (direction) => __buildQuery(Object.assign({}, plan, { order: direction })),
-
-          first:   () => __terminal(plan, 'first'),
-          unique:  () => __terminal(plan, 'unique'),
-          collect: () => __terminal(plan, 'collect'),
-          take:    (n) => __terminal(plan, 'take', n),
-          paginate: (opts) => __terminal(plan, 'paginate', opts),
-
-          getDependencies: () => [plan.collection],
-        };
-      }
-      return __buildQuery({ collection: name });
-    }
-
-    function __makeDbClient() {
-      return {
-        collection: (name) => __makeCollectionApi(name),
-        query: (name) => __makeQuery(name),
-      };
-    }
 
     // --- ctx.runQuery / runMutation / runAction (Phase 7) ---
     // Composition surface for cross-function calls. Each call posts a
@@ -1176,10 +646,9 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         self.postMessage({
           type: 'runX', rpcId, op, ref, args,
           depth: nextDepth,
-          // Phase 8.5: forward the caller's txn ref so a mutation→mutation
-          // call can ride the parent's transaction. Main-thread dispatch
-          // only honours this when the caller's kind is "mutation"; for
-          // queries/actions the ref is recorded but ignored.
+          // Forward the caller's scope ref so a mutation→mutation call joins
+          // the parent's scope. Main-thread dispatch only honours this when
+          // the caller's kind is "mutation".
           txnRefId: __currentTxnRefId,
         });
       });
@@ -1200,10 +669,8 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       const rpcId = __nextSchedRpcId++;
       return new Promise((resolve, reject) => {
         __schedPending.set(rpcId, { resolve, reject });
-        // Phase 8.5: route the scheduler INSERT through the mutation's txn
-        // when one is active. Action handlers carry no txnRefId, so their
-        // schedule lands on the pool — matching Convex's "actions commit
-        // independently" semantics.
+        // Inside a mutation the call waits for the mutation to succeed.
+        // Action handlers carry no ref, so their schedule is sent at once.
         self.postMessage({ type: 'scheduler', rpcId, op, payload,
           txnRefId: __currentTxnRefId });
       });
@@ -1379,9 +846,8 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         // Public traffic has no depth, so default to 0.
         const incomingDepth = typeof reqData.runDepth === 'number' ? reqData.runDepth : 0;
         __currentRunDepth = incomingDepth;
-        // Phase 8.5: http* handlers don't own a transaction (action-equivalent
-        // boundary). Forward any incoming txnRefId so a nested ctx.runMutation
-        // routes through the right entry on the main side.
+        // http* handlers own no scope (action-equivalent boundary). Forward
+        // any incoming ref so a nested ctx.runMutation routes correctly.
         __currentTxnRefId = typeof txnRefId === 'string' ? txnRefId : '';
 
         // Reconstruct a raw Request. The runtime accepts relative URLs;
@@ -1404,7 +870,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         // background work the same way actions can. Phase 10: storage
         // exposed as a writer (httpAction behaves like an ActionCtx).
         const ctx = {
-          db: null,
+          db: __removedDb,
           auth: __buildAuthCtx(claims),
           runQuery:    __makeRunQuery(),
           runMutation: __makeRunMutation(),
@@ -1465,7 +931,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     // __dispatchV2 — runs the tagged FunctionDef contract:
     //   POST body must be { "args": <object> }; on missing args, 400.
     //   Calls handler(ctx, body.args); wraps result as { data } JSON.
-    //   ctx.db is a real DbClient for query/mutation; null for action.
+    //   ctx.db refuses use on every kind (removed in 0.11.0).
     // The def's zod schema guards the handler: refused args never reach it
     // (EXC-560). A hand-written def without safeParse passes args through.
     function __checkArgs(fnDef, args) {
@@ -1497,24 +963,17 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           return;
         }
 
-        // Convex parity: actions get db=null; query/mutation get a real
-        // DbClient facade. Unknown kinds default to null to be safe.
-        const db = (fnDef.kind === 'query' || fnDef.kind === 'mutation')
-          ? __makeDbClient()
-          : null;
         // Initial depth comes from the request body (set by dispatchRunX
         // for cross-function calls; absent on top-level public traffic).
         // The gateway sets it to 0 for top-level public calls; runX bumps
         // it for each nested call so the chain is end-to-end bounded.
         const incomingDepth = typeof body.runDepth === 'number' ? body.runDepth : 0;
         __currentRunDepth = incomingDepth;
-        // Phase 8.5: pick up the txn ref the main thread stamped on this
-        // invocation. Empty string means "no active txn" (query, action,
-        // or v1 fetch handler) and db/scheduler RPCs will fall back to the
-        // pool on the main side.
+        // Pick up the scope ref the main thread stamped on this invocation.
+        // Empty outside a mutation (query, action or v1 fetch handler).
         __currentTxnRefId = typeof txnRefId === 'string' ? txnRefId : '';
         const ctx = {
-          db,
+          db: __removedDb,
           auth: __buildAuthCtx(claims),
           // Phase 7: composition surface. Type-level read-only rules are
           // enforced by the lib (QueryCtx has no runMutation/runAction);
@@ -1604,29 +1063,10 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     // --- worker dispatch ---
     // Each invoke message carries a unique reqId so the runtime can correlate
     // concurrent responses on the same worker without races. The same
-    // handler also routes dbResult replies back to the right __dbCall().
+    // handler also routes RPC replies back to their pending calls.
     self.onmessage = async (e) => {
       const msg = e.data;
-      if (msg && msg.type === 'dbResult') {
-        const pending = __dbPending.get(msg.rpcId);
-        if (!pending) return;
-        __dbPending.delete(msg.rpcId);
-        if (msg.result && msg.result.ok === true) {
-          pending.resolve(msg.result.data);
-        } else {
-          const err = new Error(msg.result && msg.result.error || 'db error');
-          if (msg.result && msg.result.issues) {
-            // Surface validation issues so the handler can catch and
-            // re-render. Attach as an issues array for ValidationError parity.
-            err.issues = msg.result.issues;
-            err.name = 'ValidationError';
-          }
-          pending.reject(err);
-        }
-        return;
-      }
-      // Phase 7: runX RPC reply. Mirrors the db RPC channel but on its
-      // own pending map so the two don't collide.
+      // Phase 7: runX RPC reply.
       if (msg && msg.type === 'runXResult') {
         const pending = __runXPending.get(msg.rpcId);
         if (!pending) return;
@@ -1673,10 +1113,9 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       if (msg && msg.type === 'invoke') {
         const reqId = msg.reqId;
         const reqData = msg.data;
-        // Phase 8.5: main-thread stamps the txn ref onto every invoke
-        // envelope so this worker's db/scheduler/runX RPCs can echo it
-        // back. Empty string when no txn is active (queries, actions,
-        // v1 handlers, or the initial top-level call before main decides).
+        // The main thread stamps the mutation-scope ref onto every invoke
+        // envelope so this worker's scheduler/runX RPCs can echo it back.
+        // Empty outside a mutation.
         const txnRefId = typeof msg.txnRefId === 'string' ? msg.txnRefId : '';
 
         // v2 path — only if the flag is on AND the export matches the
@@ -1751,9 +1190,8 @@ interface RunXMessage {
   ref: { moduleName: string; exportName: string };
   args: unknown;
   depth: number;
-  // Phase 8.5: present when the caller's worker has an active mutation
-  // txn. dispatchRunX only forwards it to the target when the kind matrix
-  // permits shared-txn composition (mutation → mutation).
+  // Present when the caller runs in a mutation scope. dispatchRunX only
+  // forwards it when the kind matrix permits it (mutation → mutation).
   txnRefId?: string;
 }
 
@@ -1785,7 +1223,7 @@ async function dispatchRunX(callerRuntimeID: string, msg: RunXMessage): Promise<
   //   query   → mutation   ERROR
   //   query   → action     ERROR
   //   mutation→ query      OK
-  //   mutation→ mutation   OK (shared txn — runtime-side wiring)
+  //   mutation→ mutation   OK (joins the caller's scope)
   //   mutation→ action     OK
   //   action  → *          OK
   //
@@ -1806,11 +1244,8 @@ async function dispatchRunX(callerRuntimeID: string, msg: RunXMessage): Promise<
       );
     }
   }
-  // Phase 8.5: forward the caller's txn ref only when the caller is a
-  // mutation. From a mutation → another mutation we want shared-txn
-  // semantics; from an action → mutation we deliberately do NOT propagate
-  // (the action has no transactional boundary), so the inner mutation
-  // opens a fresh top-level txn — Convex parity.
+  // Forward the caller's scope ref only from a mutation to a mutation; an
+  // action's ctx.runMutation is a new top level with its own scope.
   const propagateTxn = callerKind === "mutation" && targetKind === "mutation"
     && typeof msg.txnRefId === "string" && msg.txnRefId.length > 0;
   const bodyPayload: Record<string, unknown> = {
@@ -1881,7 +1316,7 @@ type SchedulerOp =
  * dispatchScheduler turns one `ctx.scheduler.*` call into a SchedulerOp and
  * resolves with what the worker's promise receives (a `ScheduledId` for
  * `runAfter`/`runAt`, `null` for `cancel`). Inside a mutation the op waits
- * for the transaction to commit; anywhere else it is sent at once, so an
+ * for the mutation to succeed; anywhere else it is sent at once, so an
  * action's schedule stands whatever the action does next (Convex parity).
  */
 async function dispatchScheduler(
@@ -1895,9 +1330,9 @@ async function dispatchScheduler(
   }
   const projectID = callerRuntimeID.slice(0, sep);
   const op = schedulerOpFor(msg);
-  const txn = owningTxn(txnRefId);
-  if (txn) {
-    txn.schedules = [...(txn.schedules ?? []), op];
+  const scope = owningScope(txnRefId);
+  if (scope) {
+    scope.schedules = [...(scope.schedules ?? []), op];
   } else {
     await sendSchedulerOps(projectID, [op]);
   }
@@ -1953,7 +1388,7 @@ async function callProvisioning(label: string, url: string, init?: RequestInit):
 /**
  * sendSchedulerOps records ops through provisioning's
  * /internal/runtime/projects/{projectId}/scheduler route, in order and in
- * one transaction there. Auth is this project's runtime token.
+ * one transaction there (in provisioning's database). Auth is this project's runtime token.
  */
 async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<void> {
   if (PROVISIONING_URL === "") {
@@ -1981,10 +1416,10 @@ async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<
 }
 
 /**
- * flushCommittedSchedules sends the ctx.scheduler calls of a mutation that
- * just committed. It returns why they were not recorded, or null.
+ * flushSchedules sends the ctx.scheduler calls of a mutation that just
+ * succeeded. It returns false when provisioning did not record them.
  */
-async function flushCommittedSchedules(id: string, entry: ActiveTxn): Promise<boolean> {
+async function flushSchedules(id: string, entry: MutationScope): Promise<boolean> {
   if (!entry.schedules || entry.schedules.length === 0) return true;
   try {
     await sendSchedulerOps(entry.projectId, entry.schedules);
@@ -1993,7 +1428,7 @@ async function flushCommittedSchedules(id: string, entry: ActiveTxn): Promise<bo
     // The detail can name the internal provisioning endpoint, so it stays in
     // the server log; the caller gets only the fixed message below.
     const reason = scheduleErr instanceof Error ? scheduleErr.message : String(scheduleErr);
-    console.warn(`[runtime] ${id} committed but its scheduled functions were not recorded:`, reason);
+    console.warn(`[runtime] ${id} succeeded but its scheduled functions were not recorded:`, reason);
     return false;
   }
 }
@@ -2124,7 +1559,6 @@ class FunctionRuntime {
       pending: new Map(),
       nextReqId: 1,
       logs: [],
-      dbCache: newCache(),
       kind: detectedKind,
     };
     this.scripts.set(id, meta);
@@ -2155,93 +1589,6 @@ class FunctionRuntime {
             console.warn(`[runtime] late metadata forward failed for ${id}:`, err);
           });
         }
-        return;
-      }
-
-      if (msg.type === "db") {
-        // Async db op from the worker — execute against the pool (or the
-        // active mutation txn, when one is registered) and post the result
-        // back. Errors are normalised into a {ok:false,error} envelope so
-        // the worker can reject the user's promise cleanly.
-        const rpcId = msg.rpcId;
-        if (typeof rpcId !== "number") return;
-        void (async () => {
-          let result;
-          try {
-            // Phase 8.5: route through the shared mutation txn when this
-            // invocation registered one. sqlFor falls back to the pool
-            // for queries/actions/v1.
-            const sql = sqlFor(msg.txnRefId as string | undefined);
-            // Phase 6.5: tally index selection BEFORE issuing the op, so a
-            // failing SQL execution still counts the selection event. The
-            // counter is bucketed by (auto, table); `auto="true"` means
-            // the worker's selector found a declared index, `auto="false"`
-            // means the caller passed `.withIndex(...)`, and `auto="none"`
-            // means the query ran with no index at all.
-            if (msg.op === "query" && msg.plan && typeof msg.plan === "object") {
-              const plan = msg.plan as { autoSelectedIndex?: string; index?: { name?: string } };
-              const tableName = typeof msg.collection === "string" ? msg.collection : "";
-              const auto: "true" | "false" | "none" = typeof plan.autoSelectedIndex === "string"
-                ? "true"
-                : (plan.index && typeof plan.index.name === "string" ? "false" : "none");
-              bumpIndexSelection(auto, tableName);
-            }
-            result = await executeDbOp(sql, meta.dbCache, msg as DbOp);
-          } catch (err) {
-            // executeDbOp wraps its own errors into {ok:false}, so we
-            // should rarely land here. Anything that escapes is treated
-            // as a non-retryable runtime error and forwarded as-is.
-            result = {
-              ok: false as const,
-              error: String((err instanceof Error ? err.message : err) ?? "db error"),
-            };
-          }
-          // Phase 9a: mark the txn conflicted when the result envelope
-          // carries a retryable SQLSTATE. The outer retry loop checks
-          // this on finalize() and re-invokes the handler.
-          if (result && result.ok === false && typeof (result as { sqlState?: string }).sqlState === "string") {
-            const code = (result as { sqlState: string }).sqlState;
-            if (RETRYABLE_SQLSTATES.has(code)) {
-              markConflict(msg.txnRefId as string | undefined, code, result.error);
-            }
-          }
-          // Phase 15b — reads/writes tracking. Append the collection name
-          // to the active txn's `writes` (mutations) or `reads` (everything
-          // else). The op classification mirrors `DbOp.op`:
-          //   writes: insert / insertMany / update / delete
-          //   reads:  find / findOne / getById / count / search /
-          //           vectorSearch / query
-          // Skip when the entry is absent (v1 fetch handlers) or when the
-          // op failed — a rolled-back/failed write never reaches commit
-          // and therefore must not appear in the envelope `writes` set.
-          if (result && result.ok === true) {
-            const ref = msg.txnRefId as string | undefined;
-            const entry = ref ? txnMap.get(ref) : undefined;
-            if (entry) {
-              const collection = msg.collection as string | undefined;
-              if (typeof collection === "string" && collection.length > 0) {
-                const isWrite = msg.op === "insert" || msg.op === "insertMany"
-                  || msg.op === "update" || msg.op === "delete";
-                if (isWrite) {
-                  entry.writes.add(collection);
-                } else {
-                  // Track query plan reads via `plan.collection` — the
-                  // worker passes `collection` redundantly so we don't have
-                  // to dig into the plan here. Defensive against future op
-                  // shapes that omit `collection`.
-                  entry.reads.add(collection);
-                }
-              }
-            }
-          }
-          try {
-            worker.postMessage({ type: "dbResult", rpcId, result });
-          } catch (postErr) {
-            // Worker is gone — nothing to do; the pending invoke will
-            // surface a timeout instead.
-            console.debug("[runtime] dbResult postMessage failed:", postErr);
-          }
-        })();
         return;
       }
 
@@ -2372,227 +1719,50 @@ class FunctionRuntime {
   async invoke(id: string, req: InvokeRequest): Promise<InvokeResponse> {
     const script = this.scripts.get(id);
     if (!script) throw new Error(`function not found: ${id}`);
-
-    // Phase 8.5: a nested invocation rides the parent's txn — never opens
-    // its own. Detect that path up front so the retry loop below skips for
-    // nested calls (the parent owns the retry boundary).
-    const inheritedTxnRefId = extractInheritedTxnRefId(req);
-    const isNested = inheritedTxnRefId !== "" && txnMap.has(inheritedTxnRefId);
-
-    // Only TOP-LEVEL MUTATIONS retry. Queries, actions, http*, v1 handlers,
-    // and nested-mutation aliases all run exactly once. This matches Convex
-    // semantics: actions don't retry (they can have external side effects),
-    // and nested mutations re-execute naturally when the outer parent's
-    // retry replays the entire handler chain.
-    if (script.kind !== "mutation" || isNested) {
-      return await this.invokeOnce(script, req, inheritedTxnRefId);
-    }
-
-    // Top-level mutation retry loop.
-    let attempt = 0;
-    let lastConflict: { sqlState: string; message: string } | null = null;
-    while (attempt < MUTATION_RETRY_MAX) {
-      attempt++;
-      const outcome = await this.invokeOnce(script, req, inheritedTxnRefId);
-      // invokeOnce surfaces a retryable conflict via the sentinel object
-      // (encoded into a private property so InvokeResponse stays clean).
-      // Any other outcome (success OR non-retryable error) is returned as-is.
-      const conflict = (outcome as InvokeResponse & { __conflict?: { sqlState: string; message: string } }).__conflict;
-      if (!conflict) return outcome;
-      lastConflict = conflict;
-      metrics.mutationRetriesTotal++;
-      if (attempt < MUTATION_RETRY_MAX) {
-        const backoff = backoffForAttempt(attempt);
-        console.log(
-          `[runtime] mutation ${id} conflict on attempt ${attempt} ` +
-          `(SQLSTATE ${conflict.sqlState}); retrying in ${backoff}ms`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, backoff));
-        continue;
-      }
-      // Exhausted — synthesise the ConflictError envelope and surface as 409.
-      console.error(
-        `[runtime] mutation ${id} exhausted ${MUTATION_RETRY_MAX} attempts ` +
-        `on SQLSTATE ${conflict.sqlState}: ${conflict.message}`,
-      );
-      return {
-        status: 409,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          error: "MUTATION_CONFLICT",
-          attempts: attempt,
-          code: conflict.sqlState,
-          message: conflict.message,
-        }),
-      };
-    }
-    // Defensive — unreachable because the loop always returns or sets
-    // lastConflict before exhausting. Surfaces as a 500 if we get here.
-    return {
-      status: 500,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        error: "internal: retry loop exited without resolution",
-        lastConflict,
-      }),
-    };
+    return await this.invokeOnce(script, req, extractInheritedTxnRefId(req));
   }
 
   /**
-   * Run the worker exactly once, opening/closing the txn around it.
-   * Top-level mutations may be retried by the caller; everything else
-   * runs exactly once. On a retryable conflict, returns an InvokeResponse
-   * with a `__conflict` discriminator so the caller can choose to retry.
-   *
-   * Phase 15b: the returned envelope carries `__reactiveReads` /
-   * `__reactiveWrites` so the HTTP handler's `maybeApplyEnvelope` can
-   * surface them in the `{result, reads}` opt-in response without
-   * re-walking txnMap. Both are always set — empty sets when no entry
-   * was allocated (v1 fetch handlers) so callers can iterate without
-   * null checks.
+   * Run the worker once. A top-level mutation opens a scope that collects
+   * its ctx.scheduler calls; a nested mutation joins its caller's scope.
    */
   private async invokeOnce(
     script: ScriptMetadata,
     req: InvokeRequest,
     inheritedTxnRefId: string,
-  ): Promise<InvokeResponse & {
-    __conflict?: { sqlState: string; message: string };
-    __reactiveReads?: Set<string>;
-    __reactiveWrites?: Set<string>;
-  }> {
+  ): Promise<InvokeResponse> {
     const id = script.id;
     script.invocations++;
     const reqId = script.nextReqId++;
 
-    // Parse projectId / fnId for txnMap entry diagnostics. The script id
-    // is `${projectId}__${fnId}`; v1 fetch handlers don't follow this
-    // shape but they also don't open mutations so the empty fallback is
-    // safe.
+    // The script id is `${projectId}__${fnId}`; v1 fetch handlers don't
+    // follow this shape but they open no scope either.
     const sep = id.indexOf("__");
     const projectId = sep > 0 ? id.slice(0, sep) : "";
-    const fnId = sep > 0 ? id.slice(sep + 2) : id;
 
     let activeTxnRefId = "";
     if (inheritedTxnRefId && txnMap.has(inheritedTxnRefId)) {
-      // Alias entry — reuse the parent's connection, owned=false so we
-      // don't double-commit. A new key keeps the map entry per-invocation
-      // (so we can clear it on return without touching the parent).
+      // Alias entry: the caller's scope sends the schedules.
       activeTxnRefId = newTxnRefId();
-      const parent = txnMap.get(inheritedTxnRefId)!;
-      txnMap.set(activeTxnRefId, {
-        sql: parent.sql,
-        owned: false,
-        parentRefId: inheritedTxnRefId,
-        openedAt: Date.now(),
-        kind: script.kind,
-        fnId,
-        projectId,
-        writes: new Set(),
-        reads: new Set(),
-      });
+      txnMap.set(activeTxnRefId, { owned: false, parentRefId: inheritedTxnRefId, projectId });
     } else if (script.kind === "mutation") {
-      // Top-level mutation — open a fresh transaction. If the pool isn't
-      // configured (EXCALIBASE_DB_URL unset, e.g. tests that don't touch
-      // ctx.db), fall back to no-txn mode: the handler can still run, and
-      // any db op it does attempt will surface its own error. This keeps
-      // mutations that never call ctx.db / ctx.scheduler working.
-      try {
-        const txn = await openTxn();
-        activeTxnRefId = newTxnRefId();
-        txnMap.set(activeTxnRefId, {
-          sql: txn,
-          owned: true,
-          openedAt: Date.now(),
-          kind: "mutation",
-          fnId,
-          projectId,
-          writes: new Set(),
-          reads: new Set(),
-        });
-      } catch (err) {
-        console.debug(`[runtime] mutation ${id} runs without txn:`,
-          err instanceof Error ? err.message : err);
-      }
-    } else if (script.kind === "query") {
-      // Phase 15b — queries get a tracking-only entry (sql:null) so the
-      // db RPC dispatch can record `reads` for the Phase 15b envelope
-      // response. No transaction is opened; `sqlFor()` falls back to the
-      // pool. The dispatch site never tries to commit/rollback when
-      // owned=false AND sql=null, so the entry is purely a side-table
-      // for collections touched during this invocation.
       activeTxnRefId = newTxnRefId();
-      txnMap.set(activeTxnRefId, {
-        sql: null,
-        owned: false,
-        openedAt: Date.now(),
-        kind: "query",
-        fnId,
-        projectId,
-        writes: new Set(),
-        reads: new Set(),
-      });
+      txnMap.set(activeTxnRefId, { owned: true, projectId });
     }
 
-    // Captured for the caller — maybeApplyEnvelope pulls the entry's
-    // reads/writes BEFORE finalize deletes the txnMap entry. Defaults to
-    // empty sets so callers can always iterate even when no entry was
-    // allocated (e.g. v1 fetch handlers).
-    let capturedReads: Set<string> = new Set();
-    let capturedWrites: Set<string> = new Set();
-    // Set when a mutation committed but provisioning refused or missed the
+    // Set when a mutation succeeded but provisioning refused or missed the
     // ctx.scheduler calls it made; the caller gets an error, not a success
     // that scheduled nothing.
     let scheduleFailed = false;
-    // finalize closes the txn. On success path it tries to COMMIT and
-    // surfaces any retryable conflict back to the retry loop via a
-    // returned sentinel. On error path it rolls back. Either way, the
-    // entry is removed from txnMap so a redeployed worker can't see
-    // stale txn refs.
-    const finalize = async (
-      settled: "success" | "error",
-    ): Promise<{ sqlState: string; message: string } | null> => {
-      if (!activeTxnRefId) return null;
+    // finalize closes the scope: a successful top-level mutation sends its
+    // schedules, a failed one drops them. Either way the entry is removed
+    // so a redeployed worker can't see stale refs.
+    const finalize = async (settled: "success" | "error"): Promise<void> => {
+      if (!activeTxnRefId) return;
       const entry = txnMap.get(activeTxnRefId);
       txnMap.delete(activeTxnRefId);
-      if (!entry) return null;
-      // Capture reads/writes before the entry goes out of scope. Used by
-      // `maybeApplyEnvelope` for the Phase 15b `{result, reads}` opt-in.
-      capturedReads = entry.reads;
-      capturedWrites = entry.writes;
-      // Tracking-only entries (queries, aliases) — no txn to commit.
-      if (!entry.owned || !entry.sql) return null;
-      // A mid-flight db op may have stamped a conflict marker. In that
-      // case we go straight to rollback (commit would fail anyway with
-      // the same SQLSTATE) and report the conflict to the retry loop.
-      if (entry.conflict && settled !== "success") {
-        await rollbackTxn(entry.sql);
-        return entry.conflict;
-      }
-      if (entry.conflict && settled === "success") {
-        // Handler returned success but a prior db op was a retryable
-        // conflict — the handler swallowed the error. Roll back and
-        // surface the conflict; retrying the handler is safer than
-        // letting the (likely-incomplete) "success" return commit.
-        await rollbackTxn(entry.sql);
-        return entry.conflict;
-      }
-      if (settled === "success") {
-        try {
-          await commitTxn(entry.sql);
-        } catch (commitErr) {
-          if (commitErr instanceof MutationConflict) {
-            // COMMIT itself raised 40001/40P01 — classic SSI surface.
-            // The connection is already released inside commitTxn.
-            return { sqlState: commitErr.sqlState, message: commitErr.pgMessage };
-          }
-          console.warn(`[runtime] commit failed for ${id}:`, commitErr);
-          return null;
-        }
-        scheduleFailed = !(await flushCommittedSchedules(id, entry));
-        return null;
-      }
-      await rollbackTxn(entry.sql);
-      return null;
+      if (!entry || !entry.owned || settled !== "success") return;
+      scheduleFailed = !(await flushSchedules(id, entry));
     };
 
     let res: InvokeResponse;
@@ -2623,11 +1793,10 @@ class FunctionRuntime {
       throw err;
     }
 
-    // Phase 8.5: a v2 handler that threw is reported as a 200 envelope from
-    // the worker with `{error: ...}` in the body (see __dispatchV2's
-    // self.postMessage on the catch branches). Treat any non-2xx status,
-    // or any 200 whose body has a top-level `error` field, as a rollback
-    // trigger for the txn.
+    // A v2 handler that threw is reported as a 200 envelope from the worker
+    // with `{error: ...}` in the body (see __dispatchV2's catch branches).
+    // Treat any non-2xx status, or any 200 whose body has a top-level
+    // `error` field, as a failure that drops the scope's schedules.
     let isError = res.status < 200 || res.status >= 300;
     if (!isError && res.body) {
       try {
@@ -2635,33 +1804,18 @@ class FunctionRuntime {
         if (parsed && typeof parsed.error === "string") isError = true;
       } catch (_) { /* non-JSON body — treat as success */ }
     }
-    const conflict = await finalize(isError ? "error" : "success");
+    await finalize(isError ? "error" : "success");
     if (scheduleFailed) {
       return {
         ...res,
         status: 500,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          error: "the mutation committed but its scheduled functions were not recorded",
+          error: "the mutation succeeded but its scheduled functions were not recorded",
         }),
-        __reactiveReads: capturedReads,
-        __reactiveWrites: capturedWrites,
       };
     }
-    if (conflict) {
-      // Encode the conflict into the InvokeResponse so the retry loop
-      // upstairs can pick it up without changing the public shape on
-      // success paths.
-      return Object.assign({}, res, {
-        __conflict: conflict,
-        __reactiveReads: capturedReads,
-        __reactiveWrites: capturedWrites,
-      });
-    }
-    return Object.assign({}, res, {
-      __reactiveReads: capturedReads,
-      __reactiveWrites: capturedWrites,
-    });
+    return res;
   }
 
   delete(id: string): boolean {
@@ -2721,65 +1875,12 @@ const metrics = {
   invocationsError: 0,
   deploysTotal: 0,
   timeoutsTotal: 0,
-  /**
-   * Phase 9a: total retry attempts triggered by 40001/40P01 across all
-   * mutations. Each retry is one event; an exhausted retry-loop adds
-   * `MUTATION_RETRY_MAX - 1` to this counter and yields a 409. A
-   * surge here usually means under-isolated workload or a missing
-   * predicate-supporting index — page operations.
-   */
-  mutationRetriesTotal: 0,
 };
 
 /**
- * Phase 6.5 — observability for auto-index selection. Bucketed by
- * (auto, table). `auto` is one of:
- *   * "true"  — the worker's selector matched a declared index.
- *   * "false" — the user passed an explicit `.withIndex(...)` hint.
- *   * "none"  — the query op ran with no index at all (full scan path).
- * Map key is `${auto}|${table}`. The pipe is safe as a delimiter: table
- * names are regex-validated against [a-zA-Z_]\w{0,62} (no pipe), and
- * `auto` is one of three literal strings.
- */
-const indexSelectionCounts: Map<string, number> = new Map();
-
-function bumpIndexSelection(auto: "true" | "false" | "none", table: string): void {
-  // Key format: `${auto}|${table}` (the pipe is safe because table
-  // names are validated against [a-zA-Z_]\w{0,62} and `auto` is one
-  // of three literal strings).
-  const key = `${auto}|${table}`;
-  indexSelectionCounts.set(key, (indexSelectionCounts.get(key) ?? 0) + 1);
-}
-
-function escapePromLabel(value: string): string {
-  // Prometheus exposition: escape backslash, double quote, newline.
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
-}
-
-function renderIndexSelectionMetric(): string[] {
-  if (indexSelectionCounts.size === 0) {
-    // Emit a 0 sample so scrapers see the metric exists even before
-    // the first query op. We pick the "none" + empty-table baseline.
-    return [`excalibase_query_index_selected_total{auto="none",table=""} 0`];
-  }
-  const lines: string[] = [];
-  for (const [key, count] of indexSelectionCounts.entries()) {
-    // Key format: `${auto}|${table}` — the `|` cannot appear in `auto`
-    // (literal true/false/none) nor in `table` (regex-validated).
-    const sep = key.indexOf("|");
-    const auto = key.slice(0, sep);
-    const table = key.slice(sep + 1);
-    lines.push(
-      `excalibase_query_index_selected_total{auto="${escapePromLabel(auto)}",table="${escapePromLabel(table)}"} ${count}`,
-    );
-  }
-  return lines;
-}
-
-/**
- * Phase 9a: parse the per-invocation txnRefId out of a v2 request body.
+ * Parse the caller's mutation-scope ref out of a v2 request body.
  * The body is JSON `{args, txnRefId?, runDepth?}`. Anything else (non-JSON,
- * missing field) means "no parent txn" — caller is top-level.
+ * missing field) means the caller is top-level.
  */
 function extractInheritedTxnRefId(req: InvokeRequest): string {
   if (typeof req.body !== "string" || req.body.length === 0) return "";
@@ -2790,21 +1891,6 @@ function extractInheritedTxnRefId(req: InvokeRequest): string {
     }
   } catch (_) { /* not JSON — top-level path */ }
   return "";
-}
-
-/**
- * Phase 9a: exponential backoff with jitter. Formula:
- *   base * 2^(attempt-1) * (0.5 + random())
- * capped at MUTATION_RETRY_BACKOFF_CAP_MS. attempt is 1-indexed —
- * attempt=1 means "we just finished attempt 1, sleep before attempt 2".
- *
- * Jitter avoids retry storms where every contending mutation wakes at
- * the same moment and re-enters the same SSI race.
- */
-function backoffForAttempt(attempt: number): number {
-  const exp = MUTATION_RETRY_BACKOFF_MS * Math.pow(2, attempt - 1);
-  const jittered = exp * (0.5 + Math.random());
-  return Math.min(MUTATION_RETRY_BACKOFF_CAP_MS, Math.floor(jittered));
 }
 
 const runtime = new FunctionRuntime();
@@ -3164,85 +2250,7 @@ async function handleInvoke(req: Request, id: string): Promise<Response> {
   }
   const invokeReq = JSON.parse(body) as InvokeRequest;
   const result = withoutCrashDetail(await runtime.invoke(id, invokeReq));
-  // Phase 15b — opt-in response envelope. Graphql's Phase 15a subscription
-  // registry sets `X-Excalibase-Envelope: v1` on every invocation so the
-  // outer body becomes `{result, reads}`. With reads in hand, the registry
-  // can compare a committed table against the sub's tracked reads and skip
-  // the re-invoke when there's no overlap — the precise-dep filter the
-  // pre-15b conservative "any commit re-invokes any sub" path lacked.
-  //
-  // Legacy callers omit the header and get the bit-identical pre-15b shape
-  // (`InvokeResponse { status, headers, body: '{"data":...}'}`).
-  const enveloped = maybeApplyEnvelope(invokeReq, result);
-  return Response.json(enveloped, { headers: JSON_HEADERS });
-}
-
-/**
- * Phase 15b — wrap an InvokeResponse body in the `{result, reads}` shape if
- * the caller opted in via the `X-Excalibase-Envelope: v1` header.
- *
- * Header lookup is case-insensitive (HTTP header semantics; both the deno
- * runtime's worker and the Go gateway preserve raw casing in the headers
- * map). When the opt-in is present:
- *   - `result` = whatever the handler returned (parsed out of the inner
- *     `{data: ...}` v2 envelope). If the body is a v2 `{error}` shape or
- *     not parseable, `result` is null.
- *   - `reads` = `[...__reactiveReads]` captured by invokeOnce. Always an
- *     array, possibly empty.
- *
- * When the opt-in is absent, the InvokeResponse passes through verbatim so
- * pre-15b callers see no behaviour change.
- */
-function maybeApplyEnvelope(
-  invokeReq: InvokeRequest,
-  response: InvokeResponse,
-): InvokeResponse {
-  const wantsEnvelope = readEnvelopeHeader(invokeReq.headers) === ENVELOPE_VERSION_V1;
-  if (!wantsEnvelope) return response;
-  // Pull the reads set off the augmented response (invokeOnce stamps the
-  // private `__reactiveReads` field on every return path that allocated a
-  // txn entry). Default to an empty array — defensive against the 409
-  // exhausted-retry path that does not allocate `__reactiveReads`.
-  const augmented = response as InvokeResponse & { __reactiveReads?: Set<string> };
-  const reads = augmented.__reactiveReads ? [...augmented.__reactiveReads] : [];
-  // The handler return value lives at `body.data` in the v2 success path
-  // (see __dispatchV2's success branch). Errors land at `body.error`. We
-  // surface only `result` per the Phase 15b contract — graphql 15a reads
-  // `body.path("result")` and routes errors through the HTTP status, not
-  // the envelope.
-  let handlerResult: unknown = null;
-  if (typeof response.body === "string" && response.body.length > 0) {
-    try {
-      const parsed = JSON.parse(response.body) as { data?: unknown };
-      if (parsed && typeof parsed === "object" && "data" in parsed) {
-        handlerResult = parsed.data;
-      }
-    } catch (_) { /* non-JSON body — surface null, preserve status */ }
-  }
-  return {
-    status: response.status,
-    headers: response.headers,
-    body: JSON.stringify({ result: handlerResult, reads }),
-  };
-}
-
-const ENVELOPE_HEADER_NAME = "x-excalibase-envelope";
-const ENVELOPE_VERSION_V1 = "v1";
-
-/**
- * Case-insensitive lookup for the envelope opt-in header. The Go gateway
- * passes incoming headers through Go's `http.Header` which canonicalizes
- * keys, but the v2 worker bundle and ad-hoc callers may use arbitrary
- * casing. We normalize on read to keep wire shape forgiving.
- */
-function readEnvelopeHeader(headers: Record<string, string> | undefined): string {
-  if (!headers) return "";
-  for (const k of Object.keys(headers)) {
-    if (k.toLowerCase() === ENVELOPE_HEADER_NAME) {
-      return headers[k] ?? "";
-    }
-  }
-  return "";
+  return Response.json(result, { headers: JSON_HEADERS });
 }
 
 function handleLogs(url: URL, id: string): Response {
@@ -3287,14 +2295,6 @@ function handleMetrics(): Response {
     "# HELP excalibase_fn_timeouts_total Total invocation timeouts",
     "# TYPE excalibase_fn_timeouts_total counter",
     `excalibase_fn_timeouts_total ${metrics.timeoutsTotal}`,
-    "",
-    "# HELP excalibase_mutation_retries_total Total mutation retry attempts on 40001/40P01",
-    "# TYPE excalibase_mutation_retries_total counter",
-    `excalibase_mutation_retries_total ${metrics.mutationRetriesTotal}`,
-    "",
-    "# HELP excalibase_query_index_selected_total Query plans by index-selection mode (Phase 6.5)",
-    "# TYPE excalibase_query_index_selected_total counter",
-    ...renderIndexSelectionMetric(),
     "",
     "# HELP excalibase_fn_uptime_seconds Runtime uptime in seconds",
     "# TYPE excalibase_fn_uptime_seconds gauge",
@@ -3360,13 +2360,12 @@ function readDrainEnv(): string | undefined {
 }
 
 // On SIGTERM/SIGINT keep serving while the Service forgets this pod, then
-// stop the listener and drain the postgres pool (EXC-569).
+// stop the listener (EXC-569).
 const shutdown = drainThenExit({
   drainMs: shutdownDrainMs(readDrainEnv()),
   markDraining: () => { draining = true; },
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   stopServing: () => server.shutdown(),
-  closePool,
   exit: (code) => Deno.exit(code),
 });
 try { Deno.addSignalListener("SIGTERM", shutdown); } catch (_) { /* not all platforms */ }
