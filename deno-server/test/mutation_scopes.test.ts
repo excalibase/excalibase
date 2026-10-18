@@ -1,7 +1,7 @@
 // EXC-625 — mutation scopes hold a mutation's ctx.scheduler calls until it
 // succeeds, now that no database transaction does.
 
-import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertNotEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { MutationScopes } from "../runtime/mutation_scopes.ts";
 
 const op = (name: string) => ({ op: "cancel" as const, id: name });
@@ -64,4 +64,45 @@ Deno.test("refs are unguessable and bound to their project", () => {
   scopes.add(foreign, "proj_b", op("own"));
   assertEquals(scopes.close(foreign, "success"), { send: [op("own")] });
   assertEquals(scopes.close(a, "success"), { send: [] });
+});
+
+Deno.test("hold refuses a call from an ended or foreign scope", () => {
+  const scopes = new MutationScopes();
+  const ref = scopes.open("mutation", "", "proj_a");
+  scopes.hold(ref, "proj_a", op("one"));
+  assertThrows(() => scopes.hold(ref, "proj_b", op("x")), Error, "has already ended");
+  scopes.close(ref, "error");
+  assertThrows(() => scopes.hold(ref, "proj_a", op("x")), Error, "has already ended");
+});
+
+Deno.test("settle sends a succeeded mutation's calls and reports what happened", async () => {
+  const scopes = new MutationScopes();
+  const sent: unknown[][] = [];
+  const send = (ops: unknown[]) => { sent.push(ops); return Promise.resolve(); };
+
+  const none = scopes.open("query", "", "proj_a");
+  assertEquals(await scopes.settle(none, "success", send), "ok");
+
+  const ok = scopes.open("mutation", "", "proj_a");
+  scopes.hold(ok, "proj_a", op("one"));
+  assertEquals(await scopes.settle(ok, "success", send), "ok");
+  assertEquals(sent, [[op("one")]]);
+
+  const refused = scopes.open("mutation", "", "proj_a");
+  scopes.hold(refused, "proj_a", op("two"));
+  assertEquals(await scopes.settle(refused, "success", () => Promise.reject(new Error("down"))), "unrecorded");
+
+  const outer = scopes.open("mutation", "", "proj_a");
+  const inner = scopes.open("mutation", outer, "proj_a");
+  scopes.hold(inner, "proj_a", op("orphan"));
+  await scopes.settle(outer, "error", send);
+  assertEquals(await scopes.settle(inner, "success", send), "lost");
+  assertEquals(sent.length, 1);
+});
+
+Deno.test("settle never sends for a failed mutation", async () => {
+  const scopes = new MutationScopes();
+  const ref = scopes.open("mutation", "", "proj_a");
+  scopes.hold(ref, "proj_a", op("one"));
+  assertEquals(await scopes.settle(ref, "error", () => { throw new Error("must not send"); }), "ok");
 });

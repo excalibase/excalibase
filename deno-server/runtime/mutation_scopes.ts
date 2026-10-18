@@ -16,6 +16,9 @@ export interface ClosedScope<Op> {
   lost?: true;
 }
 
+/** How a closed scope's calls ended: sent (or none), lost, or refused by provisioning. */
+export type Settled = "ok" | "lost" | "unrecorded";
+
 export class MutationScopes<Op = unknown> {
   private readonly scopes = new Map<string, Scope<Op>>();
 
@@ -38,6 +41,40 @@ export class MutationScopes<Op = unknown> {
     if (!scope) return false;
     scope.ops = [...scope.ops, op];
     return true;
+  }
+
+  /** hold is add for a worker's call: a ref that names no live scope throws. */
+  hold(ref: string, projectId: string, op: Op): void {
+    if (!this.add(ref, projectId, op)) {
+      throw new Error("ctx.scheduler: the mutation that made this call has already ended");
+    }
+  }
+
+  /**
+   * settle closes a scope and sends what a succeeded top-level mutation
+   * scheduled. Failures are logged under `label` (the function id); the
+   * send error can name internal endpoints, so it never reaches the result.
+   */
+  async settle(
+    ref: string,
+    settled: "success" | "error",
+    send: (ops: Op[]) => Promise<void>,
+    label = "",
+  ): Promise<Settled> {
+    const closed = this.close(ref, settled);
+    if (closed.lost) {
+      console.warn(`[runtime] ${label} succeeded after its calling mutation ended; its scheduled functions were dropped`);
+      return "lost";
+    }
+    if (closed.send.length === 0) return "ok";
+    try {
+      await send(closed.send);
+      return "ok";
+    } catch (sendErr) {
+      const reason = sendErr instanceof Error ? sendErr.message : String(sendErr);
+      console.warn(`[runtime] ${label} succeeded but its scheduled functions were not recorded:`, reason);
+      return "unrecorded";
+    }
   }
 
   /** close ends a scope and says which of its calls to send now. */

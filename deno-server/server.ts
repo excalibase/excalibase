@@ -1291,9 +1291,7 @@ async function dispatchScheduler(
   const projectID = callerRuntimeID.slice(0, sep);
   const op = schedulerOpFor(msg);
   if (txnRefId) {
-    if (!mutationScopes.add(txnRefId, projectID, op)) {
-      throw new Error("ctx.scheduler: the mutation that made this call has already ended");
-    }
+    mutationScopes.hold(txnRefId, projectID, op);
   } else {
     await sendSchedulerOps(projectID, [op]);
   }
@@ -1374,24 +1372,6 @@ async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<
     throw new Error(`ctx.scheduler: the platform rejected the request (status ${res.status})`);
   }
   await res.body?.cancel();
-}
-
-/**
- * flushSchedules sends the ctx.scheduler calls of a mutation that just
- * succeeded. It returns false when provisioning did not record them.
- */
-async function flushSchedules(id: string, projectId: string, ops: SchedulerOp[]): Promise<boolean> {
-  if (ops.length === 0) return true;
-  try {
-    await sendSchedulerOps(projectId, ops);
-    return true;
-  } catch (scheduleErr) {
-    // The detail can name the internal provisioning endpoint, so it stays in
-    // the server log; the caller gets only the fixed message below.
-    const reason = scheduleErr instanceof Error ? scheduleErr.message : String(scheduleErr);
-    console.warn(`[runtime] ${id} succeeded but its scheduled functions were not recorded:`, reason);
-    return false;
-  }
 }
 
 class FunctionRuntime {
@@ -1711,13 +1691,8 @@ class FunctionRuntime {
     // schedules, a failed one drops them. Either way the entry is removed
     // so a redeployed worker can't see stale refs.
     const finalize = async (settled: "success" | "error"): Promise<void> => {
-      const closed = mutationScopes.close(activeTxnRefId, settled);
-      if (closed.lost) {
-        scheduleFailed = true;
-        console.warn(`[runtime] ${id} succeeded after its calling mutation ended; its scheduled functions were dropped`);
-        return;
-      }
-      scheduleFailed = !(await flushSchedules(id, projectId, closed.send));
+      const outcome = await mutationScopes.settle(activeTxnRefId, settled, (ops) => sendSchedulerOps(projectId, ops), id);
+      scheduleFailed = outcome !== "ok";
     };
 
     let res: InvokeResponse;
