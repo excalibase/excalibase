@@ -25,13 +25,36 @@ export function getPool(): Sql {
   if (!url) {
     throw new Error("EXCALIBASE_DB_URL is not set — ctx.db is unavailable");
   }
-  cached = postgres(url, {
+  cached = postgres(url, poolOptions(url));
+  return cached;
+}
+
+/**
+ * Every option postgres.js would otherwise look up in PG* environment
+ * variables. The image grants the runtime only its own variables, and an
+ * unlisted read throws, so leaving one out fails every ctx.db call (EXC-625).
+ * `ssl` is left to the URL's sslmode when it names one.
+ */
+export function poolOptions(url: string): Record<string, unknown> {
+  const options: Record<string, unknown> = {
     onnotice: () => {}, // quieten Postgres NOTICEs in logs
     max: 10,
     idle_timeout: 30,
     connect_timeout: 10,
-  });
-  return cached;
+    // postgres.js's own default: a connection lives 30 to 60 minutes.
+    max_lifetime: () => 60 * (30 + Math.random() * 30),
+    max_pipeline: 100,
+    backoff: (retries: number) => (0.5 + Math.random() / 2) * Math.min(3 ** retries / 100, 20),
+    keep_alive: 60,
+    prepare: true,
+    debug: false,
+    fetch_types: true,
+    publications: "alltables",
+    // ctx.db writes, so a read-only server is refused rather than used.
+    target_session_attrs: "read-write",
+  };
+  if (!new URL(url).searchParams.has("sslmode")) options.ssl = false;
+  return options;
 }
 
 /** Close the cached pool. Called from server shutdown / test teardown. */

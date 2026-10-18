@@ -43,6 +43,12 @@ export interface RuntimeOptions {
    * stop() stays fast.
    */
   shutdownDrainMs?: number;
+  /**
+   * EXC-625: run with the image's own --allow-env list (read from the
+   * Dockerfile) instead of all of the environment, so a library reading a
+   * variable the image does not grant fails here as it does in production.
+   */
+  imageEnvPermissions?: boolean;
 }
 
 export interface RuntimeHandle {
@@ -63,6 +69,16 @@ export interface RuntimeHandle {
 }
 
 const SECRET = "test-runtime-secret";
+const DOCKERFILE_PATH = new URL("../Dockerfile", import.meta.url).pathname;
+
+/** The --allow-env flag the runtime image starts with. */
+export function imageAllowEnvFlag(): string {
+  const cmd = Deno.readTextFileSync(DOCKERFILE_PATH).split("\n").find((line) => line.startsWith("CMD "));
+  if (!cmd) throw new Error("Dockerfile has no CMD");
+  const flag = (JSON.parse(cmd.slice(4)) as string[]).find((arg) => arg.startsWith("--allow-env="));
+  if (!flag) throw new Error("Dockerfile CMD grants no --allow-env list");
+  return flag;
+}
 const SERVER_PATH = new URL("../server.ts", import.meta.url).pathname;
 
 // pickPort picks an ephemeral port. Bind+release is racy but acceptable for
@@ -94,7 +110,7 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
     args: [
       "run",
       "--allow-net",
-      "--allow-env",
+      opts.imageEnvPermissions ? imageAllowEnvFlag() : "--allow-env",
       // npm:postgres@3 lives in Deno's npm cache; the main thread needs
       // read access to import it. Workers themselves remain read-disabled
       // (--allow-read here applies to the parent process, not the worker
