@@ -120,7 +120,7 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 	metrics.InstanceCount = &tierInstances
 
 	// Pod-level CPU/memory from metrics-server
-	s.collectPodResourceMetrics(ctx, inst.Namespace, inst.ProjectID, perPodCPU, perPodMemMB, totalCPULimit, totalMemLimit, metrics)
+	s.collectPodResourceMetrics(ctx, inst, perPodCPU, perPodMemMB, totalCPULimit, totalMemLimit, metrics)
 
 	return metrics
 }
@@ -180,10 +180,10 @@ func (s *MetricsService) collectCNPGMetrics(ctx context.Context, inst *domain.Da
 // per-pod metrics and aggregate usage percentages.
 // The namespace also runs the project's apps, functions and watcher, so only
 // the database's own pods count.
-func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, namespace, projectID string, perPodCPU float64, perPodMemMB int, totalCPULimit float64, totalMemLimit int64, metrics *domain.DatabaseMetrics) {
-	podMetrics, err := s.k8sClient.GetPodMetrics(ctx, namespace)
+func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, inst *domain.DatabaseInstance, perPodCPU float64, perPodMemMB int, totalCPULimit float64, totalMemLimit int64, metrics *domain.DatabaseMetrics) {
+	podMetrics, err := s.k8sClient.GetPodMetrics(ctx, inst.Namespace)
 	if err != nil {
-		log.Printf("metrics of %s: pod usage: %v", projectID, err)
+		log.Printf("metrics of %s: pod usage: %v", inst.ProjectID, err)
 		return
 	}
 
@@ -191,7 +191,7 @@ func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, namespac
 	var totalMemMB int64
 	var counted int
 	for _, pm := range podMetrics {
-		if !strings.HasPrefix(pm.Name, projectID+postgresSuffix+"-") {
+		if !strings.HasPrefix(pm.Name, inst.ProjectID+postgresSuffix+"-") {
 			continue
 		}
 		counted++

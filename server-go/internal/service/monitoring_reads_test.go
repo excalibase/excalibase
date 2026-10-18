@@ -116,3 +116,48 @@ func TestDatabaseUsageCountsOnlyThePostgresPods(t *testing.T) {
 		t.Fatalf("pods = %+v", m.Pods)
 	}
 }
+
+// Without metrics-server's figures the database's own figures still arrive,
+// and CPU and memory stay unset for Studio to name as not available.
+func TestDatabaseUsageIsUnsetWhenMetricsServerDoesNotAnswer(t *testing.T) {
+	svc, mock := setupMetricsCollectTest(t)
+	delete(mock.Metrics, "org-m-db")
+
+	m, err := svc.GetCurrentMetrics(context.Background(), "m-db")
+	if err != nil {
+		t.Fatalf("GetCurrentMetrics: %v", err)
+	}
+	if !m.MetricsAvailable || m.ActiveConnections == nil {
+		t.Fatalf("the database's figures are missing: %+v", m)
+	}
+	if m.CPUUsagePercent != nil || m.MemoryUsagePercent != nil || m.Pods != nil {
+		t.Fatalf("usage set without metrics-server: %+v", m)
+	}
+}
+
+func TestDatabaseUsageIsUnsetWhenNoPostgresPodIsSampled(t *testing.T) {
+	svc, mock := setupMetricsCollectTest(t)
+	mock.Metrics["org-m-db"] = []k8s.PodResourceMetrics{{Name: "deno-runtime-5f6-abc", CPUMillis: 300, MemoryMB: 200}}
+
+	m, _ := svc.GetCurrentMetrics(context.Background(), "m-db")
+	if m.CPUUsageCores != nil {
+		t.Fatalf("cpu cores = %v, want unset", *m.CPUUsageCores)
+	}
+}
+
+func TestAuditLogsAreEmptyWhenNothingWasAudited(t *testing.T) {
+	svc, mock := setupAuditTest(t)
+	mock.PodLogs["org-aud-db/aud-db-postgres-1"] = `{"logger":"postgres","msg":"record"}` + "\n"
+
+	logs, err := svc.GetAuditLogs(context.Background(), testAudDB, 100)
+	if err != nil || logs != "" {
+		t.Fatalf("logs = %q, err = %v", logs, err)
+	}
+}
+
+func TestAuditLogsFailWhenThePodLogCannotBeRead(t *testing.T) {
+	svc, _ := setupAuditTest(t)
+	if _, err := svc.GetAuditLogs(context.Background(), testAudDB, 100); err == nil {
+		t.Fatal("expected an error")
+	}
+}

@@ -24,10 +24,10 @@ const METRICS = {
   cpuLimitCores: 0.5, memoryLimitMB: 512, storageLimit: '5Gi', instanceCount: 1,
 };
 
-function serve(logs: () => unknown) {
+function serve(logs: () => unknown, metrics: object = METRICS) {
   vi.mocked(api.get).mockImplementation(async (url: string) => {
     if (url === '/provision/p-1') return { data: PROJECT } as never;
-    if (url.includes('/metrics/current')) return { data: METRICS } as never;
+    if (url.includes('/metrics/current')) return { data: metrics } as never;
     if (url.includes('/metrics/history')) return { data: { projectId: 'p-1', metrics: [METRICS], totalPoints: 1 } } as never;
     if (url.includes('/logs')) return logs() as never;
     return { data: [] } as never;
@@ -80,5 +80,17 @@ describe('Studio monitoring says what it cannot measure', () => {
     renderAt('database/overview', <InstanceDetailPage />);
     await userEvent.click(await screen.findByRole('button', { name: /^logs$/i }));
     expect(await screen.findByText(/checkpoint complete/)).toBeInTheDocument();
+  });
+
+  test('measured figures show as numbers', async () => {
+    serve(() => ({ data: { logs: '' } }), {
+      ...METRICS, cpuUsagePercent: 12.4, memoryUsagePercent: 40, diskUsagePercent: 13,
+      cpuUsageCores: 0.06, memoryUsageMB: 205, diskUsageGB: 1,
+    });
+    renderAt('database/overview', <InstanceDetailPage />);
+    expect(await screen.findByText('12%')).toBeInTheDocument();
+    expect(screen.getByText('205 MB')).toBeInTheDocument();
+    expect(screen.getByText('1 GB')).toBeInTheDocument();
+    expect(screen.queryByText('Not available')).not.toBeInTheDocument();
   });
 });
