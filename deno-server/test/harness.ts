@@ -10,39 +10,22 @@ export interface RuntimeOptions {
   v2Enabled?: boolean;
   allowedHosts?: string;
   /**
-   * If set, the server is started with EXCALIBASE_DB_URL pointed at this
-   * Postgres URL. Required for Phase 1 ctx.db tests.
-   */
-  dbUrl?: string;
-  /**
    * If set, EXCALIBASE_PROVISIONING_URL is wired so the runtime's metadata
    * capture path posts callbacks back to this URL. Phase 2 metadata tests
    * stand up a mock provisioning server and pass its URL here.
    */
   provisioningUrl?: string;
   /**
-   * Phase 9a: override the mutation BEGIN isolation level. One of
-   *  - "SERIALIZABLE" (default at runtime if unset)
-   *  - "REPEATABLE READ"
-   *  - "READ COMMITTED"
-   * Sets EXCALIBASE_MUTATION_ISOLATION; the runtime validates at boot.
-   */
-  mutationIsolation?: string;
-  /**
-   * Phase 9a: cap on retry attempts when a mutation hits 40001/40P01.
-   * Sets EXCALIBASE_MUTATION_RETRY_MAX; runtime default is 5.
-   */
-  mutationRetryMax?: number;
-  /**
-   * Phase 9a: base backoff in milliseconds for the retry loop.
-   * Sets EXCALIBASE_MUTATION_RETRY_BACKOFF_MS; runtime default is 50.
-   */
-  mutationRetryBackoffMs?: number;
-  /**
    * EXC-569: how long a stopped runtime keeps serving. Tests default to 0 so
    * stop() stays fast.
    */
   shutdownDrainMs?: number;
+  /**
+   * Run with the image's own --allow-env list (read from the Dockerfile)
+   * instead of all of the environment, so code reading a variable the image
+   * does not grant fails here as it does in production (EXC-625).
+   */
+  imageEnvPermissions?: boolean;
 }
 
 export interface RuntimeHandle {
@@ -63,6 +46,16 @@ export interface RuntimeHandle {
 }
 
 const SECRET = "test-runtime-secret";
+const DOCKERFILE_PATH = new URL("../Dockerfile", import.meta.url).pathname;
+
+/** The --allow-env flag the runtime image starts with. */
+export function imageAllowEnvFlag(): string {
+  const cmd = Deno.readTextFileSync(DOCKERFILE_PATH).split("\n").find((line) => line.startsWith("CMD "));
+  if (!cmd) throw new Error("Dockerfile has no CMD");
+  const flag = (JSON.parse(cmd.slice(4)) as string[]).find((arg) => arg.startsWith("--allow-env="));
+  if (!flag) throw new Error("Dockerfile CMD grants no --allow-env list");
+  return flag;
+}
 const SERVER_PATH = new URL("../server.ts", import.meta.url).pathname;
 
 // pickPort picks an ephemeral port. Bind+release is racy but acceptable for
@@ -84,21 +77,16 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
   };
   if (opts.v2Enabled) env.EXCALIBASE_FUNCTIONS_V2 = "1";
   if (opts.allowedHosts) env.ALLOWED_HOSTS = opts.allowedHosts;
-  if (opts.dbUrl) env.EXCALIBASE_DB_URL = opts.dbUrl;
   if (opts.provisioningUrl) env.EXCALIBASE_PROVISIONING_URL = opts.provisioningUrl;
-  if (opts.mutationIsolation) env.EXCALIBASE_MUTATION_ISOLATION = opts.mutationIsolation;
-  if (opts.mutationRetryMax !== undefined) env.EXCALIBASE_MUTATION_RETRY_MAX = String(opts.mutationRetryMax);
-  if (opts.mutationRetryBackoffMs !== undefined) env.EXCALIBASE_MUTATION_RETRY_BACKOFF_MS = String(opts.mutationRetryBackoffMs);
 
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
       "run",
       "--allow-net",
-      "--allow-env",
-      // npm:postgres@3 lives in Deno's npm cache; the main thread needs
-      // read access to import it. Workers themselves remain read-disabled
-      // (--allow-read here applies to the parent process, not the worker
-      // permissions object passed to `new Worker`).
+      opts.imageEnvPermissions ? imageAllowEnvFlag() : "--allow-env",
+      // The main thread reads the vendored lib and Deno's module cache.
+      // Workers remain read-limited (--allow-read here applies to the parent
+      // process, not the worker permissions object passed to `new Worker`).
       "--allow-read",
       "--unstable-worker-options",
       SERVER_PATH,

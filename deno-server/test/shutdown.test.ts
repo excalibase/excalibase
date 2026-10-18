@@ -31,14 +31,10 @@ Deno.test("a stop marks the runtime draining, waits, then stops serving and exit
       steps.push("stop serving");
       return Promise.resolve();
     },
-    closePool: () => {
-      steps.push("close pool");
-      return Promise.resolve();
-    },
     exit: (code) => steps.push(`exit ${code}`),
   });
   await Promise.all([stop(), stop()]);
-  assertEquals(steps, ["draining", "sleep 30", "stop serving", "close pool", "exit 0"]);
+  assertEquals(steps, ["draining", "sleep 30", "stop serving", "exit 0"]);
 });
 
 Deno.test("a failing step does not keep the runtime from exiting", async () => {
@@ -48,7 +44,6 @@ Deno.test("a failing step does not keep the runtime from exiting", async () => {
     markDraining: () => steps.push("draining"),
     sleep: () => Promise.resolve(),
     stopServing: () => Promise.reject(new Error("already closed")),
-    closePool: () => Promise.reject(new Error("pool gone")),
     exit: (code) => steps.push(`exit ${code}`),
   });
   await stop();

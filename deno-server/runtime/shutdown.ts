@@ -2,7 +2,7 @@
 // of the Service at the same time; until every node has seen the change,
 // calls still arrive. Exiting at once refused them, so the runtime keeps
 // serving for a drain period (reporting "draining" on /health so readiness
-// drops it sooner), then stops the listener, closes the pool and exits.
+// drops it sooner), then stops the listener and exits.
 
 const DEFAULT_DRAIN_MS = 5000;
 // Below Kubernetes' default 30s termination grace, so the runtime always
@@ -21,7 +21,6 @@ export interface DrainSteps {
   markDraining: () => void;
   sleep: (ms: number) => Promise<void>;
   stopServing: () => Promise<void>;
-  closePool: () => Promise<void>;
   exit: (code: number) => void;
 }
 
@@ -33,7 +32,6 @@ export function drainThenExit(steps: DrainSteps): () => Promise<void> {
     steps.markDraining();
     await steps.sleep(steps.drainMs);
     try { await steps.stopServing(); } catch (_) { /* already stopped */ }
-    try { await steps.closePool(); } catch (_) { /* postgres closes the sockets */ }
     steps.exit(0);
   };
   return () => {

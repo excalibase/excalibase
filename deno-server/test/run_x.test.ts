@@ -141,7 +141,7 @@ Deno.test({
       // The target's handler does its own validation and throws a
       // ValidationError-shaped error. Phase 7 surfaces .name and .issues
       // through the runX RPC envelope so the caller sees the same shape
-      // it would from a direct ctx.db ValidationError.
+      // the target threw.
       const targetCode = bundleDefault(`{
         kind: "mutation",
         args: { parse: (a) => a },
