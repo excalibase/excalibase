@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,25 @@ func TestDockerMySQLProjectServesTLSClientsFromTheHost(t *testing.T) {
 	}
 	_ = db.Close()
 	assertAuthAdminIsConfinedToAuth(ctx, t, docker, result.Namespace, passwords.AuthAdmin, verified)
+	assertAppCannotReadAuth(ctx, t, docker, result.Namespace, passwords.App, verified)
+	// EXC-628: a cluster restored from before EXC-628 carries the old read
+	// grant. The in-place restore's password reset and a re-registration
+	// each take it away.
+	oldGrant := "GRANT SELECT ON `auth`.* TO 'excalibase_app'@'%';"
+	for name, reapply := range map[string]func() error{
+		"restore password reset": func() error {
+			return p.SetUserPasswords(ctx, result.Namespace, projectID, map[string]string{MySQLUserApp: passwords.App})
+		},
+		"re-registration": func() error { return p.EnsurePlatformUsers(ctx, result.Namespace, projectID, "shop", passwords) },
+	} {
+		if err := p.runSecret(ctx, result.Namespace, oldGrant); err != nil {
+			t.Fatalf("plant the old grant: %v", err)
+		}
+		if err := reapply(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		assertAppCannotReadAuth(ctx, t, docker, result.Namespace, passwords.App, verified)
+	}
 
 	plain := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, nil)
 	if err := plain.PingContext(ctx); err == nil {
@@ -143,6 +163,22 @@ func assertAuthAdminIsConfinedToAuth(ctx context.Context, t *testing.T, docker *
 	} {
 		if _, err := db.ExecContext(ctx, refused); err == nil {
 			t.Errorf("auth_admin was allowed: %s", refused)
+		}
+	}
+}
+
+// assertAppCannotReadAuth: excalibase_app, behind the engine, reaches no table
+// of the auth database (EXC-628).
+func assertAppCannotReadAuth(ctx context.Context, t *testing.T, docker *RealDockerClient, container, password string, tlsConfig *tls.Config) {
+	t.Helper()
+	db := mysqlAs(ctx, t, docker, container, mysqlLogin{MySQLUserApp, password, "shop"}, tlsConfig)
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatalf("excalibase_app cannot log in: %v", err)
+	}
+	for _, refused := range []string{"SELECT COUNT(*) FROM auth.users", "INSERT INTO auth.users (email) VALUES ('m@b.test')"} {
+		if _, err := db.ExecContext(ctx, refused); err == nil || !strings.Contains(err.Error(), "denied") {
+			t.Errorf("excalibase_app ran %s: %v", refused, err)
 		}
 	}
 }

@@ -111,7 +111,7 @@ func platformRoutes(t *testing.T, tenant mcpTenant) http.Handler {
 
 // EXC-623: MCP execute_sql and apply_migration run customer SQL as
 // excalibase_app, through the platform's real routes. Neither can write the
-// excalibase schema; both read the project's auth users and build its own.
+// excalibase schema or read the project's auth users (EXC-628).
 func TestMCPDatabaseTools_CannotWriteThePlatformSchema(t *testing.T) {
 	tenant := startMCPTenant(t)
 	cs := session(t, platformRoutes(t, tenant), &recordingAudit{}, writeCaller())
@@ -137,14 +137,14 @@ func TestMCPDatabaseTools_CannotWriteThePlatformSchema(t *testing.T) {
 		}
 	}
 
-	read := structured(t, callTool(t, cs, "execute_sql", map[string]any{"project_id": testProjectA, "query": `SELECT email FROM auth.users`}))
-	if rows, _ := read["rows"].([]any); len(rows) != 1 {
-		t.Fatalf("execute_sql read of auth.users = %v", read)
+	read := callTool(t, cs, "execute_sql", map[string]any{"project_id": testProjectA, "query": `SELECT email FROM auth.users`})
+	if !read.IsError || !strings.Contains(resultText(read), "permission denied") {
+		t.Fatalf("execute_sql read of auth.users = %s", resultText(read))
 	}
 	res := callTool(t, cs, "apply_migration", map[string]any{"project_id": testProjectA, "name": "profiles",
 		"sql": `CREATE TABLE public.profiles (user_id int PRIMARY KEY, email text); INSERT INTO public.profiles SELECT id, email FROM auth.users`})
-	if migration, _ := structured(t, res)["migration"].(map[string]any); migration["status"] != "APPLIED" {
-		t.Fatalf("apply_migration in the project's own schema: %v", migration)
+	if migration, _ := structured(t, res)["migration"].(map[string]any); migration["status"] != "FAILED" {
+		t.Fatalf("apply_migration copied the auth users: %v", migration)
 	}
 
 	var planted int

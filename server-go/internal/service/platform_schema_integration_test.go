@@ -9,10 +9,11 @@ import (
 )
 
 // EXC-623: customer-written SQL (Studio's runner, MCP execute_sql and
-// apply_migration) runs as excalibase_app. It keeps read access to the
-// project's auth tables and its own schemas, and gets no write, CREATE or
-// ownership in the platform's excalibase schema. The scheduler's bookkeeping
-// there is written by excalibase_scheduler, a login no customer path uses.
+// apply_migration) runs as excalibase_app. It works in its own schemas and gets
+// no write, CREATE or ownership in the platform's excalibase schema. EXC-628:
+// it cannot read the project's auth tables either; only auth_admin can. The
+// scheduler's bookkeeping in the excalibase schema is written by
+// excalibase_scheduler, a login no customer path uses.
 
 const (
 	platformSchedulerPassword = "Scheduler-Password-1"
@@ -102,9 +103,7 @@ func TestPlatformSchema_CustomerSQLCannotWriteIt(t *testing.T) {
 	mustExec(t, c.app, `CREATE TABLE public.moved (id int)`)
 	mustFail(t, c.app, `ALTER TABLE public.moved SET SCHEMA excalibase`, "permission denied")
 
-	if got := scanString(t, c.app, `SELECT email FROM auth.users`); got != "ada@example.test" {
-		t.Fatalf("customer SQL reads auth.users as %q, want the project's own user", got)
-	}
+	mustFail(t, c.app, `SELECT email FROM auth.users`, "permission denied")
 	if scanBool(t, c.admin, `SELECT has_schema_privilege('excalibase_app', 'excalibase', 'CREATE')`) {
 		t.Fatal("excalibase_app still holds CREATE on the excalibase schema")
 	}

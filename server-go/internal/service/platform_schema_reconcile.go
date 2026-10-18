@@ -29,12 +29,14 @@ type RoleReconcileReport struct {
 }
 
 // ReconcileProjectRoles re-runs the registration SQL on every running Postgres
-// project registered before EXC-623, which it knows by the excalibase_scheduler
-// login missing from vault: the excalibase schema is left the superuser's
-// alone, whatever the app role planted there is dropped, and the scheduler
-// login is created, filed and admitted by certificate. Filing that login is
-// the last step, so a project that fails part-way is tried again next pass,
-// and one already reconciled is not touched.
+// project whose roles are out of date: one registered before EXC-623, known by
+// the excalibase_scheduler login missing from vault, or one whose
+// excalibase_app can still reach the auth schema (EXC-628). The excalibase
+// schema is left the superuser's alone, whatever the app role planted there is
+// dropped, the app role loses auth, and the scheduler login is created, filed
+// and admitted by certificate. Filing that login is the last step, so a project
+// that fails part-way is tried again next pass, and one already reconciled is
+// only probed.
 func (s *ProvisioningService) ReconcileProjectRoles(ctx context.Context) RoleReconcileReport {
 	var report RoleReconcileReport
 	if s.vault == nil || s.vault.Sealed() || (s.k8sClient == nil && s.dockerClient == nil) {
@@ -49,7 +51,7 @@ func (s *ProvisioningService) ReconcileProjectRoles(ctx context.Context) RoleRec
 		if !reconcilesRoles(inst) {
 			continue
 		}
-		reconciled, err := s.reconcileIfPending(ctx, inst.ProjectID)
+		reconciled, err := s.reconcileIfPending(ctx, inst)
 		if err != nil {
 			report.Failed = append(report.Failed, fmt.Errorf("project %s: %w", inst.ProjectID, err))
 			continue
@@ -61,18 +63,28 @@ func (s *ProvisioningService) ReconcileProjectRoles(ctx context.Context) RoleRec
 	return report
 }
 
-// reconcileIfPending reconciles a project that has no scheduler login yet.
-func (s *ProvisioningService) reconcileIfPending(ctx context.Context, projectID string) (bool, error) {
-	pending, err := s.missingSchedulerLogin(projectID)
+// reconcileIfPending reconciles a project whose roles are out of date.
+func (s *ProvisioningService) reconcileIfPending(ctx context.Context, inst *domain.DatabaseInstance) (bool, error) {
+	projectCtx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+	defer cancel()
+	pending, err := s.rolesPending(projectCtx, inst)
 	if err != nil || !pending {
 		return false, err
 	}
-	projectCtx, cancel := context.WithTimeout(ctx, reconcileTimeout)
-	defer cancel()
-	if err := s.reconcileProject(projectCtx, projectID); err != nil {
+	if err := s.reconcileProject(projectCtx, inst.ProjectID); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// rolesPending reports a project registered before EXC-623 (no scheduler
+// login filed) or before EXC-628 (excalibase_app still reaches auth).
+func (s *ProvisioningService) rolesPending(ctx context.Context, inst *domain.DatabaseInstance) (bool, error) {
+	missing, err := s.missingSchedulerLogin(inst.ProjectID)
+	if err != nil || missing {
+		return missing, err
+	}
+	return appReachesAuth(ctx, s.roleSQLExecer(inst.Namespace, inst.ProjectID+primaryPodSuffix), inst.DatabaseName)
 }
 
 // missingSchedulerLogin reports whether vault holds no excalibase_scheduler
@@ -110,6 +122,14 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	exec := s.roleSQLExecer(spec.namespace, spec.projectID+primaryPodSuffix)
 	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL); err != nil {
 		return fmt.Errorf("re-run registration SQL: %w", err)
+	}
+	// A grant the revokes cannot take away (another grantor's, a chain of
+	// roles) must surface, not pass as reconciled every pass.
+	if reaches, err := appReachesAuth(ctx, exec, spec.databaseName); err != nil || reaches {
+		if err == nil {
+			err = errors.New("excalibase_app still reaches auth after the registration SQL")
+		}
+		return err
 	}
 	if err := s.ensureClusterCertLogins(ctx, inst); err != nil {
 		return err

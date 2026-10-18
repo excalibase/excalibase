@@ -222,6 +222,10 @@ func TestDockerMySQLSetsSeveralPasswordsInOneBatch(t *testing.T) {
 	if batch := engine.stdin[before]; !strings.Contains(batch, "'admin'@'%' IDENTIFIED BY 'a1'") || !strings.Contains(batch, "'excalibase_app'@'%' IDENTIFIED BY 'b2'") {
 		t.Fatalf("batch:\n%s", batch)
 	}
+	// EXC-628: the restore's batch also takes away an old auth read grant.
+	if batch := engine.stdin[before]; !strings.Contains(batch, MySQLAppAuthRevokeSQL) {
+		t.Fatalf("batch keeps excalibase_app's auth access:\n%s", batch)
+	}
 }
 
 func TestDockerMySQLClientWorkIsReadOverTheSocket(t *testing.T) {

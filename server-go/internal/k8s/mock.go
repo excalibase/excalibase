@@ -72,6 +72,8 @@ type MockClient struct {
 	WildcardExecError error // ExecInPod returns this for any pod not in ExecError
 	// WildcardExecOutput is what ExecInPod prints for any pod not in ExecOutput.
 	WildcardExecOutput string
+	// ExecAnswer, when set, answers every ExecInPod by its argv instead.
+	ExecAnswer func(cmd []string) (string, error)
 
 	// DenoRuntimes — set of namespaces where EnsureDenoRuntime has been called.
 	DenoRuntimes map[string]bool
@@ -671,6 +673,9 @@ func (m *MockClient) exec(namespace, pod string, cmd []string, stdin string) (st
 	key := namespace + "/" + pod
 	if err, ok := m.ExecError[key]; ok && err != nil {
 		return "", err
+	}
+	if m.ExecAnswer != nil {
+		return m.ExecAnswer(cmd)
 	}
 	if m.WildcardExecError != nil {
 		return "", m.WildcardExecError
