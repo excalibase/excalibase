@@ -1,28 +1,39 @@
-# Excalibase Provisioning
+# Excalibase
 
-Kubernetes-native database provisioning platform. Built with Go + client-go.
+An open-source platform as a service. A project gets a database (Postgres, MySQL or DocumentDB), a GraphQL and REST API generated from its schema, row and column permissions per role, auth for your app's end users, TypeScript functions, hosting for your containers next to the database, and static Sites with your own domain. Run it on the hosted beta at [excalibase.io](https://excalibase.io), or self-host the whole platform on one box or on Kubernetes.
 
-## What It Does
+This repository is the control plane and Studio, the web console. The API engine is [excalibase-graphql](https://github.com/excalibase/excalibase-graphql), end-user auth is [excalibase-auth](https://github.com/excalibase/excalibase-auth), change capture is [excalibase-watcher](https://github.com/excalibase/excalibase-watcher), the client is [@excalibase/sdk](https://github.com/excalibase/excalibase-sdk-js). All Apache-2.0.
 
-One API call provisions a production PostgreSQL cluster with backup, monitoring, and performance insights:
+![Studio project overview](https://excalibase.io/screens/studio-overview.webp)
+
+## Try it on one machine
+
+Linux with Docker Engine 24+ and the Compose plugin, ports 80 and 443 free:
 
 ```bash
-curl -X POST http://localhost:24005/api/provision \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"projectName":"my-db","orgId":"myorg","databaseType":"POSTGRESQL"}'
+git clone --depth 1 --branch v1.5.1 https://github.com/excalibase/excalibase.git
+cd excalibase/deploy/single-host
+./init.sh --domain localhost --admin-email you@example.com
+docker compose up -d
+docker compose logs -f bootstrap   # prints the first admin's password once
 ```
 
-- **9-stage provisioning pipeline** — namespace, CRD deployment, pod readiness, credential extraction, backup config, metrics setup, watcher deployment, role creation
-- **Two deployment modes per project** — Kubernetes (CNPG operator on any distro: EKS/GKE/AKS, RKE2, or single-node k0s/k3s/MicroK8s including rootless) or Docker (local socket or remote daemon over TLS, Dokploy/CapRover-style). K8s vs Docker is a real trade-off: K8s provides ServiceAccount + Role + namespace isolation, Docker is operationally simpler but daemon access is root-equivalent and there's no per-project isolation enforced by the platform.
-- **Self-hosted or cloud** — `DEPLOYMENT_MODE=selfhosted` (Postgres store + Postgres vault, single org) or `cloud` (Postgres store + Postgres vault or remote HTTP vault, multi-tenant + tier enforcement)
-- **3 tiers** — FREE (1 pod), STANDARD (3 pods + HA), ENTERPRISE (5 pods)
-- **Real metrics** — per-pod CPU/memory from metrics-server + CNPG database metrics from port 9187
-- **Backup & PITR** — automated WAL archiving + scheduled backups + point-in-time recovery
-- **Performance insights** — pg_stat_statements: top queries, cache hit ratio, wait events
-- **Schema management** — full SQL schema introspection, CRUD for tables/columns/roles/extensions/policies/functions/triggers/indexes
-- **Realtime** — per-table CDC publication toggle (ALTER PUBLICATION) backed by a watcher daemon
-- **Edge functions** — per-project Deno workers with multi-file bundling (esbuild), secrets, log streaming, public invoke at `/functions/v1/{projectId}/{name}`
-- **Vault** — Shamir secret sharing for credentials, AES-256-GCM at rest; runs in-process (Postgres-backed) or as a standalone HTTP service
+Open https://studio.localhost and sign in as `admin`. Rootless Podman, a real domain, container apps and what a single host does not do (high availability, edge functions, realtime) are in the [self-hosting guide](https://excalibase.io/docs/self-hosting). Kubernetes installs use the Helm charts in [`charts/`](charts).
+
+## What the control plane does
+
+- **Projects** — a project is a container of services: 0 or 1 database, apps, functions, storage and Sites, with organization and project roles in Studio
+- **Two provisioners** — Kubernetes (CloudNativePG for Postgres, MOCO for MySQL) or a single Docker / rootless Podman host behind an engine-socket proxy
+- **Plans** — FREE (1 instance), STANDARD (3 instances, synchronous replication), ENTERPRISE (5 instances)
+- **Backups and PITR** — scheduled base backups, WAL archiving, restore to a point in time or into a new project
+- **Schema management** — tables, columns, roles, extensions, policies, functions, triggers and indexes from Studio or the API
+- **Permissions** — per role, table and operation, served to the API engine, which enforces them itself
+- **Realtime** — per-table change capture toggled from Studio, backed by the watcher
+- **Edge functions** — per-project Deno workers with secrets, an outbound allowlist and log streaming
+- **Containers** — any image next to the database, under gVisor, with custom domains and roll back
+- **Sites** — static frontends served from Cloudflare's edge, with custom domains
+- **MCP** — a coding agent can create tables, set permissions and deploy, limited to its token's scopes
+- **Vault** — Shamir secret sharing for credentials, AES-256-GCM at rest
 
 ## Using the engine with your own database
 
@@ -63,7 +74,7 @@ deno-server/     Deno edge functions runtime (Web Workers, sandboxed)
 
 The Go server uses `client-go` natively — no kubectl shell-outs. CRDs are built as `unstructured.Unstructured` objects and applied via the dynamic client.
 
-## Quick Start
+## Developing from source
 
 ### Prerequisites
 
@@ -117,7 +128,7 @@ curl -s -X POST http://localhost:24005/api/vault/unseal \
   -H "Content-Type: application/json" \
   -d '{"share": "<share-hex>"}'
 
-# Register the first admin with the one-time setup token (EXC-451), burned on
+# Register the first admin with the one-time setup token, burned on
 # use: SETUP_TOKEN, which Kubernetes requires (provisioning refuses to start
 # without it until an admin exists); only the docker provisioner started
 # without SETUP_TOKEN prints a generated one to its log ("First-admin setup token: ...")
@@ -140,8 +151,8 @@ curl -X POST http://localhost:24005/api/provision \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "projectName": "duke-database",
-    "orgId": "exca",
+    "projectName": "my-db",
+    "orgId": "myorg",
     "databaseType": "POSTGRESQL",
     "backup": {"enabled": true, "schedule": "0 2 * * *", "retention": 30},
     "parameters": {"work_mem": "16MB"}
@@ -170,7 +181,7 @@ Every route with a project in its path binds that project to the caller before t
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/auth/register` | No | Public registration; the first registrant becomes platform_admin, but only with a valid one-time `setupToken` (`SETUP_TOKEN`, required on Kubernetes; a docker provisioner started without it prints a generated one to its log) — EXC-451 |
+| POST | `/api/auth/register` | No | Public registration; the first registrant becomes platform_admin, but only with a valid one-time `setupToken` (`SETUP_TOKEN`, required on Kubernetes; a docker provisioner started without it prints a generated one to its log) |
 | POST | `/api/auth/login` | No | Login (argon2id), returns bearer token |
 | GET | `/api/auth/setup-status` | No | `{hasAdmin}` — used by the setup wizard |
 | GET | `/api/auth/me` | Yes | Current user info |
@@ -439,7 +450,7 @@ cd frontend && npx playwright test
 - **Edge Functions**: Deno workers, esbuild bundling, public Supabase-style invoke
 - **Realtime**: PostgreSQL logical replication via watcher daemon, per-table `ALTER PUBLICATION` toggle
 - **Frontend**: React 18, Vite, Tailwind CSS, TanStack Query/Table, CodeMirror 6, cmdk
-- **K8s Operators**: CloudNativePG (PostgreSQL), Vitess (MySQL planned), MongoDB Community (planned)
+- **K8s Operators**: CloudNativePG (PostgreSQL, DocumentDB), MOCO (MySQL)
 - **Metrics**: Kubernetes metrics-server (CPU/memory), CNPG Prometheus exporter
 - **Backup**: Barman Cloud plugin (per-project `ObjectStore`) → S3-compatible store (Cloudflare R2 in production; endpoint/bucket/creds from `BACKUP_DEFAULT_*` or vault `backup/s3`); restore reads from the same configured store
 - **Testing**: httptest, testcontainers-go (k3s + PostgreSQL), Playwright, Vitest
