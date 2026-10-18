@@ -36,51 +36,23 @@
 // via a `file:` spec rather than the npm registry.
 
 import { newId } from "./runtime/ids.ts";
+import { MutationScopes } from "./runtime/mutation_scopes.ts";
 import { drainThenExit, shutdownDrainMs } from "./runtime/shutdown.ts";
 import { runXFailure, runXTargetError, withoutCrashDetail } from "./runtime/invoke_errors.ts";
 import type { InvokeResponse, RunXFailure } from "./runtime/invoke_errors.ts";
 import { outboundDeniedMessage } from "./runtime/outbound_denied.ts";
 
 // ---------------------------------------------------------------------------
-// Mutation scopes.
+// Mutation scopes (runtime/mutation_scopes.ts).
 //
 // A mutation's ctx.scheduler calls are sent to provisioning only once its
-// handler succeeds, so a mutation that throws schedules nothing. Each
-// top-level mutation gets a scope keyed by a `txnRefId` the worker echoes on
-// every scheduler/runX RPC. A nested ctx.runMutation gets an alias entry
-// (`owned=false`) pointing at its parent: its calls join the parent's when it
-// succeeds and are dropped when it throws, so they reach provisioning only
-// with the outermost mutation's. Actions open no scope: an action's
-// ctx.runMutation is a new top level, and an action's own schedules are sent
-// at once. A ref that resolves to no live scope is refused, never sent.
+// handler succeeds. Each invocation's scope ref rides on the invoke envelope
+// and the worker echoes it on every scheduler/runX RPC; a nested
+// ctx.runMutation's calls join its caller's only when it succeeds. Actions
+// open no scope, so their schedules are sent at once.
 // ---------------------------------------------------------------------------
 
-interface MutationScope {
-  /** True for the top-level mutation that sends the scope's schedules. */
-  owned: boolean;
-  /** Non-empty for alias entries; carries the parent's txnRefId. */
-  parentRefId?: string;
-  /** Project id parsed from the runtime id at invocation time. */
-  projectId: string;
-  /** ctx.scheduler calls waiting for the mutation to succeed. */
-  schedules?: SchedulerOp[];
-}
-
-const txnMap: Map<string, MutationScope> = new Map();
-
-// Unguessable, so a function cannot name another invocation's scope.
-function newTxnRefId(): string {
-  return `t${crypto.randomUUID()}`;
-}
-
-/**
- * liveScope returns the scope a ref names when it belongs to the caller's
- * project, or null.
- */
-function liveScope(txnRefId: string, projectId: string): MutationScope | null {
-  const entry = txnMap.get(txnRefId);
-  return entry && entry.projectId === projectId ? entry : null;
-}
+const mutationScopes = new MutationScopes<SchedulerOp>();
 
 interface DeployRequest {
   id: string;
@@ -1319,9 +1291,9 @@ async function dispatchScheduler(
   const projectID = callerRuntimeID.slice(0, sep);
   const op = schedulerOpFor(msg);
   if (txnRefId) {
-    const scope = liveScope(txnRefId, projectID);
-    if (!scope) throw new Error("ctx.scheduler: the mutation that made this call has already ended");
-    scope.schedules = [...(scope.schedules ?? []), op];
+    if (!mutationScopes.add(txnRefId, projectID, op)) {
+      throw new Error("ctx.scheduler: the mutation that made this call has already ended");
+    }
   } else {
     await sendSchedulerOps(projectID, [op]);
   }
@@ -1408,10 +1380,10 @@ async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<
  * flushSchedules sends the ctx.scheduler calls of a mutation that just
  * succeeded. It returns false when provisioning did not record them.
  */
-async function flushSchedules(id: string, entry: MutationScope): Promise<boolean> {
-  if (!entry.schedules || entry.schedules.length === 0) return true;
+async function flushSchedules(id: string, projectId: string, ops: SchedulerOp[]): Promise<boolean> {
+  if (ops.length === 0) return true;
   try {
-    await sendSchedulerOps(entry.projectId, entry.schedules);
+    await sendSchedulerOps(projectId, ops);
     return true;
   } catch (scheduleErr) {
     // The detail can name the internal provisioning endpoint, so it stays in
@@ -1729,15 +1701,7 @@ class FunctionRuntime {
     const sep = id.indexOf("__");
     const projectId = sep > 0 ? id.slice(0, sep) : "";
 
-    let activeTxnRefId = "";
-    if (inheritedTxnRefId && liveScope(inheritedTxnRefId, projectId)) {
-      // Alias entry: the caller's scope sends the schedules.
-      activeTxnRefId = newTxnRefId();
-      txnMap.set(activeTxnRefId, { owned: false, parentRefId: inheritedTxnRefId, projectId });
-    } else if (script.kind === "mutation") {
-      activeTxnRefId = newTxnRefId();
-      txnMap.set(activeTxnRefId, { owned: true, projectId });
-    }
+    const activeTxnRefId = mutationScopes.open(script.kind, inheritedTxnRefId, projectId);
 
     // Set when a mutation succeeded but provisioning refused or missed the
     // ctx.scheduler calls it made; the caller gets an error, not a success
@@ -1747,22 +1711,13 @@ class FunctionRuntime {
     // schedules, a failed one drops them. Either way the entry is removed
     // so a redeployed worker can't see stale refs.
     const finalize = async (settled: "success" | "error"): Promise<void> => {
-      if (!activeTxnRefId) return;
-      const entry = txnMap.get(activeTxnRefId);
-      txnMap.delete(activeTxnRefId);
-      if (!entry || settled !== "success" || !entry.schedules?.length) return;
-      if (entry.owned) {
-        scheduleFailed = !(await flushSchedules(id, entry));
-        return;
-      }
-      // A nested mutation hands its calls to its caller's scope.
-      const parent = entry.parentRefId ? txnMap.get(entry.parentRefId) : undefined;
-      if (!parent) {
+      const closed = mutationScopes.close(activeTxnRefId, settled);
+      if (closed.lost) {
         scheduleFailed = true;
         console.warn(`[runtime] ${id} succeeded after its calling mutation ended; its scheduled functions were dropped`);
         return;
       }
-      parent.schedules = [...(parent.schedules ?? []), ...entry.schedules];
+      scheduleFailed = !(await flushSchedules(id, projectId, closed.send));
     };
 
     let res: InvokeResponse;
