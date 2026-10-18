@@ -25,7 +25,8 @@ function renderPage() {
 describe('LogExplorerPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(api.get).mockResolvedValue({ data: LOGS } as never);
+    // The server answers { logs: "..." }, not the bare text.
+    vi.mocked(api.get).mockResolvedValue({ data: { logs: LOGS } } as never);
   });
 
   test('shows the log lines coloured by level', async () => {
@@ -56,7 +57,7 @@ describe('LogExplorerPage', () => {
   });
 
   test('says there are no logs when the database has written none', async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: '' } as never);
+    vi.mocked(api.get).mockResolvedValue({ data: { logs: '' } } as never);
     renderPage();
     expect(await screen.findByText('No logs available')).toBeInTheDocument();
   });

@@ -142,11 +142,12 @@ describe('useProvisioning hooks', () => {
     expect(api.post).toHaveBeenCalled();
   });
 
-  test('useLogs GETs with lines param', async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ data: 'log line\n' } as never);
+  test('useLogs GETs with lines param and answers the log text', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ data: { logs: 'log line\n' } } as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useLogs('p1', 50), { wrapper: Wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.get).toHaveBeenCalledWith('/provision/p1/logs?lines=50');
+    expect(result.current.data).toBe('log line\n');
   });
 });

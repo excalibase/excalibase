@@ -16,6 +16,16 @@ import { engineLabel } from '../utils/engine';
 
 type Tab = 'overview' | 'credentials' | 'backups' | 'logs';
 
+const NOT_AVAILABLE = 'Not available';
+
+function usage(value: number | null | undefined, format: (amount: number) => string): string {
+  return value == null ? NOT_AVAILABLE : format(value);
+}
+
+function optional(value: number | null | undefined, format: (amount: number) => string): string | undefined {
+  return value == null ? undefined : format(value);
+}
+
 export function InstanceDetailPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -25,7 +35,7 @@ export function InstanceDetailPage() {
   const { data: metrics } = useCurrentMetrics(projectId!);
   const { data: backupData, refetch: refetchBackups } = useListBackups(projectId!);
   const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
-  const { data: logs } = useLogs(projectId!, 200);
+  const { data: logs, error: logsError } = useLogs(projectId!, 200);
   const deprovision = useDeprovisionDatabase();
   const triggerBackup = useTriggerBackup();
 
@@ -92,13 +102,12 @@ export function InstanceDetailPage() {
         <StageTimeline currentStage={instance.currentStage} failureReason={instance.failureReason} />
       </div>
 
-      {/* Live metrics. Metric fields are nullable while the project is
-          spinning up or scaling — render "—" rather than NaN. */}
+      {/* Live metrics. A figure the platform could not measure says so. */}
       {metrics && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard icon={<Cpu className="w-4 h-4" />}      label="CPU"         value={metrics.cpuUsagePercent == null ? '—' : `${Math.round(metrics.cpuUsagePercent)}%`}    subtitle={metrics.cpuUsageCores == null ? '—' : `${metrics.cpuUsageCores.toFixed(1)} cores`}  color="text-blue-400" />
-          <MetricCard icon={<Database className="w-4 h-4" />}  label="Memory"      value={metrics.memoryUsagePercent == null ? '—' : `${Math.round(metrics.memoryUsagePercent)}%`} subtitle={metrics.memoryUsageMB == null ? '—' : `${metrics.memoryUsageMB} MB`}                color="text-purple-400" />
-          <MetricCard icon={<HardDrive className="w-4 h-4" />} label="Disk"        value={metrics.diskUsagePercent == null ? '—' : `${Math.round(metrics.diskUsagePercent)}%`}   subtitle={metrics.diskUsageGB == null ? '—' : `${metrics.diskUsageGB} GB`}                  color="text-orange-400" />
+          <MetricCard icon={<Cpu className="w-4 h-4" />}      label="CPU"         value={usage(metrics.cpuUsagePercent, (percent) => `${Math.round(percent)}%`)}    subtitle={optional(metrics.cpuUsageCores, (cores) => `${cores.toFixed(1)} cores`)}  color="text-blue-400" />
+          <MetricCard icon={<Database className="w-4 h-4" />}  label="Memory"      value={usage(metrics.memoryUsagePercent, (percent) => `${Math.round(percent)}%`)} subtitle={optional(metrics.memoryUsageMB, (megabytes) => `${megabytes} MB`)}                color="text-purple-400" />
+          <MetricCard icon={<HardDrive className="w-4 h-4" />} label="Disk"        value={usage(metrics.diskUsagePercent, (percent) => `${Math.round(percent)}%`)}   subtitle={optional(metrics.diskUsageGB, (gigabytes) => `${gigabytes} GB`)}                  color="text-orange-400" />
           <MetricCard icon={<Users className="w-4 h-4" />}     label="Connections" value={metrics.activeConnections ?? '—'}                                                       subtitle={`/ ${metrics.maxConnections ?? '—'} max`}                                            color="text-green-400" />
         </div>
       )}
@@ -148,7 +157,12 @@ export function InstanceDetailPage() {
 
           {tab === 'logs' && (
             <div>
-              {logs == null && (
+              {logsError != null && (
+                <p role="alert" className="text-center py-10 text-red-400 text-sm">
+                  {serverErrorMessage(logsError, 'The logs could not be loaded')}
+                </p>
+              )}
+              {logs == null && logsError == null && (
                 <div className="text-center py-10 text-text-secondary text-sm">Loading logs…</div>
               )}
               {logs?.trim() === '' && (

@@ -323,8 +323,8 @@ export const useLogs = (projectId: string, lines: number = 100) => {
   return useQuery({
     queryKey: ['logs', projectId, lines],
     queryFn: async () => {
-      const response = await api.get<string>(`/provision/${projectId}/logs?lines=${lines}`);
-      return response.data;
+      const response = await api.get<{ logs: string }>(`/provision/${projectId}/logs?lines=${lines}`);
+      return response.data.logs;
     },
     enabled: !!projectId,
     refetchInterval: 15000,
