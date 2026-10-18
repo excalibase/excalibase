@@ -721,13 +721,10 @@ func (h *FunctionHandler) mergeSecrets(projectID string, builtins map[string]str
 // so first deploy, secret-triggered redeploy and cold-start replay all ship
 // byte-identical bundles.
 //
-// Phase 5b: the function's captured SchemaJSON is injected as a preamble so
-// the worker-side schema helper (`runtime/schema.ts`) can pre-flight
-// collection access and search/vector index lookup. Bundles without a
-// defineSchema call get no preamble — the runtime falls back to permissive
-// mode. json.RawMessage is verbatim JSON, so embedding it as a JS object
-// literal is safe: the source was JSON-marshalled by ExtractSchema and the
-// slot name matches what deno-server/runtime/schema.ts reads.
+// Phase 5b: the function's captured SchemaJSON is injected as a preamble.
+// Nothing in the runtime reads it since ctx.db was removed (EXC-625); it
+// stays until the deploy-time schema capture goes. json.RawMessage is
+// verbatim JSON, so embedding it as a JS object literal is safe.
 //
 // allowedHosts is the project's effective egress allowlist (EXC-348); the
 // runtime grants the worker `net` access to exactly these hosts.
