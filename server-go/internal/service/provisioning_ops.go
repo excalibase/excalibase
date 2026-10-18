@@ -109,16 +109,23 @@ func (s *ProvisioningService) SearchLogs(ctx context.Context, projectID string, 
 		return "", err
 	}
 
+	lokiAnswered := false
 	if s.lokiURL != "" {
-		if out, err := s.getLogsFromLoki(ctx, inst.Namespace, projectID, search); err == nil {
+		out, err := s.getLogsFromLoki(ctx, inst.Namespace, projectID, search)
+		if err == nil && out != "" {
 			return out, nil
 		}
+		// No lines yet (a pod the collector has not shipped) or no answer: the live pod log.
+		lokiAnswered = err == nil
 	}
 
 	// Never a command on /controller/log/postgres.csv: CNPG's collector reads that pipe.
 	out, err := s.k8sClient.PodLogTail(ctx, inst.Namespace, projectID+primaryPodSuffix, "postgres", int64(search.Lines))
 	if err != nil {
 		log.Printf("logs of %s: pod log: %v", projectID, err)
+		if lokiAnswered {
+			return "", nil
+		}
 		return "", ErrLogsUnavailable
 	}
 	return filterLogLines(out, search.Term), nil

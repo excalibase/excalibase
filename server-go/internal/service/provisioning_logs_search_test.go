@@ -170,3 +170,25 @@ func TestLogSearchWithoutLokiFiltersThePodLog(t *testing.T) {
 	}
 	assertNoExecIntoThePod(t, mock)
 }
+
+// Loki holds nothing yet for a pod the collector has not shipped: the live pod
+// log answers instead of an empty page.
+func TestLogSearchFallsBackToThePodLogWhenLokiHasNoLines(t *testing.T) {
+	svc, _, mock := setupOpsTest(t)
+	mock.PodLogs[testOpsDBNS+"/ops-db-postgres-1"] = "database system is ready\n"
+	server := httptest.NewServer(&fakeLoki{lines: map[string][]string{}})
+	defer server.Close()
+	svc.SetLokiURL(server.URL)
+
+	logs, err := svc.SearchLogs(context.Background(), testOpsDB, LogSearch{Lines: 10})
+	if err != nil || logs != "database system is ready\n" {
+		t.Fatalf("logs = %q, err = %v", logs, err)
+	}
+
+	// Loki answered: a pod that cannot be read is no outage, just no lines.
+	delete(mock.PodLogs, testOpsDBNS+"/ops-db-postgres-1")
+	logs, err = svc.SearchLogs(context.Background(), testOpsDB, LogSearch{Lines: 10})
+	if err != nil || logs != "" {
+		t.Fatalf("logs = %q, err = %v", logs, err)
+	}
+}
