@@ -153,3 +153,38 @@ func TestEnsureDenoRuntime_LoginGoneRemovesTheSecretAndReference(t *testing.T) {
 		t.Fatal("the secret must be deleted")
 	}
 }
+
+// A runtime made from an older image moves to the configured one, its fence
+// with it: a runtime fix (EXC-625's pool options) otherwise never reaches a
+// project whose runtime already exists.
+func TestEnsureDenoRuntime_ExistingRuntimeMovesToTheConfiguredImage(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	old := buildDenoDeployment(egressNS, DenoRuntimeSpec{Image: "excalibase/deno-runtime:old", RuntimeSecret: "s"})
+	if _, err := c.clientset.AppsV1().Deployments(egressNS).Create(ctx, old, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EnsureDenoRuntime(ctx, egressNS, DenoRuntimeSpec{Image: egressImage, RuntimeSecret: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	pod := denoDeployment(t, c).Spec.Template.Spec
+	if pod.Containers[0].Image != egressImage || pod.InitContainers[0].Image != egressImage {
+		t.Fatalf("runtime image %q, fence image %q, want %q", pod.Containers[0].Image, pod.InitContainers[0].Image, egressImage)
+	}
+}
+
+// A caller that names no image leaves the runtime's image alone.
+func TestEnsureDenoRuntime_NoImageNamedKeepsTheRuntimeImage(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	old := buildDenoDeployment(egressNS, DenoRuntimeSpec{Image: "excalibase/deno-runtime:old", RuntimeSecret: "s"})
+	if _, err := c.clientset.AppsV1().Deployments(egressNS).Create(ctx, old, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EnsureDenoRuntime(ctx, egressNS, DenoRuntimeSpec{RuntimeSecret: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := denoDeployment(t, c).Spec.Template.Spec.Containers[0].Image; got != "excalibase/deno-runtime:old" {
+		t.Fatalf("image changed to %q", got)
+	}
+}

@@ -61,9 +61,6 @@ func denoTierResources(tier string) (cpuReq, cpuLim, memReq, memLim string) {
 // disagree. The runtime is reachable at
 // http://deno-runtime.{namespace}.svc.cluster.local:8000
 func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec DenoRuntimeSpec) error {
-	if spec.Image == "" {
-		spec.Image = "excalibase/deno-runtime:latest"
-	}
 	existing, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, denoRuntimeName, metav1.GetOptions{})
 	switch {
 	case err == nil:
@@ -74,6 +71,9 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 		return c.reconcileDenoEgress(ctx, namespace, existing, spec)
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("check existing deployment: %w", err)
+	}
+	if spec.Image == "" {
+		spec.Image = "excalibase/deno-runtime:latest"
 	}
 
 	// The fence first: the runtime's pod must never start without it.
@@ -117,16 +117,23 @@ func (c *Client) reconcileDenoEgress(ctx context.Context, namespace string, dep 
 	}
 	want := workerAllowedHosts(spec)
 	settings := runtimeSettingsEnv(spec)
+	// A runtime made from an older image moves to the configured one (EXC-625).
+	image := dep.Spec.Template.Spec.Containers[0].Image
+	imageChanged := spec.Image != "" && spec.Image != image
+	if imageChanged {
+		image = spec.Image
+	}
 	// A runtime made before EXC-622, or fenced with an oversized request, gets the wanted fence.
-	fence := denoFenceContainer(dep.Spec.Template.Spec.Containers[0].Image, spec.Tier)
+	fence := denoFenceContainer(image, spec.Tier)
 	initContainers, fenceChanged := withDenoFence(dep.Spec.Template.Spec.InitContainers, fence)
 	if err := c.applyDenoDBSecret(ctx, namespace, spec.DatabaseURL); err != nil {
 		return err
 	}
-	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) && hasDBEnv(dep, spec.DatabaseURL) && !fenceChanged {
+	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) && hasDBEnv(dep, spec.DatabaseURL) && !fenceChanged && !imageChanged {
 		return nil
 	}
 	updated := dep.DeepCopy()
+	updated.Spec.Template.Spec.Containers[0].Image = image
 	setAllowedHosts(updated, want)
 	setEnv(updated, settings)
 	setDBEnv(updated, spec.DatabaseURL)
