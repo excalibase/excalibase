@@ -385,3 +385,30 @@ func TestMySQLSetUserPasswords_RevokesTheAppRolesAuthAccess(t *testing.T) {
 		t.Fatalf("the restore's batch keeps excalibase_app's auth access:\n%s", last)
 	}
 }
+
+// EXC-635: a restored copy's end-user sessions are ended on its primary.
+func TestMySQLForgetEndUserSessions_RunsOnThePrimary(t *testing.T) {
+	mock, prov := newMySQLTest(t)
+	applyTestCluster(t, mock, mysqlFree)
+	_ = unstructured.SetNestedField(mock.CRDs[mysqlClusterKey].Object, int64(0), "status", "currentPrimaryIndex")
+	if err := prov.ForgetEndUserSessions(context.Background(), mysqlTestNS, mysqlTestProject); err != nil {
+		t.Fatalf("ForgetEndUserSessions: %v", err)
+	}
+	if len(mock.ExecStdin) != 1 || mock.ExecStdin[0] != MySQLEndUserSessionsRevokeSQL {
+		t.Fatalf("stdin %v", mock.ExecStdin)
+	}
+}
+
+func TestMySQLEndUserSessionsRevokeSQL_KeepsTheUsers(t *testing.T) {
+	for _, want := range []string{
+		"DELETE FROM `auth`.`refresh_tokens`", "DELETE FROM `auth`.`password_reset_tokens`",
+		"DELETE FROM `auth`.`email_verification_tokens`", "UPDATE `auth`.`api_keys` SET revoked_at",
+	} {
+		if !strings.Contains(MySQLEndUserSessionsRevokeSQL, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(MySQLEndUserSessionsRevokeSQL, "`users`") {
+		t.Error("the end users themselves must be kept")
+	}
+}

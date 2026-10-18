@@ -45,6 +45,12 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 	if err := mysql.EnsurePlatformUsers(ctx, inst.Namespace, inst.ProjectID, inst.DatabaseName, passwords); err != nil {
 		return pc.Fail(err)
 	}
+	if inst.RestoredFromProjectID != "" {
+		pc.SetStep("end the source's end-user sessions")
+		if err := mysql.ForgetEndUserSessions(ctx, inst.Namespace, inst.ProjectID); err != nil {
+			return pc.Fail(err)
+		}
+	}
 	inst.Username = roleAdmin
 	for role, password := range map[string]string{
 		roleAdmin: passwords.Admin, roleApp: passwords.App, roleAuthAdmin: passwords.AuthAdmin, roleWatcher: passwords.Watcher,

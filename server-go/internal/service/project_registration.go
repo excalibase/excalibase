@@ -238,6 +238,7 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 		adminPassword:  inst.Password,
 		resetPasswords: opts.ResetRolePasswords,
 		resetAdmin:     opts.ResetAdminPassword,
+		restored:       inst.RestoredFromProjectID != "",
 		documentDB:     inst.DocumentDB,
 	}
 	canExecSQL := (s.k8sClient != nil) || (s.dockerClient != nil)
@@ -306,6 +307,9 @@ type projectRoleSpec struct {
 	adminPassword  string
 	resetPasswords bool
 	resetAdmin     bool
+	// restored is a copy registered from another project's backup: what the
+	// source issued its end users must not open it (EXC-635).
+	restored bool
 	// documentDB projects run no watcher on a single host.
 	documentDB bool
 }
@@ -387,6 +391,9 @@ func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicat
 		pgroles.OwnerAccessSQL(spec.adminUsername)
 	if spec.resetPasswords {
 		roleSQL += BuildProjectRoleResetSQL(resetTargets(spec, creds))
+	}
+	if spec.restored {
+		roleSQL += endUserSessionsRevokeSQL
 	}
 	return roleSQL
 }

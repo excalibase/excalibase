@@ -27,6 +27,21 @@ const MySQLAuthAdminPrivileges = "SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER,
 // tables, and a cluster restored from an older backup still carries it.
 const MySQLAppAuthRevokeSQL = "REVOKE IF EXISTS ALL PRIVILEGES ON `" + MySQLAuthDatabase + "`.* FROM '" + MySQLUserApp + "'@'%' IGNORE UNKNOWN USER;"
 
+// MySQLEndUserSessionsRevokeSQL ends what the source project issued the end
+// users of a copy restored from its backup, keeping the users (EXC-635).
+// Tables the auth service has not created yet are skipped.
+var MySQLEndUserSessionsRevokeSQL = mysqlIfAuthTable("refresh_tokens", "DELETE FROM `auth`.`refresh_tokens`") +
+	mysqlIfAuthTable("password_reset_tokens", "DELETE FROM `auth`.`password_reset_tokens`") +
+	mysqlIfAuthTable("email_verification_tokens", "DELETE FROM `auth`.`email_verification_tokens`") +
+	mysqlIfAuthTable("api_keys", "UPDATE `auth`.`api_keys` SET revoked_at = UTC_TIMESTAMP(6) WHERE revoked_at IS NULL")
+
+// mysqlIfAuthTable runs statement when the auth database holds table.
+func mysqlIfAuthTable(table, statement string) string {
+	return fmt.Sprintf("SET @statement = IF(EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s), %s, 'DO 0');\n"+
+		"PREPARE statement FROM @statement;\nEXECUTE statement;\nDEALLOCATE PREPARE statement;\n",
+		mysqlString(MySQLAuthDatabase), mysqlString(table), mysqlString(statement))
+}
+
 // MySQLPasswords are the passwords the platform users are created with.
 type MySQLPasswords struct {
 	Admin, App, AuthAdmin, Watcher string
