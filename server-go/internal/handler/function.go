@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -553,8 +554,14 @@ func (t dbTarget) url(host string) string {
 	if t.mysql {
 		return domain.MySQLURL(host, t.port, t.user, t.pass, t.db)
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=require",
-		t.user, t.pass, net.JoinHostPort(host, t.port), t.db)
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(t.user, t.pass),
+		Host:     net.JoinHostPort(host, t.port),
+		Path:     "/" + t.db,
+		RawQuery: "sslmode=require",
+	}
+	return u.String()
 }
 
 // List returns all functions belonging to the project.
