@@ -188,31 +188,18 @@ export const attachUpload = mutation({
 });
 ```
 
-### 2. Server: attach the resulting `storageId` to a row
+### 2. Attach the resulting `storageId` to a row
 
-```ts
-import { mutation, v } from "@excalibase/server";
-
-export const sendImage = mutation({
-  args: v.object({
-    storageId: v.id("_storage"),
-    author: v.string(),
-  }),
-  handler: async (ctx, { storageId, author }) => {
-    await ctx.db.collection("messages").insert({
-      author,
-      image: storageId,
-    });
-  },
-});
-```
+Save the `storageId` on your row through the project's GraphQL or REST
+API, from the client SDK or from a function that calls the API with a
+project key kept as a function secret. Functions have no `ctx.db`.
 
 ### 3. Client (excalibase-sdk-js)
 
 ```ts
 import { db } from "./excalibase";
 
-async function uploadAndAttach(blob: Blob, author: string) {
+async function upload(blob: Blob): Promise<string> {
   // The upload is three steps, because the bytes are staged before they
   // become an object:
   //   a) call the mutation that mints the URL, declaring the blob's type
@@ -236,8 +223,8 @@ async function uploadAndAttach(blob: Blob, author: string) {
     uploadId: minted.uploadId,
   });
 
-  // Pass the id to whatever mutation persists it on a row.
-  await db.functions.messages.sendImage({ storageId: minted.storageId, author });
+  // Save the id on a row through the project's API (step 2).
+  return minted.storageId;
 }
 ```
 
@@ -282,19 +269,14 @@ client can fetch directly. Render images, video, etc. from query
 results without proxying through the function runtime.
 
 ```ts
+import { z } from "zod";
 import { query } from "@excalibase/server";
 
-export const recentMessages = query({
-  args: v.object({}),
-  handler: async (ctx) => {
-    const msgs = await ctx.db.collection("messages").find();
-    return Promise.all(
-      msgs.map(async (m) => ({
-        ...m,
-        url: await ctx.storage.getUrl(m.image as never),
-      })),
-    );
-  },
+// The caller passes the storage ids it read from its rows.
+export default query({
+  args: z.object({ storageIds: z.array(z.string()) }),
+  handler: async (ctx, { storageIds }) =>
+    Promise.all(storageIds.map((id) => ctx.storage.getUrl(id as never))),
 });
 ```
 
@@ -305,17 +287,17 @@ client-rendering flows prefer `getUrl`.
 ## Deleting
 
 `ctx.storage.delete(id)` is idempotent — calling it on a missing id is
-a no-op. Use it from a mutation whenever you remove the row that
-referenced the blob:
+a no-op. Call it from a mutation when you remove the row that referenced
+the blob through the project's API:
 
 ```ts
-export const deleteMessage = mutation({
-  args: v.object({ id: v.id("messages") }),
-  handler: async (ctx, { id }) => {
-    const msg = await ctx.db.collection("messages").getById(id);
-    if (!msg) return;
-    await ctx.db.collection("messages").delete({ _id: id });
-    if (msg.image) await ctx.storage.delete(msg.image as never);
+import { z } from "zod";
+import { mutation } from "@excalibase/server";
+
+export default mutation({
+  args: z.object({ storageId: z.string() }),
+  handler: async (ctx, { storageId }) => {
+    await ctx.storage.delete(storageId as never);
   },
 });
 ```

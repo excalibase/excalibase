@@ -116,7 +116,8 @@ Empty array on the first call is fine. The user has no rows yet.
   `using (user_id = current_setting('request.user_id', true))`.
 * **Edge functions**: write a Deno handler, deploy it with `curl`,
   invoke it at `/functions/v1/<projectId>/<fnId>`.
-  See [functions-query.md](functions-query.md). Deployed functions
+  Functions read and write data through the project's GraphQL or REST
+  API with a project key; `ctx.db` is not available. Deployed functions
   survive runtime restarts — see
   [functions-runtime-replay.md](functions-runtime-replay.md). Outbound
   `fetch()` is off until the project allowlists hosts — see
