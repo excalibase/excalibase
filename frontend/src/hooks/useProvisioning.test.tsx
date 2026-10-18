@@ -150,4 +150,12 @@ describe('useProvisioning hooks', () => {
     expect(api.get).toHaveBeenCalledWith('/provision/p1/logs?lines=50');
     expect(result.current.data).toBe('log line\n');
   });
+
+  test('useLogs sends the search term and range for the server to search stored logs', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ data: { logs: '' } } as never);
+    const { Wrapper } = makeWrapper();
+    const { result } = renderHook(() => useLogs('p1', 50, { since: '7d', search: 'a&b "c"' }), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(api.get).toHaveBeenCalledWith('/provision/p1/logs?lines=50&since=7d&q=a%26b+%22c%22');
+  });
 });

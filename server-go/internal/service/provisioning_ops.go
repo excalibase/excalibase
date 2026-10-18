@@ -12,8 +12,11 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -69,40 +72,113 @@ var ErrLogsUnavailable = errors.New("the database's logs are not available right
 // maxLokiAnswer bounds one Loki reply: 5000 lines with their labels.
 const maxLokiAnswer = 32 << 20
 
+// ErrInvalidLogSearch is a search term the log read cannot use.
+var ErrInvalidLogSearch = errors.New("the log search term must be printable text of at most 200 characters")
+
+// maxLogSearchTerm bounds the Logs page's search term.
+const maxLogSearchTerm = 200
+
+// defaultLogSearchWindow is how far back stored logs are read when no range is asked.
+const defaultLogSearchWindow = time.Hour
+
+// LogSearch narrows a read of a project's database log.
+type LogSearch struct {
+	Lines int
+	// Term is matched literally and case-insensitively; empty keeps every line.
+	Term string
+	// Since is how far back Loki is searched; zero is an hour. The live pod log
+	// has only what the pod printed since it started.
+	Since time.Duration
+}
+
 // GetLogs returns the last N lines of the project's postgres pod log.
+func (s *ProvisioningService) GetLogs(ctx context.Context, projectID string, lines int) (string, error) {
+	return s.SearchLogs(ctx, projectID, LogSearch{Lines: lines})
+}
+
+// SearchLogs returns the last matching lines of the project's postgres log.
 // Prefers Loki when configured (it keeps logs across pod restarts) and reads
 // the pod's log through the Kubernetes API when Loki is unset or does not answer.
-func (s *ProvisioningService) GetLogs(ctx context.Context, projectID string, lines int) (string, error) {
+// Either way only the project's own namespace is read.
+func (s *ProvisioningService) SearchLogs(ctx context.Context, projectID string, search LogSearch) (string, error) {
+	if err := validateLogSearchTerm(search.Term); err != nil {
+		return "", err
+	}
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return "", err
 	}
 
 	if s.lokiURL != "" {
-		if out, err := s.getLogsFromLoki(ctx, inst.Namespace, projectID, lines); err == nil {
+		if out, err := s.getLogsFromLoki(ctx, inst.Namespace, projectID, search); err == nil {
 			return out, nil
 		}
 	}
 
 	// Never a command on /controller/log/postgres.csv: CNPG's collector reads that pipe.
-	out, err := s.k8sClient.PodLogTail(ctx, inst.Namespace, projectID+primaryPodSuffix, "postgres", int64(lines))
+	out, err := s.k8sClient.PodLogTail(ctx, inst.Namespace, projectID+primaryPodSuffix, "postgres", int64(search.Lines))
 	if err != nil {
 		log.Printf("logs of %s: pod log: %v", projectID, err)
 		return "", ErrLogsUnavailable
 	}
-	return out, nil
+	return filterLogLines(out, search.Term), nil
 }
 
-// getLogsFromLoki queries Loki for the last N postgres pod lines from the
-// project's namespace. Returns plain-text concatenated lines (one per row)
+func validateLogSearchTerm(term string) error {
+	if len(term) > maxLogSearchTerm || !utf8.ValidString(term) {
+		return ErrInvalidLogSearch
+	}
+	for _, r := range term {
+		if unicode.IsControl(r) {
+			return ErrInvalidLogSearch
+		}
+	}
+	return nil
+}
+
+// filterLogLines keeps the lines containing term, ignoring case.
+func filterLogLines(logs, term string) string {
+	if term == "" {
+		return logs
+	}
+	needle := strings.ToLower(term)
+	var sb strings.Builder
+	for _, line := range strings.Split(logs, "\n") {
+		if line != "" && strings.Contains(strings.ToLower(line), needle) {
+			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.String()
+}
+
+// projectLogQL selects the project's postgres pods in its own namespace, both
+// labels set by the collector from Kubernetes metadata, then keeps the lines
+// containing term: a quoted literal, case-insensitive regex, so nothing in the
+// term can leave the filter string or widen the selector.
+func projectLogQL(namespace, projectID, term string) string {
+	selector := fmt.Sprintf("{namespace=%s,cnpg_io_cluster=%s}", strconv.Quote(namespace), strconv.Quote(projectID+postgresSuffix))
+	if term == "" {
+		return selector
+	}
+	return selector + " |~ " + strconv.Quote("(?i)"+regexp.QuoteMeta(term))
+}
+
+// getLogsFromLoki queries Loki for the last matching postgres pod lines from
+// the project's namespace. Returns plain-text concatenated lines (one per row)
 // so the existing handler-side response shape stays unchanged.
-func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, namespace, projectID string, lines int) (string, error) {
+func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, namespace, projectID string, search LogSearch) (string, error) {
+	lines := search.Lines
 	if lines <= 0 || lines > 5000 {
 		lines = 100
 	}
-	logql := fmt.Sprintf(`{namespace=%q,cnpg_io_cluster=%q}`, namespace, projectID+postgresSuffix)
+	window := search.Since
+	if window <= 0 {
+		window = defaultLogSearchWindow
+	}
+	logql := projectLogQL(namespace, projectID, search.Term)
 	end := time.Now()
-	start := end.Add(-1 * time.Hour)
+	start := end.Add(-window)
 	u := fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&start=%d&end=%d&limit=%d&direction=backward",
 		s.lokiURL, urlEscape(logql), start.UnixNano(), end.UnixNano(), lines)
 
