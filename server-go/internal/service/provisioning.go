@@ -1118,8 +1118,37 @@ type deletionStep struct {
 // (BACKUPS_PENDING_DELETE, retried via PurgeBackups) because by then the
 // project's resources really are gone; it still reports the failure.
 func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projectID string, opts DeprovisionOptions) error {
-	if err := s.checkDeletable(projectID, opts); err != nil {
+	teardown, err := s.beginDeprovision(ctx, projectID, opts)
+	if err != nil {
 		return err
+	}
+	return teardown()
+}
+
+// DeprovisionInBackground claims the project and records DELETING as
+// DeprovisionWithOptions does, then runs the teardown detached from the
+// request: waiting out a namespace outlasts what the edge waits for one
+// request. The outcome is on the project: the row gone, or DELETING with the
+// failing step.
+func (s *ProvisioningService) DeprovisionInBackground(ctx context.Context, projectID string, opts DeprovisionOptions) error {
+	teardown, err := s.beginDeprovision(ctx, projectID, opts)
+	if err != nil {
+		return err
+	}
+	s.startInBackground(func() {
+		if err := teardown(); err != nil {
+			log.Printf("deletion of %s did not finish: %v", projectID, err)
+		}
+	})
+	return nil
+}
+
+// beginDeprovision takes the lease and records DELETING. The returned
+// teardown runs the steps and releases the lease. It does not depend on the
+// caller staying connected: a teardown cut short leaves the row in DELETING.
+func (s *ProvisioningService) beginDeprovision(ctx context.Context, projectID string, opts DeprovisionOptions) (func() error, error) {
+	if err := s.checkDeletable(projectID, opts); err != nil {
+		return nil, err
 	}
 
 	// DELETE takes the same per-project lease as pause and resume. A delete
@@ -1128,42 +1157,55 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 	// better than preempting a shutdown halfway through. The lease cannot
 	// hold it off indefinitely: every lifecycle operation is bounded by its
 	// own timeout and releases on every path, including a panic.
+	ctx = context.WithoutCancel(ctx)
 	release, claimed, err := s.claimer().Claim(ctx, projectID, OperationDeletion)
 	if err != nil {
-		return fmt.Errorf("claim project for deletion: %w", err)
+		return nil, fmt.Errorf("claim project for deletion: %w", err)
 	}
 	if !claimed {
 		// The holder may be a pause or a resume, and for an advisory lease
 		// we cannot tell which. Saying "a deletion is already running" was a
 		// guess, and usually a wrong one.
-		return fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
+		return nil, fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
 	}
-	defer release()
+	inst, deleteBackups, err := s.claimDeletion(projectID, opts)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	return func() error {
+		defer release()
+		for _, step := range s.deletionSteps(deleteBackups) {
+			if err := step.run(ctx, inst); err != nil {
+				return s.recordDeletionFailure(inst, step.name, err)
+			}
+		}
+		return nil
+	}, nil
+}
+
+// claimDeletion moves the row to DELETING under the lease and returns the
+// claimed row.
+func (s *ProvisioningService) claimDeletion(projectID string, opts DeprovisionOptions) (*domain.DatabaseInstance, bool, error) {
 	inst, err := s.recheckUnderLease(projectID, opts)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
-
 	deleteBackups, err := s.store.BeginDeletion(projectID, opts.DeleteBackups)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	for _, observer := range s.deletionObservers {
 		observer.ProjectDeleting(projectID)
 	}
 	if deleteBackups && s.backupPurger == nil {
-		return s.recordDeletionFailure(inst, domain.DeletionStepDeleteBackups, ErrBackupPurgeNotConfigured)
+		return nil, false, s.recordDeletionFailure(inst, domain.DeletionStepDeleteBackups, ErrBackupPurgeNotConfigured)
 	}
 	// Work from the claimed row, not the pre-claim snapshot.
 	if inst, err = s.store.FindByProjectID(projectID); err != nil || inst == nil {
-		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
+		return nil, false, fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
 	}
-	for _, step := range s.deletionSteps(deleteBackups) {
-		if err := step.run(ctx, inst); err != nil {
-			return s.recordDeletionFailure(inst, step.name, err)
-		}
-	}
-	return nil
+	return inst, deleteBackups, nil
 }
 
 // DeletionObserver is told when a project is claimed for teardown. It exists

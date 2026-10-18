@@ -83,6 +83,9 @@ export interface DatabaseInstance {
   currentStage: ProvisioningStage;
   currentStep?: string;
   failureReason?: string;
+  // A teardown that stopped: the step it stopped at and why.
+  deletionStep?: string;
+  deletionError?: string;
   failureStage?: ProvisioningStage;
   failureStep?: string;
   rollbackLog?: string;

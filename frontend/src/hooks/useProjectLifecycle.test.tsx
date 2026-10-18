@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useDeprovisionDatabase, usePauseProject, useResumeProject } from './useProvisioning';
+import { useForceDropProject } from './useAdmin';
 import { api } from '../api/client';
 
 vi.mock('../api/client', () => ({
@@ -88,5 +89,33 @@ describe('project lifecycle follows the project', () => {
     result.current.mutate('p1');
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect((result.current.error as Error).message).toMatch(/not confirmed stopped/);
+  });
+
+  test('a deletion torn down at once is followed until the project is gone', async () => {
+    vi.mocked(api.delete).mockResolvedValueOnce({ status: 202, data: { projectId: 'p1', status: 'DELETING' } } as never);
+    projectReads({ status: 'DELETING' });
+    vi.mocked(api.get).mockRejectedValueOnce({ response: { status: 404 } });
+    const { result } = renderHook(() => useDeprovisionDatabase(1), { wrapper: wrapper() });
+    result.current.mutate('p1');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  test('a teardown that stopped at a step fails with its error', async () => {
+    vi.mocked(api.delete).mockResolvedValueOnce({ status: 202, data: { projectId: 'p1', status: 'DELETING' } } as never);
+    projectReads({ status: 'DELETING', deletionStep: 'DELETE_VAULT', deletionError: 'vault is sealed' });
+    const { result } = renderHook(() => useDeprovisionDatabase(1), { wrapper: wrapper() });
+    result.current.mutate('p1');
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect((result.current.error as Error).message).toMatch(/vault is sealed/);
+  });
+
+  test('a force drop does not wait on the teardown and is followed until the project is gone', async () => {
+    vi.mocked(api.delete).mockResolvedValueOnce({ status: 202, data: { projectId: 'p1', status: 'DELETING' } } as never);
+    vi.mocked(api.get).mockRejectedValueOnce({ response: { status: 404 } });
+    const { result } = renderHook(() => useForceDropProject(1), { wrapper: wrapper() });
+    result.current.mutate('p1');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(api.delete).toHaveBeenCalledWith('/admin/projects/p1', RESPOND_ASYNC);
   });
 });

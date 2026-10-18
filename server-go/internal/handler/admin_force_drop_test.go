@@ -161,6 +161,35 @@ func TestAdmin_ForceDropProject_HappyPath(t *testing.T) {
 	}
 }
 
+// The edge gives up after a minute; a force drop waits out the namespace for
+// longer. A caller that prefers not to wait is answered once DELETING is recorded.
+func TestAdmin_ForceDropProject_PreferRespondAsyncAnswers202ThenDeletes(t *testing.T) {
+	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj-x": {ProjectID: "proj-x", OrgID: "org-1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeDocker, Namespace: "ctr-x"},
+	}}
+	provSvc := newDockerProvSvc(t, store)
+	runs := &[]func(){}
+	provSvc.SetBackgroundRunner(func(run func()) { *runs = append(*runs, run) })
+	h := NewAdminHandler(provSvc, store, nil, &captureAudit{}, nil, "", nil)
+
+	r := chi.NewRouter()
+	r.Delete("/api/admin/projects/{projectId}", h.ForceDropProject)
+	req := httptest.NewRequest("DELETE", "/api/admin/projects/proj-x", nil)
+	req.Header.Set("Prefer", "respond-async")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != http.StatusAccepted || body["status"] != string(domain.StatusDeleting) || len(*runs) != 1 {
+		t.Fatalf("ForceDrop: %d %s with %d runs, want 202 DELETING and the teardown started", w.Code, w.Body.String(), len(*runs))
+	}
+	(*runs)[0]()
+	if got, _ := store.FindByProjectID("proj-x"); got != nil {
+		t.Fatalf("row left behind as %s", got.Status)
+	}
+}
+
 func TestAdmin_ForceDropProject_ClearsDeletionProtection(t *testing.T) {
 	prot := true
 	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{

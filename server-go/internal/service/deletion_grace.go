@@ -138,7 +138,7 @@ func isProtected(inst *domain.DatabaseInstance) bool {
 // period ends; any other project is deleted at once. It returns the scheduled
 // row, or nil when the project was deleted.
 func (s *ProvisioningService) ScheduleDeletion(ctx context.Context, projectID string, opts DeprovisionOptions) (*domain.DatabaseInstance, error) {
-	answered, scheduled, err := s.admitDeletion(ctx, projectID, opts)
+	answered, scheduled, err := s.admitDeletion(ctx, projectID, opts, s.deprovisionNow)
 	if answered || err != nil {
 		return scheduled, err
 	}
@@ -166,7 +166,7 @@ func (s *ProvisioningService) ScheduleDeletionInBackground(ctx context.Context, 
 	if !ok {
 		return s.ScheduleDeletion(ctx, projectID, opts)
 	}
-	answered, scheduled, err := s.admitDeletion(ctx, projectID, opts)
+	answered, scheduled, err := s.admitDeletion(ctx, projectID, opts, s.deprovisionDetached)
 	if answered || err != nil {
 		return scheduled, err
 	}
@@ -196,10 +196,24 @@ func (s *ProvisioningService) finishDeletionStop(ctx context.Context, projectID 
 	}
 }
 
+// deprovisionNow deletes the project in the answer; it returns no row.
+func (s *ProvisioningService) deprovisionNow(ctx context.Context, projectID string, opts DeprovisionOptions) (*domain.DatabaseInstance, error) {
+	return nil, s.DeprovisionWithOptions(ctx, projectID, opts)
+}
+
+// deprovisionDetached answers with the row DELETING and tears it down in the background.
+func (s *ProvisioningService) deprovisionDetached(ctx context.Context, projectID string, opts DeprovisionOptions) (*domain.DatabaseInstance, error) {
+	if err := s.DeprovisionInBackground(ctx, projectID, opts); err != nil {
+		return nil, err
+	}
+	return s.store.FindByProjectID(projectID)
+}
+
 // admitDeletion answers what needs no stop: a repeated DELETE, a project
-// deleted at once, one without a database, or a refusal. answered is false
-// when the project must be stopped before it is scheduled.
-func (s *ProvisioningService) admitDeletion(ctx context.Context, projectID string, opts DeprovisionOptions) (bool, *domain.DatabaseInstance, error) {
+// deleted at once by deprovision, one without a database, or a refusal.
+// answered is false when the project must be stopped before it is scheduled.
+func (s *ProvisioningService) admitDeletion(ctx context.Context, projectID string, opts DeprovisionOptions,
+	deprovision func(context.Context, string, DeprovisionOptions) (*domain.DatabaseInstance, error)) (bool, *domain.DatabaseInstance, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
 		return true, nil, fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
@@ -209,7 +223,8 @@ func (s *ProvisioningService) admitDeletion(ctx context.Context, projectID strin
 		return true, scheduled, err
 	}
 	if !holdsCustomerData(inst.Status) {
-		return true, nil, s.DeprovisionWithOptions(ctx, projectID, opts)
+		deleting, err := deprovision(ctx, projectID, opts)
+		return true, deleting, err
 	}
 	if isProtected(inst) {
 		return true, nil, fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)

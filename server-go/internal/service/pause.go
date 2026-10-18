@@ -240,6 +240,8 @@ func (s *PauseService) resumable(ctx context.Context, pauser provisioner.Pauser,
 // is PAUSED recorded. Idempotent for an already-PAUSED project; a project
 // left in PAUSING by a previous attempt is retried from the top.
 func (s *PauseService) Pause(ctx context.Context, projectID, reason string) error {
+	// A caller hanging up must not leave the project half paused; the waits bound themselves.
+	ctx = context.WithoutCancel(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	run, err := s.beginPause(ctx, projectID, reason)
@@ -534,6 +536,7 @@ func clearPauseRetryBackoff(inst *domain.DatabaseInstance) {
 // waited out by the provisioner, then replication is restarted. Idempotent
 // for any project that is not PAUSED.
 func (s *PauseService) Resume(ctx context.Context, projectID string) error {
+	ctx = context.WithoutCancel(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	run, err := s.beginResume(ctx, projectID)

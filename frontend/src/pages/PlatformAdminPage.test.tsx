@@ -104,7 +104,7 @@ describe('PlatformAdminPage', () => {
     await userEvent.click((await screen.findAllByRole('button', { name: /Drop/ }))[0]);
 
     await waitFor(() => expect(alert).toHaveBeenCalledWith('Drop failed: the project is still restoring'));
-    expect(api.delete).toHaveBeenCalledWith('/admin/projects/p1');
+    expect(api.delete).toHaveBeenCalledWith('/admin/projects/p1', { headers: { Prefer: 'respond-async' } });
   });
 
   test("a refused revoke alerts the server's reason", async () => {
