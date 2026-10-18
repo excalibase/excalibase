@@ -224,3 +224,83 @@ func TestWithoutTheTableAnAlertIsStillRaisedOnceAndResolved(t *testing.T) {
 		t.Fatalf("history = %+v, want the one alert, resolved", history)
 	}
 }
+
+type failingMetricsHistory struct{}
+
+func (failingMetricsHistory) AppendMetrics(context.Context, *domain.DatabaseMetrics) error {
+	return context.DeadlineExceeded
+}
+
+func (failingMetricsHistory) GetMetricsHistory(context.Context, string, int) ([]domain.DatabaseMetrics, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func (failingMetricsHistory) PruneMetricsBefore(context.Context, time.Time) error {
+	return context.DeadlineExceeded
+}
+
+type failingAlertStore struct{}
+
+func (failingAlertStore) SaveAlert(context.Context, *domain.Alert) error {
+	return context.DeadlineExceeded
+}
+func (failingAlertStore) GetActiveAlerts(context.Context) ([]domain.Alert, error) {
+	return nil, context.DeadlineExceeded
+}
+func (failingAlertStore) GetActiveAlertsForProject(context.Context, string) ([]domain.Alert, error) {
+	return nil, context.DeadlineExceeded
+}
+func (failingAlertStore) GetAlertHistory(context.Context, int) ([]domain.Alert, error) {
+	return nil, context.DeadlineExceeded
+}
+
+// A table that does not answer costs the tick, never the process.
+func TestSamplingSurvivesATableThatDoesNotAnswer(t *testing.T) {
+	metrics, _, alerts, _, _ := samplerFixture(t)
+	metrics.SetHistory(failingMetricsHistory{}, alerts)
+	alerts.SetStore(failingAlertStore{})
+
+	metrics.SampleAll(context.Background())
+
+	if _, err := metrics.GetMetricsHistory(context.Background(), "live-db", 10); err == nil {
+		t.Fatal("expected the table's error")
+	}
+	if got := alerts.GetActiveAlerts(); len(got) != 0 {
+		t.Fatalf("active = %+v, want none from a failing table", got)
+	}
+}
+
+func TestAHistoryReadWithoutALimitTakesTheDefault(t *testing.T) {
+	metrics, history, _, _, _ := samplerFixture(t)
+	for minute := 0; minute < defaultHistoryPoints+5; minute++ {
+		history.rows = append(history.rows, domain.DatabaseMetrics{ProjectID: "live-db"})
+	}
+	got, _ := metrics.GetMetricsHistory(context.Background(), "live-db", 0)
+	if got.TotalPoints != defaultHistoryPoints {
+		t.Fatalf("points = %d, want %d", got.TotalPoints, defaultHistoryPoints)
+	}
+}
+
+type erroringLeader struct{}
+
+func (erroringLeader) IsLeader(context.Context) (bool, error) { return false, context.DeadlineExceeded }
+
+func TestTheSamplerTicksUntilStopped(t *testing.T) {
+	metrics, history, _, _, _ := samplerFixture(t)
+	metrics.sampleIfLeader(context.Background(), erroringLeader{})
+
+	stop := metrics.StartSampler(context.Background(), staticLeader(true), 10*time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		history.mu.Lock()
+		sampled := len(history.rows)
+		history.mu.Unlock()
+		if sampled > 0 {
+			stop()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stop()
+	t.Fatal("the sampler never sampled")
+}

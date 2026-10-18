@@ -84,3 +84,15 @@ func TestASingleHostKeepsAlertsInThePlatformDBAndSamplesNothing(t *testing.T) {
 		t.Fatal("the alert was not saved to the table")
 	}
 }
+
+// A platform store without the tables leaves history and alerts on disk.
+func TestMetricsHistoryWiringNeedsTheTables(t *testing.T) {
+	metrics := service.NewMetricsService(fakestore.NewInstances(), k8s.NewMockClient(), t.TempDir())
+	alerts := service.NewAlertingService(t.TempDir())
+	var bare storage.PlatformStore
+	wireMetricsHistory(config.AppConfig{}, bare, k8s.NewMockClient(), metrics, alerts)
+	alerts.AddAlert(domain.Alert{ID: "a1", ProjectID: "p1"})
+	if got := alerts.GetActiveAlerts(); len(got) != 1 {
+		t.Fatalf("active = %+v, want the alert kept in memory", got)
+	}
+}
