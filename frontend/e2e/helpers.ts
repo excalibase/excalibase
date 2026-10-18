@@ -154,9 +154,9 @@ export async function mockSchemaEndpoints(page: Page, projectId = 'test-project'
     { id: 'mig-1', projectId, version: 'V1', name: 'create_users', description: 'Initial users table', sql: 'CREATE TABLE users ...', status: 'APPLIED', appliedAt: '2026-01-01T00:00:00Z', executionTimeMs: 42, checksum: 'abc12345' },
   ]);
 
-  // Logs
+  // Logs, in the server's { logs } shape
   await page.route(`**/api/provision/${projectId}/logs*`, (route) =>
-    route.fulfill({ status: 200, contentType: 'text/plain', body: '2026-01-01 INFO Starting database...\n2026-01-01 WARNING Slow query detected\n2026-01-01 ERROR Connection refused' })
+    route.fulfill({ json: { logs: '2026-01-01 INFO Starting database...\n2026-01-01 WARNING Slow query detected\n2026-01-01 ERROR Connection refused' } })
   );
 
   // Indexes for tables
