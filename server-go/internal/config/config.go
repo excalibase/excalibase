@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -298,6 +299,9 @@ type AppConfig struct {
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
 	// "true": a DocumentDB project is refused rather than left to fail (EXC-394).
 	DocumentDBEnabled bool
+	// MySQLEnabled is whether the MOCO operator is installed (chart value
+	// mysql.enabled). Off unless "true"; the chart grants MOCO rights only then.
+	MySQLEnabled bool
 	// AppHostingEnabled mounts the customer-application routes (EXC-377).
 	// App hosting is built incrementally on main and must stay unreachable in
 	// any install until the epic is finished, so it defaults off; only the
@@ -552,6 +556,7 @@ func load() AppConfig {
 		Sites:                          loadSites(),
 		DarkFeatures:                   loadDarkFeatures(),
 		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
+		MySQLEnabled:                   os.Getenv("MYSQL_ENABLED") == "true",
 		AppRuntimeClass:                envOr("APP_RUNTIME_CLASS", "gvisor"),
 		AppEgressExtraDenyCIDRs:        envEgressExtraDenyCIDRs("APP_EGRESS_EXTRA_DENY_CIDRS"),
 		AppDomain:                      os.Getenv("APP_DOMAIN"),
@@ -648,8 +653,15 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: "SITES_GIT_BUILDS_ENABLED", Field: "SitesGitBuildsEnabled", Enabled: c.SitesGitBuildsEnabled},
 		{Env: "APP_WILDCARD_TLS", Field: "AppWildcardTLS", Enabled: c.AppWildcardTLS},
 		{Env: "DOCUMENTDB_ENABLED", Field: "DocumentDBEnabled", Enabled: c.DocumentDBEnabled},
+		{Env: "MYSQL_ENABLED", Field: "MySQLEnabled", Enabled: c.MySQLEnabled},
 		{Env: "TENANT_STORAGE_REQUIRE_SIZED", Field: "TenantStorageRequireSized", Enabled: c.TenantStorageRequireSized},
 	}
+}
+
+// MySQLInstalled is whether MySQL clusters may exist and count against the
+// storage budget: MOCO installed, or MySQL projects switched on (which need it).
+func (c AppConfig) MySQLInstalled() bool {
+	return c.MySQLEnabled || c.Features().Enabled(context.Background(), features.MySQL)
 }
 
 // CheckStudioURL refuses a missing or malformed STUDIO_URL. Emailed links are

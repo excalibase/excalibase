@@ -41,6 +41,8 @@ type Client struct {
 	accessTimeout time.Duration
 	// storage holds every volume this client creates or grows to the platform's budget.
 	storage StorageReserver
+	// mysql says the MOCO operator is installed and its clusters count (EXC-631).
+	mysql bool
 	// diskExec runs df in a running app; nil is ExecInPod (tests replace it).
 	diskExec func(ctx context.Context, namespace, pod, container string, cmd []string) (string, error)
 }

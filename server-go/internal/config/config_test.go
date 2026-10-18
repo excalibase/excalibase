@@ -224,6 +224,29 @@ func TestLoadAppRuntimeClass(t *testing.T) {
 	}
 }
 
+// EXC-631: the MOCO operator is there only where the chart says so (mysql.enabled).
+func TestLoadMySQLEnabled(t *testing.T) {
+	os.Unsetenv("MYSQL_ENABLED")
+	os.Unsetenv("FEATURE_MYSQL")
+	if cfg := Load(); cfg.MySQLEnabled || cfg.MySQLInstalled() {
+		t.Error("MySQL must default to off")
+	}
+	t.Setenv("MYSQL_ENABLED", "true")
+	if cfg := Load(); !cfg.MySQLEnabled || !cfg.MySQLInstalled() {
+		t.Error("MYSQL_ENABLED=true must say MOCO is installed")
+	}
+	t.Setenv("MYSQL_ENABLED", "yes")
+	if Load().MySQLEnabled {
+		t.Error("only the exact value \"true\" may enable MySQL")
+	}
+	// MySQL projects on means MOCO must be there; never undercount their disks.
+	t.Setenv("MYSQL_ENABLED", "")
+	t.Setenv("FEATURE_MYSQL", "true")
+	if !Load().MySQLInstalled() {
+		t.Error("FEATURE_MYSQL=true must count MySQL clusters")
+	}
+}
+
 // EXC-394: DocumentDB is offered only where the chart says it is installed.
 func TestLoadDocumentDBEnabled(t *testing.T) {
 	os.Unsetenv("DOCUMENTDB_ENABLED")

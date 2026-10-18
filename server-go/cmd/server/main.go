@@ -2491,7 +2491,7 @@ func buildK8sClient(cfg config.AppConfig) k8s.KubeClient {
 		ClusterRole:    cfg.ProjectNamespaceRole,
 		ServiceAccount: cfg.ProvisioningServiceAccount,
 		Namespace:      cfg.PodNamespace,
-	})
+	}).WithMySQL(cfg.MySQLInstalled())
 }
 
 // buildDocumentBrowser wires the document browser, which reaches a project's

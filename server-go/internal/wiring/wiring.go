@@ -97,6 +97,8 @@ func table(deps Deps) map[string][]Dependency {
 		// Only gates requests: the gateway plugin it vouches for is the
 		// chart's, outside this process.
 		"DOCUMENTDB_ENABLED": {},
+		// Says MOCO is installed; the operator is the chart's, outside this process.
+		"MYSQL_ENABLED": {},
 		// Checked at start-up against the cluster itself (verifyTenantStorage),
 		// which refuses to start rather than run without it.
 		"TENANT_STORAGE_REQUIRE_SIZED": {},
