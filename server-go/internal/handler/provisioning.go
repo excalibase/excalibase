@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -586,10 +587,18 @@ func (h *ProvisioningHandler) EstimateCost(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// logRanges are the Logs page's time ranges: how far back stored logs are searched.
+var logRanges = map[string]time.Duration{
+	"1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour,
+}
+
+// GetLogs answers the project's database log lines: the last ?lines (100),
+// those containing ?q (any case) within ?since (1h, 6h, 24h or 7d; 1h).
 func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
+	query := r.URL.Query()
 	lines := 100
-	if l := r.URL.Query().Get("lines"); l != "" {
+	if l := query.Get("lines"); l != "" {
 		if v, err := strconv.Atoi(l); err == nil {
 			lines = v
 		}
@@ -597,7 +606,19 @@ func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	if lines > 10000 {
 		lines = 10000
 	}
-	out, err := h.svc.GetLogs(r.Context(), projectID, lines)
+	since := logRanges["1h"]
+	if v := query.Get("since"); v != "" {
+		var ok bool
+		if since, ok = logRanges[v]; !ok {
+			httpError(w, "since must be 1h, 6h, 24h or 7d", http.StatusBadRequest)
+			return
+		}
+	}
+	out, err := h.svc.SearchLogs(r.Context(), projectID, service.LogSearch{Lines: lines, Term: query.Get("q"), Since: since})
+	if errors.Is(err, service.ErrInvalidLogSearch) {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if errors.Is(err, service.ErrLogsUnavailable) {
 		httpError(w, err.Error(), http.StatusServiceUnavailable)
 		return

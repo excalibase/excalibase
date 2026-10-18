@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useCallback, useEffect } from 'react';
 import { api } from '../api/client';
 import { useSSE } from './useSSE';
@@ -319,15 +319,27 @@ export const useRestoreFromBackup = (projectId: string) => {
   });
 };
 
-export const useLogs = (projectId: string, lines: number = 100) => {
+export interface LogQuery {
+  /** How far back stored logs are searched: 1h, 6h, 24h or 7d. */
+  since?: string;
+  /** Kept lines contain this, ignoring case; the server searches stored logs with it. */
+  search?: string;
+}
+
+export const useLogs = (projectId: string, lines: number = 100, { since, search }: LogQuery = {}) => {
+  const params = new URLSearchParams({ lines: String(lines) });
+  if (since) params.set('since', since);
+  if (search) params.set('q', search);
   return useQuery({
-    queryKey: ['logs', projectId, lines],
+    queryKey: ['logs', projectId, lines, since ?? '', search ?? ''],
     queryFn: async () => {
-      const response = await api.get<{ logs: string }>(`/provision/${projectId}/logs?lines=${lines}`);
+      const response = await api.get<{ logs: string }>(`/provision/${projectId}/logs?${params.toString()}`);
       return response.data.logs;
     },
     enabled: !!projectId,
     refetchInterval: 15000,
+    // A new term keeps the current lines on screen while the search runs.
+    placeholderData: keepPreviousData,
   });
 };
 

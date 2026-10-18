@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { Loader2, Search, FileText } from 'lucide-react';
 import { useLogs } from '../hooks/useProvisioning';
@@ -11,6 +11,11 @@ const TIME_RANGES = [
   { label: '7d', lines: 1000 },
 ];
 
+// The server searches stored logs for terms up to this long; longer ones only
+// filter the lines already loaded.
+const MAX_SERVER_SEARCH = 200;
+const SEARCH_DEBOUNCE_MS = 400;
+
 function getLineColor(line: string): string {
   if (line.includes('ERROR')) return 'text-red-400';
   if (line.includes('WARNING') || line.includes('WARN')) return 'text-yellow-400';
@@ -21,9 +26,18 @@ export function LogExplorerPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [search, setSearch] = useState('');
   const [rangeIdx, setRangeIdx] = useState(0);
-  const lines = TIME_RANGES[rangeIdx].lines;
+  const { label: since, lines } = TIME_RANGES[rangeIdx];
+  const [serverSearch, setServerSearch] = useState('');
 
-  const { data: rawLogs = '', isLoading, error } = useLogs(projectId || '', lines);
+  // Typing filters the loaded lines at once; the term reaches the server, which
+  // searches stored logs when it keeps them, once typing pauses.
+  useEffect(() => {
+    const term = search.trim();
+    const timer = setTimeout(() => setServerSearch(term.length <= MAX_SERVER_SEARCH ? term : ''), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const { data: rawLogs = '', isLoading, error } = useLogs(projectId || '', lines, { since, search: serverSearch });
 
   const logLines = useMemo(() => {
     const allLines = rawLogs.split('\n').filter(Boolean);

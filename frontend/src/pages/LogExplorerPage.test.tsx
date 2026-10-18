@@ -34,7 +34,7 @@ describe('LogExplorerPage', () => {
     expect(await screen.findByText('ERROR connection reset')).toHaveClass('text-red-400');
     expect(screen.getByText('WARNING slow query')).toHaveClass('text-yellow-400');
     expect(screen.getByText('INFO started')).toHaveClass('text-text-secondary');
-    expect(api.get).toHaveBeenCalledWith('/provision/proj-1/logs?lines=50');
+    expect(api.get).toHaveBeenCalledWith('/provision/proj-1/logs?lines=50&since=1h');
   });
 
   test('the search filters lines case-insensitively and says when nothing matches', async () => {
@@ -49,11 +49,23 @@ describe('LogExplorerPage', () => {
     expect(screen.getByText('INFO started')).toBeInTheDocument();
   });
 
-  test('a wider range asks for more lines', async () => {
+  test('a wider range searches further back and asks for more lines', async () => {
     renderPage();
     await screen.findByText('INFO started');
     fireEvent.click(screen.getByRole('button', { name: '24h' }));
-    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/provision/proj-1/logs?lines=500'));
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/provision/proj-1/logs?lines=500&since=24h'));
+  });
+
+  test('a search term is sent to the server once typing pauses, so stored logs are searched', async () => {
+    renderPage();
+    await screen.findByText('INFO started');
+    fireEvent.change(screen.getByTestId('log-search-input'), { target: { value: 'connection' } });
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/provision/proj-1/logs?lines=50&since=1h&q=connection'));
+    // A term the server would refuse stays a filter of the loaded lines.
+    vi.mocked(api.get).mockClear();
+    fireEvent.change(screen.getByTestId('log-search-input'), { target: { value: 'x'.repeat(201) } });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(api.get).not.toHaveBeenCalledWith(expect.stringContaining('q=xxx'));
   });
 
   test('says there are no logs when the database has written none', async () => {
