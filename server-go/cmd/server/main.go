@@ -197,6 +197,8 @@ func runServer(cfg config.AppConfig) {
 		singleHostApps: singleHostApps,
 	})
 	deps.fnHandler = fnHandler
+	// The function runtime's ctx.db pool holds the owner login (EXC-625).
+	deps.provHandler.SetCredentialsRotatedHook(fnHandler.CredentialsRotated)
 	// The schema browser holds one connection per project for ten minutes.
 	// An open session stops the tenant's Postgres shutting down, so the pod
 	// survives, the namespace will not terminate, and the teardown times out

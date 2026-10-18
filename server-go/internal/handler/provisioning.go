@@ -49,6 +49,9 @@ type ProvisioningHandler struct {
 	// endpoint; nil → the surface returns 503 rather than pretending a
 	// setting was saved.
 	dbEndpoints DBEndpointAPI
+	// credentialsRotated is told after a rotation succeeds, so the function
+	// runtime stops using the old owner password (EXC-625); nil → nobody.
+	credentialsRotated func(r *http.Request, projectID string)
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {
@@ -58,6 +61,11 @@ func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.O
 // SetPauseService wires the pause/resume backend. Wired post-construction
 // because pauseService depends on backupSvc which is built after provHandler.
 func (h *ProvisioningHandler) SetPauseService(s *service.PauseService) { h.pauseSvc = s }
+
+// SetCredentialsRotatedHook registers who is told after a credential rotation.
+func (h *ProvisioningHandler) SetCredentialsRotatedHook(fn func(r *http.Request, projectID string)) {
+	h.credentialsRotated = fn
+}
 
 // SetInstanceStore lets the pause handlers look up the post-transition
 // state for the response shape.
@@ -615,6 +623,9 @@ func (h *ProvisioningHandler) RotateCredentials(w http.ResponseWriter, r *http.R
 	if err != nil {
 		httpError(w, safeError(err), unsettledOr(err, http.StatusInternalServerError))
 		return
+	}
+	if h.credentialsRotated != nil {
+		h.credentialsRotated(r, projectID)
 	}
 	writeJSON(w, creds)
 }

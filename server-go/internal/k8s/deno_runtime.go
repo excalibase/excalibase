@@ -80,6 +80,9 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 	if err := c.applyDenoEgressPolicy(ctx, namespace, spec); err != nil {
 		return err
 	}
+	if err := c.applyDenoDBSecret(ctx, namespace, spec.DatabaseURL); err != nil {
+		return err
+	}
 	dep := buildDenoDeployment(namespace, spec)
 	if _, err := c.clientset.AppsV1().Deployments(namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create deno deployment: %w", err)
@@ -117,12 +120,16 @@ func (c *Client) reconcileDenoEgress(ctx context.Context, namespace string, dep 
 	// A runtime made before EXC-622, or fenced with an oversized request, gets the wanted fence.
 	fence := denoFenceContainer(dep.Spec.Template.Spec.Containers[0].Image, spec.Tier)
 	initContainers, fenceChanged := withDenoFence(dep.Spec.Template.Spec.InitContainers, fence)
-	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) && !fenceChanged {
+	if err := c.applyDenoDBSecret(ctx, namespace, spec.DatabaseURL); err != nil {
+		return err
+	}
+	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) && hasDBEnv(dep, spec.DatabaseURL) && !fenceChanged {
 		return nil
 	}
 	updated := dep.DeepCopy()
 	setAllowedHosts(updated, want)
 	setEnv(updated, settings)
+	setDBEnv(updated, spec.DatabaseURL)
 	updated.Spec.Template.Spec.InitContainers = initContainers
 	if _, err := c.clientset.AppsV1().Deployments(namespace).Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update deno deployment: %w", err)
@@ -231,7 +238,7 @@ func buildDenoDeployment(namespace string, spec DenoRuntimeSpec) *appsv1.Deploym
 	one := int32(1)
 	falseVal := false
 	allowed := workerAllowedHosts(spec)
-	return &appsv1.Deployment{
+	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: denoRuntimeName, Namespace: namespace, Labels: labels},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &one,
@@ -253,6 +260,8 @@ func buildDenoDeployment(namespace string, spec DenoRuntimeSpec) *appsv1.Deploym
 			},
 		},
 	}
+	setDBEnv(dep, spec.DatabaseURL)
+	return dep
 }
 
 func buildDenoContainer(spec DenoRuntimeSpec, allowedHosts string) corev1.Container {

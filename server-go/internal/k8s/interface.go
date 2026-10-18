@@ -288,6 +288,10 @@ type DenoRuntimeSpec struct {
 	// ProvisioningURL is provisioning's in-cluster address, which ctx.storage
 	// and the export-metadata callback call with the project's runtime token.
 	ProvisioningURL string
+	// DatabaseURL is the project database login ctx.db opens, as the
+	// customer's own role (EXC-410). It reaches the pod through a Secret,
+	// never as a literal in the pod spec (EXC-625). Empty renders nothing.
+	DatabaseURL string
 }
 
 // Verify Client implements KubeClient at compile time.

@@ -159,10 +159,10 @@ func (h *FunctionHandler) PutEgress(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
-	if err := h.renderEgress(r.Context(), projectID); err != nil {
+	if err := h.renderRuntime(r.Context(), projectID); err != nil {
 		// The setting is saved; the runtime catches up on the next deploy or
 		// replay. Surface the rollout failure without failing the write.
-		log.Printf("WARN: render egress for %s: %v", projectID, err)
+		log.Printf("WARN: render runtime for %s: %v", projectID, err)
 	}
 	h.redeployAll(r, projectID)
 	writeJSON(w, h.egressResponseFor(hosts))
@@ -203,15 +203,27 @@ func (h *FunctionHandler) denoRuntimeSpecFor(projectID string) k8s.DenoRuntimeSp
 		Edge:            h.runtimeEdge,
 		CiliumFQDN:      h.runtimeCiliumFQDN,
 		ProvisioningURL: h.runtimeProvisioningURL,
+		DatabaseURL:     h.runtimePoolURL(projectID),
 	}
 }
 
-// renderEgress pushes the current allowlist into an existing per-project
-// runtime. A project whose runtime has not been created yet (no function
+// runtimePoolURL is the URL the runtime's ctx.db pool opens (EXC-625): the
+// same owner login the functions are handed, Postgres only, since the pool
+// is postgres.js. Empty when vault holds no complete login.
+func (h *FunctionHandler) runtimePoolURL(projectID string) string {
+	target, ok := h.injectedDBTarget(projectID)
+	if !ok || target.mysql {
+		return ""
+	}
+	return target.url(target.host)
+}
+
+// renderRuntime pushes the current allowlist and database login into an
+// existing per-project runtime. A project whose runtime has not been created yet (no function
 // deployed) is left alone: the first deploy renders the setting. The shared
 // docker runtime has no per-project pod — its workers get the allowlist on
 // each deploy payload instead.
-func (h *FunctionHandler) renderEgress(ctx context.Context, projectID string) error {
+func (h *FunctionHandler) renderRuntime(ctx context.Context, projectID string) error {
 	if h.k8sClient == nil {
 		return nil
 	}
@@ -247,4 +259,15 @@ func unreachableImportsMessage(imports []string) string {
 	return "the runtime does not carry " + strings.Join(imports, ", ") +
 		" and this project's function egress does not allow fetching it: add the host to the egress allowlist," +
 		" or put the code in the function's own files (zod and @excalibase/server are built in)"
+}
+
+// CredentialsRotated hands a project's runtime the owner login a rotation just
+// filed: the pod rolls onto the new URL and every function is redeployed with
+// it (EXC-625). The rotation itself already succeeded, so a failure here is
+// logged and the next deploy or replay catches up.
+func (h *FunctionHandler) CredentialsRotated(r *http.Request, projectID string) {
+	if err := h.renderRuntime(r.Context(), projectID); err != nil {
+		log.Printf("WARN: render runtime for %s after credential rotation: %v", projectID, err)
+	}
+	h.redeployAll(r, projectID)
 }
