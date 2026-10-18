@@ -53,7 +53,12 @@ func TestDockerMySQLProjectServesTLSClientsFromTheHost(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "SELECT twice(21)").Scan(&doubled); err != nil || doubled != 42 {
 		t.Fatalf("twice(21)=%d err=%v", doubled, err)
 	}
+	// EXC-626: the customer's login cannot read the end users' auth database.
+	if _, err := db.ExecContext(ctx, "SELECT COUNT(*) FROM auth.users"); err == nil {
+		t.Fatal("admin reached the auth database")
+	}
 	_ = db.Close()
+	assertAuthAdminIsConfinedToAuth(ctx, t, docker, result.Namespace, passwords.AuthAdmin, verified)
 
 	plain := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, nil)
 	if err := plain.PingContext(ctx); err == nil {
@@ -112,12 +117,44 @@ func hostTLS(ctx context.Context, t *testing.T, p *DockerMySQLProvisioner, conta
 // without TLS when it is nil.
 func mysqlFromHost(ctx context.Context, t *testing.T, docker *RealDockerClient, container, password string, tlsConfig *tls.Config) *sql.DB {
 	t.Helper()
+	return mysqlAs(ctx, t, docker, container, MySQLUserAdmin, password, "shop", tlsConfig)
+}
+
+// assertAuthAdminIsConfinedToAuth: auth_admin builds and uses the auth
+// service's tables, and holds nothing else (EXC-626).
+func assertAuthAdminIsConfinedToAuth(ctx context.Context, t *testing.T, docker *RealDockerClient, container, password string, tlsConfig *tls.Config) {
+	t.Helper()
+	db := mysqlAs(ctx, t, docker, container, MySQLUserAuthAdmin, password, MySQLAuthDatabase, tlsConfig)
+	defer db.Close()
+	mustExec(ctx, t, db, "CREATE TABLE users (id BIGINT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(100) NOT NULL UNIQUE)")
+	mustExec(ctx, t, db, "CREATE TABLE tokens (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE)")
+	mustExec(ctx, t, db, "ALTER TABLE users ADD COLUMN role VARCHAR(63) NOT NULL DEFAULT 'user'")
+	mustExec(ctx, t, db, "CREATE INDEX idx_users_role ON users (role)")
+	mustExec(ctx, t, db, "INSERT INTO users (email) VALUES ('a@b.test')")
+	mustExec(ctx, t, db, "UPDATE users SET role = 'editor'")
+	mustExec(ctx, t, db, "DELETE FROM users")
+	mustExec(ctx, t, db, "DROP TABLE tokens")
+	for _, refused := range []string{
+		"CREATE PROCEDURE p() SELECT 1",
+		"CREATE VIEW v AS SELECT 1",
+		"CREATE TRIGGER t BEFORE INSERT ON users FOR EACH ROW SET NEW.role = 'x'",
+		"SELECT COUNT(*) FROM shop.notes",
+		"SELECT COUNT(*) FROM mysql.user",
+	} {
+		if _, err := db.ExecContext(ctx, refused); err == nil {
+			t.Errorf("auth_admin was allowed: %s", refused)
+		}
+	}
+}
+
+func mysqlAs(ctx context.Context, t *testing.T, docker *RealDockerClient, container, user, password, database string, tlsConfig *tls.Config) *sql.DB {
+	t.Helper()
 	state, err := docker.ContainerState(ctx, container)
 	if err != nil || state.HostPorts["3306"] == 0 {
 		t.Fatalf("published port of %s: %+v %v", container, state, err)
 	}
 	cfg := mysql.NewConfig()
-	cfg.User, cfg.Passwd, cfg.DBName = MySQLUserAdmin, password, "shop"
+	cfg.User, cfg.Passwd, cfg.DBName = user, password, database
 	cfg.Net, cfg.Addr = "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(state.HostPorts["3306"]))
 	cfg.TLS = tlsConfig
 	connector, err := mysql.NewConnector(cfg)

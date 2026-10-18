@@ -13,9 +13,6 @@ const (
 	engineMySQL    = "MYSQL"
 )
 
-const mysqlNoEndUserAuth = "end-user sign-up and sign-in are not available for MySQL projects yet: " +
-	"the auth service keeps a project's users in Postgres (ADR 0041)"
-
 // projectEngine reads the engine of the project's database from its row.
 func projectEngine(ctx context.Context, c *call, projectID string) (string, error) {
 	var project struct {

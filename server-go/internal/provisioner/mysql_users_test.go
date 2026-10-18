@@ -20,7 +20,7 @@ func TestMySQLPlatformUsersSQL(t *testing.T) {
 		"GRANT ALL PRIVILEGES ON `app`.* TO 'excalibase_app'@'%';",
 		"GRANT ALL PRIVILEGES ON `excalibase`.* TO 'excalibase_app'@'%';",
 		"GRANT SELECT ON `auth`.* TO 'excalibase_app'@'%';",
-		"GRANT ALL PRIVILEGES ON `auth`.* TO 'auth_admin'@'%';",
+		"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES ON `auth`.* TO 'auth_admin'@'%';",
 		"GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'cdc_watcher'@'%';",
 		"GRANT SELECT ON `app`.* TO 'cdc_watcher'@'%';",
 	} {
@@ -33,6 +33,14 @@ func TestMySQLPlatformUsersSQL(t *testing.T) {
 	}
 	if strings.Contains(sql, "*.* TO 'admin'") || strings.Contains(sql, "*.* TO 'excalibase_app'") {
 		t.Error("only the watcher holds a global privilege")
+	}
+	// auth_admin works only in auth, with what the auth service's migrations
+	// and queries use (EXC-626): no routines, events, triggers, views or locks.
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.Contains(line, "TO 'auth_admin'") && strings.HasPrefix(line, "GRANT") &&
+			line != "GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES ON `auth`.* TO 'auth_admin'@'%';" {
+			t.Errorf("auth_admin is granted more: %s", line)
+		}
 	}
 }
 

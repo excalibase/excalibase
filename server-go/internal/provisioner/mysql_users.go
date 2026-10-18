@@ -18,6 +18,10 @@ const (
 	MySQLPlatformDatabase = "excalibase"
 )
 
+// MySQLAuthAdminPrivileges is what excalibase-auth's migrations and queries
+// use in the auth database, and nothing more (EXC-626).
+const MySQLAuthAdminPrivileges = "SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES"
+
 // MySQLPasswords are the passwords the platform users are created with.
 type MySQLPasswords struct {
 	Admin, App, AuthAdmin, Watcher string
@@ -42,7 +46,7 @@ func MySQLPlatformUsersSQL(projectDatabase string, passwords MySQLPasswords) str
 		"ALL PRIVILEGES ON " + project + ".* TO " + mysqlAccount(MySQLUserApp),
 		"ALL PRIVILEGES ON " + platform + ".* TO " + mysqlAccount(MySQLUserApp),
 		"SELECT ON " + auth + ".* TO " + mysqlAccount(MySQLUserApp),
-		"ALL PRIVILEGES ON " + auth + ".* TO " + mysqlAccount(MySQLUserAuthAdmin),
+		MySQLAuthAdminPrivileges + " ON " + auth + ".* TO " + mysqlAccount(MySQLUserAuthAdmin),
 		"REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO " + mysqlAccount(MySQLUserWatcher),
 		"SELECT ON " + project + ".* TO " + mysqlAccount(MySQLUserWatcher),
 	} {

@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -125,20 +126,24 @@ func TestTrackDBFunctionRefusesAMySQLProject(t *testing.T) {
 	}
 }
 
-// End users live in excalibase-auth's Postgres store; a MySQL project has none
-// yet, so the probe is refused before anything is sent.
-func TestAuthFlowRefusesAMySQLProject(t *testing.T) {
+// A MySQL project's end users live in its own auth database (EXC-626), so
+// the probe signs in exactly as it does for a Postgres project.
+func TestAuthFlowRunsOnAMySQLProject(t *testing.T) {
+	plane := &authPlane{answer: signedIn}
+	server := httptest.NewServer(plane)
+	t.Cleanup(server.Close)
 	routes := newFakeRoutes()
 	routes.on(http.MethodGet, provisionA, 200, mysqlProjectReply)
-	cs := sessionWith(t, routes, &recordingAudit{}, writeCaller(), Settings{PublicBaseURL: "https://api.example.test"})
-	res := callTool(t, cs, "test_auth_flow", map[string]any{"project_id": testProjectA, "flow": "login", "email": "a@b.test", "password": "pw"})
-	if !res.IsError || !strings.Contains(resultText(res), "MySQL") {
-		t.Fatalf("res = %s", resultText(res))
+	routes.on(http.MethodGet, projectsA+"/info/", 200, `{"projectId":"proj-a","orgSlug":"acme"}`)
+	settings := testSettings
+	settings.DataPlaneURL = server.URL
+	cs := sessionWith(t, routes, &recordingAudit{}, writeCaller(), settings)
+	out := structured(t, callTool(t, cs, "test_auth_flow", flowArgs("login")))
+	if out["outcome"] != "signed_in" || out["tokensIssued"] != true {
+		t.Fatalf("out = %v", out)
 	}
-	for _, call := range routes.calls {
-		if strings.HasSuffix(call.Path, "/info/") {
-			t.Fatal("the probe went ahead")
-		}
+	if len(plane.requests) != 1 || plane.requests[0].URL.Path != loginPath {
+		t.Fatalf("auth requests = %d", len(plane.requests))
 	}
 }
 
