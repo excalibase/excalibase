@@ -18,6 +18,10 @@ const (
 	MySQLPlatformDatabase = "excalibase"
 )
 
+// MySQLAuthAdminPrivileges is what excalibase-auth's migrations and queries
+// use in the auth database, and nothing more (EXC-626).
+const MySQLAuthAdminPrivileges = "SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES"
+
 // MySQLPasswords are the passwords the platform users are created with.
 type MySQLPasswords struct {
 	Admin, App, AuthAdmin, Watcher string
@@ -37,18 +41,24 @@ func MySQLPlatformUsersSQL(projectDatabase string, passwords MySQLPasswords) str
 		fmt.Fprintf(&sql, "CREATE USER IF NOT EXISTS %s IDENTIFIED BY %s REQUIRE SSL;\n%s\n",
 			mysqlAccount(user.name), mysqlString(user.password), MySQLAlterUserSQL(user.name, user.password))
 	}
+	const all = "ALL PRIVILEGES"
 	for _, grant := range []string{
-		"ALL PRIVILEGES ON " + project + ".* TO " + mysqlAccount(MySQLUserAdmin),
-		"ALL PRIVILEGES ON " + project + ".* TO " + mysqlAccount(MySQLUserApp),
-		"ALL PRIVILEGES ON " + platform + ".* TO " + mysqlAccount(MySQLUserApp),
-		"SELECT ON " + auth + ".* TO " + mysqlAccount(MySQLUserApp),
-		"ALL PRIVILEGES ON " + auth + ".* TO " + mysqlAccount(MySQLUserAuthAdmin),
+		grantOn(all, project, MySQLUserAdmin),
+		grantOn(all, project, MySQLUserApp),
+		grantOn(all, platform, MySQLUserApp),
+		grantOn("SELECT", auth, MySQLUserApp),
+		grantOn(MySQLAuthAdminPrivileges, auth, MySQLUserAuthAdmin),
 		"REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO " + mysqlAccount(MySQLUserWatcher),
-		"SELECT ON " + project + ".* TO " + mysqlAccount(MySQLUserWatcher),
+		grantOn("SELECT", project, MySQLUserWatcher),
 	} {
 		fmt.Fprintf(&sql, "GRANT %s;\n", grant)
 	}
 	return sql.String()
+}
+
+// grantOn is "privileges ON `database`.* TO 'user'@'%'".
+func grantOn(privileges, quotedDatabase, user string) string {
+	return privileges + " ON " + quotedDatabase + ".* TO " + mysqlAccount(user)
 }
 
 // MySQLAlterUserSQL sets a platform user's password, TLS still required.

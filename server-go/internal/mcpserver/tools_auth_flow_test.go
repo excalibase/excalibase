@@ -201,6 +201,6 @@ func authFlowRouteCases() []routeCase {
 			f.on(http.MethodGet, projectsA+"/info/", 200, `{"projectId":"proj-a","orgSlug":"acme"}`)
 		},
 		plane:  &authPlane{answer: signedIn},
-		expect: []string{"GET " + provisionA, "GET " + projectsA + "/info/"},
+		expect: []string{"GET " + projectsA + "/info/"},
 	}}
 }
