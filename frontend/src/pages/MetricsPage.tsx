@@ -35,8 +35,9 @@ export function MetricsPage() {
   // A new project has no history yet: the server sends metrics: null.
   const chartData = (history?.metrics ?? []).filter(m => m.metricsAvailable).map((m) => ({
     time: new Date(m.timestamp).toLocaleTimeString(),
-    cpu: Math.round(m.cpuUsagePercent ?? 0),
-    memory: Math.round(m.memoryUsagePercent ?? 0),
+    // An unmeasured point is a gap in the chart, not a 0%.
+    cpu: m.cpuUsagePercent == null ? null : Math.round(m.cpuUsagePercent),
+    memory: m.memoryUsagePercent == null ? null : Math.round(m.memoryUsagePercent),
   }));
 
   return (
@@ -86,14 +87,14 @@ export function MetricsPage() {
             <MetricCard
               icon={<Cpu className="w-4 h-4" />}
               label="CPU"
-              value={current.cpuUsageCores == null ? 'N/A' : `${current.cpuUsageCores.toFixed(2)} cores`}
+              value={current.cpuUsageCores == null ? 'Not available' : `${current.cpuUsageCores.toFixed(2)} cores`}
               subtitle={current.cpuLimitCores == null ? undefined : `/ ${current.cpuLimitCores} limit (${current.instanceCount} pods)`}
               color="text-blue-400"
             />
             <MetricCard
               icon={<Server className="w-4 h-4" />}
               label="Memory"
-              value={current.memoryUsageMB == null ? 'N/A' : `${current.memoryUsageMB} MB`}
+              value={current.memoryUsageMB == null ? 'Not available' : `${current.memoryUsageMB} MB`}
               subtitle={current.memoryLimitMB == null ? undefined : `/ ${current.memoryLimitMB} MB limit`}
               color="text-purple-400"
             />
@@ -171,7 +172,7 @@ export function MetricsPage() {
             </div>
           )}
 
-          {chartData.length > 1 && chartData.some(d => d.cpu > 0 || d.memory > 0) && (
+          {chartData.length > 1 && chartData.some(d => (d.cpu ?? 0) > 0 || (d.memory ?? 0) > 0) && (
             <div className="bg-surface-card border border-border-primary rounded-xl p-6">
               <h3 className="text-sm font-semibold text-text-primary mb-6">Resource Usage Trends</h3>
               <ResponsiveContainer width="100%" height={280}>

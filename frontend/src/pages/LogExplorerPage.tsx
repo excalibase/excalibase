@@ -26,7 +26,7 @@ export function LogExplorerPage() {
   const { data: rawLogs = '', isLoading, error } = useLogs(projectId || '', lines);
 
   const logLines = useMemo(() => {
-    const allLines = typeof rawLogs === 'string' ? rawLogs.split('\n').filter(Boolean) : [];
+    const allLines = rawLogs.split('\n').filter(Boolean);
     if (!search.trim()) return allLines;
     const term = search.toLowerCase();
     return allLines.filter((l) => l.toLowerCase().includes(term));
