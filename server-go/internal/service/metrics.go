@@ -27,8 +27,9 @@ type MetricsService struct {
 	mu          sync.RWMutex
 	history     map[string][]domain.DatabaseMetrics
 	// table, when set, keeps history in place of the file (SetHistory).
-	table  MetricsHistory
-	alerts *AlertingService
+	table      MetricsHistory
+	alerts     *AlertingService
+	tierLimits TierLimits
 }
 
 func NewMetricsService(store storage.InstanceStore, client k8s.KubeClient, storagePath string) *MetricsService {
@@ -117,19 +118,20 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 		metrics.HealthStatus = "HEALTHY"
 	}
 
-	// Resource limits from tier config
-	perPodCPU := parseCPU(inst.Tier)
-	perPodMemMB := parseMemMB(inst.Tier)
-	totalCPULimit := perPodCPU * float64(tierInstances)
-	totalMemLimit := int64(perPodMemMB * tierInstances)
 	storageLimit := parseStorage(inst.Tier)
-	metrics.CPULimitCores = &totalCPULimit
-	metrics.MemoryLimitMB = &totalMemLimit
+	if inst.StorageSize != "" {
+		storageLimit = inst.StorageSize
+	}
 	metrics.StorageLimit = &storageLimit
 	metrics.InstanceCount = &tierInstances
 
-	// Pod-level CPU/memory from metrics-server
-	s.collectPodResourceMetrics(ctx, inst, perPodCPU, perPodMemMB, totalCPULimit, totalMemLimit, metrics)
+	limits := s.databaseLimits(ctx, inst)
+	if total, instances, ok := limits.total(); ok {
+		metrics.CPULimitCores = &total.cpuCores
+		metrics.MemoryLimitMB = &total.memoryMB
+		metrics.InstanceCount = &instances
+	}
+	s.collectPodResourceMetrics(ctx, inst, limits, metrics)
 
 	return metrics
 }
@@ -189,16 +191,16 @@ func (s *MetricsService) collectCNPGMetrics(ctx context.Context, inst *domain.Da
 // per-pod metrics and aggregate usage percentages.
 // The namespace also runs the project's apps, functions and watcher, so only
 // the database's own pods count.
-func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, inst *domain.DatabaseInstance, perPodCPU float64, perPodMemMB int, totalCPULimit float64, totalMemLimit int64, metrics *domain.DatabaseMetrics) {
+func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, inst *domain.DatabaseInstance, limits databaseLimits, metrics *domain.DatabaseMetrics) {
 	podMetrics, err := s.k8sClient.GetPodMetrics(ctx, inst.Namespace)
 	if err != nil {
 		log.Printf("metrics of %s: pod usage: %v", inst.ProjectID, err)
 		return
 	}
 
-	var totalCPUMillis int64
-	var totalMemMB int64
+	var usage, limit podLimit
 	var counted int
+	limited := true
 	for _, pm := range podMetrics {
 		if !strings.HasPrefix(pm.Name, inst.ProjectID+postgresSuffix+"-") {
 			continue
@@ -208,27 +210,34 @@ func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, inst *do
 		if strings.HasSuffix(pm.Name, "-1") {
 			role = "primary"
 		}
+		own, ok := limits.of(pm.Name)
+		limited = limited && ok
 		metrics.Pods = append(metrics.Pods, domain.PodMetrics{
 			Name:          pm.Name,
 			Role:          role,
 			CPUCores:      float64(pm.CPUMillis) / 1000.0,
-			CPULimitCores: perPodCPU,
+			CPULimitCores: own.cpuCores,
 			MemoryMB:      pm.MemoryMB,
-			MemoryLimitMB: int64(perPodMemMB),
+			MemoryLimitMB: own.memoryMB,
 		})
-		totalCPUMillis += pm.CPUMillis
-		totalMemMB += pm.MemoryMB
+		usage.cpuCores += float64(pm.CPUMillis) / 1000.0
+		usage.memoryMB += pm.MemoryMB
+		limit.cpuCores += own.cpuCores
+		limit.memoryMB += own.memoryMB
 	}
 	if counted == 0 {
 		return
 	}
 
-	cpuCores := float64(totalCPUMillis) / 1000.0
-	metrics.CPUUsageCores = &cpuCores
-	cpuPct := (cpuCores / totalCPULimit) * 100
+	metrics.CPUUsageCores = &usage.cpuCores
+	metrics.MemoryUsageMB = &usage.memoryMB
+	// A share needs every sampled pod's limit; a guessed one would misstate it.
+	if !limited || limit.cpuCores <= 0 || limit.memoryMB <= 0 {
+		return
+	}
+	cpuPct := usage.cpuCores / limit.cpuCores * 100
+	memPct := float64(usage.memoryMB) / float64(limit.memoryMB) * 100
 	metrics.CPUUsagePercent = &cpuPct
-	metrics.MemoryUsageMB = &totalMemMB
-	memPct := float64(totalMemMB) / float64(totalMemLimit) * 100
 	metrics.MemoryUsagePercent = &memPct
 }
 
@@ -317,17 +326,6 @@ func tierInstanceCount(tier domain.TierType) int {
 	}
 }
 
-func parseCPU(tier domain.TierType) float64 {
-	switch tier {
-	case domain.Standard:
-		return 2
-	case domain.Enterprise:
-		return 4
-	default:
-		return 0.5
-	}
-}
-
 func parseStorage(tier domain.TierType) string {
 	switch tier {
 	case domain.Standard:
@@ -336,17 +334,6 @@ func parseStorage(tier domain.TierType) string {
 		return "500Gi"
 	default:
 		return "5Gi"
-	}
-}
-
-func parseMemMB(tier domain.TierType) int {
-	switch tier {
-	case domain.Standard:
-		return 4096
-	case domain.Enterprise:
-		return 16384
-	default:
-		return 512
 	}
 }
 

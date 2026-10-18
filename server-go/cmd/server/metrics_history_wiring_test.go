@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,5 +96,16 @@ func TestMetricsHistoryWiringNeedsTheTables(t *testing.T) {
 	alerts.AddAlert(domain.Alert{ID: "a1", ProjectID: "p1"})
 	if got := alerts.GetActiveAlerts(); len(got) != 1 {
 		t.Fatalf("active = %+v, want the alert kept in memory", got)
+	}
+}
+
+// A pod without limits is measured against its tier's row, not a built-in guess.
+func TestMetricsReadTierLimitsFromTheTierRows(t *testing.T) {
+	body, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(body), "metricsSvc.SetTierLimits(provSvc.TierConfig)") {
+		t.Error("metrics never learn the tier rows")
 	}
 }

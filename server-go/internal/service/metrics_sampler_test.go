@@ -103,6 +103,7 @@ func samplerFixture(t *testing.T) (*MetricsService, *fakeMetricsHistory, *Alerti
 		}
 	}
 	mock.SetupPostgreSQLMock("live-db", "org-live-db", 1)
+	limitPostgresPod(mock, "org-live-db", "500m", "512Mi")
 	mock.Metrics["org-live-db"] = []k8s.PodResourceMetrics{{Name: "live-db-postgres-1", CPUMillis: 475, MemoryMB: 100}}
 
 	history := &fakeMetricsHistory{}
