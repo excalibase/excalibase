@@ -1447,6 +1447,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provSvc, pgStore := a.provSvc, a.pgStore
 
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
+	metricsSvc.SetTierLimits(provSvc.TierConfig)
 	appRuntime := appRuntimeFor(k8sClient, a.singleHostApps)
 	appDeploySvc := service.NewAppDeployService(
 		apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
