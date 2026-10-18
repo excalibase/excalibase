@@ -8,6 +8,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"maps"
+	"net"
+	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -1540,8 +1543,13 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 		port = *inst.Port
 	}
 
-	connURL := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=%s",
-		inst.Username, password, inst.Host, port, inst.DatabaseName, inst.SSLMode)
+	connURL := url.URL{
+		Scheme:   "postgresql",
+		User:     url.UserPassword(inst.Username, password),
+		Host:     net.JoinHostPort(inst.Host, strconv.Itoa(port)),
+		Path:     "/" + inst.DatabaseName,
+		RawQuery: url.Values{"sslmode": {inst.SSLMode}}.Encode(),
+	}
 
 	return &domain.CredentialsResponse{
 		ProjectID:     projectID,
@@ -1552,7 +1560,7 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 		Username:      inst.Username,
 		Password:      password,
 		SSLMode:       inst.SSLMode,
-		ConnectionURL: connURL,
+		ConnectionURL: connURL.String(),
 	}, nil
 }
 
