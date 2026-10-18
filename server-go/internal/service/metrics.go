@@ -26,6 +26,9 @@ type MetricsService struct {
 	storagePath string
 	mu          sync.RWMutex
 	history     map[string][]domain.DatabaseMetrics
+	// table, when set, keeps history in place of the file (SetHistory).
+	table  MetricsHistory
+	alerts *AlertingService
 }
 
 func NewMetricsService(store storage.InstanceStore, client k8s.KubeClient, storagePath string) *MetricsService {
@@ -44,6 +47,9 @@ func (s *MetricsService) GetCurrentMetrics(ctx context.Context, projectID string
 	}
 
 	metrics := s.collectMetrics(ctx, inst)
+	if s.table != nil {
+		return metrics, nil
+	}
 
 	// Append to history
 	s.mu.Lock()
@@ -60,6 +66,9 @@ func (s *MetricsService) GetCurrentMetrics(ctx context.Context, projectID string
 }
 
 func (s *MetricsService) GetMetricsHistory(ctx context.Context, projectID string, limit int) (*domain.MetricsHistory, error) {
+	if s.table != nil {
+		return s.tableHistory(ctx, projectID, limit)
+	}
 	s.mu.RLock()
 	hist := s.history[projectID]
 	s.mu.RUnlock()

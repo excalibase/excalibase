@@ -577,6 +577,36 @@ func startImageWatcher(cfg config.AppConfig, flags features.Flags, sqlStore stor
 	return watcher.Start(context.Background(), service.NewLeadership(lock), appImageWatchTick)
 }
 
+// metricsTable is the platform DB's metrics and alert tables.
+type metricsTable interface {
+	service.MetricsHistory
+	service.AlertStore
+}
+
+const (
+	metricsSampleLockID   int64 = 0x6d65_7472_6963_7331
+	metricsSampleInterval       = time.Minute
+)
+
+// wireMetricsHistory keeps alerts in the platform DB and, on Kubernetes,
+// samples every running database into it once a minute on the leading replica.
+func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8sClient k8s.KubeClient, metrics *service.MetricsService, alerts *service.AlertingService) {
+	table, ok := sqlStore.(metricsTable)
+	if !ok {
+		return
+	}
+	alerts.SetStore(table)
+	if k8sClient == nil || cfg.ProvisionerMode == "docker" {
+		return
+	}
+	metrics.SetHistory(table, alerts)
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() {
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), metricsSampleLockID)
+	}
+	metrics.StartSampler(context.Background(), service.NewLeadership(lock), metricsSampleInterval)
+}
+
 // restoreSweepLockID is the advisory lock the restore sweeper leads on. It
 // must stay distinct from every other advisory lock id the platform takes.
 const restoreSweepLockID int64 = 0x51c2_7d0e_9a41_3b77
@@ -1456,6 +1486,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	snapshotSvc := buildSnapshotService(store, k8sClient, cfg.StoragePath, buildDocumentConnector(k8sClient, nil, vc, store))
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
+	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 
 	emailSender := buildEmailSender(cfg)

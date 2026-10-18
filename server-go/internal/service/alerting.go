@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -19,6 +20,24 @@ type AlertingService struct {
 	mu          sync.RWMutex
 	active      []domain.Alert
 	history     []domain.Alert
+	// store, when set, keeps alerts in place of the file (SetStore).
+	store AlertStore
+}
+
+// AlertStore keeps alerts: the platform DB's alerts table. Lists answer newest first.
+type AlertStore interface {
+	SaveAlert(ctx context.Context, alert *domain.Alert) error
+	GetActiveAlerts(ctx context.Context) ([]domain.Alert, error)
+	GetActiveAlertsForProject(ctx context.Context, projectID string) ([]domain.Alert, error)
+	GetAlertHistory(ctx context.Context, limit int) ([]domain.Alert, error)
+}
+
+// maxAlertHistory bounds a history read, as the file kept the last 1000.
+const maxAlertHistory = 1000
+
+// SetStore keeps alerts in the table, shared by every replica.
+func (s *AlertingService) SetStore(store AlertStore) {
+	s.store = store
 }
 
 func NewAlertingService(storagePath string) *AlertingService {
@@ -28,6 +47,10 @@ func NewAlertingService(storagePath string) *AlertingService {
 }
 
 func (s *AlertingService) AddAlert(alert domain.Alert) {
+	if s.store != nil {
+		s.save(alert)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.active = append(s.active, alert)
@@ -39,6 +62,9 @@ func (s *AlertingService) AddAlert(alert domain.Alert) {
 }
 
 func (s *AlertingService) GetActiveAlerts() []domain.Alert {
+	if s.store != nil {
+		return oldestFirst(s.store.GetActiveAlerts(context.Background()))
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]domain.Alert, 0)
@@ -51,6 +77,9 @@ func (s *AlertingService) GetActiveAlerts() []domain.Alert {
 }
 
 func (s *AlertingService) GetActiveAlertsForProject(projectID string) []domain.Alert {
+	if s.store != nil {
+		return oldestFirst(s.store.GetActiveAlertsForProject(context.Background(), projectID))
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]domain.Alert, 0)
@@ -63,6 +92,12 @@ func (s *AlertingService) GetActiveAlertsForProject(projectID string) []domain.A
 }
 
 func (s *AlertingService) GetAlertHistory(limit int) []domain.Alert {
+	if s.store != nil {
+		if limit <= 0 || limit > maxAlertHistory {
+			limit = maxAlertHistory
+		}
+		return oldestFirst(s.store.GetAlertHistory(context.Background(), limit))
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if limit <= 0 || limit > len(s.history) {
@@ -75,36 +110,94 @@ func (s *AlertingService) GetAlertHistory(limit int) []domain.Alert {
 	return s.history[start:]
 }
 
+// alertRule is one usage figure checked against its threshold.
+type alertRule struct {
+	metric string
+	label  string
+	value  *float64
+}
+
+const usageAlertThreshold = 90
+
+// CheckMetrics raises an alert when a figure goes over the threshold and
+// resolves it when the figure falls back, so a figure that stays high stays one alert.
 func (s *AlertingService) CheckMetrics(metrics *domain.DatabaseMetrics) {
 	if metrics == nil || !metrics.MetricsAvailable {
 		return
 	}
-	now := &domain.FlexTime{Time: time.Now()}
+	active := s.GetActiveAlertsForProject(metrics.ProjectID)
+	for _, rule := range []alertRule{
+		{metric: "cpuUsagePercent", label: "CPU", value: metrics.CPUUsagePercent},
+		{metric: "memoryUsagePercent", label: "Memory", value: metrics.MemoryUsagePercent},
+	} {
+		if rule.value == nil {
+			continue
+		}
+		open := findAlert(active, rule.metric)
+		switch {
+		case *rule.value > usageAlertThreshold && open == nil:
+			s.AddAlert(domain.Alert{
+				ID:        fmt.Sprintf("%s-%s-%d", rule.metric, metrics.ProjectID, time.Now().UnixNano()),
+				ProjectID: metrics.ProjectID,
+				Severity:  "WARNING",
+				Message:   fmt.Sprintf("%s usage at %.1f%%", rule.label, *rule.value),
+				Metric:    rule.metric,
+				Value:     rule.value,
+				Threshold: float64Ptr(usageAlertThreshold),
+				Timestamp: &domain.FlexTime{Time: time.Now()},
+			})
+		case *rule.value <= usageAlertThreshold && open != nil:
+			s.resolve(*open)
+		}
+	}
+}
 
-	if metrics.CPUUsagePercent != nil && *metrics.CPUUsagePercent > 90 {
-		s.AddAlert(domain.Alert{
-			ID:        fmt.Sprintf("cpu-%s-%d", metrics.ProjectID, time.Now().Unix()),
-			ProjectID: metrics.ProjectID,
-			Severity:  "WARNING",
-			Message:   fmt.Sprintf("CPU usage at %.1f%%", *metrics.CPUUsagePercent),
-			Metric:    "cpuUsagePercent",
-			Value:     metrics.CPUUsagePercent,
-			Threshold: float64Ptr(90),
-			Timestamp: now,
-		})
+func findAlert(alerts []domain.Alert, metric string) *domain.Alert {
+	for i := range alerts {
+		if alerts[i].Metric == metric {
+			return &alerts[i]
+		}
 	}
-	if metrics.MemoryUsagePercent != nil && *metrics.MemoryUsagePercent > 90 {
-		s.AddAlert(domain.Alert{
-			ID:        fmt.Sprintf("mem-%s-%d", metrics.ProjectID, time.Now().Unix()),
-			ProjectID: metrics.ProjectID,
-			Severity:  "WARNING",
-			Message:   fmt.Sprintf("Memory usage at %.1f%%", *metrics.MemoryUsagePercent),
-			Metric:    "memoryUsagePercent",
-			Value:     metrics.MemoryUsagePercent,
-			Threshold: float64Ptr(90),
-			Timestamp: now,
-		})
+	return nil
+}
+
+func (s *AlertingService) resolve(alert domain.Alert) {
+	alert.Resolved = true
+	if s.store != nil {
+		s.save(alert)
+		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.active {
+		if s.active[i].ID == alert.ID {
+			s.active[i].Resolved = true
+		}
+	}
+	for i := range s.history {
+		if s.history[i].ID == alert.ID {
+			s.history[i].Resolved = true
+		}
+	}
+	s.saveHistory()
+}
+
+func (s *AlertingService) save(alert domain.Alert) {
+	if err := s.store.SaveAlert(context.Background(), &alert); err != nil {
+		log.Printf("alerts: save %s: %v", alert.ID, err)
+	}
+}
+
+// oldestFirst turns a table read (newest first) into the order the file kept.
+func oldestFirst(alerts []domain.Alert, err error) []domain.Alert {
+	if err != nil {
+		log.Printf("alerts: read: %v", err)
+		return []domain.Alert{}
+	}
+	for i, j := 0, len(alerts)-1; i < j; i, j = i+1, j-1 {
+		alerts[i], alerts[j] = alerts[j], alerts[i]
+	}
+	return alerts
 }
 
 func (s *AlertingService) saveHistory() {

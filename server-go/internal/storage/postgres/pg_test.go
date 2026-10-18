@@ -533,6 +533,39 @@ func TestMetricsAppendAndHistory(t *testing.T) {
 	}
 }
 
+// A week of samples a minute apart is kept whole; only rows past the cutoff go.
+func TestMetricsKeepEverySampleUntilPruned(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	cpu, memoryMB := 12.5, int64(205)
+	for minute := 0; minute < 150; minute++ {
+		if err := store.AppendMetrics(ctx, &domain.DatabaseMetrics{
+			ProjectID: "m-db", Timestamp: &domain.FlexTime{Time: start.Add(time.Duration(minute) * time.Minute)},
+			MetricsAvailable: true, CPUUsagePercent: &cpu, MemoryUsageMB: &memoryMB,
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	if hist, _ := store.GetMetricsHistory(ctx, "m-db", 1000); len(hist) != 150 {
+		t.Fatalf("kept %d samples, want 150", len(hist))
+	}
+
+	if err := store.PruneMetricsBefore(ctx, start.Add(100*time.Minute)); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	hist, err := store.GetMetricsHistory(ctx, "m-db", 1000)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(hist) != 50 || !hist[len(hist)-1].Timestamp.Equal(start.Add(100*time.Minute)) {
+		t.Fatalf("after prune: %d samples, oldest %v", len(hist), hist[len(hist)-1].Timestamp)
+	}
+	if *hist[0].CPUUsagePercent != 12.5 || *hist[0].MemoryUsageMB != 205 {
+		t.Fatalf("figures did not round-trip: %+v", hist[0])
+	}
+}
+
 // --- Alert tests ---
 
 func TestAlertSaveAndQuery(t *testing.T) {

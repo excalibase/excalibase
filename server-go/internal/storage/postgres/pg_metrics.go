@@ -32,13 +32,12 @@ func (s *Store) AppendMetrics(ctx context.Context, m *domain.DatabaseMetrics) er
 		m.CPULimitCores, m.MemoryLimitMB, m.StorageLimit, m.InstanceCount,
 	)
 
-	// Prune old entries (keep latest 100 per project)
-	if err == nil {
-		s.db.ExecContext(ctx, `DELETE FROM database_metrics WHERE project_id = $1 AND id NOT IN (
-			SELECT id FROM database_metrics WHERE project_id = $2 ORDER BY timestamp DESC LIMIT 100
-		)`, m.ProjectID, m.ProjectID)
-	}
+	return err
+}
 
+// PruneMetricsBefore drops samples taken before cutoff.
+func (s *Store) PruneMetricsBefore(ctx context.Context, cutoff time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM database_metrics WHERE timestamp < $1`, cutoff)
 	return err
 }
 
