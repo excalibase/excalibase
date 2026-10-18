@@ -37,7 +37,7 @@ func lookupOf(keys map[string]string) SecretLookup {
 
 func verifierAt(now time.Time) *Verifier {
 	return &Verifier{
-		Lookup: lookupOf(map[string]string{exampleKeyID: exampleSecret}),
+		Authenticate: SecretAuthenticator(lookupOf(map[string]string{exampleKeyID: exampleSecret})),
 		Now:    func() time.Time { return now },
 	}
 }
@@ -168,9 +168,9 @@ func TestVerify_ClockSkewWindow(t *testing.T) {
 
 func TestVerify_UnknownKeyAndWrongSecretAnswerTheSame(t *testing.T) {
 	req := sdkSigned(t, http.MethodGet, "http://s3.example.test/photos/a.txt", nil, nil, signedAt, "")
-	unknown := &Verifier{Lookup: lookupOf(map[string]string{}), Now: func() time.Time { return signedAt }}
+	unknown := &Verifier{Authenticate: SecretAuthenticator(lookupOf(map[string]string{})), Now: func() time.Time { return signedAt }}
 	_, unknownErr := unknown.Verify(req)
-	wrong := &Verifier{Lookup: lookupOf(map[string]string{exampleKeyID: "not-the-secret"}), Now: func() time.Time { return signedAt }}
+	wrong := &Verifier{Authenticate: SecretAuthenticator(lookupOf(map[string]string{exampleKeyID: "not-the-secret"})), Now: func() time.Time { return signedAt }}
 	_, wrongErr := wrong.Verify(sdkSigned(t, http.MethodGet, "http://s3.example.test/photos/a.txt", nil, nil, signedAt, ""))
 	wantCode(t, unknownErr, "AccessDenied")
 	wantCode(t, wrongErr, "AccessDenied")
@@ -182,7 +182,7 @@ func TestVerify_UnknownKeyAndWrongSecretAnswerTheSame(t *testing.T) {
 func TestVerify_LookupFailureIsUnavailableNotDenied(t *testing.T) {
 	req := sdkSigned(t, http.MethodGet, "http://s3.example.test/photos/a.txt", nil, nil, signedAt, "")
 	sealed := &Verifier{
-		Lookup: func(context.Context, string) (string, error) { return "", errVaultSealed },
+		Authenticate: SecretAuthenticator(func(context.Context, string) (string, error) { return "", errVaultSealed }),
 		Now:    func() time.Time { return signedAt },
 	}
 	_, err := sealed.Verify(req)
@@ -280,4 +280,54 @@ func flipLastHex(header string) string {
 		replacement = '1'
 	}
 	return header[:len(header)-1] + string(replacement)
+}
+
+// The gateway hands the canonical request to the control plane, which holds
+// the secret; what it checks must be exactly what the gateway would have.
+func TestCheck_RoundTripsThroughARemoteAuthenticator(t *testing.T) {
+	var seen Check
+	remote := func(_ context.Context, check Check) (*Grant, error) {
+		seen = check
+		key, ok := VerifyWithSecret(exampleSecret, check)
+		if !ok {
+			return nil, ErrDenied
+		}
+		return &Grant{SigningKey: key, Principal: "key-row"}, nil
+	}
+	verifier := &Verifier{Authenticate: remote, Now: func() time.Time { return signedAt }}
+	req := sdkSigned(t, http.MethodGet, "http://s3.example.test/photos/a%20b.txt?x-id=GetObject", nil, nil, signedAt, "")
+	auth, err := verifier.Verify(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.Principal != "key-row" || seen.AccessKeyID != exampleKeyID || seen.Region != "us-east-1" {
+		t.Fatalf("auth = %+v, check = %+v", auth, seen)
+	}
+	method, path, query, err := seen.Request()
+	if err != nil || method != http.MethodGet || path != "/photos/a b.txt" || query.Get("x-id") != "GetObject" {
+		t.Fatalf("request = %s %q %v %v", method, path, query, err)
+	}
+
+	tampered := seen
+	tampered.CanonicalRequest = strings.Replace(seen.CanonicalRequest, "/photos/", "/other/", 1)
+	if _, ok := VerifyWithSecret(exampleSecret, tampered); ok {
+		t.Fatal("a canonical request the client did not sign must not verify")
+	}
+	_, err = (&Verifier{Authenticate: func(context.Context, Check) (*Grant, error) { return nil, ErrDenied },
+		Now: func() time.Time { return signedAt }}).Verify(sdkSigned(t, http.MethodGet, "http://s3.example.test/photos/a.txt", nil, nil, signedAt, ""))
+	wantCode(t, err, "AccessDenied")
+	_, err = (&Verifier{Authenticate: func(context.Context, Check) (*Grant, error) { return nil, &Error{Code: "AccessDenied", Message: "the key may not write to photos", Status: 403} },
+		Now: func() time.Time { return signedAt }}).Verify(sdkSigned(t, http.MethodGet, "http://s3.example.test/photos/a.txt", nil, nil, signedAt, ""))
+	if err == nil || !strings.Contains(err.Error(), "may not write") {
+		t.Fatalf("an authenticator's own S3 error passes through: %v", err)
+	}
+}
+
+func TestCheck_RequestRefusesAMalformedCanonicalRequest(t *testing.T) {
+	for _, canonical := range []string{"", "GET", "GET\n%zz\n\n", "GET\n/a\nx=%zz\n"} {
+		check := Check{CanonicalRequest: strings.ReplaceAll(canonical, "\\n", "\n")}
+		if _, _, _, err := check.Request(); err == nil {
+			t.Errorf("%q parsed", canonical)
+		}
+	}
 }
