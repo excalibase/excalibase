@@ -42,9 +42,9 @@ export function poolOptions(url: string): Record<string, unknown> {
     idle_timeout: 30,
     connect_timeout: 10,
     // postgres.js's own default: a connection lives 30 to 60 minutes.
-    max_lifetime: () => 60 * (30 + Math.random() * 30),
+    max_lifetime: () => 60 * (30 + unitJitter() * 30),
     max_pipeline: 100,
-    backoff: (retries: number) => (0.5 + Math.random() / 2) * Math.min(3 ** retries / 100, 20),
+    backoff: (retries: number) => (0.5 + unitJitter() / 2) * Math.min(3 ** retries / 100, 20),
     keep_alive: 60,
     prepare: true,
     debug: false,
@@ -55,6 +55,11 @@ export function poolOptions(url: string): Record<string, unknown> {
   };
   if (!new URL(url).searchParams.has("sslmode")) options.ssl = false;
   return options;
+}
+
+/** A number in [0, 1) that spreads reconnects and recycling over time. */
+function unitJitter(): number {
+  return crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;
 }
 
 /** Close the cached pool. Called from server shutdown / test teardown. */
