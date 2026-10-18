@@ -26,7 +26,19 @@ const DONE: Record<ProjectOperation, string> = {
 function outcome(operation: ProjectOperation, project: DatabaseInstance): 'pending' | 'done' {
   if (project.status === DONE[operation]) return 'done';
   if (project.failureReason) throw new ProjectOperationError(project.failureReason);
+  if (project.status === 'DELETING' && project.deletionError) throw new ProjectOperationError(project.deletionError);
   return 'pending';
+}
+
+// A project torn down at once is followed until it is gone.
+async function readProject(projectId: string, operation: ProjectOperation): Promise<DatabaseInstance | null> {
+  try {
+    return (await api.get<DatabaseInstance>(`/provision/${projectId}`)).data;
+  } catch (err) {
+    const status = (err as { response?: { status?: number } } | null)?.response?.status;
+    if (operation === 'deletion' && status === 404) return null;
+    throw err;
+  }
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -38,8 +50,9 @@ export async function followProject(
 ): Promise<DatabaseInstance> {
   const deadline = Date.now() + FOLLOW_LIMIT_MS;
   while (Date.now() < deadline) {
-    const { data } = await api.get<DatabaseInstance>(`/provision/${projectId}`);
-    if (outcome(operation, data) === 'done') return data;
+    const project = await readProject(projectId, operation);
+    if (project === null) return { projectId, status: 'DELETED' } as DatabaseInstance;
+    if (outcome(operation, project) === 'done') return project;
     await sleep(intervalMs);
   }
   throw new ProjectOperationError(

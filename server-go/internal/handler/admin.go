@@ -154,7 +154,14 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	if err := h.provSvc.DeprovisionWithOptions(r.Context(), projectID, opts); err != nil {
+	// A caller that prefers not to wait (RFC 7240) is answered once DELETING
+	// is recorded and follows the teardown on the project's status.
+	async := prefersRespondAsync(r)
+	deprovision := h.provSvc.DeprovisionWithOptions
+	if async {
+		deprovision = h.provSvc.DeprovisionInBackground
+	}
+	if err := deprovision(r.Context(), projectID, opts); err != nil {
 		log.Printf("action=force_drop_project project=%s status=failed err=%v", projectID, err)
 		writeDeprovisionError(w, err)
 		return
@@ -167,6 +174,10 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 		ResourceID: projectID,
 		Details:    fmt.Sprintf("org=%s tier=%s backups=%s", inst.OrgID, inst.Tier, backupDisposition(opts)),
 	})
+	if async {
+		writeJSONStatus(w, http.StatusAccepted, map[string]string{"status": string(domain.StatusDeleting), "projectId": projectID})
+		return
+	}
 	writeJSON(w, map[string]string{"status": "deprovisioned", "projectId": projectID})
 }
 

@@ -532,7 +532,10 @@ curl -X POST -H "Authorization: Bearer $PAT" \
 Find rows waiting for a retry with
 `SELECT project_id, failure_reason FROM database_instances WHERE status = 'BACKUPS_PENDING_DELETE'`.
 `DELETE /api/admin/projects/{projectId}` (force drop) accepts the same
-`confirmDeleteBackups` body field.
+`confirmDeleteBackups` body field. With `Prefer: respond-async` it answers
+202 once the project is `DELETING` and tears it down in the background; the
+row is gone when it finishes, or stays `DELETING` with `deletion_step` and
+`deletion_error`. A teardown never depends on the request staying connected.
 
 **Where a restore reads from:** the K8s restore adapter resolves endpoint,
 bucket, region and credentials through `ProvisioningService.BackupStorage()`
