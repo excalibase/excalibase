@@ -48,9 +48,11 @@ import { outboundDeniedMessage } from "./runtime/outbound_denied.ts";
 // handler succeeds, so a mutation that throws schedules nothing. Each
 // top-level mutation gets a scope keyed by a `txnRefId` the worker echoes on
 // every scheduler/runX RPC. A nested ctx.runMutation gets an alias entry
-// (`owned=false`) pointing at its parent, so its calls join the outermost
-// mutation's scope. Actions open no scope: an action's ctx.runMutation is a
-// new top level, and an action's own schedules are sent at once.
+// (`owned=false`) pointing at its parent: its calls join the parent's when it
+// succeeds and are dropped when it throws, so they reach provisioning only
+// with the outermost mutation's. Actions open no scope: an action's
+// ctx.runMutation is a new top level, and an action's own schedules are sent
+// at once. A ref that resolves to no live scope is refused, never sent.
 // ---------------------------------------------------------------------------
 
 interface MutationScope {
@@ -66,28 +68,18 @@ interface MutationScope {
 
 const txnMap: Map<string, MutationScope> = new Map();
 
-// nextTxnRefSeq generates a monotonically-increasing, process-unique key
-// for each top-level/alias scope entry.
-let nextTxnRefSeq = 1;
+// Unguessable, so a function cannot name another invocation's scope.
 function newTxnRefId(): string {
-  const id = `t${nextTxnRefSeq.toString(36)}_${Date.now().toString(36)}`;
-  nextTxnRefSeq++;
-  return id;
+  return `t${crypto.randomUUID()}`;
 }
 
 /**
- * owningScope returns the top-level mutation scope a ref runs in, walking
- * alias entries up to their owner, or null outside a mutation.
+ * liveScope returns the scope a ref names when it belongs to the caller's
+ * project, or null.
  */
-function owningScope(txnRefId: string | undefined | null): MutationScope | null {
-  let cursor: string | undefined = txnRefId ?? undefined;
-  for (let i = 0; i < 16 && cursor; i++) {
-    const entry = txnMap.get(cursor);
-    if (!entry) return null;
-    if (entry.owned) return entry;
-    cursor = entry.parentRefId;
-  }
-  return null;
+function liveScope(txnRefId: string, projectId: string): MutationScope | null {
+  const entry = txnMap.get(txnRefId);
+  return entry && entry.projectId === projectId ? entry : null;
 }
 
 interface DeployRequest {
@@ -597,16 +589,18 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     // --- ctx.db (removed in @excalibase/server 0.11.0) ---
     // Any use names what to do instead, rather than failing on a null.
     const __removedDbMessage = "ctx.db is not available: read and write your project's data through its GraphQL or REST API with a project key";
-    // Symbol keys pass so console.log(ctx) and other inspection still work.
+    // Symbol keys, then and toJSON pass, so inspecting, awaiting or
+    // serializing a ctx still works; any real use throws.
     const __removedDb = new Proxy({}, {
       get(_target, key) {
-        if (typeof key === 'symbol') return undefined;
+        if (typeof key === 'symbol' || key === 'then' || key === 'toJSON') return undefined;
         throw new Error(__removedDbMessage);
       },
     });
-    // The invocation's mutation-scope ref, set by __dispatchV2/__dispatchHttp
-    // and echoed on every scheduler/runX RPC. Empty outside a mutation.
-    let __currentTxnRefId = '';
+    // Each invocation's ctx closes over its own call context
+    // ({ txnRefId, depth }), so overlapping invocations on one worker never
+    // see each other's mutation scope or run depth. txnRefId is empty
+    // outside a mutation.
 
     // --- ctx.runQuery / runMutation / runAction (Phase 7) ---
     // Composition surface for cross-function calls. Each call posts a
@@ -616,16 +610,13 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     //
     // The current call depth rides along in the envelope so the dispatcher
     // can reject runaway recursion before the message reaches the target.
-    // The initial depth is set by the v2 dispatcher when it builds the ctx
-    // for an invocation, and increments for every nested call this worker
-    // makes via __runXCall.
+    // The initial depth comes from the invocation's call context, and
+    // increments for every nested call made via __runXCall.
     const __runXPending = new Map();
     let __nextRunXRpcId = 1;
-    // Set by __dispatchV2 / httpAction dispatch before the handler runs.
-    let __currentRunDepth = 0;
     const __RUN_MAX_DEPTH = ${RUN_MAX_DEPTH};
 
-    function __runXCall(op, ref, args) {
+    function __runXCall(op, ref, args, call) {
       // ref must look like { moduleName, exportName }. Reject malformed
       // values up-front so the user gets a clean error.
       if (!ref || typeof ref !== 'object' ||
@@ -633,7 +624,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           typeof ref.exportName !== 'string' || ref.exportName.length === 0) {
         return Promise.reject(new Error("ctx." + op + ": first argument must be a FunctionRef { moduleName, exportName }"));
       }
-      const nextDepth = __currentRunDepth + 1;
+      const nextDepth = call.depth + 1;
       if (nextDepth > __RUN_MAX_DEPTH) {
         return Promise.reject(new Error(
           "ctx." + op + ": run depth limit exceeded (" + __RUN_MAX_DEPTH +
@@ -649,33 +640,32 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           // Forward the caller's scope ref so a mutation→mutation call joins
           // the parent's scope. Main-thread dispatch only honours this when
           // the caller's kind is "mutation".
-          txnRefId: __currentTxnRefId,
+          txnRefId: call.txnRefId,
         });
       });
     }
 
-    function __makeRunQuery()    { return (ref, args) => __runXCall('runQuery',    ref, args); }
-    function __makeRunMutation() { return (ref, args) => __runXCall('runMutation', ref, args); }
-    function __makeRunAction()   { return (ref, args) => __runXCall('runAction',   ref, args); }
+    function __makeRunQuery(call)    { return (ref, args) => __runXCall('runQuery',    ref, args, call); }
+    function __makeRunMutation(call) { return (ref, args) => __runXCall('runMutation', ref, args, call); }
+    function __makeRunAction(call)   { return (ref, args) => __runXCall('runAction',   ref, args, call); }
 
     // --- ctx.scheduler (Phase 8) ---
     // Worker-side facade for runAfter / runAt / cancel. Each method posts
-    // a {type:'scheduler', op, ...} message to the main thread; the main
-    // thread does the INSERT/UPDATE on the project DB and posts a
-    // {type:'schedulerResult', rpcId, result} message back.
+    // a {type:'scheduler', op, ...} message to the main thread, which sends
+    // it to provisioning and posts {type:'schedulerResult', rpcId, result}.
     const __schedPending = new Map();
     let __nextSchedRpcId = 1;
-    function __schedCall(op, payload) {
+    function __schedCall(op, payload, call) {
       const rpcId = __nextSchedRpcId++;
       return new Promise((resolve, reject) => {
         __schedPending.set(rpcId, { resolve, reject });
         // Inside a mutation the call waits for the mutation to succeed.
         // Action handlers carry no ref, so their schedule is sent at once.
         self.postMessage({ type: 'scheduler', rpcId, op, payload,
-          txnRefId: __currentTxnRefId });
+          txnRefId: call.txnRefId });
       });
     }
-    function __makeScheduler() {
+    function __makeScheduler(call) {
       return {
         runAfter: (delayMs, ref, args) => {
           if (!ref || typeof ref !== 'object' ||
@@ -687,7 +677,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           if (!Number.isFinite(d)) {
             return Promise.reject(new Error("ctx.scheduler.runAfter: delayMs must be a finite number"));
           }
-          return __schedCall('runAfter', { delayMs: d, ref, args: args === undefined ? {} : args });
+          return __schedCall('runAfter', { delayMs: d, ref, args: args === undefined ? {} : args }, call);
         },
         runAt: (timestamp, ref, args) => {
           if (!ref || typeof ref !== 'object' ||
@@ -699,13 +689,13 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           if (!Number.isFinite(t)) {
             return Promise.reject(new Error("ctx.scheduler.runAt: timestamp must be a finite number"));
           }
-          return __schedCall('runAt', { timestamp: t, ref, args: args === undefined ? {} : args });
+          return __schedCall('runAt', { timestamp: t, ref, args: args === undefined ? {} : args }, call);
         },
         cancel: (id) => {
           if (typeof id !== 'string' || id.length === 0) {
             return Promise.reject(new Error("ctx.scheduler.cancel: id must be a non-empty string"));
           }
-          return __schedCall('cancel', { id });
+          return __schedCall('cancel', { id }, call);
         },
       };
     }
@@ -845,10 +835,9 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         // gateway forwards it that way for internal invocations).
         // Public traffic has no depth, so default to 0.
         const incomingDepth = typeof reqData.runDepth === 'number' ? reqData.runDepth : 0;
-        __currentRunDepth = incomingDepth;
         // http* handlers own no scope (action-equivalent boundary). Forward
         // any incoming ref so a nested ctx.runMutation routes correctly.
-        __currentTxnRefId = typeof txnRefId === 'string' ? txnRefId : '';
+        const call = { txnRefId: typeof txnRefId === 'string' ? txnRefId : '', depth: incomingDepth };
 
         // Reconstruct a raw Request. The runtime accepts relative URLs;
         // Request requires an absolute one. Use the same synthetic base
@@ -872,10 +861,10 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         const ctx = {
           db: __removedDb,
           auth: __buildAuthCtx(claims),
-          runQuery:    __makeRunQuery(),
-          runMutation: __makeRunMutation(),
-          runAction:   __makeRunAction(),
-          scheduler:   __makeScheduler(),
+          runQuery:    __makeRunQuery(call),
+          runMutation: __makeRunMutation(call),
+          runAction:   __makeRunAction(call),
+          scheduler:   __makeScheduler(call),
           storage:     __makeStorageWriter(),
         };
 
@@ -968,10 +957,9 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         // The gateway sets it to 0 for top-level public calls; runX bumps
         // it for each nested call so the chain is end-to-end bounded.
         const incomingDepth = typeof body.runDepth === 'number' ? body.runDepth : 0;
-        __currentRunDepth = incomingDepth;
-        // Pick up the scope ref the main thread stamped on this invocation.
-        // Empty outside a mutation (query, action or v1 fetch handler).
-        __currentTxnRefId = typeof txnRefId === 'string' ? txnRefId : '';
+        // The scope ref the main thread stamped on this invocation; empty
+        // outside a mutation (query, action or v1 fetch handler).
+        const call = { txnRefId: typeof txnRefId === 'string' ? txnRefId : '', depth: incomingDepth };
         const ctx = {
           db: __removedDb,
           auth: __buildAuthCtx(claims),
@@ -981,14 +969,14 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           // hand-rolled bundle can still compose, but discipline lives
           // in the typed lib path. Read-only enforcement at runtime is
           // the main thread's job (dispatchRunX kind-matrix check).
-          runQuery:    __makeRunQuery(),
-          runMutation: __makeRunMutation(),
-          runAction:   __makeRunAction(),
+          runQuery:    __makeRunQuery(call),
+          runMutation: __makeRunMutation(call),
+          runAction:   __makeRunAction(call),
           // Phase 8: scheduler — present on mutation/action ctx via the
           // typed lib. Worker exposes it on every Ctx so the runtime
           // path is uniform; the typed lib still keeps it off QueryCtx
           // (a query handler that tries to schedule is a compile error).
-          scheduler:   __makeScheduler(),
+          scheduler:   __makeScheduler(call),
           // Phase 10: ctx.storage — kind-aware. QueryCtx gets the
           // read-only surface so untyped bundles that try to call
           // generateUploadUrl/store/delete from a query throw a clear
@@ -1330,8 +1318,9 @@ async function dispatchScheduler(
   }
   const projectID = callerRuntimeID.slice(0, sep);
   const op = schedulerOpFor(msg);
-  const scope = owningScope(txnRefId);
-  if (scope) {
+  if (txnRefId) {
+    const scope = liveScope(txnRefId, projectID);
+    if (!scope) throw new Error("ctx.scheduler: the mutation that made this call has already ended");
     scope.schedules = [...(scope.schedules ?? []), op];
   } else {
     await sendSchedulerOps(projectID, [op]);
@@ -1741,7 +1730,7 @@ class FunctionRuntime {
     const projectId = sep > 0 ? id.slice(0, sep) : "";
 
     let activeTxnRefId = "";
-    if (inheritedTxnRefId && txnMap.has(inheritedTxnRefId)) {
+    if (inheritedTxnRefId && liveScope(inheritedTxnRefId, projectId)) {
       // Alias entry: the caller's scope sends the schedules.
       activeTxnRefId = newTxnRefId();
       txnMap.set(activeTxnRefId, { owned: false, parentRefId: inheritedTxnRefId, projectId });
@@ -1761,8 +1750,19 @@ class FunctionRuntime {
       if (!activeTxnRefId) return;
       const entry = txnMap.get(activeTxnRefId);
       txnMap.delete(activeTxnRefId);
-      if (!entry || !entry.owned || settled !== "success") return;
-      scheduleFailed = !(await flushSchedules(id, entry));
+      if (!entry || settled !== "success" || !entry.schedules?.length) return;
+      if (entry.owned) {
+        scheduleFailed = !(await flushSchedules(id, entry));
+        return;
+      }
+      // A nested mutation hands its calls to its caller's scope.
+      const parent = entry.parentRefId ? txnMap.get(entry.parentRefId) : undefined;
+      if (!parent) {
+        scheduleFailed = true;
+        console.warn(`[runtime] ${id} succeeded after its calling mutation ended; its scheduled functions were dropped`);
+        return;
+      }
+      parent.schedules = [...(parent.schedules ?? []), ...entry.schedules];
     };
 
     let res: InvokeResponse;

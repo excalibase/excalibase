@@ -167,6 +167,91 @@ Deno.test({
   sanitizeResources: false,
 });
 
+// A nested mutation that throws drops its calls even when its caller
+// catches the error and succeeds.
+Deno.test({
+  name: "ctx.scheduler from a nested mutation that throws is dropped",
+  async fn() {
+    await withRuntime(async (rt, prov) => {
+      await rt.deploy("proj_nestfail__inner", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, _args) => {
+          await ctx.scheduler.runAfter(0, { moduleName: "jobs", exportName: "inner" }, {});
+          throw new Error("inner-fails");
+        },
+      }`));
+      await rt.deploy("proj_nestfail__outer", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, _args) => {
+          try { await ctx.runMutation({ moduleName: "inner", exportName: "default" }, {}); } catch (_) { /* handled */ }
+          await ctx.scheduler.runAfter(0, { moduleName: "jobs", exportName: "outer" }, {});
+          return { ok: true };
+        },
+      }`));
+      const res = await rt.invoke("proj_nestfail__outer", { args: {} });
+      assertEquals(res.status, 200, res.body);
+      assertEquals(prov.calls.flatMap((call) => call.ops.map((op) => op.exportName)), ["outer"]);
+    });
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+// Two overlapping calls on one worker keep their own scopes: one failing does
+// not take the other's schedule with it.
+Deno.test({
+  name: "ctx.scheduler in overlapping mutations stays with its own call",
+  async fn() {
+    await withRuntime(async (rt, prov) => {
+      await rt.deploy("proj_overlap__job", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, args) => {
+          await new Promise((resolve) => setTimeout(resolve, args.waitMs));
+          if (args.fail) throw new Error("fails");
+          await ctx.scheduler.runAfter(0, { moduleName: "jobs", exportName: "send" }, { who: args.who });
+          return { ok: true };
+        },
+      }`));
+      const first = rt.invoke("proj_overlap__job", { args: { who: "a", waitMs: 100, fail: false } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const second = rt.invoke("proj_overlap__job", { args: { who: "b", waitMs: 300, fail: true } });
+      assertEquals((await first).status, 200);
+      await second;
+      assertEquals(prov.calls.flatMap((call) => call.ops.map((op) => op.args)), [{ who: "a" }]);
+    });
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+// A call made after its mutation returned is refused, not sent on its own.
+Deno.test({
+  name: "ctx.scheduler after its mutation ended is refused",
+  async fn() {
+    await withRuntime(async (rt, prov) => {
+      await rt.deploy("proj_late__job", bundleDefault(`{
+        kind: "mutation",
+        args: { parse: (a) => a },
+        handler: async (ctx, _args) => {
+          setTimeout(() => {
+            ctx.scheduler.runAfter(0, { moduleName: "jobs", exportName: "late" }, {}).catch(() => {});
+          }, 50);
+          return { ok: true };
+        },
+      }`));
+      const res = await rt.invoke("proj_late__job", { args: {} });
+      assertEquals(res.status, 200, res.body);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assertEquals(prov.calls.length, 0);
+    });
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
 Deno.test({
   name: "ctx.scheduler.runAfter from an action is sent regardless of the action's outcome",
   async fn() {
