@@ -100,8 +100,8 @@ type SchemaSource func(ctx context.Context, schemaName string) (*LiveSchema, err
 // would drop it, hiding the table from the role. A failed read is returned
 // as it is, never taken as a pass.
 func CheckLive(ctx context.Context, source SchemaSource, table, operation string, definition json.RawMessage) error {
-	checker := &liveChecker{ctx: ctx, source: source, schemas: map[string]*LiveSchema{}}
-	shape, err := checker.table(table)
+	checker := &liveChecker{source: source, schemas: map[string]*LiveSchema{}}
+	shape, err := checker.table(ctx, table)
 	if err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func CheckLive(ctx context.Context, source SchemaSource, table, operation string
 		return err
 	}
 	for key, value := range fields {
-		if err := checker.field(table, shape, key, value); err != nil {
+		if err := checker.field(ctx, table, shape, key, value); err != nil {
 			return err
 		}
 	}
@@ -121,16 +121,15 @@ func CheckLive(ctx context.Context, source SchemaSource, table, operation string
 }
 
 type liveChecker struct {
-	ctx     context.Context
 	source  SchemaSource
 	schemas map[string]*LiveSchema
 }
 
-func (c *liveChecker) table(key string) (liveTable, error) {
+func (c *liveChecker) table(ctx context.Context, key string) (liveTable, error) {
 	schemaName, name, _ := strings.Cut(key, ".")
 	live, ok := c.schemas[schemaName]
 	if !ok {
-		read, err := c.source(c.ctx, schemaName)
+		read, err := c.source(ctx, schemaName)
 		if err != nil {
 			return liveTable{}, err
 		}
@@ -147,10 +146,10 @@ func (c *liveChecker) table(key string) (liveTable, error) {
 	return liveTable{}, invalid("Unknown table %s", key)
 }
 
-func (c *liveChecker) field(table string, shape liveTable, key string, value json.RawMessage) error {
+func (c *liveChecker) field(ctx context.Context, table string, shape liveTable, key string, value json.RawMessage) error {
 	switch key {
 	case keyFilter, keyCheck:
-		return c.expression(table, shape, value)
+		return c.expression(ctx, table, shape, value)
 	case keyColumns:
 		var names []string
 		if json.Unmarshal(value, &names) != nil {
@@ -181,20 +180,20 @@ func knownColumns(table string, shape liveTable, names []string) error {
 }
 
 // expression walks a filter or check the way ValidateBoolExp reads it.
-func (c *liveChecker) expression(table string, shape liveTable, raw json.RawMessage) error {
+func (c *liveChecker) expression(ctx context.Context, table string, shape liveTable, raw json.RawMessage) error {
 	fields, err := decodeObject(raw)
 	if err != nil {
 		return err
 	}
 	for key, value := range fields {
-		if err := c.term(table, shape, key, value); err != nil {
+		if err := c.term(ctx, table, shape, key, value); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *liveChecker) term(table string, shape liveTable, key string, value json.RawMessage) error {
+func (c *liveChecker) term(ctx context.Context, table string, shape liveTable, key string, value json.RawMessage) error {
 	switch key {
 	case opAnd, opOr:
 		var items []json.RawMessage
@@ -202,15 +201,15 @@ func (c *liveChecker) term(table string, shape liveTable, key string, value json
 			return err
 		}
 		for _, item := range items {
-			if err := c.expression(table, shape, item); err != nil {
+			if err := c.expression(ctx, table, shape, item); err != nil {
 				return err
 			}
 		}
 		return nil
 	case opNot:
-		return c.expression(table, shape, value)
+		return c.expression(ctx, table, shape, value)
 	case opExists:
-		return c.exists(value)
+		return c.exists(ctx, value)
 	}
 	ops, err := decodeObject(value)
 	if err != nil {
@@ -221,10 +220,10 @@ func (c *liveChecker) term(table string, shape liveTable, key string, value json
 			return knownColumns(table, shape, []string{key})
 		}
 	}
-	return c.relationship(table, shape, key, value)
+	return c.relationship(ctx, table, shape, key, value)
 }
 
-func (c *liveChecker) relationship(table string, shape liveTable, name string, where json.RawMessage) error {
+func (c *liveChecker) relationship(ctx context.Context, table string, shape liveTable, name string, where json.RawMessage) error {
 	target, ok := shape.relationships[name]
 	if !ok {
 		if shape.crossSchema {
@@ -234,14 +233,14 @@ func (c *liveChecker) relationship(table string, shape liveTable, name string, w
 	}
 	schemaName, _, _ := strings.Cut(table, ".")
 	targetKey := schemaName + "." + target
-	targetShape, err := c.table(targetKey)
+	targetShape, err := c.table(ctx, targetKey)
 	if err != nil {
 		return err
 	}
-	return c.expression(targetKey, targetShape, where)
+	return c.expression(ctx, targetKey, targetShape, where)
 }
 
-func (c *liveChecker) exists(value json.RawMessage) error {
+func (c *liveChecker) exists(ctx context.Context, value json.RawMessage) error {
 	var exists struct {
 		Table string          `json:"_table"`
 		Where json.RawMessage `json:"_where"`
@@ -249,9 +248,9 @@ func (c *liveChecker) exists(value json.RawMessage) error {
 	if err := json.Unmarshal(value, &exists); err != nil {
 		return err
 	}
-	shape, err := c.table(exists.Table)
+	shape, err := c.table(ctx, exists.Table)
 	if err != nil {
 		return err
 	}
-	return c.expression(exists.Table, shape, exists.Where)
+	return c.expression(ctx, exists.Table, shape, exists.Where)
 }

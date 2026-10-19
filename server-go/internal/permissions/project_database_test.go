@@ -30,3 +30,20 @@ func TestLiveSchemaReadsAMySQLProjectThroughItsPool(t *testing.T) {
 		t.Fatalf("mysqlAsked=%v err=%v", pools.mysqlAsked, err)
 	}
 }
+
+type postgresPools struct{ err error }
+
+func (p postgresPools) Open(context.Context, string) (*sql.DB, error) { return nil, p.err }
+
+func (p postgresPools) OpenMySQL(context.Context, string, bool) (*sql.DB, error) {
+	return nil, errors.New("not asked")
+}
+
+// A Postgres project's failure to open is returned as it is.
+func TestLiveSchemaPassesAPostgresOpenFailureOn(t *testing.T) {
+	want := errors.New("project is not servable")
+	_, err := NewProjectDatabase(postgresPools{err: want}, schema.NewIntrospector()).LiveSchema(context.Background(), "proj-1", "public")
+	if !errors.Is(err, want) {
+		t.Fatalf("err = %v", err)
+	}
+}
