@@ -51,6 +51,15 @@ func (p *DockerMySQLProvisioner) EnsurePlatformUsers(ctx context.Context, namesp
 	return nil
 }
 
+// ForgetEndUserSessions ends what a restored copy's end users were issued by
+// the source project.
+func (p *DockerMySQLProvisioner) ForgetEndUserSessions(ctx context.Context, namespace, _ string) error {
+	if err := p.runSecret(ctx, namespace, MySQLEndUserSessionsRevokeSQL); err != nil {
+		return fmt.Errorf("end the source's end-user sessions: %w", err)
+	}
+	return nil
+}
+
 // SetUserPassword sets one platform user's password.
 func (p *DockerMySQLProvisioner) SetUserPassword(ctx context.Context, namespace, _, user, password string) error {
 	if err := p.runSecret(ctx, namespace, MySQLAlterUserSQL(user, password), password); err != nil {

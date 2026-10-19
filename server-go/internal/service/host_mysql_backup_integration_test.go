@@ -209,6 +209,12 @@ func countNotes(ctx context.Context, t *testing.T, docker *provisioner.RealDocke
 // platform records for it (EXC-589).
 func hostMySQL(ctx context.Context, t *testing.T, docker *provisioner.RealDockerClient, container, password string) *sql.DB {
 	t.Helper()
+	return hostMySQLAs(ctx, t, docker, container, provisioner.MySQLUserAdmin, password, "shop")
+}
+
+// hostMySQLAs is hostMySQL as another platform user, in another database.
+func hostMySQLAs(ctx context.Context, t *testing.T, docker *provisioner.RealDockerClient, container, user, password, database string) *sql.DB {
+	t.Helper()
 	state, err := docker.ContainerState(ctx, container)
 	if err != nil || state.HostPorts["3306"] == 0 {
 		t.Fatalf("published port of %s: %+v %v", container, state, err)
@@ -222,7 +228,7 @@ func hostMySQL(ctx context.Context, t *testing.T, docker *provisioner.RealDocker
 		t.Fatal(err)
 	}
 	cfg := mysql.NewConfig()
-	cfg.User, cfg.Passwd, cfg.DBName = provisioner.MySQLUserAdmin, password, "shop"
+	cfg.User, cfg.Passwd, cfg.DBName = user, password, database
 	cfg.Net, cfg.Addr, cfg.TLS = "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(state.HostPorts["3306"])), tlsConfig
 	connector, err := mysql.NewConnector(cfg)
 	if err != nil {

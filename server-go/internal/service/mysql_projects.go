@@ -80,6 +80,9 @@ func (s *ProvisioningService) mysqlProvisioner() (*provisioner.MySQLProvisioner,
 // a single host.
 type mysqlServer interface {
 	EnsurePlatformUsers(ctx context.Context, namespace, projectID, database string, passwords provisioner.MySQLPasswords) error
+	// ForgetEndUserSessions ends what a restored copy's end users were issued
+	// by the source project (EXC-635).
+	ForgetEndUserSessions(ctx context.Context, namespace, projectID string) error
 	SetUserPassword(ctx context.Context, namespace, projectID, user, password string) error
 	SetUserPasswords(ctx context.Context, namespace, projectID string, passwords map[string]string) error
 	RemoveDatabase(ctx context.Context, namespace, projectID string) error

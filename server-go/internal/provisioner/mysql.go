@@ -248,6 +248,15 @@ func (p *MySQLProvisioner) EnsurePlatformUsers(ctx context.Context, namespace, p
 	return nil
 }
 
+// ForgetEndUserSessions ends, on the primary, what a restored copy's end
+// users were issued by the source project.
+func (p *MySQLProvisioner) ForgetEndUserSessions(ctx context.Context, namespace, projectID string) error {
+	if err := p.execSecret(ctx, namespace, projectID, MySQLEndUserSessionsRevokeSQL); err != nil {
+		return fmt.Errorf("end the source's end-user sessions: %w", err)
+	}
+	return nil
+}
+
 // SetUserPassword sets one platform user's password.
 func (p *MySQLProvisioner) SetUserPassword(ctx context.Context, namespace, projectID, user, password string) error {
 	if err := p.execSecret(ctx, namespace, projectID, MySQLAlterUserSQL(user, password), password); err != nil {
