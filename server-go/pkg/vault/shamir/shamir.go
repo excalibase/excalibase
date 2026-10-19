@@ -7,8 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"fmt"
-	mathrand "math/rand"
-	"time"
+	"math/big"
 )
 
 const (
@@ -155,8 +154,10 @@ func Split(secret []byte, parts, threshold int) ([][]byte, error) {
 	}
 
 	// Generate random list of x coordinates
-	mathrand.Seed(time.Now().UnixNano())
-	xCoordinates := mathrand.Perm(255)
+	xCoordinates, err := cryptoPerm(255)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate x coordinates: %w", err)
+	}
 
 	// Allocate the output array, initialize the final byte
 	// of the output with the offset. The representation of each
@@ -243,4 +244,21 @@ func Combine(parts [][]byte) ([]byte, error) {
 		secret[idx] = val
 	}
 	return secret, nil
+}
+
+// cryptoPerm returns a permutation of [0, n) drawn from crypto/rand
+// (Fisher-Yates). Upstream seeds math/rand from the clock here (EXC-642).
+func cryptoPerm(n int) ([]int, error) {
+	perm := make([]int, n)
+	for i := range perm {
+		perm[i] = i
+	}
+	for i := n - 1; i > 0; i-- {
+		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return nil, err
+		}
+		perm[i], perm[j.Int64()] = perm[j.Int64()], perm[i]
+	}
+	return perm, nil
 }
