@@ -135,6 +135,23 @@ jobs:
           EXCALIBASE_POSTGRES_IMAGE_REF: excalibase-postgresql-candidate:${{ matrix.entry.major }}
         run: go test -tags integration -count=1 -p 1 -timeout 30m ./internal/schema/
 
+      # EXC-642: the candidate is scanned before it can be pushed.
+      - name: Trivy (candidate)
+        if: steps.published.outputs.skip != 'true'
+        uses: ./.github/actions/trivy
+        with:
+          image: excalibase-postgresql-candidate:${{ matrix.entry.major }}
+
+      # A pinned image is what tenants run, so it is scanned even when nothing
+      # is rebuilt. Report only: fixing it means a new digest in the catalogue,
+      # which rolls every tenant database on that major.
+      - name: Trivy (published, report only)
+        if: steps.published.outputs.skip == 'true'
+        uses: ./.github/actions/trivy
+        with:
+          image: ${{ matrix.entry.image }}
+          fail: "false"
+
       # Same context, same build args: buildx serves this from the cache of the
       # build just verified, so what is pushed is the artefact the tests ran
       # against.
