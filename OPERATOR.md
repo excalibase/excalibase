@@ -338,6 +338,30 @@ kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-pa
 
 ## 6. Backup + restore
 
+### What a restore into a new project carries
+
+Every restore path (CNPG, single-host Postgres, MOCO, single-host MySQL) ends
+in the same registration, so a copy gets the same things on each:
+
+- **Carried with the database:** tables, data, database functions, the realtime publication
+  (Postgres), and the end users. Their sessions, API keys and email links are
+  revoked (EXC-635).
+- **Copied from the source's platform rows** before the copy is activated
+  (EXC-639): table permissions (columns, row filters), tracked functions and
+  who may call them, the CORS origins a person added, and auth settings
+  (email verification, site URL). They are the source's settings at restore
+  time, not as of the backup.
+- **Not carried:** apps, sites and domains (running deployments; a domain
+  points at one project), CORS origins an app added, edge functions with their
+  secrets and outbound allowlist (redeploy them; copying would hand the
+  source's third-party secrets to another project), stored files, and
+  project-level members.
+
+A copy takes its organisation's project slot when the restore is submitted:
+the running job counts as a project until the copy is registered, so nothing
+created meanwhile can take the slot. A plan that is full answers 409
+`project_limit_reached` at submission.
+
 ### K8s mode (CNPG + Barman Cloud plugin → R2)
 
 Backups go through the CloudNativePG Barman Cloud plugin (CNPG-I), installed

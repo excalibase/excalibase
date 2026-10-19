@@ -25,6 +25,9 @@ type fakeRestoreJobStore struct {
 	beats chan struct{}
 	// beatErrs makes the next N heartbeats fail with a store error.
 	beatErrs int
+	// slots records the slot each start asked for; full refuses any slot.
+	slots []storage.ProjectSlot
+	full  bool
 }
 
 func newFakeJobs() *fakeRestoreJobStore {
@@ -117,8 +120,13 @@ func (f *fakeRestoreJobStore) UpsertRestoreJob(_ context.Context, j *domain.Rest
 }
 
 // StartRestoreJob refuses a conflicting running job as the real table does.
-func (f *fakeRestoreJobStore) StartRestoreJob(ctx context.Context, j *domain.RestoreJob) error {
+func (f *fakeRestoreJobStore) StartRestoreJob(ctx context.Context, j *domain.RestoreJob, slot storage.ProjectSlot) error {
 	f.mu.Lock()
+	f.slots = append(f.slots, slot)
+	if f.full && slot.MaxProjects > 0 {
+		f.mu.Unlock()
+		return storage.ErrOrgProjectLimitReached
+	}
 	for _, running := range f.jobs {
 		if running.Status == domain.RestoreStatusRunning && storage.RestoreJobsConflict(&running, j) {
 			f.mu.Unlock()
@@ -167,7 +175,7 @@ func waitForJobStatus(t *testing.T, jobs *fakeRestoreJobStore, projectID, id, ta
 
 func TestOrchestrator_RunsAllStepsThenCompletes(t *testing.T) {
 	jobs := newFakeJobs()
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs, Slots: &fixedSlots{}})
 	steps := []string{}
 	mu := sync.Mutex{}
 	orch.SetSteps([]RestoreStep{
@@ -214,7 +222,7 @@ func TestOrchestrator_RunsAllStepsThenCompletes(t *testing.T) {
 
 func TestOrchestrator_FailsAtStep_StopsAndPersistsReason(t *testing.T) {
 	jobs := newFakeJobs()
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs, Slots: &fixedSlots{}})
 	called := []string{}
 	mu := sync.Mutex{}
 	orch.SetSteps([]RestoreStep{
@@ -255,7 +263,7 @@ func TestOrchestrator_FailsAtStep_StopsAndPersistsReason(t *testing.T) {
 
 func TestOrchestrator_TargetKindPersisted(t *testing.T) {
 	jobs := newFakeJobs()
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: jobs})
 	orch.SetSteps([]RestoreStep{
 		{Name: "noop", Run: func(_ context.Context, _ *domain.RestoreJob) error { return nil }},
 	})
@@ -290,7 +298,7 @@ func TestOrchestrator_TargetKindPersisted(t *testing.T) {
 // as the latest state.
 func TestOrchestrator_StepsReceiveTheWholeRequest(t *testing.T) {
 	jobs := newFakeJobs()
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: jobs})
 	at := &domain.ZonedTime{Time: time.Date(2026, 9, 26, 22, 40, 0, 0, time.UTC)}
 	req := domain.RestoreRequest{NewProjectName: "p", TargetProjectID: "p", BackupID: "b1", TargetTime: at}
 	seen := make(chan domain.RestoreRequest, 1)
@@ -310,7 +318,7 @@ func TestOrchestrator_StepsReceiveTheWholeRequest(t *testing.T) {
 
 func TestOrchestrator_RejectsTwoTargets(t *testing.T) {
 	jobs := newFakeJobs()
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: jobs})
 	now := time.Now()
 	_, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, domain.RestoreRequest{
 		NewProjectName: "dst", TargetProjectID: "dst",
@@ -350,7 +358,7 @@ func TestOrchestrator_Get_ReturnsRunning(t *testing.T) {
 	// Step that blocks forever — lets us catch the job mid-flight.
 	hold := make(chan struct{})
 	defer close(hold)
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: jobs})
 	orch.SetSteps([]RestoreStep{
 		{Name: "blocker", Run: func(_ context.Context, _ *domain.RestoreJob) error {
 			<-hold
@@ -376,7 +384,7 @@ func TestOrchestrator_Get_ReturnsRunning(t *testing.T) {
 // landed, so it refuses to start one whose target id was never allocated.
 func TestOrchestrator_RefusesAnUnallocatedTargetID(t *testing.T) {
 	jobs := newFakeJobs()
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: jobs})
 
 	_, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"},
 		domain.RestoreRequest{NewProjectName: "dst"})

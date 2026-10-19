@@ -34,9 +34,10 @@ type DatabaseProbe interface {
 }
 
 // registerVerifiedProject finishes a restore the honest way: the project is
-// registered as RESTORING, the database is made to answer a query with the
-// credentials that registration filed, and only then does the row become
-// ACTIVE. Removing the unverified row is registered on pc, so a failed probe
+// registered as RESTORING, given the source's API settings (EXC-639), the
+// database is made to answer a query with the credentials that registration
+// filed, and only then does the row become ACTIVE. Removing the unverified row
+// (and with it the copied settings) is registered on pc, so a failed probe
 // rolls back through the same compensation chain as everything else the
 // restore created.
 func registerVerifiedProject(
@@ -60,6 +61,13 @@ func registerVerifiedProject(
 	pc.RegisterCleanup("remove unverified restored project", func(context.Context) error {
 		return store.Delete(projectID)
 	})
+
+	if inst.RestoredFromProjectID == "" {
+		return errors.New("restore: the copy does not name its source")
+	}
+	if err := reg.CarryRestoredSettings(ctx, inst.RestoredFromProjectID, projectID); err != nil {
+		return fmt.Errorf("carry the source's settings: %w", err)
+	}
 
 	if err := probe.Probe(ctx, projectID); err != nil {
 		return fmt.Errorf("probe restored database: %w", err)
@@ -89,6 +97,11 @@ func failRestore(ctx context.Context, pc *provisioner.ProvisionContext, projectI
 	// Missing the target is the caller's to know: it changes what to ask for.
 	if errors.Is(err, ErrRestoreTargetNotReached) {
 		return ErrRestoreTargetNotReached
+	}
+	// So is the plan having no room left for the copy (EXC-639).
+	var limit *OrgProjectLimitError
+	if errors.As(err, &limit) {
+		return limit
 	}
 	return ErrRestoreNotObserved
 }

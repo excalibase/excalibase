@@ -288,7 +288,7 @@ func runServer(cfg config.AppConfig) {
 
 	wireInPlaceRestore(deps.backupHandler.Service(), provSvc, store, vc, projectDB, deps.schemaHandler)
 	if sqlStore != nil {
-		stopRestoreSweeper := wireRestoreOrchestrator(cfg, sqlStore, store, deps)
+		stopRestoreSweeper := wireRestoreOrchestrator(cfg, sqlStore, store, deps, provSvc)
 		defer stopRestoreSweeper()
 	}
 
@@ -364,12 +364,14 @@ func wireInPlaceRestore(backupSvc *service.BackupService, provSvc *service.Provi
 // single restore step, sweeps abandoned jobs, starts the periodic sweeper,
 // and wires it into the backup handler. Extracted from runServer to keep
 // that function's branching shallow. Returns the sweeper's stop.
-func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, deps *handlerDeps) func() {
+func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, deps *handlerDeps, slots service.RestoreSlotSource) func() {
 	orchestrator := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{
 		Jobs: sqlStore.RestoreJobs(),
 		// A swept job's target project is told its restore was interrupted,
 		// so the user reading the project sees why it is stuck.
 		Instances: store,
+		// A copy takes its organisation's slot when it is submitted.
+		Slots: slots,
 	})
 	backupSvc := deps.backupHandler.Service()
 	// Wrap the existing synchronous adapter.Restore as a single
@@ -1133,6 +1135,7 @@ func buildProvisioningService(
 	// database is the only thing that can say so.
 	provSvc.SetCredentialVerifier(service.NewTenantRoleVerifier())
 	provSvc.SetOrgStore(sqlStore)
+	provSvc.SetRestoredSettings(sqlStore)
 	provSvc.AllowMySQLCreation(mysqlCreationAllowed(cfg))
 	provSvc.SetTierStore(sqlStore)
 	provSvc.SetStorageClassPolicy(cfg.TenantStorageClassPolicy())

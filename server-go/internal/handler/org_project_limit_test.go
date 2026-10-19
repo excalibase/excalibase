@@ -271,7 +271,7 @@ func TestRestoreOfADiskLargerThanThePlanIsAConflict(t *testing.T) {
 	store.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", DeploymentMode: domain.ModeK8s, Status: "ACTIVE", StorageSize: "80Gi"})
 	jobs := &fakeRestoreJobStoreForHandler{}
 	h := NewBackupHandler(backupSvc)
-	h.SetRestoreOrchestrator(service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs}))
+	h.SetRestoreOrchestrator(service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs, Slots: unmeteredSlots{}}))
 	r := chi.NewRouter()
 	r.Route("/api/provision/{projectId}/backup", func(r chi.Router) { h.Routes(r) })
 
@@ -284,5 +284,42 @@ func TestRestoreOfADiskLargerThanThePlanIsAConflict(t *testing.T) {
 	all, _ := store.FindAll()
 	if len(all) != 1 {
 		t.Errorf("%d projects registered, want only the source", len(all))
+	}
+}
+
+// freePlanSlots is the Free plan's single project.
+type freePlanSlots struct{}
+
+func (freePlanSlots) OrgProjectLimit(context.Context, string) (int, domain.TierType, error) {
+	return 1, domain.Free, nil
+}
+
+// EXC-639: the last slot can be taken between the early check and the moment
+// the restore takes it. The caller is told it is the project limit, with the
+// code the Studio offers the in-place restore on, and no job is filed.
+func TestRestoreThatLosesTheLastSlotAtSubmissionIsTheProjectLimit(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := storage.NewFileSystemStore(dir)
+	backupSvc := service.NewBackupService(store, k8s.NewMockClient(), dir, testBackupStorage())
+	backupSvc.SetBackupCredentials(testBackupCredentials(t))
+	backupSvc.SetOrgProjectCapacity(unlimitedCapacity{})
+	store.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", DeploymentMode: domain.ModeK8s, Status: "ACTIVE"})
+	jobs := &fakeRestoreJobStoreForHandler{full: true}
+	h := NewBackupHandler(backupSvc)
+	h.SetRestoreOrchestrator(service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs, Slots: freePlanSlots{}}))
+	r := chi.NewRouter()
+	r.Route("/api/provision/{projectId}/backup", func(r chi.Router) { h.Routes(r) })
+
+	req := httptest.NewRequest("POST", "/api/provision/p1/backup/restore", strings.NewReader(`{"newProjectName":"dst"}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "project limit of 1 for the FREE tier") {
+		t.Fatalf("got %d %s, want 409 naming the limit", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"code":"project_limit_reached"`) {
+		t.Errorf("the refusal must carry the limit code: %s", w.Body.String())
+	}
+	if len(jobs.jobs) != 0 {
+		t.Errorf("a refused restore filed jobs: %v", jobs.jobs)
 	}
 }

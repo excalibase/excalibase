@@ -101,6 +101,10 @@ func (r *liveRegistrar) RegisterProject(ctx context.Context, inst *domain.Databa
 	return r.rows.RegisterProject(ctx, inst, opts)
 }
 
+func (r *liveRegistrar) CarryRestoredSettings(ctx context.Context, sourceID, targetID string) error {
+	return r.rows.CarryRestoredSettings(ctx, sourceID, targetID)
+}
+
 func customerRolesTier() config.TierConfig {
 	return config.TierConfig{Instances: 1, StorageSize: "1Gi", Memory: "1Gi", CPU: "0.5", StatementTimeout: "30s", BackupEnabled: true}
 }

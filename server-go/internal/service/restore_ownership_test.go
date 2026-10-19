@@ -39,6 +39,7 @@ func (c *movableClock) advance(d time.Duration) {
 
 func ownedOrchestrator(jobs *fakeRestoreJobStore, instance string, clock *movableClock) *RestoreOrchestrator {
 	return NewRestoreOrchestrator(RestoreOrchestratorConfig{
+		Slots:      &fixedSlots{},
 		Jobs:       jobs,
 		InstanceID: instance,
 		Now:        clock.now,
@@ -119,7 +120,8 @@ func TestSweepFailsAJobWhoseOwnerStoppedHeartbeating(t *testing.T) {
 	// is advanced below — the only thing that can make the job look fresh
 	// is its own initial claim write, which the test waits out first.
 	replicaA := NewRestoreOrchestrator(RestoreOrchestratorConfig{
-		Jobs: jobs, InstanceID: "replica-a", Now: clock.now, Heartbeat: time.Hour,
+		Slots: &fixedSlots{},
+		Jobs:  jobs, InstanceID: "replica-a", Now: clock.now, Heartbeat: time.Hour,
 	})
 	replicaA.SetSteps([]RestoreStep{{Name: "held", Run: func(ctx context.Context, _ *domain.RestoreJob) error {
 		<-ctx.Done()
@@ -212,7 +214,7 @@ func TestInstanceIDsDifferBetweenProcesses(t *testing.T) {
 	if first == "" || first == second {
 		t.Errorf("instance ids must be distinct: %q %q", first, second)
 	}
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: newFakeJobs()})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: newFakeJobs()})
 	if orch.instance == "" || orch.heartbeat == 0 || orch.stale == 0 || orch.now == nil {
 		t.Errorf("defaults not applied: %+v", orch)
 	}
@@ -226,7 +228,8 @@ func TestADrivenJobKeepsBeatingWhileItRuns(t *testing.T) {
 	jobs := newOwnedJobs(clock.now)
 	jobs.beats = make(chan struct{}, 8)
 	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{
-		Jobs: jobs, InstanceID: "replica-a", Now: clock.now,
+		Slots: &fixedSlots{},
+		Jobs:  jobs, InstanceID: "replica-a", Now: clock.now,
 		Heartbeat: time.Millisecond,
 	})
 	release := make(chan struct{})

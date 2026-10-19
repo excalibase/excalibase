@@ -18,7 +18,7 @@ func inPlaceRequest(projectID string) domain.RestoreRequest {
 
 func TestOrchestrator_InPlaceJobNamesTheProjectItself(t *testing.T) {
 	jobs := newFakeJobs()
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: jobs})
 	orch.SetSteps([]RestoreStep{{Name: domain.RestoreStepRestoring, Run: func(context.Context, *domain.RestoreJob) error { return nil }}})
 
 	job, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, inPlaceRequest("src"))
@@ -32,7 +32,7 @@ func TestOrchestrator_InPlaceJobNamesTheProjectItself(t *testing.T) {
 }
 
 func TestOrchestrator_InPlaceJobMustTargetTheSource(t *testing.T) {
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: newFakeJobs()})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: newFakeJobs()})
 	_, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, inPlaceRequest("someone-else"))
 	if err == nil {
 		t.Fatal("an in-place restore can only replace the project it was asked on")
@@ -41,7 +41,7 @@ func TestOrchestrator_InPlaceJobMustTargetTheSource(t *testing.T) {
 
 func TestOrchestrator_RefusesADuplicateWhileOneRuns(t *testing.T) {
 	jobs := newFakeJobs()
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: jobs})
 	release := make(chan struct{})
 	defer close(release)
 	orch.SetSteps([]RestoreStep{{Name: domain.RestoreStepRestoring, Run: func(ctx context.Context, _ *domain.RestoreJob) error {
@@ -76,7 +76,7 @@ func TestOrchestrator_FailureReasonIsPublic(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			jobs := newFakeJobs()
-			orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+			orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: jobs})
 			orch.SetSteps([]RestoreStep{{Name: domain.RestoreStepRestoring, Run: func(context.Context, *domain.RestoreJob) error { return c.err }}})
 			job, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"},
 				domain.RestoreRequest{NewProjectName: "copy", TargetProjectID: "dst"})
@@ -96,7 +96,7 @@ func TestOrchestrator_FailureReasonIsPublic(t *testing.T) {
 
 func TestOrchestrator_StepReportsItsPhase(t *testing.T) {
 	jobs := newFakeJobs()
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: jobs})
 	seen := make(chan string, 1)
 	proceed := make(chan struct{})
 	orch.SetSteps([]RestoreStep{{Name: domain.RestoreStepRestoring, Run: func(ctx context.Context, j *domain.RestoreJob) error {
@@ -142,7 +142,7 @@ func TestSweepOfAnInPlaceRestoreTellsTheUserToRestoreAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	clock.advance(2 * defaultRestoreHeartbeatStale)
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs, InstanceID: "live", Now: clock.now, Instances: instances})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: jobs, InstanceID: "live", Now: clock.now, Instances: instances})
 	if err := orch.SweepAbandoned(ctx); err != nil {
 		t.Fatal(err)
 	}

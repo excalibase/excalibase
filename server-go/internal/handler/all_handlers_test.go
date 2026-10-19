@@ -73,6 +73,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	provSvc.SetOrgStore(orgs)
 	withBackupTarget(t, provSvc)
 	backupSvc.SetProjectRegistrar(provSvc)
+	provSvc.SetRestoredSettings(noRestoredSettings{})
 	backupSvc.SetOrgProjectCapacity(provSvc)
 	backupSvc.SetRestorePlanSource(provSvc)
 	if err := backupSvc.SetDatabaseProbe(answeringProbe{}); err != nil {
@@ -922,3 +923,8 @@ func TestSetDeletionProtectionRequiresExplicitValue(t *testing.T) {
 		}
 	}
 }
+
+// noRestoredSettings carries nothing: these tests' sources have no API settings.
+type noRestoredSettings struct{}
+
+func (noRestoredSettings) CopyRestoredSettings(context.Context, string, string) error { return nil }

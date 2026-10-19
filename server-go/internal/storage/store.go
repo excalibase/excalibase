@@ -374,6 +374,14 @@ type BackupScheduleStore interface {
 	DeleteSchedule(ctx context.Context, projectID string) error
 }
 
+// ProjectSlot is the organisation slot a restore into a new project takes
+// when it is submitted. MaxProjects of zero or less means unlimited; the zero
+// value is what an in-place restore, which takes no slot, passes.
+type ProjectSlot struct {
+	OrgID       string
+	MaxProjects int
+}
+
 // RestoreJobStore persists the async restore state machine. The
 // orchestrator reads/writes through here so a platform restart can
 // replay (or fail) jobs that were RUNNING.
@@ -382,8 +390,11 @@ type RestoreJobStore interface {
 	// StartRestoreJob records a new RUNNING job unless a running one
 	// conflicts with it (ErrRestoreAlreadyRunning): the same source restored
 	// to the same point, or any other restore of a project being replaced in
-	// place. The check and the insert are one atomic step.
-	StartRestoreJob(ctx context.Context, j *domain.RestoreJob) error
+	// place. A restore into a new project also takes slot: it is refused
+	// with ErrOrgProjectLimitReached when the organisation has none free, and
+	// while it runs it holds one (EXC-639). The checks and the insert are one
+	// atomic step.
+	StartRestoreJob(ctx context.Context, j *domain.RestoreJob, slot ProjectSlot) error
 	// FindRestoreJob resolves a job only within projectID — the project the
 	// caller is already bound to. An id alone never resolves.
 	FindRestoreJob(ctx context.Context, projectID, id string) (*domain.RestoreJob, error)

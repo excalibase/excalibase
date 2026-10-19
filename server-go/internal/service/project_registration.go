@@ -37,6 +37,33 @@ var ErrProjectCredentialsExist = errors.New("project registration: credentials a
 // narrow surface so a restore finishes exactly the way a provision does.
 type ProjectRegistrar interface {
 	RegisterProject(ctx context.Context, inst *domain.DatabaseInstance, opts RegistrationOptions) error
+	// CarryRestoredSettings gives a restored copy the source's API settings,
+	// which live in the platform database rather than in the backup.
+	CarryRestoredSettings(ctx context.Context, sourceID, targetID string) error
+}
+
+// ErrRestoredSettingsNotConfigured refuses a restore when the platform has no
+// way to carry the source's API settings: a copy without them refuses every
+// signed-in query, so it must not be activated (EXC-639).
+var ErrRestoredSettingsNotConfigured = errors.New("restore: the source's API settings cannot be carried to the copy")
+
+// SetRestoredSettings wires where a restored copy's API settings are copied
+// from and to.
+func (s *ProvisioningService) SetRestoredSettings(r storage.RestoredSettingsStore) {
+	s.restoredSettings = r
+}
+
+// CarryRestoredSettings copies the source's API settings onto the copy, then
+// evicts whatever the data plane cached of the copy while it had none.
+func (s *ProvisioningService) CarryRestoredSettings(ctx context.Context, sourceID, targetID string) error {
+	if s.restoredSettings == nil {
+		return ErrRestoredSettingsNotConfigured
+	}
+	if err := s.restoredSettings.CopyRestoredSettings(ctx, sourceID, targetID); err != nil {
+		return err
+	}
+	s.AnnounceDatabaseReplaced(ctx, targetID)
+	return nil
 }
 
 // ProjectEventPublisher is notified once a project becomes usable, so the

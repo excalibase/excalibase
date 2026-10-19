@@ -35,7 +35,8 @@ func TestSweepRecordsTheInterruptionOnTheTargetProject(t *testing.T) {
 	clock.advance(2 * defaultRestoreHeartbeatStale)
 
 	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{
-		Jobs: jobs, InstanceID: "live-replica", Now: clock.now, Instances: instances,
+		Slots: &fixedSlots{},
+		Jobs:  jobs, InstanceID: "live-replica", Now: clock.now, Instances: instances,
 	})
 	if err := orch.SweepAbandoned(ctx); err != nil {
 		t.Fatalf("SweepAbandoned: %v", err)
@@ -82,7 +83,8 @@ func TestSweepLeavesATargetThatIsNotRestoringAlone(t *testing.T) {
 	clock.advance(2 * defaultRestoreHeartbeatStale)
 
 	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{
-		Jobs: jobs, InstanceID: "live", Now: clock.now, Instances: instances,
+		Slots: &fixedSlots{},
+		Jobs:  jobs, InstanceID: "live", Now: clock.now, Instances: instances,
 	})
 	if err := orch.SweepAbandoned(ctx); err != nil {
 		t.Fatalf("SweepAbandoned: %v", err)
