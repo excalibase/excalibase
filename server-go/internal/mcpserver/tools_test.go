@@ -522,6 +522,19 @@ func baseRouteCases() []routeCase {
 			expect: []string{"DELETE " + projectsA + "/realtime/tables/app/todos"},
 		},
 		{
+			// EXC-641: the schema-qualified name set_permission takes works here too.
+			name: "set_realtime qualified", tool: "set_realtime", args: map[string]any{"project_id": testProjectA, "table": "app.todos", "enabled": true},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodPut, projectsA+"/realtime/tables/app/todos", 200, `{"status":"enabled"}`)
+			},
+			expect: []string{"PUT " + projectsA + "/realtime/tables/app/todos"},
+			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+				if out["schema"] != "app" || out["table"] != "todos" || out["subscription"] != "appTodosChanges" {
+					t.Errorf("out = %v", out)
+				}
+			},
+		},
+		{
 			name: "delete_function", tool: "delete_function", args: map[string]any{"project_id": testProjectA, "id": "shorten"},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodDelete, projectsA+"/functions/shorten/", 204, ``)

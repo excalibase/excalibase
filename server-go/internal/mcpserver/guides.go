@@ -16,8 +16,9 @@ func authGuide(urls map[string]string) map[string]any {
 		"logout":  "POST " + auth + `/logout {"refreshToken":"<refreshToken>"} revokes that session.`,
 		"claims": "The access token is a JWT. userId is the end user's id and role is the role it runs as (\"user\" after sign-up, unless an admin changed it; " +
 			"\"anon\" for the publishable-key exchange). Send it as Authorization: Bearer <accessToken> to REST, GraphQL, realtime and functions.",
-		"userIdType": "userId is numeric (the user's database id, e.g. 42) but travels as a string claim (\"42\"), never a JSON number: " +
-			"test_auth_flow shows the real claims of a test sign-in. See permissions.ownerColumnType for comparing it with an owner column.",
+		"userIdType": "userId is the user's database id as a JSON number (\"userId\": 42); read it as a number in function code. " +
+			"There is no email claim: the token's sub is the user's email, which permissions read as X-Excalibase-Email. " +
+			"test_auth_flow shows the real claims of a test sign-in. See permissions.ownerColumnType for comparing userId with an owner column.",
 		"verifyOffline": "A backend verifies an access token without calling auth: fetch the public keys (JWKS) from " + auth + "/.well-known/jwks.json, " +
 			"check the ES256 signature and exp, and that aud includes exactly this project's audience (excalibase:<projectId> by default; the aud of a token test_auth_flow shows): " +
 			"the key signs every project's tokens, so the aud check is what keeps another project's users out. Cache the keys for a few minutes and fetch them again when a signature does not verify.",
@@ -33,12 +34,12 @@ func authGuide(urls map[string]string) map[string]any {
 func permissionsGuide() map[string]any {
 	return map[string]any{
 		"sessionVariables": "A permission compares columns with session variables taken from the caller's JWT: X-Excalibase-User-Id is the userId claim, " +
-			"X-Excalibase-Role the role, X-Excalibase-Email the email, and any other claim <name> is X-Excalibase-<name>. Names ignore case.",
+			"X-Excalibase-Role the role, X-Excalibase-Email the email (the sub claim), and any other claim <name> is X-Excalibase-<name>. Names ignore case.",
 		"rowFilter": `select/update/delete filter: {"owner_id": {"_eq": "X-Excalibase-User-Id"}} — only the caller's rows.`,
 		"insertPreset": `insert {"check": {}, "set": {"owner_id": "X-Excalibase-User-Id"}, "columns": ["title"]}: set fills owner_id from the session; ` +
 			`leave it out of columns so the client cannot send it. insert always needs a check ({} allows any row).`,
 		"updateCheck": `update check: {"owner_id": {"_eq": "X-Excalibase-User-Id"}} keeps an update from moving a row to someone else.`,
-		"ownerColumnType": "X-Excalibase-User-Id is always a string (\"42\"); the engine converts it to the owner column's type before comparing. " +
+		"ownerColumnType": "The session variable X-Excalibase-User-Id is always a string (\"42\"), whatever the claim's JSON type; the engine converts it to the owner column's type before comparing. " +
 			"A bigint or integer owner column compares as a number and a text or varchar one as text, so the same {\"_eq\": \"X-Excalibase-User-Id\"} works for both. " +
 			"A uuid column cannot hold \"42\": the request fails with invalid_session_variable. Make the owner column bigint (matching the user id) or text, and never uuid.",
 		"anon": "anon has no userId: a permission that uses X-Excalibase-User-Id fails for anon, so give anon its own (or no) permission.",
