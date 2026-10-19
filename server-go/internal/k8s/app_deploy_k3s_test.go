@@ -23,7 +23,10 @@ func exerciseAppDeploy(t *testing.T, platform string) {
 	t.Run("missing image fails fast", func(t *testing.T) { checkMissingImageFailsFast(t, g, namespace) })
 	t.Run("crashing image fails only after repeated restarts", func(t *testing.T) { checkCrashLoopTolerance(t, g, namespace) })
 	t.Run("fixed image recovers after a failed deploy", func(t *testing.T) { checkRecoveryAfterFailure(t, g, namespace) })
-	t.Run("a health path the app answers with 404 fails before the deadline", func(t *testing.T) { checkRejectedHealthPathFailsFast(t, g, namespace) })
+	// The probe is the kubelet's, not the sandbox's: one platform shows it.
+	if platform == gvisorPlatformSystrap {
+		t.Run("a health path the app answers with 404 fails before the deadline", func(t *testing.T) { checkRejectedHealthPathFailsFast(t, g, namespace) })
+	}
 }
 
 // EXC-651: the kubelet's own probe events carry the answer; the deploy fails
