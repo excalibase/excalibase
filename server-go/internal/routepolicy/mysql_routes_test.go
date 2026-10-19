@@ -33,6 +33,10 @@ func TestSchemaRoutesThatServeMySQL(t *testing.T) {
 		{"GET", "/api/provision/p1/permissions/"},
 		{"PUT", "/api/provision/p1/permissions/tables/app.orders/roles/anon/select"},
 		{"DELETE", "/api/provision/p1/permissions/tables/app.orders/roles/anon/select"},
+		// EXC-653: the log explorer and the metrics pages.
+		{"GET", "/api/provision/p1/logs"},
+		{"GET", "/api/provision/p1/metrics/current"},
+		{"GET", "/api/provision/p1/metrics/history"},
 	} {
 		row, ok := Lookup(request[0], request[1])
 		if !ok || !row.MySQL {

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // A search term is a literal, case-insensitive line filter: quotes, braces and
@@ -27,7 +29,7 @@ func TestLogSearchTermIsALiteralCaseInsensitiveLineFilter(t *testing.T) {
 		"`backtick`",
 	} {
 		t.Run(term, func(t *testing.T) {
-			logql := projectLogQL("org1-proj-a", "proj-a", term)
+			logql := projectLogQL(postgresLogSelector("org1-proj-a", "proj-a"), term)
 			selector := `{namespace="org1-proj-a",cnpg_io_cluster="proj-a-postgres"}`
 			if !strings.HasPrefix(logql, selector+" |~ ") {
 				t.Fatalf("logql = %s, want the project selector then one line filter", logql)
@@ -48,7 +50,7 @@ func TestLogSearchTermIsALiteralCaseInsensitiveLineFilter(t *testing.T) {
 			}
 		})
 	}
-	if got := projectLogQL("org1-proj-a", "proj-a", ""); got != `{namespace="org1-proj-a",cnpg_io_cluster="proj-a-postgres"}` {
+	if got := projectLogQL(postgresLogSelector("org1-proj-a", "proj-a"), ""); got != `{namespace="org1-proj-a",cnpg_io_cluster="proj-a-postgres"}` {
 		t.Fatalf("no term: %s", got)
 	}
 }
@@ -77,7 +79,7 @@ type fakeLoki struct {
 	starts  []int64
 }
 
-var selectorPattern = regexp.MustCompile(`^\{namespace="([^"]+)",cnpg_io_cluster="([^"]+)"\}(?: \|~ (".*"))?$`)
+var selectorPattern = regexp.MustCompile(`^\{namespace="([^"]+)",(cnpg_io_cluster="[^"]+"|app_kubernetes_io_instance="[^"]+",container="mysqld")\}(?: \|~ (".*"))?$`)
 
 func (f *fakeLoki) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("query")
@@ -190,5 +192,74 @@ func TestLogSearchFallsBackToThePodLogWhenLokiHasNoLines(t *testing.T) {
 	logs, err = svc.SearchLogs(context.Background(), testOpsDB, LogSearch{Lines: 10})
 	if err != nil || logs != "" {
 		t.Fatalf("logs = %q, err = %v", logs, err)
+	}
+}
+
+// seedMySQLProject adds a MOCO project whose primary is instance 1.
+func seedMySQLProject(t *testing.T, store interface {
+	Create(*domain.DatabaseInstance) error
+}, mock *k8s.MockClient) {
+	t.Helper()
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: "my-a", OrgID: "org1", Namespace: "org1-my-a",
+		DBType: domain.MySQL, Tier: domain.Free, Status: "ACTIVE", DeploymentMode: domain.ModeK8s}); err != nil {
+		t.Fatal(err)
+	}
+	cluster := &unstructured.Unstructured{Object: map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "my-a-mysql", "namespace": "org1-my-a"},
+		"status":   map[string]interface{}{"currentPrimaryIndex": int64(1)},
+	}}
+	mock.CRDs["org1-my-a/my-a-mysql"] = cluster
+}
+
+// EXC-653: a MySQL project's search reads the collector's stream of its own
+// MOCO mysqld containers, in its own namespace.
+func TestMySQLLogSearchReadsTheMysqldStream(t *testing.T) {
+	svc, store, mock := setupOpsTest(t)
+	seedMySQLProject(t, store, mock)
+	loki := &fakeLoki{lines: map[string][]string{
+		"org1-my-a": {"[ERROR] [MY-010584] Replica SQL: marker", "[System] ready for connections"},
+		testOpsDBNS: {"ERROR: marker in a Postgres project"},
+	}}
+	server := httptest.NewServer(loki)
+	defer server.Close()
+	svc.SetLokiURL(server.URL)
+
+	logs, err := svc.SearchLogs(context.Background(), "my-a", LogSearch{Lines: 100, Term: "MARKER", Since: 7 * 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("SearchLogs: %v", err)
+	}
+	if logs != "[ERROR] [MY-010584] Replica SQL: marker\n" {
+		t.Fatalf("logs = %q", logs)
+	}
+	want := `{namespace="org1-my-a",app_kubernetes_io_instance="my-a-mysql",container="mysqld"} |~ `
+	if len(loki.queries) != 1 || !strings.HasPrefix(loki.queries[0], want) {
+		t.Fatalf("queries = %q, want %s", loki.queries, want)
+	}
+}
+
+// Without stored lines the live log of MOCO's current primary's mysqld answers.
+func TestMySQLLogSearchFallsBackToThePrimarysMysqldLog(t *testing.T) {
+	svc, store, mock := setupOpsTest(t)
+	seedMySQLProject(t, store, mock)
+	mock.PodLogs["org1-my-a/moco-my-a-mysql-1/mysqld"] = "[System] ready for connections\n[Warning] Aborted connection\n"
+	mock.PodLogs["org1-my-a/moco-my-a-mysql-0/mysqld"] = "[Warning] from a replica\n"
+
+	logs, err := svc.SearchLogs(context.Background(), "my-a", LogSearch{Lines: 50, Term: "aborted"})
+	if err != nil {
+		t.Fatalf("SearchLogs: %v", err)
+	}
+	if logs != "[Warning] Aborted connection\n" {
+		t.Fatalf("logs = %q", logs)
+	}
+	assertNoExecIntoThePod(t, mock)
+}
+
+func TestMySQLLogSearchWithoutAClusterIsUnavailable(t *testing.T) {
+	svc, store, mock := setupOpsTest(t)
+	seedMySQLProject(t, store, mock)
+	delete(mock.CRDs, "org1-my-a/my-a-mysql")
+
+	if _, err := svc.SearchLogs(context.Background(), "my-a", LogSearch{Lines: 10}); !errors.Is(err, ErrLogsUnavailable) {
+		t.Fatalf("err = %v, want ErrLogsUnavailable", err)
 	}
 }

@@ -123,6 +123,5 @@ const (
 	// MySQLNoMigrations is also MCP's answer to apply_migration.
 	MySQLNoMigrations = "migration history is Postgres-only for now; run a MySQL migration with the SQL runner, " +
 		"and note MySQL DDL is not transactional, so a failed migration is not rolled back"
-	mysqlNoLogs     = "the log explorer reads Postgres's log files; MySQL server logs are not collected yet"
 	mysqlNoRealtime = "realtime on MySQL reads the binlog through the watcher, which is not served yet"
 )

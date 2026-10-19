@@ -9,7 +9,7 @@ var provisionRows = []Row{
 	{Methods: post, Pattern: "/api/provision/estimate", Auth: AuthSession, Owner: OwnerNone},
 
 	{Methods: get, Pattern: "/api/provision/{projectId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
-	{Methods: get, Pattern: "/api/provision/{projectId}/logs", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, MySQLRefusal: mysqlNoLogs, Discloses: NoSecret},
+	{Methods: get, Pattern: "/api/provision/{projectId}/logs", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, MySQL: true, Discloses: NoSecret},
 	{Methods: get, Pattern: "/api/provision/{projectId}/maintenance-window", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, Discloses: NoSecret},
 	{Methods: put, Pattern: "/api/provision/{projectId}/maintenance-window", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
 
@@ -33,8 +33,8 @@ var provisionRows = []Row{
 
 	{Methods: post, Pattern: "/api/provision/{projectId}/database", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "creates the database of a project made without one, as project creation does"},
 
-	{Methods: get, Pattern: "/api/provision/{projectId}/metrics/current", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, Discloses: NoSecret},
-	{Methods: get, Pattern: "/api/provision/{projectId}/metrics/history", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, Discloses: NoSecret},
+	{Methods: get, Pattern: "/api/provision/{projectId}/metrics/current", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, MySQL: true, Discloses: NoSecret},
+	{Methods: get, Pattern: "/api/provision/{projectId}/metrics/history", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, MySQL: true, Discloses: NoSecret},
 	{Methods: get, Pattern: "/api/provision/{projectId}/performance/summary", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, Discloses: NoSecret},
 	{Methods: get, Pattern: "/api/provision/{projectId}/performance/top-queries", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, Discloses: NoSecret},
 	{Methods: get, Pattern: "/api/provision/{projectId}/performance/wait-events", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, Discloses: NoSecret},
