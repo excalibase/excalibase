@@ -1215,3 +1215,17 @@ func TestGetLogs_UnusableSearchIsABadRequest(t *testing.T) {
 		}
 	}
 }
+
+// EXC-641: a parameter the log search does not read is refused, not ignored.
+func TestGetLogs_UnknownParameterIsABadRequest(t *testing.T) {
+	r, store, mock := fullRouterWithOpsRoutes(t)
+	seedInstance(store, mock)
+	mock.PodLogs["org1-test-db/test-db-postgres-1"] = "log line 1"
+
+	for _, query := range []string{"search=error", "lines=10&level=error", "Q=error"} {
+		w := doRequest(r, "GET", "/api/provision/test-db/logs?"+query, "")
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "lines, q and since") {
+			t.Errorf("%s: got %d %s, want 400 naming the parameters", query, w.Code, w.Body.String())
+		}
+	}
+}

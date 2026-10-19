@@ -592,11 +592,23 @@ var logRanges = map[string]time.Duration{
 	"1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour,
 }
 
+// logSearchParams are the parameters GetLogs reads; any other is refused (EXC-641).
+var logSearchParams = map[string]bool{"lines": true, "q": true, "since": true}
+
 // GetLogs answers the project's database log lines: the last ?lines (100),
 // those containing ?q (any case) within ?since (1h, 6h, 24h or 7d; 1h).
 func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	query := r.URL.Query()
+	for name := range query {
+		if !logSearchParams[name] {
+			if len(name) > 64 {
+				name = name[:64]
+			}
+			httpError(w, fmt.Sprintf("unknown parameter %q: the log search takes lines, q and since", name), http.StatusBadRequest)
+			return
+		}
+	}
 	lines := 100
 	if l := query.Get("lines"); l != "" {
 		if v, err := strconv.Atoi(l); err == nil {

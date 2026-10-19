@@ -38,7 +38,7 @@ func schemaTools() []entry {
 		tool("list_tables", "List the tables and views in a schema of the project's database.", readTool, listTables),
 		tool("describe_table", "Columns, indexes, CHECK constraints and foreign keys of one table.", readTool, describeTable),
 		tool("get_graphql_schema",
-			"What the project's GraphQL and REST APIs are generated from: the endpoint, every table with its columns, foreign keys, "+
+			"What the project's GraphQL and REST APIs are generated from: the endpoint, every table with its columns, foreign keys, relationship field names, "+
 				"its exact GraphQL root field names (query, connection, aggregate, mutations, subscription ...Changes), REST path and realtime state. "+
 				"The engine builds the GraphQL schema per role from these tables and the project's permissions; the returned introspection command fetches the exact schema a role sees.",
 			readTool, getGraphQLSchema),
@@ -119,12 +119,14 @@ type tableColumns struct {
 // changes are published to subscriptions.
 type schemaTable struct {
 	tableColumns
-	GraphQL  rootFields `json:"graphql"`
-	REST     string     `json:"rest"`
-	Realtime *bool      `json:"realtime,omitempty"`
+	GraphQL       rootFields          `json:"graphql"`
+	Relationships []relationshipField `json:"relationships"`
+	REST          string              `json:"rest"`
+	Realtime      *bool               `json:"realtime,omitempty"`
 }
 
-const namingRule = "Root fields are the engine's names for the schema-qualified table: lowerCamel(schema) + PascalCase(table), " +
+const namingRule = "Each table's relationships are the nested fields its foreign keys add (field is the name for queries and permission filters; deprecatedName still answers). " +
+	"Root fields are the engine's names for the schema-qualified table: lowerCamel(schema) + PascalCase(table), " +
 	"e.g. public.kanban_cards → publicKanbanCards (list), publicKanbanCardsConnection, publicKanbanCardsAggregate, " +
 	"createPublicKanbanCards, createManyPublicKanbanCards (inputs), updatePublicKanbanCards (where, input), deletePublicKanbanCards (where), " +
 	"and the subscription publicKanbanCardsChanges. A role sees only the fields its permissions allow: the connection needs the primary key, " +
@@ -147,13 +149,18 @@ func realtimeTables(ctx context.Context, c *call, projectID string) map[string]b
 	return enabled
 }
 
-func describeSchemaTables(schemaName, restBase string, tables []tableColumns, realtime map[string]bool) []schemaTable {
+func describeSchemaTables(schemaName, restBase string, tables []tableColumns, keys []schema.RelationshipInfo, realtime map[string]bool) []schemaTable {
+	relationships := relationshipFields(schemaName, tables, keys)
 	out := make([]schemaTable, 0, len(tables))
 	for _, table := range tables {
 		entry := schemaTable{
-			tableColumns: table,
-			GraphQL:      graphQLFields(schemaName, table.Name, strings.EqualFold(table.Type, "VIEW")),
-			REST:         restBase + "/" + table.Name,
+			tableColumns:  table,
+			GraphQL:       graphQLFields(schemaName, table.Name, strings.EqualFold(table.Type, "VIEW")),
+			Relationships: relationships[table.Name],
+			REST:          restBase + "/" + table.Name,
+		}
+		if entry.Relationships == nil {
+			entry.Relationships = []relationshipField{}
 		}
 		if realtime != nil {
 			enabled := realtime[schemaName+"."+table.Name]
@@ -210,7 +217,7 @@ func getGraphQLSchema(ctx context.Context, c *call, in schemaArgs) (any, error) 
 	restBase := base + "/" + projectID + "/api/v1"
 	return map[string]any{
 		"endpoint": endpoint, "schema": in.schemaName(), "foreignKeys": relationships,
-		"tables":   describeSchemaTables(in.schemaName(), restBase, tables, realtimeTables(ctx, c, projectID)),
+		"tables":   describeSchemaTables(in.schemaName(), restBase, tables, relationships, realtimeTables(ctx, c, projectID)),
 		"naming":   namingRule,
 		"realtime": realtimeGuide(endpoint),
 		"roles": "Each role sees only the tables, columns and functions it has a permission for (list_permissions); " +

@@ -381,7 +381,7 @@ func validateDatabaseRequest(req domain.ProvisioningRequest) error {
 	// chose.
 	version := strings.TrimSpace(req.PostgresVersion)
 	if version == "" {
-		return fmt.Errorf("postgres version is required (supported: %s)", config.SupportedPostgresMajorsMessage())
+		return fmt.Errorf("postgresVersion is required (supported: %s)", config.SupportedPostgresMajorsMessage())
 	}
 	if _, ok := config.LookupPostgresMajor(version); !ok {
 		return fmt.Errorf("postgres version %q is not supported (supported: %s)", version, config.SupportedPostgresMajorsMessage())
