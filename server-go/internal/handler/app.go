@@ -25,6 +25,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -49,7 +50,18 @@ type AppHandler struct {
 	budget *storagebudget.Budget
 	// features gates auto-deploy, part of the pipeline (EXC-554); nil keeps it dark.
 	features features.Flags
+	// restarts reads what the runtime saw of the app's containers; unset, none is shown.
+	restarts AppRestartReader
 }
+
+// AppRestartReader reads how often an app's containers restarted and why the
+// newest one stopped (EXC-651).
+type AppRestartReader interface {
+	AppRestarts(ctx context.Context, projectID, appID string) (k8s.AppRestarts, error)
+}
+
+// SetRestarts wires where an app's restarts are read.
+func (h *AppHandler) SetRestarts(restarts AppRestartReader) { h.restarts = restarts }
 
 // SetFeatures wires the flags that decide whether auto-deploy may be set.
 func (h *AppHandler) SetFeatures(flags features.Flags) { h.features = flags }
@@ -71,6 +83,23 @@ func NewAppHandler(store apphost.Store, project apphost.ProjectFacts, route apph
 type appResponse struct {
 	*apphost.App
 	URL string `json:"url,omitempty"`
+	// Restarts is live: an app the runtime restarted (OOMKilled, crash) still
+	// reads ACTIVE in its status, so this says it was not running smoothly.
+	Restarts *k8s.AppRestarts `json:"restarts,omitempty"`
+}
+
+// withRestarts adds the app's restarts; a runtime that cannot answer leaves them out.
+func (h *AppHandler) withRestarts(ctx context.Context, response appResponse) appResponse {
+	if h.restarts == nil {
+		return response
+	}
+	restarts, err := h.restarts.AppRestarts(ctx, response.ProjectID, response.ID)
+	if err != nil {
+		log.Printf("app %s/%s: restarts: %v", response.ProjectID, response.ID, err)
+		return response
+	}
+	response.Restarts = &restarts
+	return response
 }
 
 // present leaves the URL out when the app has no hostname; its deploy is what reports why.
@@ -200,7 +229,7 @@ func (h *AppHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]appResponse, 0, len(apps))
 	for _, app := range apps {
-		out = append(out, h.present(app))
+		out = append(out, h.withRestarts(r.Context(), h.present(app)))
 	}
 	writeJSON(w, out)
 }
@@ -219,7 +248,8 @@ func (h *AppHandler) Get(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errNotFound, http.StatusNotFound)
 		return
 	}
-	h.writeAppJSON(w, app)
+	w.Header().Set("ETag", strconv.Itoa(app.Version))
+	writeJSON(w, h.withRestarts(r.Context(), h.present(app)))
 }
 
 // Create stores a new app. The id is assigned here rather than taken from the

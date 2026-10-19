@@ -31,9 +31,13 @@ type fakeContainer struct {
 	aliases  map[string][]string // network -> aliases it was connected with
 	state    string
 	restarts int
-	created  time.Time
-	files    map[string][]byte
-	logs     string
+	// oomKilled, exitCode and finishedAt are the engine's view of the last stop.
+	oomKilled  bool
+	exitCode   int
+	finishedAt string
+	created    time.Time
+	files      map[string][]byte
+	logs       string
 }
 
 type fakeNetwork struct {
@@ -215,7 +219,8 @@ func (f *fakeEngine) ContainerInspect(_ context.Context, id string) (container.I
 	}
 	return container.InspectResponse{
 		ContainerJSONBase: &container.ContainerJSONBase{ID: c.id, Name: "/" + c.name, RestartCount: c.restarts, HostConfig: &host,
-			State: &container.State{Status: c.state, Running: c.state == "running", Restarting: c.state == "restarting"}},
+			State: &container.State{Status: c.state, Running: c.state == "running", Restarting: c.state == "restarting",
+				OOMKilled: c.oomKilled, ExitCode: c.exitCode, FinishedAt: c.finishedAt}},
 		Config: &config, NetworkSettings: &container.NetworkSettings{Networks: networks},
 	}, nil
 }

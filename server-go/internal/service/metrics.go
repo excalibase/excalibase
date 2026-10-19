@@ -101,7 +101,16 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 		MetricsAvailable: true,
 	}
 
+	if s.k8sClient == nil {
+		metrics.MetricsAvailable = false
+		reason := "database metrics are read from Kubernetes; this installation runs its databases on a single host"
+		metrics.UnavailableReason = &reason
+		return metrics
+	}
 	tierInstances := tierInstanceCount(inst.Tier)
+	if inst.DBType == domain.MySQL {
+		return s.collectMySQLMetrics(ctx, inst, tierInstances, metrics)
+	}
 
 	// Collect CNPG Prometheus metrics
 	if err := s.collectCNPGMetrics(ctx, inst, tierInstances, metrics); err != nil {
@@ -111,12 +120,7 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 		return metrics
 	}
 
-	// Health status
-	if inst.Status == "FAILED" {
-		metrics.HealthStatus = "DOWN"
-	} else {
-		metrics.HealthStatus = "HEALTHY"
-	}
+	metrics.HealthStatus = healthOf(inst)
 
 	storageLimit := parseStorage(inst.Tier)
 	if inst.StorageSize != "" {
@@ -124,6 +128,7 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 	}
 	metrics.StorageLimit = &storageLimit
 	metrics.InstanceCount = &tierInstances
+	s.collectDiskUsage(ctx, inst, postgresVolume(inst, tierInstances), metrics)
 
 	limits := s.databaseLimits(ctx, inst)
 	if total, instances, ok := limits.total(); ok {
@@ -134,6 +139,32 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 	s.collectPodResourceMetrics(ctx, inst, limits, metrics)
 
 	return metrics
+}
+
+// collectMySQLMetrics reports what a MySQL project has without CNPG's
+// exporter: its health, plan limits and data volume.
+func (s *MetricsService) collectMySQLMetrics(ctx context.Context, inst *domain.DatabaseInstance, tierInstances int, metrics *domain.DatabaseMetrics) *domain.DatabaseMetrics {
+	metrics.HealthStatus = healthOf(inst)
+	storageLimit := parseStorage(inst.Tier)
+	if inst.StorageSize != "" {
+		storageLimit = inst.StorageSize
+	}
+	metrics.StorageLimit = &storageLimit
+	metrics.InstanceCount = &tierInstances
+	s.collectDiskUsage(ctx, inst, mysqlVolume(inst, tierInstances), metrics)
+	if metrics.DiskUsagePercent == nil {
+		metrics.MetricsAvailable = false
+		reason := "the MySQL data volume could not be read"
+		metrics.UnavailableReason = &reason
+	}
+	return metrics
+}
+
+func healthOf(inst *domain.DatabaseInstance) string {
+	if inst.Status == "FAILED" {
+		return "DOWN"
+	}
+	return "HEALTHY"
 }
 
 // collectCNPGMetrics fetches and parses CNPG Prometheus metrics from the primary pod,

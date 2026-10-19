@@ -134,8 +134,14 @@ const FAILURE_RULES: Array<[RegExp, string]> = [
   ],
 ];
 
+const REJECTED_HEALTH_CHECK = /HealthCheckRejected: the health check GET (\S+) on port \S+ answered HTTP (\d{3})/;
+
 export function plainFailureReason(raw?: string): string {
   if (!raw) return 'The deploy failed.';
+  const rejected = REJECTED_HEALTH_CHECK.exec(raw);
+  if (rejected) {
+    return `The app is running but answers its health check path ${rejected[1]} with HTTP ${rejected[2]}. Fix the health check path, or serve it.`;
+  }
   const match = FAILURE_RULES.find(([pattern]) => pattern.test(raw));
   return match ? match[1] : 'The deploy failed.';
 }
@@ -157,4 +163,38 @@ export function formatWhen(iso?: string): string {
   if (!iso) return '';
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+}
+
+export interface RestartSummary {
+  readonly short: string;
+  readonly detail: string;
+}
+
+function lastStop(reason?: string, exitCode?: number): { short: string; detail: string } {
+  if (reason === 'OOMKilled') {
+    return {
+      short: 'out of memory',
+      detail: 'It ran out of its memory limit and was killed. Lower its memory use, or move the project to a plan with more memory.',
+    };
+  }
+  if (reason) {
+    const code = exitCode === undefined ? '' : ` (${exitCode})`;
+    return { short: `exited${code}`, detail: 'It exited on its own; its logs show what it printed before it stopped.' };
+  }
+  return { short: 'restarting', detail: 'Its logs show what it printed before it stopped.' };
+}
+
+// restartSummary says an app the runtime restarted is not running smoothly,
+// though its status reads ACTIVE (EXC-651).
+export function restartSummary(app: Pick<App, 'restarts'>): RestartSummary | undefined {
+  const restarts = app.restarts;
+  if (!restarts || restarts.count <= 0) return undefined;
+  const stop = lastStop(restarts.lastReason, restarts.lastExitCode);
+  const times = restarts.count === 1 ? 'once' : `${restarts.count} times`;
+  const when = restarts.lastAt ? `, last at ${formatWhen(restarts.lastAt)}` : '';
+  const reason = restarts.lastReason ? ` (${restarts.lastReason})` : '';
+  return {
+    short: `${restarts.count} ${restarts.count === 1 ? 'restart' : 'restarts'} · ${stop.short}`,
+    detail: `This container restarted ${times} since its current deploy started it${reason}${when}. ${stop.detail}`,
+  };
 }

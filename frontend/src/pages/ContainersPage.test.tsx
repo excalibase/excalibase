@@ -86,6 +86,17 @@ describe('ContainersPage', () => {
     expect(screen.getByTestId('container-last-deploy-app-1')).toHaveTextContent('Revision 1');
   });
 
+  test('a container that keeps restarting says so beside its status (EXC-651)', async () => {
+    renderPage({ apps: [{ ...app, status: 'ACTIVE', restarts: { count: 2, lastReason: 'OOMKilled', lastExitCode: 137 } }] });
+    expect(await screen.findByTestId('container-restarts-app-1')).toHaveTextContent('2 restarts · out of memory');
+  });
+
+  test('a container that never restarted shows no restart badge', async () => {
+    renderPage({ apps: [{ ...app, restarts: { count: 0 } }] });
+    await screen.findByTestId('container-status-app-1');
+    expect(screen.queryByTestId('container-restarts-app-1')).not.toBeInTheDocument();
+  });
+
   test('shows the public URL when the API returns one', async () => {
     renderPage({ apps: [{ ...app, url: 'https://web.proj-1.example.dev' }] });
     const link = await screen.findByRole('link', { name: 'https://web.proj-1.example.dev' });
