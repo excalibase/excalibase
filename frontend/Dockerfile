@@ -12,6 +12,8 @@ ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build
 
 FROM nginx:1.27-alpine
+# Security fixes from Alpine published since the base image was cut (EXC-642).
+RUN apk upgrade --no-cache
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 # The /api resolver is injected at container start from /etc/resolv.conf so the
 # proxy works under both Docker's embedded DNS and Kubernetes cluster DNS.
