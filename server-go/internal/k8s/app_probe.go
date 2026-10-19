@@ -48,9 +48,15 @@ func awaitingProbe(pod corev1.Pod, now time.Time) bool {
 	return ok
 }
 
+// probedRun is a container's current run and how long its probe has run.
+type probedRun struct {
+	container corev1.Container
+	started   time.Time
+}
+
 // rejectedContainer is the first running, unready container with an HTTP
 // readiness probe whose initial delay and window have both passed.
-func rejectedContainer(pod corev1.Pod, now time.Time) (corev1.Container, time.Duration, bool) {
+func rejectedContainer(pod corev1.Pod, now time.Time) (probedRun, time.Duration, bool) {
 	for _, status := range pod.Status.ContainerStatuses {
 		if status.Ready || status.State.Running == nil {
 			continue
@@ -60,12 +66,13 @@ func rejectedContainer(pod corev1.Pod, now time.Time) (corev1.Container, time.Du
 		if !found || probe == nil || probe.HTTPGet == nil {
 			continue
 		}
-		since := now.Sub(status.State.Running.StartedAt.Time) - time.Duration(probe.InitialDelaySeconds)*time.Second
+		started := status.State.Running.StartedAt.Time
+		since := now.Sub(started) - time.Duration(probe.InitialDelaySeconds)*time.Second
 		if since >= probeRejectionWindow {
-			return spec, since, true
+			return probedRun{container: spec, started: started}, since, true
 		}
 	}
-	return corev1.Container{}, 0, false
+	return probedRun{}, 0, false
 }
 
 func containerSpec(pod corev1.Pod, name string) (corev1.Container, bool) {
@@ -80,10 +87,11 @@ func containerSpec(pod corev1.Pod, name string) (corev1.Container, bool) {
 // probeRejection fails a pod whose app has answered its readiness path with a
 // 4xx on every check of the window, and is still doing so.
 func probeRejection(pod corev1.Pod, events []corev1.Event, now time.Time) (reason, message string, bad bool) {
-	container, since, ok := rejectedContainer(pod, now)
+	run, since, ok := rejectedContainer(pod, now)
 	if !ok {
 		return "", "", false
 	}
+	container := run.container
 	probe := container.ReadinessProbe
 	period := time.Duration(max(probe.PeriodSeconds, 1)) * time.Second
 	needed := int32(math.Ceil(probeRejectionWindow.Seconds() / period.Seconds()))
@@ -94,7 +102,11 @@ func probeRejection(pod corev1.Pod, events []corev1.Event, now time.Time) (reaso
 			continue
 		}
 		count, first, last := eventSpan(event)
-		if count < needed || now.Sub(last) > fresh || now.Sub(first) < probeRejectionWindow {
+		// Every check of this run: the event began in it, spans the window,
+		// is current, and has one 4xx per period (kubelet merges a pod's
+		// repeats into one event across runs, so an older one says nothing).
+		if first.Before(run.started) || count < needed || now.Sub(last) > fresh ||
+			now.Sub(first) < probeRejectionWindow || last.Sub(first) > time.Duration(count)*period {
 			continue
 		}
 		return probeRejectedReason, fmt.Sprintf(

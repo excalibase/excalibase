@@ -25,7 +25,8 @@ func (r *Runtime) AppRestarts(ctx context.Context, namespace, appID string) (k8s
 		return k8s.AppRestarts{}, err
 	}
 	var restarts k8s.AppRestarts
-	for _, summary := range list {
+	// A stopped container was stopped by the platform (a pause), not a crash.
+	for _, summary := range where(list, isUp) {
 		inspect, err := r.engine.ContainerInspect(ctx, summary.ID)
 		if err != nil {
 			return k8s.AppRestarts{}, fmt.Errorf("read %s: %w", nameOf(summary), err)

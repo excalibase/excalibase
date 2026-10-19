@@ -56,3 +56,18 @@ func TestAppRestartsOfACleanAppIsNone(t *testing.T) {
 		t.Fatalf("restarts = %+v, want none", restarts)
 	}
 }
+
+// A container the platform stopped (a pause) is not a crash.
+func TestAppRestartsIgnoresContainersThePlatformStopped(t *testing.T) {
+	h := newHarness(t, nil)
+	h.rollout(freeApp(), "dep-1")
+	c := h.engine.appContainers("app-01")[0]
+	c.state, c.restarts, c.exitCode, c.finishedAt = "exited", 1, 143, time.Now().UTC().Format(time.RFC3339Nano)
+	restarts, err := h.rt.AppRestarts(context.Background(), testDB, "app-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarts.Count != 0 || restarts.LastReason != "" {
+		t.Fatalf("restarts = %+v, want a stopped container left out", restarts)
+	}
+}

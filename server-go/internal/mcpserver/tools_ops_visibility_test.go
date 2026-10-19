@@ -133,3 +133,14 @@ func TestFunctionPermissionDescriptionExplainsInference(t *testing.T) {
 		}
 	}
 }
+
+// A redeploy with a commit that the server refuses reports that refusal.
+func TestDeployAppWithACommitReportsTheServersRefusal(t *testing.T) {
+	routes := newFakeRoutes()
+	cs := session(t, routes, &recordingAudit{}, writeCaller())
+	routes.on(http.MethodPost, projectsA+"/apps/web/deploy", 409, `{"error":"a deploy is already running"}`)
+	res := callTool(t, cs, "deploy_app", map[string]any{"project_id": testProjectA, "app_id": "web", "commit_sha": "abc1234"})
+	if !res.IsError || !strings.Contains(resultText(res), "already running") {
+		t.Fatalf("got %s, want the deploy's own refusal", resultText(res))
+	}
+}

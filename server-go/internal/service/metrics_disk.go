@@ -2,8 +2,8 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"log"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -17,27 +17,38 @@ const (
 	bytesPerGiB       = 1024 * 1024 * 1024
 )
 
-// databaseVolume is where one engine keeps its data, per instance pod.
+// databaseVolume is where one engine keeps its data: its instance pods,
+// found by label so an instance CNPG or MOCO replaced is still read.
 type databaseVolume struct {
-	pods      []string
+	selector  string
+	prefix    string
 	container string
 	dir       string
 }
 
-func postgresVolume(inst *domain.DatabaseInstance, instances int) databaseVolume {
-	pods := make([]string, 0, instances)
-	for i := 1; i <= instances; i++ {
-		pods = append(pods, fmt.Sprintf("%s-postgres-%d", inst.ProjectID, i))
-	}
-	return databaseVolume{pods: pods, container: postgresContainer, dir: postgresDataDir}
+func postgresVolume(inst *domain.DatabaseInstance) databaseVolume {
+	cluster := inst.ProjectID + postgresSuffix
+	return databaseVolume{selector: "cnpg.io/cluster=" + cluster, prefix: cluster + "-", container: postgresContainer, dir: postgresDataDir}
 }
 
-func mysqlVolume(inst *domain.DatabaseInstance, instances int) databaseVolume {
-	pods := make([]string, 0, instances)
-	for i := 0; i < instances; i++ {
-		pods = append(pods, k8s.MySQLPodName(inst.ProjectID, int64(i)))
+func mysqlVolume(inst *domain.DatabaseInstance) databaseVolume {
+	return databaseVolume{selector: k8s.MySQLPodSelector(inst.ProjectID), prefix: "moco-" + k8s.MySQLClusterName(inst.ProjectID) + "-",
+		container: mysqlContainer, dir: mysqlDataDir}
+}
+
+func (s *MetricsService) volumePods(ctx context.Context, inst *domain.DatabaseInstance, volume databaseVolume) []string {
+	pods, err := s.k8sClient.GetPods(ctx, inst.Namespace, volume.selector)
+	if err != nil {
+		log.Printf("metrics of %s: database pods: %v", inst.ProjectID, err)
+		return nil
 	}
-	return databaseVolume{pods: pods, container: mysqlContainer, dir: mysqlDataDir}
+	names := make([]string, 0, len(pods))
+	for _, pod := range pods {
+		if strings.HasPrefix(pod.Name, volume.prefix) && pod.DeletionTimestamp == nil {
+			names = append(names, pod.Name)
+		}
+	}
+	return names
 }
 
 // collectDiskUsage reads each instance's data volume with df inside the
@@ -47,7 +58,7 @@ func mysqlVolume(inst *domain.DatabaseInstance, instances int) databaseVolume {
 // cannot be read is skipped; none read leaves the figures unset.
 func (s *MetricsService) collectDiskUsage(ctx context.Context, inst *domain.DatabaseInstance, volume databaseVolume, metrics *domain.DatabaseMetrics) {
 	var fullest *k8s.AppDiskUsage
-	for _, pod := range volume.pods {
+	for _, pod := range s.volumePods(ctx, inst, volume) {
 		output, err := s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, volume.container, []string{"df", "-P", "-k", volume.dir})
 		if err != nil {
 			log.Printf("metrics of %s: disk of %s: %v", inst.ProjectID, pod, err)

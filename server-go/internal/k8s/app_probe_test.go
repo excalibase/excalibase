@@ -130,3 +130,27 @@ func TestWaitForAppRollout_FailsOnARejectedHealthCheckPath(t *testing.T) {
 		t.Errorf("error must name the path and the answer: %v", err)
 	}
 }
+
+// kubelet merges a pod's repeated probe events across container runs; only
+// failures of this run, one per period, count (review of EXC-651).
+func TestProbeRejection_CountsOnlyThisRunsDenseFailures(t *testing.T) {
+	now := time.Now()
+	started := now.Add(-probeRejectionWindow - 10*time.Second)
+	pod := probingPod(started, httpProbe("/healthz"))
+
+	carried := unhealthyEvent(notFound404, 14, now)
+	carried.FirstTimestamp = metav1.NewTime(started.Add(-time.Minute))
+	if _, _, bad := probeRejection(pod, []corev1.Event{carried}, now); bad {
+		t.Error("an event that began in an earlier run failed this one")
+	}
+
+	sparse := unhealthyEvent(notFound404, 12, now)
+	sparse.FirstTimestamp = metav1.NewTime(started.Add(time.Second))
+	sparse.LastTimestamp = metav1.NewTime(now)
+	if span := sparse.LastTimestamp.Sub(sparse.FirstTimestamp.Time); span <= 12*10*time.Second {
+		t.Fatalf("setup: span %s is not sparse", span)
+	}
+	if _, _, bad := probeRejection(pod, []corev1.Event{sparse}, now); bad {
+		t.Error("4xx answers mixed with other failures failed the run")
+	}
+}

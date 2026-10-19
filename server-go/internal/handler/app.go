@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -53,6 +54,8 @@ type AppHandler struct {
 	// restarts reads what the runtime saw of the app's containers; unset, none is shown.
 	restarts AppRestartReader
 }
+
+const restartsReadTimeout = 2 * time.Second
 
 // AppRestartReader reads how often an app's containers restarted and why the
 // newest one stopped (EXC-651).
@@ -93,6 +96,9 @@ func (h *AppHandler) withRestarts(ctx context.Context, response appResponse) app
 	if h.restarts == nil {
 		return response
 	}
+	// Bounded: Studio polls the list, and a slow runtime must not stall it.
+	ctx, cancel := context.WithTimeout(ctx, restartsReadTimeout)
+	defer cancel()
 	restarts, err := h.restarts.AppRestarts(ctx, response.ProjectID, response.ID)
 	if err != nil {
 		log.Printf("app %s/%s: restarts: %v", response.ProjectID, response.ID, err)

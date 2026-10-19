@@ -128,7 +128,7 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 	}
 	metrics.StorageLimit = &storageLimit
 	metrics.InstanceCount = &tierInstances
-	s.collectDiskUsage(ctx, inst, postgresVolume(inst, tierInstances), metrics)
+	s.collectDiskUsage(ctx, inst, postgresVolume(inst), metrics)
 
 	limits := s.databaseLimits(ctx, inst)
 	if total, instances, ok := limits.total(); ok {
@@ -151,7 +151,7 @@ func (s *MetricsService) collectMySQLMetrics(ctx context.Context, inst *domain.D
 	}
 	metrics.StorageLimit = &storageLimit
 	metrics.InstanceCount = &tierInstances
-	s.collectDiskUsage(ctx, inst, mysqlVolume(inst, tierInstances), metrics)
+	s.collectDiskUsage(ctx, inst, mysqlVolume(inst), metrics)
 	if metrics.DiskUsagePercent == nil {
 		metrics.MetricsAvailable = false
 		reason := "the MySQL data volume could not be read"

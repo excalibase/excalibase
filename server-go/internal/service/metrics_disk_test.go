@@ -9,6 +9,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const diskTestExporter = "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n" +
@@ -21,7 +23,7 @@ func dfOutput(sizeKiB, usedKiB string) string {
 		"/dev/sdb " + sizeKiB + " " + usedKiB + " 0 50% /data\n"
 }
 
-func newDiskMetricsService(t *testing.T, inst *domain.DatabaseInstance, answer func(pod string, cmd []string) (string, error)) (*MetricsService, *k8s.MockClient) {
+func newDiskMetricsService(t *testing.T, inst *domain.DatabaseInstance, answer func(pod string, cmd []string) (string, error), pods ...string) (*MetricsService, *k8s.MockClient) {
 	t.Helper()
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
@@ -30,6 +32,10 @@ func newDiskMetricsService(t *testing.T, inst *domain.DatabaseInstance, answer f
 	}
 	mock := k8s.NewMockClient()
 	mock.ExecAnswerInPod = answer
+	// Another workload in the namespace is never read as the database.
+	for _, name := range append(pods, "web-7d9f-abc") {
+		mock.Pods[inst.Namespace] = append(mock.Pods[inst.Namespace], corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: inst.Namespace}})
+	}
 	return NewMetricsService(store, mock, dir), mock
 }
 
@@ -45,7 +51,7 @@ func TestPostgresMetricsReportTheDataVolumesUsage(t *testing.T) {
 			return dfOutput("10485760", "2621440"), nil // 10 GiB, 2.5 GiB used
 		}
 		return diskTestExporter, nil
-	})
+	}, "pg-postgres-1")
 
 	m, err := svc.GetCurrentMetrics(context.Background(), "pg")
 	if err != nil {
@@ -65,17 +71,18 @@ func TestPostgresMetricsReportTheDataVolumesUsage(t *testing.T) {
 	}
 }
 
-// Every instance has its own volume; the fullest one is the one that stops the database.
+// Every instance has its own volume; the fullest one is the one that stops
+// the database. Instances are found by label, so one CNPG replaced (-4) counts.
 func TestPostgresDiskUsageIsTheFullestInstances(t *testing.T) {
 	inst := &domain.DatabaseInstance{ProjectID: "pg3", Namespace: "org-pg3", Status: "ACTIVE",
 		DBType: domain.PostgreSQL, Tier: domain.Standard, DatabaseName: "app"}
-	used := map[string]string{"pg3-postgres-1": "1048576", "pg3-postgres-2": "9437184", "pg3-postgres-3": "2097152"}
+	used := map[string]string{"pg3-postgres-1": "1048576", "pg3-postgres-4": "9437184", "pg3-postgres-3": "2097152"}
 	svc, _ := newDiskMetricsService(t, inst, func(pod string, cmd []string) (string, error) {
 		if cmd[0] == "df" {
 			return dfOutput("10485760", used[pod]), nil
 		}
 		return diskTestExporter, nil
-	})
+	}, "pg3-postgres-1", "pg3-postgres-4", "pg3-postgres-3")
 	m, err := svc.GetCurrentMetrics(context.Background(), "pg3")
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +101,7 @@ func TestDiskUsageThatCannotBeReadStaysUnset(t *testing.T) {
 			return "", errors.New("exec refused")
 		}
 		return diskTestExporter, nil
-	})
+	}, "pg-postgres-1")
 	m, err := svc.GetCurrentMetrics(context.Background(), "pg")
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +122,7 @@ func TestMySQLMetricsReportTheDataVolumesUsage(t *testing.T) {
 			return dfOutput("1048576", "524288"), nil
 		}
 		return "", errors.New("no exporter")
-	})
+	}, "moco-my-mysql-0")
 	m, err := svc.GetCurrentMetrics(context.Background(), "my")
 	if err != nil {
 		t.Fatal(err)

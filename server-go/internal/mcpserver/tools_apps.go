@@ -160,13 +160,13 @@ func sendDeploy(ctx context.Context, c *call, path string, in deployAppArgs) (ma
 	}
 	if in.Image != "" {
 		deploy, err = deployViaUpdate(ctx, c, path, in.Image, err)
-		return deploy, false, err
+		return deploy, err == nil && in.CommitSHA != "", err
 	}
 	if in.CommitSHA == "" {
 		return nil, false, err
 	}
 	deploy = nil
-	if retryErr := c.send(ctx, http.MethodPost, path+"/deploy", nil, nil, &deploy); retryErr != nil {
+	if err := c.send(ctx, http.MethodPost, path+"/deploy", nil, nil, &deploy); err != nil {
 		return nil, false, err
 	}
 	return deploy, true, nil
