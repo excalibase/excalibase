@@ -107,6 +107,7 @@ type ProvisioningService struct {
 
 	// restoredSettings carries a source's API settings onto a restored copy.
 	restoredSettings storage.RestoredSettingsStore
+	migrationHistory MigrationHistoryCopier
 
 	// activity seeds the last-seen marker for a newly registered project so
 	// it is not a candidate for idle-pause the moment it exists. Optional.

@@ -54,6 +54,7 @@ func TestHostMySQLRestoredCopyHasNoSessionsFromTheSource(t *testing.T) {
 	setOrgTier(registrar, "org1", domain.Standard)
 	registrar.SetVault(vault)
 	registrar.SetRestoredSettings(&recordingSettings{})
+	registrar.SetMigrationHistory(&recordingHistory{})
 	adapter := NewHostMySQLBackupAdapter(HostMySQLBackupAdapterConfig{
 		Docker: docker, MySQL: mysqlProv, Streamer: NewDockerStreamer(docker.RawClient()), Uploader: newFakeS3Uploader(),
 		Records: &fakeBackupRecordStore{}, Bucket: "it", KeyPrefix: "backups/", Instances: instances,

@@ -1136,6 +1136,7 @@ func buildProvisioningService(
 	provSvc.SetCredentialVerifier(service.NewTenantRoleVerifier())
 	provSvc.SetOrgStore(sqlStore)
 	provSvc.SetRestoredSettings(sqlStore)
+	provSvc.SetMigrationHistory(service.NewMigrationHistoryFiles(cfg.StoragePath))
 	provSvc.AllowMySQLCreation(mysqlCreationAllowed(cfg))
 	provSvc.SetTierStore(sqlStore)
 	provSvc.SetStorageClassPolicy(cfg.TenantStorageClassPolicy())

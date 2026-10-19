@@ -116,13 +116,13 @@ func newLocalStackUploader(ctx context.Context, t *testing.T, bucket string) *AW
 func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, bucket string) (*DockerBackupAdapter, *storage.FileSystemStore, *fakeVault) {
 	t.Helper()
 	store, _ := storage.NewFileSystemStore(t.TempDir())
-	adapter, vault := newRestoreAdapterOn(t, uploader, bucket, store, &recordingSettings{})
+	adapter, vault := newRestoreAdapterOn(t, uploader, bucket, store, &recordingSettings{}, &recordingHistory{})
 	return adapter, store, vault
 }
 
 // newRestoreAdapterOn is newRestoreAdapter registering into the given
 // platform store, carrying API settings through settings.
-func newRestoreAdapterOn(t *testing.T, uploader S3Uploader, bucket string, store storage.InstanceStore, settings storage.RestoredSettingsStore) (*DockerBackupAdapter, *fakeVault) {
+func newRestoreAdapterOn(t *testing.T, uploader S3Uploader, bucket string, store storage.InstanceStore, settings storage.RestoredSettingsStore, history MigrationHistoryCopier) (*DockerBackupAdapter, *fakeVault) {
 	t.Helper()
 	dockerSDK, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -152,6 +152,7 @@ func newRestoreAdapterOn(t *testing.T, uploader S3Uploader, bucket string, store
 	setOrgTier(registrar, "org", domain.Standard)
 	registrar.SetVault(vault)
 	registrar.SetRestoredSettings(settings)
+	registrar.SetMigrationHistory(history)
 	adapter.SetProjectRegistrar(registrar)
 	// The restored container is sized by the restore plan; Free's sizing,
 	// one copy as a single host runs (ADR 0038).
