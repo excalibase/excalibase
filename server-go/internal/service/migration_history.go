@@ -97,7 +97,8 @@ func (h *MigrationHistoryFiles) readRecords(projectID string) (map[string]domain
 }
 
 // stage writes the copy's records into a fresh directory beside the target,
-// so the target only ever holds a complete history.
+// so the target only ever holds a complete history. Only this server reads
+// them, so the directory and records are its own (0700, 0600).
 func (h *MigrationHistoryFiles) stage(targetID string, records map[string]domain.MigrationRecord) (string, error) {
 	parent := filepath.Dir(h.dir(targetID))
 	if err := os.MkdirAll(parent, 0o755); err != nil {
@@ -111,16 +112,12 @@ func (h *MigrationHistoryFiles) stage(targetID string, records map[string]domain
 		record.ProjectID = targetID
 		data, err := json.MarshalIndent(record, "", "  ")
 		if err == nil {
-			err = os.WriteFile(filepath.Join(staging, name), data, 0o644)
+			err = os.WriteFile(filepath.Join(staging, name), data, 0o600)
 		}
 		if err != nil {
 			_ = os.RemoveAll(staging)
 			return "", fmt.Errorf("stage migration record %s of %s: %w", name, targetID, err)
 		}
-	}
-	if err := os.Chmod(staging, 0o755); err != nil {
-		_ = os.RemoveAll(staging)
-		return "", fmt.Errorf("stage migration history of %s: %w", targetID, err)
 	}
 	return staging, nil
 }

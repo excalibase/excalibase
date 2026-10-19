@@ -131,3 +131,54 @@ func (r *recordingHistory) CopyMigrationHistory(sourceID, targetID string) error
 	r.copies = append(r.copies, [2]string{sourceID, targetID})
 	return r.err
 }
+
+// A record ListMigrations cannot read is not copied either; the rest are.
+func TestMigrationHistoryCopySkipsAnUnreadableRecord(t *testing.T) {
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "projects", "src", "migrations")
+	if err := saveMigrationRecord(srcDir, time.Now(), &domain.MigrationRecord{ProjectID: "src", SQL: "select 1", Status: "APPLIED"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"mig-broken.json": "{not json", "notes.txt": "ignored"} {
+		if err := os.WriteFile(filepath.Join(srcDir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(srcDir, "nested.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewMigrationHistoryFiles(root).CopyMigrationHistory("src", "dst"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "projects", "dst", "migrations"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("copied %v (%v), want only the readable record", entries, err)
+	}
+}
+
+// A history that cannot be read or placed fails the copy, so the restore fails.
+func TestMigrationHistoryCopyFailsWhenTheFilesystemRefuses(t *testing.T) {
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "projects", "src", "migrations")
+	if err := saveMigrationRecord(srcDir, time.Now(), &domain.MigrationRecord{ProjectID: "src", SQL: "select 1", Status: "APPLIED"}); err != nil {
+		t.Fatal(err)
+	}
+	// The copy's project directory is a file: nothing can be staged there.
+	if err := os.WriteFile(filepath.Join(root, "projects", "dst"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewMigrationHistoryFiles(root).CopyMigrationHistory("src", "dst"); err == nil {
+		t.Fatal("copy into a project directory that is a file = nil, want an error")
+	}
+	// The source's history is a file, not a directory: it cannot be listed.
+	notADir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(notADir, "projects", "src"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notADir, "projects", "src", "migrations"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewMigrationHistoryFiles(notADir).CopyMigrationHistory("src", "dst"); err == nil {
+		t.Fatal("copy of an unreadable history = nil, want an error")
+	}
+}
