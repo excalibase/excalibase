@@ -270,7 +270,7 @@ func baseRouteCases() []routeCase {
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodGet, schemaA+"/tables", 200, `[{"name":"orders","schema":"app","type":"table"}]`)
 			},
-			expect: []string{"GET " + schemaA + "/tables?schema=app"},
+			expect: []string{"GET " + provisionA, "GET " + schemaA + "/tables?schema=app"},
 		},
 		{
 			name: "describe_table", tool: "describe_table", args: map[string]any{"project_id": testProjectA, "table": "orders"},
@@ -280,7 +280,7 @@ func baseRouteCases() []routeCase {
 				f.on(http.MethodGet, schemaA+"/tables/orders/checks", 200, `[{"name":"orders_total_check","definition":"CHECK ((total >= 0))","columns":["total"]}]`)
 				f.on(http.MethodGet, schemaA+"/relationships", 200, `[{"sourceTable":"orders","sourceColumn":"customer_id","targetTable":"customers","targetColumn":"id"},{"sourceTable":"items","sourceColumn":"order_id","targetTable":"orders","targetColumn":"id"},{"sourceTable":"a","targetTable":"b"}]`)
 			},
-			expect: []string{"GET " + schemaA + "/tables/orders/columns?schema=public", "GET " + schemaA + "/tables/orders/indexes?schema=public", "GET " + schemaA + "/tables/orders/checks?schema=public", "GET " + schemaA + "/relationships?schema=public"},
+			expect: []string{"GET " + provisionA, "GET " + schemaA + "/tables/orders/columns?schema=public", "GET " + schemaA + "/tables/orders/indexes?schema=public", "GET " + schemaA + "/tables/orders/checks?schema=public", "GET " + schemaA + "/relationships?schema=public"},
 			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
 				if checks, _ := out["checks"].([]any); len(checks) != 1 {
 					t.Errorf("checks = %v", out["checks"])
@@ -301,7 +301,7 @@ func baseRouteCases() []routeCase {
 				f.on(http.MethodGet, schemaA+"/relationships", 200, `[]`)
 				f.on(http.MethodGet, projectsA+"/realtime/tables", 200, `[{"schema":"public","table":"orders","enabled":true}]`)
 			},
-			expect: []string{"GET " + schemaA + "/tables?schema=public", "GET " + schemaA + "/relationships?schema=public", "GET " + schemaA + "/tables/orders/columns?schema=public", "GET " + projectsA + "/realtime/tables"},
+			expect: []string{"GET " + provisionA, "GET " + schemaA + "/tables?schema=public", "GET " + schemaA + "/relationships?schema=public", "GET " + schemaA + "/tables/orders/columns?schema=public", "GET " + projectsA + "/realtime/tables"},
 			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
 				if out["endpoint"] != "https://api.example.test/proj-a/graphql" {
 					t.Errorf("endpoint = %v", out["endpoint"])
@@ -950,7 +950,9 @@ func TestBoundConnectionListsOnlyItsProject(t *testing.T) {
 // without the project, so an outsider cannot write into someone's feed.
 func TestACallIsFiledUnderAProjectOnlyWhenTheProjectAnswered(t *testing.T) {
 	routes := newFakeRoutes()
+	routes.on(http.MethodGet, provisionA, 404, `{"error":"project not found"}`)
 	routes.on(http.MethodGet, schemaA+"/tables", 404, `{"error":"project not found"}`)
+	routes.on(http.MethodGet, "/api/provision/"+testProjectB, 401, `{"error":"unauthenticated"}`)
 	routes.on(http.MethodGet, "/api/schema/"+testProjectB+"/tables", 401, `{"error":"unauthenticated"}`)
 	audit := &recordingAudit{}
 	cs := session(t, routes, audit, writeCaller())

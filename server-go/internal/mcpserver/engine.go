@@ -15,16 +15,23 @@ const (
 
 // projectEngine reads the engine of the project's database from its row.
 func projectEngine(ctx context.Context, c *call, projectID string) (string, error) {
+	engine, _, err := projectEngineAndDatabase(ctx, c, projectID)
+	return engine, err
+}
+
+// projectEngineAndDatabase reads the engine and database name from the project's row.
+func projectEngineAndDatabase(ctx context.Context, c *call, projectID string) (engine, database string, err error) {
 	var project struct {
 		DatabaseType string `json:"databaseType"`
+		DatabaseName string `json:"databaseName"`
 	}
 	if err := c.get(ctx, provisionAPI+projectID, nil, &project); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if strings.EqualFold(project.DatabaseType, engineMySQL) {
-		return engineMySQL, nil
+		return engineMySQL, project.DatabaseName, nil
 	}
-	return enginePostgres, nil
+	return enginePostgres, project.DatabaseName, nil
 }
 
 var (
