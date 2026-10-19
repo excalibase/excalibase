@@ -159,6 +159,25 @@ func TestIntegration_GetColumns_AsNonSuperuser(t *testing.T) {
 	}
 }
 
+func TestIntegration_GetColumns_ArrayElementTypes(t *testing.T) {
+	superDB, appDB, cleanup := setupPG(t)
+	defer cleanup()
+	if _, err := superDB.Exec(`CREATE TABLE tallies (id int PRIMARY KEY, counts bigint[], prices numeric(10,2)[], tags text[])`); err != nil {
+		t.Fatalf("create tallies: %v", err)
+	}
+
+	cols, err := NewIntrospector().GetColumns(context.Background(), appDB, "public", "tallies")
+	if err != nil {
+		t.Fatalf("GetColumns: %v", err)
+	}
+	want := map[string]string{"id": "", "counts": "bigint", "prices": "numeric", "tags": "text"}
+	for _, c := range cols {
+		if c.ElementType != want[c.Name] {
+			t.Errorf("%s: element type %q, want %q", c.Name, c.ElementType, want[c.Name])
+		}
+	}
+}
+
 func TestIntegration_GetRelationships_AsNonSuperuser(t *testing.T) {
 	_, appDB, cleanup := setupPG(t)
 	defer cleanup()
