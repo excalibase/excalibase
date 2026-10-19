@@ -33,15 +33,16 @@ func TestTypeScriptForMapsMySQLTypes(t *testing.T) {
 			{Name: "made_in", DataType: "year"},
 			{Name: "note", DataType: "varchar(255)"},
 			{Name: "picture", DataType: "blob"},
+			{Name: "flags_bits", DataType: "bit(8)"},
 		},
 	}}
 	got := typeScriptForEngine("app", tables, engineMySQL)
 	for _, want := range []string{
-		"  id: number;",
+		"  id: string;",
 		"  paid: boolean;",
 		"  flags: number;",
 		"  qty: number;",
-		"  total: number;",
+		"  total: string;",
 		"  ratio: number | null;",
 		`  status: "draft" | "paid";`,
 		`  mood: "it's" | "ok" | null;`,
@@ -53,6 +54,7 @@ func TestTypeScriptForMapsMySQLTypes(t *testing.T) {
 		"  made_in: number;",
 		"  note: string;",
 		"  picture: string;",
+		"  flags_bits: string;",
 		"export interface Database {\n  app: {",
 	} {
 		if !strings.Contains(got, want) {

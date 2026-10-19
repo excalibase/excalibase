@@ -76,7 +76,7 @@ func (i *Introspector) GetColumns(ctx context.Context, db *sql.DB, schemaName, t
 		if err := rows.Scan(
 			&c.Name, &c.DataType, &isNullable, &c.DefaultValue,
 			&c.OrdinalPosition, &c.CharacterMaximumLength,
-			&c.NumericPrecision, &c.NumericScale,
+			&c.NumericPrecision, &c.NumericScale, &c.ElementType,
 			&c.PrimaryKey, &c.Unique,
 		); err != nil {
 			return nil, fmt.Errorf("scan column: %w", err)
@@ -320,6 +320,9 @@ const columnsQuery = `
 SELECT c.column_name, c.data_type, c.is_nullable, c.column_default,
        c.ordinal_position, c.character_maximum_length,
        c.numeric_precision, c.numeric_scale,
+       COALESCE((SELECT format_type(t.typelem, NULL) FROM pg_type t
+                 JOIN pg_namespace tn ON tn.oid = t.typnamespace
+                 WHERE c.data_type = 'ARRAY' AND t.typname = c.udt_name AND tn.nspname = c.udt_schema), '') AS element_type,
        EXISTS (
            SELECT 1 FROM pg_constraint con
            JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)

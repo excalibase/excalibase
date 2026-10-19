@@ -39,12 +39,12 @@ var (
 	mysqlBaseType  = regexp.MustCompile(`^[a-z]+`)
 )
 
-// mysqlTSTypes maps MySQL base types; the API serves numbers as numbers, as
-// the Postgres map does.
+// mysqlTSTypes maps MySQL base types as the Postgres map does: bigints and
+// decimals as strings of every digit, BIT as \x hex like binary.
 var mysqlTSTypes = map[string]string{
 	"tinyint": "number", "smallint": "number", "mediumint": "number", "int": "number", "integer": "number",
-	"bigint": "number", "decimal": "number", "numeric": "number", "float": "number", "double": "number",
-	"real": "number", "bit": "number", "year": "number",
+	"bigint": "string", "decimal": "string", "numeric": "string", "float": "number", "double": "number",
+	"real": "number", "year": "number",
 	"bool": "boolean", "boolean": "boolean",
 	"json": "unknown",
 }
