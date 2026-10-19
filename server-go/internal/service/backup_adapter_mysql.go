@@ -150,16 +150,17 @@ func (a *MySQLBackupAdapter) List(ctx context.Context, inst *domain.DatabaseInst
 	return refs, nil
 }
 
-// completedRefs names each run by its time; a run started by hand is MANUAL.
-func completedRefs(projectID string, completed []mysqlBackup, manual map[string]bool) []BackupRef {
+// completedRefs names each run by its time; a run started by hand is MANUAL,
+// listed under the id its trigger returned.
+func completedRefs(projectID string, completed []mysqlBackup, manual map[string]string) []BackupRef {
 	refs := make([]BackupRef, 0, len(completed))
 	for _, backup := range completed {
-		kind := backupTypeScheduled
-		if manual[backup.ID] {
-			kind = backupTypeManual
+		id, kind := backup.ID, backupTypeScheduled
+		if listed, ok := manual[backup.ID]; ok {
+			id, kind = listed, backupTypeManual
 		}
 		refs = append(refs, BackupRef{
-			ID: backup.ID, ProjectID: projectID, Type: kind, Status: backupStatusCompleted,
+			ID: id, ProjectID: projectID, Type: kind, Status: backupStatusCompleted,
 			StartedAt: backup.At.UTC().Format(time.RFC3339), SizeBytes: backup.Size,
 		})
 	}
@@ -196,7 +197,7 @@ func (a *MySQLBackupAdapter) BackupStatusOf(ctx context.Context, inst *domain.Da
 	}
 	job, err := a.kube.GetCRD(ctx, k8s.JobGVR, inst.Namespace, backupID)
 	if err != nil || !k8s.IsMySQLBackupJob(job, inst.ProjectID) {
-		return "", fmt.Errorf("backup %s not found for project %s", backupID, inst.ProjectID)
+		return a.recordedStatusOf(ctx, inst, backupID)
 	}
 	switch k8s.MySQLBackupJobState(job).Phase {
 	case k8s.MySQLJobSucceeded:
@@ -205,6 +206,46 @@ func (a *MySQLBackupAdapter) BackupStatusOf(ctx context.Context, inst *domain.Da
 		return backupStatusFailed, nil
 	}
 	return backupStatusInProgress, nil
+}
+
+// recordedStatusOf answers a manual run whose Job the CronJob's history limit
+// removed, from its record and the bucket.
+func (a *MySQLBackupAdapter) recordedStatusOf(ctx context.Context, inst *domain.DatabaseInstance, backupID string) (string, error) {
+	records, err := a.manualRecords(ctx, inst.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	record, ok := records[backupID]
+	if !ok {
+		return "", fmt.Errorf("backup %s not found for project %s", backupID, inst.ProjectID)
+	}
+	if record.Status == backupStatusFailed {
+		return backupStatusFailed, nil
+	}
+	backups, err := a.backups(ctx, inst)
+	if err != nil {
+		return "", err
+	}
+	if _, found, err := a.manualRunOf(ctx, record, nil, completedMySQLBackups(backups)); err != nil || found {
+		return backupStatusCompleted, err
+	}
+	return backupStatusInProgress, nil
+}
+
+// restorePoint resolves req against the project's runs; a manual run may be
+// named by its trigger id.
+func (a *MySQLBackupAdapter) restorePoint(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) ([]mysqlBackup, map[string]mysqlShipMark, time.Time, error) {
+	backups, marks, err := a.catalog(ctx, inst)
+	if err != nil {
+		return nil, nil, time.Time{}, err
+	}
+	if req.BackupID != "" {
+		if req.BackupID, err = a.runIDOf(ctx, inst, req.BackupID, completedMySQLBackups(backups)); err != nil {
+			return nil, nil, time.Time{}, err
+		}
+	}
+	point, err := resolveMySQLRestorePoint(backups, marks, req)
+	return backups, marks, point, err
 }
 
 // RestoreWindow is the span the project's runs reach, or nil before the first.
@@ -222,11 +263,7 @@ func (a *MySQLBackupAdapter) RestoreWindow(ctx context.Context, inst *domain.Dat
 
 // CheckRestoreTarget refuses a target outside the window, or not a time.
 func (a *MySQLBackupAdapter) CheckRestoreTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) error {
-	backups, marks, err := a.catalog(ctx, inst)
-	if err != nil {
-		return err
-	}
-	_, err = resolveMySQLRestorePoint(backups, marks, req)
+	_, _, _, err := a.restorePoint(ctx, inst, req)
 	return err
 }
 

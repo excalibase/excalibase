@@ -75,8 +75,8 @@ func TestMySQLSafetyBackupReturnsTheRunItMade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TakeSafetyBackup: %v", err)
 	}
-	if id != "20261011-130000" {
-		t.Errorf("safety backup %q", id)
+	if listed, ok := refsByID(mustList(t, lab))[id]; !ok || listed.StartedAt != "2026-10-11T13:00:00Z" {
+		t.Errorf("safety backup %q is not listed under its id: %+v", id, listed)
 	}
 	target, err := lab.adapter.InPlaceRecoveryTarget(context.Background(), lab.source, domain.RestoreRequest{BackupID: id})
 	if err != nil || target["restorePoint"] != "2026-10-11T13:00:00Z" {
