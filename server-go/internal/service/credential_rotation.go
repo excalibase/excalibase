@@ -11,7 +11,6 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
+	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
@@ -404,7 +404,7 @@ func (v *TenantRoleVerifier) VerifyRole(ctx context.Context, inst *domain.Databa
 	if err != nil {
 		return fmt.Errorf("open project database as %s: connection could not be established", username)
 	}
-	db, err := sql.Open("postgres", dsn)
+	db, err := projectdb.OpenPostgres(dsn, projectdb.ProbeIOTimeout)
 	if err != nil {
 		return fmt.Errorf("open project database as %s: connection could not be established", username)
 	}

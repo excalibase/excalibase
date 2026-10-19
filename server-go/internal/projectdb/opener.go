@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +100,7 @@ func DSNFor(creds map[string]string, o Overrides) (string, error) {
 		dsnField("user", creds["username"]),
 		dsnField("password", creds["password"]),
 		dsnField("dbname", creds["database"]),
+		dsnField("connect_timeout", strconv.Itoa(int(ConnectTimeout.Seconds()))),
 	}
 	if sslmode == "disable" || !tenantcert.IsPlatformRole(creds["username"]) {
 		return strings.Join(append(fields, dsnField("sslmode", sslmode)), " "), nil
@@ -310,7 +312,7 @@ func (o *Opener) openPostgres(creds map[string]string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("postgres", dsn)
+	db, err := OpenPostgres(dsn, o.limits.ioTimeout())
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

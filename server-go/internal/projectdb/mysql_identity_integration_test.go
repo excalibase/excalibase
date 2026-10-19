@@ -24,6 +24,21 @@ import (
 // project CA the vault records carry (EXC-589), and an opener over them.
 func provisionedMySQL(t *testing.T) *Opener {
 	t.Helper()
+	server := startProvisionedMySQL(t)
+	o := NewOpener(testStore(t, &domain.DatabaseInstance{ProjectID: "proj_my", Status: "ACTIVE", DBType: domain.MySQL}),
+		server.vault, Overrides{}, PoolLimits{})
+	t.Cleanup(o.Close)
+	return o
+}
+
+// mysqlServer is a started MySQL and the vault records that reach it.
+type mysqlServer struct {
+	host, port string
+	vault      fakeVault
+}
+
+func startProvisionedMySQL(t *testing.T) mysqlServer {
+	t.Helper()
 	ctx := context.Background()
 	ca := testca.New(t, "proj_my MySQL CA")
 	server := ca.Issue(t, "localhost")
@@ -71,10 +86,7 @@ func provisionedMySQL(t *testing.T) *Opener {
 		"projects/proj_my/credentials/admin":          record("admin", "admin-pw"),
 		"projects/proj_my/credentials/excalibase_app": record("excalibase_app", "app-pw"),
 	}}
-	o := NewOpener(testStore(t, &domain.DatabaseInstance{ProjectID: "proj_my", Status: "ACTIVE", DBType: domain.MySQL}),
-		vault, Overrides{}, PoolLimits{})
-	t.Cleanup(o.Close)
-	return o
+	return mysqlServer{host: host, port: port.Port(), vault: vault}
 }
 
 // EXC-619 review: SQL a Developer writes runs as the customer's admin login,

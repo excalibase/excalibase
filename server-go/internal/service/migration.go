@@ -71,7 +71,8 @@ func (s *MigrationService) openTenantDB(projectID string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("postgres", dsn)
+	// No statement timeout bounds a migration, so its read bound is long.
+	db, err := projectdb.OpenPostgres(dsn, projectdb.MigrationIOTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("open tenant connection: %w", err)
 	}
