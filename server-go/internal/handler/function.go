@@ -667,6 +667,11 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		// function) around.
 		_ = rollbackCronSync(cronTx)
 		rollback()
+		var refused *edgefn.CodeRejectedError
+		if errors.As(deployErr, &refused) {
+			httpError(w, refused.Reason, http.StatusBadRequest)
+			return
+		}
 		if !writeRuntimeFailure(w, "deploy "+fn.RuntimeID(), deployErr) {
 			httpError(w, "failed to deploy: "+safeError(deployErr), http.StatusBadGateway)
 		}
@@ -1322,6 +1327,12 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 	}
 	resp, err := h.invokeDeployed(r.Context(), client, fn, invokeReq)
 	if err != nil {
+		var refused *edgefn.CodeRejectedError
+		if errors.As(err, &refused) {
+			log.Printf("function %s cannot run: %s", fn.RuntimeID(), refused.Reason)
+			httpError(w, "the function cannot run: "+refused.Reason, http.StatusInternalServerError)
+			return
+		}
 		if !writeRuntimeFailure(w, "invoke "+fn.RuntimeID(), err) {
 			log.Printf("ERROR: invoke %s failed: %v", fn.RuntimeID(), err)
 			httpError(w, "internal error", http.StatusInternalServerError)

@@ -83,3 +83,73 @@ func TestCreateFunction_FailedFirstDeployLeavesNoRecord(t *testing.T) {
 		t.Errorf("a failed first deploy kept the function")
 	}
 }
+
+// EXC-640: a deploy the runtime refuses for the function's own code answers
+// 400 with the runtime's reason, not 502.
+func TestCreateFunction_RefusedCodeAnswers400WithTheReason(t *testing.T) {
+	reason := "index.ts must use export default (req: Request) => Response; found only named exports: invite"
+	runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(sharedContentType, sharedMIMEJSON)
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
+	}))
+	t.Cleanup(runtime.Close)
+	store := edgefn.NewFunctionStore(t.TempDir())
+	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}
+	h := NewFunctionHandler(store, edgefn.NewSecretsStore(newFakeVault()), edgefn.NewRuntimeClient(runtime.URL, ""),
+		instStore, nil, testAPIBase)
+	router := chi.NewRouter()
+	router.Post("/api/projects/{projectId}/functions", h.Create)
+
+	w := deployFunction(router, "export function invite() {}")
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &refusal)
+	if w.Code != http.StatusBadRequest || !strings.Contains(refusal.Error, reason) {
+		t.Fatalf("deploy: %d %s, want 400 naming %q", w.Code, w.Body.String(), reason)
+	}
+	if fn, _ := store.Get("proj_p1", "hello"); fn != nil {
+		t.Errorf("a refused first deploy kept the function")
+	}
+}
+
+// EXC-640: a stored function the runtime no longer holds and refuses to load
+// again answers with the refusal, not a bare "internal error".
+func TestInvokeFunction_RefusedRedeployAnswersTheReason(t *testing.T) {
+	reason := "index.ts must use export default (req: Request) => Response; found only named exports: invite"
+	runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(sharedContentType, sharedMIMEJSON)
+		if r.URL.Path == "/deploy" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(runtime.Close)
+	store := edgefn.NewFunctionStore(t.TempDir())
+	if err := store.Save(&edgefn.Function{ID: "hello", ProjectID: "proj_p1", Name: "hello", Active: true,
+		Files: []edgefn.File{{Path: "index.ts", Content: "export function invite() {}"}}}); err != nil {
+		t.Fatal(err)
+	}
+	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}
+	h := NewFunctionHandler(store, edgefn.NewSecretsStore(newFakeVault()), edgefn.NewRuntimeClient(runtime.URL, ""),
+		instStore, nil, testAPIBase)
+	router := chi.NewRouter()
+	router.Post("/api/projects/{projectId}/functions/{fnId}/invoke", h.Invoke)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest("POST", "/api/projects/proj_p1/functions/hello/invoke", strings.NewReader("{}")))
+	var answer struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &answer)
+	if w.Code != http.StatusInternalServerError || answer.Error != "the function cannot run: "+reason {
+		t.Fatalf("invoke: %d %s", w.Code, w.Body.String())
+	}
+}

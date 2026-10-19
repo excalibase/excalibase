@@ -790,7 +790,9 @@ func TestToolDescriptionsSteerTheClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	wants := map[string][]string{
-		"deploy_function":     {"APIs", "not web pages", "script-src 'self'", "create_app"},
+		// EXC-640: the handler contract and the route the SDK calls.
+		"deploy_function": {"APIs", "not web pages", "script-src 'self'", "create_app",
+			"export default (req: Request) => Response", "named exports", "/functions/v1/{projectId}/{id}", "db.functions.", `{"args"`},
 		"get_ci_snippet":      {"after the app exists"},
 		"deploy_app":          {"public", "pass its tag"},
 		"create_app":          {"CORS"},
