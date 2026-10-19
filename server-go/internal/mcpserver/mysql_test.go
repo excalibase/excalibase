@@ -10,7 +10,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/schema"
 )
 
-const mysqlProjectReply = `{"projectId":"proj-a","databaseType":"MYSQL","status":"ACTIVE"}`
+const mysqlProjectReply = `{"projectId":"proj-a","databaseType":"MYSQL","databaseName":"app","status":"ACTIVE"}`
 
 // EXC-619: MySQL column types as the schema API reports them (COLUMN_TYPE).
 func TestTypeScriptForMapsMySQLTypes(t *testing.T) {
@@ -158,5 +158,106 @@ func TestProjectInfoNamesMySQLTablesByTheirDatabase(t *testing.T) {
 	fields, _ := out["graphqlFields"].(map[string]rootFields)
 	if _, ok := fields["app.orders"]; !ok {
 		t.Fatalf("fields = %v", out)
+	}
+}
+
+// EXC-649: a MySQL project's tables are read and named under its database,
+// not public (Corner Shop: appProducts, not publicProducts).
+const cornerShopProject = `{"projectId":"proj-a","databaseType":"MYSQL","databaseName":"app","status":"ACTIVE"}`
+
+func cornerShopRoutes() *fakeRoutes {
+	routes := newFakeRoutes()
+	routes.on(http.MethodGet, provisionA, 200, cornerShopProject)
+	routes.on(http.MethodGet, schemaA+"/tables", 200, `[{"name":"orders","schema":"app","type":"BASE TABLE"},{"name":"order_items","schema":"app","type":"BASE TABLE"}]`)
+	routes.on(http.MethodGet, schemaA+"/tables/orders/columns", 200, `[{"name":"id"}]`)
+	routes.on(http.MethodGet, schemaA+"/tables/order_items/columns", 200, `[{"name":"id"},{"name":"order_id"}]`)
+	routes.on(http.MethodGet, schemaA+"/tables/orders/indexes", 200, `[]`)
+	routes.on(http.MethodGet, schemaA+"/tables/orders/checks", 200, `[]`)
+	routes.on(http.MethodGet, schemaA+"/relationships", 200, `[{"constraintName":"items_order","sourceTable":"order_items","sourceColumn":"order_id","targetTable":"orders","targetColumn":"id"}]`)
+	routes.on(http.MethodGet, projectsA+"/realtime/tables", 200, `[]`)
+	return routes
+}
+
+func schemaQueries(calls []recordedCall) []string {
+	var queries []string
+	for _, call := range calls {
+		if strings.HasPrefix(call.Path, schemaA) {
+			queries = append(queries, call.Query)
+		}
+	}
+	return queries
+}
+
+func TestGetGraphQLSchemaNamesAMySQLProjectsTablesByItsDatabase(t *testing.T) {
+	routes := cornerShopRoutes()
+	cs := session(t, routes, &recordingAudit{}, readOnlyCaller())
+	out := structured(t, callTool(t, cs, "get_graphql_schema", map[string]any{"project_id": testProjectA}))
+	if out["schema"] != "app" {
+		t.Fatalf("schema = %v", out["schema"])
+	}
+	fields := map[string]string{}
+	for _, raw := range out["tables"].([]any) {
+		table := raw.(map[string]any)
+		graphql := table["graphql"].(map[string]any)
+		fields[table["name"].(string)] = graphql["query"].(string)
+		if table["name"] == "order_items" {
+			relationships := table["relationships"].([]any)
+			if field := relationships[0].(map[string]any)["field"]; field != "appOrder" {
+				t.Errorf("order_items relationship = %v", field)
+			}
+		}
+	}
+	if fields["orders"] != "appOrders" || fields["order_items"] != "appOrderItems" {
+		t.Fatalf("root fields = %v", fields)
+	}
+	for _, query := range schemaQueries(routes.calls) {
+		if query != "schema=app" {
+			t.Fatalf("schema routes asked with %q", query)
+		}
+	}
+}
+
+func TestSchemaToolsReadAMySQLProjectsDatabase(t *testing.T) {
+	for _, tool := range []string{"list_tables", "describe_table", "generate_typescript_types"} {
+		routes := cornerShopRoutes()
+		cs := session(t, routes, &recordingAudit{}, readOnlyCaller())
+		args := map[string]any{"project_id": testProjectA}
+		if tool == "describe_table" {
+			args["table"] = "orders"
+		}
+		out := structured(t, callTool(t, cs, tool, args))
+		if tool != "generate_typescript_types" && out["schema"] != "app" {
+			t.Errorf("%s schema = %v", tool, out["schema"])
+		}
+		for _, query := range schemaQueries(routes.calls) {
+			if query != "schema=app" {
+				t.Errorf("%s asked the schema routes with %q", tool, query)
+			}
+		}
+	}
+}
+
+// The permission route's refusal reaches the caller word for word.
+func TestSetPermissionReturnsTheEnginesRefusal(t *testing.T) {
+	routes := newFakeRoutes()
+	routes.on(http.MethodPut, provisionA+"/permissions/tables/app.order_items/roles/anon/select", http.StatusBadRequest,
+		`{"error":"permission_invalid: Unknown relationship orders on app.order_items","status":400}`)
+	cs := session(t, routes, &recordingAudit{}, writeCaller())
+	res := callTool(t, cs, "set_permission", map[string]any{"project_id": testProjectA, "table": "app.order_items", "role": "anon",
+		"operation": "select", "permission": map[string]any{"filter": map[string]any{"orders": map[string]any{}}, "columns": "*"}})
+	if !res.IsError || !strings.Contains(resultText(res), "permission_invalid: Unknown relationship orders on app.order_items") {
+		t.Fatalf("res = %s", resultText(res))
+	}
+}
+
+// A permission saved under public on a MySQL project names no table: the
+// catalogue reads public as the database, so the reply's schema decides.
+func TestListPermissionsFlagsAMySQLProjectsPublicTables(t *testing.T) {
+	routes := cornerShopRoutes()
+	routes.on(http.MethodGet, provisionA+"/permissions/", 200, `{"tables":[{"table":"public.orders","role":"anon"},{"table":"app.orders","role":"anon"}]}`)
+	cs := session(t, routes, &recordingAudit{}, readOnlyCaller())
+	out := structured(t, callTool(t, cs, "list_permissions", map[string]any{"project_id": testProjectA}))
+	if dropped, _ := out["droppedTables"].([]any); len(dropped) != 1 || dropped[0] != "public.orders" {
+		t.Fatalf("droppedTables = %v", out["droppedTables"])
 	}
 }

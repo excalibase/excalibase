@@ -3,8 +3,8 @@
 // (table, role, operation), boolean expressions over the row, tracked
 // functions and function permissions.
 //
-// Column existence is deliberately not checked here: the engine refuses a
-// permission naming a column it cannot find when it builds a role's schema.
+// The grammar is checked here; CheckLive checks the names against the
+// project's live schema, as the engine does when it builds a role's schema.
 package permissions
 
 import (

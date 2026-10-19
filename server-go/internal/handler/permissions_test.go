@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/permissions"
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -140,9 +141,23 @@ func (f *fakePermissionStore) DeleteFunctionPermission(_ context.Context, _, fun
 }
 
 type fakeInspector struct {
-	details []schema.FunctionDetail
-	err     error
-	asked   string
+	details   []schema.FunctionDetail
+	err       error
+	asked     string
+	schemaErr error
+}
+
+// LiveSchema serves public.orders (id, owner_id, status) for every project.
+func (f *fakeInspector) LiveSchema(_ context.Context, _, schemaName string) (*permissions.LiveSchema, error) {
+	if f.schemaErr != nil {
+		return nil, f.schemaErr
+	}
+	if schemaName != "public" {
+		return permissions.NewLiveSchema(schemaName, "", nil, nil), nil
+	}
+	return permissions.NewLiveSchema("public", "", []permissions.TableShape{
+		{Name: "orders", Columns: []string{"id", "owner_id", "status"}},
+	}, nil), nil
 }
 
 func (f *fakeInspector) FunctionDetails(_ context.Context, projectID, schemaName, name string) ([]schema.FunctionDetail, error) {
@@ -450,5 +465,45 @@ func TestPermissionWrites_WithoutPublisherStillSucceed(t *testing.T) {
 	var stored map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &stored); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// EXC-649: a permission the engine would drop is refused with its reason,
+// not saved for the table to vanish from the role's schema.
+func TestPutPermission_RefusesWhatTheLiveSchemaLacks(t *testing.T) {
+	f := newPermissionFixture()
+	for path, body := range map[string]string{
+		permSelectPath: `{"filter":{},"columns":["id","colour"]}`,
+		permBase + "/permissions/tables/public.products/roles/user/select": `{"filter":{},"columns":"*"}`,
+		permBase + "/permissions/tables/public.orders/roles/user/delete":   `{"filter":{"customer":{"id":{"_eq":1}}}}`,
+	} {
+		w := f.do(http.MethodPut, path, body)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "permission_invalid: Unknown") {
+			t.Errorf("%s = %d %s", path, w.Code, w.Body.String())
+		}
+	}
+	if len(f.store.perms) != 0 || len(f.published.events) != 0 {
+		t.Fatalf("stored %v, published %v", f.store.perms, f.published.events)
+	}
+}
+
+func TestPutPermission_RefusesWhenTheSchemaCannotBeRead(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want int
+	}{
+		{projectdb.ErrNotServable, http.StatusConflict},
+		{domain.ErrNoDatabase, http.StatusConflict},
+		{errors.New("dial tcp: connection refused"), http.StatusBadGateway},
+	} {
+		f := newPermissionFixture()
+		f.inspector.schemaErr = c.err
+		w := f.do(http.MethodPut, permSelectPath, `{"filter":{},"columns":"*"}`)
+		if w.Code != c.want || strings.Contains(w.Body.String(), "dial tcp") {
+			t.Errorf("%v = %d %s", c.err, w.Code, w.Body.String())
+		}
+		if len(f.store.perms) != 0 {
+			t.Errorf("%v: stored %v", c.err, f.store.perms)
+		}
 	}
 }

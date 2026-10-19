@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -14,7 +15,7 @@ const maxTypedTables = 200
 
 type schemaArgs struct {
 	projectArg
-	Schema string `json:"schema,omitempty" jsonschema:"the database schema; public when left out"`
+	Schema string `json:"schema,omitempty" jsonschema:"the database schema; when left out, public on Postgres and the project's database on MySQL"`
 }
 
 type tableArgs struct {
@@ -27,6 +28,27 @@ func (a schemaArgs) schemaName() string {
 		return "public"
 	}
 	return a.Schema
+}
+
+// resolve fills in the schema a call left out: public on Postgres, the one
+// database on a MySQL project, whose tables the engine names after it
+// (EXC-649). It returns the project's engine too.
+func (a schemaArgs) resolve(ctx context.Context, c *call, projectID string) (schemaArgs, string, error) {
+	engine, database, err := projectEngineAndDatabase(ctx, c, projectID)
+	if err != nil {
+		return a, "", err
+	}
+	if a.Schema != "" {
+		return a, engine, nil
+	}
+	a.Schema = "public"
+	if engine == engineMySQL {
+		if database == "" {
+			return a, "", errors.New("the project's MySQL database has no name yet; is it still provisioning?")
+		}
+		a.Schema = database
+	}
+	return a, engine, nil
 }
 
 func (a schemaArgs) query() url.Values {
@@ -53,6 +75,9 @@ func listTables(ctx context.Context, c *call, in schemaArgs) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if in, _, err = in.resolve(ctx, c, projectID); err != nil {
+		return nil, err
+	}
 	var tables []schema.TableInfo
 	if err := c.get(ctx, schemaAPI+projectID+"/tables", in.query(), &tables); err != nil {
 		return nil, err
@@ -67,6 +92,9 @@ func describeTable(ctx context.Context, c *call, in tableArgs) (any, error) {
 	}
 	table, err := segment("table", in.Table)
 	if err != nil {
+		return nil, err
+	}
+	if in.schemaArgs, _, err = in.schemaArgs.resolve(ctx, c, projectID); err != nil {
 		return nil, err
 	}
 	base := schemaAPI + projectID
@@ -205,6 +233,9 @@ func getGraphQLSchema(ctx context.Context, c *call, in schemaArgs) (any, error) 
 	if err != nil {
 		return nil, err
 	}
+	if in, _, err = in.resolve(ctx, c, projectID); err != nil {
+		return nil, err
+	}
 	var relationships []schema.RelationshipInfo
 	tables, err := readTables(ctx, c, projectID, in, func() error {
 		return c.get(ctx, schemaAPI+projectID+"/relationships", in.query(), &relationships)
@@ -233,7 +264,7 @@ func generateTypeScriptTypes(ctx context.Context, c *call, in schemaArgs) (any, 
 	if err != nil {
 		return nil, err
 	}
-	engine, err := projectEngine(ctx, c, projectID)
+	in, engine, err := in.resolve(ctx, c, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -241,12 +272,7 @@ func generateTypeScriptTypes(ctx context.Context, c *call, in schemaArgs) (any, 
 	if err != nil {
 		return nil, err
 	}
-	schemaName := in.schemaName()
-	if engine == engineMySQL && len(tables) > 0 {
-		// A MySQL project's tables live in its one database, named by the routes.
-		schemaName = tables[0].Schema
-	}
 	return map[string]any{
-		"path": "src/database.types.ts", "typescript": typeScriptForEngine(schemaName, tables, engine), "tables": len(tables),
+		"path": "src/database.types.ts", "typescript": typeScriptForEngine(in.schemaName(), tables, engine), "tables": len(tables),
 	}, nil
 }
