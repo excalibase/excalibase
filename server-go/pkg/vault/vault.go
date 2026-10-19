@@ -9,7 +9,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/hashicorp/vault/shamir"
+	"github.com/excalibase/provisioning-poc/pkg/vault/shamir"
 )
 
 var (

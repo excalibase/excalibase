@@ -387,6 +387,9 @@ func (lab *fenceLab) startFunctionProbe(t *testing.T, namespace string, spec Den
 			t.Fatalf("apply runtime fence: %v", err)
 		}
 	}
+	if err := lab.client.applyDenoRuntimeSecret(lab.ctx, namespace, spec.RuntimeSecret); err != nil {
+		t.Fatalf("apply runtime secret: %v", err)
+	}
 	if _, err := lab.cs.AppsV1().Deployments(namespace).Create(lab.ctx, deployment, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}

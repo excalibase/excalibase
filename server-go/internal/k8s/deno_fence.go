@@ -27,18 +27,13 @@ var denoFenceScript string
 // denoFenceContainer holds the runtime back until the fence refuses the
 // Kubernetes API and DNS answers, and fails the pod after 30 s if it never does.
 func denoFenceContainer(image, tier string) corev1.Container {
-	noEscalation, readOnlyRoot := false, true
 	return corev1.Container{
 		Name:            denoFenceContainerName,
 		Image:           image,
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Command:         []string{"deno", "eval", "--ext=ts", denoFenceScript},
 		Resources:       denoFenceResources(tier),
-		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: &noEscalation,
-			ReadOnlyRootFilesystem:   &readOnlyRoot,
-			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-		},
+		SecurityContext: denoSecurityContext(true),
 	}
 }
 

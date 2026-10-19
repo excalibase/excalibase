@@ -50,7 +50,28 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # The Dockerfile runs the example's unit tests before it builds.
+      # The Trivy gate lives in this repository; the workspace is the SDK's.
+      - uses: actions/checkout@v4
+        with:
+          path: .platform
+          persist-credentials: false
+
+      # The Dockerfile runs the example's unit tests before it builds. Built
+      # into the local daemon and scanned before anything is pushed (EXC-642).
+      - name: Build the candidate image
+        uses: docker/build-push-action@v6
+        with:
+          context: examples/storefront
+          load: true
+          push: false
+          platforms: linux/amd64
+          tags: storefront-demo-candidate:${{ inputs.sdk_commit }}
+
+      - name: Trivy
+        uses: ./.platform/.github/actions/trivy
+        with:
+          image: storefront-demo-candidate:${{ inputs.sdk_commit }}
+
       - name: Build and push
         id: push
         uses: docker/build-push-action@v6

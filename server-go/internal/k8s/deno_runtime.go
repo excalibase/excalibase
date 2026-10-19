@@ -80,6 +80,9 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 	if err := c.applyDenoEgressPolicy(ctx, namespace, spec); err != nil {
 		return err
 	}
+	if err := c.applyDenoRuntimeSecret(ctx, namespace, spec.RuntimeSecret); err != nil {
+		return err
+	}
 	dep := buildDenoDeployment(namespace, spec)
 	if _, err := c.clientset.AppsV1().Deployments(namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create deno deployment: %w", err)
@@ -112,6 +115,9 @@ func (c *Client) reconcileDenoEgress(ctx context.Context, namespace string, dep 
 	if err := c.applyDenoEgressPolicy(ctx, namespace, spec); err != nil {
 		return err
 	}
+	if err := c.applyDenoRuntimeSecret(ctx, namespace, spec.RuntimeSecret); err != nil {
+		return err
+	}
 	want := workerAllowedHosts(spec)
 	settings := runtimeSettingsEnv(spec)
 	// A runtime made from an older image moves to the configured one, or no
@@ -124,10 +130,13 @@ func (c *Client) reconcileDenoEgress(ctx context.Context, namespace string, dep 
 	// A runtime made before EXC-622, or fenced with an oversized request, gets the wanted fence.
 	fence := denoFenceContainer(image, spec.Tier)
 	initContainers, fenceChanged := withDenoFence(dep.Spec.Template.Spec.InitContainers, fence)
-	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) && !fenceChanged && !imageChanged {
+	// A runtime made before EXC-642 moves its secret into a Secret and drops its privileges.
+	hardened := denoHardeningCurrent(dep, spec.RuntimeSecret)
+	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) && !fenceChanged && !imageChanged && hardened {
 		return nil
 	}
 	updated := dep.DeepCopy()
+	hardenDeno(updated, spec.RuntimeSecret)
 	updated.Spec.Template.Spec.Containers[0].Image = image
 	setAllowedHosts(updated, want)
 	setEnv(updated, settings)
@@ -246,8 +255,11 @@ func buildDenoDeployment(namespace string, spec DenoRuntimeSpec) *appsv1.Deploym
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels:      labels,
-					Annotations: map[string]string{egressHashAnnotation: egressHash(allowed)},
+					Labels: labels,
+					Annotations: map[string]string{
+						egressHashAnnotation:            egressHash(allowed),
+						denoRuntimeSecretHashAnnotation: runtimeSecretHash(spec.RuntimeSecret),
+					},
 				},
 				Spec: corev1.PodSpec{
 					// The Deno runtime executes tenant-authored code and never calls
@@ -269,8 +281,9 @@ func buildDenoContainer(spec DenoRuntimeSpec, allowedHosts string) corev1.Contai
 		Image:           spec.Image,
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Ports:           []corev1.ContainerPort{{ContainerPort: 8000, Protocol: corev1.ProtocolTCP}},
+		SecurityContext: denoSecurityContext(false),
 		Env: append([]corev1.EnvVar{
-			{Name: "RUNTIME_SECRET", Value: spec.RuntimeSecret},
+			runtimeSecretEnv(),
 			// The project's outbound allowlist (EXC-348). Empty = no network
 			// for user code, which is the default for a new project.
 			{Name: allowedHostsEnvName, Value: allowedHosts},

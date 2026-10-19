@@ -54,9 +54,10 @@ func TestEnsureDenoRuntime_ExistingRuntimeWithoutProvisioningURLIsUpdated(t *tes
 	if env["EXCALIBASE_PROVISIONING_URL"] != runtimeProvisioningURL || env["EXCALIBASE_FUNCTIONS_V2"] != "1" {
 		t.Fatalf("existing runtime not brought up to date: %v", env)
 	}
-	if env["RUNTIME_SECRET"] != "s" || env["ALLOWED_HOSTS"] != "" {
+	if env["ALLOWED_HOSTS"] != "" {
 		t.Fatalf("unrelated env changed: %v", env)
 	}
+	assertSecretByReference(t, c, denoDeployment(t, c), "s")
 	if n := countActions(c, "update", "deployments"); n != 1 {
 		t.Fatalf("want one deployment update, got %d", n)
 	}
