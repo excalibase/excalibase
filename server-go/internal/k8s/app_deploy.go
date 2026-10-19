@@ -386,6 +386,11 @@ func (c *Client) badPod(ctx context.Context, namespace string, dep *appsv1.Deplo
 		if reason, message, bad := podProblem(pod, runtimeClass, now); bad {
 			return reason, message, true
 		}
+		if awaitingProbe(pod, now) {
+			if reason, message, bad := probeRejection(pod, c.probeEvents(ctx, namespace, pod.Name), now); bad {
+				return reason, message, true
+			}
+		}
 	}
 	return "", "", false
 }

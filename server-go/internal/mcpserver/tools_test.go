@@ -591,8 +591,9 @@ func baseRouteCases() []routeCase {
 			args: map[string]any{"project_id": testProjectA, "function": "public.short_code", "role": "anon", "allowed": false},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodDelete, "/api/provision/proj-a/function-permissions/public.short_code/roles/anon", 204, ``)
+				f.on(http.MethodGet, "/api/provision/proj-a/permissions/", 200, `{"functions":[]}`)
 			},
-			expect: []string{"DELETE /api/provision/proj-a/function-permissions/public.short_code/roles/anon"},
+			expect: []string{"DELETE /api/provision/proj-a/function-permissions/public.short_code/roles/anon", "GET /api/provision/proj-a/permissions/"},
 		},
 		{
 			name: "list_apps marks an app never deployed", tool: "list_apps", args: map[string]any{"project_id": testProjectA},
@@ -619,13 +620,13 @@ func baseRouteCases() []routeCase {
 		},
 		{
 			name: "deploy_app with a new image", tool: "deploy_app",
-			args: map[string]any{"project_id": testProjectA, "app_id": "web", "image": "ghcr.io/a/web:main", "commit_sha": "abc123"},
+			args: map[string]any{"project_id": testProjectA, "app_id": "web", "image": "ghcr.io/a/web:main", "commit_sha": "abc1234"},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodPost, projectsA+"/apps/web/deploy", 202, `{"id":"d1","status":"pending"}`)
 			},
 			expect: []string{"POST " + projectsA + "/apps/web/deploy"},
 			check: func(t *testing.T, calls []recordedCall, _ map[string]any) {
-				if calls[0].Body != `{"commitSha":"abc123","image":"ghcr.io/a/web:main"}` {
+				if calls[0].Body != `{"commitSha":"abc1234","image":"ghcr.io/a/web:main"}` {
 					t.Errorf("deploy body = %s", calls[0].Body)
 				}
 			},

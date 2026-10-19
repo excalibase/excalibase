@@ -475,7 +475,7 @@ jobs:
         with:
           go-version: '1.24'
       - name: Run live cluster tests
-        run: go test -tags=live ./internal/k8s/ -run 'TestK3s' -skip 'StartFence|MySQLBackup|TestK3sSiteBuild' -v -timeout 40m
+        run: go test -tags=live ./internal/k8s/ -run 'TestK3s' -skip 'StartFence|MySQLBackup|TestK3sSiteBuild' -v -timeout 50m
 
   live-start-fence:
     name: Live cluster tests (start fence)

@@ -152,6 +152,7 @@ type KubeClient interface {
 	AppLogs(ctx context.Context, namespace, appID string, opts AppLogOptions) (AppLogPage, error)
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)
 	LiveAppPods(ctx context.Context, namespace, appID string) (AppPods, error)
+	AppRestarts(ctx context.Context, namespace, appID string) (AppRestarts, error)
 	RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error)
 	PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error)
 	SyncAppDomains(ctx context.Context, namespace string, app *apphost.App, hosts []string, opts AppDomainOptions) error

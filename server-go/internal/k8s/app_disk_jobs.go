@@ -503,3 +503,6 @@ func parseDiskUsage(output string) (AppDiskUsage, error) {
 }
 
 func pointerTo[T any](value T) *T { return &value }
+
+// ParseDiskFree reads `df -P -k` output into used and total bytes.
+func ParseDiskFree(output string) (AppDiskUsage, error) { return parseDiskUsage(output) }

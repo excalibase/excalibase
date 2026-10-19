@@ -23,6 +23,31 @@ func exerciseAppDeploy(t *testing.T, platform string) {
 	t.Run("missing image fails fast", func(t *testing.T) { checkMissingImageFailsFast(t, g, namespace) })
 	t.Run("crashing image fails only after repeated restarts", func(t *testing.T) { checkCrashLoopTolerance(t, g, namespace) })
 	t.Run("fixed image recovers after a failed deploy", func(t *testing.T) { checkRecoveryAfterFailure(t, g, namespace) })
+	// The probe is the kubelet's, not the sandbox's: one platform shows it.
+	if platform == gvisorPlatformSystrap {
+		t.Run("a health path the app answers with 404 fails before the deadline", func(t *testing.T) { checkRejectedHealthPathFailsFast(t, g, namespace) })
+	}
+}
+
+// EXC-651: the kubelet's own probe events carry the answer; the deploy fails
+// with it once the window has passed, long before a 10-minute deadline.
+func checkRejectedHealthPathFailsFast(t *testing.T, g *gvisorCluster, namespace string) {
+	app := liveApp("wrongpath", "nginxinc/nginx-unprivileged:1.27", 8080)
+	app.HealthCheckPath = "/nope"
+	start := time.Now()
+	err := g.deployApp(t, namespace, app, 10*time.Minute)
+	elapsed := time.Since(start)
+	t.Logf("wrong health path after %s: %v", elapsed.Round(time.Second), err)
+	if !errors.Is(err, ErrAppRollout) || !strings.Contains(err.Error(), probeRejectedReason) ||
+		!strings.Contains(err.Error(), "/nope") || !strings.Contains(err.Error(), "404") {
+		t.Fatalf("want a rejected health check naming /nope and 404, got %v", err)
+	}
+	if elapsed < probeRejectionWindow {
+		t.Errorf("failed after %s, before the %s window", elapsed, probeRejectionWindow)
+	}
+	if elapsed > probeRejectionWindow+2*time.Minute {
+		t.Errorf("took %s, want a failure soon after the %s window", elapsed, probeRejectionWindow)
+	}
 }
 
 func checkGoodImageRollsOut(t *testing.T, g *gvisorCluster, namespace string) {

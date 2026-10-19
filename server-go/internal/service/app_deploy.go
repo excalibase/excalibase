@@ -631,3 +631,19 @@ func (s *AppDeployService) setStatus(deploy *apphost.Deploy, status, failureReas
 		log.Printf("update deploy %s status to %s: %v", deploy.ID, status, err)
 	}
 }
+
+// AppRestarts reads how often the app's containers restarted and why the
+// newest one stopped (EXC-651): a status of ACTIVE does not say so.
+func (s *AppDeployService) AppRestarts(ctx context.Context, projectID, appID string) (k8s.AppRestarts, error) {
+	if _, err := s.lookupApp(projectID, appID); err != nil {
+		return k8s.AppRestarts{}, err
+	}
+	namespace, err := s.namespaceFor(projectID)
+	if errors.Is(err, errNoAppNamespace) {
+		return k8s.AppRestarts{}, nil // nothing has run, so nothing restarted
+	}
+	if err != nil {
+		return k8s.AppRestarts{}, err
+	}
+	return s.runtime.AppRestarts(ctx, namespace, appID)
+}

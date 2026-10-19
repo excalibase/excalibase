@@ -4,11 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/routepolicy"
 )
+
+// exposedAsQuery is how a tracked function that only reads is served.
+const exposedAsQuery = "QUERY"
 
 type trackFunctionArgs struct {
 	projectArg
@@ -36,7 +41,10 @@ func dbFunctionTools() []entry {
 			"Create the function first (apply_migration). A function that only reads (STABLE/IMMUTABLE) is a query, any other a mutation. "+
 			"A SECURITY DEFINER function runs with its owner's privileges, so check its arguments. "+
 			"Tracked functions are not offered on MySQL projects: MySQL functions return scalars, and permissions apply to rows.", writeTool, trackDBFunction),
-		tool("set_db_function_permission", "Let one role call a tracked database function, or take that away.", writeTool, setDBFunctionPermission),
+		tool("set_db_function_permission", "Let one role call a tracked database function, or take that away. "+
+			"A query function (STABLE/IMMUTABLE) tracked with infer_permissions on (the default) is callable by every role that may select its "+
+			"return table, with or without this permission, so taking it away has no effect while inference is on: remove the role's select "+
+			"on the return table, or track the function again with infer_permissions false. Mutations always need this permission.", writeTool, setDBFunctionPermission),
 	}
 }
 
@@ -105,7 +113,30 @@ func setDBFunctionPermission(ctx context.Context, c *call, in functionPermission
 	if err := grantFunction(ctx, c, projectID, function, in.Role, in.Allowed); err != nil {
 		return nil, err
 	}
-	return map[string]any{"function": in.Function, "role": in.Role, "allowed": in.Allowed}, nil
+	out := map[string]any{"function": in.Function, "role": in.Role, "allowed": in.Allowed}
+	if !in.Allowed && inferredQuery(ctx, c, projectID, in.Function) {
+		out["effect"] = "no effect while infer_permissions is on: " + in.Function + " is a query function tracked with inference, so " +
+			in.Role + " can still call it as long as it may select the function's return table. To stop it, remove " + in.Role +
+			"'s select on that table (set_permission), or track the function again with infer_permissions false."
+	}
+	return out, nil
+}
+
+// inferredQuery is true when the function is a query tracked with
+// inference, which the engine lets any role that may select its return
+// table call. A document that cannot be read says nothing.
+func inferredQuery(ctx context.Context, c *call, projectID, function string) bool {
+	var document domain.PermissionDocument
+	if err := c.get(ctx, provisionAPI+projectID+"/permissions/", nil, &document); err != nil {
+		log.Printf("mcp: permissions of %s: %v", projectID, err)
+		return false
+	}
+	for _, tracked := range document.Functions {
+		if tracked.Function == function {
+			return tracked.InferPermissions && tracked.ExposedAs == exposedAsQuery
+		}
+	}
+	return false
 }
 
 func grantFunction(ctx context.Context, c *call, projectID, function, role string, allowed bool) error {

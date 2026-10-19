@@ -5,6 +5,7 @@ import {
   diskStopReason,
   isAppRunning,
   plainFailureReason,
+  restartSummary,
   suggestAppName,
 } from './appCopy';
 import type { App, Deploy } from '../../api/apps';
@@ -134,5 +135,38 @@ describe('suggestAppName', () => {
     ['acme/proj-tool:1', ''],
   ])('%s → %s', (image, name) => {
     expect(suggestAppName(image)).toBe(name);
+  });
+});
+
+describe('restartSummary (EXC-651)', () => {
+  test('an app that ran out of memory says so', () => {
+    const summary = restartSummary({
+      restarts: { count: 3, lastReason: 'OOMKilled', lastExitCode: 137, lastAt: '2026-10-19T12:00:00Z' },
+    });
+    expect(summary?.short).toBe('3 restarts · out of memory');
+    expect(summary?.detail).toMatch(/restarted 3 times/i);
+    expect(summary?.detail).toMatch(/ran out of its memory/i);
+  });
+
+  test('an app that exited on its own points at its logs', () => {
+    const summary = restartSummary({ restarts: { count: 1, lastReason: 'Error', lastExitCode: 1 } });
+    expect(summary?.short).toBe('1 restart · exited (1)');
+    expect(summary?.detail).toMatch(/logs/i);
+  });
+
+  test('an app that never restarted, or whose restarts are unknown, says nothing', () => {
+    expect(restartSummary({ restarts: { count: 0 } })).toBeUndefined();
+    expect(restartSummary({})).toBeUndefined();
+  });
+});
+
+describe('plainFailureReason for a rejected health check (EXC-651)', () => {
+  test('names the path and the answer', () => {
+    const reason = plainFailureReason(
+      'app rollout: web HealthCheckRejected: the health check GET /nope on port 8080 answered HTTP 404 on every check for 2m5s (13 checks); the app is running but does not serve that path: fix healthCheckPath or serve it',
+    );
+    expect(reason).toMatch(/\/nope/);
+    expect(reason).toMatch(/404/);
+    expect(reason).toMatch(/health check path/i);
   });
 });

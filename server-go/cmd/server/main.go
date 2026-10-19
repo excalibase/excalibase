@@ -1427,7 +1427,7 @@ func newSchemaHandler(cfg config.AppConfig, vc vaultclient.VaultClient, instance
 }
 
 func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore storage.PlatformStore,
-	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget) *handler.AppHandler {
+	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget, restarts handler.AppRestartReader) *handler.AppHandler {
 	plans := service.NewOrgPlanTiers(store, sqlStore)
 	h := handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
 		handler.NewProjectSourceLookup(store, plans), appPublicRoute(cfg))
@@ -1435,6 +1435,7 @@ func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore s
 	h.SetAppLimits(service.NewAppLimits(plans, tiers))
 	h.SetStorageBudget(budget)
 	h.SetFeatures(cfg.Features())
+	h.SetRestarts(restarts)
 	return h
 }
 
@@ -1634,7 +1635,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		tableImportHandler:  newTableImportHandler(cfg, schemaHandler, store, sqlStore),
 		realtimeHandler:     realtimeHandler,
 		permissionHandler:   newPermissionHandler(cfg, sqlStore, store, a.projectDB),
-		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget),
+		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc),
 		siteHandler:         newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:    sitesSvc,
 		storageBudgetH:      handler.NewStorageBudgetHandler(a.budget),

@@ -149,6 +149,10 @@ type DatabaseMetrics struct {
 	CPUUsageCores      *float64 `json:"cpuUsageCores"`
 	MemoryUsageMB      *int64   `json:"memoryUsageMB"`
 	DiskUsageGB        *int64   `json:"diskUsageGB"`
+	// Disk figures are the fullest instance's data volume, as df reads it in
+	// the database container (EXC-651).
+	DiskUsedBytes *int64 `json:"diskUsedBytes"`
+	DiskSizeBytes *int64 `json:"diskSizeBytes"`
 
 	// Database metrics (from CNPG port 9187)
 	ActiveConnections *int     `json:"activeConnections"`
