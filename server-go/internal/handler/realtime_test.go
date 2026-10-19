@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -140,5 +143,44 @@ func TestRealtimeHandler_NewAndSetPublicationName(t *testing.T) {
 	h.SetPublicationName("xyz")
 	if h.publicationName != "xyz" {
 		t.Errorf("publicationName: got %q, want xyz", h.publicationName)
+	}
+}
+
+// EXC-650: a project database that accepts the connection and then never
+// answers (a frozen or replaced pod) fails the toggle instead of holding it.
+func TestRealtimeHandler_ListTables_SilentDatabaseFails(t *testing.T) {
+	listener, err := net.Listen("tcp", testLocalhost+":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+	t.Setenv("SCHEMA_DB_HOST", testLocalhost)
+	t.Setenv("SCHEMA_DB_PORT", strconv.Itoa(listener.Addr().(*net.TCPAddr).Port))
+	t.Setenv("SCHEMA_DB_SSLMODE", "disable")
+	r, _, _ := setupRealtimeRouter(t, map[string]string{
+		"username": "u", "password": "p", "host": "db.internal", "port": "5432", "database": "x",
+	})
+	done := make(chan int, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/api/projects/proj-known/realtime/tables", nil))
+		done <- w.Code
+	}()
+	select {
+	case code := <-done:
+		if code != 500 {
+			t.Errorf("silent database: got %d, want 500", code)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the request hung on a database that does not answer")
 	}
 }

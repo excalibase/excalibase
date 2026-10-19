@@ -11,6 +11,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/projectdb"
 
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
@@ -91,7 +92,7 @@ func (p *VaultDatabaseProbe) open(creds map[string]string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("postgres", dsn)
+	db, err := projectdb.OpenPostgres(dsn, projectdb.ProbeIOTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("open restored database: %w", err)
 	}

@@ -99,7 +99,10 @@ func MySQLConfigFor(creds map[string]string, o Overrides, l PoolLimits, multiSta
 	}
 	config.TLS = tlsConfig
 	config.MultiStatements = multiStatements
-	config.Timeout = 10 * time.Second
+	config.Timeout = ConnectTimeout
+	// A server a restore or failover replaced fails the call instead of
+	// holding it (EXC-650); max_execution_time answers a slow SELECT first.
+	config.ReadTimeout, config.WriteTimeout = l.ioTimeout(), l.ioTimeout()
 	lockSeconds := strconv.Itoa(wholeSeconds(l.LockTimeout))
 	config.Params = map[string]string{
 		"max_execution_time":       strconv.FormatInt(l.StatementTimeout.Milliseconds(), 10),
