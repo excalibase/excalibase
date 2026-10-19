@@ -23,6 +23,19 @@ type fakeRegistrar struct {
 	// store, when set, persists the row so the caller's verify-then-activate
 	// flip has something to update.
 	store storage.InstanceStore
+	// carried records each source->copy settings carry; carryErr fails it.
+	carried      [][2]string
+	carriedWhile []string
+	carryStatus  func(projectID string) string
+	carryErr     error
+}
+
+func (f *fakeRegistrar) CarryRestoredSettings(_ context.Context, sourceID, targetID string) error {
+	f.carried = append(f.carried, [2]string{sourceID, targetID})
+	if f.carryStatus != nil {
+		f.carriedWhile = append(f.carriedWhile, f.carryStatus(targetID))
+	}
+	return f.carryErr
 }
 
 func (f *fakeRegistrar) RegisterProject(_ context.Context, inst *domain.DatabaseInstance, opts RegistrationOptions) error {

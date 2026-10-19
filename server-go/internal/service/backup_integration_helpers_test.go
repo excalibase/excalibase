@@ -115,6 +115,15 @@ func newLocalStackUploader(ctx context.Context, t *testing.T, bucket string) *AW
 // in-memory record store. Returns the adapter and its store.
 func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, bucket string) (*DockerBackupAdapter, *storage.FileSystemStore, *fakeVault) {
 	t.Helper()
+	store, _ := storage.NewFileSystemStore(t.TempDir())
+	adapter, vault := newRestoreAdapterOn(t, uploader, bucket, store, &recordingSettings{})
+	return adapter, store, vault
+}
+
+// newRestoreAdapterOn is newRestoreAdapter registering into the given
+// platform store, carrying API settings through settings.
+func newRestoreAdapterOn(t *testing.T, uploader S3Uploader, bucket string, store storage.InstanceStore, settings storage.RestoredSettingsStore) (*DockerBackupAdapter, *fakeVault) {
+	t.Helper()
 	dockerSDK, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		t.Fatalf("docker SDK client: %v", err)
@@ -126,9 +135,6 @@ func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, b
 	if err != nil {
 		t.Fatalf("real docker client: %v", err)
 	}
-
-	storeDir := t.TempDir()
-	store, _ := storage.NewFileSystemStore(storeDir)
 	records := &fakeBackupRecordStore{}
 
 	adapter := NewDockerBackupAdapter(DockerBackupAdapterConfig{
@@ -145,6 +151,7 @@ func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, b
 	registrar.SetOrgStore(testOrgs())
 	setOrgTier(registrar, "org", domain.Standard)
 	registrar.SetVault(vault)
+	registrar.SetRestoredSettings(settings)
 	adapter.SetProjectRegistrar(registrar)
 	// The restored container is sized by the restore plan; Free's sizing,
 	// one copy as a single host runs (ADR 0038).
@@ -157,7 +164,7 @@ func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, b
 	// query with the credentials registration filed (EXC-401). This is the
 	// production probe against the live restored container.
 	adapter.SetDatabaseProbe(&liveDatabaseProbe{t: t, vault: vault})
-	return adapter, store, vault
+	return adapter, vault
 }
 
 // newRestoreAdapterWithProbe is newRestoreAdapter for tests that need to

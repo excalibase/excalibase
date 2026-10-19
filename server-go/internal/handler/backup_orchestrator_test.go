@@ -23,6 +23,8 @@ import (
 type fakeRestoreJobStoreForHandler struct {
 	mu   sync.Mutex
 	jobs map[string]domain.RestoreJob
+	// full refuses every restore that needs a project slot.
+	full bool
 }
 
 func (f *fakeRestoreJobStoreForHandler) UpsertRestoreJob(_ context.Context, j *domain.RestoreJob) error {
@@ -38,8 +40,12 @@ func (f *fakeRestoreJobStoreForHandler) UpsertRestoreJob(_ context.Context, j *d
 	return nil
 }
 
-func (f *fakeRestoreJobStoreForHandler) StartRestoreJob(ctx context.Context, j *domain.RestoreJob) error {
+func (f *fakeRestoreJobStoreForHandler) StartRestoreJob(ctx context.Context, j *domain.RestoreJob, slot storage.ProjectSlot) error {
 	f.mu.Lock()
+	if f.full && slot.MaxProjects > 0 {
+		f.mu.Unlock()
+		return storage.ErrOrgProjectLimitReached
+	}
 	for _, running := range f.jobs {
 		if running.Status == domain.RestoreStatusRunning && storage.RestoreJobsConflict(&running, j) {
 			f.mu.Unlock()
@@ -126,7 +132,7 @@ func buildBackupHandlerHarness(t *testing.T) (*chi.Mux, *service.RestoreOrchestr
 	})
 
 	jobs := &fakeRestoreJobStoreForHandler{}
-	orch := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs})
+	orch := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs, Slots: unmeteredSlots{}})
 	orch.SetSteps([]service.RestoreStep{
 		{Name: "noop", Run: func(_ context.Context, _ *domain.RestoreJob) error { return nil }},
 	})
@@ -254,7 +260,7 @@ func TestBackupHandler_Restore_OrchestratorDelegatesToAdapter(t *testing.T) {
 	})
 
 	jobs := &fakeRestoreJobStoreForHandler{}
-	orch := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs})
+	orch := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs, Slots: unmeteredSlots{}})
 	// Same wiring main.go uses: a single delegate step that calls
 	// the legacy synchronous Restore.
 	orch.SetSteps([]service.RestoreStep{
@@ -313,4 +319,12 @@ func TestBackupHandler_Restore_RejectsTwoTargets(t *testing.T) {
 	if w.Code != 400 {
 		t.Errorf("status: got %d, want 400 (body=%s)", w.Code, w.Body.String())
 	}
+}
+
+// unmeteredSlots is a plan without a project limit, for tests whose subject
+// is not the limit.
+type unmeteredSlots struct{}
+
+func (unmeteredSlots) OrgProjectLimit(context.Context, string) (int, domain.TierType, error) {
+	return 0, domain.Free, nil
 }

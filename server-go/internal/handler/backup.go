@@ -267,9 +267,14 @@ func inPlaceFailureMessage(err error) string {
 // would duplicate or collide with a running one is refused.
 func (h *BackupHandler) startRestoreJob(w http.ResponseWriter, r *http.Request, inst *domain.DatabaseInstance, req domain.RestoreRequest) {
 	job, err := h.orchestrator.Start(r.Context(), inst, req)
+	var limit *service.OrgProjectLimitError
 	switch {
 	case errors.Is(err, storage.ErrRestoreAlreadyRunning):
 		httpError(w, err.Error(), http.StatusConflict)
+	case errors.As(err, &limit):
+		h.writeRestoreCapacityError(w, inst, err)
+	case errors.Is(err, service.ErrOrgCapacityNotConfigured):
+		httpError(w, "restores are not available on this platform", http.StatusServiceUnavailable)
 	case err != nil:
 		httpError(w, safeError(err), http.StatusBadRequest)
 	default:

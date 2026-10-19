@@ -46,6 +46,7 @@ type RestoreOrchestrator struct {
 	now       func() time.Time
 	after     func(time.Duration) <-chan time.Time
 	instances storage.InstanceStore
+	slots     RestoreSlotSource
 
 	mu    sync.Mutex
 	steps []RestoreStep
@@ -62,6 +63,9 @@ type RestoreOrchestratorConfig struct {
 	// Instances is where a swept job's target project is told its restore
 	// was interrupted. Optional: without it the job is still failed.
 	Instances storage.InstanceStore
+	// Slots says how many projects an organisation may hold. A restore into
+	// a new project takes its slot when it starts and is refused without it.
+	Slots     RestoreSlotSource
 	Heartbeat time.Duration
 	Stale     time.Duration
 	Now       func() time.Time
@@ -111,7 +115,7 @@ func NewRestoreOrchestrator(c RestoreOrchestratorConfig) *RestoreOrchestrator {
 		after = time.After
 	}
 	return &RestoreOrchestrator{
-		jobs: c.Jobs, logger: logger, instance: instance, instances: c.Instances,
+		jobs: c.Jobs, logger: logger, instance: instance, instances: c.Instances, slots: c.Slots,
 		heartbeat: beat, stale: stale, now: now, after: after,
 	}
 }
@@ -162,9 +166,16 @@ func (o *RestoreOrchestrator) Start(ctx context.Context, source *domain.Database
 		Request:         req,
 		Owner:           o.instance,
 	}
-	if err := o.jobs.StartRestoreJob(ctx, &job); err != nil {
-		if errors.Is(err, storage.ErrRestoreAlreadyRunning) {
+	slot, refuse, err := o.slotFor(ctx, source, job.Mode)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.jobs.StartRestoreJob(ctx, &job, slot); err != nil {
+		switch {
+		case errors.Is(err, storage.ErrRestoreAlreadyRunning):
 			return nil, err
+		case errors.Is(err, storage.ErrOrgProjectLimitReached):
+			return nil, refuse
 		}
 		return nil, fmt.Errorf("persist restore job: %w", err)
 	}
@@ -176,6 +187,32 @@ func (o *RestoreOrchestrator) Start(ctx context.Context, source *domain.Database
 	go o.drive(context.Background(), &worker)
 	snapshot := job
 	return &snapshot, nil
+}
+
+// RestoreSlotSource reads the project limit of an organisation's current
+// plan; zero or less is unlimited. *ProvisioningService implements it.
+type RestoreSlotSource interface {
+	OrgProjectLimit(ctx context.Context, orgID string) (int, domain.TierType, error)
+}
+
+// slotFor is the slot a restore takes when it starts, and the refusal the
+// caller is given when there is none. A restore into a new project creates
+// one, so it holds its slot from submission rather than from registration
+// minutes later (EXC-639); an in-place restore keeps its project and takes
+// none.
+func (o *RestoreOrchestrator) slotFor(ctx context.Context, source *domain.DatabaseInstance, mode string) (storage.ProjectSlot, *OrgProjectLimitError, error) {
+	if mode == domain.RestoreModeInPlace {
+		return storage.ProjectSlot{}, nil, nil
+	}
+	if o.slots == nil {
+		return storage.ProjectSlot{}, nil, ErrOrgCapacityNotConfigured
+	}
+	limit, tier, err := o.slots.OrgProjectLimit(ctx, source.OrgID)
+	if err != nil {
+		return storage.ProjectSlot{}, nil, err
+	}
+	refuse := &OrgProjectLimitError{Limit: limit, Tier: tier}
+	return storage.ProjectSlot{OrgID: source.OrgID, MaxProjects: limit}, refuse, nil
 }
 
 // Get retrieves a restore job by id, within the project polling for it.

@@ -23,14 +23,14 @@ func runningJob(id, source, mode, kind, value string) *domain.RestoreJob {
 func TestStartRestoreJob_RefusesTheSameRestoreWhileOneRuns(t *testing.T) {
 	rs := NewRestoreJobs(testStore(t))
 	ctx := context.Background()
-	if err := rs.StartRestoreJob(ctx, runningJob("a", "src", domain.RestoreModeNewProject, "time", "T1")); err != nil {
+	if err := rs.StartRestoreJob(ctx, runningJob("a", "src", domain.RestoreModeNewProject, "time", "T1"), storage.ProjectSlot{}); err != nil {
 		t.Fatalf("first start: %v", err)
 	}
-	err := rs.StartRestoreJob(ctx, runningJob("b", "src", domain.RestoreModeNewProject, "time", "T1"))
+	err := rs.StartRestoreJob(ctx, runningJob("b", "src", domain.RestoreModeNewProject, "time", "T1"), storage.ProjectSlot{})
 	if !errors.Is(err, storage.ErrRestoreAlreadyRunning) {
 		t.Fatalf("a second restore of the same source and time must be refused, got %v", err)
 	}
-	if err := rs.StartRestoreJob(ctx, runningJob("c", "src", domain.RestoreModeNewProject, "time", "T2")); err != nil {
+	if err := rs.StartRestoreJob(ctx, runningJob("c", "src", domain.RestoreModeNewProject, "time", "T2"), storage.ProjectSlot{}); err != nil {
 		t.Fatalf("a different restore point is a different restore: %v", err)
 	}
 	got, _ := rs.FindRestoreJob(ctx, "src", "a")
@@ -42,10 +42,10 @@ func TestStartRestoreJob_RefusesTheSameRestoreWhileOneRuns(t *testing.T) {
 func TestStartRestoreJob_InPlaceExcludesEveryOtherRestoreOfTheProject(t *testing.T) {
 	rs := NewRestoreJobs(testStore(t))
 	ctx := context.Background()
-	if err := rs.StartRestoreJob(ctx, runningJob("copy", "src", domain.RestoreModeNewProject, "latest", "")); err != nil {
+	if err := rs.StartRestoreJob(ctx, runningJob("copy", "src", domain.RestoreModeNewProject, "latest", ""), storage.ProjectSlot{}); err != nil {
 		t.Fatal(err)
 	}
-	err := rs.StartRestoreJob(ctx, runningJob("replace", "src", domain.RestoreModeInPlace, "time", "T1"))
+	err := rs.StartRestoreJob(ctx, runningJob("replace", "src", domain.RestoreModeInPlace, "time", "T1"), storage.ProjectSlot{})
 	if !errors.Is(err, storage.ErrRestoreAlreadyRunning) {
 		t.Fatalf("replacing a project while a copy of it is being made must wait, got %v", err)
 	}
@@ -53,10 +53,10 @@ func TestStartRestoreJob_InPlaceExcludesEveryOtherRestoreOfTheProject(t *testing
 	if ok, err := rs.UpdateRunningRestoreJob(ctx, &finished, "replica-a"); err != nil || !ok {
 		t.Fatalf("complete: ok=%v err=%v", ok, err)
 	}
-	if err := rs.StartRestoreJob(ctx, runningJob("replace", "src", domain.RestoreModeInPlace, "time", "T1")); err != nil {
+	if err := rs.StartRestoreJob(ctx, runningJob("replace", "src", domain.RestoreModeInPlace, "time", "T1"), storage.ProjectSlot{}); err != nil {
 		t.Fatalf("nothing else runs now: %v", err)
 	}
-	err = rs.StartRestoreJob(ctx, runningJob("copy2", "src", domain.RestoreModeNewProject, "time", "T9"))
+	err = rs.StartRestoreJob(ctx, runningJob("copy2", "src", domain.RestoreModeNewProject, "time", "T9"), storage.ProjectSlot{})
 	if !errors.Is(err, storage.ErrRestoreAlreadyRunning) {
 		t.Fatalf("a copy while the project is being replaced must wait, got %v", err)
 	}
@@ -77,7 +77,7 @@ func TestStartRestoreJob_ConcurrentDuplicatesStartOnce(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			errs[i] = rs.StartRestoreJob(ctx, runningJob("dup-"+string(rune('a'+i)), "src", domain.RestoreModeInPlace, "time", "T1"))
+			errs[i] = rs.StartRestoreJob(ctx, runningJob("dup-"+string(rune('a'+i)), "src", domain.RestoreModeInPlace, "time", "T1"), storage.ProjectSlot{})
 		}(i)
 	}
 	wg.Wait()
@@ -98,7 +98,7 @@ func TestStartRestoreJob_ConcurrentDuplicatesStartOnce(t *testing.T) {
 func TestFailAbandonedRestoreJobs_ReportsTheMode(t *testing.T) {
 	rs := NewRestoreJobs(testStore(t))
 	ctx := context.Background()
-	if err := rs.StartRestoreJob(ctx, runningJob("gone", "src", domain.RestoreModeInPlace, "latest", "")); err != nil {
+	if err := rs.StartRestoreJob(ctx, runningJob("gone", "src", domain.RestoreModeInPlace, "latest", ""), storage.ProjectSlot{}); err != nil {
 		t.Fatal(err)
 	}
 	failed, err := rs.FailAbandonedRestoreJobs(ctx, "replica-b", 0*time.Second, "abandoned")
