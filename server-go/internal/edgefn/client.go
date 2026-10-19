@@ -131,10 +131,38 @@ func (c *RuntimeClient) Deploy(ctx context.Context, deployReq DeployRequest) err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == http.StatusBadRequest {
+			if reason := runtimeErrorText(b); reason != "" {
+				return &CodeRejectedError{ID: deployReq.ID, Reason: reason}
+			}
+		}
 		return fmt.Errorf("deploy %s: status %d: %s", deployReq.ID, resp.StatusCode, string(b))
 	}
 	return nil
+}
+
+// CodeRejectedError is a deploy the runtime refused because of the function's
+// own code (it does not load, or has no default handler). Reason is the
+// runtime's message, written for the function's author.
+type CodeRejectedError struct {
+	ID     string
+	Reason string
+}
+
+func (e *CodeRejectedError) Error() string {
+	return fmt.Sprintf("deploy %s: refused: %s", e.ID, e.Reason)
+}
+
+// runtimeErrorText reads the runtime's {"error": "..."} answer.
+func runtimeErrorText(body []byte) string {
+	var answer struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &answer) != nil {
+		return ""
+	}
+	return answer.Error
 }
 
 // Invoke calls the function with the given Request shape and returns the

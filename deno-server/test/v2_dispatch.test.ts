@@ -208,7 +208,8 @@ Deno.test({
         args: { parse: (a) => a },
         handler: async () => ({ ok: true }),
       }`);
-      await rt.deploy("flagoff", fnCode);
+      // EXC-640: an export no invoke could run is refused at deploy.
+      assertEquals((await rt.deploy("flagoff", fnCode)).status, 400);
       const res = await rt.invoke("flagoff", { args: {} });
       // Legacy path: the export is not a function, so worker rejects with
       // the legacy "No default export found" / "must export default" error,
