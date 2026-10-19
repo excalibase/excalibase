@@ -72,6 +72,7 @@ func TestCarryingRestoredSettingsCopiesFromTheSource(t *testing.T) {
 	svc := NewProvisioningService(emptyInstanceStore(t), provisioner.NewFactory(), nil)
 	settings := &recordingSettings{}
 	svc.SetRestoredSettings(settings)
+	svc.SetMigrationHistory(&recordingHistory{})
 	if err := svc.CarryRestoredSettings(context.Background(), "src", "dst"); err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +86,7 @@ func TestCarryingRestoredSettingsCopiesFromTheSource(t *testing.T) {
 func TestCarryingRestoredSettingsEvictsWhatTheDataPlaneCached(t *testing.T) {
 	svc := NewProvisioningService(emptyInstanceStore(t), provisioner.NewFactory(), nil)
 	svc.SetRestoredSettings(&recordingSettings{})
+	svc.SetMigrationHistory(&recordingHistory{})
 	events := &fakePolicyPublisher{}
 	svc.SetProjectEventPublisher(events)
 
@@ -112,6 +114,7 @@ func TestRestoreRefusedAtRegistrationForWantOfASlotSaysSo(t *testing.T) {
 	registrar.SetOrgStore(testOrgs())
 	registrar.SetVault(newFakeVault())
 	registrar.SetRestoredSettings(&recordingSettings{})
+	registrar.SetMigrationHistory(&recordingHistory{})
 	mock := k8s.NewMockClient()
 	adapter := newRestoreReadyAdapter(t, mock, registrar)
 	adapter.SetInstanceStore(store)

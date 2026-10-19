@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -54,7 +55,8 @@ func TestSingleHostRestoredCopyCarriesTheSourcesAPISettings(t *testing.T) {
 
 	platform := startPlatformPostgres(ctx, t)
 	bucket := "excalibase-restore-settings"
-	adapter, _ := newRestoreAdapterOn(t, newLocalStackUploader(ctx, t, bucket), bucket, platform, platform)
+	migrationsRoot := t.TempDir()
+	adapter, _ := newRestoreAdapterOn(t, newLocalStackUploader(ctx, t, bucket), bucket, platform, platform, NewMigrationHistoryFiles(migrationsRoot))
 
 	src := &domain.DatabaseInstance{
 		ProjectID: "src-settings", OrgID: "org", Tier: domain.Standard, StorageSize: "50Gi",
@@ -65,6 +67,7 @@ func TestSingleHostRestoredCopyCarriesTheSourcesAPISettings(t *testing.T) {
 		t.Fatalf("register source: %v", err)
 	}
 	seedSourceAPISettings(ctx, t, platform, src.ProjectID)
+	seedSourceMigrationHistory(t, migrationsRoot, src.ProjectID)
 
 	if _, err := adapter.TriggerManual(ctx, src); err != nil {
 		t.Fatalf("TriggerManual: %v", err)
@@ -76,6 +79,37 @@ func TestSingleHostRestoredCopyCarriesTheSourcesAPISettings(t *testing.T) {
 	t.Cleanup(func() { _ = cleanupContainer(resp.Namespace) })
 
 	assertCopyCarriesTheSourcesAPISettings(ctx, t, platform, src.ProjectID, "settings-copy")
+	assertCopyListsTheSourcesMigrations(t, migrationsRoot, src.ProjectID, "settings-copy")
+}
+
+// seedSourceMigrationHistory records the migration that created the source's
+// table, the way apply_migration records it.
+func seedSourceMigrationHistory(t *testing.T, root, projectID string) {
+	t.Helper()
+	record := &domain.MigrationRecord{ProjectID: projectID, Name: "create_workspaces",
+		SQL: "CREATE TABLE workspaces (id int, name text)", Status: "APPLIED", Output: "ok"}
+	if err := saveMigrationRecord(filepath.Join(root, "projects", projectID, "migrations"), time.Now(), record); err != nil {
+		t.Fatalf("seed migration history: %v", err)
+	}
+}
+
+// The schema arrives with the data, so the history that built it must too.
+func assertCopyListsTheSourcesMigrations(t *testing.T, root, sourceID, copyID string) {
+	t.Helper()
+	migrations := NewMigrationService(nil, nil, root)
+	source, err := migrations.ListMigrations(sourceID)
+	if err != nil || len(source) == 0 {
+		t.Fatalf("source migrations = %+v (%v)", source, err)
+	}
+	copied, err := migrations.ListMigrations(copyID)
+	if err != nil || len(copied) != len(source) {
+		t.Fatalf("copy lists %d migrations (%v), want the source's %d", len(copied), err, len(source))
+	}
+	for i := range source {
+		if copied[i].ID != source[i].ID || copied[i].SQL != source[i].SQL || copied[i].ProjectID != copyID {
+			t.Errorf("copy migration %d = %+v, want the source's %s owned by %s", i, copied[i], source[i].ID, copyID)
+		}
+	}
 }
 
 // seedSourceAPISettings is what the prod test's source had: a signed-in role
@@ -165,6 +199,9 @@ func TestHostMySQLRestoredCopyCarriesTheSourcesAPISettings(t *testing.T) {
 	setOrgTier(registrar, "org1", domain.Standard)
 	registrar.SetVault(newFakeVault())
 	registrar.SetRestoredSettings(platform)
+	migrationsRoot := t.TempDir()
+	registrar.SetMigrationHistory(NewMigrationHistoryFiles(migrationsRoot))
+	seedSourceMigrationHistory(t, migrationsRoot, source)
 	adapter := NewHostMySQLBackupAdapter(HostMySQLBackupAdapterConfig{
 		Docker: docker, MySQL: mysqlProv, Streamer: NewDockerStreamer(docker.RawClient()), Uploader: newFakeS3Uploader(),
 		Records: &fakeBackupRecordStore{}, Bucket: "it", KeyPrefix: "backups/", Instances: platform,
@@ -180,4 +217,5 @@ func TestHostMySQLRestoredCopyCarriesTheSourcesAPISettings(t *testing.T) {
 		t.Fatalf("Restore: %v", err)
 	}
 	assertCopyCarriesTheSourcesAPISettings(ctx, t, platform, source, copyID)
+	assertCopyListsTheSourcesMigrations(t, migrationsRoot, source, copyID)
 }

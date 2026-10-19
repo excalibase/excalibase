@@ -351,6 +351,9 @@ in the same registration, so a copy gets the same things on each:
   who may call them, the CORS origins a person added, and auth settings
   (email verification, site URL). They are the source's settings at restore
   time, not as of the backup.
+- **Copied from the source's STORAGE_PATH:** the migration history
+  (`list_migrations`), as the source has it at restore time; a restore to an
+  earlier point still lists migrations applied after that point.
 - **Not carried:** apps, sites and domains (running deployments; a domain
   points at one project), CORS origins an app added, edge functions with their
   secrets and outbound allowlist (redeploy them; copying would hand the

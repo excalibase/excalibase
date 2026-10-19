@@ -74,6 +74,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	withBackupTarget(t, provSvc)
 	backupSvc.SetProjectRegistrar(provSvc)
 	provSvc.SetRestoredSettings(noRestoredSettings{})
+	provSvc.SetMigrationHistory(service.NewMigrationHistoryFiles(dir))
 	backupSvc.SetOrgProjectCapacity(provSvc)
 	backupSvc.SetRestorePlanSource(provSvc)
 	if err := backupSvc.SetDatabaseProbe(answeringProbe{}); err != nil {

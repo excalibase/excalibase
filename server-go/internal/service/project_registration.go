@@ -53,13 +53,25 @@ func (s *ProvisioningService) SetRestoredSettings(r storage.RestoredSettingsStor
 	s.restoredSettings = r
 }
 
+// SetMigrationHistory wires where a restored copy's migration history is copied.
+func (s *ProvisioningService) SetMigrationHistory(h MigrationHistoryCopier) {
+	s.migrationHistory = h
+}
+
 // CarryRestoredSettings copies the source's API settings onto the copy, then
 // evicts whatever the data plane cached of the copy while it had none.
 func (s *ProvisioningService) CarryRestoredSettings(ctx context.Context, sourceID, targetID string) error {
 	if s.restoredSettings == nil {
 		return ErrRestoredSettingsNotConfigured
 	}
+	if s.migrationHistory == nil {
+		return ErrMigrationHistoryNotConfigured
+	}
 	if err := s.restoredSettings.CopyRestoredSettings(ctx, sourceID, targetID); err != nil {
+		return err
+	}
+	// The schema arrives with the data; the history that built it does not.
+	if err := s.migrationHistory.CopyMigrationHistory(sourceID, targetID); err != nil {
 		return err
 	}
 	s.AnnounceDatabaseReplaced(ctx, targetID)
