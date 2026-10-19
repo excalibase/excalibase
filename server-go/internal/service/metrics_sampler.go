@@ -61,7 +61,7 @@ func (s *MetricsService) sampleIfLeader(ctx context.Context, leader LeaderChecke
 	}
 }
 
-// SampleAll records one row per running CNPG database, raises or resolves its
+// SampleAll records one row per running database, raises or resolves its
 // alerts, and drops rows past the retention.
 func (s *MetricsService) SampleAll(ctx context.Context) {
 	instances, err := s.store.FindAll()
@@ -88,10 +88,10 @@ func (s *MetricsService) SampleAll(ctx context.Context) {
 	}
 }
 
-// sampled is a running database on Kubernetes the CNPG exporter describes.
+// sampled is a running CNPG or MOCO database on Kubernetes.
 func sampled(inst *domain.DatabaseInstance) bool {
 	return inst.Status == "ACTIVE" && !inst.NoDatabase &&
-		inst.DBType == domain.PostgreSQL && inst.DeploymentMode != domain.ModeDocker
+		(inst.DBType == domain.PostgreSQL || inst.DBType == domain.MySQL) && inst.DeploymentMode != domain.ModeDocker
 }
 
 // tableHistory is the table's newest rows for a project, oldest first.

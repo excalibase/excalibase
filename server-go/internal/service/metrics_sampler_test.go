@@ -123,10 +123,15 @@ func TestSampleAllRecordsEveryRunningDatabase(t *testing.T) {
 	before := time.Now()
 	metrics.SampleAll(context.Background())
 
-	if len(history.rows) != 1 || history.rows[0].ProjectID != "live-db" {
-		t.Fatalf("rows = %+v, want one for live-db", history.rows)
+	// The paused, database-less and single-host projects are not sampled.
+	sampledProjects := map[string]domain.DatabaseMetrics{}
+	for _, row := range history.rows {
+		sampledProjects[row.ProjectID] = row
 	}
-	row := history.rows[0]
+	if len(history.rows) != 2 || len(sampledProjects) != 2 || sampledProjects["my-db"].ProjectID == "" {
+		t.Fatalf("rows = %+v, want one for live-db and one for my-db", history.rows)
+	}
+	row := sampledProjects["live-db"]
 	if row.CPUUsagePercent == nil || *row.CPUUsagePercent < 94 || row.ActiveConnections == nil {
 		t.Fatalf("row lacks its figures: %+v", row)
 	}
@@ -196,8 +201,8 @@ func TestTheSamplerRunsOnlyOnTheLeader(t *testing.T) {
 		t.Fatalf("a follower wrote %d rows", len(history.rows))
 	}
 	metrics.sampleIfLeader(context.Background(), staticLeader(true))
-	if len(history.rows) != 1 {
-		t.Fatalf("the leader wrote %d rows, want 1", len(history.rows))
+	if len(history.rows) != 2 {
+		t.Fatalf("the leader wrote %d rows, want 2", len(history.rows))
 	}
 }
 

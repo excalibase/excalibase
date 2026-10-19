@@ -130,19 +130,24 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 	metrics.InstanceCount = &tierInstances
 	s.collectDiskUsage(ctx, inst, postgresVolume(inst), metrics)
 
-	limits := s.databaseLimits(ctx, inst)
+	s.collectUsage(ctx, inst, postgresVolume(inst), metrics)
+
+	return metrics
+}
+
+// collectUsage reports the database pods' CPU and memory against their limits.
+func (s *MetricsService) collectUsage(ctx context.Context, inst *domain.DatabaseInstance, volume databaseVolume, metrics *domain.DatabaseMetrics) {
+	limits := s.databaseLimits(ctx, inst, volume)
 	if total, instances, ok := limits.total(); ok {
 		metrics.CPULimitCores = &total.cpuCores
 		metrics.MemoryLimitMB = &total.memoryMB
 		metrics.InstanceCount = &instances
 	}
-	s.collectPodResourceMetrics(ctx, inst, limits, metrics)
-
-	return metrics
+	s.collectPodResourceMetrics(ctx, inst, volume, limits, metrics)
 }
 
 // collectMySQLMetrics reports what a MySQL project has without CNPG's
-// exporter: its health, plan limits and data volume.
+// exporter: its health, data volume, and mysqld's CPU and memory.
 func (s *MetricsService) collectMySQLMetrics(ctx context.Context, inst *domain.DatabaseInstance, tierInstances int, metrics *domain.DatabaseMetrics) *domain.DatabaseMetrics {
 	metrics.HealthStatus = healthOf(inst)
 	storageLimit := parseStorage(inst.Tier)
@@ -151,10 +156,12 @@ func (s *MetricsService) collectMySQLMetrics(ctx context.Context, inst *domain.D
 	}
 	metrics.StorageLimit = &storageLimit
 	metrics.InstanceCount = &tierInstances
-	s.collectDiskUsage(ctx, inst, mysqlVolume(inst), metrics)
-	if metrics.DiskUsagePercent == nil {
+	volume := mysqlVolume(inst)
+	s.collectDiskUsage(ctx, inst, volume, metrics)
+	s.collectUsage(ctx, inst, volume, metrics)
+	if metrics.DiskUsagePercent == nil && metrics.CPUUsageCores == nil {
 		metrics.MetricsAvailable = false
-		reason := "the MySQL data volume could not be read"
+		reason := "the MySQL database's usage could not be read"
 		metrics.UnavailableReason = &reason
 	}
 	return metrics
@@ -222,7 +229,7 @@ func (s *MetricsService) collectCNPGMetrics(ctx context.Context, inst *domain.Da
 // per-pod metrics and aggregate usage percentages.
 // The namespace also runs the project's apps, functions and watcher, so only
 // the database's own pods count.
-func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, inst *domain.DatabaseInstance, limits databaseLimits, metrics *domain.DatabaseMetrics) {
+func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, inst *domain.DatabaseInstance, volume databaseVolume, limits databaseLimits, metrics *domain.DatabaseMetrics) {
 	podMetrics, err := s.k8sClient.GetPodMetrics(ctx, inst.Namespace)
 	if err != nil {
 		log.Printf("metrics of %s: pod usage: %v", inst.ProjectID, err)
@@ -233,12 +240,20 @@ func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, inst *do
 	var counted int
 	limited := true
 	for _, pm := range podMetrics {
-		if !strings.HasPrefix(pm.Name, inst.ProjectID+postgresSuffix+"-") {
+		if !strings.HasPrefix(pm.Name, volume.prefix) {
 			continue
+		}
+		cpuMillis, memoryMB := pm.CPUMillis, pm.MemoryMB
+		if volume.containerUsage {
+			container, ok := pm.Container(volume.container)
+			if !ok {
+				continue
+			}
+			cpuMillis, memoryMB = container.CPUMillis, container.MemoryMB
 		}
 		counted++
 		role := "replica"
-		if strings.HasSuffix(pm.Name, "-1") {
+		if primaryPod(volume, limits, pm.Name) {
 			role = "primary"
 		}
 		own, ok := limits.of(pm.Name)
@@ -246,13 +261,13 @@ func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, inst *do
 		metrics.Pods = append(metrics.Pods, domain.PodMetrics{
 			Name:          pm.Name,
 			Role:          role,
-			CPUCores:      float64(pm.CPUMillis) / 1000.0,
+			CPUCores:      float64(cpuMillis) / 1000.0,
 			CPULimitCores: own.cpuCores,
-			MemoryMB:      pm.MemoryMB,
+			MemoryMB:      memoryMB,
 			MemoryLimitMB: own.memoryMB,
 		})
-		usage.cpuCores += float64(pm.CPUMillis) / 1000.0
-		usage.memoryMB += pm.MemoryMB
+		usage.cpuCores += float64(cpuMillis) / 1000.0
+		usage.memoryMB += memoryMB
 		limit.cpuCores += own.cpuCores
 		limit.memoryMB += own.memoryMB
 	}
@@ -270,6 +285,13 @@ func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, inst *do
 	memPct := float64(usage.memoryMB) / float64(limit.memoryMB) * 100
 	metrics.CPUUsagePercent = &cpuPct
 	metrics.MemoryUsagePercent = &memPct
+}
+
+func primaryPod(volume databaseVolume, limits databaseLimits, pod string) bool {
+	if volume.roleLabel != "" {
+		return limits.roles[pod] == "primary"
+	}
+	return strings.HasSuffix(pod, "-1")
 }
 
 func (s *MetricsService) fetchCNPGMetrics(ctx context.Context, namespace, projectID string) (string, error) {
