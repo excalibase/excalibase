@@ -639,6 +639,9 @@ func (s *AppDeployService) AppRestarts(ctx context.Context, projectID, appID str
 		return k8s.AppRestarts{}, err
 	}
 	namespace, err := s.namespaceFor(projectID)
+	if errors.Is(err, errNoAppNamespace) {
+		return k8s.AppRestarts{}, nil // nothing has run, so nothing restarted
+	}
 	if err != nil {
 		return k8s.AppRestarts{}, err
 	}
