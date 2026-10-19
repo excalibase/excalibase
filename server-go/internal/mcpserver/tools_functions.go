@@ -52,6 +52,9 @@ type outboundHostsArgs struct {
 	Remove []string `json:"remove,omitempty" jsonschema:"hosts to stop allowing"`
 }
 
+// functionsSegment is the project route the function tools act on.
+const functionsSegment = "/functions/"
+
 // functionContract is what deploy_function's caller must write and how the function is reached (EXC-640).
 const functionContract = "index.ts must use export default (req: Request) => Response (async is fine); a file with only named exports is refused. " +
 	"The function answers POST /functions/v1/{projectId}/{id} with the caller's token. " +
@@ -82,7 +85,7 @@ func deleteFunction(ctx context.Context, c *call, in functionIDArgs) (any, error
 	if err != nil {
 		return nil, err
 	}
-	if err := c.send(ctx, http.MethodDelete, projectsAPI+projectID+"/functions/"+id+"/", nil, nil, nil); err != nil {
+	if err := c.send(ctx, http.MethodDelete, projectsAPI+projectID+functionsSegment+id+"/", nil, nil, nil); err != nil {
 		return nil, err
 	}
 	return map[string]any{"deleted": in.ID}, nil
@@ -122,7 +125,7 @@ func listFunctions(ctx context.Context, c *call, in projectArg) (any, error) {
 		return nil, err
 	}
 	functions := []functionView{}
-	if err := c.get(ctx, projectsAPI+projectID+"/functions/", nil, &functions); err != nil {
+	if err := c.get(ctx, projectsAPI+projectID+functionsSegment, nil, &functions); err != nil {
 		return nil, err
 	}
 	return map[string]any{
@@ -148,7 +151,7 @@ func deployFunction(ctx context.Context, c *call, in deployFunctionArgs) (any, e
 		body["verifyJwt"] = *in.VerifyJWT
 	}
 	var deployed functionView
-	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+"/functions/", nil, body, &deployed); err != nil {
+	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+functionsSegment, nil, body, &deployed); err != nil {
 		return nil, err
 	}
 	return map[string]any{"function": deployed}, nil

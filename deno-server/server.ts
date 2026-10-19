@@ -41,6 +41,8 @@ import { drainThenExit, shutdownDrainMs } from "./runtime/shutdown.ts";
 import { runXFailure, runXTargetError, withoutCrashDetail } from "./runtime/invoke_errors.ts";
 import type { InvokeResponse, RunXFailure } from "./runtime/invoke_errors.ts";
 import { outboundDeniedMessage } from "./runtime/outbound_denied.ts";
+import { handlerContractRefusal } from "./runtime/handler_contract.ts";
+import { appendLog, DeployRefusals } from "./runtime/refusals.ts";
 
 // ---------------------------------------------------------------------------
 // Mutation scopes (runtime/mutation_scopes.ts).
@@ -165,9 +167,6 @@ class AllowedHostsError extends Error {}
 // UserCodeError is a deploy refused because of the function's own code (it
 // does not load, or breaks the handler contract): the caller's 400, not ours.
 class UserCodeError extends Error {}
-
-// Cap on remembered deploy refusals of functions the runtime does not hold.
-const MAX_REFUSALS = 100;
 
 // parseAllowedHosts validates a deploy payload's allowedHosts. Throws on any
 // entry the worker permission must not receive; returns [] when absent.
@@ -1135,17 +1134,13 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       }
     };
     // --- handler contract (EXC-640) ---
-    // Refuse at deploy what no invoke could run: the default export must be a
-    // (req: Request) => Response handler, or a tagged v2 export when enabled.
+    // Refuse at deploy what no invoke could run.
     {
+      const __contractRefusal = ${handlerContractRefusal.toString()};
       const __exp = globalThis.__excalibase_default;
-      if (typeof __exp !== 'function' && !(__V2_ENABLED && __isV2Export(__exp))) {
-        const __named = __exportNames.filter((n) => n !== 'default');
-        const __found = __exp !== undefined
-          ? 'the default export is a ' + (__exp === null ? 'null' : typeof __exp) + ', not a function'
-          : (__named.length > 0 ? 'found only named exports: ' + __named.join(', ') : 'found no exports');
-        self.postMessage({ type: 'bootError', error:
-          'index.ts must use export default (req: Request) => Response; ' + __found });
+      const __refusal = __contractRefusal(__exp, __exportNames, __V2_ENABLED && __isV2Export(__exp));
+      if (__refusal !== null) {
+        self.postMessage({ type: 'bootError', error: __refusal });
         throw new Error('handler contract not met');
       }
     }
@@ -1402,7 +1397,7 @@ async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<
 
 class FunctionRuntime {
   private readonly scripts = new Map<string, ScriptMetadata>();
-  private readonly refusals = new Map<string, LogEntry[]>();
+  private readonly refusals = new DeployRefusals(MAX_SCRIPTS, MAX_LOG_LINE);
 
   async deploy(req: DeployRequest): Promise<{ id: string; url: string }> {
     const { id, code, secrets = {} } = req;
@@ -1460,16 +1455,48 @@ class FunctionRuntime {
 
     // Wait for the worker's 'ready' message. Installs a temporary handler
     // that swaps to the permanent router on first 'ready'.
-    try {
-      await this.bootWorker(worker, (exports) => { initMetadataExports = exports; });
-    } catch (err) {
-      if (err instanceof UserCodeError) this.recordRefusal(id, err.message);
-      throw err;
-    }
-    if (existing) {
-      try { existing.worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate replaced worker:", terminateErr); }
-    }
-    this.refusals.delete(id);
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        // Terminate the orphan so we don't leak it on init failure.
+        try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on timeout:", terminateErr); }
+        reject(new Error("worker init timeout"));
+      }, WORKER_INIT_TIMEOUT_MS);
+      worker.onmessage = (e) => {
+        if (e.data?.type === "metadata") {
+          initMetadataExports = e.data.exports;
+          return;
+        }
+        if (e.data?.type === "bootError") {
+          // Phase 9b.F — the user module failed to load (parse error,
+          // unresolvable npm specifier, etc.). The worker has already
+          // posted a structured message and re-thrown; the onerror
+          // handler below will fire next. We pre-empt with the structured
+          // message so the caller sees a deploy error that names the
+          // root cause instead of a generic "worker init error".
+          clearTimeout(timeout);
+          try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on bootError:", terminateErr); }
+          reject(new UserCodeError(typeof e.data.error === "string" && e.data.error.length > 0
+            ? e.data.error
+            : "user module failed to load"));
+          return;
+        }
+        if (e.data?.type === "ready") {
+          clearTimeout(timeout);
+          resolve();
+        }
+      };
+      worker.onerror = (err) => {
+        clearTimeout(timeout);
+        try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on error:", terminateErr); }
+        // Phase 9b.F — module-eval failure inside a Deno worker fires
+        // BOTH a structured bootError postMessage and the onerror event.
+        // Use preventDefault() so the error is not re-thrown on the
+        // parent process side (which would crash the runtime).
+        try { err.preventDefault(); } catch (_e) { /* not all envs expose it */ }
+        reject(new Error(err.message ?? "worker init error"));
+      };
+    }).catch((err: unknown) => this.refused(id, err));
+    this.retire(id, existing);
 
     // Fire-and-forget forward — provisioning callback failures must never
     // affect deploy success. The Go side persists the payload on receipt.
@@ -1652,68 +1679,23 @@ class FunctionRuntime {
     return { id, url: `/invoke/${id}` };
   }
 
-  // bootWorker waits for the worker's 'ready'; a bootError (the user module
-  // failed to load or broke the handler contract) rejects with UserCodeError.
-  private bootWorker(worker: Worker, onMetadata: (exports: unknown) => void): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        // Terminate the orphan so we don't leak it on init failure.
-        try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on timeout:", terminateErr); }
-        reject(new Error("worker init timeout"));
-      }, WORKER_INIT_TIMEOUT_MS);
-      worker.onmessage = (e) => {
-        if (e.data?.type === "metadata") {
-          onMetadata(e.data.exports);
-          return;
-        }
-        if (e.data?.type === "bootError") {
-          // Phase 9b.F — the user module failed to load (parse error,
-          // unresolvable npm specifier, etc.). The worker has already
-          // posted a structured message and re-thrown; the onerror
-          // handler below will fire next. We pre-empt with the structured
-          // message so the caller sees a deploy error that names the
-          // root cause instead of a generic "worker init error".
-          clearTimeout(timeout);
-          try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on bootError:", terminateErr); }
-          reject(new UserCodeError(typeof e.data.error === "string" && e.data.error.length > 0
-            ? e.data.error
-            : "user module failed to load"));
-          return;
-        }
-        if (e.data?.type === "ready") {
-          clearTimeout(timeout);
-          resolve();
-        }
-      };
-      worker.onerror = (err) => {
-        clearTimeout(timeout);
-        try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on error:", terminateErr); }
-        // Phase 9b.F — module-eval failure inside a Deno worker fires
-        // BOTH a structured bootError postMessage and the onerror event.
-        // Use preventDefault() so the error is not re-thrown on the
-        // parent process side (which would crash the runtime).
-        try { err.preventDefault(); } catch (_e) { /* not all envs expose it */ }
-        reject(new Error(err.message ?? "worker init error"));
-      };
-    });
+  // refused logs a deploy refused for its code where get_logs reads it (the
+  // version still running, else the refusal list) and rethrows.
+  private refused(id: string, err: unknown): never {
+    if (err instanceof UserCodeError) {
+      const entry = this.refusals.entry(err.message);
+      const running = this.scripts.get(id);
+      if (running) appendLog(running.logs, entry, LOG_RING_SIZE);
+      else this.refusals.record(id, entry);
+    }
+    throw err;
   }
 
-  // recordRefusal logs a refused deploy where get_logs reads it: on the
-  // version still running, else in a bounded list for the refused id.
-  private recordRefusal(id: string, message: string): void {
-    const entry = { level: "error", msg: `deploy refused: ${message}`.slice(0, MAX_LOG_LINE), ts: Date.now() };
-    const running = this.scripts.get(id);
-    if (running) {
-      running.logs.push(entry);
-      if (running.logs.length > LOG_RING_SIZE) running.logs.splice(0, running.logs.length - LOG_RING_SIZE);
-      return;
-    }
-    this.refusals.delete(id);
-    this.refusals.set(id, [entry]);
-    if (this.refusals.size > MAX_REFUSALS) {
-      const oldest = this.refusals.keys().next().value;
-      if (oldest !== undefined) this.refusals.delete(oldest);
-    }
+  // retire stops the version a successful deploy replaced.
+  private retire(id: string, replaced: ScriptMetadata | undefined): void {
+    this.refusals.clear(id);
+    if (!replaced) return;
+    try { replaced.worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate replaced worker:", terminateErr); }
   }
 
   async invoke(id: string, req: InvokeRequest): Promise<InvokeResponse> {
@@ -1808,7 +1790,7 @@ class FunctionRuntime {
   }
 
   delete(id: string): boolean {
-    const refused = this.refusals.delete(id);
+    const refused = this.refusals.clear(id);
     const script = this.scripts.get(id);
     if (!script) return refused;
     script.worker.terminate();
@@ -1840,10 +1822,7 @@ class FunctionRuntime {
   // function doesn't exist, returns null so the caller can return 404.
   getLogs(id: string, sinceMs?: number): LogEntry[] | null {
     const script = this.scripts.get(id);
-    if (!script) {
-      const refused = this.refusals.get(id);
-      return refused ? refused.filter((l) => !(typeof sinceMs === "number" && l.ts <= sinceMs)) : null;
-    }
+    if (!script) return this.refusals.logs(id, sinceMs);
     if (typeof sinceMs === "number" && Number.isFinite(sinceMs)) {
       return script.logs.filter((l) => l.ts > sinceMs);
     }
