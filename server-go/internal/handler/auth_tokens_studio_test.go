@@ -294,3 +294,26 @@ func TestCreateToken_AuditNamesTheCaller(t *testing.T) {
 		t.Fatalf("the creation must name who minted it: %+v", entries)
 	}
 }
+
+// EXC-650: expiresInDays is honoured within 1..365 days, as on site tokens;
+// out of range, or beside expiresIn, it is refused rather than ignored.
+func TestCreateToken_HonoursExpiresInDays(t *testing.T) {
+	f := newTokenFixture(t)
+	session := f.mint("studio-session", tokenUser, auth.ScopeSession, nil)
+	w := doAuthRequest(f.r, "POST", routeAuthTokens, session, `{"name":"short","expiresInDays":2}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf(statusFmt, w.Code, w.Body.String())
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, decodeBody(t, w.Body.String())["expiresAt"].(string))
+	if want := time.Now().Add(48 * time.Hour); err != nil || expiresAt.Sub(want).Abs() > time.Minute {
+		t.Fatalf("expiresAt %v %v, want about %v", expiresAt, err, want)
+	}
+	for _, body := range []string{
+		`{"name":"x","expiresInDays":0}`, `{"name":"x","expiresInDays":366}`, `{"name":"x","expiresInDays":-1}`,
+		`{"name":"x","expiresInDays":2,"expiresIn":"30d"}`, `{"name":"x","expiresInDays":"2"}`,
+	} {
+		if w := doAuthRequest(f.r, "POST", routeAuthTokens, session, body); w.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d %s", body, w.Code, w.Body.String())
+		}
+	}
+}

@@ -25,18 +25,14 @@ const mysqlRestorePointKey = "restorePoint"
 
 // InPlaceRecoveryTarget resolves req against the project's own runs.
 func (a *MySQLBackupAdapter) InPlaceRecoveryTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (map[string]interface{}, error) {
-	backups, marks, err := a.catalog(ctx, inst)
-	if err != nil {
-		return nil, err
-	}
-	point, err := resolveMySQLRestorePoint(backups, marks, req)
+	_, _, point, err := a.restorePoint(ctx, inst, req)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]interface{}{mysqlRestorePointKey: point.UTC().Format(time.RFC3339)}, nil
 }
 
-// TakeSafetyBackup runs a backup now, waits for it, and names the run it made.
+// TakeSafetyBackup runs a backup now and waits for its run to be in the bucket.
 func (a *MySQLBackupAdapter) TakeSafetyBackup(ctx context.Context, inst *domain.DatabaseInstance) (string, error) {
 	ref, err := a.TriggerManual(ctx, inst)
 	if err != nil {
@@ -56,7 +52,12 @@ func (a *MySQLBackupAdapter) TakeSafetyBackup(ctx context.Context, inst *domain.
 	if err != nil {
 		return "", err
 	}
-	return a.runOfJob(ctx, inst, ref.ID)
+	// Named by its trigger id, as the list names it (EXC-650), once its run
+	// is in the bucket.
+	if _, err := a.runOfJob(ctx, inst, ref.ID); err != nil {
+		return "", err
+	}
+	return ref.ID, nil
 }
 
 // runOfJob is the run a finished backup Job wrote: the one it started and
