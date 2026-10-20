@@ -632,8 +632,7 @@ func runRestoreStep(ctx context.Context, store storage.InstanceStore, backupSvc 
 	if req.InPlace() {
 		return backupSvc.RestoreInPlace(ctx, j.SourceProjectID, req)
 	}
-	_, err = backupSvc.RestoreFromBackup(ctx, j.SourceProjectID, req)
-	return err
+	return backupSvc.RestoreSubmittedCopy(ctx, j.SourceProjectID, req)
 }
 
 // restoreStepRequest is the request the job was started with, for the project
