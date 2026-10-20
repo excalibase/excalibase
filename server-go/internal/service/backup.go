@@ -315,24 +315,52 @@ func (s *BackupService) BackupStatus(ctx context.Context, projectID, backupID st
 }
 
 func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
-	inst, err := s.store.FindByProjectID(projectID)
-	if err != nil || inst == nil {
-		return nil, fmt.Errorf("project not found: %s", projectID)
-	}
-	adapter, err := s.adapterFor(inst)
+	inst, adapter, err := s.copySource(projectID, req)
 	if err != nil {
 		return nil, err
-	}
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
-	if req.TargetProjectID == "" {
-		return nil, ErrTargetProjectIDMissing
 	}
 	if err := s.EnsureOrgProjectCapacity(ctx, inst); err != nil {
 		return nil, err
 	}
 	return adapter.Restore(ctx, inst, req)
+}
+
+// RestoreSubmittedCopy runs the restore of a job that took its organisation's
+// slot when it was submitted (EXC-639). Counting slots again would count the
+// job against itself; registration still takes the slot atomically.
+func (s *BackupService) RestoreSubmittedCopy(ctx context.Context, projectID string, req domain.RestoreRequest) error {
+	inst, adapter, err := s.copySource(projectID, req)
+	if err != nil {
+		return err
+	}
+	if s.capacity == nil {
+		return ErrOrgCapacityNotConfigured
+	}
+	if err := s.capacity.RequireRestoreDiskFits(ctx, inst); err != nil {
+		return err
+	}
+	_, err = adapter.Restore(ctx, inst, req)
+	return err
+}
+
+// copySource resolves the source project and its adapter for a restore into a
+// new project, and validates the request.
+func (s *BackupService) copySource(projectID string, req domain.RestoreRequest) (*domain.DatabaseInstance, BackupAdapter, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return nil, nil, fmt.Errorf("project not found: %s", projectID)
+	}
+	adapter, err := s.adapterFor(inst)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := req.Validate(); err != nil {
+		return nil, nil, err
+	}
+	if req.TargetProjectID == "" {
+		return nil, nil, ErrTargetProjectIDMissing
+	}
+	return inst, adapter, nil
 }
 
 // SetOrgProjectCapacity wires the organisation project limit a restore is
