@@ -154,3 +154,22 @@ describe('Storage — app access (EXC-560)', () => {
     expect(screen.getByLabelText('authenticated read')).toHaveValue('own');
   });
 });
+
+describe('Storage — S3 access (EXC-630)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const PHOTOS = [{ id: 'b1', name: 'photos', public: false }];
+
+  test('hidden while the feature is off', async () => {
+    renderPage(PHOTOS);
+    await screen.findByRole('button', { name: 'Delete bucket' });
+    expect(screen.queryByRole('button', { name: 'S3 access' })).not.toBeInTheDocument();
+  });
+
+  test('opens the key panel when the feature is on', async () => {
+    renderPage(PHOTOS, { s3: true });
+    await userEvent.click(await screen.findByRole('button', { name: 'S3 access' }));
+    expect(await screen.findByTestId('s3-access-panel')).toBeInTheDocument();
+    expect(screen.getByLabelText('Key name')).toBeInTheDocument();
+  });
+});

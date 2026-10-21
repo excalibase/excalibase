@@ -81,6 +81,7 @@ func catalogue() []entry {
 	tools := make([]entry, 0, 32)
 	tools = append(tools, projectTools()...)
 	tools = append(tools, corsTools()...)
+	tools = append(tools, s3KeyTools()...)
 	tools = append(tools, schemaTools()...)
 	tools = append(tools, realtimeTools()...)
 	tools = append(tools, databaseTools()...)

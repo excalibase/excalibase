@@ -39,6 +39,11 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},
 		{http.MethodPut, "/api/projects/" + matrixProjectA + "/storage/buckets/files/access"},
 	},
+	features.S3: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/storage/s3-keys"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/storage/s3-keys"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/storage/s3-keys/s3k_1"},
+	},
 }
 
 func darkFeatureRouter(t *testing.T, on ...features.Feature) (http.Handler, string) {
@@ -49,6 +54,7 @@ func darkFeatureRouter(t *testing.T, on ...features.Feature) (http.Handler, stri
 		// Storage mounts only when the object store is configured.
 		deps.storageHandler = handler.NewStorageHandler(nil, nil)
 		deps.fnHandler = handler.NewFunctionHandler(nil, nil, nil, nil, nil, "")
+		deps.s3KeysHandler = handler.NewS3KeysHandler(policyS3Keys{}, "")
 	})
 	return router, who[callerDeveloper]
 }

@@ -143,6 +143,10 @@ var projectRows = []Row{
 	{Methods: post, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/confirm-upload", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: del, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/objects/*", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: put, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/access", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "decides what the project's app users may do in the bucket"},
+	// S3 access keys (EXC-630): ids, scopes and dates only; the secret is in the create answer alone.
+	{Methods: get, Pattern: "/api/projects/{projectId}/storage/s3-keys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "access key ids, scopes and dates; never a secret"},
+	{Methods: post, Pattern: "/api/projects/{projectId}/storage/s3-keys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "issues a credential for the project's buckets; the secret is answered once"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/storage/s3-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 
 	// tus mounts every method on two patterns. HEAD reports an upload's
 	// offset (a read); everything else creates, appends to or terminates an
