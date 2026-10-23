@@ -14,6 +14,7 @@ const (
 	postgresContainer = "postgres"
 	mysqlDataDir      = "/var/lib/mysql"
 	mysqlContainer    = "mysqld"
+	mocoRoleLabel     = "moco.cybozu.com/role"
 	bytesPerGiB       = 1024 * 1024 * 1024
 )
 
@@ -24,6 +25,10 @@ type databaseVolume struct {
 	prefix    string
 	container string
 	dir       string
+	// roleLabel is the pod label naming the primary; empty is CNPG's -1 instance.
+	roleLabel string
+	// containerUsage measures the database container alone, not its pod's sidecars.
+	containerUsage bool
 }
 
 func postgresVolume(inst *domain.DatabaseInstance) databaseVolume {
@@ -33,7 +38,7 @@ func postgresVolume(inst *domain.DatabaseInstance) databaseVolume {
 
 func mysqlVolume(inst *domain.DatabaseInstance) databaseVolume {
 	return databaseVolume{selector: k8s.MySQLPodSelector(inst.ProjectID), prefix: "moco-" + k8s.MySQLClusterName(inst.ProjectID) + "-",
-		container: mysqlContainer, dir: mysqlDataDir}
+		container: mysqlContainer, dir: mysqlDataDir, roleLabel: mocoRoleLabel, containerUsage: true}
 }
 
 func (s *MetricsService) volumePods(ctx context.Context, inst *domain.DatabaseInstance, volume databaseVolume) []string {

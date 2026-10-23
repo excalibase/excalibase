@@ -10,9 +10,9 @@ func TestLookupResolvesARequestToItsRow(t *testing.T) {
 	if !ok || row.Pattern != "/api/provision/{projectId}/pause" || !row.MySQL {
 		t.Errorf("pause: %+v %v", row, ok)
 	}
-	row, ok = Lookup("GET", "/api/provision/proj-abc/logs")
+	row, ok = Lookup("GET", "/api/provision/proj-abc/backup/wal-lag")
 	if !ok || row.MySQL || !row.Database {
-		t.Errorf("logs: %+v %v", row, ok)
+		t.Errorf("wal-lag: %+v %v", row, ok)
 	}
 	if _, ok := Lookup("GET", "/api/nowhere"); ok {
 		t.Error("an unknown route resolved")

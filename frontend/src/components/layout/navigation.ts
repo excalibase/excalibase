@@ -127,10 +127,11 @@ export const PROJECT_NAV: NavSection[] = [
     label: 'Monitoring',
     icon: Activity,
     children: [
-      { label: 'Metrics', icon: BarChart2, to: 'monitoring/metrics', postgresOnly: true },
+      // MySQL projects get logs and CPU/memory too (EXC-653).
+      { label: 'Metrics', icon: BarChart2, to: 'monitoring/metrics' },
       { label: 'Performance', icon: Zap, to: 'monitoring/performance', postgresOnly: true },
       { label: 'Alerts', icon: Bell, to: 'monitoring/alerts' },
-      { label: 'Logs', icon: FileText, to: 'monitoring/logs', postgresOnly: true },
+      { label: 'Logs', icon: FileText, to: 'monitoring/logs' },
     ],
   },
   {

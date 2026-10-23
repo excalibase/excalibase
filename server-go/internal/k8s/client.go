@@ -27,6 +27,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/homedir"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
@@ -619,28 +620,48 @@ func (c *Client) GetPodMetrics(ctx context.Context, namespace string) ([]PodReso
 	if err != nil {
 		return nil, fmt.Errorf("get pod metrics: %w", err)
 	}
+	return podResourceMetrics(list.Items), nil
+}
 
+func podResourceMetrics(items []metricsv1beta1.PodMetrics) []PodResourceMetrics {
 	var result []PodResourceMetrics
-	for _, pm := range list.Items {
-		var cpuMillis int64
+	for _, pm := range items {
+		pod := PodResourceMetrics{Name: pm.Name}
 		var memBytes int64
 		for _, container := range pm.Containers {
-			cpuMillis += container.Usage.Cpu().MilliValue()
-			memBytes += container.Usage.Memory().Value()
+			cpuMillis, containerBytes := container.Usage.Cpu().MilliValue(), container.Usage.Memory().Value()
+			pod.CPUMillis += cpuMillis
+			memBytes += containerBytes
+			pod.Containers = append(pod.Containers, ContainerResourceMetrics{Name: container.Name, CPUMillis: cpuMillis, MemoryMB: containerBytes / (1024 * 1024)})
 		}
-		result = append(result, PodResourceMetrics{
-			Name:      pm.Name,
-			CPUMillis: cpuMillis,
-			MemoryMB:  memBytes / (1024 * 1024),
-		})
+		pod.MemoryMB = memBytes / (1024 * 1024)
+		result = append(result, pod)
 	}
-	return result, nil
+	return result
 }
 
 type PodResourceMetrics struct {
 	Name      string
 	CPUMillis int64
 	MemoryMB  int64
+	// Containers is each container's share of the pod's usage.
+	Containers []ContainerResourceMetrics
+}
+
+type ContainerResourceMetrics struct {
+	Name      string
+	CPUMillis int64
+	MemoryMB  int64
+}
+
+// Container is the named container's usage, if metrics-server reported it.
+func (p PodResourceMetrics) Container(name string) (ContainerResourceMetrics, bool) {
+	for _, container := range p.Containers {
+		if container.Name == name {
+			return container, true
+		}
+	}
+	return ContainerResourceMetrics{}, false
 }
 
 // ListNamespaces returns namespace names matching the given prefix.

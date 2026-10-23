@@ -19,18 +19,20 @@ func (s *MetricsService) SetTierLimits(lookup TierLimits) {
 	s.tierLimits = lookup
 }
 
-// podLimit is what one postgres instance may use.
+// podLimit is what one database instance may use.
 type podLimit struct {
 	cpuCores float64
 	memoryMB int64
 }
 
-// databaseLimits are each postgres pod's limits as Kubernetes enforces them,
+// databaseLimits are each database pod's limits as Kubernetes enforces them,
 // and the tier row's per-instance limits for a pod that declares none.
 type databaseLimits struct {
 	perPod    map[string]podLimit
 	tier      *podLimit
 	instances int
+	// roles is each pod's role as its operator labels it.
+	roles map[string]string
 }
 
 func (l databaseLimits) of(pod string) (podLimit, bool) {
@@ -59,17 +61,20 @@ func (l databaseLimits) total() (podLimit, int, bool) {
 	return podLimit{}, 0, false
 }
 
-func (s *MetricsService) databaseLimits(ctx context.Context, inst *domain.DatabaseInstance) databaseLimits {
-	limits := databaseLimits{perPod: map[string]podLimit{}}
-	pods, err := s.k8sClient.GetPods(ctx, inst.Namespace, "cnpg.io/cluster="+inst.ProjectID+postgresSuffix)
+func (s *MetricsService) databaseLimits(ctx context.Context, inst *domain.DatabaseInstance, volume databaseVolume) databaseLimits {
+	limits := databaseLimits{perPod: map[string]podLimit{}, roles: map[string]string{}}
+	pods, err := s.k8sClient.GetPods(ctx, inst.Namespace, volume.selector)
 	if err != nil {
-		log.Printf("metrics of %s: postgres pods: %v", inst.ProjectID, err)
+		log.Printf("metrics of %s: database pods: %v", inst.ProjectID, err)
 	}
 	for _, pod := range pods {
-		if !strings.HasPrefix(pod.Name, inst.ProjectID+postgresSuffix+"-") {
+		if !strings.HasPrefix(pod.Name, volume.prefix) {
 			continue
 		}
-		if limit, ok := postgresContainerLimit(pod); ok {
+		if volume.roleLabel != "" {
+			limits.roles[pod.Name] = pod.Labels[volume.roleLabel]
+		}
+		if limit, ok := containerLimit(pod, volume.container); ok {
 			limits.perPod[pod.Name] = limit
 		}
 	}
@@ -90,9 +95,9 @@ func (s *MetricsService) databaseLimits(ctx context.Context, inst *domain.Databa
 	return limits
 }
 
-func postgresContainerLimit(pod corev1.Pod) (podLimit, bool) {
+func containerLimit(pod corev1.Pod, name string) (podLimit, bool) {
 	for _, container := range pod.Spec.Containers {
-		if container.Name != "postgres" {
+		if container.Name != name {
 			continue
 		}
 		cpu, hasCPU := container.Resources.Limits[corev1.ResourceCPU]

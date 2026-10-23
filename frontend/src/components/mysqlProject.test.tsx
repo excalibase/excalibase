@@ -38,6 +38,9 @@ function renderWithProject(ui: React.ReactElement, path = '/project/p-my') {
           <Route path="/project/:projectId/operations/backups" element={<DatabaseRequired mysql />}>
             <Route index element={<p>backups page</p>} />
           </Route>
+          <Route path="/project/:projectId/monitoring/logs" element={<DatabaseRequired mysql />}>
+            <Route index element={<p>logs page</p>} />
+          </Route>
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>
@@ -58,6 +61,12 @@ describe('MySQL projects in Studio', () => {
     expect(screen.queryByTestId('postgres-required')).not.toBeInTheDocument();
   });
 
+  test('the Logs page opens on a MySQL project', async () => {
+    renderWithProject(<p>overview</p>, '/project/p-my/monitoring/logs');
+    expect(await screen.findByText('logs page')).toBeInTheDocument();
+    expect(screen.queryByTestId('postgres-required')).not.toBeInTheDocument();
+  });
+
   test('the navigation lists only what works on MySQL', () => {
     const sections = visibleProjectNav({ appHosting: true, mcp: false, postgres: false });
     const keys = sections.map((section) => section.key);
@@ -68,7 +77,8 @@ describe('MySQL projects in Studio', () => {
       expect(keys).toContain(shown);
     }
     const monitoring = PROJECT_NAV.find((section) => section.key === 'monitoring');
-    expect(visibleNavItems(monitoring?.children ?? [], false, false).map((item) => item.label)).toEqual(['Alerts']);
+    // EXC-653: a MySQL project's logs and CPU/memory are read as Postgres's are.
+    expect(visibleNavItems(monitoring?.children ?? [], false, false).map((item) => item.label)).toEqual(['Metrics', 'Alerts', 'Logs']);
   });
 
   // ADR 0041 decision 9: the database pages that read MySQL stay, the rest say why not.
