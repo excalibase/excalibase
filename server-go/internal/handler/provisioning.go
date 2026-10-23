@@ -390,7 +390,7 @@ func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
-	log.Printf("tenant=%s action=deprovision path=%s backups=%s", tenant, r.URL.Path, backupDisposition(opts))
+	log.Printf("tenant=%s action=deprovision path=%s backups=%s", safeLog(tenant), safeLog(r.URL.Path), backupDisposition(opts))
 	// Read the row before it is removed: its backups, if the deletion is not
 	// purging them, outlive the only record that names them.
 	inst, _ := h.svc.GetInstance(projectID)

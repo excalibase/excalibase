@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/excalibase/provisioning-poc/internal/logsafe"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -36,7 +37,7 @@ func TenantContext(next http.Handler) http.Handler {
 		if projectID != "" {
 			ctx := context.WithValue(r.Context(), tenantIDKey, projectID)
 			r = r.WithContext(ctx)
-			log.Printf("tenant=%s method=%s path=%s", projectID, r.Method, r.URL.Path)
+			log.Printf("tenant=%s method=%s path=%s", logsafe.Value(projectID), logsafe.Value(r.Method), logsafe.Value(r.URL.Path))
 		}
 		next.ServeHTTP(w, r)
 	})
