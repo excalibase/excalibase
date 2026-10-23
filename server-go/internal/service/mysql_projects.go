@@ -92,6 +92,8 @@ type mysqlServer interface {
 	ServerCertificateExpiry(ctx context.Context, namespace, projectID string) (time.Time, error)
 	// ReloadTLS has the running server read a renewed certificate.
 	ReloadTLS(ctx context.Context, namespace, projectID string) error
+	// GrantQueryStats lets the platform login read the statement digests (EXC-654).
+	GrantQueryStats(ctx context.Context, namespace, projectID string) error
 }
 
 var (

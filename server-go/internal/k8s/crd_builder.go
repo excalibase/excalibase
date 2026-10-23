@@ -69,6 +69,8 @@ type PostgreSQLClusterOpts struct {
 	// AllowPlaintext renders network logins as host rather than hostssl. The
 	// zero value requires TLS (EXC-410).
 	AllowPlaintext bool
+	// QueryStats turns on pg_stat_statements for the slow-queries page (EXC-654).
+	QueryStats bool
 }
 
 // BackupOpts turns a cluster's backups on. The cluster only names its
@@ -436,6 +438,9 @@ func buildPostgresql(opts PostgreSQLClusterOpts) map[string]interface{} {
 	}
 	params["max_connections"] = "100"
 	maps.Copy(params, tierPlatformParameters(opts.Tier))
+	if opts.QueryStats {
+		maps.Copy(params, queryStatsParameters())
+	}
 	var sharedPreloadLibs []interface{}
 	// DocumentDB's configuration is applied after the tenant's, and wins.
 	// Both settings are load-bearing: without the libraries the extension

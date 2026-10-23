@@ -33,6 +33,9 @@ type ProvisioningService struct {
 	// mysqlCreation is the mysql feature: new MySQL projects may be created.
 	// Existing ones are looked after either way (ADR 0041).
 	mysqlCreation bool
+	// queryStats is the slowqueries feature: new MySQL projects are granted
+	// their digests at creation (EXC-654).
+	queryStats bool
 	// runInBackground starts an accepted project build; nil runs it on its own goroutine.
 	runInBackground func(func())
 	// storageBudget holds every database volume to the platform's share of its storage.

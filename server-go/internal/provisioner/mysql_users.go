@@ -42,6 +42,10 @@ func mysqlIfAuthTable(table, statement string) string {
 		mysqlString(MySQLAuthDatabase), mysqlString(table), mysqlString(statement))
 }
 
+// MySQLQueryStatsGrantSQL lets the platform login read and clear the statement
+// digests for the slow-queries page (EXC-654); DROP is what TRUNCATE needs.
+const MySQLQueryStatsGrantSQL = "GRANT SELECT, DROP ON `performance_schema`.`events_statements_summary_by_digest` TO '" + MySQLUserApp + "'@'%';"
+
 // MySQLPasswords are the passwords the platform users are created with.
 type MySQLPasswords struct {
 	Admin, App, AuthAdmin, Watcher string

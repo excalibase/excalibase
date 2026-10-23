@@ -260,6 +260,8 @@ services:
       FEATURE_MYSQL: ${FEATURE_MYSQL:-false}
       # MySQL binlogs shipped every minute between backups (EXC-587).
       FEATURE_MYSQLPITR: ${FEATURE_MYSQLPITR:-false}
+      # Slow-queries page and tool (EXC-654); a single host's Postgres keeps no statistics.
+      FEATURE_SLOWQUERIES: ${FEATURE_SLOWQUERIES:-false}
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.

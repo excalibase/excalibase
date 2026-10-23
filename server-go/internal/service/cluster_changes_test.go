@@ -79,6 +79,7 @@ func clusterChanges() []clusterChange {
 		{"tune", OperationTune, func(s *ProvisioningService) error {
 			return s.TuneParameters(ctx, testOpsDB, map[string]string{"work_mem": "8MB"})
 		}},
+		{"query stats", OperationQueryStats, func(s *ProvisioningService) error { return s.EnableQueryStats(ctx, testOpsDB) }},
 	}
 }
 

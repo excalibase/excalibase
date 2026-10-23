@@ -123,16 +123,17 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 	mock := k8s.NewMockClient()
 	provSvc := service.NewProvisioningService(instances, provisioner.NewFactory(), mock)
 	return &handlerDeps{
-		provHandler:      handler.NewProvisioningHandler(provSvc, nil),
-		metricsHandler:   handler.NewMetricsHandler(service.NewMetricsService(instances, mock, dir)),
-		backupHandler:    handler.NewBackupHandler(service.NewBackupService(instances, mock, dir, nil)),
-		perfHandler:      handler.NewPerformanceHandler(service.NewPerformanceService(instances, mock)),
-		auditHandler:     handler.NewAuditHandler(service.NewAuditService(instances, mock)),
-		snapshotHandler:  handler.NewSnapshotHandler(service.NewSnapshotService(instances, mock, dir)),
-		migrationHandler: handler.NewMigrationHandler(service.NewMigrationService(instances, nil, dir)),
-		alertHandler:     handler.NewAlertHandler(service.NewAlertingService(dir)),
-		setupHandler:     handler.NewSetupHandler(service.NewOperatorSetupService(mock)),
-		pgHandler:        handler.NewParameterGroupHandler(&fakeParameterGroups{groups: map[string]*domain.ParameterGroup{}}),
+		provHandler:       handler.NewProvisioningHandler(provSvc, nil),
+		metricsHandler:    handler.NewMetricsHandler(service.NewMetricsService(instances, mock, dir)),
+		backupHandler:     handler.NewBackupHandler(service.NewBackupService(instances, mock, dir, nil)),
+		perfHandler:       handler.NewPerformanceHandler(service.NewPerformanceService(instances, mock)),
+		queryStatsHandler: handler.NewQueryStatsHandler(service.NewQueryStatsService(instances, provSvc, nil, features.NewStatic(features.All()...))),
+		auditHandler:      handler.NewAuditHandler(service.NewAuditService(instances, mock)),
+		snapshotHandler:   handler.NewSnapshotHandler(service.NewSnapshotService(instances, mock, dir)),
+		migrationHandler:  handler.NewMigrationHandler(service.NewMigrationService(instances, nil, dir)),
+		alertHandler:      handler.NewAlertHandler(service.NewAlertingService(dir)),
+		setupHandler:      handler.NewSetupHandler(service.NewOperatorSetupService(mock)),
+		pgHandler:         handler.NewParameterGroupHandler(&fakeParameterGroups{groups: map[string]*domain.ParameterGroup{}}),
 		// The app store talks to a database that never connects: the matrix
 		// asserts authorization outcomes, and a failed query is a 500, which
 		// is not a gate refusal.

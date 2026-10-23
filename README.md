@@ -253,6 +253,9 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | GET | `/api/provision/{id}/backup/wal-lag` | Yes | Docker mode only — seconds since last successful WAL push. K8s returns 501. |
 | GET | `/api/provision/{id}/performance/summary` | Yes | pg_stat_statements summary |
 | GET | `/api/provision/{id}/performance/top-queries` | Yes | Top queries by time |
+| GET | `/api/provision/{id}/slow-queries/?sort=total\|mean&limit=N` | Yes | The project's own normalized statements, Postgres or MySQL (`FEATURE_SLOWQUERIES`) |
+| POST | `/api/provision/{id}/slow-queries/reset` | Yes | Developer+: clear the project's statement statistics |
+| POST | `/api/provision/{id}/slow-queries/enable` | Yes | Admin+: turn statistics on for a database created before the feature; restarts Postgres once |
 | GET | `/api/provision/{id}/audit` | Yes | Per-project audit log |
 | POST | `/api/provision/{id}/migrations` | Yes | Apply SQL migration |
 | POST | `/api/provision/{id}/snapshot/export` | Yes | pg_dump export (never the `auth` schema) |

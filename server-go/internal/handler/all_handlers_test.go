@@ -250,6 +250,7 @@ func TestPerformanceSummaryHandler(t *testing.T) {
 func TestPerformanceTopQueriesHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = "[]"
 
 	w := doRequest(r, "GET", "/api/provision/test-db/performance/top-queries?limit=5", "")
 	if w.Code != 200 {
@@ -678,8 +679,9 @@ func TestMetricsHistoryInvalidLimit(t *testing.T) {
 func TestPerformanceTopQueriesInvalidLimit(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = "[]"
 
-	// invalid limit falls back to default (10)
+	// invalid limit falls back to the default
 	w := doRequest(r, "GET", "/api/provision/test-db/performance/top-queries?limit=notanumber", "")
 	if w.Code != 200 {
 		t.Errorf("top queries invalid limit: got %d", w.Code)

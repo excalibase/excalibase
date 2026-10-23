@@ -30,7 +30,21 @@ const mysqlRole = "admin"
 // TLS. A script pool lets one request carry several statements, for the SQL
 // runner and migrations; every other caller gets a pool that refuses a
 // second statement, so a read-only call cannot end its transaction.
-func (o *Opener) OpenMySQL(_ context.Context, projectID string, script bool) (*sql.DB, error) {
+func (o *Opener) OpenMySQL(ctx context.Context, projectID string, script bool) (*sql.DB, error) {
+	key := projectID
+	if script {
+		key = mysqlScriptKey(projectID)
+	}
+	return o.openMySQLAs(ctx, projectID, key, mysqlRole, script)
+}
+
+// OpenMySQLStats returns a MySQL project's pool as excalibase_app, the login
+// granted the statement digests (EXC-654). No customer SQL runs on it.
+func (o *Opener) OpenMySQLStats(ctx context.Context, projectID string) (*sql.DB, error) {
+	return o.openMySQLAs(ctx, projectID, mysqlStatsKey(projectID), appRole, false)
+}
+
+func (o *Opener) openMySQLAs(_ context.Context, projectID, key, role string, script bool) (*sql.DB, error) {
 	inst, err := o.servableInstance(projectID)
 	if err != nil {
 		return nil, err
@@ -38,13 +52,9 @@ func (o *Opener) OpenMySQL(_ context.Context, projectID string, script bool) (*s
 	if inst.DBType != domain.MySQL {
 		return nil, fmt.Errorf("%w: %s", ErrNotMySQL, projectID)
 	}
-	key := projectID
-	if script {
-		key = mysqlScriptKey(projectID)
-	}
-	return o.cached(projectID, key, mysqlRole, func(creds map[string]string) (*sql.DB, error) {
-		if !domain.IsMySQLRecord(creds) || creds["username"] != mysqlRole {
-			return nil, fmt.Errorf("the %s record of %s is not its MySQL admin login", mysqlRole, projectID)
+	return o.cached(projectID, key, role, func(creds map[string]string) (*sql.DB, error) {
+		if !domain.IsMySQLRecord(creds) || creds["username"] != role {
+			return nil, fmt.Errorf("the %s record of %s is not its MySQL %s login", role, projectID, role)
 		}
 		config, err := MySQLConfigFor(creds, o.overrides, o.limits, script)
 		if err != nil {
@@ -73,6 +83,8 @@ func (o *Opener) KillMySQLQuery(ctx context.Context, db *sql.DB, threadID int64)
 }
 
 func mysqlScriptKey(projectID string) string { return projectID + "#script" }
+
+func mysqlStatsKey(projectID string) string { return projectID + "#stats" }
 
 // MySQLConfigFor is the connection a MySQL pool opens. max_execution_time
 // bounds SELECTs and the lock waits bound DDL and row locks. The server is
