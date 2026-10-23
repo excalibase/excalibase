@@ -52,8 +52,19 @@ func (i *Introspector) GetTriggers(ctx context.Context, db *sql.DB, schemaName s
 
 // CreateTrigger creates a new trigger on a table.
 func (i *Introspector) CreateTrigger(ctx context.Context, db *sql.DB, req CreateTriggerRequest) error {
-	if err := checkNameLength("trigger", req.Name); err != nil {
+	stmt, err := buildCreateTriggerSQL(req)
+	if err != nil {
 		return err
+	}
+	if _, err := db.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("create trigger: %w", err)
+	}
+	return nil
+}
+
+func buildCreateTriggerSQL(req CreateTriggerRequest) (string, error) {
+	if err := checkNameLength("trigger", req.Name); err != nil {
+		return "", err
 	}
 	schemaName := req.Schema
 	if schemaName == "" {
@@ -61,10 +72,10 @@ func (i *Introspector) CreateTrigger(ctx context.Context, db *sql.DB, req Create
 	}
 
 	if err := ValidateTriggerTiming(req.Timing); err != nil {
-		return err
+		return "", err
 	}
 	if err := ValidateTriggerEvent(req.Event); err != nil {
-		return err
+		return "", err
 	}
 
 	var b strings.Builder
@@ -91,19 +102,19 @@ func (i *Introspector) CreateTrigger(ctx context.Context, db *sql.DB, req Create
 	b.WriteString(QuoteIdent(req.Function))
 	b.WriteString("()")
 
-	if _, err := db.ExecContext(ctx, b.String()); err != nil {
-		return fmt.Errorf("create trigger: %w", err)
-	}
-	return nil
+	return b.String(), nil
 }
 
 // DropTrigger drops a trigger from a table.
 func (i *Introspector) DropTrigger(ctx context.Context, db *sql.DB, schema, table, name string) error {
-	stmt := "DROP TRIGGER " + QuoteIdent(name) + " ON " + QuoteIdent(schema) + "." + QuoteIdent(table)
-	if _, err := db.ExecContext(ctx, stmt); err != nil {
+	if _, err := db.ExecContext(ctx, buildDropTriggerSQL(schema, table, name)); err != nil {
 		return fmt.Errorf("drop trigger: %w", err)
 	}
 	return nil
+}
+
+func buildDropTriggerSQL(schema, table, name string) string {
+	return "DROP TRIGGER " + QuoteIdent(name) + " ON " + QuoteIdent(schema) + "." + QuoteIdent(table)
 }
 
 const triggersQuery = `
