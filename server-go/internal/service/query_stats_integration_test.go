@@ -132,59 +132,86 @@ func TestIntegration_SlowQueriesArePostgresProjectRolesOnly(t *testing.T) {
 			pg := start(t)
 			statsWorkload(t, pg)
 			svc := statsService(pg)
-			report, err := svc.List(context.Background(), "p1", "total", 100)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !report.Enabled {
-				t.Fatal("statistics reported off with the library preloaded")
-			}
-			text := ""
-			for _, q := range report.Queries {
-				text += q.Query + "\n"
-			}
-			for _, want := range []string{"INSERT INTO orders VALUES ($1, $2)", "SELECT * FROM orders WHERE secret_note = $1"} {
-				if !strings.Contains(text, want) {
-					t.Errorf("missing the project's %q in:\n%s", want, text)
-				}
-			}
-			for _, refused := range []string{"auth_marker", "scheduler_marker", "cdc_marker", "superuser_marker", "other_marker",
-				"owner-literal-4242", "api-literal-9191", "pg_temp", "pg_stat_statements"} {
-				if strings.Contains(text, refused) {
-					t.Errorf("answered %q:\n%s", refused, text)
-				}
-			}
-
-			if err := svc.Reset(context.Background(), "p1"); err != nil {
-				t.Fatalf("reset: %v", err)
-			}
-			after, err := svc.List(context.Background(), "p1", "mean", 100)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(after.Queries) != 0 {
-				t.Errorf("reset left %d of the project's statements", len(after.Queries))
-			}
-			// The platform's own statistics are not the project's to clear.
-			admin := pg.connectTo(t, "postgres", "p", "app")
-			var kept int
-			if err := admin.QueryRow(`SELECT count(*) FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid
-				WHERE r.rolname = 'auth_admin' OR s.query LIKE '%other_marker%'`).Scan(&kept); err != nil {
-				t.Fatal(err)
-			}
-			if kept < 2 {
-				t.Errorf("reset cleared the platform's or another database's statistics: %d left", kept)
-			}
-
+			assertOnlyProjectStatements(t, svc)
+			assertSummaryCoversEveryStatement(t, pg)
+			assertResetKeepsThePlatformsStatistics(t, svc, pg)
 			pg.psql(t, "DROP EXTENSION pg_stat_statements")
-			off, err := svc.List(context.Background(), "p1", "total", 10)
-			if err != nil || off.Enabled {
-				t.Errorf("without the extension: %+v, %v", off, err)
-			}
-			if err := svc.Reset(context.Background(), "p1"); err == nil {
-				t.Error("reset without the extension reported success")
-			}
+			assertReportedOff(t, svc)
 		})
+	}
+}
+
+func assertOnlyProjectStatements(t *testing.T, svc *QueryStatsService) {
+	t.Helper()
+	report, err := svc.List(context.Background(), "p1", "total", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Enabled {
+		t.Fatal("statistics reported off with the library preloaded")
+	}
+	text := ""
+	for _, q := range report.Queries {
+		text += q.Query + "\n"
+	}
+	for _, want := range []string{"INSERT INTO orders VALUES ($1, $2)", "SELECT * FROM orders WHERE secret_note = $1"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing the project's %q in:\n%s", want, text)
+		}
+	}
+	for _, refused := range []string{"auth_marker", "scheduler_marker", "cdc_marker", "superuser_marker", "other_marker",
+		"owner-literal-4242", "api-literal-9191", "pg_temp", "pg_stat_statements"} {
+		if strings.Contains(text, refused) {
+			t.Errorf("answered %q:\n%s", refused, text)
+		}
+	}
+}
+
+// The summary's figures come with no rows, over every project statement.
+func assertSummaryCoversEveryStatement(t *testing.T, pg *rolePostgres) {
+	t.Helper()
+	inst := &domain.DatabaseInstance{ProjectID: "p1", DatabaseName: "app"}
+	summary, err := readPostgresStatements(context.Background(), pg.execer(), inst, sortByTotal, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary == nil || len(summary.Queries) != 0 || summary.AvgMeanMs == nil || summary.SlowCount != 0 {
+		t.Errorf("summary = %+v", summary)
+	}
+}
+
+// The platform's own statistics are not the project's to clear.
+func assertResetKeepsThePlatformsStatistics(t *testing.T, svc *QueryStatsService, pg *rolePostgres) {
+	t.Helper()
+	if err := svc.Reset(context.Background(), "p1"); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	after, err := svc.List(context.Background(), "p1", "mean", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Queries) != 0 {
+		t.Errorf("reset left %d of the project's statements", len(after.Queries))
+	}
+	admin := pg.connectTo(t, "postgres", "p", "app")
+	var kept int
+	if err := admin.QueryRow(`SELECT count(*) FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid
+		WHERE r.rolname = 'auth_admin' OR s.query LIKE '%other_marker%'`).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept < 2 {
+		t.Errorf("reset cleared the platform's or another database's statistics: %d left", kept)
+	}
+}
+
+func assertReportedOff(t *testing.T, svc *QueryStatsService) {
+	t.Helper()
+	off, err := svc.List(context.Background(), "p1", "total", 10)
+	if err != nil || off.Enabled {
+		t.Errorf("without the extension: %+v, %v", off, err)
+	}
+	if err := svc.Reset(context.Background(), "p1"); err == nil {
+		t.Error("reset without the extension reported success")
 	}
 }
 

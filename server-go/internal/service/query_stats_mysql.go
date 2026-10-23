@@ -20,9 +20,17 @@ WHERE SCHEMA_NAME = ? AND DIGEST_TEXT IS NOT NULL AND COUNT_STAR > 0
   AND DIGEST_TEXT NOT LIKE '%performance_schema%'
 ORDER BY `
 
-var mysqlDigestOrder = map[string]string{
-	sortByTotal: "SUM_TIMER_WAIT DESC LIMIT ?",
-	sortByMean:  "SUM_TIMER_WAIT / COUNT_STAR DESC LIMIT ?",
+const (
+	mysqlDigestsByTotalSQL = mysqlDigestsSQL + "SUM_TIMER_WAIT DESC LIMIT ?"
+	mysqlDigestsByMeanSQL  = mysqlDigestsSQL + "SUM_TIMER_WAIT / COUNT_STAR DESC LIMIT ?"
+)
+
+// queryDigests reads the project database's digests in the order sort names.
+func queryDigests(ctx context.Context, db *sql.DB, sort, schema string, limit int) (*sql.Rows, error) {
+	if sort == sortByMean {
+		return db.QueryContext(ctx, mysqlDigestsByMeanSQL, schema, limit)
+	}
+	return db.QueryContext(ctx, mysqlDigestsByTotalSQL, schema, limit)
 }
 
 // mysqlResetDigestsSQL clears every digest of the project's own server.
@@ -40,7 +48,7 @@ func (s *QueryStatsService) listMySQL(ctx context.Context, inst *domain.Database
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, mysqlDigestsSQL+mysqlDigestOrder[sort], inst.DatabaseName, limit)
+	rows, err := queryDigests(ctx, db, sort, inst.DatabaseName, limit)
 	if isMySQLDenied(err) {
 		return report, nil
 	}

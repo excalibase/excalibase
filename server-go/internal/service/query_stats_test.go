@@ -18,7 +18,9 @@ import (
 
 // fakeStatsDatabases records the psql it is asked to run and answers with output.
 type fakeStatsDatabases struct {
-	output   string
+	output string
+	// version answers the server version probe when set.
+	version  string
 	err      error
 	commands [][]string
 	enabled  []string
@@ -27,6 +29,9 @@ type fakeStatsDatabases struct {
 func (f *fakeStatsDatabases) primaryPsql(context.Context, *domain.DatabaseInstance) (roleSQLExecer, error) {
 	return func(_ context.Context, cmd []string) (string, error) {
 		f.commands = append(f.commands, cmd)
+		if f.version != "" && strings.Contains(strings.Join(cmd, " "), "SHOW server_version_num") {
+			return f.version, nil
+		}
 		return f.output, f.err
 	}, nil
 }
@@ -70,7 +75,7 @@ func mysqlStatsProject() *domain.DatabaseInstance {
 }
 
 func TestQueryStats_PostgresReadsThePrimaryAsTheSuperuserInTheProjectDatabase(t *testing.T) {
-	dbs := &fakeStatsDatabases{output: `[{"query":"SELECT $1","calls":3,"totalTimeMs":12.5,"meanTimeMs":4.1,"rows":3}]`}
+	dbs := &fakeStatsDatabases{output: statsAnswer(`[{"query":"SELECT $1","calls":3,"totalTimeMs":12.5,"meanTimeMs":4.1,"rows":3}]`)}
 	svc := NewQueryStatsService(statsProjects(pgStatsProject()), dbs, nil, features.NewStatic())
 	report, err := svc.List(context.Background(), "p1", "mean", 10)
 	if err != nil {
@@ -87,9 +92,31 @@ func TestQueryStats_PostgresReadsThePrimaryAsTheSuperuserInTheProjectDatabase(t 
 		t.Errorf("psql = %s", cmd)
 	}
 	script := dbs.lastSQL(t)
+	if !strings.HasPrefix(script, sessionGuardSQL) {
+		t.Error("the read does not start with the superuser session guard")
+	}
 	for _, want := range []string{"'mean'", "10)", "current_database()", "NOT r.rolsuper", "NOT r.rolreplication", "statement_timeout"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script lacks %q", want)
+		}
+	}
+}
+
+// An owner's ALTER DATABASE ... SET transaction_timeout cannot cut the read
+// short where the server has the setting.
+func TestQueryStats_PostgresPinsTransactionTimeoutWhereTheServerHasIt(t *testing.T) {
+	dbs := &fakeStatsDatabases{version: "170002", output: statsAnswer("[]")}
+	svc := NewQueryStatsService(statsProjects(pgStatsProject()), dbs, nil, features.NewStatic())
+	if _, err := svc.List(context.Background(), "p1", "total", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Reset(context.Background(), "p1"); err == nil {
+		t.Log("reset answered")
+	}
+	for _, cmd := range dbs.commands {
+		joined := strings.Join(cmd, " ")
+		if !strings.Contains(joined, "SHOW server_version_num") && !strings.Contains(joined, "transaction_timeout=0") {
+			t.Errorf("psql without the pinned transaction_timeout: %s", joined)
 		}
 	}
 }
@@ -138,7 +165,7 @@ func TestQueryStats_PostgresUnparseableOutputIsAnError(t *testing.T) {
 
 // A NOTICE on stderr ahead of the answer does not hide it.
 func TestQueryStats_PostgresReadsTheAnswerAfterOtherOutput(t *testing.T) {
-	dbs := &fakeStatsDatabases{output: "WARNING:  something\n[]\n"}
+	dbs := &fakeStatsDatabases{output: "WARNING:  something\n" + statsAnswer("[]") + "\n"}
 	svc := NewQueryStatsService(statsProjects(pgStatsProject()), dbs, nil, features.NewStatic())
 	report, err := svc.List(context.Background(), "p1", "total", 5)
 	if err != nil || !report.Enabled {
@@ -155,7 +182,7 @@ func TestQueryStats_RefusesAnUnknownSort(t *testing.T) {
 
 func TestQueryStats_LimitIsBounded(t *testing.T) {
 	for limit, want := range map[int]string{0: "50)", -3: "50)", 7: "7)", 5000: "100)"} {
-		dbs := &fakeStatsDatabases{output: "[]"}
+		dbs := &fakeStatsDatabases{output: statsAnswer("[]")}
 		svc := NewQueryStatsService(statsProjects(pgStatsProject()), dbs, nil, features.NewStatic())
 		if _, err := svc.List(context.Background(), "p1", "total", limit); err != nil {
 			t.Fatal(err)

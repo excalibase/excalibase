@@ -49,7 +49,7 @@ describe('project navigation', () => {
     expect(labels(true)).not.toContain('Slow queries');
     expect(labels(true, false)).not.toContain('Slow queries');
     expect(labels(true, true)).toContain('Slow queries');
-    expect(labels(false, true)).toEqual(['Alerts', 'Slow queries']);
+    expect(labels(false, true)).toEqual(['Metrics', 'Alerts', 'Logs', 'Slow queries']);
     expect(monitoring?.children?.find((item) => item.label === 'Slow queries')).toMatchObject({ to: 'monitoring/slow-queries', feature: 'slowqueries' });
   });
 });

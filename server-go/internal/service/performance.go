@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -104,42 +103,36 @@ func (s *PerformanceService) GetTopQueries(ctx context.Context, projectID string
 	return stats, nil
 }
 
-// slowStatementMs is when the summary counts a statement as slow.
-const slowStatementMs = 1000
-
-// summarizeStatements counts the slow ones among the project's costliest statements.
+// summarizeStatements counts the project's slow statements and their average.
 func (s *PerformanceService) summarizeStatements(ctx context.Context, inst *domain.DatabaseInstance, summary *domain.PerformanceSummary) {
-	statements, err := s.projectStatements(ctx, inst, queryStatsMaxRows)
-	if err != nil {
+	report, err := s.readStatements(ctx, inst, 0)
+	if err != nil || report == nil {
 		return
 	}
-	slow, sum := 0, 0.0
-	for _, q := range statements {
-		if q.MeanTimeMs > slowStatementMs {
-			slow++
-		}
-		sum += q.MeanTimeMs
-	}
+	slow := report.SlowCount
 	summary.SlowQueryCount = &slow
-	if len(statements) > 0 {
-		avg := sum / float64(len(statements))
-		summary.AvgQueryTimeMs = &avg
-	}
+	summary.AvgQueryTimeMs = report.AvgMeanMs
 }
 
 func (s *PerformanceService) projectStatements(ctx context.Context, inst *domain.DatabaseInstance, limit int) ([]SlowQuery, error) {
-	out, err := s.k8sClient.ExecInPod(ctx, inst.Namespace, inst.ProjectID+"-postgres-1", "postgres",
-		queryStatsPsql(inst.DatabaseName, queryStatsScript(sortByTotal, limit)))
+	report, err := s.readStatements(ctx, inst, limit)
+	if err != nil || report == nil {
+		return []SlowQuery{}, err
+	}
+	return report.Queries, nil
+}
+
+// readStatements reads on the current primary: the read creates a temporary
+// function, which a standby refuses.
+func (s *PerformanceService) readStatements(ctx context.Context, inst *domain.DatabaseInstance, limit int) (*statementReport, error) {
+	primary, err := clusterPrimary(ctx, s.k8sClient, inst)
 	if err != nil {
 		return nil, err
 	}
-	statements := []SlowQuery{}
-	if answer := lastLine(out); answer != "" {
-		if err := json.Unmarshal([]byte(answer), &statements); err != nil {
-			return nil, fmt.Errorf("read query statistics of %s: unexpected answer", inst.ProjectID)
-		}
+	exec := func(ctx context.Context, cmd []string) (string, error) {
+		return s.k8sClient.ExecInPod(ctx, inst.Namespace, primary, "postgres", cmd)
 	}
-	return statements, nil
+	return readPostgresStatements(ctx, exec, inst, sortByTotal, limit)
 }
 
 func (s *PerformanceService) GetWaitEvents(ctx context.Context, projectID string) ([]domain.WaitEvent, error) {

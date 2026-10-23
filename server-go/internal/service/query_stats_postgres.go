@@ -64,20 +64,22 @@ DECLARE
   result text;
 BEGIN
   ` + statsSchemaLookup + `
-  EXECUTE format($q$SELECT coalesce(json_agg(json_build_object('query', top.query, 'calls', top.calls,
-      'totalTimeMs', top.total_ms, 'meanTimeMs', top.mean_ms, 'rows', top.rows) ORDER BY top.sort_key DESC), '[]')::text
-    FROM (
+  EXECUTE format($q$WITH grouped AS (
+      SELECT s.query, sum(s.calls) AS calls, sum(s.total_exec_time) AS total_ms,
+        coalesce(sum(s.total_exec_time) / nullif(sum(s.calls), 0), 0) AS mean_ms, sum(s.rows) AS rows
+      FROM %I.pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid
+      WHERE s.dbid = ` + projectDatabaseOID + ` AND ` + projectStatementRoleFilter + `
+      GROUP BY s.query
+    ), top AS (
       SELECT grouped.*, CASE WHEN $1 = 'mean' THEN grouped.mean_ms ELSE grouped.total_ms END AS sort_key
-      FROM (
-        SELECT s.query, sum(s.calls) AS calls, sum(s.total_exec_time) AS total_ms,
-          coalesce(sum(s.total_exec_time) / nullif(sum(s.calls), 0), 0) AS mean_ms, sum(s.rows) AS rows
-        FROM %I.pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid
-        WHERE s.dbid = ` + projectDatabaseOID + ` AND ` + projectStatementRoleFilter + `
-        GROUP BY s.query
-      ) grouped
-      ORDER BY sort_key DESC
-      LIMIT $2
-    ) top$q$, stats_schema) INTO result USING sort_by, max_rows;
+      FROM grouped ORDER BY sort_key DESC LIMIT $2
+    )
+    SELECT json_build_object(
+      'queries', (SELECT coalesce(json_agg(json_build_object('query', top.query, 'calls', top.calls,
+        'totalTimeMs', top.total_ms, 'meanTimeMs', top.mean_ms, 'rows', top.rows) ORDER BY top.sort_key DESC), '[]') FROM top),
+      'slowCount', (SELECT count(*) FROM grouped WHERE grouped.mean_ms > $3),
+      'avgMeanMs', (SELECT avg(grouped.mean_ms) FROM grouped))::text$q$, stats_schema)
+    INTO result USING sort_by, max_rows, ` + strconv.Itoa(slowStatementMs) + `;
   RETURN result;
 END
 $excalibase_stats$;
@@ -100,16 +102,51 @@ $excalibase_stats$;
 SELECT pg_temp.excalibase_reset_query_stats();
 `
 
+// slowStatementMs is the mean time at which a statement counts as slow.
+const slowStatementMs = 1000
+
+// statementReport is the statistics function's answer: the costliest
+// statements, and the slow count and average over all of them.
+type statementReport struct {
+	Queries   []SlowQuery `json:"queries"`
+	SlowCount int         `json:"slowCount"`
+	AvgMeanMs *float64    `json:"avgMeanMs"`
+}
+
 // queryStatsScript reads the project's statements; sort and limit are checked values.
 func queryStatsScript(sort string, limit int) string {
 	return queryStatsFunctionSQL + "SELECT pg_temp.excalibase_query_stats(" + sqlQuote(sort) + ", " + strconv.Itoa(limit) + ");\n"
 }
 
-// queryStatsPsql runs script as the superuser in the project database with
-// the session pinned against the owner's database settings.
-func queryStatsPsql(dbName, script string) []string {
+// queryStatsPsql runs script as the superuser in the project database, the
+// session pinned against the owner's database settings and guarded as every
+// platform superuser script is.
+func queryStatsPsql(dbName string, serverVersionNum int, script string) []string {
 	return []string{"psql", "-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1", "-U", "postgres",
-		"-d", superuserConninfo(dbName, 0), "-c", script}
+		"-d", superuserConninfo(dbName, serverVersionNum), "-c", sessionGuardSQL + script}
+}
+
+// runStatsScript runs script on the primary exec reaches and returns its answer.
+func runStatsScript(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance, script string) (string, error) {
+	version := probeServerVersionNum(ctx, exec, inst.DatabaseName)
+	out, err := exec(ctx, queryStatsPsql(inst.DatabaseName, version, script))
+	if err != nil {
+		return "", fmt.Errorf("read query statistics of %s: %w", inst.ProjectID, err)
+	}
+	return psqlAnswer(out), nil
+}
+
+// readPostgresStatements is nil while statistics are not on.
+func readPostgresStatements(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance, sort string, limit int) (*statementReport, error) {
+	answer, err := runStatsScript(ctx, exec, inst, queryStatsScript(sort, limit))
+	if err != nil || answer == "" {
+		return nil, err
+	}
+	report := &statementReport{}
+	if err := json.Unmarshal([]byte(answer), report); err != nil || report.Queries == nil {
+		return nil, fmt.Errorf("read query statistics of %s: unexpected answer", inst.ProjectID)
+	}
+	return report, nil
 }
 
 func (s *QueryStatsService) runPostgres(ctx context.Context, inst *domain.DatabaseInstance, script string) (string, error) {
@@ -117,25 +154,23 @@ func (s *QueryStatsService) runPostgres(ctx context.Context, inst *domain.Databa
 	if err != nil {
 		return "", err
 	}
-	out, err := psql(ctx, queryStatsPsql(inst.DatabaseName, script))
-	if err != nil {
-		return "", fmt.Errorf("read query statistics of %s: %w", inst.ProjectID, err)
-	}
-	return lastLine(out), nil
+	return runStatsScript(ctx, psql, inst, script)
 }
 
 func (s *QueryStatsService) listPostgres(ctx context.Context, inst *domain.DatabaseInstance, sort string, limit int) (*SlowQueryReport, error) {
-	answer, err := s.runPostgres(ctx, inst, queryStatsScript(sort, limit))
+	psql, err := s.databases.primaryPsql(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	statements, err := readPostgresStatements(ctx, psql, inst, sort, limit)
 	if err != nil {
 		return nil, err
 	}
 	report := emptyReport(engineNamePostgres, sort)
-	if answer == "" {
+	if statements == nil {
 		return report, nil
 	}
-	if err := json.Unmarshal([]byte(answer), &report.Queries); err != nil {
-		return nil, fmt.Errorf("read query statistics of %s: unexpected answer", inst.ProjectID)
-	}
+	report.Queries = statements.Queries
 	report.Enabled = true
 	return report, nil
 }
@@ -151,8 +186,8 @@ func (s *QueryStatsService) resetPostgres(ctx context.Context, inst *domain.Data
 	return nil
 }
 
-// lastLine is psql's answer: notices on stderr come before it.
-func lastLine(out string) string {
+// psqlAnswer is psql's answer: notices on stderr come before it.
+func psqlAnswer(out string) string {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	return strings.TrimSpace(lines[len(lines)-1])
 }

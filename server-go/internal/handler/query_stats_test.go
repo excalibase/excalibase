@@ -75,7 +75,7 @@ func TestQueryStatsHandler_ListsWithWhatTheCallerMayDo(t *testing.T) {
 		domain.OrgRoleAdmin:     {true, true},
 	} {
 		f := newQueryStatsFixture(t, role)
-		f.mock.ExecOutput["org1-test-db/test-db-postgres-1"] = `[{"query":"SELECT $1","calls":2,"totalTimeMs":3,"meanTimeMs":1.5,"rows":2}]`
+		f.mock.ExecOutput["org1-test-db/test-db-postgres-1"] = `{"queries":[{"query":"SELECT $1","calls":2,"totalTimeMs":3,"meanTimeMs":1.5,"rows":2}],"slowCount":0,"avgMeanMs":1.5}`
 		w := f.do(http.MethodGet, "/?sort=mean&limit=5")
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", role, w.Code, w.Body)

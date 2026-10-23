@@ -38,7 +38,7 @@ func TestProvisionWithQueryStatsTurnsOnStatementStatistics(t *testing.T) {
 }
 
 func TestMySQLQueryStatsGrantIsTheDigestTableOnlyToThePlatformLogin(t *testing.T) {
-	want := "GRANT SELECT, DROP ON `performance_schema`.`events_statements_summary_by_digest` TO 'excalibase_app'@'%';"
+	want := "GRANT SELECT (`SCHEMA_NAME`, `DIGEST_TEXT`, `COUNT_STAR`, `SUM_TIMER_WAIT`, `SUM_ROWS_SENT`, `SUM_ROWS_AFFECTED`), DROP ON `performance_schema`.`events_statements_summary_by_digest` TO 'excalibase_app'@'%';"
 	if MySQLQueryStatsGrantSQL != want {
 		t.Errorf("grant = %s", MySQLQueryStatsGrantSQL)
 	}

@@ -87,6 +87,9 @@ func TestIntegration_SlowQueriesOnMySQLAreTheProjectDatabasesOnly(t *testing.T) 
 	}
 
 	app := server.connect(t, "excalibase_app", "app-pw", "shop", false)
+	if _, err := app.Exec("SELECT QUERY_SAMPLE_TEXT FROM performance_schema.events_statements_summary_by_digest"); err == nil {
+		t.Error("excalibase_app read the sample text, which keeps literals")
+	}
 	inst := &domain.DatabaseInstance{ProjectID: "m1", DBType: domain.MySQL, Status: "ACTIVE", DatabaseName: "shop"}
 	svc := NewQueryStatsService(statsProjects(inst), &fakeStatsDatabases{}, statsOpener{db: app}, features.NewStatic(features.MySQL))
 	ctx := context.Background()
