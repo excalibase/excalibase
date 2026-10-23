@@ -45,6 +45,12 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 	if err := mysql.EnsurePlatformUsers(ctx, inst.Namespace, inst.ProjectID, inst.DatabaseName, passwords); err != nil {
 		return pc.Fail(err)
 	}
+	if s.queryStats {
+		pc.SetStep("grant the statement digests")
+		if err := mysql.GrantQueryStats(ctx, inst.Namespace, inst.ProjectID); err != nil {
+			return pc.Fail(err)
+		}
+	}
 	if inst.RestoredFromProjectID != "" {
 		pc.SetStep("end the source's end-user sessions")
 		if err := mysql.ForgetEndUserSessions(ctx, inst.Namespace, inst.ProjectID); err != nil {

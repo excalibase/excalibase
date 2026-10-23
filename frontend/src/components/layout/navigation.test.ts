@@ -40,4 +40,16 @@ describe('project navigation', () => {
     expect(keys(true)).toContain('sites');
     expect(PROJECT_NAV.find((section) => section.key === 'sites')).toMatchObject({ label: 'Sites', to: 'sites' });
   });
+
+  // EXC-654: Slow queries ships dark and serves Postgres and MySQL alike.
+  test('Slow queries is listed only with its feature on, on either engine', () => {
+    const monitoring = PROJECT_NAV.find((section) => section.key === 'monitoring');
+    const labels = (postgres: boolean, slowqueries?: boolean) =>
+      visibleNavItems(monitoring?.children ?? [], false, postgres, { slowqueries }).map((item) => item.label);
+    expect(labels(true)).not.toContain('Slow queries');
+    expect(labels(true, false)).not.toContain('Slow queries');
+    expect(labels(true, true)).toContain('Slow queries');
+    expect(labels(false, true)).toEqual(['Metrics', 'Alerts', 'Logs', 'Slow queries']);
+    expect(monitoring?.children?.find((item) => item.label === 'Slow queries')).toMatchObject({ to: 'monitoring/slow-queries', feature: 'slowqueries' });
+  });
 });

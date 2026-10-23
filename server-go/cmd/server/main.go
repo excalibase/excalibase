@@ -884,6 +884,7 @@ type handlerDeps struct {
 	metricsHandler     *handler.MetricsHandler
 	backupHandler      *handler.BackupHandler
 	perfHandler        *handler.PerformanceHandler
+	queryStatsHandler  *handler.QueryStatsHandler
 	auditHandler       *handler.AuditHandler
 	snapshotHandler    *handler.SnapshotHandler
 	migrationHandler   *handler.MigrationHandler
@@ -1137,6 +1138,7 @@ func buildProvisioningService(
 	provSvc.SetRestoredSettings(sqlStore)
 	provSvc.SetMigrationHistory(service.NewMigrationHistoryFiles(cfg.StoragePath))
 	provSvc.AllowMySQLCreation(mysqlCreationAllowed(cfg))
+	provSvc.SetQueryStats(queryStatsOn(cfg))
 	provSvc.SetTierStore(sqlStore)
 	provSvc.SetStorageClassPolicy(cfg.TenantStorageClassPolicy())
 	provSvc.SetSelfHostedMode(!cfg.IsCloud())
@@ -1351,6 +1353,7 @@ func buildBackupService(
 	k8sAdapter := service.NewK8sBackupAdapter(k8sClient, backupStorage)
 	k8sAdapter.SetInstanceStore(store)
 	k8sAdapter.SetPublicDomainSuffix(cfg.DBEndpointDomain)
+	k8sAdapter.SetQueryStats(queryStatsOn(cfg))
 	adapters := map[domain.DeploymentMode]service.BackupAdapter{
 		domain.ModeK8s: k8sAdapter,
 	}
@@ -1408,6 +1411,17 @@ func newAlertHandler(svc *service.AlertingService, instances storage.InstanceSto
 	h := handler.NewAlertHandler(svc)
 	h.SetScope(instances, orgs)
 	return h
+}
+
+// newQueryStatsHandler reads MySQL digests through the shared project pools.
+func newQueryStatsHandler(cfg config.AppConfig, store storage.InstanceStore, provSvc *service.ProvisioningService, pools permissions.ProjectPools) *handler.QueryStatsHandler {
+	mysqlStats, _ := pools.(service.MySQLStatsOpener)
+	return handler.NewQueryStatsHandler(service.NewQueryStatsService(store, provSvc, mysqlStats, cfg.Features()))
+}
+
+// queryStatsOn is the slowqueries feature: whether new clusters carry statement statistics.
+func queryStatsOn(cfg config.AppConfig) bool {
+	return features.Enabled(context.Background(), cfg.Features(), features.SlowQueries)
 }
 
 // newSchemaHandler gives the schema browser pools of its own, with the same
@@ -1614,6 +1628,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		metricsHandler:      handler.NewMetricsHandler(metricsSvc),
 		backupHandler:       handler.NewBackupHandler(backupSvc),
 		perfHandler:         handler.NewPerformanceHandler(perfSvc),
+		queryStatsHandler:   newQueryStatsHandler(cfg, store, provSvc, a.projectDB),
 		auditHandler:        handler.NewAuditHandler(auditSvc),
 		snapshotHandler:     handler.NewSnapshotHandler(snapshotSvc),
 		migrationHandler:    handler.NewMigrationHandler(migrationSvc),
@@ -1841,6 +1856,13 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			// Read-only subtrees — any member.
 			r.With(db).Route("/metrics", func(r chi.Router) { d.metricsHandler.Routes(r) })
 			r.With(db).Route("/performance", func(r chi.Router) { d.perfHandler.Routes(r) })
+			// Slow queries (EXC-654): reads any member, reset Developer+, and
+			// Admin+ turns statistics on, which restarts a Postgres database.
+			r.With(features.Require(d.features, features.SlowQueries), db).Route("/slow-queries", func(r chi.Router) {
+				r.Get("/", d.queryStatsHandler.List)
+				r.With(dev).Post("/reset", d.queryStatsHandler.Reset)
+				r.With(admin).Post("/enable", d.queryStatsHandler.Enable)
+			})
 
 			// Developer+ subtrees — schema/data-plane authoring.
 			r.Group(func(r chi.Router) {
@@ -2657,6 +2679,7 @@ func buildK8sFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) *provisione
 	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
 	pgProvisioner.SetWatcherImage(cfg.WatcherImage)
 	pgProvisioner.SetPublicDomainSuffix(cfg.DBEndpointDomain)
+	pgProvisioner.SetQueryStats(queryStatsOn(cfg))
 	pgProvisioner.SetDeletionPoller(deletionPoller())
 	mysql := provisioner.NewMySQLProvisioner(k8sClient)
 	mysql.SetBackupPathStyle(backupUsePathStyle())

@@ -51,6 +51,14 @@ func (p *DockerMySQLProvisioner) EnsurePlatformUsers(ctx context.Context, namesp
 	return nil
 }
 
+// GrantQueryStats lets the platform login read the project's statement digests.
+func (p *DockerMySQLProvisioner) GrantQueryStats(ctx context.Context, namespace, _ string) error {
+	if err := p.runSecret(ctx, namespace, MySQLQueryStatsGrantSQL); err != nil {
+		return fmt.Errorf("grant the statement digests: %w", err)
+	}
+	return nil
+}
+
 // ForgetEndUserSessions ends what a restored copy's end users were issued by
 // the source project.
 func (p *DockerMySQLProvisioner) ForgetEndUserSessions(ctx context.Context, namespace, _ string) error {

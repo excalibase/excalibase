@@ -54,6 +54,7 @@ const IndexesPage = lazy(() => import('./pages/IndexesPage').then(m => ({ defaul
 const TypesPage = lazy(() => import('./pages/TypesPage').then(m => ({ default: m.TypesPage })));
 const AdvisorsPage = lazy(() => import('./pages/AdvisorsPage').then(m => ({ default: m.AdvisorsPage })));
 const LogExplorerPage = lazy(() => import('./pages/LogExplorerPage').then(m => ({ default: m.LogExplorerPage })));
+const SlowQueriesPage = lazy(() => import('./pages/SlowQueriesPage').then(m => ({ default: m.SlowQueriesPage })));
 const PlatformAdminPage = lazy(() => import('./pages/PlatformAdminPage').then(m => ({ default: m.PlatformAdminPage })));
 const ContainersPage = lazy(() => import('./pages/ContainersPage').then(m => ({ default: m.ContainersPage })));
 const ContainerTemplatesPage = lazy(() => import('./pages/ContainerTemplatesPage').then(m => ({ default: m.ContainerTemplatesPage })));
@@ -125,6 +126,7 @@ export default function App() {
                 <Route path="database/tables/:schema/:table/permissions" element={<TablePermissionsPage />} />
                 <Route path="database/functions" element={<FunctionsPage />} />
                 <Route path="database/indexes" element={<IndexesPage />} />
+                <Route path="monitoring/slow-queries" element={<FeatureGate feature="slowqueries"><SlowQueriesPage /></FeatureGate>} />
               </Route>
             </Route>
             <Route element={<DatabaseRequired />}>

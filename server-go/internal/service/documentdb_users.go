@@ -342,7 +342,12 @@ func (s *ProvisioningService) currentPrimary(ctx context.Context, inst *domain.D
 		// A single host's database is its one container.
 		return inst.Namespace, nil
 	}
-	cluster, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, inst.ProjectID+postgresClusterSuffix)
+	return clusterPrimary(ctx, s.k8sClient, inst)
+}
+
+// clusterPrimary is the pod CloudNativePG reports as the project's primary.
+func clusterPrimary(ctx context.Context, client k8s.KubeClient, inst *domain.DatabaseInstance) (string, error) {
+	cluster, err := client.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, inst.ProjectID+postgresClusterSuffix)
 	if err != nil {
 		return "", fmt.Errorf("read cluster of %s: %w", inst.ProjectID, err)
 	}

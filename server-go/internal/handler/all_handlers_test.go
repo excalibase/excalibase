@@ -19,6 +19,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 const (
@@ -250,6 +251,9 @@ func TestPerformanceSummaryHandler(t *testing.T) {
 func TestPerformanceTopQueriesHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	mock.CRDs["org1-test-db/test-db-postgres"] = &unstructured.Unstructured{Object: map[string]interface{}{
+		"status": map[string]interface{}{"currentPrimary": "test-db-postgres-1"}}}
+	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = `{"queries":[],"slowCount":0,"avgMeanMs":null}`
 
 	w := doRequest(r, "GET", "/api/provision/test-db/performance/top-queries?limit=5", "")
 	if w.Code != 200 {
@@ -678,8 +682,11 @@ func TestMetricsHistoryInvalidLimit(t *testing.T) {
 func TestPerformanceTopQueriesInvalidLimit(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	mock.CRDs["org1-test-db/test-db-postgres"] = &unstructured.Unstructured{Object: map[string]interface{}{
+		"status": map[string]interface{}{"currentPrimary": "test-db-postgres-1"}}}
+	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = `{"queries":[],"slowCount":0,"avgMeanMs":null}`
 
-	// invalid limit falls back to default (10)
+	// invalid limit falls back to the default
 	w := doRequest(r, "GET", "/api/provision/test-db/performance/top-queries?limit=notanumber", "")
 	if w.Code != 200 {
 		t.Errorf("top queries invalid limit: got %d", w.Code)

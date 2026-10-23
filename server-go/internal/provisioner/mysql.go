@@ -310,6 +310,14 @@ func (p *MySQLProvisioner) execSecret(ctx context.Context, namespace, projectID,
 	return nil
 }
 
+// GrantQueryStats lets the platform login read the project's statement digests.
+func (p *MySQLProvisioner) GrantQueryStats(ctx context.Context, namespace, projectID string) error {
+	if err := p.execSecret(ctx, namespace, projectID, MySQLQueryStatsGrantSQL); err != nil {
+		return fmt.Errorf("grant the statement digests: %w", err)
+	}
+	return nil
+}
+
 // serving reports whether every instance pod is ready, MOCO reports a
 // writable primary (and, with replicas, every instance in sync), and a real
 // query answers on the primary.

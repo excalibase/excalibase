@@ -30,8 +30,10 @@ import {
   Globe,
   LayoutDashboard,
   Bot,
+  Timer,
   type LucideIcon,
 } from 'lucide-react';
+import type { Feature } from '../../hooks/useDeploymentMode';
 
 export interface NavItem {
   label: string;
@@ -43,6 +45,8 @@ export interface NavItem {
   postgresOnly?: boolean;
   // Hidden for MySQL projects, and this one line says why when it is opened.
   mysqlUnavailable?: string;
+  // Shown only while this dark feature is on (EXC-554).
+  feature?: Feature;
 }
 
 export interface NavSection {
@@ -132,6 +136,7 @@ export const PROJECT_NAV: NavSection[] = [
       { label: 'Performance', icon: Zap, to: 'monitoring/performance', postgresOnly: true },
       { label: 'Alerts', icon: Bell, to: 'monitoring/alerts' },
       { label: 'Logs', icon: FileText, to: 'monitoring/logs' },
+      { label: 'Slow queries', icon: Timer, to: 'monitoring/slow-queries', feature: 'slowqueries' },
     ],
   },
   {
@@ -149,9 +154,17 @@ export const PROJECT_NAV: NavSection[] = [
   { key: 'settings', label: 'Settings', icon: Settings, to: 'settings' },
 ];
 
-export function visibleNavItems(items: readonly NavItem[], documentDb: boolean, postgres = true): NavItem[] {
+export function visibleNavItems(
+  items: readonly NavItem[],
+  documentDb: boolean,
+  postgres = true,
+  features: Partial<Record<Feature, boolean>> = {},
+): NavItem[] {
   return items.filter(
-    (item) => (!item.documentDbOnly || documentDb) && (postgres || (!item.postgresOnly && !item.mysqlUnavailable))
+    (item) =>
+      (!item.documentDbOnly || documentDb) &&
+      (postgres || (!item.postgresOnly && !item.mysqlUnavailable)) &&
+      (!item.feature || features[item.feature] === true)
   );
 }
 

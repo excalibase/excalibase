@@ -70,7 +70,12 @@ type PostgreSQLProvisioner struct {
 	// publicDomainSuffix is the suffix public endpoint names hang off; empty
 	// when the platform offers no public endpoints.
 	publicDomainSuffix string
+	// queryStats turns on pg_stat_statements in the clusters it creates (EXC-654).
+	queryStats bool
 }
+
+// SetQueryStats decides whether new clusters carry pg_stat_statements.
+func (p *PostgreSQLProvisioner) SetQueryStats(on bool) { p.queryStats = on }
 
 // SetPublicDomainSuffix names the suffix under which a project's public
 // endpoint is dialled, so its server certificate can carry that name.
@@ -191,6 +196,7 @@ func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.Pro
 		DocumentDB:             req.DocumentDB,
 		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
 		ServerAltDNSNames:      altNames,
+		QueryStats:             p.queryStats,
 	}
 	opts.Backup = clusterBackupOpts(req)
 	cluster := k8s.BuildPostgreSQLCluster(opts)
@@ -492,6 +498,7 @@ func (p *PostgreSQLProvisioner) stageCRD(ctx context.Context, req domain.Provisi
 		DocumentDB:             req.DocumentDB,
 		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
 		ServerAltDNSNames:      altNames,
+		QueryStats:             p.queryStats,
 	}
 	opts.Backup = clusterBackupOpts(req)
 	cluster := k8s.BuildPostgreSQLCluster(opts)

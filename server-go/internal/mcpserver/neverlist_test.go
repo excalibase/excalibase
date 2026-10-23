@@ -14,7 +14,7 @@ import (
 var offeredTools = []string{
 	"add_cors_origin", "add_site_domain", "apply_migration", "check_site_domain", "connect_site_repo", "create_app", "create_publishable_key", "create_site", "delete_app", "delete_function",
 	"delete_site", "deploy_app", "deploy_function", "deploy_site", "describe_table", "execute_sql", "generate_typescript_types", "get_ci_snippet",
-	"get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_project_info",
+	"get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_project_info", "get_slow_queries",
 	"list_apps", "list_cors_origins", "list_functions", "list_migrations", "list_permissions", "list_projects",
 	"list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_tables", "remove_cors_origin", "remove_site_domain", "rollback_site", "set_db_function_permission", "set_function_outbound_hosts",
 	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "test_auth_flow", "track_db_function", "update_app",
@@ -40,6 +40,8 @@ var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^GET /api/provision/[^/]+/permissions/$`),
 	regexp.MustCompile(`^(PUT|DELETE) /api/provision/[^/]+/permissions/tables/[^/]+/roles/[^/]+/[^/]+$`),
 	regexp.MustCompile(`^GET /api/provision/[^/]+/logs(\?.*)?$`),
+	// Normalized statement statistics; reset and turning them on stay in Studio (EXC-654).
+	regexp.MustCompile(`^GET /api/provision/[^/]+/slow-queries/(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/functions/$`),
 	regexp.MustCompile(`^DELETE /api/projects/[^/]+/functions/[^/]+/$`),
 	// Which outside hosts the project's functions may reach.

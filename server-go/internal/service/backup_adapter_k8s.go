@@ -42,6 +42,8 @@ type K8sBackupAdapter struct {
 	// publicDomainSuffix names the restored project's public endpoint, so
 	// its server certificate can carry it. Empty without public endpoints.
 	publicDomainSuffix string
+	// queryStats turns on pg_stat_statements in a restored cluster (EXC-654).
+	queryStats bool
 	// plans decides the restored project's tier and backups, exactly as they
 	// would be decided for a new project.
 	plans RestorePlanSource
@@ -106,6 +108,10 @@ func (a *K8sBackupAdapter) SetRestoreTargetGuard(g RestoreTargetGuard) { a.targe
 
 // SetPublicDomainSuffix names the suffix public endpoint names hang off.
 func (a *K8sBackupAdapter) SetPublicDomainSuffix(suffix string) { a.publicDomainSuffix = suffix }
+
+// SetQueryStats decides whether a restored cluster carries pg_stat_statements,
+// as a new project's does.
+func (a *K8sBackupAdapter) SetQueryStats(on bool) { a.queryStats = on }
 
 // SetDatabaseProbe wires the check that proves a recovered database serves
 // queries. Without it a restore refuses to run.
@@ -237,7 +243,7 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if err := a.issueRestoreCredentials(ctx, inst.ProjectID, &target); err != nil {
 		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
 	}
-	err = target.render(inst, recoveryTarget, clusterIdentity{image: image, altNames: altNames})
+	err = target.render(inst, recoveryTarget, clusterIdentity{image: image, altNames: altNames, queryStats: a.queryStats})
 	if err != nil {
 		return nil, fmt.Errorf("restore %s at tier %s: %w", inst.ProjectID, plan.Tier, err)
 	}
@@ -311,8 +317,9 @@ type restoreTarget struct {
 
 // clusterIdentity is what the restored cluster runs and is known by.
 type clusterIdentity struct {
-	image    string
-	altNames []string
+	image      string
+	altNames   []string
+	queryStats bool
 }
 
 // render builds the cluster a new project with the source's settings and the
@@ -331,6 +338,7 @@ func (target *restoreTarget) render(src *domain.DatabaseInstance, recoveryTarget
 		MasterUsername:    src.Username,
 		Parameters:        src.Parameters,
 		ServerAltDNSNames: id.altNames,
+		QueryStats:        id.queryStats,
 		// The same DocumentDB cluster creation builds: preload, pg_cron and
 		// the gateway plugin are fixed when a cluster is created.
 		DocumentDB:             src.DocumentDB,

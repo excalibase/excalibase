@@ -87,6 +87,7 @@ func catalogue() []entry {
 	tools = append(tools, dbFunctionTools()...)
 	tools = append(tools, functionTools()...)
 	tools = append(tools, appTools()...)
+	tools = append(tools, slowQueryTools()...)
 	tools = append(tools, appManageTools()...)
 	tools = append(tools, siteTools()...)
 	tools = append(tools, siteDomainTools()...)

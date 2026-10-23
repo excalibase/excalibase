@@ -44,14 +44,11 @@ func (s *PerformanceService) GetSummary(ctx context.Context, projectID string) (
 // Each metric is best-effort: a query error leaves the field nil/zero.
 func (s *PerformanceService) populateSummaryMetrics(ctx context.Context, inst *domain.DatabaseInstance, summary *domain.PerformanceSummary) {
 	const cacheHitSQL = `SELECT ROUND(sum(blks_hit)*100.0/NULLIF(sum(blks_hit)+sum(blks_read),0),2) FROM pg_stat_database`
-	const slowQuerySQL = `SELECT count(*) FROM pg_stat_statements WHERE mean_exec_time > 1000`
-	const avgTimeSQL = `SELECT ROUND(avg(mean_exec_time)::numeric, 2) FROM pg_stat_statements WHERE calls > 0`
 
 	summary.ActiveConnections = s.queryInt(ctx, inst, "SELECT count(*) FROM pg_stat_activity WHERE state='active'")
 	summary.TotalConnections = s.queryInt(ctx, inst, "SELECT count(*) FROM pg_stat_activity")
 	summary.CacheHitRatio = s.queryFloat(ctx, inst, cacheHitSQL)
-	summary.SlowQueryCount = s.queryInt(ctx, inst, slowQuerySQL)
-	summary.AvgQueryTimeMs = s.queryFloat(ctx, inst, avgTimeSQL)
+	s.summarizeStatements(ctx, inst, summary)
 
 	if inst.DatabaseName == "" {
 		return
@@ -88,19 +85,54 @@ func (s *PerformanceService) queryFloat(ctx context.Context, inst *domain.Databa
 	return &v
 }
 
+// GetTopQueries is the project's own statements, read as the slow-queries
+// page reads them (EXC-654).
 func (s *PerformanceService) GetTopQueries(ctx context.Context, projectID string, limit int) ([]domain.QueryStat, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
 		return nil, fmt.Errorf(errProjectNotFoundFmt, projectID)
 	}
-
-	sql := fmt.Sprintf(`SELECT query, calls, total_exec_time, mean_exec_time, min_exec_time, max_exec_time, rows FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT %d`, limit)
-	out, err := s.execSQL(ctx, inst, sql)
+	statements, err := s.projectStatements(ctx, inst, queryRows(limit))
 	if err != nil {
 		return nil, err
 	}
+	stats := make([]domain.QueryStat, 0, len(statements))
+	for _, q := range statements {
+		stats = append(stats, domain.QueryStat{Query: q.Query, Calls: q.Calls, TotalExecTimeMs: q.TotalTimeMs, AvgExecTimeMs: q.MeanTimeMs, Rows: q.Rows})
+	}
+	return stats, nil
+}
 
-	return parseQueryStats(out), nil
+// summarizeStatements counts the project's slow statements and their average.
+func (s *PerformanceService) summarizeStatements(ctx context.Context, inst *domain.DatabaseInstance, summary *domain.PerformanceSummary) {
+	report, err := s.readStatements(ctx, inst, 0)
+	if err != nil || report == nil {
+		return
+	}
+	slow := report.SlowCount
+	summary.SlowQueryCount = &slow
+	summary.AvgQueryTimeMs = report.AvgMeanMs
+}
+
+func (s *PerformanceService) projectStatements(ctx context.Context, inst *domain.DatabaseInstance, limit int) ([]SlowQuery, error) {
+	report, err := s.readStatements(ctx, inst, limit)
+	if err != nil || report == nil {
+		return []SlowQuery{}, err
+	}
+	return report.Queries, nil
+}
+
+// readStatements reads on the current primary: the read creates a temporary
+// function, which a standby refuses.
+func (s *PerformanceService) readStatements(ctx context.Context, inst *domain.DatabaseInstance, limit int) (*statementReport, error) {
+	primary, err := clusterPrimary(ctx, s.k8sClient, inst)
+	if err != nil {
+		return nil, err
+	}
+	exec := func(ctx context.Context, cmd []string) (string, error) {
+		return s.k8sClient.ExecInPod(ctx, inst.Namespace, primary, "postgres", cmd)
+	}
+	return readPostgresStatements(ctx, exec, inst, sortByTotal, limit)
 }
 
 func (s *PerformanceService) GetWaitEvents(ctx context.Context, projectID string) ([]domain.WaitEvent, error) {
@@ -138,33 +170,6 @@ func parseFirstInt(s string) (int, error) {
 
 func parseFirstFloat(s string) (float64, error) {
 	return strconv.ParseFloat(strings.TrimSpace(extractFirstLine(s)), 64)
-}
-
-func parseQueryStats(out string) []domain.QueryStat {
-	var stats []domain.QueryStat
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		parts := strings.Split(line, "|")
-		if len(parts) < 7 {
-			continue
-		}
-		calls, _ := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
-		totalTime, _ := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
-		meanTime, _ := strconv.ParseFloat(strings.TrimSpace(parts[3]), 64)
-		minTime, _ := strconv.ParseFloat(strings.TrimSpace(parts[4]), 64)
-		maxTime, _ := strconv.ParseFloat(strings.TrimSpace(parts[5]), 64)
-		rows, _ := strconv.ParseInt(strings.TrimSpace(parts[6]), 10, 64)
-
-		stats = append(stats, domain.QueryStat{
-			Query:           strings.TrimSpace(parts[0]),
-			Calls:           calls,
-			TotalExecTimeMs: totalTime,
-			AvgExecTimeMs:   meanTime,
-			MinExecTimeMs:   minTime,
-			MaxExecTimeMs:   maxTime,
-			Rows:            rows,
-		})
-	}
-	return stats
 }
 
 func parseWaitEvents(out string) []domain.WaitEvent {
