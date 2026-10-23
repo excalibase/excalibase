@@ -252,8 +252,8 @@ func mysqlStatsService(t *testing.T) (*QueryStatsService, sqlmock.Sqlmock) {
 
 func TestQueryStats_MySQLReadsTheDigestsOfTheProjectDatabaseOnly(t *testing.T) {
 	svc, mock := mysqlStatsService(t)
-	mock.ExpectQuery(`FROM performance_schema\.events_statements_summary_by_digest\s+WHERE SCHEMA_NAME = \?.*ORDER BY SUM_TIMER_WAIT / COUNT_STAR DESC LIMIT \?`).
-		WithArgs("shop", 20).
+	mock.ExpectQuery(`FROM performance_schema\.events_statements_summary_by_digest\s+WHERE SCHEMA_NAME = \?.*ORDER BY CASE WHEN \? = 'mean' THEN SUM_TIMER_WAIT / COUNT_STAR ELSE SUM_TIMER_WAIT END DESC LIMIT \?`).
+		WithArgs("shop", "mean", 20).
 		WillReturnRows(sqlmock.NewRows([]string{"DIGEST_TEXT", "COUNT_STAR", "SUM_TIMER_WAIT", "ROWS"}).
 			AddRow("SELECT * FROM `orders` WHERE `id` = ?", 4, uint64(8_000_000_000), 4))
 	report, err := svc.List(context.Background(), "m1", "mean", 20)
