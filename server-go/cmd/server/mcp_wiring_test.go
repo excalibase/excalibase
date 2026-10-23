@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -42,6 +43,11 @@ func (a *discardAudit) LogAudit(_ context.Context, entry *domain.AuditEntry) err
 // personal access tokens for a developer and a viewer of org A.
 func mcpServer(t *testing.T) (*httptest.Server, *discardAudit) {
 	t.Helper()
+	return mcpServerWith(t, features.NewStatic(features.All()...))
+}
+
+func mcpServerWith(t *testing.T, flags features.Flags) (*httptest.Server, *discardAudit) {
+	t.Helper()
 	instances := fakestore.NewInstances()
 	instances.Items[matrixProjectA] = &domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"}
 	instances.Items[matrixProjectB] = &domain.DatabaseInstance{ProjectID: matrixProjectB, OrgID: matrixOrgB, Status: "ACTIVE"}
@@ -63,6 +69,7 @@ func mcpServer(t *testing.T) (*httptest.Server, *discardAudit) {
 	deps := policyDeps(t, instances, platform, functions)
 	audit := &discardAudit{}
 	deps.mcpAudit = audit
+	deps.features = flags
 	cfg := config.AppConfig{DeploymentMode: "cloud", AppHostingEnabled: true, PublicBaseURL: "https://api.example.test"}
 	server := httptest.NewServer(buildRouter(cfg, platform, instances, deps))
 	t.Cleanup(server.Close)
@@ -185,5 +192,45 @@ func TestMCPNarrowingOverTheRealRouter(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// EXC-655: the hosted endpoint offers get_advisors only with its feature on,
+// and the tool meets the route's role gate.
+func TestMCPOffersTheAdvisorsToolOnlyWithItsFeature(t *testing.T) {
+	for _, tc := range []struct {
+		flags features.Flags
+		want  bool
+	}{
+		{features.NewStatic(features.MCP), false},
+		{features.NewStatic(features.MCP, features.Advisors), true},
+	} {
+		server, _ := mcpServerWith(t, tc.flags)
+		dev, err := mcpConnect(t, server.URL+"/mcp", mcpDevPAT)
+		if err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		listed, err := dev.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		offered := false
+		for _, tool := range listed.Tools {
+			offered = offered || tool.Name == "get_advisors"
+		}
+		if offered != tc.want {
+			t.Fatalf("flags %v: get_advisors offered=%v", tc.flags, offered)
+		}
+		if !tc.want {
+			continue
+		}
+		viewer, err := mcpConnect(t, server.URL+"/mcp", mcpViewPAT)
+		if err != nil {
+			t.Fatalf("connect viewer: %v", err)
+		}
+		res := mcpCall(t, viewer, "get_advisors", map[string]any{"project_id": matrixProjectA})
+		if !res.IsError || !strings.Contains(mcpText(res), "insufficient project role") {
+			t.Fatalf("a viewer must be refused the advisors by the role gate: %s", mcpText(res))
+		}
 	}
 }

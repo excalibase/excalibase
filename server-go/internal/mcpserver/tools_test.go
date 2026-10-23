@@ -13,6 +13,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -110,7 +111,7 @@ func session(t *testing.T, routes http.Handler, audit AuditLogger, caller Caller
 func sessionWith(t *testing.T, routes http.Handler, audit AuditLogger, caller Caller, settings Settings) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
-	server := newServer(newEnv(routes, audit, settings), caller)
+	server := newServer(ctx, newEnv(routes, audit, settings), caller)
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
 	if _, err := server.Connect(ctx, serverTransport, nil); err != nil {
 		t.Fatalf("server connect: %v", err)
@@ -165,6 +166,8 @@ type routeCase struct {
 	tool  string
 	args  map[string]any
 	setup func(f *fakeRoutes)
+	// features are switched on for a dark tool's case.
+	features []features.Feature
 	// plane answers a tool that calls the project's data API.
 	plane  http.Handler
 	expect []string
@@ -758,6 +761,9 @@ func TestEveryToolGoesThroughItsRoute(t *testing.T) {
 				tc.setup(routes)
 			}
 			settings := testSettings
+			if tc.features != nil {
+				settings.Features = features.NewStatic(tc.features...)
+			}
 			if tc.plane != nil {
 				plane := httptest.NewServer(tc.plane)
 				t.Cleanup(plane.Close)

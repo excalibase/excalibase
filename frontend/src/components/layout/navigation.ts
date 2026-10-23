@@ -48,6 +48,8 @@ export interface NavItem {
   mysqlUnavailable?: string;
   // Shown only while this dark feature is on (EXC-554).
   feature?: Feature;
+  // Offered on MySQL after all while this feature is on.
+  mysqlWith?: Feature;
 }
 
 export interface NavSection {
@@ -102,7 +104,7 @@ export const PROJECT_NAV: NavSection[] = [
       { label: 'Triggers', icon: Zap, to: 'database/triggers', mysqlUnavailable: MYSQL_REASONS.triggers },
       { label: 'Indexes', icon: List, to: 'database/indexes' },
       { label: 'Types', icon: Hash, to: 'database/types', mysqlUnavailable: MYSQL_REASONS.types },
-      { label: 'Advisors', icon: AlertTriangle, to: 'database/advisors', mysqlUnavailable: MYSQL_REASONS.advisors },
+      { label: 'Advisors', icon: AlertTriangle, to: 'database/advisors', mysqlUnavailable: MYSQL_REASONS.advisors, mysqlWith: 'advisors' },
       { label: 'Documents', icon: FileJson, to: 'database/documents', documentDbOnly: true, mysqlUnavailable: MYSQL_REASONS.documentDb },
       { label: 'Mongo Users', icon: UserCog, to: 'database/mongo-users', documentDbOnly: true, mysqlUnavailable: MYSQL_REASONS.documentDb },
     ],
@@ -162,10 +164,12 @@ export function visibleNavItems(
   postgres = true,
   features: Partial<Record<Feature, boolean>> = {},
 ): NavItem[] {
+  const onMySQL = (item: NavItem) =>
+    (!item.postgresOnly && !item.mysqlUnavailable) || (item.mysqlWith !== undefined && features[item.mysqlWith] === true);
   return items.filter(
     (item) =>
       (!item.documentDbOnly || documentDb) &&
-      (postgres || (!item.postgresOnly && !item.mysqlUnavailable)) &&
+      (postgres || onMySQL(item)) &&
       (!item.feature || features[item.feature] === true)
   );
 }

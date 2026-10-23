@@ -1,6 +1,19 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
-import type { AdvisorFinding } from '../types/schema';
+import type { AdvisorFinding, ProjectAdvisorReport } from '../types/schema';
+
+// The project's own checks on either engine (EXC-655).
+export function useProjectAdvisors(projectId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['project-advisors', projectId],
+    queryFn: async () => {
+      const res = await api.get<ProjectAdvisorReport>(`/provision/${projectId}/advisors`);
+      return res.data;
+    },
+    enabled: enabled && !!projectId,
+    staleTime: 60000,
+  });
+}
 
 export function usePerformanceAdvisor(projectId: string, schema = 'public') {
   return useQuery({

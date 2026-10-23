@@ -207,6 +207,7 @@ var projectRoutes = []projectRoute{
 	{"backup trigger", http.MethodPost, "/api/provision/proj-a/backup/trigger", domain.OrgRoleAdmin},
 	{"migrations", http.MethodGet, "/api/provision/proj-a/migrations/", domain.OrgRoleDeveloper},
 	{"permission document", http.MethodGet, "/api/provision/proj-a/permissions/", domain.OrgRoleDeveloper},
+	{"advisors", http.MethodGet, "/api/provision/proj-a/advisors", domain.OrgRoleDeveloper},
 	{"schema browse", http.MethodGet, "/api/schema/proj-a/tables", domain.OrgRoleViewer},
 	{"schema ddl", http.MethodPost, "/api/schema/proj-a/ddl", domain.OrgRoleDeveloper},
 	{"functions list", http.MethodGet, "/api/projects/proj-a/functions/", domain.OrgRoleViewer},

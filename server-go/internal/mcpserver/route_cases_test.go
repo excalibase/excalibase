@@ -11,7 +11,8 @@ import (
 func routeCases() []routeCase {
 	cases := append(append(baseRouteCases(), appManageRouteCases()...), authFlowRouteCases()...)
 	cases = append(cases, slowQueryRouteCases()...)
-	return append(append(append(cases, sitesRouteCases()...), siteDomainRouteCases()...), siteBuildRouteCases()...)
+	cases = append(append(append(cases, sitesRouteCases()...), siteDomainRouteCases()...), siteBuildRouteCases()...)
+	return append(cases, advisorRouteCases()...)
 }
 
 func slowQueryRouteCases() []routeCase {
