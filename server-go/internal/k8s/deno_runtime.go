@@ -474,9 +474,20 @@ func denoProvisioningRule() networkingv1.NetworkPolicyEgressRule {
 // this-network — the same classes edgefn.ParseEgressHosts refuses by literal,
 // enforced here for names that resolve into them.
 var privateRanges = []string{
-	"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
-	"169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16",
+	thisNetworkRange, rfc1918Range10, cgnatRange, loopbackRange,
+	linkLocalRange, rfc1918Range172, rfc1918Range192,
 }
+
+// Ranges the egress fence excepts from public IPv4 space, never targets.
+const (
+	thisNetworkRange = "0.0.0.0/8"
+	rfc1918Range10   = "10.0.0.0/8"    // NOSONAR: blocked egress range (RFC 1918 private)
+	cgnatRange       = "100.64.0.0/10" // NOSONAR: blocked egress range (CGNAT, Alibaba metadata)
+	loopbackRange    = "127.0.0.0/8"
+	linkLocalRange   = "169.254.0.0/16" // NOSONAR: blocked egress range (link-local, cloud metadata)
+	rfc1918Range172  = "172.16.0.0/12"  // NOSONAR: blocked egress range (RFC 1918 private)
+	rfc1918Range192  = "192.168.0.0/16" // NOSONAR: blocked egress range (RFC 1918 private)
+)
 
 // denoInternetRule opens public IPv4 space on the allowlisted TCP ports.
 func denoInternetRule(ports []int) networkingv1.NetworkPolicyEgressRule {

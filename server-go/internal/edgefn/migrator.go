@@ -8,7 +8,10 @@ import (
 	"log"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/logsafe"
 )
 
 // nosqlSchemaName is the postgres schema under which the NoSQL tables live.
@@ -36,8 +39,10 @@ func validateIdent(kind, ident string) error {
 // validateIdent succeeds, the identifier contains no characters that would
 // require escaping, so this is safe.
 func quoteIdent(ident string) string {
-	return `"` + ident + `"`
+	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }
+
+const createNosqlSchemaSQL = `CREATE SCHEMA IF NOT EXISTS "` + nosqlSchemaName + `"`
 
 // ApplySchema translates the provided Schema into a sequence of additive DDL
 // statements and runs them in a single transaction. Idempotent — every
@@ -76,7 +81,7 @@ func ApplySchema(ctx context.Context, db *sql.DB, projectID string, schema Schem
 	}()
 
 	// Ensure schema exists (idempotent). Migration is scoped to nosql.*.
-	if _, err := tx.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+quoteIdent(nosqlSchemaName)); err != nil {
+	if _, err := tx.ExecContext(ctx, createNosqlSchemaSQL); err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
 
@@ -101,7 +106,7 @@ func ApplySchema(ctx context.Context, db *sql.DB, projectID string, schema Schem
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
-	log.Printf("schema applied: project=%s tables=%d", projectID, len(tableNames))
+	log.Printf("schema applied: project=%s tables=%d", logsafe.Value(projectID), len(tableNames))
 	return nil
 }
 
@@ -110,31 +115,41 @@ func applyTable(ctx context.Context, tx *sql.Tx, tableName string, table TableSc
 	//    fields are persisted in a single jsonb document column to match the
 	//    existing NoSQL service convention. Field-level checks live in the
 	//    application layer (the validator); the DB stores the blob.
-	createSQL := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS %s.%s (
-			_id text PRIMARY KEY,
-			_creation_time double precision NOT NULL,
-			doc jsonb NOT NULL DEFAULT '{}'::jsonb
-		)`,
-		quoteIdent(nosqlSchemaName), quoteIdent(tableName),
-	)
-	if _, err := tx.ExecContext(ctx, createSQL); err != nil {
+	if _, err := tx.ExecContext(ctx, buildNosqlCreateTableSQL(tableName)); err != nil {
 		return fmt.Errorf("create table: %w", err)
 	}
 
 	// 2. Compound btree indexes — one per index spec.
-	if err := applyBtreeIndexes(ctx, tx, tableName, table.Indexes); err != nil {
-		return err
+	for _, idx := range table.Indexes {
+		step, err := buildBtreeIndexSQL(tableName, idx)
+		if err != nil {
+			return err
+		}
+		if err := execMigrationSteps(ctx, tx, step); err != nil {
+			return err
+		}
 	}
 
 	// 3. Search indexes (tsvector).
-	if err := applySearchIndexes(ctx, tx, tableName, table.SearchIndexes); err != nil {
-		return err
+	for _, idx := range table.SearchIndexes {
+		steps, err := buildSearchIndexSQL(tableName, idx)
+		if err != nil {
+			return err
+		}
+		if err := execMigrationSteps(ctx, tx, steps...); err != nil {
+			return err
+		}
 	}
 
 	// 4. Vector indexes (pgvector ivfflat).
-	if err := applyVectorIndexes(ctx, tx, tableName, table.VectorIndexes); err != nil {
-		return err
+	for _, idx := range table.VectorIndexes {
+		steps, err := buildVectorIndexSQL(tableName, idx)
+		if err != nil {
+			return err
+		}
+		if err := execMigrationSteps(ctx, tx, steps...); err != nil {
+			return err
+		}
 	}
 
 	// Validator metadata is intentionally NOT applied as a DB constraint in
@@ -148,122 +163,131 @@ func applyTable(ctx context.Context, tx *sql.Tx, tableName string, table TableSc
 	}
 	// Use a COMMENT to attach the schema so it survives across deploys
 	// without an extra metadata table. pg_description holds it.
-	commentSQL := fmt.Sprintf(
-		`COMMENT ON TABLE %s.%s IS %s`,
-		quoteIdent(nosqlSchemaName), quoteIdent(tableName),
-		quoteLiteral(string(rawValidator)),
-	)
-	if _, err := tx.ExecContext(ctx, commentSQL); err != nil {
+	if _, err := tx.ExecContext(ctx, buildValidatorCommentSQL(tableName, string(rawValidator))); err != nil {
 		return fmt.Errorf("comment validator: %w", err)
 	}
 	return nil
 }
 
-// applyBtreeIndexes creates one compound btree index per spec. Each indexes
-// the extracted jsonb path so queries can use `doc->>'field'`.
-func applyBtreeIndexes(ctx context.Context, tx *sql.Tx, tableName string, indexes []IndexSpec) error {
-	for _, idx := range indexes {
-		if err := validateIdent("index", idx.Name); err != nil {
-			return err
-		}
-		if len(idx.Fields) == 0 {
-			return fmt.Errorf("index %s.%s has no fields", tableName, idx.Name)
-		}
-		exprs := make([]string, 0, len(idx.Fields))
-		for _, f := range idx.Fields {
-			if err := validateIdent("field", f); err != nil {
-				return err
-			}
-			exprs = append(exprs, fmt.Sprintf("(doc ->> '%s')", f))
-		}
-		ddl := fmt.Sprintf(
-			`CREATE INDEX IF NOT EXISTS %s ON %s.%s (%s)`,
-			quoteIdent(tableName+"_"+idx.Name),
-			quoteIdent(nosqlSchemaName), quoteIdent(tableName),
-			strings.Join(exprs, ", "),
-		)
-		if _, err := tx.ExecContext(ctx, ddl); err != nil {
-			return fmt.Errorf("create index %s: %w", idx.Name, err)
+// migrationStep is one DDL statement and the label its failure is reported under.
+type migrationStep struct {
+	sql  string
+	what string
+}
+
+func execMigrationSteps(ctx context.Context, tx *sql.Tx, steps ...migrationStep) error {
+	for _, step := range steps {
+		if _, err := tx.ExecContext(ctx, step.sql); err != nil {
+			return fmt.Errorf("%s: %w", step.what, err)
 		}
 	}
 	return nil
 }
 
-// applySearchIndexes creates a stored tsvector generated column per searchField
-// plus a GIN index on it. Idempotent via IF NOT EXISTS on both.
-func applySearchIndexes(ctx context.Context, tx *sql.Tx, tableName string, indexes []SearchIndexSpec) error {
-	for _, idx := range indexes {
-		if err := validateIdent("search index", idx.Name); err != nil {
-			return err
-		}
-		if err := validateIdent("field", idx.SearchField); err != nil {
-			return err
-		}
-		colName := "search_vector_" + idx.SearchField
-		if err := validateIdent("search column", colName); err != nil {
-			return err
-		}
-		// We use a stored generated column (ADD COLUMN IF NOT EXISTS) — older
-		// Postgres versions (>=12) support this and the column gets recomputed
-		// on every row write.
-		addCol := fmt.Sprintf(
-			`ALTER TABLE %s.%s ADD COLUMN IF NOT EXISTS %s tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(doc ->> '%s', ''))) STORED`,
-			quoteIdent(nosqlSchemaName), quoteIdent(tableName),
-			quoteIdent(colName), idx.SearchField,
-		)
-		if _, err := tx.ExecContext(ctx, addCol); err != nil {
-			return fmt.Errorf("add search column %s: %w", colName, err)
-		}
-		ddl := fmt.Sprintf(
-			`CREATE INDEX IF NOT EXISTS %s ON %s.%s USING GIN (%s)`,
-			quoteIdent(tableName+"_search_"+idx.Name),
-			quoteIdent(nosqlSchemaName), quoteIdent(tableName),
-			quoteIdent(colName),
-		)
-		if _, err := tx.ExecContext(ctx, ddl); err != nil {
-			return fmt.Errorf("create search index %s: %w", idx.Name, err)
-		}
-	}
-	return nil
+// nosqlTable is the quoted, schema-qualified name of a nosql table.
+func nosqlTable(tableName string) string {
+	return quoteIdent(nosqlSchemaName) + "." + quoteIdent(tableName)
 }
 
-// applyVectorIndexes creates a pgvector embedding column at the declared
-// dimensions plus an ivfflat cosine index per spec. The application writes the
+// docPath is the jsonb text extraction of a document field, the field a quoted literal.
+func docPath(field string) string {
+	return "doc ->> " + quoteLiteral(field)
+}
+
+func buildNosqlCreateTableSQL(tableName string) string {
+	return "CREATE TABLE IF NOT EXISTS " + nosqlTable(tableName) + ` (
+			_id text PRIMARY KEY,
+			_creation_time double precision NOT NULL,
+			doc jsonb NOT NULL DEFAULT '{}'::jsonb
+		)`
+}
+
+func buildValidatorCommentSQL(tableName, rawValidator string) string {
+	return "COMMENT ON TABLE " + nosqlTable(tableName) + " IS " + quoteLiteral(rawValidator)
+}
+
+// buildBtreeIndexSQL builds one compound btree index over the extracted jsonb
+// paths so queries can use `doc->>'field'`.
+func buildBtreeIndexSQL(tableName string, idx IndexSpec) (migrationStep, error) {
+	if err := validateIdent("index", idx.Name); err != nil {
+		return migrationStep{}, err
+	}
+	if len(idx.Fields) == 0 {
+		return migrationStep{}, fmt.Errorf("index %s.%s has no fields", tableName, idx.Name)
+	}
+	exprs := make([]string, 0, len(idx.Fields))
+	for _, f := range idx.Fields {
+		if err := validateIdent("field", f); err != nil {
+			return migrationStep{}, err
+		}
+		exprs = append(exprs, "("+docPath(f)+")")
+	}
+	return migrationStep{
+		sql: "CREATE INDEX IF NOT EXISTS " + quoteIdent(tableName+"_"+idx.Name) +
+			" ON " + nosqlTable(tableName) + " (" + strings.Join(exprs, ", ") + ")",
+		what: "create index " + idx.Name,
+	}, nil
+}
+
+// buildSearchIndexSQL builds a stored tsvector generated column for the
+// search field plus a GIN index on it. Idempotent via IF NOT EXISTS on both.
+func buildSearchIndexSQL(tableName string, idx SearchIndexSpec) ([]migrationStep, error) {
+	if err := validateIdent("search index", idx.Name); err != nil {
+		return nil, err
+	}
+	if err := validateIdent("field", idx.SearchField); err != nil {
+		return nil, err
+	}
+	colName := "search_vector_" + idx.SearchField
+	if err := validateIdent("search column", colName); err != nil {
+		return nil, err
+	}
+	// We use a stored generated column (ADD COLUMN IF NOT EXISTS) — older
+	// Postgres versions (>=12) support this and the column gets recomputed
+	// on every row write.
+	return []migrationStep{
+		{
+			sql: "ALTER TABLE " + nosqlTable(tableName) + " ADD COLUMN IF NOT EXISTS " + quoteIdent(colName) +
+				" tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(" + docPath(idx.SearchField) + ", ''))) STORED",
+			what: "add search column " + colName,
+		},
+		{
+			sql: "CREATE INDEX IF NOT EXISTS " + quoteIdent(tableName+"_search_"+idx.Name) +
+				" ON " + nosqlTable(tableName) + " USING GIN (" + quoteIdent(colName) + ")",
+			what: "create search index " + idx.Name,
+		},
+	}, nil
+}
+
+// buildVectorIndexSQL builds a pgvector embedding column at the declared
+// dimensions plus an ivfflat cosine index. The application writes the
 // embedding directly to this column; the jsonb doc holds a copy too.
-func applyVectorIndexes(ctx context.Context, tx *sql.Tx, tableName string, indexes []VectorIndexSpec) error {
-	for _, idx := range indexes {
-		if err := validateIdent("vector index", idx.Name); err != nil {
-			return err
-		}
-		if err := validateIdent("field", idx.VectorField); err != nil {
-			return err
-		}
-		if idx.Dimensions <= 0 || idx.Dimensions > 16000 {
-			return fmt.Errorf("vector index %s: invalid dimensions %d (must be 1-16000)", idx.Name, idx.Dimensions)
-		}
-		colName := "embedding_" + idx.VectorField
-		if err := validateIdent("vector column", colName); err != nil {
-			return err
-		}
-		addCol := fmt.Sprintf(
-			`ALTER TABLE %s.%s ADD COLUMN IF NOT EXISTS %s vector(%d)`,
-			quoteIdent(nosqlSchemaName), quoteIdent(tableName),
-			quoteIdent(colName), idx.Dimensions,
-		)
-		if _, err := tx.ExecContext(ctx, addCol); err != nil {
-			return fmt.Errorf("add vector column %s: %w", colName, err)
-		}
-		ddl := fmt.Sprintf(
-			`CREATE INDEX IF NOT EXISTS %s ON %s.%s USING ivfflat (%s vector_cosine_ops)`,
-			quoteIdent(tableName+"_vector_"+idx.Name),
-			quoteIdent(nosqlSchemaName), quoteIdent(tableName),
-			quoteIdent(colName),
-		)
-		if _, err := tx.ExecContext(ctx, ddl); err != nil {
-			return fmt.Errorf("create vector index %s: %w", idx.Name, err)
-		}
+func buildVectorIndexSQL(tableName string, idx VectorIndexSpec) ([]migrationStep, error) {
+	if err := validateIdent("vector index", idx.Name); err != nil {
+		return nil, err
 	}
-	return nil
+	if err := validateIdent("field", idx.VectorField); err != nil {
+		return nil, err
+	}
+	if idx.Dimensions <= 0 || idx.Dimensions > 16000 {
+		return nil, fmt.Errorf("vector index %s: invalid dimensions %d (must be 1-16000)", idx.Name, idx.Dimensions)
+	}
+	colName := "embedding_" + idx.VectorField
+	if err := validateIdent("vector column", colName); err != nil {
+		return nil, err
+	}
+	return []migrationStep{
+		{
+			sql: "ALTER TABLE " + nosqlTable(tableName) + " ADD COLUMN IF NOT EXISTS " + quoteIdent(colName) +
+				" vector(" + strconv.Itoa(idx.Dimensions) + ")",
+			what: "add vector column " + colName,
+		},
+		{
+			sql: "CREATE INDEX IF NOT EXISTS " + quoteIdent(tableName+"_vector_"+idx.Name) +
+				" ON " + nosqlTable(tableName) + " USING ivfflat (" + quoteIdent(colName) + " vector_cosine_ops)",
+			what: "create vector index " + idx.Name,
+		},
+	}, nil
 }
 
 // quoteLiteral SQL-quotes a string literal using doubled single quotes.
