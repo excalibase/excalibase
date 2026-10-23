@@ -285,3 +285,27 @@ func TestLogSearchOnASingleHostIsUnavailable(t *testing.T) {
 		})
 	}
 }
+
+// The live pod log asks for as many lines as Loki would: 1..5000, else 100.
+func TestLogSearchClampsThePodLogTailLikeLoki(t *testing.T) {
+	for _, tc := range []struct {
+		asked int
+		want  int64
+	}{{0, 100}, {-5, 100}, {10000, 100}, {5001, 100}, {5000, 5000}, {1, 1}, {250, 250}} {
+		t.Run(strconv.Itoa(tc.asked), func(t *testing.T) {
+			svc, store, mock := setupOpsTest(t)
+			seedMySQLProject(t, store, mock)
+			mock.PodLogs[testOpsDBNS+"/"+testOpsDB+primaryPodSuffix] = "line\n"
+			mock.PodLogs["org1-my-a/moco-my-a-mysql-1/mysqld"] = "line\n"
+
+			for _, project := range []string{testOpsDB, "my-a"} {
+				if _, err := svc.SearchLogs(context.Background(), project, LogSearch{Lines: tc.asked}); err != nil {
+					t.Fatalf("SearchLogs(%s): %v", project, err)
+				}
+			}
+			if len(mock.PodLogTailLines) != 2 || mock.PodLogTailLines[0] != tc.want || mock.PodLogTailLines[1] != tc.want {
+				t.Fatalf("tail lines = %v, want %d for both engines", mock.PodLogTailLines, tc.want)
+			}
+		})
+	}
+}

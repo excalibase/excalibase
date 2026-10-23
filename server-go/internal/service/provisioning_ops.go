@@ -124,7 +124,7 @@ func (s *ProvisioningService) SearchLogs(ctx context.Context, projectID string, 
 		lokiAnswered = err == nil
 	}
 
-	out, err := s.primaryPodLog(ctx, inst, int64(search.Lines))
+	out, err := s.primaryPodLog(ctx, inst, int64(clampLogLines(search.Lines)))
 	if err != nil {
 		log.Printf("logs of %s: pod log: %v", projectID, err)
 		if lokiAnswered {
@@ -147,6 +147,14 @@ func (s *ProvisioningService) primaryPodLog(ctx context.Context, inst *domain.Da
 		return "", err
 	}
 	return s.k8sClient.PodLogTail(ctx, inst.Namespace, k8s.MySQLPrimaryPod(cluster), mysqlContainer, lines)
+}
+
+// clampLogLines is how many lines one search returns, from Loki or the pod log.
+func clampLogLines(lines int) int {
+	if lines <= 0 || lines > 5000 {
+		return 100
+	}
+	return lines
 }
 
 func validateLogSearchTerm(term string) error {
@@ -211,10 +219,7 @@ func projectLogQL(selector, term string) string {
 // pods. Returns plain-text concatenated lines (one per row) so the existing
 // handler-side response shape stays unchanged.
 func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, selector, projectID string, search LogSearch) (string, error) {
-	lines := search.Lines
-	if lines <= 0 || lines > 5000 {
-		lines = 100
-	}
+	lines := clampLogLines(search.Lines)
 	window := search.Since
 	if window <= 0 {
 		window = defaultLogSearchWindow
