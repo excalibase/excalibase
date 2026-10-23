@@ -133,7 +133,8 @@ func TestInstances_DeleteRemovesProjectOwnedRows(t *testing.T) {
 	if err := store.Delete(inst.ProjectID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	for _, table := range projectOwnedTables {
+	for _, owned := range projectOwnedTables {
+		table := owned.name
 		var left int
 		if err := store.DB().QueryRow(`SELECT count(*) FROM `+table+` WHERE project_id = $1`, inst.ProjectID).Scan(&left); err != nil {
 			t.Fatalf("count %s: %v", table, err)

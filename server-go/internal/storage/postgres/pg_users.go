@@ -15,6 +15,14 @@ const userColumns = `id, username, email, password_hash, role, active, kind, ema
 // prefixedUserColumns is userColumns for a query that joins users as u.
 const prefixedUserColumns = `u.id, u.username, u.email, u.password_hash, u.role, u.active, u.kind, u.email_verified_at, u.created_at, u.updated_at`
 
+const (
+	findUserByIDSQL       = `SELECT ` + userColumns + ` FROM users WHERE id = $1`
+	findUserByUsernameSQL = `SELECT ` + userColumns + ` FROM users WHERE lower(username) = lower($1)`
+	findUserByEmailSQL    = `SELECT ` + userColumns + ` FROM users WHERE lower(email) = lower($1)
+		 ORDER BY kind = 'human' DESC LIMIT 1`
+	findAllUsersSQL = `SELECT ` + userColumns + ` FROM users`
+)
+
 func (s *Store) CreateUser(ctx context.Context, u *domain.User) error {
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx,
@@ -40,29 +48,24 @@ func (s *Store) UpdateUserPassword(ctx context.Context, username, passwordHash s
 }
 
 func (s *Store) FindUserByID(ctx context.Context, id string) (*domain.User, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE id = $1`, id)
+	row := s.db.QueryRowContext(ctx, findUserByIDSQL, id)
 	return scanUser(row)
 }
 
 func (s *Store) FindUserByUsername(ctx context.Context, username string) (*domain.User, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE lower(username) = lower($1)`, username)
+	row := s.db.QueryRowContext(ctx, findUserByUsernameSQL, username)
 	return scanUser(row)
 }
 
 // FindUserByEmail matches the address ignoring case. Human addresses are
 // unique ignoring case; should a service principal share one, the human wins.
 func (s *Store) FindUserByEmail(ctx context.Context, email string) (*domain.User, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE lower(email) = lower($1)
-		 ORDER BY kind = 'human' DESC LIMIT 1`, email)
+	row := s.db.QueryRowContext(ctx, findUserByEmailSQL, email)
 	return scanUser(row)
 }
 
 func (s *Store) FindAllUsers(ctx context.Context) ([]*domain.User, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+userColumns+` FROM users`)
+	rows, err := s.db.QueryContext(ctx, findAllUsersSQL)
 	if err != nil {
 		return nil, err
 	}
