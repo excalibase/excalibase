@@ -14,6 +14,8 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -261,5 +263,25 @@ func TestMySQLLogSearchWithoutAClusterIsUnavailable(t *testing.T) {
 
 	if _, err := svc.SearchLogs(context.Background(), "my-a", LogSearch{Lines: 10}); !errors.Is(err, ErrLogsUnavailable) {
 		t.Fatalf("err = %v, want ErrLogsUnavailable", err)
+	}
+}
+
+// A single-host install has no Kubernetes client: the search answers that the
+// logs are unavailable instead of calling a nil client.
+func TestLogSearchOnASingleHostIsUnavailable(t *testing.T) {
+	for _, engine := range []domain.DatabaseType{domain.PostgreSQL, domain.MySQL} {
+		t.Run(string(engine), func(t *testing.T) {
+			store, _ := storage.NewFileSystemStore(t.TempDir())
+			if err := store.Create(&domain.DatabaseInstance{ProjectID: "host-a", OrgID: "org1", Namespace: "excalibase-host-a",
+				DBType: engine, DeploymentMode: domain.ModeDocker, Status: "ACTIVE", Tier: domain.Free}); err != nil {
+				t.Fatal(err)
+			}
+			svc := NewProvisioningService(store, provisioner.NewFactory(), nil)
+
+			_, err := svc.SearchLogs(context.Background(), "host-a", LogSearch{Lines: 10})
+			if !errors.Is(err, ErrLogsUnavailable) || !strings.Contains(err.Error(), "single host") {
+				t.Fatalf("err = %v, want ErrLogsUnavailable naming the single host", err)
+			}
+		})
 	}
 }

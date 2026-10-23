@@ -69,6 +69,8 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 // ErrLogsUnavailable is a log backend that did not answer.
 var ErrLogsUnavailable = errors.New("the database's logs are not available right now")
 
+var errLogsOnSingleHost = fmt.Errorf("%w: the log search reads Kubernetes pod logs; this installation runs its databases on a single host", ErrLogsUnavailable)
+
 // maxLokiAnswer bounds one Loki reply: 5000 lines with their labels.
 const maxLokiAnswer = 32 << 20
 
@@ -107,6 +109,9 @@ func (s *ProvisioningService) SearchLogs(ctx context.Context, projectID string, 
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return "", err
+	}
+	if s.k8sClient == nil || inst.DeploymentMode == domain.ModeDocker {
+		return "", errLogsOnSingleHost
 	}
 
 	lokiAnswered := false
