@@ -6,7 +6,8 @@ import "net/http"
 // tools added since.
 func routeCases() []routeCase {
 	cases := append(append(baseRouteCases(), appManageRouteCases()...), authFlowRouteCases()...)
-	return append(append(append(cases, sitesRouteCases()...), siteDomainRouteCases()...), siteBuildRouteCases()...)
+	cases = append(append(append(cases, sitesRouteCases()...), siteDomainRouteCases()...), siteBuildRouteCases()...)
+	return append(cases, advisorRouteCases()...)
 }
 
 func appManageRouteCases() []routeCase {

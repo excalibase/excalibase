@@ -45,6 +45,7 @@ var provisionRows = []Row{
 	{Methods: get, Pattern: "/api/provision/{projectId}/migrations/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, MySQLRefusal: MySQLNoMigrations, Discloses: NoSecret},
 	{Methods: post, Pattern: "/api/provision/{projectId}/migrations/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, MySQLRefusal: MySQLNoMigrations},
 
+	{Methods: get, Pattern: "/api/provision/{projectId}/advisors", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Discloses: NoSecret, Note: "read-only catalog checks; names permission rules, so the rung that reads them", Database: true, MySQL: true},
 	{Methods: get, Pattern: "/api/provision/{projectId}/permissions/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Capability: "policies:read", Discloses: NoSecret, Note: "the engine reads the whole permission set in one document", Database: true, MySQL: true},
 	{Methods: put, Pattern: "/api/provision/{projectId}/permissions/tables/{table}/roles/{role}/{operation}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, MySQL: true},
 	{Methods: del, Pattern: "/api/provision/{projectId}/permissions/tables/{table}/roles/{role}/{operation}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, MySQL: true},

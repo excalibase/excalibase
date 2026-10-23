@@ -4,6 +4,7 @@ import { useProjectIsDocumentDB } from '../../hooks/useDocuments';
 import { cn } from '../../utils/cn';
 import { useInstance } from '../../hooks/useProvisioning';
 import { isMySQLProject } from '../../utils/engine';
+import { useFeatures } from '../../hooks/useDeploymentMode';
 
 interface SubNavProps {
   readonly sectionKey: string;
@@ -14,6 +15,7 @@ export function SubNav({ sectionKey }: SubNavProps) {
   const section = PROJECT_NAV.find((s) => s.key === sectionKey);
   const { data: documentDb = false } = useProjectIsDocumentDB(projectId ?? '');
   const { data: project } = useInstance(projectId ?? '');
+  const features = useFeatures();
 
   if (!section?.children) return null;
 
@@ -25,7 +27,7 @@ export function SubNav({ sectionKey }: SubNavProps) {
         </h2>
       </div>
       <nav className="flex-1 py-2 px-2 space-y-0.5 overflow-y-auto">
-        {visibleNavItems(section.children, documentDb, !isMySQLProject(project)).map((item) => {
+        {visibleNavItems(section.children, documentDb, !isMySQLProject(project), features).map((item) => {
           const Icon = item.icon;
           return (
             <NavLink

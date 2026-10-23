@@ -32,6 +32,7 @@ import {
   Bot,
   type LucideIcon,
 } from 'lucide-react';
+import type { Feature } from '../../hooks/useDeploymentMode';
 
 export interface NavItem {
   label: string;
@@ -43,6 +44,8 @@ export interface NavItem {
   postgresOnly?: boolean;
   // Hidden for MySQL projects, and this one line says why when it is opened.
   mysqlUnavailable?: string;
+  // Offered on MySQL after all while this feature is on.
+  mysqlWith?: Feature;
 }
 
 export interface NavSection {
@@ -97,7 +100,7 @@ export const PROJECT_NAV: NavSection[] = [
       { label: 'Triggers', icon: Zap, to: 'database/triggers', mysqlUnavailable: MYSQL_REASONS.triggers },
       { label: 'Indexes', icon: List, to: 'database/indexes' },
       { label: 'Types', icon: Hash, to: 'database/types', mysqlUnavailable: MYSQL_REASONS.types },
-      { label: 'Advisors', icon: AlertTriangle, to: 'database/advisors', mysqlUnavailable: MYSQL_REASONS.advisors },
+      { label: 'Advisors', icon: AlertTriangle, to: 'database/advisors', mysqlUnavailable: MYSQL_REASONS.advisors, mysqlWith: 'advisors' },
       { label: 'Documents', icon: FileJson, to: 'database/documents', documentDbOnly: true, mysqlUnavailable: MYSQL_REASONS.documentDb },
       { label: 'Mongo Users', icon: UserCog, to: 'database/mongo-users', documentDbOnly: true, mysqlUnavailable: MYSQL_REASONS.documentDb },
     ],
@@ -148,10 +151,15 @@ export const PROJECT_NAV: NavSection[] = [
   { key: 'settings', label: 'Settings', icon: Settings, to: 'settings' },
 ];
 
-export function visibleNavItems(items: readonly NavItem[], documentDb: boolean, postgres = true): NavItem[] {
-  return items.filter(
-    (item) => (!item.documentDbOnly || documentDb) && (postgres || (!item.postgresOnly && !item.mysqlUnavailable))
-  );
+export function visibleNavItems(
+  items: readonly NavItem[],
+  documentDb: boolean,
+  postgres = true,
+  features: Partial<Record<Feature, boolean>> = {}
+): NavItem[] {
+  const onMySQL = (item: NavItem) =>
+    (!item.postgresOnly && !item.mysqlUnavailable) || (item.mysqlWith !== undefined && features[item.mysqlWith] === true);
+  return items.filter((item) => (!item.documentDbOnly || documentDb) && (postgres || onMySQL(item)));
 }
 
 // The reason a page is hidden on MySQL, by its path below the project.

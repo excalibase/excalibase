@@ -127,6 +127,12 @@ export default function App() {
                 <Route path="database/indexes" element={<IndexesPage />} />
               </Route>
             </Route>
+            {/* Postgres-only until the advisors feature checks MySQL too (EXC-655). */}
+            <Route element={<DatabaseRequired mysqlFeature="advisors" />}>
+              <Route element={<DatabaseRunning />}>
+                <Route path="database/advisors" element={<AdvisorsPage />} />
+              </Route>
+            </Route>
             <Route element={<DatabaseRequired />}>
               <Route element={<DatabaseRunning />}>
                 <Route path="database/extensions" element={<ExtensionsPage />} />
@@ -134,7 +140,6 @@ export default function App() {
                 <Route path="database/rls" element={<RlsPage />} />
                 <Route path="database/triggers" element={<TriggersPage />} />
                 <Route path="database/types" element={<TypesPage />} />
-                <Route path="database/advisors" element={<AdvisorsPage />} />
                 <Route path="database/documents" element={<DocumentsPage />} />
                 <Route path="database/mongo-users" element={<MongoUsersPage />} />
                 {/* Authentication: end users live in the project's database */}

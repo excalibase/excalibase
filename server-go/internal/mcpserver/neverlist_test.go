@@ -40,6 +40,8 @@ var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^GET /api/provision/[^/]+/permissions/$`),
 	regexp.MustCompile(`^(PUT|DELETE) /api/provision/[^/]+/permissions/tables/[^/]+/roles/[^/]+/[^/]+$`),
 	regexp.MustCompile(`^GET /api/provision/[^/]+/logs(\?.*)?$`),
+	// Read-only checks of the project's catalog and permissions (EXC-655).
+	regexp.MustCompile(`^GET /api/provision/[^/]+/advisors$`),
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/functions/$`),
 	regexp.MustCompile(`^DELETE /api/projects/[^/]+/functions/[^/]+/$`),
 	// Which outside hosts the project's functions may reach.
@@ -135,6 +137,11 @@ func TestEveryOfferedToolHasARouteCase(t *testing.T) {
 		covered[tc.tool] = true
 	}
 	for _, name := range offeredTools {
+		if !covered[name] {
+			t.Errorf("%s has no routing case", name)
+		}
+	}
+	for name := range darkTools {
 		if !covered[name] {
 			t.Errorf("%s has no routing case", name)
 		}

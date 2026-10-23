@@ -23,11 +23,13 @@ const (
 	// MySQLPITR ships MySQL binlogs between backups, so a point-in-time
 	// restore reaches about a minute ago instead of the last backup (EXC-587).
 	MySQLPITR Feature = "mysqlpitr"
+	// Advisors are a project's security and performance checks, in Studio and MCP (EXC-655).
+	Advisors Feature = "advisors"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, Advisors}
 }
 
 type Flags interface {

@@ -4,7 +4,7 @@ import { api } from '../api/client';
 export type DeploymentMode = 'selfhosted' | 'cloud';
 
 // Features that ship dark and are turned on per installation (EXC-554).
-export type Feature = 'mcp' | 'pipeline' | 'appstorage' | 'mysql';
+export type Feature = 'mcp' | 'pipeline' | 'appstorage' | 'mysql' | 'advisors';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
@@ -73,6 +73,12 @@ export function useCustomDomainsEnabled(): boolean {
 export function useFeatureEnabled(feature: Feature): { enabled: boolean; isLoading: boolean } {
   const { data, isLoading } = useStudioConfig();
   return { enabled: data?.features?.[feature] === true, isLoading };
+}
+
+// Every feature the server reports on; empty until it answers.
+export function useFeatures(): Partial<Record<Feature, boolean>> {
+  const { data } = useStudioConfig();
+  return data?.features ?? {};
 }
 
 export function isSelfHosted(mode: DeploymentMode): boolean {

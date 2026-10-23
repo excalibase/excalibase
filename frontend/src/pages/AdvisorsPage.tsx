@@ -4,6 +4,8 @@ import { Loader2, RefreshCw, AlertTriangle, Shield } from 'lucide-react';
 import { usePerformanceAdvisor, useSecurityAdvisor } from '../hooks/useSchema';
 import { useQueryClient } from '@tanstack/react-query';
 import type { AdvisorFinding } from '../types/schema';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
+import { ProjectAdvisors } from '../components/advisors/ProjectAdvisors';
 
 const SEVERITY_COLORS: Record<string, string> = {
   critical: 'bg-red-900/20 text-red-400 border-red-500/30',
@@ -46,7 +48,17 @@ function FindingCard({ finding }: { readonly finding: AdvisorFinding }) {
 
 type Tab = 'performance' | 'security';
 
+// With the advisors feature on, the project's checks on either engine
+// (EXC-655); off, the schema advisor as it was.
 export function AdvisorsPage() {
+  const { enabled, isLoading } = useFeatureEnabled('advisors');
+  if (isLoading) {
+    return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
+  }
+  return enabled ? <ProjectAdvisors /> : <SchemaAdvisors />;
+}
+
+function SchemaAdvisors() {
   const { projectId } = useParams<{ projectId: string }>();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>('performance');

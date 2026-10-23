@@ -34,6 +34,9 @@ var darkRoutes = map[features.Feature][]darkProbe{
 	features.MySQL: {
 		{http.MethodGet, "/api/mysql/catalog"},
 	},
+	features.Advisors: {
+		{http.MethodGet, "/api/provision/" + matrixProjectA + "/advisors"},
+	},
 	features.AppStorage: {
 		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
 		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},
