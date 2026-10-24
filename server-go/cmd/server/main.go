@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -36,6 +37,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/permissions"
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/requestmetrics"
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/sdkkeys"
@@ -591,8 +593,9 @@ const (
 )
 
 // wireMetricsHistory keeps alerts in the platform DB and, on Kubernetes,
-// samples every running database into it once a minute on the leading replica.
-func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8sClient k8s.KubeClient, metrics *service.MetricsService, alerts *service.AlertingService) {
+// samples every running database, and with requestmetrics on every graphql and
+// auth pod, into it once a minute on the leading replica.
+func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8sClient k8s.KubeClient, metrics *service.MetricsService, alerts *service.AlertingService, requests *service.RequestMetricsService) {
 	table, ok := sqlStore.(metricsTable)
 	if !ok {
 		return
@@ -602,11 +605,37 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 		return
 	}
 	metrics.SetHistory(table, alerts)
+	if sampler := requestSampling(cfg, requests); sampler != nil {
+		metrics.SetRequestSampler(sampler)
+	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
 		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), metricsSampleLockID)
 	}
 	metrics.StartSampler(context.Background(), service.NewLeadership(lock), metricsSampleInterval)
+}
+
+// newRequestMetricsService reads the request_metrics table and scrapes the
+// configured targets, every pod behind each name (EXC-656).
+func newRequestMetricsService(cfg config.AppConfig, sqlStore storage.PlatformStore, instances storage.InstanceStore) *service.RequestMetricsService {
+	table, ok := sqlStore.(service.RequestMetricsStore)
+	if !ok {
+		return nil
+	}
+	return service.NewRequestMetricsService(requestmetrics.NewScraper(cfg.RequestMetricsTargets, net.DefaultResolver), table, instances)
+}
+
+// requestSampling is the request sample the metrics loop takes: none while
+// the requestmetrics feature is off or no target is configured.
+func requestSampling(cfg config.AppConfig, requests *service.RequestMetricsService) service.RequestSampler {
+	if requests == nil || !features.Enabled(context.Background(), cfg.Features(), features.RequestMetrics) {
+		return nil
+	}
+	if len(cfg.RequestMetricsTargets) == 0 {
+		log.Printf("request metrics: the feature is on but REQUEST_METRICS_TARGETS is empty; nothing is scraped")
+		return nil
+	}
+	return requests
 }
 
 // restoreSweepLockID is the advisory lock the restore sweeper leads on. It
@@ -877,23 +906,25 @@ func functionCronLock(cfg config.AppConfig, sqlStore storage.PlatformStore) stor
 // handlerDeps groups all wired handlers + middleware used during route mounting.
 // Centralising the bag keeps buildRouter focused on routing rather than wiring.
 type handlerDeps struct {
-	provHandler        *handler.ProvisioningHandler
-	sdkKeysHandler     *handler.SDKKeysHandler
-	aiActivityHandler  *handler.AIActivityHandler
-	endUsersHandler    *handler.EndUsersHandler
-	metricsHandler     *handler.MetricsHandler
-	backupHandler      *handler.BackupHandler
-	perfHandler        *handler.PerformanceHandler
-	queryStatsHandler  *handler.QueryStatsHandler
-	auditHandler       *handler.AuditHandler
-	snapshotHandler    *handler.SnapshotHandler
-	migrationHandler   *handler.MigrationHandler
-	alertHandler       *handler.AlertHandler
-	setupHandler       *handler.SetupHandler
-	pgHandler          *handler.ParameterGroupHandler
-	emailTokensHandler *handler.EmailTokensHandler
-	internalEmail      *handler.InternalEmailHandler
-	storageHandler     *handler.StorageHandler
+	provHandler       *handler.ProvisioningHandler
+	sdkKeysHandler    *handler.SDKKeysHandler
+	aiActivityHandler *handler.AIActivityHandler
+	endUsersHandler   *handler.EndUsersHandler
+	metricsHandler    *handler.MetricsHandler
+	backupHandler     *handler.BackupHandler
+	perfHandler       *handler.PerformanceHandler
+	queryStatsHandler *handler.QueryStatsHandler
+	// requestMetricsHandler serves the request charts; nil without the platform DB table.
+	requestMetricsHandler *handler.RequestMetricsHandler
+	auditHandler          *handler.AuditHandler
+	snapshotHandler       *handler.SnapshotHandler
+	migrationHandler      *handler.MigrationHandler
+	alertHandler          *handler.AlertHandler
+	setupHandler          *handler.SetupHandler
+	pgHandler             *handler.ParameterGroupHandler
+	emailTokensHandler    *handler.EmailTokensHandler
+	internalEmail         *handler.InternalEmailHandler
+	storageHandler        *handler.StorageHandler
 	// documentsHandler is Studio's DocumentDB document browser; nil without
 	// Kubernetes, which is where DocumentDB projects run.
 	documentsHandler *handler.DocumentBrowserHandler
@@ -1413,6 +1444,13 @@ func newAlertHandler(svc *service.AlertingService, instances storage.InstanceSto
 	return h
 }
 
+func newRequestMetricsHandler(requests *service.RequestMetricsService) *handler.RequestMetricsHandler {
+	if requests == nil {
+		return nil
+	}
+	return handler.NewRequestMetricsHandler(requests)
+}
+
 // newQueryStatsHandler reads MySQL digests through the shared project pools.
 func newQueryStatsHandler(cfg config.AppConfig, store storage.InstanceStore, provSvc *service.ProvisioningService, pools permissions.ProjectPools) *handler.QueryStatsHandler {
 	mysqlStats, _ := pools.(service.MySQLStatsOpener)
@@ -1505,7 +1543,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	snapshotSvc := buildSnapshotService(store, k8sClient, cfg.StoragePath, buildDocumentConnector(k8sClient, nil, vc, store))
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
-	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc)
+	requestMetricsSvc := newRequestMetricsService(cfg, sqlStore, store)
+	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 
 	emailSender := buildEmailSender(cfg)
@@ -1620,43 +1659,44 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		limits:  service.NewSiteBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
 		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}})
 	return &handlerDeps{
-		siteBuilds:          builds,
-		provHandler:         provHandler,
-		sdkKeysHandler:      handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
-		aiActivityHandler:   newAIActivityHandler(sqlStore),
-		endUsersHandler:     handler.NewEndUsersHandler(buildEndUserManager(cfg, vc), store, sqlStore, sqlStore),
-		metricsHandler:      handler.NewMetricsHandler(metricsSvc),
-		backupHandler:       handler.NewBackupHandler(backupSvc),
-		perfHandler:         handler.NewPerformanceHandler(perfSvc),
-		queryStatsHandler:   newQueryStatsHandler(cfg, store, provSvc, a.projectDB),
-		auditHandler:        handler.NewAuditHandler(auditSvc),
-		snapshotHandler:     handler.NewSnapshotHandler(snapshotSvc),
-		migrationHandler:    handler.NewMigrationHandler(migrationSvc),
-		alertHandler:        newAlertHandler(alertSvc, store, sqlStore),
-		setupHandler:        handler.NewSetupHandler(setupSvc),
-		pgHandler:           handler.NewParameterGroupHandler(pgStore),
-		emailTokensHandler:  emailTokensHandler,
-		storageHandler:      storageHandler,
-		documentsHandler:    buildDocumentBrowser(k8sClient, a.dockerClient, vc, store),
-		adminHandler:        adminHandler,
-		authHandler:         authHandler,
-		oauthHandler:        buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
-		ssoHandler:          buildSSOProvidersHandler(cfg, vc, sqlStore),
-		svcAcctHandler:      handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
-		orgHandler:          newOrgHandler(sqlStore, store, provSvc, planChanged),
-		vaultHandler:        vaultHandler,
-		schemaHandler:       schemaHandler,
-		tableImportHandler:  newTableImportHandler(cfg, schemaHandler, store, sqlStore),
-		realtimeHandler:     realtimeHandler,
-		permissionHandler:   newPermissionHandler(cfg, sqlStore, store, a.projectDB),
-		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc),
-		siteHandler:         newSiteHandler(sitesSvc, sqlStore, store),
-		siteDeployTokens:    sitesSvc,
-		storageBudgetH:      handler.NewStorageBudgetHandler(a.budget),
-		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
-		appDeploySvc:        appDeploySvc,
-		appDeployHandler:    newAppDeployHandler(appDeploySvc, cfg.Features(), cfg.DeployWait),
-		registryCredHandler: newRegistryCredentialHandler(registryCreds),
+		siteBuilds:            builds,
+		provHandler:           provHandler,
+		sdkKeysHandler:        handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
+		aiActivityHandler:     newAIActivityHandler(sqlStore),
+		endUsersHandler:       handler.NewEndUsersHandler(buildEndUserManager(cfg, vc), store, sqlStore, sqlStore),
+		metricsHandler:        handler.NewMetricsHandler(metricsSvc),
+		backupHandler:         handler.NewBackupHandler(backupSvc),
+		perfHandler:           handler.NewPerformanceHandler(perfSvc),
+		queryStatsHandler:     newQueryStatsHandler(cfg, store, provSvc, a.projectDB),
+		requestMetricsHandler: newRequestMetricsHandler(requestMetricsSvc),
+		auditHandler:          handler.NewAuditHandler(auditSvc),
+		snapshotHandler:       handler.NewSnapshotHandler(snapshotSvc),
+		migrationHandler:      handler.NewMigrationHandler(migrationSvc),
+		alertHandler:          newAlertHandler(alertSvc, store, sqlStore),
+		setupHandler:          handler.NewSetupHandler(setupSvc),
+		pgHandler:             handler.NewParameterGroupHandler(pgStore),
+		emailTokensHandler:    emailTokensHandler,
+		storageHandler:        storageHandler,
+		documentsHandler:      buildDocumentBrowser(k8sClient, a.dockerClient, vc, store),
+		adminHandler:          adminHandler,
+		authHandler:           authHandler,
+		oauthHandler:          buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
+		ssoHandler:            buildSSOProvidersHandler(cfg, vc, sqlStore),
+		svcAcctHandler:        handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
+		orgHandler:            newOrgHandler(sqlStore, store, provSvc, planChanged),
+		vaultHandler:          vaultHandler,
+		schemaHandler:         schemaHandler,
+		tableImportHandler:    newTableImportHandler(cfg, schemaHandler, store, sqlStore),
+		realtimeHandler:       realtimeHandler,
+		permissionHandler:     newPermissionHandler(cfg, sqlStore, store, a.projectDB),
+		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc),
+		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
+		siteDeployTokens:      sitesSvc,
+		storageBudgetH:        handler.NewStorageBudgetHandler(a.budget),
+		appSecretHandler:      handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
+		appDeploySvc:          appDeploySvc,
+		appDeployHandler:      newAppDeployHandler(appDeploySvc, cfg.Features(), cfg.DeployWait),
+		registryCredHandler:   newRegistryCredentialHandler(registryCreds),
 		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(
 			apphost.NewPostgresAppStore(sqlStore.DB()), store, appRuntime)),
 		appDomainSvc:      appDomainSvc,
@@ -1863,6 +1903,11 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 				r.With(dev).Post("/reset", d.queryStatsHandler.Reset)
 				r.With(admin).Post("/enable", d.queryStatsHandler.Enable)
 			})
+
+			// Request charts (EXC-656): any member reads them.
+			if d.requestMetricsHandler != nil {
+				r.With(features.Require(d.features, features.RequestMetrics), db).Get("/requests", d.requestMetricsHandler.Charts)
+			}
 
 			// Developer+ subtrees — schema/data-plane authoring.
 			r.Group(func(r chi.Router) {

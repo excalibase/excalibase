@@ -52,4 +52,14 @@ describe('project navigation', () => {
     expect(labels(false, true)).toEqual(['Metrics', 'Alerts', 'Logs', 'Slow queries']);
     expect(monitoring?.children?.find((item) => item.label === 'Slow queries')).toMatchObject({ to: 'monitoring/slow-queries', feature: 'slowqueries' });
   });
+  // EXC-656: Requests ships dark and serves Postgres and MySQL alike.
+  test('Requests is listed only with its feature on, on either engine', () => {
+    const monitoring = PROJECT_NAV.find((section) => section.key === 'monitoring');
+    const labels = (postgres: boolean, requestmetrics?: boolean) =>
+      visibleNavItems(monitoring?.children ?? [], false, postgres, { requestmetrics }).map((item) => item.label);
+    expect(labels(true)).not.toContain('Requests');
+    expect(labels(true, true)).toContain('Requests');
+    expect(labels(false, true)).toContain('Requests');
+    expect(monitoring?.children?.find((item) => item.label === 'Requests')).toMatchObject({ to: 'monitoring/requests', feature: 'requestmetrics' });
+  });
 });

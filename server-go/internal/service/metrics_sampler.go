@@ -25,6 +25,16 @@ type MetricsHistory interface {
 	PruneMetricsBefore(ctx context.Context, cutoff time.Time) error
 }
 
+// RequestSampler takes the per-project request sample (EXC-656).
+type RequestSampler interface {
+	Sample(ctx context.Context)
+}
+
+// SetRequestSampler adds the request sample to every tick.
+func (s *MetricsService) SetRequestSampler(sampler RequestSampler) {
+	s.requests = sampler
+}
+
 // SetHistory keeps metrics in the table, sampled by the loop rather than by
 // reads of the live endpoint, and checks each sample against the alert thresholds.
 func (s *MetricsService) SetHistory(history MetricsHistory, alerts *AlertingService) {
@@ -64,6 +74,10 @@ func (s *MetricsService) sampleIfLeader(ctx context.Context, leader LeaderChecke
 // SampleAll records one row per running database, raises or resolves its
 // alerts, and drops rows past the retention.
 func (s *MetricsService) SampleAll(ctx context.Context) {
+	// First: a few HTTP reads, kept on the tick however long the databases take.
+	if s.requests != nil {
+		s.requests.Sample(ctx)
+	}
 	instances, err := s.store.FindAll()
 	if err != nil {
 		log.Printf("metrics sampler: list projects: %v", err)

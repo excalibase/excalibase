@@ -31,6 +31,7 @@ import {
   LayoutDashboard,
   Bot,
   Timer,
+  Gauge,
   type LucideIcon,
 } from 'lucide-react';
 import type { Feature } from '../../hooks/useDeploymentMode';
@@ -137,6 +138,7 @@ export const PROJECT_NAV: NavSection[] = [
       { label: 'Alerts', icon: Bell, to: 'monitoring/alerts' },
       { label: 'Logs', icon: FileText, to: 'monitoring/logs' },
       { label: 'Slow queries', icon: Timer, to: 'monitoring/slow-queries', feature: 'slowqueries' },
+      { label: 'Requests', icon: Gauge, to: 'monitoring/requests', feature: 'requestmetrics' },
     ],
   },
   {
