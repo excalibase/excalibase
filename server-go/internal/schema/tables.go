@@ -26,9 +26,7 @@ func (i *Introspector) CreateTable(ctx context.Context, db *sql.DB, req CreateTa
 	}
 
 	if req.Comment != "" {
-		commentSQL := "COMMENT ON TABLE " + QuoteIdent(schema) + "." + QuoteIdent(req.Name) +
-			" IS " + QuoteLiteral(req.Comment)
-		if _, err := db.ExecContext(ctx, commentSQL); err != nil {
+		if _, err := db.ExecContext(ctx, buildTableCommentSQL(schema, req.Name, req.Comment)); err != nil {
 			return fmt.Errorf("set table comment: %w", err)
 		}
 	}
@@ -120,56 +118,51 @@ func (i *Introspector) UpdateTable(ctx context.Context, db *sql.DB, schema, name
 	if err := checkOptionalIdentifier("schema", req.NewSchema); err != nil {
 		return err
 	}
-	fqn := QuoteIdent(schema) + "." + QuoteIdent(name)
+	return execSteps(ctx, db, buildUpdateTableSQL(schema, name, req))
+}
 
+// buildTableCommentSQL constructs COMMENT ON TABLE; the comment is a quoted literal.
+func buildTableCommentSQL(schema, table, comment string) string {
+	return "COMMENT ON TABLE " + QuoteIdent(schema) + "." + QuoteIdent(table) + " IS " + QuoteLiteral(comment)
+}
+
+// buildUpdateTableSQL constructs the statements UpdateTable runs, in order.
+func buildUpdateTableSQL(schema, name string, req UpdateTableRequest) []ddlStep {
+	fqn := QuoteIdent(schema) + "." + QuoteIdent(name)
+	var steps []ddlStep
 	if req.RlsEnabled != nil {
-		var action string
+		action := "DISABLE"
 		if *req.RlsEnabled {
 			action = "ENABLE"
-		} else {
-			action = "DISABLE"
 		}
-		sql := sqlAlterTable + fqn + " " + action + " ROW LEVEL SECURITY"
-		if _, err := db.ExecContext(ctx, sql); err != nil {
-			return fmt.Errorf("toggle RLS: %w", err)
-		}
+		steps = append(steps, ddlStep{sqlAlterTable + fqn + " " + action + " ROW LEVEL SECURITY", "toggle RLS"})
 	}
-
 	if req.Comment != nil {
-		commentSQL := "COMMENT ON TABLE " + fqn + " IS " + QuoteLiteral(*req.Comment)
-		if _, err := db.ExecContext(ctx, commentSQL); err != nil {
-			return fmt.Errorf("set comment: %w", err)
-		}
+		steps = append(steps, ddlStep{buildTableCommentSQL(schema, name, *req.Comment), "set comment"})
 	}
-
 	if req.NewSchema != nil {
-		sql := sqlAlterTable + fqn + " SET SCHEMA " + QuoteIdent(*req.NewSchema)
-		if _, err := db.ExecContext(ctx, sql); err != nil {
-			return fmt.Errorf("move schema: %w", err)
-		}
-		// Update schema for subsequent operations
+		steps = append(steps, ddlStep{sqlAlterTable + fqn + " SET SCHEMA " + QuoteIdent(*req.NewSchema), "move schema"})
 		schema = *req.NewSchema
 	}
-
 	if req.NewName != nil {
 		currentFQN := QuoteIdent(schema) + "." + QuoteIdent(name)
-		sql := sqlAlterTable + currentFQN + " RENAME TO " + QuoteIdent(*req.NewName)
-		if _, err := db.ExecContext(ctx, sql); err != nil {
-			return fmt.Errorf("rename table: %w", err)
-		}
+		steps = append(steps, ddlStep{sqlAlterTable + currentFQN + " RENAME TO " + QuoteIdent(*req.NewName), "rename table"})
 	}
-
-	return nil
+	return steps
 }
 
 // DropTable drops a table, optionally with CASCADE.
 func (i *Introspector) DropTable(ctx context.Context, db *sql.DB, schema, name string, cascade bool) error {
-	sql := "DROP TABLE " + QuoteIdent(schema) + "." + QuoteIdent(name)
-	if cascade {
-		sql += " CASCADE"
-	}
-	if _, err := db.ExecContext(ctx, sql); err != nil {
+	if _, err := db.ExecContext(ctx, buildDropTableSQL(schema, name, cascade)); err != nil {
 		return fmt.Errorf("drop table: %w", err)
 	}
 	return nil
+}
+
+func buildDropTableSQL(schema, name string, cascade bool) string {
+	stmt := "DROP TABLE " + QuoteIdent(schema) + "." + QuoteIdent(name)
+	if cascade {
+		stmt += " CASCADE"
+	}
+	return stmt
 }

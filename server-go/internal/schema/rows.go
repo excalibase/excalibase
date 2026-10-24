@@ -243,8 +243,20 @@ func rowArg(value interface{}) (interface{}, error) {
 
 // UpdateRow updates a row by primary key.
 func (i *Introspector) UpdateRow(ctx context.Context, db *sql.DB, schema, table, pkColumn, pkValue string, data map[string]interface{}) error {
+	query, args, err := buildUpdateQuery(schema, table, pkColumn, pkValue, data)
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("update row: %w", err)
+	}
+	return nil
+}
+
+// buildUpdateQuery constructs UPDATE ... SET with every value and the key bound.
+func buildUpdateQuery(schema, table, pkColumn, pkValue string, data map[string]interface{}) (string, []interface{}, error) {
 	if len(data) == 0 {
-		return invalidInput("data is required")
+		return "", nil, invalidInput("data is required")
 	}
 
 	fqn := QuoteIdent(schema) + "." + QuoteIdent(table)
@@ -256,7 +268,7 @@ func (i *Introspector) UpdateRow(ctx context.Context, db *sql.DB, schema, table,
 	for idx, k := range keys {
 		value, err := rowArg(data[k])
 		if err != nil {
-			return fmt.Errorf("column %q: %w", k, err)
+			return "", nil, fmt.Errorf("column %q: %w", k, err)
 		}
 		setClauses = append(setClauses, QuoteIdent(k)+" = "+fmt.Sprintf("$%d", idx+1))
 		args = append(args, value)
@@ -269,21 +281,20 @@ func (i *Introspector) UpdateRow(ctx context.Context, db *sql.DB, schema, table,
 	query := "UPDATE " + fqn +
 		" SET " + strings.Join(setClauses, ", ") +
 		sqlWhere + QuoteIdent(pkColumn) + " = " + pkParam
-
-	if _, err := db.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("update row: %w", err)
-	}
-	return nil
+	return query, args, nil
 }
 
 // DeleteRow deletes a row by primary key.
 func (i *Introspector) DeleteRow(ctx context.Context, db *sql.DB, schema, table, pkColumn, pkValue string) error {
-	fqn := QuoteIdent(schema) + "." + QuoteIdent(table)
-	query := "DELETE FROM " + fqn + sqlWhere + QuoteIdent(pkColumn) + " = $1"
-	if _, err := db.ExecContext(ctx, query, pkValue); err != nil {
+	if _, err := db.ExecContext(ctx, buildDeleteQuery(schema, table, pkColumn), pkValue); err != nil {
 		return fmt.Errorf("delete row: %w", err)
 	}
 	return nil
+}
+
+// buildDeleteQuery constructs DELETE ... WHERE with the key bound as $1.
+func buildDeleteQuery(schema, table, pkColumn string) string {
+	return "DELETE FROM " + QuoteIdent(schema) + "." + QuoteIdent(table) + sqlWhere + QuoteIdent(pkColumn) + " = $1"
 }
 
 // buildWhereClause builds WHERE clause fragments and corresponding args from filters.
