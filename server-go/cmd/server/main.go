@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/advisors"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/bootstrap"
@@ -943,7 +944,9 @@ type handlerDeps struct {
 	// permissionHandler serves permissions, tracked functions and function
 	// permissions (EXC-370 step C).
 	permissionHandler *handler.PermissionHandler
-	appHandler        *handler.AppHandler
+	// advisorsHandler serves a project's security and performance checks (EXC-655).
+	advisorsHandler *handler.AdvisorsHandler
+	appHandler      *handler.AppHandler
 	// siteHandler serves Sites (EXC-353); it answers 503 where Cloudflare is not configured.
 	siteHandler *handler.SiteHandler
 	// siteDeployTokens resolves a site's CI deploy token (EXC-620) for the root gate.
@@ -1689,6 +1692,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		tableImportHandler:    newTableImportHandler(cfg, schemaHandler, store, sqlStore),
 		realtimeHandler:       realtimeHandler,
 		permissionHandler:     newPermissionHandler(cfg, sqlStore, store, a.projectDB),
+		advisorsHandler:       handler.NewAdvisorsHandler(advisors.NewService(a.projectDB, sqlStore.Permissions(), advisors.Options{})),
 		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc),
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,
@@ -1833,7 +1837,9 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 // mountMCP serves MCP for coding tools (ADR 0037). Each tool is an
 // in-process request through r itself, so it meets the same gates as Studio.
 func mountMCP(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
-	r.With(features.Require(d.features, features.MCP), d.rlAuthed).Handle("/mcp", mcpserver.NewHandler(r, d.mcpAudit, mcpSettings(cfg)))
+	settings := mcpSettings(cfg)
+	settings.Features = d.features
+	r.With(features.Require(d.features, features.MCP), d.rlAuthed).Handle("/mcp", mcpserver.NewHandler(r, d.mcpAudit, settings))
 }
 
 // mountProvisioningRoutes attaches /api/provision and its per-project sub-router.
@@ -1918,6 +1924,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 				r.Route("/permissions", d.permissionHandler.PermissionRoutes)
 				r.Route("/tracked-functions", d.permissionHandler.TrackedFunctionRoutes)
 				r.Route("/function-permissions", d.permissionHandler.FunctionPermissionRoutes)
+				r.With(features.Require(d.features, features.Advisors)).Get("/advisors", d.advisorsHandler.Get)
 			})
 
 			// Admin+ subtrees — backup/restore and full-DB snapshots (dump +

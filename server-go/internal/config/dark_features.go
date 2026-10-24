@@ -16,6 +16,7 @@ var featureEnv = map[features.Feature]string{
 	features.MySQLPITR:      "FEATURE_MYSQLPITR",
 	features.SlowQueries:    "FEATURE_SLOWQUERIES",
 	features.RequestMetrics: "FEATURE_REQUESTMETRICS",
+	features.Advisors:       "FEATURE_ADVISORS",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.

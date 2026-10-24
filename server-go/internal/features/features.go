@@ -29,11 +29,13 @@ const (
 	// RequestMetrics is the request charts: graphql and auth scraped into
 	// per-project request, error and latency history (EXC-656).
 	RequestMetrics Feature = "requestmetrics"
+	// Advisors are a project's security and performance checks, in Studio and MCP (EXC-655).
+	Advisors Feature = "advisors"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors}
 }
 
 type Flags interface {

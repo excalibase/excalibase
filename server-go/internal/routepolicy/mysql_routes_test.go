@@ -37,6 +37,8 @@ func TestSchemaRoutesThatServeMySQL(t *testing.T) {
 		{"GET", "/api/provision/p1/logs"},
 		{"GET", "/api/provision/p1/metrics/current"},
 		{"GET", "/api/provision/p1/metrics/history"},
+		// The advisors check both engines (EXC-655).
+		{"GET", "/api/provision/p1/advisors"},
 	} {
 		row, ok := Lookup(request[0], request[1])
 		if !ok || !row.MySQL {

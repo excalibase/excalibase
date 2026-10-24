@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -27,7 +28,15 @@ const (
 type entry struct {
 	name   string
 	access access
-	add    func(server *mcp.Server, e *env, caller Caller)
+	// feature, when set, offers the tool only while that feature is on.
+	feature features.Feature
+	add     func(server *mcp.Server, e *env, caller Caller)
+}
+
+// dark offers a tool only while its feature is on.
+func dark(feature features.Feature, t entry) entry {
+	t.feature = feature
+	return t
 }
 
 func (t entry) offeredTo(caller Caller) bool {
@@ -95,6 +104,7 @@ func catalogue() []entry {
 	tools = append(tools, shippingTools()...)
 	tools = append(tools, probeTools()...)
 	tools = append(tools, authFlowTools()...)
+	tools = append(tools, advisorTools()...)
 	return tools
 }
 

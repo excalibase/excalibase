@@ -133,6 +133,38 @@ export interface RowsResult {
   totalCount: number;
 }
 
+// Project advisors (EXC-655): one shape for Postgres and MySQL.
+export type AdvisorCategory = 'security' | 'performance';
+export type AdvisorLevel = 'error' | 'warning' | 'info';
+
+export interface ProjectAdvisorFinding {
+  check: string;
+  category: AdvisorCategory;
+  level: AdvisorLevel;
+  object: string;
+  index?: string;
+  constraint?: string;
+  columns?: string[];
+  role?: string;
+  operation?: string;
+  message: string;
+  fixHint: string;
+  fixSql?: string;
+}
+
+export interface ProjectAdvisorCheck {
+  id: string;
+  category: AdvisorCategory;
+  status: 'ran' | 'not_applicable' | 'unavailable';
+  reason?: string;
+}
+
+export interface ProjectAdvisorReport {
+  engine: 'postgres' | 'mysql';
+  findings: ProjectAdvisorFinding[];
+  checks: ProjectAdvisorCheck[];
+}
+
 // Advisor
 export interface AdvisorFinding {
   ruleId: string;
