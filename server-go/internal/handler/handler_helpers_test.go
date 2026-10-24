@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -77,4 +78,13 @@ func TestHashToken_Stable(t *testing.T) {
 func TestLogEmailSent_DoesNotPanic(t *testing.T) {
 	// Pure logging side effect; assert it runs without panicking.
 	logEmailSent("verify", "u@example.com", "msg-1", "user-1")
+}
+
+func TestLogEmailSent_KeepsForgedRecordsOnOneLine(t *testing.T) {
+	logged := captureLogs(t, func() {
+		logEmailSent("verify", "u@example.com\r\nINFO: email.sent kind=forged", "msg-1\n", "user-1")
+	})
+	if strings.Count(strings.TrimRight(logged, "\n"), "\n") != 0 {
+		t.Fatalf("one send must log one line, got %q", logged)
+	}
 }

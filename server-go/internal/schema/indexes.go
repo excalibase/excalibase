@@ -26,8 +26,19 @@ func ValidateIndexType(indexType string) error {
 
 // CreateIndex creates a new index on a table.
 func (i *Introspector) CreateIndex(ctx context.Context, db *sql.DB, req CreateIndexRequest) error {
-	if err := checkNameLength("index", req.Name); err != nil {
+	stmt, err := buildCreateIndexSQL(req)
+	if err != nil {
 		return err
+	}
+	if _, err := db.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("create index: %w", err)
+	}
+	return nil
+}
+
+func buildCreateIndexSQL(req CreateIndexRequest) (string, error) {
+	if err := checkNameLength("index", req.Name); err != nil {
+		return "", err
 	}
 	schemaName := req.Schema
 	if schemaName == "" {
@@ -35,7 +46,7 @@ func (i *Introspector) CreateIndex(ctx context.Context, db *sql.DB, req CreateIn
 	}
 
 	if len(req.Columns) == 0 {
-		return fmt.Errorf("at least one column is required")
+		return "", fmt.Errorf("at least one column is required")
 	}
 
 	indexType := strings.ToLower(req.Type)
@@ -43,7 +54,7 @@ func (i *Introspector) CreateIndex(ctx context.Context, db *sql.DB, req CreateIn
 		indexType = "btree"
 	}
 	if err := ValidateIndexType(indexType); err != nil {
-		return err
+		return "", err
 	}
 
 	var b strings.Builder
@@ -68,17 +79,17 @@ func (i *Introspector) CreateIndex(ctx context.Context, db *sql.DB, req CreateIn
 	b.WriteString(strings.Join(quotedCols, ", "))
 	b.WriteString(")")
 
-	if _, err := db.ExecContext(ctx, b.String()); err != nil {
-		return fmt.Errorf("create index: %w", err)
-	}
-	return nil
+	return b.String(), nil
 }
 
 // DropIndex drops an index by name.
 func (i *Introspector) DropIndex(ctx context.Context, db *sql.DB, schema, name string) error {
-	stmt := "DROP INDEX " + QuoteIdent(schema) + "." + QuoteIdent(name)
-	if _, err := db.ExecContext(ctx, stmt); err != nil {
+	if _, err := db.ExecContext(ctx, buildDropIndexSQL(schema, name)); err != nil { // NOSONAR: identifiers quoted by QuoteIdent; DDL cannot bind identifiers
 		return fmt.Errorf("drop index: %w", err)
 	}
 	return nil
+}
+
+func buildDropIndexSQL(schema, name string) string {
+	return "DROP INDEX " + QuoteIdent(schema) + "." + QuoteIdent(name)
 }

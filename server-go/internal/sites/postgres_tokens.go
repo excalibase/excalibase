@@ -13,6 +13,12 @@ const siteTokenLockSpace = 620
 
 const tokenColumns = `id, site_id, project_id, name, token_prefix, token_hash, created_by, created_at, expires_at, last_used_at`
 
+const (
+	listDeployTokensSQL = `SELECT ` + tokenColumns + ` FROM site_deploy_tokens
+		WHERE project_id = $1 AND site_id = $2 ORDER BY created_at, id`
+	findDeployTokenSQL = `SELECT ` + tokenColumns + ` FROM site_deploy_tokens WHERE token_hash = $1`
+)
+
 func scanDeployToken(row rowScanner) (*DeployToken, error) {
 	token := &DeployToken{}
 	var lastUsed sql.NullTime
@@ -57,8 +63,7 @@ func (s *PostgresStore) CreateDeployToken(ctx context.Context, token *DeployToke
 }
 
 func (s *PostgresStore) ListDeployTokens(ctx context.Context, projectID, siteID string) ([]*DeployToken, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+tokenColumns+` FROM site_deploy_tokens
-		WHERE project_id = $1 AND site_id = $2 ORDER BY created_at, id`, projectID, siteID)
+	rows, err := s.db.QueryContext(ctx, listDeployTokensSQL, projectID, siteID)
 	if err != nil {
 		return nil, fmt.Errorf("list site deploy tokens: %w", err)
 	}
@@ -90,7 +95,7 @@ func (s *PostgresStore) DeleteDeployToken(ctx context.Context, projectID, siteID
 }
 
 func (s *PostgresStore) FindDeployToken(ctx context.Context, hash string) (*DeployToken, error) {
-	token, err := scanDeployToken(s.db.QueryRowContext(ctx, `SELECT `+tokenColumns+` FROM site_deploy_tokens WHERE token_hash = $1`, hash))
+	token, err := scanDeployToken(s.db.QueryRowContext(ctx, findDeployTokenSQL, hash))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

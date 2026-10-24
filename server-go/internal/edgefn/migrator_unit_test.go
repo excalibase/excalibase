@@ -127,3 +127,70 @@ func TestExtractSchema_StringMentionOnlyTriggersEval(t *testing.T) {
 		t.Errorf("expected found=false, got: %+v", schema)
 	}
 }
+
+func TestQuoteIdentEscapesEmbeddedQuotes(t *testing.T) {
+	if got := quoteIdent(`a"; DROP TABLE x; --`); got != `"a""; DROP TABLE x; --"` {
+		t.Errorf("quoteIdent: got %q", got)
+	}
+}
+
+func TestMigrationDDLQuotesEveryNameAndPath(t *testing.T) {
+	if got, want := createNosqlSchemaSQL, "CREATE SCHEMA IF NOT EXISTS "+quoteIdent(nosqlSchemaName); got != want {
+		t.Errorf("create schema: got %q want %q", got, want)
+	}
+	if got := buildNosqlCreateTableSQL("users"); !strings.HasPrefix(got, `CREATE TABLE IF NOT EXISTS "nosql"."users" (`) {
+		t.Errorf("create table: got %q", got)
+	}
+	if got, want := buildValidatorCommentSQL("users", `{"a":"it's"}`), `COMMENT ON TABLE "nosql"."users" IS '{"a":"it''s"}'`; got != want {
+		t.Errorf("comment: got %q want %q", got, want)
+	}
+
+	steps, err := buildBtreeIndexSQL("users", IndexSpec{Name: "by_email", Fields: []string{"email", "org"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `CREATE INDEX IF NOT EXISTS "users_by_email" ON "nosql"."users" ((doc ->> 'email'), (doc ->> 'org'))`; steps.sql != want {
+		t.Errorf("btree: got %q want %q", steps.sql, want)
+	}
+
+	search, err := buildSearchIndexSQL("users", SearchIndexSpec{Name: "s", SearchField: "bio"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSearch := []string{
+		`ALTER TABLE "nosql"."users" ADD COLUMN IF NOT EXISTS "search_vector_bio" tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(doc ->> 'bio', ''))) STORED`,
+		`CREATE INDEX IF NOT EXISTS "users_search_s" ON "nosql"."users" USING GIN ("search_vector_bio")`,
+	}
+	for i, step := range search {
+		if step.sql != wantSearch[i] {
+			t.Errorf("search %d: got %q want %q", i, step.sql, wantSearch[i])
+		}
+	}
+
+	vector, err := buildVectorIndexSQL("users", VectorIndexSpec{Name: "v", VectorField: "emb", Dimensions: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantVector := []string{
+		`ALTER TABLE "nosql"."users" ADD COLUMN IF NOT EXISTS "embedding_emb" vector(3)`,
+		`CREATE INDEX IF NOT EXISTS "users_vector_v" ON "nosql"."users" USING ivfflat ("embedding_emb" vector_cosine_ops)`,
+	}
+	for i, step := range vector {
+		if step.sql != wantVector[i] {
+			t.Errorf("vector %d: got %q want %q", i, step.sql, wantVector[i])
+		}
+	}
+}
+
+func TestMigrationDDLRefusesAnInjectedField(t *testing.T) {
+	evil := "x') OR 1=1; DROP TABLE users; --"
+	if _, err := buildBtreeIndexSQL("users", IndexSpec{Name: "i", Fields: []string{evil}}); err == nil {
+		t.Error("btree index accepted an injected field")
+	}
+	if _, err := buildSearchIndexSQL("users", SearchIndexSpec{Name: "s", SearchField: evil}); err == nil {
+		t.Error("search index accepted an injected field")
+	}
+	if _, err := buildVectorIndexSQL("users", VectorIndexSpec{Name: "v", VectorField: evil, Dimensions: 3}); err == nil {
+		t.Error("vector index accepted an injected field")
+	}
+}

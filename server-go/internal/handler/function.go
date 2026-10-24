@@ -588,7 +588,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, _ := custommw.TenantIDFromContext(r.Context())
-	log.Printf("tenant=%s action=fn_create path=%s", tenant, r.URL.Path)
+	log.Printf("tenant=%s action=fn_create path=%s", safeLog(tenant), safeLog(r.URL.Path))
 
 	r.Body = http.MaxBytesReader(w, r.Body, int64(edgefn.MaxCodeSize+16*1024))
 	var fn edgefn.Function

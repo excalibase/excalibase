@@ -12,6 +12,11 @@ import (
 
 const tokenColumns = `token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes, project_id, permissions`
 
+const (
+	findTokenByHashSQL  = `SELECT ` + tokenColumns + ` FROM access_tokens WHERE token_hash = $1`
+	listTokensByUserSQL = `SELECT ` + tokenColumns + ` FROM access_tokens WHERE user_id = $1`
+)
+
 func (s *Store) CreateToken(ctx context.Context, t *domain.AccessToken) error {
 	createdAt := time.Now().UTC()
 	if t.CreatedAt != nil {
@@ -29,8 +34,7 @@ func (s *Store) CreateToken(ctx context.Context, t *domain.AccessToken) error {
 }
 
 func (s *Store) FindByTokenHash(ctx context.Context, hash string) (*domain.AccessToken, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+tokenColumns+` FROM access_tokens WHERE token_hash = $1`, hash)
+	row := s.db.QueryRowContext(ctx, findTokenByHashSQL, hash)
 	t, err := scanPgToken(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -42,8 +46,7 @@ func (s *Store) FindByTokenHash(ctx context.Context, hash string) (*domain.Acces
 }
 
 func (s *Store) ListTokensByUser(ctx context.Context, userID string) ([]*domain.AccessToken, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+tokenColumns+` FROM access_tokens WHERE user_id = $1`, userID)
+	rows, err := s.db.QueryContext(ctx, listTokensByUserSQL, userID)
 	if err != nil {
 		return nil, err
 	}
