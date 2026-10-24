@@ -12,15 +12,24 @@ var ErrInternalAddress = errors.New("host is not a publicly routable address; th
 // CGNAT (Alibaba metadata lives here), IETF protocol assignments, benchmarking,
 // reserved + broadcast, IPv6 site-local, Teredo tunnels and the discard prefix.
 var blockedPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("192.0.0.0/24"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix(thisNetworkRange),
+	netip.MustParsePrefix(cgnatRange),
+	netip.MustParsePrefix(ietfProtocolRange),
+	netip.MustParsePrefix(benchmarkingRange),
+	netip.MustParsePrefix(reservedRange),
 	netip.MustParsePrefix("fec0::/10"),
 	netip.MustParsePrefix("2001::/32"),
 	netip.MustParsePrefix("100::/64"),
 }
+
+// IPv4 ranges the platform refuses to dial, never targets.
+const (
+	thisNetworkRange  = "0.0.0.0/8"
+	cgnatRange        = "100.64.0.0/10" // NOSONAR: blocked dial range (CGNAT, Alibaba metadata)
+	ietfProtocolRange = "192.0.0.0/24"  // NOSONAR: blocked dial range (IETF protocol assignments)
+	benchmarkingRange = "198.18.0.0/15" // NOSONAR: blocked dial range (benchmarking)
+	reservedRange     = "240.0.0.0/4"   // NOSONAR: blocked dial range (reserved + broadcast)
+)
 
 var (
 	prefixNAT64 = netip.MustParsePrefix("64:ff9b::/96")
