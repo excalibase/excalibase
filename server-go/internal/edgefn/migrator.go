@@ -166,7 +166,7 @@ func applyTable(ctx context.Context, tx *sql.Tx, tableName string, table TableSc
 	}
 	// Use a COMMENT to attach the schema so it survives across deploys
 	// without an extra metadata table. pg_description holds it.
-	if _, err := tx.ExecContext(ctx, buildValidatorCommentSQL(tableName, string(rawValidator))); err != nil {
+	if _, err := tx.ExecContext(ctx, buildValidatorCommentSQL(tableName, string(rawValidator))); err != nil { // NOSONAR: tableName passed validateIdent and is quoted, the validator is a quoted literal
 		return fmt.Errorf("comment validator: %w", err)
 	}
 	return nil

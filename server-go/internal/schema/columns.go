@@ -125,7 +125,7 @@ func buildAlterColumnSQL(schema, table, col string, req AlterColumnRequest) ([]d
 
 // DropColumn removes a column from a table.
 func (i *Introspector) DropColumn(ctx context.Context, db *sql.DB, schema, table, col string) error {
-	if _, err := db.ExecContext(ctx, buildDropColumnSQL(schema, table, col)); err != nil {
+	if _, err := db.ExecContext(ctx, buildDropColumnSQL(schema, table, col)); err != nil { // NOSONAR: identifiers quoted by QuoteIdent; DDL cannot bind identifiers
 		return fmt.Errorf("drop column: %w", err)
 	}
 	return nil

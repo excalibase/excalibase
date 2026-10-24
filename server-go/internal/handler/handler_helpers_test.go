@@ -84,7 +84,7 @@ func TestLogEmailSent_KeepsForgedRecordsOnOneLine(t *testing.T) {
 	logged := captureLogs(t, func() {
 		logEmailSent("verify", "u@example.com\r\nINFO: email.sent kind=forged", "msg-1\n", "user-1")
 	})
-	if lines := strings.Count(strings.TrimRight(logged, "\n"), "\n"); lines != 0 {
+	if strings.Count(strings.TrimRight(logged, "\n"), "\n") != 0 {
 		t.Fatalf("one send must log one line, got %q", logged)
 	}
 }
