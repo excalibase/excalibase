@@ -111,3 +111,34 @@ excalibase_request_metrics_info{instance="x"} 1
 		t.Errorf("escaped label: %v", reading.Histograms)
 	}
 }
+
+// Lines as the engine's integration test scraped them (EXC-656).
+func TestParse_TheEnginesRealScrape(t *testing.T) {
+	text := `excalibase_requests_seconds_bucket{family="rest",outcome="ok",project="test-proj",le="0.05"} 0
+excalibase_requests_seconds_bucket{family="rest",outcome="ok",project="test-proj",le="0.1"} 1
+excalibase_requests_seconds_bucket{family="rest",outcome="ok",project="test-proj",le="10.0"} 1
+excalibase_requests_seconds_bucket{family="rest",outcome="ok",project="test-proj",le="+Inf"} 1
+excalibase_requests_seconds_count{family="rest",outcome="ok",project="test-proj"} 1
+excalibase_requests_seconds_sum{family="rest",outcome="ok",project="test-proj"} 0.09754877
+excalibase_realtime_connections{project="test-proj"} 1.0
+excalibase_realtime_connections_opened_total{project="test-proj"} 1.0
+excalibase_realtime_messages_total{project="test-proj"} 1.0
+excalibase_request_metrics_info{instance="45c1c3d1-50fb-4e37-86de-9cb075692ef7"} 1
+excalibase_request_metrics_start_time_seconds{instance="45c1c3d1-50fb-4e37-86de-9cb075692ef7"} 1.792870702E9
+excalibase_request_metrics_dropped_total 0.0
+`
+	reading, err := Parse(text)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if reading.Instance != "45c1c3d1-50fb-4e37-86de-9cb075692ef7" {
+		t.Errorf("instance: %q", reading.Instance)
+	}
+	rest := reading.Histograms[SeriesKey{Project: "test-proj", Family: "rest", Outcome: "ok"}]
+	if rest[3] != 0 || rest[4] != 1 || rest[BucketCount-1] != 1 {
+		t.Errorf("rest buckets: %v", rest)
+	}
+	if got := reading.Realtime["test-proj"]; got != (Realtime{Connections: 1, Opened: 1, Messages: 1}) {
+		t.Errorf("realtime: %+v", got)
+	}
+}
