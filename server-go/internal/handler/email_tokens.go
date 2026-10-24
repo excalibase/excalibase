@@ -12,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -42,7 +41,6 @@ type EmailTokensHandler struct {
 	store       emailTokenUsers // user lookup for verify/reset
 	studioURL   string          // Studio origin the click links open
 	productName string
-	pg          bool // true if backing db is Postgres (uses $1 placeholders)
 	verifier    *EmailVerifier
 	sessions    sessionTokens // ended on a password reset
 	publicLimit func(http.Handler) http.Handler
@@ -151,6 +149,7 @@ func (h *EmailTokensHandler) allowMailTo(address string) bool {
 // statements are plain Postgres literals.
 const (
 	insertPasswordResetSQL = `INSERT INTO password_resets (user_id, token_hash, expires_at, requested_from) VALUES ($1, $2, $3, $4)`
+	findPasswordResetSQL   = `SELECT user_id, expires_at, consumed_at FROM password_resets WHERE token_hash = $1`
 	// Claiming one link consumes every open link of its account.
 	claimPasswordResetSQL = `UPDATE password_resets SET consumed_at = $1
 		WHERE consumed_at IS NULL
@@ -158,42 +157,9 @@ const (
 		RETURNING token_hash`
 )
 
-// rebind converts SQLite-style `?` placeholders to Postgres-style `$1, $2, ...`
-// when the underlying driver is Postgres. Sqlite passes the string unchanged.
-// Bound to a single connection per handler — pg flag is set once at init.
-func (h *EmailTokensHandler) rebind(q string) string {
-	if !h.pg {
-		return q
-	}
-	var b []byte
-	n := 0
-	for i := 0; i < len(q); i++ {
-		if q[i] == '?' {
-			n++
-			b = append(b, '$')
-			b = append(b, []byte(strconv.Itoa(n))...)
-		} else {
-			b = append(b, q[i])
-		}
-	}
-	return string(b)
-}
-
 func NewEmailTokensHandler(db *sql.DB, sender email.Sender, store emailTokenUsers, studioURL, productName string) *EmailTokensHandler {
 	if productName == "" {
 		productName = "Excalibase"
-	}
-	// Detect Postgres driver so we can rewrite `?` placeholders in INSERT
-	// statements. We use the driver-name string from sql.DB (set at Open).
-	// Both pq and pgx register under "postgres", sqlite as "sqlite3" or "sqlite".
-	pg := false
-	if db != nil {
-		// Probe with a Postgres-specific syntax. If it errors with a
-		// recognisable Postgres error (or succeeds), we're on Postgres.
-		// SQLite would error with "no such function" instead.
-		var n int
-		err := db.QueryRow("SELECT 1::int").Scan(&n)
-		pg = err == nil
 	}
 	return &EmailTokensHandler{
 		db:              db,
@@ -201,7 +167,6 @@ func NewEmailTokensHandler(db *sql.DB, sender email.Sender, store emailTokenUser
 		store:           store,
 		studioURL:       strings.TrimRight(studioURL, "/"),
 		productName:     productName,
-		pg:              pg,
 		publicLimit:     middleware.RateLimit(middleware.PerIP, publicSendsPerClient, publicSendWindow),
 		confirmLimit:    middleware.RateLimit(middleware.PerIP, confirmsPerClient, confirmWindow),
 		addressLimit:    middleware.NewKeyLimiter(publicSendsPerAddress, publicSendWindow),
@@ -398,7 +363,7 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 	}
 	hash := hashToken(body.Token)
 	row := h.db.QueryRowContext(r.Context(),
-		h.rebind(`SELECT user_id, expires_at, consumed_at FROM password_resets WHERE token_hash = ?`), hash)
+		findPasswordResetSQL, hash)
 	var userID, expiresStr string
 	var consumed sql.NullString
 	if err := row.Scan(&userID, &expiresStr, &consumed); err != nil {
