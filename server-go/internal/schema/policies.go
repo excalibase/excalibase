@@ -99,7 +99,7 @@ func buildCreatePolicySQL(req CreatePolicyRequest) (string, error) {
 
 // DropPolicy drops a policy from a table.
 func (i *Introspector) DropPolicy(ctx context.Context, db *sql.DB, table, name string) error {
-	if _, err := db.ExecContext(ctx, buildDropPolicySQL(table, name)); err != nil {
+	if _, err := db.ExecContext(ctx, buildDropPolicySQL(table, name)); err != nil { // NOSONAR: identifiers quoted by QuoteIdent; DDL cannot bind identifiers
 		return fmt.Errorf("drop policy: %w", err)
 	}
 	return nil

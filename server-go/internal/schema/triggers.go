@@ -107,7 +107,7 @@ func buildCreateTriggerSQL(req CreateTriggerRequest) (string, error) {
 
 // DropTrigger drops a trigger from a table.
 func (i *Introspector) DropTrigger(ctx context.Context, db *sql.DB, schema, table, name string) error {
-	if _, err := db.ExecContext(ctx, buildDropTriggerSQL(schema, table, name)); err != nil {
+	if _, err := db.ExecContext(ctx, buildDropTriggerSQL(schema, table, name)); err != nil { // NOSONAR: identifiers quoted by QuoteIdent; DDL cannot bind identifiers
 		return fmt.Errorf("drop trigger: %w", err)
 	}
 	return nil

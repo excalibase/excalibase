@@ -286,7 +286,7 @@ func buildUpdateQuery(schema, table, pkColumn, pkValue string, data map[string]i
 
 // DeleteRow deletes a row by primary key.
 func (i *Introspector) DeleteRow(ctx context.Context, db *sql.DB, schema, table, pkColumn, pkValue string) error {
-	if _, err := db.ExecContext(ctx, buildDeleteQuery(schema, table, pkColumn), pkValue); err != nil {
+	if _, err := db.ExecContext(ctx, buildDeleteQuery(schema, table, pkColumn), pkValue); err != nil { // NOSONAR: identifiers quoted by QuoteIdent, the key bound as $1
 		return fmt.Errorf("delete row: %w", err)
 	}
 	return nil

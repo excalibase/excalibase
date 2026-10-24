@@ -84,7 +84,7 @@ func buildCreateIndexSQL(req CreateIndexRequest) (string, error) {
 
 // DropIndex drops an index by name.
 func (i *Introspector) DropIndex(ctx context.Context, db *sql.DB, schema, name string) error {
-	if _, err := db.ExecContext(ctx, buildDropIndexSQL(schema, name)); err != nil {
+	if _, err := db.ExecContext(ctx, buildDropIndexSQL(schema, name)); err != nil { // NOSONAR: identifiers quoted by QuoteIdent; DDL cannot bind identifiers
 		return fmt.Errorf("drop index: %w", err)
 	}
 	return nil

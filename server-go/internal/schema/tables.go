@@ -26,7 +26,7 @@ func (i *Introspector) CreateTable(ctx context.Context, db *sql.DB, req CreateTa
 	}
 
 	if req.Comment != "" {
-		if _, err := db.ExecContext(ctx, buildTableCommentSQL(schema, req.Name, req.Comment)); err != nil {
+		if _, err := db.ExecContext(ctx, buildTableCommentSQL(schema, req.Name, req.Comment)); err != nil { // NOSONAR: identifiers quoted by QuoteIdent, the comment by QuoteLiteral
 			return fmt.Errorf("set table comment: %w", err)
 		}
 	}
@@ -153,7 +153,7 @@ func buildUpdateTableSQL(schema, name string, req UpdateTableRequest) []ddlStep 
 
 // DropTable drops a table, optionally with CASCADE.
 func (i *Introspector) DropTable(ctx context.Context, db *sql.DB, schema, name string, cascade bool) error {
-	if _, err := db.ExecContext(ctx, buildDropTableSQL(schema, name, cascade)); err != nil {
+	if _, err := db.ExecContext(ctx, buildDropTableSQL(schema, name, cascade)); err != nil { // NOSONAR: identifiers quoted by QuoteIdent; DDL cannot bind identifiers
 		return fmt.Errorf("drop table: %w", err)
 	}
 	return nil

@@ -135,7 +135,7 @@ func TestQuoteIdentEscapesEmbeddedQuotes(t *testing.T) {
 }
 
 func TestMigrationDDLQuotesEveryNameAndPath(t *testing.T) {
-	if got, want := createNosqlSchemaSQL, `CREATE SCHEMA IF NOT EXISTS "nosql"`; got != want {
+	if got, want := createNosqlSchemaSQL, "CREATE SCHEMA IF NOT EXISTS "+quoteIdent(nosqlSchemaName); got != want {
 		t.Errorf("create schema: got %q want %q", got, want)
 	}
 	if got := buildNosqlCreateTableSQL("users"); !strings.HasPrefix(got, `CREATE TABLE IF NOT EXISTS "nosql"."users" (`) {

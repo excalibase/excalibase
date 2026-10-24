@@ -42,7 +42,10 @@ func quoteIdent(ident string) string {
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }
 
-const createNosqlSchemaSQL = `CREATE SCHEMA IF NOT EXISTS "` + nosqlSchemaName + `"`
+// createNosqlSchemaSQL is a literal; a test pins it to nosqlSchemaName.
+const createNosqlSchemaSQL = `CREATE SCHEMA IF NOT EXISTS "nosql"`
+
+const createIndexIfMissing = "CREATE INDEX IF NOT EXISTS "
 
 // ApplySchema translates the provided Schema into a sequence of additive DDL
 // statements and runs them in a single transaction. Idempotent — every
@@ -115,7 +118,7 @@ func applyTable(ctx context.Context, tx *sql.Tx, tableName string, table TableSc
 	//    fields are persisted in a single jsonb document column to match the
 	//    existing NoSQL service convention. Field-level checks live in the
 	//    application layer (the validator); the DB stores the blob.
-	if _, err := tx.ExecContext(ctx, buildNosqlCreateTableSQL(tableName)); err != nil {
+	if _, err := tx.ExecContext(ctx, buildNosqlCreateTableSQL(tableName)); err != nil { // NOSONAR: tableName passed validateIdent and is quoted; DDL cannot bind identifiers
 		return fmt.Errorf("create table: %w", err)
 	}
 
@@ -223,7 +226,7 @@ func buildBtreeIndexSQL(tableName string, idx IndexSpec) (migrationStep, error) 
 		exprs = append(exprs, "("+docPath(f)+")")
 	}
 	return migrationStep{
-		sql: "CREATE INDEX IF NOT EXISTS " + quoteIdent(tableName+"_"+idx.Name) +
+		sql: createIndexIfMissing + quoteIdent(tableName+"_"+idx.Name) +
 			" ON " + nosqlTable(tableName) + " (" + strings.Join(exprs, ", ") + ")",
 		what: "create index " + idx.Name,
 	}, nil
@@ -252,7 +255,7 @@ func buildSearchIndexSQL(tableName string, idx SearchIndexSpec) ([]migrationStep
 			what: "add search column " + colName,
 		},
 		{
-			sql: "CREATE INDEX IF NOT EXISTS " + quoteIdent(tableName+"_search_"+idx.Name) +
+			sql: createIndexIfMissing + quoteIdent(tableName+"_search_"+idx.Name) +
 				" ON " + nosqlTable(tableName) + " USING GIN (" + quoteIdent(colName) + ")",
 			what: "create search index " + idx.Name,
 		},
@@ -283,7 +286,7 @@ func buildVectorIndexSQL(tableName string, idx VectorIndexSpec) ([]migrationStep
 			what: "add vector column " + colName,
 		},
 		{
-			sql: "CREATE INDEX IF NOT EXISTS " + quoteIdent(tableName+"_vector_"+idx.Name) +
+			sql: createIndexIfMissing + quoteIdent(tableName+"_vector_"+idx.Name) +
 				" ON " + nosqlTable(tableName) + " USING ivfflat (" + quoteIdent(colName) + " vector_cosine_ops)",
 			what: "create vector index " + idx.Name,
 		},
