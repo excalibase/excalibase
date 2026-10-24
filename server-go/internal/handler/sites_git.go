@@ -254,7 +254,7 @@ func (h *SiteGitHandler) webhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		log.Printf("site builds: webhook %s: %v", r.Header.Get("X-GitHub-Delivery"), err)
+		log.Printf("site builds: webhook %s: %v", safeLog(r.Header.Get("X-GitHub-Delivery")), err)
 		httpError(w, "the delivery could not be processed", http.StatusInternalServerError)
 		return
 	}

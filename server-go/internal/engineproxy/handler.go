@@ -15,6 +15,8 @@ import (
 	"path"
 	"regexp"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/logsafe"
 )
 
 // maxCreateBody bounds the JSON the proxy reads to check a create.
@@ -227,7 +229,7 @@ func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
 	case !errors.Is(err, ErrRefused) && !errors.Is(err, errNotManaged):
 		status = http.StatusBadGateway
 	}
-	log.Printf("engine proxy: %d %s %s: %v", status, r.Method, r.URL.Path, err)
+	log.Printf("engine proxy: %d %s %s: %v", status, logsafe.Value(r.Method), logsafe.Value(r.URL.Path), err)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"message": err.Error()})
