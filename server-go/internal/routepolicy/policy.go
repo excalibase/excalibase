@@ -154,6 +154,9 @@ type Row struct {
 	// SiteDeployToken marks a route a site's deploy token may call for its own
 	// site (EXC-620); middleware.SiteDeployTokenGate refuses it everywhere else.
 	SiteDeployToken bool
+	// MetricsKey marks the route a project's metrics key may call (EXC-657);
+	// middleware.MetricsKeyGate refuses it everywhere else.
+	MetricsKey bool
 	// MySQLRefusal is why a MySQL project is refused this database route,
 	// appended to the 409 so Studio and MCP can show it (EXC-619).
 	MySQLRefusal string

@@ -13,8 +13,9 @@ import (
 const tokenColumns = `token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes, project_id, permissions`
 
 const (
-	findTokenByHashSQL  = `SELECT ` + tokenColumns + ` FROM access_tokens WHERE token_hash = $1`
-	listTokensByUserSQL = `SELECT ` + tokenColumns + ` FROM access_tokens WHERE user_id = $1`
+	findTokenByHashSQL     = `SELECT ` + tokenColumns + ` FROM access_tokens WHERE token_hash = $1`
+	listTokensByUserSQL    = `SELECT ` + tokenColumns + ` FROM access_tokens WHERE user_id = $1`
+	listTokensByProjectSQL = `SELECT ` + tokenColumns + ` FROM access_tokens WHERE project_id = $1 ORDER BY created_at, token_hash`
 )
 
 func (s *Store) CreateToken(ctx context.Context, t *domain.AccessToken) error {
@@ -46,7 +47,16 @@ func (s *Store) FindByTokenHash(ctx context.Context, hash string) (*domain.Acces
 }
 
 func (s *Store) ListTokensByUser(ctx context.Context, userID string) ([]*domain.AccessToken, error) {
-	rows, err := s.db.QueryContext(ctx, listTokensByUserSQL, userID)
+	return s.listTokens(ctx, listTokensByUserSQL, userID)
+}
+
+// ListTokensByProject is every token bound to projectID, whoever owns it.
+func (s *Store) ListTokensByProject(ctx context.Context, projectID string) ([]*domain.AccessToken, error) {
+	return s.listTokens(ctx, listTokensByProjectSQL, projectID)
+}
+
+func (s *Store) listTokens(ctx context.Context, query, arg string) ([]*domain.AccessToken, error) {
+	rows, err := s.db.QueryContext(ctx, query, arg)
 	if err != nil {
 		return nil, err
 	}

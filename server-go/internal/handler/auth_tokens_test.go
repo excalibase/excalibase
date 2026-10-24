@@ -359,3 +359,23 @@ func TestRegister_AutoLoginTokenIsBoundedSession(t *testing.T) {
 		t.Errorf("registration token must be a bounded session token: %+v", stored)
 	}
 }
+
+// EXC-657: a metrics key is renewed only by its project's Admins (revoke, then
+// create), never by its owner through the generic rotate route.
+func TestRotateToken_RefusesAMetricsKey(t *testing.T) {
+	f := newTokenFixture(t)
+	expires := time.Now().Add(30 * 24 * time.Hour)
+	// A Studio session: no PAT subset rule stands in the way.
+	caller := f.mint(nameCI, tokenUser, auth.ScopeSession, &expires)
+	key := f.mint("grafana", tokenUser, scopesReadWrite, &expires)
+	f.ts.tokens[auth.HashToken(key)].Scopes = auth.ScopeMetricsRead
+	f.ts.tokens[auth.HashToken(key)].ProjectID = rotateProject
+
+	code, resp := rotate(f, caller, key, `{}`)
+	if code != http.StatusForbidden {
+		t.Fatalf("rotate: got %d %v", code, resp)
+	}
+	if len(f.ts.tokens) != 2 {
+		t.Errorf("nothing is minted: %d tokens", len(f.ts.tokens))
+	}
+}

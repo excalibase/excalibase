@@ -497,6 +497,8 @@ var projectOwnedTables = []projectOwnedTable{
 	{"storage_quota", `DELETE FROM storage_quota WHERE project_id = $1`},
 	{"project_members", `DELETE FROM project_members WHERE project_id = $1`},
 	{"access_tokens", `DELETE FROM access_tokens WHERE project_id = $1`},
+	// Running counters, not history: a later project with this id starts from zero.
+	{"request_metric_totals", `DELETE FROM request_metric_totals WHERE project_id = $1`},
 }
 
 // projectOwnedTable pairs a table with its constant delete statement.

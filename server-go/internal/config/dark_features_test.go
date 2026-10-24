@@ -54,3 +54,10 @@ func TestDarkFeatures_EveryDeclaredFeatureHasAVariable(t *testing.T) {
 		t.Errorf("%d variables for %d declared features", len(featureEnv), len(features.All()))
 	}
 }
+
+// EXC-657: the chart sets this exact name from features.metricsEndpoint.
+func TestDarkFeatures_MetricsEndpointVariable(t *testing.T) {
+	if got := featureEnv[features.MetricsEndpoint]; got != "FEATURE_METRICSENDPOINT" {
+		t.Errorf("metrics endpoint variable = %q", got)
+	}
+}

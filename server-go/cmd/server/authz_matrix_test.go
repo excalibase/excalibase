@@ -80,6 +80,13 @@ func buildMatrix(t *testing.T) (http.Handler, callers, callers) {
 // buildMatrixWith is buildMatrix under cfg, with deps adjusted before the router is built.
 func buildMatrixWith(t *testing.T, cfg config.AppConfig, adjust func(*handlerDeps)) (http.Handler, callers, callers) {
 	t.Helper()
+	router, who, admins, _ := buildMatrixPlatform(t, cfg, func(deps *handlerDeps, _ *fakePlatform) { adjust(deps) })
+	return router, who, admins
+}
+
+// buildMatrixPlatform is buildMatrixWith that also hands over the fake platform store.
+func buildMatrixPlatform(t *testing.T, cfg config.AppConfig, adjust func(*handlerDeps, *fakePlatform)) (http.Handler, callers, callers, *fakePlatform) {
+	t.Helper()
 	instances := fakestore.NewInstances()
 	instances.Create(&domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"})
 	instances.Create(&domain.DatabaseInstance{ProjectID: matrixProjectB, OrgID: matrixOrgB, Status: "ACTIVE"})
@@ -109,8 +116,8 @@ func buildMatrixWith(t *testing.T, cfg config.AppConfig, adjust func(*handlerDep
 	issue(admins, callerAdminSession, matrixAdminID, domain.AccessToken{Scopes: auth.ScopeSession})
 
 	deps := matrixDeps(t, instances)
-	adjust(deps)
-	return buildRouter(cfg, platform, instances, deps), who, admins
+	adjust(deps, platform)
+	return buildRouter(cfg, platform, instances, deps), who, admins, platform
 }
 
 // matrixDeps wires the handlers whose registration or reachable path the
@@ -162,6 +169,10 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		rlMailSend:         custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		rlTokenCreate:      custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		rlOrgCreate:        custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		rlMetricsScrape:    custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Minute),
+		// No platform DB: past the gates both answer from empty fakes.
+		metricsKeysHandler:     handler.NewMetricsKeysHandler(fakestore.NewTokens(), nil),
+		metricsEndpointHandler: handler.NewMetricsEndpointHandler(storedTotals{}),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),

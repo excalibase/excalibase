@@ -80,6 +80,7 @@ var gateRefusalBodies = map[string]bool{
 	`{"error":"this route requires a write-capable credential"}`:                   true,
 	`{"error":"token is not permitted to call this endpoint"}`:                     true,
 	`{"error":"a deploy token may only deploy its own site and read its deploys"}`: true,
+	`{"error":"a metrics key may only read its own project's metrics"}`:            true,
 	// Refusals the handlers write themselves, in their own words.
 	`{"error":"org not found","status":404}`:                 true,
 	`{"error":"insufficient permissions","status":403}`:      true,
@@ -213,6 +214,9 @@ func policyPrincipals(platform *fakePlatform) []principal {
 	// "x" of project A, the site every {siteId} in the matrix renders as.
 	out = append(out, principal{Principal: routepolicy.Principal{Name: "siteDeployToken", OrgRole: domain.OrgRoleDeveloper,
 		Restricted: true, SiteDeployToken: true}, token: policyDeployToken})
+	// EXC-657: an org admin's metrics key for project A, read-only and default-deny.
+	add(routepolicy.Principal{Name: "metricsKey", OrgRole: domain.OrgRoleAdmin, ReadOnly: true, Restricted: true, MetricsKey: true},
+		policyAdminID, "user", domain.AccessToken{Scopes: auth.ScopeMetricsRead, ProjectID: matrixProjectA})
 	addCapability(platform, &out, "svcAuthToken", policySvcAuthID, chartPermissions[svcAuth])
 	addCapability(platform, &out, "svcGraphqlToken", policySvcGqlID, chartPermissions[svcGraphql])
 	return out

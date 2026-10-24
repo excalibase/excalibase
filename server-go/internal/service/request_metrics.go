@@ -32,6 +32,13 @@ type RequestMetricsStore interface {
 	PruneRequestMetricsBefore(ctx context.Context, cutoff time.Time) error
 }
 
+// RequestTotalsStore is the platform DB's request_metric_totals table (EXC-657).
+type RequestTotalsStore interface {
+	AddRequestTotals(ctx context.Context, rows []domain.RequestMetricsRow) error
+	RequestTotals(ctx context.Context, projectID string) ([]domain.RequestTotalsRow, error)
+	PruneRequestTotalsBefore(ctx context.Context, cutoff time.Time) error
+}
+
 // RequestScraper reads every graphql and auth pod's request counters.
 type RequestScraper interface {
 	Scrape(ctx context.Context) ([]requestmetrics.Reading, []error)
@@ -45,6 +52,14 @@ type RequestMetricsService struct {
 	instances storage.InstanceStore
 	tracker   *requestmetrics.Tracker
 	now       func() time.Time
+	// totals, when set, also sums every sample for the metrics endpoint.
+	totals RequestTotalsStore
+}
+
+// SetTotals adds every sample to the running totals the metrics endpoint
+// exports; wired only while that feature is on (EXC-657).
+func (s *RequestMetricsService) SetTotals(totals RequestTotalsStore) {
+	s.totals = totals
 }
 
 func NewRequestMetricsService(scraper RequestScraper, store RequestMetricsStore, instances storage.InstanceStore) *RequestMetricsService {
@@ -82,6 +97,19 @@ func (s *RequestMetricsService) Sample(ctx context.Context) {
 	}
 	if err := s.store.PruneRequestMetricsBefore(ctx, now.Add(-metricsRetention)); err != nil {
 		log.Printf("request metrics: prune: %v", err)
+	}
+	s.addTotals(ctx, rows, now)
+}
+
+func (s *RequestMetricsService) addTotals(ctx context.Context, rows []domain.RequestMetricsRow, now time.Time) {
+	if s.totals == nil {
+		return
+	}
+	if err := s.totals.AddRequestTotals(ctx, rows); err != nil {
+		log.Printf("request metrics: add totals: %v", err)
+	}
+	if err := s.totals.PruneRequestTotalsBefore(ctx, now.Add(-metricsRetention)); err != nil {
+		log.Printf("request metrics: prune totals: %v", err)
 	}
 }
 

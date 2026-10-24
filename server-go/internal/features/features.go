@@ -31,11 +31,14 @@ const (
 	RequestMetrics Feature = "requestmetrics"
 	// Advisors are a project's security and performance checks, in Studio and MCP (EXC-655).
 	Advisors Feature = "advisors"
+	// MetricsEndpoint is each project's Prometheus metrics endpoint and the
+	// metrics keys that read it (EXC-657).
+	MetricsEndpoint Feature = "metricsendpoint"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint}
 }
 
 type Flags interface {

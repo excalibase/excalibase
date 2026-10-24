@@ -639,6 +639,35 @@ func requestSampling(cfg config.AppConfig, requests *service.RequestMetricsServi
 	return requests
 }
 
+// metricsEndpointTotals is the running totals table, kept only while the
+// metrics endpoint is on so turning it off writes nothing new (EXC-657).
+func metricsEndpointTotals(cfg config.AppConfig, sqlStore any) service.RequestTotalsStore {
+	if !features.Enabled(context.Background(), cfg.Features(), features.MetricsEndpoint) {
+		return nil
+	}
+	totals, _ := sqlStore.(service.RequestTotalsStore)
+	return totals
+}
+
+func newMetricsKeysHandler(sqlStore storage.PlatformStore) *handler.MetricsKeysHandler {
+	keys, ok := sqlStore.(handler.MetricsKeyStore)
+	if !ok {
+		return nil
+	}
+	audit, _ := sqlStore.(interface {
+		LogAudit(ctx context.Context, entry *domain.AuditEntry) error
+	})
+	return handler.NewMetricsKeysHandler(keys, audit)
+}
+
+func newMetricsEndpointHandler(sqlStore storage.PlatformStore, totals service.RequestTotalsStore) *handler.MetricsEndpointHandler {
+	history, ok := sqlStore.(service.MetricsHistory)
+	if !ok {
+		return nil
+	}
+	return handler.NewMetricsEndpointHandler(service.NewMetricsExportService(history, totals))
+}
+
 // restoreSweepLockID is the advisory lock the restore sweeper leads on. It
 // must stay distinct from every other advisory lock id the platform takes.
 const restoreSweepLockID int64 = 0x51c2_7d0e_9a41_3b77
@@ -982,6 +1011,12 @@ type handlerDeps struct {
 	rlTokenCreate func(http.Handler) http.Handler
 	// rlOrgCreate bounds organization creation per user (EXC-553).
 	rlOrgCreate func(http.Handler) http.Handler
+	// rlMetricsScrape bounds scrapes of a project's metrics endpoint (EXC-657).
+	rlMetricsScrape func(http.Handler) http.Handler
+	// metricsKeysHandler and metricsEndpointHandler serve the Prometheus
+	// endpoint and its keys (EXC-657); nil without the platform DB tables.
+	metricsKeysHandler     *handler.MetricsKeysHandler
+	metricsEndpointHandler *handler.MetricsEndpointHandler
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1547,6 +1582,10 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
 	requestMetricsSvc := newRequestMetricsService(cfg, sqlStore, store)
+	requestTotals := metricsEndpointTotals(cfg, sqlStore)
+	if requestMetricsSvc != nil && requestTotals != nil {
+		requestMetricsSvc.SetTotals(requestTotals)
+	}
 	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 
@@ -1720,17 +1759,20 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 			// reflects admin edits to tier_configs without a redeploy.
 			resolveTier: provSvc.TierConfig,
 		},
-		rlUnauth:      custommw.RateLimit(custommw.PerIP, 30, time.Minute),
-		rlAuthed:      custommw.RateLimit(custommw.PerUser, 600, time.Minute),
-		rlDataPlane:   custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
-		rlMailSend:    custommw.RateLimit(custommw.PerUser, 5, time.Hour),
-		rlTokenCreate: newTokenCreateLimiter(),
-		rlOrgCreate:   newOrgCreateLimiter(),
-		mcpAudit:      sqlStore,
-		features:      cfg.Features(),
-		activity:      custommw.ProjectActivity(activityRecorder),
-		emailSender:   emailSender,
-		storageSvc:    storageSvc,
+		rlUnauth:               custommw.RateLimit(custommw.PerIP, 30, time.Minute),
+		rlAuthed:               custommw.RateLimit(custommw.PerUser, 600, time.Minute),
+		rlDataPlane:            custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
+		rlMailSend:             custommw.RateLimit(custommw.PerUser, 5, time.Hour),
+		rlTokenCreate:          newTokenCreateLimiter(),
+		rlOrgCreate:            newOrgCreateLimiter(),
+		rlMetricsScrape:        newMetricsScrapeLimiter(),
+		metricsKeysHandler:     newMetricsKeysHandler(sqlStore),
+		metricsEndpointHandler: newMetricsEndpointHandler(sqlStore, requestTotals),
+		mcpAudit:               sqlStore,
+		features:               cfg.Features(),
+		activity:               custommw.ProjectActivity(activityRecorder),
+		emailSender:            emailSender,
+		storageSvc:             storageSvc,
 		// EXC-11: server-to-server mail relay for excalibase-auth. Its
 		// authorization is the capability gate, wired at the mount below.
 		internalEmail: handler.NewInternalEmailHandler(emailSender),
@@ -1792,6 +1834,8 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	r.Use(auth.ExtractAuth(sqlStore))
 	// A site deploy token (EXC-620) reaches only its own site's deploys.
 	r.Use(custommw.SiteDeployTokenGate(d.siteDeployTokens, sqlStore))
+	// A metrics key (EXC-657) reaches only its own project's metrics endpoint.
+	r.Use(custommw.MetricsKeyGate)
 	// Capability tokens (the platform's own service principals) are
 	// default-deny: mounted here, the gate covers every route including ones
 	// added later. Human PATs and sessions pass straight through.
@@ -2011,6 +2055,14 @@ func buildSSOProvidersHandler(cfg config.AppConfig, vc vaultclient.VaultClient, 
 // tokenCreateBudget is how many personal access tokens one user may mint per
 // hour. Install scripts mint two; nobody legitimately needs more than a few.
 const tokenCreateBudget = 20
+
+// metricsScrapesPerMinute is a scrape a second for one key holder on one
+// project; the data changes once a minute.
+const metricsScrapesPerMinute = 60
+
+func newMetricsScrapeLimiter() func(http.Handler) http.Handler {
+	return custommw.RateLimit(custommw.PerProjectAndUser, metricsScrapesPerMinute, time.Minute)
+}
 
 func newTokenCreateLimiter() func(http.Handler) http.Handler {
 	return custommw.RateLimit(custommw.PerUser, tokenCreateBudget, time.Hour)
@@ -2277,6 +2329,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 		d.sdkKeysHandler.Routes(r)
 	})
+	mountMetricsEndpoint(r, sqlStore, store, d)
 	// What AI coding tools did in the project through MCP (EXC-544).
 	r.Route("/api/projects/{projectId}/ai-activity", func(r chi.Router) {
 		r.Use(features.Require(d.features, features.MCP))
@@ -2392,6 +2445,32 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		// on the root router because internal callers don't have a
 		// user JWT and don't ride the project-access middleware.
 		d.storageHandler.InternalRoutes(r)
+	}
+}
+
+// mountMetricsEndpoint serves a project's metrics to its own Prometheus,
+// Grafana or Datadog (EXC-657): any member or the project's metrics key reads
+// it; only Admins make and revoke keys. Scrapes do not count as project activity.
+func mountMetricsEndpoint(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
+	if d.metricsEndpointHandler != nil {
+		r.Route("/api/projects/{projectId}/metrics", func(r chi.Router) {
+			r.Use(features.Require(d.features, features.MetricsEndpoint))
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(d.rlMetricsScrape)
+			r.Get("/", d.metricsEndpointHandler.Serve)
+		})
+	}
+	if d.metricsKeysHandler != nil {
+		r.Route("/api/projects/{projectId}/metrics-keys", func(r chi.Router) {
+			r.Use(features.Require(d.features, features.MetricsEndpoint))
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
+			d.metricsKeysHandler.Routes(d.rlTokenCreate)(r)
+		})
 	}
 }
 
