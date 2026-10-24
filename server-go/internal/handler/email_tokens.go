@@ -478,7 +478,7 @@ func hashToken(token string) string {
 // is impossible without the address.
 func logEmailSent(kind, recipient, messageID, userID string) {
 	log.Printf("INFO: email.sent kind=%s to=%s userId=%s sesMessageId=%s",
-		kind, recipient, userID, messageID)
+		safeLog(kind), safeLog(recipient), safeLog(userID), safeLog(messageID))
 }
 
 // minimum context check so callers can detect missing wiring early
