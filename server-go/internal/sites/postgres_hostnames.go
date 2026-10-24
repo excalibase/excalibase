@@ -127,9 +127,11 @@ func (s *PostgresStore) CreateHostname(ctx context.Context, hostname *CustomHost
 	return tx.Commit()
 }
 
+const getHostnameSQL = `SELECT ` + hostnameColumns + `
+		FROM site_hostnames WHERE project_id = $1 AND site_id = $2 AND id = $3`
+
 func (s *PostgresStore) GetHostname(ctx context.Context, projectID, siteID, id string) (*CustomHostname, error) {
-	hostname, err := scanHostname(s.db.QueryRowContext(ctx, `SELECT `+hostnameColumns+`
-		FROM site_hostnames WHERE project_id = $1 AND site_id = $2 AND id = $3`, projectID, siteID, id))
+	hostname, err := scanHostname(s.db.QueryRowContext(ctx, getHostnameSQL, projectID, siteID, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

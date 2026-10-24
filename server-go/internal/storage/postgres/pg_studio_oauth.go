@@ -37,10 +37,11 @@ func (s *Store) ConsumeOAuthState(ctx context.Context, stateHash string, now tim
 	return &state, nil
 }
 
+const findUserByIdentitySQL = `SELECT ` + prefixedUserColumns + ` FROM users u JOIN studio_identities i ON i.user_id = u.id
+		 WHERE i.provider = $1 AND i.subject = $2`
+
 func (s *Store) FindUserByIdentity(ctx context.Context, provider, subject string) (*domain.User, error) {
-	return scanUser(s.db.QueryRowContext(ctx,
-		`SELECT `+prefixedUserColumns+` FROM users u JOIN studio_identities i ON i.user_id = u.id
-		 WHERE i.provider = $1 AND i.subject = $2`, provider, subject))
+	return scanUser(s.db.QueryRowContext(ctx, findUserByIdentitySQL, provider, subject))
 }
 
 func (s *Store) LinkStudioIdentity(ctx context.Context, provider, subject, userID, email string) error {

@@ -176,9 +176,11 @@ func (r *RestoreJobsStore) FailAbandonedRestoreJobs(ctx context.Context, owner s
 // into — and both are legitimate readers of their own restore, so either side
 // matches. Every other project gets no row at all: scoping here, in the query,
 // means no caller can reach a job by id alone (EXC-399).
+const findRestoreJobSQL = restoreJobColumns + `
+		WHERE id = $1 AND ($2 IN (source_project_id, new_project_id))`
+
 func (r *RestoreJobsStore) FindRestoreJob(ctx context.Context, projectID, id string) (*domain.RestoreJob, error) {
-	row := r.s.db.QueryRowContext(ctx, restoreJobColumns+`
-		WHERE id = $1 AND ($2 IN (source_project_id, new_project_id))`, id, projectID)
+	row := r.s.db.QueryRowContext(ctx, findRestoreJobSQL, id, projectID)
 	return scanPgRestoreJob(row)
 }
 
