@@ -30,6 +30,7 @@ type MetricsService struct {
 	table      MetricsHistory
 	alerts     *AlertingService
 	tierLimits TierLimits
+	requests   RequestSampler
 }
 
 func NewMetricsService(store storage.InstanceStore, client k8s.KubeClient, storagePath string) *MetricsService {

@@ -256,6 +256,7 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | GET | `/api/provision/{id}/slow-queries/?sort=total\|mean&limit=N` | Yes | The project's own normalized statements, Postgres or MySQL (`FEATURE_SLOWQUERIES`) |
 | POST | `/api/provision/{id}/slow-queries/reset` | Yes | Developer+: clear the project's statement statistics |
 | POST | `/api/provision/{id}/slow-queries/enable` | Yes | Admin+: turn statistics on for a database created before the feature; restarts Postgres once |
+| GET | `/api/provision/{id}/requests?range=1h\|24h\|7d` | Yes | The project's GraphQL, REST, auth and realtime request counts, error counts and p50/p95 latency, sampled every minute on Kubernetes (`FEATURE_REQUESTMETRICS`, scraping `REQUEST_METRICS_TARGETS`) |
 | GET | `/api/provision/{id}/audit` | Yes | Per-project audit log |
 | POST | `/api/provision/{id}/migrations` | Yes | Apply SQL migration |
 | POST | `/api/provision/{id}/snapshot/export` | Yes | pg_dump export (never the `auth` schema) |

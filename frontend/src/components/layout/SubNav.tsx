@@ -16,6 +16,7 @@ export function SubNav({ sectionKey }: SubNavProps) {
   const { data: documentDb = false } = useProjectIsDocumentDB(projectId ?? '');
   const { data: project } = useInstance(projectId ?? '');
   const { enabled: slowqueries } = useFeatureEnabled('slowqueries');
+  const { enabled: requestmetrics } = useFeatureEnabled('requestmetrics');
 
   if (!section?.children) return null;
 
@@ -27,7 +28,7 @@ export function SubNav({ sectionKey }: SubNavProps) {
         </h2>
       </div>
       <nav className="flex-1 py-2 px-2 space-y-0.5 overflow-y-auto">
-        {visibleNavItems(section.children, documentDb, !isMySQLProject(project), { slowqueries }).map((item) => {
+        {visibleNavItems(section.children, documentDb, !isMySQLProject(project), { slowqueries, requestmetrics }).map((item) => {
           const Icon = item.icon;
           return (
             <NavLink

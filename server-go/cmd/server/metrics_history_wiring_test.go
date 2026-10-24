@@ -59,7 +59,7 @@ func TestMetricsHistoryIsKeptInThePlatformDBOnKubernetes(t *testing.T) {
 	metrics := service.NewMetricsService(fakestore.NewInstances(), k8s.NewMockClient(), t.TempDir())
 	alerts := service.NewAlertingService(t.TempDir())
 
-	wireMetricsHistory(config.AppConfig{}, table, k8s.NewMockClient(), metrics, alerts)
+	wireMetricsHistory(config.AppConfig{}, table, k8s.NewMockClient(), metrics, alerts, nil)
 
 	history, err := metrics.GetMetricsHistory(context.Background(), "p1", 10)
 	if err != nil || history.TotalPoints != 1 {
@@ -76,7 +76,7 @@ func TestASingleHostKeepsAlertsInThePlatformDBAndSamplesNothing(t *testing.T) {
 	metrics := service.NewMetricsService(fakestore.NewInstances(), nil, t.TempDir())
 	alerts := service.NewAlertingService(t.TempDir())
 
-	wireMetricsHistory(config.AppConfig{ProvisionerMode: "docker"}, table, nil, metrics, alerts)
+	wireMetricsHistory(config.AppConfig{ProvisionerMode: "docker"}, table, nil, metrics, alerts, nil)
 
 	if history, _ := metrics.GetMetricsHistory(context.Background(), "p1", 10); history.TotalPoints != 0 {
 		t.Fatalf("history = %+v, want the file's (none)", history)
@@ -92,7 +92,7 @@ func TestMetricsHistoryWiringNeedsTheTables(t *testing.T) {
 	metrics := service.NewMetricsService(fakestore.NewInstances(), k8s.NewMockClient(), t.TempDir())
 	alerts := service.NewAlertingService(t.TempDir())
 	var bare storage.PlatformStore
-	wireMetricsHistory(config.AppConfig{}, bare, k8s.NewMockClient(), metrics, alerts)
+	wireMetricsHistory(config.AppConfig{}, bare, k8s.NewMockClient(), metrics, alerts, nil)
 	alerts.AddAlert(domain.Alert{ID: "a1", ProjectID: "p1"})
 	if got := alerts.GetActiveAlerts(); len(got) != 1 {
 		t.Fatalf("active = %+v, want the alert kept in memory", got)

@@ -54,6 +54,7 @@ const IndexesPage = lazy(() => import('./pages/IndexesPage').then(m => ({ defaul
 const TypesPage = lazy(() => import('./pages/TypesPage').then(m => ({ default: m.TypesPage })));
 const AdvisorsPage = lazy(() => import('./pages/AdvisorsPage').then(m => ({ default: m.AdvisorsPage })));
 const LogExplorerPage = lazy(() => import('./pages/LogExplorerPage').then(m => ({ default: m.LogExplorerPage })));
+const RequestsPage = lazy(() => import('./pages/RequestsPage').then(m => ({ default: m.RequestsPage })));
 const SlowQueriesPage = lazy(() => import('./pages/SlowQueriesPage').then(m => ({ default: m.SlowQueriesPage })));
 const PlatformAdminPage = lazy(() => import('./pages/PlatformAdminPage').then(m => ({ default: m.PlatformAdminPage })));
 const ContainersPage = lazy(() => import('./pages/ContainersPage').then(m => ({ default: m.ContainersPage })));
@@ -158,6 +159,7 @@ export default function App() {
               <Route path="operations/backups" element={<BackupsPage />} />
               <Route path="monitoring/metrics" element={<MetricsPage />} />
               <Route path="monitoring/logs" element={<LogExplorerPage />} />
+              <Route path="monitoring/requests" element={<FeatureGate feature="requestmetrics"><RequestsPage /></FeatureGate>} />
             </Route>
             {/* Containers */}
             <Route path="containers" element={<ContainersPage />} />

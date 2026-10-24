@@ -113,6 +113,9 @@ type AppConfig struct {
 	// on busy minikube clusters and only sees logs since pod start).
 	LokiURL string
 
+	// RequestMetricsTargets are scraped for the request charts (EXC-656).
+	RequestMetricsTargets []string
+
 	// FnEgressDefaultHosts is the operator-level outbound allowlist every
 	// project's edge functions get in addition to their own setting:
 	// comma-separated host, host:port or "*.suffix" entries in Deno
@@ -413,6 +416,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateAppLocalRegistries(); err != nil {
 		return err
 	}
+	if err := validateRequestMetricsTargets(c.RequestMetricsTargets); err != nil {
+		return err
+	}
 	if err := c.validateSites(); err != nil {
 		return err
 	}
@@ -493,6 +499,7 @@ func load() AppConfig {
 		EmailReplyTo:                   envOr("EMAIL_REPLY_TO", ""),
 		StoragePublicURL:               envOr("STORAGE_PUBLIC_URL", ""),
 		LokiURL:                        envOr("LOKI_URL", ""),
+		RequestMetricsTargets:          loadRequestMetricsTargets(),
 		PromURL:                        envOr("PROM_URL", ""),
 		FnEgressDefaultHosts:           envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),
 		CapacityHeadroomPercent:        envInt("CAPACITY_HEADROOM_PERCENT", 15),
