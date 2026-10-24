@@ -131,7 +131,7 @@ func TestRequestCharts_MergesRowsIntoStepsWithPercentilesAcrossThem(t *testing.T
 		{ProjectID: "p1", Timestamp: clock.Add(-2 * time.Hour), Family: "graphql", Requests: 1000},
 	}
 
-	charts, err := svc.Charts(context.Background(), "p1", "1h")
+	charts, err := svc.Chart(context.Background(), "p1", "1h")
 	if err != nil {
 		t.Fatalf("Charts: %v", err)
 	}
@@ -167,12 +167,12 @@ func TestRequestCharts_MergesRowsIntoStepsWithPercentilesAcrossThem(t *testing.T
 func TestRequestCharts_EachRangeHasItsStep(t *testing.T) {
 	svc, _, _ := requestFixture(t)
 	for rangeName, step := range map[string]int{"1h": 60, "24h": 900, "7d": 3600} {
-		charts, err := svc.Charts(context.Background(), "p1", rangeName)
+		charts, err := svc.Chart(context.Background(), "p1", rangeName)
 		if err != nil || charts.StepSeconds != step || charts.Points == nil || charts.Totals == nil {
 			t.Errorf("%s: %+v %v", rangeName, charts, err)
 		}
 	}
-	if _, err := svc.Charts(context.Background(), "p1", "30d"); !errors.Is(err, ErrUnknownChartRange) {
+	if _, err := svc.Chart(context.Background(), "p1", "30d"); !errors.Is(err, ErrUnknownChartRange) {
 		t.Errorf("an unknown range is refused: %v", err)
 	}
 }

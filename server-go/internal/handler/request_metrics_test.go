@@ -20,7 +20,7 @@ type fakeCharts struct {
 	err                error
 }
 
-func (f *fakeCharts) Charts(_ context.Context, projectID, rangeName string) (*domain.RequestCharts, error) {
+func (f *fakeCharts) Chart(_ context.Context, projectID, rangeName string) (*domain.RequestCharts, error) {
 	f.project, f.rangeName = projectID, rangeName
 	if f.err != nil {
 		return nil, f.err
@@ -29,7 +29,7 @@ func (f *fakeCharts) Charts(_ context.Context, projectID, rangeName string) (*do
 		Points: []domain.RequestChartPoint{}, Totals: []domain.RequestChartPoint{}}, nil
 }
 
-func requestChartsRouter(source RequestChartsSource) chi.Router {
+func requestChartsRouter(source RequestCharter) chi.Router {
 	r := chi.NewRouter()
 	r.Get("/api/provision/{projectId}/requests", NewRequestMetricsHandler(source).Charts)
 	return r

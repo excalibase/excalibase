@@ -12,17 +12,17 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/service"
 )
 
-// RequestChartsSource answers a project's request history.
-type RequestChartsSource interface {
-	Charts(ctx context.Context, projectID, rangeName string) (*domain.RequestCharts, error)
+// RequestCharter answers a project's request history.
+type RequestCharter interface {
+	Chart(ctx context.Context, projectID, rangeName string) (*domain.RequestCharts, error)
 }
 
 // RequestMetricsHandler serves Studio's request charts (EXC-656).
 type RequestMetricsHandler struct {
-	source RequestChartsSource
+	source RequestCharter
 }
 
-func NewRequestMetricsHandler(source RequestChartsSource) *RequestMetricsHandler {
+func NewRequestMetricsHandler(source RequestCharter) *RequestMetricsHandler {
 	return &RequestMetricsHandler{source: source}
 }
 
@@ -33,7 +33,7 @@ func (h *RequestMetricsHandler) Charts(w http.ResponseWriter, r *http.Request) {
 		rangeName = "1h"
 	}
 	projectID := chi.URLParam(r, "projectId")
-	charts, err := h.source.Charts(r.Context(), projectID, rangeName)
+	charts, err := h.source.Chart(r.Context(), projectID, rangeName)
 	if errors.Is(err, service.ErrUnknownChartRange) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return

@@ -108,7 +108,7 @@ func rowOf(key requestmetrics.Key, span requestmetrics.Usage, at time.Time) doma
 
 // Charts is a project's request history over rangeName, merged per step and
 // per family; steps without traffic are left out.
-func (s *RequestMetricsService) Charts(ctx context.Context, projectID, rangeName string) (*domain.RequestCharts, error) {
+func (s *RequestMetricsService) Chart(ctx context.Context, projectID, rangeName string) (*domain.RequestCharts, error) {
 	window, ok := chartRanges[rangeName]
 	if !ok {
 		return nil, ErrUnknownChartRange

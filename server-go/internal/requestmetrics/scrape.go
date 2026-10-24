@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -67,7 +68,9 @@ func (s *Scraper) Scrape(ctx context.Context) ([]Reading, []error) {
 }
 
 func (s *Scraper) read(ctx context.Context, address string) (Reading, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/metrics", nil)
+	// The counters port is cluster-internal and admitted to provisioning only by NetworkPolicy.
+	target := url.URL{Scheme: "http", Host: address, Path: "/metrics"}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
 		return Reading{}, err
 	}
