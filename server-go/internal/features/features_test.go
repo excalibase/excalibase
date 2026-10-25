@@ -84,3 +84,20 @@ func TestRequire_PassesThroughWhenOn(t *testing.T) {
 		t.Fatalf("on: %d", rec.Code)
 	}
 }
+
+func TestWhenOnAppliesTheMiddlewareOnlyWhileTheFeatureIsOn(t *testing.T) {
+	refuse := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
+	}
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	for _, tc := range []struct {
+		flags Flags
+		want  int
+	}{{NewStatic(AuthOAuth), http.StatusForbidden}, {NewStatic(), http.StatusOK}} {
+		w := httptest.NewRecorder()
+		WhenOn(tc.flags, AuthOAuth, refuse)(ok).ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/", nil))
+		if w.Code != tc.want {
+			t.Errorf("status = %d, want %d", w.Code, tc.want)
+		}
+	}
+}

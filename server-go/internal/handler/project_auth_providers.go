@@ -18,6 +18,8 @@ import (
 const (
 	auditActionAuthProviderUpdate = "auth_provider.update"
 	auditResourceAuthProvider     = "auth_provider"
+	auditActionAuthSettingsUpdate = "auth_settings.update"
+	auditResourceAuthSettings     = "auth_settings"
 	authProviderSecretField       = "client_secret"
 	errAuthProvidersUnavailable   = "sign-in providers are not available"
 	errAuthProvidersRead          = "failed to read the sign-in providers"
@@ -211,19 +213,24 @@ func (h *ProvisioningHandler) authProviderViewFor(provider domain.ProjectAuthPro
 
 // recordAuthProvider audits the change best-effort; the secret is never in it.
 func (h *ProvisioningHandler) recordAuthProvider(r *http.Request, projectID string, saved domain.ProjectAuthProvider, secretChanged bool) {
+	details, _ := json.Marshal(map[string]any{"enabled": saved.Enabled, "clientId": saved.ClientID, "secretChanged": secretChanged})
+	h.writeAuthAudit(r, projectID, auditActionAuthProviderUpdate, auditResourceAuthProvider, saved.Provider, string(details))
+}
+
+// writeAuthAudit records a sign-in settings change best-effort.
+func (h *ProvisioningHandler) writeAuthAudit(r *http.Request, projectID, action, resource, resourceID, details string) {
 	if h.authOAuth.Audit == nil {
 		return
 	}
-	details, _ := json.Marshal(map[string]any{"enabled": saved.Enabled, "clientId": saved.ClientID, "secretChanged": secretChanged})
 	now := time.Now()
 	entry := &domain.AuditEntry{
-		Action: auditActionAuthProviderUpdate, Resource: auditResourceAuthProvider, ResourceID: saved.Provider,
-		ProjectID: projectID, Details: string(details), IPAddress: clientIP(r), Timestamp: &now,
+		Action: action, Resource: resource, ResourceID: resourceID,
+		ProjectID: projectID, Details: details, IPAddress: clientIP(r), Timestamp: &now,
 	}
 	if user := auth.GetUser(r.Context()); user != nil {
 		entry.UserID = user.ID
 	}
 	if err := h.authOAuth.Audit.LogAudit(r.Context(), entry); err != nil {
-		log.Printf("ERROR: audit sign-in provider change %s/%s: %v", projectID, saved.Provider, err)
+		log.Printf("ERROR: audit %s %s/%s: %v", action, projectID, resourceID, err)
 	}
 }

@@ -199,3 +199,22 @@ func TestInfo_FlagOnUnreadablePolicyIs503(t *testing.T) {
 		t.Fatalf("policy unreadable: %d", w.Code)
 	}
 }
+
+// The redirect list decides where sign-in codes are delivered, so every change is audited.
+func TestAuthSettings_FlagOnPutAuditsTheSignInPolicy(t *testing.T) {
+	f := setupOAuthHandler(t, true)
+	w := doJSON(f.router, http.MethodPut, testOAuthSettings, map[string]any{
+		"siteUrl": "https://app.example.com", "redirectUrls": []string{"https://app.example.com/cb"}, "allowNewUsers": false,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body.String())
+	}
+	if len(f.audit.entries) != 1 {
+		t.Fatalf("audit entries = %d", len(f.audit.entries))
+	}
+	entry := f.audit.entries[0]
+	if entry.Action != "auth_settings.update" || entry.ProjectID != testOAuthProject ||
+		!strings.Contains(entry.Details, "https://app.example.com/cb") || !strings.Contains(entry.Details, `"allowNewUsers":false`) {
+		t.Fatalf("audit = %+v", entry)
+	}
+}

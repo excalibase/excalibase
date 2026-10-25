@@ -104,3 +104,17 @@ func Require(flags Flags, feature Feature) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// WhenOn applies middleware only while the feature is on, decided per request.
+func WhenOn(flags Flags, feature Feature, middleware func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		gated := middleware(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if Enabled(r.Context(), flags, feature) {
+				gated.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}

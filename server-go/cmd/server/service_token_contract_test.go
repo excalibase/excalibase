@@ -40,7 +40,8 @@ import (
 // chartPermissions is the permission list each service principal is minted
 // with. It must stay identical to serviceTokens.<service>.permissions in
 // excalibase-service charts/platform-aio/values.yaml — the bootstrap Job
-// passes those verbatim to the token-minting endpoint. This is the only copy
+// passes those verbatim to the token-minting endpoint (svc-auth's provider
+// secret read is appended there only with features.authOAuth). This is the only copy
 // in the package; the other cmd/server authz tests read it from here.
 var chartPermissions = map[string][]string{
 	svcAuth: {

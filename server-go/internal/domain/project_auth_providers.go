@@ -3,6 +3,8 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -114,12 +116,9 @@ func NormalizeRedirectURLs(raw []string) ([]string, error) {
 	out := make([]string, 0, len(raw))
 	seen := make(map[string]bool, len(raw))
 	for _, entry := range raw {
-		canonical, err := ValidateSiteURL(entry)
+		canonical, err := validateRedirectURL(entry)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s", ErrInvalidRedirectURLs, err.Error())
-		}
-		if canonical == "" {
-			return nil, fmt.Errorf("%w: an entry is empty", ErrInvalidRedirectURLs)
+			return nil, err
 		}
 		if !seen[canonical] {
 			seen[canonical] = true
@@ -165,4 +164,42 @@ func UsableOAuthProviders(stored []ProjectAuthProvider, publicBaseURL, orgSlug, 
 		})
 	}
 	return out
+}
+
+// validateRedirectURL is ValidateSiteURL plus what a redirect target must not
+// carry: a wildcard host, an out-of-range port, control characters or dot
+// segments, raw or encoded. The path is kept escaped, as auth compares it.
+func validateRedirectURL(entry string) (string, error) {
+	if _, err := ValidateSiteURL(entry); err != nil {
+		return "", fmt.Errorf("%w: %s", ErrInvalidRedirectURLs, err.Error())
+	}
+	trimmed := strings.TrimSpace(entry)
+	if trimmed == "" {
+		return "", fmt.Errorf("%w: an entry is empty", ErrInvalidRedirectURLs)
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || !plainRedirect(parsed) {
+		return "", fmt.Errorf("%w: %q must name one host and a plain path", ErrInvalidRedirectURLs, truncateForError(trimmed))
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host) + parsed.EscapedPath(), nil
+}
+
+func plainRedirect(parsed *url.URL) bool {
+	if strings.Contains(parsed.Host, "*") {
+		return false
+	}
+	if port := parsed.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return false
+		}
+	}
+	if strings.IndexFunc(parsed.Path, unicode.IsControl) >= 0 {
+		return false
+	}
+	for _, segment := range strings.Split(parsed.Path, "/") {
+		if segment == "." || segment == ".." || strings.Contains(segment, "/") {
+			return false
+		}
+	}
+	return !strings.Contains(strings.ToLower(parsed.EscapedPath()), "%2f")
 }

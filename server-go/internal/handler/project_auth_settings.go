@@ -154,6 +154,7 @@ func (h *ProvisioningHandler) putAuthSettingsWithSignIn(w http.ResponseWriter, r
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
+	h.recordAuthSignIn(r, projectID, settings, signIn)
 	response := authSettingsResponseFor(settings)
 	response.authSignInResponse = authSignInResponseFor(signIn)
 	writeJSON(w, response)
@@ -207,4 +208,13 @@ func authSettingsResponseFor(settings domain.ProjectAuthSettings) authSettingsRe
 		RequireEmailVerification: settings.RequireEmailVerification,
 		SiteURL:                  settings.SiteURL,
 	}
+}
+
+// recordAuthSignIn audits the sign-in policy: the redirect list decides where
+// sign-in codes are delivered.
+func (h *ProvisioningHandler) recordAuthSignIn(r *http.Request, projectID string, settings domain.ProjectAuthSettings, signIn domain.ProjectAuthSignIn) {
+	details, _ := json.Marshal(map[string]any{
+		"siteUrl": settings.SiteURL, "redirectUrls": signIn.RedirectURLs, "allowNewUsers": signIn.AllowNewUsers,
+	})
+	h.writeAuthAudit(r, projectID, auditActionAuthSettingsUpdate, auditResourceAuthSettings, projectID, string(details))
 }

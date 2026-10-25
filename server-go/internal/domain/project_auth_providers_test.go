@@ -88,17 +88,29 @@ func TestNormalizeRedirectURLs(t *testing.T) {
 	}
 }
 
+func TestNormalizeRedirectURLs_KeepsThePathEscaped(t *testing.T) {
+	got, err := NormalizeRedirectURLs([]string{"https://app.example.com/a%20b/cb"})
+	if err != nil || got[0] != "https://app.example.com/a%20b/cb" {
+		t.Fatalf("got %v %v", got, err)
+	}
+}
+
 func TestNormalizeRedirectURLs_Refusals(t *testing.T) {
 	tooMany := make([]string, 0, MaxRedirectURLs+1)
 	for i := 0; i <= MaxRedirectURLs; i++ {
 		tooMany = append(tooMany, fmt.Sprintf("https://app%d.example.com", i))
 	}
 	for name, list := range map[string][]string{
-		"empty entry":  {"https://a.example.com", "  "},
-		"query":        {"https://a.example.com/cb?x=1"},
-		"plain http":   {"http://a.example.com/cb"},
-		"trailing /":   {"https://a.example.com/"},
-		"over the cap": tooMany,
+		"empty entry":       {"https://a.example.com", "  "},
+		"query":             {"https://a.example.com/cb?x=1"},
+		"plain http":        {"http://a.example.com/cb"},
+		"trailing /":        {"https://a.example.com/"},
+		"wildcard host":     {"https://*.example.com/cb"},
+		"dot segment":       {"https://a.example.com/a/../b"},
+		"encoded dot slash": {"https://a.example.com/a%2F..%2Fb"},
+		"encoded CR LF":     {"https://a.example.com/%0d%0a"},
+		"port out of range": {"https://a.example.com:99999/x"},
+		"over the cap":      tooMany,
 	} {
 		if _, err := NormalizeRedirectURLs(list); err == nil {
 			t.Errorf("%s accepted", name)

@@ -2444,6 +2444,8 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+		// With end-user OAuth on, these settings decide where sign-in codes go (EXC-662).
+		r.Use(features.WhenOn(d.features, features.AuthOAuth, custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore)))
 		r.Use(d.activity)
 		r.Get("/", d.provHandler.GetAuthSettings)
 		r.Put("/", d.provHandler.PutAuthSettings)
