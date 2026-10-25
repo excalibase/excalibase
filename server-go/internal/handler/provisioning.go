@@ -596,7 +596,8 @@ var logRanges = map[string]time.Duration{
 var logSearchParams = map[string]bool{"lines": true, "q": true, "since": true}
 
 // GetLogs answers the project's database log lines: the last ?lines (100),
-// those containing ?q (any case) within ?since (1h, 6h, 24h or 7d; 1h).
+// those containing ?q (any case) within ?since (1h, 6h, 24h or 7d; 1h), no
+// further back than the project's plan keeps logs.
 func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	query := r.URL.Query()
@@ -626,7 +627,7 @@ func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	out, err := h.svc.SearchLogs(r.Context(), projectID, service.LogSearch{Lines: lines, Term: query.Get("q"), Since: since})
+	page, err := h.svc.SearchProjectLogs(r.Context(), projectID, service.LogSearch{Lines: lines, Term: query.Get("q"), Since: since})
 	if errors.Is(err, service.ErrInvalidLogSearch) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -639,7 +640,16 @@ func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"logs": out})
+	writeJSON(w, logsResponse(page))
+}
+
+// logsResponse names how long the project's logs are kept only when its plan decides it (EXC-659).
+func logsResponse(page service.LogPage) map[string]any {
+	resp := map[string]any{"logs": page.Lines}
+	if page.KeptFor > 0 {
+		resp["retentionHours"] = int(page.KeptFor / time.Hour)
+	}
+	return resp
 }
 
 func (h *ProvisioningHandler) RotateCredentials(w http.ResponseWriter, r *http.Request) {

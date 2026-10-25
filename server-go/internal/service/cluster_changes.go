@@ -201,6 +201,14 @@ func (s *ProvisioningService) growDisk(ctx context.Context, inst *domain.Databas
 // plan's instances (one per node), CPU, memory, disk and statement guard.
 // tier is the plan the caller expects the organization to be on.
 func (s *ProvisioningService) ApplyOrgTier(ctx context.Context, projectID string, tier domain.TierType) error {
+	if err := s.applyOrgTier(ctx, projectID, tier); err != nil {
+		return err
+	}
+	s.relabelLogPlan(ctx, projectID)
+	return nil
+}
+
+func (s *ProvisioningService) applyOrgTier(ctx context.Context, projectID string, tier domain.TierType) error {
 	inst, release, err := s.holdProject(ctx, projectID, OperationTierChange, requireActive)
 	if err != nil {
 		return err

@@ -326,21 +326,32 @@ export interface LogQuery {
   search?: string;
 }
 
-export const useLogs = (projectId: string, lines: number = 100, { since, search }: LogQuery = {}) => {
+export interface LogPage {
+  logs: string;
+  /** How long the project's plan keeps logs; absent when the plan does not decide it (EXC-659). */
+  retentionHours?: number;
+}
+
+export const useLogSearch = (projectId: string, lines: number = 100, { since, search }: LogQuery = {}) => {
   const params = new URLSearchParams({ lines: String(lines) });
   if (since) params.set('since', since);
   if (search) params.set('q', search);
   return useQuery({
     queryKey: ['logs', projectId, lines, since ?? '', search ?? ''],
     queryFn: async () => {
-      const response = await api.get<{ logs: string }>(`/provision/${projectId}/logs?${params.toString()}`);
-      return response.data.logs;
+      const response = await api.get<LogPage>(`/provision/${projectId}/logs?${params.toString()}`);
+      return response.data;
     },
     enabled: !!projectId,
     refetchInterval: 15000,
     // A new term keeps the current lines on screen while the search runs.
     placeholderData: keepPreviousData,
   });
+};
+
+export const useLogs = (projectId: string, lines: number = 100, query: LogQuery = {}) => {
+  const result = useLogSearch(projectId, lines, query);
+  return { ...result, data: result.data?.logs };
 };
 
 // Adds the database to a project created without one. The build outlasts one

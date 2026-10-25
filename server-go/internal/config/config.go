@@ -319,6 +319,8 @@ type AppConfig struct {
 	// DarkFeatures are the features shipped dark that this install turned on
 	// (EXC-554); feature code asks Features(), never this list.
 	DarkFeatures []features.Feature
+	// LogRetention is how long Loki keeps each plan's project logs (EXC-659).
+	LogRetention LogRetention
 	// AppRuntimeClass names the sandbox RuntimeClass every app pod runs under.
 	AppRuntimeClass string
 
@@ -562,6 +564,7 @@ func load() AppConfig {
 		SitesEnabled:                   os.Getenv("SITES_ENABLED") == "true",
 		Sites:                          loadSites(),
 		DarkFeatures:                   loadDarkFeatures(),
+		LogRetention:                   loadLogRetention(),
 		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
 		MySQLEnabled:                   os.Getenv("MYSQL_ENABLED") == "true",
 		AppRuntimeClass:                envOr("APP_RUNTIME_CLASS", "gvisor"),

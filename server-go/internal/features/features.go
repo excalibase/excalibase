@@ -34,11 +34,14 @@ const (
 	// MetricsEndpoint is each project's Prometheus metrics endpoint and the
 	// metrics keys that read it (EXC-657).
 	MetricsEndpoint Feature = "metricsendpoint"
+	// LogRetention keeps each project's logs for its plan's period: provisioning
+	// labels project namespaces with their plan and clamps log searches (EXC-659).
+	LogRetention Feature = "logretention"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention}
 }
 
 type Flags interface {

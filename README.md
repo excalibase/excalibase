@@ -239,7 +239,7 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | PATCH | `/api/provision/{id}/deletion-protection` | Yes | Toggle deletion protection |
 | GET | `/api/provision/{id}/credentials` | Yes | Connection details |
 | POST | `/api/provision/{id}/credentials/rotate` | Yes | Rotate credentials |
-| GET | `/api/provision/{id}/logs` | Yes | Pod logs |
+| GET | `/api/provision/{id}/logs` | Yes | Database logs; with `FEATURE_LOGRETENTION`, no further back than the plan keeps them, and `retentionHours` says how long |
 | GET | `/api/provision/{id}/maintenance-window` | Yes | Get maintenance window |
 | PUT | `/api/provision/{id}/maintenance-window` | Yes | Set maintenance window |
 | GET | `/api/provision/{id}/metrics/current` | Yes | Real-time metrics |
