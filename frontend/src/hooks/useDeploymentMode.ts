@@ -13,7 +13,8 @@ export type Feature =
   | 'requestmetrics'
   | 'advisors'
   | 'metricsendpoint'
-  | 'logdrains';
+  | 'logdrains'
+  | 'authoauth';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;

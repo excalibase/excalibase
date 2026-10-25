@@ -4,6 +4,9 @@ import { api } from './client';
 export interface AuthSettings {
   requireEmailVerification: boolean;
   siteUrl: string;
+  // Only while the authoauth feature is on (EXC-662); a PUT without them keeps the stored ones.
+  redirectUrls?: string[];
+  allowNewUsers?: boolean;
 }
 
 const authSettingsKey = (projectId: string) => ['auth-settings', projectId] as const;
@@ -41,6 +44,12 @@ export function siteUrlProblem(raw: string): string | null {
   }
   if (value.endsWith('/')) return `Remove the trailing slash. ${SITE_URL_RULE}`;
   return null;
+}
+
+// A redirect URL follows the site URL's rule, and an empty one is not a URL.
+export function redirectUrlProblem(raw: string): string | null {
+  if (raw.trim() === '') return 'Enter the URL your app returns to after sign-in.';
+  return siteUrlProblem(raw);
 }
 
 // The first app that already has a public address, offered as the site URL.

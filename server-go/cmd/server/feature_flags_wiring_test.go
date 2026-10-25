@@ -60,6 +60,10 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodPost, "/internal/log-forwarder/pull"},
 		{http.MethodPost, "/internal/log-forwarder/ack"},
 	},
+	features.AuthOAuth: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/auth-providers"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-providers/github"},
+	},
 	features.AppStorage: {
 		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
 		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},

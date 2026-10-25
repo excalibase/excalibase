@@ -25,4 +25,16 @@ type ProjectInfo struct {
 	// null.
 	RequireEmailVerification bool   `json:"requireEmailVerification"`
 	SiteURL                  string `json:"siteUrl"`
+	// ProjectOAuthInfo is present only while the authoauth flag is on
+	// (EXC-662); nil keeps its keys off the wire entirely.
+	*ProjectOAuthInfo
+}
+
+// ProjectOAuthInfo is the end-user OAuth policy the auth service enforces:
+// where it may redirect, whether sign-up is open, and the providers it may
+// offer. Never null inside.
+type ProjectOAuthInfo struct {
+	RedirectURLs   []string            `json:"redirectUrls"`
+	AllowNewUsers  bool                `json:"allowNewUsers"`
+	OAuthProviders []OAuthProviderInfo `json:"oauthProviders"`
 }

@@ -269,6 +269,8 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | PUT | `/api/projects/{id}/cors` | Yes | Replace the allowlist (Developer+). Absolute origins only (`scheme://host[:port]`, max 32); `"*"` needs `"allowWildcard": true` and must be the only entry. Empty = no CORS headers (browser apps blocked). See `docs/project-cors.md` |
 | GET | `/api/projects/{id}/auth-settings` | Yes (Developer+) | Read the project's auth settings `{requireEmailVerification, siteUrl}` |
 | PUT | `/api/projects/{id}/auth-settings` | Yes (Developer+) | Set the project's auth settings; `siteUrl` must be an absolute `http`/`https` URL with no trailing slash, or empty to unset |
+| GET | `/api/projects/{id}/auth-providers` | Yes (Developer+) | End-user Google/GitHub sign-in settings and the callback URL to register; the client secret is never returned (flag `authoauth`) |
+| PUT | `/api/projects/{id}/auth-providers/{provider}` | Yes (Admin) | Set `{enabled, clientId, clientSecret?}`; the secret goes to the vault, an empty one keeps the stored secret (flag `authoauth`) |
 
 ### Edge Functions (per-project Deno runtime)
 

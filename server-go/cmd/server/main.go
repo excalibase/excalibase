@@ -1228,6 +1228,18 @@ func wireProjectAuthSettings(sqlStore storage.PlatformStore, provHandler *handle
 	log.Println("WARN: no Postgres platform store — the per-project auth settings API is unavailable")
 }
 
+// wireAuthOAuth attaches end-user OAuth sign-in (EXC-662). Everything it adds
+// to /info and /auth-settings stays off the wire while authoauth is off.
+func wireAuthOAuth(cfg config.AppConfig, sqlStore storage.PlatformStore, vc vaultclient.VaultClient, provHandler *handler.ProvisioningHandler) {
+	deps := handler.AuthOAuthDeps{Flags: cfg.Features(), PublicBaseURL: cfg.PublicBaseURL, Audit: sqlStore}
+	deps.Providers, _ = sqlStore.(storage.ProjectAuthProviderStore)
+	deps.SignIn, _ = sqlStore.(storage.ProjectAuthSignInStore)
+	if vc != nil {
+		deps.Secrets = vc
+	}
+	provHandler.SetAuthOAuth(deps)
+}
+
 // buildProvisioningService wires the central provisioning service plus its
 // optional collaborators (backup defaults, credential verifier, etc).
 func buildProvisioningService(
@@ -1723,6 +1735,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provHandler.SetActivityStore(sqlStore)
 	wireProjectCors(sqlStore, provHandler)
 	wireProjectAuthSettings(sqlStore, provHandler)
+	wireAuthOAuth(cfg, sqlStore, vc, provHandler)
 	activityRecorder := service.NewActivityRecorder(service.ActivityRecorderConfig{Store: sqlStore})
 	// Newly registered projects (provisioned or restored) get a last-seen
 	// marker straight away so idle-pause never sees them as stale.
@@ -2377,6 +2390,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	})
 	mountMetricsEndpoint(r, sqlStore, store, d)
 	mountLogDrains(r, sqlStore, store, d)
+	mountAuthProviders(r, sqlStore, store, d)
 	// What AI coding tools did in the project through MCP (EXC-544).
 	r.Route("/api/projects/{projectId}/ai-activity", func(r chi.Router) {
 		r.Use(features.Require(d.features, features.MCP))
@@ -2541,6 +2555,23 @@ func mountLogDrains(r *chi.Mux, sqlStore storage.OrgStore, store storage.Instanc
 			d.logForwarderHandler.Mount(r, custommw.RequireInternalListener)
 		})
 	}
+}
+
+// mountAuthProviders serves a project's end-user sign-in providers (EXC-662):
+// any Developer reads them; a write carries the client secret, so it is an
+// Admin's (ADR 0022).
+func mountAuthProviders(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
+	r.Route("/api/projects/{projectId}/auth-providers", func(r chi.Router) {
+		r.Use(features.Require(d.features, features.AuthOAuth))
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
+		r.Use(d.activity)
+		r.Get("/", d.provHandler.GetAuthProviders)
+		r.Put("/{provider}", d.provHandler.PutAuthProvider)
+	})
 }
 
 // mountAppStorage serves a project's buckets to its app users (EXC-560): a

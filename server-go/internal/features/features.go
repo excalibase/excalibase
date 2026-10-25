@@ -40,11 +40,14 @@ const (
 	// LogDrains forwards a project's logs to Datadog or an HTTPS endpoint its
 	// Admins configure, through the log-forwarder pod (EXC-658).
 	LogDrains Feature = "logdrains"
+	// AuthOAuth is end-user Google and GitHub sign-in for customers' apps:
+	// provider settings, redirect URLs and the new-user switch (EXC-662).
+	AuthOAuth Feature = "authoauth"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth}
 }
 
 type Flags interface {

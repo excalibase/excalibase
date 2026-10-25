@@ -123,6 +123,7 @@ export default defineConfig({
         'src/pages/AuthUsersPage.tsx',
         'src/pages/AuthSettingsPage.tsx',
         'src/api/authSettings.ts',
+        'src/api/authProviders.ts',
         'src/pages/EdgeFunctionsPage.tsx',
         'src/api/client.ts',
         'src/pages/ExtensionsPage.tsx',
