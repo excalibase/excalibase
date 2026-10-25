@@ -84,6 +84,12 @@ expect_recorded() {
   fi
 }
 
+# expect_owned <file> <uid> — only the one container that reads the token can.
+expect_owned() {
+  GOT=$(stat -c '%a %u' "$SECRETS_DIR/$1" 2>/dev/null)
+  if [ "$GOT" = "600 $2" ]; then ok "$1 is 0600 owned by $2"; else bad "$1 is $GOT, want 600 $2"; fi
+}
+
 case "$BASE_AUTH" in
   *"$PROVIDERS_GRANT"*) echo "  FAIL svc-auth asks for $PROVIDERS_GRANT with end-user OAuth off"; FAILED=$((FAILED + 1)) ;;
   *) echo "  ok   svc-auth asks for no OAuth provider secret with the flag off" ;;
@@ -98,6 +104,8 @@ expect_file "$SECRETS_DIR/auth-token" excb_svc-auth-new
 expect_file "$SECRETS_DIR/graphql-token" excb_svc-graphql-new
 expect_recorded auth-token "$WANT_AUTH"
 expect_recorded graphql-token "$WANT_GRAPHQL"
+expect_owned auth-token 65532
+expect_owned graphql-token 1000
 expect_not_called "DELETE"
 if grep -F '/api/auth/tokens {"name":"svc-auth"' "$CALL_LOG" | grep -qF "$PROVIDERS_GRANT"; then
   ok "svc-auth minted with the provider grant"
@@ -105,8 +113,11 @@ else bad "svc-auth minted without $PROVIDERS_GRANT"; fi
 
 start "restart with current tokens"
 installed recorded
+chmod 0644 "$SECRETS_DIR/auth-token" "$SECRETS_DIR/graphql-token"
 run
 expect_rc 0
+expect_owned auth-token 65532
+expect_owned graphql-token 1000
 expect_not_called "/api/auth/login"
 expect_not_called "/api/auth/register"
 expect_file "$SECRETS_DIR/auth-token" excb_svc-auth

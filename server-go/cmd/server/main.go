@@ -2573,6 +2573,7 @@ func mountAuthProviders(r *chi.Mux, sqlStore storage.OrgStore, store storage.Ins
 		r.Use(d.activity)
 		r.Get("/", d.provHandler.GetAuthProviders)
 		r.Put("/{provider}", d.provHandler.PutAuthProvider)
+		r.Delete("/{provider}", d.provHandler.DeleteAuthProvider)
 	})
 }
 

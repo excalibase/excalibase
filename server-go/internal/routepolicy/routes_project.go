@@ -126,6 +126,7 @@ var projectRows = []Row{
 	{Methods: put, Pattern: "/api/projects/{projectId}/auth-settings/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "Admin while the authoauth flag is on (the redirect list decides where sign-in codes go), Developer while it is off"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/auth-providers/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Discloses: NoSecret, Note: "end-user sign-in providers and their callback URLs; the client secret is write-only (EXC-662)"},
 	{Methods: put, Pattern: "/api/projects/{projectId}/auth-providers/{provider}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "writes the provider's client secret to the vault (ADR 0022)"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/auth-providers/{provider}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "removes the provider's client secret from the vault and its row"},
 
 	{Methods: get, Pattern: "/api/projects/{projectId}/realtime/tables", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true, MySQLRefusal: mysqlNoRealtime, Discloses: NoSecret},
 	{Methods: put, Pattern: "/api/projects/{projectId}/realtime/tables/{schema}/{table}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "alters the database publication", Database: true, MySQLRefusal: mysqlNoRealtime},

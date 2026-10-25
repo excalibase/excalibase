@@ -6,7 +6,7 @@ import { AuthProvidersCard } from './AuthProvidersCard';
 import { providerUpdateBody } from '../../api/authProviders';
 import { api } from '../../api/client';
 
-vi.mock('../../api/client', () => ({ api: { get: vi.fn(), put: vi.fn() } }));
+vi.mock('../../api/client', () => ({ api: { get: vi.fn(), put: vi.fn(), delete: vi.fn() } }));
 
 const unconfigured = { provider: 'github', enabled: false, clientId: '', clientSecretSet: false, callbackUrl: 'https://api.x/auth/o/p/callback/github' };
 
@@ -45,5 +45,32 @@ describe('AuthProvidersCard', () => {
     await waitFor(() => expect(within(github).getByTestId('auth-provider-github-secret-state')).toHaveTextContent('Secret set'));
     expect(within(github).getByLabelText('Client secret')).toHaveValue('');
     expect(within(github).getByText(/^Saved/)).toBeInTheDocument();
+  });
+
+  test('removing the secret asks first, then turns the provider off and empties it', async () => {
+    const u = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const configured = { ...unconfigured, enabled: true, clientId: 'gh', clientSecretSet: true };
+    vi.mocked(api.get).mockResolvedValue({ data: { providers: [configured] } });
+    vi.mocked(api.delete).mockResolvedValue({ data: unconfigured });
+    renderCard();
+    const github = await screen.findByTestId('auth-provider-github');
+    await u.click(within(github).getByRole('button', { name: 'Remove GitHub secret' }));
+    expect(window.confirm).toHaveBeenCalled();
+    expect(api.delete).toHaveBeenCalledWith('/projects/p/auth-providers/github');
+    await waitFor(() => expect(within(github).getByTestId('auth-provider-github-secret-state')).toHaveTextContent('Secret not set'));
+    expect(within(github).getByLabelText('Enable GitHub')).not.toBeChecked();
+    expect(within(github).getByLabelText('Client ID')).toHaveValue('');
+  });
+
+  test('declining keeps the secret and no remove button shows without one', async () => {
+    const u = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    vi.mocked(api.get).mockResolvedValue({ data: { providers: [{ ...unconfigured, clientSecretSet: true }, { ...unconfigured, provider: 'google' }] } });
+    renderCard();
+    const github = await screen.findByTestId('auth-provider-github');
+    await u.click(within(github).getByRole('button', { name: 'Remove GitHub secret' }));
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(within(screen.getByTestId('auth-provider-google')).queryByRole('button', { name: /Remove/ })).toBeNull();
   });
 });

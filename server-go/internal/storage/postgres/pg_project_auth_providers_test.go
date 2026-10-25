@@ -143,3 +143,24 @@ func TestAuthSignIn_RestoredCopyCarriesThePolicy(t *testing.T) {
 		t.Fatalf("providers copied: %+v", providers)
 	}
 }
+
+func TestAuthProviders_DeleteRemovesOneRowOnly(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	saveAuthSettingsProject(t, store, "proj_oauth_del")
+	for _, name := range []string{domain.AuthProviderGitHub, domain.AuthProviderGoogle} {
+		if err := store.PutAuthProvider(ctx, "proj_oauth_del", domain.ProjectAuthProvider{Provider: name, Enabled: true, ClientID: "id", ClientSecretSet: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.DeleteAuthProvider(ctx, "proj_oauth_del", domain.AuthProviderGitHub); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	got, err := store.ListAuthProviders(ctx, "proj_oauth_del")
+	if err != nil || len(got) != 1 || got[0].Provider != domain.AuthProviderGoogle {
+		t.Fatalf("after delete = %+v, %v", got, err)
+	}
+	if err := store.DeleteAuthProvider(ctx, "proj_oauth_del", domain.AuthProviderGitHub); err != nil {
+		t.Fatalf("deleting a missing row: %v", err)
+	}
+}

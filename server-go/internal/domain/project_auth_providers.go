@@ -74,9 +74,15 @@ func DefaultAuthSignIn() ProjectAuthSignIn {
 }
 
 // AuthProviderCallbackURL is the address the customer registers at the
-// provider; the auth service serves it behind the public API host.
+// provider; the auth service serves it behind the public API host. Without
+// an absolute base there is none, so no provider can be offered.
 func AuthProviderCallbackURL(publicBaseURL, orgSlug, projectID, provider string) string {
-	return strings.TrimRight(publicBaseURL, "/") + "/auth/" + orgSlug + "/" + projectID + "/callback/" + provider
+	base := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	parsed, err := url.Parse(base)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return ""
+	}
+	return base + "/auth/" + orgSlug + "/" + projectID + "/callback/" + provider
 }
 
 // AuthProviderSecretPath is the vault path of a provider's client secret. It
@@ -154,14 +160,11 @@ func AllAuthProviders(stored []ProjectAuthProvider) []ProjectAuthProvider {
 func UsableOAuthProviders(stored []ProjectAuthProvider, publicBaseURL, orgSlug, projectID string) []OAuthProviderInfo {
 	out := []OAuthProviderInfo{}
 	for _, provider := range AllAuthProviders(stored) {
-		if !provider.Enabled || provider.ClientID == "" || !provider.ClientSecretSet {
+		callback := AuthProviderCallbackURL(publicBaseURL, orgSlug, projectID, provider.Provider)
+		if !provider.Enabled || provider.ClientID == "" || !provider.ClientSecretSet || callback == "" {
 			continue
 		}
-		out = append(out, OAuthProviderInfo{
-			Provider:    provider.Provider,
-			ClientID:    provider.ClientID,
-			CallbackURL: AuthProviderCallbackURL(publicBaseURL, orgSlug, projectID, provider.Provider),
-		})
+		out = append(out, OAuthProviderInfo{Provider: provider.Provider, ClientID: provider.ClientID, CallbackURL: callback})
 	}
 	return out
 }

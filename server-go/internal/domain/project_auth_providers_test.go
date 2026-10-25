@@ -30,6 +30,18 @@ func TestAuthProviderCallbackURL(t *testing.T) {
 	}
 }
 
+func TestAuthProviderCallbackURLNeedsAnAbsoluteBase(t *testing.T) {
+	for _, base := range []string{"", " ", "/", "api.example.com", "/api", "ftp://api.example.com", "https://"} {
+		if got := AuthProviderCallbackURL(base, "acme", "proj-1", "github"); got != "" {
+			t.Errorf("base %q: got %q, want no callback", base, got)
+		}
+	}
+	stored := []ProjectAuthProvider{{Provider: AuthProviderGitHub, Enabled: true, ClientID: "gh", ClientSecretSet: true}}
+	if got := UsableOAuthProviders(stored, "", "acme", "proj-1"); got == nil || len(got) != 0 {
+		t.Fatalf("an empty public base URL listed %+v", got)
+	}
+}
+
 func TestAuthProviderSecretPath(t *testing.T) {
 	if got := AuthProviderSecretPath("proj-1", "google"); got != "projects/proj-1/auth/providers/google" {
 		t.Fatalf("secret path = %q", got)
