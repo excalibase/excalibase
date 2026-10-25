@@ -142,6 +142,8 @@ export default defineConfig({
         'src/pages/SitesPage.tsx',
         'src/pages/SiteFormPage.tsx',
         'src/pages/SiteDetailPage.tsx',
+        'src/api/metricsKeys.ts',
+        'src/components/MetricsEndpointCard.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

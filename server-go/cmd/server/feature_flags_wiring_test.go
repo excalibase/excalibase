@@ -45,6 +45,12 @@ var darkRoutes = map[features.Feature][]darkProbe{
 	features.Advisors: {
 		{http.MethodGet, "/api/provision/" + matrixProjectA + "/advisors"},
 	},
+	features.MetricsEndpoint: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/metrics"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/metrics-keys"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/metrics-keys"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/metrics-keys/key-1"},
+	},
 	features.AppStorage: {
 		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
 		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},

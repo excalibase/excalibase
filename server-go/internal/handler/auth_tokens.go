@@ -451,6 +451,11 @@ func (h *AuthHandler) RotateToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A metrics key is renewed by its project's Admins, not by its owner (EXC-657).
+	if auth.IsMetricsKey(tok) {
+		httpError(w, "a metrics key is renewed from its project: revoke it and create another", http.StatusForbidden)
+		return
+	}
 	// Rotation returns a fresh secret for tok, so the same rules that govern
 	// creation govern this door too.
 	caller := auth.GetToken(r.Context())

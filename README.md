@@ -257,6 +257,8 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | POST | `/api/provision/{id}/slow-queries/reset` | Yes | Developer+: clear the project's statement statistics |
 | POST | `/api/provision/{id}/slow-queries/enable` | Yes | Admin+: turn statistics on for a database created before the feature; restarts Postgres once |
 | GET | `/api/provision/{id}/requests?range=1h\|24h\|7d` | Yes | The project's GraphQL, REST, auth and realtime request counts, error counts and p50/p95 latency, sampled every minute on Kubernetes (`FEATURE_REQUESTMETRICS`, scraping `REQUEST_METRICS_TARGETS`) |
+| GET | `/api/projects/{id}/metrics` | Metrics key or session | The project's stored metrics in Prometheus text format for its own Grafana or Datadog, on Kubernetes (`FEATURE_METRICSENDPOINT`) |
+| GET/POST/DELETE | `/api/projects/{id}/metrics-keys` | Yes, Admin | Metrics keys: PATs holding only `metrics:read`, bound to the project, shown once (`FEATURE_METRICSENDPOINT`) |
 | GET | `/api/provision/{id}/audit` | Yes | Per-project audit log |
 | POST | `/api/provision/{id}/migrations` | Yes | Apply SQL migration |
 | POST | `/api/provision/{id}/snapshot/export` | Yes | pg_dump export (never the `auth` schema) |

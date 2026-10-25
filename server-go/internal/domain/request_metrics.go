@@ -43,3 +43,19 @@ type RequestCharts struct {
 	Points      []RequestChartPoint `json:"points"`
 	Totals      []RequestChartPoint `json:"totals"`
 }
+
+// RequestTotalsRow is a project's family summed over every sample since the
+// metrics endpoint was turned on (EXC-657): monotonic, so it exports as
+// Prometheus counters. Connections is the latest reading, at UpdatedAt.
+type RequestTotalsRow struct {
+	ProjectID         string
+	Family            string
+	Requests          int64
+	ClientErrors      int64
+	ServerErrors      int64
+	LatencyBuckets    []int64
+	Connections       int64
+	ConnectionsOpened int64
+	Messages          int64
+	UpdatedAt         time.Time
+}
