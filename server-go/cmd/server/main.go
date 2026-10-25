@@ -1258,6 +1258,7 @@ func buildProvisioningService(
 		provSvc.SetDockerClient(dockerClientRef)
 	}
 	provSvc.SetLokiURL(cfg.LokiURL)
+	startLogPlanSweep(context.Background(), cfg, provSvc, k8sClient)
 
 	wireNatsCredentialMinter(sqlStore, provSvc)
 	return provSvc, lifecycleClaimer

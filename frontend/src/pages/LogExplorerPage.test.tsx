@@ -85,4 +85,33 @@ describe('LogExplorerPage', () => {
     expect(screen.queryByText('No logs available')).not.toBeInTheDocument();
     expect(screen.queryByText(/status code/)).not.toBeInTheDocument();
   });
+  // EXC-659: the plan decides how long logs are kept; Studio offers no range past it.
+  test('says how long the plan keeps logs and offers no range past it', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { logs: LOGS, retentionHours: 24 } } as never);
+    renderPage();
+    expect(await screen.findByTestId('log-retention')).toHaveTextContent('Logs are kept for 1 day on this plan');
+    expect(screen.getByRole('button', { name: '24h' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '7d' })).not.toBeInTheDocument();
+  });
+
+  test('a plan that keeps a week offers the week', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { logs: LOGS, retentionHours: 168 } } as never);
+    renderPage();
+    expect(await screen.findByTestId('log-retention')).toHaveTextContent('Logs are kept for 7 days on this plan');
+    fireEvent.click(screen.getByRole('button', { name: '7d' }));
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/provision/proj-1/logs?lines=1000&since=7d'));
+  });
+
+  test('a retention that is not whole days is said in hours', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { logs: LOGS, retentionHours: 36 } } as never);
+    renderPage();
+    expect(await screen.findByTestId('log-retention')).toHaveTextContent('Logs are kept for 36 hours on this plan');
+  });
+
+  test('without a plan retention every range is offered and nothing is said', async () => {
+    renderPage();
+    await screen.findByText('INFO started');
+    expect(screen.getByRole('button', { name: '7d' })).toBeInTheDocument();
+    expect(screen.queryByTestId('log-retention')).not.toBeInTheDocument();
+  });
 });

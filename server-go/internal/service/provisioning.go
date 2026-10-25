@@ -64,6 +64,8 @@ type ProvisioningService struct {
 	// queries it instead of running kubectl-exec tail (the legacy path
 	// hangs on busy clusters and only sees logs since pod start).
 	lokiURL string
+	// logRetention keeps project logs for their plan (EXC-659); nil keeps logs.retention for all.
+	logRetention *logRetention
 
 	// backupDefaults configures the platform-wide backup target. When
 	// set, every new project gets backup enabled by default with these

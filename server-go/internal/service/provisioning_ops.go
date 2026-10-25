@@ -93,32 +93,51 @@ type LogSearch struct {
 	Since time.Duration
 }
 
+// LogPage is one search's lines and, with retention per plan on, how long
+// the project's logs are kept (zero otherwise).
+type LogPage struct {
+	Lines   string
+	KeptFor time.Duration
+}
+
 // GetLogs returns the last N lines of the project's database pod log.
 func (s *ProvisioningService) GetLogs(ctx context.Context, projectID string, lines int) (string, error) {
 	return s.SearchLogs(ctx, projectID, LogSearch{Lines: lines})
 }
 
 // SearchLogs returns the last matching lines of the project's database log.
+func (s *ProvisioningService) SearchLogs(ctx context.Context, projectID string, search LogSearch) (string, error) {
+	page, err := s.SearchProjectLogs(ctx, projectID, search)
+	return page.Lines, err
+}
+
+// SearchProjectLogs returns the last matching lines of the project's database log.
 // Prefers Loki when configured (it keeps logs across pod restarts) and reads
 // the pod's log through the Kubernetes API when Loki is unset or does not answer.
-// Either way only the project's own namespace is read.
-func (s *ProvisioningService) SearchLogs(ctx context.Context, projectID string, search LogSearch) (string, error) {
+// Either way only the project's own namespace is read, and no further back
+// than the project's plan keeps logs.
+func (s *ProvisioningService) SearchProjectLogs(ctx context.Context, projectID string, search LogSearch) (LogPage, error) {
 	if err := validateLogSearchTerm(search.Term); err != nil {
-		return "", err
+		return LogPage{}, err
 	}
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
-		return "", err
+		return LogPage{}, err
 	}
 	if s.k8sClient == nil || inst.DeploymentMode == domain.ModeDocker {
-		return "", errLogsOnSingleHost
+		return LogPage{}, errLogsOnSingleHost
+	}
+	page := LogPage{KeptFor: s.logsKeptFor(ctx, inst)}
+	if page.KeptFor > 0 && search.Since > page.KeptFor {
+		search.Since = page.KeptFor
 	}
 
 	lokiAnswered := false
 	if s.lokiURL != "" {
 		out, err := s.getLogsFromLoki(ctx, databaseLogSelector(inst), projectID, search)
 		if err == nil && out != "" {
-			return out, nil
+			page.Lines = out
+			return page, nil
 		}
 		// No lines yet (a pod the collector has not shipped) or no answer: the live pod log.
 		lokiAnswered = err == nil
@@ -128,11 +147,12 @@ func (s *ProvisioningService) SearchLogs(ctx context.Context, projectID string, 
 	if err != nil {
 		log.Printf("logs of %s: pod log: %v", projectID, err)
 		if lokiAnswered {
-			return "", nil
+			return page, nil
 		}
-		return "", ErrLogsUnavailable
+		return LogPage{}, ErrLogsUnavailable
 	}
-	return filterLogLines(out, search.Term), nil
+	page.Lines = filterLogLines(out, search.Term)
+	return page, nil
 }
 
 // primaryPodLog is the live log of the database container on the primary.
