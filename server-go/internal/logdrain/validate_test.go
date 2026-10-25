@@ -100,7 +100,7 @@ func TestValidateName(t *testing.T) {
 	if err := ValidateName("Datadog prod"); err != nil {
 		t.Errorf("ok name: %v", err)
 	}
-	for _, bad := range []string{"", "   ", strings.Repeat("n", 65), "bad\nname", "bad‮name"} {
+	for _, bad := range []string{"", "   ", strings.Repeat("n", 65), "bad\nname", "bad\u202ename"} {
 		if err := ValidateName(bad); !errors.Is(err, ErrInvalidDrain) {
 			t.Errorf("%q: err = %v", bad, err)
 		}

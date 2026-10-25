@@ -203,7 +203,7 @@ func endpointHost(raw string) string {
 
 // LogForwarderAPI is what the forwarder pod calls.
 type LogForwarderAPI interface {
-	Pull(ctx context.Context, max int) ([]logdrain.Batch, error)
+	Pull(ctx context.Context, limit int) ([]logdrain.Batch, error)
 	Ack(ctx context.Context, ack logdrain.Ack) error
 }
 

@@ -147,7 +147,7 @@ function LogDrains({ projectId }: ProjectRef) {
       data-testid="log-drains"
     >
       <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
-        Log forwarding
+        <span>Log forwarding</span>
         <span className="px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide rounded border border-purple-500/30 bg-purple-500/10 text-purple-400">
           Beta
         </span>

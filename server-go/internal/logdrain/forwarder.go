@@ -63,7 +63,7 @@ type Ack struct {
 
 // ControlPlane hands out batches and takes their outcome.
 type ControlPlane interface {
-	Pull(ctx context.Context, max int) ([]Batch, error)
+	Pull(ctx context.Context, limit int) ([]Batch, error)
 	Ack(ctx context.Context, ack Ack) error
 }
 
@@ -220,8 +220,8 @@ func NewHTTPControlPlane(base, token string, client *http.Client) *HTTPControlPl
 	return &HTTPControlPlane{base: strings.TrimRight(base, "/"), token: token, client: client}
 }
 
-func (p *HTTPControlPlane) Pull(ctx context.Context, max int) ([]Batch, error) {
-	asked, err := json.Marshal(PullRequest{Max: max})
+func (p *HTTPControlPlane) Pull(ctx context.Context, limit int) ([]Batch, error) {
+	asked, err := json.Marshal(PullRequest{Max: limit})
 	if err != nil {
 		return nil, err
 	}

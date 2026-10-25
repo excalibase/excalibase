@@ -22,11 +22,11 @@ type fakePlane struct {
 	acks    []Ack
 }
 
-func (f *fakePlane) Pull(_ context.Context, max int) ([]Batch, error) {
+func (f *fakePlane) Pull(_ context.Context, limit int) ([]Batch, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pulls++
-	f.maxes = append(f.maxes, max)
+	f.maxes = append(f.maxes, limit)
 	if f.pullErr != nil {
 		return nil, f.pullErr
 	}
