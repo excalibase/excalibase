@@ -402,6 +402,8 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}
+      # svc-auth reads project OAuth client secrets only while this is on (EXC-662).
+      FEATURE_AUTHOAUTH: ${FEATURE_AUTHOAUTH:-false}
       SECRETS_DIR: /var/run/excalibase
     command: ["sh", "/bootstrap.sh"]
     volumes:

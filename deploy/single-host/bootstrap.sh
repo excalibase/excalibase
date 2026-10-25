@@ -33,7 +33,11 @@ ADMIN_EMAIL="${ADMIN_EMAIL:?ADMIN_EMAIL is required: the first platform admin ad
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 
 # Permission lists — keep in sync with charts/platform-aio values.yaml.
-AUTH_PERMISSIONS='["vault:read:pki/signing/*","vault:read:projects/*/credentials/auth_admin","vault:read:projects/*/auth/providers/*","projects:info:read","email:send"]'
+AUTH_PERMISSIONS='["vault:read:pki/signing/*","vault:read:projects/*/credentials/auth_admin","projects:info:read","email:send"]'
+# Each project's own Google/GitHub client secret, only while end-user OAuth is on (EXC-662).
+if [ "${FEATURE_AUTHOAUTH:-false}" = true ]; then
+  AUTH_PERMISSIONS=$(printf '%s' "$AUTH_PERMISSIONS" | jq -c '. + ["vault:read:projects/*/auth/providers/*"]')
+fi
 GRAPHQL_PERMISSIONS='["vault:read:projects/*/credentials/excalibase_app","projects:info:read","policies:read"]'
 
 # 0755 dir + 0644 files: the volume is mounted read-only into exactly two

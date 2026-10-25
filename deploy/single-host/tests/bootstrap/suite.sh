@@ -16,11 +16,14 @@ PATH="$STUB:$PATH"
 export PATH
 
 # The lists the script under test asks for, read from it so they never drift.
-WANT_AUTH=$(sed -n "s/^AUTH_PERMISSIONS='\(.*\)'$/\1/p" /bootstrap.sh)
+BASE_AUTH=$(sed -n "s/^AUTH_PERMISSIONS='\(.*\)'$/\1/p" /bootstrap.sh)
 WANT_GRAPHQL=$(sed -n "s/^GRAPHQL_PERMISSIONS='\(.*\)'$/\1/p" /bootstrap.sh)
-OLD_AUTH='["vault:read:pki/signing/*","vault:read:projects/*/credentials/auth_admin","projects:info:read","email:send"]'
+OLD_AUTH=$BASE_AUTH
 PROVIDERS_GRANT='vault:read:projects/*/auth/providers/*'
-export WANT_AUTH WANT_GRAPHQL
+WANT_AUTH=$(printf '%s' "$BASE_AUTH" | jq -c --arg grant "$PROVIDERS_GRANT" '. + [$grant]')
+# The cases below run with end-user OAuth on; the last one with it off.
+FEATURE_AUTHOAUTH=true
+export WANT_AUTH WANT_GRAPHQL FEATURE_AUTHOAUTH
 
 CALL_LOG=/tmp/calls.log
 OUTPUT=/tmp/case.out
@@ -81,9 +84,9 @@ expect_recorded() {
   fi
 }
 
-case "$WANT_AUTH" in
-  *"$PROVIDERS_GRANT"*) echo "  ok   svc-auth asks for the OAuth provider secrets" ;;
-  *) echo "  FAIL svc-auth does not ask for $PROVIDERS_GRANT"; FAILED=$((FAILED + 1)) ;;
+case "$BASE_AUTH" in
+  *"$PROVIDERS_GRANT"*) echo "  FAIL svc-auth asks for $PROVIDERS_GRANT with end-user OAuth off"; FAILED=$((FAILED + 1)) ;;
+  *) echo "  ok   svc-auth asks for no OAuth provider secret with the flag off" ;;
 esac
 
 start "fresh install"
@@ -176,6 +179,16 @@ expect_rc 0
 expect_called "DELETE http://provisioning.test:24005/api/auth/tokens/hash-svc-auth"
 expect_file "$SECRETS_DIR/auth-token" excb_svc-auth-new
 expect_file "$SECRETS_DIR/graphql-token" excb_svc-graphql
+
+start "fresh install with end-user OAuth off"
+PRINCIPALS_EXIST= REGISTERED=1 FEATURE_AUTHOAUTH=false
+export PRINCIPALS_EXIST REGISTERED FEATURE_AUTHOAUTH
+run
+expect_rc 0
+expect_recorded auth-token "$BASE_AUTH"
+if grep -F '/api/auth/tokens {"name":"svc-auth"' "$CALL_LOG" | grep -qF "$PROVIDERS_GRANT"; then
+  bad "svc-auth minted with $PROVIDERS_GRANT while end-user OAuth is off"
+else ok "svc-auth minted without the provider grant"; fi
 
 echo "bootstrap: $PASSED passed, $FAILED failed"
 [ "$FAILED" = 0 ]
