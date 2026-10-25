@@ -23,9 +23,20 @@ type fakeLogReader struct {
 	err      error
 	queries  []string
 	readArgs [][2]int64
+	// deadlines is how long each call had left.
+	deadlines []time.Duration
 }
 
-func (f *fakeLogReader) ReadLines(_ context.Context, selector string, from, to int64, limit int) ([]logdrain.Line, error) {
+func (f *fakeLogReader) noteDeadline(ctx context.Context) {
+	if deadline, ok := ctx.Deadline(); ok {
+		f.deadlines = append(f.deadlines, time.Until(deadline))
+	} else {
+		f.deadlines = append(f.deadlines, -1)
+	}
+}
+
+func (f *fakeLogReader) ReadLines(ctx context.Context, selector string, from, to int64, limit int) ([]logdrain.Line, error) {
+	f.noteDeadline(ctx)
 	f.queries = append(f.queries, selector)
 	f.readArgs = append(f.readArgs, [2]int64{from, to})
 	if f.err != nil {
@@ -40,7 +51,8 @@ func (f *fakeLogReader) ReadLines(_ context.Context, selector string, from, to i
 	return out, nil
 }
 
-func (f *fakeLogReader) CountLines(_ context.Context, selector string, _, _ int64) (int64, error) {
+func (f *fakeLogReader) CountLines(ctx context.Context, selector string, _, _ int64) (int64, error) {
+	f.noteDeadline(ctx)
 	return f.counts[selector], nil
 }
 
@@ -748,5 +760,24 @@ func TestLogDrains_PullStopsWhenItsTimeIsUp(t *testing.T) {
 	f.now = drainNow.Add(time.Minute)
 	if batches := f.pull(t); len(batches) != 1 {
 		t.Errorf("%d batches", len(batches))
+	}
+}
+
+// Every Loki call of a pull shares one deadline, so the pull answers before
+// the forwarder stops waiting even when a drain must count what it skips.
+func TestLogDrains_PullReadsWithinOneDeadline(t *testing.T) {
+	f := newDrainFixture(t)
+	sel := drainLogSelector(f.instances["proj-a"])
+	f.reader.lines[sel] = []logdrain.Line{lineAt(time.Hour, "late")}
+	f.datadog(t, "proj-a")
+	f.now = drainNow.Add(2 * time.Hour)
+	f.pull(t)
+	if len(f.reader.deadlines) < 2 {
+		t.Fatalf("calls %v", f.reader.deadlines)
+	}
+	for _, left := range f.reader.deadlines {
+		if left <= 0 || left > logPullDeadline {
+			t.Errorf("a Loki call had %v left", left)
+		}
 	}
 }

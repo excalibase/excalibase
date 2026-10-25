@@ -27,8 +27,10 @@ const (
 	logDrainLease      = time.Minute
 	minLogDrainWait    = 30 * time.Second
 	maxLogDrainBackoff = 30 * time.Minute
-	// logPullTime plus one Loki read stays under the forwarder's wait.
-	logPullTime = 10 * time.Second
+	// logPullTime is when a pull stops starting drains; logPullDeadline ends
+	// its Loki reads, well inside the forwarder's 30 s wait.
+	logPullTime     = 10 * time.Second
+	logPullDeadline = 20 * time.Second
 	// lineEntryOverhead covers the JSON fields around each message.
 	lineEntryOverhead = 192
 )
@@ -52,6 +54,9 @@ func (s *LogDrainService) Pull(ctx context.Context, limit int) ([]logdrain.Batch
 	if err != nil {
 		return nil, err
 	}
+	// Loki reads share one deadline; store writes keep the caller's context.
+	readCtx, cancel := context.WithTimeout(ctx, logPullDeadline)
+	defer cancel()
 	budget := logdrain.MaxPullBytes
 	batches := make([]logdrain.Batch, 0, len(due))
 	started := time.Now()
@@ -59,7 +64,7 @@ func (s *LogDrainService) Pull(ctx context.Context, limit int) ([]logdrain.Batch
 		if i > 0 && time.Since(started) >= s.pullTime {
 			break
 		}
-		batch, size, ok := s.batchFor(ctx, &due[i], now)
+		batch, size, ok := s.batchFor(ctx, readCtx, &due[i], now)
 		if !ok {
 			continue
 		}
@@ -78,7 +83,7 @@ func (s *LogDrainService) Pull(ctx context.Context, limit int) ([]logdrain.Batch
 	return batches, nil
 }
 
-func (s *LogDrainService) batchFor(ctx context.Context, drain *domain.LogDrain, now time.Time) (logdrain.Batch, int, bool) {
+func (s *LogDrainService) batchFor(ctx, readCtx context.Context, drain *domain.LogDrain, now time.Time) (logdrain.Batch, int, bool) {
 	batch, selector, err := s.prepare(drain)
 	if err != nil {
 		s.recordFailure(ctx, drain, 0, err.Error(), now)
@@ -90,12 +95,12 @@ func (s *LogDrainService) batchFor(ctx context.Context, drain *domain.LogDrain, 
 		s.deferDrain(ctx, drain.ID, time.Unix(0, from).Add(logIngestDelay+time.Second))
 		return logdrain.Batch{}, 0, false
 	}
-	if from, err = s.skipBacklog(ctx, drain, selector, from, end); err != nil {
+	if from, err = s.skipBacklog(ctx, readCtx, drain, selector, from, end); err != nil {
 		log.Printf("log drain %s: skip ahead: %v", drain.ID, err)
 		s.deferDrain(ctx, drain.ID, now.Add(logStoreRetry))
 		return logdrain.Batch{}, 0, false
 	}
-	lines, err := s.logs.ReadLines(ctx, selector, from+1, end, logdrain.MaxBatchLines)
+	lines, err := s.logs.ReadLines(readCtx, selector, from+1, end, logdrain.MaxBatchLines)
 	if err != nil {
 		log.Printf("log drain %s: read logs: %v", drain.ID, err)
 		s.deferDrain(ctx, drain.ID, now.Add(logStoreRetry))
@@ -140,12 +145,12 @@ func (s *LogDrainService) prepare(drain *domain.LogDrain) (logdrain.Batch, strin
 
 // skipBacklog moves a drain more than logMaxLag behind to just before end,
 // counting the lines it skips as dropped.
-func (s *LogDrainService) skipBacklog(ctx context.Context, drain *domain.LogDrain, selector string, from, end int64) (int64, error) {
+func (s *LogDrainService) skipBacklog(ctx, readCtx context.Context, drain *domain.LogDrain, selector string, from, end int64) (int64, error) {
 	if time.Duration(end-from) <= logMaxLag {
 		return from, nil
 	}
 	resume := end - int64(logResumeWindow)
-	dropped, err := s.logs.CountLines(ctx, selector, from+1, resume+1)
+	dropped, err := s.logs.CountLines(readCtx, selector, from+1, resume+1)
 	if err != nil {
 		log.Printf("log drain %s: count skipped lines: %v", drain.ID, err)
 		dropped = 0
