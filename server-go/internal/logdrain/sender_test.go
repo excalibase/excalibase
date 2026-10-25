@@ -251,13 +251,16 @@ func TestEncode_DoesNotEscapeHTML(t *testing.T) {
 // An answer whose body never ends is a failure, so a slow destination cannot
 // hold a worker and still count as delivered.
 func TestSender_UnfinishedAnswerIsAFailure(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	release := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("partial"))
 		w.(http.Flusher).Flush()
-		<-r.Context().Done()
+		// The answer ends only after the sender has given up on it.
+		<-release
 	}))
 	defer server.Close()
+	defer close(release)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	err := testSender(server).Send(ctx, Batch{Kind: KindHTTPS, Target: server.URL, Lines: sampleLines})

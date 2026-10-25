@@ -124,6 +124,7 @@ describe('LogExplorerPage', () => {
     await screen.findByText('INFO started');
     expect(screen.getByRole('button', { name: '7d' })).toBeInTheDocument();
     expect(screen.queryByTestId('log-retention')).not.toBeInTheDocument();
+  });
 
   test('shows log forwarding to an Admin when the logdrains feature is on', async () => {
     useAuthStore.setState({ user: { id: 'u1', username: 'u', role: 'platform_admin' } as never });
