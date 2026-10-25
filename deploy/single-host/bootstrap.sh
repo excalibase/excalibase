@@ -40,12 +40,11 @@ if [ "${FEATURE_AUTHOAUTH:-false}" = true ]; then
 fi
 GRAPHQL_PERMISSIONS='["vault:read:projects/*/credentials/excalibase_app","projects:info:read","policies:read"]'
 
-# 0755 dir + 0644 files: the volume is mounted read-only into exactly two
-# containers (auth, graphql) which run as different non-root UIDs (distroless
-# nonroot vs uid 1000), so a 0600 root-owned file would be unreadable by both.
-# This mirrors the default mode of a Kubernetes Secret volume: the files are
-# reachable only from inside those containers, never from the host filesystem
-# of another service.
+# Each token is read by one container only, so it is 0600 and owned by that
+# container's user: auth runs as distroless nonroot (65532), graphql as uid
+# 1000. The directory stays 0755 so both can reach their own file.
+AUTH_TOKEN_UID="${AUTH_TOKEN_UID:-65532}"
+GRAPHQL_TOKEN_UID="${GRAPHQL_TOKEN_UID:-1000}"
 mkdir -p "$SECRETS_DIR"
 chmod 0755 "$SECRETS_DIR"
 
@@ -69,6 +68,13 @@ token_valid() {
 permissions_recorded() {
   [ -s "$1$PERMISSIONS_SUFFIX" ] &&
     jq -e --argjson want "$2" 'sort == ($want | sort)' "$1$PERMISSIONS_SUFFIX" >/dev/null 2>&1
+}
+
+# restrict_token <token-file> <uid> — readable by that container's user only;
+# also tightens a token an older version left 0644.
+restrict_token() {
+  chown "$2:$2" "$1"
+  chmod 0600 "$1"
 }
 
 # record_permissions <token-file> <permissions-json>
@@ -105,6 +111,8 @@ waiting_for_admin() {
 echo "[2/5] checking the stored service tokens ..."
 if token_valid "$AUTH_TOKEN_FILE" && token_valid "$GRAPHQL_TOKEN_FILE"; then
   echo "  both service tokens are valid"
+  restrict_token "$AUTH_TOKEN_FILE" "$AUTH_TOKEN_UID"
+  restrict_token "$GRAPHQL_TOKEN_FILE" "$GRAPHQL_TOKEN_UID"
   VAULT=$(vault_state) || exit 1
   KEY_SETTLED=0
   if [ "$VAULT" != open ] || [ -n "$(signing_key_present "$(cat "$AUTH_TOKEN_FILE")")" ]; then
@@ -232,14 +240,13 @@ mint_service_token() {
     echo "ERROR: could not mint the $1 token"; exit 1
   fi
   # No trailing newline — the consumers trim, but keep the file clean.
-  ( umask 022; printf '%s' "$TOKEN" > "$3" )
-  chmod 0644 "$3"
+  ( umask 077; printf '%s' "$TOKEN" > "$3" )
   echo "  minted $1"
 }
 
-# ensure_service_token <name> <permissions-json> <file> — keeps a stored token
-# that authenticates and carries exactly this list; otherwise revokes every
-# token the principal owns and mints one.
+# ensure_service_token <name> <permissions-json> <file> <reader-uid> — keeps a
+# stored token that authenticates and carries exactly this list; otherwise
+# revokes every token the principal owns and mints one.
 ensure_service_token() {
   if token_valid "$3" && permissions_current "$1" "$2"; then
     echo "  $1 token is valid"
@@ -247,12 +254,13 @@ ensure_service_token() {
     revoke_service_tokens "$1" || { echo "ERROR: could not revoke the stored $1 tokens"; exit 1; }
     mint_service_token "$1" "$2" "$3"
   fi
+  restrict_token "$3" "$4"
   record_permissions "$3" "$2"
 }
 
 echo "[4/5] service identities ..."
-ensure_service_token svc-auth "$AUTH_PERMISSIONS" "$AUTH_TOKEN_FILE"
-ensure_service_token svc-graphql "$GRAPHQL_PERMISSIONS" "$GRAPHQL_TOKEN_FILE"
+ensure_service_token svc-auth "$AUTH_PERMISSIONS" "$AUTH_TOKEN_FILE" "$AUTH_TOKEN_UID"
+ensure_service_token svc-graphql "$GRAPHQL_PERMISSIONS" "$GRAPHQL_TOKEN_FILE" "$GRAPHQL_TOKEN_UID"
 
 echo "[5/5] signing key ..."
 VAULT=$(vault_state) || exit 1
