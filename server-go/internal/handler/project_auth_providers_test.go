@@ -85,6 +85,14 @@ func (m *memAuthSignInStore) SetAuthSettingsWithSignIn(_ context.Context, projec
 	return nil
 }
 
+func (m *memAuthProviderStore) DeleteAuthProvider(_ context.Context, projectID, provider string) error {
+	if m.err != nil {
+		return m.err
+	}
+	delete(m.rows, projectID+"/"+provider)
+	return nil
+}
+
 type failingPutSecrets struct{ *fakeVault }
 
 func (failingPutSecrets) Put(string, map[string]string) error { return errors.New("vault sealed") }
@@ -132,6 +140,7 @@ func setupOAuthHandler(t *testing.T, flagOn bool) oauthFixture {
 	r.Route("/api/projects/{projectId}/auth-providers", func(r chi.Router) {
 		r.Get("/", h.GetAuthProviders)
 		r.Put("/{provider}", h.PutAuthProvider)
+		r.Delete("/{provider}", h.DeleteAuthProvider)
 	})
 	f.router = r
 	return f
@@ -317,5 +326,80 @@ func TestAuthProviders_PutIsAuditedWithoutTheSecret(t *testing.T) {
 	if entry.Action != "auth_provider.update" || entry.ProjectID != testOAuthProject || entry.ResourceID != "github" ||
 		!strings.Contains(entry.Details, `"secretChanged":true`) || strings.Contains(entry.Details, testOAuthSecret) {
 		t.Fatalf("audit = %+v", entry)
+	}
+}
+
+type failingDeleteSecrets struct{ *fakeVault }
+
+func (failingDeleteSecrets) Delete(string) error { return errors.New("vault sealed") }
+
+func TestAuthProviders_DeleteRemovesTheSecretAndTheRow(t *testing.T) {
+	f := setupOAuthHandler(t, true)
+	f.providers.rows[testOAuthProject+"/github"] = domain.ProjectAuthProvider{Provider: "github", Enabled: true, ClientID: "gh-id", ClientSecretSet: true}
+	f.vault.data[testOAuthSecretAt] = map[string]string{"client_secret": testOAuthSecret}
+	f.vault.data["projects/proj_oauth1/auth/providers/google"] = map[string]string{"client_secret": "keep"}
+	w := doJSON(f.router, http.MethodDelete, testOAuthGitHub, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE: %d %s", w.Code, w.Body.String())
+	}
+	if _, ok := f.vault.data[testOAuthSecretAt]; ok {
+		t.Fatal("the secret is still in the vault")
+	}
+	if _, ok := f.vault.data["projects/proj_oauth1/auth/providers/google"]; !ok {
+		t.Fatal("another provider's secret went too")
+	}
+	if _, ok := f.providers.rows[testOAuthProject+"/github"]; ok {
+		t.Fatal("the row survived")
+	}
+	if !strings.Contains(w.Body.String(), `"enabled":false`) || !strings.Contains(w.Body.String(), `"clientSecretSet":false`) {
+		t.Fatalf("response = %s", w.Body.String())
+	}
+	if again := doJSON(f.router, http.MethodDelete, testOAuthGitHub, nil); again.Code != http.StatusOK {
+		t.Fatalf("a second DELETE: %d", again.Code)
+	}
+}
+
+func TestAuthProviders_DeleteIsAudited(t *testing.T) {
+	f := setupOAuthHandler(t, true)
+	f.vault.data[testOAuthSecretAt] = map[string]string{"client_secret": testOAuthSecret}
+	doJSON(f.router, http.MethodDelete, testOAuthGitHub, nil)
+	if len(f.audit.entries) != 1 {
+		t.Fatalf("audit entries = %d", len(f.audit.entries))
+	}
+	entry := f.audit.entries[0]
+	if entry.Action != "auth_provider.delete" || entry.ProjectID != testOAuthProject || entry.ResourceID != "github" ||
+		entry.Resource != "auth_provider" || strings.Contains(entry.Details, testOAuthSecret) {
+		t.Fatalf("audit = %+v", entry)
+	}
+}
+
+func TestAuthProviders_DeleteRefusals(t *testing.T) {
+	f := setupOAuthHandler(t, true)
+	if w := doJSON(f.router, http.MethodDelete, testOAuthProviders+"/apple", nil); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown provider: %d", w.Code)
+	}
+	if w := doJSON(f.router, http.MethodDelete, "/api/projects/bad..id/auth-providers/github", nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("bad project: %d", w.Code)
+	}
+	f.providers.rows[testOAuthProject+"/github"] = domain.ProjectAuthProvider{Provider: "github", Enabled: true, ClientID: "gh", ClientSecretSet: true}
+	f.vault.data[testOAuthSecretAt] = map[string]string{"client_secret": testOAuthSecret}
+	f.handler.authOAuth.Secrets = failingDeleteSecrets{f.vault}
+	if w := doJSON(f.router, http.MethodDelete, testOAuthGitHub, nil); w.Code != http.StatusInternalServerError {
+		t.Fatalf("vault refused: %d", w.Code)
+	}
+	if _, ok := f.providers.rows[testOAuthProject+"/github"]; ok {
+		t.Fatal("the provider stayed on although its secret is going")
+	}
+	f.handler.authOAuth.Secrets = nil
+	if w := doJSON(f.router, http.MethodDelete, testOAuthGitHub, nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("no vault: %d", w.Code)
+	}
+	f.handler.authOAuth.Secrets = f.vault
+	f.providers.err = errors.New("pq: connection reset")
+	if w := doJSON(f.router, http.MethodDelete, testOAuthGitHub, nil); w.Code != http.StatusInternalServerError {
+		t.Fatalf("store failure: %d", w.Code)
+	}
+	if len(f.audit.entries) != 0 {
+		t.Fatalf("a failed DELETE was audited: %+v", f.audit.entries)
 	}
 }

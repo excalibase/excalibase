@@ -53,6 +53,15 @@ ON CONFLICT (project_id, provider) DO UPDATE SET
 	return nil
 }
 
+// DeleteAuthProvider removes one provider's row.
+func (s *Store) DeleteAuthProvider(ctx context.Context, projectID, provider string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM project_auth_providers WHERE project_id = $1 AND provider = $2`, projectID, provider); err != nil {
+		return fmt.Errorf("delete auth provider: %w", err)
+	}
+	return nil
+}
+
 // GetAuthSignIn reads the sign-in policy; no row reads as the default.
 func (s *Store) GetAuthSignIn(ctx context.Context, projectID string) (domain.ProjectAuthSignIn, error) {
 	signIn := domain.DefaultAuthSignIn()

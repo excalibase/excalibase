@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { providerUpdateBody, useAuthProviders, useSaveAuthProvider } from '../../api/authProviders';
+import { providerUpdateBody, useAuthProviders, useDeleteAuthProvider, useSaveAuthProvider } from '../../api/authProviders';
 import type { AuthProvider } from '../../api/authProviders';
 import { Button } from '../Button';
 import { StringRow } from '../ConnectionParts';
@@ -39,6 +39,7 @@ function guideFor(provider: string): ProviderGuide {
 
 function ProviderForm({ projectId, initial }: { readonly projectId: string; readonly initial: AuthProvider }) {
   const save = useSaveAuthProvider(projectId, initial.provider);
+  const remove = useDeleteAuthProvider(projectId, initial.provider);
   const [enabled, setEnabled] = useState(initial.enabled);
   const [clientId, setClientId] = useState(initial.clientId);
   const [secret, setSecret] = useState('');
@@ -53,6 +54,18 @@ function ProviderForm({ projectId, initial }: { readonly projectId: string; read
       onSuccess: () => {
         setSecret('');
         setSaved(true);
+      },
+    });
+  };
+
+  const removeSecret = () => {
+    if (!window.confirm(`Remove the ${guide.name} client secret? ${guide.name} sign-in stops working immediately.`)) return;
+    setSaved(false);
+    remove.mutate(undefined, {
+      onSuccess: (removed) => {
+        setEnabled(removed.enabled);
+        setClientId(removed.clientId);
+        setSecret('');
       },
     });
   };
@@ -84,12 +97,21 @@ function ProviderForm({ projectId, initial }: { readonly projectId: string; read
         <input id={`${prefix}-secret`} type="password" value={secret} className={inputClass} autoComplete="new-password"
           placeholder={initial.clientSecretSet ? 'Leave empty to keep the current secret' : `From the OAuth app at ${guide.name}`}
           onChange={(e) => { setSecret(e.target.value); setSaved(false); }} />
-        <p className="text-xs text-text-secondary mt-1" data-testid={`${prefix}-secret-state`}>
-          {initial.clientSecretSet ? 'Secret set. It is never shown again.' : 'Secret not set.'}
-        </p>
+        <div className="flex items-center justify-between mt-1">
+          <p className="text-xs text-text-secondary" data-testid={`${prefix}-secret-state`}>
+            {initial.clientSecretSet ? 'Secret set. It is never shown again.' : 'Secret not set.'}
+          </p>
+          {initial.clientSecretSet && (
+            <Button type="button" variant="danger" size="sm" disabled={remove.isPending} onClick={removeSecret}
+              aria-label={`Remove ${guide.name} secret`}>Remove secret</Button>
+          )}
+        </div>
       </div>
       {save.isError && (
         <p className="text-sm text-red-400" role="alert">{serverErrorMessage(save.error, 'The provider was not saved')}</p>
+      )}
+      {remove.isError && (
+        <p className="text-sm text-red-400" role="alert">{serverErrorMessage(remove.error, 'The secret was not removed')}</p>
       )}
       {saved && <p className="text-sm text-text-secondary">Saved. Auth uses it after it refreshes the project's settings.</p>}
       <Button type="submit" disabled={save.isPending} aria-label={`Save ${guide.name}`}>Save</Button>

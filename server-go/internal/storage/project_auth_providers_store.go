@@ -14,6 +14,8 @@ type ProjectAuthProviderStore interface {
 	ListAuthProviders(ctx context.Context, projectID string) ([]domain.ProjectAuthProvider, error)
 	// PutAuthProvider upserts one provider's row.
 	PutAuthProvider(ctx context.Context, projectID string, provider domain.ProjectAuthProvider) error
+	// DeleteAuthProvider removes one provider's row; a missing row is no error.
+	DeleteAuthProvider(ctx context.Context, projectID, provider string) error
 }
 
 // ProjectAuthSignInStore reads and writes the sign-in policy columns of the

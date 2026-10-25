@@ -44,3 +44,14 @@ export const useSaveAuthProvider = (projectId: string, provider: string) => {
         current?.map((entry) => (entry.provider === saved.provider ? saved : entry))),
   });
 };
+
+// useDeleteAuthProvider removes the provider's secret and settings; it comes back off and empty.
+export const useDeleteAuthProvider = (projectId: string, provider: string) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => (await api.delete<AuthProvider>(`${providersPath(projectId)}/${provider}`)).data,
+    onSuccess: (removed) =>
+      queryClient.setQueryData<AuthProvider[]>(providersKey(projectId), (current) =>
+        current?.map((entry) => (entry.provider === removed.provider ? removed : entry))),
+  });
+};

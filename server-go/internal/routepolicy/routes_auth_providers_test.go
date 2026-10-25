@@ -13,8 +13,9 @@ func TestAuthProviderRows(t *testing.T) {
 		t.Fatalf("Index: %v", err)
 	}
 	for key, minRole := range map[Key]string{
-		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/auth-providers/"}:           roleDeveloper,
-		{Method: http.MethodPut, Pattern: "/api/projects/{projectId}/auth-providers/{provider}"}: roleAdmin,
+		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/auth-providers/"}:              roleDeveloper,
+		{Method: http.MethodPut, Pattern: "/api/projects/{projectId}/auth-providers/{provider}"}:    roleAdmin,
+		{Method: http.MethodDelete, Pattern: "/api/projects/{projectId}/auth-providers/{provider}"}: roleAdmin,
 	} {
 		row, ok := index[key]
 		if !ok || row.MinRole != minRole || row.Param != ParamProject || row.Auth != AuthSession || row.Capability != "" {
@@ -25,5 +26,9 @@ func TestAuthProviderRows(t *testing.T) {
 	put := index[Key{Method: http.MethodPut, Pattern: "/api/projects/{projectId}/auth-providers/{provider}"}]
 	if got := Expect(put, http.MethodPut, developer); got != Deny403 {
 		t.Errorf("a Developer writing a provider: %s", got)
+	}
+	del := index[Key{Method: http.MethodDelete, Pattern: "/api/projects/{projectId}/auth-providers/{provider}"}]
+	if got := Expect(del, http.MethodDelete, developer); got != Deny403 {
+		t.Errorf("a Developer deleting a provider secret: %s", got)
 	}
 }

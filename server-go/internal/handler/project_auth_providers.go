@@ -17,6 +17,7 @@ import (
 
 const (
 	auditActionAuthProviderUpdate = "auth_provider.update"
+	auditActionAuthProviderDelete = "auth_provider.delete"
 	auditResourceAuthProvider     = "auth_provider"
 	auditActionAuthSettingsUpdate = "auth_settings.update"
 	auditResourceAuthSettings     = "auth_settings"
@@ -25,9 +26,10 @@ const (
 	errAuthProvidersRead          = "failed to read the sign-in providers"
 )
 
-// authProviderSecrets writes a provider's client secret; the vault client satisfies it.
+// authProviderSecrets writes and removes a provider's client secret; the vault client satisfies it.
 type authProviderSecrets interface {
 	Put(path string, data map[string]string) error
+	Delete(path string) error
 }
 
 // AuthOAuthDeps wires end-user OAuth sign-in (EXC-662). Nil stores leave the
@@ -111,6 +113,37 @@ func (h *ProvisioningHandler) PutAuthProvider(w http.ResponseWriter, r *http.Req
 	}
 	h.recordAuthProvider(r, projectID, next, secret != "")
 	writeJSON(w, h.authProviderViewFor(next, orgSlug, projectID))
+}
+
+// DeleteAuthProvider serves DELETE /api/projects/{projectId}/auth-providers/{provider}.
+// The row goes first, switching the provider off, so a row never claims a
+// secret the vault no longer holds; both steps are safe to repeat.
+func (h *ProvisioningHandler) DeleteAuthProvider(w http.ResponseWriter, r *http.Request) {
+	provider := chi.URLParam(r, "provider")
+	projectID, orgSlug, ok := h.authProvidersProject(w, r)
+	if !ok {
+		return
+	}
+	if !domain.IsAuthProvider(provider) {
+		httpError(w, "unknown sign-in provider", http.StatusNotFound)
+		return
+	}
+	if h.authOAuth.Secrets == nil {
+		httpError(w, "the vault is not available", http.StatusServiceUnavailable)
+		return
+	}
+	if err := h.authOAuth.Providers.DeleteAuthProvider(r.Context(), projectID, provider); err != nil {
+		log.Printf("ERROR: delete the %s provider of project %s: %v", provider, projectID, err)
+		httpError(w, "failed to delete the provider", http.StatusInternalServerError)
+		return
+	}
+	if err := h.authOAuth.Secrets.Delete(domain.AuthProviderSecretPath(projectID, provider)); err != nil {
+		log.Printf("ERROR: delete the %s client secret of project %s: %v", provider, projectID, err)
+		httpError(w, "failed to delete the client secret", http.StatusInternalServerError)
+		return
+	}
+	h.writeAuthAudit(r, projectID, auditActionAuthProviderDelete, auditResourceAuthProvider, provider, `{"secretRemoved":true}`)
+	writeJSON(w, h.authProviderViewFor(domain.ProjectAuthProvider{Provider: provider}, orgSlug, projectID))
 }
 
 // decodeAuthProviderUpdate validates the body against the stored row and
