@@ -12,7 +12,8 @@ export type Feature =
   | 'slowqueries'
   | 'requestmetrics'
   | 'advisors'
-  | 'metricsendpoint';
+  | 'metricsendpoint'
+  | 'logdrains';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;

@@ -21,5 +21,9 @@
 //     port, zone id, path or multi-host list, and refuses the reserved
 //     suffixes that only ever name something inside the platform network.
 //
+// Dialer applies ClassifyAddr at connect time: every address a name resolves
+// to is checked and the checked address is the one dialled, so DNS rebinding
+// between check and connect gains nothing (log drains, EXC-658).
+//
 // Errors never echo a resolved address back to the user.
 package publicaddr

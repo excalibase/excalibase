@@ -10,7 +10,8 @@ var ErrInternalAddress = errors.New("host is not a publicly routable address; th
 
 // blockedPrefixes covers ranges that netip's Is* helpers do not: this-network,
 // CGNAT (Alibaba metadata lives here), IETF protocol assignments, benchmarking,
-// reserved + broadcast, IPv6 site-local, Teredo tunnels and the discard prefix.
+// reserved + broadcast, IPv6 site-local, Teredo tunnels, the discard prefix and
+// local-use NAT64.
 var blockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix(thisNetworkRange),
 	netip.MustParsePrefix(cgnatRange),
@@ -20,6 +21,8 @@ var blockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("fec0::/10"),
 	netip.MustParsePrefix("2001::/32"),
 	netip.MustParsePrefix("100::/64"),
+	// Local-use NAT64 (RFC 8215): where the IPv4 sits is the operator's choice.
+	netip.MustParsePrefix("64:ff9b:1::/48"),
 }
 
 // IPv4 ranges the platform refuses to dial, never targets.

@@ -113,6 +113,10 @@ type AppConfig struct {
 	// on busy minikube clusters and only sees logs since pod start).
 	LokiURL string
 
+	// LogForwarderToken is the shared token the log-forwarder pod pulls
+	// batches with (EXC-658); empty refuses every pull.
+	LogForwarderToken string
+
 	// RequestMetricsTargets are scraped for the request charts (EXC-656).
 	RequestMetricsTargets []string
 
@@ -501,6 +505,7 @@ func load() AppConfig {
 		EmailReplyTo:                   envOr("EMAIL_REPLY_TO", ""),
 		StoragePublicURL:               envOr("STORAGE_PUBLIC_URL", ""),
 		LokiURL:                        envOr("LOKI_URL", ""),
+		LogForwarderToken:              os.Getenv("LOG_FORWARDER_TOKEN"),
 		RequestMetricsTargets:          loadRequestMetricsTargets(),
 		PromURL:                        envOr("PROM_URL", ""),
 		FnEgressDefaultHosts:           envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),

@@ -173,6 +173,8 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		// No platform DB: past the gates both answer from empty fakes.
 		metricsKeysHandler:     handler.NewMetricsKeysHandler(fakestore.NewTokens(), nil),
 		metricsEndpointHandler: handler.NewMetricsEndpointHandler(storedTotals{}),
+		logDrainsHandler:       handler.NewLogDrainsHandler(matrixLogDrains(instances), nil),
+		logForwarderHandler:    handler.NewLogForwarderHandler(matrixLogDrains(instances), "matrix-forwarder-token"),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),
@@ -439,4 +441,17 @@ func matrixTemplateHandler(t *testing.T, instances *fakestore.Instances) *handle
 	return handler.NewAppTemplateHandler(service.NewAppTemplateService(catalog, service.AppTemplateDeps{
 		Apps: apphost.NewPostgresAppStore(offlineDB(t)), Projects: instances, Plans: plans,
 	}))
+}
+
+// matrixLogDrains has no vault or log store: past the gates a create is
+// refused and a list is empty.
+func matrixLogDrains(instances *fakestore.Instances) *service.LogDrainService {
+	return service.NewLogDrainService(service.LogDrainDeps{Store: fakestore.NewLogDrains(),
+		Instances: func(projectID string) (*domain.DatabaseInstance, error) {
+			inst, err := instances.FindByProjectID(projectID)
+			if err != nil || inst == nil {
+				return nil, service.ErrProjectNotFound
+			}
+			return inst, nil
+		}})
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 )
 
 // EXC-554: what shipped dark answers exactly as a route that was never
@@ -51,6 +52,14 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodPost, "/api/projects/" + matrixProjectA + "/metrics-keys"},
 		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/metrics-keys/key-1"},
 	},
+	features.LogDrains: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/log-drains"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/log-drains"},
+		{http.MethodPatch, "/api/projects/" + matrixProjectA + "/log-drains/ld_1"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/log-drains/ld_1"},
+		{http.MethodPost, "/internal/log-forwarder/pull"},
+		{http.MethodPost, "/internal/log-forwarder/ack"},
+	},
 	features.AppStorage: {
 		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
 		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},
@@ -75,7 +84,8 @@ func probeDark(router http.Handler, probe darkProbe, token string) *httptest.Res
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	// Probed on the internal listener, where every route is mounted.
+	custommw.MarkInternalListener(router).ServeHTTP(w, req)
 	return w
 }
 
