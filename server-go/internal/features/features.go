@@ -37,11 +37,14 @@ const (
 	// LogRetention keeps each project's logs for its plan's period: provisioning
 	// labels project namespaces with their plan and clamps log searches (EXC-659).
 	LogRetention Feature = "logretention"
+	// LogDrains forwards a project's logs to Datadog or an HTTPS endpoint its
+	// Admins configure, through the log-forwarder pod (EXC-658).
+	LogDrains Feature = "logdrains"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains}
 }
 
 type Flags interface {

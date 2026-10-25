@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Loader2, Search, FileText } from 'lucide-react';
 import { useLogSearch } from '../hooks/useProvisioning';
 import { serverErrorMessage } from '../utils/serverError';
+import { LogDrainsCard } from '../components/LogDrainsCard';
 
 const TIME_RANGES = [
   { label: '1h', hours: 1, lines: 50 },
@@ -126,6 +127,8 @@ export function LogExplorerPage() {
           </div>
         )}
       </div>
+
+      <LogDrainsCard projectId={projectId || ''} />
     </div>
   );
 }

@@ -40,6 +40,7 @@ func TestClassifyAddr_BlocksInternalRanges(t *testing.T) {
 		{"v6 v4-compatible deprecated", "::10.0.0.1"},
 		{"v6 nat64 embedding private", "64:ff9b::10.0.0.1"},
 		{"v6 nat64 embedding metadata", "64:ff9b::a9fe:a9fe"},
+		{"v6 local-use nat64 64:ff9b:1::/48", "64:ff9b:1::808:808"},
 		{"v6 6to4 embedding private", "2002:0a00:0001::1"},
 		{"v6 6to4 embedding metadata", "2002:a9fe:a9fe::1"},
 		{"v6 teredo tunnel", "2001:0:4136:e378:8000:63bf:3fff:fdd2"},

@@ -668,6 +668,44 @@ func newMetricsEndpointHandler(sqlStore storage.PlatformStore, totals service.Re
 	return handler.NewMetricsEndpointHandler(service.NewMetricsExportService(history, totals))
 }
 
+// newLogDrainService serves log forwarding (EXC-658); nil without the
+// platform DB tables. It runs no loop: the forwarder pod pulls.
+func newLogDrainService(cfg config.AppConfig, sqlStore any, vc vaultclient.VaultClient, provSvc *service.ProvisioningService) *service.LogDrainService {
+	drains, ok := sqlStore.(service.LogDrainStore)
+	if !ok {
+		return nil
+	}
+	var logs service.ProjectLogReader
+	if cfg.LokiURL != "" {
+		logs = service.NewLokiReader(cfg.LokiURL, &http.Client{})
+	}
+	instances := func(projectID string) (*domain.DatabaseInstance, error) {
+		inst, err := provSvc.GetInstance(projectID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", service.ErrProjectNotFound, err)
+		}
+		return inst, nil
+	}
+	return service.NewLogDrainService(service.LogDrainDeps{Store: drains, Vault: vc, Instances: instances, Logs: logs})
+}
+
+func newLogDrainsHandler(drains *service.LogDrainService, sqlStore any) *handler.LogDrainsHandler {
+	if drains == nil {
+		return nil
+	}
+	audit, _ := sqlStore.(interface {
+		LogAudit(ctx context.Context, entry *domain.AuditEntry) error
+	})
+	return handler.NewLogDrainsHandler(drains, audit)
+}
+
+func newLogForwarderHandler(drains *service.LogDrainService, token string) *handler.LogForwarderHandler {
+	if drains == nil {
+		return nil
+	}
+	return handler.NewLogForwarderHandler(drains, token)
+}
+
 // restoreSweepLockID is the advisory lock the restore sweeper leads on. It
 // must stay distinct from every other advisory lock id the platform takes.
 const restoreSweepLockID int64 = 0x51c2_7d0e_9a41_3b77
@@ -1017,6 +1055,10 @@ type handlerDeps struct {
 	// endpoint and its keys (EXC-657); nil without the platform DB tables.
 	metricsKeysHandler     *handler.MetricsKeysHandler
 	metricsEndpointHandler *handler.MetricsEndpointHandler
+	// logDrainsHandler and logForwarderHandler serve log forwarding
+	// (EXC-658); nil without the platform DB tables.
+	logDrainsHandler    *handler.LogDrainsHandler
+	logForwarderHandler *handler.LogForwarderHandler
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1589,6 +1631,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
+	logDrainSvc := newLogDrainService(cfg, sqlStore, vc, provSvc)
 
 	emailSender := buildEmailSender(cfg)
 	storageSvc := buildStorageService(cfg, sqlStore)
@@ -1769,6 +1812,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlMetricsScrape:        newMetricsScrapeLimiter(),
 		metricsKeysHandler:     newMetricsKeysHandler(sqlStore),
 		metricsEndpointHandler: newMetricsEndpointHandler(sqlStore, requestTotals),
+		logDrainsHandler:       newLogDrainsHandler(logDrainSvc, sqlStore),
+		logForwarderHandler:    newLogForwarderHandler(logDrainSvc, cfg.LogForwarderToken),
 		mcpAudit:               sqlStore,
 		features:               cfg.Features(),
 		activity:               custommw.ProjectActivity(activityRecorder),
@@ -2331,6 +2376,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		d.sdkKeysHandler.Routes(r)
 	})
 	mountMetricsEndpoint(r, sqlStore, store, d)
+	mountLogDrains(r, sqlStore, store, d)
 	// What AI coding tools did in the project through MCP (EXC-544).
 	r.Route("/api/projects/{projectId}/ai-activity", func(r chi.Router) {
 		r.Use(features.Require(d.features, features.MCP))
@@ -2475,6 +2521,28 @@ func mountMetricsEndpoint(r *chi.Mux, sqlStore storage.OrgStore, store storage.I
 	}
 }
 
+// mountLogDrains serves a project's log forwarding (EXC-658): only Admins
+// see or change drains. The forwarder pod pulls batches with its own token.
+func mountLogDrains(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
+	if d.logDrainsHandler != nil {
+		r.Route("/api/projects/{projectId}/log-drains", func(r chi.Router) {
+			r.Use(features.Require(d.features, features.LogDrains))
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
+			r.Use(d.rlAuthed)
+			d.logDrainsHandler.Routes(r)
+		})
+	}
+	if d.logForwarderHandler != nil {
+		r.Group(func(r chi.Router) {
+			r.Use(features.Require(d.features, features.LogDrains))
+			d.logForwarderHandler.Mount(r, custommw.RequireInternalListener)
+		})
+	}
+}
+
 // mountAppStorage serves a project's buckets to its app users (EXC-560): a
 // project JWT, the bucket's access rule for its role, and CORS from the
 // project's own allowlist.
@@ -2526,7 +2594,7 @@ func newListeners(cfg config.AppConfig, router http.Handler) (public, internal *
 	}
 	internal = &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           clientaddr.Middleware(nil)(router),
+		Handler:           clientaddr.Middleware(nil)(custommw.MarkInternalListener(router)),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	return public, internal

@@ -11,6 +11,8 @@ RUN CGO_ENABLED=1 go build -o /bin/excalibase-provisioning ./cmd/server/
 RUN CGO_ENABLED=0 go build -o /bin/excalibase-engine-proxy ./cmd/engine-proxy/
 # Copied into every app container on a single host as its readiness check: static, so any image runs it.
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /bin/excalibase-app-probe ./cmd/app-probe/
+# The log forwarder pod (EXC-658) runs this image with this binary as its command.
+RUN CGO_ENABLED=0 go build -o /bin/excalibase-log-forwarder ./cmd/log-forwarder/
 
 FROM alpine:3.20
 
@@ -18,6 +20,7 @@ RUN apk add --no-cache ca-certificates sqlite-libs
 COPY --from=build /bin/excalibase-provisioning /bin/excalibase-provisioning
 COPY --from=build /bin/excalibase-engine-proxy /bin/excalibase-engine-proxy
 COPY --from=build /bin/excalibase-app-probe /usr/local/bin/excalibase-app-probe
+COPY --from=build /bin/excalibase-log-forwarder /bin/excalibase-log-forwarder
 
 # Bundle watcher Helm chart so provisioning can auto-deploy per-tenant CDC watchers.
 # Path matches default WATCHER_CHART_PATH env.

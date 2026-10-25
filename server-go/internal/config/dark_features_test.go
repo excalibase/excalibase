@@ -61,3 +61,10 @@ func TestDarkFeatures_MetricsEndpointVariable(t *testing.T) {
 		t.Errorf("metrics endpoint variable = %q", got)
 	}
 }
+
+// EXC-658: the chart sets this exact name from features.logDrains.
+func TestDarkFeatures_LogDrainsVariable(t *testing.T) {
+	if got := featureEnv[features.LogDrains]; got != "FEATURE_LOGDRAINS" {
+		t.Errorf("log drains variable = %q", got)
+	}
+}

@@ -65,6 +65,9 @@ const (
 	// AuthFunctionJWT is an end-user JWT whose audience must name the
 	// project in the path.
 	AuthFunctionJWT AuthClass = "function-jwt"
+	// AuthForwarderToken is the log-forwarder pod's shared token (EXC-658),
+	// held by no studio caller or service principal.
+	AuthForwarderToken AuthClass = "forwarder-token"
 )
 
 // Owner names what resolves the caller's right to the resource in the path.
@@ -87,6 +90,9 @@ const (
 	OwnerTokenSubject Owner = "handler.AuthHandler.tokenForCaller"
 	// OwnerRuntimeSecret is the per-project derived runtime secret.
 	OwnerRuntimeSecret Owner = "per-project runtime secret"
+	// OwnerForwarderToken is the forwarder's token; each batch carries the
+	// project it was read for, chosen by provisioning, never by the caller.
+	OwnerForwarderToken Owner = "log-forwarder token"
 	// OwnerFunctionAudience is the JWT audience claim naming the project.
 	OwnerFunctionAudience Owner = "JWT aud names the project"
 	// OwnerBucketVisibility is the bucket's own public flag.

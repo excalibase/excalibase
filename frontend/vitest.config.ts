@@ -144,6 +144,9 @@ export default defineConfig({
         'src/pages/SiteDetailPage.tsx',
         'src/api/metricsKeys.ts',
         'src/components/MetricsEndpointCard.tsx',
+        'src/api/logDrains.ts',
+        'src/components/LogDrainsCard.tsx',
+        'src/components/LogDrainForm.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

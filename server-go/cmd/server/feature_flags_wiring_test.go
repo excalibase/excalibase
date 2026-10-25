@@ -51,6 +51,14 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodPost, "/api/projects/" + matrixProjectA + "/metrics-keys"},
 		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/metrics-keys/key-1"},
 	},
+	features.LogDrains: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/log-drains"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/log-drains"},
+		{http.MethodPatch, "/api/projects/" + matrixProjectA + "/log-drains/ld_1"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/log-drains/ld_1"},
+		{http.MethodPost, "/internal/log-forwarder/pull"},
+		{http.MethodPost, "/internal/log-forwarder/ack"},
+	},
 	features.AppStorage: {
 		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
 		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},
