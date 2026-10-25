@@ -264,6 +264,8 @@ services:
       FEATURE_SLOWQUERIES: ${FEATURE_SLOWQUERIES:-false}
       # Security and performance checks per project, in Studio and MCP (EXC-655).
       FEATURE_ADVISORS: ${FEATURE_ADVISORS:-false}
+      # End-user Google and GitHub sign-in for customers' apps (EXC-662).
+      FEATURE_AUTHOAUTH: ${FEATURE_AUTHOAUTH:-false}
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.
@@ -385,7 +387,9 @@ services:
   # svc-auth and svc-graphql service principals, mints one permission-scoped
   # capability token each, and seeds the ES256 signing keypair into vault. The
   # tokens are handed to the consumers as FILES on a shared named volume.
-  # Idempotent: re-mints only the tokens that no longer authenticate.
+  # Idempotent: re-mints only the tokens that no longer authenticate or carry
+  # another permission list than this version's; that re-mint needs
+  # ADMIN_PASSWORD, and without it the old tokens are kept with a warning.
   bootstrap:
     image: docker.io/library/alpine:3.20
     container_name: excalibase-bootstrap
@@ -398,6 +402,8 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}
+      # svc-auth reads project OAuth client secrets only while this is on (EXC-662).
+      FEATURE_AUTHOAUTH: ${FEATURE_AUTHOAUTH:-false}
       SECRETS_DIR: /var/run/excalibase
     command: ["sh", "/bootstrap.sh"]
     volumes:

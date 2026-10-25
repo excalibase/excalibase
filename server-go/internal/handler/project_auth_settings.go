@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -18,12 +19,23 @@ const errAuthSettingsNotConfigured = "project auth settings not configured"
 type authSettingsResponse struct {
 	RequireEmailVerification bool   `json:"requireEmailVerification"`
 	SiteURL                  string `json:"siteUrl"`
+	// Present only while authoauth is on (EXC-662).
+	*authSignInResponse
 }
 
-// authSettingsRequest is the PUT body.
+type authSignInResponse struct {
+	RedirectURLs  []string `json:"redirectUrls"`
+	AllowNewUsers bool     `json:"allowNewUsers"`
+}
+
+// authSettingsRequest is the PUT body. The sign-in fields are read only while
+// authoauth is on, and an absent one keeps its stored value so an older
+// Studio cannot wipe them.
 type authSettingsRequest struct {
-	RequireEmailVerification bool   `json:"requireEmailVerification"`
-	SiteURL                  string `json:"siteUrl"`
+	RequireEmailVerification bool      `json:"requireEmailVerification"`
+	SiteURL                  string    `json:"siteUrl"`
+	RedirectURLs             *[]string `json:"redirectUrls"`
+	AllowNewUsers            *bool     `json:"allowNewUsers"`
 }
 
 // GetAuthSettings serves GET /api/projects/{projectId}/auth-settings.
@@ -37,7 +49,16 @@ func (h *ProvisioningHandler) GetAuthSettings(w http.ResponseWriter, r *http.Req
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, authSettingsResponseFor(settings))
+	response := authSettingsResponseFor(settings)
+	if h.authOAuthOn(r.Context()) {
+		signIn, err := h.storedAuthSignIn(r.Context(), projectID)
+		if err != nil {
+			httpError(w, safeError(err), http.StatusInternalServerError)
+			return
+		}
+		response.authSignInResponse = authSignInResponseFor(signIn)
+	}
+	writeJSON(w, response)
 }
 
 // PutAuthSettings serves PUT /api/projects/{projectId}/auth-settings with
@@ -67,6 +88,10 @@ func (h *ProvisioningHandler) PutAuthSettings(w http.ResponseWriter, r *http.Req
 	settings := domain.ProjectAuthSettings{
 		RequireEmailVerification: body.RequireEmailVerification,
 		SiteURL:                  siteURL,
+	}
+	if h.authOAuthOn(r.Context()) {
+		h.putAuthSettingsWithSignIn(w, r, projectID, settings, body)
+		return
 	}
 	if err := h.authSettingsStore.SetAuthSettings(r.Context(), projectID, settings); err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
@@ -102,9 +127,94 @@ func (h *ProvisioningHandler) authSettingsForInfo(ctx context.Context, projectID
 	return settings, err
 }
 
+// putAuthSettingsWithSignIn is the authoauth-on write: the settings and the
+// sign-in policy in one upsert, absent policy fields keeping their stored value.
+func (h *ProvisioningHandler) putAuthSettingsWithSignIn(w http.ResponseWriter, r *http.Request, projectID string, settings domain.ProjectAuthSettings, body authSettingsRequest) {
+	var redirectURLs []string
+	if body.RedirectURLs != nil {
+		normalized, err := domain.NormalizeRedirectURLs(*body.RedirectURLs)
+		if err != nil {
+			httpError(w, safeError(err), http.StatusBadRequest)
+			return
+		}
+		redirectURLs = normalized
+	}
+	signIn, err := h.storedAuthSignIn(r.Context(), projectID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	if body.RedirectURLs != nil {
+		signIn.RedirectURLs = redirectURLs
+	}
+	if body.AllowNewUsers != nil {
+		signIn.AllowNewUsers = *body.AllowNewUsers
+	}
+	if err := h.authOAuth.SignIn.SetAuthSettingsWithSignIn(r.Context(), projectID, settings, signIn); err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	h.recordAuthSignIn(r, projectID, settings, signIn)
+	response := authSettingsResponseFor(settings)
+	response.authSignInResponse = authSignInResponseFor(signIn)
+	writeJSON(w, response)
+}
+
+// storedAuthSignIn reads the sign-in policy; without its store there is none to report.
+func (h *ProvisioningHandler) storedAuthSignIn(ctx context.Context, projectID string) (domain.ProjectAuthSignIn, error) {
+	if h.authOAuth.SignIn == nil {
+		return domain.ProjectAuthSignIn{}, errors.New(errAuthSettingsNotConfigured)
+	}
+	return h.authOAuth.SignIn.GetAuthSignIn(ctx, projectID)
+}
+
+// authOAuthForInfo is the OAuth policy on /info: nil while authoauth is off,
+// so none of its keys appear. A read failure is returned, never defaulted.
+func (h *ProvisioningHandler) authOAuthForInfo(ctx context.Context, projectID, orgSlug string) (*domain.ProjectOAuthInfo, error) {
+	if !h.authOAuthOn(ctx) {
+		return nil, nil
+	}
+	info := &domain.ProjectOAuthInfo{RedirectURLs: []string{}, AllowNewUsers: true, OAuthProviders: []domain.OAuthProviderInfo{}}
+	if h.authOAuth.SignIn != nil {
+		signIn, err := h.authOAuth.SignIn.GetAuthSignIn(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		info.AllowNewUsers = signIn.AllowNewUsers
+		if signIn.RedirectURLs != nil {
+			info.RedirectURLs = signIn.RedirectURLs
+		}
+	}
+	if h.authOAuth.Providers != nil {
+		stored, err := h.authOAuth.Providers.ListAuthProviders(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		info.OAuthProviders = domain.UsableOAuthProviders(stored, h.authOAuth.PublicBaseURL, orgSlug, projectID)
+	}
+	return info, nil
+}
+
+func authSignInResponseFor(signIn domain.ProjectAuthSignIn) *authSignInResponse {
+	urls := signIn.RedirectURLs
+	if urls == nil {
+		urls = []string{}
+	}
+	return &authSignInResponse{RedirectURLs: urls, AllowNewUsers: signIn.AllowNewUsers}
+}
+
 func authSettingsResponseFor(settings domain.ProjectAuthSettings) authSettingsResponse {
 	return authSettingsResponse{
 		RequireEmailVerification: settings.RequireEmailVerification,
 		SiteURL:                  settings.SiteURL,
 	}
+}
+
+// recordAuthSignIn audits the sign-in policy: the redirect list decides where
+// sign-in codes are delivered.
+func (h *ProvisioningHandler) recordAuthSignIn(r *http.Request, projectID string, settings domain.ProjectAuthSettings, signIn domain.ProjectAuthSignIn) {
+	details, _ := json.Marshal(map[string]any{
+		"siteUrl": settings.SiteURL, "redirectUrls": signIn.RedirectURLs, "allowNewUsers": signIn.AllowNewUsers,
+	})
+	h.writeAuthAudit(r, projectID, auditActionAuthSettingsUpdate, auditResourceAuthSettings, projectID, string(details))
 }

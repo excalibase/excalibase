@@ -112,7 +112,7 @@ SSH tunnel).
 | `EDGE_BIND_ADDRESS` | `0.0.0.0` | Host address the edge listens on |
 | `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` | `80` / `443` | Host ports of the edge |
 | `REGISTRATION_MODE` | `invite` | `open` lets anyone who reaches Studio sign up |
-| `ADMIN_PASSWORD` | generated | First admin's password (12+ characters) |
+| `ADMIN_PASSWORD` | generated | First admin's password (12+ characters). Set it again when the bootstrap log warns that the service tokens need re-minting after an upgrade |
 | `TAG` | the release this bundle came with (`1.5.0`) | Image tag of the platform services; set it to move to another release |
 | `AIO_EDGE_SUBNET` / `AIO_DATAPLANE_SUBNET` | `10.203.250.0/28` / `10.203.250.16/28` | Change if they clash with your network |
 

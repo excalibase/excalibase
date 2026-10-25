@@ -1,0 +1,49 @@
+import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { AuthProvidersCard } from './AuthProvidersCard';
+import { providerUpdateBody } from '../../api/authProviders';
+import { api } from '../../api/client';
+
+vi.mock('../../api/client', () => ({ api: { get: vi.fn(), put: vi.fn() } }));
+
+const unconfigured = { provider: 'github', enabled: false, clientId: '', clientSecretSet: false, callbackUrl: 'https://api.x/auth/o/p/callback/github' };
+
+function renderCard() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(<QueryClientProvider client={client}><AuthProvidersCard projectId="p" /></QueryClientProvider>);
+}
+
+beforeEach(() => {
+  vi.resetAllMocks();
+});
+
+describe('providerUpdateBody', () => {
+  test('trims the client id and leaves a blank secret out', () => {
+    expect(providerUpdateBody(false, ' id ', '')).toEqual({ enabled: false, clientId: 'id' });
+    expect(providerUpdateBody(true, 'id', ' s ')).toEqual({ enabled: true, clientId: 'id', clientSecret: ' s ' });
+  });
+});
+
+describe('AuthProvidersCard', () => {
+  test('says why the providers are missing when they cannot be read', async () => {
+    vi.mocked(api.get).mockRejectedValue({ response: { status: 503, data: { error: 'sign-in providers are not available' } } });
+    renderCard();
+    expect(await screen.findByRole('alert')).toHaveTextContent('sign-in providers are not available');
+  });
+
+  test('after a save the secret reads as set and the field is empty again', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.get).mockResolvedValue({ data: { providers: [unconfigured] } });
+    vi.mocked(api.put).mockResolvedValue({ data: { ...unconfigured, clientId: 'gh', clientSecretSet: true } });
+    renderCard();
+    const github = await screen.findByTestId('auth-provider-github');
+    await u.type(within(github).getByLabelText('Client ID'), 'gh');
+    await u.type(within(github).getByLabelText('Client secret'), 'shh');
+    await u.click(within(github).getByRole('button', { name: 'Save GitHub' }));
+    await waitFor(() => expect(within(github).getByTestId('auth-provider-github-secret-state')).toHaveTextContent('Secret set'));
+    expect(within(github).getByLabelText('Client secret')).toHaveValue('');
+    expect(within(github).getByText(/^Saved/)).toBeInTheDocument();
+  });
+});

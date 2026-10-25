@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,8 @@ type ProvisioningHandler struct {
 	// endpoint; nil → the surface returns 503 rather than pretending a
 	// setting was saved.
 	dbEndpoints DBEndpointAPI
+	// authOAuth backs end-user OAuth sign-in (EXC-662) behind the authoauth flag.
+	authOAuth AuthOAuthDeps
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {
@@ -725,36 +728,43 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// The auth service resolves email-verification + redirect behavior from
-	// these fields and caches it; a read failure is a 503 so it keeps its
-	// last good settings rather than a wrong default.
-	authSettings, aerr := h.authSettingsForInfo(r.Context(), inst.ProjectID)
-	if aerr != nil {
-		httpError(w, "auth settings unavailable", http.StatusServiceUnavailable)
+	info, unavailable := h.infoSettings(r.Context(), inst.ProjectID, org.Slug)
+	if unavailable != "" {
+		httpError(w, unavailable, http.StatusServiceUnavailable)
 		return
 	}
+	info.ProjectID = inst.ProjectID
+	info.ProjectName = inst.ProjectName
+	info.OrgID = inst.OrgID
+	info.OrgSlug = org.Slug
+	info.OrgName = org.Name
+	info.RealtimeAutoEnable = true // v1: hardcoded; per-project override is a future column on instances
 
-	// The data plane resolves CORS from this field and caches it; a read
-	// failure is a 503 so it keeps its last good list rather than a deny.
-	corsOrigins, cerr := h.corsOriginsForInfo(r.Context(), inst.ProjectID)
-	if cerr != nil {
-		httpError(w, "cors allowlist unavailable", http.StatusServiceUnavailable)
-		return
+	writeJSON(w, info)
+}
+
+// infoSettings reads the per-project settings /info carries. Each read failure
+// names what is unavailable, answered as a 503 so the auth service and the
+// data plane keep their last good copy rather than a wrong default.
+func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSlug string) (domain.ProjectInfo, string) {
+	authSettings, err := h.authSettingsForInfo(ctx, projectID)
+	if err != nil {
+		return domain.ProjectInfo{}, "auth settings unavailable"
 	}
-
-	info := domain.ProjectInfo{
-		ProjectID:                inst.ProjectID,
-		ProjectName:              inst.ProjectName,
-		OrgID:                    inst.OrgID,
-		OrgSlug:                  org.Slug,
-		OrgName:                  org.Name,
-		RealtimeAutoEnable:       true, // v1: hardcoded; per-project override is a future column on instances
+	corsOrigins, err := h.corsOriginsForInfo(ctx, projectID)
+	if err != nil {
+		return domain.ProjectInfo{}, "cors allowlist unavailable"
+	}
+	oauth, err := h.authOAuthForInfo(ctx, projectID, orgSlug)
+	if err != nil {
+		return domain.ProjectInfo{}, "auth sign-in settings unavailable"
+	}
+	return domain.ProjectInfo{
 		CorsAllowedOrigins:       corsOrigins,
 		RequireEmailVerification: authSettings.RequireEmailVerification,
 		SiteURL:                  authSettings.SiteURL,
-	}
-
-	writeJSON(w, info)
+		ProjectOAuthInfo:         oauth,
+	}, ""
 }
 
 // resolveInfoOrg looks up the org metadata GetProjectInfo embeds in its

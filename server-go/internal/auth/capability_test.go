@@ -12,6 +12,7 @@ import (
 const (
 	capAuthCredentials   = "vault:read:projects/*/credentials/auth_admin"
 	capEngineCredentials = "vault:read:projects/*/credentials/excalibase_app"
+	capAuthProviders     = "vault:read:projects/*/auth/providers/*"
 )
 
 // rawCapability builds a wanted capability without validating it, the way the
@@ -39,6 +40,7 @@ func TestParseCapability(t *testing.T) {
 		{name: "with selector", raw: "projects:info:read", resource: "projects", action: "info", selector: "read"},
 		{name: "path selector", raw: "vault:read:pki/signing/private", resource: "vault", action: "read", selector: "pki/signing/private"},
 		{name: "trailing wildcard selector", raw: "vault:read:pki/signing/*", resource: "vault", action: "read", selector: "pki/signing/*"},
+		{name: "provider secret selector", raw: capAuthProviders, resource: "vault", action: "read", selector: "projects/*/auth/providers/*"},
 		{name: "interior wildcard segment", raw: "vault:read:projects/*/credentials/auth_admin",
 			resource: "vault", action: "read", selector: "projects/*/credentials/auth_admin"},
 		{name: "leading wildcard segment", raw: "vault:read:*/credentials/excalibase_app",
@@ -147,6 +149,15 @@ func TestCapabilityGrants(t *testing.T) {
 			want: "vault:read:projects/proj-1/credentials/auth_admin", allow: false},
 		{name: "engine may not read the owner role", granted: capEngineCredentials,
 			want: "vault:read:projects/proj-1/credentials/admin", allow: false},
+		// EXC-662: auth reads a project's OAuth client secret, and nothing beside it.
+		{name: "auth reads a provider secret", granted: capAuthProviders,
+			want: "vault:read:projects/p1/auth/providers/github", allow: true},
+		{name: "the provider grant does not reach the database role", granted: capAuthProviders,
+			want: "vault:read:projects/p1/credentials/auth_admin", allow: false},
+		{name: "the provider grant does not reach deeper", granted: capAuthProviders,
+			want: "vault:read:projects/p1/auth/providers/github/x", allow: false},
+		{name: "the provider grant does not reach the folder", granted: capAuthProviders,
+			want: "vault:read:projects/p1/auth/providers", allow: false},
 		{name: "two wildcards each stand for one segment", granted: "vault:read:projects/*/jwt_keys/*",
 			want: "vault:read:projects/proj-1/jwt_keys/anon_token", allow: true},
 		{name: "two wildcards do not stretch", granted: "vault:read:projects/*/jwt_keys/*",

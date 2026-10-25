@@ -40,11 +40,14 @@ const (
 	// LogDrains forwards a project's logs to Datadog or an HTTPS endpoint its
 	// Admins configure, through the log-forwarder pod (EXC-658).
 	LogDrains Feature = "logdrains"
+	// AuthOAuth is end-user Google and GitHub sign-in for customers' apps:
+	// provider settings, redirect URLs and the new-user switch (EXC-662).
+	AuthOAuth Feature = "authoauth"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth}
 }
 
 type Flags interface {
@@ -95,6 +98,20 @@ func Require(flags Flags, feature Feature) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !Enabled(r.Context(), flags, feature) {
 				http.NotFound(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// WhenOn applies middleware only while the feature is on, decided per request.
+func WhenOn(flags Flags, feature Feature, middleware func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		gated := middleware(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if Enabled(r.Context(), flags, feature) {
+				gated.ServeHTTP(w, r)
 				return
 			}
 			next.ServeHTTP(w, r)

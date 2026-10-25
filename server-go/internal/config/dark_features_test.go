@@ -68,3 +68,10 @@ func TestDarkFeatures_LogDrainsVariable(t *testing.T) {
 		t.Errorf("log drains variable = %q", got)
 	}
 }
+
+// EXC-662: the chart and the single-host compose file set this exact name.
+func TestDarkFeatures_AuthOAuthVariable(t *testing.T) {
+	if got := featureEnv[features.AuthOAuth]; got != "FEATURE_AUTHOAUTH" {
+		t.Errorf("auth oauth variable = %q", got)
+	}
+}

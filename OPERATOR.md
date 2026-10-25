@@ -948,7 +948,8 @@ and incident response, but a project-bound PAT still confines them.
 | `POST /api/projects/{id}/schema/apply` | Developer | |
 | `GET/PUT /api/projects/{id}/cors` | Developer | browser-origin allowlist the data plane enforces |
 | `/api/projects/{id}/info`, `/realtime/*`, `/storage/*`, `GET /api/alerts/project/{id}` | Viewer | |
-| `/api/projects/{id}/auth-settings` | Developer | `requireEmailVerification` + `siteUrl` |
+| `/api/projects/{id}/auth-settings` | Developer | `requireEmailVerification` + `siteUrl`; with `authoauth` on also `redirectUrls` + `allowNewUsers` |
+| `/api/projects/{id}/auth-providers` | Developer reads, Admin writes | end-user Google/GitHub client id; the secret is write-only, in the vault at `projects/{id}/auth/providers/{provider}` (`authoauth`) |
 | `/api/orgs/{orgId}/projects/{id}/members` | org member (list) / Admin (change) | project must belong to `{orgId}` |
 | `/api/admin/projects/{id}` | platform permission (`delete`) | platform plane, not the tenant gate |
 
