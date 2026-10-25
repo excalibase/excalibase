@@ -15,6 +15,8 @@ type LogDrains struct {
 	mu    sync.Mutex
 	Items map[string]domain.LogDrain
 	Err   error
+	// FailUpdates makes UpdateLogDrain return Err.
+	FailUpdates bool
 }
 
 func NewLogDrains() *LogDrains { return &LogDrains{Items: map[string]domain.LogDrain{}} }
@@ -77,6 +79,9 @@ func (s *LogDrains) FindLogDrain(_ context.Context, id string) (*domain.LogDrain
 func (s *LogDrains) UpdateLogDrain(_ context.Context, drain *domain.LogDrain) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.FailUpdates {
+		return s.Err
+	}
 	existing, ok := s.Items[drain.ID]
 	if !ok || existing.ProjectID != drain.ProjectID {
 		return domain.ErrLogDrainNotFound

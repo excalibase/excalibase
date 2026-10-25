@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -69,6 +70,8 @@ type LogDrainService struct {
 	instances func(projectID string) (*domain.DatabaseInstance, error)
 	logs      ProjectLogReader
 	now       func() time.Time
+	// pullTime is how long one pull keeps reading before it answers.
+	pullTime time.Duration
 }
 
 func NewLogDrainService(deps LogDrainDeps) *LogDrainService {
@@ -76,7 +79,7 @@ func NewLogDrainService(deps LogDrainDeps) *LogDrainService {
 	if now == nil {
 		now = time.Now
 	}
-	return &LogDrainService{store: deps.Store, vault: deps.Vault, instances: deps.Instances, logs: deps.Logs, now: now}
+	return &LogDrainService{store: deps.Store, vault: deps.Vault, instances: deps.Instances, logs: deps.Logs, now: now, pullTime: logPullTime}
 }
 
 // CreateLogDrainInput is a new drain as an Admin asked for it.
@@ -173,6 +176,12 @@ func (s *LogDrainService) Update(ctx context.Context, projectID, id string, inpu
 	}
 	updated.UpdatedAt = s.now()
 	if err := s.store.UpdateLogDrain(ctx, updated); err != nil {
+		if entry != stored {
+			// The vault must not send to a destination the drain does not show.
+			if restoreErr := s.writeEntry(current, stored); restoreErr != nil {
+				log.Printf("log drain %s: restore vault entry: %v", id, restoreErr)
+			}
+		}
 		return nil, err
 	}
 	if input.Enabled != nil && *input.Enabled != current.Enabled {
@@ -211,7 +220,7 @@ func applyDrainChange(current *domain.LogDrain, stored drainVaultEntry, input Up
 	if input.Secret != nil {
 		newSecret = *input.Secret
 	}
-	if err := applySecretChange(current, &updated, &entry, newSecret); err != nil {
+	if err := applySecretChange(current, &updated, stored, &entry, newSecret); err != nil {
 		return nil, entry, err
 	}
 	if err := validateDrain(&updated, entry); err != nil {
@@ -224,7 +233,7 @@ func applyDrainChange(current *domain.LogDrain, stored drainVaultEntry, input Up
 // value to another host or under another header without it entered again:
 // the value is write-only, so an Admin who did not enter it must not be able
 // to point it at a server of their own.
-func applySecretChange(current, updated *domain.LogDrain, entry *drainVaultEntry, newSecret string) error {
+func applySecretChange(current, updated *domain.LogDrain, stored drainVaultEntry, entry *drainVaultEntry, newSecret string) error {
 	if updated.Kind == logdrain.KindHTTPS && updated.HeaderName == "" {
 		if newSecret != "" {
 			return fmt.Errorf("%w: a header value needs a header name", logdrain.ErrInvalidDrain)
@@ -236,10 +245,10 @@ func applySecretChange(current, updated *domain.LogDrain, entry *drainVaultEntry
 		entry.Secret = newSecret
 		return nil
 	}
-	// The shown URL is scheme and host: a changed one is another server.
-	retargeted := current.URL != updated.URL || current.HeaderName != updated.HeaderName
+	// Any new endpoint counts, path included: one host can serve many tenants.
+	retargeted := stored.Endpoint != entry.Endpoint || current.HeaderName != updated.HeaderName
 	if updated.Kind == logdrain.KindHTTPS && entry.Secret != "" && retargeted {
-		return fmt.Errorf("%w: enter the header value again to send it to a new host or header", logdrain.ErrInvalidDrain)
+		return fmt.Errorf("%w: enter the header value again to send it to a new endpoint or header", logdrain.ErrInvalidDrain)
 	}
 	return nil
 }

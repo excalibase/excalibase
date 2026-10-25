@@ -219,9 +219,10 @@ func NewLogForwarderHandler(api LogForwarderAPI, token string) *LogForwarderHand
 	return &LogForwarderHandler{api: api, tokenHash: sha256.Sum256([]byte(token)), hasToken: token != ""}
 }
 
-// Mount serves the forwarder's routes; gates run after the token check.
+// Mount serves the forwarder's routes; gates run before the token check, so
+// a refused caller learns nothing about tokens.
 func (h *LogForwarderHandler) Mount(r chi.Router, gates ...func(http.Handler) http.Handler) {
-	chain := append([]func(http.Handler) http.Handler{h.requireToken}, gates...)
+	chain := append(append([]func(http.Handler) http.Handler{}, gates...), h.requireToken)
 	r.With(chain...).Post(logdrain.PullPath, h.pull)
 	r.With(chain...).Post(logdrain.AckPath, h.ack)
 }

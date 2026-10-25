@@ -97,13 +97,10 @@ describe('log drain form rules', () => {
     });
   });
 
-  test('a new path on the same host keeps the stored value', () => {
+  test('a new path on the same host needs the value again', () => {
     const samehost = editOf({ url: 'https://LOGS.example.com/v2' });
-    expect(needsHeaderValueAgain(samehost, withHeader)).toBe(false);
-    expect(updateBody(samehost, withHeader)).toEqual({
-      name: 'collector',
-      url: 'https://LOGS.example.com/v2',
-    });
+    expect(needsHeaderValueAgain(samehost, withHeader)).toBe(true);
+    expect(drainProblem(samehost, withHeader)).toBe(REENTER_HEADER_VALUE);
   });
 
   test('a renamed header needs the value again', () => {

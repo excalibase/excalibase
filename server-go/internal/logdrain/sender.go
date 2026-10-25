@@ -136,8 +136,10 @@ func (s *Sender) Send(ctx context.Context, batch Batch) error {
 		return describeTransportError(err)
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswerToRead))
+	_, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswerToRead))
 	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300 && readErr != nil:
+		return sendFailure("the destination did not finish its answer in time")
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return nil
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
@@ -236,5 +238,6 @@ func TruncateLine(line string) string {
 	for cut > 0 && !utf8.RuneStart(line[cut]) {
 		cut--
 	}
-	return line[:cut]
+	// A copy, so the cut line does not keep the whole original alive.
+	return strings.Clone(line[:cut])
 }

@@ -15,11 +15,12 @@ func MarkInternalListener(next http.Handler) http.Handler {
 	})
 }
 
-// RequireInternalListener refuses a request that came through the edge.
+// RequireInternalListener answers a request that came through the edge as an
+// unmounted route would.
 func RequireInternalListener(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if internal, _ := r.Context().Value(internalListenerKey{}).(bool); !internal {
-			http.Error(w, "this route is served to in-cluster callers only", http.StatusNotFound)
+			http.NotFound(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)

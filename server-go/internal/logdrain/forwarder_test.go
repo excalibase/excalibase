@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -248,5 +249,32 @@ func TestForwarder_PullsForFreeWorkers(t *testing.T) {
 	}
 	if len(plane.maxes) != 1 || plane.maxes[0] != sendWorkers {
 		t.Errorf("maxes %v", plane.maxes)
+	}
+}
+
+// A full pull means more drains are due: the forwarder pulls again as soon as
+// a worker is free instead of pausing.
+func TestForwarder_PullsAgainAfterAFullPull(t *testing.T) {
+	full := make([]Batch, sendWorkers)
+	for i := range full {
+		full[i] = Batch{DrainID: fmt.Sprintf("ld_%d", i)}
+	}
+	plane := &fakePlane{batches: [][]Batch{full, {{DrainID: "ld_last"}}}}
+	forwarder := NewForwarder(plane, &fakeSender{})
+	ctx, cancel := context.WithCancel(context.Background())
+	pullsBeforePause := 0
+	forwarder.sleep = func(context.Context, time.Duration) bool {
+		plane.mu.Lock()
+		pullsBeforePause = plane.pulls
+		plane.mu.Unlock()
+		cancel()
+		return false
+	}
+	forwarder.Run(ctx)
+	if pullsBeforePause < 2 {
+		t.Errorf("paused after %d pulls", pullsBeforePause)
+	}
+	if len(plane.acks) != sendWorkers+1 {
+		t.Errorf("acks %d", len(plane.acks))
 	}
 }

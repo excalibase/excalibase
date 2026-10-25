@@ -78,12 +78,14 @@ type Forwarder struct {
 	plane  ControlPlane
 	sender BatchSender
 	slots  chan struct{}
+	// freed is signalled when a worker finishes.
+	freed chan struct{}
 	// sleep waits d or until ctx ends, reporting whether to go on.
 	sleep func(ctx context.Context, d time.Duration) bool
 }
 
 func NewForwarder(plane ControlPlane, sender BatchSender) *Forwarder {
-	return &Forwarder{plane: plane, sender: sender, slots: make(chan struct{}, sendWorkers), sleep: sleepContext}
+	return &Forwarder{plane: plane, sender: sender, slots: make(chan struct{}, sendWorkers), freed: make(chan struct{}, 1), sleep: sleepContext}
 }
 
 func sleepContext(ctx context.Context, d time.Duration) bool {
@@ -97,15 +99,18 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// Run pulls until ctx ends, pausing idleWait between pulls and backing off up
-// to maxPlaneBackoff while provisioning does not answer. Sends in flight
-// finish before it returns.
+// Run pulls until ctx ends. After a full pull it pulls again as soon as a
+// worker is free; otherwise it pauses idleWait, backing off up to
+// maxPlaneBackoff while provisioning does not answer. Sends in flight finish
+// before it returns.
 func (f *Forwarder) Run(ctx context.Context) {
 	var inFlight sync.WaitGroup
 	defer inFlight.Wait()
 	wait := idleWait
 	for ctx.Err() == nil {
-		if _, err := f.dispatch(ctx, &inFlight); err != nil {
+		asked := cap(f.slots) - len(f.slots)
+		got, err := f.dispatch(ctx, &inFlight)
+		if err != nil {
 			log.Printf("log forwarder: pull: %v", err)
 			if !f.sleep(ctx, wait) {
 				return
@@ -114,9 +119,27 @@ func (f *Forwarder) Run(ctx context.Context) {
 			continue
 		}
 		wait = idleWait
+		if asked > 0 && got >= asked {
+			continue
+		}
+		if asked == 0 {
+			if !f.waitForWorker(ctx) {
+				return
+			}
+			continue
+		}
 		if !f.sleep(ctx, idleWait) {
 			return
 		}
+	}
+}
+
+func (f *Forwarder) waitForWorker(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-f.freed:
+		return true
 	}
 }
 
@@ -145,7 +168,14 @@ func (f *Forwarder) dispatch(ctx context.Context, inFlight *sync.WaitGroup) (int
 		f.slots <- struct{}{}
 		inFlight.Add(1)
 		go func(batch Batch) {
-			defer func() { <-f.slots; inFlight.Done() }()
+			defer func() {
+				<-f.slots
+				select {
+				case f.freed <- struct{}{}:
+				default:
+				}
+				inFlight.Done()
+			}()
 			f.handle(ctx, batch)
 		}(batch)
 	}

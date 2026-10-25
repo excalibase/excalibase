@@ -27,6 +27,8 @@ const (
 	logDrainLease      = time.Minute
 	minLogDrainWait    = 30 * time.Second
 	maxLogDrainBackoff = 30 * time.Minute
+	// logPullTime plus one Loki read stays under the forwarder's wait.
+	logPullTime = 10 * time.Second
 	// lineEntryOverhead covers the JSON fields around each message.
 	lineEntryOverhead = 192
 )
@@ -52,7 +54,11 @@ func (s *LogDrainService) Pull(ctx context.Context, limit int) ([]logdrain.Batch
 	}
 	budget := logdrain.MaxPullBytes
 	batches := make([]logdrain.Batch, 0, len(due))
+	started := time.Now()
 	for i := range due {
+		if i > 0 && time.Since(started) >= s.pullTime {
+			break
+		}
 		batch, size, ok := s.batchFor(ctx, &due[i], now)
 		if !ok {
 			continue

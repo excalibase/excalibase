@@ -82,11 +82,14 @@ func Expect(row Row, method string, p Principal) Expectation {
 		// must refuse every principal this matrix holds, whatever authority
 		// that principal has over the project in the control plane.
 		return Deny401
-	case AuthRuntimeToken, AuthForwarderToken:
+	case AuthRuntimeToken:
 		// None of these principals holds the project's derived runtime
-		// secret or the forwarder's token, so every one of them is refused
-		// as unauthenticated.
+		// secret, so every one of them is refused as unauthenticated.
 		return Deny401
+	case AuthForwarderToken:
+		// Served on the in-cluster listener only: through the edge the route
+		// looks unmounted to everyone.
+		return Deny404
 	}
 	return expectSession(row, method, p)
 }

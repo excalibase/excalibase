@@ -16,17 +16,20 @@ import (
 func TestLogForwarderRoutesAnswerOnTheInternalListenerOnly(t *testing.T) {
 	router, _ := darkFeatureRouter(t, features.LogDrains)
 	public, internal := newListeners(config.AppConfig{}, router)
-	pull := func(handler http.Handler) *httptest.ResponseRecorder {
+	pull := func(handler http.Handler, token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, logdrain.PullPath, strings.NewReader(`{"max":1}`))
-		req.Header.Set(logdrain.TokenHeader, "matrix-forwarder-token")
+		req.Header.Set(logdrain.TokenHeader, token)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		return rec
 	}
-	if rec := pull(public.Handler); rec.Code != http.StatusNotFound {
-		t.Errorf("public listener: %d %s", rec.Code, rec.Body)
+	// The edge learns nothing, not even whether a token is right.
+	for _, token := range []string{"matrix-forwarder-token", "wrong"} {
+		if rec := pull(public.Handler, token); rec.Code != http.StatusNotFound {
+			t.Errorf("public listener, token %s: %d %s", token, rec.Code, rec.Body)
+		}
 	}
-	if rec := pull(internal.Handler); rec.Code != http.StatusOK {
+	if rec := pull(internal.Handler, "matrix-forwarder-token"); rec.Code != http.StatusOK {
 		t.Errorf("internal listener: %d %s", rec.Code, rec.Body)
 	}
 }

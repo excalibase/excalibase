@@ -88,6 +88,8 @@ var gateRefusalBodies = map[string]bool{
 	`{"error":"unauthorized","status":401}`:                  true,
 	`{"error":"auth required","status":401}`:                 true,
 	`{"error":"internal route not configured","status":503}`: true,
+	// The in-cluster-only gate answers like an unmounted route.
+	`404 page not found`: true,
 	// The end-user function gate: no studio credential is an end-user JWT.
 	`{"error":"missing or invalid Authorization header","status":401}`: true,
 }

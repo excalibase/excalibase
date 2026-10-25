@@ -197,7 +197,7 @@ describe('LogDrainsCard', () => {
     await user.click(await screen.findByTestId('log-drain-edit-ld_ffffffffffffffff'));
     await user.type(screen.getByTestId('log-drain-url'), 'https://other.example.net/in');
     expect(screen.getByTestId('log-drain-reenter')).toHaveTextContent(
-      'Re-enter the header value to send it to a new host or header',
+      'Re-enter the header value to send it to a new URL or header',
     );
     expect(screen.getByTestId('log-drain-submit')).toBeDisabled();
     await user.type(screen.getByTestId('log-drain-secret'), 'Bearer new');
@@ -212,20 +212,13 @@ describe('LogDrainsCard', () => {
     );
   });
 
-  test('a new path on the same host keeps the stored header value', async () => {
+  test('a new path on the same host also needs the header value again', async () => {
     const user = userEvent.setup();
     renderCard({ drains: [httpsDrain] });
-    vi.mocked(api.patch).mockResolvedValue({ data: httpsDrain } as never);
     await user.click(await screen.findByTestId('log-drain-edit-ld_ffffffffffffffff'));
     await user.type(screen.getByTestId('log-drain-url'), 'https://logs.example.com/v2');
-    expect(screen.queryByTestId('log-drain-reenter')).not.toBeInTheDocument();
-    await user.click(screen.getByTestId('log-drain-submit'));
-    await waitFor(() =>
-      expect(api.patch).toHaveBeenCalledWith(`${DRAINS_URL}/ld_ffffffffffffffff`, {
-        name: 'collector',
-        url: 'https://logs.example.com/v2',
-      }),
-    );
+    expect(screen.getByTestId('log-drain-reenter')).toBeInTheDocument();
+    expect(screen.getByTestId('log-drain-submit')).toBeDisabled();
   });
 
   test('clearing the header sends an empty header name and no secret', async () => {

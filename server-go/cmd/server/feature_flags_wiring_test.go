@@ -10,6 +10,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 )
 
 // EXC-554: what shipped dark answers exactly as a route that was never
@@ -83,7 +84,8 @@ func probeDark(router http.Handler, probe darkProbe, token string) *httptest.Res
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	// Probed on the internal listener, where every route is mounted.
+	custommw.MarkInternalListener(router).ServeHTTP(w, req)
 	return w
 }
 

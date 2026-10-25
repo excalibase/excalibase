@@ -35,7 +35,7 @@ func TestLogDrainRows(t *testing.T) {
 			{Name: "platformAdmin", PlatformAdmin: true},
 			{Name: "orgOwner", OrgRole: "owner"},
 		} {
-			if got := Expect(row, http.MethodPost, p); got != Deny401 {
+			if got := Expect(row, http.MethodPost, p); got != Deny404 {
 				t.Errorf("%s for %s: %s", key, p.Name, got)
 			}
 		}

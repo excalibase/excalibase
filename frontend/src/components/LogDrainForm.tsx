@@ -42,26 +42,20 @@ export function valuesOf(drain: LogDrain): DrainValues {
   };
 }
 
-export const REENTER_HEADER_VALUE = 'Re-enter the header value to send it to a new host or header';
-
-function hostOf(url: string): string | undefined {
-  try {
-    return new URL(url.trim()).host.toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
+export const REENTER_HEADER_VALUE = 'Re-enter the header value to send it to a new URL or header';
 
 const hasStoredHeader = (current?: LogDrain) => !!current?.headerName && current.hasSecret;
 
-// A stored header value never follows the drain to a new host or header name.
+// A stored header value never follows the drain to a new URL or header name.
 export function needsHeaderValueAgain(values: DrainValues, current?: LogDrain): boolean {
   if (!current || values.kind !== 'https' || !hasStoredHeader(current)) return false;
   if (values.secret.trim() !== '') return false;
   const header = values.headerName.trim();
   if (header === '') return false;
-  const newHost = values.url.trim() !== '' && hostOf(values.url) !== hostOf(current.url ?? '');
-  return newHost || header !== current.headerName;
+  // Any new URL counts, path included: one host can serve many tenants.
+  const url = values.url.trim();
+  const newEndpoint = url !== '' && url !== current.url;
+  return newEndpoint || header !== current.headerName;
 }
 
 // The contract's rules, checked before anything is sent; current is the drain being edited.

@@ -31,7 +31,7 @@ func TestLokiReader_ReadLinesForwardAndMerged(t *testing.T) {
 	if len(lines) != 3 || lines[0].Line != "first" || lines[1].Line != "second" || lines[2].TS != 300 {
 		t.Errorf("lines %+v", lines)
 	}
-	if got.Get("query") != selector || got.Get("start") != "50" || got.Get("end") != "400" ||
+	if got.Get("query") != selector+` | line_format "{{ __line__ | trunc 16384 }}"` || got.Get("start") != "50" || got.Get("end") != "400" ||
 		got.Get("limit") != "3" || got.Get("direction") != "forward" {
 		t.Errorf("query %v", got)
 	}

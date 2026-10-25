@@ -604,6 +604,7 @@ func TestLogDrains_StoredHeaderValueDoesNotFollowARetarget(t *testing.T) {
 	ctx := context.Background()
 	refused := []UpdateLogDrainInput{
 		{URL: strPtr("https://attacker.example.net/collect")},
+		{URL: strPtr("https://logs.example.com/receiver/OTHER")},
 		{HeaderName: strPtr("X-Api-Key")},
 	}
 	for _, input := range refused {
@@ -614,7 +615,8 @@ func TestLogDrains_StoredHeaderValueDoesNotFollowARetarget(t *testing.T) {
 	if got := f.vault.data["projects/proj-a/logdrains/"+drain.ID]["url"]; got != "https://logs.example.com/receiver/TOKEN123" {
 		t.Errorf("a refused update moved the endpoint: %s", got)
 	}
-	if _, err := f.svc.Update(ctx, "proj-a", drain.ID, UpdateLogDrainInput{URL: strPtr("https://logs.example.com/other")}); err != nil {
+	// One host can serve many tenants, so a new path is a new endpoint too.
+	if _, err := f.svc.Update(ctx, "proj-a", drain.ID, UpdateLogDrainInput{URL: strPtr("https://logs.example.com/attacker?x")}); !errors.Is(err, logdrain.ErrInvalidDrain) {
 		t.Errorf("same host, new path: %v", err)
 	}
 	moved, err := f.svc.Update(ctx, "proj-a", drain.ID, UpdateLogDrainInput{URL: strPtr("https://new.example.net/in"), Secret: strPtr("Bearer new")})
@@ -717,5 +719,34 @@ func TestLogDrains_NewDrainWaitsForItsFirstWindow(t *testing.T) {
 	}
 	if next := f.store.Items[drain.ID].NextAttemptAt; !next.After(drainNow.Add(logIngestDelay)) {
 		t.Errorf("next attempt %v: a drain with nothing to read yet is not due", next)
+	}
+}
+
+// A failed save leaves the vault sending where the drain says it sends.
+func TestLogDrains_FailedUpdateRestoresTheVaultEntry(t *testing.T) {
+	f := newDrainFixture(t)
+	drain := f.httpsWithHeader(t)
+	f.store.Err = errors.New("store down")
+	f.store.FailUpdates = true
+	if _, err := f.svc.Update(context.Background(), "proj-a", drain.ID, UpdateLogDrainInput{URL: strPtr("https://new.example.net/in"), Secret: strPtr("Bearer new")}); err == nil {
+		t.Fatal("want the store error")
+	}
+	if entry := f.vault.data["projects/proj-a/logdrains/"+drain.ID]; entry["url"] != "https://logs.example.com/receiver/TOKEN123" || entry["secret"] != "Bearer stored" {
+		t.Errorf("vault %v", entry)
+	}
+}
+
+// A pull stops reading once its time is up, so the forwarder gets an answer
+// (and the leases in it) before it gives up waiting.
+func TestLogDrains_PullStopsWhenItsTimeIsUp(t *testing.T) {
+	f := newDrainFixture(t)
+	f.svc.pullTime = 0
+	sel := drainLogSelector(f.instances["proj-a"])
+	f.reader.lines[sel] = []logdrain.Line{lineAt(time.Second, "a1")}
+	f.datadog(t, "proj-a")
+	f.datadog(t, "proj-a")
+	f.now = drainNow.Add(time.Minute)
+	if batches := f.pull(t); len(batches) != 1 {
+		t.Errorf("%d batches", len(batches))
 	}
 }

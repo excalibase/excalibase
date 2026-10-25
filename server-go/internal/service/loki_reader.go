@@ -28,13 +28,16 @@ func NewLokiReader(base string, client *http.Client) *LokiReader {
 	return &LokiReader{base: strings.TrimRight(base, "/"), client: client}
 }
 
-// maxDrainLokiAnswer bounds one read's transfer; lines are cut as they are
-// decoded, so memory holds at most limit lines of MaxLineBytes.
-const maxDrainLokiAnswer = 192 << 20
+// drainLineCut has Loki cut each line before it travels, so a tenant's huge
+// log lines never cross the network or sit in provisioning's memory.
+var drainLineCut = fmt.Sprintf(` | line_format "{{ __line__ | trunc %d }}"`, logdrain.MaxLineBytes)
+
+// maxDrainLokiAnswer bounds one read: limit cut lines, escaped, with labels.
+const maxDrainLokiAnswer = 64 << 20
 
 func (r *LokiReader) ReadLines(ctx context.Context, selector string, fromNS, toNS int64, limit int) ([]logdrain.Line, error) {
 	params := url.Values{
-		"query":     {selector},
+		"query":     {selector + drainLineCut},
 		"start":     {strconv.FormatInt(fromNS, 10)},
 		"end":       {strconv.FormatInt(toNS, 10)},
 		"limit":     {strconv.Itoa(limit)},
