@@ -271,7 +271,7 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | PUT | `/api/projects/{id}/auth-settings` | Yes (Developer+) | Set the project's auth settings; `siteUrl` must be an absolute `http`/`https` URL with no trailing slash, or empty to unset |
 | GET | `/api/projects/{id}/auth-providers` | Yes (Developer+) | End-user Google/GitHub sign-in settings and the callback URL to register; the client secret is never returned (flag `authoauth`) |
 | PUT | `/api/projects/{id}/auth-providers/{provider}` | Yes (Admin) | Set `{enabled, clientId, clientSecret?}`; the secret goes to the vault, an empty one keeps the stored secret (flag `authoauth`) |
-| — | `/api/projects/{id}/auth-settings` with flag `authotp` | Yes (Admin writes) | Adds `emailOtpEnabled` (sign-in by emailed link or six-digit code) and the shared `redirectUrls` + `allowNewUsers`; `/info` then carries `emailOtpEnabled` for the auth service |
+| — | `/api/projects/{id}/auth-settings` with flag `authotp` | Yes (Admin writes) | Adds `emailOtpEnabled` (sign-in by emailed link or six-digit code) and the shared `redirectUrls` + `allowNewUsers`; `/info` then carries `emailOtpEnabled` for the auth service. The mail relay sends `magic_link`/`email_otp` only while the flag and the project's switch are on, names the project and its site in each, and caps a project at 1000 a day (`sign_in_mail_sends`) |
 
 ### Edge Functions (per-project Deno runtime)
 

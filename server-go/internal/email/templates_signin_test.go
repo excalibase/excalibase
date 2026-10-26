@@ -52,3 +52,27 @@ func TestBuildEmailOTPEmail(t *testing.T) {
 		}
 	}
 }
+
+func TestSignInEmailsNameTheProjectAndItsSite(t *testing.T) {
+	link, err := BuildMagicLinkEmail(MagicLinkData{UserEmail: "u@x.com", LinkURL: "https://notes.acme.test/cb?token_hash=abc",
+		ProductName: "Acme <Notes>", SiteURL: "https://notes.acme.test/app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := BuildEmailOTPEmail(EmailOTPData{UserEmail: "u@x.com", Code: "042917",
+		ProductName: "Acme <Notes>", SiteURL: "https://notes.acme.test/app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, m := range map[string]Message{"link": link, "code": code} {
+		if !strings.Contains(m.Subject, "Acme <Notes>") {
+			t.Errorf("%s subject names no project: %q", name, m.Subject)
+		}
+		if !strings.Contains(m.TextBody, "Acme <Notes>") || !strings.Contains(m.TextBody, "notes.acme.test") {
+			t.Errorf("%s text names no project or site: %s", name, m.TextBody)
+		}
+		if !strings.Contains(m.HTMLBody, "Acme &lt;Notes&gt;") || strings.Contains(m.HTMLBody, "<Notes>") || !strings.Contains(m.HTMLBody, "notes.acme.test") {
+			t.Errorf("%s html names no project or site, or leaves markup unescaped", name)
+		}
+	}
+}

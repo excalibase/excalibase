@@ -3,6 +3,8 @@ package email
 import (
 	"errors"
 	"net/url"
+	"strings"
+	"unicode"
 )
 
 // End-user sign-in by emailed link or code (EXC-662). The auth service sends
@@ -10,12 +12,15 @@ import (
 
 const defaultSignInExpiresMin = 10
 
-// MagicLinkData populates the magic-link template.
+// MagicLinkData populates the magic-link template. ProductName and SiteURL
+// name the project, so the reader knows which app is asking.
 type MagicLinkData struct {
 	UserEmail   string
 	LinkURL     string
 	ExpiresMin  int
 	ProductName string
+	SiteURL     string
+	SiteHost    string
 }
 
 // EmailOTPData populates the six-digit code template.
@@ -24,6 +29,8 @@ type EmailOTPData struct {
 	Code        string
 	ExpiresMin  int
 	ProductName string
+	SiteURL     string
+	SiteHost    string
 }
 
 var (
@@ -48,6 +55,7 @@ Your sign-in to {{.ProductName}}.
     <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width:600px;background:#ffffff;border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,0.04);">
       <tr><td style="padding:32px 40px 0;">
         <div style="font-weight:700;font-size:20px;color:#7c3aed;letter-spacing:-0.5px;">{{.ProductName}}</div>
+        {{if .SiteHost}}<div style="font-size:13px;color:#6b7280;">{{.SiteHost}}</div>{{end}}
       </td></tr>`
 
 const signInHTMLFoot = `
@@ -85,7 +93,7 @@ const magicLinkHTML = signInHTMLHead + `
         </p>
       </td></tr>` + signInHTMLFoot
 
-const magicLinkText = `Sign in — {{.ProductName}}
+const magicLinkText = `Sign in — {{.ProductName}}{{if .SiteHost}} ({{.SiteHost}}){{end}}
 
 Open this link to sign in as {{.UserEmail}}, in the browser where you asked for this email:
 
@@ -104,7 +112,7 @@ const emailOTPHTML = signInHTMLHead + `
         <div style="font-size:32px;font-weight:700;letter-spacing:8px;color:#111827;font-family:Menlo,Consolas,monospace;">{{.Code}}</div>
       </td></tr>` + signInHTMLFoot
 
-const emailOTPText = `Your sign-in code — {{.ProductName}}
+const emailOTPText = `Your sign-in code — {{.ProductName}}{{if .SiteHost}} ({{.SiteHost}}){{end}}
 
 Enter this code to sign in as {{.UserEmail}}:
 
@@ -119,7 +127,8 @@ func BuildMagicLinkEmail(d MagicLinkData) (Message, error) {
 		return Message{}, errSignInLink
 	}
 	d.ProductName, d.ExpiresMin = signInDefaults(d.ProductName, d.ExpiresMin)
-	return renderSignIn(magicLinkHTML, magicLinkText, "Your sign-in link", "magic_link", d)
+	d.SiteHost = siteHost(d.SiteURL)
+	return renderSignIn(magicLinkHTML, magicLinkText, "Your sign-in link for "+d.ProductName, "magic_link", d)
 }
 
 // BuildEmailOTPEmail renders the sign-in code message; the code stays out of
@@ -129,10 +138,23 @@ func BuildEmailOTPEmail(d EmailOTPData) (Message, error) {
 		return Message{}, errSignInCode
 	}
 	d.ProductName, d.ExpiresMin = signInDefaults(d.ProductName, d.ExpiresMin)
-	return renderSignIn(emailOTPHTML, emailOTPText, "Your sign-in code", "email_otp", d)
+	d.SiteHost = siteHost(d.SiteURL)
+	return renderSignIn(emailOTPHTML, emailOTPText, "Your sign-in code for "+d.ProductName, "email_otp", d)
 }
 
+// maxProductName keeps a project name from crowding the subject line.
+const maxProductName = 64
+
 func signInDefaults(product string, expiresMin int) (string, int) {
+	product = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, product))
+	if runes := []rune(product); len(runes) > maxProductName {
+		product = string(runes[:maxProductName])
+	}
 	if product == "" {
 		product = "Excalibase"
 	}
@@ -140,6 +162,16 @@ func signInDefaults(product string, expiresMin int) (string, int) {
 		expiresMin = defaultSignInExpiresMin
 	}
 	return product, expiresMin
+}
+
+// siteHost is the host of the project's site, shown so a reader can tell a
+// mail asked for by an app they use; anything but http(s) shows nothing.
+func siteHost(site string) string {
+	parsed, err := url.Parse(site)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return ""
+	}
+	return parsed.Host
 }
 
 func renderSignIn(html, text, subject, template string, data any) (Message, error) {

@@ -208,3 +208,11 @@ func plainRedirect(parsed *url.URL) bool {
 	}
 	return !strings.Contains(strings.ToLower(parsed.EscapedPath()), "%2f")
 }
+
+// SignInMailProject is what an end-user sign-in mail says about the project
+// that sent it, and whether the project signs in by mail at all.
+type SignInMailProject struct {
+	Name            string
+	SiteURL         string
+	EmailOTPEnabled bool
+}

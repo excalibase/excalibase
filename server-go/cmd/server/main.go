@@ -1834,8 +1834,19 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		storageSvc:             storageSvc,
 		// EXC-11: server-to-server mail relay for excalibase-auth. Its
 		// authorization is the capability gate, wired at the mount below.
-		internalEmail: handler.NewInternalEmailHandler(emailSender),
+		internalEmail: newInternalEmailHandler(emailSender, cfg.Features(), sqlStore),
 	}
+}
+
+// newInternalEmailHandler wires the relay; sign-in mails need the platform
+// store's project names and daily budget, so a store without them refuses
+// sign-in mail.
+func newInternalEmailHandler(sender email.Sender, flags features.Flags, platform storage.PlatformStore) *handler.InternalEmailHandler {
+	relay := handler.NewInternalEmailHandler(sender)
+	if source, ok := platform.(handler.SignInMailSource); ok {
+		relay.WithSignInMail(flags, source)
+	}
+	return relay
 }
 
 // routerStores is the slice of the platform store the router itself needs:
