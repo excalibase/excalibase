@@ -298,12 +298,14 @@ func (s *Store) CreatePendingInvite(ctx context.Context, invite *domain.PendingI
 	return err
 }
 
+// pendingInviteColumns is the select list its scanner reads, in order.
+// The queries spell it out as one literal; query_text_test pins them to it.
 const pendingInviteColumns = `id, org_id, email, role, invited_by, expires_at, created_at`
 
 const (
-	findPendingInviteSQL   = `SELECT ` + pendingInviteColumns + ` FROM pending_invites WHERE token_hash = $1 AND expires_at > $2`
-	acceptPendingInviteSQL = `DELETE FROM pending_invites WHERE token_hash = $1 AND expires_at > $2 RETURNING ` + pendingInviteColumns
-	listPendingInvitesSQL  = `SELECT ` + pendingInviteColumns + ` FROM pending_invites WHERE org_id = $1`
+	findPendingInviteSQL   = `SELECT id, org_id, email, role, invited_by, expires_at, created_at FROM pending_invites WHERE token_hash = $1 AND expires_at > $2`
+	acceptPendingInviteSQL = `DELETE FROM pending_invites WHERE token_hash = $1 AND expires_at > $2 RETURNING id, org_id, email, role, invited_by, expires_at, created_at`
+	listPendingInvitesSQL  = `SELECT id, org_id, email, role, invited_by, expires_at, created_at FROM pending_invites WHERE org_id = $1`
 )
 
 // rowScanner is the common interface of *sql.Row and *sql.Rows.

@@ -37,7 +37,7 @@ func (s *Store) ConsumeOAuthState(ctx context.Context, stateHash string, now tim
 	return &state, nil
 }
 
-const findUserByIdentitySQL = `SELECT ` + prefixedUserColumns + ` FROM users u JOIN studio_identities i ON i.user_id = u.id
+const findUserByIdentitySQL = `SELECT u.id, u.username, u.email, u.password_hash, u.role, u.active, u.kind, u.email_verified_at, u.created_at, u.updated_at FROM users u JOIN studio_identities i ON i.user_id = u.id
 		 WHERE i.provider = $1 AND i.subject = $2`
 
 func (s *Store) FindUserByIdentity(ctx context.Context, provider, subject string) (*domain.User, error) {

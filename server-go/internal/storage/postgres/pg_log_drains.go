@@ -18,6 +18,11 @@ const logDrainColumns = `id, project_id, name, kind, datadog_site, url, header_n
 	last_error, consecutive_failures, cursor_ns, lease_to, lease_lines, next_attempt_at, last_success_at,
 	sent_lines, dropped_lines, created_by, created_at, updated_at`
 
+const insertLogDrainSQL = `INSERT INTO log_drains (id, project_id, name, kind, datadog_site, url, header_name, enabled, status,
+	last_error, consecutive_failures, cursor_ns, lease_to, lease_lines, next_attempt_at, last_success_at,
+	sent_lines, dropped_lines, created_by, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,0,0,$13,NULL,0,0,$14,$15,$16)`
+
 func scanLogDrain(row scanner) (*domain.LogDrain, error) {
 	var drain domain.LogDrain
 	var lastSuccess sql.NullTime
@@ -51,8 +56,7 @@ func (s *Store) CreateLogDrain(ctx context.Context, drain *domain.LogDrain, limi
 	if count >= limit {
 		return domain.ErrLogDrainLimit
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO log_drains (`+logDrainColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,0,0,$13,NULL,0,0,$14,$15,$16)`,
+	if _, err := tx.ExecContext(ctx, insertLogDrainSQL,
 		drain.ID, drain.ProjectID, drain.Name, drain.Kind, drain.DatadogSite, drain.URL, drain.HeaderName,
 		drain.Enabled, drain.Status, drain.LastError, drain.ConsecutiveFailures, drain.CursorNS, drain.NextAttemptAt,
 		drain.CreatedBy, drain.CreatedAt, drain.UpdatedAt); err != nil {
