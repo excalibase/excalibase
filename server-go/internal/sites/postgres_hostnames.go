@@ -127,7 +127,8 @@ func (s *PostgresStore) CreateHostname(ctx context.Context, hostname *CustomHost
 	return tx.Commit()
 }
 
-const getHostnameSQL = `SELECT ` + hostnameColumns + `
+const getHostnameSQL = `SELECT id, site_id, project_id, hostname, validation, status, COALESCE(cloudflare_id, ''), hostname_status,
+	certificate_status, records, errors, created_by, created_at, updated_at, checked_at, verification_token, verified_at, inactive_since, withdrawn_at
 		FROM site_hostnames WHERE project_id = $1 AND site_id = $2 AND id = $3`
 
 func (s *PostgresStore) GetHostname(ctx context.Context, projectID, siteID, id string) (*CustomHostname, error) {

@@ -417,6 +417,8 @@ var notServableStatuses = []string{
 	string(domain.StatusPendingDeletion),
 }
 
+// pgInstanceColumns is the select list its scanner reads, in order.
+// The queries spell it out as one literal; query_text_test pins them to it.
 const pgInstanceColumns = `
 	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
 	deployment_mode,
@@ -437,11 +439,62 @@ const pgInstanceColumns = `
 	deletion_scheduled_at, deletion_due_at, storage_size, no_database, mysql_version`
 
 const (
-	findInstanceByProjectIDSQL = `SELECT` + pgInstanceColumns + `
+	findInstanceByProjectIDSQL = `SELECT
+	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
+	deployment_mode,
+	host, read_only_host, port, database_name, username,
+	deletion_protection, pooler_enabled, pooler_host, ssl_mode,
+	webhook_url, postgres_version, documentdb, tags,
+	status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
+	deletion_step, deletion_error, deletion_delete_backups,
+	network_policy_enabled,
+	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
+	backup_enabled, backup_schedule, backup_retention_days,
+	metrics_endpoint, grafana_dashboard_url,
+	restored_from_project_id, restored_from_backup_id,
+	last_active_at, last_xact_count, pause_reason,
+	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
+	created_at, updated_at, last_health_check,
+	storage_class, parameters,
+	deletion_scheduled_at, deletion_due_at, storage_size, no_database, mysql_version
 	FROM database_instances WHERE project_id = $1`
-	findAllInstancesSQL = `SELECT` + pgInstanceColumns + `
+	findAllInstancesSQL = `SELECT
+	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
+	deployment_mode,
+	host, read_only_host, port, database_name, username,
+	deletion_protection, pooler_enabled, pooler_host, ssl_mode,
+	webhook_url, postgres_version, documentdb, tags,
+	status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
+	deletion_step, deletion_error, deletion_delete_backups,
+	network_policy_enabled,
+	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
+	backup_enabled, backup_schedule, backup_retention_days,
+	metrics_endpoint, grafana_dashboard_url,
+	restored_from_project_id, restored_from_backup_id,
+	last_active_at, last_xact_count, pause_reason,
+	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
+	created_at, updated_at, last_health_check,
+	storage_class, parameters,
+	deletion_scheduled_at, deletion_due_at, storage_size, no_database, mysql_version
 	FROM database_instances`
-	findInstancesByOwnerSQL = `SELECT` + pgInstanceColumns + `
+	findInstancesByOwnerSQL = `SELECT
+	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
+	deployment_mode,
+	host, read_only_host, port, database_name, username,
+	deletion_protection, pooler_enabled, pooler_host, ssl_mode,
+	webhook_url, postgres_version, documentdb, tags,
+	status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
+	deletion_step, deletion_error, deletion_delete_backups,
+	network_policy_enabled,
+	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
+	backup_enabled, backup_schedule, backup_retention_days,
+	metrics_endpoint, grafana_dashboard_url,
+	restored_from_project_id, restored_from_backup_id,
+	last_active_at, last_xact_count, pause_reason,
+	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
+	created_at, updated_at, last_health_check,
+	storage_class, parameters,
+	deletion_scheduled_at, deletion_due_at, storage_size, no_database, mysql_version
 	FROM database_instances WHERE owner_id = $1`
 )
 

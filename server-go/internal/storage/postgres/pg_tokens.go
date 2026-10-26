@@ -10,12 +10,14 @@ import (
 	"github.com/lib/pq"
 )
 
+// tokenColumns is the select list its scanner reads, in order.
+// The queries spell it out as one literal; query_text_test pins them to it.
 const tokenColumns = `token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes, project_id, permissions`
 
 const (
-	findTokenByHashSQL     = `SELECT ` + tokenColumns + ` FROM access_tokens WHERE token_hash = $1`
-	listTokensByUserSQL    = `SELECT ` + tokenColumns + ` FROM access_tokens WHERE user_id = $1`
-	listTokensByProjectSQL = `SELECT ` + tokenColumns + ` FROM access_tokens WHERE project_id = $1 ORDER BY created_at, token_hash`
+	findTokenByHashSQL     = `SELECT token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes, project_id, permissions FROM access_tokens WHERE token_hash = $1`
+	listTokensByUserSQL    = `SELECT token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes, project_id, permissions FROM access_tokens WHERE user_id = $1`
+	listTokensByProjectSQL = `SELECT token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes, project_id, permissions FROM access_tokens WHERE project_id = $1 ORDER BY created_at, token_hash`
 )
 
 func (s *Store) CreateToken(ctx context.Context, t *domain.AccessToken) error {

@@ -10,17 +10,18 @@ import (
 )
 
 // userColumns is the select list every user read shares, in scanUserRow order.
+// The queries spell it out as one literal; query_text_test pins them to it.
 const userColumns = `id, username, email, password_hash, role, active, kind, email_verified_at, created_at, updated_at`
 
 // prefixedUserColumns is userColumns for a query that joins users as u.
 const prefixedUserColumns = `u.id, u.username, u.email, u.password_hash, u.role, u.active, u.kind, u.email_verified_at, u.created_at, u.updated_at`
 
 const (
-	findUserByIDSQL       = `SELECT ` + userColumns + ` FROM users WHERE id = $1`
-	findUserByUsernameSQL = `SELECT ` + userColumns + ` FROM users WHERE lower(username) = lower($1)`
-	findUserByEmailSQL    = `SELECT ` + userColumns + ` FROM users WHERE lower(email) = lower($1)
+	findUserByIDSQL       = `SELECT id, username, email, password_hash, role, active, kind, email_verified_at, created_at, updated_at FROM users WHERE id = $1`
+	findUserByUsernameSQL = `SELECT id, username, email, password_hash, role, active, kind, email_verified_at, created_at, updated_at FROM users WHERE lower(username) = lower($1)`
+	findUserByEmailSQL    = `SELECT id, username, email, password_hash, role, active, kind, email_verified_at, created_at, updated_at FROM users WHERE lower(email) = lower($1)
 		 ORDER BY kind = 'human' DESC LIMIT 1`
-	findAllUsersSQL = `SELECT ` + userColumns + ` FROM users`
+	findAllUsersSQL = `SELECT id, username, email, password_hash, role, active, kind, email_verified_at, created_at, updated_at FROM users`
 )
 
 func (s *Store) CreateUser(ctx context.Context, u *domain.User) error {

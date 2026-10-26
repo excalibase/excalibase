@@ -11,12 +11,14 @@ import (
 // siteTokenLockSpace keeps the per-site token count apart from other advisory locks.
 const siteTokenLockSpace = 620
 
+// tokenColumns is the select list its scanner reads, in order.
+// The queries spell it out as one literal; query_text_test pins them to it.
 const tokenColumns = `id, site_id, project_id, name, token_prefix, token_hash, created_by, created_at, expires_at, last_used_at`
 
 const (
-	listDeployTokensSQL = `SELECT ` + tokenColumns + ` FROM site_deploy_tokens
+	listDeployTokensSQL = `SELECT id, site_id, project_id, name, token_prefix, token_hash, created_by, created_at, expires_at, last_used_at FROM site_deploy_tokens
 		WHERE project_id = $1 AND site_id = $2 ORDER BY created_at, id`
-	findDeployTokenSQL = `SELECT ` + tokenColumns + ` FROM site_deploy_tokens WHERE token_hash = $1`
+	findDeployTokenSQL = `SELECT id, site_id, project_id, name, token_prefix, token_hash, created_by, created_at, expires_at, last_used_at FROM site_deploy_tokens WHERE token_hash = $1`
 )
 
 func scanDeployToken(row rowScanner) (*DeployToken, error) {
