@@ -51,6 +51,16 @@ func (h *ProvisioningHandler) authOAuthOn(ctx context.Context) bool {
 	return features.Enabled(ctx, h.authOAuth.Flags, features.AuthOAuth)
 }
 
+func (h *ProvisioningHandler) authOTPOn(ctx context.Context) bool {
+	return features.Enabled(ctx, h.authOAuth.Flags, features.AuthOTP)
+}
+
+// signInPolicyOn is whether any end-user sign-in method that reads the
+// redirect list and the new-user switch is on.
+func (h *ProvisioningHandler) signInPolicyOn(ctx context.Context) bool {
+	return h.authOAuthOn(ctx) || h.authOTPOn(ctx)
+}
+
 // authProviderView is one provider on the wire; the secret is never here.
 type authProviderView struct {
 	Provider        string `json:"provider"`

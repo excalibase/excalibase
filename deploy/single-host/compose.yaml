@@ -266,6 +266,8 @@ services:
       FEATURE_ADVISORS: ${FEATURE_ADVISORS:-false}
       # End-user Google and GitHub sign-in for customers' apps (EXC-662).
       FEATURE_AUTHOAUTH: ${FEATURE_AUTHOAUTH:-false}
+      # End-user sign-in by emailed link or code (EXC-662); no new grant.
+      FEATURE_AUTHOTP: ${FEATURE_AUTHOTP:-false}
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.

@@ -79,7 +79,7 @@ func TestAuthSignIn_DefaultsWithoutARowAndForAnOlderRow(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	got, err := store.GetAuthSignIn(ctx, "proj_never_set")
-	if err != nil || !got.AllowNewUsers || got.RedirectURLs == nil || len(got.RedirectURLs) != 0 {
+	if err != nil || !got.AllowNewUsers || got.RedirectURLs == nil || len(got.RedirectURLs) != 0 || got.EmailOTPEnabled {
 		t.Fatalf("no row = %+v, %v", got, err)
 	}
 	// A row written by the flag-off path still reads with the column defaults.
@@ -88,7 +88,7 @@ func TestAuthSignIn_DefaultsWithoutARowAndForAnOlderRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = store.GetAuthSignIn(ctx, "proj_signin_old")
-	if err != nil || !got.AllowNewUsers || got.RedirectURLs == nil || len(got.RedirectURLs) != 0 {
+	if err != nil || !got.AllowNewUsers || got.RedirectURLs == nil || len(got.RedirectURLs) != 0 || got.EmailOTPEnabled {
 		t.Fatalf("older row = %+v, %v", got, err)
 	}
 }
@@ -98,12 +98,12 @@ func TestAuthSignIn_RoundTripAndTheOldWriterKeepsIt(t *testing.T) {
 	ctx := context.Background()
 	saveAuthSettingsProject(t, store, "proj_signin")
 	settings := domain.ProjectAuthSettings{RequireEmailVerification: true, SiteURL: "https://app.example.com"}
-	signIn := domain.ProjectAuthSignIn{RedirectURLs: []string{"https://app.example.com/cb", "http://localhost:3000/cb"}, AllowNewUsers: false}
+	signIn := domain.ProjectAuthSignIn{RedirectURLs: []string{"https://app.example.com/cb", "http://localhost:3000/cb"}, AllowNewUsers: false, EmailOTPEnabled: true}
 	if err := store.SetAuthSettingsWithSignIn(ctx, "proj_signin", settings, signIn); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	got, err := store.GetAuthSignIn(ctx, "proj_signin")
-	if err != nil || got.AllowNewUsers || fmt.Sprint(got.RedirectURLs) != fmt.Sprint(signIn.RedirectURLs) {
+	if err != nil || got.AllowNewUsers || fmt.Sprint(got.RedirectURLs) != fmt.Sprint(signIn.RedirectURLs) || !got.EmailOTPEnabled {
 		t.Fatalf("round trip = %+v, %v", got, err)
 	}
 	if stored, ok, _ := store.GetAuthSettings(ctx, "proj_signin"); !ok || stored != settings {
@@ -113,7 +113,7 @@ func TestAuthSignIn_RoundTripAndTheOldWriterKeepsIt(t *testing.T) {
 	if err := store.SetAuthSettings(ctx, "proj_signin", domain.ProjectAuthSettings{SiteURL: "https://b.example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := store.GetAuthSignIn(ctx, "proj_signin"); got.AllowNewUsers || len(got.RedirectURLs) != 2 {
+	if got, _ := store.GetAuthSignIn(ctx, "proj_signin"); got.AllowNewUsers || len(got.RedirectURLs) != 2 || !got.EmailOTPEnabled {
 		t.Fatalf("the original writer wiped the policy: %+v", got)
 	}
 }
@@ -123,7 +123,7 @@ func TestAuthSignIn_RestoredCopyCarriesThePolicy(t *testing.T) {
 	ctx := context.Background()
 	saveAuthSettingsProject(t, store, "proj_signin_src")
 	saveAuthSettingsProject(t, store, "proj_signin_copy")
-	signIn := domain.ProjectAuthSignIn{RedirectURLs: []string{"https://app.example.com/cb"}, AllowNewUsers: false}
+	signIn := domain.ProjectAuthSignIn{RedirectURLs: []string{"https://app.example.com/cb"}, AllowNewUsers: false, EmailOTPEnabled: true}
 	if err := store.SetAuthSettingsWithSignIn(ctx, "proj_signin_src", domain.ProjectAuthSettings{SiteURL: "https://app.example.com"}, signIn); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestAuthSignIn_RestoredCopyCarriesThePolicy(t *testing.T) {
 		t.Fatalf("copy: %v", err)
 	}
 	got, err := store.GetAuthSignIn(ctx, "proj_signin_copy")
-	if err != nil || got.AllowNewUsers || fmt.Sprint(got.RedirectURLs) != "[https://app.example.com/cb]" {
+	if err != nil || got.AllowNewUsers || fmt.Sprint(got.RedirectURLs) != "[https://app.example.com/cb]" || !got.EmailOTPEnabled {
 		t.Fatalf("copy policy = %+v, %v", got, err)
 	}
 	// The copy has its own callback URL and no secret in the vault, so its

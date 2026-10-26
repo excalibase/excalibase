@@ -6,6 +6,7 @@ import type { AuthSettings } from '../api/authSettings';
 import { useApps } from '../api/apps';
 import { Button } from '../components/Button';
 import { AuthProvidersCard } from '../components/auth/AuthProvidersCard';
+import { EmailSignInCard } from '../components/auth/EmailSignInCard';
 import { RedirectUrlsCard } from '../components/auth/RedirectUrlsCard';
 import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { serverErrorMessage } from '../utils/serverError';
@@ -91,6 +92,7 @@ export function AuthSettingsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const { data, isLoading, isError } = useAuthSettings(projectId || '');
   const { enabled: oauthOn } = useFeatureEnabled('authoauth');
+  const { enabled: otpOn } = useFeatureEnabled('authotp');
 
   if (isLoading) {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
@@ -101,10 +103,11 @@ export function AuthSettingsPage() {
       {isError || !data
         ? <p className="text-sm text-red-400" role="alert">Could not load the auth settings.</p>
         : <SiteUrlForm projectId={projectId || ''} initial={data} />}
-      {oauthOn && data && (
+      {(oauthOn || otpOn) && data && (
         <div className="mt-8 space-y-6">
           <RedirectUrlsCard projectId={projectId || ''} settings={data} />
-          <AuthProvidersCard projectId={projectId || ''} />
+          {otpOn && <EmailSignInCard projectId={projectId || ''} settings={data} />}
+          {oauthOn && <AuthProvidersCard projectId={projectId || ''} />}
         </div>
       )}
     </div>

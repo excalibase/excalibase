@@ -33,8 +33,8 @@ var copyRestoredSettingsSQL = []struct{ what, query string }{
 			ORDER BY o.n)
 		FROM project_cors_settings c WHERE c.project_id = $1`},
 	{"auth settings", `
-		INSERT INTO project_auth_settings (project_id, require_email_verification, site_url, redirect_urls, allow_new_users)
-		SELECT $2, require_email_verification, site_url, redirect_urls, allow_new_users FROM project_auth_settings WHERE project_id = $1`},
+		INSERT INTO project_auth_settings (project_id, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled)
+		SELECT $2, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled FROM project_auth_settings WHERE project_id = $1`},
 }
 
 // CopyRestoredSettings carries the source's API settings onto a restored copy

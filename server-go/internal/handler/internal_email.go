@@ -22,8 +22,10 @@ const internalEmailSendPath = "/internal/email/send"
 // Template names accepted by the relay. Auth sends these verbatim, so the
 // values are a wire contract and must not change.
 const (
-	emailTemplateVerify = "verify_email"
-	emailTemplateReset  = "password_reset"
+	emailTemplateVerify    = "verify_email"
+	emailTemplateReset     = "password_reset"
+	emailTemplateMagicLink = "magic_link"
+	emailTemplateEmailOTP  = "email_otp"
 )
 
 // InternalEmailHandler renders a transactional template and hands it to the
@@ -118,6 +120,20 @@ func buildInternalEmail(req internalEmailRequest) (email.Message, string, error)
 			ExpiresMin: atoiOrZero(req.Data["expiresMin"]),
 		})
 		return msg, emailTemplateReset, err
+	case emailTemplateMagicLink:
+		msg, err := email.BuildMagicLinkEmail(email.MagicLinkData{
+			UserEmail:  req.Data["userEmail"],
+			LinkURL:    req.Data["linkUrl"],
+			ExpiresMin: atoiOrZero(req.Data["expiresMin"]),
+		})
+		return msg, emailTemplateMagicLink, err
+	case emailTemplateEmailOTP:
+		msg, err := email.BuildEmailOTPEmail(email.EmailOTPData{
+			UserEmail:  req.Data["userEmail"],
+			Code:       req.Data["code"],
+			ExpiresMin: atoiOrZero(req.Data["expiresMin"]),
+		})
+		return msg, emailTemplateEmailOTP, err
 	default:
 		return email.Message{}, "", errors.New("unknown or missing template")
 	}

@@ -118,6 +118,28 @@ func TestInternalEmailSend_PasswordResetAccepted(t *testing.T) {
 	}
 }
 
+// EXC-662: the auth service's sign-in link and code.
+func TestInternalEmailSend_SignInTemplatesAccepted(t *testing.T) {
+	link := "https://app.example.io/cb?token_hash=t1&type=magiclink"
+	for template, data := range map[string]string{
+		"magic_link": `{"userEmail":"` + testRecipient + `","linkUrl":"` + link + `","expiresMin":"10"}`,
+		"email_otp":  `{"userEmail":"` + testRecipient + `","code":"042917","expiresMin":"10"}`,
+	} {
+		sender := &recordingEmailSender{}
+		w := postInternalEmail(newInternalEmailRouter(sender), `{"projectId":"proj_p1","to":"`+testRecipient+`","template":"`+template+`","data":`+data+`}`)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("%s: want 202, got %d body=%s", template, w.Code, w.Body.String())
+		}
+		msg, ok := sender.last()
+		if !ok || len(msg.To) != 1 || msg.To[0] != testRecipient || msg.Tags["template"] != template {
+			t.Fatalf("%s: message = %+v", template, msg)
+		}
+		if !strings.Contains(msg.TextBody, "042917") && !strings.Contains(msg.TextBody, link) {
+			t.Errorf("%s: the secret is not in the mail", template)
+		}
+	}
+}
+
 func TestInternalEmailSend_BadRequests(t *testing.T) {
 	cases := []struct {
 		name string
@@ -127,6 +149,8 @@ func TestInternalEmailSend_BadRequests(t *testing.T) {
 		{"missing to", `{"projectId":"p","template":"verify_email"}`},
 		{"missing template", `{"projectId":"p","to":"` + testRecipient + `"}`},
 		{"unknown template", `{"projectId":"p","to":"` + testRecipient + `","template":"nope"}`},
+		{"magic link without a link", `{"projectId":"p","to":"` + testRecipient + `","template":"magic_link","data":{"linkUrl":"javascript:x"}}`},
+		{"code that is not six digits", `{"projectId":"p","to":"` + testRecipient + `","template":"email_otp","data":{"code":"12ab56"}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -19,23 +19,26 @@ const errAuthSettingsNotConfigured = "project auth settings not configured"
 type authSettingsResponse struct {
 	RequireEmailVerification bool   `json:"requireEmailVerification"`
 	SiteURL                  string `json:"siteUrl"`
-	// Present only while authoauth is on (EXC-662).
+	// Present only while authoauth or authotp is on (EXC-662).
 	*authSignInResponse
 }
 
 type authSignInResponse struct {
 	RedirectURLs  []string `json:"redirectUrls"`
 	AllowNewUsers bool     `json:"allowNewUsers"`
+	// Present only while authotp is on.
+	EmailOTPEnabled *bool `json:"emailOtpEnabled,omitempty"`
 }
 
 // authSettingsRequest is the PUT body. The sign-in fields are read only while
-// authoauth is on, and an absent one keeps its stored value so an older
+// their flag is on, and an absent one keeps its stored value so an older
 // Studio cannot wipe them.
 type authSettingsRequest struct {
 	RequireEmailVerification bool      `json:"requireEmailVerification"`
 	SiteURL                  string    `json:"siteUrl"`
 	RedirectURLs             *[]string `json:"redirectUrls"`
 	AllowNewUsers            *bool     `json:"allowNewUsers"`
+	EmailOTPEnabled          *bool     `json:"emailOtpEnabled"`
 }
 
 // GetAuthSettings serves GET /api/projects/{projectId}/auth-settings.
@@ -50,13 +53,13 @@ func (h *ProvisioningHandler) GetAuthSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 	response := authSettingsResponseFor(settings)
-	if h.authOAuthOn(r.Context()) {
+	if h.signInPolicyOn(r.Context()) {
 		signIn, err := h.storedAuthSignIn(r.Context(), projectID)
 		if err != nil {
 			httpError(w, safeError(err), http.StatusInternalServerError)
 			return
 		}
-		response.authSignInResponse = authSignInResponseFor(signIn)
+		response.authSignInResponse = h.authSignInResponseFor(r.Context(), signIn)
 	}
 	writeJSON(w, response)
 }
@@ -89,7 +92,7 @@ func (h *ProvisioningHandler) PutAuthSettings(w http.ResponseWriter, r *http.Req
 		RequireEmailVerification: body.RequireEmailVerification,
 		SiteURL:                  siteURL,
 	}
-	if h.authOAuthOn(r.Context()) {
+	if h.signInPolicyOn(r.Context()) {
 		h.putAuthSettingsWithSignIn(w, r, projectID, settings, body)
 		return
 	}
@@ -127,7 +130,7 @@ func (h *ProvisioningHandler) authSettingsForInfo(ctx context.Context, projectID
 	return settings, err
 }
 
-// putAuthSettingsWithSignIn is the authoauth-on write: the settings and the
+// putAuthSettingsWithSignIn is the sign-in-flag-on write: the settings and the
 // sign-in policy in one upsert, absent policy fields keeping their stored value.
 func (h *ProvisioningHandler) putAuthSettingsWithSignIn(w http.ResponseWriter, r *http.Request, projectID string, settings domain.ProjectAuthSettings, body authSettingsRequest) {
 	var redirectURLs []string
@@ -150,13 +153,16 @@ func (h *ProvisioningHandler) putAuthSettingsWithSignIn(w http.ResponseWriter, r
 	if body.AllowNewUsers != nil {
 		signIn.AllowNewUsers = *body.AllowNewUsers
 	}
+	if body.EmailOTPEnabled != nil && h.authOTPOn(r.Context()) {
+		signIn.EmailOTPEnabled = *body.EmailOTPEnabled
+	}
 	if err := h.authOAuth.SignIn.SetAuthSettingsWithSignIn(r.Context(), projectID, settings, signIn); err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	h.recordAuthSignIn(r, projectID, settings, signIn)
 	response := authSettingsResponseFor(settings)
-	response.authSignInResponse = authSignInResponseFor(signIn)
+	response.authSignInResponse = h.authSignInResponseFor(r.Context(), signIn)
 	writeJSON(w, response)
 }
 
@@ -168,10 +174,11 @@ func (h *ProvisioningHandler) storedAuthSignIn(ctx context.Context, projectID st
 	return h.authOAuth.SignIn.GetAuthSignIn(ctx, projectID)
 }
 
-// authOAuthForInfo is the OAuth policy on /info: nil while authoauth is off,
-// so none of its keys appear. A read failure is returned, never defaulted.
+// authOAuthForInfo is the sign-in policy on /info: nil while both sign-in
+// flags are off, so none of its keys appear; providers only with authoauth,
+// the email switch only with authotp. A read failure is returned, never defaulted.
 func (h *ProvisioningHandler) authOAuthForInfo(ctx context.Context, projectID, orgSlug string) (*domain.ProjectOAuthInfo, error) {
-	if !h.authOAuthOn(ctx) {
+	if !h.signInPolicyOn(ctx) {
 		return nil, nil
 	}
 	info := &domain.ProjectOAuthInfo{RedirectURLs: []string{}, AllowNewUsers: true, OAuthProviders: []domain.OAuthProviderInfo{}}
@@ -184,8 +191,11 @@ func (h *ProvisioningHandler) authOAuthForInfo(ctx context.Context, projectID, o
 		if signIn.RedirectURLs != nil {
 			info.RedirectURLs = signIn.RedirectURLs
 		}
+		if h.authOTPOn(ctx) {
+			info.EmailOTPEnabled = &signIn.EmailOTPEnabled
+		}
 	}
-	if h.authOAuth.Providers != nil {
+	if h.authOAuth.Providers != nil && h.authOAuthOn(ctx) {
 		stored, err := h.authOAuth.Providers.ListAuthProviders(ctx, projectID)
 		if err != nil {
 			return nil, err
@@ -195,12 +205,16 @@ func (h *ProvisioningHandler) authOAuthForInfo(ctx context.Context, projectID, o
 	return info, nil
 }
 
-func authSignInResponseFor(signIn domain.ProjectAuthSignIn) *authSignInResponse {
+func (h *ProvisioningHandler) authSignInResponseFor(ctx context.Context, signIn domain.ProjectAuthSignIn) *authSignInResponse {
 	urls := signIn.RedirectURLs
 	if urls == nil {
 		urls = []string{}
 	}
-	return &authSignInResponse{RedirectURLs: urls, AllowNewUsers: signIn.AllowNewUsers}
+	response := &authSignInResponse{RedirectURLs: urls, AllowNewUsers: signIn.AllowNewUsers}
+	if h.authOTPOn(ctx) {
+		response.EmailOTPEnabled = &signIn.EmailOTPEnabled
+	}
+	return response
 }
 
 func authSettingsResponseFor(settings domain.ProjectAuthSettings) authSettingsResponse {
@@ -213,8 +227,12 @@ func authSettingsResponseFor(settings domain.ProjectAuthSettings) authSettingsRe
 // recordAuthSignIn audits the sign-in policy: the redirect list decides where
 // sign-in codes are delivered.
 func (h *ProvisioningHandler) recordAuthSignIn(r *http.Request, projectID string, settings domain.ProjectAuthSettings, signIn domain.ProjectAuthSignIn) {
-	details, _ := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"siteUrl": settings.SiteURL, "redirectUrls": signIn.RedirectURLs, "allowNewUsers": signIn.AllowNewUsers,
-	})
+	}
+	if h.authOTPOn(r.Context()) {
+		fields["emailOtpEnabled"] = signIn.EmailOTPEnabled
+	}
+	details, _ := json.Marshal(fields)
 	h.writeAuthAudit(r, projectID, auditActionAuthSettingsUpdate, auditResourceAuthSettings, projectID, string(details))
 }

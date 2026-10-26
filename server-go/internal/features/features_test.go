@@ -101,3 +101,21 @@ func TestWhenOnAppliesTheMiddlewareOnlyWhileTheFeatureIsOn(t *testing.T) {
 		}
 	}
 }
+
+func TestWhenAnyOnAppliesTheMiddlewareWhileEitherFeatureIsOn(t *testing.T) {
+	refuse := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
+	}
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	either := []Feature{AuthOAuth, AuthOTP}
+	for _, tc := range []struct {
+		flags Flags
+		want  int
+	}{{NewStatic(AuthOTP), http.StatusForbidden}, {NewStatic(AuthOAuth), http.StatusForbidden}, {NewStatic(MCP), http.StatusOK}} {
+		w := httptest.NewRecorder()
+		WhenAnyOn(tc.flags, either, refuse)(ok).ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/", nil))
+		if w.Code != tc.want {
+			t.Errorf("status = %d, want %d", w.Code, tc.want)
+		}
+	}
+}

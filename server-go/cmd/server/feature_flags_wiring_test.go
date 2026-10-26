@@ -93,11 +93,12 @@ func probeDark(router http.Handler, probe darkProbe, token string) *httptest.Res
 	return w
 }
 
-// darkWork is every feature that gates background work, not a route; its
-// wiring test proves the work does not start while it is off.
+// darkWork is every feature that gates background work or response fields,
+// not a route; its test proves nothing changes while it is off.
 var darkWork = map[features.Feature]string{
 	features.MySQLPITR:    "TestMySQLBinlogShippingStartsOnlyWithItsFeature",
 	features.LogRetention: "TestLogPlanSweepStartsOnlyWithItsFeature",
+	features.AuthOTP:      "TestAuthOTP_OffHidesTheSwitchEvenWithOAuthOn",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {
@@ -188,5 +189,20 @@ func TestImageWatcher_RunsOnlyWithThePipelineOn(t *testing.T) {
 		if got := imageWatcherWanted(t.Context(), tc.cfg, tc.flags); got != tc.want {
 			t.Errorf("hosting=%v flags=%v: watcher wanted=%v, want %v", tc.cfg.AppHostingEnabled, tc.flags, got, tc.want)
 		}
+	}
+}
+
+// EXC-662: either sign-in flag makes the redirect list an Admin's to write.
+func TestAuthSettingsWritesNeedAnAdminWhileAnySignInFlagIsOn(t *testing.T) {
+	put := darkProbe{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-settings"}
+	for _, on := range [][]features.Feature{{features.AuthOAuth}, {features.AuthOTP}} {
+		router, developer := darkFeatureRouter(t, on...)
+		if w := probeDark(router, put, developer); w.Code != http.StatusForbidden {
+			t.Errorf("%v on: a Developer's write answered %d", on, w.Code)
+		}
+	}
+	router, developer := darkFeatureRouter(t)
+	if w := probeDark(router, put, developer); w.Code == http.StatusForbidden {
+		t.Errorf("both off: a Developer's write was refused (%s)", w.Body.String())
 	}
 }

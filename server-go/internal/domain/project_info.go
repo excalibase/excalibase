@@ -25,8 +25,8 @@ type ProjectInfo struct {
 	// null.
 	RequireEmailVerification bool   `json:"requireEmailVerification"`
 	SiteURL                  string `json:"siteUrl"`
-	// ProjectOAuthInfo is present only while the authoauth flag is on
-	// (EXC-662); nil keeps its keys off the wire entirely.
+	// ProjectOAuthInfo is present only while the authoauth or authotp flag
+	// is on (EXC-662); nil keeps its keys off the wire entirely.
 	*ProjectOAuthInfo
 }
 
@@ -37,4 +37,6 @@ type ProjectOAuthInfo struct {
 	RedirectURLs   []string            `json:"redirectUrls"`
 	AllowNewUsers  bool                `json:"allowNewUsers"`
 	OAuthProviders []OAuthProviderInfo `json:"oauthProviders"`
+	// EmailOTPEnabled is sent only while authotp is on.
+	EmailOTPEnabled *bool `json:"emailOtpEnabled,omitempty"`
 }

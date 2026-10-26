@@ -28,11 +28,15 @@ const MySQLAuthAdminPrivileges = "SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER,
 const MySQLAppAuthRevokeSQL = "REVOKE IF EXISTS ALL PRIVILEGES ON `" + MySQLAuthDatabase + "`.* FROM '" + MySQLUserApp + "'@'%' IGNORE UNKNOWN USER;"
 
 // MySQLEndUserSessionsRevokeSQL ends what the source project issued the end
-// users of a copy restored from its backup, keeping the users (EXC-635).
+// users of a copy restored from its backup, sign-ins in flight included
+// (EXC-662), keeping the users (EXC-635).
 // Tables the auth service has not created yet are skipped.
 var MySQLEndUserSessionsRevokeSQL = mysqlIfAuthTable("refresh_tokens", "DELETE FROM `auth`.`refresh_tokens`") +
 	mysqlIfAuthTable("password_reset_tokens", "DELETE FROM `auth`.`password_reset_tokens`") +
 	mysqlIfAuthTable("email_verification_tokens", "DELETE FROM `auth`.`email_verification_tokens`") +
+	mysqlIfAuthTable("email_otps", "DELETE FROM `auth`.`email_otps`") +
+	mysqlIfAuthTable("auth_codes", "DELETE FROM `auth`.`auth_codes`") +
+	mysqlIfAuthTable("flow_states", "DELETE FROM `auth`.`flow_states`") +
 	mysqlIfAuthTable("api_keys", "UPDATE `auth`.`api_keys` SET revoked_at = UTC_TIMESTAMP(6) WHERE revoked_at IS NULL")
 
 // mysqlIfAuthTable runs statement when the auth database holds table.

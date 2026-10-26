@@ -271,6 +271,7 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | PUT | `/api/projects/{id}/auth-settings` | Yes (Developer+) | Set the project's auth settings; `siteUrl` must be an absolute `http`/`https` URL with no trailing slash, or empty to unset |
 | GET | `/api/projects/{id}/auth-providers` | Yes (Developer+) | End-user Google/GitHub sign-in settings and the callback URL to register; the client secret is never returned (flag `authoauth`) |
 | PUT | `/api/projects/{id}/auth-providers/{provider}` | Yes (Admin) | Set `{enabled, clientId, clientSecret?}`; the secret goes to the vault, an empty one keeps the stored secret (flag `authoauth`) |
+| — | `/api/projects/{id}/auth-settings` with flag `authotp` | Yes (Admin writes) | Adds `emailOtpEnabled` (sign-in by emailed link or six-digit code) and the shared `redirectUrls` + `allowNewUsers`; `/info` then carries `emailOtpEnabled` for the auth service |
 
 ### Edge Functions (per-project Deno runtime)
 

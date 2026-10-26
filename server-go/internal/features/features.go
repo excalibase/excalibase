@@ -43,11 +43,14 @@ const (
 	// AuthOAuth is end-user Google and GitHub sign-in for customers' apps:
 	// provider settings, redirect URLs and the new-user switch (EXC-662).
 	AuthOAuth Feature = "authoauth"
+	// AuthOTP is end-user sign-in by emailed link or six-digit code: the
+	// project's switch for it and the sign-in policy it shares with AuthOAuth.
+	AuthOTP Feature = "authotp"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP}
 }
 
 type Flags interface {
@@ -107,12 +110,19 @@ func Require(flags Flags, feature Feature) func(http.Handler) http.Handler {
 
 // WhenOn applies middleware only while the feature is on, decided per request.
 func WhenOn(flags Flags, feature Feature, middleware func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return WhenAnyOn(flags, []Feature{feature}, middleware)
+}
+
+// WhenAnyOn applies middleware while any of the features is on, decided per request.
+func WhenAnyOn(flags Flags, anyOf []Feature, middleware func(http.Handler) http.Handler) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		gated := middleware(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if Enabled(r.Context(), flags, feature) {
-				gated.ServeHTTP(w, r)
-				return
+			for _, feature := range anyOf {
+				if Enabled(r.Context(), flags, feature) {
+					gated.ServeHTTP(w, r)
+					return
+				}
 			}
 			next.ServeHTTP(w, r)
 		})

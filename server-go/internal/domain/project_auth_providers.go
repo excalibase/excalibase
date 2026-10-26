@@ -66,6 +66,8 @@ type OAuthProviderInfo struct {
 type ProjectAuthSignIn struct {
 	RedirectURLs  []string
 	AllowNewUsers bool
+	// EmailOTPEnabled is the project's switch for sign-in by emailed link or code.
+	EmailOTPEnabled bool
 }
 
 // DefaultAuthSignIn is what a project without a settings row gets.
