@@ -22,6 +22,11 @@ describe('EmailSignInCard', () => {
     expect(screen.getByLabelText(/email links and codes/i)).not.toBeChecked();
   });
 
+  test('tells the admin codes are eight digits', () => {
+    renderCard({ siteUrl: '', requireEmailVerification: false });
+    expect(screen.getByText(/eight-digit code/i)).toBeInTheDocument();
+  });
+
   test('turning it off sends only the switch with the site settings', async () => {
     const u = userEvent.setup();
     vi.mocked(api.put).mockImplementation(async (_path: string, body: unknown) => ({ data: body }));

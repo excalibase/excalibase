@@ -2,7 +2,7 @@ import { useSaveAuthSettings } from '../../api/authSettings';
 import type { AuthSettings } from '../../api/authSettings';
 import { serverErrorMessage } from '../../utils/serverError';
 
-// EmailSignInCard switches sign-in by emailed link or six-digit code (EXC-662).
+// EmailSignInCard switches sign-in by emailed link or eight-digit code (EXC-662).
 // The PUT leaves out the redirect list and the new-user switch, so the server
 // keeps them as stored.
 export function EmailSignInCard({ projectId, settings }: { readonly projectId: string; readonly settings: AuthSettings }) {
@@ -24,7 +24,7 @@ export function EmailSignInCard({ projectId, settings }: { readonly projectId: s
         <span>
           <span className="block">Email links and codes</span>
           <span className="block text-xs text-text-secondary">
-            Users sign in with a link or a six-digit code sent to their address, without a password. Each works once,
+            Users sign in with a link or a eight-digit code sent to their address, without a password. Each works once,
             for 10 minutes, in the browser that asked for it. A link goes to the site URL or a redirect URL above.
           </span>
         </span>

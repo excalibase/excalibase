@@ -10,7 +10,10 @@ import (
 // End-user sign-in by emailed link or code (EXC-662). The auth service sends
 // both through the relay; the link points at the project's own site.
 
-const defaultSignInExpiresMin = 10
+const (
+	defaultSignInExpiresMin = 10
+	platformName            = "Excalibase"
+)
 
 // MagicLinkData populates the magic-link template. ProductName and SiteURL
 // name the project, so the reader knows which app is asking.
@@ -23,7 +26,7 @@ type MagicLinkData struct {
 	SiteHost    string
 }
 
-// EmailOTPData populates the six-digit code template.
+// EmailOTPData populates the eight-digit code template.
 type EmailOTPData struct {
 	UserEmail   string
 	Code        string
@@ -35,7 +38,7 @@ type EmailOTPData struct {
 
 var (
 	errSignInLink = errors.New("magic link must be an absolute http(s) URL")
-	errSignInCode = errors.New("sign-in code must be six digits")
+	errSignInCode = errors.New("sign-in code must be eight digits")
 )
 
 const signInHTMLHead = `<!DOCTYPE html>
@@ -62,6 +65,9 @@ const signInHTMLFoot = `
       <tr><td style="padding:0 40px 32px;">
         <p style="margin:0;font-size:13px;line-height:1.5;color:#6b7280;">
           It expires in {{.ExpiresMin}} minutes and works once. If you didn't ask to sign in, you can ignore this email.
+        </p>
+        <p style="margin:12px 0 0;font-size:12px;line-height:1.5;color:#9ca3af;">
+          Sent by Excalibase on behalf of {{.ProductName}}.
         </p>
       </td></tr>
     </table>
@@ -99,7 +105,9 @@ Open this link to sign in as {{.UserEmail}}, in the browser where you asked for 
 
 {{.LinkURL}}
 
-It expires in {{.ExpiresMin}} minutes and works once. If you didn't ask to sign in, ignore this email.`
+It expires in {{.ExpiresMin}} minutes and works once. If you didn't ask to sign in, ignore this email.
+
+Sent by Excalibase on behalf of {{.ProductName}}.`
 
 const emailOTPHTML = signInHTMLHead + `
       <tr><td style="padding:24px 40px 8px;">
@@ -109,7 +117,7 @@ const emailOTPHTML = signInHTMLHead + `
         </p>
       </td></tr>
       <tr><td style="padding:16px 40px 24px;">
-        <div style="font-size:32px;font-weight:700;letter-spacing:8px;color:#111827;font-family:Menlo,Consolas,monospace;">{{.Code}}</div>
+        <div style="font-size:32px;font-weight:700;letter-spacing:6px;color:#111827;font-family:Menlo,Consolas,monospace;">{{.Code}}</div>
       </td></tr>` + signInHTMLFoot
 
 const emailOTPText = `Your sign-in code — {{.ProductName}}{{if .SiteHost}} ({{.SiteHost}}){{end}}
@@ -118,7 +126,9 @@ Enter this code to sign in as {{.UserEmail}}:
 
 {{.Code}}
 
-It expires in {{.ExpiresMin}} minutes and works once. If you didn't ask to sign in, ignore this email.`
+It expires in {{.ExpiresMin}} minutes and works once. If you didn't ask to sign in, ignore this email.
+
+Sent by Excalibase on behalf of {{.ProductName}}.`
 
 // BuildMagicLinkEmail renders the sign-in link message.
 func BuildMagicLinkEmail(d MagicLinkData) (Message, error) {
@@ -128,18 +138,18 @@ func BuildMagicLinkEmail(d MagicLinkData) (Message, error) {
 	}
 	d.ProductName, d.ExpiresMin = signInDefaults(d.ProductName, d.ExpiresMin)
 	d.SiteHost = siteHost(d.SiteURL)
-	return renderSignIn(magicLinkHTML, magicLinkText, "Your sign-in link for "+d.ProductName, "magic_link", d)
+	return renderSignIn(magicLinkHTML, magicLinkText, "Your sign-in link for "+d.ProductName, "magic_link", d.ProductName, d)
 }
 
 // BuildEmailOTPEmail renders the sign-in code message; the code stays out of
 // the subject, which lock screens show.
 func BuildEmailOTPEmail(d EmailOTPData) (Message, error) {
-	if !sixDigits(d.Code) {
+	if !eightDigits(d.Code) {
 		return Message{}, errSignInCode
 	}
 	d.ProductName, d.ExpiresMin = signInDefaults(d.ProductName, d.ExpiresMin)
 	d.SiteHost = siteHost(d.SiteURL)
-	return renderSignIn(emailOTPHTML, emailOTPText, "Your sign-in code for "+d.ProductName, "email_otp", d)
+	return renderSignIn(emailOTPHTML, emailOTPText, "Your sign-in code for "+d.ProductName, "email_otp", d.ProductName, d)
 }
 
 // maxProductName keeps a project name from crowding the subject line.
@@ -156,7 +166,7 @@ func signInDefaults(product string, expiresMin int) (string, int) {
 		product = string(runes[:maxProductName])
 	}
 	if product == "" {
-		product = "Excalibase"
+		product = platformName
 	}
 	if expiresMin <= 0 {
 		expiresMin = defaultSignInExpiresMin
@@ -174,12 +184,29 @@ func siteHost(site string) string {
 	return parsed.Host
 }
 
-func renderSignIn(html, text, subject, template string, data any) (Message, error) {
+// senderName shows the project as sending via the platform, so a project
+// cannot pass for a brand in the From line; characters that would break the
+// address header are dropped.
+func senderName(product string) string {
+	name := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`"<>,;:\@()[]`, r) {
+			return -1
+		}
+		return r
+	}, product)), " ")
+	if name == "" || name == platformName {
+		return platformName
+	}
+	return name + " via " + platformName
+}
+
+func renderSignIn(html, text, subject, template, product string, data any) (Message, error) {
 	htmlBody, textBody, err := Render(html, text, data)
 	if err != nil {
 		return Message{}, err
 	}
 	return Message{
+		FromName: senderName(product),
 		Subject:  subject,
 		HTMLBody: htmlBody,
 		TextBody: textBody,
@@ -187,8 +214,8 @@ func renderSignIn(html, text, subject, template string, data any) (Message, erro
 	}, nil
 }
 
-func sixDigits(code string) bool {
-	if len(code) != 6 {
+func eightDigits(code string) bool {
+	if len(code) != 8 {
 		return false
 	}
 	for _, r := range code {

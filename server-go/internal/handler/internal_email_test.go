@@ -157,7 +157,7 @@ func newSignInMailRouter(sender email.Sender, flags features.Flags, source *fake
 
 var signInMailBodies = map[string]string{
 	"magic_link": `{"userEmail":"` + testRecipient + `","linkUrl":"https://notes.acme.test/cb?token_hash=t1&type=magiclink","expiresMin":"10"}`,
-	"email_otp":  `{"userEmail":"` + testRecipient + `","code":"042917","expiresMin":"10"}`,
+	"email_otp":  `{"userEmail":"` + testRecipient + `","code":"04291735","expiresMin":"10"}`,
 }
 
 func postSignInMail(r *chi.Mux, template string) *httptest.ResponseRecorder {
@@ -177,7 +177,7 @@ func TestInternalEmailSend_SignInTemplatesAccepted(t *testing.T) {
 		if !ok || len(msg.To) != 1 || msg.To[0] != testRecipient || msg.Tags["template"] != template {
 			t.Fatalf("%s: message = %+v", template, msg)
 		}
-		if !strings.Contains(msg.TextBody, "042917") && !strings.Contains(msg.TextBody, "token_hash=t1") {
+		if !strings.Contains(msg.TextBody, "04291735") && !strings.Contains(msg.TextBody, "token_hash=t1") {
 			t.Errorf("%s: the secret is not in the mail", template)
 		}
 		if !strings.Contains(msg.Subject, "Acme Notes") || !strings.Contains(msg.TextBody, "notes.acme.test") {
@@ -237,7 +237,7 @@ func TestInternalEmailSend_BadRequests(t *testing.T) {
 		{"missing template", `{"projectId":"p","to":"` + testRecipient + `"}`},
 		{"unknown template", `{"projectId":"p","to":"` + testRecipient + `","template":"nope"}`},
 		{"magic link without a link", `{"projectId":"p","to":"` + testRecipient + `","template":"magic_link","data":{"linkUrl":"javascript:x"}}`},
-		{"code that is not six digits", `{"projectId":"p","to":"` + testRecipient + `","template":"email_otp","data":{"code":"12ab56"}}`},
+		{"code that is not eight digits", `{"projectId":"p","to":"` + testRecipient + `","template":"email_otp","data":{"code":"123456"}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

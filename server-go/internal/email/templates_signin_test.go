@@ -34,19 +34,19 @@ func TestBuildMagicLinkEmail(t *testing.T) {
 }
 
 func TestBuildEmailOTPEmail(t *testing.T) {
-	m, err := BuildEmailOTPEmail(EmailOTPData{UserEmail: "u@x.com", Code: "042917"})
+	m, err := BuildEmailOTPEmail(EmailOTPData{UserEmail: "u@x.com", Code: "04291735"})
 	if err != nil {
 		t.Fatalf("BuildEmailOTPEmail: %v", err)
 	}
-	if m.Tags["template"] != "email_otp" || strings.Contains(m.Subject, "042917") {
+	if m.Tags["template"] != "email_otp" || strings.Contains(m.Subject, "04291735") {
 		t.Errorf("message = %+v; the subject must not carry the code", m)
 	}
 	for name, body := range map[string]string{"html": m.HTMLBody, "text": m.TextBody} {
-		if !strings.Contains(body, "042917") || !strings.Contains(body, "10 minutes") {
+		if !strings.Contains(body, "04291735") || !strings.Contains(body, "10 minutes") {
 			t.Errorf("%s body lacks the code or its default lifetime: %s", name, body)
 		}
 	}
-	for _, code := range []string{"", "12345", "1234567", "12345a", "<b>1</b>"} {
+	for _, code := range []string{"", "042917", "1234567", "123456789", "1234567a", "<b>1</b>"} {
 		if _, err := BuildEmailOTPEmail(EmailOTPData{UserEmail: "u@x.com", Code: code}); err == nil {
 			t.Errorf("code %q: built", code)
 		}
@@ -59,7 +59,7 @@ func TestSignInEmailsNameTheProjectAndItsSite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := BuildEmailOTPEmail(EmailOTPData{UserEmail: "u@x.com", Code: "042917",
+	code, err := BuildEmailOTPEmail(EmailOTPData{UserEmail: "u@x.com", Code: "04291735",
 		ProductName: "Acme <Notes>", SiteURL: "https://notes.acme.test/app"})
 	if err != nil {
 		t.Fatal(err)
@@ -71,8 +71,23 @@ func TestSignInEmailsNameTheProjectAndItsSite(t *testing.T) {
 		if !strings.Contains(m.TextBody, "Acme <Notes>") || !strings.Contains(m.TextBody, "notes.acme.test") {
 			t.Errorf("%s text names no project or site: %s", name, m.TextBody)
 		}
+		if m.FromName != "Acme Notes via Excalibase" {
+			t.Errorf("%s sender = %q, want the project via Excalibase", name, m.FromName)
+		}
+		for part, body := range map[string]string{"html": m.HTMLBody, "text": m.TextBody} {
+			if !strings.Contains(body, "Sent by Excalibase on behalf of") {
+				t.Errorf("%s %s footer does not say who sent it", name, part)
+			}
+		}
 		if !strings.Contains(m.HTMLBody, "Acme &lt;Notes&gt;") || strings.Contains(m.HTMLBody, "<Notes>") || !strings.Contains(m.HTMLBody, "notes.acme.test") {
 			t.Errorf("%s html names no project or site, or leaves markup unescaped", name)
 		}
+	}
+}
+
+func TestSignInSenderNameIsThePlatformWhenTheProjectHasNone(t *testing.T) {
+	m, err := BuildEmailOTPEmail(EmailOTPData{UserEmail: "u@x.com", Code: "04291735"})
+	if err != nil || m.FromName != "Excalibase" {
+		t.Fatalf("sender = %q %v", m.FromName, err)
 	}
 }
