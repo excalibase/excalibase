@@ -158,6 +158,9 @@ func newSignInMailRouter(sender email.Sender, flags features.Flags, source *fake
 var signInMailBodies = map[string]string{
 	"magic_link": `{"userEmail":"` + testRecipient + `","linkUrl":"https://notes.acme.test/cb?token_hash=t1&type=magiclink","expiresMin":"10"}`,
 	"email_otp":  `{"userEmail":"` + testRecipient + `","code":"04291735","expiresMin":"10"}`,
+	// The address-link mails go to an address being added to an account.
+	"link_magic_link": `{"userEmail":"` + testRecipient + `","linkUrl":"https://notes.acme.test/cb?token_hash=t1&type=magiclink","expiresMin":"10"}`,
+	"link_email_otp":  `{"userEmail":"` + testRecipient + `","code":"04291735","expiresMin":"10"}`,
 }
 
 func postSignInMail(r *chi.Mux, template string) *httptest.ResponseRecorder {

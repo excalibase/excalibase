@@ -29,6 +29,9 @@ const (
 	emailTemplateReset     = "password_reset"
 	emailTemplateMagicLink = "magic_link"
 	emailTemplateEmailOTP  = "email_otp"
+	// An address a signed-in end user adds to their account (EXC-662).
+	emailTemplateLinkMagicLink = "link_magic_link"
+	emailTemplateLinkEmailOTP  = "link_email_otp"
 )
 
 // InternalEmailHandler renders a transactional template and hands it to the
@@ -133,7 +136,11 @@ func (h *InternalEmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 }
 
 func isSignInTemplate(template string) bool {
-	return template == emailTemplateMagicLink || template == emailTemplateEmailOTP
+	switch template {
+	case emailTemplateMagicLink, emailTemplateEmailOTP, emailTemplateLinkMagicLink, emailTemplateLinkEmailOTP:
+		return true
+	}
+	return false
 }
 
 // signInMessage renders a sign-in mail named for its project, once the
@@ -190,24 +197,32 @@ func buildInternalEmail(req internalEmailRequest, project domain.SignInMailProje
 			ExpiresMin: atoiOrZero(req.Data["expiresMin"]),
 		})
 		return msg, emailTemplateReset, err
-	case emailTemplateMagicLink:
-		msg, err := email.BuildMagicLinkEmail(email.MagicLinkData{
+	case emailTemplateMagicLink, emailTemplateLinkMagicLink:
+		build := email.BuildMagicLinkEmail
+		if req.Template == emailTemplateLinkMagicLink {
+			build = email.BuildLinkMagicLinkEmail
+		}
+		msg, err := build(email.MagicLinkData{
 			UserEmail:   req.Data["userEmail"],
 			LinkURL:     req.Data["linkUrl"],
 			ExpiresMin:  atoiOrZero(req.Data["expiresMin"]),
 			ProductName: project.Name,
 			SiteURL:     project.SiteURL,
 		})
-		return msg, emailTemplateMagicLink, err
-	case emailTemplateEmailOTP:
-		msg, err := email.BuildEmailOTPEmail(email.EmailOTPData{
+		return msg, msg.Tags["template"], err
+	case emailTemplateEmailOTP, emailTemplateLinkEmailOTP:
+		build := email.BuildEmailOTPEmail
+		if req.Template == emailTemplateLinkEmailOTP {
+			build = email.BuildLinkEmailOTPEmail
+		}
+		msg, err := build(email.EmailOTPData{
 			UserEmail:   req.Data["userEmail"],
 			Code:        req.Data["code"],
 			ExpiresMin:  atoiOrZero(req.Data["expiresMin"]),
 			ProductName: project.Name,
 			SiteURL:     project.SiteURL,
 		})
-		return msg, emailTemplateEmailOTP, err
+		return msg, msg.Tags["template"], err
 	default:
 		return email.Message{}, "", errors.New("unknown or missing template")
 	}

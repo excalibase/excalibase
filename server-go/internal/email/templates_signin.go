@@ -132,24 +132,115 @@ Sent by Excalibase on behalf of {{.ProductName}}.`
 
 // BuildMagicLinkEmail renders the sign-in link message.
 func BuildMagicLinkEmail(d MagicLinkData) (Message, error) {
+	return buildLinkMail(d, magicLinkHTML, magicLinkText, "Your sign-in link for ", "magic_link")
+}
+
+func buildLinkMail(d MagicLinkData, html, text, subject, template string) (Message, error) {
 	parsed, err := url.Parse(d.LinkURL)
 	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
 		return Message{}, errSignInLink
 	}
 	d.ProductName, d.ExpiresMin = signInDefaults(d.ProductName, d.ExpiresMin)
 	d.SiteHost = siteHost(d.SiteURL)
-	return renderSignIn(magicLinkHTML, magicLinkText, "Your sign-in link for "+d.ProductName, "magic_link", d.ProductName, d)
+	return renderSignIn(html, text, subject+d.ProductName, template, d.ProductName, d)
 }
 
 // BuildEmailOTPEmail renders the sign-in code message; the code stays out of
 // the subject, which lock screens show.
 func BuildEmailOTPEmail(d EmailOTPData) (Message, error) {
+	return buildCodeMail(d, emailOTPHTML, emailOTPText, "Your sign-in code for ", "email_otp")
+}
+
+func buildCodeMail(d EmailOTPData, html, text, subject, template string) (Message, error) {
 	if !eightDigits(d.Code) {
 		return Message{}, errSignInCode
 	}
 	d.ProductName, d.ExpiresMin = signInDefaults(d.ProductName, d.ExpiresMin)
 	d.SiteHost = siteHost(d.SiteURL)
-	return renderSignIn(emailOTPHTML, emailOTPText, "Your sign-in code for "+d.ProductName, "email_otp", d.ProductName, d)
+	return renderSignIn(html, text, subject+d.ProductName, template, d.ProductName, d)
+}
+
+// The address-link mails go to an address a signed-in user is adding to their
+// account; they must not read as a sign-in, since a code read out to someone
+// else adds the address to that person's account.
+const linkHTMLFoot = `
+      <tr><td style="padding:0 40px 32px;">
+        <p style="margin:0;font-size:13px;line-height:1.5;color:#6b7280;">
+          It expires in {{.ExpiresMin}} minutes and works once. Never share it: whoever uses it adds this address to their account.
+          If you didn't ask to add your address, ignore this email.
+        </p>
+        <p style="margin:12px 0 0;font-size:12px;line-height:1.5;color:#9ca3af;">
+          Sent by Excalibase on behalf of {{.ProductName}}.
+        </p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>`
+
+const linkMagicLinkHTML = signInHTMLHead + `
+      <tr><td style="padding:24px 40px 8px;">
+        <h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;color:#111827;font-weight:600;">Confirm your address</h1>
+        <p style="margin:0 0 8px;font-size:15px;line-height:1.6;color:#374151;">
+          Tap the button below to add {{.UserEmail}} to an account, in the browser where you asked for this email.
+        </p>
+      </td></tr>
+      <tr><td style="padding:24px 40px;">
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+          <tr><td align="center" bgcolor="#7c3aed" style="border-radius:8px;">
+            <a href="{{.LinkURL}}" target="_blank"
+               style="display:inline-block;padding:13px 28px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:8px;">
+              Add this address
+            </a>
+          </td></tr>
+        </table>
+      </td></tr>
+      <tr><td style="padding:0 40px 24px;">
+        <p style="margin:0 0 8px;font-size:13px;line-height:1.5;color:#6b7280;">Or paste this link in your browser:</p>
+        <p style="margin:0;font-size:12px;line-height:1.5;color:#4b5563;word-break:break-all;">
+          <a href="{{.LinkURL}}" style="color:#4b5563;text-decoration:underline;">{{.LinkURL}}</a>
+        </p>
+      </td></tr>` + linkHTMLFoot
+
+const linkMagicLinkText = `Confirm your address — {{.ProductName}}{{if .SiteHost}} ({{.SiteHost}}){{end}}
+
+Open this link to add {{.UserEmail}} to an account, in the browser where you asked for this email:
+
+{{.LinkURL}}
+
+It expires in {{.ExpiresMin}} minutes and works once. Never share it: whoever uses it adds this address to their account. If you didn't ask to add your address, ignore this email.
+
+Sent by Excalibase on behalf of {{.ProductName}}.`
+
+const linkEmailOTPHTML = signInHTMLHead + `
+      <tr><td style="padding:24px 40px 8px;">
+        <h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;color:#111827;font-weight:600;">Confirm your address</h1>
+        <p style="margin:0 0 8px;font-size:15px;line-height:1.6;color:#374151;">
+          Enter this code to add {{.UserEmail}} to an account:
+        </p>
+      </td></tr>
+      <tr><td style="padding:16px 40px 24px;">
+        <div style="font-size:32px;font-weight:700;letter-spacing:6px;color:#111827;font-family:Menlo,Consolas,monospace;">{{.Code}}</div>
+      </td></tr>` + linkHTMLFoot
+
+const linkEmailOTPText = `Confirm your address — {{.ProductName}}{{if .SiteHost}} ({{.SiteHost}}){{end}}
+
+Enter this code to add {{.UserEmail}} to an account:
+
+{{.Code}}
+
+It expires in {{.ExpiresMin}} minutes and works once. Never share it: whoever uses it adds this address to their account. If you didn't ask to add your address, ignore this email.
+
+Sent by Excalibase on behalf of {{.ProductName}}.`
+
+// BuildLinkMagicLinkEmail renders the link that adds an address to an account.
+func BuildLinkMagicLinkEmail(d MagicLinkData) (Message, error) {
+	return buildLinkMail(d, linkMagicLinkHTML, linkMagicLinkText, "Confirm your address for ", "link_magic_link")
+}
+
+// BuildLinkEmailOTPEmail renders the code that adds an address to an account.
+func BuildLinkEmailOTPEmail(d EmailOTPData) (Message, error) {
+	return buildCodeMail(d, linkEmailOTPHTML, linkEmailOTPText, "Confirm your address for ", "link_email_otp")
 }
 
 // maxProductName keeps a project name from crowding the subject line.
