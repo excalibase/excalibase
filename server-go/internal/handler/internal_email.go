@@ -198,9 +198,9 @@ func buildInternalEmail(req internalEmailRequest, project domain.SignInMailProje
 		})
 		return msg, emailTemplateReset, err
 	case emailTemplateMagicLink, emailTemplateLinkMagicLink:
-		build := email.BuildMagicLinkEmail
+		build, template := email.BuildMagicLinkEmail, emailTemplateMagicLink
 		if req.Template == emailTemplateLinkMagicLink {
-			build = email.BuildLinkMagicLinkEmail
+			build, template = email.BuildLinkMagicLinkEmail, emailTemplateLinkMagicLink
 		}
 		msg, err := build(email.MagicLinkData{
 			UserEmail:   req.Data["userEmail"],
@@ -209,11 +209,11 @@ func buildInternalEmail(req internalEmailRequest, project domain.SignInMailProje
 			ProductName: project.Name,
 			SiteURL:     project.SiteURL,
 		})
-		return msg, msg.Tags["template"], err
+		return msg, template, err
 	case emailTemplateEmailOTP, emailTemplateLinkEmailOTP:
-		build := email.BuildEmailOTPEmail
+		build, template := email.BuildEmailOTPEmail, emailTemplateEmailOTP
 		if req.Template == emailTemplateLinkEmailOTP {
-			build = email.BuildLinkEmailOTPEmail
+			build, template = email.BuildLinkEmailOTPEmail, emailTemplateLinkEmailOTP
 		}
 		msg, err := build(email.EmailOTPData{
 			UserEmail:   req.Data["userEmail"],
@@ -222,7 +222,7 @@ func buildInternalEmail(req internalEmailRequest, project domain.SignInMailProje
 			ProductName: project.Name,
 			SiteURL:     project.SiteURL,
 		})
-		return msg, msg.Tags["template"], err
+		return msg, template, err
 	default:
 		return email.Message{}, "", errors.New("unknown or missing template")
 	}
