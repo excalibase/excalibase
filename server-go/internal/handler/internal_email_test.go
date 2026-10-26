@@ -11,7 +11,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/email"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -118,6 +120,113 @@ func TestInternalEmailSend_PasswordResetAccepted(t *testing.T) {
 	}
 }
 
+// fakeSignInMail is the project a sign-in mail is for and its daily budget.
+type fakeSignInMail struct {
+	project domain.SignInMailProject
+	readErr error
+	left    int
+	takeErr error
+	taken   int
+}
+
+func (f *fakeSignInMail) SignInMailProject(context.Context, string) (domain.SignInMailProject, error) {
+	return f.project, f.readErr
+}
+
+func (f *fakeSignInMail) TakeSignInMail(_ context.Context, _ string, perDay int) (bool, error) {
+	if f.takeErr != nil {
+		return false, f.takeErr
+	}
+	if perDay <= 0 || f.left == 0 {
+		return false, nil
+	}
+	f.left--
+	f.taken++
+	return true, nil
+}
+
+func signInMailOn() *fakeSignInMail {
+	return &fakeSignInMail{project: domain.SignInMailProject{Name: "Acme Notes", SiteURL: "https://notes.acme.test", EmailOTPEnabled: true}, left: 100}
+}
+
+func newSignInMailRouter(sender email.Sender, flags features.Flags, source *fakeSignInMail) *chi.Mux {
+	r := chi.NewRouter()
+	NewInternalEmailHandler(sender).WithSignInMail(flags, source).Routes(r)
+	return r
+}
+
+var signInMailBodies = map[string]string{
+	"magic_link": `{"userEmail":"` + testRecipient + `","linkUrl":"https://notes.acme.test/cb?token_hash=t1&type=magiclink","expiresMin":"10"}`,
+	"email_otp":  `{"userEmail":"` + testRecipient + `","code":"04291735","expiresMin":"10"}`,
+}
+
+func postSignInMail(r *chi.Mux, template string) *httptest.ResponseRecorder {
+	return postInternalEmail(r, `{"projectId":"proj_p1","to":"`+testRecipient+`","template":"`+template+`","data":`+signInMailBodies[template]+`}`)
+}
+
+// EXC-662: the auth service's sign-in link and code, named for the project.
+func TestInternalEmailSend_SignInTemplatesAccepted(t *testing.T) {
+	for template := range signInMailBodies {
+		sender := &recordingEmailSender{}
+		source := signInMailOn()
+		w := postSignInMail(newSignInMailRouter(sender, features.NewStatic(features.AuthOTP), source), template)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("%s: want 202, got %d body=%s", template, w.Code, w.Body.String())
+		}
+		msg, ok := sender.last()
+		if !ok || len(msg.To) != 1 || msg.To[0] != testRecipient || msg.Tags["template"] != template {
+			t.Fatalf("%s: message = %+v", template, msg)
+		}
+		if !strings.Contains(msg.TextBody, "04291735") && !strings.Contains(msg.TextBody, "token_hash=t1") {
+			t.Errorf("%s: the secret is not in the mail", template)
+		}
+		if !strings.Contains(msg.Subject, "Acme Notes") || !strings.Contains(msg.TextBody, "notes.acme.test") {
+			t.Errorf("%s: the mail names no project: %q", template, msg.Subject)
+		}
+		if source.taken != 1 {
+			t.Errorf("%s: the send spent %d of the budget", template, source.taken)
+		}
+	}
+}
+
+func TestInternalEmailSend_SignInMailRefusedUnlessTheProjectMayMail(t *testing.T) {
+	off := signInMailOn()
+	off.project.EmailOTPEnabled = false
+	spent := signInMailOn()
+	spent.left = 0
+	cases := map[string]struct {
+		flags  features.Flags
+		source *fakeSignInMail
+		want   int
+	}{
+		"the flag off":              {features.NewStatic(), signInMailOn(), http.StatusForbidden},
+		"no settings wired":         {features.NewStatic(features.AuthOTP), nil, http.StatusForbidden},
+		"the project's switch off":  {features.NewStatic(features.AuthOTP), off, http.StatusForbidden},
+		"settings unreadable":       {features.NewStatic(features.AuthOTP), &fakeSignInMail{readErr: errors.New("db down")}, http.StatusServiceUnavailable},
+		"the day's budget spent":    {features.NewStatic(features.AuthOTP), spent, http.StatusTooManyRequests},
+		"the budget cannot be read": {features.NewStatic(features.AuthOTP), &fakeSignInMail{project: signInMailOn().project, takeErr: errors.New("db down")}, http.StatusServiceUnavailable},
+	}
+	for name, tc := range cases {
+		for template := range signInMailBodies {
+			sender := &recordingEmailSender{}
+			r := chi.NewRouter()
+			handler := NewInternalEmailHandler(sender)
+			if tc.source != nil {
+				handler = handler.WithSignInMail(tc.flags, tc.source)
+			}
+			handler.Routes(r)
+			if w := postSignInMail(r, template); w.Code != tc.want || len(sender.sent) != 0 {
+				t.Errorf("%s, %s: %d and %d sent, want %d", name, template, w.Code, len(sender.sent), tc.want)
+			}
+		}
+	}
+	sender := &recordingEmailSender{}
+	verify := `{"projectId":"proj_p1","to":"` + testRecipient + `","template":"verify_email","data":{"userEmail":"` + testRecipient + `","verifyUrl":"` + testVerifyURL + `"}}`
+	if w := postInternalEmail(newSignInMailRouter(sender, features.NewStatic(), signInMailOn()), verify); w.Code != http.StatusAccepted {
+		t.Fatalf("a verification mail with the sign-in flag off: %d", w.Code)
+	}
+}
+
 func TestInternalEmailSend_BadRequests(t *testing.T) {
 	cases := []struct {
 		name string
@@ -127,6 +236,8 @@ func TestInternalEmailSend_BadRequests(t *testing.T) {
 		{"missing to", `{"projectId":"p","template":"verify_email"}`},
 		{"missing template", `{"projectId":"p","to":"` + testRecipient + `"}`},
 		{"unknown template", `{"projectId":"p","to":"` + testRecipient + `","template":"nope"}`},
+		{"magic link without a link", `{"projectId":"p","to":"` + testRecipient + `","template":"magic_link","data":{"linkUrl":"javascript:x"}}`},
+		{"code that is not eight digits", `{"projectId":"p","to":"` + testRecipient + `","template":"email_otp","data":{"code":"123456"}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

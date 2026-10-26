@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html/template"
 	"strings"
+	texttemplate "text/template"
 	"time"
 )
 
@@ -75,7 +76,8 @@ func Render(htmlTemplate, textTemplate string, data interface{}) (htmlBody, text
 		htmlBody = buf.String()
 	}
 	if textTemplate != "" {
-		t, err := template.New("text").Parse(textTemplate)
+		// Plain text is not HTML: escaping would turn a link's & into &amp;.
+		t, err := texttemplate.New("text").Parse(textTemplate)
 		if err != nil {
 			return "", "", fmt.Errorf("parse text: %w", err)
 		}

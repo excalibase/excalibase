@@ -4,9 +4,11 @@ import { api } from './client';
 export interface AuthSettings {
   requireEmailVerification: boolean;
   siteUrl: string;
-  // Only while the authoauth feature is on (EXC-662); a PUT without them keeps the stored ones.
+  // Only while the authoauth or authotp feature is on (EXC-662); a PUT without them keeps the stored ones.
   redirectUrls?: string[];
   allowNewUsers?: boolean;
+  // Only while the authotp feature is on.
+  emailOtpEnabled?: boolean;
 }
 
 const authSettingsKey = (projectId: string) => ['auth-settings', projectId] as const;

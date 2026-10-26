@@ -403,6 +403,7 @@ func TestMySQLEndUserSessionsRevokeSQL_KeepsTheUsers(t *testing.T) {
 	for _, want := range []string{
 		"DELETE FROM `auth`.`refresh_tokens`", "DELETE FROM `auth`.`password_reset_tokens`",
 		"DELETE FROM `auth`.`email_verification_tokens`", "UPDATE `auth`.`api_keys` SET revoked_at",
+		"DELETE FROM `auth`.`email_otps`", "DELETE FROM `auth`.`auth_codes`", "DELETE FROM `auth`.`flow_states`",
 	} {
 		if !strings.Contains(MySQLEndUserSessionsRevokeSQL, want) {
 			t.Errorf("missing %q", want)

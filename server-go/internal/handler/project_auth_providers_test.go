@@ -111,6 +111,15 @@ type oauthFixture struct {
 // handler whose project belongs to org "acme"; flagOn decides authoauth.
 func setupOAuthHandler(t *testing.T, flagOn bool) oauthFixture {
 	t.Helper()
+	if flagOn {
+		return setupSignInHandler(t, features.AuthOAuth)
+	}
+	return setupSignInHandler(t)
+}
+
+// setupSignInHandler is setupOAuthHandler with the given sign-in flags on.
+func setupSignInHandler(t *testing.T, on ...features.Feature) oauthFixture {
+	t.Helper()
 	fsStore, err := storage.NewFileSystemStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("init store: %v", err)
@@ -124,11 +133,7 @@ func setupOAuthHandler(t *testing.T, flagOn bool) oauthFixture {
 		settings: &memAuthSettingsStore{settings: map[string]domain.ProjectAuthSettings{}}}
 	f.signIn = &memAuthSignInStore{settings: f.settings, signIn: map[string]domain.ProjectAuthSignIn{}}
 	h.SetAuthSettingsStore(f.settings)
-	flags := features.NewStatic()
-	if flagOn {
-		flags = features.NewStatic(features.AuthOAuth)
-	}
-	h.SetAuthOAuth(AuthOAuthDeps{Flags: flags, Providers: f.providers, SignIn: f.signIn, Secrets: f.vault,
+	h.SetAuthOAuth(AuthOAuthDeps{Flags: features.NewStatic(on...), Providers: f.providers, SignIn: f.signIn, Secrets: f.vault,
 		PublicBaseURL: testOAuthBaseURL, Audit: f.audit})
 
 	r := chi.NewRouter()

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -8,7 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/email"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -22,19 +25,42 @@ const internalEmailSendPath = "/internal/email/send"
 // Template names accepted by the relay. Auth sends these verbatim, so the
 // values are a wire contract and must not change.
 const (
-	emailTemplateVerify = "verify_email"
-	emailTemplateReset  = "password_reset"
+	emailTemplateVerify    = "verify_email"
+	emailTemplateReset     = "password_reset"
+	emailTemplateMagicLink = "magic_link"
+	emailTemplateEmailOTP  = "email_otp"
 )
 
 // InternalEmailHandler renders a transactional template and hands it to the
 // platform's configured email provider. excalibase-auth has no mail SDK of its
 // own, so this endpoint is its only outbound path.
 type InternalEmailHandler struct {
-	sender email.Sender
+	sender     email.Sender
+	flags      features.Flags
+	signInMail SignInMailSource
 }
+
+// SignInMailSource names the project in its sign-in mails and keeps the
+// platform's own daily budget of them, which the shared sender relies on.
+type SignInMailSource interface {
+	SignInMailProject(ctx context.Context, projectID string) (domain.SignInMailProject, error)
+	// TakeSignInMail records one sign-in mail if the project has budget left today.
+	TakeSignInMail(ctx context.Context, projectID string, perDay int) (bool, error)
+}
+
+// signInMailPerDay is a project's sign-in mails a day. The auth service holds
+// each project to fewer; this bounds a caller that does not.
+const signInMailPerDay = 1000
 
 func NewInternalEmailHandler(sender email.Sender) *InternalEmailHandler {
 	return &InternalEmailHandler{sender: sender}
+}
+
+// WithSignInMail lets the relay send sign-in links and codes; without it, or
+// with authotp off, it refuses them.
+func (h *InternalEmailHandler) WithSignInMail(flags features.Flags, source SignInMailSource) *InternalEmailHandler {
+	h.flags, h.signInMail = flags, source
+	return h
 }
 
 // Routes mounts POST /internal/email/send on the given router.
@@ -61,7 +87,10 @@ func (h *InternalEmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req internalEmailRequest
+	var (
+		req internalEmailRequest
+		ok  bool
+	)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, "malformed request body", http.StatusBadRequest)
 		return
@@ -77,10 +106,15 @@ func (h *InternalEmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg, template, err := buildInternalEmail(req)
+	msg, template, err := buildInternalEmail(req, domain.SignInMailProject{})
 	if err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if isSignInTemplate(template) {
+		if msg, ok = h.signInMessage(r.Context(), w, req); !ok {
+			return
+		}
 	}
 	msg.To = []string{req.To}
 
@@ -98,11 +132,49 @@ func (h *InternalEmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+func isSignInTemplate(template string) bool {
+	return template == emailTemplateMagicLink || template == emailTemplateEmailOTP
+}
+
+// signInMessage renders a sign-in mail named for its project, once the
+// project may send one and has budget left; otherwise it answers itself.
+func (h *InternalEmailHandler) signInMessage(ctx context.Context, w http.ResponseWriter, req internalEmailRequest) (email.Message, bool) {
+	if h.signInMail == nil || !features.Enabled(ctx, h.flags, features.AuthOTP) {
+		httpError(w, "sign-in mail is not enabled", http.StatusForbidden)
+		return email.Message{}, false
+	}
+	project, err := h.signInMail.SignInMailProject(ctx, req.ProjectID)
+	if err != nil {
+		httpError(w, "sign-in settings unavailable", http.StatusServiceUnavailable)
+		return email.Message{}, false
+	}
+	if !project.EmailOTPEnabled {
+		httpError(w, "sign-in mail is not enabled", http.StatusForbidden)
+		return email.Message{}, false
+	}
+	msg, _, err := buildInternalEmail(req, project)
+	if err != nil {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return email.Message{}, false
+	}
+	taken, err := h.signInMail.TakeSignInMail(ctx, req.ProjectID, signInMailPerDay)
+	switch {
+	case err != nil:
+		httpError(w, "sign-in mail budget unavailable", http.StatusServiceUnavailable)
+		return email.Message{}, false
+	case !taken:
+		log.Printf("WARN: sign-in mail budget spent for %s", safeLog(req.ProjectID))
+		httpError(w, "sign-in mail budget spent for today", http.StatusTooManyRequests)
+		return email.Message{}, false
+	}
+	return msg, true
+}
+
 // buildInternalEmail dispatches on the template name. Unknown or missing
 // templates are a client error, never a silent no-op. The template name it
 // returns is the matched constant, not the request string, so callers can log
 // it without carrying the caller's bytes along.
-func buildInternalEmail(req internalEmailRequest) (email.Message, string, error) {
+func buildInternalEmail(req internalEmailRequest, project domain.SignInMailProject) (email.Message, string, error) {
 	switch req.Template {
 	case emailTemplateVerify:
 		msg, err := email.BuildVerifyEmail(email.VerifyEmailData{
@@ -118,6 +190,24 @@ func buildInternalEmail(req internalEmailRequest) (email.Message, string, error)
 			ExpiresMin: atoiOrZero(req.Data["expiresMin"]),
 		})
 		return msg, emailTemplateReset, err
+	case emailTemplateMagicLink:
+		msg, err := email.BuildMagicLinkEmail(email.MagicLinkData{
+			UserEmail:   req.Data["userEmail"],
+			LinkURL:     req.Data["linkUrl"],
+			ExpiresMin:  atoiOrZero(req.Data["expiresMin"]),
+			ProductName: project.Name,
+			SiteURL:     project.SiteURL,
+		})
+		return msg, emailTemplateMagicLink, err
+	case emailTemplateEmailOTP:
+		msg, err := email.BuildEmailOTPEmail(email.EmailOTPData{
+			UserEmail:   req.Data["userEmail"],
+			Code:        req.Data["code"],
+			ExpiresMin:  atoiOrZero(req.Data["expiresMin"]),
+			ProductName: project.Name,
+			SiteURL:     project.SiteURL,
+		})
+		return msg, emailTemplateEmailOTP, err
 	default:
 		return email.Message{}, "", errors.New("unknown or missing template")
 	}

@@ -66,6 +66,8 @@ type OAuthProviderInfo struct {
 type ProjectAuthSignIn struct {
 	RedirectURLs  []string
 	AllowNewUsers bool
+	// EmailOTPEnabled is the project's switch for sign-in by emailed link or code.
+	EmailOTPEnabled bool
 }
 
 // DefaultAuthSignIn is what a project without a settings row gets.
@@ -205,4 +207,12 @@ func plainRedirect(parsed *url.URL) bool {
 		}
 	}
 	return !strings.Contains(strings.ToLower(parsed.EscapedPath()), "%2f")
+}
+
+// SignInMailProject is what an end-user sign-in mail says about the project
+// that sent it, and whether the project signs in by mail at all.
+type SignInMailProject struct {
+	Name            string
+	SiteURL         string
+	EmailOTPEnabled bool
 }

@@ -3,8 +3,8 @@ import { redirectUrlProblem, useSaveAuthSettings } from '../../api/authSettings'
 import type { AuthSettings } from '../../api/authSettings';
 import { AllowList } from '../AllowList';
 
-// RedirectUrlsCard edits where auth may send a user back after an OAuth
-// sign-in, and whether sign-in may create new users (EXC-662). Each change
+// RedirectUrlsCard edits where auth may send a user back after a provider
+// sign-in or an emailed link, and whether sign-in may create new users (EXC-662). Each change
 // saves the whole settings body; the server validates and canonicalises.
 export function RedirectUrlsCard({ projectId, settings }: { readonly projectId: string; readonly settings: AuthSettings }) {
   const save = useSaveAuthSettings(projectId);
@@ -40,8 +40,8 @@ export function RedirectUrlsCard({ projectId, settings }: { readonly projectId: 
     <section className="rounded-lg border border-border-primary bg-surface-card p-4 space-y-3" data-testid="redirect-urls-card">
       <h4 className="text-base font-semibold text-text-primary">Redirect URLs</h4>
       <p className="text-xs text-text-secondary">
-        After a Google or GitHub sign-in, auth sends the user back only to the site URL or to an address listed
-        here, matched exactly (scheme, host, port and path). Wildcards are not supported.
+        After a provider sign-in, and in an emailed sign-in link, auth sends the user only to the site URL or to an
+        address listed here, matched exactly (scheme, host, port and path). Wildcards are not supported.
       </p>
       <AllowList
         name="redirect-urls"
@@ -61,7 +61,7 @@ export function RedirectUrlsCard({ projectId, settings }: { readonly projectId: 
         <span>
           <span className="block">Allow new users</span>
           <span className="block text-xs text-text-secondary">
-            Off: only people who already have an account can sign in; a first sign-in with a provider is refused.
+            Off: only people who already have an account can sign in; a first sign-in with a provider or an emailed link is refused.
           </span>
         </span>
       </label>

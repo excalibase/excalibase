@@ -75,3 +75,10 @@ func TestDarkFeatures_AuthOAuthVariable(t *testing.T) {
 		t.Errorf("auth oauth variable = %q", got)
 	}
 }
+
+// EXC-662: the chart and the single-host compose file set this exact name.
+func TestDarkFeatures_AuthOTPVariable(t *testing.T) {
+	if got := featureEnv[features.AuthOTP]; got != "FEATURE_AUTHOTP" {
+		t.Errorf("auth otp variable = %q", got)
+	}
+}

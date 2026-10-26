@@ -1228,8 +1228,8 @@ func wireProjectAuthSettings(sqlStore storage.PlatformStore, provHandler *handle
 	log.Println("WARN: no Postgres platform store — the per-project auth settings API is unavailable")
 }
 
-// wireAuthOAuth attaches end-user OAuth sign-in (EXC-662). Everything it adds
-// to /info and /auth-settings stays off the wire while authoauth is off.
+// wireAuthOAuth attaches end-user sign-in (EXC-662). Everything it adds to
+// /info and /auth-settings stays off the wire while authoauth and authotp are off.
 func wireAuthOAuth(cfg config.AppConfig, sqlStore storage.PlatformStore, vc vaultclient.VaultClient, provHandler *handler.ProvisioningHandler) {
 	deps := handler.AuthOAuthDeps{Flags: cfg.Features(), PublicBaseURL: cfg.PublicBaseURL, Audit: sqlStore}
 	deps.Providers, _ = sqlStore.(storage.ProjectAuthProviderStore)
@@ -1834,8 +1834,19 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		storageSvc:             storageSvc,
 		// EXC-11: server-to-server mail relay for excalibase-auth. Its
 		// authorization is the capability gate, wired at the mount below.
-		internalEmail: handler.NewInternalEmailHandler(emailSender),
+		internalEmail: newInternalEmailHandler(emailSender, cfg.Features(), sqlStore),
 	}
+}
+
+// newInternalEmailHandler wires the relay; sign-in mails need the platform
+// store's project names and daily budget, so a store without them refuses
+// sign-in mail.
+func newInternalEmailHandler(sender email.Sender, flags features.Flags, platform storage.PlatformStore) *handler.InternalEmailHandler {
+	relay := handler.NewInternalEmailHandler(sender)
+	if source, ok := platform.(handler.SignInMailSource); ok {
+		relay.WithSignInMail(flags, source)
+	}
+	return relay
 }
 
 // routerStores is the slice of the platform store the router itself needs:
@@ -2444,8 +2455,9 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
-		// With end-user OAuth on, these settings decide where sign-in codes go (EXC-662).
-		r.Use(features.WhenOn(d.features, features.AuthOAuth, custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore)))
+		// With end-user sign-in on, these settings decide where sign-in codes go (EXC-662).
+		r.Use(features.WhenAnyOn(d.features, []features.Feature{features.AuthOAuth, features.AuthOTP},
+			custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore)))
 		r.Use(d.activity)
 		r.Get("/", d.provHandler.GetAuthSettings)
 		r.Put("/", d.provHandler.PutAuthSettings)

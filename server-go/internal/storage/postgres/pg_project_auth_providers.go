@@ -67,8 +67,8 @@ func (s *Store) GetAuthSignIn(ctx context.Context, projectID string) (domain.Pro
 	signIn := domain.DefaultAuthSignIn()
 	var urls []string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT redirect_urls, allow_new_users FROM project_auth_settings WHERE project_id = $1`, projectID).
-		Scan(pq.Array(&urls), &signIn.AllowNewUsers)
+		`SELECT redirect_urls, allow_new_users, email_otp_enabled FROM project_auth_settings WHERE project_id = $1`, projectID).
+		Scan(pq.Array(&urls), &signIn.AllowNewUsers, &signIn.EmailOTPEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.DefaultAuthSignIn(), nil
 	}
@@ -88,15 +88,16 @@ func (s *Store) SetAuthSettingsWithSignIn(ctx context.Context, projectID string,
 		urls = []string{}
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO project_auth_settings (project_id, require_email_verification, site_url, redirect_urls, allow_new_users, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO project_auth_settings (project_id, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (project_id) DO UPDATE SET
     require_email_verification = EXCLUDED.require_email_verification,
     site_url                   = EXCLUDED.site_url,
     redirect_urls              = EXCLUDED.redirect_urls,
     allow_new_users            = EXCLUDED.allow_new_users,
+    email_otp_enabled          = EXCLUDED.email_otp_enabled,
     updated_at                 = EXCLUDED.updated_at`,
-		projectID, settings.RequireEmailVerification, settings.SiteURL, pq.Array(urls), signIn.AllowNewUsers, time.Now())
+		projectID, settings.RequireEmailVerification, settings.SiteURL, pq.Array(urls), signIn.AllowNewUsers, signIn.EmailOTPEnabled, time.Now())
 	if err != nil {
 		return fmt.Errorf("write auth settings: %w", err)
 	}
