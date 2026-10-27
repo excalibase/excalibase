@@ -15,7 +15,8 @@ export type Feature =
   | 'metricsendpoint'
   | 'logdrains'
   | 'authoauth'
-  | 'authotp';
+  | 'authotp'
+  | 'authuser';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
