@@ -51,13 +51,14 @@ type InternalEmailHandler struct {
 // platform's own daily budget of them, which the shared sender relies on.
 type SignInMailSource interface {
 	SignInMailProject(ctx context.Context, projectID string) (domain.SignInMailProject, error)
-	// TakeSignInMail records one sign-in mail if the project has budget left today.
-	TakeSignInMail(ctx context.Context, projectID string, perDay int) (bool, error)
+	// TakeSignInMail records one mail of a budget (domain.MailBudget*) if the
+	// project has that budget left today.
+	TakeSignInMail(ctx context.Context, projectID, kind string, perDay int) (bool, error)
 }
 
-// signInMailPerDay is a project's sign-in mails a day. The auth service holds
-// each project to fewer; this bounds a caller that does not.
-const signInMailPerDay = 1000
+// projectMailPerDay is a project's mails a day of each budget. The auth
+// service holds each project to fewer; this bounds a caller that does not.
+const projectMailPerDay = 1000
 
 func NewInternalEmailHandler(sender email.Sender) *InternalEmailHandler {
 	return &InternalEmailHandler{sender: sender}
@@ -145,6 +146,9 @@ type projectMailGate struct {
 	flagsOn func(ctx context.Context, flags features.Flags) bool
 	allows  func(ctx context.Context, flags features.Flags, project domain.SignInMailProject) bool
 	refusal string
+	// budget is the daily budget the mail draws on; label names it in answers and logs.
+	budget string
+	label  string
 }
 
 var (
@@ -156,6 +160,8 @@ var (
 			return project.EmailOTPEnabled
 		},
 		refusal: "sign-in mail is not enabled",
+		budget:  domain.MailBudgetSignIn,
+		label:   "sign-in",
 	}
 	emailChangeMailGate = projectMailGate{
 		flagsOn: func(ctx context.Context, flags features.Flags) bool {
@@ -165,6 +171,8 @@ var (
 			return project.Exists
 		},
 		refusal: "account mail is not enabled",
+		budget:  domain.MailBudgetAccount,
+		label:   "account",
 	}
 	// A method can be added only while some sign-in method that adds one is in use.
 	identityLinkedMailGate = projectMailGate{
@@ -176,6 +184,8 @@ var (
 				(features.Enabled(ctx, flags, features.AuthOTP) && project.EmailOTPEnabled)
 		},
 		refusal: "account mail is not enabled",
+		budget:  domain.MailBudgetAccount,
+		label:   "account",
 	}
 )
 
@@ -214,14 +224,14 @@ func (h *InternalEmailHandler) projectMessage(ctx context.Context, w http.Respon
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return email.Message{}, false
 	}
-	taken, err := h.signInMail.TakeSignInMail(ctx, req.ProjectID, signInMailPerDay)
+	taken, err := h.signInMail.TakeSignInMail(ctx, req.ProjectID, gate.budget, projectMailPerDay)
 	switch {
 	case err != nil:
-		httpError(w, "sign-in mail budget unavailable", http.StatusServiceUnavailable)
+		httpError(w, gate.label+" mail budget unavailable", http.StatusServiceUnavailable)
 		return email.Message{}, false
 	case !taken:
-		log.Printf("WARN: sign-in mail budget spent for %s", safeLog(req.ProjectID))
-		httpError(w, "sign-in mail budget spent for today", http.StatusTooManyRequests)
+		log.Printf("WARN: %s mail budget spent for %s", gate.label, safeLog(req.ProjectID))
+		httpError(w, gate.label+" mail budget spent for today", http.StatusTooManyRequests)
 		return email.Message{}, false
 	}
 	return msg, true

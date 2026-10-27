@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -163,5 +164,37 @@ func TestInternalEmailSend_AccountMailLogsNoAddresses(t *testing.T) {
 		if strings.Contains(logged, secret) {
 			t.Errorf("the log carries %q: %q", secret, logged)
 		}
+	}
+}
+
+// A project's end users changing addresses must not spend its sign-in mail.
+func TestInternalEmailSend_AccountMailHasItsOwnBudget(t *testing.T) {
+	flags := features.NewStatic(features.AuthUser, features.AuthOAuth, features.AuthOTP)
+	source := signInMailOn()
+	source.project.OAuthEnabled = true
+	source.spent = map[string]bool{domain.MailBudgetSignIn: true}
+	for template := range accountMailBodies {
+		if w := postAccountMail(accountMailRouter(&recordingEmailSender{}, flags, source), template); w.Code != http.StatusAccepted {
+			t.Errorf("%s with sign-in mail spent: %d %s", template, w.Code, w.Body.String())
+		}
+	}
+	if w := postSignInMail(accountMailRouter(&recordingEmailSender{}, flags, source), "magic_link"); w.Code != http.StatusTooManyRequests {
+		t.Errorf("sign-in mail with its budget spent: %d", w.Code)
+	}
+	want := []string{domain.MailBudgetAccount, domain.MailBudgetAccount, domain.MailBudgetAccount, domain.MailBudgetSignIn}
+	if !slices.Equal(source.kinds, want) {
+		t.Fatalf("budgets drawn on: %v", source.kinds)
+	}
+
+	source = signInMailOn()
+	source.project.OAuthEnabled = true
+	source.spent = map[string]bool{domain.MailBudgetAccount: true}
+	for template := range accountMailBodies {
+		if w := postAccountMail(accountMailRouter(&recordingEmailSender{}, flags, source), template); w.Code != http.StatusTooManyRequests {
+			t.Errorf("%s with account mail spent: %d", template, w.Code)
+		}
+	}
+	if w := postSignInMail(accountMailRouter(&recordingEmailSender{}, flags, source), "email_otp"); w.Code != http.StatusAccepted {
+		t.Errorf("sign-in mail with account mail spent: %d", w.Code)
 	}
 }

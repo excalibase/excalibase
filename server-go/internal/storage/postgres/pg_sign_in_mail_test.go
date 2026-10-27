@@ -72,7 +72,7 @@ func TestSignInMailBudget_HoldsPerProjectUnderConcurrentSends(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ok, err := store.TakeSignInMail(ctx, "proj_mail_budget", 3)
+			ok, err := store.TakeSignInMail(ctx, "proj_mail_budget", domain.MailBudgetSignIn, 3)
 			if err != nil {
 				t.Errorf("take: %v", err)
 			}
@@ -85,7 +85,33 @@ func TestSignInMailBudget_HoldsPerProjectUnderConcurrentSends(t *testing.T) {
 	if taken.Load() != 3 {
 		t.Fatalf("took %d of 8 with a budget of 3", taken.Load())
 	}
-	if ok, err := store.TakeSignInMail(ctx, "proj_mail_other", 3); err != nil || !ok {
+	if ok, err := store.TakeSignInMail(ctx, "proj_mail_other", domain.MailBudgetSignIn, 3); err != nil || !ok {
 		t.Fatalf("another project shares the budget: %v %v", ok, err)
+	}
+}
+
+// EXC-662: account mail and sign-in mail are budgeted apart, so email changes
+// cannot use up a project's sign-in links and codes.
+func TestSignInMailBudget_KindsAreCountedApart(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	for range 2 {
+		if ok, err := store.TakeSignInMail(ctx, "proj_mail_kinds", domain.MailBudgetAccount, 2); err != nil || !ok {
+			t.Fatalf("account mail within budget: %v %v", ok, err)
+		}
+	}
+	if ok, err := store.TakeSignInMail(ctx, "proj_mail_kinds", domain.MailBudgetAccount, 2); err != nil || ok {
+		t.Fatalf("account mail past its budget: %v %v", ok, err)
+	}
+	for range 2 {
+		if ok, err := store.TakeSignInMail(ctx, "proj_mail_kinds", domain.MailBudgetSignIn, 2); err != nil || !ok {
+			t.Fatalf("sign-in mail after account mail is spent: %v %v", ok, err)
+		}
+	}
+	if ok, err := store.TakeSignInMail(ctx, "proj_mail_kinds", domain.MailBudgetSignIn, 2); err != nil || ok {
+		t.Fatalf("sign-in mail past its budget: %v %v", ok, err)
+	}
+	if _, err := store.TakeSignInMail(ctx, "proj_mail_kinds", "marketing", 2); err == nil {
+		t.Fatal("an undeclared budget was recorded")
 	}
 }

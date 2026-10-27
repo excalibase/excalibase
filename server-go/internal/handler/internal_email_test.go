@@ -127,17 +127,21 @@ type fakeSignInMail struct {
 	left    int
 	takeErr error
 	taken   int
+	// kinds is the budget each send drew on; spent lists budgets with none left.
+	kinds []string
+	spent map[string]bool
 }
 
 func (f *fakeSignInMail) SignInMailProject(context.Context, string) (domain.SignInMailProject, error) {
 	return f.project, f.readErr
 }
 
-func (f *fakeSignInMail) TakeSignInMail(_ context.Context, _ string, perDay int) (bool, error) {
+func (f *fakeSignInMail) TakeSignInMail(_ context.Context, _ string, kind string, perDay int) (bool, error) {
 	if f.takeErr != nil {
 		return false, f.takeErr
 	}
-	if perDay <= 0 || f.left == 0 {
+	f.kinds = append(f.kinds, kind)
+	if perDay <= 0 || f.left == 0 || f.spent[kind] {
 		return false, nil
 	}
 	f.left--
