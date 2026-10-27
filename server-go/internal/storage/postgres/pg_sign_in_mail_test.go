@@ -20,7 +20,7 @@ func TestSignInMailProject_ReadsNameSiteAndSwitch(t *testing.T) {
 	if err := store.Create(&domain.DatabaseInstance{ProjectID: "proj_mail_a", ProjectName: "Acme Notes", OrgID: "org1", Status: "ACTIVE"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := store.SignInMailProject(ctx, "proj_mail_a"); err != nil || got != (domain.SignInMailProject{Name: "Acme Notes"}) {
+	if got, err := store.SignInMailProject(ctx, "proj_mail_a"); err != nil || got != (domain.SignInMailProject{Exists: true, Name: "Acme Notes"}) {
 		t.Fatalf("no settings yet: %+v %v", got, err)
 	}
 	signIn := domain.DefaultAuthSignIn()
@@ -28,12 +28,38 @@ func TestSignInMailProject_ReadsNameSiteAndSwitch(t *testing.T) {
 	if err := store.SetAuthSettingsWithSignIn(ctx, "proj_mail_a", domain.ProjectAuthSettings{SiteURL: "https://notes.acme.test"}, signIn); err != nil {
 		t.Fatal(err)
 	}
-	want := domain.SignInMailProject{Name: "Acme Notes", SiteURL: "https://notes.acme.test", EmailOTPEnabled: true}
+	want := domain.SignInMailProject{Exists: true, Name: "Acme Notes", SiteURL: "https://notes.acme.test", EmailOTPEnabled: true}
 	if got, err := store.SignInMailProject(ctx, "proj_mail_a"); err != nil || got != want {
 		t.Fatalf("got %+v %v, want %+v", got, err, want)
 	}
-	if got, err := store.SignInMailProject(ctx, "proj_mail_ghost"); err != nil || got.EmailOTPEnabled {
+	if got, err := store.SignInMailProject(ctx, "proj_mail_ghost"); err != nil || got != (domain.SignInMailProject{}) {
 		t.Fatalf("an unknown project: %+v %v", got, err)
+	}
+}
+
+// EXC-662: the added-sign-in-method notice goes out with only Google/GitHub on.
+func TestSignInMailProject_ReadsWhetherAnyProviderIsOn(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: "proj_mail_oauth", ProjectName: "Acme Notes", OrgID: "org1", Status: "ACTIVE"}); err != nil {
+		t.Fatal(err)
+	}
+	steps := []struct {
+		provider domain.ProjectAuthProvider
+		want     bool
+	}{
+		{domain.ProjectAuthProvider{Provider: "google", Enabled: false, ClientID: "g"}, false},
+		{domain.ProjectAuthProvider{Provider: "github", Enabled: true, ClientID: "h"}, true},
+		{domain.ProjectAuthProvider{Provider: "github", Enabled: false, ClientID: "h"}, false},
+	}
+	for _, step := range steps {
+		if err := store.PutAuthProvider(ctx, "proj_mail_oauth", step.provider); err != nil {
+			t.Fatal(err)
+		}
+		got, err := store.SignInMailProject(ctx, "proj_mail_oauth")
+		if err != nil || !got.Exists || got.OAuthEnabled != step.want {
+			t.Fatalf("after %+v: %+v %v", step.provider, got, err)
+		}
 	}
 }
 

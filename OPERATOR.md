@@ -950,6 +950,7 @@ and incident response, but a project-bound PAT still confines them.
 | `/api/projects/{id}/info`, `/realtime/*`, `/storage/*`, `GET /api/alerts/project/{id}` | Viewer | |
 | `/api/projects/{id}/auth-settings` | Developer (Admin writes while `authoauth` or `authotp` is on) | `requireEmailVerification` + `siteUrl`; with `authoauth` or `authotp` on also `redirectUrls` + `allowNewUsers`; with `authotp` on also `emailOtpEnabled` |
 | `/api/projects/{id}/auth-providers` | Developer reads, Admin writes | end-user Google/GitHub client id; the secret is write-only, in the vault at `projects/{id}/auth/providers/{provider}` (`authoauth`) |
+| `/api/projects/{id}/end-users/{userId}` | Admin | one end user's details, metadata change and delete, relayed to auth with a user-admin token; audited (`end_user.update` names fields only, `end_user.delete`); unmounted while `authuser` is off |
 | `/api/orgs/{orgId}/projects/{id}/members` | org member (list) / Admin (change) | project must belong to `{orgId}` |
 | `/api/admin/projects/{id}` | platform permission (`delete`) | platform plane, not the tenant gate |
 

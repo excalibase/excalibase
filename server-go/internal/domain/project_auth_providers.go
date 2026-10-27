@@ -212,7 +212,11 @@ func plainRedirect(parsed *url.URL) bool {
 // SignInMailProject is what an end-user sign-in mail says about the project
 // that sent it, and whether the project signs in by mail at all.
 type SignInMailProject struct {
+	// Exists is false for a project the platform does not know.
+	Exists          bool
 	Name            string
 	SiteURL         string
 	EmailOTPEnabled bool
+	// OAuthEnabled is whether any Google/GitHub sign-in row is switched on.
+	OAuthEnabled bool
 }

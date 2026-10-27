@@ -764,6 +764,7 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 		RequireEmailVerification: authSettings.RequireEmailVerification,
 		SiteURL:                  authSettings.SiteURL,
 		ProjectOAuthInfo:         oauth,
+		UserAPIEnabled:           h.userAPIForInfo(ctx),
 	}, ""
 }
 

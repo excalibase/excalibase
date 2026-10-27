@@ -12,15 +12,16 @@ import (
 // signInMailLockSpace serialises one project's budget check and insert.
 const signInMailLockSpace = 662
 
-// SignInMailProject reads the project's name, site and email sign-in switch;
-// an unknown project reads as switched off.
+// SignInMailProject reads the project's name, site, email sign-in switch and
+// whether any OAuth provider is on; an unknown project reads as switched off.
 func (s *Store) SignInMailProject(ctx context.Context, projectID string) (domain.SignInMailProject, error) {
-	var project domain.SignInMailProject
+	project := domain.SignInMailProject{Exists: true}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(i.project_name, ''), COALESCE(a.site_url, ''), COALESCE(a.email_otp_enabled, false)
+		`SELECT COALESCE(i.project_name, ''), COALESCE(a.site_url, ''), COALESCE(a.email_otp_enabled, false),
+		        EXISTS (SELECT 1 FROM project_auth_providers p WHERE p.project_id = i.project_id AND p.enabled)
 		 FROM database_instances i LEFT JOIN project_auth_settings a ON a.project_id = i.project_id
 		 WHERE i.project_id = $1`, projectID).
-		Scan(&project.Name, &project.SiteURL, &project.EmailOTPEnabled)
+		Scan(&project.Name, &project.SiteURL, &project.EmailOTPEnabled, &project.OAuthEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.SignInMailProject{}, nil
 	}

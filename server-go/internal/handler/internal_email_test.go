@@ -146,7 +146,7 @@ func (f *fakeSignInMail) TakeSignInMail(_ context.Context, _ string, perDay int)
 }
 
 func signInMailOn() *fakeSignInMail {
-	return &fakeSignInMail{project: domain.SignInMailProject{Name: "Acme Notes", SiteURL: "https://notes.acme.test", EmailOTPEnabled: true}, left: 100}
+	return &fakeSignInMail{project: domain.SignInMailProject{Exists: true, Name: "Acme Notes", SiteURL: "https://notes.acme.test", EmailOTPEnabled: true}, left: 100}
 }
 
 func newSignInMailRouter(sender email.Sender, flags features.Flags, source *fakeSignInMail) *chi.Mux {

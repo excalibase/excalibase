@@ -32,6 +32,10 @@ const (
 	// An address a signed-in end user adds to their account (EXC-662).
 	emailTemplateLinkMagicLink = "link_magic_link"
 	emailTemplateLinkEmailOTP  = "link_email_otp"
+	// Account mails (EXC-662 step 4).
+	emailTemplateEmailChange       = "email_change"
+	emailTemplateEmailChangeNotice = "email_change_notice"
+	emailTemplateIdentityLinked    = "identity_linked"
 )
 
 // InternalEmailHandler renders a transactional template and hands it to the
@@ -59,8 +63,8 @@ func NewInternalEmailHandler(sender email.Sender) *InternalEmailHandler {
 	return &InternalEmailHandler{sender: sender}
 }
 
-// WithSignInMail lets the relay send sign-in links and codes; without it, or
-// with authotp off, it refuses them.
+// WithSignInMail lets the relay send the mails that speak for a project:
+// sign-in links and codes, and account notices. Without it it refuses them.
 func (h *InternalEmailHandler) WithSignInMail(flags features.Flags, source SignInMailSource) *InternalEmailHandler {
 	h.flags, h.signInMail = flags, source
 	return h
@@ -114,8 +118,8 @@ func (h *InternalEmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if isSignInTemplate(template) {
-		if msg, ok = h.signInMessage(r.Context(), w, req); !ok {
+	if gate, gated := projectMailGateFor(template); gated {
+		if msg, ok = h.projectMessage(r.Context(), w, req, gate); !ok {
 			return
 		}
 	}
@@ -135,19 +139,65 @@ func (h *InternalEmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func isSignInTemplate(template string) bool {
-	switch template {
-	case emailTemplateMagicLink, emailTemplateEmailOTP, emailTemplateLinkMagicLink, emailTemplateLinkEmailOTP:
-		return true
-	}
-	return false
+// projectMailGate decides whether a project may send one kind of mail: the
+// flags checked before the project is read, then the project's own settings.
+type projectMailGate struct {
+	flagsOn func(ctx context.Context, flags features.Flags) bool
+	allows  func(ctx context.Context, flags features.Flags, project domain.SignInMailProject) bool
+	refusal string
 }
 
-// signInMessage renders a sign-in mail named for its project, once the
-// project may send one and has budget left; otherwise it answers itself.
-func (h *InternalEmailHandler) signInMessage(ctx context.Context, w http.ResponseWriter, req internalEmailRequest) (email.Message, bool) {
-	if h.signInMail == nil || !features.Enabled(ctx, h.flags, features.AuthOTP) {
-		httpError(w, "sign-in mail is not enabled", http.StatusForbidden)
+var (
+	signInMailGate = projectMailGate{
+		flagsOn: func(ctx context.Context, flags features.Flags) bool {
+			return features.Enabled(ctx, flags, features.AuthOTP)
+		},
+		allows: func(_ context.Context, _ features.Flags, project domain.SignInMailProject) bool {
+			return project.EmailOTPEnabled
+		},
+		refusal: "sign-in mail is not enabled",
+	}
+	emailChangeMailGate = projectMailGate{
+		flagsOn: func(ctx context.Context, flags features.Flags) bool {
+			return features.Enabled(ctx, flags, features.AuthUser)
+		},
+		allows: func(_ context.Context, _ features.Flags, project domain.SignInMailProject) bool {
+			return project.Exists
+		},
+		refusal: "account mail is not enabled",
+	}
+	// A method can be added only while some sign-in method that adds one is in use.
+	identityLinkedMailGate = projectMailGate{
+		flagsOn: func(ctx context.Context, flags features.Flags) bool {
+			return features.Enabled(ctx, flags, features.AuthOAuth) || features.Enabled(ctx, flags, features.AuthOTP)
+		},
+		allows: func(ctx context.Context, flags features.Flags, project domain.SignInMailProject) bool {
+			return (features.Enabled(ctx, flags, features.AuthOAuth) && project.OAuthEnabled) ||
+				(features.Enabled(ctx, flags, features.AuthOTP) && project.EmailOTPEnabled)
+		},
+		refusal: "account mail is not enabled",
+	}
+)
+
+// projectMailGateFor names the gate of a template that speaks for a project;
+// verify_email and password_reset have none.
+func projectMailGateFor(template string) (projectMailGate, bool) {
+	switch template {
+	case emailTemplateMagicLink, emailTemplateEmailOTP, emailTemplateLinkMagicLink, emailTemplateLinkEmailOTP:
+		return signInMailGate, true
+	case emailTemplateEmailChange, emailTemplateEmailChangeNotice:
+		return emailChangeMailGate, true
+	case emailTemplateIdentityLinked:
+		return identityLinkedMailGate, true
+	}
+	return projectMailGate{}, false
+}
+
+// projectMessage renders a mail named for its project, once the project may
+// send it and has budget left; otherwise it answers itself.
+func (h *InternalEmailHandler) projectMessage(ctx context.Context, w http.ResponseWriter, req internalEmailRequest, gate projectMailGate) (email.Message, bool) {
+	if h.signInMail == nil || !gate.flagsOn(ctx, h.flags) {
+		httpError(w, gate.refusal, http.StatusForbidden)
 		return email.Message{}, false
 	}
 	project, err := h.signInMail.SignInMailProject(ctx, req.ProjectID)
@@ -155,8 +205,8 @@ func (h *InternalEmailHandler) signInMessage(ctx context.Context, w http.Respons
 		httpError(w, "sign-in settings unavailable", http.StatusServiceUnavailable)
 		return email.Message{}, false
 	}
-	if !project.EmailOTPEnabled {
-		httpError(w, "sign-in mail is not enabled", http.StatusForbidden)
+	if !gate.allows(ctx, h.flags, project) {
+		httpError(w, gate.refusal, http.StatusForbidden)
 		return email.Message{}, false
 	}
 	msg, _, err := buildInternalEmail(req, project)
@@ -223,6 +273,31 @@ func buildInternalEmail(req internalEmailRequest, project domain.SignInMailProje
 			SiteURL:     project.SiteURL,
 		})
 		return msg, template, err
+	default:
+		return buildAccountEmail(req, project)
+	}
+}
+
+// buildAccountEmail renders the account mails; their data is checked by the builders.
+func buildAccountEmail(req internalEmailRequest, project domain.SignInMailProject) (email.Message, string, error) {
+	switch req.Template {
+	case emailTemplateEmailChange:
+		msg, err := email.BuildEmailChangeEmail(email.MagicLinkData{
+			UserEmail: req.Data["userEmail"], LinkURL: req.Data["linkUrl"], ExpiresMin: atoiOrZero(req.Data["expiresMin"]),
+			ProductName: project.Name, SiteURL: project.SiteURL,
+		})
+		return msg, emailTemplateEmailChange, err
+	case emailTemplateEmailChangeNotice:
+		msg, err := email.BuildEmailChangeNoticeEmail(email.EmailChangeNoticeData{
+			UserEmail: req.Data["userEmail"], NewEmail: req.Data["newEmail"], ProductName: project.Name, SiteURL: project.SiteURL,
+		})
+		return msg, emailTemplateEmailChangeNotice, err
+	case emailTemplateIdentityLinked:
+		msg, err := email.BuildIdentityLinkedEmail(email.IdentityLinkedData{
+			UserEmail: req.Data["userEmail"], Method: req.Data["method"], LinkedEmail: req.Data["linkedEmail"],
+			ProductName: project.Name, SiteURL: project.SiteURL,
+		})
+		return msg, emailTemplateIdentityLinked, err
 	default:
 		return email.Message{}, "", errors.New("unknown or missing template")
 	}
