@@ -91,3 +91,34 @@ func TestSignInSenderNameIsThePlatformWhenTheProjectHasNone(t *testing.T) {
 		t.Fatalf("sender = %q %v", m.FromName, err)
 	}
 }
+
+func TestAddressLinkEmailsSayTheyAddTheAddressToAnAccount(t *testing.T) {
+	link, err := BuildLinkMagicLinkEmail(MagicLinkData{UserEmail: "u@x.com", LinkURL: "https://app.test/cb?token_hash=abc", ProductName: "Acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := BuildLinkEmailOTPEmail(EmailOTPData{UserEmail: "u@x.com", Code: "04291735", ProductName: "Acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, m := range map[string]Message{"link_magic_link": link, "link_email_otp": code} {
+		if m.Tags["template"] != name || strings.Contains(m.Subject, "04291735") || !strings.Contains(m.Subject, "Acme") {
+			t.Errorf("%s: message = %+v", name, m)
+		}
+		for part, body := range map[string]string{"html": m.HTMLBody, "text": m.TextBody} {
+			if !strings.Contains(body, "add u@x.com to an account") || !strings.Contains(body, "Never share") ||
+				strings.Contains(body, "to sign in") {
+				t.Errorf("%s %s body does not say it links the address: %s", name, part, body)
+			}
+		}
+	}
+	if !strings.Contains(link.TextBody, "token_hash=abc") || !strings.Contains(code.TextBody, "04291735") {
+		t.Error("the secret is not in the mail")
+	}
+	if _, err := BuildLinkMagicLinkEmail(MagicLinkData{LinkURL: "javascript:alert(1)"}); err == nil {
+		t.Error("a script link built")
+	}
+	if _, err := BuildLinkEmailOTPEmail(EmailOTPData{Code: "123"}); err == nil {
+		t.Error("a short code built")
+	}
+}
