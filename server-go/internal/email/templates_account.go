@@ -56,7 +56,8 @@ var emailChangeHTML = accountHTMLHead + `
       <tr><td style="padding:24px 40px 8px;">
         <h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;color:#111827;font-weight:600;">Confirm your new email address</h1>
         <p style="margin:0 0 8px;font-size:15px;line-height:1.6;color:#374151;">
-          Tap the button below to make <b>{{.UserEmail}}</b> the sign-in address of an account.
+          Someone signed in to an account at {{.ProductName}} asked to make <b>{{.UserEmail}}</b> that account's sign-in address.
+          Tap the button below only if you asked for this yourself, in the browser where you are signed in to that account.
         </p>
       </td></tr>
       <tr><td style="padding:24px 40px;">
@@ -77,16 +78,17 @@ var emailChangeHTML = accountHTMLHead + `
       </td></tr>
       <tr><td style="padding:0 40px 32px;">
         <p style="margin:0;font-size:13px;line-height:1.5;color:#6b7280;">
-          It expires in {{.ExpiresMin}} minutes and works once. If you didn't ask for this, you can ignore this email.
+          It expires in {{.ExpiresMin}} minutes and works once. If you didn't ask for this, ignore this email and your address stays yours.
         </p>` + accountHTMLSignature
 
 const emailChangeText = `Confirm your new email address — {{.ProductName}}{{if .SiteHost}} ({{.SiteHost}}){{end}}
 
-Open this link to make {{.UserEmail}} the sign-in address of an account:
+Someone signed in to an account at {{.ProductName}} asked to make {{.UserEmail}} that account's sign-in address.
+Open this link only if you asked for this yourself, in the browser where you are signed in to that account:
 
 {{.LinkURL}}
 
-It expires in {{.ExpiresMin}} minutes and works once. If you didn't ask for this, ignore this email.
+It expires in {{.ExpiresMin}} minutes and works once. If you didn't ask for this, ignore this email and your address stays yours.
 
 Sent by Excalibase on behalf of {{.ProductName}}.`
 
@@ -100,14 +102,14 @@ var emailChangeNoticeHTML = accountHTMLHead + `
       </td></tr>
       <tr><td style="padding:16px 40px 32px;">
         <p style="margin:0;font-size:13px;line-height:1.5;color:#6b7280;">
-          If this wasn't you, sign in and change your password.
+          If this wasn't you, sign in and change your password: that cancels the change.
         </p>` + accountHTMLSignature
 
 const emailChangeNoticeText = `Your email address is being changed — {{.ProductName}}{{if .SiteHost}} ({{.SiteHost}}){{end}}
 
 Someone signed in to your account ({{.UserEmail}}) asked to change its address to {{.NewEmail}}. Nothing changes until the new address confirms.
 
-If this wasn't you, sign in and change your password.
+If this wasn't you, sign in and change your password: that cancels the change.
 
 Sent by Excalibase on behalf of {{.ProductName}}.`
 

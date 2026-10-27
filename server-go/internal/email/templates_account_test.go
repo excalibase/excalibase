@@ -23,7 +23,9 @@ func TestBuildEmailChangeEmail(t *testing.T) {
 		t.Errorf("message = %+v", m)
 	}
 	for name, body := range bodies(m) {
-		for _, want := range []string{"new@x.com", "token_hash=abc", "30 minutes", "works once", "notes.acme.test", "sign-in address"} {
+		for _, want := range []string{"new@x.com", "token_hash=abc", "30 minutes", "works once", "notes.acme.test",
+			"Someone signed in to an account at Acme Notes asked to make", "that account's sign-in address",
+			"only if you asked for this yourself"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s body lacks %q: %s", name, want, body)
 			}
@@ -55,7 +57,7 @@ func TestBuildEmailChangeNoticeEmail(t *testing.T) {
 		t.Errorf("message = %+v", m)
 	}
 	for name, body := range bodies(m) {
-		for _, want := range []string{"new@x.com", "Nothing changes until", "If this wasn't you, sign in and change your password"} {
+		for _, want := range []string{"new@x.com", "Nothing changes until", "If this wasn't you, sign in and change your password: that cancels the change."} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s body lacks %q: %s", name, want, body)
 			}
