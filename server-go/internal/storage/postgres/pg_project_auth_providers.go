@@ -67,8 +67,9 @@ func (s *Store) GetAuthSignIn(ctx context.Context, projectID string) (domain.Pro
 	signIn := domain.DefaultAuthSignIn()
 	var urls []string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT redirect_urls, allow_new_users, email_otp_enabled FROM project_auth_settings WHERE project_id = $1`, projectID).
-		Scan(pq.Array(&urls), &signIn.AllowNewUsers, &signIn.EmailOTPEnabled)
+		`SELECT redirect_urls, allow_new_users, email_otp_enabled, guest_sign_in_enabled, guest_captcha_secret_set
+		 FROM project_auth_settings WHERE project_id = $1`, projectID).
+		Scan(pq.Array(&urls), &signIn.AllowNewUsers, &signIn.EmailOTPEnabled, &signIn.GuestSignInEnabled, &signIn.GuestCaptchaSecretSet)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.DefaultAuthSignIn(), nil
 	}
@@ -88,18 +89,33 @@ func (s *Store) SetAuthSettingsWithSignIn(ctx context.Context, projectID string,
 		urls = []string{}
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO project_auth_settings (project_id, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO project_auth_settings (project_id, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled, guest_sign_in_enabled, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (project_id) DO UPDATE SET
     require_email_verification = EXCLUDED.require_email_verification,
     site_url                   = EXCLUDED.site_url,
     redirect_urls              = EXCLUDED.redirect_urls,
     allow_new_users            = EXCLUDED.allow_new_users,
     email_otp_enabled          = EXCLUDED.email_otp_enabled,
+    guest_sign_in_enabled      = EXCLUDED.guest_sign_in_enabled,
     updated_at                 = EXCLUDED.updated_at`,
-		projectID, settings.RequireEmailVerification, settings.SiteURL, pq.Array(urls), signIn.AllowNewUsers, signIn.EmailOTPEnabled, time.Now())
+		projectID, settings.RequireEmailVerification, settings.SiteURL, pq.Array(urls), signIn.AllowNewUsers, signIn.EmailOTPEnabled,
+		signIn.GuestSignInEnabled, time.Now())
 	if err != nil {
 		return fmt.Errorf("write auth settings: %w", err)
+	}
+	return nil
+}
+
+// SetGuestCaptchaSecretSet upserts only the captcha column; the vault write
+// is the caller's and comes first when setting, last when clearing.
+func (s *Store) SetGuestCaptchaSecretSet(ctx context.Context, projectID string, set bool) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO project_auth_settings (project_id, guest_captcha_secret_set, updated_at) VALUES ($1, $2, $3)
+ON CONFLICT (project_id) DO UPDATE SET guest_captcha_secret_set = EXCLUDED.guest_captcha_secret_set, updated_at = EXCLUDED.updated_at`,
+		projectID, set, time.Now())
+	if err != nil {
+		return fmt.Errorf("write guest captcha setting: %w", err)
 	}
 	return nil
 }

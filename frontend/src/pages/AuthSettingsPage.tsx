@@ -7,6 +7,7 @@ import { useApps } from '../api/apps';
 import { Button } from '../components/Button';
 import { AuthProvidersCard } from '../components/auth/AuthProvidersCard';
 import { EmailSignInCard } from '../components/auth/EmailSignInCard';
+import { GuestSignInCard } from '../components/auth/GuestSignInCard';
 import { RedirectUrlsCard } from '../components/auth/RedirectUrlsCard';
 import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { serverErrorMessage } from '../utils/serverError';
@@ -93,6 +94,7 @@ export function AuthSettingsPage() {
   const { data, isLoading, isError } = useAuthSettings(projectId || '');
   const { enabled: oauthOn } = useFeatureEnabled('authoauth');
   const { enabled: otpOn } = useFeatureEnabled('authotp');
+  const { enabled: guestOn } = useFeatureEnabled('authguest');
 
   if (isLoading) {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
@@ -103,10 +105,11 @@ export function AuthSettingsPage() {
       {isError || !data
         ? <p className="text-sm text-red-400" role="alert">Could not load the auth settings.</p>
         : <SiteUrlForm projectId={projectId || ''} initial={data} />}
-      {(oauthOn || otpOn) && data && (
+      {(oauthOn || otpOn || guestOn) && data && (
         <div className="mt-8 space-y-6">
           <RedirectUrlsCard projectId={projectId || ''} settings={data} />
           {otpOn && <EmailSignInCard projectId={projectId || ''} settings={data} />}
+          {guestOn && <GuestSignInCard projectId={projectId || ''} settings={data} />}
           {oauthOn && <AuthProvidersCard projectId={projectId || ''} />}
         </div>
       )}

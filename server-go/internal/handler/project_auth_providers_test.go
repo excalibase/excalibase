@@ -85,6 +85,19 @@ func (m *memAuthSignInStore) SetAuthSettingsWithSignIn(_ context.Context, projec
 	return nil
 }
 
+func (m *memAuthSignInStore) SetGuestCaptchaSecretSet(_ context.Context, projectID string, set bool) error {
+	if m.err != nil {
+		return m.err
+	}
+	signIn, ok := m.signIn[projectID]
+	if !ok {
+		signIn = domain.DefaultAuthSignIn()
+	}
+	signIn.GuestCaptchaSecretSet = set
+	m.signIn[projectID] = signIn
+	return nil
+}
+
 func (m *memAuthProviderStore) DeleteAuthProvider(_ context.Context, projectID, provider string) error {
 	if m.err != nil {
 		return m.err

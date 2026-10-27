@@ -16,7 +16,8 @@ export type Feature =
   | 'logdrains'
   | 'authoauth'
   | 'authotp'
-  | 'authuser';
+  | 'authuser'
+  | 'authguest';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;

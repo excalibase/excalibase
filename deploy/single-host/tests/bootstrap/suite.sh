@@ -20,10 +20,12 @@ BASE_AUTH=$(sed -n "s/^AUTH_PERMISSIONS='\(.*\)'$/\1/p" /bootstrap.sh)
 WANT_GRAPHQL=$(sed -n "s/^GRAPHQL_PERMISSIONS='\(.*\)'$/\1/p" /bootstrap.sh)
 OLD_AUTH=$BASE_AUTH
 PROVIDERS_GRANT='vault:read:projects/*/auth/providers/*'
-WANT_AUTH=$(printf '%s' "$BASE_AUTH" | jq -c --arg grant "$PROVIDERS_GRANT" '. + [$grant]')
-# The cases below run with end-user OAuth on; the last one with it off.
+CAPTCHA_GRANT='vault:read:projects/*/auth/captcha'
+WANT_AUTH=$(printf '%s' "$BASE_AUTH" | jq -c --arg grant "$PROVIDERS_GRANT" --arg captcha "$CAPTCHA_GRANT" '. + [$grant, $captcha]')
+# The cases below run with end-user OAuth and guests on; the last ones with each off.
 FEATURE_AUTHOAUTH=true
-export WANT_AUTH WANT_GRAPHQL FEATURE_AUTHOAUTH
+FEATURE_AUTHGUEST=true
+export WANT_AUTH WANT_GRAPHQL FEATURE_AUTHOAUTH FEATURE_AUTHGUEST
 
 CALL_LOG=/tmp/calls.log
 OUTPUT=/tmp/case.out
@@ -191,15 +193,24 @@ expect_called "DELETE http://provisioning.test:24005/api/auth/tokens/hash-svc-au
 expect_file "$SECRETS_DIR/auth-token" excb_svc-auth-new
 expect_file "$SECRETS_DIR/graphql-token" excb_svc-graphql
 
-start "fresh install with end-user OAuth off"
-PRINCIPALS_EXIST= REGISTERED=1 FEATURE_AUTHOAUTH=false
-export PRINCIPALS_EXIST REGISTERED FEATURE_AUTHOAUTH
+start "fresh install with end-user OAuth and guests off"
+PRINCIPALS_EXIST= REGISTERED=1 FEATURE_AUTHOAUTH=false FEATURE_AUTHGUEST=false
+export PRINCIPALS_EXIST REGISTERED FEATURE_AUTHOAUTH FEATURE_AUTHGUEST
 run
 expect_rc 0
 expect_recorded auth-token "$BASE_AUTH"
-if grep -F '/api/auth/tokens {"name":"svc-auth"' "$CALL_LOG" | grep -qF "$PROVIDERS_GRANT"; then
-  bad "svc-auth minted with $PROVIDERS_GRANT while end-user OAuth is off"
-else ok "svc-auth minted without the provider grant"; fi
+for grant in "$PROVIDERS_GRANT" "$CAPTCHA_GRANT"; do
+  if grep -F '/api/auth/tokens {"name":"svc-auth"' "$CALL_LOG" | grep -qF "$grant"; then
+    bad "svc-auth minted with $grant while its feature is off"
+  else ok "svc-auth minted without $grant"; fi
+done
+
+start "fresh install with guests on and OAuth off"
+PRINCIPALS_EXIST= REGISTERED=1 FEATURE_AUTHOAUTH=false FEATURE_AUTHGUEST=true
+export PRINCIPALS_EXIST REGISTERED FEATURE_AUTHOAUTH FEATURE_AUTHGUEST
+run
+expect_rc 0
+expect_recorded auth-token "$(printf '%s' "$BASE_AUTH" | jq -c --arg captcha "$CAPTCHA_GRANT" '. + [$captcha]')"
 
 echo "bootstrap: $PASSED passed, $FAILED failed"
 [ "$FAILED" = 0 ]

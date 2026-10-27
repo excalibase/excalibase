@@ -38,6 +38,10 @@ AUTH_PERMISSIONS='["vault:read:pki/signing/*","vault:read:projects/*/credentials
 if [ "${FEATURE_AUTHOAUTH:-false}" = true ]; then
   AUTH_PERMISSIONS=$(printf '%s' "$AUTH_PERMISSIONS" | jq -c '. + ["vault:read:projects/*/auth/providers/*"]')
 fi
+# Each project's guest Turnstile secret, only while guest accounts are on (EXC-662).
+if [ "${FEATURE_AUTHGUEST:-false}" = true ]; then
+  AUTH_PERMISSIONS=$(printf '%s' "$AUTH_PERMISSIONS" | jq -c '. + ["vault:read:projects/*/auth/captcha"]')
+fi
 GRAPHQL_PERMISSIONS='["vault:read:projects/*/credentials/excalibase_app","projects:info:read","policies:read"]'
 
 # Each token is read by one container only, so it is 0600 and owned by that

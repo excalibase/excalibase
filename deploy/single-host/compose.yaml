@@ -270,6 +270,8 @@ services:
       FEATURE_AUTHOTP: ${FEATURE_AUTHOTP:-false}
       # End-user account self-service: metadata, email change, sign-out scopes (EXC-662).
       FEATURE_AUTHUSER: ${FEATURE_AUTHUSER:-false}
+      # End-user guest accounts and the stable token subject (EXC-662).
+      FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.
@@ -408,6 +410,8 @@ services:
       SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}
       # svc-auth reads project OAuth client secrets only while this is on (EXC-662).
       FEATURE_AUTHOAUTH: ${FEATURE_AUTHOAUTH:-false}
+      # ...and project guest Turnstile secrets only while this is on.
+      FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
       SECRETS_DIR: /var/run/excalibase
     command: ["sh", "/bootstrap.sh"]
     volumes:

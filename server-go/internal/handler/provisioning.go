@@ -765,6 +765,7 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 		SiteURL:                  authSettings.SiteURL,
 		ProjectOAuthInfo:         oauth,
 		UserAPIEnabled:           h.userAPIForInfo(ctx),
+		StableSubject:            h.stableSubjectForInfo(ctx),
 	}, ""
 }
 

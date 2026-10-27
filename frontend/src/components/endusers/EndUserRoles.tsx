@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
-import { listEndUsers, setEndUserRole, type EndUser, type EndUserPage, type EndUserRoleChange } from '../../api/endUsers';
+import { endUserName, listEndUsers, setEndUserRole, type EndUser, type EndUserPage, type EndUserRoleChange } from '../../api/endUsers';
 import { apiErrorMessage } from '../../api/permissions';
 import { useProjectRole } from '../../hooks/useProjectRole';
 import { useFeatureEnabled } from '../../hooks/useDeploymentMode';
@@ -113,6 +113,7 @@ function EndUserTable({ projectId, users, total }: Readonly<{ projectId: string;
 
 function EndUserRow({ projectId, user, accounts }: Readonly<{ projectId: string; user: EndUser; accounts: boolean }>) {
   const qc = useQueryClient();
+  const name = endUserName(user);
   const [editing, setEditing] = useState(false);
   const [details, setDetails] = useState(false);
   const [role, setRole] = useState(user.role);
@@ -121,7 +122,7 @@ function EndUserRow({ projectId, user, accounts }: Readonly<{ projectId: string;
   const save = useMutation({
     mutationFn: (change: EndUserRoleChange) => setEndUserRole(projectId, user.id, change),
     onSuccess: () => {
-      toast.success(`${user.email} now runs as ${role}; their sessions were signed out`);
+      toast.success(`${name} now runs as ${role}; their sessions were signed out`);
       setEditing(false);
       qc.invalidateQueries({ queryKey: endUsersKey(projectId) });
     },
@@ -141,14 +142,21 @@ function EndUserRow({ projectId, user, accounts }: Readonly<{ projectId: string;
   return (
     <>
     <tr className="border-t border-border-primary align-top" data-testid={`end-user-${user.id}`}>
-      <td className="px-4 py-3 text-text-primary">{user.email}</td>
+      <td className="px-4 py-3 text-text-primary">
+        {name}
+        {user.isGuest && (
+          <span data-testid="guest-badge" className="ml-2 px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/30">
+            Guest
+          </span>
+        )}
+      </td>
       {editing ? (
         <td colSpan={3} className="px-4 py-3">
           <form onSubmit={submit} className="space-y-2">
             <div className="grid grid-cols-2 gap-2">
-              <input aria-label={`Role for ${user.email}`} value={role} onChange={(e) => setRole(e.target.value)} className={inputClass} />
+              <input aria-label={`Role for ${name}`} value={role} onChange={(e) => setRole(e.target.value)} className={inputClass} />
               <input
-                aria-label={`Allowed roles for ${user.email}`}
+                aria-label={`Allowed roles for ${name}`}
                 value={allowed}
                 onChange={(e) => setAllowed(e.target.value)}
                 placeholder="comma-separated, empty for the role only"
@@ -182,7 +190,7 @@ function EndUserRow({ projectId, user, accounts }: Readonly<{ projectId: string;
             {accounts && (
               <button
                 type="button"
-                aria-label={`Details of ${user.email}`}
+                aria-label={`Details of ${name}`}
                 aria-expanded={details}
                 onClick={() => setDetails(!details)}
                 className="px-2 py-1 text-xs rounded text-text-secondary hover:bg-surface-hover"
@@ -192,7 +200,7 @@ function EndUserRow({ projectId, user, accounts }: Readonly<{ projectId: string;
             )}
             <button
               type="button"
-              aria-label={`Change role of ${user.email}`}
+              aria-label={`Change role of ${name}`}
               onClick={() => setEditing(true)}
               className="px-2 py-1 text-xs rounded text-purple-400 hover:bg-purple-500/10"
             >

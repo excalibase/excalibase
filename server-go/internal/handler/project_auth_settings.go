@@ -28,6 +28,9 @@ type authSignInResponse struct {
 	AllowNewUsers bool     `json:"allowNewUsers"`
 	// Present only while authotp is on.
 	EmailOTPEnabled *bool `json:"emailOtpEnabled,omitempty"`
+	// Present only while authguest is on; the secret itself is write-only.
+	GuestSignInEnabled    *bool `json:"guestSignInEnabled,omitempty"`
+	GuestCaptchaSecretSet *bool `json:"guestCaptchaSecretSet,omitempty"`
 }
 
 // authSettingsRequest is the PUT body. The sign-in fields are read only while
@@ -39,6 +42,7 @@ type authSettingsRequest struct {
 	RedirectURLs             *[]string `json:"redirectUrls"`
 	AllowNewUsers            *bool     `json:"allowNewUsers"`
 	EmailOTPEnabled          *bool     `json:"emailOtpEnabled"`
+	GuestSignInEnabled       *bool     `json:"guestSignInEnabled"`
 }
 
 // GetAuthSettings serves GET /api/projects/{projectId}/auth-settings.
@@ -156,6 +160,9 @@ func (h *ProvisioningHandler) putAuthSettingsWithSignIn(w http.ResponseWriter, r
 	if body.EmailOTPEnabled != nil && h.authOTPOn(r.Context()) {
 		signIn.EmailOTPEnabled = *body.EmailOTPEnabled
 	}
+	if body.GuestSignInEnabled != nil && h.authGuestOn(r.Context()) {
+		signIn.GuestSignInEnabled = *body.GuestSignInEnabled
+	}
 	if err := h.authOAuth.SignIn.SetAuthSettingsWithSignIn(r.Context(), projectID, settings, signIn); err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
@@ -194,6 +201,10 @@ func (h *ProvisioningHandler) authOAuthForInfo(ctx context.Context, projectID, o
 		if h.authOTPOn(ctx) {
 			info.EmailOTPEnabled = &signIn.EmailOTPEnabled
 		}
+		if h.authGuestOn(ctx) {
+			info.GuestSignInEnabled = &signIn.GuestSignInEnabled
+			info.GuestCaptchaEnabled = signIn.GuestCaptchaSecretSet
+		}
 	}
 	if h.authOAuth.Providers != nil && h.authOAuthOn(ctx) {
 		stored, err := h.authOAuth.Providers.ListAuthProviders(ctx, projectID)
@@ -214,6 +225,10 @@ func (h *ProvisioningHandler) authSignInResponseFor(ctx context.Context, signIn 
 	if h.authOTPOn(ctx) {
 		response.EmailOTPEnabled = &signIn.EmailOTPEnabled
 	}
+	if h.authGuestOn(ctx) {
+		response.GuestSignInEnabled = &signIn.GuestSignInEnabled
+		response.GuestCaptchaSecretSet = &signIn.GuestCaptchaSecretSet
+	}
 	return response
 }
 
@@ -232,6 +247,9 @@ func (h *ProvisioningHandler) recordAuthSignIn(r *http.Request, projectID string
 	}
 	if h.authOTPOn(r.Context()) {
 		fields["emailOtpEnabled"] = signIn.EmailOTPEnabled
+	}
+	if h.authGuestOn(r.Context()) {
+		fields["guestSignInEnabled"] = signIn.GuestSignInEnabled
 	}
 	details, _ := json.Marshal(fields)
 	h.writeAuthAudit(r, projectID, auditActionAuthSettingsUpdate, auditResourceAuthSettings, projectID, string(details))
