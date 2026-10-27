@@ -46,11 +46,14 @@ const (
 	// AuthOTP is end-user sign-in by emailed link or six-digit code: the
 	// project's switch for it and the sign-in policy it shares with AuthOAuth.
 	AuthOTP Feature = "authotp"
+	// AuthUser is end-user account self-service: metadata, profile and email
+	// change, sign-out scopes, and Studio's per-user details and delete.
+	AuthUser Feature = "authuser"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser}
 }
 
 type Flags interface {

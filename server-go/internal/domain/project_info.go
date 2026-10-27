@@ -28,6 +28,9 @@ type ProjectInfo struct {
 	// ProjectOAuthInfo is present only while the authoauth or authotp flag
 	// is on (EXC-662); nil keeps its keys off the wire entirely.
 	*ProjectOAuthInfo
+	// UserAPIEnabled is sent, as true, only while the authuser flag is on;
+	// nil keeps the key off the wire.
+	UserAPIEnabled *bool `json:"userApiEnabled,omitempty"`
 }
 
 // ProjectOAuthInfo is the end-user OAuth policy the auth service enforces:

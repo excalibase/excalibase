@@ -209,10 +209,21 @@ func plainRedirect(parsed *url.URL) bool {
 	return !strings.Contains(strings.ToLower(parsed.EscapedPath()), "%2f")
 }
 
+// Daily budgets of the relay's project mail (EXC-662): sign-in links and codes
+// are counted apart from account notices, so neither can use up the other.
+const (
+	MailBudgetSignIn  = "sign_in"
+	MailBudgetAccount = "account"
+)
+
 // SignInMailProject is what an end-user sign-in mail says about the project
 // that sent it, and whether the project signs in by mail at all.
 type SignInMailProject struct {
+	// Exists is false for a project the platform does not know.
+	Exists          bool
 	Name            string
 	SiteURL         string
 	EmailOTPEnabled bool
+	// OAuthEnabled is whether any Google/GitHub sign-in row is switched on.
+	OAuthEnabled bool
 }

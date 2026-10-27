@@ -1,5 +1,5 @@
-// Package endusers lets Studio list a project's end users and set their role
-// through excalibase-auth, which alone stores them. Each call carries a
+// Package endusers lets Studio list, read, change and delete a project's end
+// users through excalibase-auth, which alone stores them. Each call carries a
 // one-minute user-admin token naming the platform user who asked; the
 // Studio session itself never leaves the control plane.
 package endusers
@@ -80,21 +80,14 @@ func (c *Client) List(ctx context.Context, orgSlug, projectID, actor string, pag
 	if page.Offset != nil {
 		query.Set("offset", strconv.Itoa(*page.Offset))
 	}
-	payload, err := c.do(ctx, call{method: http.MethodGet, orgSlug: orgSlug, projectID: projectID, actor: actor, path: "users", query: query})
-	if err != nil {
-		return nil, err
-	}
-	if !json.Valid(payload) {
-		return nil, errors.New("decode auth response: not JSON")
-	}
-	return json.RawMessage(payload), nil
+	return c.relayJSON(ctx, call{method: http.MethodGet, orgSlug: orgSlug, projectID: projectID, actor: actor, path: "users", query: query})
 }
 
 // SetRole sets userID's role and the roles the account may switch to.
 func (c *Client) SetRole(ctx context.Context, orgSlug, projectID, actor string, userID int64, change RoleChange) (*EndUser, error) {
 	payload, err := c.do(ctx, call{
 		method: http.MethodPut, orgSlug: orgSlug, projectID: projectID, actor: actor,
-		path: "users/" + strconv.FormatInt(userID, 10) + "/role", body: change,
+		path: userPath(userID) + "/role", body: change,
 	})
 	if err != nil {
 		return nil, err
@@ -104,6 +97,45 @@ func (c *Client) SetRole(ctx context.Context, orgSlug, projectID, actor string, 
 		return nil, fmt.Errorf("decode auth response: %w", err)
 	}
 	return &user, nil
+}
+
+// UserPatch is an admin's change to one account; a field left nil is not
+// sent. Metadata merges at auth: a key set to null is removed.
+type UserPatch struct {
+	AppMetadata  json.RawMessage `json:"appMetadata,omitempty"`
+	UserMetadata json.RawMessage `json:"userMetadata,omitempty"`
+	FullName     *string         `json:"fullName,omitempty"`
+}
+
+// Get relays one account's details as auth wrote them.
+func (c *Client) Get(ctx context.Context, orgSlug, projectID, actor string, userID int64) (json.RawMessage, error) {
+	return c.relayJSON(ctx, call{method: http.MethodGet, orgSlug: orgSlug, projectID: projectID, actor: actor, path: userPath(userID)})
+}
+
+// Update applies patch to one account and relays the account auth answers with.
+func (c *Client) Update(ctx context.Context, orgSlug, projectID, actor string, userID int64, patch UserPatch) (json.RawMessage, error) {
+	return c.relayJSON(ctx, call{method: http.MethodPatch, orgSlug: orgSlug, projectID: projectID, actor: actor, path: userPath(userID), body: patch})
+}
+
+// Delete removes one account.
+func (c *Client) Delete(ctx context.Context, orgSlug, projectID, actor string, userID int64) error {
+	_, err := c.do(ctx, call{method: http.MethodDelete, orgSlug: orgSlug, projectID: projectID, actor: actor, path: userPath(userID)})
+	return err
+}
+
+func userPath(userID int64) string {
+	return "users/" + strconv.FormatInt(userID, 10)
+}
+
+func (c *Client) relayJSON(ctx context.Context, spec call) (json.RawMessage, error) {
+	payload, err := c.do(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	if !json.Valid(payload) {
+		return nil, errors.New("decode auth response: not JSON")
+	}
+	return json.RawMessage(payload), nil
 }
 
 type call struct {

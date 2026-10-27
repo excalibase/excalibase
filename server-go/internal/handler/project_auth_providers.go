@@ -55,6 +55,15 @@ func (h *ProvisioningHandler) authOTPOn(ctx context.Context) bool {
 	return features.Enabled(ctx, h.authOAuth.Flags, features.AuthOTP)
 }
 
+// userAPIForInfo is /info's userApiEnabled: true while authuser is on, else absent.
+func (h *ProvisioningHandler) userAPIForInfo(ctx context.Context) *bool {
+	if !features.Enabled(ctx, h.authOAuth.Flags, features.AuthUser) {
+		return nil
+	}
+	on := true
+	return &on
+}
+
 // signInPolicyOn is whether any end-user sign-in method that reads the
 // redirect list and the new-user switch is on.
 func (h *ProvisioningHandler) signInPolicyOn(ctx context.Context) bool {

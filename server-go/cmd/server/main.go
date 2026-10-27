@@ -2414,12 +2414,24 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	// End users and their roles (EXC-370): who a project's app users run as
 	// is a project admin's decision, and every change is audited.
 	r.Route("/api/projects/{projectId}/end-users", func(r chi.Router) {
-		r.Use(custommw.TenantContext)
-		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
-		r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
-		r.Use(d.activity)
-		d.endUsersHandler.Routes(r)
+		endUserAdmin := func(r chi.Router) {
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
+			r.Use(d.activity)
+		}
+		r.Group(func(r chi.Router) {
+			endUserAdmin(r)
+			d.endUsersHandler.Routes(r)
+		})
+		// One user's details, metadata and deletion (EXC-662); the flag goes
+		// first so that while it is off these answer as never mounted.
+		r.Group(func(r chi.Router) {
+			r.Use(features.Require(d.features, features.AuthUser))
+			endUserAdmin(r)
+			d.endUsersHandler.AccountRoutes(r)
+		})
 	})
 	r.Route("/api/projects/{projectId}/cors", func(r chi.Router) {
 		r.Use(custommw.TenantContext)

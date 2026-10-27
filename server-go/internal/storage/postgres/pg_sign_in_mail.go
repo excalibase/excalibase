@@ -12,15 +12,16 @@ import (
 // signInMailLockSpace serialises one project's budget check and insert.
 const signInMailLockSpace = 662
 
-// SignInMailProject reads the project's name, site and email sign-in switch;
-// an unknown project reads as switched off.
+// SignInMailProject reads the project's name, site, email sign-in switch and
+// whether any OAuth provider is on; an unknown project reads as switched off.
 func (s *Store) SignInMailProject(ctx context.Context, projectID string) (domain.SignInMailProject, error) {
-	var project domain.SignInMailProject
+	project := domain.SignInMailProject{Exists: true}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(i.project_name, ''), COALESCE(a.site_url, ''), COALESCE(a.email_otp_enabled, false)
+		`SELECT COALESCE(i.project_name, ''), COALESCE(a.site_url, ''), COALESCE(a.email_otp_enabled, false),
+		        EXISTS (SELECT 1 FROM project_auth_providers p WHERE p.project_id = i.project_id AND p.enabled)
 		 FROM database_instances i LEFT JOIN project_auth_settings a ON a.project_id = i.project_id
 		 WHERE i.project_id = $1`, projectID).
-		Scan(&project.Name, &project.SiteURL, &project.EmailOTPEnabled)
+		Scan(&project.Name, &project.SiteURL, &project.EmailOTPEnabled, &project.OAuthEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.SignInMailProject{}, nil
 	}
@@ -30,9 +31,10 @@ func (s *Store) SignInMailProject(ctx context.Context, projectID string) (domain
 	return project, nil
 }
 
-// TakeSignInMail records one sign-in mail when the project has sent fewer than
-// perDay in the last day, and drops every row older than that.
-func (s *Store) TakeSignInMail(ctx context.Context, projectID string, perDay int) (bool, error) {
+// TakeSignInMail records one mail of the given budget (domain.MailBudget*)
+// when the project has sent fewer than perDay of that kind in the last day,
+// and drops every row older than that.
+func (s *Store) TakeSignInMail(ctx context.Context, projectID, kind string, perDay int) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("begin sign-in mail: %w", err)
@@ -47,13 +49,13 @@ func (s *Store) TakeSignInMail(ctx context.Context, projectID string, perDay int
 	}
 	var sent int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT count(*) FROM sign_in_mail_sends WHERE project_id = $1`, projectID).Scan(&sent); err != nil {
+		`SELECT count(*) FROM sign_in_mail_sends WHERE project_id = $1 AND kind = $2`, projectID, kind).Scan(&sent); err != nil {
 		return false, fmt.Errorf("count sign-in mail: %w", err)
 	}
 	if sent >= perDay {
 		return false, nil
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO sign_in_mail_sends (project_id) VALUES ($1)`, projectID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO sign_in_mail_sends (project_id, kind) VALUES ($1, $2)`, projectID, kind); err != nil {
 		return false, fmt.Errorf("record sign-in mail: %w", err)
 	}
 	return true, tx.Commit()

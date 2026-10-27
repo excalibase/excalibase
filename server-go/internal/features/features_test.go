@@ -119,3 +119,16 @@ func TestWhenAnyOnAppliesTheMiddlewareWhileEitherFeatureIsOn(t *testing.T) {
 		}
 	}
 }
+
+// EXC-662: end-user account self-service ships dark and Studio is told its state.
+func TestAll_DeclaresAuthUser(t *testing.T) {
+	if AuthUser != "authuser" {
+		t.Errorf("auth user feature = %q", AuthUser)
+	}
+	if _, listed := Snapshot(context.Background(), NewStatic())[string(AuthUser)]; !listed {
+		t.Error("authuser is not reported to Studio")
+	}
+	if !NewStatic(AuthUser).Enabled(context.Background(), AuthUser) {
+		t.Error("authuser cannot be switched on")
+	}
+}

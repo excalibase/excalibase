@@ -5,6 +5,8 @@ import { Loader2 } from 'lucide-react';
 import { listEndUsers, setEndUserRole, type EndUser, type EndUserPage, type EndUserRoleChange } from '../../api/endUsers';
 import { apiErrorMessage } from '../../api/permissions';
 import { useProjectRole } from '../../hooks/useProjectRole';
+import { useFeatureEnabled } from '../../hooks/useDeploymentMode';
+import { EndUserDetails } from './EndUserDetails';
 import { validateEndUserRole } from '../../utils/permissionRules';
 
 // The role each end user's token carries (EXC-370): the API permissions of
@@ -82,6 +84,7 @@ function EndUserRolesBody({ roleLoading, canAdmin, users, children }: BodyProps)
 }
 
 function EndUserTable({ projectId, users, total }: Readonly<{ projectId: string; users: EndUser[]; total?: number }>) {
+  const { enabled: accounts } = useFeatureEnabled('authuser');
   return (
     <div className="rounded-lg border border-border-primary overflow-hidden">
       <table className="w-full text-sm">
@@ -95,7 +98,7 @@ function EndUserTable({ projectId, users, total }: Readonly<{ projectId: string;
         </thead>
         <tbody>
           {users.map((user) => (
-            <EndUserRow key={user.id} projectId={projectId} user={user} />
+            <EndUserRow key={user.id} projectId={projectId} user={user} accounts={accounts} />
           ))}
         </tbody>
       </table>
@@ -108,9 +111,10 @@ function EndUserTable({ projectId, users, total }: Readonly<{ projectId: string;
   );
 }
 
-function EndUserRow({ projectId, user }: Readonly<{ projectId: string; user: EndUser }>) {
+function EndUserRow({ projectId, user, accounts }: Readonly<{ projectId: string; user: EndUser; accounts: boolean }>) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
+  const [details, setDetails] = useState(false);
   const [role, setRole] = useState(user.role);
   const [allowed, setAllowed] = useState(user.allowedRoles.join(', '));
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +139,7 @@ function EndUserRow({ projectId, user }: Readonly<{ projectId: string; user: End
     'w-full px-2 py-1 rounded border border-border-primary bg-bg-primary text-text-primary text-xs font-mono';
 
   return (
+    <>
     <tr className="border-t border-border-primary align-top" data-testid={`end-user-${user.id}`}>
       <td className="px-4 py-3 text-text-primary">{user.email}</td>
       {editing ? (
@@ -174,6 +179,17 @@ function EndUserRow({ projectId, user }: Readonly<{ projectId: string; user: End
           </td>
           <td className="px-4 py-3 text-xs text-text-secondary font-mono">{user.allowedRoles.join(', ')}</td>
           <td className="px-4 py-3 text-right">
+            {accounts && (
+              <button
+                type="button"
+                aria-label={`Details of ${user.email}`}
+                aria-expanded={details}
+                onClick={() => setDetails(!details)}
+                className="px-2 py-1 text-xs rounded text-text-secondary hover:bg-surface-hover"
+              >
+                Details
+              </button>
+            )}
             <button
               type="button"
               aria-label={`Change role of ${user.email}`}
@@ -186,5 +202,13 @@ function EndUserRow({ projectId, user }: Readonly<{ projectId: string; user: End
         </>
       )}
     </tr>
+    {accounts && details && (
+      <tr className="border-t border-border-primary" data-testid={`end-user-details-${user.id}`}>
+        <td colSpan={4} className="px-4 py-4">
+          <EndUserDetails projectId={projectId} user={user} onDeleted={() => setDetails(false)} />
+        </td>
+      </tr>
+    )}
+    </>
   );
 }

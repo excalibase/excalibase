@@ -45,6 +45,9 @@ const (
 type EndUserManager interface {
 	List(ctx context.Context, orgSlug, projectID, actor string, page endusers.Page) (json.RawMessage, error)
 	SetRole(ctx context.Context, orgSlug, projectID, actor string, userID int64, change endusers.RoleChange) (*endusers.EndUser, error)
+	Get(ctx context.Context, orgSlug, projectID, actor string, userID int64) (json.RawMessage, error)
+	Update(ctx context.Context, orgSlug, projectID, actor string, userID int64, patch endusers.UserPatch) (json.RawMessage, error)
+	Delete(ctx context.Context, orgSlug, projectID, actor string, userID int64) error
 }
 
 // EndUsersHandler lets a project admin list the project's end users and set
@@ -223,10 +226,14 @@ func isAssignableRole(role string) bool {
 }
 
 // roleChangeAudit is what the audit log keeps of one role change: the
-// target, the roles asked for, and how it ended (with auth's refusal status
-// and code when auth said no).
+// target, the roles asked for, and how it ended.
 func roleChangeAudit(userID int64, change endusers.RoleChange, err error) map[string]any {
-	details := map[string]any{"userId": userID, "role": change.Role, "allowedRoles": change.AllowedRoles}
+	return withOutcome(map[string]any{"userId": userID, "role": change.Role, "allowedRoles": change.AllowedRoles}, err)
+}
+
+// withOutcome adds how a relayed change ended, with auth's refusal status and
+// code when auth said no.
+func withOutcome(details map[string]any, err error) map[string]any {
 	var refused *endusers.RefusedError
 	switch {
 	case err == nil:
@@ -246,17 +253,21 @@ func roleChangeAudit(userID int64, change endusers.RoleChange, err error) map[st
 }
 
 func (h *EndUsersHandler) recordRoleChange(r *http.Request, target endUserTarget, details map[string]any) {
+	h.record(r, target, auditActionEndUserRoleSet, details)
+}
+
+func (h *EndUsersHandler) record(r *http.Request, target endUserTarget, action string, details map[string]any) {
 	if h.audit == nil {
 		return
 	}
 	encoded, _ := json.Marshal(details)
 	now := time.Now()
 	entry := &domain.AuditEntry{
-		UserID: target.actor, Action: auditActionEndUserRoleSet, Resource: auditResourceEndUser,
+		UserID: target.actor, Action: action, Resource: auditResourceEndUser,
 		ResourceID: target.projectID, Details: string(encoded), IPAddress: clientIP(r), Timestamp: &now,
 	}
 	if err := h.audit.LogAudit(r.Context(), entry); err != nil {
-		log.Printf("ERROR: audit %s on %s: %v", auditActionEndUserRoleSet, target.projectID, err)
+		log.Printf("ERROR: audit %s on %s: %v", action, target.projectID, err)
 	}
 }
 
