@@ -55,11 +55,14 @@ const (
 	// DBAllowList is the per-project list of addresses that may reach the
 	// public database port, and its Studio card and MCP tools (EXC-665).
 	DBAllowList Feature = "dballowlist"
+	// DBReadAddress is a database's read-only address to its replicas, internal
+	// and on its own public port, and its Studio card (EXC-666).
+	DBReadAddress Feature = "dbreadaddress"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, DBAllowList}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, DBAllowList, DBReadAddress}
 }
 
 type Flags interface {

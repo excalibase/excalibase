@@ -18,7 +18,8 @@ export type Feature =
   | 'authotp'
   | 'authuser'
   | 'authguest'
-  | 'dballowlist';
+  | 'dballowlist'
+  | 'dbreadaddress';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
