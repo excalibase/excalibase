@@ -209,6 +209,7 @@ func writeDBEndpointError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrDBEndpointUnsupported),
 		errors.Is(err, service.ErrProjectNotActive),
 		errors.Is(err, service.ErrNotForMySQL),
+		errors.Is(err, service.ErrDBAllowListNotChosen),
 		errors.Is(err, storage.ErrProjectBusy):
 		httpError(w, safeError(err), http.StatusConflict)
 	case errors.Is(err, service.ErrDBEndpointNotObserved),
