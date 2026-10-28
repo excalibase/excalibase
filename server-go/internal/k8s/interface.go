@@ -89,6 +89,8 @@ type KubeClient interface {
 	// project with none refuses connections rather than pointing at
 	// nothing, which is what a paused or deleting project must do.
 	PublicDBServiceExists(ctx context.Context, namespace, name string) (bool, error)
+	// PublicDBServiceSourceRanges reads back the addresses it admits (EXC-665).
+	PublicDBServiceSourceRanges(ctx context.Context, namespace, name string) ([]string, error)
 	// DeletePublicDBService removes the Service so the port stops
 	// answering. Deleting an absent one succeeds.
 	DeletePublicDBService(ctx context.Context, namespace, name string) error

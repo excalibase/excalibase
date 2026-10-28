@@ -755,6 +755,25 @@ exactly what turning the setting off would cost them.
 | `EXCALIBASE_DB_ENDPOINT_PORT_QUARANTINE` | `720h` (30 days) | How long a freed port is held back before it can be reissued. |
 | `EXCALIBASE_DB_ENDPOINT_SHARED_IP_KEY` | `excalibase-db-edge` | MetalLB sharing key. Every project's Service carries it, which is what puts them on one address. |
 
+**Allow-list (`FEATURE_DBALLOWLIST`, EXC-665).** With the flag on, an Admin
+names who may connect (`GET/PUT /api/projects/{id}/db-endpoint/allowed-sources`,
+`{"sources": [...]}` or `{"allowAny": true}`; reads Developer+, writes Admin,
+audited as `db_endpoint.allowed_sources.update`). The list is rendered as
+`loadBalancerSourceRanges` on every public Service of the project (Postgres,
+the DocumentDB Mongo port, MySQL), which Cilium's kube-proxy replacement (and
+kube-proxy) enforce at the node before any SNAT; those Services then allocate
+no NodePort (`allocateLoadBalancerNodePorts: false`), because Cilium applies
+the list to the load-balancer address only. Entries are IPv4/IPv6 addresses
+or ranges, at most 20, no `/0` (that is `allowAny`), nothing wider than /8
+(IPv4) or /16 (IPv6), no loopback, link-local or multicast. Opening a port
+needs that choice first; a port opened before the flag keeps admitting any
+address until an Admin chooses. In-cluster clients are never affected. A
+datapath that does not implement the field ignores it, so check
+`kubectl get svc -o yaml` and a refused outside dial before relying on it.
+A single host's databases listen on 127.0.0.1 only, so its list is fixed at
+"this host only" and a change is refused. Flag off: Services and routes as
+before.
+
 **Ports are allocated randomly inside the window**, never sequentially: two
 port numbers must not let anyone read off how many tenants the platform has
 or in what order they signed up. Allocation is atomic — an advisory lock on

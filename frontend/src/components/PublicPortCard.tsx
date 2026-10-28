@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { Globe, Loader2, Lock } from 'lucide-react';
 import { useProjectEndpoint, useSetProjectEndpointPublic } from '../api/projectEndpoint';
+import { useAllowedSources } from '../api/allowedSources';
 import { refusalMessage } from '../api/clusterSettings';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
+import { DatabaseAllowList } from './DatabaseAllowList';
 import { Button } from './Button';
 import { SshTunnelNote } from './SshTunnelNote';
 
@@ -27,7 +30,17 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
   const offered = endpoint.data?.publicOffered !== false;
   const current = offered ? endpoint.data : undefined;
   const canChange = current?.canChange === true;
-  if (current?.singleHost) return <SingleHostPort host={current.host} port={current.port} available={current.available} />;
+  const allowListOn = useFeatureEnabled('dballowlist').enabled;
+  const sources = useAllowedSources(projectId, allowListOn && !!current);
+  const access = allowListOn ? sources.data?.access : undefined;
+  if (current?.singleHost)
+    return (
+      <SingleHostPort host={current.host} port={current.port} available={current.available}>
+        {allowListOn && <DatabaseAllowList projectId={projectId} />}
+      </SingleHostPort>
+    );
+  // Opening a port nobody has scoped is refused by the server (EXC-665).
+  const needsChoice = access === 'unset' && !current?.publicEnabled;
 
   const toggle = () => {
     if (!current) return;
@@ -88,7 +101,7 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
             <Button
               size="sm"
               variant={current.publicEnabled ? 'secondary' : 'primary'}
-              disabled={!active || change.isPending || confirming}
+              disabled={!active || change.isPending || confirming || needsChoice}
               onClick={toggle}
               data-testid="public-port-toggle"
             >
@@ -96,6 +109,9 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
             </Button>
           )}
         </div>
+      )}
+      {current && canChange && needsChoice && (
+        <p className="text-xs text-text-tertiary mt-2">Choose who may connect below before opening the port.</p>
       )}
       {current && canChange && !active && (
         <p className="text-xs text-text-tertiary mt-2">
@@ -110,9 +126,11 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
       {confirming && (
         <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-text-primary">
           <p>
-            Anyone on the internet will be able to reach this database's login. Only open it when a
-            tool outside the platform needs a direct connection. Only org admins and owners can do
-            this.
+            {access === 'listed'
+              ? "Only the addresses listed under Who may connect will be able to reach this database's login."
+              : "Anyone on the internet will be able to reach this database's login."}{' '}
+            Only open it when a tool outside the platform needs a direct connection. Only org admins
+            and owners can do this.
           </p>
           <div className="mt-2 flex gap-2">
             <Button size="sm" variant="danger" onClick={open} data-testid="public-port-confirm">
@@ -129,13 +147,24 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
           {refusalMessage(change.error)}
         </p>
       )}
+      {current && allowListOn && <DatabaseAllowList projectId={projectId} />}
     </div>
   );
 }
 
 // A single host publishes the port on its own loopback when the database
 // container is created; there is nothing to open or close (EXC-576).
-function SingleHostPort({ host, port, available }: { readonly host: string; readonly port: number; readonly available: boolean }) {
+function SingleHostPort({
+  host,
+  port,
+  available,
+  children,
+}: {
+  readonly host: string;
+  readonly port: number;
+  readonly available: boolean;
+  readonly children?: React.ReactNode;
+}) {
   return (
     <div className="rounded-lg border border-border-primary bg-surface-card p-4" data-testid="public-port-card">
       <h4 className="flex items-center gap-2 text-sm font-medium text-text-primary mb-2">
@@ -151,6 +180,7 @@ function SingleHostPort({ host, port, available }: { readonly host: string; read
         )}
       </p>
       {available && <SshTunnelNote port={port} />}
+      {children}
     </div>
   );
 }

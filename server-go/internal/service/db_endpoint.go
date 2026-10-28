@@ -8,6 +8,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -97,6 +98,10 @@ type DBEndpointServiceConfig struct {
 	SharedIPKey  string
 	// Claimer is the project lifecycle lease; nil means an in-process one.
 	Claimer ProjectOperationClaimer
+	// AllowList and Flags are the allow-list (EXC-665); nil or the flag off
+	// renders Services as before it.
+	AllowList storage.DBSourceAllowListStore
+	Flags     features.Flags
 }
 
 // DBEndpointService is the control plane's view of one project's public
@@ -110,6 +115,8 @@ type DBEndpointService struct {
 	quarantine   time.Duration
 	sharedIPKey  string
 	claimer      ProjectOperationClaimer
+	allowList    storage.DBSourceAllowListStore
+	flags        features.Flags
 	// goneTimeout bounds the wait for a deleted Service to be observed gone;
 	// a cloud controller may hold one by its finalizer for a moment.
 	goneTimeout time.Duration
@@ -131,6 +138,8 @@ func NewDBEndpointService(c DBEndpointServiceConfig) *DBEndpointService {
 		quarantine:   c.Quarantine,
 		sharedIPKey:  c.SharedIPKey,
 		claimer:      claimerOrInProcess(c.Claimer),
+		allowList:    c.AllowList,
+		flags:        c.Flags,
 		goneTimeout:  defaultServiceGoneTimeout,
 		gonePoll:     defaultServiceGonePoll,
 	}
@@ -237,6 +246,11 @@ func (s *DBEndpointService) SetPublic(ctx context.Context, projectID string, pub
 	if !s.publicOffered() {
 		return DBEndpointView{}, ErrDBEndpointNotConfigured
 	}
+	release, err := s.serializeWithAllowList(ctx, projectID)
+	if err != nil {
+		return DBEndpointView{}, err
+	}
+	defer release()
 	inst, err := s.project(projectID)
 	if err != nil {
 		return DBEndpointView{}, err
@@ -246,6 +260,9 @@ func (s *DBEndpointService) SetPublic(ctx context.Context, projectID string, pub
 	}
 	if domain.IsNotServable(inst.Status) {
 		return DBEndpointView{}, errors.New(domain.NotServableReason(inst.Status))
+	}
+	if err := s.requireChosenSources(ctx, projectID); err != nil {
+		return DBEndpointView{}, err
 	}
 	endpoint, err := s.endpoints.AllocateDatabaseEndpointPort(
 		ctx, projectID, domain.DBEndpointRolePostgres, s.ports, s.quarantine)
@@ -412,6 +429,9 @@ func (s *DBEndpointService) Release(ctx context.Context, inst *domain.DatabaseIn
 	if err := s.releasePorts(ctx, inst); err != nil {
 		return err
 	}
+	if err := s.forgetSourceAllowList(ctx, inst.ProjectID); err != nil {
+		return err
+	}
 	return s.endpoints.DeleteDatabaseEndpoint(ctx, inst.ProjectID)
 }
 
@@ -480,26 +500,49 @@ func (s *DBEndpointService) closeIngressIfUnpublished(ctx context.Context, inst 
 	return cause
 }
 
-// publishServices creates the project's Services and confirms they exist.
+// publishServices creates the project's Services, carrying its allow-list,
+// and confirms they exist.
 func (s *DBEndpointService) publishServices(ctx context.Context, inst *domain.DatabaseInstance, port, mongoPort int) error {
-	if inst.DBType == domain.MySQL {
-		return s.ensureServiceObserved(ctx, inst, s.mysqlServiceSpec(inst, port))
+	policy, err := s.servicePolicy(ctx, inst.ProjectID)
+	if err != nil {
+		return err
 	}
-	if err := s.ensureServiceObserved(ctx, inst, k8s.PublicDBServiceSpec{
+	return s.publishServicesWith(ctx, inst, port, mongoPort, policy)
+}
+
+func (s *DBEndpointService) publishServicesWith(ctx context.Context, inst *domain.DatabaseInstance, port, mongoPort int, policy sourcePolicy) error {
+	for _, spec := range s.publicSpecs(inst, port, mongoPort) {
+		spec.SourceRanges, spec.NoNodePorts = policy.ranges, policy.noNodePorts
+		if err := s.ensureServiceObserved(ctx, inst, spec); err != nil {
+			return err
+		}
+		if policy.enforced {
+			if err := s.confirmSourceRanges(ctx, inst.Namespace, spec); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// publicSpecs is every public Service the project has: one per protocol.
+func (s *DBEndpointService) publicSpecs(inst *domain.DatabaseInstance, port, mongoPort int) []k8s.PublicDBServiceSpec {
+	if inst.DBType == domain.MySQL {
+		return []k8s.PublicDBServiceSpec{s.mysqlServiceSpec(inst, port)}
+	}
+	specs := []k8s.PublicDBServiceSpec{{
 		Name:             publicServiceName(inst),
 		Port:             port,
 		ReadWriteService: inst.ProjectID + "-postgres-rw",
 		SharedIPKey:      s.sharedIPKey,
 		ProjectID:        inst.ProjectID,
-	}); err != nil {
-		return err
-	}
+	}}
 	if mongoPort == 0 {
-		return nil
+		return specs
 	}
 	// The gateway is a container in the very same pod, so this Service
 	// selects the same primary and differs only in the port it forwards to.
-	return s.ensureServiceObserved(ctx, inst, k8s.PublicDBServiceSpec{
+	return append(specs, k8s.PublicDBServiceSpec{
 		Name:             domain.DBEndpointMongoServiceName(inst.ProjectID),
 		Port:             mongoPort,
 		TargetPort:       config.DocumentDBGatewayPort,

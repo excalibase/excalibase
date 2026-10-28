@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -59,6 +60,12 @@ type PublicDBServiceSpec struct {
 	TargetPort int
 	// PortName names the port on the Service. Empty means "postgres".
 	PortName string
+	// SourceRanges are the client addresses the datapath admits (EXC-665);
+	// nil admits any address.
+	SourceRanges []string
+	// NoNodePorts keeps the Service off every node's NodePort, which would
+	// answer outside SourceRanges.
+	NoNodePorts bool
 }
 
 // EnsurePublicDBService creates the project's public LoadBalancer Service, or
@@ -89,6 +96,8 @@ func (c *Client) EnsurePublicDBService(ctx context.Context, namespace string, sp
 	updated.Spec.Type = desired.Spec.Type
 	updated.Spec.Selector = desired.Spec.Selector
 	updated.Spec.Ports = desired.Spec.Ports
+	updated.Spec.LoadBalancerSourceRanges = desired.Spec.LoadBalancerSourceRanges
+	updated.Spec.AllocateLoadBalancerNodePorts = desired.Spec.AllocateLoadBalancerNodePorts
 	if _, err := services.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update public database service: %w", err)
 	}
@@ -107,6 +116,16 @@ func (c *Client) PublicDBServiceExists(ctx context.Context, namespace, name stri
 		return false, fmt.Errorf("check public database service: %w", err)
 	}
 	return true, nil
+}
+
+// PublicDBServiceSourceRanges reads back the addresses the Service admits, so
+// a changed allow-list is recorded only once the Service carries it.
+func (c *Client) PublicDBServiceSourceRanges(ctx context.Context, namespace, name string) ([]string, error) {
+	svc, err := c.clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("read public database service: %w", err)
+	}
+	return svc.Spec.LoadBalancerSourceRanges, nil
 }
 
 // DeletePublicDBService removes the project's Service so the port stops
@@ -157,7 +176,7 @@ func servicePortName(spec PublicDBServiceSpec) string {
 }
 
 func buildPublicDBService(namespace string, spec PublicDBServiceSpec, selector map[string]string) *corev1.Service {
-	return &corev1.Service{
+	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      spec.Name,
 			Namespace: namespace,
@@ -180,4 +199,12 @@ func buildPublicDBService(namespace string, spec PublicDBServiceSpec, selector m
 			}},
 		},
 	}
+	if len(spec.SourceRanges) > 0 {
+		svc.Spec.LoadBalancerSourceRanges = slices.Clone(spec.SourceRanges)
+	}
+	if spec.NoNodePorts {
+		allocate := false
+		svc.Spec.AllocateLoadBalancerNodePorts = &allocate
+	}
+	return svc
 }
