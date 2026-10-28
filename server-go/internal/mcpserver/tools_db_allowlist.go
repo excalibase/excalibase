@@ -3,7 +3,9 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/features"
@@ -32,7 +34,7 @@ func dbAllowListTools() []entry {
 		dark(features.DBAllowList, tool("get_db_allowed_sources", "Who may reach the project's public database port: the allowed addresses and ranges, "+
 			"and whether the port is open.", readTool, getDBAllowedSources)),
 		dark(features.DBAllowList, tool("set_db_allowed_sources", "Replace the addresses and CIDR ranges that may reach the project's public database port (Postgres, MySQL "+
-			"or the DocumentDB Mongo port). Anything not listed is refused at the network edge. Admins only.", writeTool, setDBAllowedSources)),
+			"or the DocumentDB Mongo port). Anything not listed is refused at the network edge. Hosts and networks up to IPv4 /24 or IPv6 /48; wider is set in Studio. Admins only.", writeTool, setDBAllowedSources)),
 	}
 }
 
@@ -68,18 +70,41 @@ func setDBAllowedSources(ctx context.Context, c *call, in dbAllowListArgs) (any,
 	return allowListAnswer(saved), nil
 }
 
-// mcpAllowListSources refuses "every address" here; the server validates the rest.
+// A coding tool may name hosts and small networks only; anything wider, and
+// allowing every address, is decided in Studio.
+const (
+	mcpMinIPv4Prefix = 24
+	mcpMinIPv6Prefix = 48
+)
+
+// mcpAllowListSources refuses wide entries here; the server validates the rest.
 func mcpAllowListSources(sources []string) ([]string, error) {
 	if len(sources) == 0 {
 		return nil, errors.New("name at least one address or range; closing the port or allowing any address is done in Studio")
 	}
 	for _, source := range sources {
-		trimmed := strings.TrimSpace(source)
-		if trimmed == "*" || strings.HasSuffix(trimmed, "/0") {
-			return nil, errors.New("allowing every address is not set through MCP; list the addresses that need the port")
+		if err := narrowSource(strings.TrimSpace(source)); err != nil {
+			return nil, err
 		}
 	}
 	return sources, nil
+}
+
+func narrowSource(source string) error {
+	if source == "*" {
+		return errors.New("allowing every address is not set through MCP; list the addresses that need the port")
+	}
+	if !strings.Contains(source, "/") {
+		return nil
+	}
+	prefix, err := netip.ParsePrefix(source)
+	if err != nil {
+		return fmt.Errorf("%q is not an address or CIDR range", source)
+	}
+	if (prefix.Addr().Is4() && prefix.Bits() < mcpMinIPv4Prefix) || (prefix.Addr().Is6() && prefix.Bits() < mcpMinIPv6Prefix) {
+		return fmt.Errorf("%q is wider than MCP may set (IPv4 /%d, IPv6 /%d); set wider ranges in Studio", source, mcpMinIPv4Prefix, mcpMinIPv6Prefix)
+	}
+	return nil
 }
 
 func allowListAnswer(list dbAllowList) map[string]any {

@@ -164,7 +164,10 @@ function AllowListEditor({ current, allowAny, draft, saving, setDraft, setAllowA
           Anyone on the internet will be able to reach this database&apos;s login. Prefer listing the addresses that need it.
         </p>
       )}
-      <p className="text-xs text-text-tertiary">Up to {current.max} addresses or ranges, IPv4 or IPv6.</p>
+      <p className="text-xs text-text-tertiary">
+        Up to {current.max} addresses or ranges, at least one IPv4. A shared address (office NAT, VPN, mobile carrier) admits
+        everyone behind it.
+      </p>
       <Button size="sm" type="button" disabled={saving} onClick={onSave} data-testid="allow-list-save">
         Save
       </Button>

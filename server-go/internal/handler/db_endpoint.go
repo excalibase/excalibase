@@ -213,7 +213,8 @@ func writeDBEndpointError(w http.ResponseWriter, err error) {
 		errors.Is(err, storage.ErrProjectBusy):
 		httpError(w, safeError(err), http.StatusConflict)
 	case errors.Is(err, service.ErrDBEndpointNotObserved),
-		errors.Is(err, service.ErrTLSSettingNotObserved):
+		errors.Is(err, service.ErrTLSSettingNotObserved),
+		errors.Is(err, service.ErrDBAllowListNotObserved):
 		httpError(w, safeError(err), http.StatusBadGateway)
 	default:
 		httpError(w, safeError(err), http.StatusInternalServerError)
