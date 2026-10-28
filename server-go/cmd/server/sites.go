@@ -144,11 +144,11 @@ func platformDomains(cfg config.AppConfig) []string {
 	return domains
 }
 
-// serverSitesSweepInterval is how often server sites are unrouted again while their feature is off.
+// serverSitesSweepInterval is how often server sites are routed or unrouted again.
 const serverSitesSweepInterval = 10 * time.Minute
 
-// startServerSitesSweep serves server sites only while their feature is on, so
-// switching it off stops their code (EXC-661); while off it repeats, until every one is unrouted.
+// startServerSitesSweep serves server sites only while their feature is on and
+// their egress is filtered, so switching either off stops their code (EXC-661).
 func startServerSitesSweep(ctx context.Context, service *sites.Service) {
 	if !service.Available() {
 		return
@@ -159,9 +159,6 @@ func startServerSitesSweep(ctx context.Context, service *sites.Service) {
 		for {
 			if err := service.ReconcileServerSites(ctx); err != nil {
 				log.Printf("ERROR sites: route server sites for the sitesserver feature: %v", err)
-			}
-			if service.ServerSitesOn(ctx) {
-				return
 			}
 			select {
 			case <-ctx.Done():

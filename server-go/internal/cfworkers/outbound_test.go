@@ -42,6 +42,9 @@ func TestDispatchOutboundIsEmptyWithoutAnOutboundOnThisNamespace(t *testing.T) {
 		"no outbound":         routerSettings(dispatchBinding(testNamespace, "")),
 		"only another's":      routerSettings(dispatchBinding("another-ns", "excalibase-sites-outbound")),
 		"no dispatch binding": routerSettings(),
+		// A second binding of the namespace without it would let code dispatch around the filter.
+		"a second raw binding": routerSettings(dispatchBinding(testNamespace, "excalibase-sites-outbound"), dispatchBinding(testNamespace, "")),
+		"two outbounds":        routerSettings(dispatchBinding(testNamespace, "excalibase-sites-outbound"), dispatchBinding(testNamespace, "other")),
 	} {
 		_, client := newFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) { writeEnvelope(w, http.StatusOK, settings) })
 		if got, err := client.DispatchOutbound(context.Background(), "excalibase-sites-router"); err != nil || got != "" {

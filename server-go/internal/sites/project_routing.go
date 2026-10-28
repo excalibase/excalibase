@@ -110,10 +110,11 @@ func (s *Service) servable(ctx context.Context, site *Site) bool {
 	return site.Kind != KindServer || s.serverSitesOn(ctx)
 }
 
-// ReconcileServerSites routes every live server site while server sites are
-// on, and unroutes all of them while they are off. It runs at start and, while
-// off, again on a timer, so a replica still on during a rollout cannot leave one
-// routed. Every site is tried; the failures are joined.
+// ReconcileServerSites routes every live server site while server sites are on
+// and the router binds the outbound Worker, and unroutes all of them otherwise.
+// It runs on a timer, so neither a replica still on during a rollout nor a
+// router redeployed without the outbound Worker leaves one served. Every site
+// is tried; the failures are joined.
 func (s *Service) ReconcileServerSites(ctx context.Context) error {
 	if !s.Available() {
 		return nil
@@ -122,9 +123,11 @@ func (s *Service) ReconcileServerSites(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Routed only while the router still sends their requests through the outbound Worker.
+	serve := s.serverSitesOn(ctx) && s.checkOutbound(ctx, true) == nil
 	var failures []error
 	for _, site := range held {
-		if err := s.reconcileInTime(ctx, site); err != nil {
+		if err := s.reconcileInTime(ctx, site, serve); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -132,14 +135,14 @@ func (s *Service) ReconcileServerSites(ctx context.Context) error {
 }
 
 // reconcileInTime gives each site its own time, so one slow answer leaves no other site routed.
-func (s *Service) reconcileInTime(ctx context.Context, site *Site) error {
+func (s *Service) reconcileInTime(ctx context.Context, site *Site, serve bool) error {
 	siteCtx, cancel := context.WithTimeout(ctx, reconcileSiteTimeout)
 	defer cancel()
-	return s.reconcileServerSite(siteCtx, site)
+	return s.reconcileServerSite(siteCtx, site, serve)
 }
 
-func (s *Service) reconcileServerSite(ctx context.Context, site *Site) error {
-	if !s.serverSitesOn(ctx) {
+func (s *Service) reconcileServerSite(ctx context.Context, site *Site, serve bool) error {
+	if !serve {
 		if err := s.publisher.DeleteKV(ctx, site.Hostname); err != nil {
 			return publishFailure(site, stepUnroute, err)
 		}

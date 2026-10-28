@@ -513,3 +513,34 @@ func TestStaticSitesNeverReadTheOutboundBinding(t *testing.T) {
 		t.Fatalf("static deploy err=%v reads=%d", err, binding.Reads)
 	}
 }
+
+// A router redeployed without the outbound Worker stops serving server sites at the next sweep.
+func TestTheSweepUnroutesServerSitesOnceTheOutboundWorkerIsGone(t *testing.T) {
+	h := newServerHarness(t, true)
+	binding := &sitestest.Outbound{Worker: "excalibase-sites-outbound"}
+	options := serverOptions(t, features.NewStatic(features.SitesServer), h.store)
+	options.Outbound = binding
+	service, err := sites.NewService(h.store, h.publisher, h.origins, options)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	h.service = service
+	site := h.createServerSite(t, "ssr")
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1")); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	binding.Worker = ""
+	if err := service.ReconcileServerSites(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if _, routed := h.publisher.Hosts[site.Hostname]; routed {
+		t.Fatal("a server site stayed routed without the outbound Worker")
+	}
+	binding.Worker = "excalibase-sites-outbound"
+	if err := service.ReconcileServerSites(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if _, routed := h.publisher.Hosts[site.Hostname]; !routed {
+		t.Fatal("the server site was not routed again once the outbound Worker was back")
+	}
+}
