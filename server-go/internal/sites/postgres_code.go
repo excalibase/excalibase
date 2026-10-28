@@ -36,12 +36,20 @@ func (s *PostgresStore) GetCode(ctx context.Context, projectID, siteID, deployID
 	return packed, nil
 }
 
-// PruneCode keeps the newest keep succeeded deploys' code and the live deploy's, and deletes the rest.
-func (s *PostgresStore) PruneCode(ctx context.Context, projectID, siteID string, keep int) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM site_deploy_code c WHERE c.project_id = $1 AND c.site_id = $2
-		AND c.deploy_id NOT IN (SELECT live_deploy_id FROM sites WHERE id = $2 AND live_deploy_id IS NOT NULL)
-		AND c.deploy_id NOT IN (SELECT d.id FROM site_deploys d WHERE d.project_id = $1 AND d.site_id = $2 AND d.status = 'SUCCEEDED'
-			ORDER BY d.created_at DESC, d.id LIMIT $3)`, projectID, siteID, keep)
+// PruneCode keeps the newest keep succeeded deploys' code that fits in
+// maxBytes, the live deploy's and any still pending, and deletes the rest.
+func (s *PostgresStore) PruneCode(ctx context.Context, projectID, siteID string, keep int, maxBytes int64) error {
+	_, err := s.db.ExecContext(ctx, `WITH ranked AS (
+			SELECT c.deploy_id,
+				row_number() OVER (ORDER BY d.created_at DESC, d.id) AS position,
+				sum(octet_length(c.packed)) OVER (ORDER BY d.created_at DESC, d.id) AS running
+			FROM site_deploy_code c JOIN site_deploys d ON d.id = c.deploy_id
+			WHERE c.project_id = $1 AND c.site_id = $2 AND d.status = 'SUCCEEDED')
+		DELETE FROM site_deploy_code c WHERE c.project_id = $1 AND c.site_id = $2
+		AND c.deploy_id NOT IN (SELECT live_deploy_id FROM sites WHERE id = $2 AND project_id = $1 AND live_deploy_id IS NOT NULL)
+		AND c.deploy_id NOT IN (SELECT id FROM site_deploys WHERE project_id = $1 AND site_id = $2 AND status = 'PENDING')
+		AND c.deploy_id NOT IN (SELECT deploy_id FROM ranked WHERE position <= $3 AND running <= $4)`,
+		projectID, siteID, keep, maxBytes)
 	if err != nil {
 		return fmt.Errorf("prune kept server code: %w", err)
 	}

@@ -103,6 +103,24 @@ func (s *PostgresStore) List(ctx context.Context, projectID string) ([]*Site, er
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) ListServerSites(ctx context.Context) ([]*Site, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, project_id, name, hostname, kind, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at
+		FROM sites WHERE kind = 'server' ORDER BY project_id, name`)
+	if err != nil {
+		return nil, fmt.Errorf("list server sites: %w", err)
+	}
+	defer rows.Close()
+	out := []*Site{}
+	for rows.Next() {
+		site, err := scanSite(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan site: %w", err)
+		}
+		out = append(out, site)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) UpdateSettings(ctx context.Context, projectID, id string, spaFallback bool) (*Site, error) {
 	site, err := scanSite(s.db.QueryRowContext(ctx, `UPDATE sites SET spa_fallback = $3, updated_at = NOW()
 		WHERE project_id = $1 AND id = $2 RETURNING id, project_id, name, hostname, kind, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at`, projectID, id, spaFallback))

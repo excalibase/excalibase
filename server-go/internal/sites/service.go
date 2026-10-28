@@ -59,6 +59,9 @@ type Options struct {
 	Flags features.Flags
 	// Code keeps server deploys' modules; nil offers no server sites.
 	Code CodeStore
+	// OutboundWorker names the Worker the dispatch namespace sends every
+	// fetch of site code through (ADR 0045 decision 5); "" offers no server sites.
+	OutboundWorker string
 }
 
 // DeployLimiter answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.
@@ -98,9 +101,15 @@ func (s *Service) MaxUploadBytes(ctx context.Context, projectID string) (int64, 
 	return MaxArchiveBytes(limits), nil
 }
 
-// serverSitesOn is whether server-rendered sites are offered to this request.
+// serverSitesOn is whether server-rendered sites are offered to this request:
+// the feature is on, their code has a store, and their egress is filtered.
 func (s *Service) serverSitesOn(ctx context.Context) bool {
-	return s.options.Code != nil && features.Enabled(ctx, s.options.Flags, features.SitesServer)
+	return s.options.Code != nil && s.options.OutboundWorker != "" && features.Enabled(ctx, s.options.Flags, features.SitesServer)
+}
+
+// ServerSitesOn tells callers whether to show server sites at all.
+func (s *Service) ServerSitesOn(ctx context.Context) bool {
+	return s.Available() && s.serverSitesOn(ctx)
 }
 
 // requireKind refuses work on a server site while server sites are off.
@@ -185,11 +194,12 @@ func (s *Service) CreateKind(ctx context.Context, projectID, name, kind string, 
 	if !s.Available() {
 		return nil, ErrSitesUnavailable
 	}
+	// Off, any kind but static is answered as the feature's absent route, so the kinds are not advertised.
+	if kind != KindStatic && !s.serverSitesOn(ctx) {
+		return nil, ErrServerSitesOff
+	}
 	if kind != KindStatic && kind != KindServer {
 		return nil, &InputError{Reason: fmt.Sprintf("a site is %q or %q", KindStatic, KindServer)}
-	}
-	if err := s.requireKind(ctx, kind); err != nil {
-		return nil, err
 	}
 	if err := ValidateName(name); err != nil {
 		return nil, &InputError{Reason: err.Error()}

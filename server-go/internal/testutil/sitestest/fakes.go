@@ -25,9 +25,12 @@ type MemoryStore struct {
 	Tokens map[string]sites.DeployToken
 	// Attempts are each project's deploy attempts, for the hourly rate.
 	Attempts map[string][]time.Time
-	// Code is each server deploy's kept modules, by deploy id.
-	Code map[string][]byte
-	Now  func() time.Time
+	// Code is each server deploy's kept modules, by deploy id; CodeReads counts GetCode calls.
+	Code      map[string][]byte
+	CodeReads int
+	// prunedBudget is the byte budget of each site's last prune.
+	prunedBudget map[string]int64
+	Now          func() time.Time
 	// OnClaim runs as a lease is taken, before it is granted, for tests that change things meanwhile.
 	OnClaim func()
 }
@@ -40,7 +43,7 @@ type Lease struct {
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{Sites: map[string]sites.Site{}, Leases: map[string]Lease{}, Deploys: map[string]sites.Deploy{}, Tokens: map[string]sites.DeployToken{},
-		Attempts: map[string][]time.Time{}, Code: map[string][]byte{}, Now: time.Now}
+		Attempts: map[string][]time.Time{}, Code: map[string][]byte{}, prunedBudget: map[string]int64{}, Now: time.Now}
 }
 
 // ExpireLease ends a site's lease now, as a deploy outliving it would see.
@@ -106,6 +109,20 @@ func (m *MemoryStore) List(_ context.Context, projectID string) ([]*sites.Site, 
 	out := []*sites.Site{}
 	for _, site := range m.Sites {
 		if site.ProjectID == projectID {
+			copied := site
+			out = append(out, &copied)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (m *MemoryStore) ListServerSites(_ context.Context) ([]*sites.Site, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*sites.Site{}
+	for _, site := range m.Sites {
+		if site.Kind == sites.KindServer {
 			copied := site
 			out = append(out, &copied)
 		}
@@ -266,6 +283,7 @@ func (m *MemoryStore) PutCode(_ context.Context, deploy *sites.Deploy, packed []
 func (m *MemoryStore) GetCode(_ context.Context, projectID, siteID, deployID string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.CodeReads++
 	deploy, ok := m.Deploys[deployID]
 	packed, kept := m.Code[deployID]
 	if !ok || !kept || deploy.ProjectID != projectID || deploy.SiteID != siteID {
@@ -274,23 +292,37 @@ func (m *MemoryStore) GetCode(_ context.Context, projectID, siteID, deployID str
 	return packed, nil
 }
 
-// PruneCode keeps the newest keep succeeded deploys' code and the live one's, as the Postgres store does.
-func (m *MemoryStore) PruneCode(_ context.Context, projectID, siteID string, keep int) error {
+// PrunedWithBudget reports whether the site's last prune was held to budget bytes.
+func (m *MemoryStore) PrunedWithBudget(siteID string, budget int64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.prunedBudget[siteID] == budget
+}
+
+// PruneCode keeps what the Postgres store keeps: the newest keep succeeded
+// deploys within maxBytes, the live one and any pending.
+func (m *MemoryStore) PruneCode(_ context.Context, projectID, siteID string, keep int, maxBytes int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prunedBudget[siteID] = maxBytes
 	succeeded := []sites.Deploy{}
-	for _, deploy := range m.Deploys {
-		if deploy.ProjectID == projectID && deploy.SiteID == siteID && deploy.Status == sites.DeploySucceeded {
+	for deployID, deploy := range m.Deploys {
+		if _, held := m.Code[deployID]; held && deploy.ProjectID == projectID && deploy.SiteID == siteID && deploy.Status == sites.DeploySucceeded {
 			succeeded = append(succeeded, deploy)
 		}
 	}
 	sort.Slice(succeeded, func(i, j int) bool { return succeeded[i].CreatedAt.After(succeeded[j].CreatedAt) })
 	kept := map[string]bool{m.Sites[siteID].LiveDeployID: true}
-	for i := 0; i < len(succeeded) && i < keep; i++ {
-		kept[succeeded[i].ID] = true
+	var running int64
+	for i, deploy := range succeeded {
+		running += int64(len(m.Code[deploy.ID]))
+		if i < keep && running <= maxBytes {
+			kept[deploy.ID] = true
+		}
 	}
 	for deployID := range m.Code {
-		if deploy := m.Deploys[deployID]; deploy.SiteID == siteID && !kept[deployID] {
+		deploy := m.Deploys[deployID]
+		if deploy.SiteID == siteID && deploy.Status != sites.DeployPending && !kept[deployID] {
 			delete(m.Code, deployID)
 		}
 	}

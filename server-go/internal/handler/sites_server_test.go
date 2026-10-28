@@ -17,7 +17,8 @@ func newServerSitesHarness(t *testing.T, on bool) *sitesHarness {
 	if on {
 		flags = features.NewStatic(features.SitesServer)
 	}
-	service, err := sites.NewService(store, publisher, origins, sites.Options{BaseDomain: "excalibase.app", SpoolDir: t.TempDir(), Flags: flags, Code: store})
+	service, err := sites.NewService(store, publisher, origins, sites.Options{BaseDomain: "excalibase.app", SpoolDir: t.TempDir(), Flags: flags, Code: store,
+		OutboundWorker: "excalibase-sites-outbound"})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -35,6 +36,9 @@ func TestSites_ServerKindAnswersAsUnmountedWhileOff(t *testing.T) {
 	}
 	if static := h.createSite(t, "plain"); static.Kind != sites.KindStatic {
 		t.Fatalf("site = %+v", static)
+	}
+	if limits := h.do(t, http.MethodGet, "/limits", nil); strings.Contains(limits.Body.String(), "Server") {
+		t.Fatalf("limits name server sites while they are off: %s", limits.Body)
 	}
 }
 
@@ -74,7 +78,8 @@ func TestSites_ServerSiteDeploysAndRollsBackWhileOn(t *testing.T) {
 func TestSites_LimitsNameTheServerSiteAllowance(t *testing.T) {
 	h := newServerSitesHarness(t, true)
 	response := h.do(t, http.MethodGet, "/limits", nil)
-	if !strings.Contains(response.Body.String(), `"maxServerSites":1`) || !strings.Contains(response.Body.String(), `"maxServerBundleBytes":10485760`) {
+	if !strings.Contains(response.Body.String(), `"maxServerSites":1`) || !strings.Contains(response.Body.String(), `"maxServerBundleBytes":10485760`) ||
+		!strings.Contains(response.Body.String(), `"maxServerCpuMs":50`) {
 		t.Fatalf("limits = %s", response.Body)
 	}
 }

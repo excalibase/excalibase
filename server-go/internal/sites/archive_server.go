@@ -20,7 +20,6 @@ var moduleTypes = map[string]string{
 	".js":   cfworkers.ModuleJavaScript,
 	".mjs":  cfworkers.ModuleJavaScript,
 	".wasm": cfworkers.ModuleWasm,
-	".map":  cfworkers.ModuleSourceMap,
 	".txt":  cfworkers.ModuleText,
 	".bin":  cfworkers.ModuleData,
 }
@@ -28,9 +27,9 @@ var moduleTypes = map[string]string{
 const serverLayoutHint = "pack the build as server/ (code), assets/ (public files) and site.json"
 
 // MaxServerArchiveBytes bounds a server deploy's archive as read: the
-// assets, the code and its source maps, site.json and framing.
+// assets, the code, site.json and framing.
 func MaxServerArchiveBytes(limits Limits) int64 {
-	return MaxArchiveBytes(limits) + 2*limits.MaxServerBundleBytes + int64(2*MaxServerModules+4)*tarFramingBytes + maxSiteJSONBytes
+	return MaxArchiveBytes(limits) + limits.MaxServerBundleBytes + int64(2*MaxServerModules+4)*tarFramingBytes + maxSiteJSONBytes
 }
 
 // ReadServerArchive streams a server deploy (EXC-661) into a spool under
@@ -101,16 +100,20 @@ func (b *Bundle) readSiteJSON(reader io.Reader, size int64) error {
 
 func (b *Bundle) addServerAsset(reader io.Reader, publicPath string, size int64, limits Limits, seen map[string]bool) error {
 	// Pages-style adapters put the server in _worker.js inside the output folder; served, it would be public code.
-	if publicPath == "/_worker.js" || strings.HasPrefix(publicPath, "/_worker.js/") {
+	if lower := strings.ToLower(publicPath); lower == "/_worker.js" || strings.HasPrefix(lower, "/_worker.js/") {
 		return refuse("assets%s would publish server code as a public file; move it under server/", publicPath)
 	}
 	return b.addFile(reader, publicPath, size, limits, seen)
 }
 
 func (b *Bundle) addModule(reader io.Reader, name string, size int64, limits Limits, seen map[string]bool) error {
+	if path.Ext(name) == ".map" {
+		// Kept for every rollback and as large again as the code; stack traces stay unmapped in v1.
+		return refuse("server/%s is a source map, which is not uploaded; delete server/*.map before packing", name)
+	}
 	contentType, ok := moduleTypes[path.Ext(name)]
 	if !ok {
-		return refuse("server/%s is not a file a Worker runs; server/ holds .js, .mjs, .wasm, .map, .txt or .bin files", name)
+		return refuse("server/%s is not a file a Worker runs; server/ holds .js, .mjs, .wasm, .txt or .bin files", name)
 	}
 	if !cfworkers.ValidModuleName(name) {
 		return refuse("server/%s has a name a Worker module may not have; use letters, digits and . _ - / @ +", name)
@@ -122,7 +125,7 @@ func (b *Bundle) addModule(reader io.Reader, name string, size int64, limits Lim
 	if len(b.Modules) >= MaxServerModules {
 		return refuseSize("server/ holds more than %d modules", MaxServerModules)
 	}
-	if err := b.reserveCode(contentType, size, limits); err != nil {
+	if err := b.reserveCode(size, limits); err != nil {
 		return err
 	}
 	file, err := b.spool(reader, "/server/"+name, size)
@@ -134,15 +137,8 @@ func (b *Bundle) addModule(reader io.Reader, name string, size int64, limits Lim
 	return nil
 }
 
-// reserveCode counts a module against the plan's bundle size; source maps have an allowance of their own.
-func (b *Bundle) reserveCode(contentType string, size int64, limits Limits) error {
-	if contentType == cfworkers.ModuleSourceMap {
-		if b.MapBytes+size > limits.MaxServerBundleBytes {
-			return refuseSize("the server code's source maps total more than %d bytes", limits.MaxServerBundleBytes)
-		}
-		b.MapBytes += size
-		return nil
-	}
+// reserveCode counts a module against the plan's bundle size.
+func (b *Bundle) reserveCode(size int64, limits Limits) error {
 	if b.CodeBytes+size > limits.MaxServerBundleBytes {
 		return refuseSize("the server code is larger than this plan's %d bytes uncompressed; deploy the app as a container instead", limits.MaxServerBundleBytes)
 	}
@@ -162,9 +158,7 @@ func (b *Bundle) checkServerLayout() error {
 	}
 	code := map[[32]byte]string{}
 	for _, mod := range b.Modules {
-		if mod.ContentType != cfworkers.ModuleSourceMap {
-			code[mod.digest] = mod.Path
-		}
+		code[mod.digest] = mod.Path
 	}
 	for _, file := range b.Files {
 		if name, copied := code[file.digest]; copied {

@@ -19,11 +19,15 @@ func newServerHarness(t *testing.T, on bool) *serviceHarness {
 	if on {
 		flags = features.NewStatic(features.SitesServer)
 	}
-	service, err := sites.NewService(store, publisher, origins, sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(), Flags: flags, Code: store})
+	service, err := sites.NewService(store, publisher, origins, serverOptions(t, flags, store))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 	return &serviceHarness{service: service, store: store, publisher: publisher, origins: origins}
+}
+
+func serverOptions(t *testing.T, flags features.Flags, code sites.CodeStore) sites.Options {
+	return sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(), Flags: flags, Code: code, OutboundWorker: "excalibase-sites-outbound"}
 }
 
 func (h *serviceHarness) createServerSite(t *testing.T, name string) *sites.Site {
@@ -33,6 +37,25 @@ func (h *serviceHarness) createServerSite(t *testing.T, name string) *sites.Site
 		t.Fatalf("CreateKind: %v", err)
 	}
 	return site
+}
+
+func TestServerSitesNeedTheOutboundWorker(t *testing.T) {
+	options := serverOptions(t, features.NewStatic(features.SitesServer), sitestest.NewMemoryStore())
+	options.OutboundWorker = ""
+	service, err := sites.NewService(sitestest.NewMemoryStore(), sitestest.NewPublisher(), sitestest.NewOrigins(), options)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if _, err := service.CreateKind(context.Background(), testProject, "ssr", sites.KindServer, nil, testActor); !errors.Is(err, sites.ErrServerSitesOff) {
+		t.Fatalf("err = %v; server code must not run before its egress is filtered", err)
+	}
+}
+
+func TestAnUnknownKindIsUnmountedWhileOff(t *testing.T) {
+	off := newServerHarness(t, false)
+	if _, err := off.service.CreateKind(context.Background(), testProject, "odd", "edge", nil, testActor); !errors.Is(err, sites.ErrServerSitesOff) {
+		t.Fatalf("err = %v, want the feature's 404", err)
+	}
 }
 
 func TestServerSitesAreOffUntilTheirFeatureIs(t *testing.T) {
@@ -70,13 +93,17 @@ func TestServerDeployPublishesModulesAndKeepsThemOutOfTheAssets(t *testing.T) {
 		t.Fatalf("Deploy: %v", err)
 	}
 	if deploy.Kind != sites.KindServer || deploy.Server == nil || deploy.Server.Main != "worker.js" || deploy.Server.Modules != 2 ||
-		deploy.Server.CodeBytes != int64(len("export default 1")) || deploy.FileCount != 2 {
+		deploy.Server.CodeBytes != int64(len("export default 1")+len("export const page = 1")) || deploy.FileCount != 2 {
 		t.Fatalf("deploy = %+v server = %+v", deploy, deploy.Server)
 	}
 	version := h.publisher.Versions[sites.ScriptName(site)]
 	if version.MainModule != "worker.js" || version.Assets.NotFoundHandling != cfworkers.NotFoundNone ||
-		version.CompatibilityDate != "2025-09-01" || strings.Join(version.CompatibilityFlags, ",") != "nodejs_compat" {
+		version.CompatibilityDate != "2025-09-01" || strings.Join(version.CompatibilityFlags, ",") != "nodejs_compat,global_fetch_strictly_public" {
 		t.Fatalf("version = %+v", version)
+	}
+	// The plan's limits travel with the script too, behind the router's per-call ones.
+	if version.Limits == nil || version.Limits.CPUMillis != sites.DefaultLimits.MaxServerCPUMillis || version.Limits.Subrequests != sites.DefaultLimits.MaxServerSubrequests {
+		t.Errorf("limits = %+v", version.Limits)
 	}
 	if len(version.Bindings) != 0 {
 		t.Errorf("bindings = %v; v1 binds only ASSETS", version.Bindings)
@@ -153,6 +180,9 @@ func TestCodeIsKeptForTheRollbackWindowOnly(t *testing.T) {
 	if len(h.store.Code) != sites.ServerCodeKept {
 		t.Fatalf("code kept for %d deploys, want %d", len(h.store.Code), sites.ServerCodeKept)
 	}
+	if !h.store.PrunedWithBudget(site.ID, sites.ServerCodeBudget(sites.DefaultLimits)) {
+		t.Error("pruned without the site's byte budget")
+	}
 	_, err := h.service.Rollback(context.Background(), testProject, site.ID, deploys[0].ID)
 	if !errors.Is(err, sites.ErrServerCodeGone) {
 		t.Fatalf("err = %v, want the code gone", err)
@@ -187,7 +217,7 @@ func TestServerDeploysStopWhenTheFeatureIsSwitchedOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	off, err := sites.NewService(h.store, h.publisher, h.origins, sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(), Flags: features.NewStatic(), Code: h.store})
+	off, err := sites.NewService(h.store, h.publisher, h.origins, serverOptions(t, features.NewStatic(), h.store))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -218,8 +248,7 @@ func (failingCode) PutCode(context.Context, *sites.Deploy, []byte) error {
 // Nothing is published without its code kept, and the deploy's reason names no internals.
 func TestAServerDeployWhoseCodeCannotBeKeptPublishesNothing(t *testing.T) {
 	store, publisher := sitestest.NewMemoryStore(), sitestest.NewPublisher()
-	service, err := sites.NewService(store, publisher, sitestest.NewOrigins(), sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(),
-		Flags: features.NewStatic(features.SitesServer), Code: failingCode{store}})
+	service, err := sites.NewService(store, publisher, sitestest.NewOrigins(), serverOptions(t, features.NewStatic(features.SitesServer), failingCode{store}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -234,5 +263,95 @@ func TestAServerDeployWhoseCodeCannotBeKeptPublishesNothing(t *testing.T) {
 	deploys, _ := service.ListDeploys(context.Background(), testProject, site.ID)
 	if len(deploys) != 1 || deploys[0].Status != sites.DeployFailed || strings.Contains(deploys[0].FailureReason, "10.0.0.5") {
 		t.Fatalf("deploys = %+v", deploys)
+	}
+}
+
+func TestAServerRollbackLoadsNoCodeBeforeItsSlot(t *testing.T) {
+	h := newServerHarness(t, true)
+	site := h.createServerSite(t, "ssr")
+	first, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1"))
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if err := h.store.ClaimDeploy(context.Background(), testProject, site.ID, "other-holder", h.store.Now().Add(sites.MaxDeployDuration)); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	reads := h.store.CodeReads
+	if _, err := h.service.Rollback(context.Background(), testProject, site.ID, first.ID); !errors.Is(err, sites.ErrSiteBusy) {
+		t.Fatalf("err = %v, want busy", err)
+	}
+	if h.store.CodeReads != reads {
+		t.Fatal("a refused rollback read the kept code")
+	}
+}
+
+func TestServerRollbacksCountAgainstTheHourlyDeploys(t *testing.T) {
+	h := newServerHarness(t, true)
+	site := h.createServerSite(t, "ssr")
+	first, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1"))
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	before := len(h.store.Attempts[testProject])
+	if _, err := h.service.Rollback(context.Background(), testProject, site.ID, first.ID); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if len(h.store.Attempts[testProject]) != before+1 {
+		t.Fatalf("attempts %d → %d; a server rollback re-uploads all its code", before, len(h.store.Attempts[testProject]))
+	}
+}
+
+func TestADeployFailingAfterItsWorkerChangedKeepsItsCode(t *testing.T) {
+	h := newServerHarness(t, true)
+	site := h.createServerSite(t, "ssr")
+	h.publisher.FailKV = errors.New("kv down")
+	deploy, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 'running'"))
+	if err == nil {
+		t.Fatal("want the route write to fail")
+	}
+	deploys, _ := h.service.ListDeploys(context.Background(), testProject, site.ID)
+	if _, kept := h.store.Code[deploys[0].ID]; !kept || deploy != nil {
+		t.Fatal("the code now running on the CDN was dropped")
+	}
+}
+
+func TestSwitchingTheFeatureOffStopsServingServerSites(t *testing.T) {
+	h := newServerHarness(t, true)
+	site := h.createServerSite(t, "ssr")
+	static := h.createSite(t, "plain")
+	for _, target := range []*sites.Site{site, static} {
+		archive := viteDist(t)
+		if target.Kind == sites.KindServer {
+			archive = sitestest.ServerDist(t, "export default 1")
+		}
+		if _, err := h.deploy(t, target, archive); err != nil {
+			t.Fatalf("Deploy %s: %v", target.Name, err)
+		}
+	}
+	off, err := sites.NewService(h.store, h.publisher, h.origins, serverOptions(t, features.NewStatic(), h.store))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if err := off.ReconcileServerSites(context.Background()); err != nil {
+		t.Fatalf("Reconcile off: %v", err)
+	}
+	if _, routed := h.publisher.Hosts[site.Hostname]; routed {
+		t.Fatal("a server site is still routed with its feature off")
+	}
+	if h.publisher.Hosts[static.Hostname] != sites.ScriptName(static) {
+		t.Fatal("a static site lost its route")
+	}
+	// Nothing routes it back while the feature is off.
+	if err := off.RouteProjectSites(context.Background(), testProject); err != nil {
+		t.Fatalf("RouteProjectSites: %v", err)
+	}
+	if _, routed := h.publisher.Hosts[site.Hostname]; routed {
+		t.Fatal("project routing served a server site with its feature off")
+	}
+	if err := h.service.ReconcileServerSites(context.Background()); err != nil {
+		t.Fatalf("Reconcile on: %v", err)
+	}
+	if h.publisher.Hosts[site.Hostname] != sites.ScriptName(site) {
+		t.Fatal("switching the feature on again did not serve the live deploy")
 	}
 }

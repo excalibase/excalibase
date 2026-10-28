@@ -291,7 +291,7 @@ func siteLimitsBody(field, value string) string {
 	fields := map[string]string{
 		"maxSites": "5", "maxSiteDeployBytes": "104857600", "maxSiteFiles": "20000",
 		"maxSiteFileBytes": "26214400", "maxSiteDeploysPerHour": "30", "maxSiteCustomDomains": "2",
-		"maxServerSites": "1", "maxSiteServerBundleBytes": "10485760",
+		"maxServerSites": "1", "maxSiteServerBundleBytes": "10485760", "maxSiteServerCpuMs": "50", "maxSiteServerSubrequests": "20",
 	}
 	fields[field] = value
 	out := `{"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.5"`
@@ -314,6 +314,9 @@ func TestTierHandler_Update_RefusesSiteLimitsOutOfBounds(t *testing.T) {
 		// Cloudflare refuses a Worker above 64 MiB uncompressed.
 		"maxServerSites":           {"-1", "1001"},
 		"maxSiteServerBundleBytes": {"0", "1048575", "67108865"},
+		// Cloudflare's own ceilings for one request.
+		"maxSiteServerCpuMs":       {"9", "300001"},
+		"maxSiteServerSubrequests": {"0", "10001"},
 	}
 	for field, values := range refused {
 		for _, value := range values {
@@ -335,12 +338,12 @@ func TestTierHandler_Update_StoresAndEchoesSiteLimits(t *testing.T) {
 	rec := httptest.NewRecorder()
 	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", siteLimitsBody("maxSites", "0"), string(domain.Free)))
 	want := config.SiteTierLimits{MaxSites: 0, MaxDeployBytes: 100 << 20, MaxFiles: 20_000, MaxFileBytes: 25 << 20, MaxDeploysPerHour: 30, MaxCustomDomains: 2,
-		MaxServerSites: 1, MaxServerBundleBytes: 10 << 20}
+		MaxServerSites: 1, MaxServerBundleBytes: 10 << 20, MaxServerCPUMillis: 50, MaxServerSubrequests: 20}
 	if rec.Code != http.StatusOK || store.m[domain.Free].Sites != want {
 		t.Fatalf("got %d %s, stored %+v; want the plan's site limits kept", rec.Code, rec.Body.String(), store.m[domain.Free].Sites)
 	}
 	for _, echoed := range []string{`"maxSites":0`, `"maxSiteDeployBytes":104857600`, `"maxSiteFiles":20000`, `"maxSiteFileBytes":26214400`, `"maxSiteDeploysPerHour":30`, `"maxSiteCustomDomains":2`,
-		`"maxServerSites":1`, `"maxSiteServerBundleBytes":10485760`} {
+		`"maxServerSites":1`, `"maxSiteServerBundleBytes":10485760`, `"maxSiteServerCpuMs":50`, `"maxSiteServerSubrequests":20`} {
 		if !strings.Contains(rec.Body.String(), echoed) {
 			t.Errorf("response %s does not echo %s", rec.Body.String(), echoed)
 		}
@@ -352,7 +355,7 @@ func TestTierHandler_Update_StoresAndEchoesSiteLimits(t *testing.T) {
 func TestTierHandler_Update_KeepsSiteLimitsLeftOut(t *testing.T) {
 	const body = `{"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.25","maxSiteDeploysPerHour":12}`
 	stored := config.SiteTierLimits{MaxSites: 7, MaxDeployBytes: 50 << 20, MaxFiles: 900, MaxFileBytes: 5 << 20, MaxDeploysPerHour: 3, MaxCustomDomains: 4,
-		MaxServerSites: 2, MaxServerBundleBytes: 20 << 20}
+		MaxServerSites: 2, MaxServerBundleBytes: 20 << 20, MaxServerCPUMillis: 100, MaxServerSubrequests: 30}
 	freeBuiltin, _ := config.GetTierConfig(domain.Free)
 	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Sites: stored, SiteBuilds: freeBuiltin.SiteBuilds}}}
 	rec := httptest.NewRecorder()

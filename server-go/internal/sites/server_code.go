@@ -14,11 +14,16 @@ import (
 )
 
 // ServerCodeKept is how many of a site's latest succeeded server deploys keep
-// their code for a rollback; the live deploy's code is kept beyond it.
+// their code for a rollback, within ServerCodeBudget; the live deploy's code
+// and a deploy still running are kept beyond both.
 const ServerCodeKept = 10
 
-// maxPackedCodeBytes bounds what is read back of one deploy's kept code.
-const maxPackedCodeBytes = 2*64<<20 + MaxServerModules*2*tarFramingBytes
+// ServerCodeBudget bounds the packed code one site keeps for rollbacks.
+func ServerCodeBudget(limits Limits) int64 { return 3 * limits.MaxServerBundleBytes }
+
+// maxPackedCodeBytes bounds what is read back of one deploy's kept code: the
+// largest bundle a plan may allow, and a long-name header per module.
+const maxPackedCodeBytes = 64<<20 + MaxServerModules*4*tarFramingBytes
 
 // CodeStore keeps each server deploy's modules for the rollback window
 // (ADR 0045 decision 7). Cloudflare keeps asset bodies by hash; nothing keeps code but this.
@@ -27,8 +32,9 @@ type CodeStore interface {
 	PutCode(ctx context.Context, deploy *Deploy, packed []byte) error
 	// GetCode answers ErrServerCodeGone once the deploy's code is no longer kept.
 	GetCode(ctx context.Context, projectID, siteID, deployID string) ([]byte, error)
-	// PruneCode keeps the code of the site's newest keep succeeded deploys and its live one, and drops the rest.
-	PruneCode(ctx context.Context, projectID, siteID string, keep int) error
+	// PruneCode keeps the code of the site's newest keep succeeded deploys
+	// that fit in maxBytes together, its live one and any still pending, and drops the rest.
+	PruneCode(ctx context.Context, projectID, siteID string, keep int, maxBytes int64) error
 }
 
 // packModules writes the bundle's modules as one tar.gz, named as the Worker loads them.
@@ -81,11 +87,15 @@ func unpackModules(packed []byte) ([]cfworkers.Module, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read kept server code: %w", err)
 		}
+		contentType, known := moduleTypes[path.Ext(header.Name)]
+		if !cfworkers.ValidModuleName(header.Name) || !known || header.Typeflag != tar.TypeReg {
+			return nil, fmt.Errorf("kept server code holds %q, which is not a module", header.Name)
+		}
 		body, err := io.ReadAll(archive)
 		if err != nil {
 			return nil, fmt.Errorf("read kept module %s: %w", header.Name, err)
 		}
-		modules = append(modules, cfworkers.Module{Name: header.Name, ContentType: moduleTypes[path.Ext(header.Name)],
+		modules = append(modules, cfworkers.Module{Name: header.Name, ContentType: contentType,
 			Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }})
 	}
 }

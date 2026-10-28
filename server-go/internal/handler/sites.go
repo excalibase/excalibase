@@ -181,9 +181,15 @@ type limitsResponse struct {
 	MaxFileBytes      int64 `json:"maxFileBytes"`
 	MaxDeploysPerHour int   `json:"maxDeploysPerHour"`
 	MaxCustomDomains  int   `json:"maxCustomDomains"`
-	// Server-rendered sites (EXC-661): how many, and their code size uncompressed.
+	// Server-rendered sites (EXC-661), shown only while they are offered.
+	*serverLimitsResponse
+}
+
+type serverLimitsResponse struct {
 	MaxServerSites       int   `json:"maxServerSites"`
 	MaxServerBundleBytes int64 `json:"maxServerBundleBytes"`
+	MaxServerCPUMillis   int   `json:"maxServerCpuMs"`
+	MaxServerSubrequests int   `json:"maxServerSubrequests"`
 }
 
 func (h *SiteHandler) limits(w http.ResponseWriter, r *http.Request) {
@@ -192,9 +198,13 @@ func (h *SiteHandler) limits(w http.ResponseWriter, r *http.Request) {
 		writeSiteError(w, err)
 		return
 	}
-	writeJSON(w, limitsResponse{MaxSites: limits.MaxSites, MaxDeployBytes: limits.MaxTotalBytes, MaxFiles: limits.MaxFiles,
-		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour, MaxCustomDomains: limits.MaxCustomDomains,
-		MaxServerSites: limits.MaxServerSites, MaxServerBundleBytes: limits.MaxServerBundleBytes})
+	out := limitsResponse{MaxSites: limits.MaxSites, MaxDeployBytes: limits.MaxTotalBytes, MaxFiles: limits.MaxFiles,
+		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour, MaxCustomDomains: limits.MaxCustomDomains}
+	if h.sites.ServerSitesOn(r.Context()) {
+		out.serverLimitsResponse = &serverLimitsResponse{MaxServerSites: limits.MaxServerSites, MaxServerBundleBytes: limits.MaxServerBundleBytes,
+			MaxServerCPUMillis: limits.MaxServerCPUMillis, MaxServerSubrequests: limits.MaxServerSubrequests}
+	}
+	writeJSON(w, out)
 }
 
 // sitePathID refuses an id that is not a plain identifier before any lookup.

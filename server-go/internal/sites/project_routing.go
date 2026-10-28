@@ -2,6 +2,7 @@ package sites
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -60,7 +61,7 @@ func (s *Service) RouteProjectSites(ctx context.Context, projectID string) error
 	cdnCtx, cancel := context.WithTimeout(ctx, publishTimeout)
 	defer cancel()
 	for _, site := range held {
-		if site.LiveDeployID == "" {
+		if site.LiveDeployID == "" || !s.servable(ctx, site) {
 			continue
 		}
 		if err := s.publisher.PutKV(cdnCtx, site.Hostname, ScriptName(site)); err != nil {
@@ -97,4 +98,49 @@ func (s *Service) routeSiteHostnames(ctx context.Context, site *Site) error {
 	}
 	defer lease.release()
 	return s.refreshSiteHostnames(ctx, site, routing{serving: assumeServing, live: true})
+}
+
+// servable is whether the router may send traffic to the site's Worker: a
+// server site only while server sites are on, so switching them off stops their code.
+func (s *Service) servable(ctx context.Context, site *Site) bool {
+	return site.Kind != KindServer || s.serverSitesOn(ctx)
+}
+
+// ReconcileServerSites routes every live server site while server sites are
+// on, and unroutes all of them while they are off; it runs at start, since
+// the feature is decided then. Every site is tried; the failures are joined.
+func (s *Service) ReconcileServerSites(ctx context.Context) error {
+	if !s.Available() {
+		return nil
+	}
+	held, err := s.store.ListServerSites(ctx)
+	if err != nil {
+		return err
+	}
+	cdnCtx, cancel := context.WithTimeout(ctx, publishTimeout)
+	defer cancel()
+	var failures []error
+	for _, site := range held {
+		if err := s.reconcileServerSite(cdnCtx, site); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (s *Service) reconcileServerSite(ctx context.Context, site *Site) error {
+	if !s.serverSitesOn(ctx) {
+		if err := s.publisher.DeleteKV(ctx, site.Hostname); err != nil {
+			return publishFailure(site, stepUnroute, err)
+		}
+		return s.unrouteSiteHostnames(ctx, site)
+	}
+	serving, err := s.projectServing(ctx, site.ProjectID)
+	if err != nil || !serving || site.LiveDeployID == "" {
+		return err
+	}
+	if err := s.publisher.PutKV(ctx, site.Hostname, ScriptName(site)); err != nil {
+		return publishFailure(site, stepRoute, err)
+	}
+	return s.routeSiteHostnames(ctx, site)
 }

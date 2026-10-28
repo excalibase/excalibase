@@ -29,7 +29,7 @@ func openNextEntries(siteJSON string) []sitestest.Entry {
 		sitestest.File("./site.json", siteJSON),
 		sitestest.Dir("./server/"),
 		sitestest.File("./server/worker.js", "export default { fetch() {} }"),
-		sitestest.File("./server/worker.js.map", `{"version":3}`),
+		sitestest.File("./server/chunks/a.wasm", "\x00asm"),
 		sitestest.Dir("./assets/"),
 		sitestest.File("./assets/BUILD_ID", "L-2K"),
 		sitestest.File("./assets/_next/static/chunk.js", "console.log(1)"),
@@ -62,16 +62,16 @@ func TestServerArchiveSplitsModulesFromPublicAssets(t *testing.T) {
 	for _, mod := range bundle.Modules {
 		names = append(names, mod.Path+" "+mod.ContentType)
 	}
-	if strings.Join(names, ",") != "worker.js application/javascript+module,worker.js.map application/source-map" {
+	if strings.Join(names, ",") != "worker.js application/javascript+module,chunks/a.wasm application/wasm" {
 		t.Fatalf("modules = %v", names)
 	}
 	server := bundle.Server
 	if server == nil || server.Main != "worker.js" || server.CompatibilityDate != "2025-09-01" ||
-		strings.Join(server.CompatibilityFlags, ",") != "nodejs_compat" || server.Framework != "nextjs" {
+		strings.Join(server.CompatibilityFlags, ",") != "nodejs_compat,global_fetch_strictly_public" || server.Framework != "nextjs" {
 		t.Fatalf("server = %+v", server)
 	}
-	if bundle.CodeBytes != int64(len("export default { fetch() {} }")) {
-		t.Errorf("code bytes = %d; a source map is not code", bundle.CodeBytes)
+	if bundle.CodeBytes != int64(len("export default { fetch() {} }")+len("\x00asm")) {
+		t.Errorf("code bytes = %d", bundle.CodeBytes)
 	}
 }
 
@@ -80,7 +80,8 @@ func TestServerArchiveDefaultsTheCompatibilityDate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadServerArchive: %v", err)
 	}
-	if bundle.Server.CompatibilityDate != sites.DefaultCompatibilityDate || len(bundle.Server.CompatibilityFlags) != 0 {
+	// Same-zone fetches always go out to the internet, never straight to an origin (ADR 0045).
+	if bundle.Server.CompatibilityDate != sites.DefaultCompatibilityDate || strings.Join(bundle.Server.CompatibilityFlags, ",") != "global_fetch_strictly_public" {
 		t.Fatalf("server = %+v", bundle.Server)
 	}
 }
@@ -145,11 +146,6 @@ func TestServerArchiveHoldsCodeToThePlansBundleSize(t *testing.T) {
 	if !errors.As(err, &archiveErr) || !archiveErr.TooLarge {
 		t.Fatalf("err = %v, want it marked too large", err)
 	}
-	// Source maps have their own allowance of the same size, so a 3 MiB worker with a 7 MiB map fits a 10 MiB plan.
-	maps := sitestest.File("./server/chunk.js.map", strings.Repeat("m", 48))
-	if _, err := readServerArchive(t, serverArchive(t, nextSiteJSON, maps), limits); err != nil {
-		t.Fatalf("a map inside its own allowance: %v", err)
-	}
 }
 
 func TestServerArchiveCapsTheModuleCount(t *testing.T) {
@@ -163,7 +159,7 @@ func TestServerArchiveCapsTheModuleCount(t *testing.T) {
 
 func TestServerArchiveFitsTheUploadCeiling(t *testing.T) {
 	limits := sites.DefaultLimits
-	if sites.MaxServerArchiveBytes(limits) < sites.MaxArchiveBytes(limits)+2*limits.MaxServerBundleBytes {
-		t.Fatal("the server archive ceiling leaves no room for the code and its maps")
+	if sites.MaxServerArchiveBytes(limits) < sites.MaxArchiveBytes(limits)+limits.MaxServerBundleBytes {
+		t.Fatal("the server archive ceiling leaves no room for the code")
 	}
 }

@@ -15,6 +15,8 @@ type Store interface {
 	// Get answers nil, no error, when the project holds no such site.
 	Get(ctx context.Context, projectID, id string) (*Site, error)
 	List(ctx context.Context, projectID string) ([]*Site, error)
+	// ListServerSites answers every project's server-rendered sites, for routing them on or off as a whole.
+	ListServerSites(ctx context.Context) ([]*Site, error)
 	UpdateSettings(ctx context.Context, projectID, id string, spaFallback bool) (*Site, error)
 	// Delete removes the site and its deploy history while lease still holds it.
 	Delete(ctx context.Context, projectID, id, lease string) error
