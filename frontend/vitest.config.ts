@@ -148,6 +148,11 @@ export default defineConfig({
         'src/api/logDrains.ts',
         'src/components/LogDrainsCard.tsx',
         'src/components/LogDrainForm.tsx',
+        'src/api/monitoring.ts',
+        'src/utils/hostMetrics.ts',
+        'src/utils/alertSettingsForm.ts',
+        'src/components/monitoring/**/*.{ts,tsx}',
+        'src/pages/HostMonitoringPage.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

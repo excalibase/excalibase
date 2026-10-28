@@ -32,6 +32,10 @@ import {
   Bot,
   Timer,
   Gauge,
+  Building2,
+  DatabaseZap,
+  ShieldCheck,
+  Server,
   type LucideIcon,
 } from 'lucide-react';
 import type { Feature } from '../../hooks/useDeploymentMode';
@@ -189,4 +193,42 @@ export const visibleProjectNav = (capabilities: NavCapabilities): NavSection[] =
 // Where a section with sub-pages opens: its first page the engine offers.
 export function sectionLanding(section: NavSection, postgres: boolean): string | undefined {
   return visibleNavItems(section.children ?? [], false, postgres)[0]?.to;
+}
+
+export interface PlatformNavItem {
+  icon: LucideIcon;
+  label: string;
+  to: string;
+  cloudOnly?: boolean;
+  adminOnly?: boolean;
+  // Shown only while this dark feature is on (EXC-554).
+  feature?: Feature;
+}
+
+export const PLATFORM_NAV: PlatformNavItem[] = [
+  { icon: LayoutDashboard, label: 'Dashboard', to: '/' },
+  { icon: Building2, label: 'Organizations', to: '/orgs', cloudOnly: true },
+  { icon: Database, label: 'Projects', to: '/instances' },
+  { icon: DatabaseZap, label: 'Provision', to: '/provision' },
+  { icon: KeyRound, label: 'Access tokens', to: '/account/tokens' },
+  { icon: ShieldCheck, label: 'Platform Admin', to: '/admin', adminOnly: true },
+  // Host monitoring of a single-host Docker/Podman install (EXC-670).
+  { icon: Server, label: 'Host', to: '/admin/host', adminOnly: true, feature: 'hostmetrics' },
+];
+
+export function visiblePlatformNav({
+  isAdmin,
+  selfHosted,
+  features,
+}: {
+  isAdmin: boolean;
+  selfHosted: boolean;
+  features: Partial<Record<Feature, boolean>>;
+}): PlatformNavItem[] {
+  return PLATFORM_NAV.filter(
+    (item) =>
+      !(item.cloudOnly && selfHosted) &&
+      !(item.adminOnly && !isAdmin) &&
+      (!item.feature || features[item.feature] === true),
+  );
 }
