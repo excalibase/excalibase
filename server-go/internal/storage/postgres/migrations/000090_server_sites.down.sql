@@ -1,3 +1,5 @@
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS site_server_subrequests;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS site_server_cpu_ms;
 ALTER TABLE tier_configs DROP COLUMN IF EXISTS max_site_server_bundle_bytes;
 ALTER TABLE tier_configs DROP COLUMN IF EXISTS max_server_sites;
 DROP TABLE IF EXISTS site_deploy_code;

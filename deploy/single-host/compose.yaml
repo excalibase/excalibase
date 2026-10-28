@@ -347,6 +347,9 @@ services:
       SITES_ZONE_ID: ${SITES_ZONE_ID:-}
       SITES_CUSTOM_DOMAIN_TARGET: ${SITES_CUSTOM_DOMAIN_TARGET:-}
       SITES_MAX_ZONE_HOSTNAMES: ${SITES_MAX_ZONE_HOSTNAMES:-}
+      # Server-rendered sites (EXC-661) run only once the outbound Worker bound on
+      # the dispatch namespace is named here, with FEATURE_SITESSERVER=true.
+      SITES_OUTBOUND_WORKER: ${SITES_OUTBOUND_WORKER:-}
       # DocumentDB projects (EXC-576): off unless .env says "true" (init.sh --documentdb).
       DOCUMENTDB_ENABLED: ${DOCUMENTDB_ENABLED:-false}
       # Apps (EXC-575, ADR 0039): off unless .env says "true" (init.sh --apps).

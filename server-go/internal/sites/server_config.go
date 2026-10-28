@@ -21,7 +21,11 @@ const (
 const maxSiteJSONBytes = 16 << 10
 
 // allowedCompatibilityFlags are the runtime switches a site may ask for; any other could weaken the sandbox or our tests.
-var allowedCompatibilityFlags = []string{"nodejs_compat", "nodejs_als", "global_fetch_strictly_public"}
+var allowedCompatibilityFlags = []string{"nodejs_compat", "nodejs_als", strictlyPublicFetch}
+
+// strictlyPublicFetch sends a fetch to a hostname on one of our zones out to the internet,
+// through its WAF and routes, never straight to its origin; every server deploy runs with it.
+const strictlyPublicFetch = "global_fetch_strictly_public"
 
 // Frameworks a server deploy may name; it only labels the deploy.
 var knownFrameworks = []string{"nextjs", "astro", "sveltekit", "nuxt", "react-router", "other"}
@@ -80,9 +84,9 @@ func checkSiteJSON(parsed siteJSON) (*ServerConfig, error) {
 	if parsed.Framework != "" && !slices.Contains(knownFrameworks, parsed.Framework) {
 		return nil, refuse("site.json names framework %q; use one of %v", parsed.Framework, knownFrameworks)
 	}
-	flags := parsed.CompatibilityFlags
-	if flags == nil {
-		flags = []string{}
+	flags := append([]string{}, parsed.CompatibilityFlags...)
+	if !slices.Contains(flags, strictlyPublicFetch) {
+		flags = append(flags, strictlyPublicFetch)
 	}
 	return &ServerConfig{Main: parsed.Main, CompatibilityDate: date, CompatibilityFlags: flags, Framework: parsed.Framework}, nil
 }

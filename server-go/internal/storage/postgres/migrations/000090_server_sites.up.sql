@@ -19,13 +19,23 @@ CREATE TABLE IF NOT EXISTS site_deploy_code (
 
 CREATE INDEX IF NOT EXISTS idx_site_deploy_code_site ON site_deploy_code(site_id);
 
--- Per plan: how many sites may be server-rendered, and their code size uncompressed.
+-- Per plan: how many sites may be server-rendered, their code size
+-- uncompressed, and the CPU and subrequests one request of their code may use.
 ALTER TABLE tier_configs ADD COLUMN max_server_sites INTEGER;
 ALTER TABLE tier_configs ADD COLUMN max_site_server_bundle_bytes BIGINT;
-UPDATE tier_configs SET max_server_sites = 1, max_site_server_bundle_bytes = 10485760 WHERE tier = 'FREE';
-UPDATE tier_configs SET max_server_sites = 3, max_site_server_bundle_bytes = 31457280 WHERE tier = 'STANDARD';
-UPDATE tier_configs SET max_server_sites = 10, max_site_server_bundle_bytes = 31457280 WHERE tier = 'ENTERPRISE';
+ALTER TABLE tier_configs ADD COLUMN site_server_cpu_ms INTEGER;
+ALTER TABLE tier_configs ADD COLUMN site_server_subrequests INTEGER;
+UPDATE tier_configs SET max_server_sites = 1, max_site_server_bundle_bytes = 10485760, site_server_cpu_ms = 50, site_server_subrequests = 20
+    WHERE tier = 'FREE';
+UPDATE tier_configs SET max_server_sites = 3, max_site_server_bundle_bytes = 31457280, site_server_cpu_ms = 2000, site_server_subrequests = 200
+    WHERE tier = 'STANDARD';
+UPDATE tier_configs SET max_server_sites = 10, max_site_server_bundle_bytes = 31457280, site_server_cpu_ms = 2000, site_server_subrequests = 200
+    WHERE tier = 'ENTERPRISE';
 UPDATE tier_configs SET max_server_sites = 0 WHERE max_server_sites IS NULL;
 UPDATE tier_configs SET max_site_server_bundle_bytes = 10485760 WHERE max_site_server_bundle_bytes IS NULL;
+UPDATE tier_configs SET site_server_cpu_ms = 50 WHERE site_server_cpu_ms IS NULL;
+UPDATE tier_configs SET site_server_subrequests = 20 WHERE site_server_subrequests IS NULL;
 ALTER TABLE tier_configs ALTER COLUMN max_server_sites SET NOT NULL;
 ALTER TABLE tier_configs ALTER COLUMN max_site_server_bundle_bytes SET NOT NULL;
+ALTER TABLE tier_configs ALTER COLUMN site_server_cpu_ms SET NOT NULL;
+ALTER TABLE tier_configs ALTER COLUMN site_server_subrequests SET NOT NULL;

@@ -35,8 +35,11 @@ type Limits struct {
 	MaxCustomDomains int
 	// MaxServerSites is how many of the sites may be server-rendered (EXC-661); 0 offers none.
 	MaxServerSites int
-	// MaxServerBundleBytes bounds a server deploy's code, uncompressed; its source maps get the same again.
+	// MaxServerBundleBytes bounds a server deploy's code, uncompressed.
 	MaxServerBundleBytes int64
+	// MaxServerCPUMillis and MaxServerSubrequests bound one request of a server site's code.
+	MaxServerCPUMillis   int
+	MaxServerSubrequests int
 }
 
 // DefaultLimits is the FREE plan's, for a service built without a limits source.
@@ -50,6 +53,8 @@ var DefaultLimits = Limits{
 	MaxServerSites:    1,
 	// Cloudflare takes 64 MiB; a minified Next.js app is about 3 MiB.
 	MaxServerBundleBytes: 10 << 20,
+	MaxServerCPUMillis:   50,
+	MaxServerSubrequests: 20,
 }
 
 const maxPathLength = 1024
@@ -129,9 +134,8 @@ type Bundle struct {
 	TotalBytes int64
 	// Modules are a server deploy's code; Path is the module name, relative to server/.
 	Modules []BundleFile
-	// CodeBytes counts the modules except source maps, which MapBytes counts.
+	// CodeBytes is the modules' total size, uncompressed.
 	CodeBytes int64
-	MapBytes  int64
 	Server    *ServerConfig
 }
 

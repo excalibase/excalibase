@@ -125,11 +125,11 @@ func TestTiersCarryTheirSiteLimits(t *testing.T) {
 	const mib = int64(1) << 20
 	want := map[domain.TierType]SiteTierLimits{
 		domain.Free: {MaxSites: 5, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 30, MaxCustomDomains: 2,
-			MaxServerSites: 1, MaxServerBundleBytes: 10 * mib},
+			MaxServerSites: 1, MaxServerBundleBytes: 10 * mib, MaxServerCPUMillis: 50, MaxServerSubrequests: 20},
 		domain.Standard: {MaxSites: 20, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 120, MaxCustomDomains: 5,
-			MaxServerSites: 3, MaxServerBundleBytes: 30 * mib},
+			MaxServerSites: 3, MaxServerBundleBytes: 30 * mib, MaxServerCPUMillis: 2000, MaxServerSubrequests: 200},
 		domain.Enterprise: {MaxSites: 50, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 300, MaxCustomDomains: 10,
-			MaxServerSites: 10, MaxServerBundleBytes: 30 * mib},
+			MaxServerSites: 10, MaxServerBundleBytes: 30 * mib, MaxServerCPUMillis: 2000, MaxServerSubrequests: 200},
 	}
 	for tier, limits := range want {
 		tc, err := GetTierConfig(tier)

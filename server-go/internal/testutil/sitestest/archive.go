@@ -79,7 +79,7 @@ func ServerDist(t testing.TB, worker string) []byte {
 		File("./site.json", ServerSiteJSON),
 		Dir("./server/"),
 		File("./server/worker.js", worker),
-		File("./server/worker.js.map", `{"version":3}`),
+		File("./server/chunks/page.js", "export const page = 1"),
 		Dir("./assets/"),
 		File("./assets/BUILD_ID", "build-1"),
 		File("./assets/_next/static/chunk.js", "console.log(1)"),

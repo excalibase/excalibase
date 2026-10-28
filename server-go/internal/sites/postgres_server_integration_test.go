@@ -29,7 +29,7 @@ func newPostgresServerSites(t *testing.T, project string) *serverSitesHarness {
 	store := sites.NewPostgresStore(platformDB(t).DB())
 	publisher := sitestest.NewPublisher()
 	service, err := sites.NewService(store, publisher, sitestest.NewOrigins(), sites.Options{BaseDomain: "example.app", SpoolDir: t.TempDir(),
-		Flags: features.NewStatic(features.SitesServer), Code: store})
+		Flags: features.NewStatic(features.SitesServer), Code: store, OutboundWorker: "excalibase-sites-outbound"})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -152,5 +152,47 @@ func TestPostgresServerSitesCountAgainstTheirOwnLimit(t *testing.T) {
 	read, err := store.Get(ctx, "proj-kind", "kind-3")
 	if err != nil || read.Kind != sites.KindStatic {
 		t.Fatalf("read = %+v err=%v", read, err)
+	}
+}
+
+func TestPostgresServerCodeKeepsToTheSitesByteBudget(t *testing.T) {
+	h := newPostgresServerSites(t, "proj-server-c")
+	ctx := context.Background()
+	site, err := h.service.CreateKind(ctx, h.project, "server-budget", sites.KindServer, nil, "dev")
+	if err != nil {
+		t.Fatalf("CreateKind: %v", err)
+	}
+	var deploys []*sites.Deploy
+	for i := range 3 {
+		deploy, err := h.deploy(t, site, "export default "+string(rune('a'+i)))
+		if err != nil {
+			t.Fatalf("deploy %d: %v", i, err)
+		}
+		deploys = append(deploys, deploy)
+	}
+	var newest int64
+	if err := platformDB(t).DB().QueryRow(`SELECT octet_length(packed) FROM site_deploy_code WHERE deploy_id = $1`, deploys[2].ID).Scan(&newest); err != nil {
+		t.Fatalf("size: %v", err)
+	}
+	// A budget that holds only the newest: the two before it go, the live one (the newest) stays.
+	if err := h.store.PruneCode(ctx, h.project, site.ID, sites.ServerCodeKept, newest); err != nil {
+		t.Fatalf("PruneCode: %v", err)
+	}
+	if kept := h.keptCode(t, site.ID); kept != 1 {
+		t.Fatalf("kept = %d, want only the newest", kept)
+	}
+	listed, err := h.store.ListServerSites(ctx)
+	if err != nil {
+		t.Fatalf("ListServerSites: %v", err)
+	}
+	found := false
+	for _, server := range listed {
+		found = found || server.ID == site.ID
+		if server.Kind != sites.KindServer {
+			t.Fatalf("listed a %s site", server.Kind)
+		}
+	}
+	if !found {
+		t.Fatal("the server site is not listed")
 	}
 }

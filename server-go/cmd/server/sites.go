@@ -49,7 +49,7 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 		BaseDomain: cfg.Sites.BaseDomain, Hostnames: store, DeployLimits: limits, CustomDomains: customDomainOptions(cfg),
 		Projects: projectGate{instances: sqlStore, claimer: claimer},
 		// Server sites keep their code beside the deploy records (EXC-661).
-		Flags: cfg.Features(), Code: store,
+		Flags: cfg.Features(), Code: store, OutboundWorker: cfg.Sites.OutboundWorker,
 	})
 	if err != nil {
 		log.Fatalf("sites: %v", err)
@@ -140,6 +140,14 @@ func platformDomains(cfg config.AppConfig) []string {
 		}
 	}
 	return domains
+}
+
+// reconcileServerSites serves server sites only while their feature is on, so
+// switching it off at a restart stops their code (EXC-661).
+func reconcileServerSites(ctx context.Context, service *sites.Service) {
+	if err := service.ReconcileServerSites(ctx); err != nil {
+		log.Printf("sites: route server sites for the sitesserver feature: %v", err)
+	}
 }
 
 // startHostnameSweep routes custom domains once their DNS is in place and drops abandoned ones.
