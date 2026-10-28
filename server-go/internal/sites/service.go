@@ -62,6 +62,9 @@ type Options struct {
 	// OutboundWorker names the Worker the dispatch namespace sends every
 	// fetch of site code through (ADR 0045 decision 5); "" offers no server sites.
 	OutboundWorker string
+	// Outbound reads which outbound Worker the router's binding names; server
+	// code is published only while it names OutboundWorker. nil offers no server sites.
+	Outbound OutboundBinding
 }
 
 // DeployLimiter answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.
@@ -104,7 +107,8 @@ func (s *Service) MaxUploadBytes(ctx context.Context, projectID string) (int64, 
 // serverSitesOn is whether server-rendered sites are offered to this request:
 // the feature is on, their code has a store, and their egress is filtered.
 func (s *Service) serverSitesOn(ctx context.Context) bool {
-	return s.options.Code != nil && s.options.OutboundWorker != "" && features.Enabled(ctx, s.options.Flags, features.SitesServer)
+	return s.options.Code != nil && s.options.OutboundWorker != "" && s.options.Outbound != nil &&
+		features.Enabled(ctx, s.options.Flags, features.SitesServer)
 }
 
 // ServerSitesOn tells callers whether to show server sites at all.
@@ -166,6 +170,7 @@ type Service struct {
 	options   Options
 	admission *admission
 	now       func() time.Time
+	outbound  outboundCheck
 }
 
 func NewService(store Store, publisher Publisher, origins CorsOrigins, options Options) (*Service, error) {

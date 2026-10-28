@@ -83,16 +83,12 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 	if err := s.store.CreateDeploy(ctx, deploy); err != nil {
 		return nil, err
 	}
-	swapped := false
 	publishErr := s.keepCode(ctx, deploy, bundle)
 	if publishErr == nil {
-		swapped, publishErr = s.publishInTime(ctx, site, newRelease(deploy, bundleAssets(bundle), bundleModules(bundle), limits))
+		publishErr = s.publishInTime(ctx, site, newRelease(deploy, bundleAssets(bundle), bundleModules(bundle), limits))
 	}
 	finished, err := s.finish(ctx, deploy, lease, publishErr)
-	// A deploy that failed after its Worker changed is what the CDN runs; its code stays.
-	if publishErr == nil || !swapped {
-		s.pruneCode(ctx, deploy, limits)
-	}
+	s.pruneCode(ctx, deploy, limits)
 	return finished, err
 }
 
@@ -126,8 +122,8 @@ func (s *Service) pruneCode(ctx context.Context, deploy *Deploy, limits Limits) 
 	if deploy.Kind != KindServer {
 		return
 	}
-	err := s.options.Code.PruneCode(context.WithoutCancel(ctx), deploy.ProjectID, deploy.SiteID, ServerCodeKept, ServerCodeBudget(limits))
-	if err != nil {
+	retention := CodeRetention{Keep: ServerCodeKept, MaxBytes: ServerCodeBudget(limits), PendingSince: s.now().UTC().Add(-MaxDeployDuration)}
+	if err := s.options.Code.PruneCode(context.WithoutCancel(ctx), deploy.ProjectID, deploy.SiteID, retention); err != nil {
 		log.Printf("site %s: prune kept server code: %v", deploy.SiteID, err)
 	}
 }
@@ -161,19 +157,19 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 		return nil, err
 	}
 	defer admitted()
-	// A server rollback uploads all its code again, so it counts as a deploy.
-	if target.Kind == KindServer {
-		if _, err := s.takeDeploySlot(ctx, projectID, limits.MaxDeploysPerHour); err != nil {
-			return nil, err
-		}
+	giveBackSlot, err := s.rollbackSlot(ctx, target, limits)
+	if err != nil {
+		return nil, err
 	}
 	lease, err := s.claim(ctx, site)
 	if err != nil {
+		giveBackSlot()
 		return nil, err
 	}
 	defer lease.release()
 	released, err := s.holdServingProject(ctx, site.ProjectID)
 	if err != nil {
+		giveBackSlot()
 		return nil, err
 	}
 	defer released()
@@ -183,7 +179,7 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 		return nil, err
 	}
 	// Asset bodies are not kept here, so files Cloudflare asks for again cannot be sent.
-	if _, err := s.publishInTime(ctx, site, newRelease(target, nil, modules, limits)); err != nil {
+	if err := s.publishInTime(ctx, site, newRelease(target, nil, modules, limits)); err != nil {
 		return nil, err
 	}
 	// The CDN already switched; the record follows even if the caller has gone.
@@ -191,6 +187,15 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 		return nil, err
 	}
 	return s.mustGet(context.WithoutCancel(ctx), projectID, siteID)
+}
+
+// rollbackSlot counts a server rollback, which uploads all its code again, as a
+// deploy; the function gives the slot back when the rollback is refused before publishing.
+func (s *Service) rollbackSlot(ctx context.Context, target *Deploy, limits Limits) (func(), error) {
+	if target.Kind != KindServer {
+		return func() {}, nil
+	}
+	return s.takeDeploySlot(ctx, target.ProjectID, limits.MaxDeploysPerHour)
 }
 
 // keptModules reads a server deploy's code back for a rollback; a static deploy has none.
@@ -289,6 +294,10 @@ func (r release) version(completion string) (cfworkers.ScriptVersion, error) {
 	if server == nil {
 		return cfworkers.ScriptVersion{}, fmt.Errorf("server deploy %s has no recorded settings", r.deploy.ID)
 	}
+	// A zero limit would leave the field out, and Cloudflare would run the code unlimited.
+	if r.limits.MaxServerCPUMillis <= 0 || r.limits.MaxServerSubrequests <= 0 {
+		return cfworkers.ScriptVersion{}, fmt.Errorf("server deploy %s has no CPU or subrequest limit to run under", r.deploy.ID)
+	}
 	// Unknown paths must reach the code, which renders its own 404.
 	return cfworkers.ScriptVersion{
 		AssetsJWT:          completion,
@@ -301,37 +310,53 @@ func (r release) version(completion string) (cfworkers.ScriptVersion, error) {
 	}, nil
 }
 
-// publishInTime bounds every Cloudflare call by publishTimeout, inside the
-// lease. swapped reports that the Worker already runs the release, even if a later step failed.
-func (s *Service) publishInTime(ctx context.Context, site *Site, rel release) (swapped bool, err error) {
+// publishInTime bounds every Cloudflare call by publishTimeout, inside the lease.
+func (s *Service) publishInTime(ctx context.Context, site *Site, rel release) error {
 	publishCtx, cancel := context.WithTimeout(ctx, publishTimeout)
 	defer cancel()
 	return s.publish(publishCtx, site, rel)
 }
 
 // publish runs Cloudflare's upload session, the bucket uploads and the script upload.
-func (s *Service) publish(ctx context.Context, site *Site, rel release) (bool, error) {
+func (s *Service) publish(ctx context.Context, site *Site, rel release) error {
+	if rel.deploy.Kind == KindServer {
+		if err := s.requireOutbound(ctx); err != nil {
+			return err
+		}
+	}
 	script := ScriptName(site)
 	session, err := s.publisher.StartUploadSession(ctx, script, rel.deploy.Manifest)
 	if err != nil {
-		return false, publishFailure(site, stepStartUpload, err)
+		return publishFailure(site, stepStartUpload, err)
 	}
 	completion, err := s.uploadBuckets(ctx, site, session, rel.assetsFor)
 	if err != nil {
-		return false, err
+		return err
 	}
 	version, err := rel.version(completion)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if err := s.publisher.PutScript(ctx, script, version); err != nil {
-		return false, publishFailure(site, stepPublish, err)
+		return publishFailure(site, stepPublish, err)
 	}
+	s.markPublished(ctx, rel.deploy)
 	// Written on every publish: idempotent, and it heals a missing entry.
 	if err := s.publisher.PutKV(ctx, site.Hostname, script); err != nil {
-		return true, publishFailure(site, stepRoute, err)
+		return publishFailure(site, stepRoute, err)
 	}
-	return true, s.routeAfterPublish(ctx, site)
+	return s.routeAfterPublish(ctx, site)
+}
+
+// markPublished records that Cloudflare now runs the deploy's code, so it is
+// kept even when a later step fails; a failure only risks a later prune.
+func (s *Service) markPublished(ctx context.Context, deploy *Deploy) {
+	if deploy.Kind != KindServer {
+		return
+	}
+	if err := s.options.Code.MarkPublished(context.WithoutCancel(ctx), deploy, s.now().UTC()); err != nil {
+		log.Printf("site %s: record the published server deploy: %v", deploy.SiteID, err)
+	}
 }
 
 func (s *Service) uploadBuckets(ctx context.Context, site *Site, session cfworkers.UploadSession,

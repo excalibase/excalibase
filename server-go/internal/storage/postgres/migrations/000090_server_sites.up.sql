@@ -5,6 +5,8 @@ ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'static' CHECK (kind IN 
 ALTER TABLE site_deploys ADD COLUMN kind TEXT NOT NULL DEFAULT 'static' CHECK (kind IN ('static', 'server'));
 -- A server deploy's site.json (main module, compatibility date and flags) and code size.
 ALTER TABLE site_deploys ADD COLUMN server_config JSONB;
+-- When Cloudflare began running the deploy's code; the newest such deploy keeps its code.
+ALTER TABLE site_deploys ADD COLUMN published_at TIMESTAMPTZ;
 
 -- A server deploy's modules (tar.gz), kept for the rollback window: the
 -- newest succeeded deploys of the site and its live one. Cloudflare keeps

@@ -1757,7 +1757,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	schemaHandler := newSchemaHandler(cfg, vc, store)
 	sitesSvc := newSitesService(cfg, sqlStore, service.NewSiteLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc), a.claimer)
 	startHostnameSweep(context.Background(), sitesSvc)
-	go reconcileServerSites(context.Background(), sitesSvc)
+	startServerSitesSweep(context.Background(), sitesSvc)
 	provSvc.SetSitePurger(sitesSvc)
 	provSvc.SetSiteRouter(sitesSvc)
 	builds := newSiteBuilds(siteBuildArgs{cfg: cfg, sqlStore: sqlStore, kube: k8sClient, vault: vc, sites: sitesSvc,

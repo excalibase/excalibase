@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // UnrouteProjectSites stops serving a project scheduled for deletion: the
@@ -100,6 +101,9 @@ func (s *Service) routeSiteHostnames(ctx context.Context, site *Site) error {
 	return s.refreshSiteHostnames(ctx, site, routing{serving: assumeServing, live: true})
 }
 
+// reconcileSiteTimeout bounds routing one site on or off: a KV write and its custom hostnames.
+const reconcileSiteTimeout = time.Minute
+
 // servable is whether the router may send traffic to the site's Worker: a
 // server site only while server sites are on, so switching them off stops their code.
 func (s *Service) servable(ctx context.Context, site *Site) bool {
@@ -107,8 +111,9 @@ func (s *Service) servable(ctx context.Context, site *Site) bool {
 }
 
 // ReconcileServerSites routes every live server site while server sites are
-// on, and unroutes all of them while they are off; it runs at start, since
-// the feature is decided then. Every site is tried; the failures are joined.
+// on, and unroutes all of them while they are off. It runs at start and, while
+// off, again on a timer, so a replica still on during a rollout cannot leave one
+// routed. Every site is tried; the failures are joined.
 func (s *Service) ReconcileServerSites(ctx context.Context) error {
 	if !s.Available() {
 		return nil
@@ -117,15 +122,20 @@ func (s *Service) ReconcileServerSites(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cdnCtx, cancel := context.WithTimeout(ctx, publishTimeout)
-	defer cancel()
 	var failures []error
 	for _, site := range held {
-		if err := s.reconcileServerSite(cdnCtx, site); err != nil {
+		if err := s.reconcileInTime(ctx, site); err != nil {
 			failures = append(failures, err)
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// reconcileInTime gives each site its own time, so one slow answer leaves no other site routed.
+func (s *Service) reconcileInTime(ctx context.Context, site *Site) error {
+	siteCtx, cancel := context.WithTimeout(ctx, reconcileSiteTimeout)
+	defer cancel()
+	return s.reconcileServerSite(siteCtx, site)
 }
 
 func (s *Service) reconcileServerSite(ctx context.Context, site *Site) error {
