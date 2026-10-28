@@ -19,6 +19,7 @@
 # TLS clients, backups, point-in-time and in-place restore, pause, purge.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG);
 # GRAPHQL_IMAGE a locally built engine image.
+# Every run checks the read address (EXC-666, read-address-journey.sh): one copy, none.
 # Every run walks realtime (EXC-612, realtime-journey.sh): a subscriber receives
 # a table's changes across a NATS restart, a pause and a resume.
 # Destroys the bundle's containers and volumes; never run it on an install you keep.
@@ -83,6 +84,7 @@ echo "== install"
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
+echo "FEATURE_DBREADADDRESS=true" >> "$W/.env"
 # The apps journey drives create_app through MCP, as a coding tool does (EXC-606).
 [ -n "${APPS:-}" ] && echo "FEATURE_MCP=true" >> "$W/.env"
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"
@@ -132,6 +134,8 @@ nets=$($DOCKER inspect "$TC" --format '{{range $k,$v := .NetworkSettings.Network
 tports=$($DOCKER port "$TC" 2>/dev/null | tr '\n' ' ')
 case "$tports" in "") ko "tenant port unknown" ;; *0.0.0.0*|*::*|*"[::]"*) ko "tenant port on all addresses: $tports" ;; *) ok "tenant port on loopback ($tports)" ;; esac
 $DOCKER logs excalibase-engine-proxy 2>&1 | grep -c ' 403 ' | xargs -I{} echo "info: proxy refusals during the run: {}"
+. "$TESTS/read-address-journey.sh"
+read_address_journey "$PID" postgres
 
 echo "== tier limits"
 mem=$($DOCKER inspect "$TC" --format '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}' 2>/dev/null)
