@@ -154,10 +154,21 @@ function forwardable(request) {
 function withSiteHeaders(response, hostname, ranCode) {
   const headers = siteHeaders(response.headers, hostname, ranCode);
   if (response.status === 101) {
+    if (!response.webSocket) {
+      return plainError(502, "This site could not be reached.");
+    }
     // A handshake sets cookies like any answer; only its socket is carried over.
     return new Response(null, { status: 101, webSocket: response.webSocket, headers });
   }
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  // Copied whole, so body encoding and other options the site set carry over.
+  const result = new Response(response.body, response);
+  for (const name of [...result.headers.keys()]) {
+    result.headers.delete(name);
+  }
+  for (const [name, value] of headers) {
+    result.headers.append(name, value);
+  }
+  return result;
 }
 
 // siteHeaders are the headers a site's answer may carry: never the platform's

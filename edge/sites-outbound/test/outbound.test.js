@@ -34,6 +34,7 @@ describe("the project's own API", () => {
   it.each([
     `https://${API}/${PROJECT}/graphql`,
     `https://${API}/${PROJECT}/api/v1/todos?limit=5`,
+    `https://${API}/${PROJECT}/graphql/`,
     `https://${API}/auth/${PROJECT}/${PROJECT}/token`,
     `https://${API}/functions/v1/${PROJECT}/hello`,
     `https://${API}/storage/v1/${PROJECT}/buckets/files/objects`,
@@ -47,9 +48,10 @@ describe("the project's own API", () => {
 
   it("is reached without headers in the platform's own namespace", async () => {
     const sent = withUpstream();
-    await call(`https://${API}/${PROJECT}/graphql`, { method: "POST", headers: { "x-excalibase-project": "other", authorization: "Bearer end-user" }, body: "{}" });
+    await call(`https://${API}/${PROJECT}/graphql`, { method: "POST", headers: { "x-excalibase-project": "other", "x-excalibase-publishable-key": "pk_live", authorization: "Bearer end-user" }, body: "{}" });
     expect(sent[0].request.headers.get("x-excalibase-project")).toBeNull();
     expect(sent[0].request.headers.get("authorization")).toBe("Bearer end-user");
+    expect(sent[0].request.headers.get("x-excalibase-publishable-key")).toBe("pk_live");
     expect(await sent[0].request.text()).toBe("{}");
   });
 
@@ -226,11 +228,13 @@ describe("a redirect to another origin", () => {
       request.url === "https://example.com/go"
         ? new Response(null, { status: 302, headers: { location: "https://elsewhere.example.org/" } })
         : new Response("there"));
-    await call("https://example.com/go", { headers: { authorization: "Bearer t", cookie: "s=1", "proxy-authorization": "x", accept: "text/html" } });
+    await call("https://example.com/go", { headers: { authorization: "Bearer t", cookie: "s=1", "proxy-authorization": "x", "x-api-key": "k", apikey: "k", accept: "text/html" } });
     const hop = sent[1].request.headers;
     expect(hop.get("authorization")).toBeNull();
     expect(hop.get("cookie")).toBeNull();
     expect(hop.get("proxy-authorization")).toBeNull();
+    expect(hop.get("x-api-key")).toBeNull();
+    expect(hop.get("apikey")).toBeNull();
     expect(hop.get("accept")).toBe("text/html");
   });
 
