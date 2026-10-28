@@ -64,7 +64,7 @@ type Options struct {
 	OutboundWorker string
 	// Outbound reads which outbound Worker the router's binding names; server
 	// code is published only while it names OutboundWorker. nil offers no server sites.
-	Outbound OutboundBinding
+	Outbound OutboundReader
 }
 
 // DeployLimiter answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.

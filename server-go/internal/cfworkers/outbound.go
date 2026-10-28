@@ -8,15 +8,21 @@ import (
 )
 
 type scriptSettings struct {
-	Bindings []struct {
-		Type      string `json:"type"`
-		Namespace string `json:"namespace"`
-		Outbound  *struct {
-			Worker struct {
-				Service string `json:"service"`
-			} `json:"worker"`
-		} `json:"outbound"`
-	} `json:"bindings"`
+	Bindings []settingsBinding `json:"bindings"`
+}
+
+type settingsBinding struct {
+	Type      string            `json:"type"`
+	Namespace string            `json:"namespace"`
+	Outbound  *outboundSettings `json:"outbound"`
+}
+
+type outboundSettings struct {
+	Worker outboundWorker `json:"worker"`
+}
+
+type outboundWorker struct {
+	Service string `json:"service"`
 }
 
 // DispatchOutbound answers the outbound Worker every one of the router

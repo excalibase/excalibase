@@ -18,8 +18,8 @@ const outboundCheckTTL = 5 * time.Minute
 // send site code's requests through the outbound Worker.
 var ErrOutboundNotBound = errors.New("server sites are unavailable: the sites router does not send their requests through the outbound Worker")
 
-// OutboundBinding reads the outbound Worker the router script's binding of the dispatch namespace names.
-type OutboundBinding interface {
+// OutboundReader reads the outbound Worker the router script's binding of the dispatch namespace names.
+type OutboundReader interface {
 	DispatchOutbound(ctx context.Context, routerScript string) (string, error)
 }
 

@@ -101,11 +101,7 @@ func encodeServerDeploy(server *ServerDeploy) (any, error) {
 	return encoded, nil
 }
 
-// deployColumns is every column scanDeploy reads, in its order.
-const deployColumns = `d.id, d.site_id, d.project_id, d.status, d.manifest, d.file_count, d.total_bytes, d.spa_fallback,
-		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at,
-		COALESCE(d.deploy_token_id, ''), COALESCE(d.deploy_token_name, ''), d.kind, d.server_config`
-
+// scanDeploy reads the columns GetDeploy and ListDeploys select, in their order.
 func scanDeploy(row rowScanner) (*Deploy, error) {
 	deploy := &Deploy{}
 	var manifest, server []byte
@@ -134,7 +130,9 @@ func scanDeploy(row rowScanner) (*Deploy, error) {
 }
 
 func (s *PostgresStore) GetDeploy(ctx context.Context, projectID, siteID, id string) (*Deploy, error) {
-	deploy, err := scanDeploy(s.db.QueryRowContext(ctx, `SELECT `+deployColumns+`
+	deploy, err := scanDeploy(s.db.QueryRowContext(ctx, `SELECT d.id, d.site_id, d.project_id, d.status, d.manifest, d.file_count, d.total_bytes, d.spa_fallback,
+		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at,
+		COALESCE(d.deploy_token_id, ''), COALESCE(d.deploy_token_name, ''), d.kind, d.server_config
 		FROM site_deploys d LEFT JOIN users u ON u.id = d.created_by
 		WHERE d.project_id = $1 AND d.site_id = $2 AND d.id = $3`, projectID, siteID, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -147,7 +145,9 @@ func (s *PostgresStore) GetDeploy(ctx context.Context, projectID, siteID, id str
 }
 
 func (s *PostgresStore) ListDeploys(ctx context.Context, projectID, siteID string, limit int) ([]*Deploy, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+deployColumns+`
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id, d.site_id, d.project_id, d.status, d.manifest, d.file_count, d.total_bytes, d.spa_fallback,
+		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at,
+		COALESCE(d.deploy_token_id, ''), COALESCE(d.deploy_token_name, ''), d.kind, d.server_config
 		FROM site_deploys d LEFT JOIN users u ON u.id = d.created_by
 		WHERE d.project_id = $1 AND d.site_id = $2 ORDER BY d.created_at DESC, d.id LIMIT $3`, projectID, siteID, limit)
 	if err != nil {
