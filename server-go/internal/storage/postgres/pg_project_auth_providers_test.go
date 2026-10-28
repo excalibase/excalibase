@@ -144,6 +144,54 @@ func TestAuthSignIn_RestoredCopyCarriesThePolicy(t *testing.T) {
 	}
 }
 
+func TestAuthSignIn_GuestSwitchAndCaptchaAreStoredApart(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	saveAuthSettingsProject(t, store, "proj_guest")
+	// The captcha column may be written before any settings row exists.
+	if err := store.SetGuestCaptchaSecretSet(ctx, "proj_guest", true); err != nil {
+		t.Fatalf("captcha: %v", err)
+	}
+	signIn := domain.ProjectAuthSignIn{RedirectURLs: []string{}, AllowNewUsers: true, GuestSignInEnabled: true}
+	if err := store.SetAuthSettingsWithSignIn(ctx, "proj_guest", domain.ProjectAuthSettings{}, signIn); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	got, err := store.GetAuthSignIn(ctx, "proj_guest")
+	if err != nil || !got.GuestSignInEnabled || !got.GuestCaptchaSecretSet || !got.AllowNewUsers {
+		t.Fatalf("a settings write must keep the captcha column: %+v, %v", got, err)
+	}
+	if err := store.SetGuestCaptchaSecretSet(ctx, "proj_guest", false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.GetAuthSignIn(ctx, "proj_guest"); got.GuestCaptchaSecretSet || !got.GuestSignInEnabled {
+		t.Fatalf("clearing the captcha touched the switch: %+v", got)
+	}
+}
+
+func TestAuthSignIn_RestoredCopyTakesGuestsOnlyWithoutACaptcha(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	for i, withCaptcha := range []bool{false, true} {
+		src, dst := fmt.Sprintf("proj_guest_src%d", i), fmt.Sprintf("proj_guest_copy%d", i)
+		saveAuthSettingsProject(t, store, src)
+		saveAuthSettingsProject(t, store, dst)
+		signIn := domain.ProjectAuthSignIn{RedirectURLs: []string{}, AllowNewUsers: true, GuestSignInEnabled: true}
+		if err := store.SetAuthSettingsWithSignIn(ctx, src, domain.ProjectAuthSettings{}, signIn); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetGuestCaptchaSecretSet(ctx, src, withCaptcha); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CopyRestoredSettings(ctx, src, dst); err != nil {
+			t.Fatalf("copy: %v", err)
+		}
+		got, err := store.GetAuthSignIn(ctx, dst)
+		if err != nil || got.GuestCaptchaSecretSet || got.GuestSignInEnabled == withCaptcha {
+			t.Fatalf("captcha=%v: copy = %+v, %v", withCaptcha, got, err)
+		}
+	}
+}
+
 func TestAuthProviders_DeleteRemovesOneRowOnly(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()

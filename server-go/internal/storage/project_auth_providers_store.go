@@ -26,4 +26,7 @@ type ProjectAuthSignInStore interface {
 	GetAuthSignIn(ctx context.Context, projectID string) (domain.ProjectAuthSignIn, error)
 	// SetAuthSettingsWithSignIn upserts the settings and the policy together.
 	SetAuthSettingsWithSignIn(ctx context.Context, projectID string, settings domain.ProjectAuthSettings, signIn domain.ProjectAuthSignIn) error
+	// SetGuestCaptchaSecretSet records whether the vault holds the project's
+	// Turnstile secret, leaving every other setting as stored.
+	SetGuestCaptchaSecretSet(ctx context.Context, projectID string, set bool) error
 }

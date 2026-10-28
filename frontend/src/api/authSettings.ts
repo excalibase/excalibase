@@ -9,6 +9,9 @@ export interface AuthSettings {
   allowNewUsers?: boolean;
   // Only while the authotp feature is on.
   emailOtpEnabled?: boolean;
+  // Only while the authguest feature is on; the Turnstile secret itself is write-only.
+  guestSignInEnabled?: boolean;
+  guestCaptchaSecretSet?: boolean;
 }
 
 const authSettingsKey = (projectId: string) => ['auth-settings', projectId] as const;
@@ -69,6 +72,25 @@ export const useAuthSettings = (projectId: string) =>
     queryFn: async () => (await api.get<AuthSettings>(authSettingsPath(projectId))).data,
     enabled: !!projectId,
   });
+
+// The guest Turnstile secret is written and removed on its own path; the
+// answer carries the sign-in fields, merged into the cached settings.
+export const useGuestCaptcha = (projectId: string) => {
+  const queryClient = useQueryClient();
+  const merge = (answer: Partial<AuthSettings>) =>
+    queryClient.setQueryData<AuthSettings>(authSettingsKey(projectId), (current) => (current ? { ...current, ...answer } : current));
+  return {
+    save: useMutation({
+      mutationFn: async (secretKey: string) =>
+        (await api.put<Partial<AuthSettings>>(`${authSettingsPath(projectId)}/guest-captcha`, { secretKey })).data,
+      onSuccess: merge,
+    }),
+    remove: useMutation({
+      mutationFn: async () => (await api.delete<Partial<AuthSettings>>(`${authSettingsPath(projectId)}/guest-captcha`)).data,
+      onSuccess: merge,
+    }),
+  };
+};
 
 export const useSaveAuthSettings = (projectId: string) => {
   const queryClient = useQueryClient();

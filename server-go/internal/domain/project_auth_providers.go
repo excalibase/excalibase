@@ -68,6 +68,11 @@ type ProjectAuthSignIn struct {
 	AllowNewUsers bool
 	// EmailOTPEnabled is the project's switch for sign-in by emailed link or code.
 	EmailOTPEnabled bool
+	// GuestSignInEnabled is the project's switch for guest accounts.
+	GuestSignInEnabled bool
+	// GuestCaptchaSecretSet says the vault holds a Turnstile secret, which
+	// makes guest sign-up require a captcha.
+	GuestCaptchaSecretSet bool
 }
 
 // DefaultAuthSignIn is what a project without a settings row gets.
@@ -226,4 +231,26 @@ type SignInMailProject struct {
 	EmailOTPEnabled bool
 	// OAuthEnabled is whether any Google/GitHub sign-in row is switched on.
 	OAuthEnabled bool
+}
+
+// GuestCaptchaSecretPath is the vault path of the project's Turnstile secret,
+// under projects/{id}/ so deleting the project purges it.
+func GuestCaptchaSecretPath(projectID string) string {
+	return "projects/" + projectID + "/auth/captcha"
+}
+
+// ErrInvalidGuestCaptchaSecret refuses a secret that is empty, too long or not printable ASCII.
+var ErrInvalidGuestCaptchaSecret = errors.New("the Turnstile secret key must be 1 to 256 printable characters without spaces")
+
+// ValidateGuestCaptchaSecret checks a Turnstile secret key's shape.
+func ValidateGuestCaptchaSecret(secret string) error {
+	if secret == "" || len(secret) > 256 {
+		return ErrInvalidGuestCaptchaSecret
+	}
+	for _, c := range secret {
+		if c <= ' ' || c > '~' {
+			return ErrInvalidGuestCaptchaSecret
+		}
+	}
+	return nil
 }

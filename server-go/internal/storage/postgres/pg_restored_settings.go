@@ -11,8 +11,9 @@ import (
 // copyRestoredSettingsSQL copies, in dependency order, what decides who may
 // reach a project through its API. CORS origins an app added stay behind: the
 // app is not part of the copy. OAuth providers stay behind too: the copy has
-// its own callback URL and no client secret in the vault. $1 is the source,
-// $2 the copy.
+// its own callback URL and no client secret in the vault. Guests come over only
+// when the source asked no captcha, since the copy has no Turnstile secret.
+// $1 is the source, $2 the copy.
 var copyRestoredSettingsSQL = []struct{ what, query string }{
 	{"table permissions", `
 		INSERT INTO api_permissions (project_id, table_key, role_name, operation, definition)
@@ -33,8 +34,10 @@ var copyRestoredSettingsSQL = []struct{ what, query string }{
 			ORDER BY o.n)
 		FROM project_cors_settings c WHERE c.project_id = $1`},
 	{"auth settings", `
-		INSERT INTO project_auth_settings (project_id, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled)
-		SELECT $2, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled FROM project_auth_settings WHERE project_id = $1`},
+		INSERT INTO project_auth_settings (project_id, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled, guest_sign_in_enabled)
+		SELECT $2, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled,
+		       guest_sign_in_enabled AND NOT guest_captcha_secret_set
+		FROM project_auth_settings WHERE project_id = $1`},
 }
 
 // CopyRestoredSettings carries the source's API settings onto a restored copy

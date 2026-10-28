@@ -5,10 +5,15 @@ import { api } from './client';
 // admins may make them, and every role change is audited.
 export interface EndUser {
   id: number;
+  // Empty for a guest account (EXC-662), which has no address.
   email: string;
   role: string;
   allowedRoles: string[];
+  isGuest?: boolean;
 }
+
+// How Studio names an end user: the address, or the id when it has none.
+export const endUserName = (user: Pick<EndUser, 'id' | 'email'>): string => user.email || `Guest ${user.id}`;
 
 export interface EndUserPage {
   users: EndUser[];

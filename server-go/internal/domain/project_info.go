@@ -31,6 +31,9 @@ type ProjectInfo struct {
 	// UserAPIEnabled is sent, as true, only while the authuser flag is on;
 	// nil keeps the key off the wire.
 	UserAPIEnabled *bool `json:"userApiEnabled,omitempty"`
+	// StableSubject is sent, as true, only while the authguest flag is on:
+	// the auth service then signs sub as the account id, not its address.
+	StableSubject *bool `json:"stableSubject,omitempty"`
 }
 
 // ProjectOAuthInfo is the end-user OAuth policy the auth service enforces:
@@ -42,4 +45,8 @@ type ProjectOAuthInfo struct {
 	OAuthProviders []OAuthProviderInfo `json:"oauthProviders"`
 	// EmailOTPEnabled is sent only while authotp is on.
 	EmailOTPEnabled *bool `json:"emailOtpEnabled,omitempty"`
+	// GuestSignInEnabled is sent only while authguest is on; the captcha key
+	// only when the project also has a Turnstile secret.
+	GuestSignInEnabled  *bool `json:"guestSignInEnabled,omitempty"`
+	GuestCaptchaEnabled bool  `json:"guestCaptchaEnabled,omitempty"`
 }

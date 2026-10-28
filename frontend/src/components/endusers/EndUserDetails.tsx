@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 import {
   deleteEndUser,
+  endUserName,
   getEndUser,
   updateEndUser,
   type EndUser,
@@ -44,7 +45,7 @@ export function EndUserDetails({ projectId, user, onDeleted }: Props) {
         <dt className="text-text-tertiary">Full name</dt>
         <dd className="text-text-primary">{detail.data.fullName || '—'}</dd>
         <dt className="text-text-tertiary">Email</dt>
-        <dd className="text-text-primary">{detail.data.email}</dd>
+        <dd className="text-text-primary">{detail.data.email || '—'}</dd>
       </dl>
       <div>
         <h4 className="text-xs font-medium text-text-secondary mb-1">
@@ -81,7 +82,7 @@ function AppMetadataEditor({
     mutationFn: (appMetadata: Record<string, unknown>) =>
       updateEndUser(projectId, detail.id, { appMetadata }),
     onSuccess: (updated) => {
-      toast.success(`App metadata of ${detail.email} saved`);
+      toast.success(`App metadata of ${endUserName(detail)} saved`);
       qc.setQueryData(endUserKey(projectId, detail.id), updated);
     },
     onError: (err) => setError(apiErrorMessage(err, 'The app metadata could not be saved.')),
@@ -113,7 +114,7 @@ function AppMetadataEditor({
       </label>
       <textarea
         id={`app-metadata-${detail.id}`}
-        aria-label={`App metadata of ${detail.email}`}
+        aria-label={`App metadata of ${endUserName(detail)}`}
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={6}
@@ -145,7 +146,7 @@ function DeleteEndUser({ projectId, user, onDeleted }: Props) {
   const remove = useMutation({
     mutationFn: () => deleteEndUser(projectId, user.id),
     onSuccess: () => {
-      toast.success(`${user.email} was deleted`);
+      toast.success(`${endUserName(user)} was deleted`);
       qc.invalidateQueries({ queryKey: ['end-users', projectId] });
       onDeleted();
     },
@@ -175,9 +176,9 @@ function DeleteEndUser({ projectId, user, onDeleted }: Props) {
           return remove.mutateAsync().catch(() => undefined);
         }}
         title="Delete this end user?"
-        message={`${user.email} loses their account and every session. This cannot be undone.`}
+        message={`${endUserName(user)} loses their account and every session. This cannot be undone.`}
         confirmLabel="Delete permanently"
-        confirmText={user.email}
+        confirmText={endUserName(user)}
         destructive
         loading={remove.isPending}
       />

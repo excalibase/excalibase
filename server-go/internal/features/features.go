@@ -49,11 +49,14 @@ const (
 	// AuthUser is end-user account self-service: metadata, profile and email
 	// change, sign-out scopes, and Studio's per-user details and delete.
 	AuthUser Feature = "authuser"
+	// AuthGuest is end-user guest accounts (no address, role guest) and the
+	// stable token subject: sub becomes the account id.
+	AuthGuest Feature = "authguest"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest}
 }
 
 type Flags interface {

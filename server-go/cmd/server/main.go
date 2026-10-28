@@ -2463,16 +2463,30 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	// auth service's signup/redirect behavior, so reads and writes carry the
 	// same Developer+ gate as the other data-plane authoring surfaces.
 	r.Route("/api/projects/{projectId}/auth-settings", func(r chi.Router) {
-		r.Use(custommw.TenantContext)
-		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
-		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
-		// With end-user sign-in on, these settings decide where sign-in codes go (EXC-662).
-		r.Use(features.WhenAnyOn(d.features, []features.Feature{features.AuthOAuth, features.AuthOTP},
-			custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore)))
-		r.Use(d.activity)
-		r.Get("/", d.provHandler.GetAuthSettings)
-		r.Put("/", d.provHandler.PutAuthSettings)
+		r.Group(func(r chi.Router) {
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+			// With end-user sign-in on, these settings decide where sign-in codes go (EXC-662).
+			r.Use(features.WhenAnyOn(d.features, []features.Feature{features.AuthOAuth, features.AuthOTP, features.AuthGuest},
+				custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore)))
+			r.Use(d.activity)
+			r.Get("/", d.provHandler.GetAuthSettings)
+			r.Put("/", d.provHandler.PutAuthSettings)
+		})
+		// The guest Turnstile secret (EXC-662): Admin-only, written to the vault;
+		// the flag goes first so that while it is off these answer as never mounted.
+		r.Group(func(r chi.Router) {
+			r.Use(features.Require(d.features, features.AuthGuest))
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
+			r.Use(d.activity)
+			r.Put("/guest-captcha", d.provHandler.PutGuestCaptcha)
+			r.Delete("/guest-captcha", d.provHandler.DeleteGuestCaptcha)
+		})
 	})
 	r.Route("/api/projects/{projectId}/realtime", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
