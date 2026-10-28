@@ -39,9 +39,12 @@ func (f *fakeAllowListAPI) SetAllowedSources(_ context.Context, _ string, list d
 	if f.setErr != nil {
 		return service.DBAllowListView{}, f.setErr
 	}
+	previous := f.current
 	f.sets = append(f.sets, list)
 	f.current = list
-	return f.view(), nil
+	view := f.view()
+	view.PreviousAccess, view.PreviousSources = previous.Access, previous.Sources
+	return view, nil
 }
 
 func allowListRouter(api DBAllowListAPI, audit auditWriter) http.Handler {
@@ -154,10 +157,21 @@ func TestAllowListPutRefusals(t *testing.T) {
 			if rec.Code != tc.status {
 				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status, rec.Body)
 			}
-			if len(audit.entries) != 0 {
-				t.Fatal("a refused change is not audited as a change")
+			if tc.setErr == nil && len(audit.entries) != 0 {
+				t.Fatal("a request refused before the service is not audited")
+			}
+			if tc.setErr != nil && (len(audit.entries) != 1 || !strings.Contains(audit.entries[0].Details, `"outcome":"refused"`)) {
+				t.Fatalf("a refused change is audited with its outcome: %+v", audit.entries)
 			}
 		})
+	}
+}
+
+func TestDBEndpointPutReportsAnUnconfirmedListAsABadGateway(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeDBEndpointError(rec, service.ErrDBAllowListNotObserved)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d", rec.Code)
 	}
 }
 

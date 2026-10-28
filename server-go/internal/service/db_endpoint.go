@@ -420,6 +420,11 @@ func (s *DBEndpointService) mongoPort(ctx context.Context, inst *domain.Database
 // quarantine and the row goes. Idempotent, because a teardown that failed
 // part way is retried from the top.
 func (s *DBEndpointService) Release(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if s != nil && inst != nil {
+		if err := s.forgetSourceAllowList(ctx, inst.ProjectID); err != nil {
+			return err
+		}
+	}
 	if s.inert(inst) {
 		return nil
 	}
@@ -427,9 +432,6 @@ func (s *DBEndpointService) Release(ctx context.Context, inst *domain.DatabaseIn
 		return err
 	}
 	if err := s.releasePorts(ctx, inst); err != nil {
-		return err
-	}
-	if err := s.forgetSourceAllowList(ctx, inst.ProjectID); err != nil {
 		return err
 	}
 	return s.endpoints.DeleteDatabaseEndpoint(ctx, inst.ProjectID)

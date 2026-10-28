@@ -112,3 +112,15 @@ func TestDBSourceAllowListRanges(t *testing.T) {
 		t.Fatal("SourceRanges must return a copy")
 	}
 }
+
+// The shared address is IPv4: a list of IPv6 entries alone matches no client,
+// and kube-proxy drops a list with no entry of the Service's family.
+func TestParseDBSourceAllowListNeedsAnIPv4Entry(t *testing.T) {
+	_, err := ParseDBSourceAllowList(false, []string{"2001:db8::/32"})
+	if !errors.Is(err, ErrInvalidDBSourceAllowList) || !strings.Contains(err.Error(), "IPv4") {
+		t.Fatalf("want an IPv4 refusal, got %v", err)
+	}
+	if _, err := ParseDBSourceAllowList(false, []string{"2001:db8::/32", "198.51.100.7"}); err != nil {
+		t.Fatalf("an IPv6 entry beside an IPv4 one is kept: %v", err)
+	}
+}
