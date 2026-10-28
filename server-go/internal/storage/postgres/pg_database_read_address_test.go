@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -117,5 +118,26 @@ func TestReadAddress_DeleteRemovesTheReaderRow(t *testing.T) {
 	}
 	if after.Port != 0 {
 		t.Fatalf("reader row survived the delete: %+v", after)
+	}
+}
+
+func TestReadAddress_RollbackIsRefusedWhileAReadPortIsHeld(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	down, err := os.ReadFile("migrations/000090_database_endpoint_reader_role.down.sql")
+	if err != nil {
+		t.Fatalf("read down migration: %v", err)
+	}
+	if _, err := store.AllocateDatabaseEndpointPort(ctx, "proj-reader008", domain.DBEndpointRoleReader, endpointWindow(t, 31800, 31899), time.Hour); err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, string(down)); err == nil {
+		t.Fatal("rolled back with a read port held")
+	}
+	if err := store.ReleaseDatabaseEndpointPort(ctx, "proj-reader008", domain.DBEndpointRoleReader, time.Now()); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, string(down)); err != nil {
+		t.Fatalf("rollback with no read port held: %v", err)
 	}
 }
