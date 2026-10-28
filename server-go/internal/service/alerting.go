@@ -152,6 +152,34 @@ func (s *AlertingService) CheckMetrics(metrics *domain.DatabaseMetrics) {
 	}
 }
 
+// AlertChange is what one Track call raised or resolved, for notifying.
+type AlertChange struct {
+	Raised   *domain.Alert
+	Resolved *domain.Alert
+}
+
+// Track keeps one open alert per project and metric while breached is true
+// and resolves it once it is not; newAlert builds the alert to raise.
+func (s *AlertingService) Track(projectID, metric string, breached bool, newAlert func() domain.Alert) AlertChange {
+	open := findAlert(s.GetActiveAlertsForProject(projectID), metric)
+	switch {
+	case breached && open == nil:
+		alert := newAlert()
+		alert.ProjectID, alert.Metric = projectID, metric
+		if alert.Timestamp == nil {
+			alert.Timestamp = &domain.FlexTime{Time: time.Now()}
+		}
+		s.AddAlert(alert)
+		return AlertChange{Raised: &alert}
+	case !breached && open != nil:
+		resolved := *open
+		s.resolve(resolved)
+		resolved.Resolved = true
+		return AlertChange{Resolved: &resolved}
+	}
+	return AlertChange{}
+}
+
 func findAlert(alerts []domain.Alert, metric string) *domain.Alert {
 	for i := range alerts {
 		if alerts[i].Metric == metric {

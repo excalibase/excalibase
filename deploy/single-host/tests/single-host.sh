@@ -47,6 +47,12 @@ echo "$documentdb" | grep -q 'DOCUMENTDB_ENABLED: "true"' \
   || { echo "DOCUMENTDB_ENABLED=true does not reach provisioning" >&2; exit 1; }
 echo "$documentdb" | grep -q "PROXY_NETNS_JOIN_IMAGES: $gateway\$" \
   || { echo "the proxy does not admit the catalogue's gateway $gateway" >&2; exit 1; }
+# Host monitoring (EXC-670): the flag and the one read-only host file reach provisioning.
+hostmetrics=$(render FEATURE_HOSTMETRICS=true HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev)
+echo "$hostmetrics" | grep -q 'FEATURE_HOSTMETRICS: "true"' \
+  || { echo "FEATURE_HOSTMETRICS=true does not reach provisioning" >&2; exit 1; }
+echo "$hostmetrics" | grep -q 'source: /proc/1/net/dev' \
+  || { echo "the host's network counters are not mounted with --host-metrics" >&2; exit 1; }
 echo "single-host required settings ok"
 # Email through the operator's own relay (EXC-580) or SES: every setting in .env reaches provisioning.
 out=$(render EMAIL_PROVIDER=smtp SMTP_HOST=mail.example.test SMTP_PORT=2587 SMTP_TLS=starttls \

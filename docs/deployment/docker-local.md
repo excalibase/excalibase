@@ -309,6 +309,47 @@ docker port excalibase-<project>-postgres           # 5432 and 10260 on 127.0.0.
 |---|---|---|
 | `DOCUMENTDB_ENABLED` | unset (`true` with `--documentdb`) | DocumentDB projects on this host |
 
+## Host monitoring
+
+Studio's Host page (Platform, Host) shows the machine and every container on it,
+the platform's and the projects', when the install asks for it (EXC-670):
+
+```bash
+./init.sh --domain example.com --admin-email you@example.com --host-metrics
+docker compose up -d
+```
+
+Once a minute provisioning records the host's CPU, memory and swap, the disk
+holding the engine's storage, disk reads and writes, network traffic, load and
+temperatures (where the machine has sensors), and each container's CPU, memory
+against its limit, and network. Host figures are kept 30 days; container
+figures every minute for 7 days, then one every 10 minutes up to 30 days. A
+project's Metrics page shows its database's CPU, memory, connections and size,
+and its own containers; members of a project see only that project's.
+
+No agent is installed. The host figures come from what an unprivileged
+container already sees of `/proc` and `/sys`; `--host-metrics` adds one
+read-only mount, the host's `/proc/1/net/dev`, for the network counters (without
+it the network figure is the containers' sum, and Studio says so). Container
+figures come through the engine proxy, which answers a one-sample stats call
+for a container provisioning manages, and for the platform's own containers by
+their exact names a stats call and their state only, never their settings,
+logs or a shell.
+
+Alerts: in Studio's Host page, Alert settings. Host CPU, memory, disk (default
+90 %), temperature (85 °C), 5-minute load and network, averaged over a window
+(5 minutes); and a platform container, or the database of an active project,
+that stops, goes missing or reports unhealthy for the down time (2 minutes).
+Alerts show on the Alerts page and go to the email recipients you list (through
+the install's email settings) and to one webhook: a public `https://` URL on
+port 443, sent JSON with a `text` field that Slack, Mattermost and Google Chat
+read; the URL is kept in the vault and shown by its host only.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_HOSTMETRICS` | unset (`true` with `--host-metrics`) | host monitoring, its Studio pages and alerts |
+| `HOST_METRICS_NET_DEV_SOURCE` | unset (`/proc/1/net/dev` with `--host-metrics`) | the host file mounted for network counters |
+
 ## Refusals you may see
 
 - `run ./init.sh first` — a required value is missing from `.env`.
@@ -333,6 +374,7 @@ docker port excalibase-<project>-postgres           # 5432 and 10260 on 127.0.0.
 | SDK keys (publishable, secret) | yes |
 | Containers (app hosting) | yes, with `--apps` (see Apps) |
 | DocumentDB projects | yes, with `--documentdb` (see DocumentDB projects) |
+| Host and container monitoring, alerts | yes, with `--host-metrics` (see Host monitoring) |
 | Edge functions, realtime | no (Kubernetes only) |
 | High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
 
@@ -350,7 +392,9 @@ engine has `runsc`, else with `--app-sandbox none`, which the run prints).
 created through Studio's API, mongosh on the host inserting and finding over
 verified TLS, Studio's document browser, a read-only Mongo user, pause, resume,
 a backup restored into a new project that serves Mongo again, and a delete.
-`MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
+`HOST_METRICS=1` installs with `--host-metrics` and walks host monitoring: host
+and container samples, the database's figures, a stopped database raising its
+project's alert and the restart resolving it. `MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
 initializes, restarts and unseals the vault with the CLI. It destroys the bundle's containers and
 volumes: never run it on an install you keep. CI runs it on every change to the
 bundle or the engine path; for Podman, `COMPOSE="podman compose" DOCKER=podman

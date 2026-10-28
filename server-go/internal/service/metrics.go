@@ -31,6 +31,9 @@ type MetricsService struct {
 	alerts     *AlertingService
 	tierLimits TierLimits
 	requests   RequestSampler
+	// singleHost and host sample a Docker or Podman host (EXC-670); nil elsewhere.
+	singleHost SingleHostDatabases
+	host       LoopSampler
 }
 
 func NewMetricsService(store storage.InstanceStore, client k8s.KubeClient, storagePath string) *MetricsService {
@@ -102,6 +105,9 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 		MetricsAvailable: true,
 	}
 
+	if s.singleHostSampled(inst) {
+		return s.collectSingleHostMetrics(ctx, inst, metrics)
+	}
 	if s.k8sClient == nil {
 		metrics.MetricsAvailable = false
 		reason := "database metrics are read from Kubernetes; this installation runs its databases on a single host"

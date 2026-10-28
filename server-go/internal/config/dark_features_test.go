@@ -29,6 +29,9 @@ func TestLoad_EachDarkFeatureIsTurnedOnByItsOwnVariable(t *testing.T) {
 				t.Setenv(other, "")
 			}
 			t.Setenv(env, "true")
+			if feature == features.HostMetrics {
+				t.Setenv("PROVISIONER_MODE", "docker")
+			}
 			flags := Load().Features()
 			for _, each := range features.All() {
 				if got := flags.Enabled(context.Background(), each); got != (each == feature) {
@@ -87,5 +90,20 @@ func TestDarkFeatures_AuthOTPVariable(t *testing.T) {
 func TestDarkFeatures_AuthUserVariable(t *testing.T) {
 	if got := featureEnv[features.AuthUser]; got != "FEATURE_AUTHUSER" {
 		t.Errorf("auth user variable = %q", got)
+	}
+}
+
+// EXC-670: the single-host compose file sets this exact name; Kubernetes ignores it.
+func TestDarkFeatures_HostMetricsIsOnOnlyOnASingleHost(t *testing.T) {
+	if got := featureEnv[features.HostMetrics]; got != "FEATURE_HOSTMETRICS" {
+		t.Errorf("host metrics variable = %q", got)
+	}
+	on := AppConfig{DarkFeatures: []features.Feature{features.HostMetrics, features.MCP}}
+	for mode, want := range map[string]bool{"docker": true, "kubernetes": false, "": false} {
+		on.ProvisionerMode = mode
+		flags := on.Features()
+		if flags.Enabled(context.Background(), features.HostMetrics) != want || !flags.Enabled(context.Background(), features.MCP) {
+			t.Errorf("mode %q: hostmetrics=%v mcp=%v", mode, flags.Enabled(context.Background(), features.HostMetrics), flags.Enabled(context.Background(), features.MCP))
+		}
 	}
 }
