@@ -15,6 +15,8 @@ import (
 
 // fakeAllowListStore keeps each project's choice in memory.
 type fakeAllowListStore struct {
+	getErr  error
+	setErr  error
 	mu      sync.Mutex
 	lists   map[string]domain.DBSourceAllowList
 	deletes []string
@@ -27,6 +29,9 @@ func newFakeAllowListStore() *fakeAllowListStore {
 func (f *fakeAllowListStore) GetDBSourceAllowList(_ context.Context, projectID string) (domain.DBSourceAllowList, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return domain.DBSourceAllowList{}, f.getErr
+	}
 	if list, ok := f.lists[projectID]; ok {
 		return list, nil
 	}
@@ -36,6 +41,9 @@ func (f *fakeAllowListStore) GetDBSourceAllowList(_ context.Context, projectID s
 func (f *fakeAllowListStore) SetDBSourceAllowList(_ context.Context, list domain.DBSourceAllowList) (domain.DBSourceAllowList, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.setErr != nil {
+		return domain.DBSourceAllowList{}, f.setErr
+	}
 	f.lists[list.ProjectID] = list
 	return list, nil
 }
@@ -369,5 +377,64 @@ func TestAChangeReportsThePreviousChoiceReadUnderTheLease(t *testing.T) {
 	view, err := h.svc.SetAllowedSources(ctx, endpointProject, mustAllowList(t, false, "198.51.100.7"))
 	if err != nil || view.PreviousAccess != domain.DBSourceAccessAny || len(view.PreviousSources) != 0 {
 		t.Fatalf("view %+v, %v", view, err)
+	}
+}
+
+func TestAllowListRefusalsAndStoreFailures(t *testing.T) {
+	ctx := context.Background()
+	h := newEndpointHarness(t, "ACTIVE")
+	h.withAllowList(false)
+	if _, err := h.svc.AllowedSources(ctx, endpointProject); !errors.Is(err, ErrDBAllowListOff) {
+		t.Errorf("flag off read: %v", err)
+	}
+
+	lists := h.withAllowList(true)
+	if _, err := h.svc.AllowedSources(ctx, "proj-unknown"); err == nil {
+		t.Error("an unknown project has no allow-list")
+	}
+	if _, err := h.svc.SetAllowedSources(ctx, endpointProject, domain.DBSourceAllowList{}); !errors.Is(err, domain.ErrInvalidDBSourceAllowList) {
+		t.Errorf("unset is not a choice: %v", err)
+	}
+	if _, err := h.svc.SetAllowedSources(ctx, "proj-unknown", mustAllowList(t, true)); err == nil {
+		t.Error("an unknown project cannot be changed")
+	}
+
+	boom := errors.New("store down")
+	lists.getErr = boom
+	if _, err := h.svc.AllowedSources(ctx, endpointProject); !errors.Is(err, boom) {
+		t.Errorf("read failure: %v", err)
+	}
+	if _, err := h.svc.SetAllowedSources(ctx, endpointProject, mustAllowList(t, true)); !errors.Is(err, boom) {
+		t.Errorf("previous read failure: %v", err)
+	}
+	if _, err := h.svc.SetPublic(ctx, endpointProject, true); !errors.Is(err, boom) {
+		t.Errorf("open with an unreadable choice: %v", err)
+	}
+	if err := h.svc.Publish(ctx, h.instance); err != nil && !errors.Is(err, boom) {
+		t.Errorf("publish: %v", err)
+	}
+
+	lists.getErr = nil
+	if _, err := h.svc.SetAllowedSources(ctx, endpointProject, mustAllowList(t, true)); err != nil {
+		t.Fatalf("allow any: %v", err)
+	}
+	if _, err := h.svc.SetPublic(ctx, endpointProject, true); err != nil {
+		t.Fatalf("SetPublic: %v", err)
+	}
+	lists.setErr = boom
+	if _, err := h.svc.SetAllowedSources(ctx, endpointProject, mustAllowList(t, false, "198.51.100.7")); !errors.Is(err, boom) {
+		t.Errorf("record failure: %v", err)
+	}
+	if ranges, _ := h.publicSpecRanges(t); ranges != nil {
+		t.Errorf("a change that was not recorded is put back, got %v", ranges)
+	}
+}
+
+func TestAllowListChangeNeedsTheLeaseStore(t *testing.T) {
+	h := newEndpointHarness(t, "ACTIVE")
+	h.withAllowList(true)
+	h.svc.claimer = failingClaimer{err: errors.New("lease store down")}
+	if _, err := h.svc.SetAllowedSources(context.Background(), endpointProject, mustAllowList(t, true)); err == nil || !strings.Contains(err.Error(), "lease store down") {
+		t.Fatalf("got %v", err)
 	}
 }
