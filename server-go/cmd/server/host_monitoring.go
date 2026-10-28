@@ -45,6 +45,8 @@ type hostMonitoringDeps struct {
 	mail      email.Sender
 	metrics   *service.MetricsService
 	alerts    *service.AlertingService
+	// provisioning searches the database containers' logs; nil leaves them refused.
+	provisioning *service.ProvisioningService
 }
 
 // wireHostMonitoring samples the host and its containers on the metrics loop
@@ -75,6 +77,9 @@ func wireHostMonitoring(d hostMonitoringDeps) *handler.HostMonitoringHandler {
 	})
 	d.metrics.SetHostSampler(monitor)
 	d.metrics.SetSingleHost(hostmonitor.NewDatabases(monitor, d.docker))
+	if d.provisioning != nil {
+		d.provisioning.SetSingleHostLogs(engine)
+	}
 	settings := hostmonitor.NewSettings(tables, d.vault).WithNotifier(notifier)
 	log.Printf("host monitoring: on; %d platform containers", len(d.cfg.HostMetrics.Containers))
 	return handler.NewHostMonitoringHandler(tables, settings, tables)
