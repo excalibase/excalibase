@@ -148,6 +148,8 @@ export default defineConfig({
         'src/api/logDrains.ts',
         'src/components/LogDrainsCard.tsx',
         'src/components/LogDrainForm.tsx',
+        'src/api/allowedSources.ts',
+        'src/components/DatabaseAllowList.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

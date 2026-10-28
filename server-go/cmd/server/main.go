@@ -215,10 +215,12 @@ func runServer(cfg config.AppConfig) {
 	if dbEndpointSvc != nil {
 		dbEndpoints = dbEndpointSvc
 		deps.provHandler.SetDBEndpointService(dbEndpointSvc)
+		deps.dbAllowListHandler.SetAPI(dbEndpointSvc)
 		provSvc.SetPublicEndpointReconciler(dbEndpointSvc)
 	}
 	if singleHostEndpoints := buildSingleHostEndpoints(cfg, store, dockerClientRef); singleHostEndpoints != nil {
 		deps.provHandler.SetDBEndpointService(singleHostEndpoints)
+		deps.dbAllowListHandler.SetAPI(singleHostEndpoints)
 	}
 
 	stopCallout := startNatsAuthCallout(cfg, sqlStore)
@@ -699,6 +701,23 @@ func newLogDrainsHandler(drains *service.LogDrainService, sqlStore any) *handler
 	return handler.NewLogDrainsHandler(drains, audit)
 }
 
+// allowListRoutes mounts the allow-list even before its service is wired,
+// answering 503 until it is.
+func (d *handlerDeps) allowListRoutes() func(chi.Router) {
+	if d.dbAllowListHandler == nil {
+		return handler.NewDBAllowListHandler(nil, nil).Routes
+	}
+	return d.dbAllowListHandler.Routes
+}
+
+// newDBAllowListHandler starts without its service, which is wired once built.
+func newDBAllowListHandler(sqlStore any) *handler.DBAllowListHandler {
+	audit, _ := sqlStore.(interface {
+		LogAudit(ctx context.Context, entry *domain.AuditEntry) error
+	})
+	return handler.NewDBAllowListHandler(nil, audit)
+}
+
 func newLogForwarderHandler(drains *service.LogDrainService, token string) *handler.LogForwarderHandler {
 	if drains == nil {
 		return nil
@@ -1072,6 +1091,9 @@ type handlerDeps struct {
 	// storageSvc is nil when R2 is not configured; the reaper is started
 	// from it after the handlers are built.
 	storageSvc *storagesvc.Service
+
+	// dbAllowListHandler serves the public port's allow-list (EXC-665).
+	dbAllowListHandler *handler.DBAllowListHandler
 }
 
 // newPermissionHandler serves API permissions; tracking a function reads its
@@ -1760,6 +1782,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	return &handlerDeps{
 		siteBuilds:            builds,
 		provHandler:           provHandler,
+		dbAllowListHandler:    newDBAllowListHandler(sqlStore),
 		sdkKeysHandler:        handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
 		aiActivityHandler:     newAIActivityHandler(sqlStore),
 		endUsersHandler:       handler.NewEndUsersHandler(buildEndUserManager(cfg, vc), store, sqlStore, sqlStore),
@@ -2453,11 +2476,16 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
-		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
-		r.Use(custommw.RequireProjectDatabase(store))
-		r.Use(d.activity)
-		r.Get("/", d.provHandler.GetDBEndpoint)
-		r.Put("/", d.provHandler.PutDBEndpoint)
+		endpointWrites := []func(http.Handler) http.Handler{
+			custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore),
+			custommw.RequireProjectDatabase(store),
+			d.activity,
+		}
+		r.With(endpointWrites...).Get("/", d.provHandler.GetDBEndpoint)
+		r.With(endpointWrites...).Put("/", d.provHandler.PutDBEndpoint)
+		// Who may reach the public port (EXC-665); unmounted while dballowlist is off.
+		r.With(append([]func(http.Handler) http.Handler{features.Require(d.features, features.DBAllowList)}, endpointWrites...)...).
+			Route("/allowed-sources", d.allowListRoutes())
 	})
 	// Auth settings (EXC-367): requireEmailVerification + siteUrl feed the
 	// auth service's signup/redirect behavior, so reads and writes carry the
@@ -2878,6 +2906,7 @@ func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore
 		log.Print("WARN: public database endpoints disabled: the platform store does not hold the port allocator")
 		return nil
 	}
+	allowList, _ := sqlStore.(storage.DBSourceAllowListStore)
 	return service.NewDBEndpointService(service.DBEndpointServiceConfig{
 		Endpoints:    endpoints,
 		Instances:    instances,
@@ -2887,6 +2916,8 @@ func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore
 		Quarantine:   cfg.DBEndpointPortQuarantine,
 		SharedIPKey:  cfg.DBEndpointSharedIPKey,
 		Claimer:      claimer,
+		AllowList:    allowList,
+		Flags:        cfg.Features(),
 	})
 }
 

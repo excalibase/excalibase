@@ -59,5 +59,7 @@ func buildSingleHostEndpoints(cfg config.AppConfig, store storage.InstanceStore,
 	if cfg.ProvisionerMode != "docker" || docker == nil {
 		return nil
 	}
-	return service.NewSingleHostEndpointService(store, docker)
+	endpoints := service.NewSingleHostEndpointService(store, docker)
+	endpoints.PublishesOnEveryInterface(cfg.DockerDBPublic)
+	return endpoints
 }

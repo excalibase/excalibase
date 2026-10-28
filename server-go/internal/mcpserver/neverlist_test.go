@@ -66,6 +66,7 @@ var allowedRoutes = []*regexp.Regexp{
 	// wildcard is never set through MCP.
 	regexp.MustCompile(`^GET /api/projects/[^/]+/cors/$`),
 	regexp.MustCompile(`^(POST|DELETE) /api/projects/[^/]+/cors/origins(\?.*)?$`),
+	regexp.MustCompile(`^(GET|PUT) /api/projects/[^/]+/db-endpoint/allowed-sources/$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/certificate$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/$`),
 	regexp.MustCompile(`^POST /api/projects/[^/]+/apps/[^/]+/deploy$`),

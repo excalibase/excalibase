@@ -52,11 +52,14 @@ const (
 	// AuthGuest is end-user guest accounts (no address, role guest) and the
 	// stable token subject: sub becomes the account id.
 	AuthGuest Feature = "authguest"
+	// DBAllowList is the per-project list of addresses that may reach the
+	// public database port, and its Studio card and MCP tools (EXC-665).
+	DBAllowList Feature = "dballowlist"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, DBAllowList}
 }
 
 type Flags interface {

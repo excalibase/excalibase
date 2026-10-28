@@ -24,6 +24,7 @@ const (
 	OperationMaintenance ProjectOperation = "maintenance window change"
 	OperationDeploy      ProjectOperation = "deploy"
 	OperationTLSChange   ProjectOperation = "TLS setting change"
+	OperationAllowList   ProjectOperation = "allow-list change"
 )
 
 // ErrProjectOperationRunning is what every caller refused the project's

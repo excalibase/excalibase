@@ -85,6 +85,8 @@ sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUB
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
 # The apps journey drives create_app through MCP, as a coding tool does (EXC-606).
 [ -n "${APPS:-}" ] && echo "FEATURE_MCP=true" >> "$W/.env"
+# The allow-list reports a single host's loopback-only database (EXC-665).
+echo "FEATURE_DBALLOWLIST=true" >> "$W/.env"
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"
 timeout 900 $COMPOSE $P up -d > "$W/up.log" 2>&1; echo "up exit $?"; grep -iE "^Error|error:" "$W/up.log" | sort -u | head -5
 for i in $(seq 90); do [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.Status}}' 2>/dev/null)" = exited ] && break; sleep 2; done
@@ -132,6 +134,13 @@ nets=$($DOCKER inspect "$TC" --format '{{range $k,$v := .NetworkSettings.Network
 tports=$($DOCKER port "$TC" 2>/dev/null | tr '\n' ' ')
 case "$tports" in "") ko "tenant port unknown" ;; *0.0.0.0*|*::*|*"[::]"*) ko "tenant port on all addresses: $tports" ;; *) ok "tenant port on loopback ($tports)" ;; esac
 $DOCKER logs excalibase-engine-proxy 2>&1 | grep -c ' 403 ' | xargs -I{} echo "info: proxy refusals during the run: {}"
+
+echo "== allow-list"
+AL=https://studio.localhost:$PORT/api/projects/$PID/db-endpoint/allowed-sources
+access=$(c -H "Authorization: Bearer $T" "$AL" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("access",""))' 2>/dev/null)
+[ "$access" = host ] && ok "allow-list says this host only" || ko "allow-list access: $access"
+code=$(c -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $T" -H 'Content-Type: application/json' "$AL" -d '{"sources":["198.51.100.7"]}')
+[ "$code" = 409 ] && ok "a single host refuses an allow-list change" || ko "allow-list PUT answered $code"
 
 echo "== tier limits"
 mem=$($DOCKER inspect "$TC" --format '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}' 2>/dev/null)
