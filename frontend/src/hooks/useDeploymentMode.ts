@@ -22,7 +22,8 @@ export type Feature =
   | 'hostmetrics'
   | 'sitesserver'
   | 'authhooks'
-  | 'authmfa';
+  | 'authmfa'
+  | 'dballowlist';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
