@@ -19,6 +19,7 @@ import (
 )
 
 type fakeAllowListAPI struct {
+	getErr  error
 	current domain.DBSourceAllowList
 	public  bool
 	single  bool
@@ -32,6 +33,9 @@ func (f *fakeAllowListAPI) view() service.DBAllowListView {
 }
 
 func (f *fakeAllowListAPI) AllowedSources(context.Context, string) (service.DBAllowListView, error) {
+	if f.getErr != nil {
+		return service.DBAllowListView{}, f.getErr
+	}
 	return f.view(), nil
 }
 
@@ -180,5 +184,40 @@ func TestDBEndpointPutSaysToChooseSourcesFirst(t *testing.T) {
 	writeDBEndpointError(rec, service.ErrDBAllowListNotChosen)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "choose who may connect") {
 		t.Fatalf("status %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestAllowListAnswersWhatItCannotServe(t *testing.T) {
+	unwired := NewDBAllowListHandler(nil, nil)
+	r := chi.NewRouter()
+	r.Route("/api/projects/{projectId}/db-endpoint/allowed-sources", unwired.Routes)
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		if rec := callAllowList(r, method, `{"allowAny":true}`, domain.OrgRoleAdmin); rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s unwired: %d", method, rec.Code)
+		}
+	}
+	unwired.SetAPI(&fakeAllowListAPI{})
+	if rec := callAllowList(r, http.MethodGet, "", domain.OrgRoleAdmin); rec.Code != http.StatusOK {
+		t.Errorf("wired: %d", rec.Code)
+	}
+
+	bad := httptest.NewRequest(http.MethodGet, "/api/projects/bad$id/db-endpoint/allowed-sources", nil)
+	rec := httptest.NewRecorder()
+	allowListRouter(&fakeAllowListAPI{}, nil).ServeHTTP(rec, bad)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad id: %d", rec.Code)
+	}
+
+	failing := &fakeAllowListAPI{getErr: errors.New("store down")}
+	if rec := callAllowList(allowListRouter(failing, nil), http.MethodGet, "", domain.OrgRoleAdmin); rec.Code != http.StatusInternalServerError ||
+		strings.Contains(rec.Body.String(), "store down") {
+		t.Errorf("read failure: %d %s", rec.Code, rec.Body)
+	}
+	invalid := &fakeAllowListAPI{setErr: domain.ErrInvalidDBSourceAllowList}
+	if rec := callAllowList(allowListRouter(invalid, nil), http.MethodPut, `{"allowAny":true}`, domain.OrgRoleAdmin); rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid from the service: %d", rec.Code)
+	}
+	if rec := callAllowList(allowListRouter(&fakeAllowListAPI{}, failingAudit{}), http.MethodPut, `{"allowAny":true}`, domain.OrgRoleAdmin); rec.Code != http.StatusOK {
+		t.Errorf("an audit failure does not fail the change: %d", rec.Code)
 	}
 }

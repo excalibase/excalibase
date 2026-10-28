@@ -153,6 +153,8 @@ export default defineConfig({
         'src/utils/alertSettingsForm.ts',
         'src/components/monitoring/**/*.{ts,tsx}',
         'src/pages/HostMonitoringPage.tsx',
+        'src/api/allowedSources.ts',
+        'src/components/DatabaseAllowList.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {
