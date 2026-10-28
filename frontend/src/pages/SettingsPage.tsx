@@ -10,6 +10,7 @@ import { ConnectSnippets } from '../components/ConnectSnippets';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
 import { ClusterSettingsCard } from '../components/ClusterSettingsCard';
 import { PublicPortCard } from '../components/PublicPortCard';
+import { ReadAddressCard } from '../components/ReadAddressCard';
 import { AppNetworkSection } from '../components/AppNetworkCard';
 import { CorsOriginsCard } from '../components/CorsOriginsCard';
 import { useProjectEndpoint } from '../api/projectEndpoint';
@@ -117,6 +118,9 @@ export function SettingsPage() {
       <div className="mb-8">
         <PublicPortCard projectId={project.projectId} status={project.status} />
       </div>
+      <div className="mb-8 empty:hidden">
+        <ReadAddressCard projectId={project.projectId} status={project.status} />
+      </div>
       </>)}
 
       {!noDatabase && isMySQLProject(project) && (<>
@@ -125,6 +129,9 @@ export function SettingsPage() {
         </div>
         <div className="mb-8">
           <PublicPortCard projectId={project.projectId} status={project.status} />
+        </div>
+        <div className="mb-8 empty:hidden">
+          <ReadAddressCard projectId={project.projectId} status={project.status} />
         </div>
       </>)}
 
