@@ -1,0 +1,14 @@
+{
+  "name": "excalibase-sites-outbound",
+  "private": true,
+  "description": "Outbound Worker of the Sites dispatch namespace: every fetch() of a server site's code passes through it (EXC-661).",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.11",
+    "vitest": "4.1.11"
+  }
+}

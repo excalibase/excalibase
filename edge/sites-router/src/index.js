@@ -3,9 +3,12 @@
 //
 // Bindings (set by deploy.sh):
 //   SITES        dispatch namespace holding one `site-<site id>` Worker per site
-//   SITE_HOSTS   KV: hostname → script name, written by the platform on deploy
+//   SITE_HOSTS   KV: hostname → script name (static site), or a JSON entry
+//                {script, project, cpuMs, subRequests, paused} (server site, EXC-661),
+//                written by the platform on deploy
 //   BASE_DOMAIN  the user-content domain, e.g. excalibase.app
 //   ABUSE_URL    https: or mailto: link shown on the 404 page
+//   OUTBOUND     set when the namespace has the outbound Worker bound (deploy.sh --outbound)
 
 // Same shape the platform accepts for a site name (server-go/internal/sites ValidateName).
 const SITE_LABEL = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
@@ -15,6 +18,13 @@ const SITE_SCRIPT = /^site-[a-z0-9][a-z0-9-]{0,57}$/;
 // only once Cloudflare for SaaS reports it and its certificate active.
 const CUSTOM_HOSTNAME = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const INTERNAL_HEADER_PREFIX = "x-excalibase-";
+// Headers a server site's code may not answer with: ours, and Cloudflare's own.
+const RESERVED_RESPONSE_PREFIXES = [INTERNAL_HEADER_PREFIX, "cf-"];
+// The platform's project ids: one path segment, nothing to escape.
+const PROJECT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+// Cloudflare's own ceilings for one request of a user Worker.
+const MAX_CPU_MS = 300000;
+const MAX_SUBREQUESTS = 10000;
 // KV's minimum: an unrouted host keeps serving for at most this long. KV bills
 // each get the same whether it is answered from cache or not.
 const LOOKUP_CACHE_SECONDS = 30;
@@ -43,13 +53,16 @@ export default {
     if (!key) {
       return notFound(env.ABUSE_URL);
     }
-    const script = await lookupScript(env.SITE_HOSTS, key);
-    if (!script) {
+    const entry = await lookupEntry(env.SITE_HOSTS, key);
+    if (!entry) {
       return notFound(env.ABUSE_URL);
+    }
+    if (entry.paused) {
+      return pausedPage();
     }
     let response;
     try {
-      response = await env.SITES.get(script).fetch(forwardable(request));
+      response = await siteWorker(env, entry).fetch(forwardable(request));
     } catch (err) {
       if (String(err?.message).startsWith("Worker not found")) {
         return notFound(env.ABUSE_URL);
@@ -57,9 +70,22 @@ export default {
       console.error(`sites router: ${hostname}: ${err?.stack ?? err}`);
       return plainError(502, "This site could not be reached.");
     }
-    return withSiteHeaders(response, hostname);
+    return withSiteHeaders(response, hostname, entry.limits !== undefined);
   },
 };
+
+// siteWorker is the site's user Worker; a server site runs under its plan's limits,
+// and its outbound fetches carry the site's identity to the outbound Worker.
+function siteWorker(env, entry) {
+  if (!entry.limits) {
+    return env.SITES.get(entry.script);
+  }
+  const options = { limits: entry.limits };
+  if (env.OUTBOUND) {
+    options.outbound = { siteId: entry.script.slice("site-".length), projectId: entry.project };
+  }
+  return env.SITES.get(entry.script, {}, options);
+}
 
 // hostKey is the SITE_HOSTS key for a request's host: <site>.<base domain>, or
 // a custom hostname outside the base domain. Anything else under the base
@@ -75,16 +101,40 @@ export function hostKey(hostname, baseDomain) {
   return CUSTOM_HOSTNAME.test(hostname) ? hostname : null;
 }
 
-async function lookupScript(table, hostname) {
-  const script = await table.get(hostname, { cacheTtl: LOOKUP_CACHE_SECONDS });
-  if (script === null) {
+async function lookupEntry(table, hostname) {
+  const value = await table.get(hostname, { cacheTtl: LOOKUP_CACHE_SECONDS });
+  if (value === null) {
     return null;
   }
-  if (!SITE_SCRIPT.test(script)) {
-    console.error(`sites router: ${hostname} maps to a value that is not a site script; refusing it`);
+  const entry = hostEntry(value);
+  if (!entry) {
+    console.error(`sites router: ${hostname} maps to a value that is not a site entry; refusing it`);
+  }
+  return entry;
+}
+
+// hostEntry reads a SITE_HOSTS value: a plain script name is a static site; a
+// JSON entry is a server site, refused whole unless every field is sound, so a
+// bad entry never runs without its limits.
+export function hostEntry(value) {
+  if (!value.startsWith("{")) {
+    return SITE_SCRIPT.test(value) ? { script: value } : null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
     return null;
   }
-  return script;
+  const { script, project, cpuMs, subRequests, paused = false } = parsed;
+  const sound = typeof script === "string" && SITE_SCRIPT.test(script) &&
+    typeof project === "string" && PROJECT_ID.test(project) &&
+    withinLimit(cpuMs, MAX_CPU_MS) && withinLimit(subRequests, MAX_SUBREQUESTS) && typeof paused === "boolean";
+  return sound ? { script, project, paused, limits: { cpuMs, subRequests } } : null;
+}
+
+function withinLimit(value, ceiling) {
+  return Number.isInteger(value) && value >= 1 && value <= ceiling;
 }
 
 // forwardable drops the platform's own header namespace, so a visitor cannot
@@ -99,11 +149,18 @@ function forwardable(request) {
   return new Request(request, { headers });
 }
 
-function withSiteHeaders(response, hostname) {
+function withSiteHeaders(response, hostname, ranCode) {
   if (response.status === 101) {
     return response;
   }
   const result = new Response(response.body, response);
+  if (ranCode) {
+    for (const name of [...result.headers.keys()]) {
+      if (RESERVED_RESPONSE_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+        result.headers.delete(name);
+      }
+    }
+  }
   result.headers.set("x-content-type-options", "nosniff");
   if (!result.headers.has("referrer-policy")) {
     result.headers.set("referrer-policy", "strict-origin-when-cross-origin");
@@ -137,6 +194,18 @@ function cookieStaysOnHost(cookie, hostname) {
 function plainError(status, message) {
   return new Response(message, {
     status,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+// pausedPage answers a server site that used its month (EXC-661); its code does not run.
+function pausedPage() {
+  return new Response("This site is paused until its plan's monthly allowance renews.", {
+    status: 503,
     headers: {
       "content-type": "text/plain; charset=utf-8",
       "cache-control": "no-store",
