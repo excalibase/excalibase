@@ -228,8 +228,8 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	case errors.Is(err, sites.ErrServerSitesOff):
 		// As an unmounted route answers (EXC-554), so a dark feature is not advertised.
 		http.Error(w, "404 page not found", http.StatusNotFound)
-	case errors.Is(err, sites.ErrSitesUnavailable):
-		httpError(w, sites.ErrSitesUnavailable.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, sites.ErrSitesUnavailable), errors.Is(err, sites.ErrOutboundNotBound):
+		httpError(w, err.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, sites.ErrCustomDomainsUnavailable):
 		httpError(w, sites.ErrCustomDomainsUnavailable.Error()+"; the site's own hostname still serves it", http.StatusServiceUnavailable)
 	case errors.Is(err, sites.ErrSiteNotFound), errors.Is(err, sites.ErrDeployNotFound), errors.Is(err, sites.ErrDeployTokenNotFound),

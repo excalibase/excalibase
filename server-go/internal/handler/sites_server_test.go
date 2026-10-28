@@ -18,7 +18,7 @@ func newServerSitesHarness(t *testing.T, on bool) *sitesHarness {
 		flags = features.NewStatic(features.SitesServer)
 	}
 	service, err := sites.NewService(store, publisher, origins, sites.Options{BaseDomain: "excalibase.app", SpoolDir: t.TempDir(), Flags: flags, Code: store,
-		OutboundWorker: "excalibase-sites-outbound"})
+		OutboundWorker: "excalibase-sites-outbound", Outbound: &sitestest.Outbound{Worker: "excalibase-sites-outbound"}})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -29,7 +29,8 @@ func newPostgresServerSites(t *testing.T, project string) *serverSitesHarness {
 	store := sites.NewPostgresStore(platformDB(t).DB())
 	publisher := sitestest.NewPublisher()
 	service, err := sites.NewService(store, publisher, sitestest.NewOrigins(), sites.Options{BaseDomain: "example.app", SpoolDir: t.TempDir(),
-		Flags: features.NewStatic(features.SitesServer), Code: store, OutboundWorker: "excalibase-sites-outbound"})
+		Flags: features.NewStatic(features.SitesServer), Code: store, OutboundWorker: "excalibase-sites-outbound",
+		Outbound: &sitestest.Outbound{Worker: "excalibase-sites-outbound"}})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestPostgresServerCodeKeepsToTheSitesByteBudget(t *testing.T) {
 		t.Fatalf("size: %v", err)
 	}
 	// A budget that holds only the newest: the two before it go, the live one (the newest) stays.
-	if err := h.store.PruneCode(ctx, h.project, site.ID, sites.ServerCodeKept, newest); err != nil {
+	if err := h.store.PruneCode(ctx, h.project, site.ID, sites.CodeRetention{Keep: sites.ServerCodeKept, MaxBytes: newest, PendingSince: time.Now()}); err != nil {
 		t.Fatalf("PruneCode: %v", err)
 	}
 	if kept := h.keptCode(t, site.ID); kept != 1 {
@@ -194,5 +195,50 @@ func TestPostgresServerCodeKeepsToTheSitesByteBudget(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the server site is not listed")
+	}
+}
+
+func TestPostgresServerCodeCloudflareRunsOutlivesLaterFailures(t *testing.T) {
+	h := newPostgresServerSites(t, "proj-server-d")
+	ctx := context.Background()
+	site, err := h.service.CreateKind(ctx, h.project, "server-running", sites.KindServer, nil, "dev")
+	if err != nil {
+		t.Fatalf("CreateKind: %v", err)
+	}
+	if _, err := h.deploy(t, site, "export default 'live'"); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	h.publisher.FailKV = errors.New("kv down")
+	if _, err := h.deploy(t, site, "export default 'running'"); err == nil {
+		t.Fatal("want the route write to fail")
+	}
+	h.publisher.FailKV = nil
+	h.publisher.FailSession = errors.New("cloudflare answered 500")
+	if _, err := h.deploy(t, site, "export default 'never'"); err == nil {
+		t.Fatal("want the upload session to fail")
+	}
+	var running string
+	if err := platformDB(t).DB().QueryRow(`SELECT id FROM site_deploys WHERE site_id = $1 AND published_at IS NOT NULL
+		ORDER BY published_at DESC LIMIT 1`, site.ID).Scan(&running); err != nil {
+		t.Fatalf("published deploy: %v", err)
+	}
+	if _, err := h.store.GetCode(ctx, h.project, site.ID, running); err != nil {
+		t.Fatalf("the code Cloudflare runs was pruned: %v", err)
+	}
+	// A pending deploy older than any lease keeps nothing.
+	stale := &sites.Deploy{ID: "00000000-0000-4000-8000-0000000000d1", SiteID: site.ID, ProjectID: h.project, Kind: sites.KindServer,
+		Status: sites.DeployPending, CreatedAt: time.Now().Add(-2 * sites.MaxDeployDuration)}
+	if err := h.store.CreateDeploy(ctx, stale); err != nil {
+		t.Fatalf("CreateDeploy: %v", err)
+	}
+	if err := h.store.PutCode(ctx, stale, []byte("x")); err != nil {
+		t.Fatalf("PutCode: %v", err)
+	}
+	if err := h.store.PruneCode(ctx, h.project, site.ID, sites.CodeRetention{Keep: sites.ServerCodeKept, MaxBytes: 1 << 30,
+		PendingSince: time.Now().Add(-sites.MaxDeployDuration)}); err != nil {
+		t.Fatalf("PruneCode: %v", err)
+	}
+	if _, err := h.store.GetCode(ctx, h.project, site.ID, stale.ID); !errors.Is(err, sites.ErrServerCodeGone) {
+		t.Fatalf("stale pending code: err=%v", err)
 	}
 }

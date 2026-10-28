@@ -28,8 +28,9 @@ type MemoryStore struct {
 	// Code is each server deploy's kept modules, by deploy id; CodeReads counts GetCode calls.
 	Code      map[string][]byte
 	CodeReads int
-	// prunedBudget is the byte budget of each site's last prune.
+	// prunedBudget is the byte budget of each site's last prune; published each site's last published deploy.
 	prunedBudget map[string]int64
+	published    map[string]string
 	Now          func() time.Time
 	// OnClaim runs as a lease is taken, before it is granted, for tests that change things meanwhile.
 	OnClaim func()
@@ -43,7 +44,7 @@ type Lease struct {
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{Sites: map[string]sites.Site{}, Leases: map[string]Lease{}, Deploys: map[string]sites.Deploy{}, Tokens: map[string]sites.DeployToken{},
-		Attempts: map[string][]time.Time{}, Code: map[string][]byte{}, prunedBudget: map[string]int64{}, Now: time.Now}
+		Attempts: map[string][]time.Time{}, Code: map[string][]byte{}, prunedBudget: map[string]int64{}, published: map[string]string{}, Now: time.Now}
 }
 
 // ExpireLease ends a site's lease now, as a deploy outliving it would see.
@@ -299,12 +300,25 @@ func (m *MemoryStore) PrunedWithBudget(siteID string, budget int64) bool {
 	return m.prunedBudget[siteID] == budget
 }
 
-// PruneCode keeps what the Postgres store keeps: the newest keep succeeded
-// deploys within maxBytes, the live one and any pending.
-func (m *MemoryStore) PruneCode(_ context.Context, projectID, siteID string, keep int, maxBytes int64) error {
+func (m *MemoryStore) MarkPublished(_ context.Context, deploy *sites.Deploy, _ time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.prunedBudget[siteID] = maxBytes
+	m.published[deploy.SiteID] = deploy.ID
+	return nil
+}
+
+// Published is the site's deploy Cloudflare last ran.
+func (m *MemoryStore) Published(siteID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.published[siteID]
+}
+
+// PruneCode keeps what the Postgres store keeps.
+func (m *MemoryStore) PruneCode(_ context.Context, projectID, siteID string, retention sites.CodeRetention) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prunedBudget[siteID] = retention.MaxBytes
 	succeeded := []sites.Deploy{}
 	for deployID, deploy := range m.Deploys {
 		if _, held := m.Code[deployID]; held && deploy.ProjectID == projectID && deploy.SiteID == siteID && deploy.Status == sites.DeploySucceeded {
@@ -312,17 +326,18 @@ func (m *MemoryStore) PruneCode(_ context.Context, projectID, siteID string, kee
 		}
 	}
 	sort.Slice(succeeded, func(i, j int) bool { return succeeded[i].CreatedAt.After(succeeded[j].CreatedAt) })
-	kept := map[string]bool{m.Sites[siteID].LiveDeployID: true}
+	kept := map[string]bool{m.Sites[siteID].LiveDeployID: true, m.published[siteID]: true}
 	var running int64
 	for i, deploy := range succeeded {
 		running += int64(len(m.Code[deploy.ID]))
-		if i < keep && running <= maxBytes {
+		if i < retention.Keep && running <= retention.MaxBytes {
 			kept[deploy.ID] = true
 		}
 	}
 	for deployID := range m.Code {
 		deploy := m.Deploys[deployID]
-		if deploy.SiteID == siteID && deploy.Status != sites.DeployPending && !kept[deployID] {
+		recent := deploy.Status == sites.DeployPending && deploy.CreatedAt.After(retention.PendingSince)
+		if deploy.SiteID == siteID && !recent && !kept[deployID] {
 			delete(m.Code, deployID)
 		}
 	}
@@ -427,6 +442,21 @@ func (m *MemoryStore) TouchDeployToken(_ context.Context, id string, at time.Tim
 	return nil
 }
 
+// Outbound stands in for the router's dispatch binding: it names Worker, or fails with Fail.
+type Outbound struct {
+	mu     sync.Mutex
+	Worker string
+	Fail   error
+	Reads  int
+}
+
+func (o *Outbound) DispatchOutbound(_ context.Context, _ string) (string, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.Reads++
+	return o.Worker, o.Fail
+}
+
 // Publisher stands in for Cloudflare; it asks for every hash it has not stored yet.
 type Publisher struct {
 	mu        sync.Mutex
@@ -437,6 +467,7 @@ type Publisher struct {
 	ModuleBodies map[string]map[string]string
 	Deleted      []string
 	Sessions     int
+	FailSession  error
 	FailPut      error
 	Forget       bool
 	// BeforePut runs at the start of PutScript, with the context it was called with.
@@ -479,6 +510,9 @@ func (f *Publisher) StartUploadSession(_ context.Context, _ string, manifest map
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Sessions++
+	if f.FailSession != nil {
+		return cfworkers.UploadSession{}, f.FailSession
+	}
 	if f.Forget {
 		f.Stored = map[string]string{}
 	}

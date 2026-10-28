@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 	"github.com/excalibase/provisioning-poc/internal/features"
@@ -27,7 +28,8 @@ func newServerHarness(t *testing.T, on bool) *serviceHarness {
 }
 
 func serverOptions(t *testing.T, flags features.Flags, code sites.CodeStore) sites.Options {
-	return sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(), Flags: flags, Code: code, OutboundWorker: "excalibase-sites-outbound"}
+	return sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(), Flags: flags, Code: code, OutboundWorker: "excalibase-sites-outbound",
+		Outbound: &sitestest.Outbound{Worker: "excalibase-sites-outbound"}}
 }
 
 func (h *serviceHarness) createServerSite(t *testing.T, name string) *sites.Site {
@@ -301,20 +303,6 @@ func TestServerRollbacksCountAgainstTheHourlyDeploys(t *testing.T) {
 	}
 }
 
-func TestADeployFailingAfterItsWorkerChangedKeepsItsCode(t *testing.T) {
-	h := newServerHarness(t, true)
-	site := h.createServerSite(t, "ssr")
-	h.publisher.FailKV = errors.New("kv down")
-	deploy, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 'running'"))
-	if err == nil {
-		t.Fatal("want the route write to fail")
-	}
-	deploys, _ := h.service.ListDeploys(context.Background(), testProject, site.ID)
-	if _, kept := h.store.Code[deploys[0].ID]; !kept || deploy != nil {
-		t.Fatal("the code now running on the CDN was dropped")
-	}
-}
-
 func TestSwitchingTheFeatureOffStopsServingServerSites(t *testing.T) {
 	h := newServerHarness(t, true)
 	site := h.createServerSite(t, "ssr")
@@ -353,5 +341,175 @@ func TestSwitchingTheFeatureOffStopsServingServerSites(t *testing.T) {
 	}
 	if h.publisher.Hosts[site.Hostname] != sites.ScriptName(site) {
 		t.Fatal("switching the feature on again did not serve the live deploy")
+	}
+}
+
+// What Cloudflare runs keeps its code even when its deploy failed after the
+// swap and a later deploy failed before one.
+func TestTheCodeCloudflareRunsIsNeverPruned(t *testing.T) {
+	h := newServerHarness(t, true)
+	site := h.createServerSite(t, "ssr")
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 'old'")); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	h.publisher.FailKV = errors.New("kv down")
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 'running'")); err == nil {
+		t.Fatal("want the route write to fail")
+	}
+	h.publisher.FailKV = nil
+	h.publisher.FailSession = errors.New("cloudflare answered 500")
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 'never'")); err == nil {
+		t.Fatal("want the upload session to fail")
+	}
+	running := h.store.Published(site.ID)
+	if running == "" {
+		t.Fatal("no deploy is recorded as published")
+	}
+	if _, kept := h.store.Code[running]; !kept {
+		t.Fatal("the code Cloudflare runs was pruned")
+	}
+}
+
+func TestARefusedServerRollbackGivesItsSlotBack(t *testing.T) {
+	h := newServerHarness(t, true)
+	site := h.createServerSite(t, "ssr")
+	first, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1"))
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if err := h.store.ClaimDeploy(context.Background(), testProject, site.ID, "other-holder", h.store.Now().Add(sites.MaxDeployDuration)); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	before := len(h.store.Attempts[testProject])
+	if _, err := h.service.Rollback(context.Background(), testProject, site.ID, first.ID); !errors.Is(err, sites.ErrSiteBusy) {
+		t.Fatalf("err = %v, want busy", err)
+	}
+	if len(h.store.Attempts[testProject]) != before {
+		t.Fatal("a rollback refused as busy kept its hourly slot")
+	}
+}
+
+func TestAServerPublishNeverGoesOutWithoutLimits(t *testing.T) {
+	store, publisher := sitestest.NewMemoryStore(), sitestest.NewPublisher()
+	options := serverOptions(t, features.NewStatic(features.SitesServer), store)
+	limits := sites.DefaultLimits
+	limits.MaxServerCPUMillis = 0
+	options.DeployLimits = fixedLimits{limits: limits}
+	service, err := sites.NewService(store, publisher, sitestest.NewOrigins(), options)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	h := &serviceHarness{service: service, store: store, publisher: publisher}
+	site := h.createServerSite(t, "ssr")
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1")); err == nil {
+		t.Fatal("published server code with no CPU limit")
+	}
+	if len(publisher.Versions) != 0 {
+		t.Fatal("a version without limits reached the CDN")
+	}
+}
+
+func TestStaleServerDeploysStillRunningKeepNoCode(t *testing.T) {
+	h := newServerHarness(t, true)
+	site := h.createServerSite(t, "ssr")
+	stale := &sites.Deploy{ID: "stale", SiteID: site.ID, ProjectID: testProject, Kind: sites.KindServer, Status: sites.DeployPending,
+		CreatedAt: h.store.Now().Add(-2 * sites.MaxDeployDuration)}
+	if err := h.store.CreateDeploy(context.Background(), stale); err != nil {
+		t.Fatalf("CreateDeploy: %v", err)
+	}
+	if err := h.store.PutCode(context.Background(), stale, []byte("x")); err != nil {
+		t.Fatalf("PutCode: %v", err)
+	}
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1")); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if _, kept := h.store.Code["stale"]; kept {
+		t.Fatal("code of a deploy that outlived its lease is kept forever")
+	}
+}
+
+func TestTheOffSwitchTriesEverySiteAndReportsTheRest(t *testing.T) {
+	h := newServerHarness(t, true)
+	site := h.createServerSite(t, "ssr")
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1")); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	off, err := sites.NewService(h.store, h.publisher, h.origins, serverOptions(t, features.NewStatic(), h.store))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	h.publisher.FailKV = errors.New("kv down")
+	if err := off.ReconcileServerSites(context.Background()); err == nil {
+		t.Fatal("a failed unroute was not reported")
+	}
+}
+
+// No server code reaches Cloudflare unless the router sends its requests
+// through the configured outbound Worker (ADR 0045 decision 5).
+func TestServerCodeIsPublishedOnlyBehindTheOutboundWorker(t *testing.T) {
+	for name, binding := range map[string]*sitestest.Outbound{
+		"another outbound": {Worker: "someone-elses"},
+		"no outbound":      {},
+		"unreadable":       {Fail: errors.New("cloudflare answered 403")},
+	} {
+		store, publisher := sitestest.NewMemoryStore(), sitestest.NewPublisher()
+		options := serverOptions(t, features.NewStatic(features.SitesServer), store)
+		options.Outbound = binding
+		service, err := sites.NewService(store, publisher, sitestest.NewOrigins(), options)
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		h := &serviceHarness{service: service, store: store, publisher: publisher}
+		site := h.createServerSite(t, "ssr")
+		if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1")); !errors.Is(err, sites.ErrOutboundNotBound) {
+			t.Errorf("%s: err = %v, want the outbound refusal", name, err)
+		}
+		if publisher.Sessions != 0 || len(publisher.Versions) != 0 {
+			t.Errorf("%s: server code reached Cloudflare", name)
+		}
+	}
+}
+
+func TestTheOutboundBindingIsReadAgainAfterAWhile(t *testing.T) {
+	h := newServerHarness(t, true)
+	binding := &sitestest.Outbound{Worker: "excalibase-sites-outbound"}
+	options := serverOptions(t, features.NewStatic(features.SitesServer), h.store)
+	options.Outbound = binding
+	service, err := sites.NewService(h.store, h.publisher, h.origins, options)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	clock := time.Now()
+	service.SetNow(func() time.Time { return clock })
+	h.service = service
+	site := h.createServerSite(t, "ssr")
+	for range 2 {
+		if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1")); err != nil {
+			t.Fatalf("Deploy: %v", err)
+		}
+	}
+	if binding.Reads != 1 {
+		t.Fatalf("reads = %d, want one while it is fresh", binding.Reads)
+	}
+	clock = clock.Add(10 * time.Minute)
+	binding.Worker = "replaced"
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 2")); !errors.Is(err, sites.ErrOutboundNotBound) {
+		t.Fatalf("err = %v, want a changed binding refused", err)
+	}
+}
+
+func TestStaticSitesNeverReadTheOutboundBinding(t *testing.T) {
+	h := newServerHarness(t, true)
+	binding := &sitestest.Outbound{Fail: errors.New("unreachable")}
+	options := serverOptions(t, features.NewStatic(features.SitesServer), h.store)
+	options.Outbound = binding
+	service, err := sites.NewService(h.store, h.publisher, h.origins, options)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	h.service = service
+	site := h.createSite(t, "plain")
+	if _, err := h.deploy(t, site, sitestest.Dist(t, "<h1>hi</h1>")); err != nil || binding.Reads != 0 {
+		t.Fatalf("static deploy err=%v reads=%d", err, binding.Reads)
 	}
 }

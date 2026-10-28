@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 )
@@ -25,6 +26,14 @@ func ServerCodeBudget(limits Limits) int64 { return 3 * limits.MaxServerBundleBy
 // largest bundle a plan may allow, and a long-name header per module.
 const maxPackedCodeBytes = 64<<20 + MaxServerModules*4*tarFramingBytes
 
+// CodeRetention is what a prune keeps beyond the live deploy and the one Cloudflare last ran:
+// the newest Keep succeeded deploys within MaxBytes, and deploys pending since PendingSince.
+type CodeRetention struct {
+	Keep         int
+	MaxBytes     int64
+	PendingSince time.Time
+}
+
 // CodeStore keeps each server deploy's modules for the rollback window
 // (ADR 0045 decision 7). Cloudflare keeps asset bodies by hash; nothing keeps code but this.
 type CodeStore interface {
@@ -32,9 +41,10 @@ type CodeStore interface {
 	PutCode(ctx context.Context, deploy *Deploy, packed []byte) error
 	// GetCode answers ErrServerCodeGone once the deploy's code is no longer kept.
 	GetCode(ctx context.Context, projectID, siteID, deployID string) ([]byte, error)
-	// PruneCode keeps the code of the site's newest keep succeeded deploys
-	// that fit in maxBytes together, its live one and any still pending, and drops the rest.
-	PruneCode(ctx context.Context, projectID, siteID string, keep int, maxBytes int64) error
+	// MarkPublished records that Cloudflare runs the deploy's code from at on.
+	MarkPublished(ctx context.Context, deploy *Deploy, at time.Time) error
+	// PruneCode drops the site's code that retention, the live deploy and the last published one do not keep.
+	PruneCode(ctx context.Context, projectID, siteID string, retention CodeRetention) error
 }
 
 // packModules writes the bundle's modules as one tar.gz, named as the Worker loads them.
