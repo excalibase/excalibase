@@ -163,7 +163,7 @@ func TestPutScriptPublishesAnAssetsOnlyWorker(t *testing.T) {
 		parts = readFormParts(t, r, body)
 		writeEnvelope(w, http.StatusOK, map[string]any{"id": testScript})
 	})
-	err := client.PutScript(context.Background(), testScript, "completion-jwt", AssetConfig{HTMLHandling: HTMLAutoTrailingSlash, NotFoundHandling: NotFoundSinglePage})
+	err := client.PutScript(context.Background(), testScript, staticVersion())
 	if err != nil {
 		t.Fatalf("PutScript: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestAnInvalidScriptNameNeverReachesCloudflare(t *testing.T) {
 	if _, err := client.StartUploadSession(ctx, "Bad/Name", nil); err == nil {
 		t.Error("upload session accepted an invalid script name")
 	}
-	if err := client.PutScript(ctx, "Bad/Name", "jwt", AssetConfig{}); err == nil {
+	if err := client.PutScript(ctx, "Bad/Name", staticVersion()); err == nil {
 		t.Error("publish accepted an invalid script name")
 	}
 	if len(fake.requests) != 0 {
@@ -332,7 +332,7 @@ func TestPutScriptReportsARefusal(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"success":false,"errors":[{"code":10021,"message":"bad assets jwt"}]}`))
 	})
-	err := client.PutScript(context.Background(), testScript, "jwt", AssetConfig{})
+	err := client.PutScript(context.Background(), testScript, staticVersion())
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Codes[0] != 10021 {
 		t.Fatalf("err = %v", err)

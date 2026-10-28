@@ -55,11 +55,14 @@ const (
 	// HostMetrics is single-host monitoring: the host and every container
 	// sampled into history, alerts and notices, and Studio's Host page (EXC-670).
 	HostMetrics Feature = "hostmetrics"
+	// SitesServer is server-rendered sites: a site of kind server runs its
+	// build's Worker code beside its assets (ADR 0045, EXC-661). Needs Sites.
+	SitesServer Feature = "sitesserver"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer}
 }
 
 type Flags interface {

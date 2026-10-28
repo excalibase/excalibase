@@ -37,6 +37,9 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requireKind(ctx, site.Kind); err != nil {
+		return nil, err
+	}
 	limits, err := s.limitsFor(ctx, request.ProjectID)
 	if err != nil {
 		return nil, err
@@ -53,7 +56,7 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 			return nil, err
 		}
 	}
-	bundle, err := ReadArchive(request.Body, limits, s.spoolDir())
+	bundle, err := s.readBundle(site, request.Body, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -80,8 +83,48 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 	if err := s.store.CreateDeploy(ctx, deploy); err != nil {
 		return nil, err
 	}
-	publishErr := s.publishInTime(ctx, site, deploy.Manifest, bundleAssets(bundle), deploy.SPAFallback)
-	return s.finish(ctx, deploy, lease, publishErr)
+	publishErr := s.keepCode(ctx, deploy, bundle)
+	if publishErr == nil {
+		publishErr = s.publishInTime(ctx, site, newRelease(deploy, bundleAssets(bundle), bundleModules(bundle)))
+	}
+	finished, err := s.finish(ctx, deploy, lease, publishErr)
+	s.pruneCode(ctx, deploy)
+	return finished, err
+}
+
+// readBundle reads the archive in the layout of the site's kind.
+func (s *Service) readBundle(site *Site, body io.Reader, limits Limits) (*Bundle, error) {
+	if site.Kind == KindServer {
+		return ReadServerArchive(body, limits, s.spoolDir())
+	}
+	return ReadArchive(body, limits, s.spoolDir())
+}
+
+// keepCode stores a server deploy's modules before anything is published, so a live deploy always has its code.
+func (s *Service) keepCode(ctx context.Context, deploy *Deploy, bundle *Bundle) error {
+	if deploy.Kind != KindServer {
+		return nil
+	}
+	packed, err := packModules(bundle)
+	if err == nil {
+		err = s.options.Code.PutCode(ctx, deploy, packed)
+	}
+	if err != nil {
+		// The cause names our database; the deploy records only the fixed reason.
+		log.Printf("site %s: keep server code: %v", deploy.SiteID, err)
+		return ErrCodeNotKept
+	}
+	return nil
+}
+
+// pruneCode drops code past the rollback window; a failure only keeps more than needed.
+func (s *Service) pruneCode(ctx context.Context, deploy *Deploy) {
+	if deploy.Kind != KindServer {
+		return
+	}
+	if err := s.options.Code.PruneCode(context.WithoutCancel(ctx), deploy.ProjectID, deploy.SiteID, ServerCodeKept); err != nil {
+		log.Printf("site %s: prune kept server code: %v", deploy.SiteID, err)
+	}
 }
 
 // Rollback publishes an earlier deploy's manifest again and makes it live.
@@ -100,6 +143,13 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 	if target.Status != DeploySucceeded {
 		return nil, ErrDeployNotServable
 	}
+	if err := s.requireKind(ctx, target.Kind); err != nil {
+		return nil, err
+	}
+	modules, err := s.keptModules(ctx, target)
+	if err != nil {
+		return nil, err
+	}
 	// A rollback publishes like an upload, so it shares the in-flight cap.
 	admitted, err := s.admission.admit(projectID)
 	if err != nil {
@@ -116,8 +166,8 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 		return nil, err
 	}
 	defer released()
-	// File bodies are not kept here, so files Cloudflare asks for again cannot be sent.
-	if err := s.publishInTime(ctx, site, target.Manifest, nil, target.SPAFallback); err != nil {
+	// Asset bodies are not kept here, so files Cloudflare asks for again cannot be sent.
+	if err := s.publishInTime(ctx, site, newRelease(target, nil, modules)); err != nil {
 		return nil, err
 	}
 	// The CDN already switched; the record follows even if the caller has gone.
@@ -125,6 +175,18 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 		return nil, err
 	}
 	return s.mustGet(context.WithoutCancel(ctx), projectID, siteID)
+}
+
+// keptModules reads a server deploy's code back for a rollback; a static deploy has none.
+func (s *Service) keptModules(ctx context.Context, target *Deploy) ([]cfworkers.Module, error) {
+	if target.Kind != KindServer {
+		return nil, nil
+	}
+	packed, err := s.options.Code.GetCode(ctx, target.ProjectID, target.SiteID, target.ID)
+	if err != nil {
+		return nil, err
+	}
+	return unpackModules(packed)
 }
 
 func (s *Service) spoolDir() string {
@@ -153,11 +215,15 @@ func (s *Service) ensureOrigin(ctx context.Context, site *Site) error {
 }
 
 func (s *Service) newDeploy(site *Site, bundle *Bundle, request DeployRequest) *Deploy {
-	return &Deploy{
-		ID: uuid.NewString(), SiteID: site.ID, ProjectID: site.ProjectID, Status: DeployPending,
+	deploy := &Deploy{
+		ID: uuid.NewString(), SiteID: site.ID, ProjectID: site.ProjectID, Status: DeployPending, Kind: site.Kind,
 		Manifest: bundle.Manifest(), FileCount: len(bundle.Files), TotalBytes: bundle.TotalBytes,
 		SPAFallback: site.SPAFallback, Label: request.Label, CreatedBy: request.Actor, CreatedAt: s.now().UTC(),
 	}
+	if bundle.Server != nil {
+		deploy.Server = &ServerDeploy{ServerConfig: *bundle.Server, Modules: len(bundle.Modules), CodeBytes: bundle.CodeBytes}
+	}
+	return deploy
 }
 
 // finish records the outcome even when the caller has gone away. A deploy
@@ -184,28 +250,61 @@ func (s *Service) finish(ctx context.Context, deploy *Deploy, lease *siteLease, 
 	return deploy, nil
 }
 
-// publishInTime bounds every Cloudflare call by publishTimeout, inside the lease.
-func (s *Service) publishInTime(ctx context.Context, site *Site, manifest map[string]cfworkers.ManifestEntry,
-	assetsFor func([]string) ([]cfworkers.Asset, error), spaFallback bool) error {
-	publishCtx, cancel := context.WithTimeout(ctx, publishTimeout)
-	defer cancel()
-	return s.publish(publishCtx, site, manifest, assetsFor, spaFallback)
+// release is what one publish sends: a deploy's assets and, for a server deploy, its code.
+type release struct {
+	deploy *Deploy
+	// assetsFor nil means no file body can be sent.
+	assetsFor func([]string) ([]cfworkers.Asset, error)
+	modules   []cfworkers.Module
 }
 
-// publish runs Cloudflare's upload session, the bucket uploads and the
-// script upload. assetsFor nil means no file body can be sent.
-func (s *Service) publish(ctx context.Context, site *Site, manifest map[string]cfworkers.ManifestEntry,
-	assetsFor func([]string) ([]cfworkers.Asset, error), spaFallback bool) error {
+func newRelease(deploy *Deploy, assetsFor func([]string) ([]cfworkers.Asset, error), modules []cfworkers.Module) release {
+	return release{deploy: deploy, assetsFor: assetsFor, modules: modules}
+}
+
+// version is the Worker the release publishes, given Cloudflare's completion token.
+func (r release) version(completion string) (cfworkers.ScriptVersion, error) {
+	if r.deploy.Kind != KindServer {
+		return cfworkers.ScriptVersion{AssetsJWT: completion, Assets: assetConfig(r.deploy.SPAFallback)}, nil
+	}
+	server := r.deploy.Server
+	if server == nil {
+		return cfworkers.ScriptVersion{}, fmt.Errorf("server deploy %s has no recorded settings", r.deploy.ID)
+	}
+	// Unknown paths must reach the code, which renders its own 404.
+	return cfworkers.ScriptVersion{
+		AssetsJWT:          completion,
+		Assets:             cfworkers.AssetConfig{HTMLHandling: cfworkers.HTMLAutoTrailingSlash, NotFoundHandling: cfworkers.NotFoundNone},
+		MainModule:         server.Main,
+		Modules:            r.modules,
+		CompatibilityDate:  server.CompatibilityDate,
+		CompatibilityFlags: server.CompatibilityFlags,
+	}, nil
+}
+
+// publishInTime bounds every Cloudflare call by publishTimeout, inside the lease.
+func (s *Service) publishInTime(ctx context.Context, site *Site, rel release) error {
+	publishCtx, cancel := context.WithTimeout(ctx, publishTimeout)
+	defer cancel()
+	return s.publish(publishCtx, site, rel)
+}
+
+// publish runs Cloudflare's upload session, the bucket uploads and the script upload.
+func (s *Service) publish(ctx context.Context, site *Site, rel release) error {
 	script := ScriptName(site)
-	session, err := s.publisher.StartUploadSession(ctx, script, manifest)
+	session, err := s.publisher.StartUploadSession(ctx, script, rel.deploy.Manifest)
 	if err != nil {
 		return publishFailure(site, stepStartUpload, err)
 	}
-	completion, err := s.uploadBuckets(ctx, site, session, assetsFor)
+	completion, err := s.uploadBuckets(ctx, site, session, rel.assetsFor)
 	if err != nil {
 		return err
 	}
-	if err := s.publisher.PutScript(ctx, script, completion, assetConfig(spaFallback)); err != nil {
+	version, err := rel.version(completion)
+	if err != nil {
+		return err
+	}
+	if err := s.publisher.PutScript(ctx, script, version); err != nil {
 		return publishFailure(site, stepPublish, err)
 	}
 	// Written on every publish: idempotent, and it heals a missing entry.

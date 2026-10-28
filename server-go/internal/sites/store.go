@@ -9,8 +9,9 @@ import (
 // id, so a caller holding one project's id never reaches another's site.
 type Store interface {
 	// Create refuses with ErrSiteNameTaken when any project uses the name
-	// (it is a hostname) and ErrSiteLimitReached past maxSites.
-	Create(ctx context.Context, site *Site, maxSites int) error
+	// (it is a hostname), ErrSiteLimitReached past maxSites and, for a server
+	// site, ErrServerSiteLimitReached past maxServerSites.
+	Create(ctx context.Context, site *Site, maxSites, maxServerSites int) error
 	// Get answers nil, no error, when the project holds no such site.
 	Get(ctx context.Context, projectID, id string) (*Site, error)
 	List(ctx context.Context, projectID string) ([]*Site, error)

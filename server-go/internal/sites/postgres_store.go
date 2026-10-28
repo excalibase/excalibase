@@ -26,13 +26,21 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 func scanSite(row rowScanner) (*Site, error) {
 	site := &Site{}
-	err := row.Scan(&site.ID, &site.ProjectID, &site.Name, &site.Hostname, &site.SPAFallback,
+	err := row.Scan(&site.ID, &site.ProjectID, &site.Name, &site.Hostname, &site.Kind, &site.SPAFallback,
 		&site.LiveDeployID, &site.CorsClaimed, &site.CreatedBy, &site.CreatedAt, &site.UpdatedAt)
 	return site, err
 }
 
+// siteKind is the kind a site is stored as; one built without a kind is static.
+func siteKind(site *Site) string {
+	if site.Kind == "" {
+		return KindStatic
+	}
+	return site.Kind
+}
+
 // Create counts the project's sites under a per-project lock, so two creates cannot both take the last slot.
-func (s *PostgresStore) Create(ctx context.Context, site *Site, maxSites int) error {
+func (s *PostgresStore) Create(ctx context.Context, site *Site, maxSites, maxServerSites int) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin site create: %w", err)
@@ -41,16 +49,20 @@ func (s *PostgresStore) Create(ctx context.Context, site *Site, maxSites int) er
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, siteLimitLockSpace, site.ProjectID); err != nil {
 		return fmt.Errorf("lock project site count: %w", err)
 	}
-	var held int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sites WHERE project_id = $1`, site.ProjectID).Scan(&held); err != nil {
+	var held, heldServer int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*), count(*) FILTER (WHERE kind = 'server') FROM sites WHERE project_id = $1`,
+		site.ProjectID).Scan(&held, &heldServer); err != nil {
 		return fmt.Errorf("count project sites: %w", err)
 	}
 	if held >= maxSites {
 		return ErrSiteLimitReached
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO sites (id, project_id, name, hostname, spa_fallback, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		site.ID, site.ProjectID, site.Name, site.Hostname, site.SPAFallback, site.CreatedBy, site.CreatedAt, site.UpdatedAt)
+	if siteKind(site) == KindServer && heldServer >= maxServerSites {
+		return ErrServerSiteLimitReached
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO sites (id, project_id, name, hostname, kind, spa_fallback, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		site.ID, site.ProjectID, site.Name, site.Hostname, siteKind(site), site.SPAFallback, site.CreatedBy, site.CreatedAt, site.UpdatedAt)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 		return ErrSiteNameTaken
@@ -62,7 +74,7 @@ func (s *PostgresStore) Create(ctx context.Context, site *Site, maxSites int) er
 }
 
 func (s *PostgresStore) Get(ctx context.Context, projectID, id string) (*Site, error) {
-	site, err := scanSite(s.db.QueryRowContext(ctx, `SELECT id, project_id, name, hostname, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at
+	site, err := scanSite(s.db.QueryRowContext(ctx, `SELECT id, project_id, name, hostname, kind, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at
 		FROM sites WHERE project_id = $1 AND id = $2`, projectID, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -74,7 +86,7 @@ func (s *PostgresStore) Get(ctx context.Context, projectID, id string) (*Site, e
 }
 
 func (s *PostgresStore) List(ctx context.Context, projectID string) ([]*Site, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, project_id, name, hostname, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id, project_id, name, hostname, kind, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at
 		FROM sites WHERE project_id = $1 ORDER BY name`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list sites: %w", err)
@@ -93,7 +105,7 @@ func (s *PostgresStore) List(ctx context.Context, projectID string) ([]*Site, er
 
 func (s *PostgresStore) UpdateSettings(ctx context.Context, projectID, id string, spaFallback bool) (*Site, error) {
 	site, err := scanSite(s.db.QueryRowContext(ctx, `UPDATE sites SET spa_fallback = $3, updated_at = NOW()
-		WHERE project_id = $1 AND id = $2 RETURNING id, project_id, name, hostname, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at`, projectID, id, spaFallback))
+		WHERE project_id = $1 AND id = $2 RETURNING id, project_id, name, hostname, kind, spa_fallback, COALESCE(live_deploy_id, ''), cors_claimed, created_by, created_at, updated_at`, projectID, id, spaFallback))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSiteNotFound
 	}
