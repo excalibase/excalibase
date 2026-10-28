@@ -125,7 +125,7 @@ func (s *ProvisioningService) SearchProjectLogs(ctx context.Context, projectID s
 		return LogPage{}, err
 	}
 	if s.k8sClient == nil || inst.DeploymentMode == domain.ModeDocker {
-		return LogPage{}, errLogsOnSingleHost
+		return s.searchSingleHostLogs(ctx, inst, search)
 	}
 	page := LogPage{KeptFor: s.logsKeptFor(ctx, inst)}
 	if page.KeptFor > 0 && search.Since > page.KeptFor {
@@ -153,6 +153,32 @@ func (s *ProvisioningService) SearchProjectLogs(ctx context.Context, projectID s
 	}
 	page.Lines = filterLogLines(out, search.Term)
 	return page, nil
+}
+
+// SingleHostLogs is the engine's log of one container.
+type SingleHostLogs interface {
+	Logs(ctx context.Context, container string, tail int, since time.Time) (string, error)
+}
+
+// SetSingleHostLogs lets a single host search its database containers' logs.
+func (s *ProvisioningService) SetSingleHostLogs(logs SingleHostLogs) { s.singleHostLogs = logs }
+
+// searchSingleHostLogs reads what the engine kept of the database container's
+// output since it was created; the container is the project's own, by id.
+func (s *ProvisioningService) searchSingleHostLogs(ctx context.Context, inst *domain.DatabaseInstance, search LogSearch) (LogPage, error) {
+	if s.singleHostLogs == nil || inst.DeploymentMode != domain.ModeDocker || inst.Namespace == "" {
+		return LogPage{}, errLogsOnSingleHost
+	}
+	var since time.Time
+	if search.Since > 0 {
+		since = time.Now().Add(-search.Since)
+	}
+	out, err := s.singleHostLogs.Logs(ctx, inst.Namespace, clampLogLines(search.Lines), since)
+	if err != nil {
+		log.Printf("logs of %s: engine log: %v", inst.ProjectID, err)
+		return LogPage{}, ErrLogsUnavailable
+	}
+	return LogPage{Lines: filterLogLines(out, search.Term)}, nil
 }
 
 // primaryPodLog is the live log of the database container on the primary.

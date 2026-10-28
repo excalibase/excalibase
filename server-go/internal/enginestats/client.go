@@ -4,13 +4,16 @@
 package enginestats
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -179,26 +182,78 @@ func (c *Client) Stats(ctx context.Context, ref string) (Stats, error) {
 }
 
 func (c *Client) get(ctx context.Context, path string, query url.Values, into any) error {
+	body, err := c.open(ctx, path, query)
+	if err != nil {
+		return err
+	}
+	defer body.Close()
+	return json.NewDecoder(io.LimitReader(body, maxAnswer)).Decode(into)
+}
+
+// Logs is the last lines a container wrote to stdout and stderr, from since
+// when it is set, at most maxAnswer bytes.
+func (c *Client) Logs(ctx context.Context, ref string, tail int, since time.Time) (string, error) {
+	query := url.Values{"stdout": {"1"}, "stderr": {"1"}, "tail": {strconv.Itoa(tail)}}
+	if !since.IsZero() {
+		query.Set("since", strconv.FormatInt(since.Unix(), 10))
+	}
+	body, err := c.open(ctx, "/containers/"+url.PathEscape(ref)+"/logs", query)
+	if err != nil {
+		return "", err
+	}
+	defer body.Close()
+	return readLogStream(bufio.NewReader(io.LimitReader(body, maxAnswer)))
+}
+
+// readLogStream joins the engine's multiplexed frames; a container with a
+// terminal writes plain text instead.
+func readLogStream(stream *bufio.Reader) (string, error) {
+	var out strings.Builder
+	for {
+		header, err := stream.Peek(8)
+		if len(header) == 0 && errors.Is(err, io.EOF) {
+			return out.String(), nil
+		}
+		if len(header) < 8 || header[0] > 2 || header[1] != 0 || header[2] != 0 || header[3] != 0 {
+			rest, readErr := io.ReadAll(stream)
+			out.Write(rest)
+			return out.String(), readErr
+		}
+		_, _ = stream.Discard(8)
+		size := int64(binary.BigEndian.Uint32(header[4:8]))
+		if _, err := io.CopyN(&out, stream, size); err != nil {
+			if errors.Is(err, io.EOF) {
+				return out.String(), nil
+			}
+			return out.String(), err
+		}
+	}
+}
+
+// open answers the body of a successful GET; the caller closes it.
+func (c *Client) open(ctx context.Context, path string, query url.Values) (io.ReadCloser, error) {
 	target := *c.base
 	target.Path = path
 	target.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("engine %s: %w", path, err)
+		return nil, fmt.Errorf("engine %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return resp.Body, nil
+	}
+	resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
-		return ErrNotFound
+		return nil, ErrNotFound
 	case resp.StatusCode == http.StatusConflict, resp.StatusCode == http.StatusInternalServerError && strings.HasSuffix(path, "/stats"):
 		// Podman answers stats of a stopped container with 500 "container is stopped".
-		return ErrNotRunning
-	case resp.StatusCode != http.StatusOK:
-		return fmt.Errorf("engine %s: answered %d", path, resp.StatusCode)
+		return nil, ErrNotRunning
+	default:
+		return nil, fmt.Errorf("engine %s: answered %d", path, resp.StatusCode)
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, maxAnswer)).Decode(into)
 }

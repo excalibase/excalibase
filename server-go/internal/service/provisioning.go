@@ -27,6 +27,8 @@ import (
 const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
 type ProvisioningService struct {
+	// singleHostLogs reads a single host's database container logs (EXC-670); nil refuses the search.
+	singleHostLogs SingleHostLogs
 	// documentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin; off unless the installation says so (EXC-394).
 	documentDBEnabled bool

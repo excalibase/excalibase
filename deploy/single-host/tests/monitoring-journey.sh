@@ -1,5 +1,6 @@
 # Sourced by boot-smoke.sh with HOST_METRICS=1 (EXC-670): the host and every
-# container are sampled each minute, the project's database shows its figures,
+# container are sampled each minute, the project's database shows its figures
+# and its log is searchable,
 # its members see only its own containers, and a stopped database raises an
 # alert that its restart resolves. Needs T, PID, TC, PORT, DOCKER, c, ok, ko.
 echo "== host monitoring"
@@ -31,6 +32,9 @@ M=$(api /provision/$PID/metrics/current)
   && ok "the project's Metrics page has its database figures" || ko "database metrics: ${M:0:400}"
 PC=$(api "/projects/$PID/containers/metrics?range=1h")
 case "$PC" in *"\"$TC\""*) case "$PC" in *'"excalibase-postgres"'*) ko "a project sees the platform's containers" ;; *) ok "the project sees its own containers only" ;; esac ;; *) ko "project containers: ${PC:0:400}" ;; esac
+
+LG=$(api "/provision/$PID/logs?lines=200&q=database+system+is+ready")
+case "$LG" in *'"logs":"'*"database system is ready"*) ok "the database's log is searched on a single host" ;; *) ko "log search: ${LG:0:300}" ;; esac
 
 st=$(c -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $T" -H 'Content-Type: application/json' "https://studio.localhost:$PORT/api/admin/monitoring/alert-settings" \
   -d '{"enabled":true,"cpuPercent":90,"memoryPercent":90,"diskPercent":99,"temperatureCelsius":95,"windowMinutes":5,"downMinutes":0,"emails":[]}')

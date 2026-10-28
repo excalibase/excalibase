@@ -153,3 +153,59 @@ func TestAHungEngineIsCutOff(t *testing.T) {
 		t.Error("a stats call outlived its context")
 	}
 }
+
+// frame is one block of the engine's multiplexed log stream.
+func frame(stream byte, text string) string {
+	size := len(text)
+	return string([]byte{stream, 0, 0, 0, byte(size >> 24), byte(size >> 16), byte(size >> 8), byte(size)}) + text
+}
+
+func TestLogsReadsTheTailOfBothStreams(t *testing.T) {
+	client, seen := engine(t, map[string]string{
+		"/containers/abc/logs": frame(1, "2026-10-29 LOG:  ready\n") + frame(2, "2026-10-29 FATAL:  password authentication failed\n"),
+	})
+	out, err := client.Logs(context.Background(), "abc", 50, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "2026-10-29 LOG:  ready\n2026-10-29 FATAL:  password authentication failed\n" {
+		t.Errorf("logs = %q", out)
+	}
+	if got := (*seen)[0]; got != "GET /containers/abc/logs?stderr=1&stdout=1&tail=50" {
+		t.Errorf("request = %s", got)
+	}
+}
+
+func TestLogsSinceAskTheEngineFromThatSecond(t *testing.T) {
+	client, seen := engine(t, map[string]string{"/containers/abc/logs": frame(1, "line\n")})
+	if _, err := client.Logs(context.Background(), "abc", 10, time.Unix(1761700000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if got := (*seen)[0]; got != "GET /containers/abc/logs?since=1761700000&stderr=1&stdout=1&tail=10" {
+		t.Errorf("request = %s", got)
+	}
+}
+
+func TestLogsOfATerminalContainerArePlainText(t *testing.T) {
+	client, _ := engine(t, map[string]string{"/containers/abc/logs": "plain line one\nplain line two\n"})
+	out, err := client.Logs(context.Background(), "abc", 10, time.Time{})
+	if err != nil || out != "plain line one\nplain line two\n" {
+		t.Errorf("logs = %q %v", out, err)
+	}
+}
+
+func TestLogsOfAMissingContainerIsNotFound(t *testing.T) {
+	client, _ := engine(t, map[string]string{})
+	if _, err := client.Logs(context.Background(), "gone", 10, time.Time{}); err != ErrNotFound {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestLogsStopAtTheReadBound(t *testing.T) {
+	big := strings.Repeat("x", maxAnswer+10)
+	client, _ := engine(t, map[string]string{"/containers/abc/logs": frame(1, big)})
+	out, err := client.Logs(context.Background(), "abc", 10, time.Time{})
+	if err != nil || len(out) > maxAnswer {
+		t.Errorf("read %d bytes, %v; want at most %d", len(out), err, maxAnswer)
+	}
+}

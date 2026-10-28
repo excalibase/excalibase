@@ -325,7 +325,9 @@ temperatures (where the machine has sensors), and each container's CPU, memory
 against its limit, and network. Host figures are kept 30 days; container
 figures every minute for 7 days, then one every 10 minutes up to 30 days. A
 project's Metrics page shows its database's CPU, memory, connections and size,
-and its own containers; members of a project see only that project's.
+and its own containers; members of a project see only that project's. The
+project's Logs page searches what the engine kept of its database container's
+output (the last 5000 lines at most; nothing is stored beyond the engine's own log).
 
 No agent is installed. The host figures come from what an unprivileged
 container already sees of `/proc` and `/sys`; `--host-metrics` adds one
