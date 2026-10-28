@@ -76,6 +76,9 @@ type tierConfigDTO struct {
 	MaxSiteFileBytes      *int64 `json:"maxSiteFileBytes"`
 	MaxSiteDeploysPerHour *int   `json:"maxSiteDeploysPerHour"`
 	MaxSiteCustomDomains  *int   `json:"maxSiteCustomDomains"`
+	// Server-rendered sites per project and their code size (EXC-661).
+	MaxServerSites           *int   `json:"maxServerSites"`
+	MaxSiteServerBundleBytes *int64 `json:"maxSiteServerBundleBytes"`
 	// One git build's limits (EXC-354); each one left out keeps the plan's current value.
 	SiteBuildCPUMillis      *int    `json:"siteBuildCpuMillis"`
 	SiteBuildMemory         *string `json:"siteBuildMemory"`
@@ -100,12 +103,14 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 
 		AutoPauseAfterDays: tc.AutoPauseAfterDays,
 
-		MaxSites:              &tc.Sites.MaxSites,
-		MaxSiteDeployBytes:    &tc.Sites.MaxDeployBytes,
-		MaxSiteFiles:          &tc.Sites.MaxFiles,
-		MaxSiteFileBytes:      &tc.Sites.MaxFileBytes,
-		MaxSiteDeploysPerHour: &tc.Sites.MaxDeploysPerHour,
-		MaxSiteCustomDomains:  &tc.Sites.MaxCustomDomains,
+		MaxSites:                 &tc.Sites.MaxSites,
+		MaxSiteDeployBytes:       &tc.Sites.MaxDeployBytes,
+		MaxSiteFiles:             &tc.Sites.MaxFiles,
+		MaxSiteFileBytes:         &tc.Sites.MaxFileBytes,
+		MaxSiteDeploysPerHour:    &tc.Sites.MaxDeploysPerHour,
+		MaxSiteCustomDomains:     &tc.Sites.MaxCustomDomains,
+		MaxServerSites:           &tc.Sites.MaxServerSites,
+		MaxSiteServerBundleBytes: &tc.Sites.MaxServerBundleBytes,
 
 		SiteBuildCPUMillis:      &tc.SiteBuilds.CPUMillis,
 		SiteBuildMemory:         &tc.SiteBuilds.Memory,
@@ -273,6 +278,12 @@ func (dto tierConfigDTO) siteLimits(current config.SiteTierLimits) config.SiteTi
 	if dto.MaxSiteCustomDomains != nil {
 		out.MaxCustomDomains = *dto.MaxSiteCustomDomains
 	}
+	if dto.MaxServerSites != nil {
+		out.MaxServerSites = *dto.MaxServerSites
+	}
+	if dto.MaxSiteServerBundleBytes != nil {
+		out.MaxServerBundleBytes = *dto.MaxSiteServerBundleBytes
+	}
 	return out
 }
 
@@ -332,9 +343,18 @@ const (
 	maxSiteDeploysPerHourCap = 1000
 	// Cloudflare includes 100 custom hostnames per zone; every one after is billed.
 	maxSiteCustomDomainsCap = 100
+	// Cloudflare refuses a Worker above 64 MiB uncompressed.
+	minSiteServerBundleBytes = int64(1) << 20
+	maxSiteServerBundleBytes = int64(64) << 20
 )
 
 func validateSiteLimits(limits config.SiteTierLimits) error {
+	if limits.MaxServerSites < 0 || limits.MaxServerSites > maxSitesCeiling {
+		return fmt.Errorf("maxServerSites must be between 0 and %d (0 offers none)", maxSitesCeiling)
+	}
+	if limits.MaxServerBundleBytes < minSiteServerBundleBytes || limits.MaxServerBundleBytes > maxSiteServerBundleBytes {
+		return fmt.Errorf("maxSiteServerBundleBytes must be between %d (1 MiB) and %d (64 MiB)", minSiteServerBundleBytes, maxSiteServerBundleBytes)
+	}
 	if limits.MaxCustomDomains < 0 || limits.MaxCustomDomains > maxSiteCustomDomainsCap {
 		return fmt.Errorf("maxSiteCustomDomains must be between 0 and %d (0 offers none)", maxSiteCustomDomainsCap)
 	}

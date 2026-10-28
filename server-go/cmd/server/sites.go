@@ -48,6 +48,8 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 	service, err := sites.NewService(store, publisher, origins, sites.Options{
 		BaseDomain: cfg.Sites.BaseDomain, Hostnames: store, DeployLimits: limits, CustomDomains: customDomainOptions(cfg),
 		Projects: projectGate{instances: sqlStore, claimer: claimer},
+		// Server sites keep their code beside the deploy records (EXC-661).
+		Flags: cfg.Features(), Code: store,
 	})
 	if err != nil {
 		log.Fatalf("sites: %v", err)

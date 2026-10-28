@@ -18,7 +18,7 @@ var errStoreDown = errors.New("platform database unreachable")
 // brokenStore fails every call, so each path that reads or writes reports it.
 type brokenStore struct{ sites.Store }
 
-func (brokenStore) Create(context.Context, *sites.Site, int) error { return errStoreDown }
+func (brokenStore) Create(context.Context, *sites.Site, int, int) error { return errStoreDown }
 func (brokenStore) Get(context.Context, string, string) (*sites.Site, error) {
 	return nil, errStoreDown
 }

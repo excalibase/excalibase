@@ -124,9 +124,12 @@ func TestTiersCapAppsPerProject(t *testing.T) {
 func TestTiersCarryTheirSiteLimits(t *testing.T) {
 	const mib = int64(1) << 20
 	want := map[domain.TierType]SiteTierLimits{
-		domain.Free:       {MaxSites: 5, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 30, MaxCustomDomains: 2},
-		domain.Standard:   {MaxSites: 20, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 120, MaxCustomDomains: 5},
-		domain.Enterprise: {MaxSites: 50, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 300, MaxCustomDomains: 10},
+		domain.Free: {MaxSites: 5, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 30, MaxCustomDomains: 2,
+			MaxServerSites: 1, MaxServerBundleBytes: 10 * mib},
+		domain.Standard: {MaxSites: 20, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 120, MaxCustomDomains: 5,
+			MaxServerSites: 3, MaxServerBundleBytes: 30 * mib},
+		domain.Enterprise: {MaxSites: 50, MaxDeployBytes: 100 * mib, MaxFiles: 20_000, MaxFileBytes: 25 * mib, MaxDeploysPerHour: 300, MaxCustomDomains: 10,
+			MaxServerSites: 10, MaxServerBundleBytes: 30 * mib},
 	}
 	for tier, limits := range want {
 		tc, err := GetTierConfig(tier)

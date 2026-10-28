@@ -14,7 +14,8 @@ import (
 func (s *Store) ListTierConfigs(ctx context.Context) (map[domain.TierType]config.TierConfig, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT tier, max_projects, instances, storage_size, max_storage_size, max_app_disk_size, max_apps, memory, cpu, backup_enabled, auto_pause_after_days,
 		max_sites, max_site_deploy_bytes, max_site_files, max_site_file_bytes, max_site_deploys_per_hour, max_site_custom_domains,
-		site_build_cpu_millis, site_build_memory, site_build_disk, site_build_timeout_seconds, site_build_concurrency, version FROM tier_configs`)
+		site_build_cpu_millis, site_build_memory, site_build_disk, site_build_timeout_seconds, site_build_concurrency, version,
+		max_server_sites, max_site_server_bundle_bytes FROM tier_configs`)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +36,8 @@ func (s *Store) GetTierConfig(ctx context.Context, tier domain.TierType) (config
 	row := s.db.QueryRowContext(ctx,
 		`SELECT tier, max_projects, instances, storage_size, max_storage_size, max_app_disk_size, max_apps, memory, cpu, backup_enabled, auto_pause_after_days,
 		max_sites, max_site_deploy_bytes, max_site_files, max_site_file_bytes, max_site_deploys_per_hour, max_site_custom_domains,
-		site_build_cpu_millis, site_build_memory, site_build_disk, site_build_timeout_seconds, site_build_concurrency, version FROM tier_configs WHERE tier = $1`, tier)
+		site_build_cpu_millis, site_build_memory, site_build_disk, site_build_timeout_seconds, site_build_concurrency, version,
+		max_server_sites, max_site_server_bundle_bytes FROM tier_configs WHERE tier = $1`, tier)
 	_, tc, err := scanTierConfig(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return config.TierConfig{}, false, nil
@@ -53,8 +55,9 @@ func (s *Store) UpsertTierConfig(ctx context.Context, tier domain.TierType, tc c
 	err := s.db.QueryRowContext(ctx,
 		`INSERT INTO tier_configs (tier, max_projects, instances, storage_size, memory, cpu, backup_enabled, auto_pause_after_days, max_storage_size, max_app_disk_size, max_apps,
 		    max_sites, max_site_deploy_bytes, max_site_files, max_site_file_bytes, max_site_deploys_per_hour, max_site_custom_domains,
-		    site_build_cpu_millis, site_build_memory, site_build_disk, site_build_timeout_seconds, site_build_concurrency, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $19, $20, $21, $22, $23, NOW())
+		    site_build_cpu_millis, site_build_memory, site_build_disk, site_build_timeout_seconds, site_build_concurrency,
+		    max_server_sites, max_site_server_bundle_bytes, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $19, $20, $21, $22, $23, $24, $25, NOW())
 		 ON CONFLICT (tier) DO UPDATE SET
 		    max_projects          = EXCLUDED.max_projects,
 		    instances             = EXCLUDED.instances,
@@ -77,13 +80,16 @@ func (s *Store) UpsertTierConfig(ctx context.Context, tier domain.TierType, tc c
 		    site_build_disk       = EXCLUDED.site_build_disk,
 		    site_build_timeout_seconds = EXCLUDED.site_build_timeout_seconds,
 		    site_build_concurrency = EXCLUDED.site_build_concurrency,
+		    max_server_sites      = EXCLUDED.max_server_sites,
+		    max_site_server_bundle_bytes = EXCLUDED.max_site_server_bundle_bytes,
 		    version               = tier_configs.version + 1,
 		    updated_at            = NOW()
 		 WHERE $18::INTEGER IS NULL OR tier_configs.version = $18
 		 RETURNING version`,
 		tier, tc.MaxProjects, tc.Instances, tc.StorageSize, tc.Memory, tc.CPU, tc.BackupEnabled, tc.AutoPauseAfterDays, tc.MaxStorageSize, tc.MaxAppDiskSize, tc.MaxApps,
 		tc.Sites.MaxSites, tc.Sites.MaxDeployBytes, tc.Sites.MaxFiles, tc.Sites.MaxFileBytes, tc.Sites.MaxDeploysPerHour, tc.Sites.MaxCustomDomains, expectedVersion,
-		tc.SiteBuilds.CPUMillis, tc.SiteBuilds.Memory, tc.SiteBuilds.Disk, tc.SiteBuilds.TimeoutSeconds, tc.SiteBuilds.Concurrency).Scan(&version)
+		tc.SiteBuilds.CPUMillis, tc.SiteBuilds.Memory, tc.SiteBuilds.Disk, tc.SiteBuilds.TimeoutSeconds, tc.SiteBuilds.Concurrency,
+		tc.Sites.MaxServerSites, tc.Sites.MaxServerBundleBytes).Scan(&version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, s.tierVersionConflict(ctx, tier)
 	}
@@ -106,6 +112,7 @@ func scanTierConfig(r tierRowScanner) (domain.TierType, config.TierConfig, error
 	var tc config.TierConfig
 	err := r.Scan(&tier, &tc.MaxProjects, &tc.Instances, &tc.StorageSize, &tc.MaxStorageSize, &tc.MaxAppDiskSize, &tc.MaxApps, &tc.Memory, &tc.CPU, &tc.BackupEnabled, &tc.AutoPauseAfterDays,
 		&tc.Sites.MaxSites, &tc.Sites.MaxDeployBytes, &tc.Sites.MaxFiles, &tc.Sites.MaxFileBytes, &tc.Sites.MaxDeploysPerHour, &tc.Sites.MaxCustomDomains,
-		&tc.SiteBuilds.CPUMillis, &tc.SiteBuilds.Memory, &tc.SiteBuilds.Disk, &tc.SiteBuilds.TimeoutSeconds, &tc.SiteBuilds.Concurrency, &tc.Version)
+		&tc.SiteBuilds.CPUMillis, &tc.SiteBuilds.Memory, &tc.SiteBuilds.Disk, &tc.SiteBuilds.TimeoutSeconds, &tc.SiteBuilds.Concurrency, &tc.Version,
+		&tc.Sites.MaxServerSites, &tc.Sites.MaxServerBundleBytes)
 	return tier, tc, err
 }

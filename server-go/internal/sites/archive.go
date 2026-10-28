@@ -33,6 +33,10 @@ type Limits struct {
 	MaxDeploysPerHour int
 	// MaxCustomDomains is how many custom domains the project's sites may hold; 0 offers none.
 	MaxCustomDomains int
+	// MaxServerSites is how many of the sites may be server-rendered (EXC-661); 0 offers none.
+	MaxServerSites int
+	// MaxServerBundleBytes bounds a server deploy's code, uncompressed; its source maps get the same again.
+	MaxServerBundleBytes int64
 }
 
 // DefaultLimits is the FREE plan's, for a service built without a limits source.
@@ -43,6 +47,9 @@ var DefaultLimits = Limits{
 	MaxSites:          5,
 	MaxDeploysPerHour: 30,
 	MaxCustomDomains:  2,
+	MaxServerSites:    1,
+	// Cloudflare takes 64 MiB; a minified Next.js app is about 3 MiB.
+	MaxServerBundleBytes: 10 << 20,
 }
 
 const maxPathLength = 1024
@@ -109,16 +116,26 @@ type BundleFile struct {
 	Size        int64
 	ContentType string
 	spool       string
+	// digest is the SHA-256 of the content alone, to tell a public copy of server code.
+	digest [sha256.Size]byte
 }
 
-// Bundle is a validated build output; Close removes its spool.
+// Bundle is a validated build output; Close removes its spool. Files are
+// the public assets; a server deploy also has Modules, which never reach the
+// manifest, and the Server settings from its site.json.
 type Bundle struct {
 	dir        string
 	Files      []BundleFile
 	TotalBytes int64
+	// Modules are a server deploy's code; Path is the module name, relative to server/.
+	Modules []BundleFile
+	// CodeBytes counts the modules except source maps, which MapBytes counts.
+	CodeBytes int64
+	MapBytes  int64
+	Server    *ServerConfig
 }
 
-// Manifest is the bundle as Cloudflare's upload session reads it.
+// Manifest is the bundle's public files as Cloudflare's upload session reads it.
 func (b *Bundle) Manifest() map[string]cfworkers.ManifestEntry {
 	manifest := make(map[string]cfworkers.ManifestEntry, len(b.Files))
 	for _, file := range b.Files {
@@ -152,36 +169,46 @@ func ReadArchive(body io.Reader, limits Limits, spoolDir string) (*Bundle, error
 }
 
 func (b *Bundle) fill(body io.Reader, limits Limits) error {
-	stream, err := decompressed(body)
+	seen := map[string]bool{}
+	err := readEntries(body, MaxArchiveBytes(limits), 2*limits.MaxFiles, func(reader io.Reader, header *tar.Header) error {
+		return b.addEntry(reader, header, limits, seen)
+	})
 	if err != nil {
 		return err
-	}
-	// Pax and GNU long-name headers never surface as entries, so the inflated stream itself is capped.
-	reader := tar.NewReader(&cappedReader{source: stream, limit: MaxArchiveBytes(limits)})
-	seen := map[string]bool{}
-	for entries := 1; ; entries++ {
-		header, err := reader.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if errors.Is(err, errArchiveInflated) {
-			return refuseSize("the archive is larger than %d bytes once decompressed", MaxArchiveBytes(limits))
-		}
-		if err != nil {
-			return refuseRead(err, "the upload is not a readable tar or tar.gz archive: %v", err)
-		}
-		// Folders cost nothing to compress, so they are counted too.
-		if entries > 2*limits.MaxFiles {
-			return refuseSize("the archive holds more than %d entries", 2*limits.MaxFiles)
-		}
-		if err := b.addEntry(reader, header, limits, seen); err != nil {
-			return err
-		}
 	}
 	if !seen["/index.html"] {
 		return refuse("the archive has no index.html at its root; build it with: tar -czf dist.tgz -C dist .")
 	}
 	return nil
+}
+
+// readEntries walks the archive, capped at maxBytes decompressed and maxEntries entries, folders included.
+func readEntries(body io.Reader, maxBytes int64, maxEntries int, add func(io.Reader, *tar.Header) error) error {
+	stream, err := decompressed(body)
+	if err != nil {
+		return err
+	}
+	// Pax and GNU long-name headers never surface as entries, so the inflated stream itself is capped.
+	reader := tar.NewReader(&cappedReader{source: stream, limit: maxBytes})
+	for entries := 1; ; entries++ {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if errors.Is(err, errArchiveInflated) {
+			return refuseSize("the archive is larger than %d bytes once decompressed", maxBytes)
+		}
+		if err != nil {
+			return refuseRead(err, "the upload is not a readable tar or tar.gz archive: %v", err)
+		}
+		// Folders cost nothing to compress, so they are counted too.
+		if entries > maxEntries {
+			return refuseSize("the archive holds more than %d entries", maxEntries)
+		}
+		if err := add(reader, header); err != nil {
+			return err
+		}
+	}
 }
 
 // decompressed reads gzip when the body starts with its magic bytes, plain tar otherwise.
@@ -209,6 +236,11 @@ func (b *Bundle) addEntry(reader io.Reader, header *tar.Header, limits Limits, s
 	if header.Typeflag == tar.TypeDir {
 		return nil
 	}
+	return b.addFile(reader, sitePath, header.Size, limits, seen)
+}
+
+// addFile spools one public file of the deploy under its site path.
+func (b *Bundle) addFile(reader io.Reader, sitePath string, size int64, limits Limits, seen map[string]bool) error {
 	if seen[sitePath] {
 		return refuse("%s appears twice in the archive", sitePath)
 	}
@@ -216,13 +248,19 @@ func (b *Bundle) addEntry(reader io.Reader, header *tar.Header, limits Limits, s
 	if len(b.Files) >= limits.MaxFiles {
 		return refuseSize("the archive holds more than %d files", limits.MaxFiles)
 	}
-	if header.Size > limits.MaxFileBytes {
+	if size > limits.MaxFileBytes {
 		return refuseSize("%s is larger than %d bytes", sitePath, limits.MaxFileBytes)
 	}
-	if b.TotalBytes+header.Size > limits.MaxTotalBytes {
+	if b.TotalBytes+size > limits.MaxTotalBytes {
 		return refuseSize("the files total more than %d bytes", limits.MaxTotalBytes)
 	}
-	return b.spoolFile(reader, sitePath, header.Size)
+	file, err := b.spool(reader, sitePath, size)
+	if err != nil {
+		return err
+	}
+	b.Files = append(b.Files, file)
+	b.TotalBytes += file.Size
+	return nil
 }
 
 func refuseEntryType(header *tar.Header) error {
@@ -274,39 +312,39 @@ func cleanPath(name string, isDir bool) (string, error) {
 	return "/" + trimmed, nil
 }
 
-// spoolFile copies one file to disk while hashing it as Wrangler does:
+// spool copies one file to disk while hashing it as Wrangler does:
 // SHA-256 of base64(content) + extension, first 32 hex characters.
-func (b *Bundle) spoolFile(reader io.Reader, sitePath string, declared int64) error {
-	spool := strconv.Itoa(len(b.Files))
+func (b *Bundle) spool(reader io.Reader, sitePath string, declared int64) (BundleFile, error) {
+	spool := strconv.Itoa(len(b.Files) + len(b.Modules))
 	out, err := os.OpenFile(filepath.Join(b.dir, spool), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("spool %s: %w", sitePath, err)
+		return BundleFile{}, fmt.Errorf("spool %s: %w", sitePath, err)
 	}
-	hasher := sha256.New()
+	hasher, plain := sha256.New(), sha256.New()
 	encoder := base64.NewEncoder(base64.StdEncoding, hasher)
-	written, copyErr := io.Copy(io.MultiWriter(out, encoder), io.LimitReader(reader, declared))
+	written, copyErr := io.Copy(io.MultiWriter(out, encoder, plain), io.LimitReader(reader, declared))
 	closeErr := out.Close()
 	if errors.Is(copyErr, errArchiveInflated) {
-		return refuseSize("the archive is larger than its limit once decompressed")
+		return BundleFile{}, refuseSize("the archive is larger than its limit once decompressed")
 	}
 	if copyErr != nil {
-		return refuseRead(copyErr, "could not read %s from the archive: %v", sitePath, copyErr)
+		return BundleFile{}, refuseRead(copyErr, "could not read %s from the archive: %v", sitePath, copyErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("spool %s: %w", sitePath, closeErr)
+		return BundleFile{}, fmt.Errorf("spool %s: %w", sitePath, closeErr)
 	}
 	if written != declared {
-		return refuse("%s is cut short in the archive", sitePath)
+		return BundleFile{}, refuse("%s is cut short in the archive", sitePath)
 	}
-	b.Files = append(b.Files, BundleFile{
+	file := BundleFile{
 		Path:        sitePath,
 		Hash:        assetHash(encoder, hasher, sitePath),
 		Size:        written,
 		ContentType: contentTypeFor(sitePath),
 		spool:       spool,
-	})
-	b.TotalBytes += written
-	return nil
+	}
+	copy(file.digest[:], plain.Sum(nil))
+	return file, nil
 }
 
 // assetHash finishes the base64 stream into the hash, then adds the extension.

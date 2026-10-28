@@ -85,7 +85,9 @@ type deployResponse struct {
 }
 
 type siteCreateRequest struct {
-	Name        string `json:"name"`
+	Name string `json:"name"`
+	// Kind is static (the default) or server, offered with the sitesserver feature.
+	Kind        string `json:"kind"`
 	SPAFallback *bool  `json:"spaFallback"`
 }
 
@@ -112,7 +114,11 @@ func (h *SiteHandler) create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
-	site, err := h.sites.Create(r.Context(), chi.URLParam(r, "projectId"), body.Name, body.SPAFallback, actorID(r))
+	kind := body.Kind
+	if kind == "" {
+		kind = sites.KindStatic
+	}
+	site, err := h.sites.CreateKind(r.Context(), chi.URLParam(r, "projectId"), body.Name, kind, body.SPAFallback, actorID(r))
 	if err != nil {
 		writeSiteError(w, err)
 		return
@@ -175,6 +181,9 @@ type limitsResponse struct {
 	MaxFileBytes      int64 `json:"maxFileBytes"`
 	MaxDeploysPerHour int   `json:"maxDeploysPerHour"`
 	MaxCustomDomains  int   `json:"maxCustomDomains"`
+	// Server-rendered sites (EXC-661): how many, and their code size uncompressed.
+	MaxServerSites       int   `json:"maxServerSites"`
+	MaxServerBundleBytes int64 `json:"maxServerBundleBytes"`
 }
 
 func (h *SiteHandler) limits(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +193,8 @@ func (h *SiteHandler) limits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, limitsResponse{MaxSites: limits.MaxSites, MaxDeployBytes: limits.MaxTotalBytes, MaxFiles: limits.MaxFiles,
-		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour, MaxCustomDomains: limits.MaxCustomDomains})
+		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour, MaxCustomDomains: limits.MaxCustomDomains,
+		MaxServerSites: limits.MaxServerSites, MaxServerBundleBytes: limits.MaxServerBundleBytes})
 }
 
 // sitePathID refuses an id that is not a plain identifier before any lookup.
@@ -205,6 +215,9 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	var rateErr *sites.RateLimitError
 	switch {
+	case errors.Is(err, sites.ErrServerSitesOff):
+		// As an unmounted route answers (EXC-554), so a dark feature is not advertised.
+		http.Error(w, "404 page not found", http.StatusNotFound)
 	case errors.Is(err, sites.ErrSitesUnavailable):
 		httpError(w, sites.ErrSitesUnavailable.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, sites.ErrCustomDomainsUnavailable):
@@ -215,7 +228,7 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	case errors.Is(err, sites.ErrSiteNameTaken), errors.Is(err, sites.ErrSiteLimitReached), errors.Is(err, sites.ErrSiteBusy), errors.Is(err, sites.ErrLeaseLost),
 		errors.Is(err, sites.ErrDeployNotServable), errors.Is(err, sites.ErrRollbackNeedsFiles), errors.Is(err, sites.ErrDeployTokenLimitReached),
 		errors.Is(err, sites.ErrHostnameTaken), errors.Is(err, sites.ErrHostnameLimitReached), errors.Is(err, sites.ErrCustomDomainsFull),
-		errors.Is(err, sites.ErrProjectNotServing):
+		errors.Is(err, sites.ErrProjectNotServing), errors.Is(err, sites.ErrServerSiteLimitReached), errors.Is(err, sites.ErrServerCodeGone):
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.As(err, &rateErr):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(rateErr.RetryAfter.Seconds())), 10))
