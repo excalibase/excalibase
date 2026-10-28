@@ -272,6 +272,8 @@ services:
       FEATURE_AUTHUSER: ${FEATURE_AUTHUSER:-false}
       # End-user guest accounts and the stable token subject (EXC-662).
       FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
+      # A database's read-only address to its replicas (EXC-666); a single host has none and says so.
+      FEATURE_DBREADADDRESS: ${FEATURE_DBREADADDRESS:-false}
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.

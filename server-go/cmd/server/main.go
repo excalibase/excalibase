@@ -213,12 +213,17 @@ func runServer(cfg config.AppConfig) {
 	dbEndpointSvc := buildDBEndpointService(cfg, sqlStore, store, k8sClient, lifecycleClaimer)
 	var dbEndpoints service.PublicEndpointReconciler
 	if dbEndpointSvc != nil {
-		dbEndpoints = dbEndpointSvc
-		deps.provHandler.SetDBEndpointService(dbEndpointSvc)
-		provSvc.SetPublicEndpointReconciler(dbEndpointSvc)
+		// The read address (EXC-666) wraps the endpoint so the lifecycle takes it along.
+		readStore, _ := sqlStore.(storage.DatabaseReadAddressStore)
+		withReadAddress := service.NewDBReadAddressService(dbEndpointSvc, readStore, cfg.Features())
+		dbEndpoints = withReadAddress
+		deps.provHandler.SetDBEndpointService(withReadAddress)
+		deps.dbReadAddressHandler.SetAPI(withReadAddress)
+		provSvc.SetPublicEndpointReconciler(withReadAddress)
 	}
 	if singleHostEndpoints := buildSingleHostEndpoints(cfg, store, dockerClientRef); singleHostEndpoints != nil {
 		deps.provHandler.SetDBEndpointService(singleHostEndpoints)
+		deps.dbReadAddressHandler.SetAPI(singleHostEndpoints)
 	}
 
 	stopCallout := startNatsAuthCallout(cfg, sqlStore)
@@ -1059,6 +1064,8 @@ type handlerDeps struct {
 	// (EXC-658); nil without the platform DB tables.
 	logDrainsHandler    *handler.LogDrainsHandler
 	logForwarderHandler *handler.LogForwarderHandler
+	// dbReadAddressHandler serves a database's read-only address (EXC-666).
+	dbReadAddressHandler *handler.DBReadAddressHandler
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1827,6 +1834,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		metricsEndpointHandler: newMetricsEndpointHandler(sqlStore, requestTotals),
 		logDrainsHandler:       newLogDrainsHandler(logDrainSvc, sqlStore),
 		logForwarderHandler:    newLogForwarderHandler(logDrainSvc, cfg.LogForwarderToken),
+		dbReadAddressHandler:   newDBReadAddressHandler(sqlStore),
 		mcpAudit:               sqlStore,
 		features:               cfg.Features(),
 		activity:               custommw.ProjectActivity(activityRecorder),
@@ -2401,6 +2409,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	})
 	mountMetricsEndpoint(r, sqlStore, store, d)
 	mountLogDrains(r, sqlStore, store, d)
+	mountDBReadAddress(r, sqlStore, store, d)
 	mountAuthProviders(r, sqlStore, store, d)
 	// What AI coding tools did in the project through MCP (EXC-544).
 	r.Route("/api/projects/{projectId}/ai-activity", func(r chi.Router) {

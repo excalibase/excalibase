@@ -24,6 +24,7 @@ var featureEnv = map[features.Feature]string{
 	features.AuthOTP:         "FEATURE_AUTHOTP",
 	features.AuthUser:        "FEATURE_AUTHUSER",
 	features.AuthGuest:       "FEATURE_AUTHGUEST",
+	features.DBReadAddress:   "FEATURE_DBREADADDRESS",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.
