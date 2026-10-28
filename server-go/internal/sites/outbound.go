@@ -31,13 +31,19 @@ type outboundCheck struct {
 // requireOutbound refuses to publish server code unless the router binds the
 // configured outbound Worker, so no site code ever runs with unfiltered egress.
 func (s *Service) requireOutbound(ctx context.Context) error {
+	return s.checkOutbound(ctx, false)
+}
+
+// checkOutbound reads the binding unless a fresh read is not asked for and one was seen lately.
+func (s *Service) checkOutbound(ctx context.Context, fresh bool) error {
 	check := &s.outbound
 	check.mu.Lock()
 	defer check.mu.Unlock()
 	now := s.now()
-	if !check.seenAt.IsZero() && now.Sub(check.seenAt) < outboundCheckTTL {
+	if !fresh && !check.seenAt.IsZero() && now.Sub(check.seenAt) < outboundCheckTTL {
 		return nil
 	}
+	check.seenAt = time.Time{}
 	bound, err := s.options.Outbound.DispatchOutbound(ctx, RouterWorker)
 	if err != nil {
 		log.Printf("sites: read the router's outbound binding: %v", err)
