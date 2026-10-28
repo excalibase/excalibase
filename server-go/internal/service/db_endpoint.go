@@ -117,6 +117,9 @@ type DBEndpointService struct {
 	claimer      ProjectOperationClaimer
 	allowList    storage.DBSourceAllowListStore
 	flags        features.Flags
+	// alsoPublish renders the project's other public Services (the read
+	// address, EXC-666) with the same allow-list; nil renders none.
+	alsoPublish func(ctx context.Context, inst *domain.DatabaseInstance, policy sourcePolicy) error
 	// goneTimeout bounds the wait for a deleted Service to be observed gone;
 	// a cloud controller may hold one by its finalizer for a moment.
 	goneTimeout time.Duration
@@ -523,6 +526,9 @@ func (s *DBEndpointService) publishServicesWith(ctx context.Context, inst *domai
 				return err
 			}
 		}
+	}
+	if s.alsoPublish != nil {
+		return s.alsoPublish(ctx, inst, policy)
 	}
 	return nil
 }

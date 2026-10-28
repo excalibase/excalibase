@@ -45,8 +45,37 @@ var (
 var _ PublicEndpointReconciler = (*DBReadAddressService)(nil)
 
 func NewDBReadAddressService(inner *DBEndpointService, store storage.DatabaseReadAddressStore, flags features.Flags) *DBReadAddressService {
-	return &DBReadAddressService{inner: inner, store: store, flags: flags,
+	r := &DBReadAddressService{inner: inner, store: store, flags: flags,
 		closeRetry: 500 * time.Millisecond, closeWait: 30 * time.Second}
+	// Every render of the project's public Services, an allow-list change
+	// included, renders the read port with the same source ranges.
+	inner.alsoPublish = r.republishReader
+	return r
+}
+
+// republishReader re-renders an open read port under the given allow-list.
+func (r *DBReadAddressService) republishReader(ctx context.Context, inst *domain.DatabaseInstance, policy sourcePolicy) error {
+	if !features.Enabled(ctx, r.flags, features.DBReadAddress) {
+		return nil
+	}
+	reader, err := r.inner.endpoints.GetDatabaseEndpointForRole(ctx, inst.ProjectID, domain.DBEndpointRoleReader)
+	if err != nil || !reader.IsPublic() {
+		return err
+	}
+	return r.renderReader(ctx, inst, reader.Port, policy)
+}
+
+// renderReader creates or re-renders the read Service and reads its ranges back.
+func (r *DBReadAddressService) renderReader(ctx context.Context, inst *domain.DatabaseInstance, port int, policy sourcePolicy) error {
+	spec := r.readerSpec(inst, port)
+	spec.SourceRanges, spec.NoNodePorts = policy.ranges, policy.noNodePorts
+	if err := r.inner.ensureServiceObserved(ctx, inst, spec); err != nil {
+		return err
+	}
+	if policy.enforced {
+		return r.inner.confirmSourceRanges(ctx, inst.Namespace, spec)
+	}
+	return nil
 }
 
 // DBReadAddressInternal is the in-cluster read address an app beside the database uses.
@@ -130,11 +159,8 @@ func (r *DBReadAddressService) Publish(ctx context.Context, inst *domain.Databas
 		// A read port left from before a flag rollback is released, not republished.
 		return r.closeReader(ctx, inst)
 	}
-	reader, primary, err := r.rows(ctx, inst.ProjectID)
-	if err != nil || !reader.IsPublic() || !primary.IsPublic() {
-		return err
-	}
-	return r.inner.ensureServiceObserved(ctx, inst, r.readerSpec(inst, reader.Port))
+	// The inner Publish rendered an open read port with the primary ones.
+	return nil
 }
 
 // Release takes the read Service and port down before the primary teardown.
@@ -207,8 +233,12 @@ func (r *DBReadAddressService) open(ctx context.Context, inst *domain.DatabaseIn
 	if err != nil {
 		return err
 	}
-	if err := r.inner.ensureServiceObserved(ctx, inst, r.readerSpec(inst, reader.Port)); err != nil {
+	policy, err := r.inner.servicePolicy(ctx, inst.ProjectID)
+	if err != nil {
 		return err
+	}
+	if err := r.renderReader(ctx, inst, reader.Port, policy); err != nil {
+		return errors.Join(err, r.closeReader(ctx, inst))
 	}
 	// The primary port may have closed meanwhile; never leave a read port open on its own.
 	if err := r.requirePublicPort(ctx, inst); err != nil {
