@@ -76,7 +76,8 @@ describe('ReadAddressCard', () => {
     expect(screen.getByTestId('read-address-internal')).toHaveTextContent(
       'p-1-postgres-ro.ns.svc.cluster.local:5432',
     );
-    expect(screen.getByTestId('read-address-lag')).toHaveTextContent(/miss a write/);
+    expect(screen.getByTestId('read-address-lag')).toHaveTextContent(/revoked permission/);
+    expect(screen.getByTestId('read-address-not-acl')).toHaveTextContent(/not an access control/);
     expect(screen.getByTestId('read-address-public')).toHaveTextContent('No public read port');
   });
 
@@ -153,9 +154,12 @@ describe('ReadAddressCard', () => {
     expect(screen.queryByTestId('read-address-toggle')).not.toBeInTheDocument();
   });
 
-  test('the control waits for an active project', async () => {
-    renderCard(replicas, { status: 'PAUSED' });
+  test('opening waits for an active project; closing does not', async () => {
+    const { unmount } = renderCard(replicas, { status: 'PAUSED' });
     expect(await screen.findByTestId('read-address-toggle')).toBeDisabled();
+    unmount();
+    renderCard({ ...replicas, enabled: true, port: 31002 }, { status: 'PAUSED' });
+    expect(await screen.findByTestId('read-address-toggle')).toBeEnabled();
   });
 
   test('an installation without public ports keeps the internal address', async () => {

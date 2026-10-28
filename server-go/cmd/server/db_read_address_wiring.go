@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
@@ -21,7 +25,7 @@ func mountDBReadAddress(r *chi.Mux, sqlStore storage.OrgStore, store storage.Ins
 		readAddress = handler.NewDBReadAddressHandler(nil, nil)
 	}
 	r.Route("/api/projects/{projectId}/db-read-address", func(r chi.Router) {
-		r.Use(features.Require(d.features, features.DBReadAddress))
+		r.Use(readAddressGate(d.features))
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
@@ -39,4 +43,31 @@ func newDBReadAddressHandler(sqlStore any) *handler.DBReadAddressHandler {
 		LogAudit(ctx context.Context, entry *domain.AuditEntry) error
 	})
 	return handler.NewDBReadAddressHandler(nil, audit)
+}
+
+// readAddressGate answers as unmounted while the flag is off, except a PUT
+// closing the read port: a port opened before a rollback can still be closed.
+func readAddressGate(flags features.Flags) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if features.Enabled(r.Context(), flags, features.DBReadAddress) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if r.Method != http.MethodPut {
+				http.NotFound(w, r)
+				return
+			}
+			body, err := io.ReadAll(io.LimitReader(r.Body, 1024))
+			var close struct {
+				Enabled *bool `json:"enabled"`
+			}
+			if err != nil || json.Unmarshal(body, &close) != nil || close.Enabled == nil || *close.Enabled {
+				http.NotFound(w, r)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			next.ServeHTTP(w, r)
+		})
+	}
 }

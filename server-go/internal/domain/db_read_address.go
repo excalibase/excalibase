@@ -2,7 +2,7 @@ package domain
 
 // A project's read-only address (EXC-666): a second way into the database
 // that reaches only its replicas, like an RDS reader endpoint. A replica is a
-// Postgres hot standby or a MOCO super_read_only mysqld, so whoever logs in
+// Postgres hot standby or a MOCO super_read_only mysqld, so a new connection
 // cannot write through it; a database with no replica has no read address.
 
 // DBEndpointRoleReader is the public port the read address holds, from the

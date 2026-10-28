@@ -357,9 +357,66 @@ func TestReadAddress_SecondCloseWaitsForARacingEnable(t *testing.T) {
 	h.reader.closeRetry = 10 * time.Millisecond
 	h.reader.closeWait = 50 * time.Millisecond
 	h.openPublic(t)
+	h.enable(t)
 	release, _, _ := h.svc.claimer.Claim(context.Background(), endpointProject, OperationReadAddress)
 	defer release()
 	if err := h.reader.closeReaderLeased(context.Background(), h.instance); !errors.Is(err, ErrProjectOperationRunning) {
 		t.Fatalf("close while the lease is held: %v", err)
+	}
+}
+
+func TestReadAddress_ClosingThePublicPortNeedsNoLeaseWithoutAReadPort(t *testing.T) {
+	h := newReadHarness(t, 3, true)
+	h.openPublic(t)
+	release, _, _ := h.svc.claimer.Claim(context.Background(), endpointProject, OperationPause)
+	defer release()
+	if _, err := h.reader.SetPublic(context.Background(), endpointProject, false); err != nil {
+		t.Fatalf("close public during another operation: %v", err)
+	}
+	if h.serviceExists(t) {
+		t.Fatal("the public port is still open")
+	}
+}
+
+func TestReadAddress_FlagOffResumeReleasesAStoredReadPort(t *testing.T) {
+	h := newReadHarness(t, 3, true)
+	h.openPublic(t)
+	port := h.enable(t).Port
+	off := NewDBReadAddressService(h.svc, h.store, features.NewStatic())
+	if err := off.Withdraw(context.Background(), h.instance); err != nil {
+		t.Fatalf("withdraw: %v", err)
+	}
+	if err := off.Publish(context.Background(), h.instance); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if !h.store.quarantined(port) {
+		t.Fatal("a read port from before the rollback is still held")
+	}
+}
+
+func TestReadAddress_NeedsThePrimaryServiceAnswering(t *testing.T) {
+	h := newReadHarness(t, 3, true)
+	h.openPublic(t)
+	delete(h.kube.PublicDBServices, endpointNamespace+"/"+domain.DBEndpointServiceName(endpointProject))
+	if _, err := h.reader.SetReadAddress(context.Background(), endpointProject, true); !errors.Is(err, ErrReadAddressNeedsPublicPort) {
+		t.Fatalf("enable with the primary Service gone: %v", err)
+	}
+}
+
+type failingReadStore struct{}
+
+func (failingReadStore) SetDatabaseEndpointRolePublic(context.Context, string, domain.DBEndpointRole, bool) (domain.DBEndpoint, error) {
+	return domain.DBEndpoint{}, errors.New("platform db down")
+}
+
+func TestReadAddress_AnUnrecordedEnableTakesItsServiceDown(t *testing.T) {
+	h := newReadHarness(t, 3, true)
+	h.openPublic(t)
+	reader := NewDBReadAddressService(h.svc, failingReadStore{}, features.NewStatic(features.DBReadAddress))
+	if _, err := reader.SetReadAddress(context.Background(), endpointProject, true); err == nil {
+		t.Fatal("an unrecorded enable reported success")
+	}
+	if _, ok := h.kube.PublicDBServices[readerServiceKey()]; ok {
+		t.Fatal("a read port answers that nothing records")
 	}
 }

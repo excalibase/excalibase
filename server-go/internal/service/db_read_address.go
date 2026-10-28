@@ -16,9 +16,9 @@ import (
 
 // DBReadAddressService is a project's read-only address (EXC-666): CNPG's
 // -ro Service or MOCO's replica Service, inside the cluster and, when an
-// Admin opts in, on a public port of its own beside the primary one. Every
-// server behind it is a hot standby or super_read_only, so it is read-only
-// whoever logs in; a database with one copy has none. It wraps the endpoint
+// Admin opts in, on a public port of its own beside the primary one. New
+// connections reach only hot standbys or super_read_only replicas; a session
+// held across a failover is not re-routed. A database with one copy has none. It wraps the endpoint
 // service so the lifecycle and the primary port's close take it along.
 type DBReadAddressService struct {
 	inner *DBEndpointService
@@ -123,8 +123,12 @@ func (r *DBReadAddressService) Publish(ctx context.Context, inst *domain.Databas
 	if err := r.inner.Publish(ctx, inst); err != nil {
 		return err
 	}
-	if r.inner.inert(inst) || !features.Enabled(ctx, r.flags, features.DBReadAddress) {
+	if r.inner.inert(inst) {
 		return nil
+	}
+	if !features.Enabled(ctx, r.flags, features.DBReadAddress) {
+		// A read port left from before a flag rollback is released, not republished.
+		return r.closeReader(ctx, inst)
 	}
 	reader, primary, err := r.rows(ctx, inst.ProjectID)
 	if err != nil || !reader.IsPublic() || !primary.IsPublic() {
@@ -195,12 +199,8 @@ func (r *DBReadAddressService) open(ctx context.Context, inst *domain.DatabaseIn
 	if replicas == 0 {
 		return ErrReadAddressNoReplica
 	}
-	primary, err := r.inner.endpoints.GetDatabaseEndpoint(ctx, inst.ProjectID)
-	if err != nil {
+	if err := r.requirePublicPort(ctx, inst); err != nil {
 		return err
-	}
-	if !primary.IsPublic() {
-		return ErrReadAddressNeedsPublicPort
 	}
 	reader, err := r.inner.endpoints.AllocateDatabaseEndpointPort(
 		ctx, inst.ProjectID, domain.DBEndpointRoleReader, r.inner.ports, r.inner.quarantine)
@@ -210,13 +210,42 @@ func (r *DBReadAddressService) open(ctx context.Context, inst *domain.DatabaseIn
 	if err := r.inner.ensureServiceObserved(ctx, inst, r.readerSpec(inst, reader.Port)); err != nil {
 		return err
 	}
-	_, err = r.store.SetDatabaseEndpointRolePublic(ctx, inst.ProjectID, domain.DBEndpointRoleReader, true)
-	return err
+	// The primary port may have closed meanwhile; never leave a read port open on its own.
+	if err := r.requirePublicPort(ctx, inst); err != nil {
+		return errors.Join(err, r.closeReader(ctx, inst))
+	}
+	if _, err := r.store.SetDatabaseEndpointRolePublic(ctx, inst.ProjectID, domain.DBEndpointRoleReader, true); err != nil {
+		return errors.Join(err, r.deleteReaderService(ctx, inst))
+	}
+	return nil
+}
+
+// requirePublicPort refuses a read port unless the primary one is open and answering.
+func (r *DBReadAddressService) requirePublicPort(ctx context.Context, inst *domain.DatabaseInstance) error {
+	primary, err := r.inner.endpoints.GetDatabaseEndpoint(ctx, inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	if !primary.IsPublic() {
+		return ErrReadAddressNeedsPublicPort
+	}
+	exists, err := r.inner.kube.PublicDBServiceExists(ctx, inst.Namespace, publicServiceName(inst))
+	if err != nil {
+		return fmt.Errorf("confirm database endpoint: %w", err)
+	}
+	if !exists {
+		return ErrReadAddressNeedsPublicPort
+	}
+	return nil
 }
 
 // closeReaderLeased closes the read port under the project lease, waiting a
 // bounded time for an enable that holds it.
 func (r *DBReadAddressService) closeReaderLeased(ctx context.Context, inst *domain.DatabaseInstance) error {
+	held, err := r.holdsReader(ctx, inst.ProjectID)
+	if err != nil || !held {
+		return err
+	}
 	deadline := time.Now().Add(r.closeWait)
 	for {
 		release, claimed, err := r.inner.claimer.Claim(ctx, inst.ProjectID, OperationReadAddress)
@@ -241,12 +270,9 @@ func (r *DBReadAddressService) closeReaderLeased(ctx context.Context, inst *doma
 // closeReader withdraws the read Service and quarantines its port. A project
 // that never held one costs one row read and no Kubernetes call.
 func (r *DBReadAddressService) closeReader(ctx context.Context, inst *domain.DatabaseInstance) error {
-	reader, err := r.inner.endpoints.GetDatabaseEndpointForRole(ctx, inst.ProjectID, domain.DBEndpointRoleReader)
-	if err != nil {
+	held, err := r.holdsReader(ctx, inst.ProjectID)
+	if err != nil || !held {
 		return err
-	}
-	if reader.Port == 0 && !reader.PublicEnabled {
-		return nil
 	}
 	if err := r.deleteReaderService(ctx, inst); err != nil {
 		return err
@@ -256,14 +282,20 @@ func (r *DBReadAddressService) closeReader(ctx context.Context, inst *domain.Dat
 
 // withdrawReader removes the read Service and keeps its port, for a pause.
 func (r *DBReadAddressService) withdrawReader(ctx context.Context, inst *domain.DatabaseInstance) error {
-	reader, err := r.inner.endpoints.GetDatabaseEndpointForRole(ctx, inst.ProjectID, domain.DBEndpointRoleReader)
-	if err != nil {
+	held, err := r.holdsReader(ctx, inst.ProjectID)
+	if err != nil || !held {
 		return err
 	}
-	if reader.Port == 0 && !reader.PublicEnabled {
-		return nil
-	}
 	return r.deleteReaderService(ctx, inst)
+}
+
+// holdsReader reports whether the project holds a read port or a record of one.
+func (r *DBReadAddressService) holdsReader(ctx context.Context, projectID string) (bool, error) {
+	reader, err := r.inner.endpoints.GetDatabaseEndpointForRole(ctx, projectID, domain.DBEndpointRoleReader)
+	if err != nil {
+		return false, err
+	}
+	return reader.Port > 0 || reader.PublicEnabled, nil
 }
 
 func (r *DBReadAddressService) deleteReaderService(ctx context.Context, inst *domain.DatabaseInstance) error {

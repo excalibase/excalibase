@@ -102,7 +102,7 @@ func (h *DBReadAddressHandler) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view, err := h.api.SetReadAddress(r.Context(), projectID, *body.Enabled)
-	h.record(r, projectID, *body.Enabled, err)
+	h.record(r, projectID, *body.Enabled, view.Port, err)
 	if err != nil {
 		writeDBReadAddressError(w, projectID, err)
 		return
@@ -139,7 +139,7 @@ func readAddressResponseFor(r *http.Request, view service.DBReadAddressView) dbR
 }
 
 // record audits every attempt with its outcome.
-func (h *DBReadAddressHandler) record(r *http.Request, projectID string, enabled bool, failure error) {
+func (h *DBReadAddressHandler) record(r *http.Request, projectID string, enabled bool, port int, failure error) {
 	if h.audit == nil {
 		return
 	}
@@ -147,7 +147,7 @@ func (h *DBReadAddressHandler) record(r *http.Request, projectID string, enabled
 	if failure != nil {
 		outcome = "refused"
 	}
-	encoded, _ := json.Marshal(map[string]any{"enabled": enabled, "outcome": outcome})
+	encoded, _ := json.Marshal(map[string]any{"enabled": enabled, "port": port, "outcome": outcome})
 	now := time.Now()
 	entry := &domain.AuditEntry{UserID: actorID(r), Action: auditDBReadAddressUpdate, Resource: "db_endpoint",
 		ResourceID: projectID, ProjectID: projectID, Details: string(encoded), IPAddress: clientIP(r), Timestamp: &now}
