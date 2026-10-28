@@ -241,6 +241,20 @@ waits = (services["graphql"].get("depends_on") or {}).get("nats-stream-init", {}
 if waits.get("condition") != "service_completed_successfully":
     failures.append("graphql starts before the CDC stream exists")
 
+# EXC-670: host monitoring is off by default and mounts no host file then; the
+# proxy and provisioning read the same platform containers, by exact name.
+if penv.get("FEATURE_HOSTMETRICS") != "false":
+    failures.append(f"FEATURE_HOSTMETRICS={penv.get('FEATURE_HOSTMETRICS')!r} by default, want false")
+net_dev = [v for v in services["provisioning"].get("volumes") or [] if v.get("target") == penv.get("HOST_METRICS_NET_DEV")]
+if len(net_dev) != 1 or net_dev[0].get("source") != "/dev/null" or not net_dev[0].get("read_only"):
+    failures.append(f"provisioning's network-counters mount by default is {net_dev}, want /dev/null read-only")
+monitored = penv_proxy.get("PROXY_STATS_CONTAINERS", "").split(",")
+if monitored != penv.get("HOST_METRICS_CONTAINERS", "").split(","):
+    failures.append("the proxy and provisioning name different platform containers")
+long_running = {s.get("container_name") for s in services.values() if s.get("restart") == "unless-stopped"}
+if set(monitored) != long_running:
+    failures.append(f"monitored platform containers {sorted(monitored)}, want every long-running one {sorted(long_running)}")
+
 if failures:
     sys.exit("\n".join(failures))
 print("single-host hardening ok")

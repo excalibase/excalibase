@@ -174,6 +174,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		metricsKeysHandler:     handler.NewMetricsKeysHandler(fakestore.NewTokens(), nil),
 		metricsEndpointHandler: handler.NewMetricsEndpointHandler(storedTotals{}),
 		logDrainsHandler:       handler.NewLogDrainsHandler(matrixLogDrains(instances), nil),
+		hostMonitoringHandler:  matrixHostMonitoring(),
 		logForwarderHandler:    handler.NewLogForwarderHandler(matrixLogDrains(instances), "matrix-forwarder-token"),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.

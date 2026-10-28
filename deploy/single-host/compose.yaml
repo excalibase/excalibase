@@ -14,6 +14,9 @@ x-edge-aliases: &edge_aliases studio.${EXCALIBASE_DOMAIN:?run ./init.sh first},a
 # provisioning starts it and the engine proxy admits this image, and only it,
 # to the bus network NATS listens on.
 x-watcher-image: &watcher_image docker.io/excalibase/excalibase-watcher-go@sha256:7b2f9feb21b2a92b34c3f7b136399c619d460bf5d296215b8662a7a334126d9e
+# The platform's long-running containers host monitoring reads (EXC-670): the
+# proxy admits their stats and state, by these exact names, and nothing else of theirs.
+x-platform-containers: &platform_containers excalibase-postgres,excalibase-nats,excalibase-objectstore,excalibase-engine-proxy,excalibase-provisioning,excalibase-studio,excalibase-auth,excalibase-graphql,excalibase-edge
 x-hardened: &hardened
   security_opt:
     - no-new-privileges:true
@@ -205,6 +208,7 @@ services:
       PROXY_CDC_NETWORK: excalibase-cdc
       PROXY_CDC_IMAGES: *watcher_image
       PROXY_NETNS_JOIN_IMAGES: ${DOCUMENTDB_ENABLED:+ghcr.io/documentdb/documentdb-kubernetes-operator/gateway@sha256:8a5c7e533dc0fbed8ed780b22e31001a6b12ae0eb670f4aac62c1ded782742ed}
+      PROXY_STATS_CONTAINERS: *platform_containers
     volumes:
       - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
     read_only: true
@@ -272,6 +276,10 @@ services:
       FEATURE_AUTHUSER: ${FEATURE_AUTHUSER:-false}
       # End-user guest accounts and the stable token subject (EXC-662).
       FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
+      # Host and container monitoring, alerts and notices (EXC-670; init.sh --host-metrics).
+      FEATURE_HOSTMETRICS: ${FEATURE_HOSTMETRICS:-false}
+      HOST_METRICS_CONTAINERS: *platform_containers
+      HOST_METRICS_NET_DEV: /host/proc-net-dev
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.
@@ -363,6 +371,8 @@ services:
     volumes:
       - provisioning_data:/var/lib/excalibase
       - app_routes:/srv/excalibase-app-routes
+      # The host's network counters, one read-only file (init.sh --host-metrics); /dev/null otherwise.
+      - ${HOST_METRICS_NET_DEV_SOURCE:-/dev/null}:/host/proc-net-dev:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -78,13 +78,16 @@ func (s *MetricsService) SampleAll(ctx context.Context) {
 	if s.requests != nil {
 		s.requests.Sample(ctx)
 	}
+	if s.host != nil {
+		s.host.Sample(ctx)
+	}
 	instances, err := s.store.FindAll()
 	if err != nil {
 		log.Printf("metrics sampler: list projects: %v", err)
 		return
 	}
 	for _, inst := range instances {
-		if !sampled(inst) {
+		if !s.sampled(inst) {
 			continue
 		}
 		sampleCtx, cancel := context.WithTimeout(ctx, sampleTimeout)
@@ -102,10 +105,12 @@ func (s *MetricsService) SampleAll(ctx context.Context) {
 	}
 }
 
-// sampled is a running CNPG or MOCO database on Kubernetes.
-func sampled(inst *domain.DatabaseInstance) bool {
+// sampled is a running CNPG or MOCO database on Kubernetes, or a database
+// container on a single host whose monitoring is on.
+func (s *MetricsService) sampled(inst *domain.DatabaseInstance) bool {
 	return inst.Status == "ACTIVE" && !inst.NoDatabase &&
-		(inst.DBType == domain.PostgreSQL || inst.DBType == domain.MySQL) && inst.DeploymentMode != domain.ModeDocker
+		(inst.DBType == domain.PostgreSQL || inst.DBType == domain.MySQL) &&
+		(inst.DeploymentMode != domain.ModeDocker || s.singleHostSampled(inst))
 }
 
 // tableHistory is the table's newest rows for a project, oldest first.

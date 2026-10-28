@@ -51,6 +51,9 @@ type Policy struct {
 	// only CDCImages, digest-pinned, may join it (cdc_network.go).
 	CDCNetwork string
 	CDCImages  []string
+	// StatsContainers are the platform's own containers, by exact name, whose
+	// stats and state host monitoring reads (stats.go).
+	StatsContainers []string
 }
 
 // ErrRefused wraps every policy refusal.
@@ -103,6 +106,9 @@ func allow(Policy, any) error { return nil }
 func (p Policy) CheckCreate(name string, body []byte) error {
 	if !strings.HasPrefix(name, p.ContainerPrefix) || name == p.ContainerPrefix {
 		return refuse("container name %q must start with %q", name, p.ContainerPrefix)
+	}
+	if p.monitoredPlatform(name) {
+		return refuse("container name %q is a platform container's", name)
 	}
 	var create struct {
 		Image            string

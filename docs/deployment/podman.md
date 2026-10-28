@@ -82,6 +82,7 @@ the other containers can read them under SELinux.
 | Edge ports | 80/443 | 80/443 with the sysctl above, else 8080/8443 for `localhost` |
 | Client addresses seen by the edge | the real client | the address of Podman's port forwarder: `STUDIO_ALLOW_CIDRS` and per-client rate limits cannot tell clients apart — restrict Studio with the host firewall instead |
 | Tenant CPU limits | always | needs the `cpu` controller delegated |
+| Host monitoring (`--host-metrics`) | container CPU, memory, network | the same; CPU is read without the `cpu` controller delegated, and health only where Podman runs its healthcheck timers |
 | Image healthchecks | kept | dropped for OCI-format images (Podman); the bundle declares every health gate it relies on in `compose.yaml` |
 
 ## Apps (containers)
