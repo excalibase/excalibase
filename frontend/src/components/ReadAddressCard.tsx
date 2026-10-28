@@ -10,8 +10,13 @@ interface ReadAddressCardProps {
 }
 
 const LAG_NOTE =
-  'Replicas apply each change a moment after the primary commits it, so a read here can miss a write made just before. ' +
-  'Read your own recent writes from the main address. Every write is refused on this address, whoever signs in.';
+  'Replicas apply each change after the primary commits it: usually within a second, much longer under heavy load. ' +
+  'A read here can miss a recent write, a deleted row or a revoked permission until the replica catches up. ' +
+  'Read your own recent writes from the main address.';
+
+const NOT_ACCESS_CONTROL =
+  'New connections reach replicas only, which refuse writes. A session kept open across a failover or upgrade can end up ' +
+  'on the new primary, and the same user writes through the main address: this is a route for reads, not an access control.';
 
 const NO_REPLICA =
   'This database runs one copy, so there is no replica to read from. A plan with more than one copy gets a read address.';
@@ -90,6 +95,9 @@ function ReadAddressBody({
       <p className="text-xs text-text-tertiary mt-3" data-testid="read-address-lag">
         {LAG_NOTE}
       </p>
+      <p className="text-xs text-text-tertiary mt-2" data-testid="read-address-not-acl">
+        {NOT_ACCESS_CONTROL}
+      </p>
     </>
   );
 }
@@ -135,7 +143,7 @@ function PublicReadPort({
           <Button
             size="sm"
             variant={view.enabled ? 'secondary' : 'primary'}
-            disabled={!active || change.isPending}
+            disabled={(!active && !view.enabled) || change.isPending}
             onClick={() => change.mutate(!view.enabled)}
             data-testid="read-address-toggle"
           >
