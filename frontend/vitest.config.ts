@@ -100,6 +100,8 @@ export default defineConfig({
         'src/components/services/**/*.{ts,tsx}',
         'src/pages/ProjectOverviewPage.tsx',
         'src/components/PublicPortCard.tsx',
+        'src/components/ReadAddressCard.tsx',
+        'src/api/readAddress.ts',
         'src/pages/AddDatabasePage.tsx',
         'src/components/DatabaseRequired.tsx',
         'src/components/StorageBudgetCard.tsx',
