@@ -13,7 +13,9 @@ const PROJECT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 // Each hop is a subrequest the site's own limit may not count, so few are followed.
 const MAX_REDIRECTS = 5;
 const FORWARDING_HEADERS = ["x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "forwarded", "x-real-ip", "true-client-ip", "cf-connecting-ip"];
-const CREDENTIAL_HEADERS = ["authorization", "cookie", "proxy-authorization"];
+const CREDENTIAL_HEADERS = ["authorization", "cookie", "proxy-authorization", "apikey", "x-api-key", "x-excalibase-publishable-key"];
+// The one header of the platform's namespace a client is meant to send.
+const PUBLISHABLE_KEY_HEADER = "x-excalibase-publishable-key";
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 
 export default {
@@ -107,7 +109,8 @@ const PLAIN_SEGMENT = /^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/;
 
 // ownProjectPath is a path of the project's own public API, as the ingress routes it.
 function ownProjectPath(pathname, projectId) {
-  const segments = pathname.split("/").slice(1);
+  // A trailing slash is the one empty segment allowed.
+  const segments = pathname.replace(/(.)\/$/, "$1").split("/").slice(1);
   if (!segments.every((segment) => PLAIN_SEGMENT.test(segment) && segment !== "." && segment !== "..")) {
     return false;
   }
@@ -129,7 +132,8 @@ function ownProjectPath(pathname, projectId) {
 function apiHeaders(source) {
   const headers = new Headers();
   for (const [name, value] of source) {
-    if (!name.startsWith(INTERNAL_HEADER_PREFIX) && !FORWARDING_HEADERS.includes(name)) {
+    const internal = name.startsWith(INTERNAL_HEADER_PREFIX) && name !== PUBLISHABLE_KEY_HEADER;
+    if (!internal && !FORWARDING_HEADERS.includes(name)) {
       headers.append(name, value);
     }
   }
