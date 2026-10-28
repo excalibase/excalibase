@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import router, { hostEntry } from "../src/index.js";
+import router, { hostEntry, siteHeaders } from "../src/index.js";
 
 // Server-rendered sites (EXC-661, ADR 0045): the platform records a JSON
 // entry for the hostname, and the router passes its limits and the site's
@@ -51,10 +51,20 @@ describe("a server site's entry", () => {
     }]);
   });
 
-  it("passes no outbound parameters while no outbound Worker is bound", async () => {
+  it("never runs server code while no outbound Worker filters its egress", async () => {
     const { env, calls } = fakeEnv({ overrides: { OUTBOUND: undefined } });
-    await get(env);
-    expect(calls.get[0].options).toEqual({ limits: { cpuMs: 50, subRequests: 20 } });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await get(env);
+    expect(response.status).toBe(503);
+    expect(calls.get).toEqual([]);
+    expect(errors).toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it("still serves a static entry without an outbound Worker", async () => {
+    const { env, calls } = fakeEnv({ entry: SCRIPT, overrides: { OUTBOUND: undefined } });
+    expect((await get(env)).status).toBe(200);
+    expect(calls.get).toEqual([{ script: SCRIPT, args: undefined, options: undefined }]);
   });
 
   it.each([
@@ -124,5 +134,18 @@ describe("a server site's response", () => {
     expect(response.status).toBe(502);
     expect(await response.text()).not.toContain("CPU");
     errors.mockRestore();
+  });
+});
+
+describe("a server site's WebSocket handshake", () => {
+  it("gets the same header and cookie rules as any other answer", () => {
+    const headers = new Headers({ "x-excalibase-project": "other", "cf-ray": "x", upgrade: "websocket" });
+    headers.append("set-cookie", `wide=2; Domain=${BASE}`);
+    headers.append("set-cookie", "own=1; Path=/");
+    const filtered = siteHeaders(headers, `ssr.${BASE}`, true);
+    expect(filtered.get("x-excalibase-project")).toBeNull();
+    expect(filtered.get("cf-ray")).toBeNull();
+    expect(filtered.get("upgrade")).toBe("websocket");
+    expect(filtered.getSetCookie()).toEqual(["own=1; Path=/"]);
   });
 });

@@ -38,7 +38,7 @@ run() {
     FAKE_STATUS="${FAKE_STATUS:-200}" FAKE_BODY="${FAKE_BODY:-$OK_BODY}" \
     "$@" >"$WORK/out" 2>&1
 }
-good_args="--api-host api.excalibase.io --platform-hosts .excalibase.io,studio.example.com,148.113.0.42"
+good_args="--api-host api.excalibase.io --platform-hosts .excalibase.io,studio.example.com,148.113.0.42,2001:41d0:304:200::5e0"
 creds="CLOUDFLARE_API_TOKEN=$TOKEN CLOUDFLARE_ACCOUNT_ID=$ACCOUNT"
 leaks() { grep -q -e "$TOKEN" -e "$ACCOUNT" "$@"; }
 
@@ -57,7 +57,8 @@ cmp -s "$WORK/fake/part-index.js" "$DIR/src/index.js" || fail "uploaded module i
 meta="$WORK/fake/part-metadata"
 grep -q '"main_module":"index.js"' "$meta" || fail "no main module"
 grep -q '"type":"plain_text","name":"API_HOST","text":"api.excalibase.io"' "$meta" || fail "no API host"
-grep -q '"type":"plain_text","name":"PLATFORM_HOSTS","text":".excalibase.io,studio.example.com,148.113.0.42"' "$meta" || fail "no platform hosts"
+grep -q '"type":"plain_text","name":"PLATFORM_HOSTS","text":".excalibase.io,studio.example.com,148.113.0.42,2001:41d0:304:200::5e0"' "$meta" || fail "no platform hosts"
+grep -q '"compatibility_flags":\["global_fetch_strictly_public"\]' "$meta" || fail "fetches to our own zones could skip the public edge"
 
 run env $creds sh "$DIR/deploy.sh" $good_args --script outbound-staging || fail "--script refused"
 grep -q "/workers/scripts/outbound-staging\"" "$WORK/fake/config" || fail "--script ignored"
@@ -78,6 +79,9 @@ for bad in \
   run env $creds sh "$DIR/deploy.sh" $bad && fail "accepted: $bad"
   [ ! -e "$WORK/fake/args" ] || fail "called curl for: $bad"
 done
+# A value with a newline would pass a line-wise check and add JSON of its own.
+run env $creds sh "$DIR/deploy.sh" --api-host "$(printf 'api.excalibase.io\nx')" --platform-hosts .excalibase.io && fail "accepted a newline"
+[ ! -e "$WORK/fake/args" ] || fail "called curl for a newline"
 
 run env CLOUDFLARE_ACCOUNT_ID=$ACCOUNT sh "$DIR/deploy.sh" $good_args && fail "ran without a token"
 grep -q CLOUDFLARE_API_TOKEN "$WORK/out" || fail "missing token not named"

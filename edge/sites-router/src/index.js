@@ -57,6 +57,11 @@ export default {
     if (!entry) {
       return notFound(env.ABUSE_URL);
     }
+    // Server code never runs with unfiltered egress (deploy.sh --outbound binds the filter).
+    if (entry.limits && !env.OUTBOUND) {
+      console.error(`sites router: ${hostname} is a server site but no outbound Worker is bound; refusing it`);
+      return plainError(503, "This site is temporarily unavailable.");
+    }
     if (entry.paused) {
       return pausedPage();
     }
@@ -80,11 +85,8 @@ function siteWorker(env, entry) {
   if (!entry.limits) {
     return env.SITES.get(entry.script);
   }
-  const options = { limits: entry.limits };
-  if (env.OUTBOUND) {
-    options.outbound = { siteId: entry.script.slice("site-".length), projectId: entry.project };
-  }
-  return env.SITES.get(entry.script, {}, options);
+  const outbound = { siteId: entry.script.slice("site-".length), projectId: entry.project };
+  return env.SITES.get(entry.script, {}, { limits: entry.limits, outbound });
 }
 
 // hostKey is the SITE_HOSTS key for a request's host: <site>.<base domain>, or
@@ -150,29 +152,37 @@ function forwardable(request) {
 }
 
 function withSiteHeaders(response, hostname, ranCode) {
+  const headers = siteHeaders(response.headers, hostname, ranCode);
   if (response.status === 101) {
-    return response;
+    // A handshake sets cookies like any answer; only its socket is carried over.
+    return new Response(null, { status: 101, webSocket: response.webSocket, headers });
   }
-  const result = new Response(response.body, response);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+// siteHeaders are the headers a site's answer may carry: never the platform's
+// or Cloudflare's namespaces from code, never a cookie for another host.
+export function siteHeaders(source, hostname, ranCode) {
+  const headers = new Headers(source);
   if (ranCode) {
-    for (const name of [...result.headers.keys()]) {
+    for (const name of [...headers.keys()]) {
       if (RESERVED_RESPONSE_PREFIXES.some((prefix) => name.startsWith(prefix))) {
-        result.headers.delete(name);
+        headers.delete(name);
       }
     }
   }
-  result.headers.set("x-content-type-options", "nosniff");
-  if (!result.headers.has("referrer-policy")) {
-    result.headers.set("referrer-policy", "strict-origin-when-cross-origin");
+  headers.set("x-content-type-options", "nosniff");
+  if (!headers.has("referrer-policy")) {
+    headers.set("referrer-policy", "strict-origin-when-cross-origin");
   }
-  const cookies = result.headers.getSetCookie();
+  const cookies = headers.getSetCookie();
   if (cookies.length > 0) {
-    result.headers.delete("set-cookie");
+    headers.delete("set-cookie");
     for (const cookie of cookies.filter((cookie) => cookieStaysOnHost(cookie, hostname))) {
-      result.headers.append("set-cookie", cookie);
+      headers.append("set-cookie", cookie);
     }
   }
-  return result;
+  return headers;
 }
 
 // cookieStaysOnHost refuses a Domain attribute naming anything but the site's
