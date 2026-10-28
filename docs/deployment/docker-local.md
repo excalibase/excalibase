@@ -350,6 +350,7 @@ read; the URL is kept in the vault and shown by its host only.
 | `.env` | Default | Meaning |
 |---|---|---|
 | `FEATURE_HOSTMETRICS` | unset (`true` with `--host-metrics`) | host monitoring, its Studio pages and alerts |
+| `APP_EGRESS_EXTRA_DENY_CIDRS` | unset | the host's own public ranges, comma-separated, refused to the alert webhook and apps |
 | `HOST_METRICS_NET_DEV_SOURCE` | unset (`/proc/1/net/dev` with `--host-metrics`) | the host file mounted for network counters |
 
 ## Refusals you may see

@@ -105,6 +105,9 @@ type observed struct {
 	stats     *enginestats.Stats
 }
 
+// engineDeadline bounds one sample's engine reads: list, inspects and stats.
+const engineDeadline = 40 * time.Second
+
 // Sample takes one minute: the host, every container, alerts, and the hourly prune.
 func (m *Monitor) Sample(ctx context.Context) {
 	m.mu.Lock()
@@ -116,8 +119,11 @@ func (m *Monitor) Sample(ctx context.Context) {
 	if err != nil {
 		log.Printf("host monitor: list projects: %v", err)
 	}
-	containers := m.observe(ctx, instances)
-	m.takeStats(ctx, containers)
+	// The engine reads end well inside the minute, however slow the engine is.
+	engineCtx, cancel := context.WithTimeout(ctx, engineDeadline)
+	containers := m.observe(engineCtx, instances)
+	m.takeStats(engineCtx, containers)
+	cancel()
 
 	samples := m.containerSamples(now, counters, containers)
 	host := hostmetrics.Rates(m.prevHost, counters)
@@ -332,11 +338,19 @@ func attribution(instances []*domain.DatabaseInstance) func(enginestats.Containe
 		if inst.Namespace != "" {
 			byID[inst.Namespace] = inst.ProjectID
 		}
-		for _, name := range []string{provisioner.DatabaseContainerName(inst.ProjectID), provisioner.DatabaseContainerName(inst.ProjectName), provisioner.MySQLContainerName(inst.ProjectID)} {
-			byName[name] = [2]string{inst.ProjectID, domain.ContainerDatabase}
+		// Names come from the project id only; the display name is free text.
+		for name, component := range map[string]string{
+			provisioner.DatabaseContainerName(inst.ProjectID): domain.ContainerDatabase,
+			provisioner.MySQLContainerName(inst.ProjectID):    domain.ContainerDatabase,
+			provisioner.DocumentDBGatewayName(inst.ProjectID): domain.ContainerDocumentDB,
+			provisioner.WatcherContainerName(inst.ProjectID):  domain.ContainerWatcher,
+		} {
+			claim := [2]string{inst.ProjectID, component}
+			if held, taken := byName[name]; taken && held != claim {
+				claim = [2]string{"", domain.ContainerOther}
+			}
+			byName[name] = claim
 		}
-		byName[provisioner.DocumentDBGatewayName(inst.ProjectID)] = [2]string{inst.ProjectID, domain.ContainerDocumentDB}
-		byName[provisioner.WatcherContainerName(inst.ProjectID)] = [2]string{inst.ProjectID, domain.ContainerWatcher}
 	}
 	return func(container enginestats.Container) (string, string) {
 		if projectID := container.Labels[projectLabel]; projectID != "" {

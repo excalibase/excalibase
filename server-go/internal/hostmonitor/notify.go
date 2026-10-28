@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -55,8 +56,9 @@ func NewNotifier(deps NotifierDeps) *Notifier {
 
 // GuardedClient reaches only public addresses, checked on every connect
 // (the EXC-658 dialer), and never follows a redirect.
-func GuardedClient() *http.Client {
-	return logdrain.NewHTTPClient(publicaddr.NewDialer(nil, nil))
+// and refusing deny besides: the install's own off-host ranges.
+func GuardedClient(deny []netip.Prefix) *http.Client {
+	return logdrain.NewHTTPClient(publicaddr.NewDialer(nil, deny))
 }
 
 // ChannelResult is one channel's answer to a test notice.
@@ -206,7 +208,7 @@ func (n *Notifier) client() *http.Client {
 	if n.deps.Client != nil {
 		return n.deps.Client
 	}
-	return GuardedClient()
+	return GuardedClient(nil)
 }
 
 func webhookAlert(alert *domain.Alert) map[string]any {

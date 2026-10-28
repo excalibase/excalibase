@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -183,7 +184,7 @@ func TestTestReportsEachChannelWithoutInternalDetail(t *testing.T) {
 func TestTheGuardedClientRefusesAnInternalWebhook(t *testing.T) {
 	_, url := webhookServer(t, http.StatusOK)
 	vault := &memoryVault{entries: map[string]map[string]string{WebhookVaultPath: {"url": url}}}
-	notifier := NewNotifier(NotifierDeps{Vault: vault, Client: GuardedClient()})
+	notifier := NewNotifier(NotifierDeps{Vault: vault, Client: GuardedClient(nil)})
 	results := notifier.Test(context.Background(), domain.MonitoringAlertSettings{WebhookDisplay: "x"})
 	if len(results) != 1 || results[0].OK || results[0].Error != "the webhook could not be reached" {
 		t.Errorf("a loopback webhook = %+v", results)
@@ -193,5 +194,15 @@ func TestTheGuardedClientRefusesAnInternalWebhook(t *testing.T) {
 func TestASubjectStaysOneLine(t *testing.T) {
 	if got := oneLine("[Excalibase] Alert: Container x\r\nBcc: evil@example.com"); strings.ContainsAny(got, "\r\n") {
 		t.Errorf("subject = %q", got)
+	}
+}
+
+// The install's own off-host ranges (APP_EGRESS_EXTRA_DENY_CIDRS) are refused
+// to the webhook as to apps: the host's public address is not a destination.
+func TestTheWebhookClientRefusesTheInstallsOwnRanges(t *testing.T) {
+	client := GuardedClient([]netip.Prefix{netip.MustParsePrefix("1.1.1.0/24")})
+	_, err := client.Get("https://1.1.1.1/hook")
+	if err == nil || !strings.Contains(err.Error(), "not a publicly routable address") {
+		t.Errorf("err = %v, want the address refused", err)
 	}
 }

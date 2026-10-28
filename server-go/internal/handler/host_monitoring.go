@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -48,12 +49,19 @@ var monitoringRanges = map[string]monitoringRange{
 
 var monitoredName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
+// testNoticesPerMinute bounds test notices: each goes to every recipient and the webhook.
+const testNoticesPerMinute = 3
+
 // HostMonitoringHandler serves a single host's monitoring to Studio.
 type HostMonitoringHandler struct {
 	reads    MonitoringReads
 	settings AlertSettingsManager
 	audit    auditWriter
 	now      func() time.Time
+
+	testMu     sync.Mutex
+	testMinute time.Time
+	testsSent  int
 }
 
 // NewHostMonitoringHandler takes an optional audit log; nil records nothing.
@@ -240,6 +248,11 @@ func (h *HostMonitoringHandler) PutAlertSettings(w http.ResponseWriter, r *http.
 }
 
 func (h *HostMonitoringHandler) TestAlertSettings(w http.ResponseWriter, r *http.Request) {
+	if !h.admitTest() {
+		httpError(w, "at most 3 test notices a minute", http.StatusTooManyRequests)
+		return
+	}
+	h.recordAction(r, "test", "{}")
 	results, err := h.settings.Test(r.Context())
 	if err != nil {
 		h.failed(w, "test notice", err)
@@ -259,10 +272,31 @@ func (h *HostMonitoringHandler) record(r *http.Request, view hostmonitor.Setting
 	details, _ := json.Marshal(map[string]any{"enabled": view.Enabled, "cpuPercent": view.CPUPercent, "memoryPercent": view.MemoryPercent,
 		"diskPercent": view.DiskPercent, "temperatureCelsius": view.TemperatureCelsius, "load5": view.Load5, "networkMbps": view.NetworkMbps,
 		"windowMinutes": view.WindowMinutes, "downMinutes": view.DownMinutes, "recipients": len(view.Emails), "webhook": view.WebhookURL})
+	h.recordAction(r, "update", string(details))
+}
+
+func (h *HostMonitoringHandler) recordAction(r *http.Request, action, details string) {
+	if h.audit == nil {
+		return
+	}
 	now := h.now()
-	entry := &domain.AuditEntry{UserID: actorID(r), Action: "update", Resource: "monitoring_alert_settings", ResourceID: "host",
-		Details: string(details), IPAddress: clientIP(r), Timestamp: &now}
+	entry := &domain.AuditEntry{UserID: actorID(r), Action: action, Resource: "monitoring_alert_settings", ResourceID: "host",
+		Details: details, IPAddress: clientIP(r), Timestamp: &now}
 	if err := h.audit.LogAudit(r.Context(), entry); err != nil {
 		log.Printf("ERROR: audit alert settings: %v", err)
 	}
+}
+
+// admitTest counts test notices in the current minute.
+func (h *HostMonitoringHandler) admitTest() bool {
+	h.testMu.Lock()
+	defer h.testMu.Unlock()
+	if minute := h.now().Truncate(time.Minute); !minute.Equal(h.testMinute) {
+		h.testMinute, h.testsSent = minute, 0
+	}
+	if h.testsSent >= testNoticesPerMinute {
+		return false
+	}
+	h.testsSent++
+	return true
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/netip"
 
 	"github.com/go-chi/chi/v5"
 
@@ -70,9 +71,9 @@ func wireHostMonitoring(d hostMonitoringDeps) *handler.HostMonitoringHandler {
 		mail = d.mail
 	}
 	notifier := hostmonitor.NewNotifier(hostmonitor.NotifierDeps{Mail: mail, From: d.cfg.EmailFromAddress, FromName: d.cfg.EmailFromName,
-		Vault: d.vault, Client: hostmonitor.GuardedClient(), StudioURL: d.cfg.StudioURL})
+		Vault: d.vault, Client: hostmonitor.GuardedClient(denyPrefixes(d.cfg.AppEgressExtraDenyCIDRs)), StudioURL: d.cfg.StudioURL})
 	monitor := hostmonitor.New(hostmonitor.Deps{
-		Engine: engine, Store: tables, Instances: d.instances, Alerts: d.alerts, Notifier: notifier,
+		Engine: engine, Store: tables, Instances: d.instances, Alerts: d.alerts, Notifier: hostmonitor.NewQueue(notifier),
 		Paths: hostmetrics.DefaultPaths(d.cfg.HostMetrics.NetDev), Platform: d.cfg.HostMetrics.Containers,
 	})
 	d.metrics.SetHostSampler(monitor)
@@ -117,4 +118,15 @@ func mountProjectContainers(r *chi.Mux, sqlStore storage.OrgStore, store storage
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Get("/metrics", d.hostMonitoringHandler.ProjectContainers)
 	})
+}
+
+// denyPrefixes are the install's own ranges, which config has already validated.
+func denyPrefixes(cidrs []string) []netip.Prefix {
+	prefixes := make([]netip.Prefix, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		if prefix, err := netip.ParsePrefix(cidr); err == nil {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	return prefixes
 }
