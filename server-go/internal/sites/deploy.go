@@ -193,7 +193,9 @@ func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID stri
 // deploy; the function gives the slot back when the rollback is refused before publishing.
 func (s *Service) rollbackSlot(ctx context.Context, target *Deploy, limits Limits) (func(), error) {
 	if target.Kind != KindServer {
-		return func() {}, nil
+		return func() {
+			// A static rollback took no slot, so there is none to give back.
+		}, nil
 	}
 	return s.takeDeploySlot(ctx, target.ProjectID, limits.MaxDeploysPerHour)
 }

@@ -363,17 +363,8 @@ const (
 )
 
 func validateSiteLimits(limits config.SiteTierLimits) error {
-	if limits.MaxServerSites < 0 || limits.MaxServerSites > maxSitesCeiling {
-		return fmt.Errorf("maxServerSites must be between 0 and %d (0 offers none)", maxSitesCeiling)
-	}
-	if limits.MaxServerBundleBytes < minSiteServerBundleBytes || limits.MaxServerBundleBytes > maxSiteServerBundleBytes {
-		return fmt.Errorf("maxSiteServerBundleBytes must be between %d (1 MiB) and %d (64 MiB)", minSiteServerBundleBytes, maxSiteServerBundleBytes)
-	}
-	if limits.MaxServerCPUMillis < minSiteServerCPUMillis || limits.MaxServerCPUMillis > maxSiteServerCPUMillis {
-		return fmt.Errorf("maxSiteServerCpuMs must be between %d and %d", minSiteServerCPUMillis, maxSiteServerCPUMillis)
-	}
-	if limits.MaxServerSubrequests < 1 || limits.MaxServerSubrequests > maxSiteServerSubrequests {
-		return fmt.Errorf("maxSiteServerSubrequests must be between 1 and %d", maxSiteServerSubrequests)
+	if err := validateServerSiteLimits(limits); err != nil {
+		return err
 	}
 	if limits.MaxCustomDomains < 0 || limits.MaxCustomDomains > maxSiteCustomDomainsCap {
 		return fmt.Errorf("maxSiteCustomDomains must be between 0 and %d (0 offers none)", maxSiteCustomDomainsCap)
@@ -392,6 +383,23 @@ func validateSiteLimits(limits config.SiteTierLimits) error {
 	}
 	if limits.MaxDeploysPerHour < 1 || limits.MaxDeploysPerHour > maxSiteDeploysPerHourCap {
 		return fmt.Errorf("maxSiteDeploysPerHour must be between 1 and %d", maxSiteDeploysPerHourCap)
+	}
+	return nil
+}
+
+// validateServerSiteLimits bounds what a plan's server-rendered sites (EXC-661) may use.
+func validateServerSiteLimits(limits config.SiteTierLimits) error {
+	if limits.MaxServerSites < 0 || limits.MaxServerSites > maxSitesCeiling {
+		return fmt.Errorf("maxServerSites must be between 0 and %d (0 offers none)", maxSitesCeiling)
+	}
+	if limits.MaxServerBundleBytes < minSiteServerBundleBytes || limits.MaxServerBundleBytes > maxSiteServerBundleBytes {
+		return fmt.Errorf("maxSiteServerBundleBytes must be between %d (1 MiB) and %d (64 MiB)", minSiteServerBundleBytes, maxSiteServerBundleBytes)
+	}
+	if limits.MaxServerCPUMillis < minSiteServerCPUMillis || limits.MaxServerCPUMillis > maxSiteServerCPUMillis {
+		return fmt.Errorf("maxSiteServerCpuMs must be between %d and %d", minSiteServerCPUMillis, maxSiteServerCPUMillis)
+	}
+	if limits.MaxServerSubrequests < 1 || limits.MaxServerSubrequests > maxSiteServerSubrequests {
+		return fmt.Errorf("maxSiteServerSubrequests must be between 1 and %d", maxSiteServerSubrequests)
 	}
 	return nil
 }

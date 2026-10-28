@@ -470,7 +470,7 @@ func TestServerCodeIsPublishedOnlyBehindTheOutboundWorker(t *testing.T) {
 	}
 }
 
-func TestTheOutboundBindingIsReadAgainAfterAWhile(t *testing.T) {
+func TestTheOutboundReaderIsReadAgainAfterAWhile(t *testing.T) {
 	h := newServerHarness(t, true)
 	binding := &sitestest.Outbound{Worker: "excalibase-sites-outbound"}
 	options := serverOptions(t, features.NewStatic(features.SitesServer), h.store)
@@ -498,7 +498,7 @@ func TestTheOutboundBindingIsReadAgainAfterAWhile(t *testing.T) {
 	}
 }
 
-func TestStaticSitesNeverReadTheOutboundBinding(t *testing.T) {
+func TestStaticSitesNeverReadTheOutboundReader(t *testing.T) {
 	h := newServerHarness(t, true)
 	binding := &sitestest.Outbound{Fail: errors.New("unreachable")}
 	options := serverOptions(t, features.NewStatic(features.SitesServer), h.store)

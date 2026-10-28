@@ -34,7 +34,7 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 	}
 	var publisher sites.Publisher
 	// A nil interface, not a nil *Client, so server sites stay off without Cloudflare.
-	var outbound sites.OutboundBinding
+	var outbound sites.OutboundReader
 	if cfg.SitesAvailable() {
 		client, err := cfworkers.New(cfworkers.Config{
 			AccountID: cfg.Sites.AccountID, APIToken: cfg.Sites.APIToken, Namespace: cfg.Sites.DispatchNamespace,

@@ -7,3 +7,4 @@ ALTER TABLE site_deploys DROP COLUMN IF EXISTS published_at;
 ALTER TABLE site_deploys DROP COLUMN IF EXISTS server_config;
 ALTER TABLE site_deploys DROP COLUMN IF EXISTS kind;
 ALTER TABLE sites DROP COLUMN IF EXISTS kind;
+DROP DOMAIN IF EXISTS site_kind;

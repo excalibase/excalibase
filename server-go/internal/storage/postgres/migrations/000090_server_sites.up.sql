@@ -1,8 +1,9 @@
 -- Server-rendered sites (EXC-661, ADR 0045): a site is static or server for
 -- its whole life, and each deploy records which, so a rollback publishes it
 -- the same way. Existing sites and deploys are static.
-ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'static' CHECK (kind IN ('static', 'server'));
-ALTER TABLE site_deploys ADD COLUMN kind TEXT NOT NULL DEFAULT 'static' CHECK (kind IN ('static', 'server'));
+CREATE DOMAIN site_kind AS TEXT DEFAULT 'static' NOT NULL CHECK (VALUE IN ('static', 'server'));
+ALTER TABLE sites ADD COLUMN kind site_kind;
+ALTER TABLE site_deploys ADD COLUMN kind site_kind;
 -- A server deploy's site.json (main module, compatibility date and flags) and code size.
 ALTER TABLE site_deploys ADD COLUMN server_config JSONB;
 -- When Cloudflare began running the deploy's code; the newest such deploy keeps its code.
