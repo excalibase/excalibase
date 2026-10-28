@@ -114,6 +114,10 @@ for bad in \
   [ ! -e "$WORK/fake/args" ] || fail "called curl for: $bad"
 done
 
+# A value with a newline would pass a line-wise check and add JSON of its own.
+run env $creds sh "$DIR/deploy.sh" $good_args --outbound "$(printf 'excalibase-sites-outbound\nx')" && fail "accepted a newline"
+[ ! -e "$WORK/fake/args" ] || fail "called curl for a newline"
+
 # Missing credentials: named, not shown.
 run env CLOUDFLARE_ACCOUNT_ID=$ACCOUNT sh "$DIR/deploy.sh" $good_args && fail "ran without a token"
 grep -q CLOUDFLARE_API_TOKEN "$WORK/out" || fail "missing token not named"

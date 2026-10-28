@@ -162,7 +162,7 @@ describe("the public internet", () => {
     const sent = withUpstream((request) => new Response(null, { status: 302, headers: { location: request.url + "x" } }));
     const response = await call("https://example.com/loop");
     expect(response.status).toBe(508);
-    expect(sent.length).toBeLessThanOrEqual(11);
+    expect(sent.length).toBe(6);
   });
 
   it("fails closed when PLATFORM_HOSTS or API_HOST is not bound", async () => {
@@ -172,5 +172,103 @@ describe("the public internet", () => {
     expect((await call("https://example.com/", undefined, fakeEnv({ API_HOST: "" }))).status).toBe(503);
     expect(sent).toHaveLength(0);
     errors.mockRestore();
+  });
+});
+
+describe("hostnames written another way", () => {
+  it.each([
+    `https://${API}./proj-other/graphql`,
+    "https://studio.excalibase.io./api/projects",
+    "https://studio.excalibase.io../",
+    "http://localhost./",
+    "http://metadata.google.internal./",
+  ])("are refused like the name they stand for: %s", async (url) => {
+    const sent = withUpstream();
+    expect((await call(url)).status).toBe(403);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("a trailing dot on the API host still strips the platform's headers", async () => {
+    const sent = withUpstream();
+    await call(`https://${API}./${PROJECT}/graphql`, { headers: { "x-excalibase-project": "other" } });
+    expect(sent[0].request.headers.get("x-excalibase-project")).toBeNull();
+  });
+});
+
+describe("the project's API paths", () => {
+  it.each([
+    `https://${API}/${PROJECT}/graphql/..%2F..%2Fproj-other/graphql`,
+    `https://${API}/${PROJECT}/graphql/%2e%2e/x`,
+    `https://${API}/${PROJECT}/api//v1`,
+    `https://${API}/${PROJECT}/api/v1%5c..%5cx`,
+    `https://${API}/${PROJECT}/graphql/..;/proj-other/graphql`,
+    `https://${API}/${PROJECT}/graphql;x`,
+  ])("refuse encoded separators, path parameters and empty segments: %s", async (url) => {
+    const sent = withUpstream();
+    expect((await call(url)).status).toBe(403);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("drop forwarding headers the code could use to pass as someone else", async () => {
+    const sent = withUpstream();
+    await call(`https://${API}/${PROJECT}/graphql`, {
+      headers: { "x-forwarded-for": "10.0.0.1", forwarded: "for=10.0.0.1", "x-real-ip": "10.0.0.1", "true-client-ip": "1.1.1.1", "x-forwarded-host": "studio.excalibase.io" },
+    });
+    for (const name of ["x-forwarded-for", "forwarded", "x-real-ip", "true-client-ip", "x-forwarded-host"]) {
+      expect(sent[0].request.headers.get(name)).toBeNull();
+    }
+  });
+});
+
+describe("a redirect to another origin", () => {
+  it("does not carry the code's credentials there", async () => {
+    const sent = withUpstream((request) =>
+      request.url === "https://example.com/go"
+        ? new Response(null, { status: 302, headers: { location: "https://elsewhere.example.org/" } })
+        : new Response("there"));
+    await call("https://example.com/go", { headers: { authorization: "Bearer t", cookie: "s=1", "proxy-authorization": "x", accept: "text/html" } });
+    const hop = sent[1].request.headers;
+    expect(hop.get("authorization")).toBeNull();
+    expect(hop.get("cookie")).toBeNull();
+    expect(hop.get("proxy-authorization")).toBeNull();
+    expect(hop.get("accept")).toBe("text/html");
+  });
+
+  it("keeps them on the same origin", async () => {
+    const sent = withUpstream((request) =>
+      request.url === "https://example.com/go" ? new Response(null, { status: 307, headers: { location: "/next" } }) : new Response("ok"));
+    await call("https://example.com/go", { headers: { authorization: "Bearer t" } });
+    expect(sent[1].request.headers.get("authorization")).toBe("Bearer t");
+  });
+});
+
+describe("refusals", () => {
+  it("are logged with the site that asked", async () => {
+    withUpstream();
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    await call("https://studio.excalibase.io/");
+    expect(JSON.parse(logs.mock.calls[0][0])).toMatchObject({ refused: "platform", site: "0b6f2c9e-6a51-4c07-9a3c-7f1d2e3a4b5c", host: "studio.excalibase.io" });
+    logs.mockRestore();
+  });
+});
+
+describe("IPv6 platform addresses", () => {
+  it("are refused however they are written", async () => {
+    const sent = withUpstream();
+    const env = fakeEnv({ PLATFORM_HOSTS: ".excalibase.io,2001:41d0:304:200::5e0" });
+    expect((await call("https://[2001:41d0:304:200:0:0:0:5e0]/", undefined, env)).status).toBe(403);
+    expect((await call("https://[2001:41D0:304:200::5E0]/", undefined, env)).status).toBe(403);
+    expect(sent).toHaveLength(0);
+  });
+});
+
+describe("the request sent on", () => {
+  it("carries only the method, headers and body the code gave", async () => {
+    const sent = withUpstream();
+    await call("https://example.com/x", { method: "POST", headers: { "x-a": "1" }, body: "b" });
+    const { request, init } = sent[0];
+    expect(init).toEqual({ redirect: "manual" });
+    expect(request.method).toBe("POST");
+    expect(await request.text()).toBe("b");
   });
 });

@@ -20,7 +20,12 @@ API=https://api.cloudflare.com/client/v4
 COMPATIBILITY_DATE=2025-09-01
 
 die() { echo "deploy.sh: $*" >&2; exit 1; }
-matches() { printf '%s' "$1" | grep -Eq "$2"; }
+# One line only: grep checks line by line, so a newline could carry JSON of its own past it.
+matches() {
+  case "$1" in *"
+"*) return 1 ;; esac
+  printf '%s' "$1" | grep -Eq "$2"
+}
 
 namespace="" kv_id="" base_domain="" abuse_url="" script=excalibase-sites-router outbound="" dry_run=0
 while [ $# -gt 0 ]; do
