@@ -85,7 +85,11 @@ func (f *fakeAlertSettings) Test(context.Context) ([]hostmonitor.ChannelResult, 
 }
 
 func monitoringRouter(reads *fakeMonitoringReads, settings *fakeAlertSettings, audit *recordedAudit) chi.Router {
-	h := NewHostMonitoringHandler(reads, settings, audit)
+	var writer auditWriter
+	if audit != nil {
+		writer = audit
+	}
+	h := NewHostMonitoringHandler(reads, settings, writer)
 	h.now = func() time.Time { return monitoredAt }
 	r := chi.NewRouter()
 	r.Route("/api/admin/monitoring", func(r chi.Router) {
@@ -232,5 +236,23 @@ func TestAlertSettingsReadAndTest(t *testing.T) {
 	w = serveMonitoring(monitoringRouter(&fakeMonitoringReads{}, settings, nil), http.MethodPost, "/api/admin/monitoring/alert-settings/test", "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"results":[{"channel":"email","ok":true}]`) {
 		t.Errorf("test = %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A test notice is audited, and at most testNoticesPerMinute go out a minute:
+// it reaches every recipient and the webhook.
+func TestTestNoticesAreAuditedAndLimited(t *testing.T) {
+	settings, audit := &fakeAlertSettings{results: []hostmonitor.ChannelResult{{Channel: "email", OK: true}}}, &recordedAudit{}
+	router := monitoringRouter(&fakeMonitoringReads{}, settings, audit)
+	for i := range testNoticesPerMinute {
+		if w := serveMonitoring(router, http.MethodPost, "/api/admin/monitoring/alert-settings/test", ""); w.Code != http.StatusOK {
+			t.Fatalf("test %d = %d", i, w.Code)
+		}
+	}
+	if w := serveMonitoring(router, http.MethodPost, "/api/admin/monitoring/alert-settings/test", ""); w.Code != http.StatusTooManyRequests {
+		t.Errorf("one more test = %d, want 429", w.Code)
+	}
+	if len(audit.entries) != testNoticesPerMinute || audit.entries[0].Action != "test" || audit.entries[0].Resource != "monitoring_alert_settings" {
+		t.Errorf("audit = %+v", audit.entries)
 	}
 }

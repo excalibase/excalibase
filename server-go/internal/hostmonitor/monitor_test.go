@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/enginestats"
 	"github.com/excalibase/provisioning-poc/internal/hostmetrics"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 )
 
@@ -311,5 +312,23 @@ func TestPruneRunsHourly(t *testing.T) {
 	monitor.Sample(context.Background())
 	if store.prunes != 2 {
 		t.Errorf("prunes = %d, want at start and after an hour", store.prunes)
+	}
+}
+
+// A project's display name is free text: it never claims a container, and a
+// name two projects would claim is credited to neither.
+func TestAttributionNeverFollowsADisplayName(t *testing.T) {
+	victim := &domain.DatabaseInstance{ProjectID: "victim", DeploymentMode: domain.ModeDocker, Namespace: "org-ref"}
+	attacker := &domain.DatabaseInstance{ProjectID: "attacker", ProjectName: "victim", DeploymentMode: domain.ModeDocker}
+	for _, order := range [][]*domain.DatabaseInstance{{victim, attacker}, {attacker, victim}} {
+		credit := attribution(order)
+		if project, _ := credit(enginestats.Container{ID: "c1", Name: provisioner.DatabaseContainerName("victim")}); project != "victim" {
+			t.Errorf("the victim's database is credited to %q", project)
+		}
+	}
+	twin := &domain.DatabaseInstance{ProjectID: "victim", DeploymentMode: domain.ModeDocker}
+	other := &domain.DatabaseInstance{ProjectID: "victim", DeploymentMode: domain.ModeDocker, OrgID: "other"}
+	if project, _ := attribution([]*domain.DatabaseInstance{twin, other})(enginestats.Container{Name: provisioner.WatcherContainerName("victim")}); project != "victim" {
+		t.Errorf("one project's two rows still name it: %q", project)
 	}
 }
