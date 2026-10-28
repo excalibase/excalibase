@@ -124,7 +124,9 @@ func sameRanges(observed, want []string) bool {
 // open cannot render a list read before a concurrent change records.
 func (s *DBEndpointService) serializeWithAllowList(ctx context.Context, projectID string) (func(), error) {
 	if !s.allowListOn(ctx) {
-		return func() {}, nil
+		return func() {
+			// Nothing was claimed, so there is nothing to release.
+		}, nil
 	}
 	release, claimed, err := s.claimer.Claim(ctx, projectID, OperationAllowList)
 	if err != nil {

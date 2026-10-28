@@ -47,5 +47,8 @@ export const useSetAllowedSources = (projectId: string) => {
 };
 
 // A bare address is the host itself; the server checks everything else.
-export const hostRange = (address: string): string =>
-  address.includes('/') ? address : `${address}/${address.includes(':') ? 128 : 32}`;
+export const hostRange = (address: string): string => {
+  if (address.includes('/')) return address;
+  const bits = address.includes(':') ? 128 : 32;
+  return `${address}/${bits}`;
+};
