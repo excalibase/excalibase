@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -34,6 +35,10 @@ type DBAllowListView struct {
 	Max           int
 	PublicEnabled bool
 	SingleHost    bool
+	// PreviousAccess and PreviousSources are what a change replaced, read
+	// under the lease, for the audit.
+	PreviousAccess  domain.DBSourceAccess
+	PreviousSources []string
 }
 
 // sourcePolicy is how the Services are rendered. enforced is the flag: with
@@ -53,15 +58,19 @@ func (s *DBEndpointService) allowListOn(ctx context.Context) bool {
 	return s.allowList != nil && features.Enabled(ctx, s.flags, features.DBAllowList)
 }
 
-// servicePolicy reads the stored choice. An unset project renders no ranges:
-// a port opened before the flag stays open as it was.
+// servicePolicy reads the stored choice. A stored list is rendered even with
+// the flag off, so a rollback never opens a restricted port; with the flag
+// off and no list, Services render exactly as before the flag.
 func (s *DBEndpointService) servicePolicy(ctx context.Context, projectID string) (sourcePolicy, error) {
-	if !s.allowListOn(ctx) {
+	if s.allowList == nil {
 		return sourcePolicy{}, nil
 	}
 	list, err := s.allowList.GetDBSourceAllowList(ctx, projectID)
 	if err != nil {
 		return sourcePolicy{}, err
+	}
+	if !s.allowListOn(ctx) && list.Access != domain.DBSourceAccessListed {
+		return sourcePolicy{}, nil
 	}
 	return policyFor(list), nil
 }
@@ -162,18 +171,40 @@ func (s *DBEndpointService) SetAllowedSources(ctx context.Context, projectID str
 	if err != nil {
 		return DBAllowListView{}, err
 	}
-	list.ProjectID = projectID
-	if err := s.applyToServices(ctx, inst, list); err != nil {
-		return DBAllowListView{}, err
-	}
-	saved, err := s.allowList.SetDBSourceAllowList(ctx, list)
+	previous, err := s.allowList.GetDBSourceAllowList(ctx, projectID)
 	if err != nil {
 		return DBAllowListView{}, err
 	}
-	return s.allowListView(ctx, saved)
+	list.ProjectID = projectID
+	if err := s.applyToServices(ctx, inst, policyFor(list)); err != nil {
+		return DBAllowListView{}, s.restoreServices(ctx, inst, err)
+	}
+	saved, err := s.allowList.SetDBSourceAllowList(ctx, list)
+	if err != nil {
+		return DBAllowListView{}, s.restoreServices(ctx, inst, err)
+	}
+	view, err := s.allowListView(ctx, saved)
+	if err != nil {
+		return DBAllowListView{}, err
+	}
+	view.PreviousAccess, view.PreviousSources = previous.Access, slices.Clone(previous.Sources)
+	return view, nil
 }
 
-func (s *DBEndpointService) applyToServices(ctx context.Context, inst *domain.DatabaseInstance, list domain.DBSourceAllowList) error {
+// restoreServices puts the recorded choice back on the Services after a change
+// failed part way, so none is left more open than what is recorded.
+func (s *DBEndpointService) restoreServices(ctx context.Context, inst *domain.DatabaseInstance, cause error) error {
+	policy, err := s.servicePolicy(ctx, inst.ProjectID)
+	if err == nil {
+		err = s.applyToServices(ctx, inst, policy)
+	}
+	if err != nil {
+		log.Printf("ERROR: restore the allow-list of %s after a failed change: %v", inst.ProjectID, err)
+	}
+	return cause
+}
+
+func (s *DBEndpointService) applyToServices(ctx context.Context, inst *domain.DatabaseInstance, policy sourcePolicy) error {
 	if !s.publicOffered() || !servableNow(inst.Status) {
 		return nil
 	}
@@ -188,7 +219,7 @@ func (s *DBEndpointService) applyToServices(ctx context.Context, inst *domain.Da
 	if err != nil {
 		return err
 	}
-	return s.publishServicesWith(ctx, inst, endpoint.Port, mongoPort, policyFor(list))
+	return s.publishServicesWith(ctx, inst, endpoint.Port, mongoPort, policy)
 }
 
 func (s *DBEndpointService) allowListView(ctx context.Context, list domain.DBSourceAllowList) (DBAllowListView, error) {

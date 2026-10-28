@@ -87,6 +87,9 @@ func ParseDBSourceAllowList(allowAny bool, sources []string) (DBSourceAllowList,
 			canonical = append(canonical, text)
 		}
 	}
+	if !slices.ContainsFunc(canonical, isIPv4Source) {
+		return DBSourceAllowList{}, fmt.Errorf("%w: name at least one IPv4 address or range; the public database address is IPv4", ErrInvalidDBSourceAllowList)
+	}
 	if len(canonical) > MaxDBAllowedSources {
 		return DBSourceAllowList{}, fmt.Errorf("%w: at most %d addresses or ranges per project", ErrInvalidDBSourceAllowList, MaxDBAllowedSources)
 	}
@@ -156,6 +159,10 @@ func unreachableSource(addr netip.Addr) string {
 		return "multicast"
 	}
 	return ""
+}
+
+func isIPv4Source(source string) bool {
+	return netip.MustParsePrefix(source).Addr().Is4()
 }
 
 // compareSources orders IPv4 before IPv6, then by address and prefix length.

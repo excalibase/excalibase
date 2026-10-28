@@ -255,7 +255,7 @@ func TestEveryPublicServiceOfADocumentDBProjectCarriesTheList(t *testing.T) {
 	f := newMongoEndpointFixture(t, true)
 	f.svc.UseSourceAllowList(newFakeAllowListStore(), allowListFlags(true))
 	ctx := context.Background()
-	if _, err := f.svc.SetAllowedSources(ctx, f.inst.ProjectID, mustAllowList(t, false, "2001:db8::/32")); err != nil {
+	if _, err := f.svc.SetAllowedSources(ctx, f.inst.ProjectID, mustAllowList(t, false, "2001:db8::/32", "198.51.100.0/24")); err != nil {
 		t.Fatalf("SetAllowedSources: %v", err)
 	}
 	if _, err := f.svc.SetPublic(ctx, f.inst.ProjectID, true); err != nil {
@@ -263,7 +263,7 @@ func TestEveryPublicServiceOfADocumentDBProjectCarriesTheList(t *testing.T) {
 	}
 	for _, name := range []string{domain.DBEndpointServiceName(f.inst.ProjectID), domain.DBEndpointMongoServiceName(f.inst.ProjectID)} {
 		spec, ok := f.kube.PublicDBServices[f.inst.Namespace+"/"+name]
-		if !ok || !slices.Equal(spec.SourceRanges, []string{"2001:db8::/32"}) || !spec.NoNodePorts {
+		if !ok || !slices.Equal(spec.SourceRanges, []string{"198.51.100.0/24", "2001:db8::/32"}) || !spec.NoNodePorts {
 			t.Errorf("%s: %+v", name, spec)
 		}
 	}
@@ -313,5 +313,61 @@ func TestOpeningThePortTakesNoLeaseWhileAllowListsAreOff(t *testing.T) {
 	defer release()
 	if _, err := h.svc.SetPublic(context.Background(), endpointProject, true); err != nil {
 		t.Fatalf("SetPublic with the flag off behaves as before: %v", err)
+	}
+}
+
+// A flag rollback must not open a port its Admin restricted.
+func TestAStoredListStaysOnTheServiceWhenTheFlagIsTurnedOff(t *testing.T) {
+	h := newEndpointHarness(t, "ACTIVE")
+	lists := h.withAllowList(true)
+	ctx := context.Background()
+	if _, err := h.svc.SetAllowedSources(ctx, endpointProject, mustAllowList(t, false, "198.51.100.7")); err != nil {
+		t.Fatalf("SetAllowedSources: %v", err)
+	}
+	if _, err := h.svc.SetPublic(ctx, endpointProject, true); err != nil {
+		t.Fatalf("SetPublic: %v", err)
+	}
+	h.svc.UseSourceAllowList(lists, allowListFlags(false))
+	if err := h.svc.Publish(ctx, h.instance); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if ranges, noNodePorts := h.publicSpecRanges(t); !slices.Equal(ranges, []string{"198.51.100.7/32"}) || !noNodePorts {
+		t.Fatalf("after rollback: ranges %v, noNodePorts %v", ranges, noNodePorts)
+	}
+}
+
+func TestAFailedChangePutsThePreviousListBack(t *testing.T) {
+	f := newMongoEndpointFixture(t, true)
+	lists := newFakeAllowListStore()
+	f.svc.UseSourceAllowList(lists, allowListFlags(true))
+	ctx := context.Background()
+	if _, err := f.svc.SetAllowedSources(ctx, f.inst.ProjectID, mustAllowList(t, false, "198.51.100.7")); err != nil {
+		t.Fatalf("SetAllowedSources: %v", err)
+	}
+	if _, err := f.svc.SetPublic(ctx, f.inst.ProjectID, true); err != nil {
+		t.Fatalf("SetPublic: %v", err)
+	}
+	f.kube.SourceRangesReadBack = []string{"192.0.2.0/24"}
+	if _, err := f.svc.SetAllowedSources(ctx, f.inst.ProjectID, mustAllowList(t, true)); !errors.Is(err, ErrDBAllowListNotObserved) {
+		t.Fatalf("want ErrDBAllowListNotObserved, got %v", err)
+	}
+	f.kube.SourceRangesReadBack = nil
+	for _, name := range []string{domain.DBEndpointServiceName(f.inst.ProjectID), domain.DBEndpointMongoServiceName(f.inst.ProjectID)} {
+		if spec := f.kube.PublicDBServices[f.inst.Namespace+"/"+name]; !slices.Equal(spec.SourceRanges, []string{"198.51.100.7/32"}) {
+			t.Errorf("%s left with %v after a failed change", name, spec.SourceRanges)
+		}
+	}
+}
+
+func TestAChangeReportsThePreviousChoiceReadUnderTheLease(t *testing.T) {
+	h := newEndpointHarness(t, "ACTIVE")
+	h.withAllowList(true)
+	ctx := context.Background()
+	if _, err := h.svc.SetAllowedSources(ctx, endpointProject, mustAllowList(t, true)); err != nil {
+		t.Fatalf("allow any: %v", err)
+	}
+	view, err := h.svc.SetAllowedSources(ctx, endpointProject, mustAllowList(t, false, "198.51.100.7"))
+	if err != nil || view.PreviousAccess != domain.DBSourceAccessAny || len(view.PreviousSources) != 0 {
+		t.Fatalf("view %+v, %v", view, err)
 	}
 }

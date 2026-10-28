@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/testcontainers/testcontainers-go"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -32,7 +33,8 @@ func TestK3sCiliumPublicDBAllowList(t *testing.T) {
 	values := maps.Clone(productionCiliumValues)
 	values["bpf"] = map[string]interface{}{"lbSourceRangeAllTypes": true}
 	lab := &egressLab{ctx: context.Background(), ciliumValues: values}
-	lab.startCiliumCluster(t)
+	// Without kube-proxy and servicelb, only Cilium can be what enforces the list.
+	lab.startCiliumClusterWith(t, testcontainers.WithCmdArgs("--disable-kube-proxy", "--disable=traefik", "--disable=servicelb"))
 	lab.nodeIP = nodeInternalIP(lab.ctx, t, lab.cs)
 	ctx, client := lab.ctx, lab.client
 
@@ -84,6 +86,7 @@ func TestK3sCiliumPublicDBAllowList(t *testing.T) {
 	if svc.Spec.Ports[0].NodePort != 0 {
 		t.Fatalf("node port %d is still allocated; it would answer outside the list", svc.Spec.Ports[0].NodePort)
 	}
+	eventually(t, "the released node port stops answering", 60*time.Second, func() bool { return dialNode(lab.nodeIP, port) != nil })
 	stayRefused(t, lab.nodeIP, port, "the released node port")
 }
 

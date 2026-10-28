@@ -764,15 +764,19 @@ the DocumentDB Mongo port, MySQL), which Cilium's kube-proxy replacement (and
 kube-proxy) enforce at the node before any SNAT; those Services then allocate
 no NodePort (`allocateLoadBalancerNodePorts: false`), because Cilium applies
 the list to the load-balancer address only. Entries are IPv4/IPv6 addresses
-or ranges, at most 20, no `/0` (that is `allowAny`), nothing wider than /8
-(IPv4) or /16 (IPv6), no loopback, link-local or multicast. Opening a port
-needs that choice first; a port opened before the flag keeps admitting any
-address until an Admin chooses. In-cluster clients are never affected. A
+or ranges, at most 20 and at least one IPv4 (the shared address is IPv4, and
+kube-proxy ignores a list with no entry of the Service's family), no `/0`
+(that is `allowAny`), nothing wider than /8 (IPv4) or /16 (IPv6), no
+loopback, link-local or multicast; MCP may set only up to /24 and /48. Opening
+a port needs that choice first; a port opened before the flag keeps admitting
+any address until an Admin chooses. A stored list stays on the Services if the
+flag is turned off again, so a rollback never opens a restricted port. A change
+that fails part way puts the recorded list back and is audited as refused. In-cluster clients are never affected. A
 datapath that does not implement the field ignores it, so check
 `kubectl get svc -o yaml` and a refused outside dial before relying on it.
 A single host's databases listen on 127.0.0.1 only, so its list is fixed at
-"this host only" and a change is refused. Flag off: Services and routes as
-before.
+"this host only" and a change is refused. Flag off with no stored list:
+Services and routes as before.
 
 **Ports are allocated randomly inside the window**, never sequentially: two
 port numbers must not let anyone read off how many tenants the platform has

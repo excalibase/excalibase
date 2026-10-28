@@ -47,9 +47,15 @@ func dbAllowListRouteCases() []routeCase {
 }
 
 func TestSetDBAllowedSourcesRefusesEveryAddressAndAnEmptyList(t *testing.T) {
-	for _, sources := range [][]string{nil, {"0.0.0.0/0"}, {"::/0"}, {"*"}} {
+	for _, sources := range [][]string{nil, {"0.0.0.0/0"}, {"::/0"}, {"*"}, {"10.0.0.0/8"}, {"198.51.100.7", "203.0.0.0/16"}, {"2001:db8::/32"}} {
 		if _, err := mcpAllowListSources(sources); err == nil {
 			t.Errorf("%v accepted", sources)
 		}
+	}
+}
+
+func TestSetDBAllowedSourcesTakesNarrowEntries(t *testing.T) {
+	if _, err := mcpAllowListSources([]string{"198.51.100.7", "203.0.113.0/24", "2001:db8:1::/48"}); err != nil {
+		t.Fatalf("narrow entries refused: %v", err)
 	}
 }

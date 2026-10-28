@@ -94,17 +94,13 @@ func (h *DBAllowListHandler) put(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	previous, err := h.api.AllowedSources(r.Context(), projectID)
-	if err != nil {
-		writeDBAllowListError(w, projectID, err)
-		return
-	}
 	view, err := h.api.SetAllowedSources(r.Context(), projectID, list)
 	if err != nil {
+		h.record(r, projectID, list, service.DBAllowListView{}, err)
 		writeDBAllowListError(w, projectID, err)
 		return
 	}
-	h.record(r, projectID, previous, view)
+	h.record(r, projectID, list, view, nil)
 	writeJSON(w, allowListResponseFor(r, view))
 }
 
@@ -143,17 +139,21 @@ func allowListResponseFor(r *http.Request, view service.DBAllowListView) dbAllow
 	}
 }
 
-func (h *DBAllowListHandler) record(r *http.Request, projectID string, previous, current service.DBAllowListView) {
+// record audits every attempt: a failed one may have reached some Services
+// before it was put back, and says so with its outcome.
+func (h *DBAllowListHandler) record(r *http.Request, projectID string, asked domain.DBSourceAllowList, saved service.DBAllowListView, failure error) {
 	if h.audit == nil {
 		return
 	}
-	details, _ := json.Marshal(map[string]any{
-		"previousAccess": string(previous.Access), "previousSources": previous.Sources,
-		"access": string(current.Access), "sources": current.Sources,
-	})
+	details := map[string]any{"access": string(asked.Access), "sources": asked.Sources, "outcome": "saved",
+		"previousAccess": string(saved.PreviousAccess), "previousSources": saved.PreviousSources}
+	if failure != nil {
+		details = map[string]any{"access": string(asked.Access), "sources": asked.Sources, "outcome": "refused"}
+	}
+	encoded, _ := json.Marshal(details)
 	now := time.Now()
 	entry := &domain.AuditEntry{UserID: actorID(r), Action: auditDBAllowListUpdate, Resource: "db_endpoint",
-		ResourceID: projectID, ProjectID: projectID, Details: string(details), IPAddress: clientIP(r), Timestamp: &now}
+		ResourceID: projectID, ProjectID: projectID, Details: string(encoded), IPAddress: clientIP(r), Timestamp: &now}
 	if err := h.audit.LogAudit(r.Context(), entry); err != nil {
 		log.Printf("ERROR: audit %s on %s: %v", auditDBAllowListUpdate, safeLog(projectID), err)
 	}
