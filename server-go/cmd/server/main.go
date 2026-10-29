@@ -1234,6 +1234,7 @@ func wireAuthOAuth(cfg config.AppConfig, sqlStore storage.PlatformStore, vc vaul
 	deps := handler.AuthOAuthDeps{Flags: cfg.Features(), PublicBaseURL: cfg.PublicBaseURL, Audit: sqlStore}
 	deps.Providers, _ = sqlStore.(storage.ProjectAuthProviderStore)
 	deps.SignIn, _ = sqlStore.(storage.ProjectAuthSignInStore)
+	deps.Hooks, _ = sqlStore.(storage.ProjectAuthHookStore)
 	if vc != nil {
 		deps.Secrets = vc
 	}
@@ -2402,6 +2403,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	mountMetricsEndpoint(r, sqlStore, store, d)
 	mountLogDrains(r, sqlStore, store, d)
 	mountAuthProviders(r, sqlStore, store, d)
+	mountAuthHooks(r, sqlStore, store, d)
 	// What AI coding tools did in the project through MCP (EXC-544).
 	r.Route("/api/projects/{projectId}/ai-activity", func(r chi.Router) {
 		r.Use(features.Require(d.features, features.MCP))
@@ -2612,6 +2614,25 @@ func mountAuthProviders(r *chi.Mux, sqlStore storage.OrgStore, store storage.Ins
 		r.Get("/", d.provHandler.GetAuthProviders)
 		r.Put("/{provider}", d.provHandler.PutAuthProvider)
 		r.Delete("/{provider}", d.provHandler.DeleteAuthProvider)
+	})
+}
+
+// mountAuthHooks serves the end-user auth hooks settings (EXC-662): Developer
+// reads, Admin writes; the flag goes first so that while it is off these
+// answer as never mounted.
+func mountAuthHooks(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
+	r.Route("/api/projects/{projectId}/auth-hooks", func(r chi.Router) {
+		r.Use(features.Require(d.features, features.AuthHooks))
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
+		r.Use(d.activity)
+		r.Get("/", d.provHandler.GetAuthHooks)
+		r.Post("/secret", d.provHandler.RotateAuthHookSecret)
+		r.Delete("/secret", d.provHandler.DeleteAuthHookSecret)
+		r.Put("/{hook}", d.provHandler.PutAuthHook)
 	})
 }
 

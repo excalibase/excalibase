@@ -272,6 +272,8 @@ services:
       FEATURE_AUTHUSER: ${FEATURE_AUTHUSER:-false}
       # End-user guest accounts and the stable token subject (EXC-662).
       FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
+      # End-user auth hooks: signed calls to the project's own endpoints (EXC-662).
+      FEATURE_AUTHHOOKS: ${FEATURE_AUTHHOOKS:-false}
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.
@@ -412,6 +414,8 @@ services:
       FEATURE_AUTHOAUTH: ${FEATURE_AUTHOAUTH:-false}
       # ...and project guest Turnstile secrets only while this is on.
       FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
+      # ...and project auth hook signing secrets only while this is on.
+      FEATURE_AUTHHOOKS: ${FEATURE_AUTHHOOKS:-false}
       SECRETS_DIR: /var/run/excalibase
     command: ["sh", "/bootstrap.sh"]
     volumes:
@@ -443,6 +447,8 @@ services:
       TRUSTED_PROXY_CIDRS: ${AIO_DATAPLANE_SUBNET:-10.203.250.16/28}
       # Docker-mode tenant databases serve no TLS; k8s tenants require it.
       TENANT_DB_SSLMODE: disable
+      # Extra CIDRs auth hook calls may never reach, beside the built-in private ranges (EXC-662).
+      AUTH_HOOKS_DENY_CIDRS: ${AUTH_HOOKS_DENY_CIDRS:-}
     volumes:
       - excalibase_secrets:/var/run/excalibase:ro
     depends_on:

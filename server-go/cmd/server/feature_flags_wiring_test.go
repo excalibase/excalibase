@@ -68,6 +68,12 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-settings/guest-captcha"},
 		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/auth-settings/guest-captcha"},
 	},
+	features.AuthHooks: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/auth-hooks"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-hooks/send_email"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/auth-hooks/secret"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/auth-hooks/secret"},
+	},
 	features.AuthUser: {
 		{http.MethodGet, "/api/projects/" + matrixProjectA + "/end-users/7"},
 		{http.MethodPatch, "/api/projects/" + matrixProjectA + "/end-users/7"},
