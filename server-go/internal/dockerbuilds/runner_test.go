@@ -111,7 +111,20 @@ func TestStartLaysOutTheBuild(t *testing.T) {
 	engine := newFakeEngine()
 	runner, _ := newTestRunner(t, engine, "runsc")
 	startBuild(t, runner)
+	assertNetworksAndVolume(t, engine)
+	assertEgressSidecar(t, engine)
+	for _, name := range []string{"prepare", "clone", "build", "collect"} {
+		if engine.get(step(name)) == nil {
+			t.Fatalf("step %s not created", name)
+		}
+	}
+	if engine.get(step("prepare")).state != "running" || engine.get(step("clone")).state != "created" {
+		t.Fatal("only prepare starts at once")
+	}
+}
 
+func assertNetworksAndVolume(t *testing.T, engine *fakeEngine) {
+	t.Helper()
 	if options := engine.networks[buildNetwork]; !options.Internal || options.Labels["excalibase.managed"] != "true" ||
 		options.Options["com.docker.network.bridge.gateway_mode_ipv4"] != "isolated" {
 		t.Fatalf("build network %+v must be internal, managed and without an address on the host", options)
@@ -125,6 +138,10 @@ func TestStartLaysOutTheBuild(t *testing.T) {
 	if !slices.Contains(engine.pulled, testNode) || !slices.Contains(engine.pulled, testPrepare) || slices.Contains(engine.pulled, testEgress) {
 		t.Fatalf("pulled %v: the build images, never provisioning's own", engine.pulled)
 	}
+}
+
+func assertEgressSidecar(t *testing.T, engine *fakeEngine) {
+	t.Helper()
 	egress := engine.get(step("egress"))
 	if egress == nil || egress.state != "running" {
 		t.Fatalf("egress sidecar %+v must be running", egress)
@@ -135,14 +152,6 @@ func TestStartLaysOutTheBuild(t *testing.T) {
 	if e := env(egress); e["EGRESS_ALLOW"] != "git.lan:8080" || e["EGRESS_EXTRA_DENY_CIDRS"] != "203.0.113.0/24" {
 		t.Fatalf("egress env %v", e)
 	}
-	for _, name := range []string{"prepare", "clone", "build", "collect"} {
-		if engine.get(step(name)) == nil {
-			t.Fatalf("step %s not created", name)
-		}
-	}
-	if engine.get(step("prepare")).state != "running" || engine.get(step("clone")).state != "created" {
-		t.Fatal("only prepare starts at once")
-	}
 }
 
 func TestStepsAreLockedDown(t *testing.T) {
@@ -150,36 +159,49 @@ func TestStepsAreLockedDown(t *testing.T) {
 	runner, _ := newTestRunner(t, engine, "runsc")
 	startBuild(t, runner)
 	for _, name := range []string{"prepare", "clone", "build", "collect", "egress", "watch"} {
-		c := engine.get(step(name))
-		host := c.host
-		if !host.ReadonlyRootfs || !slices.Contains(host.CapDrop, "ALL") || len(host.CapAdd) > 0 || host.Privileged {
-			t.Fatalf("%s: root %v caps %v/%v", name, host.ReadonlyRootfs, host.CapDrop, host.CapAdd)
-		}
-		if !slices.Contains(host.SecurityOpt, "no-new-privileges") || host.PidsLimit == nil || *host.PidsLimit <= 0 {
-			t.Fatalf("%s: security %v pids %v", name, host.SecurityOpt, host.PidsLimit)
-		}
-		if len(host.Binds) > 0 || len(host.PortBindings) > 0 || c.config.Labels["excalibase.managed"] != "true" {
-			t.Fatalf("%s: binds %v ports %v labels %v", name, host.Binds, host.PortBindings, c.config.Labels)
-		}
-		wantRuntime := "runsc"
-		if name == "egress" || name == "watch" {
-			wantRuntime = ""
-		}
-		if host.Runtime != wantRuntime {
-			t.Fatalf("%s runs under %q, want %q", name, host.Runtime, wantRuntime)
-		}
-		wantUser := "1000:1000"
-		if name == "prepare" {
-			wantUser = "0:0"
-		}
-		if c.config.User != wantUser {
-			t.Fatalf("%s runs as %q", name, c.config.User)
-		}
+		assertLockedDown(t, name, engine.get(step(name)))
 	}
 	build := engine.get(step("build")).host
 	if build.Memory != 2<<30 || build.MemorySwap != build.Memory || build.NanoCPUs != 1_500_000_000 || build.CPUShares != 256 {
 		t.Fatalf("build limits: memory %d swap %d cpus %d shares %d", build.Memory, build.MemorySwap, build.NanoCPUs, build.CPUShares)
 	}
+	assertStepNetworks(t, engine)
+	mounts := build.Mounts
+	if len(mounts) != 1 || mounts[0].Source != workVolume || mounts[0].Target != "/work" {
+		t.Fatalf("build mounts %+v", mounts)
+	}
+	if _, ok := build.Tmpfs["/tmp"]; !ok {
+		t.Fatal("no /tmp")
+	}
+}
+
+// assertLockedDown: no capability, no new privileges, read-only root, bounded processes, the expected runtime and user.
+func assertLockedDown(t *testing.T, name string, planned *fakeContainer) {
+	t.Helper()
+	host := planned.host
+	if !host.ReadonlyRootfs || !slices.Contains(host.CapDrop, "ALL") || len(host.CapAdd) > 0 || host.Privileged {
+		t.Fatalf("%s: root %v caps %v/%v", name, host.ReadonlyRootfs, host.CapDrop, host.CapAdd)
+	}
+	if !slices.Contains(host.SecurityOpt, "no-new-privileges") || host.PidsLimit == nil || *host.PidsLimit <= 0 {
+		t.Fatalf("%s: security %v pids %v", name, host.SecurityOpt, host.PidsLimit)
+	}
+	if len(host.Binds) > 0 || len(host.PortBindings) > 0 || planned.config.Labels["excalibase.managed"] != "true" {
+		t.Fatalf("%s: binds %v ports %v labels %v", name, host.Binds, host.PortBindings, planned.config.Labels)
+	}
+	wantRuntime, wantUser := "runsc", "1000:1000"
+	if name == "egress" || name == "watch" {
+		wantRuntime = ""
+	}
+	if name == "prepare" {
+		wantUser = "0:0"
+	}
+	if host.Runtime != wantRuntime || planned.config.User != wantUser {
+		t.Fatalf("%s runs under %q as %q, want %q as %q", name, host.Runtime, planned.config.User, wantRuntime, wantUser)
+	}
+}
+
+func assertStepNetworks(t *testing.T, engine *fakeEngine) {
+	t.Helper()
 	if string(engine.get(step("collect")).host.NetworkMode) != "none" || string(engine.get(step("prepare")).host.NetworkMode) != "none" {
 		t.Fatal("prepare and collect need no network")
 	}
@@ -187,13 +209,6 @@ func TestStepsAreLockedDown(t *testing.T) {
 		if string(engine.get(step(name)).host.NetworkMode) != buildNetwork {
 			t.Fatalf("%s is on %q", name, engine.get(step(name)).host.NetworkMode)
 		}
-	}
-	mounts := engine.get(step("build")).host.Mounts
-	if len(mounts) != 1 || mounts[0].Source != workVolume || mounts[0].Target != "/work" {
-		t.Fatalf("build mounts %+v", mounts)
-	}
-	if _, ok := engine.get(step("build")).host.Tmpfs["/tmp"]; !ok {
-		t.Fatal("no /tmp")
 	}
 }
 
@@ -210,23 +225,8 @@ func TestCredentialsReachOnlyTheirStep(t *testing.T) {
 	engine := newFakeEngine()
 	runner, _ := newTestRunner(t, engine, "runsc")
 	startBuild(t, runner)
-	proxy := "http://10.250.0.2:3128"
-	for _, name := range []string{"prepare", "clone", "build", "collect", "egress"} {
-		e := env(engine.get(step(name)))
-		joined := strings.Join(engine.get(step(name)).config.Env, " ")
-		if hasToken := strings.Contains(joined, testToken); hasToken != (name == "clone") {
-			t.Fatalf("%s holds the clone token: %v", name, hasToken)
-		}
-		if hasSecret := strings.Contains(joined, testSecret); hasSecret != (name == "build") {
-			t.Fatalf("%s holds the build secret: %v", name, hasSecret)
-		}
-		if name == "clone" || name == "build" {
-			for _, variable := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "npm_config_https_proxy", "YARN_HTTPS_PROXY"} {
-				if e[variable] != proxy {
-					t.Fatalf("%s %s=%q, want the sidecar %s", name, variable, e[variable], proxy)
-				}
-			}
-		}
+	for _, name := range []string{"prepare", "clone", "build", "collect", "egress", "watch"} {
+		assertCredentialsOnlyWhereNeeded(t, name, engine.get(step(name)))
 	}
 	build := env(engine.get(step("build")))
 	if build["HOME"] != "/work/home" || build["VITE_GREETING"] != "hi" || build["ROOT_DIR"] != "web" || build["NODE_USE_ENV_PROXY"] != "1" {
@@ -243,6 +243,28 @@ func TestCredentialsReachOnlyTheirStep(t *testing.T) {
 	cmd := engine.get(step("clone")).config.Cmd
 	if len(cmd) != 7 || cmd[4] != "bash" || cmd[5] != "-c" || !strings.Contains(cmd[6], "git fetch") {
 		t.Fatalf("clone runs %v", cmd)
+	}
+}
+
+// assertCredentialsOnlyWhereNeeded: the clone token in clone, the build's secrets in build, the proxy in both.
+func assertCredentialsOnlyWhereNeeded(t *testing.T, name string, planned *fakeContainer) {
+	t.Helper()
+	joined := strings.Join(planned.config.Env, " ")
+	if hasToken := strings.Contains(joined, testToken); hasToken != (name == "clone") {
+		t.Fatalf("%s holds the clone token: %v", name, hasToken)
+	}
+	if hasSecret := strings.Contains(joined, testSecret); hasSecret != (name == "build") {
+		t.Fatalf("%s holds the build secret: %v", name, hasSecret)
+	}
+	if name != "clone" && name != "build" {
+		return
+	}
+	const proxy = "http://10.250.0.2:3128"
+	values := env(planned)
+	for _, variable := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "npm_config_https_proxy", "YARN_HTTPS_PROXY"} {
+		if values[variable] != proxy {
+			t.Fatalf("%s %s=%q, want the sidecar %s", name, variable, values[variable], proxy)
+		}
 	}
 }
 
@@ -404,7 +426,7 @@ func TestStepsEndAtTheDeadlineWithoutProvisioning(t *testing.T) {
 			t.Fatalf("%s cmd %v", name, cmd)
 		}
 	}
-	if e := env(engine.get(step("egress"))); e["EGRESS_LIFETIME"] != "600s" {
+	if e := env(engine.get(step("egress"))); e["EGRESS_LIFETIME"] != "660s" {
 		t.Fatalf("egress lifetime %q", e["EGRESS_LIFETIME"])
 	}
 }

@@ -59,6 +59,9 @@ type Proxy struct {
 
 const defaultMaxConnections = 256
 
+// unreachableLog names a destination that passed the policy but did not answer.
+const unreachableLog = "could not reach %s: %v"
+
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.slotsOnce.Do(func() {
 		limit := p.MaxConnections
@@ -98,7 +101,7 @@ func (p *Proxy) target(w http.ResponseWriter, r *http.Request, hostport, default
 		return "", false
 	}
 	if err != nil {
-		p.Log.Printf("could not reach %s: %v", net.JoinHostPort(host, port), err)
+		p.Log.Printf(unreachableLog, net.JoinHostPort(host, port), err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return "", false
 	}
@@ -130,7 +133,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 	stripHop(out.Header)
 	resp, err := transport.RoundTrip(out)
 	if err != nil {
-		p.Log.Printf("could not reach %s: %v", r.URL.Host, err)
+		p.Log.Printf(unreachableLog, r.URL.Host, err)
 		http.Error(w, "the destination did not answer", http.StatusBadGateway)
 		return
 	}
@@ -150,7 +153,7 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	upstream, err := p.dial(r.Context(), address)
 	if err != nil {
-		p.Log.Printf("could not reach %s: %v", r.Host, err)
+		p.Log.Printf(unreachableLog, r.Host, err)
 		http.Error(w, "the destination did not answer", http.StatusBadGateway)
 		return
 	}
