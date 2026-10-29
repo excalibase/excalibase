@@ -33,6 +33,7 @@ var featureEnv = map[features.Feature]string{
 	features.DBCopy:          "FEATURE_DBCOPY",
 	features.MajorUpgrade:    "FEATURE_MAJORUPGRADE",
 	features.TemplateCatalog: "FEATURE_TEMPLATECATALOG",
+	features.HostLogs:        "FEATURE_HOSTLOGS",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.
@@ -47,11 +48,12 @@ func loadDarkFeatures() []features.Feature {
 }
 
 // Features is the flags feature code asks; nothing else reads DarkFeatures.
-// Host monitoring reads a Docker or Podman host, so it is off on Kubernetes.
+// Host monitoring and host logs read a Docker or Podman host, so they are off
+// on Kubernetes, which keeps logs in the chart's Loki.
 func (c AppConfig) Features() features.Flags {
 	on := make([]features.Feature, 0, len(c.DarkFeatures))
 	for _, feature := range c.DarkFeatures {
-		if feature != features.HostMetrics || c.ProvisionerMode == "docker" {
+		if (feature != features.HostMetrics && feature != features.HostLogs) || c.ProvisionerMode == "docker" {
 			on = append(on, feature)
 		}
 	}
