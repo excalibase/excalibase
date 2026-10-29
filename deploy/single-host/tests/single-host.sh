@@ -53,6 +53,28 @@ echo "$hostmetrics" | grep -q 'FEATURE_HOSTMETRICS: "true"' \
   || { echo "FEATURE_HOSTMETRICS=true does not reach provisioning" >&2; exit 1; }
 echo "$hostmetrics" | grep -q 'source: /proc/1/net/dev' \
   || { echo "the host's network counters are not mounted with --host-metrics" >&2; exit 1; }
+# Stored log search (EXC-672): Loki only with the profile, on a network only provisioning shares.
+render | python3 -c 'import sys,yaml; sys.exit("loki runs without the hostlogs profile" if "loki" in yaml.safe_load(sys.stdin)["services"] else 0)'
+render COMPOSE_PROFILES=hostlogs FEATURE_HOSTLOGS=true | python3 -c '
+import sys, yaml
+doc = yaml.safe_load(sys.stdin)
+services, networks = doc["services"], doc["networks"]
+loki = services.get("loki") or sys.exit("no loki with the hostlogs profile")
+prov = services["provisioning"]
+if prov["environment"].get("FEATURE_HOSTLOGS") != "true":
+    sys.exit("FEATURE_HOSTLOGS=true does not reach provisioning")
+if prov["environment"].get("HOST_LOGS_LOKI_URL") != "http://loki:3100":
+    sys.exit("provisioning is not pointed at the bundled loki")
+if set(loki.get("networks") or {}) != {"logs"} or not networks["logs"].get("internal"):
+    sys.exit("loki must sit alone on the internal logs network")
+joined = sorted(n for n, s in services.items() if "logs" in (s.get("networks") or {}))
+if joined != ["loki", "provisioning"]:
+    sys.exit(f"the logs network is joined by {joined}")
+if loki.get("ports") or not loki.get("read_only") or "ALL" not in (loki.get("cap_drop") or []):
+    sys.exit("loki is published or not hardened")
+if not loki.get("mem_limit"):
+    sys.exit("loki has no memory limit")
+'
 echo "single-host required settings ok"
 # Email through the operator's own relay (EXC-580) or SES: every setting in .env reaches provisioning.
 out=$(render EMAIL_PROVIDER=smtp SMTP_HOST=mail.example.test SMTP_PORT=2587 SMTP_TLS=starttls \
