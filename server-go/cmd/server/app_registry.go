@@ -66,6 +66,18 @@ func projectExists(instances storage.InstanceStore) appregistry.ProjectExists {
 	}
 }
 
+// projectKept is the sweep's check: only a project gone for good loses its
+// images; one whose deletion can still be cancelled keeps them.
+func projectKept(instances storage.InstanceStore) appregistry.ProjectExists {
+	return func(_ context.Context, projectID string) (bool, error) {
+		inst, err := instances.FindByProjectID(projectID)
+		if err != nil {
+			return false, err
+		}
+		return inst != nil && !domain.IsDeletionStatus(inst.Status), nil
+	}
+}
+
 func newRegistryTokenHandler(internal *appregistry.Internal, instances storage.InstanceStore) http.Handler {
 	// Refused while the registry only guards: then there is no token service.
 	h, err := appregistry.NewTokenHandler(internal, projectExists(instances))
@@ -83,6 +95,8 @@ func mountRegistryToken(r *chi.Mux, d *handlerDeps) {
 	r.Group(func(r chi.Router) {
 		r.Use(features.Require(d.features, features.AppGitBuilds))
 		r.Use(custommw.RequireInternalListener)
+		// A node asks once per image pull; edge-function code shares this listener.
+		r.Use(custommw.RateLimit(custommw.PerIP, registryTokenCallsPerMinute, time.Minute))
 		r.Method(http.MethodGet, registryTokenPath, d.registryToken)
 		r.Method(http.MethodPost, registryTokenPath, d.registryToken)
 	})
@@ -122,8 +136,9 @@ func mountInternalRegistry(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 }
 
 const (
-	appRegistrySweepLockID   int64 = 0x6168_0acb_5e9c_0540
-	appRegistrySweepInterval       = 24 * time.Hour
+	registryTokenCallsPerMinute       = 600
+	appRegistrySweepLockID      int64 = 0x6168_0acb_5e9c_0540
+	appRegistrySweepInterval          = 24 * time.Hour
 )
 
 // startRegistrySweeper deletes built images nothing will run again, daily on
@@ -143,6 +158,6 @@ func startRegistrySweeper(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 	if cfg.IsCloud() {
 		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), appRegistrySweepLockID)
 	}
-	sweeper := service.NewRegistrySweeper(client, apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()), projectExists(instances))
+	sweeper := service.NewRegistrySweeper(client, apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()), projectKept(instances))
 	return sweeper.Start(context.Background(), service.NewLeadership(lock), appRegistrySweepInterval), nil
 }

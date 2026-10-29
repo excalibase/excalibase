@@ -96,6 +96,24 @@ func TestNewInternalRegistry_OnlyWithTheFlagAndAHost(t *testing.T) {
 	}
 }
 
+// The sweep keeps a project's images until its deletion can no longer be cancelled.
+func TestProjectKept_UntilTheDeletionIsFinal(t *testing.T) {
+	instances := fakestore.NewInstances()
+	instances.Items["proj-live"] = &domain.DatabaseInstance{ProjectID: "proj-live", Status: string(domain.StatusActive)}
+	instances.Items["proj-dying"] = &domain.DatabaseInstance{ProjectID: "proj-dying", Status: string(domain.StatusDeleting)}
+	instances.Items["proj-grace"] = &domain.DatabaseInstance{ProjectID: "proj-grace", Status: string(domain.StatusPendingDeletion)}
+	kept := projectKept(instances)
+	for project, want := range map[string]bool{"proj-live": true, "proj-grace": true, "proj-dying": false, "proj-missing": false} {
+		if got, err := kept(context.Background(), project); err != nil || got != want {
+			t.Errorf("%s: %v %v, want %v", project, got, err, want)
+		}
+	}
+	instances.Err = errors.New("down")
+	if _, err := kept(context.Background(), "proj-live"); err == nil {
+		t.Error("a store that cannot answer is an error")
+	}
+}
+
 // The derived password opens nothing once the project is gone or being deleted.
 func TestProjectExists_OnlyALiveProject(t *testing.T) {
 	instances := fakestore.NewInstances()

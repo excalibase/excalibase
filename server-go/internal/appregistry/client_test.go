@@ -105,24 +105,26 @@ func TestClient_ListsEveryPageWithTheNarrowestToken(t *testing.T) {
 	}
 }
 
-func TestClient_DeletesOneDigestWithADeleteTokenOnItsRepository(t *testing.T) {
+func TestClient_UntagsOnePushTagWithADeleteTokenOnItsRepository(t *testing.T) {
 	f := &fakeRegistry{}
 	client := fakeClient(t, f)
-	digest := "sha256:" + strings.Repeat("cd", 32)
-	if err := client.Delete(context.Background(), "proj-a/api", digest); err != nil {
+	tag := "p1800000000-" + strings.Repeat("cd", 32)
+	if err := client.Untag(context.Background(), "proj-a/api", tag); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(f.deleted, []string{"proj-a/api/manifests/" + digest}) {
+	if !slices.Equal(f.deleted, []string{"proj-a/api/manifests/" + tag}) {
 		t.Errorf("deleted %v", f.deleted)
 	}
-	if got := f.grants["DELETE /v2/proj-a/api/manifests/"+digest]; len(got) != 1 || got[0].Name != "proj-a/api" || !slices.Equal(got[0].Actions, []string{"delete"}) {
+	if got := f.grants["DELETE /v2/proj-a/api/manifests/"+tag]; len(got) != 1 || got[0].Name != "proj-a/api" || !slices.Equal(got[0].Actions, []string{"delete"}) {
 		t.Errorf("delete grant %+v", got)
 	}
-	if err := client.Delete(context.Background(), "proj-a/api", "latest"); err == nil {
-		t.Error("a delete by tag")
+	for _, other := range []string{"latest", "sha256:" + strings.Repeat("cd", 32)} {
+		if err := client.Untag(context.Background(), "proj-a/api", other); err == nil {
+			t.Errorf("removed %q, not a push tag", other)
+		}
 	}
-	if err := client.Delete(context.Background(), "../proj-a", digest); err == nil {
-		t.Error("a delete outside a project's repository")
+	if err := client.Untag(context.Background(), "../proj-a", tag); err == nil {
+		t.Error("an untag outside a project's repository")
 	}
 }
 
@@ -136,14 +138,14 @@ func TestClient_ReportsWhatTheRegistryRefuses(t *testing.T) {
 		if _, err := client.Tags(context.Background(), "proj-a/api"); err == nil {
 			t.Errorf("%d: tags read", status)
 		}
-		if err := client.Delete(context.Background(), "proj-a/api", "sha256:"+strings.Repeat("cd", 32)); err == nil {
-			t.Errorf("%d: delete", status)
+		if err := client.Untag(context.Background(), "proj-a/api", "p1-"+strings.Repeat("cd", 32)); err == nil {
+			t.Errorf("%d: untag", status)
 		}
 	}
 	f := &fakeRegistry{status: http.StatusNotFound}
 	client := fakeClient(t, f)
-	if err := client.Delete(context.Background(), "proj-a/api", "sha256:"+strings.Repeat("cd", 32)); err != nil {
-		t.Errorf("a digest already gone: %v", err)
+	if err := client.Untag(context.Background(), "proj-a/api", "p1-"+strings.Repeat("cd", 32)); err != nil {
+		t.Errorf("a tag already gone: %v", err)
 	}
 }
 

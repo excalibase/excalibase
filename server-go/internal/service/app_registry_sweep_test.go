@@ -14,6 +14,8 @@ import (
 )
 
 type fakeRegistryAdmin struct {
+	onTags           func()
+	untagged         []string
 	tags             map[string][]string
 	deleted          []string
 	listErr, tagsErr error
@@ -30,14 +32,21 @@ func (f *fakeRegistryAdmin) Repositories(context.Context) ([]string, error) {
 }
 
 func (f *fakeRegistryAdmin) Tags(_ context.Context, repository string) ([]string, error) {
+	if f.onTags != nil {
+		f.onTags()
+		f.onTags = nil
+	}
 	return f.tags[repository], f.tagsErr
 }
 
-func (f *fakeRegistryAdmin) Delete(_ context.Context, repository, digest string) error {
+// Untag records the image a tag named, so tests read what lost its tag.
+func (f *fakeRegistryAdmin) Untag(_ context.Context, repository, tag string) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
+	digest, _, _ := appregistry.ParsePushTag(tag)
 	f.deleted = append(f.deleted, repository+"@"+digest)
+	f.untagged = append(f.untagged, tag)
 	return nil
 }
 
@@ -66,7 +75,7 @@ func sweepFixture(t *testing.T) (*RegistrySweeper, *fakeRegistryAdmin, *fakeDepl
 	registry := &fakeRegistryAdmin{tags: map[string][]string{repo: {"latest"}, app.ProjectID + "/gone": {pushedTag(t, sweepDigest(50), 48*time.Hour)}}}
 	for n := 1; n <= 12; n++ {
 		deploys.deploys = append(deploys.deploys, &apphost.Deploy{ID: fmt.Sprint(n), ProjectID: app.ProjectID, AppID: app.ID,
-			Image: appregistrytestHost + "/" + repo + "@" + sweepDigest(n), Source: apphost.DeploySourceGitBuild})
+			Image: appregistrytestHost + "/" + repo + "@" + sweepDigest(n), Source: apphost.DeploySourceGitBuild, Status: apphost.DeployStatusSucceeded})
 		registry.tags[repo] = append(registry.tags[repo], pushedTag(t, sweepDigest(n), 72*time.Hour))
 	}
 	exists := func(_ context.Context, projectID string) (bool, error) { return projectID == app.ProjectID, nil }
@@ -110,10 +119,14 @@ func TestRegistrySweep_SparesARecentPushAndTheImageTheAppNames(t *testing.T) {
 	if _, err := sweeper.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	for _, kept := range []int{1, 2, 12, 99} {
+	for _, kept := range []int{2, 12, 99} {
 		if slices.Contains(registry.deleted, repo+"@"+sweepDigest(kept)) {
 			t.Errorf("digest %d deleted", kept)
 		}
+	}
+	// Digest 1 loses its old tag only: the new one keeps the image.
+	if fresh := pushedTag(t, sweepDigest(1), time.Hour); slices.Contains(registry.untagged, fresh) || !slices.Contains(registry.untagged, pushedTag(t, sweepDigest(1), 72*time.Hour)) {
+		t.Errorf("untagged %v", registry.untagged)
 	}
 	if !slices.Contains(registry.deleted, repo+"@"+sweepDigest(3)) {
 		t.Errorf("an image nothing names stays: %v", registry.deleted)
@@ -122,7 +135,7 @@ func TestRegistrySweep_SparesARecentPushAndTheImageTheAppNames(t *testing.T) {
 
 func TestRegistrySweep_ADeletedProjectKeepsNothing(t *testing.T) {
 	sweeper, registry, _ := sweepFixture(t)
-	sweeper.exists = func(context.Context, string) (bool, error) { return false, nil }
+	sweeper.live = func(context.Context, string) (bool, error) { return false, nil }
 	if _, err := sweeper.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -131,10 +144,63 @@ func TestRegistrySweep_ADeletedProjectKeepsNothing(t *testing.T) {
 	}
 }
 
+// The image the cluster runs is the last deploy that succeeded, however many failed after it.
+func TestRegistrySweep_KeepsTheLastSuccessBehindAnyNumberOfFailures(t *testing.T) {
+	sweeper, registry, deploys := sweepFixture(t)
+	app := sampleDeployApp()
+	repo := app.ProjectID + "/" + app.Name
+	for i, d := range deploys.deploys {
+		if i > 0 {
+			d.Status = apphost.DeployStatusFailed
+		}
+	}
+	if _, err := sweeper.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(registry.deleted, repo+"@"+sweepDigest(1)) || !slices.Contains(registry.deleted, repo+"@"+sweepDigest(2)) {
+		t.Errorf("deleted %v: digest 1 ran last, digest 2 never did", registry.deleted)
+	}
+}
+
+// Pushes inside the grace that no deploy names are capped, so one app cannot fill the registry in a day.
+func TestRegistrySweep_CapsRecentPushesNoDeployNames(t *testing.T) {
+	sweeper, registry, _ := sweepFixture(t)
+	app := sampleDeployApp()
+	repo := app.ProjectID + "/" + app.Name
+	for n := 60; n < 66; n++ {
+		registry.tags[repo] = append(registry.tags[repo], pushedTag(t, sweepDigest(n), time.Duration(n)*time.Minute))
+	}
+	if _, err := sweeper.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for n := 60; n < 66; n++ {
+		if got := slices.Contains(registry.deleted, repo+"@"+sweepDigest(n)); got != (n >= 60+RegistryRecentPushes) {
+			t.Errorf("recent push %d deleted: %v", n, got)
+		}
+	}
+}
+
+// A deploy recorded while the sweep listed the tags keeps its image.
+func TestRegistrySweep_ReadsTheKeepSetAgainBeforeRemoving(t *testing.T) {
+	sweeper, registry, deploys := sweepFixture(t)
+	app := sampleDeployApp()
+	repo := app.ProjectID + "/" + app.Name
+	registry.onTags = func() {
+		deploys.deploys = append(deploys.deploys, &apphost.Deploy{ID: "rollback", ProjectID: app.ProjectID, AppID: app.ID,
+			Image: appregistrytestHost + "/" + repo + "@" + sweepDigest(1), Status: apphost.DeployStatusPending})
+	}
+	if _, err := sweeper.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(registry.deleted, repo+"@"+sweepDigest(1)) {
+		t.Errorf("the image a deploy just named was untagged: %v", registry.deleted)
+	}
+}
+
 // A repository the sweep cannot judge is left whole.
 func TestRegistrySweep_LeavesWhatItCannotJudge(t *testing.T) {
 	sweeper, registry, deploys := sweepFixture(t)
-	sweeper.exists = func(context.Context, string) (bool, error) { return false, errors.New("platform db down") }
+	sweeper.live = func(context.Context, string) (bool, error) { return false, errors.New("platform db down") }
 	report, err := sweeper.Sweep(context.Background())
 	if err != nil || len(registry.deleted) != 0 || report.Failed != 2 {
 		t.Fatalf("store down: deleted %v, %+v %v", registry.deleted, report, err)

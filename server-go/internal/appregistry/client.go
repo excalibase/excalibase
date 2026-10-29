@@ -65,15 +65,16 @@ func (c *Client) Tags(ctx context.Context, repository string) ([]string, error) 
 	return c.list(ctx, "/v2/"+repository+"/tags/list", Grant{Type: "repository", Name: repository, Actions: []string{"pull"}}, "tags")
 }
 
-// Delete removes a manifest and every tag on it; zot's own GC then frees the blobs.
-func (c *Client) Delete(ctx context.Context, repository, digest string) error {
+// Untag removes one of the platform's push tags. Another tag on the same
+// image keeps it; an image left with none is freed by zot's own GC.
+func (c *Client) Untag(ctx context.Context, repository, tag string) error {
 	if _, _, ok := SplitRepository(repository); !ok {
 		return ErrInvalidName
 	}
-	if !digestPattern.MatchString(digest) {
-		return fmt.Errorf("a delete names a sha256 digest, not %q", digest)
+	if _, _, ok := ParsePushTag(tag); !ok {
+		return fmt.Errorf("only the platform's push tags are removed, not %q", tag)
 	}
-	resp, err := c.do(ctx, http.MethodDelete, "/v2/"+repository+"/manifests/"+digest, Grant{Type: "repository", Name: repository, Actions: []string{"delete"}})
+	resp, err := c.do(ctx, http.MethodDelete, "/v2/"+repository+"/manifests/"+tag, Grant{Type: "repository", Name: repository, Actions: []string{"delete"}})
 	if err != nil {
 		return err
 	}
@@ -81,7 +82,7 @@ func (c *Client) Delete(ctx context.Context, repository, digest string) error {
 	if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
-	return fmt.Errorf("delete %s@%s: registry answered %d", repository, digest, resp.StatusCode)
+	return fmt.Errorf("untag %s:%s: registry answered %d", repository, tag, resp.StatusCode)
 }
 
 // list reads a paged listing (n and last, as the distribution spec pages).

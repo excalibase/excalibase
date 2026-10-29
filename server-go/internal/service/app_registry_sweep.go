@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,26 +14,33 @@ import (
 const (
 	// RegistryKeepDeploys is how many of an app's latest deploys keep their images, the running one besides.
 	RegistryKeepDeploys = 10
+	// registryDeployHistory is how far back the sweep looks for the last deploy that succeeded.
+	registryDeployHistory = 100
 	// RegistryPushGrace spares an image pushed this recently: its deploy may not be recorded yet.
 	RegistryPushGrace = 24 * time.Hour
+	// RegistryRecentPushes caps the images an app keeps inside the grace that no deploy names.
+	RegistryRecentPushes = 3
 )
 
 // RegistryAdmin is the registry as the sweep uses it.
 type RegistryAdmin interface {
 	Repositories(ctx context.Context) ([]string, error)
 	Tags(ctx context.Context, repository string) ([]string, error)
-	Delete(ctx context.Context, repository, digest string) error
+	Untag(ctx context.Context, repository, tag string) error
 }
 
-// RegistrySweeper deletes built images nothing will run again (EXC-540): an
-// app keeps its last RegistryKeepDeploys deploys' images and the one it names;
-// a deleted app or project keeps none.
+// RegistrySweeper removes the push tags of built images nothing will run
+// again (EXC-540), and zot's own GC frees an image left with none. An app
+// keeps the images of its last RegistryKeepDeploys deploys, its last deploy
+// that succeeded and the one it names; a deleted app or project keeps none.
 type RegistrySweeper struct {
 	registry RegistryAdmin
 	apps     apphost.Store
 	deploys  apphost.DeployStore
-	exists   appregistry.ProjectExists
-	now      func() time.Time
+	// live answers false only for a project that is gone for good: one whose
+	// deletion can still be cancelled keeps its images.
+	live appregistry.ProjectExists
+	now  func() time.Time
 }
 
 // RegistrySweepReport counts one sweep.
@@ -40,8 +48,8 @@ type RegistrySweepReport struct {
 	Repositories, Deleted, Failed int
 }
 
-func NewRegistrySweeper(registry RegistryAdmin, apps apphost.Store, deploys apphost.DeployStore, exists appregistry.ProjectExists) *RegistrySweeper {
-	return &RegistrySweeper{registry: registry, apps: apps, deploys: deploys, exists: exists, now: time.Now}
+func NewRegistrySweeper(registry RegistryAdmin, apps apphost.Store, deploys apphost.DeployStore, live appregistry.ProjectExists) *RegistrySweeper {
+	return &RegistrySweeper{registry: registry, apps: apps, deploys: deploys, live: live, now: time.Now}
 }
 
 // Start sweeps at once and then every interval while this replica leads; the
@@ -98,13 +106,7 @@ func (s *RegistrySweeper) Sweep(ctx context.Context) (RegistrySweepReport, error
 		if ctx.Err() != nil {
 			return report, ctx.Err()
 		}
-		keep, err := s.keep(ctx, repository)
-		if err != nil {
-			log.Printf("registry sweep: %s: %v", repository, err)
-			report.Failed++
-			continue
-		}
-		deleted, failed := s.sweepRepository(ctx, repository, keep)
+		deleted, failed := s.sweepRepository(ctx, repository)
 		report.Deleted += deleted
 		report.Failed += failed
 	}
@@ -118,7 +120,7 @@ func (s *RegistrySweeper) keep(ctx context.Context, repository string) (map[stri
 		return nil, appregistry.ErrInvalidName
 	}
 	keep := map[string]bool{}
-	live, err := s.exists(ctx, projectID)
+	live, err := s.live(ctx, projectID)
 	if err != nil || !live {
 		return keep, err
 	}
@@ -131,14 +133,18 @@ func (s *RegistrySweeper) keep(ctx context.Context, repository string) (map[stri
 			continue
 		}
 		keepDigest(keep, app.Image)
-		deploys, err := s.deploys.ListByApp(projectID, app.ID, RegistryKeepDeploys)
+		deploys, err := s.deploys.ListByApp(projectID, app.ID, registryDeployHistory)
 		if err != nil {
 			return nil, err
 		}
-		for _, deploy := range deploys {
-			keepDigest(keep, deploy.Image)
-			if deploy.Digest != "" {
-				keep[deploy.Digest] = true
+		// Newest first: the last few, and the last that succeeded, which is what runs.
+		succeeded := false
+		for i, deploy := range deploys {
+			lastSuccess := !succeeded && deploy.Status == apphost.DeployStatusSucceeded
+			succeeded = succeeded || lastSuccess
+			if i < RegistryKeepDeploys || lastSuccess {
+				keepDigest(keep, deploy.Image)
+				keepDigest(keep, "@"+deploy.Digest)
 			}
 		}
 	}
@@ -146,37 +152,73 @@ func (s *RegistrySweeper) keep(ctx context.Context, repository string) (map[stri
 }
 
 func keepDigest(keep map[string]bool, image string) {
-	if _, digest, pinned := strings.Cut(image, "@"); pinned {
+	if _, digest, pinned := strings.Cut(image, "@"); pinned && digest != "" {
 		keep[digest] = true
 	}
 }
 
-// sweepRepository deletes each pushed image outside keep and past the grace.
-// A tag the platform did not write is left alone.
-func (s *RegistrySweeper) sweepRepository(ctx context.Context, repository string, keep map[string]bool) (int, int) {
+// sweepRepository removes the push tags nothing keeps. Each tag goes alone,
+// so a newer push of the same image keeps it; a tag the platform did not
+// write is left. The keep set is read again just before anything goes, so a
+// deploy recorded during the listing is not lost.
+func (s *RegistrySweeper) sweepRepository(ctx context.Context, repository string) (int, int) {
+	keep, err := s.keep(ctx, repository)
+	if err != nil {
+		log.Printf("registry sweep: %s: %v", repository, err)
+		return 0, 1
+	}
 	tags, err := s.registry.Tags(ctx, repository)
 	if err != nil {
 		log.Printf("registry sweep: %s: list tags: %v", repository, err)
 		return 0, 1
 	}
-	// A digest pushed twice is as young as its latest push.
-	latest := map[string]time.Time{}
-	for _, tag := range tags {
-		if digest, pushed, ok := appregistry.ParsePushTag(tag); ok && pushed.After(latest[digest]) {
-			latest[digest] = pushed
-		}
+	stale := s.staleTags(tags, keep)
+	if len(stale) == 0 {
+		return 0, 0
+	}
+	if keep, err = s.keep(ctx, repository); err != nil {
+		log.Printf("registry sweep: %s: %v", repository, err)
+		return 0, 1
 	}
 	deleted, failed := 0, 0
-	for digest, pushed := range latest {
-		if keep[digest] || s.now().Sub(pushed) < RegistryPushGrace {
+	for _, tag := range stale {
+		if digest, _, _ := appregistry.ParsePushTag(tag); keep[digest] {
 			continue
 		}
-		if err := s.registry.Delete(ctx, repository, digest); err != nil {
-			log.Printf("registry sweep: %s@%s: %v", repository, digest, err)
+		if err := s.registry.Untag(ctx, repository, tag); err != nil {
+			log.Printf("registry sweep: %s:%s: %v", repository, tag, err)
 			failed++
 			continue
 		}
 		deleted++
 	}
 	return deleted, failed
+}
+
+// staleTags are the push tags of images nothing keeps: past the grace, or
+// inside it beyond the RegistryRecentPushes newest.
+func (s *RegistrySweeper) staleTags(tags []string, keep map[string]bool) []string {
+	type push struct {
+		tag string
+		at  time.Time
+	}
+	var recent []push
+	var stale []string
+	for _, tag := range tags {
+		digest, at, ok := appregistry.ParsePushTag(tag)
+		switch {
+		case !ok || keep[digest]:
+		case s.now().Sub(at) >= RegistryPushGrace:
+			stale = append(stale, tag)
+		default:
+			recent = append(recent, push{tag, at})
+		}
+	}
+	sort.Slice(recent, func(i, j int) bool { return recent[i].at.After(recent[j].at) })
+	for i, p := range recent {
+		if i >= RegistryRecentPushes {
+			stale = append(stale, p.tag)
+		}
+	}
+	return stale
 }
