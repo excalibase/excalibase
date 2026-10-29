@@ -74,6 +74,18 @@ grep -q "\"type\":\"kv_namespace\",\"name\":\"SITE_HOSTS\",\"namespace_id\":\"$K
 grep -q '"type":"plain_text","name":"BASE_DOMAIN","text":"excalibase.app"' "$meta" || fail "no base domain var"
 grep -q '"type":"plain_text","name":"ABUSE_URL","text":"mailto:abuse@example.com"' "$meta" || fail "no abuse var"
 
+# Without --outbound, no outbound Worker and no OUTBOUND var: server sites stay off.
+grep -q '"outbound"' "$meta" && fail "an outbound binding without --outbound"
+grep -q '"name":"OUTBOUND"' "$meta" && fail "an OUTBOUND var without --outbound"
+
+# EXC-661: --outbound sends every fetch of site code through that Worker, with
+# the site's identity as its parameters (binding shape unverified on Cloudflare: R5).
+run env $creds sh "$DIR/deploy.sh" $good_args --outbound excalibase-sites-outbound || { cat "$WORK/out"; fail "--outbound refused"; }
+meta="$WORK/fake/part-metadata"
+grep -q '"type":"dispatch_namespace","name":"SITES","namespace":"sites-prod","outbound":{"worker":{"service":"excalibase-sites-outbound"},"params":\[{"name":"siteId"},{"name":"projectId"}\]}}' "$meta" ||
+  fail "no outbound Worker on the dispatch binding: $(cat "$meta")"
+grep -q '"type":"plain_text","name":"OUTBOUND","text":"excalibase-sites-outbound"' "$meta" || fail "no OUTBOUND var"
+
 # Another script name is honoured.
 run env $creds sh "$DIR/deploy.sh" $good_args --script sites-router-staging || fail "--script refused"
 grep -q "/workers/scripts/sites-router-staging\"" "$WORK/fake/config" || fail "--script ignored"
@@ -95,10 +107,16 @@ for bad in \
   "--namespace sites --hosts-kv-id $KV --base-domain excalibase.app --abuse-url javascript:alert(1)" \
   "--namespace sites --hosts-kv-id $KV --base-domain excalibase.app --abuse-url https://x.com/\"" \
   "$good_args --script Bad/Name" \
+  "$good_args --outbound Bad/Name" \
+  "$good_args --outbound" \
   "$good_args --unknown"; do
   run env $creds sh "$DIR/deploy.sh" $bad && fail "accepted: $bad"
   [ ! -e "$WORK/fake/args" ] || fail "called curl for: $bad"
 done
+
+# A value with a newline would pass a line-wise check and add JSON of its own.
+run env $creds sh "$DIR/deploy.sh" $good_args --outbound "$(printf 'excalibase-sites-outbound\nx')" && fail "accepted a newline"
+[ ! -e "$WORK/fake/args" ] || fail "called curl for a newline"
 
 # Missing credentials: named, not shown.
 run env CLOUDFLARE_ACCOUNT_ID=$ACCOUNT sh "$DIR/deploy.sh" $good_args && fail "ran without a token"

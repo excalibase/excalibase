@@ -24,6 +24,7 @@ jobs:
       singlehost: ${{ steps.filter.outputs.singlehost }}
       singlehostboot: ${{ steps.filter.outputs.singlehostboot }}
       sitesrouter: ${{ steps.filter.outputs.sitesrouter }}
+      sitesoutbound: ${{ steps.filter.outputs.sitesoutbound }}
       sitebuilds: ${{ steps.filter.outputs.sitebuilds }}
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +57,8 @@ jobs:
               - 'frontend/Dockerfile'
             sitesrouter:
               - 'edge/sites-router/**'
+            sitesoutbound:
+              - 'edge/sites-outbound/**'
             sitebuilds:
               - 'server-go/internal/k8s/site_build*'
               - 'server-go/internal/k8s/testdata/site_build_vite/**'
@@ -104,6 +107,26 @@ jobs:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: edge/sites-router/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: Deploy script (curl faked, nothing reaches Cloudflare)
+        run: sh test/deploy.sh
+
+  sites-outbound:
+    name: Sites outbound Worker
+    needs: changes
+    if: needs.changes.outputs.sitesoutbound == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: edge/sites-outbound
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: edge/sites-outbound/package-lock.json
       - run: npm ci
       - run: npm test
       - name: Deploy script (curl faked, nothing reaches Cloudflare)

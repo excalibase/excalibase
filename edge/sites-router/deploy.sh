@@ -6,7 +6,10 @@
 #   CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... sh edge/sites-router/deploy.sh \
 #     --namespace <dispatch namespace> --hosts-kv-id <KV namespace id> \
 #     --base-domain excalibase.app --abuse-url mailto:abuse@example.com \
-#     [--script excalibase-sites-router] [--dry-run]
+#     [--script excalibase-sites-router] [--outbound excalibase-sites-outbound] [--dry-run]
+#
+# --outbound names the outbound Worker (edge/sites-outbound, EXC-661) every
+# fetch of a site's code goes through; server sites are offered only with it.
 #
 # The token and the account id travel only on curl's stdin and are never printed.
 set -eu
@@ -17,9 +20,14 @@ API=https://api.cloudflare.com/client/v4
 COMPATIBILITY_DATE=2025-09-01
 
 die() { echo "deploy.sh: $*" >&2; exit 1; }
-matches() { printf '%s' "$1" | grep -Eq "$2"; }
+# One line only: grep checks line by line, so a newline could carry JSON of its own past it.
+matches() {
+  case "$1" in *"
+"*) return 1 ;; esac
+  printf '%s' "$1" | grep -Eq "$2"
+}
 
-namespace="" kv_id="" base_domain="" abuse_url="" script=excalibase-sites-router dry_run=0
+namespace="" kv_id="" base_domain="" abuse_url="" script=excalibase-sites-router outbound="" dry_run=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --namespace) namespace=${2-}; shift ;;
@@ -27,6 +35,7 @@ while [ $# -gt 0 ]; do
     --base-domain) base_domain=${2-}; shift ;;
     --abuse-url) abuse_url=${2-}; shift ;;
     --script) script=${2-}; shift ;;
+    --outbound) outbound=${2-}; [ -n "$outbound" ] || die "--outbound needs a Worker name"; shift ;;
     --dry-run) dry_run=1 ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -39,13 +48,23 @@ matches "$kv_id" '^[0-9a-f]{32}$' || die "--hosts-kv-id must be a 32-hex KV name
 matches "$base_domain" '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$' || die "--base-domain must be a lowercase domain"
 matches "$abuse_url" '^(https://|mailto:)[^"\\[:space:][:cntrl:]]+$' || die "--abuse-url must be an https: or mailto: link"
 matches "$script" '^[a-z0-9][a-z0-9-]{0,62}$' || die "--script must be a lowercase Worker name"
+[ -z "$outbound" ] || matches "$outbound" '^[a-z0-9][a-z0-9-]{0,62}$' || die "--outbound must be a lowercase Worker name"
 
-metadata=$(printf '{"main_module":"index.js","compatibility_date":"%s","bindings":[%s,%s,%s,%s]}' \
+# The outbound Worker gets the site's identity from the router on every call.
+dispatch="{\"type\":\"dispatch_namespace\",\"name\":\"SITES\",\"namespace\":\"$namespace\"}"
+outbound_var=""
+if [ -n "$outbound" ]; then
+  dispatch="{\"type\":\"dispatch_namespace\",\"name\":\"SITES\",\"namespace\":\"$namespace\",\"outbound\":{\"worker\":{\"service\":\"$outbound\"},\"params\":[{\"name\":\"siteId\"},{\"name\":\"projectId\"}]}}"
+  outbound_var=",{\"type\":\"plain_text\",\"name\":\"OUTBOUND\",\"text\":\"$outbound\"}"
+fi
+
+metadata=$(printf '{"main_module":"index.js","compatibility_date":"%s","bindings":[%s,%s,%s,%s%s]}' \
   "$COMPATIBILITY_DATE" \
-  "{\"type\":\"dispatch_namespace\",\"name\":\"SITES\",\"namespace\":\"$namespace\"}" \
+  "$dispatch" \
   "{\"type\":\"kv_namespace\",\"name\":\"SITE_HOSTS\",\"namespace_id\":\"$kv_id\"}" \
   "{\"type\":\"plain_text\",\"name\":\"BASE_DOMAIN\",\"text\":\"$base_domain\"}" \
-  "{\"type\":\"plain_text\",\"name\":\"ABUSE_URL\",\"text\":\"$abuse_url\"}")
+  "{\"type\":\"plain_text\",\"name\":\"ABUSE_URL\",\"text\":\"$abuse_url\"}" \
+  "$outbound_var")
 
 if [ "$dry_run" = 1 ]; then
   echo "dry run: would PUT $API/accounts/<CLOUDFLARE_ACCOUNT_ID>/workers/scripts/$script"
