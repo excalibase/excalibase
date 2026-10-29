@@ -1,6 +1,6 @@
 module github.com/excalibase/excalibase-vault
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/excalibase/provisioning-poc v0.0.0

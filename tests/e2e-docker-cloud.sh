@@ -8,7 +8,7 @@
 #
 # Prerequisites:
 #   - Docker 24+ running (docker ps works)
-#   - Go 1.26.9+ (builds the server binary)
+#   - Go 1.26.10+ (builds the server binary)
 #   - Deno installed (for edge functions)
 #   - jq, curl
 #
