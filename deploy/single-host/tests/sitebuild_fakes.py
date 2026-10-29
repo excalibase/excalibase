@@ -118,11 +118,17 @@ class Fakes(BaseHTTPRequestHandler):
         env = dict(os.environ, GIT_PROJECT_ROOT=self.root, GIT_HTTP_EXPORT_ALL="1", REQUEST_METHOD=method,
                    PATH_INFO=path[3:], QUERY_STRING=query, CONTENT_TYPE=self.headers.get("Content-Type", ""),
                    CONTENT_LENGTH=str(len(raw)), GIT_PROTOCOL=self.headers.get("Git-Protocol", ""), REMOTE_ADDR="127.0.0.1")
-        out = subprocess.run(["git", "http-backend"], input=raw, env=env, capture_output=True, check=False).stdout
-        head, _, payload = out.partition(b"\r\n\r\n")
+        backend = subprocess.run(["git", "http-backend"], input=raw, env=env, capture_output=True, check=False)
+        if backend.returncode != 0 and not backend.stdout:
+            sys.stderr.write("fakes: git http-backend: " + backend.stderr.decode("utf-8", "replace"))
+            return self.answer(500, {"message": "git http-backend failed"})
+        out = backend.stdout
+        # CGI headers end at the first blank line; git http-backend ends its lines with a bare \n.
+        match = re.search(rb"\r?\n\r?\n", out)
+        head, payload = (out[:match.start()], out[match.end():]) if match else (b"", out)
         status = 200
         headers = []
-        for line in head.decode().split("\r\n"):
+        for line in head.decode().splitlines():
             name, _, value = line.partition(":")
             if name.lower() == "status":
                 status = int(value.strip().split()[0])
