@@ -38,12 +38,29 @@ var networkCreateFields = map[string]func(Policy, any) error{
 	"Options": func(_ Policy, value any) error {
 		options, _ := value.(map[string]any)
 		for key, option := range options {
-			if key != bridgeIsolate || option != "true" {
-				return refuse("network Options %s=%v may not be set; only isolate=true", key, option)
+			allowed := (key == bridgeIsolate && option == "true") || (key == gatewayModeIPv4 && option == gatewayIsolated)
+			if !allowed {
+				return refuse("network Options %s=%v may not be set; only isolate=true or %s=%s", key, option, gatewayModeIPv4, gatewayIsolated)
 			}
 		}
 		return nil
 	},
+}
+
+// gatewayModeIPv4=isolated (Docker 28+) leaves an internal network's bridge with
+// no address on the host, so nothing on it reaches the host's own services (EXC-671).
+const (
+	gatewayModeIPv4 = "com.docker.network.bridge.gateway_mode_ipv4"
+	gatewayIsolated = "isolated"
+)
+
+// checkIsolatedGateway admits the isolated gateway only on an internal network, where it means "no route anywhere".
+func checkIsolatedGateway(create map[string]any) error {
+	options, _ := create["Options"].(map[string]any)
+	if _, set := options[gatewayModeIPv4]; set && create["Internal"] != true {
+		return refuse("network Options %s may be set only on an internal network", gatewayModeIPv4)
+	}
+	return nil
 }
 
 // CheckNetworkCreate admits a managed bridge network named under the network prefix.
@@ -59,7 +76,10 @@ func (p Policy) CheckNetworkCreate(body []byte) error {
 	if err := p.requireManagedLabel("network", create["Labels"]); err != nil {
 		return err
 	}
-	return checkFields("network create", create, networkCreateFields, p)
+	if err := checkFields("network create", create, networkCreateFields, p); err != nil {
+		return err
+	}
+	return checkIsolatedGateway(create)
 }
 
 // CheckNetworkConnect admits joining a container with no endpoint settings:

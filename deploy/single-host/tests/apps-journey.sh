@@ -136,6 +136,26 @@ echo "info: app runtime/memory/pids: $rt (sandbox: $APP_SANDBOX)"
 DBHOST=$($DOCKER ps --filter label=excalibase.managed=true --format '{{.Names}}' | grep -- '-postgres$' | head -1)
 $DOCKER exec "$AC" nc -z -w 3 "$DBHOST" 5432 && ok "the app reaches its own project's database" || ko "app cannot reach $DBHOST"
 $DOCKER exec "$AC" wget -q -T 3 -O /dev/null http://example.com/ 2>/dev/null && ko "the app reached the internet without APP_EGRESS" || ok "no egress by default"
+# EXC-676: a host service on every address (sshd, a local database) is not reached through the bridge's own address.
+HOST_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("",0));print(s.getsockname()[1])')
+python3 -m http.server "$HOST_PORT" --bind 0.0.0.0 --directory "$W" >/dev/null 2>&1 &
+HOST_SRV=$!
+subnet=$($DOCKER network inspect "excalibase-net-$PID" --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null || $DOCKER network inspect "excalibase-net-$PID" --format '{{range .Subnets}}{{.Subnet}} {{end}}')
+BRIDGE=$(python3 -c 'import ipaddress,sys;print(next(str(next(n.hosts())) for n in map(ipaddress.ip_network,sys.argv[1:]) if n.version==4))' $subnet 2>/dev/null)
+$DOCKER network create excalibase-smoke-control >/dev/null 2>&1
+CONTROL_GW=$($DOCKER network inspect excalibase-smoke-control --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null)
+$DOCKER run --rm --network excalibase-smoke-control "$APP_IMAGE" wget -q -T 3 -O /dev/null "http://$CONTROL_GW:$HOST_PORT/" 2>/dev/null \
+  || echo "info: a container on a plain bridge cannot reach the host listener either (host firewall, or rootless Podman); the check below proves less"
+$DOCKER network rm excalibase-smoke-control >/dev/null 2>&1
+if [ -z "$BRIDGE" ]; then
+  ko "no subnet on excalibase-net-$PID"
+elif $DOCKER exec "$AC" wget -q -T 3 -O /dev/null "http://$BRIDGE:$HOST_PORT/" 2>/dev/null; then
+  ko "the app reached a host service through its network's bridge address $BRIDGE"
+else
+  ok "the app cannot reach a host service through its network's bridge address ($BRIDGE)"
+fi
+kill "$HOST_SRV" 2>/dev/null
+logs_have excalibase-provisioning "WARN: app networks" && echo "info: $($DOCKER logs excalibase-provisioning 2>&1 | grep -m1 'WARN: app networks')"
 # NATS has no per-client login: only the projects' watchers may reach it (EXC-612).
 bus=
 for ip in $($DOCKER inspect excalibase-nats --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'); do

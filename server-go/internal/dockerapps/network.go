@@ -13,25 +13,33 @@ import (
 )
 
 // networkOptions: internal unless the operator gave apps egress, so a project
-// network has no route off it at all (ADR 0039).
+// network has no route off it at all (ADR 0039), and where the engine can, no
+// address on the host either (EXC-676).
 func (r *Runtime) networkOptions(project string) network.CreateOptions {
 	options := network.CreateOptions{
 		Driver:   "bridge",
 		Internal: !r.opts.Egress,
 		Labels:   map[string]string{labelManaged: "true", labelProject: project},
 	}
-	if r.opts.Egress && r.opts.Isolate {
+	switch {
+	case r.opts.Egress && r.opts.Isolate:
 		options.Options = map[string]string{"isolate": "true"}
+	case r.isolatedGateway():
+		options.Options = map[string]string{gatewayModeIPv4: gatewayIsolated}
 	}
 	return options
 }
 
 // ensureProjectNetwork makes the project's network and puts its database on
-// it, and the edge while the project has a public app. Nothing else joins.
+// it, and the edge while the project has a public app. Nothing else joins but
+// the project's own apps, put back on a network made again.
 func (r *Runtime) ensureProjectNetwork(ctx context.Context, project, database string, public bool) error {
+	r.networkMu.Lock()
+	defer r.networkMu.Unlock()
 	name := r.networkName(project)
 	inspect, err := r.engine.NetworkInspect(ctx, name, network.InspectOptions{})
-	if errdefs.IsNotFound(err) {
+	made := errdefs.IsNotFound(err)
+	if made {
 		if _, err := r.engine.NetworkCreate(ctx, name, r.networkOptions(project)); err != nil && !errdefs.IsConflict(err) {
 			return fmt.Errorf("create the project's network: %w", err)
 		}
@@ -43,8 +51,20 @@ func (r *Runtime) ensureProjectNetwork(ctx context.Context, project, database st
 	if inspect.Labels[labelProject] != project {
 		return fmt.Errorf("network %s does not belong to project %s", name, project)
 	}
+	if r.olderNetwork(inspect) {
+		public = public || isMember(inspect, r.opts.EdgeContainer)
+		if inspect, err = r.remakeProjectNetwork(ctx, project, inspect); err != nil {
+			return err
+		}
+		made = true
+	}
 	if err := r.join(ctx, inspect, database); err != nil {
 		return fmt.Errorf("attach the project's database to its network: %w", err)
+	}
+	if made {
+		if err := r.rejoinApps(ctx, project, inspect); err != nil {
+			return err
+		}
 	}
 	if !public {
 		return nil
@@ -98,6 +118,8 @@ func alreadyMember(err error) bool {
 // removeProjectNetwork takes the database and the edge off the network first:
 // a stopped database still configured on a removed network would never start.
 func (r *Runtime) removeProjectNetwork(ctx context.Context, project, database string) error {
+	r.networkMu.Lock()
+	defer r.networkMu.Unlock()
 	name := r.networkName(project)
 	inspect, err := r.engine.NetworkInspect(ctx, name, network.InspectOptions{})
 	if errdefs.IsNotFound(err) {
