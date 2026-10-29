@@ -221,6 +221,9 @@ func (a *DockerBackupAdapter) bringUp(ctx context.Context, dc provisioner.Docker
 	if err := a.waitForPromotedPostgres(ctx, dc, containerID, dbName); err != nil {
 		return err
 	}
+	if err := a.restoreQueryStats(ctx, dc, seeded); err != nil {
+		return err
+	}
 	if !archive {
 		return nil
 	}
@@ -228,6 +231,22 @@ func (a *DockerBackupAdapter) bringUp(ctx context.Context, dc provisioner.Docker
 		return fmt.Errorf("enable WAL archiving on the restored database: %w", err)
 	}
 	return a.waitForPromotedPostgres(ctx, dc, containerID, dbName)
+}
+
+// SetQueryStats decides whether a restored Postgres copy carries
+// pg_stat_statements, as a new project does (EXC-673).
+func (a *DockerBackupAdapter) SetQueryStats(on bool) { a.queryStats = on }
+
+// restoreQueryStats turns statistics on in a Postgres copy whose backup
+// predates them; DocumentDB copies have none on a single host.
+func (a *DockerBackupAdapter) restoreQueryStats(ctx context.Context, dc provisioner.DockerClient, seeded recovered) error {
+	if !a.queryStats || seeded.spec.documentDB {
+		return nil
+	}
+	if err := provisioner.NewDockerPostgreSQLProvisioner(dc).EnableQueryStats(ctx, seeded.containerID); err != nil {
+		return fmt.Errorf("turn on query statistics in the restored database: %w", err)
+	}
+	return nil
 }
 
 // restoredDockerSpec carries what the restore learned about the new container.

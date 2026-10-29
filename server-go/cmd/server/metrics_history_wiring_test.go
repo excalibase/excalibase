@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -107,5 +108,36 @@ func TestMetricsReadTierLimitsFromTheTierRows(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "metricsSvc.SetTierLimits(provSvc.TierConfig)") {
 		t.Error("metrics never learn the tier rows")
+	}
+}
+
+// EXC-673: request charts on a single host need the loop, not host monitoring.
+func TestASingleHostWithRequestChartsSamplesIntoThePlatformDB(t *testing.T) {
+	table := &tablePlatformStore{samples: []domain.DatabaseMetrics{{ProjectID: "p1"}}}
+	metrics := service.NewMetricsService(fakestore.NewInstances(), nil, t.TempDir())
+	alerts := service.NewAlertingService(t.TempDir())
+	requests := service.NewRequestMetricsService(nil, nil, fakestore.NewInstances())
+	cfg := config.AppConfig{ProvisionerMode: "docker", DarkFeatures: []features.Feature{features.RequestMetrics},
+		RequestMetricsTargets: []string{"graphql-metrics:9464"}}
+
+	wireMetricsHistory(cfg, table, nil, metrics, alerts, requests)
+
+	if history, _ := metrics.GetMetricsHistory(context.Background(), "p1", 10); history.TotalPoints != 1 {
+		t.Fatalf("history = %+v, want the table's sample", history)
+	}
+}
+
+// The feature on with nothing to scrape starts no loop on a single host.
+func TestASingleHostWithRequestChartsButNoTargetsSamplesNothing(t *testing.T) {
+	table := &tablePlatformStore{samples: []domain.DatabaseMetrics{{ProjectID: "p1"}}}
+	metrics := service.NewMetricsService(fakestore.NewInstances(), nil, t.TempDir())
+	alerts := service.NewAlertingService(t.TempDir())
+	requests := service.NewRequestMetricsService(nil, nil, fakestore.NewInstances())
+	cfg := config.AppConfig{ProvisionerMode: "docker", DarkFeatures: []features.Feature{features.RequestMetrics}}
+
+	wireMetricsHistory(cfg, table, nil, metrics, alerts, requests)
+
+	if history, _ := metrics.GetMetricsHistory(context.Background(), "p1", 10); history.TotalPoints != 0 {
+		t.Fatalf("history = %+v, want none", history)
 	}
 }

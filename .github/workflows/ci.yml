@@ -53,6 +53,7 @@ jobs:
               - 'server-go/cmd/app-probe/**'
               - 'server-go/internal/provisioner/docker*'
               - 'server-go/internal/service/backup_*docker*'
+              - 'server-go/internal/service/query_stats*'
               - 'frontend/Dockerfile'
             sitesrouter:
               - 'edge/sites-router/**'
@@ -127,11 +128,33 @@ jobs:
           PLATFORM_TAG: ci
           PG_BACKUPS: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
-      - name: Fresh install with manual vault unseal (init, restart, CLI unseal) and host monitoring
+      # The engines' counters bind one address (EXC-673) from these commits on; no
+      # trunk image carries it yet, so they are built here until both are published.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Build graphql and auth with the counters' bind address
+        env:
+          GRAPHQL_COMMIT: bc4d58fbb65e5c3c1f8b9ebc0c2633d1a3e19f5d
+          SIGNIN_SERVICE_COMMIT: 86c157783616020b53586b97151cfe8217090a44
+        run: |
+          for repo in graphql:$GRAPHQL_COMMIT auth:$SIGNIN_SERVICE_COMMIT; do
+            name=${repo%%:*}; ref=${repo#*:}
+            git init -q "/tmp/$name" && git -C "/tmp/$name" fetch -q --depth 1 "https://github.com/excalibase/excalibase-$name.git" "$ref"
+            git -C "/tmp/$name" checkout -q FETCH_HEAD
+          done
+          (cd /tmp/graphql && mvn -q -B -pl modules/excalibase-graphql-api -am -DskipTests -Djacoco.skip=true package)
+          docker build -q -t excalibase-graphql:ci /tmp/graphql
+          docker build -q -t excalibase-auth:ci /tmp/auth
+      - name: Fresh install with manual vault unseal (init, restart, CLI unseal), host monitoring, request charts and slow queries
         env:
           PLATFORM_TAG: ci
           MANUAL_UNSEAL: "1"
           HOST_METRICS: "1"
+          REQUEST_METRICS: "1"
+          GRAPHQL_IMAGE: excalibase-graphql:ci
+          AUTH_IMAGE: excalibase-auth:ci
         run: bash deploy/single-host/tests/boot-smoke.sh docker
       - name: Fresh install with MySQL (TLS clients, backups, point-in-time and in-place restore, purge)
         env:

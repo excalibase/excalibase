@@ -354,6 +354,7 @@ type fakeDockerClientForAdapter struct {
 	// walArchive is the container's /walarchive; nil has none.
 	walArchive map[string][]byte
 	execs      [][]string
+	stdins     []string
 	copyDsts   []string
 	ports      map[string]string
 	removed    []string
@@ -421,8 +422,9 @@ func (f *fakeDockerClientForAdapter) CreateContainerSpec(ctx context.Context, sp
 func (f *fakeDockerClientForAdapter) ContainerState(context.Context, string) (provisioner.ContainerState, error) {
 	return provisioner.ContainerState{Found: true, Running: true}, nil
 }
-func (f *fakeDockerClientForAdapter) ExecInContainerStdin(_ context.Context, _ string, cmd []string, _ string) (string, error) {
+func (f *fakeDockerClientForAdapter) ExecInContainerStdin(_ context.Context, _ string, cmd []string, stdin string) (string, error) {
 	f.execs = append(f.execs, cmd)
+	f.stdins = append(f.stdins, stdin)
 	if strings.Contains(strings.Join(cmd, " "), "pg_walfile_name") {
 		return f.walName + "\n", nil
 	}
