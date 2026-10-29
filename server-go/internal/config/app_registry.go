@@ -11,7 +11,9 @@ import (
 // AppRegistryConfig is the platform's own registry for git-built images
 // (EXC-540): the host images name, and the key that signs its tokens.
 type AppRegistryConfig struct {
-	Host        string
+	Host string
+	// Aliases are the other names that reach the same registry (its Service's DNS names, its ClusterIP).
+	Aliases     []string
 	TokenKeyPEM []byte
 	keyErr      error
 	keyFile     string
@@ -21,6 +23,11 @@ func loadAppRegistry() AppRegistryConfig {
 	registry := AppRegistryConfig{
 		Host:    strings.ToLower(strings.TrimSpace(os.Getenv("APP_REGISTRY_HOST"))),
 		keyFile: strings.TrimSpace(os.Getenv("APP_REGISTRY_TOKEN_KEY_FILE")),
+	}
+	for _, alias := range strings.Split(os.Getenv("APP_REGISTRY_ALIASES"), ",") {
+		if alias = strings.ToLower(strings.TrimSpace(alias)); alias != "" {
+			registry.Aliases = append(registry.Aliases, alias)
+		}
 	}
 	if registry.keyFile != "" {
 		registry.TokenKeyPEM, registry.keyErr = os.ReadFile(registry.keyFile)

@@ -86,6 +86,9 @@ func parseSigningKey(keyPEM []byte) (crypto.Signer, error) {
 func methodFor(key crypto.Signer) (jwt.SigningMethod, error) {
 	switch k := key.(type) {
 	case *rsa.PrivateKey:
+		if k.N.BitLen() < 2048 {
+			return nil, errors.New("the registry token key is RSA under 2048 bits")
+		}
 		return jwt.SigningMethodRS256, nil
 	case *ecdsa.PrivateKey:
 		if k.Curve.Params().BitSize == 256 {

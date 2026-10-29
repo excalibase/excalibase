@@ -19,15 +19,39 @@ type tokenResponse struct {
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-func tokenHandler(t *testing.T, projects map[string]bool) (*TokenHandler, *Issuer) {
+// fixedGenerations rotates nothing, unless a project is listed.
+type fixedGenerations map[string]int
+
+func (g fixedGenerations) PullGeneration(projectID string) (int, error) {
+	if projectID == "proj-sealed" {
+		return 0, errors.New("vault sealed")
+	}
+	return g[projectID], nil
+}
+
+func testInternal(t *testing.T, generations fixedGenerations) (*Internal, *Issuer) {
 	t.Helper()
 	issuer, _ := testIssuer(t)
-	return NewTokenHandler(issuer, func(_ context.Context, projectID string) (bool, error) {
+	guard, err := NewInternal(service, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return guard.Issuing(issuer, generations), issuer
+}
+
+func tokenHandler(t *testing.T, projects map[string]bool) (*TokenHandler, *Issuer) {
+	t.Helper()
+	internal, issuer := testInternal(t, fixedGenerations{"proj-rotated": 2})
+	h, err := NewTokenHandler(internal, func(_ context.Context, projectID string) (bool, error) {
 		if projectID == "proj-broken" {
 			return false, errors.New("store down")
 		}
 		return projects[projectID], nil
-	}), issuer
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, issuer
 }
 
 func askToken(h http.Handler, method, user, password string, query url.Values) *httptest.ResponseRecorder {
@@ -70,7 +94,7 @@ const service = "registry.excalibase.internal"
 
 func TestTokenHandler_GrantsPullOnTheProjectsOwnRepositoriesOnly(t *testing.T) {
 	h, issuer := tokenHandler(t, map[string]bool{"proj-a": true})
-	cred := issuer.PullCredential("proj-a")
+	cred := issuer.PullCredential("proj-a", 0)
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
 		rec := askToken(h, method, cred.Username, cred.Password, url.Values{"service": {service}, "scope": {
 			"repository:proj-a/api:pull,push", "repository:proj-b/api:pull", "repository:proj-a/web:pull repository:proj-ab/x:pull",
@@ -85,20 +109,27 @@ func TestTokenHandler_GrantsPullOnTheProjectsOwnRepositoriesOnly(t *testing.T) {
 func TestTokenHandler_RefusesWhoIsNotAProject(t *testing.T) {
 	h, issuer := tokenHandler(t, map[string]bool{"proj-a": true})
 	scope := url.Values{"service": {service}, "scope": {"repository:proj-a/api:pull"}}
-	a := issuer.PullCredential("proj-a")
+	a := issuer.PullCredential("proj-a", 0)
 	cases := map[string]*httptest.ResponseRecorder{
 		"anonymous":              askToken(h, http.MethodGet, "", "", scope),
 		"a wrong password":       askToken(h, http.MethodGet, "proj-a", "nope", scope),
 		"proj-a's password as b": askToken(h, http.MethodGet, "proj-b", a.Password, scope),
-		"a deleted project":      askToken(h, http.MethodGet, "proj-gone", issuer.PullCredential("proj-gone").Password, scope),
+		"a deleted project":      askToken(h, http.MethodGet, "proj-gone", issuer.PullCredential("proj-gone", 0).Password, scope),
+		"a rotated-out password": askToken(h, http.MethodGet, "proj-rotated", issuer.PullCredential("proj-rotated", 1).Password, scope),
 	}
 	for name, rec := range cases {
 		if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), "token") {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
 		}
 	}
-	if rec := askToken(h, http.MethodGet, "proj-broken", issuer.PullCredential("proj-broken").Password, scope); rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("a store that cannot say is not a refusal: %d", rec.Code)
+	for _, project := range []string{"proj-broken", "proj-sealed"} {
+		if rec := askToken(h, http.MethodGet, project, issuer.PullCredential(project, 0).Password, scope); rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: a store that cannot say is not a refusal: %d", project, rec.Code)
+		}
+	}
+	guard, _ := NewInternal(service, nil)
+	if _, err := NewTokenHandler(guard, nil); err == nil {
+		t.Error("a guard-only registry has no token service")
 	}
 	if rec := askToken(h, http.MethodGet, a.Username, a.Password, url.Values{"service": {"docker.io"}}); rec.Code != http.StatusBadRequest {
 		t.Errorf("a token for another service: %d", rec.Code)

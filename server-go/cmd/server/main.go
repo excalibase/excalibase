@@ -1065,6 +1065,8 @@ type handlerDeps struct {
 	logForwarderHandler *handler.LogForwarderHandler
 	// registryToken is the internal registry's token service (EXC-540); nil without one.
 	registryToken http.Handler
+	// internalRegistryH rotates a project's internal-registry pull credential (EXC-540).
+	internalRegistryH *handler.InternalRegistryHandler
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1752,7 +1754,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// marker straight away so idle-pause never sees them as stale.
 	provSvc.SetActivityRecorder(activityRecorder)
 
-	internalRegistry, err := newInternalRegistry(cfg)
+	internalRegistry, err := newInternalRegistry(cfg, vaultSecrets(vc))
 	if err != nil {
 		log.Fatalf("internal registry (APP_REGISTRY_HOST): %v", err)
 	}
@@ -1810,6 +1812,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		advisorsHandler:       handler.NewAdvisorsHandler(advisors.NewService(a.projectDB, sqlStore.Permissions(), advisors.Options{})),
 		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
 		registryToken:         newRegistryTokenHandler(internalRegistry, store),
+		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc)),
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,
 		storageBudgetH:        handler.NewStorageBudgetHandler(a.budget),
@@ -2425,6 +2428,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	mountProjectContainers(r, sqlStore, store, d)
 	mountLogDrains(r, sqlStore, store, d)
 	mountRegistryToken(r, d)
+	mountInternalRegistry(r, sqlStore, store, d)
 	mountAuthProviders(r, sqlStore, store, d)
 	// What AI coding tools did in the project through MCP (EXC-544).
 	r.Route("/api/projects/{projectId}/ai-activity", func(r chi.Router) {

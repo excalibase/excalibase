@@ -14,7 +14,11 @@ func TestLoadAppRegistry_ReadsTheHostAndTheKeyFile(t *testing.T) {
 	}
 	t.Setenv("APP_REGISTRY_HOST", " registry.excalibase.internal ")
 	t.Setenv("APP_REGISTRY_TOKEN_KEY_FILE", key)
+	t.Setenv("APP_REGISTRY_ALIASES", " Zot.Excalibase.svc.cluster.local, 10.43.200.10 ,")
 	registry := loadAppRegistry()
+	if len(registry.Aliases) != 2 || registry.Aliases[0] != "zot.excalibase.svc.cluster.local" {
+		t.Errorf("aliases %v", registry.Aliases)
+	}
 	if registry.Host != "registry.excalibase.internal" || !strings.HasPrefix(string(registry.TokenKeyPEM), "-----BEGIN") {
 		t.Fatalf("%+v", registry)
 	}

@@ -88,6 +88,10 @@ func TestNewIssuer_ReadsPKCS8AndRefusesWhatIsNotAKey(t *testing.T) {
 	if _, err := NewIssuer(raw, ""); err == nil {
 		t.Error("an issuer with no service")
 	}
+	weak, _ := rsa.GenerateKey(rand.Reader, 1024)
+	if _, err := NewIssuer(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(weak)}), "svc"); err == nil {
+		t.Error("a 1024-bit RSA key")
+	}
 }
 
 func expectAll(t *testing.T, checks map[string]bool) {

@@ -6,8 +6,7 @@ import (
 )
 
 func TestInternal_NamesItsHostInEverySpelling(t *testing.T) {
-	issuer, _ := testIssuer(t)
-	internal, err := NewInternal("Registry.Excalibase.Internal", issuer)
+	internal, err := NewInternal("Registry.Excalibase.Internal", []string{"zot.excalibase.svc.cluster.local", "10.43.200.10"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,20 +34,25 @@ func TestInternal_NamesItsHostInEverySpelling(t *testing.T) {
 }
 
 func TestNewInternal_RefusesAHostThatIsNotOurs(t *testing.T) {
-	issuer, _ := testIssuer(t)
 	for _, host := range []string{"", "docker.io", "index.docker.io", "bad host", "ghcr.io/x"} {
-		if _, err := NewInternal(host, issuer); err == nil {
+		if _, err := NewInternal(host, nil); err == nil {
 			t.Errorf("%q accepted as the internal registry", host)
 		}
 	}
-	if _, err := NewInternal("registry.excalibase.internal", nil); err == nil {
-		t.Error("no issuer")
+	guard, err := NewInternal("registry.excalibase.internal", nil)
+	if err != nil || guard.CanIssue() || !guard.Names("registry.excalibase.internal/x:1") {
+		t.Errorf("a guard with no issuer still names its host: %v", err)
+	}
+	if _, err := guard.PullCredential("proj-a"); err == nil {
+		t.Error("a guard issues no pull credential")
+	}
+	if _, err := guard.VerifyPull("proj-a", "x"); err == nil {
+		t.Error("a guard verifies no pull credential")
 	}
 }
 
 func TestInternal_ImageAndPullCredential(t *testing.T) {
-	issuer, _ := testIssuer(t)
-	internal, _ := NewInternal("registry.excalibase.internal", issuer)
+	internal, issuer := testInternal(t, fixedGenerations{"proj-b": 3})
 	image, err := internal.Image("proj-a", "api", "sha256:"+hex64)
 	if err != nil || image != "registry.excalibase.internal/proj-a/api@sha256:"+hex64 {
 		t.Fatalf("image %q: %v", image, err)
@@ -56,9 +60,16 @@ func TestInternal_ImageAndPullCredential(t *testing.T) {
 	if _, err := internal.Image("proj-a", "api", "latest"); err == nil {
 		t.Error("an internal image is always a digest")
 	}
-	cred := internal.PullCredential("proj-a")
-	if !issuer.VerifyPull("proj-a", cred.Password) {
-		t.Error("the pull secret's password opens the project's token")
+	cred, err := internal.PullCredential("proj-a")
+	if err != nil || !issuer.VerifyPull("proj-a", 0, cred.Password) {
+		t.Errorf("the pull secret's password opens the project's token: %v", err)
+	}
+	rotated, _ := internal.PullCredential("proj-b")
+	if ok, _ := internal.VerifyPull("proj-b", rotated.Password); !ok || issuer.VerifyPull("proj-b", 0, rotated.Password) {
+		t.Error("a rotated project's credential is its current generation's")
+	}
+	if _, err := internal.PullCredential("proj-sealed"); err == nil {
+		t.Error("an unreadable generation is an error")
 	}
 }
 

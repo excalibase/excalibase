@@ -12,7 +12,7 @@ import (
 
 const (
 	// pullTokenTTL is how long a node's pull token lasts; containerd asks again per pull.
-	pullTokenTTL = 5 * time.Minute
+	pullTokenTTL = 2 * time.Minute
 	maxScopes    = 16
 	maxFormBytes = 16 << 10
 )
@@ -25,12 +25,17 @@ type ProjectExists func(ctx context.Context, projectID string) (bool, error)
 // credential gets pull, and only on its own repositories; push and delete
 // tokens are minted for our own steps and never handed out here.
 type TokenHandler struct {
-	issuer *Issuer
-	exists ProjectExists
+	issuer   *Issuer
+	internal *Internal
+	exists   ProjectExists
 }
 
-func NewTokenHandler(issuer *Issuer, exists ProjectExists) *TokenHandler {
-	return &TokenHandler{issuer: issuer, exists: exists}
+// NewTokenHandler serves an issuing registry; one that only guards has no token service.
+func NewTokenHandler(internal *Internal, exists ProjectExists) (*TokenHandler, error) {
+	if !internal.CanIssue() {
+		return nil, errNotIssuing
+	}
+	return &TokenHandler{issuer: internal.issuer, internal: internal, exists: exists}, nil
 }
 
 func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +85,18 @@ func (h *TokenHandler) authenticate(w http.ResponseWriter, r *http.Request) (str
 	if !ok && r.Method == http.MethodPost && r.PostForm.Get("grant_type") == "password" {
 		user, password, ok = r.PostForm.Get("username"), r.PostForm.Get("password"), true
 	}
-	if !ok || !segment.MatchString(user) || !h.issuer.VerifyPull(user, password) {
+	if !ok || !segment.MatchString(user) {
+		unauthorized(w)
+		return "", false
+	}
+	verified, err := h.internal.VerifyPull(user, password)
+	if err != nil {
+		log.Printf("registry token: read %s's pull generation: %v", user, err)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return "", false
+	}
+	if !verified {
+		log.Printf("registry token: refused a pull credential for %s", user)
 		unauthorized(w)
 		return "", false
 	}

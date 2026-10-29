@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"strconv"
 )
 
 // PullCredential is what a project's pull secret carries to the token endpoint.
@@ -13,21 +14,22 @@ type PullCredential struct {
 	Password string
 }
 
-// PullCredential derives the project's password from the signing key: the
-// same on every replica, nothing stored, and a new key replaces them all.
-func (i *Issuer) PullCredential(projectID string) PullCredential {
-	return PullCredential{Username: projectID, Password: base64.RawURLEncoding.EncodeToString(i.pullMAC(projectID))}
+// PullCredential derives the project's password from the signing key and its
+// generation: the same on every replica, only the generation stored; a new
+// generation retires one project's password, a new key retires them all.
+func (i *Issuer) PullCredential(projectID string, generation int) PullCredential {
+	return PullCredential{Username: projectID, Password: base64.RawURLEncoding.EncodeToString(i.pullMAC(projectID, generation))}
 }
 
-// VerifyPull checks password in constant time.
-func (i *Issuer) VerifyPull(projectID, password string) bool {
+// VerifyPull checks password against the project's current generation in constant time.
+func (i *Issuer) VerifyPull(projectID string, generation int, password string) bool {
 	given, err := base64.RawURLEncoding.DecodeString(password)
-	return err == nil && password != "" && hmac.Equal(given, i.pullMAC(projectID))
+	return err == nil && password != "" && hmac.Equal(given, i.pullMAC(projectID, generation))
 }
 
-func (i *Issuer) pullMAC(projectID string) []byte {
+func (i *Issuer) pullMAC(projectID string, generation int) []byte {
 	mac := hmac.New(sha256.New, i.pullKey)
-	mac.Write([]byte("registry pull\x00" + projectID))
+	mac.Write([]byte("registry pull\x00" + projectID + "\x00" + strconv.Itoa(generation)))
 	return mac.Sum(nil)
 }
 

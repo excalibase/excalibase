@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,7 +10,10 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/appregistry/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
 )
 
 func registryTokenRouter(t *testing.T, on ...features.Feature) (http.Handler, *appregistry.Internal) {
@@ -18,14 +22,18 @@ func registryTokenRouter(t *testing.T, on ...features.Feature) (http.Handler, *a
 	cfg := config.AppConfig{DeploymentMode: "selfhosted", AppHostingEnabled: true}
 	router, _, _ := buildMatrixWith(t, cfg, func(deps *handlerDeps) {
 		deps.features = features.NewStatic(on...)
-		deps.registryToken = appregistry.NewTokenHandler(internal.Issuer(), func(context.Context, string) (bool, error) { return true, nil })
+		token, err := appregistry.NewTokenHandler(internal, func(context.Context, string) (bool, error) { return true, nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		deps.registryToken = token
 	})
 	return router, internal
 }
 
 func askRegistryToken(handler http.Handler, internal *appregistry.Internal) int {
 	req := httptest.NewRequest(http.MethodGet, registryTokenPath+"?service="+appregistrytest.Host+"&scope=repository:proj-a/api:pull", nil)
-	cred := internal.PullCredential("proj-a")
+	cred, _ := internal.PullCredential("proj-a")
 	req.SetBasicAuth(cred.Username, cred.Password)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -53,18 +61,70 @@ func TestNewInternalRegistry_OnlyWithTheFlagAndAHost(t *testing.T) {
 	key := appregistrytest.KeyPEM(t)
 	on := config.AppConfig{DarkFeatures: []features.Feature{features.AppGitBuilds},
 		AppRegistry: config.AppRegistryConfig{Host: appregistrytest.Host, TokenKeyPEM: key}}
-	internal, err := newInternalRegistry(on)
-	if err != nil || internal == nil || internal.Host() != appregistrytest.Host {
+	secrets := memVault{}
+	internal, err := newInternalRegistry(on, secrets)
+	if err != nil || !internal.CanIssue() || internal.Host() != appregistrytest.Host {
 		t.Fatalf("on: %v %v", internal, err)
+	}
+	if _, err := newInternalRegistry(on, nil); err == nil {
+		t.Error("issuing with no vault for the pull generations")
 	}
 	off := on
 	off.DarkFeatures = nil
-	if internal, err := newInternalRegistry(off); internal != nil || err != nil {
-		t.Errorf("flag off: %v %v", internal, err)
+	guard, err := newInternalRegistry(off, secrets)
+	if err != nil || guard == nil || guard.CanIssue() || !guard.Names(appregistrytest.Host+"/proj-a/api:1") {
+		t.Errorf("flag off still guards the name, issuing nothing: %v %v", guard, err)
+	}
+	if newRegistryTokenHandler(guard, nil) != nil {
+		t.Error("flag off serves no token service")
+	}
+	if none, err := newInternalRegistry(config.AppConfig{}, secrets); none != nil || err != nil {
+		t.Errorf("no host: %v %v", none, err)
 	}
 	bad := on
 	bad.AppRegistry.TokenKeyPEM = []byte("not a key")
-	if _, err := newInternalRegistry(bad); err == nil {
+	if _, err := newInternalRegistry(bad, secrets); err == nil {
 		t.Error("a key that cannot sign must stop the boot")
 	}
+}
+
+// The derived password opens nothing once the project is gone or being deleted.
+func TestProjectExists_OnlyALiveProject(t *testing.T) {
+	instances := fakestore.NewInstances()
+	instances.Items["proj-live"] = &domain.DatabaseInstance{ProjectID: "proj-live", Status: string(domain.StatusActive)}
+	instances.Items["proj-dying"] = &domain.DatabaseInstance{ProjectID: "proj-dying", Status: string(domain.StatusDeleting)}
+	instances.Items["proj-grace"] = &domain.DatabaseInstance{ProjectID: "proj-grace", Status: string(domain.StatusPendingDeletion)}
+	exists := projectExists(instances)
+	for project, want := range map[string]bool{"proj-live": true, "proj-dying": false, "proj-grace": false, "proj-missing": false} {
+		if got, err := exists(context.Background(), project); err != nil || got != want {
+			t.Errorf("%s: %v %v, want %v", project, got, err, want)
+		}
+	}
+	instances.Err = errors.New("down")
+	if _, err := exists(context.Background(), "proj-live"); err == nil {
+		t.Error("a store that cannot answer is an error, not a refusal")
+	}
+}
+
+type memVault map[string]map[string]string
+
+func (m memVault) Get(path string) (map[string]string, error) {
+	record, ok := m[path]
+	if !ok {
+		return nil, vault.ErrNotFound
+	}
+	return record, nil
+}
+func (m memVault) Put(path string, data map[string]string) error {
+	m[path] = data
+	return nil
+}
+
+func matrixRegistryToken(t *testing.T) http.Handler {
+	t.Helper()
+	token, err := appregistry.NewTokenHandler(appregistrytest.New(t), func(context.Context, string) (bool, error) { return true, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
 }

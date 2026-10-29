@@ -36,9 +36,14 @@ func New(t testing.TB) *appregistry.Internal {
 	if err != nil {
 		t.Fatal(err)
 	}
-	internal, err := appregistry.NewInternal(Host, issuer)
+	guard, err := appregistry.NewInternal(Host, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return internal
+	return guard.Issuing(issuer, Unrotated{})
 }
+
+// Unrotated is every project at generation 0.
+type Unrotated struct{}
+
+func (Unrotated) PullGeneration(string) (int, error) { return 0, nil }

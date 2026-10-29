@@ -47,7 +47,7 @@ func TestDeployImage_AGitBuildDeploysFromTheInternalRegistryWithTheProjectsPullC
 	for _, workload := range kube.AppWorkloads {
 		pull = workload.PullSecret
 	}
-	want := internal.PullCredential(app.ProjectID)
+	want, _ := internal.PullCredential(app.ProjectID)
 	if pull == nil || !strings.Contains(string(pull.Data[corev1.DockerConfigJsonKey]), want.Password) ||
 		!strings.Contains(string(pull.Data[corev1.DockerConfigJsonKey]), `"registry.excalibase.internal"`) {
 		t.Fatalf("the pull secret does not carry the project's credential: %v", pull)
@@ -92,9 +92,32 @@ func TestDeployCurrent_ARedeployOfAGitBuildKeepsTheInternalCredential(t *testing
 	if _, err := svc.DeployCurrent(context.Background(), app.ProjectID, app.ID, ciOrigin()); err != nil {
 		t.Fatalf("DeployCurrent: %v", err)
 	}
+	want, _ := internal.PullCredential(app.ProjectID)
 	for _, workload := range kube.AppWorkloads {
-		if workload.PullSecret == nil || !strings.Contains(string(workload.PullSecret.Data[corev1.DockerConfigJsonKey]), internal.PullCredential(app.ProjectID).Password) {
+		if workload.PullSecret == nil || !strings.Contains(string(workload.PullSecret.Data[corev1.DockerConfigJsonKey]), want.Password) {
 			t.Fatal("the redeploy lost the project's pull credential")
+		}
+	}
+}
+
+// Every rollout path is held to the app's own repository, whatever put the
+// image on the app: a record from before the guard, a template, a redeploy.
+func TestRollout_AnotherRepositoryOnTheInternalRegistryNeverRuns(t *testing.T) {
+	for name, image := range map[string]string{
+		"another project":                    appregistrytest.Host + "/proj-other/storefront@" + resolvedDigest,
+		"another app":                        appregistrytest.Host + "/" + deployTestProject + "/other@" + resolvedDigest,
+		"an alias spelling, another project": appregistrytest.Host + ":443/proj-other/storefront@" + resolvedDigest,
+	} {
+		app := sampleDeployApp()
+		app.Image = image
+		svc, _, kube := newDeployTestService(t, app)
+		svc.SetInternalRegistry(testInternalRegistry(t))
+		deploy, err := svc.DeployAppAs(context.Background(), app.ProjectID, app.ID, ciOrigin())
+		if err == nil && (deploy == nil || deploy.Status != apphost.DeployStatusFailed || !strings.Contains(deploy.FailureReason, "own repository")) {
+			t.Errorf("%s: deployed %+v", name, deploy)
+		}
+		for _, workload := range kube.AppWorkloads {
+			t.Errorf("%s: a workload was applied: %v", name, workload.Deployment.Name)
 		}
 	}
 }

@@ -117,8 +117,16 @@ func (s *AppDeployService) SetCorsOriginReleaser(origins CorsOriginReleaser) {
 	s.corsOrigins = origins
 }
 
-// pullAuth fails rather than pull anonymously when the credential cannot be read.
-func (s *AppDeployService) pullAuth(projectID, image string) (*k8s.RegistryAuth, error) {
+// pullAuth fails rather than pull anonymously when the credential cannot be
+// read. Every rollout passes here, so it is also where an image on the
+// platform's registry is held to the app's own repository, by digest.
+func (s *AppDeployService) pullAuth(app *apphost.App, image string) (*k8s.RegistryAuth, error) {
+	projectID := app.ProjectID
+	if s.internal.Names(image) {
+		if err := s.ownInternalImage(app, image); err != nil {
+			return nil, err
+		}
+	}
 	cred, err := s.registryCredential(projectID, image)
 	if err != nil || cred == nil {
 		return nil, err
@@ -141,7 +149,10 @@ func (s *AppDeployService) registryCredential(projectID, image string) (*apphost
 // credential, and any other registry with the one the project saved.
 func (s *AppDeployService) lookupCredential(projectID, registry string) (*apphost.RegistryCredential, error) {
 	if s.internal != nil && registry == s.internal.Host() {
-		pull := s.internal.PullCredential(projectID)
+		pull, err := s.internal.PullCredential(projectID)
+		if err != nil {
+			return nil, err
+		}
 		return &apphost.RegistryCredential{Username: pull.Username, Password: pull.Password}, nil
 	}
 	if s.registries == nil {
@@ -334,7 +345,7 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 	render := s.render
 	render.EnvRevision = strconv.Itoa(deploy.Revision)
 	render.DeployID = deploy.ID
-	if render.PullAuth, err = s.pullAuth(app.ProjectID, cfg.Image); err != nil {
+	if render.PullAuth, err = s.pullAuth(app, cfg.Image); err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}
