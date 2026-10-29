@@ -156,13 +156,13 @@ func (h *BackupHandler) recordCopy(r *http.Request, job *domain.RestoreJob, body
 	}
 	encoded, err := json.Marshal(details)
 	if err != nil {
-		log.Printf("ERROR: audit %s of %s: %v", auditDatabaseCopy, job.SourceProjectID, err)
+		log.Printf("ERROR: audit %s of %s: %v", auditDatabaseCopy, safeLog(job.SourceProjectID), err)
 		return
 	}
 	now := time.Now()
 	entry := &domain.AuditEntry{UserID: actorID(r), Action: auditDatabaseCopy, Resource: "project", ResourceID: job.NewProjectID,
 		ProjectID: job.SourceProjectID, Details: string(encoded), IPAddress: clientIP(r), Timestamp: &now}
 	if err := h.audit.LogAudit(r.Context(), entry); err != nil {
-		log.Printf("ERROR: audit %s of %s: %v", auditDatabaseCopy, job.SourceProjectID, err)
+		log.Printf("ERROR: audit %s of %s: %v", auditDatabaseCopy, safeLog(job.SourceProjectID), err)
 	}
 }
