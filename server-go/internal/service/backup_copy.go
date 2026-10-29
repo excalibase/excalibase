@@ -53,8 +53,12 @@ func (s *BackupService) pinCopyToNow(ctx context.Context, inst *domain.DatabaseI
 	if err := s.CheckCopy(inst, req); err != nil {
 		return req, err
 	}
+	cluster, ok := adapter.(InPlaceCluster)
+	if !ok {
+		return req, ErrCopyNowUnsupported
+	}
 	ReportRestoreProgress(ctx, domain.RestoreStepSourceBackup)
-	id, err := adapter.(InPlaceCluster).TakeSafetyBackup(ctx, inst)
+	id, err := cluster.TakeSafetyBackup(ctx, inst)
 	if err != nil {
 		return req, fmt.Errorf("%w: %w", ErrCopyBackupFailed, err)
 	}

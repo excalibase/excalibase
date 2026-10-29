@@ -34,22 +34,20 @@ func (c CopyRequest) RestoreRequest() (RestoreRequest, error) {
 	if !ok {
 		return RestoreRequest{}, fmt.Errorf("%w: name is required and must be %d characters or fewer", ErrCopyRequestInvalid, MaxProjectNameLength)
 	}
-	req := RestoreRequest{NewProjectName: name, Mode: RestoreModeNewProject}
-	switch c.Point {
-	case "", CopyPointNow:
+	point := c.Point
+	if point == "" {
+		point = CopyPointNow
+	}
+	if (point == CopyPointTime) != (c.TargetTime != nil) {
+		return RestoreRequest{}, fmt.Errorf("%w: targetTime is required for point time and only for it", ErrCopyRequestInvalid)
+	}
+	req := RestoreRequest{NewProjectName: name, Mode: RestoreModeNewProject, TargetTime: c.TargetTime, Copy: true}
+	switch point {
+	case CopyPointNow:
 		req.CopyNow = true
-	case CopyPointLatest:
-	case CopyPointTime:
-		if c.TargetTime == nil {
-			return RestoreRequest{}, fmt.Errorf("%w: targetTime is required for a copy at a time", ErrCopyRequestInvalid)
-		}
-		req.TargetTime = c.TargetTime
-		return req, nil
+	case CopyPointLatest, CopyPointTime:
 	default:
 		return RestoreRequest{}, fmt.Errorf("%w: point must be now, latest or time", ErrCopyRequestInvalid)
-	}
-	if c.TargetTime != nil {
-		return RestoreRequest{}, fmt.Errorf("%w: targetTime is only for point time", ErrCopyRequestInvalid)
 	}
 	return req, nil
 }

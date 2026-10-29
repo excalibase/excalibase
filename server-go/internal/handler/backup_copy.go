@@ -17,6 +17,9 @@ import (
 // auditDatabaseCopy is the audit action of a started copy (EXC-667).
 const auditDatabaseCopy = "database.copy"
 
+// copiesUnavailable answers a platform wired without copies.
+const copiesUnavailable = "copies are not available on this platform"
+
 // copyFailed is all a caller learns of a failure that is the platform's own.
 const copyFailed = "the copy could not be started; try again, and if it fails again ask your platform administrator to check the provisioning log"
 
@@ -46,7 +49,7 @@ func (h *BackupHandler) Copy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.orchestrator == nil {
-		httpError(w, "copies are not available on this platform", http.StatusServiceUnavailable)
+		httpError(w, copiesUnavailable, http.StatusServiceUnavailable)
 		return
 	}
 	if err := h.svc.EnsureOrgProjectCapacity(r.Context(), inst); err != nil {
@@ -121,7 +124,7 @@ func (h *BackupHandler) writeCopyCapacityError(w http.ResponseWriter, err error)
 	case errors.Is(err, service.ErrRestoreDiskAbovePlan):
 		httpError(w, service.ErrRestoreDiskAbovePlan.Error(), http.StatusConflict)
 	case errors.Is(err, service.ErrOrgCapacityNotConfigured):
-		httpError(w, "copies are not available on this platform", http.StatusServiceUnavailable)
+		httpError(w, copiesUnavailable, http.StatusServiceUnavailable)
 	case !writeProjectCreationError(w, err):
 		log.Printf("copy: admit the new project: %v", err)
 		httpError(w, copyFailed, http.StatusInternalServerError)
@@ -151,7 +154,11 @@ func (h *BackupHandler) recordCopy(r *http.Request, job *domain.RestoreJob, body
 	if body.TargetTime != nil {
 		details["targetTime"] = body.TargetTime.UTC().Format(time.RFC3339)
 	}
-	encoded, _ := json.Marshal(details)
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		log.Printf("ERROR: audit %s of %s: %v", auditDatabaseCopy, job.SourceProjectID, err)
+		return
+	}
 	now := time.Now()
 	entry := &domain.AuditEntry{UserID: actorID(r), Action: auditDatabaseCopy, Resource: "project", ResourceID: job.NewProjectID,
 		ProjectID: job.SourceProjectID, Details: string(encoded), IPAddress: clientIP(r), Timestamp: &now}

@@ -24,7 +24,7 @@ func TestCopyRequest_DefaultsToNow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreRequest: %v", err)
 	}
-	if !restore.CopyNow || restore.NewProjectName != "staging" || restore.TargetTime != nil || restore.InPlace() {
+	if !restore.CopyNow || !restore.Copy || restore.NewProjectName != "staging" || restore.TargetTime != nil || restore.InPlace() {
 		t.Fatalf("restore = %+v, want a new-project copy of now named staging", restore)
 	}
 	if kind, value := restore.RestoreTargetKind(); kind != RestoreTargetNow || value != "" {

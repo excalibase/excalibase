@@ -503,11 +503,13 @@ const restoreFailedReason = "the restore did not complete; start it again, and i
 // publicRestoreFailures are refusals and outcomes whose own words are meant
 // for the user. Anything else wrapped around them stays in the log.
 var publicRestoreFailures = []error{
+	// A copy's own words come first: its cause may wrap another public error.
+	ErrCopyBackupFailed,
 	ErrRestoreNotObserved, ErrRestoreTargetDeleting, ErrRestoreTargetInFuture,
 	ErrRestoreTargetNotArchived, ErrRestoreTargetNotReached, ErrRestoreBackupUnusable,
 	ErrRestoreDiskAbovePlan, ErrBackupStorageNotConfigured,
 	ErrInPlaceRestoreUnsupported, ErrInPlaceNoBackups, ErrProjectOperationRunning,
-	ErrCopyNeedsBackups, ErrCopyNoBackupStore, ErrCopyNowUnsupported, ErrCopyNowNeedsRunning, ErrCopyBackupFailed,
+	ErrCopyNeedsBackups, ErrCopyNoBackupStore, ErrCopyNowUnsupported, ErrCopyNowNeedsRunning,
 }
 
 // publicRestoreFailure is the job's failure reason for err.
