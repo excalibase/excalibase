@@ -50,11 +50,11 @@ func TestUpgradeInitScript(t *testing.T) {
 	script := upgradeInitScript()
 	fence := strings.Index(script, upgradeFenceLine)
 	reject := strings.Index(script, superuserNetworkReject)
-	load := strings.Index(script, "-f "+UpgradeDumpFile)
+	load := strings.Index(script, "-f "+UpgradeGlobalsFile)
 	if fence < 0 || reject < 0 || load < 0 || fence > load || reject > load {
 		t.Fatalf("fence %d reject %d load %d", fence, reject, load)
 	}
-	for _, want := range []string{`role "postgres" already exists`, "archive_mode = 'on'", "/walarchive/%f", UpgradeLoaded, UpgradeFailed} {
+	for _, want := range []string{"trap ", `role "postgres" already exists`, "archive_mode = 'on'", "/walarchive/%f", UpgradeLoaded, UpgradeFailed} {
 		if !strings.Contains(script, want) {
 			t.Errorf("init script misses %q", want)
 		}
@@ -76,7 +76,7 @@ func TestFenceAndUnfence(t *testing.T) {
 	if !strings.Contains(UnfenceScript(), "grep -vxF '"+upgradeFenceLine+"'") {
 		t.Fatal("the unfence does not remove the fence line")
 	}
-	if !strings.Contains(DumpScript(), "--use-set-session-authorization") || !strings.Contains(CleanupScript(), UpgradeDir) {
+	if !strings.Contains(upgradeInitScript(), "--section=data --use-set-session-authorization") || !strings.Contains(CleanupScript(), UpgradeDir) {
 		t.Fatal("dump or cleanup scripts")
 	}
 }

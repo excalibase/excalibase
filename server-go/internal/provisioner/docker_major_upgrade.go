@@ -34,8 +34,13 @@ func (r *RealDockerClient) RenameContainer(ctx context.Context, id, name string)
 // UpgradeDir holds the dump and the load's result in both containers.
 const UpgradeDir = "/tmp/excalibase-upgrade"
 
-// UpgradeDumpFile is the old server's pg_dumpall.
-const UpgradeDumpFile = UpgradeDir + "/dump.sql"
+// The dump: the roles, then one archive per database. UpgradeDatabasesFile
+// lists "oid<TAB>create<TAB>name" per database; create is 1 for one the load
+// creates, 0 for postgres and template1, which every server already has.
+const (
+	UpgradeGlobalsFile   = UpgradeDir + "/globals.sql"
+	UpgradeDatabasesFile = UpgradeDir + "/databases"
+)
 
 // UpgradeStateFile, in the new container's data directory, says how the load
 // ended: "loaded" or "failed". The container restarts by itself after a
@@ -93,22 +98,35 @@ psql -X -U ` + defaultPostgresSuperuser + ` -d postgres -tAc 'SELECT pg_reload_c
 `
 }
 
-// DumpScript writes the whole server, roles and every database, to
-// UpgradeDumpFile. Each object and its rows load as their owner (SET SESSION
-// AUTHORIZATION), so a tenant's constraint or index function that runs while
-// rows are copied never runs as the superuser the load connects as.
+// DumpScript writes the whole server to UpgradeDir, readable by the server's
+// user only: the new container's first start loads it as that user.
 func DumpScript() string {
 	return `set -eu
 umask 077
+rm -rf ` + UpgradeDir + `
 mkdir -p ` + UpgradeDir + `
-export PGOPTIONS='-c statement_timeout=0'
-pg_dumpall -U ` + defaultPostgresSuperuser + ` --quote-all-identifiers --use-set-session-authorization -f ` + UpgradeDumpFile + `
+export PGOPTIONS='-c statement_timeout=0 -c search_path=pg_catalog,pg_temp'
+tab=$(printf '\t')
+pg_dumpall -U ` + defaultPostgresSuperuser + ` --quote-all-identifiers --globals-only -f ` + UpgradeGlobalsFile + `
+psql -X -A -t -q -v ON_ERROR_STOP=1 -U ` + defaultPostgresSuperuser + ` -d postgres -F "$tab" \
+  -c "SELECT oid, CASE WHEN datname OPERATOR(pg_catalog.=) ANY (ARRAY['postgres', 'template1']::pg_catalog.name[]) THEN 0 ELSE 1 END, datname FROM pg_catalog.pg_database WHERE datallowconn AND datname OPERATOR(pg_catalog.<>) 'template0' ORDER BY oid" > ` + UpgradeDatabasesFile + `
+while IFS="$tab" read -r oid create name; do
+  pg_dump -U ` + defaultPostgresSuperuser + ` -Fc --create --quote-all-identifiers -f "` + UpgradeDir + `/db-$oid.dump" -d "$name"
+done < ` + UpgradeDatabasesFile + `
+chown -R postgres:postgres ` + UpgradeDir + `
 `
 }
 
 // CleanupScript removes the dump and the load's state.
 func CleanupScript() string {
-	return `rm -rf ` + UpgradeDir + `; [ -n "${PGDATA:-}" ] && rm -f "$PGDATA/` + UpgradeStateFile + `"; true
+	return `rm -rf ` + UpgradeDir + `; [ -n "${PGDATA:-}" ] && rm -f "$PGDATA/` + UpgradeStateFile + `" "$PGDATA/` + UpgradeStateFile + `.reason"; true
+`
+}
+
+// LoadErrorsScript prints why the load failed and its first errors.
+func LoadErrorsScript() string {
+	return `cat "$PGDATA/` + UpgradeStateFile + `.reason" 2>/dev/null
+grep -v 'role "` + defaultPostgresSuperuser + `" already exists' ` + UpgradeDir + `/load.log 2>/dev/null | grep -A2 'ERROR:\|FATAL:\|error:' | head -n 9; true
 `
 }
 
@@ -120,16 +138,37 @@ func UpgradeStateScript() string {
 
 // upgradeInitScript runs once, from the official entrypoint, against its
 // socket-only first server: fence and keep the superuser off the network
-// first, then load the dump (the image already made the postgres role, the
-// one error allowed), then archive WAL. Any other error leaves "failed".
+// first, then load the roles (the image already made the postgres role, the
+// one error allowed) and each database, then archive WAL. Any other error
+// leaves "failed". Rows load as their table's owner, so a tenant's check
+// constraint that runs on them never runs as the superuser; the schema and
+// what comes after the rows are not tenant code that runs (index builds run
+// as the table owner since CVE-2022-1552).
 func upgradeInitScript() string {
 	return `#!/bin/sh
 set -u
 state="$PGDATA/` + UpgradeStateFile + `"
-fail() { echo "` + UpgradeFailed + `" > "$state"; echo "excalibase upgrade: $1" >&2; exit 1; }
+fail() { echo "excalibase upgrade: $1" > "$state.reason"; echo "` + UpgradeFailed + `" > "$state"; echo "excalibase upgrade: $1" >&2; exit 1; }
+# Whatever ends this script early, the platform must read "failed", not wait.
+trap '[ -s "$state" ] || echo "` + UpgradeFailed + `" > "$state"' EXIT
 ` + hbaPrepend(`"$PGDATA/pg_hba.conf"`, superuserNetworkReject) + hbaPrepend(`"$PGDATA/pg_hba.conf"`, upgradeFenceLine) + `
 log=` + UpgradeDir + `/load.log
-psql -X -q -v ON_ERROR_STOP=0 -U ` + defaultPostgresSuperuser + ` -d postgres -f ` + UpgradeDumpFile + ` >/dev/null 2>"$log" || fail "the dump did not load"
+: > "$log"
+tab=$(printf '\t')
+load() { psql -X -q -v ON_ERROR_STOP=0 -U ` + defaultPostgresSuperuser + ` "$@" >/dev/null 2>>"$log"; }
+restore() { pg_restore -U ` + defaultPostgresSuperuser + ` --exit-on-error "$@" 2>>"$log"; }
+[ -r ` + UpgradeGlobalsFile + ` ] && [ -r ` + UpgradeDatabasesFile + ` ] || fail "the dump is incomplete"
+load -d postgres -f ` + UpgradeGlobalsFile + ` || fail "the roles did not load"
+while IFS="$tab" read -r oid create name; do
+  dump="` + UpgradeDir + `/db-$oid.dump"
+  if [ "$create" = 1 ]; then
+    restore --section=pre-data --create -d postgres "$dump" || fail "a database's schema did not load"
+  else
+    restore --section=pre-data -d "$name" "$dump" || fail "a database's schema did not load"
+  fi
+  restore --section=data --use-set-session-authorization -d "$name" "$dump" || fail "a database's rows did not load"
+  restore --section=post-data -d "$name" "$dump" || fail "a database's indexes and constraints did not load"
+done < ` + UpgradeDatabasesFile + `
 if grep 'ERROR:' "$log" | grep -vqF 'role "` + defaultPostgresSuperuser + `" already exists'; then
   fail "the dump did not load: $(grep -c 'ERROR:' "$log") error(s)"
 fi

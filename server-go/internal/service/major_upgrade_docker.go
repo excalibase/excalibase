@@ -301,6 +301,15 @@ func (u *DockerMajorUpgrader) seed(ctx context.Context, dc provisioner.DockerCli
 
 var errLoadFailed = errors.New("the new version could not load the database")
 
+// loadFailure is errLoadFailed with the load's last errors, for the log only.
+func (u *DockerMajorUpgrader) loadFailure(ctx context.Context, dc provisioner.DockerClient, container string) error {
+	out, err := runScript(ctx, dc, container, provisioner.LoadErrorsScript())
+	if err != nil || strings.TrimSpace(out) == "" {
+		return errLoadFailed
+	}
+	return fmt.Errorf("%w: %s", errLoadFailed, strings.TrimSpace(out))
+}
+
 // waitLoaded waits for the first start to say how the load ended and the
 // real server to listen.
 func (u *DockerMajorUpgrader) waitLoaded(ctx context.Context, dc provisioner.DockerClient, container string) error {
@@ -309,7 +318,7 @@ func (u *DockerMajorUpgrader) waitLoaded(ctx context.Context, dc provisioner.Doc
 		out, err := runScript(ctx, dc, container, provisioner.UpgradeStateScript())
 		switch strings.TrimSpace(out) {
 		case provisioner.UpgradeFailed:
-			return errLoadFailed
+			return u.loadFailure(ctx, dc, container)
 		case provisioner.UpgradeLoaded:
 			if code, err := dc.ExecInContainer(ctx, container, tcpReady); err == nil && code == 0 {
 				return nil

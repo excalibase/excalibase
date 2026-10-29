@@ -38,7 +38,7 @@ func (b brokenDump) CopyToContainer(ctx context.Context, id, dst string, content
 	writer := tar.NewWriter(&buf)
 	body := []byte("CREATE TABLE broken (;\n")
 	_ = writer.WriteHeader(&tar.Header{Name: "excalibase-upgrade/", Typeflag: tar.TypeDir, Mode: 0o755})
-	_ = writer.WriteHeader(&tar.Header{Name: "excalibase-upgrade/dump.sql", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))})
+	_ = writer.WriteHeader(&tar.Header{Name: "excalibase-upgrade/globals.sql", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))})
 	_, _ = writer.Write(body)
 	_ = writer.Close()
 	return b.RealDockerClient.CopyToContainer(ctx, id, dst, &buf)
