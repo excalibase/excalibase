@@ -25,7 +25,8 @@ function hooksWith(secretSet: boolean, enabled: Partial<Record<string, string>> 
 function renderCard(initial: AuthHooks) {
   vi.mocked(api.get).mockResolvedValue({ data: initial });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><AuthHooksCard projectId="p" /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><AuthHooksCard projectId="p" /></QueryClientProvider>);
+  return client;
 }
 
 beforeEach(() => {
@@ -79,7 +80,29 @@ describe('AuthHooksCard', () => {
     await waitFor(() => expect(api.put).toHaveBeenCalledWith(`${HOOKS_PATH}/custom_access_token`, {
       enabled: true, url: 'https://hooks.example.com/claims',
     }));
-    expect(await within(screen.getByTestId('auth-hook-custom_access_token')).findByText(/saved/i)).toBeInTheDocument();
+    expect(await within(screen.getByTestId('auth-hook-custom_access_token')).findByRole('status')).toHaveTextContent(/saved/i);
+  });
+
+  test('a save elsewhere re-seeds a form from the server answer', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValue({ data: hooksWith(true, { send_email: 'https://new-mail.example.com' }) });
+    renderCard(hooksWith(true));
+    const claims = await screen.findByTestId('auth-hook-custom_access_token');
+    await u.click(within(claims).getByRole('button', { name: /save custom access token/i }));
+    const sendEmail = screen.getByTestId('auth-hook-send_email');
+    await waitFor(() => expect(within(sendEmail).getByLabelText(/send email url/i)).toHaveValue('https://new-mail.example.com'));
+    expect(within(sendEmail).getByLabelText(/enable send email/i)).toBeChecked();
+  });
+
+  test('generating the first secret keeps a URL typed but not yet saved', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { secret: SECRET } });
+    renderCard(hooksWith(false));
+    const form = await screen.findByTestId('auth-hook-send_email');
+    await u.type(within(form).getByLabelText(/send email url/i), 'https://mail.example.com/send');
+    await u.click(screen.getByRole('button', { name: /generate secret/i }));
+    await screen.findByTestId('auth-hooks-new-secret');
+    expect(within(screen.getByTestId('auth-hook-send_email')).getByLabelText(/send email url/i)).toHaveValue('https://mail.example.com/send');
   });
 
   test("shows the server's refusal", async () => {
@@ -95,9 +118,10 @@ describe('AuthHooksCard', () => {
   test('generates the secret and shows it once with a copy button and a warning', async () => {
     const u = userEvent.setup();
     vi.mocked(api.post).mockResolvedValue({ data: { secret: SECRET } });
-    renderCard(hooksWith(false));
+    const client = renderCard(hooksWith(false));
     await u.click(await screen.findByRole('button', { name: /generate secret/i }));
     await waitFor(() => expect(api.post).toHaveBeenCalledWith(`${HOOKS_PATH}/secret`));
+    await waitFor(() => expect(JSON.stringify(client.getMutationCache().getAll().map((m) => m.state.data))).not.toContain(SECRET));
     const issued = await screen.findByTestId('auth-hooks-new-secret');
     expect(issued).toHaveTextContent(SECRET);
     expect(issued).toHaveTextContent(/not shown again/i);
@@ -134,6 +158,13 @@ describe('AuthHooksCard', () => {
     await waitFor(() => expect(api.delete).toHaveBeenCalledWith(`${HOOKS_PATH}/secret`));
     await waitFor(() => expect(within(screen.getByTestId('auth-hook-send_email')).getByLabelText(/enable send email/i)).not.toBeChecked());
     expect(screen.getByTestId('auth-hooks-secret-state')).toHaveTextContent('Not set');
+  });
+
+  test('announces loading to assistive technology', () => {
+    vi.mocked(api.get).mockReturnValue(new Promise(() => {}));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><AuthHooksCard projectId="p" /></QueryClientProvider>);
+    expect(screen.getByRole('status', { name: /loading the auth hooks/i })).toBeInTheDocument();
   });
 
   test('says why the hooks are missing when they cannot be read', async () => {

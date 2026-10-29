@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
@@ -139,5 +140,44 @@ func TestAuthHooks_RestoredCopyDoesNotInheritHooks(t *testing.T) {
 	got, _ := store.ListAuthHooks(ctx, "proj_hooks_copy")
 	if set, _ := store.AuthHookSecretSet(ctx, "proj_hooks_copy"); set || len(got) != 0 {
 		t.Fatalf("the copy inherited hooks: %v %+v", set, got)
+	}
+}
+
+func TestAuthHooks_SecretLockSerializesOneProjectOnly(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	release, err := store.LockAuthHookSecret(ctx, "proj_lock_a")
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	other, err := store.LockAuthHookSecret(ctx, "proj_lock_b")
+	if err != nil {
+		t.Fatalf("another project waited: %v", err)
+	}
+	other()
+
+	acquired := make(chan func(), 1)
+	go func() {
+		second, err := store.LockAuthHookSecret(ctx, "proj_lock_a")
+		if err != nil {
+			t.Errorf("second lock: %v", err)
+			close(acquired)
+			return
+		}
+		acquired <- second
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("the same project was locked twice")
+	case <-time.After(300 * time.Millisecond):
+	}
+	release()
+	select {
+	case second := <-acquired:
+		if second != nil {
+			second()
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lock was not released")
 	}
 }
