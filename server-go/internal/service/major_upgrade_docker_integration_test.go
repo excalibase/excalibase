@@ -198,7 +198,7 @@ func TestSingleHostMajorUpgradeMovesTheDatabaseTo17(t *testing.T) {
 	if got := scanString(t, app, "SELECT count(*)::text FROM public.orders"); got != "500" {
 		t.Fatalf("rows after the upgrade: %s", got)
 	}
-	if got := scanString(t, app, "SELECT digest FROM public.orders WHERE id = 1"); got == "" {
+	if scanString(t, app, "SELECT digest FROM public.orders WHERE id = 1") == "" {
 		t.Fatal("the extension's data did not survive")
 	}
 	if !scanBool(t, app, "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto')") {
