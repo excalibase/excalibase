@@ -1647,6 +1647,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	emailSender := buildEmailSender(cfg)
 	hostMonitoringHandler := wireHostMonitoring(hostMonitoringDeps{cfg: cfg, sqlStore: sqlStore, instances: store,
 		docker: a.dockerClient, vault: vc, mail: emailSender, metrics: metricsSvc, alerts: alertSvc, provisioning: provSvc})
+	if shipper := wireHostLogs(hostLogDeps{cfg: cfg, sqlStore: sqlStore, instances: store, provisioning: provSvc}); shipper != nil {
+		go shipper.Run(context.Background())
+	}
 	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 	logDrainSvc := newLogDrainService(cfg, sqlStore, vc, provSvc)

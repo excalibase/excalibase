@@ -280,6 +280,14 @@ services:
       FEATURE_HOSTMETRICS: ${FEATURE_HOSTMETRICS:-false}
       HOST_METRICS_CONTAINERS: *platform_containers
       HOST_METRICS_NET_DEV: /host/proc-net-dev
+      # Stored project log search in the bundled Loki (EXC-672; init.sh --host-logs).
+      FEATURE_HOSTLOGS: ${FEATURE_HOSTLOGS:-false}
+      HOST_LOGS_LOKI_URL: http://loki:3100
+      HOST_LOGS_DAILY_MB: ${HOST_LOGS_DAILY_MB:-64}
+      # How long Loki keeps logs; by plan only with FEATURE_LOGRETENTION (EXC-659).
+      FEATURE_LOGRETENTION: ${FEATURE_LOGRETENTION:-false}
+      LOG_RETENTION: ${LOG_RETENTION:-168h}
+      LOG_RETENTION_BY_PLAN: free=${LOG_RETENTION_FREE:-24h},standard=${LOG_RETENTION_STANDARD:-168h},enterprise=${LOG_RETENTION_ENTERPRISE:-168h}
       # The host's own public ranges, refused to apps and to the alert webhook; empty: only private ranges are.
       APP_EGRESS_EXTRA_DENY_CIDRS: ${APP_EGRESS_EXTRA_DENY_CIDRS:-}
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
@@ -386,6 +394,35 @@ services:
       - engine
       - tenants
       - edge
+      - logs
+    restart: unless-stopped
+
+  # Stored project logs (EXC-672; init.sh --host-logs): provisioning follows
+  # each project container's output through the engine proxy and pushes it
+  # here. On its own network, which only provisioning joins.
+  loki:
+    image: docker.io/grafana/loki:3.7.8@sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193
+    container_name: excalibase-loki
+    profiles: ["hostlogs"]
+    command: ["-config.file=/etc/loki/loki.yaml", "-config.expand-env=true", "-target=all"]
+    environment:
+      LOG_RETENTION: ${LOG_RETENTION:-168h}
+      LOG_RETENTION_FREE: ${LOG_RETENTION_FREE:-24h}
+      LOG_RETENTION_STANDARD: ${LOG_RETENTION_STANDARD:-168h}
+      LOG_RETENTION_ENTERPRISE: ${LOG_RETENTION_ENTERPRISE:-168h}
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/loki.yaml:ro,z
+      - logs_data:/loki
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: ${LOKI_MEMORY:-512m}
+    pids_limit: 256
+    cpus: ${LOKI_CPUS:-0.5}
+    <<: *hardened
+    networks:
+      - logs
     restart: unless-stopped
 
   studio:
@@ -574,6 +611,9 @@ volumes:
   # Apps' routes: provisioning writes them, the edge reads them.
   app_routes:
     name: excalibase-platform-app-routes
+  # Stored project logs (EXC-672); delete it to forget them.
+  logs_data:
+    name: excalibase-platform-logs
 
 networks:
   # Platform services and their state. Internal: no route in or out.
@@ -608,6 +648,10 @@ networks:
   # out. The engine proxy admits only the watcher image to it.
   cdc:
     name: excalibase-cdc
+    internal: true
+  # provisioning and the bundled Loki alone (EXC-672). Internal: no route in or out.
+  logs:
+    name: excalibase-logs
     internal: true
   # Outbound only, for the one-shot bootstrap's package install.
   egress:

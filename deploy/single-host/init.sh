@@ -5,6 +5,7 @@
 #
 #   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman] [--manual-unseal]
 #             [--apps] [--app-domain apps.example.com] [--app-sandbox runsc|none] [--documentdb] [--host-metrics]
+#             [--host-logs]
 #
 # Studio:     https://studio.<domain>
 # Data plane: https://api.<domain>   (/{projectId}/graphql, /{projectId}/api/v1, /auth)
@@ -20,6 +21,9 @@
 # --host-metrics: Studio's Host page: the host's and every container's CPU, memory, disk,
 # network and temperatures, kept 30 days, with alerts by email and webhook. Mounts the
 # host's /proc/1/net/dev read-only into provisioning for the network figures.
+# --host-logs: stored project log search: the bundled Loki (compose profile hostlogs)
+# keeps each project container's output for LOG_RETENTION (168h), searchable in Studio
+# after the container is gone; at most HOST_LOGS_DAILY_MB (64) per project per day.
 # A public domain gets Let's Encrypt certificates for the admin address;
 # localhost gets certificates from the edge's own CA.
 set -eu
@@ -41,6 +45,7 @@ manual_unseal=
 apps=
 documentdb=
 host_metrics=
+host_logs=
 app_domain=
 app_sandbox=runsc
 
@@ -58,6 +63,8 @@ while [ $# -gt 0 ]; do
     --documentdb) documentdb="DOCUMENTDB_ENABLED=true"; shift ;;
     --host-metrics) host_metrics="FEATURE_HOSTMETRICS=true
 HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev"; shift ;;
+    --host-logs) host_logs="FEATURE_HOSTLOGS=true
+COMPOSE_PROFILES=hostlogs"; shift ;;
     --app-domain) app_domain=$2; shift 2 ;;
     --app-sandbox) app_sandbox=$2; shift 2 ;;
     *) usage ;;
@@ -160,7 +167,7 @@ ENGINE_SOCKET_GID=$engine_socket_gid
 APP_DOMAIN=$app_domain
 APP_SANDBOX_RUNTIME=$app_sandbox
 ENV
-for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics"; do
+for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs"; do
   [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
 done
 chmod 600 "$env_file"
