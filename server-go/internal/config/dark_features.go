@@ -27,6 +27,7 @@ var featureEnv = map[features.Feature]string{
 	features.AuthGuest:       "FEATURE_AUTHGUEST",
 	features.AuthMFA:         "FEATURE_AUTHMFA",
 	features.HostMetrics:     "FEATURE_HOSTMETRICS",
+<<<<<<< HEAD
 	features.SitesServer:     "FEATURE_SITESSERVER",
 	features.AuthHooks:       "FEATURE_AUTHHOOKS",
 	features.DBAllowList:     "FEATURE_DBALLOWLIST",
@@ -36,6 +37,10 @@ var featureEnv = map[features.Feature]string{
 	features.TemplateCatalog: "FEATURE_TEMPLATECATALOG",
 	features.HostLogs:        "FEATURE_HOSTLOGS",
 	features.LogDeletion:     "FEATURE_LOGDELETION",
+=======
+	// Single-host only (the compose file); Kubernetes builds do not read it.
+	features.SingleHostBuilds: "FEATURE_SINGLEHOSTBUILDS",
+>>>>>>> dd0db8a3 (feat: EXC-671 single-host git builds of sites behind singlehostbuilds)
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.

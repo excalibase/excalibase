@@ -139,11 +139,16 @@ var darkWork = map[features.Feature]string{
 	features.MySQLPITR:    "TestMySQLBinlogShippingStartsOnlyWithItsFeature",
 	features.LogRetention: "TestLogPlanSweepStartsOnlyWithItsFeature",
 	features.AuthOTP:      "TestAuthOTP_OffHidesTheSwitchEvenWithOAuthOn",
+<<<<<<< HEAD
 	features.SitesServer:  "TestSites_ServerKindAnswersAsUnmountedWhileOff",
 	// The catalog's templates answer as unknown ids while it is off (internal/service).
 	features.TemplateCatalog: "TestTemplateCatalog_OffIsInvisible",
 	features.HostLogs:        "TestHostLogShippingStartsOnlyWithItsFeature",
 	features.LogDeletion:  "TestLogDeletionStartsOnlyWithItsFeature",
+=======
+	// Off, a single host keeps answering that it builds nothing (ModeSingleHost).
+	features.SingleHostBuilds: "TestSiteBuildMode",
+>>>>>>> dd0db8a3 (feat: EXC-671 single-host git builds of sites behind singlehostbuilds)
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

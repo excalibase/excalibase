@@ -58,6 +58,7 @@ const (
 	// HostMetrics is single-host monitoring: the host and every container
 	// sampled into history, alerts and notices, and Studio's Host page (EXC-670).
 	HostMetrics Feature = "hostmetrics"
+<<<<<<< HEAD
 	// SitesServer is server-rendered sites: a site of kind server runs its
 	// build's Worker code beside its assets (ADR 0045, EXC-661). Needs Sites.
 	SitesServer Feature = "sitesserver"
@@ -83,11 +84,20 @@ const (
 	HostLogs Feature = "hostlogs"
 	// LogDeletion removes a deleted project's stored log lines from Loki (EXC-678).
 	LogDeletion Feature = "logdeletion"
+=======
+	// SingleHostBuilds runs git builds of sites on a single Docker or Podman
+	// host, under the sandbox runtime behind the build egress proxy (EXC-671).
+	SingleHostBuilds Feature = "singlehostbuilds"
+>>>>>>> dd0db8a3 (feat: EXC-671 single-host git builds of sites behind singlehostbuilds)
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
+<<<<<<< HEAD
 	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, LogDeletion}
+=======
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SingleHostBuilds}
+>>>>>>> dd0db8a3 (feat: EXC-671 single-host git builds of sites behind singlehostbuilds)
 }
 
 type Flags interface {
