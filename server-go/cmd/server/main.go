@@ -16,6 +16,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/advisors"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/bootstrap"
 	"github.com/excalibase/provisioning-poc/internal/clientaddr"
@@ -1062,6 +1063,8 @@ type handlerDeps struct {
 	// (EXC-658); nil without the platform DB tables.
 	logDrainsHandler    *handler.LogDrainsHandler
 	logForwarderHandler *handler.LogForwarderHandler
+	// registryToken is the internal registry's token service (EXC-540); nil without one.
+	registryToken http.Handler
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1574,7 +1577,8 @@ func newSchemaHandler(cfg config.AppConfig, vc vaultclient.VaultClient, instance
 }
 
 func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore storage.PlatformStore,
-	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget, restarts handler.AppRestartReader) *handler.AppHandler {
+	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget, restarts handler.AppRestartReader,
+	internal *appregistry.Internal) *handler.AppHandler {
 	plans := service.NewOrgPlanTiers(store, sqlStore)
 	h := handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
 		handler.NewProjectSourceLookup(store, plans), appPublicRoute(cfg))
@@ -1583,6 +1587,7 @@ func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore s
 	h.SetStorageBudget(budget)
 	h.SetFeatures(cfg.Features())
 	h.SetRestarts(restarts)
+	h.SetInternalRegistry(internal)
 	return h
 }
 
@@ -1747,8 +1752,16 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// marker straight away so idle-pause never sees them as stale.
 	provSvc.SetActivityRecorder(activityRecorder)
 
+	internalRegistry, err := newInternalRegistry(cfg)
+	if err != nil {
+		log.Fatalf("internal registry (APP_REGISTRY_HOST): %v", err)
+	}
 	registryCreds := registryCredentials(vc, store, appRuntime)
+	if registryCreds != nil {
+		registryCreds.SetInternalRegistry(internalRegistry)
+	}
 	withRegistryCredentials(appDeploySvc, registryCreds)
+	appDeploySvc.SetInternalRegistry(internalRegistry)
 	if origins, ok := sqlStore.(storage.ProjectCorsEditor); ok {
 		appDeploySvc.SetCorsOriginReleaser(origins)
 	}
@@ -1795,7 +1808,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:       realtimeHandler,
 		permissionHandler:     newPermissionHandler(cfg, sqlStore, store, a.projectDB),
 		advisorsHandler:       handler.NewAdvisorsHandler(advisors.NewService(a.projectDB, sqlStore.Permissions(), advisors.Options{})),
-		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc),
+		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
+		registryToken:         newRegistryTokenHandler(internalRegistry, store),
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,
 		storageBudgetH:        handler.NewStorageBudgetHandler(a.budget),
@@ -2410,6 +2424,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	mountMetricsEndpoint(r, sqlStore, store, d)
 	mountProjectContainers(r, sqlStore, store, d)
 	mountLogDrains(r, sqlStore, store, d)
+	mountRegistryToken(r, d)
 	mountAuthProviders(r, sqlStore, store, d)
 	// What AI coding tools did in the project through MCP (EXC-544).
 	r.Route("/api/projects/{projectId}/ai-activity", func(r chi.Router) {

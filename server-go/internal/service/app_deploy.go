@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/google/uuid"
@@ -53,6 +54,8 @@ type AppDeployService struct {
 	images ImageResolver
 	// localRegistries are operator registries never dialled (self-host only).
 	localRegistries []string
+	// internal is the platform's own registry for git builds (EXC-540); nil without one.
+	internal        *appregistry.Internal
 	plans           PlanTiers
 	headroomPercent int
 	// quotaTiers sizes the namespace quota from the plan (EXC-524).
@@ -126,15 +129,25 @@ func (s *AppDeployService) pullAuth(projectID, image string) (*k8s.RegistryAuth,
 // registryCredential is the project's saved credential for the image's
 // registry, or nil when it has none.
 func (s *AppDeployService) registryCredential(projectID, image string) (*apphost.RegistryCredential, error) {
-	if s.registries == nil {
-		return nil, nil
-	}
 	registry := apphost.ImageRegistry(image)
-	cred, err := s.registries.Lookup(projectID, registry)
+	cred, err := s.lookupCredential(projectID, registry)
 	if err != nil {
 		return nil, fmt.Errorf("read the pull credential for %s: %w", registry, err)
 	}
 	return cred, nil
+}
+
+// lookupCredential answers the internal registry with the project's derived
+// credential, and any other registry with the one the project saved.
+func (s *AppDeployService) lookupCredential(projectID, registry string) (*apphost.RegistryCredential, error) {
+	if s.internal != nil && registry == s.internal.Host() {
+		pull := s.internal.PullCredential(projectID)
+		return &apphost.RegistryCredential{Username: pull.Username, Password: pull.Password}, nil
+	}
+	if s.registries == nil {
+		return nil, nil
+	}
+	return s.registries.Lookup(projectID, registry)
 }
 
 // errPullAuthChanged fails a deploy whose credential was removed or replaced while it was applied.
@@ -147,7 +160,7 @@ func (s *AppDeployService) confirmPullAuth(ctx context.Context, projectID, names
 	if used == nil {
 		return nil
 	}
-	cred, err := s.registries.Lookup(projectID, used.Registry)
+	cred, err := s.lookupCredential(projectID, used.Registry)
 	if err == nil && cred != nil && cred.Username == used.Username && cred.Password == used.Password {
 		return nil
 	}
