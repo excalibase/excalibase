@@ -129,13 +129,20 @@ func TestAppBuildPod_DockerfileBuildsWithRootlessBuildKit(t *testing.T) {
 // the app's code, exporting to a layout, so no step holds a registry credential.
 func TestAppBuildPod_BuildpacksKeepTheAppsCodeInItsOwnStep(t *testing.T) {
 	pod := renderAppBuildJob(testAppBuildOptions(), testAppRunSpec(appbuilds.BuilderBuildpacks)).Spec.Template.Spec
-	want := []string{"prepare-workdir", "wait-for-fence", "clone", "run-image", "analyze", "buildpacks", "export"}
+	want := []string{"prepare-workdir", "wait-for-fence", "clone", "share-checkout", "run-image", "analyze", "buildpacks", "export"}
 	if got := initNames(pod); !slices.Equal(got, want) {
 		t.Fatalf("steps %v, want %v", got, want)
 	}
 	fetch := containerNamed(t, pod.InitContainers, appBuildRunImage)
 	if got := strings.Join(fetch.Args, " "); got != "pull --platform=linux/amd64 --format=oci docker.io/paketobuildpacks/ubuntu-noble-run:0.0.150@sha256:feed /work/out/layout/index.docker.io/paketobuildpacks/ubuntu-noble-run/0.0.150" {
 		t.Errorf("run image fetch %q", got)
+	}
+	if collect := pod.Containers[0]; collect.SecurityContext.RunAsUser == nil || *collect.SecurityContext.RunAsUser != appBuildCNBUID {
+		t.Errorf("the collect step reads the exporter's blobs as the CNB user")
+	}
+	share := containerNamed(t, pod.InitContainers, appBuildShareCheckout)
+	if share.SecurityContext.RunAsUser != nil || strings.Join(share.Command, " ") != "chmod -R a+rwX /work/src" {
+		t.Errorf("the checkout is opened by its owner, the pod user, with no capability: %v %v", share.Command, share.SecurityContext.RunAsUser)
 	}
 	scripts := map[string]string{}
 	for _, phase := range append([]string{appBuildRunImage}, appBuildPhases...) {
@@ -149,10 +156,10 @@ func TestAppBuildPod_BuildpacksKeepTheAppsCodeInItsOwnStep(t *testing.T) {
 		})
 	}
 	expectAll(t, map[string]bool{
-		"analyze then restore":           strings.Contains(scripts["analyze"], "/cnb/lifecycle/analyzer -layers=/work/layers -run-image=docker.io/paketobuildpacks/ubuntu-noble-run:0.0.150 -layout") && strings.Contains(scripts["analyze"], "&& /cnb/lifecycle/restorer"),
-		"detect then build the root dir": strings.Contains(scripts["buildpacks"], "/cnb/lifecycle/detector -layers=/work/layers -app=/work/src/api -platform=/run/platform") && strings.Contains(scripts["buildpacks"], "&& /cnb/lifecycle/builder"),
-		"export to the layout":           strings.Contains(scripts["export"], "/cnb/lifecycle/exporter") && strings.Contains(scripts["export"], "-layout -layout-dir=/work/out/layout "+appBuildImageRef),
-		"builder image":                  containerNamed(t, pod.InitContainers, "export").Image == "paketobuildpacks/ubuntu-noble-builder:0.0.203",
+		"analyze alone, before detection":          strings.Contains(scripts["analyze"], "/cnb/lifecycle/analyzer -layers=/work/layers -run-image=docker.io/paketobuildpacks/ubuntu-noble-run:0.0.150 -layout") && !strings.Contains(scripts["analyze"], "restorer"),
+		"detect, restore, then build the root dir": strings.Contains(scripts["buildpacks"], "/cnb/lifecycle/detector -layers=/work/layers -app=/work/src/api -platform=/run/platform") && strings.Contains(scripts["buildpacks"], "&& /cnb/lifecycle/restorer -layers=/work/layers -layout") && strings.Contains(scripts["buildpacks"], "&& /cnb/lifecycle/builder"),
+		"export to the layout":                     strings.Contains(scripts["export"], "/cnb/lifecycle/exporter") && strings.Contains(scripts["export"], "-layout -layout-dir=/work/out/layout "+appBuildImageRef),
+		"builder image":                            containerNamed(t, pod.InitContainers, "export").Image == "paketobuildpacks/ubuntu-noble-builder:0.0.203",
 	})
 	build := containerNamed(t, pod.InitContainers, appBuildBuildpacks)
 	if build.Resources.Limits.Memory().String() != "4Gi" {

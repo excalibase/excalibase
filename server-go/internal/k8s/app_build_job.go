@@ -43,12 +43,13 @@ const (
 	appBuildImageRef  = "excalibase.local/app:build"
 )
 
-// The Buildpacks steps, in order: analyze+restore and export are the platform's
-// side; detect+build run the app's code and read the build-visible secrets.
+// The Buildpacks steps, in order: analyze and export are the platform's side;
+// detect, restore and build run as one step with the app's code and the build-visible secrets.
 const (
-	appBuildAnalyze    = "analyze"
-	appBuildBuildpacks = "buildpacks"
-	appBuildExport     = "export"
+	appBuildShareCheckout = "share-checkout"
+	appBuildAnalyze       = "analyze"
+	appBuildBuildpacks    = "buildpacks"
+	appBuildExport        = "export"
 	// appBuildPlatformDir/env holds the build-visible secrets, one file each (the CNB platform spec).
 	appBuildPlatformDir = "/run/platform"
 )
@@ -168,6 +169,8 @@ func buildKitContainer(options AppBuildOptions, spec appbuilds.RunSpec) corev1.C
 		Env: []corev1.EnvVar{
 			{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox --root /work/buildkit"},
 			{Name: "HOME", Value: "/work/home"}, {Name: "XDG_RUNTIME_DIR", Value: "/tmp/run"},
+			// The image points TMPDIR into its own home; the root filesystem is read-only.
+			{Name: "TMPDIR", Value: "/tmp"},
 		},
 		SecurityContext: security, Resources: appBuildResources(spec),
 		VolumeMounts: append(workMounts(), secretsMount()),
@@ -190,13 +193,17 @@ func buildpacksContainers(options AppBuildOptions, spec appbuilds.RunSpec) []cor
 	layers, layout := "-layers=/work/layers", "-layout -layout-dir="+appBuildLayoutDir
 	app := "-app=" + spec.ContextDir()
 	phases := map[string]string{
-		appBuildAnalyze: appInsideCheckout + " && " + lifecycle("analyzer", layers, "-run-image="+byTag(runRef), layout, appBuildImageRef) + " && " +
-			lifecycle("restorer", layers, layout),
+		appBuildAnalyze: appInsideCheckout + " && " + lifecycle("analyzer", layers, "-run-image="+byTag(runRef), layout, appBuildImageRef),
 		appBuildBuildpacks: lifecycle("detector", layers, app, "-platform="+appBuildPlatformDir) + " && " +
-			lifecycle("builder", layers, app, "-platform="+appBuildPlatformDir),
+			lifecycle("restorer", layers, layout) + " && " + lifecycle("builder", layers, app, "-platform="+appBuildPlatformDir),
 		appBuildExport: lifecycle("exporter", layers, app, layout, appBuildImageRef),
 	}
-	containers := []corev1.Container{fetch}
+	// The clone step's user owns the checkout; the buildpacks write into it as the CNB user.
+	share := corev1.Container{
+		Name: appBuildShareCheckout, Image: options.PrepareImage, Command: []string{"chmod", "-R", "a+rwX", appbuilds.WorkSource},
+		SecurityContext: lockedDown(), Resources: guaranteed("100m", "32Mi"), VolumeMounts: workMounts(),
+	}
+	containers := []corev1.Container{share, fetch}
 	for _, phase := range appBuildPhases {
 		resources, mounts := guaranteed("500m", "512Mi"), workMounts()
 		if phase == appBuildBuildpacks {
@@ -246,12 +253,17 @@ func byTag(ref string) string {
 	return tagged
 }
 
+// appCollectContainer runs as whoever wrote the image: the exporter leaves its blobs readable by the CNB user only.
 func appCollectContainer(options AppBuildOptions, spec appbuilds.RunSpec) corev1.Container {
+	security := lockedDown()
+	if spec.Builder == appbuilds.BuilderBuildpacks {
+		security.RunAsUser, security.RunAsGroup = pointerTo(appBuildCNBUID), pointerTo(appBuildCNBUID)
+	}
 	return corev1.Container{
 		Name: siteBuildCollect, Image: options.PrepareImage, Command: []string{"sh", "/scripts/collect.sh"},
 		Env: []corev1.EnvVar{{Name: "BUILDER", Value: string(spec.Builder)},
 			{Name: "IMAGE_DIR", Value: path.Join(appBuildLayoutDir, layoutPath(appBuildImageRef))}},
-		SecurityContext: lockedDown(), Resources: guaranteed("250m", "128Mi"),
+		SecurityContext: security, Resources: guaranteed("250m", "128Mi"),
 		VolumeMounts: append(workMounts(), scriptMount()),
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler:  corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"test", "-f", siteBuildCollectReady}}},

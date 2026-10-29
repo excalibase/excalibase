@@ -15,6 +15,7 @@ else
   if [ -L "$dir/index.json" ] || [ ! -f "$dir/index.json" ]; then echo "the buildpacks export wrote no image"; exit 3; fi
   tar -cf /work/collect/image.tar -C "$dir" .
 fi
-touch /work/collect/ready
+# Printed before the ready mark, so the log has it whenever the controller sees ready.
 echo "packed the image ($(wc -c < /work/collect/image.tar) bytes)"
+touch /work/collect/ready
 exec sleep 3600
