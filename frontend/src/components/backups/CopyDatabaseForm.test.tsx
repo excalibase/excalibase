@@ -82,13 +82,13 @@ describe('CopyDatabaseForm', () => {
   });
 
   test('a MySQL copy at a time is bounded by the backup window', async () => {
-    const window = { earliest: '2026-10-11T00:00:00Z', latest: '2026-10-11T12:00:00Z' };
-    renderForm({ engine: 'mysql', restoreWindow: window });
+    const backupWindow = { earliest: '2026-10-11T00:00:00Z', latest: '2026-10-11T12:00:00Z' };
+    renderForm({ engine: 'mysql', restoreWindow: backupWindow });
     await userEvent.click(screen.getByRole('radio', { name: /A point in time/i }));
 
     const field = screen.getByLabelText(/Copy at/i);
-    expect(field).toHaveAttribute('min', toLocalInput(window.earliest));
-    expect(field).toHaveAttribute('max', toLocalInput(window.latest));
+    expect(field).toHaveAttribute('min', toLocalInput(backupWindow.earliest));
+    expect(field).toHaveAttribute('max', toLocalInput(backupWindow.latest));
   });
 
   test('says that logins created inside the database keep their passwords', () => {
@@ -108,7 +108,7 @@ describe('CopyDatabaseForm', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('turn on backups for this database first');
   });
 
-  test('reports the backup taken for the copy, then links the finished copy', async () => {
+  test('reports the backup taken for the copy while it runs', async () => {
     stubJob({ ...RUNNING, currentStep: 'SOURCE_BACKUP' });
     vi.mocked(api.post).mockResolvedValueOnce({ data: RUNNING } as never);
     renderForm();
@@ -128,6 +128,19 @@ describe('CopyDatabaseForm', () => {
 
     const link = await screen.findByRole('link', { name: /Open the copy/i });
     expect(link).toHaveAttribute('href', '/project/copy-1');
+    // The name is cleared so a second click does not make a second copy.
+    expect(screen.getByLabelText(/New project name/i)).toHaveValue('');
+    expect(submit()).toBeDisabled();
+  });
+
+  test('a progress check that fails says so instead of spinning', async () => {
+    vi.mocked(api.get).mockRejectedValue(new Error('network down'));
+    vi.mocked(api.post).mockResolvedValueOnce({ data: RUNNING } as never);
+    renderForm();
+    await userEvent.type(screen.getByLabelText(/New project name/i), 'staging');
+    await userEvent.click(submit());
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not check the copy's progress/i);
   });
 
   test('a failed copy says why', async () => {

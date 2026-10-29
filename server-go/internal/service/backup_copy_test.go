@@ -74,7 +74,7 @@ func copyService(t *testing.T, adapter BackupAdapter, edit func(*domain.Database
 }
 
 func copyNow() domain.RestoreRequest {
-	return domain.RestoreRequest{NewProjectName: "copy", TargetProjectID: "dst", CopyNow: true}
+	return domain.RestoreRequest{NewProjectName: "copy", TargetProjectID: "dst", CopyNow: true, Copy: true}
 }
 
 func TestCheckCopy_Refusals(t *testing.T) {
@@ -194,5 +194,28 @@ func TestRestoreSubmittedCopy_LatestTakesNoBackup(t *testing.T) {
 	}
 	if adapter.backups != 0 || len(adapter.restored) != 1 || adapter.restored[0].BackupID != "" {
 		t.Errorf("backups=%d restores=%+v, want a plain restore", adapter.backups, adapter.restored)
+	}
+}
+
+// A backup that failed for a reason with public words of its own still
+// reads as the copy's failure.
+func TestRestoreSubmittedCopy_BackupFailureKeepsTheCopysWords(t *testing.T) {
+	adapter := &copyAdapter{configured: true, backupErr: ErrProjectOperationRunning}
+	svc, _ := copyService(t, adapter, nil)
+	err := svc.RestoreSubmittedCopy(context.Background(), "src", copyNow())
+	if reason := publicRestoreFailure(err); reason != ErrCopyBackupFailed.Error() {
+		t.Errorf("public failure = %q", reason)
+	}
+}
+
+// A copy from the latest backup is checked again when it runs too: backups
+// turned off since submission end it with the copy's own refusal.
+func TestRestoreSubmittedCopy_LatestRechecksTheSource(t *testing.T) {
+	adapter := &copyAdapter{configured: true}
+	svc, _ := copyService(t, adapter, func(i *domain.DatabaseInstance) { i.BackupEnabled = boolPtr(false) })
+	req := domain.RestoreRequest{NewProjectName: "copy", TargetProjectID: "dst", Copy: true}
+	err := svc.RestoreSubmittedCopy(context.Background(), "src", req)
+	if !errors.Is(err, ErrCopyNeedsBackups) || len(adapter.restored) != 0 {
+		t.Fatalf("RestoreSubmittedCopy = %v, restores %d; want ErrCopyNeedsBackups and nothing restored", err, len(adapter.restored))
 	}
 }

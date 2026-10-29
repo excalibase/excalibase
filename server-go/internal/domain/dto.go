@@ -324,6 +324,9 @@ type RestoreRequest struct {
 	// backed up first and the copy restored from that backup (EXC-667). Only
 	// the copy route sets it; a restore body cannot.
 	CopyNow bool `json:"-"`
+	// Copy marks a job filed by the copy route, so it is checked as a copy
+	// again when it runs. Never read from a body.
+	Copy bool `json:"-"`
 }
 
 // Restore modes.

@@ -298,9 +298,14 @@ export const useRestoreJob = (projectId: string, jobId: string | undefined) => {
   });
   // A database replaced in place changes everything the project's pages show.
   const replaced = job.data?.mode === 'in_place' && job.data.status === 'COMPLETED';
+  const created = job.data?.mode === 'new_project' && job.data.status === 'COMPLETED';
   useEffect(() => {
     if (replaced) queryClient.invalidateQueries();
   }, [replaced, queryClient]);
+  // A copy finished building: it joins the projects list now, not at submission.
+  useEffect(() => {
+    if (created) queryClient.invalidateQueries({ queryKey: ['instances'] });
+  }, [created, queryClient]);
   return job;
 };
 
