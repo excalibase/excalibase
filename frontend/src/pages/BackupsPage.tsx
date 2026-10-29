@@ -5,11 +5,13 @@ import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
 import { RestoreForm } from '../components/backups/RestoreForm';
-import { Archive, RefreshCw, RotateCcw, type LucideIcon } from 'lucide-react';
+import { CopyDatabaseForm } from '../components/backups/CopyDatabaseForm';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
+import { Archive, Copy, RefreshCw, RotateCcw, type LucideIcon } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
 import { formatBytes } from '../utils/formatBytes';
 
-type Tab = 'backups' | 'restore';
+type Tab = 'backups' | 'restore' | 'copy';
 
 export function BackupsPage() {
   const projectId = useRouteProjectId();
@@ -20,6 +22,13 @@ export function BackupsPage() {
   const mysql = isMySQLProject(useInstance(projectId).data);
   const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
   const triggerBackup = useTriggerBackup();
+  // Copying into a new project ships dark (EXC-667).
+  const { enabled: copyOn } = useFeatureEnabled('dbcopy');
+  const tabs: { key: Tab; label: string; icon: LucideIcon }[] = [
+    { key: 'backups', label: 'Backup History', icon: Archive },
+    { key: 'restore', label: mysql ? 'Restore' : 'Restore / PITR', icon: RotateCcw },
+    ...(copyOn ? [{ key: 'copy' as const, label: 'Copy', icon: Copy }] : []),
+  ];
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
   function showToast(msg: string, ok: boolean) {
@@ -56,10 +65,7 @@ export function BackupsPage() {
 
       <div className="bg-surface-card border border-border-primary rounded-xl overflow-hidden">
         <div className="flex border-b border-border-primary px-4 gap-1">
-          {([
-            { key: 'backups', label: 'Backup History', icon: Archive },
-            { key: 'restore', label: mysql ? 'Restore' : 'Restore / PITR', icon: RotateCcw },
-          ] as { key: Tab; label: string; icon: LucideIcon }[]).map(({ key, label, icon: Icon }) => (
+          {tabs.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
@@ -123,6 +129,10 @@ export function BackupsPage() {
 
           {tab === 'restore' && (
             <RestoreForm projectId={projectId} engine={mysql ? 'mysql' : undefined} restoreWindow={mysql ? backupData?.restoreWindow : undefined} />
+          )}
+
+          {tab === 'copy' && copyOn && (
+            <CopyDatabaseForm projectId={projectId} engine={mysql ? 'mysql' : undefined} restoreWindow={mysql ? backupData?.restoreWindow : undefined} />
           )}
         </div>
       </div>

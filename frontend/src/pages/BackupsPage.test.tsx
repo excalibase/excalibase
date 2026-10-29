@@ -4,6 +4,7 @@ import { BackupsPage } from './BackupsPage';
 
 const restoreMutate = vi.fn();
 
+vi.mock('../hooks/useDeploymentMode', () => ({ useFeatureEnabled: () => ({ enabled: false, isLoading: false }) }));
 vi.mock('../hooks/useRouteProjectId', () => ({ useRouteProjectId: () => 'p1' }));
 vi.mock('../hooks/useProvisioning', () => ({
   useInstance: () => ({ data: { projectId: 'p1', databaseType: 'POSTGRESQL' } }),

@@ -52,11 +52,14 @@ const (
 	// AuthGuest is end-user guest accounts (no address, role guest) and the
 	// stable token subject: sub becomes the account id.
 	AuthGuest Feature = "authguest"
+	// DBCopy is copying a database into a new project from now, its latest
+	// backup or a time, in Studio and the API (EXC-667).
+	DBCopy Feature = "dbcopy"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, DBCopy}
 }
 
 type Flags interface {

@@ -339,6 +339,11 @@ func (s *BackupService) RestoreSubmittedCopy(ctx context.Context, projectID stri
 	if err := s.capacity.RequireRestoreDiskFits(ctx, inst); err != nil {
 		return err
 	}
+	if req.CopyNow {
+		if req, err = s.pinCopyToNow(ctx, inst, adapter, req); err != nil {
+			return err
+		}
+	}
 	_, err = adapter.Restore(ctx, inst, req)
 	return err
 }

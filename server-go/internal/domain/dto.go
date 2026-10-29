@@ -239,6 +239,8 @@ const (
 	RestoreStepChecking       = "CHECKING_DATABASE"
 	RestoreStepRollingBack    = "ROLLING_BACK"
 	RestoreStepRestoreStopped = "RESTORE_INTERRUPTED"
+	// RestoreStepSourceBackup is a copy of now backing its source up (EXC-667).
+	RestoreStepSourceBackup = "SOURCE_BACKUP"
 )
 
 // RestoreJob is the persisted state of a restore-into-new-project run.
@@ -277,6 +279,8 @@ type RestoreJob struct {
 // RestoreRequest. Used by the orchestrator when persisting RestoreJob.
 func (r RestoreRequest) RestoreTargetKind() (kind, value string) {
 	switch {
+	case r.CopyNow:
+		return RestoreTargetNow, ""
 	case r.TargetTime != nil:
 		return "time", r.TargetTime.RecoveryTime()
 	case r.TargetXID != "":
@@ -316,6 +320,10 @@ type RestoreRequest struct {
 	// ConfirmReplace is the caller's explicit consent that an in-place
 	// restore discards everything written after the restore point.
 	ConfirmReplace bool `json:"confirmReplace,omitempty"`
+	// CopyNow copies the database as it is when the job runs: the source is
+	// backed up first and the copy restored from that backup (EXC-667). Only
+	// the copy route sets it; a restore body cannot.
+	CopyNow bool `json:"-"`
 }
 
 // Restore modes.
@@ -364,6 +372,9 @@ func (r RestoreRequest) Validate() error {
 	}
 	if count > 1 {
 		return errors.New("restore request: at most one of targetTime, targetXid, targetLsn, targetName may be set")
+	}
+	if r.CopyNow && (count > 0 || r.BackupID != "" || r.InPlace()) {
+		return errors.New("restore request: a copy of now takes no other target and is never in place")
 	}
 	switch r.Mode {
 	case "", RestoreModeNewProject:

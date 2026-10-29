@@ -941,6 +941,7 @@ and incident response, but a project-bound PAT still confines them.
 | `/api/provision/{id}/audit`, `/migrations`, `/permissions`, `/tracked-functions`, `/function-permissions` | Developer | |
 | `DELETE /api/provision/{id}`, `/credentials`, `/credentials/rotate`, `/deletion-protection`, `/pause`, `/resume`, `/backups/purge` | Admin | lifecycle + secrets |
 | `/api/provision/{id}/backup/*`, `/snapshot/*` | Admin | dump/restore are destructive and exfil-capable |
+| `POST /api/provision/{id}/backup/copy` | Admin | a new project in the source's organisation from its backups, at `now` (a backup is taken first), `latest` or a `time`; needs backups on and a free project slot; audited as `database.copy` (ids and point only); unmounted while `dbcopy` is off |
 | `GET /api/schema/{id}/*` | Viewer | browse |
 | `POST/PATCH/DELETE /api/schema/{id}/*` (DDL, `/query`, row writes) | Developer | |
 | `GET /api/projects/{id}/functions`, `/{fnId}`, `/{fnId}/logs`, `/_metadata`, `/runtime/status` | Viewer | |
