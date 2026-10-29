@@ -13,6 +13,7 @@ const (
 	capAuthCredentials   = "vault:read:projects/*/credentials/auth_admin"
 	capEngineCredentials = "vault:read:projects/*/credentials/excalibase_app"
 	capAuthProviders     = "vault:read:projects/*/auth/providers/*"
+	capAuthHooks         = "vault:read:projects/*/auth/hooks"
 )
 
 // rawCapability builds a wanted capability without validating it, the way the
@@ -158,6 +159,21 @@ func TestCapabilityGrants(t *testing.T) {
 			want: "vault:read:projects/p1/auth/providers/github/x", allow: false},
 		{name: "the provider grant does not reach the folder", granted: capAuthProviders,
 			want: "vault:read:projects/p1/auth/providers", allow: false},
+		// EXC-662: auth reads a project's hook signing secret, and nothing beside it.
+		{name: "auth reads a hook secret", granted: capAuthHooks,
+			want: "vault:read:projects/p1/auth/hooks", allow: true},
+		{name: "the hook grant does not reach deeper", granted: capAuthHooks,
+			want: "vault:read:projects/p1/auth/hooks/secret", allow: false},
+		{name: "the hook grant does not reach the folder", granted: capAuthHooks,
+			want: "vault:read:projects/p1/auth", allow: false},
+		{name: "the hook grant does not reach the captcha", granted: capAuthHooks,
+			want: "vault:read:projects/p1/auth/captcha", allow: false},
+		{name: "the hook grant does not reach the database role", granted: capAuthHooks,
+			want: "vault:read:projects/p1/credentials/auth_admin", allow: false},
+		{name: "the hook grant does not stand for an empty project", granted: capAuthHooks,
+			want: "vault:read:projects//auth/hooks", allow: false},
+		{name: "the hook grant does not span two segments", granted: capAuthHooks,
+			want: "vault:read:projects/a/b/auth/hooks", allow: false},
 		{name: "two wildcards each stand for one segment", granted: "vault:read:projects/*/jwt_keys/*",
 			want: "vault:read:projects/proj-1/jwt_keys/anon_token", allow: true},
 		{name: "two wildcards do not stretch", granted: "vault:read:projects/*/jwt_keys/*",

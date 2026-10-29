@@ -89,3 +89,10 @@ func TestDarkFeatures_AuthUserVariable(t *testing.T) {
 		t.Errorf("auth user variable = %q", got)
 	}
 }
+
+// EXC-662: the chart and the single-host compose file set this exact name.
+func TestDarkFeatures_AuthHooksVariable(t *testing.T) {
+	if got := featureEnv[features.AuthHooks]; got != "FEATURE_AUTHHOOKS" {
+		t.Errorf("auth hooks variable = %q", got)
+	}
+}

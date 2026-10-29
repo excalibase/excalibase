@@ -38,7 +38,9 @@ type AuthOAuthDeps struct {
 	Flags     features.Flags
 	Providers storage.ProjectAuthProviderStore
 	SignIn    storage.ProjectAuthSignInStore
-	Secrets   authProviderSecrets
+	// Hooks backs the auth hooks settings behind the authhooks flag.
+	Hooks   storage.ProjectAuthHookStore
+	Secrets authProviderSecrets
 	// PublicBaseURL is the API host the auth service's callbacks are served behind.
 	PublicBaseURL string
 	Audit         auditWriter

@@ -13,6 +13,7 @@ import (
 // app is not part of the copy. OAuth providers stay behind too: the copy has
 // its own callback URL and no client secret in the vault. Guests come over only
 // when the source asked no captcha, since the copy has no Turnstile secret.
+// Auth hooks stay behind: the copy has no hook signing secret in the vault.
 // $1 is the source, $2 the copy.
 var copyRestoredSettingsSQL = []struct{ what, query string }{
 	{"table permissions", `

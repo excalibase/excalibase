@@ -132,3 +132,16 @@ func TestAll_DeclaresAuthUser(t *testing.T) {
 		t.Error("authuser cannot be switched on")
 	}
 }
+
+// EXC-662: end-user auth hooks ship dark and Studio is told their state.
+func TestAll_DeclaresAuthHooks(t *testing.T) {
+	if AuthHooks != "authhooks" {
+		t.Errorf("auth hooks feature = %q", AuthHooks)
+	}
+	if _, listed := Snapshot(context.Background(), NewStatic())[string(AuthHooks)]; !listed {
+		t.Error("authhooks is not reported to Studio")
+	}
+	if !NewStatic(AuthHooks).Enabled(context.Background(), AuthHooks) {
+		t.Error("authhooks cannot be switched on")
+	}
+}

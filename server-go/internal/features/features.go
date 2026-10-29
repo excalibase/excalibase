@@ -52,11 +52,14 @@ const (
 	// AuthGuest is end-user guest accounts (no address, role guest) and the
 	// stable token subject: sub becomes the account id.
 	AuthGuest Feature = "authguest"
+	// AuthHooks is end-user auth hooks: signed HTTPS calls the auth service
+	// makes to the project's own endpoints (custom claims, sign-up, mail).
+	AuthHooks Feature = "authhooks"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, AuthHooks}
 }
 
 type Flags interface {

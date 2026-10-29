@@ -21,11 +21,13 @@ WANT_GRAPHQL=$(sed -n "s/^GRAPHQL_PERMISSIONS='\(.*\)'$/\1/p" /bootstrap.sh)
 OLD_AUTH=$BASE_AUTH
 PROVIDERS_GRANT='vault:read:projects/*/auth/providers/*'
 CAPTCHA_GRANT='vault:read:projects/*/auth/captcha'
-WANT_AUTH=$(printf '%s' "$BASE_AUTH" | jq -c --arg grant "$PROVIDERS_GRANT" --arg captcha "$CAPTCHA_GRANT" '. + [$grant, $captcha]')
-# The cases below run with end-user OAuth and guests on; the last ones with each off.
+HOOKS_GRANT='vault:read:projects/*/auth/hooks'
+WANT_AUTH=$(printf '%s' "$BASE_AUTH" | jq -c --arg grant "$PROVIDERS_GRANT" --arg captcha "$CAPTCHA_GRANT" --arg hooks "$HOOKS_GRANT" '. + [$grant, $captcha, $hooks]')
+# The cases below run with end-user OAuth, guests and hooks on; the last ones with each off.
 FEATURE_AUTHOAUTH=true
 FEATURE_AUTHGUEST=true
-export WANT_AUTH WANT_GRAPHQL FEATURE_AUTHOAUTH FEATURE_AUTHGUEST
+FEATURE_AUTHHOOKS=true
+export WANT_AUTH WANT_GRAPHQL FEATURE_AUTHOAUTH FEATURE_AUTHGUEST FEATURE_AUTHHOOKS
 
 CALL_LOG=/tmp/calls.log
 OUTPUT=/tmp/case.out
@@ -193,13 +195,13 @@ expect_called "DELETE http://provisioning.test:24005/api/auth/tokens/hash-svc-au
 expect_file "$SECRETS_DIR/auth-token" excb_svc-auth-new
 expect_file "$SECRETS_DIR/graphql-token" excb_svc-graphql
 
-start "fresh install with end-user OAuth and guests off"
-PRINCIPALS_EXIST= REGISTERED=1 FEATURE_AUTHOAUTH=false FEATURE_AUTHGUEST=false
-export PRINCIPALS_EXIST REGISTERED FEATURE_AUTHOAUTH FEATURE_AUTHGUEST
+start "fresh install with end-user OAuth, guests and hooks off"
+PRINCIPALS_EXIST= REGISTERED=1 FEATURE_AUTHOAUTH=false FEATURE_AUTHGUEST=false FEATURE_AUTHHOOKS=false
+export PRINCIPALS_EXIST REGISTERED FEATURE_AUTHOAUTH FEATURE_AUTHGUEST FEATURE_AUTHHOOKS
 run
 expect_rc 0
 expect_recorded auth-token "$BASE_AUTH"
-for grant in "$PROVIDERS_GRANT" "$CAPTCHA_GRANT"; do
+for grant in "$PROVIDERS_GRANT" "$CAPTCHA_GRANT" "$HOOKS_GRANT"; do
   if grep -F '/api/auth/tokens {"name":"svc-auth"' "$CALL_LOG" | grep -qF "$grant"; then
     bad "svc-auth minted with $grant while its feature is off"
   else ok "svc-auth minted without $grant"; fi
@@ -211,6 +213,13 @@ export PRINCIPALS_EXIST REGISTERED FEATURE_AUTHOAUTH FEATURE_AUTHGUEST
 run
 expect_rc 0
 expect_recorded auth-token "$(printf '%s' "$BASE_AUTH" | jq -c --arg captcha "$CAPTCHA_GRANT" '. + [$captcha]')"
+
+start "fresh install with hooks on alone"
+PRINCIPALS_EXIST= REGISTERED=1 FEATURE_AUTHOAUTH=false FEATURE_AUTHGUEST=false FEATURE_AUTHHOOKS=true
+export PRINCIPALS_EXIST REGISTERED FEATURE_AUTHOAUTH FEATURE_AUTHGUEST FEATURE_AUTHHOOKS
+run
+expect_rc 0
+expect_recorded auth-token "$(printf '%s' "$BASE_AUTH" | jq -c --arg hooks "$HOOKS_GRANT" '. + [$hooks]')"
 
 echo "bootstrap: $PASSED passed, $FAILED failed"
 [ "$FAILED" = 0 ]
