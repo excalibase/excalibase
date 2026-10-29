@@ -82,6 +82,74 @@ type DockerBackupAdapter struct {
 	// readyTimeout bounds the wait for the restored container to finish
 	// recovery. Zero means the package default.
 	readyTimeout time.Duration
+	// archives names each major's archive after a major upgrade; nil keeps
+	// every project on its original one.
+	archives *MajorUpgradeArchives
+}
+
+// SetMajorUpgradeArchives tells the adapter which archive each major of an
+// upgraded project uses (EXC-668).
+func (a *DockerBackupAdapter) SetMajorUpgradeArchives(archives *MajorUpgradeArchives) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.archives = archives
+}
+
+func (a *DockerBackupAdapter) majorArchives() *MajorUpgradeArchives {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.archives
+}
+
+// walsPrefix is where WAL of inst's database, on inst.PostgresVersion, goes.
+func (a *DockerBackupAdapter) walsPrefix(ctx context.Context, inst *domain.DatabaseInstance) (string, error) {
+	archive, err := a.majorArchives().Archive(ctx, inst, inst.PostgresVersion)
+	if err != nil {
+		return "", err
+	}
+	if archive == "" {
+		return fmt.Sprintf("%s%s/wals/", a.keyPrefix, inst.ProjectID), nil
+	}
+	return fmt.Sprintf("%s%s/%s/wals/", a.keyPrefix, inst.ProjectID, archive), nil
+}
+
+// BackupMajor is the major a base backup was taken on; "" for a record that
+// does not say, which is the project's original major.
+func (a *DockerBackupAdapter) BackupMajor(ctx context.Context, inst *domain.DatabaseInstance, backupID string) (string, error) {
+	records, err := a.records.ListByProject(ctx, inst.ProjectID)
+	if err != nil {
+		return "", fmt.Errorf("list backup records: %w", err)
+	}
+	for _, record := range records {
+		if record.ID == backupID {
+			return record.PostgresVersion, nil
+		}
+	}
+	return "", fmt.Errorf("%w: %s", ErrRestoreBackupUnusable, backupID)
+}
+
+// majorRecords are the project's backup records taken on inst.PostgresVersion;
+// a record that does not say is from the project's original major.
+func (a *DockerBackupAdapter) majorRecords(ctx context.Context, inst *domain.DatabaseInstance) ([]domain.BackupRecord, error) {
+	records, err := a.records.ListByProject(ctx, inst.ProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("list backup records: %w", err)
+	}
+	original, err := a.majorArchives().OriginalMajor(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	kept := make([]domain.BackupRecord, 0, len(records))
+	for _, record := range records {
+		major := record.PostgresVersion
+		if major == "" {
+			major = original
+		}
+		if major == inst.PostgresVersion {
+			kept = append(kept, record)
+		}
+	}
+	return kept, nil
 }
 
 // SetRestoreReadyTimeout bounds the wait for the restored container to
@@ -230,11 +298,12 @@ func (a *DockerBackupAdapter) TriggerManual(ctx context.Context, inst *domain.Da
 	id := newBackupID()
 	startedAt := time.Now().UTC().Format(time.RFC3339)
 	record := &domain.BackupRecord{
-		ID:        id,
-		ProjectID: inst.ProjectID,
-		Type:      "MANUAL",
-		Status:    "IN_PROGRESS",
-		Timestamp: startedAt,
+		ID:              id,
+		ProjectID:       inst.ProjectID,
+		Type:            "MANUAL",
+		Status:          "IN_PROGRESS",
+		Timestamp:       startedAt,
+		PostgresVersion: inst.PostgresVersion,
 	}
 	if err := a.records.Save(ctx, record); err != nil {
 		return BackupRef{}, fmt.Errorf("save backup record: %w", err)

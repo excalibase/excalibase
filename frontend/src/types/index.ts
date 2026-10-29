@@ -197,3 +197,45 @@ export interface MetricsHistory {
   metrics: DatabaseMetrics[];
   totalPoints: number;
 }
+
+// Major version upgrade (EXC-668): GET/POST /provision/{id}/major-upgrade.
+export type MajorUpgradeStatus = 'RUNNING' | 'COMPLETED' | 'ROLLED_BACK' | 'FAILED';
+
+export type MajorUpgradeStep =
+  | 'UPGRADE_CHECKING'
+  | 'UPGRADE_BACKUP'
+  | 'UPGRADE_CONVERTING'
+  | 'UPGRADE_STARTING'
+  | 'UPGRADE_FINISHING'
+  | 'UPGRADE_ROLLING_BACK'
+  | 'UPGRADE_WAITING';
+
+export interface MajorUpgradeRun {
+  id: string;
+  projectId: string;
+  engine: string;
+  fromVersion: string;
+  toVersion: string;
+  status: MajorUpgradeStatus;
+  step?: MajorUpgradeStep;
+  safetyBackupId?: string;
+  converted: boolean;
+  error?: string;
+  warnings?: string[];
+  startedAt: string;
+  writesStoppedAt?: string;
+  convertedAt?: string;
+  finishedAt?: string;
+}
+
+export interface MajorUpgradeInfo {
+  engine: 'POSTGRESQL' | 'MYSQL';
+  deploymentMode: 'k8s' | 'docker';
+  currentVersion: string;
+  targets: string[];
+  supported: boolean;
+  reason?: string;
+  blockers: string[];
+  downtime?: string;
+  latest: MajorUpgradeRun | null;
+}

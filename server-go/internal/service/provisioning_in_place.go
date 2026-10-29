@@ -135,3 +135,19 @@ func (s *ProvisioningService) filedPasswordRoles(projectID string) ([]RolePasswo
 	}
 	return roles, nil
 }
+
+var _ MajorUpgradeProjects = (*ProvisioningService)(nil)
+
+// HoldForMajorUpgrade takes the project's lifecycle lease for a major
+// upgrade; admit decides on the row's status. See MajorUpgradeProjects.
+func (s *ProvisioningService) HoldForMajorUpgrade(ctx context.Context, projectID string, admit func(status string) error) (*domain.DatabaseInstance, func(), error) {
+	inst, release, err := s.holdProject(ctx, projectID, OperationMajorUpgrade, func(_, status string) error { return admit(status) })
+	if err != nil {
+		return nil, nil, err
+	}
+	if inst.NoDatabase {
+		release()
+		return nil, nil, fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
+	}
+	return inst, release, nil
+}

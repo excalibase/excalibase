@@ -250,6 +250,8 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | GET | `/api/provision/{id}/backup/restore/{jobId}` | Yes | Poll restore status (RUNNING / COMPLETED / FAILED) |
 | POST | `/api/provision/{id}/backup/schedule` | Yes | Upsert cron schedule `{cron, retentionDays, enabled}` |
 | DELETE | `/api/provision/{id}/backup/schedule` | Yes | Remove schedule (immediate cron unregister) |
+| GET | `/api/provision/{id}/major-upgrade/` with flag `majorupgrade` | Yes (Viewer) | Current Postgres major, the majors offered, what blocks an upgrade (checks rerun at most once a minute), the expected downtime and the latest run |
+| POST | `/api/provision/{id}/major-upgrade/` with flag `majorupgrade` | Yes (Admin) | `{targetVersion, confirm: true}`; 202 with the run. One-way: a backup first, then CNPG converts in place (single host: dump into a container of the new image). 409 with `blockers` when the database is not ready. Restores of a point before the upgrade go to a new project |
 | GET | `/api/provision/{id}/backup/wal-lag` | Yes | Docker mode only — seconds since last successful WAL push. K8s returns 501. |
 | GET | `/api/provision/{id}/performance/summary` | Yes | pg_stat_statements summary |
 | GET | `/api/provision/{id}/performance/top-queries` | Yes | Top queries by time |

@@ -26,7 +26,7 @@ var errInPlaceTargetMalformed = errors.New("the in-place restore target carries 
 // InPlaceRecoveryTarget resolves req against the project's own backups before
 // anything changes. See InPlaceCluster.
 func (a *DockerBackupAdapter) InPlaceRecoveryTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (map[string]interface{}, error) {
-	base, err := a.resolveSourceBackup(ctx, inst.ProjectID, req)
+	base, err := a.resolveSourceBackup(ctx, inst, req)
 	if err != nil {
 		return nil, err
 	}
@@ -182,6 +182,6 @@ func (a *DockerBackupAdapter) CheckRestoreTarget(ctx context.Context, inst *doma
 	if req.TargetTime.After(time.Now()) {
 		return &RestoreTargetError{Message: "the restore point is in the future"}
 	}
-	_, err := a.resolveSourceBackup(ctx, inst.ProjectID, req)
+	_, err := a.resolveSourceBackup(ctx, inst, req)
 	return err
 }

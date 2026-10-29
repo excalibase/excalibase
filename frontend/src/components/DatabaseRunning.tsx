@@ -18,6 +18,7 @@ const STATES: Readonly<Record<string, NotRunning>> = {
   PAUSED: { title: 'This project is paused', body: 'Its database is not running. Resume the project from the overview to use this page.', waits: false },
   RESUMING: { title: 'This project is resuming', body: OPENS_ITSELF, waits: true },
   RESTORING: { title: 'The database is being restored', body: OPENS_ITSELF, waits: true },
+  UPGRADING: { title: 'The database is being upgraded', body: OPENS_ITSELF, waits: true },
   PENDING_DELETION: { title: 'This project is scheduled for deletion', body: 'Its database is no longer served. The overview shows when it will be removed.', waits: false },
   FAILED: { title: 'The database could not be created', body: 'The overview shows which step failed.', waits: false },
   DELETING: { title: 'This project is being deleted', body: 'Its database is no longer served.', waits: false },

@@ -28,6 +28,7 @@ describe('StatusBadge', () => {
     ['RESUMING', 'Resuming'],
     ['DELETING', 'Deleting'],
     ['RESTORING', 'Restoring'],
+    ['UPGRADING', 'Upgrading'],
     ['IN_PROGRESS', 'In progress'],
     ['RUNNING', 'In progress'],
   ])('in-progress status %s reads %s with a spinner', (status, label) => {

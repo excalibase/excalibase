@@ -14,6 +14,7 @@ describe('databaseServiceStatus', () => {
     ['PAUSING', 'COMPLETED', 'Pausing', 'progress'],
     ['RESUMING', 'COMPLETED', 'Resuming', 'progress'],
     ['RESTORING', 'COMPLETED', 'Restoring', 'progress'],
+    ['UPGRADING', 'COMPLETED', 'Upgrading', 'progress'],
     ['PENDING_DELETION', 'COMPLETED', 'Scheduled for deletion', 'warning'],
     ['DELETING', 'COMPLETED', 'Deleting', 'progress'],
   ])('%s reads as %s', (status, stage, label, tone) => {

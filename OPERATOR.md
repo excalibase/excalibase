@@ -606,6 +606,12 @@ How a Docker-mode project's backup actually works:
    pulls `/walarchive` out via `CopyFromContainer`, and uploads
    each WAL segment to `s3://{bucket}/backups/{projectId}/wals/{name}.gz`.
 
+   After a major upgrade (EXC-668) each later major archives under
+   `s3://{bucket}/backups/{projectId}/pg{major}/`; the original layout
+   stays for restores of earlier points and is removed with the project.
+   On Kubernetes the new major's ObjectStore is `{projectId}-backups-pg{major}`
+   with serverName `pg{major}`.
+
 3. **On `POST /backup/restore` with a recovery target** —
    `DockerBackupAdapter.Restore` creates a stopped postgres container,
    gunzips + extracts the basebackup tar into `/var/lib/postgresql/data`,
@@ -941,6 +947,8 @@ and incident response, but a project-bound PAT still confines them.
 | `/api/provision/{id}/audit`, `/migrations`, `/permissions`, `/tracked-functions`, `/function-permissions` | Developer | |
 | `DELETE /api/provision/{id}`, `/credentials`, `/credentials/rotate`, `/deletion-protection`, `/pause`, `/resume`, `/backups/purge` | Admin | lifecycle + secrets |
 | `/api/provision/{id}/backup/*`, `/snapshot/*` | Admin | dump/restore are destructive and exfil-capable |
+| `GET /api/provision/{id}/major-upgrade/` | Viewer | flag `majorupgrade`; unmounted while off |
+| `POST /api/provision/{id}/major-upgrade/` | Admin | flag `majorupgrade`; one-way, takes a backup first |
 | `GET /api/schema/{id}/*` | Viewer | browse |
 | `POST/PATCH/DELETE /api/schema/{id}/*` (DDL, `/query`, row writes) | Developer | |
 | `GET /api/projects/{id}/functions`, `/{fnId}`, `/{fnId}/logs`, `/_metadata`, `/runtime/status` | Viewer | |

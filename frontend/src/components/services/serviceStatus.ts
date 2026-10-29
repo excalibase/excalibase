@@ -16,6 +16,7 @@ const DATABASE_STATUS: Record<string, ServiceStatus> = {
   PAUSING: { label: 'Pausing', tone: 'progress' },
   RESUMING: { label: 'Resuming', tone: 'progress' },
   RESTORING: { label: 'Restoring', tone: 'progress' },
+  UPGRADING: { label: 'Upgrading', tone: 'progress' },
   PENDING_DELETION: { label: 'Scheduled for deletion', tone: 'warning' },
   DELETING: { label: 'Deleting', tone: 'progress' },
 };

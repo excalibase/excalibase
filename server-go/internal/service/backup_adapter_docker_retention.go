@@ -61,9 +61,11 @@ func (a *DockerBackupAdapter) PurgeExpired(ctx context.Context, inst *domain.Dat
 	if inst.BackupRetentionDays == nil || *inst.BackupRetentionDays <= 0 {
 		return 0, fmt.Errorf("%w: %s", ErrMySQLRetentionUnknown, inst.ProjectID)
 	}
-	records, err := a.records.ListByProject(ctx, inst.ProjectID)
+	// Only the current major's archive ages out; an earlier one, left
+	// behind by a major upgrade, is kept until the project is deleted.
+	records, err := a.majorRecords(ctx, inst)
 	if err != nil {
-		return 0, fmt.Errorf("list backup records: %w", err)
+		return 0, err
 	}
 	cutoff := time.Now().Add(-time.Duration(*inst.BackupRetentionDays) * 24 * time.Hour)
 	expired, anchor := expiredBackups(records, cutoff)
@@ -72,7 +74,7 @@ func (a *DockerBackupAdapter) PurgeExpired(ctx context.Context, inst *domain.Dat
 		doomed = append(doomed, a.objectKey(inst.ProjectID, "manual", backup.id), a.startSegmentKey(inst.ProjectID, backup.id))
 	}
 	if anchor != nil {
-		wal, err := a.unneededWAL(ctx, inst.ProjectID, anchor.id)
+		wal, err := a.unneededWAL(ctx, inst, anchor.id)
 		if err != nil {
 			return 0, err
 		}
@@ -84,7 +86,11 @@ func (a *DockerBackupAdapter) PurgeExpired(ctx context.Context, inst *domain.Dat
 		}
 	}
 	if len(expired) > 0 {
-		if err := a.records.DeleteThrough(ctx, inst.ProjectID, expired[len(expired)-1].at); err != nil {
+		ids := make([]string, 0, len(expired))
+		for _, backup := range expired {
+			ids = append(ids, backup.id)
+		}
+		if err := a.records.DeleteRecords(ctx, inst.ProjectID, ids); err != nil {
 			return len(doomed), fmt.Errorf("drop the records of expired backups: %w", err)
 		}
 	}
@@ -117,17 +123,20 @@ func expiredBackups(records []domain.BackupRecord, cutoff time.Time) ([]datedBac
 
 // unneededWAL is the archived WAL older than the segment anchor starts in;
 // histories stay. An anchor whose start is unknown keeps everything.
-func (a *DockerBackupAdapter) unneededWAL(ctx context.Context, projectID, anchorID string) ([]string, error) {
-	body, err := a.uploader.Download(ctx, a.bucket, a.startSegmentKey(projectID, anchorID))
+func (a *DockerBackupAdapter) unneededWAL(ctx context.Context, inst *domain.DatabaseInstance, anchorID string) ([]string, error) {
+	body, err := a.uploader.Download(ctx, a.bucket, a.startSegmentKey(inst.ProjectID, anchorID))
 	if err != nil {
-		log.Printf("WARN: retention of %s: start of backup %s unknown; its WAL is kept", projectID, anchorID)
+		log.Printf("WARN: retention of %s: start of backup %s unknown; its WAL is kept", inst.ProjectID, anchorID)
 		return nil, nil
 	}
 	start, err := readSmall(body)
 	if err != nil || !walSegment.MatchString(start) {
 		return nil, nil
 	}
-	prefix := fmt.Sprintf("%s%s/wals/", a.keyPrefix, projectID)
+	prefix, err := a.walsPrefix(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
 	objects, err := a.uploader.List(ctx, a.bucket, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("list archived WAL: %w", err)

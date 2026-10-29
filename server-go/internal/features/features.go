@@ -52,11 +52,14 @@ const (
 	// AuthGuest is end-user guest accounts (no address, role guest) and the
 	// stable token subject: sub becomes the account id.
 	AuthGuest Feature = "authguest"
+	// MajorUpgrade moves a project's Postgres database to a newer major
+	// version after a forced backup, and its Studio card (EXC-668).
+	MajorUpgrade Feature = "majorupgrade"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, MajorUpgrade}
 }
 
 type Flags interface {

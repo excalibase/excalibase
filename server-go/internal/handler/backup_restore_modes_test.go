@@ -32,6 +32,7 @@ type restoreModesHarness struct {
 	jobs   *fakeRestoreJobStoreForHandler
 	ran    chan domain.RestoreJob
 	hold   chan struct{}
+	svc    *service.BackupService
 }
 
 func newRestoreModesHarness(t *testing.T, project *domain.DatabaseInstance) *restoreModesHarness {
@@ -43,7 +44,7 @@ func newRestoreModesHarness(t *testing.T, project *domain.DatabaseInstance) *res
 	if err := store.Create(project); err != nil {
 		t.Fatal(err)
 	}
-	h := &restoreModesHarness{store: store, jobs: &fakeRestoreJobStoreForHandler{}, ran: make(chan domain.RestoreJob, 4), hold: make(chan struct{})}
+	h := &restoreModesHarness{store: store, jobs: &fakeRestoreJobStoreForHandler{}, ran: make(chan domain.RestoreJob, 4), hold: make(chan struct{}), svc: backupSvc}
 	t.Cleanup(func() { close(h.hold) })
 	orch := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: h.jobs, Slots: unmeteredSlots{}})
 	orch.SetSteps([]service.RestoreStep{{Name: domain.RestoreStepRestoring, Run: func(_ context.Context, j *domain.RestoreJob) error {

@@ -89,3 +89,10 @@ func TestDarkFeatures_AuthUserVariable(t *testing.T) {
 		t.Errorf("auth user variable = %q", got)
 	}
 }
+
+// EXC-668: the chart sets this exact name from features.majorUpgrade.
+func TestDarkFeatures_MajorUpgradeVariable(t *testing.T) {
+	if got := featureEnv[features.MajorUpgrade]; got != "FEATURE_MAJORUPGRADE" {
+		t.Fatalf("major upgrade variable = %q, want FEATURE_MAJORUPGRADE", got)
+	}
+}
