@@ -21,7 +21,7 @@ const project = {
 
 function info(overrides: Partial<MajorUpgradeInfo> = {}): MajorUpgradeInfo {
   return {
-    engine: 'postgresql',
+    engine: 'POSTGRESQL',
     deploymentMode: 'k8s',
     currentVersion: '16',
     targets: ['17'],
@@ -38,7 +38,7 @@ function run(overrides: Partial<MajorUpgradeRun> = {}): MajorUpgradeRun {
   return {
     id: 'mu-1',
     projectId: 'p-1',
-    engine: 'postgresql',
+    engine: 'POSTGRESQL',
     fromVersion: '16',
     toVersion: '17',
     status: 'RUNNING',
@@ -99,7 +99,7 @@ describe('MajorUpgradeCard', () => {
 
   test('an unsupported project shows the reason and no controls', async () => {
     renderCard({
-      responses: [info({ engine: 'mysql', supported: false, targets: [], reason: 'MySQL projects cannot be upgraded to a new major yet.' })],
+      responses: [info({ engine: 'MYSQL', supported: false, targets: [], reason: 'MySQL projects cannot be upgraded to a new major yet.' })],
     });
     expect(await screen.findByTestId('major-upgrade-reason')).toHaveTextContent('MySQL projects cannot be upgraded');
     expect(screen.queryByTestId('major-upgrade-btn')).not.toBeInTheDocument();

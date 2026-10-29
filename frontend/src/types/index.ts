@@ -229,7 +229,7 @@ export interface MajorUpgradeRun {
 }
 
 export interface MajorUpgradeInfo {
-  engine: 'postgresql' | 'mysql';
+  engine: 'POSTGRESQL' | 'MYSQL';
   deploymentMode: 'k8s' | 'docker';
   currentVersion: string;
   targets: string[];

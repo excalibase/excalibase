@@ -20,7 +20,7 @@ const STEP_LABEL: Record<MajorUpgradeStep, string> = {
   UPGRADE_WAITING: 'Still converting; checked again every few minutes',
 };
 
-const engineName = (engine: string) => (engine === 'mysql' ? 'MySQL' : 'PostgreSQL');
+const engineName = (engine: string) => (engine.toUpperCase() === 'MYSQL' ? 'MySQL' : 'PostgreSQL');
 
 const newestFirst = (versions: string[]) => [...versions].sort((a, b) => Number(b) - Number(a));
 

@@ -22,7 +22,7 @@ function renderSettings(majorupgrade: boolean) {
     if (url === '/provision/p-1/major-upgrade') {
       return Promise.resolve({
         data: {
-          engine: 'postgresql', deploymentMode: 'k8s', currentVersion: '16', targets: ['17'], supported: true,
+          engine: 'POSTGRESQL', deploymentMode: 'k8s', currentVersion: '16', targets: ['17'], supported: true,
           reason: '', blockers: [], downtime: 'A few minutes offline.', latest: null,
         },
       } as never);
