@@ -242,3 +242,32 @@ func TestRealEngineRunsAnAppThroughTheProxy(t *testing.T) {
 		t.Fatalf("containers left: %d (%v)", len(list), err)
 	}
 }
+
+// EXC-669: on a real engine through the real proxy, one app reaches another
+// by its bare name, and arguments read the app's variables as on Kubernetes.
+func TestRealEngineAppsReachEachOtherByName(t *testing.T) {
+	rig := newRealRig(t)
+	ctx := context.Background()
+	web := itApp("unused")
+	web.Disk = nil
+	web.Args = []string{"sh", "-c", "mkdir -p /www && echo $(BODY) > /www/index.html && exec httpd -f -p 8080 -h /www"}
+	web.Env = []apphost.EnvVar{{Name: "BODY", Kind: apphost.KindLiteral, Value: literal("expanded")}}
+	rig.deploy(web, "dep-web")
+
+	caller := itApp("caller")
+	caller.ID, caller.Name, caller.Disk = "app-it2", "caller", nil
+	rig.deploy(caller, "dep-caller")
+	list, err := rig.direct.ContainerList(ctx, container.ListOptions{Filters: labelFilter(labelApp, "app-it2")})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("caller containers: %d (%v)", len(list), err)
+	}
+	output, err := exec.Command("docker", "exec", list[0].ID, "wget", "-qO-", "-T", "3", "http://web:8080/").CombinedOutput()
+	if body := strings.TrimSpace(string(output)); err != nil || body != "expanded" {
+		t.Fatalf("web by name from caller: %q (%v)", body, err)
+	}
+	for _, id := range []string{"app-it", "app-it2"} {
+		if err := rig.rt.DeleteAppWorkload(ctx, rig.db, id, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

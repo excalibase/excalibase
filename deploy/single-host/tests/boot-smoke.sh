@@ -90,6 +90,8 @@ sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUB
 echo "FEATURE_DBREADADDRESS=true" >> "$W/.env"
 # The apps journey drives create_app through MCP, as a coding tool does (EXC-606).
 [ -n "${APPS:-}" ] && echo "FEATURE_MCP=true" >> "$W/.env"
+# and deploys a catalog template, reached by its siblings by name (EXC-669).
+[ -n "${APPS:-}" ] && echo "FEATURE_TEMPLATECATALOG=true" >> "$W/.env"
 # The allow-list reports a single host's loopback-only database (EXC-665).
 echo "FEATURE_DBALLOWLIST=true" >> "$W/.env"
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"

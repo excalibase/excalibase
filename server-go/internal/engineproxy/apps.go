@@ -18,6 +18,48 @@ var (
 	volumePath  = regexp.MustCompile(`^/volumes/` + ref + `$`)
 )
 
+// AppServiceDomain holds the one name each app answers to on its project
+// network, <app>.apps.internal; apps search it, so the bare name resolves as a
+// Service name does on Kubernetes. The dot keeps it off every container name.
+const AppServiceDomain = "apps.internal"
+
+// serviceAlias is one DNS label under AppServiceDomain.
+var serviceAlias = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?\.` + regexp.QuoteMeta(AppServiceDomain) + `$`)
+
+// checkServiceAlias admits endpoint settings naming exactly one service alias
+// that is not one of the edge's platform hosts, and nothing else.
+func (p Policy) checkServiceAlias(endpoint any) error {
+	settings, ok := endpoint.(map[string]any)
+	if !ok {
+		return refuse("network endpoint settings must be an object")
+	}
+	for field, value := range settings {
+		if field != "Aliases" && !isZero(value) {
+			return refuse("network endpoint %s may not be set", field)
+		}
+	}
+	aliases, _ := settings["Aliases"].([]any)
+	if len(aliases) != 1 {
+		return refuse("an app may carry exactly one service name")
+	}
+	name, _ := aliases[0].(string)
+	label, _, _ := strings.Cut(name, ".")
+	if !serviceAlias.MatchString(name) || strings.HasPrefix(label, p.ContainerPrefix) || p.isEdgeAlias(name) {
+		return refuse("service name %q is not one an app may carry", name)
+	}
+	return nil
+}
+
+// isEdgeAlias compares as DNS does, without case.
+func (p Policy) isEdgeAlias(name string) bool {
+	for _, alias := range p.EdgeAliases {
+		if strings.EqualFold(alias, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // bridgeIsolate is netavark's option keeping a Podman bridge from routing to
 // the other bridges; Docker isolates bridges without it.
 const bridgeIsolate = "isolate"

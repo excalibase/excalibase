@@ -202,6 +202,61 @@ done
 [ -s "$W/app-db.secret" ] && [ "$leak" = 0 ] && ok "the app's database password is in no platform log" || ko "the app's database password leaked into a log (or was empty)"
 rm -f "$W/app-db.env" "$W/app-db.secret"
 
+echo "== apps: catalog templates, reached by their siblings by name (EXC-669)"
+cat_ids=$(api "$API/projects/$PID/app-templates/" | json '",".join(t["id"] for t in d if t.get("catalog"))')
+case ",$cat_ids," in *,valkey,*meilisearch,*) ok "the catalog is listed with its flag on ($cat_ids)" ;; *) ko "catalog: '$cat_ids'" ;; esac
+# deploy_template <id> <credential>: the app's id; the credential the answer shows once goes to
+# "$W/<id>.secret" (0600) and is never printed.
+deploy_template() {
+  ( umask 077; api -X POST "$API/projects/$PID/app-templates/$1/deploy" -d '{}' > "$W/$1.json"
+    json '[c["value"] for c in d.get("credentials",[]) if c["name"]=="'"$2"'"][0]' < "$W/$1.json" > "$W/$1.secret" )
+  json 'd["apps"][0]["id"]' < "$W/$1.json"
+  rm -f "$W/$1.json"
+}
+no_platform_log_has() {
+  local name leak=0
+  for name in excalibase-provisioning excalibase-engine-proxy excalibase-studio excalibase-edge excalibase-auth excalibase-graphql; do
+    $DOCKER logs "$name" 2>&1 | grep -qFf "$1" && leak=1
+  done
+  [ -s "$1" ] && [ "$leak" = 0 ]
+}
+remove_app() {
+  api -X DELETE -H 'Prefer: respond-async' "$API/projects/$PID/apps/$1/" -d '{"confirmDeleteDisk":true}' -o /dev/null
+  for i in $(seq 60); do
+    [ -z "$(api "$API/projects/$PID/apps/" | json '" ".join(a["id"] for a in d if a["id"]=="'"$1"'")')" ] && return 0
+    sleep 3
+  done
+  ko "app $1 was not removed"
+}
+
+SRCH=$(deploy_template meilisearch MEILI_MASTER_KEY)
+grep -qx '[A-Za-z0-9]\{32\}' "$W/meilisearch.secret" && ok "the deploy shows the generated master key once" || ko "no MEILI_MASTER_KEY in the deploy answer"
+[ "$(wait_deploy "$PID" "$SRCH")" = succeeded ] && ok "meilisearch deployed from the catalog" || ko "meilisearch deploy: $(deploys "$PID" "$SRCH" | head -c 300)"
+( umask 077; printf 'Authorization: Bearer %s\n' "$(cat "$W/meilisearch.secret")" > "$W/meilisearch.header" )
+keyed=$($DOCKER exec -i "$AC" sh -c 'wget -q -T 5 -O - --header "$(cat)" http://meilisearch:7700/keys >/dev/null && echo yes' < "$W/meilisearch.header" 2>&1)
+bare=$($DOCKER exec "$AC" wget -q -T 5 -O /dev/null http://meilisearch:7700/keys 2>&1 && echo yes)
+[ "$keyed" = yes ] && [ "$bare" != yes ] && ok "a sibling reaches meilisearch by its bare name, and only with the key" || ko "meilisearch by name: keyed '$keyed', without key '$bare'"
+no_platform_log_has "$W/meilisearch.secret" && ok "the master key is in no platform log" || ko "the master key leaked into a log (or was empty)"
+rm -f "$W/meilisearch.secret" "$W/meilisearch.header"
+remove_app "$SRCH"
+
+# Valkey, like Redis, starts as root and steps down to its own user: that needs the sandbox's capabilities.
+if [ "$APP_SANDBOX" = none ]; then
+  echo "info: no sandbox: skipping valkey (it steps down from root, which drop-ALL refuses)"
+else
+  VID=$(deploy_template valkey VALKEY_URL)
+  grep -q '^redis://:[A-Za-z0-9]\{32\}@valkey:6379/0$' "$W/valkey.secret" && ok "the deploy shows VALKEY_URL once" || ko "no VALKEY_URL in the deploy answer"
+  [ "$(wait_deploy "$PID" "$VID")" = succeeded ] && ok "valkey deployed from the catalog" || ko "valkey deploy: $(deploys "$PID" "$VID" | head -c 300)"
+  ( umask 077; sed 's|^redis://:\([^@]*\)@.*|\1|' "$W/valkey.secret" > "$W/valkey.pw"; printf 'AUTH %s\r\nPING\r\nQUIT\r\n' "$(cat "$W/valkey.pw")" > "$W/valkey.cmd" )
+  said=$($DOCKER exec -i "$AC" nc -w 5 valkey 6379 < "$W/valkey.cmd" 2>&1 | tr -d '\r' | tr '\n' ' ')
+  case "$said" in "+OK +PONG "*) ok "a sibling reaches valkey by its bare name with the generated password" ;; *) ko "valkey by name: ${said:0:200}" ;; esac
+  said=$(printf 'AUTH $(VALKEY_PASSWORD)\r\nQUIT\r\n' | $DOCKER exec -i "$AC" nc -w 5 valkey 6379 2>&1 | tr -d '\r')
+  case "$said" in *WRONGPASS*) ok "the arguments were expanded: the variable's name is no password" ;; *) ko "the literal variable name answered: ${said:0:200}" ;; esac
+  no_platform_log_has "$W/valkey.pw" && ok "the valkey password is in no platform log" || ko "the valkey password leaked into a log (or was empty)"
+  rm -f "$W/valkey.secret" "$W/valkey.pw" "$W/valkey.cmd"
+  remove_app "$VID"
+fi
+
 echo "== apps: another project cannot reach this one"
 # The single host's one organisation is on the Free plan, one project; the operator raises it.
 FREE=$(api "$API/admin/tiers/" | json 'json.dumps(dict([t for t in (d if isinstance(d,list) else d.get("tiers")) if t["tier"]=="FREE"][0], maxProjects=2))')
