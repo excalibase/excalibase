@@ -689,6 +689,17 @@ func newLogDrainService(cfg config.AppConfig, sqlStore any, vc vaultclient.Vault
 	return service.NewLogDrainService(service.LogDrainDeps{Store: drains, Vault: vc, Instances: instances, Logs: logs})
 }
 
+// newBackupHandler records started database copies in the audit log (EXC-667).
+func newBackupHandler(backupSvc *service.BackupService, sqlStore any) *handler.BackupHandler {
+	backups := handler.NewBackupHandler(backupSvc)
+	if audit, ok := sqlStore.(interface {
+		LogAudit(ctx context.Context, entry *domain.AuditEntry) error
+	}); ok {
+		backups.SetAudit(audit)
+	}
+	return backups
+}
+
 func newLogDrainsHandler(drains *service.LogDrainService, sqlStore any) *handler.LogDrainsHandler {
 	if drains == nil {
 		return nil
@@ -1764,7 +1775,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		aiActivityHandler:     newAIActivityHandler(sqlStore),
 		endUsersHandler:       handler.NewEndUsersHandler(buildEndUserManager(cfg, vc), store, sqlStore, sqlStore),
 		metricsHandler:        handler.NewMetricsHandler(metricsSvc),
-		backupHandler:         handler.NewBackupHandler(backupSvc),
+		backupHandler:         newBackupHandler(backupSvc, sqlStore),
 		perfHandler:           handler.NewPerformanceHandler(perfSvc),
 		queryStatsHandler:     newQueryStatsHandler(cfg, store, provSvc, a.projectDB),
 		requestMetricsHandler: newRequestMetricsHandler(requestMetricsSvc),
@@ -2040,6 +2051,10 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 				r.Route("/function-permissions", d.permissionHandler.FunctionPermissionRoutes)
 				r.With(features.Require(d.features, features.Advisors)).Get("/advisors", d.advisorsHandler.Get)
 			})
+
+			// Admin+ — copying the database into a new project (EXC-667). The
+			// flag is asked first so the route is unmounted, not forbidden, while off.
+			r.With(features.Require(d.features, features.DBCopy), admin, db).Post("/backup/copy", d.backupHandler.Copy)
 
 			// Admin+ subtrees — backup/restore and full-DB snapshots (dump +
 			// restore are destructive/exfil; kept Admin-only as the safe default).

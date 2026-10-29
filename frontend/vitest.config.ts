@@ -105,6 +105,7 @@ export default defineConfig({
         'src/components/StorageBudgetCard.tsx',
         'src/utils/diskSize.ts',
         'src/pages/BackupsPage.tsx',
+        'src/components/backups/CopyDatabaseForm.tsx',
         'src/pages/SnapshotsPage.tsx',
         'src/pages/MigrationsPage.tsx',
         'src/pages/MetricsPage.tsx',

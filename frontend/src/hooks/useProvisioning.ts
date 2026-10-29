@@ -298,9 +298,14 @@ export const useRestoreJob = (projectId: string, jobId: string | undefined) => {
   });
   // A database replaced in place changes everything the project's pages show.
   const replaced = job.data?.mode === 'in_place' && job.data.status === 'COMPLETED';
+  const created = job.data?.mode === 'new_project' && job.data.status === 'COMPLETED';
   useEffect(() => {
     if (replaced) queryClient.invalidateQueries();
   }, [replaced, queryClient]);
+  // A copy finished building: it joins the projects list now, not at submission.
+  useEffect(() => {
+    if (created) queryClient.invalidateQueries({ queryKey: ['instances'] });
+  }, [created, queryClient]);
   return job;
 };
 
@@ -311,6 +316,30 @@ export const useRestoreFromBackup = (projectId: string) => {
       const response = await api.post<RestoreResult>(
         `/provision/${projectId}/backup/restore`, request
       );
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['instances'] });
+    },
+  });
+};
+
+// A copy of this database into a new project (EXC-667): as it is now, its
+// latest backup, or a time. The answer is a restore job, polled like one.
+export type CopyPoint = 'now' | 'latest' | 'time';
+
+export interface CopyRequest {
+  name: string;
+  point: CopyPoint;
+  // RFC 3339 with a zone; only with point 'time'.
+  targetTime?: string;
+}
+
+export const useCopyDatabase = (projectId: string) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (request: CopyRequest) => {
+      const response = await api.post<RestoreResult>(`/provision/${projectId}/backup/copy`, request);
       return response.data;
     },
     onSuccess: () => {

@@ -5,11 +5,13 @@ import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
 import { RestoreForm } from '../components/backups/RestoreForm';
-import { Archive, RefreshCw, RotateCcw, type LucideIcon } from 'lucide-react';
+import { CopyDatabaseForm } from '../components/backups/CopyDatabaseForm';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
+import { Archive, Copy, RefreshCw, RotateCcw, type LucideIcon } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
 import { formatBytes } from '../utils/formatBytes';
 
-type Tab = 'backups' | 'restore';
+type Tab = 'backups' | 'restore' | 'copy';
 
 export function BackupsPage() {
   const projectId = useRouteProjectId();
@@ -20,6 +22,15 @@ export function BackupsPage() {
   const mysql = isMySQLProject(useInstance(projectId).data);
   const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
   const triggerBackup = useTriggerBackup();
+  // Copying into a new project ships dark (EXC-667).
+  const { enabled: copyOn } = useFeatureEnabled('dbcopy');
+  const tabs: { key: Tab; label: string; icon: LucideIcon }[] = [
+    { key: 'backups', label: 'Backup History', icon: Archive },
+    { key: 'restore', label: mysql ? 'Restore' : 'Restore / PITR', icon: RotateCcw },
+    ...(copyOn ? [{ key: 'copy' as const, label: 'Copy', icon: Copy }] : []),
+  ];
+  // A tab whose feature went off falls back to the history.
+  const active: Tab = tabs.some((t) => t.key === tab) ? tab : 'backups';
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
   function showToast(msg: string, ok: boolean) {
@@ -56,20 +67,17 @@ export function BackupsPage() {
 
       <div className="bg-surface-card border border-border-primary rounded-xl overflow-hidden">
         <div className="flex border-b border-border-primary px-4 gap-1">
-          {([
-            { key: 'backups', label: 'Backup History', icon: Archive },
-            { key: 'restore', label: mysql ? 'Restore' : 'Restore / PITR', icon: RotateCcw },
-          ] as { key: Tab; label: string; icon: LucideIcon }[]).map(({ key, label, icon: Icon }) => (
+          {tabs.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${tab === key ? 'border-accent-primary text-accent-primary' : 'border-transparent text-text-secondary hover:text-text-primary'}`}
+              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${active === key ? 'border-accent-primary text-accent-primary' : 'border-transparent text-text-secondary hover:text-text-primary'}`}
             >
               <Icon className="w-4 h-4" />
               {label}
             </button>
           ))}
-          {tab === 'backups' && (
+          {active === 'backups' && (
             <div className="ml-auto flex items-center py-2">
               <Button
                 size="sm"
@@ -87,16 +95,16 @@ export function BackupsPage() {
         </div>
 
         <div className="p-6">
-          {tab === 'backups' && isLoading && (
+          {active === 'backups' && isLoading && (
             <div className="text-center py-12 text-text-secondary">Loading…</div>
           )}
-          {tab === 'backups' && !isLoading && backups.length === 0 && (
+          {active === 'backups' && !isLoading && backups.length === 0 && (
             <div className="text-center py-12">
               <Archive className="w-12 h-12 mx-auto mb-3 text-text-tertiary" />
               <p className="text-text-secondary">No backups found. Click "Trigger Backup" to create one.</p>
             </div>
           )}
-          {tab === 'backups' && !isLoading && backups.length > 0 && (
+          {active === 'backups' && !isLoading && backups.length > 0 && (
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-text-tertiary border-b border-border-primary">
@@ -121,8 +129,12 @@ export function BackupsPage() {
             </table>
           )}
 
-          {tab === 'restore' && (
+          {active === 'restore' && (
             <RestoreForm projectId={projectId} engine={mysql ? 'mysql' : undefined} restoreWindow={mysql ? backupData?.restoreWindow : undefined} />
+          )}
+
+          {active === 'copy' && (
+            <CopyDatabaseForm projectId={projectId} engine={mysql ? 'mysql' : undefined} restoreWindow={mysql ? backupData?.restoreWindow : undefined} />
           )}
         </div>
       </div>

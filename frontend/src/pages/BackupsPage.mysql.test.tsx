@@ -9,6 +9,7 @@ const BACKUPS = [
   { id: 'moco-backup-x-manual-1', timestamp: '2026-10-11T13:00:00Z', type: 'MANUAL', status: 'IN_PROGRESS' },
 ];
 
+vi.mock('../hooks/useDeploymentMode', () => ({ useFeatureEnabled: () => ({ enabled: false, isLoading: false }) }));
 vi.mock('../hooks/useRouteProjectId', () => ({ useRouteProjectId: () => 'my1' }));
 vi.mock('../hooks/useProvisioning', () => ({
   useInstance: () => ({ data: { projectId: 'my1', databaseType: 'MYSQL' } }),
