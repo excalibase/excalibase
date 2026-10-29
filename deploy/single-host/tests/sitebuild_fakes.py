@@ -34,7 +34,17 @@ class Fakes(BaseHTTPRequestHandler):
         sys.stderr.write("fakes: " + (fmt % args) + "\n")
 
     def body(self):
-        return self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.headers.get("Transfer-Encoding", "").lower() != "chunked":
+            return self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        # The asset upload streams its multipart body, so it arrives chunked.
+        chunks = []
+        while True:
+            size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+            if size == 0:
+                self.rfile.readline()
+                return b"".join(chunks)
+            chunks.append(self.rfile.read(size))
+            self.rfile.readline()
 
     def answer(self, status, payload=None):
         raw = b"" if payload is None else json.dumps(payload).encode()
