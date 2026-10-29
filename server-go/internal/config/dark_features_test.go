@@ -121,3 +121,10 @@ func TestDarkFeatures_AuthMFAVariable(t *testing.T) {
 		t.Errorf("auth mfa variable = %q", got)
 	}
 }
+
+// EXC-667: the chart and single-host compose set this exact name.
+func TestDarkFeatures_DBCopyVariable(t *testing.T) {
+	if got := featureEnv[features.DBCopy]; got != "FEATURE_DBCOPY" {
+		t.Errorf("dbcopy variable = %q, want FEATURE_DBCOPY", got)
+	}
+}

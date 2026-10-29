@@ -248,6 +248,7 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | GET | `/api/provision/{id}/backup/list` | Yes | List backups for the project |
 | POST | `/api/provision/{id}/backup/restore` | Yes | Async restore — returns RestoreJob with `status: RUNNING` |
 | GET | `/api/provision/{id}/backup/restore/{jobId}` | Yes | Poll restore status (RUNNING / COMPLETED / FAILED) |
+| POST | `/api/provision/{id}/backup/copy` | Yes (Admin) | Copy the database into a new project: `{name, point: now\|latest\|time, targetTime?}`; `now` backs the source up first. Returns the restore job, polled on `/backup/restore/{jobId}` (flag `dbcopy`) |
 | POST | `/api/provision/{id}/backup/schedule` | Yes | Upsert cron schedule `{cron, retentionDays, enabled}` |
 | DELETE | `/api/provision/{id}/backup/schedule` | Yes | Remove schedule (immediate cron unregister) |
 | GET | `/api/provision/{id}/backup/wal-lag` | Yes | Docker mode only — seconds since last successful WAL push. K8s returns 501. |

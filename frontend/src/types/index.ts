@@ -90,6 +90,9 @@ export interface DatabaseInstance {
   failureStep?: string;
   rollbackLog?: string;
   backupEnabled: boolean;
+  // Set on a project made as a copy of another: the source and the backup it came from.
+  restoredFromProjectId?: string;
+  restoredFromBackupId?: string;
   // On for every new project; only an org Owner may turn it off.
   deletionProtection?: boolean;
   // Set while the project is PENDING_DELETION: when it is permanently deleted.

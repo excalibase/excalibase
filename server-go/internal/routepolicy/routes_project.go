@@ -61,6 +61,7 @@ var provisionRows = []Row{
 	{Methods: post, Pattern: "/api/provision/{projectId}/backup/trigger", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true, MySQL: true},
 	{Methods: get, Pattern: "/api/provision/{projectId}/backup/list", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true, Discloses: NoSecret, MySQL: true},
 	{Methods: post, Pattern: "/api/provision/{projectId}/backup/restore", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true, MySQL: true},
+	{Methods: post, Pattern: "/api/provision/{projectId}/backup/copy", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true, MySQL: true, Note: "a new project in the source's organisation, from its backups (dbcopy, EXC-667)"},
 	{Methods: get, Pattern: "/api/provision/{projectId}/backup/restore/{jobId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Discloses: NoSecret, Note: "the job is read as (projectId, jobId)", Database: true, MySQL: true},
 	{Methods: get, Pattern: "/api/provision/{projectId}/backup/wal-lag", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true, Discloses: NoSecret},
 	{Methods: post, Pattern: "/api/provision/{projectId}/backup/schedule", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true},

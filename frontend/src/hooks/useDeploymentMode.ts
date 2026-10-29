@@ -24,7 +24,8 @@ export type Feature =
   | 'authhooks'
   | 'authmfa'
   | 'dballowlist'
-  | 'dbreadaddress';
+  | 'dbreadaddress'
+  | 'dbcopy';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
