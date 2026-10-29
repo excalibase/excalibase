@@ -11,6 +11,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -347,7 +348,7 @@ func TestTierHandler_Update_KeepsSiteLimitsLeftOut(t *testing.T) {
 	const body = `{"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.25","maxSiteDeploysPerHour":12}`
 	stored := config.SiteTierLimits{MaxSites: 7, MaxDeployBytes: 50 << 20, MaxFiles: 900, MaxFileBytes: 5 << 20, MaxDeploysPerHour: 3, MaxCustomDomains: 4}
 	freeBuiltin, _ := config.GetTierConfig(domain.Free)
-	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Sites: stored, SiteBuilds: freeBuiltin.SiteBuilds}}}
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: {Sites: stored, SiteBuilds: freeBuiltin.SiteBuilds, AppBuilds: freeBuiltin.AppBuilds}}}
 	rec := httptest.NewRecorder()
 	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", body, string(domain.Free)))
 	want := stored
@@ -462,6 +463,71 @@ func TestTierHandler_Update_StoresBuildLimits(t *testing.T) {
 		t.Fatalf("got %d %s, stored %+v; want %+v", rec.Code, rec.Body.String(), store.m[domain.Free].SiteBuilds, want)
 	}
 	for _, echoed := range []string{`"siteBuildCpuMillis":2000`, `"siteBuildMemory":"3Gi"`, `"siteBuildDisk":"5Gi"`, `"siteBuildTimeoutSeconds":600`, `"siteBuildConcurrency":1`} {
+		if !strings.Contains(rec.Body.String(), echoed) {
+			t.Errorf("response %s does not echo %s", rec.Body.String(), echoed)
+		}
+	}
+}
+
+// A plan's app build limits (EXC-547) are bounded like site builds, plus the image size.
+func TestTierHandler_Update_RefusesAppBuildLimitsOutOfBounds(t *testing.T) {
+	refused := map[string][]string{
+		"appBuildCpuMillis":      {"1999", "16001"},
+		"appBuildMemory":         {`"512Mi"`, `"64Gi"`, `"lots"`},
+		"appBuildDisk":           {`"1Gi"`, `"1Ti"`},
+		"appBuildTimeoutSeconds": {"59", "7201"},
+		"appBuildConcurrency":    {"0", "21"},
+		"appBuildMaxImage":       {`"128Mi"`, `"64Gi"`, `"big"`, `"6Gi"`},
+	}
+	for field, values := range refused {
+		for _, value := range values {
+			t.Run(field+"="+value, func(t *testing.T) {
+				store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+				rec := httptest.NewRecorder()
+				appBuildTierHandler(store).Update(rec, newTierReqWithParam("PUT", siteLimitsBody(field, value), string(domain.Free)))
+				if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), field) || len(store.m) != 0 {
+					t.Errorf("got %d %s; want 400 naming %s and nothing stored", rec.Code, rec.Body.String(), field)
+				}
+			})
+		}
+	}
+}
+
+func appBuildTierHandler(store *fakeTierStore) *TierHandler {
+	h := NewTierHandler(store)
+	h.SetFeatures(features.NewStatic(features.AppGitBuilds))
+	return h
+}
+
+// While appgitbuilds is off the plan's app build limits are neither shown nor changed (EXC-554).
+func TestTierHandler_AppBuildLimitsStayDarkWhileTheFlagIsOff(t *testing.T) {
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+	rec := httptest.NewRecorder()
+	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", siteLimitsBody("appBuildMemory", `"6Gi"`), string(domain.Free)))
+	freeBuiltin, _ := config.GetTierConfig(domain.Free)
+	if rec.Code != http.StatusOK || store.m[domain.Free].AppBuilds != freeBuiltin.AppBuilds {
+		t.Fatalf("got %d %s, stored %+v; want the built-in %+v kept", rec.Code, rec.Body.String(), store.m[domain.Free].AppBuilds, freeBuiltin.AppBuilds)
+	}
+	listed := httptest.NewRecorder()
+	NewTierHandler(store).List(listed, httptest.NewRequest("GET", "/", nil))
+	for _, body := range []string{rec.Body.String(), listed.Body.String()} {
+		if strings.Contains(body, "appBuild") {
+			t.Errorf("response names app build limits while the flag is off: %s", body)
+		}
+	}
+}
+
+// App build limits left out keep the plan's; the ones named are stored and echoed.
+func TestTierHandler_Update_StoresAppBuildLimits(t *testing.T) {
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+	rec := httptest.NewRecorder()
+	appBuildTierHandler(store).Update(rec, newTierReqWithParam("PUT", siteLimitsBody("appBuildMemory", `"6Gi"`), string(domain.Free)))
+	want := config.AppBuildTierLimits{CPUMillis: 2000, Memory: "6Gi", Disk: "10Gi", TimeoutSeconds: 900, Concurrency: 1, MaxImage: "2Gi"}
+	if rec.Code != http.StatusOK || store.m[domain.Free].AppBuilds != want {
+		t.Fatalf("got %d %s, stored %+v; want %+v", rec.Code, rec.Body.String(), store.m[domain.Free].AppBuilds, want)
+	}
+	for _, echoed := range []string{`"appBuildCpuMillis":2000`, `"appBuildMemory":"6Gi"`, `"appBuildDisk":"10Gi"`,
+		`"appBuildTimeoutSeconds":900`, `"appBuildConcurrency":1`, `"appBuildMaxImage":"2Gi"`} {
 		if !strings.Contains(rec.Body.String(), echoed) {
 			t.Errorf("response %s does not echo %s", rec.Body.String(), echoed)
 		}
