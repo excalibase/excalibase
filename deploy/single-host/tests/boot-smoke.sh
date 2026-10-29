@@ -121,9 +121,9 @@ SITES_BUILD_EGRESS_ALLOW=$SITE_FAKES:8080
 EOF
   printf 'services:\n  provisioning:\n    volumes:\n      - %s:/run/excalibase-github/app.pem:ro\n' "$W/github-app.pem" > "$W/sitebuilds.yml"
   P="$P -f $W/sitebuilds.yml"
-  # The stand-ins install git from the internet first, then join the platform and build egress networks.
+  # The stand-ins install git (and git-daemon, which holds http-backend on Alpine) first, then join the platform and build egress networks.
   $DOCKER run -d --name "$SITE_FAKES" -v "$TESTS/sitebuild_fakes.py:/fakes.py:ro" docker.io/library/python:3.13-alpine \
-    sh -c 'apk add --no-cache git >/dev/null && exec python3 /fakes.py 8080 /repos' >/dev/null
+    sh -c 'apk add --no-cache git git-daemon >/dev/null && exec python3 /fakes.py 8080 /repos' >/dev/null
   $DOCKER network create --label excalibase.managed=true --label excalibase.component=site-build excalibase-net-build-egress >/dev/null
   $DOCKER network connect excalibase-net-build-egress "$SITE_FAKES"
 fi
