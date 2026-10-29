@@ -5,6 +5,8 @@ format: excalibase.template/v1
 id: web-redis
 name: Web app + Redis starter
 summary: A public web app with a private Redis it reaches by name, password generated for you.
+category: starter
+license: Redis 7.4 RSALv2 or SSPLv1; nginx BSD-2-Clause
 description: >-
   Two apps. web is a public web app on its own URL (placeholder image
   nginx-unprivileged 1.27 on port 8080; swap in your own image). redis is an

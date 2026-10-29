@@ -1,0 +1,37 @@
+# RabbitMQ 4.2 (alpine) as an internal AMQP broker.
+format: excalibase.template/v1
+id: rabbitmq
+name: RabbitMQ
+category: queue
+license: MPL-2.0
+summary: A RabbitMQ broker your apps reach at rabbitmq:5672, user and password generated for you.
+description: >-
+  One internal app named rabbitmq that only this project's apps reach over
+  AMQP at rabbitmq:5672, user app. Queues and messages are kept on a 1Gi disk;
+  the node name is fixed, so a new container keeps them. RabbitMQ does not read
+  its memory limit, so it is told 1 GiB and needs at least 1Gi per app (Standard
+  plan or above). The password is generated when you deploy and RABBITMQ_URL is
+  shown to you once. You run this service: Excalibase does not back it up,
+  upgrade it or watch it. Image rabbitmq 4.2.9-alpine, pinned by digest.
+apps:
+  - name: rabbitmq
+    image: rabbitmq@sha256:aab85daef4295ab28df229600109434ed6ed7b966dd915baeb0fc396279f0e8e
+    internal: true
+    internalPorts: [5672]
+    replicas: 1
+    minMemory: 1Gi
+    disk:
+      mountPath: /var/lib/rabbitmq
+      size: 1Gi
+    env:
+      - name: RABBITMQ_DEFAULT_USER
+        value: app
+      - name: RABBITMQ_DEFAULT_PASS
+        value: "${{ secret(32) }}"
+      - name: RABBITMQ_NODENAME
+        value: rabbit@localhost
+      - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
+        value: "-rabbit total_memory_available_override_value 1073741824"
+      - name: RABBITMQ_URL
+        value: "amqp://app:${{ apps.rabbitmq.env.RABBITMQ_DEFAULT_PASS }}@${{ apps.rabbitmq.host }}:${{ apps.rabbitmq.port }}"
+        showOnce: true
