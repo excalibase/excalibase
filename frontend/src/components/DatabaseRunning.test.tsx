@@ -40,6 +40,7 @@ describe('DatabaseRunning', () => {
     [{ status: 'PAUSING' }, /pausing/, true],
     [{ status: 'RESUMING' }, /resuming/, true],
     [{ status: 'RESTORING' }, /being restored/, true],
+    [{ status: 'UPGRADING' }, /being upgraded/, true],
     [{ status: 'PENDING_DELETION' }, /scheduled for deletion/, false],
     [{ status: 'FAILED' }, /could not be created/, false],
     [{ status: 'DELETING' }, /deleted/, false],

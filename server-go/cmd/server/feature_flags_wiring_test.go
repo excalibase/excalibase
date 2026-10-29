@@ -100,6 +100,10 @@ var darkRoutes = map[features.Feature][]darkProbe{
 	features.DBCopy: {
 		{http.MethodPost, "/api/provision/" + matrixProjectA + "/backup/copy"},
 	},
+	features.MajorUpgrade: {
+		{http.MethodGet, "/api/provision/" + matrixProjectA + "/major-upgrade"},
+		{http.MethodPost, "/api/provision/" + matrixProjectA + "/major-upgrade"},
+	},
 	features.AppStorage: {
 		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
 		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},
