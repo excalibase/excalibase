@@ -39,7 +39,7 @@ type majorUpgradeDeps struct {
 func wireMajorUpgrades(cfg config.AppConfig, sqlStore storage.PlatformStore, d majorUpgradeDeps, deps *handlerDeps) func() {
 	runs, ok := sqlStore.(storage.MajorUpgradeStore)
 	if !ok || d.backupSvc == nil {
-		return func() {}
+		return func() { /* nothing was started */ }
 	}
 	archives := service.NewMajorUpgradeArchives(runs)
 	d.backupSvc.SetMajorUpgradeArchives(archives)
@@ -51,7 +51,7 @@ func wireMajorUpgrades(cfg config.AppConfig, sqlStore storage.PlatformStore, d m
 	})
 	deps.majorUpgradeHandler = handler.NewMajorUpgradeHandler(svc, sqlStore)
 	if !features.Enabled(context.Background(), cfg.Features(), features.MajorUpgrade) {
-		return func() {}
+		return func() { /* no sweep while the feature is off */ }
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
