@@ -136,7 +136,7 @@ jobs:
           java-version: '25'
       - name: Build graphql and auth with the counters' bind address
         env:
-          GRAPHQL_COMMIT: bc4d58fbb65e5c3c1f8b9ebc0c2633d1a3e19f5d
+          GRAPHQL_COMMIT: 40dcbb1551bcdf41c7b2affa932e0b68f6452034
           SIGNIN_SERVICE_COMMIT: 86c157783616020b53586b97151cfe8217090a44
         run: |
           for repo in graphql:$GRAPHQL_COMMIT auth:$SIGNIN_SERVICE_COMMIT; do
