@@ -35,7 +35,7 @@ deploy_failure() {
   api "$API/projects/$1/apps/$2/deploys" | json '(lambda x: "%s: %s" % (x.get("status"), x.get("failureReason", "")))((d if isinstance(d,list) else (d.get("deploys") or d.get("items")))[0])'
   local last
   last=$($DOCKER ps -a --filter "label=excalibase.app=$2" --filter label=excalibase.component=app --format '{{.Names}}' | head -1)
-  [ -n "$last" ] && $DOCKER inspect "$last" --format 'container {{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' && $DOCKER logs --tail 15 "$last" 2>&1 | cut -c1-200
+  [ -n "$last" ] && $DOCKER inspect "$last" --format 'container {{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' && $DOCKER logs "$last" 2>&1 | grep -v '^ *To update\|^Error: \|^$' | head -40 | cut -c1-240
 }
 app_container() { $DOCKER ps --filter "label=excalibase.app=$1" --filter label=excalibase.component=app --format '{{.Names}}' | head -1; }
 open_app() { curl -sk --max-time 10 --resolve "$1:$PORT:127.0.0.1" "https://$1:$PORT/"; }
