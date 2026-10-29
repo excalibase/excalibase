@@ -7,15 +7,10 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strconv"
 	"strings"
 
-	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -53,9 +48,6 @@ const (
 
 // chain is the order the steps run in, each once the one before exits 0.
 var chain = []string{stepPrepare, stepClone, stepBuild, stepCollect}
-
-// everyContainer is the chain and the two that run beside it from the start.
-var everyContainer = append([]string{stepEgress, stepWatch}, chain...)
 
 // stepLogs caps each container's log, so a build printing without end cannot fill the host's disk.
 var stepLogs = container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "2"}}
@@ -96,8 +88,8 @@ var proxyVariables = []string{
 	"npm_config_proxy", "npm_config_https_proxy", "YARN_HTTP_PROXY", "YARN_HTTPS_PROXY",
 }
 
-// Start lays out the build — volume, networks, sidecar and every step created —
-// then starts the first step; Status starts the rest in turn.
+// Start lays out the build's sandbox — volume, networks, sidecar, disk watcher — creates every step,
+// then starts the first; Status starts the rest in turn.
 func (r *Runner) Start(ctx context.Context, spec sitebuilds.RunSpec) error {
 	if err := checkSpec(spec); err != nil {
 		return err
@@ -110,22 +102,23 @@ func (r *Runner) Start(ctx context.Context, spec sitebuilds.RunSpec) error {
 			return err
 		}
 	}
-	if err := r.layOut(ctx, spec); err != nil {
-		return err
-	}
-	if err := r.startWatch(ctx, spec); err != nil {
-		return err
-	}
-	proxy, err := r.startEgress(ctx, spec)
+	site := r.siteBox(spec)
+	proxy, err := r.openBox(ctx, site)
 	if err != nil {
 		return err
 	}
 	for _, step := range chain {
-		if err := r.create(ctx, spec, step, r.stepContainer(spec, step, proxy)); err != nil {
+		if err := r.create(ctx, spec.BuildID, step, r.stepContainer(site, spec, step, proxy)); err != nil {
 			return err
 		}
 	}
 	return r.start(ctx, spec.BuildID, stepPrepare)
+}
+
+// siteBox is the sandbox a site build runs in, labelled with its site and project.
+func (r *Runner) siteBox(spec sitebuilds.RunSpec) box {
+	return r.newBox(spec.BuildID, componentBuild, map[string]string{labelSite: spec.SiteID, labelProject: spec.ProjectID},
+		spec.Timeout, resource.MustParse(spec.Disk))
 }
 
 func checkSpec(spec sitebuilds.RunSpec) error {
@@ -147,111 +140,9 @@ func checkSpec(spec sitebuilds.RunSpec) error {
 	return nil
 }
 
-func (r *Runner) layOut(ctx context.Context, spec sitebuilds.RunSpec) error {
-	if err := r.ensureEgressNetwork(ctx); err != nil {
-		return err
-	}
-	labels := r.labels(spec)
-	if _, err := r.engine.NetworkCreate(ctx, r.buildNetwork(spec.BuildID), r.buildNetworkOptions(labels)); err != nil {
-		return fmt.Errorf("create the build network: %w", err)
-	}
-	if _, err := r.engine.VolumeCreate(ctx, volume.CreateOptions{Name: r.workVolume(spec.BuildID), Driver: "local", Labels: labels}); err != nil {
-		return fmt.Errorf("create the work volume: %w", err)
-	}
-	return nil
-}
-
-// ensureEgressNetwork makes the one network with a route out, which only sidecars join.
-func (r *Runner) ensureEgressNetwork(ctx context.Context) error {
-	name := r.egressNetwork()
-	if _, err := r.engine.NetworkInspect(ctx, name, network.InspectOptions{}); err == nil {
-		return nil
-	} else if !errdefs.IsNotFound(err) {
-		return fmt.Errorf("inspect the egress network: %w", err)
-	}
-	options := network.CreateOptions{Driver: "bridge", Labels: map[string]string{labelManaged: "true", labelComponent: componentBuild}}
-	if r.opts.Isolate {
-		options.Options = map[string]string{"isolate": "true"}
-	}
-	if _, err := r.engine.NetworkCreate(ctx, name, options); err != nil && !errdefs.IsConflict(err) {
-		return fmt.Errorf("create the egress network: %w", err)
-	}
-	return nil
-}
-
-// startEgress runs the sidecar and answers the proxy URL the build steps use, by address:
-// under gVisor a step may not reach the engine's resolver.
-func (r *Runner) startEgress(ctx context.Context, spec sitebuilds.RunSpec) (string, error) {
-	config := &container.Config{
-		Image: r.opts.EgressImage, User: buildUser, Entrypoint: []string{"/bin/excalibase-build-egress"},
-		Env: []string{
-			"EGRESS_LISTEN=:" + egressPort,
-			"EGRESS_EXTRA_DENY_CIDRS=" + strings.Join(r.opts.ExtraDenyCIDRs, ","),
-			"EGRESS_ALLOW=" + strings.Join(r.opts.EgressAllow, ","),
-			// Past the steps' own limit, so the time limit, not a vanished proxy, names a build that ran long.
-			"EGRESS_LIFETIME=" + strconv.Itoa(lifetime(spec)+egressGraceSeconds) + "s",
-		},
-		Labels: r.labels(spec),
-	}
-	host := lockedHost(toolSize[stepEgress].cpuMillis, toolSize[stepEgress].memory, toolPids)
-	host.NetworkMode = container.NetworkMode(r.buildNetwork(spec.BuildID))
-	if err := r.create(ctx, spec, stepEgress, stepContainer{config: config, host: host}); err != nil {
-		return "", err
-	}
-	name := containerName(spec.BuildID, stepEgress)
-	if err := r.engine.NetworkConnect(ctx, r.egressNetwork(), name, nil); err != nil {
-		return "", fmt.Errorf("connect the egress sidecar: %w", err)
-	}
-	if err := r.start(ctx, spec.BuildID, stepEgress); err != nil {
-		return "", err
-	}
-	inspect, err := r.engine.ContainerInspect(ctx, name)
-	if err != nil {
-		return "", fmt.Errorf("inspect the egress sidecar: %w", err)
-	}
-	if inspect.NetworkSettings == nil {
-		return "", errors.New("the engine answered no networks for the egress sidecar")
-	}
-	endpoint := inspect.NetworkSettings.Networks[r.buildNetwork(spec.BuildID)]
-	if endpoint == nil || endpoint.IPAddress == "" {
-		return "", errors.New("the egress sidecar has no address on the build network")
-	}
-	// Plain http to the forward proxy on the build's own network; HTTPS crosses it as CONNECT tunnels.
-	return "http://" + endpoint.IPAddress + ":" + egressPort, nil //NOSONAR
-}
-
-// startWatch runs the disk watcher as the steps' own user, so it reads every folder they make (their 0700
-// HOME too); one they make unreadable fails the build. No network, the volume read-only, its own PID namespace.
-// It runs no build code, so it stays on the default runtime, where df sees the host's filesystem.
-func (r *Runner) startWatch(ctx context.Context, spec sitebuilds.RunSpec) error {
-	disk := resource.MustParse(spec.Disk)
-	script := fmt.Sprintf(watchScript, lifetime(spec), r.opts.HostDiskFloor/1024, disk.Value()/1024, int(r.opts.DiskCheckEvery.Seconds()))
-	config := &container.Config{Image: r.opts.PrepareImage, User: buildUser, Cmd: []string{"sh", "-c", script}, Labels: r.labels(spec)}
-	host := lockedHost(toolSize[stepWatch].cpuMillis, toolSize[stepWatch].memory, toolPids)
-	host.NetworkMode = "none"
-	host.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: r.workVolume(spec.BuildID), Target: workDir, ReadOnly: true}}
-	if err := r.create(ctx, spec, stepWatch, stepContainer{config: config, host: host}); err != nil {
-		return err
-	}
-	return r.start(ctx, spec.BuildID, stepWatch)
-}
-
-// lifetime is the build's time limit in whole seconds, which the engine enforces on each step.
-func lifetime(spec sitebuilds.RunSpec) int {
-	return int(spec.Timeout.Seconds())
-}
-
 type stepContainer struct {
 	config *container.Config
 	host   *container.HostConfig
-}
-
-func (r *Runner) labels(spec sitebuilds.RunSpec) map[string]string {
-	deadline := r.opts.Now().Add(spec.Timeout).Unix()
-	return map[string]string{
-		labelManaged: "true", labelComponent: componentBuild, labelBuild: spec.BuildID,
-		labelSite: spec.SiteID, labelProject: spec.ProjectID, labelDeadline: strconv.FormatInt(deadline, 10), labelDisk: spec.Disk,
-	}
 }
 
 // lockedHost is what every step gets: no capability, no new privileges, read-only root, bounded processes.
@@ -264,38 +155,32 @@ func lockedHost(cpuMillis, memory, pids int64) *container.HostConfig {
 	}
 }
 
-func (r *Runner) stepContainer(spec sitebuilds.RunSpec, step, proxy string) stepContainer {
+func (r *Runner) stepContainer(site box, spec sitebuilds.RunSpec, step, proxy string) stepContainer {
 	size := toolSize[step]
-	memory, pids, shares := size.memory, toolPids, int64(0)
+	memory, pids := size.memory, toolPids
 	if step == stepBuild {
 		parsed := resource.MustParse(spec.Memory)
-		size.cpuMillis, memory, pids, shares = int64(spec.CPUMillis), parsed.Value(), buildPids, buildShares
+		size.cpuMillis, memory, pids = int64(spec.CPUMillis), parsed.Value(), buildPids
 	}
-	host := lockedHost(size.cpuMillis, memory, pids)
-	host.CPUShares = shares
-	host.Runtime = r.opts.SandboxRuntime
-	host.Tmpfs = map[string]string{"/tmp": tmpfsOptions}
-	host.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: r.workVolume(spec.BuildID), Target: workDir}}
-	host.NetworkMode = "none"
-	config := &container.Config{Image: spec.Image, User: buildUser, WorkingDir: workDir, Labels: r.labels(spec)}
+	online := step == stepClone || step == stepBuild
+	planned := r.boxStep(site, spec.Image, size.cpuMillis, memory, pids, online)
+	config := planned.config
 	switch step {
 	case stepPrepare:
 		config.Image, config.User, config.Cmd = r.opts.PrepareImage, "0:0", []string{"chmod", "1777", workDir}
 	case stepClone:
-		host.NetworkMode = container.NetworkMode(r.buildNetwork(spec.BuildID))
 		config.Env = append([]string{"CLONE_URL=" + spec.CloneURL, "COMMIT=" + spec.Commit, "HOME=/work/home",
 			"GIT_TERMINAL_PROMPT=0", "GIT_TOKEN=" + spec.CloneToken}, proxyEnv(proxy)...)
 	case stepBuild:
-		host.NetworkMode = container.NetworkMode(r.buildNetwork(spec.BuildID))
+		planned.host.CPUShares = buildShares
 		config.Env = buildEnv(spec, proxy)
 	case stepCollect:
 		config.Env = []string{"ROOT_DIR=" + spec.RootDir, "OUTPUT_DIR=" + spec.OutputDir}
 	}
 	if step != stepPrepare {
-		// The engine kills the step at the time limit, even with provisioning gone.
-		config.Cmd = []string{"timeout", "-s", "KILL", strconv.Itoa(lifetime(spec)), "bash", "-c", r.scripts[step]}
+		config.Cmd = site.deadlined("bash", "-c", r.scripts[step])
 	}
-	return stepContainer{config: config, host: host}
+	return planned
 }
 
 // loadScripts reads the Job's own scripts for the steps that run one.
@@ -346,8 +231,8 @@ func buildEnv(spec sitebuilds.RunSpec, proxy string) []string {
 	return append(env, tail...)
 }
 
-func (r *Runner) create(ctx context.Context, spec sitebuilds.RunSpec, step string, planned stepContainer) error {
-	if _, err := r.engine.ContainerCreate(ctx, planned.config, planned.host, nil, nil, containerName(spec.BuildID, step)); err != nil {
+func (r *Runner) create(ctx context.Context, buildID, step string, planned stepContainer) error {
+	if _, err := r.engine.ContainerCreate(ctx, planned.config, planned.host, nil, nil, containerName(buildID, step)); err != nil {
 		return fmt.Errorf("create the %s step: %w", step, err)
 	}
 	return nil

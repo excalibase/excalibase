@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 )
 
@@ -684,5 +686,36 @@ func TestStatusNamesAnEngineKillAtTheDeadlineATimeout(t *testing.T) {
 	now.now = now.now.Add(11 * time.Minute)
 	if status := mustStatus(t, runner); status.Failure != sitebuilds.FailTimeout {
 		t.Fatalf("%+v", status)
+	}
+}
+
+// The sandbox carries no site in it: another kind of build (EXC-677 app builds) gets the same network,
+// sidecar, watcher, labels and time limit with its own steps, and is cleaned up by its own step names.
+func TestABoxServesBuildsOtherThanSites(t *testing.T) {
+	engine := newFakeEngine()
+	runner, _ := newTestRunner(t, engine, "runsc")
+	app := runner.newBox(testBuild, "app-build", map[string]string{"excalibase.app": "web"}, 5*time.Minute, resource.MustParse("3Gi"))
+	proxy, err := runner.openBox(context.Background(), app)
+	if err != nil || proxy != "http://10.250.0.2:3128" {
+		t.Fatalf("open: %q %v", proxy, err)
+	}
+	planned := runner.boxStep(app, "moby/buildkit:rootless", 2000, 4<<30, 4096, true)
+	planned.config.Cmd = app.deadlined("buildctl-daemonless.sh", "build")
+	if err := runner.create(context.Background(), testBuild, "image", planned); err != nil {
+		t.Fatal(err)
+	}
+	image := engine.get(step("image"))
+	if image.host.Runtime != "runsc" || string(image.host.NetworkMode) != buildNetwork || image.config.Labels["excalibase.component"] != "app-build" ||
+		image.config.Labels["excalibase.app"] != "web" || image.config.Cmd[3] != "300" {
+		t.Fatalf("app step %+v %+v", image.host, image.config)
+	}
+	if watch := strings.Join(engine.get(step("watch")).config.Cmd, " "); !strings.Contains(watch, "3145728") {
+		t.Fatalf("watcher %s", watch)
+	}
+	if err := runner.removeBox(context.Background(), testBuild, []string{"image"}); err != nil {
+		t.Fatal(err)
+	}
+	if engine.get(step("image")) != nil || engine.get(step("egress")) != nil || engine.volumes[workVolume] {
+		t.Fatal("the box was not cleaned up")
 	}
 }
