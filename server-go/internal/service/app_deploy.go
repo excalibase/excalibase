@@ -148,7 +148,7 @@ func (s *AppDeployService) registryCredential(projectID, image string) (*apphost
 // lookupCredential answers the internal registry with the project's derived
 // credential, and any other registry with the one the project saved.
 func (s *AppDeployService) lookupCredential(projectID, registry string) (*apphost.RegistryCredential, error) {
-	if s.internal != nil && registry == s.internal.Host() {
+	if s.internal.NamesHost(registry) {
 		pull, err := s.internal.PullCredential(projectID)
 		if err != nil {
 			return nil, err

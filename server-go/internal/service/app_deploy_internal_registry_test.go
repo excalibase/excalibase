@@ -107,6 +107,7 @@ func TestRollout_AnotherRepositoryOnTheInternalRegistryNeverRuns(t *testing.T) {
 		"another project":                    appregistrytest.Host + "/proj-other/storefront@" + resolvedDigest,
 		"another app":                        appregistrytest.Host + "/" + deployTestProject + "/other@" + resolvedDigest,
 		"an alias spelling, another project": appregistrytest.Host + ":443/proj-other/storefront@" + resolvedDigest,
+		"an alias spelling, its own":         "Registry.Excalibase.Internal:5000/" + deployTestProject + "/storefront@" + resolvedDigest,
 	} {
 		app := sampleDeployApp()
 		app.Image = image
@@ -125,7 +126,9 @@ func TestRollout_AnotherRepositoryOnTheInternalRegistryNeverRuns(t *testing.T) {
 func TestRegistryCredentials_RefuseTheInternalRegistry(t *testing.T) {
 	registries, _, _ := newRegistryService(t)
 	registries.SetInternalRegistry(testInternalRegistry(t))
-	if _, err := registries.Set(deployTestProject, "Registry.Excalibase.Internal", testRegistryCredential); !errors.Is(err, appregistry.ErrInternalImage) {
-		t.Fatalf("a saved credential for the platform's registry: %v", err)
+	for _, host := range []string{"Registry.Excalibase.Internal", appregistrytest.Host + ":5000"} {
+		if _, err := registries.Set(deployTestProject, host, testRegistryCredential); !errors.Is(err, appregistry.ErrInternalImage) {
+			t.Errorf("a saved credential for the platform's registry as %s: %v", host, err)
+		}
 	}
 }

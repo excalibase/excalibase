@@ -63,3 +63,15 @@ func TestPullCredential_ChangesWithTheGeneration(t *testing.T) {
 		t.Fatal("a rotation must retire the old password")
 	}
 }
+
+func TestGenerations_ARotationThatCannotBeStoredFails(t *testing.T) {
+	secrets := &memSecrets{data: map[string]map[string]string{}}
+	generations := NewGenerations(failingPut{secrets})
+	if _, err := generations.RotatePull("proj-a"); err == nil {
+		t.Fatal("a rotation the vault did not keep must fail")
+	}
+}
+
+type failingPut struct{ *memSecrets }
+
+func (failingPut) Put(string, map[string]string) error { return errors.New("vault sealed") }

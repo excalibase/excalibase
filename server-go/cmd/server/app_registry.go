@@ -63,9 +63,7 @@ func projectExists(instances storage.InstanceStore) appregistry.ProjectExists {
 }
 
 func newRegistryTokenHandler(internal *appregistry.Internal, instances storage.InstanceStore) http.Handler {
-	if !internal.CanIssue() {
-		return nil
-	}
+	// Refused while the registry only guards: then there is no token service.
 	h, err := appregistry.NewTokenHandler(internal, projectExists(instances))
 	if err != nil {
 		return nil

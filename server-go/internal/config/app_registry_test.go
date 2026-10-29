@@ -2,11 +2,11 @@ package config
 
 import (
 	"os"
-
-	"github.com/excalibase/provisioning-poc/internal/features"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/features"
 )
 
 func TestLoadAppRegistry_ReadsTheHostAndTheKeyFile(t *testing.T) {
@@ -40,6 +40,9 @@ func TestValidateAppRegistry(t *testing.T) {
 		"single host":            {ProvisionerMode: "docker", AppRegistry: AppRegistryConfig{Host: "r.internal", TokenKeyPEM: []byte("k")}},
 		"docker hub":             {AppRegistry: AppRegistryConfig{Host: "docker.io", TokenKeyPEM: []byte("k")}},
 		"an operator's one":      {AppLocalRegistries: []string{"r.internal"}, AppRegistry: AppRegistryConfig{Host: "r.internal", TokenKeyPEM: []byte("k")}},
+		"docker hub alias":       {AppRegistry: AppRegistryConfig{Host: "r.internal", Aliases: []string{"docker.io"}, TokenKeyPEM: []byte("k")}},
+		"an operator's alias":    {AppLocalRegistries: []string{"zot.local"}, AppRegistry: AppRegistryConfig{Host: "r.internal", Aliases: []string{"zot.local"}, TokenKeyPEM: []byte("k")}},
+		"a malformed alias":      {AppRegistry: AppRegistryConfig{Host: "r.internal", Aliases: []string{"http://zot"}, TokenKeyPEM: []byte("k")}},
 	}
 	for name, cfg := range cases {
 		if err := cfg.validateAppRegistry(); err == nil {

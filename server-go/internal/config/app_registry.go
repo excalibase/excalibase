@@ -45,11 +45,13 @@ func (c AppConfig) validateAppRegistry() error {
 	if c.ProvisionerMode == "docker" {
 		return errors.New("APP_REGISTRY_HOST is for Kubernetes installs; single-host app builds come later (EXC-677)")
 	}
-	if dockerHubHosts[registry.Host] || registryHost.FindStringSubmatch(registry.Host) == nil {
-		return fmt.Errorf("APP_REGISTRY_HOST: %q is not a registry host the platform can own", registry.Host)
-	}
-	if slices.Contains(c.AppLocalRegistries, registry.Host) {
-		return errors.New("APP_REGISTRY_HOST is also in APP_LOCAL_REGISTRIES: an operator's registry is never the platform's")
+	for _, name := range append([]string{registry.Host}, registry.Aliases...) {
+		if dockerHubHosts[name] || registryHost.FindStringSubmatch(name) == nil {
+			return fmt.Errorf("APP_REGISTRY_HOST / APP_REGISTRY_ALIASES: %q is not a registry host the platform can own", name)
+		}
+		if slices.Contains(c.AppLocalRegistries, name) {
+			return fmt.Errorf("APP_REGISTRY_HOST / APP_REGISTRY_ALIASES: %q is also in APP_LOCAL_REGISTRIES; an operator's registry is never the platform's", name)
+		}
 	}
 	if registry.keyErr != nil {
 		return fmt.Errorf("APP_REGISTRY_TOKEN_KEY_FILE: %w", registry.keyErr)

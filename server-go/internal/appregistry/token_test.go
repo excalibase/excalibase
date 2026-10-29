@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"strings"
 	"testing"
@@ -91,6 +92,23 @@ func TestNewIssuer_ReadsPKCS8AndRefusesWhatIsNotAKey(t *testing.T) {
 	weak, _ := rsa.GenerateKey(rand.Reader, 1024)
 	if _, err := NewIssuer(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(weak)}), "svc"); err == nil {
 		t.Error("a 1024-bit RSA key")
+	}
+	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	der384, _ := x509.MarshalPKCS8PrivateKey(p384)
+	if _, err := NewIssuer(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der384}), "svc"); err == nil {
+		t.Error("a P-384 key zot is not configured for")
+	}
+}
+
+func TestIssuer_AnEmptyGrantIsAnEmptyAccessList(t *testing.T) {
+	issuer, _ := testIssuer(t)
+	token, err := issuer.Mint("proj-a", nil, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := base64.RawURLEncoding.DecodeString(strings.Split(token, ".")[1])
+	if !strings.Contains(string(payload), `"access":[]`) {
+		t.Errorf("access must be an array zot can read: %s", payload)
 	}
 }
 

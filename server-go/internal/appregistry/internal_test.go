@@ -2,6 +2,7 @@ package appregistry
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -74,3 +75,13 @@ func TestInternal_ImageAndPullCredential(t *testing.T) {
 }
 
 const hex64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func TestInternal_NilIsNoRegistry(t *testing.T) {
+	var none *Internal
+	if none.NamesHost("registry.excalibase.internal") || none.Names("registry.excalibase.internal/p/a@sha256:x") || none.CanIssue() {
+		t.Error("no registry names nothing and issues nothing")
+	}
+	if _, err := none.Image("proj-a", "api", "sha256:"+strings.Repeat("a", 64)); err == nil {
+		t.Error("no registry has no images")
+	}
+}

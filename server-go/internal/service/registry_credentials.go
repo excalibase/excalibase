@@ -51,7 +51,7 @@ func (s *RegistryCredentialService) Set(projectID, registry string, cred apphost
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalidRegistryCredential, err)
 	}
-	if normalized == s.internal.Host() {
+	if s.internal.NamesHost(normalized) {
 		return "", fmt.Errorf("%w: %w", ErrInvalidRegistryCredential, appregistry.ErrInternalImage)
 	}
 	if err := cred.Validate(); err != nil {

@@ -75,8 +75,14 @@ func TestNewInternalRegistry_OnlyWithTheFlagAndAHost(t *testing.T) {
 	if err != nil || guard == nil || guard.CanIssue() || !guard.Names(appregistrytest.Host+"/proj-a/api:1") {
 		t.Errorf("flag off still guards the name, issuing nothing: %v %v", guard, err)
 	}
-	if newRegistryTokenHandler(guard, nil) != nil {
-		t.Error("flag off serves no token service")
+	if newRegistryTokenHandler(guard, nil) != nil || newInternalRegistryHandler(guard, secrets) != nil {
+		t.Error("flag off serves no token service and no rotation")
+	}
+	if newRegistryTokenHandler(internal, fakestore.NewInstances()) == nil || newInternalRegistryHandler(internal, secrets) == nil {
+		t.Error("flag on serves the token service and the rotation")
+	}
+	if newInternalRegistryHandler(internal, nil) != nil || vaultSecrets(nil) != nil {
+		t.Error("no vault, no rotation")
 	}
 	if none, err := newInternalRegistry(config.AppConfig{}, secrets); none != nil || err != nil {
 		t.Errorf("no host: %v %v", none, err)

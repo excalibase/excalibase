@@ -83,10 +83,12 @@ func (in *Internal) Host() string {
 
 // Names answers whether image is on the internal registry, however its host is spelled.
 func (in *Internal) Names(image string) bool {
-	if in == nil {
-		return false
-	}
-	return in.names[hostname(apphost.ImageRegistry(image))]
+	return in.NamesHost(apphost.ImageRegistry(image))
+}
+
+// NamesHost answers whether a registry host, with or without a port, is the internal registry.
+func (in *Internal) NamesHost(host string) bool {
+	return in != nil && in.names[hostname(host)]
 }
 
 // RefuseUserImage is for every image a person or a token names: the deploy API, Studio, MCP.
@@ -99,6 +101,9 @@ func (in *Internal) RefuseUserImage(image string) error {
 
 // Image is the reference a build deploys: always by digest.
 func (in *Internal) Image(projectID, appName, digest string) (string, error) {
+	if in == nil {
+		return "", ErrInternalImage
+	}
 	repository, err := Repository(projectID, appName)
 	if err != nil {
 		return "", err
@@ -132,6 +137,3 @@ func (in *Internal) VerifyPull(projectID, password string) (bool, error) {
 	}
 	return in.issuer.VerifyPull(projectID, gen, password), nil
 }
-
-// Issuer mints the platform's own push and delete tokens.
-func (in *Internal) Issuer() *Issuer { return in.issuer }

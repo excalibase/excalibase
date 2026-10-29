@@ -32,25 +32,19 @@ func (s *AppDeployService) internalDigest(app *apphost.App, image string, origin
 		return "", "", err
 	}
 	_, digest, _ := strings.Cut(image, "@")
-	want, _ := s.internal.Image(app.ProjectID, app.Name, digest)
-	return want, digest, nil
+	return image, digest, nil
 }
 
-// ownInternalImage holds an image on the platform's registry to the app's own repository, by digest.
+// ownInternalImage holds an image on the platform's registry to the app's own
+// repository, by digest, spelled exactly as a build names it: the pull secret
+// is filed under the canonical host alone.
 func (s *AppDeployService) ownInternalImage(app *apphost.App, image string) error {
 	_, digest, _ := strings.Cut(image, "@")
 	want, err := s.internal.Image(app.ProjectID, app.Name, digest)
-	if err != nil || !s.internal.Names(want) || !sameRepository(want, image) {
+	if err != nil || image != want {
 		return fmt.Errorf("%w: only %s's own repository runs, by digest", appregistry.ErrInternalImage, app.Name)
 	}
 	return nil
-}
-
-// sameRepository compares the repository and digest, the host already matched as the registry's.
-func sameRepository(want, image string) bool {
-	_, wantPath, _ := strings.Cut(want, "/")
-	_, path, _ := strings.Cut(image, "/")
-	return wantPath == path
 }
 
 // localRegistryDigest answers whether image is on an operator registry, and
