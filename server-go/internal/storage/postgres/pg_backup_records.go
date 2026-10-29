@@ -7,6 +7,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/lib/pq"
 )
 
 // BackupRecordsStore adapts Store to the storage.BackupRecordStore
@@ -43,23 +44,30 @@ func (b *BackupRecordsStore) DeleteThrough(ctx context.Context, projectID string
 	return err
 }
 
+func (b *BackupRecordsStore) DeleteRecords(ctx context.Context, projectID string, ids []string) error {
+	_, err := b.s.db.ExecContext(ctx,
+		`DELETE FROM backup_records WHERE project_id = $1 AND id = ANY($2)`, projectID, pq.Array(ids))
+	return err
+}
+
 // saveBackupRecord upserts a backup_records row.
 func (s *Store) saveBackupRecord(ctx context.Context, r *domain.BackupRecord) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO backup_records (id, project_id, timestamp, type, status)
-		VALUES ($1, $2, $3::timestamptz, $4, $5)
+		INSERT INTO backup_records (id, project_id, timestamp, type, status, postgres_version)
+		VALUES ($1, $2, $3::timestamptz, $4, $5, $6)
 		ON CONFLICT (id) DO UPDATE SET
 			timestamp = EXCLUDED.timestamp,
 			type = EXCLUDED.type,
-			status = EXCLUDED.status`,
-		r.ID, r.ProjectID, nullTimestamp(r.Timestamp), r.Type, r.Status,
+			status = EXCLUDED.status,
+			postgres_version = EXCLUDED.postgres_version`,
+		r.ID, r.ProjectID, nullTimestamp(r.Timestamp), r.Type, r.Status, r.PostgresVersion,
 	)
 	return err
 }
 
 func (s *Store) listBackupsByProject(ctx context.Context, projectID string) ([]domain.BackupRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, project_id, timestamp, type, status
+		SELECT id, project_id, timestamp, type, status, postgres_version
 		FROM backup_records
 		WHERE project_id = $1
 		ORDER BY timestamp DESC`, projectID)
@@ -95,7 +103,7 @@ func (s *Store) updateBackupStatus(ctx context.Context, id, status string) error
 func scanBackupRecord(s scannable) (domain.BackupRecord, error) {
 	var r domain.BackupRecord
 	var ts interface{}
-	if err := s.Scan(&r.ID, &r.ProjectID, &ts, &r.Type, &r.Status); err != nil {
+	if err := s.Scan(&r.ID, &r.ProjectID, &ts, &r.Type, &r.Status, &r.PostgresVersion); err != nil {
 		return r, err
 	}
 	r.Timestamp = formatTimestamp(ts)

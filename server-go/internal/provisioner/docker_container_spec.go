@@ -46,6 +46,8 @@ type ContainerSpec struct {
 
 // ContainerState is what an inspect reports about a container.
 type ContainerState struct {
+	// ID is the engine's id, whatever name the container was asked by.
+	ID        string
 	Found     bool
 	Running   bool
 	StartedAt time.Time
@@ -63,7 +65,7 @@ func (r *RealDockerClient) ContainerState(ctx context.Context, id string) (Conta
 	if err != nil {
 		return ContainerState{}, fmt.Errorf("inspect container %s: %w", id, err)
 	}
-	state := ContainerState{Found: true, HostPorts: map[string]int{}}
+	state := ContainerState{ID: insp.ID, Found: true, HostPorts: map[string]int{}}
 	if insp.State != nil {
 		state.Running = insp.State.Running
 		state.StartedAt, _ = time.Parse(time.RFC3339Nano, insp.State.StartedAt)

@@ -100,7 +100,7 @@ func TestBuildInPlaceRecoveryCarriesARestoredProjectsDatabase(t *testing.T) {
 	live := liveCluster(t)
 	spec := live.Object["spec"].(map[string]interface{})
 	spec["bootstrap"] = map[string]interface{}{"recovery": map[string]interface{}{"source": "clusterBackup", "database": "shop", "owner": "owner"}}
-	spec["externalClusters"] = []interface{}{recoverySource("dst")}
+	spec["externalClusters"] = []interface{}{recoverySource("dst", "")}
 
 	got, err := BuildInPlaceRecovery(live, nil)
 	if err != nil {

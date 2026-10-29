@@ -290,6 +290,11 @@ func runServer(cfg config.AppConfig) {
 	defer stopStorageReap()
 
 	wireInPlaceRestore(deps.backupHandler.Service(), provSvc, store, vc, projectDB, deps.schemaHandler)
+	stopMajorUpgradeRecovery := wireMajorUpgrades(cfg, sqlStore, majorUpgradeDeps{
+		store: store, provSvc: provSvc, backupSvc: deps.backupHandler.Service(), kube: k8sClient, vault: vc,
+		observers: []service.StatusObserver{projectDB, deps.schemaHandler},
+	}, deps)
+	defer stopMajorUpgradeRecovery()
 	if sqlStore != nil {
 		stopRestoreSweeper := wireRestoreOrchestrator(cfg, sqlStore, store, deps, provSvc)
 		defer stopRestoreSweeper()
@@ -1057,7 +1062,10 @@ type handlerDeps struct {
 	metricsEndpointHandler *handler.MetricsEndpointHandler
 	// logDrainsHandler and logForwarderHandler serve log forwarding
 	// (EXC-658); nil without the platform DB tables.
-	logDrainsHandler    *handler.LogDrainsHandler
+	logDrainsHandler *handler.LogDrainsHandler
+	// majorUpgradeHandler serves major version upgrades (EXC-668); nil
+	// without a platform store to record runs in.
+	majorUpgradeHandler *handler.MajorUpgradeHandler
 	logForwarderHandler *handler.LogForwarderHandler
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
@@ -2005,6 +2013,13 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			r.With(admin, db).Post("/pause", d.provHandler.Pause)
 			r.With(admin, db).Post("/resume", d.provHandler.Resume)
 			r.With(admin, db).Post("/upgrade", d.provHandler.UpgradeMinorVersion)
+			// Any member reads where a major upgrade stands; Admin+ starts one (EXC-668).
+			if d.majorUpgradeHandler != nil {
+				r.With(features.Require(d.features, features.MajorUpgrade), db).Route("/major-upgrade", func(r chi.Router) {
+					r.Get("/", d.majorUpgradeHandler.Status)
+					r.With(admin).Post("/", d.majorUpgradeHandler.Start)
+				})
+			}
 			// Admin+ — resizing, re-tiering and tuning a running database (EXC-492).
 			r.With(admin, db).Post("/storage", d.provHandler.ResizeStorage)
 			r.With(admin, db).Post("/tier", d.provHandler.ChangeTier)

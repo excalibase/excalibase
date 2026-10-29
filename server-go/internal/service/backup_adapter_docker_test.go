@@ -156,6 +156,14 @@ func (s *fakeBackupRecordStore) DeleteThrough(_ context.Context, projectID strin
 	})
 }
 
+func (s *fakeBackupRecordStore) DeleteRecords(_ context.Context, projectID string, ids []string) error {
+	doomed := map[string]bool{}
+	for _, id := range ids {
+		doomed[id] = true
+	}
+	return s.deleteWhere(func(r domain.BackupRecord) bool { return r.ProjectID == projectID && doomed[r.ID] })
+}
+
 func (s *fakeBackupRecordStore) deleteWhere(doomed func(domain.BackupRecord) bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

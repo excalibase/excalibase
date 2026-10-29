@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -99,10 +100,34 @@ var hostConfigFields = map[string]hostConfigCheck{
 
 func allow(Policy, any) error { return nil }
 
-// CheckCreate decides whether a POST /containers/create may reach the engine.
-func (p Policy) CheckCreate(name string, body []byte) error {
+// CheckName decides whether a container may carry name.
+func (p Policy) CheckName(name string) error {
 	if !strings.HasPrefix(name, p.ContainerPrefix) || name == p.ContainerPrefix {
 		return refuse("container name %q must start with %q", name, p.ContainerPrefix)
+	}
+	return nil
+}
+
+// renameSuffix is what a rename may give a container after the prefix: a
+// project's database container or the one a major upgrade sets aside
+// (EXC-668). No platform service is named like either.
+var renameSuffix = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*-postgres(-pre-upgrade-[a-z0-9-]+)?$`)
+
+// CheckRename decides whether a managed container may be renamed to name.
+func (p Policy) CheckRename(name string) error {
+	if err := p.CheckName(name); err != nil {
+		return err
+	}
+	if !renameSuffix.MatchString(strings.TrimPrefix(name, p.ContainerPrefix)) {
+		return refuse("a container may be renamed only to a project database's name, not %q", name)
+	}
+	return nil
+}
+
+// CheckCreate decides whether a POST /containers/create may reach the engine.
+func (p Policy) CheckCreate(name string, body []byte) error {
+	if err := p.CheckName(name); err != nil {
+		return err
 	}
 	var create struct {
 		Image            string

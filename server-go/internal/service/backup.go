@@ -34,6 +34,66 @@ type BackupService struct {
 	// inPlace replaces a project's database from its own backups; nil on a
 	// platform wired without it.
 	inPlace *InPlaceRestore
+	// archives says which major a restore point was written on (EXC-668).
+	archives *MajorUpgradeArchives
+}
+
+// ErrRestorePointBeforeMajorUpgrade refuses an in-place restore to a point on
+// a major the project has since been upgraded from: it would put the old
+// major back under the new one. A copy into a new project can reach it.
+var ErrRestorePointBeforeMajorUpgrade = errors.New("that restore point is from before this project's last major upgrade; restore it into a new project instead")
+
+// backupMajorReader is an adapter that knows which major a backup was taken on.
+type backupMajorReader interface {
+	BackupMajor(ctx context.Context, inst *domain.DatabaseInstance, backupID string) (string, error)
+}
+
+// archiveAware is an adapter that reads each major's archive.
+type archiveAware interface {
+	SetMajorUpgradeArchives(*MajorUpgradeArchives)
+}
+
+// SetMajorUpgradeArchives wires which archive each major of an upgraded
+// project uses, here and in every adapter that reads archives.
+func (s *BackupService) SetMajorUpgradeArchives(archives *MajorUpgradeArchives) {
+	s.archives = archives
+	for _, adapter := range s.adapters {
+		if aware, ok := adapter.(archiveAware); ok {
+			aware.SetMajorUpgradeArchives(archives)
+		}
+	}
+}
+
+// restorePoint is inst as a restore of req must see it: on the major req's
+// point was written on.
+func (s *BackupService) restorePoint(ctx context.Context, inst *domain.DatabaseInstance, adapter BackupAdapter,
+	req domain.RestoreRequest) (*domain.DatabaseInstance, domain.RestoreRequest, error) {
+	var majorOf BackupMajorReader
+	if reader, ok := adapter.(backupMajorReader); ok {
+		majorOf = reader.BackupMajor
+	}
+	return s.archives.RestorePoint(ctx, inst, req, majorOf)
+}
+
+// CheckInPlaceRestorePoint refuses, before a job is filed, an in-place
+// restore to a point the project has been upgraded past.
+func (s *BackupService) CheckInPlaceRestorePoint(ctx context.Context, projectID string, req domain.RestoreRequest) error {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return fmt.Errorf("project not found: %s", projectID)
+	}
+	adapter, err := s.adapterFor(inst)
+	if err != nil {
+		return err
+	}
+	view, _, err := s.restorePoint(ctx, inst, adapter, req)
+	if err != nil {
+		return err
+	}
+	if view.PostgresVersion != inst.PostgresVersion {
+		return ErrRestorePointBeforeMajorUpgrade
+	}
+	return nil
 }
 
 // SetInPlaceRestore wires restores that replace a project's own database.
@@ -66,6 +126,9 @@ func (s *BackupService) RestoreInPlace(ctx context.Context, projectID string, re
 	cluster, ok := adapter.(InPlaceCluster)
 	if !ok {
 		return ErrInPlaceRestoreUnsupported
+	}
+	if err := s.CheckInPlaceRestorePoint(ctx, projectID, req); err != nil {
+		return err
 	}
 	return s.inPlace.Restore(ctx, cluster, projectID, req)
 }
@@ -195,6 +258,12 @@ func (s *BackupService) TriggerManualBackup(ctx context.Context, projectID strin
 	return refToMap(ref), nil
 }
 
+// K8sPostgres is the Kubernetes Postgres adapter, nil without one.
+func (s *BackupService) K8sPostgres() *K8sBackupAdapter {
+	adapter, _ := s.adapters[domain.ModeK8s].(*K8sBackupAdapter)
+	return adapter
+}
+
 // DockerPostgres is the single host's Postgres backup adapter; nil where the
 // platform has none.
 func (s *BackupService) DockerPostgres() *DockerBackupAdapter {
@@ -315,7 +384,7 @@ func (s *BackupService) BackupStatus(ctx context.Context, projectID, backupID st
 }
 
 func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
-	inst, adapter, err := s.copySource(projectID, req)
+	inst, adapter, req, err := s.copySource(ctx, projectID, req)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +398,7 @@ func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string,
 // slot when it was submitted (EXC-639). Counting slots again would count the
 // job against itself; registration still takes the slot atomically.
 func (s *BackupService) RestoreSubmittedCopy(ctx context.Context, projectID string, req domain.RestoreRequest) error {
-	inst, adapter, err := s.copySource(projectID, req)
+	inst, adapter, req, err := s.copySource(ctx, projectID, req)
 	if err != nil {
 		return err
 	}
@@ -344,23 +413,28 @@ func (s *BackupService) RestoreSubmittedCopy(ctx context.Context, projectID stri
 }
 
 // copySource resolves the source project and its adapter for a restore into a
-// new project, and validates the request.
-func (s *BackupService) copySource(projectID string, req domain.RestoreRequest) (*domain.DatabaseInstance, BackupAdapter, error) {
+// new project, and validates the request. The source is returned as the
+// restore point sees it: on the major that point was written on (EXC-668).
+func (s *BackupService) copySource(ctx context.Context, projectID string, req domain.RestoreRequest) (*domain.DatabaseInstance, BackupAdapter, domain.RestoreRequest, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
-		return nil, nil, fmt.Errorf("project not found: %s", projectID)
+		return nil, nil, req, fmt.Errorf("project not found: %s", projectID)
 	}
 	adapter, err := s.adapterFor(inst)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, req, err
 	}
 	if err := req.Validate(); err != nil {
-		return nil, nil, err
+		return nil, nil, req, err
 	}
 	if req.TargetProjectID == "" {
-		return nil, nil, ErrTargetProjectIDMissing
+		return nil, nil, req, ErrTargetProjectIDMissing
 	}
-	return inst, adapter, nil
+	view, adjusted, err := s.restorePoint(ctx, inst, adapter, req)
+	if err != nil {
+		return nil, nil, req, err
+	}
+	return view, adapter, adjusted, nil
 }
 
 // SetOrgProjectCapacity wires the organisation project limit a restore is

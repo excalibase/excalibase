@@ -227,6 +227,14 @@ func (h *BackupHandler) restoreInPlace(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	req.TargetProjectID = inst.ProjectID
+	if err := h.svc.CheckInPlaceRestorePoint(r.Context(), inst.ProjectID, req); err != nil {
+		if errors.Is(err, service.ErrRestorePointBeforeMajorUpgrade) {
+			httpError(w, err.Error(), http.StatusConflict)
+			return
+		}
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
 	if h.orchestrator != nil {
 		h.startRestoreJob(w, r, inst, req)
 		return

@@ -103,7 +103,10 @@ type RestoreClusterOpts struct {
 	// the same settings would get it; only its bootstrap is replaced.
 	Cluster         PostgreSQLClusterOpts
 	SourceProjectID string
-	Store           ObjectStoreOpts
+	// SourceArchive is the source's archive the restore reads: "" for the
+	// one every project starts with, "pg<major>" after a major upgrade.
+	SourceArchive string
+	Store         ObjectStoreOpts
 	// RecoveryTarget is the optional PITR target (targetTime / targetXID /
 	// targetLSN / targetName) in CNPG's recoveryTarget shape.
 	RecoveryTarget map[string]interface{}
@@ -548,7 +551,7 @@ func BuildRestoreCluster(opts RestoreClusterOpts) (*unstructured.Unstructured, e
 	cluster := BuildPostgreSQLCluster(opts.Cluster)
 	spec := cluster.Object["spec"].(map[string]interface{})
 	spec["bootstrap"] = map[string]interface{}{"recovery": recovery}
-	spec["externalClusters"] = []interface{}{recoverySource(opts.Cluster.ProjectID)}
+	spec["externalClusters"] = []interface{}{recoverySource(opts.Cluster.ProjectID, opts.SourceArchive)}
 	return cluster, nil
 }
 

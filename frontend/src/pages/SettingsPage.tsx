@@ -8,6 +8,8 @@ import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { ConnectionStrings } from '../components/ConnectionStrings';
 import { ConnectSnippets } from '../components/ConnectSnippets';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
+import { MajorUpgradeCard } from '../components/MajorUpgradeCard';
+import { useFeatures } from '../hooks/useDeploymentMode';
 import { ClusterSettingsCard } from '../components/ClusterSettingsCard';
 import { PublicPortCard } from '../components/PublicPortCard';
 import { AppNetworkSection } from '../components/AppNetworkCard';
@@ -47,6 +49,7 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const [showDelete, setShowDelete] = useState(false);
   const deprovision = useDeprovisionDatabase();
+  const { majorupgrade } = useFeatures();
   const { data: project, isLoading, error: loadError } = useQuery({
     queryKey: ['project', projectId],
     queryFn: async () => {
@@ -166,6 +169,12 @@ export function SettingsPage() {
       <div className="mb-8">
         <MinorUpgradeCard project={project} />
       </div>
+
+      {majorupgrade && (
+      <div className="mb-8">
+        <MajorUpgradeCard project={project} />
+      </div>
+      )}
 
       {postgres && (
       <div className="mb-8">

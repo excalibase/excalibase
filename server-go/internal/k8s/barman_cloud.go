@@ -152,6 +152,7 @@ func BuildRecoverySourceObjectStore(opts RestoreClusterOpts) (*unstructured.Unst
 	if err != nil {
 		return nil, err
 	}
+	configuration["destinationPath"] = ArchiveDestinationPath(opts.Store.Bucket, opts.SourceProjectID, opts.SourceArchive)
 	configuration["wal"] = map[string]interface{}{"maxParallel": int64(8)}
 	name := RecoverySourceObjectStoreName(opts.Cluster.ProjectID)
 	return objectStore(name, opts.Cluster.Namespace, map[string]interface{}{"configuration": configuration}), nil
@@ -202,12 +203,15 @@ func backupPlugin(projectID string) map[string]interface{} {
 	}
 }
 
-func recoverySource(projectID string) map[string]interface{} {
+func recoverySource(projectID, archive string) map[string]interface{} {
 	return map[string]interface{}{
 		"name": recoverySourceName,
 		"plugin": map[string]interface{}{
-			"name":       BarmanCloudPluginName,
-			"parameters": barmanPluginParameters(RecoverySourceObjectStoreName(projectID)),
+			"name": BarmanCloudPluginName,
+			"parameters": map[string]interface{}{
+				"barmanObjectName": RecoverySourceObjectStoreName(projectID),
+				"serverName":       ArchiveServerName(archive),
+			},
 		},
 	}
 }
