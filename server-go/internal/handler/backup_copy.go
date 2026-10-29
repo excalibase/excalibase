@@ -156,7 +156,8 @@ func (h *BackupHandler) recordCopy(r *http.Request, job *domain.RestoreJob, body
 	}
 	encoded, err := json.Marshal(details)
 	if err != nil {
-		log.Printf("ERROR: audit %s of %s: %v", auditDatabaseCopy, safeLog(job.SourceProjectID), err)
+		// The error can quote the caller's input, so only the fact is logged.
+		log.Printf("ERROR: audit %s: the details could not be encoded", auditDatabaseCopy)
 		return
 	}
 	now := time.Now()
