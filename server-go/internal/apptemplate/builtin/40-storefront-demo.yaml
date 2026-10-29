@@ -5,6 +5,8 @@ format: excalibase.template/v1
 id: storefront-demo
 name: Storefront demo
 summary: A working store on this project's API, with a private Redis for product views.
+category: starter
+license: Redis 7.4 RSALv2 or SSPLv1; storefront Apache-2.0
 description: >-
   Two apps. storefront is a public web app (excalibase/storefront-demo on port
   8080): a small shop whose browser code uses this project's GraphQL API,

@@ -98,6 +98,8 @@ var hostConfigFields = map[string]hostConfigCheck{
 	"LogConfig":         checkLogConfig,
 	"IpcMode":           privateOnly("IpcMode", "private", "none", "shareable"),
 	"CgroupnsMode":      privateOnly("CgroupnsMode", "private"),
+	"DnsSearch":         exactly("DnsSearch", AppServiceDomain),
+	"DnsOptions":        exactly("DnsOptions", "ndots:1"),
 }
 
 func allow(Policy, any) error { return nil }
@@ -143,7 +145,7 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 		if !p.networkAllowed(network) && !p.cdcNetworkAdmitted(network, create.Image) {
 			return refuse("network %q is not one containers may join", network)
 		}
-		if err := checkEndpoint(network, endpoint); err != nil {
+		if err := p.checkEndpoint(network, endpoint, create.HostConfig, len(create.NetworkingConfig.EndpointsConfig)); err != nil {
 			return err
 		}
 	}
@@ -151,16 +153,33 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 }
 
 // checkEndpoint refuses aliases, fixed addresses and the like: on a shared
-// network an alias or a taken address answers for a platform service.
-func checkEndpoint(network string, raw json.RawMessage) error {
+// network an alias or a taken address answers for a platform service. On a
+// project network an app may carry its one service name (checkServiceAlias).
+// The name is admitted only on the one network the container runs on.
+func (p Policy) checkEndpoint(network string, raw json.RawMessage, hostConfig map[string]any, endpoints int) error {
 	var endpoint any
 	if err := json.Unmarshal(raw, &endpoint); err != nil {
 		return refuse("endpoint on %q: %v", network, err)
 	}
-	if !isZero(endpoint) {
-		return refuse("endpoint settings on %q may not be set (aliases, addresses, links)", network)
+	if isZero(endpoint) {
+		return nil
 	}
-	return nil
+	mode, _ := hostConfig["NetworkMode"].(string)
+	if endpoints == 1 && mode == network && p.underNetworkPrefix(network) && p.checkServiceAlias(endpoint) == nil {
+		return nil
+	}
+	return refuse("endpoint settings on %q may not be set (aliases, addresses, links)", network)
+}
+
+// exactly admits a list holding only the one value given.
+func exactly(field, want string) hostConfigCheck {
+	return func(_ Policy, value any) error {
+		list, _ := value.([]any)
+		if len(list) == 1 && list[0] == want {
+			return nil
+		}
+		return refuse("HostConfig.%s may only be [%s]", field, want)
+	}
 }
 
 // unmaskingFields are refused whenever present: an empty list there is not

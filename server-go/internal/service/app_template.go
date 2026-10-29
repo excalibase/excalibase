@@ -12,6 +12,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/apptemplate"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 )
 
@@ -111,6 +112,8 @@ type AppTemplateDeps struct {
 	Network  TemplateNetwork
 	Secrets  TemplateSecretStore
 	Claimer  ProjectOperationClaimer
+	// Flags show the catalog (EXC-669) beside the starters; nil keeps it hidden.
+	Flags features.Flags
 }
 
 // AppTemplateService deploys a template all or nothing (EXC-526): every plan
@@ -153,12 +156,27 @@ type TemplateDeployResult struct {
 	TemplateID             string                `json:"templateId"`
 	Apps                   []TemplateDeployedApp `json:"apps"`
 	PrivateNetworkTurnedOn bool                  `json:"privateNetworkTurnedOn"`
+	// Credentials are the template's showOnce values; this answer is the only time they are readable.
+	Credentials apptemplate.ShownValues `json:"credentials,omitempty"`
+}
+
+// template is a template this caller may see: a catalog one only while its flag is on.
+func (s *AppTemplateService) template(ctx context.Context, templateID string) (*apptemplate.Template, error) {
+	tpl, ok := s.catalog.Get(templateID)
+	if !ok || !s.visible(ctx, tpl) {
+		return nil, ErrTemplateNotFound
+	}
+	return tpl, nil
+}
+
+func (s *AppTemplateService) visible(ctx context.Context, tpl *apptemplate.Template) bool {
+	return !tpl.Catalog || features.Enabled(ctx, s.deps.Flags, features.TemplateCatalog)
 }
 
 func (s *AppTemplateService) Deploy(ctx context.Context, projectID, templateID, actor string, opts TemplateDeployOptions) (*TemplateDeployResult, error) {
-	tpl, ok := s.catalog.Get(templateID)
-	if !ok {
-		return nil, ErrTemplateNotFound
+	tpl, err := s.template(ctx, templateID)
+	if err != nil {
+		return nil, err
 	}
 	ctx = context.WithoutCancel(ctx)
 	release, claimed, err := s.claimer.Claim(ctx, "app-template:"+projectID, OperationAppTemplate)
@@ -281,7 +299,7 @@ func (s *AppTemplateService) apply(ctx context.Context, tpl *apptemplate.Templat
 		}
 		journal.created = append(journal.created, app)
 	}
-	result := &TemplateDeployResult{TemplateID: tpl.ID, PrivateNetworkTurnedOn: turnOn}
+	result := &TemplateDeployResult{TemplateID: tpl.ID, PrivateNetworkTurnedOn: turnOn, Credentials: built.Shown}
 	for _, app := range built.Apps {
 		deploy, err := s.deps.Deployer.DeployApp(ctx, projectID, app.ID, actor)
 		if err != nil {

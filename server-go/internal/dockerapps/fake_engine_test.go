@@ -165,11 +165,14 @@ func (f *fakeEngine) ContainerCreate(_ context.Context, config *container.Config
 	id := fmt.Sprintf("c%04d", f.seq)
 	c := &fakeContainer{id: id, name: name, config: *config, host: *host, state: "created",
 		created: time.Now().Add(time.Duration(f.seq) * time.Millisecond), files: map[string][]byte{}}
-	for net := range netCfg.EndpointsConfig {
+	for net, endpoint := range netCfg.EndpointsConfig {
 		if _, ok := f.networks[net]; !ok {
 			return container.CreateResponse{}, errdefs.ErrNotFound.WithMessage("no such network " + net)
 		}
 		c.networks = append(c.networks, net)
+		if endpoint != nil && len(endpoint.Aliases) > 0 {
+			c.aliases = map[string][]string{net: slices.Clone(endpoint.Aliases)}
+		}
 		f.networks[net].members = append(f.networks[net].members, id)
 	}
 	f.containers[id] = c

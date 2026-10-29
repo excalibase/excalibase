@@ -132,3 +132,16 @@ func TestAll_DeclaresAuthUser(t *testing.T) {
 		t.Error("authuser cannot be switched on")
 	}
 }
+
+// EXC-669: the template catalog ships dark and Studio is told its state.
+func TestAll_DeclaresTemplateCatalog(t *testing.T) {
+	if TemplateCatalog != "templatecatalog" {
+		t.Errorf("template catalog feature = %q", TemplateCatalog)
+	}
+	if _, listed := Snapshot(context.Background(), NewStatic())[string(TemplateCatalog)]; !listed {
+		t.Error("templatecatalog is not reported to Studio")
+	}
+	if !NewStatic(TemplateCatalog).Enabled(context.Background(), TemplateCatalog) {
+		t.Error("templatecatalog cannot be switched on")
+	}
+}

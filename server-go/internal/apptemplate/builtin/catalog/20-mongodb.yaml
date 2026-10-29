@@ -1,0 +1,34 @@
+# MongoDB Community Server 8.0 as an internal service. Licensed SSPL-1.0.
+format: excalibase.template/v1
+id: mongodb
+name: MongoDB
+category: database
+license: SSPL-1.0 (MongoDB Community Server)
+summary: A MongoDB server your apps reach at mongodb:27017, with a generated root password.
+description: >-
+  One internal app named mongodb that only this project's apps reach, at
+  mongodb:27017. Data is kept on a 1Gi disk. The root user is root; its
+  password is generated when you deploy and MONGODB_URL is shown to you once.
+  Needs at least 1Gi of memory per app (Standard plan or above). You run this
+  service: Excalibase does not back it up, upgrade it or watch it; use
+  mongodump for backups. MongoDB Community Server is licensed under the SSPL.
+  Image mongo 8.0.34, pinned by digest.
+apps:
+  - name: mongodb
+    image: mongo@sha256:b9924c330a8bbc5800fe9c69f04a84e221eca7b28fd049a0354147d9908fa142
+    internal: true
+    internalPorts: [27017]
+    replicas: 1
+    minMemory: 1Gi
+    args: ["--wiredTigerCacheSizeGB", "0.25"]
+    disk:
+      mountPath: /data/db
+      size: 1Gi
+    env:
+      - name: MONGO_INITDB_ROOT_USERNAME
+        value: root
+      - name: MONGO_INITDB_ROOT_PASSWORD
+        value: "${{ secret(32) }}"
+      - name: MONGODB_URL
+        value: "mongodb://root:${{ apps.mongodb.env.MONGO_INITDB_ROOT_PASSWORD }}@${{ apps.mongodb.host }}:${{ apps.mongodb.port }}/?authSource=admin"
+        showOnce: true

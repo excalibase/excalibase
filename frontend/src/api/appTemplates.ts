@@ -10,6 +10,8 @@ export interface TemplateVar {
   source: TemplateVarSource;
   // Only a plain literal carries its value; a generated one does not exist until deploy.
   value?: string;
+  // Returned to the deployer once, in the deploy's answer.
+  showOnce?: boolean;
 }
 
 export interface TemplateApp {
@@ -21,6 +23,7 @@ export interface TemplateApp {
   replicas: number;
   args?: string[];
   disk?: { mountPath: string; size: string };
+  minMemory?: string;
   env: TemplateVar[];
 }
 
@@ -46,6 +49,10 @@ export interface AppTemplate {
   name: string;
   summary: string;
   description?: string;
+  category?: TemplateCategory;
+  license?: string;
+  // A self-managed service of the catalog (EXC-669), not a starter.
+  catalog?: boolean;
   apps: TemplateApp[];
   needsPrivateNetwork: boolean;
   needsDatabase: boolean;
@@ -53,10 +60,20 @@ export interface AppTemplate {
   source?: string;
 }
 
+export type TemplateCategory = 'starter' | 'database' | 'cache' | 'queue' | 'search' | 'monitoring' | 'analytics';
+
+// A generated value the deploy returns once; the platform cannot show it again.
+export interface TemplateCredential {
+  app: string;
+  name: string;
+  value: string;
+}
+
 export interface TemplateDeployResult {
   templateId: string;
   apps: { id: string; name: string; deployId: string; deployStatus: string }[];
   privateNetworkTurnedOn: boolean;
+  credentials?: TemplateCredential[];
 }
 
 const templatesKey = (projectId: string) => ['app-templates', projectId] as const;
