@@ -228,3 +228,37 @@ func TestZot_TheClientListsAndUntags(t *testing.T) {
 		t.Errorf("a project's token reads the catalog: %d", resp.StatusCode)
 	}
 }
+
+// An archive a build wrote goes through the hostile reader and the push, and
+// the project's pull credential then reads it by digest.
+func TestZot_APushedArchivePullsByDigest(t *testing.T) {
+	internal, issuer := testInternal(t, fixedGenerations{})
+	base := startZot(t, issuer)
+	entries, root := image(t, "amd64", nil)
+	layout, err := ReadLayout(bytes.NewReader(tarOf(t, append([]entry{layoutFile, indexEntry(t, root)}, entries...)...)), t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := internal.Client(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := client.Push(context.Background(), "proj-a/api", layout, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _ := NewTokenHandler(internal, func(context.Context, string) (bool, error) { return true, nil })
+	cred, _ := internal.PullCredential("proj-a")
+	pull := pullToken(t, h, cred.Username, cred.Password, "repository:proj-a/api:pull")
+	if resp := send(t, http.MethodGet, base+"/v2/proj-a/api/manifests/"+digest, pull, "application/vnd.oci.image.manifest.v1+json", nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("pull by digest: %d", resp.StatusCode)
+	}
+	for _, blob := range layout.Blobs {
+		if resp := send(t, http.MethodGet, base+"/v2/proj-a/api/blobs/"+string(blob.Digest), pull, "", nil); resp.StatusCode != http.StatusOK {
+			t.Errorf("blob %s: %d", blob.Digest, resp.StatusCode)
+		}
+	}
+	if tags, _ := client.Tags(context.Background(), "proj-a/api"); len(tags) != 1 {
+		t.Errorf("the push is tagged once: %v", tags)
+	}
+}
