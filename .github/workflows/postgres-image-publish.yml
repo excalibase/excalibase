@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26.9'
           cache-dependency-path: server-go/go.sum
 
       # Rendered by the same package provisioning validates against, so the
@@ -65,7 +65,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26.9'
           cache-dependency-path: server-go/go.sum
 
       # Docker Hub, the same registry and the same credentials cd.yml uses
@@ -217,7 +217,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26.9'
           cache-dependency-path: server-go/go.sum
 
       # Generated from the catalogue rather than committed beside it, so the

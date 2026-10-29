@@ -79,7 +79,7 @@ The Go server uses `client-go` natively — no kubectl shell-outs. CRDs are buil
 ### Prerequisites
 
 - For K8s mode: any cluster — managed (EKS/GKE/AKS), self-hosted (RKE2), or single-node (k0s/k3s/MicroK8s, rootless OK). For Docker mode: a Docker daemon (local or remote over TLS).
-- Go 1.24+
+- Go 1.26.9+
 - Node.js 18+ (for frontend)
 
 ### 1. Install operators
@@ -458,7 +458,7 @@ cd frontend && npx playwright test
 
 ## Tech Stack
 
-- **Backend**: Go 1.24+, chi router, client-go, Docker SDK, Helm SDK, NATS client, esbuild
+- **Backend**: Go 1.26.9+, chi router, client-go, Docker SDK, Helm SDK, NATS client, esbuild
 - **Storage**: SQLite (self-hosted) / PostgreSQL via CNPG (cloud), auto-migrate on startup
 - **Vault**: in-process Shamir on the platform Postgres, or standalone HTTP service via `VAULT_URL`
 - **Auth**: argon2id password hashing, PATs (`excali_…` prefix), JWT minted via separate auth service
