@@ -4,7 +4,7 @@
 # after Loki and provisioning restart and after the container itself is gone.
 # Needs T, PID, TC, ORG, PORT, DOCKER, COMPOSE, P, c, ok, ko.
 echo "== stored log search"
-lapi() { c -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api$1"; }
+lapi() { local path=$1; shift; c -H "Authorization: Bearer $T" "$@" "https://studio.localhost:$PORT/api$path"; }
 quote() { python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
 # Loki is reached only from provisioning's network; ask it from there.
 loki_lines() {
