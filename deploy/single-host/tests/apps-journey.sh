@@ -30,6 +30,13 @@ wait_deploy() {
   echo "$state"
 }
 deploys() { api "$API/projects/$1/apps/$2/deploys" | json 'json.dumps(d if isinstance(d,list) else (d.get("deploys") or d.get("items")))'; }
+# deploy_failure <project> <app>: the newest deploy's state and reason, and the app's last container logs.
+deploy_failure() {
+  api "$API/projects/$1/apps/$2/deploys" | json '(lambda x: "%s: %s" % (x.get("status"), x.get("failureReason", "")))((d if isinstance(d,list) else (d.get("deploys") or d.get("items")))[0])'
+  local last
+  last=$($DOCKER ps -a --filter "label=excalibase.app=$2" --filter label=excalibase.component=app --format '{{.Names}}' | head -1)
+  [ -n "$last" ] && $DOCKER inspect "$last" --format 'container {{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' && $DOCKER logs --tail 15 "$last" 2>&1 | cut -c1-200
+}
 app_container() { $DOCKER ps --filter "label=excalibase.app=$1" --filter label=excalibase.component=app --format '{{.Names}}' | head -1; }
 open_app() { curl -sk --max-time 10 --resolve "$1:$PORT:127.0.0.1" "https://$1:$PORT/"; }
 
@@ -231,7 +238,7 @@ remove_app() {
 
 SRCH=$(deploy_template meilisearch MEILI_MASTER_KEY)
 grep -qx '[A-Za-z0-9]\{32\}' "$W/meilisearch.secret" && ok "the deploy shows the generated master key once" || ko "no MEILI_MASTER_KEY in the deploy answer"
-[ "$(wait_deploy "$PID" "$SRCH")" = succeeded ] && ok "meilisearch deployed from the catalog" || ko "meilisearch deploy: $(deploys "$PID" "$SRCH" | head -c 300)"
+[ "$(wait_deploy "$PID" "$SRCH")" = succeeded ] && ok "meilisearch deployed from the catalog" || ko "meilisearch deploy: $(deploy_failure "$PID" "$SRCH")"
 ( umask 077; printf 'Authorization: Bearer %s\n' "$(cat "$W/meilisearch.secret")" > "$W/meilisearch.header" )
 keyed=$($DOCKER exec -i "$AC" sh -c 'wget -q -T 5 -O - --header "$(cat)" http://meilisearch:7700/keys >/dev/null && echo yes' < "$W/meilisearch.header" 2>&1)
 bare=$($DOCKER exec "$AC" wget -q -T 5 -O /dev/null http://meilisearch:7700/keys 2>&1 && echo yes)
@@ -246,7 +253,7 @@ if [ "$APP_SANDBOX" = none ]; then
 else
   VID=$(deploy_template valkey VALKEY_URL)
   grep -q '^redis://:[A-Za-z0-9]\{32\}@valkey:6379/0$' "$W/valkey.secret" && ok "the deploy shows VALKEY_URL once" || ko "no VALKEY_URL in the deploy answer"
-  [ "$(wait_deploy "$PID" "$VID")" = succeeded ] && ok "valkey deployed from the catalog" || ko "valkey deploy: $(deploys "$PID" "$VID" | head -c 300)"
+  [ "$(wait_deploy "$PID" "$VID")" = succeeded ] && ok "valkey deployed from the catalog" || ko "valkey deploy: $(deploy_failure "$PID" "$VID")"
   ( umask 077; sed 's|^redis://:\([^@]*\)@.*|\1|' "$W/valkey.secret" > "$W/valkey.pw"; printf 'AUTH %s\r\nPING\r\nQUIT\r\n' "$(cat "$W/valkey.pw")" > "$W/valkey.cmd" )
   said=$($DOCKER exec -i "$AC" nc -w 5 valkey 6379 < "$W/valkey.cmd" 2>&1 | tr -d '\r' | tr '\n' ' ')
   case "$said" in "+OK +PONG "*) ok "a sibling reaches valkey by its bare name with the generated password" ;; *) ko "valkey by name: ${said:0:200}" ;; esac
