@@ -47,6 +47,8 @@ const (
 	buildShares  = int64(256)
 	tmpfsOptions = "rw,nosuid,nodev,size=1g,mode=1777"
 	mib          = int64(1) << 20
+	// egressGraceSeconds keeps the sidecar up a little past the steps' time limit.
+	egressGraceSeconds = 60
 )
 
 // chain is the order the steps run in, each once the one before exits 0.
@@ -186,7 +188,8 @@ func (r *Runner) startEgress(ctx context.Context, spec sitebuilds.RunSpec) (stri
 			"EGRESS_LISTEN=:" + egressPort,
 			"EGRESS_EXTRA_DENY_CIDRS=" + strings.Join(r.opts.ExtraDenyCIDRs, ","),
 			"EGRESS_ALLOW=" + strings.Join(r.opts.EgressAllow, ","),
-			"EGRESS_LIFETIME=" + strconv.Itoa(lifetime(spec)) + "s",
+			// Past the steps' own limit, so the time limit, not a vanished proxy, names a build that ran long.
+			"EGRESS_LIFETIME=" + strconv.Itoa(lifetime(spec)+egressGraceSeconds) + "s",
 		},
 		Labels: r.labels(spec),
 	}
@@ -213,7 +216,8 @@ func (r *Runner) startEgress(ctx context.Context, spec sitebuilds.RunSpec) (stri
 	if endpoint == nil || endpoint.IPAddress == "" {
 		return "", errors.New("the egress sidecar has no address on the build network")
 	}
-	return "http://" + endpoint.IPAddress + ":" + egressPort, nil
+	// Plain http to the forward proxy on the build's own network; HTTPS crosses it as CONNECT tunnels.
+	return "http://" + endpoint.IPAddress + ":" + egressPort, nil //NOSONAR
 }
 
 // startWatch runs the disk watcher as the steps' own user, so it reads every folder they make (their 0700

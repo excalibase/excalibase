@@ -209,11 +209,16 @@ func (r *Runner) buildNetworkOptions(labels map[string]string) network.CreateOpt
 	return options
 }
 
+// buildSegment starts every per-build network, volume and container name.
+const buildSegment = "build-"
+
 func (r *Runner) buildNetwork(buildID string) string {
-	return r.opts.NetworkPrefix + "build-" + buildID
+	return r.opts.NetworkPrefix + buildSegment + buildID
 }
-func (r *Runner) egressNetwork() string            { return r.opts.NetworkPrefix + egressNetworkName }
-func (r *Runner) workVolume(buildID string) string { return r.opts.VolumePrefix + "build-" + buildID }
-func containerName(buildID string, step string) string {
-	return managedPrefix + "build-" + buildID + "-" + step
+func (r *Runner) egressNetwork() string { return r.opts.NetworkPrefix + egressNetworkName }
+func (r *Runner) workVolume(buildID string) string {
+	return r.opts.VolumePrefix + buildSegment + buildID
+}
+func containerName(buildID, step string) string {
+	return managedPrefix + buildSegment + buildID + "-" + step
 }

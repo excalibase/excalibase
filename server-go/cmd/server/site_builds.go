@@ -56,8 +56,8 @@ type siteBuildArgs struct {
 	docker provisioner.DockerClient
 }
 
-// rawEngine is a Docker client that hands out the SDK client the runners call.
-type rawEngine interface{ RawClient() *client.Client }
+// rawClienter is a Docker client that hands out the SDK client the runners call.
+type rawClienter interface{ RawClient() *client.Client }
 
 // siteBuildMode: off unless switched on where Sites is offered; single-host builds
 // only behind their own flag (EXC-671), and is named, never silently off, without it.
@@ -118,7 +118,7 @@ func siteBuildDispatcherOptions(cfg config.AppConfig) sitebuilds.DispatcherOptio
 func siteBuildRunner(args siteBuildArgs) (sitebuilds.Runner, error) {
 	cfg := args.cfg
 	if cfg.ProvisionerMode == "docker" {
-		engine, _ := args.docker.(rawEngine)
+		engine, _ := args.docker.(rawClienter)
 		return singleHostBuildRunner(context.Background(), cfg, engine)
 	}
 	kube, ok := args.kube.(*k8s.Client)
@@ -138,7 +138,7 @@ func siteBuildRunner(args siteBuildArgs) (sitebuilds.Runner, error) {
 
 // singleHostBuildRunner runs builds through the engine proxy under the apps' sandbox runtime,
 // and refuses to start on an engine without it, as a cluster without the RuntimeClass does.
-func singleHostBuildRunner(ctx context.Context, cfg config.AppConfig, engine rawEngine) (*dockerbuilds.Runner, error) {
+func singleHostBuildRunner(ctx context.Context, cfg config.AppConfig, engine rawClienter) (*dockerbuilds.Runner, error) {
 	if engine == nil || engine.RawClient() == nil {
 		return nil, errors.New("git builds on a single host need the engine the databases run on")
 	}
