@@ -40,6 +40,7 @@ export default defineConfig({
         'src/components/PostgresVersionPicker.tsx',
         'src/components/MySQLVersionPicker.tsx',
         'src/components/MinorUpgradeCard.tsx',
+        'src/components/MajorUpgradeCard.tsx',
         'src/components/documents/**/*.{ts,tsx}',
         'src/pages/DocumentsPage.tsx',
         'src/pages/MongoUsersPage.tsx',

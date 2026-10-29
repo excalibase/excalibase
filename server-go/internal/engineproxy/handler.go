@@ -40,6 +40,8 @@ const (
 	routeManaged route = iota
 	routeExecCreate
 	routeStats
+	// routeRename takes a new name a create could take (EXC-668).
+	routeRename
 )
 
 // containerRoutes are the calls provisioning makes on a container it created.
@@ -55,6 +57,7 @@ var containerRoutes = map[string]route{
 	"GET /logs":     routeManaged,
 	"POST /wait":    routeManaged,
 	"GET /stats":    routeStats,
+	"POST /rename":  routeRename,
 }
 
 // Handler is the proxy. Build it with NewHandler.
@@ -150,8 +153,15 @@ func (h *Handler) authorizeContainer(r *http.Request, id, action string) error {
 	if err := h.requireManaged(r.Context(), id); err != nil {
 		return err
 	}
-	if kind == routeExecCreate {
+	switch kind {
+	case routeExecCreate:
 		return h.checkBody(r, CheckExecCreate)
+	case routeRename:
+		names := r.URL.Query()["name"]
+		if len(names) != 1 {
+			return refuse("a rename names exactly one name")
+		}
+		return h.policy.CheckRename(names[0])
 	}
 	return nil
 }

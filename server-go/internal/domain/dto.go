@@ -210,6 +210,9 @@ type BackupRecord struct {
 	Timestamp string `json:"timestamp"`
 	Type      string `json:"type"`   // MANUAL, SCHEDULED
 	Status    string `json:"status"` // IN_PROGRESS, COMPLETED, FAILED
+	// PostgresVersion is the major the backup was taken on; empty for one
+	// taken before records said, which is the project's first major.
+	PostgresVersion string `json:"postgresVersion,omitempty"`
 }
 
 // BackupSchedule is the persistent record driving the platform's

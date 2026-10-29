@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 
 interface ConfirmModalProps {
@@ -45,6 +45,21 @@ export function ConfirmModal({
     if (!open) release();
   }, [open]);
 
+  const titleId = useId();
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setTyped('');
+        onCloseRef.current();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+
   if (!open) return null;
 
   const canConfirm = confirmText ? typed === confirmText : true;
@@ -74,6 +89,9 @@ export function ConfirmModal({
       />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none" data-testid="confirm-modal">
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
           className="bg-surface-card border border-border-primary rounded-xl shadow-2xl w-full max-w-md pointer-events-auto"
         >
           {/* Header */}
@@ -83,9 +101,10 @@ export function ConfirmModal({
                 <AlertTriangle className="w-5 h-5 text-red-400" />
               </div>
             )}
-            <h3 className="text-lg font-semibold text-text-primary flex-1">{title}</h3>
+            <h3 id={titleId} className="text-lg font-semibold text-text-primary flex-1">{title}</h3>
             <button
               onClick={handleClose}
+              aria-label="Close"
               className="p-1 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-hover"
               data-testid="modal-close"
             >
@@ -107,6 +126,7 @@ export function ConfirmModal({
                   onChange={(e) => setTyped(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
                   placeholder={confirmText}
+                  aria-label={`Type ${confirmText} to confirm`}
                   data-testid="confirm-input"
                   autoFocus
                 />
