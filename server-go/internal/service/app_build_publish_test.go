@@ -43,6 +43,17 @@ func (f *fakePusher) Push(_ context.Context, repository string, layout *appregis
 	return string(layout.Root.Digest), f.err
 }
 
+type fakeRoom struct {
+	err      error
+	quota    int64
+	incoming int
+}
+
+func (f *fakeRoom) MakeRoom(_ context.Context, _ string, incoming map[string]int64, quota int64) error {
+	f.quota, f.incoming = quota, len(incoming)
+	return f.err
+}
+
 type fakeImageDeployer struct {
 	image  string
 	origin apphost.DeployOrigin
@@ -57,7 +68,7 @@ func publishFixture(t *testing.T, collector AppImageCollector) (*AppBuildPublish
 	t.Helper()
 	spool := t.TempDir()
 	pusher, deployer := &fakePusher{}, &fakeImageDeployer{}
-	return NewAppBuildPublisher(appregistrytest.New(t), collector, pusher, deployer, spool), pusher, deployer, spool
+	return NewAppBuildPublisher(appregistrytest.New(t), collector, pusher, &fakeRoom{}, deployer, spool), pusher, deployer, spool
 }
 
 func buildResult() AppBuildResult {
@@ -80,6 +91,9 @@ func TestPublish_PushesTheImageAndDeploysItAsAGitBuild(t *testing.T) {
 	}
 	if deployer.origin.Source != apphost.DeploySourceGitBuild || deployer.origin.CommitSHA != "9fceb02" {
 		t.Errorf("origin %+v", deployer.origin)
+	}
+	if room := publisher.room.(*fakeRoom); room.quota != RegistryQuotaImages*result.MaxImage || room.incoming != 2 {
+		t.Errorf("room asked for %d blobs within %d", room.incoming, room.quota)
 	}
 	if left, _ := os.ReadDir(spool); len(left) != 0 {
 		t.Errorf("the spool keeps %d entries", len(left))
@@ -109,6 +123,14 @@ func TestPublish_NothingIsPushedFromAnArchiveItRefuses(t *testing.T) {
 		if tc.want == nil && !strings.Contains(err.Error(), "went away") {
 			t.Errorf("%s: the collector's own failure is named: %v", name, err)
 		}
+	}
+}
+
+func TestPublish_AFullRegistryPushesNothing(t *testing.T) {
+	publisher, pusher, deployer, _ := publishFixture(t, fakeCollector{archive: appregistrytest.Archive(t)})
+	publisher.room = &fakeRoom{err: ErrRegistryFull}
+	if _, err := publisher.Publish(context.Background(), buildResult()); !errors.Is(err, ErrRegistryFull) || pusher.pushed != 0 || deployer.image != "" {
+		t.Fatalf("%v, pushed %d", err, pusher.pushed)
 	}
 }
 

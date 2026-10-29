@@ -23,6 +23,11 @@ type ImagePusher interface {
 	Push(ctx context.Context, repository string, layout *appregistry.Layout, at time.Time) (string, error)
 }
 
+// RegistryRoom fits an image into the project's share of the registry.
+type RegistryRoom interface {
+	MakeRoom(ctx context.Context, projectID string, incoming map[string]int64, quota int64) error
+}
+
 // AppImageDeployer is the deploy the publish hands the image to.
 type AppImageDeployer interface {
 	DeployImage(ctx context.Context, projectID, appID, image string, origin apphost.DeployOrigin) (*apphost.Deploy, error)
@@ -38,6 +43,7 @@ type AppBuildPublisher struct {
 	internal  *appregistry.Internal
 	collector AppImageCollector
 	pusher    ImagePusher
+	room      RegistryRoom
 	deployer  AppImageDeployer
 	spoolDir  string
 	now       func() time.Time
@@ -52,8 +58,8 @@ type AppBuildResult struct {
 }
 
 // NewAppBuildPublisher spools archives under spoolDir (provisioning's own disk); each is removed after its push.
-func NewAppBuildPublisher(internal *appregistry.Internal, collector AppImageCollector, pusher ImagePusher, deployer AppImageDeployer, spoolDir string) *AppBuildPublisher {
-	return &AppBuildPublisher{internal: internal, collector: collector, pusher: pusher, deployer: deployer, spoolDir: spoolDir, now: time.Now}
+func NewAppBuildPublisher(internal *appregistry.Internal, collector AppImageCollector, pusher ImagePusher, room RegistryRoom, deployer AppImageDeployer, spoolDir string) *AppBuildPublisher {
+	return &AppBuildPublisher{internal: internal, collector: collector, pusher: pusher, room: room, deployer: deployer, spoolDir: spoolDir, now: time.Now}
 }
 
 // Publish collects, checks and pushes the build's image, then deploys it as a git build.
@@ -72,6 +78,9 @@ func (p *AppBuildPublisher) Publish(ctx context.Context, result AppBuildResult) 
 	defer os.RemoveAll(dir)
 	layout, err := p.collect(ctx, result, dir)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.room.MakeRoom(ctx, result.ProjectID, layout.Contents(), RegistryQuotaImages*result.MaxImage); err != nil {
 		return nil, err
 	}
 	digest, err := p.pusher.Push(ctx, repository, layout, p.now())

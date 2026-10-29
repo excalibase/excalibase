@@ -16,6 +16,8 @@ import (
 type fakeRegistryAdmin struct {
 	onTags           func()
 	untagged         []string
+	blobs            map[string]map[string]int64
+	blobsErr         error
 	tags             map[string][]string
 	deleted          []string
 	listErr, tagsErr error
@@ -37,6 +39,13 @@ func (f *fakeRegistryAdmin) Tags(_ context.Context, repository string) ([]string
 		f.onTags = nil
 	}
 	return f.tags[repository], f.tagsErr
+}
+
+func (f *fakeRegistryAdmin) Blobs(_ context.Context, _, reference string) (map[string]int64, error) {
+	if f.blobsErr != nil {
+		return nil, f.blobsErr
+	}
+	return f.blobs[reference], nil
 }
 
 // Untag records the image a tag named, so tests read what lost its tag.

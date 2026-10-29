@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -258,7 +259,13 @@ func TestZot_APushedArchivePullsByDigest(t *testing.T) {
 			t.Errorf("blob %s: %d", blob.Digest, resp.StatusCode)
 		}
 	}
-	if tags, _ := client.Tags(context.Background(), "proj-a/api"); len(tags) != 1 {
-		t.Errorf("the push is tagged once: %v", tags)
+	tags, _ := client.Tags(context.Background(), "proj-a/api")
+	if len(tags) != 1 {
+		t.Fatalf("the push is tagged once: %v", tags)
+	}
+	// What the quota counts in the registry is what the archive held.
+	blobs, err := client.Blobs(context.Background(), "proj-a/api", tags[0])
+	if err != nil || !maps.Equal(blobs, layout.Contents()) {
+		t.Errorf("blobs %v %v, archive %v", blobs, err, layout.Contents())
 	}
 }

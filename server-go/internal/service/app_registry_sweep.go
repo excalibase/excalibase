@@ -27,6 +27,7 @@ type RegistryAdmin interface {
 	Repositories(ctx context.Context) ([]string, error)
 	Tags(ctx context.Context, repository string) ([]string, error)
 	Untag(ctx context.Context, repository, tag string) error
+	Blobs(ctx context.Context, repository, reference string) (map[string]int64, error)
 }
 
 // RegistrySweeper removes the push tags of built images nothing will run
@@ -115,6 +116,11 @@ func (s *RegistrySweeper) Sweep(ctx context.Context) (RegistrySweepReport, error
 
 // keep is the digests a repository must hold; empty for an app or project that is gone.
 func (s *RegistrySweeper) keep(ctx context.Context, repository string) (map[string]bool, error) {
+	return s.keepRecent(ctx, repository, RegistryKeepDeploys)
+}
+
+// keepRecent keeps the app's image, its last successful deploy's and its last recent deploys'.
+func (s *RegistrySweeper) keepRecent(ctx context.Context, repository string, recent int) (map[string]bool, error) {
 	projectID, appName, ok := appregistry.SplitRepository(repository)
 	if !ok {
 		return nil, appregistry.ErrInvalidName
@@ -142,7 +148,7 @@ func (s *RegistrySweeper) keep(ctx context.Context, repository string) (map[stri
 		for i, deploy := range deploys {
 			lastSuccess := !succeeded && deploy.Status == apphost.DeployStatusSucceeded
 			succeeded = succeeded || lastSuccess
-			if i < RegistryKeepDeploys || lastSuccess {
+			if i < recent || lastSuccess {
 				keepDigest(keep, deploy.Image)
 				keepDigest(keep, "@"+deploy.Digest)
 			}
