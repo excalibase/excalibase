@@ -55,8 +55,26 @@ const statsSchemaLookup = `SELECT n.nspname INTO stats_schema
 
 const projectDatabaseOID = `(SELECT d.oid FROM pg_database d WHERE d.datname = current_database())`
 
+// statsTarget is where the statistics are read: the project database itself
+// on Kubernetes, where CloudNativePG creates the extension in it; on a single
+// host the maintenance database, filtered to the project database by name, so
+// the superuser never connects to a database the owner owns (EXC-673).
+type statsTarget struct {
+	connectTo   string
+	databaseOID string
+}
+
+func statsTargetOf(inst *domain.DatabaseInstance) statsTarget {
+	if inst.DeploymentMode == domain.ModeDocker {
+		return statsTarget{connectTo: "postgres",
+			databaseOID: `(SELECT d.oid FROM pg_catalog.pg_database d WHERE d.datname = ` + sqlQuote(inst.DatabaseName) + `)`}
+	}
+	return statsTarget{connectTo: inst.DatabaseName, databaseOID: projectDatabaseOID}
+}
+
 // The functions live in the session's pg_temp and go with it.
-var queryStatsFunctionSQL = `SET statement_timeout = '10s';
+func queryStatsFunctionSQL(databaseOID string) string {
+	return `SET statement_timeout = '10s';
 CREATE FUNCTION pg_temp.excalibase_query_stats(sort_by text, max_rows integer) RETURNS text
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $excalibase_stats$
 DECLARE
@@ -68,7 +86,7 @@ BEGIN
       SELECT s.query, sum(s.calls) AS calls, sum(s.total_exec_time) AS total_ms,
         coalesce(sum(s.total_exec_time) / nullif(sum(s.calls), 0), 0) AS mean_ms, sum(s.rows) AS rows
       FROM %I.pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid
-      WHERE s.dbid = ` + projectDatabaseOID + ` AND ` + projectStatementRoleFilter + `
+      WHERE s.dbid = ` + databaseOID + ` AND ` + projectStatementRoleFilter + `
       GROUP BY s.query
     ), top AS (
       SELECT grouped.*, CASE WHEN $1 = 'mean' THEN grouped.mean_ms ELSE grouped.total_ms END AS sort_key
@@ -84,23 +102,31 @@ BEGIN
 END
 $excalibase_stats$;
 `
+}
 
-var resetQueryStatsSQL = `SET statement_timeout = '10s';
+func resetQueryStatsSQL(databaseOID string) string {
+	return `SET statement_timeout = '10s';
 CREATE FUNCTION pg_temp.excalibase_reset_query_stats() RETURNS text
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $excalibase_stats$
 DECLARE
   stats_schema text;
   project_role oid;
+  project_database oid;
 BEGIN
   ` + statsSchemaLookup + `
+  project_database := ` + databaseOID + `;
+  IF project_database IS NULL THEN
+    RETURN NULL;
+  END IF;
   FOR project_role IN SELECT r.oid FROM pg_roles r WHERE ` + projectStatementRoleFilter + ` LOOP
-    EXECUTE format('SELECT %I.pg_stat_statements_reset($1, ` + projectDatabaseOID + `, 0)', stats_schema) USING project_role;
+    EXECUTE format('SELECT %I.pg_stat_statements_reset($1, $2, 0)', stats_schema) USING project_role, project_database;
   END LOOP;
   RETURN 'reset';
 END
 $excalibase_stats$;
 SELECT pg_temp.excalibase_reset_query_stats();
 `
+}
 
 // slowStatementMs is the mean time at which a statement counts as slow.
 const slowStatementMs = 1000
@@ -114,8 +140,8 @@ type statementReport struct {
 }
 
 // queryStatsScript reads the project's statements; sort and limit are checked values.
-func queryStatsScript(sort string, limit int) string {
-	return queryStatsFunctionSQL + "SELECT pg_temp.excalibase_query_stats(" + sqlQuote(sort) + ", " + strconv.Itoa(limit) + ");\n"
+func queryStatsScript(target statsTarget, sort string, limit int) string {
+	return queryStatsFunctionSQL(target.databaseOID) + "SELECT pg_temp.excalibase_query_stats(" + sqlQuote(sort) + ", " + strconv.Itoa(limit) + ");\n"
 }
 
 // queryStatsPsql runs script as the superuser in the project database, the
@@ -128,8 +154,9 @@ func queryStatsPsql(dbName string, serverVersionNum int, script string) []string
 
 // runStatsScript runs script on the primary exec reaches and returns its answer.
 func runStatsScript(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance, script string) (string, error) {
-	version := probeServerVersionNum(ctx, exec, inst.DatabaseName)
-	out, err := exec(ctx, queryStatsPsql(inst.DatabaseName, version, script))
+	database := statsTargetOf(inst).connectTo
+	version := probeServerVersionNum(ctx, exec, database)
+	out, err := exec(ctx, queryStatsPsql(database, version, script))
 	if err != nil {
 		return "", fmt.Errorf("read query statistics of %s: %w", inst.ProjectID, err)
 	}
@@ -138,7 +165,7 @@ func runStatsScript(ctx context.Context, exec roleSQLExecer, inst *domain.Databa
 
 // readPostgresStatements is nil while statistics are not on.
 func readPostgresStatements(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance, sort string, limit int) (*statementReport, error) {
-	answer, err := runStatsScript(ctx, exec, inst, queryStatsScript(sort, limit))
+	answer, err := runStatsScript(ctx, exec, inst, queryStatsScript(statsTargetOf(inst), sort, limit))
 	if err != nil || answer == "" {
 		return nil, err
 	}
@@ -176,7 +203,7 @@ func (s *QueryStatsService) listPostgres(ctx context.Context, inst *domain.Datab
 }
 
 func (s *QueryStatsService) resetPostgres(ctx context.Context, inst *domain.DatabaseInstance) error {
-	answer, err := s.runPostgres(ctx, inst, resetQueryStatsSQL)
+	answer, err := s.runPostgres(ctx, inst, resetQueryStatsSQL(statsTargetOf(inst).databaseOID))
 	if err != nil {
 		return err
 	}

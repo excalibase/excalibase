@@ -434,6 +434,36 @@ a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
 | `LOG_RETENTION` | `168h` | how long lines are kept (whole hours, at least 24h) |
 | `FEATURE_LOGRETENTION` | unset | keep each project's lines for its plan instead: `LOG_RETENTION_FREE` (`24h`), `LOG_RETENTION_STANDARD` and `LOG_RETENTION_ENTERPRISE` (`168h`) |
 
+## Request charts and slow queries
+
+A project's Requests and Slow queries pages (Monitoring) work on a single host
+as on Kubernetes (EXC-673), each behind its own setting in `.env`:
+
+```bash
+FEATURE_REQUESTMETRICS=true   # Requests: calls, errors, latency per project
+FEATURE_SLOWQUERIES=true      # Slow queries: the project's costliest statements
+```
+
+then `docker compose up -d`. Requests: graphql and auth count each project's
+calls on a second port bound only to an internal network, `excalibase-metrics`,
+that only provisioning, graphql and auth join; tenant containers cannot reach
+it. Provisioning reads the counts once a minute and keeps a row per project and
+minute with traffic for 7 days. Host monitoring is not needed.
+
+Slow queries: a Postgres project created with the setting on keeps
+`pg_stat_statements` (up to 5000 statements, utility statements such as
+`ALTER ROLE ... PASSWORD` never kept). A project created before turns it on
+from its Slow queries page (Admin), which restarts its database once (a few
+seconds). Statistics are read as the superuser in the database server's own
+`postgres` database, never the project's, and show only the project's own
+roles' statements. MySQL projects read their statement digests with no
+restart. DocumentDB projects have no slow-queries page on a single host.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_REQUESTMETRICS` | unset (off) | request counting in graphql and auth, and the Requests page |
+| `FEATURE_SLOWQUERIES` | unset (off) | statement statistics for new Postgres projects, and the Slow queries page |
+
 ## Refusals you may see
 
 - `run ./init.sh first` — a required value is missing from `.env`.
@@ -460,6 +490,7 @@ a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
 | DocumentDB projects | yes, with `--documentdb` (see DocumentDB projects) |
 | Host and container monitoring, alerts | yes, with `--host-metrics` (see Host monitoring) |
 | Stored log search with retention | yes, with `--host-logs` (see Stored log search) |
+| Request charts, slow queries | yes, with `FEATURE_REQUESTMETRICS` / `FEATURE_SLOWQUERIES` (see Request charts and slow queries); not for DocumentDB slow queries |
 | Edge functions, realtime | no (Kubernetes only) |
 | High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
 
@@ -483,7 +514,9 @@ project's alert and the restart resolving it. `HOST_LOGS=1` installs with
 `--host-logs` and walks stored log search: a line a project's database writes is
 stored in Loki under that project's labels, found by its search and never by a
 second project's, and still found after Loki and provisioning restart and the
-database container is removed (it runs last). `MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
+database container is removed (it runs last). `REQUEST_METRICS=1` turns both on and walks them: a project's calls in its
+own charts and not another's, a slow statement in its own slow queries only,
+and a tenant container unable to open the counters' ports. `MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
 initializes, restarts and unseals the vault with the CLI. It destroys the bundle's containers and
 volumes: never run it on an install you keep. CI runs it on every change to the
 bundle or the engine path; for Podman, `COMPOSE="podman compose" DOCKER=podman
