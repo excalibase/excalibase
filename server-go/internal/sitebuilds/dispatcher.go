@@ -288,7 +288,7 @@ func (e *execution) execute(ctx context.Context) outcome {
 	cancelStart()
 	defer e.remove(ctx)
 	if err != nil {
-		return failedWith(FailPlatform, userMessage(err))
+		return startFailure(err)
 	}
 	awaitCtx, cancelAwait := context.WithTimeout(ctx, spec.Timeout+e.dispatcher.options.PendingGrace)
 	status := e.await(awaitCtx, revoke)
@@ -303,6 +303,14 @@ func (e *execution) execute(ctx context.Context) outcome {
 	deployCtx, cancelDeploy := context.WithTimeout(ctx, e.dispatcher.options.DeployBudget)
 	defer cancelDeploy()
 	return e.deploy(deployCtx)
+}
+
+// startFailure names a build image that did not pull apart from the platform's own failures.
+func startFailure(err error) outcome {
+	if errors.Is(err, ErrImagePull) {
+		return failedWith(FailImage, "the build image could not be pulled; try again, or ask the operator to check the host's registry access")
+	}
+	return failedWith(FailPlatform, userMessage(err))
 }
 
 // stillDeployable re-reads the connection and its connector just before the deploy; it answers why not, or "".

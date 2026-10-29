@@ -72,3 +72,19 @@ for want in 'SITES_ENABLED: "true"' 'SITES_CLOUDFLARE_ACCOUNT_ID: acct-9f3e' 'SI
   'SITES_ZONE_ID: 0123456789abcdef0123456789abcdef' 'SITES_CUSTOM_DOMAIN_TARGET: cname.example.site' 'SITES_MAX_ZONE_HOSTNAMES: "40"'; do
   printf '%s\n' "$out" | grep -qF "$want" || { echo "sites setting does not reach provisioning: $want" >&2; exit 1; }
 done
+# Git builds of sites on this host (EXC-671): off by default, and every setting in .env reaches provisioning.
+out=$(render)
+for want in 'SITES_GIT_BUILDS_ENABLED: "false"' 'FEATURE_SINGLEHOSTBUILDS: "false"' 'SITES_BUILD_SLOTS: "1"'; do
+  printf '%s\n' "$out" | grep -qF "$want" || { echo "site builds default does not reach provisioning: $want" >&2; exit 1; }
+done
+out=$(render TAG=9.9.9 SITES_GIT_BUILDS_ENABLED=true FEATURE_SINGLEHOSTBUILDS=true SITES_GITHUB_APP_ID=4242 SITES_GITHUB_APP_SLUG=acme-sites \
+  SITES_GITHUB_CLIENT_ID=Iv1.abc SITES_GITHUB_CLIENT_SECRET=gh-secret SITES_GITHUB_APP_PRIVATE_KEY_FILE=/run/app.pem \
+  SITES_GITHUB_WEBHOOK_SECRET=hook-secret SITES_BUILD_SLOTS=2 SITES_BUILD_EGRESS_ALLOW=git.lan:8080 SITES_CLOUDFLARE_API_URL=http://cf.test)
+for want in 'SITES_GIT_BUILDS_ENABLED: "true"' 'FEATURE_SINGLEHOSTBUILDS: "true"' 'SITES_GITHUB_APP_ID: "4242"' \
+  'SITES_GITHUB_APP_SLUG: acme-sites' 'SITES_GITHUB_CLIENT_ID: Iv1.abc' 'SITES_GITHUB_CLIENT_SECRET: gh-secret' \
+  'SITES_GITHUB_APP_PRIVATE_KEY_FILE: /run/app.pem' 'SITES_GITHUB_WEBHOOK_SECRET: hook-secret' 'SITES_BUILD_SLOTS: "2"' \
+  'SITES_BUILD_EGRESS_ALLOW: git.lan:8080' 'SITES_CLOUDFLARE_API_URL: http://cf.test' \
+  'SITES_BUILD_EGRESS_IMAGE: docker.io/excalibase/provisioning:9.9.9' 'SITES_GITHUB_API_URL: https://api.github.com'; do
+  printf '%s\n' "$out" | grep -qF "$want" || { echo "site build setting does not reach provisioning: $want" >&2; exit 1; }
+done
+echo "single-host site build settings ok"

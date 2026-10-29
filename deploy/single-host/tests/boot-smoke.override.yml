@@ -6,6 +6,7 @@ services:
     image: docker.io/excalibase/provisioning:${PLATFORM_TAG:-${TAG:-latest}}
     environment:
       APP_DISK_TOOLS_IMAGE: docker.io/excalibase/provisioning:${PLATFORM_TAG:-${TAG:-latest}}
+      SITES_BUILD_EGRESS_IMAGE: docker.io/excalibase/provisioning:${PLATFORM_TAG:-${TAG:-latest}}
   studio:
     image: docker.io/excalibase/studio:${PLATFORM_TAG:-${TAG:-latest}}
   # GRAPHQL_IMAGE runs a locally built engine; unset keeps the bundle's release.

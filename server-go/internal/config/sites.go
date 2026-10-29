@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -25,6 +26,8 @@ type SitesConfig struct {
 	CustomTarget string
 	// MaxZoneHostnames bounds the custom hostnames on the zone, across every project; 0 is the default.
 	MaxZoneHostnames int
+	// APIURL is Cloudflare's API origin; "" is the client's default. Tests point it at a stand-in.
+	APIURL string
 }
 
 // DefaultMaxZoneHostnames keeps the zone under the 100 custom hostnames Cloudflare includes.
@@ -51,6 +54,7 @@ func loadSites() SitesConfig {
 		ZoneID:             strings.TrimSpace(os.Getenv("SITES_ZONE_ID")),
 		CustomTarget:       strings.ToLower(strings.TrimSpace(os.Getenv("SITES_CUSTOM_DOMAIN_TARGET"))),
 		MaxZoneHostnames:   zoneHostnameCap(os.Getenv("SITES_MAX_ZONE_HOSTNAMES")),
+		APIURL:             strings.TrimRight(strings.TrimSpace(os.Getenv("SITES_CLOUDFLARE_API_URL")), "/"),
 	}
 }
 
@@ -73,8 +77,8 @@ func (s SitesConfig) Complete() bool {
 }
 
 func (s SitesConfig) String() string {
-	return fmt.Sprintf("{AccountID:%s APIToken:[redacted] DispatchNamespace:%s BaseDomain:%s HostsKVNamespaceID:%s ZoneID:%s CustomTarget:%s MaxZoneHostnames:%d}",
-		s.AccountID, s.DispatchNamespace, s.BaseDomain, s.HostsKVNamespaceID, s.ZoneID, s.CustomTarget, s.MaxZoneHostnames)
+	return fmt.Sprintf("{AccountID:%s APIToken:[redacted] DispatchNamespace:%s BaseDomain:%s HostsKVNamespaceID:%s ZoneID:%s CustomTarget:%s MaxZoneHostnames:%d APIURL:%s}",
+		s.AccountID, s.DispatchNamespace, s.BaseDomain, s.HostsKVNamespaceID, s.ZoneID, s.CustomTarget, s.MaxZoneHostnames, s.APIURL)
 }
 
 func (s SitesConfig) GoString() string { return "config.SitesConfig" + s.String() }
@@ -100,6 +104,14 @@ func (c AppConfig) validateSites() error {
 	}
 	if !baseDomainPattern.MatchString(c.Sites.BaseDomain) {
 		return fmt.Errorf("SITES_BASE_DOMAIN %q is not a domain such as excalibase.app", c.Sites.BaseDomain)
+	}
+	if c.Sites.APIURL != "" {
+		// Plain http carries the API token in the clear: only to a dotless (container network) name, for tests.
+		parsed, err := url.Parse(c.Sites.APIURL)
+		plainLocal := err == nil && parsed.Scheme == "http" && !strings.Contains(parsed.Hostname(), ".")
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !plainLocal) {
+			return fmt.Errorf("SITES_CLOUDFLARE_API_URL %q must be an https URL (plain http only to a dotless test host)", c.Sites.APIURL)
+		}
 	}
 	if domainsOverlap(c.Sites.BaseDomain, strings.ToLower(strings.TrimSpace(c.AppDomain))) {
 		return fmt.Errorf("SITES_BASE_DOMAIN %q must not be APP_DOMAIN or share a subtree with it: a site name could take an app's hostname", c.Sites.BaseDomain)

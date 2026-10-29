@@ -148,7 +148,14 @@ for key, value in want.items():
 sites = {k: v for k, v in penv.items() if k.startswith("SITES_")}
 want_sites = {"SITES_ENABLED": "false", "SITES_CLOUDFLARE_ACCOUNT_ID": "", "SITES_CLOUDFLARE_API_TOKEN": "",
               "SITES_DISPATCH_NAMESPACE": "", "SITES_HOSTS_KV_NAMESPACE_ID": "", "SITES_BASE_DOMAIN": "",
-              "SITES_ZONE_ID": "", "SITES_CUSTOM_DOMAIN_TARGET": "", "SITES_MAX_ZONE_HOSTNAMES": ""}
+              "SITES_ZONE_ID": "", "SITES_CUSTOM_DOMAIN_TARGET": "", "SITES_MAX_ZONE_HOSTNAMES": "",
+              # Git builds on this host (EXC-671): off, no App, one slot, the proxy from provisioning's image.
+              "SITES_CLOUDFLARE_API_URL": "", "SITES_GIT_BUILDS_ENABLED": "false", "SITES_GITHUB_APP_ID": "",
+              "SITES_GITHUB_APP_SLUG": "", "SITES_GITHUB_CLIENT_ID": "", "SITES_GITHUB_CLIENT_SECRET": "",
+              "SITES_GITHUB_APP_PRIVATE_KEY": "", "SITES_GITHUB_APP_PRIVATE_KEY_FILE": "", "SITES_GITHUB_WEBHOOK_SECRET": "",
+              "SITES_GITHUB_API_URL": "https://api.github.com", "SITES_GITHUB_WEB_URL": "https://github.com",
+              "SITES_BUILD_SLOTS": "1", "SITES_BUILD_NODE_IMAGE": "", "SITES_BUILD_EGRESS_ALLOW": "",
+              "SITES_BUILD_EGRESS_IMAGE": penv.get("APP_DISK_TOOLS_IMAGE", "")}
 if sites != want_sites:
     failures.append(f"provisioning SITES_* = {sites}, want {want_sites} by default")
 secrets = [penv.get("BACKUP_DEFAULT_SECRET_ACCESS_KEY"), penv.get("STORAGE_SECRET_ACCESS_KEY"),

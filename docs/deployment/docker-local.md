@@ -274,6 +274,56 @@ Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
 | `APP_EGRESS` | `none` | `internet` lets apps call out |
 | `APP_DOMAIN_RESOLVER` | the host's | `host:port` of the DNS server custom domains' CNAMEs are checked against |
 
+## Git builds of sites
+
+Sites (a project's built frontend) need a Cloudflare account on every install
+(ADR 0043); without one there are no Sites and no builds. With Cloudflare
+configured, a site can deploy on every push to a GitHub repository, built on
+this host (EXC-671). Off by default; in `.env`:
+
+```bash
+SITES_GIT_BUILDS_ENABLED=true
+FEATURE_SINGLEHOSTBUILDS=true
+SITES_GITHUB_APP_ID=...            # your GitHub App, as on Kubernetes
+SITES_GITHUB_APP_SLUG=...
+SITES_GITHUB_CLIENT_ID=...
+SITES_GITHUB_CLIENT_SECRET=...
+SITES_GITHUB_WEBHOOK_SECRET=...
+# the App's private key: its PEM text in SITES_GITHUB_APP_PRIVATE_KEY, or a file
+# mounted into provisioning and named in SITES_GITHUB_APP_PRIVATE_KEY_FILE
+SITES_GITHUB_APP_PRIVATE_KEY_FILE=/run/excalibase-github/app.pem
+```
+
+Each build is a short chain of containers (`excalibase-build-<id>-*`): clone,
+then install and build, then pack the output, which provisioning deploys the
+way an upload is deployed. Every step runs under `APP_SANDBOX_RUNTIME` (gVisor,
+installed as in Apps; `none` runs builds without it, for trusted code only),
+with every capability dropped, a read-only root, uid 1000, the plan's CPU and
+memory (no swap) and at most 4096 processes. The git token reaches only the
+clone step; the site's variables and build-visible secrets only the build step.
+
+| | Kubernetes | Single host |
+|---|---|---|
+| Network | NetworkPolicy: ports 80/443 to public addresses | the build's own internal network, no route anywhere; a proxy beside it (`excalibase-build-<id>-egress`, from provisioning's image) lets HTTP(S) through to public IPv4 addresses on ports 80/443 and refuses private, metadata and other ranges. Tools that ignore `HTTPS_PROXY` get no network |
+| Disk | evicted past the plan's disk | measured every 10 s by a watcher container beside the steps (no network, the volume read-only; a folder made unreadable fails the build), stopped past the plan's disk, or when the host has under 2 GiB free |
+| Time, memory | Job deadline, OOM | the same limits, named the same way in Studio; the engine kills each step at the time limit even if provisioning is down |
+| Logs | the kubelet's rotation | each container's log capped at 2 × 10 MB |
+| Cache | none yet | none yet |
+
+**Host firewall.** On Docker 28 or later the build network has no address on
+the host, so a build cannot reach the host's own services. On older Docker
+and on Podman it has one, and provisioning warns at start: a build could then
+connect to anything listening on all of the host's addresses (sshd, a local
+database). Upgrade Docker, or drop traffic from container bridges to the host
+(`iptables -I INPUT -i br-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP`,
+Podman: the same for `podman+`).
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `SITES_BUILD_SLOTS` | `1` | Builds at once on this host |
+| `SITES_BUILD_EGRESS_ALLOW` | empty | `host:port` entries builds may reach although private (a git server or registry on your LAN) |
+| `SITES_BUILD_NODE_IMAGE` | Docker Hub's, pinned | a mirror of the Node images builds run in |
+
 ## DocumentDB projects
 
 A project can carry DocumentDB, the MongoDB-compatible API over its Postgres
@@ -411,6 +461,7 @@ read; the URL is kept in the vault and shown by its host only.
 | Containers (app hosting) | yes, with `--apps` (see Apps) |
 | DocumentDB projects | yes, with `--documentdb` (see DocumentDB projects) |
 | Host and container monitoring, alerts | yes, with `--host-metrics` (see Host monitoring) |
+| Sites: upload deploys, and git builds with `FEATURE_SINGLEHOSTBUILDS` | where Cloudflare is configured (see Git builds of sites) |
 | Edge functions, realtime | no (Kubernetes only) |
 | High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
 

@@ -345,6 +345,28 @@ services:
       SITES_ZONE_ID: ${SITES_ZONE_ID:-}
       SITES_CUSTOM_DOMAIN_TARGET: ${SITES_CUSTOM_DOMAIN_TARGET:-}
       SITES_MAX_ZONE_HOSTNAMES: ${SITES_MAX_ZONE_HOSTNAMES:-}
+      # Cloudflare's API origin; set only to point Sites at a stand-in in tests.
+      SITES_CLOUDFLARE_API_URL: ${SITES_CLOUDFLARE_API_URL:-}
+      # Git builds of sites on this host (EXC-671): off unless .env says "true" for both
+      # switches and names the GitHub App. Each build runs under APP_SANDBOX_RUNTIME on a
+      # network with no route out; it reaches the internet (ports 80/443, public addresses
+      # only) through a proxy started from this image. Install notes: host firewall.
+      SITES_GIT_BUILDS_ENABLED: ${SITES_GIT_BUILDS_ENABLED:-false}
+      FEATURE_SINGLEHOSTBUILDS: ${FEATURE_SINGLEHOSTBUILDS:-false}
+      SITES_GITHUB_APP_ID: ${SITES_GITHUB_APP_ID:-}
+      SITES_GITHUB_APP_SLUG: ${SITES_GITHUB_APP_SLUG:-}
+      SITES_GITHUB_CLIENT_ID: ${SITES_GITHUB_CLIENT_ID:-}
+      SITES_GITHUB_CLIENT_SECRET: ${SITES_GITHUB_CLIENT_SECRET:-}
+      SITES_GITHUB_APP_PRIVATE_KEY: ${SITES_GITHUB_APP_PRIVATE_KEY:-}
+      SITES_GITHUB_APP_PRIVATE_KEY_FILE: ${SITES_GITHUB_APP_PRIVATE_KEY_FILE:-}
+      SITES_GITHUB_WEBHOOK_SECRET: ${SITES_GITHUB_WEBHOOK_SECRET:-}
+      SITES_GITHUB_API_URL: ${SITES_GITHUB_API_URL:-https://api.github.com}
+      SITES_GITHUB_WEB_URL: ${SITES_GITHUB_WEB_URL:-https://github.com}
+      SITES_BUILD_SLOTS: ${SITES_BUILD_SLOTS:-1}
+      SITES_BUILD_NODE_IMAGE: ${SITES_BUILD_NODE_IMAGE:-}
+      SITES_BUILD_EGRESS_IMAGE: ${SITES_BUILD_EGRESS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.5.0}}
+      # host:port entries builds may reach although private, e.g. a git server on your LAN.
+      SITES_BUILD_EGRESS_ALLOW: ${SITES_BUILD_EGRESS_ALLOW:-}
       # DocumentDB projects (EXC-576): off unless .env says "true" (init.sh --documentdb).
       DOCUMENTDB_ENABLED: ${DOCUMENTDB_ENABLED:-false}
       # Apps (EXC-575, ADR 0039): off unless .env says "true" (init.sh --apps).
