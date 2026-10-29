@@ -602,6 +602,9 @@ func TestMajorUpgradeStatus_ReportsTargetsBlockersAndTheLatestRun(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if status.Engine != "POSTGRESQL" || status.DeploymentMode != "k8s" {
+		t.Fatalf("engine %q mode %q: Studio reads the API's database type spelling", status.Engine, status.DeploymentMode)
+	}
 	if !status.Supported || status.CurrentVersion != "16" || strings.Join(status.Targets, ",") != "17" ||
 		len(status.Blockers) != 1 || status.Downtime == "" || status.Latest != nil {
 		t.Fatalf("status = %+v", status)

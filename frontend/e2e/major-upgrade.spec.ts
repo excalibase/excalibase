@@ -7,14 +7,14 @@ const FIRST_RENDER = 20_000;
 const UPGRADE_URL = `**/api/provision/${PROJECT_ID}/major-upgrade`;
 
 const RUN = {
-  id: 'mu-1', projectId: PROJECT_ID, engine: 'postgresql', fromVersion: '16', toVersion: '17',
+  id: 'mu-1', projectId: PROJECT_ID, engine: 'POSTGRESQL', fromVersion: '16', toVersion: '17',
   status: 'RUNNING', step: 'UPGRADE_CHECKING', safetyBackupId: 'backup-1', converted: false, warnings: [],
   startedAt: '2026-10-29T10:00:00Z',
 };
 
 function upgradeInfo(overrides: Record<string, unknown> = {}) {
   return {
-    engine: 'postgresql', deploymentMode: 'k8s', currentVersion: '16', targets: ['17'], supported: true,
+    engine: 'POSTGRESQL', deploymentMode: 'k8s', currentVersion: '16', targets: ['17'], supported: true,
     reason: '', blockers: [], downtime: 'The database is offline for a few minutes.', latest: null,
     ...overrides,
   };
