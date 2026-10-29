@@ -43,8 +43,8 @@ type BackupService struct {
 // major back under the new one. A copy into a new project can reach it.
 var ErrRestorePointBeforeMajorUpgrade = errors.New("that restore point is from before this project's last major upgrade; restore it into a new project instead")
 
-// backupMajorReader is an adapter that knows which major a backup was taken on.
-type backupMajorReader interface {
+// backupMajorer is an adapter that knows which major a backup was taken on.
+type backupMajorer interface {
 	BackupMajor(ctx context.Context, inst *domain.DatabaseInstance, backupID string) (string, error)
 }
 
@@ -69,7 +69,7 @@ func (s *BackupService) SetMajorUpgradeArchives(archives *MajorUpgradeArchives) 
 func (s *BackupService) restorePoint(ctx context.Context, inst *domain.DatabaseInstance, adapter BackupAdapter,
 	req domain.RestoreRequest) (*domain.DatabaseInstance, domain.RestoreRequest, error) {
 	var majorOf BackupMajorReader
-	if reader, ok := adapter.(backupMajorReader); ok {
+	if reader, ok := adapter.(backupMajorer); ok {
 		majorOf = reader.BackupMajor
 	}
 	return s.archives.RestorePoint(ctx, inst, req, majorOf)

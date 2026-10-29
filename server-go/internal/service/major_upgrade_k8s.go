@@ -403,7 +403,9 @@ func (u *K8sMajorUpgrader) WaitServing(ctx context.Context, inst *domain.Databas
 
 // Cleanup has nothing to remove: the old archive's store is kept for
 // restores of earlier points. See MajorUpgrader.
-func (u *K8sMajorUpgrader) Cleanup(context.Context, *domain.DatabaseInstance, domain.MajorUpgrade) {}
+func (u *K8sMajorUpgrader) Cleanup(context.Context, *domain.DatabaseInstance, domain.MajorUpgrade) {
+	// The converted cluster is the only copy; nothing else was made.
+}
 
 // afterUpgradeScript updates every extension in every database, then builds
 // planner statistics, which pg_upgrade does not carry, in stages.
