@@ -116,8 +116,15 @@ gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
   services listening on the host's own addresses (not those on 127.0.0.1 only);
   a host firewall cannot tell that traffic apart, so bind such services to
   127.0.0.1 or keep egress off. Rootful Podman gives the bridge an address on
-  the host: add the firewall rule from the Docker notes for `podman+`, after
-  accepting port 53 there (Podman's resolver listens on the bridge).
+  the host, and its resolver listens there, so drop everything but DNS (in
+  this order: each `-I` goes on top), and persist the rules:
+
+  ```bash
+  iptables -I INPUT -i podman+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+  iptables -I INPUT -i podman+ -p udp --dport 53 -j ACCEPT
+  iptables -I INPUT -i podman+ -p tcp --dport 53 -j ACCEPT
+  ```
+
   Provisioning logs `WARN: app networks: ...` in both cases.
 - App hostnames carry the edge's port when it is above 1024
   (`https://<app>-<project>.apps.localhost:8443`).

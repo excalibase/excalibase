@@ -38,7 +38,7 @@ var networkCreateFields = map[string]func(Policy, any) error{
 	"Options": func(_ Policy, value any) error {
 		options, _ := value.(map[string]any)
 		for key, option := range options {
-			allowed := (key == bridgeIsolate && option == "true") || (key == gatewayModeIPv4 && option == gatewayIsolated)
+			allowed := (key == bridgeIsolate && option == "true") || (isGatewayMode(key) && option == gatewayIsolated)
 			if !allowed {
 				return refuse("network Options %s=%v may not be set; only isolate=true or %s=%s", key, option, gatewayModeIPv4, gatewayIsolated)
 			}
@@ -48,17 +48,23 @@ var networkCreateFields = map[string]func(Policy, any) error{
 }
 
 // gatewayModeIPv4=isolated (Docker 28+) leaves an internal network's bridge with
-// no address on the host, so nothing on it reaches the host's own services (EXC-671).
+// no address on the host, so nothing on it reaches the host's own services (EXC-671);
+// the IPv6 option does the same where the daemon enables IPv6 by default (EXC-676).
 const (
 	gatewayModeIPv4 = "com.docker.network.bridge.gateway_mode_ipv4"
+	gatewayModeIPv6 = "com.docker.network.bridge.gateway_mode_ipv6"
 	gatewayIsolated = "isolated"
 )
+
+func isGatewayMode(key string) bool { return key == gatewayModeIPv4 || key == gatewayModeIPv6 }
 
 // checkIsolatedGateway admits the isolated gateway only on an internal network, where it means "no route anywhere".
 func checkIsolatedGateway(create map[string]any) error {
 	options, _ := create["Options"].(map[string]any)
-	if _, set := options[gatewayModeIPv4]; set && create["Internal"] != true {
-		return refuse("network Options %s may be set only on an internal network", gatewayModeIPv4)
+	for key := range options {
+		if isGatewayMode(key) && create["Internal"] != true {
+			return refuse("network Options %s may be set only on an internal network", key)
+		}
 	}
 	return nil
 }

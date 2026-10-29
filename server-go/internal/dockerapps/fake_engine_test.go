@@ -63,6 +63,8 @@ type fakeEngine struct {
 	// gatewayMode is how the engine takes an isolated gateway: "" honours it (Docker 28+),
 	// "refuse" answers 400 (Docker 27), "ignore" gives the bridge an address anyway (Docker 26).
 	gatewayMode string
+	// removeErr fails every network removal.
+	removeErr error
 	// probeOK decides an exec of the probe; nil passes every probe.
 	probeOK func(c *fakeContainer) bool
 	// toolOutput is what a tool container prints for its command.
@@ -352,6 +354,9 @@ func (f *fakeEngine) NetworkCreate(_ context.Context, name string, options netwo
 		if f.podman {
 			return network.CreateResponse{}, errdefs.ErrInvalidArgument.WithMessage("netavark: unsupported bridge network option: " + gatewayModeIPv4)
 		}
+		if f.gatewayMode == "invalid" {
+			return network.CreateResponse{}, errdefs.ErrInvalidArgument.WithMessage("invalid label")
+		}
 		if f.gatewayMode == "forbid" {
 			return network.CreateResponse{}, errdefs.ErrPermissionDenied.WithMessage("refused by the engine proxy")
 		}
@@ -392,6 +397,9 @@ func (f *fakeEngine) NetworkRemove(_ context.Context, name string) error {
 	net, ok := f.networks[name]
 	if !ok {
 		return errdefs.ErrNotFound
+	}
+	if f.removeErr != nil {
+		return f.removeErr
 	}
 	if len(net.members) > 0 {
 		return errdefs.ErrPermissionDenied.WithMessage("network has active endpoints")

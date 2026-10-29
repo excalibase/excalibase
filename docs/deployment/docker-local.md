@@ -234,18 +234,29 @@ docker compose exec edge ls /etc/caddy/apps            # one route file per app
 host, and a container can connect through it to anything listening on all of
 the host's addresses (sshd, a local database), internal network or not. On
 Docker 28 or later provisioning makes project networks with no address on the
-host (`com.docker.network.bridge.gateway_mode_ipv4=isolated`); containers on a
-network still reach each other and the edge reaches its apps by name. It checks
-this at start and logs `WARN: app networks: ...` where it cannot hold:
+host (`com.docker.network.bridge.gateway_mode_ipv4=isolated`, and `_ipv6` for
+a daemon that enables IPv6 by default); containers on a network still reach
+each other and the edge reaches its apps by name. It checks this at start and
+logs `WARN: app networks: ...` where it cannot hold:
 
 - Docker before 28: upgrade, or drop new connections from container bridges to
-  the host: `iptables -I INPUT -i br-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP`
-  (this covers the bundle's own networks too; nothing in the bundle connects to the host).
+  the host:
+
+  ```bash
+  iptables  -I INPUT -i br-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+  ip6tables -I INPUT -i br-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+  ```
+
+  This covers every Docker network on the host, the bundle's own included
+  (nothing in the bundle connects to the host; anything else of yours using
+  `host-gateway` would stop working). Persist the rules (`iptables-persistent`,
+  or your firewalld/nftables setup): they are gone after a reboot.
 - `APP_EGRESS=internet`: an isolated gateway cannot route out, so egress
-  networks keep their address on the host; add the same rule.
+  networks keep their address on the host; add the same rules.
 
 Upgrading from a release before this one: on start, and on every network
-reconcile, provisioning remakes each older project network (an engine cannot
+reconcile, provisioning remakes each older project network (and any made with
+`APP_EGRESS` other than it is now) (an engine cannot
 change a network's options): it takes the apps, the database and the edge off,
 removes the network, makes it again and puts them back. Apps are not restarted
 and no data is touched; open connections to an app are dropped once, and an

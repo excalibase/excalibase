@@ -25,21 +25,20 @@ func (r *Runtime) networkOptions(project string) network.CreateOptions {
 	case r.opts.Egress && r.opts.Isolate:
 		options.Options = map[string]string{"isolate": "true"}
 	case r.isolatedGateway():
-		options.Options = map[string]string{gatewayModeIPv4: gatewayIsolated}
+		options.Options = isolatedGatewayOptions()
 	}
 	return options
 }
 
 // ensureProjectNetwork makes the project's network and puts its database on
 // it, and the edge while the project has a public app. Nothing else joins but
-// the project's own apps, put back on a network made again.
+// the project's own apps, put back if a remake took them off.
 func (r *Runtime) ensureProjectNetwork(ctx context.Context, project, database string, public bool) error {
 	r.networkMu.Lock()
 	defer r.networkMu.Unlock()
 	name := r.networkName(project)
 	inspect, err := r.engine.NetworkInspect(ctx, name, network.InspectOptions{})
-	made := errdefs.IsNotFound(err)
-	if made {
+	if errdefs.IsNotFound(err) {
 		if _, err := r.engine.NetworkCreate(ctx, name, r.networkOptions(project)); err != nil && !errdefs.IsConflict(err) {
 			return fmt.Errorf("create the project's network: %w", err)
 		}
@@ -53,18 +52,15 @@ func (r *Runtime) ensureProjectNetwork(ctx context.Context, project, database st
 	}
 	if r.olderNetwork(inspect) {
 		public = public || isMember(inspect, r.opts.EdgeContainer)
-		if inspect, err = r.remakeProjectNetwork(ctx, project, inspect); err != nil {
+		if inspect, err = r.remakeProjectNetwork(ctx, project, database, inspect); err != nil {
 			return err
 		}
-		made = true
 	}
 	if err := r.join(ctx, inspect, database); err != nil {
 		return fmt.Errorf("attach the project's database to its network: %w", err)
 	}
-	if made {
-		if err := r.rejoinApps(ctx, project, inspect); err != nil {
-			return err
-		}
+	if err := r.rejoinApps(ctx, project, inspect); err != nil {
+		return err
 	}
 	if !public {
 		return nil
@@ -128,18 +124,8 @@ func (r *Runtime) removeProjectNetwork(ctx context.Context, project, database st
 	if err != nil {
 		return fmt.Errorf("read the project's network: %w", err)
 	}
-	// The proxy knows the edge by name only; every other member is managed and goes by id.
-	members := []string{database, r.opts.EdgeContainer}
-	for id, member := range inspect.Containers {
-		if member.Name != r.opts.EdgeContainer && id != database {
-			members = append(members, id)
-		}
-	}
 	var errs []error
-	for _, member := range members {
-		if member == "" {
-			continue
-		}
+	for _, member := range r.memberRefs(inspect, database, r.opts.EdgeContainer) {
 		if err := r.engine.NetworkDisconnect(ctx, name, member, true); err != nil && !notMember(err) {
 			errs = append(errs, fmt.Errorf("take %s off the project's network: %w", member, err))
 		}

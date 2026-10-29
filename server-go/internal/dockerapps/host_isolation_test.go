@@ -2,6 +2,7 @@ package dockerapps
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func TestProjectNetworksHaveNoHostAddressOnDocker28(t *testing.T) {
 	verified(t, h)
 	h.rollout(freeApp(), "dep-1")
 	net := h.engine.networks[testNet].options
-	if !net.Internal || net.Options[gatewayModeIPv4] != gatewayIsolated {
+	if !net.Internal || net.Options[gatewayModeIPv4] != gatewayIsolated || net.Options[gatewayModeIPv6] != gatewayIsolated {
 		t.Fatalf("project network %+v, want internal with an isolated gateway", net)
 	}
 	if isolated, why := h.rt.HostIsolation(); !isolated {
@@ -79,9 +80,11 @@ func TestAnEngineWithoutTheIsolatedGatewayKeepsPlainInternalNetworksAndSaysSo(t 
 // A proxy or engine refusing the check for another reason is not read as an old engine.
 func TestTheStartupCheckFailsOnAnyOtherRefusal(t *testing.T) {
 	h := newHarness(t, nil)
-	h.engine.gatewayMode = "forbid"
-	if err := h.rt.VerifyEngine(context.Background()); err == nil {
-		t.Fatal("a refused check network passed as an engine without the isolated gateway")
+	for _, mode := range []string{"forbid", "invalid"} {
+		h.engine.gatewayMode = mode
+		if err := h.rt.VerifyEngine(context.Background()); err == nil {
+			t.Fatalf("%s: a refused check network passed as an engine without the isolated gateway", mode)
+		}
 	}
 }
 
@@ -214,4 +217,86 @@ func (h *harness) appContainers() []string {
 		ids = append(ids, summary.ID)
 	}
 	return ids
+}
+
+// An app left off an already-remade network (a pass stopped after the create) is put back.
+func TestReconcilePutsBackAnAppOffAnIsolatedNetwork(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	verified(t, h)
+	h.rollout(freeApp(), "dep-1")
+	app := h.appContainers()[0]
+	if err := h.engine.NetworkDisconnect(ctx, testNet, app, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.rt.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(h.engine.networks[testNet].members, app) {
+		t.Fatal("the app was left off its project's network")
+	}
+}
+
+// A stopped database is not listed among the members, yet it must come off before the remove.
+func TestTheRemakeTakesAStoppedDatabaseOffToo(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	h.rollout(freeApp(), "dep-1")
+	h.engine.containers[testDB].state = "exited"
+	verified(t, h)
+	if err := h.rt.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if option, _ := projectNetworkOption(h); option != gatewayIsolated || !slices.Contains(h.engine.networks[testNet].members, testDB) {
+		t.Fatalf("network %+v members %v", h.engine.networks[testNet].options, h.engine.networks[testNet].members)
+	}
+}
+
+// A remake whose remove fails leaves the project as it was, not offline.
+func TestAFailedRemakePutsTheMembersBack(t *testing.T) {
+	h := newHarness(t, func(o *Options) { o.EdgeAliases = []string{"api.example.com"} })
+	ctx := context.Background()
+	h.rollout(freeApp(), "dep-1")
+	before := slices.Clone(h.engine.networks[testNet].members)
+	verified(t, h)
+	h.engine.removeErr = errors.New("network has active endpoints")
+	if err := h.rt.Reconcile(ctx); err == nil {
+		t.Fatal("a failed remake was not reported")
+	}
+	after := h.engine.networks[testNet].members
+	for _, member := range before {
+		if !slices.Contains(after, member) {
+			t.Errorf("%s is off the network after a failed remake (members %v)", member, after)
+		}
+	}
+	if aliases := h.engine.containers["edge01"].aliases[testNet]; !slices.Equal(aliases, []string{"api.example.com"}) {
+		t.Errorf("the edge came back with aliases %v", aliases)
+	}
+}
+
+func TestEgressNetworksAreNotRemade(t *testing.T) {
+	h := newHarness(t, func(o *Options) { o.Egress = true })
+	h.rollout(freeApp(), "dep-1")
+	verified(t, h)
+	h.engine.calls = nil
+	if err := h.rt.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(h.engine.calls, func(call string) bool { return strings.HasPrefix(call, "network ") }) {
+		t.Fatalf("an egress network was remade: %v", h.engine.calls)
+	}
+}
+
+// Egress turned off after networks were made with it: they lose their route and host address.
+func TestNetworksMadeWithEgressAreRemadeWhenItIsTurnedOff(t *testing.T) {
+	h := newHarness(t, func(o *Options) { o.Egress = true })
+	h.rollout(freeApp(), "dep-1")
+	h.rt.opts.Egress = false
+	verified(t, h)
+	if err := h.rt.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if net := h.engine.networks[testNet].options; !net.Internal || net.Options[gatewayModeIPv4] != gatewayIsolated {
+		t.Fatalf("the egress network was kept: %+v", net)
+	}
 }

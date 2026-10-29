@@ -2,9 +2,11 @@ package dockerapps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
+	"strings"
 
 	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -14,10 +16,16 @@ import (
 // An internal bridge still has an address on the host, and every host service
 // listening on all addresses answers there (EXC-676). Docker 28's isolated
 // gateway leaves the bridge without one; containers on it still reach each other.
+// The IPv6 mode matters where the daemon enables IPv6 on every network by default.
 const (
 	gatewayModeIPv4 = "com.docker.network.bridge.gateway_mode_ipv4"
+	gatewayModeIPv6 = "com.docker.network.bridge.gateway_mode_ipv6"
 	gatewayIsolated = "isolated"
 )
+
+func isolatedGatewayOptions() map[string]string {
+	return map[string]string{gatewayModeIPv4: gatewayIsolated, gatewayModeIPv6: gatewayIsolated}
+}
 
 // hostFirewall is the fix where the engine cannot isolate: rootful Podman's resolver listens on the bridge.
 const hostFirewall = "add a host firewall rule dropping new connections from container bridges to the host " +
@@ -74,9 +82,10 @@ func (r *Runtime) makeCheckNetwork(ctx context.Context, name string) error {
 		return nil
 	}
 	isolated := plain
-	isolated.Options = map[string]string{gatewayModeIPv4: gatewayIsolated}
+	isolated.Options = isolatedGatewayOptions()
 	_, err := r.engine.NetworkCreate(ctx, name, isolated)
-	if errdefs.IsInvalidArgument(err) {
+	// Docker 27 knows the option but not the mode; any other refusal fails the start.
+	if errdefs.IsInvalidArgument(err) && strings.Contains(err.Error(), "gateway mode") {
 		if _, plainErr := r.engine.NetworkCreate(ctx, name, plain); plainErr != nil {
 			return plainErr
 		}
@@ -132,42 +141,78 @@ func hasHostAddress(inspect network.Inspect) bool {
 	return false
 }
 
-// olderNetwork is a project network an earlier release made with an address on the host.
+// olderNetwork is a project network made with an address on the host by an earlier
+// release, or made with egress the operator has since turned off (or on).
 func (r *Runtime) olderNetwork(inspect network.Inspect) bool {
-	return r.isolatedGateway() && inspect.Internal && inspect.Options[gatewayModeIPv4] != gatewayIsolated
+	if inspect.Internal == r.opts.Egress {
+		return true
+	}
+	return r.isolatedGateway() && (inspect.Options[gatewayModeIPv4] != gatewayIsolated || inspect.Options[gatewayModeIPv6] != gatewayIsolated)
 }
 
 // remakeProjectNetwork replaces an older project network: an engine cannot change a
 // network's options, so its members are taken off, it is made again, and the caller
-// puts them back. Running apps keep running; the edge reaches them again by name.
-func (r *Runtime) remakeProjectNetwork(ctx context.Context, project string, older network.Inspect) (network.Inspect, error) {
+// puts them back. Running apps are not restarted; their connections reset once.
+func (r *Runtime) remakeProjectNetwork(ctx context.Context, project, database string, older network.Inspect) (network.Inspect, error) {
 	apps, err := r.projectApps(ctx, project)
 	if err != nil {
 		return network.Inspect{}, err
 	}
-	// The proxy knows the edge by name only; every other member is managed and goes by id.
-	members := apps
-	for id, member := range older.Containers {
-		if member.Name == r.opts.EdgeContainer {
-			id = member.Name
-		}
-		if !slices.Contains(members, id) {
-			members = append(members, id)
-		}
-	}
+	members := r.memberRefs(older, append([]string{database}, apps...)...)
 	for _, member := range members {
 		if err := r.engine.NetworkDisconnect(ctx, older.Name, member, true); err != nil && !notMember(err) {
-			return network.Inspect{}, fmt.Errorf("take %s off the older project network: %w", member, err)
+			return network.Inspect{}, errors.Join(fmt.Errorf("take %s off the older project network: %w", member, err),
+				r.restoreMembers(ctx, older, members))
 		}
 	}
 	if err := r.engine.NetworkRemove(ctx, older.Name); err != nil && !errdefs.IsNotFound(err) {
-		return network.Inspect{}, fmt.Errorf("remove the older project network: %w", err)
+		return network.Inspect{}, errors.Join(fmt.Errorf("remove the older project network: %w", err),
+			r.restoreMembers(ctx, older, members))
 	}
+	// From here a failed pass leaves no network: the next one makes it and puts everyone back.
 	if _, err := r.engine.NetworkCreate(ctx, older.Name, r.networkOptions(project)); err != nil && !errdefs.IsConflict(err) {
 		return network.Inspect{}, fmt.Errorf("make the project's network again: %w", err)
 	}
-	log.Printf("INFO: app networks: remade %s without an address on the host; its apps keep running", older.Name)
+	log.Printf("INFO: app networks: remade %s as this release makes project networks; its apps keep running", older.Name)
 	return r.engine.NetworkInspect(ctx, older.Name, network.InspectOptions{})
+}
+
+// restoreMembers puts members back on the older network when it could not be removed,
+// so a failed remake leaves the project as it was rather than offline.
+func (r *Runtime) restoreMembers(ctx context.Context, older network.Inspect, members []string) error {
+	var errs []error
+	for _, member := range members {
+		var settings *network.EndpointSettings
+		if member == r.opts.EdgeContainer {
+			settings = &network.EndpointSettings{Aliases: slices.Clone(r.opts.EdgeAliases)}
+		}
+		if err := r.connect(ctx, older.Name, member, settings); err != nil && !errdefs.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("put %s back on the older project network: %w", member, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// memberRefs are a network's members plus extra, as the proxy names them: the edge by
+// name only, every other member (managed) by id.
+func (r *Runtime) memberRefs(inspect network.Inspect, extra ...string) []string {
+	refs := make([]string, 0, len(extra)+len(inspect.Containers))
+	add := func(ref string) {
+		if ref != "" && !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	for _, ref := range extra {
+		add(ref)
+	}
+	for id, member := range inspect.Containers {
+		if member.Name == r.opts.EdgeContainer {
+			add(member.Name)
+		} else {
+			add(id)
+		}
+	}
+	return refs
 }
 
 // projectApps are the project's app containers, stopped ones too: a stopped container
@@ -185,14 +230,15 @@ func (r *Runtime) projectApps(ctx context.Context, project string) ([]string, er
 	return ids, nil
 }
 
-// rejoinApps puts the project's apps on a network just made: after a remake, or one interrupted.
+// rejoinApps puts back any of the project's apps that are off its network: after a
+// remake, or one interrupted at any step. A member already on it is left alone.
 func (r *Runtime) rejoinApps(ctx context.Context, project string, inspect network.Inspect) error {
 	apps, err := r.projectApps(ctx, project)
 	if err != nil {
 		return err
 	}
 	for _, app := range apps {
-		if err := r.join(ctx, inspect, app); err != nil {
+		if err := r.join(ctx, inspect, app); err != nil && !errdefs.IsNotFound(err) {
 			return fmt.Errorf("put app container %s back on the project's network: %w", app, err)
 		}
 	}

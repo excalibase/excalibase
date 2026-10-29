@@ -56,6 +56,14 @@ func TestRealEngineKeepsAppsOffTheHost(t *testing.T) {
 	if body, err := rig.fromEdge(app); err != nil || body != "one" {
 		t.Fatalf("the edge lost the app after the remake: %q (%v)", body, err)
 	}
+	// The engine echoes the options back, so the next pass leaves the network alone.
+	remade := rig.projectNetworkID()
+	if err := rig.rt.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if again := rig.projectNetworkID(); again != remade {
+		t.Fatalf("a remade network was remade again (%s, then %s)", remade, again)
+	}
 
 	// A paused app, off the network while stopped, comes back on the remade one.
 	ctx := context.Background()
@@ -101,6 +109,15 @@ func (r *realRig) projectGateway() string {
 		}
 	}
 	return ""
+}
+
+func (r *realRig) projectNetworkID() string {
+	r.t.Helper()
+	inspect, err := r.direct.NetworkInspect(context.Background(), r.rt.networkName("proj-it"), network.InspectOptions{})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return inspect.ID
 }
 
 func (r *realRig) reachesHost(app, address string, port int) bool {
