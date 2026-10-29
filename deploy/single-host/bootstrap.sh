@@ -42,6 +42,10 @@ fi
 if [ "${FEATURE_AUTHGUEST:-false}" = true ]; then
   AUTH_PERMISSIONS=$(printf '%s' "$AUTH_PERMISSIONS" | jq -c '. + ["vault:read:projects/*/auth/captcha"]')
 fi
+# Each project's auth hook signing secret, only while auth hooks are on (EXC-662).
+if [ "${FEATURE_AUTHHOOKS:-false}" = true ]; then
+  AUTH_PERMISSIONS=$(printf '%s' "$AUTH_PERMISSIONS" | jq -c '. + ["vault:read:projects/*/auth/hooks"]')
+fi
 GRAPHQL_PERMISSIONS='["vault:read:projects/*/credentials/excalibase_app","projects:info:read","policies:read"]'
 
 # Each token is read by one container only, so it is 0600 and owned by that
