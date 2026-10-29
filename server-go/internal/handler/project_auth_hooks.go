@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/go-chi/chi/v5"
@@ -84,8 +85,8 @@ func (h *ProvisioningHandler) PutAuthHook(w http.ResponseWriter, r *http.Request
 	h.writeAuthHooks(r.Context(), w, projectID)
 }
 
-// decodeAuthHookUpdate validates the body. Switching on without a URL is a
-// 409; without a secret the store answers it, so the check cannot race a removal.
+// decodeAuthHookUpdate validates the body. The 409 for a missing secret is the
+// store's, so the check cannot race a removal.
 func decodeAuthHookUpdate(w http.ResponseWriter, r *http.Request, hook string) (domain.ProjectAuthHook, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
 	var body authHookUpdate
@@ -96,7 +97,7 @@ func decodeAuthHookUpdate(w http.ResponseWriter, r *http.Request, hook string) (
 	next := domain.ProjectAuthHook{Hook: hook, Enabled: body.Enabled}
 	if body.URL == "" {
 		if body.Enabled {
-			httpError(w, "enabling a hook needs its URL", http.StatusConflict)
+			httpError(w, "enabling a hook needs its URL", http.StatusBadRequest)
 			return domain.ProjectAuthHook{}, false
 		}
 		return next, true
@@ -118,25 +119,47 @@ func (h *ProvisioningHandler) RotateAuthHookSecret(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	secret, err := domain.GenerateAuthHookSecret()
-	if err != nil {
-		log.Printf("ERROR: generate the hook secret of project %s: %v", projectID, err)
-		httpError(w, "failed to generate the secret", http.StatusInternalServerError)
+	release, ok := h.lockAuthHookSecret(r.Context(), w, projectID)
+	if !ok {
 		return
 	}
-	if err := h.authOAuth.Secrets.Put(domain.AuthHooksSecretPath(projectID), map[string]string{authHookSecretField: secret}); err != nil {
-		log.Printf("ERROR: store the hook secret of project %s: %v", projectID, err)
-		httpError(w, "failed to store the secret", http.StatusInternalServerError)
+	defer release()
+	wasSet, err := h.authOAuth.Hooks.AuthHookSecretSet(r.Context(), projectID)
+	if err != nil {
+		log.Printf("ERROR: read the hook secret state of project %s: %v", projectID, err)
+		httpError(w, errAuthHooksRead, http.StatusInternalServerError)
+		return
+	}
+	secret, ok := h.storeNewAuthHookSecret(w, projectID)
+	if !ok {
 		return
 	}
 	if err := h.authOAuth.Hooks.MarkAuthHookSecretSet(r.Context(), projectID); err != nil {
 		log.Printf("ERROR: mark the hook secret of project %s: %v", projectID, err)
-		httpError(w, errAuthHooksSave, http.StatusInternalServerError)
-		return
+		// A rotation already replaced the old secret: answering the new one keeps the hooks verifiable.
+		if !wasSet {
+			httpError(w, errAuthHooksSave, http.StatusInternalServerError)
+			return
+		}
 	}
 	h.writeAuthAudit(r, projectID, auditActionAuthHookSecretRotate, auditResourceAuthHook, projectID, `{"secretSet":true}`)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, map[string]string{"secret": secret})
+}
+
+func (h *ProvisioningHandler) storeNewAuthHookSecret(w http.ResponseWriter, projectID string) (string, bool) {
+	secret, err := domain.GenerateAuthHookSecret()
+	if err != nil {
+		log.Printf("ERROR: generate the hook secret of project %s: %v", projectID, err)
+		httpError(w, "failed to generate the secret", http.StatusInternalServerError)
+		return "", false
+	}
+	if err := h.authOAuth.Secrets.Put(domain.AuthHooksSecretPath(projectID), map[string]string{authHookSecretField: secret}); err != nil {
+		log.Printf("ERROR: store the hook secret of project %s: %v", projectID, err)
+		httpError(w, "failed to store the secret", http.StatusInternalServerError)
+		return "", false
+	}
+	return secret, true
 }
 
 // DeleteAuthHookSecret serves DELETE on the same path: every hook goes off
@@ -146,6 +169,11 @@ func (h *ProvisioningHandler) DeleteAuthHookSecret(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
+	release, ok := h.lockAuthHookSecret(r.Context(), w, projectID)
+	if !ok {
+		return
+	}
+	defer release()
 	if err := h.authOAuth.Hooks.ClearAuthHookSecret(r.Context(), projectID); err != nil {
 		log.Printf("ERROR: switch off the hooks of project %s: %v", projectID, err)
 		httpError(w, errAuthHooksSave, http.StatusInternalServerError)
@@ -158,6 +186,18 @@ func (h *ProvisioningHandler) DeleteAuthHookSecret(w http.ResponseWriter, r *htt
 	}
 	h.writeAuthAudit(r, projectID, auditActionAuthHookSecretDelete, auditResourceAuthHook, projectID, `{"secretSet":false,"hooksEnabled":false}`)
 	h.writeAuthHooks(r.Context(), w, projectID)
+}
+
+// lockAuthHookSecret takes the project's secret lock, so a rotation and a
+// removal never interleave around the vault call.
+func (h *ProvisioningHandler) lockAuthHookSecret(ctx context.Context, w http.ResponseWriter, projectID string) (func(), bool) {
+	release, err := h.authOAuth.Hooks.LockAuthHookSecret(ctx, projectID)
+	if err != nil {
+		log.Printf("ERROR: lock the hook secret of project %s: %v", projectID, err)
+		httpError(w, errAuthHooksSave, http.StatusInternalServerError)
+		return nil, false
+	}
+	return release, true
 }
 
 func (h *ProvisioningHandler) writeAuthHooks(ctx context.Context, w http.ResponseWriter, projectID string) {
@@ -218,10 +258,11 @@ func (h *ProvisioningHandler) authHooksSecretProject(w http.ResponseWriter, r *h
 	return projectID, true
 }
 
-// authHooksForInfo is /info's authHooks: nil while the flag is off, else the
-// URL of each enabled hook. A hook is never reported without its secret.
+// authHooksForInfo is /info's authHooks: nil while the flag is off or for any
+// caller but a platform service (a URL may carry the receiver's token), else
+// the URL of each enabled hook. A hook is never reported without its secret.
 func (h *ProvisioningHandler) authHooksForInfo(ctx context.Context, projectID string) (*domain.AuthHooksInfo, error) {
-	if !h.authHooksOn(ctx) {
+	if !h.authHooksOn(ctx) || !auth.TokenGrants(auth.GetToken(ctx), auth.ProjectInfoReadCapability()) {
 		return nil, nil
 	}
 	info := &domain.AuthHooksInfo{}

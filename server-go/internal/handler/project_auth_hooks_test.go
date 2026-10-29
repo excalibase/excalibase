@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/go-chi/chi/v5"
@@ -27,6 +29,22 @@ type memAuthHookStore struct {
 	secretSet map[string]bool
 	err       error
 	putErr    error
+	markErr   error
+	lockErr   error
+	events    []string
+	locked    bool
+}
+
+func (m *memAuthHookStore) LockAuthHookSecret(_ context.Context, projectID string) (func(), error) {
+	if m.lockErr != nil {
+		return nil, m.lockErr
+	}
+	if m.locked {
+		return nil, errors.New("lock held twice")
+	}
+	m.locked = true
+	m.events = append(m.events, "lock")
+	return func() { m.locked = false; m.events = append(m.events, "unlock") }, nil
 }
 
 func newMemAuthHookStore() *memAuthHookStore {
@@ -65,14 +83,16 @@ func (m *memAuthHookStore) AuthHookSecretSet(_ context.Context, projectID string
 }
 
 func (m *memAuthHookStore) MarkAuthHookSecretSet(_ context.Context, projectID string) error {
-	if m.putErr != nil {
-		return m.putErr
+	m.events = append(m.events, "mark")
+	if m.markErr != nil {
+		return m.markErr
 	}
 	m.secretSet[projectID] = true
 	return nil
 }
 
 func (m *memAuthHookStore) ClearAuthHookSecret(_ context.Context, projectID string) error {
+	m.events = append(m.events, "clear")
 	if m.putErr != nil {
 		return m.putErr
 	}
@@ -212,11 +232,62 @@ func TestAuthHooks_SecretIsNotMarkedSetWhenTheVaultRefuses(t *testing.T) {
 	}
 }
 
-func TestAuthHooks_SecretMarkFailureIsAnInternalError(t *testing.T) {
+func TestAuthHooks_FirstSecretMarkFailureIsAnInternalError(t *testing.T) {
 	f := setupHooksHandler(t, features.AuthHooks)
-	f.hooks.putErr = errors.New("db down")
+	f.hooks.markErr = errors.New("db down")
 	if w := doJSON(f.router, http.MethodPost, testHooksSecret, nil); w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "whsec_") {
 		t.Fatalf("POST: %d %s", w.Code, w.Body.String())
+	}
+	if f.hooks.locked {
+		t.Fatal("the secret lock was not released")
+	}
+}
+
+// The vault already holds the new secret, so a rotation still answers it:
+// losing it would leave every enabled hook unverifiable.
+func TestAuthHooks_RotationAnswersTheNewSecretWhenOnlyTheMarkFails(t *testing.T) {
+	f := setupHooksHandler(t, features.AuthHooks)
+	f.hooks.secretSet[testOAuthProject] = true
+	f.vault.data[testHooksSecretAt] = map[string]string{"secret": "whsec_old"}
+	f.hooks.markErr = errors.New("db down")
+	w := doJSON(f.router, http.MethodPost, testHooksSecret, nil)
+	secret, _ := decodeObject(t, w.Body.Bytes())["secret"].(string)
+	if w.Code != http.StatusOK || secret == "" || f.vault.data[testHooksSecretAt]["secret"] != secret {
+		t.Fatalf("POST: %d %s", w.Code, w.Body.String())
+	}
+	if len(f.audit.entries) != 1 || strings.Contains(f.audit.entries[0].Details, secret) {
+		t.Fatalf("audit = %+v", f.audit.entries)
+	}
+}
+
+func TestAuthHooks_RotationFailsBeforeWritingWhenTheStateCannotBeRead(t *testing.T) {
+	f := setupHooksHandler(t, features.AuthHooks)
+	f.hooks.err = errors.New("db down")
+	if w := doJSON(f.router, http.MethodPost, testHooksSecret, nil); w.Code != http.StatusInternalServerError {
+		t.Fatalf("POST: %d", w.Code)
+	}
+	if len(f.vault.data) != 0 {
+		t.Fatal("the vault was written without knowing the secret state")
+	}
+}
+
+// Rotating and removing hold the project's secret lock across the vault call,
+// so one never interleaves with the other.
+func TestAuthHooks_SecretChangesHoldTheProjectLock(t *testing.T) {
+	f := setupHooksHandler(t, features.AuthHooks)
+	doJSON(f.router, http.MethodPost, testHooksSecret, nil)
+	doJSON(f.router, http.MethodDelete, testHooksSecret, nil)
+	if got := strings.Join(f.hooks.events, ","); got != "lock,mark,unlock,lock,clear,unlock" {
+		t.Fatalf("events = %s", got)
+	}
+	f.hooks.lockErr = errors.New("db down")
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		if w := doJSON(f.router, method, testHooksSecret, nil); w.Code != http.StatusInternalServerError {
+			t.Errorf("%s with no lock: %d", method, w.Code)
+		}
+	}
+	if len(f.vault.data) != 0 {
+		t.Fatal("the vault was written without the lock")
 	}
 }
 
@@ -282,7 +353,7 @@ func TestAuthHooks_PutRefusesBadInput(t *testing.T) {
 	if w := doJSON(f.router, http.MethodPut, testHooks+"/after_sign_in", map[string]any{"enabled": false, "url": ""}); w.Code != http.StatusNotFound {
 		t.Errorf("unknown hook: %d", w.Code)
 	}
-	if w := doJSON(f.router, http.MethodPut, testHookClaims, map[string]any{"enabled": true, "url": ""}); w.Code != http.StatusConflict ||
+	if w := doJSON(f.router, http.MethodPut, testHookClaims, map[string]any{"enabled": true, "url": ""}); w.Code != http.StatusBadRequest ||
 		!strings.Contains(w.Body.String(), "needs its URL") {
 		t.Errorf("enabled without a URL: %d %s", w.Code, w.Body.String())
 	}
@@ -348,14 +419,50 @@ func TestAuthHooks_VaultDeleteFailureIsAnInternalError(t *testing.T) {
 	}
 }
 
+// serviceInfo reads /info as svc-auth does, with a projects:info:read capability token.
+func serviceInfo(router chi.Router) *httptest.ResponseRecorder {
+	return infoAs(router, &domain.AccessToken{Name: "svc-auth", Permissions: []string{"projects:info:read"}})
+}
+
+func infoAs(router chi.Router, token *domain.AccessToken) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, testOAuthInfo, nil)
+	if token != nil {
+		req = req.WithContext(auth.SetToken(req.Context(), token))
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+// Hook URLs may carry the receiver's token, so only the service caller gets them.
+func TestAuthHooks_InfoCarriesTheHooksOnlyForTheServiceCaller(t *testing.T) {
+	f := setupHooksHandler(t, features.AuthHooks)
+	f.hooks.secretSet[testOAuthProject] = true
+	f.hooks.rows[testOAuthProject+"/send_email"] = domain.ProjectAuthHook{Hook: "send_email", Enabled: true, URL: testHookURL}
+	for name, token := range map[string]*domain.AccessToken{
+		"viewer session":   nil,
+		"session token":    {Name: "studio", Scopes: auth.ScopeSession},
+		"other capability": {Name: "svc-x", Permissions: []string{"policies:read"}},
+	} {
+		w := infoAs(f.router, token)
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "receiver-token") {
+			t.Fatalf("%s: %d %s", name, w.Code, w.Body.String())
+		}
+		assertNoSignInKeys(t, w.Body.Bytes(), "authHooks")
+	}
+	if hooks, _ := decodeObject(t, serviceInfo(f.router).Body.Bytes())["authHooks"].(map[string]any); hooks["sendEmail"] != testHookURL {
+		t.Fatalf("service caller: %v", hooks)
+	}
+}
+
 func TestAuthHooks_InfoCarriesTheEnabledHooksOnlyWhileTheFlagIsOn(t *testing.T) {
 	off := setupHooksHandler(t, features.AuthOAuth, features.AuthOTP, features.AuthGuest, features.AuthUser)
 	off.hooks.secretSet[testOAuthProject] = true
 	off.hooks.rows[testOAuthProject+"/send_email"] = domain.ProjectAuthHook{Hook: "send_email", Enabled: true, URL: testHookURL}
-	assertNoSignInKeys(t, doJSON(off.router, http.MethodGet, testOAuthInfo, nil).Body.Bytes(), "authHooks")
+	assertNoSignInKeys(t, serviceInfo(off.router).Body.Bytes(), "authHooks")
 
 	on := setupHooksHandler(t, features.AuthHooks)
-	w := doJSON(on.router, http.MethodGet, testOAuthInfo, nil)
+	w := serviceInfo(on.router)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"authHooks":{}`) {
 		t.Fatalf("none enabled: %d %s", w.Code, w.Body.String())
 	}
@@ -364,14 +471,14 @@ func TestAuthHooks_InfoCarriesTheEnabledHooksOnlyWhileTheFlagIsOn(t *testing.T) 
 	on.hooks.rows[testOAuthProject+"/custom_access_token"] = domain.ProjectAuthHook{Hook: "custom_access_token", Enabled: true, URL: testHookURL}
 	on.hooks.rows[testOAuthProject+"/before_user_created"] = domain.ProjectAuthHook{Hook: "before_user_created", URL: "https://signup.example.com"}
 	on.hooks.rows[testOAuthProject+"/send_email"] = domain.ProjectAuthHook{Hook: "send_email", Enabled: true, URL: "https://mail.example.com/send"}
-	hooks, _ := decodeObject(t, doJSON(on.router, http.MethodGet, testOAuthInfo, nil).Body.Bytes())["authHooks"].(map[string]any)
+	hooks, _ := decodeObject(t, serviceInfo(on.router).Body.Bytes())["authHooks"].(map[string]any)
 	if len(hooks) != 2 || hooks["customAccessToken"] != testHookURL || hooks["sendEmail"] != "https://mail.example.com/send" {
 		t.Fatalf("authHooks = %v", hooks)
 	}
 
 	// A hook is never reported without the secret it is signed with.
 	delete(on.hooks.secretSet, testOAuthProject)
-	if w := doJSON(on.router, http.MethodGet, testOAuthInfo, nil); !strings.Contains(w.Body.String(), `"authHooks":{}`) {
+	if w := serviceInfo(on.router); !strings.Contains(w.Body.String(), `"authHooks":{}`) {
 		t.Fatalf("without a secret: %s", w.Body.String())
 	}
 }
@@ -379,12 +486,12 @@ func TestAuthHooks_InfoCarriesTheEnabledHooksOnlyWhileTheFlagIsOn(t *testing.T) 
 func TestAuthHooks_InfoIsUnavailableWhenTheHooksCannotBeRead(t *testing.T) {
 	f := setupHooksHandler(t, features.AuthHooks)
 	f.hooks.err = errors.New("db down")
-	if w := doJSON(f.router, http.MethodGet, testOAuthInfo, nil); w.Code != http.StatusServiceUnavailable {
+	if w := serviceInfo(f.router); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("info: %d %s", w.Code, w.Body.String())
 	}
 	f.hooks.err = nil
 	f.handler.authOAuth.Hooks = nil
-	if w := doJSON(f.router, http.MethodGet, testOAuthInfo, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"authHooks":{}`) {
+	if w := serviceInfo(f.router); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"authHooks":{}`) {
 		t.Fatalf("no store: %d %s", w.Code, w.Body.String())
 	}
 }

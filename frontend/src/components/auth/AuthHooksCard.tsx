@@ -28,6 +28,14 @@ function HookForm({ projectId, hook, secretSet }: { readonly projectId: string; 
   const [enabled, setEnabled] = useState(hook.enabled);
   const [url, setUrl] = useState(hook.url);
   const [saved, setSaved] = useState(false);
+  // Re-seed when the server's copy changes (a refetch, or the secret's removal
+  // switching the hook off), but never when only the secret state does.
+  const [seed, setSeed] = useState(hook);
+  if (seed.enabled !== hook.enabled || seed.url !== hook.url) {
+    setSeed(hook);
+    setEnabled(hook.enabled);
+    setUrl(hook.url);
+  }
   const guide = hookGuides[hook.hook];
   const prefix = `auth-hook-${hook.hook}`;
   const blocked = !secretSet && !enabled;
@@ -55,7 +63,7 @@ function HookForm({ projectId, hook, secretSet }: { readonly projectId: string; 
         placeholder="https://hooks.example.com/auth" onChange={(e) => { setUrl(e.target.value); setSaved(false); }} />
       <p className="text-xs text-text-secondary">An https:// URL on a public host, port 443 only.</p>
       {save.isError && <p className="text-sm text-red-400" role="alert">{serverErrorMessage(save.error, 'The hook was not saved')}</p>}
-      {saved && <p className="text-sm text-text-secondary">Saved. Auth uses it after it refreshes the project's settings.</p>}
+      {saved && <p className="text-sm text-text-secondary" role="status">Saved. Auth uses it after it refreshes the project's settings.</p>}
       <Button type="submit" size="sm" disabled={save.isPending} aria-label={`Save ${guide.name}`}>Save</Button>
     </form>
   );
@@ -68,7 +76,13 @@ function SigningSecret({ projectId, secretSet }: { readonly projectId: string; r
 
   const generate = () => {
     if (secretSet && !window.confirm('Rotate the signing secret? The old one stops working at once: enabled hooks, and with them sign-in, fail until your endpoint uses the new secret.')) return;
-    rotate.mutate(undefined, { onSuccess: (secret) => setIssued({ secret, rotated: secretSet }) });
+    rotate.mutate(undefined, {
+      onSuccess: (secret) => {
+        setIssued({ secret, rotated: secretSet });
+        // The secret lives only in this card's state, never in the mutation cache.
+        rotate.reset();
+      },
+    });
   };
 
   const removeSecret = () => {
@@ -116,14 +130,13 @@ export function AuthHooksCard({ projectId }: { readonly projectId: string }) {
         more than 5 minutes off or an id you have seen. A hook that fails or takes over 2 s makes the sign-in fail.
         Only project Admins can change hooks.
       </p>
-      {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+      {isLoading && <Loader2 className="w-4 h-4 animate-spin" role="status" aria-label="Loading the auth hooks" />}
       {isError && <p className="text-sm text-red-400" role="alert">{serverErrorMessage(error, 'The auth hooks could not be read')}</p>}
       {data && (
         <div className="grid gap-4">
           <SigningSecret projectId={projectId} secretSet={data.secretSet} />
-          {/* Keyed on the secret too: removing it switches every hook off on the server. */}
           {data.hooks.map((hook) => (
-            <HookForm key={`${hook.hook}-${data.secretSet}`} projectId={projectId} hook={hook} secretSet={data.secretSet} />
+            <HookForm key={hook.hook} projectId={projectId} hook={hook} secretSet={data.secretSet} />
           ))}
         </div>
       )}

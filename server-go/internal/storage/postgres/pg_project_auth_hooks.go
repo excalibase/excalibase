@@ -81,6 +81,20 @@ ON CONFLICT (project_id) DO UPDATE SET rotated_at = EXCLUDED.rotated_at`, projec
 	return nil
 }
 
+// LockAuthHookSecret holds a transaction-scoped advisory lock per project until
+// release; rolling the transaction back frees it, and so does a lost connection.
+func (s *Store) LockAuthHookSecret(ctx context.Context, projectID string) (func(), error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin auth hook secret lock: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('auth_hook_secret:' || $1))`, projectID); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("take auth hook secret lock: %w", err)
+	}
+	return func() { _ = tx.Rollback() }, nil
+}
+
 // ClearAuthHookSecret forgets the secret and switches every hook off in one
 // transaction; the vault delete is the caller's and comes after.
 func (s *Store) ClearAuthHookSecret(ctx context.Context, projectID string) error {

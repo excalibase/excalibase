@@ -44,6 +44,7 @@ export const useRotateAuthHookSecret = (projectId: string) => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => (await api.post<{ secret: string }>(`${hooksPath(projectId)}/secret`)).data.secret,
+    gcTime: 0,
     onSuccess: () =>
       queryClient.setQueryData<AuthHooks>(hooksKey(projectId), (current) => (current ? { ...current, secretSet: true } : current)),
   });

@@ -19,6 +19,9 @@ type ProjectAuthHookStore interface {
 	AuthHookSecretSet(ctx context.Context, projectID string) (bool, error)
 	// MarkAuthHookSecretSet records that the vault now holds the secret.
 	MarkAuthHookSecretSet(ctx context.Context, projectID string) error
+	// LockAuthHookSecret serializes secret changes per project; the caller
+	// holds it across the vault call and must call the release func.
+	LockAuthHookSecret(ctx context.Context, projectID string) (func(), error)
 	// ClearAuthHookSecret switches every hook of the project off and forgets
 	// the secret, in one transaction.
 	ClearAuthHookSecret(ctx context.Context, projectID string) error
