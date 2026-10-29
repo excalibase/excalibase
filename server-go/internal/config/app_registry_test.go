@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,12 +33,13 @@ func TestValidateAppRegistry(t *testing.T) {
 	t.Setenv("APP_REGISTRY_HOST", "registry.excalibase.internal")
 	t.Setenv("APP_REGISTRY_TOKEN_KEY_FILE", filepath.Join(t.TempDir(), "missing"))
 	missing := loadAppRegistry()
+	on := []features.Feature{features.AppGitBuilds}
 	cases := map[string]AppConfig{
-		"no key file":       {AppRegistry: AppRegistryConfig{Host: "registry.excalibase.internal"}},
-		"unreadable key":    {AppRegistry: missing},
-		"single host":       {ProvisionerMode: "docker", AppRegistry: AppRegistryConfig{Host: "r.internal", TokenKeyPEM: []byte("k")}},
-		"docker hub":        {AppRegistry: AppRegistryConfig{Host: "docker.io", TokenKeyPEM: []byte("k")}},
-		"an operator's one": {AppLocalRegistries: []string{"r.internal"}, AppRegistry: AppRegistryConfig{Host: "r.internal", TokenKeyPEM: []byte("k")}},
+		"no key file, builds on": {DarkFeatures: on, AppRegistry: AppRegistryConfig{Host: "registry.excalibase.internal"}},
+		"unreadable key":         {AppRegistry: missing},
+		"single host":            {ProvisionerMode: "docker", AppRegistry: AppRegistryConfig{Host: "r.internal", TokenKeyPEM: []byte("k")}},
+		"docker hub":             {AppRegistry: AppRegistryConfig{Host: "docker.io", TokenKeyPEM: []byte("k")}},
+		"an operator's one":      {AppLocalRegistries: []string{"r.internal"}, AppRegistry: AppRegistryConfig{Host: "r.internal", TokenKeyPEM: []byte("k")}},
 	}
 	for name, cfg := range cases {
 		if err := cfg.validateAppRegistry(); err == nil {
@@ -45,5 +48,8 @@ func TestValidateAppRegistry(t *testing.T) {
 	}
 	if err := (AppConfig{}).validateAppRegistry(); err != nil {
 		t.Errorf("no registry is valid: %v", err)
+	}
+	if err := (AppConfig{AppRegistry: AppRegistryConfig{Host: "registry.excalibase.internal"}}).validateAppRegistry(); err != nil {
+		t.Errorf("the host alone guards user images with builds off: %v", err)
 	}
 }

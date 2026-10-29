@@ -6,6 +6,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/features"
 )
 
 // AppRegistryConfig is the platform's own registry for git-built images
@@ -52,8 +54,9 @@ func (c AppConfig) validateAppRegistry() error {
 	if registry.keyErr != nil {
 		return fmt.Errorf("APP_REGISTRY_TOKEN_KEY_FILE: %w", registry.keyErr)
 	}
-	if len(registry.TokenKeyPEM) == 0 {
-		return errors.New("APP_REGISTRY_TOKEN_KEY_FILE is required with APP_REGISTRY_HOST: the registry trusts only tokens it signs")
+	// The host alone only guards user images; issuing tokens needs the key.
+	if len(registry.TokenKeyPEM) == 0 && slices.Contains(c.DarkFeatures, features.AppGitBuilds) {
+		return errors.New("APP_REGISTRY_TOKEN_KEY_FILE is required with app git builds on: the registry trusts only tokens it signs")
 	}
 	return nil
 }
