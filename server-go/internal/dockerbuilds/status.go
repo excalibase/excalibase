@@ -2,7 +2,6 @@ package dockerbuilds
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -158,29 +157,13 @@ func (r *Runner) packed(ctx context.Context, buildID string) bool {
 
 // stopAll stops every step, the sidecar and the watcher; Remove deletes them after.
 func (r *Runner) stopAll(ctx context.Context, buildID string) {
-	timeout := stopSeconds
-	for _, step := range everyContainer {
-		err := r.engine.ContainerStop(ctx, containerName(buildID, step), container.StopOptions{Timeout: &timeout})
-		if err != nil && !errdefs.IsNotFound(err) {
-			log.Printf("site build %s: stop the %s step: %v", buildID, step, err)
-		}
-	}
+	r.stopBox(ctx, buildID, chain)
 }
 
 // Remove deletes the build's containers, work volume and network; a build already gone is not an error.
 func (r *Runner) Remove(ctx context.Context, buildID string) error {
-	var errs []error
-	for _, step := range everyContainer {
-		err := r.engine.ContainerRemove(ctx, containerName(buildID, step), container.RemoveOptions{Force: true})
-		if err != nil && !errdefs.IsNotFound(err) {
-			errs = append(errs, fmt.Errorf("remove the %s step: %w", step, err))
-		}
-	}
-	if err := r.engine.VolumeRemove(ctx, r.workVolume(buildID), true); err != nil && !errdefs.IsNotFound(err) {
-		errs = append(errs, fmt.Errorf("remove the work volume: %w", err))
-	}
-	if err := r.engine.NetworkRemove(ctx, r.buildNetwork(buildID)); err != nil && !errdefs.IsNotFound(err) {
-		errs = append(errs, fmt.Errorf("remove the build network: %w", err))
-	}
-	return errors.Join(errs...)
+	return r.removeBox(ctx, buildID, chain)
 }
+
+// logf is log.Printf, named for the box's own use.
+var logf = log.Printf
