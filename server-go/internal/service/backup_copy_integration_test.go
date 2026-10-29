@@ -70,7 +70,7 @@ func TestCopyNow_HasWhatWasWrittenAfterTheLastBackup(t *testing.T) {
 		t.Fatalf("write after the backup: %v", err)
 	}
 
-	req := domain.RestoreRequest{NewProjectName: "copy-now", TargetProjectID: "copy-now", CopyNow: true}
+	req := domain.RestoreRequest{NewProjectName: "copy-now", TargetProjectID: "copy-now", CopyNow: true, Copy: true}
 	if err := svc.CheckCopy(src, req); err != nil {
 		t.Fatalf("CheckCopy: %v", err)
 	}

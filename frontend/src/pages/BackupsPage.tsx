@@ -29,6 +29,8 @@ export function BackupsPage() {
     { key: 'restore', label: mysql ? 'Restore' : 'Restore / PITR', icon: RotateCcw },
     ...(copyOn ? [{ key: 'copy' as const, label: 'Copy', icon: Copy }] : []),
   ];
+  // A tab whose feature went off falls back to the history.
+  const active: Tab = tabs.some((t) => t.key === tab) ? tab : 'backups';
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
   function showToast(msg: string, ok: boolean) {
@@ -69,13 +71,13 @@ export function BackupsPage() {
             <button
               key={key}
               onClick={() => setTab(key)}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${tab === key ? 'border-accent-primary text-accent-primary' : 'border-transparent text-text-secondary hover:text-text-primary'}`}
+              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${active === key ? 'border-accent-primary text-accent-primary' : 'border-transparent text-text-secondary hover:text-text-primary'}`}
             >
               <Icon className="w-4 h-4" />
               {label}
             </button>
           ))}
-          {tab === 'backups' && (
+          {active === 'backups' && (
             <div className="ml-auto flex items-center py-2">
               <Button
                 size="sm"
@@ -93,16 +95,16 @@ export function BackupsPage() {
         </div>
 
         <div className="p-6">
-          {tab === 'backups' && isLoading && (
+          {active === 'backups' && isLoading && (
             <div className="text-center py-12 text-text-secondary">Loading…</div>
           )}
-          {tab === 'backups' && !isLoading && backups.length === 0 && (
+          {active === 'backups' && !isLoading && backups.length === 0 && (
             <div className="text-center py-12">
               <Archive className="w-12 h-12 mx-auto mb-3 text-text-tertiary" />
               <p className="text-text-secondary">No backups found. Click "Trigger Backup" to create one.</p>
             </div>
           )}
-          {tab === 'backups' && !isLoading && backups.length > 0 && (
+          {active === 'backups' && !isLoading && backups.length > 0 && (
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-text-tertiary border-b border-border-primary">
@@ -127,11 +129,11 @@ export function BackupsPage() {
             </table>
           )}
 
-          {tab === 'restore' && (
+          {active === 'restore' && (
             <RestoreForm projectId={projectId} engine={mysql ? 'mysql' : undefined} restoreWindow={mysql ? backupData?.restoreWindow : undefined} />
           )}
 
-          {tab === 'copy' && copyOn && (
+          {active === 'copy' && (
             <CopyDatabaseForm projectId={projectId} engine={mysql ? 'mysql' : undefined} restoreWindow={mysql ? backupData?.restoreWindow : undefined} />
           )}
         </div>

@@ -12,10 +12,7 @@ import {
 import { Button } from '../Button';
 import { toLocalInput, toZonedInstant } from '../../utils/zonedInstant';
 import { serverErrorMessage } from '../../utils/serverError';
-import type { RestoreWindow } from './RestoreForm';
-
-const inputClass =
-  'w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent-primary';
+import { inputClass, type RestoreWindow } from './RestoreForm';
 
 // What a copy's job reports while it runs; other steps are not shown.
 const STEP_TEXT: Record<string, string> = {
@@ -62,15 +59,16 @@ function CopyProgress({ job }: { readonly job: RestoreResult }) {
   }
   if (job.status === 'FAILED') {
     return (
-      <output data-testid="copy-result" className="block p-3 rounded-lg border text-sm bg-red-900/20 border-red-500/30 text-red-400">
+      <output data-testid="copy-result" role="alert" className="block p-3 rounded-lg border text-sm bg-red-900/20 border-red-500/30 text-red-400">
         The copy failed: {job.failureReason || 'no reason was recorded.'}
       </output>
     );
   }
   const step = job.currentStep ? STEP_TEXT[job.currentStep] : undefined;
+  const started = step ? `Copy started. ${step}…` : 'Copy started.';
   return (
     <output data-testid="copy-result" className="block p-3 rounded-lg border text-sm bg-blue-900/20 border-blue-500/30 text-blue-300">
-      Copy started{step ? `. ${step}…` : '.'}
+      {started}
       {copyId && <span className="block mt-1 text-xs text-text-secondary">New project: <span className="font-mono">{copyId}</span></span>}
     </output>
   );
@@ -92,8 +90,17 @@ export function CopyDatabaseForm({ projectId, engine, restoreWindow }: CopyDatab
   const [refusal, setRefusal] = useState<string | null>(null);
 
   const startedJobId = copy.data?.status === RESTORE_RUNNING ? copy.data.id : undefined;
-  const job = useRestoreJob(projectId, startedJobId).data ?? copy.data;
-  const running = copy.isPending || job?.status === RESTORE_RUNNING;
+  const poll = useRestoreJob(projectId, startedJobId);
+  const job = poll.data ?? copy.data;
+  const lost = poll.isError && !poll.data;
+  const running = copy.isPending || (job?.status === RESTORE_RUNNING && !lost);
+  const completed = job?.status === 'COMPLETED';
+  // A finished copy does not leave its name behind for a second click.
+  const [clearedFor, setClearedFor] = useState<string | undefined>();
+  if (completed && job?.id && clearedFor !== job.id) {
+    setClearedFor(job.id);
+    setName('');
+  }
   const atTime = point === 'time';
   const ready = name.trim() !== '' && (!atTime || targetTime.trim() !== '');
   const bounds = engine === 'mysql' && restoreWindow
@@ -117,7 +124,7 @@ export function CopyDatabaseForm({ projectId, engine, restoreWindow }: CopyDatab
       <div className="space-y-4">
         <div>
           <label htmlFor="copy-name" className="text-xs text-text-secondary block mb-1">New project name *</label>
-          <input id="copy-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. orders staging" className={inputClass} />
+          <input id="copy-name" required aria-required="true" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. orders staging" className={inputClass} />
         </div>
         <PointChoice point={point} onChange={setPoint} />
         {atTime && (
@@ -136,7 +143,12 @@ export function CopyDatabaseForm({ projectId, engine, restoreWindow }: CopyDatab
           {refusal}
         </div>
       )}
-      {job && <CopyProgress job={job} />}
+      {job && !lost && <CopyProgress job={job} />}
+      {lost && (
+        <div role="alert" className="p-3 rounded-lg border text-sm bg-red-900/20 border-red-500/30 text-red-400">
+          Could not check the copy&apos;s progress. It may still be running; look for the new project in your projects list.
+        </div>
+      )}
       <Button disabled={!ready || running || !projectId} onClick={submit}>
         <Copy className="w-4 h-4 mr-2" />
         Copy database
