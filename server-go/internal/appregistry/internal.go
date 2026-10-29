@@ -126,6 +126,14 @@ func (in *Internal) PullCredential(projectID string) (PullCredential, error) {
 	return in.issuer.PullCredential(projectID, gen), nil
 }
 
+// Client is provisioning's own client for the registry at baseURL; only an issuing registry has one.
+func (in *Internal) Client(baseURL string) (*Client, error) {
+	if !in.CanIssue() {
+		return nil, errNotIssuing
+	}
+	return NewClient(baseURL, in.issuer)
+}
+
 // VerifyPull checks a pull password against the project's current generation.
 func (in *Internal) VerifyPull(projectID, password string) (bool, error) {
 	if !in.CanIssue() {

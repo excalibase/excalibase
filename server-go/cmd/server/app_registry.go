@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -14,7 +16,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
@@ -115,4 +119,30 @@ func mountInternalRegistry(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 		r.Use(d.activity)
 		d.internalRegistryH.Routes(r)
 	})
+}
+
+const (
+	appRegistrySweepLockID   int64 = 0x6168_0acb_5e9c_0540
+	appRegistrySweepInterval       = 24 * time.Hour
+)
+
+// startRegistrySweeper deletes built images nothing will run again, daily on
+// the leading replica; only an issuing registry holds images of ours.
+func startRegistrySweeper(cfg config.AppConfig, sqlStore storage.PlatformStore, instances storage.InstanceStore, internal *appregistry.Internal) (func(), error) {
+	noop := func() {
+		// app git builds off or no platform store: no images of ours to sweep
+	}
+	if !internal.CanIssue() || sqlStore == nil {
+		return noop, nil
+	}
+	client, err := internal.Client(cfg.AppRegistry.URL)
+	if err != nil {
+		return noop, err
+	}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() {
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), appRegistrySweepLockID)
+	}
+	sweeper := service.NewRegistrySweeper(client, apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()), projectExists(instances))
+	return sweeper.Start(context.Background(), service.NewLeadership(lock), appRegistrySweepInterval), nil
 }

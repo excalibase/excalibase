@@ -300,6 +300,11 @@ func runServer(cfg config.AppConfig) {
 	defer stopAppRollouts()
 	stopImageWatcher := startImageWatcher(cfg, deps.features, sqlStore, deps.appDeploySvc)
 	defer stopImageWatcher()
+	stopRegistrySweep, err := startRegistrySweeper(cfg, sqlStore, store, deps.internalRegistry)
+	if err != nil {
+		log.Fatalf("internal registry sweep (APP_REGISTRY_URL): %v", err)
+	}
+	defer stopRegistrySweep()
 	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
 	defer stopCredentialRenewal()
 	stopRoleReconcile := startPlatformRoleReconcile(cfg, sqlStore, provSvc)
@@ -1067,6 +1072,8 @@ type handlerDeps struct {
 	registryToken http.Handler
 	// internalRegistryH rotates a project's internal-registry pull credential (EXC-540).
 	internalRegistryH *handler.InternalRegistryHandler
+	// internalRegistry is the platform's registry for git builds; nil without one.
+	internalRegistry *appregistry.Internal
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1812,6 +1819,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		advisorsHandler:       handler.NewAdvisorsHandler(advisors.NewService(a.projectDB, sqlStore.Permissions(), advisors.Options{})),
 		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
 		registryToken:         newRegistryTokenHandler(internalRegistry, store),
+		internalRegistry:      internalRegistry,
 		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc)),
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 )
@@ -133,4 +135,44 @@ func matrixRegistryToken(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	return token
+}
+
+// dbOnlyStore is a platform store whose handle opens no connection until used.
+type dbOnlyStore struct {
+	storage.PlatformStore
+	db *sql.DB
+}
+
+func (s dbOnlyStore) DB() *sql.DB { return s.db }
+
+func TestStartRegistrySweeper_OnlyWhereTheRegistryIssues(t *testing.T) {
+	guard, err := appregistry.NewInternal(appregistrytest.Host, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stop, err := startRegistrySweeper(config.AppConfig{}, nil, nil, guard); err != nil || stop == nil {
+		t.Fatalf("a guard only registry sweeps nothing: %v", err)
+	}
+	internal := appregistrytest.New(t)
+	db, err := sql.Open("postgres", "postgres://unused.invalid/db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := dbOnlyStore{db: db}
+	if _, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: "ftp://zot"}}, store, nil, internal); err == nil {
+		t.Error("a registry address provisioning cannot call")
+	}
+	asked := make(chan struct{}, 1)
+	zot := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		asked <- struct{}{}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(zot.Close)
+	stop, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: zot.URL}}, store, fakestore.NewInstances(), internal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-asked
+	stop()
 }

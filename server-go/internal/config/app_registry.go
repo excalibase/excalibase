@@ -15,7 +15,9 @@ import (
 type AppRegistryConfig struct {
 	Host string
 	// Aliases are the other names that reach the same registry (its Service's DNS names, its ClusterIP).
-	Aliases     []string
+	Aliases []string
+	// URL is the registry's in-cluster address, for provisioning's own calls (the sweep, the push).
+	URL         string
 	TokenKeyPEM []byte
 	keyErr      error
 	keyFile     string
@@ -25,6 +27,7 @@ func loadAppRegistry() AppRegistryConfig {
 	registry := AppRegistryConfig{
 		Host:    strings.ToLower(strings.TrimSpace(os.Getenv("APP_REGISTRY_HOST"))),
 		keyFile: strings.TrimSpace(os.Getenv("APP_REGISTRY_TOKEN_KEY_FILE")),
+		URL:     strings.TrimSpace(os.Getenv("APP_REGISTRY_URL")),
 	}
 	for _, alias := range strings.Split(os.Getenv("APP_REGISTRY_ALIASES"), ",") {
 		if alias = strings.ToLower(strings.TrimSpace(alias)); alias != "" {
@@ -57,8 +60,14 @@ func (c AppConfig) validateAppRegistry() error {
 		return fmt.Errorf("APP_REGISTRY_TOKEN_KEY_FILE: %w", registry.keyErr)
 	}
 	// The host alone only guards user images; issuing tokens needs the key.
-	if len(registry.TokenKeyPEM) == 0 && slices.Contains(c.DarkFeatures, features.AppGitBuilds) {
+	if !slices.Contains(c.DarkFeatures, features.AppGitBuilds) {
+		return nil
+	}
+	if len(registry.TokenKeyPEM) == 0 {
 		return errors.New("APP_REGISTRY_TOKEN_KEY_FILE is required with app git builds on: the registry trusts only tokens it signs")
+	}
+	if registry.URL == "" {
+		return errors.New("APP_REGISTRY_URL is required with app git builds on: provisioning pushes and sweeps the registry there")
 	}
 	return nil
 }

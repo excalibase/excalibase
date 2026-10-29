@@ -3,7 +3,6 @@ package appregistry
 import (
 	"errors"
 	"regexp"
-	"strings"
 )
 
 // segment is one lowercase path component the OCI spec and a DNS label both accept.
@@ -24,6 +23,6 @@ func Repository(projectID, appName string) (string, error) {
 // OwnedBy answers whether repository is one of the project's: exactly
 // <project>/<app>, nothing nested and no other project's prefix.
 func OwnedBy(repository, projectID string) bool {
-	project, app, found := strings.Cut(repository, "/")
-	return found && project == projectID && segment.MatchString(project) && segment.MatchString(app)
+	project, _, ok := SplitRepository(repository)
+	return ok && project == projectID
 }
