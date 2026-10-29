@@ -26,16 +26,19 @@ EN=$(c -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $T" "htt
 [ "$EN" = 202 ] && ok "turning statistics on again is accepted (no second restart)" || ko "enable answered $EN"
 
 # Requests: traffic for the first project only, then its charts and the other's.
-AT3=$(c -X POST -H 'Content-Type: application/json' https://api.localhost:$PORT/auth/$SLUG/$PID/token -d "{\"grant_type\":\"api_key\",\"api_key\":\"$KEY\"}" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("accessToken",""))' 2>/dev/null)
-for i in $(seq 5); do
+# The first scrape after provisioning starts only sets the baseline, so calls
+# keep coming until a sample has counted each family.
+calls() {
+  AT3=$(c -X POST -H 'Content-Type: application/json' https://api.localhost:$PORT/auth/$SLUG/$PID/token -d "{\"grant_type\":\"api_key\",\"api_key\":\"$KEY\"}" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("accessToken",""))' 2>/dev/null)
   c -o /dev/null -X POST -H "Authorization: Bearer $AT3" -H 'Content-Type: application/json' https://api.localhost:$PORT/$PID/graphql -d '{"query":"{ publicNotes { id } }"}'
   c -o /dev/null -H "Authorization: Bearer $AT3" https://api.localhost:$PORT/$PID/api/v1/notes
-done
+}
 totals() { python3 -c "import json,sys
 d=json.load(sys.stdin)
-print(' '.join(f\"{t['family']}={t['requests']}\" for t in d.get('totals') or []))" 2>/dev/null; }
+print(' '.join(f\"{t['family']}={t['requests']}\" for t in d.get('totals') or [] if t['requests']))" 2>/dev/null; }
 RC=
 for i in $(seq 40); do
+  calls
   RC=$(rapi "/provision/$PID/requests?range=1h" | totals)
   case "$RC" in *graphql=*rest=*auth=*) break ;; esac
   sleep 6
