@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
-	"github.com/excalibase/provisioning-poc/internal/appregistry/appregistrytest"
+	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"

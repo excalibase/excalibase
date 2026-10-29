@@ -10,7 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
-	"github.com/excalibase/provisioning-poc/internal/appregistry/appregistrytest"
+	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 )
 
 func testInternalRegistry(t *testing.T) *appregistry.Internal {

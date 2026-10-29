@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
-	"github.com/excalibase/provisioning-poc/internal/appregistry/appregistrytest"
+	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/go-chi/chi/v5"
 )
