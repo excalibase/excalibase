@@ -507,6 +507,7 @@ var publicRestoreFailures = []error{
 	ErrRestoreTargetNotArchived, ErrRestoreTargetNotReached, ErrRestoreBackupUnusable,
 	ErrRestoreDiskAbovePlan, ErrBackupStorageNotConfigured,
 	ErrInPlaceRestoreUnsupported, ErrInPlaceNoBackups, ErrProjectOperationRunning,
+	ErrCopyNeedsBackups, ErrCopyNoBackupStore, ErrCopyNowUnsupported, ErrCopyNowNeedsRunning, ErrCopyBackupFailed,
 }
 
 // publicRestoreFailure is the job's failure reason for err.

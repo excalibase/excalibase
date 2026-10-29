@@ -97,6 +97,9 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodPost, "/api/admin/monitoring/alert-settings/test"},
 		{http.MethodGet, "/api/projects/" + matrixProjectA + "/containers/metrics"},
 	},
+	features.DBCopy: {
+		{http.MethodPost, "/api/provision/" + matrixProjectA + "/backup/copy"},
+	},
 	features.AppStorage: {
 		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
 		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},
