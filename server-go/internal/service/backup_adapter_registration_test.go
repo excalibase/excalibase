@@ -30,7 +30,7 @@ type fakeRegistrar struct {
 	carryErr     error
 }
 
-func (f *fakeRegistrar) CarryRestoredSettings(_ context.Context, sourceID, targetID string) error {
+func (f *fakeRegistrar) CarryRestoredSettings(_ context.Context, _ *provisioner.ProvisionContext, sourceID, targetID string) error {
 	f.carried = append(f.carried, [2]string{sourceID, targetID})
 	if f.carryStatus != nil {
 		f.carriedWhile = append(f.carriedWhile, f.carryStatus(targetID))

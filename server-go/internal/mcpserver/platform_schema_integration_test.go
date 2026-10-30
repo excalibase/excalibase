@@ -173,5 +173,11 @@ func (v *memoryVault) DeletePrefix(string) (int, error) { return 0, nil }
 func (v *memoryVault) List(string) ([]string, error)    { return nil, nil }
 func (v *memoryVault) Sealed() bool                     { return false }
 func (v *memoryVault) GetPublicKey() (string, error)    { return "", nil }
+func (v *memoryVault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	if _, err := v.Get(path); err == nil {
+		return false, nil
+	}
+	return true, v.Put(path, data)
+}
 
 var errNotInVault = errors.New("not found")

@@ -5,8 +5,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MFACard } from './MFACard';
 import { api } from '../../api/client';
 import type { AuthSettings } from '../../api/authSettings';
+import { useProjectRole } from '../../hooks/useProjectRole';
 
 vi.mock('../../api/client', () => ({ api: { get: vi.fn(), put: vi.fn() } }));
+vi.mock('../../hooks/useProjectRole', () => ({ useProjectRole: vi.fn() }));
+
+const asRole = (canAdmin: boolean) =>
+  vi.mocked(useProjectRole).mockReturnValue({ role: canAdmin ? 'admin' : 'developer', canDevelop: true, canAdmin, isLoading: false });
 
 const base: AuthSettings = { siteUrl: 'https://app.example.com', requireEmailVerification: false };
 
@@ -19,6 +24,7 @@ function renderCard(settings: AuthSettings) {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  asRole(true);
 });
 
 describe('MFACard', () => {
@@ -46,13 +52,32 @@ describe('MFACard', () => {
     await waitFor(() => expect(client.getQueryData(['auth-settings', 'p'])).toEqual(answer));
   });
 
-  test('switching off says enrolled factors are kept', async () => {
+  test('switching off asks first and says enrolled factors are kept', async () => {
     const u = userEvent.setup();
     vi.mocked(api.put).mockResolvedValue({ data: { ...base, mfaEnabled: false } });
     renderCard({ ...base, mfaEnabled: true });
     expect(screen.getByTestId('mfa-card')).toHaveTextContent(/kept/i);
     await u.click(screen.getByLabelText(/authenticator apps/i));
+    expect(screen.getByTestId('confirm-modal')).toHaveTextContent(/second step/i);
+    expect(api.put).not.toHaveBeenCalled();
+    await u.click(screen.getByTestId('modal-confirm'));
     await waitFor(() => expect(api.put).toHaveBeenCalledWith('/projects/p/auth-settings/mfa', { enabled: false }));
+  });
+
+  test('cancelling the switch-off sends nothing', async () => {
+    const u = userEvent.setup();
+    renderCard({ ...base, mfaEnabled: true });
+    await u.click(screen.getByLabelText(/authenticator apps/i));
+    await u.click(screen.getByTestId('modal-cancel'));
+    expect(api.put).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/authenticator apps/i)).toBeChecked();
+  });
+
+  test('only project admins can switch it', () => {
+    asRole(false);
+    renderCard(base);
+    expect(screen.getByLabelText(/authenticator apps/i)).toBeDisabled();
+    expect(screen.getByTestId('mfa-card')).toHaveTextContent(/only project admins/i);
   });
 
   test("shows the server's refusal", async () => {

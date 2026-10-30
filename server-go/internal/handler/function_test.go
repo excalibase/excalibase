@@ -236,6 +236,12 @@ func (f *fakeVault) List(prefix string) ([]string, error) {
 }
 func (f *fakeVault) Sealed() bool                  { return false }
 func (f *fakeVault) GetPublicKey() (string, error) { return "", nil }
+func (f *fakeVault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	if _, err := f.Get(path); err == nil {
+		return false, nil
+	}
+	return true, f.Put(path, data)
+}
 
 // --- Tests ---
 

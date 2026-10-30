@@ -216,6 +216,12 @@ func (f *e2eFakeVault) DeletePrefix(prefix string) (int, error) {
 }
 func (f *e2eFakeVault) Sealed() bool                  { return false }
 func (f *e2eFakeVault) GetPublicKey() (string, error) { return "", nil }
+func (f *e2eFakeVault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	if _, err := f.Get(path); err == nil {
+		return false, nil
+	}
+	return true, f.Put(path, data)
+}
 
 func setupFnE2E(t *testing.T) (*chi.Mux, string, func()) {
 	t.Helper()

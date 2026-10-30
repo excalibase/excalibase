@@ -46,16 +46,13 @@ func (h *ProvisioningHandler) PutAuthMFA(w http.ResponseWriter, r *http.Request)
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if enabled {
-		err = h.authOAuth.MFA.EnableMFA(r.Context(), projectID, func() error { return h.ensureMFAKey(projectID) })
-	} else {
-		err = h.authOAuth.MFA.DisableMFA(r.Context(), projectID)
-	}
+	err = h.switchMFA(r.Context(), projectID, enabled)
+	h.writeAuthAudit(r, projectID, auditActionAuthMFAUpdate, auditResourceAuthSettings, projectID,
+		`{"mfaEnabled":`+strconv.FormatBool(enabled)+`,"outcome":"`+mfaOutcome(err)+`"}`)
 	if err != nil {
 		writeMFAError(w, projectID, err)
 		return
 	}
-	h.writeAuthAudit(r, projectID, auditActionAuthMFAUpdate, auditResourceAuthSettings, projectID, `{"mfaEnabled":`+strconv.FormatBool(enabled)+`}`)
 	view, err := h.authSettingsView(r.Context(), projectID)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
@@ -77,30 +74,63 @@ func decodeMFARequest(w http.ResponseWriter, r *http.Request) (bool, error) {
 	return *body.Enabled, nil
 }
 
-// ensureMFAKey creates the key only when the vault says there is none; an
-// unreadable vault or a malformed key is an error, never a reason to write.
+// switchMFA turns MFA on only once the vault holds a valid key.
+func (h *ProvisioningHandler) switchMFA(ctx context.Context, projectID string, enabled bool) error {
+	if !enabled {
+		return h.authOAuth.MFA.DisableMFA(ctx, projectID)
+	}
+	if err := h.ensureMFAKey(projectID); err != nil {
+		return err
+	}
+	return h.authOAuth.MFA.EnableMFA(ctx, projectID)
+}
+
+// ensureMFAKey creates the key only where the vault holds nothing, with a
+// conditional write so concurrent enables keep one key; it then re-reads what
+// is stored. An unreadable vault or a malformed key is an error, never a reason to write.
 func (h *ProvisioningHandler) ensureMFAKey(projectID string) error {
 	path := domain.MFAKeyPath(projectID)
 	stored, err := h.authOAuth.Secrets.Get(path)
-	switch {
-	case err == nil:
-		if domain.ValidMFAKey(stored[domain.MFAKeyField]) {
-			return nil
+	if errors.Is(err, vault.ErrNotFound) {
+		if err := h.putMFAKeyIfAbsent(projectID, path); err != nil {
+			return err
 		}
-		return domain.ErrInvalidMFAKey
-	case !errors.Is(err, vault.ErrNotFound):
+		stored, err = h.authOAuth.Secrets.Get(path)
+	}
+	if err != nil {
 		log.Printf("ERROR: read the MFA key of project %s: %v", projectID, err)
 		return errMFAVaultReadable
 	}
+	if !domain.ValidMFAKey(stored[domain.MFAKeyField]) {
+		return domain.ErrInvalidMFAKey
+	}
+	return nil
+}
+
+func (h *ProvisioningHandler) putMFAKeyIfAbsent(projectID, path string) error {
 	key, err := domain.NewMFAKey()
 	if err != nil {
 		return err
 	}
-	if err := h.authOAuth.Secrets.Put(path, map[string]string{domain.MFAKeyField: key}); err != nil {
+	if _, err := h.authOAuth.Secrets.PutIfAbsent(path, map[string]string{domain.MFAKeyField: key}); err != nil {
 		log.Printf("ERROR: store the MFA key of project %s: %v", projectID, err)
 		return errMFAKeyWrite
 	}
 	return nil
+}
+
+// mfaOutcome names a switch's result for the audit row.
+func mfaOutcome(err error) string {
+	switch {
+	case err == nil:
+		return "success"
+	case errors.Is(err, domain.ErrInvalidMFAKey):
+		return "invalid_key"
+	case errors.Is(err, errMFAVaultReadable):
+		return "vault_unavailable"
+	default:
+		return "error"
+	}
 }
 
 func writeMFAError(w http.ResponseWriter, projectID string, err error) {
