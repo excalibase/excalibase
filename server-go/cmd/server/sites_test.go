@@ -154,16 +154,18 @@ func TestSiteDomainChecksAreLimitedPerProject(t *testing.T) {
 }
 
 // Previews are wired only with sitepreviews on and Sites offered (EXC-660).
+// The flag decides whether previews are made; held ones are kept wired either way, so turning
+// the flag off never strands a preview's Worker on Cloudflare.
 func TestSitePreviewsFollowTheirFeature(t *testing.T) {
 	store := sites.NewPostgresStore(nil)
 	off := sitesConfig("")
-	if previewStore(off, store) != nil {
-		t.Fatal("previews wired with the feature off")
+	if previewStore(off, store) == nil || !previewsDark(off) {
+		t.Fatal("with the feature off previews must be dark but still kept for cleanup")
 	}
 	on := sitesConfig("")
 	on.DarkFeatures = []features.Feature{features.SitePreviews}
-	if previewStore(on, store) == nil {
-		t.Fatal("previews not wired with the feature on")
+	if previewStore(on, store) == nil || previewsDark(on) {
+		t.Fatal("previews not made with the feature on")
 	}
 	noSites := on
 	noSites.SitesEnabled = false

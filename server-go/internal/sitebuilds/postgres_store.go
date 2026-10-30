@@ -118,12 +118,34 @@ func (s *PostgresStore) ConnectionsForRepository(ctx context.Context, provider s
 	return collectConnections(rows)
 }
 
-func (s *PostgresStore) SavePreviewSettings(ctx context.Context, projectID, siteID string, settings PreviewSettings) error {
-	encoded, err := json.Marshal(settings)
+func (s *PostgresStore) ConnectionsForInstallation(ctx context.Context, provider string, installationID int64, repositoryIDs []int64) ([]*Connection, error) {
+	if repositoryIDs == nil {
+		repositoryIDs = []int64{}
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+connectionColumns+` FROM site_git_connections
+		WHERE provider = $1 AND installation_id = $2 AND (cardinality($3::bigint[]) = 0 OR repository_id = ANY($3))`,
+		provider, installationID, pq.Array(repositoryIDs))
+	if err != nil {
+		return nil, fmt.Errorf("find the sites connected through an installation: %w", err)
+	}
+	return collectConnections(rows)
+}
+
+func (s *PostgresStore) SavePreviewMode(ctx context.Context, projectID, siteID, mode string) error {
+	return s.mergePreviewSettings(ctx, projectID, siteID, map[string]string{"mode": mode})
+}
+
+func (s *PostgresStore) SavePreviewAccess(ctx context.Context, projectID, siteID string, access PreviewAccess) error {
+	return s.mergePreviewSettings(ctx, projectID, siteID, access)
+}
+
+// mergePreviewSettings writes the given keys in one statement, leaving the others as they are.
+func (s *PostgresStore) mergePreviewSettings(ctx context.Context, projectID, siteID string, keys any) error {
+	encoded, err := json.Marshal(keys)
 	if err != nil {
 		return fmt.Errorf("encode preview settings: %w", err)
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE site_git_connections SET preview_settings = $3, updated_at = NOW()
+	result, err := s.db.ExecContext(ctx, `UPDATE site_git_connections SET preview_settings = preview_settings || $3::jsonb, updated_at = NOW()
 		WHERE site_id = $1 AND project_id = $2`, siteID, projectID, encoded)
 	if err != nil {
 		return fmt.Errorf("save preview settings: %w", err)

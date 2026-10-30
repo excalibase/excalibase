@@ -194,7 +194,6 @@ func TestForkPullRequestsAreNotBuiltUnlessOptedInAndThenNeverSeeSecrets(t *testi
 	if _, err := h.Service.SetSecretVisibility(ctx, h.Project, []string{"STRIPE_PK"}, h.User); err != nil {
 		t.Fatal(err)
 	}
-	const forkRepo = int64(987654)
 	h.GitHub.SetPullRequest(h.SiteRepo, pullRequest(21, true, prSHA, forkRepo))
 	if queued, err := h.DeliverPullRequest(gitprovider.PullRequestOpened, 21, prSHA, forkRepo, "d-fork-1"); err != nil || queued != 0 {
 		t.Fatalf("a fork pull request queued %d by default, %v", queued, err)

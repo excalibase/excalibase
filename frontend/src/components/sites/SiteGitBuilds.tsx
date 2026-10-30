@@ -273,7 +273,7 @@ export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false 
           <SiteBuildList projectId={projectId} siteId={siteId} canReadLogs={canDevelop} />
         </div>
       )}
-      {state?.connection && !state.connection.inactiveReason && (
+      {state?.connection && (
         <SitePreviews
           projectId={projectId}
           siteId={siteId}

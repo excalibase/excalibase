@@ -62,5 +62,21 @@ func (e *execution) reportPreview(ctx context.Context, result outcome) {
 	if err := service.options.Previews.RecordPreviewFailure(ctx, build.ProjectID, build.SiteID, build.PreviewID, result.reason); err != nil {
 		log.Printf("site build %s: record the failed preview: %v", build.ID, err)
 	}
-	service.postStatus(ctx, build, gitprovider.StatusFailure, "", result.reason)
+	service.postStatus(ctx, build, gitprovider.StatusFailure, "", publicFailure(result.kind))
+}
+
+// publicFailure is what a failed preview says on its commit, which anyone who reads a public
+// repository sees: the kind of failure only, never the runner's or Cloudflare's own words.
+func publicFailure(kind FailureKind) string {
+	switch kind {
+	case FailInstall:
+		return "The install command failed; see the build log in Studio"
+	case FailBuild:
+		return "The build command failed; see the build log in Studio"
+	case FailTimeout, FailOutOfMemory, FailDisk:
+		return "The build ran past its plan's limits; see Studio"
+	case FailNoOutput, FailRootDir:
+		return "The build settings do not match the repository; see Studio"
+	}
+	return "The preview could not be built or deployed; see Studio"
 }

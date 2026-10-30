@@ -109,7 +109,7 @@ func TestPostgresPreviewLeaseFinishRemoveAndDue(t *testing.T) {
 	if err := store.ReleasePreview(ctx, "proj-pv-life", preview.ID, "lease-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkPreviewRemoving(ctx, "proj-pv-life", preview.ID); err != nil {
+	if err := store.MarkPreviewRemoving(ctx, "proj-pv-life", preview.ID, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.OpenPreview(ctx, newPreview("pv-life-2", "pv-life-a", "proj-pv-life", "feat/a"), 5, 1000); !errors.Is(err, sites.ErrPreviewRemoving) {
@@ -176,5 +176,40 @@ func TestPostgresPreviewServiceRoundTripAndSiteDeletion(t *testing.T) {
 	}
 	if len(publisher.Hosts) != 0 {
 		t.Fatalf("hosts left = %v", publisher.Hosts)
+	}
+}
+
+// The sweep marks only a preview still idle: a push between its read and its mark spares the preview.
+func TestPostgresPreviewIdleMarkSparesAFreshPreview(t *testing.T) {
+	store := sites.NewPostgresStore(platformDB(t).DB())
+	ctx := context.Background()
+	seedSite(t, store, newSite("pv-idle-a", "proj-pv-idle", "pv-idle-a"))
+	fork := newPreview("pv-idle-1", "pv-idle-a", "proj-pv-idle", "12")
+	fork.Source, fork.FromFork = sites.PreviewSourcePullRequest, true
+	preview, err := store.OpenPreview(ctx, fork, 5, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetPreview(ctx, "proj-pv-idle", "pv-idle-a", preview.ID)
+	if err != nil || !stored.FromFork {
+		t.Fatalf("stored = %+v, %v; want the fork remembered", stored, err)
+	}
+	if err := store.MarkPreviewRemoving(ctx, "proj-pv-idle", preview.ID, preview.UpdatedAt.Add(-time.Hour)); !errors.Is(err, sites.ErrPreviewNotFound) {
+		t.Fatalf("idle mark of a fresh preview err = %v", err)
+	}
+	if again, _ := store.GetPreview(ctx, "proj-pv-idle", "pv-idle-a", preview.ID); again.Status == sites.PreviewRemoving {
+		t.Fatal("a fresh preview was marked by the idle sweep")
+	}
+	if err := store.MarkPreviewRemoving(ctx, "proj-pv-idle", preview.ID, preview.UpdatedAt.Add(time.Hour)); err != nil {
+		t.Fatalf("idle mark of an idle preview: %v", err)
+	}
+	// Once REMOVING, the idle check passes regardless, so a failed removal is retried.
+	if err := store.MarkPreviewRemoving(ctx, "proj-pv-idle", preview.ID, preview.UpdatedAt.Add(-time.Hour)); err != nil {
+		t.Fatalf("retry mark of a removing preview: %v", err)
+	}
+	reopen := newPreview("pv-idle-2", "pv-idle-a", "proj-pv-idle", "12")
+	reopen.Source = sites.PreviewSourcePullRequest
+	if _, err := store.OpenPreview(ctx, reopen, 5, 1000); !errors.Is(err, sites.ErrPreviewRemoving) {
+		t.Fatalf("reopen of a removing preview err = %v", err)
 	}
 }

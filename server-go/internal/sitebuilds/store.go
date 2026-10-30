@@ -31,8 +31,14 @@ type Store interface {
 	ConnectionsForPush(ctx context.Context, provider string, installationID, repositoryID int64, branch string) ([]*Connection, error)
 	// ConnectionsForRepository answers every site connected to the repository, whatever its branch.
 	ConnectionsForRepository(ctx context.Context, provider string, installationID, repositoryID int64) ([]*Connection, error)
-	// SavePreviewSettings replaces the connection's previews; ErrNotConnected when the site has none.
-	SavePreviewSettings(ctx context.Context, projectID, siteID string, settings PreviewSettings) error
+	// ConnectionsForInstallation answers the sites connected through the installation, to the given
+	// repositories only when any are named.
+	ConnectionsForInstallation(ctx context.Context, provider string, installationID int64, repositoryIDs []int64) ([]*Connection, error)
+	// SavePreviewMode and SavePreviewAccess each write only their own keys of the connection's previews,
+	// so a developer's mode and an Admin's opt-ins saved at once never undo each other; ErrNotConnected
+	// when the site has no connection.
+	SavePreviewMode(ctx context.Context, projectID, siteID, mode string) error
+	SavePreviewAccess(ctx context.Context, projectID, siteID string, access PreviewAccess) error
 	// ForgetInstallation drops connections through an installation, or only those to the given repositories.
 	ForgetInstallation(ctx context.Context, provider string, installationID int64, repositoryIDs []int64) (int, error)
 

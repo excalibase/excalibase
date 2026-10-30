@@ -145,11 +145,14 @@ func (m *MemoryPreviews) FinishPreview(_ context.Context, preview *sites.Preview
 	return nil
 }
 
-func (m *MemoryPreviews) MarkPreviewRemoving(_ context.Context, projectID, id string) error {
+func (m *MemoryPreviews) MarkPreviewRemoving(_ context.Context, projectID, id string, idleBefore time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	held, ok := m.Previews[id]
 	if !ok || held.ProjectID != projectID {
+		return sites.ErrPreviewNotFound
+	}
+	if !idleBefore.IsZero() && held.Status != sites.PreviewRemoving && !held.UpdatedAt.Before(idleBefore) {
 		return sites.ErrPreviewNotFound
 	}
 	held.Status = sites.PreviewRemoving
@@ -182,7 +185,13 @@ func (m *MemoryPreviews) DuePreviews(_ context.Context, idleBefore time.Time, li
 			out = append(out, &copied)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.Before(out[j].UpdatedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		removingI, removingJ := out[i].Status == sites.PreviewRemoving, out[j].Status == sites.PreviewRemoving
+		if removingI != removingJ {
+			return removingI
+		}
+		return out[i].UpdatedAt.Before(out[j].UpdatedAt)
+	})
 	if len(out) > limit {
 		out = out[:limit]
 	}
