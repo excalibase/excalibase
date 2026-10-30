@@ -67,4 +67,6 @@ bad = [r["query"] for r in requests if not re.fullmatch(r"\{(namespace|project_i
 sys.exit(f"a wider delete request reached Loki: {bad}" if bad else 0)' && ok "every delete request names one project exactly" || ko "a delete request is wider than one project"
 case "$LD" in *"project_id=\\\"$PID\\\""*) ko "the kept project's lines were asked to be deleted" ;; *) ok "no delete request for the kept project" ;; esac
 case "$(loki_lines "{project_id=\"$PID\"} |= \"$MARK\"")" in *"$MARK"*) ok "the kept project's line is still stored" ;; *) ko "the kept project's line is gone" ;; esac
-$DOCKER logs excalibase-provisioning 2>&1 | grep -q "log deletion: on" && ok "provisioning reports log deletion on" || ko "provisioning did not turn log deletion on"
+# Read the whole log first: grep -q closing the pipe early fails it under pipefail.
+PLOG=$($DOCKER logs excalibase-provisioning 2>&1)
+case "$PLOG" in *"log deletion: on"*) ok "provisioning reports log deletion on" ;; *) ko "provisioning did not turn log deletion on" ;; esac
