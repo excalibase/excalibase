@@ -48,3 +48,36 @@ func sitePreviewRouteCases() []routeCase {
 		},
 	}
 }
+
+// Every preview tool passes the server's refusal on, and checks its ids before calling anything.
+func TestSitePreviewToolsPassRefusalsOn(t *testing.T) {
+	settings := testSettings
+	settings.Features = features.NewStatic(features.SitePreviews)
+	f := newFakeRoutes()
+	f.on(http.MethodGet, projectsA+"/sites/s1/previews", 503, `{"error":"git builds are not offered on this install"}`)
+	f.on(http.MethodPut, projectsA+"/sites/s1/previews/mode", 503, `{"error":"git builds are not offered on this install"}`)
+	f.on(http.MethodDelete, projectsA+"/sites/s1/previews/p1", 409, `{"error":"this preview is being removed"}`)
+	cs := sessionWith(t, f, &recordingAudit{}, writeCaller(), settings)
+	for tool, args := range map[string]map[string]any{
+		"list_site_previews":    {"project_id": testProjectA, "site_id": "s1"},
+		"set_site_preview_mode": {"project_id": testProjectA, "site_id": "s1", "mode": "off"},
+		"remove_site_preview":   {"project_id": testProjectA, "site_id": "s1", "preview_id": "p1"},
+	} {
+		if res := callTool(t, cs, tool, args); !res.IsError {
+			t.Errorf("%s: result = %s, want the refusal", tool, resultText(res))
+		}
+	}
+	calls := len(f.calls)
+	for tool, args := range map[string]map[string]any{
+		"list_site_previews":    {"project_id": testProjectA, "site_id": ".."},
+		"set_site_preview_mode": {"project_id": testProjectA, "site_id": "..", "mode": "off"},
+		"remove_site_preview":   {"project_id": testProjectA, "site_id": "s1", "preview_id": ".."},
+	} {
+		if res := callTool(t, cs, tool, args); !res.IsError {
+			t.Errorf("%s: a bad id was accepted: %s", tool, resultText(res))
+		}
+	}
+	if len(f.calls) != calls {
+		t.Fatalf("a bad id reached the API: %v", f.calls[calls:])
+	}
+}
