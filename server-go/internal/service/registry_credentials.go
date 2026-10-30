@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
@@ -31,6 +32,12 @@ type RegistryCredentialService struct {
 	vault     vaultclient.VaultClient
 	instances storage.InstanceStore
 	runtime   AppRuntime
+	internal  *appregistry.Internal
+}
+
+// SetInternalRegistry refuses a saved credential for the platform's own registry (EXC-540).
+func (s *RegistryCredentialService) SetInternalRegistry(internal *appregistry.Internal) {
+	s.internal = internal
 }
 
 func NewRegistryCredentialService(vault vaultclient.VaultClient, instances storage.InstanceStore, runtime AppRuntime) *RegistryCredentialService {
@@ -43,6 +50,9 @@ func (s *RegistryCredentialService) Set(projectID, registry string, cred apphost
 	normalized, err := apphost.NormalizeRegistry(registry)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalidRegistryCredential, err)
+	}
+	if s.internal.NamesHost(normalized) {
+		return "", fmt.Errorf("%w: %w", ErrInvalidRegistryCredential, appregistry.ErrInternalImage)
 	}
 	if err := cred.Validate(); err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalidRegistryCredential, err)

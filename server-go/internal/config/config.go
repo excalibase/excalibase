@@ -361,6 +361,8 @@ type AppConfig struct {
 	// AppLocalRegistries are registries a self-hosted operator runs beside the
 	// platform (APP_LOCAL_REGISTRIES); refused in cloud mode.
 	AppLocalRegistries []string
+	// AppRegistry is the platform's registry for git-built images (EXC-540).
+	AppRegistry AppRegistryConfig
 	// SingleHostApps is how apps run when PROVISIONER_MODE=docker (EXC-575).
 	SingleHostApps SingleHostAppsConfig
 	// AppDiskToolsImage runs the app-disk usage probe and lowering copy.
@@ -424,6 +426,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateAppLocalRegistries(); err != nil {
 		return err
 	}
+	if err := c.validateAppRegistry(); err != nil {
+		return err
+	}
 	if err := validateRequestMetricsTargets(c.RequestMetricsTargets); err != nil {
 		return err
 	}
@@ -444,6 +449,7 @@ func Load() AppConfig {
 	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"
 	cfg.SiteGit = loadSiteGit()
 	cfg.AppLocalRegistries = loadAppLocalRegistries()
+	cfg.AppRegistry = loadAppRegistry()
 	return cfg
 }
 

@@ -56,7 +56,10 @@ type Client struct {
 	now    func() time.Time
 }
 
-var _ gitprovider.Provider = (*Client)(nil)
+var (
+	_ gitprovider.Provider    = (*Client)(nil)
+	_ gitprovider.FileChecker = (*Client)(nil)
+)
 
 func New(config Config) (*Client, error) {
 	key, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(config.PrivateKeyPEM))
@@ -260,6 +263,32 @@ func (c *Client) BranchHead(ctx context.Context, installationID int64, repositor
 	}
 	commit.Message = detail.Commit.Message
 	return commit, nil
+}
+
+// FileExists reads the path's contents entry at the commit; a directory or a missing path is no file.
+func (c *Client) FileExists(ctx context.Context, installationID int64, repository gitprovider.Repository, commit, path string) (bool, error) {
+	credential, err := c.installationToken(ctx, installationID, repository.ID, contentsRead)
+	if err != nil {
+		return false, err
+	}
+	defer c.revokeQuietly(ctx, credential.Token)
+	var entry json.RawMessage
+	contentsURL := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", c.config.APIURL, repository.FullName, escapeRef(path), url.QueryEscape(commit))
+	err = c.do(ctx, call{method: http.MethodGet, url: contentsURL, bearer: credential.Token}, &entry)
+	if errors.Is(err, gitprovider.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var file struct {
+		Type string `json:"type"`
+	}
+	// A directory answers a JSON array, which does not decode into an object.
+	if json.Unmarshal(entry, &file) != nil {
+		return false, nil
+	}
+	return file.Type == "file", nil
 }
 
 // escapeRef escapes each segment of a branch name, keeping its slashes.

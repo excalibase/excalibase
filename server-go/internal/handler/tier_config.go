@@ -14,6 +14,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -29,6 +30,8 @@ type TierHandler struct {
 	nodes NodePlacement
 	// planChanged is told of every edit; it must not block the response.
 	planChanged func()
+	// flags hide the app build limits while appgitbuilds is off.
+	flags features.Flags
 }
 
 // SetNodePlacement wires the check a multi-instance spec must pass.
@@ -37,6 +40,9 @@ func (h *TierHandler) SetNodePlacement(nodes NodePlacement) { h.nodes = nodes }
 func NewTierHandler(store storage.TierConfigStore) *TierHandler {
 	return &TierHandler{store: store}
 }
+
+// SetFeatures wires the flags that decide which limits the plan shows.
+func (h *TierHandler) SetFeatures(flags features.Flags) { h.flags = flags }
 
 // SetPlanChangeHook runs after a plan is edited: an edit that lowers a cap
 // re-runs the app disk rule on the apps it now caps (EXC-523).
@@ -82,6 +88,7 @@ type tierConfigDTO struct {
 	SiteBuildDisk           *string `json:"siteBuildDisk"`
 	SiteBuildTimeoutSeconds *int    `json:"siteBuildTimeoutSeconds"`
 	SiteBuildConcurrency    *int    `json:"siteBuildConcurrency"`
+	appBuildLimitsDTO
 }
 
 func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
@@ -112,6 +119,8 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 		SiteBuildDisk:           &tc.SiteBuilds.Disk,
 		SiteBuildTimeoutSeconds: &tc.SiteBuilds.TimeoutSeconds,
 		SiteBuildConcurrency:    &tc.SiteBuilds.Concurrency,
+
+		appBuildLimitsDTO: toAppBuildLimitsDTO(tc.AppBuilds),
 	}
 }
 
@@ -124,7 +133,7 @@ func (h *TierHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]tierConfigDTO, 0, len(m))
 	for tier, tc := range m {
-		out = append(out, toTierDTO(tier, tc))
+		out = append(out, h.shown(r.Context(), toTierDTO(tier, tc)))
 	}
 	writeJSON(w, out)
 }
@@ -166,6 +175,10 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	tc.Sites = dto.siteLimits(current.Sites)
 	tc.SiteBuilds = dto.siteBuildLimits(current.SiteBuilds)
+	tc.AppBuilds = current.AppBuilds
+	if h.appBuildsOn(r.Context()) {
+		tc.AppBuilds = dto.appBuildLimitsDTO.overlay(current.AppBuilds)
+	}
 	if err := validateTierConfig(tc); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
@@ -187,7 +200,7 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	tc.Version = version
 	w.Header().Set("ETag", strconv.Itoa(version))
-	writeJSON(w, toTierDTO(tier, tc))
+	writeJSON(w, h.shown(r.Context(), toTierDTO(tier, tc)))
 }
 
 // tierVersionPrecondition reads If-Match, the version the edit was made from,
@@ -318,7 +331,10 @@ func validateTierConfig(tc config.TierConfig) error {
 	if err := validateSiteLimits(tc.Sites); err != nil {
 		return err
 	}
-	return validateSiteBuildLimits(tc.SiteBuilds)
+	if err := validateSiteBuildLimits(tc.SiteBuilds); err != nil {
+		return err
+	}
+	return validateAppBuildLimits(tc.AppBuilds)
 }
 
 // Bounds on an admin's Sites edit. A file above 25 MiB is refused by

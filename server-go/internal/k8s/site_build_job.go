@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strconv"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -89,10 +90,14 @@ func workMounts() []corev1.VolumeMount {
 }
 
 func renderSiteBuildJob(options SiteBuildOptions, spec sitebuilds.RunSpec) *batchv1.Job {
-	labels := siteBuildLabels(spec)
-	deadline := int64(spec.Timeout.Seconds())
+	return buildJob(siteBuildName(spec.BuildID), options.Namespace, siteBuildLabels(spec), spec.Timeout, renderSiteBuildPod(options, spec))
+}
+
+// buildJob runs a build pod once, within its plan's time, removed 10 minutes after.
+func buildJob(name, namespace string, labels map[string]string, timeout time.Duration, pod corev1.PodSpec) *batchv1.Job {
+	deadline := int64(timeout.Seconds())
 	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: siteBuildName(spec.BuildID), Namespace: options.Namespace, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            pointerTo(int32(0)),
 			ActiveDeadlineSeconds:   &deadline,
@@ -101,16 +106,25 @@ func renderSiteBuildJob(options SiteBuildOptions, spec sitebuilds.RunSpec) *batc
 			Suspend: pointerTo(true),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec:       renderSiteBuildPod(options, spec),
+				Spec:       pod,
 			},
 		},
 	}
 }
 
 func renderSiteBuildPod(options SiteBuildOptions, spec sitebuilds.RunSpec) corev1.PodSpec {
+	inits := []corev1.Container{
+		prepareWorkdirContainer(options.PrepareImage), fenceContainer(spec.Image), cloneContainer(spec.Image, spec.CloneURL, spec.Commit), buildContainer(spec),
+	}
+	return buildPodSpec(options.RuntimeClass, options.PriorityClass, inits, collectContainer(spec), siteBuildVolumes(spec))
+}
+
+// buildPodSpec is every build's pod: gVisor, low priority, never restarted, no
+// service-account token or service links, non-root with seccomp on.
+func buildPodSpec(runtimeClass, priorityClass string, inits []corev1.Container, collect corev1.Container, volumes []corev1.Volume) corev1.PodSpec {
 	return corev1.PodSpec{
-		RuntimeClassName:             &options.RuntimeClass,
-		PriorityClassName:            options.PriorityClass,
+		RuntimeClassName:             &runtimeClass,
+		PriorityClassName:            priorityClass,
 		RestartPolicy:                corev1.RestartPolicyNever,
 		AutomountServiceAccountToken: pointerTo(false),
 		EnableServiceLinks:           pointerTo(false),
@@ -118,11 +132,9 @@ func renderSiteBuildPod(options SiteBuildOptions, spec sitebuilds.RunSpec) corev
 			RunAsNonRoot: pointerTo(true), RunAsUser: pointerTo(siteBuildUID), RunAsGroup: pointerTo(siteBuildUID), FSGroup: pointerTo(siteBuildUID),
 			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
-		InitContainers: []corev1.Container{
-			prepareWorkdirContainer(options.PrepareImage), fenceContainer(spec), cloneContainer(spec), buildContainer(spec),
-		},
-		Containers: []corev1.Container{collectContainer(spec)},
-		Volumes:    siteBuildVolumes(spec),
+		InitContainers: inits,
+		Containers:     []corev1.Container{collect},
+		Volumes:        volumes,
 	}
 }
 
@@ -138,30 +150,35 @@ func prepareWorkdirContainer(image string) corev1.Container {
 	}
 }
 
-func fenceContainer(spec sitebuilds.RunSpec) corev1.Container {
+func fenceContainer(image string) corev1.Container {
 	return corev1.Container{
-		Name: siteBuildFence, Image: spec.Image, Command: []string{"bash", "/scripts/fence.sh"},
+		Name: siteBuildFence, Image: image, Command: []string{"bash", "/scripts/fence.sh"},
 		SecurityContext: lockedDown(), Resources: guaranteed("100m", "32Mi"), VolumeMounts: []corev1.VolumeMount{scriptMount()},
 	}
 }
 
-func cloneContainer(spec sitebuilds.RunSpec) corev1.Container {
+// cloneContainer is the only step holding the git token.
+func cloneContainer(image, cloneURL, commit string) corev1.Container {
 	return corev1.Container{
-		Name: siteBuildClone, Image: spec.Image, Command: []string{"bash", "/scripts/clone.sh"},
+		Name: siteBuildClone, Image: image, Command: []string{"bash", "/scripts/clone.sh"},
 		Env: []corev1.EnvVar{
-			{Name: "CLONE_URL", Value: spec.CloneURL}, {Name: "COMMIT", Value: spec.Commit}, {Name: "HOME", Value: "/work/home"},
+			{Name: "CLONE_URL", Value: cloneURL}, {Name: "COMMIT", Value: commit}, {Name: "HOME", Value: "/work/home"},
 		},
 		SecurityContext: lockedDown(), Resources: guaranteed("500m", "256Mi"),
 		VolumeMounts: append(workMounts(), scriptMount(), corev1.VolumeMount{Name: "git-token", MountPath: "/run/git", ReadOnly: true}),
 	}
 }
 
-func buildContainer(spec sitebuilds.RunSpec) corev1.Container {
-	cpu := resource.NewMilliQuantity(int64(spec.CPUMillis), resource.DecimalSI)
+// planLimits is a plan's CPU, memory and disk as one Guaranteed step.
+func planLimits(cpuMillis int, memory, disk string) corev1.ResourceRequirements {
 	list := corev1.ResourceList{
-		corev1.ResourceCPU: *cpu, corev1.ResourceMemory: resource.MustParse(spec.Memory),
-		corev1.ResourceEphemeralStorage: resource.MustParse(spec.Disk),
+		corev1.ResourceCPU: *resource.NewMilliQuantity(int64(cpuMillis), resource.DecimalSI), corev1.ResourceMemory: resource.MustParse(memory),
+		corev1.ResourceEphemeralStorage: resource.MustParse(disk),
 	}
+	return corev1.ResourceRequirements{Requests: list, Limits: list.DeepCopy()}
+}
+
+func buildContainer(spec sitebuilds.RunSpec) corev1.Container {
 	return corev1.Container{
 		Name: siteBuildBuild, Image: spec.Image, Command: []string{"bash", "/scripts/build.sh"}, WorkingDir: "/work",
 		// Explicit env wins over the Secret's, so a declared variable cannot move HOME or the commands.
@@ -174,7 +191,7 @@ func buildContainer(spec sitebuilds.RunSpec) corev1.Container {
 		},
 		EnvFrom:         []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: siteBuildName(spec.BuildID) + "-env"}}}},
 		SecurityContext: lockedDown(),
-		Resources:       corev1.ResourceRequirements{Requests: list, Limits: list.DeepCopy()},
+		Resources:       planLimits(spec.CPUMillis, spec.Memory, spec.Disk),
 		VolumeMounts:    append(workMounts(), scriptMount()),
 	}
 }
@@ -200,7 +217,7 @@ func siteBuildVolumes(spec sitebuilds.RunSpec) []corev1.Volume {
 		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &tmp}}},
 		{Name: "scripts", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: siteBuildScriptsName}}}},
-		{Name: "git-token", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name + "-git"}}},
+		{Name: "git-token", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name + cloneSecretSuffix}}},
 	}
 }
 
@@ -213,7 +230,7 @@ func renderSiteBuildSecrets(options SiteBuildOptions, spec sitebuilds.RunSpec) (
 	}
 	name := siteBuildName(spec.BuildID)
 	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-env", Namespace: options.Namespace, Labels: labels}, StringData: env},
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-git", Namespace: options.Namespace, Labels: labels},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + cloneSecretSuffix, Namespace: options.Namespace, Labels: labels},
 			StringData: map[string]string{"token": spec.CloneToken}}
 }
 
