@@ -1761,7 +1761,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provSvc.SetSiteRouter(sitesSvc)
 	builds := newSiteBuilds(siteBuildArgs{cfg: cfg, sqlStore: sqlStore, kube: k8sClient, vault: vc, sites: sitesSvc,
 		limits:  service.NewSiteBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
-		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}})
+		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}, docker: a.dockerClient})
 	return &handlerDeps{
 		siteBuilds:            builds,
 		provHandler:           provHandler,

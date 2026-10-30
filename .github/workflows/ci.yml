@@ -51,6 +51,11 @@ jobs:
               - 'server-go/internal/engineproxy/**'
               - 'server-go/internal/dockerapps/**'
               - 'server-go/cmd/app-probe/**'
+              - 'server-go/internal/dockerbuilds/**'
+              - 'server-go/internal/buildegress/**'
+              - 'server-go/cmd/build-egress/**'
+              - 'server-go/cmd/server/site_builds.go'
+              - 'server-go/internal/k8s/site_build_scripts/**'
               - 'server-go/internal/provisioner/docker*'
               - 'server-go/internal/service/backup_*docker*'
               - 'frontend/Dockerfile'
@@ -115,7 +120,7 @@ jobs:
     if: needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     # Four fresh installs, each walking realtime too (EXC-612).
-    timeout-minutes: 130
+    timeout-minutes: 145
     steps:
       - uses: actions/checkout@v4
       - name: Build provisioning and Studio from this checkout
@@ -147,10 +152,11 @@ jobs:
           # Apps reach their database by name through Docker's resolver, which gVisor's own network stack cannot reach.
           sudo runsc install -- --network=host && sudo systemctl reload docker
           docker info --format '{{json .Runtimes}}' | grep -q runsc
-      - name: Fresh install with apps under gVisor (deploy, rollback, disk, isolation, domain)
+      - name: Fresh install with apps and site git builds under gVisor (deploy, rollback, disk, isolation, domain; a pushed site built behind the egress proxy)
         env:
           PLATFORM_TAG: ci
           APPS: "1"
+          SITE_BUILDS: "1"
           APP_SANDBOX: runsc
         run: bash deploy/single-host/tests/boot-smoke.sh docker
 

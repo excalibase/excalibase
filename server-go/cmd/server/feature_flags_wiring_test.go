@@ -114,6 +114,8 @@ var darkWork = map[features.Feature]string{
 	features.MySQLPITR:    "TestMySQLBinlogShippingStartsOnlyWithItsFeature",
 	features.LogRetention: "TestLogPlanSweepStartsOnlyWithItsFeature",
 	features.AuthOTP:      "TestAuthOTP_OffHidesTheSwitchEvenWithOAuthOn",
+	// Off, a single host keeps answering that it builds nothing (ModeSingleHost).
+	features.SingleHostBuilds: "TestSiteBuildMode",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

@@ -13,3 +13,14 @@ func TestUserMessage_NamesAnInactiveConnection(t *testing.T) {
 		t.Fatalf("message %q", message)
 	}
 }
+
+// A build image that did not pull is the image's failure, not the platform's, and keeps the registry's words out.
+func TestStartFailure_NamesAnImageThatDidNotPull(t *testing.T) {
+	got := startFailure(fmt.Errorf("%w: pull node:22: registry.internal refused", ErrImagePull))
+	if got.kind != FailImage || strings.Contains(got.reason, "registry.internal") {
+		t.Fatalf("%+v", got)
+	}
+	if other := startFailure(fmt.Errorf("create network: boom")); other.kind != FailPlatform {
+		t.Fatalf("%+v", other)
+	}
+}

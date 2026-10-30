@@ -107,3 +107,10 @@ func TestDarkFeatures_HostMetricsIsOnOnlyOnASingleHost(t *testing.T) {
 		}
 	}
 }
+
+// EXC-671: the single-host compose file passes this exact name through.
+func TestDarkFeatures_SingleHostBuildsVariable(t *testing.T) {
+	if got := featureEnv[features.SingleHostBuilds]; got != "FEATURE_SINGLEHOSTBUILDS" {
+		t.Errorf("single-host builds variable = %q", got)
+	}
+}

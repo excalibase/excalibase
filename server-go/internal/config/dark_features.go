@@ -25,6 +25,8 @@ var featureEnv = map[features.Feature]string{
 	features.AuthUser:        "FEATURE_AUTHUSER",
 	features.AuthGuest:       "FEATURE_AUTHGUEST",
 	features.HostMetrics:     "FEATURE_HOSTMETRICS",
+	// Single-host only (the compose file); Kubernetes builds do not read it.
+	features.SingleHostBuilds: "FEATURE_SINGLEHOSTBUILDS",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.

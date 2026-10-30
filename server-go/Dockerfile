@@ -13,6 +13,8 @@ RUN CGO_ENABLED=0 go build -o /bin/excalibase-engine-proxy ./cmd/engine-proxy/
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /bin/excalibase-app-probe ./cmd/app-probe/
 # The log forwarder pod (EXC-658) runs this image with this binary as its command.
 RUN CGO_ENABLED=0 go build -o /bin/excalibase-log-forwarder ./cmd/log-forwarder/
+# A single host's git builds reach the internet only through this proxy (EXC-671), one per build.
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /bin/excalibase-build-egress ./cmd/build-egress/
 
 FROM alpine:3.20
 
@@ -21,6 +23,7 @@ COPY --from=build /bin/excalibase-provisioning /bin/excalibase-provisioning
 COPY --from=build /bin/excalibase-engine-proxy /bin/excalibase-engine-proxy
 COPY --from=build /bin/excalibase-app-probe /usr/local/bin/excalibase-app-probe
 COPY --from=build /bin/excalibase-log-forwarder /bin/excalibase-log-forwarder
+COPY --from=build /bin/excalibase-build-egress /bin/excalibase-build-egress
 
 # Bundle watcher Helm chart so provisioning can auto-deploy per-tenant CDC watchers.
 # Path matches default WATCHER_CHART_PATH env.

@@ -20,6 +20,9 @@
 # HOST_METRICS=1 installs with --host-metrics and walks host monitoring (EXC-670,
 # monitoring-journey.sh): host and container samples, the database's figures,
 # a down alert raised and resolved. Without it the monitoring routes are absent.
+# SITE_BUILDS=1 turns on Sites and their git builds on this host (EXC-671,
+# sitebuilds-journey.sh) against stand-ins for GitHub and Cloudflare: a signed
+# push is built under the sandbox runtime behind the build egress proxy and deployed.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG);
 # GRAPHQL_IMAGE a locally built engine image.
 # Every run walks realtime (EXC-612, realtime-journey.sh): a subscriber receives
@@ -44,7 +47,7 @@ logs_have() { local out; out=$($DOCKER logs "$1" 2>&1); grep -qF -- "$2" <<< "$o
 c() { curl -sk --max-time 30 --resolve studio.localhost:$PORT:127.0.0.1 --resolve api.localhost:$PORT:127.0.0.1 --resolve files.localhost:$PORT:127.0.0.1 "$@"; }
 # Apps leave per-project networks and disks; they go with the managed containers.
 wipe_managed() {
-  $DOCKER rm -f "$SMOKE_DNS" >/dev/null 2>&1
+  $DOCKER rm -f "$SMOKE_DNS" "$SITE_FAKES" >/dev/null 2>&1
   # A DocumentDB gateway holds its database's network namespace: Podman removes it first.
   $DOCKER rm -f $($DOCKER ps -aq --filter label=excalibase.managed=true --filter name=-documentdb) >/dev/null 2>&1
   $DOCKER rm -f -v $($DOCKER ps -aq --filter label=excalibase.managed=true) >/dev/null 2>&1
@@ -52,15 +55,17 @@ wipe_managed() {
   $DOCKER network rm $($DOCKER network ls -q --filter label=excalibase.managed=true) >/dev/null 2>&1
 }
 APP_ARGS=
-if [ -n "${APPS:-}" ]; then
+if [ -n "${APPS:-}${SITE_BUILDS:-}" ]; then
   if [ -z "${APP_SANDBOX:-}" ]; then
     if $DOCKER info 2>/dev/null | grep -q runsc; then APP_SANDBOX=runsc; else APP_SANDBOX=none; fi
   fi
   [ "$APP_SANDBOX" = none ] && echo "info: no runsc on this engine: apps run with the documented opt-out, --app-sandbox none (no gVisor)"
-  APP_ARGS="--apps --app-sandbox $APP_SANDBOX"
+  [ -n "${APPS:-}" ] && APP_ARGS="--apps --app-sandbox $APP_SANDBOX"
 fi
 # The DNS server the apps journey verifies a custom domain against.
 SMOKE_DNS=smoke-dns-excalibase
+# GitHub and Cloudflare stand-ins for the site build journey.
+SITE_FAKES=smoke-sitefakes
 status() { c https://studio.localhost:$PORT/api/vault/status | python3 -c 'import json,sys;d=json.load(sys.stdin);print("uninitialized" if not d["initialized"] else ("sealed" if d["sealed"] else "open"))' 2>/dev/null; }
 
 echo "== fresh state"
@@ -89,7 +94,41 @@ sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUB
 # The apps journey drives create_app through MCP, as a coding tool does (EXC-606).
 [ -n "${APPS:-}" ] && echo "FEATURE_MCP=true" >> "$W/.env"
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"
+if [ -n "${SITE_BUILDS:-}" ]; then
+  # Builds run under the apps' sandbox runtime, set here when apps are not installed.
+  [ -z "${APPS:-}" ] && echo "APP_SANDBOX_RUNTIME=$APP_SANDBOX" >> "$W/.env"
+  SITE_WEBHOOK_SECRET=$(openssl rand -hex 16)
+  openssl genrsa -out "$W/github-app.pem" 2048 2>/dev/null && chmod 644 "$W/github-app.pem"
+  cat >> "$W/.env" <<EOF
+SITES_ENABLED=true
+SITES_CLOUDFLARE_ACCOUNT_ID=smoke-account
+SITES_CLOUDFLARE_API_TOKEN=smoke-token
+SITES_DISPATCH_NAMESPACE=smoke-sites
+SITES_HOSTS_KV_NAMESPACE_ID=smoke-kv
+SITES_BASE_DOMAIN=sites.test
+SITES_CLOUDFLARE_API_URL=http://$SITE_FAKES:8080/cf
+SITES_GIT_BUILDS_ENABLED=true
+FEATURE_SINGLEHOSTBUILDS=true
+SITES_GITHUB_APP_ID=4242
+SITES_GITHUB_APP_SLUG=smoke-app
+SITES_GITHUB_CLIENT_ID=smoke-client
+SITES_GITHUB_CLIENT_SECRET=smoke-client-secret
+SITES_GITHUB_WEBHOOK_SECRET=$SITE_WEBHOOK_SECRET
+SITES_GITHUB_API_URL=http://$SITE_FAKES:8080/gh
+SITES_GITHUB_WEB_URL=http://$SITE_FAKES:8080/gh
+SITES_GITHUB_APP_PRIVATE_KEY_FILE=/run/excalibase-github/app.pem
+SITES_BUILD_EGRESS_ALLOW=$SITE_FAKES:8080
+EOF
+  printf 'services:\n  provisioning:\n    volumes:\n      - %s:/run/excalibase-github/app.pem:ro\n' "$W/github-app.pem" > "$W/sitebuilds.yml"
+  P="$P -f $W/sitebuilds.yml"
+  # The stand-ins install git (and git-daemon, which holds http-backend on Alpine) first, then join the platform and build egress networks.
+  $DOCKER run -d --name "$SITE_FAKES" -v "$TESTS/sitebuild_fakes.py:/fakes.py:ro" docker.io/library/python:3.13-alpine \
+    sh -c 'apk add --no-cache git git-daemon >/dev/null && exec python3 /fakes.py 8080 /repos' >/dev/null
+  $DOCKER network create --label excalibase.managed=true --label excalibase.component=site-build excalibase-net-build-egress >/dev/null
+  $DOCKER network connect excalibase-net-build-egress "$SITE_FAKES"
+fi
 timeout 900 $COMPOSE $P up -d > "$W/up.log" 2>&1; echo "up exit $?"; grep -iE "^Error|error:" "$W/up.log" | sort -u | head -5
+[ -n "${SITE_BUILDS:-}" ] && $DOCKER network connect excalibase-platform "$SITE_FAKES"
 for i in $(seq 90); do [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.Status}}' 2>/dev/null)" = exited ] && break; sleep 2; done
 if [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.ExitCode}}' 2>/dev/null)" = 0 ] && logs_have excalibase-objectstore-setup 'OBJECT STORE READY'; then
   ok "bundled object store set up"
@@ -201,6 +240,7 @@ if [ -n "${MANUAL_UNSEAL:-}" ]; then
 fi
 
 [ -n "${APPS:-}" ] && . "$TESTS/apps-journey.sh"
+[ -n "${SITE_BUILDS:-}" ] && . "$TESTS/sitebuilds-journey.sh"
 [ -n "${DOCUMENTDB:-}" ] && . "$TESTS/documentdb-journey.sh"
 [ -n "${MYSQL:-}" ] && . "$TESTS/mysql-journey.sh"
 [ -n "${PG_BACKUPS:-}" ] && . "$TESTS/postgres-backup-journey.sh"

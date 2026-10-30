@@ -2,7 +2,9 @@
 # clone: the only step holding the git credential. The token goes to git through
 # GIT_CONFIG_* for this process only, so it is never written to /work/src/.git.
 set -euo pipefail
-token=""
+# The Job mounts the token as a file; the single-host runner (EXC-671) passes it in GIT_TOKEN.
+token=${GIT_TOKEN:-}
+unset GIT_TOKEN
 [[ -s /run/git/token ]] && token=$(cat /run/git/token)
 if [[ -n "$token" ]]; then
   export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader

@@ -55,11 +55,14 @@ const (
 	// HostMetrics is single-host monitoring: the host and every container
 	// sampled into history, alerts and notices, and Studio's Host page (EXC-670).
 	HostMetrics Feature = "hostmetrics"
+	// SingleHostBuilds runs git builds of sites on a single Docker or Podman
+	// host, under the sandbox runtime behind the build egress proxy (EXC-671).
+	SingleHostBuilds Feature = "singlehostbuilds"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SingleHostBuilds}
 }
 
 type Flags interface {

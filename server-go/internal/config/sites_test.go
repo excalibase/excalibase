@@ -143,3 +143,30 @@ func TestSitesConfigReadsTheZoneCap(t *testing.T) {
 		}
 	}
 }
+
+// The single-host boot test points Sites at a stand-in for Cloudflare's API (EXC-671); the default is Cloudflare's.
+func TestSites_APIURL(t *testing.T) {
+	setSitesEnv(t)
+	if got := Load().Sites.APIURL; got != "" {
+		t.Fatalf("default API URL %q, want empty (the client's default)", got)
+	}
+	t.Setenv("SITES_CLOUDFLARE_API_URL", "http://sitefakes:8080/cf/")
+	cfg := Load()
+	if cfg.Sites.APIURL != "http://sitefakes:8080/cf" {
+		t.Fatalf("API URL %q", cfg.Sites.APIURL)
+	}
+	if err := cfg.validateSites(); err != nil {
+		t.Fatalf("an http(s) URL was refused: %v", err)
+	}
+	// The API token travels in the clear over http, so only a stand-in on the host's own network may use it.
+	for _, refused := range []string{"ftp://nowhere", "http://api.example.com/client/v4"} {
+		cfg.Sites.APIURL = refused
+		if err := cfg.validateSites(); err == nil || !strings.Contains(err.Error(), "SITES_CLOUDFLARE_API_URL") {
+			t.Fatalf("%s: %v", refused, err)
+		}
+	}
+	cfg.Sites.APIURL = "https://api.example.com/client/v4"
+	if err := cfg.validateSites(); err != nil {
+		t.Fatalf("an https URL was refused: %v", err)
+	}
+}

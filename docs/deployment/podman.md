@@ -137,6 +137,14 @@ gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
 Running Docker and Podman stacks side by side on one host needs different
 `AIO_EDGE_SUBNET` / `AIO_DATAPLANE_SUBNET` values: both claim the same subnets.
 
+## Git builds of sites
+
+As on Docker (see [Git builds of sites](docker-local.md#git-builds-of-sites)).
+Rootless Podman cannot give gVisor its limits, so builds there need
+`APP_SANDBOX_RUNTIME=none` (trusted code only). Podman gives the build network
+an address on the host: add the host firewall rule from the Docker notes for
+`podman+` bridges.
+
 ## DocumentDB projects
 
 The same as on Docker (see [DocumentDB projects in docker-local.md](docker-local.md#documentdb-projects)):
