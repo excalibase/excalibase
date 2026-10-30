@@ -8,9 +8,6 @@ import (
 	"os"
 	"sync"
 	"time"
-
-	"github.com/excalibase/provisioning-poc/internal/gitprovider"
-	"github.com/excalibase/provisioning-poc/internal/sites"
 )
 
 const (
@@ -68,10 +65,12 @@ func (o DispatcherOptions) withDefaults() DispatcherOptions {
 	return o
 }
 
-// Dispatcher runs queued builds. Every replica runs one; the store's claim keeps the caps across them.
+// Dispatcher runs queued builds of sites and apps. Every replica runs one; the store's claim keeps the caps across them.
 type Dispatcher struct {
 	service *Service
 	runner  Runner
+	// apps is nil until app builds are wired; the flag still decides whether they are claimed.
+	apps    *appDispatch
 	options DispatcherOptions
 	wake    chan struct{}
 	running sync.WaitGroup
@@ -88,6 +87,35 @@ func NewDispatcher(service *Service, runner Runner, options DispatcherOptions) *
 		interrupted: make(chan struct{}), stopped: make(chan struct{})}
 	service.nudge = dispatcher.Nudge
 	return dispatcher
+}
+
+// appDispatch is what runs and publishes app builds.
+type appDispatch struct {
+	runner    AppRunner
+	publisher AppPublisher
+}
+
+// EnableApps lets the dispatcher run app builds; with no publisher, each fails before it runs. Call it before Run.
+func (d *Dispatcher) EnableApps(runner AppRunner, publisher AppPublisher) {
+	d.apps = &appDispatch{runner: runner, publisher: publisher}
+}
+
+// claimKinds are the kinds this dispatcher runs now: app builds only while wired and switched on.
+func (d *Dispatcher) claimKinds(ctx context.Context) []string {
+	if d.apps != nil && d.service.appsOn(ctx) {
+		return []string{KindSite, KindApp}
+	}
+	return []string{KindSite}
+}
+
+func (d *Dispatcher) jobsFor(kind string) JobControl {
+	if kind == KindApp && d.apps != nil {
+		return d.apps.runner
+	}
+	if kind == KindApp {
+		return nil
+	}
+	return d.runner
 }
 
 // Nudge wakes the dispatcher now instead of at its next poll.
@@ -126,10 +154,11 @@ func (d *Dispatcher) Run(ctx context.Context) {
 // Tick fails builds whose replica went away, then starts every build the caps allow.
 func (d *Dispatcher) Tick(ctx context.Context) {
 	d.expireLost(ctx)
+	kinds := d.claimKinds(ctx)
 	for ctx.Err() == nil {
-		build, err := d.service.store.ClaimNext(ctx, d.options.Slots, d.options.Holder, d.service.now().Add(d.options.Lease))
+		build, err := d.service.store.ClaimNext(ctx, d.options.Slots, d.options.Holder, d.service.now().Add(d.options.Lease), kinds)
 		if err != nil {
-			log.Printf("site builds: claim: %v", err)
+			log.Printf("git builds: claim: %v", err)
 			return
 		}
 		if build == nil {
@@ -174,14 +203,19 @@ func (d *Dispatcher) runInterruptible(build *Build) {
 }
 
 func (d *Dispatcher) expireLost(ctx context.Context) {
-	ids, err := d.service.store.ExpireLostBuilds(ctx, d.service.now(), lostBuildReason)
+	lost, err := d.service.store.ExpireLostBuilds(ctx, d.service.now(), lostBuildReason)
 	if err != nil {
-		log.Printf("site builds: expire lost builds: %v", err)
+		log.Printf("git builds: expire lost builds: %v", err)
 		return
 	}
-	for _, id := range ids {
-		if err := d.runner.Remove(ctx, id); err != nil {
-			log.Printf("site build %s: remove the lost build's job: %v", id, err)
+	for _, build := range lost {
+		jobs := d.jobsFor(build.Kind)
+		if jobs == nil {
+			log.Printf("%s build %s: lost, and no runner here removes its job", build.Kind, build.ID)
+			continue
+		}
+		if err := jobs.Remove(ctx, build.ID); err != nil {
+			log.Printf("%s build %s: remove the lost build's job: %v", build.Kind, build.ID, err)
 		}
 	}
 }
@@ -192,25 +226,25 @@ func (d *Dispatcher) run(ctx context.Context, build *Build) {
 	defer cancel()
 	leaseLost := make(chan struct{})
 	go d.holdLease(runCtx, cancel, build.ID, leaseLost)
-	execution := &execution{dispatcher: d, build: build, secrets: map[string]string{}}
+	execution := newExecution(d, build)
 	outcome := execution.execute(runCtx)
 	cancel()
 	select {
 	case <-leaseLost:
-		log.Printf("site build %s: lease lost; another replica recorded it", build.ID)
+		log.Printf("%s build %s: lease lost; another replica recorded it", build.Kind, build.ID)
 		return
 	default:
 	}
 	if ctx.Err() != nil {
 		if err := d.service.store.RequeueBuild(context.WithoutCancel(ctx), build.ID, d.options.Holder); err != nil {
-			log.Printf("site build %s: hand back to the queue: %v", build.ID, err)
+			log.Printf("%s build %s: hand back to the queue: %v", build.Kind, build.ID, err)
 		}
 		return
 	}
 	build.Status, build.DeployID, build.FailureKind, build.FailureReason = outcome.status, outcome.deployID, outcome.kind, outcome.reason
-	build.Log = redact(execution.log, execution.secrets)
+	build.Log = redact(execution.fullLog(), execution.secrets)
 	if err := d.service.store.FinishBuild(context.WithoutCancel(ctx), build, d.options.Holder); err != nil {
-		log.Printf("site build %s: record outcome: %v", build.ID, err)
+		log.Printf("%s build %s: record outcome: %v", build.Kind, build.ID, err)
 	}
 }
 
@@ -229,7 +263,7 @@ func (d *Dispatcher) holdLease(ctx context.Context, cancel context.CancelFunc, b
 				return
 			}
 			if err != nil {
-				log.Printf("site build %s: extend lease: %v", buildID, err)
+				log.Printf("git build %s: extend lease: %v", buildID, err)
 			}
 		}
 	}
@@ -246,254 +280,17 @@ func failedWith(kind FailureKind, reason string) outcome {
 	return outcome{status: StatusFailed, kind: kind, reason: reason}
 }
 
-// execution is one build's run.
-type execution struct {
-	dispatcher *Dispatcher
-	build      *Build
-	secrets    map[string]string
-	log        string
+// refuse is a build stopped before or instead of running.
+func refuse(kind FailureKind, reason string) *outcome {
+	stopped := failedWith(kind, reason)
+	return &stopped
 }
 
-func (e *execution) execute(ctx context.Context) outcome {
-	service, build := e.dispatcher.service, e.build
-	connection, err := service.store.GetConnection(ctx, build.ProjectID, build.SiteID)
-	if err != nil {
-		return failedWith(FailPlatform, userMessage(err))
+// refusal words a step's error: what the git host no longer allows is the clone's failure, anything else the platform's.
+func refusal(err error) *outcome {
+	var refused *InputError
+	if errors.As(err, &refused) {
+		return refuse(FailClone, refused.Reason)
 	}
-	if connection == nil || connection.RepositoryID != build.RepositoryID {
-		return failedWith(FailPlatform, "the repository was disconnected before this build started")
-	}
-	if err := service.checkConnector(ctx, connection); err != nil {
-		return failedWith(FailClone, userMessage(err))
-	}
-	if err := service.currentRepository(ctx, connection); err != nil {
-		var refused *InputError
-		if errors.As(err, &refused) {
-			return failedWith(FailClone, refused.Reason)
-		}
-		return failedWith(FailPlatform, userMessage(err))
-	}
-	build.Repository = connection.Repository
-	spec, revoke, err := e.prepare(ctx)
-	if err != nil {
-		var refused *InputError
-		if errors.As(err, &refused) {
-			return failedWith(FailClone, refused.Reason)
-		}
-		return failedWith(FailPlatform, userMessage(err))
-	}
-	defer revoke()
-	startCtx, cancelStart := context.WithTimeout(ctx, e.dispatcher.options.StartTimeout)
-	err = e.dispatcher.runner.Start(startCtx, spec)
-	cancelStart()
-	defer e.remove(ctx)
-	if err != nil {
-		return failedWith(FailPlatform, userMessage(err))
-	}
-	awaitCtx, cancelAwait := context.WithTimeout(ctx, spec.Timeout+e.dispatcher.options.PendingGrace)
-	status := e.await(awaitCtx, revoke)
-	cancelAwait()
-	revoke()
-	if status.Phase != RunReady {
-		return failedWith(status.Failure, failureMessage(status, build.Limits, build.Settings))
-	}
-	if reason := e.stillDeployable(ctx); reason != "" {
-		return failedWith(FailPlatform, reason)
-	}
-	deployCtx, cancelDeploy := context.WithTimeout(ctx, e.dispatcher.options.DeployBudget)
-	defer cancelDeploy()
-	return e.deploy(deployCtx)
-}
-
-// stillDeployable re-reads the connection and its connector just before the deploy; it answers why not, or "".
-func (e *execution) stillDeployable(ctx context.Context) string {
-	service, build := e.dispatcher.service, e.build
-	still, err := service.store.GetConnection(ctx, build.ProjectID, build.SiteID)
-	if err != nil {
-		return userMessage(err)
-	}
-	if still == nil || still.RepositoryID != build.RepositoryID {
-		return "the repository was disconnected while this build ran; nothing was deployed"
-	}
-	if err := service.checkConnector(ctx, still); err != nil {
-		return userMessage(err) + "; nothing was deployed"
-	}
-	return ""
-}
-
-// noRevoke stands in when no clone credential was minted.
-func noRevoke() {
-	// nothing was minted, so nothing goes back
-}
-
-// prepare mints the clone credential and gathers the build's variables.
-func (e *execution) prepare(ctx context.Context) (RunSpec, func(), error) {
-	service, build := e.dispatcher.service, e.build
-	credential, err := service.provider.CloneCredential(ctx, build.InstallationID, build.RepositoryID)
-	if errors.Is(err, gitprovider.ErrNotFound) {
-		return RunSpec{}, noRevoke, &InputError{Reason: "the GitHub App no longer covers " + build.Repository}
-	}
-	if err != nil {
-		return RunSpec{}, noRevoke, fmt.Errorf("mint a clone credential: %w", err)
-	}
-	var revokeOnce sync.Once
-	revoke := func() {
-		revokeOnce.Do(func() {
-			if err := service.provider.RevokeCloneCredential(context.WithoutCancel(ctx), credential.Token); err != nil {
-				log.Printf("site build %s: revoke the clone credential: %v", build.ID, err)
-			}
-		})
-	}
-	env, err := e.environment(ctx)
-	if err != nil {
-		revoke()
-		return RunSpec{}, noRevoke, err
-	}
-	largest, err := service.limits.LargestBuild(ctx)
-	if err != nil {
-		revoke()
-		return RunSpec{}, noRevoke, fmt.Errorf("size the build quota: %w", err)
-	}
-	repository := gitprovider.Repository{ID: build.RepositoryID, FullName: build.Repository}
-	settings, limits := build.Settings, build.Limits
-	return RunSpec{
-		BuildID: build.ID, SiteID: build.SiteID, ProjectID: build.ProjectID,
-		Image: NodeImage(service.options.NodeImage, settings.NodeVersion), CloneURL: service.provider.CloneURL(repository),
-		Commit: build.CommitSHA, CloneToken: credential.Token, RootDir: settings.RootDir, OutputDir: settings.OutputDir,
-		InstallCommand: settings.InstallCommand, BuildCommand: settings.BuildCommand,
-		CPUMillis: limits.CPUMillis, Memory: limits.Memory, Disk: limits.Disk, Timeout: time.Duration(limits.TimeoutSeconds) * time.Second,
-		Env: env, LargestPlan: largest,
-	}, revoke, nil
-}
-
-// environment is the site's declared variables plus the project secrets marked build-visible.
-func (e *execution) environment(ctx context.Context) (map[string]string, error) {
-	service, build := e.dispatcher.service, e.build
-	env := make(map[string]string, len(build.Settings.Env))
-	for name, value := range build.Settings.Env {
-		env[name] = value
-	}
-	visible, err := service.store.VisibleSecrets(ctx, build.ProjectID)
-	if err != nil || len(visible) == 0 {
-		return env, err
-	}
-	values, err := service.secrets.Secrets(ctx, build.ProjectID)
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range visible {
-		if value, held := values[name]; held {
-			env[name] = value
-			e.secrets[name] = value
-		}
-	}
-	return env, nil
-}
-
-func (e *execution) remove(ctx context.Context) {
-	e.refreshLog(ctx)
-	if err := e.dispatcher.runner.Remove(context.WithoutCancel(ctx), e.build.ID); err != nil {
-		log.Printf("site build %s: remove its job: %v", e.build.ID, err)
-	}
-}
-
-// await polls the pod until the output is packed or the build failed; cloned runs once the clone step is done.
-func (e *execution) await(ctx context.Context, cloned func()) RunStatus {
-	options := e.dispatcher.options
-	lastLog := time.Time{}
-	for {
-		status, err := e.dispatcher.runner.Status(ctx, e.build.ID)
-		if err != nil {
-			log.Printf("site build %s: read status: %v", e.build.ID, err)
-		} else if status.Phase == RunReady || status.Phase == RunFailed {
-			return status
-		} else if status.CloneDone {
-			cloned()
-		}
-		if time.Since(lastLog) >= options.LogEvery {
-			e.refreshLog(ctx)
-			lastLog = time.Now()
-		}
-		select {
-		case <-ctx.Done():
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return RunStatus{Phase: RunFailed, Failure: FailPlatform, Detail: stuckBuildReason}
-			}
-			return RunStatus{Phase: RunFailed, Failure: FailPlatform, Detail: "the build was stopped"}
-		case <-time.After(options.StatusPoll):
-		}
-	}
-}
-
-// refreshLog keeps the latest tail, so a build whose pod is gone still has one.
-func (e *execution) refreshLog(ctx context.Context) {
-	logs, err := e.dispatcher.runner.Logs(context.WithoutCancel(ctx), e.build.ID)
-	if err != nil {
-		log.Printf("site build %s: read logs: %v", e.build.ID, err)
-		return
-	}
-	if logs == "" {
-		return
-	}
-	e.log = logs
-	err = e.dispatcher.service.store.SaveLog(context.WithoutCancel(ctx), e.build.ID, e.dispatcher.options.Holder, redact(logs, e.secrets))
-	if err != nil && !errors.Is(err, ErrLeaseLost) {
-		log.Printf("site build %s: save logs: %v", e.build.ID, err)
-	}
-}
-
-// deploy collects the packed output and hands it to the Sites deploy path, every upload check included.
-func (e *execution) deploy(ctx context.Context) outcome {
-	service, build := e.dispatcher.service, e.build
-	ceiling, err := service.sites.MaxUploadBytes(ctx, build.ProjectID)
-	if err != nil {
-		return failedWith(FailPlatform, userMessage(err))
-	}
-	spool, err := os.CreateTemp(e.dispatcher.options.SpoolDir, "site-build-*.tar.gz")
-	if err != nil {
-		return failedWith(FailPlatform, userMessage(err))
-	}
-	defer func() {
-		_ = spool.Close()
-		if err := os.Remove(spool.Name()); err != nil {
-			log.Printf("site build %s: remove spool: %v", build.ID, err)
-		}
-	}()
-	if err := e.dispatcher.runner.Collect(ctx, build.ID, spool, ceiling); err != nil {
-		return failedWith(FailDeploy, userMessage(err))
-	}
-	e.refreshLog(ctx)
-	deploy, err := e.deployWithRetry(ctx, spool)
-	if err != nil {
-		return failedWith(FailDeploy, userMessage(err))
-	}
-	return outcome{status: StatusSucceeded, deployID: deploy.ID}
-}
-
-// busy are refusals that clear once another deploy of the project or site finishes.
-func busy(err error) bool {
-	return errors.Is(err, sites.ErrProjectDeployRunning) || errors.Is(err, sites.ErrTooManyDeploys) || errors.Is(err, sites.ErrSiteBusy)
-}
-
-func (e *execution) deployWithRetry(ctx context.Context, spool *os.File) (*sites.Deploy, error) {
-	service, build, options := e.dispatcher.service, e.build, e.dispatcher.options
-	var lastErr error
-	for try := 0; try < options.DeployTries; try++ {
-		if _, err := spool.Seek(0, 0); err != nil {
-			return nil, err
-		}
-		deploy, err := service.sites.Deploy(ctx, sites.DeployRequest{
-			ProjectID: build.ProjectID, SiteID: build.SiteID, Actor: build.RequestedBy, Label: build.DeployLabel(), Body: spool, SlotTaken: true,
-		})
-		if !busy(err) {
-			return deploy, err
-		}
-		lastErr = err
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(options.DeployRetry):
-		}
-	}
-	return nil, lastErr
+	return refuse(FailPlatform, userMessage(err))
 }

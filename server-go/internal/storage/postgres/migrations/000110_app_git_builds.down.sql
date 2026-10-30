@@ -1,0 +1,12 @@
+COMMENT ON TABLE site_build_visible_secrets IS NULL;
+DROP TABLE IF EXISTS app_git_connections;
+DELETE FROM site_builds WHERE kind = 'app';
+DROP INDEX IF EXISTS idx_site_builds_app_delivery;
+DROP INDEX IF EXISTS idx_site_builds_app_one_running;
+DROP INDEX IF EXISTS idx_site_builds_app;
+ALTER TABLE site_builds DROP CONSTRAINT IF EXISTS site_builds_one_target;
+ALTER TABLE site_builds ALTER COLUMN site_id SET NOT NULL;
+ALTER TABLE site_builds DROP CONSTRAINT IF EXISTS site_builds_app_fk;
+ALTER TABLE site_builds DROP COLUMN IF EXISTS app_id;
+ALTER TABLE site_builds DROP CONSTRAINT IF EXISTS site_builds_kind_known;
+ALTER TABLE site_builds DROP COLUMN IF EXISTS kind;

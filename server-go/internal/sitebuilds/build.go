@@ -39,16 +39,27 @@ var (
 		"a developer has to sign in with GitHub and connect it again")
 )
 
-// Connection is a site's repository and how to build it.
-type Connection struct {
-	SiteID         string   `json:"siteId"`
-	ProjectID      string   `json:"projectId"`
-	Provider       string   `json:"provider"`
-	InstallationID int64    `json:"installationId"`
-	RepositoryID   int64    `json:"repositoryId"`
-	Repository     string   `json:"repository"`
-	Settings       Settings `json:"settings"`
-	ConnectedBy    string   `json:"connectedBy"`
+// Build kinds: what a build makes. Both share one queue and the install's slots.
+const (
+	KindSite = "site"
+	KindApp  = "app"
+)
+
+// Target is what a build builds: a site, or an app, whose id is unique only within its project.
+type Target struct {
+	Kind      string
+	ProjectID string
+	ID        string
+}
+
+// GitSource is the repository side of a connection, whatever it builds.
+type GitSource struct {
+	ProjectID      string `json:"projectId"`
+	Provider       string `json:"provider"`
+	InstallationID int64  `json:"installationId"`
+	RepositoryID   int64  `json:"repositoryId"`
+	Repository     string `json:"repository"`
+	ConnectedBy    string `json:"connectedBy"`
 	// ConnectedByName is the connector's username, filled when read for Studio.
 	ConnectedByName string `json:"connectedByName,omitempty"`
 	// InactiveReason is set once the connector lost the developer rung; nothing builds until a developer reconnects.
@@ -56,6 +67,21 @@ type Connection struct {
 	CreatedAt      time.Time `json:"createdAt"`
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
+
+func (g *GitSource) source() *GitSource { return g }
+
+// Connection is a site's repository and how to build it.
+type Connection struct {
+	SiteID string `json:"siteId"`
+	GitSource
+	Settings Settings `json:"settings"`
+}
+
+func (c *Connection) target() Target {
+	return Target{Kind: KindSite, ProjectID: c.ProjectID, ID: c.SiteID}
+}
+
+func (c *Connection) branch() string { return c.Settings.Branch }
 
 // Limits are a build's plan limits, fixed when it is queued.
 type Limits struct {
@@ -66,10 +92,13 @@ type Limits struct {
 	ProjectConcurrency int    `json:"-"`
 }
 
-// Build is one queued or finished build of a site.
+// Build is one queued or finished build of a site or an app.
 type Build struct {
-	ID            string      `json:"id"`
-	SiteID        string      `json:"siteId"`
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	// SiteID is set on a site's build, AppID on an app's.
+	SiteID        string      `json:"siteId,omitempty"`
+	AppID         string      `json:"appId,omitempty"`
 	ProjectID     string      `json:"projectId"`
 	Status        string      `json:"status"`
 	Trigger       string      `json:"trigger"`
@@ -93,15 +122,32 @@ type Build struct {
 	Provider       string `json:"provider"`
 	InstallationID int64  `json:"-"`
 	RepositoryID   int64  `json:"-"`
+	// App is an app build's settings and image cap; nil on a site's.
+	App *AppBuild `json:"app,omitempty"`
+}
+
+// Target is the site or app the build builds.
+func (b *Build) Target() Target {
+	if b.Kind == KindApp {
+		return Target{Kind: KindApp, ProjectID: b.ProjectID, ID: b.AppID}
+	}
+	return Target{Kind: KindSite, ProjectID: b.ProjectID, ID: b.SiteID}
+}
+
+// LostBuild is a running build whose replica went away.
+type LostBuild struct {
+	ID   string
+	Kind string
 }
 
 // buildSnapshot is the connection as a build keeps it in its settings column.
 type buildSnapshot struct {
 	Settings
-	Provider       string `json:"provider"`
-	InstallationID int64  `json:"installationId"`
-	RepositoryID   int64  `json:"repositoryId"`
-	Repository     string `json:"repository"`
+	Provider       string    `json:"provider"`
+	InstallationID int64     `json:"installationId"`
+	RepositoryID   int64     `json:"repositoryId"`
+	Repository     string    `json:"repository"`
+	App            *AppBuild `json:"app,omitempty"`
 }
 
 const (

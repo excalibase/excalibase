@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/gitprovider"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 )
@@ -72,55 +73,6 @@ func noNudge() {
 	// no dispatcher in this process to wake
 }
 
-const connectorGoneReason = "the member who connected this repository can no longer deploy this project"
-
-// checkConnector deactivates a connection whose connector lost the project or the developer rung,
-// and cancels the site's waiting builds; a repository is only ever read under its connector's sign-in.
-func (s *Service) checkConnector(ctx context.Context, connection *Connection) error {
-	if connection.InactiveReason != "" {
-		return ErrConnectionInactive
-	}
-	if s.options.Members == nil {
-		return nil
-	}
-	standing, err := s.options.Members.Standing(ctx, connection.ConnectedBy, connection.ProjectID)
-	if err != nil {
-		return fmt.Errorf("read the connector's role: %w", err)
-	}
-	connection.ConnectedByName = standing.Name
-	if standing.CanDeploy {
-		return nil
-	}
-	if err := s.store.DeactivateConnection(ctx, connection.SiteID, connectorGoneReason); err != nil {
-		return err
-	}
-	if err := s.store.CancelSiteBuilds(ctx, connection.SiteID, connectorGoneReason); err != nil {
-		return err
-	}
-	connection.InactiveReason = connectorGoneReason
-	return ErrConnectionInactive
-}
-
-// currentRepository reads the repository's owner/name by its id, so a transfer or rename is followed
-// and a stale name someone else now owns is never cloned.
-func (s *Service) currentRepository(ctx context.Context, connection *Connection) error {
-	repository, err := s.provider.Repository(ctx, connection.InstallationID, connection.RepositoryID)
-	if errors.Is(err, gitprovider.ErrNotFound) {
-		return &InputError{Reason: "the GitHub App no longer covers " + connection.Repository}
-	}
-	if err != nil {
-		return fmt.Errorf("read the repository: %w", err)
-	}
-	if repository.FullName == connection.Repository {
-		return nil
-	}
-	if err := s.store.RenameRepository(ctx, connection.SiteID, connection.RepositoryID, repository.FullName); err != nil {
-		return err
-	}
-	connection.Repository = repository.FullName
-	return nil
-}
-
 // Service runs git connections and the build queue's front: everything but running builds.
 type Service struct {
 	store    Store
@@ -132,6 +84,8 @@ type Service struct {
 	now      func() time.Time
 	// nudge wakes the dispatcher when a build is queued; nil when none runs here.
 	nudge func()
+	// apps is set once app builds are wired; the appgitbuilds flag still gates every use.
+	apps *AppSupport
 }
 
 func NewService(store Store, provider gitprovider.Provider, siteService Sites, limits LimitsSource, secrets SecretReader, options Options) *Service {
@@ -267,16 +221,9 @@ func (s *Service) Connect(ctx context.Context, request ConnectRequest) (*Connect
 	if err := s.mustSite(ctx, request.ProjectID, request.SiteID); err != nil {
 		return nil, err
 	}
-	installation, granted, err := s.grantFor(ctx, request)
+	installation, repository, err := s.resolveRepository(ctx, request.UserID, request.RepositoryID, request.Repository)
 	if err != nil {
 		return nil, err
-	}
-	repository, err := s.provider.Repository(ctx, installation, granted.ID)
-	if err != nil {
-		if errors.Is(err, gitprovider.ErrNotFound) {
-			return nil, &InputError{Reason: "the GitHub App no longer covers " + granted.FullName + "; add it to the installation on GitHub"}
-		}
-		return nil, fmt.Errorf("read the repository: %w", err)
 	}
 	if strings.TrimSpace(request.Settings.Branch) == "" {
 		request.Settings.Branch = repository.DefaultBranch
@@ -285,10 +232,7 @@ func (s *Service) Connect(ctx context.Context, request ConnectRequest) (*Connect
 	if err != nil {
 		return nil, err
 	}
-	connection := &Connection{
-		SiteID: request.SiteID, ProjectID: request.ProjectID, Provider: s.provider.Name(), InstallationID: installation,
-		RepositoryID: repository.ID, Repository: repository.FullName, Settings: settings, ConnectedBy: request.UserID,
-	}
+	connection := &Connection{SiteID: request.SiteID, GitSource: s.newSource(request.ProjectID, request.UserID, installation, repository), Settings: settings}
 	if err := s.store.SaveConnection(ctx, connection); err != nil {
 		return nil, err
 	}
@@ -301,15 +245,20 @@ func (s *Service) Connect(ctx context.Context, request ConnectRequest) (*Connect
 	return result, nil
 }
 
+func (s *Service) newSource(projectID, userID string, installation int64, repository gitprovider.Repository) GitSource {
+	return GitSource{ProjectID: projectID, Provider: s.provider.Name(), InstallationID: installation, RepositoryID: repository.ID,
+		Repository: repository.FullName, ConnectedBy: userID}
+}
+
 // grantFor finds the repository in what the user's sign-in showed within the hour.
-func (s *Service) grantFor(ctx context.Context, request ConnectRequest) (int64, gitprovider.Repository, error) {
-	access, err := s.store.Grants(ctx, request.UserID, s.provider.Name(), s.now().Add(-grantLifetime))
+func (s *Service) grantFor(ctx context.Context, userID string, repositoryID int64, fullName string) (int64, gitprovider.Repository, error) {
+	access, err := s.store.Grants(ctx, userID, s.provider.Name(), s.now().Add(-grantLifetime))
 	if err != nil {
 		return 0, gitprovider.Repository{}, err
 	}
 	for _, installation := range access {
 		for _, repository := range installation.Repositories {
-			if repository.ID == request.RepositoryID || (request.Repository != "" && strings.EqualFold(repository.FullName, request.Repository)) {
+			if repository.ID == repositoryID || (fullName != "" && strings.EqualFold(repository.FullName, fullName)) {
 				return installation.Installation.ID, repository, nil
 			}
 		}
@@ -339,7 +288,7 @@ func (s *Service) Disconnect(ctx context.Context, projectID, siteID string) erro
 	if err := s.store.DeleteConnection(ctx, projectID, siteID); err != nil {
 		return err
 	}
-	return s.store.CancelSiteBuilds(ctx, siteID, "the repository was disconnected")
+	return s.store.CancelBuilds(ctx, Target{Kind: KindSite, ProjectID: projectID, ID: siteID}, disconnectedReason)
 }
 
 // Rebuild queues a build of the connected branch's head.
@@ -357,50 +306,37 @@ func (s *Service) Rebuild(ctx context.Context, projectID, siteID, actor string) 
 	return s.buildHead(ctx, connection, actor)
 }
 
-func (s *Service) buildHead(ctx context.Context, connection *Connection, actor string) (*Build, error) {
-	if err := s.checkConnector(ctx, connection); err != nil {
-		return nil, err
-	}
-	if err := s.currentRepository(ctx, connection); err != nil {
-		return nil, err
-	}
-	repository := gitprovider.Repository{ID: connection.RepositoryID, FullName: connection.Repository}
-	head, err := s.provider.BranchHead(ctx, connection.InstallationID, repository, connection.Settings.Branch)
-	if errors.Is(err, gitprovider.ErrNotFound) {
-		return nil, &InputError{Reason: fmt.Sprintf("branch %s was not found in %s", connection.Settings.Branch, connection.Repository)}
-	}
+func (s *Service) buildHead(ctx context.Context, connection connected, actor string) (*Build, error) {
+	head, err := s.headOf(ctx, connection)
 	if err != nil {
-		return nil, fmt.Errorf("read the branch head: %w", err)
+		return nil, err
 	}
 	build, _, err := s.enqueue(ctx, connection, head, TriggerRebuild, "", actor)
 	return build, err
 }
 
-// enqueue sizes the build by the plan, counts it toward the hourly deploys and
-// queues it. A push past the hourly limit is recorded FAILED so it is not lost silently.
-func (s *Service) enqueue(ctx context.Context, connection *Connection, commit gitprovider.Commit, trigger, delivery, actor string) (*Build, bool, error) {
-	limits, err := s.limits.BuildLimits(ctx, connection.ProjectID)
-	if err != nil {
-		return nil, false, fmt.Errorf("read the plan's build limits: %w", err)
-	}
-	build := &Build{
-		ID: uuid.NewString(), SiteID: connection.SiteID, ProjectID: connection.ProjectID, Status: StatusQueued, Trigger: trigger,
-		CommitSHA: commit.SHA, CommitMessage: commit.Message, Provider: connection.Provider, InstallationID: connection.InstallationID,
-		RepositoryID: connection.RepositoryID, Repository: connection.Repository, Settings: connection.Settings, Limits: limits,
-		DeliveryID: delivery, RequestedBy: actor, CreatedAt: s.now().UTC(),
-	}
+const disconnectedReason = "the repository was disconnected"
+
+// enqueue sizes the build by the plan and queues it. A site's push past the hourly
+// deploys is recorded FAILED so it is not lost silently.
+func (s *Service) enqueue(ctx context.Context, connection connected, commit gitprovider.Commit, trigger, delivery, actor string) (*Build, bool, error) {
 	if delivery != "" {
-		queued, err := s.store.DeliveryQueued(ctx, connection.SiteID, delivery)
+		queued, err := s.store.DeliveryQueued(ctx, connection.target(), delivery)
 		if err != nil || queued {
 			return nil, false, err
 		}
 	}
-	slotErr := s.sites.TakeDeploySlot(ctx, connection.ProjectID)
-	if slotErr != nil && !(trigger == TriggerPush && errors.Is(slotErr, sites.ErrDeployRateLimited)) {
-		return nil, false, slotErr
+	build, err := s.sizedBuild(ctx, connection)
+	if err != nil {
+		return nil, false, err
 	}
-	if slotErr != nil {
-		build.Status, build.FailureKind, build.FailureReason = StatusFailed, FailRateLimited, slotErr.Error()
+	source := connection.source()
+	build.ID, build.ProjectID, build.Status, build.Trigger = uuid.NewString(), source.ProjectID, StatusQueued, trigger
+	build.CommitSHA, build.CommitMessage, build.DeliveryID, build.RequestedBy = commit.SHA, commit.Message, delivery, actor
+	build.Provider, build.InstallationID, build.RepositoryID, build.Repository = source.Provider, source.InstallationID, source.RepositoryID, source.Repository
+	build.CreatedAt = s.now().UTC()
+	if err := s.admit(ctx, build); err != nil {
+		return nil, false, err
 	}
 	created, err := s.store.Enqueue(ctx, build, buildsKept)
 	if err != nil {
@@ -410,6 +346,38 @@ func (s *Service) enqueue(ctx context.Context, connection *Connection, commit gi
 		s.nudge()
 	}
 	return build, created, nil
+}
+
+// sizedBuild is the target's part of a new build: its settings and the plan's limits, fixed now.
+func (s *Service) sizedBuild(ctx context.Context, connection connected) (*Build, error) {
+	if app, isApp := connection.(*AppConnection); isApp {
+		return s.sizedAppBuild(ctx, app)
+	}
+	site, isSite := connection.(*Connection)
+	if !isSite {
+		return nil, fmt.Errorf("no build is sized for a %s connection", connection.target().Kind)
+	}
+	limits, err := s.limits.BuildLimits(ctx, site.ProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("read the plan's build limits: %w", err)
+	}
+	return &Build{Kind: KindSite, SiteID: site.SiteID, Settings: site.Settings, Limits: limits}, nil
+}
+
+// admit counts a site's build toward the project's deploys per hour; a push past it is kept as FAILED.
+func (s *Service) admit(ctx context.Context, build *Build) error {
+	if build.Kind != KindSite {
+		return nil
+	}
+	slotErr := s.sites.TakeDeploySlot(ctx, build.ProjectID)
+	if slotErr == nil {
+		return nil
+	}
+	if build.Trigger != TriggerPush || !errors.Is(slotErr, sites.ErrDeployRateLimited) {
+		return slotErr
+	}
+	build.Status, build.FailureKind, build.FailureReason = StatusFailed, FailRateLimited, slotErr.Error()
+	return nil
 }
 
 // HandleWebhook verifies a delivery and queues a build for every site tracking the pushed branch.
@@ -444,7 +412,7 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 	if err != nil || seen {
 		return 0, err
 	}
-	connections, err := s.store.ConnectionsForPush(ctx, s.provider.Name(), push.InstallationID, push.RepositoryID, push.Branch)
+	connections, err := s.pushTargets(ctx, push)
 	if err != nil || len(connections) == 0 {
 		return 0, err
 	}
@@ -454,9 +422,40 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 		return 0, fmt.Errorf("read the head of %s: %w", push.Branch, err)
 	}
 	if head.SHA != push.Commit.SHA {
-		log.Printf("site builds: push %s to %s is not the branch head any more; ignored", push.Commit.SHA, push.Repository)
+		log.Printf("git builds: push %s to %s is not the branch head any more; ignored", push.Commit.SHA, push.Repository)
 		return 0, s.store.RecordDelivery(ctx, s.provider.Name(), event.DeliveryID, s.now())
 	}
+	queued, err := s.queuePush(ctx, connections, push, event.DeliveryID)
+	if err != nil {
+		return queued, err
+	}
+	return queued, s.store.RecordDelivery(ctx, s.provider.Name(), event.DeliveryID, s.now())
+}
+
+// pushTargets are the sites, and while app builds are on the apps, tracking the pushed branch.
+func (s *Service) pushTargets(ctx context.Context, push *gitprovider.Push) ([]connected, error) {
+	siteConnections, err := s.store.ConnectionsForPush(ctx, s.provider.Name(), push.InstallationID, push.RepositoryID, push.Branch)
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]connected, 0, len(siteConnections))
+	for _, connection := range siteConnections {
+		targets = append(targets, connection)
+	}
+	if !s.appsOn(ctx) {
+		return targets, nil
+	}
+	appConnections, err := s.store.AppConnectionsForPush(ctx, s.provider.Name(), push.InstallationID, push.RepositoryID, push.Branch)
+	if err != nil {
+		return nil, err
+	}
+	for _, connection := range appConnections {
+		targets = append(targets, connection)
+	}
+	return targets, nil
+}
+
+func (s *Service) queuePush(ctx context.Context, connections []connected, push *gitprovider.Push, delivery string) (int, error) {
 	queued := 0
 	var failures []error
 	for _, connection := range connections {
@@ -466,10 +465,12 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 			failures = append(failures, err)
 			continue
 		}
-		connection.Repository = push.Repository
-		_, created, err := s.enqueue(ctx, connection, push.Commit, TriggerPush, event.DeliveryID, connection.ConnectedBy)
+		source := connection.source()
+		source.Repository = push.Repository
+		_, created, err := s.enqueue(ctx, connection, push.Commit, TriggerPush, delivery, source.ConnectedBy)
 		if err != nil {
-			log.Printf("site builds: queue a push to %s for site %s: %v", push.Repository, connection.SiteID, err)
+			target := connection.target()
+			log.Printf("git builds: queue a push to %s for %s %s: %v", push.Repository, target.Kind, target.ID, err)
 			failures = append(failures, err)
 			continue
 		}
@@ -477,24 +478,25 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 			queued++
 		}
 	}
-	if len(failures) > 0 {
-		return queued, errors.Join(failures...)
-	}
-	return queued, s.store.RecordDelivery(ctx, s.provider.Name(), event.DeliveryID, s.now())
+	return queued, errors.Join(failures...)
 }
 
 func (s *Service) ListBuilds(ctx context.Context, projectID, siteID string) ([]*Build, error) {
 	if err := s.mustSite(ctx, projectID, siteID); err != nil {
 		return nil, err
 	}
-	return s.store.ListBuilds(ctx, projectID, siteID, buildsListLimit)
+	return s.store.ListBuilds(ctx, Target{Kind: KindSite, ProjectID: projectID, ID: siteID}, buildsListLimit)
 }
 
 func (s *Service) GetBuild(ctx context.Context, projectID, siteID, id string) (*Build, error) {
 	if err := s.mustSite(ctx, projectID, siteID); err != nil {
 		return nil, err
 	}
-	build, err := s.store.GetBuild(ctx, projectID, siteID, id)
+	return s.oneBuild(ctx, Target{Kind: KindSite, ProjectID: projectID, ID: siteID}, id)
+}
+
+func (s *Service) oneBuild(ctx context.Context, target Target, id string) (*Build, error) {
+	build, err := s.store.GetBuild(ctx, target, id)
 	if err != nil {
 		return nil, err
 	}
@@ -558,7 +560,8 @@ func userMessage(err error) string {
 	switch {
 	case errors.As(err, &input), errors.As(err, &archive), errors.As(err, &siteInput), errors.As(err, &publish), errors.As(err, &limited),
 		errors.Is(err, sites.ErrDeployRateLimited), errors.Is(err, ErrOutputTooLarge), errors.Is(err, sites.ErrSiteNotFound),
-		errors.Is(err, ErrConnectionInactive):
+		errors.Is(err, ErrConnectionInactive), errors.Is(err, apphost.ErrAppNotFound), errors.Is(err, ErrAppBuildsOff),
+		errors.Is(err, errAppsUnwired):
 		return err.Error()
 	}
 	log.Printf("site builds: %v", err)

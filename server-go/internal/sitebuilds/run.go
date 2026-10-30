@@ -88,16 +88,12 @@ type RunStatus struct {
 	StartFailed bool
 }
 
-// Runner runs builds on the cluster.
+// Runner runs site builds on the cluster.
 type Runner interface {
+	JobControl
 	Start(ctx context.Context, spec RunSpec) error
-	Status(ctx context.Context, buildID string) (RunStatus, error)
 	// Collect streams the packed output (tar.gz) into w, failing past limit bytes.
 	Collect(ctx context.Context, buildID string, w io.Writer, limit int64) error
-	// Logs answers the tail of each step's output.
-	Logs(ctx context.Context, buildID string) (string, error)
-	// Remove deletes the build's Job, pod and Secrets; a build already gone is not an error.
-	Remove(ctx context.Context, buildID string) error
 }
 
 // LimitsSource answers a project's build limits from its plan, and the largest build any plan runs.
