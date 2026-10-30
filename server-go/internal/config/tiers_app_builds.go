@@ -13,9 +13,11 @@ type AppBuildTierLimits struct {
 	Concurrency int
 	// MaxImage is the largest built image the build may hand to a deploy.
 	MaxImage string
+	// MaxBuildsPerHour is how many app builds one project may queue in any hour; it starts at the site deploys per hour.
+	MaxBuildsPerHour int
 }
 
-func appBuildLimits(cpuMillis int, memory, disk string, timeoutSeconds, concurrency int, maxImage string) AppBuildTierLimits {
+func appBuildLimits(cpuMillis int, memory, disk string, timeoutSeconds, concurrency int, maxImage string, perHour int) AppBuildTierLimits {
 	return AppBuildTierLimits{CPUMillis: cpuMillis, Memory: memory, Disk: disk, TimeoutSeconds: timeoutSeconds,
-		Concurrency: concurrency, MaxImage: maxImage}
+		Concurrency: concurrency, MaxImage: maxImage, MaxBuildsPerHour: perHour}
 }

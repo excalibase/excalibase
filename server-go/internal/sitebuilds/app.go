@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/features"
@@ -97,7 +98,21 @@ type AppBuild struct {
 type AppLimits struct {
 	Limits
 	MaxImageBytes int64
+	// MaxBuildsPerHour is how many app builds the project may queue in any hour.
+	MaxBuildsPerHour int
 }
+
+// ErrAppBuildRateLimited is a project past its plan's app builds per hour.
+var ErrAppBuildRateLimited = errors.New("this project has queued as many app builds this hour as its plan allows")
+
+// AppBuildRateLimitError says when the project may build an app again.
+type AppBuildRateLimitError struct{ RetryAfter time.Duration }
+
+func (e *AppBuildRateLimitError) Error() string {
+	return ErrAppBuildRateLimited.Error() + "; try again in " + e.RetryAfter.Round(time.Second).String()
+}
+
+func (e *AppBuildRateLimitError) Is(target error) bool { return target == ErrAppBuildRateLimited }
 
 // AppLimitsSource answers a project's app build limits from its plan, and the largest app build any plan runs.
 type AppLimitsSource interface {
@@ -132,7 +147,9 @@ type JobControl interface {
 
 // AppRun is an app build ready to start: the queued build, its concrete builder, and what was minted and read for it.
 type AppRun struct {
-	Build      *Build
+	Build *Build
+	// RunID names this attempt's Job: the build id, then a fresh one for the retry.
+	RunID      string
 	Builder    string
 	CloneURL   string
 	CloneToken string
@@ -151,8 +168,9 @@ type AppRunner interface {
 
 // AppPublish is a finished app build to push and deploy.
 type AppPublish struct {
-	BuildID, ProjectID, AppID, CommitSHA string
-	MaxImageBytes                        int64
+	// RunID is the attempt whose Job holds the image.
+	BuildID, RunID, ProjectID, AppID, CommitSHA string
+	MaxImageBytes                               int64
 }
 
 // AppPublisher takes a finished build's image into the registry and deploys it, answering the deploy's id.

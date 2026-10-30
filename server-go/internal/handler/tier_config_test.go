@@ -478,6 +478,7 @@ func TestTierHandler_Update_RefusesAppBuildLimitsOutOfBounds(t *testing.T) {
 		"appBuildTimeoutSeconds": {"59", "7201"},
 		"appBuildConcurrency":    {"0", "21"},
 		"appBuildMaxImage":       {`"128Mi"`, `"64Gi"`, `"big"`, `"6Gi"`},
+		"appBuildMaxPerHour":     {"0", "1001"},
 	}
 	for field, values := range refused {
 		for _, value := range values {
@@ -522,12 +523,12 @@ func TestTierHandler_Update_StoresAppBuildLimits(t *testing.T) {
 	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
 	rec := httptest.NewRecorder()
 	appBuildTierHandler(store).Update(rec, newTierReqWithParam("PUT", siteLimitsBody("appBuildMemory", `"6Gi"`), string(domain.Free)))
-	want := config.AppBuildTierLimits{CPUMillis: 2000, Memory: "6Gi", Disk: "10Gi", TimeoutSeconds: 900, Concurrency: 1, MaxImage: "2Gi"}
+	want := config.AppBuildTierLimits{CPUMillis: 2000, Memory: "6Gi", Disk: "10Gi", TimeoutSeconds: 900, Concurrency: 1, MaxImage: "2Gi", MaxBuildsPerHour: 30}
 	if rec.Code != http.StatusOK || store.m[domain.Free].AppBuilds != want {
 		t.Fatalf("got %d %s, stored %+v; want %+v", rec.Code, rec.Body.String(), store.m[domain.Free].AppBuilds, want)
 	}
 	for _, echoed := range []string{`"appBuildCpuMillis":2000`, `"appBuildMemory":"6Gi"`, `"appBuildDisk":"10Gi"`,
-		`"appBuildTimeoutSeconds":900`, `"appBuildConcurrency":1`, `"appBuildMaxImage":"2Gi"`} {
+		`"appBuildTimeoutSeconds":900`, `"appBuildConcurrency":1`, `"appBuildMaxImage":"2Gi"`, `"appBuildMaxPerHour":30`} {
 		if !strings.Contains(rec.Body.String(), echoed) {
 			t.Errorf("response %s does not echo %s", rec.Body.String(), echoed)
 		}

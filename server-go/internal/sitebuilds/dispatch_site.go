@@ -49,7 +49,7 @@ func (k *siteKind) start(ctx context.Context, credential gitprovider.CloneCreden
 	repository := gitprovider.Repository{ID: build.RepositoryID, FullName: build.Repository}
 	settings, limits := build.Settings, build.Limits
 	return k.runner.Start(ctx, RunSpec{
-		BuildID: build.ID, SiteID: build.SiteID, ProjectID: build.ProjectID,
+		BuildID: k.execution.runID, SiteID: build.SiteID, ProjectID: build.ProjectID,
 		Image: NodeImage(service.options.NodeImage, settings.NodeVersion), CloneURL: service.provider.CloneURL(repository),
 		Commit: build.CommitSHA, CloneToken: credential.Token, RootDir: settings.RootDir, OutputDir: settings.OutputDir,
 		InstallCommand: settings.InstallCommand, BuildCommand: settings.BuildCommand,
@@ -93,7 +93,7 @@ func (k *siteKind) deliver(ctx context.Context) outcome {
 			log.Printf("site build %s: remove spool: %v", build.ID, err)
 		}
 	}()
-	if err := k.runner.Collect(ctx, build.ID, spool, ceiling); err != nil {
+	if err := k.runner.Collect(ctx, run.runID, spool, ceiling); err != nil {
 		return failedWith(FailDeploy, userMessage(err))
 	}
 	run.refreshLog(ctx)

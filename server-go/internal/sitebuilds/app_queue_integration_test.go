@@ -90,6 +90,9 @@ func TestMigration_AppGitBuilds(t *testing.T) {
 			t.Errorf("%s: %v, want code %s", tc.name, err, tc.code)
 		}
 	}
+	if count(t, h, `SELECT COUNT(*) FROM tier_configs WHERE app_build_max_per_hour <> max_site_deploys_per_hour`) != 0 {
+		t.Error("each plan's app builds per hour must start at its site deploys per hour")
+	}
 	if count(t, h, `SELECT COUNT(*) FROM site_builds WHERE kind = 'site' AND site_id IS NULL`) != 0 {
 		t.Error("existing rows must keep their site")
 	}
@@ -115,7 +118,8 @@ func checkDownAndUp(t *testing.T, h *sitebuildstest.Harness) {
 		t.Fatalf("down: %v", err)
 	}
 	var columns int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'site_builds' AND column_name IN ('kind', 'app_id')`).
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE (table_name = 'site_builds' AND column_name IN ('kind', 'app_id'))
+		OR (table_name = 'tier_configs' AND column_name = 'app_build_max_per_hour') OR table_name = 'app_build_attempts'`).
 		Scan(&columns); err != nil || columns != 0 {
 		t.Errorf("down left %d columns: %v", columns, err)
 	}
@@ -277,5 +281,67 @@ func TestAppBuilds_OffQueueNothing(t *testing.T) {
 	on := sitebuildstest.New(t, sitebuildstest.Options{AppsOn: true})
 	if _, err := on.Service.AppConnection(context.Background(), on.Project, "missing"); !errors.Is(err, apphost.ErrAppNotFound) {
 		t.Errorf("an app the project does not hold: %v", err)
+	}
+}
+
+func TestTakeAppBuildSlot_CountsTheProjectsLastHour(t *testing.T) {
+	h := sitebuildstest.New(t, sitebuildstest.Options{AppsOn: true})
+	ctx, now := context.Background(), time.Now().UTC()
+	for i := range 2 {
+		if wait, err := h.Store.TakeAppBuildSlot(ctx, h.Project, now.Add(time.Duration(i)*time.Minute), 2); err != nil || wait != 0 {
+			t.Fatalf("build %d: wait %v, %v", i, wait, err)
+		}
+	}
+	wait, err := h.Store.TakeAppBuildSlot(ctx, h.Project, now.Add(2*time.Minute), 2)
+	if err != nil || wait != 58*time.Minute {
+		t.Fatalf("the third build in the hour: wait %v, %v", wait, err)
+	}
+	if wait, err := h.Store.TakeAppBuildSlot(ctx, "proj-other-"+h.Project, now, 2); err != nil || wait != 0 {
+		t.Errorf("another project shares the count: %v %v", wait, err)
+	}
+	if wait, err := h.Store.TakeAppBuildSlot(ctx, h.Project, now.Add(61*time.Minute), 2); err != nil || wait != 0 {
+		t.Errorf("an hour later: %v %v", wait, err)
+	}
+}
+
+// A push past the plan's app builds per hour is kept as FAILED and never runs.
+func TestWebhook_APushPastTheAppBuildsPerHourIsKept(t *testing.T) {
+	limits := sitebuildstest.FreeAppLimits
+	limits.MaxBuildsPerHour = 1
+	h := sitebuildstest.New(t, sitebuildstest.Options{AppsOn: true, AppLimits: limits})
+	appID := h.AddApp(h.Project)
+	h.ConnectApp(appID, sitebuilds.AppSettings{})
+	if _, err := h.Push("main", "3333333333333333333333333333333333333333", "push-late"); err != nil {
+		t.Fatal(err)
+	}
+	builds, err := h.Service.ListAppBuilds(context.Background(), h.Project, appID)
+	if err != nil || len(builds) != 2 || builds[0].Status != sitebuilds.StatusFailed || builds[0].FailureKind != sitebuilds.FailRateLimited {
+		t.Fatalf("builds %+v %v", builds, err)
+	}
+}
+
+// With the flag off a queued app build is cancelled by name, and its app can still be disconnected.
+func TestAppBuilds_SwitchedOffCancelQueuedAndStillDisconnect(t *testing.T) {
+	h := sitebuildstest.New(t, sitebuildstest.Options{})
+	appID := h.AddApp(h.Project)
+	queued := queueAppBuild(t, h, h.Project, appID, "", sitebuildstest.FreeAppLimits.Limits)
+	h.RunAll()
+	target := sitebuilds.Target{Kind: sitebuilds.KindApp, ProjectID: h.Project, ID: appID}
+	build, err := h.Store.GetBuild(context.Background(), target, queued.ID)
+	if err != nil || build.Status != sitebuilds.StatusCancelled || !strings.Contains(build.FailureReason, "switched off") {
+		t.Fatalf("queued app build with the flag off: %+v %v", build, err)
+	}
+	if len(h.AppRunner.Runs()) != 0 {
+		t.Error("an app build ran with the flag off")
+	}
+	if _, err := h.SQL().Exec(`INSERT INTO app_git_connections (project_id, app_id, provider, installation_id, repository_id, repository,
+		branch, connected_by) VALUES ($1, $2, 'github', 1, 1, 'acme/site', 'main', 'u')`, h.Project, appID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Service.DisconnectApp(context.Background(), h.Project, appID); err != nil {
+		t.Fatalf("disconnect with the flag off: %v", err)
+	}
+	if left := count(t, h, `SELECT COUNT(*) FROM app_git_connections WHERE project_id = $1`, h.Project); left != 0 {
+		t.Errorf("%d connections left", left)
 	}
 }

@@ -124,6 +124,8 @@ type Build struct {
 	RepositoryID   int64  `json:"-"`
 	// App is an app build's settings and image cap; nil on a site's.
 	App *AppBuild `json:"app,omitempty"`
+	// buildsPerHour is the plan's app builds per hour, read when queued; it is enforced then and not kept.
+	buildsPerHour int
 }
 
 // Target is the site or app the build builds.

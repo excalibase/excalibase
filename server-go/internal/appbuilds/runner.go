@@ -1,6 +1,7 @@
 package appbuilds
 
 import (
+	"cmp"
 	"context"
 	"time"
 
@@ -41,7 +42,7 @@ func (r *Runner) FailureMessage(status sitebuilds.RunStatus, build *sitebuilds.B
 // SpecFor is the cluster's spec of a prepared run: the build's settings and plan limits, with what the dispatcher minted and read.
 func SpecFor(run sitebuilds.AppRun) RunSpec {
 	build := run.Build
-	spec := RunSpec{BuildID: build.ID, AppID: build.AppID, ProjectID: build.ProjectID, Builder: Builder(run.Builder),
+	spec := RunSpec{BuildID: cmp.Or(run.RunID, build.ID), AppID: build.AppID, ProjectID: build.ProjectID, Builder: Builder(run.Builder),
 		CloneURL: run.CloneURL, Commit: build.CommitSHA, CloneToken: run.CloneToken, Secrets: run.Secrets,
 		CPUMillis: build.Limits.CPUMillis, Memory: build.Limits.Memory, Disk: build.Limits.Disk,
 		Timeout: time.Duration(build.Limits.TimeoutSeconds) * time.Second, LargestPlan: run.LargestPlan}

@@ -38,7 +38,8 @@ func (l appBuildLimits) AppBuildLimits(ctx context.Context, projectID string) (s
 		return sitebuilds.AppLimits{}, fmt.Errorf("the %s plan's app build image cap %q is not a size", tier, plan.MaxImage)
 	}
 	return sitebuilds.AppLimits{Limits: sitebuilds.Limits{CPUMillis: plan.CPUMillis, Memory: plan.Memory, Disk: plan.Disk,
-		TimeoutSeconds: plan.TimeoutSeconds, ProjectConcurrency: plan.Concurrency}, MaxImageBytes: maxImage.Value()}, nil
+		TimeoutSeconds: plan.TimeoutSeconds, ProjectConcurrency: plan.Concurrency}, MaxImageBytes: maxImage.Value(),
+		MaxBuildsPerHour: plan.MaxBuildsPerHour}, nil
 }
 
 // LargestAppBuild is the biggest app build any plan runs as the plans stand now; it sizes the app build quota.

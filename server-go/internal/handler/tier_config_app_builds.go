@@ -18,6 +18,7 @@ type appBuildLimitsDTO struct {
 	AppBuildTimeoutSeconds *int    `json:"appBuildTimeoutSeconds,omitempty"`
 	AppBuildConcurrency    *int    `json:"appBuildConcurrency,omitempty"`
 	AppBuildMaxImage       *string `json:"appBuildMaxImage,omitempty"`
+	AppBuildMaxPerHour     *int    `json:"appBuildMaxPerHour,omitempty"`
 }
 
 func (h *TierHandler) appBuildsOn(ctx context.Context) bool {
@@ -36,6 +37,7 @@ func toAppBuildLimitsDTO(limits config.AppBuildTierLimits) appBuildLimitsDTO {
 	return appBuildLimitsDTO{
 		AppBuildCPUMillis: &limits.CPUMillis, AppBuildMemory: &limits.Memory, AppBuildDisk: &limits.Disk,
 		AppBuildTimeoutSeconds: &limits.TimeoutSeconds, AppBuildConcurrency: &limits.Concurrency, AppBuildMaxImage: &limits.MaxImage,
+		AppBuildMaxPerHour: &limits.MaxBuildsPerHour,
 	}
 }
 
@@ -59,6 +61,9 @@ func (dto appBuildLimitsDTO) overlay(current config.AppBuildTierLimits) config.A
 	}
 	if dto.AppBuildMaxImage != nil {
 		out.MaxImage = *dto.AppBuildMaxImage
+	}
+	if dto.AppBuildMaxPerHour != nil {
+		out.MaxBuildsPerHour = *dto.AppBuildMaxPerHour
 	}
 	return out
 }
@@ -90,6 +95,9 @@ func validateAppBuildLimits(limits config.AppBuildTierLimits) error {
 	}
 	if err := quantityBetween("appBuildMaxImage", limits.MaxImage, minAppBuildImage, maxAppBuildImage); err != nil {
 		return err
+	}
+	if limits.MaxBuildsPerHour < 1 || limits.MaxBuildsPerHour > maxSiteDeploysPerHourCap {
+		return fmt.Errorf("appBuildMaxPerHour must be between 1 and %d", maxSiteDeploysPerHourCap)
 	}
 	// The build packs the image next to itself on the work disk, so the disk holds it twice.
 	image, disk := resource.MustParse(limits.MaxImage), resource.MustParse(limits.Disk)

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"errors"
 
@@ -46,7 +47,7 @@ func (p *appBuildQueuePublisher) PublishBuild(ctx context.Context, publish siteb
 	if app == nil {
 		return "", &sitebuilds.BuildFailure{Kind: sitebuilds.FailDeploy, Err: errAppGoneMidBuild}
 	}
-	deploy, err := p.publisher.Publish(ctx, AppBuildResult{BuildID: publish.BuildID, ProjectID: publish.ProjectID,
+	deploy, err := p.publisher.Publish(ctx, AppBuildResult{BuildID: cmp.Or(publish.RunID, publish.BuildID), ProjectID: publish.ProjectID,
 		CommitSHA: publish.CommitSHA, App: app, MaxImage: publish.MaxImageBytes})
 	if err != nil {
 		return "", namedFailure(err)

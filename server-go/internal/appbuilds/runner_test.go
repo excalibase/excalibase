@@ -30,14 +30,14 @@ func queuedBuild() *sitebuilds.Build {
 func TestRunner_StartsTheSpecTheRunNames(t *testing.T) {
 	cluster := &recordingCluster{}
 	runner := NewRunner(cluster)
-	run := sitebuilds.AppRun{Build: queuedBuild(), Builder: sitebuilds.AppBuilderDockerfile, CloneURL: "https://github.com/acme/api.git",
+	run := sitebuilds.AppRun{Build: queuedBuild(), RunID: "b1-r1", Builder: sitebuilds.AppBuilderDockerfile, CloneURL: "https://github.com/acme/api.git",
 		CloneToken: "clone-token", Secrets: map[string]string{"API_KEY": "secret"},
 		LargestPlan: sitebuilds.BuildSize{CPUMillis: 4000, Memory: "8Gi", Disk: "20Gi"}}
 	if err := runner.StartApp(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
 	spec := cluster.started[0]
-	if spec.Builder != BuilderDockerfile || spec.BuildID != "b1" || spec.AppID != "app-1" || spec.ProjectID != "proj-1" ||
+	if spec.Builder != BuilderDockerfile || spec.BuildID != "b1-r1" || spec.AppID != "app-1" || spec.ProjectID != "proj-1" ||
 		spec.RootDir != "api" || spec.DockerfilePath != "Dockerfile.prod" || spec.BuildArgs["MODE"] != "prod" ||
 		spec.Secrets["API_KEY"] != "secret" || spec.CloneToken != "clone-token" || spec.Timeout != 15*time.Minute ||
 		spec.MaxImageBytes != 2<<30 || spec.LargestPlan.Memory != "8Gi" || spec.Memory != "4Gi" {

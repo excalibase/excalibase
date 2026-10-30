@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/lib/pq"
 
@@ -118,4 +119,49 @@ func forgetAppConnections(ctx context.Context, tx *sql.Tx, provider string, inst
 		return 0, fmt.Errorf("cancel the forgotten apps' builds: %w", err)
 	}
 	return len(apps), nil
+}
+
+// appBuildRateLock serialises one project's app build count, so two pushes cannot both take its last slot.
+const appBuildRateLock = 354_000_002
+
+// appBuildWindow is the span the plan's app builds per hour counts over.
+const appBuildWindow = time.Hour
+
+func (s *PostgresStore) TakeAppBuildSlot(ctx context.Context, projectID string, now time.Time, perHour int) (time.Duration, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin app build slot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, appBuildRateLock, projectID); err != nil {
+		return 0, fmt.Errorf("lock the project's app build rate: %w", err)
+	}
+	since := now.Add(-appBuildWindow)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM app_build_attempts WHERE attempted_at <= $1`, since); err != nil {
+		return 0, fmt.Errorf("forget old app builds: %w", err)
+	}
+	var counted int
+	var oldest sql.NullTime
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*), MIN(attempted_at) FROM (SELECT attempted_at FROM app_build_attempts
+		WHERE project_id = $1 ORDER BY attempted_at DESC LIMIT $2) AS recent`, projectID, perHour).Scan(&counted, &oldest)
+	if err != nil {
+		return 0, fmt.Errorf("count the project's app builds: %w", err)
+	}
+	if counted >= perHour && oldest.Valid {
+		return oldest.Time.Add(appBuildWindow).Sub(now), nil
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO app_build_attempts (project_id, attempted_at) VALUES ($1, $2)`, projectID, now); err != nil {
+		return 0, fmt.Errorf("record the app build: %w", err)
+	}
+	return 0, tx.Commit()
+}
+
+func (s *PostgresStore) CancelQueued(ctx context.Context, kind, reason string) (int, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE site_builds SET status = 'CANCELLED', failure_reason = $2, finished_at = NOW()
+		WHERE kind = $1 AND status = 'QUEUED'`, kind, reason)
+	if err != nil {
+		return 0, fmt.Errorf("cancel the queued %s builds: %w", kind, err)
+	}
+	cancelled, err := result.RowsAffected()
+	return int(cancelled), err
 }

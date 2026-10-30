@@ -18,13 +18,13 @@ import (
 func TestAppBuildLimits_ReadTheOrganisationsPlan(t *testing.T) {
 	plans := fixedTierConfigs{
 		domain.Free:       {AppBuilds: config.AppBuildTierLimits{CPUMillis: 2000, Memory: "4Gi", Disk: "10Gi", TimeoutSeconds: 900, Concurrency: 1, MaxImage: "2Gi"}},
-		domain.Standard:   {AppBuilds: config.AppBuildTierLimits{CPUMillis: 4000, Memory: "8Gi", Disk: "20Gi", TimeoutSeconds: 1800, Concurrency: 2, MaxImage: "5Gi"}},
+		domain.Standard:   {AppBuilds: config.AppBuildTierLimits{CPUMillis: 4000, Memory: "8Gi", Disk: "20Gi", TimeoutSeconds: 1800, Concurrency: 2, MaxImage: "5Gi", MaxBuildsPerHour: 40}},
 		domain.Enterprise: {AppBuilds: config.AppBuildTierLimits{CPUMillis: 3000, Memory: "16Gi", Disk: "10Gi", TimeoutSeconds: 1800, Concurrency: 2, MaxImage: "5Gi"}},
 	}
 	limits := NewAppBuildLimits(fixedPlan{tier: domain.Standard}, plans)
 	got, err := limits.AppBuildLimits(context.Background(), "p1")
 	want := sitebuilds.AppLimits{Limits: sitebuilds.Limits{CPUMillis: 4000, Memory: "8Gi", Disk: "20Gi", TimeoutSeconds: 1800,
-		ProjectConcurrency: 2}, MaxImageBytes: 5 << 30}
+		ProjectConcurrency: 2}, MaxImageBytes: 5 << 30, MaxBuildsPerHour: 40}
 	if err != nil || got != want {
 		t.Fatalf("AppBuildLimits = %+v, %v; want %+v", got, err, want)
 	}
@@ -72,11 +72,11 @@ func (f fakeAppGetter) Get(projectID, id string) (*apphost.App, error) {
 func TestAppBuildQueuePublisher_FindsTheAppAndNamesEachRefusal(t *testing.T) {
 	app := &apphost.App{ID: "app-1", ProjectID: "p1", Name: "api"}
 	apps := fakeAppGetter{"p1/app-1": app}
-	publish := sitebuilds.AppPublish{BuildID: "b1", ProjectID: "p1", AppID: "app-1", CommitSHA: "abc", MaxImageBytes: 1 << 30}
+	publish := sitebuilds.AppPublish{BuildID: "b1", RunID: "b1-r1", ProjectID: "p1", AppID: "app-1", CommitSHA: "abc", MaxImageBytes: 1 << 30}
 	inner := &fakeAppPublisher{}
 	queue := newAppBuildQueuePublisher(inner, apps)
 	deployID, err := queue.PublishBuild(context.Background(), publish)
-	if err != nil || deployID != "deploy-7" || inner.result != (AppBuildResult{BuildID: "b1", ProjectID: "p1", CommitSHA: "abc", App: app, MaxImage: 1 << 30}) {
+	if err != nil || deployID != "deploy-7" || inner.result != (AppBuildResult{BuildID: "b1-r1", ProjectID: "p1", CommitSHA: "abc", App: app, MaxImage: 1 << 30}) {
 		t.Fatalf("published %+v as %q: %v", inner.result, deployID, err)
 	}
 	cases := map[error]sitebuilds.FailureKind{

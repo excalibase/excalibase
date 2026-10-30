@@ -33,10 +33,24 @@ type execution struct {
 	log     string
 	// notes are the dispatcher's own lines, kept ahead of the steps' output.
 	notes string
+	// attempt counts the runs started; runID names the current one's Job.
+	attempts int
+	runID    string
+}
+
+// maxAttempts is the first run and the one retry a sandbox start error earns.
+const maxAttempts = 2
+
+// runID names an attempt's Job: the build id, then a fresh name per retry, so a retry never meets the Job being deleted.
+func runID(buildID string, attempt int) string {
+	if attempt == 0 {
+		return buildID
+	}
+	return fmt.Sprintf("%s-r%d", buildID, attempt)
 }
 
 func newExecution(dispatcher *Dispatcher, build *Build) *execution {
-	run := &execution{dispatcher: dispatcher, build: build, secrets: map[string]string{}}
+	run := &execution{dispatcher: dispatcher, build: build, secrets: map[string]string{}, runID: build.ID}
 	switch {
 	case build.Kind != KindApp:
 		run.kind = &siteKind{execution: run, runner: dispatcher.runner}
@@ -99,6 +113,8 @@ func (e *execution) checkSource(ctx context.Context) *outcome {
 
 // attempt mints a clone credential, starts the build's Job and waits for it; the credential goes once the clone is done.
 func (e *execution) attempt(ctx context.Context) (RunStatus, *outcome) {
+	e.runID = runID(e.build.ID, e.attempts)
+	e.attempts++
 	credential, err := e.mint(ctx)
 	if err != nil {
 		return RunStatus{}, refusal(err)
@@ -132,13 +148,14 @@ func (e *execution) mint(ctx context.Context) (gitprovider.CloneCredential, erro
 // forgetOnce revokes the clone token and deletes its Secret, once; neither failing stops the build.
 func (e *execution) forgetOnce(ctx context.Context, credential gitprovider.CloneCredential) func() {
 	var once sync.Once
+	runID := e.runID
 	return func() {
 		once.Do(func() {
 			quiet := context.WithoutCancel(ctx)
 			if err := e.dispatcher.service.provider.RevokeCloneCredential(quiet, credential.Token); err != nil {
 				log.Printf("%s build %s: revoke the clone credential: %v", e.build.Kind, e.build.ID, err)
 			}
-			if err := e.kind.jobs().ForgetCloneCredential(quiet, e.build.ID); err != nil {
+			if err := e.kind.jobs().ForgetCloneCredential(quiet, runID); err != nil {
 				log.Printf("%s build %s: delete the clone secret: %v", e.build.Kind, e.build.ID, err)
 			}
 		})
@@ -194,7 +211,7 @@ func (e *execution) fullLog() string { return e.notes + e.log }
 
 func (e *execution) remove(ctx context.Context) {
 	e.refreshLog(ctx)
-	if err := e.kind.jobs().Remove(context.WithoutCancel(ctx), e.build.ID); err != nil {
+	if err := e.kind.jobs().Remove(context.WithoutCancel(ctx), e.runID); err != nil {
 		log.Printf("%s build %s: remove its job: %v", e.build.Kind, e.build.ID, err)
 	}
 }
@@ -204,7 +221,7 @@ func (e *execution) await(ctx context.Context, cloned func()) RunStatus {
 	options := e.dispatcher.options
 	lastLog := time.Time{}
 	for {
-		status, err := e.kind.jobs().Status(ctx, e.build.ID)
+		status, err := e.kind.jobs().Status(ctx, e.runID)
 		if err != nil {
 			log.Printf("%s build %s: read status: %v", e.build.Kind, e.build.ID, err)
 		} else if status.Phase == RunReady || status.Phase == RunFailed {
@@ -229,7 +246,7 @@ func (e *execution) await(ctx context.Context, cloned func()) RunStatus {
 
 // refreshLog keeps the latest tail, so a build whose pod is gone still has one.
 func (e *execution) refreshLog(ctx context.Context) {
-	logs, err := e.kind.jobs().Logs(context.WithoutCancel(ctx), e.build.ID)
+	logs, err := e.kind.jobs().Logs(context.WithoutCancel(ctx), e.runID)
 	if err != nil {
 		log.Printf("%s build %s: read logs: %v", e.build.Kind, e.build.ID, err)
 		return

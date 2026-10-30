@@ -93,14 +93,14 @@ func (k *appKind) start(ctx context.Context, credential gitprovider.CloneCredent
 		return fmt.Errorf("size the build quota: %w", err)
 	}
 	repository := gitprovider.Repository{ID: build.RepositoryID, FullName: build.Repository}
-	return k.runner.StartApp(ctx, AppRun{Build: build, Builder: k.builder, CloneURL: service.provider.CloneURL(repository),
+	return k.runner.StartApp(ctx, AppRun{Build: build, RunID: run.runID, Builder: k.builder, CloneURL: service.provider.CloneURL(repository),
 		CloneToken: credential.Token, Secrets: secrets, LargestPlan: largest})
 }
 
 // deliver hands the finished build to the publisher; a failure it names keeps its kind.
 func (k *appKind) deliver(ctx context.Context) outcome {
 	build := k.execution.build
-	deployID, err := k.publisher.PublishBuild(ctx, AppPublish{BuildID: build.ID, ProjectID: build.ProjectID, AppID: build.AppID,
+	deployID, err := k.publisher.PublishBuild(ctx, AppPublish{BuildID: build.ID, RunID: k.execution.runID, ProjectID: build.ProjectID, AppID: build.AppID,
 		CommitSHA: build.CommitSHA, MaxImageBytes: build.App.MaxImageBytes})
 	k.execution.refreshLog(ctx)
 	var failure *BuildFailure

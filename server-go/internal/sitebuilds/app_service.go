@@ -103,8 +103,9 @@ func (s *Service) AppConnection(ctx context.Context, projectID, appID string) (*
 }
 
 // DisconnectApp forgets the repository and cancels the app's queued and running builds.
+// The flag never blocks it, and the store scopes it by project.
 func (s *Service) DisconnectApp(ctx context.Context, projectID, appID string) error {
-	if err := s.mustApp(ctx, projectID, appID); err != nil {
+	if err := s.Available(); err != nil {
 		return err
 	}
 	if err := s.store.DeleteAppConnection(ctx, projectID, appID); err != nil {
@@ -152,5 +153,6 @@ func (s *Service) sizedAppBuild(ctx context.Context, connection *AppConnection) 
 		return nil, fmt.Errorf("read the plan's app build limits: %w", err)
 	}
 	return &Build{Kind: KindApp, AppID: connection.AppID, Settings: Settings{Branch: connection.Settings.Branch},
-		Limits: limits.Limits, App: &AppBuild{AppSettings: connection.Settings, MaxImageBytes: limits.MaxImageBytes}}, nil
+		Limits: limits.Limits, App: &AppBuild{AppSettings: connection.Settings, MaxImageBytes: limits.MaxImageBytes},
+		buildsPerHour: limits.MaxBuildsPerHour}, nil
 }

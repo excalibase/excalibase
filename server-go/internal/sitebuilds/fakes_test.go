@@ -41,6 +41,7 @@ type memoryStore struct {
 	cancelled       []Target
 	deactivated     []Target
 	lost            []LostBuild
+	appAttempts     map[string]int
 }
 
 func newMemoryStore() *memoryStore {
@@ -199,6 +200,32 @@ func (m *memoryStore) ExpireLostBuilds(context.Context, time.Time, string) ([]Lo
 	return lost, nil
 }
 
+func (m *memoryStore) TakeAppBuildSlot(_ context.Context, projectID string, _ time.Time, perHour int) (time.Duration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.appAttempts == nil {
+		m.appAttempts = map[string]int{}
+	}
+	if m.appAttempts[projectID] >= perHour {
+		return 17 * time.Minute, nil
+	}
+	m.appAttempts[projectID]++
+	return 0, nil
+}
+
+func (m *memoryStore) CancelQueued(_ context.Context, kind, reason string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cancelled := 0
+	for _, build := range m.builds {
+		if build.Kind == kind && build.Status == StatusQueued {
+			build.Status, build.FailureReason = StatusCancelled, reason
+			cancelled++
+		}
+	}
+	return cancelled, nil
+}
+
 func (m *memoryStore) ExtendLease(context.Context, string, string, time.Time) error { return nil }
 
 func (m *memoryStore) SaveLog(_ context.Context, buildID, _, log string) error {
@@ -355,6 +382,7 @@ type fakeJobs struct {
 	outcomes  []RunStatus
 	current   RunStatus
 	reads     int
+	statusIDs []string
 	removed   []string
 	forgot    []string
 	forgetErr error
@@ -369,9 +397,10 @@ func (f *fakeJobs) begin() {
 	f.reads = 0
 }
 
-func (f *fakeJobs) Status(context.Context, string) (RunStatus, error) {
+func (f *fakeJobs) Status(_ context.Context, runID string) (RunStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.statusIDs = append(f.statusIDs, runID)
 	f.reads++
 	if f.reads == 1 {
 		return RunStatus{Phase: RunRunning, CloneDone: true}, nil
@@ -437,7 +466,8 @@ func (f *fakeAppRunner) started() []AppRun {
 
 type fakeSiteRunner struct {
 	fakeJobs
-	specs []RunSpec
+	specs     []RunSpec
+	collected []string
 }
 
 func (f *fakeSiteRunner) Start(_ context.Context, spec RunSpec) error {
@@ -448,7 +478,10 @@ func (f *fakeSiteRunner) Start(_ context.Context, spec RunSpec) error {
 	return nil
 }
 
-func (f *fakeSiteRunner) Collect(_ context.Context, _ string, w io.Writer, _ int64) error {
+func (f *fakeSiteRunner) Collect(_ context.Context, runID string, w io.Writer, _ int64) error {
+	f.mu.Lock()
+	f.collected = append(f.collected, runID)
+	f.mu.Unlock()
 	_, err := w.Write([]byte("archive"))
 	return err
 }
@@ -507,7 +540,7 @@ type fakeLimits struct{}
 var (
 	testSiteLimits = Limits{CPUMillis: 1000, Memory: "2Gi", Disk: "5Gi", TimeoutSeconds: 60, ProjectConcurrency: 1}
 	testAppLimits  = AppLimits{Limits: Limits{CPUMillis: 2000, Memory: "4Gi", Disk: "10Gi", TimeoutSeconds: 120, ProjectConcurrency: 2},
-		MaxImageBytes: 2 << 30}
+		MaxImageBytes: 2 << 30, MaxBuildsPerHour: 5}
 )
 
 func (fakeLimits) BuildLimits(context.Context, string) (Limits, error) { return testSiteLimits, nil }

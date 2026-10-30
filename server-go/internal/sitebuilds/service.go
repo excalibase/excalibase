@@ -364,19 +364,34 @@ func (s *Service) sizedBuild(ctx context.Context, connection connected) (*Build,
 	return &Build{Kind: KindSite, SiteID: site.SiteID, Settings: site.Settings, Limits: limits}, nil
 }
 
-// admit counts a site's build toward the project's deploys per hour; a push past it is kept as FAILED.
+// admit counts the build toward the project's deploys or app builds per hour; a push past it is kept as FAILED, never started.
 func (s *Service) admit(ctx context.Context, build *Build) error {
-	if build.Kind != KindSite {
-		return nil
-	}
-	slotErr := s.sites.TakeDeploySlot(ctx, build.ProjectID)
+	slotErr := s.takeSlot(ctx, build)
 	if slotErr == nil {
 		return nil
 	}
-	if build.Trigger != TriggerPush || !errors.Is(slotErr, sites.ErrDeployRateLimited) {
+	limited := errors.Is(slotErr, sites.ErrDeployRateLimited) || errors.Is(slotErr, ErrAppBuildRateLimited)
+	if build.Trigger != TriggerPush || !limited {
 		return slotErr
 	}
 	build.Status, build.FailureKind, build.FailureReason = StatusFailed, FailRateLimited, slotErr.Error()
+	return nil
+}
+
+func (s *Service) takeSlot(ctx context.Context, build *Build) error {
+	if build.Kind != KindApp {
+		return s.sites.TakeDeploySlot(ctx, build.ProjectID)
+	}
+	if build.buildsPerHour <= 0 {
+		return &AppBuildRateLimitError{RetryAfter: time.Hour}
+	}
+	wait, err := s.store.TakeAppBuildSlot(ctx, build.ProjectID, s.now().UTC(), build.buildsPerHour)
+	if err != nil {
+		return err
+	}
+	if wait > 0 {
+		return &AppBuildRateLimitError{RetryAfter: max(wait, time.Second)}
+	}
 	return nil
 }
 
@@ -560,10 +575,10 @@ func userMessage(err error) string {
 	switch {
 	case errors.As(err, &input), errors.As(err, &archive), errors.As(err, &siteInput), errors.As(err, &publish), errors.As(err, &limited),
 		errors.Is(err, sites.ErrDeployRateLimited), errors.Is(err, ErrOutputTooLarge), errors.Is(err, sites.ErrSiteNotFound),
-		errors.Is(err, ErrConnectionInactive), errors.Is(err, apphost.ErrAppNotFound), errors.Is(err, ErrAppBuildsOff),
+		errors.Is(err, ErrConnectionInactive), errors.Is(err, apphost.ErrAppNotFound), errors.Is(err, ErrAppBuildsOff), errors.Is(err, ErrAppBuildRateLimited),
 		errors.Is(err, errAppsUnwired):
 		return err.Error()
 	}
-	log.Printf("site builds: %v", err)
+	log.Printf("git builds: %v", err)
 	return "an internal error stopped this; try again"
 }

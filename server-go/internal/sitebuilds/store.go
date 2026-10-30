@@ -69,6 +69,11 @@ type Store interface {
 	ExtendLease(ctx context.Context, buildID, holder string, until time.Time) error
 	SaveLog(ctx context.Context, buildID, holder, log string) error
 	FinishBuild(ctx context.Context, build *Build, holder string) error
+	// TakeAppBuildSlot counts one app build against the project's builds in the hour before now,
+	// answering how long to wait when perHour are already counted.
+	TakeAppBuildSlot(ctx context.Context, projectID string, now time.Time, perHour int) (time.Duration, error)
+	// CancelQueued cancels every queued build of the kind, answering how many.
+	CancelQueued(ctx context.Context, kind, reason string) (int, error)
 	// ExpireLostBuilds fails running builds whose lease lapsed.
 	ExpireLostBuilds(ctx context.Context, now time.Time, reason string) ([]LostBuild, error)
 	ListBuilds(ctx context.Context, target Target, limit int) ([]*Build, error)

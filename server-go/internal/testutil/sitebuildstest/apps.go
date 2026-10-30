@@ -16,7 +16,7 @@ import (
 
 // FreeAppLimits sizes app builds as the Free plan's defaults do.
 var FreeAppLimits = sitebuilds.AppLimits{Limits: sitebuilds.Limits{CPUMillis: 2000, Memory: "4Gi", Disk: "10Gi", TimeoutSeconds: 900,
-	ProjectConcurrency: 1}, MaxImageBytes: 2 << 30}
+	ProjectConcurrency: 1}, MaxImageBytes: 2 << 30, MaxBuildsPerHour: 30}
 
 func appFlags(on bool) features.Flags {
 	if on {

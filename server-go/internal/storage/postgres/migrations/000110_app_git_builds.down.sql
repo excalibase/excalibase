@@ -1,4 +1,6 @@
 COMMENT ON TABLE site_build_visible_secrets IS NULL;
+DROP TABLE IF EXISTS app_build_attempts;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS app_build_max_per_hour;
 DROP TABLE IF EXISTS app_git_connections;
 DELETE FROM site_builds WHERE kind = 'app';
 DROP INDEX IF EXISTS idx_site_builds_app_delivery;

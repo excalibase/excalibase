@@ -73,7 +73,6 @@ func TestAppMethods_AreScopedByProject(t *testing.T) {
 	_, checks["builds"] = bed.service.ListAppBuilds(ctx, "proj-b", testApp)
 	_, checks["build"] = bed.service.GetAppBuild(ctx, "proj-b", testApp, "any")
 	_, checks["rebuild"] = bed.service.RebuildApp(ctx, "proj-b", testApp, testUser)
-	checks["disconnect"] = bed.service.DisconnectApp(ctx, "proj-b", testApp)
 	_, checks["connect"] = bed.service.ConnectApp(ctx, AppConnectRequest{ProjectID: "proj-b", AppID: testApp, UserID: testUser, Repository: testRepo})
 	for name, err := range checks {
 		if !errors.Is(err, apphost.ErrAppNotFound) {

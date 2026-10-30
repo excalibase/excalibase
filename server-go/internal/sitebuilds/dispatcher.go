@@ -108,6 +108,18 @@ func (d *Dispatcher) claimKinds(ctx context.Context) []string {
 	return []string{KindSite}
 }
 
+const appsSwitchedOffReason = "git builds of apps were switched off on this install before this build started; nothing was built"
+
+// cancelSwitchedOff cancels queued app builds while the appgitbuilds flag is off, so none waits for it by surprise.
+func (d *Dispatcher) cancelSwitchedOff(ctx context.Context) {
+	if d.service.apps == nil || d.service.appsOn(ctx) {
+		return
+	}
+	if _, err := d.service.store.CancelQueued(ctx, KindApp, appsSwitchedOffReason); err != nil {
+		log.Printf("git builds: cancel queued app builds: %v", err)
+	}
+}
+
 func (d *Dispatcher) jobsFor(kind string) JobControl {
 	if kind == KindApp && d.apps != nil {
 		return d.apps.runner
@@ -154,6 +166,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 // Tick fails builds whose replica went away, then starts every build the caps allow.
 func (d *Dispatcher) Tick(ctx context.Context) {
 	d.expireLost(ctx)
+	d.cancelSwitchedOff(ctx)
 	kinds := d.claimKinds(ctx)
 	for ctx.Err() == nil {
 		build, err := d.service.store.ClaimNext(ctx, d.options.Slots, d.options.Holder, d.service.now().Add(d.options.Lease), kinds)
@@ -214,8 +227,10 @@ func (d *Dispatcher) expireLost(ctx context.Context) {
 			log.Printf("%s build %s: lost, and no runner here removes its job", build.Kind, build.ID)
 			continue
 		}
-		if err := jobs.Remove(ctx, build.ID); err != nil {
-			log.Printf("%s build %s: remove the lost build's job: %v", build.Kind, build.ID, err)
+		for attempt := range maxAttempts {
+			if err := jobs.Remove(ctx, runID(build.ID, attempt)); err != nil {
+				log.Printf("%s build %s: remove the lost build's job: %v", build.Kind, build.ID, err)
+			}
 		}
 	}
 }

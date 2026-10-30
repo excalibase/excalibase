@@ -60,7 +60,7 @@ func TestAppBuild_SecretsAndArgumentsReachTheRunnerAndNeverTheLog(t *testing.T) 
 		}
 	}
 	published := bed.publisher.published
-	if len(published) != 1 || published[0] != (AppPublish{BuildID: queued.ID, ProjectID: testProject, AppID: testApp,
+	if len(published) != 1 || published[0] != (AppPublish{BuildID: queued.ID, RunID: queued.ID, ProjectID: testProject, AppID: testApp,
 		CommitSHA: testCommit, MaxImageBytes: testAppLimits.MaxImageBytes}) {
 		t.Errorf("published %+v", published)
 	}
@@ -175,8 +175,18 @@ func TestBuild_RetriesOnceWhenTheSandboxDidNotStart(t *testing.T) {
 		if starts := bed.starts(kind); len(starts) != 2 || starts[0] == starts[1] {
 			t.Errorf("%s: the retry must use a fresh clone credential: %v", kind, starts)
 		}
-		if removed := jobs.removedIDs(); len(removed) != 2 {
-			t.Errorf("%s: the first job must be removed before the retry: %v", kind, removed)
+		retryID := queued.ID + "-r1"
+		if removed := jobs.removedIDs(); !slices.Equal(removed, []string{queued.ID, retryID}) {
+			t.Errorf("%s: each attempt's job must be removed: %v", kind, removed)
+		}
+		if read := jobs.statusIDs[len(jobs.statusIDs)-1]; read != retryID {
+			t.Errorf("%s: the status read after the retry follows %q, want %q", kind, read, retryID)
+		}
+		if kind == KindApp && (bed.apps.started()[1].RunID != retryID || bed.publisher.published[0].RunID != retryID) {
+			t.Errorf("the retry runs and publishes as %s: %+v %+v", retryID, bed.apps.started()[1], bed.publisher.published)
+		}
+		if kind == KindSite && (bed.sites.started()[1].BuildID != retryID || !slices.Equal(bed.sites.collected, []string{retryID})) {
+			t.Errorf("the site retry runs and collects as %s: %+v %v", retryID, bed.sites.started()[1].BuildID, bed.sites.collected)
 		}
 
 		again := newTestBed(true)
@@ -202,8 +212,9 @@ func TestDispatcher_ClaimsAppBuildsOnlyWithTheFlagOn(t *testing.T) {
 		if appsOn != slices.Contains(kinds, KindApp) || !slices.Contains(kinds, KindSite) {
 			t.Errorf("apps on %v: claimed kinds %v", appsOn, kinds)
 		}
-		if !appsOn && bed.store.build("app-build-waiting").Status != StatusQueued {
-			t.Error("an app build ran with the flag off")
+		waiting := bed.store.build("app-build-waiting")
+		if !appsOn && (waiting.Status != StatusCancelled || !strings.Contains(waiting.FailureReason, "switched off")) {
+			t.Errorf("a queued app build with the flag off must be cancelled by name: %+v", waiting)
 		}
 	}
 	unwired := newTestBed(true)
@@ -247,10 +258,10 @@ func TestDispatcher_RemovesLostBuildsWithTheirOwnRunner(t *testing.T) {
 	bed := newTestBed(true)
 	bed.store.lost = []LostBuild{{ID: "lost-site", Kind: KindSite}, {ID: "lost-app", Kind: KindApp}}
 	bed.runAll()
-	if removed := bed.sites.removedIDs(); !slices.Equal(removed, []string{"lost-site"}) {
+	if removed := bed.sites.removedIDs(); !slices.Equal(removed, []string{"lost-site", "lost-site-r1"}) {
 		t.Errorf("site runner removed %v", removed)
 	}
-	if removed := bed.apps.removedIDs(); !slices.Equal(removed, []string{"lost-app"}) {
+	if removed := bed.apps.removedIDs(); !slices.Equal(removed, []string{"lost-app", "lost-app-r1"}) {
 		t.Errorf("app runner removed %v", removed)
 	}
 	unwired := newTestBed(true)
@@ -318,5 +329,71 @@ func TestAppBuild_AnArgumentNamedLikeASecretHidesBoth(t *testing.T) {
 		if strings.Contains(done.Log, hidden) {
 			t.Errorf("the log shows %q: %q", hidden, done.Log)
 		}
+	}
+}
+
+// A lost build's job is removed under every attempt's name.
+func TestDispatcher_RemovesEveryAttemptOfALostBuild(t *testing.T) {
+	bed := newTestBed(true)
+	bed.store.lost = []LostBuild{{ID: "lost-app", Kind: KindApp}}
+	bed.runAll()
+	if removed := bed.apps.removedIDs(); !slices.Equal(removed, []string{"lost-app", "lost-app-r1"}) {
+		t.Errorf("removed %v", removed)
+	}
+}
+
+// Past the plan's app builds per hour a rebuild is refused, and a push is kept as FAILED and never started.
+func TestAppBuilds_HoldThePlansBuildsPerHour(t *testing.T) {
+	bed := newTestBed(true)
+	bed.connectApp(AppSettings{Builder: AppBuilderBuildpacks})
+	ctx := context.Background()
+	for range testAppLimits.MaxBuildsPerHour {
+		if _, err := bed.service.RebuildApp(ctx, testProject, testApp, testUser); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := bed.service.RebuildApp(ctx, testProject, testApp, testUser); !errors.Is(err, ErrAppBuildRateLimited) ||
+		!strings.Contains(err.Error(), "17m") {
+		t.Fatalf("a rebuild past the cap: %v", err)
+	}
+	bed.provider.event = gitprovider.Event{DeliveryID: "d-late", Push: &gitprovider.Push{InstallationID: testInstall,
+		RepositoryID: testRepoID, Repository: testRepo, Branch: "main", Commit: bed.provider.head}}
+	if _, err := bed.service.HandleWebhook(ctx, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	builds := bed.store.queuedOf(KindApp)
+	late := builds[len(builds)-1]
+	if late.DeliveryID != "d-late" || late.Status != StatusFailed || late.FailureKind != FailRateLimited {
+		t.Fatalf("the push past the cap: %+v", late)
+	}
+	before := len(bed.apps.started())
+	bed.store.mu.Lock()
+	for _, build := range bed.store.builds {
+		if build.Status == StatusQueued {
+			build.Status = StatusCancelled
+		}
+	}
+	bed.store.mu.Unlock()
+	bed.runAll()
+	if len(bed.apps.started()) != before {
+		t.Error("a rate-limited build was started")
+	}
+}
+
+// Disconnecting is never blocked: with the flag off the app's repository is still forgotten and its builds cancelled.
+func TestDisconnectApp_WorksWithTheFlagOff(t *testing.T) {
+	bed := newTestBed(false)
+	bed.connectApp(AppSettings{})
+	if err := bed.service.DisconnectApp(context.Background(), testProject, testApp); err != nil {
+		t.Fatalf("disconnect: %v", err)
+	}
+	if stored, _ := bed.store.GetAppConnection(context.Background(), testProject, testApp); stored != nil {
+		t.Errorf("the connection survived: %+v", stored)
+	}
+	if len(bed.store.cancelled) != 1 {
+		t.Errorf("cancelled %v", bed.store.cancelled)
+	}
+	if err := bed.service.DisconnectApp(context.Background(), "proj-b", testApp); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("another project's disconnect: %v", err)
 	}
 }

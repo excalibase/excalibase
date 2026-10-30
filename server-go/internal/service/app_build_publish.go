@@ -49,7 +49,7 @@ type AppBuildPublisher struct {
 	now       func() time.Time
 }
 
-// AppBuildResult is what a finished build hands over.
+// AppBuildResult is what a finished build hands over; BuildID names the attempt whose Job holds the image.
 type AppBuildResult struct {
 	BuildID, ProjectID, CommitSHA string
 	App                           *apphost.App
