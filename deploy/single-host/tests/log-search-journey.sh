@@ -50,3 +50,21 @@ LA=
 for i in $(seq 40); do LA=$(lapi "/provision/$PID/logs?lines=200&since=1h&q=$MARK"); case "$LA" in *"$MARK"*) break ;; esac; sleep 3; done
 case "$LA" in *"$MARK"*) ok "the line is still found after the restart, from Loki alone" ;; *) ko "after the restart: ${LA:0:300}" ;; esac
 case "$(lapi "/provision/$PID2/logs?lines=500&since=1h&q=$MARK")" in *"$MARK"*) ko "after the restart the other project sees the line" ;; *) ok "after the restart the other project still does not" ;; esac
+
+# EXC-678: deleting a project removes its stored lines through Loki's delete
+# API, for its own project_id alone; the other project's lines stay.
+echo "== stored log deletion"
+loki_deletes() { $DOCKER exec excalibase-provisioning wget -qO- "http://loki:3100/loki/api/v1/delete" 2>/dev/null; }
+DD=$(c -X DELETE -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/admin/projects/$PID2" -w ' %{http_code}')
+case "$DD" in *" 200"|*" 202"|*" 204") ok "the second project is deleted" ;; *) ko "delete $PID2: ${DD:0:300}" ;; esac
+LD=
+for i in $(seq 60); do LD=$(loki_deletes); case "$LD" in *"project_id=\\\"$PID2\\\""*) break ;; esac; sleep 5; done
+case "$LD" in *"project_id=\\\"$PID2\\\""*) ok "Loki holds a delete request for the deleted project" ;; *) ko "no delete request: ${LD:0:300}" ;; esac
+echo "$LD" | python3 -c '
+import json, re, sys
+requests = json.load(sys.stdin)
+bad = [r["query"] for r in requests if not re.fullmatch(r"\{(namespace|project_id)=\"[a-z0-9]([-a-z0-9]*[a-z0-9])?\"\}", r["query"])]
+sys.exit(f"a wider delete request reached Loki: {bad}" if bad else 0)' && ok "every delete request names one project exactly" || ko "a delete request is wider than one project"
+case "$LD" in *"project_id=\\\"$PID\\\""*) ko "the kept project's lines were asked to be deleted" ;; *) ok "no delete request for the kept project" ;; esac
+case "$(loki_lines "{project_id=\"$PID\"} |= \"$MARK\"")" in *"$MARK"*) ok "the kept project's line is still stored" ;; *) ko "the kept project's line is gone" ;; esac
+$DOCKER logs excalibase-provisioning 2>&1 | grep -q "log deletion: on" && ok "provisioning reports log deletion on" || ko "provisioning did not turn log deletion on"
