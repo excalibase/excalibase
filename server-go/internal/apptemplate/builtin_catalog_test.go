@@ -42,6 +42,30 @@ func TestBuiltinsNameCategoryAndLicense(t *testing.T) {
 	}
 }
 
+// publicReaches lists every variable of tpl that reads a public app's host or port.
+func publicReaches(t *testing.T, tpl *Template) []string {
+	t.Helper()
+	internal := map[string]bool{}
+	for _, app := range tpl.Apps {
+		internal[app.Name] = app.Internal
+	}
+	var found []string
+	for _, app := range tpl.Apps {
+		for _, v := range app.Env {
+			parts, err := parseValue(v.Value)
+			if err != nil {
+				t.Fatalf("%s/%s: %v", tpl.ID, v.Name, err)
+			}
+			for _, p := range parts {
+				if p.expr != nil && (p.expr.kind == exprAppHost || p.expr.kind == exprAppPort) && !internal[p.expr.app] {
+					found = append(found, app.Name+"/"+v.Name)
+				}
+			}
+		}
+	}
+	return found
+}
+
 // A built-in reaches another app only by an internal service's host and port:
 // a public app's port is 80 on Kubernetes and its own port on a single host.
 func TestBuiltinsReachOnlyInternalServices(t *testing.T) {
@@ -50,22 +74,8 @@ func TestBuiltinsReachOnlyInternalServices(t *testing.T) {
 		t.Fatalf("builtins: %v", err)
 	}
 	for _, tpl := range catalog.List() {
-		internal := map[string]bool{}
-		for _, app := range tpl.Apps {
-			internal[app.Name] = app.Internal
-		}
-		for _, app := range tpl.Apps {
-			for _, v := range app.Env {
-				parts, err := parseValue(v.Value)
-				if err != nil {
-					t.Fatalf("%s/%s: %v", tpl.ID, v.Name, err)
-				}
-				for _, p := range parts {
-					if p.expr != nil && (p.expr.kind == exprAppHost || p.expr.kind == exprAppPort) && !internal[p.expr.app] {
-						t.Errorf("%s/%s/%s reaches public app %q", tpl.ID, app.Name, v.Name, p.expr.app)
-					}
-				}
-			}
+		if found := publicReaches(t, tpl); len(found) > 0 {
+			t.Errorf("%s reaches a public app from %v", tpl.ID, found)
 		}
 	}
 }
@@ -83,7 +93,7 @@ func TestCatalogStatesMemoryAboveFree(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s/%s: %v", tpl.ID, app.Name, err)
 			}
-			if got := bytes > 256<<20; got != needs[tpl.ID+"/"+app.Name] {
+			if (bytes > 256<<20) != needs[tpl.ID+"/"+app.Name] {
 				t.Errorf("%s/%s: minMemory %q", tpl.ID, app.Name, app.MinMemory)
 			}
 		}
