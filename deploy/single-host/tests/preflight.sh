@@ -21,4 +21,12 @@ for bad in POSTGRES_PASSWORD=password123 POSTGRES_PASSWORD= SETUP_TOKEN=abc123 \
   fi
 done
 good ADMIN_PASSWORD='a-long-passphrase-of-mine' >/dev/null || fail "a strong admin password refused"
+# EXC-658: the log forwarder's token unlocks every drain's key; checked when drains are on.
+good LOG_FORWARDER_TOKEN=weak >/dev/null || fail "the forwarder token was checked with drains off"
+good FEATURE_LOGDRAINS=true LOG_FORWARDER_TOKEN=${hex%?}4 >/dev/null || fail "a generated forwarder token refused"
+for bad in LOG_FORWARDER_TOKEN= LOG_FORWARDER_TOKEN=changeme LOG_FORWARDER_TOKEN=$hex; do
+  if good FEATURE_LOGDRAINS=true "$bad" >/dev/null 2>&1; then
+    fail "preflight accepted $bad with drains on"
+  fi
+done
 echo "preflight ok"
