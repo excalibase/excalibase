@@ -19,6 +19,9 @@ const (
 	AppBuilderBuildpacks = "buildpacks"
 )
 
+// AppBuilders are the builders an app connection may name, for Studio and MCP to offer.
+var AppBuilders = []string{AppBuilderAuto, AppBuilderDockerfile, AppBuilderBuildpacks}
+
 // ErrAppBuildsOff is an install where git builds of apps are not switched on (flag appgitbuilds) or not wired.
 var ErrAppBuildsOff = errors.New("git builds of apps are not switched on for this install")
 

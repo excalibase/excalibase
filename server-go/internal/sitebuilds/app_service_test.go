@@ -209,3 +209,30 @@ func TestConnect_RefusesAMemberWhoCannotDeploy(t *testing.T) {
 		t.Errorf("a developer connects: %v", err)
 	}
 }
+
+// An app's sign-in is the sites' flow, bound to the app; the flag and the app are checked first.
+func TestStartAppSignIn_BindsTheApp(t *testing.T) {
+	ctx := context.Background()
+	if _, err := newTestBed(false).service.StartAppSignIn(ctx, testUser, testProject, testApp, false); !errors.Is(err, ErrAppBuildsOff) {
+		t.Errorf("flag off: %v", err)
+	}
+	bed := newTestBed(true)
+	if _, err := bed.service.StartAppSignIn(ctx, testUser, testProject, "app-elsewhere", false); !errors.Is(err, apphost.ErrAppNotFound) {
+		t.Errorf("an app the project does not hold: %v", err)
+	}
+	started, err := bed.service.StartAppSignIn(ctx, testUser, testProject, testApp, true)
+	if err != nil || started.URL == "" || started.BrowserKey == "" {
+		t.Fatalf("started %+v: %v", started, err)
+	}
+	saved := bed.store.signIns
+	if len(saved) != 1 || saved[0].AppID != testApp || saved[0].SiteID != "" || saved[0].ProjectID != testProject || saved[0].UserID != testUser {
+		t.Errorf("saved %+v", saved)
+	}
+	access, err := bed.service.AppRepositories(ctx, testUser, testProject, testApp)
+	if err != nil || len(access) != 1 {
+		t.Errorf("repositories %+v: %v", access, err)
+	}
+	if _, err := newTestBed(false).service.AppRepositories(ctx, testUser, testProject, testApp); !errors.Is(err, ErrAppBuildsOff) {
+		t.Errorf("repositories with the flag off: %v", err)
+	}
+}

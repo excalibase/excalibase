@@ -42,6 +42,7 @@ type memoryStore struct {
 	deactivated     []Target
 	lost            []LostBuild
 	appAttempts     map[string]int
+	signIns         []SignIn
 }
 
 func newMemoryStore() *memoryStore {
@@ -139,6 +140,13 @@ func (m *memoryStore) RenameRepository(_ context.Context, target Target, _ int64
 	if connection := m.appConnections[target]; connection != nil {
 		connection.Repository = fullName
 	}
+	return nil
+}
+
+func (m *memoryStore) SaveSignIn(_ context.Context, _ string, signIn SignIn, _ time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.signIns = append(m.signIns, signIn)
 	return nil
 }
 

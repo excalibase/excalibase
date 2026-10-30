@@ -127,6 +127,11 @@ func (s *Service) StartSignIn(ctx context.Context, userID, projectID, siteID str
 	if err := s.mustSite(ctx, projectID, siteID); err != nil {
 		return StartedSignIn{}, err
 	}
+	return s.startSignIn(ctx, SignIn{UserID: userID, ProjectID: projectID, SiteID: siteID}, install)
+}
+
+// startSignIn records the single-use state for the site or app the sign-in returns to.
+func (s *Service) startSignIn(ctx context.Context, signIn SignIn, install bool) (StartedSignIn, error) {
 	state, err := randomToken()
 	if err != nil {
 		return StartedSignIn{}, err
@@ -135,7 +140,7 @@ func (s *Service) StartSignIn(ctx context.Context, userID, projectID, siteID str
 	if err != nil {
 		return StartedSignIn{}, err
 	}
-	signIn := SignIn{UserID: userID, ProjectID: projectID, SiteID: siteID, BrowserHash: hashState(browserKey)}
+	signIn.BrowserHash = hashState(browserKey)
 	if err := s.store.SaveSignIn(ctx, hashState(state), signIn, s.now().Add(signInLifetime)); err != nil {
 		return StartedSignIn{}, err
 	}
@@ -187,6 +192,10 @@ func (s *Service) Repositories(ctx context.Context, userID, projectID, siteID st
 	if err := s.mustSite(ctx, projectID, siteID); err != nil {
 		return nil, err
 	}
+	return s.grantedTo(ctx, userID)
+}
+
+func (s *Service) grantedTo(ctx context.Context, userID string) ([]gitprovider.Access, error) {
 	access, err := s.store.Grants(ctx, userID, s.provider.Name(), s.now().Add(-grantLifetime))
 	if err != nil {
 		return nil, err
