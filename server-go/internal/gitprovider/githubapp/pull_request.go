@@ -21,22 +21,27 @@ var previewActions = map[string]bool{
 	gitprovider.PullRequestSynchronize: true, gitprovider.PullRequestClosed: true,
 }
 
+type repoRefJSON struct {
+	ID int64 `json:"id"`
+}
+
+type pullRequestHeadJSON struct {
+	SHA string `json:"sha"`
+	Ref string `json:"ref"`
+	// Repo is null once the fork was deleted.
+	Repo *repoRefJSON `json:"repo"`
+}
+
+type pullRequestBaseJSON struct {
+	Repo repoRefJSON `json:"repo"`
+}
+
 type pullRequestJSON struct {
-	Number int    `json:"number"`
-	State  string `json:"state"`
-	Title  string `json:"title"`
-	Head   struct {
-		SHA  string `json:"sha"`
-		Ref  string `json:"ref"`
-		Repo *struct {
-			ID int64 `json:"id"`
-		} `json:"repo"`
-	} `json:"head"`
-	Base struct {
-		Repo struct {
-			ID int64 `json:"id"`
-		} `json:"repo"`
-	} `json:"base"`
+	Number int                 `json:"number"`
+	State  string              `json:"state"`
+	Title  string              `json:"title"`
+	Head   pullRequestHeadJSON `json:"head"`
+	Base   pullRequestBaseJSON `json:"base"`
 }
 
 // fromFork: a head repository other than the base, or none (the fork was deleted).
