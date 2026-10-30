@@ -98,6 +98,10 @@ func (r *Runtime) appLabels(spec containerSpec, replica int) map[string]string {
 	return labels
 }
 
+// unsandboxedCapabilities: gosu, su-exec and setpriv need these to drop from root
+// to the image's user; NET_RAW, SETPCAP, SETFCAP, MKNOD and the rest stay dropped.
+var unsandboxedCapabilities = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"}
+
 // hostConfig is the app's isolation: its sandbox, its project's network, its
 // tier's limits, and nothing of the host's.
 func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
@@ -114,11 +118,12 @@ func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
 			Memory: spec.MemoryBytes, MemorySwap: spec.MemoryBytes, NanoCPUs: spec.NanoCPUs, PidsLimit: &pids,
 		},
 	}
-	// Inside the sandbox an app keeps what Kubernetes gives it; without one it keeps only low ports.
+	// Inside the sandbox an app keeps what Kubernetes gives it; without one it keeps
+	// only what an image needs to step down from root and to bind a low port.
 	if r.opts.SandboxRuntime != "" {
 		host.CapDrop = []string{"NET_RAW"}
 	} else {
-		host.CapDrop, host.CapAdd = []string{"ALL"}, []string{"NET_BIND_SERVICE"}
+		host.CapDrop, host.CapAdd = []string{"ALL"}, slices.Clone(unsandboxedCapabilities)
 	}
 	if spec.DiskClaim != "" {
 		host.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: r.volumeName(spec.DiskClaim), Target: spec.DiskMountPath}}
