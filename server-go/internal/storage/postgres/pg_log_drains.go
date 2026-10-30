@@ -178,7 +178,7 @@ func (s *Store) FailLogDrain(ctx context.Context, failure domain.LogDrainFailure
 		last_error = $3, next_attempt_at = $4, lease_to = 0, lease_lines = 0,
 		status = CASE WHEN $5 THEN 'disabled' ELSE 'failing' END,
 		enabled = NOT $5
-		WHERE id = $1 AND cursor_ns = $2 AND enabled AND ($6 = 0 OR lease_to = $6)`,
+		WHERE id = $1 AND cursor_ns = $2 AND enabled AND ($6::bigint = 0 OR lease_to = $6::bigint)`,
 		failure.ID, failure.From, failure.Error, failure.Next, failure.Disable, failure.LeaseTo)
 	return applied(res, err, "fail log drain")
 }
