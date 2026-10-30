@@ -101,7 +101,7 @@ func TestDeprovision_NoLogDeletionStepWhenOff(t *testing.T) {
 }
 
 // The queue being down fails the teardown at its step; the same DELETE resumes it.
-func TestDeprovision_LogDeletionQueueDownStopsTheTeardown(t *testing.T) {
+func TestDeprovision_LogDeletionEnqueuerDownStopsTheTeardown(t *testing.T) {
 	svc, store, _ := setupDeletionTest(t)
 	queue := &fakeLogDeletionQueue{err: errors.New("platform db down")}
 	svc.SetLogDeletion(queue, nil, 0)
