@@ -85,7 +85,7 @@ func newSiteBuilds(args siteBuildArgs) siteBuilds {
 	service := sitebuilds.NewService(sitebuilds.NewPostgresStore(args.sqlStore.DB()), provider, args.sites, args.limits,
 		sitebuilds.NewVaultSecrets(args.vault), sitebuilds.Options{
 			Mode: mode, NodeImage: cfg.SiteGit.NodeImage, Members: args.members,
-			CallbackURL: siteGitCallbackURL(cfg),
+			CallbackURL: siteGitCallbackURL(cfg), Previews: previewSites(args.sites),
 		})
 	runner := k8s.NewSiteBuildRunner(client, k8s.SiteBuildOptions{
 		Namespace: cfg.SiteGit.BuildNamespace, RuntimeClass: cfg.AppRuntimeClass, PriorityClass: cfg.SiteGit.PriorityClass, Slots: cfg.SiteGit.BuildSlots, PrepareImage: cfg.SiteGit.PrepareImage,
@@ -94,7 +94,17 @@ func newSiteBuilds(args siteBuildArgs) siteBuilds {
 	dispatcher := sitebuilds.NewDispatcher(service, runner, sitebuilds.DispatcherOptions{Slots: cfg.SiteGit.BuildSlots})
 	log.Printf("INFO: site git builds on: %d slot(s) in namespace %s under RuntimeClass %s",
 		cfg.SiteGit.BuildSlots, cfg.SiteGit.BuildNamespace, cfg.AppRuntimeClass)
-	return siteBuilds{handler: handler.NewSiteGitHandler(service, cfg.StudioURL), dispatcher: dispatcher, wired: true}
+	gitHandler := handler.NewSiteGitHandler(service, cfg.StudioURL)
+	gitHandler.SetAuditLog(args.sqlStore)
+	return siteBuilds{handler: gitHandler, dispatcher: dispatcher, wired: true}
+}
+
+// previewSites hands previews to git builds only when Sites offers them (EXC-660).
+func previewSites(service *sites.Service) sitebuilds.PreviewSites {
+	if service == nil || !service.PreviewsAvailable() {
+		return nil
+	}
+	return service
 }
 
 // siteGitCallbackURL is on Studio's origin: Studio calls /api there, so that is where the sign-in's browser cookie lives.

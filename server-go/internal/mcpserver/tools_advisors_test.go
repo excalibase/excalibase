@@ -12,7 +12,10 @@ import (
 
 // darkTools is every tool offered only while its feature is on.
 var darkTools = map[string]features.Feature{
-	"get_advisors": features.Advisors,
+	"get_advisors":          features.Advisors,
+	"list_site_previews":    features.SitePreviews,
+	"set_site_preview_mode": features.SitePreviews,
+	"remove_site_preview":   features.SitePreviews,
 }
 
 func advisorRouteCases() []routeCase {

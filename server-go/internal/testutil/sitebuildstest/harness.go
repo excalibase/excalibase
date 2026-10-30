@@ -111,12 +111,15 @@ func (m memorySecrets) Secrets(context.Context, string) (map[string]string, erro
 	return m.values, m.err
 }
 
-// siteLimiter holds every project to a deploy rate the test sets.
-type siteLimiter struct{ perHour int }
+// siteLimiter holds every project to a deploy rate and preview count the test sets.
+type siteLimiter struct{ perHour, previews int }
 
 func (l siteLimiter) DeployLimits(context.Context, string) (sites.Limits, error) {
 	limits := sites.DefaultLimits
 	limits.MaxDeploysPerHour = l.perHour
+	if l.previews > 0 {
+		limits.MaxPreviews = l.previews
+	}
 	return limits, nil
 }
 
@@ -139,11 +142,14 @@ type Harness struct {
 }
 
 type Options struct {
-	Members *FakeMembers
-	PerHour int
-	Secrets map[string]string
-	Limits  sitebuilds.Limits
-	Slots   int
+	// Previews offers branch and pull request previews (EXC-660), at MaxPreviews per project (0 is the default plan's).
+	Previews    bool
+	MaxPreviews int
+	Members     *FakeMembers
+	PerHour     int
+	Secrets     map[string]string
+	Limits      sitebuilds.Limits
+	Slots       int
 }
 
 func New(t *testing.T, options Options) *Harness {
@@ -156,8 +162,13 @@ func New(t *testing.T, options Options) *Harness {
 		options.Limits = FreeLimits
 	}
 	publisher := sitestest.NewPublisher()
-	siteService, err := sites.NewService(sites.NewPostgresStore(db.DB()), publisher, sitestest.NewOrigins(),
-		sites.Options{BaseDomain: "excalibase.app", SpoolDir: t.TempDir(), DeployLimits: siteLimiter{perHour: options.PerHour}})
+	siteStore := sites.NewPostgresStore(db.DB())
+	siteOptions := sites.Options{BaseDomain: "excalibase.app", SpoolDir: t.TempDir(),
+		DeployLimits: siteLimiter{perHour: options.PerHour, previews: options.MaxPreviews}, MaxPreviews: 100_000}
+	if options.Previews {
+		siteOptions.Previews = siteStore
+	}
+	siteService, err := sites.NewService(siteStore, publisher, sitestest.NewOrigins(), siteOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +194,9 @@ func New(t *testing.T, options Options) *Harness {
 	serviceOptions := sitebuilds.Options{Mode: sitebuilds.ModeOn, CallbackURL: CallbackURL, NodeImage: "node"}
 	if options.Members != nil {
 		serviceOptions.Members = options.Members
+	}
+	if options.Previews {
+		serviceOptions.Previews = siteService
 	}
 	service := sitebuilds.NewService(store, client, siteService, fixedLimits{limits: options.Limits},
 		memorySecrets{values: options.Secrets}, serviceOptions)
@@ -238,6 +252,21 @@ func (h *Harness) Push(branch, sha, delivery string) (int, error) {
 func (h *Harness) Deliver(branch, sha, delivery string) (int, error) {
 	body := githubfake.PushPayload(h.Installation, h.SiteRepo, siteRepoName, branch, sha, "feat: "+sha[:4])
 	header := http.Header{"X-Github-Event": {"push"}, "X-Github-Delivery": {delivery}, "X-Hub-Signature-256": {h.GitHub.Sign(body)}}
+	return h.Service.HandleWebhook(context.Background(), header, body)
+}
+
+// DeliverDeleted sends a signed push that deletes a branch.
+func (h *Harness) DeliverDeleted(branch, delivery string) (int, error) {
+	body := githubfake.DeletePayload(h.Installation, h.SiteRepo, siteRepoName, branch)
+	header := http.Header{"X-Github-Event": {"push"}, "X-Github-Delivery": {delivery}, "X-Hub-Signature-256": {h.GitHub.Sign(body)}}
+	return h.Service.HandleWebhook(context.Background(), header, body)
+}
+
+// DeliverPullRequest sends a signed pull_request event; headRepo other than the site's repository is a fork.
+func (h *Harness) DeliverPullRequest(action string, number int, sha string, headRepo int64, delivery string) (int, error) {
+	body := githubfake.PullRequestPayload(githubfake.PullRequestEvent{Action: action, Installation: h.Installation, RepoID: h.SiteRepo,
+		FullName: siteRepoName, Number: number, HeadSHA: sha, HeadBranch: "feat/pr", HeadRepoID: headRepo, Title: "PR " + sha[:4]})
+	header := http.Header{"X-Github-Event": {"pull_request"}, "X-Github-Delivery": {delivery}, "X-Hub-Signature-256": {h.GitHub.Sign(body)}}
 	return h.Service.HandleWebhook(context.Background(), header, body)
 }
 

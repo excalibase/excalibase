@@ -33,6 +33,8 @@ type Limits struct {
 	MaxDeploysPerHour int
 	// MaxCustomDomains is how many custom domains the project's sites may hold; 0 offers none.
 	MaxCustomDomains int
+	// MaxPreviews is how many live previews the project's sites may hold (EXC-660); 0 offers none.
+	MaxPreviews int
 }
 
 // DefaultLimits is the FREE plan's, for a service built without a limits source.
@@ -43,6 +45,7 @@ var DefaultLimits = Limits{
 	MaxSites:          5,
 	MaxDeploysPerHour: 30,
 	MaxCustomDomains:  2,
+	MaxPreviews:       2,
 }
 
 const maxPathLength = 1024

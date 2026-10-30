@@ -26,6 +26,7 @@ const standard = {
   maxSiteFileBytes: 26214400,
   maxSiteDeploysPerHour: 120,
   maxSiteCustomDomains: 5,
+  maxSitePreviews: 10,
   siteBuildCpuMillis: 2000,
   siteBuildMemory: '4Gi',
   siteBuildDisk: '10Gi',
@@ -33,10 +34,13 @@ const standard = {
   siteBuildConcurrency: 2,
 };
 
-function renderTable({ sites = true, siteGitBuilds = false } = {}) {
+function renderTable({ sites = true, siteGitBuilds = false, sitePreviews = false } = {}) {
   vi.mocked(api.get).mockImplementation((url: string) =>
     Promise.resolve({
-      data: url === '/config' ? { deploymentMode: 'cloud', sites, siteGitBuilds } : [standard],
+      data:
+        url === '/config'
+          ? { deploymentMode: 'cloud', sites, siteGitBuilds, features: { sitepreviews: sitePreviews } }
+          : [standard],
     } as never),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -131,6 +135,33 @@ describe('TierConfigTable', () => {
           maxApps: 5,
         }), ifMatchVersion4,),
     );
+  });
+
+  // Live previews per project follow the plan (EXC-660), shown only with previews on.
+  test('edits and saves the previews a project may hold, only while previews are on', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable({ siteGitBuilds: true, sitePreviews: true });
+
+    const previews = await screen.findByLabelText('Live previews per project for STANDARD');
+    expect(previews).toHaveValue(10);
+    await user.clear(previews);
+    await user.type(previews, '4');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/admin/tiers/STANDARD',
+        expect.objectContaining({ maxSitePreviews: 4, maxSites: 20 }),
+        ifMatchVersion4,
+      ),
+    );
+  });
+
+  test('hides the previews column while previews are off', async () => {
+    renderTable({ siteGitBuilds: true });
+    await screen.findByLabelText('Max sites for STANDARD');
+    expect(screen.queryByLabelText('Live previews per project for STANDARD')).not.toBeInTheDocument();
   });
 
   // Custom domains per project follow the plan too (EXC-614).

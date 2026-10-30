@@ -212,6 +212,7 @@ func (d *Dispatcher) run(ctx context.Context, build *Build) {
 	if err := d.service.store.FinishBuild(context.WithoutCancel(ctx), build, d.options.Holder); err != nil {
 		log.Printf("site build %s: record outcome: %v", build.ID, err)
 	}
+	execution.reportPreview(context.WithoutCancel(ctx), outcome)
 }
 
 func (d *Dispatcher) holdLease(ctx context.Context, cancel context.CancelFunc, buildID string, lost chan<- struct{}) {
@@ -240,6 +241,8 @@ type outcome struct {
 	deployID string
 	kind     FailureKind
 	reason   string
+	// previewURL is where a preview build was published.
+	previewURL string
 }
 
 func failedWith(kind FailureKind, reason string) outcome {
@@ -274,6 +277,9 @@ func (e *execution) execute(ctx context.Context) outcome {
 		return failedWith(FailPlatform, userMessage(err))
 	}
 	build.Repository = connection.Repository
+	if build.Preview != nil {
+		build.Preview.privateRepo = connection.private
+	}
 	spec, revoke, err := e.prepare(ctx)
 	if err != nil {
 		var refused *InputError
@@ -317,6 +323,9 @@ func (e *execution) stillDeployable(ctx context.Context) string {
 	}
 	if err := service.checkConnector(ctx, still); err != nil {
 		return userMessage(err) + "; nothing was deployed"
+	}
+	if build.Preview != nil && (service.options.Previews == nil || still.Previews.normalised().Mode == PreviewModeOff) {
+		return "previews were turned off while this build ran; nothing was deployed"
 	}
 	return ""
 }
@@ -366,12 +375,16 @@ func (e *execution) prepare(ctx context.Context) (RunSpec, func(), error) {
 	}, revoke, nil
 }
 
-// environment is the site's declared variables plus the project secrets marked build-visible.
+// environment is the site's declared variables plus the project secrets marked build-visible;
+// a preview build gets the secrets only on the Admin's opt-in, and a fork's never.
 func (e *execution) environment(ctx context.Context) (map[string]string, error) {
 	service, build := e.dispatcher.service, e.build
 	env := make(map[string]string, len(build.Settings.Env))
 	for name, value := range build.Settings.Env {
 		env[name] = value
+	}
+	if build.Preview != nil && !build.Preview.seesSecrets() {
+		return env, nil
 	}
 	visible, err := service.store.VisibleSecrets(ctx, build.ProjectID)
 	if err != nil || len(visible) == 0 {
@@ -463,6 +476,9 @@ func (e *execution) deploy(ctx context.Context) outcome {
 		return failedWith(FailDeploy, userMessage(err))
 	}
 	e.refreshLog(ctx)
+	if build.Preview != nil {
+		return e.deployPreview(ctx, spool)
+	}
 	deploy, err := e.deployWithRetry(ctx, spool)
 	if err != nil {
 		return failedWith(FailDeploy, userMessage(err))

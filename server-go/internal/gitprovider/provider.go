@@ -63,10 +63,56 @@ type Push struct {
 	Deleted bool
 }
 
-// Event is one webhook delivery: a push, or repositories leaving the platform's reach.
+// Pull request actions a preview acts on (EXC-660).
+const (
+	PullRequestOpened      = "opened"
+	PullRequestReopened    = "reopened"
+	PullRequestSynchronize = "synchronize"
+	PullRequestClosed      = "closed"
+)
+
+// PullRequest is a pull request opened, pushed to, reopened or closed.
+type PullRequest struct {
+	Action         string
+	InstallationID int64
+	RepositoryID   int64
+	Repository     string
+	Number         int
+	// Commit is the head; its message is the pull request's title.
+	Commit     Commit
+	HeadBranch string
+	// FromFork is a head in another repository, or one whose repository is gone.
+	FromFork bool
+}
+
+// PullRequestState is a pull request as the host reads it now.
+type PullRequestState struct {
+	Open     bool
+	HeadSHA  string
+	FromFork bool
+}
+
+// Commit status states.
+const (
+	StatusPending = "pending"
+	StatusSuccess = "success"
+	StatusFailure = "failure"
+	StatusError   = "error"
+)
+
+// CommitStatus is one status posted on a commit; TargetURL may be empty.
+type CommitStatus struct {
+	State       string
+	TargetURL   string
+	Description string
+	Context     string
+}
+
+// Event is one webhook delivery: a push, a pull request, or repositories leaving the platform's reach.
 type Event struct {
-	DeliveryID string
-	Push       *Push
+	DeliveryID  string
+	Push        *Push
+	PullRequest *PullRequest
 	// RemovedInstallation is an installation that was deleted or suspended.
 	RemovedInstallation int64
 	// RemovedRepositories are repositories an installation no longer covers.
@@ -91,4 +137,8 @@ type Provider interface {
 	CloneURL(repository Repository) string
 	// ParseWebhook verifies a delivery's signature before reading it.
 	ParseWebhook(header http.Header, body []byte) (Event, error)
+	// PullRequest reads a pull request's state now, so a replayed event is not trusted.
+	PullRequest(ctx context.Context, installationID int64, repository Repository, number int) (PullRequestState, error)
+	// SetCommitStatus posts a status on a commit.
+	SetCommitStatus(ctx context.Context, installationID int64, repository Repository, sha string, status CommitStatus) error
 }

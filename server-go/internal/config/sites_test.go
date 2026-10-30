@@ -143,3 +143,21 @@ func TestSitesConfigReadsTheZoneCap(t *testing.T) {
 		}
 	}
 }
+
+// Previews are capped across the install, each one a Worker script (EXC-660).
+func TestSitesConfigReadsThePreviewCap(t *testing.T) {
+	setSitesEnv(t)
+	if cfg := Load(); cfg.Sites.MaxPreviews != DefaultMaxPreviews || DefaultMaxPreviews != 200 {
+		t.Fatalf("cap = %d, want the default %d", cfg.Sites.MaxPreviews, DefaultMaxPreviews)
+	}
+	t.Setenv("SITES_MAX_PREVIEWS", "20")
+	if cfg := Load(); cfg.Sites.MaxPreviews != 20 {
+		t.Fatalf("cap = %d", cfg.Sites.MaxPreviews)
+	}
+	for _, bad := range []string{"0", "-3", "many"} {
+		t.Setenv("SITES_MAX_PREVIEWS", bad)
+		if err := (AppConfig{SitesEnabled: true, Sites: Load().Sites}).Validate(); err == nil || !strings.Contains(err.Error(), "SITES_MAX_PREVIEWS") {
+			t.Errorf("%q: err = %v", bad, err)
+		}
+	}
+}

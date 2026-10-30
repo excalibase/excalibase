@@ -35,5 +35,6 @@ func (l siteLimits) DeployLimits(ctx context.Context, projectID string) (sites.L
 	return sites.Limits{
 		MaxFiles: plan.MaxFiles, MaxFileBytes: plan.MaxFileBytes, MaxTotalBytes: plan.MaxDeployBytes,
 		MaxSites: plan.MaxSites, MaxDeploysPerHour: plan.MaxDeploysPerHour, MaxCustomDomains: plan.MaxCustomDomains,
+		MaxPreviews: plan.MaxPreviews,
 	}, nil
 }

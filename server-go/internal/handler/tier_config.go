@@ -76,6 +76,7 @@ type tierConfigDTO struct {
 	MaxSiteFileBytes      *int64 `json:"maxSiteFileBytes"`
 	MaxSiteDeploysPerHour *int   `json:"maxSiteDeploysPerHour"`
 	MaxSiteCustomDomains  *int   `json:"maxSiteCustomDomains"`
+	MaxSitePreviews       *int   `json:"maxSitePreviews"`
 	// One git build's limits (EXC-354); each one left out keeps the plan's current value.
 	SiteBuildCPUMillis      *int    `json:"siteBuildCpuMillis"`
 	SiteBuildMemory         *string `json:"siteBuildMemory"`
@@ -106,6 +107,7 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 		MaxSiteFileBytes:      &tc.Sites.MaxFileBytes,
 		MaxSiteDeploysPerHour: &tc.Sites.MaxDeploysPerHour,
 		MaxSiteCustomDomains:  &tc.Sites.MaxCustomDomains,
+		MaxSitePreviews:       &tc.Sites.MaxPreviews,
 
 		SiteBuildCPUMillis:      &tc.SiteBuilds.CPUMillis,
 		SiteBuildMemory:         &tc.SiteBuilds.Memory,
@@ -273,6 +275,9 @@ func (dto tierConfigDTO) siteLimits(current config.SiteTierLimits) config.SiteTi
 	if dto.MaxSiteCustomDomains != nil {
 		out.MaxCustomDomains = *dto.MaxSiteCustomDomains
 	}
+	if dto.MaxSitePreviews != nil {
+		out.MaxPreviews = *dto.MaxSitePreviews
+	}
 	return out
 }
 
@@ -332,9 +337,14 @@ const (
 	maxSiteDeploysPerHourCap = 1000
 	// Cloudflare includes 100 custom hostnames per zone; every one after is billed.
 	maxSiteCustomDomainsCap = 100
+	// Each live preview is one Worker script; the install's own cap still applies (EXC-660).
+	maxSitePreviewsCap = 100
 )
 
 func validateSiteLimits(limits config.SiteTierLimits) error {
+	if limits.MaxPreviews < 0 || limits.MaxPreviews > maxSitePreviewsCap {
+		return fmt.Errorf("maxSitePreviews must be between 0 and %d (0 offers none)", maxSitePreviewsCap)
+	}
 	if limits.MaxCustomDomains < 0 || limits.MaxCustomDomains > maxSiteCustomDomainsCap {
 		return fmt.Errorf("maxSiteCustomDomains must be between 0 and %d (0 offers none)", maxSiteCustomDomainsCap)
 	}

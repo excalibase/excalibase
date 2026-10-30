@@ -278,6 +278,8 @@ services:
       FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
       # Host and container monitoring, alerts and notices (EXC-670; init.sh --host-metrics).
       FEATURE_HOSTMETRICS: ${FEATURE_HOSTMETRICS:-false}
+      # A preview per branch or pull request of a git-connected site (EXC-660); needs site git builds.
+      FEATURE_SITEPREVIEWS: ${FEATURE_SITEPREVIEWS:-false}
       HOST_METRICS_CONTAINERS: *platform_containers
       HOST_METRICS_NET_DEV: /host/proc-net-dev
       # The host's own public ranges, refused to apps and to the alert webhook; empty: only private ranges are.

@@ -21,6 +21,8 @@ const (
 const (
 	TriggerPush    = "push"
 	TriggerRebuild = "rebuild"
+	// TriggerPreview is a push to another branch or a pull request, deployed as a preview (EXC-660).
+	TriggerPreview = "preview"
 )
 
 var (
@@ -52,9 +54,13 @@ type Connection struct {
 	// ConnectedByName is the connector's username, filled when read for Studio.
 	ConnectedByName string `json:"connectedByName,omitempty"`
 	// InactiveReason is set once the connector lost the developer rung; nothing builds until a developer reconnects.
-	InactiveReason string    `json:"inactiveReason,omitempty"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	InactiveReason string `json:"inactiveReason,omitempty"`
+	// Previews are which branches and pull requests get previews, and the Admin's opt-ins (EXC-660).
+	Previews  PreviewSettings `json:"previews"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+	// private is the repository's visibility as last read; it decides whether a status carries a preview link.
+	private bool
 }
 
 // Limits are a build's plan limits, fixed when it is queued.
@@ -68,20 +74,23 @@ type Limits struct {
 
 // Build is one queued or finished build of a site.
 type Build struct {
-	ID            string      `json:"id"`
-	SiteID        string      `json:"siteId"`
-	ProjectID     string      `json:"projectId"`
-	Status        string      `json:"status"`
-	Trigger       string      `json:"trigger"`
-	CommitSHA     string      `json:"commitSha"`
-	CommitMessage string      `json:"commitMessage,omitempty"`
-	Repository    string      `json:"repository"`
-	Settings      Settings    `json:"settings"`
-	Limits        Limits      `json:"limits"`
-	DeliveryID    string      `json:"-"`
-	DeployID      string      `json:"deployId,omitempty"`
-	FailureKind   FailureKind `json:"failureKind,omitempty"`
-	FailureReason string      `json:"failureReason,omitempty"`
+	ID            string   `json:"id"`
+	SiteID        string   `json:"siteId"`
+	ProjectID     string   `json:"projectId"`
+	Status        string   `json:"status"`
+	Trigger       string   `json:"trigger"`
+	CommitSHA     string   `json:"commitSha"`
+	CommitMessage string   `json:"commitMessage,omitempty"`
+	Repository    string   `json:"repository"`
+	Settings      Settings `json:"settings"`
+	Limits        Limits   `json:"limits"`
+	DeliveryID    string   `json:"-"`
+	DeployID      string   `json:"deployId,omitempty"`
+	// PreviewID and Preview are set on a preview build; it deploys to the preview, never to the site.
+	PreviewID     string        `json:"previewId,omitempty"`
+	Preview       *PreviewBuild `json:"preview,omitempty"`
+	FailureKind   FailureKind   `json:"failureKind,omitempty"`
+	FailureReason string        `json:"failureReason,omitempty"`
 	// Log is read with one build, never with the list.
 	Log         string     `json:"log,omitempty"`
 	RequestedBy string     `json:"requestedBy"`
@@ -98,10 +107,11 @@ type Build struct {
 // buildSnapshot is the connection as a build keeps it in its settings column.
 type buildSnapshot struct {
 	Settings
-	Provider       string `json:"provider"`
-	InstallationID int64  `json:"installationId"`
-	RepositoryID   int64  `json:"repositoryId"`
-	Repository     string `json:"repository"`
+	Provider       string        `json:"provider"`
+	InstallationID int64         `json:"installationId"`
+	RepositoryID   int64         `json:"repositoryId"`
+	Repository     string        `json:"repository"`
+	Preview        *PreviewBuild `json:"preview,omitempty"`
 }
 
 const (

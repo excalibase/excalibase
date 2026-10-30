@@ -16,6 +16,11 @@ var siteBuildRows = []Row{
 	{Methods: get, Pattern: siteBuildPath + "builds", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
 	{Methods: post, Pattern: siteBuildPath + "builds", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "counts toward the project's deploys per hour"},
 	{Methods: get, Pattern: siteBuildPath + "builds/{buildId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Discloses: NoSecret, Note: "the build log, developers only: build output can print what a viewer should not see; build-visible secret values are redacted"},
+	// Previews (EXC-660): 404 while the sitepreviews feature is off; the opt-ins that reach past a preview are Admin's.
+	{Methods: get, Pattern: siteBuildPath + "previews", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "preview hostnames are unguessable links, shown to members only"},
+	{Methods: put, Pattern: siteBuildPath + "previews/mode", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "off removes the site's previews"},
+	{Methods: put, Pattern: siteBuildPath + "previews/access", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "forks, secrets, API access and public links widen what a preview reaches; audited"},
+	{Methods: del, Pattern: siteBuildPath + "previews/{previewId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "unroutes, then deletes the preview's Worker"},
 	{Methods: post, Pattern: "/api/sites/github/webhook", Auth: AuthPublic, Note: "X-Hub-Signature-256 over the raw body is the credential; 5 MiB cap before it is checked"},
 	{Methods: get, Pattern: "/api/sites/github/callback", Auth: AuthPublic, Discloses: NoSecret, Note: "the single-use, hashed, ten-minute state is the credential"},
 }
