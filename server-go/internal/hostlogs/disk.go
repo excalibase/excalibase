@@ -2,6 +2,7 @@ package hostlogs
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"syscall"
@@ -49,22 +50,43 @@ func NewDiskGuard(path string, minFreePercent int) *DiskGuard {
 	return &DiskGuard{path: path, minFreePercent: percent, statfs: statfsFree, now: time.Now}
 }
 
+// Check reads the disk once: a path that cannot be read would never pause.
+func (g *DiskGuard) Check() error {
+	_, total, err := g.statfs(g.path)
+	if err != nil {
+		return fmt.Errorf("free space of %s: %w", g.path, err)
+	}
+	if total == 0 {
+		return fmt.Errorf("free space of %s: the filesystem reports no size", g.path)
+	}
+	return nil
+}
+
 // Paused answers whether shipping waits, reading the disk at most every 30 s.
+// The read happens outside the lock: a slow mount holds no flush.
 func (g *DiskGuard) Paused() bool {
 	if g == nil || g.statfs == nil {
 		return false
 	}
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	now := g.now()
 	if !g.checkedAt.IsZero() && now.Sub(g.checkedAt) < diskCheckEvery {
-		return g.paused
+		paused := g.paused
+		g.mu.Unlock()
+		return paused
 	}
 	g.checkedAt = now
+	g.mu.Unlock()
 	free, total, err := g.statfs(g.path)
-	if err != nil || total == 0 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	switch {
+	case err != nil:
 		// The EXC-670 disk alert still fires; a disk we cannot read keeps the last state.
 		log.Printf("host logs: reading free space of %s: %v", g.path, err)
+		return g.paused
+	case total == 0:
+		log.Printf("host logs: %s reports no size", g.path)
 		return g.paused
 	}
 	percent := float64(free) * 100 / float64(total)

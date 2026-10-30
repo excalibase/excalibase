@@ -175,7 +175,7 @@ func TestFlushHoldsTheBatchWhilePaused(t *testing.T) {
 	shipper.deps.Disk = newTestGuard(disk, &clock)
 	target := Target{ID: "db-a", Labels: Labels{ProjectID: "proj-a", Component: "database", Container: "c"}, Retention: time.Hour, DailyBytes: 1 << 20}
 	b := newBatch(target, 0, 0)
-	shipper.add(b, line(1, "held"))
+	shipper.add(context.Background(), b, line(1, "held"))
 	if err := shipper.flush(context.Background(), b); !errors.Is(err, errDiskLow) {
 		t.Fatalf("flush = %v", err)
 	}
@@ -199,3 +199,20 @@ func (l *blockingLines) Next() (enginestats.LogLine, error) {
 }
 
 func (l *blockingLines) Close() error { return nil }
+
+// A path that cannot be read is refused at start, not found out at full disk.
+func TestDiskGuardCheck(t *testing.T) {
+	clock := now
+	if err := newTestGuard(&fakeDisk{err: errors.New("no such file")}, &clock).Check(); err == nil {
+		t.Error("an unreadable path passed the check")
+	}
+	if err := newTestGuard(&fakeDisk{free: 1, total: 0}, &clock).Check(); err == nil {
+		t.Error("a filesystem with no size passed the check")
+	}
+	if err := newTestGuard(&fakeDisk{free: gib, total: 2 * gib}, &clock).Check(); err != nil {
+		t.Errorf("a readable path: %v", err)
+	}
+	if err := NewDiskGuard(t.TempDir(), 10).Check(); err != nil {
+		t.Errorf("a real directory: %v", err)
+	}
+}

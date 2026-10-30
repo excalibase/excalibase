@@ -187,15 +187,16 @@ func (s *Shipper) Scan(ctx context.Context, prune bool) error {
 	if !prune {
 		return nil
 	}
+	var budgetErr, cursorErr error
 	if s.deps.Budgets != nil {
 		if err := s.deps.Budgets.PruneHostLogBudget(ctx, s.deps.Now().UTC().Add(-48*time.Hour).Format(time.DateOnly)); err != nil {
-			return fmt.Errorf("prune budgets: %w", err)
+			budgetErr = fmt.Errorf("prune budgets: %w", err)
 		}
 	}
 	if len(seen) > 0 {
-		return s.deps.Cursors.PruneHostLogCursors(ctx, seen)
+		cursorErr = s.deps.Cursors.PruneHostLogCursors(ctx, seen)
 	}
-	return nil
+	return errors.Join(budgetErr, cursorErr)
 }
 
 func (s *Shipper) diskLow() bool {
@@ -359,6 +360,9 @@ func (s *Shipper) follow(ctx context.Context, target Target, cursor int64) {
 // the retention, pushing batches and saving the cursor after each is stored.
 // It answers the newest stored line's time.
 func (s *Shipper) shipStream(ctx context.Context, target Target, cursor int64) (int64, error) {
+	if s.diskLow() {
+		return cursor, errDiskLow
+	}
 	since := s.deps.Now().Add(-target.Retention)
 	if cursor > since.UnixNano() {
 		since = time.Unix(0, cursor)
@@ -376,6 +380,8 @@ func (s *Shipper) shipStream(ctx context.Context, target Target, cursor int64) (
 	go readLines(streamCtx, stream, lines, done)
 
 	batch := newBatch(target, since.UnixNano(), cursor)
+	// Whatever this follow read but did not store is read and charged again later.
+	defer s.unstored(batch)
 	ticker := time.NewTicker(s.deps.FlushEvery)
 	defer ticker.Stop()
 	for {
@@ -388,7 +394,7 @@ func (s *Shipper) shipStream(ctx context.Context, target Target, cursor int64) (
 				}
 				return batch.stored, err
 			}
-			s.add(batch, line)
+			s.add(ctx, batch, line)
 			if len(batch.entries) >= batchLines || batch.bytes >= batchBytes {
 				if err := s.flush(ctx, batch); err != nil {
 					return batch.stored, err
@@ -431,7 +437,7 @@ func readLines(ctx context.Context, stream Lines, out chan<- enginestats.LogLine
 
 // add keeps a line newer than the cursor and within the day's budget; a
 // skipped line still moves the cursor.
-func (s *Shipper) add(b *batch, line enginestats.LogLine) {
+func (s *Shipper) add(ctx context.Context, b *batch, line enginestats.LogLine) {
 	// A stamp from the future would move the cursor past every real line to come.
 	at := min(line.At.UnixNano(), s.deps.Now().Add(maxClockSkew).UnixNano())
 	if at <= b.floor {
@@ -443,7 +449,7 @@ func (s *Shipper) add(b *batch, line enginestats.LogLine) {
 	if limit <= 0 {
 		limit = s.deps.DailyBytes
 	}
-	keep, notice := s.budget.take(context.Background(), b.target.Labels.ProjectID, limit, line.At, int64(len(text)))
+	keep, notice := s.budget.take(ctx, b.target.Labels.ProjectID, limit, line.At, int64(len(text)))
 	day := line.At.UTC().Format(time.DateOnly)
 	switch {
 	case keep:
@@ -511,6 +517,14 @@ type batch struct {
 func newBatch(target Target, sinceNS, cursor int64) *batch {
 	floor := max(cursor, sinceNS-1)
 	return &batch{target: target, floor: floor, seen: cursor, stored: cursor, charges: map[string]*charge{}}
+}
+
+// unstored refunds what the batch took from the budget and was not stored.
+func (s *Shipper) unstored(b *batch) {
+	if len(b.charges) > 0 {
+		s.budget.refund(b.target.Labels.ProjectID, b.charges)
+		clear(b.charges)
+	}
 }
 
 func (b *batch) charge(day string) *charge {

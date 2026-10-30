@@ -224,3 +224,76 @@ func TestScanPrunesOldBudgetDays(t *testing.T) {
 		t.Errorf("pruned before %q, want %q", store.pruned, want)
 	}
 }
+
+// Two follows of different days at once: one day's load never drops the
+// entry the other is about to count in (a nil entry would panic).
+func TestBudgetConcurrentDaysNeverLoseAnEntry(t *testing.T) {
+	ctx := context.Background()
+	budget := newBudget(&memBudgets{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				at := now.Add(-time.Duration((i+j)%5) * 24 * time.Hour)
+				budget.take(ctx, "p", 1<<30, at, 1)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// An old day stays known while its lines are read: one store read, not one per line.
+func TestBudgetKeepsAnOldDayWhileItIsRead(t *testing.T) {
+	ctx := context.Background()
+	store := &memBudgets{}
+	budget := newBudget(store)
+	budget.take(ctx, "p", 100, now, 1)
+	for i := 0; i < 5; i++ {
+		budget.take(ctx, "p", 100, now.Add(-5*24*time.Hour), 1)
+	}
+	if store.reads != 2 {
+		t.Errorf("%d store reads", store.reads)
+	}
+}
+
+// What a batch took but never stored goes back, so a pause does not spend
+// the budget on lines read again after it.
+func TestBudgetRefundsAnUnstoredBatch(t *testing.T) {
+	ctx := context.Background()
+	budget := newBudget(nil)
+	budget.take(ctx, "p", 10, now, 8)
+	budget.refund("p", map[string]*charge{now.Format(time.DateOnly): {bytes: 8, noticed: true}})
+	if keep, _ := budget.take(ctx, "p", 10, now, 8); !keep {
+		t.Error("the refunded bytes are still counted")
+	}
+	budget.refund("p", map[string]*charge{"2020-01-01": {bytes: 3}})
+}
+
+// A paused disk: what was read is not charged, and the follow does not reopen.
+func TestShipStreamWhilePausedChargesNothing(t *testing.T) {
+	clock := now
+	disk := &fakeDisk{free: 50 * gib, total: 100 * gib}
+	engine := &fakeEngine{logs: map[string][]enginestats.LogLine{"db-a": {line(1, "12345678")}}}
+	shipper := newTestShipper(engine, &fakeCursors{}, &fakePusher{}, features.NewStatic())
+	shipper.deps.Disk = newTestGuard(disk, &clock)
+	target := Target{ID: "db-a", Labels: Labels{ProjectID: "proj-a", Component: "database", Container: "c"}, Retention: time.Hour, DailyBytes: 10}
+	b := newBatch(target, 0, 0)
+	shipper.add(context.Background(), b, line(1, "12345678"))
+	disk.free = gib / 2
+	clock = clock.Add(diskCheckEvery)
+	if err := shipper.flush(context.Background(), b); !errors.Is(err, errDiskLow) {
+		t.Fatalf("flush = %v", err)
+	}
+	shipper.unstored(b)
+	if keep, _ := shipper.budget.take(context.Background(), "proj-a", 10, now.Add(time.Second), 8); !keep {
+		t.Error("a held batch kept its charge")
+	}
+	if _, err := shipper.shipStream(context.Background(), target, 0); !errors.Is(err, errDiskLow) {
+		t.Errorf("shipStream while paused = %v", err)
+	}
+	if _, opened := engine.since["db-a"]; opened {
+		t.Error("the log was opened while paused")
+	}
+}

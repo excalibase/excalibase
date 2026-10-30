@@ -50,10 +50,16 @@ func wireHostLogs(d hostLogDeps) *hostlogs.Shipper {
 		log.Printf("host logs: %v; off", err)
 		return nil
 	}
+	disk := hostlogs.NewDiskGuard(d.cfg.HostLogs.DiskPath, d.cfg.HostLogs.MinFreePercent)
+	if err := disk.Check(); err != nil {
+		// A disk that cannot be read would never pause shipping: refuse to ship blind.
+		log.Printf("host logs: %v; off (set HOST_LOGS_DISK_PATH)", err)
+		return nil
+	}
 	shipper := hostlogs.New(hostlogs.Deps{
 		Engine: hostlogs.EngineFrom(engine), Cursors: tables, Budgets: tables, Instances: d.instances,
 		Pusher: hostlogs.NewLokiPusher(d.cfg.HostLogs.LokiURL, hostlogs.NewPushClient()),
-		Disk:   hostlogs.NewDiskGuard(d.cfg.HostLogs.DiskPath, d.cfg.HostLogs.MinFreePercent),
+		Disk:   disk,
 		Flags:  flags, Retention: d.cfg.LogRetention,
 		DailyBytes: d.cfg.HostLogs.DailyBytesPerProject, DailyBytesByPlan: d.cfg.HostLogs.DailyBytesByPlan,
 	})
