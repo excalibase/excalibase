@@ -42,7 +42,7 @@ test.describe('End-user MFA', () => {
     expect(calls).toEqual([]);
   });
 
-  test('an admin switches MFA on', async ({ page }) => {
+  test('an admin switches MFA on, and off after confirming', async ({ page }) => {
     await mockFeatures(page, { authmfa: true });
     const calls = await mockSettings(page);
     await page.goto('/project/test-project/auth/settings');
@@ -54,6 +54,14 @@ test.describe('End-user MFA', () => {
     await toggle.click();
     await expect(toggle).toBeChecked();
     expect(calls).toEqual(['PUT /mfa {"enabled":true}']);
+
+    // Switching off asks first.
+    await toggle.click();
+    await expect(page.getByTestId('confirm-modal')).toContainText('aal2');
+    expect(calls).toHaveLength(1);
+    await page.getByTestId('modal-confirm').click();
+    await expect(toggle).not.toBeChecked();
+    expect(calls).toEqual(['PUT /mfa {"enabled":true}', 'PUT /mfa {"enabled":false}']);
   });
 
   test("an admin resets an end user's MFA after confirming", async ({ page }) => {

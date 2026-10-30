@@ -30,6 +30,7 @@ const (
 type authProviderSecrets interface {
 	Get(path string) (map[string]string, error)
 	Put(path string, data map[string]string) error
+	PutIfAbsent(path string, data map[string]string) (bool, error)
 	Delete(path string) error
 }
 

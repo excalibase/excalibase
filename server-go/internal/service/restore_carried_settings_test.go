@@ -56,7 +56,7 @@ func TestRestoreFailsWhenTheSourcesSettingsCannotBeCarried(t *testing.T) {
 
 func TestCarryingRestoredSettingsNeedsAStore(t *testing.T) {
 	svc := NewProvisioningService(emptyInstanceStore(t), provisioner.NewFactory(), nil)
-	if err := svc.CarryRestoredSettings(context.Background(), "src", "dst"); !errors.Is(err, ErrRestoredSettingsNotConfigured) {
+	if err := svc.CarryRestoredSettings(context.Background(), nil, "src", "dst"); !errors.Is(err, ErrRestoredSettingsNotConfigured) {
 		t.Fatalf("CarryRestoredSettings = %v, want ErrRestoredSettingsNotConfigured", err)
 	}
 }
@@ -82,7 +82,7 @@ func TestCarryingRestoredSettingsCopiesFromTheSource(t *testing.T) {
 	settings := &recordingSettings{}
 	svc.SetRestoredSettings(settings)
 	svc.SetMigrationHistory(&recordingHistory{})
-	if err := svc.CarryRestoredSettings(context.Background(), "src", "dst"); err != nil {
+	if err := svc.CarryRestoredSettings(context.Background(), nil, "src", "dst"); err != nil {
 		t.Fatal(err)
 	}
 	if len(settings.copies) != 1 || settings.copies[0] != [2]string{"src", "dst"} {
@@ -99,7 +99,7 @@ func TestCarryingRestoredSettingsEvictsWhatTheDataPlaneCached(t *testing.T) {
 	events := &fakePolicyPublisher{}
 	svc.SetProjectEventPublisher(events)
 
-	if err := svc.CarryRestoredSettings(context.Background(), "src", "dst"); err != nil {
+	if err := svc.CarryRestoredSettings(context.Background(), nil, "src", "dst"); err != nil {
 		t.Fatal(err)
 	}
 	want := domain.PolicyChangeEvent{ProjectID: "dst", Kind: domain.SchemaChangeKind, Op: domain.OpChangeUpdate}
