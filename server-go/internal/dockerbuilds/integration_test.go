@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/cgi"
@@ -36,6 +37,7 @@ import (
 )
 
 // Run: go test -tags=integration ./internal/dockerbuilds/ -run TestRealEngine -v
+// Against Docker 27 (the isolated gateway refused): scripts/dockerbuilds-docker27.sh.
 // Real builds of a tiny static site through the real engine proxy: every call
 // the runner makes is one the proxy admits. The sandbox runtime is the engine's
 // default here (runsc is exercised by the single-host boot test in CI).
@@ -43,12 +45,14 @@ import (
 const itBuildWait = 6 * time.Minute
 
 type buildRig struct {
-	t       *testing.T
-	direct  *client.Client
-	runner  *Runner
-	prefix  string
-	commit  string
-	gitAddr string
+	// engineMajor is the engine's major version: before 28 build networks keep a host address.
+	engineMajor int
+	t           *testing.T
+	direct      *client.Client
+	runner      *Runner
+	prefix      string
+	commit      string
+	gitAddr     string
 }
 
 func newBuildRig(t *testing.T, configure func(*Options)) *buildRig {
@@ -81,14 +85,36 @@ func newBuildRig(t *testing.T, configure func(*Options)) *buildRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rig.runner.Verify(ctx); err != nil {
-		t.Fatal(err)
+	// Verify is provisioning's startup check: it must pass on every engine, and say what it found.
+	var startup bytes.Buffer
+	log.SetOutput(io.MultiWriter(&startup, os.Stderr))
+	err = rig.runner.Verify(ctx)
+	log.SetOutput(os.Stderr)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
 	}
-	// Docker 28 and later give build networks no address on the host; the check must see it.
-	if info, err := direct.ServerVersion(ctx); err == nil && majorVersion(info.Version) >= 28 && !rig.runner.HostIsolated() {
-		t.Fatalf("Docker %s isolates build networks from the host, but Verify did not see it", info.Version)
+	if info, err := direct.ServerVersion(ctx); err == nil {
+		rig.engineMajor = majorVersion(info.Version)
 	}
+	rig.assertStartupIsolation(startup.String())
 	return rig
+}
+
+// assertStartupIsolation: Docker 28+ isolates build networks from the host; Docker 27 refuses the
+// isolated gateway with a 400, and builds fall back to plain internal networks, saying so (EXC-671).
+func (r *buildRig) assertStartupIsolation(startup string) {
+	r.t.Helper()
+	switch {
+	case r.engineMajor >= 28 && !r.runner.HostIsolated():
+		r.t.Fatalf("Docker %d isolates build networks from the host, but Verify did not see it", r.engineMajor)
+	case r.engineMajor > 0 && r.engineMajor < 28:
+		if r.runner.HostIsolated() || !strings.Contains(startup, "refused an isolated gateway") {
+			r.t.Fatalf("Docker %d: isolated=%v, startup log %q", r.engineMajor, r.runner.HostIsolated(), startup)
+		}
+		if options := r.runner.buildNetworkOptions(nil).Options; len(options) != 0 {
+			r.t.Fatalf("Docker %d: build networks still sent %v", r.engineMajor, options)
+		}
+	}
 }
 
 func majorVersion(version string) int {
@@ -359,7 +385,13 @@ func TestRealEngineBuildsAStaticSiteBehindTheEgressProxy(t *testing.T) {
 		t.Fatalf("index.html %q\n%s", files["index.html"], rig.logs(spec.BuildID))
 	}
 	probes := files["probes.txt"]
-	for _, want := range []string{"direct-internet=closed", "direct-metadata=closed", "direct-host=closed", "direct-fixture=closed",
+	// Before Docker 28 the build network keeps its host address (the warned, documented gap).
+	// The other bridge's address stays closed even there: Docker isolates bridges from each other.
+	directHost := "direct-host=closed"
+	if rig.engineMajor > 0 && rig.engineMajor < 28 {
+		directHost = "direct-host=open"
+	}
+	for _, want := range []string{"direct-internet=closed", "direct-metadata=closed", directHost, "direct-fixture=closed",
 		"proxy-metadata=403", "proxy-private=403", "proxy-smtp=403", "proxy-internet=200"} {
 		if !strings.Contains(probes, want) {
 			t.Errorf("probe %s missing:\n%s", want, probes)
