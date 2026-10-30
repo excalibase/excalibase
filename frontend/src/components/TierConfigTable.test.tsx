@@ -37,6 +37,7 @@ const standard = {
   appBuildTimeoutSeconds: 1800,
   appBuildConcurrency: 2,
   appBuildMaxImage: '5Gi',
+  appBuildMaxPerHour: 120,
 };
 
 function renderTable({ sites = true, siteGitBuilds = false, appGitBuilds = false } = {}) {
@@ -224,6 +225,36 @@ describe('TierConfigTable', () => {
     await waitFor(() => expect(api.put).toHaveBeenCalled());
     const body = vi.mocked(api.put).mock.calls[0][1] as Record<string, unknown>;
     expect(Object.keys(body).filter((key) => key.startsWith('appBuild'))).toEqual([]);
+  });
+
+  // A project's app builds an hour are the plan's own cap, beside the site deploys an hour.
+  test('edits the app builds an hour with the plan', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable({ appGitBuilds: true });
+    const perHour = await screen.findByLabelText('App builds an hour for STANDARD');
+    expect(perHour).toHaveValue(120);
+    await user.clear(perHour);
+    await user.type(perHour, '40');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith('/admin/tiers/STANDARD', expect.objectContaining({ appBuildMaxPerHour: 40 }), ifMatchVersion4),
+    );
+  });
+
+  test('shows no app builds an hour while app git builds are off', async () => {
+    renderTable({ siteGitBuilds: true });
+    expect(await screen.findByLabelText('Build minutes for STANDARD')).toBeInTheDocument();
+    expect(screen.queryByLabelText('App builds an hour for STANDARD')).not.toBeInTheDocument();
+  });
+
+  test('will not save no app builds an hour', async () => {
+    const user = userEvent.setup();
+    renderTable({ appGitBuilds: true });
+    const perHour = await screen.findByLabelText('App builds an hour for STANDARD');
+    await user.clear(perHour);
+    await user.type(perHour, '0');
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
   });
 
   test('will not save an app build with no minutes', async () => {

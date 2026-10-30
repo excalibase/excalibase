@@ -39,13 +39,14 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     ...(appBuildsEnabled ? {
       appBuildCpuMillis: t.appBuildCpuMillis, appBuildMemory: t.appBuildMemory, appBuildDisk: t.appBuildDisk,
       appBuildTimeoutSeconds: t.appBuildTimeoutSeconds, appBuildConcurrency: t.appBuildConcurrency,
-      appBuildMaxImage: t.appBuildMaxImage,
+      appBuildMaxImage: t.appBuildMaxImage, appBuildMaxPerHour: t.appBuildMaxPerHour,
     } : {}),
   });
 
-  // An app build needs at least a minute and a memory size; the server checks the bounds.
+  // An app build needs at least a minute, a memory size and one build an hour; the server checks the bounds.
   const appBuildValid = (d: TierConfigInput): boolean =>
-    !appBuildsEnabled || ((d.appBuildTimeoutSeconds ?? 0) >= 60 && (d.appBuildMemory ?? '').trim() !== '');
+    !appBuildsEnabled || ((d.appBuildTimeoutSeconds ?? 0) >= 60 && (d.appBuildMemory ?? '').trim() !== '' &&
+      (d.appBuildMaxPerHour ?? 0) >= 1);
 
   const setField = (tier: string, base: TierConfigInput, patch: Partial<TierConfigInput>) =>
     setDraft((d) => ({ ...d, [tier]: { ...base, ...patch } }));
@@ -61,7 +62,8 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
       d.maxSites !== t.maxSites || d.maxSiteDeploysPerHour !== t.maxSiteDeploysPerHour ||
       d.maxSiteCustomDomains !== t.maxSiteCustomDomains ||
       d.siteBuildMemory !== t.siteBuildMemory || d.siteBuildTimeoutSeconds !== t.siteBuildTimeoutSeconds ||
-      d.appBuildMemory !== t.appBuildMemory || d.appBuildTimeoutSeconds !== t.appBuildTimeoutSeconds
+      d.appBuildMemory !== t.appBuildMemory || d.appBuildTimeoutSeconds !== t.appBuildTimeoutSeconds ||
+      d.appBuildMaxPerHour !== t.appBuildMaxPerHour
     );
   };
 
@@ -127,6 +129,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                 <>
                   <th className="text-left px-4 py-3 font-medium" title="Memory of one git build of an app; CPU, disk, image size and concurrency are set through the API">App build memory</th>
                   <th className="text-left px-4 py-3 font-medium" title="How long one git build of an app may run">App build minutes</th>
+                  <th className="text-left px-4 py-3 font-medium" title="How many app builds one project may queue in any hour; a push past it is kept as a failed build">App builds/h</th>
                 </>
               )}
               <th className="px-4 py-3" />
@@ -179,6 +182,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                     <>
                       <td className="px-4 py-3"><QtyInput label={`App build memory for ${t.tier}`} value={d.appBuildMemory ?? ''} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { appBuildMemory: v })} placeholder="8Gi" /></td>
                       <td className="px-4 py-3"><NumInput label={`App build minutes for ${t.tier}`} value={Math.round((d.appBuildTimeoutSeconds ?? 0) / 60)} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { appBuildTimeoutSeconds: v * 60 })} /></td>
+                      <td className="px-4 py-3"><NumInput label={`App builds an hour for ${t.tier}`} value={d.appBuildMaxPerHour ?? 0} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { appBuildMaxPerHour: v })} /></td>
                     </>
                   )}
                   <td className="px-4 py-3 text-right">
