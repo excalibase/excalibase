@@ -21,7 +21,8 @@ if env.get("PUBLIC_PORT") != "24006":
     failures.append(f"PUBLIC_PORT={env.get('PUBLIC_PORT')!r}, want 24006")
 if env.get("TRUSTED_PROXY_CIDRS") != edge:
     failures.append(f"TRUSTED_PROXY_CIDRS={env.get('TRUSTED_PROXY_CIDRS')!r}, want the edge subnet {edge}")
-if set(services["provisioning"]["networks"]) != {"platform", "engine", "tenants", "edge"}:
+# logs: the bundled Loki alone (EXC-672).
+if set(services["provisioning"]["networks"]) != {"platform", "engine", "tenants", "edge", "logs"}:
     failures.append(f"provisioning networks {sorted(services['provisioning']['networks'])}")
 if set(services["studio"]["networks"]) != {"edge"}:
     failures.append(f"studio networks {sorted(services['studio']['networks'])}, want only edge")

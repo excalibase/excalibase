@@ -29,7 +29,7 @@ func TestLoad_EachDarkFeatureIsTurnedOnByItsOwnVariable(t *testing.T) {
 				t.Setenv(other, "")
 			}
 			t.Setenv(env, "true")
-			if feature == features.HostMetrics {
+			if feature == features.HostMetrics || feature == features.HostLogs {
 				t.Setenv("PROVISIONER_MODE", "docker")
 			}
 			flags := Load().Features()
@@ -104,6 +104,21 @@ func TestDarkFeatures_HostMetricsIsOnOnlyOnASingleHost(t *testing.T) {
 		flags := on.Features()
 		if flags.Enabled(context.Background(), features.HostMetrics) != want || !flags.Enabled(context.Background(), features.MCP) {
 			t.Errorf("mode %q: hostmetrics=%v mcp=%v", mode, flags.Enabled(context.Background(), features.HostMetrics), flags.Enabled(context.Background(), features.MCP))
+		}
+	}
+}
+
+// EXC-672: the single-host compose file sets this exact name; Kubernetes has its own Loki.
+func TestDarkFeatures_HostLogsIsOnOnlyOnASingleHost(t *testing.T) {
+	if got := featureEnv[features.HostLogs]; got != "FEATURE_HOSTLOGS" {
+		t.Errorf("host logs variable = %q", got)
+	}
+	on := AppConfig{DarkFeatures: []features.Feature{features.HostLogs, features.LogRetention}}
+	for mode, want := range map[string]bool{"docker": true, "kubernetes": false, "": false} {
+		on.ProvisionerMode = mode
+		flags := on.Features()
+		if flags.Enabled(context.Background(), features.HostLogs) != want || !flags.Enabled(context.Background(), features.LogRetention) {
+			t.Errorf("mode %q: hostlogs=%v logretention=%v", mode, flags.Enabled(context.Background(), features.HostLogs), flags.Enabled(context.Background(), features.LogRetention))
 		}
 	}
 }

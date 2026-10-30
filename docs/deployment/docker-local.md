@@ -353,6 +353,47 @@ read; the URL is kept in the vault and shown by its host only.
 | `APP_EGRESS_EXTRA_DENY_CIDRS` | unset | the host's own public ranges, comma-separated, refused to the alert webhook and apps |
 | `HOST_METRICS_NET_DEV_SOURCE` | unset (`/proc/1/net/dev` with `--host-metrics`) | the host file mounted for network counters |
 
+## Stored log search
+
+A project's Logs page searches the bundled Loki when the install asks for it
+(EXC-672), so its database's lines are kept for the retention period and still
+found after the container is restored, upgraded or removed:
+
+```bash
+./init.sh --domain example.com --admin-email you@example.com --host-logs
+docker compose up -d
+```
+
+`--host-logs` writes `FEATURE_HOSTLOGS=true` and `COMPOSE_PROFILES=hostlogs`,
+which starts the `loki` service (the same Loki and configuration Kubernetes
+uses, `loki/loki.yaml`). There is no collector: provisioning follows each
+project database container's output through the engine proxy it already uses
+and stores it under that project's labels; apps, watchers and the platform's
+own containers are not stored.
+Loki sits alone with provisioning on the internal `excalibase-logs` network.
+The Logs page reads the stored lines with the Kubernetes query code and falls
+back to the engine's own log until the first lines arrive.
+
+On an existing install: `git pull`, add the two lines above to `.env`, and
+`docker compose up -d`; the engine's log of each running project container is
+read back no further than the retention. To stop: remove the two lines and
+`docker compose --profile hostlogs rm -sf loki`; `docker volume rm
+excalibase-platform-logs` deletes the stored lines.
+
+Disk: each project stores at most `HOST_LOGS_DAILY_MB` (64) MiB of log text a
+UTC day; past it one notice line is stored and the rest of the day is skipped.
+Lines are cut at 16 KiB. Text compresses about 5-10 times, so 10 busy projects
+kept 7 days take about 0.5-1 GiB. Loki is limited to 512 MiB of memory and half
+a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_HOSTLOGS` | unset (`true` with `--host-logs`) | store and search project logs in the bundled Loki |
+| `COMPOSE_PROFILES` | unset (`hostlogs` with `--host-logs`) | starts the `loki` service |
+| `HOST_LOGS_DAILY_MB` | `64` | each project's stored log text per UTC day |
+| `LOG_RETENTION` | `168h` | how long lines are kept (whole hours, at least 24h) |
+| `FEATURE_LOGRETENTION` | unset | keep each project's lines for its plan instead: `LOG_RETENTION_FREE` (`24h`), `LOG_RETENTION_STANDARD` and `LOG_RETENTION_ENTERPRISE` (`168h`) |
+
 ## Refusals you may see
 
 - `run ./init.sh first` — a required value is missing from `.env`.
@@ -378,6 +419,7 @@ read; the URL is kept in the vault and shown by its host only.
 | Containers (app hosting) | yes, with `--apps` (see Apps) |
 | DocumentDB projects | yes, with `--documentdb` (see DocumentDB projects) |
 | Host and container monitoring, alerts | yes, with `--host-metrics` (see Host monitoring) |
+| Stored log search with retention | yes, with `--host-logs` (see Stored log search) |
 | Edge functions, realtime | no (Kubernetes only) |
 | High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
 
@@ -397,7 +439,11 @@ verified TLS, Studio's document browser, a read-only Mongo user, pause, resume,
 a backup restored into a new project that serves Mongo again, and a delete.
 `HOST_METRICS=1` installs with `--host-metrics` and walks host monitoring: host
 and container samples, the database's figures, a stopped database raising its
-project's alert and the restart resolving it. `MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
+project's alert and the restart resolving it. `HOST_LOGS=1` installs with
+`--host-logs` and walks stored log search: a line a project's database writes is
+stored in Loki under that project's labels, found by its search and never by a
+second project's, and still found after Loki and provisioning restart and the
+database container is removed (it runs last). `MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
 initializes, restarts and unseals the vault with the CLI. It destroys the bundle's containers and
 volumes: never run it on an install you keep. CI runs it on every change to the
 bundle or the engine path; for Podman, `COMPOSE="podman compose" DOCKER=podman
