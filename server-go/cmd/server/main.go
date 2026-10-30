@@ -593,16 +593,17 @@ const (
 	metricsSampleInterval       = time.Minute
 )
 
-// wireMetricsHistory keeps alerts in the platform DB and, on Kubernetes,
-// samples every running database, and with requestmetrics on every graphql and
-// auth pod, into it once a minute on the leading replica.
+// wireMetricsHistory keeps alerts in the platform DB and, on Kubernetes or a
+// single host with hostmetrics on, samples every running database, and with
+// requestmetrics on every graphql and auth pod, into it once a minute on the
+// leading replica.
 func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8sClient k8s.KubeClient, metrics *service.MetricsService, alerts *service.AlertingService, requests *service.RequestMetricsService) {
 	table, ok := sqlStore.(metricsTable)
 	if !ok {
 		return
 	}
 	alerts.SetStore(table)
-	if k8sClient == nil || cfg.ProvisionerMode == "docker" {
+	if (k8sClient == nil || cfg.ProvisionerMode == "docker") && !hostMonitoringOn(cfg) {
 		return
 	}
 	metrics.SetHistory(table, alerts)
@@ -1055,6 +1056,8 @@ type handlerDeps struct {
 	// endpoint and its keys (EXC-657); nil without the platform DB tables.
 	metricsKeysHandler     *handler.MetricsKeysHandler
 	metricsEndpointHandler *handler.MetricsEndpointHandler
+	// hostMonitoringHandler serves a single host's monitoring (EXC-670); nil while hostmetrics is off.
+	hostMonitoringHandler *handler.HostMonitoringHandler
 	// logDrainsHandler and logForwarderHandler serve log forwarding
 	// (EXC-658); nil without the platform DB tables.
 	logDrainsHandler    *handler.LogDrainsHandler
@@ -1641,11 +1644,13 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	if requestMetricsSvc != nil && requestTotals != nil {
 		requestMetricsSvc.SetTotals(requestTotals)
 	}
+	emailSender := buildEmailSender(cfg)
+	hostMonitoringHandler := wireHostMonitoring(hostMonitoringDeps{cfg: cfg, sqlStore: sqlStore, instances: store,
+		docker: a.dockerClient, vault: vc, mail: emailSender, metrics: metricsSvc, alerts: alertSvc, provisioning: provSvc})
 	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 	logDrainSvc := newLogDrainService(cfg, sqlStore, vc, provSvc)
 
-	emailSender := buildEmailSender(cfg)
 	storageSvc := buildStorageService(cfg, sqlStore)
 	var storageHandler *handler.StorageHandler
 	if storageSvc != nil {
@@ -1825,6 +1830,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlMetricsScrape:        newMetricsScrapeLimiter(),
 		metricsKeysHandler:     newMetricsKeysHandler(sqlStore),
 		metricsEndpointHandler: newMetricsEndpointHandler(sqlStore, requestTotals),
+		hostMonitoringHandler:  hostMonitoringHandler,
 		logDrainsHandler:       newLogDrainsHandler(logDrainSvc, sqlStore),
 		logForwarderHandler:    newLogForwarderHandler(logDrainSvc, cfg.LogForwarderToken),
 		mcpAudit:               sqlStore,
@@ -2187,6 +2193,7 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 			d.tierHandler.Routes(r)
 		})
 		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/storage", d.storageBudgetH.Report)
+		mountHostMonitoring(r, d)
 		r.Route("/service-accounts", func(r chi.Router) { d.svcAcctHandler.Routes(r) })
 		// Studio sign-in providers: the OAuth client decides who can sign in,
 		// so only an unnarrowed platform-admin credential may change it.
@@ -2400,6 +2407,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		d.sdkKeysHandler.Routes(r)
 	})
 	mountMetricsEndpoint(r, sqlStore, store, d)
+	mountProjectContainers(r, sqlStore, store, d)
 	mountLogDrains(r, sqlStore, store, d)
 	mountAuthProviders(r, sqlStore, store, d)
 	// What AI coding tools did in the project through MCP (EXC-544).

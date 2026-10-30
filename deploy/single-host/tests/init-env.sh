@@ -29,6 +29,11 @@ sh "$DIR/../init.sh" --env-file "$WORK/manual.env" --domain example.com --admin-
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --manual-unseal >/dev/null
 grep -q '^VAULT_UNSEAL_PROVIDER=manual$' "$WORK/manual.env" || fail "--manual-unseal not written"
 ! grep -q '^BACKUP_DEFAULT_' "$WORK/.env" || fail "init.sh wrote a backup target"
+! grep -q '^FEATURE_HOSTMETRICS' "$WORK/.env" || fail "host monitoring on without --host-metrics"
+sh "$DIR/../init.sh" --env-file "$WORK/metrics.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-metrics >/dev/null
+grep -q '^FEATURE_HOSTMETRICS=true$' "$WORK/metrics.env" && grep -q '^HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev$' "$WORK/metrics.env" \
+  || fail "--host-metrics not written"
 [ "$(value EXCALIBASE_DOMAIN)" = example.com ] || fail "domain not written"
 [ "$(value ADMIN_EMAIL)" = me@example.com ] || fail "admin email not written"
 [ "$(value EXCALIBASE_TLS)" = me@example.com ] || fail "a public domain must get ACME certificates for the admin address"

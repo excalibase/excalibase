@@ -17,6 +17,9 @@
 # in-place restore, pause, purge.
 # MYSQL=1 turns the mysql feature on and walks MySQL (EXC-592, mysql-journey.sh):
 # TLS clients, backups, point-in-time and in-place restore, pause, purge.
+# HOST_METRICS=1 installs with --host-metrics and walks host monitoring (EXC-670,
+# monitoring-journey.sh): host and container samples, the database's figures,
+# a down alert raised and resolved. Without it the monitoring routes are absent.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG);
 # GRAPHQL_IMAGE a locally built engine image.
 # Every run walks realtime (EXC-612, realtime-journey.sh): a subscriber receives
@@ -79,7 +82,7 @@ if [ -n "$pcode" ] && [ "$pcode" != 0 ] && logs_have excalibase-preflight POSTGR
 $COMPOSE $P down -v >/dev/null 2>&1; rm -f "$W/.env"
 
 echo "== install"
-./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS ${DOCUMENTDB:+--documentdb} || exit 1
+./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS ${DOCUMENTDB:+--documentdb} ${HOST_METRICS:+--host-metrics} || exit 1
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
@@ -201,6 +204,12 @@ fi
 [ -n "${DOCUMENTDB:-}" ] && . "$TESTS/documentdb-journey.sh"
 [ -n "${MYSQL:-}" ] && . "$TESTS/mysql-journey.sh"
 [ -n "${PG_BACKUPS:-}" ] && . "$TESTS/postgres-backup-journey.sh"
+if [ -n "${HOST_METRICS:-}" ]; then
+  . "$TESTS/monitoring-journey.sh"
+else
+  hm=$(c -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" https://studio.localhost:$PORT/api/admin/monitoring/host)
+  [ "$hm" = 404 ] && ok "host monitoring is off by default (404)" || ko "host monitoring answers $hm with the flag off"
+fi
 
 echo "== studio health"
 code=$(c -o /dev/null -w '%{http_code}' https://studio.localhost:$PORT/); h=$($DOCKER inspect excalibase-studio --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null)

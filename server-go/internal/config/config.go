@@ -119,6 +119,8 @@ type AppConfig struct {
 
 	// RequestMetricsTargets are scraped for the request charts (EXC-656).
 	RequestMetricsTargets []string
+	// HostMetrics is where single-host monitoring reads (EXC-670).
+	HostMetrics HostMetrics
 
 	// FnEgressDefaultHosts is the operator-level outbound allowlist every
 	// project's edge functions get in addition to their own setting:
@@ -507,6 +509,7 @@ func load() AppConfig {
 		LokiURL:                        envOr("LOKI_URL", ""),
 		LogForwarderToken:              os.Getenv("LOG_FORWARDER_TOKEN"),
 		RequestMetricsTargets:          loadRequestMetricsTargets(),
+		HostMetrics:                    loadHostMetrics(),
 		PromURL:                        envOr("PROM_URL", ""),
 		FnEgressDefaultHosts:           envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),
 		CapacityHeadroomPercent:        envInt("CAPACITY_HEADROOM_PERCENT", 15),

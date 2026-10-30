@@ -4,7 +4,7 @@
 # overwrite an existing .env, whose secrets the database was created with.
 #
 #   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman] [--manual-unseal]
-#             [--apps] [--app-domain apps.example.com] [--app-sandbox runsc|none] [--documentdb]
+#             [--apps] [--app-domain apps.example.com] [--app-sandbox runsc|none] [--documentdb] [--host-metrics]
 #
 # Studio:     https://studio.<domain>
 # Data plane: https://api.<domain>   (/{projectId}/graphql, /{projectId}/api/v1, /auth)
@@ -17,6 +17,9 @@
 # gVisor (runsc must be installed); --app-sandbox none runs them without a sandbox.
 # --documentdb: projects may carry DocumentDB, reached by Mongo clients on the host's
 # 127.0.0.1 (or over an SSH tunnel) through a gateway container beside the database.
+# --host-metrics: Studio's Host page: the host's and every container's CPU, memory, disk,
+# network and temperatures, kept 30 days, with alerts by email and webhook. Mounts the
+# host's /proc/1/net/dev read-only into provisioning for the network figures.
 # A public domain gets Let's Encrypt certificates for the admin address;
 # localhost gets certificates from the edge's own CA.
 set -eu
@@ -37,6 +40,7 @@ studio_allow="0.0.0.0/0 ::/0"
 manual_unseal=
 apps=
 documentdb=
+host_metrics=
 app_domain=
 app_sandbox=runsc
 
@@ -52,6 +56,8 @@ while [ $# -gt 0 ]; do
     --manual-unseal) manual_unseal="VAULT_UNSEAL_PROVIDER=manual"; shift ;;
     --apps) apps="APP_HOSTING_ENABLED=true"; shift ;;
     --documentdb) documentdb="DOCUMENTDB_ENABLED=true"; shift ;;
+    --host-metrics) host_metrics="FEATURE_HOSTMETRICS=true
+HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev"; shift ;;
     --app-domain) app_domain=$2; shift 2 ;;
     --app-sandbox) app_sandbox=$2; shift 2 ;;
     *) usage ;;
@@ -154,7 +160,7 @@ ENGINE_SOCKET_GID=$engine_socket_gid
 APP_DOMAIN=$app_domain
 APP_SANDBOX_RUNTIME=$app_sandbox
 ENV
-for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb"; do
+for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics"; do
   [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
 done
 chmod 600 "$env_file"

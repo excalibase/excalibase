@@ -39,6 +39,7 @@ type route int
 const (
 	routeManaged route = iota
 	routeExecCreate
+	routeStats
 )
 
 // containerRoutes are the calls provisioning makes on a container it created.
@@ -53,6 +54,7 @@ var containerRoutes = map[string]route{
 	"POST /exec":    routeExecCreate,
 	"GET /logs":     routeManaged,
 	"POST /wait":    routeManaged,
+	"GET /stats":    routeStats,
 }
 
 // Handler is the proxy. Build it with NewHandler.
@@ -81,6 +83,9 @@ func NewHandler(policy Policy, target *url.URL, transport http.RoundTripper) *Ha
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.servePlatformInspect(w, r) {
+		return
+	}
 	if err := h.authorize(r); err != nil {
 		h.refuse(w, r, err)
 		return
@@ -138,6 +143,9 @@ func (h *Handler) authorizeContainer(r *http.Request, id, action string) error {
 	kind, ok := containerRoutes[r.Method+" "+action]
 	if !ok {
 		return refuse("%s /containers/{id}%s is not a call provisioning makes", r.Method, action)
+	}
+	if kind == routeStats {
+		return h.authorizeStats(r, id)
 	}
 	if err := h.requireManaged(r.Context(), id); err != nil {
 		return err

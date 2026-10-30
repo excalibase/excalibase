@@ -52,11 +52,14 @@ const (
 	// AuthGuest is end-user guest accounts (no address, role guest) and the
 	// stable token subject: sub becomes the account id.
 	AuthGuest Feature = "authguest"
+	// HostMetrics is single-host monitoring: the host and every container
+	// sampled into history, alerts and notices, and Studio's Host page (EXC-670).
+	HostMetrics Feature = "hostmetrics"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics}
 }
 
 type Flags interface {
