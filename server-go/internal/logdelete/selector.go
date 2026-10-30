@@ -77,3 +77,9 @@ func StartFor(created, now time.Time, maxAge time.Duration) time.Time {
 	}
 	return start.Truncate(time.Second)
 }
+
+// EndFor is where a deletion's window ends: shortly after the teardown, for
+// the collector's last lines, and never later.
+func EndFor(teardown time.Time) time.Time {
+	return teardown.Add(endSlack).Truncate(time.Second)
+}

@@ -35,7 +35,9 @@ func wireLogDeletion(cfg config.AppConfig, store logDeletionStore, provSvc *serv
 	}
 	provSvc.SetLogDeletion(store, store, longestLogRetention(cfg.LogRetention))
 	log.Printf("log deletion: on")
-	return logdelete.NewWorker(store, logdelete.NewLokiClient(lokiURL, &http.Client{}), store)
+	// Never follow a redirect: a delete request goes to this Loki or nowhere.
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return logdelete.NewWorker(store, logdelete.NewLokiClient(lokiURL, client), store)
 }
 
 // longestLogRetention is the longest any project's lines are kept.
