@@ -57,8 +57,12 @@ func testSpec() sitebuilds.RunSpec {
 	}
 }
 
+// startBuild verifies the engine first, as provisioning does at startup, then starts the test build.
 func startBuild(t *testing.T, runner *Runner) {
 	t.Helper()
+	if err := runner.Verify(context.Background()); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
 	if err := runner.Start(context.Background(), testSpec()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -717,5 +721,38 @@ func TestABoxServesBuildsOtherThanSites(t *testing.T) {
 	}
 	if engine.get(step("image")) != nil || engine.get(step("egress")) != nil || engine.volumes[workVolume] {
 		t.Fatal("the box was not cleaned up")
+	}
+}
+
+// Docker 27 refuses the isolated gateway with a 400: Verify still passes, says the host is reachable,
+// and builds are laid out without the option instead of failing.
+func TestAnEngineThatRefusesTheIsolatedGatewayStillBuilds(t *testing.T) {
+	engine := newFakeEngine()
+	engine.refusesGatewayMode = true
+	runner, _ := newTestRunner(t, engine, "runsc")
+	if err := runner.Verify(context.Background()); err != nil {
+		t.Fatalf("Verify on Docker 27: %v", err)
+	}
+	if runner.HostIsolated() {
+		t.Fatal("Docker 27 leaves builds a host address; Verify must say so")
+	}
+	startBuild(t, runner)
+	options := engine.networks[buildNetwork]
+	if !options.Internal || len(options.Options) != 0 {
+		t.Fatalf("build network %+v: internal, without the refused option", options)
+	}
+}
+
+// On Docker 28+ both address families get the isolated gateway, as project networks do (EXC-676).
+func TestBuildNetworksIsolateBothAddressFamilies(t *testing.T) {
+	engine := newFakeEngine()
+	runner, _ := newTestRunner(t, engine, "runsc")
+	if err := runner.Verify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	startBuild(t, runner)
+	options := engine.networks[buildNetwork].Options
+	if options["com.docker.network.bridge.gateway_mode_ipv4"] != "isolated" || options["com.docker.network.bridge.gateway_mode_ipv6"] != "isolated" {
+		t.Fatalf("build network options %v", options)
 	}
 }

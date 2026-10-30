@@ -40,8 +40,10 @@ type fakeEngine struct {
 	pulled     []string
 	runtimes   []string
 	calls      []string
-	// ignoresGatewayMode is an engine older than Docker 28, or Podman.
+	// ignoresGatewayMode takes the isolated gateway but still gives the bridge a host address.
 	ignoresGatewayMode bool
+	// refusesGatewayMode is Docker 27: it knows the option, not the mode, and answers 400.
+	refusesGatewayMode bool
 	// pullMessage is an error the engine streams back on a pull; failCreate refuses a create of that name.
 	pullMessage, failCreate, failStart string
 	// networkOptionsSeen are the driver options of every network created.
@@ -211,6 +213,9 @@ func (f *fakeEngine) NetworkCreate(_ context.Context, name string, options netwo
 	defer f.mu.Unlock()
 	if _, ok := f.networks[name]; ok {
 		return network.CreateResponse{}, errdefs.ErrConflict.WithMessage(name)
+	}
+	if f.refusesGatewayMode && options.Options["com.docker.network.bridge.gateway_mode_ipv4"] != "" {
+		return network.CreateResponse{}, errdefs.ErrInvalidArgument.WithMessage("invalid gateway mode isolated: unknown gateway mode isolated")
 	}
 	f.networks[name] = options
 	f.networkOptionsSeen = append(f.networkOptionsSeen, options.Options)
