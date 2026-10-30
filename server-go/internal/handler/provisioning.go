@@ -759,6 +759,10 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 	if err != nil {
 		return domain.ProjectInfo{}, "auth sign-in settings unavailable"
 	}
+	mfa, err := h.mfaForInfo(ctx, projectID)
+	if err != nil {
+		return domain.ProjectInfo{}, "auth mfa settings unavailable"
+	}
 	return domain.ProjectInfo{
 		CorsAllowedOrigins:       corsOrigins,
 		RequireEmailVerification: authSettings.RequireEmailVerification,
@@ -766,6 +770,7 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 		ProjectOAuthInfo:         oauth,
 		UserAPIEnabled:           h.userAPIForInfo(ctx),
 		StableSubject:            h.stableSubjectForInfo(ctx),
+		MFAEnabled:               mfa,
 	}, ""
 }
 

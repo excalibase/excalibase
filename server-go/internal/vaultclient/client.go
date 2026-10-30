@@ -28,6 +28,9 @@ const (
 type VaultClient interface {
 	Get(path string) (map[string]string, error)
 	Put(path string, data map[string]string) error
+	// PutIfAbsent writes only when nothing is stored at path, atomically;
+	// created is false when a secret was already there (it is kept).
+	PutIfAbsent(path string, data map[string]string) (created bool, err error)
 	Delete(path string) error
 	// DeletePrefix removes every secret under prefix in one server round-trip.
 	// Returns the number of paths deleted. Empty prefix must be rejected by
@@ -164,6 +167,42 @@ func (c *HTTPClient) Put(path string, data map[string]string) error {
 		return fmt.Errorf(errVaultStatusFmt, resp.StatusCode)
 	}
 	return nil
+}
+
+// PutIfAbsent sends If-None-Match: *; the server answers 412 when the path is taken.
+func (c *HTTPClient) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	u, err := c.secretsURL(path)
+	if err != nil {
+		return false, fmt.Errorf(errInvalidPath, err)
+	}
+	body, err := json.Marshal(data)
+	if err != nil {
+		return false, fmt.Errorf("marshal data: %w", err)
+	}
+	ctx, cancel := requestCtx()
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "PUT", u, bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf(errCreateRequest, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-None-Match", "*")
+	c.setAuth(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf(errVaultRequest, err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusPreconditionFailed:
+		return false, nil
+	case http.StatusServiceUnavailable:
+		return false, errors.New(errVaultSealed)
+	default:
+		return false, fmt.Errorf(errVaultStatusFmt, resp.StatusCode)
+	}
 }
 
 func (c *HTTPClient) Delete(path string) error {

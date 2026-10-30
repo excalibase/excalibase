@@ -12,6 +12,8 @@ export interface AuthSettings {
   // Only while the authguest feature is on; the Turnstile secret itself is write-only.
   guestSignInEnabled?: boolean;
   guestCaptchaSecretSet?: boolean;
+  // Only while the authmfa feature is on; written through useMFASwitch, never by the settings PUT.
+  mfaEnabled?: boolean;
 }
 
 const authSettingsKey = (projectId: string) => ['auth-settings', projectId] as const;
@@ -97,6 +99,16 @@ export const useSaveAuthSettings = (projectId: string) => {
   return useMutation({
     mutationFn: async (settings: AuthSettings) =>
       (await api.put<AuthSettings>(authSettingsPath(projectId), settings)).data,
+    onSuccess: (saved) => queryClient.setQueryData(authSettingsKey(projectId), saved),
+  });
+};
+
+// The MFA switch has its own path; the answer is the whole settings object.
+export const useMFASwitch = (projectId: string) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean) =>
+      (await api.put<AuthSettings>(`${authSettingsPath(projectId)}/mfa`, { enabled })).data,
     onSuccess: (saved) => queryClient.setQueryData(authSettingsKey(projectId), saved),
   });
 };

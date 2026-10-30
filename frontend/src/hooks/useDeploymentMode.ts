@@ -17,7 +17,8 @@ export type Feature =
   | 'authoauth'
   | 'authotp'
   | 'authuser'
-  | 'authguest';
+  | 'authguest'
+  | 'authmfa';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;

@@ -13,6 +13,7 @@ import (
 // app is not part of the copy. OAuth providers stay behind too: the copy has
 // its own callback URL and no client secret in the vault. Guests come over only
 // when the source asked no captcha, since the copy has no Turnstile secret.
+// The MFA switch comes over; the caller then carries the key or turns it off.
 // $1 is the source, $2 the copy.
 var copyRestoredSettingsSQL = []struct{ what, query string }{
 	{"table permissions", `
@@ -34,9 +35,9 @@ var copyRestoredSettingsSQL = []struct{ what, query string }{
 			ORDER BY o.n)
 		FROM project_cors_settings c WHERE c.project_id = $1`},
 	{"auth settings", `
-		INSERT INTO project_auth_settings (project_id, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled, guest_sign_in_enabled)
+		INSERT INTO project_auth_settings (project_id, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled, guest_sign_in_enabled, mfa_enabled)
 		SELECT $2, require_email_verification, site_url, redirect_urls, allow_new_users, email_otp_enabled,
-		       guest_sign_in_enabled AND NOT guest_captcha_secret_set
+		       guest_sign_in_enabled AND NOT guest_captcha_secret_set, mfa_enabled
 		FROM project_auth_settings WHERE project_id = $1`},
 }
 

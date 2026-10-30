@@ -29,6 +29,12 @@ func (v *probeVault) DeletePrefix(string) (int, error)    { return 0, nil }
 func (v *probeVault) List(string) ([]string, error)       { return nil, nil }
 func (v *probeVault) Sealed() bool                        { return false }
 func (v *probeVault) GetPublicKey() (string, error)       { return "", nil }
+func (v *probeVault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	if _, err := v.Get(path); err == nil {
+		return false, nil
+	}
+	return true, v.Put(path, data)
+}
 
 func TestProbeReadsTheProjectsAppCredentials(t *testing.T) {
 	vault := &probeVault{creds: closedPortCreds()}

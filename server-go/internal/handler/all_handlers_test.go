@@ -936,3 +936,4 @@ func TestSetDeletionProtectionRequiresExplicitValue(t *testing.T) {
 type noRestoredSettings struct{}
 
 func (noRestoredSettings) CopyRestoredSettings(context.Context, string, string) error { return nil }
+func (noRestoredSettings) DisableMFA(context.Context, string) error                   { return nil }

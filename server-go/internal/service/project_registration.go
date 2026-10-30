@@ -39,7 +39,9 @@ type ProjectRegistrar interface {
 	RegisterProject(ctx context.Context, inst *domain.DatabaseInstance, opts RegistrationOptions) error
 	// CarryRestoredSettings gives a restored copy the source's API settings,
 	// which live in the platform database rather than in the backup.
-	CarryRestoredSettings(ctx context.Context, sourceID, targetID string) error
+	// What it writes outside the platform database (the copy's MFA key) is
+	// registered for removal on pc, which may be nil.
+	CarryRestoredSettings(ctx context.Context, pc *provisioner.ProvisionContext, sourceID, targetID string) error
 }
 
 // ErrRestoredSettingsNotConfigured refuses a restore when the platform has no
@@ -60,7 +62,7 @@ func (s *ProvisioningService) SetMigrationHistory(h MigrationHistoryCopier) {
 
 // CarryRestoredSettings copies the source's API settings onto the copy, then
 // evicts whatever the data plane cached of the copy while it had none.
-func (s *ProvisioningService) CarryRestoredSettings(ctx context.Context, sourceID, targetID string) error {
+func (s *ProvisioningService) CarryRestoredSettings(ctx context.Context, pc *provisioner.ProvisionContext, sourceID, targetID string) error {
 	if s.restoredSettings == nil {
 		return ErrRestoredSettingsNotConfigured
 	}
@@ -68,6 +70,9 @@ func (s *ProvisioningService) CarryRestoredSettings(ctx context.Context, sourceI
 		return ErrMigrationHistoryNotConfigured
 	}
 	if err := s.restoredSettings.CopyRestoredSettings(ctx, sourceID, targetID); err != nil {
+		return err
+	}
+	if err := s.carryMFAKey(ctx, pc, sourceID, targetID); err != nil {
 		return err
 	}
 	// The schema arrives with the data; the history that built it does not.

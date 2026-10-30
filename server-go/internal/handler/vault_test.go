@@ -539,3 +539,29 @@ func TestVaultListSecrets_WhenSealed_Returns503(t *testing.T) {
 		t.Fatalf("expected 503 sealed, got %d", w.Code)
 	}
 }
+
+// EXC-662: If-None-Match: * makes the write conditional; an existing secret answers 412 and is kept.
+func TestVaultPutSecret_IfNoneMatchNeverReplaces(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	result, _ := v.Init(1, 1)
+	if _, err := v.Unseal(result.Shares[0]); err != nil {
+		t.Fatal(err)
+	}
+	put := func(body string) int {
+		req := httptest.NewRequest("PUT", "/api/vault/secrets/projects/app/auth/mfa", strings.NewReader(body))
+		req.Header.Set(sharedContentType, sharedMIMEJSON)
+		req.Header.Set("If-None-Match", "*")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := put(`{"key":"first"}`); code != http.StatusOK {
+		t.Fatalf("first: %d", code)
+	}
+	if code := put(`{"key":"second"}`); code != http.StatusPreconditionFailed {
+		t.Fatalf("second: %d", code)
+	}
+	if got, _ := v.Get("projects/app/auth/mfa"); got["key"] != "first" {
+		t.Fatalf("stored = %v", got)
+	}
+}
