@@ -32,6 +32,8 @@ type AppBuildRunner struct {
 	options AppBuildOptions
 }
 
+var _ appbuilds.Cluster = (*AppBuildRunner)(nil)
+
 func NewAppBuildRunner(client *Client, options AppBuildOptions) *AppBuildRunner {
 	return &AppBuildRunner{options: options, buildJobs: &buildJobs{
 		client: client, namespace: options.Namespace, prefix: "app-build-", secretSuffixes: []string{"-secrets", cloneSecretSuffix},
