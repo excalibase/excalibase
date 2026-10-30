@@ -34,6 +34,7 @@ var featureEnv = map[features.Feature]string{
 	features.MajorUpgrade:    "FEATURE_MAJORUPGRADE",
 	features.TemplateCatalog: "FEATURE_TEMPLATECATALOG",
 	features.HostLogs:        "FEATURE_HOSTLOGS",
+	features.LogDeletion:     "FEATURE_LOGDELETION",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.

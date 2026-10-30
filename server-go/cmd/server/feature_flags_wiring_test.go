@@ -143,6 +143,7 @@ var darkWork = map[features.Feature]string{
 	// The catalog's templates answer as unknown ids while it is off (internal/service).
 	features.TemplateCatalog: "TestTemplateCatalog_OffIsInvisible",
 	features.HostLogs:        "TestHostLogShippingStartsOnlyWithItsFeature",
+	features.LogDeletion:  "TestLogDeletionStartsOnlyWithItsFeature",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {
