@@ -173,6 +173,8 @@ func (t *Template) validate() error {
 	return nil
 }
 
+const appError = "app %q: %v"
+
 // validateShape holds everything but the variables to the app model's own
 // rules, on a probe record. The plan's replica cap is checked on deploy, so
 // the probe takes the largest plan.
@@ -181,11 +183,11 @@ func (a *AppSpec) validateShape() error {
 		return invalid("app %q: replicas is required (0-%d)", a.Name, apphost.MaxReplicas)
 	}
 	if _, err := a.MinMemoryBytes(); err != nil {
-		return invalid("app %q: %v", a.Name, err)
+		return invalid(appError, a.Name, err)
 	}
 	probe := a.record("probe", "probe", domain.Enterprise)
 	if err := probe.Validate(); err != nil {
-		return invalid("app %q: %v", a.Name, err)
+		return invalid(appError, a.Name, err)
 	}
 	return nil
 }
@@ -194,7 +196,7 @@ func (a *AppSpec) validateEnv(apps map[string]*AppSpec) error {
 	seen := make(map[string]bool, len(a.Env))
 	for _, v := range a.Env {
 		if err := apphost.ValidateEnvName(v.Name); err != nil {
-			return invalid("app %q: %v", a.Name, err)
+			return invalid(appError, a.Name, err)
 		}
 		if seen[v.Name] {
 			return invalid("app %q declares %s twice", a.Name, v.Name)
@@ -261,15 +263,22 @@ func generated(parts []part, apps map[string]*AppSpec) bool {
 		case p.expr == nil:
 		case p.expr.kind == exprSecret:
 			return true
-		case p.expr.kind == exprAppEnv && apps[p.expr.app] != nil:
-			for _, v := range apps[p.expr.app].Env {
-				if v.Name != p.expr.variable {
-					continue
-				}
-				if read, err := parseValue(v.Value); err == nil && generated(read, nil) {
-					return true
-				}
-			}
+		case p.expr.kind == exprAppEnv && readsGenerated(apps[p.expr.app], p.expr.variable):
+			return true
+		}
+	}
+	return false
+}
+
+// readsGenerated: the app's variable holds secret(n) itself; one step only.
+func readsGenerated(app *AppSpec, variable string) bool {
+	if app == nil {
+		return false
+	}
+	for _, v := range app.Env {
+		if v.Name == variable {
+			read, err := parseValue(v.Value)
+			return err == nil && generated(read, nil)
 		}
 	}
 	return false

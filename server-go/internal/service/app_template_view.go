@@ -192,6 +192,12 @@ func (s *AppTemplateService) refusals(ctx context.Context, projectID string, tpl
 	if !facts.NeedsPrivateNetwork {
 		return nil
 	}
+	return s.networkRefusals(ctx, projectID, inst, fit, refuse)
+}
+
+// networkRefusals reads whether the project's apps can reach each other.
+func (s *AppTemplateService) networkRefusals(ctx context.Context, projectID string, inst *domain.DatabaseInstance,
+	fit *TemplateFit, refuse func(string, ...any)) error {
 	// A single host's project apps always share its network (ADR 0039).
 	if inst.DeploymentMode == domain.ModeDocker {
 		fit.PrivateNetworkOn = true
