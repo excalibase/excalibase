@@ -17,9 +17,12 @@ lnets=$($DOCKER inspect excalibase-loki --format '{{range $k,$v := .NetworkSetti
 [ "$lnets" = "excalibase-logs " ] && ok "Loki is on its own network only" || ko "Loki networks: $lnets"
 $DOCKER exec "$TC" getent hosts loki >/dev/null 2>&1 && ko "a tenant container resolves Loki" || ok "a tenant container cannot reach Loki"
 
+# The log drains journey (EXC-658) may have made it already.
+if [ -z "${PID2:-}" ]; then
 R2=$(c --max-time 600 -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' "https://studio.localhost:$PORT/api/provision/" \
   -d "{\"projectName\":\"other\",\"orgId\":\"$ORG\",\"databaseType\":\"POSTGRESQL\",\"postgresVersion\":\"17\"}")
 PID2=$(echo "$R2" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("projectId",""))' 2>/dev/null)
+fi
 for i in $(seq 60); do st2=$(lapi "/provision/$PID2/" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("status"))' 2>/dev/null); case "$st2" in ACTIVE|FAILED) break;; esac; sleep 3; done
 [ "$st2" = ACTIVE ] && ok "a second project ($PID2) for isolation" || ko "second project: $st2 ${R2:0:300}"
 

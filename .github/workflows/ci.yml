@@ -53,6 +53,11 @@ jobs:
               - 'server-go/cmd/app-probe/**'
               - 'server-go/internal/hostlogs/**'
               - 'server-go/internal/enginestats/**'
+              - 'server-go/internal/logdrain/**'
+              - 'server-go/internal/hostaddr/**'
+              - 'server-go/internal/publicaddr/**'
+              - 'server-go/cmd/log-forwarder/**'
+              - 'server-go/internal/service/log_drains*'
               - 'server-go/internal/provisioner/docker*'
               - 'server-go/internal/service/backup_*docker*'
               - 'frontend/Dockerfile'
@@ -129,12 +134,13 @@ jobs:
           PLATFORM_TAG: ci
           PG_BACKUPS: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
-      - name: Fresh install with manual vault unseal (init, restart, CLI unseal), host monitoring and stored log search
+      - name: Fresh install with manual vault unseal (init, restart, CLI unseal), host monitoring, stored log search and log drains
         env:
           PLATFORM_TAG: ci
           MANUAL_UNSEAL: "1"
           HOST_METRICS: "1"
           HOST_LOGS: "1"
+          LOG_DRAINS: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
       - name: Fresh install with MySQL (TLS clients, backups, point-in-time and in-place restore, purge)
         env:

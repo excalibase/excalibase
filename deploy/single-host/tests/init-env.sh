@@ -39,6 +39,15 @@ sh "$DIR/../init.sh" --env-file "$WORK/logs.env" --domain example.com --admin-em
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-logs >/dev/null
 grep -q '^FEATURE_HOSTLOGS=true$' "$WORK/logs.env" && grep -q '^COMPOSE_PROFILES=hostlogs$' "$WORK/logs.env" \
   || fail "--host-logs not written"
+! grep -q '^FEATURE_LOGDRAINS\|^LOG_FORWARDER' "$WORK/.env" "$WORK/logs.env" || fail "log drains on without --log-drains"
+printf '#!/bin/sh\ncase $1 in api.*) echo "203.0.113.7 STREAM $1"; echo "2001:db8::7 STREAM $1" ;; esac\n' > "$WORK/resolve"; chmod +x "$WORK/resolve"
+RESOLVE_HOSTS="$WORK/resolve" HOST_IF_INET6="$WORK/no-ipv6" sh "$DIR/../init.sh" --env-file "$WORK/drains.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --log-drains >/dev/null
+for line in FEATURE_LOGDRAINS=true FEATURE_HOSTLOGS=true COMPOSE_PROFILES=hostlogs,logdrains HOST_IF_INET6_SOURCE=/dev/null; do
+  grep -qx "$line" "$WORK/drains.env" || fail "--log-drains did not write $line"
+done
+grep -qx 'LOG_FORWARDER_EXTRA_DENY_CIDRS=2001:db8::7/128,203.0.113.7/32' "$WORK/drains.env" || fail "--log-drains did not refuse the addresses the install's names resolve to"
+sed -n 's/^LOG_FORWARDER_TOKEN=//p' "$WORK/drains.env" | grep -Eq '^[0-9a-f]{64}$' || fail "the forwarder token is not 64 random hex characters"
 [ "$(value EXCALIBASE_DOMAIN)" = example.com ] || fail "domain not written"
 [ "$(value ADMIN_EMAIL)" = me@example.com ] || fail "admin email not written"
 [ "$(value EXCALIBASE_TLS)" = me@example.com ] || fail "a public domain must get ACME certificates for the admin address"

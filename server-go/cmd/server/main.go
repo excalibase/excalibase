@@ -677,8 +677,9 @@ func newLogDrainService(cfg config.AppConfig, sqlStore any, vc vaultclient.Vault
 		return nil
 	}
 	var logs service.ProjectLogReader
-	if cfg.LokiURL != "" {
-		logs = service.NewLokiReader(cfg.LokiURL, &http.Client{})
+	lokiURL, singleHost := drainLogStore(cfg)
+	if lokiURL != "" {
+		logs = service.NewLokiReader(lokiURL, &http.Client{})
 	}
 	instances := func(projectID string) (*domain.DatabaseInstance, error) {
 		inst, err := provSvc.GetInstance(projectID)
@@ -687,7 +688,19 @@ func newLogDrainService(cfg config.AppConfig, sqlStore any, vc vaultclient.Vault
 		}
 		return inst, nil
 	}
-	return service.NewLogDrainService(service.LogDrainDeps{Store: drains, Vault: vc, Instances: instances, Logs: logs})
+	return service.NewLogDrainService(service.LogDrainDeps{Store: drains, Vault: vc, Instances: instances, Logs: logs, SingleHost: singleHost})
+}
+
+// drainLogStore is the Loki drains read: on a single host the one hostlogs
+// fills (EXC-672), with its shipper's labels; otherwise the chart's.
+func drainLogStore(cfg config.AppConfig) (string, bool) {
+	if cfg.ProvisionerMode != "docker" {
+		return cfg.LokiURL, false
+	}
+	if !features.Enabled(context.Background(), cfg.Features(), features.HostLogs) || cfg.HostLogs.LokiURL == "" {
+		return "", false
+	}
+	return cfg.HostLogs.LokiURL, true
 }
 
 func newLogDrainsHandler(drains *service.LogDrainService, sqlStore any) *handler.LogDrainsHandler {

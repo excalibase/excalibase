@@ -33,3 +33,27 @@ func TestLogForwarderRoutesAnswerOnTheInternalListenerOnly(t *testing.T) {
 		t.Errorf("internal listener: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// EXC-658 on a single host: drains read the Loki hostlogs fills, with the
+// shipper's labels; Kubernetes keeps reading the chart's Loki.
+func TestDrainLogStore(t *testing.T) {
+	singleHost := config.AppConfig{ProvisionerMode: "docker", LokiURL: "http://ignored:3100",
+		DarkFeatures: []features.Feature{features.LogDrains, features.HostLogs}, HostLogs: config.HostLogs{LokiURL: "http://loki:3100"}}
+	if url, onHost := drainLogStore(singleHost); url != "http://loki:3100" || !onHost {
+		t.Errorf("single host: %q %v", url, onHost)
+	}
+	noHostLogs := singleHost
+	noHostLogs.DarkFeatures = []features.Feature{features.LogDrains}
+	if url, onHost := drainLogStore(noHostLogs); url != "" || onHost {
+		t.Errorf("single host without hostlogs: %q %v", url, onHost)
+	}
+	unset := singleHost
+	unset.HostLogs = config.HostLogs{}
+	if url, onHost := drainLogStore(unset); url != "" || onHost {
+		t.Errorf("single host without a Loki URL: %q %v", url, onHost)
+	}
+	k8s := config.AppConfig{LokiURL: "http://loki.platform:3100", DarkFeatures: []features.Feature{features.LogDrains}}
+	if url, onHost := drainLogStore(k8s); url != "http://loki.platform:3100" || onHost {
+		t.Errorf("kubernetes: %q %v", url, onHost)
+	}
+}

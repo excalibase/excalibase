@@ -15,6 +15,9 @@ import (
 const (
 	// logIngestDelay leaves lines still being shipped to Loki for the next read.
 	logIngestDelay = 10 * time.Second
+	// singleHostIngestDelay covers the single-host shipper's 30 s scan for new
+	// containers, whose first lines reach Loki that much after they were written.
+	singleHostIngestDelay = 45 * time.Second
 	// logMaxLag is how far behind a drain may fall before it skips ahead.
 	logMaxLag = 15 * time.Minute
 	// logResumeWindow is how far back a drain that skipped ahead resumes.
@@ -89,10 +92,10 @@ func (s *LogDrainService) batchFor(ctx, readCtx context.Context, drain *domain.L
 		s.recordFailure(ctx, drain, 0, err.Error(), now)
 		return logdrain.Batch{}, 0, false
 	}
-	end := now.Add(-logIngestDelay).UnixNano()
+	end := now.Add(-s.ingestDelay).UnixNano()
 	from := drain.CursorNS
 	if end <= from {
-		s.deferDrain(ctx, drain.ID, time.Unix(0, from).Add(logIngestDelay+time.Second))
+		s.deferDrain(ctx, drain.ID, time.Unix(0, from).Add(s.ingestDelay+time.Second))
 		return logdrain.Batch{}, 0, false
 	}
 	if from, err = s.skipBacklog(ctx, readCtx, drain, selector, from, end); err != nil {
@@ -119,11 +122,17 @@ func (s *LogDrainService) batchFor(ctx, readCtx context.Context, drain *domain.L
 	return batch, size, true
 }
 
+var errLogsNotForwardable = errors.New("the project's logs are not available for forwarding")
+
 // prepare resolves where the drain's batches go and the project's selector.
 func (s *LogDrainService) prepare(drain *domain.LogDrain) (logdrain.Batch, string, error) {
 	inst, err := s.instances(drain.ProjectID)
-	if err != nil || s.logs == nil || inst.DeploymentMode == domain.ModeDocker || inst.Namespace == "" {
-		return logdrain.Batch{}, "", errors.New("the project's logs are not available for forwarding")
+	if err != nil {
+		return logdrain.Batch{}, "", errLogsNotForwardable
+	}
+	selector, ok := s.drainSelector(inst)
+	if !ok {
+		return logdrain.Batch{}, "", errLogsNotForwardable
 	}
 	entry, err := s.readEntry(drain)
 	if err != nil {
@@ -140,7 +149,7 @@ func (s *LogDrainService) prepare(drain *domain.LogDrain) (logdrain.Batch, strin
 		return logdrain.Batch{}, "", errors.New("the drain's key or endpoint is missing; save it again")
 	}
 	return logdrain.Batch{DrainID: drain.ID, ProjectID: drain.ProjectID, Kind: drain.Kind, Target: target,
-		HeaderName: drain.HeaderName, Secret: entry.Secret}, drainLogSelector(inst), nil
+		HeaderName: drain.HeaderName, Secret: entry.Secret}, selector, nil
 }
 
 // skipBacklog moves a drain more than logMaxLag behind to just before end,

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"slices"
 
 	"github.com/excalibase/provisioning-poc/internal/features"
 )
@@ -41,13 +42,26 @@ func loadDarkFeatures() []features.Feature {
 
 // Features is the flags feature code asks; nothing else reads DarkFeatures.
 // Host monitoring and host logs read a Docker or Podman host, so they are off
-// on Kubernetes, which keeps logs in the chart's Loki.
+// on Kubernetes, which keeps logs in the chart's Loki. On a single host, log
+// drains forward what host logs store, so they need it.
 func (c AppConfig) Features() features.Flags {
 	on := make([]features.Feature, 0, len(c.DarkFeatures))
 	for _, feature := range c.DarkFeatures {
-		if (feature != features.HostMetrics && feature != features.HostLogs) || c.ProvisionerMode == "docker" {
+		if c.availableHere(feature) {
 			on = append(on, feature)
 		}
 	}
 	return features.NewStatic(on...)
+}
+
+func (c AppConfig) availableHere(feature features.Feature) bool {
+	singleHost := c.ProvisionerMode == "docker"
+	switch feature {
+	case features.HostMetrics, features.HostLogs:
+		return singleHost
+	case features.LogDrains:
+		return !singleHost || slices.Contains(c.DarkFeatures, features.HostLogs)
+	default:
+		return true
+	}
 }
