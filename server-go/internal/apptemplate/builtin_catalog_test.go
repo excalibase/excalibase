@@ -116,3 +116,23 @@ func TestCatalogGeneratesItsSecrets(t *testing.T) {
 		}
 	}
 }
+
+// Redis from 7.4 is RSALv2 or SSPLv1; the starters run Valkey (BSD-3-Clause) instead.
+func TestBuiltinsRunNoSourceAvailableRedis(t *testing.T) {
+	catalog, err := Builtins()
+	if err != nil {
+		t.Fatalf("builtins: %v", err)
+	}
+	for _, tpl := range catalog.List() {
+		for _, app := range tpl.Apps {
+			repository, _, _ := strings.Cut(app.Image, "@")
+			repository, _, _ = strings.Cut(repository, ":")
+			if repository == "redis" || strings.HasSuffix(repository, "library/redis") {
+				t.Errorf("%s/%s runs %s", tpl.ID, app.Name, app.Image)
+			}
+		}
+		if strings.Contains(tpl.License, "RSAL") || strings.Contains(tpl.License, "SSPL") {
+			t.Errorf("%s: licence %q", tpl.ID, tpl.License)
+		}
+	}
+}
