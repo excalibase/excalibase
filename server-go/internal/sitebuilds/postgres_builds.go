@@ -16,26 +16,33 @@ const dispatchLock = 354_000_001
 
 const supersededReason = "superseded by a newer commit before it started"
 
-// buildColumns are what scanBuild reads, in its order.
-const buildColumns = `id, kind, COALESCE(site_id, ''), COALESCE(app_id, ''), project_id, status, trigger, commit_sha,
+// The queries below spell out the columns scanBuild reads, in its order, and one
+// target's match: $1 the project, $2 the kind, $3 the site or app id. The OR lets
+// each kind use its own index; the one-target CHECK keeps the other column NULL.
+const (
+	claimBuildSQL = `UPDATE site_builds SET status = 'RUNNING', started_at = NOW(), lease_holder = $2, lease_until = $3
+		WHERE id = $1 RETURNING id, kind, COALESCE(site_id, ''), COALESCE(app_id, ''), project_id, status, trigger, commit_sha,
 	COALESCE(commit_message, ''), settings, COALESCE(delivery_id, ''), cpu_millis, memory, disk, timeout_seconds,
 	project_concurrency, COALESCE(deploy_id, ''), COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by,
 	created_at, started_at, finished_at`
-
-// targetMatch selects one site's or app's builds: $1 the project, $2 the kind, $3 the site or app id.
-// The OR lets each kind use its own index; the one-target CHECK keeps the other column NULL.
-const targetMatch = `project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3)`
-
-const (
-	claimBuildSQL = `UPDATE site_builds SET status = 'RUNNING', started_at = NOW(), lease_holder = $2, lease_until = $3
-		WHERE id = $1 RETURNING ` + buildColumns
-	listBuildsSQL = `SELECT ` + buildColumns + ` FROM site_builds WHERE ` + targetMatch + ` ORDER BY created_at DESC LIMIT $4`
-	getBuildSQL   = `SELECT ` + buildColumns + `, COALESCE(log, '') FROM site_builds WHERE ` + targetMatch + ` AND id = $4`
-	deliverySQL   = `SELECT EXISTS (SELECT 1 FROM site_builds WHERE ` + targetMatch + ` AND delivery_id = $4)`
-	supersedeSQL  = `UPDATE site_builds SET status = 'CANCELLED', failure_reason = $4, finished_at = NOW()
-		WHERE ` + targetMatch + ` AND status = 'QUEUED'`
-	trimSQL = `DELETE FROM site_builds WHERE ` + targetMatch + ` AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
-		AND id NOT IN (SELECT id FROM site_builds WHERE ` + targetMatch + ` ORDER BY created_at DESC LIMIT $4)`
+	listBuildsSQL = `SELECT id, kind, COALESCE(site_id, ''), COALESCE(app_id, ''), project_id, status, trigger, commit_sha,
+	COALESCE(commit_message, ''), settings, COALESCE(delivery_id, ''), cpu_millis, memory, disk, timeout_seconds,
+	project_concurrency, COALESCE(deploy_id, ''), COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by,
+	created_at, started_at, finished_at
+		FROM site_builds WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3) ORDER BY created_at DESC LIMIT $4`
+	getBuildSQL = `SELECT id, kind, COALESCE(site_id, ''), COALESCE(app_id, ''), project_id, status, trigger, commit_sha,
+	COALESCE(commit_message, ''), settings, COALESCE(delivery_id, ''), cpu_millis, memory, disk, timeout_seconds,
+	project_concurrency, COALESCE(deploy_id, ''), COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by,
+	created_at, started_at, finished_at, COALESCE(log, '')
+		FROM site_builds WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3) AND id = $4`
+	deliverySQL = `SELECT EXISTS (SELECT 1 FROM site_builds
+		WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3) AND delivery_id = $4)`
+	supersedeSQL = `UPDATE site_builds SET status = 'CANCELLED', failure_reason = $4, finished_at = NOW()
+		WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3) AND status = 'QUEUED'`
+	trimSQL = `DELETE FROM site_builds WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3)
+		AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+		AND id NOT IN (SELECT id FROM site_builds WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3)
+			ORDER BY created_at DESC LIMIT $4)`
 	// insertBuildSQL writes the build only when the project holds the site or app it names.
 	insertBuildSQL = `INSERT INTO site_builds (id, kind, site_id, app_id, project_id, status, trigger, commit_sha, commit_message,
 		settings, delivery_id, cpu_millis, memory, disk, timeout_seconds, project_concurrency, requested_by, created_at,

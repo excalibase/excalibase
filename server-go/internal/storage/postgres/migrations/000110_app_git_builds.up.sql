@@ -50,7 +50,8 @@ CREATE INDEX IF NOT EXISTS idx_app_git_connections_installation ON app_git_conne
 
 -- A plan's app builds per project per hour; it starts at the plan's site deploys per hour.
 ALTER TABLE tier_configs ADD COLUMN app_build_max_per_hour INTEGER NOT NULL DEFAULT 30;
-UPDATE tier_configs SET app_build_max_per_hour = max_site_deploys_per_hour;
+UPDATE tier_configs SET app_build_max_per_hour = max_site_deploys_per_hour
+    WHERE app_build_max_per_hour IS DISTINCT FROM max_site_deploys_per_hour;
 
 -- Each app build queued in the last hour, counted against the plan's app builds per hour.
 CREATE TABLE IF NOT EXISTS app_build_attempts (

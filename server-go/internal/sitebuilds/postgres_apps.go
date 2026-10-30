@@ -13,8 +13,15 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 )
 
-const appConnectionColumns = `app_id, project_id, provider, installation_id, repository_id, repository, branch, builder,
-	root_dir, dockerfile_path, build_args, connected_by, COALESCE(inactive_reason, ''), created_at, updated_at`
+// The two connection reads select the columns scanAppConnection reads, in its order.
+const (
+	appConnectionSQL = `SELECT app_id, project_id, provider, installation_id, repository_id, repository, branch, builder,
+	root_dir, dockerfile_path, build_args, connected_by, COALESCE(inactive_reason, ''), created_at, updated_at
+	FROM app_git_connections WHERE project_id = $1 AND app_id = $2`
+	appConnectionsForPushSQL = `SELECT app_id, project_id, provider, installation_id, repository_id, repository, branch, builder,
+	root_dir, dockerfile_path, build_args, connected_by, COALESCE(inactive_reason, ''), created_at, updated_at
+	FROM app_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`
+)
 
 // cancelAppBuildsSQL stops apps' queued and running builds, named by matching project and app id arrays.
 const cancelAppBuildsSQL = `UPDATE site_builds SET status = 'CANCELLED', failure_reason = $3, finished_at = NOW(),
@@ -38,8 +45,7 @@ func scanAppConnection(row scanner) (*AppConnection, error) {
 }
 
 func (s *PostgresStore) GetAppConnection(ctx context.Context, projectID, appID string) (*AppConnection, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+appConnectionColumns+` FROM app_git_connections WHERE project_id = $1 AND app_id = $2`,
-		projectID, appID)
+	row := s.db.QueryRowContext(ctx, appConnectionSQL, projectID, appID)
 	connection, err := scanAppConnection(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -78,8 +84,7 @@ func (s *PostgresStore) DeleteAppConnection(ctx context.Context, projectID, appI
 }
 
 func (s *PostgresStore) AppConnectionsForPush(ctx context.Context, provider string, installationID, repositoryID int64, branch string) ([]*AppConnection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+appConnectionColumns+` FROM app_git_connections
-		WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`, provider, installationID, repositoryID, branch)
+	rows, err := s.db.QueryContext(ctx, appConnectionsForPushSQL, provider, installationID, repositoryID, branch)
 	if err != nil {
 		return nil, fmt.Errorf("find the apps a push builds: %w", err)
 	}
