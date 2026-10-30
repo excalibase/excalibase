@@ -13,7 +13,7 @@ unset token
 mkdir -p -m 700 "$HOME"
 git init -q /work/src
 cd /work/src
-if ! git fetch -q --depth 1 "$CLONE_URL" "$COMMIT"; then
+if ! git fetch -q --depth 1 -- "$CLONE_URL" "$COMMIT"; then
   echo "could not fetch commit $COMMIT"
   exit 1
 fi
