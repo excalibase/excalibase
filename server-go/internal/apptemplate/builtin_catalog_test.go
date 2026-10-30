@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-var catalogIDs = []string{"valkey", "mongodb", "rabbitmq"}
+var catalogIDs = []string{"valkey", "rabbitmq"}
 
 func TestBuiltinCatalogIsMarkedApartFromTheStarters(t *testing.T) {
 	catalog, err := Builtins()
@@ -86,7 +86,7 @@ func TestCatalogStatesMemoryAboveFree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("builtins: %v", err)
 	}
-	needs := map[string]bool{"mongodb/mongodb": true, "rabbitmq/rabbitmq": true}
+	needs := map[string]bool{"rabbitmq/rabbitmq": true}
 	for _, tpl := range catalog.List() {
 		for _, app := range tpl.Apps {
 			bytes, err := app.MinMemoryBytes()

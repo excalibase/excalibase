@@ -236,22 +236,18 @@ remove_app() {
   ko "app $1 was not removed"
 }
 
-# Valkey, like Redis, starts as root and steps down to its own user: that needs the sandbox's capabilities.
-if [ "$APP_SANDBOX" = none ]; then
-  echo "info: no sandbox: skipping valkey (it steps down from root, which drop-ALL refuses)"
-else
-  VID=$(deploy_template valkey VALKEY_URL)
-  grep -q '^redis://:[A-Za-z0-9]\{32\}@valkey:6379/0$' "$W/valkey.secret" && ok "the deploy shows VALKEY_URL once" || ko "no VALKEY_URL in the deploy answer"
-  [ "$(wait_deploy "$PID" "$VID")" = succeeded ] && ok "valkey deployed from the catalog" || ko "valkey deploy: $(deploy_failure "$PID" "$VID")"
-  ( umask 077; sed 's|^redis://:\([^@]*\)@.*|\1|' "$W/valkey.secret" > "$W/valkey.pw"; printf 'AUTH %s\r\nPING\r\nQUIT\r\n' "$(cat "$W/valkey.pw")" > "$W/valkey.cmd" )
-  said=$($DOCKER exec -i "$AC" nc -w 5 valkey 6379 < "$W/valkey.cmd" 2>&1 | tr -d '\r' | tr '\n' ' ')
-  case "$said" in "+OK +PONG "*) ok "a sibling reaches valkey by its bare name with the generated password" ;; *) ko "valkey by name: ${said:0:200}" ;; esac
-  said=$(printf 'AUTH $(VALKEY_PASSWORD)\r\nQUIT\r\n' | $DOCKER exec -i "$AC" nc -w 5 valkey 6379 2>&1 | tr -d '\r')
-  case "$said" in *WRONGPASS*) ok "the arguments were expanded: the variable's name is no password" ;; *) ko "the literal variable name answered: ${said:0:200}" ;; esac
-  no_platform_log_has "$W/valkey.pw" && ok "the valkey password is in no platform log" || ko "the valkey password leaked into a log (or was empty)"
-  rm -f "$W/valkey.secret" "$W/valkey.pw" "$W/valkey.cmd"
-  remove_app "$VID"
-fi
+# Valkey starts as root and steps down to its own user, sandboxed or not.
+VID=$(deploy_template valkey VALKEY_URL)
+grep -q '^redis://:[A-Za-z0-9]\{32\}@valkey:6379/0$' "$W/valkey.secret" && ok "the deploy shows VALKEY_URL once" || ko "no VALKEY_URL in the deploy answer"
+[ "$(wait_deploy "$PID" "$VID")" = succeeded ] && ok "valkey deployed from the catalog" || ko "valkey deploy: $(deploy_failure "$PID" "$VID")"
+( umask 077; sed 's|^redis://:\([^@]*\)@.*|\1|' "$W/valkey.secret" > "$W/valkey.pw"; printf 'AUTH %s\r\nPING\r\nQUIT\r\n' "$(cat "$W/valkey.pw")" > "$W/valkey.cmd" )
+said=$($DOCKER exec -i "$AC" nc -w 5 valkey 6379 < "$W/valkey.cmd" 2>&1 | tr -d '\r' | tr '\n' ' ')
+case "$said" in "+OK +PONG "*) ok "a sibling reaches valkey by its bare name with the generated password" ;; *) ko "valkey by name: ${said:0:200}" ;; esac
+said=$(printf 'AUTH $(VALKEY_PASSWORD)\r\nQUIT\r\n' | $DOCKER exec -i "$AC" nc -w 5 valkey 6379 2>&1 | tr -d '\r')
+case "$said" in *WRONGPASS*) ok "the arguments were expanded: the variable's name is no password" ;; *) ko "the literal variable name answered: ${said:0:200}" ;; esac
+no_platform_log_has "$W/valkey.pw" && ok "the valkey password is in no platform log" || ko "the valkey password leaked into a log (or was empty)"
+rm -f "$W/valkey.secret" "$W/valkey.pw" "$W/valkey.cmd"
+remove_app "$VID"
 
 echo "== apps: another project cannot reach this one"
 # The single host's one organisation is on the Free plan, one project; the operator raises it.
