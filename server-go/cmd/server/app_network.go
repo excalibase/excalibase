@@ -6,6 +6,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/apptemplate"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -62,6 +63,7 @@ type appTemplateArgs struct {
 	network  *service.AppNetworkService
 	vault    vaultclient.VaultClient
 	claimer  service.ProjectOperationClaimer
+	flags    features.Flags
 }
 
 // newAppTemplateHandler serves the built-in templates; a built-in that does not parse stops the server.
@@ -74,7 +76,7 @@ func newAppTemplateHandler(a appTemplateArgs) *handler.AppTemplateHandler {
 	deps := service.AppTemplateDeps{
 		Apps: apphost.NewPostgresAppStore(a.sqlStore.DB()), Deployer: a.deployer, Projects: a.projects,
 		Plans: plans, Limits: service.NewAppLimits(plans, a.tiers), Disks: a.disks, Budget: a.budget,
-		Claimer: a.claimer,
+		Claimer: a.claimer, Flags: a.flags,
 	}
 	// Left nil, not a typed nil, so the service sees "no network" and "no vault".
 	if a.network != nil {

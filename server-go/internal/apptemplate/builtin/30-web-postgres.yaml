@@ -4,6 +4,8 @@ format: excalibase.template/v1
 id: web-postgres
 name: Web app + project database
 summary: A public web app with DATABASE_URL pointing at this project's database.
+category: starter
+license: nginx BSD-2-Clause
 description: >-
   One public web app on its own URL (placeholder image nginx-unprivileged 1.27
   on port 8080; swap in your own image). It gets DATABASE_URL, resolved when it

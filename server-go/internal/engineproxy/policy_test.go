@@ -71,8 +71,19 @@ func TestCheckCreateRefuses(t *testing.T) {
 		"name of a platform service": {name: "provisioning", want: "name"},
 		"privileged":                 {mutate: func(b map[string]any) { hostConfig(b)["Privileged"] = true }, want: "Privileged"},
 		"added capability":           {mutate: func(b map[string]any) { hostConfig(b)["CapAdd"] = []any{"SYS_ADMIN"} }, want: "CapAdd"},
-		"host path bind":             {mutate: func(b map[string]any) { hostConfig(b)["Binds"] = []any{"/:/host"} }, want: "bind"},
-		"relative host path bind":    {mutate: func(b map[string]any) { hostConfig(b)["Binds"] = []any{"./x:/host"} }, want: "bind"},
+		// Docker reads CapAdd as a string or a list; a bare string is one capability.
+		"every capability as a string":       {mutate: func(b map[string]any) { hostConfig(b)["CapAdd"] = "ALL" }, want: "CapAdd"},
+		"a capability as a string":           {mutate: func(b map[string]any) { hostConfig(b)["CapAdd"] = "SYS_ADMIN" }, want: "CapAdd"},
+		"capabilities as an object":          {mutate: func(b map[string]any) { hostConfig(b)["CapAdd"] = map[string]any{"SYS_ADMIN": true} }, want: "CapAdd"},
+		"a capability that is no string":     {mutate: func(b map[string]any) { hostConfig(b)["CapAdd"] = []any{7} }, want: "CapAdd"},
+		"a capability folded from non-ASCII": {mutate: func(b map[string]any) { hostConfig(b)["CapAdd"] = []any{"ſetuid"} }, want: "CapAdd"},
+		"security options as a string":       {mutate: func(b map[string]any) { hostConfig(b)["SecurityOpt"] = "seccomp=unconfined" }, want: "SecurityOpt"},
+		"binds as a string":                  {mutate: func(b map[string]any) { hostConfig(b)["Binds"] = "/:/host" }, want: "Binds"},
+		"mounts as an object": {mutate: func(b map[string]any) {
+			hostConfig(b)["Mounts"] = map[string]any{"Type": "bind", "Source": "/etc", "Target": "/x"}
+		}, want: "Mounts"},
+		"host path bind":          {mutate: func(b map[string]any) { hostConfig(b)["Binds"] = []any{"/:/host"} }, want: "bind"},
+		"relative host path bind": {mutate: func(b map[string]any) { hostConfig(b)["Binds"] = []any{"./x:/host"} }, want: "bind"},
 		"bind mount": {mutate: func(b map[string]any) {
 			hostConfig(b)["Mounts"] = []any{map[string]any{"Type": "bind", "Source": "/etc", "Target": "/x"}}
 		}, want: "mount"},

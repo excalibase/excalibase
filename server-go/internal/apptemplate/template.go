@@ -18,7 +18,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
+	"strings"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/yaml"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -36,7 +39,13 @@ const (
 	maxNameLength    = 80
 	maxSummaryLength = 200
 	maxDescLength    = 4000
+	maxLicenseLength = 80
+	// maxMinMemory is above every plan's app memory; past it a template could never deploy.
+	maxMinMemory = 16 << 30
 )
+
+// Categories group the catalog in Studio.
+var Categories = []string{"starter", "database", "cache", "queue", "search", "monitoring", "analytics"}
 
 // ErrInvalidTemplate marks a document that is not a valid template.
 var ErrInvalidTemplate = errors.New("invalid template")
@@ -50,9 +59,13 @@ type Template struct {
 	Name        string    `json:"name"`
 	Summary     string    `json:"summary"`
 	Description string    `json:"description,omitempty"`
+	Category    string    `json:"category,omitempty"`
+	License     string    `json:"license,omitempty"`
 	Apps        []AppSpec `json:"apps"`
 	// Source is the document as written, shown on the details page.
 	Source string `json:"-"`
+	// Catalog marks a template of the flagged catalog (EXC-669), not a starter.
+	Catalog bool `json:"-"`
 }
 
 // AppSpec is one app a template creates.
@@ -67,6 +80,24 @@ type AppSpec struct {
 	Args            []string  `json:"args,omitempty"`
 	Disk            *DiskSpec `json:"disk,omitempty"`
 	Env             []EnvSpec `json:"env,omitempty"`
+	// MinMemory is the least memory per copy the image runs in; a smaller plan is refused.
+	MinMemory string `json:"minMemory,omitempty"`
+}
+
+// MinMemoryBytes is MinMemory in bytes, 0 when the app names none.
+func (a *AppSpec) MinMemoryBytes() (int64, error) {
+	if a.MinMemory == "" {
+		return 0, nil
+	}
+	quantity, err := resource.ParseQuantity(a.MinMemory)
+	if err != nil {
+		return 0, fmt.Errorf("minMemory %q is not a size", a.MinMemory)
+	}
+	bytes := quantity.Value()
+	if bytes <= 0 || bytes > maxMinMemory {
+		return 0, fmt.Errorf("minMemory %q must be above 0 and at most 16Gi", a.MinMemory)
+	}
+	return bytes, nil
 }
 
 // DiskSpec is the app's one persistent disk.
@@ -79,6 +110,8 @@ type DiskSpec struct {
 type EnvSpec struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
+	// ShowOnce returns the generated value to the deployer once; it is never readable again.
+	ShowOnce bool `json:"showOnce,omitempty"`
 }
 
 func invalid(format string, args ...any) error {
@@ -114,6 +147,10 @@ func (t *Template) validate() error {
 		return invalid("summary must be 1-%d characters", maxSummaryLength)
 	case len(t.Description) > maxDescLength:
 		return invalid("description exceeds %d characters", maxDescLength)
+	case t.Category != "" && !slices.Contains(Categories, t.Category):
+		return invalid("category must be one of %s", strings.Join(Categories, ", "))
+	case len(t.License) > maxLicenseLength:
+		return invalid("license exceeds %d characters", maxLicenseLength)
 	case len(t.Apps) == 0 || len(t.Apps) > MaxTemplateApps:
 		return invalid("a template declares 1 to at most %d apps", MaxTemplateApps)
 	}
@@ -136,6 +173,8 @@ func (t *Template) validate() error {
 	return nil
 }
 
+const appError = "app %q: %v"
+
 // validateShape holds everything but the variables to the app model's own
 // rules, on a probe record. The plan's replica cap is checked on deploy, so
 // the probe takes the largest plan.
@@ -143,9 +182,12 @@ func (a *AppSpec) validateShape() error {
 	if a.Replicas == nil {
 		return invalid("app %q: replicas is required (0-%d)", a.Name, apphost.MaxReplicas)
 	}
+	if _, err := a.MinMemoryBytes(); err != nil {
+		return invalid(appError, a.Name, err)
+	}
 	probe := a.record("probe", "probe", domain.Enterprise)
 	if err := probe.Validate(); err != nil {
-		return invalid("app %q: %v", a.Name, err)
+		return invalid(appError, a.Name, err)
 	}
 	return nil
 }
@@ -154,7 +196,7 @@ func (a *AppSpec) validateEnv(apps map[string]*AppSpec) error {
 	seen := make(map[string]bool, len(a.Env))
 	for _, v := range a.Env {
 		if err := apphost.ValidateEnvName(v.Name); err != nil {
-			return invalid("app %q: %v", a.Name, err)
+			return invalid(appError, a.Name, err)
 		}
 		if seen[v.Name] {
 			return invalid("app %q declares %s twice", a.Name, v.Name)
@@ -168,6 +210,9 @@ func (a *AppSpec) validateEnv(apps map[string]*AppSpec) error {
 			if err := checkTarget(p.expr, apps); err != nil {
 				return invalid("app %q, %s: %v", a.Name, v.Name, err)
 			}
+		}
+		if v.ShowOnce && !generated(parts, apps) {
+			return invalid("app %q, %s: showOnce is only for a value holding a generated secret", a.Name, v.Name)
 		}
 	}
 	if len(a.Env) > apphost.MaxEnvVars {
@@ -209,6 +254,34 @@ func checkTarget(e *expr, apps map[string]*AppSpec) error {
 		return nil
 	}
 	return fmt.Errorf("app %q has no variable %s", e.app, e.variable)
+}
+
+// generated: the value holds secret(n) itself or reads another variable that does.
+func generated(parts []part, apps map[string]*AppSpec) bool {
+	for _, p := range parts {
+		switch {
+		case p.expr == nil:
+		case p.expr.kind == exprSecret:
+			return true
+		case p.expr.kind == exprAppEnv && readsGenerated(apps[p.expr.app], p.expr.variable):
+			return true
+		}
+	}
+	return false
+}
+
+// readsGenerated: the app's variable holds secret(n) itself; one step only.
+func readsGenerated(app *AppSpec, variable string) bool {
+	if app == nil {
+		return false
+	}
+	for _, v := range app.Env {
+		if v.Name == variable {
+			read, err := parseValue(v.Value)
+			return err == nil && generated(read, nil)
+		}
+	}
+	return false
 }
 
 // record is the app this spec creates, before its variables are resolved.

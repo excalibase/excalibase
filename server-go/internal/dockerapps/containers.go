@@ -18,6 +18,8 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
+
+	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 )
 
 const (
@@ -96,6 +98,10 @@ func (r *Runtime) appLabels(spec containerSpec, replica int) map[string]string {
 	return labels
 }
 
+// unsandboxedCapabilities: gosu, su-exec and setpriv need these to drop from root
+// to the image's user; NET_RAW, SETPCAP, SETFCAP, MKNOD and the rest stay dropped.
+var unsandboxedCapabilities = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"}
+
 // hostConfig is the app's isolation: its sandbox, its project's network, its
 // tier's limits, and nothing of the host's.
 func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
@@ -105,20 +111,34 @@ func (r *Runtime) hostConfig(spec containerSpec) *container.HostConfig {
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 		SecurityOpt:   []string{"no-new-privileges"},
 		Runtime:       r.opts.SandboxRuntime,
+		// ndots:1 tries the search list first for a bare name, on glibc and musl alike.
+		DNSSearch:  []string{engineproxy.AppServiceDomain},
+		DNSOptions: []string{"ndots:1"},
 		Resources: container.Resources{
 			Memory: spec.MemoryBytes, MemorySwap: spec.MemoryBytes, NanoCPUs: spec.NanoCPUs, PidsLimit: &pids,
 		},
 	}
-	// Inside the sandbox an app keeps what Kubernetes gives it; without one it keeps only low ports.
+	// Inside the sandbox an app keeps what Kubernetes gives it; without one it keeps
+	// only what an image needs to step down from root and to bind a low port.
 	if r.opts.SandboxRuntime != "" {
 		host.CapDrop = []string{"NET_RAW"}
 	} else {
-		host.CapDrop, host.CapAdd = []string{"ALL"}, []string{"NET_BIND_SERVICE"}
+		host.CapDrop, host.CapAdd = []string{"ALL"}, slices.Clone(unsandboxedCapabilities)
 	}
 	if spec.DiskClaim != "" {
 		host.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: r.volumeName(spec.DiskClaim), Target: spec.DiskMountPath}}
 	}
 	return host
+}
+
+// serviceAlias is the name the app's siblings reach it by; one of the
+// platform's own hosts is refused, as the engine proxy would refuse it.
+func (r *Runtime) serviceAlias(appName string) (string, error) {
+	alias := appName + "." + engineproxy.AppServiceDomain
+	if slices.ContainsFunc(r.opts.EdgeAliases, func(host string) bool { return strings.EqualFold(host, alias) }) {
+		return "", fmt.Errorf("%w: app name %q would answer for the platform host %s", ErrUnsupportedWorkload, appName, alias)
+	}
+	return alias, nil
 }
 
 // createAppContainer creates one replica with the probe copied in; it is not started.
@@ -131,7 +151,13 @@ func (r *Runtime) createAppContainer(ctx context.Context, spec containerSpec, re
 	if len(spec.Args) > 0 {
 		config.Cmd = spec.Args
 	}
-	endpoints := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{r.networkName(spec.Project): {}}}
+	alias, err := r.serviceAlias(spec.AppName)
+	if err != nil {
+		return "", err
+	}
+	endpoints := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+		r.networkName(spec.Project): {Aliases: []string{alias}},
+	}}
 	name := appContainerName(spec.Project, spec.AppID, spec.DeployID, replica)
 	created, err := r.engine.ContainerCreate(ctx, config, r.hostConfig(spec), endpoints, nil, name)
 	if err != nil {

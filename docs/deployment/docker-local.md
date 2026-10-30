@@ -199,7 +199,9 @@ docker compose up -d
 `--app-domain run.example.org` serves apps elsewhere than `apps.<domain>`.
 Without gVisor provisioning refuses to start with apps on and says so;
 `--app-sandbox none` (`APP_SANDBOX_RUNTIME=none`) runs apps without it, with
-every capability dropped but `NET_BIND_SERVICE`: their code then shares the
+every capability dropped but `NET_BIND_SERVICE` and the five an image needs to
+step down from root to its own user (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`,
+`SETGID`): their code then shares the
 host's kernel directly. Choose it only for code you trust.
 
 Each app is a container named `excalibase-app-...`, labelled

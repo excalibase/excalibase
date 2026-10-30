@@ -90,6 +90,7 @@ func specFromWorkload(workload *k8s.AppWorkload) (containerSpec, error) {
 		func(s *containerSpec) (err error) { s.Image, err = qualifiedImage(container.Image); return err },
 		func(s *containerSpec) (err error) {
 			s.Env, err = containerEnv(container.Env, workload.EnvSecret)
+			s.Args = expandArgs(s.Args, s.Env)
 			return err
 		},
 		func(s *containerSpec) error { return s.readPorts(container, workload.Internal) },
@@ -132,6 +133,52 @@ func containerEnv(vars []corev1.EnvVar, secret *corev1.Secret) ([]string, error)
 		env = append(env, variable.Name+"="+string(value))
 	}
 	return env, nil
+}
+
+// expandArgs gives $(VAR) in arguments the kubelet's meaning: the variable's
+// value, $$ for a literal $, and an unknown name left as written.
+func expandArgs(args, env []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	values := make(map[string]string, len(env))
+	for _, entry := range env {
+		name, value, _ := strings.Cut(entry, "=")
+		values[name] = value
+	}
+	out := make([]string, len(args))
+	for i, arg := range args {
+		out[i] = expandArg(arg, values)
+	}
+	return out
+}
+
+func expandArg(arg string, values map[string]string) string {
+	var b strings.Builder
+	for i := 0; i < len(arg); i++ {
+		if arg[i] != '$' || i+1 == len(arg) {
+			b.WriteByte(arg[i])
+			continue
+		}
+		next := arg[i+1]
+		end := strings.IndexByte(arg[i+1:], ')')
+		switch {
+		case next == '$':
+			b.WriteByte('$')
+			i++
+		case next == '(' && end > 0:
+			name := arg[i+2 : i+1+end]
+			if value, ok := values[name]; ok {
+				b.WriteString(value)
+			} else {
+				b.WriteString("$(" + name + ")")
+			}
+			i += 1 + end
+		default:
+			b.WriteByte('$')
+		}
+	}
+	return b.String()
 }
 
 func (s *containerSpec) readPorts(container corev1.Container, internal bool) error {

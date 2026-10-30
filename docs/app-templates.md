@@ -15,6 +15,17 @@ Only the built-in templates exist for now. They ship inside the server binary (r
 | `web-postgres` | `web`: a public web app with `DATABASE_URL` pointing at the project's database | the project's database, ready |
 | `storefront-demo` | `redis` as above, plus `storefront`: the demo store (`excalibase/storefront-demo` on 8080, health check `/healthz`) with `REDIS_URL`. Its setup script (excalibase-sdk-js `examples/storefront`, also `node setup/setup.mjs` in the image) then creates the tables, permissions, tracked function, realtime, demo accounts and publishable key through the platform's APIs, sets the store's `EXCALIBASE_*` variables and redeploys it | private network; a Postgres database for the setup |
 
+## Service catalog (flag `templatecatalog`, EXC-669)
+
+With the flag on, the Templates page lists self-managed services after the starters. Off, they answer as unknown templates (404).
+
+| id | What it creates | Needs |
+|----|-----------------|-------|
+| `valkey` | `valkey`: Valkey 9.0 (BSD-3-Clause, Redis-compatible) on `valkey:6379`, 1Gi disk, password generated; `VALKEY_URL` shown once | private network |
+| `rabbitmq` | `rabbitmq`: RabbitMQ 4.2 (MPL-2.0) on `rabbitmq:5672`, 1Gi disk, password generated; `RABBITMQ_URL` shown once | private network; 1Gi memory per app (STANDARD and up) |
+
+You run these services: Excalibase does not back them up, upgrade them or watch them. A disk is kept across deploys, pause and resume, and is deleted with its app. To upgrade, change the app's image and redeploy. For a MongoDB-compatible database use a DocumentDB project; real MongoDB is an image you deploy and manage yourself.
+
 Images are pinned by digest. The `web` image is a placeholder: change the app's image to your own after the deploy. The storefront image is published by the `Publish the storefront demo image` workflow from a commit on excalibase-sdk-js main; a new build means a new digest here.
 
 ## Format (`excalibase.template/v1`)
@@ -24,6 +35,8 @@ format: excalibase.template/v1   # the only version read
 id: web-redis                    # 2-50 lowercase letters, digits, hyphens
 name: Web app + Redis starter    # 1-80 characters
 summary: One line.               # 1-200 characters
+category: starter                # starter, database, cache, queue, search, monitoring or analytics
+license: BSD-3-Clause            # optional, up to 80 characters; built-ins must set both
 description: Longer text.        # optional, up to 4000 characters
 apps:                            # 1-20 apps
   - name: redis                  # the app name, also its host name in the project
@@ -31,6 +44,7 @@ apps:                            # 1-20 apps
     internal: true               # an internal service: no HTTP port, no URL
     internalPorts: [6379]        # TCP, 1024-65535, at most 8
     replicas: 1                  # required, 0-3 (and within the plan)
+    minMemory: 1Gi               # optional: refused on a plan whose per-app memory is less
     args: ["--requirepass", "$(REDIS_PASSWORD)"]   # replace the image's CMD
     disk: {mountPath: /data, size: 1Gi}             # one disk, within the plan's cap
     env:
@@ -60,7 +74,9 @@ A variable's value is text with `${{ ... }}` expressions:
 | `${{ apps.<name>.port }}` | an internal service's first internal port, or 80 (the Service's HTTP port) for a public web app |
 | `${{ apps.<name>.env.VAR }}` | the value another app's variable resolves to; that variable may not itself read another app's variable or the database |
 
-A value holding anything generated (`secret(n)`, or another app's generated value) is stored as a **secret** of the app: in the vault under the app's own prefix, never in the app record, the template, a response, the log or the Deployment spec (the pod gets it from the app's Secret). Everything else is a plain value. `args` may name a variable as `$(VAR)`; Kubernetes fills it in from the container's environment, so a password passed on the command line is not written into the spec either.
+A variable with `showOnce: true` whose value is generated is returned once in the deploy's answer (`credentials`, sent with `Cache-Control: no-store`); Studio shows it with a warning that it cannot be shown again. It is how an app of your own gets a generated password.
+
+A value holding anything generated (`secret(n)`, or another app's generated value) is stored as a **secret** of the app: in the vault under the app's own prefix, never in the app record, the template, a response, the log or the Deployment spec (the pod gets it from the app's Secret). Everything else is a plain value. `args` may name a variable as `$(VAR)`; Kubernetes fills it in from the container's environment, so a password passed on the command line is not written into the spec either. On a single host (Docker or Podman) the runtime expands it by the same rules (`$$` is a literal `$`; an unknown name stays as written).
 
 ## Deploy: all or nothing
 
@@ -87,3 +103,5 @@ A template needs the project's private network (EXC-524) when it has an internal
 - an explicit `{"confirmPrivateNetwork": true}` in the body (without it: 409 with `"code": "confirm_private_network"`). Studio asks for this confirmation.
 
 A template whose apps only share a generated value leaves the network alone.
+
+On a single host a project's apps always share its network, so there is nothing to turn on or confirm. Each app answers to its bare name there too (`redis`, `valkey`), as a Service name does on Kubernetes.

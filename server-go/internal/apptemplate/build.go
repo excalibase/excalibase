@@ -60,11 +60,29 @@ type SecretValues map[string]string
 func (SecretValues) String() string   { return "[secret values]" }
 func (SecretValues) GoString() string { return "[secret values]" }
 
+// ShownValue is one generated value the deployer sees once (showOnce).
+type ShownValue struct {
+	App   string `json:"app"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+func (v ShownValue) String() string   { return v.App + "." + v.Name + "=[shown once]" }
+func (v ShownValue) GoString() string { return v.String() }
+
+// ShownValues never prints its values either.
+type ShownValues []ShownValue
+
+func (ShownValues) String() string   { return "[shown-once values]" }
+func (ShownValues) GoString() string { return "[shown-once values]" }
+
 // Built is what a deploy creates: the app records, whose secret variables
-// point at their own vault entries, and the values to store in those entries.
+// point at their own vault entries, the values to store in those entries,
+// and the generated values the template returns to the deployer once.
 type Built struct {
 	Apps    []*apphost.App
 	Secrets SecretValues
+	Shown   ShownValues
 }
 
 type resolved struct {
@@ -110,7 +128,11 @@ func (t *Template) Build(in BuildInput) (*Built, error) {
 	for i, spec := range t.Apps {
 		app := built.Apps[i]
 		for _, v := range spec.Env {
-			app.Env = append(app.Env, envVar(app, v.Name, values[spec.Name][v.Name], built.Secrets))
+			value := values[spec.Name][v.Name]
+			app.Env = append(app.Env, envVar(app, v.Name, value, built.Secrets))
+			if v.ShowOnce && value.secret {
+				built.Shown = append(built.Shown, ShownValue{App: spec.Name, Name: v.Name, Value: value.value})
+			}
 		}
 		if err := app.Validate(); err != nil {
 			return nil, fmt.Errorf("app %q: %w", spec.Name, err)

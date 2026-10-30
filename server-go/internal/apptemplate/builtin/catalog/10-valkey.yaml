@@ -1,0 +1,30 @@
+# Valkey 9.0 (alpine), the BSD-licensed fork of Redis, as an internal service.
+format: excalibase.template/v1
+id: valkey
+name: Valkey
+category: cache
+license: BSD-3-Clause
+summary: A Redis-compatible cache and queue your apps reach at valkey:6379, password generated for you.
+description: >-
+  One internal app named valkey that only this project's apps reach, at
+  valkey:6379 (any Redis client works). Data is kept on a 1Gi disk (append-only
+  file) across restarts and redeploys. The password is generated when you
+  deploy and VALKEY_URL is shown to you once. You run this service: Excalibase
+  does not back it up, upgrade it or watch it. Image valkey/valkey 9.0.7-alpine,
+  pinned by digest.
+apps:
+  - name: valkey
+    image: valkey/valkey@sha256:2d04268dfa26ab31cfa3fdc538866e76438b2d00e41db41b8cb86d780ac5a416
+    internal: true
+    internalPorts: [6379]
+    replicas: 1
+    args: ["--requirepass", "$(VALKEY_PASSWORD)", "--appendonly", "yes", "--dir", "/data"]
+    disk:
+      mountPath: /data
+      size: 1Gi
+    env:
+      - name: VALKEY_PASSWORD
+        value: "${{ secret(32) }}"
+      - name: VALKEY_URL
+        value: "redis://:${{ apps.valkey.env.VALKEY_PASSWORD }}@${{ apps.valkey.host }}:${{ apps.valkey.port }}/0"
+        showOnce: true

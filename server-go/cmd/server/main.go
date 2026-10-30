@@ -1809,7 +1809,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appNetworkHandler: newAppNetworkHandler(appNetworkSvc),
 		appTemplateHandler: newAppTemplateHandler(appTemplateArgs{
 			sqlStore: sqlStore, projects: store, deployer: appDeploySvc, tiers: provSvc, disks: appDiskLimits,
-			budget: a.budget, network: appNetworkSvc, vault: vc, claimer: a.claimer,
+			budget: a.budget, network: appNetworkSvc, vault: vc, claimer: a.claimer, flags: cfg.Features(),
 		}),
 		tierHandler:      tierHandler,
 		pgCatalogHandler: handler.NewPostgresCatalogHandler(cfg.DocumentDBEnabled),

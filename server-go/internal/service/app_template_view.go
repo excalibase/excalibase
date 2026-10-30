@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/apptemplate"
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -30,9 +32,10 @@ type TemplateFit struct {
 
 // TemplateVarView names where a variable's value comes from; only a plain literal shows its value.
 type TemplateVarView struct {
-	Name   string `json:"name"`
-	Source string `json:"source"`
-	Value  string `json:"value,omitempty"`
+	Name     string `json:"name"`
+	Source   string `json:"source"`
+	Value    string `json:"value,omitempty"`
+	ShowOnce bool   `json:"showOnce,omitempty"`
 }
 
 type TemplateAppView struct {
@@ -44,15 +47,20 @@ type TemplateAppView struct {
 	Replicas      int                   `json:"replicas"`
 	Args          []string              `json:"args,omitempty"`
 	Disk          *apptemplate.DiskSpec `json:"disk,omitempty"`
+	MinMemory     string                `json:"minMemory,omitempty"`
 	Env           []TemplateVarView     `json:"env"`
 }
 
 type TemplateView struct {
-	ID                  string            `json:"id"`
-	Format              string            `json:"format"`
-	Name                string            `json:"name"`
-	Summary             string            `json:"summary"`
-	Description         string            `json:"description,omitempty"`
+	ID          string `json:"id"`
+	Format      string `json:"format"`
+	Name        string `json:"name"`
+	Summary     string `json:"summary"`
+	Description string `json:"description,omitempty"`
+	Category    string `json:"category,omitempty"`
+	License     string `json:"license,omitempty"`
+	// Catalog: a self-managed service of the catalog (EXC-669), not a starter.
+	Catalog             bool              `json:"catalog"`
 	Apps                []TemplateAppView `json:"apps"`
 	NeedsPrivateNetwork bool              `json:"needsPrivateNetwork"`
 	NeedsDatabase       bool              `json:"needsDatabase"`
@@ -71,6 +79,9 @@ func (s *AppTemplateService) List(ctx context.Context, projectID string, mayChan
 	templates := s.catalog.List()
 	views := make([]TemplateView, 0, len(templates))
 	for _, tpl := range templates {
+		if !s.visible(ctx, tpl) {
+			continue
+		}
 		check, err := s.assess(ctx, projectID, tpl, mayChangeNetwork)
 		if err != nil {
 			return nil, err
@@ -82,9 +93,9 @@ func (s *AppTemplateService) List(ctx context.Context, projectID string, mayChan
 
 // Get is one template with its source document.
 func (s *AppTemplateService) Get(ctx context.Context, projectID, templateID string, mayChangeNetwork bool) (TemplateView, error) {
-	tpl, ok := s.catalog.Get(templateID)
-	if !ok {
-		return TemplateView{}, ErrTemplateNotFound
+	tpl, err := s.template(ctx, templateID)
+	if err != nil {
+		return TemplateView{}, err
 	}
 	check, err := s.assess(ctx, projectID, tpl, mayChangeNetwork)
 	if err != nil {
@@ -177,7 +188,19 @@ func (s *AppTemplateService) refusals(ctx context.Context, projectID string, tpl
 	if facts.NeedsDatabase && !fit.DatabaseReady {
 		refuse("the template needs the project's database, and the project has none that is ready")
 	}
+	refuseBelowMinMemory(tpl, fit, refuse)
 	if !facts.NeedsPrivateNetwork {
+		return nil
+	}
+	return s.networkRefusals(ctx, projectID, inst, fit, refuse)
+}
+
+// networkRefusals reads whether the project's apps can reach each other.
+func (s *AppTemplateService) networkRefusals(ctx context.Context, projectID string, inst *domain.DatabaseInstance,
+	fit *TemplateFit, refuse func(string, ...any)) error {
+	// A single host's project apps always share its network (ADR 0039).
+	if inst.DeploymentMode == domain.ModeDocker {
+		fit.PrivateNetworkOn = true
 		return nil
 	}
 	if s.deps.Network == nil {
@@ -196,6 +219,22 @@ func (s *AppTemplateService) refusals(ctx context.Context, projectID string, tpl
 	return nil
 }
 
+// refuseBelowMinMemory: an app that cannot start in the plan's memory is refused before it is made.
+func refuseBelowMinMemory(tpl *apptemplate.Template, fit *TemplateFit, refuse func(string, ...any)) {
+	planMemory, err := resource.ParseQuantity(fit.AppMemory)
+	if err != nil {
+		refuse("the %s plan's app memory %q cannot be read", fit.Plan, fit.AppMemory)
+		return
+	}
+	for i := range tpl.Apps {
+		app := &tpl.Apps[i]
+		need, err := app.MinMemoryBytes()
+		if err == nil && need > planMemory.Value() {
+			refuse("app %q needs at least %s of memory per copy and the %s plan gives %s", app.Name, app.MinMemory, fit.Plan, fit.AppMemory)
+		}
+	}
+}
+
 // servingDatabase is the project's database name while it serves, else "".
 func servingDatabase(inst *domain.DatabaseInstance) string {
 	if inst.NoDatabase || inst.DatabaseName == "" || domain.IsNotServable(inst.Status) || domain.IsBuildingStatus(inst.Status) {
@@ -209,16 +248,17 @@ func viewOf(tpl *apptemplate.Template, fit TemplateFit) TemplateView {
 	view := TemplateView{
 		ID: tpl.ID, Format: tpl.Format, Name: tpl.Name, Summary: tpl.Summary, Description: tpl.Description,
 		NeedsPrivateNetwork: facts.NeedsPrivateNetwork, NeedsDatabase: facts.NeedsDatabase, Fit: fit,
+		Category: tpl.Category, License: tpl.License, Catalog: tpl.Catalog,
 	}
 	for _, app := range tpl.Apps {
 		appView := TemplateAppView{
 			Name: app.Name, Image: app.Image, Internal: app.Internal, Port: app.Port,
 			InternalPorts: app.InternalPorts, Replicas: *app.Replicas, Args: app.Args, Disk: app.Disk,
-			Env: make([]TemplateVarView, 0, len(app.Env)),
+			MinMemory: app.MinMemory, Env: make([]TemplateVarView, 0, len(app.Env)),
 		}
 		for _, v := range app.Env {
 			source := apptemplate.ValueSource(v.Value)
-			varView := TemplateVarView{Name: v.Name, Source: source}
+			varView := TemplateVarView{Name: v.Name, Source: source, ShowOnce: v.ShowOnce}
 			if source == apptemplate.SourceLiteral {
 				varView.Value = v.Value
 			}

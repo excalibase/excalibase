@@ -55,11 +55,13 @@ const (
 	// HostMetrics is single-host monitoring: the host and every container
 	// sampled into history, alerts and notices, and Studio's Host page (EXC-670).
 	HostMetrics Feature = "hostmetrics"
+	// TemplateCatalog is the self-managed service catalog beside the starter templates (EXC-669).
+	TemplateCatalog Feature = "templatecatalog"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, TemplateCatalog}
 }
 
 type Flags interface {
