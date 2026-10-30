@@ -23,7 +23,12 @@ type budget struct {
 	store BudgetStore
 	mu    sync.Mutex
 	used  map[budgetKey]*dayUse
+	// newest is the latest day seen; days two before it are forgotten.
+	newest string
 }
+
+// budgetReadTimeout bounds the one store read per project and day.
+const budgetReadTimeout = 2 * time.Second
 
 type budgetKey struct{ project, day string }
 
@@ -47,11 +52,9 @@ func newBudget(store BudgetStore) *budget {
 // at's day under limit, and whether this is the day's first refusal, which
 // earns a notice.
 func (b *budget) take(ctx context.Context, projectID string, limit int64, at time.Time, size int64) (keep, notice bool) {
-	key := budgetKey{projectID, at.UTC().Format(time.DateOnly)}
-	b.load(ctx, key)
+	use := b.entry(ctx, budgetKey{projectID, at.UTC().Format(time.DateOnly)})
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	use := b.used[key]
 	if use.bytes+size <= limit {
 		use.bytes += size
 		return true, false
@@ -63,18 +66,20 @@ func (b *budget) take(ctx context.Context, projectID string, limit int64, at tim
 	return false, true
 }
 
-// load reads a project's day from the store the first time it is seen, and
-// forgets days older than yesterday.
-func (b *budget) load(ctx context.Context, key budgetKey) {
+// entry is a project's day, read from the store the first time it is seen.
+// A new latest day forgets days two before it; an older day being read stays.
+func (b *budget) entry(ctx context.Context, key budgetKey) *dayUse {
 	b.mu.Lock()
-	_, known := b.used[key]
+	use, known := b.used[key]
 	b.mu.Unlock()
 	if known {
-		return
+		return use
 	}
 	stored := &dayUse{}
 	if b.store != nil {
-		bytes, noticed, err := b.store.HostLogBudgetUse(ctx, key.project, key.day)
+		readCtx, cancel := context.WithTimeout(ctx, budgetReadTimeout)
+		bytes, noticed, err := b.store.HostLogBudgetUse(readCtx, key.project, key.day)
+		cancel()
 		if err != nil {
 			// Counted from zero for this run; the next restart reads the table again.
 			log.Printf("host logs: budget of %s on %s: %v", key.project, key.day, err)
@@ -84,14 +89,34 @@ func (b *budget) load(ctx context.Context, key budgetKey) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, raced := b.used[key]; raced {
-		return
+	if raced, ok := b.used[key]; ok {
+		return raced
 	}
 	b.used[key] = stored
-	oldest := dayBefore(key.day, 1)
-	for other := range b.used {
-		if other.day < oldest {
-			delete(b.used, other)
+	if key.day > b.newest {
+		b.newest = key.day
+		oldest := dayBefore(key.day, 2)
+		for other := range b.used {
+			if other.day < oldest {
+				delete(b.used, other)
+			}
+		}
+	}
+	return stored
+}
+
+// refund gives back what a batch took but never stored.
+func (b *budget) refund(projectID string, charges map[string]*charge) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for day, taken := range charges {
+		use, ok := b.used[budgetKey{projectID, day}]
+		if !ok {
+			continue
+		}
+		use.bytes = max(use.bytes-taken.bytes, 0)
+		if taken.noticed {
+			use.noticed = false
 		}
 	}
 }

@@ -45,10 +45,13 @@ func (onlyCursors) PruneHostLogCursors(context.Context, []string) error { return
 // EXC-672: the shipper exists only with hostlogs on, on a single host, with its Loki named.
 func TestHostLogShippingStartsOnlyWithItsFeature(t *testing.T) {
 	on := []features.Feature{features.HostLogs}
+	disk := t.TempDir()
 	docker := func(dark []features.Feature, loki string) config.AppConfig {
 		return config.AppConfig{DarkFeatures: dark, ProvisionerMode: "docker", DockerHost: "tcp://engine-proxy:2375",
-			HostLogs: config.HostLogs{LokiURL: loki, DailyBytesPerProject: 1 << 20}}
+			HostLogs: config.HostLogs{LokiURL: loki, DailyBytesPerProject: 1 << 20, DiskPath: disk}}
 	}
+	unreadable := docker([]features.Feature{features.HostLogs}, "http://loki:3100")
+	unreadable.HostLogs.DiskPath = disk + "/missing"
 	for name, tc := range map[string]struct {
 		cfg    config.AppConfig
 		tables storage.PlatformStore
@@ -59,6 +62,7 @@ func TestHostLogShippingStartsOnlyWithItsFeature(t *testing.T) {
 		"on, no Loki":    {docker(on, ""), cursorTables{}, false},
 		"on, no table":   {docker(on, "http://loki:3100"), nil, false},
 		"on, no budgets": {docker(on, "http://loki:3100"), onlyCursors{}, false},
+		"on, no disk":    {unreadable, cursorTables{}, false},
 		"on, bad engine": {config.AppConfig{DarkFeatures: on, ProvisionerMode: "docker", DockerHost: "unix:///x", HostLogs: config.HostLogs{LokiURL: "http://loki:3100"}}, cursorTables{}, false},
 		"on":             {docker(on, "http://loki:3100"), cursorTables{}, true},
 	} {
