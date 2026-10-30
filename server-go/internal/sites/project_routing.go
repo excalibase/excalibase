@@ -2,7 +2,9 @@ package sites
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 )
 
 // UnrouteProjectSites stops serving a project scheduled for deletion: the
@@ -60,7 +62,7 @@ func (s *Service) RouteProjectSites(ctx context.Context, projectID string) error
 	cdnCtx, cancel := context.WithTimeout(ctx, publishTimeout)
 	defer cancel()
 	for _, site := range held {
-		if site.LiveDeployID == "" {
+		if site.LiveDeployID == "" || !s.servable(ctx, site) {
 			continue
 		}
 		if err := s.publisher.PutKV(cdnCtx, site.Hostname, ScriptName(site)); err != nil {
@@ -97,4 +99,61 @@ func (s *Service) routeSiteHostnames(ctx context.Context, site *Site) error {
 	}
 	defer lease.release()
 	return s.refreshSiteHostnames(ctx, site, routing{serving: assumeServing, live: true})
+}
+
+// reconcileSiteTimeout bounds routing one site on or off: a KV write and its custom hostnames.
+const reconcileSiteTimeout = time.Minute
+
+// servable is whether the router may send traffic to the site's Worker: a
+// server site only while server sites are on, so switching them off stops their code.
+func (s *Service) servable(ctx context.Context, site *Site) bool {
+	return site.Kind != KindServer || s.serverSitesOn(ctx)
+}
+
+// ReconcileServerSites routes every live server site while server sites are on
+// and the router binds the outbound Worker, and unroutes all of them otherwise.
+// It runs on a timer, so neither a replica still on during a rollout nor a
+// router redeployed without the outbound Worker leaves one served. Every site
+// is tried; the failures are joined.
+func (s *Service) ReconcileServerSites(ctx context.Context) error {
+	if !s.Available() {
+		return nil
+	}
+	held, err := s.store.ListServerSites(ctx)
+	if err != nil {
+		return err
+	}
+	// Routed only while the router still sends their requests through the outbound Worker.
+	serve := s.serverSitesOn(ctx) && s.checkOutbound(ctx, true) == nil
+	var failures []error
+	for _, site := range held {
+		if err := s.reconcileInTime(ctx, site, serve); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// reconcileInTime gives each site its own time, so one slow answer leaves no other site routed.
+func (s *Service) reconcileInTime(ctx context.Context, site *Site, serve bool) error {
+	siteCtx, cancel := context.WithTimeout(ctx, reconcileSiteTimeout)
+	defer cancel()
+	return s.reconcileServerSite(siteCtx, site, serve)
+}
+
+func (s *Service) reconcileServerSite(ctx context.Context, site *Site, serve bool) error {
+	if !serve {
+		if err := s.publisher.DeleteKV(ctx, site.Hostname); err != nil {
+			return publishFailure(site, stepUnroute, err)
+		}
+		return s.unrouteSiteHostnames(ctx, site)
+	}
+	serving, err := s.projectServing(ctx, site.ProjectID)
+	if err != nil || !serving || site.LiveDeployID == "" {
+		return err
+	}
+	if err := s.publisher.PutKV(ctx, site.Hostname, ScriptName(site)); err != nil {
+		return publishFailure(site, stepRoute, err)
+	}
+	return s.routeSiteHostnames(ctx, site)
 }

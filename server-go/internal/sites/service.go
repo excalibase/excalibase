@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/google/uuid"
 )
 
@@ -25,7 +26,7 @@ const (
 type Publisher interface {
 	StartUploadSession(ctx context.Context, script string, manifest map[string]cfworkers.ManifestEntry) (cfworkers.UploadSession, error)
 	UploadBucket(ctx context.Context, uploadJWT string, assets []cfworkers.Asset) (string, error)
-	PutScript(ctx context.Context, script, completionJWT string, config cfworkers.AssetConfig) error
+	PutScript(ctx context.Context, script string, version cfworkers.ScriptVersion) error
 	DeleteScript(ctx context.Context, script string) error
 	// PutKV and DeleteKV keep the hosts table the dispatch Worker routes by: hostname → script.
 	PutKV(ctx context.Context, key, value string) error
@@ -54,6 +55,16 @@ type Options struct {
 	CustomDomains *CustomDomainOptions
 	// Projects is the project lifecycle every route write follows; nil serves every project and holds nothing.
 	Projects ProjectGate
+	// Flags decide per request whether server-rendered sites are offered (features.SitesServer).
+	Flags features.Flags
+	// Code keeps server deploys' modules; nil offers no server sites.
+	Code CodeStore
+	// OutboundWorker names the Worker the dispatch namespace sends every
+	// fetch of site code through (ADR 0045 decision 5); "" offers no server sites.
+	OutboundWorker string
+	// Outbound reads which outbound Worker the router's binding names; server
+	// code is published only while it names OutboundWorker. nil offers no server sites.
+	Outbound OutboundReader
 }
 
 // DeployLimiter answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.
@@ -80,13 +91,37 @@ func (s *Service) Limits(ctx context.Context, projectID string) (Limits, error) 
 	return s.limitsFor(ctx, projectID)
 }
 
-// MaxUploadBytes bounds a deploy's request body before the archive is read.
+// MaxUploadBytes bounds a deploy's request body before the archive is read;
+// the archive's own reader then holds each kind to its exact limits.
 func (s *Service) MaxUploadBytes(ctx context.Context, projectID string) (int64, error) {
 	limits, err := s.limitsFor(ctx, projectID)
 	if err != nil {
 		return 0, err
 	}
+	if s.serverSitesOn(ctx) {
+		return MaxServerArchiveBytes(limits), nil
+	}
 	return MaxArchiveBytes(limits), nil
+}
+
+// serverSitesOn is whether server-rendered sites are offered to this request:
+// the feature is on, their code has a store, and their egress is filtered.
+func (s *Service) serverSitesOn(ctx context.Context) bool {
+	return s.options.Code != nil && s.options.OutboundWorker != "" && s.options.Outbound != nil &&
+		features.Enabled(ctx, s.options.Flags, features.SitesServer)
+}
+
+// ServerSitesOn tells callers whether to show server sites at all.
+func (s *Service) ServerSitesOn(ctx context.Context) bool {
+	return s.Available() && s.serverSitesOn(ctx)
+}
+
+// requireKind refuses work on a server site while server sites are off.
+func (s *Service) requireKind(ctx context.Context, kind string) error {
+	if kind == KindServer && !s.serverSitesOn(ctx) {
+		return ErrServerSitesOff
+	}
+	return nil
 }
 
 // Steps a PublishError names.
@@ -135,6 +170,7 @@ type Service struct {
 	options   Options
 	admission *admission
 	now       func() time.Time
+	outbound  outboundCheck
 }
 
 func NewService(store Store, publisher Publisher, origins CorsOrigins, options Options) (*Service, error) {
@@ -155,8 +191,20 @@ func NewService(store Store, publisher Publisher, origins CorsOrigins, options O
 func (s *Service) Available() bool { return s != nil && s.publisher != nil }
 
 func (s *Service) Create(ctx context.Context, projectID, name string, spaFallback *bool, actor string) (*Site, error) {
+	return s.CreateKind(ctx, projectID, name, KindStatic, spaFallback, actor)
+}
+
+// CreateKind creates a static or a server-rendered site; the kind never changes after.
+func (s *Service) CreateKind(ctx context.Context, projectID, name, kind string, spaFallback *bool, actor string) (*Site, error) {
 	if !s.Available() {
 		return nil, ErrSitesUnavailable
+	}
+	// Off, any kind but static is answered as the feature's absent route, so the kinds are not advertised.
+	if kind != KindStatic && !s.serverSitesOn(ctx) {
+		return nil, ErrServerSitesOff
+	}
+	if kind != KindStatic && kind != KindServer {
+		return nil, &InputError{Reason: fmt.Sprintf("a site is %q or %q", KindStatic, KindServer)}
 	}
 	if err := ValidateName(name); err != nil {
 		return nil, &InputError{Reason: err.Error()}
@@ -170,12 +218,12 @@ func (s *Service) Create(ctx context.Context, projectID, name string, spaFallbac
 	}
 	now := s.now().UTC()
 	site := &Site{
-		ID: uuid.NewString(), ProjectID: projectID, Name: name,
+		ID: uuid.NewString(), ProjectID: projectID, Name: name, Kind: kind,
 		Hostname:    name + "." + s.options.BaseDomain,
 		SPAFallback: spaFallback == nil || *spaFallback,
 		CreatedBy:   actor, CreatedAt: now, UpdatedAt: now,
 	}
-	if err := s.store.Create(ctx, site, limits.MaxSites); err != nil {
+	if err := s.store.Create(ctx, site, limits.MaxSites, limits.MaxServerSites); err != nil {
 		return nil, err
 	}
 	return site, nil

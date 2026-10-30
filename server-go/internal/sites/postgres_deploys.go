@@ -14,11 +14,18 @@ func (s *PostgresStore) CreateDeploy(ctx context.Context, deploy *Deploy) error 
 	if err != nil {
 		return fmt.Errorf("encode deploy manifest: %w", err)
 	}
+	server, err := encodeServerDeploy(deploy.Server)
+	if err != nil {
+		return err
+	}
 	result, err := s.db.ExecContext(ctx, `INSERT INTO site_deploys
-		(id, site_id, project_id, status, manifest, file_count, total_bytes, spa_fallback, label, created_by, created_at, deploy_token_id, deploy_token_name)
-		SELECT $1, id, project_id, $4, $5, $6, $7, $8, NULLIF($9, ''), $10, $11, NULLIF($12, ''), NULLIF($13, '') FROM sites WHERE id = $2 AND project_id = $3`,
+		(id, site_id, project_id, status, manifest, file_count, total_bytes, spa_fallback, label, created_by, created_at, deploy_token_id, deploy_token_name,
+		 kind, server_config)
+		SELECT $1, id, project_id, $4, $5, $6, $7, $8, NULLIF($9, ''), $10, $11, NULLIF($12, ''), NULLIF($13, ''), $14, $15
+		FROM sites WHERE id = $2 AND project_id = $3`,
 		deploy.ID, deploy.SiteID, deploy.ProjectID, deploy.Status, manifest, deploy.FileCount, deploy.TotalBytes,
-		deploy.SPAFallback, deploy.Label, deploy.CreatedBy, deploy.CreatedAt, deploy.DeployTokenID, deploy.DeployTokenName)
+		deploy.SPAFallback, deploy.Label, deploy.CreatedBy, deploy.CreatedAt, deploy.DeployTokenID, deploy.DeployTokenName,
+		deployKind(deploy), server)
 	if err != nil {
 		return fmt.Errorf("create site deploy: %w", err)
 	}
@@ -74,18 +81,46 @@ func makeLive(ctx context.Context, tx *sql.Tx, deploy *Deploy, lease string) err
 	return nil
 }
 
+// deployKind is the kind a deploy is recorded as; one made before kinds existed is static.
+func deployKind(deploy *Deploy) string {
+	if deploy.Kind == "" {
+		return KindStatic
+	}
+	return deploy.Kind
+}
+
+// encodeServerDeploy answers an untyped nil for a static deploy: a nil []byte would be stored as ”, not NULL.
+func encodeServerDeploy(server *ServerDeploy) (any, error) {
+	if server == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(server)
+	if err != nil {
+		return nil, fmt.Errorf("encode server deploy: %w", err)
+	}
+	return encoded, nil
+}
+
+// scanDeploy reads the columns GetDeploy and ListDeploys select, in their order.
 func scanDeploy(row rowScanner) (*Deploy, error) {
 	deploy := &Deploy{}
-	var manifest []byte
+	var manifest, server []byte
 	var finishedAt sql.NullTime
 	err := row.Scan(&deploy.ID, &deploy.SiteID, &deploy.ProjectID, &deploy.Status, &manifest, &deploy.FileCount,
 		&deploy.TotalBytes, &deploy.SPAFallback, &deploy.Label, &deploy.FailureReason, &deploy.CreatedBy,
-		&deploy.CreatedByName, &deploy.CreatedAt, &finishedAt, &deploy.DeployTokenID, &deploy.DeployTokenName)
+		&deploy.CreatedByName, &deploy.CreatedAt, &finishedAt, &deploy.DeployTokenID, &deploy.DeployTokenName,
+		&deploy.Kind, &server)
 	if err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(manifest, &deploy.Manifest); err != nil {
 		return nil, fmt.Errorf("decode deploy manifest: %w", err)
+	}
+	if server != nil {
+		deploy.Server = &ServerDeploy{}
+		if err := json.Unmarshal(server, deploy.Server); err != nil {
+			return nil, fmt.Errorf("decode server deploy: %w", err)
+		}
 	}
 	if finishedAt.Valid {
 		finished := finishedAt.Time
@@ -97,7 +132,7 @@ func scanDeploy(row rowScanner) (*Deploy, error) {
 func (s *PostgresStore) GetDeploy(ctx context.Context, projectID, siteID, id string) (*Deploy, error) {
 	deploy, err := scanDeploy(s.db.QueryRowContext(ctx, `SELECT d.id, d.site_id, d.project_id, d.status, d.manifest, d.file_count, d.total_bytes, d.spa_fallback,
 		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at,
-		COALESCE(d.deploy_token_id, ''), COALESCE(d.deploy_token_name, '')
+		COALESCE(d.deploy_token_id, ''), COALESCE(d.deploy_token_name, ''), d.kind, d.server_config
 		FROM site_deploys d LEFT JOIN users u ON u.id = d.created_by
 		WHERE d.project_id = $1 AND d.site_id = $2 AND d.id = $3`, projectID, siteID, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -112,7 +147,7 @@ func (s *PostgresStore) GetDeploy(ctx context.Context, projectID, siteID, id str
 func (s *PostgresStore) ListDeploys(ctx context.Context, projectID, siteID string, limit int) ([]*Deploy, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT d.id, d.site_id, d.project_id, d.status, d.manifest, d.file_count, d.total_bytes, d.spa_fallback,
 		COALESCE(d.label, ''), COALESCE(d.failure_reason, ''), d.created_by, COALESCE(u.username, ''), d.created_at, d.finished_at,
-		COALESCE(d.deploy_token_id, ''), COALESCE(d.deploy_token_name, '')
+		COALESCE(d.deploy_token_id, ''), COALESCE(d.deploy_token_name, ''), d.kind, d.server_config
 		FROM site_deploys d LEFT JOIN users u ON u.id = d.created_by
 		WHERE d.project_id = $1 AND d.site_id = $2 ORDER BY d.created_at DESC, d.id LIMIT $3`, projectID, siteID, limit)
 	if err != nil {

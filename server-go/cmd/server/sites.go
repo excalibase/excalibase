@@ -33,6 +33,8 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 		log.Fatal("sites: the platform store cannot edit a project's CORS list")
 	}
 	var publisher sites.Publisher
+	// A nil interface, not a nil *Client, so server sites stay off without Cloudflare.
+	var outbound sites.OutboundReader
 	if cfg.SitesAvailable() {
 		client, err := cfworkers.New(cfworkers.Config{
 			AccountID: cfg.Sites.AccountID, APIToken: cfg.Sites.APIToken, Namespace: cfg.Sites.DispatchNamespace,
@@ -41,13 +43,15 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 		if err != nil {
 			log.Fatalf("sites: %v", err)
 		}
-		publisher = client
+		publisher, outbound = client, client
 		log.Printf("INFO: sites enabled under %s (dispatch namespace %s)", cfg.Sites.BaseDomain, cfg.Sites.DispatchNamespace)
 	}
 	store := sites.NewPostgresStore(sqlStore.DB())
 	service, err := sites.NewService(store, publisher, origins, sites.Options{
 		BaseDomain: cfg.Sites.BaseDomain, Hostnames: store, DeployLimits: limits, CustomDomains: customDomainOptions(cfg),
 		Projects: projectGate{instances: sqlStore, claimer: claimer},
+		// Server sites keep their code beside the deploy records (EXC-661).
+		Flags: cfg.Features(), Code: store, OutboundWorker: cfg.Sites.OutboundWorker, Outbound: outbound,
 	})
 	if err != nil {
 		log.Fatalf("sites: %v", err)
@@ -138,6 +142,31 @@ func platformDomains(cfg config.AppConfig) []string {
 		}
 	}
 	return domains
+}
+
+// serverSitesSweepInterval is how often server sites are routed or unrouted again.
+const serverSitesSweepInterval = 10 * time.Minute
+
+// startServerSitesSweep serves server sites only while their feature is on and
+// their egress is filtered, so switching either off stops their code (EXC-661).
+func startServerSitesSweep(ctx context.Context, service *sites.Service) {
+	if !service.Available() {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(serverSitesSweepInterval)
+		defer ticker.Stop()
+		for {
+			if err := service.ReconcileServerSites(ctx); err != nil {
+				log.Printf("ERROR sites: route server sites for the sitesserver feature: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 }
 
 // startHostnameSweep routes custom domains once their DNS is in place and drops abandoned ones.

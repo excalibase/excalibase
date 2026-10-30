@@ -122,7 +122,7 @@ func (h *domainHarness) liveSite(t *testing.T, name string) *sites.Site {
 func (h *domainHarness) otherSite(t *testing.T, project, name string) *sites.Site {
 	t.Helper()
 	site := &sites.Site{ID: "site-" + project + "-" + name, ProjectID: project, Name: name, Hostname: name + "." + testDomain}
-	if err := h.store.Create(context.Background(), site, 5); err != nil {
+	if err := h.store.Create(context.Background(), site, 5, 0); err != nil {
 		t.Fatal(err)
 	}
 	return site

@@ -1,0 +1,10 @@
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS site_server_subrequests;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS site_server_cpu_ms;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS max_site_server_bundle_bytes;
+ALTER TABLE tier_configs DROP COLUMN IF EXISTS max_server_sites;
+DROP TABLE IF EXISTS site_deploy_code;
+ALTER TABLE site_deploys DROP COLUMN IF EXISTS published_at;
+ALTER TABLE site_deploys DROP COLUMN IF EXISTS server_config;
+ALTER TABLE site_deploys DROP COLUMN IF EXISTS kind;
+ALTER TABLE sites DROP COLUMN IF EXISTS kind;
+DROP DOMAIN IF EXISTS site_kind;

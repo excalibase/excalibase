@@ -67,3 +67,21 @@ func Dist(t testing.TB, index string) []byte {
 		File("./assets/index-abc.css", "body{}"),
 	))
 }
+
+// ServerSiteJSON is the site.json of an OpenNext build (EXC-661).
+const ServerSiteJSON = `{"kind":"server","main":"worker.js","compatibilityDate":"2025-09-01","compatibilityFlags":["nodejs_compat"],"framework":"nextjs"}`
+
+// ServerDist is a server deploy as the upload layout packs it: worker is the main module's code.
+func ServerDist(t testing.TB, worker string) []byte {
+	t.Helper()
+	return Gzip(t, Tar(t,
+		Dir("./"),
+		File("./site.json", ServerSiteJSON),
+		Dir("./server/"),
+		File("./server/worker.js", worker),
+		File("./server/chunks/page.js", "export const page = 1"),
+		Dir("./assets/"),
+		File("./assets/BUILD_ID", "build-1"),
+		File("./assets/_next/static/chunk.js", "console.log(1)"),
+	))
+}

@@ -143,3 +143,22 @@ func TestSitesConfigReadsTheZoneCap(t *testing.T) {
 		}
 	}
 }
+
+// EXC-661: server sites run only where the operator names the outbound Worker
+// bound on the dispatch namespace; its name is a Worker script name.
+func TestSites_ReadTheOutboundWorker(t *testing.T) {
+	setSitesEnv(t)
+	t.Setenv("SITES_OUTBOUND_WORKER", " excalibase-sites-outbound ")
+	if got := Load().Sites.OutboundWorker; got != "excalibase-sites-outbound" {
+		t.Fatalf("outbound worker = %q", got)
+	}
+}
+
+func TestValidateSites_RefusesAnOutboundWorkerThatIsNotAScriptName(t *testing.T) {
+	for _, name := range []string{"Bad/Name", "-lead", strings.Repeat("a", 64)} {
+		cfg := AppConfig{SitesEnabled: true, Sites: SitesConfig{BaseDomain: "excalibase.app", OutboundWorker: name}}
+		if err := cfg.validateSites(); err == nil || !strings.Contains(err.Error(), "SITES_OUTBOUND_WORKER") {
+			t.Errorf("%q: err = %v", name, err)
+		}
+	}
+}

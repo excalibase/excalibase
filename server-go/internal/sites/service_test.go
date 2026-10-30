@@ -282,7 +282,7 @@ func TestPurgeProjectSitesDeletesEveryScript(t *testing.T) {
 
 func TestPurgeWithoutCloudflareRefusesWhenSitesExist(t *testing.T) {
 	store := sitestest.NewMemoryStore()
-	if err := store.Create(context.Background(), &sites.Site{ID: "s1", ProjectID: testProject, Name: "shop"}, 5); err != nil {
+	if err := store.Create(context.Background(), &sites.Site{ID: "s1", ProjectID: testProject, Name: "shop"}, 5, 0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	service, _ := sites.NewService(store, nil, sitestest.NewOrigins(), sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir()})

@@ -1,0 +1,58 @@
+{
+ "url_query": "excludeScript=true&bindings_inherit=strict",
+ "metadata": {
+  "main_module": "worker.js",
+  "bindings": [
+   {
+    "name": "EXCALIBASE_URL",
+    "type": "plain_text",
+    "text": "http://127.0.0.1:9"
+   },
+   {
+    "name": "WORKER_SELF_REFERENCE",
+    "type": "service",
+    "service": "site-spike"
+   },
+   {
+    "name": "ASSETS",
+    "type": "assets"
+   }
+  ],
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": [
+   "nodejs_compat",
+   "global_fetch_strictly_public"
+  ],
+  "code_update_strategy": {
+   "mode": "deferred",
+   "max_delay": 300
+  },
+  "keep_bindings": [
+   "secret_text",
+   "secret_key"
+  ],
+  "assets": {
+   "jwt": "fake-completion-jwt",
+   "config": {}
+  },
+  "package_dependencies": [
+   {
+    "name": "@opennextjs/cloudflare",
+    "packageJsonVersion": "1.20.11",
+    "installedVersion": "1.20.11"
+   }
+  ]
+ },
+ "parts": [
+  {
+   "name": "worker.js",
+   "filename": "worker.js",
+   "type": "application/javascript+module"
+  },
+  {
+   "name": "worker.js.map",
+   "filename": "worker.js.map",
+   "type": "application/source-map"
+  }
+ ]
+}

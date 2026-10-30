@@ -288,7 +288,7 @@ func (s *Service) routeHostname(ctx context.Context, site *Site, hostname *Custo
 			return fmt.Errorf("add the custom domain's origin to the project's CORS list: %w", err)
 		}
 	}
-	if !route.live {
+	if !route.live || !s.servable(ctx, site) {
 		return nil
 	}
 	serving, err := route.serving(ctx, site.ProjectID)
