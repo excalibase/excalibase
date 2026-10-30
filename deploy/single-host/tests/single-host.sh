@@ -75,6 +75,10 @@ if loki.get("ports") or not loki.get("read_only") or "ALL" not in (loki.get("cap
 if not loki.get("mem_limit"):
     sys.exit("loki has no memory limit")
 '
+# Log drains (EXC-658): the forwarder only with the profile; it reaches provisioning and the internet only.
+render | python3 "$DIR/log_drains_check.py" off
+render COMPOSE_PROFILES=hostlogs,logdrains FEATURE_HOSTLOGS=true FEATURE_LOGDRAINS=true LOG_FORWARDER_TOKEN=$hex \
+  | python3 "$DIR/log_drains_check.py" on
 echo "single-host required settings ok"
 # Email through the operator's own relay (EXC-580) or SES: every setting in .env reaches provisioning.
 out=$(render EMAIL_PROVIDER=smtp SMTP_HOST=mail.example.test SMTP_PORT=2587 SMTP_TLS=starttls \

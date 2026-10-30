@@ -35,6 +35,8 @@ services:
       OBJECTSTORE_ROOT_SECRET: ${OBJECTSTORE_ROOT_SECRET:?run ./init.sh first}
       OBJECTSTORE_BACKUPS_SECRET: ${OBJECTSTORE_BACKUPS_SECRET:?run ./init.sh first}
       OBJECTSTORE_FILES_SECRET: ${OBJECTSTORE_FILES_SECRET:?run ./init.sh first}
+      FEATURE_LOGDRAINS: ${FEATURE_LOGDRAINS:-false}
+      LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
     command: ["sh", "/preflight.sh"]
     volumes:
       - ./preflight.sh:/preflight.sh:ro,z
@@ -288,6 +290,10 @@ services:
       FEATURE_LOGRETENTION: ${FEATURE_LOGRETENTION:-false}
       LOG_RETENTION: ${LOG_RETENTION:-168h}
       LOG_RETENTION_BY_PLAN: free=${LOG_RETENTION_FREE:-24h},standard=${LOG_RETENTION_STANDARD:-168h},enterprise=${LOG_RETENTION_ENTERPRISE:-168h}
+      # Log drains (EXC-658; init.sh --log-drains): projects' database logs sent to Datadog or HTTPS by
+      # the log-forwarder below, read from the Loki above, so they need FEATURE_HOSTLOGS.
+      FEATURE_LOGDRAINS: ${FEATURE_LOGDRAINS:-false}
+      LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
       # The host's own public ranges, refused to apps and to the alert webhook; empty: only private ranges are.
       APP_EGRESS_EXTRA_DENY_CIDRS: ${APP_EGRESS_EXTRA_DENY_CIDRS:-}
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
@@ -395,6 +401,7 @@ services:
       - tenants
       - edge
       - logs
+      - drains
     restart: unless-stopped
 
   # Stored project logs (EXC-672; init.sh --host-logs): provisioning follows
@@ -423,6 +430,40 @@ services:
     <<: *hardened
     networks:
       - logs
+    restart: unless-stopped
+
+  # Log drains (EXC-658; init.sh --log-drains): POSTs the batches provisioning leases on its
+  # internal port to each drain's HTTPS endpoint. No engine socket and no platform network.
+  # It refuses private ranges and the host's own addresses, read live from the host's routing
+  # table; list a public address the host is reached by but does not hold (NAT) in
+  # LOG_FORWARDER_EXTRA_DENY_CIDRS.
+  log-forwarder:
+    image: docker.io/excalibase/provisioning:${TAG:-1.5.0}
+    container_name: excalibase-log-forwarder
+    profiles: ["logdrains"]
+    entrypoint: ["/bin/excalibase-log-forwarder"]
+    environment:
+      PROVISIONING_URL: http://provisioning:24005
+      LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
+      # init.sh fills it with what the install's names resolve to; the apps' own list otherwise.
+      LOG_FORWARDER_EXTRA_DENY_CIDRS: ${LOG_FORWARDER_EXTRA_DENY_CIDRS:-${APP_EGRESS_EXTRA_DENY_CIDRS:-}}
+      LOG_FORWARDER_HOST_FIB_TRIE: /host/fib_trie
+      LOG_FORWARDER_HOST_IF_INET6: /host/if_inet6
+    volumes:
+      - /proc/1/net/fib_trie:/host/fib_trie:ro
+      # /dev/null on a host without IPv6 (init.sh).
+      - ${HOST_IF_INET6_SOURCE:-/proc/1/net/if_inet6}:/host/if_inet6:ro
+    read_only: true
+    mem_limit: 128m
+    pids_limit: 128
+    cpus: 0.5
+    <<: *hardened
+    depends_on:
+      provisioning:
+        condition: service_started
+    networks:
+      - drains
+      - drains-out
     restart: unless-stopped
 
   studio:
@@ -653,6 +694,14 @@ networks:
   logs:
     name: excalibase-logs
     internal: true
+  # provisioning and the log forwarder alone (EXC-658). Internal: no route in or out.
+  drains:
+    name: excalibase-drains
+    internal: true
+  # The log forwarder's way out to drain endpoints (EXC-658); nothing else joins it.
+  drains-out:
+    name: excalibase-drains-out
+    enable_ipv6: false
   # Outbound only, for the one-shot bootstrap's package install.
   egress:
     name: excalibase-egress

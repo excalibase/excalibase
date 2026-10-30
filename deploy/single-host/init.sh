@@ -5,7 +5,7 @@
 #
 #   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman] [--manual-unseal]
 #             [--apps] [--app-domain apps.example.com] [--app-sandbox runsc|none] [--documentdb] [--host-metrics]
-#             [--host-logs]
+#             [--host-logs] [--log-drains]
 #
 # Studio:     https://studio.<domain>
 # Data plane: https://api.<domain>   (/{projectId}/graphql, /{projectId}/api/v1, /auth)
@@ -24,6 +24,10 @@
 # --host-logs: stored project log search: the bundled Loki (compose profile hostlogs)
 # keeps each project container's output for LOG_RETENTION (168h), searchable in Studio
 # after the container is gone; at most HOST_LOGS_DAILY_MB (64) per project per day.
+# --log-drains: project Admins forward their database logs to Datadog or an HTTPS endpoint
+# (compose profile logdrains). Reads what --host-logs stores, so it turns that on too. The
+# forwarder refuses private ranges and the host's own addresses; behind NAT, add the public
+# address to LOG_FORWARDER_EXTRA_DENY_CIDRS.
 # A public domain gets Let's Encrypt certificates for the admin address;
 # localhost gets certificates from the edge's own CA.
 set -eu
@@ -46,6 +50,7 @@ apps=
 documentdb=
 host_metrics=
 host_logs=
+log_drains=
 app_domain=
 app_sandbox=runsc
 
@@ -65,6 +70,7 @@ while [ $# -gt 0 ]; do
 HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev"; shift ;;
     --host-logs) host_logs="FEATURE_HOSTLOGS=true
 COMPOSE_PROFILES=hostlogs"; shift ;;
+    --log-drains) log_drains=1; shift ;;
     --app-domain) app_domain=$2; shift 2 ;;
     --app-sandbox) app_sandbox=$2; shift 2 ;;
     *) usage ;;
@@ -144,6 +150,25 @@ if [ "${SELINUX_MODE:-$(getenforce 2>/dev/null || echo Disabled)}" = Enforcing ]
   selinux_label="ENGINE_PROXY_SELINUX_LABEL=disable"
 fi
 
+# Log drains read the stored logs, so they bring them; the IPv6 table is
+# mounted only where the host has one.
+drains=
+if [ -n "$log_drains" ]; then
+  host_logs="FEATURE_HOSTLOGS=true
+COMPOSE_PROFILES=hostlogs,logdrains"
+  inet6=${HOST_IF_INET6:-/proc/1/net/if_inet6}
+  [ -r "$inet6" ] || inet6=/dev/null
+  # A host behind NAT does not hold the address its names point at: refuse those too.
+  own=$(for name in "studio.$domain" "api.$domain" "files.$domain" "$app_domain"; do
+    ${RESOLVE_HOSTS:-getent ahosts} "$name" 2>/dev/null | awk '{print $1}'
+  done | sort -u | awk '/:/ {printf "%s%s/128", sep, $1; sep=","; next} /^[0-9.]+$/ {printf "%s%s/32", sep, $1; sep=","}')
+  drains="FEATURE_LOGDRAINS=true
+LOG_FORWARDER_TOKEN=$(secret)
+# Addresses the install's names resolved to at init, refused to drains. Behind a CDN or proxy, remove its addresses.
+LOG_FORWARDER_EXTRA_DENY_CIDRS=$own
+HOST_IF_INET6_SOURCE=$inet6"
+fi
+
 umask 077
 cat >"$env_file" <<ENV
 # Written by init.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ). Keep it private and with the volumes.
@@ -167,7 +192,7 @@ ENGINE_SOCKET_GID=$engine_socket_gid
 APP_DOMAIN=$app_domain
 APP_SANDBOX_RUNTIME=$app_sandbox
 ENV
-for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs"; do
+for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$drains"; do
   [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
 done
 chmod 600 "$env_file"
