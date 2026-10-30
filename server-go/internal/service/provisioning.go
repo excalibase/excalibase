@@ -109,6 +109,8 @@ type ProvisioningService struct {
 	// retainedBackups dates the kept backups of deleted projects for purging.
 	retainedBackups storage.RetainedBackupStore
 	deletionNow     func() time.Time
+	// logDeletion queues a deleted project's stored log lines for removal (EXC-678).
+	logDeletion projectLogDeletion
 
 	// endpoints frees the project's public database endpoint. Nil when the
 	// platform offers none, and the teardown then carries no such step.
@@ -1306,6 +1308,11 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 		steps = append(steps, deletionStep{domain.DeletionStepDeleteAppWorkloads, s.teardownAppWorkloads})
 	}
 	steps = append(steps, deletionStep{domain.DeletionStepDeleteResources, s.deleteDatabaseResources})
+	// Nothing writes new lines once the resources are gone; queued before the
+	// backup purge, whose failure ends this teardown short of the record.
+	if s.logDeletion.queue != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepQueueLogDeletion, s.queueLogDeletion})
+	}
 	if deleteBackups {
 		steps = append(steps, deletionStep{domain.DeletionStepDeleteBackups, s.purgeBackups})
 	}

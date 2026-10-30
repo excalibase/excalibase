@@ -168,6 +168,9 @@ const (
 	DeletionStepDeleteVault        = "DELETE_VAULT_CREDENTIALS"
 	DeletionStepRetainBackups      = "RECORD_RETAINED_BACKUPS"
 	DeletionStepDeleteRecord       = "DELETE_PROJECT_RECORD"
+
+	// DeletionStepQueueLogDeletion queues the removal of the project's stored log lines (EXC-678).
+	DeletionStepQueueLogDeletion = "QUEUE_LOG_DELETION"
 )
 
 // Pause reasons recorded on database_instances.pause_reason. Empty

@@ -115,6 +115,7 @@ var darkWork = map[features.Feature]string{
 	features.LogRetention: "TestLogPlanSweepStartsOnlyWithItsFeature",
 	features.AuthOTP:      "TestAuthOTP_OffHidesTheSwitchEvenWithOAuthOn",
 	features.HostLogs:     "TestHostLogShippingStartsOnlyWithItsFeature",
+	features.LogDeletion:  "TestLogDeletionStartsOnlyWithItsFeature",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {
