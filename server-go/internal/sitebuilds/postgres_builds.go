@@ -19,14 +19,14 @@ const (
 	claimBuildSQL = `UPDATE site_builds SET status = 'RUNNING', started_at = NOW(), lease_holder = $2, lease_until = $3
 		WHERE id = $1 RETURNING id, site_id, project_id, status, trigger, commit_sha, COALESCE(commit_message, ''), settings,
 		COALESCE(delivery_id, ''), cpu_millis, memory, disk, timeout_seconds, project_concurrency, COALESCE(deploy_id, ''),
-		COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by, created_at, started_at, finished_at`
+		COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by, created_at, started_at, finished_at, COALESCE(preview_id, '')`
 	listBuildsSQL = `SELECT id, site_id, project_id, status, trigger, commit_sha, COALESCE(commit_message, ''), settings,
 		COALESCE(delivery_id, ''), cpu_millis, memory, disk, timeout_seconds, project_concurrency, COALESCE(deploy_id, ''),
-		COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by, created_at, started_at, finished_at
+		COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by, created_at, started_at, finished_at, COALESCE(preview_id, '')
 		FROM site_builds WHERE project_id = $1 AND site_id = $2 ORDER BY created_at DESC LIMIT $3`
 	getBuildSQL = `SELECT id, site_id, project_id, status, trigger, commit_sha, COALESCE(commit_message, ''), settings,
 		COALESCE(delivery_id, ''), cpu_millis, memory, disk, timeout_seconds, project_concurrency, COALESCE(deploy_id, ''),
-		COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by, created_at, started_at, finished_at, COALESCE(log, '')
+		COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by, created_at, started_at, finished_at, COALESCE(preview_id, ''), COALESCE(log, '')
 		FROM site_builds WHERE id = $1 AND project_id = $2 AND site_id = $3`
 )
 
@@ -34,7 +34,7 @@ const (
 // build refused before it could queue is written FAILED, so its push is not lost silently.
 func (s *PostgresStore) Enqueue(ctx context.Context, build *Build, keep int) (bool, error) {
 	snapshot, err := json.Marshal(buildSnapshot{Settings: build.Settings, Provider: build.Provider,
-		InstallationID: build.InstallationID, RepositoryID: build.RepositoryID, Repository: build.Repository})
+		InstallationID: build.InstallationID, RepositoryID: build.RepositoryID, Repository: build.Repository, Preview: build.Preview})
 	if err != nil {
 		return false, fmt.Errorf("encode the build's settings: %w", err)
 	}
@@ -54,29 +54,34 @@ func (s *PostgresStore) Enqueue(ctx context.Context, build *Build, keep int) (bo
 		}
 	}
 	if build.Status == StatusQueued {
+		// A preview build supersedes only its own preview's; a production build only production's.
 		if _, err := tx.ExecContext(ctx, `UPDATE site_builds SET status = 'CANCELLED', failure_reason = $2, finished_at = NOW()
-			WHERE site_id = $1 AND status = 'QUEUED'`, build.SiteID, supersededReason); err != nil {
+			WHERE site_id = $1 AND status = 'QUEUED' AND preview_id IS NOT DISTINCT FROM NULLIF($3, '')`,
+			build.SiteID, supersededReason, build.PreviewID); err != nil {
 			return false, fmt.Errorf("supersede queued builds: %w", err)
 		}
 	}
 	limits := build.Limits
 	result, err := tx.ExecContext(ctx, `INSERT INTO site_builds (id, site_id, project_id, status, trigger, commit_sha, commit_message,
 		settings, delivery_id, cpu_millis, memory, disk, timeout_seconds, project_concurrency, requested_by, created_at,
-		failure_kind, failure_reason, finished_at)
+		failure_kind, failure_reason, finished_at, preview_id)
 		SELECT $1, id, project_id, $16, $4, $5, NULLIF($6, ''), $7, NULLIF($8, ''), $9, $10, $11, $12, $13, $14, $15,
-		NULLIF($17, ''), NULLIF($18, ''), CASE WHEN $16 = 'QUEUED' THEN NULL ELSE NOW() END
+		NULLIF($17, ''), NULLIF($18, ''), CASE WHEN $16 = 'QUEUED' THEN NULL ELSE NOW() END, NULLIF($19, '')
 		FROM sites WHERE id = $2 AND project_id = $3`,
 		build.ID, build.SiteID, build.ProjectID, build.Trigger, build.CommitSHA, build.CommitMessage, snapshot, build.DeliveryID,
 		limits.CPUMillis, limits.Memory, limits.Disk, limits.TimeoutSeconds, limits.ProjectConcurrency, build.RequestedBy, build.CreatedAt,
-		build.Status, string(build.FailureKind), build.FailureReason)
+		build.Status, string(build.FailureKind), build.FailureReason, build.PreviewID)
 	if err != nil {
 		return false, fmt.Errorf("queue the build: %w", err)
 	}
 	if err := requireTouched(result, ErrNotConnected); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM site_builds WHERE site_id = $1 AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
-		AND id NOT IN (SELECT id FROM site_builds WHERE site_id = $1 ORDER BY created_at DESC LIMIT $2)`, build.SiteID, keep); err != nil {
+	// Production and each preview keep their own history, so a busy pull request never pushes out the site's.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM site_builds WHERE site_id = $1 AND preview_id IS NOT DISTINCT FROM NULLIF($3, '')
+		AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+		AND id NOT IN (SELECT id FROM site_builds WHERE site_id = $1 AND preview_id IS NOT DISTINCT FROM NULLIF($3, '') ORDER BY created_at DESC LIMIT $2)`,
+		build.SiteID, keep, build.PreviewID); err != nil {
 		return false, fmt.Errorf("trim the build history: %w", err)
 	}
 	return true, tx.Commit()
@@ -92,12 +97,18 @@ func (s *PostgresStore) ClaimNext(ctx context.Context, slots int, holder string,
 		return nil, fmt.Errorf("take the dispatch lock: %w", err)
 	}
 	var id string
+	// One build at a time per site and scope (production, or one preview). Production builds count
+	// against the plan's concurrency; previews against PreviewsRunningPerProject on their own, so a
+	// flood of pull requests holds at most that many install slots and never a production build back.
 	err = tx.QueryRowContext(ctx, `SELECT queued.id FROM site_builds queued
 		WHERE queued.status = 'QUEUED'
 		  AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING') < $1
-		  AND NOT EXISTS (SELECT 1 FROM site_builds WHERE status = 'RUNNING' AND site_id = queued.site_id)
-		  AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING' AND project_id = queued.project_id) < queued.project_concurrency
-		ORDER BY queued.created_at LIMIT 1 FOR UPDATE SKIP LOCKED`, slots).Scan(&id)
+		  AND NOT EXISTS (SELECT 1 FROM site_builds WHERE status = 'RUNNING' AND site_id = queued.site_id
+		    AND preview_id IS NOT DISTINCT FROM queued.preview_id)
+		  AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING' AND project_id = queued.project_id
+		    AND (preview_id IS NULL) = (queued.preview_id IS NULL))
+		    < CASE WHEN queued.preview_id IS NULL THEN queued.project_concurrency ELSE $2 END
+		ORDER BY queued.created_at LIMIT 1 FOR UPDATE SKIP LOCKED`, slots, PreviewsRunningPerProject).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -119,7 +130,7 @@ func scanBuild(row scanner) (*Build, error) {
 	limits := &build.Limits
 	err := row.Scan(&build.ID, &build.SiteID, &build.ProjectID, &build.Status, &build.Trigger, &build.CommitSHA, &build.CommitMessage,
 		&snapshot, &build.DeliveryID, &limits.CPUMillis, &limits.Memory, &limits.Disk, &limits.TimeoutSeconds, &limits.ProjectConcurrency,
-		&build.DeployID, &build.FailureKind, &build.FailureReason, &build.RequestedBy, &build.CreatedAt, &started, &finished)
+		&build.DeployID, &build.FailureKind, &build.FailureReason, &build.RequestedBy, &build.CreatedAt, &started, &finished, &build.PreviewID)
 	if err != nil {
 		return nil, err
 	}
@@ -127,8 +138,8 @@ func scanBuild(row scanner) (*Build, error) {
 	if err := json.Unmarshal(snapshot, &decoded); err != nil {
 		return nil, fmt.Errorf("decode the build's settings: %w", err)
 	}
-	build.Settings, build.Provider, build.InstallationID, build.RepositoryID, build.Repository =
-		decoded.Settings, decoded.Provider, decoded.InstallationID, decoded.RepositoryID, decoded.Repository
+	build.Settings, build.Provider, build.InstallationID, build.RepositoryID, build.Repository, build.Preview =
+		decoded.Settings, decoded.Provider, decoded.InstallationID, decoded.RepositoryID, decoded.Repository, decoded.Preview
 	if started.Valid {
 		build.StartedAt = &started.Time
 	}
@@ -268,7 +279,8 @@ func (s *PostgresStore) RequeueBuild(ctx context.Context, buildID, holder string
 			finished_at = CASE WHEN newer.id IS NULL THEN NULL ELSE NOW() END,
 			started_at = NULL, lease_holder = NULL, lease_until = NULL
 		FROM site_builds AS this
-		LEFT JOIN LATERAL (SELECT id FROM site_builds WHERE site_id = this.site_id AND status = 'QUEUED' LIMIT 1) AS newer ON TRUE
+		LEFT JOIN LATERAL (SELECT id FROM site_builds WHERE site_id = this.site_id AND status = 'QUEUED'
+			AND preview_id IS NOT DISTINCT FROM this.preview_id LIMIT 1) AS newer ON TRUE
 		WHERE running.id = $1 AND this.id = $1 AND running.status = 'RUNNING' AND running.lease_holder = $2`,
 		buildID, holder, supersededReason)
 	if err != nil {

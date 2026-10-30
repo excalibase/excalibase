@@ -72,6 +72,8 @@ const (
 	FailRateLimited FailureKind = "rate-limit"
 	// FailDeploy is output the deploy path refused or could not publish.
 	FailDeploy FailureKind = "deploy"
+	// FailPreviewLimit is a preview past the plan's or the install's cap, never started (EXC-660).
+	FailPreviewLimit FailureKind = "preview-limit"
 )
 
 // RunStatus is read from the pod's status, never from an exit code alone:

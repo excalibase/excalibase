@@ -53,6 +53,9 @@ echo "$hostmetrics" | grep -q 'FEATURE_HOSTMETRICS: "true"' \
   || { echo "FEATURE_HOSTMETRICS=true does not reach provisioning" >&2; exit 1; }
 echo "$hostmetrics" | grep -q 'source: /proc/1/net/dev' \
   || { echo "the host's network counters are not mounted with --host-metrics" >&2; exit 1; }
+# Previews (EXC-660): the flag reaches provisioning.
+render FEATURE_SITEPREVIEWS=true | grep -q 'FEATURE_SITEPREVIEWS: "true"' \
+  || { echo "FEATURE_SITEPREVIEWS=true does not reach provisioning" >&2; exit 1; }
 echo "single-host required settings ok"
 # Email through the operator's own relay (EXC-580) or SES: every setting in .env reaches provisioning.
 out=$(render EMAIL_PROVIDER=smtp SMTP_HOST=mail.example.test SMTP_PORT=2587 SMTP_TLS=starttls \

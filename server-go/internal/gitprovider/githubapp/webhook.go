@@ -24,6 +24,8 @@ func (c *Client) ParseWebhook(header http.Header, body []byte) (gitprovider.Even
 	switch header.Get("X-GitHub-Event") {
 	case "push":
 		event.Push, err = parsePush(body)
+	case "pull_request":
+		event.PullRequest, err = parsePullRequest(body)
 	case "installation":
 		event.RemovedInstallation, err = parseInstallation(body)
 	case "installation_repositories":

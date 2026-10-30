@@ -25,6 +25,7 @@ var featureEnv = map[features.Feature]string{
 	features.AuthUser:        "FEATURE_AUTHUSER",
 	features.AuthGuest:       "FEATURE_AUTHGUEST",
 	features.HostMetrics:     "FEATURE_HOSTMETRICS",
+	features.SitePreviews:    "FEATURE_SITEPREVIEWS",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.

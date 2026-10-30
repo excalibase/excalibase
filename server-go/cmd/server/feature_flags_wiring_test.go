@@ -79,6 +79,12 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodPost, "/api/admin/monitoring/alert-settings/test"},
 		{http.MethodGet, "/api/projects/" + matrixProjectA + "/containers/metrics"},
 	},
+	features.SitePreviews: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/sites/site-1/previews"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/sites/site-1/previews/mode"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/sites/site-1/previews/access"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/sites/site-1/previews/pv-1"},
+	},
 	features.AppStorage: {
 		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
 		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},

@@ -25,10 +25,15 @@ type SitesConfig struct {
 	CustomTarget string
 	// MaxZoneHostnames bounds the custom hostnames on the zone, across every project; 0 is the default.
 	MaxZoneHostnames int
+	// MaxPreviews bounds live previews across the install, each one Worker script (EXC-660); 0 is the default.
+	MaxPreviews int
 }
 
 // DefaultMaxZoneHostnames keeps the zone under the 100 custom hostnames Cloudflare includes.
 const DefaultMaxZoneHostnames = 90
+
+// DefaultMaxPreviews keeps previews well inside the 1,000 scripts Workers for Platforms includes.
+const DefaultMaxPreviews = 200
 
 // DefaultCustomTargetLabel is the label of the default CNAME target under the base domain.
 const DefaultCustomTargetLabel = "cname"
@@ -50,15 +55,16 @@ func loadSites() SitesConfig {
 		HostsKVNamespaceID: strings.TrimSpace(os.Getenv("SITES_HOSTS_KV_NAMESPACE_ID")),
 		ZoneID:             strings.TrimSpace(os.Getenv("SITES_ZONE_ID")),
 		CustomTarget:       strings.ToLower(strings.TrimSpace(os.Getenv("SITES_CUSTOM_DOMAIN_TARGET"))),
-		MaxZoneHostnames:   zoneHostnameCap(os.Getenv("SITES_MAX_ZONE_HOSTNAMES")),
+		MaxZoneHostnames:   positiveCap(os.Getenv("SITES_MAX_ZONE_HOSTNAMES"), DefaultMaxZoneHostnames),
+		MaxPreviews:        positiveCap(os.Getenv("SITES_MAX_PREVIEWS"), DefaultMaxPreviews),
 	}
 }
 
-// zoneHostnameCap is the default when unset and -1, for Validate to refuse, when not a count above 0.
-func zoneHostnameCap(raw string) int {
+// positiveCap is the default when unset and -1, for Validate to refuse, when not a count above 0.
+func positiveCap(raw string, fallback int) int {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return DefaultMaxZoneHostnames
+		return fallback
 	}
 	count, err := strconv.Atoi(raw)
 	if err != nil || count < 1 {
@@ -112,6 +118,9 @@ func (c AppConfig) validateSites() error {
 func (s SitesConfig) validateCustomDomains() error {
 	if s.MaxZoneHostnames < 0 {
 		return fmt.Errorf("SITES_MAX_ZONE_HOSTNAMES must be a whole number above 0 (default %d)", DefaultMaxZoneHostnames)
+	}
+	if s.MaxPreviews < 0 {
+		return fmt.Errorf("SITES_MAX_PREVIEWS must be a whole number above 0 (default %d)", DefaultMaxPreviews)
 	}
 	if s.ZoneID == "" {
 		return nil

@@ -29,6 +29,16 @@ type Store interface {
 	SaveConnection(ctx context.Context, connection *Connection) error
 	DeleteConnection(ctx context.Context, projectID, siteID string) error
 	ConnectionsForPush(ctx context.Context, provider string, installationID, repositoryID int64, branch string) ([]*Connection, error)
+	// ConnectionsForRepository answers every site connected to the repository, whatever its branch.
+	ConnectionsForRepository(ctx context.Context, provider string, installationID, repositoryID int64) ([]*Connection, error)
+	// ConnectionsForInstallation answers the sites connected through the installation, to the given
+	// repositories only when any are named.
+	ConnectionsForInstallation(ctx context.Context, provider string, installationID int64, repositoryIDs []int64) ([]*Connection, error)
+	// SavePreviewMode and SavePreviewAccess each write only their own keys of the connection's previews,
+	// so a developer's mode and an Admin's opt-ins saved at once never undo each other; ErrNotConnected
+	// when the site has no connection.
+	SavePreviewMode(ctx context.Context, projectID, siteID, mode string) error
+	SavePreviewAccess(ctx context.Context, projectID, siteID string, access PreviewAccess) error
 	// ForgetInstallation drops connections through an installation, or only those to the given repositories.
 	ForgetInstallation(ctx context.Context, provider string, installationID int64, repositoryIDs []int64) (int, error)
 
@@ -56,7 +66,8 @@ type Store interface {
 	// or records it as it is when it was refused before queueing (FAILED).
 	// A delivery already recorded for the site answers false.
 	Enqueue(ctx context.Context, build *Build, keep int) (bool, error)
-	// ClaimNext takes the oldest queued build that fits the slots, its project's cap and one per site.
+	// ClaimNext takes the oldest queued build that fits the slots, one per site and scope, and its
+	// project's cap: the plan's concurrency for production builds, PreviewsRunningPerProject for previews.
 	ClaimNext(ctx context.Context, slots int, holder string, leaseUntil time.Time) (*Build, error)
 	ExtendLease(ctx context.Context, buildID, holder string, until time.Time) error
 	SaveLog(ctx context.Context, buildID, holder, log string) error

@@ -18,11 +18,13 @@ import { Spinner, primaryButton, secondaryButton } from '../containers/Container
 import { SiteBuildList } from './SiteBuildList';
 import { SiteBuildSecrets } from './SiteBuildSecrets';
 import { SiteBuildSettingsForm } from './SiteBuildSettingsForm';
+import { SitePreviews } from './SitePreviews';
 
 interface SiteProps {
   readonly projectId: string;
   readonly siteId: string;
   readonly canDevelop: boolean;
+  readonly canAdmin?: boolean;
 }
 
 const card = 'bg-surface-card border border-border-primary rounded-lg p-4 space-y-3';
@@ -231,7 +233,7 @@ function Connected({
 }
 
 // Deploy on git push (EXC-354): hidden until the server switches it on; single-host answers why it has none.
-export function SiteGitBuilds({ projectId, siteId, canDevelop }: SiteProps) {
+export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false }: SiteProps) {
   const enabled = useSiteGitBuildsEnabled();
   const { data: state, error } = useGitState(projectId, siteId, enabled);
   if (!enabled) return null;
@@ -270,6 +272,15 @@ export function SiteGitBuilds({ projectId, siteId, canDevelop }: SiteProps) {
         <div className="bg-surface-card border border-border-primary rounded-lg">
           <SiteBuildList projectId={projectId} siteId={siteId} canReadLogs={canDevelop} />
         </div>
+      )}
+      {state?.connection && (
+        <SitePreviews
+          projectId={projectId}
+          siteId={siteId}
+          productionBranch={state.connection.settings.branch}
+          canDevelop={canDevelop}
+          canAdmin={canAdmin}
+        />
       )}
       {state && canDevelop && (
         <details className={card}>

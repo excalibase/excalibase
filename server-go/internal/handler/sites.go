@@ -175,6 +175,7 @@ type limitsResponse struct {
 	MaxFileBytes      int64 `json:"maxFileBytes"`
 	MaxDeploysPerHour int   `json:"maxDeploysPerHour"`
 	MaxCustomDomains  int   `json:"maxCustomDomains"`
+	MaxPreviews       int   `json:"maxPreviews"`
 }
 
 func (h *SiteHandler) limits(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +185,7 @@ func (h *SiteHandler) limits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, limitsResponse{MaxSites: limits.MaxSites, MaxDeployBytes: limits.MaxTotalBytes, MaxFiles: limits.MaxFiles,
-		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour, MaxCustomDomains: limits.MaxCustomDomains})
+		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour, MaxCustomDomains: limits.MaxCustomDomains, MaxPreviews: limits.MaxPreviews})
 }
 
 // sitePathID refuses an id that is not a plain identifier before any lookup.

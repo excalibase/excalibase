@@ -15,7 +15,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/features"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
+	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
+	"github.com/excalibase/provisioning-poc/internal/testutil/sitestest"
 )
 
 func sitesConfig(zoneID string) config.AppConfig {
@@ -148,5 +150,47 @@ func TestSiteDomainChecksAreLimitedPerProject(t *testing.T) {
 	}
 	if code := post("p2"); code != http.StatusOK {
 		t.Fatalf("another project's check = %d", code)
+	}
+}
+
+// Previews are wired only with sitepreviews on and Sites offered (EXC-660).
+// The flag decides whether previews are made; held ones are kept wired either way, so turning
+// the flag off never strands a preview's Worker on Cloudflare.
+func TestSitePreviewsFollowTheirFeature(t *testing.T) {
+	store := sites.NewPostgresStore(nil)
+	off := sitesConfig("")
+	if previewStore(off, store) == nil || !previewsDark(off) {
+		t.Fatal("with the feature off previews must be dark but still kept for cleanup")
+	}
+	on := sitesConfig("")
+	on.DarkFeatures = []features.Feature{features.SitePreviews}
+	if previewStore(on, store) == nil || previewsDark(on) {
+		t.Fatal("previews not made with the feature on")
+	}
+	noSites := on
+	noSites.SitesEnabled = false
+	if previewStore(noSites, store) != nil {
+		t.Fatal("previews wired without Sites")
+	}
+}
+
+func TestSiteBuildsGetPreviewsOnlyWhenSitesOfferThem(t *testing.T) {
+	if previewSites(nil) != nil {
+		t.Fatal("previews from no Sites service")
+	}
+	withoutPreviews, err := sites.NewService(sites.NewPostgresStore(nil), nil, sitestest.NewOrigins(), sites.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previewSites(withoutPreviews) != nil {
+		t.Fatal("previews from a Sites service that does not offer them")
+	}
+	withPreviews, err := sites.NewService(sites.NewPostgresStore(nil), sitestest.NewPublisher(), sitestest.NewOrigins(),
+		sites.Options{BaseDomain: "excalibase.app", Previews: sitestest.NewMemoryPreviews(sitestest.NewMemoryStore())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previewSites(withPreviews) == nil {
+		t.Fatal("previews not passed to site builds")
 	}
 }

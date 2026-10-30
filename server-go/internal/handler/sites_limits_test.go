@@ -30,12 +30,12 @@ func newLimitedSitesHarness(t *testing.T, limits sites.Limits) *sitesHarness {
 
 // Studio shows the plan's limits on the Sites page (EXC-620).
 func TestSiteLimitsAnswerThePlan(t *testing.T) {
-	h := newLimitedSitesHarness(t, sites.Limits{MaxSites: 20, MaxTotalBytes: 100 << 20, MaxFiles: 20_000, MaxFileBytes: 25 << 20, MaxDeploysPerHour: 120, MaxCustomDomains: 5})
+	h := newLimitedSitesHarness(t, sites.Limits{MaxSites: 20, MaxTotalBytes: 100 << 20, MaxFiles: 20_000, MaxFileBytes: 25 << 20, MaxDeploysPerHour: 120, MaxCustomDomains: 5, MaxPreviews: 10})
 	response := h.do(t, http.MethodGet, "/limits", nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("limits = %d %s", response.Code, response.Body)
 	}
-	for _, field := range []string{`"maxSites":20`, `"maxDeployBytes":104857600`, `"maxFiles":20000`, `"maxFileBytes":26214400`, `"maxDeploysPerHour":120`, `"maxCustomDomains":5`} {
+	for _, field := range []string{`"maxSites":20`, `"maxDeployBytes":104857600`, `"maxFiles":20000`, `"maxFileBytes":26214400`, `"maxDeploysPerHour":120`, `"maxCustomDomains":5`, `"maxPreviews":10`} {
 		if !strings.Contains(response.Body.String(), field) {
 			t.Errorf("limits %s lack %s", response.Body, field)
 		}

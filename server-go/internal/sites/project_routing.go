@@ -22,6 +22,9 @@ func (s *Service) UnrouteProjectSites(ctx context.Context, projectID string) err
 		if err := s.unrouteSiteHostnames(cdnCtx, site); err != nil {
 			return err
 		}
+		if err := s.routeSitePreviews(cdnCtx, site, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -67,6 +70,11 @@ func (s *Service) RouteProjectSites(ctx context.Context, projectID string) error
 			return publishFailure(site, stepRoute, err)
 		}
 		if err := s.routeSiteHostnames(cdnCtx, site); err != nil {
+			return err
+		}
+	}
+	for _, site := range held {
+		if err := s.routeSitePreviews(cdnCtx, site, true); err != nil {
 			return err
 		}
 	}

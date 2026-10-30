@@ -1,5 +1,6 @@
 // Sites router (EXC-353, ADR 0043): <site>.<BASE_DOMAIN> → that site's user
-// Worker in the Workers for Platforms dispatch namespace.
+// Worker in the Workers for Platforms dispatch namespace; previews (EXC-660)
+// are <site>--<random>.<BASE_DOMAIN> → their own Worker the same way.
 //
 // Bindings (set by deploy.sh):
 //   SITES        dispatch namespace holding one `site-<site id>` Worker per site
@@ -14,6 +15,9 @@ const SITE_SCRIPT = /^site-[a-z0-9][a-z0-9-]{0,57}$/;
 // A customer's own hostname (EXC-614): the platform writes it into SITE_HOSTS
 // only once Cloudflare for SaaS reports it and its certificate active.
 const CUSTOM_HOSTNAME = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+// A preview (EXC-660): up to 30 characters of the site's name, "--", then 128
+// random bits in lowercase base32. A site name never holds "--", so the two never collide.
+const PREVIEW_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?--[a-z2-7]{26}$/;
 const INTERNAL_HEADER_PREFIX = "x-excalibase-";
 // KV's minimum: an unrouted host keeps serving for at most this long. KV bills
 // each get the same whether it is answered from cache or not.
@@ -26,6 +30,19 @@ export function siteLabel(hostname, baseDomain) {
   }
   const label = hostname.slice(0, -suffix.length);
   if (!SITE_LABEL.test(label) || label.includes("--")) {
+    return null;
+  }
+  return label;
+}
+
+// previewLabel answers a preview's label in front of the base domain, or null.
+export function previewLabel(hostname, baseDomain) {
+  const suffix = `.${baseDomain}`;
+  if (!hostname.endsWith(suffix)) {
+    return null;
+  }
+  const label = hostname.slice(0, -suffix.length);
+  if (!PREVIEW_LABEL.test(label) || label.split("--").length !== 2) {
     return null;
   }
   return label;
@@ -57,7 +74,7 @@ export default {
       console.error(`sites router: ${hostname}: ${err?.stack ?? err}`);
       return plainError(502, "This site could not be reached.");
     }
-    return withSiteHeaders(response, hostname);
+    return withSiteHeaders(response, hostname, previewLabel(hostname, baseDomain) !== null);
   },
 };
 
@@ -65,7 +82,7 @@ export default {
 // a custom hostname outside the base domain. Anything else under the base
 // domain (the apex, nested names) has no site.
 export function hostKey(hostname, baseDomain) {
-  const label = siteLabel(hostname, baseDomain);
+  const label = siteLabel(hostname, baseDomain) ?? previewLabel(hostname, baseDomain);
   if (label) {
     return `${label}.${baseDomain}`;
   }
@@ -99,13 +116,18 @@ function forwardable(request) {
   return new Request(request, { headers });
 }
 
-function withSiteHeaders(response, hostname) {
+// A preview is kept out of search engines and never sends its unguessable
+// hostname on as a referrer, whatever its own pages ask for.
+function withSiteHeaders(response, hostname, preview) {
   if (response.status === 101) {
     return response;
   }
   const result = new Response(response.body, response);
   result.headers.set("x-content-type-options", "nosniff");
-  if (!result.headers.has("referrer-policy")) {
+  if (preview) {
+    result.headers.set("x-robots-tag", "noindex, nofollow");
+    result.headers.set("referrer-policy", "no-referrer");
+  } else if (!result.headers.has("referrer-policy")) {
     result.headers.set("referrer-policy", "strict-origin-when-cross-origin");
   }
   const cookies = result.headers.getSetCookie();

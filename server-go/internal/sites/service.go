@@ -54,6 +54,13 @@ type Options struct {
 	CustomDomains *CustomDomainOptions
 	// Projects is the project lifecycle every route write follows; nil serves every project and holds nothing.
 	Projects ProjectGate
+	// Previews keeps branch and pull request previews (EXC-660); nil means previews are not offered.
+	Previews PreviewStore
+	// PreviewsDark refuses new previews (the flag is off) while the held ones are still removed
+	// with their site, unrouted with their project and swept, so none is left on Cloudflare.
+	PreviewsDark bool
+	// MaxPreviews caps live previews across the install, each one Worker script; 0 is DefaultMaxPreviews.
+	MaxPreviews int
 }
 
 // DeployLimiter answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.
@@ -245,7 +252,11 @@ func (s *Service) Delete(ctx context.Context, projectID, id string) error {
 }
 
 func (s *Service) remove(ctx context.Context, site *Site, lease *siteLease) error {
-	// Custom hostnames go first: each leaves the router, then the zone.
+	// Previews go first: each is a Worker of its own that would outlive the site.
+	if err := s.removeSitePreviews(ctx, site); err != nil {
+		return err
+	}
+	// Custom hostnames go next: each leaves the router, then the zone.
 	if err := s.removeSiteHostnames(ctx, site); err != nil {
 		return err
 	}

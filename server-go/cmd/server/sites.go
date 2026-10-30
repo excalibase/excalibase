@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -47,12 +48,51 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 	store := sites.NewPostgresStore(sqlStore.DB())
 	service, err := sites.NewService(store, publisher, origins, sites.Options{
 		BaseDomain: cfg.Sites.BaseDomain, Hostnames: store, DeployLimits: limits, CustomDomains: customDomainOptions(cfg),
-		Projects: projectGate{instances: sqlStore, claimer: claimer},
+		Projects: projectGate{instances: sqlStore, claimer: claimer}, Previews: previewStore(cfg, store), MaxPreviews: cfg.Sites.MaxPreviews,
+		PreviewsDark: previewsDark(cfg),
 	})
 	if err != nil {
 		log.Fatalf("sites: %v", err)
 	}
 	return service
+}
+
+// previewStore keeps previews (EXC-660) wherever Sites is offered, flag or not: with sitepreviews
+// off none is made, but the held ones are still removed with their site and swept.
+func previewStore(cfg config.AppConfig, store *sites.PostgresStore) sites.PreviewStore {
+	if !cfg.SitesAvailable() {
+		return nil
+	}
+	return store
+}
+
+// previewsDark is sitepreviews off: no new preview is made.
+func previewsDark(cfg config.AppConfig) bool {
+	return !features.Enabled(context.Background(), cfg.Features(), features.SitePreviews)
+}
+
+// previewSweepInterval spaces the passes that remove idle previews and retry failed removals.
+const previewSweepInterval = time.Hour
+
+// startPreviewSweep removes previews idle past their lifetime and finishes removals that failed.
+func startPreviewSweep(ctx context.Context, service *sites.Service) {
+	if !service.KeepsPreviews() {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(previewSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if report := service.SweepPreviews(ctx); report.Removed > 0 || report.Failed > 0 {
+				log.Printf("sites: previews removed=%d failed=%d", report.Removed, report.Failed)
+			}
+		}
+	}()
 }
 
 // newSiteHandler serves Sites and audits its deploy tokens (EXC-620).

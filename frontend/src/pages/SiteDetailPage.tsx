@@ -118,7 +118,7 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
   const { data: deploys = [] } = useSiteDeploys(projectId, siteId);
   const deploy = useDeploySite(projectId, siteId);
   const rollback = useRollbackSite(projectId, siteId);
-  const { canDevelop } = useProjectRole(projectId);
+  const { canDevelop, canAdmin } = useProjectRole(projectId);
 
   if (error) {
     return (
@@ -176,7 +176,7 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
           )}
         </section>
       </div>
-      <SiteGitBuilds projectId={projectId} siteId={siteId} canDevelop={canDevelop} />
+      <SiteGitBuilds projectId={projectId} siteId={siteId} canDevelop={canDevelop} canAdmin={canAdmin} />
       <section className="space-y-2 mb-6">
         <h4 className="text-sm font-semibold text-text-primary">Custom domains</h4>
         <SiteDomains projectId={projectId} siteId={siteId} canDevelop={canDevelop} />
