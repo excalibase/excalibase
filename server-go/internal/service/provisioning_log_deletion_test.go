@@ -64,7 +64,8 @@ func TestDeprovision_QueuesTheProjectsLogDeletion(t *testing.T) {
 	}
 	got := queue.queued[0]
 	if got.ProjectID != testDeletingProj || got.Selector != `{namespace="`+testDeletingNS+`"}` ||
-		!got.Start.Equal(created.Add(-24*time.Hour)) || !got.NextAttemptAt.Equal(logDeletionNow) {
+		!got.Start.Equal(created.Add(-24*time.Hour)) || !got.End.Equal(logDeletionNow.Add(5*time.Minute)) ||
+		!got.NextAttemptAt.Equal(logDeletionNow) {
 		t.Errorf("queued = %+v", got)
 	}
 	if len(audit.entries) != 1 || audit.entries[0].Action != logdelete.ActionQueued || audit.entries[0].ResourceID != testDeletingProj {
@@ -134,5 +135,8 @@ func TestDeprovision_LogDeletionSkippedWithoutASafeSelector(t *testing.T) {
 	}
 	if len(audit.entries) != 1 || audit.entries[0].Action != logdelete.ActionSkipped {
 		t.Fatalf("audit = %+v", audit.entries)
+	}
+	if err := svc.queueLogDeletion(context.Background(), nil); err != nil {
+		t.Errorf("nil project: %v", err)
 	}
 }

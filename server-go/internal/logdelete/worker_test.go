@@ -67,21 +67,41 @@ func (m *memStore) row(id string) Deletion {
 
 type fakeLoki struct {
 	requests  []string
+	ends      []time.Time
 	requestFn func(selector string) error
 	status    Status
 	statusErr error
+	reads     int
+	// slow is how far each request moves the worker's clock.
+	slow  time.Duration
+	clock *time.Time
 }
 
-func (f *fakeLoki) Request(_ context.Context, selector string, _, _ time.Time) error {
+func (f *fakeLoki) Request(_ context.Context, selector string, _, end time.Time) error {
 	f.requests = append(f.requests, selector)
+	f.ends = append(f.ends, end)
+	if f.clock != nil {
+		*f.clock = f.clock.Add(f.slow)
+	}
 	if f.requestFn != nil {
 		return f.requestFn(selector)
 	}
 	return nil
 }
 
-func (f *fakeLoki) Status(context.Context, string, time.Time) (Status, error) {
-	return f.status, f.statusErr
+// Statuses answers status for every request it was sent, and for selA.
+func (f *fakeLoki) Statuses(context.Context) (Statuses, error) {
+	f.reads++
+	if f.statusErr != nil {
+		return nil, f.statusErr
+	}
+	out := Statuses{}
+	if f.status != StatusMissing {
+		for _, selector := range append([]string{selA, `{project_id="proj-b"}`}, f.requests...) {
+			out[statusKey{selector, workerNow.Add(-72 * time.Hour).Unix()}] = f.status
+		}
+	}
+	return out, nil
 }
 
 type memAudit struct {
@@ -192,7 +212,7 @@ func TestWorker_ResendsARequestLokiNoLongerHas(t *testing.T) {
 	loki := &fakeLoki{status: StatusMissing}
 	worker, _ := newTestWorker(store, loki, &memAudit{})
 	worker.RunOnce(context.Background())
-	if got := store.row("proj-a"); got.State != StatePending || !got.NextAttemptAt.Equal(workerNow) {
+	if got := store.row("proj-a"); got.State != StatePending || !got.NextAttemptAt.Equal(workerNow) || got.Resends != 1 {
 		t.Fatalf("after missing: %+v", got)
 	}
 	worker.RunOnce(context.Background())
@@ -304,5 +324,76 @@ func TestBackoff(t *testing.T) {
 		if got := backoff(attempts); got != want {
 			t.Errorf("backoff(%d) = %v, want %v", attempts, got, want)
 		}
+	}
+}
+
+// A Loki that keeps losing a request is not sent it forever.
+func TestWorker_StopsResendingARequestLokiKeepsLosing(t *testing.T) {
+	row := pending("proj-a", selA)
+	row.State, row.Resends = StateRequested, maxResends
+	store := newMemStore(row)
+	audit := &memAudit{}
+	worker, _ := newTestWorker(store, &fakeLoki{status: StatusMissing}, audit)
+	worker.RunOnce(context.Background())
+	if got := store.row("proj-a"); got.State != StateLost {
+		t.Fatalf("after the last resend: %+v", got)
+	}
+	if len(audit.entries) != 1 || audit.entries[0].Action != ActionLost {
+		t.Errorf("audit = %v", audit.actions())
+	}
+}
+
+// The window ends at the teardown, not when Loki is finally reached.
+func TestWorker_SendsTheStoredEnd(t *testing.T) {
+	row := pending("proj-a", selA)
+	row.End = workerNow.Add(-time.Hour)
+	loki := &fakeLoki{}
+	worker, _ := newTestWorker(newMemStore(row), loki, &memAudit{})
+	worker.RunOnce(context.Background())
+	if len(loki.ends) != 1 || !loki.ends[0].Equal(row.End) {
+		t.Fatalf("ends = %v", loki.ends)
+	}
+	// An end still ahead (sent within the slack) is held to now.
+	row.ProjectID, row.End = "proj-b", workerNow.Add(time.Minute)
+	worker, _ = newTestWorker(newMemStore(row), loki, &memAudit{})
+	worker.RunOnce(context.Background())
+	if !loki.ends[1].Equal(workerNow) {
+		t.Fatalf("future end sent: %v", loki.ends[1])
+	}
+}
+
+// Loki's list is read once a pass, however many rows are checked.
+func TestWorker_ReadsLokisListOncePerPass(t *testing.T) {
+	a, b := pending("proj-a", selA), pending("proj-b", `{project_id="proj-b"}`)
+	a.State, b.State = StateRequested, StateRequested
+	loki := &fakeLoki{status: StatusProcessed}
+	store := newMemStore(a, b)
+	worker, _ := newTestWorker(store, loki, &memAudit{})
+	if n := worker.RunOnce(context.Background()); n != 2 || loki.reads != 1 {
+		t.Fatalf("worked %d with %d reads", n, loki.reads)
+	}
+	if store.row("proj-a").State != StateDone || store.row("proj-b").State != StateDone {
+		t.Fatalf("a=%+v b=%+v", store.row("proj-a"), store.row("proj-b"))
+	}
+}
+
+// A slow Loki: the pass stops while its lease holds, and the rest wait for the next.
+func TestWorker_StopsBeforeTheLeaseRunsOut(t *testing.T) {
+	var rows []Deletion
+	for _, id := range []string{"proj-a", "proj-b", "proj-c", "proj-d", "proj-e", "proj-f"} {
+		rows = append(rows, pending(id, `{project_id="`+id+`"}`))
+	}
+	store := newMemStore(rows...)
+	worker, now := newTestWorker(store, nil, &memAudit{})
+	loki := &fakeLoki{slow: time.Minute, clock: now}
+	worker.loki = loki
+	if n := worker.RunOnce(context.Background()); n != 5 || len(loki.requests) != 5 {
+		t.Fatalf("worked %d, sent %d", n, len(loki.requests))
+	}
+}
+
+func TestEndFor(t *testing.T) {
+	if got := EndFor(workerNow.Add(300 * time.Millisecond)); !got.Equal(workerNow.Add(endSlack)) {
+		t.Errorf("end = %v", got)
 	}
 }

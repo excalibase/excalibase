@@ -47,9 +47,6 @@ func TestLokiClient_RefusesAnUnsafeSelectorWithoutCallingLoki(t *testing.T) {
 		if err := client.Request(context.Background(), bad, time.Unix(1700000000, 0), time.Now()); !errors.Is(err, ErrUnsafeSelector) {
 			t.Errorf("%q: %v", bad, err)
 		}
-		if _, err := client.Status(context.Background(), bad, time.Unix(1700000000, 0)); !errors.Is(err, ErrUnsafeSelector) {
-			t.Errorf("status %q: %v", bad, err)
-		}
 	}
 	if called {
 		t.Error("Loki was called with an unsafe selector")
@@ -102,12 +99,13 @@ func TestLokiClient_StatusMatchesTheQueryAndStart(t *testing.T) {
 		{"received", `[{"query":"{namespace=\"org1-proj-a\"}","start_time":1704067200,"end_time":1793322969.007,"status":"received"}]`, StatusReceived},
 		{"processed", `[{"query":"{namespace=\"org1-proj-a\"}","start_time":1704067200.4,"status":"processed"}]`, StatusProcessed},
 		{"one shard still open", `[{"query":"{namespace=\"org1-proj-a\"}","start_time":1704067200,"status":"processed"},{"query":"{namespace=\"org1-proj-a\"}","start_time":1704067200,"status":"received"}]`, StatusReceived},
+		{"open shard listed first", `[{"query":"{namespace=\"org1-proj-a\"}","start_time":1704067200,"status":"received"},{"query":"{namespace=\"org1-proj-a\"}","start_time":1704067200,"status":"processed"}]`, StatusReceived},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := statusServer(t, http.StatusOK, tc.body)
-			got, err := NewLokiClient(srv.URL, srv.Client()).Status(context.Background(), selA, start)
-			if err != nil || got != tc.want {
+			statuses, err := NewLokiClient(srv.URL, srv.Client()).Statuses(context.Background())
+			if got := statuses.Of(selA, start); err != nil || got != tc.want {
 				t.Errorf("status = %v %v, want %v", got, err, tc.want)
 			}
 		})
@@ -120,7 +118,7 @@ func TestLokiClient_StatusErrors(t *testing.T) {
 		"not json":  statusServer(t, http.StatusOK, "<html>"),
 		"not array": statusServer(t, http.StatusOK, `{"a":1}`),
 	} {
-		if _, err := NewLokiClient(srv.URL, srv.Client()).Status(context.Background(), selA, time.Unix(1704067200, 0)); err == nil {
+		if _, err := NewLokiClient(srv.URL, srv.Client()).Statuses(context.Background()); err == nil {
 			t.Errorf("%s: no error", name)
 		}
 	}

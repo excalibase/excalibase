@@ -31,6 +31,9 @@ func (s *ProvisioningService) SetLogDeletion(queue LogDeletionQueue, audit Audit
 // surely its own alone is skipped and audited: its logs are never worth a
 // wider selector, nor a project that cannot be deleted.
 func (s *ProvisioningService) queueLogDeletion(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if inst == nil {
+		return nil
+	}
 	now := s.deletionClock()
 	selector, err := logdelete.ProjectSelector(inst)
 	if err != nil {
@@ -44,7 +47,7 @@ func (s *ProvisioningService) queueLogDeletion(ctx context.Context, inst *domain
 	}
 	row := logdelete.Deletion{
 		ProjectID: inst.ProjectID, Selector: selector, NextAttemptAt: now,
-		Start: logdelete.StartFor(created, now, s.logDeletion.maxAge),
+		Start: logdelete.StartFor(created, now, s.logDeletion.maxAge), End: logdelete.EndFor(now),
 	}
 	if err := s.logDeletion.queue.EnqueueProjectLogDeletion(ctx, row); err != nil {
 		return err
