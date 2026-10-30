@@ -197,6 +197,16 @@ was asked for, and the vault prefix emptied.
   timeout, so a client retry is safe: it is refused, not run in parallel.
 * Raise `DELETION_WAIT_TIMEOUT` (a Go duration, e.g. `10m`) on clusters where
   storage detach is slow.
+* With `FEATURE_LOGDELETION=true` (chart `features.logDeletion`) and a
+  `LOKI_URL`, the teardown also queues the deletion of the project's stored
+  log lines (step `QUEUE_LOG_DELETION`, table `project_log_deletions`). A
+  worker sends Loki one delete request for `{namespace="<project
+  namespace>"}` (single host: `{project_id="<id>"}`), retries it while Loki
+  is down, and marks it done when Loki reports it processed, about a day
+  later (Loki's `delete_request_cancel_period`). Each step is in the platform
+  audit log (`project.logs.delete_*`). Nothing else is ever sent: an empty,
+  wildcard or regex selector is refused, and a project whose namespace is
+  not its own is skipped and audited, not deleted wider.
 
 ### Deleting a project that is still being provisioned
 
