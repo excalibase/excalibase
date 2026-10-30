@@ -33,14 +33,20 @@ func interpretBuild(job *batchv1.Job, pod *corev1.Pod, kindOf func(step string, 
 			return status
 		}
 	}
+	if jobFailedFor(job, batchv1.JobReasonDeadlineExceeded) {
+		return failed(sitebuilds.FailTimeout, 0, "the build ran past its time limit")
+	}
+	// The Job can be marked failed before the runner reads the pod, so the step that exited still names the failure.
+	if pod != nil {
+		if status, failed := stepFailure(pod, kindOf); failed {
+			return status
+		}
+	}
 	if status, failed := jobFailure(job); failed {
 		return status
 	}
 	if pod == nil {
 		return sitebuilds.RunStatus{Phase: sitebuilds.RunPending}
-	}
-	if status, failed := stepFailure(pod, kindOf); failed {
-		return status
 	}
 	for _, container := range pod.Status.ContainerStatuses {
 		if container.Name == siteBuildCollect && container.Ready {
@@ -98,15 +104,20 @@ func allStatuses(pod *corev1.Pod) []corev1.ContainerStatus {
 
 func jobFailure(job *batchv1.Job) (sitebuilds.RunStatus, bool) {
 	for _, condition := range job.Status.Conditions {
-		if condition.Type != batchv1.JobFailed || condition.Status != corev1.ConditionTrue {
-			continue
+		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
+			return failed(sitebuilds.FailPlatform, 0, "the build job failed: "+condition.Reason), true
 		}
-		if condition.Reason == batchv1.JobReasonDeadlineExceeded {
-			return failed(sitebuilds.FailTimeout, 0, "the build ran past its time limit"), true
-		}
-		return failed(sitebuilds.FailPlatform, 0, "the build job failed: "+condition.Reason), true
 	}
 	return sitebuilds.RunStatus{}, false
+}
+
+func jobFailedFor(job *batchv1.Job, reason string) bool {
+	for _, condition := range job.Status.Conditions {
+		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue && condition.Reason == reason {
+			return true
+		}
+	}
+	return false
 }
 
 // stepFailure names the first step that exited non-zero.

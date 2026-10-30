@@ -83,6 +83,12 @@ func TestSiteBuildStatus(t *testing.T) {
 		{name: "image cannot be pulled", job: &batchv1.Job{}, pod: buildPod(corev1.PodPending, []corev1.ContainerStatus{waiting("prepare-workdir", "ImagePullBackOff")}, nil),
 			phase: sitebuilds.RunFailed, failure: sitebuilds.FailImage},
 		{name: "job failed with no pod", job: failedJob("BackoffLimitExceeded"), phase: sitebuilds.RunFailed, failure: sitebuilds.FailPlatform},
+		{name: "job marked failed before the step is read", job: failedJob("BackoffLimitExceeded"),
+			pod:   buildPod(corev1.PodFailed, append(passedInits()[:3], terminated("build", "Error", 11)), nil),
+			phase: sitebuilds.RunFailed, failure: sitebuilds.FailBuild, code: 11},
+		{name: "deadline wins over the step it killed", job: failedJob("DeadlineExceeded"),
+			pod:   buildPod(corev1.PodFailed, append(passedInits()[:3], terminated("build", "Error", 143)), nil),
+			phase: sitebuilds.RunFailed, failure: sitebuilds.FailTimeout},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
