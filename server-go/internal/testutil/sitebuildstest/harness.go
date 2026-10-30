@@ -265,6 +265,11 @@ func (h *Harness) Connect() *sitebuilds.ConnectResult {
 	return result
 }
 
+// signed is the headers GitHub sends with a delivery of event.
+func (h *Harness) signed(event, delivery string, body []byte) http.Header {
+	return http.Header{"X-Github-Event": {event}, "X-Github-Delivery": {delivery}, "X-Hub-Signature-256": {h.GitHub.Sign(body)}}
+}
+
 // Push moves the branch on GitHub, then delivers the signed push for it.
 func (h *Harness) Push(branch, sha, delivery string) (int, error) {
 	h.GitHub.SetBranchHead(h.SiteRepo, branch, sha)
@@ -274,14 +279,14 @@ func (h *Harness) Push(branch, sha, delivery string) (int, error) {
 // Deliver sends a signed push without moving the branch, as a replayed delivery would.
 func (h *Harness) Deliver(branch, sha, delivery string) (int, error) {
 	body := githubfake.PushPayload(h.Installation, h.SiteRepo, siteRepoName, branch, sha, "feat: "+sha[:4])
-	header := http.Header{"X-Github-Event": {"push"}, "X-Github-Delivery": {delivery}, "X-Hub-Signature-256": {h.GitHub.Sign(body)}}
+	header := h.signed("push", delivery, body)
 	return h.Service.HandleWebhook(context.Background(), header, body)
 }
 
 // DeliverDeleted sends a signed push that deletes a branch.
 func (h *Harness) DeliverDeleted(branch, delivery string) (int, error) {
 	body := githubfake.DeletePayload(h.Installation, h.SiteRepo, siteRepoName, branch)
-	header := http.Header{"X-Github-Event": {"push"}, "X-Github-Delivery": {delivery}, "X-Hub-Signature-256": {h.GitHub.Sign(body)}}
+	header := h.signed("push", delivery, body)
 	return h.Service.HandleWebhook(context.Background(), header, body)
 }
 
@@ -289,7 +294,7 @@ func (h *Harness) DeliverDeleted(branch, delivery string) (int, error) {
 func (h *Harness) DeliverPullRequest(action string, number int, sha string, headRepo int64, delivery string) (int, error) {
 	body := githubfake.PullRequestPayload(githubfake.PullRequestEvent{Action: action, Installation: h.Installation, RepoID: h.SiteRepo,
 		FullName: siteRepoName, Number: number, HeadSHA: sha, HeadBranch: "feat/pr", HeadRepoID: headRepo, Title: "PR " + sha[:4]})
-	header := http.Header{"X-Github-Event": {"pull_request"}, "X-Github-Delivery": {delivery}, "X-Hub-Signature-256": {h.GitHub.Sign(body)}}
+	header := h.signed("pull_request", delivery, body)
 	return h.Service.HandleWebhook(context.Background(), header, body)
 }
 

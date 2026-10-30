@@ -463,6 +463,31 @@ func (s *Service) HandleWebhook(ctx context.Context, header map[string][]string,
 	return 0, nil
 }
 
+// queuePushes queues a production build for every site tracking the pushed branch.
+func (s *Service) queuePushes(ctx context.Context, push *gitprovider.Push, connections []*Connection, delivery string) (int, []error) {
+	queued := 0
+	var failures []error
+	for _, connection := range connections {
+		if err := s.checkConnector(ctx, connection); errors.Is(err, ErrConnectionInactive) {
+			continue
+		} else if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		connection.Repository = push.Repository
+		_, created, err := s.enqueue(ctx, connection, push.Commit, TriggerPush, delivery, connection.ConnectedBy, nil)
+		if err != nil {
+			log.Printf("site builds: queue a push to %s for site %s: %v", push.Repository, connection.SiteID, err)
+			failures = append(failures, err)
+			continue
+		}
+		if created {
+			queued++
+		}
+	}
+	return queued, failures
+}
+
 func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int, error) {
 	push := event.Push
 	if push.Deleted {
@@ -492,26 +517,7 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 		log.Printf("site builds: push %s to %s is not the branch head any more; ignored", push.Commit.SHA, push.Repository)
 		return 0, s.store.RecordDelivery(ctx, s.provider.Name(), event.DeliveryID, s.now())
 	}
-	queued := 0
-	var failures []error
-	for _, connection := range connections {
-		if err := s.checkConnector(ctx, connection); errors.Is(err, ErrConnectionInactive) {
-			continue
-		} else if err != nil {
-			failures = append(failures, err)
-			continue
-		}
-		connection.Repository = push.Repository
-		_, created, err := s.enqueue(ctx, connection, push.Commit, TriggerPush, event.DeliveryID, connection.ConnectedBy, nil)
-		if err != nil {
-			log.Printf("site builds: queue a push to %s for site %s: %v", push.Repository, connection.SiteID, err)
-			failures = append(failures, err)
-			continue
-		}
-		if created {
-			queued++
-		}
-	}
+	queued, failures := s.queuePushes(ctx, push, connections, event.DeliveryID)
 	for _, connection := range previewed {
 		connection.Repository = push.Repository
 		created, err := s.queuePreview(ctx, connection, push.Commit, previewTarget{source: sites.PreviewSourceBranch, ref: push.Branch}, event.DeliveryID)

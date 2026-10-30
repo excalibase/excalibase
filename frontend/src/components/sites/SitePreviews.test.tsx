@@ -90,6 +90,7 @@ describe('SitePreviews', () => {
     await userEvent.selectOptions(await screen.findByTestId('preview-mode'), 'off');
     expect(api.put).not.toHaveBeenCalled();
     expect(screen.getByTestId('preview-off-confirm')).toHaveTextContent('removes');
+    expect(screen.getByTestId('preview-off-confirm-button')).toHaveFocus();
     vi.mocked(api.put).mockResolvedValue({ data: overview({ previews: [] }) } as never);
     await userEvent.click(screen.getByTestId('preview-off-confirm-button'));
     await waitFor(() => expect(api.put).toHaveBeenCalledWith(`${BASE}/mode`, { mode: 'off' }));

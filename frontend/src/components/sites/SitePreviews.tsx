@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiErrorMessage } from '../../api/apps';
 import {
   useRemovePreview,
@@ -120,6 +120,11 @@ function ModeSelect({
 }) {
   const setMode = useSetPreviewMode(projectId, siteId);
   const [confirmOff, setConfirmOff] = useState(false);
+  const confirmButton = useRef<HTMLButtonElement>(null);
+  // The warning takes focus with it, so a keyboard user lands on the choice.
+  useEffect(() => {
+    if (confirmOff) confirmButton.current?.focus();
+  }, [confirmOff]);
   const choose = (next: PreviewMode) => {
     if (next === 'off' && mode !== 'off') {
       setConfirmOff(true);
@@ -153,8 +158,7 @@ function ModeSelect({
           <button
             type="button"
             className={secondaryButton}
-            // The warning takes focus with it, so a keyboard user lands on the choice.
-            autoFocus
+            ref={confirmButton}
             onClick={() => {
               setConfirmOff(false);
               setMode.mutate('off');

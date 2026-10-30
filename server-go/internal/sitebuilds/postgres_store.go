@@ -14,6 +14,17 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/sites"
 )
 
+// The connection reads, all over the same columns.
+const (
+	getConnectionSQL      = `SELECT ` + connectionColumns + ` FROM site_git_connections WHERE site_id = $1 AND project_id = $2`
+	connectionsForPushSQL = `SELECT ` + connectionColumns + ` FROM site_git_connections
+		WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`
+	connectionsForRepositorySQL = `SELECT ` + connectionColumns + ` FROM site_git_connections
+		WHERE provider = $1 AND installation_id = $2 AND repository_id = $3`
+	connectionsForInstallationSQL = `SELECT ` + connectionColumns + ` FROM site_git_connections
+		WHERE provider = $1 AND installation_id = $2 AND (cardinality($3::bigint[]) = 0 OR repository_id = ANY($3))`
+)
+
 // PostgresStore keeps git builds in the platform database.
 type PostgresStore struct{ db *sql.DB }
 
@@ -22,7 +33,7 @@ var _ Store = (*PostgresStore)(nil)
 func NewPostgresStore(db *sql.DB) *PostgresStore { return &PostgresStore{db: db} }
 
 func (s *PostgresStore) GetConnection(ctx context.Context, projectID, siteID string) (*Connection, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+connectionColumns+` FROM site_git_connections WHERE site_id = $1 AND project_id = $2`, siteID, projectID)
+	row := s.db.QueryRowContext(ctx, getConnectionSQL, siteID, projectID)
 	connection, err := scanConnection(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -100,8 +111,7 @@ func (s *PostgresStore) DeleteConnection(ctx context.Context, projectID, siteID 
 }
 
 func (s *PostgresStore) ConnectionsForPush(ctx context.Context, provider string, installationID, repositoryID int64, branch string) ([]*Connection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+connectionColumns+` FROM site_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`,
-		provider, installationID, repositoryID, branch)
+	rows, err := s.db.QueryContext(ctx, connectionsForPushSQL, provider, installationID, repositoryID, branch)
 	if err != nil {
 		return nil, fmt.Errorf("find the sites a push builds: %w", err)
 	}
@@ -110,8 +120,7 @@ func (s *PostgresStore) ConnectionsForPush(ctx context.Context, provider string,
 
 // ConnectionsForRepository answers every site connected to the repository, whatever its branch (EXC-660).
 func (s *PostgresStore) ConnectionsForRepository(ctx context.Context, provider string, installationID, repositoryID int64) ([]*Connection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+connectionColumns+` FROM site_git_connections
-		WHERE provider = $1 AND installation_id = $2 AND repository_id = $3`, provider, installationID, repositoryID)
+	rows, err := s.db.QueryContext(ctx, connectionsForRepositorySQL, provider, installationID, repositoryID)
 	if err != nil {
 		return nil, fmt.Errorf("find the sites connected to a repository: %w", err)
 	}
@@ -122,9 +131,7 @@ func (s *PostgresStore) ConnectionsForInstallation(ctx context.Context, provider
 	if repositoryIDs == nil {
 		repositoryIDs = []int64{}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+connectionColumns+` FROM site_git_connections
-		WHERE provider = $1 AND installation_id = $2 AND (cardinality($3::bigint[]) = 0 OR repository_id = ANY($3))`,
-		provider, installationID, pq.Array(repositoryIDs))
+	rows, err := s.db.QueryContext(ctx, connectionsForInstallationSQL, provider, installationID, pq.Array(repositoryIDs))
 	if err != nil {
 		return nil, fmt.Errorf("find the sites connected through an installation: %w", err)
 	}
