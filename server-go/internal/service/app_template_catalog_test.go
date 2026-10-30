@@ -56,14 +56,14 @@ func TestTemplateCatalog_OffIsInvisible(t *testing.T) {
 func TestTemplateCatalog_OnListsItAfterTheStarters(t *testing.T) {
 	rig := withCatalog(newTemplateRig(t), true)
 	ids := listedIDs(t, rig)
-	if len(ids) != 7 || ids[3] != "storefront-demo" || ids[4] != "valkey" {
+	if len(ids) != 6 || ids[3] != "storefront-demo" || ids[4] != "valkey" {
 		t.Fatalf("listed %v", ids)
 	}
-	view, err := rig.svc.Get(context.Background(), tplProject, "mongodb", true)
+	view, err := rig.svc.Get(context.Background(), tplProject, "rabbitmq", true)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if view.Category != "database" || !strings.HasPrefix(view.License, "SSPL") || !view.Catalog || view.Apps[0].MinMemory != "1Gi" {
+	if view.Category != "queue" || !strings.HasPrefix(view.License, "MPL") || !view.Catalog || view.Apps[0].MinMemory != "1Gi" {
 		t.Fatalf("view %+v", view)
 	}
 }
@@ -88,17 +88,17 @@ func TestTemplateCatalog_DeployShowsTheGeneratedURLOnce(t *testing.T) {
 
 func TestTemplateCatalog_MemoryAboveThePlanIsRefused(t *testing.T) {
 	rig := withCatalog(newTemplateRig(t), true)
-	_, err := rig.svc.Deploy(context.Background(), tplProject, "mongodb", "dev", adminConfirmed)
-	refusedWith(t, err, `app "mongodb" needs at least 1Gi of memory per copy and the FREE plan gives 256Mi`)
+	_, err := rig.svc.Deploy(context.Background(), tplProject, "rabbitmq", "dev", adminConfirmed)
+	refusedWith(t, err, `app "rabbitmq" needs at least 1Gi of memory per copy and the FREE plan gives 256Mi`)
 	rig.expectNothingDone(t)
-	view, err := rig.svc.Get(context.Background(), tplProject, "mongodb", true)
+	view, err := rig.svc.Get(context.Background(), tplProject, "rabbitmq", true)
 	if err != nil || len(view.Fit.Refusals) != 1 {
 		t.Fatalf("the card says why: %+v %v", view.Fit, err)
 	}
 
 	rig.svc.deps.Plans = fixedPlan{tier: domain.Standard}
-	if _, err := rig.svc.Deploy(context.Background(), tplProject, "mongodb", "dev", adminConfirmed); err != nil {
-		t.Fatalf("standard holds mongodb: %v", err)
+	if _, err := rig.svc.Deploy(context.Background(), tplProject, "rabbitmq", "dev", adminConfirmed); err != nil {
+		t.Fatalf("standard holds rabbitmq: %v", err)
 	}
 }
 
