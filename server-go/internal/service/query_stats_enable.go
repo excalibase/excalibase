@@ -12,6 +12,15 @@ import (
 // OperationQueryStats is the lease turning a project's statistics on holds.
 const OperationQueryStats ProjectOperation = "query statistics"
 
+// ErrQueryStatsDocumentDB refuses statistics for a single-host DocumentDB
+// project, whose documents share the maintenance database the read runs in.
+var ErrQueryStatsDocumentDB = errors.New("query statistics are not available for DocumentDB projects on a single host")
+
+// dockerQueryStats turns statistics on in a single host's project container (EXC-673).
+type dockerQueryStats interface {
+	EnableQueryStats(ctx context.Context, containerID string) error
+}
+
 // SetQueryStats is the slowqueries feature for the projects this service creates.
 func (s *ProvisioningService) SetQueryStats(on bool) { s.queryStats = on }
 
@@ -31,6 +40,9 @@ func (s *ProvisioningService) EnableQueryStats(ctx context.Context, projectID st
 		}
 		return mysql.GrantQueryStats(ctx, inst.Namespace, inst.ProjectID)
 	}
+	if inst.DeploymentMode == domain.ModeDocker {
+		return s.enableDockerQueryStats(ctx, inst)
+	}
 	if err := s.requireKubernetes(inst); err != nil {
 		return err
 	}
@@ -42,6 +54,26 @@ func (s *ProvisioningService) EnableQueryStats(ctx context.Context, projectID st
 		return nil
 	}
 	if err := s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithQueryStats(cluster)); err != nil {
+		return fmt.Errorf("turn on query statistics: %w", err)
+	}
+	return nil
+}
+
+// enableDockerQueryStats restarts a single host's Postgres container once to
+// load the library, as CloudNativePG does on Kubernetes.
+func (s *ProvisioningService) enableDockerQueryStats(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if inst.DocumentDB {
+		return ErrQueryStatsDocumentDB
+	}
+	prov, ok := s.factory.Get(domain.PostgreSQL)
+	if !ok {
+		return ErrKubernetesOnly
+	}
+	stats, ok := prov.(dockerQueryStats)
+	if !ok {
+		return ErrKubernetesOnly
+	}
+	if err := stats.EnableQueryStats(ctx, inst.Namespace); err != nil {
 		return fmt.Errorf("turn on query statistics: %w", err)
 	}
 	return nil

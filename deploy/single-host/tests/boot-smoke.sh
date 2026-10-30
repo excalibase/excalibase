@@ -20,8 +20,11 @@
 # HOST_METRICS=1 installs with --host-metrics and walks host monitoring (EXC-670,
 # monitoring-journey.sh): host and container samples, the database's figures,
 # a down alert raised and resolved. Without it the monitoring routes are absent.
+# REQUEST_METRICS=1 turns request charts and slow queries on and walks them (EXC-673,
+# request-charts-journey.sh): calls and a slow statement show in their own project
+# only, and tenant containers cannot reach the counters. Without it both are absent.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG);
-# GRAPHQL_IMAGE a locally built engine image.
+# GRAPHQL_IMAGE and AUTH_IMAGE locally built engine images.
 # Every run walks realtime (EXC-612, realtime-journey.sh): a subscriber receives
 # a table's changes across a NATS restart, a pause and a resume.
 # Destroys the bundle's containers and volumes; never run it on an install you keep.
@@ -86,6 +89,7 @@ echo "== install"
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
+[ -n "${REQUEST_METRICS:-}" ] && printf 'FEATURE_REQUESTMETRICS=true\nFEATURE_SLOWQUERIES=true\n' >> "$W/.env"
 # The apps journey drives create_app through MCP, as a coding tool does (EXC-606).
 [ -n "${APPS:-}" ] && echo "FEATURE_MCP=true" >> "$W/.env"
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"
@@ -204,6 +208,13 @@ fi
 [ -n "${DOCUMENTDB:-}" ] && . "$TESTS/documentdb-journey.sh"
 [ -n "${MYSQL:-}" ] && . "$TESTS/mysql-journey.sh"
 [ -n "${PG_BACKUPS:-}" ] && . "$TESTS/postgres-backup-journey.sh"
+if [ -n "${REQUEST_METRICS:-}" ]; then
+  . "$TESTS/request-charts-journey.sh"
+else
+  rq=$(c -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/provision/$PID/requests?range=1h")
+  sq=$(c -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/provision/$PID/slow-queries/")
+  [ "$rq" = 404 ] && [ "$sq" = 404 ] && ok "request charts and slow queries are off by default (404)" || ko "with the flags off: requests $rq, slow queries $sq"
+fi
 if [ -n "${HOST_METRICS:-}" ]; then
   . "$TESTS/monitoring-journey.sh"
 else

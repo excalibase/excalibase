@@ -11,3 +11,6 @@ services:
   # GRAPHQL_IMAGE runs a locally built engine; unset keeps the bundle's release.
   graphql:
     image: ${GRAPHQL_IMAGE:-docker.io/excalibase/excalibase-graphql:${TAG:-1.5.0}}
+  # AUTH_IMAGE runs a locally built auth; unset keeps the bundle's release.
+  auth:
+    image: ${AUTH_IMAGE:-docker.io/excalibase/excalibase-auth:${TAG:-1.5.0}}

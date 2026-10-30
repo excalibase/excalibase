@@ -120,6 +120,9 @@ func (s *QueryStatsService) project(ctx context.Context, projectID string) (*dom
 	if inst.DBType == domain.MySQL && !features.Enabled(ctx, s.flags, features.MySQL) {
 		return nil, ErrNotForMySQL
 	}
+	if inst.DeploymentMode == domain.ModeDocker && inst.DocumentDB {
+		return nil, ErrQueryStatsDocumentDB
+	}
 	if !domain.IsActive(inst.Status) {
 		return nil, fmt.Errorf("%w: %s is %s", ErrProjectNotActive, projectID, inst.Status)
 	}

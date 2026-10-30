@@ -264,8 +264,13 @@ services:
       FEATURE_MYSQL: ${FEATURE_MYSQL:-false}
       # MySQL binlogs shipped every minute between backups (EXC-587).
       FEATURE_MYSQLPITR: ${FEATURE_MYSQLPITR:-false}
-      # Slow-queries page and tool (EXC-654); a single host's Postgres keeps no statistics.
+      # Slow-queries page and tool (EXC-654): new Postgres projects keep pg_stat_statements,
+      # older ones turn it on from the page with one restart (EXC-673).
       FEATURE_SLOWQUERIES: ${FEATURE_SLOWQUERIES:-false}
+      # Request charts (EXC-656): graphql and auth count per project, read once a minute
+      # over the metrics network only (EXC-673). Turns their counters on too, below.
+      FEATURE_REQUESTMETRICS: ${FEATURE_REQUESTMETRICS:-false}
+      REQUEST_METRICS_TARGETS: graphql-metrics:9464,auth-metrics:9465
       # Security and performance checks per project, in Studio and MCP (EXC-655).
       FEATURE_ADVISORS: ${FEATURE_ADVISORS:-false}
       # End-user Google and GitHub sign-in for customers' apps (EXC-662).
@@ -386,6 +391,7 @@ services:
       - engine
       - tenants
       - edge
+      - metrics
     restart: unless-stopped
 
   studio:
@@ -455,6 +461,10 @@ services:
       TRUSTED_PROXY_CIDRS: ${AIO_DATAPLANE_SUBNET:-10.203.250.16/28}
       # Docker-mode tenant databases serve no TLS; k8s tenants require it.
       TENANT_DB_SSLMODE: disable
+      # Request counters (EXC-656), bound to the metrics network alone (EXC-673).
+      REQUEST_METRICS_ENABLED: ${FEATURE_REQUESTMETRICS:-false}
+      REQUEST_METRICS_PORT: "9465"
+      REQUEST_METRICS_ADDRESS: auth-metrics
     volumes:
       - excalibase_secrets:/var/run/excalibase:ro
     depends_on:
@@ -464,9 +474,11 @@ services:
         condition: service_completed_successfully
     <<: *hardened
     networks:
-      - platform
-      - dataplane
-      - tenants
+      platform: {}
+      dataplane: {}
+      tenants: {}
+      metrics:
+        aliases: [auth-metrics]
     restart: unless-stopped
 
   # Serves every project Studio creates at /{projectId}/graphql and
@@ -498,6 +510,10 @@ services:
       # Docker-mode tenant databases serve no TLS, so no client certificate either.
       TENANT_DB_SSLMODE: disable
       SERVER_SHUTDOWN: graceful
+      # Request counters (EXC-656), bound to the metrics network alone (EXC-673).
+      APP_REQUEST_METRICS_ENABLED: ${FEATURE_REQUESTMETRICS:-false}
+      APP_REQUEST_METRICS_PORT: "9464"
+      APP_REQUEST_METRICS_ADDRESS: graphql-metrics
     volumes:
       - excalibase_secrets:/var/run/excalibase:ro
     depends_on:
@@ -513,9 +529,11 @@ services:
         condition: service_started
     <<: *hardened
     networks:
-      - platform
-      - dataplane
-      - tenants
+      platform: {}
+      dataplane: {}
+      tenants: {}
+      metrics:
+        aliases: [graphql-metrics]
     restart: unless-stopped
 
   # The only published service: HTTPS for Studio (studio.<domain>) and the
@@ -604,6 +622,11 @@ networks:
     ipam:
       config:
         - subnet: ${AIO_DATAPLANE_SUBNET:-10.203.250.16/28}
+  # provisioning reading graphql's and auth's request counters, nothing else
+  # (EXC-673): the counters bind here alone, so tenant containers cannot reach them.
+  metrics:
+    name: excalibase-metrics
+    internal: true
   # NATS and the projects' CDC watchers alone (EXC-612). Internal: no route
   # out. The engine proxy admits only the watcher image to it.
   cdc:

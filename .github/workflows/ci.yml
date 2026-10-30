@@ -53,6 +53,7 @@ jobs:
               - 'server-go/cmd/app-probe/**'
               - 'server-go/internal/provisioner/docker*'
               - 'server-go/internal/service/backup_*docker*'
+              - 'server-go/internal/service/query_stats*'
               - 'frontend/Dockerfile'
             sitesrouter:
               - 'edge/sites-router/**'
@@ -127,11 +128,15 @@ jobs:
           PLATFORM_TAG: ci
           PG_BACKUPS: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
-      - name: Fresh install with manual vault unseal (init, restart, CLI unseal) and host monitoring
+      - name: Fresh install with manual vault unseal (init, restart, CLI unseal), host monitoring, request charts and slow queries
         env:
           PLATFORM_TAG: ci
           MANUAL_UNSEAL: "1"
           HOST_METRICS: "1"
+          REQUEST_METRICS: "1"
+          # Trunk builds that bind the counters' address (EXC-673); bump with the engines.
+          GRAPHQL_IMAGE: docker.io/excalibase/excalibase-graphql:main-72a7b22
+          AUTH_IMAGE: docker.io/excalibase/excalibase-auth:main-8449290
         run: bash deploy/single-host/tests/boot-smoke.sh docker
       - name: Fresh install with MySQL (TLS clients, backups, point-in-time and in-place restore, purge)
         env:
