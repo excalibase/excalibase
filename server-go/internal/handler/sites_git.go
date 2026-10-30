@@ -66,20 +66,27 @@ func (h *SiteGitHandler) PublicRoutes(r chi.Router) {
 	r.Get("/callback", h.on(h.callback))
 }
 
-// on answers 404 while git builds are off and 503 on single-host, before anything else runs.
 func (h *SiteGitHandler) on(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		err := h.builds.Available()
-		if errors.Is(err, sitebuilds.ErrUnavailable) {
-			http.NotFound(w, r)
-			return
-		}
-		if err != nil {
-			writeSiteGitError(w, err)
+		if !gitBuildsAvailable(w, r, h.builds, writeSiteGitError) {
 			return
 		}
 		next(w, r)
 	}
+}
+
+// gitBuildsAvailable answers 404 while git builds are off and 503 on single-host, before anything else runs.
+func gitBuildsAvailable(w http.ResponseWriter, r *http.Request, builds *sitebuilds.Service, refuse func(http.ResponseWriter, error)) bool {
+	err := builds.Available()
+	if errors.Is(err, sitebuilds.ErrUnavailable) {
+		http.NotFound(w, r)
+		return false
+	}
+	if err != nil {
+		refuse(w, err)
+		return false
+	}
+	return true
 }
 
 func projectSite(w http.ResponseWriter, r *http.Request) (string, string, bool) {
@@ -142,22 +149,31 @@ func (h *SiteGitHandler) signIn(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var body struct {
-		Install bool `json:"install"`
+	install, ok := installRequested(w, r)
+	if !ok {
+		return
 	}
-	if r.ContentLength != 0 {
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSiteBodyBytes)).Decode(&body); err != nil {
-			httpError(w, errInvalidJSON, http.StatusBadRequest)
-			return
-		}
-	}
-	started, err := h.builds.StartSignIn(r.Context(), actorID(r), projectID, siteID, body.Install)
+	started, err := h.builds.StartSignIn(r.Context(), actorID(r), projectID, siteID, install)
 	if err != nil {
 		writeSiteGitError(w, err)
 		return
 	}
 	http.SetCookie(w, siteGitCookie(started.BrowserKey, 600))
 	writeJSON(w, map[string]string{"url": started.URL})
+}
+
+// installRequested reads the optional {"install": true} a sign-in start may carry.
+func installRequested(w http.ResponseWriter, r *http.Request) (bool, bool) {
+	var body struct {
+		Install bool `json:"install"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSiteBodyBytes)).Decode(&body); err != nil {
+			httpError(w, errInvalidJSON, http.StatusBadRequest)
+			return false, false
+		}
+	}
+	return body.Install, true
 }
 
 func (h *SiteGitHandler) repositories(w http.ResponseWriter, r *http.Request) {
@@ -261,7 +277,7 @@ func (h *SiteGitHandler) webhook(w http.ResponseWriter, r *http.Request) {
 	writeJSONStatus(w, http.StatusAccepted, map[string]int{"queued": queued})
 }
 
-// callback finishes a sign-in and sends the browser back to the site's page in Studio.
+// callback finishes a sign-in and sends the browser back to the site's or app's page in Studio.
 func (h *SiteGitHandler) callback(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, siteGitCookie("", -1))
 	var browserKey string
@@ -280,11 +296,19 @@ func (h *SiteGitHandler) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	outcome := url.Values{"git": {"signed-in"}}
 	if err != nil {
-		log.Printf("site builds: sign-in for site %s: %v", signIn.SiteID, err)
+		log.Printf("git builds: sign-in for site %q app %q: %v", signIn.SiteID, signIn.AppID, err)
 		outcome = url.Values{"git": {"error"}}
 	}
-	target := h.studioURL + "/project/" + url.PathEscape(signIn.ProjectID) + "/sites/" + url.PathEscape(signIn.SiteID) + "?" + outcome.Encode()
-	http.Redirect(w, r, target, http.StatusFound)
+	http.Redirect(w, r, signInReturn(h.studioURL, signIn, outcome), http.StatusFound)
+}
+
+// signInReturn is the Studio page a sign-in started from: an app's container page, or a site's.
+func signInReturn(studioURL string, signIn sitebuilds.SignIn, outcome url.Values) string {
+	page := "/sites/" + url.PathEscape(signIn.SiteID)
+	if signIn.AppID != "" {
+		page = "/containers/" + url.PathEscape(signIn.AppID)
+	}
+	return studioURL + "/project/" + url.PathEscape(signIn.ProjectID) + page + "?" + outcome.Encode()
 }
 
 func siteGitCookie(value string, maxAge int) *http.Cookie {
@@ -300,7 +324,7 @@ func writeSiteGitError(w http.ResponseWriter, err error) {
 		httpError(w, err.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, sitebuilds.ErrNotConnected), errors.Is(err, sitebuilds.ErrBuildNotFound):
 		httpError(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, sitebuilds.ErrNotAuthorized):
+	case errors.Is(err, sitebuilds.ErrNotAuthorized), errors.Is(err, sitebuilds.ErrNotDeveloper):
 		httpError(w, err.Error(), http.StatusForbidden)
 	case errors.Is(err, sitebuilds.ErrConnectionInactive):
 		httpError(w, sitebuilds.ErrConnectionInactive.Error(), http.StatusConflict)

@@ -36,6 +36,8 @@ type TierConfig struct {
 	Sites SiteTierLimits
 	// SiteBuilds bound one git build of a site on the plan (EXC-354).
 	SiteBuilds SiteBuildTierLimits
+	// AppBuilds bound one git build of an app on the plan (EXC-547).
+	AppBuilds AppBuildTierLimits
 }
 
 // SiteTierLimits bound a project's Sites. Files and file size start at
@@ -85,6 +87,7 @@ var tiers = map[domain.TierType]TierConfig{
 		AutoPauseAfterDays: 7,
 		Sites:              siteLimits(5, 30, 2),
 		SiteBuilds:         siteBuildLimits("2Gi", "5Gi", 10*60, 1),
+		AppBuilds:          appBuildLimits(2000, "4Gi", "10Gi", 15*60, 1, "2Gi", 30),
 	},
 	domain.Standard: {
 		MaxProjects:      5,
@@ -99,6 +102,7 @@ var tiers = map[domain.TierType]TierConfig{
 		StatementTimeout: "30s",
 		Sites:            siteLimits(20, 120, 5),
 		SiteBuilds:       siteBuildLimits("4Gi", "10Gi", 20*60, 2),
+		AppBuilds:        appBuildLimits(4000, "8Gi", "20Gi", 30*60, 2, "5Gi", 120),
 	},
 	domain.Enterprise: {
 		MaxProjects:      0, // unlimited
@@ -113,6 +117,7 @@ var tiers = map[domain.TierType]TierConfig{
 		StatementTimeout: "60s",
 		Sites:            siteLimits(50, 300, 10),
 		SiteBuilds:       siteBuildLimits("4Gi", "10Gi", 20*60, 2),
+		AppBuilds:        appBuildLimits(4000, "8Gi", "20Gi", 30*60, 2, "5Gi", 300),
 	},
 }
 

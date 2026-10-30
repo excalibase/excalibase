@@ -294,12 +294,12 @@ func TestDispatcher_HoldsTheCaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	holder := "other-replica"
-	claimed, err := h.Store.ClaimNext(ctx, 100, holder, time.Now().Add(time.Minute))
+	claimed, err := h.Store.ClaimNext(ctx, 100, holder, time.Now().Add(time.Minute), allKinds)
 	if err != nil || claimed == nil {
 		t.Fatalf("first claim: %+v %v", claimed, err)
 	}
 	// The project's cap is 1: the second site's build waits.
-	if next, err := h.Store.ClaimNext(ctx, 100, holder, time.Now().Add(time.Minute)); err != nil || (next != nil && next.ProjectID == h.Project) {
+	if next, err := h.Store.ClaimNext(ctx, 100, holder, time.Now().Add(time.Minute), allKinds); err != nil || (next != nil && next.ProjectID == h.Project) {
 		t.Fatalf("claimed past the project's cap: %+v %v", next, err)
 	}
 	claimed.Status = sitebuilds.StatusSucceeded
@@ -315,7 +315,7 @@ func TestDispatcher_FailsBuildsWhoseReplicaWentAway(t *testing.T) {
 	h := sitebuildstest.New(t, sitebuildstest.Options{})
 	ctx := context.Background()
 	first := h.Connect().Build
-	if _, err := h.Store.ClaimNext(ctx, 100, "dead-replica", time.Now().Add(-time.Second)); err != nil {
+	if _, err := h.Store.ClaimNext(ctx, 100, "dead-replica", time.Now().Add(-time.Second), allKinds); err != nil {
 		t.Fatal(err)
 	}
 	h.Dispatcher.Tick(ctx)
@@ -506,7 +506,8 @@ func TestDisconnect_CancelsQueuedAndRunningBuilds(t *testing.T) {
 	running := h.Connect().Build
 	h.Dispatcher.Tick(ctx)
 	deadline := time.Now().Add(5 * time.Second)
-	for h.Build(running.ID).Status != sitebuilds.StatusRunning && time.Now().Before(deadline) {
+	// RUNNING is written at the claim; the Job itself starts after the source checks.
+	for len(h.Runner.Specs()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if _, err := h.Push("main", "8888888888888888888888888888888888888888", "d-queued"); err != nil {

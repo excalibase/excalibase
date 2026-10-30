@@ -53,12 +53,16 @@ func (l siteBuildLimits) LargestBuild(ctx context.Context) (sitebuilds.BuildSize
 		if err != nil {
 			return sitebuilds.BuildSize{}, fmt.Errorf("%w: %v", ErrOrgTierUnresolved, err)
 		}
-		largest = largerBuild(largest, tc.SiteBuilds)
+		largest = largerSize(largest, siteBuildSize(tc.SiteBuilds))
 	}
 	return largest, nil
 }
 
-func largerBuild(current sitebuilds.BuildSize, plan config.SiteBuildTierLimits) sitebuilds.BuildSize {
+func siteBuildSize(plan config.SiteBuildTierLimits) sitebuilds.BuildSize {
+	return sitebuilds.BuildSize{CPUMillis: plan.CPUMillis, Memory: plan.Memory, Disk: plan.Disk}
+}
+
+func largerSize(current, plan sitebuilds.BuildSize) sitebuilds.BuildSize {
 	current.CPUMillis = max(current.CPUMillis, plan.CPUMillis)
 	current.Memory = largerQuantity(current.Memory, plan.Memory)
 	current.Disk = largerQuantity(current.Disk, plan.Disk)

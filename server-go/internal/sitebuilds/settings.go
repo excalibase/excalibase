@@ -139,35 +139,42 @@ func validCommand(what, command string) error {
 }
 
 func validEnv(env map[string]string) error {
-	if len(env) > MaxEnvVars {
-		return fmt.Errorf("a site holds at most %d build variables", MaxEnvVars)
+	return validVariables("build variable", env, reservedEnvName)
+}
+
+// validVariables checks names and sizes; reserved, when set, refuses the names the build sets itself.
+func validVariables(what string, values map[string]string, reserved func(string) error) error {
+	if len(values) > MaxEnvVars {
+		return fmt.Errorf("at most %d %ss", MaxEnvVars, what)
 	}
 	total := 0
-	names := make([]string, 0, len(env))
-	for name := range env {
+	names := make([]string, 0, len(values))
+	for name := range values {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		value := env[name]
-		if err := validEnvName(name); err != nil {
-			return err
+		value := values[name]
+		if !envNamePattern.MatchString(name) {
+			return fmt.Errorf("%s %q: a name is letters, digits and '_', not starting with a digit", what, name)
+		}
+		if reserved != nil {
+			if err := reserved(name); err != nil {
+				return err
+			}
 		}
 		if len(value) > MaxEnvValueBytes || !utf8.ValidString(value) {
-			return fmt.Errorf("build variable %s: a value is at most %d bytes of text", name, MaxEnvValueBytes)
+			return fmt.Errorf("%s %s: a value is at most %d bytes of text", what, name, MaxEnvValueBytes)
 		}
 		total += len(name) + len(value)
 	}
 	if total > maxEnvTotalBytes {
-		return fmt.Errorf("build variables hold at most %d KiB in total", maxEnvTotalBytes>>10)
+		return fmt.Errorf("%ss hold at most %d KiB in total", what, maxEnvTotalBytes>>10)
 	}
 	return nil
 }
 
-func validEnvName(name string) error {
-	if !envNamePattern.MatchString(name) {
-		return fmt.Errorf("build variable %q: a name is letters, digits and '_', not starting with a digit", name)
-	}
+func reservedEnvName(name string) error {
 	if reservedEnv[name] || strings.HasPrefix(name, "KUBERNETES_") {
 		return fmt.Errorf("build variable %s is set by the build itself", name)
 	}
