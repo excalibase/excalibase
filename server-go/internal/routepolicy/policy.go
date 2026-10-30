@@ -68,6 +68,9 @@ const (
 	// AuthForwarderToken is the log-forwarder pod's shared token (EXC-658),
 	// held by no studio caller or service principal.
 	AuthForwarderToken AuthClass = "forwarder-token"
+	// AuthRegistryPull is a project's internal-registry pull credential, which
+	// zot forwards from a node's login (EXC-540); no studio caller holds one.
+	AuthRegistryPull AuthClass = "registry-pull-credential"
 )
 
 // Owner names what resolves the caller's right to the resource in the path.
@@ -93,6 +96,8 @@ const (
 	// OwnerForwarderToken is the forwarder's token; each batch carries the
 	// project it was read for, chosen by provisioning, never by the caller.
 	OwnerForwarderToken Owner = "log-forwarder token"
+	// OwnerPullCredential is the credential's own project: the token grants pull on that project's repositories only.
+	OwnerPullCredential Owner = "pull credential's project"
 	// OwnerFunctionAudience is the JWT audience claim naming the project.
 	OwnerFunctionAudience Owner = "JWT aud names the project"
 	// OwnerBucketVisibility is the bucket's own public flag.

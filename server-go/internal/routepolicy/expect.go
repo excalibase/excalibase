@@ -86,7 +86,7 @@ func Expect(row Row, method string, p Principal) Expectation {
 		// None of these principals holds the project's derived runtime
 		// secret, so every one of them is refused as unauthenticated.
 		return Deny401
-	case AuthForwarderToken:
+	case AuthForwarderToken, AuthRegistryPull:
 		// Served on the in-cluster listener only: through the edge the route
 		// looks unmounted to everyone.
 		return Deny404

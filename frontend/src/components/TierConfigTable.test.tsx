@@ -31,12 +31,20 @@ const standard = {
   siteBuildDisk: '10Gi',
   siteBuildTimeoutSeconds: 1200,
   siteBuildConcurrency: 2,
+  appBuildCpuMillis: 4000,
+  appBuildMemory: '8Gi',
+  appBuildDisk: '20Gi',
+  appBuildTimeoutSeconds: 1800,
+  appBuildConcurrency: 2,
+  appBuildMaxImage: '5Gi',
 };
 
-function renderTable({ sites = true, siteGitBuilds = false } = {}) {
+function renderTable({ sites = true, siteGitBuilds = false, appGitBuilds = false } = {}) {
   vi.mocked(api.get).mockImplementation((url: string) =>
     Promise.resolve({
-      data: url === '/config' ? { deploymentMode: 'cloud', sites, siteGitBuilds } : [standard],
+      data: url === '/config'
+        ? { deploymentMode: 'cloud', sites, siteGitBuilds, features: { appgitbuilds: appGitBuilds } }
+        : [standard],
     } as never),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -179,6 +187,51 @@ describe('TierConfigTable', () => {
     renderTable();
     expect(await screen.findByLabelText('Max sites for STANDARD')).toBeInTheDocument();
     expect(screen.queryByLabelText('Build minutes for STANDARD')).not.toBeInTheDocument();
+  });
+
+  // An app build's limits come from the plan too (EXC-547), shown only with the appgitbuilds flag on.
+  test('edits an app build memory and minutes with the plan', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable({ appGitBuilds: true });
+
+    const memory = await screen.findByLabelText('App build memory for STANDARD');
+    expect(memory).toHaveValue('8Gi');
+    const minutes = screen.getByLabelText('App build minutes for STANDARD');
+    expect(minutes).toHaveValue(30);
+    await user.clear(minutes);
+    await user.type(minutes, '45');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/admin/tiers/STANDARD',
+        expect.objectContaining({ appBuildTimeoutSeconds: 2700, appBuildMemory: '8Gi', appBuildMaxImage: '5Gi' }),
+        ifMatchVersion4,
+      ),
+    );
+  });
+
+  test('shows and sends no app build limits while app git builds are off', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable({ siteGitBuilds: true });
+    const minutes = await screen.findByLabelText('Build minutes for STANDARD');
+    expect(screen.queryByLabelText('App build minutes for STANDARD')).not.toBeInTheDocument();
+    await user.clear(minutes);
+    await user.type(minutes, '25');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    const body = vi.mocked(api.put).mock.calls[0][1] as Record<string, unknown>;
+    expect(Object.keys(body).filter((key) => key.startsWith('appBuild'))).toEqual([]);
+  });
+
+  test('will not save an app build with no minutes', async () => {
+    const user = userEvent.setup();
+    renderTable({ appGitBuilds: true });
+    const minutes = await screen.findByLabelText('App build minutes for STANDARD');
+    await user.clear(minutes);
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
   });
 
   // Sites stays behind its install flag: no Sites, no site columns.

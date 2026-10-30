@@ -19,7 +19,8 @@ export type Feature =
   | 'authuser'
   | 'authguest'
   // On only on a single-host Docker/Podman install (EXC-670).
-  | 'hostmetrics';
+  | 'hostmetrics'
+  | 'appgitbuilds';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
