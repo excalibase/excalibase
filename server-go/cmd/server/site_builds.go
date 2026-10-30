@@ -167,7 +167,8 @@ func singleHostBuildRunner(ctx context.Context, cfg config.AppConfig, engine raw
 	}
 	if podman || !runner.HostIsolated() {
 		log.Printf("WARN: this engine may give build networks an address on the host (Docker before 28, or Podman): " +
-			"builds can reach host services listening on every address unless the host firewall drops traffic from container bridges")
+			"builds can reach host services listening on every address; upgrade to Docker 28 or later, or add the host " +
+			"firewall rule in docs/deployment/docker-local.md (Host isolation)")
 	}
 	log.Printf("INFO: site git builds on this single host: %d slot(s), under runtime %q, out only through the build egress proxy",
 		git.BuildSlots, apps.SandboxRuntime)

@@ -29,6 +29,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/excalibase/provisioning-poc/internal/buildegress"
+	"github.com/excalibase/provisioning-poc/internal/dockerapps"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 )
 
@@ -118,6 +119,8 @@ type Runner struct {
 	scripts map[string]string
 	// hostIsolated is what Verify found: build networks have no address on the host.
 	hostIsolated bool
+	// gateway: the engine takes the isolated gateway (Docker 28+), so build networks are made with it.
+	gateway bool
 }
 
 var _ sitebuilds.Runner = (*Runner)(nil)
@@ -158,22 +161,41 @@ func (r *Runner) Verify(ctx context.Context) error {
 				"or set APP_SANDBOX_RUNTIME=none to run builds without a sandbox (trusted code only)", r.opts.SandboxRuntime)
 		}
 	}
-	isolated, err := r.checkHostIsolation(ctx)
+	found, err := r.checkHostIsolation(ctx)
 	if err != nil {
 		return err
 	}
 	r.mu.Lock()
-	r.hostIsolated = isolated
+	r.hostIsolated, r.gateway = found.isolated, found.gateway
 	r.mu.Unlock()
 	return nil
 }
 
-// checkHostIsolation makes a build network and reads whether its bridge has an address on the host:
-// a container can reach the host's own services through that address unless the host firewall drops it.
-func (r *Runner) checkHostIsolation(ctx context.Context) (bool, error) {
+// isolation is what the startup check found about build networks and the host.
+type isolation struct {
+	// gateway: the engine takes the isolated gateway; isolated: the bridge has no address on the host.
+	gateway, isolated bool
+}
+
+// checkHostIsolation makes a build network the way builds will and reads whether its bridge has an
+// address on the host, through which a container reaches the host's own services unless the host
+// firewall drops it. Docker 27 refuses the isolated gateway (a 400): builds are then made without it.
+// Podman is never sent it.
+func (r *Runner) checkHostIsolation(ctx context.Context) (isolation, error) {
 	name := r.opts.NetworkPrefix + "build-check-" + strconv.FormatInt(r.opts.Now().UnixNano(), 36)
-	if _, err := r.engine.NetworkCreate(ctx, name, r.buildNetworkOptions(map[string]string{labelManaged: "true", labelComponent: componentBuild})); err != nil {
-		return false, fmt.Errorf("create a network to check build isolation: %w", err)
+	options := network.CreateOptions{Driver: "bridge", Internal: true, Labels: map[string]string{labelManaged: "true", labelComponent: componentBuild}}
+	found := isolation{gateway: !r.opts.Isolate}
+	if found.gateway {
+		options.Options = dockerapps.IsolatedGatewayOptions()
+	}
+	_, err := r.engine.NetworkCreate(ctx, name, options)
+	if found.gateway && dockerapps.GatewayModeRefused(err) {
+		log.Printf("site builds: the engine refused an isolated gateway (%v); build networks are made without it", err)
+		found.gateway, options.Options = false, nil
+		_, err = r.engine.NetworkCreate(ctx, name, options)
+	}
+	if err != nil {
+		return isolation{}, fmt.Errorf("create a network to check build isolation: %w", err)
 	}
 	defer func() {
 		if err := r.engine.NetworkRemove(context.WithoutCancel(ctx), name); err != nil {
@@ -182,14 +204,15 @@ func (r *Runner) checkHostIsolation(ctx context.Context) (bool, error) {
 	}()
 	inspect, err := r.engine.NetworkInspect(ctx, name, network.InspectOptions{})
 	if err != nil {
-		return false, fmt.Errorf("inspect the isolation check network: %w", err)
+		return isolation{}, fmt.Errorf("inspect the isolation check network: %w", err)
 	}
+	found.isolated = true
 	for _, config := range inspect.IPAM.Config {
 		if config.Gateway != "" {
-			return false, nil
+			found.isolated = false
 		}
 	}
-	return true, nil
+	return found, nil
 }
 
 // HostIsolated is whether build networks have no address on the host (Docker 28+); false means
@@ -200,11 +223,14 @@ func (r *Runner) HostIsolated() bool {
 	return r.hostIsolated
 }
 
-// buildNetworkOptions: internal, and on Docker with no address on the host (gateway mode isolated, Docker 28+).
+// buildNetworkOptions: internal, and with no address on the host where Verify found the engine takes that.
 func (r *Runner) buildNetworkOptions(labels map[string]string) network.CreateOptions {
 	options := network.CreateOptions{Driver: "bridge", Internal: true, Labels: labels}
-	if !r.opts.Isolate {
-		options.Options = map[string]string{gatewayModeIPv4: "isolated"}
+	r.mu.Lock()
+	gateway := r.gateway
+	r.mu.Unlock()
+	if gateway {
+		options.Options = dockerapps.IsolatedGatewayOptions()
 	}
 	return options
 }

@@ -25,7 +25,7 @@ func (r *Runtime) networkOptions(project string) network.CreateOptions {
 	case r.opts.Egress && r.opts.Isolate:
 		options.Options = map[string]string{"isolate": "true"}
 	case r.isolatedGateway():
-		options.Options = isolatedGatewayOptions()
+		options.Options = IsolatedGatewayOptions()
 	}
 	return options
 }

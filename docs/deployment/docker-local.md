@@ -310,13 +310,12 @@ clone step; the site's variables and build-visible secrets only the build step.
 | Logs | the kubelet's rotation | each container's log capped at 2 × 10 MB |
 | Cache | none yet | none yet |
 
-**Host firewall.** On Docker 28 or later the build network has no address on
-the host, so a build cannot reach the host's own services. On older Docker
-and on Podman it has one, and provisioning warns at start: a build could then
-connect to anything listening on all of the host's addresses (sshd, a local
-database). Upgrade Docker, or drop traffic from container bridges to the host
-(`iptables -I INPUT -i br-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP`,
-Podman: the same for `podman+`).
+**Host firewall.** Build networks get the same isolated gateway as project
+networks (see Host isolation) wherever the engine takes it. Docker before 28
+refuses it: provisioning then makes build networks without it and logs
+`WARN: ... build networks an address on the host`, and a build could connect
+to anything listening on all of the host's addresses. Upgrade Docker, or add
+the firewall rule under Host isolation; on Podman, the same for `podman+`.
 
 | `.env` | Default | Meaning |
 |---|---|---|
