@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
-	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 )
@@ -168,17 +168,16 @@ func TestStartRegistrySweeper_OnlyWhereTheRegistryIssues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stop, err := startRegistrySweeper(config.AppConfig{}, nil, nil, guard); err != nil || stop == nil {
-		t.Fatalf("a guard only registry sweeps nothing: %v", err)
+	store := offlineStore(t)
+	if parts, err := newAppRegistryParts(config.AppConfig{}, store, nil, guard); err != nil || parts.sweeper != nil || parts.client != nil {
+		t.Fatalf("a guard only registry has nothing to sweep or push to: %+v %v", parts, err)
 	}
+	startRegistrySweeper(config.AppConfig{}, nil, appRegistryParts{})()
 	internal := appregistrytest.New(t)
-	db, err := sql.Open("postgres", "postgres://unused.invalid/db")
-	if err != nil {
-		t.Fatal(err)
+	if parts, err := newAppRegistryParts(config.AppConfig{}, nil, nil, internal); err != nil || parts.sweeper != nil {
+		t.Errorf("no platform store: %+v %v", parts, err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	store := dbOnlyStore{db: db}
-	if _, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: "ftp://zot"}}, store, nil, internal); err == nil {
+	if _, err := newAppRegistryParts(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: "ftp://zot"}}, store, nil, internal); err == nil {
 		t.Error("a registry address provisioning cannot call")
 	}
 	asked := make(chan struct{}, 1)
@@ -187,10 +186,11 @@ func TestStartRegistrySweeper_OnlyWhereTheRegistryIssues(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	t.Cleanup(zot.Close)
-	stop, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: zot.URL}}, store, fakestore.NewInstances(), internal)
-	if err != nil {
-		t.Fatal(err)
+	parts, err := newAppRegistryParts(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: zot.URL}}, store, fakestore.NewInstances(), internal)
+	if err != nil || parts.client == nil || parts.sweeper == nil {
+		t.Fatalf("%+v %v", parts, err)
 	}
+	stop := startRegistrySweeper(config.AppConfig{}, store, parts)
 	<-asked
 	stop()
 }

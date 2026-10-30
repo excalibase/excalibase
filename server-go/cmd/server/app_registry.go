@@ -141,23 +141,36 @@ const (
 	appRegistrySweepInterval          = 24 * time.Hour
 )
 
-// startRegistrySweeper deletes built images nothing will run again, daily on
-// the leading replica; only an issuing registry holds images of ours.
-func startRegistrySweeper(cfg config.AppConfig, sqlStore storage.PlatformStore, instances storage.InstanceStore, internal *appregistry.Internal) (func(), error) {
-	noop := func() {
-		// app git builds off or no platform store: no images of ours to sweep
-	}
+// appRegistryParts are the issuing registry's client and its one sweeper, which both the daily sweep
+// and app builds' room-making use; zero where the registry only guards.
+type appRegistryParts struct {
+	client  *appregistry.Client
+	sweeper *service.RegistrySweeper
+}
+
+func newAppRegistryParts(cfg config.AppConfig, sqlStore storage.PlatformStore, instances storage.InstanceStore, internal *appregistry.Internal) (appRegistryParts, error) {
 	if !internal.CanIssue() || sqlStore == nil {
-		return noop, nil
+		return appRegistryParts{}, nil
 	}
 	client, err := internal.Client(cfg.AppRegistry.URL)
 	if err != nil {
-		return noop, err
+		return appRegistryParts{}, err
+	}
+	sweeper := service.NewRegistrySweeper(client, apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()), projectKept(instances))
+	return appRegistryParts{client: client, sweeper: sweeper}, nil
+}
+
+// startRegistrySweeper deletes built images nothing will run again, daily on
+// the leading replica; only an issuing registry holds images of ours.
+func startRegistrySweeper(cfg config.AppConfig, sqlStore storage.PlatformStore, parts appRegistryParts) func() {
+	if parts.sweeper == nil {
+		return func() {
+			// app git builds off or no platform store: no images of ours to sweep
+		}
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
 		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), appRegistrySweepLockID)
 	}
-	sweeper := service.NewRegistrySweeper(client, apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()), projectKept(instances))
-	return sweeper.Start(context.Background(), service.NewLeadership(lock), appRegistrySweepInterval), nil
+	return parts.sweeper.Start(context.Background(), service.NewLeadership(lock), appRegistrySweepInterval)
 }

@@ -1,5 +1,13 @@
 package config
 
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/features"
+)
+
 // The images an app build (EXC-547) runs, pinned by digest so a moved tag never
 // changes what builds a user's code. Chosen and measured in the gVisor
 // app-build spike (excalibase-knowledge docs/spikes/2026-10-29-gvisor-app-builds.md);
@@ -14,3 +22,34 @@ const (
 	// DefaultAppCraneImage fetches the run image into the build's OCI layout.
 	DefaultAppCraneImage = "gcr.io/go-containerregistry/crane:v0.22.1@sha256:1f968817b95790bed063f71175aa6b8ff879fa17064020415f3e18bb6e6a36e1"
 )
+
+// AppBuildConfig is where git builds of apps (EXC-547) run and the images they run.
+type AppBuildConfig struct {
+	// Namespace holds every app build Job, apart from site builds; the chart creates it with features.appGitBuilds.
+	Namespace     string
+	BuildKitImage string
+	BuilderImage  string
+	RunImage      string
+	CraneImage    string
+}
+
+func loadAppBuilds() AppBuildConfig {
+	return AppBuildConfig{
+		Namespace:     strings.TrimSpace(envOr("APP_BUILD_NAMESPACE", "excalibase-app-builds")),
+		BuildKitImage: strings.TrimSpace(envOr("APP_BUILD_BUILDKIT_IMAGE", DefaultAppBuildKitImage)),
+		BuilderImage:  strings.TrimSpace(envOr("APP_BUILD_BUILDER_IMAGE", DefaultAppBuilderImage)),
+		RunImage:      strings.TrimSpace(envOr("APP_BUILD_RUN_IMAGE", DefaultAppRunImage)),
+		CraneImage:    strings.TrimSpace(envOr("APP_BUILD_CRANE_IMAGE", DefaultAppCraneImage)),
+	}
+}
+
+// validateAppBuilds refuses a namespace no build could run in, once app git builds are on.
+func (c AppConfig) validateAppBuilds() error {
+	if !features.Enabled(context.Background(), c.Features(), features.AppGitBuilds) {
+		return nil
+	}
+	if !namespacePattern.MatchString(c.AppBuild.Namespace) {
+		return fmt.Errorf("APP_BUILD_NAMESPACE %q is not a namespace name", c.AppBuild.Namespace)
+	}
+	return nil
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/gitprovider"
 	"github.com/excalibase/provisioning-poc/internal/gitprovider/githubapp"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -33,6 +34,9 @@ type siteBuilds struct {
 	dispatcher *sitebuilds.Dispatcher
 	// wired is what the boot check asks: a cluster runner, or single-host, which refuses by name.
 	wired bool
+	// apps serves git builds of apps (EXC-547) over the same service; appsWired is whether they can run here.
+	apps      *handler.AppGitHandler
+	appsWired bool
 }
 
 type siteBuildArgs struct {
@@ -44,6 +48,7 @@ type siteBuildArgs struct {
 	limits   sitebuilds.LimitsSource
 	// members judges a connector by the deploy route's own checks.
 	members sitebuilds.MembershipChecker
+	apps    appBuildArgs
 }
 
 // siteBuildMode: off unless switched on where Sites is offered; single-host is named, never silently off.
@@ -60,11 +65,15 @@ func siteBuildMode(cfg config.AppConfig) sitebuilds.Mode {
 func newSiteBuilds(args siteBuildArgs) siteBuilds {
 	cfg := args.cfg
 	mode := siteBuildMode(cfg)
-	off := siteBuilds{handler: handler.NewSiteGitHandler(sitebuilds.NewService(nil, nil, nil, nil, nil, sitebuilds.Options{Mode: mode}), cfg.StudioURL)}
+	offService := sitebuilds.NewService(nil, nil, nil, nil, nil, sitebuilds.Options{Mode: mode})
+	off := siteBuilds{handler: handler.NewSiteGitHandler(offService, cfg.StudioURL), apps: handler.NewAppGitHandler(offService)}
 	if mode != sitebuilds.ModeOn {
 		off.wired = mode == sitebuilds.ModeSingleHost
 		if mode == sitebuilds.ModeSingleHost {
 			log.Printf("INFO: site git builds are switched on but not offered on single-host; the API says so")
+		}
+		if appBuildsFlagOn(cfg) {
+			log.Printf("WARN: appgitbuilds is on but app git builds run only beside site git builds in a cluster (SITES_GIT_BUILDS_ENABLED)")
 		}
 		return off
 	}
@@ -94,7 +103,24 @@ func newSiteBuilds(args siteBuildArgs) siteBuilds {
 	dispatcher := sitebuilds.NewDispatcher(service, runner, sitebuilds.DispatcherOptions{Slots: cfg.SiteGit.BuildSlots})
 	log.Printf("INFO: site git builds on: %d slot(s) in namespace %s under RuntimeClass %s",
 		cfg.SiteGit.BuildSlots, cfg.SiteGit.BuildNamespace, cfg.AppRuntimeClass)
-	return siteBuilds{handler: handler.NewSiteGitHandler(service, cfg.StudioURL), dispatcher: dispatcher, wired: true}
+	appsWired := wireAppBuilds(cfg, client, provider, service, dispatcher, args.apps)
+	return siteBuilds{handler: handler.NewSiteGitHandler(service, cfg.StudioURL), dispatcher: dispatcher, wired: true,
+		apps: handler.NewAppGitHandler(service), appsWired: appsWired}
+}
+
+// wireAppBuilds turns on git builds of apps where they are wanted; with the flag on, it says why when they are not.
+func wireAppBuilds(cfg config.AppConfig, client *k8s.Client, files gitprovider.FileChecker,
+	service *sitebuilds.Service, dispatcher *sitebuilds.Dispatcher, args appBuildArgs) bool {
+	if !appBuildsWanted(cfg, args.internal) {
+		if appBuildsFlagOn(cfg) {
+			log.Printf("WARN: appgitbuilds is on but app git builds need the internal registry issuing (APP_REGISTRY_HOST, its key and the vault); the API says they are not offered")
+		}
+		return false
+	}
+	if err := enableAppBuilds(cfg, client, files, service, dispatcher, args); err != nil {
+		log.Fatalf("app builds: %v", err)
+	}
+	return true
 }
 
 // siteGitCallbackURL is on Studio's origin: Studio calls /api there, so that is where the sign-in's browser cookie lives.
@@ -104,21 +130,27 @@ func siteGitCallbackURL(cfg config.AppConfig) string {
 
 // verifySiteBuildCluster refuses to start without the build namespace the chart makes and the sandbox RuntimeClass.
 func verifySiteBuildCluster(cfg config.AppConfig, client *k8s.Client) error {
+	return verifyBuildCluster(client, cfg.SiteGit.BuildNamespace,
+		"(SITES_BUILD_NAMESPACE) does not exist; the chart creates it and the builder's Role with features.sitesGitBuilds", cfg.AppRuntimeClass)
+}
+
+// verifyBuildCluster checks a build namespace and the sandbox RuntimeClass; missing says what is missing and who makes it.
+func verifyBuildCluster(client *k8s.Client, namespace, missing, runtimeClass string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), siteBuildCheckTimeout)
 	defer cancel()
-	exists, err := client.NamespaceExists(ctx, cfg.SiteGit.BuildNamespace)
+	exists, err := client.NamespaceExists(ctx, namespace)
 	if err != nil {
-		return fmt.Errorf("check the build namespace %s: %w", cfg.SiteGit.BuildNamespace, err)
+		return fmt.Errorf("check the build namespace %s: %w", namespace, err)
 	}
 	if !exists {
-		return fmt.Errorf("the build namespace %s (SITES_BUILD_NAMESPACE) does not exist; the chart creates it and the builder's Role with features.sitesGitBuilds", cfg.SiteGit.BuildNamespace)
+		return fmt.Errorf("the build namespace %s %s", namespace, missing)
 	}
-	found, err := client.RuntimeClassExists(ctx, cfg.AppRuntimeClass)
+	found, err := client.RuntimeClassExists(ctx, runtimeClass)
 	if err != nil {
-		return fmt.Errorf("check RuntimeClass %q: %w", cfg.AppRuntimeClass, err)
+		return fmt.Errorf("check RuntimeClass %q: %w", runtimeClass, err)
 	}
 	if !found {
-		return fmt.Errorf("RuntimeClass %q (APP_RUNTIME_CLASS) does not exist; builds run only under the sandbox", cfg.AppRuntimeClass)
+		return fmt.Errorf("RuntimeClass %q (APP_RUNTIME_CLASS) does not exist; builds run only under the sandbox", runtimeClass)
 	}
 	return nil
 }

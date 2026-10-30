@@ -322,6 +322,8 @@ type AppConfig struct {
 	// SitesGitBuildsEnabled offers git builds of sites (EXC-354) where Sites itself is offered.
 	SitesGitBuildsEnabled bool
 	SiteGit               SiteGitConfig
+	// AppBuild is where git builds of apps run (EXC-547).
+	AppBuild AppBuildConfig
 	// DarkFeatures are the features shipped dark that this install turned on
 	// (EXC-554); feature code asks Features(), never this list.
 	DarkFeatures []features.Feature
@@ -426,6 +428,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateAppLocalRegistries(); err != nil {
 		return err
 	}
+	if err := c.validateAppBuilds(); err != nil {
+		return err
+	}
 	if err := c.validateAppRegistry(); err != nil {
 		return err
 	}
@@ -450,6 +455,7 @@ func Load() AppConfig {
 	cfg.SiteGit = loadSiteGit()
 	cfg.AppLocalRegistries = loadAppLocalRegistries()
 	cfg.AppRegistry = loadAppRegistry()
+	cfg.AppBuild = loadAppBuilds()
 	return cfg
 }
 

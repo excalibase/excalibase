@@ -26,6 +26,13 @@ type darkProbe struct{ method, path string }
 var darkRoutes = map[features.Feature][]darkProbe{
 	features.AppGitBuilds: {
 		{http.MethodPost, "/api/projects/" + matrixProjectA + "/internal-registry/pull-credential/rotate"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/apps/app-1/git"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/apps/app-1/git"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/apps/app-1/git/sign-in"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/apps/app-1/git/repositories"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/apps/app-1/builds"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/apps/app-1/builds"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/apps/app-1/builds/b-1"},
 	},
 	features.MCP: {
 		{http.MethodPost, "/mcp"},
@@ -117,7 +124,7 @@ var darkWork = map[features.Feature]string{
 	features.MySQLPITR:    "TestMySQLBinlogShippingStartsOnlyWithItsFeature",
 	features.LogRetention: "TestLogPlanSweepStartsOnlyWithItsFeature",
 	features.AuthOTP:      "TestAuthOTP_OffHidesTheSwitchEvenWithOAuthOn",
-	features.AppGitBuilds: "TestTierHandler_AppBuildLimitsStayDarkWhileTheFlagIsOff",
+	features.AppGitBuilds: "TestAppBuilds_NothingWiredWhileTheFlagIsOff",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

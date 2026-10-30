@@ -300,10 +300,7 @@ func runServer(cfg config.AppConfig) {
 	defer stopAppRollouts()
 	stopImageWatcher := startImageWatcher(cfg, deps.features, sqlStore, deps.appDeploySvc)
 	defer stopImageWatcher()
-	stopRegistrySweep, err := startRegistrySweeper(cfg, sqlStore, store, deps.internalRegistry)
-	if err != nil {
-		log.Fatalf("internal registry sweep (APP_REGISTRY_URL): %v", err)
-	}
+	stopRegistrySweep := startRegistrySweeper(cfg, sqlStore, deps.appRegistry)
 	defer stopRegistrySweep()
 	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
 	defer stopCredentialRenewal()
@@ -1074,6 +1071,8 @@ type handlerDeps struct {
 	internalRegistryH *handler.InternalRegistryHandler
 	// internalRegistry is the platform's registry for git builds; nil without one.
 	internalRegistry *appregistry.Internal
+	// appRegistry is the issuing registry's client and sweeper, shared by the sweep and app builds.
+	appRegistry appRegistryParts
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1782,10 +1781,17 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	startHostnameSweep(context.Background(), sitesSvc)
 	provSvc.SetSitePurger(sitesSvc)
 	provSvc.SetSiteRouter(sitesSvc)
+	appRegistry, err := newAppRegistryParts(cfg, sqlStore, store, internalRegistry)
+	if err != nil {
+		log.Fatalf("internal registry (APP_REGISTRY_URL): %v", err)
+	}
 	builds := newSiteBuilds(siteBuildArgs{cfg: cfg, sqlStore: sqlStore, kube: k8sClient, vault: vc, sites: sitesSvc,
 		limits:  service.NewSiteBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
-		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}})
+		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore},
+		apps: appBuildArgs{internal: internalRegistry, registry: appRegistry, deploys: appDeploySvc,
+			apps: apphost.NewPostgresAppStore(sqlStore.DB()), limits: service.NewAppBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc)}})
 	return &handlerDeps{
+		appRegistry:           appRegistry,
 		siteBuilds:            builds,
 		provHandler:           provHandler,
 		sdkKeysHandler:        handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
@@ -2348,6 +2354,8 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.Get("/logs", d.appLogHandler.Logs)
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
 				r.With(dev).Put("/secrets/{name}", d.appSecretHandler.Set)
+				// Git builds of apps (EXC-547): dark with appgitbuilds, but a connection can always be removed.
+				d.siteBuilds.apps.Routes(r, dev, features.Require(d.features, features.AppGitBuilds))
 				if d.appDomainHandler != nil {
 					r.Get("/certificate", d.appDomainHandler.HostCertificate)
 					r.Route("/domains", func(r chi.Router) {
