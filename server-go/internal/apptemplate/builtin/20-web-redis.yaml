@@ -1,20 +1,22 @@
-# A public web app beside an internal Redis. The web image is a placeholder
-# (nginx-unprivileged 1.27): replace it with your own image after deploying;
-# the REDIS_* variables stay.
+# A public web app beside an internal Redis-compatible cache (Valkey). The web
+# image is a placeholder (nginx-unprivileged 1.27): replace it with your own
+# image after deploying; the REDIS_* variables stay.
 format: excalibase.template/v1
 id: web-redis
 name: Web app + Redis starter
-summary: A public web app with a private Redis it reaches by name, password generated for you.
+summary: A public web app with a private Redis-compatible cache (Valkey) it reaches by name, password generated for you.
+category: starter
+license: Valkey BSD-3-Clause; nginx BSD-2-Clause
 description: >-
   Two apps. web is a public web app on its own URL (placeholder image
-  nginx-unprivileged 1.27 on port 8080; swap in your own image). redis is an
-  internal service with a 1Gi disk that only this project's apps reach, at
-  redis:6379. web gets REDIS_HOST, REDIS_PORT, REDIS_PASSWORD and REDIS_URL;
+  nginx-unprivileged 1.27 on port 8080; swap in your own image). redis is
+  Valkey 9.0, a Redis-compatible internal service with a 1Gi disk that only
+  this project's apps reach, at redis:6379. web gets REDIS_HOST, REDIS_PORT, REDIS_PASSWORD and REDIS_URL;
   the password is generated when you deploy and stored only as a secret of
   each app. Turns on the project's private network.
 apps:
   - name: redis
-    image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    image: valkey/valkey@sha256:2d04268dfa26ab31cfa3fdc538866e76438b2d00e41db41b8cb86d780ac5a416
     internal: true
     internalPorts: [6379]
     replicas: 1

@@ -100,6 +100,8 @@ func (h *AppTemplateHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		writeTemplateError(w, err)
 		return
 	}
+	// The answer may carry the template's generated values, readable only this once.
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSONStatus(w, http.StatusAccepted, result)
 }
 

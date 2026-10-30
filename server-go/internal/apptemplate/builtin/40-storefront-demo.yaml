@@ -1,16 +1,18 @@
 # The storefront demo: a working store built on this project (the image is the
-# excalibase-sdk-js examples/storefront app) and a private Redis it counts
-# product views in. Its setup script configures the project afterwards.
+# excalibase-sdk-js examples/storefront app) and a private Redis-compatible
+# cache (Valkey) it counts product views in. Its setup script configures the project afterwards.
 format: excalibase.template/v1
 id: storefront-demo
 name: Storefront demo
-summary: A working store on this project's API, with a private Redis for product views.
+summary: A working store on this project's API, with a private Redis-compatible cache for product views.
+category: starter
+license: Valkey BSD-3-Clause; storefront Apache-2.0
 description: >-
   Two apps. storefront is a public web app (excalibase/storefront-demo on port
   8080): a small shop whose browser code uses this project's GraphQL API,
-  end-user sign-in and realtime through @excalibase/sdk. redis is an internal
-  service with a 1Gi disk that only this project's apps reach, at redis:6379;
-  storefront counts product views in it. After deploying, run the store's setup
+  end-user sign-in and realtime through @excalibase/sdk. redis is Valkey 9.0,
+  a Redis-compatible internal service with a 1Gi disk that only this
+  project's apps reach, at redis:6379; storefront counts product views in it. After deploying, run the store's setup
   script (excalibase-sdk-js examples/storefront, or node setup/setup.mjs in the
   image): through the platform's APIs it creates the tables and sample products,
   the permissions for guests, customers and a custom staff role, a tracked
@@ -19,7 +21,7 @@ description: >-
   Postgres database. Turns on the project's private network.
 apps:
   - name: redis
-    image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    image: valkey/valkey@sha256:2d04268dfa26ab31cfa3fdc538866e76438b2d00e41db41b8cb86d780ac5a416
     internal: true
     internalPorts: [6379]
     replicas: 1

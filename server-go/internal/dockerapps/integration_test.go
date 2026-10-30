@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,9 @@ import (
 // call it makes is one the proxy admits.
 
 const itBusybox = "docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+
+// itValkey is the catalog template's image: it starts as root and steps down.
+const itValkey = "docker.io/valkey/valkey@sha256:2d04268dfa26ab31cfa3fdc538866e76438b2d00e41db41b8cb86d780ac5a416"
 
 type realRig struct {
 	t                *testing.T
@@ -240,5 +244,67 @@ func TestRealEngineRunsAnAppThroughTheProxy(t *testing.T) {
 	list, err := rig.direct.ContainerList(ctx, container.ListOptions{All: true, Filters: labelFilter(labelApp, "app-it")})
 	if err != nil || len(list) != 0 {
 		t.Fatalf("containers left: %d (%v)", len(list), err)
+	}
+}
+
+// EXC-669: on a real engine through the real proxy, one app reaches another
+// by its bare name, and arguments read the app's variables as on Kubernetes.
+func TestRealEngineAppsReachEachOtherByName(t *testing.T) {
+	rig := newRealRig(t)
+	ctx := context.Background()
+	web := itApp("unused")
+	web.Disk = nil
+	web.Args = []string{"sh", "-c", "mkdir -p /www && echo $(BODY) > /www/index.html && exec httpd -f -p 8080 -h /www"}
+	web.Env = []apphost.EnvVar{{Name: "BODY", Kind: apphost.KindLiteral, Value: literal("expanded")}}
+	rig.deploy(web, "dep-web")
+
+	caller := itApp("caller")
+	caller.ID, caller.Name, caller.Disk = "app-it2", "caller", nil
+	rig.deploy(caller, "dep-caller")
+	list, err := rig.direct.ContainerList(ctx, container.ListOptions{Filters: labelFilter(labelApp, "app-it2")})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("caller containers: %d (%v)", len(list), err)
+	}
+	output, err := exec.Command("docker", "exec", list[0].ID, "wget", "-qO-", "-T", "3", "http://web:8080/").CombinedOutput()
+	if body := strings.TrimSpace(string(output)); err != nil || body != "expanded" {
+		t.Fatalf("web by name from caller: %q (%v)", body, err)
+	}
+	for _, id := range []string{"app-it", "app-it2"} {
+		if err := rig.rt.DeleteAppWorkload(ctx, rig.db, id, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Valkey starts as root and steps down to its own user (setpriv); without a
+// sandbox that needs the step-down capabilities the runtime keeps (EXC-669).
+func TestRealEngineAnUnsandboxedAppStepsDownFromRoot(t *testing.T) {
+	rig := newRealRig(t)
+	ctx := context.Background()
+	cache := itApp("unused")
+	cache.Name, cache.Image, cache.Port, cache.HealthCheckPath = "valkey", itValkey, 0, ""
+	cache.Internal = true
+	cache.InternalPorts = []apphost.InternalPort{{Port: 6379, Protocol: apphost.ProtocolTCP}}
+	cache.Args = []string{"--appendonly", "yes", "--dir", "/data"}
+	rig.deploy(cache, "dep-valkey")
+	list, err := rig.direct.ContainerList(ctx, container.ListOptions{Filters: labelFilter(labelApp, cache.ID)})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("valkey containers: %d (%v)", len(list), err)
+	}
+	output, err := exec.Command("docker", "exec", list[0].ID, "valkey-cli", "ping").CombinedOutput()
+	if reply := strings.TrimSpace(string(output)); err != nil || reply != "PONG" {
+		t.Fatalf("valkey: %q (%v)", reply, err)
+	}
+	top, err := rig.direct.ContainerTop(ctx, list[0].ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, command := slices.Index(top.Titles, "UID"), slices.Index(top.Titles, "CMD")
+	server := slices.IndexFunc(top.Processes, func(process []string) bool { return strings.Contains(process[command], "valkey-server") })
+	if server < 0 || top.Processes[server][user] == "root" || top.Processes[server][user] == "0" {
+		t.Fatalf("valkey runs as root or not at all: %v", top.Processes)
+	}
+	if err := rig.rt.DeleteAppWorkload(ctx, rig.db, cache.ID, time.Minute); err != nil {
+		t.Fatal(err)
 	}
 }

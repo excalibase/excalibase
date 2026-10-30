@@ -100,7 +100,9 @@ rootless Podman install apps without the sandbox, knowingly:
 podman compose up -d
 ```
 
-Apps then run with every capability dropped but `NET_BIND_SERVICE`,
+Apps then run with every capability dropped but `NET_BIND_SERVICE`, `CHOWN`,
+`DAC_OVERRIDE`, `FOWNER`, `SETUID` and `SETGID` (what images such as Valkey or
+RabbitMQ need to step down from root),
 `no-new-privileges`, the plan's memory, CPU and 1024 processes, under crun:
 they share the host's kernel. Run only code you trust, or use Docker with
 gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
