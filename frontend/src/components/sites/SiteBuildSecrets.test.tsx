@@ -11,8 +11,15 @@ vi.mock('../../api/client', () => ({
 
 const SECRETS_URL = '/projects/proj-1/sites/build-secrets';
 
-function renderSecrets(secrets: { name: string; buildVisible: boolean }[]) {
-  vi.mocked(api.get).mockResolvedValue({ data: secrets } as never);
+function renderSecrets(secrets: { name: string; buildVisible: boolean }[], appGitBuilds = false) {
+  vi.mocked(api.get).mockImplementation((url: string) =>
+    Promise.resolve({
+      data:
+        url === '/config'
+          ? { deploymentMode: 'cloud', features: { appgitbuilds: appGitBuilds } }
+          : secrets,
+    } as never),
+  );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -39,6 +46,19 @@ describe('SiteBuildSecrets', () => {
     await waitFor(() =>
       expect(api.put).toHaveBeenCalledWith(SECRETS_URL, { buildVisible: ['B_KEY'] }),
     );
+  });
+
+  test('with app git builds on, it says every step of an app build can read a marked secret', async () => {
+    renderSecrets([{ name: 'NPM_TOKEN', buildVisible: true }], true);
+    expect(await screen.findByTestId('app-build-secrets-warning')).toHaveTextContent(
+      /any step of an app build/i,
+    );
+  });
+
+  test('with app git builds off, only the site warning shows', async () => {
+    renderSecrets([{ name: 'NPM_TOKEN', buildVisible: true }]);
+    expect(await screen.findByTestId('site-build-secrets-warning')).toBeInTheDocument();
+    expect(screen.queryByTestId('app-build-secrets-warning')).not.toBeInTheDocument();
   });
 
   test('a project without secrets says so', async () => {

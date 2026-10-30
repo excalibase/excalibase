@@ -1,11 +1,13 @@
 import { apiErrorMessage } from '../../api/apps';
 import { useBuildSecrets, useSetBuildSecrets } from '../../api/siteBuilds';
 import { Spinner } from '../containers/ContainerBits';
+import { useFeatureEnabled } from '../../hooks/useDeploymentMode';
 
 // Project secrets stay out of builds unless marked here; a marked one ends up in public files.
 export function SiteBuildSecrets({ projectId }: { readonly projectId: string }) {
   const { data: secrets, error } = useBuildSecrets(projectId);
   const update = useSetBuildSecrets(projectId);
+  const { enabled: appBuilds } = useFeatureEnabled('appgitbuilds');
   if (error)
     return (
       <p className="text-xs text-red-400">
@@ -25,6 +27,13 @@ export function SiteBuildSecrets({ projectId }: { readonly projectId: string }) 
         A secret a build can see may be copied into the built files, which anyone can download. Only
         mark values meant to be public, such as a publishable key.
       </p>
+      {appBuilds && (
+        <p className="text-xs text-amber-400" data-testid="app-build-secrets-warning">
+          App builds see the same secrets. Any step of an app build can read a marked secret (every
+          Dockerfile RUN line, every buildpack), not only the step that mounts it, and a secret
+          written into an image layer is readable by anyone who can pull the image.
+        </p>
+      )}
       <ul className="space-y-1">
         {secrets.map((secret) => (
           <li key={secret.name}>
