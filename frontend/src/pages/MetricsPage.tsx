@@ -3,6 +3,8 @@ import { useCurrentMetrics, useMetricsHistory } from '../hooks/useMetrics';
 import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { MetricCard } from '../components/shared/MetricCard';
 import { MetricsEndpointCard } from '../components/MetricsEndpointCard';
+import { ProjectContainersSection } from '../components/monitoring/ProjectContainersSection';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { Cpu, Server, HardDrive, Network, Zap, Timer, Loader2, AlertTriangle } from 'lucide-react';
 import {
   AreaChart,
@@ -39,6 +41,7 @@ export function MetricsPage() {
 
   const { data: current, isLoading } = useCurrentMetrics(projectId);
   const { data: history } = useMetricsHistory(projectId, 30);
+  const { enabled: hostMetrics } = useFeatureEnabled('hostmetrics');
 
   // A new project has no history yet: the server sends metrics: null.
   const chartData = (history?.metrics ?? [])
@@ -284,6 +287,7 @@ export function MetricsPage() {
             )}
         </>
       )}
+      {projectId && hostMetrics && <ProjectContainersSection projectId={projectId} />}
       {projectId && <MetricsEndpointCard projectId={projectId} />}
     </div>
   );

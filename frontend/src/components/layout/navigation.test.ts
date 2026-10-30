@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { PROJECT_NAV, visibleNavItems, visibleProjectNav } from './navigation';
+import { PROJECT_NAV, visibleNavItems, visibleProjectNav, visiblePlatformNav } from './navigation';
 
 describe('project navigation', () => {
   test('the project home is the project, not its database', () => {
@@ -61,5 +61,24 @@ describe('project navigation', () => {
     expect(labels(true, true)).toContain('Requests');
     expect(labels(false, true)).toContain('Requests');
     expect(monitoring?.children?.find((item) => item.label === 'Requests')).toMatchObject({ to: 'monitoring/requests', feature: 'requestmetrics' });
+  });
+});
+
+describe('platform navigation', () => {
+  const labels = (isAdmin: boolean, selfHosted: boolean, hostmetrics?: boolean) =>
+    visiblePlatformNav({ isAdmin, selfHosted, features: { hostmetrics } }).map((item) => item.label);
+
+  // EXC-670: host monitoring ships dark and is for platform admins only.
+  test('Host is listed only for platform admins with host metrics on', () => {
+    expect(labels(true, true)).not.toContain('Host');
+    expect(labels(true, true, false)).not.toContain('Host');
+    expect(labels(false, true, true)).not.toContain('Host');
+    expect(labels(true, true, true)).toContain('Host');
+    expect(visiblePlatformNav({ isAdmin: true, selfHosted: true, features: { hostmetrics: true } }).find((item) => item.label === 'Host')).toMatchObject({ to: '/admin/host' });
+  });
+
+  test('organizations are a cloud page and Platform Admin an admin one', () => {
+    expect(labels(false, true)).toEqual(['Dashboard', 'Projects', 'Provision', 'Access tokens']);
+    expect(labels(true, false)).toEqual(['Dashboard', 'Organizations', 'Projects', 'Provision', 'Access tokens', 'Platform Admin']);
   });
 });

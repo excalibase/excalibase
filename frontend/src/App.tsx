@@ -56,6 +56,7 @@ const AdvisorsPage = lazy(() => import('./pages/AdvisorsPage').then(m => ({ defa
 const LogExplorerPage = lazy(() => import('./pages/LogExplorerPage').then(m => ({ default: m.LogExplorerPage })));
 const RequestsPage = lazy(() => import('./pages/RequestsPage').then(m => ({ default: m.RequestsPage })));
 const SlowQueriesPage = lazy(() => import('./pages/SlowQueriesPage').then(m => ({ default: m.SlowQueriesPage })));
+const HostMonitoringPage = lazy(() => import('./pages/HostMonitoringPage').then(m => ({ default: m.HostMonitoringPage })));
 const PlatformAdminPage = lazy(() => import('./pages/PlatformAdminPage').then(m => ({ default: m.PlatformAdminPage })));
 const ContainersPage = lazy(() => import('./pages/ContainersPage').then(m => ({ default: m.ContainersPage })));
 const ContainerTemplatesPage = lazy(() => import('./pages/ContainerTemplatesPage').then(m => ({ default: m.ContainerTemplatesPage })));
@@ -107,6 +108,7 @@ export default function App() {
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/provision" element={<ProvisionPage />} />
             <Route path="/admin" element={<PlatformAdminPage />} />
+            <Route path="/admin/host" element={<FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate>} />
             <Route path="/account/tokens" element={<AccessTokensPage />} />
           </Route>
 

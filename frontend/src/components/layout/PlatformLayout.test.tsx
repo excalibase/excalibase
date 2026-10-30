@@ -49,3 +49,19 @@ describe('PlatformLayout', () => {
     expect(screen.queryByRole('link', { name: /platform admin/i })).not.toBeInTheDocument();
   });
 });
+
+describe('PlatformLayout host monitoring', () => {
+  test('a platform admin reaches Host when the server has host metrics on', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { deploymentMode: 'selfhosted', features: { hostmetrics: true } } } as never);
+    renderLayout('platform_admin');
+    const link = await within(screen.getByTestId('platform-nav')).findByRole('link', { name: /^host$/i });
+    expect(link).toHaveAttribute('href', '/admin/host');
+  });
+
+  test('Host stays hidden while host metrics are off', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { deploymentMode: 'selfhosted', features: {} } } as never);
+    renderLayout('platform_admin');
+    expect(await screen.findByRole('link', { name: /platform admin/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^host$/i })).not.toBeInTheDocument();
+  });
+});
