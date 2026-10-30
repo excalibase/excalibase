@@ -14,15 +14,26 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/sites"
 )
 
-// The connection reads, all over the same columns.
+// The connection reads, each spelt out whole so every statement is a constant; scanConnection reads
+// these columns in this order.
 const (
-	getConnectionSQL      = `SELECT ` + connectionColumns + ` FROM site_git_connections WHERE site_id = $1 AND project_id = $2`
-	connectionsForPushSQL = `SELECT ` + connectionColumns + ` FROM site_git_connections
-		WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`
-	connectionsForRepositorySQL = `SELECT ` + connectionColumns + ` FROM site_git_connections
-		WHERE provider = $1 AND installation_id = $2 AND repository_id = $3`
-	connectionsForInstallationSQL = `SELECT ` + connectionColumns + ` FROM site_git_connections
-		WHERE provider = $1 AND installation_id = $2 AND (cardinality($3::bigint[]) = 0 OR repository_id = ANY($3))`
+	getConnectionSQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
+		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		created_at, updated_at, preview_settings
+		FROM site_git_connections WHERE site_id = $1 AND project_id = $2`
+	connectionsForPushSQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
+		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		created_at, updated_at, preview_settings
+		FROM site_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`
+	connectionsForRepositorySQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
+		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		created_at, updated_at, preview_settings
+		FROM site_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3`
+	connectionsForInstallationSQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
+		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		created_at, updated_at, preview_settings
+		FROM site_git_connections WHERE provider = $1 AND installation_id = $2
+		AND (cardinality($3::bigint[]) = 0 OR repository_id = ANY($3))`
 )
 
 // PostgresStore keeps git builds in the platform database.
@@ -40,10 +51,6 @@ func (s *PostgresStore) GetConnection(ctx context.Context, projectID, siteID str
 	}
 	return connection, err
 }
-
-const connectionColumns = `site_id, project_id, provider, installation_id, repository_id, repository, branch,
-	root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
-	created_at, updated_at, preview_settings`
 
 type scanner interface{ Scan(dest ...any) error }
 

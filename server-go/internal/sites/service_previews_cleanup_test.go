@@ -210,3 +210,68 @@ func TestPreviewBuildsHaveTheirOwnHourlyBudget(t *testing.T) {
 		t.Fatalf("the production budget was spent by previews: %v", err)
 	}
 }
+
+func TestRecordPreviewFailureMarksThePreviewFailed(t *testing.T) {
+	h := newPreviewHarness(t, 5, 100)
+	site := h.createSite(t, "shop")
+	preview := h.mustOpen(t, site, sites.PreviewSourceBranch, "feat/a")
+	if err := h.service.RecordPreviewFailure(context.Background(), testProject, site.ID, preview.ID, "the build command failed"); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := h.service.GetPreview(context.Background(), testProject, site.ID, preview.ID)
+	if stored.Status != sites.PreviewFailed || stored.FailureReason != "the build command failed" {
+		t.Fatalf("stored = %+v", stored)
+	}
+	// A preview already gone is nothing to record.
+	if err := h.service.RecordPreviewFailure(context.Background(), testProject, site.ID, "gone", "x"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// Without a preview store every preview call says so, rather than acting on nothing.
+func TestPreviewCallsWithoutAStoreAreRefused(t *testing.T) {
+	h := newHarness(t)
+	site := h.createSite(t, "shop")
+	ctx := context.Background()
+	if h.service.KeepsPreviews() {
+		t.Fatal("previews kept without a store")
+	}
+	checks := map[string]error{}
+	_, checks["get"] = h.service.GetPreview(ctx, testProject, site.ID, "p")
+	_, checks["list"] = h.service.ListPreviews(ctx, testProject, site.ID)
+	_, _, checks["usage"] = h.service.PreviewUsage(ctx, testProject)
+	checks["remove"] = h.service.RemovePreview(ctx, testProject, site.ID, "p")
+	checks["remove by ref"] = h.service.RemovePreviewByRef(ctx, testProject, site.ID, sites.PreviewSourceBranch, "a")
+	checks["record"] = h.service.RecordPreviewFailure(ctx, testProject, site.ID, "p", "x")
+	checks["withdraw"] = h.service.WithdrawPreviewAPIAccess(ctx, testProject, site.ID)
+	_, checks["deploy"] = h.service.DeployPreview(ctx, sites.PreviewDeployRequest{ProjectID: testProject, SiteID: site.ID, PreviewID: "p"})
+	for name, err := range checks {
+		if !errors.Is(err, sites.ErrPreviewsUnavailable) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	if report := h.service.SweepPreviews(ctx); report != (sites.PreviewSweepReport{}) {
+		t.Errorf("sweep without a store = %+v", report)
+	}
+}
+
+func TestRemovingAPreviewThatIsNotThereIsNotFound(t *testing.T) {
+	h := newPreviewHarness(t, 5, 100)
+	site := h.createSite(t, "shop")
+	if err := h.service.RemovePreview(context.Background(), testProject, site.ID, "missing"); !errors.Is(err, sites.ErrPreviewNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := h.service.RemovePreviewByRef(context.Background(), testProject, site.ID, sites.PreviewSourceBranch, "none"); err != nil {
+		t.Fatalf("removing no preview by ref: %v", err)
+	}
+}
+
+func TestPreviewSlotsNeedSites(t *testing.T) {
+	service, err := sites.NewService(sitestest.NewMemoryStore(), nil, sitestest.NewOrigins(), sites.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.TakePreviewSlot(context.Background(), testProject); !errors.Is(err, sites.ErrSitesUnavailable) {
+		t.Fatalf("err = %v", err)
+	}
+}
