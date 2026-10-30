@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +127,32 @@ func countLines(t *testing.T, lokiURL, selector string) int {
 	return total
 }
 
+// workUntilDone runs the worker until Loki processed the row's request. The
+// test configs' cancel period is 20s and compaction 15s; checked as soon as allowed.
+func workUntilDone(t *testing.T, store *memStore, worker *Worker, projectID string) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Minute)
+	for store.row(projectID).State != StateDone && time.Now().Before(deadline) {
+		row := store.row(projectID)
+		row.NextAttemptAt = time.Now()
+		_ = store.SaveProjectLogDeletion(context.Background(), row)
+		worker.RunOnce(context.Background())
+		time.Sleep(5 * time.Second)
+	}
+	if row := store.row(projectID); row.State != StateDone {
+		t.Fatalf("Loki never processed the deletion: %+v", row)
+	}
+}
+
+// selectorOf is an exact selector of every label.
+func selectorOf(labels map[string]string) string {
+	pairs := make([]string, 0, len(labels))
+	for key, value := range labels {
+		pairs = append(pairs, key+"="+strconv.Quote(value))
+	}
+	return "{" + strings.Join(pairs, ",") + "}"
+}
+
 // EXC-678: deleting one project's lines in a real Loki removes them and only
 // them: the other project's namespace, a namespace that merely ends alike, the
 // platform's own lines and the single-host label all stay.
@@ -161,18 +188,7 @@ func TestRealLokiDeletesOnlyTheProjectsLines(t *testing.T) {
 		t.Fatalf("not requested: %+v", row)
 	}
 
-	// The test config's cancel period is 20s and compaction 15s; check as soon as allowed.
-	deadline := time.Now().Add(4 * time.Minute)
-	for store.row("proj-a").State != StateDone && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Second)
-		row := store.row("proj-a")
-		row.NextAttemptAt = time.Now()
-		_ = store.SaveProjectLogDeletion(context.Background(), row)
-		worker.RunOnce(context.Background())
-	}
-	if row := store.row("proj-a"); row.State != StateDone {
-		t.Fatalf("Loki never processed the deletion: %+v", row)
-	}
+	workUntilDone(t, store, worker, "proj-a")
 	if got := countLines(t, lokiURL, selector); got != 0 {
 		t.Errorf("after: %d lines of the deleted project remain", got)
 	}
@@ -180,14 +196,7 @@ func TestRealLokiDeletesOnlyTheProjectsLines(t *testing.T) {
 		if labels["namespace"] == "org1-proj-a" {
 			continue
 		}
-		sel := "{"
-		for key, value := range labels {
-			if sel != "{" {
-				sel += ","
-			}
-			sel += key + "=" + strconv.Quote(value)
-		}
-		if got := countLines(t, lokiURL, sel+"}"); got != 2 {
+		if got := countLines(t, lokiURL, selectorOf(labels)); got != 2 {
 			t.Errorf("%s: %d of 2 lines remain", name, got)
 		}
 	}
