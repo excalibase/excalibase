@@ -81,6 +81,7 @@ type tierConfigDTO struct {
 	MaxSiteServerBundleBytes *int64 `json:"maxSiteServerBundleBytes"`
 	MaxSiteServerCPUMillis   *int   `json:"maxSiteServerCpuMs"`
 	MaxSiteServerSubrequests *int   `json:"maxSiteServerSubrequests"`
+	MaxSitePreviews          *int   `json:"maxSitePreviews"`
 	// One git build's limits (EXC-354); each one left out keeps the plan's current value.
 	SiteBuildCPUMillis      *int    `json:"siteBuildCpuMillis"`
 	SiteBuildMemory         *string `json:"siteBuildMemory"`
@@ -115,6 +116,7 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 		MaxSiteServerBundleBytes: &tc.Sites.MaxServerBundleBytes,
 		MaxSiteServerCPUMillis:   &tc.Sites.MaxServerCPUMillis,
 		MaxSiteServerSubrequests: &tc.Sites.MaxServerSubrequests,
+		MaxSitePreviews:          &tc.Sites.MaxPreviews,
 
 		SiteBuildCPUMillis:      &tc.SiteBuilds.CPUMillis,
 		SiteBuildMemory:         &tc.SiteBuilds.Memory,
@@ -294,6 +296,9 @@ func (dto tierConfigDTO) siteLimits(current config.SiteTierLimits) config.SiteTi
 	if dto.MaxSiteServerSubrequests != nil {
 		out.MaxServerSubrequests = *dto.MaxSiteServerSubrequests
 	}
+	if dto.MaxSitePreviews != nil {
+		out.MaxPreviews = *dto.MaxSitePreviews
+	}
 	return out
 }
 
@@ -360,11 +365,16 @@ const (
 	minSiteServerCPUMillis   = 10
 	maxSiteServerCPUMillis   = 300_000
 	maxSiteServerSubrequests = 10_000
+	// Each live preview is one Worker script; the install's own cap still applies (EXC-660).
+	maxSitePreviewsCap = 100
 )
 
 func validateSiteLimits(limits config.SiteTierLimits) error {
 	if err := validateServerSiteLimits(limits); err != nil {
 		return err
+	}
+	if limits.MaxPreviews < 0 || limits.MaxPreviews > maxSitePreviewsCap {
+		return fmt.Errorf("maxSitePreviews must be between 0 and %d (0 offers none)", maxSitePreviewsCap)
 	}
 	if limits.MaxCustomDomains < 0 || limits.MaxCustomDomains > maxSiteCustomDomainsCap {
 		return fmt.Errorf("maxSiteCustomDomains must be between 0 and %d (0 offers none)", maxSiteCustomDomainsCap)

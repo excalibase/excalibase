@@ -99,10 +99,12 @@ func newSiteBuilds(args siteBuildArgs) siteBuilds {
 	service := sitebuilds.NewService(sitebuilds.NewPostgresStore(args.sqlStore.DB()), provider, args.sites, args.limits,
 		sitebuilds.NewVaultSecrets(args.vault), sitebuilds.Options{
 			Mode: mode, NodeImage: cfg.SiteGit.NodeImage, Members: args.members,
-			CallbackURL: siteGitCallbackURL(cfg),
+			CallbackURL: siteGitCallbackURL(cfg), Previews: previewSites(args.sites),
 		})
 	dispatcher := sitebuilds.NewDispatcher(service, runner, siteBuildDispatcherOptions(cfg))
-	return siteBuilds{handler: handler.NewSiteGitHandler(service, cfg.StudioURL), dispatcher: dispatcher, wired: true}
+	gitHandler := handler.NewSiteGitHandler(service, cfg.StudioURL)
+	gitHandler.SetAuditLog(args.sqlStore)
+	return siteBuilds{handler: gitHandler, dispatcher: dispatcher, wired: true}
 }
 
 // siteBuildDispatcherOptions: a single host pulls the Node image inside Start, so its start window covers a first pull.
@@ -173,6 +175,14 @@ func singleHostBuildRunner(ctx context.Context, cfg config.AppConfig, engine raw
 	log.Printf("INFO: site git builds on this single host: %d slot(s), under runtime %q, out only through the build egress proxy",
 		git.BuildSlots, apps.SandboxRuntime)
 	return runner, nil
+}
+
+// previewSites hands previews to git builds only when Sites offers them (EXC-660).
+func previewSites(service *sites.Service) sitebuilds.PreviewSites {
+	if service == nil || !service.PreviewsAvailable() {
+		return nil
+	}
+	return service
 }
 
 // siteGitCallbackURL is on Studio's origin: Studio calls /api there, so that is where the sign-in's browser cookie lives.

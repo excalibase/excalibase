@@ -86,11 +86,14 @@ const (
 	// SingleHostBuilds runs git builds of sites on a single Docker or Podman
 	// host, under the sandbox runtime behind the build egress proxy (EXC-671).
 	SingleHostBuilds Feature = "singlehostbuilds"
+	// SitePreviews is a preview per branch or pull request of a site connected
+	// to git, at its own unguessable hostname, removed with its branch or PR (EXC-660).
+	SitePreviews Feature = "sitepreviews"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, LogDeletion, SingleHostBuilds}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, LogDeletion, SingleHostBuilds, SitePreviews}
 }
 
 type Flags interface {

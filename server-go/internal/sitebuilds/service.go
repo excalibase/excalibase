@@ -55,6 +55,8 @@ type Options struct {
 	NodeImage string
 	// Members answers whether a connector may still deploy the project; nil trusts every connection.
 	Members MembershipChecker
+	// Previews deploys branch and pull request previews (EXC-660); nil leaves them off.
+	Previews PreviewSites
 }
 
 // MembershipChecker answers who a project member is and whether they still hold the developer rung.
@@ -111,6 +113,7 @@ func (s *Service) currentRepository(ctx context.Context, connection *Connection)
 	if err != nil {
 		return fmt.Errorf("read the repository: %w", err)
 	}
+	connection.private = repository.Private
 	if repository.FullName == connection.Repository {
 		return nil
 	}
@@ -336,6 +339,9 @@ func (s *Service) Disconnect(ctx context.Context, projectID, siteID string) erro
 	if err := s.mustSite(ctx, projectID, siteID); err != nil {
 		return err
 	}
+	if err := s.removeSitePreviews(ctx, projectID, siteID); err != nil {
+		return err
+	}
 	if err := s.store.DeleteConnection(ctx, projectID, siteID); err != nil {
 		return err
 	}
@@ -372,13 +378,15 @@ func (s *Service) buildHead(ctx context.Context, connection *Connection, actor s
 	if err != nil {
 		return nil, fmt.Errorf("read the branch head: %w", err)
 	}
-	build, _, err := s.enqueue(ctx, connection, head, TriggerRebuild, "", actor)
+	build, _, err := s.enqueue(ctx, connection, head, TriggerRebuild, "", actor, nil)
 	return build, err
 }
 
 // enqueue sizes the build by the plan, counts it toward the hourly deploys and
 // queues it. A push past the hourly limit is recorded FAILED so it is not lost silently.
-func (s *Service) enqueue(ctx context.Context, connection *Connection, commit gitprovider.Commit, trigger, delivery, actor string) (*Build, bool, error) {
+// shape, when given, fills in what a preview build adds before anything is counted.
+func (s *Service) enqueue(ctx context.Context, connection *Connection, commit gitprovider.Commit, trigger, delivery, actor string,
+	shape func(*Build)) (*Build, bool, error) {
 	limits, err := s.limits.BuildLimits(ctx, connection.ProjectID)
 	if err != nil {
 		return nil, false, fmt.Errorf("read the plan's build limits: %w", err)
@@ -389,14 +397,24 @@ func (s *Service) enqueue(ctx context.Context, connection *Connection, commit gi
 		RepositoryID: connection.RepositoryID, Repository: connection.Repository, Settings: connection.Settings, Limits: limits,
 		DeliveryID: delivery, RequestedBy: actor, CreatedAt: s.now().UTC(),
 	}
+	if shape != nil {
+		shape(build)
+	}
 	if delivery != "" {
 		queued, err := s.store.DeliveryQueued(ctx, connection.SiteID, delivery)
 		if err != nil || queued {
 			return nil, false, err
 		}
 	}
+	if build.Status != StatusQueued {
+		created, err := s.store.Enqueue(ctx, build, buildsKept)
+		return build, created, err
+	}
 	slotErr := s.sites.TakeDeploySlot(ctx, connection.ProjectID)
-	if slotErr != nil && !(trigger == TriggerPush && errors.Is(slotErr, sites.ErrDeployRateLimited)) {
+	if slotErr != nil && trigger == TriggerRebuild {
+		return nil, false, slotErr
+	}
+	if slotErr != nil && !errors.Is(slotErr, sites.ErrDeployRateLimited) {
 		return nil, false, slotErr
 	}
 	if slotErr != nil {
@@ -424,6 +442,11 @@ func (s *Service) HandleWebhook(ctx context.Context, header map[string][]string,
 	switch {
 	case event.Push != nil:
 		return s.handlePush(ctx, event)
+	case event.PullRequest != nil:
+		if s.options.Previews == nil {
+			return 0, nil
+		}
+		return s.handlePullRequest(ctx, event)
 	case event.RemovedInstallation != 0:
 		return s.store.ForgetInstallation(ctx, s.provider.Name(), event.RemovedInstallation, nil)
 	case len(event.RemovedRepositories) > 0:
@@ -435,7 +458,7 @@ func (s *Service) HandleWebhook(ctx context.Context, header map[string][]string,
 func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int, error) {
 	push := event.Push
 	if push.Deleted {
-		return 0, nil
+		return s.removeBranchPreviews(ctx, push)
 	}
 	if event.DeliveryID == "" {
 		return 0, errors.New("the push has no delivery id")
@@ -445,7 +468,11 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 		return 0, err
 	}
 	connections, err := s.store.ConnectionsForPush(ctx, s.provider.Name(), push.InstallationID, push.RepositoryID, push.Branch)
-	if err != nil || len(connections) == 0 {
+	if err != nil {
+		return 0, err
+	}
+	previewed, err := s.branchPreviews(ctx, push)
+	if err != nil || len(connections)+len(previewed) == 0 {
 		return 0, err
 	}
 	// The delivery id is not signed: a replayed push is caught by the branch having moved past it.
@@ -467,9 +494,21 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 			continue
 		}
 		connection.Repository = push.Repository
-		_, created, err := s.enqueue(ctx, connection, push.Commit, TriggerPush, event.DeliveryID, connection.ConnectedBy)
+		_, created, err := s.enqueue(ctx, connection, push.Commit, TriggerPush, event.DeliveryID, connection.ConnectedBy, nil)
 		if err != nil {
 			log.Printf("site builds: queue a push to %s for site %s: %v", push.Repository, connection.SiteID, err)
+			failures = append(failures, err)
+			continue
+		}
+		if created {
+			queued++
+		}
+	}
+	for _, connection := range previewed {
+		connection.Repository = push.Repository
+		created, err := s.queuePreview(ctx, connection, push.Commit, previewTarget{source: sites.PreviewSourceBranch, ref: push.Branch}, event.DeliveryID)
+		if err != nil {
+			log.Printf("site builds: queue a preview of %s for site %s: %v", push.Branch, connection.SiteID, err)
 			failures = append(failures, err)
 			continue
 		}

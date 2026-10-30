@@ -59,6 +59,9 @@ type SiteTierLimits struct {
 	// MaxServerCPUMillis and MaxServerSubrequests bound one request of a server site's code.
 	MaxServerCPUMillis   int
 	MaxServerSubrequests int
+	// MaxPreviews is how many live branch and pull request previews one project may hold (EXC-660);
+	// each is one Worker script on the account.
+	MaxPreviews int
 }
 
 // serverSiteLimits are what a plan's server-rendered sites may use (EXC-661).
@@ -70,9 +73,9 @@ type serverSiteLimits struct {
 }
 
 // siteLimits holds every plan to Cloudflare's per-deploy limits; plans differ in sites and deploy rate.
-func siteLimits(maxSites, deploysPerHour, customDomains int, server serverSiteLimits) SiteTierLimits {
+func siteLimits(maxSites, deploysPerHour, customDomains, previews int, server serverSiteLimits) SiteTierLimits {
 	return SiteTierLimits{MaxSites: maxSites, MaxDeployBytes: 100 * mebibyte, MaxFiles: 20_000,
-		MaxFileBytes: 25 * mebibyte, MaxDeploysPerHour: deploysPerHour, MaxCustomDomains: customDomains,
+		MaxFileBytes: 25 * mebibyte, MaxDeploysPerHour: deploysPerHour, MaxCustomDomains: customDomains, MaxPreviews: previews,
 		MaxServerSites: server.sites, MaxServerBundleBytes: server.bundleBytes,
 		MaxServerCPUMillis: server.cpuMillis, MaxServerSubrequests: server.subrequests}
 }
@@ -100,7 +103,7 @@ var tiers = map[domain.TierType]TierConfig{
 		BackupEnabled:      true,
 		StatementTimeout:   "15s",
 		AutoPauseAfterDays: 7,
-		Sites:              siteLimits(5, 30, 2, serverSiteLimits{1, 10 * mebibyte, 50, 20}),
+		Sites:              siteLimits(5, 30, 2, 2, serverSiteLimits{1, 10 * mebibyte, 50, 20}),
 		SiteBuilds:         siteBuildLimits("2Gi", "5Gi", 10*60, 1),
 	},
 	domain.Standard: {
@@ -114,7 +117,7 @@ var tiers = map[domain.TierType]TierConfig{
 		CPU:              "2",
 		BackupEnabled:    true,
 		StatementTimeout: "30s",
-		Sites:            siteLimits(20, 120, 5, serverSiteLimits{3, 30 * mebibyte, 2000, 200}),
+		Sites:            siteLimits(20, 120, 5, 10, serverSiteLimits{3, 30 * mebibyte, 2000, 200}),
 		SiteBuilds:       siteBuildLimits("4Gi", "10Gi", 20*60, 2),
 	},
 	domain.Enterprise: {
@@ -128,7 +131,7 @@ var tiers = map[domain.TierType]TierConfig{
 		CPU:              "4",
 		BackupEnabled:    true,
 		StatementTimeout: "60s",
-		Sites:            siteLimits(50, 300, 10, serverSiteLimits{10, 30 * mebibyte, 2000, 200}),
+		Sites:            siteLimits(50, 300, 10, 25, serverSiteLimits{10, 30 * mebibyte, 2000, 200}),
 		SiteBuilds:       siteBuildLimits("4Gi", "10Gi", 20*60, 2),
 	},
 }

@@ -22,9 +22,7 @@ var _ Store = (*PostgresStore)(nil)
 func NewPostgresStore(db *sql.DB) *PostgresStore { return &PostgresStore{db: db} }
 
 func (s *PostgresStore) GetConnection(ctx context.Context, projectID, siteID string) (*Connection, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
-		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''), created_at, updated_at
-		FROM site_git_connections WHERE site_id = $1 AND project_id = $2`, siteID, projectID)
+	row := s.db.QueryRowContext(ctx, `SELECT `+connectionColumns+` FROM site_git_connections WHERE site_id = $1 AND project_id = $2`, siteID, projectID)
 	connection, err := scanConnection(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -32,21 +30,29 @@ func (s *PostgresStore) GetConnection(ctx context.Context, projectID, siteID str
 	return connection, err
 }
 
+const connectionColumns = `site_id, project_id, provider, installation_id, repository_id, repository, branch,
+	root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+	created_at, updated_at, preview_settings`
+
 type scanner interface{ Scan(dest ...any) error }
 
 func scanConnection(row scanner) (*Connection, error) {
 	var connection Connection
-	var env []byte
+	var env, previews []byte
 	settings := &connection.Settings
 	err := row.Scan(&connection.SiteID, &connection.ProjectID, &connection.Provider, &connection.InstallationID, &connection.RepositoryID,
 		&connection.Repository, &settings.Branch, &settings.RootDir, &settings.InstallCommand, &settings.BuildCommand, &settings.OutputDir,
-		&settings.NodeVersion, &env, &connection.ConnectedBy, &connection.InactiveReason, &connection.CreatedAt, &connection.UpdatedAt)
+		&settings.NodeVersion, &env, &connection.ConnectedBy, &connection.InactiveReason, &connection.CreatedAt, &connection.UpdatedAt, &previews)
 	if err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(env, &settings.Env); err != nil {
 		return nil, fmt.Errorf("decode build variables: %w", err)
 	}
+	if err := json.Unmarshal(previews, &connection.Previews); err != nil {
+		return nil, fmt.Errorf("decode preview settings: %w", err)
+	}
+	connection.Previews = connection.Previews.normalised()
 	return &connection, nil
 }
 
@@ -94,13 +100,38 @@ func (s *PostgresStore) DeleteConnection(ctx context.Context, projectID, siteID 
 }
 
 func (s *PostgresStore) ConnectionsForPush(ctx context.Context, provider string, installationID, repositoryID int64, branch string) ([]*Connection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
-		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''), created_at, updated_at
-		FROM site_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`,
+	rows, err := s.db.QueryContext(ctx, `SELECT `+connectionColumns+` FROM site_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`,
 		provider, installationID, repositoryID, branch)
 	if err != nil {
 		return nil, fmt.Errorf("find the sites a push builds: %w", err)
 	}
+	return collectConnections(rows)
+}
+
+// ConnectionsForRepository answers every site connected to the repository, whatever its branch (EXC-660).
+func (s *PostgresStore) ConnectionsForRepository(ctx context.Context, provider string, installationID, repositoryID int64) ([]*Connection, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+connectionColumns+` FROM site_git_connections
+		WHERE provider = $1 AND installation_id = $2 AND repository_id = $3`, provider, installationID, repositoryID)
+	if err != nil {
+		return nil, fmt.Errorf("find the sites connected to a repository: %w", err)
+	}
+	return collectConnections(rows)
+}
+
+func (s *PostgresStore) SavePreviewSettings(ctx context.Context, projectID, siteID string, settings PreviewSettings) error {
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("encode preview settings: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE site_git_connections SET preview_settings = $3, updated_at = NOW()
+		WHERE site_id = $1 AND project_id = $2`, siteID, projectID, encoded)
+	if err != nil {
+		return fmt.Errorf("save preview settings: %w", err)
+	}
+	return requireTouched(result, ErrNotConnected)
+}
+
+func collectConnections(rows *sql.Rows) ([]*Connection, error) {
 	defer rows.Close()
 	var found []*Connection
 	for rows.Next() {

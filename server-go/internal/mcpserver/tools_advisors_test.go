@@ -15,6 +15,9 @@ var darkTools = map[string]features.Feature{
 	"get_advisors":           features.Advisors,
 	"get_db_allowed_sources": features.DBAllowList,
 	"set_db_allowed_sources": features.DBAllowList,
+	"list_site_previews":     features.SitePreviews,
+	"set_site_preview_mode":  features.SitePreviews,
+	"remove_site_preview":    features.SitePreviews,
 }
 
 func advisorRouteCases() []routeCase {

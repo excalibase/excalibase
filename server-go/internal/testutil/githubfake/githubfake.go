@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/excalibase/provisioning-poc/internal/gitprovider"
 )
 
 const (
@@ -65,6 +67,9 @@ type GitHub struct {
 	revokedTokens []string
 	revokedUsers  []string
 	userTokens    map[string]map[int64][]int64
+	// pulls are each repo's pull requests by number; statuses each commit's posted statuses.
+	pulls    map[int64]map[int]PullRequest
+	statuses map[string][]gitprovider.CommitStatus
 }
 
 type installation struct {
@@ -184,6 +189,8 @@ func (g *GitHub) routes() http.Handler {
 	mux.HandleFunc("GET /repositories/{id}", g.repository)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/ref/heads/{branch...}", g.branchRef)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits/{sha}", g.commit)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/pulls/{number}", g.pullRequest)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/statuses/{sha}", g.createStatus)
 	mux.HandleFunc("POST /login/oauth/access_token", g.exchangeCode)
 	mux.HandleFunc("GET /user/installations", g.userInstallations)
 	mux.HandleFunc("GET /user/installations/{id}/repositories", g.userRepositories)

@@ -65,6 +65,10 @@ type Options struct {
 	// Outbound reads which outbound Worker the router's binding names; server
 	// code is published only while it names OutboundWorker. nil offers no server sites.
 	Outbound OutboundReader
+	// Previews keeps branch and pull request previews (EXC-660); nil means previews are not offered.
+	Previews PreviewStore
+	// MaxPreviews caps live previews across the install, each one Worker script; 0 is DefaultMaxPreviews.
+	MaxPreviews int
 }
 
 // DeployLimiter answers what one project's deploys may hold, so a plan can raise Cloudflare's free-plan defaults.
@@ -293,7 +297,11 @@ func (s *Service) Delete(ctx context.Context, projectID, id string) error {
 }
 
 func (s *Service) remove(ctx context.Context, site *Site, lease *siteLease) error {
-	// Custom hostnames go first: each leaves the router, then the zone.
+	// Previews go first: each is a Worker of its own that would outlive the site.
+	if err := s.removeSitePreviews(ctx, site); err != nil {
+		return err
+	}
+	// Custom hostnames go next: each leaves the router, then the zone.
 	if err := s.removeSiteHostnames(ctx, site); err != nil {
 		return err
 	}

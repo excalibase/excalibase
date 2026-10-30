@@ -3,7 +3,7 @@ import { Loader2, Save } from 'lucide-react';
 import { Button } from './Button';
 import { useTiers, useUpdateTier, sortTiers, type TierConfig, type TierConfigInput } from '../api/tiers';
 import { serverErrorMessage } from '../utils/serverError';
-import { useSiteGitBuildsEnabled, useSitesEnabled } from '../hooks/useDeploymentMode';
+import { useFeatureEnabled, useSiteGitBuildsEnabled, useSitesEnabled } from '../hooks/useDeploymentMode';
 
 // The server takes the app disk cap in whole Mi or whole Gi; "0Gi" offers no app disks.
 const APP_DISK_CAP = /^\d+(Mi|Gi)$/;
@@ -18,6 +18,8 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
   const update = useUpdateTier();
   const { enabled: sitesEnabled } = useSitesEnabled();
   const gitBuildsEnabled = useSiteGitBuildsEnabled();
+  const { enabled: previewsFlag } = useFeatureEnabled('sitepreviews');
+  const previewsEnabled = gitBuildsEnabled && previewsFlag;
 
   // Local draft of edits keyed by tier. A row with no entry renders the server
   // value (see `toInput` fallback below), so there's no need to pre-seed from
@@ -31,7 +33,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     autoPauseAfterDays: t.autoPauseAfterDays ?? 0,
     maxSites: t.maxSites, maxSiteDeployBytes: t.maxSiteDeployBytes, maxSiteFiles: t.maxSiteFiles,
     maxSiteFileBytes: t.maxSiteFileBytes, maxSiteDeploysPerHour: t.maxSiteDeploysPerHour,
-    maxSiteCustomDomains: t.maxSiteCustomDomains,
+    maxSiteCustomDomains: t.maxSiteCustomDomains, maxSitePreviews: t.maxSitePreviews,
     siteBuildCpuMillis: t.siteBuildCpuMillis, siteBuildMemory: t.siteBuildMemory, siteBuildDisk: t.siteBuildDisk,
     siteBuildTimeoutSeconds: t.siteBuildTimeoutSeconds, siteBuildConcurrency: t.siteBuildConcurrency,
   });
@@ -48,7 +50,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
       d.maxProjects !== t.maxProjects || d.instances !== t.instances || d.backupEnabled !== t.backupEnabled ||
       d.autoPauseAfterDays !== (t.autoPauseAfterDays ?? 0) ||
       d.maxSites !== t.maxSites || d.maxSiteDeploysPerHour !== t.maxSiteDeploysPerHour ||
-      d.maxSiteCustomDomains !== t.maxSiteCustomDomains ||
+      d.maxSiteCustomDomains !== t.maxSiteCustomDomains || d.maxSitePreviews !== t.maxSitePreviews ||
       d.siteBuildMemory !== t.siteBuildMemory || d.siteBuildTimeoutSeconds !== t.siteBuildTimeoutSeconds
     );
   };
@@ -111,6 +113,9 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                   <th className="text-left px-4 py-3 font-medium" title="How long one git build of a site may run">Build minutes</th>
                 </>
               )}
+              {previewsEnabled && (
+                <th className="text-left px-4 py-3 font-medium" title="How many branch and pull-request previews one project's sites may hold at once (0 = none); each is a Worker script">Previews</th>
+              )}
               <th className="px-4 py-3" />
             </tr>
           </thead>
@@ -156,6 +161,9 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                       <td className="px-4 py-3"><QtyInput value={d.siteBuildMemory ?? ''} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { siteBuildMemory: v })} placeholder="4Gi" /></td>
                       <td className="px-4 py-3"><NumInput label={`Build minutes for ${t.tier}`} value={Math.round((d.siteBuildTimeoutSeconds ?? 0) / 60)} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { siteBuildTimeoutSeconds: v * 60 })} /></td>
                     </>
+                  )}
+                  {previewsEnabled && (
+                    <td className="px-4 py-3"><NumInput label={`Live previews per project for ${t.tier}`} value={d.maxSitePreviews ?? 0} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxSitePreviews: v })} /></td>
                   )}
                   <td className="px-4 py-3 text-right">
                     <Button
