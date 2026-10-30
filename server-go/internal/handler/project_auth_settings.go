@@ -21,6 +21,8 @@ type authSettingsResponse struct {
 	SiteURL                  string `json:"siteUrl"`
 	// Present only while authoauth or authotp is on (EXC-662).
 	*authSignInResponse
+	// Present only while authmfa is on; the key itself is never answered.
+	MFAEnabled *bool `json:"mfaEnabled,omitempty"`
 }
 
 type authSignInResponse struct {
@@ -51,21 +53,32 @@ func (h *ProvisioningHandler) GetAuthSettings(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	settings, _, err := h.authSettingsStore.GetAuthSettings(r.Context(), projectID)
+	response, err := h.authSettingsView(r.Context(), projectID)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
-	response := authSettingsResponseFor(settings)
-	if h.signInPolicyOn(r.Context()) {
-		signIn, err := h.storedAuthSignIn(r.Context(), projectID)
-		if err != nil {
-			httpError(w, safeError(err), http.StatusInternalServerError)
-			return
-		}
-		response.authSignInResponse = h.authSignInResponseFor(r.Context(), signIn)
-	}
 	writeJSON(w, response)
+}
+
+// authSettingsView is what GET answers: the settings plus each field whose flag is on.
+func (h *ProvisioningHandler) authSettingsView(ctx context.Context, projectID string) (authSettingsResponse, error) {
+	settings, _, err := h.authSettingsStore.GetAuthSettings(ctx, projectID)
+	if err != nil {
+		return authSettingsResponse{}, err
+	}
+	response := authSettingsResponseFor(settings)
+	if h.signInPolicyOn(ctx) {
+		signIn, err := h.storedAuthSignIn(ctx, projectID)
+		if err != nil {
+			return authSettingsResponse{}, err
+		}
+		response.authSignInResponse = h.authSignInResponseFor(ctx, signIn)
+	}
+	if response.MFAEnabled, err = h.mfaView(ctx, projectID); err != nil {
+		return authSettingsResponse{}, err
+	}
+	return response, nil
 }
 
 // PutAuthSettings serves PUT /api/projects/{projectId}/auth-settings with
@@ -104,7 +117,12 @@ func (h *ProvisioningHandler) PutAuthSettings(w http.ResponseWriter, r *http.Req
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, authSettingsResponseFor(settings))
+	response := authSettingsResponseFor(settings)
+	if response.MFAEnabled, err = h.mfaView(r.Context(), projectID); err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, response)
 }
 
 // authSettingsRequestProject validates the path project and the store wiring
@@ -170,6 +188,9 @@ func (h *ProvisioningHandler) putAuthSettingsWithSignIn(w http.ResponseWriter, r
 	h.recordAuthSignIn(r, projectID, settings, signIn)
 	response := authSettingsResponseFor(settings)
 	response.authSignInResponse = h.authSignInResponseFor(r.Context(), signIn)
+	if h.authMFAOn(r.Context()) {
+		response.MFAEnabled = &signIn.MFAEnabled
+	}
 	writeJSON(w, response)
 }
 

@@ -24,6 +24,7 @@ var featureEnv = map[features.Feature]string{
 	features.AuthOTP:         "FEATURE_AUTHOTP",
 	features.AuthUser:        "FEATURE_AUTHUSER",
 	features.AuthGuest:       "FEATURE_AUTHGUEST",
+	features.AuthMFA:         "FEATURE_AUTHMFA",
 	features.HostMetrics:     "FEATURE_HOSTMETRICS",
 }
 

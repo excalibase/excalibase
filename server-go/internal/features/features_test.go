@@ -132,3 +132,16 @@ func TestAll_DeclaresAuthUser(t *testing.T) {
 		t.Error("authuser cannot be switched on")
 	}
 }
+
+// EXC-662: end-user TOTP MFA ships dark and Studio is told its state.
+func TestAll_DeclaresAuthMFA(t *testing.T) {
+	if AuthMFA != "authmfa" {
+		t.Errorf("auth mfa feature = %q", AuthMFA)
+	}
+	if _, listed := Snapshot(context.Background(), NewStatic())[string(AuthMFA)]; !listed {
+		t.Error("authmfa is not reported to Studio")
+	}
+	if !NewStatic(AuthMFA).Enabled(context.Background(), AuthMFA) {
+		t.Error("authmfa cannot be switched on")
+	}
+}

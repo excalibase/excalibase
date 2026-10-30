@@ -61,7 +61,16 @@ func TestCarryingRestoredSettingsNeedsAStore(t *testing.T) {
 	}
 }
 
-type recordingSettings struct{ copies [][2]string }
+type recordingSettings struct {
+	copies     [][2]string
+	mfaOff     []string
+	disableErr error
+}
+
+func (r *recordingSettings) DisableMFA(_ context.Context, projectID string) error {
+	r.mfaOff = append(r.mfaOff, projectID)
+	return r.disableErr
+}
 
 func (r *recordingSettings) CopyRestoredSettings(_ context.Context, sourceID, targetID string) error {
 	r.copies = append(r.copies, [2]string{sourceID, targetID})
