@@ -276,6 +276,8 @@ services:
       FEATURE_AUTHUSER: ${FEATURE_AUTHUSER:-false}
       # End-user guest accounts and the stable token subject (EXC-662).
       FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
+      # End-user TOTP MFA, recovery codes and the aal claim (EXC-662).
+      FEATURE_AUTHMFA: ${FEATURE_AUTHMFA:-false}
       # Host and container monitoring, alerts and notices (EXC-670; init.sh --host-metrics).
       FEATURE_HOSTMETRICS: ${FEATURE_HOSTMETRICS:-false}
       HOST_METRICS_CONTAINERS: *platform_containers
@@ -433,6 +435,8 @@ services:
       FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
       # ...and project auth hook signing secrets only while this is on.
       FEATURE_AUTHHOOKS: ${FEATURE_AUTHHOOKS:-false}
+      # ...and project MFA keys only while this is on.
+      FEATURE_AUTHMFA: ${FEATURE_AUTHMFA:-false}
       SECRETS_DIR: /var/run/excalibase
     command: ["sh", "/bootstrap.sh"]
     volumes:

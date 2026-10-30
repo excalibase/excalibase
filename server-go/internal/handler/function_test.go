@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -199,7 +201,7 @@ func (f *fakeVault) Get(p string) (map[string]string, error) {
 	if d, ok := f.data[p]; ok {
 		return d, nil
 	}
-	return nil, errors.New("not found")
+	return nil, fmt.Errorf("%w: %s", vault.ErrNotFound, p)
 }
 func (f *fakeVault) Put(p string, d map[string]string) error {
 	cp := make(map[string]string, len(d))

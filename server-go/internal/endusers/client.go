@@ -123,6 +123,13 @@ func (c *Client) Delete(ctx context.Context, orgSlug, projectID, actor string, u
 	return err
 }
 
+// ResetFactors removes one account's MFA factors and recovery codes; auth
+// also ends the account's sessions.
+func (c *Client) ResetFactors(ctx context.Context, orgSlug, projectID, actor string, userID int64) error {
+	_, err := c.do(ctx, call{method: http.MethodDelete, orgSlug: orgSlug, projectID: projectID, actor: actor, path: userPath(userID) + "/factors"})
+	return err
+}
+
 func userPath(userID int64) string {
 	return "users/" + strconv.FormatInt(userID, 10)
 }

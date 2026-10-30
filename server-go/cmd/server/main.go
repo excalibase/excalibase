@@ -1238,6 +1238,7 @@ func wireAuthOAuth(cfg config.AppConfig, sqlStore storage.PlatformStore, vc vaul
 	deps.Providers, _ = sqlStore.(storage.ProjectAuthProviderStore)
 	deps.SignIn, _ = sqlStore.(storage.ProjectAuthSignInStore)
 	deps.Hooks, _ = sqlStore.(storage.ProjectAuthHookStore)
+	deps.MFA, _ = sqlStore.(storage.ProjectAuthMFAStore)
 	if vc != nil {
 		deps.Secrets = vc
 	}
@@ -2443,6 +2444,12 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			endUserAdmin(r)
 			d.endUsersHandler.AccountRoutes(r)
 		})
+		// An end user's MFA reset (EXC-662), unmounted while authmfa is off.
+		r.Group(func(r chi.Router) {
+			r.Use(features.Require(d.features, features.AuthMFA))
+			endUserAdmin(r)
+			d.endUsersHandler.FactorRoutes(r)
+		})
 	})
 	r.Route("/api/projects/{projectId}/cors", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
@@ -2497,6 +2504,17 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Use(d.activity)
 			r.Put("/guest-captcha", d.provHandler.PutGuestCaptcha)
 			r.Delete("/guest-captcha", d.provHandler.DeleteGuestCaptcha)
+		})
+		// The end-user MFA switch (EXC-662): Admin-only, as the switch decides
+		// whether enrolled factors are asked for at all.
+		r.Group(func(r chi.Router) {
+			r.Use(features.Require(d.features, features.AuthMFA))
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
+			r.Use(d.activity)
+			r.Put("/mfa", d.provHandler.PutAuthMFA)
 		})
 	})
 	r.Route("/api/projects/{projectId}/realtime", func(r chi.Router) {
