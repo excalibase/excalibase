@@ -66,7 +66,8 @@ type Store interface {
 	// or records it as it is when it was refused before queueing (FAILED).
 	// A delivery already recorded for the site answers false.
 	Enqueue(ctx context.Context, build *Build, keep int) (bool, error)
-	// ClaimNext takes the oldest queued build that fits the slots, its project's cap and one per site.
+	// ClaimNext takes the oldest queued build that fits the slots, one per site and scope, and its
+	// project's cap: the plan's concurrency for production builds, PreviewsRunningPerProject for previews.
 	ClaimNext(ctx context.Context, slots int, holder string, leaseUntil time.Time) (*Build, error)
 	ExtendLease(ctx context.Context, buildID, holder string, until time.Time) error
 	SaveLog(ctx context.Context, buildID, holder, log string) error
