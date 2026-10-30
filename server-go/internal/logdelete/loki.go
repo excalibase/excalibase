@@ -15,8 +15,9 @@ import (
 
 const (
 	lokiTimeout = 15 * time.Second
-	// maxStatusAnswer bounds Loki's list of delete requests, one per deleted project.
-	maxStatusAnswer = 16 << 20
+	// maxStatusAnswer bounds Loki's list of delete requests, about 200 bytes
+	// per deleted project: some 300 thousand deletions.
+	maxStatusAnswer = 64 << 20
 )
 
 // Status is what Loki says of one delete request.
@@ -70,40 +71,48 @@ type deleteRequest struct {
 	Status    string  `json:"status"`
 }
 
-// Status finds the request for selector from start: processed only when
-// every part Loki split it into is.
-func (c *LokiClient) Status(ctx context.Context, selector string, start time.Time) (Status, error) {
-	if err := CheckSelector(selector); err != nil {
-		return StatusMissing, err
+// Statuses is what Loki holds, by query and start second: processed only
+// when every part Loki split a request into is.
+type Statuses map[statusKey]Status
+
+type statusKey struct {
+	query string
+	start int64
+}
+
+// Of is the request for selector from start.
+func (s Statuses) Of(selector string, start time.Time) Status {
+	if status, ok := s[statusKey{selector, start.Unix()}]; ok {
+		return status
 	}
+	return StatusMissing
+}
+
+// Statuses reads every delete request Loki holds.
+func (c *LokiClient) Statuses(ctx context.Context) (Statuses, error) {
 	resp, err := c.do(ctx, http.MethodGet, c.base)
 	if err != nil {
-		return StatusMissing, err
+		return nil, err
 	}
 	defer drain(resp)
 	if resp.StatusCode != http.StatusOK {
-		return StatusMissing, fmt.Errorf("loki delete list answered %d", resp.StatusCode)
+		return nil, fmt.Errorf("loki delete list answered %d", resp.StatusCode)
 	}
 	var requests []deleteRequest
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxStatusAnswer)).Decode(&requests); err != nil {
-		return StatusMissing, fmt.Errorf("loki delete list: %w", err)
+		return nil, fmt.Errorf("loki delete list (read up to %d MiB): %w", maxStatusAnswer>>20, err)
 	}
-	found, processed := false, true
+	statuses := Statuses{}
 	for _, request := range requests {
-		if request.Query != selector || int64(math.Floor(request.StartTime)) != start.Unix() {
-			continue
+		key := statusKey{request.Query, int64(math.Floor(request.StartTime))}
+		switch {
+		case request.Status != "processed":
+			statuses[key] = StatusReceived
+		case statuses[key] != StatusReceived:
+			statuses[key] = StatusProcessed
 		}
-		found = true
-		processed = processed && request.Status == "processed"
 	}
-	switch {
-	case !found:
-		return StatusMissing, nil
-	case processed:
-		return StatusProcessed, nil
-	default:
-		return StatusReceived, nil
-	}
+	return statuses, nil
 }
 
 func (c *LokiClient) do(ctx context.Context, method, target string) (*http.Response, error) {
@@ -111,7 +120,7 @@ func (c *LokiClient) do(ctx context.Context, method, target string) (*http.Respo
 	req, err := http.NewRequestWithContext(ctx, method, target, nil)
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, fmt.Errorf("loki delete request: %w", err)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
