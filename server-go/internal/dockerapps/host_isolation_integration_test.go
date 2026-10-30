@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -70,8 +71,12 @@ func TestRealEngineKeepsAppsOffTheHost(t *testing.T) {
 	if err := rig.rt.PauseAppWorkload(ctx, rig.db, "app-it"); err != nil {
 		t.Fatal(err)
 	}
+	// As the app service does: a resume waits until no container of the app runs.
+	if err := rig.rt.WaitForAppPodsGone(ctx, rig.db, "app-it", 2*time.Minute); err != nil {
+		t.Fatalf("pause: %v (%s)", err, rig.appStates())
+	}
 	if err := rig.rt.ResumeAppWorkload(ctx, rig.db, "app-it", "web", domain.Free, 2*time.Minute); err != nil {
-		t.Fatal(err)
+		t.Fatalf("resume: %v (%s)", err, rig.appStates())
 	}
 	resumed := rig.serving()
 	if body, err := rig.fromEdge(resumed); err != nil || body != "one" {
@@ -109,6 +114,18 @@ func (r *realRig) projectGateway() string {
 		}
 	}
 	return ""
+}
+
+func (r *realRig) appStates() string {
+	list, err := r.direct.ContainerList(context.Background(), container.ListOptions{All: true, Filters: labelFilter(labelApp, "app-it")})
+	if err != nil {
+		return err.Error()
+	}
+	states := make([]string, 0, len(list))
+	for _, summary := range list {
+		states = append(states, summary.Names[0]+"="+summary.State+" "+summary.Status)
+	}
+	return strings.Join(states, ", ")
 }
 
 func (r *realRig) projectNetworkID() string {
