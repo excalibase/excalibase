@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
+)
 
 func TestParseHostLogsDefaults(t *testing.T) {
 	got, err := ParseHostLogs(" http://loki:3100/ ", "")
@@ -32,5 +36,49 @@ func TestParseHostLogsRefusesAnAddressThatIsNotPlainHTTP(t *testing.T) {
 		if _, err := ParseHostLogs(bad, ""); err == nil {
 			t.Errorf("HOST_LOGS_LOKI_URL=%q accepted", bad)
 		}
+	}
+}
+
+// EXC-678: each plan's daily budget, in LOG_RETENTION_BY_PLAN's shape.
+func TestParseHostLogBudgetsByPlan(t *testing.T) {
+	got, err := ParseHostLogBudgets("free=64,standard=256,enterprise=1024")
+	if err != nil || got[domain.Free] != 64<<20 || got[domain.Standard] != 256<<20 || got[domain.Enterprise] != 1<<30 {
+		t.Errorf("budgets = %v %v", got, err)
+	}
+	if got, err := ParseHostLogBudgets(""); err != nil || len(got) != 0 {
+		t.Errorf("unset = %v %v", got, err)
+	}
+	for _, bad := range []string{"free", "free=0", "free=x", "pro=64", "FREE=64", "free=64,free=32", "free=102401", " free=64"} {
+		if _, err := ParseHostLogBudgets(bad); err == nil {
+			t.Errorf("HOST_LOGS_DAILY_MB_BY_PLAN=%q accepted", bad)
+		}
+	}
+}
+
+func TestParseHostLogMinFreePercent(t *testing.T) {
+	if got, err := ParseHostLogMinFreePercent(""); err != nil || got != 10 {
+		t.Errorf("default = %d %v", got, err)
+	}
+	if got, err := ParseHostLogMinFreePercent("20"); err != nil || got != 20 {
+		t.Errorf("20 = %d %v", got, err)
+	}
+	for _, bad := range []string{"0", "51", "x", "-5", "10%"} {
+		if _, err := ParseHostLogMinFreePercent(bad); err == nil {
+			t.Errorf("HOST_LOGS_MIN_FREE_PERCENT=%q accepted", bad)
+		}
+	}
+}
+
+func TestLoadHostLogsReadsTheCaps(t *testing.T) {
+	t.Setenv("HOST_LOGS_DAILY_MB_BY_PLAN", "free=8")
+	t.Setenv("HOST_LOGS_MIN_FREE_PERCENT", "15")
+	t.Setenv("HOST_LOGS_DISK_PATH", "/data")
+	got := loadHostLogs()
+	if got.DailyBytesByPlan[domain.Free] != 8<<20 || got.MinFreePercent != 15 || got.DiskPath != "/data" {
+		t.Errorf("host logs = %+v", got)
+	}
+	t.Setenv("HOST_LOGS_DISK_PATH", "")
+	if got := loadHostLogs(); got.DiskPath != defaultHostLogDiskPath {
+		t.Errorf("default disk path = %q", got.DiskPath)
 	}
 }

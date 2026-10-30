@@ -72,21 +72,32 @@ type Instances interface {
 	FindAll() ([]*domain.DatabaseInstance, error)
 }
 
+// DiskState says whether the host's disk is too full to store more lines.
+type DiskState interface {
+	Paused() bool
+}
+
 // Deps is what a Shipper is built from.
 type Deps struct {
 	Engine    Engine
 	Cursors   Cursors
 	Pusher    Pusher
 	Instances Instances
+	// Budgets keeps each project's day of stored text across restarts; nil counts in memory only.
+	Budgets BudgetStore
+	// Disk pauses every project's shipping while the host disk is nearly full; nil never pauses.
+	Disk DiskState
 	// Flags turns the plan label on with features.LogRetention.
 	Flags     features.Flags
 	Retention config.LogRetention
-	// DailyBytes is each project's stored log text per UTC day.
-	DailyBytes int64
-	Now        func() time.Time
-	ScanEvery  time.Duration
-	RetryDelay time.Duration
-	FlushEvery time.Duration
+	// DailyBytes is each project's stored log text per UTC day, unless
+	// DailyBytesByPlan names the project's plan.
+	DailyBytes       int64
+	DailyBytesByPlan map[domain.TierType]int64
+	Now              func() time.Time
+	ScanEvery        time.Duration
+	RetryDelay       time.Duration
+	FlushEvery       time.Duration
 }
 
 // Target is one container to follow and the labels its lines carry.
@@ -94,6 +105,8 @@ type Target struct {
 	ID        string
 	Labels    Labels
 	Retention time.Duration
+	// DailyBytes is the project's plan's budget; zero takes Deps.DailyBytes.
+	DailyBytes int64
 }
 
 // Shipper follows every running project container.
@@ -128,7 +141,7 @@ func New(deps Deps) *Shipper {
 	if deps.FlushEvery <= 0 {
 		deps.FlushEvery = defaultFlushEvery
 	}
-	return &Shipper{deps: deps, budget: newBudget(deps.DailyBytes), followers: map[string]*follower{}, stopping: map[string]*follower{}}
+	return &Shipper{deps: deps, budget: newBudget(deps.Budgets), followers: map[string]*follower{}, stopping: map[string]*follower{}}
 }
 
 // Run scans now and every ScanEvery until ctx ends, then stops every follow.
@@ -156,6 +169,11 @@ func (s *Shipper) Run(ctx context.Context) {
 // follows of containers that went, and with prune forgets the cursors of
 // containers the engine no longer has.
 func (s *Shipper) Scan(ctx context.Context, prune bool) error {
+	if s.diskLow() {
+		// Nothing is read while paused: the engine keeps the lines, the cursors stay.
+		s.reconcile(ctx, nil, nil, nil)
+		return nil
+	}
 	targets, seen, err := s.targets(ctx)
 	if err != nil {
 		return err
@@ -166,10 +184,22 @@ func (s *Shipper) Scan(ctx context.Context, prune bool) error {
 	}
 	s.reconcile(ctx, targets, seen, cursors)
 	// An empty answer is more likely an engine hiccup than no containers at all.
-	if prune && len(seen) > 0 {
+	if !prune {
+		return nil
+	}
+	if s.deps.Budgets != nil {
+		if err := s.deps.Budgets.PruneHostLogBudget(ctx, s.deps.Now().UTC().Add(-48*time.Hour).Format(time.DateOnly)); err != nil {
+			return fmt.Errorf("prune budgets: %w", err)
+		}
+	}
+	if len(seen) > 0 {
 		return s.deps.Cursors.PruneHostLogCursors(ctx, seen)
 	}
 	return nil
+}
+
+func (s *Shipper) diskLow() bool {
+	return s.deps.Disk != nil && s.deps.Disk.Paused()
 }
 
 func (s *Shipper) reconcile(ctx context.Context, targets []Target, seen []string, cursors map[string]int64) {
@@ -283,6 +313,7 @@ func (s *Shipper) targets(ctx context.Context) ([]Target, []string, error) {
 		}
 		target := Target{ID: container.ID, Labels: Labels{ProjectID: projectID, Component: component, Container: container.Name}}
 		target.Retention = s.deps.Retention.Default
+		target.DailyBytes = s.dailyBytes(tiers[projectID])
 		if tier, ok := tiers[projectID]; ok && perPlan && domain.IsValidTier(tier) {
 			target.Labels.Tier = strings.ToLower(string(tier))
 			target.Retention = s.deps.Retention.For(tier)
@@ -293,6 +324,14 @@ func (s *Shipper) targets(ctx context.Context) ([]Target, []string, error) {
 		targets = append(targets, target)
 	}
 	return targets, seen, nil
+}
+
+// dailyBytes is the plan's budget, or the default for a plan not named.
+func (s *Shipper) dailyBytes(tier domain.TierType) int64 {
+	if limit, ok := s.deps.DailyBytesByPlan[tier]; ok && limit > 0 {
+		return limit
+	}
+	return s.deps.DailyBytes
 }
 
 // follow ships the container's log until ctx ends, reopening it after the
@@ -400,14 +439,21 @@ func (s *Shipper) add(b *batch, line enginestats.LogLine) {
 	}
 	b.seen = max(b.seen, at)
 	text := line.Text
-	keep, notice := s.budget.take(b.target.Labels.ProjectID, line.At, int64(len(text)))
+	limit := b.target.DailyBytes
+	if limit <= 0 {
+		limit = s.deps.DailyBytes
+	}
+	keep, notice := s.budget.take(context.Background(), b.target.Labels.ProjectID, limit, line.At, int64(len(text)))
+	day := line.At.UTC().Format(time.DateOnly)
 	switch {
 	case keep:
 		b.entries = append(b.entries, Entry{At: at, Line: text})
 		b.bytes += len(text)
+		b.charge(day).bytes += int64(len(text))
 	case notice:
 		b.entries = append(b.entries, Entry{At: at, Line: fmt.Sprintf(
-			"excalibase: this project's daily log budget (%d MiB) is used; its lines are not stored until 00:00 UTC", s.budget.limit>>20)})
+			"excalibase: this project's daily log budget (%d MiB) is used; its lines are not stored until 00:00 UTC", limit>>20)})
+		b.charge(day).noticed = true
 	}
 }
 
@@ -415,6 +461,9 @@ func (s *Shipper) add(b *batch, line enginestats.LogLine) {
 func (s *Shipper) flush(ctx context.Context, b *batch) error {
 	if len(b.entries) == 0 && b.seen <= b.stored {
 		return nil
+	}
+	if s.diskLow() {
+		return errDiskLow
 	}
 	if len(b.entries) > 0 {
 		stream := []Stream{{Labels: b.target.Labels, Entries: b.entries}}
@@ -431,6 +480,11 @@ func (s *Shipper) flush(ctx context.Context, b *batch) error {
 			}
 		}
 	}
+	if err := s.budget.record(ctx, b.target.Labels.ProjectID, b.charges); err != nil {
+		// The in-memory count still holds; only a restart before the next write loses it.
+		log.Printf("host logs: budget of %s: %v", b.target.Labels.ProjectID, err)
+	}
+	clear(b.charges)
 	if err := s.deps.Cursors.SaveHostLogCursor(ctx, b.target.ID, b.target.Labels.ProjectID, b.seen); err != nil {
 		return fmt.Errorf("save cursor: %w", err)
 	}
@@ -450,9 +504,20 @@ type batch struct {
 	floor int64
 	// seen is the newest line read; stored the newest Loki has.
 	seen, stored int64
+	// charges is what the entries took from each day's budget.
+	charges map[string]*charge
 }
 
 func newBatch(target Target, sinceNS, cursor int64) *batch {
 	floor := max(cursor, sinceNS-1)
-	return &batch{target: target, floor: floor, seen: cursor, stored: cursor}
+	return &batch{target: target, floor: floor, seen: cursor, stored: cursor, charges: map[string]*charge{}}
+}
+
+func (b *batch) charge(day string) *charge {
+	taken := b.charges[day]
+	if taken == nil {
+		taken = &charge{}
+		b.charges[day] = taken
+	}
+	return taken
 }

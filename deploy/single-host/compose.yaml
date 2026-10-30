@@ -284,6 +284,12 @@ services:
       FEATURE_HOSTLOGS: ${FEATURE_HOSTLOGS:-false}
       HOST_LOGS_LOKI_URL: http://loki:3100
       HOST_LOGS_DAILY_MB: ${HOST_LOGS_DAILY_MB:-64}
+      # Each plan's daily budget, kept across restarts; a plan not named takes HOST_LOGS_DAILY_MB (EXC-678).
+      HOST_LOGS_DAILY_MB_BY_PLAN: free=${HOST_LOGS_DAILY_MB_FREE:-64},standard=${HOST_LOGS_DAILY_MB_STANDARD:-256},enterprise=${HOST_LOGS_DAILY_MB_ENTERPRISE:-1024}
+      # Shipping pauses while less of the host disk is free, and resumes 5 points higher (EXC-678).
+      HOST_LOGS_MIN_FREE_PERCENT: ${HOST_LOGS_MIN_FREE_PERCENT:-10}
+      # A deleted project's stored lines are removed from the bundled Loki (EXC-678).
+      FEATURE_LOGDELETION: ${FEATURE_LOGDELETION:-false}
       # How long Loki keeps logs; by plan only with FEATURE_LOGRETENTION (EXC-659).
       FEATURE_LOGRETENTION: ${FEATURE_LOGRETENTION:-false}
       LOG_RETENTION: ${LOG_RETENTION:-168h}
