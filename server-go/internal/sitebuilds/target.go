@@ -45,6 +45,21 @@ func (s *Service) checkConnector(ctx context.Context, connection connected) erro
 	return ErrConnectionInactive
 }
 
+// mayConnect refuses a connector below the developer rung before anything is read or saved.
+func (s *Service) mayConnect(ctx context.Context, userID, projectID string) error {
+	if s.options.Members == nil {
+		return nil
+	}
+	standing, err := s.options.Members.Standing(ctx, userID, projectID)
+	if err != nil {
+		return fmt.Errorf("read the connector's role: %w", err)
+	}
+	if !standing.CanDeploy {
+		return ErrNotDeveloper
+	}
+	return nil
+}
+
 // currentRepository reads the repository's owner/name by its id, so a transfer or rename is followed
 // and a stale name someone else now owns is never cloned.
 func (s *Service) currentRepository(ctx context.Context, connection connected) error {

@@ -92,6 +92,8 @@ func (c *AppConnection) branch() string { return c.Settings.Branch }
 type AppBuild struct {
 	AppSettings
 	MaxImageBytes int64 `json:"maxImageBytes"`
+	// MaxBuildsPerHour is the plan's app builds per hour, enforced as the build queues and not kept.
+	MaxBuildsPerHour int `json:"-"`
 }
 
 // AppLimits are one app build's plan limits (tier_configs.app_build_*).

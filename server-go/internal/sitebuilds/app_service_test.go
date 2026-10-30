@@ -187,3 +187,25 @@ type standings map[string]bool
 func (s standings) Standing(_ context.Context, userID, _ string) (MemberStanding, error) {
 	return MemberStanding{Name: userID, CanDeploy: s[userID]}, nil
 }
+
+// A member without the developer rung saves no connection, site or app, before anything is read.
+func TestConnect_RefusesAMemberWhoCannotDeploy(t *testing.T) {
+	bed := newTestBed(true)
+	bed.service.options.Members = standings{testUser: false}
+	ctx := context.Background()
+	_, err := bed.service.ConnectApp(ctx, AppConnectRequest{ProjectID: testProject, AppID: testApp, UserID: testUser, Repository: testRepo})
+	if !errors.Is(err, ErrNotDeveloper) {
+		t.Errorf("app: err = %v", err)
+	}
+	_, err = bed.service.Connect(ctx, ConnectRequest{ProjectID: testProject, SiteID: testSite, UserID: testUser, Repository: testRepo})
+	if !errors.Is(err, ErrNotDeveloper) {
+		t.Errorf("site: err = %v", err)
+	}
+	if app, _ := bed.store.GetAppConnection(ctx, testProject, testApp); app != nil || len(bed.store.siteConnections) != 0 {
+		t.Errorf("a refused connect saved %+v / %+v", app, bed.store.siteConnections)
+	}
+	bed.service.options.Members = standings{testUser: true}
+	if _, err := bed.service.ConnectApp(ctx, AppConnectRequest{ProjectID: testProject, AppID: testApp, UserID: testUser, Repository: testRepo}); err != nil {
+		t.Errorf("a developer connects: %v", err)
+	}
+}

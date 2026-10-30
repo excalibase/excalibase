@@ -23,7 +23,6 @@ func TestBuildStatus_NamesASandboxThatDidNotStart(t *testing.T) {
 	stopped := "failed to create containerd task: starting container: cannot start container \"abc\" in state stopped"
 	for name, step := range map[string]corev1.ContainerStatus{
 		"containerd's reason":    terminatedWith("build", "StartError", "", 128),
-		"runsc's start message":  terminatedWith("build", "Error", stopped, 128),
 		"an app build's step":    terminatedWith("buildkit", "StartError", stopped, 128),
 		"the clone step refused": terminatedWith("clone", "StartError", "", 128),
 	} {
@@ -38,6 +37,11 @@ func TestBuildStatus_NamesASandboxThatDidNotStart(t *testing.T) {
 	plain := buildPod(corev1.PodPending, []corev1.ContainerStatus{terminatedWith("build", "Error", "", 128)}, nil)
 	if status := interpretBuild(&batchv1.Job{}, plain, stepFailureKind); status.StartFailed || status.Failure != sitebuilds.FailBuild {
 		t.Errorf("a build that itself exited 128 is the build's failure: %+v", status)
+	}
+	// The termination message is the build's own to write, so it never earns a retry.
+	spoofed := buildPod(corev1.PodPending, []corev1.ContainerStatus{terminatedWith("build", "Error", stopped, 128)}, nil)
+	if status := interpretBuild(&batchv1.Job{}, spoofed, stepFailureKind); status.StartFailed || status.Failure != sitebuilds.FailBuild {
+		t.Errorf("a build that printed the sandbox's message is still the build's failure: %+v", status)
 	}
 }
 

@@ -221,6 +221,9 @@ func (s *Service) Connect(ctx context.Context, request ConnectRequest) (*Connect
 	if err := s.mustSite(ctx, request.ProjectID, request.SiteID); err != nil {
 		return nil, err
 	}
+	if err := s.mayConnect(ctx, request.UserID, request.ProjectID); err != nil {
+		return nil, err
+	}
 	installation, repository, err := s.resolveRepository(ctx, request.UserID, request.RepositoryID, request.Repository)
 	if err != nil {
 		return nil, err
@@ -365,11 +368,19 @@ func (s *Service) sizedBuild(ctx context.Context, connection connected) (*Build,
 }
 
 // admit counts the build toward the project's deploys or app builds per hour; a push past it is kept as FAILED, never started.
+// admit takes a site build's deploy slot; an app build's slot is taken inside Enqueue, past its delivery check.
 func (s *Service) admit(ctx context.Context, build *Build) error {
-	slotErr := s.takeSlot(ctx, build)
-	if slotErr == nil {
+	if build.Kind == KindApp {
 		return nil
 	}
+	if err := s.sites.TakeDeploySlot(ctx, build.ProjectID); err != nil {
+		return overCap(build, err)
+	}
+	return nil
+}
+
+// overCap applies a refused slot: a push is recorded FAILED so it is not lost silently; anything else is refused.
+func overCap(build *Build, slotErr error) error {
 	limited := errors.Is(slotErr, sites.ErrDeployRateLimited) || errors.Is(slotErr, ErrAppBuildRateLimited)
 	if build.Trigger != TriggerPush || !limited {
 		return slotErr
@@ -378,21 +389,12 @@ func (s *Service) admit(ctx context.Context, build *Build) error {
 	return nil
 }
 
-func (s *Service) takeSlot(ctx context.Context, build *Build) error {
-	if build.Kind != KindApp {
-		return s.sites.TakeDeploySlot(ctx, build.ProjectID)
+// appBuildWait is the refusal for an app build that must wait; none when it may queue now.
+func appBuildWait(wait time.Duration) error {
+	if wait <= 0 {
+		return nil
 	}
-	if build.buildsPerHour <= 0 {
-		return &AppBuildRateLimitError{RetryAfter: time.Hour}
-	}
-	wait, err := s.store.TakeAppBuildSlot(ctx, build.ProjectID, s.now().UTC(), build.buildsPerHour)
-	if err != nil {
-		return err
-	}
-	if wait > 0 {
-		return &AppBuildRateLimitError{RetryAfter: max(wait, time.Second)}
-	}
-	return nil
+	return &AppBuildRateLimitError{RetryAfter: max(wait, time.Second)}
 }
 
 // HandleWebhook verifies a delivery and queues a build for every site tracking the pushed branch.

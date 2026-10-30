@@ -83,6 +83,9 @@ func (s *PostgresStore) Enqueue(ctx context.Context, build *Build, keep int) (bo
 			return false, nil
 		}
 	}
+	if err := takeAppBuildSlot(ctx, tx, build); err != nil {
+		return false, err
+	}
 	if build.Status == StatusQueued {
 		if _, err := tx.ExecContext(ctx, supersedeSQL, targetArgs(target, supersededReason)...); err != nil {
 			return false, fmt.Errorf("supersede queued builds: %w", err)

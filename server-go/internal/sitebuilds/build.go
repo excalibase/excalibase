@@ -31,6 +31,8 @@ var (
 	// ErrSingleHost is a single-host install, where git builds are not offered yet.
 	ErrSingleHost = errors.New("git builds are not offered on single-host installs yet: build the site in your own CI " +
 		"and deploy the output (Studio → Sites → Deploy from CI, or the get_ci_snippet tool with kind site)")
+	// ErrNotDeveloper is a connect by a member below the developer rung; the route gates it too.
+	ErrNotDeveloper = errors.New("connecting a repository needs the developer role on this project")
 	// ErrNotAuthorized is a repository the caller's own git-host sign-in did not show them.
 	ErrNotAuthorized = errors.New("sign in to GitHub from this site first: your sign-in has to show you can read that repository")
 	ErrStateInvalid  = errors.New("that sign-in link has expired or was already used; start again from the site")
@@ -124,8 +126,6 @@ type Build struct {
 	RepositoryID   int64  `json:"-"`
 	// App is an app build's settings and image cap; nil on a site's.
 	App *AppBuild `json:"app,omitempty"`
-	// buildsPerHour is the plan's app builds per hour, read when queued; it is enforced then and not kept.
-	buildsPerHour int
 }
 
 // Target is the site or app the build builds.

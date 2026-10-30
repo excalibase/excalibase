@@ -31,7 +31,8 @@ func queueAppBuild(t *testing.T, h *sitebuildstest.Harness, project, appID, deli
 	build := &sitebuilds.Build{ID: uuid.NewString(), Kind: sitebuilds.KindApp, AppID: appID, ProjectID: project, Status: sitebuilds.StatusQueued,
 		Trigger: sitebuilds.TriggerPush, CommitSHA: sitebuildstest.HeadSHA, DeliveryID: delivery, Limits: limits, RequestedBy: h.User,
 		Provider: "github", InstallationID: h.Installation, RepositoryID: h.SiteRepo, Repository: "acme/site", CreatedAt: time.Now().UTC(),
-		App: &sitebuilds.AppBuild{AppSettings: sitebuilds.AppSettings{Branch: "main", Builder: sitebuilds.AppBuilderBuildpacks}, MaxImageBytes: 1 << 30}}
+		App: &sitebuilds.AppBuild{AppSettings: sitebuilds.AppSettings{Branch: "main", Builder: sitebuilds.AppBuilderBuildpacks}, MaxImageBytes: 1 << 30,
+			MaxBuildsPerHour: sitebuildstest.FreeAppLimits.MaxBuildsPerHour}}
 	if created, err := h.Store.Enqueue(context.Background(), build, 30); err != nil || !created {
 		t.Fatalf("queue an app build: created %v, %v", created, err)
 	}
@@ -284,23 +285,57 @@ func TestAppBuilds_OffQueueNothing(t *testing.T) {
 	}
 }
 
-func TestTakeAppBuildSlot_CountsTheProjectsLastHour(t *testing.T) {
+// enqueueAt queues an app build of trigger at a moment, under a plan allowing perHour app builds.
+func enqueueAt(h *sitebuildstest.Harness, project, appID, trigger, delivery string, at time.Time, perHour int) (*sitebuilds.Build, bool, error) {
+	build := &sitebuilds.Build{ID: uuid.NewString(), Kind: sitebuilds.KindApp, AppID: appID, ProjectID: project, Status: sitebuilds.StatusQueued,
+		Trigger: trigger, CommitSHA: sitebuildstest.HeadSHA, DeliveryID: delivery, Limits: sitebuildstest.FreeAppLimits.Limits, RequestedBy: h.User,
+		Provider: "github", InstallationID: h.Installation, RepositoryID: h.SiteRepo, Repository: "acme/site", CreatedAt: at,
+		App: &sitebuilds.AppBuild{AppSettings: sitebuilds.AppSettings{Branch: "main", Builder: sitebuilds.AppBuilderBuildpacks},
+			MaxImageBytes: 1 << 30, MaxBuildsPerHour: perHour}}
+	created, err := h.Store.Enqueue(context.Background(), build, 30)
+	return build, created, err
+}
+
+// The project's app builds per hour are counted as they queue: a redelivery or a refused enqueue takes no slot.
+func TestEnqueue_CountsTheProjectsAppBuildsInTheLastHour(t *testing.T) {
 	h := sitebuildstest.New(t, sitebuildstest.Options{AppsOn: true})
-	ctx, now := context.Background(), time.Now().UTC()
-	for i := range 2 {
-		if wait, err := h.Store.TakeAppBuildSlot(ctx, h.Project, now.Add(time.Duration(i)*time.Minute), 2); err != nil || wait != 0 {
-			t.Fatalf("build %d: wait %v, %v", i, wait, err)
+	// Postgres keeps microseconds; a finer now would shave the wait below the hour's edge.
+	appID, now := h.AddApp(h.Project), time.Now().UTC().Truncate(time.Microsecond)
+	queued := func(trigger, delivery string, at time.Time) *sitebuilds.Build {
+		t.Helper()
+		build, created, err := enqueueAt(h, h.Project, appID, trigger, delivery, at, 2)
+		if err != nil || !created {
+			t.Fatalf("%s at %v: created %v, %v", delivery, at, created, err)
+		}
+		return build
+	}
+	queued(sitebuilds.TriggerPush, "d-1", now)
+	for range 3 {
+		if _, created, err := enqueueAt(h, h.Project, appID, sitebuilds.TriggerPush, "d-1", now, 2); err != nil || created {
+			t.Fatalf("a redelivery: created %v, %v", created, err)
 		}
 	}
-	wait, err := h.Store.TakeAppBuildSlot(ctx, h.Project, now.Add(2*time.Minute), 2)
-	if err != nil || wait != 58*time.Minute {
-		t.Fatalf("the third build in the hour: wait %v, %v", wait, err)
+	if _, _, err := enqueueAt(h, "proj-elsewhere", appID, sitebuilds.TriggerPush, "", now, 2); !errors.Is(err, sitebuilds.ErrNotConnected) {
+		t.Fatalf("an app the project does not hold: %v", err)
 	}
-	if wait, err := h.Store.TakeAppBuildSlot(ctx, "proj-other-"+h.Project, now, 2); err != nil || wait != 0 {
-		t.Errorf("another project shares the count: %v %v", wait, err)
+	if second := queued(sitebuilds.TriggerPush, "d-2", now.Add(time.Minute)); second.Status != sitebuilds.StatusQueued {
+		t.Fatalf("the second build in the hour: %+v", second)
 	}
-	if wait, err := h.Store.TakeAppBuildSlot(ctx, h.Project, now.Add(61*time.Minute), 2); err != nil || wait != 0 {
-		t.Errorf("an hour later: %v %v", wait, err)
+	late := queued(sitebuilds.TriggerPush, "d-3", now.Add(2*time.Minute))
+	if late.Status != sitebuilds.StatusFailed || late.FailureKind != sitebuilds.FailRateLimited {
+		t.Fatalf("a push past the cap is kept as failed: %+v", late)
+	}
+	var limited *sitebuilds.AppBuildRateLimitError
+	_, _, err := enqueueAt(h, h.Project, appID, sitebuilds.TriggerRebuild, "", now.Add(2*time.Minute), 2)
+	if !errors.As(err, &limited) || limited.RetryAfter != 58*time.Minute {
+		t.Fatalf("a rebuild past the cap: %v", err)
+	}
+	other := "proj-other-" + h.Project
+	if build, _, err := enqueueAt(h, other, h.AddApp(other), sitebuilds.TriggerPush, "", now, 2); err != nil || build.Status != sitebuilds.StatusQueued {
+		t.Errorf("another project shares the count: %+v %v", build, err)
+	}
+	if later := queued(sitebuilds.TriggerRebuild, "", now.Add(61*time.Minute)); later.Status != sitebuilds.StatusQueued {
+		t.Errorf("an hour later: %+v", later)
 	}
 }
 

@@ -173,6 +173,11 @@ func (m *memoryStore) DeliveryQueued(_ context.Context, target Target, deliveryI
 func (m *memoryStore) Enqueue(_ context.Context, build *Build, _ int) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if build.Kind == KindApp && build.Status == StatusQueued {
+		if err := overCap(build, appBuildWait(m.takeAppSlot(build))); err != nil {
+			return false, err
+		}
+	}
 	copied := *build
 	m.builds = append(m.builds, &copied)
 	return true, nil
@@ -200,17 +205,16 @@ func (m *memoryStore) ExpireLostBuilds(context.Context, time.Time, string) ([]Lo
 	return lost, nil
 }
 
-func (m *memoryStore) TakeAppBuildSlot(_ context.Context, projectID string, _ time.Time, perHour int) (time.Duration, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// takeAppSlot counts an app build, answering a wait once the project used its plan's hour.
+func (m *memoryStore) takeAppSlot(build *Build) time.Duration {
 	if m.appAttempts == nil {
 		m.appAttempts = map[string]int{}
 	}
-	if m.appAttempts[projectID] >= perHour {
-		return 17 * time.Minute, nil
+	if build.App == nil || m.appAttempts[build.ProjectID] >= build.App.MaxBuildsPerHour {
+		return 17 * time.Minute
 	}
-	m.appAttempts[projectID]++
-	return 0, nil
+	m.appAttempts[build.ProjectID]++
+	return 0
 }
 
 func (m *memoryStore) CancelQueued(_ context.Context, kind, reason string) (int, error) {
@@ -387,6 +391,10 @@ type fakeJobs struct {
 	forgot    []string
 	forgetErr error
 	logText   string
+	// onRemove runs as an attempt's job is removed, before any retry.
+	onRemove func()
+	// onStatus runs on each status read of a running job.
+	onStatus func()
 }
 
 func (f *fakeJobs) begin() {
@@ -402,6 +410,9 @@ func (f *fakeJobs) Status(_ context.Context, runID string) (RunStatus, error) {
 	defer f.mu.Unlock()
 	f.statusIDs = append(f.statusIDs, runID)
 	f.reads++
+	if f.onStatus != nil {
+		f.onStatus()
+	}
 	if f.reads == 1 {
 		return RunStatus{Phase: RunRunning, CloneDone: true}, nil
 	}
@@ -416,8 +427,12 @@ func (f *fakeJobs) Logs(context.Context, string) (string, error) {
 
 func (f *fakeJobs) Remove(_ context.Context, buildID string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.removed = append(f.removed, buildID)
+	hook := f.onRemove
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 

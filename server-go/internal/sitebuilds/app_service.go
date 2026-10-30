@@ -62,6 +62,9 @@ func (s *Service) ConnectApp(ctx context.Context, request AppConnectRequest) (*A
 	if err := s.mustApp(ctx, request.ProjectID, request.AppID); err != nil {
 		return nil, err
 	}
+	if err := s.mayConnect(ctx, request.UserID, request.ProjectID); err != nil {
+		return nil, err
+	}
 	installation, repository, err := s.resolveRepository(ctx, request.UserID, request.RepositoryID, request.Repository)
 	if err != nil {
 		return nil, err
@@ -153,6 +156,6 @@ func (s *Service) sizedAppBuild(ctx context.Context, connection *AppConnection) 
 		return nil, fmt.Errorf("read the plan's app build limits: %w", err)
 	}
 	return &Build{Kind: KindApp, AppID: connection.AppID, Settings: Settings{Branch: connection.Settings.Branch},
-		Limits: limits.Limits, App: &AppBuild{AppSettings: connection.Settings, MaxImageBytes: limits.MaxImageBytes},
-		buildsPerHour: limits.MaxBuildsPerHour}, nil
+		Limits: limits.Limits, App: &AppBuild{AppSettings: connection.Settings, MaxImageBytes: limits.MaxImageBytes,
+			MaxBuildsPerHour: limits.MaxBuildsPerHour}}, nil
 }

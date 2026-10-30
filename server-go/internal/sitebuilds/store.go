@@ -61,7 +61,8 @@ type Store interface {
 
 	// Enqueue cancels the target's queued builds as superseded and queues this one,
 	// or records it as it is when it was refused before queueing (FAILED).
-	// A delivery already recorded for the target answers false.
+	// A delivery already recorded for the target answers false. An app build takes one of the
+	// project's app builds per hour in the same transaction, after the delivery check, via overCap.
 	Enqueue(ctx context.Context, build *Build, keep int) (bool, error)
 	// ClaimNext takes the oldest queued build of the given kinds that fits the slots (running builds
 	// of every kind count), its project's cap for that kind, and one running build per site or app.
@@ -69,9 +70,6 @@ type Store interface {
 	ExtendLease(ctx context.Context, buildID, holder string, until time.Time) error
 	SaveLog(ctx context.Context, buildID, holder, log string) error
 	FinishBuild(ctx context.Context, build *Build, holder string) error
-	// TakeAppBuildSlot counts one app build against the project's builds in the hour before now,
-	// answering how long to wait when perHour are already counted.
-	TakeAppBuildSlot(ctx context.Context, projectID string, now time.Time, perHour int) (time.Duration, error)
 	// CancelQueued cancels every queued build of the kind, answering how many.
 	CancelQueued(ctx context.Context, kind, reason string) (int, error)
 	// ExpireLostBuilds fails running builds whose lease lapsed.

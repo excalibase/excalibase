@@ -26,9 +26,13 @@ type appKind struct {
 
 func (k *appKind) jobs() JobControl { return k.runner }
 
+// connection is read before the build starts and again before it deploys; the flag going off stops either.
 func (k *appKind) connection(ctx context.Context) (connected, error) {
-	build := k.execution.build
-	connection, err := k.execution.dispatcher.service.store.GetAppConnection(ctx, build.ProjectID, build.AppID)
+	build, service := k.execution.build, k.execution.dispatcher.service
+	if !service.appsOn(ctx) {
+		return nil, ErrAppBuildsOff
+	}
+	connection, err := service.store.GetAppConnection(ctx, build.ProjectID, build.AppID)
 	if err != nil || connection == nil {
 		return nil, err
 	}

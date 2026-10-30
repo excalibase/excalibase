@@ -127,22 +127,33 @@ const appBuildRateLock = 354_000_002
 // appBuildWindow is the span the plan's app builds per hour counts over.
 const appBuildWindow = time.Hour
 
-func (s *PostgresStore) TakeAppBuildSlot(ctx context.Context, projectID string, now time.Time, perHour int) (time.Duration, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin app build slot: %w", err)
+// takeAppBuildSlot counts a queued app build against its project's last hour inside the enqueue's
+// transaction, so a rolled-back enqueue gives the slot back.
+func takeAppBuildSlot(ctx context.Context, tx *sql.Tx, build *Build) error {
+	if build.Kind != KindApp || build.Status != StatusQueued {
+		return nil
 	}
-	defer func() { _ = tx.Rollback() }()
+	if build.App == nil || build.App.MaxBuildsPerHour <= 0 {
+		return overCap(build, appBuildWait(appBuildWindow))
+	}
+	wait, err := appBuildWaitIn(ctx, tx, build.ProjectID, build.CreatedAt, build.App.MaxBuildsPerHour)
+	if err != nil {
+		return err
+	}
+	return overCap(build, appBuildWait(wait))
+}
+
+func appBuildWaitIn(ctx context.Context, tx *sql.Tx, projectID string, now time.Time, perHour int) (time.Duration, error) {
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, appBuildRateLock, projectID); err != nil {
 		return 0, fmt.Errorf("lock the project's app build rate: %w", err)
 	}
 	since := now.Add(-appBuildWindow)
-	if _, err := tx.ExecContext(ctx, `DELETE FROM app_build_attempts WHERE attempted_at <= $1`, since); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM app_build_attempts WHERE project_id = $1 AND attempted_at <= $2`, projectID, since); err != nil {
 		return 0, fmt.Errorf("forget old app builds: %w", err)
 	}
 	var counted int
 	var oldest sql.NullTime
-	err = tx.QueryRowContext(ctx, `SELECT COUNT(*), MIN(attempted_at) FROM (SELECT attempted_at FROM app_build_attempts
+	err := tx.QueryRowContext(ctx, `SELECT COUNT(*), MIN(attempted_at) FROM (SELECT attempted_at FROM app_build_attempts
 		WHERE project_id = $1 ORDER BY attempted_at DESC LIMIT $2) AS recent`, projectID, perHour).Scan(&counted, &oldest)
 	if err != nil {
 		return 0, fmt.Errorf("count the project's app builds: %w", err)
@@ -153,7 +164,7 @@ func (s *PostgresStore) TakeAppBuildSlot(ctx context.Context, projectID string, 
 	if _, err := tx.ExecContext(ctx, `INSERT INTO app_build_attempts (project_id, attempted_at) VALUES ($1, $2)`, projectID, now); err != nil {
 		return 0, fmt.Errorf("record the app build: %w", err)
 	}
-	return 0, tx.Commit()
+	return 0, nil
 }
 
 func (s *PostgresStore) CancelQueued(ctx context.Context, kind, reason string) (int, error) {

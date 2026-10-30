@@ -71,10 +71,7 @@ func (e *execution) execute(ctx context.Context) outcome {
 	}
 	status, refused := e.attempt(ctx)
 	if refused == nil && status.StartFailed {
-		e.remove(ctx)
-		e.note(e.log + fmt.Sprintf("== retry ==\n%s; retried once with a fresh clone credential\n", status.Detail))
-		e.log = ""
-		status, refused = e.attempt(ctx)
+		status, refused = e.retry(ctx, status)
 	}
 	defer e.remove(ctx)
 	if refused != nil {
@@ -89,6 +86,17 @@ func (e *execution) execute(ctx context.Context) outcome {
 	deployCtx, cancelDeploy := context.WithTimeout(ctx, e.dispatcher.options.DeployBudget)
 	defer cancelDeploy()
 	return e.kind.deliver(deployCtx)
+}
+
+// retry drops the failed attempt's Job and runs once more, after the source checks pass again.
+func (e *execution) retry(ctx context.Context, failed RunStatus) (RunStatus, *outcome) {
+	e.remove(ctx)
+	e.note(e.log + fmt.Sprintf("== retry ==\n%s; retried once with a fresh clone credential\n", failed.Detail))
+	e.log = ""
+	if refused := e.checkSource(ctx); refused != nil {
+		return RunStatus{}, refused
+	}
+	return e.attempt(ctx)
 }
 
 // checkSource re-reads the connection, its connector and the repository's current name before anything runs.
@@ -166,7 +174,7 @@ func (e *execution) forgetOnce(ctx context.Context, credential gitprovider.Clone
 func (e *execution) stillDeployable(ctx context.Context) string {
 	still, err := e.kind.connection(ctx)
 	if err != nil {
-		return userMessage(err)
+		return userMessage(err) + "; nothing was deployed"
 	}
 	if still == nil || still.source().RepositoryID != e.build.RepositoryID {
 		return "the repository was disconnected while this build ran; nothing was deployed"

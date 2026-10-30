@@ -5,9 +5,11 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/gitprovider"
 )
 
@@ -197,6 +199,45 @@ func TestBuild_RetriesOnceWhenTheSandboxDidNotStart(t *testing.T) {
 		if done.Status != StatusFailed || done.FailureKind != FailPlatform || len(again.starts(kind)) != 2 {
 			t.Errorf("%s: a second start error: %+v, %d starts", kind, done, len(again.starts(kind)))
 		}
+	}
+}
+
+// The retry re-reads the source: a connector who lost the rung between attempts gets no second start.
+func TestBuild_RetryRechecksTheSource(t *testing.T) {
+	notStarted := RunStatus{Phase: RunFailed, Failure: FailPlatform, ExitCode: 128, StartFailed: true}
+	for _, kind := range []string{KindSite, KindApp} {
+		bed := newTestBed(true)
+		members := standings{testUser: true}
+		bed.service.options.Members = members
+		jobs := bed.jobsOf(kind)
+		jobs.outcomes = []RunStatus{notStarted, {Phase: RunReady}}
+		jobs.onRemove = func() { members[testUser] = false }
+		queued := bed.queue(t, kind)
+		bed.runAll()
+		done := bed.store.build(queued.ID)
+		if done.Status != StatusFailed || done.FailureKind != FailClone || len(bed.starts(kind)) != 1 {
+			t.Errorf("%s: %+v after %d starts", kind, done, len(bed.starts(kind)))
+		}
+	}
+}
+
+// switchable is a flag the test turns off mid-build.
+type switchable struct{ on atomic.Bool }
+
+func (f *switchable) Enabled(context.Context, features.Feature) bool { return f.on.Load() }
+
+// The flag is a kill switch: an app build running when it goes off deploys nothing.
+func TestAppBuild_SwitchedOffWhileRunningDeploysNothing(t *testing.T) {
+	bed := newTestBed(true)
+	flag := &switchable{}
+	flag.on.Store(true)
+	bed.service.apps.Flags = flag
+	queued := bed.queue(t, KindApp)
+	bed.apps.onStatus = func() { flag.on.Store(false) }
+	bed.runAll()
+	done := bed.store.build(queued.ID)
+	if done.Status != StatusFailed || !strings.Contains(done.FailureReason, "nothing was deployed") || len(bed.publisher.published) != 0 {
+		t.Fatalf("%+v, published %+v", done, bed.publisher.published)
 	}
 }
 
