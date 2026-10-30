@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/apptemplate"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -176,6 +177,8 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		logDrainsHandler:       handler.NewLogDrainsHandler(matrixLogDrains(instances), nil),
 		hostMonitoringHandler:  matrixHostMonitoring(),
 		logForwarderHandler:    handler.NewLogForwarderHandler(matrixLogDrains(instances), "matrix-forwarder-token"),
+		registryToken:          matrixRegistryToken(t),
+		internalRegistryH:      handler.NewInternalRegistryHandler(appregistry.NewGenerations(memVault{})),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),

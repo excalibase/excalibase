@@ -55,11 +55,15 @@ const (
 	// HostMetrics is single-host monitoring: the host and every container
 	// sampled into history, alerts and notices, and Studio's Host page (EXC-670).
 	HostMetrics Feature = "hostmetrics"
+	// AppGitBuilds is building apps from a git push under gVisor (EXC-547,
+	// ADR 0037 phase 2): each plan's app build limits and, later, the app's
+	// git source, builds and logs.
+	AppGitBuilds Feature = "appgitbuilds"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, AppGitBuilds}
 }
 
 type Flags interface {
