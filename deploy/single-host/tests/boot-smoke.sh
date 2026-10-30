@@ -23,7 +23,8 @@
 # HOST_LOGS=1 installs with --host-logs and walks stored log search (EXC-672,
 # log-search-journey.sh): a project's line in Loki under its own labels, found
 # by its search and not another project's, after a restart and the container's
-# removal. Without it no Loki runs. It removes the project's database container,
+# removal, and a deleted project's lines asked of Loki for that project alone
+# (EXC-678, FEATURE_LOGDELETION=true). Without it no Loki runs. It removes the project's database container,
 # so it runs last.
 # REQUEST_METRICS=1 turns request charts and slow queries on and walks them (EXC-673,
 # request-charts-journey.sh): calls and a slow statement show in their own project
@@ -97,6 +98,8 @@ sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUB
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
 echo "FEATURE_DBREADADDRESS=true" >> "$W/.env"
 [ -n "${REQUEST_METRICS:-}" ] && printf 'FEATURE_REQUESTMETRICS=true\nFEATURE_SLOWQUERIES=true\n' >> "$W/.env"
+# Stored logs go with a deleted project (EXC-678, log-search-journey.sh).
+[ -n "${HOST_LOGS:-}" ] && echo "FEATURE_LOGDELETION=true" >> "$W/.env"
 # The apps journey drives create_app through MCP, as a coding tool does (EXC-606).
 [ -n "${APPS:-}" ] && echo "FEATURE_MCP=true" >> "$W/.env"
 # and deploys a catalog template, reached by its siblings by name (EXC-669).
