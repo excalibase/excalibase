@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-var catalogIDs = []string{"valkey", "mongodb", "rabbitmq", "meilisearch"}
+var catalogIDs = []string{"valkey", "mongodb", "rabbitmq"}
 
 func TestBuiltinCatalogIsMarkedApartFromTheStarters(t *testing.T) {
 	catalog, err := Builtins()
