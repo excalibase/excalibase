@@ -53,7 +53,7 @@ func TestDeployOriginIsInTheDeployJSON(t *testing.T) {
 }
 
 func TestIsDeploySource(t *testing.T) {
-	for _, source := range []string{DeploySourceStudio, DeploySourceAPI, DeploySourceImageWatcher} {
+	for _, source := range []string{DeploySourceStudio, DeploySourceAPI, DeploySourceImageWatcher, DeploySourceGitBuild} {
 		if !IsDeploySource(source) {
 			t.Errorf("%q is a deploy source", source)
 		}

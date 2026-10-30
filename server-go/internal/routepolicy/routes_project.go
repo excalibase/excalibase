@@ -189,6 +189,8 @@ var runtimeRows = []Row{
 	{Methods: get, Pattern: "/storage/v1/{projectId}/buckets/{bucket}/download-url/*", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerBucketAccess, Discloses: NoSecret},
 	{Methods: del, Pattern: "/storage/v1/{projectId}/buckets/{bucket}/objects/*", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerBucketAccess},
 
+	{Methods: getPost, Pattern: "/internal/registry/token", Auth: AuthRegistryPull, Owner: OwnerPullCredential, Discloses: NoSecret, Note: "the internal registry's token service: a 2-minute pull token on the credential's own project, never to a platform token (EXC-540)"},
+	{Methods: post, Pattern: "/api/projects/{projectId}/internal-registry/pull-credential/rotate", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "retires the project's pull password; apps pull with the new one from their next deploy (EXC-540)"},
 	{Methods: post, Pattern: "/internal/log-forwarder/pull", Auth: AuthForwarderToken, Owner: OwnerForwarderToken, Note: "hands the forwarder pod due batches with their destination keys (EXC-658)"},
 	{Methods: post, Pattern: "/internal/log-forwarder/ack", Auth: AuthForwarderToken, Owner: OwnerForwarderToken, Note: "moves a drain's cursor only from where it was handed out"},
 	{Methods: post, Pattern: "/internal/runtime/functions/{fnId}/metadata", Auth: AuthRuntimeToken, Owner: OwnerRuntimeSecret, Note: "the project is named in the BODY, not the path, and the token must match that project's derived secret"},

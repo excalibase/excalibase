@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/imagedigest"
@@ -426,7 +427,7 @@ const registryRetryAfter = "60"
 
 func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, apphost.ErrInvalidImage):
+	case errors.Is(err, apphost.ErrInvalidImage), errors.Is(err, appregistry.ErrInternalImage):
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, imagedigest.ErrNotPublic):
 		httpError(w, err.Error()+"; push the image to a public registry, or set it as the app's image and deploy with no image, which runs it as the node pulls it, without a pinned digest", http.StatusUnprocessableEntity)
