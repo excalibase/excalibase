@@ -92,3 +92,9 @@ type Provider interface {
 	// ParseWebhook verifies a delivery's signature before reading it.
 	ParseWebhook(header http.Header, body []byte) (Event, error)
 }
+
+// FileChecker answers whether a regular file is at a path in a commit; a missing
+// file is false, and anything the host could not answer is an error.
+type FileChecker interface {
+	FileExists(ctx context.Context, installationID int64, repository Repository, commit, path string) (bool, error)
+}
