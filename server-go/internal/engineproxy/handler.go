@@ -224,9 +224,13 @@ func (h *Handler) checkBody(r *http.Request, check func([]byte) error) error {
 	if len(body) > maxCreateBody {
 		return refuse("request body is larger than %d bytes", maxCreateBody)
 	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.ContentLength = int64(len(body))
-	return check(body)
+	checked, err := canonicalBody(body)
+	if err != nil {
+		return err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(checked))
+	r.ContentLength = int64(len(checked))
+	return check(checked)
 }
 
 func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {

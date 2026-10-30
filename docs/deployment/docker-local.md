@@ -41,6 +41,11 @@ Holding the Docker socket is root on the host, so provisioning does not get it.
   profiles, sysctls, another container's volumes, a network other than
   `excalibase-tenants`, a port on any address but `127.0.0.1`, or any
   HostConfig field the proxy does not know;
+- a request body is refused if any object in it names a key twice, even in
+  another case (`"Type"` and `"type"`): the engine would read a different one
+  than the proxy checked (label or port keys that differ only in case are
+  refused too). The engine gets the proxy's own encoding of the
+  body it checked, never the caller's bytes;
 - image pulls are allowed; listing containers, networks, volumes, builds,
   swarm and everything else is refused.
 
