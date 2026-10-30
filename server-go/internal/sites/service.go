@@ -56,6 +56,9 @@ type Options struct {
 	Projects ProjectGate
 	// Previews keeps branch and pull request previews (EXC-660); nil means previews are not offered.
 	Previews PreviewStore
+	// PreviewsDark refuses new previews (the flag is off) while the held ones are still removed
+	// with their site, unrouted with their project and swept, so none is left on Cloudflare.
+	PreviewsDark bool
 	// MaxPreviews caps live previews across the install, each one Worker script; 0 is DefaultMaxPreviews.
 	MaxPreviews int
 }

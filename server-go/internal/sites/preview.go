@@ -53,6 +53,8 @@ type Preview struct {
 	SiteID    string `json:"siteId"`
 	ProjectID string `json:"projectId"`
 	Source    string `json:"source"`
+	// FromFork is a pull request from another repository; such previews go when forks are turned off.
+	FromFork bool `json:"fromFork"`
 	// Ref is the branch name, or the pull request number in decimal.
 	Ref      string `json:"ref"`
 	Hostname string `json:"hostname"`
@@ -97,7 +99,9 @@ type PreviewStore interface {
 	ReleasePreview(ctx context.Context, projectID, id, lease string) error
 	// FinishPreview records a deploy's outcome while lease holds the preview.
 	FinishPreview(ctx context.Context, preview *Preview, lease string) error
-	MarkPreviewRemoving(ctx context.Context, projectID, id string) error
+	// MarkPreviewRemoving marks the preview for removal; with idleBefore set, only while it is already
+	// REMOVING or idle since then (a push meanwhile spares it), answering ErrPreviewNotFound otherwise.
+	MarkPreviewRemoving(ctx context.Context, projectID, id string, idleBefore time.Time) error
 	DeletePreview(ctx context.Context, projectID, id, lease string) error
 	// DuePreviews answers previews being removed and those not updated since idleBefore.
 	DuePreviews(ctx context.Context, idleBefore time.Time, limit int) ([]*Preview, error)
@@ -111,6 +115,7 @@ type PreviewRequest struct {
 	Ref       string
 	CommitSHA string
 	Actor     string
+	FromFork  bool
 }
 
 func (r PreviewRequest) validate() error {
@@ -132,11 +137,22 @@ func (r PreviewRequest) validate() error {
 	return nil
 }
 
-// PreviewsAvailable reports whether this install publishes previews.
-func (s *Service) PreviewsAvailable() bool { return s.Available() && s.options.Previews != nil }
+// PreviewsAvailable reports whether this install publishes new previews.
+func (s *Service) PreviewsAvailable() bool { return s.KeepsPreviews() && !s.options.PreviewsDark }
+
+// KeepsPreviews reports whether previews are stored here, so held ones can be removed even while dark.
+func (s *Service) KeepsPreviews() bool { return s.Available() && s.options.Previews != nil }
 
 func (s *Service) previewStore() (PreviewStore, error) {
 	if !s.PreviewsAvailable() {
+		return nil, ErrPreviewsUnavailable
+	}
+	return s.options.Previews, nil
+}
+
+// heldPreviews is the store for reading and removing previews already made, dark or not.
+func (s *Service) heldPreviews() (PreviewStore, error) {
+	if !s.KeepsPreviews() {
 		return nil, ErrPreviewsUnavailable
 	}
 	return s.options.Previews, nil
@@ -185,12 +201,12 @@ func (s *Service) OpenPreview(ctx context.Context, request PreviewRequest) (*Pre
 	}
 	now := s.now().UTC()
 	candidate := &Preview{ID: newPreviewID(), SiteID: site.ID, ProjectID: site.ProjectID, Source: request.Source, Ref: request.Ref,
-		Hostname: hostname, Status: PreviewBuilding, CommitSHA: request.CommitSHA, CreatedBy: request.Actor, CreatedAt: now, UpdatedAt: now}
+		FromFork: request.FromFork, Hostname: hostname, Status: PreviewBuilding, CommitSHA: request.CommitSHA, CreatedBy: request.Actor, CreatedAt: now, UpdatedAt: now}
 	return store.OpenPreview(ctx, candidate, limits.MaxPreviews, s.maxInstallPreviews())
 }
 
 func (s *Service) GetPreview(ctx context.Context, projectID, siteID, id string) (*Preview, error) {
-	store, err := s.previewStore()
+	store, err := s.heldPreviews()
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +214,7 @@ func (s *Service) GetPreview(ctx context.Context, projectID, siteID, id string) 
 }
 
 func (s *Service) ListPreviews(ctx context.Context, projectID, siteID string) ([]*Preview, error) {
-	store, err := s.previewStore()
+	store, err := s.heldPreviews()
 	if err != nil {
 		return nil, err
 	}

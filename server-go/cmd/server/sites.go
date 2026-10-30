@@ -49,6 +49,7 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 	service, err := sites.NewService(store, publisher, origins, sites.Options{
 		BaseDomain: cfg.Sites.BaseDomain, Hostnames: store, DeployLimits: limits, CustomDomains: customDomainOptions(cfg),
 		Projects: projectGate{instances: sqlStore, claimer: claimer}, Previews: previewStore(cfg, store), MaxPreviews: cfg.Sites.MaxPreviews,
+		PreviewsDark: previewsDark(cfg),
 	})
 	if err != nil {
 		log.Fatalf("sites: %v", err)
@@ -56,12 +57,18 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 	return service
 }
 
-// previewStore keeps previews (EXC-660) only where Sites is offered and sitepreviews is on.
+// previewStore keeps previews (EXC-660) wherever Sites is offered, flag or not: with sitepreviews
+// off none is made, but the held ones are still removed with their site and swept.
 func previewStore(cfg config.AppConfig, store *sites.PostgresStore) sites.PreviewStore {
-	if !cfg.SitesAvailable() || !features.Enabled(context.Background(), cfg.Features(), features.SitePreviews) {
+	if !cfg.SitesAvailable() {
 		return nil
 	}
 	return store
+}
+
+// previewsDark is sitepreviews off: no new preview is made.
+func previewsDark(cfg config.AppConfig) bool {
+	return !features.Enabled(context.Background(), cfg.Features(), features.SitePreviews)
 }
 
 // previewSweepInterval spaces the passes that remove idle previews and retry failed removals.
@@ -69,7 +76,7 @@ const previewSweepInterval = time.Hour
 
 // startPreviewSweep removes previews idle past their lifetime and finishes removals that failed.
 func startPreviewSweep(ctx context.Context, service *sites.Service) {
-	if !service.PreviewsAvailable() {
+	if !service.KeepsPreviews() {
 		return
 	}
 	go func() {

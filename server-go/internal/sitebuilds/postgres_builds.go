@@ -77,8 +77,11 @@ func (s *PostgresStore) Enqueue(ctx context.Context, build *Build, keep int) (bo
 	if err := requireTouched(result, ErrNotConnected); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM site_builds WHERE site_id = $1 AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
-		AND id NOT IN (SELECT id FROM site_builds WHERE site_id = $1 ORDER BY created_at DESC LIMIT $2)`, build.SiteID, keep); err != nil {
+	// Production and each preview keep their own history, so a busy pull request never pushes out the site's.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM site_builds WHERE site_id = $1 AND preview_id IS NOT DISTINCT FROM NULLIF($3, '')
+		AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+		AND id NOT IN (SELECT id FROM site_builds WHERE site_id = $1 AND preview_id IS NOT DISTINCT FROM NULLIF($3, '') ORDER BY created_at DESC LIMIT $2)`,
+		build.SiteID, keep, build.PreviewID); err != nil {
 		return false, fmt.Errorf("trim the build history: %w", err)
 	}
 	return true, tx.Commit()

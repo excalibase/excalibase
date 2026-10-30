@@ -13,13 +13,13 @@ const previewLockSpace = 660
 
 var _ PreviewStore = (*PostgresStore)(nil)
 
-const previewColumns = `id, site_id, project_id, source, ref, hostname, status, commit_sha, COALESCE(deployed_sha, ''),
+const previewColumns = `id, site_id, project_id, source, ref, from_fork, hostname, status, commit_sha, COALESCE(deployed_sha, ''),
 	COALESCE(failure_reason, ''), file_count, total_bytes, cors_claimed, created_by, created_at, updated_at, deployed_at`
 
 func scanPreview(row rowScanner) (*Preview, error) {
 	preview := &Preview{}
 	var deployed sql.NullTime
-	err := row.Scan(&preview.ID, &preview.SiteID, &preview.ProjectID, &preview.Source, &preview.Ref, &preview.Hostname, &preview.Status,
+	err := row.Scan(&preview.ID, &preview.SiteID, &preview.ProjectID, &preview.Source, &preview.Ref, &preview.FromFork, &preview.Hostname, &preview.Status,
 		&preview.CommitSHA, &preview.DeployedSHA, &preview.FailureReason, &preview.FileCount, &preview.TotalBytes, &preview.CorsClaimed,
 		&preview.CreatedBy, &preview.CreatedAt, &preview.UpdatedAt, &deployed)
 	if deployed.Valid {
@@ -56,16 +56,16 @@ func (s *PostgresStore) OpenPreview(ctx context.Context, preview *Preview, maxPe
 	if inInstall >= maxInstall {
 		return nil, ErrPreviewInstallFull
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO site_previews (id, site_id, project_id, source, ref, hostname, status, commit_sha,
+	result, err := tx.ExecContext(ctx, `INSERT INTO site_previews (id, site_id, project_id, source, ref, from_fork, hostname, status, commit_sha,
 		created_by, created_at, updated_at)
-		SELECT $1, id, project_id, $4, $5, $6, $7, $8, $9, $10, $11 FROM sites WHERE id = $2 AND project_id = $3`,
+		SELECT $1, id, project_id, $4, $5, $12, $6, $7, $8, $9, $10, $11 FROM sites WHERE id = $2 AND project_id = $3`,
 		preview.ID, preview.SiteID, preview.ProjectID, preview.Source, preview.Ref, preview.Hostname, preview.Status, preview.CommitSHA,
-		preview.CreatedBy, preview.CreatedAt, preview.UpdatedAt)
+		preview.CreatedBy, preview.CreatedAt, preview.UpdatedAt, preview.FromFork)
 	if err != nil {
 		return nil, fmt.Errorf("create the preview: %w", err)
 	}
-	if touched, _ := result.RowsAffected(); touched == 0 {
-		return nil, ErrSiteNotFound
+	if err := touchedOne(result, ErrSiteNotFound); err != nil {
+		return nil, err
 	}
 	created := *preview
 	return &created, tx.Commit()
@@ -75,9 +75,14 @@ func (s *PostgresStore) reopenPreview(ctx context.Context, tx *sql.Tx, held, ask
 	if held.Status == PreviewRemoving {
 		return nil, ErrPreviewRemoving
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE site_previews SET status = $2, commit_sha = $3, updated_at = $4 WHERE id = $1`,
-		held.ID, PreviewBuilding, asked.CommitSHA, asked.UpdatedAt); err != nil {
+	// A removal marked since the read wins: REMOVING is never undone.
+	result, err := tx.ExecContext(ctx, `UPDATE site_previews SET status = $2, commit_sha = $3, updated_at = $4
+		WHERE id = $1 AND status <> 'REMOVING'`, held.ID, PreviewBuilding, asked.CommitSHA, asked.UpdatedAt)
+	if err != nil {
 		return nil, fmt.Errorf("reopen the preview: %w", err)
+	}
+	if err := touchedOne(result, ErrPreviewRemoving); err != nil {
+		return nil, err
 	}
 	held.Status, held.CommitSHA, held.UpdatedAt = PreviewBuilding, asked.CommitSHA, asked.UpdatedAt
 	return held, tx.Commit()
@@ -145,7 +150,11 @@ func (s *PostgresStore) ClaimPreview(ctx context.Context, projectID, id, lease s
 	if err != nil {
 		return fmt.Errorf("claim the preview: %w", err)
 	}
-	if touched, _ := result.RowsAffected(); touched == 1 {
+	touched, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("claim the preview: %w", err)
+	}
+	if touched == 1 {
 		return nil
 	}
 	var status string
@@ -179,21 +188,16 @@ func (s *PostgresStore) FinishPreview(ctx context.Context, preview *Preview, lea
 	if err != nil {
 		return fmt.Errorf("record the preview: %w", err)
 	}
-	if touched, _ := result.RowsAffected(); touched == 0 {
-		return ErrLeaseLost
-	}
-	return nil
+	return touchedOne(result, ErrLeaseLost)
 }
 
-func (s *PostgresStore) MarkPreviewRemoving(ctx context.Context, projectID, id string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE site_previews SET status = 'REMOVING' WHERE id = $1 AND project_id = $2`, id, projectID)
+func (s *PostgresStore) MarkPreviewRemoving(ctx context.Context, projectID, id string, idleBefore time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE site_previews SET status = 'REMOVING' WHERE id = $1 AND project_id = $2
+		AND ($3::timestamptz IS NULL OR status = 'REMOVING' OR updated_at < $3)`, id, projectID, nullTime(idleBefore))
 	if err != nil {
 		return fmt.Errorf("mark the preview for removal: %w", err)
 	}
-	if touched, _ := result.RowsAffected(); touched == 0 {
-		return ErrPreviewNotFound
-	}
-	return nil
+	return touchedOne(result, ErrPreviewNotFound)
 }
 
 func (s *PostgresStore) DeletePreview(ctx context.Context, projectID, id, lease string) error {
@@ -202,13 +206,26 @@ func (s *PostgresStore) DeletePreview(ctx context.Context, projectID, id, lease 
 	if err != nil {
 		return fmt.Errorf("delete the preview: %w", err)
 	}
-	if touched, _ := result.RowsAffected(); touched == 0 {
-		return ErrLeaseLost
+	return touchedOne(result, ErrLeaseLost)
+}
+
+func (s *PostgresStore) DuePreviews(ctx context.Context, idleBefore time.Time, limit int) ([]*Preview, error) {
+	// Removals waiting for a retry come first, so idle previews never crowd them out.
+	return s.listPreviews(ctx, `SELECT `+previewColumns+` FROM site_previews
+		WHERE status = 'REMOVING' OR updated_at < $1 ORDER BY (status = 'REMOVING') DESC, updated_at LIMIT $2`, idleBefore, limit)
+}
+
+// touchedOne answers none when the statement changed no row.
+func touchedOne(result sql.Result, none error) error {
+	touched, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count the rows changed: %w", err)
+	}
+	if touched == 0 {
+		return none
 	}
 	return nil
 }
 
-func (s *PostgresStore) DuePreviews(ctx context.Context, idleBefore time.Time, limit int) ([]*Preview, error) {
-	return s.listPreviews(ctx, `SELECT `+previewColumns+` FROM site_previews
-		WHERE status = 'REMOVING' OR updated_at < $1 ORDER BY updated_at LIMIT $2`, idleBefore, limit)
-}
+// nullTime is NULL for the zero time.
+func nullTime(at time.Time) sql.NullTime { return sql.NullTime{Time: at, Valid: !at.IsZero()} }

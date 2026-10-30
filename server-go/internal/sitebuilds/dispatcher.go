@@ -279,6 +279,9 @@ func (e *execution) execute(ctx context.Context) outcome {
 	build.Repository = connection.Repository
 	if build.Preview != nil {
 		build.Preview.privateRepo = connection.private
+		if reason := build.Preview.narrow(connection.Previews); reason != "" {
+			return failedWith(FailPlatform, reason)
+		}
 	}
 	spec, revoke, err := e.prepare(ctx)
 	if err != nil {
@@ -324,8 +327,11 @@ func (e *execution) stillDeployable(ctx context.Context) string {
 	if err := service.checkConnector(ctx, still); err != nil {
 		return userMessage(err) + "; nothing was deployed"
 	}
-	if build.Preview != nil && (service.options.Previews == nil || still.Previews.normalised().Mode == PreviewModeOff) {
+	if build.Preview != nil && service.options.Previews == nil {
 		return "previews were turned off while this build ran; nothing was deployed"
+	}
+	if build.Preview != nil {
+		return build.Preview.narrow(still.Previews)
 	}
 	return ""
 }

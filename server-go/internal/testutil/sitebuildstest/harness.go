@@ -133,12 +133,15 @@ type Harness struct {
 	Site         *sites.Site
 	Sites        *sites.Service
 	Publisher    *sitestest.Publisher
+	Origins      *sitestest.Origins
 	GitHub       *githubfake.GitHub
 	Store        *sitebuilds.PostgresStore
 	Service      *sitebuilds.Service
 	Runner       *FakeRunner
 	Dispatcher   *sitebuilds.Dispatcher
 	User         string
+	// darken rebuilds Sites and git builds with previews dark, as after the flag is turned off.
+	darken func()
 }
 
 type Options struct {
@@ -168,7 +171,8 @@ func New(t *testing.T, options Options) *Harness {
 	if options.Previews {
 		siteOptions.Previews = siteStore
 	}
-	siteService, err := sites.NewService(siteStore, publisher, sitestest.NewOrigins(), siteOptions)
+	origins := sitestest.NewOrigins()
+	siteService, err := sites.NewService(siteStore, publisher, origins, siteOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,13 +208,32 @@ func New(t *testing.T, options Options) *Harness {
 	if options.Slots == 0 {
 		options.Slots = 100
 	}
-	dispatcher := sitebuilds.NewDispatcher(service, runner, sitebuilds.DispatcherOptions{
-		Slots: options.Slots, Holder: "replica-" + project, SpoolDir: t.TempDir(), StatusPoll: 10 * time.Millisecond,
+	dispatcher := sitebuilds.NewDispatcher(service, runner, dispatcherOptions(project, t.TempDir(), options.Slots))
+	h := &Harness{t: t, Installation: installation, SiteRepo: siteRepo, PrivateRepo: privateRepo, Project: project, Site: site, Sites: siteService,
+		Publisher: publisher, Origins: origins, GitHub: fake, Store: store, Service: service, Runner: runner, Dispatcher: dispatcher, User: "u-" + project}
+	h.darken = func() {
+		siteOptions.PreviewsDark = true
+		dark, err := sites.NewService(siteStore, publisher, origins, siteOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serviceOptions.Previews = dark
+		h.Sites = dark
+		h.Service = sitebuilds.NewService(store, client, dark, fixedLimits{limits: options.Limits}, memorySecrets{values: options.Secrets}, serviceOptions)
+		h.Dispatcher = sitebuilds.NewDispatcher(h.Service, runner, dispatcherOptions(project, t.TempDir(), options.Slots))
+	}
+	return h
+}
+
+// TurnPreviewsDark is the sitepreviews flag turned off: no new previews, the held ones still cleaned up.
+func (h *Harness) TurnPreviewsDark() { h.darken() }
+
+func dispatcherOptions(project, spool string, slots int) sitebuilds.DispatcherOptions {
+	return sitebuilds.DispatcherOptions{
+		Slots: slots, Holder: "replica-" + project, SpoolDir: spool, StatusPoll: 10 * time.Millisecond,
 		LogEvery: 10 * time.Millisecond, DeployRetry: 10 * time.Millisecond, Lease: 30 * time.Second,
 		PendingGrace: 200 * time.Millisecond, ShutdownGrace: 50 * time.Millisecond,
-	})
-	return &Harness{t: t, Installation: installation, SiteRepo: siteRepo, PrivateRepo: privateRepo, Project: project, Site: site, Sites: siteService, Publisher: publisher, GitHub: fake, Store: store,
-		Service: service, Runner: runner, Dispatcher: dispatcher, User: "u-" + project}
+	}
 }
 
 // SignIn runs the GitHub sign-in for the harness user, who sees only acme/site.

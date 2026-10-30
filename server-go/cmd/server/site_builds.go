@@ -99,9 +99,10 @@ func newSiteBuilds(args siteBuildArgs) siteBuilds {
 	return siteBuilds{handler: gitHandler, dispatcher: dispatcher, wired: true}
 }
 
-// previewSites hands previews to git builds only when Sites offers them (EXC-660).
+// previewSites hands previews to git builds wherever Sites keeps them (EXC-660); while the flag is
+// off git builds make none but still remove the held ones on close, delete and disconnect.
 func previewSites(service *sites.Service) sitebuilds.PreviewSites {
-	if service == nil || !service.PreviewsAvailable() {
+	if service == nil || !service.KeepsPreviews() {
 		return nil
 	}
 	return service

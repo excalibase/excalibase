@@ -78,7 +78,11 @@ function useOverviewMutation<T>(projectId: string, siteId: string, call: (input:
   const client = useQueryClient();
   return useMutation({
     mutationFn: call,
-    onSuccess: (overview) => client.setQueryData(previewsKey(projectId, siteId), overview),
+    // A poll already in flight must not land after this and show the settings from before.
+    onSuccess: async (overview) => {
+      await client.cancelQueries({ queryKey: previewsKey(projectId, siteId) });
+      client.setQueryData(previewsKey(projectId, siteId), overview);
+    },
   });
 }
 

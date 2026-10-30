@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -95,6 +96,12 @@ func (s *Service) publishPreview(ctx context.Context, site *Site, preview *Previ
 		}
 		preview.CorsClaimed = true
 	}
+	if !apiAccess && preview.CorsClaimed {
+		if _, err := s.origins.ReleaseAppCorsOrigins(ctx, site.ProjectID, previewCorsOwner(preview)); err != nil {
+			return fmt.Errorf("release the preview's CORS origin: %w", err)
+		}
+		preview.CorsClaimed = false
+	}
 	publishCtx, cancel := context.WithTimeout(ctx, publishTimeout)
 	defer cancel()
 	script := PreviewScriptName(preview)
@@ -146,7 +153,7 @@ func publicReason(err error) string {
 
 // RecordPreviewFailure marks a preview whose build failed before anything was published.
 func (s *Service) RecordPreviewFailure(ctx context.Context, projectID, siteID, previewID, reason string) error {
-	store, err := s.previewStore()
+	store, err := s.heldPreviews()
 	if err != nil {
 		return err
 	}
@@ -166,7 +173,7 @@ func (s *Service) RecordPreviewFailure(ctx context.Context, projectID, siteID, p
 // RemovePreview takes the preview off the router, deletes its Worker (its assets go with it),
 // releases its CORS origin and forgets it. A failure leaves it REMOVING for the sweep.
 func (s *Service) RemovePreview(ctx context.Context, projectID, siteID, previewID string) error {
-	store, err := s.previewStore()
+	store, err := s.heldPreviews()
 	if err != nil {
 		return err
 	}
@@ -177,12 +184,12 @@ func (s *Service) RemovePreview(ctx context.Context, projectID, siteID, previewI
 	if preview == nil {
 		return ErrPreviewNotFound
 	}
-	return s.removePreview(ctx, store, preview)
+	return s.removePreview(ctx, store, preview, time.Time{})
 }
 
 // RemovePreviewByRef removes the preview of a closed pull request or deleted branch; none is not an error.
 func (s *Service) RemovePreviewByRef(ctx context.Context, projectID, siteID, source, ref string) error {
-	store, err := s.previewStore()
+	store, err := s.heldPreviews()
 	if err != nil {
 		return err
 	}
@@ -190,11 +197,13 @@ func (s *Service) RemovePreviewByRef(ctx context.Context, projectID, siteID, sou
 	if err != nil || preview == nil {
 		return err
 	}
-	return s.removePreview(ctx, store, preview)
+	return s.removePreview(ctx, store, preview, time.Time{})
 }
 
-func (s *Service) removePreview(ctx context.Context, store PreviewStore, preview *Preview) error {
-	if err := store.MarkPreviewRemoving(ctx, preview.ProjectID, preview.ID); err != nil {
+// removePreview marks the preview REMOVING first, so a failure below is retried by the sweep; with
+// idleBefore set it removes only a preview still idle (the sweep's own check, against a push meanwhile).
+func (s *Service) removePreview(ctx context.Context, store PreviewStore, preview *Preview, idleBefore time.Time) error {
+	if err := store.MarkPreviewRemoving(ctx, preview.ProjectID, preview.ID, idleBefore); err != nil {
 		return err
 	}
 	lease, err := s.claimPreview(ctx, store, preview, true)
@@ -218,6 +227,7 @@ func (s *Service) removePreview(ctx context.Context, store PreviewStore, preview
 }
 
 // removeSitePreviews runs before a site is deleted; any preview left on Cloudflare keeps the site.
+// Every preview is tried, so one failure leaves the rest removed or marked for the sweep.
 func (s *Service) removeSitePreviews(ctx context.Context, site *Site) error {
 	store := s.options.Previews
 	if store == nil {
@@ -227,12 +237,13 @@ func (s *Service) removeSitePreviews(ctx context.Context, site *Site) error {
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, preview := range held {
-		if err := s.removePreview(ctx, store, preview); err != nil {
-			return fmt.Errorf("remove the site's preview %s: %w", preview.Hostname, err)
+		if err := s.removePreview(ctx, store, preview, time.Time{}); err != nil {
+			failures = append(failures, fmt.Errorf("remove the site's preview %s: %w", preview.Hostname, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 // PreviewSweepReport is what one pass over previews did.
@@ -245,22 +256,23 @@ type PreviewSweepReport struct {
 // A preview busy with a deploy is left for the next pass.
 func (s *Service) SweepPreviews(ctx context.Context) PreviewSweepReport {
 	report := PreviewSweepReport{}
-	store, err := s.previewStore()
+	store, err := s.heldPreviews()
 	if err != nil {
 		return report
 	}
-	due, err := store.DuePreviews(ctx, s.now().Add(-PreviewLifetime), previewSweepBatch)
+	idleBefore := s.now().Add(-PreviewLifetime)
+	due, err := store.DuePreviews(ctx, idleBefore, previewSweepBatch)
 	if err != nil {
 		log.Printf("sites: list previews due removal: %v", err)
 		report.Failed++
 		return report
 	}
 	for _, preview := range due {
-		err := s.removePreview(ctx, store, preview)
+		err := s.removePreview(ctx, store, preview, idleBefore)
 		switch {
 		case err == nil:
 			report.Removed++
-		case errors.Is(err, ErrSiteBusy):
+		case errors.Is(err, ErrSiteBusy), errors.Is(err, ErrPreviewNotFound):
 		default:
 			log.Printf("sites: remove preview %s: %v", preview.ID, err)
 			report.Failed++

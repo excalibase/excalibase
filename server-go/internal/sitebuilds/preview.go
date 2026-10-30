@@ -77,6 +77,18 @@ type PreviewBuild struct {
 // seesSecrets: a fork's build never does, whatever the opt-in.
 func (p *PreviewBuild) seesSecrets() bool { return p.Secrets && !p.FromFork }
 
+// narrow keeps only the opt-ins the connection still grants, so an Admin's withdrawal reaches a
+// build already queued; it answers why the build may not go on at all, or "".
+func (p *PreviewBuild) narrow(current PreviewSettings) string {
+	if !previewAllowed(current, p.Source, p.FromFork) {
+		return "previews of this kind were turned off while this build waited; nothing was deployed"
+	}
+	p.Secrets = p.Secrets && current.Secrets
+	p.APIAccess = p.APIAccess && current.APIAccess
+	p.PublicLinks = p.PublicLinks && current.PublicLinks
+	return ""
+}
+
 // PreviewSites is the Sites service previews deploy through; nil leaves previews off.
 type PreviewSites interface {
 	Get(ctx context.Context, projectID, id string) (*sites.Site, error)
@@ -87,6 +99,10 @@ type PreviewSites interface {
 	RemovePreviewByRef(ctx context.Context, projectID, siteID, source, ref string) error
 	ListPreviews(ctx context.Context, projectID, siteID string) ([]*sites.Preview, error)
 	PreviewUsage(ctx context.Context, projectID string) (int, int, error)
+	WithdrawPreviewAPIAccess(ctx context.Context, projectID, siteID string) error
+	TakePreviewSlot(ctx context.Context, projectID string) error
+	// PreviewsAvailable is false while previews are dark: none is made, the held ones are still removed.
+	PreviewsAvailable() bool
 }
 
 // PreviewsAvailable answers why previews cannot be used here, or nil.
@@ -94,10 +110,31 @@ func (s *Service) PreviewsAvailable() error {
 	if err := s.Available(); err != nil {
 		return err
 	}
-	if s.options.Previews == nil {
+	if !s.makesPreviews() {
 		return ErrPreviewsOff
 	}
 	return nil
+}
+
+// makesPreviews is whether new previews are made; removal only needs options.Previews.
+func (s *Service) makesPreviews() bool {
+	return s.options.Previews != nil && s.options.Previews.PreviewsAvailable()
+}
+
+// previewAllowed is whether settings still make this kind of preview: a mode change or forks
+// turned off removes the previews they no longer cover.
+func previewAllowed(settings PreviewSettings, source string, fromFork bool) bool {
+	if fromFork && !settings.Forks {
+		return false
+	}
+	switch settings.normalised().Mode {
+	case PreviewModePullRequests:
+		return source == sites.PreviewSourcePullRequest
+	case PreviewModeBranches:
+		// A same-repository pull request is previewed as its branch in this mode.
+		return source == sites.PreviewSourceBranch || fromFork
+	}
+	return false
 }
 
 // PreviewOverview is a site's preview settings, its previews and the project's use of its plan.
@@ -143,7 +180,7 @@ func (s *Service) SetPreviewMode(ctx context.Context, projectID, siteID, mode st
 	if err := validPreviewMode(mode); err != nil {
 		return nil, err
 	}
-	return s.updatePreviews(ctx, projectID, siteID, func(settings *PreviewSettings) { settings.Mode = mode })
+	return s.updatePreviews(ctx, projectID, siteID, func() error { return s.store.SavePreviewMode(ctx, projectID, siteID, mode) })
 }
 
 // SetPreviewAccess records the Admin's opt-ins; the next preview build snapshots them.
@@ -151,10 +188,15 @@ func (s *Service) SetPreviewAccess(ctx context.Context, projectID, siteID string
 	if err := s.mustPreviewSite(ctx, projectID, siteID); err != nil {
 		return nil, err
 	}
-	return s.updatePreviews(ctx, projectID, siteID, func(settings *PreviewSettings) { settings.PreviewAccess = access })
+	return s.updatePreviews(ctx, projectID, siteID, func() error { return s.store.SavePreviewAccess(ctx, projectID, siteID, access) })
 }
 
-func (s *Service) updatePreviews(ctx context.Context, projectID, siteID string, change func(*PreviewSettings)) (*PreviewOverview, error) {
+// updatePreviews saves one change, then takes down what the settings now stored no longer allow:
+// previews of another mode, fork previews once forks are off, and preview origins once API access is.
+func (s *Service) updatePreviews(ctx context.Context, projectID, siteID string, save func() error) (*PreviewOverview, error) {
+	if err := save(); err != nil {
+		return nil, err
+	}
 	connection, err := s.store.GetConnection(ctx, projectID, siteID)
 	if err != nil {
 		return nil, err
@@ -162,17 +204,27 @@ func (s *Service) updatePreviews(ctx context.Context, projectID, siteID string, 
 	if connection == nil {
 		return nil, ErrNotConnected
 	}
-	settings := connection.Previews.normalised()
-	change(&settings)
-	if err := s.store.SavePreviewSettings(ctx, projectID, siteID, settings); err != nil {
+	if err := s.pruneSitePreviews(ctx, projectID, siteID, connection.Previews.normalised()); err != nil {
 		return nil, err
 	}
-	if settings.Mode == PreviewModeOff {
-		if err := s.removeSitePreviews(ctx, projectID, siteID); err != nil {
-			return nil, err
+	return s.Previews(ctx, projectID, siteID)
+}
+
+func (s *Service) pruneSitePreviews(ctx context.Context, projectID, siteID string, settings PreviewSettings) error {
+	held, err := s.options.Previews.ListPreviews(ctx, projectID, siteID)
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, preview := range held {
+		if !previewAllowed(settings, preview.Source, preview.FromFork) {
+			failures = append(failures, s.options.Previews.RemovePreview(ctx, projectID, siteID, preview.ID))
 		}
 	}
-	return s.Previews(ctx, projectID, siteID)
+	if !settings.APIAccess {
+		failures = append(failures, s.options.Previews.WithdrawPreviewAPIAccess(ctx, projectID, siteID))
+	}
+	return errors.Join(failures...)
 }
 
 // RemovePreview takes one preview down now, as closing its pull request would.
@@ -191,12 +243,30 @@ func (s *Service) removeSitePreviews(ctx context.Context, projectID, siteID stri
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, preview := range held {
 		if err := s.options.Previews.RemovePreview(ctx, projectID, siteID, preview.ID); err != nil {
-			return fmt.Errorf("remove preview %s: %w", preview.Hostname, err)
+			failures = append(failures, fmt.Errorf("remove preview %s: %w", preview.Hostname, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
+}
+
+// forgetInstallation drops the connections the App no longer covers, taking their previews down
+// first; a preview that could not be removed is left REMOVING for the sweep, never forgotten.
+func (s *Service) forgetInstallation(ctx context.Context, installationID int64, repositoryIDs []int64) (int, error) {
+	if s.options.Previews != nil {
+		connections, err := s.store.ConnectionsForInstallation(ctx, s.provider.Name(), installationID, repositoryIDs)
+		if err != nil {
+			return 0, err
+		}
+		for _, connection := range connections {
+			if err := s.removeSitePreviews(ctx, connection.ProjectID, connection.SiteID); err != nil {
+				log.Printf("site builds: remove the previews of site %s on uninstall: %v", connection.SiteID, err)
+			}
+		}
+	}
+	return s.store.ForgetInstallation(ctx, s.provider.Name(), installationID, repositoryIDs)
 }
 
 // previewConnections are the repository's connections with previews on; none while previews are off.
@@ -219,7 +289,7 @@ func (s *Service) previewConnections(ctx context.Context, installationID, reposi
 
 // branchPreviews are the connections a push to a non-production branch previews.
 func (s *Service) branchPreviews(ctx context.Context, push *gitprovider.Push) ([]*Connection, error) {
-	if validBranch(push.Branch) != nil {
+	if validBranch(push.Branch) != nil || !s.makesPreviews() {
 		return nil, nil
 	}
 	connections, err := s.previewConnections(ctx, push.InstallationID, push.RepositoryID)
@@ -296,6 +366,9 @@ func (s *Service) actOnPullRequest(ctx context.Context, event gitprovider.Event,
 		}
 		return 0, errors.Join(failures...)
 	}
+	if !s.makesPreviews() {
+		return 0, nil
+	}
 	if !state.Open || state.HeadSHA != pr.Commit.SHA {
 		log.Printf("site builds: pull request #%d of %s is not open at %s any more; ignored", pr.Number, pr.Repository, pr.Commit.SHA)
 		return 0, nil
@@ -303,9 +376,7 @@ func (s *Service) actOnPullRequest(ctx context.Context, event gitprovider.Event,
 	queued := 0
 	var failures []error
 	for _, connection := range connections {
-		settings := connection.Previews.normalised()
-		// In branch mode a same-repository pull request is already previewed as its branch.
-		if (state.FromFork && !settings.Forks) || (settings.Mode == PreviewModeBranches && !state.FromFork) {
+		if !previewAllowed(connection.Previews, sites.PreviewSourcePullRequest, state.FromFork) {
 			continue
 		}
 		target := previewTarget{source: sites.PreviewSourcePullRequest, ref: ref, fromFork: state.FromFork}
@@ -337,7 +408,7 @@ func (s *Service) queuePreview(ctx context.Context, connection *Connection, comm
 	snapshot := &PreviewBuild{Source: target.source, Ref: target.ref, FromFork: target.fromFork, Secrets: settings.Secrets,
 		APIAccess: settings.APIAccess, PublicLinks: settings.PublicLinks}
 	preview, openErr := s.options.Previews.OpenPreview(ctx, sites.PreviewRequest{ProjectID: connection.ProjectID, SiteID: connection.SiteID,
-		Source: target.source, Ref: target.ref, CommitSHA: commit.SHA, Actor: connection.ConnectedBy})
+		Source: target.source, Ref: target.ref, CommitSHA: commit.SHA, Actor: connection.ConnectedBy, FromFork: target.fromFork})
 	if openErr != nil && !refusedPreview(openErr) {
 		return false, openErr
 	}
@@ -349,6 +420,12 @@ func (s *Service) queuePreview(ctx context.Context, connection *Connection, comm
 		}
 		build.Status, build.FailureKind, build.FailureReason = StatusFailed, FailPreviewLimit, openErr.Error()
 	})
+	if err != nil && preview != nil {
+		// Nothing was queued for the preview it just marked building.
+		if recordErr := s.options.Previews.RecordPreviewFailure(ctx, connection.ProjectID, connection.SiteID, preview.ID, userMessage(err)); recordErr != nil {
+			log.Printf("site builds: record the unqueued preview %s: %v", preview.ID, recordErr)
+		}
+	}
 	if err == nil && created && build.Status == StatusFailed {
 		if build.PreviewID != "" {
 			if recordErr := s.options.Previews.RecordPreviewFailure(ctx, build.ProjectID, build.SiteID, build.PreviewID, build.FailureReason); recordErr != nil {

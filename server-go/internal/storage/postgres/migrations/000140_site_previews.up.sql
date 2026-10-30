@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS site_previews (
     project_id     TEXT NOT NULL,
     source         TEXT NOT NULL CHECK (source IN ('pull-request', 'branch')),
     ref            TEXT NOT NULL,
+    -- A pull request from another repository; turning forks off removes these.
+    from_fork      BOOLEAN NOT NULL DEFAULT FALSE,
     hostname       TEXT NOT NULL UNIQUE,
     status         TEXT NOT NULL CHECK (status IN ('BUILDING', 'READY', 'FAILED', 'REMOVING')),
     commit_sha     TEXT NOT NULL DEFAULT '',

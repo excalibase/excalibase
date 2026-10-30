@@ -23,6 +23,9 @@ interface SitePreviewsProps {
 
 const card = 'bg-surface-card border border-border-primary rounded-lg p-4 space-y-3';
 
+const MODES: readonly PreviewMode[] = ['off', 'pull-requests', 'branches'];
+const isPreviewMode = (value: string): value is PreviewMode => (MODES as readonly string[]).includes(value);
+
 const STATUS: Record<PreviewStatus, { label: string; tone: string }> = {
   BUILDING: { label: 'Building', tone: 'text-amber-400' },
   READY: { label: 'Ready', tone: 'text-emerald-400' },
@@ -92,6 +95,7 @@ function PreviewRow({
           className={secondaryButton}
           disabled={removing}
           onClick={onRemove}
+          aria-label={`Remove the preview of ${source}`}
           data-testid={`preview-remove-${preview.id}`}
         >
           Remove
@@ -133,7 +137,10 @@ function ModeSelect({
         className="bg-surface-input border border-border-primary rounded px-2 py-1 text-sm text-text-primary"
         value={mode}
         disabled={!canDevelop || setMode.isPending}
-        onChange={(event) => choose(event.target.value as PreviewMode)}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (isPreviewMode(next)) choose(next);
+        }}
         data-testid="preview-mode"
       >
         <option value="off">Off</option>
@@ -141,11 +148,13 @@ function ModeSelect({
         <option value="branches">One per branch, except {productionBranch}</option>
       </select>
       {confirmOff && (
-        <div className="flex flex-wrap items-center gap-2" data-testid="preview-off-confirm">
+        <div className="flex flex-wrap items-center gap-2" role="alert" data-testid="preview-off-confirm">
           <p className="text-xs text-amber-400">Turning previews off removes every preview of this site.</p>
           <button
             type="button"
             className={secondaryButton}
+            // The warning takes focus with it, so a keyboard user lands on the choice.
+            autoFocus
             onClick={() => {
               setConfirmOff(false);
               setMode.mutate('off');
@@ -192,7 +201,7 @@ function AccessSwitches({
     <fieldset className="space-y-2">
       <legend className="text-xs text-text-secondary">What previews may reach</legend>
       {!canAdmin && (
-        <p className="text-xs text-text-tertiary" data-testid="preview-access-note">
+        <p id="preview-access-note" className="text-xs text-text-tertiary" data-testid="preview-access-note">
           Only an Admin of the project changes these.
         </p>
       )}
@@ -204,11 +213,12 @@ function AccessSwitches({
               checked={access[key]}
               disabled={!canAdmin || setAccess.isPending}
               onChange={(event) => setAccess.mutate({ ...accessOf(access), [key]: event.target.checked })}
+              aria-describedby={canAdmin ? `preview-access-${key}-warning` : `preview-access-${key}-warning preview-access-note`}
               data-testid={`preview-access-${key}`}
             />
             {label}
           </label>
-          <p className="text-xs text-text-tertiary pl-6" data-testid={`preview-access-${key}-warning`}>
+          <p id={`preview-access-${key}-warning`} className="text-xs text-text-tertiary pl-6" data-testid={`preview-access-${key}-warning`}>
             {warning}
           </p>
         </div>

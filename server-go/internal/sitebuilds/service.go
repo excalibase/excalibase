@@ -410,7 +410,7 @@ func (s *Service) enqueue(ctx context.Context, connection *Connection, commit gi
 		created, err := s.store.Enqueue(ctx, build, buildsKept)
 		return build, created, err
 	}
-	slotErr := s.sites.TakeDeploySlot(ctx, connection.ProjectID)
+	slotErr := s.takeSlot(ctx, connection.ProjectID, trigger)
 	if slotErr != nil && trigger == TriggerRebuild {
 		return nil, false, slotErr
 	}
@@ -428,6 +428,14 @@ func (s *Service) enqueue(ctx context.Context, connection *Connection, commit gi
 		s.nudge()
 	}
 	return build, created, nil
+}
+
+// takeSlot counts a preview build against the previews' own budget, any other against the project's deploys.
+func (s *Service) takeSlot(ctx context.Context, projectID, trigger string) error {
+	if trigger == TriggerPreview && s.options.Previews != nil {
+		return s.options.Previews.TakePreviewSlot(ctx, projectID)
+	}
+	return s.sites.TakeDeploySlot(ctx, projectID)
 }
 
 // HandleWebhook verifies a delivery and queues a build for every site tracking the pushed branch.
@@ -448,9 +456,9 @@ func (s *Service) HandleWebhook(ctx context.Context, header map[string][]string,
 		}
 		return s.handlePullRequest(ctx, event)
 	case event.RemovedInstallation != 0:
-		return s.store.ForgetInstallation(ctx, s.provider.Name(), event.RemovedInstallation, nil)
+		return s.forgetInstallation(ctx, event.RemovedInstallation, nil)
 	case len(event.RemovedRepositories) > 0:
-		return s.store.ForgetInstallation(ctx, s.provider.Name(), event.RemovedFrom, event.RemovedRepositories)
+		return s.forgetInstallation(ctx, event.RemovedFrom, event.RemovedRepositories)
 	}
 	return 0, nil
 }

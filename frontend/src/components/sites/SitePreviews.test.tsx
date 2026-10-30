@@ -105,7 +105,7 @@ describe('SitePreviews', () => {
     renderPreviews({ canAdmin: true });
     vi.mocked(api.put).mockResolvedValue({ data: overview() } as never);
     const forks = await screen.findByTestId('preview-access-forks');
-    expect(screen.getByTestId('preview-access-forks-warning')).toHaveTextContent('never');
+    expect(forks).toHaveAccessibleDescription(expect.stringContaining('never see project secrets'));
     await userEvent.click(forks);
     await waitFor(() =>
       expect(api.put).toHaveBeenCalledWith(`${BASE}/access`, {
@@ -117,10 +117,10 @@ describe('SitePreviews', () => {
     );
   });
 
-  test('a developer removes a preview; a viewer cannot', async () => {
+  test('a developer removes a preview, named for screen readers', async () => {
     renderPreviews();
     vi.mocked(api.delete).mockResolvedValue({ data: undefined } as never);
-    await userEvent.click(await screen.findByTestId('preview-remove-pv-1'));
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove the preview of Branch feat/header' }));
     await waitFor(() => expect(api.delete).toHaveBeenCalledWith(`${BASE}/pv-1`));
   });
 
