@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -227,18 +228,52 @@ func checkNetworkMode(p Policy, value any) error {
 	return refuse("network mode %q is not one containers may use", mode)
 }
 
-// addableCapabilities: an app that drops ALL may still bind ports below 1024.
-var addableCapabilities = []string{"NET_BIND_SERVICE", "CAP_NET_BIND_SERVICE"}
+// addableCapabilities: an app that drops ALL may still bind ports below 1024 and
+// step down from root to its image's user; all are in Docker's default set.
+var addableCapabilities = []string{"NET_BIND_SERVICE", "CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"}
+
+// capabilityName is ASCII only, so the proxy never leans on the engine's case folding.
+var capabilityName = regexp.MustCompile(`^[A-Za-z_]+$`)
 
 func checkCapAdd(_ Policy, value any) error {
-	capabilities, _ := value.([]any)
-	for _, entry := range capabilities {
-		capability, _ := entry.(string)
-		if !slices.Contains(addableCapabilities, strings.ToUpper(capability)) {
+	capabilities, err := stringList("CapAdd", value)
+	if err != nil {
+		return err
+	}
+	for _, capability := range capabilities {
+		if !capabilityName.MatchString(capability) ||
+			!slices.Contains(addableCapabilities, strings.TrimPrefix(strings.ToUpper(capability), "CAP_")) {
 			return refuse("HostConfig.CapAdd %q is not allowed", capability)
 		}
 	}
 	return nil
+}
+
+// list reads a field that must be a JSON array: Docker reads some (CapAdd,
+// CapDrop) from a bare string too, which a check of the array alone would miss.
+func list(field string, value any) ([]any, error) {
+	entries, ok := value.([]any)
+	if !ok {
+		return nil, refuse("HostConfig.%s must be a list", field)
+	}
+	return entries, nil
+}
+
+// stringList is list with every entry a string.
+func stringList(field string, value any) ([]string, error) {
+	entries, err := list(field, value)
+	if err != nil {
+		return nil, err
+	}
+	values := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		text, ok := entry.(string)
+		if !ok {
+			return nil, refuse("HostConfig.%s entry %v is not text", field, entry)
+		}
+		values = append(values, text)
+	}
+	return values, nil
 }
 
 func checkRuntime(p Policy, value any) error {
@@ -273,9 +308,11 @@ func checkPortBindings(p Policy, value any) error {
 // checkBinds admits the policy's named volumes only: a source with a path
 // separator or a leading dot is a host path.
 func checkBinds(p Policy, value any) error {
-	binds, _ := value.([]any)
-	for _, entry := range binds {
-		bind, _ := entry.(string)
+	binds, err := stringList("Binds", value)
+	if err != nil {
+		return err
+	}
+	for _, bind := range binds {
 		source, _, _ := strings.Cut(bind, ":")
 		if source == "" || strings.ContainsAny(source, `/\`) || strings.HasPrefix(source, ".") {
 			return refuse("bind %q is a host path; only named volumes may be mounted", bind)
@@ -296,7 +333,10 @@ func (p Policy) checkVolumeName(name string) error {
 }
 
 func checkMounts(p Policy, value any) error {
-	mounts, _ := value.([]any)
+	mounts, err := list("Mounts", value)
+	if err != nil {
+		return err
+	}
 	for _, entry := range mounts {
 		mount, _ := entry.(map[string]any)
 		kind, _ := mount["Type"].(string)
@@ -320,9 +360,11 @@ func checkMounts(p Policy, value any) error {
 
 // checkSecurityOpt admits options that only tighten the container.
 func checkSecurityOpt(_ Policy, value any) error {
-	options, _ := value.([]any)
-	for _, entry := range options {
-		option, _ := entry.(string)
+	options, err := stringList("SecurityOpt", value)
+	if err != nil {
+		return err
+	}
+	for _, option := range options {
 		if option != "no-new-privileges" && option != "no-new-privileges:true" && option != "no-new-privileges=true" {
 			return refuse("HostConfig.SecurityOpt %q is not allowed", option)
 		}
