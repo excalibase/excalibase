@@ -65,7 +65,8 @@ func siteBuildMode(cfg config.AppConfig) sitebuilds.Mode {
 func newSiteBuilds(args siteBuildArgs) siteBuilds {
 	cfg := args.cfg
 	mode := siteBuildMode(cfg)
-	offService := sitebuilds.NewService(nil, nil, nil, nil, nil, sitebuilds.Options{Mode: mode})
+	// The off service keeps the store: an app's disconnect answers whatever the install offers.
+	offService := sitebuilds.NewService(offStore(args.sqlStore), nil, nil, nil, nil, sitebuilds.Options{Mode: mode})
 	off := siteBuilds{handler: handler.NewSiteGitHandler(offService, cfg.StudioURL), apps: handler.NewAppGitHandler(offService)}
 	if mode != sitebuilds.ModeOn {
 		off.wired = mode == sitebuilds.ModeSingleHost
@@ -108,19 +109,27 @@ func newSiteBuilds(args siteBuildArgs) siteBuilds {
 		apps: handler.NewAppGitHandler(service), appsWired: appsWired}
 }
 
-// wireAppBuilds turns on git builds of apps where they are wanted; with the flag on, it says why when they are not.
+// wireAppBuilds turns on git builds of apps where they are wanted, and stops the boot where they are wanted but cannot run.
 func wireAppBuilds(cfg config.AppConfig, client *k8s.Client, files gitprovider.FileChecker,
 	service *sitebuilds.Service, dispatcher *sitebuilds.Dispatcher, args appBuildArgs) bool {
+	if err := appBuildsBlocked(cfg, args.internal); err != nil {
+		log.Fatalf("app builds: %v", err)
+	}
 	if !appBuildsWanted(cfg, args.internal) {
-		if appBuildsFlagOn(cfg) {
-			log.Printf("WARN: appgitbuilds is on but app git builds need the internal registry issuing (APP_REGISTRY_HOST, its key and the vault); the API says they are not offered")
-		}
 		return false
 	}
 	if err := enableAppBuilds(cfg, client, files, service, dispatcher, args); err != nil {
 		log.Fatalf("app builds: %v", err)
 	}
 	return true
+}
+
+// offStore is the build store where there is a platform database; without one a disconnect answers unavailable.
+func offStore(sqlStore storage.PlatformStore) sitebuilds.Store {
+	if sqlStore == nil {
+		return nil
+	}
+	return sitebuilds.NewPostgresStore(sqlStore.DB())
 }
 
 // siteGitCallbackURL is on Studio's origin: Studio calls /api there, so that is where the sign-in's browser cookie lives.

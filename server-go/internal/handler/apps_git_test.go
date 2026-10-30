@@ -53,15 +53,15 @@ func TestAppGit_FlagOffIsNotFoundButDisconnectAnswers(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, gitRequest("DELETE", "/api/projects/p1/apps/a1/git", ""))
-	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "single-host") {
+	if recorder.Code == http.StatusNotFound {
 		t.Fatalf("the disconnect reaches the service with the flag off: %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 
-// Git builds off for the install hide the app routes too, disconnect included.
+// Git builds off for the install hide the app routes too; only the disconnect still reaches the service.
 func TestAppGit_SiteGitBuildsOffIsNotFound(t *testing.T) {
 	router := appGitRouter(sitebuilds.NewService(nil, nil, nil, nil, nil, sitebuilds.Options{Mode: sitebuilds.ModeOff}), true)
-	for _, route := range append(appGitRoutes, struct{ method, path string }{"DELETE", "/api/projects/p1/apps/a1/git"}) {
+	for _, route := range appGitRoutes {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, gitRequest(route.method, route.path, "{}"))
 		if recorder.Code != http.StatusNotFound {

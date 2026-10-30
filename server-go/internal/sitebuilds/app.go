@@ -85,6 +85,38 @@ type AppConnection struct {
 	Settings AppSettings `json:"settings"`
 }
 
+// WithoutBuildArgValues is a copy that names the build arguments without their values, for readers below the developer rung.
+func (c *AppConnection) WithoutBuildArgValues() *AppConnection {
+	if c == nil {
+		return nil
+	}
+	copied := *c
+	copied.Settings.BuildArgs = argNamesOnly(c.Settings.BuildArgs)
+	return &copied
+}
+
+// WithoutBuildArgValues is a copy of the build whose app settings name the build arguments without their values.
+func (b *Build) WithoutBuildArgValues() *Build {
+	copied := *b
+	if b.App != nil {
+		app := *b.App
+		app.BuildArgs = argNamesOnly(b.App.BuildArgs)
+		copied.App = &app
+	}
+	return &copied
+}
+
+func argNamesOnly(args map[string]string) map[string]string {
+	if args == nil {
+		return nil
+	}
+	names := make(map[string]string, len(args))
+	for name := range args {
+		names[name] = ""
+	}
+	return names
+}
+
 func (c *AppConnection) target() Target {
 	return Target{Kind: KindApp, ProjectID: c.ProjectID, ID: c.AppID}
 }

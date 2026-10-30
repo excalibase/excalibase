@@ -122,11 +122,11 @@ func (s *Service) AppConnection(ctx context.Context, projectID, appID string) (*
 	return connection, nil
 }
 
-// DisconnectApp forgets the repository and cancels the app's queued and running builds.
-// The flag never blocks it, and the store scopes it by project.
+// DisconnectApp forgets the repository and cancels the app's queued and running builds. Neither the
+// flag nor what the install offers blocks it; the store scopes it by project.
 func (s *Service) DisconnectApp(ctx context.Context, projectID, appID string) error {
-	if err := s.Available(); err != nil {
-		return err
+	if s == nil || s.store == nil {
+		return ErrUnavailable
 	}
 	if err := s.store.DeleteAppConnection(ctx, projectID, appID); err != nil {
 		return err

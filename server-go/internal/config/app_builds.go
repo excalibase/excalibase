@@ -3,6 +3,8 @@ package config
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/features"
@@ -31,6 +33,8 @@ type AppBuildConfig struct {
 	BuilderImage  string
 	RunImage      string
 	CraneImage    string
+	// SpoolPath is a volume of its own where a publish takes in an image, never STORAGE_PATH; required once app builds are wired.
+	SpoolPath string
 }
 
 func loadAppBuilds() AppBuildConfig {
@@ -40,6 +44,7 @@ func loadAppBuilds() AppBuildConfig {
 		BuilderImage:  strings.TrimSpace(envOr("APP_BUILD_BUILDER_IMAGE", DefaultAppBuilderImage)),
 		RunImage:      strings.TrimSpace(envOr("APP_BUILD_RUN_IMAGE", DefaultAppRunImage)),
 		CraneImage:    strings.TrimSpace(envOr("APP_BUILD_CRANE_IMAGE", DefaultAppCraneImage)),
+		SpoolPath:     strings.TrimSpace(os.Getenv("APP_BUILD_SPOOL_PATH")),
 	}
 }
 
@@ -50,6 +55,9 @@ func (c AppConfig) validateAppBuilds() error {
 	}
 	if !namespacePattern.MatchString(c.AppBuild.Namespace) {
 		return fmt.Errorf("APP_BUILD_NAMESPACE %q is not a namespace name", c.AppBuild.Namespace)
+	}
+	if c.AppBuild.SpoolPath != "" && !filepath.IsAbs(c.AppBuild.SpoolPath) {
+		return fmt.Errorf("APP_BUILD_SPOOL_PATH %q must be an absolute path", c.AppBuild.SpoolPath)
 	}
 	return nil
 }

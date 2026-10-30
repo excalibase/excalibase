@@ -8,6 +8,8 @@ import (
 	"os"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
@@ -33,6 +35,12 @@ type AppImageDeployer interface {
 	DeployImage(ctx context.Context, projectID, appID, image string, origin apphost.DeployOrigin) (*apphost.Deploy, error)
 }
 
+// ErrSpoolFull refuses a publish while the spool lacks room for the plan's largest image and a margin.
+var ErrSpoolFull = errors.New("the platform has no room to take in a built image right now; try the build again later")
+
+// spoolMargin is kept free beyond the image, for the layout's own files and other publishes in flight.
+const spoolMargin = 512 << 20
+
 // ErrImageTooLarge fails a build whose image is past the plan's app_build_max_image.
 var ErrImageTooLarge = errors.New("the built image is larger than this plan allows")
 
@@ -47,6 +55,8 @@ type AppBuildPublisher struct {
 	deployer  AppImageDeployer
 	spoolDir  string
 	now       func() time.Time
+	// free answers the bytes free on the spool's filesystem.
+	free func(dir string) (int64, error)
 }
 
 // AppBuildResult is what a finished build hands over; BuildID names the attempt whose Job holds the image.
@@ -59,7 +69,7 @@ type AppBuildResult struct {
 
 // NewAppBuildPublisher spools archives under spoolDir (provisioning's own disk); each is removed after its push.
 func NewAppBuildPublisher(internal *appregistry.Internal, collector AppImageCollector, pusher ImagePusher, room RegistryRoom, deployer AppImageDeployer, spoolDir string) *AppBuildPublisher {
-	return &AppBuildPublisher{internal: internal, collector: collector, pusher: pusher, room: room, deployer: deployer, spoolDir: spoolDir, now: time.Now}
+	return &AppBuildPublisher{internal: internal, collector: collector, pusher: pusher, room: room, deployer: deployer, spoolDir: spoolDir, now: time.Now, free: spoolFree}
 }
 
 // Publish collects, checks and pushes the build's image, then deploys it as a git build.
@@ -69,6 +79,9 @@ func (p *AppBuildPublisher) Publish(ctx context.Context, result AppBuildResult) 
 	}
 	repository, err := appregistry.Repository(result.ProjectID, result.App.Name)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.haveRoom(result.MaxImage); err != nil {
 		return nil, err
 	}
 	dir, err := os.MkdirTemp(p.spoolDir, "app-image-")
@@ -143,4 +156,24 @@ func (s *streamErr) Read(p []byte) (int, error) {
 		s.err = err
 	}
 	return n, err
+}
+
+// haveRoom refuses before anything is collected unless the spool holds the plan's largest image and the margin.
+func (p *AppBuildPublisher) haveRoom(maxImage int64) error {
+	free, err := p.free(p.spoolDir)
+	if err != nil {
+		return fmt.Errorf("read the spool's free space: %w", err)
+	}
+	if free < maxImage+spoolMargin {
+		return fmt.Errorf("%w (%d bytes free)", ErrSpoolFull, free)
+	}
+	return nil
+}
+
+func spoolFree(dir string) (int64, error) {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(dir, &stat); err != nil {
+		return 0, err
+	}
+	return int64(stat.Bavail) * int64(stat.Bsize), nil
 }

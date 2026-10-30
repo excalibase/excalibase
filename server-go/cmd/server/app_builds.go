@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -20,8 +21,6 @@ import (
 )
 
 const (
-	// appBuildSpoolDir holds each publish's image on STORAGE_PATH, which is sized for it, unlike the pod's /tmp.
-	appBuildSpoolDir = "app-build-spool"
 	// appBuildSpoolMaxAge is well past any build's deadline: older entries are a crashed publish's leftovers.
 	appBuildSpoolMaxAge = 6 * time.Hour
 )
@@ -40,6 +39,15 @@ func appBuildsWanted(cfg config.AppConfig, internal *appregistry.Internal) bool 
 	return appBuildsFlagOn(cfg) && internal.CanIssue() && siteBuildMode(cfg) == sitebuilds.ModeOn
 }
 
+// appBuildsBlocked fails the boot where app builds should run beside site builds in a cluster but the
+// registry cannot issue. Site git builds off or single-host only say app builds are not offered.
+func appBuildsBlocked(cfg config.AppConfig, internal *appregistry.Internal) error {
+	if !appBuildsFlagOn(cfg) || siteBuildMode(cfg) != sitebuilds.ModeOn || internal.CanIssue() {
+		return nil
+	}
+	return errors.New("appgitbuilds is on beside site git builds, but the internal registry does not issue: set APP_REGISTRY_HOST, its token key and the vault, or turn the flag off")
+}
+
 func appBuildsFlagOn(cfg config.AppConfig) bool {
 	return features.Enabled(context.Background(), cfg.Features(), features.AppGitBuilds)
 }
@@ -47,10 +55,16 @@ func appBuildsFlagOn(cfg config.AppConfig) bool {
 // enableAppBuilds wires app builds into the shared queue; call it before the dispatcher runs or the API serves.
 func enableAppBuilds(cfg config.AppConfig, client *k8s.Client, files gitprovider.FileChecker,
 	builds *sitebuilds.Service, dispatcher *sitebuilds.Dispatcher, args appBuildArgs) error {
+	if args.registry.client == nil || args.registry.sweeper == nil {
+		return errors.New("the internal registry's client and sweeper are not built; app builds have nowhere to push")
+	}
+	if cfg.AppBuild.SpoolPath == "" {
+		return errors.New("APP_BUILD_SPOOL_PATH is required: a volume of its own where a publish takes in an image")
+	}
 	if err := verifyAppBuildCluster(cfg, client); err != nil {
 		return err
 	}
-	spool, err := appBuildSpool(cfg.StoragePath)
+	spool, err := appBuildSpool(cfg.AppBuild.SpoolPath)
 	if err != nil {
 		return err
 	}
@@ -79,15 +93,33 @@ func verifyAppBuildCluster(cfg config.AppConfig, client *k8s.Client) error {
 		"(APP_BUILD_NAMESPACE) does not exist; the chart creates it and the builder's Role with features.appGitBuilds", cfg.AppRuntimeClass)
 }
 
-// appBuildSpool makes the spool directory and clears what a crashed publish left there long ago.
-func appBuildSpool(storagePath string) (string, error) {
-	dir := filepath.Join(storagePath, appBuildSpoolDir)
+// appBuildSpool makes the spool a plain 0700 directory and clears what a crashed publish left there long ago.
+func appBuildSpool(dir string) (string, error) {
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("the app build spool %q must be an absolute path", dir)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("make the app build spool: %w", err)
 	}
-	entries, err := os.ReadDir(dir)
+	info, err := os.Lstat(dir)
 	if err != nil {
 		return "", fmt.Errorf("read the app build spool: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("the app build spool %s must be a directory, not a link or a file", dir)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", fmt.Errorf("restrict the app build spool: %w", err)
+	}
+	sweepSpool(dir)
+	return dir, nil
+}
+
+func sweepSpool(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		log.Printf("WARN: app build spool: read %s: %v", dir, err)
+		return
 	}
 	cutoff := time.Now().Add(-appBuildSpoolMaxAge)
 	for _, entry := range entries {
@@ -99,5 +131,4 @@ func appBuildSpool(storagePath string) (string, error) {
 			log.Printf("WARN: app build spool: remove %s: %v", entry.Name(), err)
 		}
 	}
-	return dir, nil
 }

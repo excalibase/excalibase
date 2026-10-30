@@ -7,14 +7,15 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
-	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
+	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 )
 
 type fakeCollector struct {
@@ -132,6 +133,51 @@ func TestPublish_AFullRegistryPushesNothing(t *testing.T) {
 	if _, err := publisher.Publish(context.Background(), buildResult()); !errors.Is(err, ErrRegistryFull) || pusher.pushed != 0 || deployer.image != "" {
 		t.Fatalf("%v, pushed %d", err, pusher.pushed)
 	}
+}
+
+// A publish starts only with room on the spool for the plan's largest image and a margin; a tenant never fills the disk.
+func TestPublish_RefusedWithoutRoomOnTheSpool(t *testing.T) {
+	collector := &countingCollector{fakeCollector: fakeCollector{archive: appregistrytest.Archive(t)}}
+	publisher, pusher, _, _ := publishFixture(t, collector)
+	result := buildResult()
+	asked := ""
+	publisher.free = func(dir string) (int64, error) {
+		asked = dir
+		return result.MaxImage + spoolMargin - 1, nil
+	}
+	if _, err := publisher.Publish(context.Background(), result); !errors.Is(err, ErrSpoolFull) || collector.calls != 0 || pusher.pushed != 0 {
+		t.Fatalf("%v, collected %d, pushed %d", err, collector.calls, pusher.pushed)
+	}
+	if asked != publisher.spoolDir {
+		t.Errorf("asked about %q, not the spool", asked)
+	}
+	publisher.free = func(string) (int64, error) { return 0, errors.New("statfs: gone") }
+	if _, err := publisher.Publish(context.Background(), result); err == nil || collector.calls != 0 {
+		t.Fatalf("a spool whose room cannot be read: %v", err)
+	}
+	publisher.free = func(string) (int64, error) { return result.MaxImage + spoolMargin, nil }
+	if _, err := publisher.Publish(context.Background(), result); err != nil || collector.calls != 1 {
+		t.Fatalf("exactly enough room: %v", err)
+	}
+}
+
+func TestSpoolFree_ReadsTheFilesystem(t *testing.T) {
+	if free, err := spoolFree(t.TempDir()); err != nil || free <= 0 {
+		t.Fatalf("%d %v", free, err)
+	}
+	if _, err := spoolFree(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Error("a spool that does not exist")
+	}
+}
+
+type countingCollector struct {
+	fakeCollector
+	calls int
+}
+
+func (c *countingCollector) Collect(ctx context.Context, buildID string, w io.Writer, limit int64) error {
+	c.calls++
+	return c.fakeCollector.Collect(ctx, buildID, w, limit)
 }
 
 func TestPublish_ARefusedPushDeploysNothing(t *testing.T) {

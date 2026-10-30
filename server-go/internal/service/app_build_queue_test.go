@@ -83,6 +83,7 @@ func TestAppBuildQueuePublisher_FindsTheAppAndNamesEachRefusal(t *testing.T) {
 		fmt.Errorf("%w (5 bytes)", ErrImageTooLarge):           appbuilds.FailImageTooLarge,
 		fmt.Errorf("%w: 9 bytes in use", ErrRegistryFull):      appbuilds.FailRegistryFull,
 		fmt.Errorf("%w: a symlink", appregistry.ErrBadArchive): appbuilds.FailBadImage,
+		fmt.Errorf("%w: 1 byte free", ErrSpoolFull):            sitebuilds.FailPlatform,
 	}
 	for refusal, kind := range cases {
 		inner.err = refusal

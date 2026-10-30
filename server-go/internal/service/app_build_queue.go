@@ -64,6 +64,7 @@ func namedFailure(err error) error {
 		{ErrImageTooLarge, appbuilds.FailImageTooLarge},
 		{ErrRegistryFull, appbuilds.FailRegistryFull},
 		{appregistry.ErrBadArchive, appbuilds.FailBadImage},
+		{ErrSpoolFull, sitebuilds.FailPlatform},
 	}
 	for _, named := range kinds {
 		if errors.Is(err, named.cause) {

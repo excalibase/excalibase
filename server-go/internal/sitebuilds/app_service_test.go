@@ -236,3 +236,48 @@ func TestStartAppSignIn_BindsTheApp(t *testing.T) {
 		t.Errorf("repositories with the flag off: %v", err)
 	}
 }
+
+// A connection can always be removed: site git builds off or single-host never block the disconnect.
+func TestDisconnectApp_WhateverTheInstallOffers(t *testing.T) {
+	for _, mode := range []Mode{ModeOff, ModeSingleHost} {
+		store := newMemoryStore()
+		bed := &testBed{store: store}
+		bed.connectApp(AppSettings{})
+		service := NewService(store, nil, nil, nil, nil, Options{Mode: mode})
+		if err := service.DisconnectApp(context.Background(), testProject, testApp); err != nil {
+			t.Errorf("mode %v: %v", mode, err)
+		}
+		if want := (Target{Kind: KindApp, ProjectID: testProject, ID: testApp}); len(store.cancelled) != 1 || store.cancelled[0] != want {
+			t.Errorf("mode %v: cancelled %+v", mode, store.cancelled)
+		}
+	}
+	if err := NewService(nil, nil, nil, nil, nil, Options{Mode: ModeOff}).DisconnectApp(context.Background(), testProject, testApp); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("no store: %v", err)
+	}
+}
+
+// Below the developer rung a build argument shows only its name; the copy never touches the original.
+func TestWithoutBuildArgValues_KeepsNamesOnly(t *testing.T) {
+	args := map[string]string{"NPM_REGISTRY": "https://token@npm.example.com"}
+	connection := &AppConnection{AppID: testApp, Settings: AppSettings{Branch: "main", BuildArgs: args}}
+	hidden := connection.WithoutBuildArgValues()
+	if value, named := hidden.Settings.BuildArgs["NPM_REGISTRY"]; !named || value != "" || hidden.AppID != testApp {
+		t.Errorf("hidden connection %+v", hidden)
+	}
+	build := &Build{ID: "b1", Kind: KindApp, App: &AppBuild{AppSettings: AppSettings{BuildArgs: args}, MaxImageBytes: 7}}
+	shown := build.WithoutBuildArgValues()
+	if shown.App.BuildArgs["NPM_REGISTRY"] != "" || shown.App.MaxImageBytes != 7 || shown.ID != "b1" {
+		t.Errorf("hidden build %+v %+v", shown, shown.App)
+	}
+	if args["NPM_REGISTRY"] == "" || build.App.BuildArgs["NPM_REGISTRY"] == "" || connection.Settings.BuildArgs["NPM_REGISTRY"] == "" {
+		t.Error("the original lost its values")
+	}
+	site := &Build{ID: "s1", Kind: KindSite}
+	if site.WithoutBuildArgValues().App != nil {
+		t.Error("a site build has no app settings")
+	}
+	var none *AppConnection
+	if none.WithoutBuildArgValues() != nil {
+		t.Error("no connection stays none")
+	}
+}

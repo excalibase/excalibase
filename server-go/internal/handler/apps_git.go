@@ -14,6 +14,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 )
 
@@ -31,7 +33,7 @@ func NewAppGitHandler(service *sitebuilds.Service) *AppGitHandler {
 func (h *AppGitHandler) Routes(r chi.Router, developer, dark func(http.Handler) http.Handler) {
 	r.With(dark).Get("/git", h.on(h.connection))
 	r.With(dark, developer).Put("/git", h.on(h.connect))
-	r.With(developer).Delete("/git", h.on(h.disconnect))
+	r.With(developer).Delete("/git", h.disconnect)
 	r.With(dark, developer).Post("/git/sign-in", h.on(h.signIn))
 	r.With(dark, developer).Get("/git/repositories", h.on(h.repositories))
 	r.With(dark).Get("/builds", h.on(h.listBuilds))
@@ -63,6 +65,9 @@ func (h *AppGitHandler) connection(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeAppGitError(w, err)
 		return
+	}
+	if !seesBuildArgValues(r) {
+		connection = connection.WithoutBuildArgValues()
 	}
 	writeJSON(w, map[string]any{"connected": connection != nil, "connection": connection, "builders": sitebuilds.AppBuilders})
 }
@@ -145,6 +150,9 @@ func (h *AppGitHandler) listBuilds(w http.ResponseWriter, r *http.Request) {
 		writeAppGitError(w, err)
 		return
 	}
+	if !seesBuildArgValues(r) {
+		builds = buildsWithoutArgValues(builds)
+	}
 	writeJSON(w, builds)
 }
 
@@ -176,6 +184,20 @@ func (h *AppGitHandler) getBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, build)
+}
+
+// seesBuildArgValues is the developer rung, the one that may change them; the log hides them from everyone.
+func seesBuildArgValues(r *http.Request) bool {
+	access := custommw.ProjectAccessFromContext(r.Context())
+	return access != nil && access.RoleAtLeast(domain.OrgRoleDeveloper)
+}
+
+func buildsWithoutArgValues(builds []*sitebuilds.Build) []*sitebuilds.Build {
+	hidden := make([]*sitebuilds.Build, len(builds))
+	for i, build := range builds {
+		hidden[i] = build.WithoutBuildArgValues()
+	}
+	return hidden
 }
 
 // writeAppGitError maps the app refusals, then the shared git-build ones.

@@ -47,7 +47,7 @@ func gitBuildConfig(t *testing.T, on ...features.Feature) config.AppConfig {
 	cfg.Sites = config.SitesConfig{AccountID: "a", APIToken: "t", DispatchNamespace: "n", BaseDomain: "example.app", HostsKVNamespaceID: "kv"}
 	cfg.SiteGit = config.SiteGitConfig{AppID: 7, AppSlug: "excalibase", ClientID: "c", ClientSecret: "s", PrivateKeyPEM: string(keyPEM),
 		WebhookSecret: "w", APIURL: "https://api.github.com", WebURL: "https://github.com", BuildNamespace: testSiteBuildNamespace, BuildSlots: 1}
-	cfg.AppBuild = config.AppBuildConfig{Namespace: testAppBuildNamespace}
+	cfg.AppBuild = config.AppBuildConfig{Namespace: testAppBuildNamespace, SpoolPath: filepath.Join(t.TempDir(), "spool")}
 	return cfg
 }
 
@@ -86,10 +86,6 @@ func appBuildTestArgs(t *testing.T, cfg config.AppConfig, internal *appregistry.
 func TestAppBuilds_NothingWiredWhileTheFlagIsOff(t *testing.T) {
 	cluster := buildCluster(testSiteBuildNamespace, testAppBuildNamespace)
 	issuing := appregistrytest.New(t)
-	guard, err := appregistry.NewInternal(appregistrytest.Host, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	siteGitOff := gitBuildConfig(t, features.AppGitBuilds)
 	siteGitOff.SitesGitBuildsEnabled = false
 	cases := map[string]struct {
@@ -97,11 +93,9 @@ func TestAppBuilds_NothingWiredWhileTheFlagIsOff(t *testing.T) {
 		internal *appregistry.Internal
 		want     bool
 	}{
-		"flag off":                    {gitBuildConfig(t), issuing, false},
-		"a registry that only guards": {gitBuildConfig(t, features.AppGitBuilds), guard, false},
-		"no registry":                 {gitBuildConfig(t, features.AppGitBuilds), nil, false},
-		"site git builds off":         {siteGitOff, issuing, false},
-		"everything on":               {gitBuildConfig(t, features.AppGitBuilds), issuing, true},
+		"flag off":            {gitBuildConfig(t), issuing, false},
+		"site git builds off": {siteGitOff, issuing, false},
+		"everything on":       {gitBuildConfig(t, features.AppGitBuilds), issuing, true},
 	}
 	for name, tc := range cases {
 		builds := newSiteBuilds(appBuildTestArgs(t, tc.cfg, tc.internal, cluster))
@@ -111,6 +105,54 @@ func TestAppBuilds_NothingWiredWhileTheFlagIsOff(t *testing.T) {
 		if builds.apps == nil {
 			t.Errorf("%s: the app git routes need their handler, wired or not", name)
 		}
+	}
+}
+
+// The flag on where app builds should run but the registry does not issue stops the boot; the nightly,
+// with site git builds off, and single-host keep answering that app builds are not offered.
+func TestAppBuildsBlocked_FailsClosedOnlyWhereSiteBuildsRun(t *testing.T) {
+	issuing := appregistrytest.New(t)
+	guard, err := appregistry.NewInternal(appregistrytest.Host, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteGitOff := gitBuildConfig(t, features.AppGitBuilds)
+	siteGitOff.SitesGitBuildsEnabled = false
+	singleHost := withMode(gitBuildConfig(t, features.AppGitBuilds), "docker")
+	cases := map[string]struct {
+		cfg      config.AppConfig
+		internal *appregistry.Internal
+		blocked  bool
+	}{
+		"a registry that only guards": {gitBuildConfig(t, features.AppGitBuilds), guard, true},
+		"no registry":                 {gitBuildConfig(t, features.AppGitBuilds), nil, true},
+		"flag off":                    {gitBuildConfig(t), nil, false},
+		"site git builds off":         {siteGitOff, nil, false},
+		"single-host":                 {singleHost, nil, false},
+		"everything on":               {gitBuildConfig(t, features.AppGitBuilds), issuing, false},
+	}
+	for name, tc := range cases {
+		if err := appBuildsBlocked(tc.cfg, tc.internal); (err != nil) != tc.blocked {
+			t.Errorf("%s: %v, want blocked %v", name, err, tc.blocked)
+		}
+	}
+}
+
+// Wiring refuses what a publish could not run without: the registry's client and sweeper, and a spool path.
+func TestEnableAppBuilds_RefusesWhatAPublishNeeds(t *testing.T) {
+	cfg := gitBuildConfig(t, features.AppGitBuilds)
+	internal := appregistrytest.New(t)
+	args := appBuildTestArgs(t, cfg, internal, buildCluster(testSiteBuildNamespace, testAppBuildNamespace))
+	cluster := buildCluster(testSiteBuildNamespace, testAppBuildNamespace)
+	noRegistry := args.apps
+	noRegistry.registry = appRegistryParts{}
+	if err := enableAppBuilds(cfg, cluster, nil, nil, nil, noRegistry); err == nil {
+		t.Error("no registry client or sweeper")
+	}
+	noSpool := cfg
+	noSpool.AppBuild.SpoolPath = ""
+	if err := enableAppBuilds(noSpool, cluster, nil, nil, nil, args.apps); err == nil {
+		t.Error("no APP_BUILD_SPOOL_PATH")
 	}
 }
 
@@ -142,12 +184,12 @@ func TestAppBuildOptions_ShareTheSiteBuildsSlotsAndClass(t *testing.T) {
 	}
 }
 
-// The spool sits on STORAGE_PATH, and what a crashed publish left there long ago is cleared at boot.
-func TestAppBuildSpool_OnStorageAndSweptOfOldLeftovers(t *testing.T) {
+// The spool is its own volume; a crashed publish's old leftovers are cleared at boot, and a path that is not a plain directory stops it.
+func TestAppBuildSpool_OwnDirectorySweptOfOldLeftovers(t *testing.T) {
 	root := t.TempDir()
-	dir, err := appBuildSpool(root)
-	if err != nil || dir != filepath.Join(root, appBuildSpoolDir) {
-		t.Fatalf("spool %s: %v", dir, err)
+	dir := filepath.Join(root, "spool")
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		t.Fatal(err)
 	}
 	stale, fresh := filepath.Join(dir, "app-image-stale"), filepath.Join(dir, "app-image-fresh")
 	for _, path := range []string{stale, fresh} {
@@ -159,8 +201,11 @@ func TestAppBuildSpool_OnStorageAndSweptOfOldLeftovers(t *testing.T) {
 	if err := os.Chtimes(stale, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := appBuildSpool(root); err != nil {
-		t.Fatal(err)
+	if got, err := appBuildSpool(dir); err != nil || got != dir {
+		t.Fatalf("spool %s: %v", got, err)
+	}
+	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("spool mode %v: %v", info.Mode(), err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Error("an old leftover survived the boot")
@@ -168,12 +213,21 @@ func TestAppBuildSpool_OnStorageAndSweptOfOldLeftovers(t *testing.T) {
 	if _, err := os.Stat(fresh); err != nil {
 		t.Error("a publish in flight lost its spool")
 	}
-	blocked := filepath.Join(root, "blocked")
-	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
+	if made, err := appBuildSpool(filepath.Join(root, "made", "here")); err != nil || made == "" {
+		t.Errorf("a missing spool is made: %v", err)
+	}
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := appBuildSpool(blocked); err == nil {
-		t.Error("a STORAGE_PATH that is a file")
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{"a file": file, "a symlink": link, "relative": "spool"} {
+		if _, err := appBuildSpool(path); err == nil {
+			t.Errorf("%s as the spool", name)
+		}
 	}
 }
 

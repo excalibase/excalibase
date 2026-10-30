@@ -17,7 +17,11 @@ func TestLoadAppBuilds_DefaultsToThePinnedImagesAndItsOwnNamespace(t *testing.T)
 	t.Setenv("APP_BUILD_BUILDER_IMAGE", "mirror/builder@sha256:2")
 	t.Setenv("APP_BUILD_RUN_IMAGE", "mirror/run@sha256:3")
 	t.Setenv("APP_BUILD_CRANE_IMAGE", "mirror/crane@sha256:4")
+	t.Setenv("APP_BUILD_SPOOL_PATH", " /var/spool/app-builds ")
 	builds = loadAppBuilds()
+	if builds.SpoolPath != "/var/spool/app-builds" {
+		t.Errorf("spool %q", builds.SpoolPath)
+	}
 	if builds.Namespace != "app-builds" || builds.BuildKitImage != "mirror/buildkit@sha256:1" || builds.BuilderImage != "mirror/builder@sha256:2" ||
 		builds.RunImage != "mirror/run@sha256:3" || builds.CraneImage != "mirror/crane@sha256:4" {
 		t.Fatalf("%+v", builds)
@@ -33,6 +37,10 @@ func TestValidateAppBuilds(t *testing.T) {
 	bad.DarkFeatures = []features.Feature{features.AppGitBuilds}
 	if err := bad.validateAppBuilds(); err == nil {
 		t.Error("flag on with a bad namespace")
+	}
+	relative := AppConfig{DarkFeatures: bad.DarkFeatures, AppBuild: AppBuildConfig{Namespace: "app-builds", SpoolPath: "spool"}}
+	if err := relative.validateAppBuilds(); err == nil {
+		t.Error("a relative spool path")
 	}
 	good := AppConfig{DarkFeatures: bad.DarkFeatures, AppBuild: loadAppBuilds()}
 	if err := good.validateAppBuilds(); err != nil {

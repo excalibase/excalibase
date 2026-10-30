@@ -14,6 +14,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/testutil/sitebuildstest"
 )
@@ -41,9 +42,16 @@ func (a *appGitAPI) appPath(rest string) string {
 }
 
 func (a *appGitAPI) call(method, path, body string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	return a.callAs(domain.OrgRoleDeveloper, method, path, body, cookies...)
+}
+
+// callAs sends a request as a member holding role, as the project gate would have resolved them.
+func (a *appGitAPI) callAs(role, method, path, body string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	a.t.Helper()
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
-	request = request.WithContext(auth.SetUser(context.Background(), &domain.User{ID: a.harness.User, Active: true}))
+	ctx := auth.SetUser(context.Background(), &domain.User{ID: a.harness.User, Active: true})
+	ctx = custommw.WithProjectAccess(ctx, &custommw.ProjectAccess{Member: &domain.OrgMember{UserID: a.harness.User, Role: role}})
+	request = request.WithContext(ctx)
 	for _, cookie := range cookies {
 		request.AddCookie(cookie)
 	}
@@ -122,6 +130,46 @@ func TestAppGitRoutes_AnAppOfNoProject(t *testing.T) {
 	} {
 		if got := api.call(route.method, route.path, ""); got.Code != http.StatusNotFound {
 			t.Errorf("%s %s: %d", route.method, route.path, got.Code)
+		}
+	}
+}
+
+// The disconnect reaches the store with site git builds off for the install.
+func TestAppGitRoutes_DisconnectWithSiteGitBuildsOff(t *testing.T) {
+	api := newAppGitAPI(t)
+	api.harness.ConnectApp(api.appID, sitebuilds.AppSettings{})
+	off := sitebuilds.NewService(api.harness.Store, nil, nil, nil, nil, sitebuilds.Options{Mode: sitebuilds.ModeOff})
+	r := chi.NewRouter()
+	pass := func(next http.Handler) http.Handler { return next }
+	r.Route("/api/projects/{projectId}/apps/{appId}", func(r chi.Router) { NewAppGitHandler(off).Routes(r, pass, pass) })
+	api.router = r
+	if got := api.call(http.MethodDelete, api.appPath("/git"), ""); got.Code != http.StatusNoContent {
+		t.Fatalf("disconnect: %d %s", got.Code, got.Body.String())
+	}
+	if connection, err := api.harness.Service.AppConnection(context.Background(), api.harness.Project, api.appID); err != nil || connection != nil {
+		t.Errorf("still connected: %+v %v", connection, err)
+	}
+	if read := api.call(http.MethodGet, api.appPath("/git"), ""); read.Code != http.StatusNotFound {
+		t.Errorf("the other routes stay hidden: %d", read.Code)
+	}
+}
+
+// A viewer sees which build arguments an app has, never their values; a developer sees both.
+func TestAppGitRoutes_BuildArgValuesNeedTheDeveloperRung(t *testing.T) {
+	api := newAppGitAPI(t)
+	api.harness.ConnectApp(api.appID, sitebuilds.AppSettings{Builder: sitebuilds.AppBuilderDockerfile,
+		BuildArgs: map[string]string{"NPM_REGISTRY": "https://token@npm.example.com"}})
+	type connectionBody struct {
+		Connection sitebuilds.AppConnection `json:"connection"`
+	}
+	for role, want := range map[string]string{domain.OrgRoleViewer: "", domain.OrgRoleDeveloper: "https://token@npm.example.com"} {
+		read := decodeGit[connectionBody](t, api.callAs(role, http.MethodGet, api.appPath("/git"), ""))
+		if value, named := read.Connection.Settings.BuildArgs["NPM_REGISTRY"]; !named || value != want {
+			t.Errorf("%s reads the connection's argument as %q (named %v)", role, value, named)
+		}
+		builds := decodeGit[[]sitebuilds.Build](t, api.callAs(role, http.MethodGet, api.appPath("/builds"), ""))
+		if len(builds) != 1 || builds[0].App == nil || builds[0].App.BuildArgs["NPM_REGISTRY"] != want {
+			t.Errorf("%s reads the build's argument wrongly: %+v", role, builds)
 		}
 	}
 }
