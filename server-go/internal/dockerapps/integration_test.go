@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,9 @@ import (
 // call it makes is one the proxy admits.
 
 const itBusybox = "docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+
+// itValkey is the catalog template's image: it starts as root and steps down.
+const itValkey = "docker.io/valkey/valkey@sha256:2d04268dfa26ab31cfa3fdc538866e76438b2d00e41db41b8cb86d780ac5a416"
 
 type realRig struct {
 	t                *testing.T
@@ -269,5 +273,38 @@ func TestRealEngineAppsReachEachOtherByName(t *testing.T) {
 		if err := rig.rt.DeleteAppWorkload(ctx, rig.db, id, time.Minute); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// Valkey starts as root and steps down to its own user (setpriv); without a
+// sandbox that needs the step-down capabilities the runtime keeps (EXC-669).
+func TestRealEngineAnUnsandboxedAppStepsDownFromRoot(t *testing.T) {
+	rig := newRealRig(t)
+	ctx := context.Background()
+	cache := itApp("unused")
+	cache.Name, cache.Image, cache.Port, cache.HealthCheckPath = "valkey", itValkey, 0, ""
+	cache.Internal = true
+	cache.InternalPorts = []apphost.InternalPort{{Port: 6379, Protocol: apphost.ProtocolTCP}}
+	cache.Args = []string{"--appendonly", "yes", "--dir", "/data"}
+	rig.deploy(cache, "dep-valkey")
+	list, err := rig.direct.ContainerList(ctx, container.ListOptions{Filters: labelFilter(labelApp, cache.ID)})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("valkey containers: %d (%v)", len(list), err)
+	}
+	output, err := exec.Command("docker", "exec", list[0].ID, "valkey-cli", "ping").CombinedOutput()
+	if reply := strings.TrimSpace(string(output)); err != nil || reply != "PONG" {
+		t.Fatalf("valkey: %q (%v)", reply, err)
+	}
+	top, err := rig.direct.ContainerTop(ctx, list[0].ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, command := slices.Index(top.Titles, "UID"), slices.Index(top.Titles, "CMD")
+	server := slices.IndexFunc(top.Processes, func(process []string) bool { return strings.Contains(process[command], "valkey-server") })
+	if server < 0 || top.Processes[server][user] == "root" || top.Processes[server][user] == "0" {
+		t.Fatalf("valkey runs as root or not at all: %v", top.Processes)
+	}
+	if err := rig.rt.DeleteAppWorkload(ctx, rig.db, cache.ID, time.Minute); err != nil {
+		t.Fatal(err)
 	}
 }
