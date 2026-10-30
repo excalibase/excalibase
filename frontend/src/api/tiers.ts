@@ -40,6 +40,14 @@ export interface TierConfig {
   siteBuildDisk?: string;
   siteBuildTimeoutSeconds?: number;
   siteBuildConcurrency?: number;
+  // One git build of an app on the plan (EXC-547), a separate allowance from what
+  // the project runs, plus the largest image a build may hand to a deploy.
+  appBuildCpuMillis?: number;
+  appBuildMemory?: string;
+  appBuildDisk?: string;
+  appBuildTimeoutSeconds?: number;
+  appBuildConcurrency?: number;
+  appBuildMaxImage?: string;
 }
 
 export type TierConfigInput = Omit<TierConfig, 'tier' | 'version'>;

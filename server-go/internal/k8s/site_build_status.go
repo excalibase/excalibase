@@ -23,8 +23,22 @@ const (
 // step's terminated reason first: under gVisor an out-of-memory kill reaches
 // only the killed process, so the step itself may still exit 0.
 func interpretSiteBuild(job *batchv1.Job, pod *corev1.Pod) sitebuilds.RunStatus {
+	return interpretBuild(job, pod, stepFailureKind)
+}
+
+// interpretBuild reads any build Job the same way; kindOf names a failing step's kind.
+func interpretBuild(job *batchv1.Job, pod *corev1.Pod, kindOf func(step string, code int32) sitebuilds.FailureKind) sitebuilds.RunStatus {
 	if pod != nil {
 		if status, done := podKills(pod); done {
+			return status
+		}
+	}
+	if jobFailedFor(job, batchv1.JobReasonDeadlineExceeded) {
+		return failed(sitebuilds.FailTimeout, 0, "the build ran past its time limit")
+	}
+	// The Job can be marked failed before the runner reads the pod, so the step that exited still names the failure.
+	if pod != nil {
+		if status, failed := stepFailure(pod, kindOf); failed {
 			return status
 		}
 	}
@@ -33,9 +47,6 @@ func interpretSiteBuild(job *batchv1.Job, pod *corev1.Pod) sitebuilds.RunStatus 
 	}
 	if pod == nil {
 		return sitebuilds.RunStatus{Phase: sitebuilds.RunPending}
-	}
-	if status, failed := stepFailure(pod); failed {
-		return status
 	}
 	for _, container := range pod.Status.ContainerStatuses {
 		if container.Name == siteBuildCollect && container.Ready {
@@ -93,26 +104,31 @@ func allStatuses(pod *corev1.Pod) []corev1.ContainerStatus {
 
 func jobFailure(job *batchv1.Job) (sitebuilds.RunStatus, bool) {
 	for _, condition := range job.Status.Conditions {
-		if condition.Type != batchv1.JobFailed || condition.Status != corev1.ConditionTrue {
-			continue
+		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
+			return failed(sitebuilds.FailPlatform, 0, "the build job failed: "+condition.Reason), true
 		}
-		if condition.Reason == batchv1.JobReasonDeadlineExceeded {
-			return failed(sitebuilds.FailTimeout, 0, "the build ran past its time limit"), true
-		}
-		return failed(sitebuilds.FailPlatform, 0, "the build job failed: "+condition.Reason), true
 	}
 	return sitebuilds.RunStatus{}, false
 }
 
+func jobFailedFor(job *batchv1.Job, reason string) bool {
+	for _, condition := range job.Status.Conditions {
+		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue && condition.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
 // stepFailure names the first step that exited non-zero.
-func stepFailure(pod *corev1.Pod) (sitebuilds.RunStatus, bool) {
+func stepFailure(pod *corev1.Pod, kindOf func(step string, code int32) sitebuilds.FailureKind) (sitebuilds.RunStatus, bool) {
 	for _, status := range allStatuses(pod) {
 		terminated := status.State.Terminated
 		if terminated == nil || terminated.ExitCode == 0 {
 			continue
 		}
 		code := terminated.ExitCode
-		return failed(stepFailureKind(status.Name, code), code, fmt.Sprintf("the %s step exited %d", status.Name, code)), true
+		return failed(kindOf(status.Name, code), code, fmt.Sprintf("the %s step exited %d", status.Name, code)), true
 	}
 	return sitebuilds.RunStatus{}, false
 }
