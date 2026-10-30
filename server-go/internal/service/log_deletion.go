@@ -9,13 +9,13 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/logdelete"
 )
 
-// LogDeletionQueue keeps deleted projects' log deletions until Loki has them (EXC-678).
-type LogDeletionQueue interface {
+// LogDeletionEnqueuer queues deleted projects' log deletions until Loki has them (EXC-678).
+type LogDeletionEnqueuer interface {
 	EnqueueProjectLogDeletion(ctx context.Context, d logdelete.Deletion) error
 }
 
 type projectLogDeletion struct {
-	queue LogDeletionQueue
+	queue LogDeletionEnqueuer
 	audit AuditWriter
 	// maxAge is the longest any line is kept, which bounds a deletion's window.
 	maxAge time.Duration
@@ -23,7 +23,7 @@ type projectLogDeletion struct {
 
 // SetLogDeletion queues each deleted project's stored log lines for removal;
 // audit may be nil. Unset, the teardown has no such step.
-func (s *ProvisioningService) SetLogDeletion(queue LogDeletionQueue, audit AuditWriter, maxAge time.Duration) {
+func (s *ProvisioningService) SetLogDeletion(queue LogDeletionEnqueuer, audit AuditWriter, maxAge time.Duration) {
 	s.logDeletion = projectLogDeletion{queue: queue, audit: audit, maxAge: maxAge}
 }
 
