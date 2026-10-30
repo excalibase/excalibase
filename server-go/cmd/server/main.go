@@ -1316,6 +1316,10 @@ func buildProvisioningService(
 	}
 	provSvc.SetLokiURL(cfg.LokiURL)
 	startLogPlanSweep(context.Background(), cfg, provSvc, k8sClient)
+	deletionStore, _ := sqlStore.(logDeletionStore)
+	if worker := wireLogDeletion(cfg, deletionStore, provSvc, logDeletionLokiURL(cfg)); worker != nil {
+		go worker.Run(context.Background())
+	}
 
 	wireNatsCredentialMinter(sqlStore, provSvc)
 	return provSvc, lifecycleClaimer

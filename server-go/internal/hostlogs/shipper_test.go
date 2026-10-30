@@ -260,8 +260,7 @@ func TestShipStreamStopsAtTheDailyBudget(t *testing.T) {
 	engine := &fakeEngine{logs: map[string][]enginestats.LogLine{"db-a": {line(1, big), line(2, big), line(3, big)}}}
 	cursors, pusher := &fakeCursors{}, &fakePusher{}
 	shipper := newTestShipper(engine, cursors, pusher, features.NewStatic())
-	shipper.budget = newBudget(20 << 10)
-	target := Target{ID: "db-a", Labels: Labels{ProjectID: "proj-a", Component: "database", Container: "c"}, Retention: time.Hour}
+	target := Target{ID: "db-a", Labels: Labels{ProjectID: "proj-a", Component: "database", Container: "c"}, Retention: time.Hour, DailyBytes: 20 << 10}
 	if _, err := shipper.shipStream(context.Background(), target, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -271,25 +270,6 @@ func TestShipStreamStopsAtTheDailyBudget(t *testing.T) {
 	}
 	if cursors.saved["db-a"] != now.Add(3*time.Second).UnixNano() {
 		t.Errorf("cursor %d, want past the skipped lines", cursors.saved["db-a"])
-	}
-}
-
-func TestBudgetResetsEachUTCDay(t *testing.T) {
-	budget := newBudget(10)
-	if keep, notice := budget.take("p", now, 8); !keep || notice {
-		t.Error("first 8 bytes refused")
-	}
-	if keep, notice := budget.take("p", now, 8); keep || !notice {
-		t.Error("over budget: want a notice")
-	}
-	if keep, notice := budget.take("p", now, 3); keep || notice {
-		t.Error("the notice is given once a day")
-	}
-	if keep, _ := budget.take("q", now, 8); !keep {
-		t.Error("budgets are per project")
-	}
-	if keep, _ := budget.take("p", now.Add(24*time.Hour), 8); !keep {
-		t.Error("a new day starts a new budget")
 	}
 }
 
@@ -407,8 +387,7 @@ func TestShipStreamBoundsEachPushByBytes(t *testing.T) {
 	}
 	pusher := &fakePusher{}
 	shipper := newTestShipper(&fakeEngine{logs: map[string][]enginestats.LogLine{"db-a": lines}}, &fakeCursors{}, pusher, features.NewStatic())
-	shipper.budget = newBudget(1 << 30)
-	target := Target{ID: "db-a", Labels: Labels{ProjectID: "proj-a", Component: "database", Container: "c"}, Retention: time.Hour}
+	target := Target{ID: "db-a", Labels: Labels{ProjectID: "proj-a", Component: "database", Container: "c"}, Retention: time.Hour, DailyBytes: 1 << 30}
 	if _, err := shipper.shipStream(context.Background(), target, 0); err != nil {
 		t.Fatal(err)
 	}

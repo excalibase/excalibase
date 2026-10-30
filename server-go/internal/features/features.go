@@ -58,11 +58,13 @@ const (
 	// HostLogs is a single host's stored log search: provisioning ships the
 	// project containers' output to the bundled Loki (EXC-672).
 	HostLogs Feature = "hostlogs"
+	// LogDeletion removes a deleted project's stored log lines from Loki (EXC-678).
+	LogDeletion Feature = "logdeletion"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, HostLogs}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, HostLogs, LogDeletion}
 }
 
 type Flags interface {

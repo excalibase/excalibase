@@ -74,7 +74,25 @@ if loki.get("ports") or not loki.get("read_only") or "ALL" not in (loki.get("cap
     sys.exit("loki is published or not hardened")
 if not loki.get("mem_limit"):
     sys.exit("loki has no memory limit")
+env = prov["environment"]
+if env.get("FEATURE_LOGDELETION") != "false":
+    sys.exit("log deletion is not off by default")
+if env.get("HOST_LOGS_DAILY_MB_BY_PLAN") != "free=64,standard=256,enterprise=1024" or env.get("HOST_LOGS_MIN_FREE_PERCENT") != "10":
+    sys.exit("the per-plan budget or the disk floor does not reach provisioning")
 '
+# EXC-678: the deletion flag reaches provisioning, and Loki states deletion as the chart does.
+render COMPOSE_PROFILES=hostlogs FEATURE_HOSTLOGS=true FEATURE_LOGDELETION=true | grep -q 'FEATURE_LOGDELETION: "true"' \
+  || { echo "FEATURE_LOGDELETION=true does not reach provisioning" >&2; exit 1; }
+python3 - "$DIR/../loki/loki.yaml" <<'PY' || exit 1
+import sys, yaml
+config = yaml.safe_load(open(sys.argv[1]))
+if config["limits_config"].get("deletion_mode") != "filter-and-delete":
+    sys.exit("loki.yaml does not state deletion_mode: filter-and-delete")
+compactor = config["compactor"]
+if not compactor.get("retention_enabled") or compactor.get("delete_request_store") != "filesystem" \
+        or compactor.get("delete_request_cancel_period") != "24h":
+    sys.exit(f"loki.yaml compactor {compactor} does not take delete requests as the chart does")
+PY
 echo "single-host required settings ok"
 # Email through the operator's own relay (EXC-580) or SES: every setting in .env reaches provisioning.
 out=$(render EMAIL_PROVIDER=smtp SMTP_HOST=mail.example.test SMTP_PORT=2587 SMTP_TLS=starttls \

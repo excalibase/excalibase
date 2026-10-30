@@ -23,7 +23,8 @@
 # HOST_LOGS=1 installs with --host-logs and walks stored log search (EXC-672,
 # log-search-journey.sh): a project's line in Loki under its own labels, found
 # by its search and not another project's, after a restart and the container's
-# removal. Without it no Loki runs. It removes the project's database container,
+# removal, and a deleted project's lines asked of Loki for that project alone
+# (EXC-678, FEATURE_LOGDELETION=true). Without it no Loki runs. It removes the project's database container,
 # so it runs last.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG);
 # GRAPHQL_IMAGE a locally built engine image.
@@ -91,6 +92,8 @@ echo "== install"
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
+# Stored logs go with a deleted project (EXC-678, log-search-journey.sh).
+[ -n "${HOST_LOGS:-}" ] && echo "FEATURE_LOGDELETION=true" >> "$W/.env"
 # The apps journey drives create_app through MCP, as a coding tool does (EXC-606).
 [ -n "${APPS:-}" ] && echo "FEATURE_MCP=true" >> "$W/.env"
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"
