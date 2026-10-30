@@ -19,12 +19,9 @@ const (
 	testMFAKeyAt = "projects/" + testOAuthProject + "/auth/mfa"
 )
 
-func (m *memAuthSignInStore) EnableMFA(_ context.Context, projectID string, ensureKey func() error) error {
+func (m *memAuthSignInStore) EnableMFA(_ context.Context, projectID string) error {
 	if m.err != nil {
 		return m.err
-	}
-	if err := ensureKey(); err != nil {
-		return err
 	}
 	signIn, ok := m.signIn[projectID]
 	if !ok {
@@ -53,6 +50,24 @@ func (unreachableVault) Get(string) (map[string]string, error) {
 	return nil, errors.New("vault sealed")
 }
 
+// racingVault answers "not found" once, then finds the key another request
+// stored first, so the conditional write loses.
+type racingVault struct {
+	*fakeVault
+	winner string
+	reads  int
+}
+
+func (v *racingVault) Get(path string) (map[string]string, error) {
+	v.reads++
+	if v.reads == 1 {
+		return v.fakeVault.Get("absent")
+	}
+	return map[string]string{domain.MFAKeyField: v.winner}, nil
+}
+
+func (v *racingVault) PutIfAbsent(string, map[string]string) (bool, error) { return false, nil }
+
 func setupMFAHandler(t *testing.T, on ...features.Feature) oauthFixture {
 	t.Helper()
 	f := setupSignInHandler(t, on...)
@@ -76,7 +91,7 @@ func TestAuthMFA_EnableCreatesTheKeyThenTheSwitchAndNeverAnswersTheKey(t *testin
 		t.Fatal("the key was answered or the switch not stored")
 	}
 	if len(f.audit.entries) != 1 || f.audit.entries[0].Action != "auth_mfa.update" ||
-		f.audit.entries[0].Details != `{"mfaEnabled":true}` {
+		f.audit.entries[0].Details != `{"mfaEnabled":true,"outcome":"success"}` {
 		t.Fatalf("audit = %+v", f.audit.entries)
 	}
 }
@@ -99,7 +114,7 @@ func TestAuthMFA_EnableKeepsAnExistingKeyAndOffKeepsItToo(t *testing.T) {
 		f.vault.data[testMFAKeyAt][domain.MFAKeyField] != existing {
 		t.Fatal("switching back on replaced the key")
 	}
-	if len(f.audit.entries) != 3 || f.audit.entries[1].Details != `{"mfaEnabled":false}` {
+	if len(f.audit.entries) != 3 || f.audit.entries[1].Details != `{"mfaEnabled":false,"outcome":"success"}` {
 		t.Fatalf("audit = %+v", f.audit.entries)
 	}
 }
@@ -114,8 +129,11 @@ func TestAuthMFA_AnInvalidKeyIsRefusedAndLeftAlone(t *testing.T) {
 			t.Fatalf("stored %v: %d %s", stored, w.Code, w.Body.String())
 		}
 		if len(f.vault.data[testMFAKeyAt]) != len(stored) || f.vault.data[testMFAKeyAt][domain.MFAKeyField] != stored[domain.MFAKeyField] ||
-			f.signIn.signIn[testOAuthProject].MFAEnabled || len(f.audit.entries) != 0 {
+			f.signIn.signIn[testOAuthProject].MFAEnabled {
 			t.Fatalf("stored %v: vault or switch changed", stored)
+		}
+		if len(f.audit.entries) != 1 || f.audit.entries[0].Details != `{"mfaEnabled":true,"outcome":"invalid_key"}` {
+			t.Fatalf("stored %v: audit = %+v", stored, f.audit.entries)
 		}
 	}
 }
@@ -138,8 +156,11 @@ func TestAuthMFA_AFailedKeyWriteLeavesTheSwitchOff(t *testing.T) {
 	if w := doJSON(f.router, http.MethodPut, testMFA, map[string]any{"enabled": true}); w.Code != http.StatusInternalServerError {
 		t.Fatalf("PUT: %d", w.Code)
 	}
-	if f.signIn.signIn[testOAuthProject].MFAEnabled || len(f.audit.entries) != 0 {
+	if f.signIn.signIn[testOAuthProject].MFAEnabled {
 		t.Fatal("the row claims a key the vault does not hold")
+	}
+	if len(f.audit.entries) != 1 || f.audit.entries[0].Details != `{"mfaEnabled":true,"outcome":"error"}` {
+		t.Fatalf("audit = %+v", f.audit.entries)
 	}
 }
 
@@ -240,5 +261,20 @@ func TestAuthMFA_InfoSaysOnOnlyWithTheFlagAndTheSwitch(t *testing.T) {
 	f.signIn.err = errors.New("db down")
 	if w := doJSON(f.router, http.MethodGet, testOAuthInfo, nil); w.Code == http.StatusOK {
 		t.Fatal("/info answered without knowing the switch")
+	}
+}
+
+// Two enables at once: the one that loses the conditional write uses the key
+// the winner stored and never writes its own.
+func TestAuthMFA_ALostRaceUsesTheStoredKey(t *testing.T) {
+	f := setupMFAHandler(t, features.AuthMFA)
+	winner, _ := domain.NewMFAKey()
+	racing := &racingVault{fakeVault: f.vault, winner: winner}
+	f.handler.authOAuth.Secrets = racing
+	if w := doJSON(f.router, http.MethodPut, testMFA, map[string]any{"enabled": true}); w.Code != http.StatusOK {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body.String())
+	}
+	if racing.reads != 2 || len(f.vault.data) != 0 || !f.signIn.signIn[testOAuthProject].MFAEnabled {
+		t.Fatalf("reads=%d wrote=%d on=%v", racing.reads, len(f.vault.data), f.signIn.signIn[testOAuthProject].MFAEnabled)
 	}
 }

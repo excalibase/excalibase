@@ -109,6 +109,9 @@ func (m *memAuthProviderStore) DeleteAuthProvider(_ context.Context, projectID, 
 type failingPutSecrets struct{ *fakeVault }
 
 func (failingPutSecrets) Put(string, map[string]string) error { return errors.New("vault sealed") }
+func (failingPutSecrets) PutIfAbsent(string, map[string]string) (bool, error) {
+	return false, errors.New("vault sealed")
+}
 
 type oauthFixture struct {
 	router    *chi.Mux

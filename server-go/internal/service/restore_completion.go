@@ -65,7 +65,7 @@ func registerVerifiedProject(
 	if inst.RestoredFromProjectID == "" {
 		return errors.New("restore: the copy does not name its source")
 	}
-	if err := reg.CarryRestoredSettings(ctx, inst.RestoredFromProjectID, projectID); err != nil {
+	if err := reg.CarryRestoredSettings(ctx, pc, inst.RestoredFromProjectID, projectID); err != nil {
 		return fmt.Errorf("carry the source's settings: %w", err)
 	}
 
