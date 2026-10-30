@@ -109,6 +109,24 @@ gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
 - With `APP_EGRESS=internet` each project network is created with netavark's
   `isolate` option, so a project's bridge cannot reach another's; without
   egress the networks are internal and have no route anywhere.
+- The host's own services (EXC-676): netavark refuses Docker's isolated
+  gateway, so project networks keep a bridge address, but rootless Podman keeps
+  that address inside its rootless network namespace: without egress an app
+  reaches no host service. With `APP_EGRESS=internet`, pasta forwards
+  `host.containers.internal` (169.254.1.2) to the host, so an app reaches host
+  services listening on the host's own addresses (not those on 127.0.0.1 only);
+  a host firewall cannot tell that traffic apart, so bind such services to
+  127.0.0.1 or keep egress off. Rootful Podman gives the bridge an address on
+  the host, and its resolver listens there, so drop everything but DNS (in
+  this order: each `-I` goes on top), and persist the rules:
+
+  ```bash
+  iptables -I INPUT -i podman+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+  iptables -I INPUT -i podman+ -p udp --dport 53 -j ACCEPT
+  iptables -I INPUT -i podman+ -p tcp --dport 53 -j ACCEPT
+  ```
+
+  Provisioning logs `WARN: app networks: ...` in both cases.
 - App hostnames carry the edge's port when it is above 1024
   (`https://<app>-<project>.apps.localhost:8443`).
 - The image's root directory may be read-only to an app without capabilities

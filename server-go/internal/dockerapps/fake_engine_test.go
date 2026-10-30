@@ -58,6 +58,13 @@ type fakeEngine struct {
 	pullErr    map[string]string
 	runtimes   []string
 	podman     bool
+	// rootful is a Podman run as root, whose bridges have an address on the host.
+	rootful bool
+	// gatewayMode is how the engine takes an isolated gateway: "" honours it (Docker 28+),
+	// "refuse" answers 400 (Docker 27), "ignore" gives the bridge an address anyway (Docker 26).
+	gatewayMode string
+	// removeErr fails every network removal.
+	removeErr error
 	// probeOK decides an exec of the probe; nil passes every probe.
 	probeOK func(c *fakeContainer) bool
 	// toolOutput is what a tool container prints for its command.
@@ -101,7 +108,11 @@ func (f *fakeEngine) Info(context.Context) (system.Info, error) {
 	for _, name := range f.runtimes {
 		runtimes[name] = system.RuntimeWithStatus{}
 	}
-	return system.Info{NCPU: 8, MemTotal: 16 << 30, Name: "host", Runtimes: runtimes}, nil
+	info := system.Info{NCPU: 8, MemTotal: 16 << 30, Name: "host", Runtimes: runtimes}
+	if f.podman && !f.rootful {
+		info.SecurityOptions = []string{"name=seccomp", "name=rootless"}
+	}
+	return info, nil
 }
 
 func (f *fakeEngine) ServerVersion(context.Context) (types.Version, error) {
@@ -339,6 +350,20 @@ func (f *fakeEngine) NetworkCreate(_ context.Context, name string, options netwo
 	if _, ok := f.networks[name]; ok {
 		return network.CreateResponse{}, errdefs.ErrConflict.WithMessage("network with name " + name + " already exists")
 	}
+	if options.Options[gatewayModeIPv4] == gatewayIsolated {
+		if f.podman {
+			return network.CreateResponse{}, errdefs.ErrInvalidArgument.WithMessage("netavark: unsupported bridge network option: " + gatewayModeIPv4)
+		}
+		if f.gatewayMode == "invalid" {
+			return network.CreateResponse{}, errdefs.ErrInvalidArgument.WithMessage("invalid label")
+		}
+		if f.gatewayMode == "forbid" {
+			return network.CreateResponse{}, errdefs.ErrPermissionDenied.WithMessage("refused by the engine proxy")
+		}
+		if f.gatewayMode == "refuse" {
+			return network.CreateResponse{}, errdefs.ErrInvalidArgument.WithMessage("unknown gateway mode isolated")
+		}
+	}
 	f.networks[name] = &fakeNetwork{options: options}
 	f.record("network create %s", name)
 	return network.CreateResponse{ID: name}, nil
@@ -352,11 +377,18 @@ func (f *fakeEngine) NetworkInspect(_ context.Context, name string, _ network.In
 		return network.Inspect{}, errdefs.ErrNotFound.WithMessage("network " + name + " not found")
 	}
 	members := map[string]network.EndpointResource{}
+	// As the engines do: a stopped container stays configured on the network but is not listed.
 	for _, id := range net.members {
-		members[id] = network.EndpointResource{Name: f.containers[id].name}
+		if member := f.containers[id]; member.state == "running" || member.state == "restarting" {
+			members[id] = network.EndpointResource{Name: member.name}
+		}
+	}
+	ipam := network.IPAM{Config: []network.IPAMConfig{{Subnet: "172.30.0.0/16", Gateway: "172.30.0.1"}}}
+	if net.options.Options[gatewayModeIPv4] == gatewayIsolated && f.gatewayMode == "" {
+		ipam.Config[0].Gateway = ""
 	}
 	return network.Inspect{Name: name, Internal: net.options.Internal, Options: net.options.Options, Labels: net.options.Labels,
-		Containers: members}, nil
+		Containers: members, IPAM: ipam}, nil
 }
 
 func (f *fakeEngine) NetworkRemove(_ context.Context, name string) error {
@@ -365,6 +397,9 @@ func (f *fakeEngine) NetworkRemove(_ context.Context, name string) error {
 	net, ok := f.networks[name]
 	if !ok {
 		return errdefs.ErrNotFound
+	}
+	if f.removeErr != nil {
+		return f.removeErr
 	}
 	if len(net.members) > 0 {
 		return errdefs.ErrPermissionDenied.WithMessage("network has active endpoints")

@@ -40,9 +40,17 @@ func networkCreateBody(t *testing.T, mutate func(map[string]any)) []byte {
 func TestCheckNetworkCreateAllowsAProjectNetwork(t *testing.T) {
 	policy := appsPolicy()
 	for name, body := range map[string][]byte{
-		"internal":           networkCreateBody(t, nil),
-		"with egress":        networkCreateBody(t, func(b map[string]any) { b["Internal"] = false }),
-		"isolated (podman)":  networkCreateBody(t, func(b map[string]any) { b["Options"] = map[string]any{"isolate": "true"} }),
+		"internal":          networkCreateBody(t, nil),
+		"with egress":       networkCreateBody(t, func(b map[string]any) { b["Internal"] = false }),
+		"isolated (podman)": networkCreateBody(t, func(b map[string]any) { b["Options"] = map[string]any{"isolate": "true"} }),
+		// EXC-671: an internal network whose bridge has no address on the host, so nothing on it reaches the host.
+		"no host address": networkCreateBody(t, func(b map[string]any) {
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv4": "isolated"}
+		}),
+		"no host address, either family": networkCreateBody(t, func(b map[string]any) {
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv4": "isolated",
+				"com.docker.network.bridge.gateway_mode_ipv6": "isolated"}
+		}),
 		"default driver":     networkCreateBody(t, func(b map[string]any) { b["Driver"] = "" }),
 		"old client dedupe":  networkCreateBody(t, func(b map[string]any) { b["CheckDuplicate"] = true }),
 		"empty IPAM by SDKs": networkCreateBody(t, func(b map[string]any) { b["IPAM"] = map[string]any{"Driver": "", "Config": nil} }),
@@ -67,11 +75,25 @@ func TestCheckNetworkCreateRefuses(t *testing.T) {
 		}, "IPAM"},
 		"driver options": {func(b map[string]any) { b["Options"] = map[string]any{"com.docker.network.bridge.name": "eth0"} }, "Options"},
 		"isolate off":    {func(b map[string]any) { b["Options"] = map[string]any{"isolate": "false"} }, "Options"},
-		"swarm scope":    {func(b map[string]any) { b["Scope"] = "swarm" }, "Scope"},
-		"ingress":        {func(b map[string]any) { b["Ingress"] = true }, "Ingress"},
-		"config from":    {func(b map[string]any) { b["ConfigFrom"] = map[string]any{"Network": "excalibase-platform"} }, "ConfigFrom"},
-		"ipv6":           {func(b map[string]any) { b["EnableIPv6"] = true }, "EnableIPv6"},
-		"unknown field":  {func(b map[string]any) { b["Future"] = "x" }, "Future"},
+		"a routed gateway": {func(b map[string]any) {
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv4": "routed"}
+		}, "Options"},
+		"no host address with egress": {func(b map[string]any) {
+			b["Internal"] = false
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv4": "isolated"}
+		}, "internal"},
+		"no IPv6 host address with egress": {func(b map[string]any) {
+			b["Internal"] = false
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv6": "isolated"}
+		}, "internal"},
+		"a routed IPv6 gateway": {func(b map[string]any) {
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv6": "routed"}
+		}, "Options"},
+		"swarm scope":   {func(b map[string]any) { b["Scope"] = "swarm" }, "Scope"},
+		"ingress":       {func(b map[string]any) { b["Ingress"] = true }, "Ingress"},
+		"config from":   {func(b map[string]any) { b["ConfigFrom"] = map[string]any{"Network": "excalibase-platform"} }, "ConfigFrom"},
+		"ipv6":          {func(b map[string]any) { b["EnableIPv6"] = true }, "EnableIPv6"},
+		"unknown field": {func(b map[string]any) { b["Future"] = "x" }, "Future"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

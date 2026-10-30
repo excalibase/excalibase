@@ -216,6 +216,7 @@ with the edge's own CA (`EXCALIBASE_TLS=internal`), as soon as it is routed.
 | Between projects | NetworkPolicy | one internal network per project (`excalibase-net-<project>`): only its apps, its database and the edge are on it |
 | Between a project's apps | closed until the project turns its private network on | always open: they share the project's network, and the private-network switch is not offered |
 | Internet from an app | allowed, private ranges denied | none; `APP_EGRESS=internet` in `.env` gives every project's network a route out (Podman: an isolated bridge) |
+| The host's own services | not reachable | not reachable on Docker 28 or later without egress (see Host isolation) |
 | Disk | a volume of the size asked | a named volume (`excalibase-vol-...`) on the host's disk; the size is recorded, not enforced by the filesystem |
 | Readiness | kubelet probe | the platform's probe, copied into the container, on the app's health check path |
 | Rollout | rolling update; with a disk, recreate | the same: new containers beside the old, the route moves when they are ready |
@@ -228,6 +229,38 @@ docker network ls --filter label=excalibase.managed=true
 docker volume ls --filter label=excalibase.managed=true
 docker compose exec edge ls /etc/caddy/apps            # one route file per app
 ```
+
+**Host isolation (EXC-676).** A bridge network normally has an address on the
+host, and a container can connect through it to anything listening on all of
+the host's addresses (sshd, a local database), internal network or not. On
+Docker 28 or later provisioning makes project networks with no address on the
+host (`com.docker.network.bridge.gateway_mode_ipv4=isolated`, and `_ipv6` for
+a daemon that enables IPv6 by default); containers on a network still reach
+each other and the edge reaches its apps by name. It checks this at start and
+logs `WARN: app networks: ...` where it cannot hold:
+
+- Docker before 28: upgrade, or drop new connections from container bridges to
+  the host:
+
+  ```bash
+  iptables  -I INPUT -i br-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+  ip6tables -I INPUT -i br-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+  ```
+
+  This covers every Docker network on the host, the bundle's own included
+  (nothing in the bundle connects to the host; anything else of yours using
+  `host-gateway` would stop working). Persist the rules (`iptables-persistent`,
+  or your firewalld/nftables setup): they are gone after a reboot.
+- `APP_EGRESS=internet`: an isolated gateway cannot route out, so egress
+  networks keep their address on the host; add the same rules.
+
+Upgrading from a release before this one: on start, and on every network
+reconcile, provisioning remakes each older project network (and any made with
+`APP_EGRESS` other than it is now) (an engine cannot
+change a network's options): it takes the apps, the database and the edge off,
+removes the network, makes it again and puts them back. Apps are not restarted
+and no data is touched; open connections to an app are dropped once, and an
+app that bound to its old container address (not `0.0.0.0`) needs a redeploy.
 
 Deleting a project removes its apps' containers, disks, routes and network.
 Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
