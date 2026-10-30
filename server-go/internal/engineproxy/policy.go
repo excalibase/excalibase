@@ -122,6 +122,13 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 	if err := json.Unmarshal(body, &create); err != nil {
 		return refuse("container create body: %v", err)
 	}
+	var fields map[string]any
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return refuse("container create body: %v", err)
+	}
+	if err := checkCreateSpelling(fields); err != nil {
+		return err
+	}
 	if create.Labels[p.ManagedLabel] != "true" {
 		return refuse("container must carry the label %s=true", p.ManagedLabel)
 	}
@@ -171,7 +178,7 @@ func (p Policy) checkHostConfigField(field string, value any) error {
 	if value != nil && slices.Contains(unmaskingFields, field) {
 		return refuse("HostConfig.%s may not be set", field)
 	}
-	if isZero(value) {
+	if isUnset(value) {
 		return nil
 	}
 	check, known := hostConfigFields[field]
@@ -183,11 +190,11 @@ func (p Policy) checkHostConfigField(field string, value any) error {
 
 // CheckExecCreate refuses an exec that asks for extended privileges.
 func CheckExecCreate(body []byte) error {
-	var exec struct{ Privileged bool }
-	if err := json.Unmarshal(body, &exec); err != nil {
-		return refuse("exec create body: %v", err)
+	exec, err := decodeSpelled("exec create", body, execNames...)
+	if err != nil {
+		return err
 	}
-	if exec.Privileged {
+	if !isZero(exec["Privileged"]) {
 		return refuse("exec may not be Privileged")
 	}
 	return nil
@@ -239,6 +246,9 @@ func checkPortBindings(p Policy, value any) error {
 		entries, _ := list.([]any)
 		for _, entry := range entries {
 			binding, _ := entry.(map[string]any)
+			if err := onlyFields("port binding", binding, "HostIp", "HostPort"); err != nil {
+				return err
+			}
 			hostIP, _ := binding["HostIp"].(string)
 			if !slices.Contains(p.PortBindIPs, hostIP) {
 				return refuse("port %s may not be published on %q", port, hostIP)
@@ -280,13 +290,13 @@ func checkMounts(p Policy, value any) error {
 	mounts, _ := value.([]any)
 	for _, entry := range mounts {
 		mount, _ := entry.(map[string]any)
+		if err := checkMountFields(mount); err != nil {
+			return err
+		}
 		kind, _ := mount["Type"].(string)
 		switch kind {
 		case "tmpfs":
 		case "volume":
-			if options, _ := mount["VolumeOptions"].(map[string]any); !isZero(options["DriverConfig"]) {
-				return refuse("mount of %v sets a volume driver; only plain named volumes may be mounted", mount["Source"])
-			}
 			if source, _ := mount["Source"].(string); source != "" {
 				if err := p.checkVolumeName(source); err != nil {
 					return err
@@ -297,6 +307,25 @@ func checkMounts(p Policy, value any) error {
 		}
 	}
 	return nil
+}
+
+// mountFields are what a named volume or tmpfs mount may set; bind, image and cluster options
+// may not, and a volume driver may not be named.
+var mountFields = []string{"Type", "Source", "Target", "ReadOnly", "Consistency", "VolumeOptions", "TmpfsOptions"}
+
+func checkMountFields(mount map[string]any) error {
+	if err := onlyFields("mount", mount, mountFields...); err != nil {
+		return err
+	}
+	volume, _ := mount["VolumeOptions"].(map[string]any)
+	if !isZero(volume["DriverConfig"]) {
+		return refuse("mount of %v sets a volume driver; only plain named volumes may be mounted", mount["Source"])
+	}
+	if err := onlyFields("mount VolumeOptions", volume, "NoCopy", "Labels"); err != nil {
+		return err
+	}
+	tmpfs, _ := mount["TmpfsOptions"].(map[string]any)
+	return onlyFields("mount TmpfsOptions", tmpfs, "SizeBytes", "Mode")
 }
 
 // checkSecurityOpt admits options that only tighten the container.
@@ -313,6 +342,9 @@ func checkSecurityOpt(_ Policy, value any) error {
 
 func checkLogConfig(_ Policy, value any) error {
 	config, _ := value.(map[string]any)
+	if err := onlyFields("HostConfig.LogConfig", config, "Type", "Config"); err != nil {
+		return err
+	}
 	kind, _ := config["Type"].(string)
 	if kind == "" || kind == "json-file" || kind == "local" || kind == "k8s-file" || kind == "journald" {
 		return nil
@@ -328,6 +360,15 @@ func privateOnly(field string, modes ...string) hostConfigCheck {
 		}
 		return refuse("HostConfig.%s %q is not allowed", field, mode)
 	}
+}
+
+// isUnset is isZero for a field the proxy does not admit: a map with any key is set there,
+// as the engine reads Sysctls {"k": ""} as one sysctl.
+func isUnset(value any) bool {
+	if object, isObject := value.(map[string]any); isObject && len(object) > 0 {
+		return false
+	}
+	return isZero(value)
 }
 
 // isZero reports a JSON value the engine treats as unset.
