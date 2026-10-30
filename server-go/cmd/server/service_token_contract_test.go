@@ -43,7 +43,8 @@ import (
 // passes those verbatim to the token-minting endpoint (svc-auth's provider
 // secret read is appended there only with features.authOAuth, the guest
 // Turnstile secret read only with features.authGuest, the auth hook signing
-// secret read only with features.authHooks). This is the only copy
+// secret read only with features.authHooks, the MFA key read only with
+// features.authMfa). This is the only copy
 // in the package; the other cmd/server authz tests read it from here.
 var chartPermissions = map[string][]string{
 	svcAuth: {
@@ -52,6 +53,7 @@ var chartPermissions = map[string][]string{
 		"vault:read:projects/*/auth/providers/*",
 		"vault:read:projects/*/auth/captcha",
 		"vault:read:projects/*/auth/hooks",
+		"vault:read:projects/*/auth/mfa",
 		"projects:info:read",
 		"email:send",
 	},
@@ -77,8 +79,10 @@ const (
 	// contractHooksSecretPath is where it reads the auth hook signing secret.
 	contractHooksSecretPath = "/api/vault/secrets/projects/" + contractProject + "/auth/hooks"
 	contractHooksSecret     = "contract-hook-secret"
-	svcAuthUserID           = "svc-auth-1"
-	svcGraphqlUser          = "svc-graphql-1"
+	// contractMFAKeyPath is where it reads the key that seals TOTP secrets.
+	contractMFAKeyPath = "/api/vault/secrets/projects/" + contractProject + "/auth/mfa"
+	svcAuthUserID      = "svc-auth-1"
+	svcGraphqlUser     = "svc-graphql-1"
 )
 
 // serviceCall is one control-plane endpoint a service principal depends on.
@@ -99,6 +103,7 @@ var platformCalls = []serviceCall{
 	{svcAuth, http.MethodGet, contractProviderSecretPath, "vault:read:projects/proj-a/auth/providers/github", "auth OAuth client secret (EXC-662)"},
 	{svcAuth, http.MethodGet, contractCaptchaSecretPath, "vault:read:projects/proj-a/auth/captcha", "auth guest Turnstile secret (EXC-662)"},
 	{svcAuth, http.MethodGet, contractHooksSecretPath, "vault:read:projects/proj-a/auth/hooks", "auth hook signing secret (EXC-662)"},
+	{svcAuth, http.MethodGet, contractMFAKeyPath, "vault:read:projects/proj-a/auth/mfa", "auth MFA key (EXC-662)"},
 	{svcAuth, http.MethodPost, "/internal/email/send", "email:send", "auth mail relay"},
 
 	// Every capability token may read its own identity.
@@ -116,6 +121,7 @@ var forbiddenCalls = []serviceCall{
 	{svcGraphql, http.MethodGet, contractProviderSecretPath, "", "a project's OAuth client secret"},
 	{svcGraphql, http.MethodGet, contractCaptchaSecretPath, "", "a project's Turnstile secret"},
 	{svcGraphql, http.MethodGet, contractHooksSecretPath, "", "a project's hook signing secret"},
+	{svcGraphql, http.MethodGet, contractMFAKeyPath, "", "a project's MFA key"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/rls-policies/", "", "the removed row-policy store"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/column-policies/", "", "the removed column-policy store"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/table-grants/", "", "the removed table-grant store"},
@@ -182,6 +188,9 @@ func contractRouterWithProjectStatus(t *testing.T, status string) (http.Handler,
 	}
 	if err := localVault.Put(domain.AuthHooksSecretPath(contractProject), map[string]string{"secret": contractHooksSecret}); err != nil {
 		t.Fatalf("seed hook secret: %v", err)
+	}
+	if err := localVault.Put(domain.MFAKeyPath(contractProject), map[string]string{domain.MFAKeyField: contractMFAKey}); err != nil {
+		t.Fatalf("seed mfa key: %v", err)
 	}
 	instances := fakestore.NewInstances()
 	instances.Create(&domain.DatabaseInstance{ProjectID: contractProject, OrgID: matrixOrgA, Status: status})
@@ -331,5 +340,24 @@ func TestAuthServiceReadsTheHookSecretAsAFlatObject(t *testing.T) {
 	}
 	if len(body) != 1 || body["secret"] != contractHooksSecret {
 		t.Fatalf("body = %s", w.Body.String())
+	}
+}
+
+// contractMFAKey is a fixture, base64 of 32 zero bytes.
+const contractMFAKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+// EXC-662: the auth service decodes {"key"} from the MFA key read.
+func TestAuthServiceReadsTheMFAKeyAsAFlatObject(t *testing.T) {
+	router, who := contractRouter(t)
+	w := contractRequest(router, serviceCall{caller: svcAuth, method: http.MethodGet, path: contractMFAKeyPath}, who[svcAuth])
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d", w.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body) != 1 || body["key"] != contractMFAKey {
+		t.Fatalf("the body is not {\"key\"} with the stored key")
 	}
 }

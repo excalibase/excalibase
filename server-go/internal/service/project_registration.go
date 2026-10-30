@@ -70,6 +70,9 @@ func (s *ProvisioningService) CarryRestoredSettings(ctx context.Context, sourceI
 	if err := s.restoredSettings.CopyRestoredSettings(ctx, sourceID, targetID); err != nil {
 		return err
 	}
+	if err := s.carryMFAKey(ctx, sourceID, targetID); err != nil {
+		return err
+	}
 	// The schema arrives with the data; the history that built it does not.
 	if err := s.migrationHistory.CopyMigrationHistory(sourceID, targetID); err != nil {
 		return err

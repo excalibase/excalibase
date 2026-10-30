@@ -9,6 +9,7 @@ import { AuthHooksCard } from '../components/auth/AuthHooksCard';
 import { AuthProvidersCard } from '../components/auth/AuthProvidersCard';
 import { EmailSignInCard } from '../components/auth/EmailSignInCard';
 import { GuestSignInCard } from '../components/auth/GuestSignInCard';
+import { MFACard } from '../components/auth/MFACard';
 import { RedirectUrlsCard } from '../components/auth/RedirectUrlsCard';
 import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { serverErrorMessage } from '../utils/serverError';
@@ -97,6 +98,7 @@ export function AuthSettingsPage() {
   const { enabled: otpOn } = useFeatureEnabled('authotp');
   const { enabled: guestOn } = useFeatureEnabled('authguest');
   const { enabled: hooksOn } = useFeatureEnabled('authhooks');
+  const { enabled: mfaOn } = useFeatureEnabled('authmfa');
 
   if (isLoading) {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
@@ -116,6 +118,7 @@ export function AuthSettingsPage() {
         </div>
       )}
       {hooksOn && projectId && <div className="mt-8"><AuthHooksCard projectId={projectId} /></div>}
+      {mfaOn && data && <div className="mt-8"><MFACard projectId={projectId || ''} settings={data} /></div>}
     </div>
   );
 }

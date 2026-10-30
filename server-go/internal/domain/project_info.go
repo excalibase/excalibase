@@ -34,6 +34,9 @@ type ProjectInfo struct {
 	// StableSubject is sent, as true, only while the authguest flag is on:
 	// the auth service then signs sub as the account id, not its address.
 	StableSubject *bool `json:"stableSubject,omitempty"`
+	// MFAEnabled is sent, as true, only while the authmfa flag is on and the
+	// project switched MFA on; the key is in the vault, never here.
+	MFAEnabled *bool `json:"mfaEnabled,omitempty"`
 	// AuthHooks is sent only while the authhooks flag is on, then always
 	// (possibly {}); nil keeps the key off the wire.
 	AuthHooks *AuthHooksInfo `json:"authHooks,omitempty"`
