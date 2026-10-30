@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -33,6 +34,8 @@ func startLoki(t *testing.T) string {
 			Image:        lokiImage,
 			ExposedPorts: []string{"3100/tcp"},
 			Cmd:          []string{"-config.file=/etc/loki/loki.yaml", "-target=all"},
+			// The chart mounts its volume at /var/loki; Loki runs as 10001.
+			Tmpfs: map[string]string{"/var/loki": "rw,uid=10001,gid=10001"},
 			Files: []testcontainers.ContainerFile{{HostFilePath: filepath.Join(filepath.Dir(here), "testdata", "loki.yaml"),
 				ContainerFilePath: "/etc/loki/loki.yaml", FileMode: 0o644}},
 			WaitingFor: wait.ForHTTP("/ready").WithPort("3100/tcp").WithStartupTimeout(120 * time.Second),
@@ -64,6 +67,38 @@ func push(t *testing.T, lokiURL string, labels map[string]string, lines ...strin
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("push answered %d", resp.StatusCode)
 	}
+}
+
+// flush moves the ingester's lines to storage, where they are by the time a
+// production delete request outlives its cancel period.
+func flush(t *testing.T, lokiURL string) {
+	t.Helper()
+	resp, err := http.Post(lokiURL+"/flush", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("flush answered %d", resp.StatusCode)
+	}
+}
+
+// namespaces lists the label's values without a log query: a query would
+// cache the tenant's delete requests in the querier for five minutes.
+func labelValues(t *testing.T, lokiURL, label string) []string {
+	t.Helper()
+	resp, err := http.Get(lokiURL + "/loki/api/v1/label/" + label + "/values?start=" + strconv.FormatInt(time.Now().Add(-time.Hour).UnixNano(), 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Data []string `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body.Data
 }
 
 func countLines(t *testing.T, lokiURL, selector string) int {
@@ -107,13 +142,14 @@ func TestRealLokiDeletesOnlyTheProjectsLines(t *testing.T) {
 	for name, labels := range streams {
 		push(t, lokiURL, labels, name+" one", name+" two")
 	}
+	flush(t, lokiURL)
 	inst := &domain.DatabaseInstance{ProjectID: "proj-a", Namespace: "org1-proj-a", DeploymentMode: domain.ModeK8s}
 	selector, err := ProjectSelector(inst)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := countLines(t, lokiURL, selector); got != 4 {
-		t.Fatalf("before: %d lines of %s", got, selector)
+	if got := labelValues(t, lokiURL, "namespace"); !slices.Contains(got, "org1-proj-a") {
+		t.Fatalf("before: namespaces %v", got)
 	}
 
 	store := newMemStore(Deletion{ProjectID: "proj-a", Selector: selector, State: StatePending,
