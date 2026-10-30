@@ -97,12 +97,18 @@ func (s *PostgresStore) ClaimNext(ctx context.Context, slots int, holder string,
 		return nil, fmt.Errorf("take the dispatch lock: %w", err)
 	}
 	var id string
+	// One build at a time per site and scope (production, or one preview). Production builds count
+	// against the plan's concurrency; previews against PreviewsRunningPerProject on their own, so a
+	// flood of pull requests holds at most that many install slots and never a production build back.
 	err = tx.QueryRowContext(ctx, `SELECT queued.id FROM site_builds queued
 		WHERE queued.status = 'QUEUED'
 		  AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING') < $1
-		  AND NOT EXISTS (SELECT 1 FROM site_builds WHERE status = 'RUNNING' AND site_id = queued.site_id)
-		  AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING' AND project_id = queued.project_id) < queued.project_concurrency
-		ORDER BY queued.created_at LIMIT 1 FOR UPDATE SKIP LOCKED`, slots).Scan(&id)
+		  AND NOT EXISTS (SELECT 1 FROM site_builds WHERE status = 'RUNNING' AND site_id = queued.site_id
+		    AND preview_id IS NOT DISTINCT FROM queued.preview_id)
+		  AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING' AND project_id = queued.project_id
+		    AND (preview_id IS NULL) = (queued.preview_id IS NULL))
+		    < CASE WHEN queued.preview_id IS NULL THEN queued.project_concurrency ELSE $2 END
+		ORDER BY queued.created_at LIMIT 1 FOR UPDATE SKIP LOCKED`, slots, PreviewsRunningPerProject).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

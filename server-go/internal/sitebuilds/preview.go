@@ -20,6 +20,10 @@ const (
 	PreviewModeBranches = "branches"
 )
 
+// PreviewsRunningPerProject is how many preview builds of one project run at once, apart from its
+// production builds; the rest wait in the queue (EXC-660).
+const PreviewsRunningPerProject = 1
+
 const (
 	// statusTimeout bounds posting a commit status; it is a courtesy, never a reason to fail.
 	statusTimeout = 30 * time.Second

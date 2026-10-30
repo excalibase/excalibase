@@ -42,3 +42,7 @@ ALTER TABLE site_builds ADD COLUMN preview_id TEXT REFERENCES site_previews(id) 
 ALTER TABLE site_builds DROP CONSTRAINT IF EXISTS site_builds_trigger_check;
 ALTER TABLE site_builds ADD CONSTRAINT site_builds_trigger_check CHECK (trigger IN ('push', 'rebuild', 'preview'));
 CREATE INDEX IF NOT EXISTS idx_site_builds_preview ON site_builds(preview_id) WHERE preview_id IS NOT NULL;
+
+-- One running build per site and scope: a preview builds beside the site's production build.
+DROP INDEX IF EXISTS idx_site_builds_one_running;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_site_builds_one_running ON site_builds(site_id, COALESCE(preview_id, '')) WHERE status = 'RUNNING';
