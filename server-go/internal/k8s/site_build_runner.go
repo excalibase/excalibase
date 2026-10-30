@@ -43,7 +43,7 @@ var _ sitebuilds.Runner = (*SiteBuildRunner)(nil)
 
 func NewSiteBuildRunner(client *Client, options SiteBuildOptions) *SiteBuildRunner {
 	return &SiteBuildRunner{options: options, buildJobs: &buildJobs{
-		client: client, namespace: options.Namespace, prefix: "site-build-", secretSuffixes: []string{"-env", "-git"},
+		client: client, namespace: options.Namespace, prefix: "site-build-", secretSuffixes: []string{"-env", cloneSecretSuffix},
 		steps: siteBuildLogSteps, collectStep: siteBuildCollect, archivePath: siteBuildArchivePath, stream: client.execStream, component: siteBuildComponent, kindOf: stepFailureKind,
 	}}
 }

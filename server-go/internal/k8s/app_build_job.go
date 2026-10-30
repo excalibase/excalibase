@@ -280,7 +280,7 @@ func appBuildVolumes(spec appbuilds.RunSpec) []corev1.Volume {
 		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &tmp}}},
 		{Name: "scripts", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: appBuildScriptsName}}}},
-		{Name: "git-token", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name + "-git"}}},
+		{Name: "git-token", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name + cloneSecretSuffix}}},
 		{Name: "build-secrets", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name + "-secrets"}}},
 	}
 }
@@ -294,7 +294,7 @@ func renderAppBuildSecrets(options AppBuildOptions, spec appbuilds.RunSpec) (*co
 	}
 	name := appBuildName(spec.BuildID)
 	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-secrets", Namespace: options.Namespace, Labels: labels}, StringData: values},
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-git", Namespace: options.Namespace, Labels: labels},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + cloneSecretSuffix, Namespace: options.Namespace, Labels: labels},
 			StringData: map[string]string{"token": spec.CloneToken}}
 }
 

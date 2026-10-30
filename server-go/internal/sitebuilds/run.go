@@ -84,6 +84,8 @@ type RunStatus struct {
 	Detail   string
 	// CloneDone is the clone step finished; its credential is no longer needed.
 	CloneDone bool
+	// StartFailed is a step the sandbox could not start (runsc's StartError): not the build's fault, worth one retry.
+	StartFailed bool
 }
 
 // Runner runs builds on the cluster.
