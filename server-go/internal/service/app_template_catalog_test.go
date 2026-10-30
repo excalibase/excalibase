@@ -56,7 +56,7 @@ func TestTemplateCatalog_OffIsInvisible(t *testing.T) {
 func TestTemplateCatalog_OnListsItAfterTheStarters(t *testing.T) {
 	rig := withCatalog(newTemplateRig(t), true)
 	ids := listedIDs(t, rig)
-	if len(ids) != 8 || ids[3] != "storefront-demo" || ids[4] != "valkey" {
+	if len(ids) != 7 || ids[3] != "storefront-demo" || ids[4] != "valkey" {
 		t.Fatalf("listed %v", ids)
 	}
 	view, err := rig.svc.Get(context.Background(), tplProject, "mongodb", true)

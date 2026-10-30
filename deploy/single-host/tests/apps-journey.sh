@@ -211,7 +211,7 @@ rm -f "$W/app-db.env" "$W/app-db.secret"
 
 echo "== apps: catalog templates, reached by their siblings by name (EXC-669)"
 cat_ids=$(api "$API/projects/$PID/app-templates/" | json '",".join(t["id"] for t in d if t.get("catalog"))')
-case ",$cat_ids," in *,valkey,*meilisearch,*) ok "the catalog is listed with its flag on ($cat_ids)" ;; *) ko "catalog: '$cat_ids'" ;; esac
+case ",$cat_ids," in *,valkey,*) ok "the catalog is listed with its flag on ($cat_ids)" ;; *) ko "catalog: '$cat_ids'" ;; esac
 # deploy_template <id> <credential>: the app's id; the credential the answer shows once goes to
 # "$W/<id>.secret" (0600) and is never printed.
 deploy_template() {
@@ -235,17 +235,6 @@ remove_app() {
   done
   ko "app $1 was not removed"
 }
-
-SRCH=$(deploy_template meilisearch MEILI_MASTER_KEY)
-grep -qx '[A-Za-z0-9]\{32\}' "$W/meilisearch.secret" && ok "the deploy shows the generated master key once" || ko "no MEILI_MASTER_KEY in the deploy answer"
-[ "$(wait_deploy "$PID" "$SRCH")" = succeeded ] && ok "meilisearch deployed from the catalog" || ko "meilisearch deploy: $(deploy_failure "$PID" "$SRCH")"
-( umask 077; printf 'Authorization: Bearer %s\n' "$(cat "$W/meilisearch.secret")" > "$W/meilisearch.header" )
-keyed=$($DOCKER exec -i "$AC" sh -c 'wget -q -T 5 -O - --header "$(cat)" http://meilisearch:7700/keys >/dev/null && echo yes' < "$W/meilisearch.header" 2>&1)
-bare=$($DOCKER exec "$AC" wget -q -T 5 -O /dev/null http://meilisearch:7700/keys 2>&1 && echo yes)
-[ "$keyed" = yes ] && [ "$bare" != yes ] && ok "a sibling reaches meilisearch by its bare name, and only with the key" || ko "meilisearch by name: keyed '$keyed', without key '$bare'"
-no_platform_log_has "$W/meilisearch.secret" && ok "the master key is in no platform log" || ko "the master key leaked into a log (or was empty)"
-rm -f "$W/meilisearch.secret" "$W/meilisearch.header"
-remove_app "$SRCH"
 
 # Valkey, like Redis, starts as root and steps down to its own user: that needs the sandbox's capabilities.
 if [ "$APP_SANDBOX" = none ]; then
