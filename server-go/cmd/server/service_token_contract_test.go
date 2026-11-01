@@ -42,7 +42,8 @@ import (
 // excalibase-service charts/platform-aio/values.yaml — the bootstrap Job
 // passes those verbatim to the token-minting endpoint (svc-auth's provider
 // secret read is appended there only with features.authOAuth, the guest
-// Turnstile secret read only with features.authGuest). This is the only copy
+// Turnstile secret read only with features.authGuest, the auth hook signing
+// secret read only with features.authHooks). This is the only copy
 // in the package; the other cmd/server authz tests read it from here.
 var chartPermissions = map[string][]string{
 	svcAuth: {
@@ -50,6 +51,7 @@ var chartPermissions = map[string][]string{
 		"vault:read:projects/*/credentials/auth_admin",
 		"vault:read:projects/*/auth/providers/*",
 		"vault:read:projects/*/auth/captcha",
+		"vault:read:projects/*/auth/hooks",
 		"projects:info:read",
 		"email:send",
 	},
@@ -72,8 +74,11 @@ const (
 	// contractCaptchaSecretPath is where it reads the guest Turnstile secret.
 	contractCaptchaSecretPath = "/api/vault/secrets/projects/" + contractProject + "/auth/captcha"
 	contractCaptchaSecret     = "contract-turnstile-secret"
-	svcAuthUserID             = "svc-auth-1"
-	svcGraphqlUser            = "svc-graphql-1"
+	// contractHooksSecretPath is where it reads the auth hook signing secret.
+	contractHooksSecretPath = "/api/vault/secrets/projects/" + contractProject + "/auth/hooks"
+	contractHooksSecret     = "contract-hook-secret"
+	svcAuthUserID           = "svc-auth-1"
+	svcGraphqlUser          = "svc-graphql-1"
 )
 
 // serviceCall is one control-plane endpoint a service principal depends on.
@@ -93,6 +98,7 @@ var platformCalls = []serviceCall{
 	{svcAuth, http.MethodGet, "/api/projects/proj-a/info", "projects:info:read", "auth pool.Manager GetProjectInfo"},
 	{svcAuth, http.MethodGet, contractProviderSecretPath, "vault:read:projects/proj-a/auth/providers/github", "auth OAuth client secret (EXC-662)"},
 	{svcAuth, http.MethodGet, contractCaptchaSecretPath, "vault:read:projects/proj-a/auth/captcha", "auth guest Turnstile secret (EXC-662)"},
+	{svcAuth, http.MethodGet, contractHooksSecretPath, "vault:read:projects/proj-a/auth/hooks", "auth hook signing secret (EXC-662)"},
 	{svcAuth, http.MethodPost, "/internal/email/send", "email:send", "auth mail relay"},
 
 	// Every capability token may read its own identity.
@@ -109,6 +115,7 @@ var forbiddenCalls = []serviceCall{
 	{svcGraphql, http.MethodGet, "/api/vault/secrets/pki/signing/private", "", "the platform signing key"},
 	{svcGraphql, http.MethodGet, contractProviderSecretPath, "", "a project's OAuth client secret"},
 	{svcGraphql, http.MethodGet, contractCaptchaSecretPath, "", "a project's Turnstile secret"},
+	{svcGraphql, http.MethodGet, contractHooksSecretPath, "", "a project's hook signing secret"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/rls-policies/", "", "the removed row-policy store"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/column-policies/", "", "the removed column-policy store"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/table-grants/", "", "the removed table-grant store"},
@@ -123,6 +130,8 @@ var forbiddenCalls = []serviceCall{
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/credentials", "", "the project's own credentials"},
 
 	{svcAuth, http.MethodGet, "/api/vault/secrets/projects/proj-a/credentials/excalibase_app", "", "the engine's role"},
+	{svcAuth, http.MethodGet, contractHooksSecretPath + "/extra", "", "anything below the hook secret"},
+	{svcAuth, http.MethodGet, "/api/vault/secrets/projects/proj-a/credentials/admin", "", "the project owner's role"},
 	{svcAuth, http.MethodGet, "/api/provision/proj-a/permissions/", "", "the permission document"},
 	{svcAuth, http.MethodPost, "/api/auth/tokens", "", "minting further tokens"},
 	{svcAuth, http.MethodGet, "/api/admin/projects", "", "the platform admin surface"},
@@ -170,6 +179,9 @@ func contractRouterWithProjectStatus(t *testing.T, status string) (http.Handler,
 	}
 	if err := localVault.Put(domain.GuestCaptchaSecretPath(contractProject), map[string]string{"secret_key": contractCaptchaSecret}); err != nil {
 		t.Fatalf("seed captcha secret: %v", err)
+	}
+	if err := localVault.Put(domain.AuthHooksSecretPath(contractProject), map[string]string{"secret": contractHooksSecret}); err != nil {
+		t.Fatalf("seed hook secret: %v", err)
 	}
 	instances := fakestore.NewInstances()
 	instances.Create(&domain.DatabaseInstance{ProjectID: contractProject, OrgID: matrixOrgA, Status: status})
@@ -302,6 +314,22 @@ func TestAuthServiceReadsTheCaptchaSecretAsAFlatObject(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(body) != 1 || body["secret_key"] != contractCaptchaSecret {
+		t.Fatalf("body = %s", w.Body.String())
+	}
+}
+
+// EXC-662: the auth service decodes {"secret"} from the hook secret read.
+func TestAuthServiceReadsTheHookSecretAsAFlatObject(t *testing.T) {
+	router, who := contractRouter(t)
+	w := contractRequest(router, serviceCall{caller: svcAuth, method: http.MethodGet, path: contractHooksSecretPath}, who[svcAuth])
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body) != 1 || body["secret"] != contractHooksSecret {
 		t.Fatalf("body = %s", w.Body.String())
 	}
 }

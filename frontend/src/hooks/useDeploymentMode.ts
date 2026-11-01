@@ -20,7 +20,8 @@ export type Feature =
   | 'authguest'
   // On only on a single-host Docker/Podman install (EXC-670).
   | 'hostmetrics'
-  | 'sitesserver';
+  | 'sitesserver'
+  | 'authhooks';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;

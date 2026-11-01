@@ -58,11 +58,14 @@ const (
 	// SitesServer is server-rendered sites: a site of kind server runs its
 	// build's Worker code beside its assets (ADR 0045, EXC-661). Needs Sites.
 	SitesServer Feature = "sitesserver"
+	// AuthHooks is end-user auth hooks: signed HTTPS calls the auth service
+	// makes to the project's own endpoints (custom claims, sign-up, mail).
+	AuthHooks Feature = "authhooks"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks}
 }
 
 type Flags interface {

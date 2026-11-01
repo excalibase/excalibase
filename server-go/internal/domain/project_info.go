@@ -34,6 +34,29 @@ type ProjectInfo struct {
 	// StableSubject is sent, as true, only while the authguest flag is on:
 	// the auth service then signs sub as the account id, not its address.
 	StableSubject *bool `json:"stableSubject,omitempty"`
+	// AuthHooks is sent only while the authhooks flag is on, then always
+	// (possibly {}); nil keeps the key off the wire.
+	AuthHooks *AuthHooksInfo `json:"authHooks,omitempty"`
+}
+
+// AuthHooksInfo is the URL of each enabled auth hook (EXC-662); a hook that
+// is off has no key.
+type AuthHooksInfo struct {
+	CustomAccessToken string `json:"customAccessToken,omitempty"`
+	BeforeUserCreated string `json:"beforeUserCreated,omitempty"`
+	SendEmail         string `json:"sendEmail,omitempty"`
+}
+
+// Set records the URL of one enabled hook; an unknown hook is ignored.
+func (i *AuthHooksInfo) Set(hook, url string) {
+	switch hook {
+	case AuthHookCustomAccessToken:
+		i.CustomAccessToken = url
+	case AuthHookBeforeUserCreated:
+		i.BeforeUserCreated = url
+	case AuthHookSendEmail:
+		i.SendEmail = url
+	}
 }
 
 // ProjectOAuthInfo is the end-user OAuth policy the auth service enforces:
