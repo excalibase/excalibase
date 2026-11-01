@@ -124,7 +124,7 @@ func TestReadAddress_DeleteRemovesTheReaderRow(t *testing.T) {
 func TestReadAddress_RollbackIsRefusedWhileAReadPortIsHeld(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	down, err := os.ReadFile("migrations/000090_database_endpoint_reader_role.down.sql")
+	down, err := os.ReadFile("migrations/000094_database_endpoint_reader_role.down.sql")
 	if err != nil {
 		t.Fatalf("read down migration: %v", err)
 	}
