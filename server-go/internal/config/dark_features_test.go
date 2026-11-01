@@ -108,7 +108,6 @@ func TestDarkFeatures_HostMetricsIsOnOnlyOnASingleHost(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
 // EXC-662: the chart and the single-host compose file set this exact name.
 func TestDarkFeatures_AuthHooksVariable(t *testing.T) {
 	if got := featureEnv[features.AuthHooks]; got != "FEATURE_AUTHHOOKS" {
@@ -156,11 +155,12 @@ func TestDarkFeatures_HostLogsIsOnOnlyOnASingleHost(t *testing.T) {
 		if flags.Enabled(context.Background(), features.HostLogs) != want || !flags.Enabled(context.Background(), features.LogRetention) {
 			t.Errorf("mode %q: hostlogs=%v logretention=%v", mode, flags.Enabled(context.Background(), features.HostLogs), flags.Enabled(context.Background(), features.LogRetention))
 		}
-=======
+	}
+}
+
 // EXC-671: the single-host compose file passes this exact name through.
 func TestDarkFeatures_SingleHostBuildsVariable(t *testing.T) {
 	if got := featureEnv[features.SingleHostBuilds]; got != "FEATURE_SINGLEHOSTBUILDS" {
 		t.Errorf("single-host builds variable = %q", got)
->>>>>>> dd0db8a3 (feat: EXC-671 single-host git builds of sites behind singlehostbuilds)
 	}
 }

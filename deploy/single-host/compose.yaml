@@ -386,11 +386,9 @@ services:
       SITES_ZONE_ID: ${SITES_ZONE_ID:-}
       SITES_CUSTOM_DOMAIN_TARGET: ${SITES_CUSTOM_DOMAIN_TARGET:-}
       SITES_MAX_ZONE_HOSTNAMES: ${SITES_MAX_ZONE_HOSTNAMES:-}
-<<<<<<< HEAD
       # Server-rendered sites (EXC-661) run only once the outbound Worker bound on
       # the dispatch namespace is named here, with FEATURE_SITESSERVER=true.
       SITES_OUTBOUND_WORKER: ${SITES_OUTBOUND_WORKER:-}
-=======
       # Cloudflare's API origin; set only to point Sites at a stand-in in tests.
       SITES_CLOUDFLARE_API_URL: ${SITES_CLOUDFLARE_API_URL:-}
       # Git builds of sites on this host (EXC-671): off unless .env says "true" for both
@@ -413,7 +411,6 @@ services:
       SITES_BUILD_EGRESS_IMAGE: ${SITES_BUILD_EGRESS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.5.0}}
       # host:port entries builds may reach although private, e.g. a git server on your LAN.
       SITES_BUILD_EGRESS_ALLOW: ${SITES_BUILD_EGRESS_ALLOW:-}
->>>>>>> dd0db8a3 (feat: EXC-671 single-host git builds of sites behind singlehostbuilds)
       # DocumentDB projects (EXC-576): off unless .env says "true" (init.sh --documentdb).
       DOCUMENTDB_ENABLED: ${DOCUMENTDB_ENABLED:-false}
       # Apps (EXC-575, ADR 0039): off unless .env says "true" (init.sh --apps).
