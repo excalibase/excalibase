@@ -70,7 +70,7 @@ func TestRouteProjectSitesRoutesTheLiveSitesAgain(t *testing.T) {
 // Without a Cloudflare account a project's sites cannot be taken offline, so its deletion must not go ahead.
 func TestUnrouteProjectSitesWithoutCloudflareRefusesWhenSitesRemain(t *testing.T) {
 	store := sitestest.NewMemoryStore()
-	if err := store.Create(context.Background(), &sites.Site{ID: "s1", ProjectID: testProject, Name: "shop", Hostname: "shop.excalibase.app"}, 5); err != nil {
+	if err := store.Create(context.Background(), &sites.Site{ID: "s1", ProjectID: testProject, Name: "shop", Hostname: "shop.excalibase.app"}, 5, 0); err != nil {
 		t.Fatal(err)
 	}
 	service, err := sites.NewService(store, nil, sitestest.NewOrigins(), sites.Options{})

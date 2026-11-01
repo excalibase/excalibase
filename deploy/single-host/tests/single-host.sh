@@ -66,9 +66,11 @@ done
 # Sites (EXC-353): every Cloudflare setting in .env reaches provisioning.
 out=$(render SITES_ENABLED=true SITES_CLOUDFLARE_ACCOUNT_ID=acct-9f3e SITES_CLOUDFLARE_API_TOKEN=cf-token \
   SITES_DISPATCH_NAMESPACE=excalibase-sites SITES_HOSTS_KV_NAMESPACE_ID=kv-7c21 SITES_BASE_DOMAIN=example.site \
-  SITES_ZONE_ID=0123456789abcdef0123456789abcdef SITES_CUSTOM_DOMAIN_TARGET=cname.example.site SITES_MAX_ZONE_HOSTNAMES=40)
+  SITES_ZONE_ID=0123456789abcdef0123456789abcdef SITES_CUSTOM_DOMAIN_TARGET=cname.example.site SITES_MAX_ZONE_HOSTNAMES=40 \
+  SITES_OUTBOUND_WORKER=excalibase-sites-outbound)
 for want in 'SITES_ENABLED: "true"' 'SITES_CLOUDFLARE_ACCOUNT_ID: acct-9f3e' 'SITES_CLOUDFLARE_API_TOKEN: cf-token' \
   'SITES_DISPATCH_NAMESPACE: excalibase-sites' 'SITES_HOSTS_KV_NAMESPACE_ID: kv-7c21' 'SITES_BASE_DOMAIN: example.site' \
-  'SITES_ZONE_ID: 0123456789abcdef0123456789abcdef' 'SITES_CUSTOM_DOMAIN_TARGET: cname.example.site' 'SITES_MAX_ZONE_HOSTNAMES: "40"'; do
+  'SITES_ZONE_ID: 0123456789abcdef0123456789abcdef' 'SITES_CUSTOM_DOMAIN_TARGET: cname.example.site' 'SITES_MAX_ZONE_HOSTNAMES: "40"' \
+  'SITES_OUTBOUND_WORKER: excalibase-sites-outbound'; do
   printf '%s\n' "$out" | grep -qF "$want" || { echo "sites setting does not reach provisioning: $want" >&2; exit 1; }
 done
