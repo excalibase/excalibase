@@ -22,7 +22,6 @@ export type Feature =
   | 'hostmetrics'
   | 'sitesserver'
   | 'authhooks'
-  | 'authhooks'
   | 'authmfa';
 
 interface ConfigResponse {
