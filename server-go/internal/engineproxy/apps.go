@@ -75,6 +75,9 @@ func (p Policy) CheckNetworkCreate(body []byte) error {
 	if err := json.Unmarshal(body, &create); err != nil {
 		return refuse("network create body: %v", err)
 	}
+	if err := checkSpelling("network create", create, networkCreateNames...); err != nil {
+		return err
+	}
 	name, _ := create["Name"].(string)
 	if !p.underNetworkPrefix(name) {
 		return refuse("network name %q must start with %q", name, p.NetworkPrefix)
@@ -96,6 +99,9 @@ func (p Policy) CheckNetworkConnect(body []byte) error {
 	if err := json.Unmarshal(body, &member); err != nil {
 		return refuse("network member body: %v", err)
 	}
+	if err := checkSpelling("network connect", member, connectNames...); err != nil {
+		return err
+	}
 	endpoint, aliased := member["EndpointConfig"]
 	if !aliased || isZero(endpoint) {
 		_, err := networkMember(body, false)
@@ -103,6 +109,9 @@ func (p Policy) CheckNetworkConnect(body []byte) error {
 	}
 	if container, _ := member["Container"].(string); container == "" || container != p.EdgeContainer {
 		return refuse("network EndpointConfig may be set only for the edge")
+	}
+	if err := checkObjectSpelling("network EndpointConfig", endpoint, endpointNames); err != nil {
+		return err
 	}
 	if err := p.checkEdgeEndpoint(endpoint); err != nil {
 		return err
@@ -159,6 +168,13 @@ func networkMember(body []byte, allowForce bool) (string, error) {
 	if err := json.Unmarshal(body, &member); err != nil {
 		return "", refuse("network member body: %v", err)
 	}
+	names := connectNames
+	if allowForce {
+		names = disconnectNames
+	}
+	if err := checkSpelling("network member", member, names...); err != nil {
+		return "", err
+	}
 	container, _ := member["Container"].(string)
 	if container == "" {
 		return "", refuse("a network connect or disconnect names a container")
@@ -191,6 +207,9 @@ func (p Policy) CheckVolumeCreate(body []byte) error {
 	if err := json.Unmarshal(body, &create); err != nil {
 		return refuse("volume create body: %v", err)
 	}
+	if err := checkSpelling("volume create", create, volumeCreateNames...); err != nil {
+		return err
+	}
 	name, _ := create["Name"].(string)
 	if err := p.checkVolumeName(name); err != nil {
 		return err
@@ -205,12 +224,13 @@ func checkFields(what string, body map[string]any, fields map[string]func(Policy
 	for field, value := range body {
 		check, known := fields[field]
 		if !known {
+			// SDKs send an empty IPAM object; a struct's zero fields are not a data map's entries.
 			if isZero(value) {
 				continue
 			}
 			return refuse("%s field %s may not be set", what, field)
 		}
-		if !isZero(value) {
+		if !isUnset(value) {
 			if err := check(p, value); err != nil {
 				return err
 			}
@@ -237,6 +257,10 @@ func checkManagedFilter(query url.Values, label string) error {
 	raw := query["filters"]
 	if len(raw) != 1 {
 		return refuse("a list must carry exactly one filter naming %s=true", label)
+	}
+	// Only to refuse twins: the engine reads the query as sent.
+	if _, err := canonicalBody([]byte(raw[0])); err != nil {
+		return refuse("list filters: %v", err)
 	}
 	var filters map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw[0]), &filters); err != nil {
