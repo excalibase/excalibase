@@ -28,6 +28,7 @@ var featureEnv = map[features.Feature]string{
 	features.HostMetrics:     "FEATURE_HOSTMETRICS",
 	features.SitesServer:     "FEATURE_SITESSERVER",
 	features.AuthHooks:       "FEATURE_AUTHHOOKS",
+	features.DBAllowList:     "FEATURE_DBALLOWLIST",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.
