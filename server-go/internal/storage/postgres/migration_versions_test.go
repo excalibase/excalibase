@@ -16,6 +16,23 @@ var migrationFile = regexp.MustCompile(`^(\d+)_[a-z0-9_]+\.(up|down)\.sql$`)
 var historicalMigrationGaps = map[int]bool{5: true, 21: true, 22: true, 35: true, 36: true, 37: true, 38: true, 39: true}
 
 func TestMigrationVersionsAreContiguous(t *testing.T) {
+	versions := migrationVersions(t)
+	if len(versions) == 0 || versions[0] != 1 {
+		t.Fatalf("migrations must start at version 1, got %v", versions)
+	}
+	for i := 1; i < len(versions); i++ {
+		for missing := versions[i-1] + 1; missing < versions[i]; missing++ {
+			if !historicalMigrationGaps[missing] {
+				t.Errorf("version %d is missing between %d and %d; number a new migration after the highest", missing, versions[i-1], versions[i])
+			}
+		}
+	}
+}
+
+// migrationVersions returns the sorted versions, failing on misnamed files,
+// a direction given twice, or a version without both up and down.
+func migrationVersions(t *testing.T) []int {
+	t.Helper()
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		t.Fatalf("read migrations: %v", err)
@@ -28,13 +45,7 @@ func TestMigrationVersionsAreContiguous(t *testing.T) {
 			continue
 		}
 		version, _ := strconv.Atoi(match[1])
-		if directions[version] == nil {
-			directions[version] = map[string]string{}
-		}
-		if previous, taken := directions[version][match[2]]; taken {
-			t.Errorf("version %d has two %s migrations: %s and %s", version, match[2], previous, entry.Name())
-		}
-		directions[version][match[2]] = entry.Name()
+		addMigrationFile(t, directions, version, match[2], entry.Name())
 	}
 	versions := make([]int, 0, len(directions))
 	for version, files := range directions {
@@ -44,14 +55,16 @@ func TestMigrationVersionsAreContiguous(t *testing.T) {
 		versions = append(versions, version)
 	}
 	sort.Ints(versions)
-	if len(versions) == 0 || versions[0] != 1 {
-		t.Fatalf("migrations must start at version 1, got %v", versions)
+	return versions
+}
+
+func addMigrationFile(t *testing.T, directions map[int]map[string]string, version int, direction, name string) {
+	t.Helper()
+	if directions[version] == nil {
+		directions[version] = map[string]string{}
 	}
-	for i := 1; i < len(versions); i++ {
-		for missing := versions[i-1] + 1; missing < versions[i]; missing++ {
-			if !historicalMigrationGaps[missing] {
-				t.Errorf("version %d is missing between %d and %d; number a new migration after the highest", missing, versions[i-1], versions[i])
-			}
-		}
+	if previous, taken := directions[version][direction]; taken {
+		t.Errorf("version %d has two %s migrations: %s and %s", version, direction, previous, name)
 	}
+	directions[version][direction] = name
 }
