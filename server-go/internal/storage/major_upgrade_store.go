@@ -29,8 +29,9 @@ type MajorUpgradeStore interface {
 	TouchMajorUpgrade(ctx context.Context, id string, at time.Time) error
 	// MarkMajorUpgradeConverted records that the data now lives on
 	// toVersion and moves the project's recorded version in the same
-	// transaction; ErrMajorUpgradeNotRunning once already marked.
-	MarkMajorUpgradeConverted(ctx context.Context, id, projectID, toVersion string, at time.Time) error
+	// transaction, by the actor named by; ErrMajorUpgradeNotRunning once
+	// already marked.
+	MarkMajorUpgradeConverted(ctx context.Context, id, projectID, toVersion, by string, at time.Time) error
 	// LatestMajorUpgrade is the project's most recent run, nil without one.
 	LatestMajorUpgrade(ctx context.Context, projectID string) (*domain.MajorUpgrade, error)
 	// ConvertedMajorUpgrades are the runs that moved the data, oldest first.

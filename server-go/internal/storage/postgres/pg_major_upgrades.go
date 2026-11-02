@@ -15,7 +15,7 @@ import (
 var _ storage.MajorUpgradeStore = (*Store)(nil)
 
 const majorUpgradeColumns = `id, project_id, engine, from_version, to_version, status, step, safety_backup_id,
-	converted, error, warnings, requested_by, started_at, writes_stopped_at, converted_at, finished_at, heartbeat_at`
+	converted, error, warnings, requested_by, started_at, writes_stopped_at, converted_at, finished_at, heartbeat_at, converted_by`
 
 // StartMajorUpgrade inserts a RUNNING run; the partial unique index refuses a
 // second one for the same project.
@@ -72,14 +72,14 @@ func (s *Store) TouchMajorUpgrade(ctx context.Context, id string, at time.Time) 
 }
 
 // MarkMajorUpgradeConverted flips converted and the project's version together.
-func (s *Store) MarkMajorUpgradeConverted(ctx context.Context, id, projectID, toVersion string, at time.Time) error {
+func (s *Store) MarkMajorUpgradeConverted(ctx context.Context, id, projectID, toVersion, by string, at time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin mark converted: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
-	res, err := tx.ExecContext(ctx, `UPDATE database_major_upgrades SET converted = true, converted_at = $3
-		WHERE id = $1 AND project_id = $2 AND status = 'RUNNING' AND NOT converted`, id, projectID, at.UTC())
+	res, err := tx.ExecContext(ctx, `UPDATE database_major_upgrades SET converted = true, converted_at = $3, converted_by = $4
+		WHERE id = $1 AND project_id = $2 AND status = 'RUNNING' AND NOT converted`, id, projectID, at.UTC(), by)
 	if err != nil {
 		return fmt.Errorf("mark major upgrade %s converted: %w", id, err)
 	}
@@ -142,7 +142,7 @@ func scanMajorUpgrade(row scanner) (domain.MajorUpgrade, error) {
 	var stoppedAt, convertedAt, finishedAt sql.NullTime
 	err := row.Scan(&run.ID, &run.ProjectID, &run.Engine, &run.FromVersion, &run.ToVersion, &run.Status, &run.Step,
 		&run.SafetyBackupID, &run.Converted, &run.Error, pq.Array(&warnings), &run.RequestedBy, &run.StartedAt,
-		&stoppedAt, &convertedAt, &finishedAt, &run.HeartbeatAt)
+		&stoppedAt, &convertedAt, &finishedAt, &run.HeartbeatAt, &run.ConvertedBy)
 	if err != nil {
 		return run, err
 	}

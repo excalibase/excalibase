@@ -90,7 +90,10 @@ type MajorUpgrade struct {
 	// restore point after it and before ConvertedAt is the old one's end.
 	WritesStoppedAt *time.Time `json:"writesStoppedAt,omitempty"`
 	ConvertedAt     *time.Time `json:"convertedAt,omitempty"`
-	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
+	// ConvertedBy is the actor whose mark recorded the conversion; only it
+	// finishes the run.
+	ConvertedBy string     `json:"-"`
+	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
 	// HeartbeatAt is when its driver last said it was alive; recovery takes
 	// only a run whose heartbeat has gone stale.
 	HeartbeatAt time.Time `json:"-"`

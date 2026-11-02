@@ -453,6 +453,38 @@ func TestDockerRecoverPutsBackANewContainerOnTheWrongMajor(t *testing.T) {
 	w.assertPutBack(t)
 }
 
+// A loaded new container the project does not record yet is not the
+// conversion: the old one is put back.
+func TestDockerRecoverPutsBackALoadedContainerThatWasNeverRecorded(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.swappedAndRecorded("postgres:17", true)
+	row, _ := w.store.FindByProjectID("dk-1")
+	row.Namespace = "old-id"
+	_ = w.store.Update(row)
+	w.inst.Namespace = "old-id"
+	if outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress); !outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.progress.converted != nil {
+		t.Fatal("recorded as converted")
+	}
+	w.assertPutBack(t)
+}
+
+// A recorded new container whose load failed is put back.
+func TestDockerRecoverPutsBackARecordedContainerWhoseLoadFailed(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.engine.load = provisioner.UpgradeFailed
+	w.swappedAndRecorded("postgres:17", true)
+	if outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress); !outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.progress.converted != nil {
+		t.Fatal("recorded as converted")
+	}
+	w.assertPutBack(t)
+}
+
 func TestDockerRecover(t *testing.T) {
 	t.Run("after the swap", func(t *testing.T) {
 		w := newDockerUpgradeWorld(t)

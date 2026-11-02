@@ -37,6 +37,8 @@ type upgradeWorld struct {
 	statuses     []string
 	// midConvert runs inside Convert before the conversion is recorded.
 	midConvert func()
+	// midBackup runs inside the first TakeBackup.
+	midBackup func()
 }
 
 func (w *upgradeWorld) record(call string) {
@@ -122,6 +124,10 @@ func (w *upgradeWorld) Preflight(_ context.Context, _ *domain.DatabaseInstance, 
 
 func (w *upgradeWorld) TakeBackup(_ context.Context, inst *domain.DatabaseInstance) (string, error) {
 	w.record("backup:" + inst.PostgresVersion)
+	if hook := w.midBackup; hook != nil {
+		w.midBackup = nil
+		hook()
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.backupErrs) > 0 {
@@ -218,9 +224,9 @@ func (m *memMajorUpgrades) UpdateMajorUpgrade(_ context.Context, run *domain.Maj
 	if m.waitingErr != nil && run.Step == domain.MajorUpgradeStepWaiting {
 		return m.waitingErr
 	}
-	converted, convertedAt, heartbeat := stored.Converted, stored.ConvertedAt, stored.HeartbeatAt
+	converted, convertedAt, convertedBy, heartbeat := stored.Converted, stored.ConvertedAt, stored.ConvertedBy, stored.HeartbeatAt
 	*stored = *run
-	stored.Converted, stored.ConvertedAt, stored.HeartbeatAt = converted, convertedAt, heartbeat
+	stored.Converted, stored.ConvertedAt, stored.ConvertedBy, stored.HeartbeatAt = converted, convertedAt, convertedBy, heartbeat
 	return nil
 }
 
@@ -235,7 +241,7 @@ func (m *memMajorUpgrades) TouchMajorUpgrade(_ context.Context, id string, at ti
 	return nil
 }
 
-func (m *memMajorUpgrades) MarkMajorUpgradeConverted(_ context.Context, id, projectID, toVersion string, at time.Time) error {
+func (m *memMajorUpgrades) MarkMajorUpgradeConverted(_ context.Context, id, projectID, toVersion, by string, at time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.markErr != nil {
@@ -247,6 +253,7 @@ func (m *memMajorUpgrades) MarkMajorUpgradeConverted(_ context.Context, id, proj
 	}
 	stored.Converted = true
 	stored.ConvertedAt = &at
+	stored.ConvertedBy = by
 	inst, err := m.instances.FindByProjectID(projectID)
 	if err != nil {
 		return err
@@ -628,7 +635,7 @@ func TestMajorUpgrade_RecoverOfAConvertedRunOnlyFinishes(t *testing.T) {
 	if err := w.runs.StartMajorUpgrade(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.runs.MarkMajorUpgradeConverted(context.Background(), "half", "proj-up", "17", time.Now()); err != nil {
+	if err := w.runs.MarkMajorUpgradeConverted(context.Background(), "half", "proj-up", "17", "dead-driver", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	svc.RecoverInterrupted(context.Background())
@@ -896,5 +903,62 @@ func TestMajorUpgrade_LeaveOpenKeepsWaitingWhenOnlyTheWriteFailed(t *testing.T) 
 	inst := projectRow(t, w)
 	if inst.Status != string(domain.StatusUpgrading) || inst.CurrentStep != domain.MajorUpgradeStepWaiting {
 		t.Fatalf("project = %s at %s", inst.Status, inst.CurrentStep)
+	}
+}
+
+// Recovery ended the run while the driver was still taking the backup: the
+// driver must not go on to convert, nor touch the project's status.
+func TestMajorUpgrade_ADriverWhoseRunRecoveryEndedDuringTheBackupChangesNothing(t *testing.T) {
+	w, svc := newUpgradeWorld(t, upgradeProject())
+	w.midBackup = func() { endRunElsewhere(t, w, domain.MajorUpgradeRolledBack, false, domain.StatusActive) }
+	if _, err := svc.Start(context.Background(), "proj-up", confirmed("17"), "u"); err != nil {
+		t.Fatal(err)
+	}
+	if after := callsAfter(w.sequence(), "ended-elsewhere"); len(after) != 0 {
+		t.Fatalf("the driver went on after recovery ended the run: %v", after)
+	}
+	if inst := projectRow(t, w); inst.Status != string(domain.StatusActive) {
+		t.Fatalf("project = %s, want it left as recovery set it", inst.Status)
+	}
+}
+
+// A driver that outlived its run never writes the project's status.
+func TestMajorUpgrade_StatusWritesNeedTheRunStillRunning(t *testing.T) {
+	w, svc := newUpgradeWorld(t, upgradeProject())
+	run := &domain.MajorUpgrade{ID: "mu-x", ProjectID: "proj-up", FromVersion: "16", ToVersion: "17"}
+	if err := w.runs.StartMajorUpgrade(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	endRunElsewhere(t, w, domain.MajorUpgradeRolledBack, false, domain.StatusActive)
+	svc.progressStep(context.Background(), run, domain.MajorUpgradeStepConverting)
+	svc.end(context.Background(), run, domain.MajorUpgradeFailed, "late", domain.StageFailed, "late")
+	if inst := projectRow(t, w); inst.Status != string(domain.StatusActive) || inst.FailureReason != "" {
+		t.Fatalf("project = %s (%q), want it left as recovery set it", inst.Status, inst.FailureReason)
+	}
+	latest, _ := w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
+	if latest.Status != domain.MajorUpgradeRolledBack {
+		t.Fatalf("run = %+v", latest)
+	}
+}
+
+// Two actors converting the same run: the one whose mark landed finishes,
+// the other stops without touching the run or the project.
+func TestMajorUpgrade_OnlyTheActorThatRecordedTheConversionFinishesIt(t *testing.T) {
+	w, svc := newUpgradeWorld(t, upgradeProject())
+	w.midConvert = func() {
+		if err := w.runs.MarkMajorUpgradeConverted(context.Background(), "mu-test", "proj-up", "17", "another-actor", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		w.record("converted-elsewhere")
+	}
+	if _, err := svc.Start(context.Background(), "proj-up", confirmed("17"), "u"); err != nil {
+		t.Fatal(err)
+	}
+	if after := callsAfter(w.sequence(), "converted-elsewhere"); len(after) != 0 {
+		t.Fatalf("the driver finished a conversion another actor recorded: %v", after)
+	}
+	latest, _ := w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
+	if latest.Status != domain.MajorUpgradeRunning || latest.Step == domain.MajorUpgradeStepWaiting {
+		t.Fatalf("run = %+v", latest)
 	}
 }

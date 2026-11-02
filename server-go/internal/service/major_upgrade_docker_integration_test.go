@@ -152,7 +152,7 @@ type liveProgress struct {
 func (p *liveProgress) Step(string)             {}
 func (p *liveProgress) WritesStopped(time.Time) {}
 func (p *liveProgress) Converted(at time.Time) error {
-	return p.runs.MarkMajorUpgradeConverted(p.ctx, p.run.ID, p.run.ProjectID, p.run.ToVersion, at)
+	return p.runs.MarkMajorUpgradeConverted(p.ctx, p.run.ID, p.run.ProjectID, p.run.ToVersion, "live", at)
 }
 
 func (l *liveUpgrade) login(ctx context.Context, t *testing.T, namespace string) *sql.DB {

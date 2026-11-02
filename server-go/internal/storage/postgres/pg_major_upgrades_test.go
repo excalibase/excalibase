@@ -97,7 +97,7 @@ func TestMajorUpgrades_MarkConvertedMovesTheProjectVersionInTheSameWrite(t *test
 		t.Fatalf("start: %v", err)
 	}
 	at := time.Now().UTC()
-	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-conv", "17", at); err != nil {
+	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-conv", "17", "driver-1", at); err != nil {
 		t.Fatalf("mark converted: %v", err)
 	}
 	inst, err := store.FindByProjectID("mu-conv")
@@ -105,11 +105,11 @@ func TestMajorUpgrades_MarkConvertedMovesTheProjectVersionInTheSameWrite(t *test
 		t.Fatalf("project version = %v (%v), want 17", inst, err)
 	}
 	converted, err := store.ConvertedMajorUpgrades(ctx, "mu-conv")
-	if err != nil || len(converted) != 1 || !converted[0].Converted || converted[0].ConvertedAt == nil {
+	if err != nil || len(converted) != 1 || !converted[0].Converted || converted[0].ConvertedAt == nil || converted[0].ConvertedBy != "driver-1" {
 		t.Fatalf("converted = %+v, %v", converted, err)
 	}
 	// A second mark is refused: the version moved once.
-	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-conv", "17", at); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-conv", "17", "driver-1", at); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
 		t.Fatalf("second mark = %v, want ErrMajorUpgradeNotRunning", err)
 	}
 }
