@@ -443,14 +443,16 @@ a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
 Turns on `FEATURE_AUTHHOOKS`: a project Admin points sign-up and sign-in at
 their own HTTPS endpoint, called signed by the auth service. Hook calls never
 reach private ranges, but this host's public address is public, so it must be
-listed too. `init.sh` writes what the install's names resolve to; the stack
+listed too. `init.sh` writes what the install's names resolve to plus the
+global addresses on the host's interfaces (`ip`; without it, a warning), and
+warns when a name resolves somewhere else (a CDN, proxy or NAT); the stack
 does not start with hooks on and the list empty, as the Helm chart refuses to
 install without `auth.hooks.extraDenyCIDRs`.
 
 | `.env` | Default | Meaning |
 |---|---|---|
 | `FEATURE_AUTHHOOKS` | unset (`true` with `--auth-hooks`) | end-user auth hooks |
-| `AUTH_HOOKS_DENY_CIDRS` | unset (the names' addresses with `--auth-hooks`) | the host's own public ranges, comma-separated, refused to hook calls; behind NAT, a CDN or a proxy, add the host's own |
+| `AUTH_HOOKS_DENY_CIDRS` | unset (the names' and interfaces' addresses with `--auth-hooks`) | the host's own public ranges, comma-separated CIDRs, refused to hook calls; behind NAT, add the public address |
 
 ## Refusals you may see
 

@@ -150,18 +150,33 @@ if [ "${SELINUX_MODE:-$(getenforce 2>/dev/null || echo Disabled)}" = Enforcing ]
 fi
 
 # Auth hooks may call only public addresses, and this host's own is one: refuse
-# what its names resolve to (a host behind NAT does not hold that address).
+# what its names resolve to (a host behind NAT does not hold that address) and
+# every global address on its interfaces (behind a CDN the names resolve to the CDN).
 hooks=
 if [ -n "$auth_hooks" ]; then
-  own=$(for name in "studio.$domain" "api.$domain" "files.$domain" "$app_domain"; do
+  resolved=$(for name in "studio.$domain" "api.$domain" "files.$domain" "$app_domain"; do
     ${RESOLVE_HOSTS:-getent ahosts} "$name" 2>/dev/null | awk '{print $1}'
-  done | sort -u | awk '/:/ {printf "%s%s/128", sep, $1; sep=","; next} /^[0-9.]+$/ {printf "%s%s/32", sep, $1; sep=","}')
-  if [ -z "$own" ]; then
+  done | awk '/:/ || /^[0-9.]+$/' | sort -u)
+  if [ -z "$resolved" ]; then
     echo "init.sh: --auth-hooks: no name of this install resolves yet; point api.$domain at this host first, or write the host's public addresses to AUTH_HOOKS_DENY_CIDRS yourself" >&2
     exit 1
   fi
+  list_addresses=${LIST_ADDRESSES:-ip -o addr show scope global}
+  if command -v "${list_addresses%% *}" >/dev/null 2>&1; then
+    local_addresses=$($list_addresses | awk '$3 == "inet" || $3 == "inet6" {sub(/\/.*/, "", $4); print $4}' | sort -u)
+    for address in $resolved; do
+      if ! printf '%s\n' "$local_addresses" | grep -qxF "$address"; then
+        echo "init.sh: WARNING: --auth-hooks: $address (from DNS) is not on this host's interfaces; behind a CDN, proxy or NAT, add the host's public address to AUTH_HOOKS_DENY_CIDRS" >&2
+      fi
+    done
+  else
+    local_addresses=
+    echo "init.sh: WARNING: --auth-hooks: '${list_addresses%% *}' not found, so this host's interface addresses were not read; add its public addresses to AUTH_HOOKS_DENY_CIDRS yourself" >&2
+  fi
+  own=$(printf '%s\n%s\n' "$resolved" "$local_addresses" | sort -u \
+    | awk '/:/ {printf "%s%s/128", sep, $1; sep=","; next} /^[0-9.]+$/ {printf "%s%s/32", sep, $1; sep=","}')
   hooks="FEATURE_AUTHHOOKS=true
-# Addresses the install's names resolved to at init, refused to auth hooks. Behind a CDN or proxy, add the host's own.
+# Addresses the install's names resolved to and the host's interface addresses at init, refused to auth hooks.
 AUTH_HOOKS_DENY_CIDRS=$own"
 fi
 

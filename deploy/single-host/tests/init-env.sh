@@ -114,11 +114,26 @@ grep -qx 'DOCUMENTDB_ENABLED=true' "$WORK/docdb.env" || fail "--documentdb not w
 # Auth hooks (EXC-662): off unless asked; on, the addresses the install's names resolve to are refused to them.
 ! grep -q '^FEATURE_AUTHHOOKS' "$WORK/.env" || fail "auth hooks turned on without --auth-hooks"
 printf '#!/bin/sh\ncase $1 in api.*) echo "203.0.113.7 STREAM $1"; echo "2001:db8::7 STREAM $1" ;; esac\n' > "$WORK/resolve"; chmod +x "$WORK/resolve"
-RESOLVE_HOSTS="$WORK/resolve" sh "$DIR/../init.sh" --env-file "$WORK/hooks.env" --domain example.com --admin-email me@example.com \
-  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --auth-hooks >/dev/null || fail "--auth-hooks refused"
+# The host's own interfaces count too: behind a CDN the names resolve to the CDN.
+cat > "$WORK/addrs" <<'ADDRS'
+#!/bin/sh
+echo "2: eth0    inet 198.51.100.9/24 brd 198.51.100.255 scope global eth0\       valid_lft forever preferred_lft forever"
+echo "2: eth0    inet 203.0.113.7/24 brd 203.0.113.255 scope global secondary eth0\       valid_lft forever preferred_lft forever"
+echo "2: eth0    inet6 2001:db8::9/64 scope global dynamic \       valid_lft 86000sec preferred_lft 14000sec"
+ADDRS
+chmod +x "$WORK/addrs"
+RESOLVE_HOSTS="$WORK/resolve" LIST_ADDRESSES="$WORK/addrs" sh "$DIR/../init.sh" --env-file "$WORK/hooks.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --auth-hooks >/dev/null 2>"$WORK/out" || fail "--auth-hooks refused"
 grep -qx 'FEATURE_AUTHHOOKS=true' "$WORK/hooks.env" || fail "--auth-hooks not written"
-grep -qx 'AUTH_HOOKS_DENY_CIDRS=2001:db8::7/128,203.0.113.7/32' "$WORK/hooks.env" \
-  || fail "--auth-hooks did not refuse the addresses the install's names resolve to"
+grep -qx 'AUTH_HOOKS_DENY_CIDRS=198.51.100.9/32,2001:db8::7/128,2001:db8::9/128,203.0.113.7/32' "$WORK/hooks.env" \
+  || fail "--auth-hooks did not refuse the resolved and the host's own addresses, once each"
+grep 'WARNING' "$WORK/out" | grep -q '2001:db8::7' || fail "no warning that a resolved address is not on this host"
+! grep 'WARNING' "$WORK/out" | grep -q '203.0.113.7' || fail "warned about a resolved address the host holds"
+# Without the ip tool (macOS) the resolved addresses still apply, with a warning.
+RESOLVE_HOSTS="$WORK/resolve" LIST_ADDRESSES="$WORK/no-such-ip" sh "$DIR/../init.sh" --env-file "$WORK/hooks3.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --auth-hooks >/dev/null 2>"$WORK/out" || fail "--auth-hooks refused without ip"
+grep -qx 'AUTH_HOOKS_DENY_CIDRS=2001:db8::7/128,203.0.113.7/32' "$WORK/hooks3.env" || fail "resolved addresses lost without ip"
+grep 'WARNING' "$WORK/out" | grep -q 'interface' || fail "no warning that the host's own addresses were not read"
 printf '#!/bin/sh\nexit 2\n' > "$WORK/unresolved"; chmod +x "$WORK/unresolved"
 if RESOLVE_HOSTS="$WORK/unresolved" sh "$DIR/../init.sh" --env-file "$WORK/hooks2.env" --domain example.com --admin-email me@example.com \
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --auth-hooks >"$WORK/out" 2>&1; then
