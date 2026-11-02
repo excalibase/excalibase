@@ -150,7 +150,7 @@ type recovered struct {
 // req, ready for bringUp. A failure removes the container it created.
 func (a *DockerBackupAdapter) recoverContainer(ctx context.Context, dc provisioner.DockerClient, source *domain.DatabaseInstance,
 	req domain.RestoreRequest, target recoveryTarget) (recovered, error) {
-	base, err := a.resolveSourceBackup(ctx, source.ProjectID, req)
+	base, err := a.resolveSourceBackup(ctx, source, req)
 	if err != nil {
 		return recovered{}, err
 	}
@@ -162,6 +162,9 @@ func (a *DockerBackupAdapter) recoverContainer(ctx context.Context, dc provision
 	defer body.Close()
 	spec, err := recoverySpec(source, req, target, body)
 	if err != nil {
+		return recovered{}, err
+	}
+	if spec.walsPrefix, err = a.walsPrefix(ctx, source); err != nil {
 		return recovered{}, err
 	}
 	containerID, owner, err := a.createAndSeedRestoreContainer(ctx, dc, spec)
@@ -309,10 +312,13 @@ const dockerRestoreReadyPoll = time.Second
 // resolveSourceBackup is the base backup a restore of req starts from: the
 // one it names, else for a point in time the last one taken before it (a
 // later one cannot be rolled back), else the newest.
-func (a *DockerBackupAdapter) resolveSourceBackup(ctx context.Context, sourceProjectID string, req domain.RestoreRequest) (*domain.BackupRecord, error) {
-	records, err := a.records.ListByProject(ctx, sourceProjectID)
+//
+// Only backups taken on source.PostgresVersion are candidates: a restore runs
+// that major, and after a major upgrade the others belong to another one.
+func (a *DockerBackupAdapter) resolveSourceBackup(ctx context.Context, source *domain.DatabaseInstance, req domain.RestoreRequest) (*domain.BackupRecord, error) {
+	records, err := a.majorRecords(ctx, source)
 	if err != nil {
-		return nil, fmt.Errorf("list backup records: %w", err)
+		return nil, err
 	}
 	if req.BackupID != "" {
 		for i := range records {
@@ -378,6 +384,8 @@ type restoreContainerSpec struct {
 	ports provisioner.DocumentDBPorts
 	// command replaces the official image's, as Provision's does.
 	command []string
+	// walsPrefix is the source archive's WAL, on the source's major.
+	walsPrefix string
 }
 
 // restoreStartPoller bounds the wait for a held host port to come free.
@@ -435,7 +443,7 @@ func (a *DockerBackupAdapter) seedRestoreContainer(ctx context.Context, dc provi
 	}
 	// PITR: download every archived WAL segment for the source project so
 	// recovery has the complete WAL stream from backup-time forward.
-	if err := a.downloadWALsIntoContainer(ctx, dc, containerID, spec.sourceProjectID, owner); err != nil {
+	if err := a.downloadWALsIntoContainer(ctx, dc, containerID, spec.walsPrefix, owner); err != nil {
 		return fmt.Errorf("download archived WALs: %w", err)
 	}
 	// Recovery directives: recovery.signal + postgresql.auto.conf land in
@@ -482,8 +490,7 @@ func pickLatestCompletedBackup(records []domain.BackupRecord) (*domain.BackupRec
 // Empty when the project never produced archived WALs (archive_mode
 // wasn't enabled). Returns nil so restore continues without PITR-able
 // WALs — recovery will replay only the basebackup-bundled segments.
-func (a *DockerBackupAdapter) downloadWALsIntoContainer(ctx context.Context, dc provisioner.DockerClient, containerID, sourceProjectID string, owner provisioner.FileOwner) error {
-	prefix := fmt.Sprintf("%s%s/wals/", a.keyPrefix, sourceProjectID)
+func (a *DockerBackupAdapter) downloadWALsIntoContainer(ctx context.Context, dc provisioner.DockerClient, containerID, prefix string, owner provisioner.FileOwner) error {
 	objects, err := a.uploader.List(ctx, a.bucket, prefix)
 	if err != nil {
 		return fmt.Errorf("list WAL objects: %w", err)

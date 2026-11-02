@@ -45,6 +45,7 @@ const LOOKS: Record<string, Look> = {
   RESUMING: { tone: 'blue', label: 'Resuming', Icon: Loader2, spin: true },
   DELETING: { tone: 'blue', label: 'Deleting', Icon: Loader2, spin: true },
   RESTORING: { tone: 'blue', label: 'Restoring', Icon: Loader2, spin: true },
+  UPGRADING: { tone: 'blue', label: 'Upgrading', Icon: Loader2, spin: true },
   IN_PROGRESS: { tone: 'blue', label: 'In progress', Icon: Loader2, spin: true },
   RUNNING: { tone: 'blue', label: 'In progress', Icon: Loader2, spin: true },
   BACKUPS_PENDING_DELETE: { tone: 'neutral', label: 'Deleted, backups pending purge', Icon: Trash2 },

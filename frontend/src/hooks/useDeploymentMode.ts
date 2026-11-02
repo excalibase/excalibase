@@ -25,7 +25,8 @@ export type Feature =
   | 'authmfa'
   | 'dballowlist'
   | 'dbreadaddress'
-  | 'dbcopy';
+  | 'dbcopy'
+  | 'majorupgrade';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
