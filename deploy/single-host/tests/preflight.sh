@@ -21,4 +21,11 @@ for bad in POSTGRES_PASSWORD=password123 POSTGRES_PASSWORD= SETUP_TOKEN=abc123 \
   fi
 done
 good ADMIN_PASSWORD='a-long-passphrase-of-mine' >/dev/null || fail "a strong admin password refused"
+
+# EXC-662: auth hooks may not start without the host's own addresses refused to them.
+if good FEATURE_AUTHHOOKS=true >/dev/null 2>&1; then
+  fail "auth hooks started with no AUTH_HOOKS_DENY_CIDRS"
+fi
+good FEATURE_AUTHHOOKS=true AUTH_HOOKS_DENY_CIDRS=203.0.113.7/32 >/dev/null || fail "auth hooks with a deny list refused"
+good FEATURE_AUTHHOOKS=false >/dev/null || fail "auth hooks off needs no deny list"
 echo "preflight ok"

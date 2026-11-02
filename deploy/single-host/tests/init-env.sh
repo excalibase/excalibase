@@ -111,6 +111,21 @@ sh "$DIR/../init.sh" --env-file "$WORK/docdb.env" --domain example.com --admin-e
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --documentdb >/dev/null || fail "--documentdb refused"
 grep -qx 'DOCUMENTDB_ENABLED=true' "$WORK/docdb.env" || fail "--documentdb not written"
 
+# Auth hooks (EXC-662): off unless asked; on, the addresses the install's names resolve to are refused to them.
+! grep -q '^FEATURE_AUTHHOOKS' "$WORK/.env" || fail "auth hooks turned on without --auth-hooks"
+printf '#!/bin/sh\ncase $1 in api.*) echo "203.0.113.7 STREAM $1"; echo "2001:db8::7 STREAM $1" ;; esac\n' > "$WORK/resolve"; chmod +x "$WORK/resolve"
+RESOLVE_HOSTS="$WORK/resolve" sh "$DIR/../init.sh" --env-file "$WORK/hooks.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --auth-hooks >/dev/null || fail "--auth-hooks refused"
+grep -qx 'FEATURE_AUTHHOOKS=true' "$WORK/hooks.env" || fail "--auth-hooks not written"
+grep -qx 'AUTH_HOOKS_DENY_CIDRS=2001:db8::7/128,203.0.113.7/32' "$WORK/hooks.env" \
+  || fail "--auth-hooks did not refuse the addresses the install's names resolve to"
+printf '#!/bin/sh\nexit 2\n' > "$WORK/unresolved"; chmod +x "$WORK/unresolved"
+if RESOLVE_HOSTS="$WORK/unresolved" sh "$DIR/../init.sh" --env-file "$WORK/hooks2.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --auth-hooks >"$WORK/out" 2>&1; then
+  fail "--auth-hooks accepted with no address to refuse"
+fi
+grep -q AUTH_HOOKS_DENY_CIDRS "$WORK/out" || fail "refusal does not name AUTH_HOOKS_DENY_CIDRS"
+
 # macOS (EXC-629): the socket's group is read without GNU-only stat flags. A BSD
 # stat on PATH refuses -c, as macOS's does.
 mkdir "$WORK/bsd"

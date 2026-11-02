@@ -6,6 +6,7 @@
 #   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman] [--manual-unseal]
 #             [--apps] [--app-domain apps.example.com] [--app-sandbox runsc|none] [--documentdb] [--host-metrics]
 #             [--host-logs]
+#             [--auth-hooks]
 #
 # Studio:     https://studio.<domain>
 # Data plane: https://api.<domain>   (/{projectId}/graphql, /{projectId}/api/v1, /auth)
@@ -24,6 +25,8 @@
 # --host-logs: stored project log search: the bundled Loki (compose profile hostlogs)
 # keeps each project container's output for LOG_RETENTION (168h), searchable in Studio
 # after the container is gone; at most HOST_LOGS_DAILY_MB (64) per project per day.
+# --auth-hooks: end-user auth hooks, signed calls to each project's own endpoint. The addresses
+# the install's names resolve to are refused to them; behind a CDN or proxy, edit AUTH_HOOKS_DENY_CIDRS.
 # A public domain gets Let's Encrypt certificates for the admin address;
 # localhost gets certificates from the edge's own CA.
 set -eu
@@ -48,6 +51,7 @@ host_metrics=
 host_logs=
 app_domain=
 app_sandbox=runsc
+auth_hooks=
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -65,6 +69,7 @@ while [ $# -gt 0 ]; do
 HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev"; shift ;;
     --host-logs) host_logs="FEATURE_HOSTLOGS=true
 COMPOSE_PROFILES=hostlogs"; shift ;;
+    --auth-hooks) auth_hooks=1; shift ;;
     --app-domain) app_domain=$2; shift 2 ;;
     --app-sandbox) app_sandbox=$2; shift 2 ;;
     *) usage ;;
@@ -144,6 +149,22 @@ if [ "${SELINUX_MODE:-$(getenforce 2>/dev/null || echo Disabled)}" = Enforcing ]
   selinux_label="ENGINE_PROXY_SELINUX_LABEL=disable"
 fi
 
+# Auth hooks may call only public addresses, and this host's own is one: refuse
+# what its names resolve to (a host behind NAT does not hold that address).
+hooks=
+if [ -n "$auth_hooks" ]; then
+  own=$(for name in "studio.$domain" "api.$domain" "files.$domain" "$app_domain"; do
+    ${RESOLVE_HOSTS:-getent ahosts} "$name" 2>/dev/null | awk '{print $1}'
+  done | sort -u | awk '/:/ {printf "%s%s/128", sep, $1; sep=","; next} /^[0-9.]+$/ {printf "%s%s/32", sep, $1; sep=","}')
+  if [ -z "$own" ]; then
+    echo "init.sh: --auth-hooks: no name of this install resolves yet; point api.$domain at this host first, or write the host's public addresses to AUTH_HOOKS_DENY_CIDRS yourself" >&2
+    exit 1
+  fi
+  hooks="FEATURE_AUTHHOOKS=true
+# Addresses the install's names resolved to at init, refused to auth hooks. Behind a CDN or proxy, add the host's own.
+AUTH_HOOKS_DENY_CIDRS=$own"
+fi
+
 umask 077
 cat >"$env_file" <<ENV
 # Written by init.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ). Keep it private and with the volumes.
@@ -167,7 +188,7 @@ ENGINE_SOCKET_GID=$engine_socket_gid
 APP_DOMAIN=$app_domain
 APP_SANDBOX_RUNTIME=$app_sandbox
 ENV
-for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs"; do
+for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$hooks"; do
   [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
 done
 chmod 600 "$env_file"

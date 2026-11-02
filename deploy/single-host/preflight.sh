@@ -1,5 +1,6 @@
 #!/bin/sh
-# Refuses to start the stack on a known, weak or reused secret. Runs before
+# Refuses to start the stack on a known, weak or reused secret, or with auth
+# hooks able to reach the host itself. Runs before
 # Postgres initialises, so a bad .env never becomes a database password.
 # init.sh generates values that pass.
 set -eu
@@ -43,6 +44,12 @@ distinct=$(printf '%s\n' "${POSTGRES_PASSWORD:-}" "${SETUP_TOKEN:-}" "${OBJECTST
   "${OBJECTSTORE_BACKUPS_SECRET:-}" "${OBJECTSTORE_FILES_SECRET:-}" | sort -u | wc -l)
 if [ "$distinct" -ne 5 ]; then
   complain "every secret in .env must differ from the others"
+fi
+
+# Auth hooks (EXC-662): the host's own public address passes the built-in check,
+# so hooks start only with it refused, as the Helm chart requires.
+if [ "${FEATURE_AUTHHOOKS:-}" = true ] && [ -z "${AUTH_HOOKS_DENY_CIDRS:-}" ]; then
+  complain "FEATURE_AUTHHOOKS needs AUTH_HOOKS_DENY_CIDRS: the host's own public addresses, comma-separated (init.sh --auth-hooks fills it)"
 fi
 
 # Optional: unset means bootstrap generates one and prints it once.
