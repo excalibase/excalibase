@@ -406,16 +406,23 @@ func TestDockerRecoverRecordsALoadedConversion(t *testing.T) {
 			if !outcome.Converted || outcome.RolledBack {
 				t.Fatalf("outcome = %+v (calls %v)", outcome, w.engine.calls)
 			}
-			if w.progress.converted == nil {
-				t.Fatal("the conversion was not recorded")
-			}
-			if !fresh.running || w.engine.find(provisioner.DatabaseContainerName("dk-1")) != fresh || w.recorded() != fresh.id {
-				t.Fatalf("new container = %+v, project records %q", fresh, w.recorded())
-			}
-			if old := w.engine.find(provisioner.PreUpgradeContainerName("dk-1", "mu-1")); old == nil || old.running {
-				t.Fatalf("old container = %+v", old)
-			}
+			w.assertCarriedForward(t, fresh)
 		})
+	}
+}
+
+// the conversion is recorded, the new container serves under the project's
+// name, and the old one waits stopped for cleanup.
+func (w *dockerUpgradeWorld) assertCarriedForward(t *testing.T, fresh *engineContainer) {
+	t.Helper()
+	if w.progress.converted == nil {
+		t.Fatal("the conversion was not recorded")
+	}
+	if !fresh.running || w.engine.find(provisioner.DatabaseContainerName("dk-1")) != fresh || w.recorded() != fresh.id {
+		t.Fatalf("new container = %+v, project records %q", fresh, w.recorded())
+	}
+	if old := w.engine.find(provisioner.PreUpgradeContainerName("dk-1", "mu-1")); old == nil || old.running {
+		t.Fatalf("old container = %+v", old)
 	}
 }
 
