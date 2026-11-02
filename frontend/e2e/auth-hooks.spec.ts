@@ -11,9 +11,9 @@ async function mockFeatures(page: Page, features: Record<string, boolean>) {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ siteUrl: 'https://app.example.com', requireEmailVerification: false }) }));
 }
 
-// A stateful stand-in for the four auth-hooks routes.
+// A stateful stand-in for the four auth-hooks routes, as an Admin is answered.
 async function mockHooks(page: Page) {
-  const state = { secretSet: false, hooks: NAMES.map((hook) => ({ hook, enabled: false, url: '' })) };
+  const state = { secretSet: false, canChange: true, hooks: NAMES.map((hook) => ({ hook, enabled: false, host: '', url: '' })) };
   const calls: string[] = [];
   await page.route('**/api/projects/test-project/auth-hooks**', (route) => {
     const request = route.request();
@@ -72,5 +72,20 @@ test.describe('Auth hooks', () => {
     await sendEmail.getByRole('button', { name: 'Save Send email' }).click();
     await expect(sendEmail).toContainText('Saved');
     expect(calls).toEqual(['GET /', 'POST /secret', 'PUT /send_email']);
+  });
+
+  test('a developer sees each hook host, never its URL, and nothing to change', async ({ page }) => {
+    await mockProjectRole(page, 'developer');
+    await mockFeatures(page, { authhooks: true });
+    await page.route('**/api/projects/test-project/auth-hooks**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        secretSet: true, canChange: false,
+        hooks: NAMES.map((hook) => ({ hook, enabled: hook === 'send_email', host: hook === 'send_email' ? 'mail.example.com' : '' })),
+      }) }));
+    await page.goto('/project/test-project/auth/settings');
+    await expect(page.getByTestId('auth-hook-send_email')).toContainText('Calls mail.example.com');
+    await expect(page.getByTestId('auth-hooks-secret-state')).toHaveText('Set');
+    await expect(page.getByTestId('auth-hooks-card').getByRole('button')).toHaveCount(0);
+    await expect(page.getByTestId('auth-hooks-card').getByRole('textbox')).toHaveCount(0);
   });
 });
