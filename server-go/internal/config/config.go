@@ -121,6 +121,8 @@ type AppConfig struct {
 	RequestMetricsTargets []string
 	// HostMetrics is where single-host monitoring reads (EXC-670).
 	HostMetrics HostMetrics
+	// HostLogs is a single host's stored log search (EXC-672).
+	HostLogs HostLogs
 
 	// FnEgressDefaultHosts is the operator-level outbound allowlist every
 	// project's edge functions get in addition to their own setting:
@@ -510,6 +512,7 @@ func load() AppConfig {
 		LogForwarderToken:              os.Getenv("LOG_FORWARDER_TOKEN"),
 		RequestMetricsTargets:          loadRequestMetricsTargets(),
 		HostMetrics:                    loadHostMetrics(),
+		HostLogs:                       loadHostLogs(),
 		PromURL:                        envOr("PROM_URL", ""),
 		FnEgressDefaultHosts:           envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),
 		CapacityHeadroomPercent:        envInt("CAPACITY_HEADROOM_PERCENT", 15),

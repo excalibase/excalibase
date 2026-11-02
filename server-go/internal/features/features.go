@@ -78,11 +78,14 @@ const (
 	MajorUpgrade Feature = "majorupgrade"
 	// TemplateCatalog is the self-managed service catalog beside the starter templates (EXC-669).
 	TemplateCatalog Feature = "templatecatalog"
+	// HostLogs is a single host's stored log search: provisioning ships the
+	// project containers' output to the bundled Loki (EXC-672).
+	HostLogs Feature = "hostlogs"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs}
 }
 
 type Flags interface {
