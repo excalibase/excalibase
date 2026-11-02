@@ -55,7 +55,8 @@ func TestValidMFAKey_RefusesAnythingButExactly32Bytes(t *testing.T) {
 func TestMFAKeyFingerprint_IsStablePerKeyAndHidesIt(t *testing.T) {
 	first, _ := NewMFAKey()
 	second, _ := NewMFAKey()
-	if MFAKeyFingerprint(first) != MFAKeyFingerprint(first) || MFAKeyFingerprint(first) == MFAKeyFingerprint(second) {
+	again := first
+	if MFAKeyFingerprint(first) != MFAKeyFingerprint(again) || MFAKeyFingerprint(first) == MFAKeyFingerprint(second) {
 		t.Fatal("a fingerprint must name exactly one key")
 	}
 	if got := MFAKeyFingerprint(first); len(got) != 64 || strings.Contains(got, first) {
