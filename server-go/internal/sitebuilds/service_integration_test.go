@@ -506,8 +506,12 @@ func TestDisconnect_CancelsQueuedAndRunningBuilds(t *testing.T) {
 	running := h.Connect().Build
 	h.Dispatcher.Tick(ctx)
 	deadline := time.Now().Add(5 * time.Second)
-	for h.Build(running.ID).Status != sitebuilds.StatusRunning && time.Now().Before(deadline) {
+	// RUNNING is claimed before the job starts; wait for the job itself.
+	for len(h.Runner.Specs()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
+	}
+	if len(h.Runner.Specs()) == 0 {
+		t.Fatal("the build's job never started")
 	}
 	if _, err := h.Push("main", "8888888888888888888888888888888888888888", "d-queued"); err != nil {
 		t.Fatal(err)
