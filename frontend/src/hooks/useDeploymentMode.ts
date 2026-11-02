@@ -23,7 +23,8 @@ export type Feature =
   | 'sitesserver'
   | 'authhooks'
   | 'authmfa'
-  | 'dballowlist';
+  | 'dballowlist'
+  | 'dbreadaddress';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
