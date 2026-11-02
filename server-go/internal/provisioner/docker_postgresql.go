@@ -436,7 +436,8 @@ func (p *DockerPostgreSQLProvisioner) ConfigureBackup(ctx context.Context, names
 // queries. Caps at 30s. Runs after WaitForHealthy so the container is up.
 func (p *DockerPostgreSQLProvisioner) waitForPostgresReady(ctx context.Context, containerID, dbName string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	pgIsReady := []string{"pg_isready", "-U", "postgres", "-d", dbName}
+	// Over TCP: the image's initdb server answers on the socket only, then stops.
+	pgIsReady := []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", dbName}
 	psqlProbe := []string{"psql", "-U", "postgres", "-d", dbName, "-tAc", "SELECT 1"}
 	var lastErr error
 	for time.Now().Before(deadline) {
