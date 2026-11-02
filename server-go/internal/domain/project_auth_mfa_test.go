@@ -50,3 +50,15 @@ func TestValidMFAKey_RefusesAnythingButExactly32Bytes(t *testing.T) {
 		t.Error("a 32-byte key was refused")
 	}
 }
+
+// The fingerprint names the key the factors were sealed with, without revealing it.
+func TestMFAKeyFingerprint_IsStablePerKeyAndHidesIt(t *testing.T) {
+	first, _ := NewMFAKey()
+	second, _ := NewMFAKey()
+	if MFAKeyFingerprint(first) != MFAKeyFingerprint(first) || MFAKeyFingerprint(first) == MFAKeyFingerprint(second) {
+		t.Fatal("a fingerprint must name exactly one key")
+	}
+	if got := MFAKeyFingerprint(first); len(got) != 64 || strings.Contains(got, first) {
+		t.Fatalf("fingerprint = %q", got)
+	}
+}
