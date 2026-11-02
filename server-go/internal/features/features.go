@@ -70,11 +70,14 @@ const (
 	// DBReadAddress is a database's read-only address to its replicas, internal
 	// and on its own public port, and its Studio card (EXC-666).
 	DBReadAddress Feature = "dbreadaddress"
+	// DBCopy is copying a database into a new project from now, its latest
+	// backup or a time, in Studio and the API (EXC-667).
+	DBCopy Feature = "dbcopy"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy}
 }
 
 type Flags interface {
