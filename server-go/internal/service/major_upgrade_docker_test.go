@@ -181,6 +181,8 @@ func (e *upgradeEngine) ExecInContainerStdin(_ context.Context, id string, cmd [
 		return "", e.step("dump")
 	case stdin == provisioner.UpgradeStateScript():
 		return e.load + "\n", nil
+	case stdin == provisioner.DataMajorScript():
+		return strings.TrimPrefix(c.image, "postgres:") + "\n", nil
 	case stdin == provisioner.CleanupScript():
 		e.calls = append(e.calls, "cleanup:"+c.image)
 	case stdin == afterUpgradeScript:
@@ -375,6 +377,71 @@ func TestDockerConvertChecksTheNewImageHasEveryExtensionFirst(t *testing.T) {
 	}
 	if w.called("fence") || w.called("stop") {
 		t.Fatalf("the database was touched: %v", w.engine.calls)
+	}
+	w.assertPutBack(t)
+}
+
+// swappedAndRecorded is the host as a driver leaves it when it dies after
+// the new container was recorded but before the conversion was.
+func (w *dockerUpgradeWorld) swappedAndRecorded(image string, running bool) *engineContainer {
+	old := w.engine.byID["old-id"]
+	old.name, old.running, old.fenced = provisioner.PreUpgradeContainerName("dk-1", "mu-1"), false, true
+	fresh := &engineContainer{id: "new-id-9", name: provisioner.DatabaseContainerName("dk-1"), image: image, running: running, fenced: true}
+	w.engine.byID[fresh.id] = fresh
+	row, _ := w.store.FindByProjectID("dk-1")
+	row.Namespace = fresh.id
+	_ = w.store.Update(row)
+	w.inst.Namespace = fresh.id
+	return fresh
+}
+
+// A loaded new container on the new major is the conversion done: recovery
+// records it, and the run finishes forward rather than being put back.
+func TestDockerRecoverRecordsALoadedConversion(t *testing.T) {
+	for _, running := range []bool{true, false} {
+		t.Run(fmt.Sprintf("running=%v", running), func(t *testing.T) {
+			w := newDockerUpgradeWorld(t)
+			fresh := w.swappedAndRecorded("postgres:17", running)
+			outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress)
+			if !outcome.Converted || outcome.RolledBack {
+				t.Fatalf("outcome = %+v (calls %v)", outcome, w.engine.calls)
+			}
+			if w.progress.converted == nil {
+				t.Fatal("the conversion was not recorded")
+			}
+			if !fresh.running || w.engine.find(provisioner.DatabaseContainerName("dk-1")) != fresh || w.recorded() != fresh.id {
+				t.Fatalf("new container = %+v, project records %q", fresh, w.recorded())
+			}
+			if old := w.engine.find(provisioner.PreUpgradeContainerName("dk-1", "mu-1")); old == nil || old.running {
+				t.Fatalf("old container = %+v", old)
+			}
+		})
+	}
+}
+
+// The record failing again leaves the run open for the next sweep.
+func TestDockerRecoverLeavesAConversionItStillCannotRecordOpen(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.swappedAndRecorded("postgres:17", true)
+	w.progress.convertErr = errors.New("platform database down")
+	outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress)
+	if !outcome.Unsettled || outcome.RolledBack || outcome.Converted {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.engine.find("new-id-9") == nil || w.recorded() != "new-id-9" {
+		t.Fatal("the converted container was put back")
+	}
+}
+
+// A new container that does not serve the new major is not taken as done.
+func TestDockerRecoverPutsBackANewContainerOnTheWrongMajor(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.swappedAndRecorded("postgres:16", true)
+	if outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress); !outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.progress.converted != nil {
+		t.Fatal("recorded as converted")
 	}
 	w.assertPutBack(t)
 }

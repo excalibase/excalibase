@@ -20,7 +20,8 @@ import (
 // shipped, dumped whole, stopped and renamed; a new container of the new
 // image, under the old name and host port, loads the dump on its first
 // start, before its server is on the network. Until the platform records the
-// new container, the old one is put back as it was.
+// new container, the old one is put back as it was; once it has, recovery
+// records a fully loaded conversion instead of putting it back.
 type DockerMajorUpgrader struct {
 	adapter *DockerBackupAdapter
 	now     func() time.Time
@@ -419,9 +420,11 @@ func (u *DockerMajorUpgrader) waitTCP(ctx context.Context, dc provisioner.Docker
 	}
 }
 
-// Recover puts the old container back after a driver died before the
-// conversion was recorded. See MajorUpgrader.
-func (u *DockerMajorUpgrader) Recover(ctx context.Context, inst *domain.DatabaseInstance, run domain.MajorUpgrade, _ UpgradeProgress) UpgradeOutcome {
+// Recover ends a run whose driver died before the conversion was recorded:
+// a recorded new container that loaded the dump and holds the new major is
+// the conversion done, and is recorded; anything else puts the old
+// container back. See MajorUpgrader.
+func (u *DockerMajorUpgrader) Recover(ctx context.Context, inst *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
 	dc, renamer, err := u.engine()
 	if err != nil || renamer == nil {
 		return UpgradeOutcome{Public: notPutBackPublic, Cause: errors.Join(err, errors.New(noRenameBlocker))}
@@ -442,7 +445,37 @@ func (u *DockerMajorUpgrader) Recover(ctx context.Context, inst *domain.Database
 		}
 		state.recorded = inst.Namespace != pre.ID
 	}
+	if state.newID != "" && inst.Namespace == state.newID && u.holdsNewMajor(ctx, dc, state.newID, run.ToVersion) {
+		if err := progress.Converted(u.now()); err != nil {
+			return notRecorded(err)
+		}
+		return UpgradeOutcome{Converted: true}
+	}
 	return u.putBack(ctx, dc, renamer, state, errors.New("the upgrade was interrupted"))
+}
+
+// holdsNewMajor: the new container, started if it is stopped, loaded the
+// dump in full and its data directory is on major.
+func (u *DockerMajorUpgrader) holdsNewMajor(ctx context.Context, dc provisioner.DockerClient, container, major string) bool {
+	current, err := dc.ContainerState(ctx, container)
+	if err != nil || !current.Found {
+		return false
+	}
+	if !current.Running {
+		if err := provisioner.StartHoldingPort(ctx, dc, restoreStartPoller, container); err != nil {
+			log.Printf("major upgrade: start %s to check it: %v", container, err)
+			return false
+		}
+	}
+	loaded, err := runScript(ctx, dc, container, provisioner.UpgradeStateScript())
+	if err != nil || strings.TrimSpace(loaded) != provisioner.UpgradeLoaded {
+		return false
+	}
+	onDisk, err := runScript(ctx, dc, container, provisioner.DataMajorScript())
+	if err != nil || strings.TrimSpace(onDisk) != major {
+		return false
+	}
+	return u.waitTCP(ctx, dc, container) == nil
 }
 
 // WaitServing lets the network in to the new server and waits for it. See

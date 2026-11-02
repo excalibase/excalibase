@@ -287,14 +287,30 @@ func (s *MajorUpgradeService) conclude(ctx context.Context, engine MajorUpgrader
 }
 
 // leaveOpen keeps a run whose conversion has not settled RUNNING, and the
-// project UPGRADING, for recovery to check again once this driver is gone.
+// project UPGRADING, for recovery to check again once this driver is gone. A
+// run something else already ended is left, with its project, as that left it.
 func (s *MajorUpgradeService) leaveOpen(ctx context.Context, run *domain.MajorUpgrade, public string) {
 	run.Step = domain.MajorUpgradeStepWaiting
 	run.Error = public
-	s.writeRun(ctx, run)
+	if err := s.cfg.Runs.UpdateMajorUpgrade(ctx, run); err != nil {
+		log.Printf("major upgrade %s: write run %s: %v", run.ProjectID, run.ID, err)
+		if !s.stillRunning(ctx, run) {
+			return
+		}
+	}
 	if err := s.setStatus(run.ProjectID, domain.StatusUpgrading, domain.MajorUpgradeStepWaiting, public); err != nil {
 		log.Printf("major upgrade %s: record waiting: %v", run.ProjectID, err)
 	}
+}
+
+// stillRunning reads back whether run is still the project's RUNNING run.
+func (s *MajorUpgradeService) stillRunning(ctx context.Context, run *domain.MajorUpgrade) bool {
+	stored, err := s.cfg.Runs.LatestMajorUpgrade(ctx, run.ProjectID)
+	if err != nil {
+		log.Printf("major upgrade %s: read run %s: %v", run.ProjectID, run.ID, err)
+		return false
+	}
+	return stored != nil && stored.ID == run.ID && stored.Status == domain.MajorUpgradeRunning
 }
 
 func rolledBackSentence(run *domain.MajorUpgrade) string {
@@ -437,6 +453,10 @@ func (p *runProgress) Converted(at time.Time) error {
 		stored, readErr := p.svc.cfg.Runs.LatestMajorUpgrade(p.ctx, p.run.ProjectID)
 		if readErr != nil || stored == nil || stored.ID != p.run.ID || !stored.Converted {
 			return fmt.Errorf("record the conversion to %s: %w", p.run.ToVersion, errors.Join(err, readErr))
+		}
+		// Recovery took over and ended the run; it is not this driver's to finish.
+		if stored.Status != domain.MajorUpgradeRunning {
+			return fmt.Errorf("record the conversion to %s: the run was already %s: %w", p.run.ToVersion, stored.Status, err)
 		}
 		// The mark committed before the error came back.
 		if stored.ConvertedAt != nil {
