@@ -26,9 +26,11 @@ const (
 	errAuthProvidersRead          = "failed to read the sign-in providers"
 )
 
-// authProviderSecrets writes and removes a provider's client secret; the vault client satisfies it.
+// authProviderSecrets reads, writes and removes a project's auth secrets; the vault client satisfies it.
 type authProviderSecrets interface {
+	Get(path string) (map[string]string, error)
 	Put(path string, data map[string]string) error
+	PutIfAbsent(path string, data map[string]string) (bool, error)
 	Delete(path string) error
 }
 
@@ -39,7 +41,9 @@ type AuthOAuthDeps struct {
 	Providers storage.ProjectAuthProviderStore
 	SignIn    storage.ProjectAuthSignInStore
 	// Hooks backs the auth hooks settings behind the authhooks flag.
-	Hooks   storage.ProjectAuthHookStore
+	Hooks storage.ProjectAuthHookStore
+	// MFA writes the end-user MFA switch behind the authmfa flag.
+	MFA     storage.ProjectAuthMFAStore
 	Secrets authProviderSecrets
 	// PublicBaseURL is the API host the auth service's callbacks are served behind.
 	PublicBaseURL string

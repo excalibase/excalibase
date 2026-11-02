@@ -403,48 +403,55 @@ func (v *Vault) Rekey(shares, threshold int) (*InitResult, error) {
 // --- Secret operations ---
 
 func (v *Vault) Put(path string, data map[string]string) error {
+	entry, err := v.sealEntry(data)
+	if err != nil {
+		return err
+	}
+	return v.store.PutSecret(path, entry)
+}
+
+// PutIfAbsent writes data only when nothing is stored at path, atomically in
+// the store; created is false when a secret was already there (it is kept).
+func (v *Vault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	entry, err := v.sealEntry(data)
+	if err != nil {
+		return false, err
+	}
+	return v.store.PutSecretIfAbsent(path, entry)
+}
+
+// sealEntry encrypts data under a fresh DEK, itself encrypted with the barrier key.
+func (v *Vault) sealEntry(data map[string]string) ([]byte, error) {
 	v.mu.RLock()
 	if v.barrierKey == nil {
 		v.mu.RUnlock()
-		return ErrSealed
+		return nil, ErrSealed
 	}
 	key := make([]byte, len(v.barrierKey))
 	copy(key, v.barrierKey)
 	v.mu.RUnlock()
 
-	// Generate per-secret DEK
 	dek, err := randomBytes(32)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	// Encrypt data with DEK
 	plaintext, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("marshal secret data: %w", err)
+		return nil, fmt.Errorf("marshal secret data: %w", err)
 	}
 	encryptedData, err := encrypt(dek, plaintext)
 	if err != nil {
-		return fmt.Errorf("encrypt data: %w", err)
+		return nil, fmt.Errorf("encrypt data: %w", err)
 	}
-
-	// Encrypt DEK with barrier key
 	encryptedDEK, err := encrypt(key, dek)
 	if err != nil {
-		return fmt.Errorf("encrypt dek: %w", err)
+		return nil, fmt.Errorf("encrypt dek: %w", err)
 	}
-
-	// Store both
-	entry := secretEntry{
-		EncryptedData: encryptedData,
-		EncryptedDEK:  encryptedDEK,
-	}
-	entryBytes, err := json.Marshal(entry)
+	entryBytes, err := json.Marshal(secretEntry{EncryptedData: encryptedData, EncryptedDEK: encryptedDEK})
 	if err != nil {
-		return fmt.Errorf("marshal secret entry: %w", err)
+		return nil, fmt.Errorf("marshal secret entry: %w", err)
 	}
-
-	return v.store.PutSecret(path, entryBytes)
+	return entryBytes, nil
 }
 
 func (v *Vault) Get(path string) (map[string]string, error) {

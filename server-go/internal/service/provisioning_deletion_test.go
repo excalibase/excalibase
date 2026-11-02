@@ -243,6 +243,12 @@ func (s *stubbornVault) DeletePrefix(string) (int, error)      { return 0, nil }
 func (s *stubbornVault) List(string) ([]string, error)         { return []string{s.leftover}, nil }
 func (s *stubbornVault) Sealed() bool                          { return false }
 func (s *stubbornVault) GetPublicKey() (string, error)         { return "", nil }
+func (s *stubbornVault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	if _, err := s.Get(path); err == nil {
+		return false, nil
+	}
+	return true, s.Put(path, data)
+}
 
 // failingStore lets a test fail the row writes the deletion state machine
 // depends on, without touching the rest of the store's behaviour.

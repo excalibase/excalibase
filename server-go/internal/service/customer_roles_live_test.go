@@ -101,8 +101,8 @@ func (r *liveRegistrar) RegisterProject(ctx context.Context, inst *domain.Databa
 	return r.rows.RegisterProject(ctx, inst, opts)
 }
 
-func (r *liveRegistrar) CarryRestoredSettings(ctx context.Context, sourceID, targetID string) error {
-	return r.rows.CarryRestoredSettings(ctx, sourceID, targetID)
+func (r *liveRegistrar) CarryRestoredSettings(ctx context.Context, pc *provisioner.ProvisionContext, sourceID, targetID string) error {
+	return r.rows.CarryRestoredSettings(ctx, pc, sourceID, targetID)
 }
 
 func customerRolesTier() config.TierConfig {
