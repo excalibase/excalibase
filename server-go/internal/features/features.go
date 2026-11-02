@@ -76,11 +76,13 @@ const (
 	// MajorUpgrade moves a project's Postgres database to a newer major
 	// version after a forced backup, and its Studio card (EXC-668).
 	MajorUpgrade Feature = "majorupgrade"
+	// TemplateCatalog is the self-managed service catalog beside the starter templates (EXC-669).
+	TemplateCatalog Feature = "templatecatalog"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog}
 }
 
 type Flags interface {

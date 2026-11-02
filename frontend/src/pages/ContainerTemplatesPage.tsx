@@ -8,6 +8,8 @@ import {
   useDeployTemplate,
   type AppTemplate,
   type TemplateApp,
+  type TemplateCategory,
+  type TemplateCredential,
   type TemplateDeployResult,
   type TemplateVar,
 } from '../api/appTemplates';
@@ -25,7 +27,17 @@ const SOURCE_TEXT: Record<TemplateVar['source'], string> = {
   literal: '',
   generated: 'generated on deploy, kept as a secret',
   database: "from this project's database",
-  app: 'from another app in this template',
+  app: 'from an app in this template',
+};
+
+const CATEGORY_TEXT: Record<TemplateCategory, string> = {
+  starter: 'Starter',
+  database: 'Database',
+  cache: 'Cache',
+  queue: 'Queue',
+  search: 'Search',
+  monitoring: 'Monitoring',
+  analytics: 'Analytics',
 };
 
 function costLine(t: AppTemplate): string {
@@ -62,6 +74,7 @@ function AppDetails({ app }: { readonly app: TemplateApp }) {
       <p className="text-sm text-text-primary">
         <span className="font-medium">{app.name}</span> · {kind}
         {app.disk && ` · ${app.disk.size} disk at ${app.disk.mountPath}`}
+        {app.minMemory && ` · needs at least ${app.minMemory} memory per copy`}
       </p>
       <p className="text-xs font-mono text-text-tertiary break-all">{app.image}</p>
       {app.args && app.args.length > 0 && (
@@ -73,11 +86,30 @@ function AppDetails({ app }: { readonly app: TemplateApp }) {
             <li key={v.name} className="text-xs text-text-secondary">
               <code className="font-mono">{v.name}</code>{' '}
               {v.source === 'literal' ? <code className="font-mono">= {v.value}</code> : `— ${SOURCE_TEXT[v.source]}`}
+              {v.showOnce && ', shown to you once after the deploy'}
             </li>
           ))}
         </ul>
       )}
     </li>
+  );
+}
+
+function Credentials({ values }: { readonly values: TemplateCredential[] }) {
+  return (
+    <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2" data-testid="template-credentials">
+      <p className="text-xs text-text-primary">
+        Copy these now and keep them somewhere safe: Excalibase stored them as secrets of the app and cannot show them again.
+      </p>
+      <ul className="mt-1 space-y-1">
+        {values.map((v) => (
+          <li key={`${v.app}.${v.name}`} className="text-xs">
+            <code className="font-mono text-text-secondary">{v.name}</code>{' '}
+            <code className="font-mono break-all select-all text-text-primary">{v.value}</code>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -88,6 +120,7 @@ function Deployed({ projectId, result }: { readonly projectId: string; readonly 
         Created {result.apps.map((a) => a.name).join(', ')}. Their first deploys are rolling out.
         {result.privateNetworkTurnedOn && " The project's private network is now on."}
       </p>
+      {result.credentials && result.credentials.length > 0 && <Credentials values={result.credentials} />}
       <Link to={`/project/${projectId}/containers`} className="text-xs text-purple-400 hover:underline">
         Go to Containers
       </Link>
@@ -115,9 +148,24 @@ function TemplateCard({ projectId, template }: { readonly projectId: string; rea
           <p className="text-sm text-text-secondary">{template.summary}</p>
         </div>
         <div className="flex gap-2 flex-shrink-0">
+          {template.catalog && template.category && (
+            <span data-testid="template-category">
+              <ToneBadge label={CATEGORY_TEXT[template.category]} tone="neutral" />
+            </span>
+          )}
           <ToneBadge label={`${template.apps.length} ${template.apps.length === 1 ? 'app' : 'apps'}`} tone="neutral" />
         </div>
       </div>
+      {template.catalog && (
+        <p className="text-xs text-text-secondary mt-2" data-testid="template-self-managed">
+          You run this service. Excalibase does not back it up, upgrade it or watch it.
+        </p>
+      )}
+      {template.license && (
+        <p className="text-xs text-text-tertiary mt-1" data-testid="template-license">
+          Licence: {template.license}
+        </p>
+      )}
       <p className="text-xs text-text-secondary mt-2" data-testid="template-cost">{costLine(template)}</p>
       {network && (
         <p className="text-xs text-text-secondary mt-1 flex items-center gap-1" data-testid="template-network">
@@ -208,11 +256,23 @@ function TemplateList({ projectId }: { readonly projectId: string }) {
     );
   }
   if (!templates) return <Spinner />;
+  const starters = templates.filter((t) => !t.catalog);
+  const catalog = templates.filter((t) => t.catalog);
   return (
-    <div className="space-y-3" data-testid="templates-list">
-      {templates.map((t) => (
-        <TemplateCard key={t.id} projectId={projectId} template={t} />
-      ))}
+    <div className="space-y-6" data-testid="templates-list">
+      <div className="space-y-3" data-testid="templates-starters">
+        {starters.map((t) => (
+          <TemplateCard key={t.id} projectId={projectId} template={t} />
+        ))}
+      </div>
+      {catalog.length > 0 && (
+        <section className="space-y-3" data-testid="templates-catalog">
+          <h3 className="text-sm font-medium text-text-primary">Services you run</h3>
+          {catalog.map((t) => (
+            <TemplateCard key={t.id} projectId={projectId} template={t} />
+          ))}
+        </section>
+      )}
     </div>
   );
 }

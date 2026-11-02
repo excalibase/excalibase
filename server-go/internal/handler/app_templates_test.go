@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/excalibase/provisioning-poc/internal/apptemplate"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -150,5 +151,25 @@ func TestTemplateRefusalListsItsReasons(t *testing.T) {
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Reasons) != 2 {
 		t.Fatalf("%s (%v)", w.Body, err)
+	}
+}
+
+// A deploy that shows a generated value once is never stored by a cache on the way.
+func TestAppTemplateDeploy_CredentialsAreNotCached(t *testing.T) {
+	api := &fakeTemplates{result: &service.TemplateDeployResult{
+		TemplateID:  "valkey",
+		Credentials: apptemplate.ShownValues{{App: "valkey", Name: "VALKEY_URL", Value: "redis://:generated@valkey:6379/0"}},
+	}}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/proj-1/app-templates/valkey/deploy", strings.NewReader(`{}`))
+	templateRouter(api, developerAccess).ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("status %d, cache-control %q", rec.Code, rec.Header().Get("Cache-Control"))
+	}
+	var body struct {
+		Credentials []struct{ App, Name, Value string } `json:"credentials"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Credentials) != 1 || body.Credentials[0].Value != "redis://:generated@valkey:6379/0" {
+		t.Fatalf("body %s", rec.Body.String())
 	}
 }

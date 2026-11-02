@@ -135,3 +135,10 @@ func TestDarkFeatures_MajorUpgradeVariable(t *testing.T) {
 		t.Fatalf("major upgrade variable = %q, want FEATURE_MAJORUPGRADE", got)
 	}
 }
+
+// EXC-669: the chart and the single-host compose file set this exact name.
+func TestDarkFeatures_TemplateCatalogVariable(t *testing.T) {
+	if got := featureEnv[features.TemplateCatalog]; got != "FEATURE_TEMPLATECATALOG" {
+		t.Errorf("template catalog variable = %q", got)
+	}
+}

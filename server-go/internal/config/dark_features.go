@@ -32,6 +32,7 @@ var featureEnv = map[features.Feature]string{
 	features.DBReadAddress:   "FEATURE_DBREADADDRESS",
 	features.DBCopy:          "FEATURE_DBCOPY",
 	features.MajorUpgrade:    "FEATURE_MAJORUPGRADE",
+	features.TemplateCatalog: "FEATURE_TEMPLATECATALOG",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.

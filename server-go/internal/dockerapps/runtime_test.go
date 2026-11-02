@@ -151,12 +151,18 @@ func TestApplyRunsTheAppOnItsProjectNetworkUnderTheSandbox(t *testing.T) {
 	}
 }
 
-func TestApplyWithoutASandboxDropsEveryCapability(t *testing.T) {
+// Without a sandbox an app keeps only what an image needs to step down from
+// root (gosu, su-exec, setpriv) and to bind a low port.
+func TestApplyWithoutASandboxKeepsOnlyTheStepDownCapabilities(t *testing.T) {
 	h := newHarness(t, func(o *Options) { o.SandboxRuntime = "" })
 	h.deploy(freeApp(), "dep-1")
 	host := h.engine.appContainers("app-01")[0].host
-	if host.Runtime != "" || !slices.Equal(host.CapDrop, []string{"ALL"}) || !slices.Equal(host.CapAdd, []string{"NET_BIND_SERVICE"}) {
+	want := []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"}
+	if host.Runtime != "" || !slices.Equal(host.CapDrop, []string{"ALL"}) || !slices.Equal(host.CapAdd, want) {
 		t.Fatalf("unsandboxed app: runtime %q drop %v add %v", host.Runtime, host.CapDrop, host.CapAdd)
+	}
+	if !slices.Equal(host.SecurityOpt, []string{"no-new-privileges"}) || host.PidsLimit == nil || *host.PidsLimit != appPidsLimit {
+		t.Fatalf("unsandboxed app: security %v pids %v", host.SecurityOpt, host.PidsLimit)
 	}
 }
 

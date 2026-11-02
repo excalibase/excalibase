@@ -4,6 +4,8 @@ format: excalibase.template/v1
 id: redis
 name: Redis
 summary: Redis 7.4 as an internal service with a password and a 1Gi disk.
+category: starter
+license: Redis 7.4 RSALv2 or SSPLv1
 description: >-
   One internal app named redis, reachable only by this project's apps at
   redis:6379 over the project's private network. Data is kept on a 1Gi disk

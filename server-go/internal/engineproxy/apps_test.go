@@ -227,6 +227,21 @@ func TestCheckCreateAllowsAnAppContainer(t *testing.T) {
 	}
 }
 
+// An unsandboxed app may add back what it needs to step down from root, and nothing more.
+func TestCheckCreateAdmitsOnlyTheStepDownCapabilities(t *testing.T) {
+	stepDown := []any{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "cap_setuid"}
+	body := createBody(t, func(b map[string]any) { hostConfig(b)["CapAdd"] = stepDown })
+	if err := appsPolicy().CheckCreate("excalibase-app-1", body); err != nil {
+		t.Fatalf("step-down capabilities refused: %v", err)
+	}
+	for _, capability := range []string{"NET_RAW", "SYS_ADMIN", "SYS_PTRACE", "SETPCAP", "SETFCAP", "MKNOD", "KILL", "SYS_CHROOT", "FSETID", "AUDIT_WRITE", "DAC_READ_SEARCH", "ALL"} {
+		body := createBody(t, func(b map[string]any) { hostConfig(b)["CapAdd"] = []any{"SETUID", capability} })
+		if err := appsPolicy().CheckCreate("excalibase-app-1", body); err == nil {
+			t.Errorf("CapAdd %s allowed", capability)
+		}
+	}
+}
+
 func appsProxyEngine(t *testing.T) (*fakeEngine, string) {
 	t.Helper()
 	engine, proxy := newProxyWith(t, appsPolicy())
