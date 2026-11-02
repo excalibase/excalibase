@@ -299,7 +299,7 @@ func TestK8sConvertDoesNotPutBackDataItCouldNotRecord(t *testing.T) {
 		}
 	}
 	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
-	if outcome.Converted || outcome.RolledBack || !w.imageIs("17") {
+	if !outcome.Unsettled || outcome.Converted || outcome.RolledBack || !w.imageIs("17") {
 		t.Fatalf("outcome = %+v image %s", outcome, w.image())
 	}
 }
@@ -327,6 +327,16 @@ func TestK8sRecover(t *testing.T) {
 		_ = k8s.SetClusterArchive(w.cluster(), image17, "src-backups-pg17", "pg17")
 		w.serving(17, 2, 2)
 		if outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress); !outcome.Converted || w.progress.converted == nil {
+			t.Fatalf("outcome = %+v", outcome)
+		}
+	})
+	t.Run("the data is on the new major but cannot be recorded", func(t *testing.T) {
+		w := newK8sUpgradeWorld(t)
+		image17, _ := config.PostgresImage("17")
+		_ = k8s.SetClusterArchive(w.cluster(), image17, "src-backups-pg17", "pg17")
+		w.serving(17, 2, 2)
+		w.progress.convertErr = errors.New("database down")
+		if outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress); !outcome.Unsettled || outcome.Converted {
 			t.Fatalf("outcome = %+v", outcome)
 		}
 	})

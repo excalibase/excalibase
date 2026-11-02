@@ -349,15 +349,20 @@ func TestDockerConvertPutsTheOldServerBackAtEveryStep(t *testing.T) {
 	}
 }
 
-func TestDockerConvertPutsTheOldServerBackWhenTheConversionCannotBeRecorded(t *testing.T) {
+// The mark may have committed, so recovery decides from the run's row.
+func TestDockerConvertLeavesAConversionItCannotRecordForRecovery(t *testing.T) {
 	w := newDockerUpgradeWorld(t)
 	w.progress.convertErr = errors.New("platform database down")
-	if outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress); !outcome.RolledBack {
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !outcome.Unsettled || outcome.RolledBack || outcome.Converted {
 		t.Fatalf("outcome = %+v", outcome)
 	}
-	w.assertPutBack(t)
-	if w.inst.Namespace != "old-id" {
-		t.Fatalf("inst = %q", w.inst.Namespace)
+	fresh := w.engine.find(provisioner.DatabaseContainerName("dk-1"))
+	if fresh == nil || fresh.id == "old-id" || w.recorded() != fresh.id {
+		t.Fatalf("new container = %+v, project records %q", fresh, w.recorded())
+	}
+	if w.engine.find(provisioner.PreUpgradeContainerName("dk-1", "mu-1")) == nil {
+		t.Fatal("the old container is gone")
 	}
 }
 

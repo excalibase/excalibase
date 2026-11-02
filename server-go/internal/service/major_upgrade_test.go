@@ -138,7 +138,7 @@ func (w *upgradeWorld) Convert(_ context.Context, _ *domain.DatabaseInstance, ru
 	progress.WritesStopped(time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC))
 	if w.outcome.Converted {
 		if err := progress.Converted(time.Date(2026, 10, 29, 10, 5, 0, 0, time.UTC)); err != nil {
-			return UpgradeOutcome{Cause: err}
+			return UpgradeOutcome{Unsettled: true, Cause: err}
 		}
 	}
 	return w.outcome
@@ -148,7 +148,7 @@ func (w *upgradeWorld) Recover(_ context.Context, _ *domain.DatabaseInstance, ru
 	w.record("recover:" + run.ToVersion)
 	if w.recovered.Converted {
 		if err := progress.Converted(time.Date(2026, 10, 29, 10, 5, 0, 0, time.UTC)); err != nil {
-			return UpgradeOutcome{Cause: err}
+			return UpgradeOutcome{Unsettled: true, Cause: err}
 		}
 	}
 	return w.recovered
@@ -175,6 +175,8 @@ type memMajorUpgrades struct {
 	runs      map[string]*domain.MajorUpgrade
 	instances storage.InstanceStore
 	markErr   error
+	// markLandsErr commits the mark, then answers this error.
+	markLandsErr error
 }
 
 func newMemMajorUpgrades(instances storage.InstanceStore) *memMajorUpgrades {
@@ -240,7 +242,10 @@ func (m *memMajorUpgrades) MarkMajorUpgradeConverted(_ context.Context, id, proj
 		return err
 	}
 	inst.PostgresVersion = toVersion
-	return m.instances.Update(inst)
+	if err := m.instances.Update(inst); err != nil {
+		return err
+	}
+	return m.markLandsErr
 }
 
 func (m *memMajorUpgrades) LatestMajorUpgrade(_ context.Context, projectID string) (*domain.MajorUpgrade, error) {
@@ -515,15 +520,47 @@ func TestMajorUpgrade_ConvertedButStepsAfterFailIsCompletedWithWarnings(t *testi
 	}
 }
 
-func TestMajorUpgrade_RecordFailsToConvertIsAFailure(t *testing.T) {
+// Converted data the platform could not record stays open, then recovery
+// records it once the platform database is back.
+func TestMajorUpgrade_AConversionItCannotRecordStaysOpenUntilRecovered(t *testing.T) {
 	w, svc := newUpgradeWorld(t, upgradeProject())
 	w.runs.markErr = errors.New("platform db down")
 	if _, err := svc.Start(context.Background(), "proj-up", confirmed("17"), "user-1"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	latest, _ := w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
-	if latest.Status != domain.MajorUpgradeFailed {
+	if latest.Status != domain.MajorUpgradeRunning || latest.Converted {
 		t.Fatalf("record = %+v", latest)
+	}
+	if inst := projectRow(t, w); inst.Status != string(domain.StatusUpgrading) || inst.PostgresVersion != "16" {
+		t.Fatalf("project = %s on %s", inst.Status, inst.PostgresVersion)
+	}
+	w.runs.markErr = nil
+	w.recovered = UpgradeOutcome{Converted: true}
+	svc.cfg.Now = func() time.Time { return time.Now().Add(time.Hour) }
+	svc.RecoverInterrupted(context.Background())
+	latest, _ = w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
+	if latest.Status != domain.MajorUpgradeCompleted || !latest.Converted {
+		t.Fatalf("after recovery = %+v", latest)
+	}
+	if inst := projectRow(t, w); inst.Status != string(domain.StatusActive) || inst.PostgresVersion != "17" {
+		t.Fatalf("project = %s on %s", inst.Status, inst.PostgresVersion)
+	}
+}
+
+// A mark that committed but answered an error is read back, not redone.
+func TestMajorUpgrade_AConversionRecordedDespiteAnErrorFinishes(t *testing.T) {
+	w, svc := newUpgradeWorld(t, upgradeProject())
+	w.runs.markLandsErr = errors.New("connection reset after commit")
+	if _, err := svc.Start(context.Background(), "proj-up", confirmed("17"), "user-1"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	latest, _ := w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
+	if latest.Status != domain.MajorUpgradeCompleted || !latest.Converted {
+		t.Fatalf("record = %+v", latest)
+	}
+	if inst := projectRow(t, w); inst.Status != string(domain.StatusActive) || inst.PostgresVersion != "17" {
+		t.Fatalf("project = %s on %s", inst.Status, inst.PostgresVersion)
 	}
 }
 

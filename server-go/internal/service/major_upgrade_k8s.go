@@ -97,7 +97,7 @@ const (
 	noArchiveBlocker      = "this database has no backup archive; turn on backups for this project"
 	stillRunningPublic    = "the conversion is taking much longer than expected; it was left running and is checked again every few minutes, and the database is offline until it ends"
 	notPutBackPublic      = "the upgrade failed and the database could not be started again on its old version"
-	notRecordedPublic     = "the database was converted but the platform could not record it"
+	notRecordedPublic     = "the database was converted but the platform could not record it yet; it is checked again every few minutes"
 )
 
 // clusterUpgrade is what one run changes on the cluster, and back.
@@ -280,6 +280,12 @@ func unsettled(cause error) UpgradeOutcome {
 	return UpgradeOutcome{Unsettled: true, Public: stillRunningPublic, Cause: cause}
 }
 
+// notRecorded leaves converted data whose record failed for recovery, which
+// reads the run again and records it.
+func notRecorded(cause error) UpgradeOutcome {
+	return UpgradeOutcome{Unsettled: true, Public: notRecordedPublic, Cause: cause}
+}
+
 // watch waits for the operator to convert the data, putting the old major
 // back when the conversion failed or never started. Past JobMax it stops
 // watching without deciding: recovery checks the run again later.
@@ -300,7 +306,7 @@ func (u *K8sMajorUpgrader) watch(ctx context.Context, run domain.MajorUpgrade, p
 		}
 		if major, ok := k8s.ClusterDataMajor(cluster); ok && major == plan.toMajor {
 			if err := progress.Converted(u.now()); err != nil {
-				return UpgradeOutcome{Public: notRecordedPublic, Cause: err}
+				return notRecorded(err)
 			}
 			return UpgradeOutcome{Converted: true}
 		}
@@ -365,7 +371,7 @@ func (u *K8sMajorUpgrader) Recover(ctx context.Context, inst *domain.DatabaseIns
 	}
 	if major, ok := k8s.ClusterDataMajor(cluster); ok && major == plan.toMajor {
 		if err := progress.Converted(u.now()); err != nil {
-			return UpgradeOutcome{Public: notRecordedPublic, Cause: err}
+			return notRecorded(err)
 		}
 		return UpgradeOutcome{Converted: true}
 	}

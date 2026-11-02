@@ -157,7 +157,7 @@ func (u *DockerMajorUpgrader) Convert(ctx context.Context, inst *domain.Database
 	}
 	state.recorded = true
 	if err := progress.Converted(u.now()); err != nil {
-		return u.putBack(ctx, dc, renamer, state, err)
+		return notRecorded(err)
 	}
 	return UpgradeOutcome{Converted: true}
 }

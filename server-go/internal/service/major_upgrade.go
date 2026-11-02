@@ -434,7 +434,14 @@ func (p *runProgress) WritesStopped(at time.Time) {
 
 func (p *runProgress) Converted(at time.Time) error {
 	if err := p.svc.cfg.Runs.MarkMajorUpgradeConverted(p.ctx, p.run.ID, p.run.ProjectID, p.run.ToVersion, at); err != nil {
-		return fmt.Errorf("record the conversion to %s: %w", p.run.ToVersion, err)
+		stored, readErr := p.svc.cfg.Runs.LatestMajorUpgrade(p.ctx, p.run.ProjectID)
+		if readErr != nil || stored == nil || stored.ID != p.run.ID || !stored.Converted {
+			return fmt.Errorf("record the conversion to %s: %w", p.run.ToVersion, errors.Join(err, readErr))
+		}
+		// The mark committed before the error came back.
+		if stored.ConvertedAt != nil {
+			at = *stored.ConvertedAt
+		}
 	}
 	converted := at.UTC()
 	p.run.Converted = true
