@@ -469,13 +469,9 @@ read back no further than the retention. To stop: remove the two lines and
 `docker compose --profile hostlogs rm -sf loki`; `docker volume rm
 excalibase-platform-logs` deletes the stored lines.
 
-Disk: each project stores at most its plan's daily budget of log text a UTC
-day (free 64 MiB, standard 256, enterprise 1024); past it one notice line is
-stored and the rest of the day is skipped. The day's count is kept in the
-platform database, so a restart does not grant a second budget. While less
-than `HOST_LOGS_MIN_FREE_PERCENT` (10%) or 2 GiB of the host disk is free,
-shipping pauses for every project and resumes at 15% and 3 GiB; the lines wait
-in the engine's own log meanwhile. Lines are cut at 16 KiB. Text compresses about 5-10 times, so 10 busy projects
+Disk: each project stores at most `HOST_LOGS_DAILY_MB` (64) MiB of log text a
+UTC day; past it one notice line is stored and the rest of the day is skipped.
+Lines are cut at 16 KiB. Text compresses about 5-10 times, so 10 busy projects
 kept 7 days take about 0.5-1 GiB. Loki is limited to 512 MiB of memory and half
 a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
 
@@ -483,12 +479,29 @@ a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
 |---|---|---|
 | `FEATURE_HOSTLOGS` | unset (`true` with `--host-logs`) | store and search project logs in the bundled Loki |
 | `COMPOSE_PROFILES` | unset (`hostlogs` with `--host-logs`) | starts the `loki` service |
-| `HOST_LOGS_DAILY_MB` | `64` | stored log text per UTC day for a plan not named below |
-| `HOST_LOGS_DAILY_MB_FREE`, `_STANDARD`, `_ENTERPRISE` | `64`, `256`, `1024` | each plan's daily budget |
-| `HOST_LOGS_MIN_FREE_PERCENT` | `10` | shipping pauses below this share of the disk free (1-50) |
-| `FEATURE_LOGDELETION` | unset | delete a project's stored lines from Loki when the project is deleted (Loki removes them within a day) |
+| `HOST_LOGS_DAILY_MB` | `64` | each project's stored log text per UTC day |
 | `LOG_RETENTION` | `168h` | how long lines are kept (whole hours, at least 24h) |
 | `FEATURE_LOGRETENTION` | unset | keep each project's lines for its plan instead: `LOG_RETENTION_FREE` (`24h`), `LOG_RETENTION_STANDARD` and `LOG_RETENTION_ENTERPRISE` (`168h`) |
+
+## End-user auth hooks
+
+```bash
+./init.sh --domain example.com --admin-email you@example.com --auth-hooks
+```
+
+Turns on `FEATURE_AUTHHOOKS`: a project Admin points sign-up and sign-in at
+their own HTTPS endpoint, called signed by the auth service. Hook calls never
+reach private ranges, but this host's public address is public, so it must be
+listed too. `init.sh` writes what the install's names resolve to plus the
+global addresses on the host's interfaces (`ip`; without it, a warning), and
+warns when a name resolves somewhere else (a CDN, proxy or NAT); the stack
+does not start with hooks on and the list empty, as the Helm chart refuses to
+install without `auth.hooks.extraDenyCIDRs`.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_AUTHHOOKS` | unset (`true` with `--auth-hooks`) | end-user auth hooks |
+| `AUTH_HOOKS_DENY_CIDRS` | unset (the names' and interfaces' addresses with `--auth-hooks`) | the host's own public ranges, comma-separated CIDRs, refused to hook calls; behind NAT, add the public address |
 
 ## Request charts and slow queries
 
@@ -532,6 +545,8 @@ restart. DocumentDB projects have no slow-queries page on a single host.
 - `preflight: ... is a known default` / `must be at least 32 hex characters` /
   `must all differ` — the stack does not start on a weak or reused secret.
   `docker compose logs preflight` names it.
+- `preflight: FEATURE_AUTHHOOKS needs AUTH_HOOKS_DENY_CIDRS` — auth hooks are on
+  and nothing keeps them off this host: list its public addresses.
 
 ## What works on a single host today
 

@@ -2,6 +2,8 @@ package dockerbuilds
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +34,8 @@ const (
 	labelProject   = "excalibase.project"
 	labelDeadline  = "excalibase.build.deadline"
 	labelDisk      = "excalibase.build.disk"
+	// labelReady is the token only the collect step is told; its ready mark must carry it.
+	labelReady     = "excalibase.build.ready"
 	componentBuild = "site-build"
 
 	buildUser    = "1000:1000"
@@ -175,7 +179,9 @@ func (r *Runner) stepContainer(site box, spec sitebuilds.RunSpec, step, proxy st
 		planned.host.CPUShares = buildShares
 		config.Env = buildEnv(spec, proxy)
 	case stepCollect:
-		config.Env = []string{"ROOT_DIR=" + spec.RootDir, "OUTPUT_DIR=" + spec.OutputDir}
+		token := readyToken()
+		config.Labels = withLabel(config.Labels, labelReady, token)
+		config.Env = []string{"ROOT_DIR=" + spec.RootDir, "OUTPUT_DIR=" + spec.OutputDir, "READY_TOKEN=" + token}
 	}
 	if step != stepPrepare {
 		config.Cmd = site.deadlined("bash", "-c", r.scripts[step])
@@ -271,4 +277,23 @@ func (r *Runner) pull(ctx context.Context, ref string) error {
 			return fmt.Errorf("%w: pull %s: %s", sitebuilds.ErrImagePull, ref, detail)
 		}
 	}
+}
+
+// readyToken is 128 random bits; the build step never sees it.
+func readyToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("read random bytes: %v", err))
+	}
+	return hex.EncodeToString(b)
+}
+
+// withLabel copies labels with one more, so the box's shared map is left alone.
+func withLabel(labels map[string]string, name, value string) map[string]string {
+	out := make(map[string]string, len(labels)+1)
+	for k, v := range labels {
+		out[k] = v
+	}
+	out[name] = value
+	return out
 }

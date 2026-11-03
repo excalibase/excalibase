@@ -300,7 +300,7 @@ func TestStatusWalksTheSteps(t *testing.T) {
 	if status = mustStatus(t, runner); status.Phase != sitebuilds.RunRunning {
 		t.Fatalf("ready before the output was packed: %+v", status)
 	}
-	engine.get(step("collect")).files["/work/collect/ready"] = []byte{}
+	engine.get(step("collect")).files["/work/collect/ready"] = []byte(collectToken(engine))
 	if status, _ = runner.Status(ctx, testBuild); status.Phase != sitebuilds.RunReady {
 		t.Fatalf("packed output not ready: %+v", status)
 	}
@@ -645,7 +645,7 @@ func TestStatusPrefersPackedOutputOverTheDeadline(t *testing.T) {
 		engine.finish(step(name), 0, false)
 		mustStatus(t, runner)
 	}
-	engine.get(step("collect")).files["/work/collect/ready"] = []byte{}
+	engine.get(step("collect")).files["/work/collect/ready"] = []byte(collectToken(engine))
 	now.now = now.now.Add(11 * time.Minute)
 	if status := mustStatus(t, runner); status.Phase != sitebuilds.RunReady {
 		t.Fatalf("%+v", status)
@@ -755,4 +755,51 @@ func TestBuildNetworksIsolateBothAddressFamilies(t *testing.T) {
 	if options["com.docker.network.bridge.gateway_mode_ipv4"] != "isolated" || options["com.docker.network.bridge.gateway_mode_ipv6"] != "isolated" {
 		t.Fatalf("build network options %v", options)
 	}
+}
+
+// A ready mark the build step left on the shared volume is not packed output:
+// collect.sh still has to run and pack it.
+func TestStatusIgnoresAReadyMarkLeftBeforeCollectStarts(t *testing.T) {
+	engine := newFakeEngine()
+	runner, _ := newTestRunner(t, engine, "runsc")
+	startBuild(t, runner)
+	for _, name := range []string{"prepare", "clone"} {
+		engine.finish(step(name), 0, false)
+		mustStatus(t, runner)
+	}
+	engine.get(step("collect")).files["/work/collect/ready"] = []byte{}
+	engine.get(step("collect")).files["/work/collect/site.tar.gz"] = []byte("planted")
+	engine.finish(step("build"), 0, false)
+	status := mustStatus(t, runner)
+	if status.Phase != sitebuilds.RunRunning || engine.get(step("collect")).state != "running" {
+		t.Fatalf("a planted ready mark skipped collect: %+v, collect %s", status, engine.get(step("collect")).state)
+	}
+}
+
+// A running collect step whose ready mark is not its own token (the build
+// step's leftover, before collect.sh removed it) is not packed yet.
+func TestStatusNeedsTheCollectStepsOwnReadyToken(t *testing.T) {
+	engine := newFakeEngine()
+	runner, _ := newTestRunner(t, engine, "runsc")
+	startBuild(t, runner)
+	for _, name := range []string{"prepare", "clone", "build"} {
+		engine.finish(step(name), 0, false)
+		mustStatus(t, runner)
+	}
+	token := collectToken(engine)
+	if len(token) < 32 || !slices.Contains(engine.get(step("collect")).config.Env, "READY_TOKEN="+token) {
+		t.Fatalf("collect has no ready token of its own: %q", token)
+	}
+	engine.get(step("collect")).files["/work/collect/ready"] = []byte{}
+	if status := mustStatus(t, runner); status.Phase != sitebuilds.RunRunning {
+		t.Fatalf("an empty ready mark counted as packed: %+v", status)
+	}
+	engine.get(step("collect")).files["/work/collect/ready"] = []byte(token)
+	if status := mustStatus(t, runner); status.Phase != sitebuilds.RunReady {
+		t.Fatalf("its own token did not count: %+v", status)
+	}
+}
+
+func collectToken(engine *fakeEngine) string {
+	return engine.get(step("collect")).config.Labels["excalibase.build.ready"]
 }

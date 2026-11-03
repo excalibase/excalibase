@@ -10,6 +10,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -23,16 +24,19 @@ const (
 	errAuthHooksSave                = "failed to save the auth hooks"
 )
 
-// authHookView is one hook on the wire.
+// authHookView is one hook on the wire. URL is nil below Admin: it may carry
+// the receiver's token, so a Developer sees the host only.
 type authHookView struct {
-	Hook    string `json:"hook"`
-	Enabled bool   `json:"enabled"`
-	URL     string `json:"url"`
+	Hook    string  `json:"hook"`
+	Enabled bool    `json:"enabled"`
+	Host    string  `json:"host"`
+	URL     *string `json:"url,omitempty"`
 }
 
 // authHooksResponse is the GET body, and what every write answers.
 type authHooksResponse struct {
 	SecretSet bool           `json:"secretSet"`
+	CanChange bool           `json:"canChange"`
 	Hooks     []authHookView `json:"hooks"`
 }
 
@@ -52,7 +56,14 @@ func (h *ProvisioningHandler) GetAuthHooks(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	h.writeAuthHooks(r.Context(), w, projectID)
+	h.writeAuthHooks(r.Context(), w, projectID, callerMayChangeAuthHooks(r))
+}
+
+// callerMayChangeAuthHooks mirrors the routes' Admin write policy; an
+// unresolved access reads as no.
+func callerMayChangeAuthHooks(r *http.Request) bool {
+	access := custommw.ProjectAccessFromContext(r.Context())
+	return access != nil && access.RoleAtLeast(domain.OrgRoleAdmin)
 }
 
 // PutAuthHook serves PUT /api/projects/{projectId}/auth-hooks/{hook}.
@@ -82,7 +93,7 @@ func (h *ProvisioningHandler) PutAuthHook(w http.ResponseWriter, r *http.Request
 	}
 	details, _ := json.Marshal(map[string]any{"hook": hook, "enabled": next.Enabled, "host": domain.AuthHookURLHost(next.URL)})
 	h.writeAuthAudit(r, projectID, auditActionAuthHookUpdate, auditResourceAuthHook, hook, string(details))
-	h.writeAuthHooks(r.Context(), w, projectID)
+	h.writeAuthHooks(r.Context(), w, projectID, callerMayChangeAuthHooks(r))
 }
 
 // decodeAuthHookUpdate validates the body. The 409 for a missing secret is the
@@ -185,7 +196,7 @@ func (h *ProvisioningHandler) DeleteAuthHookSecret(w http.ResponseWriter, r *htt
 		return
 	}
 	h.writeAuthAudit(r, projectID, auditActionAuthHookSecretDelete, auditResourceAuthHook, projectID, `{"secretSet":false,"hooksEnabled":false}`)
-	h.writeAuthHooks(r.Context(), w, projectID)
+	h.writeAuthHooks(r.Context(), w, projectID, callerMayChangeAuthHooks(r))
 }
 
 // lockAuthHookSecret takes the project's secret lock, so a rotation and a
@@ -200,16 +211,20 @@ func (h *ProvisioningHandler) lockAuthHookSecret(ctx context.Context, w http.Res
 	return release, true
 }
 
-func (h *ProvisioningHandler) writeAuthHooks(ctx context.Context, w http.ResponseWriter, projectID string) {
+func (h *ProvisioningHandler) writeAuthHooks(ctx context.Context, w http.ResponseWriter, projectID string, admin bool) {
 	stored, secretSet, err := h.storedAuthHooks(ctx, projectID)
 	if err != nil {
 		log.Printf("ERROR: read the auth hooks of project %s: %v", projectID, err)
 		httpError(w, errAuthHooksRead, http.StatusInternalServerError)
 		return
 	}
-	response := authHooksResponse{SecretSet: secretSet, Hooks: make([]authHookView, 0, len(stored))}
+	response := authHooksResponse{SecretSet: secretSet, CanChange: admin, Hooks: make([]authHookView, 0, len(stored))}
 	for _, hook := range stored {
-		response.Hooks = append(response.Hooks, authHookView{Hook: hook.Hook, Enabled: hook.Enabled, URL: hook.URL})
+		view := authHookView{Hook: hook.Hook, Enabled: hook.Enabled, Host: domain.AuthHookURLHost(hook.URL)}
+		if admin {
+			view.URL = &hook.URL
+		}
+		response.Hooks = append(response.Hooks, view)
 	}
 	writeJSON(w, response)
 }

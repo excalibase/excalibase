@@ -170,17 +170,6 @@ func (f *fakeEngine) ContainerLogs(_ context.Context, id string, _ container.Log
 	return io.NopCloser(&out), nil
 }
 
-func (f *fakeEngine) ContainerStatPath(_ context.Context, id, path string) (container.PathStat, error) {
-	c := f.get(id)
-	if c == nil {
-		return container.PathStat{}, errdefs.ErrNotFound.WithMessage(id)
-	}
-	if _, ok := c.files[path]; !ok {
-		return container.PathStat{}, errdefs.ErrNotFound.WithMessage(path)
-	}
-	return container.PathStat{Name: path}, nil
-}
-
 func (f *fakeEngine) CopyFromContainer(_ context.Context, id, path string) (io.ReadCloser, container.PathStat, error) {
 	c := f.get(id)
 	if c == nil {

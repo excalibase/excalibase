@@ -53,11 +53,6 @@ jobs:
               - 'server-go/cmd/app-probe/**'
               - 'server-go/internal/hostlogs/**'
               - 'server-go/internal/enginestats/**'
-              - 'server-go/internal/logdrain/**'
-              - 'server-go/internal/hostaddr/**'
-              - 'server-go/internal/publicaddr/**'
-              - 'server-go/cmd/log-forwarder/**'
-              - 'server-go/internal/service/log_drains*'
               - 'server-go/internal/dockerbuilds/**'
               - 'server-go/internal/buildegress/**'
               - 'server-go/cmd/build-egress/**'
@@ -140,7 +135,7 @@ jobs:
           PLATFORM_TAG: ci
           PG_BACKUPS: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
-      - name: Fresh install with manual vault unseal (init, restart, CLI unseal), host monitoring, stored log search, log drains, request charts and slow queries
+      - name: Fresh install with manual vault unseal (init, restart, CLI unseal), host monitoring, stored log search, request charts and slow queries
         env:
           PLATFORM_TAG: ci
           MANUAL_UNSEAL: "1"
@@ -150,7 +145,6 @@ jobs:
           # Trunk builds that bind the counters' address (EXC-673); bump with the engines.
           GRAPHQL_IMAGE: docker.io/excalibase/excalibase-graphql:main-72a7b22
           AUTH_IMAGE: docker.io/excalibase/excalibase-auth:main-8449290
-          LOG_DRAINS: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
       - name: Fresh install with MySQL (TLS clients, backups, point-in-time and in-place restore, purge)
         env:

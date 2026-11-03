@@ -1,8 +1,11 @@
 package dockerbuilds
 
 import (
+	"archive/tar"
 	"context"
+	"crypto/subtle"
 	"fmt"
+	"io"
 	"log"
 	"strconv"
 
@@ -60,22 +63,32 @@ func (r *Runner) stepOutcome(ctx context.Context, buildID, step string, inspect 
 		}
 		return sitebuilds.RunStatus{Phase: sitebuilds.RunReady}, step == stepCollect
 	}
-	if step == stepCollect && r.packed(ctx, buildID) {
+	if state.Status == "created" {
+		return r.startStep(ctx, buildID, step, inspect, cloneDone), true
+	}
+	// Only a running collect step's mark counts: build code can leave one on the shared volume.
+	if step == stepCollect && r.packed(ctx, buildID, inspect.Config.Labels[labelReady]) {
 		return sitebuilds.RunStatus{Phase: sitebuilds.RunReady}, true
 	}
 	if r.pastDeadline(inspect) {
 		r.stopAll(ctx, buildID)
 		return failed(sitebuilds.FailTimeout, 0, "the build ran past its time limit"), true
 	}
-	if state.Status == "created" {
-		if err := r.start(ctx, buildID, step); err != nil {
-			log.Printf("site build %s: %v", buildID, err)
-			r.stopAll(ctx, buildID)
-			return failed(sitebuilds.FailPlatform, 0, fmt.Sprintf("the %s step could not start", step)), true
-		}
-		return sitebuilds.RunStatus{Phase: sitebuilds.RunRunning, CloneDone: cloneDone}, true
-	}
 	return r.whileRunning(ctx, buildID, step, inspect, cloneDone), true
+}
+
+// startStep starts a created step unless the build is already past its deadline.
+func (r *Runner) startStep(ctx context.Context, buildID, step string, inspect *container.InspectResponse, cloneDone bool) sitebuilds.RunStatus {
+	if r.pastDeadline(inspect) {
+		r.stopAll(ctx, buildID)
+		return failed(sitebuilds.FailTimeout, 0, "the build ran past its time limit")
+	}
+	if err := r.start(ctx, buildID, step); err != nil {
+		log.Printf("site build %s: %v", buildID, err)
+		r.stopAll(ctx, buildID)
+		return failed(sitebuilds.FailPlatform, 0, fmt.Sprintf("the %s step could not start", step))
+	}
+	return sitebuilds.RunStatus{Phase: sitebuilds.RunRunning, CloneDone: cloneDone}
 }
 
 // inspectSteps answers nil when any step is gone.
@@ -150,9 +163,22 @@ func (r *Runner) alive(ctx context.Context, buildID, name string) bool {
 }
 
 // packed is collect's ready mark: the output is packed and waiting.
-func (r *Runner) packed(ctx context.Context, buildID string) bool {
-	_, err := r.engine.ContainerStatPath(ctx, containerName(buildID, stepCollect), k8s.SiteBuildReadyPath)
-	return err == nil
+// packed: the collect step wrote its own token into the ready mark.
+func (r *Runner) packed(ctx context.Context, buildID, token string) bool {
+	if token == "" {
+		return false
+	}
+	stream, _, err := r.engine.CopyFromContainer(ctx, containerName(buildID, stepCollect), k8s.SiteBuildReadyPath)
+	if err != nil {
+		return false
+	}
+	defer stream.Close()
+	archive := tar.NewReader(stream)
+	if _, err := archive.Next(); err != nil {
+		return false
+	}
+	mark, err := io.ReadAll(io.LimitReader(archive, int64(len(token))+1))
+	return err == nil && subtle.ConstantTimeCompare(mark, []byte(token)) == 1
 }
 
 // stopAll stops every step, the sidecar and the watcher; Remove deletes them after.

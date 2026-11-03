@@ -10,7 +10,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/hostlogs"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 )
 
 // hostLogDeps is what a single host's stored log search is built from.
@@ -40,9 +39,9 @@ func wireHostLogs(d hostLogDeps) *hostlogs.Shipper {
 		log.Printf("host logs: HOST_LOGS_LOKI_URL is unset; off")
 		return nil
 	}
-	tables, ok := d.sqlStore.(hostLogTables)
+	cursors, ok := d.sqlStore.(hostlogs.Cursors)
 	if !ok {
-		log.Printf("host logs: the platform store keeps no cursor or budget table; off")
+		log.Printf("host logs: the platform store keeps no cursor table; off")
 		return nil
 	}
 	engine, err := enginestats.New(d.cfg.DockerHost)
@@ -50,46 +49,16 @@ func wireHostLogs(d hostLogDeps) *hostlogs.Shipper {
 		log.Printf("host logs: %v; off", err)
 		return nil
 	}
-	disk := hostlogs.NewDiskGuard(d.cfg.HostLogs.DiskPath, d.cfg.HostLogs.MinFreePercent)
-	if err := disk.Check(); err != nil {
-		// A disk that cannot be read would never pause shipping: refuse to ship blind.
-		log.Printf("host logs: %v; off (set HOST_LOGS_DISK_PATH)", err)
-		return nil
-	}
 	shipper := hostlogs.New(hostlogs.Deps{
-		Engine: hostlogs.EngineFrom(engine), Cursors: tables, Budgets: tables, Instances: d.instances,
+		Engine: hostlogs.EngineFrom(engine), Cursors: cursors, Instances: d.instances,
 		Pusher: hostlogs.NewLokiPusher(d.cfg.HostLogs.LokiURL, hostlogs.NewPushClient()),
-		Disk:   disk,
-		Flags:  flags, Retention: d.cfg.LogRetention,
-		DailyBytes: d.cfg.HostLogs.DailyBytesPerProject, DailyBytesByPlan: d.cfg.HostLogs.DailyBytesByPlan,
+		Flags:  flags, Retention: d.cfg.LogRetention, DailyBytes: d.cfg.HostLogs.DailyBytesPerProject,
 	})
 	if features.Enabled(context.Background(), flags, features.LogRetention) {
 		d.provisioning.SetLogRetention(flags, d.cfg.LogRetention, noNamespacePlans{})
 	}
 	d.provisioning.SetHostLogStore(d.cfg.HostLogs.LokiURL)
 	d.provisioning.SetSingleHostLogs(engine)
-	log.Printf("host logs: on; %d MiB per project per day unless its plan says otherwise; paused under %d%% disk free",
-		d.cfg.HostLogs.DailyBytesPerProject>>20, d.cfg.HostLogs.MinFreePercent)
+	log.Printf("host logs: on; %d MiB per project per day", d.cfg.HostLogs.DailyBytesPerProject>>20)
 	return shipper
-}
-
-// hostLogTables are the platform database's cursor and budget tables.
-type hostLogTables interface {
-	hostlogs.Cursors
-	hostlogs.BudgetStore
-}
-
-// A missing method would turn host logs off silently.
-var _ hostLogTables = (*pgstore.Store)(nil)
-
-// logDeletionLokiURL is the Loki a deleted project's lines are removed from
-// (EXC-678): the chart's, or a single host's bundled one while hostlogs is on.
-func logDeletionLokiURL(cfg config.AppConfig) string {
-	if cfg.LokiURL != "" {
-		return cfg.LokiURL
-	}
-	if features.Enabled(context.Background(), cfg.Features(), features.HostLogs) {
-		return cfg.HostLogs.LokiURL
-	}
-	return ""
 }

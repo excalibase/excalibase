@@ -14,10 +14,25 @@ const SECRET = `whsec_${'fixture'.repeat(6)}`;
 function hooksWith(secretSet: boolean, enabled: Partial<Record<string, string>> = {}): AuthHooks {
   return {
     secretSet,
+    canChange: true,
     hooks: ['custom_access_token', 'before_user_created', 'send_email'].map((hook) => ({
       hook: hook as AuthHooks['hooks'][number]['hook'],
       enabled: hook in enabled,
+      host: enabled[hook] ? new URL(enabled[hook]).host : '',
       url: enabled[hook] ?? '',
+    })),
+  };
+}
+
+// What a Developer is answered: each hook's host, never its URL.
+function developerView(secretSet: boolean, hosts: Partial<Record<string, string>>): AuthHooks {
+  return {
+    secretSet,
+    canChange: false,
+    hooks: ['custom_access_token', 'before_user_created', 'send_email'].map((hook) => ({
+      hook: hook as AuthHooks['hooks'][number]['hook'],
+      enabled: hook in hosts,
+      host: hosts[hook] ?? '',
     })),
   };
 }
@@ -34,6 +49,19 @@ beforeEach(() => {
 });
 
 describe('AuthHooksCard', () => {
+  test('shows a Developer each hook host read-only, with no form or secret buttons', async () => {
+    renderCard(developerView(true, { send_email: 'mail.example.com' }));
+    const sendEmail = await screen.findByTestId('auth-hook-send_email');
+    expect(sendEmail).toHaveTextContent('mail.example.com');
+    expect(sendEmail).toHaveTextContent(/on/i);
+    expect(screen.getByTestId('auth-hook-custom_access_token')).toHaveTextContent(/no url set/i);
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('auth-hooks-secret-state')).toHaveTextContent('Set');
+    expect(screen.getByTestId('auth-hooks-card')).toHaveTextContent(/only project admins see the full urls/i);
+  });
+
   test('lists the three hooks with what each does', async () => {
     renderCard(hooksWith(false));
     expect(await screen.findByTestId('auth-hook-custom_access_token')).toHaveTextContent(/claims to every access token/i);

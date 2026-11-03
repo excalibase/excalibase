@@ -165,7 +165,8 @@ func singleHostBuildRunner(ctx context.Context, cfg config.AppConfig, engine raw
 		return nil, err
 	}
 	if apps.SandboxRuntime == "" {
-		log.Printf("WARN: APP_SANDBOX_RUNTIME=none: site builds run without a sandbox, sharing the host's kernel directly")
+		log.Printf("WARN: APP_SANDBOX_RUNTIME=none: site builds run untrusted repository code under plain runc, " +
+			"with no gVisor sandbox between it and the host kernel; set APP_SANDBOX_RUNTIME=runsc to sandbox them")
 	}
 	if podman || !runner.HostIsolated() {
 		log.Printf("WARN: this engine may give build networks an address on the host (Docker before 28, or Podman): " +
