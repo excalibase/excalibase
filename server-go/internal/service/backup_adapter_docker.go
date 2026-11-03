@@ -68,8 +68,10 @@ type DockerBackupAdapter struct {
 	// hostPorts holds each project's host port (EXC-593); nil publishes on
 	// any free port.
 	hostPorts provisioner.HostPortAllocator
-	instances storage.InstanceStore
-	docker    provisioner.DockerClient // optional; required for Restore
+	// queryStats turns pg_stat_statements on in every Postgres copy it brings up (EXC-673).
+	queryStats bool
+	instances  storage.InstanceStore
+	docker     provisioner.DockerClient // optional; required for Restore
 	// registrar finishes a restore the way a provision ends: roles, vault,
 	// instance row, events. Required for Restore — persisting a row
 	// without the vault write is what made restored projects unusable.
