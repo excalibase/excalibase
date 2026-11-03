@@ -358,6 +358,8 @@ func TestScanKeepsCursorsWhenTheEngineListsNothing(t *testing.T) {
 // A container back before its old follow has stopped waits for it.
 func TestScanWaitsForAStoppingFollow(t *testing.T) {
 	shipper := newTestShipper(&fakeEngine{}, &fakeCursors{}, &fakePusher{}, features.NewStatic())
+	// A follow that ends on its own would leave following() before it is read.
+	shipper.deps.Engine = &blockingEngine{fakeEngine: &fakeEngine{}}
 	old := &follower{cancel: func() {}, done: make(chan struct{})}
 	shipper.stopping["db-a"] = old
 	target := Target{ID: "db-a", Labels: Labels{ProjectID: "proj-a", Component: "database", Container: "c"}, Retention: time.Hour}
