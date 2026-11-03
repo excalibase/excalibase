@@ -84,11 +84,13 @@ const (
 	// SingleHostBuilds runs git builds of sites on a single Docker or Podman
 	// host, under the sandbox runtime behind the build egress proxy (EXC-671).
 	SingleHostBuilds Feature = "singlehostbuilds"
+	// LogDeletion removes a deleted project's stored log lines from Loki (EXC-678).
+	LogDeletion Feature = "logdeletion"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, LogDeletion}
 }
 
 type Flags interface {
