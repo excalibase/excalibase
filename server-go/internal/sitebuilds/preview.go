@@ -150,11 +150,15 @@ type PreviewOverview struct {
 }
 
 func (s *Service) mustPreviewSite(ctx context.Context, projectID, siteID string) error {
-	if err := s.PreviewsAvailable(); err != nil {
-		return err
-	}
-	_, err := s.sites.Get(ctx, projectID, siteID)
+	_, err := s.previewSite(ctx, projectID, siteID)
 	return err
+}
+
+func (s *Service) previewSite(ctx context.Context, projectID, siteID string) (*sites.Site, error) {
+	if err := s.PreviewsAvailable(); err != nil {
+		return nil, err
+	}
+	return s.sites.Get(ctx, projectID, siteID)
 }
 
 func (s *Service) Previews(ctx context.Context, projectID, siteID string) (*PreviewOverview, error) {
@@ -178,11 +182,15 @@ func (s *Service) Previews(ctx context.Context, projectID, siteID string) (*Prev
 
 // SetPreviewMode chooses what gets previews; turning them off removes the site's previews.
 func (s *Service) SetPreviewMode(ctx context.Context, projectID, siteID, mode string) (*PreviewOverview, error) {
-	if err := s.mustPreviewSite(ctx, projectID, siteID); err != nil {
+	site, err := s.previewSite(ctx, projectID, siteID)
+	if err != nil {
 		return nil, err
 	}
 	if err := validPreviewMode(mode); err != nil {
 		return nil, err
+	}
+	if site.Kind == sites.KindServer && mode != PreviewModeOff {
+		return nil, sites.ErrPreviewOfServerSite
 	}
 	return s.updatePreviews(ctx, projectID, siteID, func() error { return s.store.SavePreviewMode(ctx, projectID, siteID, mode) })
 }
@@ -403,9 +411,7 @@ type previewTarget struct {
 
 // queuePreview opens the preview within the caps and queues its build; a refusal is recorded as a failed build.
 func (s *Service) queuePreview(ctx context.Context, connection *Connection, commit gitprovider.Commit, target previewTarget, delivery string) (bool, error) {
-	if err := s.checkConnector(ctx, connection); errors.Is(err, ErrConnectionInactive) {
-		return false, nil
-	} else if err != nil {
+	if skip, err := s.skipPreview(ctx, connection, delivery); skip || err != nil {
 		return false, err
 	}
 	settings := connection.Previews.normalised()
@@ -439,6 +445,31 @@ func (s *Service) queuePreview(ctx context.Context, connection *Connection, comm
 		s.postStatus(ctx, build, gitprovider.StatusFailure, "", build.FailureReason)
 	}
 	return created, err
+}
+
+// skipPreview is whether this delivery makes no preview for the connection: its connector lost access,
+// the delivery already queued its build (opening it again would leave it BUILDING with nothing to run),
+// or the site is server-rendered, whose production builds go on without one.
+func (s *Service) skipPreview(ctx context.Context, connection *Connection, delivery string) (bool, error) {
+	if err := s.checkConnector(ctx, connection); errors.Is(err, ErrConnectionInactive) {
+		return true, nil
+	} else if err != nil {
+		return false, err
+	}
+	if delivery != "" {
+		if queued, err := s.store.DeliveryQueued(ctx, connection.SiteID, delivery); err != nil || queued {
+			return queued, err
+		}
+	}
+	site, err := s.sites.Get(ctx, connection.ProjectID, connection.SiteID)
+	if err != nil {
+		return false, err
+	}
+	if site.Kind == sites.KindServer {
+		log.Printf("site builds: site %s is server-rendered; no preview of %s", site.ID, connection.Repository)
+		return true, nil
+	}
+	return false, nil
 }
 
 func refusedPreview(err error) bool {

@@ -176,7 +176,13 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
           )}
         </section>
       </div>
-      <SiteGitBuilds projectId={projectId} siteId={siteId} canDevelop={canDevelop} canAdmin={canAdmin} />
+      <SiteGitBuilds
+        projectId={projectId}
+        siteId={siteId}
+        canDevelop={canDevelop}
+        canAdmin={canAdmin}
+        serverSite={site.kind === 'server'}
+      />
       <section className="space-y-2 mb-6">
         <h4 className="text-sm font-semibold text-text-primary">Custom domains</h4>
         <SiteDomains projectId={projectId} siteId={siteId} canDevelop={canDevelop} />

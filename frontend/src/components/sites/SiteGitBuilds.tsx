@@ -25,6 +25,7 @@ interface SiteProps {
   readonly siteId: string;
   readonly canDevelop: boolean;
   readonly canAdmin?: boolean;
+  readonly serverSite?: boolean;
 }
 
 const card = 'bg-surface-card border border-border-primary rounded-lg p-4 space-y-3';
@@ -233,7 +234,7 @@ function Connected({
 }
 
 // Deploy on git push (EXC-354): hidden until the server switches it on; single-host answers why it has none.
-export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false }: SiteProps) {
+export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false, serverSite = false }: SiteProps) {
   const enabled = useSiteGitBuildsEnabled();
   const { data: state, error } = useGitState(projectId, siteId, enabled);
   if (!enabled) return null;
@@ -280,6 +281,7 @@ export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false 
           productionBranch={state.connection.settings.branch}
           canDevelop={canDevelop}
           canAdmin={canAdmin}
+          serverSite={serverSite}
         />
       )}
       {state && canDevelop && (

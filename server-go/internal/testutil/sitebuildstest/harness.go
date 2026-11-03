@@ -21,6 +21,7 @@ import (
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/gitprovider/githubapp"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/sites"
@@ -140,6 +141,7 @@ type Harness struct {
 	Runner       *FakeRunner
 	Dispatcher   *sitebuilds.Dispatcher
 	User         string
+	db           *postgres.Store
 	// darken rebuilds Sites and git builds with previews dark, as after the flag is turned off.
 	darken func()
 }
@@ -153,6 +155,8 @@ type Options struct {
 	Secrets     map[string]string
 	Limits      sitebuilds.Limits
 	Slots       int
+	// ServerSite makes the harness site a server-rendered one, built from a server archive (EXC-661).
+	ServerSite bool
 }
 
 func New(t *testing.T, options Options) *Harness {
@@ -171,13 +175,19 @@ func New(t *testing.T, options Options) *Harness {
 	if options.Previews {
 		siteOptions.Previews = siteStore
 	}
+	kind := sites.KindStatic
+	if options.ServerSite {
+		kind = sites.KindServer
+		siteOptions.Flags, siteOptions.Code, siteOptions.OutboundWorker = features.NewStatic(features.SitesServer), siteStore, outboundWorker
+		siteOptions.Outbound = &sitestest.Outbound{Worker: outboundWorker}
+	}
 	origins := sitestest.NewOrigins()
 	siteService, err := sites.NewService(siteStore, publisher, origins, siteOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
 	project := "proj-" + uuid.NewString()[:8]
-	site, err := siteService.Create(context.Background(), project, "s-"+uuid.NewString()[:8], nil, "u-owner")
+	site, err := siteService.CreateKind(context.Background(), project, "s-"+uuid.NewString()[:8], kind, nil, "u-owner")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,12 +215,15 @@ func New(t *testing.T, options Options) *Harness {
 	service := sitebuilds.NewService(store, client, siteService, fixedLimits{limits: options.Limits},
 		memorySecrets{values: options.Secrets}, serviceOptions)
 	runner := newFakeRunner(t)
+	if options.ServerSite {
+		runner.Archive = sitestest.ServerDist(t, "export default { fetch() { return new Response('ssr') } }")
+	}
 	if options.Slots == 0 {
 		options.Slots = 100
 	}
 	dispatcher := sitebuilds.NewDispatcher(service, runner, dispatcherOptions(project, t.TempDir(), options.Slots))
 	h := &Harness{t: t, Installation: installation, SiteRepo: siteRepo, PrivateRepo: privateRepo, Project: project, Site: site, Sites: siteService,
-		Publisher: publisher, Origins: origins, GitHub: fake, Store: store, Service: service, Runner: runner, Dispatcher: dispatcher, User: "u-" + project}
+		Publisher: publisher, Origins: origins, GitHub: fake, Store: store, Service: service, Runner: runner, Dispatcher: dispatcher, User: "u-" + project, db: db}
 	h.darken = func() {
 		siteOptions.PreviewsDark = true
 		dark, err := sites.NewService(siteStore, publisher, origins, siteOptions)
@@ -223,6 +236,16 @@ func New(t *testing.T, options Options) *Harness {
 		h.Dispatcher = sitebuilds.NewDispatcher(h.Service, runner, dispatcherOptions(project, t.TempDir(), options.Slots))
 	}
 	return h
+}
+
+const outboundWorker = "excalibase-sites-outbound"
+
+// ForgetDelivery drops a delivery's record, as when its first handling failed before recording it, so GitHub's redelivery is handled again.
+func (h *Harness) ForgetDelivery(delivery string) {
+	h.t.Helper()
+	if _, err := h.db.DB().Exec(`DELETE FROM site_git_deliveries WHERE delivery_id = $1`, delivery); err != nil {
+		h.t.Fatalf("forget delivery %s: %v", delivery, err)
+	}
 }
 
 // TurnPreviewsDark is the sitepreviews flag turned off: no new previews, the held ones still cleaned up.

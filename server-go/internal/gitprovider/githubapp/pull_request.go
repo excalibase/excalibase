@@ -10,6 +10,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/gitprovider"
 )
 
+// Previews need the App granted pull_requests: read and statuses: write, and subscribed to the
+// pull_request event; see docs/deployment/docker-local.md.
 var (
 	pullRequestsRead = map[string]string{"pull_requests": "read"}
 	statusesWrite    = map[string]string{"statuses": "write"}

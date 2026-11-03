@@ -42,6 +42,8 @@ var (
 	ErrPreviewLimitReached = errors.New("the project already has as many live previews as its plan allows; close a pull request or remove a preview")
 	ErrPreviewInstallFull  = errors.New("this install has no room for another preview right now; try again later or ask its operator")
 	ErrPreviewRemoving     = errors.New("this preview is being removed; push again once it is gone")
+	// ErrPreviewOfServerSite: a preview publishes static files only, so a server site's would expose its code.
+	ErrPreviewOfServerSite = &InputError{Reason: "previews are for static sites for now"}
 )
 
 // previewEncoding is lowercase RFC 4648 base32 without padding: DNS-safe, 26 characters for 16 bytes.
@@ -178,6 +180,18 @@ func (s *Service) previewHostname(site *Site) (string, error) {
 	return prefix + "--" + previewEncoding.EncodeToString(random) + "." + s.options.BaseDomain, nil
 }
 
+// previewableSite is the site when it can have previews: a static one only, for now.
+func (s *Service) previewableSite(ctx context.Context, projectID, siteID string) (*Site, error) {
+	site, err := s.mustGet(ctx, projectID, siteID)
+	if err != nil {
+		return nil, err
+	}
+	if site.Kind == KindServer {
+		return nil, ErrPreviewOfServerSite
+	}
+	return site, nil
+}
+
 // OpenPreview answers the site's preview for a pull request or branch, creating it within the caps.
 func (s *Service) OpenPreview(ctx context.Context, request PreviewRequest) (*Preview, error) {
 	store, err := s.previewStore()
@@ -187,7 +201,7 @@ func (s *Service) OpenPreview(ctx context.Context, request PreviewRequest) (*Pre
 	if err := request.validate(); err != nil {
 		return nil, err
 	}
-	site, err := s.mustGet(ctx, request.ProjectID, request.SiteID)
+	site, err := s.previewableSite(ctx, request.ProjectID, request.SiteID)
 	if err != nil {
 		return nil, err
 	}

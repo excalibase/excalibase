@@ -52,7 +52,7 @@ func (s *Service) DeployPreview(ctx context.Context, request PreviewDeployReques
 	if err != nil {
 		return nil, err
 	}
-	site, err := s.mustGet(ctx, request.ProjectID, request.SiteID)
+	site, err := s.previewableSite(ctx, request.ProjectID, request.SiteID)
 	if err != nil {
 		return nil, err
 	}

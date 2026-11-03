@@ -40,7 +40,8 @@ function renderPreviews({
   canDevelop = true,
   canAdmin = false,
   data = overview(),
-}: { featureOn?: boolean; canDevelop?: boolean; canAdmin?: boolean; data?: PreviewOverview } = {}) {
+  serverSite = false,
+}: { featureOn?: boolean; canDevelop?: boolean; canAdmin?: boolean; data?: PreviewOverview; serverSite?: boolean } = {}) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/config')
       return Promise.resolve({ data: { deploymentMode: 'cloud', features: { sitepreviews: featureOn } } } as never);
@@ -50,7 +51,14 @@ function renderPreviews({
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <SitePreviews projectId="proj-1" siteId="site-1" productionBranch="main" canDevelop={canDevelop} canAdmin={canAdmin} />
+      <SitePreviews
+        projectId="proj-1"
+        siteId="site-1"
+        productionBranch="main"
+        canDevelop={canDevelop}
+        canAdmin={canAdmin}
+        serverSite={serverSite}
+      />
     </QueryClientProvider>,
   );
 }
@@ -130,6 +138,14 @@ describe('SitePreviews', () => {
     await screen.findByTestId('preview-pv-1');
     expect(screen.queryByTestId('preview-remove-pv-1')).not.toBeInTheDocument();
     expect(screen.getByTestId('preview-mode')).toBeDisabled();
+  });
+
+  test('a server-rendered site says previews are for static sites and offers no control', async () => {
+    renderPreviews({ serverSite: true, canAdmin: true });
+    expect(await screen.findByTestId('previews-static-only')).toHaveTextContent('static sites');
+    expect(screen.queryByTestId('preview-mode')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('preview-access-forks')).not.toBeInTheDocument();
+    expect(api.get).not.toHaveBeenCalledWith(BASE);
   });
 
   test('a failed preview shows why', async () => {
