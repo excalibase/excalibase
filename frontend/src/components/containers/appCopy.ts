@@ -35,6 +35,27 @@ export const describeTier = (tier: TierType): TierDescription =>
 
 export type Tone = 'neutral' | 'progress' | 'success' | 'error' | 'warning';
 
+// The platform's registry keeps the images of an app's last 10 deploys and the
+// running one (RegistryKeepDeploys on the server); a rollback further back is refused.
+// Index matches the server only because useDeploys returns the same unfiltered, revision-desc list.
+export const ROLLBACK_WINDOW = 10;
+
+const registryOf = (image: string): string => image.split('/')[0];
+
+// The server refuses by registry, not by source: a rollback of a git-built
+// deploy runs the same platform-registry image, so it is windowed too.
+export function onPlatformRegistry(deploys: Deploy[]): (deploy: Deploy) => boolean {
+  const hosts = new Set(
+    deploys
+      .filter((deploy) => deploy.source === 'git-build')
+      .map((deploy) => registryOf(deploy.image)),
+  );
+  return (deploy) => deploy.source === 'git-build' || hosts.has(registryOf(deploy.image));
+}
+
+export const canRollBack = (index: number, isServing: boolean, windowed: boolean): boolean =>
+  !windowed || index < ROLLBACK_WINDOW || isServing;
+
 export const DEPLOY_STATUS: Record<DeployStatus, { label: string; tone: Tone }> = {
   pending: { label: 'Queued', tone: 'progress' },
   rolling: { label: 'Rolling out', tone: 'progress' },

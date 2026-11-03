@@ -186,13 +186,14 @@ func TestClusterOnlyBookkeepingIsANoOp(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
 	placement, err := h.rt.RuntimeClassPlacement(ctx, "runsc")
-	errs := []error{err,
+	stale, refreshErr := h.rt.RefreshRegistryPullSecrets(ctx, testDB, "proj-1", k8s.RegistryAuth{Registry: "r.internal"})
+	errs := []error{err, refreshErr,
 		h.rt.AttachIssuedAppHostCertificates(ctx),
 		h.rt.DeleteRegistryPullSecrets(ctx, testDB, "web"),
 		h.rt.EnsureNamespaceQuota(ctx, testDB, k8s.NamespaceQuota{}),
 		h.rt.RestartFunctionRuntime(ctx, testDB),
 	}
-	if joined := errors.Join(errs...); joined != nil || !reflect.DeepEqual(placement, k8s.RuntimePlacement{}) {
+	if joined := errors.Join(errs...); joined != nil || stale != nil || !reflect.DeepEqual(placement, k8s.RuntimePlacement{}) {
 		t.Fatalf("%+v %v", placement, joined)
 	}
 }

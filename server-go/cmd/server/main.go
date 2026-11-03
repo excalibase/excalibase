@@ -1388,6 +1388,10 @@ func buildProvisioningService(
 	}
 	provSvc.SetLokiURL(cfg.LokiURL)
 	startLogPlanSweep(context.Background(), cfg, provSvc, k8sClient)
+	deletionStore, _ := sqlStore.(logDeletionStore)
+	if worker := wireLogDeletion(cfg, deletionStore, provSvc, cfg.LokiURL); worker != nil {
+		go worker.Run(context.Background())
+	}
 
 	wireNatsCredentialMinter(sqlStore, provSvc)
 	return provSvc, lifecycleClaimer
@@ -1886,7 +1890,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
 		registryToken:         newRegistryTokenHandler(internalRegistry, store),
 		internalRegistry:      internalRegistry,
-		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc)),
+		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc), store, appRuntime),
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,
 		storageBudgetH:        handler.NewStorageBudgetHandler(a.budget),

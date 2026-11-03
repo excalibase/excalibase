@@ -316,6 +316,19 @@ func (f *fakeDeployStore) GetLatest(projectID, appID string) (*apphost.Deploy, e
 	return deploys[0], nil
 }
 
+func (f *fakeDeployStore) GetLastSucceeded(projectID, appID string) (*apphost.Deploy, error) {
+	deploys, err := f.ListByApp(projectID, appID, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, deploy := range deploys {
+		if deploy.Status == apphost.DeployStatusSucceeded {
+			return deploy, nil
+		}
+	}
+	return nil, nil
+}
+
 func (f *fakeDeployStore) Get(projectID, appID, id string) (*apphost.Deploy, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
