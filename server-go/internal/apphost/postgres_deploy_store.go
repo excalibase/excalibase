@@ -267,6 +267,23 @@ func (s *PostgresDeployStore) GetLatest(projectID, appID string) (*Deploy, error
 	return deploys[0], nil
 }
 
+func (s *PostgresDeployStore) GetLastSucceeded(projectID, appID string) (*Deploy, error) {
+	if err := ValidateProjectID(projectID); err != nil {
+		return nil, err
+	}
+	if err := ValidateID(appID); err != nil {
+		return nil, err
+	}
+	deploy, err := scanDeploy(s.db.QueryRow(getLastSucceededDeploy, projectID, appID, DeployStatusSucceeded))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("last succeeded deploy: %w", err)
+	}
+	return deploy, nil
+}
+
 // Get returns nil, not an error, when id belongs to another app or project or
 // does not exist — the caller cannot tell those apart from the row alone, and
 // should not need to.
@@ -296,6 +313,9 @@ FROM app_deploys WHERE status IN ($1, $2) ORDER BY created_at`
 	listAppDeploys = `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason,
        created_by, created_at, finished_at, kind, source, commit_sha, image_ref, digest
 FROM app_deploys WHERE project_id = $1 AND app_id = $2 ORDER BY revision DESC LIMIT $3`
+	getLastSucceededDeploy = `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason,
+       created_by, created_at, finished_at, kind, source, commit_sha, image_ref, digest
+FROM app_deploys WHERE project_id = $1 AND app_id = $2 AND status = $3 ORDER BY revision DESC LIMIT 1`
 	getAppDeploy = `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason,
        created_by, created_at, finished_at, kind, source, commit_sha, image_ref, digest
 FROM app_deploys WHERE id = $1 AND app_id = $2 AND project_id = $3`

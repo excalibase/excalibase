@@ -154,6 +154,11 @@ func TestRegistrySweep_KeepsTheLastSuccessBehindAnyNumberOfFailures(t *testing.T
 			d.Status = apphost.DeployStatusFailed
 		}
 	}
+	// More failures than any page of history the sweep might read.
+	for n := 0; n < 150; n++ {
+		deploys.deploys = append(deploys.deploys, &apphost.Deploy{ID: fmt.Sprint("failed-", n), ProjectID: app.ProjectID, AppID: app.ID,
+			Image: appregistrytestHost + "/" + repo + "@" + sweepDigest(12), Status: apphost.DeployStatusFailed})
+	}
 	if _, err := sweeper.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -258,4 +263,50 @@ func TestRegistrySweep_RunsOnlyWhileLeading(t *testing.T) {
 	stop := sweeper.Start(context.Background(), leader, time.Hour)
 	<-leader.calls
 	stop()
+}
+
+// Pushes younger than the floor whose deploys are still queued keep their
+// images, however many come at once.
+func TestRegistrySweep_TheCapNeverTakesAPushYoungerThanTheFloor(t *testing.T) {
+	sweeper, registry, _ := sweepFixture(t)
+	app := sampleDeployApp()
+	repo := app.ProjectID + "/" + app.Name
+	for n := 70; n < 76; n++ {
+		registry.tags[repo] = append(registry.tags[repo], pushedTag(t, sweepDigest(n), time.Duration(n-69)*5*time.Minute))
+	}
+	registry.tags[repo] = append(registry.tags[repo], pushedTag(t, sweepDigest(80), 2*time.Hour))
+	if _, err := sweeper.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for n := 70; n < 76; n++ {
+		if slices.Contains(registry.deleted, repo+"@"+sweepDigest(n)) {
+			t.Errorf("a push %v old was untagged", time.Duration(n-69)*5*time.Minute)
+		}
+	}
+	if !slices.Contains(registry.deleted, repo+"@"+sweepDigest(80)) {
+		t.Errorf("a push past the floor and beyond the cap stays: %v", registry.deleted)
+	}
+}
+
+// A sweep that judged no repository at all is counted as failed and logged as an error.
+func TestRegistrySweep_CountsASweepThatJudgedNothing(t *testing.T) {
+	var counted []bool
+	run := func(sweeper *RegistrySweeper) {
+		sweeper.countSweep = func(ok bool) { counted = append(counted, ok) }
+		sweeper.sweepIfLeader(context.Background(), &countingLeader{leading: true, calls: make(chan struct{}, 1)})
+	}
+	sweeper, registry, _ := sweepFixture(t)
+	sweeper.live = func(context.Context, string) (bool, error) { return false, errors.New("platform db down") }
+	run(sweeper)
+	if len(registry.deleted) != 0 {
+		t.Fatalf("deleted %v", registry.deleted)
+	}
+	sweeper, registry, _ = sweepFixture(t)
+	registry.listErr = errors.New("zot down")
+	run(sweeper)
+	sweeper, _, _ = sweepFixture(t)
+	run(sweeper)
+	if !slices.Equal(counted, []bool{false, false, true}) {
+		t.Errorf("counted %v, want failed, failed, ok", counted)
+	}
 }

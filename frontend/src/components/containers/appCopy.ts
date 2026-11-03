@@ -35,6 +35,13 @@ export const describeTier = (tier: TierType): TierDescription =>
 
 export type Tone = 'neutral' | 'progress' | 'success' | 'error' | 'warning';
 
+// The registry keeps the images of an app's last 10 deploys and the running
+// one (RegistryKeepDeploys on the server); a rollback further back is refused.
+export const ROLLBACK_WINDOW = 10;
+
+export const canRollBack = (index: number, isServing: boolean): boolean =>
+  index < ROLLBACK_WINDOW || isServing;
+
 export const DEPLOY_STATUS: Record<DeployStatus, { label: string; tone: Tone }> = {
   pending: { label: 'Queued', tone: 'progress' },
   rolling: { label: 'Rolling out', tone: 'progress' },

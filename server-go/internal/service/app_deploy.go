@@ -224,6 +224,9 @@ func (s *AppDeployService) RedeployAppAs(ctx context.Context, projectID, appID, 
 		if source == nil {
 			return nil, nil, apphost.ErrDeployNotFound
 		}
+		if err := s.refuseSweptImage(app, source); err != nil {
+			return nil, nil, err
+		}
 		origin.CommitSHA = source.CommitSHA
 		meta := deployMeta{origin: origin, imageRef: source.ImageRef, digest: source.Digest, redeployOf: source.ID}
 		return s.rollout(context.WithoutCancel(ctx), app, source.Config, meta)

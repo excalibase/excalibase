@@ -63,3 +63,23 @@ func (s *AppDeployService) localRegistryDigest(image string) (string, bool, erro
 	}
 	return digest, true, nil
 }
+
+// refuseSweptImage stops a rollback to a git build the registry sweep no
+// longer keeps; an image on any other registry is not swept.
+func (s *AppDeployService) refuseSweptImage(app *apphost.App, source *apphost.Deploy) error {
+	if !s.internal.Names(source.Image) {
+		return nil
+	}
+	keep := map[string]bool{}
+	if err := keepAppImages(keep, s.deploys, app); err != nil {
+		return fmt.Errorf("read the images the registry keeps: %w", err)
+	}
+	sourceDigests := map[string]bool{}
+	keepDeployImage(sourceDigests, source)
+	for digest := range sourceDigests {
+		if keep[digest] {
+			return nil
+		}
+	}
+	return ErrRollbackImageRemoved
+}

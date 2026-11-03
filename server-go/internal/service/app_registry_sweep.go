@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -9,18 +10,23 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 )
 
 const (
 	// RegistryKeepDeploys is how many of an app's latest deploys keep their images, the running one besides.
 	RegistryKeepDeploys = 10
-	// registryDeployHistory is how far back the sweep looks for the last deploy that succeeded.
-	registryDeployHistory = 100
 	// RegistryPushGrace spares an image pushed this recently: its deploy may not be recorded yet.
 	RegistryPushGrace = 24 * time.Hour
 	// RegistryRecentPushes caps the images an app keeps inside the grace that no deploy names.
 	RegistryRecentPushes = 3
+	// RegistryPushFloor spares a push this recent from the cap too: a burst of
+	// pushes whose deploys are still queued keeps every image.
+	RegistryPushFloor = time.Hour
 )
+
+// ErrRollbackImageRemoved refuses a redeploy whose image the sweep has removed.
+var ErrRollbackImageRemoved = fmt.Errorf("that deploy's image was removed from the registry: a rollback reaches the last %d deploys and the one running; build its commit again to run it", RegistryKeepDeploys)
 
 // RegistryAdmin is the registry as the sweep uses it.
 type RegistryAdmin interface {
@@ -41,15 +47,20 @@ type RegistrySweeper struct {
 	// deletion can still be cancelled keeps its images.
 	live appregistry.ProjectExists
 	now  func() time.Time
+	// countSweep records whether a pass judged anything.
+	countSweep func(ok bool)
 }
 
 // RegistrySweepReport counts one sweep.
 type RegistrySweepReport struct {
 	Repositories, Deleted, Failed int
+	// Unjudged is the repositories left whole because what they keep could not be read.
+	Unjudged int
 }
 
 func NewRegistrySweeper(registry RegistryAdmin, apps apphost.Store, deploys apphost.DeployStore, live appregistry.ProjectExists) *RegistrySweeper {
-	return &RegistrySweeper{registry: registry, apps: apps, deploys: deploys, live: live, now: time.Now}
+	return &RegistrySweeper{registry: registry, apps: apps, deploys: deploys, live: live, now: time.Now,
+		countSweep: metrics.CountRegistrySweep}
 }
 
 // Start sweeps at once and then every interval while this replica leads; the
@@ -86,8 +97,13 @@ func (s *RegistrySweeper) sweepIfLeader(ctx context.Context, leader LeaderChecke
 		return
 	}
 	report, err := s.Sweep(ctx)
-	if err != nil {
-		log.Printf("registry sweep: %v", err)
+	failed := err != nil || (report.Repositories > 0 && report.Unjudged == report.Repositories)
+	s.countSweep(!failed)
+	switch {
+	case err != nil:
+		log.Printf("ERROR: registry sweep: %v", err)
+	case failed:
+		log.Printf("ERROR: registry sweep: none of %d repositories could be judged; nothing was deleted", report.Repositories)
 	}
 	if report.Deleted+report.Failed > 0 {
 		log.Printf("registry sweep: %d repositories, %d images deleted, %d failed", report.Repositories, report.Deleted, report.Failed)
@@ -106,9 +122,10 @@ func (s *RegistrySweeper) Sweep(ctx context.Context) (RegistrySweepReport, error
 		if ctx.Err() != nil {
 			return report, ctx.Err()
 		}
-		deleted, failed := s.sweepRepository(ctx, repository)
-		report.Deleted += deleted
-		report.Failed += failed
+		one := s.sweepRepository(ctx, repository)
+		report.Deleted += one.Deleted
+		report.Failed += one.Failed
+		report.Unjudged += one.Unjudged
 	}
 	return report, nil
 }
@@ -132,23 +149,38 @@ func (s *RegistrySweeper) keep(ctx context.Context, repository string) (map[stri
 		if app.Name != appName {
 			continue
 		}
-		keepDigest(keep, app.Image)
-		deploys, err := s.deploys.ListByApp(projectID, app.ID, registryDeployHistory)
-		if err != nil {
+		if err := keepAppImages(keep, s.deploys, app); err != nil {
 			return nil, err
-		}
-		// Newest first: the last few, and the last that succeeded, which is what runs.
-		succeeded := false
-		for i, deploy := range deploys {
-			lastSuccess := !succeeded && deploy.Status == apphost.DeployStatusSucceeded
-			succeeded = succeeded || lastSuccess
-			if i < RegistryKeepDeploys || lastSuccess {
-				keepDigest(keep, deploy.Image)
-				keepDigest(keep, "@"+deploy.Digest)
-			}
 		}
 	}
 	return keep, nil
+}
+
+// keepAppImages adds what an app keeps: the image it names, its last
+// RegistryKeepDeploys deploys, and its last deploy that succeeded, which is
+// what runs however many deploys failed after it.
+func keepAppImages(keep map[string]bool, deploys apphost.DeployStore, app *apphost.App) error {
+	keepDigest(keep, app.Image)
+	recent, err := deploys.ListByApp(app.ProjectID, app.ID, RegistryKeepDeploys)
+	if err != nil {
+		return err
+	}
+	running, err := deploys.GetLastSucceeded(app.ProjectID, app.ID)
+	if err != nil {
+		return err
+	}
+	if running != nil {
+		recent = append(recent, running)
+	}
+	for _, deploy := range recent {
+		keepDeployImage(keep, deploy)
+	}
+	return nil
+}
+
+func keepDeployImage(keep map[string]bool, deploy *apphost.Deploy) {
+	keepDigest(keep, deploy.Image)
+	keepDigest(keep, "@"+deploy.Digest)
 }
 
 func keepDigest(keep map[string]bool, image string) {
@@ -161,42 +193,47 @@ func keepDigest(keep map[string]bool, image string) {
 // so a newer push of the same image keeps it; a tag the platform did not
 // write is left. The keep set is read again just before anything goes, so a
 // deploy recorded during the listing is not lost.
-func (s *RegistrySweeper) sweepRepository(ctx context.Context, repository string) (int, int) {
+func (s *RegistrySweeper) sweepRepository(ctx context.Context, repository string) RegistrySweepReport {
+	unjudged := RegistrySweepReport{Failed: 1, Unjudged: 1}
 	keep, err := s.keep(ctx, repository)
 	if err != nil {
 		log.Printf("registry sweep: %s: %v", repository, err)
-		return 0, 1
+		return unjudged
 	}
 	tags, err := s.registry.Tags(ctx, repository)
 	if err != nil {
 		log.Printf("registry sweep: %s: list tags: %v", repository, err)
-		return 0, 1
+		return unjudged
 	}
 	stale := s.staleTags(tags, keep)
 	if len(stale) == 0 {
-		return 0, 0
+		return RegistrySweepReport{}
 	}
 	if keep, err = s.keep(ctx, repository); err != nil {
 		log.Printf("registry sweep: %s: %v", repository, err)
-		return 0, 1
+		return unjudged
 	}
-	deleted, failed := 0, 0
+	return s.untag(ctx, repository, stale, keep)
+}
+
+func (s *RegistrySweeper) untag(ctx context.Context, repository string, stale []string, keep map[string]bool) RegistrySweepReport {
+	var report RegistrySweepReport
 	for _, tag := range stale {
 		if digest, _, _ := appregistry.ParsePushTag(tag); keep[digest] {
 			continue
 		}
 		if err := s.registry.Untag(ctx, repository, tag); err != nil {
 			log.Printf("registry sweep: %s:%s: %v", repository, tag, err)
-			failed++
+			report.Failed++
 			continue
 		}
-		deleted++
+		report.Deleted++
 	}
-	return deleted, failed
+	return report
 }
 
 // staleTags are the push tags of images nothing keeps: past the grace, or
-// inside it beyond the RegistryRecentPushes newest.
+// inside it beyond the RegistryRecentPushes newest and past the floor.
 func (s *RegistrySweeper) staleTags(tags []string, keep map[string]bool) []string {
 	type push struct {
 		tag string
@@ -216,7 +253,7 @@ func (s *RegistrySweeper) staleTags(tags []string, keep map[string]bool) []strin
 	}
 	sort.Slice(recent, func(i, j int) bool { return recent[i].at.After(recent[j].at) })
 	for i, p := range recent {
-		if i >= RegistryRecentPushes {
+		if i >= RegistryRecentPushes && s.now().Sub(p.at) >= RegistryPushFloor {
 			stale = append(stale, p.tag)
 		}
 	}

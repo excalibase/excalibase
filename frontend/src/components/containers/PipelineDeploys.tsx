@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import type { Deploy } from '../../api/apps';
-import { DEPLOY_STATUS, formatWhen, plainFailureReason } from './appCopy';
+import { DEPLOY_STATUS, canRollBack, formatWhen, plainFailureReason } from './appCopy';
 import { ToneBadge, primaryButton, secondaryButton } from './ContainerBits';
 import { deployDuration, deployImageLabel, deploySourceLabel, shortDigest } from './pipelineCopy';
 
@@ -51,6 +51,7 @@ function DeployRow({
   deploy,
   isNewest,
   isServing,
+  rollbackable,
   busy,
   confirming,
   onAsk,
@@ -60,6 +61,7 @@ function DeployRow({
   readonly deploy: Deploy;
   readonly isNewest: boolean;
   readonly isServing: boolean;
+  readonly rollbackable: boolean;
   readonly busy: boolean;
   readonly confirming: boolean;
   readonly onAsk: () => void;
@@ -94,6 +96,7 @@ function DeployRow({
             <RotateCcw className="w-3.5 h-3.5" /> Redeploy
           </button>
         ) : (
+          rollbackable &&
           !confirming && (
             <button
               type="button"
@@ -140,6 +143,7 @@ export function PipelineDeploys({ deploys, busy, onRedeploy }: PipelineDeploysPr
           deploy={deploy}
           isNewest={index === 0}
           isServing={deploy.id === servingId}
+          rollbackable={canRollBack(index, deploy.id === servingId)}
           busy={busy}
           confirming={confirmingId === deploy.id}
           onAsk={() => setConfirmingId(deploy.id)}

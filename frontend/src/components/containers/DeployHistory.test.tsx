@@ -1,6 +1,7 @@
 import { describe, test, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { DeployHistory } from './DeployHistory';
+import { ROLLBACK_WINDOW } from './appCopy';
 import type { Deploy } from '../../api/apps';
 
 const deploy = (overrides: Partial<Deploy>): Deploy => ({
@@ -51,5 +52,19 @@ describe('DeployHistory', () => {
     expect(row('dep-3')).toHaveTextContent('Rolling out');
     expect(row('dep-2')).toHaveTextContent('Failed');
     expect(row('dep-1')).toHaveTextContent('Live');
+  });
+
+  test('rollback is offered only for the deploys whose images the registry keeps, and the running one', () => {
+    const history = Array.from({ length: ROLLBACK_WINDOW + 3 }, (_, index) => {
+      const revision = ROLLBACK_WINDOW + 3 - index;
+      return deploy({ id: `dep-${revision}`, revision, status: 'failed' });
+    });
+    history[history.length - 1] = deploy({ id: 'dep-1', revision: 1 });
+    renderHistory(history);
+    expect(screen.getByTestId(`redeploy-dep-${ROLLBACK_WINDOW + 2}`)).toBeInTheDocument();
+    expect(screen.getByTestId('redeploy-dep-4')).toBeInTheDocument();
+    expect(screen.queryByTestId('redeploy-dep-3')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('redeploy-dep-2')).not.toBeInTheDocument();
+    expect(screen.getByTestId('redeploy-dep-1')).toBeInTheDocument();
   });
 });

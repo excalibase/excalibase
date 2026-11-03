@@ -132,3 +132,68 @@ func TestRegistryCredentials_RefuseTheInternalRegistry(t *testing.T) {
 		}
 	}
 }
+
+// gitBuildHistory deploys n git builds of the app (digests 1..n) and returns them oldest first.
+func gitBuildHistory(t *testing.T, svc *AppDeployService, internal *appregistry.Internal, app *apphost.App, n int) []*apphost.Deploy {
+	t.Helper()
+	history := make([]*apphost.Deploy, 0, n)
+	for i := 1; i <= n; i++ {
+		image, err := internal.Image(app.ProjectID, app.Name, sweepDigest(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		deploy, err := svc.DeployImage(context.Background(), app.ProjectID, app.ID, image, gitBuildOrigin())
+		if err != nil {
+			t.Fatalf("deploy %d: %v", i, err)
+		}
+		history = append(history, deploy)
+	}
+	return history
+}
+
+// The sweep keeps only the last RegistryKeepDeploys deploys' images and the
+// running one, so a rollback further back would pull an image that is gone.
+func TestRedeployApp_ARollbackReachesOnlyTheImagesTheSweepKeeps(t *testing.T) {
+	app := sampleDeployApp()
+	svc, deploys, _ := newDeployTestService(t, app)
+	svc.SetImageResolver(&stubResolver{digest: resolvedDigest})
+	internal := testInternalRegistry(t)
+	svc.SetInternalRegistry(internal)
+	history := gitBuildHistory(t, svc, internal, app, RegistryKeepDeploys+2)
+
+	if _, err := svc.RedeployApp(context.Background(), app.ProjectID, app.ID, history[0].ID, "dev-1"); !errors.Is(err, ErrRollbackImageRemoved) {
+		t.Fatalf("a rollback past the kept deploys: %v", err)
+	}
+	if _, err := svc.RedeployApp(context.Background(), app.ProjectID, app.ID, history[3].ID, "dev-1"); err != nil {
+		t.Fatalf("a rollback inside the kept deploys: %v", err)
+	}
+	// The last deploy that succeeded is kept however far back it is.
+	deploys.mu.Lock()
+	for _, d := range deploys.deploys {
+		d.Status = apphost.DeployStatusFailed
+	}
+	deploys.deploys[1].Status = apphost.DeployStatusSucceeded
+	deploys.mu.Unlock()
+	if _, err := svc.RedeployApp(context.Background(), app.ProjectID, app.ID, history[1].ID, "dev-1"); err != nil {
+		t.Fatalf("a rollback to the running image: %v", err)
+	}
+}
+
+// An image on another registry is not swept, so any past deploy of it can run again.
+func TestRedeployApp_AnImageOnAnotherRegistryRollsBackAnyDistance(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+	svc.SetInternalRegistry(testInternalRegistry(t))
+	first, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < RegistryKeepDeploys+2; i++ {
+		if _, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := svc.RedeployApp(context.Background(), app.ProjectID, app.ID, first.ID, "dev-1"); err != nil {
+		t.Fatalf("an old deploy of %s: %v", first.Image, err)
+	}
+}

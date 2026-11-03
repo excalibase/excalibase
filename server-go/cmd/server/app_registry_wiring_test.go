@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
-	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 )
@@ -168,16 +168,17 @@ func TestStartRegistrySweeper_OnlyWhereTheRegistryIssues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stop, err := startRegistrySweeper(config.AppConfig{}, nil, nil, guard); err != nil || stop == nil {
-		t.Fatalf("a guard only registry sweeps nothing: %v", err)
-	}
-	internal := appregistrytest.New(t)
 	db, err := sql.Open("postgres", "postgres://unused.invalid/db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	store := dbOnlyStore{db: db}
+	// With a store and a reachable-looking address, only the CanIssue gate keeps this a no-op.
+	if stop, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: "ftp://zot"}}, store, nil, guard); err != nil || stop == nil {
+		t.Fatalf("a guard only registry sweeps nothing: %v", err)
+	}
+	internal := appregistrytest.New(t)
 	if _, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: "ftp://zot"}}, store, nil, internal); err == nil {
 		t.Error("a registry address provisioning cannot call")
 	}

@@ -5,6 +5,7 @@ package apphost_test
 import (
 	"database/sql"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -498,5 +499,64 @@ func TestPGDeployStore_RecordResize(t *testing.T) {
 	pending.ID, pending.Status = "not-finished", apphost.DeployStatusPending
 	if err := deployStore.RecordResize(pending); err == nil {
 		t.Fatal("a resize is recorded finished, never pending")
+	}
+}
+
+// What an app runs is its newest succeeded deploy, however many failed after
+// it: the registry sweep keeps that image (EXC-540).
+func TestPGDeployStore_GetLastSucceeded_BehindAnyNumberOfFailures(t *testing.T) {
+	appStore := newPGAppStore(t)
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	app := sampleApp("proj_deploy_lastok", "app_deploy_lastok", "storefront")
+	other := sampleApp("proj_deploy_lastok2", "app_deploy_lastok2", "other")
+	for _, a := range []*apphost.App{app, other} {
+		if err := appStore.Create(a, 1); err != nil {
+			t.Fatalf("create app: %v", err)
+		}
+	}
+	if none, err := deployStore.GetLastSucceeded(app.ProjectID, app.ID); err != nil || none != nil {
+		t.Fatalf("no deploys: %+v %v", none, err)
+	}
+	finish := func(a *apphost.App, id, status string) *apphost.Deploy {
+		deploy := sampleDeploy(a.ProjectID, a.ID, id)
+		if err := deployStore.Create(deploy); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+		if err := deployStore.UpdateStatus(deploy.ID, status, "", timePtr(time.Now())); err != nil {
+			t.Fatalf("finish %s: %v", id, err)
+		}
+		return deploy
+	}
+	finish(app, "old-ok", apphost.DeployStatusSucceeded)
+	running := finish(app, "ok", apphost.DeployStatusSucceeded)
+	for n := 0; n < 120; n++ {
+		finish(app, "failed-"+strconv.Itoa(n), apphost.DeployStatusFailed)
+	}
+	finish(other, "other-ok", apphost.DeployStatusSucceeded)
+
+	got, err := deployStore.GetLastSucceeded(app.ProjectID, app.ID)
+	if err != nil || got == nil || got.ID != running.ID {
+		t.Fatalf("last succeeded: got %+v %v, want %s", got, err, running.ID)
+	}
+	if got, _ := deployStore.GetLastSucceeded("proj_deploy_other", app.ID); got != nil {
+		t.Errorf("another project read the app's deploy: %+v", got)
+	}
+}
+
+func TestPGDeployStore_GetLastSucceeded_RefusesBadIDsAndReportsAClosedDB(t *testing.T) {
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	if _, err := deployStore.GetLastSucceeded("bad id", "app1"); err == nil {
+		t.Error("an invalid project id")
+	}
+	if _, err := deployStore.GetLastSucceeded("proj1", "bad id"); err == nil {
+		t.Error("an invalid app id")
+	}
+	db, err := sql.Open("postgres", "postgres://x:x@127.0.0.1:1/x?sslmode=disable")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	db.Close()
+	if _, err := apphost.NewPostgresDeployStore(db).GetLastSucceeded("proj1", "app1"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Errorf("a closed db: %v", err)
 	}
 }
