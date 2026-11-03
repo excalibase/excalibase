@@ -151,6 +151,7 @@ var darkWork = map[features.Feature]string{
 	features.HostLogs:        "TestHostLogShippingStartsOnlyWithItsFeature",
 	// Off, a single host keeps answering that it builds nothing (ModeSingleHost).
 	features.SingleHostBuilds: "TestSiteBuildMode",
+	features.AppGitBuilds:     "TestTierHandler_AppBuildLimitsStayDarkWhileTheFlagIsOff",
 	features.LogDeletion:      "TestLogDeletionStartsOnlyWithItsFeature",
 }
 

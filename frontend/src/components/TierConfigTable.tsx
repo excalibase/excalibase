@@ -3,7 +3,7 @@ import { Loader2, Save } from 'lucide-react';
 import { Button } from './Button';
 import { useTiers, useUpdateTier, sortTiers, type TierConfig, type TierConfigInput } from '../api/tiers';
 import { serverErrorMessage } from '../utils/serverError';
-import { useSiteGitBuildsEnabled, useSitesEnabled } from '../hooks/useDeploymentMode';
+import { useFeatureEnabled, useSiteGitBuildsEnabled, useSitesEnabled } from '../hooks/useDeploymentMode';
 
 // The server takes the app disk cap in whole Mi or whole Gi; "0Gi" offers no app disks.
 const APP_DISK_CAP = /^\d+(Mi|Gi)$/;
@@ -18,6 +18,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
   const update = useUpdateTier();
   const { enabled: sitesEnabled } = useSitesEnabled();
   const gitBuildsEnabled = useSiteGitBuildsEnabled();
+  const { enabled: appBuildsEnabled } = useFeatureEnabled('appgitbuilds');
 
   // Local draft of edits keyed by tier. A row with no entry renders the server
   // value (see `toInput` fallback below), so there's no need to pre-seed from
@@ -34,7 +35,17 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     maxSiteCustomDomains: t.maxSiteCustomDomains,
     siteBuildCpuMillis: t.siteBuildCpuMillis, siteBuildMemory: t.siteBuildMemory, siteBuildDisk: t.siteBuildDisk,
     siteBuildTimeoutSeconds: t.siteBuildTimeoutSeconds, siteBuildConcurrency: t.siteBuildConcurrency,
+    // The server shows app build limits only while appgitbuilds is on; off, none are sent back.
+    ...(appBuildsEnabled ? {
+      appBuildCpuMillis: t.appBuildCpuMillis, appBuildMemory: t.appBuildMemory, appBuildDisk: t.appBuildDisk,
+      appBuildTimeoutSeconds: t.appBuildTimeoutSeconds, appBuildConcurrency: t.appBuildConcurrency,
+      appBuildMaxImage: t.appBuildMaxImage,
+    } : {}),
   });
+
+  // An app build needs at least a minute and a memory size; the server checks the bounds.
+  const appBuildValid = (d: TierConfigInput): boolean =>
+    !appBuildsEnabled || ((d.appBuildTimeoutSeconds ?? 0) >= 60 && (d.appBuildMemory ?? '').trim() !== '');
 
   const setField = (tier: string, base: TierConfigInput, patch: Partial<TierConfigInput>) =>
     setDraft((d) => ({ ...d, [tier]: { ...base, ...patch } }));
@@ -49,7 +60,8 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
       d.autoPauseAfterDays !== (t.autoPauseAfterDays ?? 0) ||
       d.maxSites !== t.maxSites || d.maxSiteDeploysPerHour !== t.maxSiteDeploysPerHour ||
       d.maxSiteCustomDomains !== t.maxSiteCustomDomains ||
-      d.siteBuildMemory !== t.siteBuildMemory || d.siteBuildTimeoutSeconds !== t.siteBuildTimeoutSeconds
+      d.siteBuildMemory !== t.siteBuildMemory || d.siteBuildTimeoutSeconds !== t.siteBuildTimeoutSeconds ||
+      d.appBuildMemory !== t.appBuildMemory || d.appBuildTimeoutSeconds !== t.appBuildTimeoutSeconds
     );
   };
 
@@ -111,6 +123,12 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                   <th className="text-left px-4 py-3 font-medium" title="How long one git build of a site may run">Build minutes</th>
                 </>
               )}
+              {appBuildsEnabled && (
+                <>
+                  <th className="text-left px-4 py-3 font-medium" title="Memory of one git build of an app; CPU, disk, image size and concurrency are set through the API">App build memory</th>
+                  <th className="text-left px-4 py-3 font-medium" title="How long one git build of an app may run">App build minutes</th>
+                </>
+              )}
               <th className="px-4 py-3" />
             </tr>
           </thead>
@@ -153,14 +171,20 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                   )}
                   {gitBuildsEnabled && (
                     <>
-                      <td className="px-4 py-3"><QtyInput value={d.siteBuildMemory ?? ''} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { siteBuildMemory: v })} placeholder="4Gi" /></td>
+                      <td className="px-4 py-3"><QtyInput label={`Build memory for ${t.tier}`} value={d.siteBuildMemory ?? ''} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { siteBuildMemory: v })} placeholder="4Gi" /></td>
                       <td className="px-4 py-3"><NumInput label={`Build minutes for ${t.tier}`} value={Math.round((d.siteBuildTimeoutSeconds ?? 0) / 60)} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { siteBuildTimeoutSeconds: v * 60 })} /></td>
+                    </>
+                  )}
+                  {appBuildsEnabled && (
+                    <>
+                      <td className="px-4 py-3"><QtyInput label={`App build memory for ${t.tier}`} value={d.appBuildMemory ?? ''} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { appBuildMemory: v })} placeholder="8Gi" /></td>
+                      <td className="px-4 py-3"><NumInput label={`App build minutes for ${t.tier}`} value={Math.round((d.appBuildTimeoutSeconds ?? 0) / 60)} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { appBuildTimeoutSeconds: v * 60 })} /></td>
                     </>
                   )}
                   <td className="px-4 py-3 text-right">
                     <Button
                       size="sm"
-                      disabled={!canMutate || !isDirty(t) || !capValid || update.isPending}
+                      disabled={!canMutate || !isDirty(t) || !capValid || !appBuildValid(d) || update.isPending}
                       onClick={() => save(t)}
                     >
                       <Save className="w-3.5 h-3.5 mr-1" />
@@ -177,10 +201,11 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
   );
 }
 
-function QtyInput({ value, onChange, disabled, placeholder }: { readonly value: string; readonly onChange: (v: string) => void; readonly disabled?: boolean; readonly placeholder?: string }) {
+function QtyInput({ value, onChange, disabled, placeholder, label }: { readonly value: string; readonly onChange: (v: string) => void; readonly disabled?: boolean; readonly placeholder?: string; readonly label?: string }) {
   return (
     <input
       type="text"
+      aria-label={label}
       value={value}
       placeholder={placeholder}
       disabled={disabled}

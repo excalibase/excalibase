@@ -1774,6 +1774,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	adminHandler := handler.NewAdminHandler(provSvc, store, sqlStore, sqlStore, k8sClient, cfg.LokiURL, promClient)
 	tierHandler := handler.NewTierHandler(sqlStore)
 	tierHandler.SetNodePlacement(provSvc)
+	tierHandler.SetFeatures(cfg.Features())
 	planChanged := onPlanChange(appDeploySvc)
 	tierHandler.SetPlanChangeHook(planChanged)
 

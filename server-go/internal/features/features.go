@@ -84,6 +84,10 @@ const (
 	// SingleHostBuilds runs git builds of sites on a single Docker or Podman
 	// host, under the sandbox runtime behind the build egress proxy (EXC-671).
 	SingleHostBuilds Feature = "singlehostbuilds"
+	// AppGitBuilds is building apps from a git push under gVisor (EXC-547,
+	// ADR 0037 phase 2): each plan's app build limits and, later, the app's
+	// git source, builds and logs.
+	AppGitBuilds Feature = "appgitbuilds"
 	// LogDeletion removes a deleted project's stored log lines from Loki (EXC-678).
 	LogDeletion Feature = "logdeletion"
 	// S3 is the S3-compatible storage endpoint, its access keys and their
@@ -93,7 +97,7 @@ const (
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, LogDeletion, S3}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3}
 }
 
 type Flags interface {
