@@ -11,4 +11,7 @@ type RestoredSettingsStore interface {
 	// tracked functions, CORS origins (except those an app added) and auth
 	// settings onto targetID, all or nothing.
 	CopyRestoredSettings(ctx context.Context, sourceID, targetID string) error
+	// DisableMFA turns the copy's MFA switch off when its key could not be
+	// carried, so the copy never claims a key auth cannot read.
+	DisableMFA(ctx context.Context, projectID string) error
 }

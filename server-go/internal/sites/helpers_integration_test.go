@@ -75,7 +75,7 @@ func (acceptingPublisher) UploadBucket(context.Context, string, []cfworkers.Asse
 	return "completion", nil
 }
 
-func (acceptingPublisher) PutScript(context.Context, string, string, cfworkers.AssetConfig) error {
+func (acceptingPublisher) PutScript(context.Context, string, cfworkers.ScriptVersion) error {
 	return nil
 }
 

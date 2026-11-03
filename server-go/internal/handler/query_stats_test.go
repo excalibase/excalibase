@@ -152,3 +152,18 @@ func TestQueryStatsHandler_APausedProjectIsAConflict(t *testing.T) {
 		}
 	}
 }
+
+// EXC-673: a single-host DocumentDB project is refused by name, not as a failure.
+func TestQueryStatsHandler_SingleHostDocumentDBIsAConflict(t *testing.T) {
+	f := newQueryStatsFixture(t, domain.OrgRoleAdmin)
+	inst, _ := f.store.FindByProjectID("test-db")
+	inst.DeploymentMode = domain.ModeDocker
+	inst.DocumentDB = true
+	if err := f.store.Update(inst); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(http.MethodPost, "/enable")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "DocumentDB") {
+		t.Errorf("%d %s", w.Code, w.Body)
+	}
+}

@@ -5,8 +5,10 @@ package sitestest
 import (
 	"context"
 	"errors"
-	"github.com/excalibase/provisioning-poc/internal/sites"
+	"io"
 	"sort"
+
+	"github.com/excalibase/provisioning-poc/internal/sites"
 	"sync"
 	"time"
 
@@ -23,7 +25,13 @@ type MemoryStore struct {
 	Tokens map[string]sites.DeployToken
 	// Attempts are each project's deploy attempts, for the hourly rate.
 	Attempts map[string][]time.Time
-	Now      func() time.Time
+	// Code is each server deploy's kept modules, by deploy id; CodeReads counts GetCode calls.
+	Code      map[string][]byte
+	CodeReads int
+	// prunedBudget is the byte budget of each site's last prune; published each site's last published deploy.
+	prunedBudget map[string]int64
+	published    map[string]string
+	Now          func() time.Time
 	// OnClaim runs as a lease is taken, before it is granted, for tests that change things meanwhile.
 	OnClaim func()
 }
@@ -36,7 +44,7 @@ type Lease struct {
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{Sites: map[string]sites.Site{}, Leases: map[string]Lease{}, Deploys: map[string]sites.Deploy{}, Tokens: map[string]sites.DeployToken{},
-		Attempts: map[string][]time.Time{}, Now: time.Now}
+		Attempts: map[string][]time.Time{}, Code: map[string][]byte{}, prunedBudget: map[string]int64{}, published: map[string]string{}, Now: time.Now}
 }
 
 // ExpireLease ends a site's lease now, as a deploy outliving it would see.
@@ -61,20 +69,26 @@ func (m *MemoryStore) holds(id, lease string) bool {
 	return ok && held.Token == lease && held.Until.After(m.Now())
 }
 
-func (m *MemoryStore) Create(_ context.Context, site *sites.Site, maxSites int) error {
+func (m *MemoryStore) Create(_ context.Context, site *sites.Site, maxSites, maxServerSites int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	held := 0
+	held, heldServer := 0, 0
 	for _, existing := range m.Sites {
 		if existing.Name == site.Name {
 			return sites.ErrSiteNameTaken
 		}
 		if existing.ProjectID == site.ProjectID {
 			held++
+			if existing.Kind == sites.KindServer {
+				heldServer++
+			}
 		}
 	}
 	if held >= maxSites {
 		return sites.ErrSiteLimitReached
+	}
+	if site.Kind == sites.KindServer && heldServer >= maxServerSites {
+		return sites.ErrServerSiteLimitReached
 	}
 	m.Sites[site.ID] = *site
 	return nil
@@ -96,6 +110,20 @@ func (m *MemoryStore) List(_ context.Context, projectID string) ([]*sites.Site, 
 	out := []*sites.Site{}
 	for _, site := range m.Sites {
 		if site.ProjectID == projectID {
+			copied := site
+			out = append(out, &copied)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (m *MemoryStore) ListServerSites(_ context.Context) ([]*sites.Site, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*sites.Site{}
+	for _, site := range m.Sites {
+		if site.Kind == sites.KindServer {
 			copied := site
 			out = append(out, &copied)
 		}
@@ -134,6 +162,7 @@ func (m *MemoryStore) Delete(_ context.Context, projectID, id, lease string) err
 	for deployID, deploy := range m.Deploys {
 		if deploy.SiteID == id {
 			delete(m.Deploys, deployID)
+			delete(m.Code, deployID)
 		}
 	}
 	for tokenID, token := range m.Tokens {
@@ -242,6 +271,79 @@ func (m *MemoryStore) ListDeploys(_ context.Context, projectID, siteID string, l
 	return out, nil
 }
 
+func (m *MemoryStore) PutCode(_ context.Context, deploy *sites.Deploy, packed []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.Deploys[deploy.ID]; !ok {
+		return sites.ErrDeployNotFound
+	}
+	m.Code[deploy.ID] = append([]byte(nil), packed...)
+	return nil
+}
+
+func (m *MemoryStore) GetCode(_ context.Context, projectID, siteID, deployID string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.CodeReads++
+	deploy, ok := m.Deploys[deployID]
+	packed, kept := m.Code[deployID]
+	if !ok || !kept || deploy.ProjectID != projectID || deploy.SiteID != siteID {
+		return nil, sites.ErrServerCodeGone
+	}
+	return packed, nil
+}
+
+// PrunedWithBudget reports whether the site's last prune was held to budget bytes.
+func (m *MemoryStore) PrunedWithBudget(siteID string, budget int64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.prunedBudget[siteID] == budget
+}
+
+func (m *MemoryStore) MarkPublished(_ context.Context, deploy *sites.Deploy, _ time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.published[deploy.SiteID] = deploy.ID
+	return nil
+}
+
+// Published is the site's deploy Cloudflare last ran.
+func (m *MemoryStore) Published(siteID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.published[siteID]
+}
+
+// PruneCode keeps what the Postgres store keeps.
+func (m *MemoryStore) PruneCode(_ context.Context, projectID, siteID string, retention sites.CodeRetention) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prunedBudget[siteID] = retention.MaxBytes
+	succeeded := []sites.Deploy{}
+	for deployID, deploy := range m.Deploys {
+		if _, held := m.Code[deployID]; held && deploy.ProjectID == projectID && deploy.SiteID == siteID && deploy.Status == sites.DeploySucceeded {
+			succeeded = append(succeeded, deploy)
+		}
+	}
+	sort.Slice(succeeded, func(i, j int) bool { return succeeded[i].CreatedAt.After(succeeded[j].CreatedAt) })
+	kept := map[string]bool{m.Sites[siteID].LiveDeployID: true, m.published[siteID]: true}
+	var running int64
+	for i, deploy := range succeeded {
+		running += int64(len(m.Code[deploy.ID]))
+		if i < retention.Keep && running <= retention.MaxBytes {
+			kept[deploy.ID] = true
+		}
+	}
+	for deployID := range m.Code {
+		deploy := m.Deploys[deployID]
+		recent := deploy.Status == sites.DeployPending && deploy.CreatedAt.After(retention.PendingSince)
+		if deploy.SiteID == siteID && !recent && !kept[deployID] {
+			delete(m.Code, deployID)
+		}
+	}
+	return nil
+}
+
 func (m *MemoryStore) ReturnDeploySlot(_ context.Context, projectID string, at time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -340,15 +442,34 @@ func (m *MemoryStore) TouchDeployToken(_ context.Context, id string, at time.Tim
 	return nil
 }
 
+// Outbound stands in for the router's dispatch binding: it names Worker, or fails with Fail.
+type Outbound struct {
+	mu     sync.Mutex
+	Worker string
+	Fail   error
+	Reads  int
+}
+
+func (o *Outbound) DispatchOutbound(_ context.Context, _ string) (string, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.Reads++
+	return o.Worker, o.Fail
+}
+
 // Publisher stands in for Cloudflare; it asks for every hash it has not stored yet.
 type Publisher struct {
 	mu        sync.Mutex
 	Stored    map[string]string
 	Published map[string]cfworkers.AssetConfig
-	Deleted   []string
-	Sessions  int
-	FailPut   error
-	Forget    bool
+	// Versions is each script's last published version; ModuleBodies its modules as sent.
+	Versions     map[string]cfworkers.ScriptVersion
+	ModuleBodies map[string]map[string]string
+	Deleted      []string
+	Sessions     int
+	FailSession  error
+	FailPut      error
+	Forget       bool
 	// BeforePut runs at the start of PutScript, with the context it was called with.
 	BeforePut func(ctx context.Context)
 	// Hosts is the hostname → script table; FailKV fails every write to it.
@@ -359,7 +480,8 @@ type Publisher struct {
 }
 
 func NewPublisher() *Publisher {
-	return &Publisher{Stored: map[string]string{}, Published: map[string]cfworkers.AssetConfig{}, Hosts: map[string]string{}}
+	return &Publisher{Stored: map[string]string{}, Published: map[string]cfworkers.AssetConfig{}, Hosts: map[string]string{},
+		Versions: map[string]cfworkers.ScriptVersion{}, ModuleBodies: map[string]map[string]string{}}
 }
 
 func (f *Publisher) PutKV(_ context.Context, key, value string) error {
@@ -388,6 +510,9 @@ func (f *Publisher) StartUploadSession(_ context.Context, _ string, manifest map
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Sessions++
+	if f.FailSession != nil {
+		return cfworkers.UploadSession{}, f.FailSession
+	}
 	if f.Forget {
 		f.Stored = map[string]string{}
 	}
@@ -427,20 +552,35 @@ func (f *Publisher) UploadBucket(_ context.Context, uploadJWT string, assets []c
 	return "completion-from-upload", nil
 }
 
-func (f *Publisher) PutScript(ctx context.Context, script, completionJWT string, config cfworkers.AssetConfig) error {
+func (f *Publisher) PutScript(ctx context.Context, script string, version cfworkers.ScriptVersion) error {
 	if f.BeforePut != nil {
 		f.BeforePut(ctx)
 	}
 	if f.FailPut != nil {
 		return f.FailPut
 	}
-	if completionJWT != "completion-from-upload" && completionJWT != "completion-from-session" {
+	if version.AssetsJWT != "completion-from-upload" && version.AssetsJWT != "completion-from-session" {
 		return errors.New("published without a completion token")
+	}
+	bodies := map[string]string{}
+	for _, mod := range version.Modules {
+		reader, err := mod.Open()
+		if err != nil {
+			return err
+		}
+		body, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			return err
+		}
+		bodies[mod.Name] = string(body)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, "put-script")
-	f.Published[script] = config
+	f.Published[script] = version.Assets
+	f.Versions[script] = version
+	f.ModuleBodies[script] = bodies
 	return nil
 }
 

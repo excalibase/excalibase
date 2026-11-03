@@ -67,9 +67,10 @@ func (s *Store) GetAuthSignIn(ctx context.Context, projectID string) (domain.Pro
 	signIn := domain.DefaultAuthSignIn()
 	var urls []string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT redirect_urls, allow_new_users, email_otp_enabled, guest_sign_in_enabled, guest_captcha_secret_set
+		`SELECT redirect_urls, allow_new_users, email_otp_enabled, guest_sign_in_enabled, guest_captcha_secret_set, mfa_enabled
 		 FROM project_auth_settings WHERE project_id = $1`, projectID).
-		Scan(pq.Array(&urls), &signIn.AllowNewUsers, &signIn.EmailOTPEnabled, &signIn.GuestSignInEnabled, &signIn.GuestCaptchaSecretSet)
+		Scan(pq.Array(&urls), &signIn.AllowNewUsers, &signIn.EmailOTPEnabled, &signIn.GuestSignInEnabled, &signIn.GuestCaptchaSecretSet,
+			&signIn.MFAEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.DefaultAuthSignIn(), nil
 	}
