@@ -181,6 +181,24 @@ func TestClaim_AppsLeaveTheLastSlotToAQueuedSite(t *testing.T) {
 	}
 }
 
+// A queued site build that could not run itself, its site already building, leaves the last slot to an app build.
+func TestClaim_AQueuedSiteThatCannotRunDoesNotHoldTheLastSlot(t *testing.T) {
+	h := sitebuildstest.New(t, sitebuildstest.Options{AppsOn: true})
+	appID := h.AddApp(h.Project)
+	h.Connect()
+	site := claim(t, h, 2)
+	if site == nil || site.Kind != sitebuilds.KindSite {
+		t.Fatalf("the site build first: %+v", site)
+	}
+	if _, err := h.Push("main", "5555555555555555555555555555555555555555", "push-site-again"); err != nil {
+		t.Fatal(err)
+	}
+	queueAppBuild(t, h, h.Project, appID, "", sitebuildstest.FreeAppLimits.Limits)
+	if next := claim(t, h, 2); next == nil || next.Kind != sitebuilds.KindApp {
+		t.Fatalf("the queued site waits on its own running build, so the app takes the last slot, got %+v", next)
+	}
+}
+
 func TestClaim_OneRunningBuildPerAppAndTheProjectsAppCap(t *testing.T) {
 	h := sitebuildstest.New(t, sitebuildstest.Options{AppsOn: true})
 	first, second := h.AddApp(h.Project), h.AddApp(h.Project)
