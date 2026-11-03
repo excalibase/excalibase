@@ -11,6 +11,7 @@
 # not call; ".example.io" also covers its subdomains, and an origin's IPv6
 # address goes in as written (lowercase). The token and the
 # account id travel only on curl's stdin and are never printed.
+# Preconditions before turning server sites on in prod: docs/sites-server-egress.md.
 set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
