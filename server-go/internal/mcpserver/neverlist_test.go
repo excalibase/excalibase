@@ -84,6 +84,10 @@ var allowedRoutes = []*regexp.Regexp{
 	// Git builds (EXC-354): connect a repository and read builds; the GitHub sign-in happens in Studio only.
 	regexp.MustCompile(`^(GET|PUT) /api/projects/[^/]+/sites/[^/]+/git$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/sites/[^/]+/builds(/[^/]+)?$`),
+	// S3 access keys (EXC-630): listed and revoked. Issuing one is a credential
+	// mint, which ADR 0037 keeps in Studio.
+	regexp.MustCompile(`^GET /api/projects/[^/]+/storage/s3-keys$`),
+	regexp.MustCompile(`^DELETE /api/projects/[^/]+/storage/s3-keys/[^/]+$`),
 }
 
 // neverReached is the surface ADR 0037 keeps out of MCP: project lifecycle,
