@@ -345,7 +345,7 @@ func TestMajorUpgrade_ALostHeartbeatCancelsTheActor(t *testing.T) {
 	w.runs.setRun("mu-x", func(stored *domain.MajorUpgrade) { stored.Owner = "recovery" })
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
-	stop := svc.keepAlive(*run, cancel)
+	stop := svc.keepAlive(*run, svc.cfg.Now(), cancel)
 	defer stop()
 	select {
 	case <-ctx.Done():

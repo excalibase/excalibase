@@ -543,6 +543,36 @@ func TestDockerConvertDoesNotRenameForARunLostAfterTheStop(t *testing.T) {
 	}
 }
 
+// The heartbeat fence cancels the driver mid-swap while the platform
+// database is unreachable: the cancellation's cause says the run is lost, so
+// nothing on the host is undone behind recovery's back.
+func TestDockerConvertLeavesTheHostAloneOnceTheFenceCancelsIt(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	w.engine.after = map[string]func(){"create:postgres:17": func() {
+		cancel(fmt.Errorf("%w: no heartbeat landed", errRunTakenOver))
+		w.progress.holdErr = errors.New("dial tcp: connection refused")
+		w.engine.fail["copy-to:/"] = context.Canceled
+		w.engine.calls = append(w.engine.calls, "fenced")
+	}}
+	outcome := w.upgrader.Convert(ctx, w.inst, w.run(), w.progress)
+	if outcome.RolledBack || !errors.Is(outcome.Cause, errRunTakenOver) {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	fenced := false
+	for _, call := range w.engine.calls {
+		if call == "fenced" {
+			fenced = true
+			continue
+		}
+		if fenced && (strings.HasPrefix(call, "remove:") || strings.HasPrefix(call, "rename:") ||
+			strings.HasPrefix(call, "start:") || strings.HasPrefix(call, "unfence:")) {
+			t.Fatalf("%s ran after the fence: %v", call, w.engine.calls)
+		}
+	}
+}
+
 // A run already lost is not touched at all.
 func TestDockerConvertChangesNothingForARunItLost(t *testing.T) {
 	w := newDockerUpgradeWorld(t)

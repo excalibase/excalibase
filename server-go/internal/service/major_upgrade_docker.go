@@ -474,7 +474,7 @@ func (u *DockerMajorUpgrader) Recover(ctx context.Context, inst *domain.Database
 		}
 		return UpgradeOutcome{Converted: true}
 	}
-	return u.putBack(ctx, dc, renamer, state, errors.New("the upgrade was interrupted"))
+	return u.undo(ctx, dc, renamer, state, progress, errors.New("the upgrade was interrupted"))
 }
 
 // holdsNewMajor: the new container, started if it is stopped, loaded the

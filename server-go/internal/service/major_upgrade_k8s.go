@@ -230,6 +230,9 @@ func leftRunning(cause error) UpgradeOutcome {
 // lostRun is non-nil when the run is no longer this actor's, by cause or by
 // a fresh check.
 func lostRun(ctx context.Context, cause error, progress UpgradeProgress) error {
+	if fence := context.Cause(ctx); errors.Is(fence, errRunTakenOver) {
+		return fmt.Errorf("%w (stopped at: %v)", fence, cause)
+	}
 	if errors.Is(cause, errRunTakenOver) {
 		return cause
 	}

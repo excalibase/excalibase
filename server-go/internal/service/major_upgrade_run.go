@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -53,10 +54,12 @@ func (p *runProgress) WritesStopped(ctx context.Context, at time.Time) error {
 }
 
 // Hold confirms ownership with a heartbeat; it answers even after the
-// actor's context was cancelled, so a lost run is told apart from a stop.
+// actor's context was cancelled, so a lost run is told apart from a stop,
+// and within heartbeatTimeout.
 func (p *runProgress) Hold(ctx context.Context) error {
-	err := p.svc.cfg.Runs.TouchMajorUpgrade(context.WithoutCancel(ctx), p.run.ID, p.run.Owner)
-	return takenOver(err)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.svc.heartbeatTimeout)
+	defer cancel()
+	return takenOver(p.svc.cfg.Runs.TouchMajorUpgrade(ctx, p.run.ID, p.run.Owner))
 }
 
 func (p *runProgress) Converted(ctx context.Context, at time.Time) error {
@@ -137,10 +140,8 @@ func (s *MajorUpgradeService) RecoverInterrupted(ctx context.Context) {
 
 // recoverOne works only from the run as its claim returned it, and the
 // project as read after the claim; the listed copy may be out of date.
+// Whether the run is stale is the claim's call, on the database's clock.
 func (s *MajorUpgradeService) recoverOne(ctx context.Context, listed domain.MajorUpgrade) {
-	if s.cfg.Now().Sub(listed.HeartbeatAt) < majorUpgradeStaleAfter {
-		return // its actor is alive, even if its lease was lost
-	}
 	_, release, err := s.cfg.Projects.HoldForMajorUpgrade(ctx, listed.ProjectID, admitRecovery)
 	if err != nil {
 		if !errors.Is(err, ErrProjectOperationRunning) {
@@ -149,33 +150,25 @@ func (s *MajorUpgradeService) recoverOne(ctx context.Context, listed domain.Majo
 		return
 	}
 	defer release()
-	run, inst := s.claim(ctx, listed)
-	if run == nil {
-		return
-	}
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	stop := s.keepAlive(*run, cancel)
-	defer stop()
-	s.recoverClaimed(ctx, inst, run)
-}
-
-// claim takes the run over and reads the project afresh; nil when the run
-// is not claimable any more.
-func (s *MajorUpgradeService) claim(ctx context.Context, listed domain.MajorUpgrade) (*domain.MajorUpgrade, *domain.DatabaseInstance) {
+	stamped := s.cfg.Now()
 	run, err := s.cfg.Runs.ClaimMajorUpgrade(ctx, listed.ID, newOwner(), majorUpgradeStaleAfter)
 	if err != nil || run == nil {
 		if err != nil {
 			log.Printf("major upgrade recovery %s: claim %s: %v", listed.ProjectID, listed.ID, err)
 		}
-		return nil, nil
+		return
 	}
+	// The heartbeat runs from the claim's stamp, before anything else.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stop := s.keepAlive(*run, stamped, cancel)
+	defer stop()
 	inst, err := s.cfg.Instances.FindByProjectID(run.ProjectID)
 	if err != nil || inst == nil {
 		log.Printf("major upgrade recovery %s: read project after the claim: %v", run.ProjectID, err)
-		return nil, nil
+		return
 	}
-	return run, inst
+	s.recoverClaimed(ctx, inst, run)
 }
 
 func (s *MajorUpgradeService) recoverClaimed(ctx context.Context, inst *domain.DatabaseInstance, run *domain.MajorUpgrade) {
@@ -194,15 +187,16 @@ func (s *MajorUpgradeService) recoverClaimed(ctx context.Context, inst *domain.D
 // keepAlive marks the run alive until the returned stop is called. The
 // actor is cancelled with errRunTakenOver when a mark is refused because the
 // run is no longer its own, or when no mark has landed for
-// majorUpgradeFenceAfter: by then recovery may be about to claim it.
-func (s *MajorUpgradeService) keepAlive(run domain.MajorUpgrade, lost context.CancelCauseFunc) func() {
+// majorUpgradeFenceAfter since stamped, the time taken just before the run's
+// heartbeat was last written: by then recovery may be about to claim it.
+func (s *MajorUpgradeService) keepAlive(run domain.MajorUpgrade, stamped time.Time, lost func(error)) func() {
 	quit := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(s.heartbeatEvery)
 		defer ticker.Stop()
-		lastBeat := s.cfg.Now()
+		lastBeat := stamped
 		for {
 			select {
 			case <-quit:
@@ -221,11 +215,13 @@ func (s *MajorUpgradeService) keepAlive(run domain.MajorUpgrade, lost context.Ca
 }
 
 // fenced marks the run alive once and reports whether the actor gave it up.
-func (s *MajorUpgradeService) fenced(run domain.MajorUpgrade, lastBeat *time.Time, lost context.CancelCauseFunc) bool {
+// A mark counts from when it was sent, the earliest it could have landed.
+func (s *MajorUpgradeService) fenced(run domain.MajorUpgrade, lastBeat *time.Time, lost func(error)) bool {
+	sent := s.cfg.Now()
 	err := s.beat(run)
 	now := s.cfg.Now()
 	if err == nil {
-		*lastBeat = now
+		*lastBeat = sent
 		return false
 	}
 	log.Printf("major upgrade %s: heartbeat: %v", run.ID, err)
@@ -245,6 +241,33 @@ func (s *MajorUpgradeService) beat(run domain.MajorUpgrade) error {
 	ctx, cancel := context.WithTimeout(context.Background(), s.heartbeatTimeout)
 	defer cancel()
 	return s.cfg.Runs.TouchMajorUpgrade(ctx, run.ID, run.Owner)
+}
+
+// fence carries a lost run to the actor's context, which may be made after
+// the heartbeat started.
+type fence struct {
+	mu     sync.Mutex
+	cause  error
+	cancel context.CancelCauseFunc
+}
+
+func (f *fence) lose(cause error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cause = cause
+	if f.cancel != nil {
+		f.cancel(cause)
+	}
+}
+
+// attach cancels with the cause already met, or any met later.
+func (f *fence) attach(cancel context.CancelCauseFunc) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancel = cancel
+	if f.cause != nil {
+		cancel(f.cause)
+	}
 }
 
 // admitRecovery lets recovery take any project not being torn down.

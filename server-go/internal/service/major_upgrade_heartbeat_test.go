@@ -33,7 +33,7 @@ func (c *steppingClock) read() time.Time {
 func heartbeatWorld(t *testing.T) (*upgradeWorld, *MajorUpgradeService, domain.MajorUpgrade, *steppingClock) {
 	t.Helper()
 	w, svc := newUpgradeWorld(t, upgradeProject())
-	clock := &steppingClock{at: time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC), step: majorUpgradeHeartbeat}
+	clock := &steppingClock{at: time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC), step: majorUpgradeHeartbeat / 2} // two reads a beat
 	svc.cfg.Now = clock.now
 	svc.heartbeatEvery = time.Millisecond
 	run := domain.MajorUpgrade{ID: "mu-hb", ProjectID: "proj-up", FromVersion: "16", ToVersion: "17", Owner: "driver"}
@@ -51,7 +51,7 @@ func TestMajorUpgrade_AnActorWhoseHeartbeatsFailGivesUpBeforeRecoveryCanClaim(t 
 	started := clock.read()
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
-	stop := svc.keepAlive(run, cancel)
+	stop := svc.keepAlive(run, clock.read(), cancel)
 	defer stop()
 	select {
 	case <-ctx.Done():
@@ -68,11 +68,11 @@ func TestMajorUpgrade_AnActorWhoseHeartbeatsFailGivesUpBeforeRecoveryCanClaim(t 
 
 // A short outage does not fence the actor.
 func TestMajorUpgrade_AShortHeartbeatOutageKeepsTheRun(t *testing.T) {
-	w, svc, run, _ := heartbeatWorld(t)
+	w, svc, run, clock := heartbeatWorld(t)
 	w.runs.failTouches(2, errors.New("platform db blip"))
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
-	stop := svc.keepAlive(run, cancel)
+	stop := svc.keepAlive(run, clock.read(), cancel)
 	deadline := time.Now().Add(5 * time.Second)
 	for w.runs.touchCount() < 20 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -85,12 +85,12 @@ func TestMajorUpgrade_AShortHeartbeatOutageKeepsTheRun(t *testing.T) {
 
 // A heartbeat that hangs is cut off, so stop returns.
 func TestMajorUpgrade_AHungHeartbeatDoesNotHoldTheActor(t *testing.T) {
-	w, svc, run, _ := heartbeatWorld(t)
+	w, svc, run, clock := heartbeatWorld(t)
 	svc.heartbeatTimeout = 5 * time.Millisecond
 	w.runs.setTouchHang(true)
 	_, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
-	stop := svc.keepAlive(run, cancel)
+	stop := svc.keepAlive(run, clock.read(), cancel)
 	for w.runs.touchCount() < 1 {
 		time.Sleep(time.Millisecond)
 	}
@@ -103,5 +103,60 @@ func TestMajorUpgrade_AHungHeartbeatDoesNotHoldTheActor(t *testing.T) {
 	case <-stopped:
 	case <-time.After(5 * time.Second):
 		t.Fatal("stop waited on a hung heartbeat")
+	}
+}
+
+// The fence counts from when the run's heartbeat was stamped, not from
+// when keepAlive started: the time between them is already spent.
+func TestMajorUpgrade_TheFenceCountsFromTheStampedHeartbeat(t *testing.T) {
+	w, svc, run, clock := heartbeatWorld(t)
+	w.runs.setTouchErr(errors.New("platform db down"))
+	stamped := clock.read()
+	clock.mu.Lock()
+	clock.at = clock.at.Add(100 * time.Second) // the calls between the stamp and keepAlive
+	clock.mu.Unlock()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	stop := svc.keepAlive(run, stamped, cancel)
+	defer stop()
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the actor kept going on failing heartbeats")
+	}
+	if elapsed := clock.read().Sub(stamped); elapsed >= majorUpgradeStaleAfter {
+		t.Fatalf("fenced %s after the stamp, not before recovery could claim at %s", elapsed, majorUpgradeStaleAfter)
+	}
+}
+
+// Staleness is the database's call: an app clock running behind does not
+// hide a stale run from recovery.
+func TestMajorUpgrade_RecoveryLeavesStalenessToTheDatabase(t *testing.T) {
+	project := upgradeProject()
+	project.Status = string(domain.StatusUpgrading)
+	w, svc := newUpgradeWorld(t, project)
+	run := &domain.MajorUpgrade{ID: "old", ProjectID: "proj-up", FromVersion: "16", ToVersion: "17", Owner: "dead",
+		StartedAt: time.Now().Add(-time.Hour)}
+	if err := w.runs.StartMajorUpgrade(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	svc.cfg.Now = func() time.Time { return time.Now().Add(-time.Hour) }
+	w.recovered = UpgradeOutcome{RolledBack: true}
+	svc.RecoverInterrupted(context.Background())
+	latest, _ := w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
+	if latest.Status != domain.MajorUpgradeRolledBack {
+		t.Fatalf("run = %+v", latest)
+	}
+}
+
+// A fence met before the actor's context exists still cancels it.
+func TestMajorUpgrade_AFenceMetBeforeTheActorStartedCancelsIt(t *testing.T) {
+	lose := &fence{}
+	lose.lose(errRunTakenOver)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	lose.attach(cancel)
+	if !errors.Is(context.Cause(ctx), errRunTakenOver) {
+		t.Fatalf("cause = %v", context.Cause(ctx))
 	}
 }
