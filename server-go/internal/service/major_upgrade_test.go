@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +34,12 @@ type upgradeWorld struct {
 	probeErrs    []error
 	failOnce     map[string]error
 	statuses     []string
+	// midConvert runs inside Convert before the conversion is recorded.
+	midConvert func()
+	// midBackup runs inside the first TakeBackup.
+	midBackup func()
+	// midServing runs inside the first WaitServing.
+	midServing func()
 }
 
 func (w *upgradeWorld) record(call string) {
@@ -120,6 +125,10 @@ func (w *upgradeWorld) Preflight(_ context.Context, _ *domain.DatabaseInstance, 
 
 func (w *upgradeWorld) TakeBackup(_ context.Context, inst *domain.DatabaseInstance) (string, error) {
 	w.record("backup:" + inst.PostgresVersion)
+	if hook := w.midBackup; hook != nil {
+		w.midBackup = nil
+		hook()
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.backupErrs) > 0 {
@@ -132,23 +141,30 @@ func (w *upgradeWorld) TakeBackup(_ context.Context, inst *domain.DatabaseInstan
 	return "backup-" + inst.PostgresVersion, nil
 }
 
-func (w *upgradeWorld) Convert(_ context.Context, _ *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
+func (w *upgradeWorld) Convert(ctx context.Context, _ *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
 	w.record("convert:" + run.ToVersion)
-	progress.Step(domain.MajorUpgradeStepConverting)
-	progress.WritesStopped(time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC))
+	if err := progress.Step(ctx, domain.MajorUpgradeStepConverting); err != nil {
+		return UpgradeOutcome{Cause: err}
+	}
+	if err := progress.WritesStopped(ctx, time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)); err != nil {
+		return UpgradeOutcome{Cause: err}
+	}
+	if w.midConvert != nil {
+		w.midConvert()
+	}
 	if w.outcome.Converted {
-		if err := progress.Converted(time.Date(2026, 10, 29, 10, 5, 0, 0, time.UTC)); err != nil {
-			return UpgradeOutcome{Cause: err}
+		if err := progress.Converted(ctx, time.Date(2026, 10, 29, 10, 5, 0, 0, time.UTC)); err != nil {
+			return UpgradeOutcome{Unsettled: true, Cause: err}
 		}
 	}
 	return w.outcome
 }
 
-func (w *upgradeWorld) Recover(_ context.Context, _ *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
+func (w *upgradeWorld) Recover(ctx context.Context, _ *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
 	w.record("recover:" + run.ToVersion)
 	if w.recovered.Converted {
-		if err := progress.Converted(time.Date(2026, 10, 29, 10, 5, 0, 0, time.UTC)); err != nil {
-			return UpgradeOutcome{Cause: err}
+		if err := progress.Converted(ctx, time.Date(2026, 10, 29, 10, 5, 0, 0, time.UTC)); err != nil {
+			return UpgradeOutcome{Unsettled: true, Cause: err}
 		}
 	}
 	return w.recovered
@@ -156,6 +172,10 @@ func (w *upgradeWorld) Recover(_ context.Context, _ *domain.DatabaseInstance, ru
 
 func (w *upgradeWorld) WaitServing(context.Context, *domain.DatabaseInstance) error {
 	w.record("wait-serving")
+	if hook := w.midServing; hook != nil {
+		w.midServing = nil
+		hook()
+	}
 	return w.servingErr
 }
 
@@ -166,119 +186,6 @@ func (w *upgradeWorld) AfterSteps(context.Context, *domain.DatabaseInstance) []s
 
 func (w *upgradeWorld) Cleanup(context.Context, *domain.DatabaseInstance, domain.MajorUpgrade) {
 	w.record("cleanup")
-}
-
-// memMajorUpgrades is MajorUpgradeStore in memory; converting moves the
-// project's version in the instance store, as the real one does.
-type memMajorUpgrades struct {
-	mu        sync.Mutex
-	runs      map[string]*domain.MajorUpgrade
-	instances storage.InstanceStore
-	markErr   error
-}
-
-func newMemMajorUpgrades(instances storage.InstanceStore) *memMajorUpgrades {
-	return &memMajorUpgrades{runs: map[string]*domain.MajorUpgrade{}, instances: instances}
-}
-
-func (m *memMajorUpgrades) StartMajorUpgrade(_ context.Context, run *domain.MajorUpgrade) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, existing := range m.runs {
-		if existing.ProjectID == run.ProjectID && existing.Status == domain.MajorUpgradeRunning {
-			return storage.ErrMajorUpgradeRunning
-		}
-	}
-	if run.StartedAt.IsZero() {
-		run.StartedAt = time.Now().UTC()
-	}
-	run.Status = domain.MajorUpgradeRunning
-	run.HeartbeatAt = run.StartedAt
-	stored := *run
-	m.runs[run.ID] = &stored
-	return nil
-}
-
-func (m *memMajorUpgrades) UpdateMajorUpgrade(_ context.Context, run *domain.MajorUpgrade) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	stored, ok := m.runs[run.ID]
-	if !ok || stored.Status != domain.MajorUpgradeRunning {
-		return storage.ErrMajorUpgradeNotRunning
-	}
-	converted, convertedAt, heartbeat := stored.Converted, stored.ConvertedAt, stored.HeartbeatAt
-	*stored = *run
-	stored.Converted, stored.ConvertedAt, stored.HeartbeatAt = converted, convertedAt, heartbeat
-	return nil
-}
-
-func (m *memMajorUpgrades) TouchMajorUpgrade(_ context.Context, id string, at time.Time) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	stored, ok := m.runs[id]
-	if !ok || stored.Status != domain.MajorUpgradeRunning {
-		return storage.ErrMajorUpgradeNotRunning
-	}
-	stored.HeartbeatAt = at
-	return nil
-}
-
-func (m *memMajorUpgrades) MarkMajorUpgradeConverted(_ context.Context, id, projectID, toVersion string, at time.Time) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.markErr != nil {
-		return m.markErr
-	}
-	stored, ok := m.runs[id]
-	if !ok || stored.Converted || stored.Status != domain.MajorUpgradeRunning {
-		return storage.ErrMajorUpgradeNotRunning
-	}
-	stored.Converted = true
-	stored.ConvertedAt = &at
-	inst, err := m.instances.FindByProjectID(projectID)
-	if err != nil {
-		return err
-	}
-	inst.PostgresVersion = toVersion
-	return m.instances.Update(inst)
-}
-
-func (m *memMajorUpgrades) LatestMajorUpgrade(_ context.Context, projectID string) (*domain.MajorUpgrade, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var latest *domain.MajorUpgrade
-	for _, run := range m.runs {
-		if run.ProjectID == projectID && (latest == nil || run.StartedAt.After(latest.StartedAt)) {
-			copied := *run
-			latest = &copied
-		}
-	}
-	return latest, nil
-}
-
-func (m *memMajorUpgrades) ConvertedMajorUpgrades(_ context.Context, projectID string) ([]domain.MajorUpgrade, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := []domain.MajorUpgrade{}
-	for _, run := range m.runs {
-		if run.ProjectID == projectID && run.Converted {
-			out = append(out, *run)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ConvertedAt.Before(*out[j].ConvertedAt) })
-	return out, nil
-}
-
-func (m *memMajorUpgrades) RunningMajorUpgrades(context.Context) ([]domain.MajorUpgrade, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := []domain.MajorUpgrade{}
-	for _, run := range m.runs {
-		if run.Status == domain.MajorUpgradeRunning {
-			out = append(out, *run)
-		}
-	}
-	return out, nil
 }
 
 func upgradeProject() *domain.DatabaseInstance {
@@ -515,15 +422,47 @@ func TestMajorUpgrade_ConvertedButStepsAfterFailIsCompletedWithWarnings(t *testi
 	}
 }
 
-func TestMajorUpgrade_RecordFailsToConvertIsAFailure(t *testing.T) {
+// Converted data the platform could not record stays open, then recovery
+// records it once the platform database is back.
+func TestMajorUpgrade_AConversionItCannotRecordStaysOpenUntilRecovered(t *testing.T) {
 	w, svc := newUpgradeWorld(t, upgradeProject())
 	w.runs.markErr = errors.New("platform db down")
 	if _, err := svc.Start(context.Background(), "proj-up", confirmed("17"), "user-1"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	latest, _ := w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
-	if latest.Status != domain.MajorUpgradeFailed {
+	if latest.Status != domain.MajorUpgradeRunning || latest.Converted {
 		t.Fatalf("record = %+v", latest)
+	}
+	if inst := projectRow(t, w); inst.Status != string(domain.StatusUpgrading) || inst.PostgresVersion != "16" {
+		t.Fatalf("project = %s on %s", inst.Status, inst.PostgresVersion)
+	}
+	w.runs.markErr = nil
+	w.recovered = UpgradeOutcome{Converted: true}
+	svc.cfg.Now = func() time.Time { return time.Now().Add(time.Hour) }
+	svc.RecoverInterrupted(context.Background())
+	latest, _ = w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
+	if latest.Status != domain.MajorUpgradeCompleted || !latest.Converted {
+		t.Fatalf("after recovery = %+v", latest)
+	}
+	if inst := projectRow(t, w); inst.Status != string(domain.StatusActive) || inst.PostgresVersion != "17" {
+		t.Fatalf("project = %s on %s", inst.Status, inst.PostgresVersion)
+	}
+}
+
+// A mark that committed but answered an error is read back, not redone.
+func TestMajorUpgrade_AConversionRecordedDespiteAnErrorFinishes(t *testing.T) {
+	w, svc := newUpgradeWorld(t, upgradeProject())
+	w.runs.markLandsErr = errors.New("connection reset after commit")
+	if _, err := svc.Start(context.Background(), "proj-up", confirmed("17"), "user-1"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	latest, _ := w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
+	if latest.Status != domain.MajorUpgradeCompleted || !latest.Converted {
+		t.Fatalf("record = %+v", latest)
+	}
+	if inst := projectRow(t, w); inst.Status != string(domain.StatusActive) || inst.PostgresVersion != "17" {
+		t.Fatalf("project = %s on %s", inst.Status, inst.PostgresVersion)
 	}
 }
 
@@ -581,7 +520,7 @@ func TestMajorUpgrade_RecoverOfAConvertedRunOnlyFinishes(t *testing.T) {
 	if err := w.runs.StartMajorUpgrade(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.runs.MarkMajorUpgradeConverted(context.Background(), "half", "proj-up", "17", time.Now()); err != nil {
+	if err := w.runs.MarkMajorUpgradeConverted(context.Background(), "half", "proj-up", "17", "", time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	svc.RecoverInterrupted(context.Background())
@@ -712,7 +651,7 @@ func TestMajorUpgrade_RecoverSkipsARunWithAFreshHeartbeat(t *testing.T) {
 	if err := w.runs.StartMajorUpgrade(context.Background(), &domain.MajorUpgrade{ID: "alive", ProjectID: "proj-up", FromVersion: "16", ToVersion: "17", StartedAt: time.Now().Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.runs.TouchMajorUpgrade(context.Background(), "alive", time.Now()); err != nil {
+	if err := w.runs.TouchMajorUpgrade(context.Background(), "alive", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	svc.RecoverInterrupted(context.Background())
@@ -730,7 +669,7 @@ func TestMajorUpgrade_AFinishedRunIsNotRewritten(t *testing.T) {
 	}
 	stale := *run
 	stale.Status = domain.MajorUpgradeFailed
-	if err := svc.cfg.Runs.UpdateMajorUpgrade(context.Background(), &stale); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+	if err := svc.cfg.Runs.UpdateMajorUpgrade(context.Background(), &stale, nil); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
 		t.Fatalf("update of a finished run = %v", err)
 	}
 }

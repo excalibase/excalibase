@@ -30,6 +30,9 @@ var (
 	ErrMajorUpgradeBlocked = errors.New("the database is not ready for a major upgrade")
 	// ErrMajorUpgradeCheckUnavailable is a check that could not run.
 	ErrMajorUpgradeCheckUnavailable = errors.New("the database could not be checked right now; try again")
+	// errRunTakenOver: another actor ended the run or recorded its
+	// conversion; this one stops and leaves the run and project to it.
+	errRunTakenOver = errors.New("the run was taken over by another actor")
 )
 
 // MajorUpgradeBlockedError lists everything that must change before an upgrade.
@@ -57,11 +60,13 @@ type UpgradeOutcome struct {
 
 // UpgradeProgress is what a conversion reports while it runs.
 type UpgradeProgress interface {
-	Step(step string)
-	WritesStopped(at time.Time)
+	Step(ctx context.Context, step string) error
+	WritesStopped(ctx context.Context, at time.Time) error
+	// Hold confirms the run is still this actor's.
+	Hold(ctx context.Context) error
 	// Converted records that the data now lives on the new major. A
 	// conversion that cannot record it must not go on as if it had.
-	Converted(at time.Time) error
+	Converted(ctx context.Context, at time.Time) error
 }
 
 // MajorUpgrader is one deployment's half of a major upgrade.
@@ -118,6 +123,8 @@ type MajorUpgradeService struct {
 	checks recentChecks
 	// runSync drives the run inside Start; tests read the outcome directly.
 	runSync bool
+	// heartbeatEvery is how often an actor marks its run alive.
+	heartbeatEvery time.Duration
 }
 
 // postUpgradeBackupAttempts bounds the retries of the first backup on the
@@ -131,7 +138,7 @@ func NewMajorUpgradeService(cfg MajorUpgradeConfig) *MajorUpgradeService {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &MajorUpgradeService{cfg: cfg}
+	return &MajorUpgradeService{cfg: cfg, heartbeatEvery: majorUpgradeHeartbeat}
 }
 
 func newMajorUpgradeID() string {
@@ -160,7 +167,7 @@ func (s *MajorUpgradeService) Start(ctx context.Context, projectID string, req d
 	run := &domain.MajorUpgrade{
 		ID: s.cfg.NewID(), ProjectID: projectID, Engine: string(domain.PostgreSQL),
 		FromVersion: inst.PostgresVersion, ToVersion: req.Target(), Step: domain.MajorUpgradeStepBackup,
-		RequestedBy: actor, StartedAt: s.cfg.Now().UTC(),
+		RequestedBy: actor, StartedAt: s.cfg.Now().UTC(), Owner: newOwner(),
 	}
 	if err := s.cfg.Runs.StartMajorUpgrade(ctx, run); err != nil {
 		release()
@@ -174,9 +181,11 @@ func (s *MajorUpgradeService) Start(ctx context.Context, projectID string, req d
 	snapshot := *run
 	drive := func() {
 		defer release()
-		stop := s.keepAlive(run.ID)
+		driveCtx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+		stop := s.keepAlive(*run, cancel)
 		defer stop()
-		s.drive(context.Background(), engine, inst, run)
+		s.drive(driveCtx, engine, inst, run)
 	}
 	if s.runSync {
 		drive()
@@ -258,11 +267,16 @@ func (s *MajorUpgradeService) drive(ctx context.Context, engine MajorUpgrader, i
 		return
 	}
 	run.SafetyBackupID = backupID
-	s.writeRun(ctx, run)
+	// The run must still be this driver's before anything changes: recovery
+	// may have ended it while the backup ran.
+	if err := s.writeRun(ctx, run); err != nil {
+		log.Printf("major upgrade %s %s: stopping before any change: %v", run.ProjectID, run.ID, err)
+		return
+	}
 	if err := s.cfg.Projects.StopReplication(ctx, inst); err != nil {
 		log.Printf("major upgrade %s: stop replication: %v", inst.ProjectID, err)
 	}
-	outcome := engine.Convert(ctx, inst, *run, &runProgress{svc: s, ctx: ctx, run: run})
+	outcome := engine.Convert(ctx, inst, *run, s.progressOf(run))
 	s.conclude(ctx, engine, inst, run, outcome)
 }
 
@@ -270,6 +284,9 @@ func (s *MajorUpgradeService) drive(ctx context.Context, engine MajorUpgrader, i
 func (s *MajorUpgradeService) conclude(ctx context.Context, engine MajorUpgrader, inst *domain.DatabaseInstance, run *domain.MajorUpgrade, outcome UpgradeOutcome) {
 	if outcome.Cause != nil {
 		log.Printf("major upgrade %s %s: %v", inst.ProjectID, run.ID, outcome.Cause)
+	}
+	if !s.stillOwns(ctx, run, outcome) {
+		return
 	}
 	switch {
 	case outcome.Unsettled:
@@ -287,14 +304,11 @@ func (s *MajorUpgradeService) conclude(ctx context.Context, engine MajorUpgrader
 }
 
 // leaveOpen keeps a run whose conversion has not settled RUNNING, and the
-// project UPGRADING, for recovery to check again once this driver is gone.
+// project UPGRADING, for recovery to check again once this actor is gone.
 func (s *MajorUpgradeService) leaveOpen(ctx context.Context, run *domain.MajorUpgrade, public string) {
 	run.Step = domain.MajorUpgradeStepWaiting
 	run.Error = public
-	s.writeRun(ctx, run)
-	if err := s.setStatus(run.ProjectID, domain.StatusUpgrading, domain.MajorUpgradeStepWaiting, public); err != nil {
-		log.Printf("major upgrade %s: record waiting: %v", run.ProjectID, err)
-	}
+	_ = s.record(ctx, run, domain.StatusUpgrading, domain.MajorUpgradeStepWaiting, public)
 }
 
 func rolledBackSentence(run *domain.MajorUpgrade) string {
@@ -313,13 +327,17 @@ func publicOr(public, fallback string) string {
 // and extensions refreshed, and a first backup on the new major.
 func (s *MajorUpgradeService) finishConverted(ctx context.Context, engine MajorUpgrader, inst *domain.DatabaseInstance, run *domain.MajorUpgrade) {
 	inst.PostgresVersion = run.ToVersion
-	s.progressStep(ctx, run, domain.MajorUpgradeStepStarting)
+	if s.progressStep(ctx, run, domain.MajorUpgradeStepStarting) != nil {
+		return
+	}
 	var warnings []string
 	if err := engine.WaitServing(ctx, inst); err != nil {
 		log.Printf("major upgrade %s: wait serving: %v", inst.ProjectID, err)
 		warnings = append(warnings, "not every copy of the database was serving when the upgrade finished; replicas may still be copying data")
 	}
-	s.progressStep(ctx, run, domain.MajorUpgradeStepFinishing)
+	if s.progressStep(ctx, run, domain.MajorUpgradeStepFinishing) != nil {
+		return
+	}
 	if err := s.cfg.Projects.ReapplyCredentials(ctx, inst); err != nil {
 		log.Printf("major upgrade %s: reapply credentials: %v", inst.ProjectID, err)
 		warnings = append(warnings, "the project's passwords could not be set again; rotate the credentials if sign-ins fail")
@@ -373,30 +391,56 @@ func (s *MajorUpgradeService) endFailed(ctx context.Context, inst *domain.Databa
 	s.end(ctx, run, domain.MajorUpgradeFailed, advice, status, reason)
 }
 
-// end writes the run's outcome, then the project's status.
+// end writes the run's outcome and the project's status together; a run
+// this actor no longer owns is left as its owner has it.
 func (s *MajorUpgradeService) end(ctx context.Context, run *domain.MajorUpgrade, outcome, public string, status domain.ProvisioningStage, reason string) {
 	finished := s.cfg.Now().UTC()
 	run.Status = outcome
 	run.Error = public
 	run.FinishedAt = &finished
-	s.writeRun(ctx, run)
-	if err := s.setStatus(run.ProjectID, status, "", reason); err != nil {
-		log.Printf("major upgrade %s: record status %s: %v", run.ProjectID, status, err)
-	}
+	_ = s.record(ctx, run, status, "", reason)
 }
 
-func (s *MajorUpgradeService) writeRun(ctx context.Context, run *domain.MajorUpgrade) {
-	if err := s.cfg.Runs.UpdateMajorUpgrade(ctx, run); err != nil {
-		log.Printf("major upgrade %s: write run %s: %v", run.ProjectID, run.ID, err)
-	}
+// writeRun writes the run while this actor owns it.
+func (s *MajorUpgradeService) writeRun(ctx context.Context, run *domain.MajorUpgrade) error {
+	return s.write(ctx, run, nil)
 }
 
-func (s *MajorUpgradeService) progressStep(ctx context.Context, run *domain.MajorUpgrade, step string) {
+// record writes the run and the project's status in one transaction, then
+// tells the observers.
+func (s *MajorUpgradeService) record(ctx context.Context, run *domain.MajorUpgrade, status domain.ProvisioningStage, step, reason string) error {
+	project := &storage.MajorUpgradeProject{Status: string(status), Step: step, Reason: reason}
+	if err := s.write(ctx, run, project); err != nil {
+		return err
+	}
+	for _, observer := range s.cfg.Observers {
+		observer.ProjectStatusChanged(run.ProjectID, string(status))
+	}
+	return nil
+}
+
+// write is the one write to a run; a refusal means another actor owns it
+// or it has ended, and is errRunTakenOver.
+func (s *MajorUpgradeService) write(ctx context.Context, run *domain.MajorUpgrade, project *storage.MajorUpgradeProject) error {
+	err := s.cfg.Runs.UpdateMajorUpgrade(ctx, run, project)
+	if err == nil {
+		return nil
+	}
+	log.Printf("major upgrade %s: write run %s: %v", run.ProjectID, run.ID, err)
+	return takenOver(err)
+}
+
+// takenOver marks a refusal by the store as the run being lost.
+func takenOver(err error) error {
+	if errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+		return fmt.Errorf("%w: %v", errRunTakenOver, err)
+	}
+	return err
+}
+
+func (s *MajorUpgradeService) progressStep(ctx context.Context, run *domain.MajorUpgrade, step string) error {
 	run.Step = step
-	s.writeRun(ctx, run)
-	if err := s.setStatus(run.ProjectID, domain.StatusUpgrading, step, ""); err != nil {
-		log.Printf("major upgrade %s: record step %s: %v", run.ProjectID, step, err)
-	}
+	return s.record(ctx, run, domain.StatusUpgrading, step, "")
 }
 
 // setStatus writes the project's status from its current row and tells the observers.
@@ -415,142 +459,4 @@ func (s *MajorUpgradeService) setStatus(projectID string, status domain.Provisio
 		observer.ProjectStatusChanged(projectID, string(status))
 	}
 	return nil
-}
-
-// runProgress persists what a conversion reports as it happens.
-type runProgress struct {
-	svc *MajorUpgradeService
-	ctx context.Context
-	run *domain.MajorUpgrade
-}
-
-func (p *runProgress) Step(step string) { p.svc.progressStep(p.ctx, p.run, step) }
-
-func (p *runProgress) WritesStopped(at time.Time) {
-	stopped := at.UTC()
-	p.run.WritesStoppedAt = &stopped
-	p.svc.writeRun(p.ctx, p.run)
-}
-
-func (p *runProgress) Converted(at time.Time) error {
-	if err := p.svc.cfg.Runs.MarkMajorUpgradeConverted(p.ctx, p.run.ID, p.run.ProjectID, p.run.ToVersion, at); err != nil {
-		return fmt.Errorf("record the conversion to %s: %w", p.run.ToVersion, err)
-	}
-	converted := at.UTC()
-	p.run.Converted = true
-	p.run.ConvertedAt = &converted
-	return nil
-}
-
-// RecoverInterrupted ends every run whose driver died: a run whose project
-// lease is free has nobody driving it. A converted run is only finished; any
-// other is handed to its deployment to finish or put back.
-func (s *MajorUpgradeService) RecoverInterrupted(ctx context.Context) {
-	runs, err := s.cfg.Runs.RunningMajorUpgrades(ctx)
-	if err != nil {
-		log.Printf("major upgrade recovery: list running: %v", err)
-		return
-	}
-	for i := range runs {
-		s.recoverOne(ctx, runs[i])
-	}
-}
-
-func (s *MajorUpgradeService) recoverOne(ctx context.Context, run domain.MajorUpgrade) {
-	if s.cfg.Now().Sub(run.HeartbeatAt) < majorUpgradeStaleAfter {
-		return // its driver is alive, even if its lease was lost
-	}
-	inst, release, err := s.cfg.Projects.HoldForMajorUpgrade(ctx, run.ProjectID, admitRecovery)
-	if err != nil {
-		if !errors.Is(err, ErrProjectOperationRunning) {
-			log.Printf("major upgrade recovery %s: %v", run.ProjectID, err)
-		}
-		return
-	}
-	defer release()
-	stop := s.keepAlive(run.ID)
-	defer stop()
-	engine, _ := s.engineFor(inst)
-	if engine == nil {
-		s.endFailed(ctx, inst, &run, "the upgrade was interrupted")
-		return
-	}
-	if run.Converted {
-		s.finishConverted(ctx, engine, inst, &run)
-		return
-	}
-	outcome := engine.Recover(ctx, inst, run, &runProgress{svc: s, ctx: ctx, run: &run})
-	s.conclude(ctx, engine, inst, &run, outcome)
-}
-
-// majorUpgradeHeartbeat is how often a driver marks its run alive;
-// majorUpgradeStaleAfter is how long without it before recovery takes over.
-const (
-	majorUpgradeHeartbeat  = 30 * time.Second
-	majorUpgradeStaleAfter = 3 * time.Minute
-)
-
-// keepAlive marks the run alive until the returned stop is called.
-func (s *MajorUpgradeService) keepAlive(runID string) func() {
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(majorUpgradeHeartbeat)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := s.cfg.Runs.TouchMajorUpgrade(ctx, runID, s.cfg.Now()); err != nil && ctx.Err() == nil {
-					log.Printf("major upgrade %s: heartbeat: %v", runID, err)
-				}
-			}
-		}
-	}()
-	return func() {
-		cancel()
-		<-done
-	}
-}
-
-// admitRecovery lets recovery take any project not being torn down.
-func admitRecovery(status string) error {
-	if domain.IsDeletionStatus(status) || status == string(domain.StatusPendingDeletion) {
-		return fmt.Errorf("project is %s", status)
-	}
-	return nil
-}
-
-// StartRecoverySweeper recovers interrupted runs now and every interval, as
-// leader only. It returns the stop.
-func (s *MajorUpgradeService) StartRecoverySweeper(ctx context.Context, leader LeaderChecker, every time.Duration) func() {
-	ctx, cancel := context.WithCancel(ctx)
-	go func() {
-		ticker := time.NewTicker(every)
-		defer ticker.Stop()
-		for {
-			if isLeader(ctx, leader) {
-				s.RecoverInterrupted(ctx)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	return cancel
-}
-
-func isLeader(ctx context.Context, leader LeaderChecker) bool {
-	if leader == nil {
-		return true
-	}
-	ok, err := leader.IsLeader(ctx)
-	if err != nil {
-		log.Printf("major upgrade recovery: leadership: %v", err)
-	}
-	return ok && err == nil
 }

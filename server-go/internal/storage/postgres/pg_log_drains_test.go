@@ -202,7 +202,7 @@ func TestLogDrains_FailSkipAndDisable(t *testing.T) {
 	if skipped := findDrain(t, store, "ld_due"); skipped.ConsecutiveFailures != 1 || skipped.DroppedLines != 5 || skipped.Status != domain.LogDrainFailing {
 		t.Errorf("after skip %+v", skipped)
 	}
-	if ok, _ := store.FailLogDrain(ctx, domain.LogDrainFailure{ID: "ld_due", From: from + 10, LeaseTo: from + 99, Error: "x", Next: drainT0}); ok {
+	if ok, err := store.FailLogDrain(ctx, domain.LogDrainFailure{ID: "ld_due", From: from + 10, LeaseTo: from + 99, Error: "x", Next: drainT0}); err != nil || ok {
 		t.Error("a failure for a lease the drain does not hold applied")
 	}
 	disable := domain.LogDrainFailure{ID: "ld_due", From: from + 10, Error: "gave up", Next: drainT0, Disable: true}

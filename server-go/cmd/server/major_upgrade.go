@@ -6,7 +6,6 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
-	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -32,10 +31,10 @@ type majorUpgradeDeps struct {
 	observers []service.StatusObserver
 }
 
-// wireMajorUpgrades serves major version upgrades (EXC-668). Restores read
-// each major's archive whether or not the feature is on, since a project
-// upgraded once keeps that layout. The routes and the recovery sweep follow
-// the feature. Returns the sweep's stop.
+// wireMajorUpgrades serves major version upgrades (EXC-668). Only the routes
+// follow the feature: restores read each major's archive and the recovery
+// sweep ends open runs whether or not it is on, so turning it off mid-run
+// strands nothing. Returns the sweep's stop.
 func wireMajorUpgrades(cfg config.AppConfig, sqlStore storage.PlatformStore, d majorUpgradeDeps, deps *handlerDeps) func() {
 	runs, ok := sqlStore.(storage.MajorUpgradeStore)
 	if !ok || d.backupSvc == nil {
@@ -50,9 +49,6 @@ func wireMajorUpgrades(cfg config.AppConfig, sqlStore storage.PlatformStore, d m
 		Observers: d.observers,
 	})
 	deps.majorUpgradeHandler = handler.NewMajorUpgradeHandler(svc, sqlStore)
-	if !features.Enabled(context.Background(), cfg.Features(), features.MajorUpgrade) {
-		return func() { /* no sweep while the feature is off */ }
-	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
 		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), majorUpgradeLockID)

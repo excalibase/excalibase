@@ -67,6 +67,8 @@ export default defineConfig({
         'src/components/DatabaseRunning.tsx',
         'src/utils/serverError.ts',
         'src/pages/StoragePage.tsx',
+        'src/components/storage/S3AccessPanel.tsx',
+        'src/api/s3Keys.ts',
         'src/utils/uploadFailure.ts',
         'src/components/ClusterSettingsCard.tsx',
         'src/utils/mutationHelpers.ts',
