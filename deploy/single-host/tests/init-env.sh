@@ -34,6 +34,11 @@ sh "$DIR/../init.sh" --env-file "$WORK/metrics.env" --domain example.com --admin
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-metrics >/dev/null
 grep -q '^FEATURE_HOSTMETRICS=true$' "$WORK/metrics.env" && grep -q '^HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev$' "$WORK/metrics.env" \
   || fail "--host-metrics not written"
+! grep -q '^FEATURE_HOSTLOGS\|^COMPOSE_PROFILES' "$WORK/.env" || fail "stored logs on without --host-logs"
+sh "$DIR/../init.sh" --env-file "$WORK/logs.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-logs >/dev/null
+grep -q '^FEATURE_HOSTLOGS=true$' "$WORK/logs.env" && grep -q '^COMPOSE_PROFILES=hostlogs$' "$WORK/logs.env" \
+  || fail "--host-logs not written"
 [ "$(value EXCALIBASE_DOMAIN)" = example.com ] || fail "domain not written"
 [ "$(value ADMIN_EMAIL)" = me@example.com ] || fail "admin email not written"
 [ "$(value EXCALIBASE_TLS)" = me@example.com ] || fail "a public domain must get ACME certificates for the admin address"
@@ -105,6 +110,36 @@ fi
 sh "$DIR/../init.sh" --env-file "$WORK/docdb.env" --domain example.com --admin-email me@example.com \
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --documentdb >/dev/null || fail "--documentdb refused"
 grep -qx 'DOCUMENTDB_ENABLED=true' "$WORK/docdb.env" || fail "--documentdb not written"
+
+# Auth hooks (EXC-662): off unless asked; on, the addresses the install's names resolve to are refused to them.
+! grep -q '^FEATURE_AUTHHOOKS' "$WORK/.env" || fail "auth hooks turned on without --auth-hooks"
+printf '#!/bin/sh\ncase $1 in api.*) echo "203.0.113.7 STREAM $1"; echo "2001:db8::7 STREAM $1" ;; esac\n' > "$WORK/resolve"; chmod +x "$WORK/resolve"
+# The host's own interfaces count too: behind a CDN the names resolve to the CDN.
+cat > "$WORK/addrs" <<'ADDRS'
+#!/bin/sh
+echo "2: eth0    inet 198.51.100.9/24 brd 198.51.100.255 scope global eth0\       valid_lft forever preferred_lft forever"
+echo "2: eth0    inet 203.0.113.7/24 brd 203.0.113.255 scope global secondary eth0\       valid_lft forever preferred_lft forever"
+echo "2: eth0    inet6 2001:db8::9/64 scope global dynamic \       valid_lft 86000sec preferred_lft 14000sec"
+ADDRS
+chmod +x "$WORK/addrs"
+RESOLVE_HOSTS="$WORK/resolve" LIST_ADDRESSES="$WORK/addrs" sh "$DIR/../init.sh" --env-file "$WORK/hooks.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --auth-hooks >/dev/null 2>"$WORK/out" || fail "--auth-hooks refused"
+grep -qx 'FEATURE_AUTHHOOKS=true' "$WORK/hooks.env" || fail "--auth-hooks not written"
+grep -qx 'AUTH_HOOKS_DENY_CIDRS=198.51.100.9/32,2001:db8::7/128,2001:db8::9/128,203.0.113.7/32' "$WORK/hooks.env" \
+  || fail "--auth-hooks did not refuse the resolved and the host's own addresses, once each"
+grep 'WARNING' "$WORK/out" | grep -q '2001:db8::7' || fail "no warning that a resolved address is not on this host"
+! grep 'WARNING' "$WORK/out" | grep -q '203.0.113.7' || fail "warned about a resolved address the host holds"
+# Without the ip tool (macOS) the resolved addresses still apply, with a warning.
+RESOLVE_HOSTS="$WORK/resolve" LIST_ADDRESSES="$WORK/no-such-ip" sh "$DIR/../init.sh" --env-file "$WORK/hooks3.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --auth-hooks >/dev/null 2>"$WORK/out" || fail "--auth-hooks refused without ip"
+grep -qx 'AUTH_HOOKS_DENY_CIDRS=2001:db8::7/128,203.0.113.7/32' "$WORK/hooks3.env" || fail "resolved addresses lost without ip"
+grep 'WARNING' "$WORK/out" | grep -q 'interface' || fail "no warning that the host's own addresses were not read"
+printf '#!/bin/sh\nexit 2\n' > "$WORK/unresolved"; chmod +x "$WORK/unresolved"
+if RESOLVE_HOSTS="$WORK/unresolved" sh "$DIR/../init.sh" --env-file "$WORK/hooks2.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --auth-hooks >"$WORK/out" 2>&1; then
+  fail "--auth-hooks accepted with no address to refuse"
+fi
+grep -q AUTH_HOOKS_DENY_CIDRS "$WORK/out" || fail "refusal does not name AUTH_HOOKS_DENY_CIDRS"
 
 # macOS (EXC-629): the socket's group is read without GNU-only stat flags. A BSD
 # stat on PATH refuses -c, as macOS's does.

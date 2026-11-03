@@ -21,4 +21,18 @@ for bad in POSTGRES_PASSWORD=password123 POSTGRES_PASSWORD= SETUP_TOKEN=abc123 \
   fi
 done
 good ADMIN_PASSWORD='a-long-passphrase-of-mine' >/dev/null || fail "a strong admin password refused"
+
+# EXC-662: auth hooks may not start without the host's own addresses refused to them.
+if good FEATURE_AUTHHOOKS=true >/dev/null 2>&1; then
+  fail "auth hooks started with no AUTH_HOOKS_DENY_CIDRS"
+fi
+for blank in , ' ' ' , ' 203.0.113.7 'not-a-cidr/32' 203.0.113.7/32,bogus 203.0.113.7/33 2001:db8::7/129 '203.0.113.7/32 198.51.100.9/32'; do
+  if good FEATURE_AUTHHOOKS=true "AUTH_HOOKS_DENY_CIDRS=$blank" >/dev/null 2>&1; then
+    fail "auth hooks started with AUTH_HOOKS_DENY_CIDRS='$blank'"
+  fi
+done
+good FEATURE_AUTHHOOKS=true AUTH_HOOKS_DENY_CIDRS=203.0.113.7/32 >/dev/null || fail "auth hooks with a deny list refused"
+good FEATURE_AUTHHOOKS=true 'AUTH_HOOKS_DENY_CIDRS=203.0.113.0/24, 2001:db8::7/128,' >/dev/null \
+  || fail "a deny list with spaces and a trailing comma refused, which the chart accepts"
+good FEATURE_AUTHHOOKS=false >/dev/null || fail "auth hooks off needs no deny list"
 echo "preflight ok"

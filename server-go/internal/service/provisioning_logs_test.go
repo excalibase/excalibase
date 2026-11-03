@@ -27,7 +27,7 @@ func TestLokiFailuresNameNoInternalAddress(t *testing.T) {
 	for name, lokiURL := range map[string]string{"unreachable": closed.URL, "erroring": failing.URL, "garbled": garbled.URL, "malformed": "http://%zz"} {
 		t.Run(name, func(t *testing.T) {
 			svc := &ProvisioningService{lokiURL: lokiURL}
-			_, err := svc.getLogsFromLoki(context.Background(), postgresLogSelector("ns", "proj-a"), "proj-a", LogSearch{Lines: 10})
+			_, err := svc.getLogsFromLoki(context.Background(), svc.lokiURL, postgresLogSelector("ns", "proj-a"), "proj-a", LogSearch{Lines: 10})
 			if !errors.Is(err, ErrLogsUnavailable) {
 				t.Fatalf("err = %v, want ErrLogsUnavailable", err)
 			}

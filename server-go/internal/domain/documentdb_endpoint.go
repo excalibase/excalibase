@@ -38,7 +38,7 @@ const (
 // role is refused rather than stored: a row under a role nothing reads back is
 // a port held forever by nobody.
 func (r DBEndpointRole) Valid() bool {
-	return r == DBEndpointRolePostgres || r == DBEndpointRoleMongo
+	return r == DBEndpointRolePostgres || r == DBEndpointRoleMongo || r == DBEndpointRoleReader
 }
 
 // DBEndpointMongoServiceName is the project's public Mongo LoadBalancer

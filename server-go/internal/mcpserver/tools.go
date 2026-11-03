@@ -105,6 +105,7 @@ func catalogue() []entry {
 	tools = append(tools, probeTools()...)
 	tools = append(tools, authFlowTools()...)
 	tools = append(tools, advisorTools()...)
+	tools = append(tools, dbAllowListTools()...)
 	return tools
 }
 

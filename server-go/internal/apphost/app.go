@@ -474,6 +474,9 @@ func (a *App) validateReplicas() error {
 // project (its database, gateway and public endpoints); reservedNames are the rest.
 const platformServicePrefix = "proj-"
 
+// platformContainerPrefix names a single host's own containers (database, edge); an app's name there is a DNS name too.
+const platformContainerPrefix = "excalibase-"
+
 var reservedNames = map[string]bool{"deno-runtime": true}
 
 // ValidateName checks the per-project app name. It is the app's Service name
@@ -483,7 +486,7 @@ func ValidateName(name string) error {
 		return fmt.Errorf("invalid app name: must be %d-%d lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit",
 			minNameLength, MaxNameLength)
 	}
-	if strings.HasPrefix(name, platformServicePrefix) || reservedNames[name] {
+	if strings.HasPrefix(name, platformServicePrefix) || strings.HasPrefix(name, platformContainerPrefix) || reservedNames[name] {
 		return fmt.Errorf("invalid app name: %q is reserved for the platform's own services", name)
 	}
 	return nil

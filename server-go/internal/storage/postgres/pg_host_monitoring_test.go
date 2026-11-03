@@ -98,7 +98,7 @@ func containerRow(name, project string, at time.Time, cores float64) domain.Cont
 func TestContainerMetrics_LatestHistoryAndProjectScope(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	now := time.Now().UTC().Truncate(time.Minute)
+	now := oneHourFor3Minutes(time.Now())
 	for minute := 0; minute < 3; minute++ {
 		at := now.Add(time.Duration(minute-2) * time.Minute)
 		batch := []domain.ContainerSample{
@@ -207,5 +207,29 @@ func TestMonitoringAlertSettings_DefaultsUntilSavedThenRoundTrip(t *testing.T) {
 	if got.Enabled || *got.CPUPercent != 85 || got.MemoryPercent != nil || *got.DiskPercent != 95 || *got.Load5 != 8 || got.TemperatureCelsius != nil ||
 		got.WindowMinutes != 10 || got.DownMinutes != 3 || len(got.Emails) != 1 || got.Emails[0] != "ops@example.com" || got.WebhookDisplay != "https://hooks.slack.com/..." {
 		t.Errorf("round trip = %+v", got)
+	}
+}
+
+// oneHourFor3Minutes keeps samples at now-2m..now inside one hourly bucket:
+// in an hour's first two minutes it steps back to the previous hour's last.
+func oneHourFor3Minutes(clock time.Time) time.Time {
+	now := clock.UTC().Truncate(time.Minute)
+	if now.Minute() < 2 {
+		return now.Truncate(time.Hour).Add(-time.Minute)
+	}
+	return now
+}
+
+func TestOneHourFor3Minutes_NeverStraddlesAnHour(t *testing.T) {
+	for _, clock := range []time.Time{
+		time.Date(2026, 11, 2, 0, 0, 30, 0, time.UTC),
+		time.Date(2026, 11, 2, 0, 1, 59, 0, time.UTC),
+		time.Date(2026, 11, 2, 0, 2, 0, 0, time.UTC),
+		time.Date(2026, 11, 2, 23, 59, 0, 0, time.UTC),
+	} {
+		now := oneHourFor3Minutes(clock)
+		if now.Add(-2*time.Minute).Truncate(time.Hour) != now.Truncate(time.Hour) || now.After(clock) {
+			t.Errorf("%v -> %v straddles an hour or lies ahead", clock, now)
+		}
 	}
 }
