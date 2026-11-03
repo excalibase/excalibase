@@ -1890,7 +1890,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
 		registryToken:         newRegistryTokenHandler(internalRegistry, store),
 		internalRegistry:      internalRegistry,
-		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc)),
+		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc), store, appRuntime),
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,
 		storageBudgetH:        handler.NewStorageBudgetHandler(a.budget),

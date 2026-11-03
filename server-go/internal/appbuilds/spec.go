@@ -6,10 +6,12 @@ package appbuilds
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +35,8 @@ const (
 	FailImageTooLarge sitebuilds.FailureKind = "image-size"
 	FailNoBuildpack   sitebuilds.FailureKind = "no-buildpack"
 	FailNoDockerfile  sitebuilds.FailureKind = "no-dockerfile"
+	// FailRegistryFull is an image that does not fit the project's registry space; see RegistryFullStatus.
+	FailRegistryFull sitebuilds.FailureKind = "registry-full"
 )
 
 // WorkSource is where the clone step checks the commit out.
@@ -182,6 +186,11 @@ func FailureMessage(status sitebuilds.RunStatus, spec RunSpec) string {
 		return fmt.Sprintf("disk limit: the build wrote more than its %s of disk", spec.Disk)
 	case FailImageTooLarge:
 		return fmt.Sprintf("the built image is larger than the %.1f GiB your plan allows", float64(spec.MaxImageBytes)/(1<<30))
+	case FailRegistryFull:
+		if status.Detail != "" {
+			return status.Detail
+		}
+		return "Your apps' images fill this plan's space. Delete an app or move to a larger plan."
 	case FailNoBuildpack:
 		return "no buildpack recognised the app: add a Dockerfile, or a package.json, go.mod, requirements.txt, pom.xml or similar"
 	case FailNoDockerfile:
@@ -197,6 +206,23 @@ func FailureMessage(status sitebuilds.RunStatus, spec RunSpec) string {
 	default:
 		return "the build could not run: " + status.Detail
 	}
+}
+
+// RegistryFullStatus fails a build whose image (incoming bytes) does not fit
+// beside the used bytes the project's apps keep, of its quota; the message is in GiB.
+func RegistryFullStatus(used, incoming, quota int64) sitebuilds.RunStatus {
+	detail := fmt.Sprintf("Your apps' images use %s of %s GiB; the new image (%s GiB) doesn't fit. Delete an app or move to a larger plan.",
+		gibibytes(used), gibibytes(quota), gibibytes(incoming))
+	return sitebuilds.RunStatus{Phase: sitebuilds.RunFailed, Failure: FailRegistryFull, Detail: detail}
+}
+
+// gibibytes is bytes in GiB to one decimal, "3" rather than "3.0"; anything above nothing is at least 0.1.
+func gibibytes(bytes int64) string {
+	tenths := math.Round(float64(bytes) * 10 / (1 << 30))
+	if bytes > 0 && tenths == 0 {
+		tenths = 1
+	}
+	return strconv.FormatFloat(tenths/10, 'f', -1, 64)
 }
 
 func minutes(d time.Duration) string {

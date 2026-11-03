@@ -92,6 +92,9 @@ func (in *Internal) NamesHost(host string) bool {
 }
 
 // RefuseUserImage is for every image a person or a token names: the deploy API, Studio, MCP.
+// The name guard is a convenience, not the boundary: zot's token scoping (a
+// project's token pulls only its own repositories) and the NetworkPolicy
+// around the registry are what keep one project out of another's images.
 func (in *Internal) RefuseUserImage(image string) error {
 	if in.Names(image) {
 		return ErrInternalImage

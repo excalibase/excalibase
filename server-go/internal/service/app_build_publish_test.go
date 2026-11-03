@@ -5,16 +5,18 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
-	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
+	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 )
 
 type fakeCollector struct {
@@ -32,43 +34,123 @@ func (f fakeCollector) Collect(_ context.Context, _ string, w io.Writer, limit i
 	return f.err
 }
 
+// journal is the order the publish's steps ran in.
+type journal struct {
+	mu    sync.Mutex
+	steps []string
+}
+
+func (j *journal) add(step string) {
+	if j == nil {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.steps = append(j.steps, step)
+}
+
+// streamingCollector writes its archive in chunks under a cap, the way the
+// real collector streams a pod's output, so the reader can refuse it midway.
+type streamingCollector struct{ archive []byte }
+
+func (f streamingCollector) Collect(_ context.Context, _ string, w io.Writer, limit int64) error {
+	for offset := 0; offset < len(f.archive); offset += 4096 {
+		chunk := f.archive[offset:min(offset+4096, len(f.archive))]
+		if int64(offset+len(chunk)) > limit {
+			return sitebuilds.ErrOutputTooLarge
+		}
+		if _, err := w.Write(chunk); err != nil {
+			return fmt.Errorf("read the packed output: %w", err)
+		}
+	}
+	return nil
+}
+
 type fakePusher struct {
 	repository string
 	err        error
 	pushed     int
+	journal    *journal
 }
 
 func (f *fakePusher) Push(_ context.Context, repository string, layout *appregistry.Layout, _ time.Time) (string, error) {
 	f.repository, f.pushed = repository, f.pushed+1
+	f.journal.add("push")
 	return string(layout.Root.Digest), f.err
 }
 
 type fakeRoom struct {
-	err      error
-	quota    int64
-	incoming int
+	fitErr, makeErr error
+	quota           int64
+	incoming        int
+	pushed          string
+	journal         *journal
 }
 
-func (f *fakeRoom) MakeRoom(_ context.Context, _ string, incoming map[string]int64, quota int64) error {
+func (f *fakeRoom) Fits(_ context.Context, _ string, incoming map[string]int64, quota int64) error {
 	f.quota, f.incoming = quota, len(incoming)
-	return f.err
+	f.journal.add("fits")
+	return f.fitErr
+}
+
+func (f *fakeRoom) MakeRoom(_ context.Context, _, pushed string, _ int64) error {
+	f.pushed = pushed
+	f.journal.add("make room")
+	return f.makeErr
 }
 
 type fakeImageDeployer struct {
-	image  string
-	origin apphost.DeployOrigin
+	image   string
+	origin  apphost.DeployOrigin
+	err     error
+	journal *journal
 }
 
 func (f *fakeImageDeployer) DeployImage(_ context.Context, _, _, image string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
 	f.image, f.origin = image, origin
+	f.journal.add("deploy")
+	if f.err != nil {
+		return nil, f.err
+	}
 	return &apphost.Deploy{Image: image}, nil
+}
+
+// fakeLocker is one lock per project, as the platform database's advisory lock is.
+type fakeLocker struct {
+	mu      sync.Mutex
+	held    map[string]*sync.Mutex
+	err     error
+	journal *journal
+}
+
+func (f *fakeLocker) Lock(ctx context.Context, projectID string) (func(), error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.mu.Lock()
+	if f.held == nil {
+		f.held = map[string]*sync.Mutex{}
+	}
+	if f.held[projectID] == nil {
+		f.held[projectID] = &sync.Mutex{}
+	}
+	project := f.held[projectID]
+	f.mu.Unlock()
+	project.Lock()
+	f.journal.add("lock")
+	return func() {
+		f.journal.add("unlock")
+		project.Unlock()
+	}, nil
 }
 
 func publishFixture(t *testing.T, collector AppImageCollector) (*AppBuildPublisher, *fakePusher, *fakeImageDeployer, string) {
 	t.Helper()
 	spool := t.TempDir()
-	pusher, deployer := &fakePusher{}, &fakeImageDeployer{}
-	return NewAppBuildPublisher(appregistrytest.New(t), collector, pusher, &fakeRoom{}, deployer, spool), pusher, deployer, spool
+	steps := &journal{}
+	pusher, deployer := &fakePusher{journal: steps}, &fakeImageDeployer{journal: steps}
+	room, locker := &fakeRoom{journal: steps}, &fakeLocker{journal: steps}
+	return NewAppBuildPublisher(appregistrytest.New(t), collector, pusher, room, locker, deployer, spool), pusher, deployer, spool
 }
 
 func buildResult() AppBuildResult {
@@ -92,8 +174,9 @@ func TestPublish_PushesTheImageAndDeploysItAsAGitBuild(t *testing.T) {
 	if deployer.origin.Source != apphost.DeploySourceGitBuild || deployer.origin.CommitSHA != "9fceb02" {
 		t.Errorf("origin %+v", deployer.origin)
 	}
-	if room := publisher.room.(*fakeRoom); room.quota != RegistryQuotaImages*result.MaxImage || room.incoming != 2 {
-		t.Errorf("room asked for %d blobs within %d", room.incoming, room.quota)
+	room := publisher.room.(*fakeRoom)
+	if room.quota != RegistryQuotaImages*result.MaxImage || room.incoming != 2 || !strings.HasSuffix(deployer.image, "@"+room.pushed) {
+		t.Errorf("room asked for %d blobs within %d, kept %s", room.incoming, room.quota, room.pushed)
 	}
 	if left, _ := os.ReadDir(spool); len(left) != 0 {
 		t.Errorf("the spool keeps %d entries", len(left))
@@ -128,8 +211,23 @@ func TestPublish_NothingIsPushedFromAnArchiveItRefuses(t *testing.T) {
 
 func TestPublish_AFullRegistryPushesNothing(t *testing.T) {
 	publisher, pusher, deployer, _ := publishFixture(t, fakeCollector{archive: appregistrytest.Archive(t)})
-	publisher.room = &fakeRoom{err: ErrRegistryFull}
-	if _, err := publisher.Publish(context.Background(), buildResult()); !errors.Is(err, ErrRegistryFull) || pusher.pushed != 0 || deployer.image != "" {
+	room := &fakeRoom{fitErr: &RegistryFullError{Used: 1, Incoming: 2, Quota: 2}}
+	publisher.room = room
+	if _, err := publisher.Publish(context.Background(), buildResult()); !errors.Is(err, ErrRegistryFull) || pusher.pushed != 0 || deployer.image != "" || room.pushed != "" {
+		t.Fatalf("%v, pushed %d, made room beside %q", err, pusher.pushed, room.pushed)
+	}
+}
+
+func TestPublish_AnOversizedLayerStreamedInIsTooLargeNotMalformed(t *testing.T) {
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	layer := make([]byte, 2<<20)
+	_ = tw.WriteHeader(&tar.Header{Name: "blobs/sha256/" + strings.Repeat("a", 64), Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(layer))})
+	_, _ = tw.Write(layer)
+	_ = tw.Close()
+	publisher, pusher, _, _ := publishFixture(t, streamingCollector{archive: archive.Bytes()})
+	_, err := publisher.Publish(context.Background(), buildResult())
+	if !errors.Is(err, ErrImageTooLarge) || pusher.pushed != 0 {
 		t.Fatalf("%v, pushed %d", err, pusher.pushed)
 	}
 }

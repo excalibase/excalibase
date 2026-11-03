@@ -62,3 +62,27 @@ func TestValidateAppRegistry(t *testing.T) {
 		t.Errorf("builds on with a key and a URL: %v", err)
 	}
 }
+
+// Git builds push to and pull from the platform's registry: the flag with no host must stop the boot, not start half-wired.
+func TestValidateAppRegistry_GitBuildsNeedAHost(t *testing.T) {
+	on := []features.Feature{features.AppGitBuilds}
+	err := (AppConfig{DarkFeatures: on}).validateAppRegistry()
+	if err == nil || !strings.Contains(err.Error(), "APP_REGISTRY_HOST") || !strings.Contains(err.Error(), "FEATURE_APPGITBUILDS") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := (AppConfig{DarkFeatures: on, AppRegistry: AppRegistryConfig{Host: "r.internal", URL: "http://zot:5000", TokenKeyPEM: []byte("k")}}).validateAppRegistry(); err != nil {
+		t.Errorf("host, key and URL with builds on: %v", err)
+	}
+}
+
+// Single-host shows git-build plan limits only (EXC-677 builds come later), so the flag boots there with no registry.
+func TestValidateAppRegistry_SingleHostGitBuildsBootWithoutAHost(t *testing.T) {
+	on := []features.Feature{features.AppGitBuilds}
+	if err := (AppConfig{ProvisionerMode: "docker", DarkFeatures: on}).validateAppRegistry(); err != nil {
+		t.Errorf("single host with builds on and no host: %v", err)
+	}
+	err := (AppConfig{ProvisionerMode: "k8s", DarkFeatures: on}).validateAppRegistry()
+	if err == nil || !strings.Contains(err.Error(), "APP_REGISTRY_HOST") {
+		t.Errorf("cluster with builds on and no host: err = %v", err)
+	}
+}
