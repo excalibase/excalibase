@@ -48,19 +48,10 @@ func (r *tplRecorder) count(prefix string) int {
 }
 
 type tplApps struct {
-	log      *tplRecorder
-	held     []*apphost.App
-	failFor  string
-	maxSeen  int
-	failures map[string]*apphost.LifecycleFailure
-}
-
-func (s *tplApps) RecordLifecycleFailure(_, id string, failure *apphost.LifecycleFailure) error {
-	if s.failures == nil {
-		s.failures = map[string]*apphost.LifecycleFailure{}
-	}
-	s.failures[id] = failure
-	return nil
+	log     *tplRecorder
+	held    []*apphost.App
+	failFor string
+	maxSeen int
 }
 
 func (s *tplApps) Create(app *apphost.App, maxApps int) error {
@@ -106,20 +97,24 @@ type tplDeployer struct {
 	admitted   []int
 }
 
-func (d *tplDeployer) DeployApp(ctx context.Context, projectID, appID, _ string) (*apphost.Deploy, error) {
+// QueueDeploy records a pending deploy; its run logs "deploy <name>", or "deploy <name> failed".
+func (d *tplDeployer) QueueDeploy(ctx context.Context, projectID, appID, _ string) (*apphost.Deploy, func(), error) {
 	app := d.apps.byID(appID)
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	d.log.add("deploy %s", app.Name)
+	d.log.add("queue %s", app.Name)
 	if app.Name == d.errDeploy {
-		return nil, errors.New("the lease could not be taken")
+		return nil, nil, errors.New("the lease could not be taken")
 	}
-	status, reason := apphost.DeployStatusRolling, ""
-	if app.Name == d.failDeploy {
-		status, reason = apphost.DeployStatusFailed, "apply app workload: forced"
+	run := func() {
+		switch {
+		case ctx.Err() != nil:
+			d.log.add("deploy %s on a cancelled context", app.Name)
+		case app.Name == d.failDeploy:
+			d.log.add("deploy %s failed", app.Name)
+		default:
+			d.log.add("deploy %s", app.Name)
+		}
 	}
-	return &apphost.Deploy{ID: "dep-" + app.Name, AppID: appID, ProjectID: projectID, Status: status, FailureReason: reason}, nil
+	return &apphost.Deploy{ID: "dep-" + app.Name, AppID: appID, ProjectID: projectID, Status: apphost.DeployStatusPending}, run, nil
 }
 
 func (d *tplDeployer) DeleteApp(_ context.Context, _, appID string, confirmDeleteDisk bool) error {
@@ -266,13 +261,14 @@ func TestDeployTemplate_WebAndRedis(t *testing.T) {
 	if events[0] != "network true" {
 		t.Fatalf("the network opens before any app exists: %v", events)
 	}
-	if rig.log.count("create ") != 2 || rig.log.count("deploy ") != 2 || rig.log.count("delete ") != 0 {
+	if rig.log.count("create ") != 2 || rig.log.count("queue ") != 2 || rig.log.count("deploy ") != 2 || rig.log.count("delete ") != 0 {
 		t.Fatalf("events %v", events)
 	}
 	if rig.apps.maxSeen != 2 {
 		t.Fatalf("the store must hold the plan's limit, got %d", rig.apps.maxSeen)
 	}
-	if !result.PrivateNetworkTurnedOn || len(result.Apps) != 2 || result.Apps[0].Name != "redis" || result.Apps[1].ID != rig.apps.held[1].ID {
+	if !result.PrivateNetworkTurnedOn || len(result.Apps) != 2 || result.Apps[0].Name != "redis" || result.Apps[1].DeployID != "dep-web" ||
+		result.Apps[1].DeployStatus != apphost.DeployStatusPending {
 		t.Fatalf("result %+v", result)
 	}
 	redis, web := rig.apps.held[0], rig.apps.held[1]
@@ -299,7 +295,7 @@ func TestDeployTemplate_SecretsBeforeTheirApp(t *testing.T) {
 		t.Fatalf("deploy: %v", err)
 	}
 	events := rig.log.all()
-	if len(events) != 4 || !strings.HasPrefix(events[1], "secret projects/"+tplProject+"/apps/") || events[2] != "create redis" {
+	if len(events) != 5 || !strings.HasPrefix(events[1], "secret projects/"+tplProject+"/apps/") || events[2] != "create redis" {
 		t.Fatalf("events %v", events)
 	}
 }
@@ -415,8 +411,8 @@ func TestDeployTemplate_AnswersBeforeTheFirstDeploys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deploy: %v", err)
 	}
-	if rig.log.count("create ") != 2 || rig.log.count("deploy ") != 0 || len(background) != 1 {
-		t.Fatalf("the answer must not wait for a deploy: events %v, background %d", rig.log.all(), len(background))
+	if rig.log.count("create ") != 2 || rig.log.count("queue ") != 2 || rig.log.count("deploy ") != 0 || len(background) != 1 {
+		t.Fatalf("each app's deploy is recorded, not run, before the answer: events %v, background %d", rig.log.all(), len(background))
 	}
 	if len(result.Apps) != 2 || result.Apps[0].ID == "" || result.AcceptedAt.Before(before) {
 		t.Fatalf("result %+v", result)
@@ -457,8 +453,8 @@ func TestDeployTemplate_TheFirstDeploysOutliveTheRequest(t *testing.T) {
 	}
 	hangUp()
 	background()
-	if rig.log.count("deploy redis") != 1 || len(rig.apps.failures) != 0 {
-		t.Fatalf("the deploy ran on the request's context: %v %v", rig.log.all(), rig.apps.failures)
+	if events := rig.log.all(); events[len(events)-1] != "deploy redis" {
+		t.Fatalf("the deploy ran on the request's context: %v", events)
 	}
 }
 
@@ -483,27 +479,22 @@ func TestDeployTemplate_AFailedFirstDeployStaysOnItsApp(t *testing.T) {
 	if _, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed); err != nil {
 		t.Fatalf("the deploy was accepted: %v", err)
 	}
-	if rig.log.count("delete ") != 0 || !rig.network.on || len(rig.apps.held) != 2 {
+	if rig.log.count("deploy web failed") != 1 || rig.log.count("delete ") != 0 || !rig.network.on || len(rig.apps.held) != 2 {
 		t.Fatalf("a failed first deploy removes nothing: %v", rig.log.all())
 	}
 }
 
-// A deploy that never got a record is written on its app, in words safe to show,
-// and the other apps still deploy.
-func TestDeployTemplate_ADeployThatCannotStartIsRecordedOnItsApp(t *testing.T) {
+// A deploy that cannot even be recorded fails the request, and what it made is removed.
+func TestDeployTemplate_ADeployThatCannotBeRecordedRollsBack(t *testing.T) {
 	rig := newTemplateRig(t)
 	rig.deployer.errDeploy = "redis"
-	result, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
-	if err != nil {
-		t.Fatalf("the deploy was accepted: %v", err)
+	_, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
+	var failed *TemplateFailedError
+	if !errors.As(err, &failed) || !failed.ServerFault || strings.Contains(failed.Public(), "lease") ||
+		!strings.Contains(failed.Public(), `could not deploy app "redis"`) {
+		t.Fatalf("got %v", err)
 	}
-	redis := rig.apps.held[0]
-	failure := rig.apps.failures[redis.ID]
-	if failure == nil || failure.Operation != string(OperationAppTemplate) || strings.Contains(failure.Reason, "lease") ||
-		!strings.Contains(failure.Reason, "deploy") || failure.At.Before(result.AcceptedAt) {
-		t.Fatalf("failure %+v", failure)
-	}
-	if rig.log.count("deploy web") != 1 || rig.log.count("delete ") != 0 {
+	if rig.log.count("delete ") != 2 || rig.log.count("deploy ") != 0 || rig.network.on {
 		t.Fatalf("events %v", rig.log.all())
 	}
 }
@@ -516,7 +507,7 @@ func TestDeployTemplate_AFailedCreateRollsBackAndForgetsItsSecrets(t *testing.T)
 	if !errors.As(err, &failed) {
 		t.Fatalf("want a rolled-back failure, got %v", err)
 	}
-	if rig.log.count("delete redis") != 1 || rig.log.count("deploy ") != 0 || rig.network.on {
+	if rig.log.count("delete redis") != 1 || rig.log.count("queue ") != 0 || rig.network.on {
 		t.Fatalf("events %v", rig.log.all())
 	}
 	webPrefix := ""

@@ -121,6 +121,7 @@ const FIRST_DEPLOY_BADGE: Record<FirstDeploy['state'], { label: string; tone: To
   rolling: { label: 'Rolling out', tone: 'progress' },
   running: { label: 'Running', tone: 'success' },
   failed: { label: 'Failed', tone: 'error' },
+  stalled: { label: 'Not running', tone: 'warning' },
 };
 
 function FirstDeployLine({ projectId, app, acceptedAt }: {
@@ -136,6 +137,15 @@ function FirstDeployLine({ projectId, app, acceptedAt }: {
       <span className="font-medium text-text-primary">{app.name}</span>
       <ToneBadge label={badge.label} tone={badge.tone} />
       {progress.state === 'failed' && <span className="text-red-400">Failed: {progress.reason}</span>}
+      {progress.state === 'stalled' && (
+        <span className="text-text-secondary">
+          Still not running.{' '}
+          <Link to={`/project/${projectId}/containers/${app.id}`} className="text-purple-400 hover:underline">
+            Open the app
+          </Link>{' '}
+          to see its deploys.
+        </span>
+      )}
       {error && <span className="text-text-tertiary">{apiErrorMessage(error, 'Could not read its status')}</span>}
     </li>
   );

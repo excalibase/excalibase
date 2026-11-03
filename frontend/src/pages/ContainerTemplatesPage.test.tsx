@@ -59,7 +59,8 @@ const webRedis = (overrides: Partial<TemplateFit> = {}): AppTemplate => ({
   fit: fit(overrides),
 });
 
-const ACCEPTED_AT = '2026-11-04T10:00:00Z';
+// The answer's time is now: a deploy accepted long ago is one Studio stops following.
+const ACCEPTED_AT = new Date().toISOString();
 
 // What the server answers for each app the deploy created: the app and its newest deploys.
 type AppReads = Record<string, { app: Record<string, unknown>; deploys: Record<string, unknown>[] }>;
@@ -97,18 +98,18 @@ const deploy = (status: string, extra: Record<string, unknown> = {}) => ({
   id: 'd1', revision: 1, status, createdAt: '2026-11-04T10:00:05Z', ...extra,
 });
 
-function acceptValkey() {
+function acceptValkey(acceptedAt: string) {
   vi.mocked(api.post).mockResolvedValue({
     data: {
-      templateId: 'valkey', privateNetworkTurnedOn: false, acceptedAt: ACCEPTED_AT,
-      apps: [{ id: 'a1', name: 'valkey' }],
+      templateId: 'valkey', privateNetworkTurnedOn: false, acceptedAt,
+      apps: [{ id: 'a1', name: 'valkey', deployId: 'd1', deployStatus: 'pending' }],
       credentials: [{ app: 'valkey', name: 'VALKEY_URL', value: 'redis://:generated@valkey:6379/0' }],
     },
   } as never);
 }
 
-async function deployValkey(read: AppReads[string]) {
-  acceptValkey();
+async function deployValkey(read: AppReads[string], acceptedAt = ACCEPTED_AT) {
+  acceptValkey(acceptedAt);
   renderPage([valkey()], { a1: read });
   await userEvent.click(await screen.findByTestId('template-deploy-valkey'));
   await userEvent.click(screen.getByTestId('template-confirm-valkey'));
@@ -140,26 +141,19 @@ describe('ContainerTemplatesPage first deploys', () => {
     await waitFor(() => expect(progress).toHaveTextContent("Failed: create the app's disk: timed out"));
   });
 
-  test('a first deploy that could not start shows what the app recorded', async () => {
-    const progress = await deployValkey({
-      app: {
-        id: 'a1', name: 'valkey',
-        lifecycleFailure: { operation: 'template deploy', reason: 'its first deploy did not start; deploy the app again', at: '2026-11-04T10:00:01Z' },
-      },
-      deploys: [],
-    });
-    await waitFor(() => expect(progress).toHaveTextContent('Failed: its first deploy did not start'));
+  test('a pending first deploy shows it is preparing', async () => {
+    const progress = await deployValkey({ app: { id: 'a1', name: 'valkey' }, deploys: [deploy('pending')] });
+    expect(progress).toHaveTextContent('Preparing');
   });
 
-  test('an older failure recorded before this deploy is not shown as its outcome', async () => {
-    const progress = await deployValkey({
-      app: {
-        id: 'a1', name: 'valkey',
-        lifecycleFailure: { operation: 'template deploy', reason: 'old', at: '2026-11-04T09:00:00Z' },
-      },
-      deploys: [],
-    });
-    expect(progress).toHaveTextContent('Preparing');
+  test('a first deploy still not running after 15 minutes stops being followed and links to the app', async () => {
+    const longAgo = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    const progress = await deployValkey({ app: { id: 'a1', name: 'valkey' }, deploys: [deploy('pending')] }, longAgo);
+    await waitFor(() => expect(progress).toHaveTextContent('Still not running'));
+    expect(within(progress).getByRole('link', { name: /open the app/i })).toHaveAttribute(
+      'href',
+      '/project/proj-1/containers/a1',
+    );
   });
 });
 
@@ -189,8 +183,8 @@ describe('ContainerTemplatesPage', () => {
         privateNetworkTurnedOn: true,
         acceptedAt: ACCEPTED_AT,
         apps: [
-          { id: 'a1', name: 'redis' },
-          { id: 'a2', name: 'web' },
+          { id: 'a1', name: 'redis', deployId: 'd1', deployStatus: 'pending' },
+          { id: 'a2', name: 'web', deployId: 'd2', deployStatus: 'pending' },
         ],
       },
     } as never);
@@ -287,7 +281,7 @@ describe('ContainerTemplatesPage catalog', () => {
         templateId: 'valkey',
         privateNetworkTurnedOn: false,
         acceptedAt: ACCEPTED_AT,
-        apps: [{ id: 'a1', name: 'valkey' }],
+        apps: [{ id: 'a1', name: 'valkey', deployId: 'd1', deployStatus: 'pending' }],
         credentials: [{ app: 'valkey', name: 'VALKEY_URL', value: 'redis://:generated@valkey:6379/0' }],
       },
     } as never);
