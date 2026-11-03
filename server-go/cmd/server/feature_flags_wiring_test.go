@@ -145,7 +145,7 @@ var darkWork = map[features.Feature]string{
 	features.HostLogs:        "TestHostLogShippingStartsOnlyWithItsFeature",
 	// Off, a single host keeps answering that it builds nothing (ModeSingleHost).
 	features.SingleHostBuilds: "TestSiteBuildMode",
-	features.AppGitBuilds: "TestTierHandler_AppBuildLimitsStayDarkWhileTheFlagIsOff",
+	features.AppGitBuilds:     "TestTierHandler_AppBuildLimitsStayDarkWhileTheFlagIsOff",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {
