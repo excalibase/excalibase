@@ -51,6 +51,16 @@ func TestRunSpec_ValidateRefuses(t *testing.T) {
 		"git daemon by default":          func(s *RunSpec) { s.CloneURL = "git://gitsrv/site.git" },
 		"clone url as an option":         func(s *RunSpec) { s.CloneURL = "--upload-pack=touch /tmp/x" },
 		"file clone":                     func(s *RunSpec) { s.CloneURL = "file:///etc" },
+		"root dir with a semicolon":      func(s *RunSpec) { s.RootDir = "a;b" },
+		"root dir with a space":          func(s *RunSpec) { s.RootDir = "a b" },
+		"root dir with a substitution":   func(s *RunSpec) { s.RootDir = "$(x)" },
+		"root dir with backticks":        func(s *RunSpec) { s.RootDir = "`x`" },
+		"root dir as an option":          func(s *RunSpec) { s.RootDir = "-x" },
+		"dockerfile with a semicolon":    func(s *RunSpec) { s.DockerfilePath = "a;b" },
+		"dockerfile with a space":        func(s *RunSpec) { s.DockerfilePath = "a b" },
+		"dockerfile with a substitution": func(s *RunSpec) { s.DockerfilePath = "$(x)" },
+		"dockerfile with backticks":      func(s *RunSpec) { s.DockerfilePath = "`x`" },
+		"dockerfile as an option":        func(s *RunSpec) { s.DockerfilePath = "-x" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -60,6 +70,15 @@ func TestRunSpec_ValidateRefuses(t *testing.T) {
 				t.Error("accepted")
 			}
 		})
+	}
+}
+
+// Plain repository paths still pass the character allow-list.
+func TestRunSpec_ValidateAcceptsPlainPaths(t *testing.T) {
+	spec := validSpec()
+	spec.RootDir, spec.DockerfilePath = "services/api-v2", "docker/Dockerfile.prod"
+	if err := spec.Validate(); err != nil {
+		t.Errorf("a plain path: %v", err)
 	}
 }
 
@@ -105,5 +124,31 @@ func TestFailureMessage(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("%s: %q lacks %q", kind, got, want)
 		}
+	}
+}
+
+// A build that does not fit the project's registry space says so in GiB of its plan.
+func TestFailureMessage_RegistryFullInThePlansGiB(t *testing.T) {
+	const gib = 1 << 30
+	cases := []struct {
+		used, incoming, quota int64
+		want                  string
+	}{
+		{used: gib * 26 / 10, incoming: gib * 12 / 10, quota: 3 * gib,
+			want: "Your apps' images use 2.6 of 3 GiB; the new image (1.2 GiB) doesn't fit. Delete an app or move to a larger plan."},
+		{used: 3 * gib, incoming: 5 << 20, quota: 3 * gib,
+			want: "Your apps' images use 3 of 3 GiB; the new image (0.1 GiB) doesn't fit. Delete an app or move to a larger plan."},
+	}
+	for _, tc := range cases {
+		status := RegistryFullStatus(tc.used, tc.incoming, tc.quota)
+		if status.Phase != sitebuilds.RunFailed || status.Failure != FailRegistryFull {
+			t.Fatalf("status %+v", status)
+		}
+		if got := FailureMessage(status, validSpec()); got != tc.want {
+			t.Errorf("got %q, want %q", got, tc.want)
+		}
+	}
+	if got := FailureMessage(sitebuilds.RunStatus{Phase: sitebuilds.RunFailed, Failure: FailRegistryFull}, validSpec()); !strings.Contains(got, "larger plan") {
+		t.Errorf("without the numbers: %q", got)
 	}
 }

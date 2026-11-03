@@ -191,8 +191,8 @@ func (r *Runner) Remove(ctx context.Context, buildID string) error {
 	return r.removeBox(ctx, buildID, chain)
 }
 
-// ForgetCloneCredential has nothing to delete: the clone token lives only in the clone step's
-// environment, and the dispatcher revokes it at the git host once the clone is done.
+// ForgetCloneCredential has nothing to delete: the dispatcher revokes the clone token at the git host once
+// the clone is done, but the revoked token stays in the exited clone container's config until Remove.
 func (r *Runner) ForgetCloneCredential(context.Context, string) error {
 	return nil
 }

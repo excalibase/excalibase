@@ -84,7 +84,7 @@ func appBuildTestArgs(t *testing.T, cfg config.AppConfig, internal *appregistry.
 		t.Fatal(err)
 	}
 	apps := apphost.NewPostgresAppStore(store.DB())
-	return siteBuildArgs{cfg: cfg, sqlStore: store, kube: kube, apps: appBuildArgs{internal: internal, registry: registry, apps: apps}}
+	return siteBuildArgs{cfg: cfg, sqlStore: store, kube: kube, apps: appBuildArgs{internal: internal, registry: registry, apps: apps, platformDB: store.DB()}}
 }
 
 // EXC-547 dark work: with appgitbuilds off, or without what an app build needs, nothing app-related is wired.
@@ -164,6 +164,12 @@ func TestEnableAppBuilds_RefusesWhatAPublishNeeds(t *testing.T) {
 	noSpool.AppBuild.SpoolPath = ""
 	if err := enableAppBuilds(noSpool, cluster, nil, nil, nil, args.apps); err == nil {
 		t.Error("no APP_BUILD_SPOOL_PATH")
+	}
+	// The publish lock lives in the platform database; without it two publishes could pass the quota on one measure.
+	noLock := args.apps
+	noLock.platformDB = nil
+	if err := enableAppBuilds(cfg, cluster, nil, nil, nil, noLock); err == nil || !strings.Contains(err.Error(), "platform database") {
+		t.Errorf("no platform database for the publish lock: %v", err)
 	}
 }
 

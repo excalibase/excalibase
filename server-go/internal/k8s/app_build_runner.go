@@ -44,6 +44,9 @@ func NewAppBuildRunner(client *Client, options AppBuildOptions) *AppBuildRunner 
 // Start puts the fence, quota and scripts in place, then creates the Job suspended,
 // its Secrets owned by it, and resumes it.
 func (r *AppBuildRunner) Start(ctx context.Context, spec appbuilds.RunSpec) error {
+	if err := r.options.Validate(); err != nil {
+		return err
+	}
 	if err := spec.Validate(r.options.CloneSchemes...); err != nil {
 		return err
 	}

@@ -43,6 +43,7 @@ type memoryStore struct {
 	lost            []LostBuild
 	appAttempts     map[string]int
 	signIns         []SignIn
+	appPushErr      error
 }
 
 func newMemoryStore() *memoryStore {
@@ -107,6 +108,9 @@ func (m *memoryStore) DeleteAppConnection(_ context.Context, projectID, appID st
 func (m *memoryStore) AppConnectionsForPush(_ context.Context, _ string, installationID, repositoryID int64, branch string) ([]*AppConnection, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.appPushErr != nil {
+		return nil, m.appPushErr
+	}
 	var found []*AppConnection
 	for _, connection := range m.appConnections {
 		if connection.InstallationID == installationID && connection.RepositoryID == repositoryID && connection.Settings.Branch == branch {
@@ -322,6 +326,7 @@ type fakeProvider struct {
 	filesErr error
 	checked  []string
 	event    gitprovider.Event
+	mintErr  error
 }
 
 func newFakeProvider() *fakeProvider {
@@ -356,6 +361,9 @@ func (f *fakeProvider) BranchHead(context.Context, int64, gitprovider.Repository
 func (f *fakeProvider) CloneCredential(context.Context, int64, int64) (gitprovider.CloneCredential, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.mintErr != nil {
+		return gitprovider.CloneCredential{}, f.mintErr
+	}
 	f.minted++
 	return gitprovider.CloneCredential{Token: fmt.Sprintf("clone-token-%d", f.minted)}, nil
 }
@@ -399,6 +407,7 @@ type fakeJobs struct {
 	forgot    []string
 	forgetErr error
 	logText   string
+	logReads  int
 	// onRemove runs as an attempt's job is removed, before any retry.
 	onRemove func()
 	// onStatus runs on each status read of a running job.
@@ -430,6 +439,7 @@ func (f *fakeJobs) Status(_ context.Context, runID string) (RunStatus, error) {
 func (f *fakeJobs) Logs(context.Context, string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.logReads++
 	return f.logText, nil
 }
 
@@ -491,6 +501,7 @@ type fakeSiteRunner struct {
 	fakeJobs
 	specs     []RunSpec
 	collected []string
+	startErr  error
 }
 
 func (f *fakeSiteRunner) Start(_ context.Context, spec RunSpec) error {
@@ -498,7 +509,7 @@ func (f *fakeSiteRunner) Start(_ context.Context, spec RunSpec) error {
 	defer f.mu.Unlock()
 	f.specs = append(f.specs, spec)
 	f.begin()
-	return nil
+	return f.startErr
 }
 
 func (f *fakeSiteRunner) Collect(_ context.Context, runID string, w io.Writer, _ int64) error {

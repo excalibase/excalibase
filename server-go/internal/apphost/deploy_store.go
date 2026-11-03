@@ -24,6 +24,9 @@ type DeployStore interface {
 	ListUnfinished() ([]*Deploy, error)
 	ListByApp(projectID, appID string, limit int) ([]*Deploy, error)
 	GetLatest(projectID, appID string) (*Deploy, error)
+	// GetLastSucceeded is the newest succeeded entry however much history
+	// came after it, so what the app runs; nil (no error) when none succeeded.
+	GetLastSucceeded(projectID, appID string) (*Deploy, error)
 	// Get returns nil (no error) when id names no deploy scoped to
 	// (projectID, appID).
 	Get(projectID, appID, id string) (*Deploy, error)

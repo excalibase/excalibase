@@ -1387,6 +1387,10 @@ func buildProvisioningService(
 	}
 	provSvc.SetLokiURL(cfg.LokiURL)
 	startLogPlanSweep(context.Background(), cfg, provSvc, k8sClient)
+	deletionStore, _ := sqlStore.(logDeletionStore)
+	if worker := wireLogDeletion(cfg, deletionStore, provSvc, cfg.LokiURL); worker != nil {
+		go worker.Run(context.Background())
+	}
 
 	wireNatsCredentialMinter(sqlStore, provSvc)
 	return provSvc, lifecycleClaimer
@@ -1854,7 +1858,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		limits:  service.NewSiteBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
 		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}, docker: a.dockerClient,
 		apps: appBuildArgs{internal: internalRegistry, registry: appRegistry, deploys: appDeploySvc,
-			apps: apphost.NewPostgresAppStore(sqlStore.DB()), limits: service.NewAppBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc)}})
+			apps: apphost.NewPostgresAppStore(sqlStore.DB()), limits: service.NewAppBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
+			platformDB: sqlStore.DB()}})
 	return &handlerDeps{
 		appRegistry:           appRegistry,
 		siteBuilds:            builds,
@@ -1892,7 +1897,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
 		registryToken:         newRegistryTokenHandler(internalRegistry, store),
 		internalRegistry:      internalRegistry,
-		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc)),
+		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc), store, appRuntime),
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,
 		storageBudgetH:        handler.NewStorageBudgetHandler(a.budget),

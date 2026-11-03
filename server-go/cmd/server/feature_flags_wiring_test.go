@@ -156,6 +156,7 @@ var darkWork = map[features.Feature]string{
 	// Off, a single host keeps answering that it builds nothing (ModeSingleHost).
 	features.SingleHostBuilds: "TestSiteBuildMode",
 	features.AppGitBuilds:     "TestAppBuilds_NothingWiredWhileTheFlagIsOff",
+	features.LogDeletion:      "TestLogDeletionStartsOnlyWithItsFeature",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

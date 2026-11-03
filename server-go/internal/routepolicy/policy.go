@@ -69,7 +69,7 @@ const (
 	// held by no studio caller or service principal.
 	AuthForwarderToken AuthClass = "forwarder-token"
 	// AuthRegistryPull is a project's internal-registry pull credential, which
-	// zot forwards from a node's login (EXC-540); no studio caller holds one.
+	// containerd on a node presents to the token realm (EXC-540); no studio caller holds one.
 	AuthRegistryPull AuthClass = "registry-pull-credential"
 )
 

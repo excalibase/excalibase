@@ -13,6 +13,9 @@ import (
 var pushTag = regexp.MustCompile(`^p([0-9]{1,12})-([0-9a-f]{64})$`)
 
 // PushTag names an image pushed at a time; every image the platform pushes carries one.
+// at is when the push completed, not when the build began: the sweep's grace
+// and floor run from it, and an earlier time would age an image before its
+// deploy is recorded.
 func PushTag(digest string, at time.Time) (string, error) {
 	if !digestPattern.MatchString(digest) {
 		return "", fmt.Errorf("a push tag names a sha256 digest, not %q", digest)

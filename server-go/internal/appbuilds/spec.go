@@ -6,10 +6,12 @@ package appbuilds
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +35,8 @@ const (
 	FailImageTooLarge sitebuilds.FailureKind = "image-size"
 	FailNoBuildpack   sitebuilds.FailureKind = "no-buildpack"
 	FailNoDockerfile  sitebuilds.FailureKind = "no-dockerfile"
+	// FailRegistryFull is an image that does not fit the project's registry space; see RegistryFullStatus.
+	FailRegistryFull sitebuilds.FailureKind = "registry-full"
 )
 
 // WorkSource is where the clone step checks the commit out.
@@ -71,6 +75,8 @@ var (
 	commitPattern  = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	namePattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 	buildIDPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$`)
+	// repoPathPattern keeps a repository path to characters no shell or CLI reads as syntax.
+	repoPathPattern = regexp.MustCompile(`^[A-Za-z0-9._/][A-Za-z0-9._/-]*$`)
 )
 
 // maxBuildInputBytes bounds the build args and secrets together: both end up in a Secret or the pod spec.
@@ -96,7 +102,7 @@ func (s RunSpec) Validate(cloneSchemes ...string) error {
 	}
 	for label, relative := range map[string]string{"root directory": s.RootDir, "Dockerfile path": s.DockerfilePath} {
 		if !insideCheckout(relative) {
-			return fmt.Errorf("the %s %q leaves the repository", label, relative)
+			return fmt.Errorf("the %s %q must stay inside the repository and use only letters, digits, '.', '_', '/' and '-'", label, relative)
 		}
 	}
 	for label, value := range map[string]string{"memory": s.Memory, "disk": s.Disk,
@@ -146,7 +152,7 @@ func insideCheckout(relative string) bool {
 	if relative == "" {
 		return true
 	}
-	if strings.HasPrefix(relative, "/") || strings.ContainsRune(relative, 0) {
+	if !repoPathPattern.MatchString(relative) || strings.HasPrefix(relative, "/") {
 		return false
 	}
 	cleaned := path.Clean(relative)
@@ -180,6 +186,11 @@ func FailureMessage(status sitebuilds.RunStatus, spec RunSpec) string {
 		return fmt.Sprintf("disk limit: the build wrote more than its %s of disk", spec.Disk)
 	case FailImageTooLarge:
 		return fmt.Sprintf("the built image is larger than the %.1f GiB your plan allows", float64(spec.MaxImageBytes)/(1<<30))
+	case FailRegistryFull:
+		if status.Detail != "" {
+			return status.Detail
+		}
+		return "Your apps' images fill this plan's space. Delete an app or move to a larger plan."
 	case FailNoBuildpack:
 		return "no buildpack recognised the app: add a Dockerfile, or a package.json, go.mod, requirements.txt, pom.xml or similar"
 	case FailNoDockerfile:
@@ -195,6 +206,23 @@ func FailureMessage(status sitebuilds.RunStatus, spec RunSpec) string {
 	default:
 		return "the build could not run: " + status.Detail
 	}
+}
+
+// RegistryFullStatus fails a build whose image (incoming bytes) does not fit
+// beside the used bytes the project's apps keep, of its quota; the message is in GiB.
+func RegistryFullStatus(used, incoming, quota int64) sitebuilds.RunStatus {
+	detail := fmt.Sprintf("Your apps' images use %s of %s GiB; the new image (%s GiB) doesn't fit. Delete an app or move to a larger plan.",
+		gibibytes(used), gibibytes(quota), gibibytes(incoming))
+	return sitebuilds.RunStatus{Phase: sitebuilds.RunFailed, Failure: FailRegistryFull, Detail: detail}
+}
+
+// gibibytes is bytes in GiB to one decimal, "3" rather than "3.0"; anything above nothing is at least 0.1.
+func gibibytes(bytes int64) string {
+	tenths := math.Round(float64(bytes) * 10 / (1 << 30))
+	if bytes > 0 && tenths == 0 {
+		tenths = 1
+	}
+	return strconv.FormatFloat(tenths/10, 'f', -1, 64)
 }
 
 func minutes(d time.Duration) string {

@@ -53,9 +53,17 @@ const (
 		   OR EXISTS (SELECT 1 FROM apps WHERE $2 = 'app' AND id = $3 AND project_id = $1)`
 	// claimableSQL finds the oldest queued build of the kinds asked for that fits: running builds of every
 	// kind fill the install's slots, one runs per site or app, and the project's cap counts its own kind.
+	// An app build takes the last free slot only while no site build that could run is queued (its site not
+	// already building, its project under its cap), so a 1-slot install still builds apps.
 	claimableSQL = `SELECT queued.id FROM site_builds queued
 		WHERE queued.status = 'QUEUED' AND queued.kind = ANY($2)
 		  AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING') < $1
+		  AND (queued.kind = 'site' OR (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING') < $1 - 1
+		      OR NOT EXISTS (SELECT 1 FROM site_builds waiting WHERE waiting.status = 'QUEUED' AND waiting.kind = 'site'
+		          AND NOT EXISTS (SELECT 1 FROM site_builds running WHERE running.status = 'RUNNING' AND running.kind = 'site'
+		              AND running.site_id = waiting.site_id)
+		          AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING' AND project_id = waiting.project_id
+		              AND kind = 'site') < waiting.project_concurrency))
 		  AND NOT EXISTS (SELECT 1 FROM site_builds running WHERE running.status = 'RUNNING' AND running.kind = queued.kind
 		      AND running.project_id = queued.project_id AND (running.site_id = queued.site_id OR running.app_id = queued.app_id))
 		  AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING' AND project_id = queued.project_id

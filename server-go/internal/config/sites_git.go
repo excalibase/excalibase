@@ -30,7 +30,8 @@ type SiteGitConfig struct {
 	WebURL string
 	// BuildNamespace holds every build Job; the chart creates it and the builder's Role with features.sitesGitBuilds.
 	BuildNamespace string
-	// BuildSlots is how many builds run at once on this install, across every project.
+	// BuildSlots is how many site and app builds run at once on this install, across every project;
+	// an app build takes the last free slot only while no site build is queued.
 	BuildSlots int
 	// PriorityClass is the build pods' class, below every tenant workload; required in a cluster.
 	PriorityClass string

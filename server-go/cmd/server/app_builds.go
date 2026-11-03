@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -33,6 +34,8 @@ type appBuildArgs struct {
 	deploys  *service.AppDeployService
 	apps     apphost.Store
 	limits   sitebuilds.AppLimitsSource
+	// platformDB holds each project's publish lock (apphost.PostgresPublishLock).
+	platformDB *sql.DB
 }
 
 // appBuildsWanted: the flag on, a registry that issues, and site git builds running in a cluster.
@@ -59,6 +62,9 @@ func enableAppBuilds(cfg config.AppConfig, client *k8s.Client, files gitprovider
 	if args.registry.client == nil || args.registry.sweeper == nil {
 		return errors.New("the internal registry's client and sweeper are not built; app builds have nowhere to push")
 	}
+	if args.platformDB == nil {
+		return errors.New("app builds need the platform database: each project's publishes take its lock there")
+	}
 	if cfg.AppBuild.SpoolPath == "" {
 		return errors.New("APP_BUILD_SPOOL_PATH is required: a volume of its own where a publish takes in an image")
 	}
@@ -70,7 +76,8 @@ func enableAppBuilds(cfg config.AppConfig, client *k8s.Client, files gitprovider
 		return err
 	}
 	runner := k8s.NewAppBuildRunner(client, appBuildOptions(cfg))
-	publisher := service.NewAppBuildPublisher(args.internal, runner, args.registry.client, args.registry.sweeper, args.deploys, spool)
+	publisher := service.NewAppBuildPublisher(args.internal, runner, args.registry.client, args.registry.sweeper,
+		apphost.NewPostgresPublishLock(args.platformDB), args.deploys, spool)
 	builds.EnableApps(sitebuilds.AppSupport{Apps: args.apps, Limits: args.limits, Files: files, Flags: cfg.Features()})
 	dispatcher.EnableApps(appbuilds.NewRunner(runner), service.NewAppBuildQueuePublisher(publisher, args.apps))
 	log.Printf("INFO: app git builds on in namespace %s, sharing the site builds' %d slot(s)", cfg.AppBuild.Namespace, cfg.SiteGit.BuildSlots)

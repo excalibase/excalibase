@@ -104,3 +104,18 @@ func TestAppBuildQueuePublisher_FindsTheAppAndNamesEachRefusal(t *testing.T) {
 		t.Errorf("an app deleted mid-build: %v", err)
 	}
 }
+
+// A full registry tells the user the space in GiB, not the error's raw bytes.
+func TestAppBuildQueuePublisher_AFullRegistryIsWordedInGiB(t *testing.T) {
+	app := &apphost.App{ID: "app-1", ProjectID: "p1", Name: "api"}
+	full := &RegistryFullError{Used: 5 << 29, Incoming: 1 << 30, Quota: 3 << 30}
+	queue := newAppBuildQueuePublisher(&fakeAppPublisher{err: fmt.Errorf("publish: %w", full)}, fakeAppGetter{"p1/app-1": app})
+	_, err := queue.PublishBuild(context.Background(), sitebuilds.AppPublish{BuildID: "b1", ProjectID: "p1", AppID: "app-1"})
+	var failure *sitebuilds.BuildFailure
+	if !errors.As(err, &failure) || failure.Kind != appbuilds.FailRegistryFull || !errors.Is(err, ErrRegistryFull) {
+		t.Fatalf("%v", err)
+	}
+	if want := appbuilds.RegistryFullStatus(full.Used, full.Incoming, full.Quota).Detail; failure.Error() != want {
+		t.Fatalf("shown %q, want %q", failure.Error(), want)
+	}
+}

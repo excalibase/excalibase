@@ -22,6 +22,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
+	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
 )
@@ -180,7 +181,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		majorUpgradeHandler:    handler.NewMajorUpgradeHandler(matrixMajorUpgrades{}, nil),
 		logForwarderHandler:    handler.NewLogForwarderHandler(matrixLogDrains(instances), "matrix-forwarder-token"),
 		registryToken:          matrixRegistryToken(t),
-		internalRegistryH:      handler.NewInternalRegistryHandler(appregistry.NewGenerations(memVault{})),
+		internalRegistryH:      handler.NewInternalRegistryHandler(service.NewPullRotationService(appregistry.NewGenerations(memVault{}), appregistrytest.New(t), instances, k8s.NewMockClient())),
 		// Past the gates the app git routes answer single-host's 503, never an unmounted 404.
 		siteBuilds: siteBuilds{apps: handler.NewAppGitHandler(sitebuilds.NewService(nil, nil, nil, nil, nil,
 			sitebuilds.Options{Mode: sitebuilds.ModeSingleHost}))},

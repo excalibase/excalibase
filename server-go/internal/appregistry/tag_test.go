@@ -37,3 +37,15 @@ func TestSplitRepository_OnlyAProjectAndAnApp(t *testing.T) {
 		}
 	}
 }
+
+// The sweep's grace runs from the tag's time, so a tag never claims a later time than it was given.
+func TestPushTag_NeverDatesAPushLater(t *testing.T) {
+	at := time.Unix(1_800_000_000, 999_000_000)
+	tag, err := PushTag("sha256:"+strings.Repeat("cd", 32), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, got, _ := ParsePushTag(tag); got.After(at) || at.Sub(got) >= time.Second {
+		t.Errorf("tagged %s for a push completed at %s", got, at)
+	}
+}

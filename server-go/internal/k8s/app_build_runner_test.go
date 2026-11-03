@@ -42,6 +42,33 @@ func TestAppBuildRunner_StartRefusesARuntimeOutsideGVisor(t *testing.T) {
 	}
 }
 
+// Both quotas are unscoped, so app and site builds sharing a namespace would starve each other.
+func TestAppBuildRunner_StartRefusesTheSiteBuildNamespace(t *testing.T) {
+	cases := map[string]func(*AppBuildOptions){
+		"same namespace as site builds": func(o *AppBuildOptions) { o.SiteBuildNamespace = o.Namespace },
+		"site build namespace unknown":  func(o *AppBuildOptions) { o.SiteBuildNamespace = "" },
+		"no namespace":                  func(o *AppBuildOptions) { o.Namespace = "" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, client := newAppBuildRunner(t)
+			options := testAppBuildOptions()
+			mutate(&options)
+			err := NewAppBuildRunner(client, options).Start(context.Background(), testAppRunSpec(appbuilds.BuilderDockerfile))
+			if err == nil || !strings.Contains(err.Error(), "namespace") {
+				t.Fatalf("started: %v", err)
+			}
+			quotas, _ := client.clientset.CoreV1().ResourceQuotas(options.Namespace).List(context.Background(), metav1.ListOptions{})
+			if len(quotas.Items) != 0 {
+				t.Errorf("a quota was applied before the refusal: %v", quotas.Items)
+			}
+		})
+	}
+	if err := testAppBuildOptions().Validate(); err != nil {
+		t.Errorf("distinct namespaces refused: %v", err)
+	}
+}
+
 // A start that fails after the Job exists removes it, so no suspended Job holds a slot.
 func TestAppBuildRunner_AFailedStartLeavesNoJob(t *testing.T) {
 	runner, client := newAppBuildRunner(t)

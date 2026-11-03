@@ -376,8 +376,8 @@ func (s *Service) sizedBuild(ctx context.Context, connection connected) (*Build,
 	return &Build{Kind: KindSite, SiteID: site.SiteID, Settings: site.Settings, Limits: limits}, nil
 }
 
-// admit counts the build toward the project's deploys or app builds per hour; a push past it is kept as FAILED, never started.
-// admit takes a site build's deploy slot; an app build's slot is taken inside Enqueue, past its delivery check.
+// admit takes a site build's deploy slot, so a push past the project's deploys per hour is kept as FAILED, never started;
+// an app build's slot is taken inside Enqueue, past its delivery check.
 func (s *Service) admit(ctx context.Context, build *Build) error {
 	if build.Kind == KindApp {
 		return nil
@@ -438,9 +438,10 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 	if err != nil || seen {
 		return 0, err
 	}
-	connections, err := s.pushTargets(ctx, push)
-	if err != nil || len(connections) == 0 {
-		return 0, err
+	// A target read error still queues the targets read, so a failed app read never loses the push's site builds.
+	connections, readErr := s.pushTargets(ctx, push)
+	if len(connections) == 0 {
+		return 0, readErr
 	}
 	// The delivery id is not signed: a replayed push is caught by the branch having moved past it.
 	head, err := s.provider.BranchHead(ctx, push.InstallationID, gitprovider.Repository{ID: push.RepositoryID, FullName: push.Repository}, push.Branch)
@@ -452,13 +453,14 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 		return 0, s.store.RecordDelivery(ctx, s.provider.Name(), event.DeliveryID, s.now())
 	}
 	queued, err := s.queuePush(ctx, connections, push, event.DeliveryID)
-	if err != nil {
-		return queued, err
+	if failed := errors.Join(readErr, err); failed != nil {
+		return queued, failed
 	}
 	return queued, s.store.RecordDelivery(ctx, s.provider.Name(), event.DeliveryID, s.now())
 }
 
-// pushTargets are the sites, and while app builds are on the apps, tracking the pushed branch.
+// pushTargets are the sites, and while app builds are on the apps, tracking the pushed branch;
+// an app read error comes back with the sites already read.
 func (s *Service) pushTargets(ctx context.Context, push *gitprovider.Push) ([]connected, error) {
 	siteConnections, err := s.store.ConnectionsForPush(ctx, s.provider.Name(), push.InstallationID, push.RepositoryID, push.Branch)
 	if err != nil {
@@ -473,7 +475,7 @@ func (s *Service) pushTargets(ctx context.Context, push *gitprovider.Push) ([]co
 	}
 	appConnections, err := s.store.AppConnectionsForPush(ctx, s.provider.Name(), push.InstallationID, push.RepositoryID, push.Branch)
 	if err != nil {
-		return nil, err
+		return targets, fmt.Errorf("read the apps tracking %s: %w", push.Branch, err)
 	}
 	for _, connection := range appConnections {
 		targets = append(targets, connection)
