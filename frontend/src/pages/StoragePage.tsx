@@ -10,23 +10,37 @@ import {
   useDownloadURL,
 } from '../hooks/useStorage';
 import { Button } from '../components/Button';
-import { Loader2, FolderPlus, Upload, Trash2, Download, Globe, Lock, Users } from 'lucide-react';
+import { Loader2, FolderPlus, Upload, Trash2, Download, Globe, Lock, Users, KeyRound } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
 import type { UploadStepError } from '../utils/uploadFailure';
 import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { BucketAccessPanel } from '../components/storage/BucketAccessPanel';
+import { S3AccessPanel } from '../components/storage/S3AccessPanel';
 import type { BucketAccess } from '../hooks/useStorage';
 
 export function StoragePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [selectedBucket, setSelectedBucket] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showS3, setShowS3] = useState(false);
+  const { enabled: s3 } = useFeatureEnabled('s3');
 
   const { data: buckets = [], isLoading: bucketsLoading, error: bucketsError } = useBuckets(projectId!);
 
   if (!selectedBucket && buckets.length > 0) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     setTimeout(() => setSelectedBucket(buckets[0].name), 0);
+  }
+
+  let mainContent = (
+    <div className="flex-1 flex items-center justify-center text-text-tertiary">
+      Select a bucket from the left to browse files.
+    </div>
+  );
+  if (s3 && showS3) {
+    mainContent = <S3AccessPanel projectId={projectId!} buckets={buckets} />;
+  } else if (selectedBucket) {
+    mainContent = <ObjectBrowser projectId={projectId!} bucket={selectedBucket} buckets={buckets} />;
   }
 
   return (
@@ -57,7 +71,7 @@ export function StoragePage() {
           {!bucketsLoading && buckets.length > 0 && buckets.map((b) => (
             <button
               key={b.id}
-              onClick={() => setSelectedBucket(b.name)}
+              onClick={() => { setSelectedBucket(b.name); setShowS3(false); }}
               className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
                 selectedBucket === b.name
                   ? 'bg-accent-primary/10 text-accent-primary'
@@ -69,16 +83,23 @@ export function StoragePage() {
             </button>
           ))}
         </div>
+        {s3 && (
+          <div className="p-2 border-t border-border-primary">
+            <button
+              type="button"
+              onClick={() => setShowS3(true)}
+              className={`w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${
+                showS3 ? 'bg-accent-primary/10 text-accent-primary' : 'text-text-secondary hover:bg-surface-hover'
+              }`}
+            >
+              <KeyRound className="w-3.5 h-3.5" /> S3 access
+            </button>
+          </div>
+        )}
       </aside>
 
       <main className="flex-1 bg-surface-card border border-border-primary rounded-xl flex flex-col min-w-0">
-        {selectedBucket ? (
-          <ObjectBrowser projectId={projectId!} bucket={selectedBucket} buckets={buckets} />
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-text-tertiary">
-            Select a bucket from the left to browse files.
-          </div>
-        )}
+        {mainContent}
       </main>
 
       {showCreate && (

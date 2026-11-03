@@ -86,11 +86,14 @@ const (
 	SingleHostBuilds Feature = "singlehostbuilds"
 	// LogDeletion removes a deleted project's stored log lines from Loki (EXC-678).
 	LogDeletion Feature = "logdeletion"
+	// S3 is the S3-compatible storage endpoint, its access keys and their
+	// Studio tab and MCP tools (EXC-630, ADR 0044).
+	S3 Feature = "s3"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, LogDeletion}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, LogDeletion, S3}
 }
 
 type Flags interface {

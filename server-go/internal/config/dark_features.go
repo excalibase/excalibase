@@ -38,6 +38,7 @@ var featureEnv = map[features.Feature]string{
 	// Single-host only (the compose file); Kubernetes builds do not read it.
 	features.SingleHostBuilds: "FEATURE_SINGLEHOSTBUILDS",
 	features.LogDeletion:      "FEATURE_LOGDELETION",
+	features.S3:               "FEATURE_S3",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.
