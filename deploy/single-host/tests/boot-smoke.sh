@@ -32,6 +32,9 @@
 # SITE_BUILDS=1 turns on Sites and their git builds on this host (EXC-671,
 # sitebuilds-journey.sh) against stand-ins for GitHub and Cloudflare: a signed
 # push is built under the sandbox runtime behind the build egress proxy and deployed.
+# LOG_DRAINS=1 (with HOST_LOGS=1) installs with --log-drains and walks log drains (EXC-658,
+# log-drains-journey.sh) against a test HTTPS intake. Without it no forwarder runs and the
+# drain routes answer 404.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG);
 # GRAPHQL_IMAGE and AUTH_IMAGE locally built engine images.
 # Every run checks the read address (EXC-666, read-address-journey.sh): one copy, none.
@@ -76,12 +79,14 @@ fi
 SMOKE_DNS=smoke-dns-excalibase
 # GitHub and Cloudflare stand-ins for the site build journey.
 SITE_FAKES=smoke-sitefakes
+. "$TESTS/log-drains-journey.sh"
 status() { c https://studio.localhost:$PORT/api/vault/status | python3 -c 'import json,sys;d=json.load(sys.stdin);print("uninitialized" if not d["initialized"] else ("sealed" if d["sealed"] else "open"))' 2>/dev/null; }
 
 echo "== fresh state"
 cd "$BUNDLE"
 $COMPOSE $P down -v --remove-orphans >/dev/null 2>&1
 wipe_managed
+drains_teardown
 rm -f "$W/.env"
 # Container names are fixed: another stack holding them would answer instead.
 for name in excalibase-preflight excalibase-provisioning excalibase-edge; do
@@ -97,7 +102,7 @@ if [ -n "$pcode" ] && [ "$pcode" != 0 ] && logs_have excalibase-preflight POSTGR
 $COMPOSE $P down -v >/dev/null 2>&1; rm -f "$W/.env"
 
 echo "== install"
-./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS ${DOCUMENTDB:+--documentdb} ${HOST_METRICS:+--host-metrics} ${HOST_LOGS:+--host-logs} || exit 1
+./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS ${DOCUMENTDB:+--documentdb} ${HOST_METRICS:+--host-metrics} ${HOST_LOGS:+--host-logs} ${LOG_DRAINS:+--log-drains} || exit 1
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
@@ -145,6 +150,7 @@ EOF
   $DOCKER network create --label excalibase.managed=true --label excalibase.component=site-build excalibase-net-build-egress >/dev/null
   $DOCKER network connect excalibase-net-build-egress "$SITE_FAKES"
 fi
+[ -n "${LOG_DRAINS:-}" ] && drains_setup
 timeout 900 $COMPOSE $P up -d > "$W/up.log" 2>&1; echo "up exit $?"; grep -iE "^Error|error:" "$W/up.log" | sort -u | head -5
 [ -n "${SITE_BUILDS:-}" ] && $DOCKER network connect excalibase-platform "$SITE_FAKES"
 for i in $(seq 90); do [ "$($DOCKER inspect excalibase-objectstore-setup --format '{{.State.Status}}' 2>/dev/null)" = exited ] && break; sleep 2; done
@@ -285,6 +291,14 @@ else
   [ "$hm" = 404 ] && ok "host monitoring is off by default (404)" || ko "host monitoring answers $hm with the flag off"
 fi
 
+if [ -n "${LOG_DRAINS:-}" ]; then
+  drains_journey
+else
+  $DOCKER inspect excalibase-log-forwarder >/dev/null 2>&1 && ko "a log forwarder runs without --log-drains" || ok "no log forwarder without --log-drains"
+  ld=$(c -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/projects/$PID/log-drains/")
+  [ "$ld" = 404 ] && ok "log drains are off by default (404)" || ko "log drains answer $ld with the flag off"
+fi
+
 if [ -n "${HOST_LOGS:-}" ]; then
   . "$TESTS/log-search-journey.sh"
 else
@@ -300,5 +314,5 @@ if [ "$fail" -gt 0 ]; then
   $COMPOSE $P ps -a 2>&1 | tail -20
   $COMPOSE $P logs --tail 40 provisioning engine-proxy 2>&1 | tail -80
 fi
-[ -n "${KEEP:-}" ] || { $COMPOSE $P down -v >/dev/null 2>&1; wipe_managed; }
+[ -n "${KEEP:-}" ] || { $COMPOSE $P down -v >/dev/null 2>&1; wipe_managed; drains_teardown; }
 [ "$fail" -eq 0 ]
