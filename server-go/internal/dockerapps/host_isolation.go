@@ -23,8 +23,15 @@ const (
 	gatewayIsolated = "isolated"
 )
 
-func isolatedGatewayOptions() map[string]string {
+// IsolatedGatewayOptions give an internal bridge no address on the host, in both address families (Docker 28+).
+// Site builds (EXC-671) make their networks with them too.
+func IsolatedGatewayOptions() map[string]string {
 	return map[string]string{gatewayModeIPv4: gatewayIsolated, gatewayModeIPv6: gatewayIsolated}
+}
+
+// GatewayModeRefused is Docker 27's 400: it knows the option but not the isolated mode.
+func GatewayModeRefused(err error) bool {
+	return errdefs.IsInvalidArgument(err) && strings.Contains(err.Error(), "gateway mode")
 }
 
 // hostFirewall is the fix where the engine cannot isolate: rootful Podman's resolver listens on the bridge.
@@ -82,10 +89,10 @@ func (r *Runtime) makeCheckNetwork(ctx context.Context, name string) error {
 		return nil
 	}
 	isolated := plain
-	isolated.Options = isolatedGatewayOptions()
+	isolated.Options = IsolatedGatewayOptions()
 	_, err := r.engine.NetworkCreate(ctx, name, isolated)
 	// Docker 27 knows the option but not the mode; any other refusal fails the start.
-	if errdefs.IsInvalidArgument(err) && strings.Contains(err.Error(), "gateway mode") {
+	if GatewayModeRefused(err) {
 		if _, plainErr := r.engine.NetworkCreate(ctx, name, plain); plainErr != nil {
 			return plainErr
 		}

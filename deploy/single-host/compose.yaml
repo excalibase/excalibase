@@ -293,6 +293,12 @@ services:
       FEATURE_HOSTLOGS: ${FEATURE_HOSTLOGS:-false}
       HOST_LOGS_LOKI_URL: http://loki:3100
       HOST_LOGS_DAILY_MB: ${HOST_LOGS_DAILY_MB:-64}
+      # Each plan's daily budget, kept across restarts; a plan not named takes HOST_LOGS_DAILY_MB (EXC-678).
+      HOST_LOGS_DAILY_MB_BY_PLAN: free=${HOST_LOGS_DAILY_MB_FREE:-64},standard=${HOST_LOGS_DAILY_MB_STANDARD:-256},enterprise=${HOST_LOGS_DAILY_MB_ENTERPRISE:-1024}
+      # Shipping pauses while less of the host disk is free, and resumes 5 points higher (EXC-678).
+      HOST_LOGS_MIN_FREE_PERCENT: ${HOST_LOGS_MIN_FREE_PERCENT:-10}
+      # A deleted project's stored lines are removed from the bundled Loki (EXC-678).
+      FEATURE_LOGDELETION: ${FEATURE_LOGDELETION:-false}
       # How long Loki keeps logs; by plan only with FEATURE_LOGRETENTION (EXC-659).
       FEATURE_LOGRETENTION: ${FEATURE_LOGRETENTION:-false}
       LOG_RETENTION: ${LOG_RETENTION:-168h}
@@ -379,6 +385,28 @@ services:
       # Server-rendered sites (EXC-661) run only once the outbound Worker bound on
       # the dispatch namespace is named here, with FEATURE_SITESSERVER=true.
       SITES_OUTBOUND_WORKER: ${SITES_OUTBOUND_WORKER:-}
+      # Cloudflare's API origin; set only to point Sites at a stand-in in tests.
+      SITES_CLOUDFLARE_API_URL: ${SITES_CLOUDFLARE_API_URL:-}
+      # Git builds of sites on this host (EXC-671): off unless .env says "true" for both
+      # switches and names the GitHub App. Each build runs under APP_SANDBOX_RUNTIME on a
+      # network with no route out; it reaches the internet (ports 80/443, public addresses
+      # only) through a proxy started from this image. Install notes: host firewall.
+      SITES_GIT_BUILDS_ENABLED: ${SITES_GIT_BUILDS_ENABLED:-false}
+      FEATURE_SINGLEHOSTBUILDS: ${FEATURE_SINGLEHOSTBUILDS:-false}
+      SITES_GITHUB_APP_ID: ${SITES_GITHUB_APP_ID:-}
+      SITES_GITHUB_APP_SLUG: ${SITES_GITHUB_APP_SLUG:-}
+      SITES_GITHUB_CLIENT_ID: ${SITES_GITHUB_CLIENT_ID:-}
+      SITES_GITHUB_CLIENT_SECRET: ${SITES_GITHUB_CLIENT_SECRET:-}
+      SITES_GITHUB_APP_PRIVATE_KEY: ${SITES_GITHUB_APP_PRIVATE_KEY:-}
+      SITES_GITHUB_APP_PRIVATE_KEY_FILE: ${SITES_GITHUB_APP_PRIVATE_KEY_FILE:-}
+      SITES_GITHUB_WEBHOOK_SECRET: ${SITES_GITHUB_WEBHOOK_SECRET:-}
+      SITES_GITHUB_API_URL: ${SITES_GITHUB_API_URL:-https://api.github.com}
+      SITES_GITHUB_WEB_URL: ${SITES_GITHUB_WEB_URL:-https://github.com}
+      SITES_BUILD_SLOTS: ${SITES_BUILD_SLOTS:-1}
+      SITES_BUILD_NODE_IMAGE: ${SITES_BUILD_NODE_IMAGE:-}
+      SITES_BUILD_EGRESS_IMAGE: ${SITES_BUILD_EGRESS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.5.0}}
+      # host:port entries builds may reach although private, e.g. a git server on your LAN.
+      SITES_BUILD_EGRESS_ALLOW: ${SITES_BUILD_EGRESS_ALLOW:-}
       # DocumentDB projects (EXC-576): off unless .env says "true" (init.sh --documentdb).
       DOCUMENTDB_ENABLED: ${DOCUMENTDB_ENABLED:-false}
       # Apps (EXC-575, ADR 0039): off unless .env says "true" (init.sh --apps).

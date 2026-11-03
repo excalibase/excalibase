@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// ErrImagePull is a build image the runner could not pull; the build fails as FailImage.
+var ErrImagePull = errors.New("the build image could not be pulled")
+
 // ErrOutputTooLarge is packed build output past what a deploy of the project may hold.
 var ErrOutputTooLarge = errors.New("the packed build output is larger than this project's deploys may be")
 
