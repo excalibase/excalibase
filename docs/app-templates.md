@@ -1,6 +1,6 @@
 # Templates: a set of apps, disks and variables in one deploy (EXC-526)
 
-A template declares one or more Containers apps: their images, ports, disks, start arguments and variables. Deploying it into a project creates and deploys all of them, or none of them.
+A template declares one or more Containers apps: their images, ports, disks, start arguments and variables. Deploying it into a project creates all of them, each with its first deploy recorded, or none of them; the deploys run after the answer.
 
 Studio: a project's **Containers → Templates**. API: `GET /api/projects/{projectId}/app-templates/` (any member) lists every template with what it costs this project; `GET .../app-templates/{templateId}` adds the template's source; `POST .../app-templates/{templateId}/deploy` (Developer and up) deploys it.
 
@@ -78,7 +78,7 @@ A variable with `showOnce: true` whose value is generated is returned once in th
 
 A value holding anything generated (`secret(n)`, or another app's generated value) is stored as a **secret** of the app: in the vault under the app's own prefix, never in the app record, the template, a response, the log or the Deployment spec (the pod gets it from the app's Secret). Everything else is a plain value. `args` may name a variable as `$(VAR)`; Kubernetes fills it in from the container's environment, so a password passed on the command line is not written into the spec either. On a single host (Docker or Podman) the runtime expands it by the same rules (`$$` is a literal `$`; an unknown name stays as written).
 
-## Deploy: all or nothing
+## Deploy: the apps all or nothing, then their first deploys
 
 Before anything is created, the deploy checks, and refuses with **409** listing every reason:
 
@@ -91,9 +91,9 @@ Before anything is created, the deploy checks, and refuses with **409** listing 
 - CPU and memory: all the template's apps together fit the cluster at the plan's size (the same admission a single deploy uses, counting other apps' rollouts in flight), on a node that runs the app sandbox;
 - the platform storage budget holds the template's disks together.
 
-Then, in order: turn on the private network (if needed), store each app's generated secrets and create the app, then deploy each app. If any step fails, what the deploy made is removed in reverse (apps with their workloads, disks and secrets, then the private network it turned on) and the answer names the step that failed: 409 when the project's state refused it (a name or app slot taken meanwhile, a deploy refused for room or plan), 500 when the platform failed (vault, store, cluster). The rollback waits up to about 30 seconds for another operation holding an app or the project. If the removal itself cannot finish, the answer is 500 naming what is left. One template deploy runs at a time per project; it does not lock the project against a pause or deletion started meanwhile.
+Then, in order: turn on the private network (if needed), store each app's generated secrets and create the app, then record each app's first deploy as pending. If any of these fails, what the deploy made is removed in reverse (apps with their deploys and secrets, then the private network it turned on) and the answer names the step that failed: 409 when the project's state refused it (a name or app slot taken meanwhile), 500 when the platform failed (vault, store, cluster). The rollback waits up to about 30 seconds for another operation holding an app or the project. If the removal itself cannot finish, the answer is 500 naming what is left.
 
-The deploy is all or nothing up to the point where every app's workload has been applied. A rollout that later fails (for example an image that crashes) shows on that app like any failed deploy and is not removed, so its logs can be read.
+Once every app has its pending deploy the answer is **202** with the apps (each with its `deployId` and `deployStatus: "pending"`), the `credentials` shown once and `acceptedAt`. The deploys then run after the answer, one app after another: preparing a new disk, applying the workload, the rollout. A new disk alone can take longer than a request should wait (EXC-669). A deploy that fails is that app's failed deploy, with its reason; nothing is removed, so the apps stay to read, fix and deploy again. If the control plane restarts before a deploy ran, the rollout sweeper ends that pending deploy as failed. Studio follows each app's first deploy under the template until it runs or fails, for up to 15 minutes, then points at the app. One template deploy runs at a time per project, until its first deploys have run; it does not lock the project against a pause or deletion started meanwhile.
 
 ## Private network
 
