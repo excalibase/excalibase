@@ -74,37 +74,54 @@ func decodeMFARequest(w http.ResponseWriter, r *http.Request) (bool, error) {
 	return *body.Enabled, nil
 }
 
-// switchMFA turns MFA on only once the vault holds a valid key.
+// switchMFA turns MFA on only once the vault holds a valid key, the one the
+// factors were sealed with if any were.
 func (h *ProvisioningHandler) switchMFA(ctx context.Context, projectID string, enabled bool) error {
 	if !enabled {
 		return h.authOAuth.MFA.DisableMFA(ctx, projectID)
 	}
-	if err := h.ensureMFAKey(projectID); err != nil {
+	recorded, err := h.authOAuth.MFA.MFAKeyFingerprint(ctx, projectID)
+	if err != nil {
 		return err
 	}
-	return h.authOAuth.MFA.EnableMFA(ctx, projectID)
+	fingerprint, err := h.ensureMFAKey(projectID, recorded)
+	if err != nil {
+		return err
+	}
+	return h.authOAuth.MFA.EnableMFA(ctx, projectID, fingerprint)
 }
 
-// ensureMFAKey creates the key only where the vault holds nothing, with a
-// conditional write so concurrent enables keep one key; it then re-reads what
-// is stored. An unreadable vault or a malformed key is an error, never a reason to write.
-func (h *ProvisioningHandler) ensureMFAKey(projectID string) error {
+// ensureMFAKey creates the key only where the vault holds nothing and no key
+// was recorded, with a conditional write so concurrent enables keep one key;
+// it then re-reads what is stored. An unreadable vault or a malformed key is
+// an error, never a reason to write. It answers the stored key's fingerprint.
+func (h *ProvisioningHandler) ensureMFAKey(projectID, recorded string) (string, error) {
 	path := domain.MFAKeyPath(projectID)
 	stored, err := h.authOAuth.Secrets.Get(path)
 	if errors.Is(err, vault.ErrNotFound) {
+		if recorded != "" {
+			log.Printf("ERROR: project %s has MFA factors sealed with a key the vault no longer holds; MFA was not switched on", projectID)
+			return "", domain.ErrMFAKeyLost
+		}
 		if err := h.putMFAKeyIfAbsent(projectID, path); err != nil {
-			return err
+			return "", err
 		}
 		stored, err = h.authOAuth.Secrets.Get(path)
 	}
 	if err != nil {
 		log.Printf("ERROR: read the MFA key of project %s: %v", projectID, err)
-		return errMFAVaultReadable
+		return "", errMFAVaultReadable
 	}
-	if !domain.ValidMFAKey(stored[domain.MFAKeyField]) {
-		return domain.ErrInvalidMFAKey
+	key := stored[domain.MFAKeyField]
+	if !domain.ValidMFAKey(key) {
+		return "", domain.ErrInvalidMFAKey
 	}
-	return nil
+	fingerprint := domain.MFAKeyFingerprint(key)
+	if recorded != "" && recorded != fingerprint {
+		log.Printf("ERROR: project %s holds an MFA key its factors were not sealed with; MFA was not switched on", projectID)
+		return "", domain.ErrMFAKeyLost
+	}
+	return fingerprint, nil
 }
 
 func (h *ProvisioningHandler) putMFAKeyIfAbsent(projectID, path string) error {
@@ -126,6 +143,8 @@ func mfaOutcome(err error) string {
 		return "success"
 	case errors.Is(err, domain.ErrInvalidMFAKey):
 		return "invalid_key"
+	case errors.Is(err, domain.ErrMFAKeyLost):
+		return "key_lost"
 	case errors.Is(err, errMFAVaultReadable):
 		return "vault_unavailable"
 	default:
@@ -137,6 +156,8 @@ func writeMFAError(w http.ResponseWriter, projectID string, err error) {
 	switch {
 	case errors.Is(err, domain.ErrInvalidMFAKey):
 		log.Printf("ERROR: project %s holds an invalid MFA key; MFA was not switched on", projectID)
+		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, domain.ErrMFAKeyLost):
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, errMFAVaultReadable):
 		httpError(w, "the vault is not available", http.StatusServiceUnavailable)

@@ -699,9 +699,8 @@ func newLogDrainService(cfg config.AppConfig, sqlStore any, vc vaultclient.Vault
 		return nil
 	}
 	var logs service.ProjectLogReader
-	lokiURL, singleHost := drainLogStore(cfg)
-	if lokiURL != "" {
-		logs = service.NewLokiReader(lokiURL, &http.Client{})
+	if cfg.LokiURL != "" {
+		logs = service.NewLokiReader(cfg.LokiURL, &http.Client{})
 	}
 	instances := func(projectID string) (*domain.DatabaseInstance, error) {
 		inst, err := provSvc.GetInstance(projectID)
@@ -710,19 +709,7 @@ func newLogDrainService(cfg config.AppConfig, sqlStore any, vc vaultclient.Vault
 		}
 		return inst, nil
 	}
-	return service.NewLogDrainService(service.LogDrainDeps{Store: drains, Vault: vc, Instances: instances, Logs: logs, SingleHost: singleHost})
-}
-
-// drainLogStore is the Loki drains read: on a single host the one hostlogs
-// fills (EXC-672), with its shipper's labels; otherwise the chart's.
-func drainLogStore(cfg config.AppConfig) (string, bool) {
-	if cfg.ProvisionerMode != "docker" {
-		return cfg.LokiURL, false
-	}
-	if !features.Enabled(context.Background(), cfg.Features(), features.HostLogs) || cfg.HostLogs.LokiURL == "" {
-		return "", false
-	}
-	return cfg.HostLogs.LokiURL, true
+	return service.NewLogDrainService(service.LogDrainDeps{Store: drains, Vault: vc, Instances: instances, Logs: logs})
 }
 
 // newBackupHandler records started database copies in the audit log (EXC-667).
@@ -1390,7 +1377,7 @@ func buildProvisioningService(
 	provSvc.SetLokiURL(cfg.LokiURL)
 	startLogPlanSweep(context.Background(), cfg, provSvc, k8sClient)
 	deletionStore, _ := sqlStore.(logDeletionStore)
-	if worker := wireLogDeletion(cfg, deletionStore, provSvc, logDeletionLokiURL(cfg)); worker != nil {
+	if worker := wireLogDeletion(cfg, deletionStore, provSvc, cfg.LokiURL); worker != nil {
 		go worker.Run(context.Background())
 	}
 
@@ -2747,8 +2734,8 @@ func mountAuthProviders(r *chi.Mux, sqlStore storage.OrgStore, store storage.Ins
 }
 
 // mountAuthHooks serves the end-user auth hooks settings (EXC-662): Developer
-// reads, Admin writes; the flag goes first so that while it is off these
-// answer as never mounted.
+// reads (host only; an Admin gets each full URL, so no read-only token), Admin
+// writes; the flag goes first so that while it is off these answer as never mounted.
 func mountAuthHooks(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
 	r.Route("/api/projects/{projectId}/auth-hooks", func(r chi.Router) {
 		r.Use(features.Require(d.features, features.AuthHooks))
@@ -2758,7 +2745,7 @@ func mountAuthHooks(r *chi.Mux, sqlStore storage.OrgStore, store storage.Instanc
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
 		r.Use(d.activity)
-		r.Get("/", d.provHandler.GetAuthHooks)
+		r.With(auth.RequireWriteCapableForSecrets).Get("/", d.provHandler.GetAuthHooks)
 		r.Post("/secret", d.provHandler.RotateAuthHookSecret)
 		r.Delete("/secret", d.provHandler.DeleteAuthHookSecret)
 		r.Put("/{hook}", d.provHandler.PutAuthHook)

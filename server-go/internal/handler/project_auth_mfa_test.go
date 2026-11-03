@@ -19,10 +19,24 @@ const (
 	testMFAKeyAt = "projects/" + testOAuthProject + "/auth/mfa"
 )
 
-func (m *memAuthSignInStore) EnableMFA(_ context.Context, projectID string) error {
+func (m *memAuthSignInStore) MFAKeyFingerprint(_ context.Context, projectID string) (string, error) {
+	if m.err != nil {
+		return "", m.err
+	}
+	return m.mfaKeyFingerprints[projectID], nil
+}
+
+func (m *memAuthSignInStore) EnableMFA(_ context.Context, projectID, keyFingerprint string) error {
 	if m.err != nil {
 		return m.err
 	}
+	if stored := m.mfaKeyFingerprints[projectID]; stored != "" && stored != keyFingerprint {
+		return domain.ErrMFAKeyLost
+	}
+	if m.mfaKeyFingerprints == nil {
+		m.mfaKeyFingerprints = map[string]string{}
+	}
+	m.mfaKeyFingerprints[projectID] = keyFingerprint
 	signIn, ok := m.signIn[projectID]
 	if !ok {
 		signIn = domain.DefaultAuthSignIn()
@@ -134,6 +148,42 @@ func TestAuthMFA_AnInvalidKeyIsRefusedAndLeftAlone(t *testing.T) {
 		}
 		if len(f.audit.entries) != 1 || f.audit.entries[0].Details != `{"mfaEnabled":true,"outcome":"invalid_key"}` {
 			t.Fatalf("stored %v: audit = %+v", stored, f.audit.entries)
+		}
+	}
+}
+
+func TestAuthMFA_EnableRecordsTheKeyFingerprint(t *testing.T) {
+	f := setupMFAHandler(t, features.AuthMFA)
+	if w := doJSON(f.router, http.MethodPut, testMFA, map[string]any{"enabled": true}); w.Code != http.StatusOK {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body.String())
+	}
+	key := f.vault.data[testMFAKeyAt][domain.MFAKeyField]
+	if got := f.signIn.mfaKeyFingerprints[testOAuthProject]; got != domain.MFAKeyFingerprint(key) {
+		t.Fatalf("fingerprint = %q", got)
+	}
+}
+
+// Factors in the tenant database are sealed with the recorded key: a vault
+// that lost it (or holds another) must not get a fresh one, or every enrolled
+// user is locked out.
+func TestAuthMFA_AKeyLostAfterEnrolmentIsNeverReplaced(t *testing.T) {
+	original, _ := domain.NewMFAKey()
+	other, _ := domain.NewMFAKey()
+	for name, vaultHolds := range map[string]map[string]string{"lost": nil, "replaced": {domain.MFAKeyField: other}} {
+		f := setupMFAHandler(t, features.AuthMFA)
+		f.signIn.mfaKeyFingerprints = map[string]string{testOAuthProject: domain.MFAKeyFingerprint(original)}
+		if vaultHolds != nil {
+			f.vault.data[testMFAKeyAt] = vaultHolds
+		}
+		w := doJSON(f.router, http.MethodPut, testMFA, map[string]any{"enabled": true})
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "restore") {
+			t.Fatalf("%s: %d %s", name, w.Code, w.Body.String())
+		}
+		if f.vault.data[testMFAKeyAt][domain.MFAKeyField] != vaultHolds[domain.MFAKeyField] || f.signIn.signIn[testOAuthProject].MFAEnabled {
+			t.Fatalf("%s: a key was minted or the switch turned on", name)
+		}
+		if len(f.audit.entries) != 1 || f.audit.entries[0].Details != `{"mfaEnabled":true,"outcome":"key_lost"}` {
+			t.Fatalf("%s: audit = %+v", name, f.audit.entries)
 		}
 	}
 }

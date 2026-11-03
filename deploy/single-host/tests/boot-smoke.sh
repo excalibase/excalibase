@@ -23,15 +23,11 @@
 # HOST_LOGS=1 installs with --host-logs and walks stored log search (EXC-672,
 # log-search-journey.sh): a project's line in Loki under its own labels, found
 # by its search and not another project's, after a restart and the container's
-# removal, and a deleted project's lines asked of Loki for that project alone
-# (EXC-678, FEATURE_LOGDELETION=true). Without it no Loki runs. It removes the project's database container,
+# removal. Without it no Loki runs. It removes the project's database container,
 # so it runs last.
 # REQUEST_METRICS=1 turns request charts and slow queries on and walks them (EXC-673,
 # request-charts-journey.sh): calls and a slow statement show in their own project
 # only, and tenant containers cannot reach the counters. Without it both are absent.
-# LOG_DRAINS=1 (with HOST_LOGS=1) installs with --log-drains and walks log drains (EXC-658,
-# log-drains-journey.sh) against a test HTTPS intake. Without it no forwarder runs and the
-# drain routes answer 404.
 # SITE_BUILDS=1 turns on Sites and their git builds on this host (EXC-671,
 # sitebuilds-journey.sh) against stand-ins for GitHub and Cloudflare: a signed
 # push is built under the sandbox runtime behind the build egress proxy and deployed.
@@ -77,7 +73,6 @@ if [ -n "${APPS:-}${SITE_BUILDS:-}" ]; then
 fi
 # The DNS server the apps journey verifies a custom domain against.
 SMOKE_DNS=smoke-dns-excalibase
-. "$TESTS/log-drains-journey.sh"
 # GitHub and Cloudflare stand-ins for the site build journey.
 SITE_FAKES=smoke-sitefakes
 status() { c https://studio.localhost:$PORT/api/vault/status | python3 -c 'import json,sys;d=json.load(sys.stdin);print("uninitialized" if not d["initialized"] else ("sealed" if d["sealed"] else "open"))' 2>/dev/null; }
@@ -86,7 +81,6 @@ echo "== fresh state"
 cd "$BUNDLE"
 $COMPOSE $P down -v --remove-orphans >/dev/null 2>&1
 wipe_managed
-drains_teardown
 rm -f "$W/.env"
 # Container names are fixed: another stack holding them would answer instead.
 for name in excalibase-preflight excalibase-provisioning excalibase-edge; do
@@ -102,14 +96,12 @@ if [ -n "$pcode" ] && [ "$pcode" != 0 ] && logs_have excalibase-preflight POSTGR
 $COMPOSE $P down -v >/dev/null 2>&1; rm -f "$W/.env"
 
 echo "== install"
-./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS ${DOCUMENTDB:+--documentdb} ${HOST_METRICS:+--host-metrics} ${HOST_LOGS:+--host-logs} ${LOG_DRAINS:+--log-drains} || exit 1
+./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS ${DOCUMENTDB:+--documentdb} ${HOST_METRICS:+--host-metrics} ${HOST_LOGS:+--host-logs} || exit 1
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
 echo "FEATURE_DBREADADDRESS=true" >> "$W/.env"
 [ -n "${REQUEST_METRICS:-}" ] && printf 'FEATURE_REQUESTMETRICS=true\nFEATURE_SLOWQUERIES=true\n' >> "$W/.env"
-# Stored logs go with a deleted project (EXC-678, log-search-journey.sh).
-[ -n "${HOST_LOGS:-}" ] && echo "FEATURE_LOGDELETION=true" >> "$W/.env"
 # The apps journey drives create_app through MCP, as a coding tool does (EXC-606).
 [ -n "${APPS:-}" ] && echo "FEATURE_MCP=true" >> "$W/.env"
 # and deploys a catalog template, reached by its siblings by name (EXC-669).
@@ -117,7 +109,6 @@ echo "FEATURE_DBREADADDRESS=true" >> "$W/.env"
 # The allow-list reports a single host's loopback-only database (EXC-665).
 echo "FEATURE_DBALLOWLIST=true" >> "$W/.env"
 printf 'EDGE_BIND_ADDRESS=127.0.0.1\nEDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' $((PORT-363)) $PORT >> "$W/.env"
-[ -n "${LOG_DRAINS:-}" ] && drains_setup
 if [ -n "${SITE_BUILDS:-}" ]; then
   # Builds run under the apps' sandbox runtime, set here when apps are not installed.
   [ -z "${APPS:-}" ] && echo "APP_SANDBOX_RUNTIME=$APP_SANDBOX" >> "$W/.env"
@@ -291,14 +282,6 @@ else
   [ "$hm" = 404 ] && ok "host monitoring is off by default (404)" || ko "host monitoring answers $hm with the flag off"
 fi
 
-if [ -n "${LOG_DRAINS:-}" ]; then
-  drains_journey
-else
-  $DOCKER inspect excalibase-log-forwarder >/dev/null 2>&1 && ko "a log forwarder runs without --log-drains" || ok "no log forwarder without --log-drains"
-  ld=$(c -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/projects/$PID/log-drains/")
-  [ "$ld" = 404 ] && ok "log drains are off by default (404)" || ko "log drains answer $ld with the flag off"
-fi
-
 if [ -n "${HOST_LOGS:-}" ]; then
   . "$TESTS/log-search-journey.sh"
 else
@@ -314,5 +297,5 @@ if [ "$fail" -gt 0 ]; then
   $COMPOSE $P ps -a 2>&1 | tail -20
   $COMPOSE $P logs --tail 40 provisioning engine-proxy 2>&1 | tail -80
 fi
-[ -n "${KEEP:-}" ] || { $COMPOSE $P down -v >/dev/null 2>&1; wipe_managed; drains_teardown; }
+[ -n "${KEEP:-}" ] || { $COMPOSE $P down -v >/dev/null 2>&1; wipe_managed; }
 [ "$fail" -eq 0 ]

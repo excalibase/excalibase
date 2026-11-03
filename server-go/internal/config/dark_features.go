@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"slices"
 
 	"github.com/excalibase/provisioning-poc/internal/features"
 )
@@ -35,10 +34,10 @@ var featureEnv = map[features.Feature]string{
 	features.MajorUpgrade:    "FEATURE_MAJORUPGRADE",
 	features.TemplateCatalog: "FEATURE_TEMPLATECATALOG",
 	features.HostLogs:        "FEATURE_HOSTLOGS",
-	features.LogDeletion:     "FEATURE_LOGDELETION",
 	// Single-host only (the compose file); Kubernetes builds do not read it.
 	features.SingleHostBuilds: "FEATURE_SINGLEHOSTBUILDS",
-	features.SitePreviews:    "FEATURE_SITEPREVIEWS",
+	features.LogDeletion:      "FEATURE_LOGDELETION",
+	features.SitePreviews:     "FEATURE_SITEPREVIEWS",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.
@@ -54,26 +53,13 @@ func loadDarkFeatures() []features.Feature {
 
 // Features is the flags feature code asks; nothing else reads DarkFeatures.
 // Host monitoring and host logs read a Docker or Podman host, so they are off
-// on Kubernetes, which keeps logs in the chart's Loki. On a single host, log
-// drains forward what host logs store, so they need it.
+// on Kubernetes, which keeps logs in the chart's Loki.
 func (c AppConfig) Features() features.Flags {
 	on := make([]features.Feature, 0, len(c.DarkFeatures))
 	for _, feature := range c.DarkFeatures {
-		if c.availableHere(feature) {
+		if (feature != features.HostMetrics && feature != features.HostLogs) || c.ProvisionerMode == "docker" {
 			on = append(on, feature)
 		}
 	}
 	return features.NewStatic(on...)
-}
-
-func (c AppConfig) availableHere(feature features.Feature) bool {
-	singleHost := c.ProvisionerMode == "docker"
-	switch feature {
-	case features.HostMetrics, features.HostLogs:
-		return singleHost
-	case features.LogDrains:
-		return !singleHost || slices.Contains(c.DarkFeatures, features.HostLogs)
-	default:
-		return true
-	}
 }

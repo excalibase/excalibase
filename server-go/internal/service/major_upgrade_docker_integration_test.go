@@ -218,12 +218,20 @@ func TestSingleHostMajorUpgradeMovesTheDatabaseTo17(t *testing.T) {
 		t.Fatalf("the superuser is not rejected over the network: %v", err)
 	}
 
-	if err := live.adapter.RefreshWALArchive(ctx, row); err != nil {
-		t.Fatalf("ship WAL from 17: %v", err)
+	// The archiver copies a switched segment on its own time: ship until one lands.
+	var shipped []S3Object
+	for deadline := time.Now().Add(30 * time.Second); len(shipped) == 0 && time.Now().Before(deadline); time.Sleep(time.Second) {
+		if err := live.adapter.RefreshWALArchive(ctx, row); err != nil {
+			t.Fatalf("ship WAL from 17: %v", err)
+		}
+		listed, err := live.uploader.List(ctx, live.bucket, "backups/"+live.project+"/pg17/wals/")
+		if err != nil {
+			t.Fatalf("list the new archive: %v", err)
+		}
+		shipped = listed
 	}
-	shipped, err := live.uploader.List(ctx, live.bucket, "backups/"+live.project+"/pg17/wals/")
-	if err != nil || len(shipped) == 0 {
-		t.Fatalf("no WAL in the new archive: %v %v", shipped, err)
+	if len(shipped) == 0 {
+		t.Fatal("no WAL in the new archive")
 	}
 	upgrader.Cleanup(ctx, row, *run)
 	if state, _ := live.docker.ContainerState(ctx, provisioner.PreUpgradeContainerName(live.project, run.ID)); state.Found {
