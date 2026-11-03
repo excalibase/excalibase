@@ -40,7 +40,7 @@ func TestSignIn_RemembersTheAppItStartedFrom(t *testing.T) {
 			t.Errorf("a sign-in naming %s: %v", name, err)
 		}
 	}
-	checkMigrationDownAndUp(t, h, "000111_app_git_sign_ins", `SELECT COUNT(*) FROM information_schema.columns
+	checkMigrationDownAndUp(t, h, "000104_app_git_sign_ins", `SELECT COUNT(*) FROM information_schema.columns
 		WHERE table_name = 'site_git_states' AND column_name = 'app_id'`)
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -97,6 +98,9 @@ type MockClient struct {
 	EnsurePublicDBError        error
 	DeletePublicDBError        error
 	PublicDBServiceExistsError error
+	// SourceRangesReadBack, when set, is what every read-back reports, so a
+	// test can model a Service that did not take the list.
+	SourceRangesReadBack []string
 
 	// GatewayReady is what DocumentDBGatewayReady reports, keyed
 	// "namespace/pod". A missing key means the gateway is not serving,
@@ -364,6 +368,21 @@ func (m *MockClient) PublicDBServiceExists(ctx context.Context, namespace, name 
 	}
 	_, ok := m.PublicDBServices[key]
 	return ok, nil
+}
+
+// PublicDBServiceSourceRanges reads back what Ensure recorded.
+func (m *MockClient) PublicDBServiceSourceRanges(ctx context.Context, namespace, name string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "PublicDBServiceSourceRanges:"+namespace+"/"+name)
+	spec, ok := m.PublicDBServices[namespace+"/"+name]
+	if !ok {
+		return nil, fmt.Errorf("public database service %s/%s not found", namespace, name)
+	}
+	if m.SourceRangesReadBack != nil {
+		return m.SourceRangesReadBack, nil
+	}
+	return slices.Clone(spec.SourceRanges), nil
 }
 
 // DeletePublicDBService removes the Service; deleting an absent one succeeds.

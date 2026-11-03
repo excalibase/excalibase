@@ -99,6 +99,14 @@ func (e *execution) retry(ctx context.Context, failed RunStatus) (RunStatus, *ou
 	return e.attempt(ctx)
 }
 
+// startFailure names a build image that did not pull apart from the platform's own failures.
+func startFailure(err error) outcome {
+	if errors.Is(err, ErrImagePull) {
+		return failedWith(FailImage, "the build image could not be pulled; try again, or ask the operator to check the host's registry access")
+	}
+	return failedWith(FailPlatform, userMessage(err))
+}
+
 // checkSource re-reads the connection, its connector and the repository's current name before anything runs.
 func (e *execution) checkSource(ctx context.Context) *outcome {
 	service, build := e.dispatcher.service, e.build
@@ -133,7 +141,8 @@ func (e *execution) attempt(ctx context.Context) (RunStatus, *outcome) {
 	err = e.kind.start(startCtx, credential)
 	cancelStart()
 	if err != nil {
-		return RunStatus{}, refuse(FailPlatform, userMessage(err))
+		stopped := startFailure(err)
+		return RunStatus{}, &stopped
 	}
 	timeout := time.Duration(e.build.Limits.TimeoutSeconds)*time.Second + e.dispatcher.options.PendingGrace
 	awaitCtx, cancelAwait := context.WithTimeout(ctx, timeout)

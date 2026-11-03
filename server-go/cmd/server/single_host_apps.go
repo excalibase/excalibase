@@ -105,6 +105,9 @@ func buildSingleHostAppRuntime(ctx context.Context, cfg config.AppConfig, docker
 	if apps.SandboxRuntime == "" {
 		log.Printf("WARN: APP_SANDBOX_RUNTIME=none: apps run without a sandbox, sharing the host's kernel directly")
 	}
+	if isolated, why := runtime.HostIsolation(); !isolated {
+		log.Printf("WARN: app networks: %s", why)
+	}
 	return runtime, nil
 }
 

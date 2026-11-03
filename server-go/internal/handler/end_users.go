@@ -48,6 +48,7 @@ type EndUserManager interface {
 	Get(ctx context.Context, orgSlug, projectID, actor string, userID int64) (json.RawMessage, error)
 	Update(ctx context.Context, orgSlug, projectID, actor string, userID int64, patch endusers.UserPatch) (json.RawMessage, error)
 	Delete(ctx context.Context, orgSlug, projectID, actor string, userID int64) error
+	ResetFactors(ctx context.Context, orgSlug, projectID, actor string, userID int64) error
 }
 
 // EndUsersHandler lets a project admin list the project's end users and set

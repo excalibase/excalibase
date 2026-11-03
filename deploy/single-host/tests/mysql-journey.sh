@@ -74,6 +74,7 @@ E=$(mapi "$MAPI/projects/$MPID/db-endpoint")
 [ "$(echo "$E" | mjson 'd.get("engine")=="mysql" and d.get("requireTls") and d["host"]=="127.0.0.1" and d.get("available")')" = True ] \
   && ok "Studio shows the TLS-only loopback endpoint" || ko "endpoint: ${E:0:400}"
 MPORT=$(echo "$E" | mjson 'd["port"]')
+read_address_journey "$MPID" mysql
 [ "${MPORT:-0}" -ge 30000 ] && [ "$MPORT" -le 30999 ] && ok "the project holds port $MPORT from the tenant window" || ko "port '$MPORT' outside 30000-30999"
 # same_port <step>: the customer's connection string survives the step.
 same_port() {

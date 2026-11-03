@@ -95,7 +95,7 @@ func TestMigrationHistoryCopyRefusesIDsThatLeaveTheStorageRoot(t *testing.T) {
 func TestCarryingRestoredSettingsNeedsTheMigrationHistory(t *testing.T) {
 	svc := NewProvisioningService(emptyInstanceStore(t), provisioner.NewFactory(), nil)
 	svc.SetRestoredSettings(&recordingSettings{})
-	if err := svc.CarryRestoredSettings(context.Background(), "src", "dst"); !errors.Is(err, ErrMigrationHistoryNotConfigured) {
+	if err := svc.CarryRestoredSettings(context.Background(), nil, "src", "dst"); !errors.Is(err, ErrMigrationHistoryNotConfigured) {
 		t.Fatalf("CarryRestoredSettings = %v, want ErrMigrationHistoryNotConfigured", err)
 	}
 }
@@ -105,7 +105,7 @@ func TestCarryingRestoredSettingsCopiesTheMigrationHistory(t *testing.T) {
 	svc.SetRestoredSettings(&recordingSettings{})
 	history := &recordingHistory{}
 	svc.SetMigrationHistory(history)
-	if err := svc.CarryRestoredSettings(context.Background(), "src", "dst"); err != nil {
+	if err := svc.CarryRestoredSettings(context.Background(), nil, "src", "dst"); err != nil {
 		t.Fatal(err)
 	}
 	if len(history.copies) != 1 || history.copies[0] != [2]string{"src", "dst"} {
@@ -117,7 +117,7 @@ func TestCarryingRestoredSettingsFailsWhenTheHistoryCannotBeCopied(t *testing.T)
 	svc := NewProvisioningService(emptyInstanceStore(t), provisioner.NewFactory(), nil)
 	svc.SetRestoredSettings(&recordingSettings{})
 	svc.SetMigrationHistory(&recordingHistory{err: errors.New("disk full")})
-	if err := svc.CarryRestoredSettings(context.Background(), "src", "dst"); err == nil {
+	if err := svc.CarryRestoredSettings(context.Background(), nil, "src", "dst"); err == nil {
 		t.Fatal("CarryRestoredSettings = nil, want the copy failure")
 	}
 }

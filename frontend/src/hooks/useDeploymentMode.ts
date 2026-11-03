@@ -20,6 +20,13 @@ export type Feature =
   | 'authguest'
   // On only on a single-host Docker/Podman install (EXC-670).
   | 'hostmetrics'
+  | 'sitesserver'
+  | 'authhooks'
+  | 'authmfa'
+  | 'dballowlist'
+  | 'dbreadaddress'
+  | 'dbcopy'
+  | 'majorupgrade'
   | 'appgitbuilds';
 
 interface ConfigResponse {
@@ -30,7 +37,7 @@ interface ConfigResponse {
   customDomains?: boolean;
   // Sites may take custom domains: the Cloudflare zone is set up for them (EXC-614).
   siteCustomDomains?: boolean;
-  // Git builds of sites are switched on (EXC-354); single-host still refuses them by name.
+  // Git builds of sites are switched on (EXC-354); single-host builds only with FEATURE_SINGLEHOSTBUILDS (EXC-671), else refuses by name.
   siteGitBuilds?: boolean;
   features?: Partial<Record<Feature, boolean>>;
   // The public API base the SDK, REST and GraphQL calls go to.

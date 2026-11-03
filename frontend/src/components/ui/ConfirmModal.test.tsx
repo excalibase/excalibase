@@ -99,4 +99,13 @@ describe('ConfirmModal', () => {
     fireEvent.click(screen.getByTestId('modal-backdrop'));
     expect(onClose).toHaveBeenCalledTimes(3);
   });
+  test('is a labelled modal dialog that Escape closes', () => {
+    const { onClose } = mount({ confirmText: 'shop' });
+    const dialog = screen.getByRole('dialog', { name: 'Drop table' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByLabelText('Type shop to confirm')).toBeInTheDocument();
+    expect(screen.getByTestId('modal-close')).toHaveAttribute('aria-label', 'Close');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

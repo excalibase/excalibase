@@ -364,6 +364,8 @@ type BackupRecordStore interface {
 	DeleteByProject(ctx context.Context, projectID string) error
 	// DeleteThrough removes a project's records timed at or before through.
 	DeleteThrough(ctx context.Context, projectID string, through time.Time) error
+	// DeleteRecords removes the named records of a project.
+	DeleteRecords(ctx context.Context, projectID string, ids []string) error
 }
 
 // BackupScheduleStore persists per-project backup schedules so the

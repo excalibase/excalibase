@@ -71,6 +71,12 @@ func (m *memoryVault) List(prefix string) ([]string, error) {
 
 func (m *memoryVault) Sealed() bool                  { return false }
 func (m *memoryVault) GetPublicKey() (string, error) { return "", nil }
+func (m *memoryVault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	if _, err := m.Get(path); err == nil {
+		return false, nil
+	}
+	return true, m.Put(path, data)
+}
 
 func newRegistryService(t *testing.T) (*RegistryCredentialService, *memoryVault, *k8s.MockClient) {
 	t.Helper()

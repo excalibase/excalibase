@@ -17,6 +17,10 @@ type VaultStore interface {
 	// PutSecret stores a secret entry (already encrypted) at path.
 	PutSecret(path string, data []byte) error
 
+	// PutSecretIfAbsent stores data only when path holds nothing, atomically;
+	// it reports whether it wrote.
+	PutSecretIfAbsent(path string, data []byte) (bool, error)
+
 	// DeleteSecret removes a secret by path.
 	DeleteSecret(path string) error
 

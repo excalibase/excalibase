@@ -86,7 +86,10 @@ func (a *DockerBackupAdapter) uploadArchived(ctx context.Context, dc provisioner
 		return nil, fmt.Errorf("%w: %v", ErrNoWALArchive, err)
 	}
 	defer stream.Close()
-	prefix := fmt.Sprintf("%s%s/wals/", a.keyPrefix, inst.ProjectID)
+	prefix, err := a.walsPrefix(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
 	reader := tar.NewReader(stream)
 	var shipped []string
 	for {

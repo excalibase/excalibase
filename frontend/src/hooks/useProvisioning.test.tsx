@@ -42,13 +42,14 @@ describe('useRestoreJob', () => {
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith());
   });
 
-  test('a copy finishing leaves this project alone', async () => {
+  test('a copy finishing leaves this project alone and lists the new one', async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ data: { id: 'j', mode: 'new_project', status: 'COMPLETED' } } as never);
     const { client, Wrapper } = makeWrapper();
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     const { result } = renderHook(() => useRestoreJob('p1', 'j'), { wrapper: Wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(invalidate).not.toHaveBeenCalled();
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['instances'] }));
+    expect(invalidate).toHaveBeenCalledTimes(1);
   });
 });
 
