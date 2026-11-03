@@ -161,6 +161,8 @@ export default defineConfig({
         'src/pages/HostMonitoringPage.tsx',
         'src/api/allowedSources.ts',
         'src/components/DatabaseAllowList.tsx',
+        'src/api/appTemplates.ts',
+        'src/pages/ContainerTemplatesPage.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {
