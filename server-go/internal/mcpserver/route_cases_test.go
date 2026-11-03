@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/features"
 )
 
 // routeCases is every tool's routing case: the long-standing ones and the
@@ -64,6 +66,7 @@ func s3KeyRouteCases() []routeCase {
 	return []routeCase{
 		{
 			name: "list_s3_keys", tool: "list_s3_keys", args: map[string]any{"project_id": testProjectA},
+			features: []features.Feature{features.S3},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodGet, projectsA+"/storage/s3-keys", 200, `{"keys":[],"endpoint":"https://s3.example.test","region":"us-east-1"}`)
 			},
@@ -71,7 +74,8 @@ func s3KeyRouteCases() []routeCase {
 		},
 		{
 			name: "revoke_s3_key", tool: "revoke_s3_key",
-			args: map[string]any{"project_id": testProjectA, "key_id": testS3KeyID},
+			args:     map[string]any{"project_id": testProjectA, "key_id": testS3KeyID},
+			features: []features.Feature{features.S3},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodDelete, projectsA+"/storage/s3-keys/"+testS3KeyID, 204, ``)
 			},

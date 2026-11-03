@@ -325,3 +325,23 @@ func TestKey_Allows(t *testing.T) {
 		t.Fatal("a key lists only buckets it reaches")
 	}
 }
+
+func TestPurgeProject_ForgetsCachedSecrets(t *testing.T) {
+	h := newHarness()
+	_, key, _ := h.svc.Create(context.Background(), readWrite())
+	if _, _, err := h.svc.Resolve(context.Background(), key.AccessKeyID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.svc.cache.Load(key.AccessKeyID); !ok {
+		t.Fatal("setup: Resolve should cache the secret")
+	}
+	if _, err := h.svc.PurgeProject(context.Background(), project); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.svc.cache.Load(key.AccessKeyID); ok {
+		t.Fatal("a purged project's secret stays in memory")
+	}
+	if _, ok := h.svc.touched.Load(key.ID); ok {
+		t.Fatal("a purged key's last-use throttle stays in memory")
+	}
+}

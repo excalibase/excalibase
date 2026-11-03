@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/features"
 )
 
 // S3 access keys (EXC-630): a coding tool may see which keys a project holds
@@ -49,9 +51,9 @@ const s3KeysNote = "An S3 key lets any S3 client (aws cli, rclone, AWS SDKs) rea
 
 func s3KeyTools() []entry {
 	return []entry{
-		tool("list_s3_keys", "The project's S3 access keys: names, access key ids, buckets, permissions and last use, "+
-			"with the endpoint and region S3 clients use. Never a secret.", readTool, listS3Keys),
-		tool("revoke_s3_key", "Revoke one S3 access key at once; every client using it is refused from the next request.", writeTool, revokeS3Key),
+		dark(features.S3, tool("list_s3_keys", "The project's S3 access keys: names, access key ids, buckets, permissions and last use, "+
+			"with the endpoint and region S3 clients use. Never a secret.", readTool, listS3Keys)),
+		dark(features.S3, tool("revoke_s3_key", "Revoke one S3 access key at once; every client using it is refused from the next request.", writeTool, revokeS3Key)),
 	}
 }
 

@@ -116,13 +116,21 @@ func (s *PostgresStore) Delete(ctx context.Context, projectID, id string) (*Key,
 	return key, nil
 }
 
-func (s *PostgresStore) DeleteProject(ctx context.Context, projectID string) (int, error) {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM storage_s3_keys WHERE project_id = $1`, projectID)
+func (s *PostgresStore) DeleteProject(ctx context.Context, projectID string) ([]*Key, error) {
+	rows, err := s.db.QueryContext(ctx, `DELETE FROM storage_s3_keys WHERE project_id = $1 RETURNING `+keyColumns, projectID)
 	if err != nil {
-		return 0, fmt.Errorf("remove the project's S3 keys: %w", err)
+		return nil, fmt.Errorf("remove the project's S3 keys: %w", err)
 	}
-	removed, err := result.RowsAffected()
-	return int(removed), err
+	defer rows.Close()
+	removed := []*Key{}
+	for rows.Next() {
+		key, err := scanKey(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan removed S3 key: %w", err)
+		}
+		removed = append(removed, key)
+	}
+	return removed, rows.Err()
 }
 
 func (s *PostgresStore) TouchLastUsed(ctx context.Context, id string, at time.Time) error {

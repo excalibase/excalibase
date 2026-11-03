@@ -94,14 +94,14 @@ func (f *fakeStore) Delete(_ context.Context, projectID, id string) (*Key, error
 	return k, nil
 }
 
-func (f *fakeStore) DeleteProject(_ context.Context, projectID string) (int, error) {
+func (f *fakeStore) DeleteProject(_ context.Context, projectID string) ([]*Key, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	removed := 0
+	var removed []*Key
 	for id, k := range f.keys {
 		if k.ProjectID == projectID {
 			delete(f.keys, id)
-			removed++
+			removed = append(removed, k)
 		}
 	}
 	return removed, nil

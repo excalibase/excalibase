@@ -121,8 +121,8 @@ func TestPostgresStore_LimitHoldsUnderConcurrentCreates(t *testing.T) {
 		t.Fatalf("created %d, want exactly %d", created, limit)
 	}
 	removed, err := store.DeleteProject(ctx, "proj-c")
-	if err != nil || removed != limit {
-		t.Fatalf("removed %d, %v", removed, err)
+	if err != nil || len(removed) != limit {
+		t.Fatalf("removed %d, %v", len(removed), err)
 	}
 }
 

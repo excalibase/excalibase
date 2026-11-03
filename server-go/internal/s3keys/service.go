@@ -17,13 +17,14 @@ import (
 const touchInterval = time.Minute
 
 // Store keeps key rows. Create counts the project's keys and inserts in one
-// step; Delete returns the row it removed, nil when there was none.
+// step; Delete returns the row it removed, nil when there was none, and
+// DeleteProject the rows it removed.
 type Store interface {
 	Create(ctx context.Context, key *Key, maxPerProject int) error
 	List(ctx context.Context, projectID string) ([]*Key, error)
 	FindByAccessKeyID(ctx context.Context, accessKeyID string) (*Key, error)
 	Delete(ctx context.Context, projectID, id string) (*Key, error)
-	DeleteProject(ctx context.Context, projectID string) (int, error)
+	DeleteProject(ctx context.Context, projectID string) ([]*Key, error)
 	TouchLastUsed(ctx context.Context, id string, at time.Time) error
 }
 
@@ -275,7 +276,14 @@ func (s *Service) touch(ctx context.Context, key *Key, now time.Time) {
 }
 
 // PurgeProject removes every key of a project being deleted. The secrets go
-// with the project's vault prefix.
+// with the project's vault prefix; cached secrets and throttles go now.
 func (s *Service) PurgeProject(ctx context.Context, projectID string) (int, error) {
-	return s.store.DeleteProject(ctx, projectID)
+	removed, err := s.store.DeleteProject(ctx, projectID)
+	if err != nil {
+		return 0, err
+	}
+	for _, key := range removed {
+		s.forget(key)
+	}
+	return len(removed), nil
 }
