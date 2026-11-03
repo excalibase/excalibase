@@ -281,6 +281,55 @@ Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
 | `APP_EGRESS` | `none` | `internet` lets apps call out |
 | `APP_DOMAIN_RESOLVER` | the host's | `host:port` of the DNS server custom domains' CNAMEs are checked against |
 
+## Git builds of sites
+
+Sites (a project's built frontend) need a Cloudflare account on every install
+(ADR 0043); without one there are no Sites and no builds. With Cloudflare
+configured, a site can deploy on every push to a GitHub repository, built on
+this host (EXC-671). Off by default; in `.env`:
+
+```bash
+SITES_GIT_BUILDS_ENABLED=true
+FEATURE_SINGLEHOSTBUILDS=true
+SITES_GITHUB_APP_ID=...            # your GitHub App, as on Kubernetes
+SITES_GITHUB_APP_SLUG=...
+SITES_GITHUB_CLIENT_ID=...
+SITES_GITHUB_CLIENT_SECRET=...
+SITES_GITHUB_WEBHOOK_SECRET=...
+# the App's private key: its PEM text in SITES_GITHUB_APP_PRIVATE_KEY, or a file
+# mounted into provisioning and named in SITES_GITHUB_APP_PRIVATE_KEY_FILE
+SITES_GITHUB_APP_PRIVATE_KEY_FILE=/run/excalibase-github/app.pem
+```
+
+Each build is a short chain of containers (`excalibase-build-<id>-*`): clone,
+then install and build, then pack the output, which provisioning deploys the
+way an upload is deployed. Every step runs under `APP_SANDBOX_RUNTIME` (gVisor,
+installed as in Apps; `none` runs builds without it, for trusted code only),
+with every capability dropped, a read-only root, uid 1000, the plan's CPU and
+memory (no swap) and at most 4096 processes. The git token reaches only the
+clone step; the site's variables and build-visible secrets only the build step.
+
+| | Kubernetes | Single host |
+|---|---|---|
+| Network | NetworkPolicy: ports 80/443 to public addresses | the build's own internal network, no route anywhere; a proxy beside it (`excalibase-build-<id>-egress`, from provisioning's image) lets HTTP(S) through to public IPv4 addresses on ports 80/443 and refuses private, metadata and other ranges. Tools that ignore `HTTPS_PROXY` get no network |
+| Disk | evicted past the plan's disk | measured every 10 s by a watcher container beside the steps (no network, the volume read-only; a folder made unreadable fails the build), stopped past the plan's disk, or when the host has under 2 GiB free |
+| Time, memory | Job deadline, OOM | the same limits, named the same way in Studio; the engine kills each step at the time limit even if provisioning is down |
+| Logs | the kubelet's rotation | each container's log capped at 2 × 10 MB |
+| Cache | none yet | none yet |
+
+**Host firewall.** Build networks get the same isolated gateway as project
+networks (see Host isolation) wherever the engine takes it. Docker before 28
+refuses it: provisioning then makes build networks without it and logs
+`WARN: ... build networks an address on the host`, and a build could connect
+to anything listening on all of the host's addresses. Upgrade Docker, or add
+the firewall rule under Host isolation; on Podman, the same for `podman+`.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `SITES_BUILD_SLOTS` | `1` | Builds at once on this host |
+| `SITES_BUILD_EGRESS_ALLOW` | empty | `host:port` entries builds may reach although private (a git server or registry on your LAN) |
+| `SITES_BUILD_NODE_IMAGE` | Docker Hub's, pinned | a mirror of the Node images builds run in |
+
 ## DocumentDB projects
 
 A project can carry DocumentDB, the MongoDB-compatible API over its Postgres
@@ -420,9 +469,13 @@ read back no further than the retention. To stop: remove the two lines and
 `docker compose --profile hostlogs rm -sf loki`; `docker volume rm
 excalibase-platform-logs` deletes the stored lines.
 
-Disk: each project stores at most `HOST_LOGS_DAILY_MB` (64) MiB of log text a
-UTC day; past it one notice line is stored and the rest of the day is skipped.
-Lines are cut at 16 KiB. Text compresses about 5-10 times, so 10 busy projects
+Disk: each project stores at most its plan's daily budget of log text a UTC
+day (free 64 MiB, standard 256, enterprise 1024); past it one notice line is
+stored and the rest of the day is skipped. The day's count is kept in the
+platform database, so a restart does not grant a second budget. While less
+than `HOST_LOGS_MIN_FREE_PERCENT` (10%) or 2 GiB of the host disk is free,
+shipping pauses for every project and resumes at 15% and 3 GiB; the lines wait
+in the engine's own log meanwhile. Lines are cut at 16 KiB. Text compresses about 5-10 times, so 10 busy projects
 kept 7 days take about 0.5-1 GiB. Loki is limited to 512 MiB of memory and half
 a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
 
@@ -430,7 +483,10 @@ a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
 |---|---|---|
 | `FEATURE_HOSTLOGS` | unset (`true` with `--host-logs`) | store and search project logs in the bundled Loki |
 | `COMPOSE_PROFILES` | unset (`hostlogs` with `--host-logs`) | starts the `loki` service |
-| `HOST_LOGS_DAILY_MB` | `64` | each project's stored log text per UTC day |
+| `HOST_LOGS_DAILY_MB` | `64` | stored log text per UTC day for a plan not named below |
+| `HOST_LOGS_DAILY_MB_FREE`, `_STANDARD`, `_ENTERPRISE` | `64`, `256`, `1024` | each plan's daily budget |
+| `HOST_LOGS_MIN_FREE_PERCENT` | `10` | shipping pauses below this share of the disk free (1-50) |
+| `FEATURE_LOGDELETION` | unset | delete a project's stored lines from Loki when the project is deleted (Loki removes them within a day) |
 | `LOG_RETENTION` | `168h` | how long lines are kept (whole hours, at least 24h) |
 | `FEATURE_LOGRETENTION` | unset | keep each project's lines for its plan instead: `LOG_RETENTION_FREE` (`24h`), `LOG_RETENTION_STANDARD` and `LOG_RETENTION_ENTERPRISE` (`168h`) |
 
@@ -513,6 +569,7 @@ restart. DocumentDB projects have no slow-queries page on a single host.
 | Host and container monitoring, alerts | yes, with `--host-metrics` (see Host monitoring) |
 | Stored log search with retention | yes, with `--host-logs` (see Stored log search) |
 | Request charts, slow queries | yes, with `FEATURE_REQUESTMETRICS` / `FEATURE_SLOWQUERIES` (see Request charts and slow queries); not for DocumentDB slow queries |
+| Sites: upload deploys, and git builds with `FEATURE_SINGLEHOSTBUILDS` | where Cloudflare is configured (see Git builds of sites) |
 | Edge functions, realtime | no (Kubernetes only) |
 | High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
 
