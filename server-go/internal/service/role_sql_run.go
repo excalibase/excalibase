@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"regexp"
 	"strconv"
@@ -76,6 +77,22 @@ func probeServerVersionNum(ctx context.Context, exec roleSQLExecer, dbName strin
 		return 0
 	}
 	return num
+}
+
+// appReachesAuth reports whether excalibase_app can still reach the auth
+// schema. An answer that is neither t nor f is an error, never a guess.
+func appReachesAuth(ctx context.Context, exec roleSQLExecer, dbName string) (bool, error) {
+	out, err := exec(ctx, authAccessProbeCommand(dbName))
+	if err != nil {
+		return false, fmt.Errorf("probe excalibase_app's access to auth: %w", err)
+	}
+	switch strings.TrimSpace(out) {
+	case "t":
+		return true, nil
+	case "f":
+		return false, nil
+	}
+	return false, fmt.Errorf("probe excalibase_app's access to auth: unexpected answer %q", strings.TrimSpace(out))
 }
 
 // roleSQLExecer returns the execer bound to a project's primary database for

@@ -97,6 +97,15 @@ export interface App {
   updatedAt: string;
   // Not served yet; shown as soon as the API starts returning it.
   url?: string;
+  // Live from the runtime: an app it restarted still reads ACTIVE (EXC-651).
+  restarts?: AppRestarts;
+}
+
+export interface AppRestarts {
+  count: number;
+  lastReason?: string;
+  lastExitCode?: number;
+  lastAt?: string;
 }
 
 export type LifecycleOperation = 'pause' | 'resume' | 'deletion';

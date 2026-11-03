@@ -25,4 +25,54 @@ type ProjectInfo struct {
 	// null.
 	RequireEmailVerification bool   `json:"requireEmailVerification"`
 	SiteURL                  string `json:"siteUrl"`
+	// ProjectOAuthInfo is present only while the authoauth or authotp flag
+	// is on (EXC-662); nil keeps its keys off the wire entirely.
+	*ProjectOAuthInfo
+	// UserAPIEnabled is sent, as true, only while the authuser flag is on;
+	// nil keeps the key off the wire.
+	UserAPIEnabled *bool `json:"userApiEnabled,omitempty"`
+	// StableSubject is sent, as true, only while the authguest flag is on:
+	// the auth service then signs sub as the account id, not its address.
+	StableSubject *bool `json:"stableSubject,omitempty"`
+	// MFAEnabled is sent, as true, only while the authmfa flag is on and the
+	// project switched MFA on; the key is in the vault, never here.
+	MFAEnabled *bool `json:"mfaEnabled,omitempty"`
+	// AuthHooks is sent only while the authhooks flag is on, then always
+	// (possibly {}); nil keeps the key off the wire.
+	AuthHooks *AuthHooksInfo `json:"authHooks,omitempty"`
+}
+
+// AuthHooksInfo is the URL of each enabled auth hook (EXC-662); a hook that
+// is off has no key.
+type AuthHooksInfo struct {
+	CustomAccessToken string `json:"customAccessToken,omitempty"`
+	BeforeUserCreated string `json:"beforeUserCreated,omitempty"`
+	SendEmail         string `json:"sendEmail,omitempty"`
+}
+
+// Set records the URL of one enabled hook; an unknown hook is ignored.
+func (i *AuthHooksInfo) Set(hook, url string) {
+	switch hook {
+	case AuthHookCustomAccessToken:
+		i.CustomAccessToken = url
+	case AuthHookBeforeUserCreated:
+		i.BeforeUserCreated = url
+	case AuthHookSendEmail:
+		i.SendEmail = url
+	}
+}
+
+// ProjectOAuthInfo is the end-user OAuth policy the auth service enforces:
+// where it may redirect, whether sign-up is open, and the providers it may
+// offer. Never null inside.
+type ProjectOAuthInfo struct {
+	RedirectURLs   []string            `json:"redirectUrls"`
+	AllowNewUsers  bool                `json:"allowNewUsers"`
+	OAuthProviders []OAuthProviderInfo `json:"oauthProviders"`
+	// EmailOTPEnabled is sent only while authotp is on.
+	EmailOTPEnabled *bool `json:"emailOtpEnabled,omitempty"`
+	// GuestSignInEnabled is sent only while authguest is on; the captcha key
+	// only when the project also has a Turnstile secret.
+	GuestSignInEnabled  *bool `json:"guestSignInEnabled,omitempty"`
+	GuestCaptchaEnabled bool  `json:"guestCaptchaEnabled,omitempty"`
 }

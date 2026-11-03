@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -27,9 +29,12 @@ const (
 type createTokenRequest struct {
 	Name string `json:"name"`
 	// ExpiresIn is "30d", "12h", "never" or empty (default 90d).
-	ExpiresIn string   `json:"expiresIn"`
-	ProjectID string   `json:"projectId"`
-	Scopes    []string `json:"scopes"`
+	ExpiresIn string `json:"expiresIn"`
+	// ExpiresInDays is the lifetime in days, 1 to 365, as site tokens take
+	// it (EXC-650); it may not be given beside ExpiresIn.
+	ExpiresInDays *int     `json:"expiresInDays"`
+	ProjectID     string   `json:"projectId"`
+	Scopes        []string `json:"scopes"`
 	// UserID mints the token for another user. Platform admins only, and only
 	// for a service principal — handing an admin a human's fresh secret would
 	// be a silent credential grant.
@@ -139,7 +144,7 @@ func (h *AuthHandler) decodeCreateToken(w http.ResponseWriter, r *http.Request, 
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return tokenSpec{}, false
 	}
-	lifetime, err := auth.ParseExpiresIn(req.ExpiresIn)
+	lifetime, err := requestedLifetime(req)
 	if err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return tokenSpec{}, false
@@ -167,6 +172,21 @@ func (h *AuthHandler) decodeCreateToken(w http.ResponseWriter, r *http.Request, 
 		return tokenSpec{}, false
 	}
 	return spec, true
+}
+
+// requestedLifetime reads expiresIn or expiresInDays, never both.
+func requestedLifetime(req createTokenRequest) (auth.PATLifetime, error) {
+	if req.ExpiresInDays == nil {
+		return auth.ParseExpiresIn(req.ExpiresIn)
+	}
+	if req.ExpiresIn != "" {
+		return auth.PATLifetime{}, errors.New("give expiresIn or expiresInDays, not both")
+	}
+	days := *req.ExpiresInDays
+	if days < 1 || days > int(auth.MaxPATLifetime/(24*time.Hour)) {
+		return auth.PATLifetime{}, errors.New("expiresInDays must be between 1 and 365")
+	}
+	return auth.ParseExpiresIn(strconv.Itoa(days) + "d")
 }
 
 // refusal is a handler-level rejection carrying the status it maps to.
@@ -429,6 +449,11 @@ func (h *AuthHandler) RevokeToken(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) RotateToken(w http.ResponseWriter, r *http.Request) {
 	tok, ok := h.tokenForCaller(w, r, false)
 	if !ok {
+		return
+	}
+	// A metrics key is renewed by its project's Admins, not by its owner (EXC-657).
+	if auth.IsMetricsKey(tok) {
+		httpError(w, "a metrics key is renewed from its project: revoke it and create another", http.StatusForbidden)
 		return
 	}
 	// Rotation returns a fresh secret for tok, so the same rules that govern

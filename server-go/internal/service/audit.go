@@ -36,19 +36,35 @@ func (s *AuditService) EnableAudit(ctx context.Context, projectID string, config
 	return err
 }
 
+// auditScanLines is how much of the pod log an audit read searches.
+const auditScanLines = 10000
+
+// GetAuditLogs is the last pgaudit lines of the primary's log. CNPG writes
+// parsed pgaudit records under the "pgaudit" logger and leaves the others as
+// "AUDIT:" messages.
 func (s *AuditService) GetAuditLogs(ctx context.Context, projectID string, lines int) (string, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
 		return "", fmt.Errorf(errProjectNotFoundFmt, projectID)
 	}
 
-	pod := projectID + primaryPodSuffix
-	out, err := s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, "postgres",
-		[]string{"sh", "-c", fmt.Sprintf("cat /controller/log/postgres.csv | grep AUDIT | tail -%d", lines)})
+	podLog, err := s.k8sClient.PodLogTail(ctx, inst.Namespace, projectID+primaryPodSuffix, "postgres", auditScanLines)
 	if err != nil {
 		return "", err
 	}
-	return out, nil
+	var audit []string
+	for _, line := range strings.Split(podLog, "\n") {
+		if strings.Contains(line, `"logger":"pgaudit"`) || strings.Contains(line, "AUDIT:") {
+			audit = append(audit, line)
+		}
+	}
+	if lines > 0 && len(audit) > lines {
+		audit = audit[len(audit)-lines:]
+	}
+	if len(audit) == 0 {
+		return "", nil
+	}
+	return strings.Join(audit, "\n") + "\n", nil
 }
 
 func (s *AuditService) GetAuditConfig(ctx context.Context, projectID string) (*domain.AuditConfig, error) {

@@ -22,6 +22,35 @@ const (
 // use in the auth database, and nothing more (EXC-626).
 const MySQLAuthAdminPrivileges = "SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES"
 
+// MySQLAppAuthRevokeSQL takes from excalibase_app the read grant on the auth
+// database it held before EXC-628: only auth_admin reaches the end users'
+// tables, and a cluster restored from an older backup still carries it.
+const MySQLAppAuthRevokeSQL = "REVOKE IF EXISTS ALL PRIVILEGES ON `" + MySQLAuthDatabase + "`.* FROM '" + MySQLUserApp + "'@'%' IGNORE UNKNOWN USER;"
+
+// MySQLEndUserSessionsRevokeSQL ends what the source project issued the end
+// users of a copy restored from its backup, sign-ins in flight included
+// (EXC-662), keeping the users (EXC-635).
+// Tables the auth service has not created yet are skipped.
+var MySQLEndUserSessionsRevokeSQL = mysqlIfAuthTable("refresh_tokens", "DELETE FROM `auth`.`refresh_tokens`") +
+	mysqlIfAuthTable("password_reset_tokens", "DELETE FROM `auth`.`password_reset_tokens`") +
+	mysqlIfAuthTable("email_verification_tokens", "DELETE FROM `auth`.`email_verification_tokens`") +
+	mysqlIfAuthTable("email_otps", "DELETE FROM `auth`.`email_otps`") +
+	mysqlIfAuthTable("auth_codes", "DELETE FROM `auth`.`auth_codes`") +
+	mysqlIfAuthTable("flow_states", "DELETE FROM `auth`.`flow_states`") +
+	mysqlIfAuthTable("api_keys", "UPDATE `auth`.`api_keys` SET revoked_at = UTC_TIMESTAMP(6) WHERE revoked_at IS NULL")
+
+// mysqlIfAuthTable runs statement when the auth database holds table.
+func mysqlIfAuthTable(table, statement string) string {
+	return fmt.Sprintf("SET @statement = IF(EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s), %s, 'DO 0');\n"+
+		"PREPARE statement FROM @statement;\nEXECUTE statement;\nDEALLOCATE PREPARE statement;\n",
+		mysqlString(MySQLAuthDatabase), mysqlString(table), mysqlString(statement))
+}
+
+// MySQLQueryStatsGrantSQL lets the platform login read and clear the statement
+// digests for the slow-queries page (EXC-654): only the normalized columns, never
+// QUERY_SAMPLE_TEXT, which keeps literals; DROP is what TRUNCATE needs.
+const MySQLQueryStatsGrantSQL = "GRANT SELECT (`SCHEMA_NAME`, `DIGEST_TEXT`, `COUNT_STAR`, `SUM_TIMER_WAIT`, `SUM_ROWS_SENT`, `SUM_ROWS_AFFECTED`), DROP ON `performance_schema`.`events_statements_summary_by_digest` TO '" + MySQLUserApp + "'@'%';"
+
 // MySQLPasswords are the passwords the platform users are created with.
 type MySQLPasswords struct {
 	Admin, App, AuthAdmin, Watcher string
@@ -46,13 +75,13 @@ func MySQLPlatformUsersSQL(projectDatabase string, passwords MySQLPasswords) str
 		grantOn(all, project, MySQLUserAdmin),
 		grantOn(all, project, MySQLUserApp),
 		grantOn(all, platform, MySQLUserApp),
-		grantOn("SELECT", auth, MySQLUserApp),
 		grantOn(MySQLAuthAdminPrivileges, auth, MySQLUserAuthAdmin),
 		"REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO " + mysqlAccount(MySQLUserWatcher),
 		grantOn("SELECT", project, MySQLUserWatcher),
 	} {
 		fmt.Fprintf(&sql, "GRANT %s;\n", grant)
 	}
+	sql.WriteString(MySQLAppAuthRevokeSQL + "\n")
 	return sql.String()
 }
 

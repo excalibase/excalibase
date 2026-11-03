@@ -114,7 +114,7 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 func TestGetLogs_Success(t *testing.T) {
 	r, store, mock := fullRouterWithOpsRoutes(t)
 	seedInstance(store, mock)
-	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = "log line 1\nlog line 2"
+	mock.PodLogs["org1-test-db/test-db-postgres-1"] = "log line 1\nlog line 2"
 
 	w := doRequest(r, "GET", "/api/provision/test-db/logs?lines=50", "")
 	if w.Code != 200 {
@@ -130,6 +130,7 @@ func TestGetLogs_Success(t *testing.T) {
 func TestGetLogs_DefaultLines(t *testing.T) {
 	r, store, mock := fullRouterWithOpsRoutes(t)
 	seedInstance(store, mock)
+	mock.PodLogs["org1-test-db/test-db-postgres-1"] = "log line 1"
 
 	// No "lines" param — defaults to 100
 	w := doRequest(r, "GET", "/api/provision/test-db/logs", "")
@@ -141,6 +142,7 @@ func TestGetLogs_DefaultLines(t *testing.T) {
 func TestGetLogs_InvalidLinesParam_UsesDefault(t *testing.T) {
 	r, store, mock := fullRouterWithOpsRoutes(t)
 	seedInstance(store, mock)
+	mock.PodLogs["org1-test-db/test-db-postgres-1"] = "log line 1"
 
 	// Non-numeric lines — should fall back to 100
 	w := doRequest(r, "GET", "/api/provision/test-db/logs?lines=notanumber", "")
@@ -1182,4 +1184,48 @@ func TestSchemaExecuteQuery_EmptyQuery_Returns400_ViaNotFound(t *testing.T) {
 
 func jsonBody(s string) *strings.Reader {
 	return strings.NewReader(s)
+}
+
+// The Logs page's search box and time range reach the log read (EXC-634).
+func TestGetLogs_SearchFiltersTheLines(t *testing.T) {
+	r, store, mock := fullRouterWithOpsRoutes(t)
+	seedInstance(store, mock)
+	mock.PodLogs["org1-test-db/test-db-postgres-1"] = "checkpoint starting\nERROR: relation \"nope\" does not exist\n"
+
+	w := doRequest(r, "GET", "/api/provision/test-db/logs?lines=50&since=24h&q=RELATION", "")
+	if w.Code != 200 {
+		t.Fatalf("GetLogs search: got %d, body: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if resp["logs"] != "ERROR: relation \"nope\" does not exist\n" {
+		t.Fatalf("logs = %q", resp["logs"])
+	}
+}
+
+func TestGetLogs_UnusableSearchIsABadRequest(t *testing.T) {
+	r, store, mock := fullRouterWithOpsRoutes(t)
+	seedInstance(store, mock)
+	mock.PodLogs["org1-test-db/test-db-postgres-1"] = "log line 1"
+
+	for _, query := range []string{"since=30d", "since=1m", "q=" + strings.Repeat("x", 201)} {
+		w := doRequest(r, "GET", "/api/provision/test-db/logs?"+query, "")
+		if w.Code != 400 {
+			t.Errorf("%s: got %d, want 400 (body %s)", query, w.Code, w.Body.String())
+		}
+	}
+}
+
+// EXC-641: a parameter the log search does not read is refused, not ignored.
+func TestGetLogs_UnknownParameterIsABadRequest(t *testing.T) {
+	r, store, mock := fullRouterWithOpsRoutes(t)
+	seedInstance(store, mock)
+	mock.PodLogs["org1-test-db/test-db-postgres-1"] = "log line 1"
+
+	for _, query := range []string{"search=error", "lines=10&level=error", "Q=error"} {
+		w := doRequest(r, "GET", "/api/provision/test-db/logs?"+query, "")
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "lines, q and since") {
+			t.Errorf("%s: got %d %s, want 400 naming the parameters", query, w.Code, w.Body.String())
+		}
+	}
 }

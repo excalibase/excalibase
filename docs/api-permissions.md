@@ -50,6 +50,14 @@ against the database; the engine refuses unknown columns.
 functions not returning rows of a served table or view are refused; `exposedAs` is `MUTATION` for
 `VOLATILE`, else `QUERY`; a `sessionArgument` must be a `json`/`jsonb` argument.
 
+**Who may call a tracked function.** A role needs select on the function's return table, plus
+either a function permission or, for a `QUERY` function tracked with `inferPermissions: true`
+(the default), nothing more. So on an inferred query function a function permission adds nothing
+and removing one changes nothing: to stop a role calling it, remove that role's select on the
+return table, or track the function again with `inferPermissions: false`. `MUTATION` functions
+always need the function permission. The MCP `set_db_function_permission` tool says so when a
+revoke has no effect.
+
 ## Only store
 
 Permissions are the only access store the engine enforces. The row policies, column policies,

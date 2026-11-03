@@ -124,6 +124,18 @@ func (s *ProvisioningService) createProjectRow(ctx context.Context, inst *domain
 	}
 }
 
+// OrgProjectLimit is the number of projects the organisation's current plan
+// allows, with that plan; zero or less means unlimited. A restore into a new
+// project takes one of them when it starts (EXC-639).
+func (s *ProvisioningService) OrgProjectLimit(ctx context.Context, orgID string) (int, domain.TierType, error) {
+	tier, err := s.orgTier(ctx, orgID)
+	if err != nil {
+		return 0, "", err
+	}
+	limit, err := s.orgProjectLimit(ctx, tier)
+	return limit, tier, err
+}
+
 // orgProjectLimitFor resolves the project limit of an existing project's
 // organisation from its current plan. Self-hosted installs are not metered.
 func (s *ProvisioningService) orgProjectLimitFor(ctx context.Context, orgID string) (int, error) {

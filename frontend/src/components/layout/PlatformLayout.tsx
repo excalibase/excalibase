@@ -1,32 +1,21 @@
 import { Outlet, NavLink, Link } from 'react-router-dom';
-import { LayoutDashboard, Database, DatabaseZap, Building2, ShieldCheck, KeyRound, Sun, Moon, LogOut } from 'lucide-react';
+import { Sun, Moon, LogOut } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { useDarkMode } from '../../hooks/useDarkMode';
 import { useAuthStore } from '../../stores/auth-store';
-import { useDeploymentMode, isSelfHosted } from '../../hooks/useDeploymentMode';
+import { useDeploymentMode, useFeatures, isSelfHosted } from '../../hooks/useDeploymentMode';
+import { visiblePlatformNav } from './navigation';
 
 const PLATFORM_ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
-
-const ALL_NAV = [
-  { icon: LayoutDashboard, label: 'Dashboard', to: '/', cloudOnly: false, adminOnly: false },
-  { icon: Building2, label: 'Organizations', to: '/orgs', cloudOnly: true, adminOnly: false },
-  { icon: Database, label: 'Projects', to: '/instances', cloudOnly: false, adminOnly: false },
-  { icon: DatabaseZap, label: 'Provision', to: '/provision', cloudOnly: false, adminOnly: false },
-  { icon: KeyRound, label: 'Access tokens', to: '/account/tokens', cloudOnly: false, adminOnly: false },
-  { icon: ShieldCheck, label: 'Platform Admin', to: '/admin', cloudOnly: false, adminOnly: true },
-];
 
 export function PlatformLayout() {
   const { dark, toggle } = useDarkMode();
   const { user, logout } = useAuthStore();
   const mode = useDeploymentMode();
+  const features = useFeatures();
 
   const isAdmin = user ? PLATFORM_ADMIN_ROLES.has(user.role) : false;
-  const NAV = ALL_NAV.filter((item) => {
-    if (item.cloudOnly && isSelfHosted(mode)) return false;
-    if (item.adminOnly && !isAdmin) return false;
-    return true;
-  });
+  const NAV = visiblePlatformNav({ isAdmin, selfHosted: isSelfHosted(mode), features });
 
   return (
     <div className="flex h-screen bg-bg-primary overflow-hidden">
@@ -40,7 +29,7 @@ export function PlatformLayout() {
             <NavLink
               key={to}
               to={to}
-              end={to === '/'}
+              end={to === '/' || to === '/admin'}
               className={({ isActive }) =>
                 cn(
                   'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors',

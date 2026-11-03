@@ -133,7 +133,8 @@ func TestInstances_DeleteRemovesProjectOwnedRows(t *testing.T) {
 	if err := store.Delete(inst.ProjectID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	for _, table := range projectOwnedTables {
+	for _, owned := range projectOwnedTables {
+		table := owned.name
 		var left int
 		if err := store.DB().QueryRow(`SELECT count(*) FROM `+table+` WHERE project_id = $1`, inst.ProjectID).Scan(&left); err != nil {
 			t.Fatalf("count %s: %v", table, err)
@@ -169,6 +170,8 @@ func seedProjectOwnedRows(t *testing.T, store *Store, projectID string) {
 		`INSERT INTO orgs (id, name, slug, owner_id) VALUES ($1||'-org', 'o', $1||'-org', $1||'-user')`,
 		`INSERT INTO project_members (project_id, org_id, user_id, role) VALUES ($1, $1||'-org', $1||'-user', 'viewer')`,
 		`INSERT INTO access_tokens (token_hash, token_prefix, user_id, name, project_id) VALUES ($1||'-tok', 'exc_', $1||'-user', 'n', $1)`,
+		`INSERT INTO request_metric_totals (project_id, family, updated_at) VALUES ($1, 'graphql', now())`,
+		`INSERT INTO log_drains (id, project_id, name, kind, cursor_ns, next_attempt_at) VALUES ($1||'-ld', $1, 'n', 'https', 0, now())`,
 	}
 	for _, stmt := range statements {
 		if _, err := store.DB().Exec(stmt, projectID); err != nil {

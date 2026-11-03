@@ -19,6 +19,7 @@ import {
   diskStopReason,
   formatWhen,
   plainFailureReason,
+  restartSummary,
 } from '../components/containers/appCopy';
 import { DeployHistory } from '../components/containers/DeployHistory';
 import { AppDomains, HostCertificateBadge } from '../components/containers/AppDomains';
@@ -244,6 +245,7 @@ function Detail({
         </div>
       )}
       <DiskStopBanner reason={diskStopReason(app, newest)} />
+      <RestartsBanner app={app} />
       <CurrentDeploy deploy={newest} />
       <div className="grid gap-6 lg:grid-cols-2 mb-6">
         <section className="space-y-2">
@@ -306,6 +308,21 @@ export function ContainerDetailPage({
           <Detail projectId={projectId} appId={appId} pollIntervalMs={pollIntervalMs} />
         </HostingGate>
       </div>
+    </div>
+  );
+}
+
+// A container the runtime restarted still reads ACTIVE; this says why it is
+// not running smoothly (EXC-651).
+function RestartsBanner({ app }: { readonly app: App }) {
+  const restarts = restartSummary(app);
+  if (!restarts) return null;
+  return (
+    <div
+      className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-400"
+      data-testid="container-restarts"
+    >
+      {restarts.detail}
     </div>
   );
 }

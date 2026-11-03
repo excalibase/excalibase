@@ -35,13 +35,15 @@ func (a *MySQLBackupAdapter) recordManualRun(ctx context.Context, projectID, job
 	return nil
 }
 
-// manualRuns are the IDs of the completed runs started by hand.
-func (a *MySQLBackupAdapter) manualRuns(ctx context.Context, projectID string, completed []mysqlBackup, jobs []*unstructured.Unstructured) (map[string]bool, error) {
+// manualRuns maps each completed run started by hand to the id it is listed
+// under: the id its trigger returned when it was recorded (EXC-650), else
+// its own.
+func (a *MySQLBackupAdapter) manualRuns(ctx context.Context, projectID string, completed []mysqlBackup, jobs []*unstructured.Unstructured) (map[string]string, error) {
 	records, err := a.manualRecords(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
-	manual := map[string]bool{}
+	manual := map[string]string{}
 	live := map[string]*unstructured.Unstructured{}
 	for _, job := range jobs {
 		live[job.GetName()] = job
@@ -50,7 +52,7 @@ func (a *MySQLBackupAdapter) manualRuns(ctx context.Context, projectID string, c
 		}
 		if state := k8s.MySQLBackupJobState(job); state.Phase == k8s.MySQLJobSucceeded {
 			if run, ok := firstRunBetween(completed, state.Started, state.Finished); ok {
-				manual[run.ID] = true
+				manual[run.ID] = run.ID
 			}
 		}
 	}
@@ -60,10 +62,36 @@ func (a *MySQLBackupAdapter) manualRuns(ctx context.Context, projectID string, c
 			return nil, err
 		}
 		if ok {
-			manual[run.ID] = true
+			manual[run.ID] = record.ID
 		}
 	}
 	return manual, nil
+}
+
+// runIDOf is the run a backup id names: a run's own time, or the trigger id
+// of a recorded manual run once that run is in the bucket. Any other id is
+// returned as it is, for the caller to refuse.
+func (a *MySQLBackupAdapter) runIDOf(ctx context.Context, inst *domain.DatabaseInstance, backupID string, completed []mysqlBackup) (string, error) {
+	if _, err := time.Parse(k8s.MOCOBackupTimeFormat, backupID); err == nil {
+		return backupID, nil
+	}
+	records, err := a.manualRecords(ctx, inst.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	record, ok := records[backupID]
+	if !ok {
+		return backupID, nil
+	}
+	job, err := a.kube.GetCRD(ctx, k8s.JobGVR, inst.Namespace, backupID)
+	if err != nil || !k8s.IsMySQLBackupJob(job, inst.ProjectID) {
+		job = nil
+	}
+	run, found, err := a.manualRunOf(ctx, record, job, completed)
+	if err != nil || !found {
+		return backupID, err
+	}
+	return run.ID, nil
 }
 
 func (a *MySQLBackupAdapter) manualRecords(ctx context.Context, projectID string) (map[string]domain.BackupRecord, error) {

@@ -2,7 +2,8 @@ package mcpserver
 
 import (
 	"strings"
-	"unicode"
+
+	"github.com/excalibase/provisioning-poc/internal/graphqlnames"
 )
 
 // rootFields are the GraphQL root fields the engine generates for one table,
@@ -42,42 +43,6 @@ func functionField(key string) string {
 	return lowerCamel(schemaName) + pascal(name)
 }
 
-// lowerCamel is NamingUtils.toLowerCamelCase, quirks included: the first
-// letter is lowered even right after a leading underscore.
-func lowerCamel(name string) string {
-	var out strings.Builder
-	upperNext, first := false, true
-	for _, ch := range name {
-		switch {
-		case ch == '_':
-			upperNext = true
-		case first:
-			out.WriteRune(unicode.ToLower(ch))
-			first = false
-		case upperNext:
-			out.WriteRune(unicode.ToUpper(ch))
-			upperNext = false
-		default:
-			out.WriteRune(ch)
-		}
-	}
-	return out.String()
-}
+func lowerCamel(name string) string { return graphqlnames.LowerCamel(name) }
 
-// pascal is NamingUtils.capitalize.
-func pascal(name string) string {
-	var out strings.Builder
-	upperNext := true
-	for _, ch := range name {
-		switch {
-		case ch == '_':
-			upperNext = true
-		case upperNext:
-			out.WriteRune(unicode.ToUpper(ch))
-			upperNext = false
-		default:
-			out.WriteRune(ch)
-		}
-	}
-	return out.String()
-}
+func pascal(name string) string { return graphqlnames.Pascal(name) }

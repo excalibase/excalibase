@@ -10,6 +10,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 )
 
 // EXC-554: what shipped dark answers exactly as a route that was never
@@ -33,6 +34,75 @@ var darkRoutes = map[features.Feature][]darkProbe{
 	},
 	features.MySQL: {
 		{http.MethodGet, "/api/mysql/catalog"},
+	},
+	features.SlowQueries: {
+		{http.MethodGet, "/api/provision/" + matrixProjectA + "/slow-queries/"},
+		{http.MethodPost, "/api/provision/" + matrixProjectA + "/slow-queries/reset"},
+		{http.MethodPost, "/api/provision/" + matrixProjectA + "/slow-queries/enable"},
+	},
+	features.RequestMetrics: {
+		{http.MethodGet, "/api/provision/" + matrixProjectA + "/requests?range=1h"},
+	},
+	features.Advisors: {
+		{http.MethodGet, "/api/provision/" + matrixProjectA + "/advisors"},
+	},
+	features.MetricsEndpoint: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/metrics"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/metrics-keys"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/metrics-keys"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/metrics-keys/key-1"},
+	},
+	features.LogDrains: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/log-drains"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/log-drains"},
+		{http.MethodPatch, "/api/projects/" + matrixProjectA + "/log-drains/ld_1"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/log-drains/ld_1"},
+		{http.MethodPost, "/internal/log-forwarder/pull"},
+		{http.MethodPost, "/internal/log-forwarder/ack"},
+	},
+	features.AuthOAuth: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/auth-providers"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-providers/github"},
+	},
+	features.DBReadAddress: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/db-read-address/"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/db-read-address/"},
+	},
+	features.AuthGuest: {
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-settings/guest-captcha"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/auth-settings/guest-captcha"},
+	},
+	features.AuthHooks: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/auth-hooks"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-hooks/send_email"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/auth-hooks/secret"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/auth-hooks/secret"},
+	},
+	features.AuthMFA: {
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-settings/mfa"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/end-users/7/factors"},
+	},
+	features.DBAllowList: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/db-endpoint/allowed-sources"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/db-endpoint/allowed-sources"},
+	},
+	features.AuthUser: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/end-users/7"},
+		{http.MethodPatch, "/api/projects/" + matrixProjectA + "/end-users/7"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/end-users/7"},
+	},
+	features.HostMetrics: {
+		{http.MethodGet, "/api/admin/monitoring/host"},
+		{http.MethodPut, "/api/admin/monitoring/alert-settings"},
+		{http.MethodPost, "/api/admin/monitoring/alert-settings/test"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/containers/metrics"},
+	},
+	features.DBCopy: {
+		{http.MethodPost, "/api/provision/" + matrixProjectA + "/backup/copy"},
+	},
+	features.MajorUpgrade: {
+		{http.MethodGet, "/api/provision/" + matrixProjectA + "/major-upgrade"},
+		{http.MethodPost, "/api/provision/" + matrixProjectA + "/major-upgrade"},
 	},
 	features.AppStorage: {
 		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
@@ -64,14 +134,24 @@ func probeDark(router http.Handler, probe darkProbe, token string) *httptest.Res
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	// Probed on the internal listener, where every route is mounted.
+	custommw.MarkInternalListener(router).ServeHTTP(w, req)
 	return w
 }
 
-// darkWork is every feature that gates background work, not a route; its
-// wiring test proves the work does not start while it is off.
+// darkWork is every feature that gates background work or response fields,
+// not a route; its test proves nothing changes while it is off.
 var darkWork = map[features.Feature]string{
-	features.MySQLPITR: "TestMySQLBinlogShippingStartsOnlyWithItsFeature",
+	features.MySQLPITR:    "TestMySQLBinlogShippingStartsOnlyWithItsFeature",
+	features.LogRetention: "TestLogPlanSweepStartsOnlyWithItsFeature",
+	features.AuthOTP:      "TestAuthOTP_OffHidesTheSwitchEvenWithOAuthOn",
+	features.SitesServer:  "TestSites_ServerKindAnswersAsUnmountedWhileOff",
+	// The catalog's templates answer as unknown ids while it is off (internal/service).
+	features.TemplateCatalog: "TestTemplateCatalog_OffIsInvisible",
+	features.HostLogs:        "TestHostLogShippingStartsOnlyWithItsFeature",
+	// Off, a single host keeps answering that it builds nothing (ModeSingleHost).
+	features.SingleHostBuilds: "TestSiteBuildMode",
+	features.LogDeletion:      "TestLogDeletionStartsOnlyWithItsFeature",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {
@@ -162,5 +242,20 @@ func TestImageWatcher_RunsOnlyWithThePipelineOn(t *testing.T) {
 		if got := imageWatcherWanted(t.Context(), tc.cfg, tc.flags); got != tc.want {
 			t.Errorf("hosting=%v flags=%v: watcher wanted=%v, want %v", tc.cfg.AppHostingEnabled, tc.flags, got, tc.want)
 		}
+	}
+}
+
+// EXC-662: either sign-in flag makes the redirect list an Admin's to write.
+func TestAuthSettingsWritesNeedAnAdminWhileAnySignInFlagIsOn(t *testing.T) {
+	put := darkProbe{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-settings"}
+	for _, on := range [][]features.Feature{{features.AuthOAuth}, {features.AuthOTP}} {
+		router, developer := darkFeatureRouter(t, on...)
+		if w := probeDark(router, put, developer); w.Code != http.StatusForbidden {
+			t.Errorf("%v on: a Developer's write answered %d", on, w.Code)
+		}
+	}
+	router, developer := darkFeatureRouter(t)
+	if w := probeDark(router, put, developer); w.Code == http.StatusForbidden {
+		t.Errorf("both off: a Developer's write was refused (%s)", w.Body.String())
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 // A restore is driven by a goroutine in one process. When that process dies,
@@ -93,7 +94,7 @@ func TestBootSweepIsTheOwnershipSweep(t *testing.T) {
 }
 
 func TestSweepReportsStoreFailure(t *testing.T) {
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: failingJobStore{}})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Slots: &fixedSlots{}, Jobs: failingJobStore{}})
 	if err := orch.SweepAbandoned(context.Background()); err == nil {
 		t.Fatal("a store that cannot be swept must be reported, not swallowed")
 	}
@@ -104,7 +105,9 @@ type failingJobStore struct{}
 
 func (failingJobStore) UpsertRestoreJob(context.Context, *domain.RestoreJob) error { return nil }
 
-func (failingJobStore) StartRestoreJob(context.Context, *domain.RestoreJob) error { return nil }
+func (failingJobStore) StartRestoreJob(context.Context, *domain.RestoreJob, storage.ProjectSlot) error {
+	return nil
+}
 
 func (failingJobStore) FindRestoreJob(context.Context, string, string) (*domain.RestoreJob, error) {
 	return nil, ErrRestoreJobNotFound

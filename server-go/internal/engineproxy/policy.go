@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -51,6 +52,9 @@ type Policy struct {
 	// only CDCImages, digest-pinned, may join it (cdc_network.go).
 	CDCNetwork string
 	CDCImages  []string
+	// StatsContainers are the platform's own containers, by exact name, whose
+	// stats and state host monitoring reads (stats.go).
+	StatsContainers []string
 }
 
 // ErrRefused wraps every policy refusal.
@@ -95,14 +99,43 @@ var hostConfigFields = map[string]hostConfigCheck{
 	"LogConfig":         checkLogConfig,
 	"IpcMode":           privateOnly("IpcMode", "private", "none", "shareable"),
 	"CgroupnsMode":      privateOnly("CgroupnsMode", "private"),
+	"DnsSearch":         exactly("DnsSearch", AppServiceDomain),
+	"DnsOptions":        exactly("DnsOptions", "ndots:1"),
 }
 
 func allow(Policy, any) error { return nil }
 
-// CheckCreate decides whether a POST /containers/create may reach the engine.
-func (p Policy) CheckCreate(name string, body []byte) error {
+// CheckName decides whether a container may carry name.
+func (p Policy) CheckName(name string) error {
 	if !strings.HasPrefix(name, p.ContainerPrefix) || name == p.ContainerPrefix {
 		return refuse("container name %q must start with %q", name, p.ContainerPrefix)
+	}
+	if p.monitoredPlatform(name) {
+		return refuse("container name %q is a platform container's", name)
+	}
+	return nil
+}
+
+// renameSuffix is what a rename may give a container after the prefix: a
+// project's database container or the one a major upgrade sets aside
+// (EXC-668). No platform service is named like either.
+var renameSuffix = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*-postgres(-pre-upgrade-[a-z0-9-]+)?$`)
+
+// CheckRename decides whether a managed container may be renamed to name.
+func (p Policy) CheckRename(name string) error {
+	if err := p.CheckName(name); err != nil {
+		return err
+	}
+	if !renameSuffix.MatchString(strings.TrimPrefix(name, p.ContainerPrefix)) {
+		return refuse("a container may be renamed only to a project database's name, not %q", name)
+	}
+	return nil
+}
+
+// CheckCreate decides whether a POST /containers/create may reach the engine.
+func (p Policy) CheckCreate(name string, body []byte) error {
+	if err := p.CheckName(name); err != nil {
+		return err
 	}
 	var create struct {
 		Image            string
@@ -115,6 +148,13 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 	}
 	if err := json.Unmarshal(body, &create); err != nil {
 		return refuse("container create body: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return refuse("container create body: %v", err)
+	}
+	if err := checkCreateSpelling(fields); err != nil {
+		return err
 	}
 	if create.Labels[p.ManagedLabel] != "true" {
 		return refuse("container must carry the label %s=true", p.ManagedLabel)
@@ -137,7 +177,7 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 		if !p.networkAllowed(network) && !p.cdcNetworkAdmitted(network, create.Image) {
 			return refuse("network %q is not one containers may join", network)
 		}
-		if err := checkEndpoint(network, endpoint); err != nil {
+		if err := p.checkEndpoint(network, endpoint, create.HostConfig, len(create.NetworkingConfig.EndpointsConfig)); err != nil {
 			return err
 		}
 	}
@@ -145,16 +185,33 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 }
 
 // checkEndpoint refuses aliases, fixed addresses and the like: on a shared
-// network an alias or a taken address answers for a platform service.
-func checkEndpoint(network string, raw json.RawMessage) error {
+// network an alias or a taken address answers for a platform service. On a
+// project network an app may carry its one service name (checkServiceAlias).
+// The name is admitted only on the one network the container runs on.
+func (p Policy) checkEndpoint(network string, raw json.RawMessage, hostConfig map[string]any, endpoints int) error {
 	var endpoint any
 	if err := json.Unmarshal(raw, &endpoint); err != nil {
 		return refuse("endpoint on %q: %v", network, err)
 	}
-	if !isZero(endpoint) {
-		return refuse("endpoint settings on %q may not be set (aliases, addresses, links)", network)
+	if isZero(endpoint) {
+		return nil
 	}
-	return nil
+	mode, _ := hostConfig["NetworkMode"].(string)
+	if endpoints == 1 && mode == network && p.underNetworkPrefix(network) && p.checkServiceAlias(endpoint) == nil {
+		return nil
+	}
+	return refuse("endpoint settings on %q may not be set (aliases, addresses, links)", network)
+}
+
+// exactly admits a list holding only the one value given.
+func exactly(field, want string) hostConfigCheck {
+	return func(_ Policy, value any) error {
+		list, _ := value.([]any)
+		if len(list) == 1 && list[0] == want {
+			return nil
+		}
+		return refuse("HostConfig.%s may only be [%s]", field, want)
+	}
 }
 
 // unmaskingFields are refused whenever present: an empty list there is not
@@ -165,7 +222,7 @@ func (p Policy) checkHostConfigField(field string, value any) error {
 	if value != nil && slices.Contains(unmaskingFields, field) {
 		return refuse("HostConfig.%s may not be set", field)
 	}
-	if isZero(value) {
+	if isUnset(value) {
 		return nil
 	}
 	check, known := hostConfigFields[field]
@@ -177,11 +234,11 @@ func (p Policy) checkHostConfigField(field string, value any) error {
 
 // CheckExecCreate refuses an exec that asks for extended privileges.
 func CheckExecCreate(body []byte) error {
-	var exec struct{ Privileged bool }
-	if err := json.Unmarshal(body, &exec); err != nil {
-		return refuse("exec create body: %v", err)
+	exec, err := decodeSpelled("exec create", body, execNames...)
+	if err != nil {
+		return err
 	}
-	if exec.Privileged {
+	if !isZero(exec["Privileged"]) {
 		return refuse("exec may not be Privileged")
 	}
 	return nil
@@ -202,18 +259,52 @@ func checkNetworkMode(p Policy, value any) error {
 	return refuse("network mode %q is not one containers may use", mode)
 }
 
-// addableCapabilities: an app that drops ALL may still bind ports below 1024.
-var addableCapabilities = []string{"NET_BIND_SERVICE", "CAP_NET_BIND_SERVICE"}
+// addableCapabilities: an app that drops ALL may still bind ports below 1024 and
+// step down from root to its image's user; all are in Docker's default set.
+var addableCapabilities = []string{"NET_BIND_SERVICE", "CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"}
+
+// capabilityName is ASCII only, so the proxy never leans on the engine's case folding.
+var capabilityName = regexp.MustCompile(`^[A-Za-z_]+$`)
 
 func checkCapAdd(_ Policy, value any) error {
-	capabilities, _ := value.([]any)
-	for _, entry := range capabilities {
-		capability, _ := entry.(string)
-		if !slices.Contains(addableCapabilities, strings.ToUpper(capability)) {
+	capabilities, err := stringList("CapAdd", value)
+	if err != nil {
+		return err
+	}
+	for _, capability := range capabilities {
+		if !capabilityName.MatchString(capability) ||
+			!slices.Contains(addableCapabilities, strings.TrimPrefix(strings.ToUpper(capability), "CAP_")) {
 			return refuse("HostConfig.CapAdd %q is not allowed", capability)
 		}
 	}
 	return nil
+}
+
+// list reads a field that must be a JSON array: Docker reads some (CapAdd,
+// CapDrop) from a bare string too, which a check of the array alone would miss.
+func list(field string, value any) ([]any, error) {
+	entries, ok := value.([]any)
+	if !ok {
+		return nil, refuse("HostConfig.%s must be a list", field)
+	}
+	return entries, nil
+}
+
+// stringList is list with every entry a string.
+func stringList(field string, value any) ([]string, error) {
+	entries, err := list(field, value)
+	if err != nil {
+		return nil, err
+	}
+	values := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		text, ok := entry.(string)
+		if !ok {
+			return nil, refuse("HostConfig.%s entry %v is not text", field, entry)
+		}
+		values = append(values, text)
+	}
+	return values, nil
 }
 
 func checkRuntime(p Policy, value any) error {
@@ -233,6 +324,9 @@ func checkPortBindings(p Policy, value any) error {
 		entries, _ := list.([]any)
 		for _, entry := range entries {
 			binding, _ := entry.(map[string]any)
+			if err := onlyFields("port binding", binding, "HostIp", "HostPort"); err != nil {
+				return err
+			}
 			hostIP, _ := binding["HostIp"].(string)
 			if !slices.Contains(p.PortBindIPs, hostIP) {
 				return refuse("port %s may not be published on %q", port, hostIP)
@@ -248,9 +342,11 @@ func checkPortBindings(p Policy, value any) error {
 // checkBinds admits the policy's named volumes only: a source with a path
 // separator or a leading dot is a host path.
 func checkBinds(p Policy, value any) error {
-	binds, _ := value.([]any)
-	for _, entry := range binds {
-		bind, _ := entry.(string)
+	binds, err := stringList("Binds", value)
+	if err != nil {
+		return err
+	}
+	for _, bind := range binds {
 		source, _, _ := strings.Cut(bind, ":")
 		if source == "" || strings.ContainsAny(source, `/\`) || strings.HasPrefix(source, ".") {
 			return refuse("bind %q is a host path; only named volumes may be mounted", bind)
@@ -271,16 +367,19 @@ func (p Policy) checkVolumeName(name string) error {
 }
 
 func checkMounts(p Policy, value any) error {
-	mounts, _ := value.([]any)
+	mounts, err := list("Mounts", value)
+	if err != nil {
+		return err
+	}
 	for _, entry := range mounts {
 		mount, _ := entry.(map[string]any)
+		if err := checkMountFields(mount); err != nil {
+			return err
+		}
 		kind, _ := mount["Type"].(string)
 		switch kind {
 		case "tmpfs":
 		case "volume":
-			if options, _ := mount["VolumeOptions"].(map[string]any); !isZero(options["DriverConfig"]) {
-				return refuse("mount of %v sets a volume driver; only plain named volumes may be mounted", mount["Source"])
-			}
 			if source, _ := mount["Source"].(string); source != "" {
 				if err := p.checkVolumeName(source); err != nil {
 					return err
@@ -293,11 +392,32 @@ func checkMounts(p Policy, value any) error {
 	return nil
 }
 
+// mountFields are what a named volume or tmpfs mount may set; bind, image and cluster options
+// may not, and a volume driver may not be named.
+var mountFields = []string{"Type", "Source", "Target", "ReadOnly", "Consistency", "VolumeOptions", "TmpfsOptions"}
+
+func checkMountFields(mount map[string]any) error {
+	if err := onlyFields("mount", mount, mountFields...); err != nil {
+		return err
+	}
+	volume, _ := mount["VolumeOptions"].(map[string]any)
+	if !isZero(volume["DriverConfig"]) {
+		return refuse("mount of %v sets a volume driver; only plain named volumes may be mounted", mount["Source"])
+	}
+	if err := onlyFields("mount VolumeOptions", volume, "NoCopy", "Labels"); err != nil {
+		return err
+	}
+	tmpfs, _ := mount["TmpfsOptions"].(map[string]any)
+	return onlyFields("mount TmpfsOptions", tmpfs, "SizeBytes", "Mode")
+}
+
 // checkSecurityOpt admits options that only tighten the container.
 func checkSecurityOpt(_ Policy, value any) error {
-	options, _ := value.([]any)
-	for _, entry := range options {
-		option, _ := entry.(string)
+	options, err := stringList("SecurityOpt", value)
+	if err != nil {
+		return err
+	}
+	for _, option := range options {
 		if option != "no-new-privileges" && option != "no-new-privileges:true" && option != "no-new-privileges=true" {
 			return refuse("HostConfig.SecurityOpt %q is not allowed", option)
 		}
@@ -307,6 +427,9 @@ func checkSecurityOpt(_ Policy, value any) error {
 
 func checkLogConfig(_ Policy, value any) error {
 	config, _ := value.(map[string]any)
+	if err := onlyFields("HostConfig.LogConfig", config, "Type", "Config"); err != nil {
+		return err
+	}
 	kind, _ := config["Type"].(string)
 	if kind == "" || kind == "json-file" || kind == "local" || kind == "k8s-file" || kind == "journald" {
 		return nil
@@ -322,6 +445,15 @@ func privateOnly(field string, modes ...string) hostConfigCheck {
 		}
 		return refuse("HostConfig.%s %q is not allowed", field, mode)
 	}
+}
+
+// isUnset is isZero for a field the proxy does not admit: a map with any key is set there,
+// as the engine reads Sysctls {"k": ""} as one sysctl.
+func isUnset(value any) bool {
+	if object, isObject := value.(map[string]any); isObject && len(object) > 0 {
+		return false
+	}
+	return isZero(value)
 }
 
 // isZero reports a JSON value the engine treats as unset.

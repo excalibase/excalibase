@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -14,7 +15,7 @@ const maxTypedTables = 200
 
 type schemaArgs struct {
 	projectArg
-	Schema string `json:"schema,omitempty" jsonschema:"the database schema; public when left out"`
+	Schema string `json:"schema,omitempty" jsonschema:"the database schema; when left out, public on Postgres and the project's database on MySQL"`
 }
 
 type tableArgs struct {
@@ -29,6 +30,27 @@ func (a schemaArgs) schemaName() string {
 	return a.Schema
 }
 
+// resolve fills in the schema a call left out: public on Postgres, the one
+// database on a MySQL project, whose tables the engine names after it
+// (EXC-649). It returns the project's engine too.
+func (a schemaArgs) resolve(ctx context.Context, c *call, projectID string) (schemaArgs, string, error) {
+	engine, database, err := projectEngineAndDatabase(ctx, c, projectID)
+	if err != nil {
+		return a, "", err
+	}
+	if a.Schema != "" {
+		return a, engine, nil
+	}
+	a.Schema = "public"
+	if engine == engineMySQL {
+		if database == "" {
+			return a, "", errors.New("the project's MySQL database has no name yet; is it still provisioning?")
+		}
+		a.Schema = database
+	}
+	return a, engine, nil
+}
+
 func (a schemaArgs) query() url.Values {
 	return url.Values{"schema": {a.schemaName()}}
 }
@@ -38,7 +60,7 @@ func schemaTools() []entry {
 		tool("list_tables", "List the tables and views in a schema of the project's database.", readTool, listTables),
 		tool("describe_table", "Columns, indexes, CHECK constraints and foreign keys of one table.", readTool, describeTable),
 		tool("get_graphql_schema",
-			"What the project's GraphQL and REST APIs are generated from: the endpoint, every table with its columns, foreign keys, "+
+			"What the project's GraphQL and REST APIs are generated from: the endpoint, every table with its columns, foreign keys, relationship field names, "+
 				"its exact GraphQL root field names (query, connection, aggregate, mutations, subscription ...Changes), REST path and realtime state. "+
 				"The engine builds the GraphQL schema per role from these tables and the project's permissions; the returned introspection command fetches the exact schema a role sees.",
 			readTool, getGraphQLSchema),
@@ -51,6 +73,9 @@ func schemaTools() []entry {
 func listTables(ctx context.Context, c *call, in schemaArgs) (any, error) {
 	projectID, err := c.useProject(in.ProjectID)
 	if err != nil {
+		return nil, err
+	}
+	if in, _, err = in.resolve(ctx, c, projectID); err != nil {
 		return nil, err
 	}
 	var tables []schema.TableInfo
@@ -67,6 +92,9 @@ func describeTable(ctx context.Context, c *call, in tableArgs) (any, error) {
 	}
 	table, err := segment("table", in.Table)
 	if err != nil {
+		return nil, err
+	}
+	if in.schemaArgs, _, err = in.schemaArgs.resolve(ctx, c, projectID); err != nil {
 		return nil, err
 	}
 	base := schemaAPI + projectID
@@ -119,12 +147,14 @@ type tableColumns struct {
 // changes are published to subscriptions.
 type schemaTable struct {
 	tableColumns
-	GraphQL  rootFields `json:"graphql"`
-	REST     string     `json:"rest"`
-	Realtime *bool      `json:"realtime,omitempty"`
+	GraphQL       rootFields          `json:"graphql"`
+	Relationships []relationshipField `json:"relationships"`
+	REST          string              `json:"rest"`
+	Realtime      *bool               `json:"realtime,omitempty"`
 }
 
-const namingRule = "Root fields are the engine's names for the schema-qualified table: lowerCamel(schema) + PascalCase(table), " +
+const namingRule = "Each table's relationships are the nested fields its foreign keys add (field is the name for queries and permission filters; deprecatedName still answers). " +
+	"Root fields are the engine's names for the schema-qualified table: lowerCamel(schema) + PascalCase(table), " +
 	"e.g. public.kanban_cards → publicKanbanCards (list), publicKanbanCardsConnection, publicKanbanCardsAggregate, " +
 	"createPublicKanbanCards, createManyPublicKanbanCards (inputs), updatePublicKanbanCards (where, input), deletePublicKanbanCards (where), " +
 	"and the subscription publicKanbanCardsChanges. A role sees only the fields its permissions allow: the connection needs the primary key, " +
@@ -147,13 +177,18 @@ func realtimeTables(ctx context.Context, c *call, projectID string) map[string]b
 	return enabled
 }
 
-func describeSchemaTables(schemaName, restBase string, tables []tableColumns, realtime map[string]bool) []schemaTable {
+func describeSchemaTables(schemaName, restBase string, tables []tableColumns, keys []schema.RelationshipInfo, realtime map[string]bool) []schemaTable {
+	relationships := relationshipFields(schemaName, tables, keys)
 	out := make([]schemaTable, 0, len(tables))
 	for _, table := range tables {
 		entry := schemaTable{
-			tableColumns: table,
-			GraphQL:      graphQLFields(schemaName, table.Name, strings.EqualFold(table.Type, "VIEW")),
-			REST:         restBase + "/" + table.Name,
+			tableColumns:  table,
+			GraphQL:       graphQLFields(schemaName, table.Name, strings.EqualFold(table.Type, "VIEW")),
+			Relationships: relationships[table.Name],
+			REST:          restBase + "/" + table.Name,
+		}
+		if entry.Relationships == nil {
+			entry.Relationships = []relationshipField{}
 		}
 		if realtime != nil {
 			enabled := realtime[schemaName+"."+table.Name]
@@ -198,6 +233,9 @@ func getGraphQLSchema(ctx context.Context, c *call, in schemaArgs) (any, error) 
 	if err != nil {
 		return nil, err
 	}
+	if in, _, err = in.resolve(ctx, c, projectID); err != nil {
+		return nil, err
+	}
 	var relationships []schema.RelationshipInfo
 	tables, err := readTables(ctx, c, projectID, in, func() error {
 		return c.get(ctx, schemaAPI+projectID+"/relationships", in.query(), &relationships)
@@ -210,7 +248,7 @@ func getGraphQLSchema(ctx context.Context, c *call, in schemaArgs) (any, error) 
 	restBase := base + "/" + projectID + "/api/v1"
 	return map[string]any{
 		"endpoint": endpoint, "schema": in.schemaName(), "foreignKeys": relationships,
-		"tables":   describeSchemaTables(in.schemaName(), restBase, tables, realtimeTables(ctx, c, projectID)),
+		"tables":   describeSchemaTables(in.schemaName(), restBase, tables, relationships, realtimeTables(ctx, c, projectID)),
 		"naming":   namingRule,
 		"realtime": realtimeGuide(endpoint),
 		"roles": "Each role sees only the tables, columns and functions it has a permission for (list_permissions); " +
@@ -226,7 +264,7 @@ func generateTypeScriptTypes(ctx context.Context, c *call, in schemaArgs) (any, 
 	if err != nil {
 		return nil, err
 	}
-	engine, err := projectEngine(ctx, c, projectID)
+	in, engine, err := in.resolve(ctx, c, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -234,12 +272,7 @@ func generateTypeScriptTypes(ctx context.Context, c *call, in schemaArgs) (any, 
 	if err != nil {
 		return nil, err
 	}
-	schemaName := in.schemaName()
-	if engine == engineMySQL && len(tables) > 0 {
-		// A MySQL project's tables live in its one database, named by the routes.
-		schemaName = tables[0].Schema
-	}
 	return map[string]any{
-		"path": "src/database.types.ts", "typescript": typeScriptForEngine(schemaName, tables, engine), "tables": len(tables),
+		"path": "src/database.types.ts", "typescript": typeScriptForEngine(in.schemaName(), tables, engine), "tables": len(tables),
 	}, nil
 }

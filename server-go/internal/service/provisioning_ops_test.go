@@ -93,18 +93,6 @@ func TestGetMaintenanceWindowNotFound(t *testing.T) {
 	}
 }
 
-func TestGetLogs(t *testing.T) {
-	svc, _, _ := setupOpsTest(t)
-
-	logs, err := svc.GetLogs(context.Background(), testOpsDB, 50)
-	if err != nil {
-		t.Fatalf("GetLogs: %v", err)
-	}
-	if logs == "" {
-		t.Error("logs should not be empty")
-	}
-}
-
 func TestGetLogsNotFound(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 	_, err := svc.GetLogs(context.Background(), "nope", 50)

@@ -11,6 +11,7 @@
 //	PROXY_EDGE_CONTAINER  the edge, the one unmanaged container that may join project networks (optional)
 //	PROXY_NETNS_JOIN_IMAGES digest-pinned images that may join a managed
 //	                      container's network namespace (optional; the DocumentDB gateway)
+//	PROXY_STATS_CONTAINERS platform containers, by exact name, host monitoring reads stats and state of (optional)
 package main
 
 import (
@@ -99,6 +100,12 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	monitored := splitList(getenv("PROXY_STATS_CONTAINERS"))
+	for _, name := range monitored {
+		if !containerName.MatchString(name) {
+			return config{}, fmt.Errorf("PROXY_STATS_CONTAINERS %q is not a container name", name)
+		}
+	}
 	hostPorts, err := hostPortRange(getenv("PROXY_HOST_PORTS"))
 	if err != nil {
 		return config{}, err
@@ -124,6 +131,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 			NetnsJoinImages: joinImages,
 			CDCNetwork:      cdcNetwork,
 			CDCImages:       cdcImages,
+			StatsContainers: monitored,
 		},
 	}, nil
 }

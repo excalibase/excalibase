@@ -28,7 +28,7 @@ type migrationArgs struct {
 
 type permissionArgs struct {
 	projectArg
-	Table      string         `json:"table" jsonschema:"schema-qualified table, e.g. public.orders"`
+	Table      string         `json:"table" jsonschema:"schema-qualified table, e.g. public.orders; on a MySQL project the schema is its database, e.g. app.orders"`
 	Role       string         `json:"role" jsonschema:"the API role, e.g. anon, user or a custom role"`
 	Operation  string         `json:"operation" jsonschema:"select, insert, update or delete"`
 	Permission map[string]any `json:"permission,omitempty" jsonschema:"the permission in Hasura's shape: select {filter, columns, limit, allowAggregations}; insert {check, columns, set}; update {filter, check, columns, set}; delete {filter}"`
@@ -46,7 +46,9 @@ func databaseTools() []entry {
 		tool("apply_migration", "Apply a SQL migration to the project's database and record it in the migration history.", writeTool, applyMigration),
 		tool("list_permissions", "The project's API permissions: which role may select, insert, update or delete which rows and columns of each table, and which functions are tracked.", readTool, listPermissions),
 		tool("set_permission", "Set or remove one API permission for a (table, role, operation). A table a role has no permission for is hidden from that role. "+
-			"A page's anon role needs select with every column the page reads. "+countNeedsAggregations, writeTool, setPermission),
+			"A page's anon role needs select with every column the page reads. "+
+			"The table, its columns and the relationship names in a filter are checked against the live schema (get_graphql_schema lists them); "+
+			"a name the database does not have is refused with the engine's permission_invalid reason. "+countNeedsAggregations, writeTool, setPermission),
 	}
 }
 
@@ -179,14 +181,18 @@ func droppedTables(ctx context.Context, c *call, projectID string, document json
 
 func tableNames(ctx context.Context, c *call, projectID, schemaName string) map[string]bool {
 	var tables []struct {
-		Name string `json:"name"`
+		Name   string `json:"name"`
+		Schema string `json:"schema"`
 	}
 	if err := c.get(ctx, schemaAPI+projectID+"/tables", url.Values{"schema": {schemaName}}, &tables); err != nil {
 		return nil
 	}
 	names := make(map[string]bool, len(tables))
 	for _, table := range tables {
-		names[table.Name] = true
+		// A MySQL project answers public with its database's tables.
+		if table.Schema == "" || table.Schema == schemaName {
+			names[table.Name] = true
+		}
 	}
 	return names
 }

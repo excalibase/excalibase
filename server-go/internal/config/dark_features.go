@@ -9,12 +9,35 @@ import (
 // featureEnv names the variable that turns each dark feature on (EXC-554);
 // the chart sets it from features.<name>.
 var featureEnv = map[features.Feature]string{
-	features.MCP:        "FEATURE_MCP",
-	features.Pipeline:   "FEATURE_PIPELINE",
-	features.AppStorage: "FEATURE_APPSTORAGE",
-	features.MySQL:      "FEATURE_MYSQL",
-	features.MySQLPITR:  "FEATURE_MYSQLPITR",
-	features.S3:         "FEATURE_S3",
+	features.MCP:             "FEATURE_MCP",
+	features.Pipeline:        "FEATURE_PIPELINE",
+	features.AppStorage:      "FEATURE_APPSTORAGE",
+	features.MySQL:           "FEATURE_MYSQL",
+	features.MySQLPITR:       "FEATURE_MYSQLPITR",
+	features.SlowQueries:     "FEATURE_SLOWQUERIES",
+	features.RequestMetrics:  "FEATURE_REQUESTMETRICS",
+	features.Advisors:        "FEATURE_ADVISORS",
+	features.MetricsEndpoint: "FEATURE_METRICSENDPOINT",
+	features.LogRetention:    "FEATURE_LOGRETENTION",
+	features.LogDrains:       "FEATURE_LOGDRAINS",
+	features.AuthOAuth:       "FEATURE_AUTHOAUTH",
+	features.AuthOTP:         "FEATURE_AUTHOTP",
+	features.AuthUser:        "FEATURE_AUTHUSER",
+	features.AuthGuest:       "FEATURE_AUTHGUEST",
+	features.AuthMFA:         "FEATURE_AUTHMFA",
+	features.HostMetrics:     "FEATURE_HOSTMETRICS",
+	features.SitesServer:     "FEATURE_SITESSERVER",
+	features.AuthHooks:       "FEATURE_AUTHHOOKS",
+	features.DBAllowList:     "FEATURE_DBALLOWLIST",
+	features.DBReadAddress:   "FEATURE_DBREADADDRESS",
+	features.DBCopy:          "FEATURE_DBCOPY",
+	features.MajorUpgrade:    "FEATURE_MAJORUPGRADE",
+	features.TemplateCatalog: "FEATURE_TEMPLATECATALOG",
+	features.HostLogs:        "FEATURE_HOSTLOGS",
+	// Single-host only (the compose file); Kubernetes builds do not read it.
+	features.SingleHostBuilds: "FEATURE_SINGLEHOSTBUILDS",
+	features.LogDeletion:      "FEATURE_LOGDELETION",
+	features.S3:               "FEATURE_S3",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.
@@ -29,6 +52,14 @@ func loadDarkFeatures() []features.Feature {
 }
 
 // Features is the flags feature code asks; nothing else reads DarkFeatures.
+// Host monitoring and host logs read a Docker or Podman host, so they are off
+// on Kubernetes, which keeps logs in the chart's Loki.
 func (c AppConfig) Features() features.Flags {
-	return features.NewStatic(c.DarkFeatures...)
+	on := make([]features.Feature, 0, len(c.DarkFeatures))
+	for _, feature := range c.DarkFeatures {
+		if (feature != features.HostMetrics && feature != features.HostLogs) || c.ProvisionerMode == "docker" {
+			on = append(on, feature)
+		}
+	}
+	return features.NewStatic(on...)
 }

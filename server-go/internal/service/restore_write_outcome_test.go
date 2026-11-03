@@ -56,7 +56,8 @@ func instantAfter(time.Duration) <-chan time.Time {
 
 func flakyOrchestrator(jobs *flakyJobs, clock *movableClock) *RestoreOrchestrator {
 	return NewRestoreOrchestrator(RestoreOrchestratorConfig{
-		Jobs: jobs, InstanceID: "replica-a", Now: clock.now, After: instantAfter,
+		Slots: &fixedSlots{},
+		Jobs:  jobs, InstanceID: "replica-a", Now: clock.now, After: instantAfter,
 	})
 }
 
@@ -225,7 +226,8 @@ func TestAHeartbeatErrorDoesNotStopTheRun(t *testing.T) {
 	jobs.beatErrs = 2
 	jobs.beats = make(chan struct{}, 8)
 	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{
-		Jobs: jobs, InstanceID: "replica-a", Now: clock.now, Heartbeat: time.Millisecond,
+		Slots: &fixedSlots{},
+		Jobs:  jobs, InstanceID: "replica-a", Now: clock.now, Heartbeat: time.Millisecond,
 	})
 	release := make(chan struct{})
 	started := make(chan struct{})

@@ -12,8 +12,11 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -66,40 +69,223 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 // ErrLogsUnavailable is a log backend that did not answer.
 var ErrLogsUnavailable = errors.New("the database's logs are not available right now")
 
+var errLogsOnSingleHost = fmt.Errorf("%w: the log search reads Kubernetes pod logs; this installation runs its databases on a single host", ErrLogsUnavailable)
+
 // maxLokiAnswer bounds one Loki reply: 5000 lines with their labels.
 const maxLokiAnswer = 32 << 20
 
-// GetLogs returns the last N lines of the project's postgres pod log.
-// Prefers Loki when configured (sees logs across pod restarts, doesn't hang
-// on busy minikube apiservers); falls back to kubectl-exec tail in dev/test
-// environments without Loki.
+// ErrInvalidLogSearch is a search term the log read cannot use.
+var ErrInvalidLogSearch = errors.New("the log search term must be printable text of at most 200 characters")
+
+// maxLogSearchTerm bounds the Logs page's search term.
+const maxLogSearchTerm = 200
+
+// defaultLogSearchWindow is how far back stored logs are read when no range is asked.
+const defaultLogSearchWindow = time.Hour
+
+// LogSearch narrows a read of a project's database log.
+type LogSearch struct {
+	Lines int
+	// Term is matched literally and case-insensitively; empty keeps every line.
+	Term string
+	// Since is how far back Loki is searched; zero is an hour. The live pod log
+	// has only what the pod printed since it started.
+	Since time.Duration
+}
+
+// LogPage is one search's lines and, with retention per plan on, how long
+// the project's logs are kept (zero otherwise).
+type LogPage struct {
+	Lines   string
+	KeptFor time.Duration
+}
+
+// GetLogs returns the last N lines of the project's database pod log.
 func (s *ProvisioningService) GetLogs(ctx context.Context, projectID string, lines int) (string, error) {
+	return s.SearchLogs(ctx, projectID, LogSearch{Lines: lines})
+}
+
+// SearchLogs returns the last matching lines of the project's database log.
+func (s *ProvisioningService) SearchLogs(ctx context.Context, projectID string, search LogSearch) (string, error) {
+	page, err := s.SearchProjectLogs(ctx, projectID, search)
+	return page.Lines, err
+}
+
+// SearchProjectLogs returns the last matching lines of the project's database log.
+// Prefers Loki when configured (it keeps logs across pod restarts) and reads
+// the pod's log through the Kubernetes API when Loki is unset or does not answer.
+// Either way only the project's own namespace is read, and no further back
+// than the project's plan keeps logs.
+func (s *ProvisioningService) SearchProjectLogs(ctx context.Context, projectID string, search LogSearch) (LogPage, error) {
+	if err := validateLogSearchTerm(search.Term); err != nil {
+		return LogPage{}, err
+	}
 	inst, err := s.GetInstance(projectID)
+	if err != nil {
+		return LogPage{}, err
+	}
+	if s.k8sClient == nil || inst.DeploymentMode == domain.ModeDocker {
+		return s.searchSingleHostLogs(ctx, inst, search)
+	}
+	page := LogPage{KeptFor: s.logsKeptFor(ctx, inst)}
+	if page.KeptFor > 0 && search.Since > page.KeptFor {
+		search.Since = page.KeptFor
+	}
+
+	lokiAnswered := false
+	if s.lokiURL != "" {
+		out, err := s.getLogsFromLoki(ctx, s.lokiURL, databaseLogSelector(inst), projectID, search)
+		if err == nil && out != "" {
+			page.Lines = out
+			return page, nil
+		}
+		// No lines yet (a pod the collector has not shipped) or no answer: the live pod log.
+		lokiAnswered = err == nil
+	}
+
+	out, err := s.primaryPodLog(ctx, inst, int64(clampLogLines(search.Lines)))
+	if err != nil {
+		log.Printf("logs of %s: pod log: %v", projectID, err)
+		if lokiAnswered {
+			return page, nil
+		}
+		return LogPage{}, ErrLogsUnavailable
+	}
+	page.Lines = filterLogLines(out, search.Term)
+	return page, nil
+}
+
+// SingleHostLogs is the engine's log of one container.
+type SingleHostLogs interface {
+	Logs(ctx context.Context, container string, tail int, since time.Time) (string, error)
+}
+
+// SetSingleHostLogs lets a single host search its database containers' logs.
+func (s *ProvisioningService) SetSingleHostLogs(logs SingleHostLogs) { s.singleHostLogs = logs }
+
+// searchSingleHostLogs reads what the engine kept of the database container's
+// output since it was created; the container is the project's own, by id.
+func (s *ProvisioningService) searchSingleHostLogs(ctx context.Context, inst *domain.DatabaseInstance, search LogSearch) (LogPage, error) {
+	if (s.singleHostLogs == nil && s.hostLogStore == "") || inst.DeploymentMode != domain.ModeDocker || inst.Namespace == "" {
+		return LogPage{}, errLogsOnSingleHost
+	}
+	if s.hostLogStore != "" {
+		return s.searchHostLogStore(ctx, inst, search)
+	}
+	return s.readEngineLog(ctx, inst, search)
+}
+
+// readEngineLog is what the engine kept of the database container's output.
+func (s *ProvisioningService) readEngineLog(ctx context.Context, inst *domain.DatabaseInstance, search LogSearch) (LogPage, error) {
+	if s.singleHostLogs == nil {
+		return LogPage{}, ErrLogsUnavailable
+	}
+	var since time.Time
+	if search.Since > 0 {
+		since = time.Now().Add(-search.Since)
+	}
+	out, err := s.singleHostLogs.Logs(ctx, inst.Namespace, clampLogLines(search.Lines), since)
+	if err != nil {
+		log.Printf("logs of %s: engine log: %v", inst.ProjectID, err)
+		return LogPage{}, ErrLogsUnavailable
+	}
+	return LogPage{Lines: filterLogLines(out, search.Term)}, nil
+}
+
+// primaryPodLog is the live log of the database container on the primary.
+// Never a command on /controller/log/postgres.csv: CNPG's collector reads that pipe.
+func (s *ProvisioningService) primaryPodLog(ctx context.Context, inst *domain.DatabaseInstance, lines int64) (string, error) {
+	if inst.DBType != domain.MySQL {
+		return s.k8sClient.PodLogTail(ctx, inst.Namespace, inst.ProjectID+primaryPodSuffix, "postgres", lines)
+	}
+	// MOCO moves the primary on failover; its cluster status names the current one.
+	cluster, err := s.k8sClient.GetCRD(ctx, k8s.MOCOClusterGVR, inst.Namespace, k8s.MySQLClusterName(inst.ProjectID))
 	if err != nil {
 		return "", err
 	}
-
-	if s.lokiURL != "" {
-		return s.getLogsFromLoki(ctx, inst.Namespace, projectID, lines)
-	}
-
-	pod := projectID + "-postgres-1"
-	return s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, "postgres",
-		[]string{"sh", "-c", fmt.Sprintf("tail -%d /controller/log/postgres.csv", lines)})
+	return s.k8sClient.PodLogTail(ctx, inst.Namespace, k8s.MySQLPrimaryPod(cluster), mysqlContainer, lines)
 }
 
-// getLogsFromLoki queries Loki for the last N postgres pod lines from the
-// project's namespace. Returns plain-text concatenated lines (one per row)
-// so the existing handler-side response shape stays unchanged.
-func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, namespace, projectID string, lines int) (string, error) {
+// clampLogLines is how many lines one search returns, from Loki or the pod log.
+func clampLogLines(lines int) int {
 	if lines <= 0 || lines > 5000 {
-		lines = 100
+		return 100
 	}
-	logql := fmt.Sprintf(`{namespace=%q,cnpg_io_cluster=%q}`, namespace, projectID+postgresSuffix)
+	return lines
+}
+
+func validateLogSearchTerm(term string) error {
+	if len(term) > maxLogSearchTerm || !utf8.ValidString(term) {
+		return ErrInvalidLogSearch
+	}
+	for _, r := range term {
+		if unicode.IsControl(r) {
+			return ErrInvalidLogSearch
+		}
+	}
+	return nil
+}
+
+// filterLogLines keeps the lines containing term, ignoring case.
+func filterLogLines(logs, term string) string {
+	if term == "" {
+		return logs
+	}
+	needle := strings.ToLower(term)
+	var sb strings.Builder
+	for _, line := range strings.Split(logs, "\n") {
+		if line != "" && strings.Contains(strings.ToLower(line), needle) {
+			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.String()
+}
+
+// databaseLogSelector selects the project's database pods in its own
+// namespace, by labels the collector sets from Kubernetes metadata.
+func databaseLogSelector(inst *domain.DatabaseInstance) string {
+	if inst.DBType == domain.MySQL {
+		return mysqlLogSelector(inst.Namespace, inst.ProjectID)
+	}
+	return postgresLogSelector(inst.Namespace, inst.ProjectID)
+}
+
+func postgresLogSelector(namespace, projectID string) string {
+	return fmt.Sprintf("{namespace=%s,cnpg_io_cluster=%s}", strconv.Quote(namespace), strconv.Quote(projectID+postgresSuffix))
+}
+
+// mysqlLogSelector is MOCO's mysqld container, which writes the error log to
+// stdout; the agent and slow-log sidecars share its pod.
+func mysqlLogSelector(namespace, projectID string) string {
+	return fmt.Sprintf("{namespace=%s,app_kubernetes_io_instance=%s,container=%s}",
+		strconv.Quote(namespace), strconv.Quote(k8s.MySQLClusterName(projectID)), strconv.Quote(mysqlContainer))
+}
+
+// projectLogQL keeps the selected lines containing term: a quoted literal,
+// case-insensitive regex, so nothing in the term can leave the filter string
+// or widen the selector.
+func projectLogQL(selector, term string) string {
+	if term == "" {
+		return selector
+	}
+	return selector + " |~ " + strconv.Quote("(?i)"+regexp.QuoteMeta(term))
+}
+
+// getLogsFromLoki queries Loki for the last matching lines of the selected
+// pods. Returns plain-text concatenated lines (one per row) so the existing
+// handler-side response shape stays unchanged.
+func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, base, selector, projectID string, search LogSearch) (string, error) {
+	lines := clampLogLines(search.Lines)
+	window := search.Since
+	if window <= 0 {
+		window = defaultLogSearchWindow
+	}
+	logql := projectLogQL(selector, search.Term)
 	end := time.Now()
-	start := end.Add(-1 * time.Hour)
+	start := end.Add(-window)
 	u := fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&start=%d&end=%d&limit=%d&direction=backward",
-		s.lokiURL, urlEscape(logql), start.UnixNano(), end.UnixNano(), lines)
+		base, urlEscape(logql), start.UnixNano(), end.UnixNano(), lines)
 
 	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -293,7 +479,7 @@ func validateDatabaseRequest(req domain.ProvisioningRequest) error {
 	// chose.
 	version := strings.TrimSpace(req.PostgresVersion)
 	if version == "" {
-		return fmt.Errorf("postgres version is required (supported: %s)", config.SupportedPostgresMajorsMessage())
+		return fmt.Errorf("postgresVersion is required (supported: %s)", config.SupportedPostgresMajorsMessage())
 	}
 	if _, ok := config.LookupPostgresMajor(version); !ok {
 		return fmt.Errorf("postgres version %q is not supported (supported: %s)", version, config.SupportedPostgresMajorsMessage())

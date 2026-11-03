@@ -4,7 +4,30 @@ import { api } from '../api/client';
 export type DeploymentMode = 'selfhosted' | 'cloud';
 
 // Features that ship dark and are turned on per installation (EXC-554).
-export type Feature = 'mcp' | 'pipeline' | 'appstorage' | 'mysql' | 's3';
+export type Feature =
+  | 'mcp'
+  | 'pipeline'
+  | 'appstorage'
+  | 'mysql'
+  | 'slowqueries'
+  | 'requestmetrics'
+  | 'advisors'
+  | 'metricsendpoint'
+  | 'logdrains'
+  | 'authoauth'
+  | 'authotp'
+  | 'authuser'
+  | 'authguest'
+  // On only on a single-host Docker/Podman install (EXC-670).
+  | 'hostmetrics'
+  | 'sitesserver'
+  | 'authhooks'
+  | 'authmfa'
+  | 'dballowlist'
+  | 'dbreadaddress'
+  | 'dbcopy'
+  | 'majorupgrade'
+  | 's3';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
@@ -14,7 +37,7 @@ interface ConfigResponse {
   customDomains?: boolean;
   // Sites may take custom domains: the Cloudflare zone is set up for them (EXC-614).
   siteCustomDomains?: boolean;
-  // Git builds of sites are switched on (EXC-354); single-host still refuses them by name.
+  // Git builds of sites are switched on (EXC-354); single-host builds only with FEATURE_SINGLEHOSTBUILDS (EXC-671), else refuses by name.
   siteGitBuilds?: boolean;
   features?: Partial<Record<Feature, boolean>>;
   // The public API base the SDK, REST and GraphQL calls go to.
@@ -73,6 +96,12 @@ export function useCustomDomainsEnabled(): boolean {
 export function useFeatureEnabled(feature: Feature): { enabled: boolean; isLoading: boolean } {
   const { data, isLoading } = useStudioConfig();
   return { enabled: data?.features?.[feature] === true, isLoading };
+}
+
+// Every feature the server reports on; empty until it answers.
+export function useFeatures(): Partial<Record<Feature, boolean>> {
+  const { data } = useStudioConfig();
+  return data?.features ?? {};
 }
 
 export function isSelfHosted(mode: DeploymentMode): boolean {

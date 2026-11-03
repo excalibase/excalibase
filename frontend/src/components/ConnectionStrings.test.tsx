@@ -391,3 +391,42 @@ describe('ConnectionStrings — MySQL driver examples', () => {
     expect(screen.queryByTestId('conn-ca-download')).not.toBeInTheDocument();
   });
 });
+
+// EXC-636: a password the URL grammar reserves is escaped, so the string
+// still parses and hands the driver the password itself.
+describe('ConnectionStrings — reserved characters in the password', () => {
+  const PASSWORD = 'p@ss:w/rd?#%x';
+
+  async function copied(testId: string, data: object, endpoint: ProjectEndpoint): Promise<URL> {
+    vi.mocked(api.get).mockResolvedValue({ data: { ...CREDENTIALS, password: PASSWORD, ...data } } as never);
+    const user = userEvent.setup();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ConnectionStrings projectId="p-1" documentDb={false} endpoint={endpoint} />
+      </QueryClientProvider>
+    );
+    await screen.findByTestId(testId);
+    const written = recordClipboard();
+    await user.click(screen.getByTestId(`conn-copy-${testId.replace('conn-', '')}`));
+    return new URL(written[0]);
+  }
+
+  test('the Postgres string round-trips the password', async () => {
+    const parsed = await copied('conn-postgres-public', {}, PUBLIC_ENDPOINT);
+    expect(decodeURIComponent(parsed.password)).toBe(PASSWORD);
+    expect(parsed.host).toBe('p-1.db.excalibase.io:26257');
+    expect(parsed.pathname).toBe('/appdb');
+  });
+
+  test('the MySQL string round-trips the password', async () => {
+    const parsed = await copied(
+      'conn-mysql-internal',
+      { engine: 'mysql', username: 'admin', databaseName: 'shop' },
+      { ...PUBLIC_ENDPOINT, mongo: undefined },
+    );
+    expect(decodeURIComponent(parsed.password)).toBe(PASSWORD);
+    expect(decodeURIComponent(parsed.username)).toBe('admin');
+    expect(parsed.pathname).toBe('/shop');
+  });
+});

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -49,6 +51,8 @@ type ProvisioningHandler struct {
 	// endpoint; nil → the surface returns 503 rather than pretending a
 	// setting was saved.
 	dbEndpoints DBEndpointAPI
+	// authOAuth backs end-user OAuth sign-in (EXC-662) behind the authoauth flag.
+	authOAuth AuthOAuthDeps
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {
@@ -389,7 +393,7 @@ func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
-	log.Printf("tenant=%s action=deprovision path=%s backups=%s", tenant, r.URL.Path, backupDisposition(opts))
+	log.Printf("tenant=%s action=deprovision path=%s backups=%s", safeLog(tenant), safeLog(r.URL.Path), backupDisposition(opts))
 	// Read the row before it is removed: its backups, if the deletion is not
 	// purging them, outlive the only record that names them.
 	inst, _ := h.svc.GetInstance(projectID)
@@ -586,10 +590,31 @@ func (h *ProvisioningHandler) EstimateCost(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// logRanges are the Logs page's time ranges: how far back stored logs are searched.
+var logRanges = map[string]time.Duration{
+	"1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour,
+}
+
+// logSearchParams are the parameters GetLogs reads; any other is refused (EXC-641).
+var logSearchParams = map[string]bool{"lines": true, "q": true, "since": true}
+
+// GetLogs answers the project's database log lines: the last ?lines (100),
+// those containing ?q (any case) within ?since (1h, 6h, 24h or 7d; 1h), no
+// further back than the project's plan keeps logs.
 func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
+	query := r.URL.Query()
+	for name := range query {
+		if !logSearchParams[name] {
+			if len(name) > 64 {
+				name = name[:64]
+			}
+			httpError(w, fmt.Sprintf("unknown parameter %q: the log search takes lines, q and since", name), http.StatusBadRequest)
+			return
+		}
+	}
 	lines := 100
-	if l := r.URL.Query().Get("lines"); l != "" {
+	if l := query.Get("lines"); l != "" {
 		if v, err := strconv.Atoi(l); err == nil {
 			lines = v
 		}
@@ -597,7 +622,19 @@ func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	if lines > 10000 {
 		lines = 10000
 	}
-	out, err := h.svc.GetLogs(r.Context(), projectID, lines)
+	since := logRanges["1h"]
+	if v := query.Get("since"); v != "" {
+		var ok bool
+		if since, ok = logRanges[v]; !ok {
+			httpError(w, "since must be 1h, 6h, 24h or 7d", http.StatusBadRequest)
+			return
+		}
+	}
+	page, err := h.svc.SearchProjectLogs(r.Context(), projectID, service.LogSearch{Lines: lines, Term: query.Get("q"), Since: since})
+	if errors.Is(err, service.ErrInvalidLogSearch) {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if errors.Is(err, service.ErrLogsUnavailable) {
 		httpError(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -606,7 +643,16 @@ func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"logs": out})
+	writeJSON(w, logsResponse(page))
+}
+
+// logsResponse names how long the project's logs are kept only when its plan decides it (EXC-659).
+func logsResponse(page service.LogPage) map[string]any {
+	resp := map[string]any{"logs": page.Lines}
+	if page.KeptFor > 0 {
+		resp["retentionHours"] = int(page.KeptFor / time.Hour)
+	}
+	return resp
 }
 
 func (h *ProvisioningHandler) RotateCredentials(w http.ResponseWriter, r *http.Request) {
@@ -682,36 +728,55 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// The auth service resolves email-verification + redirect behavior from
-	// these fields and caches it; a read failure is a 503 so it keeps its
-	// last good settings rather than a wrong default.
-	authSettings, aerr := h.authSettingsForInfo(r.Context(), inst.ProjectID)
-	if aerr != nil {
-		httpError(w, "auth settings unavailable", http.StatusServiceUnavailable)
+	info, unavailable := h.infoSettings(r.Context(), inst.ProjectID, org.Slug)
+	if unavailable != "" {
+		httpError(w, unavailable, http.StatusServiceUnavailable)
 		return
 	}
+	info.ProjectID = inst.ProjectID
+	info.ProjectName = inst.ProjectName
+	info.OrgID = inst.OrgID
+	info.OrgSlug = org.Slug
+	info.OrgName = org.Name
+	info.RealtimeAutoEnable = true // v1: hardcoded; per-project override is a future column on instances
 
-	// The data plane resolves CORS from this field and caches it; a read
-	// failure is a 503 so it keeps its last good list rather than a deny.
-	corsOrigins, cerr := h.corsOriginsForInfo(r.Context(), inst.ProjectID)
-	if cerr != nil {
-		httpError(w, "cors allowlist unavailable", http.StatusServiceUnavailable)
-		return
+	writeJSON(w, info)
+}
+
+// infoSettings reads the per-project settings /info carries. Each read failure
+// names what is unavailable, answered as a 503 so the auth service and the
+// data plane keep their last good copy rather than a wrong default.
+func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSlug string) (domain.ProjectInfo, string) {
+	authSettings, err := h.authSettingsForInfo(ctx, projectID)
+	if err != nil {
+		return domain.ProjectInfo{}, "auth settings unavailable"
 	}
-
-	info := domain.ProjectInfo{
-		ProjectID:                inst.ProjectID,
-		ProjectName:              inst.ProjectName,
-		OrgID:                    inst.OrgID,
-		OrgSlug:                  org.Slug,
-		OrgName:                  org.Name,
-		RealtimeAutoEnable:       true, // v1: hardcoded; per-project override is a future column on instances
+	corsOrigins, err := h.corsOriginsForInfo(ctx, projectID)
+	if err != nil {
+		return domain.ProjectInfo{}, "cors allowlist unavailable"
+	}
+	oauth, err := h.authOAuthForInfo(ctx, projectID, orgSlug)
+	if err != nil {
+		return domain.ProjectInfo{}, "auth sign-in settings unavailable"
+	}
+	hooks, err := h.authHooksForInfo(ctx, projectID)
+	if err != nil {
+		return domain.ProjectInfo{}, "auth hooks unavailable"
+	}
+	mfa, err := h.mfaForInfo(ctx, projectID)
+	if err != nil {
+		return domain.ProjectInfo{}, "auth mfa settings unavailable"
+	}
+	return domain.ProjectInfo{
 		CorsAllowedOrigins:       corsOrigins,
 		RequireEmailVerification: authSettings.RequireEmailVerification,
 		SiteURL:                  authSettings.SiteURL,
-	}
-
-	writeJSON(w, info)
+		ProjectOAuthInfo:         oauth,
+		UserAPIEnabled:           h.userAPIForInfo(ctx),
+		StableSubject:            h.stableSubjectForInfo(ctx),
+		AuthHooks:                hooks,
+		MFAEnabled:               mfa,
+	}, ""
 }
 
 // resolveInfoOrg looks up the org metadata GetProjectInfo embeds in its

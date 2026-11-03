@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 )
 
 // digestNote is what trips a redeploy: the app keeps the digest it last ran.
@@ -28,7 +30,7 @@ type appArgs struct {
 type deployAppArgs struct {
 	appArgs
 	Image     string `json:"image,omitempty" jsonschema:"the image to run, by digest (registry/repo@sha256:...) or tag, resolved to a digest; a private registry needs its credential saved in Studio; left out redeploys the app's current image"`
-	CommitSHA string `json:"commit_sha,omitempty" jsonschema:"the commit the image was built from, kept with the deploy"`
+	CommitSHA string `json:"commit_sha,omitempty" jsonschema:"the git commit the image was built from, kept with the deploy: 7 to 64 lowercase hex characters (an abbreviated or full sha), checked with or without image"`
 }
 
 type deployStatusArgs struct {
@@ -58,6 +60,7 @@ type appView struct {
 	LifecycleFailure json.RawMessage `json:"lifecycleFailure,omitempty"`
 	Version          int             `json:"version"`
 	URL              string          `json:"url,omitempty"`
+	Restarts         *appRestarts    `json:"restarts,omitempty"`
 }
 
 func appTools() []entry {
@@ -89,6 +92,9 @@ func listApps(ctx context.Context, c *call, in projectArg) (any, error) {
 		return nil, err
 	}
 	out := map[string]any{"apps": apps}
+	if notes := restartNotes(apps); len(notes) > 0 {
+		out["restarted"] = notes
+	}
 	for i := range apps {
 		// One app's history that cannot be read leaves its status as stored.
 		fresh, err := markNotDeployed(ctx, c, projectID, &apps[i])
@@ -112,21 +118,18 @@ func deployApp(ctx context.Context, c *call, in deployAppArgs) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// An empty body redeploys the current image; an image is resolved to a
-	// digest with the project's own registry credential (EXC-543).
-	var body any
-	if in.Image != "" {
-		body = map[string]string{"image": in.Image, "commitSha": in.CommitSHA}
+	// The same rule on both paths: a redeploy must not keep "v1" as a commit (EXC-651).
+	if err := apphost.ValidateCommitSHA(in.CommitSHA); err != nil {
+		return nil, fmt.Errorf("commit_sha: %w", err)
 	}
-	var deploy map[string]any
-	err = c.send(ctx, http.MethodPost, path+"/deploy", nil, body, &deploy)
-	if in.Image != "" && isStatus(err, http.StatusNotFound) {
-		deploy, err = deployViaUpdate(ctx, c, path, in.Image, err)
-	}
+	deploy, commitDropped, err := sendDeploy(ctx, c, path, in)
 	if err != nil {
 		return nil, deployFailure(ctx, c, projectID, in.Image, err)
 	}
 	out := map[string]any{"deploy": deploy, "next": "call get_deploy_status with this deploy's id until it is succeeded or failed"}
+	if commitDropped {
+		out["commit"] = "not recorded: this platform takes a commit only where deploys from CI are enabled; the deploy runs without it"
+	}
 	if in.Image == "" {
 		out["image"] = "no image was given, so this deploy runs the image the app names now, which after an earlier pinned deploy is that " +
 			"exact digest. Pass the tag to pick up a newer build."
@@ -136,6 +139,37 @@ func deployApp(ctx context.Context, c *call, in deployAppArgs) (any, error) {
 			"registries on public addresses for a digest. Push to a public registry to have deploys pinned."
 	}
 	return out, nil
+}
+
+// sendDeploy asks for the deploy. An empty body redeploys the current image;
+// an image is resolved to a digest with the project's own registry credential
+// (EXC-543). Where only Studio's bodiless deploy is served, an image goes in
+// through the app record and a redeploy's commit cannot be kept.
+func sendDeploy(ctx context.Context, c *call, path string, in deployAppArgs) (map[string]any, bool, error) {
+	var body any
+	switch {
+	case in.Image != "":
+		body = map[string]string{"image": in.Image, "commitSha": in.CommitSHA}
+	case in.CommitSHA != "":
+		body = map[string]string{"commitSha": in.CommitSHA}
+	}
+	var deploy map[string]any
+	err := c.send(ctx, http.MethodPost, path+"/deploy", nil, body, &deploy)
+	if !isStatus(err, http.StatusNotFound) {
+		return deploy, false, err
+	}
+	if in.Image != "" {
+		deploy, err = deployViaUpdate(ctx, c, path, in.Image, err)
+		return deploy, err == nil && in.CommitSHA != "", err
+	}
+	if in.CommitSHA == "" {
+		return nil, false, err
+	}
+	deploy = nil
+	if err := c.send(ctx, http.MethodPost, path+"/deploy", nil, nil, &deploy); err != nil {
+		return nil, false, err
+	}
+	return deploy, true, nil
 }
 
 func getDeployStatus(ctx context.Context, c *call, in deployStatusArgs) (any, error) {
@@ -169,6 +203,7 @@ func getDeployStatus(ctx context.Context, c *call, in deployStatusArgs) (any, er
 		}
 		out := map[string]any{"app": app, "deploy": deploy}
 		describeDeploy(ctx, c, path, app, deploy, out)
+		addRestartNote(app, out)
 		return out, nil
 	}
 	var deploys []json.RawMessage
@@ -186,6 +221,7 @@ func getDeployStatus(ctx context.Context, c *call, in deployStatusArgs) (any, er
 	if len(deploys) > 0 {
 		describeDeploy(ctx, c, path, app, deploys[0], out)
 	}
+	addRestartNote(app, out)
 	return out, nil
 }
 

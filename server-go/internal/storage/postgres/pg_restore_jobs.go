@@ -53,7 +53,7 @@ func (r *RestoreJobsStore) UpsertRestoreJob(ctx context.Context, j *domain.Resto
 
 // StartRestoreJob records a new running job unless one already running
 // conflicts with it. See storage.RestoreJobStore.
-func (r *RestoreJobsStore) StartRestoreJob(ctx context.Context, j *domain.RestoreJob) error {
+func (r *RestoreJobsStore) StartRestoreJob(ctx context.Context, j *domain.RestoreJob, slot storage.ProjectSlot) error {
 	tx, err := r.s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin restore job start: %w", err)
@@ -73,10 +73,37 @@ func (r *RestoreJobsStore) StartRestoreJob(ctx context.Context, j *domain.Restor
 			return storage.ErrRestoreAlreadyRunning
 		}
 	}
+	if err := admitRestoreSlot(ctx, tx, slot); err != nil {
+		return err
+	}
 	if err := upsertRestoreJob(ctx, tx, j); err != nil {
 		return fmt.Errorf("insert restore job %s: %w", j.ID, err)
 	}
+	if slot.OrgID != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE restore_jobs SET org_id = $2 WHERE id = $1`, j.ID, slot.OrgID); err != nil {
+			return fmt.Errorf("record the slot of restore job %s: %w", j.ID, err)
+		}
+	}
 	return tx.Commit()
+}
+
+// admitRestoreSlot refuses a restore into a new project when its organisation
+// has no free slot. It takes the lock project creation takes, so the job and
+// a create racing it for the last slot are serialized; once inserted, the
+// running job is counted as holding that slot.
+func admitRestoreSlot(ctx context.Context, tx *sql.Tx, slot storage.ProjectSlot) error {
+	if slot.MaxProjects <= 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		orgProjectLimitLockSpace, slot.OrgID); err != nil {
+		return fmt.Errorf("lock org project slots: %w", err)
+	}
+	held, err := countOrgProjectSlots(tx, slot.OrgID, "")
+	if err != nil {
+		return err
+	}
+	return storage.CheckOrgProjectSlot(held, slot.MaxProjects)
 }
 
 // UpdateRunningRestoreJob is the only write a driver makes after Start. The
@@ -149,9 +176,13 @@ func (r *RestoreJobsStore) FailAbandonedRestoreJobs(ctx context.Context, owner s
 // into — and both are legitimate readers of their own restore, so either side
 // matches. Every other project gets no row at all: scoping here, in the query,
 // means no caller can reach a job by id alone (EXC-399).
+const findRestoreJobSQL = `
+		SELECT id, source_project_id, new_project_id, new_project_name, mode, status, current_step, target_kind, target_value, failure_reason, owner, heartbeat_at, created_at, updated_at
+		FROM restore_jobs
+		WHERE id = $1 AND ($2 IN (source_project_id, new_project_id))`
+
 func (r *RestoreJobsStore) FindRestoreJob(ctx context.Context, projectID, id string) (*domain.RestoreJob, error) {
-	row := r.s.db.QueryRowContext(ctx, restoreJobColumns+`
-		WHERE id = $1 AND ($2 IN (source_project_id, new_project_id))`, id, projectID)
+	row := r.s.db.QueryRowContext(ctx, findRestoreJobSQL, id, projectID)
 	return scanPgRestoreJob(row)
 }
 

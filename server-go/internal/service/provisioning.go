@@ -8,6 +8,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"maps"
+	"net"
+	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -24,12 +27,19 @@ import (
 const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
 type ProvisioningService struct {
+	// singleHostLogs reads a single host's database container logs (EXC-670); nil refuses the search.
+	singleHostLogs SingleHostLogs
+	// hostLogStore is a single host's Loki (EXC-672); empty reads the engine log only.
+	hostLogStore string
 	// documentDBEnabled is whether this installation runs the DocumentDB
 	// gateway plugin; off unless the installation says so (EXC-394).
 	documentDBEnabled bool
 	// mysqlCreation is the mysql feature: new MySQL projects may be created.
 	// Existing ones are looked after either way (ADR 0041).
 	mysqlCreation bool
+	// queryStats is the slowqueries feature: new MySQL projects are granted
+	// their digests at creation (EXC-654).
+	queryStats bool
 	// runInBackground starts an accepted project build; nil runs it on its own goroutine.
 	runInBackground func(func())
 	// storageBudget holds every database volume to the platform's share of its storage.
@@ -58,6 +68,8 @@ type ProvisioningService struct {
 	// queries it instead of running kubectl-exec tail (the legacy path
 	// hangs on busy clusters and only sees logs since pod start).
 	lokiURL string
+	// logRetention keeps project logs for their plan (EXC-659); nil keeps logs.retention for all.
+	logRetention *logRetention
 
 	// backupDefaults configures the platform-wide backup target. When
 	// set, every new project gets backup enabled by default with these
@@ -99,10 +111,16 @@ type ProvisioningService struct {
 	// retainedBackups dates the kept backups of deleted projects for purging.
 	retainedBackups storage.RetainedBackupStore
 	deletionNow     func() time.Time
+	// logDeletion queues a deleted project's stored log lines for removal (EXC-678).
+	logDeletion projectLogDeletion
 
 	// endpoints frees the project's public database endpoint. Nil when the
 	// platform offers none, and the teardown then carries no such step.
 	endpoints PublicEndpointReconciler
+
+	// restoredSettings carries a source's API settings onto a restored copy.
+	restoredSettings storage.RestoredSettingsStore
+	migrationHistory MigrationHistoryCopier
 
 	// activity seeds the last-seen marker for a newly registered project so
 	// it is not a candidate for idle-pause the moment it exists. Optional.
@@ -1137,8 +1155,37 @@ type deletionStep struct {
 // (BACKUPS_PENDING_DELETE, retried via PurgeBackups) because by then the
 // project's resources really are gone; it still reports the failure.
 func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projectID string, opts DeprovisionOptions) error {
-	if err := s.checkDeletable(projectID, opts); err != nil {
+	teardown, err := s.beginDeprovision(ctx, projectID, opts)
+	if err != nil {
 		return err
+	}
+	return teardown()
+}
+
+// DeprovisionInBackground claims the project and records DELETING as
+// DeprovisionWithOptions does, then runs the teardown detached from the
+// request: waiting out a namespace outlasts what the edge waits for one
+// request. The outcome is on the project: the row gone, or DELETING with the
+// failing step.
+func (s *ProvisioningService) DeprovisionInBackground(ctx context.Context, projectID string, opts DeprovisionOptions) error {
+	teardown, err := s.beginDeprovision(ctx, projectID, opts)
+	if err != nil {
+		return err
+	}
+	s.startInBackground(func() {
+		if err := teardown(); err != nil {
+			log.Printf("deletion of %s did not finish: %v", projectID, err)
+		}
+	})
+	return nil
+}
+
+// beginDeprovision takes the lease and records DELETING. The returned
+// teardown runs the steps and releases the lease. It does not depend on the
+// caller staying connected: a teardown cut short leaves the row in DELETING.
+func (s *ProvisioningService) beginDeprovision(ctx context.Context, projectID string, opts DeprovisionOptions) (func() error, error) {
+	if err := s.checkDeletable(projectID, opts); err != nil {
+		return nil, err
 	}
 
 	// DELETE takes the same per-project lease as pause and resume. A delete
@@ -1147,42 +1194,55 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 	// better than preempting a shutdown halfway through. The lease cannot
 	// hold it off indefinitely: every lifecycle operation is bounded by its
 	// own timeout and releases on every path, including a panic.
+	ctx = context.WithoutCancel(ctx)
 	release, claimed, err := s.claimer().Claim(ctx, projectID, OperationDeletion)
 	if err != nil {
-		return fmt.Errorf("claim project for deletion: %w", err)
+		return nil, fmt.Errorf("claim project for deletion: %w", err)
 	}
 	if !claimed {
 		// The holder may be a pause or a resume, and for an advisory lease
 		// we cannot tell which. Saying "a deletion is already running" was a
 		// guess, and usually a wrong one.
-		return fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
+		return nil, fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
 	}
-	defer release()
+	inst, deleteBackups, err := s.claimDeletion(projectID, opts)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	return func() error {
+		defer release()
+		for _, step := range s.deletionSteps(deleteBackups) {
+			if err := step.run(ctx, inst); err != nil {
+				return s.recordDeletionFailure(inst, step.name, err)
+			}
+		}
+		return nil
+	}, nil
+}
+
+// claimDeletion moves the row to DELETING under the lease and returns the
+// claimed row.
+func (s *ProvisioningService) claimDeletion(projectID string, opts DeprovisionOptions) (*domain.DatabaseInstance, bool, error) {
 	inst, err := s.recheckUnderLease(projectID, opts)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
-
 	deleteBackups, err := s.store.BeginDeletion(projectID, opts.DeleteBackups)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	for _, observer := range s.deletionObservers {
 		observer.ProjectDeleting(projectID)
 	}
 	if deleteBackups && s.backupPurger == nil {
-		return s.recordDeletionFailure(inst, domain.DeletionStepDeleteBackups, ErrBackupPurgeNotConfigured)
+		return nil, false, s.recordDeletionFailure(inst, domain.DeletionStepDeleteBackups, ErrBackupPurgeNotConfigured)
 	}
 	// Work from the claimed row, not the pre-claim snapshot.
 	if inst, err = s.store.FindByProjectID(projectID); err != nil || inst == nil {
-		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
+		return nil, false, fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
 	}
-	for _, step := range s.deletionSteps(deleteBackups) {
-		if err := step.run(ctx, inst); err != nil {
-			return s.recordDeletionFailure(inst, step.name, err)
-		}
-	}
-	return nil
+	return inst, deleteBackups, nil
 }
 
 // DeletionObserver is told when a project is claimed for teardown. It exists
@@ -1271,6 +1331,11 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 		steps = append(steps, deletionStep{domain.DeletionStepDeleteAppWorkloads, s.teardownAppWorkloads})
 	}
 	steps = append(steps, deletionStep{domain.DeletionStepDeleteResources, s.deleteDatabaseResources})
+	// Nothing writes new lines once the resources are gone; queued before the
+	// backup purge, whose failure ends this teardown short of the record.
+	if s.logDeletion.queue != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepQueueLogDeletion, s.queueLogDeletion})
+	}
 	if deleteBackups {
 		steps = append(steps, deletionStep{domain.DeletionStepDeleteBackups, s.purgeBackups})
 	}
@@ -1521,8 +1586,13 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 		port = *inst.Port
 	}
 
-	connURL := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=%s",
-		inst.Username, password, inst.Host, port, inst.DatabaseName, inst.SSLMode)
+	connURL := url.URL{
+		Scheme:   "postgresql",
+		User:     url.UserPassword(inst.Username, password),
+		Host:     net.JoinHostPort(inst.Host, strconv.Itoa(port)),
+		Path:     "/" + inst.DatabaseName,
+		RawQuery: url.Values{"sslmode": {inst.SSLMode}}.Encode(),
+	}
 
 	return &domain.CredentialsResponse{
 		ProjectID:     projectID,
@@ -1533,7 +1603,7 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 		Username:      inst.Username,
 		Password:      password,
 		SSLMode:       inst.SSLMode,
-		ConnectionURL: connURL,
+		ConnectionURL: connURL.String(),
 	}, nil
 }
 

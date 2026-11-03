@@ -4,6 +4,16 @@ import { api } from './client';
 export interface AuthSettings {
   requireEmailVerification: boolean;
   siteUrl: string;
+  // Only while the authoauth or authotp feature is on (EXC-662); a PUT without them keeps the stored ones.
+  redirectUrls?: string[];
+  allowNewUsers?: boolean;
+  // Only while the authotp feature is on.
+  emailOtpEnabled?: boolean;
+  // Only while the authguest feature is on; the Turnstile secret itself is write-only.
+  guestSignInEnabled?: boolean;
+  guestCaptchaSecretSet?: boolean;
+  // Only while the authmfa feature is on; written through useMFASwitch, never by the settings PUT.
+  mfaEnabled?: boolean;
 }
 
 const authSettingsKey = (projectId: string) => ['auth-settings', projectId] as const;
@@ -43,6 +53,12 @@ export function siteUrlProblem(raw: string): string | null {
   return null;
 }
 
+// A redirect URL follows the site URL's rule, and an empty one is not a URL.
+export function redirectUrlProblem(raw: string): string | null {
+  if (raw.trim() === '') return 'Enter the URL your app returns to after sign-in.';
+  return siteUrlProblem(raw);
+}
+
 // The first app that already has a public address, offered as the site URL.
 export function suggestSiteUrl(apps: ReadonlyArray<{ url?: string }> | undefined): string | null {
   for (const app of apps ?? []) {
@@ -59,11 +75,40 @@ export const useAuthSettings = (projectId: string) =>
     enabled: !!projectId,
   });
 
+// The guest Turnstile secret is written and removed on its own path; the
+// answer carries the sign-in fields, merged into the cached settings.
+export const useGuestCaptcha = (projectId: string) => {
+  const queryClient = useQueryClient();
+  const merge = (answer: Partial<AuthSettings>) =>
+    queryClient.setQueryData<AuthSettings>(authSettingsKey(projectId), (current) => (current ? { ...current, ...answer } : current));
+  return {
+    save: useMutation({
+      mutationFn: async (secretKey: string) =>
+        (await api.put<Partial<AuthSettings>>(`${authSettingsPath(projectId)}/guest-captcha`, { secretKey })).data,
+      onSuccess: merge,
+    }),
+    remove: useMutation({
+      mutationFn: async () => (await api.delete<Partial<AuthSettings>>(`${authSettingsPath(projectId)}/guest-captcha`)).data,
+      onSuccess: merge,
+    }),
+  };
+};
+
 export const useSaveAuthSettings = (projectId: string) => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (settings: AuthSettings) =>
       (await api.put<AuthSettings>(authSettingsPath(projectId), settings)).data,
+    onSuccess: (saved) => queryClient.setQueryData(authSettingsKey(projectId), saved),
+  });
+};
+
+// The MFA switch has its own path; the answer is the whole settings object.
+export const useMFASwitch = (projectId: string) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean) =>
+      (await api.put<AuthSettings>(`${authSettingsPath(projectId)}/mfa`, { enabled })).data,
     onSuccess: (saved) => queryClient.setQueryData(authSettingsKey(projectId), saved),
   });
 };

@@ -222,6 +222,10 @@ func TestDockerMySQLSetsSeveralPasswordsInOneBatch(t *testing.T) {
 	if batch := engine.stdin[before]; !strings.Contains(batch, "'admin'@'%' IDENTIFIED BY 'a1'") || !strings.Contains(batch, "'excalibase_app'@'%' IDENTIFIED BY 'b2'") {
 		t.Fatalf("batch:\n%s", batch)
 	}
+	// EXC-628: the restore's batch also takes away an old auth read grant.
+	if batch := engine.stdin[before]; !strings.Contains(batch, MySQLAppAuthRevokeSQL) {
+		t.Fatalf("batch keeps excalibase_app's auth access:\n%s", batch)
+	}
 }
 
 func TestDockerMySQLClientWorkIsReadOverTheSocket(t *testing.T) {
@@ -265,5 +269,22 @@ func TestDockerMySQLStartOnVolumeLeavesAnAnsweringServerWithoutTheDatabase(t *te
 	engine.failOn = "start:excalibase-p3-mysql"
 	if container, err := newTestDockerMySQL(engine).StartOnVolume(context.Background(), "p3", image, testTier); err == nil || container != "excalibase-p3-mysql" {
 		t.Fatalf("a created container that failed to start is still named for cleanup: %q %v", container, err)
+	}
+}
+
+// EXC-635: a restored copy's end-user sessions are ended in its container.
+func TestDockerMySQLForgetEndUserSessions(t *testing.T) {
+	engine := newFakeEngine()
+	p := newTestDockerMySQL(engine)
+	result := provisionDockerMySQL(t, engine)
+	if err := p.ForgetEndUserSessions(context.Background(), result.Namespace, "p1"); err != nil {
+		t.Fatalf("ForgetEndUserSessions: %v", err)
+	}
+	if last := engine.stdin[len(engine.stdin)-1]; last != MySQLEndUserSessionsRevokeSQL {
+		t.Fatalf("stdin %s", last)
+	}
+	engine.stdinAnswer = func(string, []string, string) (string, error) { return "", errors.New("exit code 1") }
+	if err := p.ForgetEndUserSessions(context.Background(), result.Namespace, "p1"); err == nil {
+		t.Fatal("a refused statement was reported done")
 	}
 }

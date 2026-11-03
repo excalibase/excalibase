@@ -31,7 +31,7 @@ func TestValidateRefusesAMissingPostgresMajor(t *testing.T) {
 		if err == nil {
 			t.Fatalf("version %q: expected a refusal, got nil", version)
 		}
-		if !strings.Contains(err.Error(), "postgres version") {
+		if !strings.Contains(err.Error(), "postgresVersion is required") {
 			t.Errorf("version %q: error should mention the postgres version, got %q", version, err)
 		}
 	}
@@ -102,7 +102,7 @@ func TestValidateAcceptsDocumentDBOnASupportedMajor(t *testing.T) {
 func TestProvisionRefusesARequestWithNoPostgresMajor(t *testing.T) {
 	svc, _, _ := setupProvisioningTest(t)
 	_, err := svc.Provision(context.Background(), provisionRequest(""))
-	if err == nil || !strings.Contains(err.Error(), "postgres version") {
+	if err == nil || !strings.Contains(err.Error(), "postgresVersion is required") {
 		t.Errorf("expected a postgres version refusal, got: %v", err)
 	}
 }

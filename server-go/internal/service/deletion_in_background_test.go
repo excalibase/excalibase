@@ -95,3 +95,23 @@ func TestScheduleDeletionInBackground_AnswersAtOnceWhenNothingNeedsStopping(t *t
 		t.Fatalf("%d runs started", len(*h.runs))
 	}
 }
+
+// A project with nothing to keep is torn down at once; in the background its
+// answer is the row DELETING, not a teardown the caller waits on.
+func TestScheduleDeletionInBackground_TearsDownAProjectWithNothingToKeepDetached(t *testing.T) {
+	h := newBackgroundGrace(t)
+	teardowns := &[]func(){}
+	h.svc.SetBackgroundRunner(func(run func()) { *teardowns = append(*teardowns, run) })
+	row := h.row(t)
+	row.Status = "FAILED"
+	_ = h.store.Update(row)
+
+	accepted, err := h.svc.ScheduleDeletionInBackground(context.Background(), graceProject, DeprovisionOptions{})
+	if err != nil || accepted == nil || accepted.Status != string(domain.StatusDeleting) || len(*teardowns) != 1 {
+		t.Fatalf("answer %+v, %v with %d teardowns; want DELETING and the teardown started", accepted, err, len(*teardowns))
+	}
+	(*teardowns)[0]()
+	if row := h.row(t); row != nil {
+		t.Fatalf("row left behind as %s at %s", row.Status, row.DeletionStep)
+	}
+}

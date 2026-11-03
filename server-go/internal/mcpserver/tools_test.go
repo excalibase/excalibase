@@ -13,6 +13,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -110,7 +111,7 @@ func session(t *testing.T, routes http.Handler, audit AuditLogger, caller Caller
 func sessionWith(t *testing.T, routes http.Handler, audit AuditLogger, caller Caller, settings Settings) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
-	server := newServer(newEnv(routes, audit, settings), caller)
+	server := newServer(ctx, newEnv(routes, audit, settings), caller)
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
 	if _, err := server.Connect(ctx, serverTransport, nil); err != nil {
 		t.Fatalf("server connect: %v", err)
@@ -165,6 +166,8 @@ type routeCase struct {
 	tool  string
 	args  map[string]any
 	setup func(f *fakeRoutes)
+	// features are switched on for a dark tool's case.
+	features []features.Feature
 	// plane answers a tool that calls the project's data API.
 	plane  http.Handler
 	expect []string
@@ -270,7 +273,7 @@ func baseRouteCases() []routeCase {
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodGet, schemaA+"/tables", 200, `[{"name":"orders","schema":"app","type":"table"}]`)
 			},
-			expect: []string{"GET " + schemaA + "/tables?schema=app"},
+			expect: []string{"GET " + provisionA, "GET " + schemaA + "/tables?schema=app"},
 		},
 		{
 			name: "describe_table", tool: "describe_table", args: map[string]any{"project_id": testProjectA, "table": "orders"},
@@ -280,7 +283,7 @@ func baseRouteCases() []routeCase {
 				f.on(http.MethodGet, schemaA+"/tables/orders/checks", 200, `[{"name":"orders_total_check","definition":"CHECK ((total >= 0))","columns":["total"]}]`)
 				f.on(http.MethodGet, schemaA+"/relationships", 200, `[{"sourceTable":"orders","sourceColumn":"customer_id","targetTable":"customers","targetColumn":"id"},{"sourceTable":"items","sourceColumn":"order_id","targetTable":"orders","targetColumn":"id"},{"sourceTable":"a","targetTable":"b"}]`)
 			},
-			expect: []string{"GET " + schemaA + "/tables/orders/columns?schema=public", "GET " + schemaA + "/tables/orders/indexes?schema=public", "GET " + schemaA + "/tables/orders/checks?schema=public", "GET " + schemaA + "/relationships?schema=public"},
+			expect: []string{"GET " + provisionA, "GET " + schemaA + "/tables/orders/columns?schema=public", "GET " + schemaA + "/tables/orders/indexes?schema=public", "GET " + schemaA + "/tables/orders/checks?schema=public", "GET " + schemaA + "/relationships?schema=public"},
 			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
 				if checks, _ := out["checks"].([]any); len(checks) != 1 {
 					t.Errorf("checks = %v", out["checks"])
@@ -301,7 +304,7 @@ func baseRouteCases() []routeCase {
 				f.on(http.MethodGet, schemaA+"/relationships", 200, `[]`)
 				f.on(http.MethodGet, projectsA+"/realtime/tables", 200, `[{"schema":"public","table":"orders","enabled":true}]`)
 			},
-			expect: []string{"GET " + schemaA + "/tables?schema=public", "GET " + schemaA + "/relationships?schema=public", "GET " + schemaA + "/tables/orders/columns?schema=public", "GET " + projectsA + "/realtime/tables"},
+			expect: []string{"GET " + provisionA, "GET " + schemaA + "/tables?schema=public", "GET " + schemaA + "/relationships?schema=public", "GET " + schemaA + "/tables/orders/columns?schema=public", "GET " + projectsA + "/realtime/tables"},
 			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
 				if out["endpoint"] != "https://api.example.test/proj-a/graphql" {
 					t.Errorf("endpoint = %v", out["endpoint"])
@@ -522,6 +525,19 @@ func baseRouteCases() []routeCase {
 			expect: []string{"DELETE " + projectsA + "/realtime/tables/app/todos"},
 		},
 		{
+			// EXC-641: the schema-qualified name set_permission takes works here too.
+			name: "set_realtime qualified", tool: "set_realtime", args: map[string]any{"project_id": testProjectA, "table": "app.todos", "enabled": true},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodPut, projectsA+"/realtime/tables/app/todos", 200, `{"status":"enabled"}`)
+			},
+			expect: []string{"PUT " + projectsA + "/realtime/tables/app/todos"},
+			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+				if out["schema"] != "app" || out["table"] != "todos" || out["subscription"] != "appTodosChanges" {
+					t.Errorf("out = %v", out)
+				}
+			},
+		},
+		{
 			name: "delete_function", tool: "delete_function", args: map[string]any{"project_id": testProjectA, "id": "shorten"},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodDelete, projectsA+"/functions/shorten/", 204, ``)
@@ -578,8 +594,9 @@ func baseRouteCases() []routeCase {
 			args: map[string]any{"project_id": testProjectA, "function": "public.short_code", "role": "anon", "allowed": false},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodDelete, "/api/provision/proj-a/function-permissions/public.short_code/roles/anon", 204, ``)
+				f.on(http.MethodGet, "/api/provision/proj-a/permissions/", 200, `{"functions":[]}`)
 			},
-			expect: []string{"DELETE /api/provision/proj-a/function-permissions/public.short_code/roles/anon"},
+			expect: []string{"DELETE /api/provision/proj-a/function-permissions/public.short_code/roles/anon", "GET /api/provision/proj-a/permissions/"},
 		},
 		{
 			name: "list_apps marks an app never deployed", tool: "list_apps", args: map[string]any{"project_id": testProjectA},
@@ -606,13 +623,13 @@ func baseRouteCases() []routeCase {
 		},
 		{
 			name: "deploy_app with a new image", tool: "deploy_app",
-			args: map[string]any{"project_id": testProjectA, "app_id": "web", "image": "ghcr.io/a/web:main", "commit_sha": "abc123"},
+			args: map[string]any{"project_id": testProjectA, "app_id": "web", "image": "ghcr.io/a/web:main", "commit_sha": "abc1234"},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodPost, projectsA+"/apps/web/deploy", 202, `{"id":"d1","status":"pending"}`)
 			},
 			expect: []string{"POST " + projectsA + "/apps/web/deploy"},
 			check: func(t *testing.T, calls []recordedCall, _ map[string]any) {
-				if calls[0].Body != `{"commitSha":"abc123","image":"ghcr.io/a/web:main"}` {
+				if calls[0].Body != `{"commitSha":"abc1234","image":"ghcr.io/a/web:main"}` {
 					t.Errorf("deploy body = %s", calls[0].Body)
 				}
 			},
@@ -744,6 +761,9 @@ func TestEveryToolGoesThroughItsRoute(t *testing.T) {
 				tc.setup(routes)
 			}
 			settings := testSettings
+			if tc.features != nil {
+				settings.Features = features.NewStatic(tc.features...)
+			}
 			if tc.plane != nil {
 				plane := httptest.NewServer(tc.plane)
 				t.Cleanup(plane.Close)
@@ -777,7 +797,9 @@ func TestToolDescriptionsSteerTheClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	wants := map[string][]string{
-		"deploy_function":     {"APIs", "not web pages", "script-src 'self'", "create_app"},
+		// EXC-640: the handler contract and the route the SDK calls.
+		"deploy_function": {"APIs", "not web pages", "script-src 'self'", "create_app",
+			"export default (req: Request) => Response", "named exports", "/functions/v1/{projectId}/{id}", "db.functions.", `{"args"`},
 		"get_ci_snippet":      {"after the app exists"},
 		"deploy_app":          {"public", "pass its tag"},
 		"create_app":          {"CORS"},
@@ -935,7 +957,9 @@ func TestBoundConnectionListsOnlyItsProject(t *testing.T) {
 // without the project, so an outsider cannot write into someone's feed.
 func TestACallIsFiledUnderAProjectOnlyWhenTheProjectAnswered(t *testing.T) {
 	routes := newFakeRoutes()
+	routes.on(http.MethodGet, provisionA, 404, `{"error":"project not found"}`)
 	routes.on(http.MethodGet, schemaA+"/tables", 404, `{"error":"project not found"}`)
+	routes.on(http.MethodGet, "/api/provision/"+testProjectB, 401, `{"error":"unauthenticated"}`)
 	routes.on(http.MethodGet, "/api/schema/"+testProjectB+"/tables", 401, `{"error":"unauthenticated"}`)
 	audit := &recordingAudit{}
 	cs := session(t, routes, audit, writeCaller())

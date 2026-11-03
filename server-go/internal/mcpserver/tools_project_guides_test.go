@@ -21,10 +21,14 @@ func TestProjectInfoStatesTheEndUserIdTypeAndHowToCompareIt(t *testing.T) {
 	auth, _ := out["endUserAuth"].(map[string]any)
 	permissions, _ := out["permissions"].(map[string]any)
 	idType, _ := auth["userIdType"].(string)
-	for _, want := range []string{"numeric", "string claim", `"42"`} {
+	// EXC-641: auth signs userId as a JSON number and carries the email in sub only.
+	for _, want := range []string{"JSON number", `"userId": 42`, "no email claim", "sub", "X-Excalibase-Email"} {
 		if !strings.Contains(idType, want) {
 			t.Errorf("userIdType lacks %q: %s", want, idType)
 		}
+	}
+	if strings.Contains(idType, "never a JSON number") {
+		t.Errorf("userIdType still says the claim is a string: %s", idType)
 	}
 	compare, _ := permissions["ownerColumnType"].(string)
 	for _, want := range []string{"bigint", "text", "uuid", "invalid_session_variable"} {

@@ -39,10 +39,11 @@ const (
 	errPermissionsNotSaved    = "the change could not be saved"
 )
 
-// FunctionInspector reads a function's live definition from the project's
-// own database.
+// FunctionInspector reads a function's live definition, and a schema's
+// tables, columns and relationships, from the project's own database.
 type FunctionInspector interface {
 	FunctionDetails(ctx context.Context, projectID, schemaName, name string) ([]schema.FunctionDetail, error)
+	LiveSchema(ctx context.Context, projectID, schemaName string) (*permissions.LiveSchema, error)
 }
 
 // PermissionHandler serves a project's API permissions.
@@ -130,6 +131,9 @@ func (h *PermissionHandler) PutPermission(w http.ResponseWriter, r *http.Request
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if !h.matchesLiveSchema(w, r, perm, definition) {
+		return
+	}
 	perm.Definition = definition
 	created, err := h.store.PutPermission(r.Context(), perm)
 	if err != nil {
@@ -162,6 +166,31 @@ func (h *PermissionHandler) DeletePermission(w http.ResponseWriter, r *http.Requ
 	h.publish(r.Context(), perm.ProjectID, domain.PermissionChangeKind, perm.Table, perm.Role+"/"+perm.Operation,
 		domain.OpChangeDelete)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// matchesLiveSchema refuses what the engine would drop as permission_invalid
+// (EXC-649): saved, it would hide the table from the role with no error.
+func (h *PermissionHandler) matchesLiveSchema(w http.ResponseWriter, r *http.Request, perm domain.TablePermission,
+	definition json.RawMessage) bool {
+	source := func(ctx context.Context, schemaName string) (*permissions.LiveSchema, error) {
+		return h.inspector.LiveSchema(ctx, perm.ProjectID, schemaName)
+	}
+	err := permissions.CheckLive(r.Context(), source, perm.Table, perm.Operation, definition)
+	var refused *permissions.InvalidPermissionError
+	switch {
+	case err == nil:
+		return true
+	case errors.As(err, &refused):
+		httpError(w, refused.Error(), http.StatusBadRequest)
+	case errors.Is(err, projectdb.ErrNotServable):
+		httpError(w, "project is not running; a permission is checked against its database", http.StatusConflict)
+	case errors.Is(err, domain.ErrNoDatabase):
+		httpError(w, domain.ErrNoDatabase.Error(), http.StatusConflict)
+	default:
+		log.Printf("permissions: read schema of %s for %s: %v", perm.ProjectID, perm.Table, err)
+		httpError(w, "could not read the project database's schema", http.StatusBadGateway)
+	}
+	return false
 }
 
 func readPermissionBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {

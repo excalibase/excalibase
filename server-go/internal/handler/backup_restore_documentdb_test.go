@@ -36,7 +36,7 @@ func setupBackupHandlerForDocumentDBOn(t *testing.T, mode domain.DeploymentMode,
 	})
 
 	jobs := &fakeRestoreJobStoreForHandler{}
-	orch := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs})
+	orch := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs, Slots: unmeteredSlots{}})
 	orch.SetSteps([]service.RestoreStep{
 		{Name: "noop", Run: func(_ context.Context, _ *domain.RestoreJob) error { return nil }},
 	})

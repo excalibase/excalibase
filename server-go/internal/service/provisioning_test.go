@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
 )
 
 const (
@@ -780,7 +782,7 @@ func (f *fakeVault) Get(p string) (map[string]string, error) {
 	if d, ok := f.data[p]; ok {
 		return d, nil
 	}
-	return nil, errors.New("not found")
+	return nil, fmt.Errorf("%w: %s", vault.ErrNotFound, p)
 }
 func (f *fakeVault) Put(p string, d map[string]string) error {
 	if f.putErr != nil {
@@ -819,18 +821,25 @@ func (f *fakeVault) List(prefix string) ([]string, error) {
 }
 func (f *fakeVault) Sealed() bool                  { return false }
 func (f *fakeVault) GetPublicKey() (string, error) { return "", nil }
+func (f *fakeVault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	if _, err := f.Get(path); err == nil {
+		return false, nil
+	}
+	return true, f.Put(path, data)
+}
 
 // errVault returns a fixed error from List — used to verify Deprovision
 // logs+continues on vault outage rather than stranding the instance row.
 type errVault struct{ err error }
 
-func (e *errVault) Get(string) (map[string]string, error) { return nil, e.err }
-func (e *errVault) Put(string, map[string]string) error   { return e.err }
-func (e *errVault) Delete(string) error                   { return e.err }
-func (e *errVault) DeletePrefix(string) (int, error)      { return 0, e.err }
-func (e *errVault) List(string) ([]string, error)         { return nil, e.err }
-func (e *errVault) Sealed() bool                          { return false }
-func (e *errVault) GetPublicKey() (string, error)         { return "", e.err }
+func (e *errVault) Get(string) (map[string]string, error)               { return nil, e.err }
+func (e *errVault) Put(string, map[string]string) error                 { return e.err }
+func (e *errVault) Delete(string) error                                 { return e.err }
+func (e *errVault) DeletePrefix(string) (int, error)                    { return 0, e.err }
+func (e *errVault) List(string) ([]string, error)                       { return nil, e.err }
+func (e *errVault) Sealed() bool                                        { return false }
+func (e *errVault) GetPublicKey() (string, error)                       { return "", e.err }
+func (e *errVault) PutIfAbsent(string, map[string]string) (bool, error) { return false, e.err }
 
 // sealedVault reports Sealed=true and counts any other call so the test
 // can assert nothing else was invoked.
@@ -840,13 +849,14 @@ type sealedVault struct {
 	deletePrefixCalls int
 }
 
-func (s *sealedVault) Get(string) (map[string]string, error) { return nil, nil }
-func (s *sealedVault) Put(string, map[string]string) error   { return nil }
-func (s *sealedVault) Delete(string) error                   { s.deleteCalls++; return nil }
-func (s *sealedVault) DeletePrefix(string) (int, error)      { s.deletePrefixCalls++; return 0, nil }
-func (s *sealedVault) List(string) ([]string, error)         { s.listCalls++; return nil, nil }
-func (s *sealedVault) Sealed() bool                          { return true }
-func (s *sealedVault) GetPublicKey() (string, error)         { return "", nil }
+func (s *sealedVault) Get(string) (map[string]string, error)               { return nil, nil }
+func (s *sealedVault) Put(string, map[string]string) error                 { return nil }
+func (s *sealedVault) Delete(string) error                                 { s.deleteCalls++; return nil }
+func (s *sealedVault) DeletePrefix(string) (int, error)                    { s.deletePrefixCalls++; return 0, nil }
+func (s *sealedVault) List(string) ([]string, error)                       { s.listCalls++; return nil, nil }
+func (s *sealedVault) Sealed() bool                                        { return true }
+func (s *sealedVault) GetPublicKey() (string, error)                       { return "", nil }
+func (s *sealedVault) PutIfAbsent(string, map[string]string) (bool, error) { return false, nil }
 
 // --- Rollback on failure ---
 

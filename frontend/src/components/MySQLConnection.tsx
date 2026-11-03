@@ -1,6 +1,6 @@
 import { SshTunnelNote } from './SshTunnelNote';
 import { CertificateAuthority, caFileName } from './CertificateAuthority';
-import { StringRow, internalTarget, labels, publicTarget, type SectionProps, type Target } from './ConnectionParts';
+import { StringRow, internalTarget, labels, publicTarget, userinfo, type SectionProps, type Target } from './ConnectionParts';
 
 // The Node example takes the password from the environment, so no secret is
 // ever part of a snippet someone pastes into code.
@@ -56,7 +56,7 @@ function Snippet({ testId, label, code }: { readonly testId: string; readonly la
 export function MySQLSection({ projectId, credentials, endpoint, shownPassword }: SectionProps) {
   const caFile = caFileName(projectId);
   const uri = (target: Target, password: string) =>
-    `mysql://${credentials.username}:${password}@${target.host}:${target.port}/${credentials.databaseName}?ssl-mode=VERIFY_IDENTITY&ssl-ca=${caFile}`;
+    `mysql://${userinfo(credentials.username, password)}@${target.host}:${target.port}/${credentials.databaseName}?ssl-mode=VERIFY_IDENTITY&ssl-ca=${caFile}`;
   const row = (target: Target) => ({ shown: uri(target, shownPassword), copied: uri(target, credentials.password) });
   const internal = internalTarget(credentials, endpoint);
   const external = publicTarget(endpoint);

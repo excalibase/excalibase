@@ -15,6 +15,8 @@ import (
 	"path"
 	"regexp"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/logsafe"
 )
 
 // maxCreateBody bounds the JSON the proxy reads to check a create.
@@ -37,6 +39,9 @@ type route int
 const (
 	routeManaged route = iota
 	routeExecCreate
+	routeStats
+	// routeRename takes a new name a create could take (EXC-668).
+	routeRename
 )
 
 // containerRoutes are the calls provisioning makes on a container it created.
@@ -51,6 +56,8 @@ var containerRoutes = map[string]route{
 	"POST /exec":    routeExecCreate,
 	"GET /logs":     routeManaged,
 	"POST /wait":    routeManaged,
+	"GET /stats":    routeStats,
+	"POST /rename":  routeRename,
 }
 
 // Handler is the proxy. Build it with NewHandler.
@@ -79,6 +86,9 @@ func NewHandler(policy Policy, target *url.URL, transport http.RoundTripper) *Ha
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.servePlatformInspect(w, r) {
+		return
+	}
 	if err := h.authorize(r); err != nil {
 		h.refuse(w, r, err)
 		return
@@ -137,11 +147,21 @@ func (h *Handler) authorizeContainer(r *http.Request, id, action string) error {
 	if !ok {
 		return refuse("%s /containers/{id}%s is not a call provisioning makes", r.Method, action)
 	}
+	if kind == routeStats {
+		return h.authorizeStats(r, id)
+	}
 	if err := h.requireManaged(r.Context(), id); err != nil {
 		return err
 	}
-	if kind == routeExecCreate {
+	switch kind {
+	case routeExecCreate:
 		return h.checkBody(r, CheckExecCreate)
+	case routeRename:
+		names := r.URL.Query()["name"]
+		if len(names) != 1 {
+			return refuse("a rename names exactly one name")
+		}
+		return h.policy.CheckRename(names[0])
 	}
 	return nil
 }
@@ -214,9 +234,13 @@ func (h *Handler) checkBody(r *http.Request, check func([]byte) error) error {
 	if len(body) > maxCreateBody {
 		return refuse("request body is larger than %d bytes", maxCreateBody)
 	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.ContentLength = int64(len(body))
-	return check(body)
+	checked, err := canonicalBody(body)
+	if err != nil {
+		return err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(checked))
+	r.ContentLength = int64(len(checked))
+	return check(checked)
 }
 
 func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
@@ -227,7 +251,7 @@ func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
 	case !errors.Is(err, ErrRefused) && !errors.Is(err, errNotManaged):
 		status = http.StatusBadGateway
 	}
-	log.Printf("engine proxy: %d %s %s: %v", status, r.Method, r.URL.Path, err)
+	log.Printf("engine proxy: %d %s %s: %v", status, logsafe.Value(r.Method), logsafe.Value(r.URL.Path), err)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"message": err.Error()})

@@ -89,6 +89,8 @@ type KubeClient interface {
 	// project with none refuses connections rather than pointing at
 	// nothing, which is what a paused or deleting project must do.
 	PublicDBServiceExists(ctx context.Context, namespace, name string) (bool, error)
+	// PublicDBServiceSourceRanges reads back the addresses it admits (EXC-665).
+	PublicDBServiceSourceRanges(ctx context.Context, namespace, name string) ([]string, error)
 	// DeletePublicDBService removes the Service so the port stops
 	// answering. Deleting an absent one succeeds.
 	DeletePublicDBService(ctx context.Context, namespace, name string) error
@@ -152,6 +154,7 @@ type KubeClient interface {
 	AppLogs(ctx context.Context, namespace, appID string, opts AppLogOptions) (AppLogPage, error)
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)
 	LiveAppPods(ctx context.Context, namespace, appID string) (AppPods, error)
+	AppRestarts(ctx context.Context, namespace, appID string) (AppRestarts, error)
 	RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error)
 	PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error)
 	SyncAppDomains(ctx context.Context, namespace string, app *apphost.App, hosts []string, opts AppDomainOptions) error

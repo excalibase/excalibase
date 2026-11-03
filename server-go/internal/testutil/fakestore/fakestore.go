@@ -312,6 +312,29 @@ func (s *Tokens) FindByTokenHash(_ context.Context, hash string) (*domain.Access
 	return s.ByHash[hash], nil
 }
 
+// CreateToken stores the token under its hash.
+func (s *Tokens) CreateToken(_ context.Context, token *domain.AccessToken) error {
+	s.ByHash[token.TokenHash] = token
+	return nil
+}
+
+// ListTokensByProject returns the tokens bound to projectID.
+func (s *Tokens) ListTokensByProject(_ context.Context, projectID string) ([]*domain.AccessToken, error) {
+	var out []*domain.AccessToken
+	for _, token := range s.ByHash {
+		if token.ProjectID == projectID {
+			out = append(out, token)
+		}
+	}
+	return out, nil
+}
+
+// DeleteToken removes the token with that hash.
+func (s *Tokens) DeleteToken(_ context.Context, hash string) error {
+	delete(s.ByHash, hash)
+	return nil
+}
+
 // FindUserByID returns the user or an error when unknown, mirroring the
 // real store's not-found behaviour.
 func (s *Tokens) FindUserByID(_ context.Context, id string) (*domain.User, error) {

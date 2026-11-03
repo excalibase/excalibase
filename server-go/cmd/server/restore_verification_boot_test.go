@@ -24,6 +24,12 @@ func (bootVault) DeletePrefix(string) (int, error)      { return 0, nil }
 func (bootVault) List(string) ([]string, error)         { return nil, nil }
 func (bootVault) Sealed() bool                          { return false }
 func (bootVault) GetPublicKey() (string, error)         { return "", nil }
+func (v bootVault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	if _, err := v.Get(path); err == nil {
+		return false, nil
+	}
+	return true, v.Put(path, data)
+}
 
 // unverifiableAdapter is a BackupAdapter that cannot take a database probe —
 // the shape a future or legacy adapter would have if it forgot to.

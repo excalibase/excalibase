@@ -8,13 +8,13 @@ import (
 
 var plainIdentifier = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 
-// tsTypes maps information_schema data types to TypeScript.
+// tsTypes maps information_schema data types to TypeScript. Bigints and
+// decimals are strings: the API answers them as strings of every digit.
 var tsTypes = map[string]string{
-	"smallint": "number", "integer": "number", "bigint": "number", "real": "number",
-	"double precision": "number", "numeric": "number", "decimal": "number", "oid": "number",
+	"smallint": "number", "integer": "number", "bigint": "string", "real": "number",
+	"double precision": "number", "numeric": "string", "decimal": "string", "oid": "number",
 	"boolean": "boolean",
 	"json":    "Json", "jsonb": "Json",
-	"ARRAY": "unknown[]",
 }
 
 // typeScriptFor renders a Postgres schema's types.
@@ -41,6 +41,9 @@ func typeScriptForEngine(schemaName string, tables []tableColumns, engine string
 		fmt.Fprintf(&out, "\nexport interface %s {\n", names[i])
 		for _, column := range table.Columns {
 			fieldType := columnType(column.DataType)
+			if column.DataType == "ARRAY" {
+				fieldType = arrayTSType(column.ElementType)
+			}
 			if column.Nullable {
 				fieldType += " | null"
 			}
@@ -54,6 +57,15 @@ func typeScriptForEngine(schemaName string, tables []tableColumns, engine string
 	}
 	out.WriteString("  };\n}\n")
 	return out.String()
+}
+
+// arrayTSType is an array of its elements' type; unknown[] when the element
+// type was not reported.
+func arrayTSType(elementType string) string {
+	if elementType == "" {
+		return "unknown[]"
+	}
+	return tsType(elementType) + "[]"
 }
 
 func tsType(dataType string) string {

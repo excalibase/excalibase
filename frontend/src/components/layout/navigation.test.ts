@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { PROJECT_NAV, visibleNavItems, visibleProjectNav } from './navigation';
+import { PROJECT_NAV, visibleNavItems, visibleProjectNav, visiblePlatformNav } from './navigation';
 
 describe('project navigation', () => {
   test('the project home is the project, not its database', () => {
@@ -39,5 +39,46 @@ describe('project navigation', () => {
     expect(keys(false)).not.toContain('sites');
     expect(keys(true)).toContain('sites');
     expect(PROJECT_NAV.find((section) => section.key === 'sites')).toMatchObject({ label: 'Sites', to: 'sites' });
+  });
+
+  // EXC-654: Slow queries ships dark and serves Postgres and MySQL alike.
+  test('Slow queries is listed only with its feature on, on either engine', () => {
+    const monitoring = PROJECT_NAV.find((section) => section.key === 'monitoring');
+    const labels = (postgres: boolean, slowqueries?: boolean) =>
+      visibleNavItems(monitoring?.children ?? [], false, postgres, { slowqueries }).map((item) => item.label);
+    expect(labels(true)).not.toContain('Slow queries');
+    expect(labels(true, false)).not.toContain('Slow queries');
+    expect(labels(true, true)).toContain('Slow queries');
+    expect(labels(false, true)).toEqual(['Metrics', 'Alerts', 'Logs', 'Slow queries']);
+    expect(monitoring?.children?.find((item) => item.label === 'Slow queries')).toMatchObject({ to: 'monitoring/slow-queries', feature: 'slowqueries' });
+  });
+  // EXC-656: Requests ships dark and serves Postgres and MySQL alike.
+  test('Requests is listed only with its feature on, on either engine', () => {
+    const monitoring = PROJECT_NAV.find((section) => section.key === 'monitoring');
+    const labels = (postgres: boolean, requestmetrics?: boolean) =>
+      visibleNavItems(monitoring?.children ?? [], false, postgres, { requestmetrics }).map((item) => item.label);
+    expect(labels(true)).not.toContain('Requests');
+    expect(labels(true, true)).toContain('Requests');
+    expect(labels(false, true)).toContain('Requests');
+    expect(monitoring?.children?.find((item) => item.label === 'Requests')).toMatchObject({ to: 'monitoring/requests', feature: 'requestmetrics' });
+  });
+});
+
+describe('platform navigation', () => {
+  const labels = (isAdmin: boolean, selfHosted: boolean, hostmetrics?: boolean) =>
+    visiblePlatformNav({ isAdmin, selfHosted, features: { hostmetrics } }).map((item) => item.label);
+
+  // EXC-670: host monitoring ships dark and is for platform admins only.
+  test('Host is listed only for platform admins with host metrics on', () => {
+    expect(labels(true, true)).not.toContain('Host');
+    expect(labels(true, true, false)).not.toContain('Host');
+    expect(labels(false, true, true)).not.toContain('Host');
+    expect(labels(true, true, true)).toContain('Host');
+    expect(visiblePlatformNav({ isAdmin: true, selfHosted: true, features: { hostmetrics: true } }).find((item) => item.label === 'Host')).toMatchObject({ to: '/admin/host' });
+  });
+
+  test('organizations are a cloud page and Platform Admin an admin one', () => {
+    expect(labels(false, true)).toEqual(['Dashboard', 'Projects', 'Provision', 'Access tokens']);
+    expect(labels(true, false)).toEqual(['Dashboard', 'Organizations', 'Projects', 'Provision', 'Access tokens', 'Platform Admin']);
   });
 });

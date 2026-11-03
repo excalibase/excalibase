@@ -21,6 +21,10 @@ const (
 	ScopeWrite = "write"
 	// ScopeAdmin is a superset of write kept for pre-existing tokens.
 	ScopeAdmin = "admin"
+	// ScopeMetricsRead is a metrics key (EXC-657): it reads one project's
+	// Prometheus endpoint and is refused everywhere else. Only that project's
+	// metrics-keys route mints it, so it is not creatable here.
+	ScopeMetricsRead = "metrics:read"
 )
 
 // creatableScopes are the scopes a caller may request on a new PAT.
@@ -47,6 +51,12 @@ func NormalizeScopes(requested []string) (string, error) {
 	}
 	sort.Strings(out)
 	return strings.Join(out, ","), nil
+}
+
+// IsMetricsKey reports whether t is a metrics key. It checks the scope set
+// itself: TokenHasScope would count a legacy empty-scope token as one.
+func IsMetricsKey(t *domain.AccessToken) bool {
+	return t != nil && scopeSet(t.Scopes)[ScopeMetricsRead]
 }
 
 // TokenBoundToProject reports whether the token may act on projectID. A nil

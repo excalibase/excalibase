@@ -98,3 +98,90 @@ func TestS3IsDeclaredAndOffByDefault(t *testing.T) {
 		t.Fatal("s3 ships dark")
 	}
 }
+
+func TestWhenOnAppliesTheMiddlewareOnlyWhileTheFeatureIsOn(t *testing.T) {
+	refuse := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
+	}
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	for _, tc := range []struct {
+		flags Flags
+		want  int
+	}{{NewStatic(AuthOAuth), http.StatusForbidden}, {NewStatic(), http.StatusOK}} {
+		w := httptest.NewRecorder()
+		WhenOn(tc.flags, AuthOAuth, refuse)(ok).ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/", nil))
+		if w.Code != tc.want {
+			t.Errorf("status = %d, want %d", w.Code, tc.want)
+		}
+	}
+}
+
+func TestWhenAnyOnAppliesTheMiddlewareWhileEitherFeatureIsOn(t *testing.T) {
+	refuse := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
+	}
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	either := []Feature{AuthOAuth, AuthOTP}
+	for _, tc := range []struct {
+		flags Flags
+		want  int
+	}{{NewStatic(AuthOTP), http.StatusForbidden}, {NewStatic(AuthOAuth), http.StatusForbidden}, {NewStatic(MCP), http.StatusOK}} {
+		w := httptest.NewRecorder()
+		WhenAnyOn(tc.flags, either, refuse)(ok).ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/", nil))
+		if w.Code != tc.want {
+			t.Errorf("status = %d, want %d", w.Code, tc.want)
+		}
+	}
+}
+
+// EXC-662: end-user account self-service ships dark and Studio is told its state.
+func TestAll_DeclaresAuthUser(t *testing.T) {
+	if AuthUser != "authuser" {
+		t.Errorf("auth user feature = %q", AuthUser)
+	}
+	if _, listed := Snapshot(context.Background(), NewStatic())[string(AuthUser)]; !listed {
+		t.Error("authuser is not reported to Studio")
+	}
+	if !NewStatic(AuthUser).Enabled(context.Background(), AuthUser) {
+		t.Error("authuser cannot be switched on")
+	}
+}
+
+// EXC-662: end-user auth hooks ship dark and Studio is told their state.
+func TestAll_DeclaresAuthHooks(t *testing.T) {
+	if AuthHooks != "authhooks" {
+		t.Errorf("auth hooks feature = %q", AuthHooks)
+	}
+	if _, listed := Snapshot(context.Background(), NewStatic())[string(AuthHooks)]; !listed {
+		t.Error("authhooks is not reported to Studio")
+	}
+	if !NewStatic(AuthHooks).Enabled(context.Background(), AuthHooks) {
+		t.Error("authhooks cannot be switched on")
+	}
+}
+
+// EXC-662: end-user TOTP MFA ships dark and Studio is told its state.
+func TestAll_DeclaresAuthMFA(t *testing.T) {
+	if AuthMFA != "authmfa" {
+		t.Errorf("auth mfa feature = %q", AuthMFA)
+	}
+	if _, listed := Snapshot(context.Background(), NewStatic())[string(AuthMFA)]; !listed {
+		t.Error("authmfa is not reported to Studio")
+	}
+	if !NewStatic(AuthMFA).Enabled(context.Background(), AuthMFA) {
+		t.Error("authmfa cannot be switched on")
+	}
+}
+
+// EXC-669: the template catalog ships dark and Studio is told its state.
+func TestAll_DeclaresTemplateCatalog(t *testing.T) {
+	if TemplateCatalog != "templatecatalog" {
+		t.Errorf("template catalog feature = %q", TemplateCatalog)
+	}
+	if _, listed := Snapshot(context.Background(), NewStatic())[string(TemplateCatalog)]; !listed {
+		t.Error("templatecatalog is not reported to Studio")
+	}
+	if !NewStatic(TemplateCatalog).Enabled(context.Background(), TemplateCatalog) {
+		t.Error("templatecatalog cannot be switched on")
+	}
+}

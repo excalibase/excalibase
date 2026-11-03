@@ -248,6 +248,15 @@ func (p *MySQLProvisioner) EnsurePlatformUsers(ctx context.Context, namespace, p
 	return nil
 }
 
+// ForgetEndUserSessions ends, on the primary, what a restored copy's end
+// users were issued by the source project.
+func (p *MySQLProvisioner) ForgetEndUserSessions(ctx context.Context, namespace, projectID string) error {
+	if err := p.execSecret(ctx, namespace, projectID, MySQLEndUserSessionsRevokeSQL); err != nil {
+		return fmt.Errorf("end the source's end-user sessions: %w", err)
+	}
+	return nil
+}
+
 // SetUserPassword sets one platform user's password.
 func (p *MySQLProvisioner) SetUserPassword(ctx context.Context, namespace, projectID, user, password string) error {
 	if err := p.execSecret(ctx, namespace, projectID, MySQLAlterUserSQL(user, password), password); err != nil {
@@ -256,7 +265,8 @@ func (p *MySQLProvisioner) SetUserPassword(ctx context.Context, namespace, proje
 	return nil
 }
 
-// SetUserPasswords sets several platform users' passwords in one batch.
+// SetUserPasswords sets several platform users' passwords in one batch, and
+// takes away excalibase_app's old auth read grant (EXC-628).
 func (p *MySQLProvisioner) SetUserPasswords(ctx context.Context, namespace, projectID string, passwords map[string]string) error {
 	users := make([]string, 0, len(passwords))
 	for user := range passwords {
@@ -269,6 +279,8 @@ func (p *MySQLProvisioner) SetUserPasswords(ctx context.Context, namespace, proj
 		statements.WriteString(MySQLAlterUserSQL(user, passwords[user]) + "\n")
 		secrets = append(secrets, passwords[user])
 	}
+	// This is the in-place restore's reset; the backup may predate EXC-628.
+	statements.WriteString(MySQLAppAuthRevokeSQL + "\n")
 	if err := p.execSecret(ctx, namespace, projectID, statements.String(), secrets...); err != nil {
 		return fmt.Errorf("set the platform users' passwords: %w", err)
 	}
@@ -294,6 +306,14 @@ func (p *MySQLProvisioner) execSecret(ctx context.Context, namespace, projectID,
 		}
 		log.Printf("WARN: mysql on %s/%s: %s", namespace, k8s.MySQLPrimaryPod(cluster), reported)
 		return errors.New("the statements were refused or could not be run on the primary")
+	}
+	return nil
+}
+
+// GrantQueryStats lets the platform login read the project's statement digests.
+func (p *MySQLProvisioner) GrantQueryStats(ctx context.Context, namespace, projectID string) error {
+	if err := p.execSecret(ctx, namespace, projectID, MySQLQueryStatsGrantSQL); err != nil {
+		return fmt.Errorf("grant the statement digests: %w", err)
 	}
 	return nil
 }

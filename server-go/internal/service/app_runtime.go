@@ -47,5 +47,6 @@ type AppRuntime interface {
 
 	GetClusterCapacity(ctx context.Context) (k8s.ClusterCapacity, error)
 	LiveAppPods(ctx context.Context, namespace, appID string) (k8s.AppPods, error)
+	AppRestarts(ctx context.Context, namespace, appID string) (k8s.AppRestarts, error)
 	RuntimeClassPlacement(ctx context.Context, name string) (k8s.RuntimePlacement, error)
 }

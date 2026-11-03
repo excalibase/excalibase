@@ -51,6 +51,23 @@ func (p *DockerMySQLProvisioner) EnsurePlatformUsers(ctx context.Context, namesp
 	return nil
 }
 
+// GrantQueryStats lets the platform login read the project's statement digests.
+func (p *DockerMySQLProvisioner) GrantQueryStats(ctx context.Context, namespace, _ string) error {
+	if err := p.runSecret(ctx, namespace, MySQLQueryStatsGrantSQL); err != nil {
+		return fmt.Errorf("grant the statement digests: %w", err)
+	}
+	return nil
+}
+
+// ForgetEndUserSessions ends what a restored copy's end users were issued by
+// the source project.
+func (p *DockerMySQLProvisioner) ForgetEndUserSessions(ctx context.Context, namespace, _ string) error {
+	if err := p.runSecret(ctx, namespace, MySQLEndUserSessionsRevokeSQL); err != nil {
+		return fmt.Errorf("end the source's end-user sessions: %w", err)
+	}
+	return nil
+}
+
 // SetUserPassword sets one platform user's password.
 func (p *DockerMySQLProvisioner) SetUserPassword(ctx context.Context, namespace, _, user, password string) error {
 	if err := p.runSecret(ctx, namespace, MySQLAlterUserSQL(user, password), password); err != nil {
@@ -59,7 +76,8 @@ func (p *DockerMySQLProvisioner) SetUserPassword(ctx context.Context, namespace,
 	return nil
 }
 
-// SetUserPasswords sets several platform users' passwords in one batch.
+// SetUserPasswords sets several platform users' passwords in one batch, and
+// takes away excalibase_app's old auth read grant (EXC-628).
 func (p *DockerMySQLProvisioner) SetUserPasswords(ctx context.Context, namespace, _ string, passwords map[string]string) error {
 	users := make([]string, 0, len(passwords))
 	for user := range passwords {
@@ -72,6 +90,8 @@ func (p *DockerMySQLProvisioner) SetUserPasswords(ctx context.Context, namespace
 		statements.WriteString(MySQLAlterUserSQL(user, passwords[user]) + "\n")
 		secrets = append(secrets, passwords[user])
 	}
+	// This is the in-place restore's reset; the backup may predate EXC-628.
+	statements.WriteString(MySQLAppAuthRevokeSQL + "\n")
 	if err := p.runSecret(ctx, namespace, statements.String(), secrets...); err != nil {
 		return fmt.Errorf("set the platform users' passwords: %w", err)
 	}

@@ -76,6 +76,11 @@ type tierConfigDTO struct {
 	MaxSiteFileBytes      *int64 `json:"maxSiteFileBytes"`
 	MaxSiteDeploysPerHour *int   `json:"maxSiteDeploysPerHour"`
 	MaxSiteCustomDomains  *int   `json:"maxSiteCustomDomains"`
+	// Server-rendered sites per project and their code size (EXC-661).
+	MaxServerSites           *int   `json:"maxServerSites"`
+	MaxSiteServerBundleBytes *int64 `json:"maxSiteServerBundleBytes"`
+	MaxSiteServerCPUMillis   *int   `json:"maxSiteServerCpuMs"`
+	MaxSiteServerSubrequests *int   `json:"maxSiteServerSubrequests"`
 	// One git build's limits (EXC-354); each one left out keeps the plan's current value.
 	SiteBuildCPUMillis      *int    `json:"siteBuildCpuMillis"`
 	SiteBuildMemory         *string `json:"siteBuildMemory"`
@@ -100,12 +105,16 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 
 		AutoPauseAfterDays: tc.AutoPauseAfterDays,
 
-		MaxSites:              &tc.Sites.MaxSites,
-		MaxSiteDeployBytes:    &tc.Sites.MaxDeployBytes,
-		MaxSiteFiles:          &tc.Sites.MaxFiles,
-		MaxSiteFileBytes:      &tc.Sites.MaxFileBytes,
-		MaxSiteDeploysPerHour: &tc.Sites.MaxDeploysPerHour,
-		MaxSiteCustomDomains:  &tc.Sites.MaxCustomDomains,
+		MaxSites:                 &tc.Sites.MaxSites,
+		MaxSiteDeployBytes:       &tc.Sites.MaxDeployBytes,
+		MaxSiteFiles:             &tc.Sites.MaxFiles,
+		MaxSiteFileBytes:         &tc.Sites.MaxFileBytes,
+		MaxSiteDeploysPerHour:    &tc.Sites.MaxDeploysPerHour,
+		MaxSiteCustomDomains:     &tc.Sites.MaxCustomDomains,
+		MaxServerSites:           &tc.Sites.MaxServerSites,
+		MaxSiteServerBundleBytes: &tc.Sites.MaxServerBundleBytes,
+		MaxSiteServerCPUMillis:   &tc.Sites.MaxServerCPUMillis,
+		MaxSiteServerSubrequests: &tc.Sites.MaxServerSubrequests,
 
 		SiteBuildCPUMillis:      &tc.SiteBuilds.CPUMillis,
 		SiteBuildMemory:         &tc.SiteBuilds.Memory,
@@ -273,6 +282,18 @@ func (dto tierConfigDTO) siteLimits(current config.SiteTierLimits) config.SiteTi
 	if dto.MaxSiteCustomDomains != nil {
 		out.MaxCustomDomains = *dto.MaxSiteCustomDomains
 	}
+	if dto.MaxServerSites != nil {
+		out.MaxServerSites = *dto.MaxServerSites
+	}
+	if dto.MaxSiteServerBundleBytes != nil {
+		out.MaxServerBundleBytes = *dto.MaxSiteServerBundleBytes
+	}
+	if dto.MaxSiteServerCPUMillis != nil {
+		out.MaxServerCPUMillis = *dto.MaxSiteServerCPUMillis
+	}
+	if dto.MaxSiteServerSubrequests != nil {
+		out.MaxServerSubrequests = *dto.MaxSiteServerSubrequests
+	}
 	return out
 }
 
@@ -332,9 +353,19 @@ const (
 	maxSiteDeploysPerHourCap = 1000
 	// Cloudflare includes 100 custom hostnames per zone; every one after is billed.
 	maxSiteCustomDomainsCap = 100
+	// Cloudflare refuses a Worker above 64 MiB uncompressed.
+	minSiteServerBundleBytes = int64(1) << 20
+	maxSiteServerBundleBytes = int64(64) << 20
+	// Cloudflare's own ceilings for one request of a Worker.
+	minSiteServerCPUMillis   = 10
+	maxSiteServerCPUMillis   = 300_000
+	maxSiteServerSubrequests = 10_000
 )
 
 func validateSiteLimits(limits config.SiteTierLimits) error {
+	if err := validateServerSiteLimits(limits); err != nil {
+		return err
+	}
 	if limits.MaxCustomDomains < 0 || limits.MaxCustomDomains > maxSiteCustomDomainsCap {
 		return fmt.Errorf("maxSiteCustomDomains must be between 0 and %d (0 offers none)", maxSiteCustomDomainsCap)
 	}
@@ -352,6 +383,23 @@ func validateSiteLimits(limits config.SiteTierLimits) error {
 	}
 	if limits.MaxDeploysPerHour < 1 || limits.MaxDeploysPerHour > maxSiteDeploysPerHourCap {
 		return fmt.Errorf("maxSiteDeploysPerHour must be between 1 and %d", maxSiteDeploysPerHourCap)
+	}
+	return nil
+}
+
+// validateServerSiteLimits bounds what a plan's server-rendered sites (EXC-661) may use.
+func validateServerSiteLimits(limits config.SiteTierLimits) error {
+	if limits.MaxServerSites < 0 || limits.MaxServerSites > maxSitesCeiling {
+		return fmt.Errorf("maxServerSites must be between 0 and %d (0 offers none)", maxSitesCeiling)
+	}
+	if limits.MaxServerBundleBytes < minSiteServerBundleBytes || limits.MaxServerBundleBytes > maxSiteServerBundleBytes {
+		return fmt.Errorf("maxSiteServerBundleBytes must be between %d (1 MiB) and %d (64 MiB)", minSiteServerBundleBytes, maxSiteServerBundleBytes)
+	}
+	if limits.MaxServerCPUMillis < minSiteServerCPUMillis || limits.MaxServerCPUMillis > maxSiteServerCPUMillis {
+		return fmt.Errorf("maxSiteServerCpuMs must be between %d and %d", minSiteServerCPUMillis, maxSiteServerCPUMillis)
+	}
+	if limits.MaxServerSubrequests < 1 || limits.MaxServerSubrequests > maxSiteServerSubrequests {
+		return fmt.Errorf("maxSiteServerSubrequests must be between 1 and %d", maxSiteServerSubrequests)
 	}
 	return nil
 }

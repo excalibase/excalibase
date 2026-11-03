@@ -1,0 +1,85 @@
+#!/bin/sh
+# Stand-in for curl in the single-host bootstrap test. It understands the
+# flags bootstrap.sh uses and is driven by env:
+#
+#   CALL_LOG           file each call is appended to as "METHOD URL DATA"
+#   ME_FAIL            space-separated bearers /api/auth/me rejects
+#   VAULT_STATUS       body of GET /api/vault/status (default: open)
+#   SIGNING_PRIVATE    body of GET of the signing key ("" = 404)
+#   REGISTERED         non-empty: /api/auth/register creates the admin
+#   LOGIN_FAIL         non-empty: /api/auth/login answers without a token
+#   PRINCIPALS_EXIST   space-separated service principals that exist (default both)
+#   STORED_AUTH_PERMISSIONS / STORED_GRAPHQL_PERMISSIONS
+#                      permission list the listed token carries (default: the
+#                      list bootstrap.sh asks for, i.e. no drift)
+#   LISTING_CODE       status the token listing answers (default 200)
+#   REVOKE_FAIL        non-empty: DELETE /api/auth/tokens/{hash} fails
+set -u
+
+METHOD=GET URL= DATA= BEARER= WANT_CODE=0 OUT= FAIL_ON_ERROR=0 prev=
+for arg in "$@"; do
+  case "$arg" in -*f*) FAIL_ON_ERROR=1 ;; esac
+  case "$prev" in
+    -X) METHOD=$arg ;;
+    -d) DATA=$arg ;;
+    -o) OUT=$arg ;;
+    -w) WANT_CODE=1 ;;
+    -H) case "$arg" in "Authorization: Bearer "*) BEARER=${arg#Authorization: Bearer } ;; esac ;;
+  esac
+  case "$arg" in http://*|https://*) [ -n "$URL" ] || URL=$arg ;; esac
+  prev=$arg
+done
+printf '%s %s %s\n' "$METHOD" "$URL" "$DATA" >> "$CALL_LOG"
+
+CODE=200
+OPEN_VAULT='{"initialized":true,"sealed":false}'
+emit() {
+  if [ "$CODE" -ge 400 ] && [ "$FAIL_ON_ERROR" = 1 ]; then
+    echo "curl: (22) The requested URL returned error: $CODE" >&2
+    exit 22
+  fi
+  [ -z "$OUT" ] || printf '%s' "$1" > "$OUT"
+  if [ "$WANT_CODE" = 1 ]; then printf '%s' "$CODE"; elif [ -z "$OUT" ]; then printf '%s' "$1"; fi
+}
+
+principal_exists() {
+  case " ${PRINCIPALS_EXIST-svc-auth svc-graphql} " in *" $1 "*) return 0 ;; esac
+  [ -f "/tmp/stub-principal-$1" ]
+}
+
+case "$URL" in
+  */healthz) emit '{"status":"ok"}' ;;
+  */api/auth/me)
+    for rejected in ${ME_FAIL:-}; do [ "$BEARER" = "$rejected" ] && { CODE=401; emit '{}'; }; done
+    emit "{\"username\":\"${BEARER#excb_}\"}" ;;
+  */api/vault/status) emit "${VAULT_STATUS:-$OPEN_VAULT}" ;;
+  */api/vault/secrets/pki/signing/*)
+    if [ "$METHOD" = PUT ]; then emit '{"status":"ok"}'
+    elif [ -n "${SIGNING_PRIVATE:-}" ]; then emit "$SIGNING_PRIVATE"
+    else CODE=404; emit '{"error":"secret not found"}'; fi ;;
+  */api/auth/register)
+    if [ -n "${REGISTERED:-}" ]; then emit '{"user":{"id":"admin"}}'; else CODE=409; emit '{"error":"registration closed"}'; fi ;;
+  */api/auth/login)
+    if [ -n "${LOGIN_FAIL:-}" ]; then CODE=401; emit '{"error":"invalid credentials"}'; else emit '{"token":"session-admin"}'; fi ;;
+  */api/admin/service-accounts/*/tokens)
+    principal=$(basename "$(dirname "$URL")")
+    if [ "$BEARER" != session-admin ]; then CODE=401; emit '{"error":"auth required"}'
+    elif [ -n "${LISTING_CODE:-}" ]; then CODE=$LISTING_CODE; emit '{"error":"failed"}'
+    elif principal_exists "$principal"; then
+      case "$principal" in
+        svc-auth) perms=${STORED_AUTH_PERMISSIONS:-$WANT_AUTH} ;;
+        *) perms=${STORED_GRAPHQL_PERMISSIONS:-$WANT_GRAPHQL} ;;
+      esac
+      emit "[{\"tokenHash\":\"hash-$principal\",\"name\":\"$principal\",\"permissions\":$perms}]"
+    else CODE=404; emit '{"error":"service account not found","status":404}'; fi ;;
+  */api/admin/service-accounts)
+    name=$(printf '%s' "$DATA" | jq -r .name)
+    : > "/tmp/stub-principal-$name"
+    emit "{\"id\":\"svc-$name\"}" ;;
+  */api/auth/tokens/*)
+    if [ -n "${REVOKE_FAIL:-}" ]; then CODE=500; emit '{"error":"revoke failed"}'; else emit '{"status":"revoked"}'; fi ;;
+  */api/auth/tokens)
+    name=$(printf '%s' "$DATA" | jq -r .name)
+    emit "{\"token\":\"excb_$name-new\"}" ;;
+  *) emit '{}' ;;
+esac

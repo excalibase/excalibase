@@ -20,6 +20,8 @@ type BackupHandler struct {
 	orchestrator *service.RestoreOrchestrator // optional; nil → restore is synchronous
 	// documentDBEnabled is whether this installation runs DocumentDB (EXC-394).
 	documentDBEnabled bool
+	// audit records started copies (EXC-667); nil records nothing.
+	audit auditWriter
 }
 
 func NewBackupHandler(svc *service.BackupService) *BackupHandler {
@@ -227,6 +229,14 @@ func (h *BackupHandler) restoreInPlace(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	req.TargetProjectID = inst.ProjectID
+	if err := h.svc.CheckInPlaceRestorePoint(r.Context(), inst.ProjectID, req); err != nil {
+		if errors.Is(err, service.ErrRestorePointBeforeMajorUpgrade) {
+			httpError(w, err.Error(), http.StatusConflict)
+			return
+		}
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
 	if h.orchestrator != nil {
 		h.startRestoreJob(w, r, inst, req)
 		return
@@ -267,13 +277,25 @@ func inPlaceFailureMessage(err error) string {
 // would duplicate or collide with a running one is refused.
 func (h *BackupHandler) startRestoreJob(w http.ResponseWriter, r *http.Request, inst *domain.DatabaseInstance, req domain.RestoreRequest) {
 	job, err := h.orchestrator.Start(r.Context(), inst, req)
+	if err != nil {
+		h.writeStartError(w, inst, err)
+		return
+	}
+	writeJSON(w, job)
+}
+
+// writeStartError answers a restore job the orchestrator refused to start.
+func (h *BackupHandler) writeStartError(w http.ResponseWriter, inst *domain.DatabaseInstance, err error) {
+	var limit *service.OrgProjectLimitError
 	switch {
 	case errors.Is(err, storage.ErrRestoreAlreadyRunning):
 		httpError(w, err.Error(), http.StatusConflict)
-	case err != nil:
-		httpError(w, safeError(err), http.StatusBadRequest)
+	case errors.As(err, &limit):
+		h.writeRestoreCapacityError(w, inst, err)
+	case errors.Is(err, service.ErrOrgCapacityNotConfigured):
+		httpError(w, "restores are not available on this platform", http.StatusServiceUnavailable)
 	default:
-		writeJSON(w, job)
+		httpError(w, safeError(err), http.StatusBadRequest)
 	}
 }
 

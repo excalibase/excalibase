@@ -90,6 +90,26 @@ func serverVersionProbeCommand(dbName string) []string {
 	return []string{"psql", "-X", "-tA", "-U", "postgres", "-d", superuserConninfo(dbName, 0), "-c", "SHOW server_version_num"}
 }
 
+// authAccessProbeSQL answers t while excalibase_app can still reach anything
+// in the auth schema — the schema, a relation in it, membership of auth_admin,
+// or a default privilege that would hand it the next table — and f once it
+// cannot (EXC-628). The privilege functions count grants to PUBLIC.
+const authAccessProbeSQL = `SELECT CASE WHEN to_regnamespace('auth') IS NULL OR to_regrole('excalibase_app') IS NULL THEN false
+ELSE pg_catalog.has_schema_privilege('excalibase_app', 'auth', 'USAGE')
+  OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+    WHERE c.relnamespace = to_regnamespace('auth') AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+      AND pg_catalog.has_table_privilege('excalibase_app', c.oid, 'SELECT, INSERT, UPDATE, DELETE'))
+  OR (to_regrole('auth_admin') IS NOT NULL AND pg_catalog.pg_has_role('excalibase_app', 'auth_admin', 'MEMBER'))
+  OR EXISTS (SELECT 1 FROM pg_catalog.pg_default_acl d, pg_catalog.aclexplode(d.defaclacl) a
+    WHERE d.defaclnamespace = to_regnamespace('auth') AND a.grantee = to_regrole('excalibase_app'))
+END`
+
+// authAccessProbeCommand runs the probe as the superuser with the connect-safe
+// options, so an owner's database settings cannot change its answer.
+func authAccessProbeCommand(dbName string) []string {
+	return []string{"psql", "-X", "-tA", "-U", "postgres", "-d", superuserConninfo(dbName, 0), "-c", authAccessProbeSQL}
+}
+
 func superuserConninfo(dbName string, serverVersionNum int) string {
 	options := make([]string, 0, len(pinnedSessionOptions)+1)
 	for _, option := range pinnedSessionOptions {

@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -553,8 +554,14 @@ func (t dbTarget) url(host string) string {
 	if t.mysql {
 		return domain.MySQLURL(host, t.port, t.user, t.pass, t.db)
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=require",
-		t.user, t.pass, net.JoinHostPort(host, t.port), t.db)
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(t.user, t.pass),
+		Host:     net.JoinHostPort(host, t.port),
+		Path:     "/" + t.db,
+		RawQuery: "sslmode=require",
+	}
+	return u.String()
 }
 
 // List returns all functions belonging to the project.
@@ -581,7 +588,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, _ := custommw.TenantIDFromContext(r.Context())
-	log.Printf("tenant=%s action=fn_create path=%s", tenant, r.URL.Path)
+	log.Printf("tenant=%s action=fn_create path=%s", safeLog(tenant), safeLog(r.URL.Path))
 
 	r.Body = http.MaxBytesReader(w, r.Body, int64(edgefn.MaxCodeSize+16*1024))
 	var fn edgefn.Function
@@ -660,6 +667,11 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		// function) around.
 		_ = rollbackCronSync(cronTx)
 		rollback()
+		var refused *edgefn.CodeRejectedError
+		if errors.As(deployErr, &refused) {
+			httpError(w, refused.Reason, http.StatusBadRequest)
+			return
+		}
 		if !writeRuntimeFailure(w, "deploy "+fn.RuntimeID(), deployErr) {
 			httpError(w, "failed to deploy: "+safeError(deployErr), http.StatusBadGateway)
 		}
@@ -1315,6 +1327,12 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 	}
 	resp, err := h.invokeDeployed(r.Context(), client, fn, invokeReq)
 	if err != nil {
+		var refused *edgefn.CodeRejectedError
+		if errors.As(err, &refused) {
+			log.Printf("function %s cannot run: %s", fn.RuntimeID(), refused.Reason)
+			httpError(w, "the function cannot run: "+refused.Reason, http.StatusInternalServerError)
+			return
+		}
 		if !writeRuntimeFailure(w, "invoke "+fn.RuntimeID(), err) {
 			log.Printf("ERROR: invoke %s failed: %v", fn.RuntimeID(), err)
 			httpError(w, "internal error", http.StatusInternalServerError)

@@ -90,13 +90,15 @@ func table(deps Deps) map[string][]Dependency {
 		// Its GitHub App settings are checked with the providers below.
 		"SITES_GIT_BUILDS_ENABLED": {
 			{Name: "Sites (SITES_ENABLED with its Cloudflare settings)", Wired: deps.SitesAvailable},
-			{Name: "site build runner (Kubernetes mode, the build namespace and the sandbox RuntimeClass)", Wired: deps.SiteBuildRunner},
+			{Name: "site build runner (the cluster's build namespace and sandbox RuntimeClass, or a single host's engine with FEATURE_SINGLEHOSTBUILDS)", Wired: deps.SiteBuildRunner},
 		},
 		// Changes how each app's route is rendered; needs nothing of this process.
 		"APP_WILDCARD_TLS": {},
 		// Only gates requests: the gateway plugin it vouches for is the
 		// chart's, outside this process.
 		"DOCUMENTDB_ENABLED": {},
+		// Says MOCO is installed; the operator is the chart's, outside this process.
+		"MYSQL_ENABLED": {},
 		// Checked at start-up against the cluster itself (verifyTenantStorage),
 		// which refuses to start rather than run without it.
 		"TENANT_STORAGE_REQUIRE_SIZED": {},

@@ -93,6 +93,14 @@ func (c *Client) LVMVolumeGroupBytes(ctx context.Context, namespace, volumeGroup
 	return total, nil
 }
 
+// WithMySQL says whether the MOCO operator is installed: with it off the
+// budget never asks for MySQL clusters, which the chart then grants no right to.
+func (c *Client) WithMySQL(installed bool) *Client {
+	configured := *c
+	configured.mysql = installed
+	return &configured
+}
+
 // StorageAllocated counts every claim in the cluster, and what each project's
 // clusters will still claim, so an allocation in flight is never free space.
 func (c *Client) StorageAllocated(ctx context.Context) (StorageAllocation, error) {
@@ -157,13 +165,13 @@ func (c *Client) clusterBytesStillToClaim(ctx context.Context, namespace string,
 	return pending + mysql, nil
 }
 
-// mysqlBytesStillToClaim is clusterBytesStillToClaim for MOCO clusters. A
-// cluster without MOCO installed lists nothing.
+// mysqlBytesStillToClaim is clusterBytesStillToClaim for MOCO clusters. With
+// MySQL off there are none; with it on, a list that fails fails the budget.
 func (c *Client) mysqlBytesStillToClaim(ctx context.Context, namespace string, claimed map[string]int64) (int64, error) {
-	clusters, err := c.dynamicClient.Resource(MOCOClusterGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
-	if apierrors.IsNotFound(err) {
+	if !c.mysql {
 		return 0, nil
 	}
+	clusters, err := c.dynamicClient.Resource(MOCOClusterGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return 0, fmt.Errorf("list MySQL clusters in %s: %w", namespace, err)
 	}

@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { PROJECT_FOLLOW_MS, RESPOND_ASYNC, settleProject } from './projectFollow';
 
 // AdminProject is the cross-org row returned by /api/admin/projects.
 // cpuCores/memBytes are absent when Prometheus isn't wired in the backend.
@@ -72,11 +73,14 @@ export const useClusterCapacity = () =>
     staleTime: 30_000,
   });
 
-export const useForceDropProject = () => {
+// The teardown outlasts what the edge waits for one request, so the answer
+// comes once the project is DELETING and the project is followed until gone.
+export const useForceDropProject = (followMs = PROJECT_FOLLOW_MS) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (projectId: string) => {
-      await api.delete(`/admin/projects/${projectId}`);
+      const response = await api.delete<{ status?: string }>(`/admin/projects/${projectId}`, RESPOND_ASYNC);
+      return settleProject(projectId, 'deletion', response, followMs);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'projects'] });

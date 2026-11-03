@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/logsafe"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -72,13 +73,9 @@ func isValidSlug(slug string) bool {
 	return validSlug.MatchString(slug)
 }
 
-// logSanitizer strips the line terminators an attacker would use to forge
-// extra log records out of a value that came from a request.
-var logSanitizer = strings.NewReplacer("\n", "", "\r", "")
-
 // safeLog makes a request-derived value safe to write to the log.
 func safeLog(s string) string {
-	return logSanitizer.Replace(s)
+	return logsafe.Value(s)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

@@ -42,13 +42,14 @@ describe('useRestoreJob', () => {
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith());
   });
 
-  test('a copy finishing leaves this project alone', async () => {
+  test('a copy finishing leaves this project alone and lists the new one', async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ data: { id: 'j', mode: 'new_project', status: 'COMPLETED' } } as never);
     const { client, Wrapper } = makeWrapper();
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     const { result } = renderHook(() => useRestoreJob('p1', 'j'), { wrapper: Wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(invalidate).not.toHaveBeenCalled();
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['instances'] }));
+    expect(invalidate).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -142,11 +143,20 @@ describe('useProvisioning hooks', () => {
     expect(api.post).toHaveBeenCalled();
   });
 
-  test('useLogs GETs with lines param', async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ data: 'log line\n' } as never);
+  test('useLogs GETs with lines param and answers the log text', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ data: { logs: 'log line\n' } } as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useLogs('p1', 50), { wrapper: Wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.get).toHaveBeenCalledWith('/provision/p1/logs?lines=50');
+    expect(result.current.data).toBe('log line\n');
+  });
+
+  test('useLogs sends the search term and range for the server to search stored logs', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ data: { logs: '' } } as never);
+    const { Wrapper } = makeWrapper();
+    const { result } = renderHook(() => useLogs('p1', 50, { since: '7d', search: 'a&b "c"' }), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(api.get).toHaveBeenCalledWith('/provision/p1/logs?lines=50&since=7d&q=a%26b+%22c%22');
   });
 });

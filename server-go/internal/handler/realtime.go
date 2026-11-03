@@ -149,7 +149,7 @@ func (h *RealtimeHandler) dial(r *http.Request) (*service.RealtimeService, *sql.
 	if err != nil {
 		return nil, nil, err
 	}
-	db, err := sql.Open("postgres", dsn)
+	db, err := projectdb.OpenPostgres(dsn, projectdb.ProbeIOTimeout)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open db: %w", err)
 	}

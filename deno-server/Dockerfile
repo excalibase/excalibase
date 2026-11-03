@@ -30,7 +30,7 @@ WORKDIR /lib
 
 COPY lib/excalibase-server/ ./
 RUN --mount=type=cache,target=/root/.npm \
-    npm install --no-audit --no-fund && \
+    npm ci --ignore-scripts --no-audit --no-fund && \
     npm run build && \
     rm -rf node_modules src test
 

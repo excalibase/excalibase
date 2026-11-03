@@ -1,28 +1,39 @@
-# Excalibase Provisioning
+# Excalibase
 
-Kubernetes-native database provisioning platform. Built with Go + client-go.
+An open-source platform as a service. A project gets a database (Postgres, MySQL or DocumentDB), a GraphQL and REST API generated from its schema, row and column permissions per role, auth for your app's end users, TypeScript functions, hosting for your containers next to the database, and static Sites with your own domain. Run it on the hosted beta at [excalibase.io](https://excalibase.io), or self-host the whole platform on one box or on Kubernetes.
 
-## What It Does
+This repository is the control plane and Studio, the web console. The API engine is [excalibase-graphql](https://github.com/excalibase/excalibase-graphql), end-user auth is [excalibase-auth](https://github.com/excalibase/excalibase-auth), change capture is [excalibase-watcher](https://github.com/excalibase/excalibase-watcher), the client is [@excalibase/sdk](https://github.com/excalibase/excalibase-sdk-js). All Apache-2.0.
 
-One API call provisions a production PostgreSQL cluster with backup, monitoring, and performance insights:
+![Studio project overview](https://excalibase.io/screens/studio-overview.webp)
+
+## Try it on one machine
+
+Linux with Docker Engine 24+ and the Compose plugin, ports 80 and 443 free:
 
 ```bash
-curl -X POST http://localhost:24005/api/provision \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"projectName":"my-db","orgId":"myorg","databaseType":"POSTGRESQL"}'
+git clone --depth 1 --branch v1.5.1 https://github.com/excalibase/excalibase.git
+cd excalibase/deploy/single-host
+./init.sh --domain localhost --admin-email you@example.com
+docker compose up -d
+docker compose logs -f bootstrap   # prints the first admin's password once
 ```
 
-- **9-stage provisioning pipeline** — namespace, CRD deployment, pod readiness, credential extraction, backup config, metrics setup, watcher deployment, role creation
-- **Two deployment modes per project** — Kubernetes (CNPG operator on any distro: EKS/GKE/AKS, RKE2, or single-node k0s/k3s/MicroK8s including rootless) or Docker (local socket or remote daemon over TLS, Dokploy/CapRover-style). K8s vs Docker is a real trade-off: K8s provides ServiceAccount + Role + namespace isolation, Docker is operationally simpler but daemon access is root-equivalent and there's no per-project isolation enforced by the platform.
-- **Self-hosted or cloud** — `DEPLOYMENT_MODE=selfhosted` (Postgres store + Postgres vault, single org) or `cloud` (Postgres store + Postgres vault or remote HTTP vault, multi-tenant + tier enforcement)
-- **3 tiers** — FREE (1 pod), STANDARD (3 pods + HA), ENTERPRISE (5 pods)
-- **Real metrics** — per-pod CPU/memory from metrics-server + CNPG database metrics from port 9187
-- **Backup & PITR** — automated WAL archiving + scheduled backups + point-in-time recovery
-- **Performance insights** — pg_stat_statements: top queries, cache hit ratio, wait events
-- **Schema management** — full SQL schema introspection, CRUD for tables/columns/roles/extensions/policies/functions/triggers/indexes
-- **Realtime** — per-table CDC publication toggle (ALTER PUBLICATION) backed by a watcher daemon
-- **Edge functions** — per-project Deno workers with multi-file bundling (esbuild), secrets, log streaming, public invoke at `/functions/v1/{projectId}/{name}`
-- **Vault** — Shamir secret sharing for credentials, AES-256-GCM at rest; runs in-process (Postgres-backed) or as a standalone HTTP service
+Open https://studio.localhost and sign in as `admin`. Rootless Podman, a real domain, container apps and what a single host does not do (high availability, edge functions, realtime) are in the [self-hosting guide](https://excalibase.io/docs/self-hosting). Kubernetes installs use the Helm charts in [`charts/`](charts).
+
+## What the control plane does
+
+- **Projects** — a project is a container of services: 0 or 1 database, apps, functions, storage and Sites, with organization and project roles in Studio
+- **Two provisioners** — Kubernetes (CloudNativePG for Postgres, MOCO for MySQL) or a single Docker / rootless Podman host behind an engine-socket proxy
+- **Plans** — FREE (1 instance), STANDARD (3 instances, synchronous replication), ENTERPRISE (5 instances)
+- **Backups and PITR** — scheduled base backups, WAL archiving, restore to a point in time or into a new project
+- **Schema management** — tables, columns, roles, extensions, policies, functions, triggers and indexes from Studio or the API
+- **Permissions** — per role, table and operation, served to the API engine, which enforces them itself
+- **Realtime** — per-table change capture toggled from Studio, backed by the watcher
+- **Edge functions** — per-project Deno workers with secrets, an outbound allowlist and log streaming
+- **Containers** — any image next to the database, under gVisor, with custom domains and roll back
+- **Sites** — static frontends served from Cloudflare's edge, with custom domains
+- **MCP** — a coding agent can create tables, set permissions and deploy, limited to its token's scopes
+- **Vault** — Shamir secret sharing for credentials, AES-256-GCM at rest
 
 ## Using the engine with your own database
 
@@ -63,12 +74,12 @@ deno-server/     Deno edge functions runtime (Web Workers, sandboxed)
 
 The Go server uses `client-go` natively — no kubectl shell-outs. CRDs are built as `unstructured.Unstructured` objects and applied via the dynamic client.
 
-## Quick Start
+## Developing from source
 
 ### Prerequisites
 
 - For K8s mode: any cluster — managed (EKS/GKE/AKS), self-hosted (RKE2), or single-node (k0s/k3s/MicroK8s, rootless OK). For Docker mode: a Docker daemon (local or remote over TLS).
-- Go 1.24+
+- Go 1.26.10+
 - Node.js 18+ (for frontend)
 
 ### 1. Install operators
@@ -117,7 +128,7 @@ curl -s -X POST http://localhost:24005/api/vault/unseal \
   -H "Content-Type: application/json" \
   -d '{"share": "<share-hex>"}'
 
-# Register the first admin with the one-time setup token (EXC-451), burned on
+# Register the first admin with the one-time setup token, burned on
 # use: SETUP_TOKEN, which Kubernetes requires (provisioning refuses to start
 # without it until an admin exists); only the docker provisioner started
 # without SETUP_TOKEN prints a generated one to its log ("First-admin setup token: ...")
@@ -140,8 +151,8 @@ curl -X POST http://localhost:24005/api/provision \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "projectName": "duke-database",
-    "orgId": "exca",
+    "projectName": "my-db",
+    "orgId": "myorg",
     "databaseType": "POSTGRESQL",
     "backup": {"enabled": true, "schedule": "0 2 * * *", "retention": 30},
     "parameters": {"work_mem": "16MB"}
@@ -170,7 +181,7 @@ Every route with a project in its path binds that project to the caller before t
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/auth/register` | No | Public registration; the first registrant becomes platform_admin, but only with a valid one-time `setupToken` (`SETUP_TOKEN`, required on Kubernetes; a docker provisioner started without it prints a generated one to its log) — EXC-451 |
+| POST | `/api/auth/register` | No | Public registration; the first registrant becomes platform_admin, but only with a valid one-time `setupToken` (`SETUP_TOKEN`, required on Kubernetes; a docker provisioner started without it prints a generated one to its log) |
 | POST | `/api/auth/login` | No | Login (argon2id), returns bearer token |
 | GET | `/api/auth/setup-status` | No | `{hasAdmin}` — used by the setup wizard |
 | GET | `/api/auth/me` | Yes | Current user info |
@@ -228,7 +239,7 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | PATCH | `/api/provision/{id}/deletion-protection` | Yes | Toggle deletion protection |
 | GET | `/api/provision/{id}/credentials` | Yes | Connection details |
 | POST | `/api/provision/{id}/credentials/rotate` | Yes | Rotate credentials |
-| GET | `/api/provision/{id}/logs` | Yes | Pod logs |
+| GET | `/api/provision/{id}/logs` | Yes | Database logs; with `FEATURE_LOGRETENTION`, no further back than the plan keeps them, and `retentionHours` says how long |
 | GET | `/api/provision/{id}/maintenance-window` | Yes | Get maintenance window |
 | PUT | `/api/provision/{id}/maintenance-window` | Yes | Set maintenance window |
 | GET | `/api/provision/{id}/metrics/current` | Yes | Real-time metrics |
@@ -237,19 +248,43 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | GET | `/api/provision/{id}/backup/list` | Yes | List backups for the project |
 | POST | `/api/provision/{id}/backup/restore` | Yes | Async restore — returns RestoreJob with `status: RUNNING` |
 | GET | `/api/provision/{id}/backup/restore/{jobId}` | Yes | Poll restore status (RUNNING / COMPLETED / FAILED) |
+| POST | `/api/provision/{id}/backup/copy` | Yes (Admin) | Copy the database into a new project: `{name, point: now\|latest\|time, targetTime?}`; `now` backs the source up first. Returns the restore job, polled on `/backup/restore/{jobId}` (flag `dbcopy`) |
 | POST | `/api/provision/{id}/backup/schedule` | Yes | Upsert cron schedule `{cron, retentionDays, enabled}` |
 | DELETE | `/api/provision/{id}/backup/schedule` | Yes | Remove schedule (immediate cron unregister) |
+| GET | `/api/provision/{id}/major-upgrade/` with flag `majorupgrade` | Yes (Viewer) | Current Postgres major, the majors offered, what blocks an upgrade (checks rerun at most once a minute), the expected downtime and the latest run |
+| POST | `/api/provision/{id}/major-upgrade/` with flag `majorupgrade` | Yes (Admin) | `{targetVersion, confirm: true}`; 202 with the run. One-way: a backup first, then CNPG converts in place (single host: dump into a container of the new image). 409 with `blockers` when the database is not ready. Restores of a point before the upgrade go to a new project |
 | GET | `/api/provision/{id}/backup/wal-lag` | Yes | Docker mode only — seconds since last successful WAL push. K8s returns 501. |
 | GET | `/api/provision/{id}/performance/summary` | Yes | pg_stat_statements summary |
 | GET | `/api/provision/{id}/performance/top-queries` | Yes | Top queries by time |
+| GET | `/api/provision/{id}/slow-queries/?sort=total\|mean&limit=N` | Yes | The project's own normalized statements, Postgres or MySQL (`FEATURE_SLOWQUERIES`) |
+| POST | `/api/provision/{id}/slow-queries/reset` | Yes | Developer+: clear the project's statement statistics |
+| POST | `/api/provision/{id}/slow-queries/enable` | Yes | Admin+: turn statistics on for a database created before the feature; restarts Postgres once |
+| GET | `/api/provision/{id}/requests?range=1h\|24h\|7d` | Yes | The project's GraphQL, REST, auth and realtime request counts, error counts and p50/p95 latency, sampled every minute on Kubernetes (`FEATURE_REQUESTMETRICS`, scraping `REQUEST_METRICS_TARGETS`) |
+| GET | `/api/projects/{id}/metrics` | Metrics key or session | The project's stored metrics in Prometheus text format for its own Grafana or Datadog, on Kubernetes (`FEATURE_METRICSENDPOINT`) |
+| GET/POST/DELETE | `/api/projects/{id}/metrics-keys` | Yes, Admin | Metrics keys: PATs holding only `metrics:read`, bound to the project, shown once (`FEATURE_METRICSENDPOINT`) |
+| GET/POST/PATCH/DELETE | `/api/projects/{id}/log-drains` | Yes, Admin | Up to 3 drains forwarding the project's database logs to Datadog or a public HTTPS endpoint; the key is write-only, in the vault (`FEATURE_LOGDRAINS`) |
+| POST | `/internal/log-forwarder/pull`, `/ack` | `X-Excalibase-Forwarder-Token` | The log-forwarder pod (`excalibase-log-forwarder`, `LOG_FORWARDER_TOKEN`) takes due batches and reports each outcome |
 | GET | `/api/provision/{id}/audit` | Yes | Per-project audit log |
 | POST | `/api/provision/{id}/migrations` | Yes | Apply SQL migration |
-| POST | `/api/provision/{id}/snapshot/export` | Yes | pg_dump export |
+| POST | `/api/provision/{id}/snapshot/export` | Yes | pg_dump export (never the `auth` schema) |
 | GET | `/api/projects/{id}/info` | Yes | Combined project + org metadata (for auth-service JWT mint); carries `corsAllowedOrigins` (which excalibase-graphql reads to answer CORS per project), `requireEmailVerification` and `siteUrl` |
 | GET | `/api/projects/{id}/cors` | Yes | Browser-origin allowlist for the project's data plane (Developer+). `{"allowedOrigins": [...], "allowWildcard": bool}` |
 | PUT | `/api/projects/{id}/cors` | Yes | Replace the allowlist (Developer+). Absolute origins only (`scheme://host[:port]`, max 32); `"*"` needs `"allowWildcard": true` and must be the only entry. Empty = no CORS headers (browser apps blocked). See `docs/project-cors.md` |
+| GET/PUT | `/api/projects/{id}/db-endpoint/allowed-sources` | Yes (Admin writes) | Who may reach the public database port: `{"sources": ["203.0.113.7", "198.51.100.0/24"]}` (IPv4/IPv6, max 20, at least one IPv4, no `/0`) or `{"allowAny": true}`; the GET also returns `access` (`unset`/`any`/`listed`/`host`) and `callerAddress`. Opening the port needs a choice first; audited (flag `dballowlist`) |
 | GET | `/api/projects/{id}/auth-settings` | Yes (Developer+) | Read the project's auth settings `{requireEmailVerification, siteUrl}` |
 | PUT | `/api/projects/{id}/auth-settings` | Yes (Developer+) | Set the project's auth settings; `siteUrl` must be an absolute `http`/`https` URL with no trailing slash, or empty to unset |
+| GET | `/api/projects/{id}/auth-providers` | Yes (Developer+) | End-user Google/GitHub sign-in settings and the callback URL to register; the client secret is never returned (flag `authoauth`) |
+| PUT | `/api/projects/{id}/auth-providers/{provider}` | Yes (Admin) | Set `{enabled, clientId, clientSecret?}`; the secret goes to the vault, an empty one keeps the stored secret (flag `authoauth`) |
+| — | `/api/projects/{id}/auth-settings` with flag `authotp` | Yes (Admin writes) | Adds `emailOtpEnabled` (sign-in by emailed link or eight-digit code) and the shared `redirectUrls` + `allowNewUsers`; `/info` then carries `emailOtpEnabled` for the auth service. The mail relay sends `magic_link`/`email_otp`, and `link_magic_link`/`link_email_otp` for an address a signed-in user adds to their account (they say so, and not "sign in"), only while the flag and the project's switch are on, names the project and its site in each, and caps a project at 1000 a day (`sign_in_mail_sends`) |
+| GET/PATCH/DELETE | `/api/projects/{id}/end-users/{userId}` | Yes, Admin | One end user's details (`fullName`, `userMetadata`, `appMetadata`, ...); PATCH takes only `{appMetadata?, userMetadata?, fullName?}` (metadata merges, a key set to `null` is removed), DELETE removes the account; both audited, the update by field name only (flag `authuser`) |
+| — | `/api/projects/{id}/auth-settings` with flag `authguest` | Yes (Admin writes) | Adds `guestSignInEnabled` (guest accounts: no address, role `guest`) and `guestCaptchaSecretSet`, with the shared `allowNewUsers`; `/info` then carries `guestSignInEnabled`, `guestCaptchaEnabled` (only when a Turnstile secret is set) and `stableSubject: true`, which makes the auth service sign `sub` as the account id |
+| PUT/DELETE | `/api/projects/{id}/auth-settings/guest-captcha` | Yes (Admin) | Set `{secretKey}` or remove the guest Turnstile secret; it goes to the vault at `projects/{id}/auth/captcha` and is never returned; audited (flag `authguest`) |
+| GET | `/api/projects/{id}/auth-hooks` | Yes (Developer+) | `{secretSet, hooks: [{hook, enabled, url}]}` for `custom_access_token`, `before_user_created` and `send_email`, always in that order; the signing secret is never returned (flag `authhooks`) |
+| PUT | `/api/projects/{id}/auth-hooks/{hook}` | Yes (Admin) | Set `{enabled, url}`: an `https://` URL naming one public host on port 443; switching on needs a URL and the signing secret (409 otherwise); audited with the URL's host only (flag `authhooks`) |
+| POST/DELETE | `/api/projects/{id}/auth-hooks/secret` | Yes (Admin) | POST generates a new Standard Webhooks secret (`whsec_…`) into the vault at `projects/{id}/auth/hooks` and answers it once as `{secret}`, replacing the old one at once; DELETE switches every hook off, then removes it; audited without the value (flag `authhooks`) |
+| PUT | `/api/projects/{id}/auth-settings/mfa` | Yes (Admin) | Set `{enabled}`: end-user TOTP factors and recovery codes. Switching on first makes sure the vault holds the project's key at `projects/{id}/auth/mfa` (32 random bytes, created once, never replaced, never returned; an invalid stored key is refused with 409); answers the auth settings with `mfaEnabled`. `/info` then carries `mfaEnabled: true`, and tokens carry `aal`/`amr`, so a permission can require `x-excalibase-aal = aal2`; audited (flag `authmfa`) |
+| DELETE | `/api/projects/{id}/end-users/{userId}/factors` | Yes (Admin) | Reset one end user's MFA: auth removes their factors and recovery codes and ends their sessions; audited (flag `authmfa`) |
+| — | `/api/projects/{id}/info` and the mail relay with flag `authuser` | service | `/info` carries `userApiEnabled: true`; the relay sends `email_change` (to the new address; only the signed-in account that asked can confirm it) and `email_change_notice` (to the old one; a password change cancels the change). `identity_linked` (a sign-in method was added) goes out while `authoauth` is on with an enabled provider, or `authotp` is on with the project's switch. All three draw on an account-mail budget of 1000 a day per project, counted apart from sign-in mail (`sign_in_mail_sends.kind`) |
 
 ### Edge Functions (per-project Deno runtime)
 
@@ -432,14 +467,14 @@ cd frontend && npx playwright test
 
 ## Tech Stack
 
-- **Backend**: Go 1.24+, chi router, client-go, Docker SDK, Helm SDK, NATS client, esbuild
+- **Backend**: Go 1.26.10+, chi router, client-go, Docker SDK, Helm SDK, NATS client, esbuild
 - **Storage**: SQLite (self-hosted) / PostgreSQL via CNPG (cloud), auto-migrate on startup
 - **Vault**: in-process Shamir on the platform Postgres, or standalone HTTP service via `VAULT_URL`
 - **Auth**: argon2id password hashing, PATs (`excali_…` prefix), JWT minted via separate auth service
 - **Edge Functions**: Deno workers, esbuild bundling, public Supabase-style invoke
 - **Realtime**: PostgreSQL logical replication via watcher daemon, per-table `ALTER PUBLICATION` toggle
 - **Frontend**: React 18, Vite, Tailwind CSS, TanStack Query/Table, CodeMirror 6, cmdk
-- **K8s Operators**: CloudNativePG (PostgreSQL), Vitess (MySQL planned), MongoDB Community (planned)
+- **K8s Operators**: CloudNativePG (PostgreSQL, DocumentDB), MOCO (MySQL)
 - **Metrics**: Kubernetes metrics-server (CPU/memory), CNPG Prometheus exporter
 - **Backup**: Barman Cloud plugin (per-project `ObjectStore`) → S3-compatible store (Cloudflare R2 in production; endpoint/bucket/creds from `BACKUP_DEFAULT_*` or vault `backup/s3`); restore reads from the same configured store
 - **Testing**: httptest, testcontainers-go (k3s + PostgreSQL), Playwright, Vitest

@@ -168,3 +168,21 @@ func TestLoadConfigRefusesALooseBusNetwork(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadConfigReadsTheMonitoredPlatformContainers(t *testing.T) {
+	cfg, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_STATS_CONTAINERS": "excalibase-postgres, excalibase-edge"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.policy.StatsContainers, []string{"excalibase-postgres", "excalibase-edge"}) {
+		t.Fatalf("stats containers = %v", cfg.policy.StatsContainers)
+	}
+}
+
+func TestLoadConfigRefusesAMonitoredContainerThatIsNotAName(t *testing.T) {
+	for _, name := range []string{"../x", "x/y", "-x", "a b"} {
+		if _, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_STATS_CONTAINERS": name})); err == nil {
+			t.Errorf("PROXY_STATS_CONTAINERS %q accepted", name)
+		}
+	}
+}

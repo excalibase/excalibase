@@ -39,8 +39,19 @@ func (i *Introspector) GetFunctions(ctx context.Context, db *sql.DB, schema stri
 
 // CreateFunction creates a new PostgreSQL function.
 func (i *Introspector) CreateFunction(ctx context.Context, db *sql.DB, req CreateFunctionRequest) error {
-	if err := checkNameLength("function", req.Name); err != nil {
+	stmt, err := buildCreateFunctionSQL(req)
+	if err != nil {
 		return err
+	}
+	if _, err := db.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("create function: %w", err)
+	}
+	return nil
+}
+
+func buildCreateFunctionSQL(req CreateFunctionRequest) (string, error) {
+	if err := checkNameLength("function", req.Name); err != nil {
+		return "", err
 	}
 	schemaName := req.Schema
 	if schemaName == "" {
@@ -48,16 +59,16 @@ func (i *Introspector) CreateFunction(ctx context.Context, db *sql.DB, req Creat
 	}
 
 	if err := ValidateLanguage(req.Language); err != nil {
-		return err
+		return "", err
 	}
 	if err := ValidateVolatility(req.Volatility); err != nil {
-		return err
+		return "", err
 	}
 	if err := ValidateTypeName(req.ReturnType); err != nil {
-		return fmt.Errorf("invalid return type: %w", err)
+		return "", fmt.Errorf("invalid return type: %w", err)
 	}
 	if err := ValidateArgTypes(req.Args); err != nil {
-		return err
+		return "", err
 	}
 
 	var b strings.Builder
@@ -76,23 +87,26 @@ func (i *Introspector) CreateFunction(ctx context.Context, db *sql.DB, req Creat
 	b.WriteString(" AS ")
 	b.WriteString(QuoteLiteral(req.Body))
 
-	if _, err := db.ExecContext(ctx, b.String()); err != nil {
-		return fmt.Errorf("create function: %w", err)
-	}
-	return nil
+	return b.String(), nil
 }
 
 // DropFunction drops a function by name and argument types.
 func (i *Introspector) DropFunction(ctx context.Context, db *sql.DB, schema, name, argTypes string) error {
-	if err := ValidateArgTypes(argTypes); err != nil {
+	stmt, err := buildDropFunctionSQL(schema, name, argTypes)
+	if err != nil {
 		return err
 	}
-	stmt := "DROP FUNCTION " + QuoteIdent(schema) + "." + QuoteIdent(name) +
-		"(" + argTypes + ")"
 	if _, err := db.ExecContext(ctx, stmt); err != nil {
 		return fmt.Errorf("drop function: %w", err)
 	}
 	return nil
+}
+
+func buildDropFunctionSQL(schema, name, argTypes string) (string, error) {
+	if err := ValidateArgTypes(argTypes); err != nil {
+		return "", err
+	}
+	return "DROP FUNCTION " + QuoteIdent(schema) + "." + QuoteIdent(name) + "(" + argTypes + ")", nil
 }
 
 const functionsQuery = `

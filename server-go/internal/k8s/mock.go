@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +29,8 @@ type MockClient struct {
 	CRDs            map[string]*unstructured.Unstructured
 	Secrets         map[string]map[string][]byte
 	Pods            map[string][]corev1.Pod
-	PodLogs         map[string]string   // key: "namespace/pod" → log tail
+	PodLogs         map[string]string   // key: "namespace/pod" or "namespace/pod/container" → log tail
+	PodLogTailLines []int64             // the lines each PodLogTail call asked for
 	PVCs            map[string][]string // namespace → PersistentVolumeClaim names
 	// StuckNamespaces model a namespace whose deletion is accepted but never
 	// completes — a finalizer or a Terminating pod holds it. DeleteNamespace
@@ -72,6 +74,10 @@ type MockClient struct {
 	WildcardExecError error // ExecInPod returns this for any pod not in ExecError
 	// WildcardExecOutput is what ExecInPod prints for any pod not in ExecOutput.
 	WildcardExecOutput string
+	// ExecAnswer, when set, answers every ExecInPod by its argv instead.
+	ExecAnswer func(cmd []string) (string, error)
+	// ExecAnswerInPod answers by pod as well as command; it is asked before ExecAnswer.
+	ExecAnswerInPod func(pod string, cmd []string) (string, error)
 
 	// DenoRuntimes — set of namespaces where EnsureDenoRuntime has been called.
 	DenoRuntimes map[string]bool
@@ -92,6 +98,9 @@ type MockClient struct {
 	EnsurePublicDBError        error
 	DeletePublicDBError        error
 	PublicDBServiceExistsError error
+	// SourceRangesReadBack, when set, is what every read-back reports, so a
+	// test can model a Service that did not take the list.
+	SourceRangesReadBack []string
 
 	// GatewayReady is what DocumentDBGatewayReady reports, keyed
 	// "namespace/pod". A missing key means the gateway is not serving,
@@ -194,6 +203,9 @@ type MockClient struct {
 	AppLogLines  map[string][]AppLogLine
 	AppLogsErr   error
 	AppLogsAsked []AppLogOptions
+	// Restarts answers AppRestarts, keyed "namespace/appID".
+	Restarts    map[string]AppRestarts
+	RestartsErr error
 	// LivePods answers LiveAppPods, keyed "namespace/appID".
 	LivePods    map[string]AppPods
 	LivePodsErr error
@@ -356,6 +368,21 @@ func (m *MockClient) PublicDBServiceExists(ctx context.Context, namespace, name 
 	}
 	_, ok := m.PublicDBServices[key]
 	return ok, nil
+}
+
+// PublicDBServiceSourceRanges reads back what Ensure recorded.
+func (m *MockClient) PublicDBServiceSourceRanges(ctx context.Context, namespace, name string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "PublicDBServiceSourceRanges:"+namespace+"/"+name)
+	spec, ok := m.PublicDBServices[namespace+"/"+name]
+	if !ok {
+		return nil, fmt.Errorf("public database service %s/%s not found", namespace, name)
+	}
+	if m.SourceRangesReadBack != nil {
+		return m.SourceRangesReadBack, nil
+	}
+	return slices.Clone(spec.SourceRanges), nil
 }
 
 // DeletePublicDBService removes the Service; deleting an absent one succeeds.
@@ -559,6 +586,10 @@ func (m *MockClient) PodLogTail(ctx context.Context, namespace, pod, container s
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "PodLogTail:"+namespace+"/"+pod)
+	m.PodLogTailLines = append(m.PodLogTailLines, lines)
+	if out, ok := m.PodLogs[namespace+"/"+pod+"/"+container]; ok {
+		return out, nil
+	}
 	if out, ok := m.PodLogs[namespace+"/"+pod]; ok {
 		return out, nil
 	}
@@ -671,6 +702,12 @@ func (m *MockClient) exec(namespace, pod string, cmd []string, stdin string) (st
 	key := namespace + "/" + pod
 	if err, ok := m.ExecError[key]; ok && err != nil {
 		return "", err
+	}
+	if m.ExecAnswerInPod != nil {
+		return m.ExecAnswerInPod(pod, cmd)
+	}
+	if m.ExecAnswer != nil {
+		return m.ExecAnswer(cmd)
 	}
 	if m.WildcardExecError != nil {
 		return "", m.WildcardExecError
@@ -1037,6 +1074,13 @@ func (m *MockClient) LiveAppPods(ctx context.Context, namespace, appID string) (
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "LiveAppPods:"+namespace+"/"+appID)
 	return m.LivePods[namespace+"/"+appID], m.LivePodsErr
+}
+
+func (m *MockClient) AppRestarts(ctx context.Context, namespace, appID string) (AppRestarts, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "AppRestarts:"+namespace+"/"+appID)
+	return m.Restarts[namespace+"/"+appID], m.RestartsErr
 }
 
 func (m *MockClient) PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error) {

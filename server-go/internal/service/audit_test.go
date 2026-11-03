@@ -54,15 +54,3 @@ func TestGetAuditConfig(t *testing.T) {
 		t.Errorf("pgaudit.log: got %s", cfg.Settings["pgaudit.log"])
 	}
 }
-
-func TestGetAuditLogs(t *testing.T) {
-	svc, mock := setupAuditTest(t)
-	mock.ExecOutput["org-aud-db/aud-db-postgres-1"] = "AUDIT: session,1,1,READ,SELECT,,,SELECT 1"
-	logs, err := svc.GetAuditLogs(context.Background(), testAudDB, 100)
-	if err != nil {
-		t.Fatalf("GetAuditLogs: %v", err)
-	}
-	if logs == "" {
-		t.Error("logs should not be empty")
-	}
-}

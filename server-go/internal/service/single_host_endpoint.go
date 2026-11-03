@@ -21,6 +21,8 @@ type SingleHostEndpointService struct {
 	docker    provisioner.DockerClient
 	gatewayCA func(ctx context.Context, projectID string) ([]byte, error)
 	mysqlCA   func(ctx context.Context, container string) (string, error)
+	// everyInterface is DOCKER_DB_PUBLIC: ports bound on 0.0.0.0.
+	everyInterface bool
 }
 
 const singleHostLoopback = "127.0.0.1"
@@ -162,4 +164,31 @@ func (s *SingleHostEndpointService) project(projectID string) (*domain.DatabaseI
 		return nil, ErrDBEndpointUnsupported
 	}
 	return inst, nil
+}
+
+// PublishesOnEveryInterface records DOCKER_DB_PUBLIC, so the allow-list says
+// "any address" rather than claiming the loopback.
+func (s *SingleHostEndpointService) PublishesOnEveryInterface(public bool) {
+	s.everyInterface = public
+}
+
+// AllowedSources reports who reaches the database: this host only, or with
+// DOCKER_DB_PUBLIC any address, neither of which a project can change.
+func (s *SingleHostEndpointService) AllowedSources(_ context.Context, projectID string) (DBAllowListView, error) {
+	if _, err := s.project(projectID); err != nil {
+		return DBAllowListView{}, err
+	}
+	access := domain.DBSourceAccessHost
+	if s.everyInterface {
+		access = domain.DBSourceAccessAny
+	}
+	return DBAllowListView{ProjectID: projectID, Access: access, Max: domain.MaxDBAllowedSources, PublicEnabled: true, SingleHost: true}, nil
+}
+
+// SetAllowedSources is refused: the host, not the project, decides the bind.
+func (s *SingleHostEndpointService) SetAllowedSources(context.Context, string, domain.DBSourceAllowList) (DBAllowListView, error) {
+	if s.everyInterface {
+		return DBAllowListView{}, fmt.Errorf("%w: this host publishes every database on all interfaces (DOCKER_DB_PUBLIC); restrict it with the host's firewall", ErrDBEndpointUnsupported)
+	}
+	return DBAllowListView{}, fmt.Errorf("%w: a single host publishes its database on 127.0.0.1 only; who may tunnel in is the host's SSH access", ErrDBEndpointUnsupported)
 }

@@ -60,6 +60,10 @@ func protocolServer(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[{"name":"orders","schema":"public","type":"table"}]`))
 	})
+	r.With(auth.RequireAuth).Get("/api/provision/{projectId}", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"databaseType":"POSTGRESQL"}`))
+	})
 	r.Handle("/mcp", NewHandler(r, &recordingAudit{}, testSettings))
 	server := httptest.NewServer(r)
 	t.Cleanup(server.Close)

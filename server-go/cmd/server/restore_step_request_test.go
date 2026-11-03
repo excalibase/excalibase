@@ -74,3 +74,48 @@ func TestRestoreStepRefusesAJobWithoutItsRequest(t *testing.T) {
 		})
 	}
 }
+
+// fullOrg answers as the platform store does while a copy job holds the
+// organisation's last slot.
+type fullOrg struct{}
+
+func (fullOrg) EnsureOrgCanTakeProject(context.Context, string) error {
+	return &service.OrgProjectLimitError{Limit: 2, Tier: domain.Free}
+}
+
+func (fullOrg) RequireRestoreDiskFits(context.Context, *domain.DatabaseInstance) error { return nil }
+
+type restoringAdapter struct {
+	service.BackupAdapter
+	restored []string
+}
+
+func (a *restoringAdapter) Restore(_ context.Context, _ *domain.DatabaseInstance, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
+	a.restored = append(a.restored, req.TargetProjectID)
+	return &domain.ProvisioningResponse{ProjectID: req.TargetProjectID}, nil
+}
+
+// EXC-639: a copy job holds its slot from submission, so its own step must
+// not be refused for the slot it holds.
+func TestRestoreStepRunsACopyOnTheSlotItsJobHolds(t *testing.T) {
+	store, err := storage.NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: "proj-a", OrgID: "o", DeploymentMode: domain.ModeK8s, Status: "ACTIVE"}); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &restoringAdapter{}
+	backupSvc := service.NewBackupServiceWithAdapters(store, map[domain.DeploymentMode]service.BackupAdapter{domain.ModeK8s: adapter}, "")
+	backupSvc.SetOrgProjectCapacity(fullOrg{})
+	job := &domain.RestoreJob{
+		SourceProjectID: "proj-a", NewProjectID: "proj-copy", Mode: domain.RestoreModeNewProject,
+		Request: domain.RestoreRequest{NewProjectName: "copy", TargetProjectID: "proj-copy"},
+	}
+	if err := runRestoreStep(context.Background(), store, backupSvc, job); err != nil {
+		t.Fatalf("runRestoreStep = %v, want the copy to run", err)
+	}
+	if len(adapter.restored) != 1 || adapter.restored[0] != "proj-copy" {
+		t.Fatalf("restored = %v, want [proj-copy]", adapter.restored)
+	}
+}

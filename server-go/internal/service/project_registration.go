@@ -37,6 +37,50 @@ var ErrProjectCredentialsExist = errors.New("project registration: credentials a
 // narrow surface so a restore finishes exactly the way a provision does.
 type ProjectRegistrar interface {
 	RegisterProject(ctx context.Context, inst *domain.DatabaseInstance, opts RegistrationOptions) error
+	// CarryRestoredSettings gives a restored copy the source's API settings,
+	// which live in the platform database rather than in the backup.
+	// What it writes outside the platform database (the copy's MFA key) is
+	// registered for removal on pc, which may be nil.
+	CarryRestoredSettings(ctx context.Context, pc *provisioner.ProvisionContext, sourceID, targetID string) error
+}
+
+// ErrRestoredSettingsNotConfigured refuses a restore when the platform has no
+// way to carry the source's API settings: a copy without them refuses every
+// signed-in query, so it must not be activated (EXC-639).
+var ErrRestoredSettingsNotConfigured = errors.New("restore: the source's API settings cannot be carried to the copy")
+
+// SetRestoredSettings wires where a restored copy's API settings are copied
+// from and to.
+func (s *ProvisioningService) SetRestoredSettings(r storage.RestoredSettingsStore) {
+	s.restoredSettings = r
+}
+
+// SetMigrationHistory wires where a restored copy's migration history is copied.
+func (s *ProvisioningService) SetMigrationHistory(h MigrationHistoryCopier) {
+	s.migrationHistory = h
+}
+
+// CarryRestoredSettings copies the source's API settings onto the copy, then
+// evicts whatever the data plane cached of the copy while it had none.
+func (s *ProvisioningService) CarryRestoredSettings(ctx context.Context, pc *provisioner.ProvisionContext, sourceID, targetID string) error {
+	if s.restoredSettings == nil {
+		return ErrRestoredSettingsNotConfigured
+	}
+	if s.migrationHistory == nil {
+		return ErrMigrationHistoryNotConfigured
+	}
+	if err := s.restoredSettings.CopyRestoredSettings(ctx, sourceID, targetID); err != nil {
+		return err
+	}
+	if err := s.carryMFAKey(ctx, pc, sourceID, targetID); err != nil {
+		return err
+	}
+	// The schema arrives with the data; the history that built it does not.
+	if err := s.migrationHistory.CopyMigrationHistory(sourceID, targetID); err != nil {
+		return err
+	}
+	s.AnnounceDatabaseReplaced(ctx, targetID)
+	return nil
 }
 
 // ProjectEventPublisher is notified once a project becomes usable, so the
@@ -238,6 +282,7 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 		adminPassword:  inst.Password,
 		resetPasswords: opts.ResetRolePasswords,
 		resetAdmin:     opts.ResetAdminPassword,
+		restored:       inst.RestoredFromProjectID != "",
 		documentDB:     inst.DocumentDB,
 	}
 	canExecSQL := (s.k8sClient != nil) || (s.dockerClient != nil)
@@ -306,6 +351,9 @@ type projectRoleSpec struct {
 	adminPassword  string
 	resetPasswords bool
 	resetAdmin     bool
+	// restored is a copy registered from another project's backup: what the
+	// source issued its end users must not open it (EXC-635).
+	restored bool
 	// documentDB projects run no watcher on a single host.
 	documentDB bool
 }
@@ -387,6 +435,9 @@ func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicat
 		pgroles.OwnerAccessSQL(spec.adminUsername)
 	if spec.resetPasswords {
 		roleSQL += BuildProjectRoleResetSQL(resetTargets(spec, creds))
+	}
+	if spec.restored {
+		roleSQL += endUserSessionsRevokeSQL
 	}
 	return roleSQL
 }
