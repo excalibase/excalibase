@@ -199,6 +199,10 @@ type MockClient struct {
 	// PullSecretsDeleted records "namespace/registry" per DeleteRegistryPullSecrets call.
 	PullSecretsDeleted   []string
 	PullSecretsDeleteErr error
+	// PullSecretsRefreshed records the credential per RefreshRegistryPullSecrets call.
+	PullSecretsRefreshed    []RegistryAuth
+	PullSecretsRefreshStale []string
+	PullSecretsRefreshErr   error
 	// AppLogLines answers AppLogs, keyed "namespace/appID".
 	AppLogLines  map[string][]AppLogLine
 	AppLogsErr   error
@@ -1056,6 +1060,14 @@ func (m *MockClient) DeleteRegistryPullSecrets(ctx context.Context, namespace, r
 	}
 	m.PullSecretsDeleted = append(m.PullSecretsDeleted, namespace+"/"+registry)
 	return nil
+}
+
+func (m *MockClient) RefreshRegistryPullSecrets(ctx context.Context, namespace string, auth RegistryAuth) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "RefreshRegistryPullSecrets:"+namespace+"/"+auth.Registry)
+	m.PullSecretsRefreshed = append(m.PullSecretsRefreshed, auth)
+	return m.PullSecretsRefreshStale, m.PullSecretsRefreshErr
 }
 
 func (m *MockClient) AppLogs(ctx context.Context, namespace, appID string, opts AppLogOptions) (AppLogPage, error) {

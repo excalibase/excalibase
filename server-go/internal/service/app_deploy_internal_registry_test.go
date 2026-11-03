@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 )
 
@@ -130,5 +131,61 @@ func TestRegistryCredentials_RefuseTheInternalRegistry(t *testing.T) {
 		if _, err := registries.Set(deployTestProject, host, testRegistryCredential); !errors.Is(err, appregistry.ErrInternalImage) {
 			t.Errorf("a saved credential for the platform's registry as %s: %v", host, err)
 		}
+	}
+}
+
+// steppingGenerations is a rotation landing mid-deploy: the first read is
+// generation 0, every later one generation 1.
+type steppingGenerations struct{ reads int }
+
+func (g *steppingGenerations) PullGeneration(string) (int, error) {
+	g.reads++
+	if g.reads == 1 {
+		return 0, nil
+	}
+	return 1, nil
+}
+
+// A rotation that lands during a deploy re-renders the pull secrets with the
+// new password; it never deletes the running apps' secrets as if the credential were removed.
+func rotatingMidDeploy(t *testing.T) (*AppDeployService, *k8s.MockClient, *appregistry.Issuer, string) {
+	t.Helper()
+	app := sampleDeployApp()
+	svc, _, kube := newDeployTestService(t, app)
+	svc.SetImageResolver(&stubResolver{digest: resolvedDigest})
+	issuer, err := appregistry.NewIssuer(appregistrytest.KeyPEM(t), appregistrytest.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, _ := appregistry.NewInternal(appregistrytest.Host, nil)
+	internal := guard.Issuing(issuer, &steppingGenerations{})
+	svc.SetInternalRegistry(internal)
+	image, _ := internal.Image(app.ProjectID, app.Name, resolvedDigest)
+	return svc, kube, issuer, image
+}
+
+func TestDeployImage_ARotationMidDeployKeepsEveryAppPulling(t *testing.T) {
+	app := sampleDeployApp()
+	svc, kube, issuer, image := rotatingMidDeploy(t)
+	if _, err := svc.DeployImage(context.Background(), app.ProjectID, app.ID, image, gitBuildOrigin()); err != nil {
+		t.Fatalf("DeployImage: %v", err)
+	}
+	rotated := issuer.PullCredential(app.ProjectID, 1)
+	if len(kube.PullSecretsDeleted) != 0 || len(kube.PullSecretsRefreshed) != 1 || kube.PullSecretsRefreshed[0].Password != rotated.Password {
+		t.Fatalf("deleted %v refreshed %v", kube.PullSecretsDeleted, kube.PullSecretsRefreshed)
+	}
+}
+
+// Secrets the rotation could not reach fail the deploy rather than read as pulling.
+func TestDeployImage_ARotationMidDeployThatCannotRefreshFailsTheDeploy(t *testing.T) {
+	app := sampleDeployApp()
+	svc, kube, _, image := rotatingMidDeploy(t)
+	kube.PullSecretsRefreshStale, kube.PullSecretsRefreshErr = []string{"storefront"}, errors.New("conflict")
+	deploy, err := svc.DeployImage(context.Background(), app.ProjectID, app.ID, image, gitBuildOrigin())
+	if err == nil && (deploy == nil || deploy.Status != apphost.DeployStatusFailed || !strings.Contains(deploy.FailureReason, "storefront")) {
+		t.Fatalf("deploy %+v err %v", deploy, err)
+	}
+	if len(kube.PullSecretsDeleted) != 0 {
+		t.Fatalf("deleted %v", kube.PullSecretsDeleted)
 	}
 }

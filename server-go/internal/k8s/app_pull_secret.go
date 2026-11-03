@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -54,6 +55,21 @@ func buildAppPullSecret(namespace string, app *apphost.App, auth *RegistryAuth) 
 	if registry := apphost.ImageRegistry(app.Image); registry != auth.Registry {
 		return nil, fmt.Errorf("%w: a credential for %s cannot pull an image from %s", ErrRenderApp, auth.Registry, registry)
 	}
+	config, err := dockerConfigJSON(*auth)
+	if err != nil {
+		return nil, err
+	}
+	labels := appLabels(app)
+	labels[appRegistryLabel] = registryLabelValue(auth.Registry)
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: AppPullSecretName(app.Name), Namespace: namespace, Labels: labels},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{corev1.DockerConfigJsonKey: config},
+	}, nil
+}
+
+// dockerConfigJSON is a pull secret's one registry login, as deploys and rotations write it.
+func dockerConfigJSON(auth RegistryAuth) ([]byte, error) {
 	entry := dockerAuthEntry{
 		Username: auth.Username, Password: auth.Password,
 		Auth: base64.StdEncoding.EncodeToString([]byte(auth.Username + ":" + auth.Password)),
@@ -66,22 +82,47 @@ func buildAppPullSecret(namespace string, app *apphost.App, auth *RegistryAuth) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode the pull credential: %w", ErrRenderApp, err)
 	}
-	labels := appLabels(app)
-	labels[appRegistryLabel] = registryLabelValue(auth.Registry)
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: AppPullSecretName(app.Name), Namespace: namespace, Labels: labels},
-		Type:       corev1.SecretTypeDockerConfigJson,
-		Data:       map[string][]byte{corev1.DockerConfigJsonKey: config},
-	}, nil
+	return config, nil
+}
+
+func registryPullSecretSelector(registry string) metav1.ListOptions {
+	return metav1.ListOptions{
+		LabelSelector: appRegistryLabel + "=" + registryLabelValue(registry) + ",app.kubernetes.io/managed-by=" + appManagedByValue,
+	}
+}
+
+// RefreshRegistryPullSecrets rewrites, in place, every pull secret rendered
+// from one registry's credential, so running apps pull with a rotated one
+// without a redeploy. It answers the apps whose secret still holds the old one.
+func (c *Client) RefreshRegistryPullSecrets(ctx context.Context, namespace string, auth RegistryAuth) ([]string, error) {
+	config, err := dockerConfigJSON(auth)
+	if err != nil {
+		return nil, err
+	}
+	secrets := c.clientset.CoreV1().Secrets(namespace)
+	list, err := secrets.List(ctx, registryPullSecretSelector(auth.Registry))
+	if err != nil {
+		return nil, fmt.Errorf("list pull secrets: %w", err)
+	}
+	var stale []string
+	var errs []error
+	for _, secret := range list.Items {
+		updated := secret.DeepCopy()
+		updated.Data = map[string][]byte{corev1.DockerConfigJsonKey: config}
+		updated.StringData = nil
+		if _, err := secrets.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+			stale = append(stale, secret.Labels["app.kubernetes.io/name"])
+			errs = append(errs, fmt.Errorf("update pull secret %s: %w", secret.Name, err))
+		}
+	}
+	return stale, errors.Join(errs...)
 }
 
 // DeleteRegistryPullSecrets removes every pull secret rendered from one
 // registry's credential, so a credential the project removed stops being used.
 func (c *Client) DeleteRegistryPullSecrets(ctx context.Context, namespace, registry string) error {
 	secrets := c.clientset.CoreV1().Secrets(namespace)
-	list, err := secrets.List(ctx, metav1.ListOptions{
-		LabelSelector: appRegistryLabel + "=" + registryLabelValue(registry) + ",app.kubernetes.io/managed-by=" + appManagedByValue,
-	})
+	list, err := secrets.List(ctx, registryPullSecretSelector(registry))
 	if err != nil {
 		return fmt.Errorf("list pull secrets: %w", err)
 	}

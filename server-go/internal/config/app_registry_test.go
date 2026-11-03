@@ -56,3 +56,15 @@ func TestValidateAppRegistry(t *testing.T) {
 		t.Errorf("the host alone guards user images with builds off: %v", err)
 	}
 }
+
+// Git builds push to and pull from the platform's registry: the flag with no host must stop the boot, not start half-wired.
+func TestValidateAppRegistry_GitBuildsNeedAHost(t *testing.T) {
+	on := []features.Feature{features.AppGitBuilds}
+	err := (AppConfig{DarkFeatures: on}).validateAppRegistry()
+	if err == nil || !strings.Contains(err.Error(), "APP_REGISTRY_HOST") || !strings.Contains(err.Error(), "FEATURE_APPGITBUILDS") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := (AppConfig{DarkFeatures: on, AppRegistry: AppRegistryConfig{Host: "r.internal", TokenKeyPEM: []byte("k")}}).validateAppRegistry(); err != nil {
+		t.Errorf("host and key with builds on: %v", err)
+	}
+}

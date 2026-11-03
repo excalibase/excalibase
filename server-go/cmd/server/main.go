@@ -1878,7 +1878,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		advisorsHandler:       handler.NewAdvisorsHandler(advisors.NewService(a.projectDB, sqlStore.Permissions(), advisors.Options{})),
 		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
 		registryToken:         newRegistryTokenHandler(internalRegistry, store),
-		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc)),
+		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc), store, appRuntime),
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,
 		storageBudgetH:        handler.NewStorageBudgetHandler(a.budget),

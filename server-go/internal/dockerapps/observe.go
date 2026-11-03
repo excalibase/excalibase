@@ -155,6 +155,11 @@ func (r *Runtime) AttachIssuedAppHostCertificates(context.Context) error { retur
 // DeleteRegistryPullSecrets has nothing to delete: a credential travels with each pull and is not kept.
 func (r *Runtime) DeleteRegistryPullSecrets(context.Context, string, string) error { return nil }
 
+// RefreshRegistryPullSecrets has nothing to rewrite, for the same reason.
+func (r *Runtime) RefreshRegistryPullSecrets(context.Context, string, k8s.RegistryAuth) ([]string, error) {
+	return nil, nil
+}
+
 func (r *Runtime) SetAppPrivateNetwork(_ context.Context, _ string, open bool) error {
 	if !open {
 		return ErrPrivateNetworkFixed

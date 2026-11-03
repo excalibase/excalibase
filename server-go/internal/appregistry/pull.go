@@ -34,6 +34,7 @@ func (i *Issuer) pullMAC(projectID string, generation int) []byte {
 }
 
 // derivePullKey keeps pull passwords apart from signatures: an HMAC key bound to the private key.
+// Rotating the signing key (APP_REGISTRY_TOKEN_KEY_FILE) retires every project's pull password at once.
 func derivePullKey(der []byte) []byte {
 	mac := hmac.New(sha256.New, der)
 	mac.Write([]byte("excalibase registry pull key v1"))

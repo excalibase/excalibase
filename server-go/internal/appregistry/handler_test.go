@@ -39,6 +39,14 @@ func testInternal(t *testing.T, generations fixedGenerations) (*Internal, *Issue
 	return guard.Issuing(issuer, generations), issuer
 }
 
+// unreadGenerations fails the test if the vault is read: the name check must refuse first.
+type unreadGenerations struct{ t *testing.T }
+
+func (g unreadGenerations) PullGeneration(projectID string) (int, error) {
+	g.t.Errorf("the vault was read for %q", projectID)
+	return 0, errors.New("must not be read")
+}
+
 func tokenHandler(t *testing.T, projects map[string]bool) (*TokenHandler, *Issuer) {
 	t.Helper()
 	internal, issuer := testInternal(t, fixedGenerations{"proj-rotated": 2})
@@ -120,6 +128,22 @@ func TestTokenHandler_RefusesWhoIsNotAProject(t *testing.T) {
 	for name, rec := range cases {
 		if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), "token") {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	issuerOnly, _ := testInternal(t, nil)
+	pathGuarded, err := NewTokenHandler(issuerOnly.Issuing(issuer, unreadGenerations{t}), func(_ context.Context, projectID string) (bool, error) {
+		t.Errorf("the project store was read for %q", projectID)
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range []string{"../proj-a", "proj-a/../proj-b", "/", "proj-a/", "/proj-a"} {
+		password := issuer.PullCredential(user, 0).Password
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			if rec := askToken(pathGuarded, method, user, password, scope); rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s %q: %d %s", method, user, rec.Code, rec.Body)
+			}
 		}
 	}
 	for _, project := range []string{"proj-broken", "proj-sealed"} {

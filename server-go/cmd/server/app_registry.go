@@ -14,11 +14,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
-// registryTokenPath is the token service zot forwards a node's login to (its upstream token endpoint).
+// registryTokenPath is the token realm zot's 401 names; containerd on each node calls it, zot never does.
 const registryTokenPath = "/internal/registry/token"
 
 // newInternalRegistry is the platform's registry for git builds (EXC-540):
@@ -92,12 +93,14 @@ func vaultSecrets(vc vaultclient.VaultClient) appregistry.SecretStore {
 	return vc
 }
 
-// newInternalRegistryHandler serves the rotation only where pull credentials are issued.
-func newInternalRegistryHandler(internal *appregistry.Internal, secrets appregistry.SecretStore) *handler.InternalRegistryHandler {
-	if !internal.CanIssue() || secrets == nil {
+// newInternalRegistryHandler serves the rotation only where pull credentials
+// are issued and the running apps' pull secrets can be re-rendered.
+func newInternalRegistryHandler(internal *appregistry.Internal, secrets appregistry.SecretStore,
+	instances storage.InstanceStore, runtime service.PullSecretRefresher) *handler.InternalRegistryHandler {
+	if !internal.CanIssue() || secrets == nil || runtime == nil {
 		return nil
 	}
-	return handler.NewInternalRegistryHandler(appregistry.NewGenerations(secrets))
+	return handler.NewInternalRegistryHandler(service.NewPullRotationService(appregistry.NewGenerations(secrets), internal, instances, runtime))
 }
 
 // mountInternalRegistry lets a project's Admin retire its pull credential.
