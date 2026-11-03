@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import type { Deploy } from '../../api/apps';
-import { DEPLOY_STATUS, canRollBack, formatWhen } from './appCopy';
+import { DEPLOY_STATUS, canRollBack, formatWhen, onPlatformRegistry } from './appCopy';
 import { ToneBadge, primaryButton, secondaryButton } from './ContainerBits';
 
 interface DeployHistoryProps {
@@ -95,6 +95,7 @@ function DeployRow({
 export function DeployHistory({ deploys, redeploying, onRedeploy }: DeployHistoryProps) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const servingId = deploys.find((deploy) => deploy.status === 'succeeded')?.id;
+  const windowed = onPlatformRegistry(deploys);
 
   if (deploys.length === 0) {
     return (
@@ -111,7 +112,7 @@ export function DeployHistory({ deploys, redeploying, onRedeploy }: DeployHistor
           deploy={deploy}
           isNewest={index === 0}
           isServing={deploy.id === servingId}
-          rollbackable={canRollBack(index, deploy.id === servingId)}
+          rollbackable={canRollBack(index, deploy.id === servingId, windowed(deploy))}
           confirming={confirmingId === deploy.id}
           redeploying={redeploying}
           onAsk={() => setConfirmingId(deploy.id)}

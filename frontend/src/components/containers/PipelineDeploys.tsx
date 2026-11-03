@@ -1,7 +1,13 @@
 import { useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import type { Deploy } from '../../api/apps';
-import { DEPLOY_STATUS, canRollBack, formatWhen, plainFailureReason } from './appCopy';
+import {
+  DEPLOY_STATUS,
+  canRollBack,
+  formatWhen,
+  onPlatformRegistry,
+  plainFailureReason,
+} from './appCopy';
 import { ToneBadge, primaryButton, secondaryButton } from './ContainerBits';
 import { deployDuration, deployImageLabel, deploySourceLabel, shortDigest } from './pipelineCopy';
 
@@ -128,6 +134,7 @@ function DeployRow({
 export function PipelineDeploys({ deploys, busy, onRedeploy }: PipelineDeploysProps) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const servingId = deploys.find((deploy) => deploy.status === 'succeeded')?.id;
+  const windowed = onPlatformRegistry(deploys);
   if (deploys.length === 0) {
     return (
       <p className="px-4 py-6 text-sm text-text-tertiary">
@@ -143,7 +150,7 @@ export function PipelineDeploys({ deploys, busy, onRedeploy }: PipelineDeploysPr
           deploy={deploy}
           isNewest={index === 0}
           isServing={deploy.id === servingId}
-          rollbackable={canRollBack(index, deploy.id === servingId)}
+          rollbackable={canRollBack(index, deploy.id === servingId, windowed(deploy))}
           busy={busy}
           confirming={confirmingId === deploy.id}
           onAsk={() => setConfirmingId(deploy.id)}

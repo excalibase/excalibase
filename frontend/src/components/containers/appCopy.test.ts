@@ -1,9 +1,12 @@
 import { describe, test, expect } from 'vitest';
 import {
+  ROLLBACK_WINDOW,
   appDisplayStatus,
+  canRollBack,
   describeTier,
   diskStopReason,
   isAppRunning,
+  onPlatformRegistry,
   plainFailureReason,
   restartSummary,
   suggestAppName,
@@ -168,5 +171,40 @@ describe('plainFailureReason for a rejected health check (EXC-651)', () => {
     expect(reason).toMatch(/\/nope/);
     expect(reason).toMatch(/404/);
     expect(reason).toMatch(/health check path/i);
+  });
+});
+
+describe('rollback window', () => {
+  const built = `registry.excalibase.internal/proj-1/web@sha256:${'a'.repeat(64)}`;
+  const row = (overrides: Partial<Deploy>): Deploy => ({
+    id: 'dep-1',
+    appId: 'app-1',
+    projectId: 'proj-1',
+    revision: 1,
+    image: 'nginx:1.27',
+    status: 'superseded',
+    createdBy: 'dev@example.com',
+    createdAt: '2026-10-01T10:00:00Z',
+    ...overrides,
+  });
+
+  test('only platform-registry deploys are windowed', () => {
+    const gitBuild = row({ source: 'git-build', image: built });
+    const rollbackOfIt = row({ id: 'dep-2', source: 'studio', image: built, redeployOf: 'dep-1' });
+    const image = row({ id: 'dep-3', source: 'api', image: 'ghcr.io/acme/web:1' });
+    const windowed = onPlatformRegistry([image, rollbackOfIt, gitBuild]);
+    expect([windowed(gitBuild), windowed(rollbackOfIt), windowed(image)]).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(onPlatformRegistry([image])(image)).toBe(false);
+  });
+
+  test('canRollBack applies the window only to windowed deploys, and never to the running one', () => {
+    expect(canRollBack(ROLLBACK_WINDOW + 2, false, false)).toBe(true);
+    expect(canRollBack(ROLLBACK_WINDOW + 2, false, true)).toBe(false);
+    expect(canRollBack(ROLLBACK_WINDOW + 2, true, true)).toBe(true);
+    expect(canRollBack(ROLLBACK_WINDOW - 1, false, true)).toBe(true);
   });
 });
