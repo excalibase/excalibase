@@ -13,14 +13,12 @@ import (
 // keyLockSpace keeps the per-project key count apart from other advisory locks.
 const keyLockSpace = 630
 
-const keyColumns = `id, project_id, name, access_key_id, buckets, can_read, can_write, can_delete,
-	created_by, created_at, expires_at, last_used_at`
-
+// Whole literal statements, not built from parts; each selects keyColumns in order.
 const (
-	listKeysSQL          = `SELECT ` + keyColumns + ` FROM storage_s3_keys WHERE project_id = $1 ORDER BY created_at, id`
-	findKeySQL           = `SELECT ` + keyColumns + ` FROM storage_s3_keys WHERE access_key_id = $1`
-	deleteKeySQL         = `DELETE FROM storage_s3_keys WHERE project_id = $1 AND id = $2 RETURNING ` + keyColumns
-	deleteProjectKeysSQL = `DELETE FROM storage_s3_keys WHERE project_id = $1 RETURNING ` + keyColumns
+	listKeysSQL          = `SELECT id, project_id, name, access_key_id, buckets, can_read, can_write, can_delete, created_by, created_at, expires_at, last_used_at FROM storage_s3_keys WHERE project_id = $1 ORDER BY created_at, id`
+	findKeySQL           = `SELECT id, project_id, name, access_key_id, buckets, can_read, can_write, can_delete, created_by, created_at, expires_at, last_used_at FROM storage_s3_keys WHERE access_key_id = $1`
+	deleteKeySQL         = `DELETE FROM storage_s3_keys WHERE project_id = $1 AND id = $2 RETURNING id, project_id, name, access_key_id, buckets, can_read, can_write, can_delete, created_by, created_at, expires_at, last_used_at`
+	deleteProjectKeysSQL = `DELETE FROM storage_s3_keys WHERE project_id = $1 RETURNING id, project_id, name, access_key_id, buckets, can_read, can_write, can_delete, created_by, created_at, expires_at, last_used_at`
 )
 
 // PostgresStore keeps key rows in the platform database.

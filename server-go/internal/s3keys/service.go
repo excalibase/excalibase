@@ -35,14 +35,14 @@ type Secrets interface {
 	Delete(projectID, accessKeyID string) error
 }
 
-// Standing answers whether a key's creator may still use it: an active
+// CanUser answers whether a key's creator may still use it: an active
 // account on the project's Developer rung or above.
-type Standing interface {
+type CanUser interface {
 	CanUse(ctx context.Context, userID, projectID string) (bool, error)
 }
 
-// Buckets answers whether a project has a bucket by that name.
-type Buckets interface {
+// BucketExister answers whether a project has a bucket by that name.
+type BucketExister interface {
 	BucketExists(ctx context.Context, projectID, name string) (bool, error)
 }
 
@@ -50,8 +50,8 @@ type Buckets interface {
 type Service struct {
 	store    Store
 	secrets  Secrets
-	standing Standing
-	buckets  Buckets
+	standing CanUser
+	buckets  BucketExister
 	now      func() time.Time
 
 	// cache holds secrets by access key id. A secret never changes for an
@@ -61,7 +61,7 @@ type Service struct {
 	touched sync.Map
 }
 
-func NewService(store Store, secrets Secrets, standing Standing, buckets Buckets) *Service {
+func NewService(store Store, secrets Secrets, standing CanUser, buckets BucketExister) *Service {
 	return &Service{store: store, secrets: secrets, standing: standing, buckets: buckets, now: time.Now}
 }
 
