@@ -40,6 +40,7 @@ var siteGitWebhookRate = custommw.RateLimit(custommw.PerIP, 600, time.Minute)
 type siteBuilds struct {
 	handler    *handler.SiteGitHandler
 	dispatcher *sitebuilds.Dispatcher
+	service    *sitebuilds.Service
 	// wired is what the boot check asks: a cluster runner, or single-host, which refuses by name.
 	wired bool
 	// apps serves git builds of apps (EXC-547) over the same service; appsWired is whether they can run here.
@@ -81,7 +82,7 @@ func newSiteBuilds(args siteBuildArgs) siteBuilds {
 	mode := siteBuildMode(cfg)
 	// The off service keeps the store: an app's disconnect answers whatever the install offers.
 	offService := sitebuilds.NewService(offStore(args.sqlStore), nil, nil, nil, nil, sitebuilds.Options{Mode: mode})
-	off := siteBuilds{handler: handler.NewSiteGitHandler(offService, cfg.StudioURL), apps: handler.NewAppGitHandler(offService)}
+	off := siteBuilds{handler: handler.NewSiteGitHandler(offService, cfg.StudioURL), service: offService, apps: handler.NewAppGitHandler(offService)}
 	if mode != sitebuilds.ModeOn {
 		off.wired = mode == sitebuilds.ModeSingleHost
 		if mode == sitebuilds.ModeSingleHost {
@@ -112,7 +113,7 @@ func newSiteBuilds(args siteBuildArgs) siteBuilds {
 			CallbackURL: siteGitCallbackURL(cfg),
 		})
 	dispatcher := sitebuilds.NewDispatcher(service, runner, siteBuildDispatcherOptions(cfg))
-	return siteBuilds{handler: handler.NewSiteGitHandler(service, cfg.StudioURL), dispatcher: dispatcher, wired: true,
+	return siteBuilds{handler: handler.NewSiteGitHandler(service, cfg.StudioURL), dispatcher: dispatcher, service: service, wired: true,
 		apps: handler.NewAppGitHandler(service), appsWired: wireClusterAppBuilds(args, provider, service, dispatcher)}
 }
 

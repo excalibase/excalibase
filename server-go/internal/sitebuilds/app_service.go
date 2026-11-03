@@ -16,6 +16,11 @@ func (s *Service) EnableApps(support AppSupport) {
 	s.apps = &support
 }
 
+// AppsWired answers whether EnableApps wired app support, whatever the flag says now.
+func (s *Service) AppsWired() bool {
+	return s != nil && s.apps != nil
+}
+
 // appsOn answers whether app builds are wired here and switched on now.
 func (s *Service) appsOn(ctx context.Context) bool {
 	return s != nil && s.apps != nil && features.Enabled(ctx, s.apps.Flags, features.AppGitBuilds)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -57,6 +58,9 @@ type AppBuildPublisher struct {
 	now       func() time.Time
 	// free answers the bytes free on the spool's filesystem.
 	free func(dir string) (int64, error)
+	// mu guards reserved: the MaxImage of every publish spooling on this pod, which free does not see yet.
+	mu       sync.Mutex
+	reserved int64
 }
 
 // AppBuildResult is what a finished build hands over; BuildID names the attempt whose Job holds the image.
@@ -81,9 +85,10 @@ func (p *AppBuildPublisher) Publish(ctx context.Context, result AppBuildResult) 
 	if err != nil {
 		return nil, err
 	}
-	if err := p.haveRoom(result.MaxImage); err != nil {
+	if err := p.reserve(result.MaxImage); err != nil {
 		return nil, err
 	}
+	defer p.release(result.MaxImage)
 	dir, err := os.MkdirTemp(p.spoolDir, "app-image-")
 	if err != nil {
 		return nil, fmt.Errorf("spool the build's image: %w", err)
@@ -158,16 +163,26 @@ func (s *streamErr) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// haveRoom refuses before anything is collected unless the spool holds the plan's largest image and the margin.
-func (p *AppBuildPublisher) haveRoom(maxImage int64) error {
+// reserve refuses before anything is collected unless the spool holds the plan's largest
+// image and the margin beside what publishes in flight have reserved; on success it reserves maxImage.
+func (p *AppBuildPublisher) reserve(maxImage int64) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	free, err := p.free(p.spoolDir)
 	if err != nil {
 		return fmt.Errorf("read the spool's free space: %w", err)
 	}
-	if free < maxImage+spoolMargin {
-		return fmt.Errorf("%w (%d bytes free)", ErrSpoolFull, free)
+	if free-p.reserved < maxImage+spoolMargin {
+		return fmt.Errorf("%w (%d bytes free, %d reserved)", ErrSpoolFull, free, p.reserved)
 	}
+	p.reserved += maxImage
 	return nil
+}
+
+func (p *AppBuildPublisher) release(maxImage int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reserved -= maxImage
 }
 
 func spoolFree(dir string) (int64, error) {

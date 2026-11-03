@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -123,12 +124,21 @@ func sweepSpool(dir string) {
 	}
 	cutoff := time.Now().Add(-appBuildSpoolMaxAge)
 	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil || info.ModTime().After(cutoff) {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
-			log.Printf("WARN: app build spool: remove %s: %v", entry.Name(), err)
-		}
+		sweepSpoolEntry(dir, entry, cutoff)
+	}
+}
+
+// sweepSpoolEntry removes one leftover older than cutoff.
+func sweepSpoolEntry(dir string, entry fs.DirEntry, cutoff time.Time) {
+	info, err := entry.Info()
+	if err != nil {
+		log.Printf("WARN: app build spool: read %s: %v", entry.Name(), err)
+		return
+	}
+	if info.ModTime().After(cutoff) {
+		return
+	}
+	if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+		log.Printf("WARN: app build spool: remove %s: %v", entry.Name(), err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -194,5 +195,49 @@ func TestPublish_ARefusedPushDeploysNothing(t *testing.T) {
 		if _, err := publisher.Publish(context.Background(), result); err == nil {
 			t.Errorf("%s: published", name)
 		}
+	}
+}
+
+// gatedCollector holds the first collect until release closes, so a later publish overlaps it.
+type gatedCollector struct {
+	fakeCollector
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (g *gatedCollector) Collect(ctx context.Context, buildID string, w io.Writer, limit int64) error {
+	if g.calls.Add(1) == 1 {
+		g.started <- struct{}{}
+		<-g.release
+	}
+	return g.fakeCollector.Collect(ctx, buildID, w, limit)
+}
+
+// Publishes in flight on one pod reserve their image on the spool: a second one that would not fit beside the first is refused before it writes.
+func TestPublish_ConcurrentPublishesReserveTheSpool(t *testing.T) {
+	collector := &gatedCollector{fakeCollector: fakeCollector{archive: appregistrytest.Archive(t)}, started: make(chan struct{}, 1), release: make(chan struct{})}
+	publisher, pusher, _, _ := publishFixture(t, collector)
+	result := buildResult()
+	publisher.free = func(string) (int64, error) { return result.MaxImage + spoolMargin, nil }
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := publisher.Publish(context.Background(), result)
+		first <- err
+	}()
+	<-collector.started
+	if _, err := publisher.Publish(context.Background(), result); !errors.Is(err, ErrSpoolFull) {
+		t.Fatalf("a second publish beside the first: %v", err)
+	}
+	if calls := collector.calls.Load(); calls != 1 {
+		t.Fatalf("the refused publish collected: %d collects", calls)
+	}
+	close(collector.release)
+	if err := <-first; err != nil || pusher.pushed != 1 {
+		t.Fatalf("the first publish: %v, pushed %d", err, pusher.pushed)
+	}
+	if _, err := publisher.Publish(context.Background(), result); err != nil {
+		t.Fatalf("the reservation outlived its publish: %v", err)
 	}
 }

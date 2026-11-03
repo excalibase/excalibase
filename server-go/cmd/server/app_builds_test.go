@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"database/sql"
 	"encoding/pem"
+	"errors"
+	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +109,12 @@ func TestAppBuilds_NothingWiredWhileTheFlagIsOff(t *testing.T) {
 		}
 		if builds.apps == nil {
 			t.Errorf("%s: the app git routes need their handler, wired or not", name)
+		}
+		if got := builds.dispatcher != nil && builds.dispatcher.AppsWired(); got != tc.want {
+			t.Errorf("%s: dispatcher has an app runner and publisher %v, want %v", name, got, tc.want)
+		}
+		if builds.service == nil || builds.service.AppsWired() != tc.want {
+			t.Errorf("%s: service app support wired, want %v", name, tc.want)
 		}
 	}
 }
@@ -237,5 +248,23 @@ func TestAppGitDisconnect_AnswersWithTheFlagOff(t *testing.T) {
 	probe := darkProbe{http.MethodDelete, "/api/projects/" + matrixProjectA + "/apps/app-1/git"}
 	if w := probeDark(router, probe, token); w.Body.String() == unmountedBody {
 		t.Fatalf("the disconnect is unmounted with the flag off: %d", w.Code)
+	}
+}
+
+// unreadableEntry is a spool entry whose details cannot be read, as when it vanishes mid-sweep.
+type unreadableEntry struct{ fs.DirEntry }
+
+func (unreadableEntry) Name() string               { return "app-image-gone" }
+func (unreadableEntry) Info() (fs.FileInfo, error) { return nil, errors.New("lstat: no such file") }
+
+// A spool entry the sweep cannot read is named in a WARN, never skipped silently.
+func TestSweepSpoolEntry_WarnsWhenAnEntryCannotBeRead(t *testing.T) {
+	var logged bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	sweepSpoolEntry(t.TempDir(), unreadableEntry{}, time.Now())
+	if line := logged.String(); !strings.Contains(line, "WARN: app build spool") || !strings.Contains(line, "app-image-gone") || !strings.Contains(line, "no such file") {
+		t.Errorf("logged %q", line)
 	}
 }

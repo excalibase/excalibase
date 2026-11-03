@@ -281,3 +281,19 @@ func TestWithoutBuildArgValues_KeepsNamesOnly(t *testing.T) {
 		t.Error("no connection stays none")
 	}
 }
+
+// AppsWired reports what EnableApps wired, whatever the appgitbuilds flag says now.
+func TestAppsWired_ReportsEnableApps(t *testing.T) {
+	bed := newTestBed(false)
+	if !bed.service.AppsWired() || !bed.dispatcher.AppsWired() {
+		t.Error("wired app builds report unwired")
+	}
+	service := NewService(newMemoryStore(), nil, nil, nil, nil, Options{Mode: ModeOn})
+	if service.AppsWired() || NewDispatcher(service, &fakeSiteRunner{}, DispatcherOptions{}).AppsWired() {
+		t.Error("unwired app builds report wired")
+	}
+	var none *Service
+	if none.AppsWired() {
+		t.Error("no service reports wired")
+	}
+}
