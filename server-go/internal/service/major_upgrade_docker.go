@@ -20,7 +20,8 @@ import (
 // shipped, dumped whole, stopped and renamed; a new container of the new
 // image, under the old name and host port, loads the dump on its first
 // start, before its server is on the network. Until the platform records the
-// new container, the old one is put back as it was.
+// new container, the old one is put back as it was; once it has, recovery
+// records a fully loaded conversion instead of putting it back.
 type DockerMajorUpgrader struct {
 	adapter *DockerBackupAdapter
 	now     func() time.Time
@@ -129,7 +130,9 @@ type swap struct {
 // Convert moves the data into a container of the new major. See
 // MajorUpgrader.
 func (u *DockerMajorUpgrader) Convert(ctx context.Context, inst *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
-	progress.Step(domain.MajorUpgradeStepConverting)
+	if err := progress.Step(ctx, domain.MajorUpgradeStepConverting); err != nil {
+		return stopped(run, err)
+	}
 	dc, renamer, err := u.engine()
 	if err != nil {
 		return nothingChanged(run, err)
@@ -150,14 +153,17 @@ func (u *DockerMajorUpgrader) Convert(ctx context.Context, inst *domain.Database
 	}
 	state := &swap{inst: inst, run: run, oldID: inst.Namespace}
 	if err := u.moveData(ctx, dc, renamer, spec, state, progress); err != nil {
-		return u.putBack(ctx, dc, renamer, state, err)
+		return u.undo(ctx, dc, renamer, state, progress, err)
+	}
+	if err := progress.Hold(ctx); err != nil {
+		return u.undo(ctx, dc, renamer, state, progress, err)
 	}
 	if err := u.adapter.recordContainer(inst, state.newID); err != nil {
-		return u.putBack(ctx, dc, renamer, state, err)
+		return u.undo(ctx, dc, renamer, state, progress, err)
 	}
 	state.recorded = true
-	if err := progress.Converted(u.now()); err != nil {
-		return u.putBack(ctx, dc, renamer, state, err)
+	if err := progress.Converted(ctx, u.now()); err != nil {
+		return notRecorded(err)
 	}
 	return UpgradeOutcome{Converted: true}
 }
@@ -242,15 +248,23 @@ func (u *DockerMajorUpgrader) moveData(ctx context.Context, dc provisioner.Docke
 	if _, err := runScript(ctx, dc, state.oldID, provisioner.FenceScript()); err != nil {
 		return fmt.Errorf("fence: %w", err)
 	}
-	progress.WritesStopped(u.now())
+	if err := progress.WritesStopped(ctx, u.now()); err != nil {
+		return err
+	}
 	if err := u.adapter.RefreshWALArchive(ctx, state.inst); err != nil {
 		return fmt.Errorf("ship the last WAL: %w", err)
 	}
 	if _, err := runScript(ctx, dc, state.oldID, provisioner.DumpScript()); err != nil {
 		return fmt.Errorf("dump: %w", err)
 	}
+	if err := progress.Hold(ctx); err != nil {
+		return err
+	}
 	if err := dc.StopContainer(ctx, state.oldID); err != nil {
 		return fmt.Errorf("stop: %w", err)
+	}
+	if err := progress.Hold(ctx); err != nil {
+		return err
 	}
 	if err := renamer.RenameContainer(ctx, state.oldID, provisioner.PreUpgradeContainerName(state.inst.ProjectID, state.run.ID)); err != nil {
 		return fmt.Errorf("rename: %w", err)
@@ -343,6 +357,16 @@ const (
 	putBackPublic = "the upgrade did not complete, so the database was put back on Postgres %s"
 )
 
+// undo puts the old container back, unless the run was lost: then what is
+// on the host is left for the actor that owns the run now.
+func (u *DockerMajorUpgrader) undo(ctx context.Context, dc provisioner.DockerClient, renamer provisioner.ContainerRenamer,
+	state *swap, progress UpgradeProgress, cause error) UpgradeOutcome {
+	if lost := lostRun(ctx, cause, progress); lost != nil {
+		return UpgradeOutcome{Cause: lost}
+	}
+	return u.putBack(ctx, dc, renamer, state, cause)
+}
+
 // putBack returns the old container to its name, the project and service.
 func (u *DockerMajorUpgrader) putBack(ctx context.Context, dc provisioner.DockerClient, renamer provisioner.ContainerRenamer, state *swap, cause error) UpgradeOutcome {
 	ctx = context.WithoutCancel(ctx)
@@ -419,9 +443,11 @@ func (u *DockerMajorUpgrader) waitTCP(ctx context.Context, dc provisioner.Docker
 	}
 }
 
-// Recover puts the old container back after a driver died before the
-// conversion was recorded. See MajorUpgrader.
-func (u *DockerMajorUpgrader) Recover(ctx context.Context, inst *domain.DatabaseInstance, run domain.MajorUpgrade, _ UpgradeProgress) UpgradeOutcome {
+// Recover ends a run whose driver died before the conversion was recorded:
+// a recorded new container that loaded the dump and holds the new major is
+// the conversion done, and is recorded; anything else puts the old
+// container back. See MajorUpgrader.
+func (u *DockerMajorUpgrader) Recover(ctx context.Context, inst *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
 	dc, renamer, err := u.engine()
 	if err != nil || renamer == nil {
 		return UpgradeOutcome{Public: notPutBackPublic, Cause: errors.Join(err, errors.New(noRenameBlocker))}
@@ -442,7 +468,37 @@ func (u *DockerMajorUpgrader) Recover(ctx context.Context, inst *domain.Database
 		}
 		state.recorded = inst.Namespace != pre.ID
 	}
+	if state.newID != "" && inst.Namespace == state.newID && u.holdsNewMajor(ctx, dc, state.newID, run.ToVersion) {
+		if err := progress.Converted(ctx, u.now()); err != nil {
+			return notRecorded(err)
+		}
+		return UpgradeOutcome{Converted: true}
+	}
 	return u.putBack(ctx, dc, renamer, state, errors.New("the upgrade was interrupted"))
+}
+
+// holdsNewMajor: the new container, started if it is stopped, loaded the
+// dump in full and its data directory is on major.
+func (u *DockerMajorUpgrader) holdsNewMajor(ctx context.Context, dc provisioner.DockerClient, container, major string) bool {
+	current, err := dc.ContainerState(ctx, container)
+	if err != nil || !current.Found {
+		return false
+	}
+	if !current.Running {
+		if err := provisioner.StartHoldingPort(ctx, dc, restoreStartPoller, container); err != nil {
+			log.Printf("major upgrade: start %s to check it: %v", container, err)
+			return false
+		}
+	}
+	loaded, err := runScript(ctx, dc, container, provisioner.UpgradeStateScript())
+	if err != nil || strings.TrimSpace(loaded) != provisioner.UpgradeLoaded {
+		return false
+	}
+	onDisk, err := runScript(ctx, dc, container, provisioner.DataMajorScript())
+	if err != nil || strings.TrimSpace(onDisk) != major {
+		return false
+	}
+	return u.waitTCP(ctx, dc, container) == nil
 }
 
 // WaitServing lets the network in to the new server and waits for it. See
