@@ -95,6 +95,7 @@ func endUsersRouter(manager EndUserManager, actor string) (chi.Router, *sdkKeyAu
 	r.Route("/api/projects/{projectId}/end-users", func(r chi.Router) {
 		h.Routes(r)
 		h.AccountRoutes(r)
+		h.FactorRoutes(r)
 	})
 	return r, audit
 }

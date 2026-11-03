@@ -40,6 +40,8 @@ const (
 	routeManaged route = iota
 	routeExecCreate
 	routeStats
+	// routeRename takes a new name a create could take (EXC-668).
+	routeRename
 )
 
 // containerRoutes are the calls provisioning makes on a container it created.
@@ -55,6 +57,7 @@ var containerRoutes = map[string]route{
 	"GET /logs":     routeManaged,
 	"POST /wait":    routeManaged,
 	"GET /stats":    routeStats,
+	"POST /rename":  routeRename,
 }
 
 // Handler is the proxy. Build it with NewHandler.
@@ -150,8 +153,15 @@ func (h *Handler) authorizeContainer(r *http.Request, id, action string) error {
 	if err := h.requireManaged(r.Context(), id); err != nil {
 		return err
 	}
-	if kind == routeExecCreate {
+	switch kind {
+	case routeExecCreate:
 		return h.checkBody(r, CheckExecCreate)
+	case routeRename:
+		names := r.URL.Query()["name"]
+		if len(names) != 1 {
+			return refuse("a rename names exactly one name")
+		}
+		return h.policy.CheckRename(names[0])
 	}
 	return nil
 }
@@ -224,9 +234,13 @@ func (h *Handler) checkBody(r *http.Request, check func([]byte) error) error {
 	if len(body) > maxCreateBody {
 		return refuse("request body is larger than %d bytes", maxCreateBody)
 	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.ContentLength = int64(len(body))
-	return check(body)
+	checked, err := canonicalBody(body)
+	if err != nil {
+		return err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(checked))
+	r.ContentLength = int64(len(checked))
+	return check(checked)
 }
 
 func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {

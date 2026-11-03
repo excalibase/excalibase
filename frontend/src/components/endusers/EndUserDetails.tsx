@@ -12,6 +12,8 @@ import {
 } from '../../api/endUsers';
 import { apiErrorMessage } from '../../api/permissions';
 import { ConfirmModal } from '../ui/ConfirmModal';
+import { useFeatureEnabled } from '../../hooks/useDeploymentMode';
+import { ResetEndUserMFA } from './ResetEndUserMFA';
 import { metadataMergePatch, parseMetadataObject } from './metadataPatch';
 
 // One end user's details (EXC-662, flag `authuser`): user metadata is the
@@ -26,6 +28,7 @@ interface Props {
 const endUserKey = (projectId: string, userId: number) => ['end-user', projectId, userId] as const;
 
 export function EndUserDetails({ projectId, user, onDeleted }: Props) {
+  const { enabled: mfa } = useFeatureEnabled('authmfa');
   const detail = useQuery({
     queryKey: endUserKey(projectId, user.id),
     queryFn: () => getEndUser(projectId, user.id),
@@ -64,6 +67,11 @@ export function EndUserDetails({ projectId, user, onDeleted }: Props) {
         projectId={projectId}
         detail={detail.data}
       />
+      {mfa && (
+        <div className="pt-2 border-t border-border-primary">
+          <ResetEndUserMFA projectId={projectId} user={user} />
+        </div>
+      )}
       <DeleteEndUser projectId={projectId} user={user} onDeleted={onDeleted} />
     </div>
   );
