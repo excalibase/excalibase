@@ -141,29 +141,29 @@ func (w *upgradeWorld) TakeBackup(_ context.Context, inst *domain.DatabaseInstan
 	return "backup-" + inst.PostgresVersion, nil
 }
 
-func (w *upgradeWorld) Convert(_ context.Context, _ *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
+func (w *upgradeWorld) Convert(ctx context.Context, _ *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
 	w.record("convert:" + run.ToVersion)
-	if err := progress.Step(domain.MajorUpgradeStepConverting); err != nil {
+	if err := progress.Step(ctx, domain.MajorUpgradeStepConverting); err != nil {
 		return UpgradeOutcome{Cause: err}
 	}
-	if err := progress.WritesStopped(time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)); err != nil {
+	if err := progress.WritesStopped(ctx, time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)); err != nil {
 		return UpgradeOutcome{Cause: err}
 	}
 	if w.midConvert != nil {
 		w.midConvert()
 	}
 	if w.outcome.Converted {
-		if err := progress.Converted(time.Date(2026, 10, 29, 10, 5, 0, 0, time.UTC)); err != nil {
+		if err := progress.Converted(ctx, time.Date(2026, 10, 29, 10, 5, 0, 0, time.UTC)); err != nil {
 			return UpgradeOutcome{Unsettled: true, Cause: err}
 		}
 	}
 	return w.outcome
 }
 
-func (w *upgradeWorld) Recover(_ context.Context, _ *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
+func (w *upgradeWorld) Recover(ctx context.Context, _ *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
 	w.record("recover:" + run.ToVersion)
 	if w.recovered.Converted {
-		if err := progress.Converted(time.Date(2026, 10, 29, 10, 5, 0, 0, time.UTC)); err != nil {
+		if err := progress.Converted(ctx, time.Date(2026, 10, 29, 10, 5, 0, 0, time.UTC)); err != nil {
 			return UpgradeOutcome{Unsettled: true, Cause: err}
 		}
 	}

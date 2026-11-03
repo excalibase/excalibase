@@ -31,33 +31,34 @@ func newOwner() string {
 // run's owner.
 type runProgress struct {
 	svc *MajorUpgradeService
-	ctx context.Context
 	run *domain.MajorUpgrade
 }
 
-func (s *MajorUpgradeService) progressOf(ctx context.Context, run *domain.MajorUpgrade) *runProgress {
-	return &runProgress{svc: s, ctx: ctx, run: run}
+func (s *MajorUpgradeService) progressOf(run *domain.MajorUpgrade) *runProgress {
+	return &runProgress{svc: s, run: run}
 }
 
-func (p *runProgress) Step(step string) error { return p.svc.progressStep(p.ctx, p.run, step) }
+func (p *runProgress) Step(ctx context.Context, step string) error {
+	return p.svc.progressStep(ctx, p.run, step)
+}
 
-func (p *runProgress) WritesStopped(at time.Time) error {
+func (p *runProgress) WritesStopped(ctx context.Context, at time.Time) error {
 	stopped := at.UTC()
 	p.run.WritesStoppedAt = &stopped
-	return p.svc.writeRun(p.ctx, p.run)
+	return p.svc.writeRun(ctx, p.run)
 }
 
 // Hold confirms ownership with a heartbeat; it answers even after the
 // actor's context was cancelled, so a lost run is told apart from a stop.
-func (p *runProgress) Hold() error {
-	err := p.svc.cfg.Runs.TouchMajorUpgrade(context.WithoutCancel(p.ctx), p.run.ID, p.run.Owner, p.svc.cfg.Now())
+func (p *runProgress) Hold(ctx context.Context) error {
+	err := p.svc.cfg.Runs.TouchMajorUpgrade(context.WithoutCancel(ctx), p.run.ID, p.run.Owner, p.svc.cfg.Now())
 	return takenOver(err)
 }
 
-func (p *runProgress) Converted(at time.Time) error {
-	err := p.svc.cfg.Runs.MarkMajorUpgradeConverted(p.ctx, p.run.ID, p.run.ProjectID, p.run.ToVersion, p.run.Owner, at)
+func (p *runProgress) Converted(ctx context.Context, at time.Time) error {
+	err := p.svc.cfg.Runs.MarkMajorUpgradeConverted(ctx, p.run.ID, p.run.ProjectID, p.run.ToVersion, p.run.Owner, at)
 	if err != nil {
-		landed, readErr := p.markLanded()
+		landed, readErr := p.markLanded(ctx)
 		if readErr != nil {
 			return fmt.Errorf("record the conversion to %s: %w", p.run.ToVersion, errors.Join(takenOver(err), readErr))
 		}
@@ -71,8 +72,8 @@ func (p *runProgress) Converted(at time.Time) error {
 
 // markLanded reads back a mark that answered an error: it counts only when
 // this actor still owns the RUNNING run and the mark committed.
-func (p *runProgress) markLanded() (time.Time, error) {
-	stored, err := p.svc.cfg.Runs.LatestMajorUpgrade(p.ctx, p.run.ProjectID)
+func (p *runProgress) markLanded(ctx context.Context) (time.Time, error) {
+	stored, err := p.svc.cfg.Runs.LatestMajorUpgrade(ctx, p.run.ProjectID)
 	switch {
 	case err != nil:
 		return time.Time{}, err
@@ -182,7 +183,7 @@ func (s *MajorUpgradeService) recoverClaimed(ctx context.Context, inst *domain.D
 	case run.Converted:
 		s.finishConverted(ctx, engine, inst, run)
 	default:
-		outcome := engine.Recover(ctx, inst, *run, s.progressOf(ctx, run))
+		outcome := engine.Recover(ctx, inst, *run, s.progressOf(run))
 		s.conclude(ctx, engine, inst, run, outcome)
 	}
 }
@@ -191,7 +192,7 @@ func (s *MajorUpgradeService) recoverClaimed(ctx context.Context, inst *domain.D
 // heartbeat refused because the run is no longer this actor's cancels the
 // actor with errRunTakenOver.
 func (s *MajorUpgradeService) keepAlive(run domain.MajorUpgrade, lost context.CancelCauseFunc) func() {
-	ctx, cancel := context.WithCancel(context.Background())
+	quit := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -199,25 +200,25 @@ func (s *MajorUpgradeService) keepAlive(run domain.MajorUpgrade, lost context.Ca
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-quit:
 				return
 			case <-ticker.C:
-				if s.beat(ctx, run, lost) {
+				if s.beat(run, lost) {
 					return
 				}
 			}
 		}
 	}()
 	return func() {
-		cancel()
+		close(quit)
 		<-done
 	}
 }
 
 // beat marks the run alive once; true when the run was lost.
-func (s *MajorUpgradeService) beat(ctx context.Context, run domain.MajorUpgrade, lost context.CancelCauseFunc) bool {
-	err := s.cfg.Runs.TouchMajorUpgrade(ctx, run.ID, run.Owner, s.cfg.Now())
-	if err == nil || ctx.Err() != nil {
+func (s *MajorUpgradeService) beat(run domain.MajorUpgrade, lost context.CancelCauseFunc) bool {
+	err := s.cfg.Runs.TouchMajorUpgrade(context.Background(), run.ID, run.Owner, s.cfg.Now())
+	if err == nil {
 		return false
 	}
 	log.Printf("major upgrade %s: heartbeat: %v", run.ID, err)

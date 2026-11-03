@@ -60,13 +60,13 @@ type UpgradeOutcome struct {
 
 // UpgradeProgress is what a conversion reports while it runs.
 type UpgradeProgress interface {
-	Step(step string) error
-	WritesStopped(at time.Time) error
+	Step(ctx context.Context, step string) error
+	WritesStopped(ctx context.Context, at time.Time) error
 	// Hold confirms the run is still this actor's.
-	Hold() error
+	Hold(ctx context.Context) error
 	// Converted records that the data now lives on the new major. A
 	// conversion that cannot record it must not go on as if it had.
-	Converted(at time.Time) error
+	Converted(ctx context.Context, at time.Time) error
 }
 
 // MajorUpgrader is one deployment's half of a major upgrade.
@@ -276,7 +276,7 @@ func (s *MajorUpgradeService) drive(ctx context.Context, engine MajorUpgrader, i
 	if err := s.cfg.Projects.StopReplication(ctx, inst); err != nil {
 		log.Printf("major upgrade %s: stop replication: %v", inst.ProjectID, err)
 	}
-	outcome := engine.Convert(ctx, inst, *run, s.progressOf(ctx, run))
+	outcome := engine.Convert(ctx, inst, *run, s.progressOf(run))
 	s.conclude(ctx, engine, inst, run, outcome)
 }
 

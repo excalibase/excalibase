@@ -183,7 +183,7 @@ func (u *K8sMajorUpgrader) TakeBackup(ctx context.Context, inst *domain.Database
 // Convert points the cluster at the new major and watches the operator
 // convert it. See MajorUpgrader.
 func (u *K8sMajorUpgrader) Convert(ctx context.Context, inst *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
-	if err := progress.Step(domain.MajorUpgradeStepConverting); err != nil {
+	if err := progress.Step(ctx, domain.MajorUpgradeStepConverting); err != nil {
 		return stopped(run, err)
 	}
 	plan, err := u.plan(ctx, inst, run)
@@ -203,7 +203,7 @@ func (u *K8sMajorUpgrader) Convert(ctx context.Context, inst *domain.DatabaseIns
 		// conversion starts, which is harmless if the write never landed.
 		log.Printf("major upgrade %s: point cluster: %v; watching in case it applied", plan.projectID, err)
 	}
-	if err := progress.WritesStopped(started); err != nil {
+	if err := progress.WritesStopped(ctx, started); err != nil {
 		return leftRunning(err)
 	}
 	return u.watch(ctx, run, plan, progress, started)
@@ -229,11 +229,11 @@ func leftRunning(cause error) UpgradeOutcome {
 
 // lostRun is non-nil when the run is no longer this actor's, by cause or by
 // a fresh check.
-func lostRun(cause error, progress UpgradeProgress) error {
+func lostRun(ctx context.Context, cause error, progress UpgradeProgress) error {
 	if errors.Is(cause, errRunTakenOver) {
 		return cause
 	}
-	if err := progress.Hold(); errors.Is(err, errRunTakenOver) {
+	if err := progress.Hold(ctx); errors.Is(err, errRunTakenOver) {
 		return fmt.Errorf("%w (stopped at: %v)", err, cause)
 	}
 	return nil
@@ -339,7 +339,7 @@ func (u *K8sMajorUpgrader) watch(ctx context.Context, run domain.MajorUpgrade, p
 			continue
 		}
 		if major, ok := k8s.ClusterDataMajor(cluster); ok && major == plan.toMajor {
-			if err := progress.Converted(u.now()); err != nil {
+			if err := progress.Converted(ctx, u.now()); err != nil {
 				return notRecorded(err)
 			}
 			return UpgradeOutcome{Converted: true}
@@ -404,7 +404,7 @@ func (u *K8sMajorUpgrader) Recover(ctx context.Context, inst *domain.DatabaseIns
 		return UpgradeOutcome{Public: notPutBackPublic, Cause: err}
 	}
 	if major, ok := k8s.ClusterDataMajor(cluster); ok && major == plan.toMajor {
-		if err := progress.Converted(u.now()); err != nil {
+		if err := progress.Converted(ctx, u.now()); err != nil {
 			return notRecorded(err)
 		}
 		return UpgradeOutcome{Converted: true}
@@ -415,10 +415,10 @@ func (u *K8sMajorUpgrader) Recover(ctx context.Context, inst *domain.DatabaseIns
 	started := u.now()
 	if run.WritesStoppedAt != nil {
 		started = *run.WritesStoppedAt
-	} else if err := progress.WritesStopped(started); err != nil {
+	} else if err := progress.WritesStopped(ctx, started); err != nil {
 		return leftRunning(err)
 	}
-	if err := progress.Step(domain.MajorUpgradeStepConverting); err != nil {
+	if err := progress.Step(ctx, domain.MajorUpgradeStepConverting); err != nil {
 		return leftRunning(err)
 	}
 	return u.watch(ctx, run, plan, progress, started)

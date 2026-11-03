@@ -130,7 +130,7 @@ type swap struct {
 // Convert moves the data into a container of the new major. See
 // MajorUpgrader.
 func (u *DockerMajorUpgrader) Convert(ctx context.Context, inst *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
-	if err := progress.Step(domain.MajorUpgradeStepConverting); err != nil {
+	if err := progress.Step(ctx, domain.MajorUpgradeStepConverting); err != nil {
 		return stopped(run, err)
 	}
 	dc, renamer, err := u.engine()
@@ -155,14 +155,14 @@ func (u *DockerMajorUpgrader) Convert(ctx context.Context, inst *domain.Database
 	if err := u.moveData(ctx, dc, renamer, spec, state, progress); err != nil {
 		return u.undo(ctx, dc, renamer, state, progress, err)
 	}
-	if err := progress.Hold(); err != nil {
+	if err := progress.Hold(ctx); err != nil {
 		return u.undo(ctx, dc, renamer, state, progress, err)
 	}
 	if err := u.adapter.recordContainer(inst, state.newID); err != nil {
 		return u.undo(ctx, dc, renamer, state, progress, err)
 	}
 	state.recorded = true
-	if err := progress.Converted(u.now()); err != nil {
+	if err := progress.Converted(ctx, u.now()); err != nil {
 		return notRecorded(err)
 	}
 	return UpgradeOutcome{Converted: true}
@@ -248,7 +248,7 @@ func (u *DockerMajorUpgrader) moveData(ctx context.Context, dc provisioner.Docke
 	if _, err := runScript(ctx, dc, state.oldID, provisioner.FenceScript()); err != nil {
 		return fmt.Errorf("fence: %w", err)
 	}
-	if err := progress.WritesStopped(u.now()); err != nil {
+	if err := progress.WritesStopped(ctx, u.now()); err != nil {
 		return err
 	}
 	if err := u.adapter.RefreshWALArchive(ctx, state.inst); err != nil {
@@ -257,13 +257,13 @@ func (u *DockerMajorUpgrader) moveData(ctx context.Context, dc provisioner.Docke
 	if _, err := runScript(ctx, dc, state.oldID, provisioner.DumpScript()); err != nil {
 		return fmt.Errorf("dump: %w", err)
 	}
-	if err := progress.Hold(); err != nil {
+	if err := progress.Hold(ctx); err != nil {
 		return err
 	}
 	if err := dc.StopContainer(ctx, state.oldID); err != nil {
 		return fmt.Errorf("stop: %w", err)
 	}
-	if err := progress.Hold(); err != nil {
+	if err := progress.Hold(ctx); err != nil {
 		return err
 	}
 	if err := renamer.RenameContainer(ctx, state.oldID, provisioner.PreUpgradeContainerName(state.inst.ProjectID, state.run.ID)); err != nil {
@@ -361,7 +361,7 @@ const (
 // on the host is left for the actor that owns the run now.
 func (u *DockerMajorUpgrader) undo(ctx context.Context, dc provisioner.DockerClient, renamer provisioner.ContainerRenamer,
 	state *swap, progress UpgradeProgress, cause error) UpgradeOutcome {
-	if lost := lostRun(cause, progress); lost != nil {
+	if lost := lostRun(ctx, cause, progress); lost != nil {
 		return UpgradeOutcome{Cause: lost}
 	}
 	return u.putBack(ctx, dc, renamer, state, cause)
@@ -469,7 +469,7 @@ func (u *DockerMajorUpgrader) Recover(ctx context.Context, inst *domain.Database
 		state.recorded = inst.Namespace != pre.ID
 	}
 	if state.newID != "" && inst.Namespace == state.newID && u.holdsNewMajor(ctx, dc, state.newID, run.ToVersion) {
-		if err := progress.Converted(u.now()); err != nil {
+		if err := progress.Converted(ctx, u.now()); err != nil {
 			return notRecorded(err)
 		}
 		return UpgradeOutcome{Converted: true}
