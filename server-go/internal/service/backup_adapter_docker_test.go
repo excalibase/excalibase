@@ -156,6 +156,14 @@ func (s *fakeBackupRecordStore) DeleteThrough(_ context.Context, projectID strin
 	})
 }
 
+func (s *fakeBackupRecordStore) DeleteRecords(_ context.Context, projectID string, ids []string) error {
+	doomed := map[string]bool{}
+	for _, id := range ids {
+		doomed[id] = true
+	}
+	return s.deleteWhere(func(r domain.BackupRecord) bool { return r.ProjectID == projectID && doomed[r.ID] })
+}
+
 func (s *fakeBackupRecordStore) deleteWhere(doomed func(domain.BackupRecord) bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -354,6 +362,7 @@ type fakeDockerClientForAdapter struct {
 	// walArchive is the container's /walarchive; nil has none.
 	walArchive map[string][]byte
 	execs      [][]string
+	stdins     []string
 	copyDsts   []string
 	ports      map[string]string
 	removed    []string
@@ -421,10 +430,14 @@ func (f *fakeDockerClientForAdapter) CreateContainerSpec(ctx context.Context, sp
 func (f *fakeDockerClientForAdapter) ContainerState(context.Context, string) (provisioner.ContainerState, error) {
 	return provisioner.ContainerState{Found: true, Running: true}, nil
 }
-func (f *fakeDockerClientForAdapter) ExecInContainerStdin(_ context.Context, _ string, cmd []string, _ string) (string, error) {
+func (f *fakeDockerClientForAdapter) ExecInContainerStdin(_ context.Context, _ string, cmd []string, stdin string) (string, error) {
 	f.execs = append(f.execs, cmd)
+	f.stdins = append(f.stdins, stdin)
 	if strings.Contains(strings.Join(cmd, " "), "pg_walfile_name") {
 		return f.walName + "\n", nil
+	}
+	if strings.Contains(strings.Join(cmd, " "), "has_schema_privilege") {
+		return "f\n", nil // the auth probe: excalibase_app reaches nothing there
 	}
 	return "", nil
 }

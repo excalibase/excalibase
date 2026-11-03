@@ -49,7 +49,7 @@ func (s *Store) CreateWithinOrgLimit(inst *domain.DatabaseInstance, maxProjects 
 		orgProjectLimitLockSpace, inst.OrgID); err != nil {
 		return fmt.Errorf("lock org project slots: %w", err)
 	}
-	held, err := countOrgProjectSlots(tx, inst.OrgID)
+	held, err := countOrgProjectSlots(tx, inst.OrgID, inst.ProjectID)
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func admitSlotTakingUpdate(q execQuerier, projectID, orgID string, maxProjects i
 	if storage.HoldsOrgProjectSlot(status) {
 		return nil
 	}
-	held, err := countOrgProjectSlots(q, orgID)
+	held, err := countOrgProjectSlots(q, orgID, projectID)
 	if err != nil {
 		return err
 	}
@@ -131,18 +131,30 @@ func admitSlotTakingUpdate(q execQuerier, projectID, orgID string, maxProjects i
 // CountOrgProjects reports how many of the organisation's projects hold a
 // slot. See storage.InstanceStore.
 func (s *Store) CountOrgProjects(orgID string) (int, error) {
-	return countOrgProjectSlots(s.db, orgID)
+	return countOrgProjectSlots(s.db, orgID, "")
 }
 
-// countOrgProjectSlots counts one organisation's slot-holding projects. The
-// non-slot statuses are excluded in SQL so the count never loads a row, let
-// alone every instance on the platform.
-func countOrgProjectSlots(q execQuerier, orgID string) (int, error) {
+// countOrgProjectSlots counts one organisation's slot-holding projects, plus
+// one for each restore into a new project still running whose copy does not
+// hold a slot itself: that restore took its slot when it was submitted
+// (EXC-639), for the organisation recorded on the job.
+// The restore registering forProject is the one creating it, so its own hold
+// is not counted against it. The non-slot statuses are excluded in SQL so the
+// count never loads a row, let alone every instance on the platform.
+func countOrgProjectSlots(q execQuerier, orgID, forProject string) (int, error) {
 	var held int
 	err := q.QueryRow(`
-		SELECT count(*) FROM database_instances
-		WHERE org_id = $1 AND status <> ALL($2)`,
-		orgID, pq.Array(storage.NonSlotStatuses())).Scan(&held)
+		SELECT
+			(SELECT count(*) FROM database_instances
+			 WHERE org_id = $1 AND status <> ALL($2))
+			+
+			(SELECT count(*) FROM restore_jobs j
+			 WHERE j.org_id = $1 AND j.status = $3 AND j.mode = $4
+			   AND j.new_project_id <> $5
+			   AND NOT EXISTS (SELECT 1 FROM database_instances t
+			                   WHERE t.project_id = j.new_project_id AND t.status <> ALL($2)))`,
+		orgID, pq.Array(storage.NonSlotStatuses()),
+		domain.RestoreStatusRunning, domain.RestoreModeNewProject, forProject).Scan(&held)
 	if err != nil {
 		return 0, fmt.Errorf("count org projects: %w", err)
 	}

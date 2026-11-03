@@ -1,18 +1,21 @@
-# Redis 7.4 (alpine) as an internal service: no public route, reached by the
-# project's own apps on redis:6379 once the private network is on.
+# A Redis-compatible cache (Valkey 9.0, BSD-3-Clause) as an internal service: no
+# public route, reached by the project's own apps on redis:6379.
 format: excalibase.template/v1
 id: redis
-name: Redis
-summary: Redis 7.4 as an internal service with a password and a 1Gi disk.
+name: Redis-compatible cache (Valkey)
+summary: A Redis-compatible cache (Valkey 9.0) as an internal service with a password and a 1Gi disk.
+category: starter
+license: BSD-3-Clause (Valkey)
 description: >-
   One internal app named redis, reachable only by this project's apps at
   redis:6379 over the project's private network. Data is kept on a 1Gi disk
   (append-only file), so it survives restarts and redeploys. The password is
   generated when you deploy, kept in the app's secret REDIS_PASSWORD, and never
-  shown in the template. Image redis:7.4-alpine, pinned by digest.
+  shown in the template. Image valkey/valkey:9.0-alpine (BSD-3-Clause), which
+  speaks the Redis protocol, pinned by digest.
 apps:
   - name: redis
-    image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    image: valkey/valkey@sha256:2d04268dfa26ab31cfa3fdc538866e76438b2d00e41db41b8cb86d780ac5a416
     internal: true
     internalPorts: [6379]
     replicas: 1

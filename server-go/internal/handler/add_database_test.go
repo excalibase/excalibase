@@ -33,7 +33,7 @@ func TestAddDatabaseAnswersEachRefusal(t *testing.T) {
 		says          string
 	}{
 		"a project that has one":               {"test-db", `{"databaseType":"POSTGRESQL","postgresVersion":"17"}`, http.StatusConflict, "already has a database"},
-		"no version":                           {"apps-only", `{"databaseType":"POSTGRESQL"}`, http.StatusBadRequest, "postgres version is required"},
+		"no version":                           {"apps-only", `{"databaseType":"POSTGRESQL"}`, http.StatusBadRequest, "postgresVersion is required"},
 		"a project field":                      {"apps-only", `{"projectName":"x","databaseType":"POSTGRESQL","postgresVersion":"17"}`, http.StatusBadRequest, "only database settings"},
 		"unknown field":                        {"apps-only", `{"postgresVersion":"17","bogus":1}`, http.StatusBadRequest, `bogus\" is not a provisioning setting`},
 		"a tier that is not the org's plan":    {"apps-only", `{"databaseType":"POSTGRESQL","postgresVersion":"17","tier":"STANDARD"}`, http.StatusBadRequest, "plan comes from its organization (FREE)"},

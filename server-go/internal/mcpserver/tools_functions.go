@@ -52,13 +52,23 @@ type outboundHostsArgs struct {
 	Remove []string `json:"remove,omitempty" jsonschema:"hosts to stop allowing"`
 }
 
+// functionsSegment is the project route the function tools act on.
+const functionsSegment = "/functions/"
+
+// functionContract is what deploy_function's caller must write and how the function is reached (EXC-640).
+const functionContract = "index.ts must use export default (req: Request) => Response (async is fine); a file with only named exports is refused. " +
+	"The function answers POST /functions/v1/{projectId}/{id} with the caller's token. " +
+	"The SDK's db.functions.<id>(args), or db.functions.<a>.<b>(args) for an id \"a.b\", sends {\"args\": ...} as the body and returns data from a {\"data\": ...} answer; " +
+	"failures and console output are in get_logs source=function."
+
 const secretWarning = "WARNING: the value passes through this conversation and the AI tool's logs. Prefer asking the user to set it in Studio " +
 	"(Edge Functions → Secrets); use this only for a test value or when the user explicitly asks."
 
 func functionTools() []entry {
 	return []entry{
 		tool("list_functions", "List the project's edge functions.", readTool, listFunctions),
-		tool("deploy_function", "Create or update an edge function from its source files and deploy it. Functions are for APIs and webhooks, not web pages: their answers carry Content-Security-Policy script-src 'self', so a page's inline scripts never run. Host a web page as a container app (create_app).", writeTool, deployFunction),
+		tool("deploy_function", "Create or update an edge function from its source files and deploy it. "+functionContract+
+			" Functions are for APIs and webhooks, not web pages: their answers carry Content-Security-Policy script-src 'self', so a page's inline scripts never run. Host a web page as a container app (create_app).", writeTool, deployFunction),
 		tool("delete_function", "Delete one edge function: it stops answering at once.", writeTool, deleteFunction),
 		tool("set_function_outbound_hosts", "Allow or stop allowing outside hosts the project's edge functions may call (fetch); anything not listed is blocked. "+
 			"Hosts already on the list stay unless removed. The functions are redeployed with the new list.", writeTool, setFunctionOutboundHosts),
@@ -75,7 +85,7 @@ func deleteFunction(ctx context.Context, c *call, in functionIDArgs) (any, error
 	if err != nil {
 		return nil, err
 	}
-	if err := c.send(ctx, http.MethodDelete, projectsAPI+projectID+"/functions/"+id+"/", nil, nil, nil); err != nil {
+	if err := c.send(ctx, http.MethodDelete, projectsAPI+projectID+functionsSegment+id+"/", nil, nil, nil); err != nil {
 		return nil, err
 	}
 	return map[string]any{"deleted": in.ID}, nil
@@ -115,7 +125,7 @@ func listFunctions(ctx context.Context, c *call, in projectArg) (any, error) {
 		return nil, err
 	}
 	functions := []functionView{}
-	if err := c.get(ctx, projectsAPI+projectID+"/functions/", nil, &functions); err != nil {
+	if err := c.get(ctx, projectsAPI+projectID+functionsSegment, nil, &functions); err != nil {
 		return nil, err
 	}
 	return map[string]any{
@@ -141,7 +151,7 @@ func deployFunction(ctx context.Context, c *call, in deployFunctionArgs) (any, e
 		body["verifyJwt"] = *in.VerifyJWT
 	}
 	var deployed functionView
-	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+"/functions/", nil, body, &deployed); err != nil {
+	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+functionsSegment, nil, body, &deployed); err != nil {
 		return nil, err
 	}
 	return map[string]any{"function": deployed}, nil

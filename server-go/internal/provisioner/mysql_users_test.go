@@ -19,7 +19,8 @@ func TestMySQLPlatformUsersSQL(t *testing.T) {
 		"GRANT ALL PRIVILEGES ON `app`.* TO 'admin'@'%';",
 		"GRANT ALL PRIVILEGES ON `app`.* TO 'excalibase_app'@'%';",
 		"GRANT ALL PRIVILEGES ON `excalibase`.* TO 'excalibase_app'@'%';",
-		"GRANT SELECT ON `auth`.* TO 'excalibase_app'@'%';",
+		// EXC-628: a restored cluster may carry the old read grant.
+		MySQLAppAuthRevokeSQL,
 		"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES ON `auth`.* TO 'auth_admin'@'%';",
 		"GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'cdc_watcher'@'%';",
 		"GRANT SELECT ON `app`.* TO 'cdc_watcher'@'%';",
@@ -30,6 +31,9 @@ func TestMySQLPlatformUsersSQL(t *testing.T) {
 	}
 	if strings.Count(sql, "REQUIRE SSL") != 8 {
 		t.Errorf("every user is created and altered with REQUIRE SSL:\n%s", sql)
+	}
+	if strings.Contains(sql, "`auth`.* TO 'excalibase_app'") || strings.Contains(sql, "`auth`.* TO 'admin'") {
+		t.Error("only auth_admin is granted anything in the auth database")
 	}
 	if strings.Contains(sql, "*.* TO 'admin'") || strings.Contains(sql, "*.* TO 'excalibase_app'") {
 		t.Error("only the watcher holds a global privilege")

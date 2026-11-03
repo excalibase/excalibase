@@ -69,6 +69,8 @@ type PostgreSQLClusterOpts struct {
 	// AllowPlaintext renders network logins as host rather than hostssl. The
 	// zero value requires TLS (EXC-410).
 	AllowPlaintext bool
+	// QueryStats turns on pg_stat_statements for the slow-queries page (EXC-654).
+	QueryStats bool
 }
 
 // BackupOpts turns a cluster's backups on. The cluster only names its
@@ -101,7 +103,10 @@ type RestoreClusterOpts struct {
 	// the same settings would get it; only its bootstrap is replaced.
 	Cluster         PostgreSQLClusterOpts
 	SourceProjectID string
-	Store           ObjectStoreOpts
+	// SourceArchive is the source's archive the restore reads: "" for the
+	// one every project starts with, "pg<major>" after a major upgrade.
+	SourceArchive string
+	Store         ObjectStoreOpts
 	// RecoveryTarget is the optional PITR target (targetTime / targetXID /
 	// targetLSN / targetName) in CNPG's recoveryTarget shape.
 	RecoveryTarget map[string]interface{}
@@ -436,6 +441,9 @@ func buildPostgresql(opts PostgreSQLClusterOpts) map[string]interface{} {
 	}
 	params["max_connections"] = "100"
 	maps.Copy(params, tierPlatformParameters(opts.Tier))
+	if opts.QueryStats {
+		maps.Copy(params, queryStatsParameters())
+	}
 	var sharedPreloadLibs []interface{}
 	// DocumentDB's configuration is applied after the tenant's, and wins.
 	// Both settings are load-bearing: without the libraries the extension
@@ -543,7 +551,7 @@ func BuildRestoreCluster(opts RestoreClusterOpts) (*unstructured.Unstructured, e
 	cluster := BuildPostgreSQLCluster(opts.Cluster)
 	spec := cluster.Object["spec"].(map[string]interface{})
 	spec["bootstrap"] = map[string]interface{}{"recovery": recovery}
-	spec["externalClusters"] = []interface{}{recoverySource(opts.Cluster.ProjectID)}
+	spec["externalClusters"] = []interface{}{recoverySource(opts.Cluster.ProjectID, opts.SourceArchive)}
 	return cluster, nil
 }
 

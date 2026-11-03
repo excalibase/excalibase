@@ -197,6 +197,16 @@ was asked for, and the vault prefix emptied.
   timeout, so a client retry is safe: it is refused, not run in parallel.
 * Raise `DELETION_WAIT_TIMEOUT` (a Go duration, e.g. `10m`) on clusters where
   storage detach is slow.
+* With `FEATURE_LOGDELETION=true` (chart `features.logDeletion`) and a
+  `LOKI_URL`, the teardown also queues the deletion of the project's stored
+  log lines (step `QUEUE_LOG_DELETION`, table `project_log_deletions`). A
+  worker sends Loki one delete request for `{namespace="<project
+  namespace>"}` (single host: `{project_id="<id>"}`), retries it while Loki
+  is down, and marks it done when Loki reports it processed, about a day
+  later (Loki's `delete_request_cancel_period`). Each step is in the platform
+  audit log (`project.logs.delete_*`). Nothing else is ever sent: an empty,
+  wildcard or regex selector is refused, and a project whose namespace is
+  not its own is skipped and audited, not deleted wider.
 
 ### Deleting a project that is still being provisioned
 
@@ -338,6 +348,33 @@ kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-pa
 
 ## 6. Backup + restore
 
+### What a restore into a new project carries
+
+Every restore path (CNPG, single-host Postgres, MOCO, single-host MySQL) ends
+in the same registration, so a copy gets the same things on each:
+
+- **Carried with the database:** tables, data, database functions, the realtime publication
+  (Postgres), and the end users. Their sessions, API keys and email links are
+  revoked (EXC-635).
+- **Copied from the source's platform rows** before the copy is activated
+  (EXC-639): table permissions (columns, row filters), tracked functions and
+  who may call them, the CORS origins a person added, and auth settings
+  (email verification, site URL). They are the source's settings at restore
+  time, not as of the backup.
+- **Copied from the source's STORAGE_PATH:** the migration history
+  (`list_migrations`), as the source has it at restore time; a restore to an
+  earlier point still lists migrations applied after that point.
+- **Not carried:** apps, sites and domains (running deployments; a domain
+  points at one project), CORS origins an app added, edge functions with their
+  secrets and outbound allowlist (redeploy them; copying would hand the
+  source's third-party secrets to another project), stored files, and
+  project-level members.
+
+A copy takes its organisation's project slot when the restore is submitted:
+the running job counts as a project until the copy is registered, so nothing
+created meanwhile can take the slot. A plan that is full answers 409
+`project_limit_reached` at submission.
+
 ### K8s mode (CNPG + Barman Cloud plugin → R2)
 
 Backups go through the CloudNativePG Barman Cloud plugin (CNPG-I), installed
@@ -461,7 +498,10 @@ through:
    and — because a restored database arrives carrying the source project's
    roles and passwords — their passwords are **reset** to freshly generated
    ones. The restored project therefore has its own credentials; leaking the
-   source's does not grant access to it, and vice versa.
+   source's does not grant access to it, and vice versa. Grants are put back
+   to the current ones too: a backup from before EXC-628 let `excalibase_app`
+   read the auth schema, and the registration SQL revokes that, so only
+   `auth_admin` reaches the end users' tables.
 2. Those credentials are written to vault under
    `projects/{restoredProjectId}/credentials/{role}`, which is what the schema
    plane, graphql and auth read. Without this step the project exists but
@@ -529,7 +569,10 @@ curl -X POST -H "Authorization: Bearer $PAT" \
 Find rows waiting for a retry with
 `SELECT project_id, failure_reason FROM database_instances WHERE status = 'BACKUPS_PENDING_DELETE'`.
 `DELETE /api/admin/projects/{projectId}` (force drop) accepts the same
-`confirmDeleteBackups` body field.
+`confirmDeleteBackups` body field. With `Prefer: respond-async` it answers
+202 once the project is `DELETING` and tears it down in the background; the
+row is gone when it finishes, or stays `DELETING` with `deletion_step` and
+`deletion_error`. A teardown never depends on the request staying connected.
 
 **Where a restore reads from:** the K8s restore adapter resolves endpoint,
 bucket, region and credentials through `ProvisioningService.BackupStorage()`
@@ -572,6 +615,12 @@ How a Docker-mode project's backup actually works:
    the basebackup uploads, it forces `pg_switch_wal()` + `CHECKPOINT`,
    pulls `/walarchive` out via `CopyFromContainer`, and uploads
    each WAL segment to `s3://{bucket}/backups/{projectId}/wals/{name}.gz`.
+
+   After a major upgrade (EXC-668) each later major archives under
+   `s3://{bucket}/backups/{projectId}/pg{major}/`; the original layout
+   stays for restores of earlier points and is removed with the project.
+   On Kubernetes the new major's ObjectStore is `{projectId}-backups-pg{major}`
+   with serverName `pg{major}`.
 
 3. **On `POST /backup/restore` with a recovery target** —
    `DockerBackupAdapter.Restore` creates a stopped postgres container,
@@ -721,6 +770,29 @@ exactly what turning the setting off would cost them.
 | `EXCALIBASE_DB_ENDPOINT_PORT_RANGE` | `30000-30999` | Inclusive window ports are allocated from. Anything present but unparseable, inverted or privileged **stops the platform from starting**. |
 | `EXCALIBASE_DB_ENDPOINT_PORT_QUARANTINE` | `720h` (30 days) | How long a freed port is held back before it can be reissued. |
 | `EXCALIBASE_DB_ENDPOINT_SHARED_IP_KEY` | `excalibase-db-edge` | MetalLB sharing key. Every project's Service carries it, which is what puts them on one address. |
+
+**Allow-list (`FEATURE_DBALLOWLIST`, EXC-665).** With the flag on, an Admin
+names who may connect (`GET/PUT /api/projects/{id}/db-endpoint/allowed-sources`,
+`{"sources": [...]}` or `{"allowAny": true}`; reads Developer+, writes Admin,
+audited as `db_endpoint.allowed_sources.update`). The list is rendered as
+`loadBalancerSourceRanges` on every public Service of the project (Postgres,
+the DocumentDB Mongo port, MySQL), which Cilium's kube-proxy replacement (and
+kube-proxy) enforce at the node before any SNAT; those Services then allocate
+no NodePort (`allocateLoadBalancerNodePorts: false`), because Cilium applies
+the list to the load-balancer address only. Entries are IPv4/IPv6 addresses
+or ranges, at most 20 and at least one IPv4 (the shared address is IPv4, and
+kube-proxy ignores a list with no entry of the Service's family), no `/0`
+(that is `allowAny`), nothing wider than /8 (IPv4) or /16 (IPv6), no
+loopback, link-local or multicast; MCP may set only up to /24 and /48. Opening
+a port needs that choice first; a port opened before the flag keeps admitting
+any address until an Admin chooses. A stored list stays on the Services if the
+flag is turned off again, so a rollback never opens a restricted port. A change
+that fails part way puts the recorded list back and is audited as refused. In-cluster clients are never affected. A
+datapath that does not implement the field ignores it, so check
+`kubectl get svc -o yaml` and a refused outside dial before relying on it.
+A single host's databases listen on 127.0.0.1 only, so its list is fixed at
+"this host only" and a change is refused. Flag off with no stored list:
+Services and routes as before.
 
 **Ports are allocated randomly inside the window**, never sequentially: two
 port numbers must not let anyone read off how many tenants the platform has
@@ -908,6 +980,9 @@ and incident response, but a project-bound PAT still confines them.
 | `/api/provision/{id}/audit`, `/migrations`, `/permissions`, `/tracked-functions`, `/function-permissions` | Developer | |
 | `DELETE /api/provision/{id}`, `/credentials`, `/credentials/rotate`, `/deletion-protection`, `/pause`, `/resume`, `/backups/purge` | Admin | lifecycle + secrets |
 | `/api/provision/{id}/backup/*`, `/snapshot/*` | Admin | dump/restore are destructive and exfil-capable |
+| `POST /api/provision/{id}/backup/copy` | Admin | a new project in the source's organisation from its backups, at `now` (a backup is taken first), `latest` or a `time`; needs backups on and a free project slot; audited as `database.copy` (ids and point only); unmounted while `dbcopy` is off |
+| `GET /api/provision/{id}/major-upgrade/` | Viewer | flag `majorupgrade`; unmounted while off |
+| `POST /api/provision/{id}/major-upgrade/` | Admin | flag `majorupgrade`; one-way, takes a backup first |
 | `GET /api/schema/{id}/*` | Viewer | browse |
 | `POST/PATCH/DELETE /api/schema/{id}/*` (DDL, `/query`, row writes) | Developer | |
 | `GET /api/projects/{id}/functions`, `/{fnId}`, `/{fnId}/logs`, `/_metadata`, `/runtime/status` | Viewer | |
@@ -915,7 +990,14 @@ and incident response, but a project-bound PAT still confines them.
 | `POST /api/projects/{id}/schema/apply` | Developer | |
 | `GET/PUT /api/projects/{id}/cors` | Developer | browser-origin allowlist the data plane enforces |
 | `/api/projects/{id}/info`, `/realtime/*`, `/storage/*`, `GET /api/alerts/project/{id}` | Viewer | |
-| `/api/projects/{id}/auth-settings` | Developer | `requireEmailVerification` + `siteUrl` |
+| `/api/projects/{id}/auth-settings` | Developer (Admin writes while `authoauth`, `authotp` or `authguest` is on) | `requireEmailVerification` + `siteUrl`; with any of the three on also `redirectUrls` + `allowNewUsers`; with `authotp` on also `emailOtpEnabled`; with `authguest` on also `guestSignInEnabled` + `guestCaptchaSecretSet`; with `authmfa` on also `mfaEnabled` (read-only here) |
+| `/api/projects/{id}/auth-settings/guest-captcha` | Admin | guest Turnstile secret, write-only, in the vault at `projects/{id}/auth/captcha`; svc-auth gets `vault:read:projects/*/auth/captcha` only with `FEATURE_AUTHGUEST=true`; unmounted while `authguest` is off |
+| `/api/projects/{id}/auth-hooks` | Developer reads, Admin writes | end-user auth hooks (URL + switch per hook; a Developer reads each hook's host only, an Admin its full URL, and no read-only token reads them) and the signing secret, generated by the platform and shown once, in the vault at `projects/{id}/auth/hooks`; svc-auth gets `vault:read:projects/*/auth/hooks` only with `FEATURE_AUTHHOOKS=true`; `AUTH_HOOKS_DENY_CIDRS` on the auth container adds ranges hook calls may never reach; restored copies start with no hooks; unmounted while `authhooks` is off |
+| `PUT /api/projects/{id}/auth-settings/mfa` | Admin | end-user MFA switch; the project's key is created once in the vault at `projects/{id}/auth/mfa` and never replaced or returned; svc-auth gets `vault:read:projects/*/auth/mfa` only with `FEATURE_AUTHMFA=true`; unmounted while `authmfa` is off. A restored copy gets the source's key at its own path (a source with no key gives a copy with MFA off; any other failure fails the restore). If switching on answers 409, the value at `projects/{id}/auth/mfa` is not a 32-byte base64 key: do not overwrite or delete it, since enrolled factors are sealed with it; restore the original value from a vault backup, or, only if no end user has enrolled a factor, delete the path and switch on again to create a new key. The first switch-on records the key's SHA-256 in `project_auth_settings.mfa_key_fingerprint`; a missing or different key then answers 409 (`restore it from a vault backup`) instead of a new key being created. Only if no end user has enrolled a factor, clear that column to start over |
+| `DELETE /api/projects/{id}/end-users/{userId}/factors` | Admin | removes one end user's MFA factors and recovery codes in auth (user-admin token) and ends their sessions; audited (`end_user.factors.reset`); unmounted while `authmfa` is off |
+| `/api/projects/{id}/auth-providers` | Developer reads, Admin writes | end-user Google/GitHub client id; the secret is write-only, in the vault at `projects/{id}/auth/providers/{provider}` (`authoauth`) |
+| `/api/projects/{id}/end-users/{userId}` | Admin | one end user's details, metadata change and delete, relayed to auth with a user-admin token; audited (`end_user.update` names fields only, `end_user.delete`); unmounted while `authuser` is off |
+| `POST /internal/email/send` (account templates) | service (`email:send`) | `email_change`, `email_change_notice` (flag `authuser`) and `identity_linked` (`authoauth` with an enabled provider, or `authotp` with the project's switch); 1000 a day per project, a budget separate from sign-in mail (`sign_in_mail_sends.kind = 'account'`) |
 | `/api/orgs/{orgId}/projects/{id}/members` | org member (list) / Admin (change) | project must belong to `{orgId}` |
 | `/api/admin/projects/{id}` | platform permission (`delete`) | platform plane, not the tenant gate |
 

@@ -65,6 +65,9 @@ const (
 	// AuthFunctionJWT is an end-user JWT whose audience must name the
 	// project in the path.
 	AuthFunctionJWT AuthClass = "function-jwt"
+	// AuthForwarderToken is the log-forwarder pod's shared token (EXC-658),
+	// held by no studio caller or service principal.
+	AuthForwarderToken AuthClass = "forwarder-token"
 )
 
 // Owner names what resolves the caller's right to the resource in the path.
@@ -87,6 +90,9 @@ const (
 	OwnerTokenSubject Owner = "handler.AuthHandler.tokenForCaller"
 	// OwnerRuntimeSecret is the per-project derived runtime secret.
 	OwnerRuntimeSecret Owner = "per-project runtime secret"
+	// OwnerForwarderToken is the forwarder's token; each batch carries the
+	// project it was read for, chosen by provisioning, never by the caller.
+	OwnerForwarderToken Owner = "log-forwarder token"
 	// OwnerFunctionAudience is the JWT audience claim naming the project.
 	OwnerFunctionAudience Owner = "JWT aud names the project"
 	// OwnerBucketVisibility is the bucket's own public flag.
@@ -154,6 +160,9 @@ type Row struct {
 	// SiteDeployToken marks a route a site's deploy token may call for its own
 	// site (EXC-620); middleware.SiteDeployTokenGate refuses it everywhere else.
 	SiteDeployToken bool
+	// MetricsKey marks the route a project's metrics key may call (EXC-657);
+	// middleware.MetricsKeyGate refuses it everywhere else.
+	MetricsKey bool
 	// MySQLRefusal is why a MySQL project is refused this database route,
 	// appended to the 409 so Studio and MCP can show it (EXC-619).
 	MySQLRefusal string

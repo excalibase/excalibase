@@ -5,15 +5,19 @@ import { secondaryButton } from './containers/ContainerBits';
 import { apiErrorMessage } from '../api/apps';
 import { isMySQLProject } from '../utils/engine';
 import { mysqlUnavailableReason } from './layout/navigation';
+import { useFeatures, type Feature } from '../hooks/useDeploymentMode';
 
 // Wraps the pages that work on the project's database (EXC-426). A project
 // created without one gets a plain statement and the way to add one, instead
 // of each page failing against a database that does not exist. The server
 // refuses those calls with 409 regardless; this only saves the round trip.
-// mysql marks pages that also work on a MySQL project (EXC-586, ADR 0041).
-export function DatabaseRequired({ mysql = false }: { readonly mysql?: boolean }) {
+// mysql marks pages that also work on a MySQL project (EXC-586, ADR 0041);
+// mysqlFeature, pages that do while that feature is on.
+export function DatabaseRequired({ mysql = false, mysqlFeature }: { readonly mysql?: boolean; readonly mysqlFeature?: Feature }) {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: project, error } = useInstance(projectId);
+  const features = useFeatures();
+  const servesMySQL = mysql || (mysqlFeature !== undefined && features[mysqlFeature] === true);
 
   if (error && !project) {
     return (
@@ -29,7 +33,7 @@ export function DatabaseRequired({ mysql = false }: { readonly mysql?: boolean }
       </div>
     );
   }
-  if (isMySQLProject(project)) return mysql ? <Outlet /> : <PostgresRequired projectId={projectId} />;
+  if (isMySQLProject(project)) return servesMySQL ? <Outlet /> : <PostgresRequired projectId={projectId} />;
   if (!project.noDatabase) return <Outlet />;
   return (
     <div data-testid="database-required" className="max-w-xl mx-auto py-16 text-center space-y-4">

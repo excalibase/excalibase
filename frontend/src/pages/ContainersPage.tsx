@@ -2,7 +2,7 @@ import { Link, useParams } from 'react-router-dom';
 import { LayoutTemplate, Plus } from 'lucide-react';
 import { useApps, useDeploys, apiErrorMessage, type App } from '../api/apps';
 import { useAppHostingEnabled } from '../hooks/useDeploymentMode';
-import { appDisplayStatus, formatWhen } from '../components/containers/appCopy';
+import { appDisplayStatus, formatWhen, restartSummary } from '../components/containers/appCopy';
 import { RegistryCredentials } from '../components/containers/RegistryCredentials';
 import {
   ContainersHeader,
@@ -19,6 +19,7 @@ function ContainerRow({ projectId, app }: { readonly projectId: string; readonly
   const { data: deploys, isLoading } = useDeploys(projectId, app.id, LIST_POLL_MS, 1);
   const last = deploys?.[0];
   const status = appDisplayStatus(app, last);
+  const restarts = restartSummary(app);
 
   return (
     <div
@@ -53,6 +54,11 @@ function ContainerRow({ projectId, app }: { readonly projectId: string; readonly
             ? `Revision ${last.revision} · ${formatWhen(last.createdAt)}`
             : !isLoading && 'Never deployed'}
         </span>
+        {restarts && (
+          <span title={restarts.detail}>
+            <ToneBadge label={restarts.short} tone="warning" testId={`container-restarts-${app.id}`} />
+          </span>
+        )}
         {!isLoading && <ToneBadge {...status} testId={`container-status-${app.id}`} />}
       </div>
     </div>

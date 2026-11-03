@@ -38,6 +38,15 @@ export function labels(endpoint?: ProjectEndpoint): { internal: string; external
   return { internal: 'Internal — from inside the cluster', external: 'Public — from outside the cluster' };
 }
 
+export const MASKED = '••••••••';
+
+// userinfo is a string's user:password, escaped so a reserved character in
+// either still parses; the mask is shown as it is.
+export function userinfo(username: string, password: string): string {
+  const shown = password === MASKED ? MASKED : encodeURIComponent(password);
+  return `${encodeURIComponent(username)}:${shown}`;
+}
+
 export interface SectionProps {
   readonly projectId: string;
   readonly credentials: CredentialsResponse;

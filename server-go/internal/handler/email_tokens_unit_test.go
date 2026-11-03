@@ -11,21 +11,6 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func TestEmailTokens_Rebind(t *testing.T) {
-	// SQLite path: placeholders unchanged.
-	sqlite := &EmailTokensHandler{pg: false}
-	const q = `INSERT INTO t (a, b, c) VALUES (?, ?, ?)`
-	if got := sqlite.rebind(q); got != q {
-		t.Errorf("sqlite rebind should be no-op, got %q", got)
-	}
-	// Postgres path: ? → $1, $2, $3.
-	pg := &EmailTokensHandler{pg: true}
-	want := `INSERT INTO t (a, b, c) VALUES ($1, $2, $3)`
-	if got := pg.rebind(q); got != want {
-		t.Errorf("pg rebind: got %q, want %q", got, want)
-	}
-}
-
 func TestNewEmailTokensHandler_DefaultsProductName(t *testing.T) {
 	h := NewEmailTokensHandler(nil, nil, nil, "https://app.example.com/", "")
 	if h.productName != "Excalibase" {

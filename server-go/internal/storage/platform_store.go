@@ -52,6 +52,8 @@ type PlatformStore interface {
 	// async restore state into.
 	RestoreJobs() RestoreJobStore
 
+	RestoredSettingsStore
+
 	// Permissions returns the PermissionStore behind
 	// /api/provision/{p}/permissions, tracked-functions and
 	// function-permissions (EXC-370 step C).

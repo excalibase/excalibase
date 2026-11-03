@@ -217,3 +217,30 @@ func TestProjectRoleSQL_SharesPlatformTablesWithTheOwner(t *testing.T) {
 		t.Fatal("owner access is installed before the reserved schema grants")
 	}
 }
+
+// EXC-628: only auth_admin reaches the auth schema. The SQL grants
+// excalibase_app nothing there and revokes what an older registration or an
+// older backup handed it, so re-running it cleans an existing project.
+func TestBuildProjectRoleSQL_AuthSchemaIsTheAuthServicesAlone(t *testing.T) {
+	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.Contains(line, "auth") && strings.Contains(line, "GRANT") && strings.Contains(line, `"excalibase_app"`) &&
+			!strings.Contains(line, "REVOKE") {
+			t.Errorf("excalibase_app is granted something in auth: %s", line)
+		}
+	}
+	for _, want := range []string{
+		`REVOKE ALL ON ALL TABLES IN SCHEMA auth FROM "excalibase_app", PUBLIC;`,
+		`REVOKE ALL ON ALL SEQUENCES IN SCHEMA auth FROM "excalibase_app", PUBLIC;`,
+		`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA auth FROM "excalibase_app";`,
+		`REVOKE ALL ON SCHEMA auth FROM "excalibase_app", PUBLIC;`,
+		`REVOKE "auth_admin" FROM "excalibase_app";`,
+		`ALTER DEFAULT PRIVILEGES IN SCHEMA auth REVOKE ALL ON TABLES FROM "excalibase_app";`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "auth_admin" IN SCHEMA auth REVOKE ALL ON TABLES FROM "excalibase_app";`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "auth_admin" IN SCHEMA auth REVOKE ALL ON SEQUENCES FROM "excalibase_app";`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+}

@@ -298,7 +298,15 @@ func (s *Store) CreatePendingInvite(ctx context.Context, invite *domain.PendingI
 	return err
 }
 
+// pendingInviteColumns is the select list its scanner reads, in order.
+// The queries spell it out as one literal; query_text_test pins them to it.
 const pendingInviteColumns = `id, org_id, email, role, invited_by, expires_at, created_at`
+
+const (
+	findPendingInviteSQL   = `SELECT id, org_id, email, role, invited_by, expires_at, created_at FROM pending_invites WHERE token_hash = $1 AND expires_at > $2`
+	acceptPendingInviteSQL = `DELETE FROM pending_invites WHERE token_hash = $1 AND expires_at > $2 RETURNING id, org_id, email, role, invited_by, expires_at, created_at`
+	listPendingInvitesSQL  = `SELECT id, org_id, email, role, invited_by, expires_at, created_at FROM pending_invites WHERE org_id = $1`
+)
 
 // rowScanner is the common interface of *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -322,7 +330,7 @@ func scanPendingInvite(row rowScanner) (*domain.PendingInvite, error) {
 
 func (s *Store) FindPendingInviteByToken(ctx context.Context, tokenHash string, now time.Time) (*domain.PendingInvite, error) {
 	inv, err := scanPendingInvite(s.db.QueryRowContext(ctx,
-		`SELECT `+pendingInviteColumns+` FROM pending_invites WHERE token_hash = $1 AND expires_at > $2`,
+		findPendingInviteSQL,
 		tokenHash, now))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, storage.ErrInviteInvalid
@@ -338,7 +346,7 @@ func (s *Store) AcceptPendingInvite(ctx context.Context, tokenHash, userID strin
 	defer func() { _ = tx.Rollback() }()
 
 	inv, err := scanPendingInvite(tx.QueryRowContext(ctx,
-		`DELETE FROM pending_invites WHERE token_hash = $1 AND expires_at > $2 RETURNING `+pendingInviteColumns,
+		acceptPendingInviteSQL,
 		tokenHash, now))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, storage.ErrInviteInvalid
@@ -366,7 +374,7 @@ func (s *Store) DeletePendingInvite(ctx context.Context, id int64) error {
 
 func (s *Store) ListPendingInvites(ctx context.Context, orgID string) ([]*domain.PendingInvite, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+pendingInviteColumns+` FROM pending_invites WHERE org_id = $1`, orgID)
+		listPendingInvitesSQL, orgID)
 	if err != nil {
 		return nil, err
 	}

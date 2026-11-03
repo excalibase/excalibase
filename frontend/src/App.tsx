@@ -54,6 +54,9 @@ const IndexesPage = lazy(() => import('./pages/IndexesPage').then(m => ({ defaul
 const TypesPage = lazy(() => import('./pages/TypesPage').then(m => ({ default: m.TypesPage })));
 const AdvisorsPage = lazy(() => import('./pages/AdvisorsPage').then(m => ({ default: m.AdvisorsPage })));
 const LogExplorerPage = lazy(() => import('./pages/LogExplorerPage').then(m => ({ default: m.LogExplorerPage })));
+const RequestsPage = lazy(() => import('./pages/RequestsPage').then(m => ({ default: m.RequestsPage })));
+const SlowQueriesPage = lazy(() => import('./pages/SlowQueriesPage').then(m => ({ default: m.SlowQueriesPage })));
+const HostMonitoringPage = lazy(() => import('./pages/HostMonitoringPage').then(m => ({ default: m.HostMonitoringPage })));
 const PlatformAdminPage = lazy(() => import('./pages/PlatformAdminPage').then(m => ({ default: m.PlatformAdminPage })));
 const ContainersPage = lazy(() => import('./pages/ContainersPage').then(m => ({ default: m.ContainersPage })));
 const ContainerTemplatesPage = lazy(() => import('./pages/ContainerTemplatesPage').then(m => ({ default: m.ContainerTemplatesPage })));
@@ -105,6 +108,7 @@ export default function App() {
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/provision" element={<ProvisionPage />} />
             <Route path="/admin" element={<PlatformAdminPage />} />
+            <Route path="/admin/host" element={<FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate>} />
             <Route path="/account/tokens" element={<AccessTokensPage />} />
           </Route>
 
@@ -125,6 +129,13 @@ export default function App() {
                 <Route path="database/tables/:schema/:table/permissions" element={<TablePermissionsPage />} />
                 <Route path="database/functions" element={<FunctionsPage />} />
                 <Route path="database/indexes" element={<IndexesPage />} />
+                <Route path="monitoring/slow-queries" element={<FeatureGate feature="slowqueries"><SlowQueriesPage /></FeatureGate>} />
+              </Route>
+            </Route>
+            {/* Postgres-only until the advisors feature checks MySQL too (EXC-655). */}
+            <Route element={<DatabaseRequired mysqlFeature="advisors" />}>
+              <Route element={<DatabaseRunning />}>
+                <Route path="database/advisors" element={<AdvisorsPage />} />
               </Route>
             </Route>
             <Route element={<DatabaseRequired />}>
@@ -134,7 +145,6 @@ export default function App() {
                 <Route path="database/rls" element={<RlsPage />} />
                 <Route path="database/triggers" element={<TriggersPage />} />
                 <Route path="database/types" element={<TypesPage />} />
-                <Route path="database/advisors" element={<AdvisorsPage />} />
                 <Route path="database/documents" element={<DocumentsPage />} />
                 <Route path="database/mongo-users" element={<MongoUsersPage />} />
                 {/* Authentication: end users live in the project's database */}
@@ -149,13 +159,14 @@ export default function App() {
               <Route path="auth/settings" element={<AuthSettingsPage />} />
               <Route path="api-keys" element={<SdkKeysPage />} />
               <Route path="api" element={<ApiInfoPage />} />
-              <Route path="monitoring/metrics" element={<MetricsPage />} />
-              <Route path="monitoring/logs" element={<LogExplorerPage />} />
               <Route path="operations/snapshots" element={<SnapshotsPage />} />
             </Route>
-            {/* Backups work on MySQL projects too (EXC-586). */}
+            {/* Backups (EXC-586), logs and metrics (EXC-653) work on MySQL projects too. */}
             <Route element={<DatabaseRequired mysql />}>
               <Route path="operations/backups" element={<BackupsPage />} />
+              <Route path="monitoring/metrics" element={<MetricsPage />} />
+              <Route path="monitoring/logs" element={<LogExplorerPage />} />
+              <Route path="monitoring/requests" element={<FeatureGate feature="requestmetrics"><RequestsPage /></FeatureGate>} />
             </Route>
             {/* Containers */}
             <Route path="containers" element={<ContainersPage />} />

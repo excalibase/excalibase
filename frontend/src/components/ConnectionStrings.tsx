@@ -5,7 +5,7 @@ import type { ProjectEndpoint } from '../api/projectEndpoint';
 import type { CredentialsResponse } from '../types';
 import { SshTunnelNote } from './SshTunnelNote';
 import { CertificateAuthority } from './CertificateAuthority';
-import { StringRow, internalTarget, labels, publicTarget, type SectionProps, type Target } from './ConnectionParts';
+import { MASKED, StringRow, internalTarget, labels, publicTarget, userinfo, type SectionProps, type Target } from './ConnectionParts';
 import { MySQLSection } from './MySQLConnection';
 
 interface ConnectionStringsProps {
@@ -21,10 +21,8 @@ interface ConnectionStringsProps {
 // username and password below work with psql and with a Mongo driver alike,
 // so they are shown once and every string on this card is built from them.
 
-const MASKED = '••••••••';
-
 function postgresUri(credentials: CredentialsResponse, target: Target, password: string, sslMode: string): string {
-  return `postgresql://${credentials.username}:${password}@${target.host}:${target.port}/${credentials.databaseName}?sslmode=${sslMode}`;
+  return `postgresql://${userinfo(credentials.username, password)}@${target.host}:${target.port}/${credentials.databaseName}?sslmode=${sslMode}`;
 }
 
 // The shape the control plane renders and the gateway was proven to accept.
@@ -32,7 +30,7 @@ function postgresUri(credentials: CredentialsResponse, target: Target, password:
 // directConnection: the gateway is one server, and topology discovery would
 // follow a member address only the cluster can reach.
 function mongoUri(credentials: CredentialsResponse, target: Target, password: string, tls: boolean): string {
-  return `mongodb://${credentials.username}:${password}@${target.host}:${target.port}/?tls=${tls}&authMechanism=SCRAM-SHA-256&directConnection=true`;
+  return `mongodb://${userinfo(credentials.username, password)}@${target.host}:${target.port}/?tls=${tls}&authMechanism=SCRAM-SHA-256&directConnection=true`;
 }
 
 // mongoPublicTarget is the public Mongo port. The gateway waits for the

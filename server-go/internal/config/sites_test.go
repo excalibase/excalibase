@@ -143,3 +143,49 @@ func TestSitesConfigReadsTheZoneCap(t *testing.T) {
 		}
 	}
 }
+
+// EXC-661: server sites run only where the operator names the outbound Worker
+// bound on the dispatch namespace; its name is a Worker script name.
+func TestSites_ReadTheOutboundWorker(t *testing.T) {
+	setSitesEnv(t)
+	t.Setenv("SITES_OUTBOUND_WORKER", " excalibase-sites-outbound ")
+	if got := Load().Sites.OutboundWorker; got != "excalibase-sites-outbound" {
+		t.Fatalf("outbound worker = %q", got)
+	}
+}
+
+func TestValidateSites_RefusesAnOutboundWorkerThatIsNotAScriptName(t *testing.T) {
+	for _, name := range []string{"Bad/Name", "-lead", strings.Repeat("a", 64)} {
+		cfg := AppConfig{SitesEnabled: true, Sites: SitesConfig{BaseDomain: "excalibase.app", OutboundWorker: name}}
+		if err := cfg.validateSites(); err == nil || !strings.Contains(err.Error(), "SITES_OUTBOUND_WORKER") {
+			t.Errorf("%q: err = %v", name, err)
+		}
+	}
+}
+
+// The single-host boot test points Sites at a stand-in for Cloudflare's API (EXC-671); the default is Cloudflare's.
+func TestSites_APIURL(t *testing.T) {
+	setSitesEnv(t)
+	if got := Load().Sites.APIURL; got != "" {
+		t.Fatalf("default API URL %q, want empty (the client's default)", got)
+	}
+	t.Setenv("SITES_CLOUDFLARE_API_URL", "http://sitefakes:8080/cf/")
+	cfg := Load()
+	if cfg.Sites.APIURL != "http://sitefakes:8080/cf" {
+		t.Fatalf("API URL %q", cfg.Sites.APIURL)
+	}
+	if err := cfg.validateSites(); err != nil {
+		t.Fatalf("an http(s) URL was refused: %v", err)
+	}
+	// The API token travels in the clear over http, so only a stand-in on the host's own network may use it.
+	for _, refused := range []string{"ftp://nowhere", "http://api.example.com/client/v4"} {
+		cfg.Sites.APIURL = refused
+		if err := cfg.validateSites(); err == nil || !strings.Contains(err.Error(), "SITES_CLOUDFLARE_API_URL") {
+			t.Fatalf("%s: %v", refused, err)
+		}
+	}
+	cfg.Sites.APIURL = "https://api.example.com/client/v4"
+	if err := cfg.validateSites(); err != nil {
+		t.Fatalf("an https URL was refused: %v", err)
+	}
+}

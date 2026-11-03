@@ -64,6 +64,10 @@ func (r *storeRegistrar) RegisterProject(_ context.Context, inst *domain.Databas
 	return r.store.Create(inst)
 }
 
+func (r *storeRegistrar) CarryRestoredSettings(context.Context, *provisioner.ProvisionContext, string, string) error {
+	return nil
+}
+
 // probeFunc adapts a function to DatabaseProbe.
 type probeFunc struct {
 	err    error

@@ -33,8 +33,19 @@ func (i *Introspector) GetPolicies(ctx context.Context, db *sql.DB, schema strin
 
 // CreatePolicy creates a new RLS policy on a table.
 func (i *Introspector) CreatePolicy(ctx context.Context, db *sql.DB, req CreatePolicyRequest) error {
-	if err := checkNameLength("policy", req.Name); err != nil {
+	stmt, err := buildCreatePolicySQL(req)
+	if err != nil {
 		return err
+	}
+	if _, err := db.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("create policy: %w", err)
+	}
+	return nil
+}
+
+func buildCreatePolicySQL(req CreatePolicyRequest) (string, error) {
+	if err := checkNameLength("policy", req.Name); err != nil {
+		return "", err
 	}
 	schemaName := req.Schema
 	if schemaName == "" {
@@ -56,7 +67,7 @@ func (i *Introspector) CreatePolicy(ctx context.Context, db *sql.DB, req CreateP
 	}
 
 	if err := ValidatePolicyCommand(req.Command); err != nil {
-		return err
+		return "", err
 	}
 	b.WriteString(" FOR ")
 	b.WriteString(strings.ToUpper(req.Command))
@@ -67,7 +78,7 @@ func (i *Introspector) CreatePolicy(ctx context.Context, db *sql.DB, req CreateP
 	if req.Using != nil {
 		safe, err := ValidatePolicyExpression(*req.Using)
 		if err != nil {
-			return fmt.Errorf("USING: %w", err)
+			return "", fmt.Errorf("USING: %w", err)
 		}
 		b.WriteString(" USING (")
 		b.WriteString(safe)
@@ -76,26 +87,26 @@ func (i *Introspector) CreatePolicy(ctx context.Context, db *sql.DB, req CreateP
 	if req.WithCheck != nil {
 		safe, err := ValidatePolicyExpression(*req.WithCheck)
 		if err != nil {
-			return fmt.Errorf("WITH CHECK: %w", err)
+			return "", fmt.Errorf("WITH CHECK: %w", err)
 		}
 		b.WriteString(" WITH CHECK (")
 		b.WriteString(safe)
 		b.WriteString(")")
 	}
 
-	if _, err := db.ExecContext(ctx, b.String()); err != nil {
-		return fmt.Errorf("create policy: %w", err)
-	}
-	return nil
+	return b.String(), nil
 }
 
 // DropPolicy drops a policy from a table.
 func (i *Introspector) DropPolicy(ctx context.Context, db *sql.DB, table, name string) error {
-	stmt := "DROP POLICY " + QuoteIdent(name) + " ON " + QuoteIdent(table)
-	if _, err := db.ExecContext(ctx, stmt); err != nil {
+	if _, err := db.ExecContext(ctx, buildDropPolicySQL(table, name)); err != nil { // NOSONAR: identifiers quoted by QuoteIdent; DDL cannot bind identifiers
 		return fmt.Errorf("drop policy: %w", err)
 	}
 	return nil
+}
+
+func buildDropPolicySQL(table, name string) string {
+	return "DROP POLICY " + QuoteIdent(name) + " ON " + QuoteIdent(table)
 }
 
 const policiesQuery = `

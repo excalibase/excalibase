@@ -5,10 +5,15 @@ import { api } from './client';
 // admins may make them, and every role change is audited.
 export interface EndUser {
   id: number;
+  // Empty for a guest account (EXC-662), which has no address.
   email: string;
   role: string;
   allowedRoles: string[];
+  isGuest?: boolean;
 }
+
+// How Studio names an end user: the address, or the id when it has none.
+export const endUserName = (user: Pick<EndUser, 'id' | 'email'>): string => user.email || `Guest ${user.id}`;
 
 export interface EndUserPage {
   users: EndUser[];
@@ -52,4 +57,41 @@ export async function setEndUserRole(
   change: EndUserRoleChange,
 ): Promise<EndUser> {
   return (await api.put<EndUser>(`${endUsersPath(projectId)}${userId}/role`, change)).data;
+}
+
+// One end user as auth's admin route returns it (EXC-662, flag `authuser`).
+export interface EndUserDetail extends EndUser {
+  fullName?: string | null;
+  enabled?: boolean;
+  emailVerified?: boolean;
+  userMetadata: Record<string, unknown>;
+  appMetadata: Record<string, unknown>;
+  createdAt?: string;
+  lastLoginAt?: string | null;
+}
+
+// Metadata merges at auth: a key set to null is removed.
+export interface EndUserPatch {
+  appMetadata?: Record<string, unknown>;
+  userMetadata?: Record<string, unknown>;
+  fullName?: string;
+}
+
+const endUserPath = (projectId: string, userId: number) => `${endUsersPath(projectId)}${userId}`;
+
+export async function getEndUser(projectId: string, userId: number): Promise<EndUserDetail> {
+  return (await api.get<EndUserDetail>(endUserPath(projectId, userId))).data;
+}
+
+export async function updateEndUser(projectId: string, userId: number, patch: EndUserPatch): Promise<EndUserDetail> {
+  return (await api.patch<EndUserDetail>(endUserPath(projectId, userId), patch)).data;
+}
+
+export async function deleteEndUser(projectId: string, userId: number): Promise<void> {
+  await api.delete(endUserPath(projectId, userId));
+}
+
+// Removes the user's MFA factors and recovery codes; auth also ends their sessions (flag `authmfa`).
+export async function resetEndUserMFA(projectId: string, userId: number): Promise<void> {
+  await api.delete(`${endUserPath(projectId, userId)}/factors`);
 }

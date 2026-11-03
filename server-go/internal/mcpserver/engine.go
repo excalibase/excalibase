@@ -15,16 +15,23 @@ const (
 
 // projectEngine reads the engine of the project's database from its row.
 func projectEngine(ctx context.Context, c *call, projectID string) (string, error) {
+	engine, _, err := projectEngineAndDatabase(ctx, c, projectID)
+	return engine, err
+}
+
+// projectEngineAndDatabase reads the engine and database name from the project's row.
+func projectEngineAndDatabase(ctx context.Context, c *call, projectID string) (engine, database string, err error) {
 	var project struct {
 		DatabaseType string `json:"databaseType"`
+		DatabaseName string `json:"databaseName"`
 	}
 	if err := c.get(ctx, provisionAPI+projectID, nil, &project); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if strings.EqualFold(project.DatabaseType, engineMySQL) {
-		return engineMySQL, nil
+		return engineMySQL, project.DatabaseName, nil
 	}
-	return enginePostgres, nil
+	return enginePostgres, project.DatabaseName, nil
 }
 
 var (
@@ -32,12 +39,12 @@ var (
 	mysqlBaseType  = regexp.MustCompile(`^[a-z]+`)
 )
 
-// mysqlTSTypes maps MySQL base types; the API serves numbers as numbers, as
-// the Postgres map does.
+// mysqlTSTypes maps MySQL base types as the Postgres map does: bigints and
+// decimals as strings of every digit, BIT as \x hex like binary.
 var mysqlTSTypes = map[string]string{
 	"tinyint": "number", "smallint": "number", "mediumint": "number", "int": "number", "integer": "number",
-	"bigint": "number", "decimal": "number", "numeric": "number", "float": "number", "double": "number",
-	"real": "number", "bit": "number", "year": "number",
+	"bigint": "string", "decimal": "string", "numeric": "string", "float": "number", "double": "number",
+	"real": "number", "year": "number",
 	"bool": "boolean", "boolean": "boolean",
 	"json": "unknown",
 }

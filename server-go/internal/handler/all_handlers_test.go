@@ -19,6 +19,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 const (
@@ -73,6 +74,8 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	provSvc.SetOrgStore(orgs)
 	withBackupTarget(t, provSvc)
 	backupSvc.SetProjectRegistrar(provSvc)
+	provSvc.SetRestoredSettings(noRestoredSettings{})
+	provSvc.SetMigrationHistory(service.NewMigrationHistoryFiles(dir))
 	backupSvc.SetOrgProjectCapacity(provSvc)
 	backupSvc.SetRestorePlanSource(provSvc)
 	if err := backupSvc.SetDatabaseProbe(answeringProbe{}); err != nil {
@@ -248,6 +251,9 @@ func TestPerformanceSummaryHandler(t *testing.T) {
 func TestPerformanceTopQueriesHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	mock.CRDs["org1-test-db/test-db-postgres"] = &unstructured.Unstructured{Object: map[string]interface{}{
+		"status": map[string]interface{}{"currentPrimary": "test-db-postgres-1"}}}
+	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = `{"queries":[],"slowCount":0,"avgMeanMs":null}`
 
 	w := doRequest(r, "GET", "/api/provision/test-db/performance/top-queries?limit=5", "")
 	if w.Code != 200 {
@@ -447,7 +453,7 @@ func TestSetDeletionProtectionHandler(t *testing.T) {
 func TestAuditGetLogsHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
-	mock.ExecOutput[testDBPodName] = "AUDIT: line1"
+	mock.PodLogs[testDBPodName] = "AUDIT: line1"
 
 	w := doRequest(r, "GET", "/api/provision/test-db/audit/logs?lines=50", "")
 	if w.Code != 200 {
@@ -676,8 +682,11 @@ func TestMetricsHistoryInvalidLimit(t *testing.T) {
 func TestPerformanceTopQueriesInvalidLimit(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	mock.CRDs["org1-test-db/test-db-postgres"] = &unstructured.Unstructured{Object: map[string]interface{}{
+		"status": map[string]interface{}{"currentPrimary": "test-db-postgres-1"}}}
+	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = `{"queries":[],"slowCount":0,"avgMeanMs":null}`
 
-	// invalid limit falls back to default (10)
+	// invalid limit falls back to the default
 	w := doRequest(r, "GET", "/api/provision/test-db/performance/top-queries?limit=notanumber", "")
 	if w.Code != 200 {
 		t.Errorf("top queries invalid limit: got %d", w.Code)
@@ -707,6 +716,7 @@ func TestAuditConfigNotFound(t *testing.T) {
 func TestAuditGetLogsDefaultLines(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	mock.PodLogs[testDBPodName] = "AUDIT: line1"
 
 	// no "lines" query param — uses default 100
 	w := doRequest(r, "GET", "/api/provision/test-db/audit/logs", "")
@@ -921,3 +931,9 @@ func TestSetDeletionProtectionRequiresExplicitValue(t *testing.T) {
 		}
 	}
 }
+
+// noRestoredSettings carries nothing: these tests' sources have no API settings.
+type noRestoredSettings struct{}
+
+func (noRestoredSettings) CopyRestoredSettings(context.Context, string, string) error { return nil }
+func (noRestoredSettings) DisableMFA(context.Context, string) error                   { return nil }

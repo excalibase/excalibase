@@ -41,6 +41,8 @@ import { drainThenExit, shutdownDrainMs } from "./runtime/shutdown.ts";
 import { runXFailure, runXTargetError, withoutCrashDetail } from "./runtime/invoke_errors.ts";
 import type { InvokeResponse, RunXFailure } from "./runtime/invoke_errors.ts";
 import { outboundDeniedMessage } from "./runtime/outbound_denied.ts";
+import { handlerContractRefusal } from "./runtime/handler_contract.ts";
+import { appendLog, DeployRefusals } from "./runtime/refusals.ts";
 
 // ---------------------------------------------------------------------------
 // Mutation scopes (runtime/mutation_scopes.ts).
@@ -161,6 +163,10 @@ const ALLOWED_HOST_SHAPE = /^(\*\.)?[a-z0-9.\-\[\]:]+$/i;
 // AllowedHostsError marks a deploy refused for its allowedHosts — a client
 // error (400), unlike the runtime failures the outer handler maps to 500.
 class AllowedHostsError extends Error {}
+
+// UserCodeError is a deploy refused because of the function's own code (it
+// does not load, or breaks the handler contract): the caller's 400, not ours.
+class UserCodeError extends Error {}
 
 // parseAllowedHosts validates a deploy payload's allowedHosts. Throws on any
 // entry the worker permission must not receive; returns [] when absent.
@@ -389,12 +395,14 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     // MIME type tells Deno to strip TypeScript annotations on parse — the
     // Go bundler already targets ES2022 JS, but inline test bundles in
     // the harness rely on the parser tolerating TS syntax.
+    let __exportNames = [];
     {
       const __userCode = ${JSON.stringify(userCode)};
       const __userBlob = new Blob([__userCode], { type: 'application/javascript' });
       const __userUrl = URL.createObjectURL(__userBlob);
       try {
         const __userModule = await import(__userUrl);
+        __exportNames = __userModule ? Object.keys(__userModule) : [];
         // Prefer the ESM default export when present; fall back to the
         // legacy global slot for test and historical bundles that did not
         // use export default.
@@ -1120,10 +1128,23 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           res.headers.forEach((v, k) => { headers[k] = v; });
           self.postMessage({ type: 'success', reqId, status: res.status, headers, body: bodyText });
         } catch (err) {
-          self.postMessage({ type: 'error', reqId, error: String(err && err.message || err) });
+          // Logged for get_logs; the caller of a crash learns only "internal error".
+          __postThrown(reqId, err);
         }
       }
     };
+    // --- handler contract (EXC-640) ---
+    // Refuse at deploy what no invoke could run.
+    {
+      const __contractRefusal = ${handlerContractRefusal.toString()};
+      const __exp = globalThis.__excalibase_default;
+      const __refusal = __contractRefusal(__exp, __exportNames, __V2_ENABLED && __isV2Export(__exp));
+      if (__refusal !== null) {
+        self.postMessage({ type: 'bootError', error: __refusal });
+        throw new Error('handler contract not met');
+      }
+    }
+
     // Best-effort metadata emission. Captured before 'ready' so main can
     // forward the payload as soon as deploy finishes; failures are
     // swallowed so a malformed user export never blocks deploy.
@@ -1376,6 +1397,7 @@ async function sendSchedulerOps(projectId: string, ops: SchedulerOp[]): Promise<
 
 class FunctionRuntime {
   private readonly scripts = new Map<string, ScriptMetadata>();
+  private readonly refusals = new DeployRefusals(MAX_SCRIPTS, MAX_LOG_LINE);
 
   async deploy(req: DeployRequest): Promise<{ id: string; url: string }> {
     const { id, code, secrets = {} } = req;
@@ -1391,9 +1413,8 @@ class FunctionRuntime {
       throw new Error(`max scripts limit reached (${MAX_SCRIPTS})`);
     }
 
-    // Replace any existing worker
+    // The running version, if any, keeps answering until its replacement is ready.
     const existing = this.scripts.get(id);
-    if (existing) existing.worker.terminate();
 
     const workerCode = buildWorkerCode(code, secrets);
     // TypeScript MIME type tells Deno to treat the blob as TS and strip type
@@ -1454,7 +1475,7 @@ class FunctionRuntime {
           // root cause instead of a generic "worker init error".
           clearTimeout(timeout);
           try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on bootError:", terminateErr); }
-          reject(new Error(typeof e.data.error === "string" && e.data.error.length > 0
+          reject(new UserCodeError(typeof e.data.error === "string" && e.data.error.length > 0
             ? e.data.error
             : "user module failed to load"));
           return;
@@ -1474,7 +1495,8 @@ class FunctionRuntime {
         try { err.preventDefault(); } catch (_e) { /* not all envs expose it */ }
         reject(new Error(err.message ?? "worker init error"));
       };
-    });
+    }).catch((err: unknown) => this.refused(id, err));
+    this.retire(id, existing);
 
     // Fire-and-forget forward — provisioning callback failures must never
     // affect deploy success. The Go side persists the payload on receipt.
@@ -1657,6 +1679,25 @@ class FunctionRuntime {
     return { id, url: `/invoke/${id}` };
   }
 
+  // refused logs a deploy refused for its code where get_logs reads it (the
+  // version still running, else the refusal list) and rethrows.
+  private refused(id: string, err: unknown): never {
+    if (err instanceof UserCodeError) {
+      const entry = this.refusals.entry(err.message);
+      const running = this.scripts.get(id);
+      if (running) appendLog(running.logs, entry, LOG_RING_SIZE);
+      else this.refusals.record(id, entry);
+    }
+    throw err;
+  }
+
+  // retire stops the version a successful deploy replaced.
+  private retire(id: string, replaced: ScriptMetadata | undefined): void {
+    this.refusals.clear(id);
+    if (!replaced) return;
+    try { replaced.worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate replaced worker:", terminateErr); }
+  }
+
   async invoke(id: string, req: InvokeRequest): Promise<InvokeResponse> {
     const script = this.scripts.get(id);
     if (!script) throw new Error(`function not found: ${id}`);
@@ -1749,8 +1790,9 @@ class FunctionRuntime {
   }
 
   delete(id: string): boolean {
+    const refused = this.refusals.clear(id);
     const script = this.scripts.get(id);
-    if (!script) return false;
+    if (!script) return refused;
     script.worker.terminate();
     this.scripts.delete(id);
     return true;
@@ -1780,7 +1822,7 @@ class FunctionRuntime {
   // function doesn't exist, returns null so the caller can return 404.
   getLogs(id: string, sinceMs?: number): LogEntry[] | null {
     const script = this.scripts.get(id);
-    if (!script) return null;
+    if (!script) return this.refusals.logs(id, sinceMs);
     if (typeof sinceMs === "number" && Number.isFinite(sinceMs)) {
       return script.logs.filter((l) => l.ts > sinceMs);
     }
@@ -2165,7 +2207,7 @@ async function handleDeploy(req: Request): Promise<Response> {
     const result = await runtime.deploy(parsed);
     return Response.json(result, { status: 201, headers: JSON_HEADERS });
   } catch (error: unknown) {
-    if (error instanceof AllowedHostsError) return badRequest(error.message);
+    if (error instanceof AllowedHostsError || error instanceof UserCodeError) return badRequest(error.message);
     throw error;
   }
 }

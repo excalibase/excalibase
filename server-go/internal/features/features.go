@@ -23,11 +23,74 @@ const (
 	// MySQLPITR ships MySQL binlogs between backups, so a point-in-time
 	// restore reaches about a minute ago instead of the last backup (EXC-587).
 	MySQLPITR Feature = "mysqlpitr"
+	// SlowQueries is the slow-queries page and tool, and pg_stat_statements
+	// on the clusters it creates (EXC-654).
+	SlowQueries Feature = "slowqueries"
+	// RequestMetrics is the request charts: graphql and auth scraped into
+	// per-project request, error and latency history (EXC-656).
+	RequestMetrics Feature = "requestmetrics"
+	// Advisors are a project's security and performance checks, in Studio and MCP (EXC-655).
+	Advisors Feature = "advisors"
+	// MetricsEndpoint is each project's Prometheus metrics endpoint and the
+	// metrics keys that read it (EXC-657).
+	MetricsEndpoint Feature = "metricsendpoint"
+	// LogRetention keeps each project's logs for its plan's period: provisioning
+	// labels project namespaces with their plan and clamps log searches (EXC-659).
+	LogRetention Feature = "logretention"
+	// LogDrains forwards a project's logs to Datadog or an HTTPS endpoint its
+	// Admins configure, through the log-forwarder pod (EXC-658).
+	LogDrains Feature = "logdrains"
+	// AuthOAuth is end-user Google and GitHub sign-in for customers' apps:
+	// provider settings, redirect URLs and the new-user switch (EXC-662).
+	AuthOAuth Feature = "authoauth"
+	// AuthOTP is end-user sign-in by emailed link or six-digit code: the
+	// project's switch for it and the sign-in policy it shares with AuthOAuth.
+	AuthOTP Feature = "authotp"
+	// AuthUser is end-user account self-service: metadata, profile and email
+	// change, sign-out scopes, and Studio's per-user details and delete.
+	AuthUser Feature = "authuser"
+	// AuthGuest is end-user guest accounts (no address, role guest) and the
+	// stable token subject: sub becomes the account id.
+	AuthGuest Feature = "authguest"
+	// AuthMFA is end-user TOTP factors, recovery codes and the aal claim:
+	// the project's switch and its per-project key in the vault.
+	AuthMFA Feature = "authmfa"
+	// HostMetrics is single-host monitoring: the host and every container
+	// sampled into history, alerts and notices, and Studio's Host page (EXC-670).
+	HostMetrics Feature = "hostmetrics"
+	// SitesServer is server-rendered sites: a site of kind server runs its
+	// build's Worker code beside its assets (ADR 0045, EXC-661). Needs Sites.
+	SitesServer Feature = "sitesserver"
+	// AuthHooks is end-user auth hooks: signed HTTPS calls the auth service
+	// makes to the project's own endpoints (custom claims, sign-up, mail).
+	AuthHooks Feature = "authhooks"
+	// DBAllowList is the per-project list of addresses that may reach the
+	// public database port, and its Studio card and MCP tools (EXC-665).
+	DBAllowList Feature = "dballowlist"
+	// DBReadAddress is a database's read-only address to its replicas, internal
+	// and on its own public port, and its Studio card (EXC-666).
+	DBReadAddress Feature = "dbreadaddress"
+	// DBCopy is copying a database into a new project from now, its latest
+	// backup or a time, in Studio and the API (EXC-667).
+	DBCopy Feature = "dbcopy"
+	// MajorUpgrade moves a project's Postgres database to a newer major
+	// version after a forced backup, and its Studio card (EXC-668).
+	MajorUpgrade Feature = "majorupgrade"
+	// TemplateCatalog is the self-managed service catalog beside the starter templates (EXC-669).
+	TemplateCatalog Feature = "templatecatalog"
+	// HostLogs is a single host's stored log search: provisioning ships the
+	// project containers' output to the bundled Loki (EXC-672).
+	HostLogs Feature = "hostlogs"
+	// SingleHostBuilds runs git builds of sites on a single Docker or Podman
+	// host, under the sandbox runtime behind the build egress proxy (EXC-671).
+	SingleHostBuilds Feature = "singlehostbuilds"
+	// LogDeletion removes a deleted project's stored log lines from Loki (EXC-678).
+	LogDeletion Feature = "logdeletion"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, LogDeletion}
 }
 
 type Flags interface {
@@ -79,6 +142,27 @@ func Require(flags Flags, feature Feature) func(http.Handler) http.Handler {
 			if !Enabled(r.Context(), flags, feature) {
 				http.NotFound(w, r)
 				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// WhenOn applies middleware only while the feature is on, decided per request.
+func WhenOn(flags Flags, feature Feature, middleware func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return WhenAnyOn(flags, []Feature{feature}, middleware)
+}
+
+// WhenAnyOn applies middleware while any of the features is on, decided per request.
+func WhenAnyOn(flags Flags, anyOf []Feature, middleware func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		gated := middleware(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			for _, feature := range anyOf {
+				if Enabled(r.Context(), flags, feature) {
+					gated.ServeHTTP(w, r)
+					return
+				}
 			}
 			next.ServeHTTP(w, r)
 		})

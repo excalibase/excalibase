@@ -19,6 +19,8 @@ type ColumnInfo struct {
 	CharacterMaximumLength *int    `json:"characterMaximumLength"`
 	NumericPrecision       *int    `json:"numericPrecision"`
 	NumericScale           *int    `json:"numericScale"`
+	// ElementType is an ARRAY column's element type, e.g. bigint for bigint[].
+	ElementType string `json:"elementType,omitempty"`
 }
 
 type RelationshipInfo struct {

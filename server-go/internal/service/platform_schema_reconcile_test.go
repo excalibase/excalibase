@@ -31,6 +31,13 @@ func (h *rotationHarness) seedPreSchedulerCluster(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.kube.CRDs[rotNamespace+"/"+rotProject+postgresClusterSuffix] = cluster
+	// The database answers the auth probe "f" (EXC-628) and runs all else.
+	h.kube.ExecAnswer = func(cmd []string) (string, error) {
+		if strings.Contains(strings.Join(cmd, " "), "has_schema_privilege") {
+			return "f\n", nil
+		}
+		return "ALTER ROLE", nil
+	}
 }
 
 func (h *rotationHarness) clusterHBA(t *testing.T) []string {
@@ -53,9 +60,10 @@ func TestReconcileProjectRoles_BringsAnOlderProjectUpToDate(t *testing.T) {
 	if report.Reconciled != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	// The reconcile probes the server version, then runs the registration SQL.
-	if len(h.kube.ExecCommands) != 2 {
-		t.Fatalf("exec calls = %d, want a version probe then the registration SQL", len(h.kube.ExecCommands))
+	// The reconcile probes the server version, runs the registration SQL, then
+	// checks excalibase_app reaches nothing in auth.
+	if len(h.kube.ExecCommands) != 3 || !strings.Contains(h.kube.ExecCommands[2], "has_schema_privilege") {
+		t.Fatalf("exec calls = %d, want a version probe, the registration SQL and the auth probe", len(h.kube.ExecCommands))
 	}
 	if !strings.Contains(h.kube.ExecCommands[0], "server_version_num") {
 		t.Fatalf("first exec is not the version probe: %q", h.kube.ExecCommands[0])
@@ -78,8 +86,8 @@ func TestReconcileProjectRoles_BringsAnOlderProjectUpToDate(t *testing.T) {
 	}
 }
 
-// A reconciled project, one with its scheduler login filed, is not reached
-// again: a second pass changes nothing.
+// A reconciled project, one with its scheduler login filed and no read access
+// to auth left for excalibase_app, is only probed: a second pass changes nothing.
 func TestReconcileProjectRoles_LeavesAReconciledProjectAlone(t *testing.T) {
 	h := newRotationHarness(t)
 	h.seedPreSchedulerCluster(t)
@@ -92,14 +100,86 @@ func TestReconcileProjectRoles_LeavesAReconciledProjectAlone(t *testing.T) {
 	if report.Reconciled != 0 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(h.kube.ExecCommands) != execsAfterFirst {
-		t.Fatal("a second pass reached the database")
+	if len(h.kube.ExecCommands) != execsAfterFirst+1 || !strings.Contains(h.kube.ExecCommands[execsAfterFirst], "has_schema_privilege") {
+		t.Fatalf("a second pass ran more than the auth probe: %q", h.kube.ExecCommands[execsAfterFirst:])
 	}
 	if got := h.vault.data[rotSchedulerCurrent]["password"]; got != filed {
 		t.Fatal("a second pass minted a new scheduler password")
 	}
 	if !slices.Equal(h.clusterHBA(t), hba) {
 		t.Fatal("a second pass rewrote pg_hba")
+	}
+}
+
+// EXC-628: a project registered after EXC-623 but before EXC-628 still lets
+// excalibase_app read auth. The probe finds it and the registration SQL, which
+// now revokes that access, runs again; the filed logins are kept.
+func TestReconcileProjectRoles_RevokesAuthFromAProjectWhoseAppRoleStillReadsIt(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedPreSchedulerCluster(t)
+	h.vault.data[rotSchedulerCurrent] = map[string]string{
+		"host": "h.local", "port": "5432", "database": "app", "username": roleScheduler, "password": "Filed-1",
+	}
+	h.kube.ExecAnswer = authProbeAnswers("t", "f")
+
+	report := h.svc.ReconcileProjectRoles(context.Background())
+	if report.Reconciled != 1 || len(report.Failed) != 0 {
+		t.Fatalf("report = %+v", report)
+	}
+	if len(h.kube.ExecCommands) != 4 || !strings.Contains(h.kube.ExecCommands[0], "has_schema_privilege") ||
+		!strings.Contains(h.kube.ExecCommands[3], "has_schema_privilege") {
+		t.Fatalf("exec calls = %q, want the auth probe, the version probe, the registration SQL and the probe again", h.kube.ExecCommands)
+	}
+	if !strings.Contains(h.kube.ExecCommands[2], `REVOKE ALL ON SCHEMA auth FROM "excalibase_app", PUBLIC`) {
+		t.Fatal("the registration SQL that ran does not revoke auth")
+	}
+	if got := h.vault.data[rotSchedulerCurrent]["password"]; got != "Filed-1" {
+		t.Fatalf("the filed scheduler password changed to %q", got)
+	}
+}
+
+// Access the revokes cannot take away (a grant from another grantor, say) is
+// reported, not counted as reconciled.
+func TestReconcileProjectRoles_ReportsAuthAccessTheSQLDidNotRemove(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedPreSchedulerCluster(t)
+	h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
+	h.kube.ExecAnswer = authProbeAnswers("t", "t")
+
+	report := h.svc.ReconcileProjectRoles(context.Background())
+	if report.Reconciled != 0 || len(report.Failed) != 1 || !strings.Contains(report.Failed[0].Error(), "still reaches auth") {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+// authProbeAnswers answers the auth probe with each answer in turn and every
+// other command with nothing.
+func authProbeAnswers(answers ...string) func(cmd []string) (string, error) {
+	return func(cmd []string) (string, error) {
+		if !strings.Contains(strings.Join(cmd, " "), "has_schema_privilege") {
+			return "", nil
+		}
+		if len(answers) == 0 {
+			return "", errors.New("no probe answer left")
+		}
+		answer := answers[0]
+		answers = answers[1:]
+		return answer + "\n", nil
+	}
+}
+
+// A probe whose answer cannot be read is a failure, never a guess either way.
+func TestReconcileProjectRoles_ReportsAnUnreadableAuthProbe(t *testing.T) {
+	h := newRotationHarness(t)
+	h.vault.data[rotSchedulerCurrent] = map[string]string{"username": roleScheduler, "password": "Filed-1"}
+	h.kube.ExecOutput[rotPod] = "psql: something else"
+
+	report := h.svc.ReconcileProjectRoles(context.Background())
+	if report.Reconciled != 0 || len(report.Failed) != 1 || !strings.Contains(report.Failed[0].Error(), "auth") {
+		t.Fatalf("report = %+v", report)
+	}
+	if len(h.kube.ExecCommands) != 1 {
+		t.Fatalf("exec calls after an unreadable probe = %q", h.kube.ExecCommands)
 	}
 }
 
@@ -222,7 +302,7 @@ func TestReconcileProjectRoles_SingleHostFilesAPasswordLogin(t *testing.T) {
 	if report := h.svc.ReconcileProjectRoles(context.Background()); report.Reconciled != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(docker.execs) != 2 || !strings.Contains(strings.Join(docker.execs[1], " "), "excalibase_scheduler_role") {
+	if len(docker.execs) != 3 || !strings.Contains(strings.Join(docker.execs[1], " "), "excalibase_scheduler_role") {
 		t.Fatalf("container execs = %d", len(docker.execs))
 	}
 	if !strings.Contains(strings.Join(docker.execs[0], " "), "server_version_num") {
@@ -271,7 +351,7 @@ func TestReconcileProjectRoles_RegeneratesAnEmptyFiledPassword(t *testing.T) {
 	if report := h.svc.ReconcileProjectRoles(context.Background()); report.Reconciled != 1 {
 		t.Fatalf("report = %+v", report)
 	}
-	if !strings.Contains(h.kube.ExecCommands[len(h.kube.ExecCommands)-1], "CREATE ROLE") {
+	if !strings.Contains(h.kube.ExecCommands[1], "CREATE ROLE") {
 		t.Fatal("the registration SQL did not run")
 	}
 }

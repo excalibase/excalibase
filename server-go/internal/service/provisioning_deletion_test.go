@@ -243,6 +243,12 @@ func (s *stubbornVault) DeletePrefix(string) (int, error)      { return 0, nil }
 func (s *stubbornVault) List(string) ([]string, error)         { return []string{s.leftover}, nil }
 func (s *stubbornVault) Sealed() bool                          { return false }
 func (s *stubbornVault) GetPublicKey() (string, error)         { return "", nil }
+func (s *stubbornVault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	if _, err := s.Get(path); err == nil {
+		return false, nil
+	}
+	return true, s.Put(path, data)
+}
 
 // failingStore lets a test fail the row writes the deletion state machine
 // depends on, without touching the rest of the store's behaviour.
@@ -358,4 +364,21 @@ func (s *failingStore) UpdateIfStatus(inst *domain.DatabaseInstance, expected st
 		return s.updateErr
 	}
 	return s.InstanceStore.UpdateIfStatus(inst, expected)
+}
+
+// EXC-662: a project's OAuth client secrets sit under its vault prefix, so
+// deleting the project takes them too.
+func TestDeprovisionPurgesTheOAuthClientSecrets(t *testing.T) {
+	svc, _, _ := setupDeletionTest(t)
+	vault := newFakeVault()
+	secretPath := domain.AuthProviderSecretPath(testDeletingProj, domain.AuthProviderGitHub)
+	vault.Put(secretPath, map[string]string{"client_secret": "secret"})
+	svc.SetVault(vault)
+
+	if err := svc.Deprovision(context.Background(), testDeletingProj); err != nil {
+		t.Fatalf("deprovision: %v", err)
+	}
+	if _, leaked := vault.data[secretPath]; leaked {
+		t.Error("the OAuth client secret must be purged with the project")
+	}
 }

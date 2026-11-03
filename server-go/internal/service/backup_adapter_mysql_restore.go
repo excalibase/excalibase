@@ -81,11 +81,7 @@ func (a *MySQLBackupAdapter) planRestore(ctx context.Context, inst *domain.Datab
 	if err != nil {
 		return mysqlRestoreTarget{}, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
 	}
-	backups, marks, err := a.catalog(ctx, inst)
-	if err != nil {
-		return mysqlRestoreTarget{}, err
-	}
-	wanted, err := resolveMySQLRestorePoint(backups, marks, req)
+	backups, marks, wanted, err := a.restorePoint(ctx, inst, req)
 	if err != nil {
 		return mysqlRestoreTarget{}, err
 	}

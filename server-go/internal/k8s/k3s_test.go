@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,8 +236,29 @@ func testExecInPodWhenReady(ctx context.Context, t *testing.T, client *Client, n
 			} else {
 				t.Logf("ExecInPod result: %s", out)
 			}
+			testDatabaseLogReads(ctx, t, client, ns)
 			return
 		}
 		time.Sleep(5 * time.Second)
+	}
+}
+
+// testDatabaseLogReads pins why Studio reads database and audit logs from the
+// pod log: CNPG's log file is a pipe its collector reads, so a command on it
+// blocks, while the pod log answers at once (EXC-633).
+func testDatabaseLogReads(ctx context.Context, t *testing.T, client *Client, ns string) {
+	t.Helper()
+	if _, err := client.ExecInPod(ctx, ns, "k3s-db-postgres-1", "postgres",
+		[]string{"test", "-p", "/controller/log/postgres.csv"}); err != nil {
+		t.Errorf("CNPG's postgres.csv is no longer a pipe: %v", err)
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := client.PodLogTail(readCtx, ns, "k3s-db-postgres-1", "postgres", 50)
+	if err != nil {
+		t.Fatalf("PodLogTail: %v", err)
+	}
+	if !strings.Contains(out, `"logger":"postgres"`) {
+		t.Errorf("the pod log carries no postgres records: %q", out)
 	}
 }

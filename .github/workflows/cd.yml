@@ -43,6 +43,24 @@ jobs:
             type=ref,event=branch
             type=sha,prefix={{branch}}-
 
+      # Built into the local daemon and scanned before anything is pushed
+      # (EXC-642); the push below is served from this build's cache.
+      - name: Build the candidate image
+        uses: docker/build-push-action@v6
+        with:
+          context: server-go
+          file: server-go/Dockerfile
+          load: true
+          push: false
+          tags: provisioning-candidate:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy
+        uses: ./.github/actions/trivy
+        with:
+          image: provisioning-candidate:${{ github.sha }}
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -83,6 +101,24 @@ jobs:
             type=ref,event=branch
             type=sha,prefix={{branch}}-
 
+      # Built into the local daemon and scanned before anything is pushed
+      # (EXC-642); the push below is served from this build's cache.
+      - name: Build the candidate image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          load: true
+          push: false
+          tags: studio-candidate:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy
+        uses: ./.github/actions/trivy
+        with:
+          image: studio-candidate:${{ github.sha }}
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -122,6 +158,24 @@ jobs:
           tags: |
             type=ref,event=branch
             type=sha,prefix={{branch}}-
+
+      # Built into the local daemon and scanned before anything is pushed
+      # (EXC-642); the push below is served from this build's cache.
+      - name: Build the candidate image
+        uses: docker/build-push-action@v6
+        with:
+          context: deno-server
+          file: deno-server/Dockerfile
+          load: true
+          push: false
+          tags: deno-runtime-candidate:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy
+        uses: ./.github/actions/trivy
+        with:
+          image: deno-runtime-candidate:${{ github.sha }}
 
       - name: Build and push
         uses: docker/build-push-action@v6

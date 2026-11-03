@@ -7,6 +7,7 @@ import (
 	"log"
 	"maps"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,9 @@ import (
 // Barman Cloud plugin.
 type K8sBackupAdapter struct {
 	k8sClient k8s.KubeClient
+	// archives names each major's archive after a major upgrade (EXC-668);
+	// nil keeps every project on its original one.
+	archives *MajorUpgradeArchives
 	// storage is the object store backups are written to; restores read
 	// from it. Resolved per call so vault rotation is picked up.
 	storage BackupStorageSource
@@ -42,6 +46,8 @@ type K8sBackupAdapter struct {
 	// publicDomainSuffix names the restored project's public endpoint, so
 	// its server certificate can carry it. Empty without public endpoints.
 	publicDomainSuffix string
+	// queryStats turns on pg_stat_statements in a restored cluster (EXC-654).
+	queryStats bool
 	// plans decides the restored project's tier and backups, exactly as they
 	// would be decided for a new project.
 	plans RestorePlanSource
@@ -101,11 +107,60 @@ func NewK8sBackupAdapter(client k8s.KubeClient, storage BackupStorageSource) *K8
 	}
 }
 
+// SetMajorUpgradeArchives tells the adapter which archive each major of an
+// upgraded project uses.
+// Wiring only: called before the server serves, so it takes no lock.
+func (a *K8sBackupAdapter) SetMajorUpgradeArchives(archives *MajorUpgradeArchives) {
+	a.archives = archives
+}
+
+// sourceArchive is the archive a restore of src reads, and whether the
+// running database still writes it: one an upgrade left behind is finished.
+func (a *K8sBackupAdapter) sourceArchive(ctx context.Context, src *domain.DatabaseInstance) (string, bool, error) {
+	archive, err := a.archives.Archive(ctx, src, src.PostgresVersion)
+	if err != nil {
+		return "", false, err
+	}
+	writing := true
+	if a.instances != nil {
+		if live, err := a.instances.FindByProjectID(src.ProjectID); err == nil && live != nil {
+			writing = live.PostgresVersion == src.PostgresVersion
+		}
+	}
+	return archive, writing, nil
+}
+
+// BackupMajor is the major a Backup was taken on, as CNPG records it, else
+// the major the project ran when the Backup started. A Backup that says
+// neither is refused rather than guessed.
+func (a *K8sBackupAdapter) BackupMajor(ctx context.Context, src *domain.DatabaseInstance, name string) (string, error) {
+	obj, err := a.k8sClient.GetCRD(ctx, k8s.CNPGBackupGVR, src.Namespace, name)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %w", ErrRestoreBackupUnusable, name, err)
+	}
+	if cluster, _, _ := unstructured.NestedString(obj.Object, "spec", "cluster", "name"); cluster != src.ProjectID+postgresClusterSuffix {
+		return "", fmt.Errorf("%w: %s belongs to another cluster", ErrRestoreBackupUnusable, name)
+	}
+	if major, found, err := unstructured.NestedInt64(obj.Object, "status", "majorVersion"); found && err == nil && major > 0 {
+		return strconv.FormatInt(major, 10), nil
+	}
+	started, _, _ := unstructured.NestedString(obj.Object, "status", "startedAt")
+	at, err := time.Parse(time.RFC3339, started)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s does not say which Postgres version it was taken on", ErrRestoreBackupUnusable, name)
+	}
+	return a.archives.MajorAt(ctx, src, at)
+}
+
 // SetRestoreTargetGuard replaces the point-in-time target check.
 func (a *K8sBackupAdapter) SetRestoreTargetGuard(g RestoreTargetGuard) { a.targetGuard = g }
 
 // SetPublicDomainSuffix names the suffix public endpoint names hang off.
 func (a *K8sBackupAdapter) SetPublicDomainSuffix(suffix string) { a.publicDomainSuffix = suffix }
+
+// SetQueryStats decides whether a restored cluster carries pg_stat_statements,
+// as a new project's does.
+func (a *K8sBackupAdapter) SetQueryStats(on bool) { a.queryStats = on }
 
 // SetDatabaseProbe wires the check that proves a recovered database serves
 // queries. Without it a restore refuses to run.
@@ -230,14 +285,21 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if err != nil {
 		return nil, err
 	}
-	if err := a.ensureTargetRecoverable(ctx, inst, req); err != nil {
-		return nil, err
+	archive, writing, err := a.sourceArchive(ctx, inst)
+	if err != nil {
+		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
 	}
-	target := restoreTarget{store: store, plan: plan, project: newProject, namespace: fmt.Sprintf("%s-%s", inst.OrgID, newProject)}
+	// A finished archive gets nothing more; recovery is the judge of it.
+	if writing {
+		if err := a.ensureTargetRecoverable(ctx, inst, req); err != nil {
+			return nil, err
+		}
+	}
+	target := restoreTarget{store: store, plan: plan, project: newProject, namespace: fmt.Sprintf("%s-%s", inst.OrgID, newProject), sourceArchive: archive}
 	if err := a.issueRestoreCredentials(ctx, inst.ProjectID, &target); err != nil {
 		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
 	}
-	err = target.render(inst, recoveryTarget, clusterIdentity{image: image, altNames: altNames})
+	err = target.render(inst, recoveryTarget, clusterIdentity{image: image, altNames: altNames, queryStats: a.queryStats})
 	if err != nil {
 		return nil, fmt.Errorf("restore %s at tier %s: %w", inst.ProjectID, plan.Tier, err)
 	}
@@ -303,16 +365,19 @@ type restoreTarget struct {
 	sourceCreds *domain.S3Credentials
 	ownCreds    *domain.S3Credentials
 	plan        RestorePlan
-	stores      []*unstructured.Unstructured
-	cluster     *unstructured.Unstructured
-	project     string
-	namespace   string
+	// sourceArchive is the source's archive the restore reads (EXC-668).
+	sourceArchive string
+	stores        []*unstructured.Unstructured
+	cluster       *unstructured.Unstructured
+	project       string
+	namespace     string
 }
 
 // clusterIdentity is what the restored cluster runs and is known by.
 type clusterIdentity struct {
-	image    string
-	altNames []string
+	image      string
+	altNames   []string
+	queryStats bool
 }
 
 // render builds the cluster a new project with the source's settings and the
@@ -331,6 +396,7 @@ func (target *restoreTarget) render(src *domain.DatabaseInstance, recoveryTarget
 		MasterUsername:    src.Username,
 		Parameters:        src.Parameters,
 		ServerAltDNSNames: id.altNames,
+		QueryStats:        id.queryStats,
 		// The same DocumentDB cluster creation builds: preload, pg_cron and
 		// the gateway plugin are fixed when a cluster is created.
 		DocumentDB:             src.DocumentDB,
@@ -348,6 +414,7 @@ func (target *restoreTarget) render(src *domain.DatabaseInstance, recoveryTarget
 	opts := k8s.RestoreClusterOpts{
 		Cluster:         cluster,
 		SourceProjectID: src.ProjectID,
+		SourceArchive:   target.sourceArchive,
 		Store:           k8s.ObjectStoreOpts{EndpointURL: target.store.Endpoint, Bucket: target.store.Bucket, SecretName: k8s.RecoverySourceCredentialsSecretName},
 		RecoveryTarget:  recoveryTarget,
 	}

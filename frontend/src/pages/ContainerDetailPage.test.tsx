@@ -207,6 +207,16 @@ describe('ContainerDetailPage', () => {
     expect(screen.getByText(/internal service/i)).toBeInTheDocument();
   });
 
+  test('a running container that was killed for memory says so (EXC-651)', async () => {
+    renderPage({
+      app: { status: 'ACTIVE', restarts: { count: 3, lastReason: 'OOMKilled', lastExitCode: 137, lastAt: '2026-10-19T12:00:00Z' } },
+      deploys: [deploy({})],
+    });
+    const note = await screen.findByTestId('container-restarts');
+    expect(note).toHaveTextContent(/restarted 3 times/i);
+    expect(note).toHaveTextContent(/memory/i);
+  });
+
   test('links to the container\'s pipeline', async () => {
     renderPage({ deploys: [] });
     expect(await screen.findByTestId('pipeline-link')).toHaveAttribute(

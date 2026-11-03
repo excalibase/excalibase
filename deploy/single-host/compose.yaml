@@ -14,6 +14,9 @@ x-edge-aliases: &edge_aliases studio.${EXCALIBASE_DOMAIN:?run ./init.sh first},a
 # provisioning starts it and the engine proxy admits this image, and only it,
 # to the bus network NATS listens on.
 x-watcher-image: &watcher_image docker.io/excalibase/excalibase-watcher-go@sha256:7b2f9feb21b2a92b34c3f7b136399c619d460bf5d296215b8662a7a334126d9e
+# The platform's long-running containers host monitoring reads (EXC-670): the
+# proxy admits their stats and state, by these exact names, and nothing else of theirs.
+x-platform-containers: &platform_containers excalibase-postgres,excalibase-nats,excalibase-objectstore,excalibase-engine-proxy,excalibase-provisioning,excalibase-studio,excalibase-auth,excalibase-graphql,excalibase-edge
 x-hardened: &hardened
   security_opt:
     - no-new-privileges:true
@@ -32,6 +35,8 @@ services:
       OBJECTSTORE_ROOT_SECRET: ${OBJECTSTORE_ROOT_SECRET:?run ./init.sh first}
       OBJECTSTORE_BACKUPS_SECRET: ${OBJECTSTORE_BACKUPS_SECRET:?run ./init.sh first}
       OBJECTSTORE_FILES_SECRET: ${OBJECTSTORE_FILES_SECRET:?run ./init.sh first}
+      FEATURE_AUTHHOOKS: ${FEATURE_AUTHHOOKS:-false}
+      AUTH_HOOKS_DENY_CIDRS: ${AUTH_HOOKS_DENY_CIDRS:-}
     command: ["sh", "/preflight.sh"]
     volumes:
       - ./preflight.sh:/preflight.sh:ro,z
@@ -205,6 +210,7 @@ services:
       PROXY_CDC_NETWORK: excalibase-cdc
       PROXY_CDC_IMAGES: *watcher_image
       PROXY_NETNS_JOIN_IMAGES: ${DOCUMENTDB_ENABLED:+ghcr.io/documentdb/documentdb-kubernetes-operator/gateway@sha256:8a5c7e533dc0fbed8ed780b22e31001a6b12ae0eb670f4aac62c1ded782742ed}
+      PROXY_STATS_CONTAINERS: *platform_containers
     volumes:
       - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
     read_only: true
@@ -260,6 +266,53 @@ services:
       FEATURE_MYSQL: ${FEATURE_MYSQL:-false}
       # MySQL binlogs shipped every minute between backups (EXC-587).
       FEATURE_MYSQLPITR: ${FEATURE_MYSQLPITR:-false}
+      # Slow-queries page and tool (EXC-654): new Postgres projects keep pg_stat_statements,
+      # older ones turn it on from the page with one restart (EXC-673).
+      FEATURE_SLOWQUERIES: ${FEATURE_SLOWQUERIES:-false}
+      # Request charts (EXC-656): graphql and auth count per project, read once a minute
+      # over the metrics network only (EXC-673). Turns their counters on too, below.
+      FEATURE_REQUESTMETRICS: ${FEATURE_REQUESTMETRICS:-false}
+      REQUEST_METRICS_TARGETS: graphql-metrics:9464,auth-metrics:9465
+      # Security and performance checks per project, in Studio and MCP (EXC-655).
+      FEATURE_ADVISORS: ${FEATURE_ADVISORS:-false}
+      # End-user Google and GitHub sign-in for customers' apps (EXC-662).
+      FEATURE_AUTHOAUTH: ${FEATURE_AUTHOAUTH:-false}
+      # End-user sign-in by emailed link or code (EXC-662); no new grant.
+      FEATURE_AUTHOTP: ${FEATURE_AUTHOTP:-false}
+      # End-user account self-service: metadata, email change, sign-out scopes (EXC-662).
+      FEATURE_AUTHUSER: ${FEATURE_AUTHUSER:-false}
+      # End-user guest accounts and the stable token subject (EXC-662).
+      FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
+      # End-user TOTP MFA, recovery codes and the aal claim (EXC-662).
+      FEATURE_AUTHMFA: ${FEATURE_AUTHMFA:-false}
+      # Host and container monitoring, alerts and notices (EXC-670; init.sh --host-metrics).
+      FEATURE_HOSTMETRICS: ${FEATURE_HOSTMETRICS:-false}
+      HOST_METRICS_CONTAINERS: *platform_containers
+      HOST_METRICS_NET_DEV: /host/proc-net-dev
+      # Stored project log search in the bundled Loki (EXC-672; init.sh --host-logs).
+      FEATURE_HOSTLOGS: ${FEATURE_HOSTLOGS:-false}
+      HOST_LOGS_LOKI_URL: http://loki:3100
+      HOST_LOGS_DAILY_MB: ${HOST_LOGS_DAILY_MB:-64}
+      # How long Loki keeps logs; by plan only with FEATURE_LOGRETENTION (EXC-659).
+      FEATURE_LOGRETENTION: ${FEATURE_LOGRETENTION:-false}
+      LOG_RETENTION: ${LOG_RETENTION:-168h}
+      LOG_RETENTION_BY_PLAN: free=${LOG_RETENTION_FREE:-24h},standard=${LOG_RETENTION_STANDARD:-168h},enterprise=${LOG_RETENTION_ENTERPRISE:-168h}
+      # The host's own public ranges, refused to apps and to the alert webhook; empty: only private ranges are.
+      APP_EGRESS_EXTRA_DENY_CIDRS: ${APP_EGRESS_EXTRA_DENY_CIDRS:-}
+      # Server-rendered sites on Cloudflare (EXC-661); needs SITES_ENABLED.
+      FEATURE_SITESSERVER: ${FEATURE_SITESSERVER:-false}
+      # End-user auth hooks: signed calls to the project's own endpoints (EXC-662).
+      FEATURE_AUTHHOOKS: ${FEATURE_AUTHHOOKS:-false}
+      # Who may reach a database's public port (EXC-665); here always this host only.
+      FEATURE_DBALLOWLIST: ${FEATURE_DBALLOWLIST:-false}
+      # A database's read-only address to its replicas (EXC-666); a single host has none and says so.
+      FEATURE_DBREADADDRESS: ${FEATURE_DBREADADDRESS:-false}
+      # Copy a database into a new project from its backups (EXC-667).
+      FEATURE_DBCOPY: ${FEATURE_DBCOPY:-false}
+      # Database major version upgrade in Studio (EXC-668): one-way, backup first.
+      FEATURE_MAJORUPGRADE: ${FEATURE_MAJORUPGRADE:-false}
+      # Self-managed service templates beside the starters (EXC-669).
+      FEATURE_TEMPLATECATALOG: ${FEATURE_TEMPLATECATALOG:-false}
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.
@@ -323,6 +376,31 @@ services:
       SITES_ZONE_ID: ${SITES_ZONE_ID:-}
       SITES_CUSTOM_DOMAIN_TARGET: ${SITES_CUSTOM_DOMAIN_TARGET:-}
       SITES_MAX_ZONE_HOSTNAMES: ${SITES_MAX_ZONE_HOSTNAMES:-}
+      # Server-rendered sites (EXC-661) run only once the outbound Worker bound on
+      # the dispatch namespace is named here, with FEATURE_SITESSERVER=true.
+      SITES_OUTBOUND_WORKER: ${SITES_OUTBOUND_WORKER:-}
+      # Cloudflare's API origin; set only to point Sites at a stand-in in tests.
+      SITES_CLOUDFLARE_API_URL: ${SITES_CLOUDFLARE_API_URL:-}
+      # Git builds of sites on this host (EXC-671): off unless .env says "true" for both
+      # switches and names the GitHub App. Each build runs under APP_SANDBOX_RUNTIME on a
+      # network with no route out; it reaches the internet (ports 80/443, public addresses
+      # only) through a proxy started from this image. Install notes: host firewall.
+      SITES_GIT_BUILDS_ENABLED: ${SITES_GIT_BUILDS_ENABLED:-false}
+      FEATURE_SINGLEHOSTBUILDS: ${FEATURE_SINGLEHOSTBUILDS:-false}
+      SITES_GITHUB_APP_ID: ${SITES_GITHUB_APP_ID:-}
+      SITES_GITHUB_APP_SLUG: ${SITES_GITHUB_APP_SLUG:-}
+      SITES_GITHUB_CLIENT_ID: ${SITES_GITHUB_CLIENT_ID:-}
+      SITES_GITHUB_CLIENT_SECRET: ${SITES_GITHUB_CLIENT_SECRET:-}
+      SITES_GITHUB_APP_PRIVATE_KEY: ${SITES_GITHUB_APP_PRIVATE_KEY:-}
+      SITES_GITHUB_APP_PRIVATE_KEY_FILE: ${SITES_GITHUB_APP_PRIVATE_KEY_FILE:-}
+      SITES_GITHUB_WEBHOOK_SECRET: ${SITES_GITHUB_WEBHOOK_SECRET:-}
+      SITES_GITHUB_API_URL: ${SITES_GITHUB_API_URL:-https://api.github.com}
+      SITES_GITHUB_WEB_URL: ${SITES_GITHUB_WEB_URL:-https://github.com}
+      SITES_BUILD_SLOTS: ${SITES_BUILD_SLOTS:-1}
+      SITES_BUILD_NODE_IMAGE: ${SITES_BUILD_NODE_IMAGE:-}
+      SITES_BUILD_EGRESS_IMAGE: ${SITES_BUILD_EGRESS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.5.0}}
+      # host:port entries builds may reach although private, e.g. a git server on your LAN.
+      SITES_BUILD_EGRESS_ALLOW: ${SITES_BUILD_EGRESS_ALLOW:-}
       # DocumentDB projects (EXC-576): off unless .env says "true" (init.sh --documentdb).
       DOCUMENTDB_ENABLED: ${DOCUMENTDB_ENABLED:-false}
       # Apps (EXC-575, ADR 0039): off unless .env says "true" (init.sh --apps).
@@ -351,6 +429,8 @@ services:
     volumes:
       - provisioning_data:/var/lib/excalibase
       - app_routes:/srv/excalibase-app-routes
+      # The host's network counters, one read-only file (init.sh --host-metrics); /dev/null otherwise.
+      - ${HOST_METRICS_NET_DEV_SOURCE:-/dev/null}:/host/proc-net-dev:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -362,6 +442,36 @@ services:
       - engine
       - tenants
       - edge
+      - logs
+      - metrics
+    restart: unless-stopped
+
+  # Stored project logs (EXC-672; init.sh --host-logs): provisioning follows
+  # each project container's output through the engine proxy and pushes it
+  # here. On its own network, which only provisioning joins.
+  loki:
+    image: docker.io/grafana/loki:3.7.8@sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193
+    container_name: excalibase-loki
+    profiles: ["hostlogs"]
+    command: ["-config.file=/etc/loki/loki.yaml", "-config.expand-env=true", "-target=all"]
+    environment:
+      LOG_RETENTION: ${LOG_RETENTION:-168h}
+      LOG_RETENTION_FREE: ${LOG_RETENTION_FREE:-24h}
+      LOG_RETENTION_STANDARD: ${LOG_RETENTION_STANDARD:-168h}
+      LOG_RETENTION_ENTERPRISE: ${LOG_RETENTION_ENTERPRISE:-168h}
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/loki.yaml:ro,z
+      - logs_data:/loki
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: ${LOKI_MEMORY:-512m}
+    pids_limit: 256
+    cpus: ${LOKI_CPUS:-0.5}
+    <<: *hardened
+    networks:
+      - logs
     restart: unless-stopped
 
   studio:
@@ -381,7 +491,9 @@ services:
   # svc-auth and svc-graphql service principals, mints one permission-scoped
   # capability token each, and seeds the ES256 signing keypair into vault. The
   # tokens are handed to the consumers as FILES on a shared named volume.
-  # Idempotent: re-mints only the tokens that no longer authenticate.
+  # Idempotent: re-mints only the tokens that no longer authenticate or carry
+  # another permission list than this version's; that re-mint needs
+  # ADMIN_PASSWORD, and without it the old tokens are kept with a warning.
   bootstrap:
     image: docker.io/library/alpine:3.20
     container_name: excalibase-bootstrap
@@ -394,6 +506,14 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}
+      # svc-auth reads project OAuth client secrets only while this is on (EXC-662).
+      FEATURE_AUTHOAUTH: ${FEATURE_AUTHOAUTH:-false}
+      # ...and project guest Turnstile secrets only while this is on.
+      FEATURE_AUTHGUEST: ${FEATURE_AUTHGUEST:-false}
+      # ...and project auth hook signing secrets only while this is on.
+      FEATURE_AUTHHOOKS: ${FEATURE_AUTHHOOKS:-false}
+      # ...and project MFA keys only while this is on.
+      FEATURE_AUTHMFA: ${FEATURE_AUTHMFA:-false}
       SECRETS_DIR: /var/run/excalibase
     command: ["sh", "/bootstrap.sh"]
     volumes:
@@ -425,6 +545,13 @@ services:
       TRUSTED_PROXY_CIDRS: ${AIO_DATAPLANE_SUBNET:-10.203.250.16/28}
       # Docker-mode tenant databases serve no TLS; k8s tenants require it.
       TENANT_DB_SSLMODE: disable
+      # Extra CIDRs auth hook calls may never reach, beside the built-in private ranges (EXC-662);
+      # preflight refuses to start with hooks on and this empty (init.sh --auth-hooks fills it).
+      AUTH_HOOKS_DENY_CIDRS: ${AUTH_HOOKS_DENY_CIDRS:-}
+      # Request counters (EXC-656), bound to the metrics network alone (EXC-673).
+      REQUEST_METRICS_ENABLED: ${FEATURE_REQUESTMETRICS:-false}
+      REQUEST_METRICS_PORT: "9465"
+      REQUEST_METRICS_ADDRESS: auth-metrics
     volumes:
       - excalibase_secrets:/var/run/excalibase:ro
     depends_on:
@@ -434,9 +561,11 @@ services:
         condition: service_completed_successfully
     <<: *hardened
     networks:
-      - platform
-      - dataplane
-      - tenants
+      platform: {}
+      dataplane: {}
+      tenants: {}
+      metrics:
+        aliases: [auth-metrics]
     restart: unless-stopped
 
   # Serves every project Studio creates at /{projectId}/graphql and
@@ -468,6 +597,10 @@ services:
       # Docker-mode tenant databases serve no TLS, so no client certificate either.
       TENANT_DB_SSLMODE: disable
       SERVER_SHUTDOWN: graceful
+      # Request counters (EXC-656), bound to the metrics network alone (EXC-673).
+      APP_REQUEST_METRICS_ENABLED: ${FEATURE_REQUESTMETRICS:-false}
+      APP_REQUEST_METRICS_PORT: "9464"
+      APP_REQUEST_METRICS_ADDRESS: graphql-metrics
     volumes:
       - excalibase_secrets:/var/run/excalibase:ro
     depends_on:
@@ -483,9 +616,11 @@ services:
         condition: service_started
     <<: *hardened
     networks:
-      - platform
-      - dataplane
-      - tenants
+      platform: {}
+      dataplane: {}
+      tenants: {}
+      metrics:
+        aliases: [graphql-metrics]
     restart: unless-stopped
 
   # The only published service: HTTPS for Studio (studio.<domain>) and the
@@ -544,6 +679,9 @@ volumes:
   # Apps' routes: provisioning writes them, the edge reads them.
   app_routes:
     name: excalibase-platform-app-routes
+  # Stored project logs (EXC-672); delete it to forget them.
+  logs_data:
+    name: excalibase-platform-logs
 
 networks:
   # Platform services and their state. Internal: no route in or out.
@@ -574,10 +712,19 @@ networks:
     ipam:
       config:
         - subnet: ${AIO_DATAPLANE_SUBNET:-10.203.250.16/28}
+  # provisioning reading graphql's and auth's request counters, nothing else
+  # (EXC-673): the counters bind here alone, so tenant containers cannot reach them.
+  metrics:
+    name: excalibase-metrics
+    internal: true
   # NATS and the projects' CDC watchers alone (EXC-612). Internal: no route
   # out. The engine proxy admits only the watcher image to it.
   cdc:
     name: excalibase-cdc
+    internal: true
+  # provisioning and the bundled Loki alone (EXC-672). Internal: no route in or out.
+  logs:
+    name: excalibase-logs
     internal: true
   # Outbound only, for the one-shot bootstrap's package install.
   egress:

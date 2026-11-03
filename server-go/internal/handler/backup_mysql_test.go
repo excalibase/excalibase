@@ -60,7 +60,7 @@ func mysqlBackupRouter(t *testing.T) *chi.Mux {
 		t.Fatal(err)
 	}
 	jobs := &fakeRestoreJobStoreForHandler{}
-	orch := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs})
+	orch := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs, Slots: unmeteredSlots{}})
 	orch.SetSteps([]service.RestoreStep{{Name: "noop", Run: func(context.Context, *domain.RestoreJob) error { return nil }}})
 	h := NewBackupHandler(backupSvc)
 	h.SetRestoreOrchestrator(orch)

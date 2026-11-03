@@ -48,6 +48,9 @@ type Principal struct {
 	// SiteDeployToken is a site's CI deploy token for the site in the path,
 	// default-deny like a capability token; past its gate it is its creator.
 	SiteDeployToken bool
+	// MetricsKey is a metrics key for the project in the path, default-deny
+	// like a deploy token; past its gate it is its creator, read-only.
+	MetricsKey bool
 }
 
 // IsCapabilityToken reports whether the principal authenticates with a
@@ -67,6 +70,9 @@ func Expect(row Row, method string, p Principal) Expectation {
 	if p.SiteDeployToken && !row.SiteDeployToken {
 		return Deny403
 	}
+	if p.MetricsKey && !row.MetricsKey {
+		return Deny403
+	}
 	switch row.Auth {
 	case AuthPublic:
 		return Allow
@@ -80,6 +86,10 @@ func Expect(row Row, method string, p Principal) Expectation {
 		// None of these principals holds the project's derived runtime
 		// secret, so every one of them is refused as unauthenticated.
 		return Deny401
+	case AuthForwarderToken:
+		// Served on the in-cluster listener only: through the edge the route
+		// looks unmounted to everyone.
+		return Deny404
 	}
 	return expectSession(row, method, p)
 }

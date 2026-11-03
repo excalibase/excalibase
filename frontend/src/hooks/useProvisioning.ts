@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useCallback, useEffect } from 'react';
 import { api } from '../api/client';
 import { useSSE } from './useSSE';
@@ -298,9 +298,14 @@ export const useRestoreJob = (projectId: string, jobId: string | undefined) => {
   });
   // A database replaced in place changes everything the project's pages show.
   const replaced = job.data?.mode === 'in_place' && job.data.status === 'COMPLETED';
+  const created = job.data?.mode === 'new_project' && job.data.status === 'COMPLETED';
   useEffect(() => {
     if (replaced) queryClient.invalidateQueries();
   }, [replaced, queryClient]);
+  // A copy finished building: it joins the projects list now, not at submission.
+  useEffect(() => {
+    if (created) queryClient.invalidateQueries({ queryKey: ['instances'] });
+  }, [created, queryClient]);
   return job;
 };
 
@@ -319,16 +324,63 @@ export const useRestoreFromBackup = (projectId: string) => {
   });
 };
 
-export const useLogs = (projectId: string, lines: number = 100) => {
+// A copy of this database into a new project (EXC-667): as it is now, its
+// latest backup, or a time. The answer is a restore job, polled like one.
+export type CopyPoint = 'now' | 'latest' | 'time';
+
+export interface CopyRequest {
+  name: string;
+  point: CopyPoint;
+  // RFC 3339 with a zone; only with point 'time'.
+  targetTime?: string;
+}
+
+export const useCopyDatabase = (projectId: string) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (request: CopyRequest) => {
+      const response = await api.post<RestoreResult>(`/provision/${projectId}/backup/copy`, request);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['instances'] });
+    },
+  });
+};
+
+export interface LogQuery {
+  /** How far back stored logs are searched: 1h, 6h, 24h or 7d. */
+  since?: string;
+  /** Kept lines contain this, ignoring case; the server searches stored logs with it. */
+  search?: string;
+}
+
+export interface LogPage {
+  logs: string;
+  /** How long the project's plan keeps logs; absent when the plan does not decide it (EXC-659). */
+  retentionHours?: number;
+}
+
+export const useLogSearch = (projectId: string, lines: number = 100, { since, search }: LogQuery = {}) => {
+  const params = new URLSearchParams({ lines: String(lines) });
+  if (since) params.set('since', since);
+  if (search) params.set('q', search);
   return useQuery({
-    queryKey: ['logs', projectId, lines],
+    queryKey: ['logs', projectId, lines, since ?? '', search ?? ''],
     queryFn: async () => {
-      const response = await api.get<string>(`/provision/${projectId}/logs?lines=${lines}`);
+      const response = await api.get<LogPage>(`/provision/${projectId}/logs?${params.toString()}`);
       return response.data;
     },
     enabled: !!projectId,
     refetchInterval: 15000,
+    // A new term keeps the current lines on screen while the search runs.
+    placeholderData: keepPreviousData,
   });
+};
+
+export const useLogs = (projectId: string, lines: number = 100, query: LogQuery = {}) => {
+  const result = useLogSearch(projectId, lines, query);
+  return { ...result, data: result.data?.logs };
 };
 
 // Adds the database to a project created without one. The build outlasts one

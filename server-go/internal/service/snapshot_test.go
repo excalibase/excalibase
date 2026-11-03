@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -61,5 +62,20 @@ func TestDeleteSnapshot(t *testing.T) {
 	list, _ := svc.ListSnapshots(testSnapDB)
 	if len(list) != 0 {
 		t.Errorf("expected 0 after delete, got %d", len(list))
+	}
+}
+
+// EXC-628: a snapshot is downloaded by project Admins, so it never carries the
+// auth schema, whatever tables the request names.
+func TestPgDumpCommand_LeavesOutTheAuthSchema(t *testing.T) {
+	for _, req := range []domain.SnapshotExportRequest{
+		{},
+		{Tables: []string{"auth.users", "public.notes"}},
+		{DataOnly: true},
+	} {
+		cmd := strings.Join(pgDumpCommand("app", "plain", req), " ")
+		if !strings.Contains(cmd, "--exclude-schema=auth") || !strings.Contains(cmd, "--exclude-table=auth.*") {
+			t.Errorf("pg_dump for %+v keeps the auth schema: %s", req, cmd)
+		}
 	}
 }

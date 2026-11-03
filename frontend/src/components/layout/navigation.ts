@@ -30,8 +30,15 @@ import {
   Globe,
   LayoutDashboard,
   Bot,
+  Timer,
+  Gauge,
+  Building2,
+  DatabaseZap,
+  ShieldCheck,
+  Server,
   type LucideIcon,
 } from 'lucide-react';
+import type { Feature } from '../../hooks/useDeploymentMode';
 
 export interface NavItem {
   label: string;
@@ -43,6 +50,10 @@ export interface NavItem {
   postgresOnly?: boolean;
   // Hidden for MySQL projects, and this one line says why when it is opened.
   mysqlUnavailable?: string;
+  // Shown only while this dark feature is on (EXC-554).
+  feature?: Feature;
+  // Offered on MySQL after all while this feature is on.
+  mysqlWith?: Feature;
 }
 
 export interface NavSection {
@@ -97,7 +108,7 @@ export const PROJECT_NAV: NavSection[] = [
       { label: 'Triggers', icon: Zap, to: 'database/triggers', mysqlUnavailable: MYSQL_REASONS.triggers },
       { label: 'Indexes', icon: List, to: 'database/indexes' },
       { label: 'Types', icon: Hash, to: 'database/types', mysqlUnavailable: MYSQL_REASONS.types },
-      { label: 'Advisors', icon: AlertTriangle, to: 'database/advisors', mysqlUnavailable: MYSQL_REASONS.advisors },
+      { label: 'Advisors', icon: AlertTriangle, to: 'database/advisors', mysqlUnavailable: MYSQL_REASONS.advisors, mysqlWith: 'advisors' },
       { label: 'Documents', icon: FileJson, to: 'database/documents', documentDbOnly: true, mysqlUnavailable: MYSQL_REASONS.documentDb },
       { label: 'Mongo Users', icon: UserCog, to: 'database/mongo-users', documentDbOnly: true, mysqlUnavailable: MYSQL_REASONS.documentDb },
     ],
@@ -127,10 +138,13 @@ export const PROJECT_NAV: NavSection[] = [
     label: 'Monitoring',
     icon: Activity,
     children: [
-      { label: 'Metrics', icon: BarChart2, to: 'monitoring/metrics', postgresOnly: true },
+      // MySQL projects get logs and CPU/memory too (EXC-653).
+      { label: 'Metrics', icon: BarChart2, to: 'monitoring/metrics' },
       { label: 'Performance', icon: Zap, to: 'monitoring/performance', postgresOnly: true },
       { label: 'Alerts', icon: Bell, to: 'monitoring/alerts' },
-      { label: 'Logs', icon: FileText, to: 'monitoring/logs', postgresOnly: true },
+      { label: 'Logs', icon: FileText, to: 'monitoring/logs' },
+      { label: 'Slow queries', icon: Timer, to: 'monitoring/slow-queries', feature: 'slowqueries' },
+      { label: 'Requests', icon: Gauge, to: 'monitoring/requests', feature: 'requestmetrics' },
     ],
   },
   {
@@ -148,9 +162,19 @@ export const PROJECT_NAV: NavSection[] = [
   { key: 'settings', label: 'Settings', icon: Settings, to: 'settings' },
 ];
 
-export function visibleNavItems(items: readonly NavItem[], documentDb: boolean, postgres = true): NavItem[] {
+export function visibleNavItems(
+  items: readonly NavItem[],
+  documentDb: boolean,
+  postgres = true,
+  features: Partial<Record<Feature, boolean>> = {},
+): NavItem[] {
+  const onMySQL = (item: NavItem) =>
+    (!item.postgresOnly && !item.mysqlUnavailable) || (item.mysqlWith !== undefined && features[item.mysqlWith] === true);
   return items.filter(
-    (item) => (!item.documentDbOnly || documentDb) && (postgres || (!item.postgresOnly && !item.mysqlUnavailable))
+    (item) =>
+      (!item.documentDbOnly || documentDb) &&
+      (postgres || onMySQL(item)) &&
+      (!item.feature || features[item.feature] === true)
   );
 }
 
@@ -169,4 +193,42 @@ export const visibleProjectNav = (capabilities: NavCapabilities): NavSection[] =
 // Where a section with sub-pages opens: its first page the engine offers.
 export function sectionLanding(section: NavSection, postgres: boolean): string | undefined {
   return visibleNavItems(section.children ?? [], false, postgres)[0]?.to;
+}
+
+export interface PlatformNavItem {
+  icon: LucideIcon;
+  label: string;
+  to: string;
+  cloudOnly?: boolean;
+  adminOnly?: boolean;
+  // Shown only while this dark feature is on (EXC-554).
+  feature?: Feature;
+}
+
+export const PLATFORM_NAV: PlatformNavItem[] = [
+  { icon: LayoutDashboard, label: 'Dashboard', to: '/' },
+  { icon: Building2, label: 'Organizations', to: '/orgs', cloudOnly: true },
+  { icon: Database, label: 'Projects', to: '/instances' },
+  { icon: DatabaseZap, label: 'Provision', to: '/provision' },
+  { icon: KeyRound, label: 'Access tokens', to: '/account/tokens' },
+  { icon: ShieldCheck, label: 'Platform Admin', to: '/admin', adminOnly: true },
+  // Host monitoring of a single-host Docker/Podman install (EXC-670).
+  { icon: Server, label: 'Host', to: '/admin/host', adminOnly: true, feature: 'hostmetrics' },
+];
+
+export function visiblePlatformNav({
+  isAdmin,
+  selfHosted,
+  features,
+}: {
+  isAdmin: boolean;
+  selfHosted: boolean;
+  features: Partial<Record<Feature, boolean>>;
+}): PlatformNavItem[] {
+  return PLATFORM_NAV.filter(
+    (item) =>
+      !(item.cloudOnly && selfHosted) &&
+      !(item.adminOnly && !isAdmin) &&
+      (!item.feature || features[item.feature] === true),
+  );
 }

@@ -253,7 +253,7 @@ func TestMySQLAdapterManualRunOutlivesItsJob(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	byID := refsByID(refs)
-	if got := byID["20261011-120000"].Type; got != backupTypeManual {
+	if got := byID[ref.ID].Type; got != backupTypeManual {
 		t.Errorf("the manual run after its Job went: %s", got)
 	}
 	for _, id := range []string{"20261011-060000", "20261011-180000"} {
@@ -269,7 +269,8 @@ func TestMySQLAdapterUnseenManualRunClaimsTheNextRunOnly(t *testing.T) {
 	lab := newMySQLAdapterLab(t, sourceKeys()...)
 	lab.cronJob()
 	lab.now = at(11, 58)
-	if _, err := lab.adapter.TriggerManual(context.Background(), lab.source); err != nil {
+	asked, err := lab.adapter.TriggerManual(context.Background(), lab.source)
+	if err != nil {
 		t.Fatalf("TriggerManual: %v", err)
 	}
 	lab.now = at(3, 0)
@@ -282,8 +283,8 @@ func TestMySQLAdapterUnseenManualRunClaimsTheNextRunOnly(t *testing.T) {
 		}
 	}
 	byID := refsByID(mustList(t, lab))
-	if got := byID["20261011-120000"].Type; got != backupTypeManual {
-		t.Errorf("the run two minutes after the request: %s", got)
+	if got := byID[asked.ID]; got.Type != backupTypeManual || got.StartedAt != "2026-10-11T12:00:00Z" {
+		t.Errorf("the run two minutes after the request: %+v", got)
 	}
 	if got := byID["20261011-060000"].Type; got != backupTypeScheduled {
 		t.Errorf("a run three hours after a request: %s", got)
@@ -403,5 +404,40 @@ func TestMySQLAdapterRetentionDropsTheRecordsOfPurgedRuns(t *testing.T) {
 	}
 	if left["job-purged"] || !left["job-kept"] || !left["other-project"] {
 		t.Errorf("records left %v", left)
+	}
+}
+
+// EXC-650: the id a manual backup is triggered under is the id the list,
+// the status read and a restore know it by, before and after its Job goes.
+func TestMySQLAdapterManualBackupKeepsItsTriggerID(t *testing.T) {
+	lab := newMySQLAdapterLab(t, sourceKeys()...)
+	lab.cronJob()
+	lab.now = at(12, 0).Add(-10 * time.Second)
+	ref, err := lab.adapter.TriggerManual(context.Background(), lab.source)
+	if err != nil {
+		t.Fatalf("TriggerManual: %v", err)
+	}
+	job := lab.mock.CRDs[mysqlSourceNS+"/"+ref.ID]
+	_ = unstructured.SetNestedField(job.Object, map[string]interface{}{
+		"succeeded": int64(1), "startTime": "2026-10-11T11:59:55Z", "completionTime": "2026-10-11T12:02:00Z"}, "status")
+	for _, phase := range []string{"while its Job is there", "after its Job went"} {
+		listed, ok := refsByID(mustList(t, lab))[ref.ID]
+		if !ok || listed.Status != backupStatusCompleted || listed.Type != backupTypeManual || listed.StartedAt != "2026-10-11T12:00:00Z" {
+			t.Errorf("%s: listed %+v (found %v)", phase, listed, ok)
+		}
+		if _, twice := refsByID(mustList(t, lab))["20261011-120000"]; twice {
+			t.Errorf("%s: the run is listed under its time as well", phase)
+		}
+		if status, err := lab.adapter.BackupStatusOf(context.Background(), lab.source, ref.ID); err != nil || status != backupStatusCompleted {
+			t.Errorf("%s: status %q %v", phase, status, err)
+		}
+		if err := lab.adapter.CheckRestoreTarget(context.Background(), lab.source, domain.RestoreRequest{BackupID: ref.ID}); err != nil {
+			t.Errorf("%s: restore by the trigger id: %v", phase, err)
+		}
+		target, err := lab.adapter.InPlaceRecoveryTarget(context.Background(), lab.source, domain.RestoreRequest{BackupID: ref.ID})
+		if err != nil || target[mysqlRestorePointKey] != "2026-10-11T12:00:00Z" {
+			t.Errorf("%s: in-place target %v %v", phase, target, err)
+		}
+		delete(lab.mock.CRDs, mysqlSourceNS+"/"+ref.ID)
 	}
 }

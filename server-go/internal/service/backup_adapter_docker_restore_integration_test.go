@@ -71,6 +71,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 		t.Fatalf("seed source: %v", err)
 	}
 	seedProjectOwner(ctx, t, srcID, pgPwd)
+	seedSourceEndUserAuth(ctx, t, srcID, pgPwd)
 	// Force a checkpoint so the basebackup captures the row.
 	_ = dockerExecPSQL(ctx, srcID, pgPwd, "CHECKPOINT;")
 
@@ -143,6 +144,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 		t.Fatalf("excalibase_app credentials missing from vault: %v", err)
 	}
 	assertRoleCanConnect(ctx, t, resp.Namespace, appCreds)
+	assertNothingTheSourceIssuedOpensTheCopy(ctx, t, resp.Namespace, srcID, src.Password)
 }
 
 // assertRoleCanConnect proves the password the platform filed in vault is the

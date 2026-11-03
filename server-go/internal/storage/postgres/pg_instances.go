@@ -417,6 +417,8 @@ var notServableStatuses = []string{
 	string(domain.StatusPendingDeletion),
 }
 
+// pgInstanceColumns is the select list its scanner reads, in order.
+// The queries spell it out as one literal; query_text_test pins them to it.
 const pgInstanceColumns = `
 	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
 	deployment_mode,
@@ -436,9 +438,68 @@ const pgInstanceColumns = `
 	storage_class, parameters,
 	deletion_scheduled_at, deletion_due_at, storage_size, no_database, mysql_version`
 
+const (
+	findInstanceByProjectIDSQL = `SELECT
+	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
+	deployment_mode,
+	host, read_only_host, port, database_name, username,
+	deletion_protection, pooler_enabled, pooler_host, ssl_mode,
+	webhook_url, postgres_version, documentdb, tags,
+	status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
+	deletion_step, deletion_error, deletion_delete_backups,
+	network_policy_enabled,
+	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
+	backup_enabled, backup_schedule, backup_retention_days,
+	metrics_endpoint, grafana_dashboard_url,
+	restored_from_project_id, restored_from_backup_id,
+	last_active_at, last_xact_count, pause_reason,
+	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
+	created_at, updated_at, last_health_check,
+	storage_class, parameters,
+	deletion_scheduled_at, deletion_due_at, storage_size, no_database, mysql_version
+	FROM database_instances WHERE project_id = $1`
+	findAllInstancesSQL = `SELECT
+	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
+	deployment_mode,
+	host, read_only_host, port, database_name, username,
+	deletion_protection, pooler_enabled, pooler_host, ssl_mode,
+	webhook_url, postgres_version, documentdb, tags,
+	status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
+	deletion_step, deletion_error, deletion_delete_backups,
+	network_policy_enabled,
+	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
+	backup_enabled, backup_schedule, backup_retention_days,
+	metrics_endpoint, grafana_dashboard_url,
+	restored_from_project_id, restored_from_backup_id,
+	last_active_at, last_xact_count, pause_reason,
+	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
+	created_at, updated_at, last_health_check,
+	storage_class, parameters,
+	deletion_scheduled_at, deletion_due_at, storage_size, no_database, mysql_version
+	FROM database_instances`
+	findInstancesByOwnerSQL = `SELECT
+	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
+	deployment_mode,
+	host, read_only_host, port, database_name, username,
+	deletion_protection, pooler_enabled, pooler_host, ssl_mode,
+	webhook_url, postgres_version, documentdb, tags,
+	status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
+	deletion_step, deletion_error, deletion_delete_backups,
+	network_policy_enabled,
+	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
+	backup_enabled, backup_schedule, backup_retention_days,
+	metrics_endpoint, grafana_dashboard_url,
+	restored_from_project_id, restored_from_backup_id,
+	last_active_at, last_xact_count, pause_reason,
+	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
+	created_at, updated_at, last_health_check,
+	storage_class, parameters,
+	deletion_scheduled_at, deletion_due_at, storage_size, no_database, mysql_version
+	FROM database_instances WHERE owner_id = $1`
+)
+
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
-	row := s.db.QueryRow(`SELECT`+pgInstanceColumns+`
-	FROM database_instances WHERE project_id = $1`, projectID)
+	row := s.db.QueryRow(findInstanceByProjectIDSQL, projectID)
 
 	inst, err := scanInstanceFrom(row)
 	if err == sql.ErrNoRows {
@@ -448,8 +509,7 @@ func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, err
 }
 
 func (s *Store) FindAll() ([]*domain.DatabaseInstance, error) {
-	rows, err := s.db.Query(`SELECT` + pgInstanceColumns + `
-	FROM database_instances`)
+	rows, err := s.db.Query(findAllInstancesSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -478,18 +538,27 @@ func (s *Store) FindAll() ([]*domain.DatabaseInstance, error) {
 // Deliberately excluded: the history tables (database_metrics, alerts,
 // backup_records, migration_records, restore_jobs, audit_log), which record
 // what happened rather than what the project can do.
-var projectOwnedTables = []string{
-	"project_cors_settings",
-	"project_app_network",
-	"edge_function_settings",
-	"edge_functions",
-	"edge_shared_files",
-	"backup_schedules",
-	"nats_credentials",
-	"storage_buckets", // storage_objects cascade from these
-	"storage_quota",
-	"project_members",
-	"access_tokens",
+var projectOwnedTables = []projectOwnedTable{
+	{"project_cors_settings", `DELETE FROM project_cors_settings WHERE project_id = $1`},
+	{"project_app_network", `DELETE FROM project_app_network WHERE project_id = $1`},
+	{"edge_function_settings", `DELETE FROM edge_function_settings WHERE project_id = $1`},
+	{"edge_functions", `DELETE FROM edge_functions WHERE project_id = $1`},
+	{"edge_shared_files", `DELETE FROM edge_shared_files WHERE project_id = $1`},
+	{"backup_schedules", `DELETE FROM backup_schedules WHERE project_id = $1`},
+	{"nats_credentials", `DELETE FROM nats_credentials WHERE project_id = $1`},
+	{"storage_buckets", `DELETE FROM storage_buckets WHERE project_id = $1`}, // storage_objects cascade from these
+	{"storage_quota", `DELETE FROM storage_quota WHERE project_id = $1`},
+	{"project_members", `DELETE FROM project_members WHERE project_id = $1`},
+	{"access_tokens", `DELETE FROM access_tokens WHERE project_id = $1`},
+	// Running counters, not history: a later project with this id starts from zero.
+	{"request_metric_totals", `DELETE FROM request_metric_totals WHERE project_id = $1`},
+	{"log_drains", `DELETE FROM log_drains WHERE project_id = $1`},
+}
+
+// projectOwnedTable pairs a table with its constant delete statement.
+type projectOwnedTable struct {
+	name      string
+	deleteSQL string
 }
 
 // Delete removes the project and everything filed under it.
@@ -501,9 +570,8 @@ func (s *Store) Delete(projectID string) error {
 	defer tx.Rollback()
 
 	for _, table := range projectOwnedTables {
-		// Table names come from the constant list above, never from input.
-		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE project_id = $1`, projectID); err != nil {
-			return fmt.Errorf("delete %s rows: %w", table, err)
+		if _, err := tx.Exec(table.deleteSQL, projectID); err != nil {
+			return fmt.Errorf("delete %s rows: %w", table.name, err)
 		}
 	}
 	if _, err := tx.Exec(`DELETE FROM database_instances WHERE project_id = $1`, projectID); err != nil {
@@ -513,8 +581,7 @@ func (s *Store) Delete(projectID string) error {
 }
 
 func (s *Store) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error) {
-	rows, err := s.db.Query(`SELECT`+pgInstanceColumns+`
-	FROM database_instances WHERE owner_id = $1`, ownerID)
+	rows, err := s.db.Query(findInstancesByOwnerSQL, ownerID)
 	if err != nil {
 		return nil, err
 	}

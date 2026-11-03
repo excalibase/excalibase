@@ -44,8 +44,8 @@ func TestDatabaseRoutesRefuseAMySQLProjectUnlessTheyServeIt(t *testing.T) {
 }
 
 // What MySQL projects are served: their lifecycle (EXC-583), their
-// logins (EXC-584) and their backups (EXC-586). WAL lag and the platform
-// backup schedule stay Postgres's.
+// logins (EXC-584), their backups (EXC-586) and their logs and metrics
+// (EXC-653). WAL lag and the platform backup schedule stay Postgres's.
 func TestMySQLLifecycleRoutesServeMySQL(t *testing.T) {
 	index, err := routepolicy.Index()
 	if err != nil {
@@ -64,6 +64,10 @@ func TestMySQLLifecycleRoutesServeMySQL(t *testing.T) {
 		{Method: "GET", Pattern: "/api/provision/{projectId}/backup/list"},
 		{Method: "POST", Pattern: "/api/provision/{projectId}/backup/restore"},
 		{Method: "GET", Pattern: "/api/provision/{projectId}/backup/restore/{jobId}"},
+		// EXC-653: logs search and CPU/memory, as on Postgres.
+		{Method: "GET", Pattern: "/api/provision/{projectId}/logs"},
+		{Method: "GET", Pattern: "/api/provision/{projectId}/metrics/current"},
+		{Method: "GET", Pattern: "/api/provision/{projectId}/metrics/history"},
 	} {
 		if row, ok := index[key]; !ok || !row.MySQL {
 			t.Errorf("%s does not serve MySQL projects", key)

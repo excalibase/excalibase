@@ -1,9 +1,13 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -102,5 +106,19 @@ func TestTenantIDFromContext_EmptyStringValue(t *testing.T) {
 	tenant, ok := TenantIDFromContext(ctx)
 	if ok {
 		t.Errorf("empty string value: got ok=true tenant=%q, want ok=false", tenant)
+	}
+}
+
+func TestTenantContext_LogLineCannotBeForged(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	req := newReqWithChiParam(t, map[string]string{"projectId": "p1\nforged=1"})
+	req.URL.Path = "/api/x\r\nforged=2"
+	TenantContext(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), req)
+
+	if lines := strings.Count(strings.TrimRight(buf.String(), "\n"), "\n"); lines != 0 || strings.Contains(buf.String(), "\r") {
+		t.Fatalf("request values split the log record: %q", buf.String())
 	}
 }

@@ -80,6 +80,13 @@ func buildMatrix(t *testing.T) (http.Handler, callers, callers) {
 // buildMatrixWith is buildMatrix under cfg, with deps adjusted before the router is built.
 func buildMatrixWith(t *testing.T, cfg config.AppConfig, adjust func(*handlerDeps)) (http.Handler, callers, callers) {
 	t.Helper()
+	router, who, admins, _ := buildMatrixPlatform(t, cfg, func(deps *handlerDeps, _ *fakePlatform) { adjust(deps) })
+	return router, who, admins
+}
+
+// buildMatrixPlatform is buildMatrixWith that also hands over the fake platform store.
+func buildMatrixPlatform(t *testing.T, cfg config.AppConfig, adjust func(*handlerDeps, *fakePlatform)) (http.Handler, callers, callers, *fakePlatform) {
+	t.Helper()
 	instances := fakestore.NewInstances()
 	instances.Create(&domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"})
 	instances.Create(&domain.DatabaseInstance{ProjectID: matrixProjectB, OrgID: matrixOrgB, Status: "ACTIVE"})
@@ -109,8 +116,8 @@ func buildMatrixWith(t *testing.T, cfg config.AppConfig, adjust func(*handlerDep
 	issue(admins, callerAdminSession, matrixAdminID, domain.AccessToken{Scopes: auth.ScopeSession})
 
 	deps := matrixDeps(t, instances)
-	adjust(deps)
-	return buildRouter(cfg, platform, instances, deps), who, admins
+	adjust(deps, platform)
+	return buildRouter(cfg, platform, instances, deps), who, admins, platform
 }
 
 // matrixDeps wires the handlers whose registration or reachable path the
@@ -123,16 +130,18 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 	mock := k8s.NewMockClient()
 	provSvc := service.NewProvisioningService(instances, provisioner.NewFactory(), mock)
 	return &handlerDeps{
-		provHandler:      handler.NewProvisioningHandler(provSvc, nil),
-		metricsHandler:   handler.NewMetricsHandler(service.NewMetricsService(instances, mock, dir)),
-		backupHandler:    handler.NewBackupHandler(service.NewBackupService(instances, mock, dir, nil)),
-		perfHandler:      handler.NewPerformanceHandler(service.NewPerformanceService(instances, mock)),
-		auditHandler:     handler.NewAuditHandler(service.NewAuditService(instances, mock)),
-		snapshotHandler:  handler.NewSnapshotHandler(service.NewSnapshotService(instances, mock, dir)),
-		migrationHandler: handler.NewMigrationHandler(service.NewMigrationService(instances, nil, dir)),
-		alertHandler:     handler.NewAlertHandler(service.NewAlertingService(dir)),
-		setupHandler:     handler.NewSetupHandler(service.NewOperatorSetupService(mock)),
-		pgHandler:        handler.NewParameterGroupHandler(&fakeParameterGroups{groups: map[string]*domain.ParameterGroup{}}),
+		provHandler:           handler.NewProvisioningHandler(provSvc, nil),
+		metricsHandler:        handler.NewMetricsHandler(service.NewMetricsService(instances, mock, dir)),
+		backupHandler:         handler.NewBackupHandler(service.NewBackupService(instances, mock, dir, nil)),
+		perfHandler:           handler.NewPerformanceHandler(service.NewPerformanceService(instances, mock)),
+		requestMetricsHandler: handler.NewRequestMetricsHandler(service.NewRequestMetricsService(nil, emptyRequestMetrics{}, instances)),
+		queryStatsHandler:     handler.NewQueryStatsHandler(service.NewQueryStatsService(instances, provSvc, nil, features.NewStatic(features.All()...))),
+		auditHandler:          handler.NewAuditHandler(service.NewAuditService(instances, mock)),
+		snapshotHandler:       handler.NewSnapshotHandler(service.NewSnapshotService(instances, mock, dir)),
+		migrationHandler:      handler.NewMigrationHandler(service.NewMigrationService(instances, nil, dir)),
+		alertHandler:          handler.NewAlertHandler(service.NewAlertingService(dir)),
+		setupHandler:          handler.NewSetupHandler(service.NewOperatorSetupService(mock)),
+		pgHandler:             handler.NewParameterGroupHandler(&fakeParameterGroups{groups: map[string]*domain.ParameterGroup{}}),
 		// The app store talks to a database that never connects: the matrix
 		// asserts authorization outcomes, and a failed query is a 500, which
 		// is not a gate refusal.
@@ -160,6 +169,14 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		rlMailSend:         custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		rlTokenCreate:      custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		rlOrgCreate:        custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		rlMetricsScrape:    custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Minute),
+		// No platform DB: past the gates both answer from empty fakes.
+		metricsKeysHandler:     handler.NewMetricsKeysHandler(fakestore.NewTokens(), nil),
+		metricsEndpointHandler: handler.NewMetricsEndpointHandler(storedTotals{}),
+		logDrainsHandler:       handler.NewLogDrainsHandler(matrixLogDrains(instances), nil),
+		hostMonitoringHandler:  matrixHostMonitoring(),
+		majorUpgradeHandler:    handler.NewMajorUpgradeHandler(matrixMajorUpgrades{}, nil),
+		logForwarderHandler:    handler.NewLogForwarderHandler(matrixLogDrains(instances), "matrix-forwarder-token"),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),
@@ -205,6 +222,7 @@ var projectRoutes = []projectRoute{
 	{"backup trigger", http.MethodPost, "/api/provision/proj-a/backup/trigger", domain.OrgRoleAdmin},
 	{"migrations", http.MethodGet, "/api/provision/proj-a/migrations/", domain.OrgRoleDeveloper},
 	{"permission document", http.MethodGet, "/api/provision/proj-a/permissions/", domain.OrgRoleDeveloper},
+	{"advisors", http.MethodGet, "/api/provision/proj-a/advisors", domain.OrgRoleDeveloper},
 	{"schema browse", http.MethodGet, "/api/schema/proj-a/tables", domain.OrgRoleViewer},
 	{"schema ddl", http.MethodPost, "/api/schema/proj-a/ddl", domain.OrgRoleDeveloper},
 	{"functions list", http.MethodGet, "/api/projects/proj-a/functions/", domain.OrgRoleViewer},
@@ -425,4 +443,17 @@ func matrixTemplateHandler(t *testing.T, instances *fakestore.Instances) *handle
 	return handler.NewAppTemplateHandler(service.NewAppTemplateService(catalog, service.AppTemplateDeps{
 		Apps: apphost.NewPostgresAppStore(offlineDB(t)), Projects: instances, Plans: plans,
 	}))
+}
+
+// matrixLogDrains has no vault or log store: past the gates a create is
+// refused and a list is empty.
+func matrixLogDrains(instances *fakestore.Instances) *service.LogDrainService {
+	return service.NewLogDrainService(service.LogDrainDeps{Store: fakestore.NewLogDrains(),
+		Instances: func(projectID string) (*domain.DatabaseInstance, error) {
+			inst, err := instances.FindByProjectID(projectID)
+			if err != nil || inst == nil {
+				return nil, service.ErrProjectNotFound
+			}
+			return inst, nil
+		}})
 }

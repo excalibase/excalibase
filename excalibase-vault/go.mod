@@ -1,6 +1,6 @@
 module github.com/excalibase/excalibase-vault
 
-go 1.25.11
+go 1.26.10
 
 require (
 	github.com/excalibase/provisioning-poc v0.0.0
@@ -24,7 +24,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.36.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.3 // indirect
 	github.com/aws/smithy-go v1.27.3 // indirect
-	github.com/hashicorp/vault v1.15.4 // indirect
 )
 
 replace github.com/excalibase/provisioning-poc => ../server-go

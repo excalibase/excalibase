@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -35,6 +36,8 @@ type Settings struct {
 	DataPlaneURL string
 	// Edge, on a single host, is where the platform's own names are served; nil on Kubernetes.
 	Edge *EdgeRoute
+	// Features decides which dark tools are offered; nil offers none.
+	Features features.Flags
 }
 
 // AuditLogger records one entry per tool call.
@@ -90,14 +93,14 @@ func (h *Handler) serverFor(r *http.Request) *mcp.Server {
 	if !ok {
 		return nil
 	}
-	return newServer(h.env, caller)
+	return newServer(r.Context(), h.env, caller)
 }
 
-func newServer(e *env, caller Caller) *mcp.Server {
+func newServer(ctx context.Context, e *env, caller Caller) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "excalibase", Version: "1.0.0"},
 		&mcp.ServerOptions{Instructions: instructions})
 	for _, entry := range catalogue() {
-		if entry.offeredTo(caller) {
+		if entry.offeredTo(caller) && (entry.feature == "" || features.Enabled(ctx, e.settings.Features, entry.feature)) {
 			entry.add(server, e, caller)
 		}
 	}

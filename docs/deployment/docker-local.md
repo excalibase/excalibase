@@ -41,6 +41,11 @@ Holding the Docker socket is root on the host, so provisioning does not get it.
   profiles, sysctls, another container's volumes, a network other than
   `excalibase-tenants`, a port on any address but `127.0.0.1`, or any
   HostConfig field the proxy does not know;
+- a request body is refused if any object in it names a key twice, even in
+  another case (`"Type"` and `"type"`): the engine would read a different one
+  than the proxy checked (label or port keys that differ only in case are
+  refused too). The engine gets the proxy's own encoding of the
+  body it checked, never the caller's bytes;
 - image pulls are allowed; listing containers, networks, volumes, builds,
   swarm and everything else is refused.
 
@@ -112,7 +117,7 @@ SSH tunnel).
 | `EDGE_BIND_ADDRESS` | `0.0.0.0` | Host address the edge listens on |
 | `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` | `80` / `443` | Host ports of the edge |
 | `REGISTRATION_MODE` | `invite` | `open` lets anyone who reaches Studio sign up |
-| `ADMIN_PASSWORD` | generated | First admin's password (12+ characters) |
+| `ADMIN_PASSWORD` | generated | First admin's password (12+ characters). Set it again when the bootstrap log warns that the service tokens need re-minting after an upgrade |
 | `TAG` | the release this bundle came with (`1.5.0`) | Image tag of the platform services; set it to move to another release |
 | `AIO_EDGE_SUBNET` / `AIO_DATAPLANE_SUBNET` | `10.203.250.0/28` / `10.203.250.16/28` | Change if they clash with your network |
 
@@ -199,7 +204,9 @@ docker compose up -d
 `--app-domain run.example.org` serves apps elsewhere than `apps.<domain>`.
 Without gVisor provisioning refuses to start with apps on and says so;
 `--app-sandbox none` (`APP_SANDBOX_RUNTIME=none`) runs apps without it, with
-every capability dropped but `NET_BIND_SERVICE`: their code then shares the
+every capability dropped but `NET_BIND_SERVICE` and the five an image needs to
+step down from root to its own user (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`,
+`SETGID`): their code then shares the
 host's kernel directly. Choose it only for code you trust.
 
 Each app is a container named `excalibase-app-...`, labelled
@@ -216,6 +223,7 @@ with the edge's own CA (`EXCALIBASE_TLS=internal`), as soon as it is routed.
 | Between projects | NetworkPolicy | one internal network per project (`excalibase-net-<project>`): only its apps, its database and the edge are on it |
 | Between a project's apps | closed until the project turns its private network on | always open: they share the project's network, and the private-network switch is not offered |
 | Internet from an app | allowed, private ranges denied | none; `APP_EGRESS=internet` in `.env` gives every project's network a route out (Podman: an isolated bridge) |
+| The host's own services | not reachable | not reachable on Docker 28 or later without egress (see Host isolation) |
 | Disk | a volume of the size asked | a named volume (`excalibase-vol-...`) on the host's disk; the size is recorded, not enforced by the filesystem |
 | Readiness | kubelet probe | the platform's probe, copied into the container, on the app's health check path |
 | Rollout | rolling update; with a disk, recreate | the same: new containers beside the old, the route moves when they are ready |
@@ -229,6 +237,38 @@ docker volume ls --filter label=excalibase.managed=true
 docker compose exec edge ls /etc/caddy/apps            # one route file per app
 ```
 
+**Host isolation (EXC-676).** A bridge network normally has an address on the
+host, and a container can connect through it to anything listening on all of
+the host's addresses (sshd, a local database), internal network or not. On
+Docker 28 or later provisioning makes project networks with no address on the
+host (`com.docker.network.bridge.gateway_mode_ipv4=isolated`, and `_ipv6` for
+a daemon that enables IPv6 by default); containers on a network still reach
+each other and the edge reaches its apps by name. It checks this at start and
+logs `WARN: app networks: ...` where it cannot hold:
+
+- Docker before 28: upgrade, or drop new connections from container bridges to
+  the host:
+
+  ```bash
+  iptables  -I INPUT -i br-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+  ip6tables -I INPUT -i br-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+  ```
+
+  This covers every Docker network on the host, the bundle's own included
+  (nothing in the bundle connects to the host; anything else of yours using
+  `host-gateway` would stop working). Persist the rules (`iptables-persistent`,
+  or your firewalld/nftables setup): they are gone after a reboot.
+- `APP_EGRESS=internet`: an isolated gateway cannot route out, so egress
+  networks keep their address on the host; add the same rules.
+
+Upgrading from a release before this one: on start, and on every network
+reconcile, provisioning remakes each older project network (and any made with
+`APP_EGRESS` other than it is now) (an engine cannot
+change a network's options): it takes the apps, the database and the edge off,
+removes the network, makes it again and puts them back. Apps are not restarted
+and no data is touched; open connections to an app are dropped once, and an
+app that bound to its old container address (not `0.0.0.0`) needs a redeploy.
+
 Deleting a project removes its apps' containers, disks, routes and network.
 Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
 `log-opts` (`max-size`, `max-file`).
@@ -240,6 +280,55 @@ Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
 | `APP_SANDBOX_RUNTIME` | `runsc` | `none` runs apps without gVisor |
 | `APP_EGRESS` | `none` | `internet` lets apps call out |
 | `APP_DOMAIN_RESOLVER` | the host's | `host:port` of the DNS server custom domains' CNAMEs are checked against |
+
+## Git builds of sites
+
+Sites (a project's built frontend) need a Cloudflare account on every install
+(ADR 0043); without one there are no Sites and no builds. With Cloudflare
+configured, a site can deploy on every push to a GitHub repository, built on
+this host (EXC-671). Off by default; in `.env`:
+
+```bash
+SITES_GIT_BUILDS_ENABLED=true
+FEATURE_SINGLEHOSTBUILDS=true
+SITES_GITHUB_APP_ID=...            # your GitHub App, as on Kubernetes
+SITES_GITHUB_APP_SLUG=...
+SITES_GITHUB_CLIENT_ID=...
+SITES_GITHUB_CLIENT_SECRET=...
+SITES_GITHUB_WEBHOOK_SECRET=...
+# the App's private key: its PEM text in SITES_GITHUB_APP_PRIVATE_KEY, or a file
+# mounted into provisioning and named in SITES_GITHUB_APP_PRIVATE_KEY_FILE
+SITES_GITHUB_APP_PRIVATE_KEY_FILE=/run/excalibase-github/app.pem
+```
+
+Each build is a short chain of containers (`excalibase-build-<id>-*`): clone,
+then install and build, then pack the output, which provisioning deploys the
+way an upload is deployed. Every step runs under `APP_SANDBOX_RUNTIME` (gVisor,
+installed as in Apps; `none` runs builds without it, for trusted code only),
+with every capability dropped, a read-only root, uid 1000, the plan's CPU and
+memory (no swap) and at most 4096 processes. The git token reaches only the
+clone step; the site's variables and build-visible secrets only the build step.
+
+| | Kubernetes | Single host |
+|---|---|---|
+| Network | NetworkPolicy: ports 80/443 to public addresses | the build's own internal network, no route anywhere; a proxy beside it (`excalibase-build-<id>-egress`, from provisioning's image) lets HTTP(S) through to public IPv4 addresses on ports 80/443 and refuses private, metadata and other ranges. Tools that ignore `HTTPS_PROXY` get no network |
+| Disk | evicted past the plan's disk | measured every 10 s by a watcher container beside the steps (no network, the volume read-only; a folder made unreadable fails the build), stopped past the plan's disk, or when the host has under 2 GiB free |
+| Time, memory | Job deadline, OOM | the same limits, named the same way in Studio; the engine kills each step at the time limit even if provisioning is down |
+| Logs | the kubelet's rotation | each container's log capped at 2 × 10 MB |
+| Cache | none yet | none yet |
+
+**Host firewall.** Build networks get the same isolated gateway as project
+networks (see Host isolation) wherever the engine takes it. Docker before 28
+refuses it: provisioning then makes build networks without it and logs
+`WARN: ... build networks an address on the host`, and a build could connect
+to anything listening on all of the host's addresses. Upgrade Docker, or add
+the firewall rule under Host isolation; on Podman, the same for `podman+`.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `SITES_BUILD_SLOTS` | `1` | Builds at once on this host |
+| `SITES_BUILD_EGRESS_ALLOW` | empty | `host:port` entries builds may reach although private (a git server or registry on your LAN) |
+| `SITES_BUILD_NODE_IMAGE` | Docker Hub's, pinned | a mirror of the Node images builds run in |
 
 ## DocumentDB projects
 
@@ -309,6 +398,141 @@ docker port excalibase-<project>-postgres           # 5432 and 10260 on 127.0.0.
 |---|---|---|
 | `DOCUMENTDB_ENABLED` | unset (`true` with `--documentdb`) | DocumentDB projects on this host |
 
+## Host monitoring
+
+Studio's Host page (Platform, Host) shows the machine and every container on it,
+the platform's and the projects', when the install asks for it (EXC-670):
+
+```bash
+./init.sh --domain example.com --admin-email you@example.com --host-metrics
+docker compose up -d
+```
+
+Once a minute provisioning records the host's CPU, memory and swap, the disk
+holding the engine's storage, disk reads and writes, network traffic, load and
+temperatures (where the machine has sensors), and each container's CPU, memory
+against its limit, and network. Host figures are kept 30 days; container
+figures every minute for 7 days, then one every 10 minutes up to 30 days. A
+project's Metrics page shows its database's CPU, memory, connections and size,
+and its own containers; members of a project see only that project's. The
+project's Logs page searches what the engine kept of its database container's
+output (the last 5000 lines at most; nothing is stored beyond the engine's own log).
+
+No agent is installed. The host figures come from what an unprivileged
+container already sees of `/proc` and `/sys`; `--host-metrics` adds one
+read-only mount, the host's `/proc/1/net/dev`, for the network counters (without
+it the network figure is the containers' sum, and Studio says so). Container
+figures come through the engine proxy, which answers a one-sample stats call
+for a container provisioning manages, and for the platform's own containers by
+their exact names a stats call and their state only, never their settings,
+logs or a shell.
+
+Alerts: in Studio's Host page, Alert settings. Host CPU, memory, disk (default
+90 %), temperature (85 °C), 5-minute load and network, averaged over a window
+(5 minutes); and a platform container, or the database of an active project,
+that stops, goes missing or reports unhealthy for the down time (2 minutes).
+Alerts show on the Alerts page and go to the email recipients you list (through
+the install's email settings) and to one webhook: a public `https://` URL on
+port 443, sent JSON with a `text` field that Slack, Mattermost and Google Chat
+read; the URL is kept in the vault and shown by its host only.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_HOSTMETRICS` | unset (`true` with `--host-metrics`) | host monitoring, its Studio pages and alerts |
+| `APP_EGRESS_EXTRA_DENY_CIDRS` | unset | the host's own public ranges, comma-separated, refused to the alert webhook and apps |
+| `HOST_METRICS_NET_DEV_SOURCE` | unset (`/proc/1/net/dev` with `--host-metrics`) | the host file mounted for network counters |
+
+## Stored log search
+
+A project's Logs page searches the bundled Loki when the install asks for it
+(EXC-672), so its database's lines are kept for the retention period and still
+found after the container is restored, upgraded or removed:
+
+```bash
+./init.sh --domain example.com --admin-email you@example.com --host-logs
+docker compose up -d
+```
+
+`--host-logs` writes `FEATURE_HOSTLOGS=true` and `COMPOSE_PROFILES=hostlogs`,
+which starts the `loki` service (the same Loki and configuration Kubernetes
+uses, `loki/loki.yaml`). There is no collector: provisioning follows each
+project database container's output through the engine proxy it already uses
+and stores it under that project's labels; apps, watchers and the platform's
+own containers are not stored.
+Loki sits alone with provisioning on the internal `excalibase-logs` network.
+The Logs page reads the stored lines with the Kubernetes query code and falls
+back to the engine's own log until the first lines arrive.
+
+On an existing install: `git pull`, add the two lines above to `.env`, and
+`docker compose up -d`; the engine's log of each running project container is
+read back no further than the retention. To stop: remove the two lines and
+`docker compose --profile hostlogs rm -sf loki`; `docker volume rm
+excalibase-platform-logs` deletes the stored lines.
+
+Disk: each project stores at most `HOST_LOGS_DAILY_MB` (64) MiB of log text a
+UTC day; past it one notice line is stored and the rest of the day is skipped.
+Lines are cut at 16 KiB. Text compresses about 5-10 times, so 10 busy projects
+kept 7 days take about 0.5-1 GiB. Loki is limited to 512 MiB of memory and half
+a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_HOSTLOGS` | unset (`true` with `--host-logs`) | store and search project logs in the bundled Loki |
+| `COMPOSE_PROFILES` | unset (`hostlogs` with `--host-logs`) | starts the `loki` service |
+| `HOST_LOGS_DAILY_MB` | `64` | each project's stored log text per UTC day |
+| `LOG_RETENTION` | `168h` | how long lines are kept (whole hours, at least 24h) |
+| `FEATURE_LOGRETENTION` | unset | keep each project's lines for its plan instead: `LOG_RETENTION_FREE` (`24h`), `LOG_RETENTION_STANDARD` and `LOG_RETENTION_ENTERPRISE` (`168h`) |
+
+## End-user auth hooks
+
+```bash
+./init.sh --domain example.com --admin-email you@example.com --auth-hooks
+```
+
+Turns on `FEATURE_AUTHHOOKS`: a project Admin points sign-up and sign-in at
+their own HTTPS endpoint, called signed by the auth service. Hook calls never
+reach private ranges, but this host's public address is public, so it must be
+listed too. `init.sh` writes what the install's names resolve to plus the
+global addresses on the host's interfaces (`ip`; without it, a warning), and
+warns when a name resolves somewhere else (a CDN, proxy or NAT); the stack
+does not start with hooks on and the list empty, as the Helm chart refuses to
+install without `auth.hooks.extraDenyCIDRs`.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_AUTHHOOKS` | unset (`true` with `--auth-hooks`) | end-user auth hooks |
+| `AUTH_HOOKS_DENY_CIDRS` | unset (the names' and interfaces' addresses with `--auth-hooks`) | the host's own public ranges, comma-separated CIDRs, refused to hook calls; behind NAT, add the public address |
+
+## Request charts and slow queries
+
+A project's Requests and Slow queries pages (Monitoring) work on a single host
+as on Kubernetes (EXC-673), each behind its own setting in `.env`:
+
+```bash
+FEATURE_REQUESTMETRICS=true   # Requests: calls, errors, latency per project
+FEATURE_SLOWQUERIES=true      # Slow queries: the project's costliest statements
+```
+
+then `docker compose up -d`. Requests: graphql and auth count each project's
+calls on a second port bound only to an internal network, `excalibase-metrics`,
+that only provisioning, graphql and auth join; tenant containers cannot reach
+it. Provisioning reads the counts once a minute and keeps a row per project and
+minute with traffic for 7 days. Host monitoring is not needed.
+
+Slow queries: a Postgres project created with the setting on keeps
+`pg_stat_statements` (up to 5000 statements, utility statements such as
+`ALTER ROLE ... PASSWORD` never kept). A project created before turns it on
+from its Slow queries page (Admin), which restarts its database once (a few
+seconds). Statistics are read as the superuser in the database server's own
+`postgres` database, never the project's, and show only the project's own
+roles' statements. MySQL projects read their statement digests with no
+restart. DocumentDB projects have no slow-queries page on a single host.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_REQUESTMETRICS` | unset (off) | request counting in graphql and auth, and the Requests page |
+| `FEATURE_SLOWQUERIES` | unset (off) | statement statistics for new Postgres projects, and the Slow queries page |
+
 ## Refusals you may see
 
 - `run ./init.sh first` — a required value is missing from `.env`.
@@ -321,6 +545,8 @@ docker port excalibase-<project>-postgres           # 5432 and 10260 on 127.0.0.
 - `preflight: ... is a known default` / `must be at least 32 hex characters` /
   `must all differ` — the stack does not start on a weak or reused secret.
   `docker compose logs preflight` names it.
+- `preflight: FEATURE_AUTHHOOKS needs AUTH_HOOKS_DENY_CIDRS` — auth hooks are on
+  and nothing keeps them off this host: list its public addresses.
 
 ## What works on a single host today
 
@@ -333,6 +559,10 @@ docker port excalibase-<project>-postgres           # 5432 and 10260 on 127.0.0.
 | SDK keys (publishable, secret) | yes |
 | Containers (app hosting) | yes, with `--apps` (see Apps) |
 | DocumentDB projects | yes, with `--documentdb` (see DocumentDB projects) |
+| Host and container monitoring, alerts | yes, with `--host-metrics` (see Host monitoring) |
+| Stored log search with retention | yes, with `--host-logs` (see Stored log search) |
+| Request charts, slow queries | yes, with `FEATURE_REQUESTMETRICS` / `FEATURE_SLOWQUERIES` (see Request charts and slow queries); not for DocumentDB slow queries |
+| Sites: upload deploys, and git builds with `FEATURE_SINGLEHOSTBUILDS` | where Cloudflare is configured (see Git builds of sites) |
 | Edge functions, realtime | no (Kubernetes only) |
 | High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
 
@@ -350,7 +580,15 @@ engine has `runsc`, else with `--app-sandbox none`, which the run prints).
 created through Studio's API, mongosh on the host inserting and finding over
 verified TLS, Studio's document browser, a read-only Mongo user, pause, resume,
 a backup restored into a new project that serves Mongo again, and a delete.
-`MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
+`HOST_METRICS=1` installs with `--host-metrics` and walks host monitoring: host
+and container samples, the database's figures, a stopped database raising its
+project's alert and the restart resolving it. `HOST_LOGS=1` installs with
+`--host-logs` and walks stored log search: a line a project's database writes is
+stored in Loki under that project's labels, found by its search and never by a
+second project's, and still found after Loki and provisioning restart and the
+database container is removed (it runs last). `REQUEST_METRICS=1` turns both on and walks them: a project's calls in its
+own charts and not another's, a slow statement in its own slow queries only,
+and a tenant container unable to open the counters' ports. `MANUAL_UNSEAL=1` installs with `--manual-unseal` and also
 initializes, restarts and unseals the vault with the CLI. It destroys the bundle's containers and
 volumes: never run it on an install you keep. CI runs it on every change to the
 bundle or the engine path; for Podman, `COMPOSE="podman compose" DOCKER=podman

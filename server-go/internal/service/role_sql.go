@@ -197,11 +197,30 @@ CREATE EVENT TRIGGER excalibase_guard_reserved_schemas ON ddl_command_end
   EXECUTE FUNCTION excalibase.guard_reserved_schemas();
 `
 
+// authSchemaRevokeSQL takes from appRole whatever it holds in the auth schema:
+// its own grants, what it gets through PUBLIC or membership of authRole, and
+// the default privileges that would hand it the auth service's next table. A
+// superuser's REVOKE acts as each object's owner, so grants auth_admin made go
+// too.
+func authSchemaRevokeSQL(appRole, authRole string) string {
+	return fmt.Sprintf(`REVOKE ALL ON ALL TABLES IN SCHEMA auth FROM %[1]s, PUBLIC;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA auth FROM %[1]s, PUBLIC;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA auth FROM %[1]s;
+REVOKE ALL ON SCHEMA auth FROM %[1]s, PUBLIC;
+REVOKE %[2]s FROM %[1]s;
+ALTER DEFAULT PRIVILEGES IN SCHEMA auth REVOKE ALL ON TABLES FROM %[1]s;
+-- The auth service creates its tables as auth_admin after registration.
+ALTER DEFAULT PRIVILEGES FOR ROLE %[2]s IN SCHEMA auth REVOKE ALL ON TABLES FROM %[1]s;
+ALTER DEFAULT PRIVILEGES FOR ROLE %[2]s IN SCHEMA auth REVOKE ALL ON SEQUENCES FROM %[1]s;`, appRole, authRole)
+}
+
 // BuildProjectRoleSQL produces the role-creation SQL run as the postgres
 // superuser at provisioning time. Output:
 //
 //   - auth_admin   — owns the auth schema (used by excalibase-auth)
-//   - excalibase_app — DML on public, CREATE on the database, read-only on auth. NO REPLICATION.
+//   - excalibase_app — DML on public, CREATE on the database. NO REPLICATION.
+//     Nothing in auth: only auth_admin reaches the end users' tables, and the
+//     grants an older registration or backup gave are revoked (EXC-628).
 //     Customer-written SQL runs as this role, so it holds no write, CREATE or
 //     ownership in the excalibase schema (EXC-623); it only calls the guarded
 //     functions there.
@@ -253,11 +272,7 @@ GRANT ALL ON ALL TABLES IN SCHEMA public TO %s;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %s;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO %s;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %s;
-GRANT USAGE ON SCHEMA auth TO %s;
-GRANT SELECT ON ALL TABLES IN SCHEMA auth TO %s;
-ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
--- The auth service creates its tables as auth_admin after registration.
-ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
+%s
 
 
 %s
@@ -341,10 +356,9 @@ GRANT EXECUTE ON FUNCTION excalibase.set_realtime_table(text, text, boolean) TO 
 		appRole, safeAppPass, // excalibase_app DO block
 		dbIdent, appRole, // GRANT CREATE ON DATABASE
 		appRole, appRole, appRole, appRole, appRole, // GRANT public
-		appRole, appRole, appRole, // GRANT auth read
-		authRole, appRole, // auth_admin's tables readable
-		reservedSchemaLockdownSQL(roleApp), // reserved excalibase schema: USAGE only
-		watcherRole, safeWatcherPass,       // cdc_watcher DO block
+		authSchemaRevokeSQL(appRole, authRole), // nothing in auth (EXC-628)
+		reservedSchemaLockdownSQL(roleApp),     // reserved excalibase schema: USAGE only
+		watcherRole, safeWatcherPass,           // cdc_watcher DO block
 		watcherRole, watcherRole, dbIdent, // cdc_watcher registry schema + search_path
 		pubName, pubName, // pubname check + CREATE PUBLICATION
 		pubIdent,                             // ALTER PUBLICATION ... OWNER TO

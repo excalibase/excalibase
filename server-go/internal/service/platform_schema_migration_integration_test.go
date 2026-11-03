@@ -12,9 +12,9 @@ import (
 )
 
 // EXC-623: apply_migration runs customer SQL as excalibase_app. On a
-// database registered with the platform's role SQL, a migration may read the
-// project's auth users and build its own schema, and any migration that
-// writes the excalibase schema fails without touching it.
+// database registered with the platform's role SQL, any migration that writes
+// the excalibase schema fails without touching it, and one that reads the
+// project's auth users is refused (EXC-628) and leaves nothing behind.
 func TestApplyMigration_CannotWriteThePlatformSchema(t *testing.T) {
 	c := newPlatformSchemaCase(t)
 	c.register(t)
@@ -67,11 +67,11 @@ func TestApplyMigration_CannotWriteThePlatformSchema(t *testing.T) {
 
 	rec := apply("profiles from auth users", `CREATE TABLE public.profiles (user_id int PRIMARY KEY, email text);
 		INSERT INTO public.profiles SELECT id, email FROM auth.users`)
-	if rec.Status != "APPLIED" {
-		t.Fatalf("a migration reading auth into the project's own table failed: %s", rec.ErrorMessage)
+	if rec.Status != "FAILED" || !strings.Contains(rec.ErrorMessage, "permission denied") {
+		t.Fatalf("a migration reading auth users = %s: %s", rec.Status, rec.ErrorMessage)
 	}
-	if got := scanString(t, c.admin, `SELECT email FROM public.profiles`); got != "ada@example.test" {
-		t.Fatalf("profiles = %q", got)
+	if scanBool(t, c.admin, `SELECT to_regclass('public.profiles') IS NOT NULL`) {
+		t.Fatal("the refused auth read left its profiles table behind")
 	}
 	if n := c.platformObjectsNotOwnedBySuperuser(t); n != 0 {
 		t.Fatalf("%d object(s) in the excalibase schema belong to a non-superuser", n)

@@ -51,6 +51,19 @@ describe('EndUserRoles', () => {
     expect(api.get).toHaveBeenCalledWith('/projects/p1/end-users/', { params: { limit: 100 } });
   });
 
+  test('a guest is named by its id and marked as a guest', async () => {
+    renderPanel('admin', Promise.resolve({ data: { users: [{ id: 9, email: '', role: 'guest', allowedRoles: ['guest'], isGuest: true }], total: 1 } }));
+    const guest = await row(9);
+    expect(within(guest).getByText('Guest 9')).toBeInTheDocument();
+    expect(within(guest).getByTestId('guest-badge')).toBeInTheDocument();
+    expect(within(guest).getByRole('button', { name: 'Change role of Guest 9' })).toBeInTheDocument();
+  });
+
+  test('an account with an address carries no guest badge', async () => {
+    renderPanel();
+    expect(within(await row(3)).queryByTestId('guest-badge')).not.toBeInTheDocument();
+  });
+
   test('a developer is told only admins can manage roles, and nothing is fetched', async () => {
     renderPanel('developer');
     expect(await screen.findByText(/only project admins and owners/i)).toBeInTheDocument();

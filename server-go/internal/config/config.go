@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -111,6 +112,17 @@ type AppConfig struct {
 	// /logs endpoint uses Loki instead of kubectl-exec tail (which hangs
 	// on busy minikube clusters and only sees logs since pod start).
 	LokiURL string
+
+	// LogForwarderToken is the shared token the log-forwarder pod pulls
+	// batches with (EXC-658); empty refuses every pull.
+	LogForwarderToken string
+
+	// RequestMetricsTargets are scraped for the request charts (EXC-656).
+	RequestMetricsTargets []string
+	// HostMetrics is where single-host monitoring reads (EXC-670).
+	HostMetrics HostMetrics
+	// HostLogs is a single host's stored log search (EXC-672).
+	HostLogs HostLogs
 
 	// FnEgressDefaultHosts is the operator-level outbound allowlist every
 	// project's edge functions get in addition to their own setting:
@@ -298,6 +310,9 @@ type AppConfig struct {
 	// gateway plugin (chart value documentdb.enabled). Off unless set to
 	// "true": a DocumentDB project is refused rather than left to fail (EXC-394).
 	DocumentDBEnabled bool
+	// MySQLEnabled is whether the MOCO operator is installed (chart value
+	// mysql.enabled). Off unless "true"; the chart grants MOCO rights only then.
+	MySQLEnabled bool
 	// AppHostingEnabled mounts the customer-application routes (EXC-377).
 	// App hosting is built incrementally on main and must stay unreachable in
 	// any install until the epic is finished, so it defaults off; only the
@@ -312,6 +327,8 @@ type AppConfig struct {
 	// DarkFeatures are the features shipped dark that this install turned on
 	// (EXC-554); feature code asks Features(), never this list.
 	DarkFeatures []features.Feature
+	// LogRetention is how long Loki keeps each plan's project logs (EXC-659).
+	LogRetention LogRetention
 	// AppRuntimeClass names the sandbox RuntimeClass every app pod runs under.
 	AppRuntimeClass string
 
@@ -409,6 +426,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateAppLocalRegistries(); err != nil {
 		return err
 	}
+	if err := validateRequestMetricsTargets(c.RequestMetricsTargets); err != nil {
+		return err
+	}
 	if err := c.validateSites(); err != nil {
 		return err
 	}
@@ -489,6 +509,10 @@ func load() AppConfig {
 		EmailReplyTo:                   envOr("EMAIL_REPLY_TO", ""),
 		StoragePublicURL:               envOr("STORAGE_PUBLIC_URL", ""),
 		LokiURL:                        envOr("LOKI_URL", ""),
+		LogForwarderToken:              os.Getenv("LOG_FORWARDER_TOKEN"),
+		RequestMetricsTargets:          loadRequestMetricsTargets(),
+		HostMetrics:                    loadHostMetrics(),
+		HostLogs:                       loadHostLogs(),
 		PromURL:                        envOr("PROM_URL", ""),
 		FnEgressDefaultHosts:           envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),
 		CapacityHeadroomPercent:        envInt("CAPACITY_HEADROOM_PERCENT", 15),
@@ -551,7 +575,9 @@ func load() AppConfig {
 		SitesEnabled:                   os.Getenv("SITES_ENABLED") == "true",
 		Sites:                          loadSites(),
 		DarkFeatures:                   loadDarkFeatures(),
+		LogRetention:                   loadLogRetention(),
 		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
+		MySQLEnabled:                   os.Getenv("MYSQL_ENABLED") == "true",
 		AppRuntimeClass:                envOr("APP_RUNTIME_CLASS", "gvisor"),
 		AppEgressExtraDenyCIDRs:        envEgressExtraDenyCIDRs("APP_EGRESS_EXTRA_DENY_CIDRS"),
 		AppDomain:                      os.Getenv("APP_DOMAIN"),
@@ -648,8 +674,15 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: "SITES_GIT_BUILDS_ENABLED", Field: "SitesGitBuildsEnabled", Enabled: c.SitesGitBuildsEnabled},
 		{Env: "APP_WILDCARD_TLS", Field: "AppWildcardTLS", Enabled: c.AppWildcardTLS},
 		{Env: "DOCUMENTDB_ENABLED", Field: "DocumentDBEnabled", Enabled: c.DocumentDBEnabled},
+		{Env: "MYSQL_ENABLED", Field: "MySQLEnabled", Enabled: c.MySQLEnabled},
 		{Env: "TENANT_STORAGE_REQUIRE_SIZED", Field: "TenantStorageRequireSized", Enabled: c.TenantStorageRequireSized},
 	}
+}
+
+// MySQLInstalled is whether MySQL clusters may exist and count against the
+// storage budget: MOCO installed, or MySQL projects switched on (which need it).
+func (c AppConfig) MySQLInstalled() bool {
+	return c.MySQLEnabled || c.Features().Enabled(context.Background(), features.MySQL)
 }
 
 // CheckStudioURL refuses a missing or malformed STUDIO_URL. Emailed links are
