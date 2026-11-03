@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -153,5 +154,58 @@ func TestMakeRoom_FailsWhenTheRegistryCannotAnswer(t *testing.T) {
 	sweeper.live = func(context.Context, string) (bool, error) { return false, errors.New("db down") }
 	if err := sweeper.Fits(context.Background(), project, incoming, 20_000); err == nil {
 		t.Error("the running images unknown")
+	}
+}
+
+// recordBuilds adds images first..last pushed inside the grace, an hour apart
+// with last the newest, each deployed and succeeded; the app runs last.
+func recordBuilds(t *testing.T, registry *fakeRegistryAdmin, deploys *fakeDeployStore, apps *fakeAppStoreForDeploy, first, last int) {
+	t.Helper()
+	app := sampleDeployApp()
+	for n := first; n <= last; n++ {
+		addPush(t, registry, n, time.Duration(last-n)*time.Hour+time.Minute, 100)
+		image := appregistrytestHost + "/" + quotaRepo() + "@" + sweepDigest(n)
+		deploys.deploys = append(deploys.deploys, &apphost.Deploy{ID: fmt.Sprintf("d%d", n), ProjectID: app.ProjectID, AppID: app.ID,
+			Image: image, Status: apphost.DeployStatusSucceeded})
+		apps.apps[app.ProjectID+"/"+app.ID].Image = image
+	}
+}
+
+// A push inside the grace is spared only until a deploy records it: builds 7
+// to 10 deployed within the day leave room for build 11 beside the one running.
+func TestFits_APushWhoseDeployIsRecordedIsNotSparedByTheGrace(t *testing.T) {
+	sweeper, registry, deploys := quotaFixture(t)
+	recordBuilds(t, registry, deploys, sweeper.apps.(*fakeAppStoreForDeploy), 7, 10)
+	project := sampleDeployApp().ProjectID
+	incoming := map[string]int64{sweepDigest(11): 10, sweepDigest(111): 100}
+	if err := sweeper.Fits(context.Background(), project, incoming, 330); err != nil {
+		t.Fatalf("build 11: %v", err)
+	}
+	addPush(t, registry, 11, 0, 100)
+	if err := sweeper.MakeRoom(context.Background(), project, sweepDigest(11), 330); err != nil {
+		t.Fatal(err)
+	}
+	if got := untaggedImages(registry); !slices.Equal(got, []int{1, 2, 3, 4, 5, 7, 8}) {
+		t.Fatalf("untagged %v, want everything but 9, 10 (running) and 11 (pushed)", got)
+	}
+}
+
+// The quota keeps what runs, not the sweep's last RegistryKeepDeploys deploys:
+// older deployed images give way to a new build.
+func TestFits_DoesNotKeepTheSweepsRecentDeploys(t *testing.T) {
+	sweeper, registry, deploys := quotaFixture(t)
+	app := sampleDeployApp()
+	for n := 1; n <= 4; n++ {
+		deploys.deploys = append([]*apphost.Deploy{{ID: fmt.Sprintf("old%d", n), ProjectID: app.ProjectID, AppID: app.ID,
+			Image: appregistrytestHost + "/" + quotaRepo() + "@" + sweepDigest(n), Status: apphost.DeployStatusSucceeded}}, deploys.deploys...)
+	}
+	if err := sweeper.Fits(context.Background(), app.ProjectID, map[string]int64{sweepDigest(12): 110}, 220); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if err := sweeper.MakeRoom(context.Background(), app.ProjectID, sweepDigest(5), 110); err != nil {
+		t.Fatal(err)
+	}
+	if got := untaggedImages(registry); !slices.Equal(got, []int{1, 2, 3, 4}) {
+		t.Fatalf("untagged %v", got)
 	}
 }

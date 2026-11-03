@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -20,7 +21,8 @@ import (
 const RegistryQuotaImages = 3
 
 // registryQuotaDeployWindow is how many of an app's newest deploys the quota
-// reads; a deploy creates superseding any earlier one in flight, so the one in flight is among them.
+// reads for the one in flight (a new deploy supersedes any other) and for the
+// pushes already recorded; a push recorded further back stays under the grace.
 const registryQuotaDeployWindow = 20
 
 // ErrRegistryFull fails a build whose image does not fit beside the images the project keeps.
@@ -39,8 +41,8 @@ func (e *RegistryFullError) Error() string {
 func (e *RegistryFullError) Unwrap() error { return ErrRegistryFull }
 
 // pushedImage is one push tag and what its image holds. removable is a tag
-// nothing keeps by the sweep's rules (staleTags): not run, not in a deploy in
-// flight, not among the newest pushes inside the grace, not the new image.
+// the quota may take: not run, not in a deploy in flight, not the new image,
+// and either recorded by a deploy or stale by the sweep's grace (staleTags).
 type pushedImage struct {
 	repository, tag, digest string
 	at                      time.Time
@@ -120,46 +122,69 @@ func (s *RegistrySweeper) projectImages(ctx context.Context, projectID, pushed s
 // quotaKeep is what the quota never takes from a repository, a narrower set
 // than the sweep's: the image the app names, the one it runs, its deploys in
 // flight and the image just pushed. Older rollback images are not kept here.
-func (s *RegistrySweeper) quotaKeep(ctx context.Context, repository, pushed string) (map[string]bool, error) {
-	keep := map[string]bool{}
-	keepDigest(keep, "@"+pushed)
+// recorded is every image a recent deploy names: the grace only spares a push
+// whose deploy is not recorded yet.
+func (s *RegistrySweeper) quotaKeep(ctx context.Context, repository, pushed string) (quotaKeepSet, error) {
+	keep := quotaKeepSet{keep: map[string]bool{}, recorded: map[string]bool{}}
+	keepDigest(keep.keep, "@"+pushed)
 	app, err := s.repositoryApp(ctx, repository)
 	if err != nil || app == nil {
 		return keep, err
 	}
-	keepDigest(keep, app.Image)
+	keepDigest(keep.keep, app.Image)
 	running, err := s.deploys.GetLastSucceeded(app.ProjectID, app.ID)
 	if err != nil {
-		return nil, err
+		return keep, err
 	}
 	if running != nil {
-		keepDeployImage(keep, running)
+		keepDeployImage(keep.keep, running)
 	}
 	recent, err := s.deploys.ListByApp(app.ProjectID, app.ID, registryQuotaDeployWindow)
 	if err != nil {
-		return nil, err
+		return keep, err
 	}
 	for _, deploy := range recent {
+		keepDeployImage(keep.recorded, deploy)
 		if inFlight(deploy) {
-			keepDeployImage(keep, deploy)
+			keepDeployImage(keep.keep, deploy)
 		}
 	}
 	return keep, nil
+}
+
+// quotaKeepSet is what the quota keeps of a repository and which images a deploy has recorded.
+type quotaKeepSet struct {
+	keep, recorded map[string]bool
+}
+
+// removable is the push tags the quota may take: recorded ones it does not
+// keep, and the rest of what the sweep's grace does not spare. A recorded
+// push leaves the grace's ranking, so it never holds a slot an unrecorded one needs.
+func (s *RegistrySweeper) removable(tags []string, keep quotaKeepSet) map[string]bool {
+	spared := maps.Clone(keep.keep)
+	maps.Copy(spared, keep.recorded)
+	removable := map[string]bool{}
+	for _, tag := range tags {
+		if digest, _, ok := appregistry.ParsePushTag(tag); ok && keep.recorded[digest] && !keep.keep[digest] {
+			removable[tag] = true
+		}
+	}
+	for _, tag := range s.staleTags(tags, spared) {
+		removable[tag] = true
+	}
+	return removable
 }
 
 func inFlight(deploy *apphost.Deploy) bool {
 	return deploy.Status == apphost.DeployStatusPending || deploy.Status == apphost.DeployStatusRolling
 }
 
-func (s *RegistrySweeper) repositoryImages(ctx context.Context, repository string, keep map[string]bool) ([]pushedImage, error) {
+func (s *RegistrySweeper) repositoryImages(ctx context.Context, repository string, keep quotaKeepSet) ([]pushedImage, error) {
 	tags, err := s.registry.Tags(ctx, repository)
 	if err != nil {
 		return nil, err
 	}
-	stale := map[string]bool{}
-	for _, tag := range s.staleTags(tags, keep) {
-		stale[tag] = true
-	}
+	stale := s.removable(tags, keep)
 	var images []pushedImage
 	read := map[string]map[string]int64{}
 	for _, tag := range tags {
