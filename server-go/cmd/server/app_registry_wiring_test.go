@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
@@ -77,14 +78,17 @@ func TestNewInternalRegistry_OnlyWithTheFlagAndAHost(t *testing.T) {
 	if err != nil || guard == nil || guard.CanIssue() || !guard.Names(appregistrytest.Host+"/proj-a/api:1") {
 		t.Errorf("flag off still guards the name, issuing nothing: %v %v", guard, err)
 	}
-	if newRegistryTokenHandler(guard, nil) != nil || newInternalRegistryHandler(guard, secrets) != nil {
+	if newRegistryTokenHandler(guard, nil) != nil || newInternalRegistryHandler(guard, secrets, fakestore.NewInstances(), k8s.NewMockClient()) != nil {
 		t.Error("flag off serves no token service and no rotation")
 	}
-	if newRegistryTokenHandler(internal, fakestore.NewInstances()) == nil || newInternalRegistryHandler(internal, secrets) == nil {
+	if newRegistryTokenHandler(internal, fakestore.NewInstances()) == nil || newInternalRegistryHandler(internal, secrets, fakestore.NewInstances(), k8s.NewMockClient()) == nil {
 		t.Error("flag on serves the token service and the rotation")
 	}
-	if newInternalRegistryHandler(internal, nil) != nil || vaultSecrets(nil) != nil {
+	if newInternalRegistryHandler(internal, nil, fakestore.NewInstances(), k8s.NewMockClient()) != nil || vaultSecrets(nil) != nil {
 		t.Error("no vault, no rotation")
+	}
+	if newInternalRegistryHandler(internal, secrets, fakestore.NewInstances(), nil) != nil {
+		t.Error("no app runtime to re-render the pull secrets, no rotation")
 	}
 	if none, err := newInternalRegistry(config.AppConfig{}, secrets); none != nil || err != nil {
 		t.Errorf("no host: %v %v", none, err)

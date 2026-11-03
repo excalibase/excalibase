@@ -71,6 +71,8 @@ var (
 	commitPattern  = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	namePattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 	buildIDPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$`)
+	// repoPathPattern keeps a repository path to characters no shell or CLI reads as syntax.
+	repoPathPattern = regexp.MustCompile(`^[A-Za-z0-9._/][A-Za-z0-9._/-]*$`)
 )
 
 // maxBuildInputBytes bounds the build args and secrets together: both end up in a Secret or the pod spec.
@@ -96,7 +98,7 @@ func (s RunSpec) Validate(cloneSchemes ...string) error {
 	}
 	for label, relative := range map[string]string{"root directory": s.RootDir, "Dockerfile path": s.DockerfilePath} {
 		if !insideCheckout(relative) {
-			return fmt.Errorf("the %s %q leaves the repository", label, relative)
+			return fmt.Errorf("the %s %q must stay inside the repository and use only letters, digits, '.', '_', '/' and '-'", label, relative)
 		}
 	}
 	for label, value := range map[string]string{"memory": s.Memory, "disk": s.Disk,
@@ -146,7 +148,7 @@ func insideCheckout(relative string) bool {
 	if relative == "" {
 		return true
 	}
-	if strings.HasPrefix(relative, "/") || strings.ContainsRune(relative, 0) {
+	if !repoPathPattern.MatchString(relative) || strings.HasPrefix(relative, "/") {
 		return false
 	}
 	cleaned := path.Clean(relative)

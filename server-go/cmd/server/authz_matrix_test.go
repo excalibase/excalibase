@@ -21,6 +21,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
+	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
 )
@@ -179,7 +180,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		majorUpgradeHandler:    handler.NewMajorUpgradeHandler(matrixMajorUpgrades{}, nil),
 		logForwarderHandler:    handler.NewLogForwarderHandler(matrixLogDrains(instances), "matrix-forwarder-token"),
 		registryToken:          matrixRegistryToken(t),
-		internalRegistryH:      handler.NewInternalRegistryHandler(appregistry.NewGenerations(memVault{})),
+		internalRegistryH:      handler.NewInternalRegistryHandler(service.NewPullRotationService(appregistry.NewGenerations(memVault{}), appregistrytest.New(t), instances, k8s.NewMockClient())),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),

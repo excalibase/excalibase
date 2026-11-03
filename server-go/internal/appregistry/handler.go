@@ -20,8 +20,10 @@ const (
 // ProjectExists answers whether a project still exists; a deleted one's derived password opens nothing.
 type ProjectExists func(ctx context.Context, projectID string) (bool, error)
 
-// TokenHandler is the registry's token service (the Docker token spec), which
-// zot reaches through its upstream token endpoint. A project's pull
+// TokenHandler is the registry's token service (the Docker token spec): zot
+// answers an unauthenticated pull with a 401 naming this realm, and containerd
+// on each node calls it with the pull secret's credential; zot only verifies
+// the tokens. A project's pull
 // credential gets pull, and only on its own repositories; push and delete
 // tokens are minted for our own steps and never handed out here.
 type TokenHandler struct {
