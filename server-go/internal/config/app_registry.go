@@ -40,7 +40,8 @@ func loadAppRegistry() AppRegistryConfig {
 func (c AppConfig) validateAppRegistry() error {
 	registry := c.AppRegistry
 	if registry.Host == "" {
-		if slices.Contains(c.DarkFeatures, features.AppGitBuilds) {
+		// Single-host shows plan limits only; its builds (EXC-677) never touch this registry.
+		if c.ProvisionerMode != "docker" && slices.Contains(c.DarkFeatures, features.AppGitBuilds) {
 			return errors.New("FEATURE_APPGITBUILDS=true needs APP_REGISTRY_HOST: git-built images are pushed to and pulled from the platform's own registry")
 		}
 		return nil

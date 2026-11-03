@@ -68,3 +68,15 @@ func TestValidateAppRegistry_GitBuildsNeedAHost(t *testing.T) {
 		t.Errorf("host and key with builds on: %v", err)
 	}
 }
+
+// Single-host shows git-build plan limits only (EXC-677 builds come later), so the flag boots there with no registry.
+func TestValidateAppRegistry_SingleHostGitBuildsBootWithoutAHost(t *testing.T) {
+	on := []features.Feature{features.AppGitBuilds}
+	if err := (AppConfig{ProvisionerMode: "docker", DarkFeatures: on}).validateAppRegistry(); err != nil {
+		t.Errorf("single host with builds on and no host: %v", err)
+	}
+	err := (AppConfig{ProvisionerMode: "k8s", DarkFeatures: on}).validateAppRegistry()
+	if err == nil || !strings.Contains(err.Error(), "APP_REGISTRY_HOST") {
+		t.Errorf("cluster with builds on and no host: err = %v", err)
+	}
+}
