@@ -15,10 +15,10 @@ function serve(features: Record<string, boolean>) {
     if (path === '/config') return { data: { deploymentMode: 'selfhosted', features } };
     if (path === SETTINGS_PATH) return { data: { siteUrl: 'https://app.example.com', requireEmailVerification: false } };
     if (path === HOOKS_PATH) {
-      return { data: { secretSet: false, hooks: [
-        { hook: 'custom_access_token', enabled: false, url: '' },
-        { hook: 'before_user_created', enabled: false, url: '' },
-        { hook: 'send_email', enabled: false, url: '' },
+      return { data: { secretSet: false, canChange: true, hooks: [
+        { hook: 'custom_access_token', enabled: false, host: '', url: '' },
+        { hook: 'before_user_created', enabled: false, host: '', url: '' },
+        { hook: 'send_email', enabled: false, host: '', url: '' },
       ] } };
     }
     return { data: [] };

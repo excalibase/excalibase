@@ -82,6 +82,8 @@ type DockerPostgreSQLProvisioner struct {
 	hostPorts HostPortAllocator
 	// watcher is the CDC watcher every project runs (docker_watcher.go).
 	watcher DockerWatcherConfig
+	// queryStats turns pg_stat_statements on in the projects it creates (EXC-673).
+	queryStats bool
 }
 
 func NewDockerPostgreSQLProvisioner(docker DockerClient) *DockerPostgreSQLProvisioner {
@@ -185,6 +187,11 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	cb(domain.StageWaitingForReady)
 	if err := p.startDatabase(ctx, containerID, dbName, postgresReadyTimeout); err != nil {
 		return nil, err
+	}
+	if p.queryStats {
+		if err := p.EnableQueryStats(ctx, containerID); err != nil {
+			return nil, err
+		}
 	}
 
 	// Stage: Credential generation

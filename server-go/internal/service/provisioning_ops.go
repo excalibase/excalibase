@@ -134,7 +134,7 @@ func (s *ProvisioningService) SearchProjectLogs(ctx context.Context, projectID s
 
 	lokiAnswered := false
 	if s.lokiURL != "" {
-		out, err := s.getLogsFromLoki(ctx, databaseLogSelector(inst), projectID, search)
+		out, err := s.getLogsFromLoki(ctx, s.lokiURL, databaseLogSelector(inst), projectID, search)
 		if err == nil && out != "" {
 			page.Lines = out
 			return page, nil
@@ -166,8 +166,19 @@ func (s *ProvisioningService) SetSingleHostLogs(logs SingleHostLogs) { s.singleH
 // searchSingleHostLogs reads what the engine kept of the database container's
 // output since it was created; the container is the project's own, by id.
 func (s *ProvisioningService) searchSingleHostLogs(ctx context.Context, inst *domain.DatabaseInstance, search LogSearch) (LogPage, error) {
-	if s.singleHostLogs == nil || inst.DeploymentMode != domain.ModeDocker || inst.Namespace == "" {
+	if (s.singleHostLogs == nil && s.hostLogStore == "") || inst.DeploymentMode != domain.ModeDocker || inst.Namespace == "" {
 		return LogPage{}, errLogsOnSingleHost
+	}
+	if s.hostLogStore != "" {
+		return s.searchHostLogStore(ctx, inst, search)
+	}
+	return s.readEngineLog(ctx, inst, search)
+}
+
+// readEngineLog is what the engine kept of the database container's output.
+func (s *ProvisioningService) readEngineLog(ctx context.Context, inst *domain.DatabaseInstance, search LogSearch) (LogPage, error) {
+	if s.singleHostLogs == nil {
+		return LogPage{}, ErrLogsUnavailable
 	}
 	var since time.Time
 	if search.Since > 0 {
@@ -264,7 +275,7 @@ func projectLogQL(selector, term string) string {
 // getLogsFromLoki queries Loki for the last matching lines of the selected
 // pods. Returns plain-text concatenated lines (one per row) so the existing
 // handler-side response shape stays unchanged.
-func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, selector, projectID string, search LogSearch) (string, error) {
+func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, base, selector, projectID string, search LogSearch) (string, error) {
 	lines := clampLogLines(search.Lines)
 	window := search.Since
 	if window <= 0 {
@@ -274,7 +285,7 @@ func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, selector, pro
 	end := time.Now()
 	start := end.Add(-window)
 	u := fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&start=%d&end=%d&limit=%d&direction=backward",
-		s.lokiURL, urlEscape(logql), start.UnixNano(), end.UnixNano(), lines)
+		base, urlEscape(logql), start.UnixNano(), end.UnixNano(), lines)
 
 	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

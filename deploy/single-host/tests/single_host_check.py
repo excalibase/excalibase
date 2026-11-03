@@ -255,6 +255,32 @@ long_running = {s.get("container_name") for s in services.values() if s.get("res
 if set(monitored) != long_running:
     failures.append(f"monitored platform containers {sorted(monitored)}, want every long-running one {sorted(long_running)}")
 
+# EXC-673: request counters are off by default; when on, graphql and auth bind
+# them to the internal metrics network only, which nothing else joins, and
+# provisioning reads them there by the aliases that network alone resolves.
+metrics_net = networks.get("metrics") or {}
+if not metrics_net.get("internal") or metrics_net.get("name") != "excalibase-metrics":
+    failures.append(f"metrics network {metrics_net}, want internal excalibase-metrics")
+on_metrics = {n for n, s in services.items() if "metrics" in (s.get("networks") or {})}
+if on_metrics != {"provisioning", "graphql", "auth"}:
+    failures.append(f"metrics network members {sorted(on_metrics)}, want provisioning, graphql and auth")
+if penv.get("FEATURE_REQUESTMETRICS") != "false" or penv.get("FEATURE_SLOWQUERIES") != "false":
+    failures.append(f"request charts/slow queries on by default: {penv.get('FEATURE_REQUESTMETRICS')!r}/{penv.get('FEATURE_SLOWQUERIES')!r}")
+counters = {"graphql": ("APP_REQUEST_METRICS_", "graphql-metrics", "9464"), "auth": ("REQUEST_METRICS_", "auth-metrics", "9465")}
+targets = []
+for name, (prefix, alias, port) in counters.items():
+    env = services[name].get("environment") or {}
+    aliases = ((services[name].get("networks") or {}).get("metrics") or {}).get("aliases") or []
+    if env.get(prefix + "ENABLED") != "false":
+        failures.append(f"{name} counts requests by default: {env.get(prefix + 'ENABLED')!r}")
+    if env.get(prefix + "ADDRESS") != alias or aliases != [alias]:
+        failures.append(f"{name} counters bind {env.get(prefix + 'ADDRESS')!r} with aliases {aliases}, want {alias} on metrics only")
+    if str(env.get(prefix + "PORT")) != port:
+        failures.append(f"{name} counters port {env.get(prefix + 'PORT')!r}, want {port}")
+    targets.append(f"{alias}:{port}")
+if penv.get("REQUEST_METRICS_TARGETS", "").split(",") != targets:
+    failures.append(f"REQUEST_METRICS_TARGETS={penv.get('REQUEST_METRICS_TARGETS')!r}, want {','.join(targets)}")
+
 if failures:
     sys.exit("\n".join(failures))
 print("single-host hardening ok")

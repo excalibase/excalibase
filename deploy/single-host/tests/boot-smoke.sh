@@ -20,8 +20,16 @@
 # HOST_METRICS=1 installs with --host-metrics and walks host monitoring (EXC-670,
 # monitoring-journey.sh): host and container samples, the database's figures,
 # a down alert raised and resolved. Without it the monitoring routes are absent.
+# HOST_LOGS=1 installs with --host-logs and walks stored log search (EXC-672,
+# log-search-journey.sh): a project's line in Loki under its own labels, found
+# by its search and not another project's, after a restart and the container's
+# removal. Without it no Loki runs. It removes the project's database container,
+# so it runs last.
+# REQUEST_METRICS=1 turns request charts and slow queries on and walks them (EXC-673,
+# request-charts-journey.sh): calls and a slow statement show in their own project
+# only, and tenant containers cannot reach the counters. Without it both are absent.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG);
-# GRAPHQL_IMAGE a locally built engine image.
+# GRAPHQL_IMAGE and AUTH_IMAGE locally built engine images.
 # Every run checks the read address (EXC-666, read-address-journey.sh): one copy, none.
 # Every run walks realtime (EXC-612, realtime-journey.sh): a subscriber receives
 # a table's changes across a NATS restart, a pause and a resume.
@@ -83,11 +91,12 @@ if [ -n "$pcode" ] && [ "$pcode" != 0 ] && logs_have excalibase-preflight POSTGR
 $COMPOSE $P down -v >/dev/null 2>&1; rm -f "$W/.env"
 
 echo "== install"
-./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS ${DOCUMENTDB:+--documentdb} ${HOST_METRICS:+--host-metrics} || exit 1
+./init.sh --env-file "$W/.env" --domain localhost --admin-email owner@example.com --engine "$ENGINE" ${MANUAL_UNSEAL:+--manual-unseal} $APP_ARGS ${DOCUMENTDB:+--documentdb} ${HOST_METRICS:+--host-metrics} ${HOST_LOGS:+--host-logs} || exit 1
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
 echo "FEATURE_DBREADADDRESS=true" >> "$W/.env"
+[ -n "${REQUEST_METRICS:-}" ] && printf 'FEATURE_REQUESTMETRICS=true\nFEATURE_SLOWQUERIES=true\n' >> "$W/.env"
 # The apps journey drives create_app through MCP, as a coding tool does (EXC-606).
 [ -n "${APPS:-}" ] && echo "FEATURE_MCP=true" >> "$W/.env"
 # and deploys a catalog template, reached by its siblings by name (EXC-669).
@@ -219,11 +228,24 @@ fi
 [ -n "${DOCUMENTDB:-}" ] && . "$TESTS/documentdb-journey.sh"
 [ -n "${MYSQL:-}" ] && . "$TESTS/mysql-journey.sh"
 [ -n "${PG_BACKUPS:-}" ] && . "$TESTS/postgres-backup-journey.sh"
+if [ -n "${REQUEST_METRICS:-}" ]; then
+  . "$TESTS/request-charts-journey.sh"
+else
+  rq=$(c -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/provision/$PID/requests?range=1h")
+  sq=$(c -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/provision/$PID/slow-queries/")
+  [ "$rq" = 404 ] && [ "$sq" = 404 ] && ok "request charts and slow queries are off by default (404)" || ko "with the flags off: requests $rq, slow queries $sq"
+fi
 if [ -n "${HOST_METRICS:-}" ]; then
   . "$TESTS/monitoring-journey.sh"
 else
   hm=$(c -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" https://studio.localhost:$PORT/api/admin/monitoring/host)
   [ "$hm" = 404 ] && ok "host monitoring is off by default (404)" || ko "host monitoring answers $hm with the flag off"
+fi
+
+if [ -n "${HOST_LOGS:-}" ]; then
+  . "$TESTS/log-search-journey.sh"
+else
+  $DOCKER inspect excalibase-loki >/dev/null 2>&1 && ko "Loki runs without --host-logs" || ok "no Loki without --host-logs"
 fi
 
 echo "== studio health"

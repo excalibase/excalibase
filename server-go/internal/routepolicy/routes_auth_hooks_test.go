@@ -5,7 +5,8 @@ import (
 	"testing"
 )
 
-// EXC-662: any Developer sees a project's auth hooks; pointing one at a URL or
+// EXC-662: any Developer sees a project's auth hooks (an Admin with each full
+// URL, a Developer with its host only); pointing one at a URL or
 // generating the signing secret is an Admin's.
 func TestAuthHookRows(t *testing.T) {
 	index, err := Index()
@@ -36,5 +37,13 @@ func TestAuthHookRows(t *testing.T) {
 	}
 	if got := Expect(index[read], http.MethodGet, developer); got != Allow {
 		t.Errorf("a Developer reading the hooks: %s", got)
+	}
+	// An Admin reads each full URL back, which may carry the receiver's token.
+	if index[read].Discloses != Secret {
+		t.Errorf("%s answers hook URLs to Admins and must be declared Discloses: Secret", read)
+	}
+	readOnlyAdmin := Principal{Name: "readOnlyAdmin", OrgRole: "admin", ReadOnly: true, Restricted: true}
+	if got := Expect(index[read], http.MethodGet, readOnlyAdmin); got != Deny403 {
+		t.Errorf("a read-only token reading the hooks: %s", got)
 	}
 }

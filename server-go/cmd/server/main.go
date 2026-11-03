@@ -615,11 +615,12 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 		return
 	}
 	alerts.SetStore(table)
-	if (k8sClient == nil || cfg.ProvisionerMode == "docker") && !hostMonitoringOn(cfg) {
+	sampler := requestSampling(cfg, requests)
+	if !metricsLoopRuns(cfg, k8sClient, sampler) {
 		return
 	}
 	metrics.SetHistory(table, alerts)
-	if sampler := requestSampling(cfg, requests); sampler != nil {
+	if sampler != nil {
 		metrics.SetRequestSampler(sampler)
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
@@ -627,6 +628,15 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), metricsSampleLockID)
 	}
 	metrics.StartSampler(context.Background(), service.NewLeadership(lock), metricsSampleInterval)
+}
+
+// metricsLoopRuns is Kubernetes, or a single host with host monitoring or
+// request charts on (EXC-673): request charts must not need host monitoring.
+func metricsLoopRuns(cfg config.AppConfig, k8sClient k8s.KubeClient, requests service.RequestSampler) bool {
+	if k8sClient != nil && cfg.ProvisionerMode != "docker" {
+		return true
+	}
+	return hostMonitoringOn(cfg) || (cfg.ProvisionerMode == "docker" && requests != nil)
 }
 
 // newRequestMetricsService reads the request_metrics table and scrapes the
@@ -1556,6 +1566,7 @@ func buildBackupService(
 				})
 				if err == nil {
 					dockerAdapter := hostPostgresBackupAdapter(sqlStore.BackupRecords(), mustSingleHostPorts(cfg, sqlStore), store, runner, uploader, defaults.Bucket, dockerClient)
+					dockerAdapter.SetQueryStats(queryStatsOn(cfg))
 					adapters[domain.ModeDocker] = dockerAdapter
 					hostMySQL = hostMySQLBackupAdapter(singleHostMySQL, dockerClient, service.NewDockerStreamer(dockerSDK.RawClient()), uploader, sqlStore.BackupRecords(), defaults.Bucket, store)
 				}
@@ -1697,6 +1708,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	emailSender := buildEmailSender(cfg)
 	hostMonitoringHandler := wireHostMonitoring(hostMonitoringDeps{cfg: cfg, sqlStore: sqlStore, instances: store,
 		docker: a.dockerClient, vault: vc, mail: emailSender, metrics: metricsSvc, alerts: alertSvc, provisioning: provSvc})
+	if shipper := wireHostLogs(hostLogDeps{cfg: cfg, sqlStore: sqlStore, instances: store, provisioning: provSvc}); shipper != nil {
+		go shipper.Run(context.Background())
+	}
 	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 	logDrainSvc := newLogDrainService(cfg, sqlStore, vc, provSvc)
@@ -2712,8 +2726,8 @@ func mountAuthProviders(r *chi.Mux, sqlStore storage.OrgStore, store storage.Ins
 }
 
 // mountAuthHooks serves the end-user auth hooks settings (EXC-662): Developer
-// reads, Admin writes; the flag goes first so that while it is off these
-// answer as never mounted.
+// reads (host only; an Admin gets each full URL, so no read-only token), Admin
+// writes; the flag goes first so that while it is off these answer as never mounted.
 func mountAuthHooks(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
 	r.Route("/api/projects/{projectId}/auth-hooks", func(r chi.Router) {
 		r.Use(features.Require(d.features, features.AuthHooks))
@@ -2723,7 +2737,7 @@ func mountAuthHooks(r *chi.Mux, sqlStore storage.OrgStore, store storage.Instanc
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
 		r.Use(d.activity)
-		r.Get("/", d.provHandler.GetAuthHooks)
+		r.With(auth.RequireWriteCapableForSecrets).Get("/", d.provHandler.GetAuthHooks)
 		r.Post("/secret", d.provHandler.RotateAuthHookSecret)
 		r.Delete("/secret", d.provHandler.DeleteAuthHookSecret)
 		r.Put("/{hook}", d.provHandler.PutAuthHook)
@@ -3033,8 +3047,7 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient, sql
 			log.Fatalf("docker provisioner: %v", err)
 		}
 		log.Printf("Provisioner mode: docker (host=%s)", cfg.DockerHost)
-		dockerProvisioner := provisioner.NewDockerPostgreSQLProvisioner(dockerClient)
-		dockerProvisioner.SetDeletionPoller(deletionPoller())
+		dockerProvisioner := newDockerPostgres(cfg, dockerClient)
 		mysql := provisioner.NewDockerMySQLProvisioner(dockerClient)
 		ports := mustSingleHostPorts(cfg, sqlStore)
 		mysql.SetHostPorts(ports)
@@ -3047,6 +3060,15 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient, sql
 		return provisioner.NewFactory(dockerProvisioner, mysql), dockerClient
 	}
 	return buildK8sFactory(cfg, k8sClient), nil
+}
+
+// newDockerPostgres is a single host's Postgres provisioner; its new projects
+// carry statement statistics while slowqueries is on (EXC-673).
+func newDockerPostgres(cfg config.AppConfig, client provisioner.DockerClient) *provisioner.DockerPostgreSQLProvisioner {
+	pg := provisioner.NewDockerPostgreSQLProvisioner(client)
+	pg.SetDeletionPoller(deletionPoller())
+	pg.SetQueryStats(queryStatsOn(cfg))
+	return pg
 }
 
 // dockerWatcherConfig is the CDC watcher a single host runs per project
