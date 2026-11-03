@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
+import { getApp, isDeployInProgress, listDeploys, type App, type Deploy } from './apps';
 import type { TierType } from '../types';
 
 // Built-in templates (EXC-526) as GET /api/projects/{projectId}/app-templates/ serves them.
@@ -69,12 +70,54 @@ export interface TemplateCredential {
   value: string;
 }
 
+// The deploy answers once the apps exist; their first deploys run after it (EXC-669).
 export interface TemplateDeployResult {
   templateId: string;
-  apps: { id: string; name: string; deployId: string; deployStatus: string }[];
+  apps: { id: string; name: string }[];
   privateNetworkTurnedOn: boolean;
   credentials?: TemplateCredential[];
+  acceptedAt: string;
 }
+
+export type FirstDeploy =
+  | { state: 'starting' }
+  | { state: 'rolling' }
+  | { state: 'running' }
+  | { state: 'failed'; reason: string };
+
+// The operation an app records when its first deploy from a template could not start.
+const TEMPLATE_DEPLOY = 'template deploy';
+
+// How the app's first deploy stands: a failure the app recorded since the
+// deploy was accepted, else its newest deploy.
+export function firstDeploy(app: App, newest: Deploy | undefined, acceptedAt: string): FirstDeploy {
+  const failure = app.lifecycleFailure;
+  if (failure?.operation === TEMPLATE_DEPLOY && Date.parse(failure.at) >= Date.parse(acceptedAt)) {
+    return { state: 'failed', reason: failure.reason };
+  }
+  if (!newest) return { state: 'starting' };
+  if (newest.status === 'succeeded') return { state: 'running' };
+  if (newest.status === 'failed') return { state: 'failed', reason: newest.failureReason ?? 'the deploy failed' };
+  return { state: 'rolling' };
+}
+
+const FIRST_DEPLOY_POLL_MS = 3000;
+
+// Reads the app and its newest deploy until the first deploy has finished.
+export const useFirstDeploy = (projectId: string, appId: string, acceptedAt: string) =>
+  useQuery({
+    queryKey: ['apps', projectId, appId, 'first-deploy', acceptedAt],
+    queryFn: async () => {
+      const [app, deploys] = await Promise.all([getApp(projectId, appId), listDeploys(projectId, appId, 1)]);
+      return firstDeploy(app, deploys[0], acceptedAt);
+    },
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      return state === 'running' || state === 'failed' ? false : FIRST_DEPLOY_POLL_MS;
+    },
+  });
+
+export { isDeployInProgress };
 
 const templatesKey = (projectId: string) => ['app-templates', projectId] as const;
 

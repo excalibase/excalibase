@@ -46,11 +46,22 @@ async function mockTemplates(page: Page, templates: unknown[]) {
       status: 202, contentType: 'application/json',
       body: JSON.stringify({
         templateId: 'mongodb', privateNetworkTurnedOn: false,
-        apps: [{ id: 'a1', name: 'mongodb', deployId: 'd1', deployStatus: 'rolling' }],
+        acceptedAt: '2026-11-04T10:00:00Z',
+        apps: [{ id: 'a1', name: 'mongodb' }],
         credentials: [{ app: 'mongodb', name: 'MONGODB_URL', value: 'mongodb://root:generated@mongodb:27017/?authSource=admin' }],
       }),
     });
   });
+  // The first deploy runs after the answer; Studio follows it until it finishes.
+  await page.route(/\/api\/projects\/test-project\/apps\/a1$/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'a1', name: 'mongodb', status: 'ACTIVE' }) }),
+  );
+  await page.route(/\/api\/projects\/test-project\/apps\/a1\/deploys\?limit=1$/, (route) =>
+    route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ id: 'd1', revision: 1, status: 'succeeded', createdAt: '2026-11-04T10:00:05Z' }]),
+    }),
+  );
   return deploys;
 }
 
@@ -80,6 +91,7 @@ test.describe('Template catalog', () => {
     const shown = page.getByTestId('template-credentials');
     await expect(shown).toContainText('mongodb://root:generated@mongodb:27017/?authSource=admin');
     await expect(shown).toContainText('cannot show them again');
+    await expect(page.getByTestId('template-progress-mongodb')).toContainText('Running');
     expect(deploys).toEqual([{ confirmPrivateNetwork: false }]);
   });
 });
