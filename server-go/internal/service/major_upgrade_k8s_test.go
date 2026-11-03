@@ -484,3 +484,22 @@ func TestK8sConvertChangesNothingForARunItLost(t *testing.T) {
 		t.Fatalf("image = %s", w.image())
 	}
 }
+
+// A run lost while the job failed is not put back: the new owner decides.
+func TestK8sPutBackForALostRunChangesNothing(t *testing.T) {
+	w := newK8sUpgradeWorld(t)
+	w.react = func(w *k8sUpgradeWorld) {
+		if w.imageIs("17") {
+			w.upgrading()
+			w.job(true)
+			w.progress.lost = true
+		}
+	}
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if !w.imageIs("17") {
+		t.Fatalf("image = %s, want the cluster left on 17", w.image())
+	}
+}

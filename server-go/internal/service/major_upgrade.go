@@ -125,6 +125,8 @@ type MajorUpgradeService struct {
 	runSync bool
 	// heartbeatEvery is how often an actor marks its run alive.
 	heartbeatEvery time.Duration
+	// heartbeatTimeout bounds one heartbeat.
+	heartbeatTimeout time.Duration
 }
 
 // postUpgradeBackupAttempts bounds the retries of the first backup on the
@@ -138,7 +140,8 @@ func NewMajorUpgradeService(cfg MajorUpgradeConfig) *MajorUpgradeService {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &MajorUpgradeService{cfg: cfg, heartbeatEvery: majorUpgradeHeartbeat}
+	return &MajorUpgradeService{cfg: cfg, heartbeatEvery: majorUpgradeHeartbeat,
+		heartbeatTimeout: majorUpgradeHeartbeatTimeout}
 }
 
 func newMajorUpgradeID() string {

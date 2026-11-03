@@ -225,6 +225,7 @@ func TestMajorUpgrade_RecoveryFinishesARunConvertedBeforeItsClaim(t *testing.T) 
 		if err := w.runs.MarkMajorUpgradeConverted(context.Background(), "live", "proj-up", "17", "driver", time.Now().Add(-time.Hour)); err != nil {
 			t.Error(err)
 		}
+		staleRun(w, "live")
 	}
 	svc.RecoverInterrupted(context.Background())
 	calls := strings.Join(w.sequence(), ",")

@@ -26,6 +26,41 @@ type memMajorUpgrades struct {
 	latestErrs []error
 	// beforeClaim runs once, just before a claim.
 	beforeClaim func()
+	// touchErrs fail the next heartbeats, in order; touchErr fails the rest.
+	touchErrs []error
+	touchErr  error
+	// touchHang makes a heartbeat wait until its context ends.
+	touchHang bool
+	touches   int
+}
+
+// now is the database's clock; heartbeats are stamped with it.
+func (m *memMajorUpgrades) now() time.Time { return time.Now() }
+
+func (m *memMajorUpgrades) setTouchErr(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.touchErr = err
+}
+
+func (m *memMajorUpgrades) failTouches(n int, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := 0; i < n; i++ {
+		m.touchErrs = append(m.touchErrs, err)
+	}
+}
+
+func (m *memMajorUpgrades) setTouchHang(hang bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.touchHang = hang
+}
+
+func (m *memMajorUpgrades) touchCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.touches
 }
 
 func newMemMajorUpgrades(instances storage.InstanceStore) *memMajorUpgrades {
@@ -76,20 +111,36 @@ func (m *memMajorUpgrades) UpdateMajorUpgrade(_ context.Context, run *domain.Maj
 			return err
 		}
 	}
-	kept := *stored
-	*stored = *run
-	stored.Converted, stored.ConvertedAt, stored.HeartbeatAt, stored.Owner = kept.Converted, kept.ConvertedAt, kept.HeartbeatAt, kept.Owner
+	// The columns the real store writes, and only those.
+	stored.Status, stored.Step, stored.SafetyBackupID, stored.Error = run.Status, run.Step, run.SafetyBackupID, run.Error
+	stored.Warnings, stored.FinishedAt, stored.WritesStoppedAt = run.Warnings, run.FinishedAt, run.WritesStoppedAt
 	return nil
 }
 
-func (m *memMajorUpgrades) TouchMajorUpgrade(_ context.Context, id, owner string, at time.Time) error {
+func (m *memMajorUpgrades) TouchMajorUpgrade(ctx context.Context, id, owner string) error {
+	m.mu.Lock()
+	m.touches++
+	hang := m.touchHang
+	m.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(m.touchErrs) > 0 {
+		err := m.touchErrs[0]
+		m.touchErrs = m.touchErrs[1:]
+		return err
+	}
+	if m.touchErr != nil {
+		return m.touchErr
+	}
 	stored, ok := m.owned(id, owner)
 	if !ok {
 		return storage.ErrMajorUpgradeNotRunning
 	}
-	stored.HeartbeatAt = at
+	stored.HeartbeatAt = m.now()
 	return nil
 }
 
@@ -100,12 +151,9 @@ func (m *memMajorUpgrades) MarkMajorUpgradeConverted(_ context.Context, id, proj
 		return m.markErr
 	}
 	stored, ok := m.owned(id, owner)
-	if !ok || stored.Converted {
+	if !ok || stored.ProjectID != projectID || stored.Converted {
 		return storage.ErrMajorUpgradeNotRunning
 	}
-	stored.Converted = true
-	stored.ConvertedAt = &at
-	stored.HeartbeatAt = at
 	inst, err := m.instances.FindByProjectID(projectID)
 	if err != nil {
 		return err
@@ -114,10 +162,13 @@ func (m *memMajorUpgrades) MarkMajorUpgradeConverted(_ context.Context, id, proj
 	if err := m.instances.Update(inst); err != nil {
 		return err
 	}
+	stored.Converted = true
+	stored.ConvertedAt = &at
+	stored.HeartbeatAt = m.now()
 	return m.markLandsErr
 }
 
-func (m *memMajorUpgrades) ClaimMajorUpgrade(_ context.Context, id, owner string, staleBefore, at time.Time) (*domain.MajorUpgrade, error) {
+func (m *memMajorUpgrades) ClaimMajorUpgrade(_ context.Context, id, owner string, staleAfter time.Duration) (*domain.MajorUpgrade, error) {
 	if hook := m.beforeClaim; hook != nil {
 		m.beforeClaim = nil
 		hook()
@@ -125,10 +176,10 @@ func (m *memMajorUpgrades) ClaimMajorUpgrade(_ context.Context, id, owner string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	stored, ok := m.runs[id]
-	if !ok || stored.Status != domain.MajorUpgradeRunning || !stored.HeartbeatAt.Before(staleBefore) {
+	if !ok || stored.Status != domain.MajorUpgradeRunning || !stored.HeartbeatAt.Before(m.now().Add(-staleAfter)) {
 		return nil, nil
 	}
-	stored.Owner, stored.HeartbeatAt = owner, at
+	stored.Owner, stored.HeartbeatAt = owner, m.now()
 	claimed := *stored
 	return &claimed, nil
 }

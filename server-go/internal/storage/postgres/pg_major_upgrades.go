@@ -25,7 +25,7 @@ func (s *Store) StartMajorUpgrade(ctx context.Context, run *domain.MajorUpgrade)
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO database_major_upgrades
 		(id, project_id, engine, from_version, to_version, status, step, requested_by, started_at, heartbeat_at, owner)
-		VALUES ($1, $2, $3, $4, $5, 'RUNNING', $6, $7, $8, $8, $9)`,
+		VALUES ($1, $2, $3, $4, $5, 'RUNNING', $6, $7, $8, now(), $9)`,
 		run.ID, run.ProjectID, run.Engine, run.FromVersion, run.ToVersion, run.Step, run.RequestedBy, run.StartedAt, run.Owner)
 	if isPQCode(err, uniqueViolation) {
 		return storage.ErrMajorUpgradeRunning
@@ -81,10 +81,11 @@ func updateOwnedRun(ctx context.Context, tx *sql.Tx, run *domain.MajorUpgrade) e
 	return nil
 }
 
-// TouchMajorUpgrade moves a running run's heartbeat for its owner.
-func (s *Store) TouchMajorUpgrade(ctx context.Context, id, owner string, at time.Time) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE database_major_upgrades SET heartbeat_at = $3
-		WHERE id = $1 AND owner = $2 AND status = 'RUNNING'`, id, owner, at.UTC())
+// TouchMajorUpgrade moves a running run's heartbeat for its owner, on the
+// database's clock.
+func (s *Store) TouchMajorUpgrade(ctx context.Context, id, owner string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE database_major_upgrades SET heartbeat_at = now()
+		WHERE id = $1 AND owner = $2 AND status = 'RUNNING'`, id, owner)
 	if err != nil {
 		return fmt.Errorf("touch major upgrade %s: %w", id, err)
 	}
@@ -101,7 +102,7 @@ func (s *Store) MarkMajorUpgradeConverted(ctx context.Context, id, projectID, to
 		return fmt.Errorf("begin mark converted: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
-	res, err := tx.ExecContext(ctx, `UPDATE database_major_upgrades SET converted = true, converted_at = $3, heartbeat_at = $3
+	res, err := tx.ExecContext(ctx, `UPDATE database_major_upgrades SET converted = true, converted_at = $3, heartbeat_at = now()
 		WHERE id = $1 AND project_id = $2 AND owner = $4 AND status = 'RUNNING' AND NOT converted`, id, projectID, at.UTC(), owner)
 	if err != nil {
 		return fmt.Errorf("mark major upgrade %s converted: %w", id, err)
@@ -116,11 +117,12 @@ func (s *Store) MarkMajorUpgradeConverted(ctx context.Context, id, projectID, to
 	return tx.Commit()
 }
 
-// ClaimMajorUpgrade hands a stale RUNNING run to owner in one statement.
-func (s *Store) ClaimMajorUpgrade(ctx context.Context, id, owner string, staleBefore, at time.Time) (*domain.MajorUpgrade, error) {
-	row := s.db.QueryRowContext(ctx, `UPDATE database_major_upgrades SET owner = $2, heartbeat_at = $4
-		WHERE id = $1 AND status = 'RUNNING' AND heartbeat_at < $3
-		RETURNING `+majorUpgradeColumns, id, owner, staleBefore.UTC(), at.UTC())
+// ClaimMajorUpgrade hands a stale RUNNING run to owner in one statement,
+// judged and stamped on the database's clock so app clocks cannot skew it.
+func (s *Store) ClaimMajorUpgrade(ctx context.Context, id, owner string, staleAfter time.Duration) (*domain.MajorUpgrade, error) {
+	row := s.db.QueryRowContext(ctx, `UPDATE database_major_upgrades SET owner = $2, heartbeat_at = now()
+		WHERE id = $1 AND status = 'RUNNING' AND heartbeat_at < now() - make_interval(secs => $3)
+		RETURNING `+majorUpgradeColumns, id, owner, staleAfter.Seconds())
 	run, err := scanMajorUpgrade(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

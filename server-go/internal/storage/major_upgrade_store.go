@@ -34,16 +34,18 @@ type MajorUpgradeStore interface {
 	// Converted and owner are never written here. A converted run ends only
 	// as COMPLETED.
 	UpdateMajorUpgrade(ctx context.Context, run *domain.MajorUpgrade, project *MajorUpgradeProject) error
-	// TouchMajorUpgrade records that the run's owner is alive.
-	TouchMajorUpgrade(ctx context.Context, id, owner string, at time.Time) error
+	// TouchMajorUpgrade records, on the database's clock, that the run's
+	// owner is alive.
+	TouchMajorUpgrade(ctx context.Context, id, owner string) error
 	// MarkMajorUpgradeConverted records that the data now lives on
 	// toVersion and moves the project's recorded version in the same
-	// transaction; ErrMajorUpgradeNotRunning once already marked.
+	// transaction, and counts as a heartbeat; ErrMajorUpgradeNotRunning
+	// once already marked.
 	MarkMajorUpgradeConverted(ctx context.Context, id, projectID, toVersion, owner string, at time.Time) error
 	// ClaimMajorUpgrade hands a RUNNING run whose heartbeat is older than
-	// staleBefore to owner and returns it as claimed; nil when it is not
-	// claimable.
-	ClaimMajorUpgrade(ctx context.Context, id, owner string, staleBefore, at time.Time) (*domain.MajorUpgrade, error)
+	// staleAfter, on the database's clock, to owner and returns it as
+	// claimed; nil when it is not claimable.
+	ClaimMajorUpgrade(ctx context.Context, id, owner string, staleAfter time.Duration) (*domain.MajorUpgrade, error)
 	// LatestMajorUpgrade is the project's most recent run, nil without one.
 	LatestMajorUpgrade(ctx context.Context, projectID string) (*domain.MajorUpgrade, error)
 	// ConvertedMajorUpgrades are the runs that moved the data, oldest first.

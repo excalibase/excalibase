@@ -348,9 +348,9 @@ func (u *K8sMajorUpgrader) watch(ctx context.Context, run domain.MajorUpgrade, p
 		sawJob = sawJob || state != k8s.UpgradeJobAbsent
 		switch {
 		case state == k8s.UpgradeJobFailed:
-			return u.putBack(ctx, run, plan, errors.New("the pg_upgrade job failed"))
+			return u.putBack(ctx, run, plan, progress, errors.New("the pg_upgrade job failed"))
 		case !sawJob && elapsed >= u.timings.JobAppear:
-			return u.putBack(ctx, run, plan, errors.New("the operator never started the pg_upgrade job"))
+			return u.putBack(ctx, run, plan, progress, errors.New("the operator never started the pg_upgrade job"))
 		case elapsed >= u.timings.JobMax:
 			return unsettled(fmt.Errorf("pg_upgrade still running after %s", elapsed))
 		}
@@ -371,7 +371,10 @@ func (u *K8sMajorUpgrader) jobState(ctx context.Context, plan clusterUpgrade, st
 
 // putBack points the cluster at the old image and archive again and waits
 // for it to serve on the old major.
-func (u *K8sMajorUpgrader) putBack(ctx context.Context, run domain.MajorUpgrade, plan clusterUpgrade, why error) UpgradeOutcome {
+func (u *K8sMajorUpgrader) putBack(ctx context.Context, run domain.MajorUpgrade, plan clusterUpgrade, progress UpgradeProgress, why error) UpgradeOutcome {
+	if lost := lostRun(ctx, why, progress); lost != nil {
+		return UpgradeOutcome{Cause: lost}
+	}
 	log.Printf("major upgrade %s: putting Postgres %s back: %v", plan.projectID, run.FromVersion, why)
 	if err := u.pointCluster(ctx, plan, plan.fromImage, plan.fromStore, plan.fromServer); err != nil {
 		return UpgradeOutcome{Public: notPutBackPublic, Cause: fmt.Errorf("%v; put back: %w", why, err)}

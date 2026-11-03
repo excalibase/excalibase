@@ -192,12 +192,12 @@ func TestMajorUpgrades_HeartbeatAndNoWriteAfterTheEnd(t *testing.T) {
 	if err := store.StartMajorUpgrade(ctx, run); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	beat := time.Now().UTC().Truncate(time.Millisecond)
-	if err := store.TouchMajorUpgrade(ctx, "mu-hb1", "driver-1", beat); err != nil {
+	ageHeartbeat(t, store, "mu-hb1", time.Hour)
+	if err := store.TouchMajorUpgrade(ctx, "mu-hb1", "driver-1"); err != nil {
 		t.Fatalf("touch: %v", err)
 	}
 	running, err := store.RunningMajorUpgrades(ctx)
-	if err != nil || len(running) != 1 || !running[0].HeartbeatAt.Equal(beat) {
+	if err != nil || len(running) != 1 || dbNow(t, store).Sub(running[0].HeartbeatAt) > time.Minute {
 		t.Fatalf("running = %+v, %v", running, err)
 	}
 	finished := time.Now().UTC()
@@ -209,9 +209,37 @@ func TestMajorUpgrades_HeartbeatAndNoWriteAfterTheEnd(t *testing.T) {
 	if err := store.UpdateMajorUpgrade(ctx, run, nil); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
 		t.Fatalf("a finished run was rewritten: %v", err)
 	}
-	if err := store.TouchMajorUpgrade(ctx, "mu-hb1", "driver-1", time.Now()); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+	if err := store.TouchMajorUpgrade(ctx, "mu-hb1", "driver-1"); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
 		t.Fatalf("a finished run took a heartbeat: %v", err)
 	}
+}
+
+// ageHeartbeat moves the run's heartbeat back by age on the database's clock.
+func ageHeartbeat(t *testing.T, store *Store, id string, age time.Duration) {
+	t.Helper()
+	if _, err := store.db.Exec(`UPDATE database_major_upgrades SET heartbeat_at = now() - make_interval(secs => $2) WHERE id = $1`,
+		id, age.Seconds()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func dbNow(t *testing.T, store *Store) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := store.db.QueryRow(`SELECT now()`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	return now
+}
+
+func startClaimable(t *testing.T, store *Store, projectID, id string) *domain.MajorUpgrade {
+	t.Helper()
+	seedUpgradeProject(t, store, projectID, "16")
+	run := runningUpgrade(id, projectID, "16", "17")
+	if err := store.StartMajorUpgrade(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	return run
 }
 
 // A stale run is claimed once, and only by one actor; the claimer then
@@ -219,24 +247,20 @@ func TestMajorUpgrades_HeartbeatAndNoWriteAfterTheEnd(t *testing.T) {
 func TestMajorUpgrades_ClaimFencesTheFormerOwner(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	seedUpgradeProject(t, store, "mu-claim", "16")
-	run := runningUpgrade("mu-cl1", "mu-claim", "16", "17")
-	run.StartedAt = time.Now().Add(-time.Hour).UTC()
-	if err := store.StartMajorUpgrade(ctx, run); err != nil {
-		t.Fatal(err)
-	}
+	run := startClaimable(t, store, "mu-claim", "mu-cl1")
 	now := time.Now().UTC()
-	if claimed, err := store.ClaimMajorUpgrade(ctx, run.ID, "fresh-check", now.Add(-2*time.Hour), now); err != nil || claimed != nil {
+	if claimed, err := store.ClaimMajorUpgrade(ctx, run.ID, "fresh-check", time.Minute); err != nil || claimed != nil {
 		t.Fatalf("claim of a live run = %+v, %v", claimed, err)
 	}
-	claimed, err := store.ClaimMajorUpgrade(ctx, run.ID, "recovery-1", now.Add(-time.Minute), now)
+	ageHeartbeat(t, store, run.ID, 10*time.Minute)
+	claimed, err := store.ClaimMajorUpgrade(ctx, run.ID, "recovery-1", time.Minute)
 	if err != nil || claimed == nil || claimed.Owner != "recovery-1" || claimed.ID != run.ID {
 		t.Fatalf("claim = %+v, %v", claimed, err)
 	}
-	if again, err := store.ClaimMajorUpgrade(ctx, run.ID, "recovery-2", now.Add(-time.Minute), now); err != nil || again != nil {
+	if again, err := store.ClaimMajorUpgrade(ctx, run.ID, "recovery-2", time.Minute); err != nil || again != nil {
 		t.Fatalf("second claim = %+v, %v", again, err)
 	}
-	if err := store.TouchMajorUpgrade(ctx, run.ID, "driver-1", now); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+	if err := store.TouchMajorUpgrade(ctx, run.ID, "driver-1"); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
 		t.Fatalf("former owner touch = %v", err)
 	}
 	if err := store.UpdateMajorUpgrade(ctx, run, nil); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
@@ -244,6 +268,61 @@ func TestMajorUpgrades_ClaimFencesTheFormerOwner(t *testing.T) {
 	}
 	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-claim", "17", "driver-1", now); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
 		t.Fatalf("former owner mark = %v", err)
+	}
+}
+
+// After a claim the new owner writes the run like its driver did.
+func TestMajorUpgrades_TheNewOwnerWritesAfterAClaim(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	run := startClaimable(t, store, "mu-own", "mu-own1")
+	ageHeartbeat(t, store, run.ID, 10*time.Minute)
+	claimed, err := store.ClaimMajorUpgrade(ctx, run.ID, "recovery-1", time.Minute)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim = %+v, %v", claimed, err)
+	}
+	if err := store.TouchMajorUpgrade(ctx, run.ID, "recovery-1"); err != nil {
+		t.Fatalf("touch = %v", err)
+	}
+	claimed.Step = domain.MajorUpgradeStepConverting
+	if err := store.UpdateMajorUpgrade(ctx, claimed, &storage.MajorUpgradeProject{Status: "UPGRADING", Step: claimed.Step}); err != nil {
+		t.Fatalf("update = %v", err)
+	}
+	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-own", "17", "recovery-1", time.Now()); err != nil {
+		t.Fatalf("mark = %v", err)
+	}
+	latest, _ := store.LatestMajorUpgrade(ctx, "mu-own")
+	if latest.Owner != "recovery-1" || !latest.Converted || latest.Step != domain.MajorUpgradeStepConverting {
+		t.Fatalf("run = %+v", latest)
+	}
+}
+
+// Staleness is judged and heartbeats are stamped on the database's clock,
+// so an app clock that runs fast or slow cannot claim a live run or keep a
+// dead one.
+func TestMajorUpgrades_HeartbeatsUseTheDatabaseClock(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	run := startClaimable(t, store, "mu-clock", "mu-clk1")
+	latest, _ := store.LatestMajorUpgrade(ctx, "mu-clock")
+	if dbNow(t, store).Sub(latest.HeartbeatAt) > time.Minute {
+		t.Fatalf("start heartbeat %s is not the database's now", latest.HeartbeatAt)
+	}
+	if claimed, _ := store.ClaimMajorUpgrade(ctx, run.ID, "recovery-1", 3*time.Minute); claimed != nil {
+		t.Fatal("a run marked alive just now was claimed")
+	}
+	ageHeartbeat(t, store, run.ID, 4*time.Minute)
+	claimed, err := store.ClaimMajorUpgrade(ctx, run.ID, "recovery-1", 3*time.Minute)
+	if err != nil || claimed == nil || dbNow(t, store).Sub(claimed.HeartbeatAt) > time.Minute {
+		t.Fatalf("claim = %+v, %v", claimed, err)
+	}
+	ageHeartbeat(t, store, run.ID, 4*time.Minute)
+	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-clock", "17", "recovery-1", time.Now().Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	latest, _ = store.LatestMajorUpgrade(ctx, "mu-clock")
+	if dbNow(t, store).Sub(latest.HeartbeatAt) > time.Minute {
+		t.Fatalf("mark heartbeat %s is not the database's now", latest.HeartbeatAt)
 	}
 }
 

@@ -527,6 +527,22 @@ func TestDockerConvertDoesNotRecordAContainerForARunItLost(t *testing.T) {
 	}
 }
 
+// A run lost once the old server stopped: the old container keeps its name.
+func TestDockerConvertDoesNotRenameForARunLostAfterTheStop(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.engine.after = map[string]func(){"stop": func() { w.progress.lost = true }}
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.called("rename:") || w.called("create:postgres:17") {
+		t.Fatalf("the swap went on after the run was lost: %v", w.engine.calls)
+	}
+	if old := w.engine.find(provisioner.DatabaseContainerName("dk-1")); old == nil || old.id != "old-id" {
+		t.Fatalf("old container = %+v", old)
+	}
+}
+
 // A run already lost is not touched at all.
 func TestDockerConvertChangesNothingForARunItLost(t *testing.T) {
 	w := newDockerUpgradeWorld(t)
