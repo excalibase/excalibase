@@ -176,6 +176,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		metricsEndpointHandler: handler.NewMetricsEndpointHandler(storedTotals{}),
 		logDrainsHandler:       handler.NewLogDrainsHandler(matrixLogDrains(instances), nil),
 		hostMonitoringHandler:  matrixHostMonitoring(),
+		majorUpgradeHandler:    handler.NewMajorUpgradeHandler(matrixMajorUpgrades{}, nil),
 		logForwarderHandler:    handler.NewLogForwarderHandler(matrixLogDrains(instances), "matrix-forwarder-token"),
 		registryToken:          matrixRegistryToken(t),
 		internalRegistryH:      handler.NewInternalRegistryHandler(appregistry.NewGenerations(memVault{})),

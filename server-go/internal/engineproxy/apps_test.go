@@ -40,9 +40,17 @@ func networkCreateBody(t *testing.T, mutate func(map[string]any)) []byte {
 func TestCheckNetworkCreateAllowsAProjectNetwork(t *testing.T) {
 	policy := appsPolicy()
 	for name, body := range map[string][]byte{
-		"internal":           networkCreateBody(t, nil),
-		"with egress":        networkCreateBody(t, func(b map[string]any) { b["Internal"] = false }),
-		"isolated (podman)":  networkCreateBody(t, func(b map[string]any) { b["Options"] = map[string]any{"isolate": "true"} }),
+		"internal":          networkCreateBody(t, nil),
+		"with egress":       networkCreateBody(t, func(b map[string]any) { b["Internal"] = false }),
+		"isolated (podman)": networkCreateBody(t, func(b map[string]any) { b["Options"] = map[string]any{"isolate": "true"} }),
+		// EXC-671: an internal network whose bridge has no address on the host, so nothing on it reaches the host.
+		"no host address": networkCreateBody(t, func(b map[string]any) {
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv4": "isolated"}
+		}),
+		"no host address, either family": networkCreateBody(t, func(b map[string]any) {
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv4": "isolated",
+				"com.docker.network.bridge.gateway_mode_ipv6": "isolated"}
+		}),
 		"default driver":     networkCreateBody(t, func(b map[string]any) { b["Driver"] = "" }),
 		"old client dedupe":  networkCreateBody(t, func(b map[string]any) { b["CheckDuplicate"] = true }),
 		"empty IPAM by SDKs": networkCreateBody(t, func(b map[string]any) { b["IPAM"] = map[string]any{"Driver": "", "Config": nil} }),
@@ -67,11 +75,25 @@ func TestCheckNetworkCreateRefuses(t *testing.T) {
 		}, "IPAM"},
 		"driver options": {func(b map[string]any) { b["Options"] = map[string]any{"com.docker.network.bridge.name": "eth0"} }, "Options"},
 		"isolate off":    {func(b map[string]any) { b["Options"] = map[string]any{"isolate": "false"} }, "Options"},
-		"swarm scope":    {func(b map[string]any) { b["Scope"] = "swarm" }, "Scope"},
-		"ingress":        {func(b map[string]any) { b["Ingress"] = true }, "Ingress"},
-		"config from":    {func(b map[string]any) { b["ConfigFrom"] = map[string]any{"Network": "excalibase-platform"} }, "ConfigFrom"},
-		"ipv6":           {func(b map[string]any) { b["EnableIPv6"] = true }, "EnableIPv6"},
-		"unknown field":  {func(b map[string]any) { b["Future"] = "x" }, "Future"},
+		"a routed gateway": {func(b map[string]any) {
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv4": "routed"}
+		}, "Options"},
+		"no host address with egress": {func(b map[string]any) {
+			b["Internal"] = false
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv4": "isolated"}
+		}, "internal"},
+		"no IPv6 host address with egress": {func(b map[string]any) {
+			b["Internal"] = false
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv6": "isolated"}
+		}, "internal"},
+		"a routed IPv6 gateway": {func(b map[string]any) {
+			b["Options"] = map[string]any{"com.docker.network.bridge.gateway_mode_ipv6": "routed"}
+		}, "Options"},
+		"swarm scope":   {func(b map[string]any) { b["Scope"] = "swarm" }, "Scope"},
+		"ingress":       {func(b map[string]any) { b["Ingress"] = true }, "Ingress"},
+		"config from":   {func(b map[string]any) { b["ConfigFrom"] = map[string]any{"Network": "excalibase-platform"} }, "ConfigFrom"},
+		"ipv6":          {func(b map[string]any) { b["EnableIPv6"] = true }, "EnableIPv6"},
+		"unknown field": {func(b map[string]any) { b["Future"] = "x" }, "Future"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -202,6 +224,21 @@ func TestCheckCreateAllowsAnAppContainer(t *testing.T) {
 	other := createBody(t, func(b map[string]any) { hostConfig(b)["CapAdd"] = []any{"NET_BIND_SERVICE", "NET_ADMIN"} })
 	if err := appsPolicy().CheckCreate("excalibase-app-2", other); err == nil {
 		t.Fatal("NET_ADMIN beside NET_BIND_SERVICE allowed")
+	}
+}
+
+// An unsandboxed app may add back what it needs to step down from root, and nothing more.
+func TestCheckCreateAdmitsOnlyTheStepDownCapabilities(t *testing.T) {
+	stepDown := []any{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "cap_setuid"}
+	body := createBody(t, func(b map[string]any) { hostConfig(b)["CapAdd"] = stepDown })
+	if err := appsPolicy().CheckCreate("excalibase-app-1", body); err != nil {
+		t.Fatalf("step-down capabilities refused: %v", err)
+	}
+	for _, capability := range []string{"NET_RAW", "SYS_ADMIN", "SYS_PTRACE", "SETPCAP", "SETFCAP", "MKNOD", "KILL", "SYS_CHROOT", "FSETID", "AUDIT_WRITE", "DAC_READ_SEARCH", "ALL"} {
+		body := createBody(t, func(b map[string]any) { hostConfig(b)["CapAdd"] = []any{"SETUID", capability} })
+		if err := appsPolicy().CheckCreate("excalibase-app-1", body); err == nil {
+			t.Errorf("CapAdd %s allowed", capability)
+		}
 	}
 }
 

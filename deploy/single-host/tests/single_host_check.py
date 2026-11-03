@@ -148,7 +148,14 @@ for key, value in want.items():
 sites = {k: v for k, v in penv.items() if k.startswith("SITES_")}
 want_sites = {"SITES_ENABLED": "false", "SITES_CLOUDFLARE_ACCOUNT_ID": "", "SITES_CLOUDFLARE_API_TOKEN": "",
               "SITES_DISPATCH_NAMESPACE": "", "SITES_HOSTS_KV_NAMESPACE_ID": "", "SITES_BASE_DOMAIN": "",
-              "SITES_ZONE_ID": "", "SITES_CUSTOM_DOMAIN_TARGET": "", "SITES_MAX_ZONE_HOSTNAMES": ""}
+              "SITES_ZONE_ID": "", "SITES_CUSTOM_DOMAIN_TARGET": "", "SITES_MAX_ZONE_HOSTNAMES": "", "SITES_OUTBOUND_WORKER": "",
+              # Git builds on this host (EXC-671): off, no App, one slot, the proxy from provisioning's image.
+              "SITES_CLOUDFLARE_API_URL": "", "SITES_GIT_BUILDS_ENABLED": "false", "SITES_GITHUB_APP_ID": "",
+              "SITES_GITHUB_APP_SLUG": "", "SITES_GITHUB_CLIENT_ID": "", "SITES_GITHUB_CLIENT_SECRET": "",
+              "SITES_GITHUB_APP_PRIVATE_KEY": "", "SITES_GITHUB_APP_PRIVATE_KEY_FILE": "", "SITES_GITHUB_WEBHOOK_SECRET": "",
+              "SITES_GITHUB_API_URL": "https://api.github.com", "SITES_GITHUB_WEB_URL": "https://github.com",
+              "SITES_BUILD_SLOTS": "1", "SITES_BUILD_NODE_IMAGE": "", "SITES_BUILD_EGRESS_ALLOW": "",
+              "SITES_BUILD_EGRESS_IMAGE": penv.get("APP_DISK_TOOLS_IMAGE", "")}
 if sites != want_sites:
     failures.append(f"provisioning SITES_* = {sites}, want {want_sites} by default")
 secrets = [penv.get("BACKUP_DEFAULT_SECRET_ACCESS_KEY"), penv.get("STORAGE_SECRET_ACCESS_KEY"),
@@ -254,6 +261,32 @@ if monitored != penv.get("HOST_METRICS_CONTAINERS", "").split(","):
 long_running = {s.get("container_name") for s in services.values() if s.get("restart") == "unless-stopped"}
 if set(monitored) != long_running:
     failures.append(f"monitored platform containers {sorted(monitored)}, want every long-running one {sorted(long_running)}")
+
+# EXC-673: request counters are off by default; when on, graphql and auth bind
+# them to the internal metrics network only, which nothing else joins, and
+# provisioning reads them there by the aliases that network alone resolves.
+metrics_net = networks.get("metrics") or {}
+if not metrics_net.get("internal") or metrics_net.get("name") != "excalibase-metrics":
+    failures.append(f"metrics network {metrics_net}, want internal excalibase-metrics")
+on_metrics = {n for n, s in services.items() if "metrics" in (s.get("networks") or {})}
+if on_metrics != {"provisioning", "graphql", "auth"}:
+    failures.append(f"metrics network members {sorted(on_metrics)}, want provisioning, graphql and auth")
+if penv.get("FEATURE_REQUESTMETRICS") != "false" or penv.get("FEATURE_SLOWQUERIES") != "false":
+    failures.append(f"request charts/slow queries on by default: {penv.get('FEATURE_REQUESTMETRICS')!r}/{penv.get('FEATURE_SLOWQUERIES')!r}")
+counters = {"graphql": ("APP_REQUEST_METRICS_", "graphql-metrics", "9464"), "auth": ("REQUEST_METRICS_", "auth-metrics", "9465")}
+targets = []
+for name, (prefix, alias, port) in counters.items():
+    env = services[name].get("environment") or {}
+    aliases = ((services[name].get("networks") or {}).get("metrics") or {}).get("aliases") or []
+    if env.get(prefix + "ENABLED") != "false":
+        failures.append(f"{name} counts requests by default: {env.get(prefix + 'ENABLED')!r}")
+    if env.get(prefix + "ADDRESS") != alias or aliases != [alias]:
+        failures.append(f"{name} counters bind {env.get(prefix + 'ADDRESS')!r} with aliases {aliases}, want {alias} on metrics only")
+    if str(env.get(prefix + "PORT")) != port:
+        failures.append(f"{name} counters port {env.get(prefix + 'PORT')!r}, want {port}")
+    targets.append(f"{alias}:{port}")
+if penv.get("REQUEST_METRICS_TARGETS", "").split(",") != targets:
+    failures.append(f"REQUEST_METRICS_TARGETS={penv.get('REQUEST_METRICS_TARGETS')!r}, want {','.join(targets)}")
 
 if failures:
     sys.exit("\n".join(failures))

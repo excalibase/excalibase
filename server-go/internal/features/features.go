@@ -52,9 +52,38 @@ const (
 	// AuthGuest is end-user guest accounts (no address, role guest) and the
 	// stable token subject: sub becomes the account id.
 	AuthGuest Feature = "authguest"
+	// AuthMFA is end-user TOTP factors, recovery codes and the aal claim:
+	// the project's switch and its per-project key in the vault.
+	AuthMFA Feature = "authmfa"
 	// HostMetrics is single-host monitoring: the host and every container
 	// sampled into history, alerts and notices, and Studio's Host page (EXC-670).
 	HostMetrics Feature = "hostmetrics"
+	// SitesServer is server-rendered sites: a site of kind server runs its
+	// build's Worker code beside its assets (ADR 0045, EXC-661). Needs Sites.
+	SitesServer Feature = "sitesserver"
+	// AuthHooks is end-user auth hooks: signed HTTPS calls the auth service
+	// makes to the project's own endpoints (custom claims, sign-up, mail).
+	AuthHooks Feature = "authhooks"
+	// DBAllowList is the per-project list of addresses that may reach the
+	// public database port, and its Studio card and MCP tools (EXC-665).
+	DBAllowList Feature = "dballowlist"
+	// DBReadAddress is a database's read-only address to its replicas, internal
+	// and on its own public port, and its Studio card (EXC-666).
+	DBReadAddress Feature = "dbreadaddress"
+	// DBCopy is copying a database into a new project from now, its latest
+	// backup or a time, in Studio and the API (EXC-667).
+	DBCopy Feature = "dbcopy"
+	// MajorUpgrade moves a project's Postgres database to a newer major
+	// version after a forced backup, and its Studio card (EXC-668).
+	MajorUpgrade Feature = "majorupgrade"
+	// TemplateCatalog is the self-managed service catalog beside the starter templates (EXC-669).
+	TemplateCatalog Feature = "templatecatalog"
+	// HostLogs is a single host's stored log search: provisioning ships the
+	// project containers' output to the bundled Loki (EXC-672).
+	HostLogs Feature = "hostlogs"
+	// SingleHostBuilds runs git builds of sites on a single Docker or Podman
+	// host, under the sandbox runtime behind the build egress proxy (EXC-671).
+	SingleHostBuilds Feature = "singlehostbuilds"
 	// AppGitBuilds is building apps from a git push under gVisor (EXC-547,
 	// ADR 0037 phase 2): each plan's app build limits and, later, the app's
 	// git source, builds and logs.
@@ -63,7 +92,7 @@ const (
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, AppGitBuilds}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds}
 }
 
 type Flags interface {

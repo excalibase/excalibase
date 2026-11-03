@@ -23,7 +23,7 @@ func newSite(id, project, name string) *sites.Site {
 
 func seedSite(t *testing.T, store *sites.PostgresStore, site *sites.Site) {
 	t.Helper()
-	if err := store.Create(context.Background(), site, 5); err != nil {
+	if err := store.Create(context.Background(), site, 5, 0); err != nil {
 		t.Fatalf("seed site %s: %v", site.Name, err)
 	}
 }
@@ -31,16 +31,16 @@ func seedSite(t *testing.T, store *sites.PostgresStore, site *sites.Site) {
 func TestPostgresSiteNameIsGlobalAndTheLimitHolds(t *testing.T) {
 	store := sites.NewPostgresStore(platformDB(t).DB())
 	ctx := context.Background()
-	if err := store.Create(ctx, newSite("limit-1", "proj-limit-a", "limit-shop"), 2); err != nil {
+	if err := store.Create(ctx, newSite("limit-1", "proj-limit-a", "limit-shop"), 2, 0); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := store.Create(ctx, newSite("limit-2", "proj-limit-b", "limit-shop"), 2); !errors.Is(err, sites.ErrSiteNameTaken) {
+	if err := store.Create(ctx, newSite("limit-2", "proj-limit-b", "limit-shop"), 2, 0); !errors.Is(err, sites.ErrSiteNameTaken) {
 		t.Fatalf("err = %v, want name taken", err)
 	}
-	if err := store.Create(ctx, newSite("limit-3", "proj-limit-a", "limit-blog"), 2); err != nil {
+	if err := store.Create(ctx, newSite("limit-3", "proj-limit-a", "limit-blog"), 2, 0); err != nil {
 		t.Fatalf("second create: %v", err)
 	}
-	if err := store.Create(ctx, newSite("limit-4", "proj-limit-a", "limit-docs"), 2); !errors.Is(err, sites.ErrSiteLimitReached) {
+	if err := store.Create(ctx, newSite("limit-4", "proj-limit-a", "limit-docs"), 2, 0); !errors.Is(err, sites.ErrSiteLimitReached) {
 		t.Fatalf("err = %v, want the limit", err)
 	}
 }

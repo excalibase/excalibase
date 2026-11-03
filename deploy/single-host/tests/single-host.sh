@@ -53,6 +53,28 @@ echo "$hostmetrics" | grep -q 'FEATURE_HOSTMETRICS: "true"' \
   || { echo "FEATURE_HOSTMETRICS=true does not reach provisioning" >&2; exit 1; }
 echo "$hostmetrics" | grep -q 'source: /proc/1/net/dev' \
   || { echo "the host's network counters are not mounted with --host-metrics" >&2; exit 1; }
+# Stored log search (EXC-672): Loki only with the profile, on a network only provisioning shares.
+render | python3 -c 'import sys,yaml; sys.exit("loki runs without the hostlogs profile" if "loki" in yaml.safe_load(sys.stdin)["services"] else 0)'
+render COMPOSE_PROFILES=hostlogs FEATURE_HOSTLOGS=true | python3 -c '
+import sys, yaml
+doc = yaml.safe_load(sys.stdin)
+services, networks = doc["services"], doc["networks"]
+loki = services.get("loki") or sys.exit("no loki with the hostlogs profile")
+prov = services["provisioning"]
+if prov["environment"].get("FEATURE_HOSTLOGS") != "true":
+    sys.exit("FEATURE_HOSTLOGS=true does not reach provisioning")
+if prov["environment"].get("HOST_LOGS_LOKI_URL") != "http://loki:3100":
+    sys.exit("provisioning is not pointed at the bundled loki")
+if set(loki.get("networks") or {}) != {"logs"} or not networks["logs"].get("internal"):
+    sys.exit("loki must sit alone on the internal logs network")
+joined = sorted(n for n, s in services.items() if "logs" in (s.get("networks") or {}))
+if joined != ["loki", "provisioning"]:
+    sys.exit(f"the logs network is joined by {joined}")
+if loki.get("ports") or not loki.get("read_only") or "ALL" not in (loki.get("cap_drop") or []):
+    sys.exit("loki is published or not hardened")
+if not loki.get("mem_limit"):
+    sys.exit("loki has no memory limit")
+'
 echo "single-host required settings ok"
 # Email through the operator's own relay (EXC-580) or SES: every setting in .env reaches provisioning.
 out=$(render EMAIL_PROVIDER=smtp SMTP_HOST=mail.example.test SMTP_PORT=2587 SMTP_TLS=starttls \
@@ -66,9 +88,27 @@ done
 # Sites (EXC-353): every Cloudflare setting in .env reaches provisioning.
 out=$(render SITES_ENABLED=true SITES_CLOUDFLARE_ACCOUNT_ID=acct-9f3e SITES_CLOUDFLARE_API_TOKEN=cf-token \
   SITES_DISPATCH_NAMESPACE=excalibase-sites SITES_HOSTS_KV_NAMESPACE_ID=kv-7c21 SITES_BASE_DOMAIN=example.site \
-  SITES_ZONE_ID=0123456789abcdef0123456789abcdef SITES_CUSTOM_DOMAIN_TARGET=cname.example.site SITES_MAX_ZONE_HOSTNAMES=40)
+  SITES_ZONE_ID=0123456789abcdef0123456789abcdef SITES_CUSTOM_DOMAIN_TARGET=cname.example.site SITES_MAX_ZONE_HOSTNAMES=40 \
+  SITES_OUTBOUND_WORKER=excalibase-sites-outbound)
 for want in 'SITES_ENABLED: "true"' 'SITES_CLOUDFLARE_ACCOUNT_ID: acct-9f3e' 'SITES_CLOUDFLARE_API_TOKEN: cf-token' \
   'SITES_DISPATCH_NAMESPACE: excalibase-sites' 'SITES_HOSTS_KV_NAMESPACE_ID: kv-7c21' 'SITES_BASE_DOMAIN: example.site' \
-  'SITES_ZONE_ID: 0123456789abcdef0123456789abcdef' 'SITES_CUSTOM_DOMAIN_TARGET: cname.example.site' 'SITES_MAX_ZONE_HOSTNAMES: "40"'; do
+  'SITES_ZONE_ID: 0123456789abcdef0123456789abcdef' 'SITES_CUSTOM_DOMAIN_TARGET: cname.example.site' 'SITES_MAX_ZONE_HOSTNAMES: "40"' \
+  'SITES_OUTBOUND_WORKER: excalibase-sites-outbound'; do
   printf '%s\n' "$out" | grep -qF "$want" || { echo "sites setting does not reach provisioning: $want" >&2; exit 1; }
 done
+# Git builds of sites on this host (EXC-671): off by default, and every setting in .env reaches provisioning.
+out=$(render)
+for want in 'SITES_GIT_BUILDS_ENABLED: "false"' 'FEATURE_SINGLEHOSTBUILDS: "false"' 'SITES_BUILD_SLOTS: "1"'; do
+  printf '%s\n' "$out" | grep -qF "$want" || { echo "site builds default does not reach provisioning: $want" >&2; exit 1; }
+done
+out=$(render TAG=9.9.9 SITES_GIT_BUILDS_ENABLED=true FEATURE_SINGLEHOSTBUILDS=true SITES_GITHUB_APP_ID=4242 SITES_GITHUB_APP_SLUG=acme-sites \
+  SITES_GITHUB_CLIENT_ID=Iv1.abc SITES_GITHUB_CLIENT_SECRET=gh-secret SITES_GITHUB_APP_PRIVATE_KEY_FILE=/run/app.pem \
+  SITES_GITHUB_WEBHOOK_SECRET=hook-secret SITES_BUILD_SLOTS=2 SITES_BUILD_EGRESS_ALLOW=git.lan:8080 SITES_CLOUDFLARE_API_URL=http://cf.test)
+for want in 'SITES_GIT_BUILDS_ENABLED: "true"' 'FEATURE_SINGLEHOSTBUILDS: "true"' 'SITES_GITHUB_APP_ID: "4242"' \
+  'SITES_GITHUB_APP_SLUG: acme-sites' 'SITES_GITHUB_CLIENT_ID: Iv1.abc' 'SITES_GITHUB_CLIENT_SECRET: gh-secret' \
+  'SITES_GITHUB_APP_PRIVATE_KEY_FILE: /run/app.pem' 'SITES_GITHUB_WEBHOOK_SECRET: hook-secret' 'SITES_BUILD_SLOTS: "2"' \
+  'SITES_BUILD_EGRESS_ALLOW: git.lan:8080' 'SITES_CLOUDFLARE_API_URL: http://cf.test' \
+  'SITES_BUILD_EGRESS_IMAGE: docker.io/excalibase/provisioning:9.9.9' 'SITES_GITHUB_API_URL: https://api.github.com'; do
+  printf '%s\n' "$out" | grep -qF "$want" || { echo "site build setting does not reach provisioning: $want" >&2; exit 1; }
+done
+echo "single-host site build settings ok"
