@@ -8,11 +8,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 )
 
-// Failure kinds the publish step names (EXC-547 step 3), beside FailImageTooLarge.
-const (
-	FailRegistryFull sitebuilds.FailureKind = "registry-full"
-	FailBadImage     sitebuilds.FailureKind = "bad-image"
-)
+// FailBadImage is an image the publish step refuses (EXC-547 step 3); FailRegistryFull and FailImageTooLarge are in spec.go.
+const FailBadImage sitebuilds.FailureKind = "bad-image"
 
 // Cluster runs app build Jobs: the k8s app build runner.
 type Cluster interface {
