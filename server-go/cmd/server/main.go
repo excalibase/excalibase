@@ -1843,7 +1843,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provSvc.SetSiteRouter(sitesSvc)
 	builds := newSiteBuilds(siteBuildArgs{cfg: cfg, sqlStore: sqlStore, kube: k8sClient, vault: vc, sites: sitesSvc,
 		limits:  service.NewSiteBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
-		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}})
+		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}, docker: a.dockerClient})
 	return &handlerDeps{
 		siteBuilds:            builds,
 		provHandler:           provHandler,
@@ -2743,8 +2743,8 @@ func mountAuthProviders(r *chi.Mux, sqlStore storage.OrgStore, store storage.Ins
 }
 
 // mountAuthHooks serves the end-user auth hooks settings (EXC-662): Developer
-// reads, Admin writes; the flag goes first so that while it is off these
-// answer as never mounted.
+// reads (host only; an Admin gets each full URL, so no read-only token), Admin
+// writes; the flag goes first so that while it is off these answer as never mounted.
 func mountAuthHooks(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
 	r.Route("/api/projects/{projectId}/auth-hooks", func(r chi.Router) {
 		r.Use(features.Require(d.features, features.AuthHooks))
@@ -2754,7 +2754,7 @@ func mountAuthHooks(r *chi.Mux, sqlStore storage.OrgStore, store storage.Instanc
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
 		r.Use(d.activity)
-		r.Get("/", d.provHandler.GetAuthHooks)
+		r.With(auth.RequireWriteCapableForSecrets).Get("/", d.provHandler.GetAuthHooks)
 		r.Post("/secret", d.provHandler.RotateAuthHookSecret)
 		r.Delete("/secret", d.provHandler.DeleteAuthHookSecret)
 		r.Put("/{hook}", d.provHandler.PutAuthHook)

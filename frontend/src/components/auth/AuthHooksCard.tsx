@@ -26,7 +26,7 @@ const inputClass = 'w-full px-3 py-2 bg-bg-secondary border border-border-primar
 function HookForm({ projectId, hook, secretSet }: { readonly projectId: string; readonly hook: AuthHook; readonly secretSet: boolean }) {
   const save = useSaveAuthHook(projectId, hook.hook);
   const [enabled, setEnabled] = useState(hook.enabled);
-  const [url, setUrl] = useState(hook.url);
+  const [url, setUrl] = useState(hook.url ?? '');
   const [saved, setSaved] = useState(false);
   // Re-seed when the server's copy changes (a refetch, or the secret's removal
   // switching the hook off), but never when only the secret state does.
@@ -34,7 +34,7 @@ function HookForm({ projectId, hook, secretSet }: { readonly projectId: string; 
   if (seed.enabled !== hook.enabled || seed.url !== hook.url) {
     setSeed(hook);
     setEnabled(hook.enabled);
-    setUrl(hook.url);
+    setUrl(hook.url ?? '');
   }
   const guide = hookGuides[hook.hook];
   const prefix = `auth-hook-${hook.hook}`;
@@ -66,6 +66,30 @@ function HookForm({ projectId, hook, secretSet }: { readonly projectId: string; 
       {saved && <p className="text-sm text-text-secondary" role="status">Saved. Auth uses it after it refreshes the project's settings.</p>}
       <Button type="submit" size="sm" disabled={save.isPending} aria-label={`Save ${guide.name}`}>Save</Button>
     </form>
+  );
+}
+
+// HookSummary is a Developer's view: the switch and the host, never the URL.
+function HookSummary({ hook }: { readonly hook: AuthHook }) {
+  const guide = hookGuides[hook.hook];
+  return (
+    <div data-testid={`auth-hook-${hook.hook}`} className="space-y-1 p-4 rounded-lg border border-border-primary">
+      <div className="flex items-center justify-between">
+        <h5 className="font-medium text-text-primary">{guide.name}</h5>
+        <span className="text-xs text-text-secondary">{hook.enabled ? 'On' : 'Off'}</span>
+      </div>
+      <p className="text-xs text-text-secondary">{guide.does}</p>
+      <p className="text-sm text-text-secondary">{hook.host ? `Calls ${hook.host}` : 'No URL set'}</p>
+    </div>
+  );
+}
+
+function SecretState({ secretSet }: { readonly secretSet: boolean }) {
+  return (
+    <div className="flex items-center justify-between p-4 rounded-lg border border-border-primary">
+      <h5 className="font-medium text-text-primary">Signing secret</h5>
+      <span data-testid="auth-hooks-secret-state" className="text-xs text-text-secondary">{secretSet ? 'Set' : 'Not set'}</span>
+    </div>
   );
 }
 
@@ -128,16 +152,22 @@ export function AuthHooksCard({ projectId }: { readonly projectId: string }) {
         Auth calls your endpoint with an HTTPS POST signed in the Standard Webhooks format: the headers webhook-id,
         webhook-timestamp and webhook-signature. Verify the signature with the signing secret, and refuse a timestamp
         more than 5 minutes off or an id you have seen. A hook that fails or takes over 2 s makes the sign-in fail.
-        Only project Admins can change hooks.
+        Only project Admins see the full URLs and change hooks.
       </p>
       {isLoading && <Loader2 className="w-4 h-4 animate-spin" role="status" aria-label="Loading the auth hooks" />}
       {isError && <p className="text-sm text-red-400" role="alert">{serverErrorMessage(error, 'The auth hooks could not be read')}</p>}
-      {data && (
+      {data?.canChange && (
         <div className="grid gap-4">
           <SigningSecret projectId={projectId} secretSet={data.secretSet} />
           {data.hooks.map((hook) => (
             <HookForm key={hook.hook} projectId={projectId} hook={hook} secretSet={data.secretSet} />
           ))}
+        </div>
+      )}
+      {data && !data.canChange && (
+        <div className="grid gap-4">
+          <SecretState secretSet={data.secretSet} />
+          {data.hooks.map((hook) => <HookSummary key={hook.hook} hook={hook} />)}
         </div>
       )}
     </section>

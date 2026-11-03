@@ -35,6 +35,8 @@ services:
       OBJECTSTORE_ROOT_SECRET: ${OBJECTSTORE_ROOT_SECRET:?run ./init.sh first}
       OBJECTSTORE_BACKUPS_SECRET: ${OBJECTSTORE_BACKUPS_SECRET:?run ./init.sh first}
       OBJECTSTORE_FILES_SECRET: ${OBJECTSTORE_FILES_SECRET:?run ./init.sh first}
+      FEATURE_AUTHHOOKS: ${FEATURE_AUTHHOOKS:-false}
+      AUTH_HOOKS_DENY_CIDRS: ${AUTH_HOOKS_DENY_CIDRS:-}
       FEATURE_LOGDRAINS: ${FEATURE_LOGDRAINS:-false}
       LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
     command: ["sh", "/preflight.sh"]
@@ -389,6 +391,28 @@ services:
       # Server-rendered sites (EXC-661) run only once the outbound Worker bound on
       # the dispatch namespace is named here, with FEATURE_SITESSERVER=true.
       SITES_OUTBOUND_WORKER: ${SITES_OUTBOUND_WORKER:-}
+      # Cloudflare's API origin; set only to point Sites at a stand-in in tests.
+      SITES_CLOUDFLARE_API_URL: ${SITES_CLOUDFLARE_API_URL:-}
+      # Git builds of sites on this host (EXC-671): off unless .env says "true" for both
+      # switches and names the GitHub App. Each build runs under APP_SANDBOX_RUNTIME on a
+      # network with no route out; it reaches the internet (ports 80/443, public addresses
+      # only) through a proxy started from this image. Install notes: host firewall.
+      SITES_GIT_BUILDS_ENABLED: ${SITES_GIT_BUILDS_ENABLED:-false}
+      FEATURE_SINGLEHOSTBUILDS: ${FEATURE_SINGLEHOSTBUILDS:-false}
+      SITES_GITHUB_APP_ID: ${SITES_GITHUB_APP_ID:-}
+      SITES_GITHUB_APP_SLUG: ${SITES_GITHUB_APP_SLUG:-}
+      SITES_GITHUB_CLIENT_ID: ${SITES_GITHUB_CLIENT_ID:-}
+      SITES_GITHUB_CLIENT_SECRET: ${SITES_GITHUB_CLIENT_SECRET:-}
+      SITES_GITHUB_APP_PRIVATE_KEY: ${SITES_GITHUB_APP_PRIVATE_KEY:-}
+      SITES_GITHUB_APP_PRIVATE_KEY_FILE: ${SITES_GITHUB_APP_PRIVATE_KEY_FILE:-}
+      SITES_GITHUB_WEBHOOK_SECRET: ${SITES_GITHUB_WEBHOOK_SECRET:-}
+      SITES_GITHUB_API_URL: ${SITES_GITHUB_API_URL:-https://api.github.com}
+      SITES_GITHUB_WEB_URL: ${SITES_GITHUB_WEB_URL:-https://github.com}
+      SITES_BUILD_SLOTS: ${SITES_BUILD_SLOTS:-1}
+      SITES_BUILD_NODE_IMAGE: ${SITES_BUILD_NODE_IMAGE:-}
+      SITES_BUILD_EGRESS_IMAGE: ${SITES_BUILD_EGRESS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.5.0}}
+      # host:port entries builds may reach although private, e.g. a git server on your LAN.
+      SITES_BUILD_EGRESS_ALLOW: ${SITES_BUILD_EGRESS_ALLOW:-}
       # DocumentDB projects (EXC-576): off unless .env says "true" (init.sh --documentdb).
       DOCUMENTDB_ENABLED: ${DOCUMENTDB_ENABLED:-false}
       # Apps (EXC-575, ADR 0039): off unless .env says "true" (init.sh --apps).
@@ -568,7 +592,8 @@ services:
       TRUSTED_PROXY_CIDRS: ${AIO_DATAPLANE_SUBNET:-10.203.250.16/28}
       # Docker-mode tenant databases serve no TLS; k8s tenants require it.
       TENANT_DB_SSLMODE: disable
-      # Extra CIDRs auth hook calls may never reach, beside the built-in private ranges (EXC-662).
+      # Extra CIDRs auth hook calls may never reach, beside the built-in private ranges (EXC-662);
+      # preflight refuses to start with hooks on and this empty (init.sh --auth-hooks fills it).
       AUTH_HOOKS_DENY_CIDRS: ${AUTH_HOOKS_DENY_CIDRS:-}
       # Request counters (EXC-656), bound to the metrics network alone (EXC-673).
       REQUEST_METRICS_ENABLED: ${FEATURE_REQUESTMETRICS:-false}

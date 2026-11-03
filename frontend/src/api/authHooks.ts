@@ -5,14 +5,17 @@ import { api } from './client';
 // the project's own endpoints. The signing secret is answered once, on generate.
 export type AuthHookName = 'custom_access_token' | 'before_user_created' | 'send_email';
 
+// url is answered to Admins only (it may carry the receiver's token); everyone sees the host.
 export interface AuthHook {
   hook: AuthHookName;
   enabled: boolean;
-  url: string;
+  host: string;
+  url?: string;
 }
 
 export interface AuthHooks {
   secretSet: boolean;
+  canChange: boolean;
   hooks: AuthHook[];
 }
 

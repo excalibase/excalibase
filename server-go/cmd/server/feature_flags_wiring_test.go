@@ -143,7 +143,9 @@ var darkWork = map[features.Feature]string{
 	// The catalog's templates answer as unknown ids while it is off (internal/service).
 	features.TemplateCatalog: "TestTemplateCatalog_OffIsInvisible",
 	features.HostLogs:        "TestHostLogShippingStartsOnlyWithItsFeature",
-	features.LogDeletion:  "TestLogDeletionStartsOnlyWithItsFeature",
+	// Off, a single host keeps answering that it builds nothing (ModeSingleHost).
+	features.SingleHostBuilds: "TestSiteBuildMode",
+	features.LogDeletion:      "TestLogDeletionStartsOnlyWithItsFeature",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {
