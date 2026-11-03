@@ -191,5 +191,11 @@ func (r *Runner) Remove(ctx context.Context, buildID string) error {
 	return r.removeBox(ctx, buildID, chain)
 }
 
+// ForgetCloneCredential has nothing to delete: the clone token lives only in the clone step's
+// environment, and the dispatcher revokes it at the git host once the clone is done.
+func (r *Runner) ForgetCloneCredential(context.Context, string) error {
+	return nil
+}
+
 // logf is log.Printf, named for the box's own use.
 var logf = log.Printf
