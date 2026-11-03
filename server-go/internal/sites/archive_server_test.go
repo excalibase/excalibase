@@ -90,6 +90,8 @@ func TestServerArchiveRefusesABadSiteJSON(t *testing.T) {
 	cases := map[string]struct{ siteJSON, fragment string }{
 		"not json":          {`{"kind":`, "site.json"},
 		"unknown field":     {`{"kind":"server","main":"worker.js","bindings":[]}`, "bindings"},
+		"durable objects":   {`{"kind":"server","main":"worker.js","durable_objects":{"bindings":[{"name":"ROOM","class_name":"Room"}]}}`, "durable_objects"},
+		"mtls certificates": {`{"kind":"server","main":"worker.js","mtls_certificates":[{"binding":"CERT","certificate_id":"x"}]}`, "mtls_certificates"},
 		"static kind":       {`{"kind":"static","main":"worker.js"}`, `"kind": "server"`},
 		"no main":           {`{"kind":"server"}`, "main"},
 		"main not uploaded": {`{"kind":"server","main":"index.js"}`, "index.js"},

@@ -51,6 +51,7 @@ matches "$script" '^[a-z0-9][a-z0-9-]{0,62}$' || die "--script must be a lowerca
 [ -z "$outbound" ] || matches "$outbound" '^[a-z0-9][a-z0-9-]{0,62}$' || die "--outbound must be a lowercase Worker name"
 
 # The outbound Worker gets the site's identity from the router on every call.
+# Cloudflare's outbound Workers doc: binding one also blocks connect(), but it never sees fetches from Durable Objects or mTLS certificate bindings, so sites get neither (cfworkers.bindingRecords).
 dispatch="{\"type\":\"dispatch_namespace\",\"name\":\"SITES\",\"namespace\":\"$namespace\"}"
 outbound_var=""
 if [ -n "$outbound" ]; then
