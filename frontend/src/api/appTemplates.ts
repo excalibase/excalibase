@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
-import { getApp, isDeployInProgress, listDeploys, type App, type Deploy } from './apps';
+import { getApp, listDeploys, type App, type Deploy } from './apps';
 import type { TierType } from '../types';
 
 // Built-in templates (EXC-526) as GET /api/projects/{projectId}/app-templates/ serves them.
@@ -116,8 +116,6 @@ export const useFirstDeploy = (projectId: string, appId: string, acceptedAt: str
       return state === 'running' || state === 'failed' ? false : FIRST_DEPLOY_POLL_MS;
     },
   });
-
-export { isDeployInProgress };
 
 const templatesKey = (projectId: string) => ['app-templates', projectId] as const;
 
