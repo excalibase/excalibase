@@ -233,12 +233,17 @@ func (h *VaultHandler) PutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.v.Put(path, data); err != nil {
+	written, err := putSecret(h.v, path, data, r.Header.Get("If-None-Match") == "*")
+	if err != nil {
 		if errors.Is(err, vault.ErrSealed) {
 			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
 		httpError(w, errInternal, http.StatusInternalServerError)
+		return
+	}
+	if !written {
+		httpError(w, "a secret is already stored at this path", http.StatusPreconditionFailed)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
@@ -288,4 +293,13 @@ func httpError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]interface{}{"error": msg, "status": code})
+}
+
+// putSecret writes data; with ifAbsent (If-None-Match: *) only when nothing is
+// stored at path, reporting false when the existing secret was kept.
+func putSecret(v *vault.Vault, path string, data map[string]string, ifAbsent bool) (bool, error) {
+	if ifAbsent {
+		return v.PutIfAbsent(path, data)
+	}
+	return true, v.Put(path, data)
 }

@@ -49,6 +49,16 @@ func (s *MemoryStore) PutSecret(path string, data []byte) error {
 	return nil
 }
 
+func (s *MemoryStore) PutSecretIfAbsent(path string, data []byte) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.secrets[path]; exists {
+		return false, nil
+	}
+	s.secrets[path] = cloneBytes(data)
+	return true, nil
+}
+
 func (s *MemoryStore) DeleteSecret(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

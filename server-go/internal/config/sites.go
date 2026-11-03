@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -25,6 +26,11 @@ type SitesConfig struct {
 	CustomTarget string
 	// MaxZoneHostnames bounds the custom hostnames on the zone, across every project; 0 is the default.
 	MaxZoneHostnames int
+	// OutboundWorker names the Worker bound as the dispatch namespace's outbound
+	// Worker (EXC-661); server sites are offered only once it is named.
+	OutboundWorker string
+	// APIURL is Cloudflare's API origin; "" is the client's default. Tests point it at a stand-in.
+	APIURL string
 }
 
 // DefaultMaxZoneHostnames keeps the zone under the 100 custom hostnames Cloudflare includes.
@@ -51,6 +57,8 @@ func loadSites() SitesConfig {
 		ZoneID:             strings.TrimSpace(os.Getenv("SITES_ZONE_ID")),
 		CustomTarget:       strings.ToLower(strings.TrimSpace(os.Getenv("SITES_CUSTOM_DOMAIN_TARGET"))),
 		MaxZoneHostnames:   zoneHostnameCap(os.Getenv("SITES_MAX_ZONE_HOSTNAMES")),
+		OutboundWorker:     strings.TrimSpace(os.Getenv("SITES_OUTBOUND_WORKER")),
+		APIURL:             strings.TrimRight(strings.TrimSpace(os.Getenv("SITES_CLOUDFLARE_API_URL")), "/"),
 	}
 }
 
@@ -73,8 +81,8 @@ func (s SitesConfig) Complete() bool {
 }
 
 func (s SitesConfig) String() string {
-	return fmt.Sprintf("{AccountID:%s APIToken:[redacted] DispatchNamespace:%s BaseDomain:%s HostsKVNamespaceID:%s ZoneID:%s CustomTarget:%s MaxZoneHostnames:%d}",
-		s.AccountID, s.DispatchNamespace, s.BaseDomain, s.HostsKVNamespaceID, s.ZoneID, s.CustomTarget, s.MaxZoneHostnames)
+	return fmt.Sprintf("{AccountID:%s APIToken:[redacted] DispatchNamespace:%s BaseDomain:%s HostsKVNamespaceID:%s ZoneID:%s CustomTarget:%s MaxZoneHostnames:%d OutboundWorker:%s APIURL:%s}",
+		s.AccountID, s.DispatchNamespace, s.BaseDomain, s.HostsKVNamespaceID, s.ZoneID, s.CustomTarget, s.MaxZoneHostnames, s.OutboundWorker, s.APIURL)
 }
 
 func (s SitesConfig) GoString() string { return "config.SitesConfig" + s.String() }
@@ -91,6 +99,9 @@ func (c AppConfig) SitesCustomDomainsAvailable() bool {
 
 var zoneIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
+// workerNamePattern is a Worker script name, as the Cloudflare client sends one.
+var workerNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
 var baseDomainPattern = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
 // validateSites refuses a base domain no hostname could sit under.
@@ -101,8 +112,19 @@ func (c AppConfig) validateSites() error {
 	if !baseDomainPattern.MatchString(c.Sites.BaseDomain) {
 		return fmt.Errorf("SITES_BASE_DOMAIN %q is not a domain such as excalibase.app", c.Sites.BaseDomain)
 	}
+	if c.Sites.APIURL != "" {
+		// Plain http carries the API token in the clear: only to a dotless (container network) name, for tests.
+		parsed, err := url.Parse(c.Sites.APIURL)
+		plainLocal := err == nil && parsed.Scheme == "http" && !strings.Contains(parsed.Hostname(), ".")
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !plainLocal) {
+			return fmt.Errorf("SITES_CLOUDFLARE_API_URL %q must be an https URL (plain http only to a dotless test host)", c.Sites.APIURL)
+		}
+	}
 	if domainsOverlap(c.Sites.BaseDomain, strings.ToLower(strings.TrimSpace(c.AppDomain))) {
 		return fmt.Errorf("SITES_BASE_DOMAIN %q must not be APP_DOMAIN or share a subtree with it: a site name could take an app's hostname", c.Sites.BaseDomain)
+	}
+	if name := c.Sites.OutboundWorker; name != "" && !workerNamePattern.MatchString(name) {
+		return fmt.Errorf("SITES_OUTBOUND_WORKER %q must be a Worker script name: lowercase letters, digits and hyphens", name)
 	}
 	return c.Sites.validateCustomDomains()
 }

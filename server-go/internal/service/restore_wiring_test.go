@@ -298,4 +298,6 @@ func (r *vanishingRegistrar) RegisterProject(_ context.Context, inst *domain.Dat
 	return r.store.Delete(inst.ProjectID)
 }
 
-func (r *vanishingRegistrar) CarryRestoredSettings(context.Context, string, string) error { return nil }
+func (r *vanishingRegistrar) CarryRestoredSettings(context.Context, *provisioner.ProvisionContext, string, string) error {
+	return nil
+}

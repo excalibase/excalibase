@@ -68,6 +68,21 @@ func (s *PostgresStore) PutSecret(path string, data []byte) error {
 	return nil
 }
 
+func (s *PostgresStore) PutSecretIfAbsent(path string, data []byte) (bool, error) {
+	result, err := s.db.Exec(
+		`INSERT INTO vault_secrets (path, entry) VALUES ($1, $2) ON CONFLICT (path) DO NOTHING`,
+		path, data,
+	)
+	if err != nil {
+		return false, fmt.Errorf("put secret if absent: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("put secret if absent: %w", err)
+	}
+	return rows == 1, nil
+}
+
 func (s *PostgresStore) DeleteSecret(path string) error {
 	_, err := s.db.Exec(`DELETE FROM vault_secrets WHERE path = $1`, path)
 	if err != nil {

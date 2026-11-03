@@ -7,6 +7,7 @@ import { apiErrorMessage } from '../../api/permissions';
 import { useProjectRole } from '../../hooks/useProjectRole';
 import { useFeatureEnabled } from '../../hooks/useDeploymentMode';
 import { EndUserDetails } from './EndUserDetails';
+import { ResetEndUserMFA } from './ResetEndUserMFA';
 import { validateEndUserRole } from '../../utils/permissionRules';
 
 // The role each end user's token carries (EXC-370): the API permissions of
@@ -85,6 +86,7 @@ function EndUserRolesBody({ roleLoading, canAdmin, users, children }: BodyProps)
 
 function EndUserTable({ projectId, users, total }: Readonly<{ projectId: string; users: EndUser[]; total?: number }>) {
   const { enabled: accounts } = useFeatureEnabled('authuser');
+  const { enabled: mfa } = useFeatureEnabled('authmfa');
   return (
     <div className="rounded-lg border border-border-primary overflow-hidden">
       <table className="w-full text-sm">
@@ -98,7 +100,7 @@ function EndUserTable({ projectId, users, total }: Readonly<{ projectId: string;
         </thead>
         <tbody>
           {users.map((user) => (
-            <EndUserRow key={user.id} projectId={projectId} user={user} accounts={accounts} />
+            <EndUserRow key={user.id} projectId={projectId} user={user} accounts={accounts} mfa={mfa} />
           ))}
         </tbody>
       </table>
@@ -111,7 +113,7 @@ function EndUserTable({ projectId, users, total }: Readonly<{ projectId: string;
   );
 }
 
-function EndUserRow({ projectId, user, accounts }: Readonly<{ projectId: string; user: EndUser; accounts: boolean }>) {
+function EndUserRow({ projectId, user, accounts, mfa }: Readonly<{ projectId: string; user: EndUser; accounts: boolean; mfa: boolean }>) {
   const qc = useQueryClient();
   const name = endUserName(user);
   const [editing, setEditing] = useState(false);
@@ -198,6 +200,8 @@ function EndUserRow({ projectId, user, accounts }: Readonly<{ projectId: string;
                 Details
               </button>
             )}
+            {/* With authuser on, the reset sits in the details panel instead. */}
+            {mfa && !accounts && <ResetEndUserMFA projectId={projectId} user={user} />}
             <button
               type="button"
               aria-label={`Change role of ${name}`}

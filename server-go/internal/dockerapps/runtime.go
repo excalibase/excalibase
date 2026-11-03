@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/network"
-
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
@@ -76,6 +74,11 @@ type Runtime struct {
 	opts   Options
 	// mu serialises the per-app records and route files.
 	mu sync.Mutex
+	// networkMu serialises making, remaking and removing project networks.
+	networkMu sync.Mutex
+	// isolation is what VerifyEngine found about project networks and the host (EXC-676).
+	isolationMu sync.Mutex
+	isolation   hostIsolation
 }
 
 func New(engine Engine, opts Options) (*Runtime, error) {
@@ -155,12 +158,11 @@ func (r *Runtime) VerifyEngine(ctx context.Context) error {
 }
 
 // verifyNames: apps reach their database by its container name through the
-// engine's resolver, which gVisor's own network stack cannot reach.
+// engine's resolver, which gVisor's own network stack cannot reach. The check
+// network is made as project networks are, so it also finds their host isolation.
 func (r *Runtime) verifyNames(ctx context.Context) error {
 	check := r.opts.NetworkPrefix + "check-" + shortHash(fmt.Sprint(time.Now().UnixNano()), 8)
-	if _, err := r.engine.NetworkCreate(ctx, check, network.CreateOptions{
-		Driver: "bridge", Internal: true, Labels: map[string]string{labelManaged: "true", labelComponent: componentDiskTool},
-	}); err != nil {
+	if err := r.makeCheckNetwork(ctx, check); err != nil {
 		return fmt.Errorf("create a network to check name resolution: %w", err)
 	}
 	defer func() { _ = r.engine.NetworkRemove(context.WithoutCancel(ctx), check) }()
