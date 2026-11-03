@@ -106,8 +106,11 @@ type tplDeployer struct {
 	admitted   []int
 }
 
-func (d *tplDeployer) DeployApp(_ context.Context, projectID, appID, _ string) (*apphost.Deploy, error) {
+func (d *tplDeployer) DeployApp(ctx context.Context, projectID, appID, _ string) (*apphost.Deploy, error) {
 	app := d.apps.byID(appID)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	d.log.add("deploy %s", app.Name)
 	if app.Name == d.errDeploy {
 		return nil, errors.New("the lease could not be taken")
@@ -440,6 +443,22 @@ func TestDeployTemplate_HoldsTheProjectUntilTheDeploysStart(t *testing.T) {
 	background()
 	if _, released := claimer.counts(); released != 1 {
 		t.Fatalf("released %d times", released)
+	}
+}
+
+// The first deploys outlive the request that asked for them.
+func TestDeployTemplate_TheFirstDeploysOutliveTheRequest(t *testing.T) {
+	rig := newTemplateRig(t)
+	var background func()
+	rig.svc.async = func(run func()) { background = run }
+	request, hangUp := context.WithCancel(context.Background())
+	if _, err := rig.svc.Deploy(request, tplProject, "redis", "dev", adminConfirmed); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	hangUp()
+	background()
+	if rig.log.count("deploy redis") != 1 || len(rig.apps.failures) != 0 {
+		t.Fatalf("the deploy ran on the request's context: %v %v", rig.log.all(), rig.apps.failures)
 	}
 }
 
