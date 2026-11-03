@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -31,11 +32,39 @@ type recordingProgress struct {
 	stopped    *time.Time
 	converted  *time.Time
 	convertErr error
+	// lost: another actor has taken the run over.
+	lost bool
 }
 
-func (p *recordingProgress) Step(step string)           { p.steps = append(p.steps, step) }
-func (p *recordingProgress) WritesStopped(at time.Time) { p.stopped = &at }
+func (p *recordingProgress) lostErr() error {
+	if p.lost {
+		return fmt.Errorf("%w: claimed by recovery", errRunTakenOver)
+	}
+	return nil
+}
+
+func (p *recordingProgress) Step(step string) error {
+	if err := p.lostErr(); err != nil {
+		return err
+	}
+	p.steps = append(p.steps, step)
+	return nil
+}
+
+func (p *recordingProgress) WritesStopped(at time.Time) error {
+	if err := p.lostErr(); err != nil {
+		return err
+	}
+	p.stopped = &at
+	return nil
+}
+
+func (p *recordingProgress) Hold() error { return p.lostErr() }
+
 func (p *recordingProgress) Converted(at time.Time) error {
+	if err := p.lostErr(); err != nil {
+		return err
+	}
 	if p.convertErr != nil {
 		return p.convertErr
 	}
@@ -440,5 +469,18 @@ func TestK8sAfterSteps(t *testing.T) {
 	w.mock.ExecAnswerInPod = func(string, []string) (string, error) { return "", errors.New("exit 1") }
 	if warnings := w.upgrader.AfterSteps(context.Background(), w.inst); len(warnings) != 1 {
 		t.Fatalf("warnings = %v", warnings)
+	}
+}
+
+// A run already taken over is not touched: the cluster keeps its major.
+func TestK8sConvertChangesNothingForARunItLost(t *testing.T) {
+	w := newK8sUpgradeWorld(t)
+	w.progress.lost = true
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack || outcome.Converted {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if !w.imageIs("16") {
+		t.Fatalf("image = %s", w.image())
 	}
 }

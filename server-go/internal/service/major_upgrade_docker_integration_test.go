@@ -149,10 +149,11 @@ type liveProgress struct {
 	run  *domain.MajorUpgrade
 }
 
-func (p *liveProgress) Step(string)             {}
-func (p *liveProgress) WritesStopped(time.Time) {}
+func (p *liveProgress) Step(string) error             { return nil }
+func (p *liveProgress) WritesStopped(time.Time) error { return nil }
+func (p *liveProgress) Hold() error                   { return nil }
 func (p *liveProgress) Converted(at time.Time) error {
-	return p.runs.MarkMajorUpgradeConverted(p.ctx, p.run.ID, p.run.ProjectID, p.run.ToVersion, "live", at)
+	return p.runs.MarkMajorUpgradeConverted(p.ctx, p.run.ID, p.run.ProjectID, p.run.ToVersion, p.run.Owner, at)
 }
 
 func (l *liveUpgrade) login(ctx context.Context, t *testing.T, namespace string) *sql.DB {

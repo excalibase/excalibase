@@ -183,7 +183,9 @@ func (u *K8sMajorUpgrader) TakeBackup(ctx context.Context, inst *domain.Database
 // Convert points the cluster at the new major and watches the operator
 // convert it. See MajorUpgrader.
 func (u *K8sMajorUpgrader) Convert(ctx context.Context, inst *domain.DatabaseInstance, run domain.MajorUpgrade, progress UpgradeProgress) UpgradeOutcome {
-	progress.Step(domain.MajorUpgradeStepConverting)
+	if err := progress.Step(domain.MajorUpgradeStepConverting); err != nil {
+		return stopped(run, err)
+	}
 	plan, err := u.plan(ctx, inst, run)
 	if err != nil {
 		return nothingChanged(run, err)
@@ -201,8 +203,40 @@ func (u *K8sMajorUpgrader) Convert(ctx context.Context, inst *domain.DatabaseIns
 		// conversion starts, which is harmless if the write never landed.
 		log.Printf("major upgrade %s: point cluster: %v; watching in case it applied", plan.projectID, err)
 	}
-	progress.WritesStopped(started)
+	if err := progress.WritesStopped(started); err != nil {
+		return leftRunning(err)
+	}
 	return u.watch(ctx, run, plan, progress, started)
+}
+
+// stopped ends a conversion that changed nothing: a lost run is left to its
+// owner, anything else reports nothing changed.
+func stopped(run domain.MajorUpgrade, cause error) UpgradeOutcome {
+	if errors.Is(cause, errRunTakenOver) {
+		return UpgradeOutcome{Cause: cause}
+	}
+	return nothingChanged(run, cause)
+}
+
+// leftRunning ends the watch of a conversion that may already be under way:
+// a lost run is left to its owner, anything else to recovery.
+func leftRunning(cause error) UpgradeOutcome {
+	if errors.Is(cause, errRunTakenOver) {
+		return UpgradeOutcome{Cause: cause}
+	}
+	return unsettled(cause)
+}
+
+// lostRun is non-nil when the run is no longer this actor's, by cause or by
+// a fresh check.
+func lostRun(cause error, progress UpgradeProgress) error {
+	if errors.Is(cause, errRunTakenOver) {
+		return cause
+	}
+	if err := progress.Hold(); errors.Is(err, errRunTakenOver) {
+		return fmt.Errorf("%w (stopped at: %v)", err, cause)
+	}
+	return nil
 }
 
 func nothingChanged(run domain.MajorUpgrade, cause error) UpgradeOutcome {
@@ -381,10 +415,12 @@ func (u *K8sMajorUpgrader) Recover(ctx context.Context, inst *domain.DatabaseIns
 	started := u.now()
 	if run.WritesStoppedAt != nil {
 		started = *run.WritesStoppedAt
-	} else {
-		progress.WritesStopped(started)
+	} else if err := progress.WritesStopped(started); err != nil {
+		return leftRunning(err)
 	}
-	progress.Step(domain.MajorUpgradeStepConverting)
+	if err := progress.Step(domain.MajorUpgradeStepConverting); err != nil {
+		return leftRunning(err)
+	}
 	return u.watch(ctx, run, plan, progress, started)
 }
 

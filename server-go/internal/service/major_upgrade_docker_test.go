@@ -28,6 +28,8 @@ type upgradeEngine struct {
 	extensions []string
 	calls      []string
 	copied     map[string][]string // container id -> destinations
+	// after runs once a named step has run.
+	after map[string]func()
 }
 
 type engineContainer struct {
@@ -58,6 +60,9 @@ func (e *upgradeEngine) find(ref string) *engineContainer {
 
 func (e *upgradeEngine) step(name string) error {
 	e.calls = append(e.calls, name)
+	if hook := e.after[name]; hook != nil {
+		hook()
+	}
 	return e.fail[name]
 }
 
@@ -483,6 +488,56 @@ func TestDockerRecoverPutsBackARecordedContainerWhoseLoadFailed(t *testing.T) {
 		t.Fatal("recorded as converted")
 	}
 	w.assertPutBack(t)
+}
+
+// (a) Recovery takes the run over while the driver dumps: the driver stops
+// there and renames, creates and records nothing, nor puts anything back.
+func TestDockerConvertStopsWhenTheRunIsTakenOverDuringTheDump(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.engine.after = map[string]func(){"dump": func() { w.progress.lost = true }}
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack || outcome.Converted {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	for _, step := range []string{"stop", "rename:", "create:postgres:17", "unfence:"} {
+		if w.called(step) {
+			t.Fatalf("%s ran after the run was lost: %v", step, w.engine.calls)
+		}
+	}
+	if w.recorded() != "old-id" || w.engine.find(provisioner.DatabaseContainerName("dk-1")).id != "old-id" {
+		t.Fatalf("project records %q", w.recorded())
+	}
+}
+
+// A run lost once the new container has loaded: the driver does not record
+// it, and leaves both containers for recovery.
+func TestDockerConvertDoesNotRecordAContainerForARunItLost(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.engine.after = map[string]func(){"start:postgres:17": func() { w.progress.lost = true }}
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.recorded() != "old-id" {
+		t.Fatalf("project records %q", w.recorded())
+	}
+	fresh := w.engine.find(provisioner.DatabaseContainerName("dk-1"))
+	if w.engine.find(provisioner.PreUpgradeContainerName("dk-1", "mu-1")) == nil || fresh == nil || fresh.id == "old-id" {
+		t.Fatalf("the swap was undone: %v", w.engine.calls)
+	}
+}
+
+// A run already lost is not touched at all.
+func TestDockerConvertChangesNothingForARunItLost(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.progress.lost = true
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.called("fence") || w.called("scratch") {
+		t.Fatalf("the database was touched: %v", w.engine.calls)
+	}
 }
 
 func TestDockerRecover(t *testing.T) {
