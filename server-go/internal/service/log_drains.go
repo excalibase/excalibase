@@ -61,15 +61,21 @@ type LogDrainDeps struct {
 	Instances func(projectID string) (*domain.DatabaseInstance, error)
 	// Logs is nil when the install has no log store.
 	Logs ProjectLogReader
-	Now  func() time.Time
+	// SingleHost reads Docker/Podman projects from the bundled Loki under the
+	// labels the single-host shipper sets (EXC-672).
+	SingleHost bool
+	Now        func() time.Time
 }
 
 type LogDrainService struct {
-	store     LogDrainStore
-	vault     vaultclient.VaultClient
-	instances func(projectID string) (*domain.DatabaseInstance, error)
-	logs      ProjectLogReader
-	now       func() time.Time
+	store      LogDrainStore
+	vault      vaultclient.VaultClient
+	instances  func(projectID string) (*domain.DatabaseInstance, error)
+	logs       ProjectLogReader
+	singleHost bool
+	// ingestDelay is how far behind now a drain reads.
+	ingestDelay time.Duration
+	now         func() time.Time
 	// pullTime is how long one pull keeps reading before it answers.
 	pullTime time.Duration
 }
@@ -79,7 +85,12 @@ func NewLogDrainService(deps LogDrainDeps) *LogDrainService {
 	if now == nil {
 		now = time.Now
 	}
-	return &LogDrainService{store: deps.Store, vault: deps.Vault, instances: deps.Instances, logs: deps.Logs, now: now, pullTime: logPullTime}
+	ingestDelay := logIngestDelay
+	if deps.SingleHost {
+		ingestDelay = singleHostIngestDelay
+	}
+	return &LogDrainService{store: deps.Store, vault: deps.Vault, instances: deps.Instances, logs: deps.Logs,
+		singleHost: deps.SingleHost, ingestDelay: ingestDelay, now: now, pullTime: logPullTime}
 }
 
 // CreateLogDrainInput is a new drain as an Admin asked for it.
@@ -323,10 +334,24 @@ func (s *LogDrainService) checkAvailable(projectID string) error {
 	if err != nil {
 		return err
 	}
-	if s.logs == nil || inst.DeploymentMode == domain.ModeDocker || inst.Namespace == "" {
+	if _, ok := s.drainSelector(inst); !ok {
 		return ErrLogDrainsUnavailable
 	}
 	return nil
+}
+
+// drainSelector is where the install keeps the project's database lines;
+// false when it does not keep them.
+func (s *LogDrainService) drainSelector(inst *domain.DatabaseInstance) (string, bool) {
+	switch {
+	case s.logs == nil:
+		return "", false
+	case s.singleHost && inst.DeploymentMode == domain.ModeDocker:
+		return hostLogSelector(inst.ProjectID)
+	case s.singleHost || inst.DeploymentMode == domain.ModeDocker || inst.Namespace == "":
+		return "", false
+	}
+	return drainLogSelector(inst), true
 }
 
 func newLogDrainID() (string, error) {
