@@ -73,6 +73,9 @@ type ProjectAuthSignIn struct {
 	// GuestCaptchaSecretSet says the vault holds a Turnstile secret, which
 	// makes guest sign-up require a captcha.
 	GuestCaptchaSecretSet bool
+	// MFAEnabled is the project's switch for end-user TOTP factors; the
+	// vault holds the key that seals them whenever it is on.
+	MFAEnabled bool
 }
 
 // DefaultAuthSignIn is what a project without a settings row gets.

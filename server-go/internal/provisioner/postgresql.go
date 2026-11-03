@@ -707,6 +707,28 @@ func (p *PostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, proj
 	return p.deleteNamespaceAndWait(ctx, namespace)
 }
 
+// deleteArchiveStores deletes the project's backup ObjectStore and the one
+// each major upgrade added (k8s.ArchiveObjectStoreName). The objects in the
+// bucket are not touched here.
+func (p *PostgreSQLProvisioner) deleteArchiveStores(ctx context.Context, namespace, projectID string) error {
+	names := []string{k8s.BackupObjectStoreName(projectID)}
+	stores, err := p.client.ListCRDs(ctx, k8s.ObjectStoreGVR, namespace)
+	if err != nil {
+		return fmt.Errorf("list backup object stores: %w", err)
+	}
+	for _, store := range stores {
+		if strings.HasPrefix(store.GetName(), k8s.BackupObjectStoreName(projectID)+"-pg") {
+			names = append(names, store.GetName())
+		}
+	}
+	for _, name := range names {
+		if err := p.client.DeleteCRD(ctx, k8s.ObjectStoreGVR, namespace, name); err != nil {
+			return fmt.Errorf("delete backup object store %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 func (p *PostgreSQLProvisioner) deleteClusterAndWait(ctx context.Context, namespace, cluster string) error {
 	if err := p.client.DeleteCRD(ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
 		return fmt.Errorf("delete database cluster %s: %w", cluster, err)
@@ -950,8 +972,8 @@ func (p *PostgreSQLProvisioner) RemoveDatabase(ctx context.Context, namespace, p
 	if err := p.client.ForceDeleteClusterPods(ctx, namespace, cluster); err != nil {
 		return err
 	}
-	if err := p.client.DeleteCRD(ctx, k8s.ObjectStoreGVR, namespace, k8s.BackupObjectStoreName(projectID)); err != nil {
-		return fmt.Errorf("delete backup object store: %w", err)
+	if err := p.deleteArchiveStores(ctx, namespace, projectID); err != nil {
+		return err
 	}
 	for _, secret := range []string{k8s.BackupCredentialsSecretName, k8s.DocumentDBCredentialSecretName(projectID), watcherTLSSecretName(projectID)} {
 		if err := p.client.DeleteSecret(ctx, namespace, secret); err != nil {

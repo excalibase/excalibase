@@ -32,6 +32,12 @@ func (fakeVault) DeletePrefix(string) (int, error)    { return 0, nil }
 func (fakeVault) List(string) ([]string, error)       { return nil, nil }
 func (fakeVault) Sealed() bool                        { return false }
 func (fakeVault) GetPublicKey() (string, error)       { return "", nil }
+func (v fakeVault) PutIfAbsent(path string, data map[string]string) (bool, error) {
+	if _, err := v.Get(path); err == nil {
+		return false, nil
+	}
+	return true, v.Put(path, data)
+}
 
 func appCreds() map[string]map[string]string {
 	return map[string]map[string]string{

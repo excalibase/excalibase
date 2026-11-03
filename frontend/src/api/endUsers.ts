@@ -90,3 +90,8 @@ export async function updateEndUser(projectId: string, userId: number, patch: En
 export async function deleteEndUser(projectId: string, userId: number): Promise<void> {
   await api.delete(endUserPath(projectId, userId));
 }
+
+// Removes the user's MFA factors and recovery codes; auth also ends their sessions (flag `authmfa`).
+export async function resetEndUserMFA(projectId: string, userId: number): Promise<void> {
+  await api.delete(`${endUserPath(projectId, userId)}/factors`);
+}

@@ -18,6 +18,48 @@ var (
 	volumePath  = regexp.MustCompile(`^/volumes/` + ref + `$`)
 )
 
+// AppServiceDomain holds the one name each app answers to on its project
+// network, <app>.apps.internal; apps search it, so the bare name resolves as a
+// Service name does on Kubernetes. The dot keeps it off every container name.
+const AppServiceDomain = "apps.internal"
+
+// serviceAlias is one DNS label under AppServiceDomain.
+var serviceAlias = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?\.` + regexp.QuoteMeta(AppServiceDomain) + `$`)
+
+// checkServiceAlias admits endpoint settings naming exactly one service alias
+// that is not one of the edge's platform hosts, and nothing else.
+func (p Policy) checkServiceAlias(endpoint any) error {
+	settings, ok := endpoint.(map[string]any)
+	if !ok {
+		return refuse("network endpoint settings must be an object")
+	}
+	for field, value := range settings {
+		if field != "Aliases" && !isZero(value) {
+			return refuse("network endpoint %s may not be set", field)
+		}
+	}
+	aliases, _ := settings["Aliases"].([]any)
+	if len(aliases) != 1 {
+		return refuse("an app may carry exactly one service name")
+	}
+	name, _ := aliases[0].(string)
+	label, _, _ := strings.Cut(name, ".")
+	if !serviceAlias.MatchString(name) || strings.HasPrefix(label, p.ContainerPrefix) || p.isEdgeAlias(name) {
+		return refuse("service name %q is not one an app may carry", name)
+	}
+	return nil
+}
+
+// isEdgeAlias compares as DNS does, without case.
+func (p Policy) isEdgeAlias(name string) bool {
+	for _, alias := range p.EdgeAliases {
+		if strings.EqualFold(alias, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // bridgeIsolate is netavark's option keeping a Podman bridge from routing to
 // the other bridges; Docker isolates bridges without it.
 const bridgeIsolate = "isolate"
@@ -38,12 +80,35 @@ var networkCreateFields = map[string]func(Policy, any) error{
 	"Options": func(_ Policy, value any) error {
 		options, _ := value.(map[string]any)
 		for key, option := range options {
-			if key != bridgeIsolate || option != "true" {
-				return refuse("network Options %s=%v may not be set; only isolate=true", key, option)
+			allowed := (key == bridgeIsolate && option == "true") || (isGatewayMode(key) && option == gatewayIsolated)
+			if !allowed {
+				return refuse("network Options %s=%v may not be set; only isolate=true or %s=%s", key, option, gatewayModeIPv4, gatewayIsolated)
 			}
 		}
 		return nil
 	},
+}
+
+// gatewayModeIPv4=isolated (Docker 28+) leaves an internal network's bridge with
+// no address on the host, so nothing on it reaches the host's own services (EXC-671);
+// the IPv6 option does the same where the daemon enables IPv6 by default (EXC-676).
+const (
+	gatewayModeIPv4 = "com.docker.network.bridge.gateway_mode_ipv4"
+	gatewayModeIPv6 = "com.docker.network.bridge.gateway_mode_ipv6"
+	gatewayIsolated = "isolated"
+)
+
+func isGatewayMode(key string) bool { return key == gatewayModeIPv4 || key == gatewayModeIPv6 }
+
+// checkIsolatedGateway admits the isolated gateway only on an internal network, where it means "no route anywhere".
+func checkIsolatedGateway(create map[string]any) error {
+	options, _ := create["Options"].(map[string]any)
+	for key := range options {
+		if isGatewayMode(key) && create["Internal"] != true {
+			return refuse("network Options %s may be set only on an internal network", key)
+		}
+	}
+	return nil
 }
 
 // CheckNetworkCreate admits a managed bridge network named under the network prefix.
@@ -52,6 +117,9 @@ func (p Policy) CheckNetworkCreate(body []byte) error {
 	if err := json.Unmarshal(body, &create); err != nil {
 		return refuse("network create body: %v", err)
 	}
+	if err := checkSpelling("network create", create, networkCreateNames...); err != nil {
+		return err
+	}
 	name, _ := create["Name"].(string)
 	if !p.underNetworkPrefix(name) {
 		return refuse("network name %q must start with %q", name, p.NetworkPrefix)
@@ -59,7 +127,10 @@ func (p Policy) CheckNetworkCreate(body []byte) error {
 	if err := p.requireManagedLabel("network", create["Labels"]); err != nil {
 		return err
 	}
-	return checkFields("network create", create, networkCreateFields, p)
+	if err := checkFields("network create", create, networkCreateFields, p); err != nil {
+		return err
+	}
+	return checkIsolatedGateway(create)
 }
 
 // CheckNetworkConnect admits joining a container with no endpoint settings:
@@ -70,6 +141,9 @@ func (p Policy) CheckNetworkConnect(body []byte) error {
 	if err := json.Unmarshal(body, &member); err != nil {
 		return refuse("network member body: %v", err)
 	}
+	if err := checkSpelling("network connect", member, connectNames...); err != nil {
+		return err
+	}
 	endpoint, aliased := member["EndpointConfig"]
 	if !aliased || isZero(endpoint) {
 		_, err := networkMember(body, false)
@@ -77,6 +151,9 @@ func (p Policy) CheckNetworkConnect(body []byte) error {
 	}
 	if container, _ := member["Container"].(string); container == "" || container != p.EdgeContainer {
 		return refuse("network EndpointConfig may be set only for the edge")
+	}
+	if err := checkObjectSpelling("network EndpointConfig", endpoint, endpointNames); err != nil {
+		return err
 	}
 	if err := p.checkEdgeEndpoint(endpoint); err != nil {
 		return err
@@ -133,6 +210,13 @@ func networkMember(body []byte, allowForce bool) (string, error) {
 	if err := json.Unmarshal(body, &member); err != nil {
 		return "", refuse("network member body: %v", err)
 	}
+	names := connectNames
+	if allowForce {
+		names = disconnectNames
+	}
+	if err := checkSpelling("network member", member, names...); err != nil {
+		return "", err
+	}
 	container, _ := member["Container"].(string)
 	if container == "" {
 		return "", refuse("a network connect or disconnect names a container")
@@ -165,6 +249,9 @@ func (p Policy) CheckVolumeCreate(body []byte) error {
 	if err := json.Unmarshal(body, &create); err != nil {
 		return refuse("volume create body: %v", err)
 	}
+	if err := checkSpelling("volume create", create, volumeCreateNames...); err != nil {
+		return err
+	}
 	name, _ := create["Name"].(string)
 	if err := p.checkVolumeName(name); err != nil {
 		return err
@@ -179,12 +266,13 @@ func checkFields(what string, body map[string]any, fields map[string]func(Policy
 	for field, value := range body {
 		check, known := fields[field]
 		if !known {
+			// SDKs send an empty IPAM object; a struct's zero fields are not a data map's entries.
 			if isZero(value) {
 				continue
 			}
 			return refuse("%s field %s may not be set", what, field)
 		}
-		if !isZero(value) {
+		if !isUnset(value) {
 			if err := check(p, value); err != nil {
 				return err
 			}
@@ -211,6 +299,10 @@ func checkManagedFilter(query url.Values, label string) error {
 	raw := query["filters"]
 	if len(raw) != 1 {
 		return refuse("a list must carry exactly one filter naming %s=true", label)
+	}
+	// Only to refuse twins: the engine reads the query as sent.
+	if _, err := canonicalBody([]byte(raw[0])); err != nil {
+		return refuse("list filters: %v", err)
 	}
 	var filters map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw[0]), &filters); err != nil {

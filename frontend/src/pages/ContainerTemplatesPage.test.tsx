@@ -152,3 +152,74 @@ describe('ContainerTemplatesPage', () => {
     });
   });
 });
+
+const valkey = (): AppTemplate => ({
+  id: 'valkey',
+  format: 'excalibase.template/v1',
+  name: 'Valkey',
+  summary: 'A Redis-compatible cache.',
+  category: 'cache',
+  license: 'BSD-3-Clause',
+  catalog: true,
+  needsPrivateNetwork: true,
+  needsDatabase: false,
+  apps: [
+    {
+      name: 'valkey',
+      image: 'valkey/valkey@sha256:2d04',
+      internal: true,
+      internalPorts: [6379],
+      replicas: 1,
+      minMemory: '1Gi',
+      disk: { mountPath: '/data', size: '1Gi' },
+      env: [
+        { name: 'VALKEY_PASSWORD', source: 'generated' },
+        { name: 'VALKEY_URL', source: 'app', showOnce: true },
+      ],
+    },
+  ],
+  fit: fit({ appsNeeded: 1, privateNetworkOn: true }),
+});
+
+describe('ContainerTemplatesPage catalog', () => {
+  test('a catalog service says who runs it and under which licence', async () => {
+    renderPage([webRedis(), valkey()]);
+    const card = await screen.findByTestId('template-valkey');
+    expect(within(card).getByTestId('template-license')).toHaveTextContent('BSD-3-Clause');
+    expect(within(card).getByTestId('template-category')).toHaveTextContent('Cache');
+    expect(within(card).getByTestId('template-self-managed')).toHaveTextContent(
+      'You run this service. Excalibase does not back it up, upgrade it or watch it.',
+    );
+    expect(screen.getByTestId('templates-catalog')).toContainElement(card);
+    expect(within(screen.getByTestId('templates-starters')).getByTestId('template-web-redis')).toBeInTheDocument();
+    await userEvent.click(within(card).getByTestId('template-details-valkey'));
+    const details = within(card).getByTestId('template-apps');
+    expect(details).toHaveTextContent('needs at least 1Gi memory');
+    expect(details).toHaveTextContent('shown to you once');
+  });
+
+  test('the generated connection value is shown once after the deploy', async () => {
+    vi.mocked(api.post).mockResolvedValue({
+      data: {
+        templateId: 'valkey',
+        privateNetworkTurnedOn: false,
+        apps: [{ id: 'a1', name: 'valkey', deployId: 'd1', deployStatus: 'rolling' }],
+        credentials: [{ app: 'valkey', name: 'VALKEY_URL', value: 'redis://:generated@valkey:6379/0' }],
+      },
+    } as never);
+    renderPage([valkey()]);
+    await userEvent.click(await screen.findByTestId('template-deploy-valkey'));
+    await userEvent.click(screen.getByTestId('template-confirm-valkey'));
+    const shown = await screen.findByTestId('template-credentials');
+    expect(shown).toHaveTextContent('VALKEY_URL');
+    expect(shown).toHaveTextContent('redis://:generated@valkey:6379/0');
+    expect(shown).toHaveTextContent('cannot show them again');
+  });
+
+  test('a starter keeps its card as before', async () => {
+    renderPage([webRedis()]);
+    const card = await screen.findByTestId('template-web-redis');
+    expect(within(card).queryByTestId('template-self-managed')).toBeNull();
+    expect(screen.queryByTestId('templates-catalog')).toBeNull();
+  });
+});

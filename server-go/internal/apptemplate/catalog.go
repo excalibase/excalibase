@@ -7,7 +7,7 @@ import (
 	"sort"
 )
 
-//go:embed builtin/*.yaml
+//go:embed builtin/*.yaml builtin/catalog/*.yaml
 var builtinFiles embed.FS
 
 // Catalog is a read-only set of templates, in a fixed order.
@@ -36,9 +36,22 @@ func (c *Catalog) Get(id string) (*Template, bool) {
 	return tpl, ok
 }
 
-// Builtins are the templates the platform ships; a file that does not parse stops the server.
+// Builtins are the templates the platform ships, the starters first and then
+// the catalog (EXC-669); a file that does not parse stops the server.
 func Builtins() (*Catalog, error) {
-	names, err := fs.Glob(builtinFiles, "builtin/*.yaml")
+	starters, err := readBuiltins("builtin/*.yaml", false)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := readBuiltins("builtin/catalog/*.yaml", true)
+	if err != nil {
+		return nil, err
+	}
+	return NewCatalog(append(starters, catalog...)...)
+}
+
+func readBuiltins(pattern string, inCatalog bool) ([]*Template, error) {
+	names, err := fs.Glob(builtinFiles, pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +66,8 @@ func Builtins() (*Catalog, error) {
 		if err != nil {
 			return nil, fmt.Errorf("built-in template %s: %w", name, err)
 		}
+		tpl.Catalog = inCatalog
 		templates = append(templates, tpl)
 	}
-	return NewCatalog(templates...)
+	return templates, nil
 }

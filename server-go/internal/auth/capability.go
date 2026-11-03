@@ -208,6 +208,11 @@ func ManageServiceTokensCapability(principal string) Capability {
 	return Capability{Resource: resourceServiceTokens, Action: actionManage, Selector: principal}
 }
 
+// ProjectInfoReadCapability is the platform services' read of a project's /info.
+func ProjectInfoReadCapability() Capability {
+	return Capability{Resource: "projects", Action: "info", Selector: "read"}
+}
+
 // VaultInitCapability and VaultUnsealCapability authorize the two vault
 // lifecycle calls the bootstrap Job makes.
 func VaultInitCapability() Capability {

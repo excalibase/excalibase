@@ -83,7 +83,7 @@ func queryStatsStatus(err error) int {
 	case errors.Is(err, service.ErrQueryStatsSort):
 		return http.StatusBadRequest
 	case errors.Is(err, service.ErrQueryStatsOff), errors.Is(err, service.ErrNotForMySQL),
-		errors.Is(err, service.ErrKubernetesOnly):
+		errors.Is(err, service.ErrKubernetesOnly), errors.Is(err, service.ErrQueryStatsDocumentDB):
 		return http.StatusConflict
 	}
 	return unsettledOr(err, http.StatusInternalServerError)
