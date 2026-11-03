@@ -17,7 +17,7 @@ type PullGenerationRotator interface {
 
 // PullSecretRefresher rewrites the pull secrets already rendered for one registry.
 type PullSecretRefresher interface {
-	RefreshRegistryPullSecrets(ctx context.Context, namespace string, auth k8s.RegistryAuth) ([]string, error)
+	RefreshRegistryPullSecrets(ctx context.Context, namespace, projectID string, auth k8s.RegistryAuth) ([]string, error)
 }
 
 // PullRotationService retires a project's internal-registry pull password
@@ -88,5 +88,5 @@ func (s *PullRotationService) refresh(ctx context.Context, projectID, namespace 
 		return nil, err
 	}
 	auth := k8s.RegistryAuth{Registry: s.internal.Host(), Username: pull.Username, Password: pull.Password}
-	return s.runtime.RefreshRegistryPullSecrets(ctx, namespace, auth)
+	return s.runtime.RefreshRegistryPullSecrets(ctx, namespace, projectID, auth)
 }

@@ -151,7 +151,7 @@ type KubeClient interface {
 	// RequireSizedStorageClass refuses a class that does not hold volumes to their size.
 	RequireSizedStorageClass(ctx context.Context, name string, provisioners []string) error
 	DeleteRegistryPullSecrets(ctx context.Context, namespace, registry string) error
-	RefreshRegistryPullSecrets(ctx context.Context, namespace string, auth RegistryAuth) ([]string, error)
+	RefreshRegistryPullSecrets(ctx context.Context, namespace, projectID string, auth RegistryAuth) ([]string, error)
 	AppLogs(ctx context.Context, namespace, appID string, opts AppLogOptions) (AppLogPage, error)
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)
 	LiveAppPods(ctx context.Context, namespace, appID string) (AppPods, error)

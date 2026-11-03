@@ -35,7 +35,7 @@ type AppRuntime interface {
 
 	AppLogs(ctx context.Context, namespace, appID string, opts k8s.AppLogOptions) (k8s.AppLogPage, error)
 	DeleteRegistryPullSecrets(ctx context.Context, namespace, registry string) error
-	RefreshRegistryPullSecrets(ctx context.Context, namespace string, auth k8s.RegistryAuth) ([]string, error)
+	RefreshRegistryPullSecrets(ctx context.Context, namespace, projectID string, auth k8s.RegistryAuth) ([]string, error)
 
 	SyncAppDomains(ctx context.Context, namespace string, app *apphost.App, hosts []string, opts k8s.AppDomainOptions) error
 	AppDomainCertificate(ctx context.Context, namespace, appName, host string) (k8s.CertificateState, error)

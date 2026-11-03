@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -173,6 +174,9 @@ func TestDeployImage_ARotationMidDeployKeepsEveryAppPulling(t *testing.T) {
 	rotated := issuer.PullCredential(app.ProjectID, 1)
 	if len(kube.PullSecretsDeleted) != 0 || len(kube.PullSecretsRefreshed) != 1 || kube.PullSecretsRefreshed[0].Password != rotated.Password {
 		t.Fatalf("deleted %v refreshed %v", kube.PullSecretsDeleted, kube.PullSecretsRefreshed)
+	}
+	if !slices.Contains(kube.Calls, "RefreshRegistryPullSecrets:"+testDeployNamespace+"/"+app.ProjectID+"/"+appregistrytest.Host) {
+		t.Errorf("calls = %v", kube.Calls)
 	}
 }
 

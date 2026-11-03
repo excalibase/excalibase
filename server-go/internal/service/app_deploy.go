@@ -176,7 +176,7 @@ func (s *AppDeployService) confirmPullAuth(ctx context.Context, projectID, names
 		return nil
 	}
 	if err == nil && cred != nil && s.internal.NamesHost(used.Registry) {
-		return s.followRotation(ctx, namespace, used.Registry, cred)
+		return s.followRotation(ctx, projectID, namespace, used.Registry, cred)
 	}
 	if delErr := s.runtime.DeleteRegistryPullSecrets(ctx, namespace, used.Registry); delErr != nil {
 		return errors.Join(errPullAuthChanged, fmt.Errorf("remove the stale pull secret: %w", delErr))
@@ -190,9 +190,9 @@ func (s *AppDeployService) confirmPullAuth(ctx context.Context, projectID, names
 // followRotation is a pull password rotated while the deploy ran: the
 // platform's credential is never removed, only renewed, so every pull secret
 // takes the new one rather than being deleted from under running apps.
-func (s *AppDeployService) followRotation(ctx context.Context, namespace, registry string, cred *apphost.RegistryCredential) error {
+func (s *AppDeployService) followRotation(ctx context.Context, projectID, namespace, registry string, cred *apphost.RegistryCredential) error {
 	auth := k8s.RegistryAuth{Registry: registry, Username: cred.Username, Password: cred.Password}
-	if stale, err := s.runtime.RefreshRegistryPullSecrets(ctx, namespace, auth); err != nil {
+	if stale, err := s.runtime.RefreshRegistryPullSecrets(ctx, namespace, projectID, auth); err != nil {
 		return fmt.Errorf("the pull credential rotated while the app deployed; these apps still hold the old one: %v: %w", stale, err)
 	}
 	return nil

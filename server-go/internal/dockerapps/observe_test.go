@@ -186,7 +186,7 @@ func TestClusterOnlyBookkeepingIsANoOp(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
 	placement, err := h.rt.RuntimeClassPlacement(ctx, "runsc")
-	stale, refreshErr := h.rt.RefreshRegistryPullSecrets(ctx, testDB, k8s.RegistryAuth{Registry: "r.internal"})
+	stale, refreshErr := h.rt.RefreshRegistryPullSecrets(ctx, testDB, "proj-1", k8s.RegistryAuth{Registry: "r.internal"})
 	errs := []error{err, refreshErr,
 		h.rt.AttachIssuedAppHostCertificates(ctx),
 		h.rt.DeleteRegistryPullSecrets(ctx, testDB, "web"),

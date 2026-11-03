@@ -46,7 +46,7 @@ func TestRefreshRegistryPullSecrets_RewritesEveryAppsSecretInPlace(t *testing.T)
 		t.Fatal(err)
 	}
 
-	stale, err := c.RefreshRegistryPullSecrets(ctx, testNamespace, rotatedPullAuth)
+	stale, err := c.RefreshRegistryPullSecrets(ctx, testNamespace, "proj-abc", rotatedPullAuth)
 	if err != nil || len(stale) != 0 {
 		t.Fatalf("refresh: %v %v", stale, err)
 	}
@@ -72,7 +72,7 @@ func TestRefreshRegistryPullSecrets_NamesTheAppsLeftOnTheOldPassword(t *testing.
 		secret := action.(k8stesting.UpdateAction).GetObject().(*corev1.Secret)
 		return secret.Name == AppPullSecretName("api"), nil, errors.New("conflict")
 	})
-	stale, err := c.RefreshRegistryPullSecrets(context.Background(), testNamespace, rotatedPullAuth)
+	stale, err := c.RefreshRegistryPullSecrets(context.Background(), testNamespace, "proj-abc", rotatedPullAuth)
 	if err == nil || !slices.Equal(stale, []string{"api"}) {
 		t.Fatalf("stale %v err %v", stale, err)
 	}
@@ -83,19 +83,47 @@ func TestRefreshRegistryPullSecrets_ListFailureIsAnError(t *testing.T) {
 	c.clientset.(*fake.Clientset).PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("forbidden")
 	})
-	if _, err := c.RefreshRegistryPullSecrets(context.Background(), testNamespace, rotatedPullAuth); err == nil {
+	if _, err := c.RefreshRegistryPullSecrets(context.Background(), testNamespace, "proj-abc", rotatedPullAuth); err == nil {
 		t.Fatal("a list that fails must not read as every secret updated")
 	}
 }
 
 func TestMockClient_RefreshRegistryPullSecrets(t *testing.T) {
 	m := NewMockClient()
-	if stale, err := m.RefreshRegistryPullSecrets(context.Background(), "ns1", rotatedPullAuth); err != nil || stale != nil ||
+	if stale, err := m.RefreshRegistryPullSecrets(context.Background(), "ns1", "proj-1", rotatedPullAuth); err != nil || stale != nil ||
 		len(m.PullSecretsRefreshed) != 1 || m.PullSecretsRefreshed[0] != rotatedPullAuth {
 		t.Fatalf("refresh: %v %v %v", stale, err, m.PullSecretsRefreshed)
 	}
+	if !slices.Contains(m.Calls, "RefreshRegistryPullSecrets:ns1/proj-1/ghcr.io") {
+		t.Errorf("calls = %v", m.Calls)
+	}
 	m.PullSecretsRefreshStale, m.PullSecretsRefreshErr = []string{"web"}, errors.New("boom")
-	if stale, err := m.RefreshRegistryPullSecrets(context.Background(), "ns1", rotatedPullAuth); err == nil || stale[0] != "web" {
+	if stale, err := m.RefreshRegistryPullSecrets(context.Background(), "ns1", "proj-1", rotatedPullAuth); err == nil || stale[0] != "web" {
 		t.Fatalf("want the scripted failure: %v %v", stale, err)
+	}
+}
+
+// Only the rotating project's pull secrets take its credential, even beside another project's for the same registry.
+func TestRefreshRegistryPullSecrets_LeavesAnotherProjectsSecretAlone(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	applyAppsWithPullAuth(t, c)
+	secrets := c.clientset.CoreV1().Secrets(testNamespace)
+	other := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "elsewhere-pull", Namespace: testNamespace,
+		Labels: map[string]string{appRegistryLabel: registryLabelValue("ghcr.io"), "app.kubernetes.io/managed-by": appManagedByValue,
+			"excalibase.io/project": "proj-other"}},
+		Data: map[string][]byte{"k": []byte("untouched")}}
+	if _, err := secrets.Create(ctx, other, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if stale, err := c.RefreshRegistryPullSecrets(ctx, testNamespace, "proj-abc", rotatedPullAuth); err != nil || len(stale) != 0 {
+		t.Fatalf("refresh: %v %v", stale, err)
+	}
+	if kept, _ := secrets.Get(ctx, "elsewhere-pull", metav1.GetOptions{}); string(kept.Data["k"]) != "untouched" {
+		t.Errorf("another project's secret changed: %v", kept.Data)
+	}
+	web, _ := secrets.Get(ctx, AppPullSecretName("web"), metav1.GetOptions{})
+	if decodeDockerConfig(t, web).Auths["ghcr.io"].Password != "rotated" {
+		t.Error("the project's own secret must take the rotated credential")
 	}
 }

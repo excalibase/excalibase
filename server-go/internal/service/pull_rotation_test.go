@@ -77,7 +77,7 @@ func TestPullRotation_RunningAppsPullWithTheNewCredential(t *testing.T) {
 	if ok, _ := fx.internal.VerifyPull("proj-a", old.Password); ok {
 		t.Error("the old password must be refused")
 	}
-	if !slices.Contains(fx.kube.Calls, "RefreshRegistryPullSecrets:ns-a/"+appregistrytest.Host) {
+	if !slices.Contains(fx.kube.Calls, "RefreshRegistryPullSecrets:ns-a/proj-a/"+appregistrytest.Host) {
 		t.Errorf("calls = %v", fx.kube.Calls)
 	}
 }

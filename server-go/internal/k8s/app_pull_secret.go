@@ -92,15 +92,17 @@ func registryPullSecretSelector(registry string) metav1.ListOptions {
 }
 
 // RefreshRegistryPullSecrets rewrites, in place, every pull secret rendered
-// from one registry's credential, so running apps pull with a rotated one
+// from one registry's credential for one project, so running apps pull with a rotated one
 // without a redeploy. It answers the apps whose secret still holds the old one.
-func (c *Client) RefreshRegistryPullSecrets(ctx context.Context, namespace string, auth RegistryAuth) ([]string, error) {
+func (c *Client) RefreshRegistryPullSecrets(ctx context.Context, namespace, projectID string, auth RegistryAuth) ([]string, error) {
 	config, err := dockerConfigJSON(auth)
 	if err != nil {
 		return nil, err
 	}
 	secrets := c.clientset.CoreV1().Secrets(namespace)
-	list, err := secrets.List(ctx, registryPullSecretSelector(auth.Registry))
+	selector := registryPullSecretSelector(auth.Registry)
+	selector.LabelSelector += ",excalibase.io/project=" + projectID
+	list, err := secrets.List(ctx, selector)
 	if err != nil {
 		return nil, fmt.Errorf("list pull secrets: %w", err)
 	}

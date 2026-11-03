@@ -1062,10 +1062,10 @@ func (m *MockClient) DeleteRegistryPullSecrets(ctx context.Context, namespace, r
 	return nil
 }
 
-func (m *MockClient) RefreshRegistryPullSecrets(ctx context.Context, namespace string, auth RegistryAuth) ([]string, error) {
+func (m *MockClient) RefreshRegistryPullSecrets(ctx context.Context, namespace, projectID string, auth RegistryAuth) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.Calls = append(m.Calls, "RefreshRegistryPullSecrets:"+namespace+"/"+auth.Registry)
+	m.Calls = append(m.Calls, "RefreshRegistryPullSecrets:"+namespace+"/"+projectID+"/"+auth.Registry)
 	m.PullSecretsRefreshed = append(m.PullSecretsRefreshed, auth)
 	return m.PullSecretsRefreshStale, m.PullSecretsRefreshErr
 }

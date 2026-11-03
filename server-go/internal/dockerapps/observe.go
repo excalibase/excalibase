@@ -156,7 +156,7 @@ func (r *Runtime) AttachIssuedAppHostCertificates(context.Context) error { retur
 func (r *Runtime) DeleteRegistryPullSecrets(context.Context, string, string) error { return nil }
 
 // RefreshRegistryPullSecrets has nothing to rewrite, for the same reason.
-func (r *Runtime) RefreshRegistryPullSecrets(context.Context, string, k8s.RegistryAuth) ([]string, error) {
+func (r *Runtime) RefreshRegistryPullSecrets(context.Context, string, string, k8s.RegistryAuth) ([]string, error) {
 	return nil, nil
 }
 
