@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/excalibase/provisioning-poc/internal/service"
 )
 
 type fakeRotator struct {
@@ -15,9 +18,9 @@ type fakeRotator struct {
 	err     error
 }
 
-func (f *fakeRotator) RotatePull(projectID string) (int, error) {
+func (f *fakeRotator) RotatePull(_ context.Context, projectID string) (int, error) {
 	if f.err != nil {
-		return 0, f.err
+		return 1, f.err
 	}
 	f.rotated = append(f.rotated, projectID)
 	return len(f.rotated), nil
@@ -35,7 +38,8 @@ func TestInternalRegistryHandler_RotatesTheProjectsPullCredential(t *testing.T) 
 	rotator := &fakeRotator{}
 	rec := rotateRequest(NewInternalRegistryHandler(rotator))
 	if rec.Code != http.StatusOK || len(rotator.rotated) != 1 || rotator.rotated[0] != "proj-a" ||
-		!strings.Contains(rec.Body.String(), `"generation":1`) || !strings.Contains(rec.Body.String(), "deploy") {
+		!strings.Contains(rec.Body.String(), `"generation":1`) || !strings.Contains(rec.Body.String(), "no redeploy") ||
+		strings.Contains(rec.Body.String(), "next deploy") {
 		t.Fatalf("%d %s %v", rec.Code, rec.Body, rotator.rotated)
 	}
 	rotator.err = errors.New("vault sealed at /projects/proj-a")
@@ -45,5 +49,20 @@ func TestInternalRegistryHandler_RotatesTheProjectsPullCredential(t *testing.T) 
 	}
 	if rec := rotateRequest(NewInternalRegistryHandler(nil)); rec.Code != http.StatusNotFound {
 		t.Fatalf("no registry: %d", rec.Code)
+	}
+}
+
+// Apps left on the retired password are named, and the call never reads as a success.
+func TestInternalRegistryHandler_NamesTheAppsStillOnTheOldPassword(t *testing.T) {
+	rotator := &fakeRotator{err: &service.StalePullSecretsError{Generation: 1, Apps: []string{"api", "web"}, Err: errors.New("secret update conflict in ns-a")}}
+	rec := rotateRequest(NewInternalRegistryHandler(rotator))
+	body := rec.Body.String()
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(body, "api, web") || strings.Contains(body, "ns-a") {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+	rotator.err = &service.StalePullSecretsError{Generation: 1, Err: errors.New("vault sealed")}
+	rec = rotateRequest(NewInternalRegistryHandler(rotator))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "rotate again") || strings.Contains(rec.Body.String(), "vault") {
+		t.Fatalf("unknown apps: %d %s", rec.Code, rec.Body)
 	}
 }

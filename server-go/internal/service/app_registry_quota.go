@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
 )
 
@@ -17,6 +18,10 @@ import (
 // The bound is soft: it counts the blobs tagged images hold, so blobs left
 // untagged but not yet freed by zot's GC are not counted.
 const RegistryQuotaImages = 3
+
+// registryQuotaDeployWindow is how many of an app's newest deploys the quota
+// reads; a deploy creates superseding any earlier one in flight, so the one in flight is among them.
+const registryQuotaDeployWindow = 20
 
 // ErrRegistryFull fails a build whose image does not fit beside the images the project keeps.
 var ErrRegistryFull = errors.New("this project's built images fill its registry space")
@@ -99,11 +104,10 @@ func (s *RegistrySweeper) projectImages(ctx context.Context, projectID, pushed s
 		if !strings.HasPrefix(repository, projectID+"/") || !appregistry.OwnedBy(repository, projectID) {
 			continue
 		}
-		keep, err := s.keepRecent(ctx, repository, 0)
+		keep, err := s.quotaKeep(ctx, repository, pushed)
 		if err != nil {
 			return nil, err
 		}
-		keepDigest(keep, "@"+pushed)
 		found, err := s.repositoryImages(ctx, repository, keep)
 		if err != nil {
 			return nil, err
@@ -111,6 +115,40 @@ func (s *RegistrySweeper) projectImages(ctx context.Context, projectID, pushed s
 		images = append(images, found...)
 	}
 	return images, nil
+}
+
+// quotaKeep is what the quota never takes from a repository, a narrower set
+// than the sweep's: the image the app names, the one it runs, its deploys in
+// flight and the image just pushed. Older rollback images are not kept here.
+func (s *RegistrySweeper) quotaKeep(ctx context.Context, repository, pushed string) (map[string]bool, error) {
+	keep := map[string]bool{}
+	keepDigest(keep, "@"+pushed)
+	app, err := s.repositoryApp(ctx, repository)
+	if err != nil || app == nil {
+		return keep, err
+	}
+	keepDigest(keep, app.Image)
+	running, err := s.deploys.GetLastSucceeded(app.ProjectID, app.ID)
+	if err != nil {
+		return nil, err
+	}
+	if running != nil {
+		keepDeployImage(keep, running)
+	}
+	recent, err := s.deploys.ListByApp(app.ProjectID, app.ID, registryQuotaDeployWindow)
+	if err != nil {
+		return nil, err
+	}
+	for _, deploy := range recent {
+		if inFlight(deploy) {
+			keepDeployImage(keep, deploy)
+		}
+	}
+	return keep, nil
+}
+
+func inFlight(deploy *apphost.Deploy) bool {
+	return deploy.Status == apphost.DeployStatusPending || deploy.Status == apphost.DeployStatusRolling
 }
 
 func (s *RegistrySweeper) repositoryImages(ctx context.Context, repository string, keep map[string]bool) ([]pushedImage, error) {

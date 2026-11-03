@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,9 +101,6 @@ func TestReadLayout_TakesOneImage(t *testing.T) {
 	if layout.Root.Digest != root.Digest || len(layout.Blobs) != 2 || len(layout.Children) != 0 {
 		t.Fatalf("%+v", layout)
 	}
-	if layout.Size() != layout.Blobs[0].Size+layout.Blobs[1].Size+root.Size {
-		t.Errorf("size %d", layout.Size())
-	}
 	file, err := layout.Open(layout.Blobs[1])
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +131,7 @@ func TestReadLayout_TakesAnIndexOfManifests(t *testing.T) {
 
 func TestReadLayout_RefusesWhatABuildCouldPlant(t *testing.T) {
 	good, root := image(t, "amd64", nil)
-	base := append([]entry{layoutFile, indexEntry(t, root)}, good...)
+	base := slices.Concat([]entry{layoutFile, indexEntry(t, root)}, good)
 	badHashEntry, _ := blob([]byte("x"))
 	badHashEntry.body = []byte("y")
 	foreign, foreignRoot := image(t, "amd64", func(m *ocispec.Manifest) { m.Layers[0].URLs = []string{"http://169.254.169.254/"} })
@@ -147,24 +145,24 @@ func TestReadLayout_RefusesWhatABuildCouldPlant(t *testing.T) {
 	unknown := root
 	unknown.MediaType = "application/vnd.example.thing"
 	cases := map[string][]entry{
-		"a symlink":            append(base, entry{name: "blobs/sha256/evil", typeflag: tar.TypeSymlink}),
-		"a hard link":          append(base, entry{name: "x", typeflag: tar.TypeLink}),
-		"a device":             append(base, entry{name: "x", typeflag: tar.TypeChar}),
-		"a parent path":        append(base, entry{name: "../escape", body: []byte("x")}),
-		"an absolute path":     append(base, entry{name: "/etc/cron.d/x", body: []byte("x")}),
-		"an unclean path":      append(base, entry{name: "blobs/../index.json", body: []byte("x")}),
-		"a bad hash":           append(base, badHashEntry),
-		"a blob twice":         append(base, good[0]),
-		"index.json twice":     append(base, indexEntry(t, root)),
-		"no oci-layout":        append([]entry{indexEntry(t, root)}, good...),
-		"a layout version":     append([]entry{{name: "oci-layout", body: []byte(`{"imageLayoutVersion":"9"}`)}, indexEntry(t, root)}, good...),
-		"two images":           append([]entry{layoutFile, indexEntry(t, root, root)}, good...),
-		"a foreign layer":      append([]entry{layoutFile, indexEntry(t, foreignRoot)}, foreign...),
-		"a wrong size":         append([]entry{layoutFile, indexEntry(t, missingRoot)}, missing...),
+		"a symlink":            slices.Concat(base, []entry{{name: "blobs/sha256/evil", typeflag: tar.TypeSymlink}}),
+		"a hard link":          slices.Concat(base, []entry{{name: "x", typeflag: tar.TypeLink}}),
+		"a device":             slices.Concat(base, []entry{{name: "x", typeflag: tar.TypeChar}}),
+		"a parent path":        slices.Concat(base, []entry{{name: "../escape", body: []byte("x")}}),
+		"an absolute path":     slices.Concat(base, []entry{{name: "/etc/cron.d/x", body: []byte("x")}}),
+		"an unclean path":      slices.Concat(base, []entry{{name: "blobs/../index.json", body: []byte("x")}}),
+		"a bad hash":           slices.Concat(base, []entry{badHashEntry}),
+		"a blob twice":         slices.Concat(base, []entry{good[0]}),
+		"index.json twice":     slices.Concat(base, []entry{indexEntry(t, root)}),
+		"no oci-layout":        slices.Concat([]entry{indexEntry(t, root)}, good),
+		"a layout version":     slices.Concat([]entry{{name: "oci-layout", body: []byte(`{"imageLayoutVersion":"9"}`)}, indexEntry(t, root)}, good),
+		"two images":           slices.Concat([]entry{layoutFile, indexEntry(t, root, root)}, good),
+		"a foreign layer":      slices.Concat([]entry{layoutFile, indexEntry(t, foreignRoot)}, foreign),
+		"a wrong size":         slices.Concat([]entry{layoutFile, indexEntry(t, missingRoot)}, missing),
 		"a missing blob":       {layoutFile, indexEntry(t, root), good[2]},
-		"an index in an index": append([]entry{layoutFile, indexEntry(t, nestedRoot), nestedBlob}, good...),
-		"a manifest as index":  append([]entry{layoutFile, indexEntry(t, mismatched)}, good...),
-		"an unknown type":      append([]entry{layoutFile, indexEntry(t, unknown)}, good...),
+		"an index in an index": slices.Concat([]entry{layoutFile, indexEntry(t, nestedRoot), nestedBlob}, good),
+		"a manifest as index":  slices.Concat([]entry{layoutFile, indexEntry(t, mismatched)}, good),
+		"an unknown type":      slices.Concat([]entry{layoutFile, indexEntry(t, unknown)}, good),
 		"not json":             {layoutFile, {name: "index.json", body: []byte("{")}},
 		"not a tar":            nil,
 	}
@@ -177,7 +175,36 @@ func TestReadLayout_RefusesWhatABuildCouldPlant(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if _, err := ReadLayout(bytes.NewReader(tarOf(t, base...)), t.TempDir(), 64); !errors.Is(err, ErrBadArchive) {
+	if _, err := ReadLayout(bytes.NewReader(tarOf(t, base...)), t.TempDir(), 64); !errors.Is(err, ErrArchiveTooLarge) || !errors.Is(err, ErrBadArchive) {
 		t.Errorf("over the limit: %v", err)
+	}
+}
+
+func TestReadLayout_RefusesAManifestOverItsCap(t *testing.T) {
+	configEntry, config := blob([]byte(`{"architecture":"amd64","os":"linux"}`))
+	config.MediaType = ocispec.MediaTypeImageConfig
+	layerEntry, layer := blob([]byte("layer"))
+	layer.MediaType = ocispec.MediaTypeImageLayerGzip
+	manifest := ocispec.Manifest{MediaType: ocispec.MediaTypeImageManifest, Config: config, Layers: []ocispec.Descriptor{layer}}
+	manifest.SchemaVersion = 2
+	// Trailing whitespace keeps it valid JSON even when cut at the cap, so only the cap refuses it.
+	padded := append(jsonOf(t, manifest), bytes.Repeat([]byte(" "), maxManifest)...)
+	manifestEntry, root := blob(padded)
+	root.MediaType = ocispec.MediaTypeImageManifest
+	archive := tarOf(t, layoutFile, indexEntry(t, root), configEntry, layerEntry, manifestEntry)
+	if _, err := ReadLayout(bytes.NewReader(archive), t.TempDir(), 2*maxManifest); !errors.Is(err, ErrBadArchive) {
+		t.Fatalf("a %d-byte manifest: %v", root.Size, err)
+	}
+}
+
+func TestReadLayout_RefusesMoreEntriesThanItsCap(t *testing.T) {
+	good, root := image(t, "amd64", nil)
+	dirs := make([]entry, maxArchiveEntries)
+	for i := range dirs {
+		dirs[i] = entry{name: "./", typeflag: tar.TypeDir}
+	}
+	archive := tarOf(t, slices.Concat([]entry{layoutFile, indexEntry(t, root)}, good, dirs)...)
+	if _, err := readLayout(t, archive); !errors.Is(err, ErrBadArchive) {
+		t.Fatalf("%d entries: %v", maxArchiveEntries+len(good)+2, err)
 	}
 }

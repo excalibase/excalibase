@@ -434,6 +434,18 @@ func TestAppDeployHandler_Redeploy_AppNotFound(t *testing.T) {
 	}
 }
 
+// A rollback past the images the registry keeps says why, instead of failing as a server error.
+func TestAppDeployHandler_Redeploy_ImageRemovedIsTheCallersError(t *testing.T) {
+	deployer := newFakeAppDeployer()
+	deployer.redeployErr = service.ErrRollbackImageRemoved
+	r := setupAppDeployRouter(t, deployer)
+
+	rec := doDeployRequest(t, r, http.MethodPost, "/api/projects/"+deployHandlerProject+"/apps/app-1/deploys/dep-1/redeploy")
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "removed from the registry") {
+		t.Fatalf("status: got %d want 422, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAppDeployHandler_Redeploy_InvalidDeployID(t *testing.T) {
 	deployer := newFakeAppDeployer()
 	r := setupAppDeployRouter(t, deployer)

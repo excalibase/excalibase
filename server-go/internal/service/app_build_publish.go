@@ -147,7 +147,7 @@ func (p *AppBuildPublisher) collect(ctx context.Context, result AppBuildResult, 
 	reader.CloseWithError(errArchiveRefused)
 	collectErr := <-collected
 	switch {
-	case errors.Is(collectErr, sitebuilds.ErrOutputTooLarge):
+	case errors.Is(collectErr, sitebuilds.ErrOutputTooLarge), errors.Is(readErr, appregistry.ErrArchiveTooLarge):
 		return nil, fmt.Errorf("%w (%d bytes)", ErrImageTooLarge, result.MaxImage)
 	case stream.err != nil && collectErr != nil:
 		// The stream broke on the collector's side, not on what it carried.

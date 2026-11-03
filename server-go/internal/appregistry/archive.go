@@ -30,6 +30,10 @@ const (
 // customer's code, so nothing in its output is trusted until it is checked.
 var ErrBadArchive = errors.New("the build's image archive is not a single OCI image")
 
+// ErrArchiveTooLarge refuses an archive whose files add up past the limit;
+// it is an ErrBadArchive, told apart so a caller can name the size.
+var ErrArchiveTooLarge = fmt.Errorf("%w: larger than the image limit", ErrBadArchive)
+
 var blobPath = regexp.MustCompile(`^blobs/sha256/([0-9a-f]{64})$`)
 
 // Layout is an OCI image layout taken from an archive: every blob was written
@@ -74,7 +78,7 @@ func ReadLayout(r io.Reader, dir string, limit int64) (*Layout, error) {
 			continue
 		}
 		if total += header.Size; total > limit {
-			return nil, fmt.Errorf("%w: larger than %d bytes", ErrBadArchive, limit)
+			return nil, fmt.Errorf("%w (%d bytes)", ErrArchiveTooLarge, limit)
 		}
 		switch {
 		case name == "index.json":
