@@ -26,7 +26,8 @@ export type Feature =
   | 'dballowlist'
   | 'dbreadaddress'
   | 'dbcopy'
-  | 'majorupgrade';
+  | 'majorupgrade'
+  | 's3';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;

@@ -15,6 +15,8 @@ var darkTools = map[string]features.Feature{
 	"get_advisors":           features.Advisors,
 	"get_db_allowed_sources": features.DBAllowList,
 	"set_db_allowed_sources": features.DBAllowList,
+	"list_s3_keys":           features.S3,
+	"revoke_s3_key":          features.S3,
 }
 
 func advisorRouteCases() []routeCase {
