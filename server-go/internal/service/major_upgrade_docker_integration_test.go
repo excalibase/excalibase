@@ -144,15 +144,15 @@ func (l *liveUpgrade) start(ctx context.Context, t *testing.T) (*domain.Database
 }
 
 type liveProgress struct {
-	ctx  context.Context
 	runs *memMajorUpgrades
 	run  *domain.MajorUpgrade
 }
 
-func (p *liveProgress) Step(string)             {}
-func (p *liveProgress) WritesStopped(time.Time) {}
-func (p *liveProgress) Converted(at time.Time) error {
-	return p.runs.MarkMajorUpgradeConverted(p.ctx, p.run.ID, p.run.ProjectID, p.run.ToVersion, at)
+func (p *liveProgress) Step(context.Context, string) error             { return nil }
+func (p *liveProgress) WritesStopped(context.Context, time.Time) error { return nil }
+func (p *liveProgress) Hold(context.Context) error                     { return nil }
+func (p *liveProgress) Converted(ctx context.Context, at time.Time) error {
+	return p.runs.MarkMajorUpgradeConverted(ctx, p.run.ID, p.run.ProjectID, p.run.ToVersion, p.run.Owner, at)
 }
 
 func (l *liveUpgrade) login(ctx context.Context, t *testing.T, namespace string) *sql.DB {
@@ -175,7 +175,7 @@ func TestSingleHostMajorUpgradeMovesTheDatabaseTo17(t *testing.T) {
 	if _, err := upgrader.TakeBackup(ctx, inst); err != nil {
 		t.Fatalf("backup: %v", err)
 	}
-	outcome := upgrader.Convert(ctx, inst, *run, &liveProgress{ctx: ctx, runs: live.runs, run: run})
+	outcome := upgrader.Convert(ctx, inst, *run, &liveProgress{runs: live.runs, run: run})
 	if !outcome.Converted {
 		logs, _ := live.docker.ContainerState(ctx, provisioner.DatabaseContainerName(live.project))
 		t.Fatalf("outcome %+v (new container %+v)", outcome, logs)
@@ -247,7 +247,7 @@ func TestSingleHostMajorUpgradePutsTheOldVersionBackWhenTheLoadFails(t *testing.
 	upgrader := live.upgrader()
 	inst, run := live.start(ctx, t)
 
-	outcome := upgrader.Convert(ctx, inst, *run, &liveProgress{ctx: ctx, runs: live.runs, run: run})
+	outcome := upgrader.Convert(ctx, inst, *run, &liveProgress{runs: live.runs, run: run})
 	if !outcome.RolledBack {
 		t.Fatalf("outcome %+v", outcome)
 	}

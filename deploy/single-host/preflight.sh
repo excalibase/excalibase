@@ -62,6 +62,17 @@ if [ "${FEATURE_AUTHHOOKS:-}" = true ]; then
   fi
 fi
 
+# Log drains (EXC-658): the forwarder's token unlocks every drain's key.
+if [ "${FEATURE_LOGDRAINS:-}" = true ]; then
+  check_secret LOG_FORWARDER_TOKEN "${LOG_FORWARDER_TOKEN:-}"
+  for other in "${POSTGRES_PASSWORD:-}" "${SETUP_TOKEN:-}" "${OBJECTSTORE_ROOT_SECRET:-}" \
+    "${OBJECTSTORE_BACKUPS_SECRET:-}" "${OBJECTSTORE_FILES_SECRET:-}"; do
+    if [ "${LOG_FORWARDER_TOKEN:-}" = "$other" ]; then
+      complain "LOG_FORWARDER_TOKEN must differ from the other secrets"
+    fi
+  done
+fi
+
 # Optional: unset means bootstrap generates one and prints it once.
 admin=${ADMIN_PASSWORD:-}
 if [ -n "$admin" ] && { is_weak "$admin" || [ "${#admin}" -lt 12 ]; }; then
