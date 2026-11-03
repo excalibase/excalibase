@@ -56,6 +56,12 @@ func (Unrotated) PullGeneration(string) (int, error) { return 0, nil }
 // Archive is a build's image archive: an OCI layout tar holding one image.
 func Archive(t testing.TB) []byte {
 	t.Helper()
+	return ArchiveBy(t, "")
+}
+
+// ArchiveBy is Archive with author in the image's config, so each author's image has its own digests.
+func ArchiveBy(t testing.TB, author string) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	add := func(name string, body []byte) {
@@ -69,6 +75,9 @@ func Archive(t testing.TB) []byte {
 		return hex.EncodeToString(sum[:])
 	}
 	config := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
+	if author != "" {
+		config = []byte(`{"author":"` + author + `","architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
+	}
 	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:` +
 		digestOf(config) + `","size":` + strconv.Itoa(len(config)) + `},"layers":[]}`)
 	add("oci-layout", []byte(`{"imageLayoutVersion":"1.0.0"}`))

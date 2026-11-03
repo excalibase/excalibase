@@ -119,7 +119,7 @@ func (s *RegistrySweeper) keep(ctx context.Context, repository string) (map[stri
 	return s.keepRecent(ctx, repository, RegistryKeepDeploys)
 }
 
-// keepRecent keeps the app's image, its last successful deploy's and its last recent deploys'.
+// keepRecent keeps the app's image, its last successful deploy's, its deploys in flight and its last recent deploys'.
 func (s *RegistrySweeper) keepRecent(ctx context.Context, repository string, recent int) (map[string]bool, error) {
 	projectID, appName, ok := appregistry.SplitRepository(repository)
 	if !ok {
@@ -143,18 +143,23 @@ func (s *RegistrySweeper) keepRecent(ctx context.Context, repository string, rec
 		if err != nil {
 			return nil, err
 		}
-		// Newest first: the last few, and the last that succeeded, which is what runs.
+		// Newest first: the last few, the last that succeeded, which is what
+		// runs, and any still in flight, which is about to.
 		succeeded := false
 		for i, deploy := range deploys {
 			lastSuccess := !succeeded && deploy.Status == apphost.DeployStatusSucceeded
 			succeeded = succeeded || lastSuccess
-			if i < recent || lastSuccess {
+			if i < recent || lastSuccess || inFlight(deploy) {
 				keepDigest(keep, deploy.Image)
 				keepDigest(keep, "@"+deploy.Digest)
 			}
 		}
 	}
 	return keep, nil
+}
+
+func inFlight(deploy *apphost.Deploy) bool {
+	return deploy.Status == apphost.DeployStatusPending || deploy.Status == apphost.DeployStatusRolling
 }
 
 func keepDigest(keep map[string]bool, image string) {

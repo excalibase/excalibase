@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -13,77 +14,113 @@ import (
 
 // RegistryQuotaImages is a project's room in the registry, in its plan's largest image:
 // enough for a new build beside what runs, shared by the project's apps.
+// The bound is soft: it counts the blobs tagged images hold, so blobs left
+// untagged but not yet freed by zot's GC are not counted.
 const RegistryQuotaImages = 3
 
-// ErrRegistryFull fails a build whose image does not fit beside the images the project runs.
+// ErrRegistryFull fails a build whose image does not fit beside the images the project keeps.
 var ErrRegistryFull = errors.New("this project's built images fill its registry space")
 
-// pushedImage is one push tag and what its image holds.
+// RegistryFullError is ErrRegistryFull with the numbers: the bytes the kept
+// images use, what the new image adds to them, and the quota.
+type RegistryFullError struct {
+	Used, Incoming, Quota int64
+}
+
+func (e *RegistryFullError) Error() string {
+	return fmt.Sprintf("%v: %d bytes kept and %d more needed, of %d", ErrRegistryFull, e.Used, e.Incoming, e.Quota)
+}
+
+func (e *RegistryFullError) Unwrap() error { return ErrRegistryFull }
+
+// pushedImage is one push tag and what its image holds. removable is a tag
+// nothing keeps by the sweep's rules (staleTags): not run, not in a deploy in
+// flight, not among the newest pushes inside the grace, not the new image.
 type pushedImage struct {
 	repository, tag, digest string
 	at                      time.Time
 	blobs                   map[string]int64
+	removable               bool
 }
 
-// MakeRoom fits incoming (an image's blobs, by digest) into the project's
-// quota: the oldest images no app runs lose their tags until it fits.
-// Shared layers count once. An image an app runs is never taken.
-func (s *RegistrySweeper) MakeRoom(ctx context.Context, projectID string, incoming map[string]int64, quota int64) error {
-	images, running, err := s.projectImages(ctx, projectID)
+// Fits says whether incoming (an image's blobs, by digest) fits the quota
+// beside the images MakeRoom may not take. It removes nothing, so a build that
+// cannot fit fails with every rollback image in place. Shared layers count once.
+func (s *RegistrySweeper) Fits(ctx context.Context, projectID string, incoming map[string]int64, quota int64) error {
+	images, err := s.projectImages(ctx, projectID, "")
+	if err != nil {
+		return err
+	}
+	used, need := usage(kept(images), incoming)
+	if used+need > quota {
+		return &RegistryFullError{Used: used, Incoming: need, Quota: quota}
+	}
+	return nil
+}
+
+// MakeRoom brings the project back within its quota after the image pushed
+// has been pushed: the oldest removable images lose their tags until it fits.
+// It runs after the push, under the publish lock, so a push that fails leaves
+// every older tag; the pushed image is never taken.
+func (s *RegistrySweeper) MakeRoom(ctx context.Context, projectID, pushed string, quota int64) error {
+	images, err := s.projectImages(ctx, projectID, pushed)
 	if err != nil {
 		return err
 	}
 	sort.Slice(images, func(i, j int) bool { return images[i].at.Before(images[j].at) })
 	for {
-		used, need := usage(images, incoming)
-		if used+need <= quota {
+		used, _ := usage(images, nil)
+		if used <= quota {
 			return nil
 		}
-		victim := -1
-		for i, image := range images {
-			if !running[image.repository][image.digest] {
-				victim = i
-				break
-			}
-		}
+		victim := slices.IndexFunc(images, func(image pushedImage) bool { return image.removable })
 		if victim < 0 {
-			return fmt.Errorf("%w: %d bytes in use and %d more needed, of %d", ErrRegistryFull, used, need, quota)
+			return &RegistryFullError{Used: used, Quota: quota}
 		}
 		if err := s.registry.Untag(ctx, images[victim].repository, images[victim].tag); err != nil {
 			return fmt.Errorf("make room in the registry: %w", err)
 		}
-		images = append(images[:victim:victim], images[victim+1:]...)
+		images = slices.Delete(images, victim, victim+1)
 	}
 }
 
-// projectImages lists every push tag in the project's repositories, and the digests each app runs.
-func (s *RegistrySweeper) projectImages(ctx context.Context, projectID string) ([]pushedImage, map[string]map[string]bool, error) {
+func kept(images []pushedImage) []pushedImage {
+	return slices.DeleteFunc(slices.Clone(images), func(image pushedImage) bool { return image.removable })
+}
+
+// projectImages lists every push tag in the project's repositories, each marked removable or not.
+func (s *RegistrySweeper) projectImages(ctx context.Context, projectID, pushed string) ([]pushedImage, error) {
 	repositories, err := s.registry.Repositories(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var images []pushedImage
-	running := map[string]map[string]bool{}
 	for _, repository := range repositories {
 		if !strings.HasPrefix(repository, projectID+"/") || !appregistry.OwnedBy(repository, projectID) {
 			continue
 		}
-		if running[repository], err = s.keepRecent(ctx, repository, 0); err != nil {
-			return nil, nil, err
-		}
-		found, err := s.repositoryImages(ctx, repository)
+		keep, err := s.keepRecent(ctx, repository, 0)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
+		}
+		keepDigest(keep, "@"+pushed)
+		found, err := s.repositoryImages(ctx, repository, keep)
+		if err != nil {
+			return nil, err
 		}
 		images = append(images, found...)
 	}
-	return images, running, nil
+	return images, nil
 }
 
-func (s *RegistrySweeper) repositoryImages(ctx context.Context, repository string) ([]pushedImage, error) {
+func (s *RegistrySweeper) repositoryImages(ctx context.Context, repository string, keep map[string]bool) ([]pushedImage, error) {
 	tags, err := s.registry.Tags(ctx, repository)
 	if err != nil {
 		return nil, err
+	}
+	stale := map[string]bool{}
+	for _, tag := range s.staleTags(tags, keep) {
+		stale[tag] = true
 	}
 	var images []pushedImage
 	read := map[string]map[string]int64{}
@@ -97,7 +134,7 @@ func (s *RegistrySweeper) repositoryImages(ctx context.Context, repository strin
 				return nil, err
 			}
 		}
-		images = append(images, pushedImage{repository: repository, tag: tag, digest: digest, at: at, blobs: read[digest]})
+		images = append(images, pushedImage{repository: repository, tag: tag, digest: digest, at: at, blobs: read[digest], removable: stale[tag]})
 	}
 	return images, nil
 }
