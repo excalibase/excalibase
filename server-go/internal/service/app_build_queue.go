@@ -57,6 +57,10 @@ func (p *appBuildQueuePublisher) PublishBuild(ctx context.Context, publish siteb
 
 // namedFailure gives each refusal the user can act on its own failure kind; anything else stays unnamed.
 func namedFailure(err error) error {
+	if full := (*RegistryFullError)(nil); errors.As(err, &full) {
+		shown := appbuilds.RegistryFullStatus(full.Used, full.Incoming, full.Quota).Detail
+		return &sitebuilds.BuildFailure{Kind: appbuilds.FailRegistryFull, Err: &shownError{shown: shown, err: err}}
+	}
 	kinds := []struct {
 		cause error
 		kind  sitebuilds.FailureKind
@@ -72,3 +76,12 @@ func namedFailure(err error) error {
 	}
 	return err
 }
+
+// shownError is err worded for the user; errors.Is still reaches err.
+type shownError struct {
+	shown string
+	err   error
+}
+
+func (e *shownError) Error() string { return e.shown }
+func (e *shownError) Unwrap() error { return e.err }
