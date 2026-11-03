@@ -216,7 +216,7 @@ case ",$cat_ids," in *,valkey,*) ok "the catalog is listed with its flag on ($ca
 # "$W/<id>.secret" (0600) and is never printed.
 deploy_template() {
   ( umask 077; api -X POST "$API/projects/$PID/app-templates/$1/deploy" -d '{}' > "$W/$1.json"
-    json '[c["value"] for c in d.get("credentials",[]) if c["name"]=="'"$2"'"][0]' < "$W/$1.json" > "$W/$1.secret" )
+    [ -z "$2" ] || json '[c["value"] for c in d.get("credentials",[]) if c["name"]=="'"$2"'"][0]' < "$W/$1.json" > "$W/$1.secret" )
   json 'd["apps"][0]["id"]' < "$W/$1.json"
   rm -f "$W/$1.json"
 }
@@ -248,6 +248,24 @@ case "$said" in *WRONGPASS*) ok "the arguments were expanded: the variable's nam
 no_platform_log_has "$W/valkey.pw" && ok "the valkey password is in no platform log" || ko "the valkey password leaked into a log (or was empty)"
 rm -f "$W/valkey.secret" "$W/valkey.pw" "$W/valkey.cmd"
 remove_app "$VID"
+
+# The redis starter runs Valkey: it starts, answers by its bare name and wants its password.
+RID=$(deploy_template redis "")
+[ "$(wait_deploy "$PID" "$RID")" = succeeded ] && ok "the redis starter deployed" || ko "redis starter deploy: $(deploy_failure "$PID" "$RID")"
+said=$(printf 'PING\r\nQUIT\r\n' | $DOCKER exec -i "$AC" nc -w 5 redis 6379 2>&1 | tr -d '\r')
+case "$said" in *NOAUTH*) ok "a sibling reaches the redis starter by name, and it wants the password" ;; *) ko "redis starter by name: ${said:0:200}" ;; esac
+RC=$(app_container "$RID")
+# The starter shows no credential; the generated password is read from its container, never printed.
+( umask 077; $DOCKER inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$RC" | sed -n 's/^REDIS_PASSWORD=//p' > "$W/redis.pw"
+  printf 'AUTH %s\r\nPING\r\nQUIT\r\n' "$(cat "$W/redis.pw")" > "$W/redis.cmd" )
+grep -q '^[A-Za-z0-9]\{32\}$' "$W/redis.pw" && ok "the redis starter has a generated password" || ko "no generated REDIS_PASSWORD on the redis starter"
+said=$($DOCKER exec -i "$AC" nc -w 5 redis 6379 < "$W/redis.cmd" 2>&1 | tr -d '\r' | tr '\n' ' ')
+case "$said" in "+OK +PONG "*) ok "a sibling reaches the redis starter with the generated password" ;; *) ko "redis starter with its password: ${said:0:200}" ;; esac
+said=$(printf 'AUTH $(REDIS_PASSWORD)\r\nQUIT\r\n' | $DOCKER exec -i "$AC" nc -w 5 redis 6379 2>&1 | tr -d '\r')
+case "$said" in *WRONGPASS*) ok "the redis starter's arguments were expanded: the variable's name is no password" ;; *) ko "the literal variable name answered: ${said:0:200}" ;; esac
+rm -f "$W/redis.pw" "$W/redis.cmd"
+$DOCKER inspect --format '{{.Config.Image}}' "$RC" 2>/dev/null | grep -q 'valkey/valkey@' && ok "the redis starter runs Valkey" || ko "the redis starter's image is not Valkey"
+remove_app "$RID"
 
 echo "== apps: another project cannot reach this one"
 # The single host's one organisation is on the Free plan, one project; the operator raises it.
