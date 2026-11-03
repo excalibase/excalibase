@@ -434,6 +434,26 @@ a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
 | `LOG_RETENTION` | `168h` | how long lines are kept (whole hours, at least 24h) |
 | `FEATURE_LOGRETENTION` | unset | keep each project's lines for its plan instead: `LOG_RETENTION_FREE` (`24h`), `LOG_RETENTION_STANDARD` and `LOG_RETENTION_ENTERPRISE` (`168h`) |
 
+## End-user auth hooks
+
+```bash
+./init.sh --domain example.com --admin-email you@example.com --auth-hooks
+```
+
+Turns on `FEATURE_AUTHHOOKS`: a project Admin points sign-up and sign-in at
+their own HTTPS endpoint, called signed by the auth service. Hook calls never
+reach private ranges, but this host's public address is public, so it must be
+listed too. `init.sh` writes what the install's names resolve to plus the
+global addresses on the host's interfaces (`ip`; without it, a warning), and
+warns when a name resolves somewhere else (a CDN, proxy or NAT); the stack
+does not start with hooks on and the list empty, as the Helm chart refuses to
+install without `auth.hooks.extraDenyCIDRs`.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_AUTHHOOKS` | unset (`true` with `--auth-hooks`) | end-user auth hooks |
+| `AUTH_HOOKS_DENY_CIDRS` | unset (the names' and interfaces' addresses with `--auth-hooks`) | the host's own public ranges, comma-separated CIDRs, refused to hook calls; behind NAT, add the public address |
+
 ## Refusals you may see
 
 - `run ./init.sh first` — a required value is missing from `.env`.
@@ -446,6 +466,8 @@ a CPU (`LOKI_MEMORY`, `LOKI_CPUS`); idle it uses about 40 MiB.
 - `preflight: ... is a known default` / `must be at least 32 hex characters` /
   `must all differ` — the stack does not start on a weak or reused secret.
   `docker compose logs preflight` names it.
+- `preflight: FEATURE_AUTHHOOKS needs AUTH_HOOKS_DENY_CIDRS` — auth hooks are on
+  and nothing keeps them off this host: list its public addresses.
 
 ## What works on a single host today
 

@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -109,13 +110,24 @@ func (m *memAuthHookStore) ClearAuthHookSecret(_ context.Context, projectID stri
 type hooksFixture struct {
 	oauthFixture
 	hooks *memAuthHookStore
+	// role is the caller's org role on the project; empty leaves the access unresolved.
+	role *string
 }
 
 func setupHooksHandler(t *testing.T, on ...features.Feature) hooksFixture {
 	t.Helper()
-	f := hooksFixture{oauthFixture: setupSignInHandler(t, on...), hooks: newMemAuthHookStore()}
+	role := domain.OrgRoleAdmin
+	f := hooksFixture{oauthFixture: setupSignInHandler(t, on...), hooks: newMemAuthHookStore(), role: &role}
 	f.handler.authOAuth.Hooks = f.hooks
 	f.router.Route("/api/projects/{projectId}/auth-hooks", func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if *f.role != "" {
+					req = req.WithContext(custommw.WithProjectAccess(req.Context(), &custommw.ProjectAccess{Member: &domain.OrgMember{Role: *f.role}}))
+				}
+				next.ServeHTTP(w, req)
+			})
+		})
 		r.Get("/", f.handler.GetAuthHooks)
 		r.Post("/secret", f.handler.RotateAuthHookSecret)
 		r.Delete("/secret", f.handler.DeleteAuthHookSecret)
@@ -126,6 +138,7 @@ func setupHooksHandler(t *testing.T, on ...features.Feature) hooksFixture {
 
 type hooksBody struct {
 	SecretSet bool             `json:"secretSet"`
+	CanChange bool             `json:"canChange"`
 	Hooks     []map[string]any `json:"hooks"`
 }
 
@@ -149,8 +162,32 @@ func TestAuthHooks_ListsAllThreeUnsetInOrder(t *testing.T) {
 		got.Hooks[1]["hook"] != "before_user_created" || got.Hooks[2]["hook"] != "send_email" {
 		t.Fatalf("body = %s", w.Body.String())
 	}
-	if got.Hooks[0]["enabled"] != false || got.Hooks[0]["url"] != "" || len(got.Hooks[0]) != 3 {
-		t.Fatalf("a hook carries exactly hook, enabled and url: %v", got.Hooks[0])
+	if got.Hooks[0]["enabled"] != false || got.Hooks[0]["url"] != "" || got.Hooks[0]["host"] != "" || len(got.Hooks[0]) != 4 || !got.CanChange {
+		t.Fatalf("a hook carries exactly hook, enabled, host and url: %v", got.Hooks[0])
+	}
+}
+
+// A hook URL may carry the receiver's token: only an Admin, who may change it, reads it back.
+func TestAuthHooks_OnlyAnAdminReadsTheFullURL(t *testing.T) {
+	f := setupHooksHandler(t, features.AuthHooks)
+	f.hooks.rows[testOAuthProject+"/custom_access_token"] = domain.ProjectAuthHook{Hook: "custom_access_token", Enabled: true, URL: testHookURL}
+	for _, role := range []string{domain.OrgRoleDeveloper, ""} {
+		*f.role = role
+		w := doJSON(f.router, http.MethodGet, testHooks, nil)
+		got := decodeHooks(t, w.Body.Bytes())
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "receiver-token") || got.CanChange {
+			t.Fatalf("role %q: %d %s", role, w.Code, w.Body.String())
+		}
+		if _, has := got.Hooks[0]["url"]; has || got.Hooks[0]["host"] != "hooks.example.com" || got.Hooks[0]["enabled"] != true {
+			t.Fatalf("role %q sees %v, want the host only", role, got.Hooks[0])
+		}
+	}
+	for _, role := range []string{domain.OrgRoleAdmin, domain.OrgRoleOwner} {
+		*f.role = role
+		got := decodeHooks(t, doJSON(f.router, http.MethodGet, testHooks, nil).Body.Bytes())
+		if got.Hooks[0]["url"] != testHookURL || got.Hooks[0]["host"] != "hooks.example.com" || !got.CanChange {
+			t.Fatalf("role %q sees %v", role, got.Hooks[0])
+		}
 	}
 }
 

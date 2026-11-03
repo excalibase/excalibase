@@ -61,9 +61,10 @@ func (m *memAuthProviderStore) PutAuthProvider(_ context.Context, projectID stri
 // memAuthSignInStore keeps the policy and writes the settings through to the
 // settings fake, as the one Postgres row does.
 type memAuthSignInStore struct {
-	settings *memAuthSettingsStore
-	signIn   map[string]domain.ProjectAuthSignIn
-	err      error
+	settings           *memAuthSettingsStore
+	signIn             map[string]domain.ProjectAuthSignIn
+	mfaKeyFingerprints map[string]string
+	err                error
 }
 
 func (m *memAuthSignInStore) GetAuthSignIn(_ context.Context, projectID string) (domain.ProjectAuthSignIn, error) {
