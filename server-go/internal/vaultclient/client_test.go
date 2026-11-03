@@ -386,3 +386,24 @@ func TestHTTPClient_GetPublicKey_BadJSON(t *testing.T) {
 		t.Errorf("expected empty key when server returned no key, got %q", pk)
 	}
 }
+
+// EXC-662: a conditional write never replaces what is stored.
+func TestHTTPClient_PutIfAbsent(t *testing.T) {
+	ts, v := setupVaultServer(t, nil)
+	c := NewHTTPClient(ts.URL, testPAT)
+	created, err := c.PutIfAbsent("projects/p/auth/mfa", map[string]string{"key": "first"})
+	if err != nil || !created {
+		t.Fatalf("first: created=%v err=%v", created, err)
+	}
+	created, err = c.PutIfAbsent("projects/p/auth/mfa", map[string]string{"key": "second"})
+	if err != nil || created {
+		t.Fatalf("second: created=%v err=%v", created, err)
+	}
+	if got, _ := v.Get("projects/p/auth/mfa"); got["key"] != "first" {
+		t.Fatalf("stored = %v", got)
+	}
+	v.Seal()
+	if _, err := c.PutIfAbsent("projects/p/auth/other", map[string]string{"key": "x"}); err == nil {
+		t.Fatal("a sealed vault accepted the write")
+	}
+}

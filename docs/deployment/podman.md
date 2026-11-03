@@ -83,6 +83,7 @@ the other containers can read them under SELinux.
 | Client addresses seen by the edge | the real client | the address of Podman's port forwarder: `STUDIO_ALLOW_CIDRS` and per-client rate limits cannot tell clients apart — restrict Studio with the host firewall instead |
 | Tenant CPU limits | always | needs the `cpu` controller delegated |
 | Host monitoring (`--host-metrics`) | container CPU, memory, network | the same; CPU is read without the `cpu` controller delegated, and health only where Podman runs its healthcheck timers |
+| Stored log search (`--host-logs`) | the engine's log followed through the proxy | the same compat API (`follow`, `timestamps`); not yet run in a full rootless boot |
 | Image healthchecks | kept | dropped for OCI-format images (Podman); the bundle declares every health gate it relies on in `compose.yaml` |
 
 ## Apps (containers)
@@ -100,7 +101,9 @@ rootless Podman install apps without the sandbox, knowingly:
 podman compose up -d
 ```
 
-Apps then run with every capability dropped but `NET_BIND_SERVICE`,
+Apps then run with every capability dropped but `NET_BIND_SERVICE`, `CHOWN`,
+`DAC_OVERRIDE`, `FOWNER`, `SETUID` and `SETGID` (what images such as Valkey or
+RabbitMQ need to step down from root),
 `no-new-privileges`, the plan's memory, CPU and 1024 processes, under crun:
 they share the host's kernel. Run only code you trust, or use Docker with
 gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
@@ -109,6 +112,24 @@ gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
 - With `APP_EGRESS=internet` each project network is created with netavark's
   `isolate` option, so a project's bridge cannot reach another's; without
   egress the networks are internal and have no route anywhere.
+- The host's own services (EXC-676): netavark refuses Docker's isolated
+  gateway, so project networks keep a bridge address, but rootless Podman keeps
+  that address inside its rootless network namespace: without egress an app
+  reaches no host service. With `APP_EGRESS=internet`, pasta forwards
+  `host.containers.internal` (169.254.1.2) to the host, so an app reaches host
+  services listening on the host's own addresses (not those on 127.0.0.1 only);
+  a host firewall cannot tell that traffic apart, so bind such services to
+  127.0.0.1 or keep egress off. Rootful Podman gives the bridge an address on
+  the host, and its resolver listens there, so drop everything but DNS (in
+  this order: each `-I` goes on top), and persist the rules:
+
+  ```bash
+  iptables -I INPUT -i podman+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+  iptables -I INPUT -i podman+ -p udp --dport 53 -j ACCEPT
+  iptables -I INPUT -i podman+ -p tcp --dport 53 -j ACCEPT
+  ```
+
+  Provisioning logs `WARN: app networks: ...` in both cases.
 - App hostnames carry the edge's port when it is above 1024
   (`https://<app>-<project>.apps.localhost:8443`).
 - The image's root directory may be read-only to an app without capabilities
@@ -118,6 +139,14 @@ gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
 
 Running Docker and Podman stacks side by side on one host needs different
 `AIO_EDGE_SUBNET` / `AIO_DATAPLANE_SUBNET` values: both claim the same subnets.
+
+## Git builds of sites
+
+As on Docker (see [Git builds of sites](docker-local.md#git-builds-of-sites)).
+Rootless Podman cannot give gVisor its limits, so builds there need
+`APP_SANDBOX_RUNTIME=none` (trusted code only). Podman gives the build network
+an address on the host: add the host firewall rule from the Docker notes for
+`podman+` bridges.
 
 ## DocumentDB projects
 

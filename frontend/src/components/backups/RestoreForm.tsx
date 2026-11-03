@@ -31,7 +31,7 @@ const STEP_TEXT: Record<string, string> = {
   ROLLING_BACK: 'The restore did not complete; putting the project back as it was',
 };
 
-const inputClass =
+export const inputClass =
   'w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent-primary';
 
 // A started restore answers RUNNING and is polled to COMPLETED or FAILED.

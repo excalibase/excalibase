@@ -38,7 +38,7 @@ func TestK3sAppBuild(t *testing.T) {
 		config.DefaultAppBuildKitImage, config.DefaultAppBuilderImage, config.DefaultAppCraneImage)
 	cluster.allowGitServer(t, namespace)
 	runner := NewAppBuildRunner(cluster.client, AppBuildOptions{
-		Namespace: namespace, RuntimeClass: gvisorRuntimeClass, Slots: 4, PrepareImage: config.DefaultSiteBuildPrepareImage,
+		Namespace: namespace, SiteBuildNamespace: "excalibase-site-builds", RuntimeClass: gvisorRuntimeClass, Slots: 4, PrepareImage: config.DefaultSiteBuildPrepareImage,
 		ToolImage: sitebuilds.NodeImage("", "22"), BuildKitImage: config.DefaultAppBuildKitImage,
 		BuilderImage: config.DefaultAppBuilderImage, RunImage: config.DefaultAppRunImage, CraneImage: config.DefaultAppCraneImage,
 		CloneSchemes: []string{"git"},

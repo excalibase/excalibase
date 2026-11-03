@@ -213,12 +213,19 @@ func runServer(cfg config.AppConfig) {
 	dbEndpointSvc := buildDBEndpointService(cfg, sqlStore, store, k8sClient, lifecycleClaimer)
 	var dbEndpoints service.PublicEndpointReconciler
 	if dbEndpointSvc != nil {
-		dbEndpoints = dbEndpointSvc
-		deps.provHandler.SetDBEndpointService(dbEndpointSvc)
-		provSvc.SetPublicEndpointReconciler(dbEndpointSvc)
+		// The read address (EXC-666) wraps the endpoint so the lifecycle takes it along.
+		readStore, _ := sqlStore.(storage.DatabaseReadAddressStore)
+		withReadAddress := service.NewDBReadAddressService(dbEndpointSvc, readStore, cfg.Features())
+		dbEndpoints = withReadAddress
+		deps.provHandler.SetDBEndpointService(withReadAddress)
+		deps.dbAllowListHandler.SetAPI(dbEndpointSvc)
+		deps.dbReadAddressHandler.SetAPI(withReadAddress)
+		provSvc.SetPublicEndpointReconciler(withReadAddress)
 	}
 	if singleHostEndpoints := buildSingleHostEndpoints(cfg, store, dockerClientRef); singleHostEndpoints != nil {
 		deps.provHandler.SetDBEndpointService(singleHostEndpoints)
+		deps.dbAllowListHandler.SetAPI(singleHostEndpoints)
+		deps.dbReadAddressHandler.SetAPI(singleHostEndpoints)
 	}
 
 	stopCallout := startNatsAuthCallout(cfg, sqlStore)
@@ -290,6 +297,11 @@ func runServer(cfg config.AppConfig) {
 	defer stopStorageReap()
 
 	wireInPlaceRestore(deps.backupHandler.Service(), provSvc, store, vc, projectDB, deps.schemaHandler)
+	stopMajorUpgradeRecovery := wireMajorUpgrades(cfg, sqlStore, majorUpgradeDeps{
+		store: store, provSvc: provSvc, backupSvc: deps.backupHandler.Service(), kube: k8sClient, vault: vc,
+		observers: []service.StatusObserver{projectDB, deps.schemaHandler},
+	}, deps)
+	defer stopMajorUpgradeRecovery()
 	if sqlStore != nil {
 		stopRestoreSweeper := wireRestoreOrchestrator(cfg, sqlStore, store, deps, provSvc)
 		defer stopRestoreSweeper()
@@ -603,11 +615,12 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 		return
 	}
 	alerts.SetStore(table)
-	if (k8sClient == nil || cfg.ProvisionerMode == "docker") && !hostMonitoringOn(cfg) {
+	sampler := requestSampling(cfg, requests)
+	if !metricsLoopRuns(cfg, k8sClient, sampler) {
 		return
 	}
 	metrics.SetHistory(table, alerts)
-	if sampler := requestSampling(cfg, requests); sampler != nil {
+	if sampler != nil {
 		metrics.SetRequestSampler(sampler)
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
@@ -615,6 +628,15 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), metricsSampleLockID)
 	}
 	metrics.StartSampler(context.Background(), service.NewLeadership(lock), metricsSampleInterval)
+}
+
+// metricsLoopRuns is Kubernetes, or a single host with host monitoring or
+// request charts on (EXC-673): request charts must not need host monitoring.
+func metricsLoopRuns(cfg config.AppConfig, k8sClient k8s.KubeClient, requests service.RequestSampler) bool {
+	if k8sClient != nil && cfg.ProvisionerMode != "docker" {
+		return true
+	}
+	return hostMonitoringOn(cfg) || (cfg.ProvisionerMode == "docker" && requests != nil)
 }
 
 // newRequestMetricsService reads the request_metrics table and scrapes the
@@ -690,6 +712,17 @@ func newLogDrainService(cfg config.AppConfig, sqlStore any, vc vaultclient.Vault
 	return service.NewLogDrainService(service.LogDrainDeps{Store: drains, Vault: vc, Instances: instances, Logs: logs})
 }
 
+// newBackupHandler records started database copies in the audit log (EXC-667).
+func newBackupHandler(backupSvc *service.BackupService, sqlStore any) *handler.BackupHandler {
+	backups := handler.NewBackupHandler(backupSvc)
+	if audit, ok := sqlStore.(interface {
+		LogAudit(ctx context.Context, entry *domain.AuditEntry) error
+	}); ok {
+		backups.SetAudit(audit)
+	}
+	return backups
+}
+
 func newLogDrainsHandler(drains *service.LogDrainService, sqlStore any) *handler.LogDrainsHandler {
 	if drains == nil {
 		return nil
@@ -698,6 +731,23 @@ func newLogDrainsHandler(drains *service.LogDrainService, sqlStore any) *handler
 		LogAudit(ctx context.Context, entry *domain.AuditEntry) error
 	})
 	return handler.NewLogDrainsHandler(drains, audit)
+}
+
+// allowListRoutes mounts the allow-list even before its service is wired,
+// answering 503 until it is.
+func (d *handlerDeps) allowListRoutes() func(chi.Router) {
+	if d.dbAllowListHandler == nil {
+		return handler.NewDBAllowListHandler(nil, nil).Routes
+	}
+	return d.dbAllowListHandler.Routes
+}
+
+// newDBAllowListHandler starts without its service, which is wired once built.
+func newDBAllowListHandler(sqlStore any) *handler.DBAllowListHandler {
+	audit, _ := sqlStore.(interface {
+		LogAudit(ctx context.Context, entry *domain.AuditEntry) error
+	})
+	return handler.NewDBAllowListHandler(nil, audit)
 }
 
 func newLogForwarderHandler(drains *service.LogDrainService, token string) *handler.LogForwarderHandler {
@@ -1060,8 +1110,13 @@ type handlerDeps struct {
 	hostMonitoringHandler *handler.HostMonitoringHandler
 	// logDrainsHandler and logForwarderHandler serve log forwarding
 	// (EXC-658); nil without the platform DB tables.
-	logDrainsHandler    *handler.LogDrainsHandler
+	logDrainsHandler *handler.LogDrainsHandler
+	// majorUpgradeHandler serves major version upgrades (EXC-668); nil
+	// without a platform store to record runs in.
+	majorUpgradeHandler *handler.MajorUpgradeHandler
 	logForwarderHandler *handler.LogForwarderHandler
+	// dbReadAddressHandler serves a database's read-only address (EXC-666).
+	dbReadAddressHandler *handler.DBReadAddressHandler
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1075,6 +1130,9 @@ type handlerDeps struct {
 	// storageSvc is nil when R2 is not configured; the reaper is started
 	// from it after the handlers are built.
 	storageSvc *storagesvc.Service
+
+	// dbAllowListHandler serves the public port's allow-list (EXC-665).
+	dbAllowListHandler *handler.DBAllowListHandler
 }
 
 // newPermissionHandler serves API permissions; tracking a function reads its
@@ -1237,6 +1295,8 @@ func wireAuthOAuth(cfg config.AppConfig, sqlStore storage.PlatformStore, vc vaul
 	deps := handler.AuthOAuthDeps{Flags: cfg.Features(), PublicBaseURL: cfg.PublicBaseURL, Audit: sqlStore}
 	deps.Providers, _ = sqlStore.(storage.ProjectAuthProviderStore)
 	deps.SignIn, _ = sqlStore.(storage.ProjectAuthSignInStore)
+	deps.Hooks, _ = sqlStore.(storage.ProjectAuthHookStore)
+	deps.MFA, _ = sqlStore.(storage.ProjectAuthMFAStore)
 	if vc != nil {
 		deps.Secrets = vc
 	}
@@ -1506,6 +1566,7 @@ func buildBackupService(
 				})
 				if err == nil {
 					dockerAdapter := hostPostgresBackupAdapter(sqlStore.BackupRecords(), mustSingleHostPorts(cfg, sqlStore), store, runner, uploader, defaults.Bucket, dockerClient)
+					dockerAdapter.SetQueryStats(queryStatsOn(cfg))
 					adapters[domain.ModeDocker] = dockerAdapter
 					hostMySQL = hostMySQLBackupAdapter(singleHostMySQL, dockerClient, service.NewDockerStreamer(dockerSDK.RawClient()), uploader, sqlStore.BackupRecords(), defaults.Bucket, store)
 				}
@@ -1647,6 +1708,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	emailSender := buildEmailSender(cfg)
 	hostMonitoringHandler := wireHostMonitoring(hostMonitoringDeps{cfg: cfg, sqlStore: sqlStore, instances: store,
 		docker: a.dockerClient, vault: vc, mail: emailSender, metrics: metricsSvc, alerts: alertSvc, provisioning: provSvc})
+	if shipper := wireHostLogs(hostLogDeps{cfg: cfg, sqlStore: sqlStore, instances: store, provisioning: provSvc}); shipper != nil {
+		go shipper.Run(context.Background())
+	}
 	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 	logDrainSvc := newLogDrainService(cfg, sqlStore, vc, provSvc)
@@ -1758,19 +1822,21 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	schemaHandler := newSchemaHandler(cfg, vc, store)
 	sitesSvc := newSitesService(cfg, sqlStore, service.NewSiteLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc), a.claimer)
 	startHostnameSweep(context.Background(), sitesSvc)
+	startServerSitesSweep(context.Background(), sitesSvc)
 	provSvc.SetSitePurger(sitesSvc)
 	provSvc.SetSiteRouter(sitesSvc)
 	builds := newSiteBuilds(siteBuildArgs{cfg: cfg, sqlStore: sqlStore, kube: k8sClient, vault: vc, sites: sitesSvc,
 		limits:  service.NewSiteBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
-		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}})
+		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}, docker: a.dockerClient})
 	return &handlerDeps{
 		siteBuilds:            builds,
 		provHandler:           provHandler,
+		dbAllowListHandler:    newDBAllowListHandler(sqlStore),
 		sdkKeysHandler:        handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
 		aiActivityHandler:     newAIActivityHandler(sqlStore),
 		endUsersHandler:       handler.NewEndUsersHandler(buildEndUserManager(cfg, vc), store, sqlStore, sqlStore),
 		metricsHandler:        handler.NewMetricsHandler(metricsSvc),
-		backupHandler:         handler.NewBackupHandler(backupSvc),
+		backupHandler:         newBackupHandler(backupSvc, sqlStore),
 		perfHandler:           handler.NewPerformanceHandler(perfSvc),
 		queryStatsHandler:     newQueryStatsHandler(cfg, store, provSvc, a.projectDB),
 		requestMetricsHandler: newRequestMetricsHandler(requestMetricsSvc),
@@ -1810,7 +1876,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appNetworkHandler: newAppNetworkHandler(appNetworkSvc),
 		appTemplateHandler: newAppTemplateHandler(appTemplateArgs{
 			sqlStore: sqlStore, projects: store, deployer: appDeploySvc, tiers: provSvc, disks: appDiskLimits,
-			budget: a.budget, network: appNetworkSvc, vault: vc, claimer: a.claimer,
+			budget: a.budget, network: appNetworkSvc, vault: vc, claimer: a.claimer, flags: cfg.Features(),
 		}),
 		tierHandler:      tierHandler,
 		pgCatalogHandler: handler.NewPostgresCatalogHandler(cfg.DocumentDBEnabled),
@@ -1834,6 +1900,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		hostMonitoringHandler:  hostMonitoringHandler,
 		logDrainsHandler:       newLogDrainsHandler(logDrainSvc, sqlStore),
 		logForwarderHandler:    newLogForwarderHandler(logDrainSvc, cfg.LogForwarderToken),
+		dbReadAddressHandler:   newDBReadAddressHandler(sqlStore),
 		mcpAudit:               sqlStore,
 		features:               cfg.Features(),
 		activity:               custommw.ProjectActivity(activityRecorder),
@@ -2012,6 +2079,13 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			r.With(admin, db).Post("/pause", d.provHandler.Pause)
 			r.With(admin, db).Post("/resume", d.provHandler.Resume)
 			r.With(admin, db).Post("/upgrade", d.provHandler.UpgradeMinorVersion)
+			// Any member reads where a major upgrade stands; Admin+ starts one (EXC-668).
+			if d.majorUpgradeHandler != nil {
+				r.With(features.Require(d.features, features.MajorUpgrade), db).Route("/major-upgrade", func(r chi.Router) {
+					r.Get("/", d.majorUpgradeHandler.Status)
+					r.With(admin).Post("/", d.majorUpgradeHandler.Start)
+				})
+			}
 			// Admin+ — resizing, re-tiering and tuning a running database (EXC-492).
 			r.With(admin, db).Post("/storage", d.provHandler.ResizeStorage)
 			r.With(admin, db).Post("/tier", d.provHandler.ChangeTier)
@@ -2047,6 +2121,10 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 				r.Route("/function-permissions", d.permissionHandler.FunctionPermissionRoutes)
 				r.With(features.Require(d.features, features.Advisors)).Get("/advisors", d.advisorsHandler.Get)
 			})
+
+			// Admin+ — copying the database into a new project (EXC-667). The
+			// flag is asked first so the route is unmounted, not forbidden, while off.
+			r.With(features.Require(d.features, features.DBCopy), admin, db).Post("/backup/copy", d.backupHandler.Copy)
 
 			// Admin+ subtrees — backup/restore and full-DB snapshots (dump +
 			// restore are destructive/exfil; kept Admin-only as the safe default).
@@ -2410,7 +2488,9 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	mountMetricsEndpoint(r, sqlStore, store, d)
 	mountProjectContainers(r, sqlStore, store, d)
 	mountLogDrains(r, sqlStore, store, d)
+	mountDBReadAddress(r, sqlStore, store, d)
 	mountAuthProviders(r, sqlStore, store, d)
+	mountAuthHooks(r, sqlStore, store, d)
 	// What AI coding tools did in the project through MCP (EXC-544).
 	r.Route("/api/projects/{projectId}/ai-activity", func(r chi.Router) {
 		r.Use(features.Require(d.features, features.MCP))
@@ -2441,6 +2521,12 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			endUserAdmin(r)
 			d.endUsersHandler.AccountRoutes(r)
 		})
+		// An end user's MFA reset (EXC-662), unmounted while authmfa is off.
+		r.Group(func(r chi.Router) {
+			r.Use(features.Require(d.features, features.AuthMFA))
+			endUserAdmin(r)
+			d.endUsersHandler.FactorRoutes(r)
+		})
 	})
 	r.Route("/api/projects/{projectId}/cors", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
@@ -2462,11 +2548,16 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
-		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
-		r.Use(custommw.RequireProjectDatabase(store))
-		r.Use(d.activity)
-		r.Get("/", d.provHandler.GetDBEndpoint)
-		r.Put("/", d.provHandler.PutDBEndpoint)
+		endpointWrites := []func(http.Handler) http.Handler{
+			custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore),
+			custommw.RequireProjectDatabase(store),
+			d.activity,
+		}
+		r.With(endpointWrites...).Get("/", d.provHandler.GetDBEndpoint)
+		r.With(endpointWrites...).Put("/", d.provHandler.PutDBEndpoint)
+		// Who may reach the public port (EXC-665); unmounted while dballowlist is off.
+		r.With(append([]func(http.Handler) http.Handler{features.Require(d.features, features.DBAllowList)}, endpointWrites...)...).
+			Route("/allowed-sources", d.allowListRoutes())
 	})
 	// Auth settings (EXC-367): requireEmailVerification + siteUrl feed the
 	// auth service's signup/redirect behavior, so reads and writes carry the
@@ -2495,6 +2586,17 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Use(d.activity)
 			r.Put("/guest-captcha", d.provHandler.PutGuestCaptcha)
 			r.Delete("/guest-captcha", d.provHandler.DeleteGuestCaptcha)
+		})
+		// The end-user MFA switch (EXC-662): Admin-only, as the switch decides
+		// whether enrolled factors are asked for at all.
+		r.Group(func(r chi.Router) {
+			r.Use(features.Require(d.features, features.AuthMFA))
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
+			r.Use(d.activity)
+			r.Put("/mfa", d.provHandler.PutAuthMFA)
 		})
 	})
 	r.Route("/api/projects/{projectId}/realtime", func(r chi.Router) {
@@ -2621,6 +2723,25 @@ func mountAuthProviders(r *chi.Mux, sqlStore storage.OrgStore, store storage.Ins
 		r.Get("/", d.provHandler.GetAuthProviders)
 		r.Put("/{provider}", d.provHandler.PutAuthProvider)
 		r.Delete("/{provider}", d.provHandler.DeleteAuthProvider)
+	})
+}
+
+// mountAuthHooks serves the end-user auth hooks settings (EXC-662): Developer
+// reads (host only; an Admin gets each full URL, so no read-only token), Admin
+// writes; the flag goes first so that while it is off these answer as never mounted.
+func mountAuthHooks(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
+	r.Route("/api/projects/{projectId}/auth-hooks", func(r chi.Router) {
+		r.Use(features.Require(d.features, features.AuthHooks))
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
+		r.Use(d.activity)
+		r.With(auth.RequireWriteCapableForSecrets).Get("/", d.provHandler.GetAuthHooks)
+		r.Post("/secret", d.provHandler.RotateAuthHookSecret)
+		r.Delete("/secret", d.provHandler.DeleteAuthHookSecret)
+		r.Put("/{hook}", d.provHandler.PutAuthHook)
 	})
 }
 
@@ -2887,6 +3008,7 @@ func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore
 		log.Print("WARN: public database endpoints disabled: the platform store does not hold the port allocator")
 		return nil
 	}
+	allowList, _ := sqlStore.(storage.DBSourceAllowListStore)
 	return service.NewDBEndpointService(service.DBEndpointServiceConfig{
 		Endpoints:    endpoints,
 		Instances:    instances,
@@ -2896,6 +3018,8 @@ func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore
 		Quarantine:   cfg.DBEndpointPortQuarantine,
 		SharedIPKey:  cfg.DBEndpointSharedIPKey,
 		Claimer:      claimer,
+		AllowList:    allowList,
+		Flags:        cfg.Features(),
 	})
 }
 
@@ -2924,8 +3048,7 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient, sql
 			log.Fatalf("docker provisioner: %v", err)
 		}
 		log.Printf("Provisioner mode: docker (host=%s)", cfg.DockerHost)
-		dockerProvisioner := provisioner.NewDockerPostgreSQLProvisioner(dockerClient)
-		dockerProvisioner.SetDeletionPoller(deletionPoller())
+		dockerProvisioner := newDockerPostgres(cfg, dockerClient)
 		mysql := provisioner.NewDockerMySQLProvisioner(dockerClient)
 		ports := mustSingleHostPorts(cfg, sqlStore)
 		mysql.SetHostPorts(ports)
@@ -2938,6 +3061,15 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient, sql
 		return provisioner.NewFactory(dockerProvisioner, mysql), dockerClient
 	}
 	return buildK8sFactory(cfg, k8sClient), nil
+}
+
+// newDockerPostgres is a single host's Postgres provisioner; its new projects
+// carry statement statistics while slowqueries is on (EXC-673).
+func newDockerPostgres(cfg config.AppConfig, client provisioner.DockerClient) *provisioner.DockerPostgreSQLProvisioner {
+	pg := provisioner.NewDockerPostgreSQLProvisioner(client)
+	pg.SetDeletionPoller(deletionPoller())
+	pg.SetQueryStats(queryStatsOn(cfg))
+	return pg
 }
 
 // dockerWatcherConfig is the CDC watcher a single host runs per project

@@ -64,9 +64,27 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodGet, "/api/projects/" + matrixProjectA + "/auth-providers"},
 		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-providers/github"},
 	},
+	features.DBReadAddress: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/db-read-address/"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/db-read-address/"},
+	},
 	features.AuthGuest: {
 		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-settings/guest-captcha"},
 		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/auth-settings/guest-captcha"},
+	},
+	features.AuthHooks: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/auth-hooks"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-hooks/send_email"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/auth-hooks/secret"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/auth-hooks/secret"},
+	},
+	features.AuthMFA: {
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/auth-settings/mfa"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/end-users/7/factors"},
+	},
+	features.DBAllowList: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/db-endpoint/allowed-sources"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/db-endpoint/allowed-sources"},
 	},
 	features.AuthUser: {
 		{http.MethodGet, "/api/projects/" + matrixProjectA + "/end-users/7"},
@@ -78,6 +96,13 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodPut, "/api/admin/monitoring/alert-settings"},
 		{http.MethodPost, "/api/admin/monitoring/alert-settings/test"},
 		{http.MethodGet, "/api/projects/" + matrixProjectA + "/containers/metrics"},
+	},
+	features.DBCopy: {
+		{http.MethodPost, "/api/provision/" + matrixProjectA + "/backup/copy"},
+	},
+	features.MajorUpgrade: {
+		{http.MethodGet, "/api/provision/" + matrixProjectA + "/major-upgrade"},
+		{http.MethodPost, "/api/provision/" + matrixProjectA + "/major-upgrade"},
 	},
 	features.AppStorage: {
 		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
@@ -114,7 +139,13 @@ var darkWork = map[features.Feature]string{
 	features.MySQLPITR:    "TestMySQLBinlogShippingStartsOnlyWithItsFeature",
 	features.LogRetention: "TestLogPlanSweepStartsOnlyWithItsFeature",
 	features.AuthOTP:      "TestAuthOTP_OffHidesTheSwitchEvenWithOAuthOn",
-	features.AppGitBuilds: "TestTierHandler_AppBuildLimitsStayDarkWhileTheFlagIsOff",
+	features.SitesServer:  "TestSites_ServerKindAnswersAsUnmountedWhileOff",
+	// The catalog's templates answer as unknown ids while it is off (internal/service).
+	features.TemplateCatalog: "TestTemplateCatalog_OffIsInvisible",
+	features.HostLogs:        "TestHostLogShippingStartsOnlyWithItsFeature",
+	// Off, a single host keeps answering that it builds nothing (ModeSingleHost).
+	features.SingleHostBuilds: "TestSiteBuildMode",
+	features.AppGitBuilds:     "TestTierHandler_AppBuildLimitsStayDarkWhileTheFlagIsOff",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

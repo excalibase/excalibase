@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,9 +20,14 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
 
-type recordingAudit struct{ entries []*domain.AuditEntry }
+type recordingAudit struct {
+	mu      sync.Mutex
+	entries []*domain.AuditEntry
+}
 
 func (a *recordingAudit) LogAudit(_ context.Context, entry *domain.AuditEntry) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.entries = append(a.entries, entry)
 	return nil
 }

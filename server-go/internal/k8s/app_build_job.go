@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -58,9 +59,11 @@ var appBuildPhases = []string{appBuildAnalyze, appBuildBuildpacks, appBuildExpor
 
 // AppBuildOptions is where and how this install runs app builds.
 type AppBuildOptions struct {
-	Namespace     string
-	RuntimeClass  string
-	PriorityClass string
+	Namespace string
+	// SiteBuildNamespace must differ from Namespace: each kind's unscoped quota would count the other's pods.
+	SiteBuildNamespace string
+	RuntimeClass       string
+	PriorityClass      string
 	// Slots is how many app builds run at once; the quota backstops it.
 	Slots int
 	// PrepareImage runs the root chmod of the work dirs and the collect step.
@@ -82,6 +85,19 @@ type AppBuildOptions struct {
 }
 
 const defaultAppBuildPlatform = "linux/amd64"
+
+// Validate refuses options whose quota would collide with the site builds'.
+func (o AppBuildOptions) Validate() error {
+	switch {
+	case o.Namespace == "":
+		return errors.New("app builds need a namespace")
+	case o.SiteBuildNamespace == "":
+		return errors.New("app builds need the site builds' namespace to keep apart from it")
+	case o.Namespace == o.SiteBuildNamespace:
+		return fmt.Errorf("app builds need their own namespace: %q is the site builds' namespace, and the two quotas would block each other", o.Namespace)
+	}
+	return nil
+}
 
 func (o AppBuildOptions) platform() string {
 	if o.Platform == "" {
@@ -191,7 +207,8 @@ func buildpacksContainers(options AppBuildOptions, spec appbuilds.RunSpec) []cor
 		SecurityContext: security, Resources: guaranteed("500m", "512Mi"), VolumeMounts: workMounts(),
 	}
 	layers, layout := "-layers=/work/layers", "-layout -layout-dir="+appBuildLayoutDir
-	app := "-app=" + spec.ContextDir()
+	// The root directory comes from the repository's settings: the scripts read it from APP_DIR, never inline.
+	app := `-app="$APP_DIR"`
 	phases := map[string]string{
 		appBuildAnalyze: appInsideCheckout + " && " + lifecycle("analyzer", layers, "-run-image="+byTag(runRef), layout, appBuildImageRef),
 		appBuildBuildpacks: lifecycle("detector", layers, app, "-platform="+appBuildPlatformDir) + " && " +

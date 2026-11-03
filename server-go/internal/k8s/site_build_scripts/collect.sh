@@ -11,6 +11,6 @@ if [[ ! -d "$out" ]]; then
 fi
 mkdir -p /work/collect
 tar -czf /work/collect/site.tar.gz -C "$out" .
-touch /work/collect/ready
+printf %s "${READY_TOKEN:-}" > /work/collect/ready
 echo "packed $(find "$out" -type f | wc -l) files"
 exec sleep 3600
