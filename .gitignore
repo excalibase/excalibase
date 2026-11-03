@@ -49,3 +49,6 @@ coverage/
 **/playwright-report/
 /server-go/server
 .sonar-local-token
+
+# Python bytecode
+__pycache__/

@@ -165,18 +165,21 @@ func buildContainer(spec sitebuilds.RunSpec) corev1.Container {
 	return corev1.Container{
 		Name: siteBuildBuild, Image: spec.Image, Command: []string{"bash", "/scripts/build.sh"}, WorkingDir: "/work",
 		// Explicit env wins over the Secret's, so a declared variable cannot move HOME or the commands.
-		Env: []corev1.EnvVar{
-			{Name: "HOME", Value: "/work/home"}, {Name: "npm_config_cache", Value: "/work/npm-cache"},
-			{Name: "COREPACK_HOME", Value: "/work/corepack"}, {Name: "COREPACK_ENABLE_DOWNLOAD_PROMPT", Value: "0"},
-			{Name: "CI", Value: "true"}, {Name: "NEXT_TELEMETRY_DISABLED", Value: "1"}, {Name: "ASTRO_TELEMETRY_DISABLED", Value: "1"},
-			{Name: "ROOT_DIR", Value: spec.RootDir}, {Name: "INSTALL_COMMAND", Value: spec.InstallCommand},
-			{Name: "BUILD_COMMAND", Value: spec.BuildCommand},
-		},
+		Env:             buildStepEnv(spec),
 		EnvFrom:         []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: siteBuildName(spec.BuildID) + "-env"}}}},
 		SecurityContext: lockedDown(),
 		Resources:       corev1.ResourceRequirements{Requests: list, Limits: list.DeepCopy()},
 		VolumeMounts:    append(workMounts(), scriptMount()),
 	}
+}
+
+func buildStepEnv(spec sitebuilds.RunSpec) []corev1.EnvVar {
+	shared := SiteBuildStepEnv(spec)
+	env := make([]corev1.EnvVar, 0, len(shared))
+	for _, pair := range shared {
+		env = append(env, corev1.EnvVar{Name: pair.Name, Value: pair.Value})
+	}
+	return env
 }
 
 func collectContainer(spec sitebuilds.RunSpec) corev1.Container {

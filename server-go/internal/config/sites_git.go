@@ -3,11 +3,15 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/features"
 )
 
 // SiteGitConfig is the GitHub App and build cluster settings git builds use
@@ -35,6 +39,11 @@ type SiteGitConfig struct {
 	NodeImage string
 	// PrepareImage runs only the workdir chmod; a minimal image pinned by digest.
 	PrepareImage string
+	// EgressImage holds the build egress proxy a single host's builds reach the internet through (EXC-671):
+	// provisioning's own image, already on the host.
+	EgressImage string
+	// EgressAllow are host:port entries a single host's builds may reach although private (a LAN git server or registry).
+	EgressAllow []string
 
 	keyFileErr error
 	appIDErr   bool
@@ -57,6 +66,8 @@ func loadSiteGit() SiteGitConfig {
 		PriorityClass:  strings.TrimSpace(os.Getenv("SITES_BUILD_PRIORITY_CLASS")),
 		NodeImage:      strings.TrimSpace(os.Getenv("SITES_BUILD_NODE_IMAGE")),
 		PrepareImage:   envOr("SITES_BUILD_PREPARE_IMAGE", DefaultSiteBuildPrepareImage),
+		EgressImage:    strings.TrimSpace(os.Getenv("SITES_BUILD_EGRESS_IMAGE")),
+		EgressAllow:    splitTrimmed(os.Getenv("SITES_BUILD_EGRESS_ALLOW")),
 	}
 	if raw := strings.TrimSpace(os.Getenv("SITES_GITHUB_APP_ID")); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
@@ -76,11 +87,17 @@ func (g SiteGitConfig) Complete() bool {
 
 func (g SiteGitConfig) String() string {
 	return fmt.Sprintf("{AppID:%d AppSlug:%s ClientID:%s ClientSecret:[redacted] PrivateKey:[redacted] WebhookSecret:[redacted] "+
-		"APIURL:%s WebURL:%s BuildNamespace:%s BuildSlots:%d PriorityClass:%s NodeImage:%s PrepareImage:%s}",
-		g.AppID, g.AppSlug, g.ClientID, g.APIURL, g.WebURL, g.BuildNamespace, g.BuildSlots, g.PriorityClass, g.NodeImage, g.PrepareImage)
+		"APIURL:%s WebURL:%s BuildNamespace:%s BuildSlots:%d PriorityClass:%s NodeImage:%s PrepareImage:%s EgressImage:%s EgressAllow:%v}",
+		g.AppID, g.AppSlug, g.ClientID, g.APIURL, g.WebURL, g.BuildNamespace, g.BuildSlots, g.PriorityClass, g.NodeImage, g.PrepareImage,
+		g.EgressImage, g.EgressAllow)
 }
 
 func (g SiteGitConfig) GoString() string { return "config.SiteGitConfig" + g.String() }
+
+// SingleHostSiteBuilds is whether this single host runs git builds itself (EXC-671), behind its own flag.
+func (c AppConfig) SingleHostSiteBuilds() bool {
+	return c.ProvisionerMode == "docker" && slices.Contains(c.DarkFeatures, features.SingleHostBuilds)
+}
 
 // SiteGitBuildsOn is whether git builds are switched on where Sites is offered at all.
 func (c AppConfig) SiteGitBuildsOn() bool {
@@ -113,10 +130,31 @@ func (c AppConfig) validateSiteGit() error {
 	if !namespacePattern.MatchString(git.BuildNamespace) {
 		return fmt.Errorf("SITES_BUILD_NAMESPACE %q is not a namespace name", git.BuildNamespace)
 	}
+	if err := c.validateSingleHostBuilds(); err != nil {
+		return err
+	}
 	for name, raw := range map[string]string{"SITES_GITHUB_API_URL": git.APIURL, "SITES_GITHUB_WEB_URL": git.WebURL} {
 		parsed, err := url.Parse(raw)
 		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
 			return fmt.Errorf("%s %q is not an http(s) URL", name, raw)
+		}
+	}
+	return nil
+}
+
+// validateSingleHostBuilds: the egress proxy's image and allow list, once a single host builds itself.
+func (c AppConfig) validateSingleHostBuilds() error {
+	if !c.SingleHostSiteBuilds() {
+		return nil
+	}
+	if c.SiteGit.EgressImage == "" {
+		return errors.New("SITES_BUILD_EGRESS_IMAGE must name the image holding the build egress proxy (provisioning's own)")
+	}
+	for _, entry := range c.SiteGit.EgressAllow {
+		host, port, err := net.SplitHostPort(entry)
+		number, portErr := strconv.Atoi(port)
+		if err != nil || host == "" || portErr != nil || number < 1 || number > 65535 {
+			return fmt.Errorf("SITES_BUILD_EGRESS_ALLOW entry %q must be host:port", entry)
 		}
 	}
 	return nil

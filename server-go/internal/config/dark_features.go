@@ -34,6 +34,8 @@ var featureEnv = map[features.Feature]string{
 	features.MajorUpgrade:    "FEATURE_MAJORUPGRADE",
 	features.TemplateCatalog: "FEATURE_TEMPLATECATALOG",
 	features.HostLogs:        "FEATURE_HOSTLOGS",
+	// Single-host only (the compose file); Kubernetes builds do not read it.
+	features.SingleHostBuilds: "FEATURE_SINGLEHOSTBUILDS",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.
