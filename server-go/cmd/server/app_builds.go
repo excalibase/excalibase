@@ -68,6 +68,10 @@ func enableAppBuilds(cfg config.AppConfig, client *k8s.Client, files gitprovider
 	if cfg.AppBuild.SpoolPath == "" {
 		return errors.New("APP_BUILD_SPOOL_PATH is required: a volume of its own where a publish takes in an image")
 	}
+	options := appBuildOptions(cfg)
+	if err := options.Validate(); err != nil {
+		return err
+	}
 	if err := verifyAppBuildCluster(cfg, client); err != nil {
 		return err
 	}
@@ -75,7 +79,7 @@ func enableAppBuilds(cfg config.AppConfig, client *k8s.Client, files gitprovider
 	if err != nil {
 		return err
 	}
-	runner := k8s.NewAppBuildRunner(client, appBuildOptions(cfg))
+	runner := k8s.NewAppBuildRunner(client, options)
 	publisher := service.NewAppBuildPublisher(args.internal, runner, args.registry.client, args.registry.sweeper,
 		apphost.NewPostgresPublishLock(args.platformDB), args.deploys, spool)
 	builds.EnableApps(sitebuilds.AppSupport{Apps: args.apps, Limits: args.limits, Files: files, Flags: cfg.Features()})
@@ -85,9 +89,11 @@ func enableAppBuilds(cfg config.AppConfig, client *k8s.Client, files gitprovider
 }
 
 // appBuildOptions share the site builds' slots, priority class and helper images; only the namespace and builders are the apps' own.
+// The site builds' namespace is named so the runner can refuse to share it.
 func appBuildOptions(cfg config.AppConfig) k8s.AppBuildOptions {
 	return k8s.AppBuildOptions{
-		Namespace: cfg.AppBuild.Namespace, RuntimeClass: cfg.AppRuntimeClass, PriorityClass: cfg.SiteGit.PriorityClass,
+		Namespace: cfg.AppBuild.Namespace, SiteBuildNamespace: cfg.SiteGit.BuildNamespace,
+		RuntimeClass: cfg.AppRuntimeClass, PriorityClass: cfg.SiteGit.PriorityClass,
 		Slots: cfg.SiteGit.BuildSlots, PrepareImage: cfg.SiteGit.PrepareImage,
 		ToolImage:     sitebuilds.NodeImage(cfg.SiteGit.NodeImage, sitebuilds.DefaultNodeVersion),
 		BuildKitImage: cfg.AppBuild.BuildKitImage, BuilderImage: cfg.AppBuild.BuilderImage, RunImage: cfg.AppBuild.RunImage,

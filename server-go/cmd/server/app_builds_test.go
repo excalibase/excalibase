@@ -171,6 +171,12 @@ func TestEnableAppBuilds_RefusesWhatAPublishNeeds(t *testing.T) {
 	if err := enableAppBuilds(cfg, cluster, nil, nil, nil, noLock); err == nil || !strings.Contains(err.Error(), "platform database") {
 		t.Errorf("no platform database for the publish lock: %v", err)
 	}
+	// One namespace for both kinds would let each quota block the other: refused at boot, not at the first build.
+	shared := cfg
+	shared.SiteGit.BuildNamespace = shared.AppBuild.Namespace
+	if err := enableAppBuilds(shared, cluster, nil, nil, nil, args.apps); err == nil || !strings.Contains(err.Error(), "own namespace") {
+		t.Errorf("app builds in the site builds' namespace: %v", err)
+	}
 }
 
 // App builds refuse to start without their own namespace and the sandbox RuntimeClass.
@@ -198,6 +204,10 @@ func TestAppBuildOptions_ShareTheSiteBuildsSlotsAndClass(t *testing.T) {
 		options.Slots != 2 || options.PrepareImage != "busybox@sha256:1" || options.BuildKitImage != "buildkit@sha256:2" ||
 		options.ToolImage == "" || len(options.ExtraDenyCIDRs) != 1 {
 		t.Fatalf("%+v", options)
+	}
+	// The runner keeps app builds out of the site builds' namespace, so it must be told which that is.
+	if options.SiteBuildNamespace != cfg.SiteGit.BuildNamespace || options.Validate() != nil {
+		t.Fatalf("site build namespace %q: %v", options.SiteBuildNamespace, options.Validate())
 	}
 }
 
