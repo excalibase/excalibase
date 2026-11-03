@@ -269,10 +269,104 @@ describe("IPv6 platform addresses", () => {
 describe("the request sent on", () => {
   it("carries only the method, headers and body the code gave", async () => {
     const sent = withUpstream();
-    await call("https://example.com/x", { method: "POST", headers: { "x-a": "1" }, body: "b" });
+    const original = new Request("https://example.com/x", { method: "POST", headers: { "x-a": "1" }, body: "b", cache: "no-store", integrity: "sha256-x", keepalive: true });
+    // A Workers Request carries its cf options as a property; the rebuilt one must not.
+    Object.defineProperty(original, "cf", { value: { resolveOverride: "studio.excalibase.io", cacheTtl: 0 } });
+    await outbound.fetch(original, fakeEnv());
     const { request, init } = sent[0];
     expect(init).toEqual({ redirect: "manual" });
+    expect(request).not.toBe(original);
+    expect(request.cf).toBeUndefined();
+    expect(request.cache).toBe("default");
+    expect(request.integrity).toBe("");
+    expect(request.keepalive).toBe(false);
     expect(request.method).toBe("POST");
+    expect(request.headers.get("x-a")).toBe("1");
     expect(await request.text()).toBe("b");
+  });
+});
+
+describe("the Host header", () => {
+  it.each([
+    "http://evil.example/",
+    `https://${API}/${PROJECT}/graphql`,
+  ])("set by the code is not forwarded: %s", async (url) => {
+    const sent = withUpstream();
+    await call(url, { headers: { host: "studio.excalibase.io" } });
+    const host = sent[0].request.headers.get("host");
+    expect(host === null || host === new URL(url).host).toBe(true);
+  });
+
+  it("set by the code does not follow a redirect", async () => {
+    const sent = withUpstream((request) =>
+      request.url === "http://evil.example/go"
+        ? new Response(null, { status: 302, headers: { location: "https://elsewhere.example.org/" } })
+        : new Response("there"));
+    await call("http://evil.example/go", { headers: { host: "studio.excalibase.io" } });
+    expect(sent).toHaveLength(2);
+    expect(sent[1].request.headers.get("host")).toBeNull();
+  });
+});
+
+describe("a malformed Location", () => {
+  it("hands the redirect back unchanged", async () => {
+    const sent = withUpstream(() => new Response("moved", { status: 302, headers: { location: "http://[::1" } }));
+    const response = await call("https://example.com/go");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("http://[::1");
+    expect(await response.text()).toBe("moved");
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("redirect: error", () => {
+  it("rejects with a TypeError when the response is a redirect", async () => {
+    withUpstream(() => new Response(null, { status: 302, headers: { location: "/next" } }));
+    await expect(call("https://example.com/go", { redirect: "error" })).rejects.toThrow(TypeError);
+  });
+
+  it("hands back a response that is not a redirect", async () => {
+    withUpstream(() => new Response("ok"));
+    const response = await call("https://example.com/go", { redirect: "error" });
+    expect(response.status).toBe(200);
+  });
+});
+
+describe("ports", () => {
+  it.each([
+    "https://example.com:8443/",
+    "http://example.com:5432/",
+    "http://8.8.8.8:6379/",
+    "https://customer-domain.example:22/",
+  ])("other than 80 and 443 are refused: %s", async (url) => {
+    const sent = withUpstream();
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect((await call(url)).status).toBe(403);
+    expect(sent).toHaveLength(0);
+    expect(JSON.parse(logs.mock.calls[0][0])).toMatchObject({ refused: "port" });
+    logs.mockRestore();
+  });
+
+  it.each([
+    "http://example.com:80/",
+    "https://example.com:443/",
+    "http://example.com:443/",
+    "https://example.com:80/",
+    "https://example.com/",
+  ])("80 and 443 are reached: %s", async (url) => {
+    const sent = withUpstream();
+    expect((await call(url)).status).toBe(200);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("are checked on every redirect hop", async () => {
+    const sent = withUpstream((request) =>
+      request.url === "https://example.com/go"
+        ? new Response(null, { status: 302, headers: { location: "https://example.com:5432/" } })
+        : new Response("should not be reached"));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect((await call("https://example.com/go")).status).toBe(403);
+    expect(sent).toHaveLength(1);
+    vi.restoreAllMocks();
   });
 });

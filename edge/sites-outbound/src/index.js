@@ -17,6 +17,8 @@ const CREDENTIAL_HEADERS = ["authorization", "cookie", "proxy-authorization", "a
 // The one header of the platform's namespace a client is meant to send.
 const PUBLISHABLE_KEY_HEADER = "x-excalibase-publishable-key";
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+// Only the web ports: a name that resolves to our origin must not reach a DB edge or admin port on it.
+const ALLOWED_PORTS = new Set(["", "80", "443"]);
 
 export default {
   async fetch(request, env) {
@@ -41,14 +43,17 @@ async function send(original, rules) {
       return checked;
     }
     const response = await fetch(checked, { redirect: "manual" });
+    if (original.redirect === "error" && REDIRECTS.has(response.status)) {
+      throw new TypeError("fetch failed: the response is a redirect and redirect is \"error\"");
+    }
     if (original.redirect !== "follow") {
       return response;
     }
-    const location = response.headers.get("location");
-    if (!REDIRECTS.has(response.status) || !location) {
+    const target = locationOf(response, request.url);
+    if (!target) {
       return response;
     }
-    const next = redirected(request, response.status, new URL(location, request.url));
+    const next = redirected(request, response.status, target);
     if (!next) {
       return response;
     }
@@ -57,12 +62,28 @@ async function send(original, rules) {
   return refusal(508, "Too many redirects.");
 }
 
+// locationOf is where a redirect points, or null when it is not one or its Location does not parse.
+function locationOf(response, base) {
+  const location = response.headers.get("location");
+  if (!REDIRECTS.has(response.status) || !location) {
+    return null;
+  }
+  try {
+    return new URL(location, base);
+  } catch {
+    return null;
+  }
+}
+
 // checkedRequest answers the request to send, rebuilt from what the code
 // gave (no cf options ride along), or the refusal.
 function checkedRequest(request, rules) {
   const url = new URL(request.url);
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     return refused(rules, "scheme", url.hostname, "Only http and https requests are allowed from a site's server code.");
+  }
+  if (!ALLOWED_PORTS.has(url.port)) {
+    return refused(rules, "port", url.host, "Only ports 80 and 443 are reachable from a site's server code.");
   }
   const host = canonicalHost(url.hostname);
   if (host === null || blockedAddress(host)) {
@@ -89,7 +110,9 @@ function canonicalHost(hostname) {
   return hostname.toLowerCase().replace(/\.$/, "");
 }
 
+// rebuilt never sends a Host the code set: the runtime derives it from the URL.
 function rebuilt(request, url, headers) {
+  headers.delete("host");
   const init = { method: request.method, headers, redirect: "manual" };
   if (request.body !== null) {
     // duplex is what a streamed body needs outside Workers; Workers ignore it.
@@ -145,6 +168,7 @@ function apiHeaders(source) {
 // stops. Credentials never follow to another origin.
 function redirected(request, status, target) {
   const headers = new Headers(request.headers);
+  headers.delete("host");
   if (target.origin !== new URL(request.url).origin) {
     for (const name of CREDENTIAL_HEADERS) {
       headers.delete(name);
