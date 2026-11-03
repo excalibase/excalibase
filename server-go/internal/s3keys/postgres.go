@@ -16,6 +16,13 @@ const keyLockSpace = 630
 const keyColumns = `id, project_id, name, access_key_id, buckets, can_read, can_write, can_delete,
 	created_by, created_at, expires_at, last_used_at`
 
+const (
+	listKeysSQL          = `SELECT ` + keyColumns + ` FROM storage_s3_keys WHERE project_id = $1 ORDER BY created_at, id`
+	findKeySQL           = `SELECT ` + keyColumns + ` FROM storage_s3_keys WHERE access_key_id = $1`
+	deleteKeySQL         = `DELETE FROM storage_s3_keys WHERE project_id = $1 AND id = $2 RETURNING ` + keyColumns
+	deleteProjectKeysSQL = `DELETE FROM storage_s3_keys WHERE project_id = $1 RETURNING ` + keyColumns
+)
+
 // PostgresStore keeps key rows in the platform database.
 type PostgresStore struct{ db *sql.DB }
 
@@ -76,8 +83,7 @@ func (s *PostgresStore) Create(ctx context.Context, key *Key, maxPerProject int)
 }
 
 func (s *PostgresStore) List(ctx context.Context, projectID string) ([]*Key, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+keyColumns+` FROM storage_s3_keys
-		WHERE project_id = $1 ORDER BY created_at, id`, projectID)
+	rows, err := s.db.QueryContext(ctx, listKeysSQL, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list S3 keys: %w", err)
 	}
@@ -94,7 +100,7 @@ func (s *PostgresStore) List(ctx context.Context, projectID string) ([]*Key, err
 }
 
 func (s *PostgresStore) FindByAccessKeyID(ctx context.Context, accessKeyID string) (*Key, error) {
-	key, err := scanKey(s.db.QueryRowContext(ctx, `SELECT `+keyColumns+` FROM storage_s3_keys WHERE access_key_id = $1`, accessKeyID))
+	key, err := scanKey(s.db.QueryRowContext(ctx, findKeySQL, accessKeyID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -105,8 +111,7 @@ func (s *PostgresStore) FindByAccessKeyID(ctx context.Context, accessKeyID strin
 }
 
 func (s *PostgresStore) Delete(ctx context.Context, projectID, id string) (*Key, error) {
-	key, err := scanKey(s.db.QueryRowContext(ctx, `DELETE FROM storage_s3_keys WHERE project_id = $1 AND id = $2
-		RETURNING `+keyColumns, projectID, id))
+	key, err := scanKey(s.db.QueryRowContext(ctx, deleteKeySQL, projectID, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -117,7 +122,7 @@ func (s *PostgresStore) Delete(ctx context.Context, projectID, id string) (*Key,
 }
 
 func (s *PostgresStore) DeleteProject(ctx context.Context, projectID string) ([]*Key, error) {
-	rows, err := s.db.QueryContext(ctx, `DELETE FROM storage_s3_keys WHERE project_id = $1 RETURNING `+keyColumns, projectID)
+	rows, err := s.db.QueryContext(ctx, deleteProjectKeysSQL, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("remove the project's S3 keys: %w", err)
 	}
