@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -13,8 +14,8 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
-	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
+	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 )
 
 type fakeCollector struct {
@@ -30,6 +31,23 @@ func (f fakeCollector) Collect(_ context.Context, _ string, w io.Writer, limit i
 		return err
 	}
 	return f.err
+}
+
+// streamingCollector writes its archive in chunks under a cap, the way the
+// real collector streams a pod's output, so the reader can refuse it midway.
+type streamingCollector struct{ archive []byte }
+
+func (f streamingCollector) Collect(_ context.Context, _ string, w io.Writer, limit int64) error {
+	for offset := 0; offset < len(f.archive); offset += 4096 {
+		chunk := f.archive[offset:min(offset+4096, len(f.archive))]
+		if int64(offset+len(chunk)) > limit {
+			return sitebuilds.ErrOutputTooLarge
+		}
+		if _, err := w.Write(chunk); err != nil {
+			return fmt.Errorf("read the packed output: %w", err)
+		}
+	}
+	return nil
 }
 
 type fakePusher struct {
@@ -109,6 +127,20 @@ func TestPublish_NothingIsPushedFromAnArchiveItRefuses(t *testing.T) {
 		if tc.want == nil && !strings.Contains(err.Error(), "went away") {
 			t.Errorf("%s: the collector's own failure is named: %v", name, err)
 		}
+	}
+}
+
+func TestPublish_AnOversizedLayerStreamedInIsTooLargeNotMalformed(t *testing.T) {
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	layer := make([]byte, 2<<20)
+	_ = tw.WriteHeader(&tar.Header{Name: "blobs/sha256/" + strings.Repeat("a", 64), Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(layer))})
+	_, _ = tw.Write(layer)
+	_ = tw.Close()
+	publisher, pusher, _, _ := publishFixture(t, streamingCollector{archive: archive.Bytes()})
+	_, err := publisher.Publish(context.Background(), buildResult())
+	if !errors.Is(err, ErrImageTooLarge) || pusher.pushed != 0 {
+		t.Fatalf("%v, pushed %d", err, pusher.pushed)
 	}
 }
 
