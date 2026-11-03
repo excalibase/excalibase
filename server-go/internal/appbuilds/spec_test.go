@@ -51,6 +51,16 @@ func TestRunSpec_ValidateRefuses(t *testing.T) {
 		"git daemon by default":          func(s *RunSpec) { s.CloneURL = "git://gitsrv/site.git" },
 		"clone url as an option":         func(s *RunSpec) { s.CloneURL = "--upload-pack=touch /tmp/x" },
 		"file clone":                     func(s *RunSpec) { s.CloneURL = "file:///etc" },
+		"root dir with a semicolon":      func(s *RunSpec) { s.RootDir = "a;b" },
+		"root dir with a space":          func(s *RunSpec) { s.RootDir = "a b" },
+		"root dir with a substitution":   func(s *RunSpec) { s.RootDir = "$(x)" },
+		"root dir with backticks":        func(s *RunSpec) { s.RootDir = "`x`" },
+		"root dir as an option":          func(s *RunSpec) { s.RootDir = "-x" },
+		"dockerfile with a semicolon":    func(s *RunSpec) { s.DockerfilePath = "a;b" },
+		"dockerfile with a space":        func(s *RunSpec) { s.DockerfilePath = "a b" },
+		"dockerfile with a substitution": func(s *RunSpec) { s.DockerfilePath = "$(x)" },
+		"dockerfile with backticks":      func(s *RunSpec) { s.DockerfilePath = "`x`" },
+		"dockerfile as an option":        func(s *RunSpec) { s.DockerfilePath = "-x" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -60,6 +70,15 @@ func TestRunSpec_ValidateRefuses(t *testing.T) {
 				t.Error("accepted")
 			}
 		})
+	}
+}
+
+// Plain repository paths still pass the character allow-list.
+func TestRunSpec_ValidateAcceptsPlainPaths(t *testing.T) {
+	spec := validSpec()
+	spec.RootDir, spec.DockerfilePath = "services/api-v2", "docker/Dockerfile.prod"
+	if err := spec.Validate(); err != nil {
+		t.Errorf("a plain path: %v", err)
 	}
 }
 

