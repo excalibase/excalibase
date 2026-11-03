@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log"
 	"sort"
 	"strings"
@@ -25,8 +25,9 @@ const (
 	RegistryPushFloor = time.Hour
 )
 
-// ErrRollbackImageRemoved refuses a redeploy whose image the sweep has removed.
-var ErrRollbackImageRemoved = fmt.Errorf("that deploy's image was removed from the registry: a rollback reaches the last %d deploys and the one running; build its commit again to run it", RegistryKeepDeploys)
+// ErrRollbackImageRemoved refuses a redeploy whose image the sweep or the
+// quota has removed; the quota may take one inside RegistryKeepDeploys, so it promises no count.
+var ErrRollbackImageRemoved = errors.New("that deploy's image was removed to keep this project within its registry space; build its commit again to run it")
 
 // RegistryAdmin is the registry as the sweep uses it.
 type RegistryAdmin interface {
