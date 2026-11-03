@@ -152,6 +152,35 @@ func TestClaim_SitesAndAppsShareTheSlots(t *testing.T) {
 	}
 }
 
+// An app build takes the last free slot only while no site build is queued, so app builds never hold every site push.
+func TestClaim_AppsLeaveTheLastSlotToAQueuedSite(t *testing.T) {
+	h := sitebuildstest.New(t, sitebuildstest.Options{AppsOn: true})
+	first, second := h.AddApp(h.Project), h.AddApp(h.Project)
+	queueAppBuild(t, h, h.Project, first, "", sitebuildstest.FreeAppLimits.Limits)
+	h.Connect()
+	site := claim(t, h, 1)
+	if site == nil || site.Kind != sitebuilds.KindSite {
+		t.Fatalf("one slot, an older app build and a queued site: the site goes first, got %+v", site)
+	}
+	finish(t, h, site)
+	app := claim(t, h, 1)
+	if app == nil || app.AppID != first {
+		t.Fatalf("one slot and no site waiting: the app builds, got %+v", app)
+	}
+	capTwo := sitebuildstest.FreeAppLimits.Limits
+	capTwo.ProjectConcurrency = 2
+	queueAppBuild(t, h, h.Project, second, "", capTwo)
+	if _, err := h.Push("main", "4444444444444444444444444444444444444444", "push-site"); err != nil {
+		t.Fatal(err)
+	}
+	if next := claim(t, h, 2); next == nil || next.Kind != sitebuilds.KindSite {
+		t.Fatalf("two slots, one app running: the last slot goes to the queued site, got %+v", next)
+	}
+	if next := claim(t, h, 2); next != nil {
+		t.Fatalf("both slots are taken, yet %+v was claimed", next)
+	}
+}
+
 func TestClaim_OneRunningBuildPerAppAndTheProjectsAppCap(t *testing.T) {
 	h := sitebuildstest.New(t, sitebuildstest.Options{AppsOn: true})
 	first, second := h.AddApp(h.Project), h.AddApp(h.Project)

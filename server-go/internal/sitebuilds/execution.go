@@ -36,6 +36,8 @@ type execution struct {
 	// attempt counts the runs started; runID names the current one's Job.
 	attempts int
 	runID    string
+	// started is whether a start was tried for runID and its Job not yet removed.
+	started bool
 }
 
 // maxAttempts is the first run and the one retry a sandbox start error earns.
@@ -138,6 +140,7 @@ func (e *execution) attempt(ctx context.Context) (RunStatus, *outcome) {
 	cloned := e.forgetOnce(ctx, credential)
 	defer cloned()
 	startCtx, cancelStart := context.WithTimeout(ctx, e.dispatcher.options.StartTimeout)
+	e.started = true
 	err = e.kind.start(startCtx, credential)
 	cancelStart()
 	if err != nil {
@@ -226,7 +229,12 @@ func (e *execution) note(line string) { e.notes += line }
 
 func (e *execution) fullLog() string { return e.notes + e.log }
 
+// remove reads the last logs and deletes the current attempt's Job; a Job never started is left alone.
 func (e *execution) remove(ctx context.Context) {
+	if !e.started {
+		return
+	}
+	e.started = false
 	e.refreshLog(ctx)
 	if err := e.kind.jobs().Remove(context.WithoutCancel(ctx), e.runID); err != nil {
 		log.Printf("%s build %s: remove its job: %v", e.build.Kind, e.build.ID, err)

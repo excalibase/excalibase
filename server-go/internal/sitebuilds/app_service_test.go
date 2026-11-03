@@ -162,6 +162,26 @@ func TestWebhook_FansOutToSitesAndApps(t *testing.T) {
 	}
 }
 
+// An app table that would not read still queues the push's site builds; the redelivery then queues the app alone.
+func TestWebhook_AnAppReadErrorKeepsTheSiteBuilds(t *testing.T) {
+	bed := newTestBed(true)
+	bed.connectSite()
+	bed.connectApp(AppSettings{})
+	readErr := errors.New("the apps table would not read")
+	bed.store.appPushErr = readErr
+	bed.provider.event = gitprovider.Event{DeliveryID: "d-1", Push: &gitprovider.Push{InstallationID: testInstall,
+		RepositoryID: testRepoID, Repository: testRepo, Branch: "main", Commit: bed.provider.head}}
+	queued, err := bed.service.HandleWebhook(context.Background(), nil, nil)
+	if !errors.Is(err, readErr) || queued != 1 || len(bed.store.queuedOf(KindSite)) != 1 {
+		t.Fatalf("queued %d with %d site builds: %v", queued, len(bed.store.queuedOf(KindSite)), err)
+	}
+	bed.store.appPushErr = nil
+	again, err := bed.service.HandleWebhook(context.Background(), nil, nil)
+	if err != nil || again != 1 || len(bed.store.queuedOf(KindApp)) != 1 || len(bed.store.queuedOf(KindSite)) != 1 {
+		t.Errorf("the redelivery queued %d: %v", again, err)
+	}
+}
+
 // A connector who lost the developer rung stops their app connection, as with sites.
 func TestConnector_LosingTheRoleStopsTheAppConnection(t *testing.T) {
 	bed := newTestBed(true)
