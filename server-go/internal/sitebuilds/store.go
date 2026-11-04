@@ -16,6 +16,8 @@ type SignIn struct {
 	UserID    string
 	ProjectID string
 	SiteID    string
+	// AppID is set instead of SiteID when the sign-in started from an app.
+	AppID string
 	// BrowserHash is the hashed key the starting browser holds.
 	BrowserHash string
 }

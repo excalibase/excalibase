@@ -426,4 +426,7 @@ func TestAppBuilds_SwitchedOffCancelQueuedAndStillDisconnect(t *testing.T) {
 	if left := count(t, h, `SELECT COUNT(*) FROM app_git_connections WHERE project_id = $1`, h.Project); left != 0 {
 		t.Errorf("%d connections left", left)
 	}
+	if err := h.Service.DisconnectApp(context.Background(), h.Project, appID); !errors.Is(err, sitebuilds.ErrNotConnected) {
+		t.Errorf("a disconnect with nothing connected: %v", err)
+	}
 }

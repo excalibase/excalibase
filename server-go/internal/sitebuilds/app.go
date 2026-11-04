@@ -19,6 +19,9 @@ const (
 	AppBuilderBuildpacks = "buildpacks"
 )
 
+// AppBuilders are the builders an app connection may name, for Studio and MCP to offer.
+var AppBuilders = []string{AppBuilderAuto, AppBuilderDockerfile, AppBuilderBuildpacks}
+
 // ErrAppBuildsOff is an install where git builds of apps are not switched on (flag appgitbuilds) or not wired.
 var ErrAppBuildsOff = errors.New("git builds of apps are not switched on for this install")
 
@@ -80,6 +83,38 @@ type AppConnection struct {
 	AppID string `json:"appId"`
 	GitSource
 	Settings AppSettings `json:"settings"`
+}
+
+// WithoutBuildArgValues is a copy that names the build arguments without their values, for readers below the developer rung.
+func (c *AppConnection) WithoutBuildArgValues() *AppConnection {
+	if c == nil {
+		return nil
+	}
+	copied := *c
+	copied.Settings.BuildArgs = argNamesOnly(c.Settings.BuildArgs)
+	return &copied
+}
+
+// WithoutBuildArgValues is a copy of the build whose app settings name the build arguments without their values.
+func (b *Build) WithoutBuildArgValues() *Build {
+	copied := *b
+	if b.App != nil {
+		app := *b.App
+		app.BuildArgs = argNamesOnly(b.App.BuildArgs)
+		copied.App = &app
+	}
+	return &copied
+}
+
+func argNamesOnly(args map[string]string) map[string]string {
+	if args == nil {
+		return nil
+	}
+	names := make(map[string]string, len(args))
+	for name := range args {
+		names[name] = ""
+	}
+	return names
 }
 
 func (c *AppConnection) target() Target {

@@ -48,6 +48,8 @@ export interface TierConfig {
   appBuildTimeoutSeconds?: number;
   appBuildConcurrency?: number;
   appBuildMaxImage?: string;
+  // How many app builds one project may queue in any hour.
+  appBuildMaxPerHour?: number;
 }
 
 export type TierConfigInput = Omit<TierConfig, 'tier' | 'version'>;

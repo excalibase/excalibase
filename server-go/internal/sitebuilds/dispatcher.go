@@ -100,6 +100,11 @@ func (d *Dispatcher) EnableApps(runner AppRunner, publisher AppPublisher) {
 	d.apps = &appDispatch{runner: runner, publisher: publisher}
 }
 
+// AppsWired answers whether EnableApps gave this dispatcher an app runner and publisher.
+func (d *Dispatcher) AppsWired() bool {
+	return d.apps != nil
+}
+
 // claimKinds are the kinds this dispatcher runs now: app builds only while wired and switched on.
 func (d *Dispatcher) claimKinds(ctx context.Context) []string {
 	if d.apps != nil && d.service.appsOn(ctx) {
