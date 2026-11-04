@@ -301,14 +301,15 @@ else
   [ "$ld" = 404 ] && ok "log drains are off by default (404)" || ko "log drains answer $ld with the flag off"
 fi
 
+# Before the log search journey, which removes the project database container.
+. "$TESTS/rotation-journey.sh"
+rotation_journey "$PID" postgres "$TC"
+
 if [ -n "${HOST_LOGS:-}" ]; then
   . "$TESTS/log-search-journey.sh"
 else
   $DOCKER inspect excalibase-loki >/dev/null 2>&1 && ko "Loki runs without --host-logs" || ok "no Loki without --host-logs"
 fi
-
-. "$TESTS/rotation-journey.sh"
-rotation_journey "$PID" postgres "$TC"
 
 echo "== studio health"
 code=$(c -o /dev/null -w '%{http_code}' https://studio.localhost:$PORT/); h=$($DOCKER inspect excalibase-studio --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null)
