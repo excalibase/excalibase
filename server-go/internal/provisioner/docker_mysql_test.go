@@ -297,7 +297,7 @@ func TestDockerMySQLVolumeAndContainerNameTheirProject(t *testing.T) {
 	if _, err := newTestDockerMySQL(engine).StartOnVolume(context.Background(), "p4", image, testTier); err != nil {
 		t.Fatalf("StartOnVolume: %v", err)
 	}
-	if owner := engine.volumeOwners[MySQLVolumeName("p4")]; owner != "p4" {
+	if owner := engine.volumeLabels[MySQLVolumeName("p4")][projectLabel]; owner != "p4" {
 		t.Fatalf("volume owner = %q", owner)
 	}
 	if spec := engine.specs["excalibase-p4-mysql"]; spec.Project != "p4" {

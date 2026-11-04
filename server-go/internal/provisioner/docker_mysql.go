@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 )
 
 // DockerMySQLProvisioner runs MySQL projects as one container each on a
@@ -40,6 +41,10 @@ type VolumeClient interface {
 	// CreateVolume labels the volume as projectID's.
 	CreateVolume(ctx context.Context, name, projectID string) error
 	RemoveVolume(ctx context.Context, name string) error
+	// VolumeLabels wraps ErrVolumeNotFound when the volume does not exist.
+	VolumeLabels(ctx context.Context, name string) (map[string]string, error)
+	// EnsureImage pulls an image the engine does not hold.
+	EnsureImage(ctx context.Context, image string) error
 }
 
 func (p *DockerMySQLProvisioner) volumes() (VolumeClient, error) {
@@ -264,12 +269,45 @@ func (p *DockerMySQLProvisioner) RemoveData(ctx context.Context, projectID strin
 // ReplaceImage recreates the project's container on image over the same data
 // and port, and returns once mysqld answers; mysqld upgrades the data
 // dictionary of a newer minor version itself.
+// What the replacement needs is checked first, so a refusal leaves the old
+// container serving.
 func (p *DockerMySQLProvisioner) ReplaceImage(ctx context.Context, projectID, image string, plan config.TierConfig) error {
-	if err := p.RemoveContainer(ctx, MySQLContainerName(projectID)); err != nil {
+	spec, err := MySQLContainerSpec(projectID, image, plan)
+	if err != nil {
 		return err
 	}
-	_, err := p.StartOnVolume(ctx, projectID, image, plan)
+	if err := p.replacementCanStart(ctx, spec); err != nil {
+		return fmt.Errorf("the %s container was kept: %w", projectID, err)
+	}
+	if err := p.RemoveContainer(ctx, spec.Name); err != nil {
+		return err
+	}
+	_, err = p.StartOnVolume(ctx, projectID, image, plan)
 	return err
+}
+
+// replacementCanStart checks that the data volume exists and that the engine
+// proxy will mount it into spec's container (EXC-682), and pulls the image.
+func (p *DockerMySQLProvisioner) replacementCanStart(ctx context.Context, spec ContainerSpec) error {
+	volumes, err := p.volumes()
+	if err != nil {
+		return err
+	}
+	labels, err := volumes.VolumeLabels(ctx, spec.DataVolumeName)
+	if errors.Is(err, ErrVolumeNotFound) {
+		return fmt.Errorf("the data volume %s does not exist", spec.DataVolumeName)
+	}
+	if err != nil {
+		return err
+	}
+	if labels[excalibaseLabel] != "true" {
+		return fmt.Errorf("the data volume %s is not one provisioning manages", spec.DataVolumeName)
+	}
+	owners := engineproxy.VolumeOwners(MySQLVolumePrefix, spec.DataVolumeName, labels)
+	if err := engineproxy.CheckVolumeOwner(spec.DataVolumeName, owners, containerLabels(spec)); err != nil {
+		return err
+	}
+	return volumes.EnsureImage(ctx, spec.Image)
 }
 
 func (p *DockerMySQLProvisioner) removeVolume(ctx context.Context, projectID string) error {

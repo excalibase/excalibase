@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 )
 
 // fakeEngine is a Docker engine in memory where a container's id is its name,
@@ -32,9 +34,10 @@ type fakeEngine struct {
 	// portBusy is how many starts still fail as a just-freed host port does.
 	portBusy int
 	clock    time.Time
-	// volumes are the named volumes that exist; volumeOwners the project each names.
+	// volumes are the named volumes that exist; volumeLabels the labels each
+	// was created with, which, as on the engine, a later create never changes.
 	volumes      map[string]bool
-	volumeOwners map[string]string
+	volumeLabels map[string]map[string]string
 }
 
 type fakeContainer struct {
@@ -72,6 +75,9 @@ func (f *fakeEngine) CreateContainerSpec(_ context.Context, spec ContainerSpec) 
 	}
 	if _, taken := f.containers[spec.Name]; taken {
 		return "", fmt.Errorf("container name %s is already in use", spec.Name)
+	}
+	if err := f.proxyAdmitsVolume(spec); err != nil {
+		return "", err
 	}
 	f.containers[spec.Name] = &fakeContainer{}
 	f.specs[spec.Name] = spec
@@ -211,16 +217,55 @@ func (f *fakeEngine) indexOf(prefix string) int {
 	return -1
 }
 
+// proxyAdmitsVolume refuses a create mounting a named volume the engine proxy
+// would refuse (EXC-682): missing, unmanaged, or another's.
+func (f *fakeEngine) proxyAdmitsVolume(spec ContainerSpec) error {
+	if spec.DataVolumeName == "" {
+		return nil
+	}
+	labels, ok := f.volumeLabels[spec.DataVolumeName]
+	if !f.volumes[spec.DataVolumeName] || !ok {
+		return fmt.Errorf("refused by the engine proxy: volume %q does not exist", spec.DataVolumeName)
+	}
+	if labels[excalibaseLabel] != "true" {
+		return fmt.Errorf("refused by the engine proxy: volume %q is not managed", spec.DataVolumeName)
+	}
+	owners := engineproxy.VolumeOwners(MySQLVolumePrefix, spec.DataVolumeName, labels)
+	return engineproxy.CheckVolumeOwner(spec.DataVolumeName, owners, containerLabels(spec))
+}
+
+// CreateVolume, like the engine, keeps an existing volume and its labels.
 func (f *fakeEngine) CreateVolume(_ context.Context, name, projectID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "volume:"+name)
-	f.volumes[name] = true
-	if f.volumeOwners == nil {
-		f.volumeOwners = map[string]string{}
+	if f.volumes[name] {
+		return nil
 	}
-	f.volumeOwners[name] = projectID
+	f.volumes[name] = true
+	if f.volumeLabels == nil {
+		f.volumeLabels = map[string]map[string]string{}
+	}
+	f.volumeLabels[name] = map[string]string{excalibaseLabel: "true", projectLabel: projectID}
 	return nil
+}
+
+func (f *fakeEngine) VolumeLabels(_ context.Context, name string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("inspectvolume:" + name); err != nil {
+		return nil, err
+	}
+	if !f.volumes[name] {
+		return nil, fmt.Errorf("volume %s: %w", name, ErrVolumeNotFound)
+	}
+	return f.volumeLabels[name], nil
+}
+
+func (f *fakeEngine) EnsureImage(_ context.Context, image string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.record("pull:" + image)
 }
 
 func (f *fakeEngine) RemoveVolume(_ context.Context, name string) error {

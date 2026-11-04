@@ -33,6 +33,15 @@ func volumeAPI(t *testing.T, created map[string]map[string]string, removed *[]st
 			}
 			created[body.Name] = body.Labels
 			_ = json.NewEncoder(w).Encode(map[string]string{"Name": body.Name})
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/volumes/"):
+			name := strings.TrimPrefix(path, "/volumes/")
+			labels, ok := created[name]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"message":"no such volume"}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"Name": name, "Labels": labels})
 		case r.Method == http.MethodDelete && path == "/volumes/busy":
 			w.WriteHeader(http.StatusConflict)
 			_, _ = w.Write([]byte(`{"message":"volume is in use"}`))

@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -262,6 +263,26 @@ func (r *RealDockerClient) CreateVolume(ctx context.Context, name, projectID str
 		return fmt.Errorf("create volume %s: %w", name, err)
 	}
 	return nil
+}
+
+// ErrVolumeNotFound is a volume the engine does not hold.
+var ErrVolumeNotFound = errors.New("no such volume")
+
+// VolumeLabels is the labels an existing volume carries.
+func (r *RealDockerClient) VolumeLabels(ctx context.Context, name string) (map[string]string, error) {
+	inspected, err := r.c.VolumeInspect(ctx, name)
+	if errdefs.IsNotFound(err) {
+		return nil, fmt.Errorf("volume %s: %w", name, ErrVolumeNotFound)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect volume %s: %w", name, err)
+	}
+	return inspected.Labels, nil
+}
+
+// EnsureImage pulls ref unless the engine holds it.
+func (r *RealDockerClient) EnsureImage(ctx context.Context, ref string) error {
+	return r.ensureImage(ctx, ref)
 }
 
 // RemoveVolume removes a volume; a missing one counts as removed.

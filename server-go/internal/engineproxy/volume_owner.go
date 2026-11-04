@@ -68,11 +68,39 @@ func (h *Handler) requireOwnVolumes(ctx context.Context, create createVolumes) e
 		if volume.Labels[h.policy.ManagedLabel] != "true" {
 			return refuse("volume %q is not one provisioning manages", name)
 		}
-		if err := CheckVolumeOwner(name, volume.Labels, create.Labels); err != nil {
+		if err := CheckVolumeOwner(name, VolumeOwners(h.policy.VolumePrefix, name, volume.Labels), create.Labels); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// legacyDatabaseSuffix ends the name of a project's MySQL data volume,
+// <prefix><project>-mysql, which v1.6 created labelled managed and nothing else.
+const legacyDatabaseSuffix = "-mysql"
+
+// VolumeOwners is the owner labels a volume names. A managed volume that names
+// none and is called <prefix><project>-mysql is a v1.6 MySQL data volume: the
+// engine never adds a label to an existing volume, so its owner is the project
+// its name encodes, the one label provisioning now creates it with. The name
+// maps to exactly one project, so it admits exactly the containers the
+// labelled volume would.
+func VolumeOwners(prefix, name string, labels map[string]string) map[string]string {
+	owners := map[string]string{}
+	for _, key := range OwnerLabels {
+		if value := labels[key]; value != "" {
+			owners[key] = value
+		}
+	}
+	if len(owners) > 0 || labels[ManagedLabel] != "true" || prefix == "" {
+		return owners
+	}
+	rest, prefixed := strings.CutPrefix(name, prefix)
+	project, suffixed := strings.CutSuffix(rest, legacyDatabaseSuffix)
+	if prefixed && suffixed && project != "" {
+		owners[OwnerLabels[0]] = project
+	}
+	return owners
 }
 
 // CheckVolumeOwner admits a container carrying every owner label the volume does.

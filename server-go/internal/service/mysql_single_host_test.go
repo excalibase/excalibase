@@ -172,6 +172,20 @@ func (h *hostEngine) CreateVolume(_ context.Context, name, _ string) error {
 	return nil
 }
 
+// VolumeLabels answers a held volume as provisioning labels one: the project
+// its name encodes.
+func (h *hostEngine) VolumeLabels(_ context.Context, name string) (map[string]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.volumes[name] {
+		return nil, fmt.Errorf("volume %s: %w", name, provisioner.ErrVolumeNotFound)
+	}
+	project := strings.TrimSuffix(strings.TrimPrefix(name, provisioner.MySQLVolumePrefix), "-mysql")
+	return map[string]string{"excalibase.managed": "true", "excalibase.project": project}, nil
+}
+
+func (h *hostEngine) EnsureImage(context.Context, string) error { return nil }
+
 func (h *hostEngine) RemoveVolume(_ context.Context, name string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()

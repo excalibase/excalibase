@@ -20,6 +20,11 @@ func volumeEngine(t *testing.T) (*fakeEngine, string) {
 		"excalibase-proj-p1-mysql": {"excalibase.managed": "true", "excalibase.project": "p1"},
 		"excalibase-proj-unowned":  {"excalibase.managed": "true"},
 		"excalibase-proj-foreign":  {"excalibase.project": "p1", "excalibase.app": "a1"},
+		// v1.6.x created MySQL data volumes before volumes named owners, and
+		// the engine never adds a label to an existing volume.
+		"excalibase-proj-p3-mysql":       {"excalibase.managed": "true"},
+		"excalibase-proj-p4-mysql":       {},
+		"excalibase-proj-p3-mysql-extra": {"excalibase.managed": "true"},
 	}
 	return engine, proxy
 }
@@ -60,6 +65,12 @@ func TestAContainerMountsOnlyItsOwnVolume(t *testing.T) {
 		{"a volume with no owner", app, "excalibase-proj-unowned", false},
 		{"a volume the platform does not manage", app, "excalibase-proj-foreign", false},
 		{"a volume that does not exist", app, "excalibase-proj-missing", false},
+		{"a v1.6 database volume, from its project", map[string]any{"excalibase.project": "p3"}, "excalibase-proj-p3-mysql", true},
+		{"a v1.6 database volume, from an app of its project", map[string]any{"excalibase.project": "p3", "excalibase.app": "a3"}, "excalibase-proj-p3-mysql", true},
+		{"a v1.6 database volume, from another project", database, "excalibase-proj-p3-mysql", false},
+		{"a v1.6 database volume, from an unlabelled container", map[string]any{}, "excalibase-proj-p3-mysql", false},
+		{"an unmanaged volume named like a v1.6 database volume", map[string]any{"excalibase.project": "p4"}, "excalibase-proj-p4-mysql", false},
+		{"an unowned volume whose name only starts like a database volume", map[string]any{"excalibase.project": "p3"}, "excalibase-proj-p3-mysql-extra", false},
 	}
 	for _, tc := range cases {
 		for _, asBind := range []bool{false, true} {
@@ -127,5 +138,35 @@ func TestVolumeOwnersReadsBothForms(t *testing.T) {
 	}
 	if got := strings.Join(create.named(), ","); got != "excalibase-proj-a,excalibase-proj-b" {
 		t.Fatalf("named volumes = %s", got)
+	}
+}
+
+// The owner a v1.6 MySQL data volume's name encodes is the one provisioning
+// labels a new one with, and nothing else: no other name, no unmanaged
+// volume, and never over labels the volume carries.
+func TestVolumeOwnersAdoptsOnlyAV16DatabaseVolume(t *testing.T) {
+	managed := map[string]string{ManagedLabel: "true"}
+	cases := []struct {
+		name   string
+		labels map[string]string
+		want   string
+	}{
+		{"excalibase-proj-p3-mysql", managed, "p3"},
+		{"excalibase-proj-p-mysql-mysql", managed, "p-mysql"},
+		{"excalibase-proj--mysql", managed, ""},
+		{"excalibase-proj-mysql", managed, ""},
+		{"excalibase-proj-p3-mysql", map[string]string{}, ""},
+		{"excalibase-proj-p3-mysql", map[string]string{ManagedLabel: "true", "excalibase.project": "p9"}, "p9"},
+		{"excalibase-proj-p3-postgres", managed, ""},
+		{"other-p3-mysql", managed, ""},
+	}
+	for _, tc := range cases {
+		owners := VolumeOwners("excalibase-proj-", tc.name, tc.labels)
+		if got := owners["excalibase.project"]; got != tc.want {
+			t.Errorf("%s %v: project %q, want %q", tc.name, tc.labels, got, tc.want)
+		}
+		if len(owners) > 1 {
+			t.Errorf("%s: owners %v name more than the project", tc.name, owners)
+		}
 	}
 }
