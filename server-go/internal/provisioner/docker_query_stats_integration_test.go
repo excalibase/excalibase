@@ -118,9 +118,8 @@ ALTER DATABASE app SET search_path = public, pg_catalog; ALTER DATABASE app SET 
 	if got := project.superuser(t, "app", "SET statement_timeout = 0; SELECT id FROM kept;"); !strings.HasSuffix(got, "7") {
 		t.Errorf("data after the restart = %q", got)
 	}
-	if _, err := project.asOwner("app", "ALTER DATABASE app RESET ALL;"); err != nil {
-		t.Fatalf("owner reset: %v", err)
-	}
+	// From outside app: a session inside it runs under the 1ms timeout set above.
+	project.superuser(t, "postgres", "ALTER DATABASE app RESET ALL;")
 	assertStatisticsOn(t, project)
 	if err := p.EnableQueryStats(context.Background(), project.container); err != nil {
 		t.Fatalf("second EnableQueryStats: %v", err)

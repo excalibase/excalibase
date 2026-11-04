@@ -28,6 +28,8 @@ type upgradeEngine struct {
 	extensions []string
 	calls      []string
 	copied     map[string][]string // container id -> destinations
+	// after runs once a named step has run.
+	after map[string]func()
 }
 
 type engineContainer struct {
@@ -58,6 +60,9 @@ func (e *upgradeEngine) find(ref string) *engineContainer {
 
 func (e *upgradeEngine) step(name string) error {
 	e.calls = append(e.calls, name)
+	if hook := e.after[name]; hook != nil {
+		hook()
+	}
 	return e.fail[name]
 }
 
@@ -181,6 +186,8 @@ func (e *upgradeEngine) ExecInContainerStdin(_ context.Context, id string, cmd [
 		return "", e.step("dump")
 	case stdin == provisioner.UpgradeStateScript():
 		return e.load + "\n", nil
+	case stdin == provisioner.DataMajorScript():
+		return strings.TrimPrefix(c.image, "postgres:") + "\n", nil
 	case stdin == provisioner.CleanupScript():
 		e.calls = append(e.calls, "cleanup:"+c.image)
 	case stdin == afterUpgradeScript:
@@ -349,15 +356,20 @@ func TestDockerConvertPutsTheOldServerBackAtEveryStep(t *testing.T) {
 	}
 }
 
-func TestDockerConvertPutsTheOldServerBackWhenTheConversionCannotBeRecorded(t *testing.T) {
+// The mark may have committed, so recovery decides from the run's row.
+func TestDockerConvertLeavesAConversionItCannotRecordForRecovery(t *testing.T) {
 	w := newDockerUpgradeWorld(t)
 	w.progress.convertErr = errors.New("platform database down")
-	if outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress); !outcome.RolledBack {
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !outcome.Unsettled || outcome.RolledBack || outcome.Converted {
 		t.Fatalf("outcome = %+v", outcome)
 	}
-	w.assertPutBack(t)
-	if w.inst.Namespace != "old-id" {
-		t.Fatalf("inst = %q", w.inst.Namespace)
+	fresh := w.engine.find(provisioner.DatabaseContainerName("dk-1"))
+	if fresh == nil || fresh.id == "old-id" || w.recorded() != fresh.id {
+		t.Fatalf("new container = %+v, project records %q", fresh, w.recorded())
+	}
+	if w.engine.find(provisioner.PreUpgradeContainerName("dk-1", "mu-1")) == nil {
+		t.Fatal("the old container is gone")
 	}
 }
 
@@ -372,6 +384,160 @@ func TestDockerConvertChecksTheNewImageHasEveryExtensionFirst(t *testing.T) {
 		t.Fatalf("the database was touched: %v", w.engine.calls)
 	}
 	w.assertPutBack(t)
+}
+
+// swappedAndRecorded is the host as a driver leaves it when it dies after
+// the new container was recorded but before the conversion was.
+func (w *dockerUpgradeWorld) swappedAndRecorded(image string, running bool) *engineContainer {
+	old := w.engine.byID["old-id"]
+	old.name, old.running, old.fenced = provisioner.PreUpgradeContainerName("dk-1", "mu-1"), false, true
+	fresh := &engineContainer{id: "new-id-9", name: provisioner.DatabaseContainerName("dk-1"), image: image, running: running, fenced: true}
+	w.engine.byID[fresh.id] = fresh
+	row, _ := w.store.FindByProjectID("dk-1")
+	row.Namespace = fresh.id
+	_ = w.store.Update(row)
+	w.inst.Namespace = fresh.id
+	return fresh
+}
+
+// A loaded new container on the new major is the conversion done: recovery
+// records it, and the run finishes forward rather than being put back.
+func TestDockerRecoverRecordsALoadedConversion(t *testing.T) {
+	for _, running := range []bool{true, false} {
+		t.Run(fmt.Sprintf("running=%v", running), func(t *testing.T) {
+			w := newDockerUpgradeWorld(t)
+			fresh := w.swappedAndRecorded("postgres:17", running)
+			outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress)
+			if !outcome.Converted || outcome.RolledBack {
+				t.Fatalf("outcome = %+v (calls %v)", outcome, w.engine.calls)
+			}
+			w.assertCarriedForward(t, fresh)
+		})
+	}
+}
+
+// the conversion is recorded, the new container serves under the project's
+// name, and the old one waits stopped for cleanup.
+func (w *dockerUpgradeWorld) assertCarriedForward(t *testing.T, fresh *engineContainer) {
+	t.Helper()
+	if w.progress.converted == nil {
+		t.Fatal("the conversion was not recorded")
+	}
+	if !fresh.running || w.engine.find(provisioner.DatabaseContainerName("dk-1")) != fresh || w.recorded() != fresh.id {
+		t.Fatalf("new container = %+v, project records %q", fresh, w.recorded())
+	}
+	if old := w.engine.find(provisioner.PreUpgradeContainerName("dk-1", "mu-1")); old == nil || old.running {
+		t.Fatalf("old container = %+v", old)
+	}
+}
+
+// The record failing again leaves the run open for the next sweep.
+func TestDockerRecoverLeavesAConversionItStillCannotRecordOpen(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.swappedAndRecorded("postgres:17", true)
+	w.progress.convertErr = errors.New("platform database down")
+	outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress)
+	if !outcome.Unsettled || outcome.RolledBack || outcome.Converted {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.engine.find("new-id-9") == nil || w.recorded() != "new-id-9" {
+		t.Fatal("the converted container was put back")
+	}
+}
+
+// A new container that does not serve the new major is not taken as done.
+func TestDockerRecoverPutsBackANewContainerOnTheWrongMajor(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.swappedAndRecorded("postgres:16", true)
+	if outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress); !outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.progress.converted != nil {
+		t.Fatal("recorded as converted")
+	}
+	w.assertPutBack(t)
+}
+
+// A loaded new container the project does not record yet is not the
+// conversion: the old one is put back.
+func TestDockerRecoverPutsBackALoadedContainerThatWasNeverRecorded(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.swappedAndRecorded("postgres:17", true)
+	row, _ := w.store.FindByProjectID("dk-1")
+	row.Namespace = "old-id"
+	_ = w.store.Update(row)
+	w.inst.Namespace = "old-id"
+	if outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress); !outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.progress.converted != nil {
+		t.Fatal("recorded as converted")
+	}
+	w.assertPutBack(t)
+}
+
+// A recorded new container whose load failed is put back.
+func TestDockerRecoverPutsBackARecordedContainerWhoseLoadFailed(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.engine.load = provisioner.UpgradeFailed
+	w.swappedAndRecorded("postgres:17", true)
+	if outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress); !outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.progress.converted != nil {
+		t.Fatal("recorded as converted")
+	}
+	w.assertPutBack(t)
+}
+
+// (a) Recovery takes the run over while the driver dumps: the driver stops
+// there and renames, creates and records nothing, nor puts anything back.
+func TestDockerConvertStopsWhenTheRunIsTakenOverDuringTheDump(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.engine.after = map[string]func(){"dump": func() { w.progress.lost = true }}
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack || outcome.Converted {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	for _, step := range []string{"stop", "rename:", "create:postgres:17", "unfence:"} {
+		if w.called(step) {
+			t.Fatalf("%s ran after the run was lost: %v", step, w.engine.calls)
+		}
+	}
+	if w.recorded() != "old-id" || w.engine.find(provisioner.DatabaseContainerName("dk-1")).id != "old-id" {
+		t.Fatalf("project records %q", w.recorded())
+	}
+}
+
+// A run lost once the new container has loaded: the driver does not record
+// it, and leaves both containers for recovery.
+func TestDockerConvertDoesNotRecordAContainerForARunItLost(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.engine.after = map[string]func(){"start:postgres:17": func() { w.progress.lost = true }}
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.recorded() != "old-id" {
+		t.Fatalf("project records %q", w.recorded())
+	}
+	fresh := w.engine.find(provisioner.DatabaseContainerName("dk-1"))
+	if w.engine.find(provisioner.PreUpgradeContainerName("dk-1", "mu-1")) == nil || fresh == nil || fresh.id == "old-id" {
+		t.Fatalf("the swap was undone: %v", w.engine.calls)
+	}
+}
+
+// A run already lost is not touched at all.
+func TestDockerConvertChangesNothingForARunItLost(t *testing.T) {
+	w := newDockerUpgradeWorld(t)
+	w.progress.lost = true
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if w.called("fence") || w.called("scratch") {
+		t.Fatalf("the database was touched: %v", w.engine.calls)
+	}
 }
 
 func TestDockerRecover(t *testing.T) {
