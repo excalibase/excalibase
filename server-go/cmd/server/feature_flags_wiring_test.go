@@ -24,6 +24,9 @@ type darkProbe struct{ method, path string }
 // darkRoutes is every route a feature hides. A declared feature with no
 // probe here fails TestDarkRoutes_EveryFeatureIsWired.
 var darkRoutes = map[features.Feature][]darkProbe{
+	features.AppGitBuilds: {
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/internal-registry/pull-credential/rotate"},
+	},
 	features.MCP: {
 		{http.MethodPost, "/mcp"},
 		{http.MethodGet, "/api/schema/" + matrixProjectA + "/query?sql=select+1"},

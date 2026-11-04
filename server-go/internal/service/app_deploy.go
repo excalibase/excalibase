@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -55,6 +56,8 @@ type AppDeployService struct {
 	images ImageResolver
 	// localRegistries are operator registries never dialled (self-host only).
 	localRegistries []string
+	// internal is the platform's own registry for git builds (EXC-540); nil without one.
+	internal        *appregistry.Internal
 	plans           PlanTiers
 	headroomPercent int
 	// quotaTiers sizes the namespace quota from the plan (EXC-524).
@@ -116,8 +119,16 @@ func (s *AppDeployService) SetCorsOriginReleaser(origins CorsOriginReleaser) {
 	s.corsOrigins = origins
 }
 
-// pullAuth fails rather than pull anonymously when the credential cannot be read.
-func (s *AppDeployService) pullAuth(projectID, image string) (*k8s.RegistryAuth, error) {
+// pullAuth fails rather than pull anonymously when the credential cannot be
+// read. Every rollout passes here, so it is also where an image on the
+// platform's registry is held to the app's own repository, by digest.
+func (s *AppDeployService) pullAuth(app *apphost.App, image string) (*k8s.RegistryAuth, error) {
+	projectID := app.ProjectID
+	if s.internal.Names(image) {
+		if err := s.ownInternalImage(app, image); err != nil {
+			return nil, err
+		}
+	}
 	cred, err := s.registryCredential(projectID, image)
 	if err != nil || cred == nil {
 		return nil, err
@@ -128,15 +139,28 @@ func (s *AppDeployService) pullAuth(projectID, image string) (*k8s.RegistryAuth,
 // registryCredential is the project's saved credential for the image's
 // registry, or nil when it has none.
 func (s *AppDeployService) registryCredential(projectID, image string) (*apphost.RegistryCredential, error) {
-	if s.registries == nil {
-		return nil, nil
-	}
 	registry := apphost.ImageRegistry(image)
-	cred, err := s.registries.Lookup(projectID, registry)
+	cred, err := s.lookupCredential(projectID, registry)
 	if err != nil {
 		return nil, fmt.Errorf("read the pull credential for %s: %w", registry, err)
 	}
 	return cred, nil
+}
+
+// lookupCredential answers the internal registry with the project's derived
+// credential, and any other registry with the one the project saved.
+func (s *AppDeployService) lookupCredential(projectID, registry string) (*apphost.RegistryCredential, error) {
+	if s.internal.NamesHost(registry) {
+		pull, err := s.internal.PullCredential(projectID)
+		if err != nil {
+			return nil, err
+		}
+		return &apphost.RegistryCredential{Username: pull.Username, Password: pull.Password}, nil
+	}
+	if s.registries == nil {
+		return nil, nil
+	}
+	return s.registries.Lookup(projectID, registry)
 }
 
 // errPullAuthChanged fails a deploy whose credential was removed or replaced while it was applied.
@@ -149,9 +173,12 @@ func (s *AppDeployService) confirmPullAuth(ctx context.Context, projectID, names
 	if used == nil {
 		return nil
 	}
-	cred, err := s.registries.Lookup(projectID, used.Registry)
+	cred, err := s.lookupCredential(projectID, used.Registry)
 	if err == nil && cred != nil && cred.Username == used.Username && cred.Password == used.Password {
 		return nil
+	}
+	if err == nil && cred != nil && s.internal.NamesHost(used.Registry) {
+		return s.followRotation(ctx, projectID, namespace, used.Registry, cred)
 	}
 	if delErr := s.runtime.DeleteRegistryPullSecrets(ctx, namespace, used.Registry); delErr != nil {
 		return errors.Join(errPullAuthChanged, fmt.Errorf("remove the stale pull secret: %w", delErr))
@@ -160,6 +187,17 @@ func (s *AppDeployService) confirmPullAuth(ctx context.Context, projectID, names
 		return fmt.Errorf("read the pull credential for %s: %w", used.Registry, err)
 	}
 	return errPullAuthChanged
+}
+
+// followRotation is a pull password rotated while the deploy ran: the
+// platform's credential is never removed, only renewed, so every pull secret
+// takes the new one rather than being deleted from under running apps.
+func (s *AppDeployService) followRotation(ctx context.Context, projectID, namespace, registry string, cred *apphost.RegistryCredential) error {
+	auth := k8s.RegistryAuth{Registry: registry, Username: cred.Username, Password: cred.Password}
+	if stale, err := s.runtime.RefreshRegistryPullSecrets(ctx, namespace, projectID, auth); err != nil {
+		return fmt.Errorf("the pull credential rotated while the app deployed; these apps still hold the old one: %v: %w", stale, err)
+	}
+	return nil
 }
 
 // publicURL is where a public app is served; an internal service (EXC-525) has none.
@@ -350,7 +388,7 @@ func (s *AppDeployService) apply(ctx context.Context, app *apphost.App, planned 
 	render := s.render
 	render.EnvRevision = strconv.Itoa(deploy.Revision)
 	render.DeployID = deploy.ID
-	if render.PullAuth, err = s.pullAuth(app.ProjectID, cfg.Image); err != nil {
+	if render.PullAuth, err = s.pullAuth(app, cfg.Image); err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}

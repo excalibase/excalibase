@@ -110,15 +110,18 @@ func (c DeployConfig) ToApp(id, projectID, name string) *App {
 }
 
 // Where a deploy was asked for: Studio, the API (CI or a script holding a
-// token), or the image watcher noticing that the app's tag moved.
+// token), the image watcher noticing that the app's tag moved, or the
+// platform's own build of a pushed commit (EXC-547).
 const (
 	DeploySourceStudio       = "studio"
 	DeploySourceAPI          = "api"
 	DeploySourceImageWatcher = "image-watcher"
+	DeploySourceGitBuild     = "git-build"
 )
 
 func IsDeploySource(source string) bool {
-	return source == DeploySourceStudio || source == DeploySourceAPI || source == DeploySourceImageWatcher
+	return source == DeploySourceStudio || source == DeploySourceAPI || source == DeploySourceImageWatcher ||
+		source == DeploySourceGitBuild
 }
 
 // DeployOrigin is who asked for a deploy, from where, and the commit the
