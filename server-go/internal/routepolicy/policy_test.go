@@ -55,7 +55,7 @@ func TestKeyString(t *testing.T) {
 func TestEveryRowIsWellFormed(t *testing.T) {
 	known := map[AuthClass]bool{
 		AuthPublic: true, AuthSession: true, AuthHandlerSession: true,
-		AuthRuntimeToken: true, AuthFunctionJWT: true, AuthForwarderToken: true,
+		AuthRuntimeToken: true, AuthFunctionJWT: true, AuthForwarderToken: true, AuthRegistryPull: true,
 	}
 	for _, row := range Table() {
 		if !strings.HasPrefix(row.Pattern, "/") {

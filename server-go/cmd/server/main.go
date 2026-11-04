@@ -16,6 +16,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/advisors"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/bootstrap"
 	"github.com/excalibase/provisioning-poc/internal/clientaddr"
@@ -311,6 +312,11 @@ func runServer(cfg config.AppConfig) {
 	defer stopAppRollouts()
 	stopImageWatcher := startImageWatcher(cfg, deps.features, sqlStore, deps.appDeploySvc)
 	defer stopImageWatcher()
+	stopRegistrySweep, err := startRegistrySweeper(cfg, sqlStore, store, deps.internalRegistry)
+	if err != nil {
+		log.Fatalf("internal registry sweep (APP_REGISTRY_URL): %v", err)
+	}
+	defer stopRegistrySweep()
 	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
 	defer stopCredentialRenewal()
 	stopRoleReconcile := startPlatformRoleReconcile(cfg, sqlStore, provSvc)
@@ -699,8 +705,9 @@ func newLogDrainService(cfg config.AppConfig, sqlStore any, vc vaultclient.Vault
 		return nil
 	}
 	var logs service.ProjectLogReader
-	if cfg.LokiURL != "" {
-		logs = service.NewLokiReader(cfg.LokiURL, &http.Client{})
+	lokiURL, singleHost := drainLogStore(cfg)
+	if lokiURL != "" {
+		logs = service.NewLokiReader(lokiURL, &http.Client{})
 	}
 	instances := func(projectID string) (*domain.DatabaseInstance, error) {
 		inst, err := provSvc.GetInstance(projectID)
@@ -709,7 +716,19 @@ func newLogDrainService(cfg config.AppConfig, sqlStore any, vc vaultclient.Vault
 		}
 		return inst, nil
 	}
-	return service.NewLogDrainService(service.LogDrainDeps{Store: drains, Vault: vc, Instances: instances, Logs: logs})
+	return service.NewLogDrainService(service.LogDrainDeps{Store: drains, Vault: vc, Instances: instances, Logs: logs, SingleHost: singleHost})
+}
+
+// drainLogStore is the Loki drains read: on a single host the one hostlogs
+// fills (EXC-672), with its shipper's labels; otherwise the chart's.
+func drainLogStore(cfg config.AppConfig) (string, bool) {
+	if cfg.ProvisionerMode != "docker" {
+		return cfg.LokiURL, false
+	}
+	if !features.Enabled(context.Background(), cfg.Features(), features.HostLogs) || cfg.HostLogs.LokiURL == "" {
+		return "", false
+	}
+	return cfg.HostLogs.LokiURL, true
 }
 
 // newBackupHandler records started database copies in the audit log (EXC-667).
@@ -1044,6 +1063,8 @@ type handlerDeps struct {
 	emailTokensHandler    *handler.EmailTokensHandler
 	internalEmail         *handler.InternalEmailHandler
 	storageHandler        *handler.StorageHandler
+	// s3KeysHandler issues S3 access keys (EXC-630); nil without storage and a vault.
+	s3KeysHandler *handler.S3KeysHandler
 	// documentsHandler is Studio's DocumentDB document browser; nil without
 	// Kubernetes, which is where DocumentDB projects run.
 	documentsHandler *handler.DocumentBrowserHandler
@@ -1117,6 +1138,12 @@ type handlerDeps struct {
 	logForwarderHandler *handler.LogForwarderHandler
 	// dbReadAddressHandler serves a database's read-only address (EXC-666).
 	dbReadAddressHandler *handler.DBReadAddressHandler
+	// registryToken is the internal registry's token service (EXC-540); nil without one.
+	registryToken http.Handler
+	// internalRegistryH rotates a project's internal-registry pull credential (EXC-540).
+	internalRegistryH *handler.InternalRegistryHandler
+	// internalRegistry is the platform's registry for git builds; nil without one.
+	internalRegistry *appregistry.Internal
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1377,7 +1404,7 @@ func buildProvisioningService(
 	provSvc.SetLokiURL(cfg.LokiURL)
 	startLogPlanSweep(context.Background(), cfg, provSvc, k8sClient)
 	deletionStore, _ := sqlStore.(logDeletionStore)
-	if worker := wireLogDeletion(cfg, deletionStore, provSvc, cfg.LokiURL); worker != nil {
+	if worker := wireLogDeletion(cfg, deletionStore, provSvc, logDeletionLokiURL(cfg)); worker != nil {
 		go worker.Run(context.Background())
 	}
 
@@ -1639,7 +1666,8 @@ func newSchemaHandler(cfg config.AppConfig, vc vaultclient.VaultClient, instance
 }
 
 func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore storage.PlatformStore,
-	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget, restarts handler.AppRestartReader) *handler.AppHandler {
+	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget, restarts handler.AppRestartReader,
+	internal *appregistry.Internal) *handler.AppHandler {
 	plans := service.NewOrgPlanTiers(store, sqlStore)
 	h := handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
 		handler.NewProjectSourceLookup(store, plans), appPublicRoute(cfg))
@@ -1648,6 +1676,7 @@ func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore s
 	h.SetStorageBudget(budget)
 	h.SetFeatures(cfg.Features())
 	h.SetRestarts(restarts)
+	h.SetInternalRegistry(internal)
 	return h
 }
 
@@ -1815,8 +1844,16 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// marker straight away so idle-pause never sees them as stale.
 	provSvc.SetActivityRecorder(activityRecorder)
 
+	internalRegistry, err := newInternalRegistry(cfg, vaultSecrets(vc))
+	if err != nil {
+		log.Fatalf("internal registry (APP_REGISTRY_HOST): %v", err)
+	}
 	registryCreds := registryCredentials(vc, store, appRuntime)
+	if registryCreds != nil {
+		registryCreds.SetInternalRegistry(internalRegistry)
+	}
 	withRegistryCredentials(appDeploySvc, registryCreds)
+	appDeploySvc.SetInternalRegistry(internalRegistry)
 	if origins, ok := sqlStore.(storage.ProjectCorsEditor); ok {
 		appDeploySvc.SetCorsOriginReleaser(origins)
 	}
@@ -1852,6 +1889,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		pgHandler:             handler.NewParameterGroupHandler(pgStore),
 		emailTokensHandler:    emailTokensHandler,
 		storageHandler:        storageHandler,
+		s3KeysHandler:         wireS3Keys(cfg, newS3Keys(sqlStore, store, vc, storageSvc), sqlStore, provSvc),
 		documentsHandler:      buildDocumentBrowser(k8sClient, a.dockerClient, vc, store),
 		adminHandler:          adminHandler,
 		authHandler:           authHandler,
@@ -1865,7 +1903,10 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:       realtimeHandler,
 		permissionHandler:     newPermissionHandler(cfg, sqlStore, store, a.projectDB),
 		advisorsHandler:       handler.NewAdvisorsHandler(advisors.NewService(a.projectDB, sqlStore.Permissions(), advisors.Options{})),
-		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc),
+		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
+		registryToken:         newRegistryTokenHandler(internalRegistry, store),
+		internalRegistry:      internalRegistry,
+		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc), store, appRuntime),
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,
 		storageBudgetH:        handler.NewStorageBudgetHandler(a.budget),
@@ -2493,6 +2534,8 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	mountProjectContainers(r, sqlStore, store, d)
 	mountLogDrains(r, sqlStore, store, d)
 	mountDBReadAddress(r, sqlStore, store, d)
+	mountRegistryToken(r, d)
+	mountInternalRegistry(r, sqlStore, store, d)
 	mountAuthProviders(r, sqlStore, store, d)
 	mountAuthHooks(r, sqlStore, store, d)
 	// What AI coding tools did in the project through MCP (EXC-544).
@@ -2646,6 +2689,9 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Use(d.activity)
 			d.storageHandler.Routes(r)
 			r.With(features.Require(d.features, features.AppStorage)).Put("/buckets/{bucket}/access", d.storageHandler.UpdateBucketAccess)
+			if d.s3KeysHandler != nil {
+				r.With(features.Require(d.features, features.S3)).Group(d.s3KeysHandler.Routes)
+			}
 		})
 		mountAppStorage(r, sqlStore, store, d)
 		// The public object path is anonymous, so it sits outside the

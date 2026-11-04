@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -53,7 +54,12 @@ type AppHandler struct {
 	features features.Flags
 	// restarts reads what the runtime saw of the app's containers; unset, none is shown.
 	restarts AppRestartReader
+	// internal is the platform's registry, which only its git builds deploy from (EXC-540).
+	internal *appregistry.Internal
 }
+
+// SetInternalRegistry refuses an image a caller names on the platform's own registry.
+func (h *AppHandler) SetInternalRegistry(internal *appregistry.Internal) { h.internal = internal }
 
 const restartsReadTimeout = 2 * time.Second
 
@@ -307,6 +313,10 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := h.internal.RefuseUserImage(app.Image); err != nil {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if !h.diskWithinPlan(w, r, app.ProjectID, app.Disk) {
 		return
 	}
@@ -371,6 +381,13 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if existing.Disk != nil && req.Disk != nil && req.Disk.Size != existing.Disk.Size {
 		httpError(w, "a disk's size changes only by growing it with POST .../disk", http.StatusBadRequest)
 		return
+	}
+	// An app a git build deployed keeps its internal image; a caller cannot name one.
+	if req.Image != nil {
+		if err := h.internal.RefuseUserImage(*req.Image); err != nil {
+			httpError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	applyAppUpdate(existing, req)
 	if req.AutoDeploy != nil && *req.AutoDeploy && apphost.IsPinnedByDigest(existing.Image) {

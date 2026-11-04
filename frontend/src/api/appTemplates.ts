@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
+import { listDeploys, type Deploy } from './apps';
 import type { TierType } from '../types';
 
 // Built-in templates (EXC-526) as GET /api/projects/{projectId}/app-templates/ serves them.
@@ -69,12 +70,47 @@ export interface TemplateCredential {
   value: string;
 }
 
+// The deploy answers once every app has a pending first deploy, which runs after it (EXC-669).
 export interface TemplateDeployResult {
   templateId: string;
   apps: { id: string; name: string; deployId: string; deployStatus: string }[];
   privateNetworkTurnedOn: boolean;
   credentials?: TemplateCredential[];
+  acceptedAt: string;
 }
+
+export type FirstDeploy =
+  | { state: 'starting' }
+  | { state: 'rolling' }
+  | { state: 'running' }
+  | { state: 'failed'; reason: string }
+  | { state: 'stalled' };
+
+// Past this, Studio stops following a first deploy and points at the app instead.
+export const FIRST_DEPLOY_FOLLOW_MS = 15 * 60 * 1000;
+const FIRST_DEPLOY_POLL_MS = 3000;
+
+// How the app's first deploy stands, from its newest deploy.
+export function firstDeploy(newest: Deploy | undefined, acceptedAt: string, now = Date.now()): FirstDeploy {
+  if (newest?.status === 'succeeded') return { state: 'running' };
+  if (newest?.status === 'failed') return { state: 'failed', reason: newest.failureReason ?? 'the deploy failed' };
+  if (now - Date.parse(acceptedAt) > FIRST_DEPLOY_FOLLOW_MS) return { state: 'stalled' };
+  return !newest || newest.status === 'pending' ? { state: 'starting' } : { state: 'rolling' };
+}
+
+const FINISHED: ReadonlySet<FirstDeploy['state']> = new Set(['running', 'failed', 'stalled']);
+
+// Reads the app's newest deploy until its first deploy has finished, or stops being followed.
+export const useFirstDeploy = (projectId: string, appId: string, acceptedAt: string) =>
+  useQuery({
+    queryKey: ['apps', projectId, appId, 'first-deploy', acceptedAt],
+    queryFn: async () => firstDeploy((await listDeploys(projectId, appId, 1))[0], acceptedAt),
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      if (state && FINISHED.has(state)) return false;
+      return Date.now() - Date.parse(acceptedAt) > FIRST_DEPLOY_FOLLOW_MS ? false : FIRST_DEPLOY_POLL_MS;
+    },
+  });
 
 const templatesKey = (projectId: string) => ['app-templates', projectId] as const;
 

@@ -20,6 +20,7 @@ var (
 	put     = []string{http.MethodPut}
 	patch   = []string{http.MethodPatch}
 	del     = []string{http.MethodDelete}
+	getPost = []string{http.MethodGet, http.MethodPost}
 	anyVerb = []string{MethodAll}
 )
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import type { Deploy } from '../../api/apps';
-import { DEPLOY_STATUS, formatWhen } from './appCopy';
+import { DEPLOY_STATUS, canRollBack, formatWhen, onPlatformRegistry } from './appCopy';
 import { ToneBadge, primaryButton, secondaryButton } from './ContainerBits';
 
 interface DeployHistoryProps {
@@ -14,6 +14,7 @@ interface RowProps {
   readonly deploy: Deploy;
   readonly isNewest: boolean;
   readonly isServing: boolean;
+  readonly rollbackable: boolean;
   readonly confirming: boolean;
   readonly redeploying: boolean;
   readonly onAsk: () => void;
@@ -25,6 +26,7 @@ function DeployRow({
   deploy,
   isNewest,
   isServing,
+  rollbackable,
   confirming,
   redeploying,
   onAsk,
@@ -47,7 +49,7 @@ function DeployRow({
         <div className="flex items-center gap-3 flex-shrink-0">
           <span className="text-xs text-text-tertiary">{formatWhen(deploy.createdAt)}</span>
           <ToneBadge label={status.label} tone={status.tone} />
-          {!isNewest && !confirming && (
+          {!isNewest && rollbackable && !confirming && (
             <button
               type="button"
               onClick={onAsk}
@@ -93,6 +95,7 @@ function DeployRow({
 export function DeployHistory({ deploys, redeploying, onRedeploy }: DeployHistoryProps) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const servingId = deploys.find((deploy) => deploy.status === 'succeeded')?.id;
+  const windowed = onPlatformRegistry(deploys);
 
   if (deploys.length === 0) {
     return (
@@ -109,6 +112,7 @@ export function DeployHistory({ deploys, redeploying, onRedeploy }: DeployHistor
           deploy={deploy}
           isNewest={index === 0}
           isServing={deploy.id === servingId}
+          rollbackable={canRollBack(index, deploy.id === servingId, windowed(deploy))}
           confirming={confirmingId === deploy.id}
           redeploying={redeploying}
           onAsk={() => setConfirmingId(deploy.id)}

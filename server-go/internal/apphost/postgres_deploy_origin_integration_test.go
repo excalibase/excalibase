@@ -65,3 +65,21 @@ func TestPGDeployStore_RefusesAnUnknownSource(t *testing.T) {
 		t.Fatal("an unknown source must be refused")
 	}
 }
+
+// EXC-540: a deploy of an image the platform built from a commit is recorded as a git build.
+func TestPGDeployStore_RecordsAGitBuild(t *testing.T) {
+	appStore := newPGAppStore(t)
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	app := sampleApp("proj_deploy_gitbuild", "app_deploy_gitbuild", "storefront")
+	if err := appStore.Create(app, 1); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	deploy := sampleDeploy(app.ProjectID, app.ID, "git-build")
+	deploy.Source = apphost.DeploySourceGitBuild
+	if err := deployStore.Create(deploy); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got, err := deployStore.Get(app.ProjectID, app.ID, deploy.ID); err != nil || got.Source != apphost.DeploySourceGitBuild {
+		t.Fatalf("get: %+v %v", got, err)
+	}
+}

@@ -106,6 +106,9 @@ type AppConfig struct {
 	EmailProductName string
 	EmailReplyTo     string
 	StoragePublicURL string
+	// S3PublicURL is where S3 clients reach the S3 gateway (EXC-630), e.g.
+	// https://s3.example.com; Studio shows it with every key.
+	S3PublicURL string
 
 	// LokiURL points at the cluster's Loki HTTP endpoint. When set, the
 	// admin /logs endpoint proxies queries to Loki and the per-project
@@ -363,6 +366,8 @@ type AppConfig struct {
 	// AppLocalRegistries are registries a self-hosted operator runs beside the
 	// platform (APP_LOCAL_REGISTRIES); refused in cloud mode.
 	AppLocalRegistries []string
+	// AppRegistry is the platform's registry for git-built images (EXC-540).
+	AppRegistry AppRegistryConfig
 	// SingleHostApps is how apps run when PROVISIONER_MODE=docker (EXC-575).
 	SingleHostApps SingleHostAppsConfig
 	// AppDiskToolsImage runs the app-disk usage probe and lowering copy.
@@ -426,6 +431,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateAppLocalRegistries(); err != nil {
 		return err
 	}
+	if err := c.validateAppRegistry(); err != nil {
+		return err
+	}
 	if err := validateRequestMetricsTargets(c.RequestMetricsTargets); err != nil {
 		return err
 	}
@@ -446,6 +454,7 @@ func Load() AppConfig {
 	cfg.SitesGitBuildsEnabled = os.Getenv("SITES_GIT_BUILDS_ENABLED") == "true"
 	cfg.SiteGit = loadSiteGit()
 	cfg.AppLocalRegistries = loadAppLocalRegistries()
+	cfg.AppRegistry = loadAppRegistry()
 	return cfg
 }
 
@@ -508,6 +517,7 @@ func load() AppConfig {
 		EmailProductName:               envOr("EMAIL_PRODUCT_NAME", "Excalibase"),
 		EmailReplyTo:                   envOr("EMAIL_REPLY_TO", ""),
 		StoragePublicURL:               envOr("STORAGE_PUBLIC_URL", ""),
+		S3PublicURL:                    envOr("S3_PUBLIC_URL", ""),
 		LokiURL:                        envOr("LOKI_URL", ""),
 		LogForwarderToken:              os.Getenv("LOG_FORWARDER_TOKEN"),
 		RequestMetricsTargets:          loadRequestMetricsTargets(),

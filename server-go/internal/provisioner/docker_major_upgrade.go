@@ -243,3 +243,9 @@ func ExtensionNames(archive io.Reader) ([]string, error) {
 	sort.Strings(names)
 	return names, nil
 }
+
+// DataMajorScript prints the major version of the data directory.
+func DataMajorScript() string {
+	return `cat "$PGDATA/PG_VERSION"
+`
+}

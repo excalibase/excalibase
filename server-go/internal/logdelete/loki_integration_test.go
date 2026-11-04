@@ -21,6 +21,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/testutil/lokitest"
 )
 
 // lokiImage is the chart's and compose's Loki.
@@ -49,7 +50,9 @@ func startLoki(t *testing.T) string {
 	t.Cleanup(func() { _ = container.Terminate(ctx) })
 	host, _ := container.Host(ctx)
 	port, _ := container.MappedPort(ctx, "3100/tcp")
-	return fmt.Sprintf("http://%s:%s", host, port.Port())
+	lokiURL := fmt.Sprintf("http://%s:%s", host, port.Port())
+	lokitest.WaitAcceptsPush(t, lokiURL, lokitest.AcceptsWithin)
+	return lokiURL
 }
 
 func push(t *testing.T, lokiURL string, labels map[string]string, lines ...string) {
@@ -64,9 +67,9 @@ func push(t *testing.T, lokiURL string, labels map[string]string, lines ...strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("push answered %d", resp.StatusCode)
+		t.Fatalf("push answered %d %q", resp.StatusCode, lokitest.Body(resp))
 	}
 }
 
@@ -78,9 +81,9 @@ func flush(t *testing.T, lokiURL string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("flush answered %d", resp.StatusCode)
+		t.Fatalf("flush answered %d %q", resp.StatusCode, lokitest.Body(resp))
 	}
 }
 
@@ -93,6 +96,9 @@ func labelValues(t *testing.T, lokiURL, label string) []string {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("label values answered %d %q", resp.StatusCode, lokitest.Body(resp))
+	}
 	var body struct {
 		Data []string `json:"data"`
 	}
@@ -110,6 +116,9 @@ func countLines(t *testing.T, lokiURL, selector string) int {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("query answered %d %q", resp.StatusCode, lokitest.Body(resp))
+	}
 	var body struct {
 		Data struct {
 			Result []struct {

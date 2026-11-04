@@ -99,17 +99,19 @@ func TestLiveTemplates(t *testing.T) {
 		live.expectNothingLeft(t)
 	})
 
-	t.Run("a failure mid-way rolls everything back", func(t *testing.T) {
+	t.Run("a first deploy that fails stays on its app and removes nothing", func(t *testing.T) {
 		kube := &failingKube{KubeClient: live.lab.client, failFor: "web"}
-		_, err := live.service(live.builtins(t), kube).Deploy(live.lab.ctx, tplLiveProject, "web-redis", "live", adminConfirmed)
-		var failed *TemplateFailedError
-		if !errors.As(err, &failed) || !strings.Contains(err.Error(), "forced failure") {
-			t.Fatalf("want a rolled-back failure, got %v", err)
+		svc := live.service(live.builtins(t), kube)
+		result, err := svc.Deploy(live.lab.ctx, tplLiveProject, "web-redis", "live", adminConfirmed)
+		if err != nil {
+			t.Fatalf("the deploy is accepted before any workload is applied: %v", err)
 		}
-		if len(kube.applied) != 2 || kube.applied[0] != k8s.AppObjectName("redis") {
-			t.Fatalf("redis must have been applied before web failed: %v", kube.applied)
+		web := live.lastDeploy(t, live.appByName(t, "web"))
+		if web.Status != apphost.DeployStatusFailed || !strings.Contains(web.FailureReason, "forced failure") {
+			t.Fatalf("web: deploy %s (%s)", web.Status, web.FailureReason)
 		}
-		t.Logf("rolled back: %v", err)
+		t.Logf("accepted at %s; web's first deploy failed: %s", result.AcceptedAt, web.FailureReason)
+		live.remove(t, svc)
 		live.expectNothingLeft(t)
 	})
 
@@ -123,7 +125,7 @@ func TestLiveTemplates(t *testing.T) {
 			t.Fatalf("result %+v", result)
 		}
 		for _, app := range result.Apps {
-			live.expectDeploySucceeded(t, app)
+			live.expectDeploySucceeded(t, live.appByName(t, app.Name))
 		}
 		redis, web := live.appByName(t, "redis"), live.appByName(t, "web")
 		password = live.secret(t, redis, "REDIS_PASSWORD")
@@ -330,18 +332,45 @@ func (l *templateLive) secret(t *testing.T, app *apphost.App, name string) strin
 	return record[ref.Key]
 }
 
-func (l *templateLive) expectDeploySucceeded(t *testing.T, deployed TemplateDeployedApp) {
+// lastDeploy waits for the app's newest deploy to finish, which starts after the template's answer.
+func (l *templateLive) lastDeploy(t *testing.T, app *apphost.App) *apphost.Deploy {
 	t.Helper()
 	var deploy *apphost.Deploy
-	eventuallyLive(t, deployed.Name+" rolled out", 8*time.Minute, func() bool {
-		got, err := l.deploys.Get(tplLiveProject, deployed.ID, deployed.DeployID)
-		deploy = got
-		return err == nil && got != nil && got.Status != apphost.DeployStatusPending && got.Status != apphost.DeployStatusRolling
+	eventuallyLive(t, app.Name+" rolled out", 8*time.Minute, func() bool {
+		latest, err := l.deploys.GetLatest(tplLiveProject, app.ID)
+		if err != nil || latest == nil {
+			return false
+		}
+		deploy = latest
+		return deploy.Status != apphost.DeployStatusPending && deploy.Status != apphost.DeployStatusRolling
 	})
+	return deploy
+}
+
+func (l *templateLive) expectDeploySucceeded(t *testing.T, app *apphost.App) {
+	t.Helper()
+	deploy := l.lastDeploy(t, app)
 	if deploy.Status != apphost.DeployStatusSucceeded {
-		t.Fatalf("%s: deploy %s (%s)", deployed.Name, deploy.Status, deploy.FailureReason)
+		t.Fatalf("%s: deploy %s (%s)", app.Name, deploy.Status, deploy.FailureReason)
 	}
-	t.Logf("%s: deploy %s", deployed.Name, deploy.Status)
+	t.Logf("%s: deploy %s", app.Name, deploy.Status)
+}
+
+// remove deletes what a template left, as its developer would, and closes the network.
+func (l *templateLive) remove(t *testing.T, svc *AppTemplateService) {
+	t.Helper()
+	apps, err := l.apps.List(tplLiveProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, app := range apps {
+		if err := svc.deleteCreated(l.lab.ctx, app); err != nil {
+			t.Fatalf("delete %s: %v", app.Name, err)
+		}
+	}
+	if err := svc.closeNetwork(l.lab.ctx, tplLiveProject); err != nil {
+		t.Fatalf("close the network: %v", err)
+	}
 }
 
 func (l *templateLive) expectSandboxed(t *testing.T, app *apphost.App) {
