@@ -211,6 +211,10 @@ func (c *liveChecker) term(ctx context.Context, table string, shape liveTable, k
 	case opExists:
 		return c.exists(ctx, value)
 	}
+	if looksLikeSessionVariable(key) {
+		// A session variable against a fixed value names no column (EXC-680).
+		return nil
+	}
 	ops, err := decodeObject(value)
 	if err != nil {
 		return err
