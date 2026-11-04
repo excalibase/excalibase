@@ -21,7 +21,7 @@ FROM alpine:3.20
 # iptables for the single host's firewall (EXC-683), which runs this image: in
 # the image, so a start with no network still sets its rules. Both backends: it
 # uses the one holding Docker's DOCKER-USER chain.
-RUN apk add --no-cache ca-certificates sqlite-libs iptables ip6tables iptables-legacy
+RUN apk add --no-cache ca-certificates ip6tables iptables iptables-legacy sqlite-libs
 COPY --from=build /bin/excalibase-provisioning /bin/excalibase-provisioning
 COPY --from=build /bin/excalibase-engine-proxy /bin/excalibase-engine-proxy
 COPY --from=build /bin/excalibase-app-probe /usr/local/bin/excalibase-app-probe
@@ -40,8 +40,9 @@ RUN adduser -D -u 1000 appuser
 RUN mkdir -p /var/lib/excalibase && chown appuser:appuser /var/lib/excalibase
 # The single host's app routes (EXC-575): written here, read by the edge from the same volume.
 RUN mkdir -p /srv/excalibase-app-routes && chown appuser:appuser /srv/excalibase-app-routes
-# The engine proxy, as the engine socket's user, writes the platform's bridges here for the host firewall (EXC-683).
-RUN mkdir -p /var/lib/excalibase-bridges && chmod 1777 /var/lib/excalibase-bridges
+# The engine proxy writes the platform's bridges here for the host firewall (EXC-683): as
+# uid 1000 on Docker (init.sh), as the user namespace's root on rootless Podman.
+RUN mkdir -p /var/lib/excalibase-bridges && chown appuser:appuser /var/lib/excalibase-bridges && chmod 0755 /var/lib/excalibase-bridges
 USER appuser
 ENV WATCHER_CHART_PATH=/charts/excalibase-watcher-go
 ENV STORAGE_PATH=/var/lib/excalibase
