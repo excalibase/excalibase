@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log"
 	"sort"
 	"strings"
@@ -25,14 +25,16 @@ const (
 	RegistryPushFloor = time.Hour
 )
 
-// ErrRollbackImageRemoved refuses a redeploy whose image the sweep has removed.
-var ErrRollbackImageRemoved = fmt.Errorf("that deploy's image was removed from the registry: a rollback reaches the last %d deploys and the one running; build its commit again to run it", RegistryKeepDeploys)
+// ErrRollbackImageRemoved refuses a redeploy whose image the sweep or the
+// quota has removed; the quota may take one inside RegistryKeepDeploys, so it promises no count.
+var ErrRollbackImageRemoved = errors.New("that deploy's image was removed to keep this project within its registry space; build its commit again to run it")
 
 // RegistryAdmin is the registry as the sweep uses it.
 type RegistryAdmin interface {
 	Repositories(ctx context.Context) ([]string, error)
 	Tags(ctx context.Context, repository string) ([]string, error)
 	Untag(ctx context.Context, repository, tag string) error
+	Blobs(ctx context.Context, repository, reference string) (map[string]int64, error)
 }
 
 // RegistrySweeper removes the push tags of built images nothing will run
@@ -132,28 +134,34 @@ func (s *RegistrySweeper) Sweep(ctx context.Context) (RegistrySweepReport, error
 
 // keep is the digests a repository must hold; empty for an app or project that is gone.
 func (s *RegistrySweeper) keep(ctx context.Context, repository string) (map[string]bool, error) {
+	keep := map[string]bool{}
+	app, err := s.repositoryApp(ctx, repository)
+	if err != nil || app == nil {
+		return keep, err
+	}
+	return keep, keepAppImages(keep, s.deploys, app)
+}
+
+// repositoryApp is the app a repository holds images of; nil for an app or project that is gone.
+func (s *RegistrySweeper) repositoryApp(ctx context.Context, repository string) (*apphost.App, error) {
 	projectID, appName, ok := appregistry.SplitRepository(repository)
 	if !ok {
 		return nil, appregistry.ErrInvalidName
 	}
-	keep := map[string]bool{}
 	live, err := s.live(ctx, projectID)
 	if err != nil || !live {
-		return keep, err
+		return nil, err
 	}
 	apps, err := s.apps.List(projectID)
 	if err != nil {
 		return nil, err
 	}
 	for _, app := range apps {
-		if app.Name != appName {
-			continue
-		}
-		if err := keepAppImages(keep, s.deploys, app); err != nil {
-			return nil, err
+		if app.Name == appName {
+			return app, nil
 		}
 	}
-	return keep, nil
+	return nil, nil
 }
 
 // keepAppImages adds what an app keeps: the image it names, its last

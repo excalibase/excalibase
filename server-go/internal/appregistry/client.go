@@ -2,6 +2,8 @@ package appregistry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 const (
@@ -154,4 +158,84 @@ func (c *Client) send(ctx context.Context, method, target string, grant Grant, b
 		req.Header.Set("Content-Type", contentType)
 	}
 	return c.http.Do(req)
+}
+
+// Blobs answers what an image holds: every blob and manifest under it, by
+// digest and size, so a project's images can be counted with shared layers once.
+func (c *Client) Blobs(ctx context.Context, repository, reference string) (map[string]int64, error) {
+	if _, _, ok := SplitRepository(repository); !ok {
+		return nil, ErrInvalidName
+	}
+	return c.blobsAt(ctx, Grant{Type: "repository", Name: repository, Actions: []string{"pull"}}, reference, true)
+}
+
+// blobsAt reads one manifest; an index's manifests are read once more, never deeper.
+func (c *Client) blobsAt(ctx context.Context, grant Grant, reference string, top bool) (map[string]int64, error) {
+	repository := grant.Name
+	if _, _, tag := ParsePushTag(reference); !tag && !digestPattern.MatchString(reference) {
+		return nil, fmt.Errorf("read %s: %q is not a push tag or a digest", repository, reference)
+	}
+	blobs := map[string]int64{}
+	body, digest, err := c.manifest(ctx, repository, reference, grant)
+	if err != nil {
+		return nil, err
+	}
+	blobs[digest] = int64(len(body))
+	var parsed struct {
+		Manifests []ocispec.Descriptor `json:"manifests"`
+		Config    ocispec.Descriptor   `json:"config"`
+		Layers    []ocispec.Descriptor `json:"layers"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("read %s@%s: %w", repository, reference, err)
+	}
+	if len(parsed.Manifests) > 0 && !top {
+		return nil, fmt.Errorf("read %s@%s: an index inside an index", repository, reference)
+	}
+	for _, child := range parsed.Manifests {
+		nested, err := c.blobsAt(ctx, grant, string(child.Digest), false)
+		if err != nil {
+			return nil, err
+		}
+		for d, size := range nested {
+			blobs[d] = size
+		}
+	}
+	for _, blob := range append([]ocispec.Descriptor{parsed.Config}, parsed.Layers...) {
+		if blob.Digest != "" {
+			blobs[string(blob.Digest)] = blob.Size
+		}
+	}
+	return blobs, nil
+}
+
+// manifestAccept is every manifest type an image the platform pushed may be.
+const manifestAccept = ocispec.MediaTypeImageManifest + ", " + ocispec.MediaTypeImageIndex +
+	", application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json"
+
+func (c *Client) manifest(ctx context.Context, repository, reference string, grant Grant) ([]byte, string, error) {
+	token, err := c.issuer.Mint("provisioning", []Grant{grant}, adminTokenTTL)
+	if err != nil {
+		return nil, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/v2/"+repository+"/manifests/"+reference, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", manifestAccept)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("read %s@%s: registry answered %d", repository, reference, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifest+1))
+	if err != nil || len(body) > maxManifest {
+		return nil, "", fmt.Errorf("read %s@%s: a manifest over %d bytes", repository, reference, maxManifest)
+	}
+	sum := sha256.Sum256(body)
+	return body, "sha256:" + hex.EncodeToString(sum[:]), nil
 }

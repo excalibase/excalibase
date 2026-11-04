@@ -441,7 +441,8 @@ func TestAppDeployHandler_Redeploy_ImageRemovedIsTheCallersError(t *testing.T) {
 	r := setupAppDeployRouter(t, deployer)
 
 	rec := doDeployRequest(t, r, http.MethodPost, "/api/projects/"+deployHandlerProject+"/apps/app-1/deploys/dep-1/redeploy")
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "removed from the registry") {
+	// The quota can remove an image inside the sweep's window, so the message promises no count.
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "within its registry space") || strings.Contains(rec.Body.String(), "last 10") {
 		t.Fatalf("status: got %d want 422, body=%s", rec.Code, rec.Body.String())
 	}
 }

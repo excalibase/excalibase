@@ -2,6 +2,8 @@ package appregistry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -161,5 +163,56 @@ func TestNewClient_RefusesWhatIsNotAnHTTPRegistry(t *testing.T) {
 	}
 	if _, err := NewClient(fmt.Sprintf("http://app-registry.ns.svc.cluster.local:%d/", 5000), issuer); err != nil {
 		t.Errorf("the chart's address: %v", err)
+	}
+}
+
+// manifestRegistry serves manifests by reference, as JSON bodies.
+type manifestRegistry map[string]string
+
+func (m manifestRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	reference := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+	body, ok := m[reference]
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	_, _ = w.Write([]byte(body))
+}
+
+func TestClient_BlobsCountsAnImageAndItsManifests(t *testing.T) {
+	layer := "sha256:" + strings.Repeat("1", 64)
+	config := "sha256:" + strings.Repeat("2", 64)
+	childManifest := `{"schemaVersion":2,"config":{"digest":"` + config + `","size":10},"layers":[{"digest":"` + layer + `","size":1000}]}`
+	childSum := sha256.Sum256([]byte(childManifest))
+	child := "sha256:" + hex.EncodeToString(childSum[:])
+	tag := "p1800000000-" + strings.Repeat("a", 64)
+	registry := manifestRegistry{tag: `{"schemaVersion":2,"manifests":[{"digest":"` + child + `","size":1}]}`, child: childManifest}
+	server := httptest.NewServer(registry)
+	t.Cleanup(server.Close)
+	issuer, _ := testIssuer(t)
+	client, _ := NewClient(server.URL, issuer)
+	blobs, err := client.Blobs(context.Background(), "proj-a/api", tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blobs[layer] != 1000 || blobs[config] != 10 || blobs[child] != int64(len(childManifest)) || len(blobs) != 4 {
+		t.Fatalf("%v", blobs)
+	}
+	registry[child] = `{"schemaVersion":2,"manifests":[{"digest":"` + child + `"}]}`
+	if _, err := client.Blobs(context.Background(), "proj-a/api", tag); err == nil {
+		t.Error("an index inside an index")
+	}
+	registry[tag] = `{"schemaVersion":2,"manifests":[{"digest":"../../_catalog"}]}`
+	if _, err := client.Blobs(context.Background(), "proj-a/api", tag); err == nil {
+		t.Error("a child reference that is not a digest")
+	}
+	for _, bad := range []struct{ repo, ref string }{{"../x", tag}, {"proj-a/api", "latest"}, {"proj-a/api", "sha256:" + strings.Repeat("9", 64)}} {
+		if _, err := client.Blobs(context.Background(), bad.repo, bad.ref); err == nil {
+			t.Errorf("%s@%s read", bad.repo, bad.ref)
+		}
+	}
+	registry[tag] = "{"
+	if _, err := client.Blobs(context.Background(), "proj-a/api", tag); err == nil {
+		t.Error("a manifest that is not JSON")
 	}
 }

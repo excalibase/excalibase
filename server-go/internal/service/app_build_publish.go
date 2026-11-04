@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"time"
 
@@ -23,6 +24,18 @@ type ImagePusher interface {
 	Push(ctx context.Context, repository string, layout *appregistry.Layout, at time.Time) (string, error)
 }
 
+// RegistryRoom is the project's share of the registry: Fits measures before
+// the push and removes nothing; MakeRoom removes after it, never the image pushed.
+type RegistryRoom interface {
+	Fits(ctx context.Context, projectID string, incoming map[string]int64, quota int64) error
+	MakeRoom(ctx context.Context, projectID, pushed string, quota int64) error
+}
+
+// ProjectLocker serializes a project's publishes across replicas; the returned function releases the lock.
+type ProjectLocker interface {
+	Lock(ctx context.Context, projectID string) (func(), error)
+}
+
 // AppImageDeployer is the deploy the publish hands the image to.
 type AppImageDeployer interface {
 	DeployImage(ctx context.Context, projectID, appID, image string, origin apphost.DeployOrigin) (*apphost.Deploy, error)
@@ -38,6 +51,8 @@ type AppBuildPublisher struct {
 	internal  *appregistry.Internal
 	collector AppImageCollector
 	pusher    ImagePusher
+	room      RegistryRoom
+	lock      ProjectLocker
 	deployer  AppImageDeployer
 	spoolDir  string
 	now       func() time.Time
@@ -52,8 +67,8 @@ type AppBuildResult struct {
 }
 
 // NewAppBuildPublisher spools archives under spoolDir (provisioning's own disk); each is removed after its push.
-func NewAppBuildPublisher(internal *appregistry.Internal, collector AppImageCollector, pusher ImagePusher, deployer AppImageDeployer, spoolDir string) *AppBuildPublisher {
-	return &AppBuildPublisher{internal: internal, collector: collector, pusher: pusher, deployer: deployer, spoolDir: spoolDir, now: time.Now}
+func NewAppBuildPublisher(internal *appregistry.Internal, collector AppImageCollector, pusher ImagePusher, room RegistryRoom, lock ProjectLocker, deployer AppImageDeployer, spoolDir string) *AppBuildPublisher {
+	return &AppBuildPublisher{internal: internal, collector: collector, pusher: pusher, room: room, lock: lock, deployer: deployer, spoolDir: spoolDir, now: time.Now}
 }
 
 // Publish collects, checks and pushes the build's image, then deploys it as a git build.
@@ -74,6 +89,23 @@ func (p *AppBuildPublisher) Publish(ctx context.Context, result AppBuildResult) 
 	if err != nil {
 		return nil, err
 	}
+	return p.pushAndDeploy(ctx, result, repository, layout)
+}
+
+// pushAndDeploy holds the project's lock from the quota measure to the room
+// made, so two publishes never pass the quota on one measure. Room is made
+// last: a push or deploy record that fails leaves every older image, and the
+// deploy recorded pending keeps the new one.
+func (p *AppBuildPublisher) pushAndDeploy(ctx context.Context, result AppBuildResult, repository string, layout *appregistry.Layout) (*apphost.Deploy, error) {
+	unlock, err := p.lock.Lock(ctx, result.ProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("lock the project's registry space: %w", err)
+	}
+	defer unlock()
+	quota := RegistryQuotaImages * result.MaxImage
+	if err := p.room.Fits(ctx, result.ProjectID, layout.Contents(), quota); err != nil {
+		return nil, err
+	}
 	digest, err := p.pusher.Push(ctx, repository, layout, p.now())
 	if err != nil {
 		return nil, fmt.Errorf("push the build's image: %w", err)
@@ -83,7 +115,15 @@ func (p *AppBuildPublisher) Publish(ctx context.Context, result AppBuildResult) 
 		return nil, err
 	}
 	origin := apphost.DeployOrigin{Actor: "git-build", Source: apphost.DeploySourceGitBuild, CommitSHA: result.CommitSHA}
-	return p.deployer.DeployImage(ctx, result.ProjectID, result.App.ID, image, origin)
+	deploy, err := p.deployer.DeployImage(ctx, result.ProjectID, result.App.ID, image, origin)
+	if err != nil {
+		return nil, err
+	}
+	// The quota is a soft bound: a room not made now is the next publish's or the sweep's.
+	if err := p.room.MakeRoom(ctx, result.ProjectID, digest, quota); err != nil {
+		log.Printf("app build %s: make room in the registry: %v", result.BuildID, err)
+	}
+	return deploy, nil
 }
 
 // collect streams the archive straight into the hostile reader: nothing is

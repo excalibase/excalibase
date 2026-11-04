@@ -185,3 +185,21 @@ func (l *Layout) Open(desc ocispec.Descriptor) (*os.File, error) {
 	}
 	return os.Open(filepath.Join(l.dir, strings.TrimPrefix(string(desc.Digest), "sha256:")))
 }
+
+// Contents is every blob and manifest the image holds, by digest and size.
+func (l *Layout) Contents() map[string]int64 {
+	contents := map[string]int64{}
+	for _, desc := range append(append([]ocispec.Descriptor{l.Root}, l.Children...), l.Blobs...) {
+		contents[string(desc.Digest)] = desc.Size
+	}
+	return contents
+}
+
+// Size is the bytes the image holds, each blob counted once.
+func (l *Layout) Size() int64 {
+	var total int64
+	for _, size := range l.Contents() {
+		total += size
+	}
+	return total
+}
