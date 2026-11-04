@@ -35,4 +35,13 @@ good FEATURE_AUTHHOOKS=true AUTH_HOOKS_DENY_CIDRS=203.0.113.7/32 >/dev/null || f
 good FEATURE_AUTHHOOKS=true 'AUTH_HOOKS_DENY_CIDRS=203.0.113.0/24, 2001:db8::7/128,' >/dev/null \
   || fail "a deny list with spaces and a trailing comma refused, which the chart accepts"
 good FEATURE_AUTHHOOKS=false >/dev/null || fail "auth hooks off needs no deny list"
+
+# EXC-658: the log forwarder's token unlocks every drain's key; checked when drains are on.
+good LOG_FORWARDER_TOKEN=weak >/dev/null || fail "the forwarder token was checked with drains off"
+good FEATURE_LOGDRAINS=true LOG_FORWARDER_TOKEN=${hex%?}4 >/dev/null || fail "a generated forwarder token refused"
+for bad in LOG_FORWARDER_TOKEN= LOG_FORWARDER_TOKEN=changeme LOG_FORWARDER_TOKEN=$hex; do
+  if good FEATURE_LOGDRAINS=true "$bad" >/dev/null 2>&1; then
+    fail "preflight accepted $bad with drains on"
+  fi
+done
 echo "preflight ok"

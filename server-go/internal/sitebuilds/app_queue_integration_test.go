@@ -104,7 +104,7 @@ func TestMigration_AppGitBuilds(t *testing.T) {
 func checkDownAndUp(t *testing.T, h *sitebuildstest.Harness) {
 	t.Helper()
 	read := func(direction string) string {
-		raw, err := os.ReadFile("../storage/postgres/migrations/000103_app_git_builds." + direction + ".sql")
+		raw, err := os.ReadFile("../storage/postgres/migrations/000104_app_git_builds." + direction + ".sql")
 		if err != nil {
 			t.Fatal(err)
 		}

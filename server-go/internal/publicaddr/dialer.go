@@ -24,18 +24,33 @@ const defaultDialTimeout = 10 * time.Second
 type Dialer struct {
 	resolver Resolver
 	deny     []netip.Prefix
-	timeout  time.Duration
+	// denySource adds a deny list read on every check, such as the host's own
+	// addresses on a single host; nil adds nothing.
+	denySource func() []netip.Prefix
+	timeout    time.Duration
 	// dialAddress connects to an already checked IP:port; tests replace it.
 	dialAddress func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
+// Option configures a Dialer when it is made.
+type Option func(*Dialer)
+
+// WithDenySource also refuses what source answers, read again on every
+// check, such as the host's own addresses on a single host.
+func WithDenySource(source func() []netip.Prefix) Option {
+	return func(d *Dialer) { d.denySource = source }
+}
+
 // NewDialer refuses ClassifyAddr's ranges plus deny (an install's cluster
 // ranges). A nil resolver is the system one.
-func NewDialer(resolver Resolver, deny []netip.Prefix) *Dialer {
+func NewDialer(resolver Resolver, deny []netip.Prefix, options ...Option) *Dialer {
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
 	d := &Dialer{resolver: resolver, deny: append([]netip.Prefix(nil), deny...), timeout: defaultDialTimeout}
+	for _, option := range options {
+		option(d)
+	}
 	socket := &net.Dialer{Timeout: d.timeout, Control: d.control}
 	d.dialAddress = socket.DialContext
 	return d
@@ -46,16 +61,18 @@ func (d *Dialer) Check(addr netip.Addr) error {
 	if err := ClassifyAddr(addr); err != nil {
 		return err
 	}
-	candidates := []netip.Addr{addr.Unmap()}
-	if embedded, ok := embeddedIPv4(addr.Unmap()); ok {
-		candidates = append(candidates, embedded)
-	}
-	for _, prefix := range d.deny {
-		for _, candidate := range candidates {
-			if prefix.Contains(candidate) {
-				return ErrInternalAddress
+	unmapped := addr.Unmap()
+	embedded, hasEmbedded := embeddedIPv4(unmapped)
+	denied := func(prefixes []netip.Prefix) bool {
+		for _, prefix := range prefixes {
+			if prefix.Contains(unmapped) || (hasEmbedded && prefix.Contains(embedded)) {
+				return true
 			}
 		}
+		return false
+	}
+	if denied(d.deny) || (d.denySource != nil && denied(d.denySource())) {
+		return ErrInternalAddress
 	}
 	return nil
 }
