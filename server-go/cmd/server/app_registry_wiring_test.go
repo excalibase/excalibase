@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil/appregistrytest"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
@@ -98,6 +100,24 @@ func TestNewInternalRegistry_OnlyWithTheFlagAndAHost(t *testing.T) {
 	}
 }
 
+// The sweep keeps a project's images until its deletion can no longer be cancelled.
+func TestProjectKept_UntilTheDeletionIsFinal(t *testing.T) {
+	instances := fakestore.NewInstances()
+	instances.Items["proj-live"] = &domain.DatabaseInstance{ProjectID: "proj-live", Status: string(domain.StatusActive)}
+	instances.Items["proj-dying"] = &domain.DatabaseInstance{ProjectID: "proj-dying", Status: string(domain.StatusDeleting)}
+	instances.Items["proj-grace"] = &domain.DatabaseInstance{ProjectID: "proj-grace", Status: string(domain.StatusPendingDeletion)}
+	kept := projectKept(instances)
+	for project, want := range map[string]bool{"proj-live": true, "proj-grace": true, "proj-dying": false, "proj-missing": false} {
+		if got, err := kept(context.Background(), project); err != nil || got != want {
+			t.Errorf("%s: %v %v, want %v", project, got, err, want)
+		}
+	}
+	instances.Err = errors.New("down")
+	if _, err := kept(context.Background(), "proj-live"); err == nil {
+		t.Error("a store that cannot answer is an error")
+	}
+}
+
 // The derived password opens nothing once the project is gone or being deleted.
 func TestProjectExists_OnlyALiveProject(t *testing.T) {
 	instances := fakestore.NewInstances()
@@ -137,4 +157,45 @@ func matrixRegistryToken(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	return token
+}
+
+// dbOnlyStore is a platform store whose handle opens no connection until used.
+type dbOnlyStore struct {
+	storage.PlatformStore
+	db *sql.DB
+}
+
+func (s dbOnlyStore) DB() *sql.DB { return s.db }
+
+func TestStartRegistrySweeper_OnlyWhereTheRegistryIssues(t *testing.T) {
+	guard, err := appregistry.NewInternal(appregistrytest.Host, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("postgres", "postgres://unused.invalid/db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := dbOnlyStore{db: db}
+	// With a store and a reachable-looking address, only the CanIssue gate keeps this a no-op.
+	if stop, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: "ftp://zot"}}, store, nil, guard); err != nil || stop == nil {
+		t.Fatalf("a guard only registry sweeps nothing: %v", err)
+	}
+	internal := appregistrytest.New(t)
+	if _, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: "ftp://zot"}}, store, nil, internal); err == nil {
+		t.Error("a registry address provisioning cannot call")
+	}
+	asked := make(chan struct{}, 1)
+	zot := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		asked <- struct{}{}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(zot.Close)
+	stop, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: zot.URL}}, store, fakestore.NewInstances(), internal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-asked
+	stop()
 }

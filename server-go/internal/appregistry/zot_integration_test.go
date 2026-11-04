@@ -91,7 +91,13 @@ func send(t *testing.T, method, target, token, contentType string, body []byte) 
 // push uploads a one-blob image and answers the status of the last call that did not succeed, or 201.
 func push(t *testing.T, base, repository, token string) (string, int) {
 	t.Helper()
-	config := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
+	return pushAs(t, base, repository, token, "amd64", func(digest string) string { return digest })
+}
+
+// pushAs pushes an image of an architecture under the reference reference(digest) names.
+func pushAs(t *testing.T, base, repository, token, arch string, reference func(string) string) (string, int) {
+	t.Helper()
+	config := []byte(`{"architecture":"` + arch + `","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
 	start := send(t, http.MethodPost, base+"/v2/"+repository+"/blobs/uploads/", token, "", nil)
 	if start.StatusCode != http.StatusAccepted {
 		return "", start.StatusCode
@@ -105,7 +111,7 @@ func push(t *testing.T, base, repository, token string) (string, int) {
 		"config": map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": digestOf(config), "size": len(config)},
 		"layers": []any{}})
 	digest := digestOf(manifest)
-	resp := send(t, http.MethodPut, base+"/v2/"+repository+"/manifests/"+digest, token, "application/vnd.oci.image.manifest.v1+json", manifest)
+	resp := send(t, http.MethodPut, base+"/v2/"+repository+"/manifests/"+reference(digest), token, "application/vnd.oci.image.manifest.v1+json", manifest)
 	return digest, resp.StatusCode
 }
 
@@ -161,5 +167,64 @@ func TestZot_TakesOurTokensForTheirOwnProjectOnly(t *testing.T) {
 	forged, _ := stranger.Mint("proj-a", []Grant{{Type: "repository", Name: "proj-a/api", Actions: []string{"pull"}}}, time.Minute)
 	if resp := send(t, http.MethodGet, manifest, forged, accept, nil); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("a token signed by another key: %d", resp.StatusCode)
+	}
+}
+
+// The sweep's client reads the real catalog and tags, and removing an
+// image's last push tag leaves it to zot's GC while a second tag keeps it.
+func TestZot_TheClientListsAndUntags(t *testing.T) {
+	internal, issuer := testInternal(t, fixedGenerations{})
+	base := startZot(t, issuer)
+	token, _ := issuer.Mint("build", []Grant{{Type: "repository", Name: "proj-a/api", Actions: []string{"pull", "push"}}}, 10*time.Minute)
+	tagAt := func(at time.Time) func(string) string {
+		return func(digest string) string {
+			tag, err := PushTag(digest, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return tag
+		}
+	}
+	old := time.Now().Add(-72 * time.Hour)
+	digest, code := pushAs(t, base, "proj-a/api", token, "amd64", tagAt(old))
+	if code != http.StatusCreated {
+		t.Fatalf("push: %d", code)
+	}
+	pushAs(t, base, "proj-a/api", token, "amd64", tagAt(time.Now()))
+	client, err := internal.Client(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	repos, err := client.Repositories(ctx)
+	if err != nil || len(repos) != 1 || repos[0] != "proj-a/api" {
+		t.Fatalf("catalog %v %v", repos, err)
+	}
+	tags, err := client.Tags(ctx, "proj-a/api")
+	if err != nil || len(tags) != 2 {
+		t.Fatalf("tags %v %v", tags, err)
+	}
+	oldTag, _ := PushTag(digest, old)
+	if err := client.Untag(ctx, "proj-a/api", oldTag); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Untag(ctx, "proj-a/api", oldTag); err != nil {
+		t.Errorf("removing what is gone: %v", err)
+	}
+	accept := "application/vnd.oci.image.manifest.v1+json"
+	if resp := send(t, http.MethodGet, base+"/v2/proj-a/api/manifests/"+digest, token, accept, nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("the image's newer tag keeps it: %d", resp.StatusCode)
+	}
+	if tags, _ := client.Tags(ctx, "proj-a/api"); len(tags) != 1 {
+		t.Errorf("tags after the untag: %v", tags)
+	}
+	// The catalog grant reads the catalog only, and a project's pull token never reads it.
+	catalog, _ := issuer.Mint("provisioning", []Grant{{Type: "repository", Name: "", Actions: []string{"pull"}}}, time.Minute)
+	if resp := send(t, http.MethodGet, base+"/v2/proj-a/api/manifests/"+digest, catalog, accept, nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("the catalog token pulls: %d", resp.StatusCode)
+	}
+	pull, _ := issuer.Mint("proj-a", []Grant{{Type: "repository", Name: "proj-a/api", Actions: []string{"pull"}}}, time.Minute)
+	if resp := send(t, http.MethodGet, base+"/v2/_catalog", pull, "", nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a project's token reads the catalog: %d", resp.StatusCode)
 	}
 }
