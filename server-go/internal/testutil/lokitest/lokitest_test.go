@@ -1,7 +1,10 @@
 package lokitest
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,5 +103,36 @@ func TestWaitAcceptsPush_FailsAtOnceWhenLokiIsUnreachable(t *testing.T) {
 	WaitAcceptsPush(rec, url, 10*time.Second)
 	if rec.failure == "" || time.Since(start) > 5*time.Second {
 		t.Fatalf("failure %q after %s", rec.failure, time.Since(start))
+	}
+}
+
+type fakeLogs struct {
+	text string
+	err  error
+}
+
+func (f fakeLogs) Logs(context.Context) (io.ReadCloser, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return io.NopCloser(strings.NewReader(f.text)), nil
+}
+
+func TestTail_KeepsTheEndOfLokisOwnLog(t *testing.T) {
+	text := "level=warn msg=\"disk usage exceeded threshold, throttling writes\"\n" + strings.Repeat("noise\n", 5000)
+	got := Tail(fakeLogs{text: text})
+	if len(got) > maxLog || !strings.HasSuffix(got, "noise") {
+		t.Fatalf("len %d, ends %q", len(got), got[len(got)-10:])
+	}
+	short := "level=warn msg=\"disk usage exceeded threshold, throttling writes\""
+	if got := Tail(fakeLogs{text: short}); got != short {
+		t.Errorf("short log = %q", got)
+	}
+}
+
+func TestTail_SaysSoWhenLokisLogCannotBeRead(t *testing.T) {
+	got := Tail(fakeLogs{err: errors.New("container is gone")})
+	if !strings.Contains(got, "container is gone") {
+		t.Errorf("got %q", got)
 	}
 }
