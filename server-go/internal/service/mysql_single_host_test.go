@@ -165,7 +165,7 @@ func (h *hostEngine) CopyFromContainer(_ context.Context, id, src string) (io.Re
 	return io.NopCloser(tarOf(src[strings.LastIndex(src, "/")+1:], body)), nil
 }
 
-func (h *hostEngine) CreateVolume(_ context.Context, name string) error {
+func (h *hostEngine) CreateVolume(_ context.Context, name, _ string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.volumes[name] = true

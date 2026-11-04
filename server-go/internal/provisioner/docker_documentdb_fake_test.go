@@ -32,8 +32,9 @@ type fakeEngine struct {
 	// portBusy is how many starts still fail as a just-freed host port does.
 	portBusy int
 	clock    time.Time
-	// volumes are the named volumes that exist.
-	volumes map[string]bool
+	// volumes are the named volumes that exist; volumeOwners the project each names.
+	volumes      map[string]bool
+	volumeOwners map[string]string
 }
 
 type fakeContainer struct {
@@ -210,11 +211,15 @@ func (f *fakeEngine) indexOf(prefix string) int {
 	return -1
 }
 
-func (f *fakeEngine) CreateVolume(_ context.Context, name string) error {
+func (f *fakeEngine) CreateVolume(_ context.Context, name, projectID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "volume:"+name)
 	f.volumes[name] = true
+	if f.volumeOwners == nil {
+		f.volumeOwners = map[string]string{}
+	}
+	f.volumeOwners[name] = projectID
 	return nil
 }
 

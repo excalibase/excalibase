@@ -37,7 +37,8 @@ type HostPortAllocator interface {
 
 // VolumeClient holds named volumes, which outlive the containers using them.
 type VolumeClient interface {
-	CreateVolume(ctx context.Context, name string) error
+	// CreateVolume labels the volume as projectID's.
+	CreateVolume(ctx context.Context, name, projectID string) error
 	RemoveVolume(ctx context.Context, name string) error
 }
 
@@ -123,7 +124,7 @@ func (p *DockerMySQLProvisioner) StartOnVolume(ctx context.Context, projectID, i
 	if err != nil {
 		return "", err
 	}
-	if err := volumes.CreateVolume(ctx, spec.DataVolumeName); err != nil {
+	if err := volumes.CreateVolume(ctx, spec.DataVolumeName, projectID); err != nil {
 		return "", err
 	}
 	if _, err := p.docker.CreateContainerSpec(ctx, spec); err != nil {

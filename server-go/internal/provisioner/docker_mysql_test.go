@@ -288,3 +288,19 @@ func TestDockerMySQLForgetEndUserSessions(t *testing.T) {
 		t.Fatal("a refused statement was reported done")
 	}
 }
+
+// EXC-682: the engine proxy mounts a volume only into a container of the
+// project the volume names, so both carry the project.
+func TestDockerMySQLVolumeAndContainerNameTheirProject(t *testing.T) {
+	engine := newFakeEngine()
+	image, _ := config.MySQLImage(config.DefaultMySQLVersion())
+	if _, err := newTestDockerMySQL(engine).StartOnVolume(context.Background(), "p4", image, testTier); err != nil {
+		t.Fatalf("StartOnVolume: %v", err)
+	}
+	if owner := engine.volumeOwners[MySQLVolumeName("p4")]; owner != "p4" {
+		t.Fatalf("volume owner = %q", owner)
+	}
+	if spec := engine.specs["excalibase-p4-mysql"]; spec.Project != "p4" {
+		t.Fatalf("container project = %q", spec.Project)
+	}
+}

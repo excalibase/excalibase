@@ -140,8 +140,7 @@ func TestRealEngineTakesTheSDKCreateThroughTheProxy(t *testing.T) {
 	ctx := context.Background()
 	name := "excalibase-it681-sdk-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	remove(t, direct, name)
-	volume := name + "-data"
-	t.Cleanup(func() { _ = direct.VolumeRemove(context.Background(), volume, true) })
+	volume := ownedVolume(t, direct, name+"-data", "p1", "a1")
 	host := &container.HostConfig{
 		Mounts:       []mount.Mount{{Type: mount.TypeVolume, Source: volume, Target: "/data", ReadOnly: true}},
 		Tmpfs:        map[string]string{"/tmp": "rw,noexec,size=1m"},
@@ -151,7 +150,8 @@ func TestRealEngineTakesTheSDKCreateThroughTheProxy(t *testing.T) {
 		SecurityOpt:  []string{"no-new-privileges"},
 	}
 	config := &container.Config{Image: itBusybox, Cmd: []string{"sh", "-c", "echo a && echo b > /tmp/x"},
-		Env: []string{"A=<b>&c"}, Labels: map[string]string{ManagedLabel: "true"}, ExposedPorts: nat.PortSet{"8080/tcp": {}}}
+		Env: []string{"A=<b>&c"}, Labels: map[string]string{ManagedLabel: "true", "excalibase.project": "p1", "excalibase.app": "a1"},
+		ExposedPorts: nat.PortSet{"8080/tcp": {}}}
 	if _, err := proxied.ContainerCreate(ctx, config, host, nil, nil, name); err != nil {
 		t.Fatalf("SDK create through the proxy: %v", err)
 	}

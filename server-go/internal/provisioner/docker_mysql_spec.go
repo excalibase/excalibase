@@ -78,6 +78,7 @@ func MySQLContainerSpec(projectID, image string, plan config.TierConfig) (Contai
 		Limits:         limits,
 		DataVolume:     MySQLDataDir,
 		DataVolumeName: MySQLVolumeName(projectID),
+		Project:        projectID,
 	}, nil
 }
 

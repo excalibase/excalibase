@@ -172,7 +172,7 @@ func (r *RealDockerClient) CreateContainerSpec(ctx context.Context, spec Contain
 		Entrypoint:   spec.Entrypoint,
 		Cmd:          spec.Cmd,
 		ExposedPorts: exposed,
-		Labels:       map[string]string{excalibaseLabel: "true"},
+		Labels:       containerLabels(spec),
 		StopSignal:   spec.StopSignal,
 		User:         spec.User,
 	}
@@ -243,9 +243,22 @@ func (r *RealDockerClient) RemoveContainer(ctx context.Context, id string) error
 	return nil
 }
 
-// CreateVolume creates a managed local volume; an existing one is kept.
-func (r *RealDockerClient) CreateVolume(ctx context.Context, name string) error {
-	if _, err := r.c.VolumeCreate(ctx, volume.CreateOptions{Name: name, Labels: map[string]string{excalibaseLabel: "true"}}); err != nil {
+// projectLabel names the project a container or volume belongs to; the engine
+// proxy mounts a volume only into a container of the same project (EXC-682).
+const projectLabel = "excalibase.project"
+
+func containerLabels(spec ContainerSpec) map[string]string {
+	labels := map[string]string{excalibaseLabel: "true"}
+	if spec.Project != "" {
+		labels[projectLabel] = spec.Project
+	}
+	return labels
+}
+
+// CreateVolume creates the project's managed local volume; an existing one is kept.
+func (r *RealDockerClient) CreateVolume(ctx context.Context, name, projectID string) error {
+	labels := map[string]string{excalibaseLabel: "true", projectLabel: projectID}
+	if _, err := r.c.VolumeCreate(ctx, volume.CreateOptions{Name: name, Driver: "local", Labels: labels}); err != nil {
 		return fmt.Errorf("create volume %s: %w", name, err)
 	}
 	return nil
