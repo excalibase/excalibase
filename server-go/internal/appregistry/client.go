@@ -134,15 +134,24 @@ func (c *Client) page(ctx context.Context, target string, grant Grant, key strin
 	return body.Repositories, true, nil
 }
 
-func (c *Client) do(ctx context.Context, method, path string, grant Grant) (*http.Response, error) {
+func (c *Client) do(ctx context.Context, method, target string, grant Grant) (*http.Response, error) {
+	return c.send(ctx, method, target, grant, nil, 0, "")
+}
+
+// send makes one request with a token for grant alone; target is a path on the registry.
+func (c *Client) send(ctx context.Context, method, target string, grant Grant, body io.Reader, size int64, contentType string) (*http.Response, error) {
 	token, err := c.issuer.Mint("provisioning", []Grant{grant}, adminTokenTTL)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
+	req, err := http.NewRequestWithContext(ctx, method, c.base+target, body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	if body != nil {
+		req.ContentLength = size
+		req.Header.Set("Content-Type", contentType)
+	}
 	return c.http.Do(req)
 }

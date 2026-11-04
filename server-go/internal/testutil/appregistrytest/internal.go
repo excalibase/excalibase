@@ -2,11 +2,16 @@
 package appregistrytest
 
 import (
+	"archive/tar"
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
+	"strconv"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
@@ -47,3 +52,32 @@ func New(t testing.TB) *appregistry.Internal {
 type Unrotated struct{}
 
 func (Unrotated) PullGeneration(string) (int, error) { return 0, nil }
+
+// Archive is a build's image archive: an OCI layout tar holding one image.
+func Archive(t testing.TB) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	add := func(name string, body []byte) {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write(body)
+	}
+	digestOf := func(body []byte) string {
+		sum := sha256.Sum256(body)
+		return hex.EncodeToString(sum[:])
+	}
+	config := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:` +
+		digestOf(config) + `","size":` + strconv.Itoa(len(config)) + `},"layers":[]}`)
+	add("oci-layout", []byte(`{"imageLayoutVersion":"1.0.0"}`))
+	add("index.json", []byte(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:`+
+		digestOf(manifest)+`","size":`+strconv.Itoa(len(manifest))+`}]}`))
+	add("blobs/sha256/"+digestOf(config), config)
+	add("blobs/sha256/"+digestOf(manifest), manifest)
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
