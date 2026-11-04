@@ -6,7 +6,7 @@
 #   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman] [--manual-unseal]
 #             [--apps] [--app-domain apps.example.com] [--app-sandbox runsc|none] [--documentdb] [--host-metrics]
 #             [--host-logs] [--log-drains]
-#             [--auth-hooks]
+#             [--auth-hooks] [--no-host-firewall]
 #
 # Studio:     https://studio.<domain>
 # Data plane: https://api.<domain>   (/{projectId}/graphql, /{projectId}/api/v1, /auth)
@@ -31,6 +31,10 @@
 # (compose profile logdrains). Reads what --host-logs stores, so it turns that on too. The
 # forwarder refuses private ranges and the host's own addresses; behind NAT, add the public
 # address to LOG_FORWARDER_EXTRA_DENY_CIDRS.
+# --no-host-firewall: on Docker, the host-firewall service (compose profile hostfirewall)
+# drops new connections from the platform's bridges to this host, so a tenant database
+# cannot reach a host service listening on every address; leave it off to manage that
+# yourself (iptables -I INPUT -i exb-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP).
 # A public domain gets Let's Encrypt certificates for the admin address;
 # localhost gets certificates from the edge's own CA.
 set -eu
@@ -54,6 +58,7 @@ documentdb=
 host_metrics=
 host_logs=
 log_drains=
+host_firewall=1
 app_domain=
 app_sandbox=runsc
 auth_hooks=
@@ -72,10 +77,10 @@ while [ $# -gt 0 ]; do
     --documentdb) documentdb="DOCUMENTDB_ENABLED=true"; shift ;;
     --host-metrics) host_metrics="FEATURE_HOSTMETRICS=true
 HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev"; shift ;;
-    --host-logs) host_logs="FEATURE_HOSTLOGS=true
-COMPOSE_PROFILES=hostlogs"; shift ;;
+    --host-logs) host_logs="FEATURE_HOSTLOGS=true"; shift ;;
     --auth-hooks) auth_hooks=1; shift ;;
     --log-drains) log_drains=1; shift ;;
+    --no-host-firewall) host_firewall=; shift ;;
     --app-domain) app_domain=$2; shift 2 ;;
     --app-sandbox) app_sandbox=$2; shift 2 ;;
     *) usage ;;
@@ -190,8 +195,7 @@ fi
 # mounted only where the host has one.
 drains=
 if [ -n "$log_drains" ]; then
-  host_logs="FEATURE_HOSTLOGS=true
-COMPOSE_PROFILES=hostlogs,logdrains"
+  host_logs="FEATURE_HOSTLOGS=true"
   inet6=${HOST_IF_INET6:-/proc/1/net/if_inet6}
   [ -r "$inet6" ] || inet6=/dev/null
   # A host behind NAT does not hold the address its names point at: refuse those too.
@@ -228,7 +232,13 @@ ENGINE_SOCKET_GID=$engine_socket_gid
 APP_DOMAIN=$app_domain
 APP_SANDBOX_RUNTIME=$app_sandbox
 ENV
-for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$hooks" "$drains"; do
+# Rootless Podman's bridges are in the user's own namespace: no host firewall to set.
+profiles=
+[ "$engine" = docker ] && [ -n "$host_firewall" ] && profiles=hostfirewall
+[ -n "$host_logs" ] && profiles=${profiles:+$profiles,}hostlogs
+[ -n "$log_drains" ] && profiles=${profiles:+$profiles,}logdrains
+profiles=${profiles:+COMPOSE_PROFILES=$profiles}
+for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$profiles" "$hooks" "$drains"; do
   [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
 done
 chmod 600 "$env_file"

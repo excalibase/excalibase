@@ -34,16 +34,21 @@ sh "$DIR/../init.sh" --env-file "$WORK/metrics.env" --domain example.com --admin
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-metrics >/dev/null
 grep -q '^FEATURE_HOSTMETRICS=true$' "$WORK/metrics.env" && grep -q '^HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev$' "$WORK/metrics.env" \
   || fail "--host-metrics not written"
-! grep -q '^FEATURE_HOSTLOGS\|^COMPOSE_PROFILES' "$WORK/.env" || fail "stored logs on without --host-logs"
+! grep -q '^FEATURE_HOSTLOGS' "$WORK/.env" || fail "stored logs on without --host-logs"
+# EXC-683: Docker installs guard the host from the platform's bridges unless told not to.
+grep -qx 'COMPOSE_PROFILES=hostfirewall' "$WORK/.env" || fail "a Docker install does not run the host firewall"
+sh "$DIR/../init.sh" --env-file "$WORK/nofw.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --no-host-firewall >/dev/null
+! grep -q '^COMPOSE_PROFILES' "$WORK/nofw.env" || fail "--no-host-firewall still runs it"
 sh "$DIR/../init.sh" --env-file "$WORK/logs.env" --domain example.com --admin-email me@example.com \
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-logs >/dev/null
-grep -q '^FEATURE_HOSTLOGS=true$' "$WORK/logs.env" && grep -q '^COMPOSE_PROFILES=hostlogs$' "$WORK/logs.env" \
+grep -q '^FEATURE_HOSTLOGS=true$' "$WORK/logs.env" && grep -q '^COMPOSE_PROFILES=hostfirewall,hostlogs$' "$WORK/logs.env" \
   || fail "--host-logs not written"
 ! grep -q '^FEATURE_LOGDRAINS\|^LOG_FORWARDER' "$WORK/.env" "$WORK/logs.env" || fail "log drains on without --log-drains"
 printf '#!/bin/sh\ncase $1 in api.*) echo "203.0.113.7 STREAM $1"; echo "2001:db8::7 STREAM $1" ;; esac\n' > "$WORK/resolve"; chmod +x "$WORK/resolve"
 RESOLVE_HOSTS="$WORK/resolve" HOST_IF_INET6="$WORK/no-ipv6" sh "$DIR/../init.sh" --env-file "$WORK/drains.env" --domain example.com --admin-email me@example.com \
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --log-drains >/dev/null
-for line in FEATURE_LOGDRAINS=true FEATURE_HOSTLOGS=true COMPOSE_PROFILES=hostlogs,logdrains HOST_IF_INET6_SOURCE=/dev/null; do
+for line in FEATURE_LOGDRAINS=true FEATURE_HOSTLOGS=true COMPOSE_PROFILES=hostfirewall,hostlogs,logdrains HOST_IF_INET6_SOURCE=/dev/null; do
   grep -qx "$line" "$WORK/drains.env" || fail "--log-drains did not write $line"
 done
 grep -qx 'LOG_FORWARDER_EXTRA_DENY_CIDRS=2001:db8::7/128,203.0.113.7/32' "$WORK/drains.env" || fail "--log-drains did not refuse the addresses the install's names resolve to"
@@ -81,6 +86,7 @@ host sh "$DIR/../init.sh" --env-file "$WORK/pm.env" --domain localhost --admin-e
 pm() { sed -n "s/^$1=//p" "$WORK/pm.env"; }
 [ "$(pm ENGINE_SOCKET_UID):$(pm ENGINE_SOCKET_GID)" = 0:0 ] || fail "podman proxy is not the container root (the socket owner)"
 [ "$(pm EDGE_HTTP_PORT):$(pm EDGE_HTTPS_PORT)" = 8080:8443 ] || fail "rootless edge not moved above the privileged ports"
+! grep -q '^COMPOSE_PROFILES' "$WORK/pm.env" || fail "rootless Podman runs a host firewall it cannot set"
 [ "$(pm FILES_PUBLIC_URL)" = https://files.localhost:8443 ] || fail "file links do not carry the moved edge port"
 if host sh "$DIR/../init.sh" --env-file "$WORK/pm2.env" --domain example.com --admin-email me@example.com \
   --engine podman --engine-socket "$WORK/podman.sock" >"$WORK/out" 2>&1; then

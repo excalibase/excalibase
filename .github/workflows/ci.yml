@@ -106,7 +106,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Hardening, init, preflight and bootstrap
         run: |
-          for t in single-host edge-listener init-env preflight bootstrap; do
+          for t in single-host edge-listener init-env preflight bootstrap host-firewall; do
             sh deploy/single-host/tests/$t.sh
           done
       - name: Sites deploy upload on the edge (real Caddy)

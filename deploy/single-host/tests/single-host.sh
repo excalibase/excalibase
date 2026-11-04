@@ -53,6 +53,38 @@ echo "$hostmetrics" | grep -q 'FEATURE_HOSTMETRICS: "true"' \
   || { echo "FEATURE_HOSTMETRICS=true does not reach provisioning" >&2; exit 1; }
 echo "$hostmetrics" | grep -q 'source: /proc/1/net/dev' \
   || { echo "the host's network counters are not mounted with --host-metrics" >&2; exit 1; }
+# EXC-683: every platform bridge has a fixed exb-* name the host firewall matches,
+# and the firewall runs only with its profile, alone in the host's network
+# namespace with nothing but the capabilities iptables needs.
+render | python3 -c '
+import sys, yaml
+doc = yaml.safe_load(sys.stdin)
+names = {}
+for key, net in doc["networks"].items():
+    bridge = (net.get("driver_opts") or {}).get("com.docker.network.bridge.name", "")
+    if not bridge.startswith("exb-") or len(bridge) > 15:
+        sys.exit(f"network {key} bridge {bridge!r}: want exb-*, at most 15 characters")
+    if bridge in names:
+        sys.exit(f"networks {names[bridge]} and {key} share bridge {bridge}")
+    names[bridge] = key
+if "host-firewall" in doc["services"]:
+    sys.exit("the host firewall runs without the hostfirewall profile")
+'
+render COMPOSE_PROFILES=hostfirewall | python3 -c '
+import sys, yaml
+fw = yaml.safe_load(sys.stdin)["services"].get("host-firewall") or sys.exit("no host firewall with its profile")
+if fw.get("network_mode") != "host":
+    sys.exit("host firewall must run in the host network namespace, got %r" % fw.get("network_mode"))
+if sorted(fw.get("cap_add") or []) != ["NET_ADMIN", "NET_RAW"] or fw.get("cap_drop") != ["ALL"]:
+    sys.exit("host firewall capabilities %r / %r" % (fw.get("cap_add"), fw.get("cap_drop")))
+if fw.get("privileged") or fw.get("ports"):
+    sys.exit("host firewall is privileged or published")
+sources = [v.get("source", "") for v in fw.get("volumes") or []]
+if len(sources) != 1 or not sources[0].endswith("/host-firewall.sh") or not fw["volumes"][0].get("read_only"):
+    sys.exit(f"host firewall mounts {sources}, want only its script, read-only")
+if "no-new-privileges:true" not in (fw.get("security_opt") or []):
+    sys.exit("host firewall may gain privileges")
+'
 # Stored log search (EXC-672): Loki only with the profile, on a network only provisioning shares.
 render | python3 -c 'import sys,yaml; sys.exit("loki runs without the hostlogs profile" if "loki" in yaml.safe_load(sys.stdin)["services"] else 0)'
 render COMPOSE_PROFILES=hostlogs FEATURE_HOSTLOGS=true | python3 -c '
