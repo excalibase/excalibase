@@ -186,3 +186,29 @@ func TestLoadConfigRefusesAMonitoredContainerThatIsNotAName(t *testing.T) {
 		}
 	}
 }
+
+// EXC-683: the proxy writes down the platform networks' bridges for the host firewall.
+func TestLoadConfigReadsTheBridgesTheFirewallNeeds(t *testing.T) {
+	cfg, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants",
+		"PROXY_BRIDGE_NETWORKS": "excalibase-tenants, excalibase-platform", "PROXY_BRIDGES_FILE": "/var/lib/excalibase-bridges/networks"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.bridgeNetworks, []string{"excalibase-tenants", "excalibase-platform"}) || cfg.bridgesFile != "/var/lib/excalibase-bridges/networks" {
+		t.Fatalf("bridges %v file %q", cfg.bridgeNetworks, cfg.bridgesFile)
+	}
+}
+
+func TestLoadConfigRefusesHalfABridgesSetting(t *testing.T) {
+	for _, settings := range []map[string]string{
+		{"PROXY_BRIDGE_NETWORKS": "excalibase-tenants"},
+		{"PROXY_BRIDGES_FILE": "/var/lib/excalibase-bridges/networks"},
+		{"PROXY_BRIDGE_NETWORKS": "excalibase tenants", "PROXY_BRIDGES_FILE": "/var/lib/excalibase-bridges/networks"},
+		{"PROXY_BRIDGE_NETWORKS": "excalibase-tenants", "PROXY_BRIDGES_FILE": "relative/networks"},
+	} {
+		settings["PROXY_NETWORKS"] = "excalibase-tenants"
+		if _, err := loadConfig(env(settings)); err == nil {
+			t.Errorf("%v accepted", settings)
+		}
+	}
+}

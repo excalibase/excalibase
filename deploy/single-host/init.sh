@@ -32,9 +32,12 @@
 # forwarder refuses private ranges and the host's own addresses; behind NAT, add the public
 # address to LOG_FORWARDER_EXTRA_DENY_CIDRS.
 # --no-host-firewall: on Docker, the host-firewall service (compose profile hostfirewall)
-# drops new connections from the platform's bridges to this host, so a tenant database
-# cannot reach a host service listening on every address; leave it off to manage that
-# yourself (iptables -I INPUT -i exb-+ -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP).
+# drops new connections from the platform's bridges to this host, and forwarded traffic
+# from the tenants' bridge to 169.254.0.0/16 (cloud metadata) and private ranges, so a
+# tenant database reaches neither a host service nor the LAN. Leave it off to manage that
+# yourself, for each bridge (docker network inspect: br-<first 12 of the id>):
+# iptables -I INPUT -i <bridge> -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP,
+# and in DOCKER-USER for the tenants' bridge, the same toward those ranges.
 # A public domain gets Let's Encrypt certificates for the admin address;
 # localhost gets certificates from the edge's own CA.
 set -eu

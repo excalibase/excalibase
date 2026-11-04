@@ -14,6 +14,9 @@ x-edge-aliases: &edge_aliases studio.${EXCALIBASE_DOMAIN:?run ./init.sh first},a
 # provisioning starts it and the engine proxy admits this image, and only it,
 # to the bus network NATS listens on.
 x-watcher-image: &watcher_image docker.io/excalibase/excalibase-watcher-go@sha256:7b2f9feb21b2a92b34c3f7b136399c619d460bf5d296215b8662a7a334126d9e
+# The networks the host firewall guards (EXC-683): their bridges drop new
+# connections to the host; the tenants' also drop metadata and private ranges.
+x-bridge-networks: &bridge_networks excalibase-platform,excalibase-engine,excalibase-tenants,excalibase-edge,excalibase-dataplane,excalibase-metrics,excalibase-cdc,excalibase-logs,excalibase-drains,excalibase-drains-out,excalibase-egress
 # The platform's long-running containers host monitoring reads (EXC-670): the
 # proxy admits their stats and state, by these exact names, and nothing else of theirs.
 x-platform-containers: &platform_containers excalibase-postgres,excalibase-nats,excalibase-objectstore,excalibase-engine-proxy,excalibase-provisioning,excalibase-studio,excalibase-auth,excalibase-graphql,excalibase-edge
@@ -213,8 +216,12 @@ services:
       PROXY_CDC_IMAGES: *watcher_image
       PROXY_NETNS_JOIN_IMAGES: ${DOCUMENTDB_ENABLED:+ghcr.io/documentdb/documentdb-kubernetes-operator/gateway@sha256:8a5c7e533dc0fbed8ed780b22e31001a6b12ae0eb670f4aac62c1ded782742ed}
       PROXY_STATS_CONTAINERS: *platform_containers
+      # Each platform network's real bridge, for the host firewall (EXC-683).
+      PROXY_BRIDGE_NETWORKS: *bridge_networks
+      PROXY_BRIDGES_FILE: /var/lib/excalibase-bridges/networks
     volumes:
       - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
+      - bridges:/var/lib/excalibase-bridges
     read_only: true
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2375/_ping"]
@@ -708,24 +715,45 @@ services:
 
   # EXC-683 (init.sh adds the profile on Docker; --no-host-firewall leaves it off):
   # the platform's bridges have an address on the host, so a tenant database could
-  # reach a host service listening on every address. This drops new connections
-  # from the exb-* bridges to the host, DNS excepted, and keeps the rule in place.
+  # reach a host service listening on every address, and the tenant network routes
+  # to the cloud's metadata service and the LAN. This drops new connections from
+  # every platform bridge to the host (DNS excepted) and, from the tenants' bridge,
+  # forwarded traffic to 169.254.0.0/16 and private ranges other than the
+  # platform's own subnets; it keeps them in place and is healthy only while they
+  # are. Bridges are read from what the engine proxy writes, never guessed.
+  # The image is the release's own, iptables included: nothing downloaded at start.
   # Rootless Podman needs none: its bridges live in the user's own namespace.
   host-firewall:
-    image: docker.io/library/alpine:3.20
+    image: docker.io/excalibase/provisioning:${TAG:-1.5.0}
     container_name: excalibase-host-firewall
     profiles: ["hostfirewall"]
-    command: ["sh", "-c", "apk add --no-cache -q iptables ip6tables && exec sh /host-firewall.sh"]
+    entrypoint: ["sh", "/host-firewall.sh"]
+    user: "0:0"
     network_mode: host
+    environment:
+      HOST_FIREWALL_NETWORKS: *bridge_networks
+      HOST_FIREWALL_TENANT_NETWORKS: excalibase-tenants
+      HOST_FIREWALL_BRIDGES_FILE: /var/lib/excalibase-bridges/networks
     volumes:
       - ./host-firewall.sh:/host-firewall.sh:ro,z
-    # Not read-only: it installs iptables when it starts.
+      - bridges:/var/lib/excalibase-bridges:ro
+    read_only: true
     mem_limit: 64m
     pids_limit: 32
     <<: *hardened
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    healthcheck:
+      test: ["CMD", "sh", "/host-firewall.sh", "check"]
+      interval: 30s
+      timeout: 20s
+      retries: 2
+      start_period: 150s
+    # The proxy creates the bridges volume writable before this mounts it read-only.
+    depends_on:
+      engine-proxy:
+        condition: service_healthy
     restart: unless-stopped
 
 # Fixed names under excalibase-platform-: the engine proxy lets tenant
@@ -754,44 +782,38 @@ volumes:
   # Stored project logs (EXC-672); delete it to forget them.
   logs_data:
     name: excalibase-platform-logs
+  # The engine proxy's record of the platform's bridges, for the host firewall (EXC-683).
+  bridges:
+    name: excalibase-platform-bridges
 
 networks:
-  # Every bridge is named exb-*: the host firewall (EXC-683, profile hostfirewall)
-  # drops new connections from them to the host. At most 15 characters.
+  # No driver_opts here, bridge names included: compose re-creates a network whose
+  # options change, which fails while tenant databases are attached (EXC-683).
+  # The host firewall finds each network's bridge through the engine proxy.
   # Platform services and their state. Internal: no route in or out.
   platform:
     name: excalibase-platform
-    driver_opts:
-      com.docker.network.bridge.name: exb-platform
     internal: true
   # provisioning and the engine proxy alone.
   engine:
     name: excalibase-engine
-    driver_opts:
-      com.docker.network.bridge.name: exb-engine
     internal: true
   # Tenant containers, with the services that connect to them. Not internal:
   # tenant ports publish on 127.0.0.1 for the operator, which an internal
   # network cannot do. Fixed name: provisioning attaches tenants to it.
   tenants:
     name: excalibase-tenants
-    driver_opts:
-      com.docker.network.bridge.name: exb-tenants
   # The edge, Studio and provisioning's edge listener. provisioning believes
   # X-Forwarded-For only from this subnet; override AIO_EDGE_SUBNET if it
   # clashes with a host network.
   edge:
     name: excalibase-edge
-    driver_opts:
-      com.docker.network.bridge.name: exb-edge
     ipam:
       config:
         - subnet: ${AIO_EDGE_SUBNET:-10.203.250.0/28}
   # The edge to auth and graphql. auth believes X-Forwarded-For only from here.
   dataplane:
     name: excalibase-dataplane
-    driver_opts:
-      com.docker.network.bridge.name: exb-dataplane
     internal: true
     ipam:
       config:
@@ -800,36 +822,24 @@ networks:
   # (EXC-673): the counters bind here alone, so tenant containers cannot reach them.
   metrics:
     name: excalibase-metrics
-    driver_opts:
-      com.docker.network.bridge.name: exb-metrics
     internal: true
   # NATS and the projects' CDC watchers alone (EXC-612). Internal: no route
   # out. The engine proxy admits only the watcher image to it.
   cdc:
     name: excalibase-cdc
-    driver_opts:
-      com.docker.network.bridge.name: exb-cdc
     internal: true
   # provisioning and the bundled Loki alone (EXC-672). Internal: no route in or out.
   logs:
     name: excalibase-logs
-    driver_opts:
-      com.docker.network.bridge.name: exb-logs
     internal: true
   # provisioning and the log forwarder alone (EXC-658). Internal: no route in or out.
   drains:
     name: excalibase-drains
-    driver_opts:
-      com.docker.network.bridge.name: exb-drains
     internal: true
   # The log forwarder's way out to drain endpoints (EXC-658); nothing else joins it.
   drains-out:
     name: excalibase-drains-out
-    driver_opts:
-      com.docker.network.bridge.name: exb-drains-out
     enable_ipv6: false
   # Outbound only, for the one-shot bootstrap's package install.
   egress:
     name: excalibase-egress
-    driver_opts:
-      com.docker.network.bridge.name: exb-egress
