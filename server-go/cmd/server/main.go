@@ -207,6 +207,7 @@ func runServer(cfg config.AppConfig) {
 	// survives, the namespace will not terminate, and the teardown times out
 	// waiting for it (EXC-431).
 	provSvc.AddDeletionObserver(deps.schemaHandler)
+	provSvc.AddCredentialObserver(deps.schemaHandler)
 	wireDocumentDBInstalled(cfg, provSvc, deps.backupHandler)
 
 	// How a customer reaches their database from outside the cluster

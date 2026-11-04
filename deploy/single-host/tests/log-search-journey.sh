@@ -27,8 +27,9 @@ for i in $(seq 60); do st2=$(lapi "/provision/$PID2/" | python3 -c 'import json,
 [ "$st2" = ACTIVE ] && ok "a second project ($PID2) for isolation" || ko "second project: $st2 ${R2:0:300}"
 
 MARK=exc672_$(date +%s)_$RANDOM
-c -o /dev/null -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' "https://studio.localhost:$PORT/api/schema/$PID/query" \
-  -d "{\"query\":\"SELECT * FROM $MARK\"}"
+MR=$(c -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' "https://studio.localhost:$PORT/api/schema/$PID/query" \
+  -d "{\"query\":\"SELECT * FROM $MARK\"}" -w ' %{http_code}')
+echo "info: the marker query answered ${MR: -3}: ${MR:0:200}"
 LG=
 for i in $(seq 40); do LG=$(lapi "/provision/$PID/logs?lines=200&since=1h&q=$MARK"); case "$(loki_lines "{project_id=\"$PID\"} |= \"$MARK\"")" in *"$MARK"*) break ;; esac; sleep 3; done
 case "$(loki_lines "{project_id=\"$PID\",component=\"database\"} |= \"$MARK\"")" in *"$MARK"*) ok "the line is stored under its project's labels" ;; *) ko "not in Loki: $(loki_lines "{project_id=\"$PID\"}" | head -c 300)" ;; esac
