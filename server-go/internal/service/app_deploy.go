@@ -11,6 +11,8 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
+	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/google/uuid"
@@ -298,9 +300,28 @@ type deployMeta struct {
 // rollout is the deploy engine every deploy and redeploy drives: create the
 // record, apply the workload, and watch the rollout. cfg is what actually runs.
 func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, meta deployMeta) (*apphost.Deploy, func(), error) {
-	tierType, tier, err := s.planTier(ctx, app.ProjectID, cfg.Replicas)
+	planned, err := s.record(ctx, app, cfg, meta)
 	if err != nil {
 		return nil, nil, err
+	}
+	return s.apply(ctx, app, planned)
+}
+
+// plannedDeploy is a deploy recorded as pending, with what applying it needs.
+type plannedDeploy struct {
+	deploy   *apphost.Deploy
+	cfg      apphost.DeployConfig
+	tierType domain.TierType
+	tier     config.AppTierConfig
+	target   *apphost.App
+	routeErr error
+}
+
+// record creates the deploy's pending record; nothing reaches the cluster yet.
+func (s *AppDeployService) record(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, meta deployMeta) (*plannedDeploy, error) {
+	tierType, tier, err := s.planTier(ctx, app.ProjectID, cfg.Replicas)
+	if err != nil {
+		return nil, err
 	}
 	cfg.Tier = tierType
 	// The disk is the app's, not the frozen config's: every deploy mounts the current one.
@@ -338,8 +359,16 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		CreatedAt:  time.Now().UTC(),
 	}
 	if err := s.deploys.Create(deploy); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	return &plannedDeploy{deploy: deploy, cfg: cfg, tierType: tierType, tier: tier, target: target, routeErr: routeErr}, nil
+}
+
+// apply runs a recorded deploy on the cluster: quota, admission, disk and
+// workload. It returns the watch to start once the app's lease is released.
+func (s *AppDeployService) apply(ctx context.Context, app *apphost.App, planned *plannedDeploy) (*apphost.Deploy, func(), error) {
+	deploy, cfg, tierType, tier, target, routeErr := planned.deploy, planned.cfg, planned.tierType, planned.tier, planned.target, planned.routeErr
+	target.Disk = app.Disk
 	s.cancelActive(app.ID)
 	namespace, err := s.namespaceFor(app.ProjectID)
 	if err != nil {

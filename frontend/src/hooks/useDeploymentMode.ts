@@ -27,7 +27,8 @@ export type Feature =
   | 'dbreadaddress'
   | 'dbcopy'
   | 'majorupgrade'
-  | 'appgitbuilds';
+  | 'appgitbuilds'
+  | 's3';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
