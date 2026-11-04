@@ -18,6 +18,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/testutil/lokitest"
 )
 
 // startSingleHostLoki runs the compose file's own Loki config with only the
@@ -60,7 +61,9 @@ func startSingleHostLoki(t *testing.T) string {
 	t.Cleanup(func() { _ = container.Terminate(ctx) })
 	host, _ := container.Host(ctx)
 	port, _ := container.MappedPort(ctx, "3100/tcp")
-	return fmt.Sprintf("http://%s:%s", host, port.Port())
+	lokiURL := fmt.Sprintf("http://%s:%s", host, port.Port())
+	lokitest.WaitAcceptsPush(t, lokiURL, lokitest.AcceptsWithin)
+	return lokiURL
 }
 
 // EXC-678: on a single host a deleted project's lines leave the bundled Loki
