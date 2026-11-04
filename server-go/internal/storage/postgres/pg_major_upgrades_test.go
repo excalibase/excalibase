@@ -28,7 +28,7 @@ func runningUpgrade(id, projectID, from, to string) *domain.MajorUpgrade {
 	return &domain.MajorUpgrade{
 		ID: id, ProjectID: projectID, Engine: string(domain.PostgreSQL),
 		FromVersion: from, ToVersion: to, Status: domain.MajorUpgradeRunning,
-		Step: domain.MajorUpgradeStepChecking, RequestedBy: "u-1",
+		Step: domain.MajorUpgradeStepChecking, RequestedBy: "u-1", Owner: "driver-1",
 	}
 }
 
@@ -67,7 +67,7 @@ func TestMajorUpgrades_UpdateAndLatest(t *testing.T) {
 	run.Warnings = []string{"statistics were not refreshed"}
 	run.FinishedAt = &finished
 	run.WritesStoppedAt = &finished
-	if err := store.UpdateMajorUpgrade(ctx, run); err != nil {
+	if err := store.UpdateMajorUpgrade(ctx, run, nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	got, err := store.LatestMajorUpgrade(ctx, "mu-up")
@@ -97,7 +97,7 @@ func TestMajorUpgrades_MarkConvertedMovesTheProjectVersionInTheSameWrite(t *test
 		t.Fatalf("start: %v", err)
 	}
 	at := time.Now().UTC()
-	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-conv", "17", at); err != nil {
+	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-conv", "17", "driver-1", at); err != nil {
 		t.Fatalf("mark converted: %v", err)
 	}
 	inst, err := store.FindByProjectID("mu-conv")
@@ -109,7 +109,7 @@ func TestMajorUpgrades_MarkConvertedMovesTheProjectVersionInTheSameWrite(t *test
 		t.Fatalf("converted = %+v, %v", converted, err)
 	}
 	// A second mark is refused: the version moved once.
-	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-conv", "17", at); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-conv", "17", "driver-1", at); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
 		t.Fatalf("second mark = %v, want ErrMajorUpgradeNotRunning", err)
 	}
 }
@@ -127,7 +127,7 @@ func TestMajorUpgrades_RunningAcrossProjects(t *testing.T) {
 		t.Fatal(err)
 	}
 	done.Status = domain.MajorUpgradeFailed
-	if err := store.UpdateMajorUpgrade(ctx, done); err != nil {
+	if err := store.UpdateMajorUpgrade(ctx, done, nil); err != nil {
 		t.Fatal(err)
 	}
 	running, err := store.RunningMajorUpgrades(ctx)
@@ -193,7 +193,7 @@ func TestMajorUpgrades_HeartbeatAndNoWriteAfterTheEnd(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	beat := time.Now().UTC().Truncate(time.Millisecond)
-	if err := store.TouchMajorUpgrade(ctx, "mu-hb1", beat); err != nil {
+	if err := store.TouchMajorUpgrade(ctx, "mu-hb1", "driver-1", beat); err != nil {
 		t.Fatalf("touch: %v", err)
 	}
 	running, err := store.RunningMajorUpgrades(ctx)
@@ -202,14 +202,83 @@ func TestMajorUpgrades_HeartbeatAndNoWriteAfterTheEnd(t *testing.T) {
 	}
 	finished := time.Now().UTC()
 	run.Status, run.FinishedAt = domain.MajorUpgradeCompleted, &finished
-	if err := store.UpdateMajorUpgrade(ctx, run); err != nil {
+	if err := store.UpdateMajorUpgrade(ctx, run, nil); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 	run.Status = domain.MajorUpgradeFailed
-	if err := store.UpdateMajorUpgrade(ctx, run); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+	if err := store.UpdateMajorUpgrade(ctx, run, nil); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
 		t.Fatalf("a finished run was rewritten: %v", err)
 	}
-	if err := store.TouchMajorUpgrade(ctx, "mu-hb1", time.Now()); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+	if err := store.TouchMajorUpgrade(ctx, "mu-hb1", "driver-1", time.Now()); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
 		t.Fatalf("a finished run took a heartbeat: %v", err)
+	}
+}
+
+// A stale run is claimed once, and only by one actor; the claimer then
+// owns every write to it.
+func TestMajorUpgrades_ClaimFencesTheFormerOwner(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	seedUpgradeProject(t, store, "mu-claim", "16")
+	run := runningUpgrade("mu-cl1", "mu-claim", "16", "17")
+	run.StartedAt = time.Now().Add(-time.Hour).UTC()
+	if err := store.StartMajorUpgrade(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if claimed, err := store.ClaimMajorUpgrade(ctx, run.ID, "fresh-check", now.Add(-2*time.Hour), now); err != nil || claimed != nil {
+		t.Fatalf("claim of a live run = %+v, %v", claimed, err)
+	}
+	claimed, err := store.ClaimMajorUpgrade(ctx, run.ID, "recovery-1", now.Add(-time.Minute), now)
+	if err != nil || claimed == nil || claimed.Owner != "recovery-1" || claimed.ID != run.ID {
+		t.Fatalf("claim = %+v, %v", claimed, err)
+	}
+	if again, err := store.ClaimMajorUpgrade(ctx, run.ID, "recovery-2", now.Add(-time.Minute), now); err != nil || again != nil {
+		t.Fatalf("second claim = %+v, %v", again, err)
+	}
+	if err := store.TouchMajorUpgrade(ctx, run.ID, "driver-1", now); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+		t.Fatalf("former owner touch = %v", err)
+	}
+	if err := store.UpdateMajorUpgrade(ctx, run, nil); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+		t.Fatalf("former owner update = %v", err)
+	}
+	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-claim", "17", "driver-1", now); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+		t.Fatalf("former owner mark = %v", err)
+	}
+}
+
+// A run's write and its project's status land together, and a converted
+// run ends only as COMPLETED.
+func TestMajorUpgrades_UpdateWritesTheProjectAndKeepsAConvertedRunForward(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	seedUpgradeProject(t, store, "mu-tx", "16")
+	run := runningUpgrade("mu-tx1", "mu-tx", "16", "17")
+	if err := store.StartMajorUpgrade(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	run.Step = domain.MajorUpgradeStepConverting
+	if err := store.UpdateMajorUpgrade(ctx, run, &storage.MajorUpgradeProject{Status: "UPGRADING", Step: run.Step}); err != nil {
+		t.Fatal(err)
+	}
+	if inst, _ := store.FindByProjectID("mu-tx"); inst.Status != "UPGRADING" || inst.CurrentStep != run.Step {
+		t.Fatalf("project = %s at %s", inst.Status, inst.CurrentStep)
+	}
+	if err := store.MarkMajorUpgradeConverted(ctx, run.ID, "mu-tx", "17", "driver-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, outcome := range []string{domain.MajorUpgradeFailed, domain.MajorUpgradeRolledBack} {
+		ended := *run
+		ended.Status = outcome
+		if err := store.UpdateMajorUpgrade(ctx, &ended, &storage.MajorUpgradeProject{Status: "ACTIVE"}); !errors.Is(err, storage.ErrMajorUpgradeNotRunning) {
+			t.Fatalf("ending a converted run %s = %v", outcome, err)
+		}
+	}
+	if inst, _ := store.FindByProjectID("mu-tx"); inst.Status != "UPGRADING" {
+		t.Fatalf("project = %s after a refused write", inst.Status)
+	}
+	run.Status = domain.MajorUpgradeCompleted
+	if err := store.UpdateMajorUpgrade(ctx, run, &storage.MajorUpgradeProject{Status: "ACTIVE"}); err != nil {
+		t.Fatalf("complete = %v", err)
 	}
 }

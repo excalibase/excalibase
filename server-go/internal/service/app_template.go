@@ -83,7 +83,7 @@ type TemplateAppStore interface {
 
 // TemplateAppDeployer is the slice of AppDeployService a template deploy drives.
 type TemplateAppDeployer interface {
-	DeployApp(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, error)
+	QueueDeploy(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, func(), error)
 	DeleteApp(ctx context.Context, projectID, appID string, confirmDeleteDisk bool) error
 	AdmitNewApps(ctx context.Context, projectID string, replicas []int) error
 }
@@ -116,15 +116,18 @@ type AppTemplateDeps struct {
 	Flags features.Flags
 }
 
-// AppTemplateService deploys a template all or nothing (EXC-526): every plan
-// limit is checked before anything is made, and a failure part way removes
-// what the deploy made.
+// AppTemplateService deploys a template (EXC-526): every plan limit is checked
+// before anything is made, and a failure before every app has its pending
+// first deploy removes what the deploy made. Those deploys run after the
+// answer (EXC-669): a disk to prepare takes longer than a request should wait.
 type AppTemplateService struct {
 	catalog *apptemplate.Catalog
 	deps    AppTemplateDeps
 	claimer ProjectOperationClaimer
 	secret  func(n int) (string, error)
 	newID   func() string
+	// async runs the first deploys after the answer; tests run them inline.
+	async func(func())
 	// leaseRetry spaces the rollback's retries of a delete another operation briefly holds.
 	leaseRetry time.Duration
 }
@@ -136,6 +139,7 @@ func NewAppTemplateService(catalog *apptemplate.Catalog, deps AppTemplateDeps) *
 	return &AppTemplateService{
 		catalog: catalog, deps: deps, claimer: claimerOrInProcess(deps.Claimer),
 		secret: apptemplate.GenerateSecret, newID: uuid.NewString, leaseRetry: 500 * time.Millisecond,
+		async: func(run func()) { go run() },
 	}
 }
 
@@ -145,6 +149,7 @@ type TemplateDeployOptions struct {
 	MayChangePrivateNetwork bool
 }
 
+// TemplateDeployedApp is an app the deploy created, with its first deploy, pending until it runs after the answer.
 type TemplateDeployedApp struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
@@ -158,6 +163,8 @@ type TemplateDeployResult struct {
 	PrivateNetworkTurnedOn bool                  `json:"privateNetworkTurnedOn"`
 	// Credentials are the template's showOnce values; this answer is the only time they are readable.
 	Credentials apptemplate.ShownValues `json:"credentials,omitempty"`
+	// AcceptedAt tells a failure the apps record afterwards from an older one.
+	AcceptedAt time.Time `json:"acceptedAt"`
 }
 
 // template is a template this caller may see: a catalog one only while its flag is on.
@@ -186,25 +193,42 @@ func (s *AppTemplateService) Deploy(ctx context.Context, projectID, templateID, 
 	if !claimed {
 		return nil, fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
 	}
-	defer release()
+	result, runs, err := s.create(ctx, projectID, tpl, actor, opts)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	// The project stays held until every first deploy has run.
+	s.async(func() {
+		defer release()
+		for _, run := range runs {
+			run()
+		}
+	})
+	return result, nil
+}
 
+// create checks the template against the project and makes its network,
+// secrets, apps and their pending first deploys, all or nothing.
+func (s *AppTemplateService) create(ctx context.Context, projectID string, tpl *apptemplate.Template,
+	actor string, opts TemplateDeployOptions) (*TemplateDeployResult, []func(), error) {
 	check, err := s.assess(ctx, projectID, tpl, opts.MayChangePrivateNetwork)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	turnOn, err := s.admit(ctx, projectID, tpl, check, opts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	built, err := tpl.Build(apptemplate.BuildInput{
 		ProjectID: projectID, Tier: check.fit.Plan, DatabaseName: check.databaseName,
 		NewID: s.newID, Secret: s.secret,
 	})
 	if errors.Is(err, apptemplate.ErrSecretGeneration) {
-		return nil, err
+		return nil, nil, err
 	}
 	if err != nil {
-		return nil, &TemplateRefusedError{Reasons: []string{err.Error()}}
+		return nil, nil, &TemplateRefusedError{Reasons: []string{err.Error()}}
 	}
 	return s.apply(ctx, tpl, built, check.fit.AppsAllowed, turnOn, actor)
 }
@@ -280,39 +304,39 @@ type templateJournal struct {
 }
 
 func (s *AppTemplateService) apply(ctx context.Context, tpl *apptemplate.Template, built *apptemplate.Built,
-	maxApps int, turnOn bool, actor string) (*TemplateDeployResult, error) {
+	maxApps int, turnOn bool, actor string) (*TemplateDeployResult, []func(), error) {
 	projectID := built.Apps[0].ProjectID
 	journal := templateJournal{projectID: projectID}
 	if turnOn {
 		// Journaled first: an error after the cluster opened it must still close it.
 		journal.networkOn = true
 		if _, err := s.deps.Network.Set(ctx, projectID, true); err != nil {
-			return nil, s.rollback(ctx, &journal, serverFault("could not turn on the project's private network", err))
+			return nil, nil, s.rollback(ctx, &journal, serverFault("could not turn on the project's private network", err))
 		}
 	}
 	for _, app := range built.Apps {
 		if err := s.storeSecrets(app, built.Secrets, &journal); err != nil {
-			return nil, s.rollback(ctx, &journal, serverFault(fmt.Sprintf("could not store the secrets of app %q", app.Name), err))
+			return nil, nil, s.rollback(ctx, &journal, serverFault(fmt.Sprintf("could not store the secrets of app %q", app.Name), err))
 		}
 		if err := s.deps.Apps.Create(app, maxApps); err != nil {
-			return nil, s.rollback(ctx, &journal, createFailure(app, err))
+			return nil, nil, s.rollback(ctx, &journal, createFailure(app, err))
 		}
 		journal.created = append(journal.created, app)
 	}
-	result := &TemplateDeployResult{TemplateID: tpl.ID, PrivateNetworkTurnedOn: turnOn, Credentials: built.Shown}
+	result := &TemplateDeployResult{TemplateID: tpl.ID, PrivateNetworkTurnedOn: turnOn, Credentials: built.Shown,
+		AcceptedAt: time.Now().UTC()}
+	// Every app has its pending deploy before the answer, so a restart that
+	// loses the runs leaves deploys the rollout sweeper ends, not apps that never deploy.
+	runs := make([]func(), 0, len(built.Apps))
 	for _, app := range built.Apps {
-		deploy, err := s.deps.Deployer.DeployApp(ctx, projectID, app.ID, actor)
+		deploy, run, err := s.deps.Deployer.QueueDeploy(ctx, projectID, app.ID, actor)
 		if err != nil {
-			return nil, s.rollback(ctx, &journal, serverFault(fmt.Sprintf("could not deploy app %q", app.Name), err))
+			return nil, nil, s.rollback(ctx, &journal, serverFault(fmt.Sprintf("could not deploy app %q", app.Name), err))
 		}
-		if deploy.Status == apphost.DeployStatusFailed {
-			// A deploy's failure reason is written for the customer; Studio shows it in the deploy history.
-			step := fmt.Sprintf("deploy app %q: %s", app.Name, deploy.FailureReason)
-			return nil, s.rollback(ctx, &journal, &TemplateFailedError{Step: step, Cause: errors.New(deploy.FailureReason)})
-		}
+		runs = append(runs, run)
 		result.Apps = append(result.Apps, TemplateDeployedApp{ID: app.ID, Name: app.Name, DeployID: deploy.ID, DeployStatus: deploy.Status})
 	}
-	return result, nil
+	return result, runs, nil
 }
 
 func serverFault(step string, cause error) *TemplateFailedError {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -31,11 +32,39 @@ type recordingProgress struct {
 	stopped    *time.Time
 	converted  *time.Time
 	convertErr error
+	// lost: another actor has taken the run over.
+	lost bool
 }
 
-func (p *recordingProgress) Step(step string)           { p.steps = append(p.steps, step) }
-func (p *recordingProgress) WritesStopped(at time.Time) { p.stopped = &at }
-func (p *recordingProgress) Converted(at time.Time) error {
+func (p *recordingProgress) lostErr() error {
+	if p.lost {
+		return fmt.Errorf("%w: claimed by recovery", errRunTakenOver)
+	}
+	return nil
+}
+
+func (p *recordingProgress) Step(_ context.Context, step string) error {
+	if err := p.lostErr(); err != nil {
+		return err
+	}
+	p.steps = append(p.steps, step)
+	return nil
+}
+
+func (p *recordingProgress) WritesStopped(_ context.Context, at time.Time) error {
+	if err := p.lostErr(); err != nil {
+		return err
+	}
+	p.stopped = &at
+	return nil
+}
+
+func (p *recordingProgress) Hold(context.Context) error { return p.lostErr() }
+
+func (p *recordingProgress) Converted(_ context.Context, at time.Time) error {
+	if err := p.lostErr(); err != nil {
+		return err
+	}
 	if p.convertErr != nil {
 		return p.convertErr
 	}
@@ -299,7 +328,7 @@ func TestK8sConvertDoesNotPutBackDataItCouldNotRecord(t *testing.T) {
 		}
 	}
 	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
-	if outcome.Converted || outcome.RolledBack || !w.imageIs("17") {
+	if !outcome.Unsettled || outcome.Converted || outcome.RolledBack || !w.imageIs("17") {
 		t.Fatalf("outcome = %+v image %s", outcome, w.image())
 	}
 }
@@ -327,6 +356,16 @@ func TestK8sRecover(t *testing.T) {
 		_ = k8s.SetClusterArchive(w.cluster(), image17, "src-backups-pg17", "pg17")
 		w.serving(17, 2, 2)
 		if outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress); !outcome.Converted || w.progress.converted == nil {
+			t.Fatalf("outcome = %+v", outcome)
+		}
+	})
+	t.Run("the data is on the new major but cannot be recorded", func(t *testing.T) {
+		w := newK8sUpgradeWorld(t)
+		image17, _ := config.PostgresImage("17")
+		_ = k8s.SetClusterArchive(w.cluster(), image17, "src-backups-pg17", "pg17")
+		w.serving(17, 2, 2)
+		w.progress.convertErr = errors.New("database down")
+		if outcome := w.upgrader.Recover(context.Background(), w.inst, w.run(), w.progress); !outcome.Unsettled || outcome.Converted {
 			t.Fatalf("outcome = %+v", outcome)
 		}
 	})
@@ -430,5 +469,18 @@ func TestK8sAfterSteps(t *testing.T) {
 	w.mock.ExecAnswerInPod = func(string, []string) (string, error) { return "", errors.New("exit 1") }
 	if warnings := w.upgrader.AfterSteps(context.Background(), w.inst); len(warnings) != 1 {
 		t.Fatalf("warnings = %v", warnings)
+	}
+}
+
+// A run already taken over is not touched: the cluster keeps its major.
+func TestK8sConvertChangesNothingForARunItLost(t *testing.T) {
+	w := newK8sUpgradeWorld(t)
+	w.progress.lost = true
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack || outcome.Converted {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if !w.imageIs("16") {
+		t.Fatalf("image = %s", w.image())
 	}
 }

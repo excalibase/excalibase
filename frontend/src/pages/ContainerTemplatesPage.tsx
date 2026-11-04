@@ -6,7 +6,9 @@ import {
   templateRefusal,
   useAppTemplates,
   useDeployTemplate,
+  useFirstDeploy,
   type AppTemplate,
+  type FirstDeploy,
   type TemplateApp,
   type TemplateCategory,
   type TemplateCredential,
@@ -22,6 +24,7 @@ import {
   primaryButton,
   secondaryButton,
 } from '../components/containers/ContainerBits';
+import type { Tone } from '../components/containers/appCopy';
 
 const SOURCE_TEXT: Record<TemplateVar['source'], string> = {
   literal: '',
@@ -113,13 +116,53 @@ function Credentials({ values }: { readonly values: TemplateCredential[] }) {
   );
 }
 
+const FIRST_DEPLOY_BADGE: Record<FirstDeploy['state'], { label: string; tone: Tone }> = {
+  starting: { label: 'Preparing', tone: 'progress' },
+  rolling: { label: 'Rolling out', tone: 'progress' },
+  running: { label: 'Running', tone: 'success' },
+  failed: { label: 'Failed', tone: 'error' },
+  stalled: { label: 'Not running', tone: 'warning' },
+};
+
+function FirstDeployLine({ projectId, app, acceptedAt }: {
+  readonly projectId: string;
+  readonly app: TemplateDeployResult['apps'][number];
+  readonly acceptedAt: string;
+}) {
+  const { data, error } = useFirstDeploy(projectId, app.id, acceptedAt);
+  const progress: FirstDeploy = data ?? { state: 'starting' };
+  const badge = FIRST_DEPLOY_BADGE[progress.state];
+  return (
+    <li className="flex flex-wrap items-center gap-2 text-xs" data-testid={`template-progress-${app.name}`}>
+      <span className="font-medium text-text-primary">{app.name}</span>
+      <ToneBadge label={badge.label} tone={badge.tone} />
+      {progress.state === 'failed' && <span className="text-red-400">Failed: {progress.reason}</span>}
+      {progress.state === 'stalled' && (
+        <span className="text-text-secondary">
+          Still not running.{' '}
+          <Link to={`/project/${projectId}/containers/${app.id}`} className="text-purple-400 hover:underline">
+            Open the app
+          </Link>{' '}
+          to see its deploys.
+        </span>
+      )}
+      {error && <span className="text-text-tertiary">{apiErrorMessage(error, 'Could not read its status')}</span>}
+    </li>
+  );
+}
+
 function Deployed({ projectId, result }: { readonly projectId: string; readonly result: TemplateDeployResult }) {
   return (
     <div className="mt-3 rounded-md border border-green-500/30 bg-green-500/10 p-3 text-sm" data-testid="template-deployed">
       <p className="text-text-primary">
-        Created {result.apps.map((a) => a.name).join(', ')}. Their first deploys are rolling out.
+        Created {result.apps.map((a) => a.name).join(', ')}.
         {result.privateNetworkTurnedOn && " The project's private network is now on."}
       </p>
+      <ul className="mt-2 space-y-1" data-testid="template-progress">
+        {result.apps.map((app) => (
+          <FirstDeployLine key={app.id} projectId={projectId} app={app} acceptedAt={result.acceptedAt} />
+        ))}
+      </ul>
       {result.credentials && result.credentials.length > 0 && <Credentials values={result.credentials} />}
       <Link to={`/project/${projectId}/containers`} className="text-xs text-purple-400 hover:underline">
         Go to Containers
@@ -203,7 +246,7 @@ function TemplateCard({ projectId, template }: { readonly projectId: string; rea
             This creates {template.apps.map((a) => a.name).join(' and ')} and deploys them.
             {turnsOnNetwork &&
               " It also turns on the project's private network: every app in this project will be able to connect to every other app in it."}{' '}
-            If any step fails, everything it created is removed again.
+            If it cannot create them all, it removes what it created. A first deploy that fails stays on its app, to read and deploy again.
           </p>
           <div className="mt-2 flex gap-2">
             <button type="button" className={primaryButton} onClick={confirm} data-testid={`template-confirm-${template.id}`}>
@@ -283,7 +326,7 @@ export function ContainerTemplatesPage() {
     <div data-testid="container-templates-page">
       <ContainersHeader
         title="Templates"
-        subtitle="Deploy a set of apps, disks and variables in one step. All or nothing: a failure removes what it created."
+        subtitle="Deploy a set of apps, disks and variables in one step. The apps are created all or nothing; their first deploys follow."
         actions={
           <Link to={`/project/${projectId}/containers`} className={secondaryButton}>
             <ArrowLeft className="w-4 h-4" /> Containers
