@@ -44,7 +44,7 @@ func (p *DockerMySQLProvisioner) runSecret(ctx context.Context, container, state
 // the passwords of users a restored database brought.
 func (p *DockerMySQLProvisioner) EnsurePlatformUsers(ctx context.Context, namespace, _, database string, passwords MySQLPasswords) error {
 	err := p.runSecret(ctx, namespace, MySQLPlatformUsersSQL(database, passwords),
-		passwords.Admin, passwords.App, passwords.AuthAdmin, passwords.Watcher)
+		passwords.Admin, passwords.App, passwords.AuthAdmin, passwords.Watcher, passwords.Reader)
 	if err != nil {
 		return fmt.Errorf("create the platform users: %w", err)
 	}

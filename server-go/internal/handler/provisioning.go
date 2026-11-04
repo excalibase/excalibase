@@ -529,7 +529,7 @@ func busyState(err error) string {
 
 func (h *ProvisioningHandler) GetCredentials(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
-	creds, err := h.svc.GetCredentials(projectID)
+	creds, err := h.svc.GetCredentials(r.Context(), projectID)
 	if errors.Is(err, service.ErrProjectDeleting) || errors.Is(err, service.ErrProjectRestoring) {
 		httpError(w, safeError(err), http.StatusConflict)
 		return

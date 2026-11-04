@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 )
 
 const ownerProject = "owner-db"
@@ -34,7 +35,7 @@ func TestGetCredentialsHandsOutTheVaultedOwnerPassword(t *testing.T) {
 	svc := seedOwnerProject(t)
 	svc.SetVault(vaultWithOwner("from-vault"))
 
-	creds, err := svc.GetCredentials(ownerProject)
+	creds, err := svc.GetCredentials(context.Background(), ownerProject)
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestGetCredentialsRefusesWhenTheVaultCannotAnswer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			svc := seedOwnerProject(t)
 			vault(svc)
-			if _, err := svc.GetCredentials(ownerProject); !errors.Is(err, ErrOwnerCredentialUnavailable) {
+			if _, err := svc.GetCredentials(context.Background(), ownerProject); !errors.Is(err, ErrOwnerCredentialUnavailable) {
 				t.Fatalf("got %v, want ErrOwnerCredentialUnavailable", err)
 			}
 		})
@@ -88,7 +89,7 @@ func TestGetCredentialsConnectionURLEscapesThePassword(t *testing.T) {
 	svc := seedOwnerProject(t)
 	svc.SetVault(vaultWithOwner(password))
 
-	creds, err := svc.GetCredentials(ownerProject)
+	creds, err := svc.GetCredentials(context.Background(), ownerProject)
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
@@ -101,5 +102,40 @@ func TestGetCredentialsConnectionURLEscapesThePassword(t *testing.T) {
 	}
 	if parsed.Host != "host.local:5432" || parsed.Path != "/mydb" || parsed.Query().Get("sslmode") != "require" {
 		t.Errorf("host %q path %q query %q", parsed.Host, parsed.Path, parsed.RawQuery)
+	}
+}
+
+// EXC-675: an Admin is handed the SELECT-only login beside the owner's, only
+// while its feature is on.
+func TestGetCredentialsHandsOutTheReaderWhileItsFeatureIsOn(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		svc := seedOwnerProject(t)
+		vault := vaultWithOwner("from-vault")
+		vault.Put(vaultCredentialPath(ownerProject, roleReader), map[string]string{"username": roleReader, "password": "reader-pass"})
+		svc.SetVault(vault)
+		if on {
+			svc.SetFeatures(features.NewStatic(features.DBReadRole))
+		}
+		creds, err := svc.GetCredentials(context.Background(), ownerProject)
+		if err != nil {
+			t.Fatalf("GetCredentials: %v", err)
+		}
+		gotReader := creds.ReaderUsername == roleReader && creds.ReaderPassword == "reader-pass"
+		if gotReader != on || (!on && (creds.ReaderUsername != "" || creds.ReaderPassword != "")) {
+			t.Errorf("feature %v: reader = %q/%q", on, creds.ReaderUsername, creds.ReaderPassword)
+		}
+	}
+}
+
+func TestGetCredentialsWithoutAFiledReaderNamesNone(t *testing.T) {
+	svc := seedOwnerProject(t)
+	svc.SetVault(vaultWithOwner("from-vault"))
+	svc.SetFeatures(features.NewStatic(features.DBReadRole))
+	creds, err := svc.GetCredentials(context.Background(), ownerProject)
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if creds.ReaderUsername != "" || creds.ReaderPassword != "" {
+		t.Errorf("a project with no reader was handed one: %q", creds.ReaderUsername)
 	}
 }

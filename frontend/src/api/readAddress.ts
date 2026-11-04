@@ -30,6 +30,9 @@ export interface ReadAddress {
   host?: string;
   port?: number;
   connectionString?: string;
+  // Who signs in at the read address; readOnlyLogin marks the SELECT-only login (EXC-675).
+  username?: string;
+  readOnlyLogin?: boolean;
   canChange: boolean;
 }
 

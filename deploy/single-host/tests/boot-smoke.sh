@@ -107,6 +107,8 @@ sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUB
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
 echo "FEATURE_DBREADADDRESS=true" >> "$W/.env"
+# The read-only login and rotation ending old sessions (EXC-675, rotation-journey.sh).
+echo "FEATURE_DBREADROLE=true" >> "$W/.env"
 [ -n "${REQUEST_METRICS:-}" ] && printf 'FEATURE_REQUESTMETRICS=true\nFEATURE_SLOWQUERIES=true\n' >> "$W/.env"
 # Stored logs go with a deleted project (EXC-678, log-search-journey.sh).
 [ -n "${HOST_LOGS:-}" ] && echo "FEATURE_LOGDELETION=true" >> "$W/.env"
@@ -304,6 +306,9 @@ if [ -n "${HOST_LOGS:-}" ]; then
 else
   $DOCKER inspect excalibase-loki >/dev/null 2>&1 && ko "Loki runs without --host-logs" || ok "no Loki without --host-logs"
 fi
+
+. "$TESTS/rotation-journey.sh"
+rotation_journey "$PID" postgres "$TC"
 
 echo "== studio health"
 code=$(c -o /dev/null -w '%{http_code}' https://studio.localhost:$PORT/); h=$($DOCKER inspect excalibase-studio --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null)

@@ -433,3 +433,18 @@ func TestOpenScheduler_RefusesNotServableProject(t *testing.T) {
 		t.Fatal("opened the scheduler pool of a project under teardown")
 	}
 }
+
+// EXC-675: a rotation can end the sessions a pool holds; the pool is dropped
+// so the next caller reopens it with the new password.
+func TestCredentialsRotated_EvictsThePool(t *testing.T) {
+	store := testStore(t, &domain.DatabaseInstance{ProjectID: "proj_a", Status: "ACTIVE"})
+	o := NewOpener(store, fakeVault{data: appCreds()}, Overrides{}, PoolLimits{})
+	defer o.Close()
+	if _, err := o.Open(context.Background(), "proj_a"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	o.CredentialsRotated("proj_a")
+	if got := o.CachedPools(); got != 0 {
+		t.Errorf("cached pools after a rotation: got %d, want 0", got)
+	}
+}

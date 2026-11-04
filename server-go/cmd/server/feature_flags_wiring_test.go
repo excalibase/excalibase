@@ -156,6 +156,9 @@ var darkWork = map[features.Feature]string{
 	features.SingleHostBuilds: "TestSiteBuildMode",
 	features.AppGitBuilds:     "TestTierHandler_AppBuildLimitsStayDarkWhileTheFlagIsOff",
 	features.LogDeletion:      "TestLogDeletionStartsOnlyWithItsFeature",
+	// Off, rotation leaves sessions alone, credentials carry no reader and the
+	// read address names the owner (internal/service).
+	features.DBReadRole: "TestRotationLeavesSessionsAloneWhileTheFlagIsOff",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {
