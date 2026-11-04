@@ -6,12 +6,16 @@
 rot_api() { c --max-time 300 -H "Authorization: Bearer $T" -H 'Content-Type: application/json' "$@"; }
 rot_json() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
 
+# Postgres trusts 127.0.0.1 from inside its own container, so a password is only
+# checked when the client dials the container's address.
+rot_host() { [ "$1" = mysql ] && echo 127.0.0.1 || $DOCKER exec "$2" awk 'END{print $1}' /etc/hosts; }
+
 # rot_sql <engine> <container> <user> <password> <database> <sql>: a client inside the database's container.
 rot_sql() {
   if [ "$1" = mysql ]; then
     $DOCKER exec -e MYSQL_PWD="$4" "$2" mysql -h 127.0.0.1 -u "$3" --ssl-mode=REQUIRED --batch --skip-column-names -e "$6" "$5" 2>&1
   else
-    $DOCKER exec -e PGPASSWORD="$4" "$2" psql -h 127.0.0.1 -U "$3" -d "$5" -XtA -v ON_ERROR_STOP=1 -c "$6" 2>&1
+    $DOCKER exec -e PGPASSWORD="$4" "$2" psql -h "$(rot_host "$1" "$2")" -U "$3" -d "$5" -XtA -v ON_ERROR_STOP=1 -c "$6" 2>&1
   fi
 }
 
@@ -40,7 +44,7 @@ rotation_journey() {
   if [ "$engine" = mysql ]; then
     out=$(rot_sql "$engine" "$container" excalibase_reader "$rp" "$db" "INSERT INTO rot_notes VALUES (2)")
   else
-    out=$(rot_sql "$engine" "$container" excalibase_reader "$rp" "$db" "SET default_transaction_read_only = off; CREATE TABLE planted (id int)")
+    out=$(rot_sql "$engine" "$container" excalibase_reader "$rp" "$db" "BEGIN READ WRITE; CREATE TABLE planted (id int); COMMIT")
   fi
   case "$out" in *denied*|*"cannot change the schema"*) ok "$engine read-only login changes nothing" ;; *) ko "$engine reader wrote: ${out:0:200}" ;; esac
 
@@ -48,7 +52,7 @@ rotation_journey() {
   if [ "$engine" = mysql ]; then
     $DOCKER exec -d -e MYSQL_PWD="$owner_password" "$container" mysql -h 127.0.0.1 -u "$user" --ssl-mode=REQUIRED -e "$sleep_sql" "$db"
   else
-    $DOCKER exec -d -e PGPASSWORD="$owner_password" "$container" psql -h 127.0.0.1 -U "$user" -d "$db" -c "$sleep_sql"
+    $DOCKER exec -d -e PGPASSWORD="$owner_password" "$container" psql -h "$(rot_host "$engine" "$container")" -U "$user" -d "$db" -c "$sleep_sql"
   fi
   for i in $(seq 30); do held=$(rot_sessions "$engine" "$container" "$user"); [ "${held:-0}" -ge 1 ] && break; sleep 1; done
   [ "${held:-0}" -ge 1 ] && ok "$engine owner session held open" || ko "$engine no held owner session"
