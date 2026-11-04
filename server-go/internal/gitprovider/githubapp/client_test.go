@@ -234,3 +234,30 @@ func TestParseWebhook_SuspendKeepsConnections(t *testing.T) {
 		}
 	}
 }
+
+func TestFileExists_ReadsTheCommitThroughAOneRepositoryToken(t *testing.T) {
+	client, fake := newClient(t)
+	ctx := context.Background()
+	const commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	fake.AddFile(siteRepoID, commit, "api/Dockerfile")
+	repo := gitprovider.Repository{ID: siteRepoID, FullName: "acme/site"}
+	cases := []struct {
+		path string
+		want bool
+	}{{"api/Dockerfile", true}, {"Dockerfile", false}, {"api", false}}
+	for _, tc := range cases {
+		found, err := client.FileExists(ctx, installationID, repo, commit, tc.path)
+		if err != nil || found != tc.want {
+			t.Errorf("%s: found = %v, err = %v, want %v", tc.path, found, err, tc.want)
+		}
+	}
+	if found, err := client.FileExists(ctx, installationID, repo, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "api/Dockerfile"); err != nil || found {
+		t.Errorf("another commit: found = %v, err = %v", found, err)
+	}
+	if len(fake.Revoked()) != len(fake.Issued()) {
+		t.Errorf("every read token goes back: issued %d, revoked %d", len(fake.Issued()), len(fake.Revoked()))
+	}
+	if _, err := client.FileExists(ctx, installationID+1, repo, commit, "api/Dockerfile"); err == nil {
+		t.Error("an installation the App lost must be an error, never \"no file\"")
+	}
+}

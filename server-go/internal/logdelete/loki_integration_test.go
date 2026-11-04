@@ -48,6 +48,7 @@ func startLoki(t *testing.T) string {
 		t.Fatalf("start loki: %v", err)
 	}
 	t.Cleanup(func() { _ = container.Terminate(ctx) })
+	lokitest.LogsOnFailure(t, container)
 	host, _ := container.Host(ctx)
 	port, _ := container.MappedPort(ctx, "3100/tcp")
 	lokiURL := fmt.Sprintf("http://%s:%s", host, port.Port())
