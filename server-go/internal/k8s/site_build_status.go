@@ -9,7 +9,11 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 )
 
-const reasonOOMKilled = "OOMKilled"
+const (
+	reasonOOMKilled = "OOMKilled"
+	// reasonStartError is the kubelet's reason for a container whose task never started.
+	reasonStartError = "StartError"
+)
 
 // Exit codes build.sh and collect.sh use to name the failing step.
 const (
@@ -128,6 +132,12 @@ func stepFailure(pod *corev1.Pod, kindOf func(step string, code int32) sitebuild
 			continue
 		}
 		code := terminated.ExitCode
+		// Only the kubelet's reason counts: the termination message is the build's own to write.
+		if terminated.Reason == reasonStartError {
+			notStarted := failed(sitebuilds.FailPlatform, code, fmt.Sprintf("the sandbox could not start the %s step", status.Name))
+			notStarted.StartFailed = true
+			return notStarted, true
+		}
 		return failed(kindOf(status.Name, code), code, fmt.Sprintf("the %s step exited %d", status.Name, code)), true
 	}
 	return sitebuilds.RunStatus{}, false

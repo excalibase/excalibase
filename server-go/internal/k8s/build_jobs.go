@@ -17,6 +17,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 )
 
+// cloneSecretSuffix names the Secret holding a build's clone credential, which the clone step alone reads.
+const cloneSecretSuffix = "-git"
+
 // gvisorHandler is the containerd handler every install registers for gVisor (rke2/node, single-host, tests).
 const gvisorHandler = "runsc"
 
@@ -179,6 +182,16 @@ func (b *buildJobs) Remove(ctx context.Context, buildID string) error {
 		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete the build's secret %s: %w", name+suffix, err)
 		}
+	}
+	return nil
+}
+
+// ForgetCloneCredential deletes the clone credential's Secret once the clone is done; one already gone is not an error.
+func (b *buildJobs) ForgetCloneCredential(ctx context.Context, buildID string) error {
+	name := b.name(buildID) + cloneSecretSuffix
+	err := b.client.clientset.CoreV1().Secrets(b.namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete the build's clone secret: %w", err)
 	}
 	return nil
 }

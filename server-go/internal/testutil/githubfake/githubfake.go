@@ -39,6 +39,8 @@ type Repo struct {
 	Private       bool
 	// Branches maps a branch to its head commit sha.
 	Branches map[string]string
+	// files maps a commit to the regular files in it.
+	files map[string]map[string]bool
 }
 
 // TokenRequest is one installation token minted, as asked for.
@@ -127,6 +129,23 @@ func (g *GitHub) SetBranchHead(repoID int64, branch, sha string) {
 	}
 }
 
+// AddFile puts a regular file at path in a commit of a repo.
+func (g *GitHub) AddFile(repoID int64, commit, path string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, inst := range g.installations {
+		if repo, ok := inst.repos[repoID]; ok {
+			if repo.files == nil {
+				repo.files = map[string]map[string]bool{}
+			}
+			if repo.files[commit] == nil {
+				repo.files[commit] = map[string]bool{}
+			}
+			repo.files[commit][path] = true
+		}
+	}
+}
+
 // RenameRepo gives a repo a new owner/name, as a transfer or rename does; its id stays.
 func (g *GitHub) RenameRepo(repoID int64, fullName string) {
 	g.mu.Lock()
@@ -184,6 +203,7 @@ func (g *GitHub) routes() http.Handler {
 	mux.HandleFunc("GET /repositories/{id}", g.repository)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/git/ref/heads/{branch...}", g.branchRef)
 	mux.HandleFunc("GET /repos/{owner}/{repo}/commits/{sha}", g.commit)
+	mux.HandleFunc("GET /repos/{owner}/{repo}/contents/{path...}", g.contents)
 	mux.HandleFunc("POST /login/oauth/access_token", g.exchangeCode)
 	mux.HandleFunc("GET /user/installations", g.userInstallations)
 	mux.HandleFunc("GET /user/installations/{id}/repositories", g.userRepositories)
@@ -337,6 +357,32 @@ func (g *GitHub) commit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sha": r.PathValue("sha"), "commit": map[string]any{"message": "commit " + r.PathValue("sha")}})
+}
+
+// contents answers a regular file's metadata, a directory's listing, or 404, at the commit in ref.
+func (g *GitHub) contents(w http.ResponseWriter, r *http.Request) {
+	fullName := r.PathValue("owner") + "/" + r.PathValue("repo")
+	repo, ok := g.scopedRepo(r, func(repo *Repo) bool { return repo.FullName == fullName })
+	if !ok {
+		notFound(w)
+		return
+	}
+	path := r.PathValue("path")
+	g.mu.Lock()
+	files := repo.files[r.URL.Query().Get("ref")]
+	isFile, isDir := files[path], false
+	for held := range files {
+		isDir = isDir || strings.HasPrefix(held, path+"/")
+	}
+	g.mu.Unlock()
+	switch {
+	case isFile:
+		writeJSON(w, http.StatusOK, map[string]any{"type": "file", "path": path})
+	case isDir:
+		writeJSON(w, http.StatusOK, []map[string]any{})
+	default:
+		notFound(w)
+	}
 }
 
 func (g *GitHub) exchangeCode(w http.ResponseWriter, r *http.Request) {

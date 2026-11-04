@@ -300,7 +300,7 @@ func writeSiteGitError(w http.ResponseWriter, err error) {
 		httpError(w, err.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, sitebuilds.ErrNotConnected), errors.Is(err, sitebuilds.ErrBuildNotFound):
 		httpError(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, sitebuilds.ErrNotAuthorized):
+	case errors.Is(err, sitebuilds.ErrNotAuthorized), errors.Is(err, sitebuilds.ErrNotDeveloper):
 		httpError(w, err.Error(), http.StatusForbidden)
 	case errors.Is(err, sitebuilds.ErrConnectionInactive):
 		httpError(w, sitebuilds.ErrConnectionInactive.Error(), http.StatusConflict)

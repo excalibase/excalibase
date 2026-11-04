@@ -72,6 +72,7 @@ func TestSiteGitErrorStatuses(t *testing.T) {
 		sitebuilds.ErrNotConnected:            http.StatusNotFound,
 		sitebuilds.ErrBuildNotFound:           http.StatusNotFound,
 		sitebuilds.ErrNotAuthorized:           http.StatusForbidden,
+		sitebuilds.ErrNotDeveloper:            http.StatusForbidden,
 		sitebuilds.ErrStateInvalid:            http.StatusBadRequest,
 		sitebuilds.ErrSingleHost:              http.StatusServiceUnavailable,
 		&sitebuilds.InputError{Reason: "bad"}: http.StatusBadRequest,
