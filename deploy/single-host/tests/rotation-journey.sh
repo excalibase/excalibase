@@ -26,15 +26,15 @@ rot_sessions() {
 }
 
 rotation_journey() {
-  local pid=$1 engine=$2 container=$3 cred user pass db rp out held sleep_sql
+  local pid=$1 engine=$2 container=$3 cred user owner_password db rp out held sleep_sql
   echo "== read-only login and rotation ($engine)"
   cred=$(rot_api "https://studio.localhost:$PORT/api/provision/$pid/credentials")
-  user=$(echo "$cred" | rot_json 'd["username"]'); pass=$(echo "$cred" | rot_json 'd["password"]')
+  user=$(echo "$cred" | rot_json 'd["username"]'); owner_password=$(echo "$cred" | rot_json 'd["password"]')
   db=$(echo "$cred" | rot_json 'd["databaseName"]'); rp=$(echo "$cred" | rot_json 'd.get("readerPassword","")')
   [ "$(echo "$cred" | rot_json 'd.get("readerUsername","")')" = excalibase_reader ] && [ -n "$rp" ] \
     && ok "$engine credentials carry the read-only login" || ko "$engine credentials: no read-only login"
 
-  rot_sql "$engine" "$container" "$user" "$pass" "$db" "CREATE TABLE rot_notes (id int); INSERT INTO rot_notes VALUES (1);" >/dev/null
+  rot_sql "$engine" "$container" "$user" "$owner_password" "$db" "CREATE TABLE rot_notes (id int); INSERT INTO rot_notes VALUES (1);" >/dev/null
   out=$(rot_sql "$engine" "$container" excalibase_reader "$rp" "$db" "SELECT COUNT(*) FROM rot_notes")
   [ "$out" = 1 ] && ok "$engine read-only login reads the owner's table" || ko "$engine reader read: ${out:0:200}"
   if [ "$engine" = mysql ]; then
@@ -46,9 +46,9 @@ rotation_journey() {
 
   sleep_sql="SELECT pg_sleep(600)"; [ "$engine" = mysql ] && sleep_sql="SELECT SLEEP(600)"
   if [ "$engine" = mysql ]; then
-    $DOCKER exec -d -e MYSQL_PWD="$pass" "$container" mysql -h 127.0.0.1 -u "$user" --ssl-mode=REQUIRED -e "$sleep_sql" "$db"
+    $DOCKER exec -d -e MYSQL_PWD="$owner_password" "$container" mysql -h 127.0.0.1 -u "$user" --ssl-mode=REQUIRED -e "$sleep_sql" "$db"
   else
-    $DOCKER exec -d -e PGPASSWORD="$pass" "$container" psql -h 127.0.0.1 -U "$user" -d "$db" -c "$sleep_sql"
+    $DOCKER exec -d -e PGPASSWORD="$owner_password" "$container" psql -h 127.0.0.1 -U "$user" -d "$db" -c "$sleep_sql"
   fi
   for i in $(seq 30); do held=$(rot_sessions "$engine" "$container" "$user"); [ "${held:-0}" -ge 1 ] && break; sleep 1; done
   [ "${held:-0}" -ge 1 ] && ok "$engine owner session held open" || ko "$engine no held owner session"
@@ -59,6 +59,6 @@ rotation_journey() {
   cred=$(rot_api "https://studio.localhost:$PORT/api/provision/$pid/credentials")
   out=$(rot_sql "$engine" "$container" "$user" "$(echo "$cred" | rot_json 'd["password"]')" "$db" "SELECT COUNT(*) FROM rot_notes")
   [ "$out" = 1 ] && ok "$engine new owner password opens the database" || ko "$engine after rotation: ${out:0:200}"
-  out=$(rot_sql "$engine" "$container" "$user" "$pass" "$db" "SELECT 1")
+  out=$(rot_sql "$engine" "$container" "$user" "$owner_password" "$db" "SELECT 1")
   [ "$out" != 1 ] && ok "$engine old owner password is refused" || ko "$engine old password still opens the database"
 }
