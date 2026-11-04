@@ -22,6 +22,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/testutil/lokitest"
 )
 
 // lokiImage is the chart's and compose's Loki.
@@ -50,7 +51,10 @@ func startBundledLoki(t *testing.T) string {
 	t.Cleanup(func() { _ = container.Terminate(ctx) })
 	host, _ := container.Host(ctx)
 	port, _ := container.MappedPort(ctx, "3100/tcp")
-	return fmt.Sprintf("http://%s:%s", host, port.Port())
+	lokiURL := fmt.Sprintf("http://%s:%s", host, port.Port())
+	// The pusher never quotes Loki's answer, so a cold Loki is waited out here.
+	lokitest.WaitAcceptsPush(t, lokiURL, lokitest.AcceptsWithin)
+	return lokiURL
 }
 
 type downEngine struct{}
