@@ -98,6 +98,7 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 	if err != nil {
 		return nil, err
 	}
+	var rotated []string
 	for _, target := range rotationTargets(inst, filed) {
 		target.serverCA = serverCA
 		authenticatesByCertificate, err := s.authenticatesByCertificate(projectID, target.role)
@@ -109,6 +110,14 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 		}
 		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
 			return nil, fmt.Errorf("rotate %s credential: %w", target.role, err)
+		}
+		rotated = append(rotated, target.username)
+	}
+	// Only once every password has changed, so a copy that cannot end its
+	// sessions never holds a role back on its old password.
+	if len(rotated) > 0 && s.endsSessionsOnRotation(ctx) {
+		if err := s.endRoleSessions(ctx, inst, rotated); err != nil {
+			return nil, fmt.Errorf("the passwords changed but the sessions opened with the old ones were not all ended: %w", err)
 		}
 	}
 	return s.GetCredentials(ctx, projectID)
@@ -186,16 +195,7 @@ func (s *ProvisioningService) rotateRoleCredential(ctx context.Context, inst *do
 	if err := s.applyAndVerify(ctx, inst, target, password, pendingPath); err != nil {
 		return err
 	}
-	if err := s.promoteCredential(ctx, inst, target, password, pendingPath); err != nil {
-		return err
-	}
-	if !s.endsSessionsOnRotation(ctx) {
-		return nil
-	}
-	if err := s.endRoleSessions(ctx, inst, target.username); err != nil {
-		return fmt.Errorf("the password changed but the sessions opened with the old one were not all ended: %w", err)
-	}
-	return nil
+	return s.promoteCredential(ctx, inst, target, password, pendingPath)
 }
 
 // applyAndVerify runs the ALTER and then asks the database whether the new

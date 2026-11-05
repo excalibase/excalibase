@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -34,10 +35,14 @@ func (s *ProvisioningService) SetFeatures(flags features.Flags) {
 	s.flags = flags
 }
 
-// terminateRoleSessionsSQL ends every session the role holds, other than the caller's.
-func terminateRoleSessionsSQL(role string) string {
+// terminateRoleSessionsSQL ends every session the roles hold, other than the caller's.
+func terminateRoleSessionsSQL(roles ...string) string {
+	literals := make([]string, len(roles))
+	for i, role := range roles {
+		literals[i] = sqlTextLiteral(role)
+	}
 	return fmt.Sprintf("SELECT count(pg_catalog.pg_terminate_backend(pid, %d)) FROM pg_catalog.pg_stat_activity "+
-		"WHERE usename = %s AND pid <> pg_catalog.pg_backend_pid();\n", terminateWaitMillis, sqlTextLiteral(role))
+		"WHERE usename IN (%s) AND pid <> pg_catalog.pg_backend_pid();\n", terminateWaitMillis, strings.Join(literals, ", "))
 }
 
 // awaitReplaySQL fails unless the standby replays up to position within the bound.
@@ -61,29 +66,37 @@ func (s *ProvisioningService) endsSessionsOnRotation(ctx context.Context) bool {
 	return features.Enabled(ctx, s.flags, features.DBReadRole)
 }
 
-// endRoleSessions ends the sessions a role opened with its old password, on
-// every copy of the project's database.
-func (s *ProvisioningService) endRoleSessions(ctx context.Context, inst *domain.DatabaseInstance, username string) error {
+// endRoleSessions ends the sessions the roles opened with their old passwords,
+// on every copy of the project's database. It runs once every password has
+// changed and reports each copy it could not clear rather than stopping there.
+func (s *ProvisioningService) endRoleSessions(ctx context.Context, inst *domain.DatabaseInstance, usernames []string) error {
 	if inst.DBType == domain.MySQL {
 		mysql, err := s.mysqlServerOf()
 		if err != nil {
 			return err
 		}
-		return mysql.EndUserSessions(ctx, inst.Namespace, inst.ProjectID, username)
+		var errs []error
+		for _, username := range usernames {
+			if err := mysql.EndUserSessions(ctx, inst.Namespace, inst.ProjectID, username); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", username, err))
+			}
+		}
+		return errors.Join(errs...)
 	}
 	if inst.DeploymentMode == domain.ModeDocker {
 		if s.dockerClient == nil {
 			return errors.New("no container engine to reach the database")
 		}
-		_, err := s.dockerClient.ExecInContainerStdin(ctx, inst.Namespace, sessionPsql, terminateRoleSessionsSQL(username))
+		_, err := s.dockerClient.ExecInContainerStdin(ctx, inst.Namespace, sessionPsql, terminateRoleSessionsSQL(usernames...))
 		return err
 	}
-	return s.endClusterRoleSessions(ctx, inst, username)
+	return s.endClusterRoleSessions(ctx, inst, usernames)
 }
 
 // endClusterRoleSessions ends the sessions on the primary, reading how far it
-// has written, then on each replica once it has replayed that far.
-func (s *ProvisioningService) endClusterRoleSessions(ctx context.Context, inst *domain.DatabaseInstance, username string) error {
+// has written, then on each healthy replica once it has replayed that far. A
+// replica CNPG does not report healthy is not waited on, only reported.
+func (s *ProvisioningService) endClusterRoleSessions(ctx context.Context, inst *domain.DatabaseInstance, usernames []string) error {
 	if s.k8sClient == nil {
 		return errors.New("no cluster client to reach the database")
 	}
@@ -95,8 +108,9 @@ func (s *ProvisioningService) endClusterRoleSessions(ctx context.Context, inst *
 	if primary == "" {
 		return fmt.Errorf("cluster of %s reports no primary", inst.ProjectID)
 	}
+	terminate := terminateRoleSessionsSQL(usernames...)
 	out, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, primary, "postgres", sessionPsql,
-		terminateRoleSessionsSQL(username)+"SELECT pg_catalog.pg_current_wal_lsn();\n")
+		terminate+"SELECT pg_catalog.pg_current_wal_lsn();\n")
 	if err != nil {
 		return fmt.Errorf("end sessions on %s: %w", primary, err)
 	}
@@ -104,17 +118,23 @@ func (s *ProvisioningService) endClusterRoleSessions(ctx context.Context, inst *
 	if !walPosition.MatchString(position) {
 		return fmt.Errorf("the primary %s reported no write position", primary)
 	}
+	healthy, _, _ := unstructured.NestedStringSlice(cluster.Object, "status", "instancesStatus", "healthy")
 	instances, _, _ := unstructured.NestedStringSlice(cluster.Object, "status", "instanceNames")
+	var errs []error
 	for _, pod := range instances {
 		if pod == primary {
 			continue
 		}
+		if !slices.Contains(healthy, pod) {
+			errs = append(errs, fmt.Errorf("replica %s is not ready; its sessions were not ended", pod))
+			continue
+		}
 		if _, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, pod, "postgres", sessionPsql,
-			awaitReplaySQL(position)+terminateRoleSessionsSQL(username)); err != nil {
-			return fmt.Errorf("end sessions on replica %s: %w", pod, err)
+			awaitReplaySQL(position)+terminate); err != nil {
+			errs = append(errs, fmt.Errorf("end sessions on replica %s: %w", pod, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func lastOutputLine(out string) string {
