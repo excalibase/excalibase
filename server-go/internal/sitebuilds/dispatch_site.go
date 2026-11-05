@@ -58,12 +58,16 @@ func (k *siteKind) start(ctx context.Context, credential gitprovider.CloneCreden
 	})
 }
 
-// environment is the site's declared variables plus the project secrets marked build-visible.
+// environment is the site's declared variables plus the project secrets marked build-visible;
+// a preview build gets the secrets only on the Admin's opt-in, and a fork's never.
 func (k *siteKind) environment(ctx context.Context) (map[string]string, error) {
 	declared := k.execution.build.Settings.Env
 	env := make(map[string]string, len(declared))
 	for name, value := range declared {
 		env[name] = value
+	}
+	if preview := k.execution.build.Preview; preview != nil && !preview.seesSecrets() {
+		return env, nil
 	}
 	secrets, err := k.execution.visibleSecrets(ctx)
 	if err != nil {
@@ -97,6 +101,9 @@ func (k *siteKind) deliver(ctx context.Context) outcome {
 		return failedWith(FailDeploy, userMessage(err))
 	}
 	run.refreshLog(ctx)
+	if build.Preview != nil {
+		return run.deployPreview(ctx, spool)
+	}
 	deploy, err := k.deployWithRetry(ctx, spool)
 	if err != nil {
 		return failedWith(FailDeploy, userMessage(err))

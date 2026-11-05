@@ -38,6 +38,7 @@ const (
 type SiteGitHandler struct {
 	builds    *sitebuilds.Service
 	studioURL string
+	audit     auditWriter
 }
 
 func NewSiteGitHandler(service *sitebuilds.Service, studioURL string) *SiteGitHandler {

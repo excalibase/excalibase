@@ -56,6 +56,8 @@ type Options struct {
 	NodeImage string
 	// Members answers whether a connector may still deploy the project; nil trusts every connection.
 	Members MembershipChecker
+	// Previews deploys branch and pull request previews (EXC-660); nil leaves them off.
+	Previews PreviewSites
 }
 
 // MembershipChecker answers who a project member is and whether they still hold the developer rung.
@@ -297,6 +299,9 @@ func (s *Service) Disconnect(ctx context.Context, projectID, siteID string) erro
 	if err := s.mustSite(ctx, projectID, siteID); err != nil {
 		return err
 	}
+	if err := s.removeSitePreviews(ctx, projectID, siteID); err != nil {
+		return err
+	}
 	if err := s.store.DeleteConnection(ctx, projectID, siteID); err != nil {
 		return err
 	}
@@ -323,7 +328,7 @@ func (s *Service) buildHead(ctx context.Context, connection connected, actor str
 	if err != nil {
 		return nil, err
 	}
-	build, _, err := s.enqueue(ctx, connection, head, TriggerRebuild, "", actor)
+	build, _, err := s.enqueue(ctx, connection, head, TriggerRebuild, "", actor, nil)
 	return build, err
 }
 
@@ -331,7 +336,9 @@ const disconnectedReason = "the repository was disconnected"
 
 // enqueue sizes the build by the plan and queues it. A site's push past the hourly
 // deploys is recorded FAILED so it is not lost silently.
-func (s *Service) enqueue(ctx context.Context, connection connected, commit gitprovider.Commit, trigger, delivery, actor string) (*Build, bool, error) {
+// shape, when given, fills in what a preview build adds before anything is counted.
+func (s *Service) enqueue(ctx context.Context, connection connected, commit gitprovider.Commit, trigger, delivery, actor string,
+	shape func(*Build)) (*Build, bool, error) {
 	if delivery != "" {
 		queued, err := s.store.DeliveryQueued(ctx, connection.target(), delivery)
 		if err != nil || queued {
@@ -347,8 +354,13 @@ func (s *Service) enqueue(ctx context.Context, connection connected, commit gitp
 	build.CommitSHA, build.CommitMessage, build.DeliveryID, build.RequestedBy = commit.SHA, commit.Message, delivery, actor
 	build.Provider, build.InstallationID, build.RepositoryID, build.Repository = source.Provider, source.InstallationID, source.RepositoryID, source.Repository
 	build.CreatedAt = s.now().UTC()
-	if err := s.admit(ctx, build); err != nil {
-		return nil, false, err
+	if shape != nil {
+		shape(build)
+	}
+	if build.Status == StatusQueued {
+		if err := s.admit(ctx, build); err != nil {
+			return nil, false, err
+		}
 	}
 	created, err := s.store.Enqueue(ctx, build, buildsKept)
 	if err != nil {
@@ -358,6 +370,14 @@ func (s *Service) enqueue(ctx context.Context, connection connected, commit gitp
 		s.nudge()
 	}
 	return build, created, nil
+}
+
+// takeSlot counts a preview build against the previews' own budget, any other site build against the project's deploys.
+func (s *Service) takeSlot(ctx context.Context, build *Build) error {
+	if build.Trigger == TriggerPreview && s.options.Previews != nil {
+		return s.options.Previews.TakePreviewSlot(ctx, build.ProjectID)
+	}
+	return s.sites.TakeDeploySlot(ctx, build.ProjectID)
 }
 
 // sizedBuild is the target's part of a new build: its settings and the plan's limits, fixed now.
@@ -382,16 +402,16 @@ func (s *Service) admit(ctx context.Context, build *Build) error {
 	if build.Kind == KindApp {
 		return nil
 	}
-	if err := s.sites.TakeDeploySlot(ctx, build.ProjectID); err != nil {
+	if err := s.takeSlot(ctx, build); err != nil {
 		return overCap(build, err)
 	}
 	return nil
 }
 
-// overCap applies a refused slot: a push is recorded FAILED so it is not lost silently; anything else is refused.
+// overCap applies a refused slot: a push or a preview is recorded FAILED so it is not lost silently; anything else is refused.
 func overCap(build *Build, slotErr error) error {
 	limited := errors.Is(slotErr, sites.ErrDeployRateLimited) || errors.Is(slotErr, ErrAppBuildRateLimited)
-	if build.Trigger != TriggerPush || !limited {
+	if (build.Trigger != TriggerPush && build.Trigger != TriggerPreview) || !limited {
 		return slotErr
 	}
 	build.Status, build.FailureKind, build.FailureReason = StatusFailed, FailRateLimited, slotErr.Error()
@@ -418,10 +438,15 @@ func (s *Service) HandleWebhook(ctx context.Context, header map[string][]string,
 	switch {
 	case event.Push != nil:
 		return s.handlePush(ctx, event)
+	case event.PullRequest != nil:
+		if s.options.Previews == nil {
+			return 0, nil
+		}
+		return s.handlePullRequest(ctx, event)
 	case event.RemovedInstallation != 0:
-		return s.store.ForgetInstallation(ctx, s.provider.Name(), event.RemovedInstallation, nil)
+		return s.forgetInstallation(ctx, event.RemovedInstallation, nil)
 	case len(event.RemovedRepositories) > 0:
-		return s.store.ForgetInstallation(ctx, s.provider.Name(), event.RemovedFrom, event.RemovedRepositories)
+		return s.forgetInstallation(ctx, event.RemovedFrom, event.RemovedRepositories)
 	}
 	return 0, nil
 }
@@ -429,7 +454,7 @@ func (s *Service) HandleWebhook(ctx context.Context, header map[string][]string,
 func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int, error) {
 	push := event.Push
 	if push.Deleted {
-		return 0, nil
+		return s.removeBranchPreviews(ctx, push)
 	}
 	if event.DeliveryID == "" {
 		return 0, errors.New("the push has no delivery id")
@@ -440,7 +465,11 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 	}
 	// A target read error still queues the targets read, so a failed app read never loses the push's site builds.
 	connections, readErr := s.pushTargets(ctx, push)
-	if len(connections) == 0 {
+	previewed, err := s.branchPreviews(ctx, push)
+	if err != nil {
+		return 0, errors.Join(readErr, err)
+	}
+	if len(connections)+len(previewed) == 0 {
 		return 0, readErr
 	}
 	// The delivery id is not signed: a replayed push is caught by the branch having moved past it.
@@ -453,7 +482,20 @@ func (s *Service) handlePush(ctx context.Context, event gitprovider.Event) (int,
 		return 0, s.store.RecordDelivery(ctx, s.provider.Name(), event.DeliveryID, s.now())
 	}
 	queued, err := s.queuePush(ctx, connections, push, event.DeliveryID)
-	if failed := errors.Join(readErr, err); failed != nil {
+	failures := []error{readErr, err}
+	for _, connection := range previewed {
+		connection.Repository = push.Repository
+		created, err := s.queuePreview(ctx, connection, push.Commit, previewTarget{source: sites.PreviewSourceBranch, ref: push.Branch}, event.DeliveryID)
+		if err != nil {
+			log.Printf("site builds: queue a preview of %s for site %s: %v", push.Branch, connection.SiteID, err)
+			failures = append(failures, err)
+			continue
+		}
+		if created {
+			queued++
+		}
+	}
+	if failed := errors.Join(failures...); failed != nil {
 		return queued, failed
 	}
 	return queued, s.store.RecordDelivery(ctx, s.provider.Name(), event.DeliveryID, s.now())
@@ -495,7 +537,7 @@ func (s *Service) queuePush(ctx context.Context, connections []connected, push *
 		}
 		source := connection.source()
 		source.Repository = push.Repository
-		_, created, err := s.enqueue(ctx, connection, push.Commit, TriggerPush, delivery, source.ConnectedBy)
+		_, created, err := s.enqueue(ctx, connection, push.Commit, TriggerPush, delivery, source.ConnectedBy, nil)
 		if err != nil {
 			target := connection.target()
 			log.Printf("git builds: queue a push to %s for %s %s: %v", push.Repository, target.Kind, target.ID, err)

@@ -88,6 +88,10 @@ var allowedRoutes = []*regexp.Regexp{
 	// mint, which ADR 0037 keeps in Studio.
 	regexp.MustCompile(`^GET /api/projects/[^/]+/storage/s3-keys$`),
 	regexp.MustCompile(`^DELETE /api/projects/[^/]+/storage/s3-keys/[^/]+$`),
+	// Previews (EXC-660): list, mode and removal; the Admin's opt-ins stay in Studio.
+	regexp.MustCompile(`^GET /api/projects/[^/]+/sites/[^/]+/previews$`),
+	regexp.MustCompile(`^PUT /api/projects/[^/]+/sites/[^/]+/previews/mode$`),
+	regexp.MustCompile(`^DELETE /api/projects/[^/]+/sites/[^/]+/previews/[^/]+$`),
 }
 
 // neverReached is the surface ADR 0037 keeps out of MCP: project lifecycle,
@@ -113,6 +117,7 @@ var neverReached = []*regexp.Regexp{
 	regexp.MustCompile(`/api/admin`),
 	regexp.MustCompile(`/api/orgs`),
 	regexp.MustCompile(`/documentdb/users`),
+	regexp.MustCompile(`/previews/access`),
 	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/registry-credentials`),
 }
 

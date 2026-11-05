@@ -390,6 +390,15 @@ func (f *fakeProvider) FileExists(_ context.Context, _ int64, _ gitprovider.Repo
 	return f.files[path], f.filesErr
 }
 
+// PullRequest and SetCommitStatus are previews' (EXC-660); these tests deliver no pull request.
+func (f *fakeProvider) PullRequest(context.Context, int64, gitprovider.Repository, int) (gitprovider.PullRequestState, error) {
+	return gitprovider.PullRequestState{}, nil
+}
+
+func (f *fakeProvider) SetCommitStatus(context.Context, int64, gitprovider.Repository, string, gitprovider.CommitStatus) error {
+	return nil
+}
+
 func (f *fakeProvider) revokedTokens() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

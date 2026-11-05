@@ -126,6 +126,9 @@ func (e *execution) checkSource(ctx context.Context) *outcome {
 		return refusal(err)
 	}
 	build.Repository = connection.source().Repository
+	if reason := e.narrowPreview(connection); reason != "" {
+		return refuse(FailPlatform, reason)
+	}
 	return nil
 }
 
@@ -194,7 +197,7 @@ func (e *execution) stillDeployable(ctx context.Context) string {
 	if err := e.dispatcher.service.checkConnector(ctx, still); err != nil {
 		return userMessage(err) + "; nothing was deployed"
 	}
-	return ""
+	return e.previewStillDeployable(still)
 }
 
 // visibleSecrets reads the project secrets marked build-visible, hiding each from the logs.

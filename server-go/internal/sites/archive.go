@@ -40,6 +40,8 @@ type Limits struct {
 	// MaxServerCPUMillis and MaxServerSubrequests bound one request of a server site's code.
 	MaxServerCPUMillis   int
 	MaxServerSubrequests int
+	// MaxPreviews is how many live previews the project's sites may hold (EXC-660); 0 offers none.
+	MaxPreviews int
 }
 
 // DefaultLimits is the FREE plan's, for a service built without a limits source.
@@ -55,6 +57,7 @@ var DefaultLimits = Limits{
 	MaxServerBundleBytes: 10 << 20,
 	MaxServerCPUMillis:   50,
 	MaxServerSubrequests: 20,
+	MaxPreviews:          2,
 }
 
 const maxPathLength = 1024

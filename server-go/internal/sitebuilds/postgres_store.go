@@ -14,6 +14,28 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/sites"
 )
 
+// The connection reads, each spelt out whole so every statement is a constant; scanConnection reads
+// these columns in this order.
+const (
+	getConnectionSQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
+		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		created_at, updated_at, preview_settings
+		FROM site_git_connections WHERE site_id = $1 AND project_id = $2`
+	connectionsForPushSQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
+		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		created_at, updated_at, preview_settings
+		FROM site_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`
+	connectionsForRepositorySQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
+		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		created_at, updated_at, preview_settings
+		FROM site_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3`
+	connectionsForInstallationSQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
+		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		created_at, updated_at, preview_settings
+		FROM site_git_connections WHERE provider = $1 AND installation_id = $2
+		AND (cardinality($3::bigint[]) = 0 OR repository_id = ANY($3))`
+)
+
 // PostgresStore keeps git builds in the platform database.
 type PostgresStore struct{ db *sql.DB }
 
@@ -22,9 +44,7 @@ var _ Store = (*PostgresStore)(nil)
 func NewPostgresStore(db *sql.DB) *PostgresStore { return &PostgresStore{db: db} }
 
 func (s *PostgresStore) GetConnection(ctx context.Context, projectID, siteID string) (*Connection, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
-		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''), created_at, updated_at
-		FROM site_git_connections WHERE site_id = $1 AND project_id = $2`, siteID, projectID)
+	row := s.db.QueryRowContext(ctx, getConnectionSQL, siteID, projectID)
 	connection, err := scanConnection(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -36,17 +56,21 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanConnection(row scanner) (*Connection, error) {
 	var connection Connection
-	var env []byte
+	var env, previews []byte
 	settings := &connection.Settings
 	err := row.Scan(&connection.SiteID, &connection.ProjectID, &connection.Provider, &connection.InstallationID, &connection.RepositoryID,
 		&connection.Repository, &settings.Branch, &settings.RootDir, &settings.InstallCommand, &settings.BuildCommand, &settings.OutputDir,
-		&settings.NodeVersion, &env, &connection.ConnectedBy, &connection.InactiveReason, &connection.CreatedAt, &connection.UpdatedAt)
+		&settings.NodeVersion, &env, &connection.ConnectedBy, &connection.InactiveReason, &connection.CreatedAt, &connection.UpdatedAt, &previews)
 	if err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(env, &settings.Env); err != nil {
 		return nil, fmt.Errorf("decode build variables: %w", err)
 	}
+	if err := json.Unmarshal(previews, &connection.Previews); err != nil {
+		return nil, fmt.Errorf("decode preview settings: %w", err)
+	}
+	connection.Previews = connection.Previews.normalised()
 	return &connection, nil
 }
 
@@ -94,13 +118,56 @@ func (s *PostgresStore) DeleteConnection(ctx context.Context, projectID, siteID 
 }
 
 func (s *PostgresStore) ConnectionsForPush(ctx context.Context, provider string, installationID, repositoryID int64, branch string) ([]*Connection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
-		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''), created_at, updated_at
-		FROM site_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`,
-		provider, installationID, repositoryID, branch)
+	rows, err := s.db.QueryContext(ctx, connectionsForPushSQL, provider, installationID, repositoryID, branch)
 	if err != nil {
 		return nil, fmt.Errorf("find the sites a push builds: %w", err)
 	}
+	return collectConnections(rows)
+}
+
+// ConnectionsForRepository answers every site connected to the repository, whatever its branch (EXC-660).
+func (s *PostgresStore) ConnectionsForRepository(ctx context.Context, provider string, installationID, repositoryID int64) ([]*Connection, error) {
+	rows, err := s.db.QueryContext(ctx, connectionsForRepositorySQL, provider, installationID, repositoryID)
+	if err != nil {
+		return nil, fmt.Errorf("find the sites connected to a repository: %w", err)
+	}
+	return collectConnections(rows)
+}
+
+func (s *PostgresStore) ConnectionsForInstallation(ctx context.Context, provider string, installationID int64, repositoryIDs []int64) ([]*Connection, error) {
+	if repositoryIDs == nil {
+		repositoryIDs = []int64{}
+	}
+	rows, err := s.db.QueryContext(ctx, connectionsForInstallationSQL, provider, installationID, pq.Array(repositoryIDs))
+	if err != nil {
+		return nil, fmt.Errorf("find the sites connected through an installation: %w", err)
+	}
+	return collectConnections(rows)
+}
+
+func (s *PostgresStore) SavePreviewMode(ctx context.Context, projectID, siteID, mode string) error {
+	return s.mergePreviewSettings(ctx, projectID, siteID, map[string]string{"mode": mode})
+}
+
+func (s *PostgresStore) SavePreviewAccess(ctx context.Context, projectID, siteID string, access PreviewAccess) error {
+	return s.mergePreviewSettings(ctx, projectID, siteID, access)
+}
+
+// mergePreviewSettings writes the given keys in one statement, leaving the others as they are.
+func (s *PostgresStore) mergePreviewSettings(ctx context.Context, projectID, siteID string, keys any) error {
+	encoded, err := json.Marshal(keys)
+	if err != nil {
+		return fmt.Errorf("encode preview settings: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE site_git_connections SET preview_settings = preview_settings || $3::jsonb, updated_at = NOW()
+		WHERE site_id = $1 AND project_id = $2`, siteID, projectID, encoded)
+	if err != nil {
+		return fmt.Errorf("save preview settings: %w", err)
+	}
+	return requireTouched(result, ErrNotConnected)
+}
+
+func collectConnections(rows *sql.Rows) ([]*Connection, error) {
 	defer rows.Close()
 	var found []*Connection
 	for rows.Next() {

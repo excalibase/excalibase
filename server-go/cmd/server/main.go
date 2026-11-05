@@ -1868,6 +1868,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	sitesSvc := newSitesService(cfg, sqlStore, service.NewSiteLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc), a.claimer)
 	startHostnameSweep(context.Background(), sitesSvc)
 	startServerSitesSweep(context.Background(), sitesSvc)
+	startPreviewSweep(context.Background(), sitesSvc)
 	provSvc.SetSitePurger(sitesSvc)
 	provSvc.SetSiteRouter(sitesSvc)
 	appRegistry, err := newAppRegistryParts(cfg, sqlStore, store, internalRegistry)
@@ -2514,6 +2515,9 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(d.activity)
 		d.siteHandler.Routes(r, custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		d.siteBuilds.handler.Routes(r, custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+		// Previews (EXC-660) ship dark behind sitepreviews.
+		d.siteBuilds.handler.PreviewRoutes(r.With(features.Require(d.features, features.SitePreviews)),
+			custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore), custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
 	})
 	// The git host's webhook and sign-in callback (EXC-354): a signature or a single-use state is the credential.
 	r.With(siteGitWebhookRate).Route("/api/sites/github", d.siteBuilds.handler.PublicRoutes)

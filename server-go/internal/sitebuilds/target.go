@@ -71,6 +71,7 @@ func (s *Service) currentRepository(ctx context.Context, connection connected) e
 	if err != nil {
 		return fmt.Errorf("read the repository: %w", err)
 	}
+	source.private = repository.Private
 	if repository.FullName == source.Repository {
 		return nil
 	}

@@ -181,6 +181,7 @@ type limitsResponse struct {
 	MaxFileBytes      int64 `json:"maxFileBytes"`
 	MaxDeploysPerHour int   `json:"maxDeploysPerHour"`
 	MaxCustomDomains  int   `json:"maxCustomDomains"`
+	MaxPreviews       int   `json:"maxPreviews"`
 	// Server-rendered sites (EXC-661), shown only while they are offered.
 	*serverLimitsResponse
 }
@@ -199,7 +200,7 @@ func (h *SiteHandler) limits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := limitsResponse{MaxSites: limits.MaxSites, MaxDeployBytes: limits.MaxTotalBytes, MaxFiles: limits.MaxFiles,
-		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour, MaxCustomDomains: limits.MaxCustomDomains}
+		MaxFileBytes: limits.MaxFileBytes, MaxDeploysPerHour: limits.MaxDeploysPerHour, MaxCustomDomains: limits.MaxCustomDomains, MaxPreviews: limits.MaxPreviews}
 	if h.sites.ServerSitesOn(r.Context()) {
 		out.serverLimitsResponse = &serverLimitsResponse{MaxServerSites: limits.MaxServerSites, MaxServerBundleBytes: limits.MaxServerBundleBytes,
 			MaxServerCPUMillis: limits.MaxServerCPUMillis, MaxServerSubrequests: limits.MaxServerSubrequests}

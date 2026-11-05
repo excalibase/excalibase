@@ -31,6 +31,16 @@ type Store interface {
 	SaveConnection(ctx context.Context, connection *Connection) error
 	DeleteConnection(ctx context.Context, projectID, siteID string) error
 	ConnectionsForPush(ctx context.Context, provider string, installationID, repositoryID int64, branch string) ([]*Connection, error)
+	// ConnectionsForRepository answers every site connected to the repository, whatever its branch.
+	ConnectionsForRepository(ctx context.Context, provider string, installationID, repositoryID int64) ([]*Connection, error)
+	// ConnectionsForInstallation answers the sites connected through the installation, to the given
+	// repositories only when any are named.
+	ConnectionsForInstallation(ctx context.Context, provider string, installationID int64, repositoryIDs []int64) ([]*Connection, error)
+	// SavePreviewMode and SavePreviewAccess each write only their own keys of the connection's previews,
+	// so a developer's mode and an Admin's opt-ins saved at once never undo each other; ErrNotConnected
+	// when the site has no connection.
+	SavePreviewMode(ctx context.Context, projectID, siteID, mode string) error
+	SavePreviewAccess(ctx context.Context, projectID, siteID string, access PreviewAccess) error
 	// ForgetInstallation drops connections through an installation, or only those to the given repositories.
 	ForgetInstallation(ctx context.Context, provider string, installationID int64, repositoryIDs []int64) (int, error)
 
@@ -67,7 +77,8 @@ type Store interface {
 	// project's app builds per hour in the same transaction, after the delivery check, via overCap.
 	Enqueue(ctx context.Context, build *Build, keep int) (bool, error)
 	// ClaimNext takes the oldest queued build of the given kinds that fits the slots (running builds
-	// of every kind count), its project's cap for that kind, and one running build per site or app.
+	// of every kind count), its project's cap for that kind, and one running build per site or app and scope;
+	// a site's previews count against PreviewsRunningPerProject instead of the plan's concurrency.
 	ClaimNext(ctx context.Context, slots int, holder string, leaseUntil time.Time, kinds []string) (*Build, error)
 	ExtendLease(ctx context.Context, buildID, holder string, until time.Time) error
 	SaveLog(ctx context.Context, buildID, holder, log string) error

@@ -266,6 +266,7 @@ func (d *Dispatcher) run(ctx context.Context, build *Build) {
 	if err := d.service.store.FinishBuild(context.WithoutCancel(ctx), build, d.options.Holder); err != nil {
 		log.Printf("%s build %s: record outcome: %v", build.Kind, build.ID, err)
 	}
+	execution.reportPreview(context.WithoutCancel(ctx), outcome)
 }
 
 func (d *Dispatcher) holdLease(ctx context.Context, cancel context.CancelFunc, buildID string, lost chan<- struct{}) {
@@ -294,6 +295,8 @@ type outcome struct {
 	deployID string
 	kind     FailureKind
 	reason   string
+	// previewURL is where a preview build was published.
+	previewURL string
 }
 
 func failedWith(kind FailureKind, reason string) outcome {

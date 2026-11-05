@@ -110,10 +110,12 @@ func newSiteBuilds(args siteBuildArgs) siteBuilds {
 	service := sitebuilds.NewService(sitebuilds.NewPostgresStore(args.sqlStore.DB()), provider, args.sites, args.limits,
 		sitebuilds.NewVaultSecrets(args.vault), sitebuilds.Options{
 			Mode: mode, NodeImage: cfg.SiteGit.NodeImage, Members: args.members,
-			CallbackURL: siteGitCallbackURL(cfg),
+			CallbackURL: siteGitCallbackURL(cfg), Previews: previewSites(args.sites),
 		})
 	dispatcher := sitebuilds.NewDispatcher(service, runner, siteBuildDispatcherOptions(cfg))
-	return siteBuilds{handler: handler.NewSiteGitHandler(service, cfg.StudioURL), dispatcher: dispatcher, service: service, wired: true,
+	gitHandler := handler.NewSiteGitHandler(service, cfg.StudioURL)
+	gitHandler.SetAuditLog(args.sqlStore)
+	return siteBuilds{handler: gitHandler, dispatcher: dispatcher, service: service, wired: true,
 		apps: handler.NewAppGitHandler(service), appsWired: wireClusterAppBuilds(args, provider, service, dispatcher)}
 }
 
@@ -198,6 +200,15 @@ func singleHostBuildRunner(ctx context.Context, cfg config.AppConfig, engine raw
 	log.Printf("INFO: site git builds on this single host: %d slot(s), under runtime %q, out only through the build egress proxy",
 		git.BuildSlots, apps.SandboxRuntime)
 	return runner, nil
+}
+
+// previewSites hands previews to git builds wherever Sites keeps them (EXC-660); while the flag is
+// off git builds make none but still remove the held ones on close, delete and disconnect.
+func previewSites(service *sites.Service) sitebuilds.PreviewSites {
+	if service == nil || !service.KeepsPreviews() {
+		return nil
+	}
+	return service
 }
 
 // wireAppBuilds turns on git builds of apps where they are wanted, and stops the boot where they are wanted but cannot run.
