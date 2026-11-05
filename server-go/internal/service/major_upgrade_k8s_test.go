@@ -34,6 +34,10 @@ type recordingProgress struct {
 	convertErr error
 	// lost: another actor has taken the run over.
 	lost bool
+	// holdErr fails ownership checks the way an unreachable database does.
+	holdErr error
+	// onHold runs inside every ownership check.
+	onHold func()
 }
 
 func (p *recordingProgress) lostErr() error {
@@ -59,7 +63,15 @@ func (p *recordingProgress) WritesStopped(_ context.Context, at time.Time) error
 	return nil
 }
 
-func (p *recordingProgress) Hold(context.Context) error { return p.lostErr() }
+func (p *recordingProgress) Hold(context.Context) error {
+	if p.onHold != nil {
+		p.onHold()
+	}
+	if p.holdErr != nil {
+		return p.holdErr
+	}
+	return p.lostErr()
+}
 
 func (p *recordingProgress) Converted(_ context.Context, at time.Time) error {
 	if err := p.lostErr(); err != nil {
@@ -482,5 +494,24 @@ func TestK8sConvertChangesNothingForARunItLost(t *testing.T) {
 	}
 	if !w.imageIs("16") {
 		t.Fatalf("image = %s", w.image())
+	}
+}
+
+// A run lost while the job failed is not put back: the new owner decides.
+func TestK8sPutBackForALostRunChangesNothing(t *testing.T) {
+	w := newK8sUpgradeWorld(t)
+	w.react = func(w *k8sUpgradeWorld) {
+		if w.imageIs("17") {
+			w.upgrading()
+			w.job(true)
+			w.progress.lost = true
+		}
+	}
+	outcome := w.upgrader.Convert(context.Background(), w.inst, w.run(), w.progress)
+	if !errors.Is(outcome.Cause, errRunTakenOver) || outcome.RolledBack {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if !w.imageIs("17") {
+		t.Fatalf("image = %s, want the cluster left on 17", w.image())
 	}
 }

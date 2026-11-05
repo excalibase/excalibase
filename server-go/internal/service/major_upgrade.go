@@ -125,6 +125,8 @@ type MajorUpgradeService struct {
 	runSync bool
 	// heartbeatEvery is how often an actor marks its run alive.
 	heartbeatEvery time.Duration
+	// heartbeatTimeout bounds one heartbeat.
+	heartbeatTimeout time.Duration
 }
 
 // postUpgradeBackupAttempts bounds the retries of the first backup on the
@@ -138,7 +140,8 @@ func NewMajorUpgradeService(cfg MajorUpgradeConfig) *MajorUpgradeService {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &MajorUpgradeService{cfg: cfg, heartbeatEvery: majorUpgradeHeartbeat}
+	return &MajorUpgradeService{cfg: cfg, heartbeatEvery: majorUpgradeHeartbeat,
+		heartbeatTimeout: majorUpgradeHeartbeatTimeout}
 }
 
 func newMajorUpgradeID() string {
@@ -169,22 +172,29 @@ func (s *MajorUpgradeService) Start(ctx context.Context, projectID string, req d
 		FromVersion: inst.PostgresVersion, ToVersion: req.Target(), Step: domain.MajorUpgradeStepBackup,
 		RequestedBy: actor, StartedAt: s.cfg.Now().UTC(), Owner: newOwner(),
 	}
+	stamped := s.cfg.Now()
 	if err := s.cfg.Runs.StartMajorUpgrade(ctx, run); err != nil {
 		release()
 		return nil, err
 	}
+	// The heartbeat runs from the start's stamp, before anything else.
+	lose := &fence{}
+	stop := s.keepAlive(*run, stamped, lose.lose)
+	finish := func() {
+		stop()
+		release()
+	}
 	if err := s.setStatus(projectID, domain.StatusUpgrading, domain.MajorUpgradeStepBackup, ""); err != nil {
 		s.endBeforeChange(context.WithoutCancel(ctx), run, err, "the upgrade could not be started")
-		release()
+		finish()
 		return nil, err
 	}
 	snapshot := *run
 	drive := func() {
-		defer release()
+		defer finish()
 		driveCtx, cancel := context.WithCancelCause(context.Background())
 		defer cancel(nil)
-		stop := s.keepAlive(*run, cancel)
-		defer stop()
+		lose.attach(cancel)
 		s.drive(driveCtx, engine, inst, run)
 	}
 	if s.runSync {

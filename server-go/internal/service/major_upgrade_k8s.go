@@ -228,13 +228,20 @@ func leftRunning(cause error) UpgradeOutcome {
 }
 
 // lostRun is non-nil when the run is no longer this actor's, by cause or by
-// a fresh check.
+// a fresh check. A check the database cannot answer leaves the run to the
+// fence, which is read again after it: the fence may be met meanwhile.
 func lostRun(ctx context.Context, cause error, progress UpgradeProgress) error {
+	if fence := runLostBy(ctx); fence != nil {
+		return fmt.Errorf("%w (stopped at: %v)", fence, cause)
+	}
 	if errors.Is(cause, errRunTakenOver) {
 		return cause
 	}
 	if err := progress.Hold(ctx); errors.Is(err, errRunTakenOver) {
 		return fmt.Errorf("%w (stopped at: %v)", err, cause)
+	}
+	if fence := runLostBy(ctx); fence != nil {
+		return fmt.Errorf("%w (stopped at: %v)", fence, cause)
 	}
 	return nil
 }
@@ -348,9 +355,9 @@ func (u *K8sMajorUpgrader) watch(ctx context.Context, run domain.MajorUpgrade, p
 		sawJob = sawJob || state != k8s.UpgradeJobAbsent
 		switch {
 		case state == k8s.UpgradeJobFailed:
-			return u.putBack(ctx, run, plan, errors.New("the pg_upgrade job failed"))
+			return u.putBack(ctx, run, plan, progress, errors.New("the pg_upgrade job failed"))
 		case !sawJob && elapsed >= u.timings.JobAppear:
-			return u.putBack(ctx, run, plan, errors.New("the operator never started the pg_upgrade job"))
+			return u.putBack(ctx, run, plan, progress, errors.New("the operator never started the pg_upgrade job"))
 		case elapsed >= u.timings.JobMax:
 			return unsettled(fmt.Errorf("pg_upgrade still running after %s", elapsed))
 		}
@@ -371,7 +378,10 @@ func (u *K8sMajorUpgrader) jobState(ctx context.Context, plan clusterUpgrade, st
 
 // putBack points the cluster at the old image and archive again and waits
 // for it to serve on the old major.
-func (u *K8sMajorUpgrader) putBack(ctx context.Context, run domain.MajorUpgrade, plan clusterUpgrade, why error) UpgradeOutcome {
+func (u *K8sMajorUpgrader) putBack(ctx context.Context, run domain.MajorUpgrade, plan clusterUpgrade, progress UpgradeProgress, why error) UpgradeOutcome {
+	if lost := lostRun(ctx, why, progress); lost != nil {
+		return UpgradeOutcome{Cause: lost}
+	}
 	log.Printf("major upgrade %s: putting Postgres %s back: %v", plan.projectID, run.FromVersion, why)
 	if err := u.pointCluster(ctx, plan, plan.fromImage, plan.fromStore, plan.fromServer); err != nil {
 		return UpgradeOutcome{Public: notPutBackPublic, Cause: fmt.Errorf("%v; put back: %w", why, err)}
@@ -388,6 +398,9 @@ func (u *K8sMajorUpgrader) putBack(ctx context.Context, run domain.MajorUpgrade,
 		if major, ok := k8s.ClusterDataMajor(cluster); ok && major == plan.fromMajor && k8s.ClusterPrimaryServing(cluster) {
 			return UpgradeOutcome{RolledBack: true, Cause: why}
 		}
+	}
+	if lost := runLostBy(ctx); lost != nil {
+		return UpgradeOutcome{Cause: fmt.Errorf("%w (putting back: %v)", lost, why)}
 	}
 	return UpgradeOutcome{Public: notPutBackPublic, Cause: fmt.Errorf("%v; the old major did not serve within %s", why, u.timings.PutBack)}
 }

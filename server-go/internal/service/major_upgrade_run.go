@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -15,11 +16,17 @@ import (
 // went stale. Every write names the owner, so a write by an actor that lost
 // the run is refused, and that actor stops where it is.
 
-// majorUpgradeHeartbeat is how often an actor marks its run alive;
-// majorUpgradeStaleAfter is how long without it before recovery takes over.
+// majorUpgradeHeartbeat is how often an actor marks its run alive, and
+// majorUpgradeHeartbeatTimeout bounds one mark. majorUpgradeStaleAfter is
+// how long without a mark before recovery may claim the run; an actor whose
+// marks have failed for majorUpgradeFenceAfter gives the run up first. The
+// check runs on a tick, so giving up can be a heartbeat late, and a step in
+// flight then still finishes: the minute and the heartbeat left cover both.
 const (
-	majorUpgradeHeartbeat  = 30 * time.Second
-	majorUpgradeStaleAfter = 3 * time.Minute
+	majorUpgradeHeartbeat        = 30 * time.Second
+	majorUpgradeHeartbeatTimeout = 10 * time.Second
+	majorUpgradeStaleAfter       = 3 * time.Minute
+	majorUpgradeFenceAfter       = majorUpgradeStaleAfter - time.Minute - majorUpgradeHeartbeat
 )
 
 // newOwner names one actor on one run.
@@ -49,10 +56,12 @@ func (p *runProgress) WritesStopped(ctx context.Context, at time.Time) error {
 }
 
 // Hold confirms ownership with a heartbeat; it answers even after the
-// actor's context was cancelled, so a lost run is told apart from a stop.
+// actor's context was cancelled, so a lost run is told apart from a stop,
+// and within heartbeatTimeout.
 func (p *runProgress) Hold(ctx context.Context) error {
-	err := p.svc.cfg.Runs.TouchMajorUpgrade(context.WithoutCancel(ctx), p.run.ID, p.run.Owner, p.svc.cfg.Now())
-	return takenOver(err)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.svc.heartbeatTimeout)
+	defer cancel()
+	return takenOver(p.svc.cfg.Runs.TouchMajorUpgrade(ctx, p.run.ID, p.run.Owner))
 }
 
 func (p *runProgress) Converted(ctx context.Context, at time.Time) error {
@@ -133,10 +142,8 @@ func (s *MajorUpgradeService) RecoverInterrupted(ctx context.Context) {
 
 // recoverOne works only from the run as its claim returned it, and the
 // project as read after the claim; the listed copy may be out of date.
+// Whether the run is stale is the claim's call, on the database's clock.
 func (s *MajorUpgradeService) recoverOne(ctx context.Context, listed domain.MajorUpgrade) {
-	if s.cfg.Now().Sub(listed.HeartbeatAt) < majorUpgradeStaleAfter {
-		return // its actor is alive, even if its lease was lost
-	}
 	_, release, err := s.cfg.Projects.HoldForMajorUpgrade(ctx, listed.ProjectID, admitRecovery)
 	if err != nil {
 		if !errors.Is(err, ErrProjectOperationRunning) {
@@ -145,34 +152,25 @@ func (s *MajorUpgradeService) recoverOne(ctx context.Context, listed domain.Majo
 		return
 	}
 	defer release()
-	run, inst := s.claim(ctx, listed)
-	if run == nil {
-		return
-	}
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	stop := s.keepAlive(*run, cancel)
-	defer stop()
-	s.recoverClaimed(ctx, inst, run)
-}
-
-// claim takes the run over and reads the project afresh; nil when the run
-// is not claimable any more.
-func (s *MajorUpgradeService) claim(ctx context.Context, listed domain.MajorUpgrade) (*domain.MajorUpgrade, *domain.DatabaseInstance) {
-	now := s.cfg.Now()
-	run, err := s.cfg.Runs.ClaimMajorUpgrade(ctx, listed.ID, newOwner(), now.Add(-majorUpgradeStaleAfter), now)
+	stamped := s.cfg.Now()
+	run, err := s.cfg.Runs.ClaimMajorUpgrade(ctx, listed.ID, newOwner(), majorUpgradeStaleAfter)
 	if err != nil || run == nil {
 		if err != nil {
 			log.Printf("major upgrade recovery %s: claim %s: %v", listed.ProjectID, listed.ID, err)
 		}
-		return nil, nil
+		return
 	}
+	// The heartbeat runs from the claim's stamp, before anything else.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stop := s.keepAlive(*run, stamped, cancel)
+	defer stop()
 	inst, err := s.cfg.Instances.FindByProjectID(run.ProjectID)
 	if err != nil || inst == nil {
 		log.Printf("major upgrade recovery %s: read project after the claim: %v", run.ProjectID, err)
-		return nil, nil
+		return
 	}
-	return run, inst
+	s.recoverClaimed(ctx, inst, run)
 }
 
 func (s *MajorUpgradeService) recoverClaimed(ctx context.Context, inst *domain.DatabaseInstance, run *domain.MajorUpgrade) {
@@ -188,22 +186,25 @@ func (s *MajorUpgradeService) recoverClaimed(ctx context.Context, inst *domain.D
 	}
 }
 
-// keepAlive marks the run alive until the returned stop is called. A
-// heartbeat refused because the run is no longer this actor's cancels the
-// actor with errRunTakenOver.
-func (s *MajorUpgradeService) keepAlive(run domain.MajorUpgrade, lost context.CancelCauseFunc) func() {
+// keepAlive marks the run alive until the returned stop is called. The
+// actor is cancelled with errRunTakenOver when a mark is refused because the
+// run is no longer its own, or when no mark has landed for
+// majorUpgradeFenceAfter since stamped, the time taken just before the run's
+// heartbeat was last written: by then recovery may be about to claim it.
+func (s *MajorUpgradeService) keepAlive(run domain.MajorUpgrade, stamped time.Time, lost func(error)) func() {
 	quit := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(s.heartbeatEvery)
 		defer ticker.Stop()
+		lastBeat := stamped
 		for {
 			select {
 			case <-quit:
 				return
 			case <-ticker.C:
-				if s.beat(run, lost) {
+				if s.fenced(run, &lastBeat, lost) {
 					return
 				}
 			}
@@ -215,10 +216,14 @@ func (s *MajorUpgradeService) keepAlive(run domain.MajorUpgrade, lost context.Ca
 	}
 }
 
-// beat marks the run alive once; true when the run was lost.
-func (s *MajorUpgradeService) beat(run domain.MajorUpgrade, lost context.CancelCauseFunc) bool {
-	err := s.cfg.Runs.TouchMajorUpgrade(context.Background(), run.ID, run.Owner, s.cfg.Now())
+// fenced marks the run alive once and reports whether the actor gave it up.
+// A mark counts from when it was sent, the earliest it could have landed.
+func (s *MajorUpgradeService) fenced(run domain.MajorUpgrade, lastBeat *time.Time, lost func(error)) bool {
+	sent := s.cfg.Now()
+	err := s.beat(run)
+	now := s.cfg.Now()
 	if err == nil {
+		*lastBeat = sent
 		return false
 	}
 	log.Printf("major upgrade %s: heartbeat: %v", run.ID, err)
@@ -226,7 +231,66 @@ func (s *MajorUpgradeService) beat(run domain.MajorUpgrade, lost context.CancelC
 		lost(errRunTakenOver)
 		return true
 	}
+	if now.Sub(*lastBeat) >= majorUpgradeFenceAfter {
+		lost(fmt.Errorf("%w: no heartbeat landed for %s", errRunTakenOver, now.Sub(*lastBeat)))
+		return true
+	}
 	return false
+}
+
+// beat marks the run alive once, within heartbeatTimeout.
+func (s *MajorUpgradeService) beat(run domain.MajorUpgrade) error {
+	ctx, cancel := context.WithTimeout(context.Background(), s.heartbeatTimeout)
+	defer cancel()
+	return s.cfg.Runs.TouchMajorUpgrade(ctx, run.ID, run.Owner)
+}
+
+// fence carries a lost run to the actor's context, which may be made after
+// the heartbeat started.
+type fence struct {
+	mu     sync.Mutex
+	cause  error
+	cancel context.CancelCauseFunc
+}
+
+func (f *fence) lose(cause error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cause = cause
+	if f.cancel != nil {
+		f.cancel(cause)
+	}
+}
+
+// attach cancels with the cause already met, or any met later.
+func (f *fence) attach(cancel context.CancelCauseFunc) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancel = cancel
+	if f.cause != nil {
+		cancel(f.cause)
+	}
+}
+
+// fenceKey holds the context a detached one came from.
+type fenceKey struct{}
+
+// detachFence keeps ctx's values but not its cancellation, so a call in
+// flight is never cut off; runLostBy still sees a fence met on ctx.
+func detachFence(ctx context.Context) context.Context {
+	return context.WithValue(context.WithoutCancel(ctx), fenceKey{}, ctx)
+}
+
+// runLostBy is the cause when ctx, or the context it was detached from, was
+// cancelled because the run is no longer the actor's; checked between steps.
+func runLostBy(ctx context.Context) error {
+	if parent, ok := ctx.Value(fenceKey{}).(context.Context); ok {
+		ctx = parent
+	}
+	if cause := context.Cause(ctx); errors.Is(cause, errRunTakenOver) {
+		return cause
+	}
+	return nil
 }
 
 // admitRecovery lets recovery take any project not being torn down.

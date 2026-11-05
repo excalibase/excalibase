@@ -439,7 +439,7 @@ func TestMajorUpgrade_AConversionItCannotRecordStaysOpenUntilRecovered(t *testin
 	}
 	w.runs.markErr = nil
 	w.recovered = UpgradeOutcome{Converted: true}
-	svc.cfg.Now = func() time.Time { return time.Now().Add(time.Hour) }
+	staleRun(w, "mu-test")
 	svc.RecoverInterrupted(context.Background())
 	latest, _ = w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
 	if latest.Status != domain.MajorUpgradeCompleted || !latest.Converted {
@@ -523,6 +523,7 @@ func TestMajorUpgrade_RecoverOfAConvertedRunOnlyFinishes(t *testing.T) {
 	if err := w.runs.MarkMajorUpgradeConverted(context.Background(), "half", "proj-up", "17", "", time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	staleRun(w, "half")
 	svc.RecoverInterrupted(context.Background())
 	calls := strings.Join(w.sequence(), ",")
 	if strings.Contains(calls, "recover:") || !strings.Contains(calls, "wait-serving") {
@@ -651,7 +652,7 @@ func TestMajorUpgrade_RecoverSkipsARunWithAFreshHeartbeat(t *testing.T) {
 	if err := w.runs.StartMajorUpgrade(context.Background(), &domain.MajorUpgrade{ID: "alive", ProjectID: "proj-up", FromVersion: "16", ToVersion: "17", StartedAt: time.Now().Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.runs.TouchMajorUpgrade(context.Background(), "alive", "", time.Now()); err != nil {
+	if err := w.runs.TouchMajorUpgrade(context.Background(), "alive", ""); err != nil {
 		t.Fatal(err)
 	}
 	svc.RecoverInterrupted(context.Background())
