@@ -12,6 +12,8 @@ const (
 	MySQLUserApp       = "excalibase_app"
 	MySQLUserAuthAdmin = "auth_admin"
 	MySQLUserWatcher   = "cdc_watcher"
+	// MySQLUserReader is the SELECT-only login the read address names (EXC-675).
+	MySQLUserReader = "excalibase_reader"
 	// MySQLAuthDatabase and MySQLPlatformDatabase stand in for Postgres's
 	// auth and excalibase schemas: MySQL has no schemas inside a database.
 	MySQLAuthDatabase     = "auth"
@@ -51,9 +53,10 @@ func mysqlIfAuthTable(table, statement string) string {
 // QUERY_SAMPLE_TEXT, which keeps literals; DROP is what TRUNCATE needs.
 const MySQLQueryStatsGrantSQL = "GRANT SELECT (`SCHEMA_NAME`, `DIGEST_TEXT`, `COUNT_STAR`, `SUM_TIMER_WAIT`, `SUM_ROWS_SENT`, `SUM_ROWS_AFFECTED`), DROP ON `performance_schema`.`events_statements_summary_by_digest` TO '" + MySQLUserApp + "'@'%';"
 
-// MySQLPasswords are the passwords the platform users are created with.
+// MySQLPasswords are the passwords the platform users are created with. An
+// empty Reader leaves any reader the database holds locked.
 type MySQLPasswords struct {
-	Admin, App, AuthAdmin, Watcher string
+	Admin, App, AuthAdmin, Watcher, Reader string
 }
 
 // MySQLPlatformUsersSQL creates the auth and platform databases and the
@@ -82,7 +85,20 @@ func MySQLPlatformUsersSQL(projectDatabase string, passwords MySQLPasswords) str
 		fmt.Fprintf(&sql, "GRANT %s;\n", grant)
 	}
 	sql.WriteString(MySQLAppAuthRevokeSQL + "\n")
+	sql.WriteString(mysqlReaderSQL(project, passwords.Reader))
 	return sql.String()
+}
+
+// mysqlReaderSQL creates the reader with SELECT on the project database and
+// nothing else. Without a password, a reader a restored copy brought is locked.
+func mysqlReaderSQL(quotedProject, password string) string {
+	reader := mysqlAccount(MySQLUserReader)
+	if password == "" {
+		return "ALTER USER IF EXISTS " + reader + " ACCOUNT LOCK;\n"
+	}
+	return fmt.Sprintf("CREATE USER IF NOT EXISTS %s IDENTIFIED BY %s REQUIRE SSL;\n%s\nALTER USER %s ACCOUNT UNLOCK;\nGRANT %s;\n",
+		reader, mysqlString(password), MySQLAlterUserSQL(MySQLUserReader, password), reader,
+		grantOn("SELECT, SHOW VIEW", quotedProject, MySQLUserReader))
 }
 
 // grantOn is "privileges ON `database`.* TO 'user'@'%'".

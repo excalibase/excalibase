@@ -124,6 +124,13 @@ func (h *Handler) authorize(r *http.Request) error {
 			if err := h.policy.CheckCreate(names[0], body); err != nil {
 				return err
 			}
+			var volumes createVolumes
+			if err := json.Unmarshal(body, &volumes); err != nil {
+				return refuse("container create body: %v", err)
+			}
+			if err := h.requireOwnVolumes(r.Context(), volumes); err != nil {
+				return err
+			}
 			return h.requireManagedJoin(r.Context(), body)
 		})
 	}

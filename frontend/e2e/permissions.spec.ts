@@ -81,6 +81,34 @@ test.describe('Table API permissions', () => {
     await page.screenshot({ path: `${SHOTS_DIR}/05-grid-after-remove.png`, fullPage: true });
   });
 
+  // EXC-680: with end-user MFA on, a filter requires the second step and is saved as the engine reads it.
+  test('a filter requires the second sign-in step', async ({ page }) => {
+    await page.route('**/api/config', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ deploymentMode: 'selfhosted', features: { authmfa: true } }),
+    }));
+    const calls = await mockPermissionsApi(page, initialDoc());
+    await page.goto('/project/test-project/database/tables/public/orders/permissions');
+
+    await page.getByRole('button', { name: 'user select: Custom' }).click();
+    const panel = page.getByTestId('sidepanel');
+    await panel.getByRole('button', { name: 'Require the second step (MFA)' }).click();
+    await expect(panel.getByTestId('filter-error')).toHaveCount(0);
+    await page.screenshot({ path: `${SHOTS_DIR}/06-editor-second-step.png`, fullPage: true });
+    await panel.getByRole('button', { name: 'Save permission' }).click();
+
+    await expect(page.getByTestId('sidepanel')).toHaveCount(0);
+    expect(calls).toContainEqual({
+      method: 'PUT',
+      path: '/api/provision/test-project/permissions/tables/public.orders/roles/user/select',
+      body: {
+        filter: { _and: [{ id: { _eq: 'X-Excalibase-User-Id' } }, { 'X-Excalibase-Aal': { _eq: 'aal2' } }] },
+        columns: ['id'],
+        allowAggregations: false,
+      },
+    });
+  });
+
   test('a custom role is added and given full select', async ({ page }) => {
     const calls = await mockPermissionsApi(page, initialDoc());
     await page.goto('/project/test-project/database/tables/public/users/permissions');

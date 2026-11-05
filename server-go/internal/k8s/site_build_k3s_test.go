@@ -170,14 +170,20 @@ func bundleHas(t *testing.T, bundle *sites.Bundle, suffix, content string) bool 
 // startGitServer serves the Vite fixture over git:// from a plain (runc) pod and answers its commit.
 func (g *gvisorCluster) startGitServer(t *testing.T) string {
 	t.Helper()
+	return g.startGitServerWith(t, "site_build_vite", siteBuildTestImage, sitebuilds.NodeImage("", "22"), config.DefaultSiteBuildPrepareImage)
+}
+
+// startGitServerWith serves testdata/<fixture> as site.git, pulling the build's images once up front
+// so neither the git server nor a build spends its own deadline on them.
+func (g *gvisorCluster) startGitServerWith(t *testing.T, fixtureDir string, images ...string) string {
+	t.Helper()
 	ctx := context.Background()
-	// Pulled once up front, so neither the git server nor a build spends its own deadline on it.
-	for _, image := range []string{siteBuildTestImage, sitebuilds.NodeImage("", "22"), config.DefaultSiteBuildPrepareImage} {
+	for _, image := range append([]string{siteBuildTestImage}, images...) {
 		g.nodeShell(t, "crictl pull "+image)
 	}
 	g.createNamespace(t, gitServerNamespace)
 	files := map[string]string{}
-	root := filepath.Join("testdata", "site_build_vite")
+	root := filepath.Join("testdata", fixtureDir)
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err

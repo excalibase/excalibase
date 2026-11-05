@@ -369,6 +369,12 @@ func (o *Opener) ProjectDeleting(projectID string) {
 	o.Evict(projectID)
 }
 
+// CredentialsRotated is the rotation hook: the pool holds the old password,
+// and a rotation may have ended its sessions (EXC-675).
+func (o *Opener) CredentialsRotated(projectID string) {
+	o.Evict(projectID)
+}
+
 // ProjectStatusChanged is the lifecycle-observer hook. Teardown is not the
 // only way a database stops being reachable: a pause takes it down for as
 // long as the project stays paused, and holding the pool across that pins

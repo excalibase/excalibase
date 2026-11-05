@@ -67,6 +67,8 @@ export default defineConfig({
         'src/components/DatabaseRunning.tsx',
         'src/utils/serverError.ts',
         'src/pages/StoragePage.tsx',
+        'src/components/storage/S3AccessPanel.tsx',
+        'src/api/s3Keys.ts',
         'src/utils/uploadFailure.ts',
         'src/components/ClusterSettingsCard.tsx',
         'src/utils/mutationHelpers.ts',
@@ -159,6 +161,8 @@ export default defineConfig({
         'src/pages/HostMonitoringPage.tsx',
         'src/api/allowedSources.ts',
         'src/components/DatabaseAllowList.tsx',
+        'src/api/appTemplates.ts',
+        'src/pages/ContainerTemplatesPage.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

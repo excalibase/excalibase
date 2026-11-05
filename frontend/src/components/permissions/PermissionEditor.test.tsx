@@ -142,3 +142,23 @@ describe('PermissionEditor', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });
+
+// EXC-680: the second-step button follows the project's MFA switch (flag authmfa).
+describe('PermissionEditor second step', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('shown only while authmfa is on', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { features: { authmfa: true } } } as never);
+    renderEditor('select');
+    expect(await screen.findAllByRole('button', { name: 'Require the second step (MFA)' })).toHaveLength(1);
+  });
+
+  test('hidden while authmfa is off', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { features: { authmfa: false } } } as never);
+    renderEditor('select');
+    await waitFor(() => expect(api.get).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: 'Require the second step (MFA)' })).not.toBeInTheDocument();
+  });
+});

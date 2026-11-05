@@ -5,8 +5,8 @@
 #
 #   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman] [--manual-unseal]
 #             [--apps] [--app-domain apps.example.com] [--app-sandbox runsc|none] [--documentdb] [--host-metrics]
-#             [--host-logs]
-#             [--auth-hooks]
+#             [--host-logs] [--log-drains]
+#             [--auth-hooks] [--no-host-firewall]
 #
 # Studio:     https://studio.<domain>
 # Data plane: https://api.<domain>   (/{projectId}/graphql, /{projectId}/api/v1, /auth)
@@ -27,6 +27,17 @@
 # after the container is gone; at most HOST_LOGS_DAILY_MB (64) per project per day.
 # --auth-hooks: end-user auth hooks, signed calls to each project's own endpoint. The addresses
 # the install's names resolve to are refused to them; behind a CDN or proxy, edit AUTH_HOOKS_DENY_CIDRS.
+# --log-drains: project Admins forward their database logs to Datadog or an HTTPS endpoint
+# (compose profile logdrains). Reads what --host-logs stores, so it turns that on too. The
+# forwarder refuses private ranges and the host's own addresses; behind NAT, add the public
+# address to LOG_FORWARDER_EXTRA_DENY_CIDRS.
+# --no-host-firewall: on Docker, the host-firewall service, which provisioning and the edge wait for,
+# drops new connections from the platform's bridges to this host, and forwarded traffic
+# from the tenants' bridge to 169.254.0.0/16 (cloud metadata) and private ranges, so a
+# tenant database reaches neither a host service nor the LAN. Leave it off to manage that
+# yourself, for each bridge (docker network inspect: br-<first 12 of the id>):
+# iptables -I INPUT -i <bridge> -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP,
+# and in DOCKER-USER for the tenants' bridge, the same toward those ranges.
 # A public domain gets Let's Encrypt certificates for the admin address;
 # localhost gets certificates from the edge's own CA.
 set -eu
@@ -49,6 +60,8 @@ apps=
 documentdb=
 host_metrics=
 host_logs=
+log_drains=
+host_firewall=1
 app_domain=
 app_sandbox=runsc
 auth_hooks=
@@ -67,9 +80,10 @@ while [ $# -gt 0 ]; do
     --documentdb) documentdb="DOCUMENTDB_ENABLED=true"; shift ;;
     --host-metrics) host_metrics="FEATURE_HOSTMETRICS=true
 HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev"; shift ;;
-    --host-logs) host_logs="FEATURE_HOSTLOGS=true
-COMPOSE_PROFILES=hostlogs"; shift ;;
+    --host-logs) host_logs="FEATURE_HOSTLOGS=true"; shift ;;
     --auth-hooks) auth_hooks=1; shift ;;
+    --log-drains) log_drains=1; shift ;;
+    --no-host-firewall) host_firewall=; shift ;;
     --app-domain) app_domain=$2; shift 2 ;;
     --app-sandbox) app_sandbox=$2; shift 2 ;;
     *) usage ;;
@@ -180,6 +194,24 @@ if [ -n "$auth_hooks" ]; then
 AUTH_HOOKS_DENY_CIDRS=$own"
 fi
 
+# Log drains read the stored logs, so they bring them; the IPv6 table is
+# mounted only where the host has one.
+drains=
+if [ -n "$log_drains" ]; then
+  host_logs="FEATURE_HOSTLOGS=true"
+  inet6=${HOST_IF_INET6:-/proc/1/net/if_inet6}
+  [ -r "$inet6" ] || inet6=/dev/null
+  # A host behind NAT does not hold the address its names point at: refuse those too.
+  own=$(for name in "studio.$domain" "api.$domain" "files.$domain" "$app_domain"; do
+    ${RESOLVE_HOSTS:-getent ahosts} "$name" 2>/dev/null | awk '{print $1}'
+  done | sort -u | awk '/:/ {printf "%s%s/128", sep, $1; sep=","; next} /^[0-9.]+$/ {printf "%s%s/32", sep, $1; sep=","}')
+  drains="FEATURE_LOGDRAINS=true
+LOG_FORWARDER_TOKEN=$(secret)
+# Addresses the install's names resolved to at init, refused to drains. Behind a CDN or proxy, remove its addresses.
+LOG_FORWARDER_EXTRA_DENY_CIDRS=$own
+HOST_IF_INET6_SOURCE=$inet6"
+fi
+
 umask 077
 cat >"$env_file" <<ENV
 # Written by init.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ). Keep it private and with the volumes.
@@ -203,7 +235,27 @@ ENGINE_SOCKET_GID=$engine_socket_gid
 APP_DOMAIN=$app_domain
 APP_SANDBOX_RUNTIME=$app_sandbox
 ENV
-for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$hooks"; do
+# Rootless Podman's bridges are in the user's own namespace: no host firewall to set.
+# On Docker, either the firewall or an explicit off, which preflight requires (EXC-683).
+profiles=
+firewall_env=
+if [ "$engine" = docker ] && [ -n "$host_firewall" ]; then
+  # The firewall lets tenants' DNS through only to the resolvers Docker forwards to:
+  # systemd-resolved's upstream file when /etc/resolv.conf names only its stub, as Docker reads it.
+  etc_resolv=${HOST_ETC_RESOLV_CONF:-/etc/resolv.conf}
+  resolv=/etc/resolv.conf
+  if ! awk '$1 == "nameserver" && $2 !~ /^(127\.|::1$)/ { found = 1 } END { exit !found }' "$etc_resolv" 2>/dev/null &&
+    [ -r "${HOST_SYSTEMD_RESOLV_CONF:-/run/systemd/resolve/resolv.conf}" ]; then
+    resolv=/run/systemd/resolve/resolv.conf
+  fi
+  firewall_env="HOST_RESOLV_CONF=$resolv"
+elif [ "$engine" = docker ]; then
+  firewall_env="HOST_FIREWALL=off"
+fi
+[ -n "$host_logs" ] && profiles=${profiles:+$profiles,}hostlogs
+[ -n "$log_drains" ] && profiles=${profiles:+$profiles,}logdrains
+profiles=${profiles:+COMPOSE_PROFILES=$profiles}
+for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$profiles" "$firewall_env" "$hooks" "$drains"; do
   [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
 done
 chmod 600 "$env_file"

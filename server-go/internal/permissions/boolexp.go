@@ -108,6 +108,9 @@ func (w *expWalker) term(key string, value json.RawMessage, depth int) error {
 	case opExists:
 		return w.exists(value, depth)
 	}
+	if looksLikeSessionVariable(key) {
+		return w.sessionComparison(key, value, depth)
+	}
 	if !columnName.MatchString(key) {
 		return fmt.Errorf("%q is not a column or relationship name", key)
 	}
@@ -163,6 +166,61 @@ func (w *expWalker) comparison(column string, ops map[string]json.RawMessage, de
 		if err := validateOperand(op, value); err != nil {
 			return fmt.Errorf("%q %s: %w", column, op, err)
 		}
+	}
+	return nil
+}
+
+// sessionComparison is a session variable compared with a fixed value
+// (EXC-680), e.g. {"X-Excalibase-Aal": {"_eq": "aal2"}}: equality and
+// membership against strings, or whether the request carries it at all.
+func (w *expWalker) sessionComparison(variable string, value json.RawMessage, depth int) error {
+	if !IsSessionVariable(variable) {
+		return fmt.Errorf("%q is not a valid session variable", variable)
+	}
+	ops, err := decodeObject(value)
+	if err != nil || len(ops) == 0 {
+		return fmt.Errorf("%q must map to comparisons", variable)
+	}
+	if err := w.count(depth + 1); err != nil {
+		return err
+	}
+	for op, operand := range ops {
+		if err := validateSessionOperand(op, operand); err != nil {
+			return fmt.Errorf("%q %s: %w", variable, op, err)
+		}
+	}
+	return nil
+}
+
+func validateSessionOperand(op string, value json.RawMessage) error {
+	switch op {
+	case opIsNull:
+		return validateOperand(op, value)
+	case opEq, opNeq:
+		return validateFixedText(value)
+	case opIn, opNin:
+		var items []json.RawMessage
+		if err := strictDecode(value, &items); err != nil || items == nil {
+			return errors.New("takes an array of strings")
+		}
+		for _, item := range items {
+			if err := validateFixedText(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return errors.New("a session variable takes _eq, _neq, _in, _nin or _is_null")
+}
+
+// validateFixedText: session variables hold text, so they compare with strings, never another variable.
+func validateFixedText(value json.RawMessage) error {
+	var text string
+	if err := strictDecode(value, &text); err != nil || isJSONNull(value) {
+		return errors.New("takes a string")
+	}
+	if looksLikeSessionVariable(text) {
+		return errors.New("compares with a fixed value, not another session variable")
 	}
 	return nil
 }

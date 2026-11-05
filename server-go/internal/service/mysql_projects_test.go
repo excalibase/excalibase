@@ -357,7 +357,7 @@ func TestMySQLProjectFilesItsPlatformLogins(t *testing.T) {
 func TestMySQLCredentialsAreMySQLConnectionStrings(t *testing.T) {
 	svc, store, _ := setupMySQLTest(t)
 	inst := provisionMySQL(t, svc, store, "")
-	creds, err := svc.GetCredentials(inst.ProjectID)
+	creds, err := svc.GetCredentials(context.Background(), inst.ProjectID)
 	if err != nil {
 		t.Fatal(err)
 	}

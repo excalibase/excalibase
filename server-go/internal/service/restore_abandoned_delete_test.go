@@ -78,7 +78,7 @@ func TestGetCredentialsRefusesARestoringProject(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	_, err := svc.GetCredentials("creds-restoring")
+	_, err := svc.GetCredentials(context.Background(), "creds-restoring")
 	if !errors.Is(err, ErrProjectRestoring) {
 		t.Fatalf("err: got %v, want ErrProjectRestoring", err)
 	}
@@ -93,7 +93,7 @@ func TestGetCredentialsStillRefusesADeletingProject(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	_, err := svc.GetCredentials("creds-deleting")
+	_, err := svc.GetCredentials(context.Background(), "creds-deleting")
 	if !errors.Is(err, ErrProjectDeleting) {
 		t.Fatalf("err: got %v, want ErrProjectDeleting", err)
 	}

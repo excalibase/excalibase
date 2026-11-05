@@ -457,7 +457,7 @@ func (s *Service) skipPreview(ctx context.Context, connection *Connection, deliv
 		return false, err
 	}
 	if delivery != "" {
-		if queued, err := s.store.DeliveryQueued(ctx, connection.SiteID, delivery); err != nil || queued {
+		if queued, err := s.store.DeliveryQueued(ctx, connection.target(), delivery); err != nil || queued {
 			return queued, err
 		}
 	}

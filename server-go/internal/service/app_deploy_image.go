@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/imagedigest"
 )
 
@@ -32,8 +33,16 @@ func (s *AppDeployService) DeployImage(ctx context.Context, projectID, appID, im
 	if err := apphost.ValidateImageReference(image); err != nil {
 		return nil, err
 	}
-	if _, err := s.lookupApp(projectID, appID); err != nil {
+	app, err := s.lookupApp(projectID, appID)
+	if err != nil {
 		return nil, err
+	}
+	if s.internal.Names(image) {
+		normalized, digest, err := s.internalDigest(app, image, origin)
+		if err != nil {
+			return nil, err
+		}
+		return s.deployDigest(ctx, projectID, appID, normalized, digest, origin, nil)
 	}
 	if digest, local, err := s.localRegistryDigest(image); local {
 		if err != nil {
@@ -67,6 +76,9 @@ func (s *AppDeployService) DeployCurrent(ctx context.Context, projectID, appID s
 	}
 	if _, digest, pinned := strings.Cut(app.Image, "@"); pinned {
 		return s.deployDigest(ctx, projectID, appID, app.Image, digest, origin, stillNames)
+	}
+	if s.internal.Names(app.Image) {
+		return nil, appregistry.ErrInternalImage
 	}
 	if s.images == nil {
 		return s.DeployAppAs(ctx, projectID, appID, origin)

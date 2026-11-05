@@ -91,6 +91,7 @@ function ReadAddressBody({
           </code>
         </p>
       )}
+      {view.username && <ReadLogin view={view} />}
       <PublicReadPort projectId={projectId} status={status} view={view} />
       <p className="text-xs text-text-tertiary mt-3" data-testid="read-address-lag">
         {LAG_NOTE}
@@ -99,6 +100,17 @@ function ReadAddressBody({
         {NOT_ACCESS_CONTROL}
       </p>
     </>
+  );
+}
+
+function ReadLogin({ view }: { readonly view: ReadAddress }) {
+  return (
+    <p className="text-xs text-text-secondary mb-2" data-testid="read-address-login">
+      Sign in as <code className="font-mono">{view.username}</code>
+      {view.readOnlyLogin
+        ? ', a login that can only read. Its password is with the connection details.'
+        : ', the database owner.'}
+    </p>
   );
 }
 

@@ -464,7 +464,7 @@ func buildPostgresql(opts PostgreSQLClusterOpts) map[string]interface{} {
 		// cdc_watcher role (created post-bootstrap by createProjectRoles) and
 		// regular client access to app + excalibase_app + auth_admin via
 		// password auth.
-		"pg_hba": networkLogins(!opts.AllowPlaintext),
+		"pg_hba": networkLogins(!opts.AllowPlaintext, clusterDatabaseName(opts)),
 	}
 	if opts.DocumentDB {
 		postgresql["pg_hba"] = append(documentDBLoopbackTrust(opts), postgresql["pg_hba"].([]interface{})...)

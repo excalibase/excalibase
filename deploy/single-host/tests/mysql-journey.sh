@@ -146,6 +146,9 @@ out=$(mysql_on "$MPID" host REQUIRED "SELECT CONCAT(VERSION(), ' ', (SELECT COUN
 [ "$out" = "8.4.10 3" ] && ok "upgraded to 8.4.10 with its rows" || ko "after the upgrade: ${out:0:300}"
 same_port "the minor upgrade"
 
+. "$TESTS/rotation-journey.sh"
+rotation_journey "$MPID" mysql "excalibase-$MPID-mysql"
+
 echo "== mysql delete purges backups"
 backup_now "$RPID" >/dev/null
 keys=$(backup_keys "$RPID")

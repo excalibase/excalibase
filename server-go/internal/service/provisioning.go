@@ -16,6 +16,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/metrics"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -93,6 +94,8 @@ type ProvisioningService struct {
 	appPurger ProjectAppPurger
 	// sitePurger removes the project's sites and the Workers that serve them.
 	sitePurger ProjectSitePurger
+	// s3KeyPurger revokes a deleted project's S3 access keys (EXC-630).
+	s3KeyPurger ProjectS3KeyPurger
 	// siteRouter takes the project's sites offline while its deletion is pending.
 	siteRouter ProjectSiteRouter
 	// workloads stops a deleted project's apps and function runtime (EXC-567).
@@ -132,6 +135,8 @@ type ProvisioningService struct {
 	// Credential rotation refuses to run without it: an unverified password
 	// is not evidence of anything.
 	credVerifier RoleCredentialVerifier
+	// flags are the dark-feature switches; nil reads as all off.
+	flags features.Flags
 	// mongoIdentWait bounds the wait for a Mongo user's peer line to load (EXC-427).
 	mongoIdentWait identWait
 
@@ -144,6 +149,8 @@ type ProvisioningService struct {
 	// teardown, so in-process caches of "is this project still live" stop
 	// serving it without waiting for their own expiry. Optional.
 	deletionObservers []DeletionObserver
+	// credentialObservers are told when a role's password is replaced.
+	credentialObservers []CredentialObserver
 
 	// defaultDeploymentMode stamps inst.DeploymentMode at provision time
 	// for the k8s + docker pipelines. Empty falls back
@@ -1035,6 +1042,11 @@ type ProjectAppPurger interface {
 	PurgeProjectApps(projectID string) (int, error)
 }
 
+// ProjectS3KeyPurger revokes every S3 access key a project holds (EXC-630).
+type ProjectS3KeyPurger interface {
+	PurgeProject(ctx context.Context, projectID string) (int, error)
+}
+
 // ProjectSitePurger removes every site a project holds, Worker first (EXC-353).
 type ProjectSitePurger interface {
 	PurgeProjectSites(ctx context.Context, projectID string) (int, error)
@@ -1083,6 +1095,18 @@ func (s *ProvisioningService) purgeProjectSites(ctx context.Context, inst *domai
 		return err
 	}
 	log.Printf("site purge for %s removed %d sites", inst.ProjectID, removed)
+	return nil
+}
+
+// SetS3KeyPurger wires the revocation of a deleted project's S3 access keys.
+func (s *ProvisioningService) SetS3KeyPurger(p ProjectS3KeyPurger) { s.s3KeyPurger = p }
+
+func (s *ProvisioningService) purgeProjectS3Keys(ctx context.Context, inst *domain.DatabaseInstance) error {
+	removed, err := s.s3KeyPurger.PurgeProject(ctx, inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	log.Printf("s3 key purge for %s revoked %d keys", inst.ProjectID, removed)
 	return nil
 }
 
@@ -1233,6 +1257,17 @@ type DeletionObserver interface {
 	ProjectDeleting(projectID string)
 }
 
+// CredentialObserver is told each time a project's role password is replaced,
+// so a cache opened with the old one drops it.
+type CredentialObserver interface {
+	CredentialsRotated(projectID string)
+}
+
+// AddCredentialObserver registers an observer of rotated passwords.
+func (s *ProvisioningService) AddCredentialObserver(o CredentialObserver) {
+	s.credentialObservers = append(s.credentialObservers, o)
+}
+
 // AddDeletionObserver registers an observer of teardown claims.
 func (s *ProvisioningService) AddDeletionObserver(o DeletionObserver) {
 	s.deletionObservers = append(s.deletionObservers, o)
@@ -1294,6 +1329,10 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	// quarantine here, not back into the pool.
 	if s.endpoints != nil {
 		steps = append(steps, deletionStep{domain.DeletionStepReleaseEndpoint, s.releasePublicEndpoint})
+	}
+	// S3 keys reach the project's files from outside; they stop working next.
+	if s.s3KeyPurger != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepRevokeS3Keys, s.purgeProjectS3Keys})
 	}
 	// Sites are public too, so they stop being served next.
 	if s.sitePurger != nil {
@@ -1534,7 +1573,7 @@ func notServableErr(status string) error {
 	return ErrProjectDeleting
 }
 
-func (s *ProvisioningService) GetCredentials(projectID string) (*domain.CredentialsResponse, error) {
+func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return nil, err
@@ -1555,8 +1594,12 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 	if err != nil {
 		return nil, err
 	}
+	readerPassword, err := s.readerPassword(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
 	if inst.DBType == domain.MySQL {
-		return mysqlCredentials(inst, password), nil
+		return withReader(mysqlCredentials(inst, password), readerPassword), nil
 	}
 	port := 5432
 	if inst.Port != nil {
@@ -1571,7 +1614,7 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 		RawQuery: url.Values{"sslmode": {inst.SSLMode}}.Encode(),
 	}
 
-	return &domain.CredentialsResponse{
+	return withReader(&domain.CredentialsResponse{
 		ProjectID:     projectID,
 		Host:          inst.Host,
 		ReadOnlyHost:  inst.ReadOnlyHost,
@@ -1581,7 +1624,43 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 		Password:      password,
 		SSLMode:       inst.SSLMode,
 		ConnectionURL: connURL.String(),
-	}, nil
+	}, readerPassword), nil
+}
+
+// readerPassword is the filed SELECT-only login's password, or "" while its
+// feature is off or the project has none (EXC-675).
+func (s *ProvisioningService) readerPassword(ctx context.Context, projectID string) (string, error) {
+	if !features.Enabled(ctx, s.flags, features.DBReadRole) {
+		return "", nil
+	}
+	filed, err := s.HasReaderLogin(projectID)
+	if err != nil || !filed {
+		return "", err
+	}
+	record, err := s.vault.Get(vaultCredentialPath(projectID, roleReader))
+	if err != nil {
+		return "", fmt.Errorf("read the read-only login: %w", err)
+	}
+	return record["password"], nil
+}
+
+// HasReaderLogin reports whether the project has a SELECT-only login on file.
+func (s *ProvisioningService) HasReaderLogin(projectID string) (bool, error) {
+	if s.vault == nil {
+		return false, nil
+	}
+	filed, err := s.filedCredentialPaths(projectID)
+	if err != nil {
+		return false, err
+	}
+	return filed[vaultCredentialPath(projectID, roleReader)], nil
+}
+
+func withReader(creds *domain.CredentialsResponse, readerPassword string) *domain.CredentialsResponse {
+	if readerPassword != "" {
+		creds.ReaderUsername, creds.ReaderPassword = roleReader, readerPassword
+	}
+	return creds
 }
 
 func (s *ProvisioningService) SetDeletionProtection(projectID string, enabled bool) error {

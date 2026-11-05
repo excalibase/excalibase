@@ -140,7 +140,7 @@ func TestAddingADatabaseGivesTheProjectItsDatabase(t *testing.T) {
 	if _, ok := vault.data["projects/"+created.ProjectID+"/credentials/excalibase_app"]; !ok {
 		t.Fatal("the added database's credentials were not filed")
 	}
-	if _, err := svc.GetCredentials(created.ProjectID); err != nil {
+	if _, err := svc.GetCredentials(context.Background(), created.ProjectID); err != nil {
 		t.Fatalf("credentials after the add: %v", err)
 	}
 }
@@ -219,7 +219,7 @@ func TestADatabaseIsAddedOnlyToAnActiveProject(t *testing.T) {
 func TestCredentialsOfAProjectWithoutADatabaseAreRefused(t *testing.T) {
 	svc, _, _ := setupProvisioningTest(t)
 	created := createWithoutDatabase(t, svc)
-	if _, err := svc.GetCredentials(created.ProjectID); !errors.Is(err, domain.ErrNoDatabase) {
+	if _, err := svc.GetCredentials(context.Background(), created.ProjectID); !errors.Is(err, domain.ErrNoDatabase) {
 		t.Fatalf("got %v, want domain.ErrNoDatabase", err)
 	}
 }

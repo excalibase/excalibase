@@ -34,11 +34,41 @@ sh "$DIR/../init.sh" --env-file "$WORK/metrics.env" --domain example.com --admin
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-metrics >/dev/null
 grep -q '^FEATURE_HOSTMETRICS=true$' "$WORK/metrics.env" && grep -q '^HOST_METRICS_NET_DEV_SOURCE=/proc/1/net/dev$' "$WORK/metrics.env" \
   || fail "--host-metrics not written"
-! grep -q '^FEATURE_HOSTLOGS\|^COMPOSE_PROFILES' "$WORK/.env" || fail "stored logs on without --host-logs"
+! grep -q '^FEATURE_HOSTLOGS' "$WORK/.env" || fail "stored logs on without --host-logs"
+# EXC-683: Docker installs guard the host from the platform's bridges unless told not to.
+! grep -q '^COMPOSE_PROFILES' "$WORK/.env" || fail "the firewall is a profile again: off profiles, a gated service would start unguarded"
+sh "$DIR/../init.sh" --env-file "$WORK/nofw.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --no-host-firewall >/dev/null
+! grep -q '^COMPOSE_PROFILES' "$WORK/nofw.env" || fail "--no-host-firewall still runs it"
+# Preflight stops an install with neither the firewall nor this explicit opt-out.
+grep -qx 'HOST_FIREWALL=off' "$WORK/nofw.env" || fail "--no-host-firewall is not recorded as a choice"
+! grep -q '^HOST_FIREWALL=' "$WORK/.env" || fail "a firewalled install says HOST_FIREWALL"
+# The firewall allows DNS to the resolvers Docker forwards to: the file Docker reads.
+grep -q '^HOST_RESOLV_CONF=/' "$WORK/.env" || fail "a firewalled install names no resolv.conf"
+printf 'nameserver 10.0.0.2\n' >"$WORK/plain-resolv.conf"
+HOST_ETC_RESOLV_CONF="$WORK/plain-resolv.conf" sh "$DIR/../init.sh" --env-file "$WORK/plain.env" --domain example.com \
+  --admin-email me@example.com --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 >/dev/null
+grep -qx 'HOST_RESOLV_CONF=/etc/resolv.conf' "$WORK/plain.env" || fail "HOST_RESOLV_CONF: $(grep HOST_RESOLV "$WORK/plain.env")"
+printf 'nameserver 127.0.0.53\noptions edns0\n' >"$WORK/stub-resolv.conf"
+printf 'nameserver 192.168.1.1\n' >"$WORK/upstream-resolv.conf"
+HOST_ETC_RESOLV_CONF="$WORK/stub-resolv.conf" HOST_SYSTEMD_RESOLV_CONF="$WORK/upstream-resolv.conf" sh "$DIR/../init.sh" \
+  --env-file "$WORK/resolved.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 >/dev/null
+grep -qx 'HOST_RESOLV_CONF=/run/systemd/resolve/resolv.conf' "$WORK/resolved.env" \
+  || fail "systemd-resolved's stub: Docker reads the upstream file, $(grep HOST_RESOLV "$WORK/resolved.env")"
 sh "$DIR/../init.sh" --env-file "$WORK/logs.env" --domain example.com --admin-email me@example.com \
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-logs >/dev/null
 grep -q '^FEATURE_HOSTLOGS=true$' "$WORK/logs.env" && grep -q '^COMPOSE_PROFILES=hostlogs$' "$WORK/logs.env" \
   || fail "--host-logs not written"
+! grep -q '^FEATURE_LOGDRAINS\|^LOG_FORWARDER' "$WORK/.env" "$WORK/logs.env" || fail "log drains on without --log-drains"
+printf '#!/bin/sh\ncase $1 in api.*) echo "203.0.113.7 STREAM $1"; echo "2001:db8::7 STREAM $1" ;; esac\n' > "$WORK/resolve"; chmod +x "$WORK/resolve"
+RESOLVE_HOSTS="$WORK/resolve" HOST_IF_INET6="$WORK/no-ipv6" sh "$DIR/../init.sh" --env-file "$WORK/drains.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --log-drains >/dev/null
+for line in FEATURE_LOGDRAINS=true FEATURE_HOSTLOGS=true COMPOSE_PROFILES=hostlogs,logdrains HOST_IF_INET6_SOURCE=/dev/null; do
+  grep -qx "$line" "$WORK/drains.env" || fail "--log-drains did not write $line"
+done
+grep -qx 'LOG_FORWARDER_EXTRA_DENY_CIDRS=2001:db8::7/128,203.0.113.7/32' "$WORK/drains.env" || fail "--log-drains did not refuse the addresses the install's names resolve to"
+sed -n 's/^LOG_FORWARDER_TOKEN=//p' "$WORK/drains.env" | grep -Eq '^[0-9a-f]{64}$' || fail "the forwarder token is not 64 random hex characters"
 [ "$(value EXCALIBASE_DOMAIN)" = example.com ] || fail "domain not written"
 [ "$(value ADMIN_EMAIL)" = me@example.com ] || fail "admin email not written"
 [ "$(value EXCALIBASE_TLS)" = me@example.com ] || fail "a public domain must get ACME certificates for the admin address"
@@ -72,6 +102,7 @@ host sh "$DIR/../init.sh" --env-file "$WORK/pm.env" --domain localhost --admin-e
 pm() { sed -n "s/^$1=//p" "$WORK/pm.env"; }
 [ "$(pm ENGINE_SOCKET_UID):$(pm ENGINE_SOCKET_GID)" = 0:0 ] || fail "podman proxy is not the container root (the socket owner)"
 [ "$(pm EDGE_HTTP_PORT):$(pm EDGE_HTTPS_PORT)" = 8080:8443 ] || fail "rootless edge not moved above the privileged ports"
+! grep -q '^COMPOSE_PROFILES' "$WORK/pm.env" || fail "rootless Podman runs a host firewall it cannot set"
 [ "$(pm FILES_PUBLIC_URL)" = https://files.localhost:8443 ] || fail "file links do not carry the moved edge port"
 if host sh "$DIR/../init.sh" --env-file "$WORK/pm2.env" --domain example.com --admin-email me@example.com \
   --engine podman --engine-socket "$WORK/podman.sock" >"$WORK/out" 2>&1; then

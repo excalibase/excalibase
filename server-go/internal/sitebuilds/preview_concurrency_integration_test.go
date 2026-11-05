@@ -16,7 +16,7 @@ func claimProject(t *testing.T, h *sitebuildstest.Harness, holder string) []*sit
 	t.Helper()
 	var ours []*sitebuilds.Build
 	for range 20 {
-		claimed, err := h.Store.ClaimNext(context.Background(), 1000, holder, time.Now().Add(time.Minute))
+		claimed, err := h.Store.ClaimNext(context.Background(), 1000, holder, time.Now().Add(time.Minute), allKinds)
 		if err != nil {
 			t.Fatal(err)
 		}

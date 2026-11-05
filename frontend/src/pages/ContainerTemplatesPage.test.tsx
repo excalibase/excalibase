@@ -59,11 +59,22 @@ const webRedis = (overrides: Partial<TemplateFit> = {}): AppTemplate => ({
   fit: fit(overrides),
 });
 
-function renderPage(templates: AppTemplate[]) {
+// The answer's time is now: a deploy accepted long ago is one Studio stops following.
+const ACCEPTED_AT = new Date().toISOString();
+
+// What the server answers for each app the deploy created: the app and its newest deploys.
+type AppReads = Record<string, { app: Record<string, unknown>; deploys: Record<string, unknown>[] }>;
+
+function renderPage(templates: AppTemplate[], apps: AppReads = {}) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/config')
       return Promise.resolve({ data: { deploymentMode: 'cloud', appHosting: true } } as never);
     if (url === '/projects/proj-1/app-templates/') return Promise.resolve({ data: templates } as never);
+    for (const [id, read] of Object.entries(apps)) {
+      if (url === `/projects/proj-1/apps/${id}`) return Promise.resolve({ data: read.app } as never);
+      if (url === `/projects/proj-1/apps/${id}/deploys?limit=1`)
+        return Promise.resolve({ data: read.deploys } as never);
+    }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -80,6 +91,71 @@ function renderPage(templates: AppTemplate[]) {
 }
 
 beforeEach(() => vi.resetAllMocks());
+
+const starting = (id: string, name: string) => ({ app: { id, name, status: 'PENDING' }, deploys: [] });
+
+const deploy = (status: string, extra: Record<string, unknown> = {}) => ({
+  id: 'd1', revision: 1, status, createdAt: '2026-11-04T10:00:05Z', ...extra,
+});
+
+function acceptValkey(acceptedAt: string) {
+  vi.mocked(api.post).mockResolvedValue({
+    data: {
+      templateId: 'valkey', privateNetworkTurnedOn: false, acceptedAt,
+      apps: [{ id: 'a1', name: 'valkey', deployId: 'd1', deployStatus: 'pending' }],
+      credentials: [{ app: 'valkey', name: 'VALKEY_URL', value: 'redis://:generated@valkey:6379/0' }],
+    },
+  } as never);
+}
+
+async function deployValkey(read: AppReads[string], acceptedAt = ACCEPTED_AT) {
+  acceptValkey(acceptedAt);
+  renderPage([valkey()], { a1: read });
+  await userEvent.click(await screen.findByTestId('template-deploy-valkey'));
+  await userEvent.click(screen.getByTestId('template-confirm-valkey'));
+  return screen.findByTestId('template-progress-valkey');
+}
+
+// The deploy answers once the apps exist; the first deploys run after it (EXC-669).
+describe('ContainerTemplatesPage first deploys', () => {
+  test('an app whose first deploy has not started yet shows it is starting', async () => {
+    const progress = await deployValkey(starting('a1', 'valkey'));
+    expect(progress).toHaveTextContent('Preparing');
+  });
+
+  test('a rolling first deploy shows it is rolling out', async () => {
+    const progress = await deployValkey({ app: { id: 'a1', name: 'valkey' }, deploys: [deploy('rolling')] });
+    expect(progress).toHaveTextContent('Rolling out');
+  });
+
+  test('a first deploy that succeeded shows the app is running', async () => {
+    const progress = await deployValkey({ app: { id: 'a1', name: 'valkey' }, deploys: [deploy('succeeded')] });
+    await waitFor(() => expect(progress).toHaveTextContent('Running'));
+  });
+
+  test('a first deploy that failed shows its reason', async () => {
+    const progress = await deployValkey({
+      app: { id: 'a1', name: 'valkey' },
+      deploys: [deploy('failed', { failureReason: 'create the app\'s disk: timed out' })],
+    });
+    await waitFor(() => expect(progress).toHaveTextContent("Failed: create the app's disk: timed out"));
+  });
+
+  test('a pending first deploy shows it is preparing', async () => {
+    const progress = await deployValkey({ app: { id: 'a1', name: 'valkey' }, deploys: [deploy('pending')] });
+    expect(progress).toHaveTextContent('Preparing');
+  });
+
+  test('a first deploy still not running after 15 minutes stops being followed and links to the app', async () => {
+    const longAgo = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    const progress = await deployValkey({ app: { id: 'a1', name: 'valkey' }, deploys: [deploy('pending')] }, longAgo);
+    await waitFor(() => expect(progress).toHaveTextContent('Still not running'));
+    expect(within(progress).getByRole('link', { name: /open the app/i })).toHaveAttribute(
+      'href',
+      '/project/proj-1/containers/a1',
+    );
+  });
+});
 
 describe('ContainerTemplatesPage', () => {
   test('shows what a template creates and costs in plan terms', async () => {
@@ -105,13 +181,14 @@ describe('ContainerTemplatesPage', () => {
       data: {
         templateId: 'web-redis',
         privateNetworkTurnedOn: true,
+        acceptedAt: ACCEPTED_AT,
         apps: [
-          { id: 'a1', name: 'redis', deployId: 'd1', deployStatus: 'rolling' },
-          { id: 'a2', name: 'web', deployId: 'd2', deployStatus: 'rolling' },
+          { id: 'a1', name: 'redis', deployId: 'd1', deployStatus: 'pending' },
+          { id: 'a2', name: 'web', deployId: 'd2', deployStatus: 'pending' },
         ],
       },
     } as never);
-    renderPage([webRedis()]);
+    renderPage([webRedis()], { a1: starting('a1', 'redis'), a2: starting('a2', 'web') });
     await userEvent.click(await screen.findByTestId('template-deploy-web-redis'));
     expect(api.post).not.toHaveBeenCalled();
     await userEvent.click(screen.getByTestId('template-confirm-web-redis'));
@@ -203,11 +280,12 @@ describe('ContainerTemplatesPage catalog', () => {
       data: {
         templateId: 'valkey',
         privateNetworkTurnedOn: false,
-        apps: [{ id: 'a1', name: 'valkey', deployId: 'd1', deployStatus: 'rolling' }],
+        acceptedAt: ACCEPTED_AT,
+        apps: [{ id: 'a1', name: 'valkey', deployId: 'd1', deployStatus: 'pending' }],
         credentials: [{ app: 'valkey', name: 'VALKEY_URL', value: 'redis://:generated@valkey:6379/0' }],
       },
     } as never);
-    renderPage([valkey()]);
+    renderPage([valkey()], { a1: starting('a1', 'valkey') });
     await userEvent.click(await screen.findByTestId('template-deploy-valkey'));
     await userEvent.click(screen.getByTestId('template-confirm-valkey'));
     const shown = await screen.findByTestId('template-credentials');
