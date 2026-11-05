@@ -43,6 +43,8 @@ func newDomainHarnessWith(t *testing.T, configure func(*sites.Options)) *domainH
 		BaseDomain: testDomain, SpoolDir: t.TempDir(), Hostnames: h.hostnames, Projects: h.projects,
 		CustomDomains: &sites.CustomDomainOptions{Zone: h.zone, Target: testTarget, ReservedDomains: []string{"excalibase.io"},
 			Resolver: h.resolver},
+		// Read only once a test turns server sites on.
+		Code: store,
 	}
 	configure(&options)
 	service, err := sites.NewService(store, publisher, origins, options)

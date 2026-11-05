@@ -68,7 +68,11 @@ func (s *Service) RouteProjectSites(ctx context.Context, projectID string) error
 		if site.LiveDeployID == "" || !s.servable(ctx, site) {
 			continue
 		}
-		if err := s.publisher.PutKV(cdnCtx, site.Hostname, ScriptName(site)); err != nil {
+		entry, err := s.routeEntryFor(cdnCtx, site)
+		if err != nil {
+			return err
+		}
+		if err := s.publisher.PutKV(cdnCtx, site.Hostname, entry); err != nil {
 			return publishFailure(site, stepRoute, err)
 		}
 		if err := s.routeSiteHostnames(cdnCtx, site); err != nil {
@@ -160,7 +164,11 @@ func (s *Service) reconcileServerSite(ctx context.Context, site *Site, serve boo
 	if err != nil || !serving || site.LiveDeployID == "" {
 		return err
 	}
-	if err := s.publisher.PutKV(ctx, site.Hostname, ScriptName(site)); err != nil {
+	entry, err := s.routeEntryFor(ctx, site)
+	if err != nil {
+		return err
+	}
+	if err := s.publisher.PutKV(ctx, site.Hostname, entry); err != nil {
 		return publishFailure(site, stepRoute, err)
 	}
 	return s.routeSiteHostnames(ctx, site)

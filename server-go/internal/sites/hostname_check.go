@@ -297,7 +297,11 @@ func (s *Service) routeHostname(ctx context.Context, site *Site, hostname *Custo
 	}
 	cdnCtx, cancel := context.WithTimeout(ctx, publishTimeout)
 	defer cancel()
-	if err := s.publisher.PutKV(cdnCtx, hostname.Hostname, ScriptName(site)); err != nil {
+	entry, err := s.routeEntryFor(cdnCtx, site)
+	if err != nil {
+		return err
+	}
+	if err := s.publisher.PutKV(cdnCtx, hostname.Hostname, entry); err != nil {
 		return publishFailure(site, stepRoute, err)
 	}
 	return nil
