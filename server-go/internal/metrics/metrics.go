@@ -196,3 +196,23 @@ func CountBackupCredentialRenewal(renewed bool) {
 	}
 	backupCredentialRenewals.WithLabelValues(result).Inc()
 }
+
+// registrySweeps counts passes of the built-image sweep (EXC-540) by result:
+// a pass that could read no repository it was given is failed, and keeps
+// failing quietly otherwise.
+var registrySweeps = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "excalibase_registry_sweeps_total",
+		Help: "Passes of the built-image registry sweep, by result (swept or failed).",
+	},
+	[]string{"result"},
+)
+
+// CountRegistrySweep records one pass of the registry sweep.
+func CountRegistrySweep(ok bool) {
+	result := "failed"
+	if ok {
+		result = "swept"
+	}
+	registrySweeps.WithLabelValues(result).Inc()
+}

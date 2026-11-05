@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/apptemplate"
@@ -96,17 +97,24 @@ type tplDeployer struct {
 	admitted   []int
 }
 
-func (d *tplDeployer) DeployApp(_ context.Context, projectID, appID, _ string) (*apphost.Deploy, error) {
+// QueueDeploy records a pending deploy; its run logs "deploy <name>", or "deploy <name> failed".
+func (d *tplDeployer) QueueDeploy(ctx context.Context, projectID, appID, _ string) (*apphost.Deploy, func(), error) {
 	app := d.apps.byID(appID)
-	d.log.add("deploy %s", app.Name)
+	d.log.add("queue %s", app.Name)
 	if app.Name == d.errDeploy {
-		return nil, errors.New("the lease could not be taken")
+		return nil, nil, errors.New("the lease could not be taken")
 	}
-	status, reason := apphost.DeployStatusRolling, ""
-	if app.Name == d.failDeploy {
-		status, reason = apphost.DeployStatusFailed, "apply app workload: forced"
+	run := func() {
+		switch {
+		case ctx.Err() != nil:
+			d.log.add("deploy %s on a cancelled context", app.Name)
+		case app.Name == d.failDeploy:
+			d.log.add("deploy %s failed", app.Name)
+		default:
+			d.log.add("deploy %s", app.Name)
+		}
 	}
-	return &apphost.Deploy{ID: "dep-" + app.Name, AppID: appID, ProjectID: projectID, Status: status, FailureReason: reason}, nil
+	return &apphost.Deploy{ID: "dep-" + app.Name, AppID: appID, ProjectID: projectID, Status: apphost.DeployStatusPending}, run, nil
 }
 
 func (d *tplDeployer) DeleteApp(_ context.Context, _, appID string, confirmDeleteDisk bool) error {
@@ -222,6 +230,7 @@ func newTemplateRig(t *testing.T) *tplRig {
 		Apps: apps, Deployer: rig.deployer, Projects: instances, Plans: fixedPlan{tier: domain.Free},
 		Limits: fixedAppLimit(2), Disks: fixedDiskCap(1 << 30), Network: rig.network, Secrets: rig.vault,
 	})
+	rig.svc.async = func(run func()) { run() }
 	return rig
 }
 
@@ -252,13 +261,14 @@ func TestDeployTemplate_WebAndRedis(t *testing.T) {
 	if events[0] != "network true" {
 		t.Fatalf("the network opens before any app exists: %v", events)
 	}
-	if rig.log.count("create ") != 2 || rig.log.count("deploy ") != 2 || rig.log.count("delete ") != 0 {
+	if rig.log.count("create ") != 2 || rig.log.count("queue ") != 2 || rig.log.count("deploy ") != 2 || rig.log.count("delete ") != 0 {
 		t.Fatalf("events %v", events)
 	}
 	if rig.apps.maxSeen != 2 {
 		t.Fatalf("the store must hold the plan's limit, got %d", rig.apps.maxSeen)
 	}
-	if !result.PrivateNetworkTurnedOn || len(result.Apps) != 2 || result.Apps[0].Name != "redis" || result.Apps[1].DeployID != "dep-web" {
+	if !result.PrivateNetworkTurnedOn || len(result.Apps) != 2 || result.Apps[0].Name != "redis" || result.Apps[1].DeployID != "dep-web" ||
+		result.Apps[1].DeployStatus != apphost.DeployStatusPending {
 		t.Fatalf("result %+v", result)
 	}
 	redis, web := rig.apps.held[0], rig.apps.held[1]
@@ -285,7 +295,7 @@ func TestDeployTemplate_SecretsBeforeTheirApp(t *testing.T) {
 		t.Fatalf("deploy: %v", err)
 	}
 	events := rig.log.all()
-	if len(events) != 4 || !strings.HasPrefix(events[1], "secret projects/"+tplProject+"/apps/") || events[2] != "create redis" {
+	if len(events) != 5 || !strings.HasPrefix(events[1], "secret projects/"+tplProject+"/apps/") || events[2] != "create redis" {
 		t.Fatalf("events %v", events)
 	}
 }
@@ -390,18 +400,102 @@ func TestDeployTemplate_TheStorageBudgetIsCheckedBeforeAnything(t *testing.T) {
 	rig.expectNothingDone(t)
 }
 
-func TestDeployTemplate_AFailedDeployRollsEverythingBack(t *testing.T) {
+// The answer comes once the apps exist; their first deploys (a disk to prepare,
+// a workload to apply) run after it, so a request never waits on them.
+func TestDeployTemplate_AnswersBeforeTheFirstDeploys(t *testing.T) {
+	rig := newTemplateRig(t)
+	var background []func()
+	rig.svc.async = func(run func()) { background = append(background, run) }
+	before := time.Now().UTC()
+	result, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if rig.log.count("create ") != 2 || rig.log.count("queue ") != 2 || rig.log.count("deploy ") != 0 || len(background) != 1 {
+		t.Fatalf("each app's deploy is recorded, not run, before the answer: events %v, background %d", rig.log.all(), len(background))
+	}
+	if len(result.Apps) != 2 || result.Apps[0].ID == "" || result.AcceptedAt.Before(before) {
+		t.Fatalf("result %+v", result)
+	}
+	background[0]()
+	if rig.log.count("deploy ") != 2 {
+		t.Fatalf("the background deploys every app: %v", rig.log.all())
+	}
+}
+
+// The project stays held for templates until every first deploy has started.
+func TestDeployTemplate_HoldsTheProjectUntilTheDeploysStart(t *testing.T) {
+	rig := newTemplateRig(t)
+	claimer := &countingClaimer{}
+	rig.svc.claimer = claimer
+	var background func()
+	rig.svc.async = func(run func()) { background = run }
+	if _, err := rig.svc.Deploy(context.Background(), tplProject, "redis", "dev", adminConfirmed); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if _, released := claimer.counts(); released != 0 {
+		t.Fatal("released before the first deploy started")
+	}
+	background()
+	if _, released := claimer.counts(); released != 1 {
+		t.Fatalf("released %d times", released)
+	}
+}
+
+// The first deploys outlive the request that asked for them.
+func TestDeployTemplate_TheFirstDeploysOutliveTheRequest(t *testing.T) {
+	rig := newTemplateRig(t)
+	var background func()
+	rig.svc.async = func(run func()) { background = run }
+	request, hangUp := context.WithCancel(context.Background())
+	if _, err := rig.svc.Deploy(request, tplProject, "redis", "dev", adminConfirmed); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	hangUp()
+	background()
+	if events := rig.log.all(); events[len(events)-1] != "deploy redis" {
+		t.Fatalf("the deploy ran on the request's context: %v", events)
+	}
+}
+
+// A refused template releases the project at once.
+func TestDeployTemplate_ARefusalReleasesTheProject(t *testing.T) {
+	rig := newTemplateRig(t)
+	claimer := &countingClaimer{}
+	rig.svc.claimer = claimer
+	rig.svc.deps.Disks = fixedDiskCap(512 << 20)
+	if _, err := rig.svc.Deploy(context.Background(), tplProject, "redis", "dev", adminConfirmed); err == nil {
+		t.Fatal("want a refusal")
+	}
+	if _, released := claimer.counts(); released != 1 {
+		t.Fatalf("released %d times", released)
+	}
+}
+
+// A first deploy that fails is the app's failed deploy, read in Studio; nothing is removed.
+func TestDeployTemplate_AFailedFirstDeployStaysOnItsApp(t *testing.T) {
 	rig := newTemplateRig(t)
 	rig.deployer.failDeploy = "web"
+	if _, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed); err != nil {
+		t.Fatalf("the deploy was accepted: %v", err)
+	}
+	if rig.log.count("deploy web failed") != 1 || rig.log.count("delete ") != 0 || !rig.network.on || len(rig.apps.held) != 2 {
+		t.Fatalf("a failed first deploy removes nothing: %v", rig.log.all())
+	}
+}
+
+// A deploy that cannot even be recorded fails the request, and what it made is removed.
+func TestDeployTemplate_ADeployThatCannotBeRecordedRollsBack(t *testing.T) {
+	rig := newTemplateRig(t)
+	rig.deployer.errDeploy = "redis"
 	_, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
 	var failed *TemplateFailedError
-	if !errors.As(err, &failed) || !strings.Contains(err.Error(), "forced") {
-		t.Fatalf("want the failure that stopped it, got %v", err)
+	if !errors.As(err, &failed) || !failed.ServerFault || strings.Contains(failed.Public(), "lease") ||
+		!strings.Contains(failed.Public(), `could not deploy app "redis"`) {
+		t.Fatalf("got %v", err)
 	}
-	events := rig.log.all()
-	tail := events[len(events)-3:]
-	if tail[0] != "delete web" || tail[1] != "delete redis" || tail[2] != "network false" {
-		t.Fatalf("rollback in reverse, network last: %v", events)
+	if rig.log.count("delete ") != 2 || rig.log.count("deploy ") != 0 || rig.network.on {
+		t.Fatalf("events %v", rig.log.all())
 	}
 }
 
@@ -413,7 +507,7 @@ func TestDeployTemplate_AFailedCreateRollsBackAndForgetsItsSecrets(t *testing.T)
 	if !errors.As(err, &failed) {
 		t.Fatalf("want a rolled-back failure, got %v", err)
 	}
-	if rig.log.count("delete redis") != 1 || rig.log.count("deploy ") != 0 || rig.network.on {
+	if rig.log.count("delete redis") != 1 || rig.log.count("queue ") != 0 || rig.network.on {
 		t.Fatalf("events %v", rig.log.all())
 	}
 	webPrefix := ""
@@ -427,19 +521,9 @@ func TestDeployTemplate_AFailedCreateRollsBackAndForgetsItsSecrets(t *testing.T)
 	}
 }
 
-func TestDeployTemplate_ADeployErrorRollsBack(t *testing.T) {
-	rig := newTemplateRig(t)
-	rig.deployer.errDeploy = "redis"
-	_, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
-	var failed *TemplateFailedError
-	if !errors.As(err, &failed) || rig.log.count("delete ") != 2 {
-		t.Fatalf("got %v, events %v", err, rig.log.all())
-	}
-}
-
 func TestDeployTemplate_ARollbackThatCannotFinishNamesWhatIsLeft(t *testing.T) {
 	rig := newTemplateRig(t)
-	rig.deployer.failDeploy = "web"
+	rig.apps.failFor = "web"
 	rig.deployer.failDelete = "redis"
 	_, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
 	var incomplete *TemplateRollbackError
@@ -535,7 +619,7 @@ func TestDescribeTemplates(t *testing.T) {
 func TestDeployTemplate_RollbackWaitsOutABriefLease(t *testing.T) {
 	rig := newTemplateRig(t)
 	rig.svc.leaseRetry = 0
-	rig.deployer.failDeploy = "web"
+	rig.apps.failFor = "web"
 	rig.deployer.busyOnce = map[string]bool{"redis": true}
 	_, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
 	var failed *TemplateFailedError
@@ -558,7 +642,7 @@ func TestDeployTemplate_ANetworkErrorAfterOpeningClosesItAgain(t *testing.T) {
 func TestDeployTemplate_RollbackWaitsOutABusyProjectToCloseTheNetwork(t *testing.T) {
 	rig := newTemplateRig(t)
 	rig.svc.leaseRetry = 0
-	rig.deployer.failDeploy = "web"
+	rig.apps.failFor = "web"
 	rig.network.busyCloses = 2
 	_, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
 	var failed *TemplateFailedError
@@ -570,19 +654,12 @@ func TestDeployTemplate_RollbackWaitsOutABusyProjectToCloseTheNetwork(t *testing
 // What a caller is told names the step, never a store's or the cluster's own words.
 func TestDeployTemplate_AFailureTellsTheStepNotTheInternals(t *testing.T) {
 	rig := newTemplateRig(t)
-	rig.deployer.errDeploy = "redis"
+	rig.vault.putErr = errors.New("vault sealed at 10.0.0.1")
 	_, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
 	var failed *TemplateFailedError
-	if !errors.As(err, &failed) || !failed.ServerFault || strings.Contains(failed.Public(), "lease") ||
-		!strings.Contains(failed.Public(), `could not deploy app "redis"`) {
+	if !errors.As(err, &failed) || !failed.ServerFault || strings.Contains(failed.Public(), "10.0.0.1") ||
+		!strings.Contains(failed.Public(), `could not store the secrets of app "redis"`) {
 		t.Fatalf("got %+v", failed)
-	}
-
-	rig = newTemplateRig(t)
-	rig.deployer.failDeploy = "web"
-	_, err = rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
-	if !errors.As(err, &failed) || failed.ServerFault || !strings.Contains(failed.Public(), "apply app workload: forced") {
-		t.Fatalf("a deploy's own failure reason is the customer's to read: %+v", failed)
 	}
 
 	rig = newTemplateRig(t)

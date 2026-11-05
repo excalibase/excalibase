@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -22,6 +23,8 @@ const (
 	roleAuthAdmin = "auth_admin"
 	roleApp       = "excalibase_app"
 	roleWatcher   = "cdc_watcher"
+	// roleReader is the SELECT-only login the read address names (EXC-675).
+	roleReader = pgroles.ReaderRole
 )
 
 // ErrProjectRegistrationInvalid is returned when a caller asks to register a
@@ -289,7 +292,7 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 	if !canExecSQL {
 		return s.fileOwnerCredential(spec, pc)
 	}
-	return s.createProjectRoles(ctx, spec, newProjectRoleCredentials(), pc)
+	return s.createProjectRoles(ctx, spec, s.newProjectRoleCredentials(ctx), pc)
 }
 
 // projectRoleCredentials holds the generated passwords for the roles
@@ -299,15 +302,23 @@ type projectRoleCredentials struct {
 	appPassword       string
 	watcherPassword   string
 	schedulerPassword string
+	// readerPassword is empty unless the project gets the SELECT-only login.
+	readerPassword string
 }
 
-func newProjectRoleCredentials() projectRoleCredentials {
-	return projectRoleCredentials{
+// newProjectRoleCredentials mints the platform roles' passwords; the reader
+// only while its feature is on (EXC-675).
+func (s *ProvisioningService) newProjectRoleCredentials(ctx context.Context) projectRoleCredentials {
+	creds := projectRoleCredentials{
 		authPassword:      generatePassword(32),
 		appPassword:       generatePassword(32),
 		watcherPassword:   generatePassword(32),
 		schedulerPassword: generatePassword(32),
 	}
+	if features.Enabled(ctx, s.flags, features.DBReadRole) {
+		creds.readerPassword = generatePassword(32)
+	}
+	return creds
 }
 
 // announceProject publishes the project-created event and seeds the activity
@@ -384,8 +395,12 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, spec proje
 		roleApp:       creds.appPassword,
 		roleWatcher:   creds.watcherPassword,
 		roleScheduler: creds.schedulerPassword,
+		roleReader:    creds.readerPassword,
 	}
-	for _, role := range []string{roleAuthAdmin, roleApp, roleWatcher, roleScheduler} {
+	for _, role := range []string{roleAuthAdmin, roleApp, roleWatcher, roleScheduler, roleReader} {
+		if passwords[role] == "" {
+			continue
+		}
 		pc.SetStep("store " + role + " credentials")
 		record := specCredentialRecord(spec, role, passwords[role])
 		if material, ok := certificates[role]; ok {
@@ -432,7 +447,8 @@ func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicat
 		BuildSchedulerRoleSQL(creds.schedulerPassword, spec.databaseName) +
 		realtimeIdentitySQL(publicationName) +
 		pgroles.CustomerRoleSQL(spec.adminUsername) +
-		pgroles.OwnerAccessSQL(spec.adminUsername)
+		pgroles.OwnerAccessSQL(spec.adminUsername) +
+		readerSQL(spec.adminUsername, creds.readerPassword)
 	if spec.resetPasswords {
 		roleSQL += BuildProjectRoleResetSQL(resetTargets(spec, creds))
 	}
@@ -451,10 +467,22 @@ func resetTargets(spec projectRoleSpec, creds projectRoleCredentials) []RolePass
 		{Role: roleWatcher, Password: creds.watcherPassword},
 		{Role: roleScheduler, Password: creds.schedulerPassword},
 	}
+	if creds.readerPassword != "" {
+		targets = append(targets, RolePassword{Role: roleReader, Password: creds.readerPassword})
+	}
 	if spec.resetAdmin {
 		targets = append(targets, RolePassword{Role: spec.adminUsername, Password: spec.adminPassword})
 	}
 	return targets
+}
+
+// readerSQL creates the SELECT-only login when the project has one, and
+// otherwise locks one a restored copy brought.
+func readerSQL(owner, password string) string {
+	if password == "" {
+		return pgroles.ReaderLockSQL()
+	}
+	return pgroles.ReaderRoleSQL(owner, password)
 }
 
 // assertNoStoredCredentials refuses to register a project whose vault prefix

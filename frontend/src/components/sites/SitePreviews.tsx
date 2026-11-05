@@ -19,6 +19,8 @@ interface SitePreviewsProps {
   readonly productionBranch: string;
   readonly canDevelop: boolean;
   readonly canAdmin: boolean;
+  // A server-rendered site gets no previews yet: a preview publishes static files only.
+  readonly serverSite?: boolean;
 }
 
 const card = 'bg-surface-card border border-border-primary rounded-lg p-4 space-y-3';
@@ -237,11 +239,21 @@ function AccessSwitches({
 }
 
 // Previews (EXC-660): hidden until the server turns sitepreviews on.
-export function SitePreviews({ projectId, siteId, productionBranch, canDevelop, canAdmin }: SitePreviewsProps) {
+export function SitePreviews({ projectId, siteId, productionBranch, canDevelop, canAdmin, serverSite = false }: SitePreviewsProps) {
   const { enabled } = useFeatureEnabled('sitepreviews');
-  const { data, error } = useSitePreviews(projectId, siteId, enabled);
+  const { data, error } = useSitePreviews(projectId, siteId, enabled && !serverSite);
   const remove = useRemovePreview(projectId, siteId);
   if (!enabled) return null;
+  if (serverSite) {
+    return (
+      <section className="space-y-2" data-testid="site-previews">
+        <h4 className="text-sm font-semibold text-text-primary">Previews</h4>
+        <p className={`${card} text-sm text-text-secondary`} data-testid="previews-static-only">
+          Previews are for static sites for now; pushes to this server-rendered site still deploy production.
+        </p>
+      </section>
+    );
+  }
   return (
     <section className="space-y-2" data-testid="site-previews">
       <h4 className="text-sm font-semibold text-text-primary">Previews</h4>

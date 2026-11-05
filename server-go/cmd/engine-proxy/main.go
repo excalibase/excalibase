@@ -12,6 +12,8 @@
 //	PROXY_NETNS_JOIN_IMAGES digest-pinned images that may join a managed
 //	                      container's network namespace (optional; the DocumentDB gateway)
 //	PROXY_STATS_CONTAINERS platform containers, by exact name, host monitoring reads stats and state of (optional)
+//	PROXY_BRIDGE_NETWORKS and PROXY_BRIDGES_FILE  platform networks whose host bridges the proxy
+//	                      writes to the file for the host firewall (optional, together; EXC-683)
 package main
 
 import (
@@ -24,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -42,7 +45,14 @@ type config struct {
 	socket string
 	listen string
 	policy engineproxy.Policy
+	// bridgeNetworks are written with their host bridges to bridgesFile.
+	bridgeNetworks []string
+	bridgesFile    string
 }
+
+// bridgesEvery is how often the bridges file is rewritten: a network
+// re-created by compose gets a new bridge.
+const bridgesEvery = 15 * time.Second
 
 func main() {
 	cfg, err := loadConfig(os.Getenv)
@@ -60,15 +70,53 @@ func main() {
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) },
 	}
 	target := &url.URL{Scheme: "http", Host: "engine"}
+	handler := engineproxy.NewHandler(cfg.policy, target, transport).WithUpgradeDial(dial)
+	if cfg.bridgesFile != "" {
+		go publishBridges(handler, cfg.bridgeNetworks, cfg.bridgesFile)
+	}
 	server := &http.Server{
 		Addr:              cfg.listen,
-		Handler:           engineproxy.NewHandler(cfg.policy, target, transport).WithUpgradeDial(dial),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Printf("engine proxy: %s -> %s, networks %v prefix %q", cfg.listen, cfg.socket, cfg.policy.Networks, cfg.policy.NetworkPrefix)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("engine proxy: %v", err)
 	}
+}
+
+// publishBridges keeps the host firewall's bridges file current. A network it
+// cannot name is left out and logged; the firewall refuses to report healthy
+// without it.
+func publishBridges(handler *engineproxy.Handler, networks []string, path string) {
+	for {
+		lines, err := handler.ResolveBridges(context.Background(), networks)
+		if err != nil {
+			log.Printf("engine proxy: host bridges: %v", err)
+		}
+		if err := engineproxy.WriteBridges(path, lines); err != nil {
+			log.Printf("engine proxy: write %s: %v", path, err)
+		}
+		time.Sleep(bridgesEvery)
+	}
+}
+
+// bridgesSetting reads the networks whose bridges the proxy writes down, and where.
+func bridgesSetting(getenv func(string) string) ([]string, string, error) {
+	networks := splitList(getenv("PROXY_BRIDGE_NETWORKS"))
+	path := strings.TrimSpace(getenv("PROXY_BRIDGES_FILE"))
+	if (len(networks) == 0) != (path == "") {
+		return nil, "", errors.New("PROXY_BRIDGE_NETWORKS and PROXY_BRIDGES_FILE go together")
+	}
+	if path != "" && !filepath.IsAbs(path) {
+		return nil, "", fmt.Errorf("PROXY_BRIDGES_FILE %q must be an absolute path", path)
+	}
+	for _, network := range networks {
+		if !containerName.MatchString(network) {
+			return nil, "", fmt.Errorf("PROXY_BRIDGE_NETWORKS %q is not a network name", network)
+		}
+	}
+	return networks, path, nil
 }
 
 func loadConfig(getenv func(string) string) (config, error) {
@@ -110,6 +158,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	bridgeNetworks, bridgesFile, err := bridgesSetting(getenv)
+	if err != nil {
+		return config{}, err
+	}
 	bindIPs := splitList(getenv("PROXY_PORT_BIND_IPS"))
 	if len(bindIPs) == 0 {
 		bindIPs = []string{"127.0.0.1"}
@@ -133,6 +185,8 @@ func loadConfig(getenv func(string) string) (config, error) {
 			CDCImages:       cdcImages,
 			StatsContainers: monitored,
 		},
+		bridgeNetworks: bridgeNetworks,
+		bridgesFile:    bridgesFile,
 	}, nil
 }
 

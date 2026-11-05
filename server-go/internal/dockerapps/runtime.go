@@ -151,7 +151,7 @@ func (r *Runtime) VerifyEngine(ctx context.Context) error {
 		return fmt.Errorf("the engine has no %q runtime (it has %s): install gVisor, or set APP_SANDBOX_RUNTIME=none to run apps without a sandbox",
 			r.opts.SandboxRuntime, strings.Join(names, ", "))
 	}
-	if _, err := r.runTool(ctx, k8s.DiskJobOptions{Timeout: toolCheckTimeout}, []string{"true"}); err != nil {
+	if _, err := r.runTool(ctx, k8s.DiskJobOptions{Timeout: toolCheckTimeout}, nil, []string{"true"}); err != nil {
 		return fmt.Errorf("the disk tools image %s does not run here (APP_DISK_TOOLS_IMAGE): %w", r.opts.ToolsImage, err)
 	}
 	return r.verifyNames(ctx)

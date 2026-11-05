@@ -11,6 +11,32 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/sites"
 )
 
+// narrowPreview reads the repository's visibility into a preview build and keeps only the opt-ins the
+// site's connection still grants; it answers why the build may not go on at all, or "".
+func (e *execution) narrowPreview(connection connected) string {
+	site, isSite := connection.(*Connection)
+	if e.build.Preview == nil || !isSite {
+		return ""
+	}
+	e.build.Preview.privateRepo = site.private
+	return e.build.Preview.narrow(site.Previews)
+}
+
+// previewStillDeployable is why a preview build may not deploy after its run, or "".
+func (e *execution) previewStillDeployable(connection connected) string {
+	if e.build.Preview == nil {
+		return ""
+	}
+	if e.dispatcher.service.options.Previews == nil {
+		return "previews were turned off while this build ran; nothing was deployed"
+	}
+	site, isSite := connection.(*Connection)
+	if !isSite {
+		return ""
+	}
+	return e.build.Preview.narrow(site.Previews)
+}
+
 // deployPreview publishes the output to the build's preview, retrying while another deploy of the project runs.
 func (e *execution) deployPreview(ctx context.Context, spool *os.File) outcome {
 	service, build, options := e.dispatcher.service, e.build, e.dispatcher.options

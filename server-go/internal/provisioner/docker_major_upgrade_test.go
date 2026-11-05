@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
 func tarOf(t *testing.T, names ...string) *bytes.Reader {
@@ -47,7 +49,7 @@ func TestPreUpgradeContainerName(t *testing.T) {
 // The new server takes no network connection until the platform lifts the
 // fence, and never one as the superuser; the load tolerates one error only.
 func TestUpgradeInitScript(t *testing.T) {
-	script := upgradeInitScript()
+	script := upgradeInitScript("shop")
 	fence := strings.Index(script, upgradeFenceLine)
 	reject := strings.Index(script, superuserNetworkReject)
 	load := strings.Index(script, "-f "+UpgradeGlobalsFile)
@@ -59,7 +61,12 @@ func TestUpgradeInitScript(t *testing.T) {
 			t.Errorf("init script misses %q", want)
 		}
 	}
-	archive, err := UpgradeInitTar()
+	for _, line := range pgroles.ReaderHBA("host", "shop") {
+		if !strings.Contains(script, line) {
+			t.Errorf("the upgraded server lets the reader past its database: misses %q", line)
+		}
+	}
+	archive, err := UpgradeInitTar("shop")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +83,7 @@ func TestFenceAndUnfence(t *testing.T) {
 	if !strings.Contains(UnfenceScript(), "grep -vxF '"+upgradeFenceLine+"'") {
 		t.Fatal("the unfence does not remove the fence line")
 	}
-	if !strings.Contains(upgradeInitScript(), "--section=data --use-set-session-authorization") || !strings.Contains(CleanupScript(), UpgradeDir) {
+	if !strings.Contains(upgradeInitScript("app"), "--section=data --use-set-session-authorization") || !strings.Contains(CleanupScript(), UpgradeDir) {
 		t.Fatal("dump or cleanup scripts")
 	}
 }

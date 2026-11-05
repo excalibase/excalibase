@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -90,25 +91,29 @@ func pgLiteral(value string) string { return "'" + strings.ReplaceAll(value, "'"
 // reaches it; no password opens it from the network.
 const superuserNetworkReject = "host all " + defaultPostgresSuperuser + " all reject"
 
-// rejectSuperuserScript puts superuserNetworkReject first in the official
-// image's pg_hba and reloads it. The file is rewritten in place, so it keeps
-// its owner, and a line already there is not added twice.
-func rejectSuperuserScript() string {
-	return `set -eu
-hba=$(psql -U ` + defaultPostgresSuperuser + ` -d postgres -tAc 'SHOW hba_file')
-line='` + superuserNetworkReject + `'
-if ! grep -qxF "$line" "$hba"; then
-  { echo "$line"; cat "$hba"; } > "$hba.excalibase"
-  cat "$hba.excalibase" > "$hba"
-  rm -f "$hba.excalibase"
-fi
-psql -U ` + defaultPostgresSuperuser + ` -d postgres -tAc 'SELECT pg_reload_conf()' >/dev/null
+// fenceNetworkLoginsScript puts superuserNetworkReject and the reader's
+// lines first in the official image's pg_hba and reloads it.
+func fenceNetworkLoginsScript(dbName string) string {
+	return "set -eu\n" + platformHBAPrepend(showHBA, dbName) +
+		`psql -U ` + defaultPostgresSuperuser + ` -d postgres -tAc 'SELECT pg_reload_conf()' >/dev/null
 `
 }
 
-// rejectSuperuserOverNetwork applies rejectSuperuserScript in the container.
-func (p *DockerPostgreSQLProvisioner) rejectSuperuserOverNetwork(ctx context.Context, containerID string) error {
-	if _, err := p.docker.ExecInContainerStdin(ctx, containerID, []string{"sh", "-s"}, rejectSuperuserScript()); err != nil {
+// platformHBAPrepend puts the platform's lines first in pg_hba: the
+// superuser's reject and the reader's admit above its reject. Each line is put
+// first, so they are written in reverse.
+func platformHBAPrepend(hbaExpr, dbName string) string {
+	lines := append([]string{superuserNetworkReject}, pgroles.ReaderHBA("host", dbName)...)
+	var script strings.Builder
+	for _, line := range slices.Backward(lines) {
+		script.WriteString(hbaPrepend(hbaExpr, line))
+	}
+	return script.String()
+}
+
+// rejectSuperuserOverNetwork applies fenceNetworkLoginsScript in the container.
+func (p *DockerPostgreSQLProvisioner) rejectSuperuserOverNetwork(ctx context.Context, containerID, dbName string) error {
+	if _, err := p.docker.ExecInContainerStdin(ctx, containerID, []string{"sh", "-s"}, fenceNetworkLoginsScript(dbName)); err != nil {
 		return fmt.Errorf("keep the superuser off the network: %w", err)
 	}
 	return nil

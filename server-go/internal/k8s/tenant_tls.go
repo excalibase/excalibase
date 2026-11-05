@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
@@ -71,8 +72,11 @@ func certLogin(database, role string) string {
 	return hbaHostSSL + " " + database + " " + role + " all cert"
 }
 
-func networkLogins(requireTLS bool) []interface{} {
+func networkLogins(requireTLS bool, database string) []interface{} {
 	lines := append(platformCertLogins(), hbaConnectionType(requireTLS)+" all app all scram-sha-256")
+	for _, line := range pgroles.ReaderHBA(hbaConnectionType(requireTLS), database) {
+		lines = append(lines, line)
+	}
 	if requireTLS {
 		for _, reject := range plaintextRejects {
 			lines = append(lines, reject)

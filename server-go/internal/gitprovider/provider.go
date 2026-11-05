@@ -142,3 +142,9 @@ type Provider interface {
 	// SetCommitStatus posts a status on a commit.
 	SetCommitStatus(ctx context.Context, installationID int64, repository Repository, sha string, status CommitStatus) error
 }
+
+// FileChecker answers whether a regular file is at a path in a commit; a missing
+// file is false, and anything the host could not answer is an error.
+type FileChecker interface {
+	FileExists(ctx context.Context, installationID int64, repository Repository, commit, path string) (bool, error)
+}

@@ -100,7 +100,7 @@ func TestSiteBuildRunner_StatusReadsTheJobAndItsPod(t *testing.T) {
 		t.Fatalf("no pod yet: %+v %v", status, err)
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "site-build-x-abcde", Namespace: "site-builds", Labels: map[string]string{siteBuildLabelBuild: spec.BuildID}},
+		ObjectMeta: metav1.ObjectMeta{Name: "site-build-x-abcde", Namespace: "site-builds", Labels: map[string]string{siteBuildComponentKey: siteBuildComponent, siteBuildLabelBuild: spec.BuildID}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning, InitContainerStatuses: passedInits(),
 			ContainerStatuses: []corev1.ContainerStatus{running("collect", true)}},
 	}
@@ -125,7 +125,7 @@ func TestSiteBuildRunner_CollectStreamsFromTheCollectStep(t *testing.T) {
 	runner, client := newBuildRunner(t)
 	ctx := context.Background()
 	spec := testRunSpec()
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "site-builds", Labels: map[string]string{siteBuildLabelBuild: spec.BuildID}}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "site-builds", Labels: map[string]string{siteBuildComponentKey: siteBuildComponent, siteBuildLabelBuild: spec.BuildID}}}
 	if _, err := client.clientset.CoreV1().Pods("site-builds").Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestSiteBuildRunner_LogsKeepEachStepsTail(t *testing.T) {
 	ctx := context.Background()
 	spec := testRunSpec()
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "site-builds", Labels: map[string]string{siteBuildLabelBuild: spec.BuildID}},
+		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "site-builds", Labels: map[string]string{siteBuildComponentKey: siteBuildComponent, siteBuildLabelBuild: spec.BuildID}},
 		Status:     corev1.PodStatus{InitContainerStatuses: passedInits()},
 	}
 	if _, err := client.clientset.CoreV1().Pods("site-builds").Create(ctx, pod, metav1.CreateOptions{}); err != nil {

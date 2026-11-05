@@ -43,7 +43,8 @@ func (r *Runtime) CreateAppDisk(ctx context.Context, namespace string, app *apph
 	if err := r.createVolume(ctx, app, name, app.Disk.Generation); err != nil {
 		return err
 	}
-	_, err := r.runTool(ctx, opts, []string{"chmod", "0777", "/disk"}, mount.Mount{Type: mount.TypeVolume, Source: name, Target: "/disk"})
+	_, err := r.runTool(ctx, opts, diskOwner(app.ProjectID, app.ID), []string{"chmod", "0777", "/disk"},
+		mount.Mount{Type: mount.TypeVolume, Source: name, Target: "/disk"})
 	if err != nil {
 		return errors.Join(err, r.engine.VolumeRemove(ctx, name, false))
 	}
@@ -80,7 +81,7 @@ func (r *Runtime) requireVolume(ctx context.Context, name string) error {
 }
 
 // AppDiskUsage reads what the disk holds; its size is the recorded one.
-func (r *Runtime) AppDiskUsage(ctx context.Context, _ string, appID string, disk apphost.AppDisk, opts k8s.DiskJobOptions) (k8s.AppDiskUsage, error) {
+func (r *Runtime) AppDiskUsage(ctx context.Context, namespace, appID string, disk apphost.AppDisk, opts k8s.DiskJobOptions) (k8s.AppDiskUsage, error) {
 	size, err := resource.ParseQuantity(disk.Size)
 	if err != nil {
 		return k8s.AppDiskUsage{}, fmt.Errorf("the disk's size %q: %w", disk.Size, err)
@@ -89,7 +90,11 @@ func (r *Runtime) AppDiskUsage(ctx context.Context, _ string, appID string, disk
 	if err := r.requireVolume(ctx, name); err != nil {
 		return k8s.AppDiskUsage{}, err
 	}
-	output, err := r.runTool(ctx, opts, []string{"du", "-sk", "/disk"},
+	project, err := r.opts.Projects.ProjectOf(namespace)
+	if err != nil {
+		return k8s.AppDiskUsage{}, fmt.Errorf("find the project of %s: %w", namespace, err)
+	}
+	output, err := r.runTool(ctx, opts, diskOwner(project, appID), []string{"du", "-sk", "/disk"},
 		mount.Mount{Type: mount.TypeVolume, Source: name, Target: "/disk", ReadOnly: true})
 	if err != nil {
 		return k8s.AppDiskUsage{}, err
@@ -124,7 +129,7 @@ func (r *Runtime) CopyAppDisk(ctx context.Context, namespace string, app *apphos
 	} else if err != nil {
 		return err
 	}
-	_, err := r.runTool(ctx, opts, []string{"sh", "-c", "cp -a /from/. /to/ && chmod 0777 /to"},
+	_, err := r.runTool(ctx, opts, diskOwner(app.ProjectID, app.ID), []string{"sh", "-c", "cp -a /from/. /to/ && chmod 0777 /to"},
 		mount.Mount{Type: mount.TypeVolume, Source: from, Target: "/from", ReadOnly: true},
 		mount.Mount{Type: mount.TypeVolume, Source: target, Target: "/to"})
 	return err
@@ -175,13 +180,24 @@ func (r *Runtime) RepointAppDisk(ctx context.Context, _ string, appID, claim str
 
 // runTool runs one command in a throwaway container of the tools image: no
 // network, the sandbox, nothing mounted but the disks named. It answers stdout.
-func (r *Runtime) runTool(ctx context.Context, opts k8s.DiskJobOptions, cmd []string, mounts ...mount.Mount) (string, error) {
+// The tool carries the disks' owner, without which the engine proxy refuses
+// to mount them (EXC-682).
+func (r *Runtime) runTool(ctx context.Context, opts k8s.DiskJobOptions, owner map[string]string, cmd []string, mounts ...mount.Mount) (string, error) {
 	name := "excalibase-app-disk-tool-" + shortHash(fmt.Sprint(time.Now().UnixNano(), cmd), 12)
-	return r.runToolOn(ctx, opts, toolContainer{name: name, network: "none"}, cmd, mounts...)
+	return r.runToolOn(ctx, opts, toolContainer{name: name, network: "none", owner: owner}, cmd, mounts...)
 }
 
-// toolContainer names a tool container and the network it runs on ("none", or one it joins).
-type toolContainer struct{ name, network string }
+// diskOwner is the labels an app's disk names its owner by.
+func diskOwner(projectID, appID string) map[string]string {
+	return map[string]string{labelProject: projectID, labelApp: appID}
+}
+
+// toolContainer names a tool container, the network it runs on ("none", or
+// one it joins) and the owner of the disks it mounts.
+type toolContainer struct {
+	name, network string
+	owner         map[string]string
+}
 
 func (r *Runtime) runToolOn(ctx context.Context, opts k8s.DiskJobOptions, tool toolContainer, cmd []string, mounts ...mount.Mount) (string, error) {
 	if opts.Timeout <= 0 {
@@ -217,8 +233,11 @@ func (r *Runtime) runToolOn(ctx context.Context, opts k8s.DiskJobOptions, tool t
 func (r *Runtime) createTool(ctx context.Context, tool toolContainer, cmd []string, mounts []mount.Mount) (string, error) {
 	pids := int64(64)
 	// The command replaces the image's entrypoint: the tools image may be provisioning's own.
-	config := &container.Config{Image: r.opts.ToolsImage, Entrypoint: cmd[:1], Cmd: cmd[1:], User: "0",
-		Labels: map[string]string{labelManaged: "true", labelComponent: componentDiskTool}}
+	labels := map[string]string{labelManaged: "true", labelComponent: componentDiskTool}
+	for key, value := range tool.owner {
+		labels[key] = value
+	}
+	config := &container.Config{Image: r.opts.ToolsImage, Entrypoint: cmd[:1], Cmd: cmd[1:], User: "0", Labels: labels}
 	host := &container.HostConfig{
 		NetworkMode: container.NetworkMode(tool.network), Mounts: mounts, Runtime: r.opts.SandboxRuntime,
 		// cp -a keeps the default capabilities: it must read and chown files the app's user owns.

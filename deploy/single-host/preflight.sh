@@ -62,6 +62,50 @@ if [ "${FEATURE_AUTHHOOKS:-}" = true ]; then
   fi
 fi
 
+# Log drains (EXC-658): the forwarder's token unlocks every drain's key.
+if [ "${FEATURE_LOGDRAINS:-}" = true ]; then
+  check_secret LOG_FORWARDER_TOKEN "${LOG_FORWARDER_TOKEN:-}"
+  for other in "${POSTGRES_PASSWORD:-}" "${SETUP_TOKEN:-}" "${OBJECTSTORE_ROOT_SECRET:-}" \
+    "${OBJECTSTORE_BACKUPS_SECRET:-}" "${OBJECTSTORE_FILES_SECRET:-}"; do
+    if [ "${LOG_FORWARDER_TOKEN:-}" = "$other" ]; then
+      complain "LOG_FORWARDER_TOKEN must differ from the other secrets"
+    fi
+  done
+fi
+
+# Host firewall (EXC-683). On Docker the platform's bridges reach the host and
+# the tenants' bridge the LAN unless it runs; it is on unless HOST_FIREWALL=off,
+# and provisioning and the edge wait for it healthy. Here, on every up, an
+# install missing what it needs is told so, rather than left waiting on it.
+# Rootless Podman (uid 0, which init.sh writes for it alone) is exempt: its
+# bridges live in the user's own namespace and its engine has no DOCKER-USER chain.
+if [ "${ENGINE_SOCKET_UID:-1000}" != 0 ]; then
+  case "${HOST_FIREWALL:-}" in
+    off) firewall= ;;
+    "") firewall=on ;;
+    *) firewall=; complain "HOST_FIREWALL must be off or unset, not ${HOST_FIREWALL}" ;;
+  esac
+  if [ -n "$firewall" ]; then
+    # The firewall runs the platform image, and 1.6.2 and before lack iptables and the
+    # proxy's bridges file. Fail closed: only a plain release after 1.6.2, a trunk
+    # build or CI's own; floating tags (1.6, 1, latest) name 1.6.2 today.
+    tag=${PLATFORM_TAG:-}
+    case $tag in
+      ci) ;;
+      main-*) printf '%s' "${tag#main-}" | grep -Eq '^[0-9a-f]{7,40}$' || tag_refused=1 ;;
+      *)
+        if printf '%s' "$tag" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+$'; then
+          [ "$(printf '%s\n%s\n' "$tag" 1.6.2 | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" != 1.6.2 ] || tag_refused=1
+        else
+          tag_refused=1
+        fi
+        ;;
+    esac
+    [ -z "${tag_refused:-}" ] || complain "TAG '${tag}' does not run the host firewall: set TAG in .env to a trunk build (main-<sha>) until a release after 1.6.2 exists, or HOST_FIREWALL=off"
+    [ -n "${HOST_RESOLV_CONF:-}" ] || complain "HOST_RESOLV_CONF is unset: the resolv.conf Docker forwards lookups to (/run/systemd/resolve/resolv.conf when /etc/resolv.conf names only 127.0.0.53, else /etc/resolv.conf)"
+  fi
+fi
+
 # Optional: unset means bootstrap generates one and prints it once.
 admin=${ADMIN_PASSWORD:-}
 if [ -n "$admin" ] && { is_weak "$admin" || [ "${#admin}" -lt 12 ]; }; then
@@ -71,4 +115,4 @@ fi
 if [ "$problems" -gt 0 ]; then
   exit 1
 fi
-echo "preflight: secrets ok"
+echo "preflight: ok"

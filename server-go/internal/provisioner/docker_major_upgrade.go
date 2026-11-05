@@ -144,14 +144,14 @@ func UpgradeStateScript() string {
 // constraint that runs on them never runs as the superuser; the schema and
 // what comes after the rows are not tenant code that runs (index builds run
 // as the table owner since CVE-2022-1552).
-func upgradeInitScript() string {
+func upgradeInitScript(dbName string) string {
 	return `#!/bin/sh
 set -u
 state="$PGDATA/` + UpgradeStateFile + `"
 fail() { echo "excalibase upgrade: $1" > "$state.reason"; echo "` + UpgradeFailed + `" > "$state"; echo "excalibase upgrade: $1" >&2; exit 1; }
 # Whatever ends this script early, the platform must read "failed", not wait.
 trap '[ -s "$state" ] || echo "` + UpgradeFailed + `" > "$state"' EXIT
-` + hbaPrepend(`"$PGDATA/pg_hba.conf"`, superuserNetworkReject) + hbaPrepend(`"$PGDATA/pg_hba.conf"`, upgradeFenceLine) + `
+` + platformHBAPrepend(`"$PGDATA/pg_hba.conf"`, dbName) + hbaPrepend(`"$PGDATA/pg_hba.conf"`, upgradeFenceLine) + `
 log=` + UpgradeDir + `/load.log
 : > "$log"
 tab=$(printf '\t')
@@ -183,8 +183,8 @@ echo "` + UpgradeLoaded + `" > "$state"
 
 // UpgradeInitTar is the tar CopyToContainer extracts into the new
 // container's /docker-entrypoint-initdb.d before its first start.
-func UpgradeInitTar() ([]byte, error) {
-	return singleFileTar("excalibase-major-upgrade.sh", []byte(upgradeInitScript()), 0o755, FileOwner{})
+func UpgradeInitTar(dbName string) ([]byte, error) {
+	return singleFileTar("excalibase-major-upgrade.sh", []byte(upgradeInitScript(dbName)), 0o755, FileOwner{})
 }
 
 // UpgradeInitDir is where the official image runs first-start scripts.
@@ -242,4 +242,10 @@ func ExtensionNames(archive io.Reader) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// DataMajorScript prints the major version of the data directory.
+func DataMajorScript() string {
+	return `cat "$PGDATA/PG_VERSION"
+`
 }

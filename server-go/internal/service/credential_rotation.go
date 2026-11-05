@@ -69,7 +69,7 @@ type credentialRotationTarget struct {
 // the project and returns the owner credential.
 //
 // Roles are rotated one at a time, in a fixed order: auth_admin, then
-// excalibase_app, then excalibase_scheduler, then the owner. The owner is last because it is the value
+// excalibase_app, then excalibase_scheduler, then excalibase_reader, then the owner. The owner is last because it is the value
 // the caller is handed — a caller is only told a rotation succeeded once every
 // role behind it has been replaced and proved. cdc_watcher is deliberately not rotated: its password is baked
 // into the deployed watcher workload's configuration, so changing it without
@@ -98,20 +98,42 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 	if err != nil {
 		return nil, err
 	}
+	var rotated []string
+	var rotateErr error
 	for _, target := range rotationTargets(inst, filed) {
 		target.serverCA = serverCA
 		authenticatesByCertificate, err := s.authenticatesByCertificate(projectID, target.role)
 		if err != nil {
-			return nil, err
+			rotateErr = err
+			break
 		}
 		if authenticatesByCertificate {
 			continue
 		}
 		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
-			return nil, fmt.Errorf("rotate %s credential: %w", target.role, err)
+			rotateErr = fmt.Errorf("rotate %s credential: %w", target.role, err)
+			break
 		}
+		rotated = append(rotated, target.username)
 	}
-	return s.GetCredentials(projectID)
+	// Only once every password has changed, so a copy that cannot end its
+	// sessions never holds a role back on its old password; a later role
+	// failing still ends the sessions of those already rotated.
+	if err := errors.Join(rotateErr, s.endRotatedSessions(ctx, inst, rotated)); err != nil {
+		return nil, err
+	}
+	return s.GetCredentials(ctx, projectID)
+}
+
+// endRotatedSessions ends the sessions opened with the rotated roles' old passwords.
+func (s *ProvisioningService) endRotatedSessions(ctx context.Context, inst *domain.DatabaseInstance, rotated []string) error {
+	if len(rotated) == 0 || !s.endsSessionsOnRotation(ctx) {
+		return nil
+	}
+	if err := s.endRoleSessions(ctx, inst, rotated); err != nil {
+		return fmt.Errorf("the passwords changed but the sessions opened with the old ones were not all ended: %w", err)
+	}
+	return nil
 }
 
 // authenticatesByCertificate reports whether a platform role's record carries
@@ -135,7 +157,7 @@ func (s *ProvisioningService) authenticatesByCertificate(projectID, role string)
 // does not have would fail the whole rotation.
 func rotationTargets(inst *domain.DatabaseInstance, filed map[string]bool) []credentialRotationTarget {
 	targets := make([]credentialRotationTarget, 0, 4)
-	for _, role := range []string{roleAuthAdmin, roleApp, roleScheduler} {
+	for _, role := range []string{roleAuthAdmin, roleApp, roleScheduler, roleReader} {
 		if filed[vaultCredentialPath(inst.ProjectID, role)] {
 			targets = append(targets, credentialRotationTarget{role: role, username: role})
 		}
@@ -252,6 +274,9 @@ func (s *ProvisioningService) promoteCredential(ctx context.Context, inst *domai
 	// replaced role serving a dead password for the rest of its TTL whenever
 	// a later role fails.
 	s.announceCredentialRotation(ctx, inst.ProjectID, target.role)
+	for _, observer := range s.credentialObservers {
+		observer.CredentialsRotated(inst.ProjectID)
+	}
 	return nil
 }
 
@@ -294,8 +319,16 @@ func (s *ProvisioningService) alterRolePassword(ctx context.Context, inst *domai
 		return mysql.SetUserPassword(ctx, inst.Namespace, inst.ProjectID, username, password)
 	}
 	sqlText := pgroles.PinnedSearchPath + alterRolePasswordSQL(username, password) + "\n"
-	_, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, inst.ProjectID+"-postgres-1", "postgres",
-		[]string{"psql", "-U", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}, sqlText)
+	psql := []string{"psql", "-U", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}
+	var err error
+	switch {
+	case inst.DeploymentMode == domain.ModeDocker && s.dockerClient != nil:
+		_, err = s.dockerClient.ExecInContainerStdin(ctx, inst.Namespace, psql, sqlText)
+	case s.k8sClient != nil:
+		_, err = s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, inst.ProjectID+primaryPodSuffix, "postgres", psql, sqlText)
+	default:
+		return ErrCredentialRotationUnavailable
+	}
 	if err != nil {
 		return errors.New(redactSecret(err.Error(), password))
 	}

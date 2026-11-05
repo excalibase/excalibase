@@ -56,3 +56,19 @@ describe('BoolExpEditor', () => {
     expect(screen.getByLabelText('Row filter')).toHaveAttribute('aria-invalid', 'false');
   });
 });
+
+// EXC-680: with MFA on, one click requires the second sign-in step.
+describe('BoolExpEditor second step', () => {
+  test('without MFA there is no second-step button', () => {
+    renderEditor();
+    expect(screen.queryByRole('button', { name: 'Require the second step (MFA)' })).not.toBeInTheDocument();
+  });
+
+  test('with MFA it keeps what is there and requires aal2', () => {
+    const onChange = renderEditor({ mfa: true, value: '{"owner_id":{"_eq":"X-Excalibase-User-Id"}}' });
+    fireEvent.click(screen.getByRole('button', { name: 'Require the second step (MFA)' }));
+    expect(JSON.parse(onChange.mock.calls[0][0] as string)).toEqual({
+      _and: [{ owner_id: { _eq: 'X-Excalibase-User-Id' } }, { 'X-Excalibase-Aal': { _eq: 'aal2' } }],
+    });
+  });
+});

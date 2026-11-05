@@ -24,6 +24,16 @@ type darkProbe struct{ method, path string }
 // darkRoutes is every route a feature hides. A declared feature with no
 // probe here fails TestDarkRoutes_EveryFeatureIsWired.
 var darkRoutes = map[features.Feature][]darkProbe{
+	features.AppGitBuilds: {
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/internal-registry/pull-credential/rotate"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/apps/app-1/git"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/apps/app-1/git"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/apps/app-1/git/sign-in"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/apps/app-1/git/repositories"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/apps/app-1/builds"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/apps/app-1/builds"},
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/apps/app-1/builds/b-1"},
+	},
 	features.MCP: {
 		{http.MethodPost, "/mcp"},
 		{http.MethodGet, "/api/schema/" + matrixProjectA + "/query?sql=select+1"},
@@ -115,6 +125,11 @@ var darkRoutes = map[features.Feature][]darkProbe{
 		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},
 		{http.MethodPut, "/api/projects/" + matrixProjectA + "/storage/buckets/files/access"},
 	},
+	features.S3: {
+		{http.MethodGet, "/api/projects/" + matrixProjectA + "/storage/s3-keys"},
+		{http.MethodPost, "/api/projects/" + matrixProjectA + "/storage/s3-keys"},
+		{http.MethodDelete, "/api/projects/" + matrixProjectA + "/storage/s3-keys/s3k_1"},
+	},
 }
 
 func darkFeatureRouter(t *testing.T, on ...features.Feature) (http.Handler, string) {
@@ -125,6 +140,7 @@ func darkFeatureRouter(t *testing.T, on ...features.Feature) (http.Handler, stri
 		// Storage mounts only when the object store is configured.
 		deps.storageHandler = handler.NewStorageHandler(nil, nil)
 		deps.fnHandler = handler.NewFunctionHandler(nil, nil, nil, nil, nil, "")
+		deps.s3KeysHandler = handler.NewS3KeysHandler(policyS3Keys{}, "")
 	})
 	return router, who[callerDeveloper]
 }
@@ -151,7 +167,11 @@ var darkWork = map[features.Feature]string{
 	features.HostLogs:        "TestHostLogShippingStartsOnlyWithItsFeature",
 	// Off, a single host keeps answering that it builds nothing (ModeSingleHost).
 	features.SingleHostBuilds: "TestSiteBuildMode",
+	features.AppGitBuilds:     "TestAppBuilds_NothingWiredWhileTheFlagIsOff",
 	features.LogDeletion:      "TestLogDeletionStartsOnlyWithItsFeature",
+	// Off, rotation leaves sessions alone, credentials carry no reader and the
+	// read address names the owner (internal/service).
+	features.DBReadRole: "TestRotationLeavesSessionsAloneWhileTheFlagIsOff",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

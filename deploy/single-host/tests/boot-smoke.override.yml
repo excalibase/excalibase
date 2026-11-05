@@ -2,6 +2,12 @@
 services:
   engine-proxy:
     image: docker.io/excalibase/provisioning:${PLATFORM_TAG:-${TAG:-latest}}
+  host-firewall:
+    image: docker.io/excalibase/provisioning:${PLATFORM_TAG:-${TAG:-latest}}
+  # Preflight checks the firewall runs a release that has it: the image built here.
+  preflight:
+    environment:
+      PLATFORM_TAG: ${PLATFORM_TAG:-${TAG:-latest}}
   provisioning:
     image: docker.io/excalibase/provisioning:${PLATFORM_TAG:-${TAG:-latest}}
     environment:

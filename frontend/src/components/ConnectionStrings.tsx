@@ -186,6 +186,22 @@ export function ConnectionStrings({ projectId, documentDb, endpoint }: Connectio
         <CredentialField testId="conn-password" label="Password" value={shownPassword} />
       </div>
 
+      {credentials.readerUsername && (
+        <div>
+          <p className="text-xs text-text-tertiary mb-2">
+            Read-only login: it can read every table and change nothing. The read address signs in with it.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <CredentialField testId="conn-reader-username" label="Read-only username" value={credentials.readerUsername} />
+            <CredentialField
+              testId="conn-reader-password"
+              label="Read-only password"
+              value={revealed ? credentials.readerPassword ?? '' : MASKED}
+            />
+          </div>
+        </div>
+      )}
+
       {credentials.engine === 'mysql' ? (
         <MySQLSection {...sectionProps} />
       ) : (

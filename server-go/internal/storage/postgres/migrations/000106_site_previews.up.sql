@@ -1,4 +1,4 @@
--- Branch and pull request previews of sites (EXC-660). Placeholder number; renumbered before merge.
+-- Branch and pull request previews of sites (EXC-660).
 
 -- Live previews one project may hold, edited with the rest of the plan; each is one Worker script.
 ALTER TABLE tier_configs ADD COLUMN max_site_previews INTEGER NOT NULL DEFAULT 2;

@@ -21,6 +21,8 @@ import (
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/gitprovider/githubapp"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/sites"
@@ -89,6 +91,7 @@ func settleQueue(t *testing.T, db *postgres.Store) {
 // fixedLimits sizes every build the same.
 type fixedLimits struct {
 	limits sitebuilds.Limits
+	app    sitebuilds.AppLimits
 	err    error
 }
 
@@ -98,6 +101,14 @@ func (f fixedLimits) BuildLimits(context.Context, string) (sitebuilds.Limits, er
 
 func (f fixedLimits) LargestBuild(context.Context) (sitebuilds.BuildSize, error) {
 	return sitebuilds.BuildSize{CPUMillis: 2000, Memory: "4Gi", Disk: "10Gi"}, f.err
+}
+
+func (f fixedLimits) AppBuildLimits(context.Context, string) (sitebuilds.AppLimits, error) {
+	return f.app, f.err
+}
+
+func (f fixedLimits) LargestAppBuild(context.Context) (sitebuilds.BuildSize, error) {
+	return sitebuilds.BuildSize{CPUMillis: 4000, Memory: "8Gi", Disk: "20Gi"}, f.err
 }
 
 var FreeLimits = sitebuilds.Limits{CPUMillis: 2000, Memory: "2Gi", Disk: "5Gi", TimeoutSeconds: 600, ProjectConcurrency: 1}
@@ -140,6 +151,9 @@ type Harness struct {
 	Runner       *FakeRunner
 	Dispatcher   *sitebuilds.Dispatcher
 	User         string
+	AppRunner    *FakeAppRunner
+	AppPublisher *FakePublisher
+	db           *postgres.Store
 	// darken rebuilds Sites and git builds with previews dark, as after the flag is turned off.
 	darken func()
 }
@@ -153,6 +167,11 @@ type Options struct {
 	Secrets     map[string]string
 	Limits      sitebuilds.Limits
 	Slots       int
+	// ServerSite makes the harness site a server-rendered one, built from a server archive (EXC-661).
+	ServerSite bool
+	// AppsOn switches on the appgitbuilds flag; AppLimits sizes app builds.
+	AppsOn    bool
+	AppLimits sitebuilds.AppLimits
 }
 
 func New(t *testing.T, options Options) *Harness {
@@ -171,29 +190,26 @@ func New(t *testing.T, options Options) *Harness {
 	if options.Previews {
 		siteOptions.Previews = siteStore
 	}
+	kind := sites.KindStatic
+	if options.ServerSite {
+		kind = sites.KindServer
+		siteOptions.Flags, siteOptions.Code, siteOptions.OutboundWorker = features.NewStatic(features.SitesServer), siteStore, outboundWorker
+		siteOptions.Outbound = &sitestest.Outbound{Worker: outboundWorker}
+	}
 	origins := sitestest.NewOrigins()
 	siteService, err := sites.NewService(siteStore, publisher, origins, siteOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
 	project := "proj-" + uuid.NewString()[:8]
-	site, err := siteService.Create(context.Background(), project, "s-"+uuid.NewString()[:8], nil, "u-owner")
+	site, err := siteService.CreateKind(context.Background(), project, "s-"+uuid.NewString()[:8], kind, nil, "u-owner")
 	if err != nil {
 		t.Fatal(err)
 	}
 	settleQueue(t, db)
 	ids := nextIDs.Add(10)
 	installation, siteRepo, privateRepo := ids, ids+1, ids+2
-	fake := githubfake.New(t)
-	fake.AddInstallation(installation, "acme",
-		&githubfake.Repo{ID: siteRepo, FullName: siteRepoName, DefaultBranch: "main", Branches: map[string]string{"main": HeadSHA}},
-		&githubfake.Repo{ID: privateRepo, FullName: "acme/payroll", DefaultBranch: "main", Branches: map[string]string{"main": HeadSHA}})
-	client, err := githubapp.New(githubapp.Config{AppID: githubfake.AppID, AppSlug: githubfake.AppSlug, ClientID: githubfake.ClientID,
-		ClientSecret: githubfake.ClientSecret, PrivateKeyPEM: fake.PrivateKeyPEM, WebhookSecret: fake.WebhookSecret,
-		APIURL: fake.URL(), WebURL: fake.URL()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	fake, client := fakeGitHub(t, installation, siteRepo, privateRepo)
 	store := sitebuilds.NewPostgresStore(db.DB())
 	serviceOptions := sitebuilds.Options{Mode: sitebuilds.ModeOn, CallbackURL: CallbackURL, NodeImage: "node"}
 	if options.Members != nil {
@@ -202,15 +218,26 @@ func New(t *testing.T, options Options) *Harness {
 	if options.Previews {
 		serviceOptions.Previews = siteService
 	}
-	service := sitebuilds.NewService(store, client, siteService, fixedLimits{limits: options.Limits},
-		memorySecrets{values: options.Secrets}, serviceOptions)
+	if options.AppLimits.CPUMillis == 0 {
+		options.AppLimits = FreeAppLimits
+	}
+	limits := fixedLimits{limits: options.Limits, app: options.AppLimits}
+	appSupport := sitebuilds.AppSupport{Apps: apphost.NewPostgresAppStore(db.DB()), Limits: limits, Files: client, Flags: appFlags(options.AppsOn)}
+	service := sitebuilds.NewService(store, client, siteService, limits, memorySecrets{values: options.Secrets}, serviceOptions)
+	service.EnableApps(appSupport)
 	runner := newFakeRunner(t)
+	if options.ServerSite {
+		runner.Archive = sitestest.ServerDist(t, "export default { fetch() { return new Response('ssr') } }")
+	}
 	if options.Slots == 0 {
 		options.Slots = 100
 	}
 	dispatcher := sitebuilds.NewDispatcher(service, runner, dispatcherOptions(project, t.TempDir(), options.Slots))
+	appRunner, appPublisher := &FakeAppRunner{}, &FakePublisher{}
+	dispatcher.EnableApps(appRunner, appPublisher)
 	h := &Harness{t: t, Installation: installation, SiteRepo: siteRepo, PrivateRepo: privateRepo, Project: project, Site: site, Sites: siteService,
-		Publisher: publisher, Origins: origins, GitHub: fake, Store: store, Service: service, Runner: runner, Dispatcher: dispatcher, User: "u-" + project}
+		Publisher: publisher, Origins: origins, GitHub: fake, Store: store, Service: service, Runner: runner, Dispatcher: dispatcher, User: "u-" + project,
+		AppRunner: appRunner, AppPublisher: appPublisher, db: db}
 	h.darken = func() {
 		siteOptions.PreviewsDark = true
 		dark, err := sites.NewService(siteStore, publisher, origins, siteOptions)
@@ -219,10 +246,22 @@ func New(t *testing.T, options Options) *Harness {
 		}
 		serviceOptions.Previews = dark
 		h.Sites = dark
-		h.Service = sitebuilds.NewService(store, client, dark, fixedLimits{limits: options.Limits}, memorySecrets{values: options.Secrets}, serviceOptions)
+		h.Service = sitebuilds.NewService(store, client, dark, limits, memorySecrets{values: options.Secrets}, serviceOptions)
+		h.Service.EnableApps(appSupport)
 		h.Dispatcher = sitebuilds.NewDispatcher(h.Service, runner, dispatcherOptions(project, t.TempDir(), options.Slots))
+		h.Dispatcher.EnableApps(appRunner, appPublisher)
 	}
 	return h
+}
+
+const outboundWorker = "excalibase-sites-outbound"
+
+// ForgetDelivery drops a delivery's record, as when its first handling failed before recording it, so GitHub's redelivery is handled again.
+func (h *Harness) ForgetDelivery(delivery string) {
+	h.t.Helper()
+	if _, err := h.db.DB().Exec(`DELETE FROM site_git_deliveries WHERE delivery_id = $1`, delivery); err != nil {
+		h.t.Fatalf("forget delivery %s: %v", delivery, err)
+	}
 }
 
 // TurnPreviewsDark is the sitepreviews flag turned off: no new previews, the held ones still cleaned up.
@@ -234,6 +273,22 @@ func dispatcherOptions(project, spool string, slots int) sitebuilds.DispatcherOp
 		LogEvery: 10 * time.Millisecond, DeployRetry: 10 * time.Millisecond, Lease: 30 * time.Second,
 		PendingGrace: 200 * time.Millisecond, ShutdownGrace: 50 * time.Millisecond,
 	}
+}
+
+// fakeGitHub serves the harness's two repositories through one installation, and the App client reaching it.
+func fakeGitHub(t *testing.T, installation, siteRepo, privateRepo int64) (*githubfake.GitHub, *githubapp.Client) {
+	t.Helper()
+	fake := githubfake.New(t)
+	fake.AddInstallation(installation, "acme",
+		&githubfake.Repo{ID: siteRepo, FullName: siteRepoName, DefaultBranch: "main", Branches: map[string]string{"main": HeadSHA}},
+		&githubfake.Repo{ID: privateRepo, FullName: "acme/payroll", DefaultBranch: "main", Branches: map[string]string{"main": HeadSHA}})
+	client, err := githubapp.New(githubapp.Config{AppID: githubfake.AppID, AppSlug: githubfake.AppSlug, ClientID: githubfake.ClientID,
+		ClientSecret: githubfake.ClientSecret, PrivateKeyPEM: fake.PrivateKeyPEM, WebhookSecret: fake.WebhookSecret,
+		APIURL: fake.URL(), WebURL: fake.URL()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fake, client
 }
 
 // SignIn runs the GitHub sign-in for the harness user, who sees only acme/site.
@@ -407,6 +462,8 @@ func (f *FakeRunner) Remove(_ context.Context, id string) error {
 	f.removed = append(f.removed, id)
 	return nil
 }
+
+func (f *FakeRunner) ForgetCloneCredential(context.Context, string) error { return nil }
 
 func (f *FakeRunner) Specs() []sitebuilds.RunSpec {
 	f.mu.Lock()

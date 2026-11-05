@@ -178,6 +178,10 @@ var projectRows = []Row{
 	{Methods: post, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/confirm-upload", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: del, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/objects/*", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: put, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/access", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "decides what the project's app users may do in the bucket"},
+	// S3 access keys (EXC-630): ids, scopes and dates only; the secret is in the create answer alone.
+	{Methods: get, Pattern: "/api/projects/{projectId}/storage/s3-keys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "access key ids, scopes and dates; never a secret"},
+	{Methods: post, Pattern: "/api/projects/{projectId}/storage/s3-keys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "issues a credential for the project's buckets; the secret is answered once"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/storage/s3-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 
 	// tus mounts every method on two patterns. HEAD reports an upload's
 	// offset (a read); everything else creates, appends to or terminates an
@@ -202,6 +206,8 @@ var runtimeRows = []Row{
 	{Methods: get, Pattern: "/storage/v1/{projectId}/buckets/{bucket}/download-url/*", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerBucketAccess, Discloses: NoSecret},
 	{Methods: del, Pattern: "/storage/v1/{projectId}/buckets/{bucket}/objects/*", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerBucketAccess},
 
+	{Methods: getPost, Pattern: "/internal/registry/token", Auth: AuthRegistryPull, Owner: OwnerPullCredential, Discloses: NoSecret, Note: "the internal registry's token service: a 2-minute pull token on the credential's own project, never to a platform token (EXC-540)"},
+	{Methods: post, Pattern: "/api/projects/{projectId}/internal-registry/pull-credential/rotate", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "retires the project's pull password and rewrites every running app's pull secret with the new one (EXC-540)"},
 	{Methods: post, Pattern: "/internal/log-forwarder/pull", Auth: AuthForwarderToken, Owner: OwnerForwarderToken, Note: "hands the forwarder pod due batches with their destination keys (EXC-658)"},
 	{Methods: post, Pattern: "/internal/log-forwarder/ack", Auth: AuthForwarderToken, Owner: OwnerForwarderToken, Note: "moves a drain's cursor only from where it was handed out"},
 	{Methods: post, Pattern: "/internal/runtime/functions/{fnId}/metadata", Auth: AuthRuntimeToken, Owner: OwnerRuntimeSecret, Note: "the project is named in the BODY, not the path, and the token must match that project's derived secret"},

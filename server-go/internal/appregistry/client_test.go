@@ -1,0 +1,218 @@
+package appregistry
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// fakeRegistry serves a catalog and tag lists a page at a time and records
+// the grants each request carried.
+type fakeRegistry struct {
+	t       *testing.T
+	issuer  *Issuer
+	repos   []string
+	tags    map[string][]string
+	deleted []string
+	grants  map[string][]Grant
+	status  int
+}
+
+func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var claims parsedClaims
+	raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if _, err := jwt.ParseWithClaims(raw, &claims, func(*jwt.Token) (any, error) { return f.issuer.key.Public(), nil }); err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	f.grants[r.Method+" "+r.URL.Path] = claims.Access
+	if f.status != 0 {
+		w.WriteHeader(f.status)
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/v2/")
+	switch {
+	case path == "_catalog":
+		page(w, r, "repositories", f.repos)
+	case strings.HasSuffix(path, "/tags/list"):
+		repo := strings.TrimSuffix(path, "/tags/list")
+		tags, ok := f.tags[repo]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":[{"code":"NAME_UNKNOWN"}]}`))
+			return
+		}
+		page(w, r, "tags", tags)
+	case r.Method == http.MethodDelete && strings.Contains(path, "/manifests/"):
+		f.deleted = append(f.deleted, path)
+		w.WriteHeader(http.StatusAccepted)
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func page(w http.ResponseWriter, r *http.Request, key string, items []string) {
+	n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+	start := 0
+	if last := r.URL.Query().Get("last"); last != "" {
+		start = slices.Index(items, last) + 1
+	}
+	end := min(start+n, len(items))
+	_ = json.NewEncoder(w).Encode(map[string]any{key: items[start:end], "name": "proj-a/api"})
+}
+
+func fakeClient(t *testing.T, f *fakeRegistry) *Client {
+	t.Helper()
+	issuer, _ := testIssuer(t)
+	f.t, f.issuer, f.grants = t, issuer, map[string][]Grant{}
+	server := httptest.NewServer(f)
+	t.Cleanup(server.Close)
+	client, err := NewClient(server.URL, issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.pageSize = 2
+	return client
+}
+
+func TestClient_ListsEveryPageWithTheNarrowestToken(t *testing.T) {
+	f := &fakeRegistry{repos: []string{"proj-a/api", "proj-a/web", "proj-b/api"}, tags: map[string][]string{"proj-a/api": {"p1-a", "p2-b", "p3-c"}}}
+	client := fakeClient(t, f)
+	repos, err := client.Repositories(context.Background())
+	if err != nil || !slices.Equal(repos, f.repos) {
+		t.Fatalf("repositories %v %v", repos, err)
+	}
+	if got := f.grants["GET /v2/_catalog"]; len(got) != 1 || got[0].Name != "" || !slices.Equal(got[0].Actions, []string{"pull"}) {
+		t.Errorf("catalog grant %+v", got)
+	}
+	tags, err := client.Tags(context.Background(), "proj-a/api")
+	if err != nil || !slices.Equal(tags, f.tags["proj-a/api"]) {
+		t.Fatalf("tags %v %v", tags, err)
+	}
+	if got := f.grants["GET /v2/proj-a/api/tags/list"]; len(got) != 1 || got[0].Name != "proj-a/api" || !slices.Equal(got[0].Actions, []string{"pull"}) {
+		t.Errorf("tags grant %+v", got)
+	}
+	if tags, err := client.Tags(context.Background(), "proj-a/web"); err != nil || len(tags) != 0 {
+		t.Errorf("a repository with nothing in it: %v %v", tags, err)
+	}
+}
+
+func TestClient_UntagsOnePushTagWithADeleteTokenOnItsRepository(t *testing.T) {
+	f := &fakeRegistry{}
+	client := fakeClient(t, f)
+	tag := "p1800000000-" + strings.Repeat("cd", 32)
+	if err := client.Untag(context.Background(), "proj-a/api", tag); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.deleted, []string{"proj-a/api/manifests/" + tag}) {
+		t.Errorf("deleted %v", f.deleted)
+	}
+	if got := f.grants["DELETE /v2/proj-a/api/manifests/"+tag]; len(got) != 1 || got[0].Name != "proj-a/api" || !slices.Equal(got[0].Actions, []string{"delete"}) {
+		t.Errorf("delete grant %+v", got)
+	}
+	for _, other := range []string{"latest", "sha256:" + strings.Repeat("cd", 32)} {
+		if err := client.Untag(context.Background(), "proj-a/api", other); err == nil {
+			t.Errorf("removed %q, not a push tag", other)
+		}
+	}
+	if err := client.Untag(context.Background(), "../proj-a", tag); err == nil {
+		t.Error("an untag outside a project's repository")
+	}
+}
+
+func TestClient_ReportsWhatTheRegistryRefuses(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusInternalServerError, http.StatusFound} {
+		f := &fakeRegistry{status: status}
+		client := fakeClient(t, f)
+		if _, err := client.Repositories(context.Background()); err == nil {
+			t.Errorf("%d: catalog read", status)
+		}
+		if _, err := client.Tags(context.Background(), "proj-a/api"); err == nil {
+			t.Errorf("%d: tags read", status)
+		}
+		if err := client.Untag(context.Background(), "proj-a/api", "p1-"+strings.Repeat("cd", 32)); err == nil {
+			t.Errorf("%d: untag", status)
+		}
+	}
+	f := &fakeRegistry{status: http.StatusNotFound}
+	client := fakeClient(t, f)
+	if err := client.Untag(context.Background(), "proj-a/api", "p1-"+strings.Repeat("cd", 32)); err != nil {
+		t.Errorf("a tag already gone: %v", err)
+	}
+}
+
+func TestNewClient_RefusesWhatIsNotAnHTTPRegistry(t *testing.T) {
+	issuer, _ := testIssuer(t)
+	for _, raw := range []string{"", "ftp://zot:5000", "http://", "http://zot:5000/v2", "http://user:pw@zot:5000", "zot:5000"} {
+		if _, err := NewClient(raw, issuer); err == nil {
+			t.Errorf("%q accepted", raw)
+		}
+	}
+	if _, err := NewClient("http://zot:5000", nil); err == nil {
+		t.Error("a client that cannot sign")
+	}
+	if _, err := NewClient(fmt.Sprintf("http://app-registry.ns.svc.cluster.local:%d/", 5000), issuer); err != nil {
+		t.Errorf("the chart's address: %v", err)
+	}
+}
+
+// manifestRegistry serves manifests by reference, as JSON bodies.
+type manifestRegistry map[string]string
+
+func (m manifestRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	reference := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+	body, ok := m[reference]
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	_, _ = w.Write([]byte(body))
+}
+
+func TestClient_BlobsCountsAnImageAndItsManifests(t *testing.T) {
+	layer := "sha256:" + strings.Repeat("1", 64)
+	config := "sha256:" + strings.Repeat("2", 64)
+	childManifest := `{"schemaVersion":2,"config":{"digest":"` + config + `","size":10},"layers":[{"digest":"` + layer + `","size":1000}]}`
+	childSum := sha256.Sum256([]byte(childManifest))
+	child := "sha256:" + hex.EncodeToString(childSum[:])
+	tag := "p1800000000-" + strings.Repeat("a", 64)
+	registry := manifestRegistry{tag: `{"schemaVersion":2,"manifests":[{"digest":"` + child + `","size":1}]}`, child: childManifest}
+	server := httptest.NewServer(registry)
+	t.Cleanup(server.Close)
+	issuer, _ := testIssuer(t)
+	client, _ := NewClient(server.URL, issuer)
+	blobs, err := client.Blobs(context.Background(), "proj-a/api", tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blobs[layer] != 1000 || blobs[config] != 10 || blobs[child] != int64(len(childManifest)) || len(blobs) != 4 {
+		t.Fatalf("%v", blobs)
+	}
+	registry[child] = `{"schemaVersion":2,"manifests":[{"digest":"` + child + `"}]}`
+	if _, err := client.Blobs(context.Background(), "proj-a/api", tag); err == nil {
+		t.Error("an index inside an index")
+	}
+	registry[tag] = `{"schemaVersion":2,"manifests":[{"digest":"../../_catalog"}]}`
+	if _, err := client.Blobs(context.Background(), "proj-a/api", tag); err == nil {
+		t.Error("a child reference that is not a digest")
+	}
+	for _, bad := range []struct{ repo, ref string }{{"../x", tag}, {"proj-a/api", "latest"}, {"proj-a/api", "sha256:" + strings.Repeat("9", 64)}} {
+		if _, err := client.Blobs(context.Background(), bad.repo, bad.ref); err == nil {
+			t.Errorf("%s@%s read", bad.repo, bad.ref)
+		}
+	}
+	registry[tag] = "{"
+	if _, err := client.Blobs(context.Background(), "proj-a/api", tag); err == nil {
+		t.Error("a manifest that is not JSON")
+	}
+}
