@@ -259,6 +259,9 @@ func (p Policy) CheckVolumeCreate(body []byte) error {
 	if err := p.requireManagedLabel("volume", create["Labels"]); err != nil {
 		return err
 	}
+	if err := requireVolumeOwner(create["Labels"]); err != nil {
+		return err
+	}
 	return checkFields("volume create", create, volumeCreateFields, p)
 }
 

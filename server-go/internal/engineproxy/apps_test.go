@@ -157,19 +157,19 @@ func TestCheckNetworkConnectAllowsOnlyAnEmptyEndpoint(t *testing.T) {
 
 func TestCheckVolumeCreate(t *testing.T) {
 	policy := appsPolicy()
-	good := map[string]any{"Name": "excalibase-proj-disk-1", "Driver": "local", "Labels": map[string]any{"excalibase.managed": "true"}}
+	good := map[string]any{"Name": "excalibase-proj-disk-1", "Driver": "local", "Labels": map[string]any{"excalibase.managed": "true", "excalibase.app": "a1"}}
 	if err := policy.CheckVolumeCreate(mustJSON(t, good)); err != nil {
 		t.Fatalf("app disk refused: %v", err)
 	}
 	cases := map[string]map[string]any{
-		"platform volume":   {"Name": "excalibase-platform-postgres", "Labels": map[string]any{"excalibase.managed": "true"}},
-		"anonymous":         {"Labels": map[string]any{"excalibase.managed": "true"}},
+		"platform volume":   {"Name": "excalibase-platform-postgres", "Labels": map[string]any{"excalibase.managed": "true", "excalibase.app": "a1"}},
+		"anonymous":         {"Labels": map[string]any{"excalibase.managed": "true", "excalibase.app": "a1"}},
 		"no managed label":  {"Name": "excalibase-proj-d"},
-		"a driver":          {"Name": "excalibase-proj-d", "Driver": "nfs", "Labels": map[string]any{"excalibase.managed": "true"}},
-		"bind via options":  {"Name": "excalibase-proj-d", "DriverOpts": map[string]any{"type": "none", "o": "bind", "device": "/"}, "Labels": map[string]any{"excalibase.managed": "true"}},
-		"a cluster volume":  {"Name": "excalibase-proj-d", "ClusterVolumeSpec": map[string]any{"Group": "x"}, "Labels": map[string]any{"excalibase.managed": "true"}},
-		"an unknown field":  {"Name": "excalibase-proj-d", "Future": 1, "Labels": map[string]any{"excalibase.managed": "true"}},
-		"bare prefix names": {"Name": "excalibase-proj-", "Labels": map[string]any{"excalibase.managed": "true"}},
+		"a driver":          {"Name": "excalibase-proj-d", "Driver": "nfs", "Labels": map[string]any{"excalibase.managed": "true", "excalibase.app": "a1"}},
+		"bind via options":  {"Name": "excalibase-proj-d", "DriverOpts": map[string]any{"type": "none", "o": "bind", "device": "/"}, "Labels": map[string]any{"excalibase.managed": "true", "excalibase.app": "a1"}},
+		"a cluster volume":  {"Name": "excalibase-proj-d", "ClusterVolumeSpec": map[string]any{"Group": "x"}, "Labels": map[string]any{"excalibase.managed": "true", "excalibase.app": "a1"}},
+		"an unknown field":  {"Name": "excalibase-proj-d", "Future": 1, "Labels": map[string]any{"excalibase.managed": "true", "excalibase.app": "a1"}},
+		"bare prefix names": {"Name": "excalibase-proj-", "Labels": map[string]any{"excalibase.managed": "true", "excalibase.app": "a1"}},
 	}
 	for name, body := range cases {
 		if err := policy.CheckVolumeCreate(mustJSON(t, body)); err == nil {
@@ -251,6 +251,7 @@ func appsProxyEngine(t *testing.T) (*fakeEngine, string) {
 
 func TestHandlerForwardsTheAppCalls(t *testing.T) {
 	engine, proxy := appsProxyEngine(t)
+	engine.volumes = map[string]map[string]string{"excalibase-proj-disk": {"excalibase.managed": "true", "excalibase.app": "a1"}}
 	list := "/v1.47/containers/json?all=1&filters=" + url.QueryEscape(`{"label":["excalibase.managed=true"]}`)
 	volumes := "/v1.47/volumes?filters=" + url.QueryEscape(`{"label":["excalibase.managed=true"]}`)
 	allowed := []struct{ method, path, body string }{
@@ -264,7 +265,7 @@ func TestHandlerForwardsTheAppCalls(t *testing.T) {
 		{http.MethodPost, "/v1.47/networks/excalibase-proj-p1/connect", `{"Container":"excalibase-edge"}`},
 		{http.MethodPost, "/v1.47/networks/excalibase-proj-p1/connect", `{"Container":"excalibase-p1-postgres"}`},
 		{http.MethodPost, "/v1.47/networks/excalibase-proj-p1/disconnect", `{"Container":"excalibase-edge","Force":true}`},
-		{http.MethodPost, "/v1.47/volumes/create", `{"Name":"excalibase-proj-disk","Labels":{"excalibase.managed":"true"}}`},
+		{http.MethodPost, "/v1.47/volumes/create", `{"Name":"excalibase-proj-disk","Labels":{"excalibase.managed":"true","excalibase.app":"a1"}}`},
 		{http.MethodGet, "/v1.47/volumes/excalibase-proj-disk", ""},
 		{http.MethodDelete, "/v1.47/volumes/excalibase-proj-disk", ""},
 		{http.MethodGet, volumes, ""},

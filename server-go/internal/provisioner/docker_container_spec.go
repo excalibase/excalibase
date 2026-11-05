@@ -42,6 +42,9 @@ type ContainerSpec struct {
 	Hardened bool
 	// User runs the container as this uid:gid; empty keeps the image's.
 	User string
+	// Project labels the container as the project's, which the engine proxy
+	// requires to mount the project's named volume (EXC-682).
+	Project string
 }
 
 // ContainerState is what an inspect reports about a container.
