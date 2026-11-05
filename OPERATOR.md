@@ -798,15 +798,24 @@ Services and routes as before.
 Postgres or MySQL project gets `excalibase_reader`: SELECT on every user table
 (Postgres: through default privileges for the owner and `excalibase_app` and a
 trigger on new schemas; MySQL: `SELECT, SHOW VIEW` on the project database),
-read-only sessions, and an event trigger that refuses it any DDL. It is filed
+read-only sessions, and an event trigger that refuses it any DDL. On Postgres
+pg_hba admits it to the project database only, and creating large objects
+(`lo_creat`, `lo_create`, `lo_from_bytea`) is taken from PUBLIC and granted
+back to the owner (with grant option) and `excalibase_app`, so a customer's
+own roles need the owner's GRANT to create one. Like any role in plain
+Postgres, it can run a SECURITY DEFINER function the customer creates, with
+that function owner's rights. It is filed
 in vault beside the platform logins, handed to Admins with the credentials and
 rotated with them, and the read address names it instead of the owner. A
 project created with the flag off has none, and a copy restored without one
-has the role locked. The flag also makes a rotation end each role's sessions
-opened with the old password: on the primary, then on each replica once it
-has replayed the change (Postgres `pg_last_wal_replay_lsn`, MySQL
-`WAIT_FOR_EXECUTED_GTID_SET`, 30 s each). This includes `excalibase_app`, so
-the engine reconnects with the new password it was told about.
+has the role locked. The flag also makes a rotation end the sessions opened
+with the old passwords, once every password has changed: on the primary, then
+on each replica once it has replayed the change (Postgres
+`pg_last_wal_replay_lsn`, MySQL `WAIT_FOR_EXECUTED_GTID_SET`, 30 s each). A
+replica CNPG does not report healthy is skipped, and it and any replica that
+fails are reported in the rotation's error; the passwords stay changed. This
+includes `excalibase_app`, so the engine reconnects with the new password it
+was told about.
 
 **Ports are allocated randomly inside the window**, never sequentially: two
 port numbers must not let anyone read off how many tenants the platform has

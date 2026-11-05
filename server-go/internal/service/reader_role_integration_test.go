@@ -7,11 +7,14 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
+
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
 // EXC-675 on real Postgres: the reader reads every user table, now and
@@ -57,6 +60,8 @@ func readerRoleSuite(t *testing.T, image string) {
 	t.Run("reads a schema the app or the owner creates later", c.readsLaterSchemas)
 	t.Run("writes nothing", c.writesNothing)
 	t.Run("changes no schema even with read-only turned off", c.changesNoSchema)
+	t.Run("creates no large object", c.createsNoLargeObject)
+	t.Run("signs in to no other database", c.reachesNoOtherDatabase)
 	t.Run("reaches no platform schema", c.reachesNoPlatformSchema)
 	t.Run("holds no privileged attribute", func(t *testing.T) { expectPlainRole(t, c.admin, roleReader) })
 	t.Run("re-registration keeps it reading", c.reRegistrationKeepsIt)
@@ -144,6 +149,81 @@ func (c *readerCase) changesNoSchema(t *testing.T) {
 	if got := scanString(t, c.admin, "SELECT count(*)::text FROM pg_class WHERE relname = 'planted'"); got != "0" {
 		t.Error("the reader left a relation behind")
 	}
+}
+
+// A large object is written to disk whatever the transaction mode; the roles
+// that build the schema keep creating them.
+func (c *readerCase) createsNoLargeObject(t *testing.T) {
+	conn := readWriteConn(t, c.reader)
+	for _, statement := range []string{
+		"SELECT lo_from_bytea(0, 'planted')",
+		"SELECT lo_creat(-1)",
+		"SELECT lo_create(0)",
+	} {
+		if _, err := conn.ExecContext(context.Background(), statement); err == nil || !strings.Contains(err.Error(), "permission denied") {
+			t.Errorf("%s: %v", statement, err)
+		}
+	}
+	if got := scanString(t, c.admin, "SELECT count(*)::text FROM pg_largeobject_metadata WHERE lomowner = '"+roleReader+"'::regrole"); got != "0" {
+		t.Errorf("the reader owns %s large object(s)", got)
+	}
+	for name, db := range map[string]*sql.DB{"owner": c.owner, "app": c.app} {
+		if _, err := db.Exec("SELECT lo_unlink(lo_from_bytea(0, 'kept'))"); err != nil {
+			t.Errorf("%s can no longer create a large object: %v", name, err)
+		}
+	}
+}
+
+// The DDL trigger lives in the project's database only, so the reader must
+// not sign in to postgres or template1, where it could plant objects (and
+// template1 would copy them into every new database).
+func (c *readerCase) reachesNoOtherDatabase(t *testing.T) {
+	if err := c.pg.connectDirect(t, roleReader, readerPassword, "postgres").Ping(); err != nil {
+		t.Fatalf("precondition: the image's own pg_hba should admit the reader anywhere: %v", err)
+	}
+	c.pg.prependHBA(t, pgroles.ReaderHBA("host", "app"))
+	if err := c.pg.connectDirect(t, roleReader, readerPassword, "app").Ping(); err != nil {
+		t.Fatalf("the reader lost its own database: %v", err)
+	}
+	for _, database := range []string{"postgres", "template1"} {
+		err := c.pg.connectDirect(t, roleReader, readerPassword, database).Ping()
+		if err == nil || !strings.Contains(err.Error(), "pg_hba.conf rejects") {
+			t.Errorf("the reader signs in to %s: %v", database, err)
+		}
+	}
+	if err := c.pg.connectDirect(t, customerOwner, customerOwnerPassword, "postgres").Ping(); err != nil {
+		t.Errorf("the owner lost the maintenance database: %v", err)
+	}
+}
+
+// prependHBA puts lines first in the server's pg_hba, in order, and reloads it.
+func (p *rolePostgres) prependHBA(t *testing.T, lines []string) {
+	t.Helper()
+	script := `hba=$(psql -U postgres -d postgres -tAc 'SHOW hba_file') && { printf '%s\n' "$LINES"; cat "$hba"; } > /tmp/hba && cat /tmp/hba > "$hba" && psql -U postgres -d postgres -tAc 'SELECT pg_reload_conf()'`
+	p.mustRun(t, []string{"sh", "-c", script}, "LINES="+strings.Join(lines, "\n"))
+}
+
+// connectDirect dials the container's own address: the image trusts loopback,
+// and a mapped port can arrive from it, so only this proves pg_hba's verdict.
+func (p *rolePostgres) connectDirect(t *testing.T, user, password, database string) *sql.DB {
+	t.Helper()
+	ip, err := p.container.ContainerIP(context.Background())
+	if err != nil {
+		t.Fatalf("container ip: %v", err)
+	}
+	dsn := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
+		Host:     ip + ":5432",
+		Path:     database,
+		RawQuery: "sslmode=disable",
+	}
+	db, err := sql.Open("postgres", dsn.String())
+	if err != nil {
+		t.Fatalf("open as %s: %v", user, err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
 }
 
 func (c *readerCase) reachesNoPlatformSchema(t *testing.T) {

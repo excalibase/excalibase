@@ -1,6 +1,9 @@
 package pgroles
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // ReaderRole is the SELECT-only login the read address names (EXC-675): a
 // session held across a failover lands on a primary that takes writes, so the
@@ -13,6 +16,29 @@ const (
 	readerDDLTrigger    = "excalibase_reader_refuses_ddl"
 	readerDDLFunction   = "excalibase.reader_refuses_ddl()"
 )
+
+// hbaDatabaseName is a database name pg_hba reads as written, unquoted.
+var hbaDatabaseName = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+
+// ReaderHBA keeps the reader to the project's database: the DDL trigger and
+// the large-object revoke live only there. connType is the line type the
+// server's other password logins use. A name pg_hba cannot take as written
+// leaves the reader rejected everywhere.
+func ReaderHBA(connType, database string) []string {
+	reject := "host all " + ReaderRole + " all reject"
+	if !hbaDatabaseName.MatchString(database) {
+		return []string{reject}
+	}
+	return []string{connType + " " + database + " " + ReaderRole + " all scram-sha-256", reject}
+}
+
+// largeObjectCreators write a large object whatever the transaction mode.
+// Server-side lo_import is already superuser-only and stays so.
+var largeObjectCreators = []string{
+	"pg_catalog.lo_creat(integer)",
+	"pg_catalog.lo_create(oid)",
+	"pg_catalog.lo_from_bytea(oid, bytea)",
+}
 
 // ReaderRoleSQL creates the reader if absent and lets it read every relation
 // in the user schemas, now and later: default privileges for the two roles
@@ -30,7 +56,32 @@ func ReaderRoleSQL(owner, password string) string {
 		"{{SHARE_FUNCTION}}", readerShareFunction,
 		"{{DDL_TRIGGER}}", readerDDLTrigger,
 		"{{DDL_FUNCTION}}", readerDDLFunction,
-	).Replace(readerRoleTemplate)
+		"{{OWNER}}", textLiteral(owner),
+		"{{APP}}", quoteLiteral(appRole),
+	).Replace(readerRoleTemplate + largeObjectSQL())
+}
+
+// largeObjectSQL takes large-object creation from PUBLIC, which the reader
+// would otherwise reach with a read-write transaction, and gives it back to the
+// owner (who may pass it on to its own roles) and excalibase_app.
+func largeObjectSQL() string {
+	var b strings.Builder
+	for _, function := range largeObjectCreators {
+		b.WriteString("REVOKE EXECUTE ON FUNCTION " + function + " FROM PUBLIC;\n")
+	}
+	functions := strings.Join(largeObjectCreators, ", ")
+	b.WriteString(`DO $excalibase_large_objects$
+BEGIN
+  IF to_regrole({{OWNER}}) IS NOT NULL THEN
+    EXECUTE format('GRANT EXECUTE ON FUNCTION ` + functions + ` TO %I WITH GRANT OPTION', {{OWNER}});
+  END IF;
+  IF to_regrole({{APP}}) IS NOT NULL THEN
+    EXECUTE format('GRANT EXECUTE ON FUNCTION ` + functions + ` TO %I', {{APP}});
+  END IF;
+END
+$excalibase_large_objects$;
+`)
+	return b.String()
 }
 
 // ReaderLockSQL leaves a reader the platform did not file unable to sign in:
