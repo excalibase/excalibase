@@ -345,7 +345,7 @@ func TestGetCredentialsRefusedWhileDeleting(t *testing.T) {
 	if _, err := store.BeginDeletion(testDeletingProj, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.GetCredentials(testDeletingProj); !errors.Is(err, ErrProjectDeleting) {
+	if _, err := svc.GetCredentials(context.Background(), testDeletingProj); !errors.Is(err, ErrProjectDeleting) {
 		t.Fatalf("err = %v, want ErrProjectDeleting", err)
 	}
 }

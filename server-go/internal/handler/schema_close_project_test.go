@@ -104,3 +104,14 @@ func TestSchemaHandlerAnswersForProjectsItMayNotReach(t *testing.T) {
 		}
 	}
 }
+
+// The schema browser holds its own pools, so a rotation must evict them too:
+// otherwise Studio's SQL runner keeps dialing with the old password (EXC-675).
+func TestCredentialsRotatedEvictsTheProjectsPool(t *testing.T) {
+	pools := &fakeProjectDB{}
+	var observer interface{ CredentialsRotated(string) } = NewSchemaHandler(pools, time.Second)
+	observer.CredentialsRotated("proj-1")
+	if len(pools.evicted) != 1 || pools.evicted[0] != "proj-1" {
+		t.Fatalf("evicted = %v, want [proj-1]", pools.evicted)
+	}
+}

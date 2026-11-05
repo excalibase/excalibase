@@ -183,6 +183,7 @@ func runServer(cfg config.AppConfig) {
 	// A project claimed for teardown must not keep an open pool on a database
 	// that is going away.
 	provSvc.AddDeletionObserver(projectDB)
+	provSvc.AddCredentialObserver(projectDB)
 
 	deps := buildHandlerDeps(handlerDepsArgs{
 		cfg:            cfg,
@@ -206,6 +207,7 @@ func runServer(cfg config.AppConfig) {
 	// survives, the namespace will not terminate, and the teardown times out
 	// waiting for it (EXC-431).
 	provSvc.AddDeletionObserver(deps.schemaHandler)
+	provSvc.AddCredentialObserver(deps.schemaHandler)
 	wireDocumentDBInstalled(cfg, provSvc, deps.backupHandler)
 
 	// How a customer reaches their database from outside the cluster
@@ -217,6 +219,7 @@ func runServer(cfg config.AppConfig) {
 		// The read address (EXC-666) wraps the endpoint so the lifecycle takes it along.
 		readStore, _ := sqlStore.(storage.DatabaseReadAddressStore)
 		withReadAddress := service.NewDBReadAddressService(dbEndpointSvc, readStore, cfg.Features())
+		withReadAddress.UseReaderLogins(provSvc)
 		dbEndpoints = withReadAddress
 		deps.provHandler.SetDBEndpointService(withReadAddress)
 		deps.dbAllowListHandler.SetAPI(dbEndpointSvc)
@@ -1346,6 +1349,8 @@ func buildProvisioningService(
 	// A rotated password is only good if the database accepts it, and the
 	// database is the only thing that can say so.
 	provSvc.SetCredentialVerifier(service.NewTenantRoleVerifier())
+	// The SELECT-only login and ending sessions on rotation (EXC-675).
+	provSvc.SetFeatures(cfg.Features())
 	provSvc.SetOrgStore(sqlStore)
 	provSvc.SetRestoredSettings(sqlStore)
 	provSvc.SetMigrationHistory(service.NewMigrationHistoryFiles(cfg.StoragePath))

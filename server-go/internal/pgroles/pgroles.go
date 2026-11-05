@@ -15,7 +15,7 @@ import (
 // owner's: the platform's cert-login roles, CloudNativePG's, the DocumentDB
 // gateway, the Mongo users group and the document browser's Mongo login.
 var reservedNames = append(slices.Clone(tenantcert.PlatformRoles),
-	"postgres", "streaming_replica",
+	"postgres", "streaming_replica", ReaderRole,
 	config.DocumentDBGatewayRole, config.DocumentDBMongoUsersGroup, config.DocumentDBBrowserLogin,
 )
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
 // A single host hands apps the same restricted owner login Kubernetes does
@@ -105,7 +106,7 @@ func TestSingleHostRejectsTheSuperuserOverTheNetwork(t *testing.T) {
 	if !found {
 		t.Fatalf("pg_hba was not told to reject the superuser; scripts %q", engine.stdin)
 	}
-	hba := DocumentDBHBA("app")
+	hba := DocumentDBHBA("app", "app")
 	reject, catchAll := slices.Index(hba, "host all postgres all reject"), slices.Index(hba, "host all all all scram-sha-256")
 	if reject < 0 || reject > catchAll {
 		t.Fatalf("a DocumentDB database lets the superuser in over the network: %v", hba)
@@ -120,5 +121,32 @@ func TestOwnerPasswordIsLongHex(t *testing.T) {
 		if len(password) != 64 || strings.Trim(password, "0123456789abcdef") != "" {
 			t.Fatalf("owner password %d chars, not lowercase hex", len(password))
 		}
+	}
+}
+
+// The read-only login reaches only the project's database on a single host
+// too (EXC-675): each line is put first, so the reject is written before the
+// admit for the admit to end up above it.
+func TestSingleHostKeepsTheReaderToTheProjectDatabase(t *testing.T) {
+	engine := newFakeEngine()
+	provisionSingleHost(t, engine, domain.ProvisioningRequest{ProjectName: "p1", DBType: domain.PostgreSQL, PostgresVersion: "17", DatabaseName: "shop"})
+	admit, reject := pgroles.ReaderHBA("host", "shop")[0], pgroles.ReaderHBA("host", "shop")[1]
+	for _, script := range engine.stdin {
+		if strings.Contains(script, admit) {
+			if strings.Index(script, reject) < strings.Index(script, admit) {
+				return
+			}
+			t.Fatalf("the reject would end up above the admit: %s", script)
+		}
+	}
+	t.Fatalf("pg_hba was not told to keep the reader to its database; scripts %q", engine.stdin)
+}
+
+func TestDocumentDBKeepsTheReaderToItsDatabase(t *testing.T) {
+	hba := DocumentDBHBA("app", "shop")
+	lines := pgroles.ReaderHBA("host", "shop")
+	admit, reject, catchAll := slices.Index(hba, lines[0]), slices.Index(hba, lines[1]), slices.Index(hba, "host all all all scram-sha-256")
+	if admit < 0 || reject < admit || catchAll < reject {
+		t.Fatalf("reader lines out of place: %v", hba)
 	}
 }

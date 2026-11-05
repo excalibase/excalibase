@@ -120,6 +120,10 @@ type CredentialsResponse struct {
 	// its Connector/J URL.
 	Engine  string `json:"engine,omitempty"`
 	JDBCURL string `json:"jdbcUrl,omitempty"`
+	// ReaderUsername and ReaderPassword are the SELECT-only login the read
+	// address names (EXC-675), when the project has one.
+	ReaderUsername string `json:"readerUsername,omitempty"`
+	ReaderPassword string `json:"readerPassword,omitempty"`
 }
 
 type CredentialsData struct {

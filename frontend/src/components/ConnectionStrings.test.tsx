@@ -430,3 +430,31 @@ describe('ConnectionStrings — reserved characters in the password', () => {
     expect(parsed.pathname).toBe('/shop');
   });
 });
+
+// EXC-675: an Admin also sees the SELECT-only login the read address names,
+// its password masked like the owner's.
+describe('ConnectionStrings read-only login', () => {
+  function renderWithReader(reader: Record<string, string>) {
+    vi.mocked(api.get).mockResolvedValue({ data: { ...CREDENTIALS, ...reader } } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={client}>
+        <ConnectionStrings projectId="p-1" documentDb={false} />
+      </QueryClientProvider>
+    );
+  }
+
+  test('shows the reader beside the owner, masked until revealed', async () => {
+    renderWithReader({ readerUsername: 'excalibase_reader', readerPassword: 'r3ad' });
+    expect(await screen.findByTestId('conn-reader-username')).toHaveTextContent('excalibase_reader');
+    expect(screen.getByTestId('conn-reader-password')).not.toHaveTextContent('r3ad');
+    await userEvent.click(screen.getByTestId('conn-reveal-password'));
+    expect(screen.getByTestId('conn-reader-password')).toHaveTextContent('r3ad');
+  });
+
+  test('shows nothing for a project without one', async () => {
+    renderWithReader({});
+    await screen.findByTestId('conn-username');
+    expect(screen.queryByTestId('conn-reader-username')).toBeNull();
+  });
+});
