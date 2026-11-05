@@ -301,6 +301,14 @@ SITES_GITHUB_WEBHOOK_SECRET=...
 SITES_GITHUB_APP_PRIVATE_KEY_FILE=/run/excalibase-github/app.pem
 ```
 
+The GitHub App needs repository permission **Contents: read** and the **Push**
+event for builds. Branch and pull request previews (EXC-660) also need
+**Pull requests: read** (to check a pull request is still open at the pushed
+commit), **Commit statuses: write** (to post the preview's result on the
+commit) and the **Pull request** event. An App set up before previews must
+add these, and each installation must accept the new permissions on GitHub
+before previews work there. Previews are for static sites only for now.
+
 Each build is a short chain of containers (`excalibase-build-<id>-*`): clone,
 then install and build, then pack the output, which provisioning deploys the
 way an upload is deployed. Every step runs under `APP_SANDBOX_RUNTIME` (gVisor,
@@ -326,7 +334,7 @@ the firewall rule under Host isolation; on Podman, the same for `podman+`.
 
 | `.env` | Default | Meaning |
 |---|---|---|
-| `SITES_BUILD_SLOTS` | `1` | Builds at once on this host |
+| `SITES_BUILD_SLOTS` | `1` | Site and app builds at once on this host; an app build takes the last free slot only while no site build is waiting |
 | `SITES_BUILD_EGRESS_ALLOW` | empty | `host:port` entries builds may reach although private (a git server or registry on your LAN) |
 | `SITES_BUILD_NODE_IMAGE` | Docker Hub's, pinned | a mirror of the Node images builds run in |
 

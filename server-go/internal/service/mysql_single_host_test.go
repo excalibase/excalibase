@@ -13,6 +13,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -165,12 +166,26 @@ func (h *hostEngine) CopyFromContainer(_ context.Context, id, src string) (io.Re
 	return io.NopCloser(tarOf(src[strings.LastIndex(src, "/")+1:], body)), nil
 }
 
-func (h *hostEngine) CreateVolume(_ context.Context, name string) error {
+func (h *hostEngine) CreateVolume(_ context.Context, name, _ string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.volumes[name] = true
 	return nil
 }
+
+// VolumeLabels answers a held volume as provisioning labels one: the project
+// its name encodes.
+func (h *hostEngine) VolumeLabels(_ context.Context, name string) (map[string]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.volumes[name] {
+		return nil, fmt.Errorf("volume %s: %w", name, provisioner.ErrVolumeNotFound)
+	}
+	project := strings.TrimSuffix(strings.TrimPrefix(name, provisioner.MySQLVolumePrefix), "-mysql")
+	return map[string]string{"excalibase.managed": "true", "excalibase.project": project}, nil
+}
+
+func (h *hostEngine) EnsureImage(context.Context, string) error { return nil }
 
 func (h *hostEngine) RemoveVolume(_ context.Context, name string) error {
 	h.mu.Lock()
@@ -352,5 +367,35 @@ func TestSingleHostMySQLUpgradeToItsOwnVersionIsANoop(t *testing.T) {
 	engine.refuseImage, _ = config.MySQLImage(inst.MySQLVersion)
 	if err := svc.UpgradeVersion(context.Background(), inst.ProjectID, inst.MySQLVersion); err != nil {
 		t.Fatalf("UpgradeVersion: %v", err)
+	}
+}
+
+// EXC-675: with dbreadrole on, a MySQL project files the SELECT-only login,
+// rotates it with the rest, and a rotation ends the old sessions in the container.
+func TestSingleHostMySQLReaderIsFiledRotatedAndSessionsEnd(t *testing.T) {
+	svc, store, engine := setupSingleHostMySQL(t)
+	svc.SetFeatures(features.NewStatic(features.DBReadRole))
+	svc.SetCredentialVerifier(&fakeRoleVerifier{})
+	inst := provisionMySQL(t, svc, store, "")
+	record, err := svc.vault.Get(vaultCredentialPath(inst.ProjectID, roleReader))
+	if err != nil || record["username"] != roleReader || record["engine"] != "mysql" {
+		t.Fatalf("reader record %v, %v", record, err)
+	}
+	if !strings.Contains(engine.fed(), "GRANT SELECT, SHOW VIEW ON `"+inst.DatabaseName+"`.* TO 'excalibase_reader'@'%'") {
+		t.Fatal("the reader was not created in the container")
+	}
+	before := len(engine.stdin)
+	if _, err := svc.RotateCredentials(context.Background(), inst.ProjectID); err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+	rotated := strings.Join(engine.stdin[before:], "\n")
+	rotatedReader, _ := svc.vault.Get(vaultCredentialPath(inst.ProjectID, roleReader))
+	if rotatedReader["password"] == record["password"] || !strings.Contains(rotated, "ALTER USER 'excalibase_reader'@'%'") {
+		t.Error("the reader was not rotated")
+	}
+	for _, user := range []string{roleAdmin, roleApp, roleAuthAdmin, roleReader} {
+		if !strings.Contains(rotated, "PROCESSLIST WHERE USER = '"+user+"'") {
+			t.Errorf("the %s sessions were not looked for", user)
+		}
 	}
 }

@@ -241,7 +241,7 @@ func (p *MySQLProvisioner) query(ctx context.Context, namespace, projectID, stat
 // primary, or resets the passwords of users a restored cluster brought.
 func (p *MySQLProvisioner) EnsurePlatformUsers(ctx context.Context, namespace, projectID, database string, passwords MySQLPasswords) error {
 	err := p.execSecret(ctx, namespace, projectID, MySQLPlatformUsersSQL(database, passwords),
-		passwords.Admin, passwords.App, passwords.AuthAdmin, passwords.Watcher)
+		passwords.Admin, passwords.App, passwords.AuthAdmin, passwords.Watcher, passwords.Reader)
 	if err != nil {
 		return fmt.Errorf("create the platform users: %w", err)
 	}

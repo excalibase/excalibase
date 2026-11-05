@@ -53,6 +53,71 @@ echo "$hostmetrics" | grep -q 'FEATURE_HOSTMETRICS: "true"' \
   || { echo "FEATURE_HOSTMETRICS=true does not reach provisioning" >&2; exit 1; }
 echo "$hostmetrics" | grep -q 'source: /proc/1/net/dev' \
   || { echo "the host's network counters are not mounted with --host-metrics" >&2; exit 1; }
+# EXC-683: no network sets driver options (a changed option makes compose
+# re-create a network tenants are attached to, which fails on upgrade); the
+# firewall guards the networks the engine proxy names the bridges of, runs only
+# with its profile, from the release's image (no download at start), alone in
+# the host's network namespace with nothing but the capabilities iptables needs,
+# and is healthy only while its rules hold.
+render | python3 -c '
+import sys, yaml
+doc = yaml.safe_load(sys.stdin)
+for key, net in doc["networks"].items():
+    opts = net.get("driver_opts")
+    if opts:
+        sys.exit(f"network {key} sets driver_opts {opts}: an upgrade would re-create it under its tenants")
+if doc["services"].get("host-firewall", {}).get("profiles"):
+    sys.exit("the host firewall is behind a profile: off it, gated services fail open")
+names = {net["name"] for net in doc["networks"].values()}
+listed = set(doc["services"]["engine-proxy"]["environment"]["PROXY_BRIDGE_NETWORKS"].split(","))
+if not names <= listed:
+    sys.exit(f"the proxy does not name the bridges of {sorted(names - listed)}")
+'
+render TAG=1.9.9 HOST_RESOLV_CONF=/run/systemd/resolve/resolv.conf | python3 -c '
+import sys, yaml
+doc = yaml.safe_load(sys.stdin)
+fw = doc["services"].get("host-firewall") or sys.exit("no host firewall")
+proxy = doc["services"]["engine-proxy"]
+if fw["image"] != proxy["image"]:
+    sys.exit("host firewall image %s, want the release image %s" % (fw["image"], proxy["image"]))
+if "apk" in str(fw.get("command")) + str(fw.get("entrypoint")):
+    sys.exit("the host firewall downloads packages when it starts")
+if fw.get("network_mode") != "host":
+    sys.exit("host firewall must run in the host network namespace, got %r" % fw.get("network_mode"))
+if sorted(fw.get("cap_add") or []) != ["NET_ADMIN", "NET_RAW"] or fw.get("cap_drop") != ["ALL"]:
+    sys.exit("host firewall capabilities %r / %r" % (fw.get("cap_add"), fw.get("cap_drop")))
+if fw.get("privileged") or fw.get("ports") or not fw.get("read_only"):
+    sys.exit("host firewall is privileged, published or writable")
+mounts = {v.get("target"): v for v in fw.get("volumes") or []}
+if set(mounts) != {"/host-firewall.sh", "/var/lib/excalibase-bridges", "/etc/host-resolv.conf"} or not all(v.get("read_only") for v in mounts.values()):
+    sys.exit(f"host firewall mounts {sorted(mounts)}, want its script, the bridges and the host resolv.conf, read-only")
+if mounts["/etc/host-resolv.conf"].get("source") != "/run/systemd/resolve/resolv.conf":
+    sys.exit("the firewall does not read the resolv.conf HOST_RESOLV_CONF names")
+pre = doc["services"]["preflight"]["environment"]
+want = {"HOST_FIREWALL": "", "PLATFORM_TAG": "1.9.9", "ENGINE_SOCKET_UID": "1000", "HOST_RESOLV_CONF": "/run/systemd/resolve/resolv.conf"}
+for key, value in want.items():
+    if pre.get(key) != value:
+        sys.exit(f"preflight sees {key}={pre.get(key)!r}, want {value!r}: it cannot refuse an unguarded start")
+if "/var/run/engine.sock" in str(fw):
+    sys.exit("the host firewall holds the engine socket")
+if fw["environment"]["HOST_FIREWALL_NETWORKS"] != proxy["environment"]["PROXY_BRIDGE_NETWORKS"]:
+    sys.exit("the firewall guards other networks than the proxy names")
+for key in ("HOST_FIREWALL", "ENGINE_SOCKET_UID"):
+    if key not in fw["environment"]:
+        sys.exit(f"the firewall cannot tell it is off: no {key}")
+if fw["environment"]["HOST_FIREWALL_TENANT_NETWORKS"] != "excalibase-tenants":
+    sys.exit("the tenant network is not the one guarded from metadata and the LAN")
+if fw.get("healthcheck", {}).get("test") != ["CMD", "sh", "/host-firewall.sh", "check"]:
+    sys.exit("the host firewall is healthy without checking its rules")
+if "no-new-privileges:true" not in (fw.get("security_opt") or []):
+    sys.exit("host firewall may gain privileges")
+# What must not run unguarded waits for the firewall healthy; without the profile it starts anyway.
+for name in ("provisioning", "edge"):
+    gate = (doc["services"][name].get("depends_on") or {}).get("host-firewall")
+    # required stays true: an optional dependency that fails is skipped, and the service starts unguarded.
+    if (gate or {}).get("condition") != "service_healthy" or (gate or {}).get("required", True) is not True:
+        sys.exit(f"{name} does not wait for a healthy host firewall: {gate}")
+'
 # Stored log search (EXC-672): Loki only with the profile, on a network only provisioning shares.
 render | python3 -c 'import sys,yaml; sys.exit("loki runs without the hostlogs profile" if "loki" in yaml.safe_load(sys.stdin)["services"] else 0)'
 render COMPOSE_PROFILES=hostlogs FEATURE_HOSTLOGS=true | python3 -c '
@@ -97,6 +162,9 @@ PY
 render | python3 "$DIR/log_drains_check.py" off
 render COMPOSE_PROFILES=hostlogs,logdrains FEATURE_HOSTLOGS=true FEATURE_LOGDRAINS=true LOG_FORWARDER_TOKEN=$hex \
   | python3 "$DIR/log_drains_check.py" on
+# Previews (EXC-660): the flag reaches provisioning.
+render FEATURE_SITEPREVIEWS=true | grep -q 'FEATURE_SITEPREVIEWS: "true"' \
+  || { echo "FEATURE_SITEPREVIEWS=true does not reach provisioning" >&2; exit 1; }
 echo "single-host required settings ok"
 # Email through the operator's own relay (EXC-580) or SES: every setting in .env reaches provisioning.
 out=$(render EMAIL_PROVIDER=smtp SMTP_HOST=mail.example.test SMTP_PORT=2587 SMTP_TLS=starttls \

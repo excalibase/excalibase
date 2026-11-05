@@ -16,11 +16,14 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/pkg/stdcopy"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+
+	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 )
 
 type fakeContainer struct {
@@ -160,6 +163,19 @@ func (f *fakeEngine) ContainerCreate(_ context.Context, config *container.Config
 	}
 	if !slices.Contains(f.pulled, config.Image) && !strings.HasPrefix(config.Image, "tools") {
 		return container.CreateResponse{}, errdefs.ErrNotFound.WithMessage("no such image " + config.Image)
+	}
+	// The engine proxy mounts only a volume the container owns (EXC-682).
+	for _, m := range host.Mounts {
+		if m.Type != mount.TypeVolume || m.Source == "" {
+			continue
+		}
+		labels, ok := f.volumes[m.Source]
+		if !ok {
+			return container.CreateResponse{}, errdefs.ErrNotFound.WithMessage("no such volume " + m.Source)
+		}
+		if err := engineproxy.CheckVolumeOwner(m.Source, labels, config.Labels); err != nil {
+			return container.CreateResponse{}, errdefs.ErrPermissionDenied.WithMessage(err.Error())
+		}
 	}
 	f.seq++
 	id := fmt.Sprintf("c%04d", f.seq)

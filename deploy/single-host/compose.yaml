@@ -14,9 +14,12 @@ x-edge-aliases: &edge_aliases studio.${EXCALIBASE_DOMAIN:?run ./init.sh first},a
 # provisioning starts it and the engine proxy admits this image, and only it,
 # to the bus network NATS listens on.
 x-watcher-image: &watcher_image docker.io/excalibase/excalibase-watcher-go@sha256:7b2f9feb21b2a92b34c3f7b136399c619d460bf5d296215b8662a7a334126d9e
+# The networks the host firewall guards (EXC-683): their bridges drop new
+# connections to the host; the tenants' also drop metadata and private ranges.
+x-bridge-networks: &bridge_networks excalibase-platform,excalibase-engine,excalibase-tenants,excalibase-edge,excalibase-dataplane,excalibase-metrics,excalibase-cdc,excalibase-logs,excalibase-drains,excalibase-drains-out,excalibase-egress
 # The platform's long-running containers host monitoring reads (EXC-670): the
 # proxy admits their stats and state, by these exact names, and nothing else of theirs.
-x-platform-containers: &platform_containers excalibase-postgres,excalibase-nats,excalibase-objectstore,excalibase-engine-proxy,excalibase-provisioning,excalibase-studio,excalibase-auth,excalibase-graphql,excalibase-edge
+x-platform-containers: &platform_containers excalibase-postgres,excalibase-nats,excalibase-objectstore,excalibase-engine-proxy,excalibase-provisioning,excalibase-studio,excalibase-auth,excalibase-graphql,excalibase-edge,excalibase-host-firewall
 x-hardened: &hardened
   security_opt:
     - no-new-privileges:true
@@ -39,6 +42,11 @@ services:
       AUTH_HOOKS_DENY_CIDRS: ${AUTH_HOOKS_DENY_CIDRS:-}
       FEATURE_LOGDRAINS: ${FEATURE_LOGDRAINS:-false}
       LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
+      # The host firewall (EXC-683): on Docker, on unless HOST_FIREWALL=off, on a release that has it.
+      HOST_FIREWALL: ${HOST_FIREWALL:-}
+      HOST_RESOLV_CONF: ${HOST_RESOLV_CONF:-}
+      ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
+      PLATFORM_TAG: ${TAG:-1.5.0}
     command: ["sh", "/preflight.sh"]
     volumes:
       - ./preflight.sh:/preflight.sh:ro,z
@@ -213,8 +221,12 @@ services:
       PROXY_CDC_IMAGES: *watcher_image
       PROXY_NETNS_JOIN_IMAGES: ${DOCUMENTDB_ENABLED:+ghcr.io/documentdb/documentdb-kubernetes-operator/gateway@sha256:8a5c7e533dc0fbed8ed780b22e31001a6b12ae0eb670f4aac62c1ded782742ed}
       PROXY_STATS_CONTAINERS: *platform_containers
+      # Each platform network's real bridge, for the host firewall (EXC-683).
+      PROXY_BRIDGE_NETWORKS: *bridge_networks
+      PROXY_BRIDGES_FILE: /var/lib/excalibase-bridges/networks
     volumes:
       - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
+      - bridges:/var/lib/excalibase-bridges
     read_only: true
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2375/_ping"]
@@ -289,6 +301,8 @@ services:
       FEATURE_AUTHMFA: ${FEATURE_AUTHMFA:-false}
       # Host and container monitoring, alerts and notices (EXC-670; init.sh --host-metrics).
       FEATURE_HOSTMETRICS: ${FEATURE_HOSTMETRICS:-false}
+      # A preview per branch or pull request of a git-connected site (EXC-660); needs site git builds.
+      FEATURE_SITEPREVIEWS: ${FEATURE_SITEPREVIEWS:-false}
       HOST_METRICS_CONTAINERS: *platform_containers
       HOST_METRICS_NET_DEV: /host/proc-net-dev
       # Stored project log search in the bundled Loki (EXC-672; init.sh --host-logs).
@@ -319,12 +333,17 @@ services:
       FEATURE_DBALLOWLIST: ${FEATURE_DBALLOWLIST:-false}
       # A database's read-only address to its replicas (EXC-666); a single host has none and says so.
       FEATURE_DBREADADDRESS: ${FEATURE_DBREADADDRESS:-false}
+      # The read address signs in with a read-only login; a rotation ends old sessions (EXC-675).
+      FEATURE_DBREADROLE: ${FEATURE_DBREADROLE:-false}
       # Copy a database into a new project from its backups (EXC-667).
       FEATURE_DBCOPY: ${FEATURE_DBCOPY:-false}
       # Database major version upgrade in Studio (EXC-668): one-way, backup first.
       FEATURE_MAJORUPGRADE: ${FEATURE_MAJORUPGRADE:-false}
       # Self-managed service templates beside the starters (EXC-669).
       FEATURE_TEMPLATECATALOG: ${FEATURE_TEMPLATECATALOG:-false}
+      # Apps build on git push (EXC-547): plan limits only so far; builds
+      # themselves are not offered on single-host until EXC-671's runner.
+      FEATURE_APPGITBUILDS: ${FEATURE_APPGITBUILDS:-false}
       EXCALIBASE_DB_ENDPOINT_PORT_RANGE: ${TENANT_PORT_RANGE:-30000-30999}
       # EXC-451: the first registration is only promoted to platform_admin
       # with this one-time token — same value the bootstrap service sends.
@@ -444,6 +463,9 @@ services:
       # The host's network counters, one read-only file (init.sh --host-metrics); /dev/null otherwise.
       - ${HOST_METRICS_NET_DEV_SOURCE:-/dev/null}:/host/proc-net-dev:ro
     depends_on:
+      # Not unguarded (EXC-683): only once the host firewall's rules hold, or it is off on purpose.
+      host-firewall:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       engine-proxy:
@@ -690,6 +712,9 @@ services:
       - edge_data:/data
       - edge_config:/config
     depends_on:
+      # Not unguarded (EXC-683): only once the host firewall's rules hold, or it is off on purpose.
+      host-firewall:
+        condition: service_healthy
       studio:
         condition: service_started
     security_opt:
@@ -701,6 +726,54 @@ services:
     networks:
       - edge
       - dataplane
+    restart: unless-stopped
+
+  # EXC-683 (on unless HOST_FIREWALL=off, init.sh --no-host-firewall; no profile, so the
+  # services gated on it never start unguarded):
+  # the platform's bridges have an address on the host, so a tenant database could
+  # reach a host service listening on every address, and the tenant network routes
+  # to the cloud's metadata service and the LAN. This drops new connections from
+  # every platform bridge to the host (DNS excepted) and, from the tenants' bridge,
+  # forwarded traffic to 169.254.0.0/16 and private ranges other than the
+  # platform's own subnets and DNS to the host's resolvers; it keeps them in place and is healthy only while they
+  # are. Bridges are read from what the engine proxy writes, never guessed.
+  # The image is the release's own, iptables included: nothing downloaded at start.
+  # Rootless Podman needs none: its bridges live in the user's own namespace.
+  host-firewall:
+    image: docker.io/excalibase/provisioning:${TAG:-1.5.0}
+    container_name: excalibase-host-firewall
+    entrypoint: ["sh", "/host-firewall.sh"]
+    user: "0:0"
+    network_mode: host
+    environment:
+      HOST_FIREWALL_NETWORKS: *bridge_networks
+      HOST_FIREWALL_TENANT_NETWORKS: excalibase-tenants
+      HOST_FIREWALL_BRIDGES_FILE: /var/lib/excalibase-bridges/networks
+      # Off on purpose: HOST_FIREWALL=off (init.sh --no-host-firewall) or rootless Podman (uid 0).
+      HOST_FIREWALL: ${HOST_FIREWALL:-}
+      ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
+    volumes:
+      - ./host-firewall.sh:/host-firewall.sh:ro,z
+      - bridges:/var/lib/excalibase-bridges:ro
+      # Tenants' DNS is let through only to these resolvers; preflight requires the setting.
+      - ${HOST_RESOLV_CONF:-/etc/resolv.conf}:/etc/host-resolv.conf:ro
+    read_only: true
+    mem_limit: 64m
+    pids_limit: 32
+    <<: *hardened
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "sh", "/host-firewall.sh", "check"]
+      interval: 30s
+      timeout: 20s
+      retries: 2
+      start_period: 150s
+    # The proxy creates the bridges volume writable before this mounts it read-only.
+    depends_on:
+      engine-proxy:
+        condition: service_healthy
     restart: unless-stopped
 
 # Fixed names under excalibase-platform-: the engine proxy lets tenant
@@ -729,8 +802,14 @@ volumes:
   # Stored project logs (EXC-672); delete it to forget them.
   logs_data:
     name: excalibase-platform-logs
+  # The engine proxy's record of the platform's bridges, for the host firewall (EXC-683).
+  bridges:
+    name: excalibase-platform-bridges
 
 networks:
+  # No driver_opts here, bridge names included: compose re-creates a network whose
+  # options change, which fails while tenant databases are attached (EXC-683).
+  # The host firewall finds each network's bridge through the engine proxy.
   # Platform services and their state. Internal: no route in or out.
   platform:
     name: excalibase-platform

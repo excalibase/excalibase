@@ -53,8 +53,12 @@ func MySQLContainerName(projectID string) string {
 // MySQLVolumeName is the project's data volume, under the engine proxy's
 // volume prefix; it outlives the container so a new image can open it.
 func MySQLVolumeName(projectID string) string {
-	return "excalibase-vol-" + projectID + "-mysql"
+	return MySQLVolumePrefix + projectID + "-mysql"
 }
+
+// MySQLVolumePrefix is the engine proxy's volume prefix on a single host
+// (PROXY_VOLUME_PREFIX).
+const MySQLVolumePrefix = "excalibase-vol-"
 
 func MySQLContainerSpec(projectID, image string, plan config.TierConfig) (ContainerSpec, error) {
 	plan, err := config.MySQLPlan(plan)
@@ -78,6 +82,7 @@ func MySQLContainerSpec(projectID, image string, plan config.TierConfig) (Contai
 		Limits:         limits,
 		DataVolume:     MySQLDataDir,
 		DataVolumeName: MySQLVolumeName(projectID),
+		Project:        projectID,
 	}, nil
 }
 

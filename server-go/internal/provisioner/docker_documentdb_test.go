@@ -59,7 +59,7 @@ func TestDocumentDBProjectRunsTheCatalogueImageWithItsOwnStartScript(t *testing.
 }
 
 func TestDocumentDBStartScriptSetsWhatKubernetesSets(t *testing.T) {
-	script := documentDBStartScript("app")
+	script := documentDBStartScript("app", "app")
 	for _, want := range []string{
 		"shared_preload_libraries=" + strings.Join(config.DocumentDBPreloadLibraries(), ","),
 		config.DocumentDBCronDatabaseSetting + "=" + config.DocumentDBDatabase,
@@ -73,7 +73,7 @@ func TestDocumentDBStartScriptSetsWhatKubernetesSets(t *testing.T) {
 			t.Errorf("start script lacks %q", want)
 		}
 	}
-	for _, line := range DocumentDBHBA("app") {
+	for _, line := range DocumentDBHBA("app", "app") {
 		if !strings.Contains(script, line+"\n") {
 			t.Errorf("start script does not write %q", line)
 		}
@@ -83,7 +83,7 @@ func TestDocumentDBStartScriptSetsWhatKubernetesSets(t *testing.T) {
 // The gateway opens its session as the client's role, the owner included, as
 // on Kubernetes; the superuser and platform roles are not trusted (EXC-604).
 func TestDocumentDBHBATrustsTheOwnerOnLoopbackAndNoSuperuser(t *testing.T) {
-	hba := DocumentDBHBA("shop_owner")
+	hba := DocumentDBHBA("shop_owner", "app")
 	if !slices.Contains(hba, "host all shop_owner 127.0.0.1/32 trust") || !slices.Contains(hba, "host all shop_owner ::1/128 trust") {
 		t.Fatalf("the owner is not trusted on loopback: %v", hba)
 	}
@@ -92,13 +92,13 @@ func TestDocumentDBHBATrustsTheOwnerOnLoopbackAndNoSuperuser(t *testing.T) {
 			t.Errorf("a superuser or platform role is trusted: %q", line)
 		}
 	}
-	if got := DocumentDBHBA("Bad Name"); slices.ContainsFunc(got, func(line string) bool { return strings.Contains(line, "Bad") }) {
+	if got := DocumentDBHBA("Bad Name", "app"); slices.ContainsFunc(got, func(line string) bool { return strings.Contains(line, "Bad") }) {
 		t.Fatalf("an unsafe owner name was written: %v", got)
 	}
 }
 
 func TestDocumentDBHBATrustsTheGatewayAndMongoUsersOnLoopbackOnly(t *testing.T) {
-	hba := DocumentDBHBA("app")
+	hba := DocumentDBHBA("app", "app")
 	group := "+" + config.DocumentDBMongoUsersGroup
 	for _, role := range []string{config.DocumentDBGatewayRole, group} {
 		for _, line := range hba {

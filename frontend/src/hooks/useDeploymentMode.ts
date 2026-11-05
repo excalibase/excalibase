@@ -18,6 +18,7 @@ export type Feature =
   | 'authotp'
   | 'authuser'
   | 'authguest'
+  | 'sitepreviews'
   // On only on a single-host Docker/Podman install (EXC-670).
   | 'hostmetrics'
   | 'sitesserver'
@@ -27,6 +28,7 @@ export type Feature =
   | 'dbreadaddress'
   | 'dbcopy'
   | 'majorupgrade'
+  | 'appgitbuilds'
   | 's3';
 
 interface ConfigResponse {

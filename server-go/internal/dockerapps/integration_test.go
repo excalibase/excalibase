@@ -181,6 +181,10 @@ func (r *realRig) deploy(app *apphost.App, deployID string) {
 		r.t.Fatal(err)
 	}
 	ctx := context.Background()
+	// As a deploy does: the proxy mounts only a disk that exists and is the app's (EXC-682).
+	if err := r.rt.CreateAppDisk(ctx, r.db, app, "", k8s.DiskJobOptions{Timeout: time.Minute}); err != nil {
+		r.t.Fatalf("disk for %s: %v", deployID, err)
+	}
 	if err := r.rt.ApplyAppWorkload(ctx, r.db, workload); err != nil {
 		r.t.Fatalf("apply %s: %v", deployID, err)
 	}

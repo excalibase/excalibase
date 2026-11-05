@@ -154,6 +154,13 @@ func TestPutScriptRefusesAVersionCloudflareShouldNeverSee(t *testing.T) {
 		},
 		"kv binding":     func(v *ScriptVersion) { v.Bindings = append(v.Bindings, Binding{Type: "kv_namespace", Name: "KV"}) },
 		"assets binding": func(v *ScriptVersion) { v.Bindings = append(v.Bindings, Binding{Type: "assets", Name: "OTHER"}) },
+		// The outbound Worker never sees fetches from these two, so a site may hold neither.
+		"durable object binding": func(v *ScriptVersion) {
+			v.Bindings = append(v.Bindings, Binding{Type: "durable_object_namespace", Name: "ROOM"})
+		},
+		"mtls certificate binding": func(v *ScriptVersion) {
+			v.Bindings = append(v.Bindings, Binding{Type: "mtls_certificate", Name: "CERT"})
+		},
 		"binding named ASSETS": func(v *ScriptVersion) {
 			v.Bindings = append(v.Bindings, Binding{Type: BindingPlainText, Name: "ASSETS"})
 		},

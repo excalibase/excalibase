@@ -24,6 +24,8 @@ type DBReadAddressService struct {
 	inner *DBEndpointService
 	store storage.DatabaseReadAddressStore
 	flags features.Flags
+	// readers says whether a project has the SELECT-only login (EXC-675).
+	readers ReaderLogins
 	// closeRetry and closeWait bound how long a close waits for a racing
 	// enable to finish before giving up.
 	closeRetry time.Duration
@@ -43,6 +45,16 @@ var (
 )
 
 var _ PublicEndpointReconciler = (*DBReadAddressService)(nil)
+
+// ReaderLogins reports whether a project has a SELECT-only login on file.
+type ReaderLogins interface {
+	HasReaderLogin(projectID string) (bool, error)
+}
+
+// UseReaderLogins lets the read address name the SELECT-only login.
+func (r *DBReadAddressService) UseReaderLogins(readers ReaderLogins) {
+	r.readers = readers
+}
 
 func NewDBReadAddressService(inner *DBEndpointService, store storage.DatabaseReadAddressStore, flags features.Flags) *DBReadAddressService {
 	return &DBReadAddressService{inner: inner, store: store, flags: flags,
@@ -74,6 +86,10 @@ type DBReadAddressView struct {
 	// ConnectionString names the user and leaves the password out, like the
 	// primary address's strings on this Developer-level surface.
 	ConnectionString string
+	// Username signs in at the read address; ReadOnlyLogin says it is the
+	// SELECT-only login rather than the owner (EXC-675).
+	Username      string
+	ReadOnlyLogin bool
 }
 
 // Describe, SetRequireTLS: the primary endpoint, unchanged.
@@ -362,15 +378,23 @@ func (r *DBReadAddressService) view(ctx context.Context, inst *domain.DatabaseIn
 	if err != nil {
 		return DBReadAddressView{}, err
 	}
+	readOnly, err := r.readOnlyLogin(ctx, inst.ProjectID)
+	if err != nil {
+		return DBReadAddressView{}, err
+	}
 	view := DBReadAddressView{ProjectID: inst.ProjectID, Replicas: replicas, PublicOffered: r.inner.publicOffered(),
-		PublicOpen: primary.IsPublic(), Enabled: reader.PublicEnabled, Port: reader.Port}
+		PublicOpen: primary.IsPublic(), Enabled: reader.PublicEnabled, Port: reader.Port,
+		Username: inst.Username, ReadOnlyLogin: readOnly}
+	if readOnly {
+		view.Username = roleReader
+	}
 	if inst.DBType == domain.MySQL {
 		view.Engine = domain.CredentialEngineMySQL
 	}
 	if replicas == 0 {
 		view.Reason = domain.ReadAddressNoReplica
 	} else {
-		view.Internal = readInternal(inst, primary)
+		view.Internal = readInternal(inst, primary, view.Username)
 	}
 	if !view.PublicOffered {
 		return view, nil
@@ -379,7 +403,7 @@ func (r *DBReadAddressService) view(ctx context.Context, inst *domain.DatabaseIn
 		return DBReadAddressView{}, err
 	}
 	if reader.Port > 0 {
-		view.ConnectionString = readString(inst, view.Host, reader.Port, primary)
+		view.ConnectionString = readString(inst, view.Host, reader.Port, primary, view.Username)
 	}
 	if reader.IsPublic() && replicas > 0 {
 		exists, err := r.inner.kube.PublicDBServiceExists(ctx, inst.Namespace, domain.DBReadAddressServiceName(inst.ProjectID, inst.DBType))
@@ -391,20 +415,32 @@ func (r *DBReadAddressService) view(ctx context.Context, inst *domain.DatabaseIn
 	return view, nil
 }
 
-func readInternal(inst *domain.DatabaseInstance, primary domain.DBEndpoint) DBReadAddressInternal {
+// readOnlyLogin reports whether the read address names the SELECT-only login.
+func (r *DBReadAddressService) readOnlyLogin(ctx context.Context, projectID string) (bool, error) {
+	if r.readers == nil || !features.Enabled(ctx, r.flags, features.DBReadRole) {
+		return false, nil
+	}
+	filed, err := r.readers.HasReaderLogin(projectID)
+	if err != nil {
+		return false, fmt.Errorf("read the read-only login: %w", err)
+	}
+	return filed, nil
+}
+
+func readInternal(inst *domain.DatabaseInstance, primary domain.DBEndpoint, username string) DBReadAddressInternal {
 	if inst.DBType == domain.MySQL {
 		host := k8s.MySQLReplicaHost(inst.ProjectID, inst.Namespace)
 		return DBReadAddressInternal{Host: host, Port: mysqlPort,
-			ConnectionString: mysqlEndpointString(host, mysqlPort, inst.Username, inst.DatabaseName)}
+			ConnectionString: mysqlEndpointString(host, mysqlPort, username, inst.DatabaseName)}
 	}
 	host := fmt.Sprintf("%s-postgres-ro.%s.svc.cluster.local", inst.ProjectID, inst.Namespace)
 	return DBReadAddressInternal{Host: host, Port: postgresPort,
-		ConnectionString: domain.DBConnectionString(host, postgresPort, inst.Username, inst.DatabaseName, internalSSLMode(primary))}
+		ConnectionString: domain.DBConnectionString(host, postgresPort, username, inst.DatabaseName, internalSSLMode(primary))}
 }
 
-func readString(inst *domain.DatabaseInstance, host string, port int, primary domain.DBEndpoint) string {
+func readString(inst *domain.DatabaseInstance, host string, port int, primary domain.DBEndpoint, username string) string {
 	if inst.DBType == domain.MySQL {
-		return mysqlEndpointString(host, port, inst.Username, inst.DatabaseName)
+		return mysqlEndpointString(host, port, username, inst.DatabaseName)
 	}
-	return domain.DBConnectionString(host, port, inst.Username, inst.DatabaseName, primary.SSLMode())
+	return domain.DBConnectionString(host, port, username, inst.DatabaseName, primary.SSLMode())
 }

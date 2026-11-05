@@ -26,17 +26,28 @@ const standard = {
   maxSiteFileBytes: 26214400,
   maxSiteDeploysPerHour: 120,
   maxSiteCustomDomains: 5,
+  maxSitePreviews: 10,
   siteBuildCpuMillis: 2000,
   siteBuildMemory: '4Gi',
   siteBuildDisk: '10Gi',
   siteBuildTimeoutSeconds: 1200,
   siteBuildConcurrency: 2,
+  appBuildCpuMillis: 4000,
+  appBuildMemory: '8Gi',
+  appBuildDisk: '20Gi',
+  appBuildTimeoutSeconds: 1800,
+  appBuildConcurrency: 2,
+  appBuildMaxImage: '5Gi',
+  appBuildMaxPerHour: 120,
 };
 
-function renderTable({ sites = true, siteGitBuilds = false } = {}) {
+function renderTable({ sites = true, siteGitBuilds = false, sitePreviews = false, appGitBuilds = false } = {}) {
   vi.mocked(api.get).mockImplementation((url: string) =>
     Promise.resolve({
-      data: url === '/config' ? { deploymentMode: 'cloud', sites, siteGitBuilds } : [standard],
+      data:
+        url === '/config'
+          ? { deploymentMode: 'cloud', sites, siteGitBuilds, features: { sitepreviews: sitePreviews, appgitbuilds: appGitBuilds } }
+          : [standard],
     } as never),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -133,6 +144,33 @@ describe('TierConfigTable', () => {
     );
   });
 
+  // Live previews per project follow the plan (EXC-660), shown only with previews on.
+  test('edits and saves the previews a project may hold, only while previews are on', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable({ siteGitBuilds: true, sitePreviews: true });
+
+    const previews = await screen.findByLabelText('Live previews per project for STANDARD');
+    expect(previews).toHaveValue(10);
+    await user.clear(previews);
+    await user.type(previews, '4');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/admin/tiers/STANDARD',
+        expect.objectContaining({ maxSitePreviews: 4, maxSites: 20 }),
+        ifMatchVersion4,
+      ),
+    );
+  });
+
+  test('hides the previews column while previews are off', async () => {
+    renderTable({ siteGitBuilds: true });
+    await screen.findByLabelText('Max sites for STANDARD');
+    expect(screen.queryByLabelText('Live previews per project for STANDARD')).not.toBeInTheDocument();
+  });
+
   // Custom domains per project follow the plan too (EXC-614).
   test('edits and saves the custom domains a project may hold', async () => {
     const user = userEvent.setup();
@@ -179,6 +217,81 @@ describe('TierConfigTable', () => {
     renderTable();
     expect(await screen.findByLabelText('Max sites for STANDARD')).toBeInTheDocument();
     expect(screen.queryByLabelText('Build minutes for STANDARD')).not.toBeInTheDocument();
+  });
+
+  // An app build's limits come from the plan too (EXC-547), shown only with the appgitbuilds flag on.
+  test('edits an app build memory and minutes with the plan', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable({ appGitBuilds: true });
+
+    const memory = await screen.findByLabelText('App build memory for STANDARD');
+    expect(memory).toHaveValue('8Gi');
+    const minutes = screen.getByLabelText('App build minutes for STANDARD');
+    expect(minutes).toHaveValue(30);
+    await user.clear(minutes);
+    await user.type(minutes, '45');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/admin/tiers/STANDARD',
+        expect.objectContaining({ appBuildTimeoutSeconds: 2700, appBuildMemory: '8Gi', appBuildMaxImage: '5Gi' }),
+        ifMatchVersion4,
+      ),
+    );
+  });
+
+  test('shows and sends no app build limits while app git builds are off', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable({ siteGitBuilds: true });
+    const minutes = await screen.findByLabelText('Build minutes for STANDARD');
+    expect(screen.queryByLabelText('App build minutes for STANDARD')).not.toBeInTheDocument();
+    await user.clear(minutes);
+    await user.type(minutes, '25');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    const body = vi.mocked(api.put).mock.calls[0][1] as Record<string, unknown>;
+    expect(Object.keys(body).filter((key) => key.startsWith('appBuild'))).toEqual([]);
+  });
+
+  // A project's app builds an hour are the plan's own cap, beside the site deploys an hour.
+  test('edits the app builds an hour with the plan', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable({ appGitBuilds: true });
+    const perHour = await screen.findByLabelText('App builds an hour for STANDARD');
+    expect(perHour).toHaveValue(120);
+    await user.clear(perHour);
+    await user.type(perHour, '40');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith('/admin/tiers/STANDARD', expect.objectContaining({ appBuildMaxPerHour: 40 }), ifMatchVersion4),
+    );
+  });
+
+  test('shows no app builds an hour while app git builds are off', async () => {
+    renderTable({ siteGitBuilds: true });
+    expect(await screen.findByLabelText('Build minutes for STANDARD')).toBeInTheDocument();
+    expect(screen.queryByLabelText('App builds an hour for STANDARD')).not.toBeInTheDocument();
+  });
+
+  test('will not save no app builds an hour', async () => {
+    const user = userEvent.setup();
+    renderTable({ appGitBuilds: true });
+    const perHour = await screen.findByLabelText('App builds an hour for STANDARD');
+    await user.clear(perHour);
+    await user.type(perHour, '0');
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
+  });
+
+  test('will not save an app build with no minutes', async () => {
+    const user = userEvent.setup();
+    renderTable({ appGitBuilds: true });
+    const minutes = await screen.findByLabelText('App build minutes for STANDARD');
+    await user.clear(minutes);
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
   });
 
   // Sites stays behind its install flag: no Sites, no site columns.

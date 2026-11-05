@@ -9,6 +9,8 @@ export interface Site {
   hostname: string;
   // Unknown paths answer /index.html instead of the nearest 404.html.
   spaFallback: boolean;
+  // Fixed at creation; a server site renders on the edge (EXC-661).
+  kind?: 'static' | 'server';
   liveDeployId?: string;
   createdBy: string;
   createdAt: string;

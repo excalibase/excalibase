@@ -160,3 +160,19 @@ func TestASingleHostReadAddressCannotBeChanged(t *testing.T) {
 		t.Fatalf("body %v", body)
 	}
 }
+
+// EXC-675: the read address says which login signs in there, never its password.
+func TestGetReadAddressNamesTheReadOnlyLogin(t *testing.T) {
+	api := &fakeReadAddress{view: service.DBReadAddressView{
+		ProjectID: "proj-abc", Replicas: 2, Username: "excalibase_reader", ReadOnlyLogin: true,
+		Internal: service.DBReadAddressInternal{Host: "h", Port: 5432, ConnectionString: "postgresql://excalibase_reader@h:5432/app"},
+	}}
+	w := readAddressCall(t, NewDBReadAddressHandler(api, nil), http.MethodGet, "", domain.OrgRoleDeveloper)
+	body := decodeReadAddress(t, w)
+	if body["username"] != "excalibase_reader" || body["readOnlyLogin"] != true {
+		t.Fatalf("body %v", body)
+	}
+	if strings.Contains(w.Body.String(), "password") {
+		t.Fatal("the read address carries a password")
+	}
+}

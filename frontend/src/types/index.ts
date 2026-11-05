@@ -130,6 +130,9 @@ export interface CredentialsResponse {
   // Connector/J URL, credentials passed separately.
   engine?: 'mysql';
   jdbcUrl?: string;
+  // The SELECT-only login the read address names (EXC-675), when the project has one.
+  readerUsername?: string;
+  readerPassword?: string;
 }
 
 export interface BackupConfig {

@@ -23,6 +23,7 @@ type fakeEngine struct {
 	mu         sync.Mutex
 	forwarded  []string
 	containers map[string]map[string]string // name or id -> labels
+	volumes    map[string]map[string]string // volume name -> labels
 	execs      map[string]string            // exec id -> container
 }
 
@@ -42,6 +43,14 @@ func (f *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"Id": ref, "Config": map[string]any{"Labels": labels}})
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/volumes/"):
+		name := strings.TrimPrefix(path, "/volumes/")
+		labels, ok := f.volumes[name]
+		if !ok {
+			http.Error(w, `{"message":"no such volume"}`, http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"Name": name, "Labels": labels})
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/exec/") && strings.HasSuffix(path, "/json"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/exec/"), "/json")
 		owner, ok := f.execs[id]

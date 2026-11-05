@@ -1,10 +1,12 @@
 package service
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/appregistry"
 )
 
 // SetLocalRegistries names the registries a self-hosted operator runs beside
@@ -12,6 +14,37 @@ import (
 // digest deploy runs as given and the container runtime pulls it.
 func (s *AppDeployService) SetLocalRegistries(hosts []string) {
 	s.localRegistries = slices.Clone(hosts)
+}
+
+// SetInternalRegistry names the platform's registry for git builds (EXC-540).
+func (s *AppDeployService) SetInternalRegistry(internal *appregistry.Internal) {
+	s.internal = internal
+}
+
+// internalDigest admits an image on the platform's registry only from the
+// platform's own build, by digest, in the app's own repository; the registry
+// is never dialled.
+func (s *AppDeployService) internalDigest(app *apphost.App, image string, origin apphost.DeployOrigin) (string, string, error) {
+	if origin.Source != apphost.DeploySourceGitBuild {
+		return "", "", appregistry.ErrInternalImage
+	}
+	if err := s.ownInternalImage(app, image); err != nil {
+		return "", "", err
+	}
+	_, digest, _ := strings.Cut(image, "@")
+	return image, digest, nil
+}
+
+// ownInternalImage holds an image on the platform's registry to the app's own
+// repository, by digest, spelled exactly as a build names it: the pull secret
+// is filed under the canonical host alone.
+func (s *AppDeployService) ownInternalImage(app *apphost.App, image string) error {
+	_, digest, _ := strings.Cut(image, "@")
+	want, err := s.internal.Image(app.ProjectID, app.Name, digest)
+	if err != nil || image != want {
+		return fmt.Errorf("%w: only %s's own repository runs, by digest", appregistry.ErrInternalImage, app.Name)
+	}
+	return nil
 }
 
 // localRegistryDigest answers whether image is on an operator registry, and
@@ -29,4 +62,24 @@ func (s *AppDeployService) localRegistryDigest(image string) (string, bool, erro
 		return "", true, apphost.ErrLocalRegistryNeedsDigest
 	}
 	return digest, true, nil
+}
+
+// refuseSweptImage stops a rollback to a git build the registry sweep no
+// longer keeps; an image on any other registry is not swept.
+func (s *AppDeployService) refuseSweptImage(app *apphost.App, source *apphost.Deploy) error {
+	if !s.internal.Names(source.Image) {
+		return nil
+	}
+	keep := map[string]bool{}
+	if err := keepAppImages(keep, s.deploys, app); err != nil {
+		return fmt.Errorf("read the images the registry keeps: %w", err)
+	}
+	sourceDigests := map[string]bool{}
+	keepDeployImage(sourceDigests, source)
+	for digest := range sourceDigests {
+		if keep[digest] {
+			return nil
+		}
+	}
+	return ErrRollbackImageRemoved
 }

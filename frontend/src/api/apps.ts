@@ -124,8 +124,8 @@ export interface ImageWatch {
 
 export type DeployStatus = 'pending' | 'rolling' | 'succeeded' | 'failed' | 'superseded';
 
-// Where a deploy was asked for: Studio, the API (CI or a script), or the image watcher.
-export type DeploySource = 'studio' | 'api' | 'image-watcher';
+// Where a deploy was asked for: Studio, the API (CI or a script), the image watcher, or a git build.
+export type DeploySource = 'studio' | 'api' | 'image-watcher' | 'git-build';
 
 export interface Deploy {
   id: string;

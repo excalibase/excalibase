@@ -339,9 +339,10 @@ func TestSwitchingTheFeatureOffStopsServingServerSites(t *testing.T) {
 	if err := h.service.ReconcileServerSites(context.Background()); err != nil {
 		t.Fatalf("Reconcile on: %v", err)
 	}
-	if h.publisher.Hosts[site.Hostname] != sites.ScriptName(site) {
+	if _, routed := h.publisher.Hosts[site.Hostname]; !routed {
 		t.Fatal("switching the feature on again did not serve the live deploy")
 	}
+	wantServerEntryUnder(t, h.publisher.Hosts[site.Hostname], site, sites.DefaultLimits)
 }
 
 // What Cloudflare runs keeps its code even when its deploy failed after the

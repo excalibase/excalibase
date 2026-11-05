@@ -9,7 +9,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 hex=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 good() {
   env -i POSTGRES_PASSWORD=$hex SETUP_TOKEN=${hex%?}d OBJECTSTORE_ROOT_SECRET=${hex%?}1 \
-    OBJECTSTORE_BACKUPS_SECRET=${hex%?}2 OBJECTSTORE_FILES_SECRET=${hex%?}3 "$@" sh "$DIR/../preflight.sh"
+    OBJECTSTORE_BACKUPS_SECRET=${hex%?}2 OBJECTSTORE_FILES_SECRET=${hex%?}3 \
+    ENGINE_SOCKET_UID=1000 PLATFORM_TAG=1.7.0 HOST_RESOLV_CONF=/etc/resolv.conf \
+    "$@" sh "$DIR/../preflight.sh"
 }
 
 good >/dev/null || fail "generated secrets refused"
@@ -44,4 +46,32 @@ for bad in LOG_FORWARDER_TOKEN= LOG_FORWARDER_TOKEN=changeme LOG_FORWARDER_TOKEN
     fail "preflight accepted $bad with drains on"
   fi
 done
+# EXC-683: on Docker the host firewall runs unless turned off on purpose; a
+# v1.6 .env says nothing, so it is on, and preflight (on every up) stops an
+# upgrade missing what it needs rather than let it start unhealthy.
+refused() {
+  if good "$@" >"$WORK_OUT" 2>&1; then fail "preflight accepted $*"; fi
+  grep -q "$want" "$WORK_OUT" || fail "preflight on $* does not say '$want': $(cat "$WORK_OUT")"
+}
+WORK_OUT=$(mktemp); trap 'rm -f "$WORK_OUT"' EXIT
+want=HOST_FIREWALL refused HOST_FIREWALL=no
+want=HOST_FIREWALL refused HOST_FIREWALL=on
+good HOST_FIREWALL=off HOST_RESOLV_CONF= >/dev/null || fail "an explicit opt-out refused"
+good COMPOSE_PROFILES=hostlogs >/dev/null || fail "another profile refused"
+# Rootless Podman (init.sh writes uid 0 for it alone): its bridges live in the
+# user's own namespace and its engine has no DOCKER-USER chain, so no firewall.
+good ENGINE_SOCKET_UID=0 HOST_RESOLV_CONF= PLATFORM_TAG=latest >/dev/null || fail "rootless Podman was asked for the host firewall"
+# The firewall runs the release's image: 1.6.2 and before have no iptables in it
+# and their proxy writes no bridges, so the firewall would never be healthy.
+# Fail closed: floating tags (release.yml publishes 1.6, 1 and latest, today
+# 1.6.2) and anything not a plain release or trunk build are refused.
+for old in 1.5.0 1.6.2 1.0.9 latest 1.6 1 V1.5.0 v1.6.2 v2.0.0 1.6.2-rc1 1.7.0-rc1 main main- main-xyz '' ' 1.7.0'; do
+  want=main- refused "PLATFORM_TAG=$old"
+done
+for newer in 1.6.3 1.7.0 1.6.10 2.0.0 main-1a2b3c4 main-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b ci; do
+  good PLATFORM_TAG=$newer >/dev/null || fail "release $newer refused"
+done
+good PLATFORM_TAG=1.5.0 HOST_FIREWALL=off >/dev/null || fail "an old release without the firewall refused"
+# The firewall allows DNS only to the resolvers Docker forwards to: init.sh names that file.
+want=HOST_RESOLV_CONF refused HOST_RESOLV_CONF=
 echo "preflight ok"

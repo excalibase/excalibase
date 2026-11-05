@@ -303,7 +303,7 @@ func (u *DockerMajorUpgrader) seed(ctx context.Context, dc provisioner.DockerCli
 	if err != nil {
 		return fmt.Errorf("copy the dump: %w", err)
 	}
-	script, err := provisioner.UpgradeInitTar()
+	script, err := provisioner.UpgradeInitTar(state.inst.DatabaseName)
 	if err != nil {
 		return err
 	}
