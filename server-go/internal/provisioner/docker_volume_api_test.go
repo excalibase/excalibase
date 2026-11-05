@@ -33,6 +33,15 @@ func volumeAPI(t *testing.T, created map[string]map[string]string, removed *[]st
 			}
 			created[body.Name] = body.Labels
 			_ = json.NewEncoder(w).Encode(map[string]string{"Name": body.Name})
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/volumes/"):
+			name := strings.TrimPrefix(path, "/volumes/")
+			labels, ok := created[name]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"message":"no such volume"}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"Name": name, "Labels": labels})
 		case r.Method == http.MethodDelete && path == "/volumes/busy":
 			w.WriteHeader(http.StatusConflict)
 			_, _ = w.Write([]byte(`{"message":"volume is in use"}`))
@@ -60,10 +69,11 @@ func TestRealClientCreatesAndRemovesManagedVolumes(t *testing.T) {
 	created := map[string]map[string]string{}
 	var removed []string
 	c := volumeAPI(t, created, &removed)
-	if err := c.CreateVolume(context.Background(), "excalibase-vol-p1-mysql"); err != nil {
+	if err := c.CreateVolume(context.Background(), "excalibase-vol-p1-mysql", "p1"); err != nil {
 		t.Fatal(err)
 	}
-	if created["excalibase-vol-p1-mysql"]["excalibase.managed"] != "true" {
+	// EXC-682: the engine proxy mounts it only into p1's containers.
+	if created["excalibase-vol-p1-mysql"]["excalibase.managed"] != "true" || created["excalibase-vol-p1-mysql"]["excalibase.project"] != "p1" {
 		t.Fatalf("created %v", created)
 	}
 	if err := c.RemoveVolume(context.Background(), "excalibase-vol-p1-mysql"); err != nil || len(removed) != 1 {
@@ -72,7 +82,7 @@ func TestRealClientCreatesAndRemovesManagedVolumes(t *testing.T) {
 	if err := c.RemoveVolume(context.Background(), "gone"); err != nil {
 		t.Fatalf("a missing volume: %v", err)
 	}
-	if c.CreateVolume(context.Background(), "refused") == nil || c.RemoveVolume(context.Background(), "busy") == nil {
+	if c.CreateVolume(context.Background(), "refused", "p1") == nil || c.RemoveVolume(context.Background(), "busy") == nil {
 		t.Fatal("an engine error was swallowed")
 	}
 }
