@@ -42,11 +42,13 @@ const (
 		WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3) AND status = 'QUEUED'
 		AND preview_id IS NOT DISTINCT FROM NULLIF($5, '')`
 	// Production and each preview keep their own history, so a busy pull request never pushes out the site's.
+	// A preview refused before it opened has no preview id; trigger $6 keeps those apart from production.
 	trimSQL = `DELETE FROM site_builds WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3)
-		AND preview_id IS NOT DISTINCT FROM NULLIF($5, '')
+		AND preview_id IS NOT DISTINCT FROM NULLIF($5, '') AND (trigger = 'preview') = ($6 = 'preview')
 		AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
 		AND id NOT IN (SELECT id FROM site_builds WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3)
-			AND preview_id IS NOT DISTINCT FROM NULLIF($5, '') ORDER BY created_at DESC LIMIT $4)`
+			AND preview_id IS NOT DISTINCT FROM NULLIF($5, '') AND (trigger = 'preview') = ($6 = 'preview')
+			ORDER BY created_at DESC LIMIT $4)`
 	// insertBuildSQL writes the build only when the project holds the site or app it names.
 	insertBuildSQL = `INSERT INTO site_builds (id, kind, site_id, app_id, project_id, status, trigger, commit_sha, commit_message,
 		settings, delivery_id, cpu_millis, memory, disk, timeout_seconds, project_concurrency, requested_by, created_at,
@@ -128,7 +130,7 @@ func (s *PostgresStore) Enqueue(ctx context.Context, build *Build, keep int) (bo
 	if err := requireTouched(result, ErrNotConnected); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, trimSQL, targetArgs(target, keep, build.PreviewID)...); err != nil {
+	if _, err := tx.ExecContext(ctx, trimSQL, targetArgs(target, keep, build.PreviewID, build.Trigger)...); err != nil {
 		return false, fmt.Errorf("trim the build history: %w", err)
 	}
 	return true, tx.Commit()

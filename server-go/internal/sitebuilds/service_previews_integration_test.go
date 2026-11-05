@@ -5,6 +5,7 @@ package sitebuilds_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -252,6 +253,54 @@ func TestPreviewPastThePlanIsAFailedBuildWithTheReason(t *testing.T) {
 	refused := h.Builds()[0]
 	if refused.Status != sitebuilds.StatusFailed || refused.FailureKind != sitebuilds.FailPreviewLimit || !strings.Contains(refused.FailureReason, "previews") {
 		t.Fatalf("refused build = %+v", refused)
+	}
+	if statuses := h.GitHub.Statuses(prSHA); len(statuses) != 1 || statuses[0].State != gitprovider.StatusFailure {
+		t.Fatalf("statuses = %+v", statuses)
+	}
+}
+
+// Refused previews have no preview id; trimming them must never count them as production builds.
+func TestRefusedPreviewsNeverTrimTheProductionBuildHistory(t *testing.T) {
+	h := previewHarness(t, sitebuildstest.Options{MaxPreviews: 1}, sitebuilds.PreviewModeBranches)
+	production := h.Builds()[0]
+	if production.Trigger == sitebuilds.TriggerPreview || production.Status != sitebuilds.StatusSucceeded {
+		t.Fatalf("first build = %+v, want the production build", production)
+	}
+	if _, err := h.Push("feat/held", featSHA, "d-trim-held"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 35; i++ {
+		branch := fmt.Sprintf("feat/refused-%d", i)
+		if queued, err := h.Push(branch, prSHA, "d-trim-"+branch); err != nil || queued != 1 {
+			t.Fatalf("push %s queued %d, %v; want the refusal recorded", branch, queued, err)
+		}
+	}
+	kept := h.Build(production.ID)
+	if kept == nil || kept.Status != sitebuilds.StatusSucceeded || kept.Log == "" {
+		t.Fatalf("production build after 35 refused previews = %+v, want it and its log kept", kept)
+	}
+}
+
+// A preview past its hourly builds is kept as a failed build and a failed preview, never dropped.
+func TestPreviewPastItsHourlyBuildsIsAFailedBuildAndAFailedPreview(t *testing.T) {
+	h := previewHarness(t, sitebuildstest.Options{PerHour: 1, MaxPreviews: 10}, sitebuilds.PreviewModeBranches)
+	if _, err := h.Push("feat/a", featSHA, "d-hour-1"); err != nil {
+		t.Fatal(err)
+	}
+	if queued, err := h.Push("feat/b", prSHA, "d-hour-2"); err != nil || queued != 1 {
+		t.Fatalf("queued %d, %v; want the refusal recorded", queued, err)
+	}
+	refused := h.Builds()[0]
+	if refused.Trigger != sitebuilds.TriggerPreview || refused.Status != sitebuilds.StatusFailed ||
+		refused.FailureKind != sitebuilds.FailRateLimited || refused.PreviewID == "" {
+		t.Fatalf("refused build = %+v", refused)
+	}
+	failed := false
+	for _, preview := range previews(t, h) {
+		failed = failed || (preview.ID == refused.PreviewID && preview.Status == sites.PreviewFailed)
+	}
+	if !failed {
+		t.Fatalf("previews = %+v, want the refused build's preview FAILED", previews(t, h))
 	}
 	if statuses := h.GitHub.Statuses(prSHA); len(statuses) != 1 || statuses[0].State != gitprovider.StatusFailure {
 		t.Fatalf("statuses = %+v", statuses)
