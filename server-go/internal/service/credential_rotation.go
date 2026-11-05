@@ -99,28 +99,41 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 		return nil, err
 	}
 	var rotated []string
+	var rotateErr error
 	for _, target := range rotationTargets(inst, filed) {
 		target.serverCA = serverCA
 		authenticatesByCertificate, err := s.authenticatesByCertificate(projectID, target.role)
 		if err != nil {
-			return nil, err
+			rotateErr = err
+			break
 		}
 		if authenticatesByCertificate {
 			continue
 		}
 		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
-			return nil, fmt.Errorf("rotate %s credential: %w", target.role, err)
+			rotateErr = fmt.Errorf("rotate %s credential: %w", target.role, err)
+			break
 		}
 		rotated = append(rotated, target.username)
 	}
 	// Only once every password has changed, so a copy that cannot end its
-	// sessions never holds a role back on its old password.
-	if len(rotated) > 0 && s.endsSessionsOnRotation(ctx) {
-		if err := s.endRoleSessions(ctx, inst, rotated); err != nil {
-			return nil, fmt.Errorf("the passwords changed but the sessions opened with the old ones were not all ended: %w", err)
-		}
+	// sessions never holds a role back on its old password; a later role
+	// failing still ends the sessions of those already rotated.
+	if err := errors.Join(rotateErr, s.endRotatedSessions(ctx, inst, rotated)); err != nil {
+		return nil, err
 	}
 	return s.GetCredentials(ctx, projectID)
+}
+
+// endRotatedSessions ends the sessions opened with the rotated roles' old passwords.
+func (s *ProvisioningService) endRotatedSessions(ctx context.Context, inst *domain.DatabaseInstance, rotated []string) error {
+	if len(rotated) == 0 || !s.endsSessionsOnRotation(ctx) {
+		return nil
+	}
+	if err := s.endRoleSessions(ctx, inst, rotated); err != nil {
+		return fmt.Errorf("the passwords changed but the sessions opened with the old ones were not all ended: %w", err)
+	}
+	return nil
 }
 
 // authenticatesByCertificate reports whether a platform role's record carries

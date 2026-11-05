@@ -286,3 +286,43 @@ func TestRotationTellsCredentialObservers(t *testing.T) {
 		t.Fatalf("observer told %v, want the project once per role", observer.projects)
 	}
 }
+
+// A later role failing does not leave the roles already rotated with their
+// old sessions open; both failures reach the caller.
+func TestRotationEndsRotatedRolesSessionsWhenALaterRoleFails(t *testing.T) {
+	h := newRotationHarness(t)
+	h.clusterWithReplicas()
+	h.readRoleOn()
+	h.verifier.accept = func(username, _ string) error {
+		if username == rotOwner {
+			return errors.New("authentication failed")
+		}
+		return nil
+	}
+	h.kube.ExecAnswerInPod = func(pod string, _ []string) (string, error) {
+		switch pod {
+		case rotPrimary:
+			return rotPrimaryLSN + "\n", nil
+		case rotProject + "-postgres-3":
+			return "", errors.New("the replica has not replayed the password change")
+		}
+		return "", nil
+	}
+
+	_, err := h.svc.RotateCredentials(context.Background(), rotProject)
+	if err == nil || !strings.Contains(err.Error(), "rotate admin credential") || !strings.Contains(err.Error(), rotProject+"-postgres-3") {
+		t.Fatalf("err = %v, want the owner's failure and the unended sessions", err)
+	}
+	scripts := sessionScripts(h.kube)
+	if len(scripts) != 3 {
+		t.Fatalf("session scripts = %d, want one per copy", len(scripts))
+	}
+	for _, role := range []string{roleAuthAdmin, roleApp} {
+		if !strings.Contains(scripts[0], sqlTextLiteral(role)) {
+			t.Errorf("%s was rotated but its sessions were left open", role)
+		}
+	}
+	if strings.Contains(scripts[0], sqlTextLiteral(rotOwner)) {
+		t.Error("the owner's sessions were ended though its password did not change")
+	}
+}
