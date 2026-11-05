@@ -166,3 +166,21 @@ func firstLoopbackRuleFor(lines []string, role string) string {
 	}
 	return "(operator catch-all)"
 }
+
+// The read-only login reaches only the project's database: elsewhere no
+// trigger refuses it DDL (EXC-675).
+func TestTheReaderLogsInOnlyToTheProjectDatabase(t *testing.T) {
+	for _, opts := range []PostgreSQLClusterOpts{plainTLSOpts(), documentDBOpts("owner_doc")} {
+		lines := hbaLines(t, opts)
+		if got := methodOf(firstRuleFor(lines, "excalibase_reader", "appdb", true)); got != "scram-sha-256" {
+			t.Errorf("the reader cannot reach its database: %q", got)
+		}
+		for _, database := range []string{"postgres", "template1", "template0"} {
+			for _, overTLS := range []bool{true, false} {
+				if got := methodOf(firstRuleFor(lines, "excalibase_reader", database, overTLS)); got != "reject" {
+					t.Errorf("the reader reaches %s (tls %v): %q", database, overTLS, got)
+				}
+			}
+		}
+	}
+}

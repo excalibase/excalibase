@@ -420,3 +420,55 @@ func TestReadAddress_AnUnrecordedEnableTakesItsServiceDown(t *testing.T) {
 		t.Fatal("a read port answers that nothing records")
 	}
 }
+
+type readerLogins struct {
+	filed bool
+	err   error
+}
+
+func (r readerLogins) HasReaderLogin(string) (bool, error) { return r.filed, r.err }
+
+// EXC-675: with its feature on, the read address names the SELECT-only login,
+// inside the project and on the public port.
+func TestReadAddress_NamesTheReaderWhileItsFeatureIsOn(t *testing.T) {
+	cases := []struct {
+		name   string
+		flags  features.Flags
+		filed  bool
+		reader bool
+	}{
+		{"feature off", features.NewStatic(features.DBReadAddress), true, false},
+		{"no reader filed", features.NewStatic(features.DBReadAddress, features.DBReadRole), false, false},
+		{"reader filed", features.NewStatic(features.DBReadAddress, features.DBReadRole), true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newReadHarness(t, 3, true)
+			h.reader = NewDBReadAddressService(h.svc, h.store, tc.flags)
+			h.reader.UseReaderLogins(readerLogins{filed: tc.filed})
+			h.openPublic(t)
+			view := h.enable(t)
+			want := "app_user"
+			if tc.reader {
+				want = roleReader
+			}
+			if view.Username != want || view.ReadOnlyLogin != tc.reader {
+				t.Fatalf("username %q readOnlyLogin %v, want %q", view.Username, view.ReadOnlyLogin, want)
+			}
+			for _, connection := range []string{view.Internal.ConnectionString, view.ConnectionString} {
+				if !strings.Contains(connection, want+"@") {
+					t.Errorf("connection string %q does not name %s", connection, want)
+				}
+			}
+		})
+	}
+}
+
+func TestReadAddress_AnUnreadableReaderRecordIsAnError(t *testing.T) {
+	h := newReadHarness(t, 3, true)
+	h.reader = NewDBReadAddressService(h.svc, h.store, features.NewStatic(features.DBReadAddress, features.DBReadRole))
+	h.reader.UseReaderLogins(readerLogins{err: errors.New("vault sealed")})
+	if _, err := h.reader.ReadAddress(context.Background(), endpointProject); err == nil {
+		t.Fatal("a vault that cannot answer read as no reader")
+	}
+}

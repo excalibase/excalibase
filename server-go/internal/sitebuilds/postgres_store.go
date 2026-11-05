@@ -138,8 +138,12 @@ func (s *PostgresStore) ForgetInstallation(ctx context.Context, provider string,
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return 0, fmt.Errorf("forget an installation's connections: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, cancelBuildsSQL, pq.Array(forgotten), "the GitHub App no longer covers the repository"); err != nil {
+	if _, err := tx.ExecContext(ctx, cancelBuildsSQL, pq.Array(forgotten), appLostReason); err != nil {
 		return 0, fmt.Errorf("cancel the forgotten sites' builds: %w", err)
+	}
+	apps, err := forgetAppConnections(ctx, tx, provider, installationID, repositoryIDs)
+	if err != nil {
+		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx, forgetGrantsSQL, provider, installationID, pq.Array(repositoryIDs)); err != nil {
 		return 0, fmt.Errorf("forget an installation's grants: %w", err)
@@ -147,15 +151,18 @@ func (s *PostgresStore) ForgetInstallation(ctx context.Context, provider string,
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("forget an installation: %w", err)
 	}
-	return len(forgotten), nil
+	return len(forgotten) + apps, nil
 }
+
+const appLostReason = "the GitHub App no longer covers the repository"
 
 func (s *PostgresStore) SaveSignIn(ctx context.Context, stateHash string, signIn SignIn, expires time.Time) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM site_git_states WHERE expires_at < NOW()`); err != nil {
 		return fmt.Errorf("clear expired sign-ins: %w", err)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO site_git_states (state_hash, user_id, project_id, site_id, browser_hash, expires_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-		stateHash, signIn.UserID, signIn.ProjectID, signIn.SiteID, signIn.BrowserHash, expires)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO site_git_states (state_hash, user_id, project_id, site_id, app_id, browser_hash, expires_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7)`,
+		stateHash, signIn.UserID, signIn.ProjectID, signIn.SiteID, signIn.AppID, signIn.BrowserHash, expires)
 	if err != nil {
 		return fmt.Errorf("record the sign-in: %w", err)
 	}
@@ -165,7 +172,8 @@ func (s *PostgresStore) SaveSignIn(ctx context.Context, stateHash string, signIn
 func (s *PostgresStore) TakeSignIn(ctx context.Context, stateHash string, now time.Time) (SignIn, error) {
 	var signIn SignIn
 	err := s.db.QueryRowContext(ctx, `DELETE FROM site_git_states WHERE state_hash = $1 AND expires_at > $2
-		RETURNING user_id, project_id, site_id, browser_hash`, stateHash, now).Scan(&signIn.UserID, &signIn.ProjectID, &signIn.SiteID, &signIn.BrowserHash)
+		RETURNING user_id, project_id, COALESCE(site_id, ''), COALESCE(app_id, ''), browser_hash`, stateHash, now).
+		Scan(&signIn.UserID, &signIn.ProjectID, &signIn.SiteID, &signIn.AppID, &signIn.BrowserHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SignIn{}, ErrStateInvalid
 	}
@@ -276,24 +284,44 @@ const forgetGrantsSQL = `DELETE FROM site_git_grants WHERE provider = $1 AND ins
 const cancelBuildsSQL = `UPDATE site_builds SET status = 'CANCELLED', failure_reason = $2, finished_at = NOW(),
 	lease_holder = NULL, lease_until = NULL WHERE site_id = ANY($1) AND status IN ('QUEUED', 'RUNNING')`
 
-func (s *PostgresStore) CancelSiteBuilds(ctx context.Context, siteID, reason string) error {
-	if _, err := s.db.ExecContext(ctx, cancelBuildsSQL, pq.Array([]string{siteID}), reason); err != nil {
-		return fmt.Errorf("cancel the site's builds: %w", err)
+func (s *PostgresStore) CancelBuilds(ctx context.Context, target Target, reason string) error {
+	var err error
+	if target.Kind == KindApp {
+		_, err = s.db.ExecContext(ctx, cancelAppBuildsSQL, pq.Array([]string{target.ProjectID}), pq.Array([]string{target.ID}), reason)
+	} else {
+		_, err = s.db.ExecContext(ctx, cancelBuildsSQL, pq.Array([]string{target.ID}), reason)
+	}
+	if err != nil {
+		return fmt.Errorf("cancel the %s's builds: %w", target.Kind, err)
 	}
 	return nil
 }
 
-func (s *PostgresStore) DeactivateConnection(ctx context.Context, siteID, reason string) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE site_git_connections SET inactive_reason = $2, updated_at = NOW() WHERE site_id = $1`,
-		siteID, reason); err != nil {
-		return fmt.Errorf("deactivate the site's repository: %w", err)
+func (s *PostgresStore) DeactivateConnection(ctx context.Context, target Target, reason string) error {
+	var err error
+	if target.Kind == KindApp {
+		_, err = s.db.ExecContext(ctx, `UPDATE app_git_connections SET inactive_reason = $3, updated_at = NOW()
+			WHERE project_id = $1 AND app_id = $2`, target.ProjectID, target.ID, reason)
+	} else {
+		_, err = s.db.ExecContext(ctx, `UPDATE site_git_connections SET inactive_reason = $2, updated_at = NOW() WHERE site_id = $1`,
+			target.ID, reason)
+	}
+	if err != nil {
+		return fmt.Errorf("deactivate the %s's repository: %w", target.Kind, err)
 	}
 	return nil
 }
 
-func (s *PostgresStore) RenameRepository(ctx context.Context, siteID string, repositoryID int64, fullName string) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE site_git_connections SET repository = $3, updated_at = NOW()
-		WHERE site_id = $1 AND repository_id = $2`, siteID, repositoryID, fullName); err != nil {
+func (s *PostgresStore) RenameRepository(ctx context.Context, target Target, repositoryID int64, fullName string) error {
+	var err error
+	if target.Kind == KindApp {
+		_, err = s.db.ExecContext(ctx, `UPDATE app_git_connections SET repository = $4, updated_at = NOW()
+			WHERE project_id = $1 AND app_id = $2 AND repository_id = $3`, target.ProjectID, target.ID, repositoryID, fullName)
+	} else {
+		_, err = s.db.ExecContext(ctx, `UPDATE site_git_connections SET repository = $3, updated_at = NOW()
+			WHERE site_id = $1 AND repository_id = $2`, target.ID, repositoryID, fullName)
+	}
+	if err != nil {
 		return fmt.Errorf("record the repository's new name: %w", err)
 	}
 	return nil

@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
 // A DocumentDB project on a single Docker or Podman host (EXC-576) is the
@@ -69,7 +70,7 @@ func DocumentDBDatabaseSpec(projectID, major, dbName, password, owner string, li
 			"POSTGRES_DB":       dbName,
 			"POSTGRES_PASSWORD": password,
 		},
-		Cmd:        []string{"bash", "-c", documentDBStartScript(owner)},
+		Cmd:        []string{"bash", "-c", documentDBStartScript(owner, dbName)},
 		Ports:      map[string]string{"5432": ports.Postgres, strconv.Itoa(config.DocumentDBGatewayPort): ports.Mongo},
 		Limits:     limits,
 		DataVolume: documentDBDataVolume,
@@ -80,7 +81,7 @@ func DocumentDBDatabaseSpec(projectID, major, dbName, password, owner string, li
 // documentDBStartScript initialises an empty data directory the way the
 // official image's entrypoint does (superuser password, the project's
 // database), writes the platform's pg_hba and runs postgres.
-func documentDBStartScript(owner string) string {
+func documentDBStartScript(owner, dbName string) string {
 	return `set -eu
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
   pwfile=$(mktemp)
@@ -90,7 +91,7 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
   printf 'CREATE DATABASE "%s";\n' "${POSTGRES_DB//\"/\"\"}" | postgres --single -D "$PGDATA" postgres >/dev/null
 fi
 cat > ` + documentDBHBAFile + ` <<'HBA'
-` + strings.Join(DocumentDBHBA(owner), "\n") + `
+` + strings.Join(DocumentDBHBA(owner, dbName), "\n") + `
 HBA
 exec postgres -D "$PGDATA" ` + strings.Join(documentDBServerArgs(), " ")
 }
@@ -119,8 +120,9 @@ func documentDBServerArgs() []string {
 // no password admits from the network. The
 // socket, which only the container's own postgres user can reach (the gateway
 // shares the network, not the filesystem), is trusted, as the official image
-// trusts it. An owner that is not a plain role name gets no line.
-func DocumentDBHBA(owner string) []string {
+// trusts it. An owner that is not a plain role name gets no line. The reader
+// reaches only the project's database.
+func DocumentDBHBA(owner, dbName string) []string {
 	lines := []string{"local all all trust", "local replication all trust"}
 	roles := []string{config.DocumentDBGatewayRole}
 	if domain.ValidateMasterUsername(owner) == nil {
@@ -129,6 +131,7 @@ func DocumentDBHBA(owner string) []string {
 	for _, role := range append(roles, "+"+config.DocumentDBMongoUsersGroup) {
 		lines = append(lines, "host all "+role+" 127.0.0.1/32 trust", "host all "+role+" ::1/128 trust")
 	}
+	lines = append(lines, pgroles.ReaderHBA("host", dbName)...)
 	return append(lines,
 		"host all +"+config.DocumentDBMongoUsersGroup+" all reject",
 		superuserNetworkReject,

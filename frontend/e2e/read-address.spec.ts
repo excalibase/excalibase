@@ -63,6 +63,28 @@ test.describe('Read-only address', () => {
     expect(puts).toEqual([{ enabled: true }]);
   });
 
+  // EXC-675: the card names the read-only login and Connect hands an admin its password.
+  test('the read address signs in with the read-only login', async ({ page }) => {
+    await mockControlPlane(page, { dbreadaddress: true, dbreadrole: true },
+      { ...readAddress, username: 'excalibase_reader', readOnlyLogin: true } as never);
+    await page.route('**/api/provision/test-project/credentials', (route) =>
+      route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          projectId: 'test-project', host: 'localhost', port: 5432, databaseName: 'testdb', username: 'app',
+          password: 'owner-pass', connectionUrl: 'postgresql://app:owner-pass@localhost:5432/testdb',
+          readerUsername: 'excalibase_reader', readerPassword: 'reader-pass',
+        }),
+      }),
+    );
+    await page.goto('/project/test-project/settings');
+    await expect(page.getByTestId('read-address-login')).toContainText('excalibase_reader, a login that can only read');
+    await expect(page.getByTestId('conn-reader-username').first()).toHaveText('excalibase_reader');
+    await expect(page.getByTestId('conn-reader-password').first()).not.toContainText('reader-pass');
+    await page.getByTestId('conn-reveal-password').first().click();
+    await expect(page.getByTestId('conn-reader-password').first()).toHaveText('reader-pass');
+  });
+
   test('one copy explains there is no replica', async ({ page }) => {
     await mockControlPlane(page, { dbreadaddress: true }, { ...readAddress, replicas: 0, reason: 'one-copy', internal: undefined } as never);
     await page.goto('/project/test-project/settings');

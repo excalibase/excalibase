@@ -119,7 +119,7 @@ func (s *ProvisioningService) filedPasswordRoles(projectID string) ([]RolePasswo
 		return nil, err
 	}
 	roles := []RolePassword{}
-	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher} {
+	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher, roleReader} {
 		path := vaultCredentialPath(projectID, role)
 		if !filed[path] {
 			continue

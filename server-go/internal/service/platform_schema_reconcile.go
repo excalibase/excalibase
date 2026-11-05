@@ -188,6 +188,12 @@ func (s *ProvisioningService) filedRoleCredentials(projectID string) (projectRol
 		}
 		*target = value
 	}
+	if filed[vaultCredentialPath(projectID, roleReader)] {
+		// A filed reader keeps its password; an unfiled one is not minted here.
+		if creds.readerPassword, err = password(roleReader); err != nil {
+			return projectRoleCredentials{}, false, err
+		}
+	}
 	return creds, !filed[vaultCredentialPath(projectID, roleScheduler)], nil
 }
 

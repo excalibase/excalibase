@@ -13,6 +13,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -366,5 +367,35 @@ func TestSingleHostMySQLUpgradeToItsOwnVersionIsANoop(t *testing.T) {
 	engine.refuseImage, _ = config.MySQLImage(inst.MySQLVersion)
 	if err := svc.UpgradeVersion(context.Background(), inst.ProjectID, inst.MySQLVersion); err != nil {
 		t.Fatalf("UpgradeVersion: %v", err)
+	}
+}
+
+// EXC-675: with dbreadrole on, a MySQL project files the SELECT-only login,
+// rotates it with the rest, and a rotation ends the old sessions in the container.
+func TestSingleHostMySQLReaderIsFiledRotatedAndSessionsEnd(t *testing.T) {
+	svc, store, engine := setupSingleHostMySQL(t)
+	svc.SetFeatures(features.NewStatic(features.DBReadRole))
+	svc.SetCredentialVerifier(&fakeRoleVerifier{})
+	inst := provisionMySQL(t, svc, store, "")
+	record, err := svc.vault.Get(vaultCredentialPath(inst.ProjectID, roleReader))
+	if err != nil || record["username"] != roleReader || record["engine"] != "mysql" {
+		t.Fatalf("reader record %v, %v", record, err)
+	}
+	if !strings.Contains(engine.fed(), "GRANT SELECT, SHOW VIEW ON `"+inst.DatabaseName+"`.* TO 'excalibase_reader'@'%'") {
+		t.Fatal("the reader was not created in the container")
+	}
+	before := len(engine.stdin)
+	if _, err := svc.RotateCredentials(context.Background(), inst.ProjectID); err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+	rotated := strings.Join(engine.stdin[before:], "\n")
+	rotatedReader, _ := svc.vault.Get(vaultCredentialPath(inst.ProjectID, roleReader))
+	if rotatedReader["password"] == record["password"] || !strings.Contains(rotated, "ALTER USER 'excalibase_reader'@'%'") {
+		t.Error("the reader was not rotated")
+	}
+	for _, user := range []string{roleAdmin, roleApp, roleAuthAdmin, roleReader} {
+		if !strings.Contains(rotated, "PROCESSLIST WHERE USER = '"+user+"'") {
+			t.Errorf("the %s sessions were not looked for", user)
+		}
 	}
 }

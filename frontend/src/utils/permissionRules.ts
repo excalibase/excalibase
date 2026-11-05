@@ -65,6 +65,7 @@ class ExpressionWalker {
     if (key === '_and' || key === '_or') return this.list(key, value, depth);
     if (key === '_not') return this.exp(value, depth + 1);
     if (key === '_exists') return this.exists(value, depth);
+    if (looksLikeSessionVariable(key)) return this.sessionComparison(key, value, depth);
     if (!COLUMN_NAME.test(key)) throw new Error(`"${key}" is not a column or relationship name`);
     if (!isPlainObject(value)) throw new Error(`"${key}" must map to an object`);
     if (Object.keys(value).some((op) => COMPARISON_OPERATORS.has(op))) {
@@ -90,6 +91,19 @@ class ExpressionWalker {
     this.exp(where, depth + 1);
   }
 
+  // A session variable against a fixed value (EXC-680), e.g. {"X-Excalibase-Aal": {"_eq": "aal2"}}.
+  private sessionComparison(variable: string, value: unknown, depth: number) {
+    if (!isSessionVariable(variable)) throw new Error(`"${variable}" is not a valid session variable`);
+    if (!isPlainObject(value) || Object.keys(value).length === 0) {
+      throw new Error(`"${variable}" must map to comparisons`);
+    }
+    this.count(depth + 1);
+    for (const [op, operand] of Object.entries(value)) {
+      const problem = sessionOperandProblem(op, operand);
+      if (problem) throw new Error(`"${variable}" ${op}: ${problem}`);
+    }
+  }
+
   private comparison(column: string, ops: Record<string, unknown>, depth: number) {
     this.count(depth + 1);
     for (const [op, operand] of Object.entries(ops)) {
@@ -98,6 +112,27 @@ class ExpressionWalker {
       if (problem) throw new Error(`"${column}" ${op}: ${problem}`);
     }
   }
+}
+
+function fixedTextProblem(value: unknown): string | null {
+  if (typeof value !== 'string') return 'takes a string';
+  if (looksLikeSessionVariable(value)) return 'compares with a fixed value, not another session variable';
+  return null;
+}
+
+// Session variables hold text: equality and membership against strings, or whether the request carries one.
+function sessionOperandProblem(op: string, value: unknown): string | null {
+  if (op === '_is_null') return typeof value === 'boolean' ? null : 'takes true or false';
+  if (op === '_eq' || op === '_neq') return fixedTextProblem(value);
+  if (op === '_in' || op === '_nin') {
+    if (!Array.isArray(value)) return 'takes an array of strings';
+    for (const item of value) {
+      const problem = fixedTextProblem(item);
+      if (problem) return problem;
+    }
+    return null;
+  }
+  return 'a session variable takes _eq, _neq, _in, _nin or _is_null';
 }
 
 function stringOperandProblem(text: string): string | null {
@@ -157,6 +192,34 @@ export function validateBoolExpText(text: string): { value: BoolExp | null; erro
 
 export function ownerOnlyExpression(column: string): BoolExp {
   return { [column]: { _eq: USER_ID_VARIABLE } };
+}
+
+/** Only users who passed the second sign-in step (MFA): their token says aal2. */
+export const SECOND_STEP_CHECK: BoolExp = { 'X-Excalibase-Aal': { _eq: 'aal2' } };
+
+function isSecondStepCheck(exp: unknown): boolean {
+  return JSON.stringify(exp) === JSON.stringify(SECOND_STEP_CHECK);
+}
+
+/**
+ * Adds the second-step check to the editor's text, keeping what is there. Text that is not JSON is
+ * returned as is, for the person to fix; an expression that already requires it is left alone.
+ */
+export function requireSecondStep(text: string): string {
+  let current: unknown = {};
+  if (text.trim() !== '') {
+    try {
+      current = JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+  if (!isPlainObject(current) || Object.keys(current).length === 0) {
+    return JSON.stringify(SECOND_STEP_CHECK, null, 2);
+  }
+  const terms = Array.isArray(current._and) && Object.keys(current).length === 1 ? current._and : [current];
+  if (isSecondStepCheck(current) || terms.some(isSecondStepCheck)) return text;
+  return JSON.stringify({ _and: [current, SECOND_STEP_CHECK] }, null, 2);
 }
 
 const ROLE_SHAPE = 'must be lower-case letters, digits and underscores, starting with a letter, at most 63 characters';

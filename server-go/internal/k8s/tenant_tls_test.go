@@ -34,6 +34,8 @@ func TestEveryNetworkLoginRequiresTLSByDefault(t *testing.T) {
 		"host all excalibase_scheduler all reject",
 		"host replication excalibase_scheduler all reject",
 		"hostssl all app all scram-sha-256",
+		"hostssl appdb excalibase_reader all scram-sha-256",
+		"host all excalibase_reader all reject",
 		"hostnossl all all all reject",
 		"hostnossl replication all all reject",
 	}

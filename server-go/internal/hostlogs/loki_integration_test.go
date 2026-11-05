@@ -40,8 +40,11 @@ func startBundledLoki(t *testing.T) string {
 			ExposedPorts: []string{"3100/tcp"},
 			Cmd:          []string{"-config.file=/etc/loki/loki.yaml", "-config.expand-env=true"},
 			Env:          map[string]string{"LOG_RETENTION": "168h", "LOG_RETENTION_FREE": "24h"},
-			Files:        []testcontainers.ContainerFile{{HostFilePath: config, ContainerFilePath: "/etc/loki/loki.yaml", FileMode: 0o644}},
-			WaitingFor:   wait.ForHTTP("/ready").WithPort("3100/tcp").WithStartupTimeout(120 * time.Second),
+			// A tmpfs at /loki, as compose's volume: on the container's own disk Loki
+			// refuses pushes once the host disk is 90% full (EXC-678).
+			Tmpfs:      map[string]string{"/loki": "rw,uid=10001,gid=10001"},
+			Files:      []testcontainers.ContainerFile{{HostFilePath: config, ContainerFilePath: "/etc/loki/loki.yaml", FileMode: 0o644}},
+			WaitingFor: wait.ForHTTP("/ready").WithPort("3100/tcp").WithStartupTimeout(120 * time.Second),
 		},
 		Started: true,
 	})
@@ -49,6 +52,7 @@ func startBundledLoki(t *testing.T) string {
 		t.Fatalf("start loki: %v", err)
 	}
 	t.Cleanup(func() { _ = container.Terminate(ctx) })
+	lokitest.LogsOnFailure(t, container)
 	host, _ := container.Host(ctx)
 	port, _ := container.MappedPort(ctx, "3100/tcp")
 	lokiURL := fmt.Sprintf("http://%s:%s", host, port.Port())

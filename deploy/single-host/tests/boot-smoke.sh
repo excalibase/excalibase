@@ -107,6 +107,8 @@ sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUB
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
 echo "FEATURE_DBREADADDRESS=true" >> "$W/.env"
+# The read-only login and rotation ending old sessions (EXC-675, rotation-journey.sh).
+echo "FEATURE_DBREADROLE=true" >> "$W/.env"
 [ -n "${REQUEST_METRICS:-}" ] && printf 'FEATURE_REQUESTMETRICS=true\nFEATURE_SLOWQUERIES=true\n' >> "$W/.env"
 # Stored logs go with a deleted project (EXC-678, log-search-journey.sh).
 [ -n "${HOST_LOGS:-}" ] && echo "FEATURE_LOGDELETION=true" >> "$W/.env"
@@ -298,6 +300,10 @@ else
   ld=$(c -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/projects/$PID/log-drains/")
   [ "$ld" = 404 ] && ok "log drains are off by default (404)" || ko "log drains answer $ld with the flag off"
 fi
+
+# Before the log search journey, which removes the project database container.
+. "$TESTS/rotation-journey.sh"
+rotation_journey "$PID" postgres "$TC"
 
 if [ -n "${HOST_LOGS:-}" ]; then
   . "$TESTS/log-search-journey.sh"
