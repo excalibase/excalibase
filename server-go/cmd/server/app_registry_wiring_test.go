@@ -172,18 +172,18 @@ func TestStartRegistrySweeper_OnlyWhereTheRegistryIssues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("postgres", "postgres://unused.invalid/db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	store := dbOnlyStore{db: db}
+	store := offlineStore(t)
 	// With a store and a reachable-looking address, only the CanIssue gate keeps this a no-op.
-	if stop, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: "ftp://zot"}}, store, nil, guard); err != nil || stop == nil {
-		t.Fatalf("a guard only registry sweeps nothing: %v", err)
+	unreachable := config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: "ftp://zot"}}
+	if parts, err := newAppRegistryParts(unreachable, store, nil, guard); err != nil || parts.sweeper != nil || parts.client != nil {
+		t.Fatalf("a guard only registry has nothing to sweep or push to: %+v %v", parts, err)
 	}
+	startRegistrySweeper(config.AppConfig{}, nil, appRegistryParts{})()
 	internal := appregistrytest.New(t)
-	if _, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: "ftp://zot"}}, store, nil, internal); err == nil {
+	if parts, err := newAppRegistryParts(config.AppConfig{}, nil, nil, internal); err != nil || parts.sweeper != nil {
+		t.Errorf("no platform store: %+v %v", parts, err)
+	}
+	if _, err := newAppRegistryParts(unreachable, store, nil, internal); err == nil {
 		t.Error("a registry address provisioning cannot call")
 	}
 	asked := make(chan struct{}, 1)
@@ -192,10 +192,11 @@ func TestStartRegistrySweeper_OnlyWhereTheRegistryIssues(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	t.Cleanup(zot.Close)
-	stop, err := startRegistrySweeper(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: zot.URL}}, store, fakestore.NewInstances(), internal)
-	if err != nil {
-		t.Fatal(err)
+	parts, err := newAppRegistryParts(config.AppConfig{AppRegistry: config.AppRegistryConfig{URL: zot.URL}}, store, fakestore.NewInstances(), internal)
+	if err != nil || parts.client == nil || parts.sweeper == nil {
+		t.Fatalf("%+v %v", parts, err)
 	}
+	stop := startRegistrySweeper(config.AppConfig{}, store, parts)
 	<-asked
 	stop()
 }

@@ -21,6 +21,7 @@ import (
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/gitprovider/githubapp"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/sites"
@@ -89,6 +90,7 @@ func settleQueue(t *testing.T, db *postgres.Store) {
 // fixedLimits sizes every build the same.
 type fixedLimits struct {
 	limits sitebuilds.Limits
+	app    sitebuilds.AppLimits
 	err    error
 }
 
@@ -98,6 +100,14 @@ func (f fixedLimits) BuildLimits(context.Context, string) (sitebuilds.Limits, er
 
 func (f fixedLimits) LargestBuild(context.Context) (sitebuilds.BuildSize, error) {
 	return sitebuilds.BuildSize{CPUMillis: 2000, Memory: "4Gi", Disk: "10Gi"}, f.err
+}
+
+func (f fixedLimits) AppBuildLimits(context.Context, string) (sitebuilds.AppLimits, error) {
+	return f.app, f.err
+}
+
+func (f fixedLimits) LargestAppBuild(context.Context) (sitebuilds.BuildSize, error) {
+	return sitebuilds.BuildSize{CPUMillis: 4000, Memory: "8Gi", Disk: "20Gi"}, f.err
 }
 
 var FreeLimits = sitebuilds.Limits{CPUMillis: 2000, Memory: "2Gi", Disk: "5Gi", TimeoutSeconds: 600, ProjectConcurrency: 1}
@@ -136,6 +146,9 @@ type Harness struct {
 	Runner       *FakeRunner
 	Dispatcher   *sitebuilds.Dispatcher
 	User         string
+	AppRunner    *FakeAppRunner
+	AppPublisher *FakePublisher
+	db           *postgres.Store
 }
 
 type Options struct {
@@ -144,6 +157,9 @@ type Options struct {
 	Secrets map[string]string
 	Limits  sitebuilds.Limits
 	Slots   int
+	// AppsOn switches on the appgitbuilds flag; AppLimits sizes app builds.
+	AppsOn    bool
+	AppLimits sitebuilds.AppLimits
 }
 
 func New(t *testing.T, options Options) *Harness {
@@ -169,6 +185,36 @@ func New(t *testing.T, options Options) *Harness {
 	settleQueue(t, db)
 	ids := nextIDs.Add(10)
 	installation, siteRepo, privateRepo := ids, ids+1, ids+2
+	fake, client := fakeGitHub(t, installation, siteRepo, privateRepo)
+	store := sitebuilds.NewPostgresStore(db.DB())
+	serviceOptions := sitebuilds.Options{Mode: sitebuilds.ModeOn, CallbackURL: CallbackURL, NodeImage: "node"}
+	if options.Members != nil {
+		serviceOptions.Members = options.Members
+	}
+	if options.AppLimits.CPUMillis == 0 {
+		options.AppLimits = FreeAppLimits
+	}
+	limits := fixedLimits{limits: options.Limits, app: options.AppLimits}
+	service := sitebuilds.NewService(store, client, siteService, limits, memorySecrets{values: options.Secrets}, serviceOptions)
+	service.EnableApps(sitebuilds.AppSupport{Apps: apphost.NewPostgresAppStore(db.DB()), Limits: limits, Files: client, Flags: appFlags(options.AppsOn)})
+	runner := newFakeRunner(t)
+	if options.Slots == 0 {
+		options.Slots = 100
+	}
+	dispatcher := sitebuilds.NewDispatcher(service, runner, sitebuilds.DispatcherOptions{
+		Slots: options.Slots, Holder: "replica-" + project, SpoolDir: t.TempDir(), StatusPoll: 10 * time.Millisecond,
+		LogEvery: 10 * time.Millisecond, DeployRetry: 10 * time.Millisecond, Lease: 30 * time.Second,
+		PendingGrace: 200 * time.Millisecond, ShutdownGrace: 50 * time.Millisecond,
+	})
+	appRunner, appPublisher := &FakeAppRunner{}, &FakePublisher{}
+	dispatcher.EnableApps(appRunner, appPublisher)
+	return &Harness{t: t, Installation: installation, SiteRepo: siteRepo, PrivateRepo: privateRepo, Project: project, Site: site, Sites: siteService, Publisher: publisher, GitHub: fake, Store: store,
+		Service: service, Runner: runner, Dispatcher: dispatcher, User: "u-" + project, AppRunner: appRunner, AppPublisher: appPublisher, db: db}
+}
+
+// fakeGitHub serves the harness's two repositories through one installation, and the App client reaching it.
+func fakeGitHub(t *testing.T, installation, siteRepo, privateRepo int64) (*githubfake.GitHub, *githubapp.Client) {
+	t.Helper()
 	fake := githubfake.New(t)
 	fake.AddInstallation(installation, "acme",
 		&githubfake.Repo{ID: siteRepo, FullName: siteRepoName, DefaultBranch: "main", Branches: map[string]string{"main": HeadSHA}},
@@ -179,24 +225,7 @@ func New(t *testing.T, options Options) *Harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := sitebuilds.NewPostgresStore(db.DB())
-	serviceOptions := sitebuilds.Options{Mode: sitebuilds.ModeOn, CallbackURL: CallbackURL, NodeImage: "node"}
-	if options.Members != nil {
-		serviceOptions.Members = options.Members
-	}
-	service := sitebuilds.NewService(store, client, siteService, fixedLimits{limits: options.Limits},
-		memorySecrets{values: options.Secrets}, serviceOptions)
-	runner := newFakeRunner(t)
-	if options.Slots == 0 {
-		options.Slots = 100
-	}
-	dispatcher := sitebuilds.NewDispatcher(service, runner, sitebuilds.DispatcherOptions{
-		Slots: options.Slots, Holder: "replica-" + project, SpoolDir: t.TempDir(), StatusPoll: 10 * time.Millisecond,
-		LogEvery: 10 * time.Millisecond, DeployRetry: 10 * time.Millisecond, Lease: 30 * time.Second,
-		PendingGrace: 200 * time.Millisecond, ShutdownGrace: 50 * time.Millisecond,
-	})
-	return &Harness{t: t, Installation: installation, SiteRepo: siteRepo, PrivateRepo: privateRepo, Project: project, Site: site, Sites: siteService, Publisher: publisher, GitHub: fake, Store: store,
-		Service: service, Runner: runner, Dispatcher: dispatcher, User: "u-" + project}
+	return fake, client
 }
 
 // SignIn runs the GitHub sign-in for the harness user, who sees only acme/site.
@@ -350,6 +379,8 @@ func (f *FakeRunner) Remove(_ context.Context, id string) error {
 	f.removed = append(f.removed, id)
 	return nil
 }
+
+func (f *FakeRunner) ForgetCloneCredential(context.Context, string) error { return nil }
 
 func (f *FakeRunner) Specs() []sitebuilds.RunSpec {
 	f.mu.Lock()

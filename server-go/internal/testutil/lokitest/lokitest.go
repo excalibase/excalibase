@@ -3,6 +3,7 @@ package lokitest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -14,6 +15,9 @@ import (
 
 // maxBody bounds how much of Loki's answer a failure quotes.
 const maxBody = 2 << 10
+
+// maxLog bounds how much of Loki's own log a failure quotes.
+const maxLog = 8 << 10
 
 // AcceptsWithin bounds the wait, after /ready, for Loki to store a push.
 const AcceptsWithin = 60 * time.Second
@@ -70,4 +74,38 @@ func pushProbe(lokiURL string) (int, string, error) {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode, Body(resp), nil
+}
+
+// LogSource is a container whose output can be read; testcontainers' is one.
+type LogSource interface {
+	Logs(ctx context.Context) (io.ReadCloser, error)
+}
+
+// Tail is the end of Loki's own log, where it says why it refuses pushes (a
+// full disk, for one: "disk usage exceeded threshold, throttling writes").
+func Tail(source LogSource) string {
+	reader, err := source.Logs(context.Background())
+	if err != nil {
+		return "(reading Loki's log: " + err.Error() + ")"
+	}
+	defer reader.Close()
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		return "(reading Loki's log: " + err.Error() + ")"
+	}
+	if len(raw) > maxLog {
+		raw = raw[len(raw)-maxLog:]
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// LogsOnFailure prints Loki's log when t fails, so a refused push is
+// explained by Loki and not guessed at.
+func LogsOnFailure(t testing.TB, source LogSource) {
+	t.Helper()
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("Loki's own log:\n%s", Tail(source))
+		}
+	})
 }

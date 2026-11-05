@@ -693,6 +693,13 @@ Two kinds of work pin a connection for longer than a query:
   Pause, resume and delete take a per-project lease so two replicas cannot
   act on one project at once. A pause waits for a backup to complete and for
   the database to shut down, so it can hold its connection for minutes.
+- **App image publishes — 1 each, for the whole push (flag `appgitbuilds`).**
+  A finished app build's publish holds its project's lock (a transaction
+  advisory lock) from the registry quota check through the push and the deploy
+  record, so a slow push pins that connection for as long as it uploads. Up to
+  `SITES_BUILD_SLOTS` publishes can run at once on a replica, so keep
+  `SITES_BUILD_SLOTS` well below `PLATFORM_DB_MAX_CONNS` minus the five standing
+  claims, or publishes and ordinary queries wait on the pool.
 
 So a replica needs `5 + (concurrent lifecycle operations) + (headroom for
 ordinary query traffic)`. The default pool is **20**, which leaves room for
