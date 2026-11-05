@@ -202,6 +202,8 @@ case "$tports" in "") ko "tenant port unknown" ;; *0.0.0.0*|*::*|*"[::]"*) ko "t
 $DOCKER logs excalibase-engine-proxy 2>&1 | grep -c ' 403 ' | xargs -I{} echo "info: proxy refusals during the run: {}"
 . "$TESTS/read-address-journey.sh"
 read_address_journey "$PID" postgres
+. "$TESTS/host-firewall-journey.sh"
+host_firewall_journey
 
 echo "== allow-list"
 AL=https://studio.localhost:$PORT/api/projects/$PID/db-endpoint/allowed-sources
