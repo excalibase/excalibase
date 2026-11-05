@@ -344,7 +344,11 @@ func (s *Service) publish(ctx context.Context, site *Site, rel release) error {
 	}
 	s.markPublished(ctx, rel.deploy)
 	// Written on every publish: idempotent, and it heals a missing entry.
-	if err := s.publisher.PutKV(ctx, site.Hostname, script); err != nil {
+	entry, err := RouteEntry(site, rel.limits)
+	if err != nil {
+		return err
+	}
+	if err := s.publisher.PutKV(ctx, site.Hostname, entry); err != nil {
 		return publishFailure(site, stepRoute, err)
 	}
 	return s.routeAfterPublish(ctx, site)

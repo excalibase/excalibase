@@ -71,6 +71,7 @@ jobs:
               - 'frontend/Dockerfile'
             sitesrouter:
               - 'edge/sites-router/**'
+              - 'server-go/internal/sites/testdata/router-entry-*'
             sitesoutbound:
               - 'edge/sites-outbound/**'
             sitebuilds:

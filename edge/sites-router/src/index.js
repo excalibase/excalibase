@@ -6,7 +6,8 @@
 //   SITES        dispatch namespace holding one `site-<site id>` Worker per site
 //   SITE_HOSTS   KV: hostname → script name (static site), or a JSON entry
 //                {script, project, cpuMs, subRequests, paused} (server site, EXC-661),
-//                written by the platform on deploy
+//                written by the platform (server-go/internal/sites RouteEntry; fixtures
+//                in server-go/internal/sites/testdata/router-entry-*)
 //   BASE_DOMAIN  the user-content domain, e.g. excalibase.app
 //   ABUSE_URL    https: or mailto: link shown on the 404 page
 //   OUTBOUND     set when the namespace has the outbound Worker bound (deploy.sh --outbound)
