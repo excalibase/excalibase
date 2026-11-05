@@ -31,7 +31,7 @@
 # (compose profile logdrains). Reads what --host-logs stores, so it turns that on too. The
 # forwarder refuses private ranges and the host's own addresses; behind NAT, add the public
 # address to LOG_FORWARDER_EXTRA_DENY_CIDRS.
-# --no-host-firewall: on Docker, the host-firewall service (compose profile hostfirewall)
+# --no-host-firewall: on Docker, the host-firewall service, which provisioning and the edge wait for,
 # drops new connections from the platform's bridges to this host, and forwarded traffic
 # from the tenants' bridge to 169.254.0.0/16 (cloud metadata) and private ranges, so a
 # tenant database reaches neither a host service nor the LAN. Leave it off to manage that
@@ -240,7 +240,6 @@ ENV
 profiles=
 firewall_env=
 if [ "$engine" = docker ] && [ -n "$host_firewall" ]; then
-  profiles=hostfirewall
   # The firewall lets tenants' DNS through only to the resolvers Docker forwards to:
   # systemd-resolved's upstream file when /etc/resolv.conf names only its stub, as Docker reads it.
   etc_resolv=${HOST_ETC_RESOLV_CONF:-/etc/resolv.conf}

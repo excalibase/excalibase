@@ -195,4 +195,17 @@ if run; then fail "the guard reported success without its rules"; fi
 reset
 run
 ! grep -q '^DOCKER-USER -i br-aa11bb22cc33\|^DOCKER-USER -i br-77aa88bb99cc' "$WORK/v4.rules" || fail "a platform network's forwarding is filtered"
+# 11. Off on purpose (HOST_FIREWALL=off, or rootless Podman at uid 0): healthy
+#     with no rule, so the services it gates start; never off by default.
+for off in HOST_FIREWALL=off ENGINE_SOCKET_UID=0; do
+  reset
+  rm "$WORK/bridges"
+  env "$off" PATH="$WORK/bin:$PATH" HOST_FIREWALL_ONCE=1 sh "$DIR/../host-firewall.sh" >"$WORK/out" 2>&1 || fail "$off: $(cat "$WORK/out")"
+  env "$off" PATH="$WORK/bin:$PATH" sh "$DIR/../host-firewall.sh" check >/dev/null 2>&1 || fail "$off: check failed"
+  [ ! -e "$WORK/v4.calls" ] || fail "$off: iptables was called"
+  grep -q 'off' "$WORK/out" || fail "$off: does not say it is off"
+done
+reset
+rm "$WORK/bridges"
+if HOST_FIREWALL=on run check; then fail "a value other than off turned it off"; fi
 echo "host-firewall: ok"

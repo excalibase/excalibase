@@ -16,8 +16,18 @@
 # bridge not on this host, or a Docker without DOCKER-USER stops it, and
 # `host-firewall.sh check` (the health check) fails until every rule is in place.
 #
-# Runs in the host's network namespace with NET_ADMIN (compose profile hostfirewall).
+# Runs in the host's network namespace with NET_ADMIN. provisioning and the edge
+# start only once it is healthy; off on purpose (HOST_FIREWALL=off, or rootless
+# Podman, whose bridges live in the user's own namespace) it is healthy with no rule.
 set -eu
+
+if [ "${HOST_FIREWALL:-}" = off ] || [ "${ENGINE_SOCKET_UID:-}" = 0 ]; then
+  [ "${1:-}" = check ] && exit 0
+  echo "host-firewall: off (HOST_FIREWALL=off or rootless Podman): no rule set, the host is guarded elsewhere"
+  [ "${HOST_FIREWALL_ONCE:-}" = 1 ] && exit 0
+  trap 'exit 0' TERM INT
+  while :; do sleep 3600 & wait $! || true; done
+fi
 
 HOST_CHAIN=EXCALIBASE-HOST
 TENANT_CHAIN=EXCALIBASE-TENANT

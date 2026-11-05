@@ -19,7 +19,7 @@ x-watcher-image: &watcher_image docker.io/excalibase/excalibase-watcher-go@sha25
 x-bridge-networks: &bridge_networks excalibase-platform,excalibase-engine,excalibase-tenants,excalibase-edge,excalibase-dataplane,excalibase-metrics,excalibase-cdc,excalibase-logs,excalibase-drains,excalibase-drains-out,excalibase-egress
 # The platform's long-running containers host monitoring reads (EXC-670): the
 # proxy admits their stats and state, by these exact names, and nothing else of theirs.
-x-platform-containers: &platform_containers excalibase-postgres,excalibase-nats,excalibase-objectstore,excalibase-engine-proxy,excalibase-provisioning,excalibase-studio,excalibase-auth,excalibase-graphql,excalibase-edge
+x-platform-containers: &platform_containers excalibase-postgres,excalibase-nats,excalibase-objectstore,excalibase-engine-proxy,excalibase-provisioning,excalibase-studio,excalibase-auth,excalibase-graphql,excalibase-edge,excalibase-host-firewall
 x-hardened: &hardened
   security_opt:
     - no-new-privileges:true
@@ -42,8 +42,7 @@ services:
       AUTH_HOOKS_DENY_CIDRS: ${AUTH_HOOKS_DENY_CIDRS:-}
       FEATURE_LOGDRAINS: ${FEATURE_LOGDRAINS:-false}
       LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
-      # The host firewall (EXC-683): on Docker, on or explicitly off, on a release that has it.
-      COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
+      # The host firewall (EXC-683): on Docker, on unless HOST_FIREWALL=off, on a release that has it.
       HOST_FIREWALL: ${HOST_FIREWALL:-}
       HOST_RESOLV_CONF: ${HOST_RESOLV_CONF:-}
       ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
@@ -462,6 +461,9 @@ services:
       # The host's network counters, one read-only file (init.sh --host-metrics); /dev/null otherwise.
       - ${HOST_METRICS_NET_DEV_SOURCE:-/dev/null}:/host/proc-net-dev:ro
     depends_on:
+      # Not unguarded (EXC-683): only once the host firewall's rules hold, or it is off on purpose.
+      host-firewall:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       engine-proxy:
@@ -708,6 +710,9 @@ services:
       - edge_data:/data
       - edge_config:/config
     depends_on:
+      # Not unguarded (EXC-683): only once the host firewall's rules hold, or it is off on purpose.
+      host-firewall:
+        condition: service_healthy
       studio:
         condition: service_started
     security_opt:
@@ -721,7 +726,8 @@ services:
       - dataplane
     restart: unless-stopped
 
-  # EXC-683 (init.sh adds the profile on Docker; --no-host-firewall leaves it off):
+  # EXC-683 (on unless HOST_FIREWALL=off, init.sh --no-host-firewall; no profile, so the
+  # services gated on it never start unguarded):
   # the platform's bridges have an address on the host, so a tenant database could
   # reach a host service listening on every address, and the tenant network routes
   # to the cloud's metadata service and the LAN. This drops new connections from
@@ -734,7 +740,6 @@ services:
   host-firewall:
     image: docker.io/excalibase/provisioning:${TAG:-1.5.0}
     container_name: excalibase-host-firewall
-    profiles: ["hostfirewall"]
     entrypoint: ["sh", "/host-firewall.sh"]
     user: "0:0"
     network_mode: host
@@ -742,6 +747,9 @@ services:
       HOST_FIREWALL_NETWORKS: *bridge_networks
       HOST_FIREWALL_TENANT_NETWORKS: excalibase-tenants
       HOST_FIREWALL_BRIDGES_FILE: /var/lib/excalibase-bridges/networks
+      # Off on purpose: HOST_FIREWALL=off (init.sh --no-host-firewall) or rootless Podman (uid 0).
+      HOST_FIREWALL: ${HOST_FIREWALL:-}
+      ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
     volumes:
       - ./host-firewall.sh:/host-firewall.sh:ro,z
       - bridges:/var/lib/excalibase-bridges:ro

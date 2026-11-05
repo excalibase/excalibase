@@ -74,25 +74,34 @@ if [ "${FEATURE_LOGDRAINS:-}" = true ]; then
 fi
 
 # Host firewall (EXC-683). On Docker the platform's bridges reach the host and
-# the tenants' bridge the LAN unless the hostfirewall profile runs, or the
-# operator turned it off on purpose. A .env from before it has neither: stop
-# here, on every up, rather than run unguarded. Rootless Podman (uid 0, which
-# init.sh writes for it alone) is exempt: its bridges live in the user's own
-# namespace and its engine has no DOCKER-USER chain.
+# the tenants' bridge the LAN unless it runs; it is on unless HOST_FIREWALL=off,
+# and provisioning and the edge wait for it healthy. Here, on every up, an
+# install missing what it needs is told so, rather than left waiting on it.
+# Rootless Podman (uid 0, which init.sh writes for it alone) is exempt: its
+# bridges live in the user's own namespace and its engine has no DOCKER-USER chain.
 if [ "${ENGINE_SOCKET_UID:-1000}" != 0 ]; then
-  case ",${COMPOSE_PROFILES:-}," in *,hostfirewall,*) firewall=on ;; *) firewall= ;; esac
   case "${HOST_FIREWALL:-}" in
-    off) [ -z "$firewall" ] || complain "HOST_FIREWALL=off but COMPOSE_PROFILES runs hostfirewall: keep one" ;;
-    "") [ -n "$firewall" ] || complain "the host firewall is off: add hostfirewall to COMPOSE_PROFILES in .env (COMPOSE_PROFILES=hostfirewall, comma-separated with any others) and HOST_RESOLV_CONF (see init.sh), or set HOST_FIREWALL=off to guard the host yourself" ;;
-    *) complain "HOST_FIREWALL must be off or unset, not ${HOST_FIREWALL}" ;;
+    off) firewall= ;;
+    "") firewall=on ;;
+    *) firewall=; complain "HOST_FIREWALL must be off or unset, not ${HOST_FIREWALL}" ;;
   esac
   if [ -n "$firewall" ]; then
-    # The firewall runs the release's image; 1.6.2 and before lack iptables and the proxy's bridges file.
-    version=${PLATFORM_TAG#v}
-    if printf '%s' "$version" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+$' &&
-      [ "$(printf '%s\n%s\n' "$version" 1.6.2 | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = 1.6.2 ]; then
-      complain "TAG ${PLATFORM_TAG} has no host firewall: set TAG in .env to a release after 1.6.2, or HOST_FIREWALL=off"
-    fi
+    # The firewall runs the platform image, and 1.6.2 and before lack iptables and the
+    # proxy's bridges file. Fail closed: only a plain release after 1.6.2, a trunk
+    # build or CI's own; floating tags (1.6, 1, latest) name 1.6.2 today.
+    tag=${PLATFORM_TAG:-}
+    case $tag in
+      ci) ;;
+      main-*) printf '%s' "${tag#main-}" | grep -Eq '^[0-9a-f]{7,40}$' || tag_refused=1 ;;
+      *)
+        if printf '%s' "$tag" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+$'; then
+          [ "$(printf '%s\n%s\n' "$tag" 1.6.2 | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" != 1.6.2 ] || tag_refused=1
+        else
+          tag_refused=1
+        fi
+        ;;
+    esac
+    [ -z "${tag_refused:-}" ] || complain "TAG '${tag}' does not run the host firewall: set TAG in .env to a trunk build (main-<sha>) until a release after 1.6.2 exists, or HOST_FIREWALL=off"
     [ -n "${HOST_RESOLV_CONF:-}" ] || complain "HOST_RESOLV_CONF is unset: the resolv.conf Docker forwards lookups to (/run/systemd/resolve/resolv.conf when /etc/resolv.conf names only 127.0.0.53, else /etc/resolv.conf)"
   fi
 fi
