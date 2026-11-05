@@ -11,6 +11,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/mysqltls"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 )
@@ -41,6 +42,9 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 		Admin: generatePassword(32), App: generatePassword(32),
 		AuthAdmin: generatePassword(32), Watcher: generatePassword(32),
 	}
+	if features.Enabled(ctx, s.flags, features.DBReadRole) {
+		passwords.Reader = generatePassword(32)
+	}
 	pc.SetStep("create the platform users")
 	if err := mysql.EnsurePlatformUsers(ctx, inst.Namespace, inst.ProjectID, inst.DatabaseName, passwords); err != nil {
 		return pc.Fail(err)
@@ -60,7 +64,11 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 	inst.Username = roleAdmin
 	for role, password := range map[string]string{
 		roleAdmin: passwords.Admin, roleApp: passwords.App, roleAuthAdmin: passwords.AuthAdmin, roleWatcher: passwords.Watcher,
+		roleReader: passwords.Reader,
 	} {
+		if password == "" {
+			continue
+		}
 		pc.SetStep("store " + role + " credentials")
 		if err := s.putCredentialRecord(inst.ProjectID, role, mysqlCredentialRecord(inst, role, password, serverCA), pc); err != nil {
 			return pc.Fail(err)
@@ -170,7 +178,7 @@ func (s *ProvisioningService) reapplyMySQLCredentials(ctx context.Context, inst 
 		return err
 	}
 	passwords := map[string]string{}
-	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher} {
+	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher, roleReader} {
 		path := vaultCredentialPath(inst.ProjectID, role)
 		if !filed[path] {
 			continue

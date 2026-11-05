@@ -506,7 +506,7 @@ func TestDisconnect_CancelsQueuedAndRunningBuilds(t *testing.T) {
 	running := h.Connect().Build
 	h.Dispatcher.Tick(ctx)
 	deadline := time.Now().Add(5 * time.Second)
-	// RUNNING is claimed before the job starts; wait for the job itself.
+	// RUNNING is written at the claim; the Job itself starts after the source checks.
 	for len(h.Runner.Specs()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}

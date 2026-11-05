@@ -204,7 +204,7 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	if err != nil {
 		return nil, err
 	}
-	if err := p.rejectSuperuserOverNetwork(ctx, containerID); err != nil {
+	if err := p.rejectSuperuserOverNetwork(ctx, containerID, dbName); err != nil {
 		return nil, err
 	}
 

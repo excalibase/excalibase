@@ -4,6 +4,7 @@ import { SidePanel } from '../ui/SidePanel';
 import { ConfirmModal } from '../ui/ConfirmModal';
 import { apiErrorMessage, type AnyPermission, type Operation } from '../../api/permissions';
 import { useDeleteTablePermission, useSaveTablePermission } from '../../hooks/usePermissions';
+import { useFeatureEnabled } from '../../hooks/useDeploymentMode';
 import { BoolExpEditor } from './BoolExpEditor';
 import { ColumnChecklist } from './ColumnChecklist';
 import { PresetsEditor } from './PresetsEditor';
@@ -54,6 +55,7 @@ export function PermissionEditor({ projectId, table, role, operation, existing, 
   const [serverError, setServerError] = useState<string | null>(null);
   const save = useSaveTablePermission(projectId);
   const remove = useDeleteTablePermission(projectId);
+  const { enabled: mfa } = useFeatureEnabled('authmfa');
   const errors = formErrors(operation, form);
   const patch = (next: Partial<PermissionForm>) => setForm((current) => ({ ...current, ...next }));
 
@@ -127,6 +129,7 @@ export function PermissionEditor({ projectId, table, role, operation, existing, 
             value={form.filter}
             error={errors.filter}
             columns={columns}
+            mfa={mfa}
             onChange={(filter) => patch({ filter })}
           />
         )}
@@ -138,6 +141,7 @@ export function PermissionEditor({ projectId, table, role, operation, existing, 
             value={form.check}
             error={errors.check}
             columns={columns}
+            mfa={mfa}
             onChange={(check) => patch({ check })}
           />
         )}

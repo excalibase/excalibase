@@ -183,6 +183,7 @@ func runServer(cfg config.AppConfig) {
 	// A project claimed for teardown must not keep an open pool on a database
 	// that is going away.
 	provSvc.AddDeletionObserver(projectDB)
+	provSvc.AddCredentialObserver(projectDB)
 
 	deps := buildHandlerDeps(handlerDepsArgs{
 		cfg:            cfg,
@@ -206,6 +207,7 @@ func runServer(cfg config.AppConfig) {
 	// survives, the namespace will not terminate, and the teardown times out
 	// waiting for it (EXC-431).
 	provSvc.AddDeletionObserver(deps.schemaHandler)
+	provSvc.AddCredentialObserver(deps.schemaHandler)
 	wireDocumentDBInstalled(cfg, provSvc, deps.backupHandler)
 
 	// How a customer reaches their database from outside the cluster
@@ -217,6 +219,7 @@ func runServer(cfg config.AppConfig) {
 		// The read address (EXC-666) wraps the endpoint so the lifecycle takes it along.
 		readStore, _ := sqlStore.(storage.DatabaseReadAddressStore)
 		withReadAddress := service.NewDBReadAddressService(dbEndpointSvc, readStore, cfg.Features())
+		withReadAddress.UseReaderLogins(provSvc)
 		dbEndpoints = withReadAddress
 		deps.provHandler.SetDBEndpointService(withReadAddress)
 		deps.dbAllowListHandler.SetAPI(dbEndpointSvc)
@@ -312,10 +315,7 @@ func runServer(cfg config.AppConfig) {
 	defer stopAppRollouts()
 	stopImageWatcher := startImageWatcher(cfg, deps.features, sqlStore, deps.appDeploySvc)
 	defer stopImageWatcher()
-	stopRegistrySweep, err := startRegistrySweeper(cfg, sqlStore, store, deps.internalRegistry)
-	if err != nil {
-		log.Fatalf("internal registry sweep (APP_REGISTRY_URL): %v", err)
-	}
+	stopRegistrySweep := startRegistrySweeper(cfg, sqlStore, deps.appRegistry)
 	defer stopRegistrySweep()
 	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
 	defer stopCredentialRenewal()
@@ -1144,6 +1144,8 @@ type handlerDeps struct {
 	internalRegistryH *handler.InternalRegistryHandler
 	// internalRegistry is the platform's registry for git builds; nil without one.
 	internalRegistry *appregistry.Internal
+	// appRegistry is the issuing registry's client and sweeper, shared by the sweep and app builds.
+	appRegistry appRegistryParts
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1347,6 +1349,8 @@ func buildProvisioningService(
 	// A rotated password is only good if the database accepts it, and the
 	// database is the only thing that can say so.
 	provSvc.SetCredentialVerifier(service.NewTenantRoleVerifier())
+	// The SELECT-only login and ending sessions on rotation (EXC-675).
+	provSvc.SetFeatures(cfg.Features())
 	provSvc.SetOrgStore(sqlStore)
 	provSvc.SetRestoredSettings(sqlStore)
 	provSvc.SetMigrationHistory(service.NewMigrationHistoryFiles(cfg.StoragePath))
@@ -1866,10 +1870,18 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	startServerSitesSweep(context.Background(), sitesSvc)
 	provSvc.SetSitePurger(sitesSvc)
 	provSvc.SetSiteRouter(sitesSvc)
+	appRegistry, err := newAppRegistryParts(cfg, sqlStore, store, internalRegistry)
+	if err != nil {
+		log.Fatalf("internal registry (APP_REGISTRY_URL): %v", err)
+	}
 	builds := newSiteBuilds(siteBuildArgs{cfg: cfg, sqlStore: sqlStore, kube: k8sClient, vault: vc, sites: sitesSvc,
 		limits:  service.NewSiteBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
-		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}, docker: a.dockerClient})
+		members: custommw.DeployTokenStanding{Users: sqlStore, Instances: store, Orgs: sqlStore}, docker: a.dockerClient,
+		apps: appBuildArgs{internal: internalRegistry, registry: appRegistry, deploys: appDeploySvc,
+			apps: apphost.NewPostgresAppStore(sqlStore.DB()), limits: service.NewAppBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
+			platformDB: sqlStore.DB()}})
 	return &handlerDeps{
+		appRegistry:           appRegistry,
 		siteBuilds:            builds,
 		provHandler:           provHandler,
 		dbAllowListHandler:    newDBAllowListHandler(sqlStore),
@@ -2446,6 +2458,8 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.Get("/logs", d.appLogHandler.Logs)
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
 				r.With(dev).Put("/secrets/{name}", d.appSecretHandler.Set)
+				// Git builds of apps (EXC-547): dark with appgitbuilds, but a connection can always be removed.
+				d.siteBuilds.apps.Routes(r, dev, features.Require(d.features, features.AppGitBuilds))
 				if d.appDomainHandler != nil {
 					r.Get("/certificate", d.appDomainHandler.HostCertificate)
 					r.Route("/domains", func(r chi.Router) {

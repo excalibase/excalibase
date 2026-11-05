@@ -31,6 +31,7 @@ var featureEnv = map[features.Feature]string{
 	features.AuthHooks:       "FEATURE_AUTHHOOKS",
 	features.DBAllowList:     "FEATURE_DBALLOWLIST",
 	features.DBReadAddress:   "FEATURE_DBREADADDRESS",
+	features.DBReadRole:      "FEATURE_DBREADROLE",
 	features.DBCopy:          "FEATURE_DBCOPY",
 	features.MajorUpgrade:    "FEATURE_MAJORUPGRADE",
 	features.TemplateCatalog: "FEATURE_TEMPLATECATALOG",

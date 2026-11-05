@@ -160,8 +160,9 @@ func (s *PostgresStore) SaveSignIn(ctx context.Context, stateHash string, signIn
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM site_git_states WHERE expires_at < NOW()`); err != nil {
 		return fmt.Errorf("clear expired sign-ins: %w", err)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO site_git_states (state_hash, user_id, project_id, site_id, browser_hash, expires_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-		stateHash, signIn.UserID, signIn.ProjectID, signIn.SiteID, signIn.BrowserHash, expires)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO site_git_states (state_hash, user_id, project_id, site_id, app_id, browser_hash, expires_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7)`,
+		stateHash, signIn.UserID, signIn.ProjectID, signIn.SiteID, signIn.AppID, signIn.BrowserHash, expires)
 	if err != nil {
 		return fmt.Errorf("record the sign-in: %w", err)
 	}
@@ -171,7 +172,8 @@ func (s *PostgresStore) SaveSignIn(ctx context.Context, stateHash string, signIn
 func (s *PostgresStore) TakeSignIn(ctx context.Context, stateHash string, now time.Time) (SignIn, error) {
 	var signIn SignIn
 	err := s.db.QueryRowContext(ctx, `DELETE FROM site_git_states WHERE state_hash = $1 AND expires_at > $2
-		RETURNING user_id, project_id, site_id, browser_hash`, stateHash, now).Scan(&signIn.UserID, &signIn.ProjectID, &signIn.SiteID, &signIn.BrowserHash)
+		RETURNING user_id, project_id, COALESCE(site_id, ''), COALESCE(app_id, ''), browser_hash`, stateHash, now).
+		Scan(&signIn.UserID, &signIn.ProjectID, &signIn.SiteID, &signIn.AppID, &signIn.BrowserHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SignIn{}, ErrStateInvalid
 	}

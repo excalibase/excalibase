@@ -85,6 +85,9 @@ type mysqlServer interface {
 	ForgetEndUserSessions(ctx context.Context, namespace, projectID string) error
 	SetUserPassword(ctx context.Context, namespace, projectID, user, password string) error
 	SetUserPasswords(ctx context.Context, namespace, projectID string, passwords map[string]string) error
+	// EndUserSessions ends a user's sessions on every copy, a replica once it
+	// has applied the change that preceded the call (EXC-675).
+	EndUserSessions(ctx context.Context, namespace, projectID, user string) error
 	RemoveDatabase(ctx context.Context, namespace, projectID string) error
 	// ServerCA is the CA the project's server certificate is signed by.
 	ServerCA(ctx context.Context, namespace, projectID string) (string, error)

@@ -68,7 +68,10 @@ type dbReadAddressResponse struct {
 	Host             string                 `json:"host,omitempty"`
 	Port             int                    `json:"port,omitempty"`
 	ConnectionString string                 `json:"connectionString,omitempty"`
-	CanChange        bool                   `json:"canChange"`
+	// Username signs in here; readOnlyLogin marks the SELECT-only login (EXC-675).
+	Username      string `json:"username,omitempty"`
+	ReadOnlyLogin bool   `json:"readOnlyLogin,omitempty"`
+	CanChange     bool   `json:"canChange"`
 }
 
 type dbReadAddressRequest struct {
@@ -129,7 +132,8 @@ func readAddressResponseFor(r *http.Request, view service.DBReadAddressView) dbR
 		SingleHost: view.SingleHost, PublicOffered: view.PublicOffered, PublicOpen: view.PublicOpen,
 		Enabled: view.Enabled, Available: view.Available, Host: view.Host, Port: view.Port,
 		ConnectionString: view.ConnectionString,
-		CanChange:        callerMayChangeDBEndpoint(r) && !view.SingleHost,
+		Username:         view.Username, ReadOnlyLogin: view.ReadOnlyLogin,
+		CanChange: callerMayChangeDBEndpoint(r) && !view.SingleHost,
 	}
 	if view.Internal.Host != "" {
 		out.Internal = &dbReadAddressInternal{Host: view.Internal.Host, Port: view.Internal.Port,

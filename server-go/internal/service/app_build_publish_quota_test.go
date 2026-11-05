@@ -202,8 +202,10 @@ func TestPublish_ConcurrentPublishesOfAProjectNeverShareOneMeasurement(t *testin
 	results := map[string]AppBuildResult{}
 	publishers := map[string]*AppBuildPublisher{}
 	for _, author := range []string{"a", "b"} {
-		copied := *publisher
-		publishers[author] = &copied
+		// Two publishers on one registry, lock and deploys, as two replicas would be.
+		copied := NewAppBuildPublisher(publisher.internal, publisher.collector, publisher.pusher, publisher.room, publisher.lock, publisher.deployer, publisher.spoolDir)
+		copied.now = publisher.now
+		publishers[author] = copied
 		results[author] = quotaBuild(t, publishers[author], author)
 	}
 	var wg sync.WaitGroup

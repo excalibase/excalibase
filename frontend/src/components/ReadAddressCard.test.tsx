@@ -184,3 +184,24 @@ describe('ReadAddressCard', () => {
     expect(await screen.findByTestId('read-address-error')).toBeInTheDocument();
   });
 });
+
+// EXC-675: the card names the login that signs in at the read address.
+describe('ReadAddressCard login', () => {
+  beforeEach(() => {
+    vi.mocked(api.get).mockReset();
+  });
+
+  test('names the read-only login', async () => {
+    renderCard({ ...replicas, username: 'excalibase_reader', readOnlyLogin: true });
+    const login = await screen.findByTestId('read-address-login');
+    expect(login).toHaveTextContent('excalibase_reader');
+    expect(login).toHaveTextContent(/can only read/i);
+  });
+
+  test('says the owner signs in without a read-only login', async () => {
+    renderCard({ ...replicas, username: 'app' });
+    const login = await screen.findByTestId('read-address-login');
+    expect(login).toHaveTextContent('app');
+    expect(login).not.toHaveTextContent(/can only read/i);
+  });
+});

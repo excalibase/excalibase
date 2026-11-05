@@ -112,6 +112,12 @@ func (h *SchemaHandler) ProjectDeleting(projectID string) {
 	h.pools.Evict(projectID)
 }
 
+// CredentialsRotated is the rotation hook (service.CredentialObserver): this
+// handler's pools hold the old password, and a rotation ends their sessions.
+func (h *SchemaHandler) CredentialsRotated(projectID string) {
+	h.pools.Evict(projectID)
+}
+
 // ProjectStatusChanged is the pause hook: a paused database is down, and its
 // pool must not hold connections against it.
 func (h *SchemaHandler) ProjectStatusChanged(projectID, status string) {

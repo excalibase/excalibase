@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ownerOnlyExpression } from '../../utils/permissionRules';
+import { ownerOnlyExpression, requireSecondStep } from '../../utils/permissionRules';
 
 interface BoolExpEditorProps {
   readonly id: 'filter' | 'check';
@@ -8,6 +8,8 @@ interface BoolExpEditorProps {
   readonly value: string;
   readonly error?: string;
   readonly columns: string[];
+  /** The project may ask end users for a second sign-in step (flag authmfa): offer to require it. */
+  readonly mfa?: boolean;
   readonly onChange: (text: string) => void;
 }
 
@@ -17,7 +19,7 @@ const chipClass =
   'px-2 py-1 text-xs rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-surface-hover disabled:opacity-50';
 
 /** A Hasura boolean expression as JSON, with the two presets most tables need. */
-export function BoolExpEditor({ id, label, help, value, error, columns, onChange }: BoolExpEditorProps) {
+export function BoolExpEditor({ id, label, help, value, error, columns, mfa = false, onChange }: BoolExpEditorProps) {
   const [ownerColumn, setOwnerColumn] = useState('');
   const inputId = `perm-${id}`;
 
@@ -52,6 +54,11 @@ export function BoolExpEditor({ id, label, help, value, error, columns, onChange
         >
           Owner only
         </button>
+        {mfa && (
+          <button type="button" className={chipClass} onClick={() => onChange(requireSecondStep(value))}>
+            Require the second step (MFA)
+          </button>
+        )}
       </div>
       <textarea
         id={inputId}

@@ -8,11 +8,17 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/gitprovider"
 )
 
 // EnableApps wires git builds of apps; the appgitbuilds flag still decides, per call, whether they are used. Call it before serving.
 func (s *Service) EnableApps(support AppSupport) {
 	s.apps = &support
+}
+
+// AppsWired answers whether EnableApps wired app support, whatever the flag says now.
+func (s *Service) AppsWired() bool {
+	return s != nil && s.apps != nil
 }
 
 // appsOn answers whether app builds are wired here and switched on now.
@@ -36,6 +42,22 @@ func (s *Service) mustApp(ctx context.Context, projectID, appID string) error {
 
 func appTarget(projectID, appID string) Target {
 	return Target{Kind: KindApp, ProjectID: projectID, ID: appID}
+}
+
+// StartAppSignIn is StartSignIn for a user connecting an app; the callback returns them to the app.
+func (s *Service) StartAppSignIn(ctx context.Context, userID, projectID, appID string, install bool) (StartedSignIn, error) {
+	if err := s.mustApp(ctx, projectID, appID); err != nil {
+		return StartedSignIn{}, err
+	}
+	return s.startSignIn(ctx, SignIn{UserID: userID, ProjectID: projectID, AppID: appID}, install)
+}
+
+// AppRepositories is what the user's latest sign-in showed they may connect to the app.
+func (s *Service) AppRepositories(ctx context.Context, userID, projectID, appID string) ([]gitprovider.Access, error) {
+	if err := s.mustApp(ctx, projectID, appID); err != nil {
+		return nil, err
+	}
+	return s.grantedTo(ctx, userID)
 }
 
 // AppConnectRequest connects a repository, named by id or by owner/name, to an app.
@@ -105,11 +127,11 @@ func (s *Service) AppConnection(ctx context.Context, projectID, appID string) (*
 	return connection, nil
 }
 
-// DisconnectApp forgets the repository and cancels the app's queued and running builds.
-// The flag never blocks it, and the store scopes it by project.
+// DisconnectApp forgets the repository and cancels the app's queued and running builds. Neither the
+// flag nor what the install offers blocks it; the store scopes it by project.
 func (s *Service) DisconnectApp(ctx context.Context, projectID, appID string) error {
-	if err := s.Available(); err != nil {
-		return err
+	if s == nil || s.store == nil {
+		return ErrUnavailable
 	}
 	if err := s.store.DeleteAppConnection(ctx, projectID, appID); err != nil {
 		return err

@@ -326,6 +326,8 @@ services:
       FEATURE_DBALLOWLIST: ${FEATURE_DBALLOWLIST:-false}
       # A database's read-only address to its replicas (EXC-666); a single host has none and says so.
       FEATURE_DBREADADDRESS: ${FEATURE_DBREADADDRESS:-false}
+      # The read address signs in with a read-only login; a rotation ends old sessions (EXC-675).
+      FEATURE_DBREADROLE: ${FEATURE_DBREADROLE:-false}
       # Copy a database into a new project from its backups (EXC-667).
       FEATURE_DBCOPY: ${FEATURE_DBCOPY:-false}
       # Database major version upgrade in Studio (EXC-668): one-way, backup first.
