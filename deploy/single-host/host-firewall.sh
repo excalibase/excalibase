@@ -9,7 +9,8 @@
 #  - drops new connections from every platform bridge to the host (DNS excepted);
 #  - drops forwarded traffic from the tenant bridges to 169.254.0.0/16, the
 #    private ranges and their IPv6 equivalents, except the platform networks'
-#    own subnets, first in DOCKER-USER, before Docker's accept rules;
+#    own subnets and DNS to the host's resolvers, first in DOCKER-USER, before
+#    Docker's accept rules;
 #  - re-checks every INTERVAL seconds and puts back whatever was removed.
 # It fails loudly, never guessing an interface: a network it cannot name, a
 # bridge not on this host, or a Docker without DOCKER-USER stops it, and
@@ -24,6 +25,8 @@ NETWORKS=${HOST_FIREWALL_NETWORKS:?the platform networks to guard}
 TENANTS=${HOST_FIREWALL_TENANT_NETWORKS:?the tenant networks}
 BRIDGES_FILE=${HOST_FIREWALL_BRIDGES_FILE:-/var/lib/excalibase-bridges/networks}
 SYSFS=${HOST_FIREWALL_SYSFS:-/sys/class/net}
+# The host's resolv.conf Docker reads: tenants' lookups are forwarded to its resolvers.
+RESOLV_CONF=${HOST_FIREWALL_RESOLV_CONF:-/etc/host-resolv.conf}
 INTERVAL=${HOST_FIREWALL_INTERVAL:-30}
 # How long a first start waits for the engine proxy to name the bridges.
 WAIT=${HOST_FIREWALL_WAIT:-120}
@@ -35,9 +38,25 @@ err() { echo "host-firewall: ERROR: $*" >&2; return 1; }
 words() { echo "$1" | tr ',' ' '; }
 listed() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
 
-# plan: read the bridges file into IFACES, TENANT_IFACES, OWN4 and OWN6.
+# resolvers: DNS4 and DNS6, the resolv.conf's nameservers a container's lookup
+# is forwarded to. Loopback ones Docker reaches from the host, and a zoned
+# link-local one is not routable from a bridge: neither is let through.
+resolvers() {
+  DNS4= DNS6=
+  [ -r "$RESOLV_CONF" ] || { err "no resolv.conf at $RESOLV_CONF (HOST_RESOLV_CONF)"; return 1; }
+  for server in $(awk '$1 == "nameserver" { print $2 }' "$RESOLV_CONF"); do
+    case $server in
+      127.*|::1|*%*) ;;
+      *:*) DNS6="$DNS6 $server/128" ;;
+      *.*.*.*) DNS4="$DNS4 $server/32" ;;
+    esac
+  done
+}
+
+# plan: read the bridges file into IFACES, TENANT_IFACES, OWN4 and OWN6, and the resolvers.
 plan() {
   IFACES= TENANT_IFACES= OWN4= OWN6=
+  resolvers || return 1
   [ -r "$BRIDGES_FILE" ] || { err "no bridges file $BRIDGES_FILE: the engine proxy has not named the bridges"; return 1; }
   for network in $(words "$NETWORKS"); do
     line=$(grep "^$network " "$BRIDGES_FILE" || true)
@@ -91,14 +110,17 @@ host_rules() {
   echo "$HOST_CHAIN -j DROP"
 }
 
-# tenant_rules <family>: the platform's own subnets pass, then DNS (the engine
-# forwards lookups from the container), then metadata and private ranges drop.
+# tenant_rules <family>: the platform's own subnets pass, then DNS to the host's
+# resolvers (the engine forwards lookups from the container), then metadata and
+# private ranges drop.
 tenant_rules() {
-  if [ "$1" = 6 ]; then own=$OWN6 deny=$DENY6; else own=$OWN4 deny=$DENY4; fi
+  if [ "$1" = 6 ]; then own=$OWN6 deny=$DENY6 dns=$DNS6; else own=$OWN4 deny=$DENY4 dns=$DNS4; fi
   echo "$TENANT_CHAIN -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN"
   for subnet in $own; do echo "$TENANT_CHAIN -d $subnet -j RETURN"; done
-  echo "$TENANT_CHAIN -p udp --dport 53 -j RETURN"
-  echo "$TENANT_CHAIN -p tcp --dport 53 -j RETURN"
+  for server in $dns; do
+    echo "$TENANT_CHAIN -d $server -p udp --dport 53 -j RETURN"
+    echo "$TENANT_CHAIN -d $server -p tcp --dport 53 -j RETURN"
+  done
   for range in $deny; do echo "$TENANT_CHAIN -d $range -j DROP"; done
 }
 

@@ -42,6 +42,12 @@ services:
       AUTH_HOOKS_DENY_CIDRS: ${AUTH_HOOKS_DENY_CIDRS:-}
       FEATURE_LOGDRAINS: ${FEATURE_LOGDRAINS:-false}
       LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
+      # The host firewall (EXC-683): on Docker, on or explicitly off, on a release that has it.
+      COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
+      HOST_FIREWALL: ${HOST_FIREWALL:-}
+      HOST_RESOLV_CONF: ${HOST_RESOLV_CONF:-}
+      ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
+      PLATFORM_TAG: ${TAG:-1.5.0}
     command: ["sh", "/preflight.sh"]
     volumes:
       - ./preflight.sh:/preflight.sh:ro,z
@@ -721,7 +727,7 @@ services:
   # to the cloud's metadata service and the LAN. This drops new connections from
   # every platform bridge to the host (DNS excepted) and, from the tenants' bridge,
   # forwarded traffic to 169.254.0.0/16 and private ranges other than the
-  # platform's own subnets; it keeps them in place and is healthy only while they
+  # platform's own subnets and DNS to the host's resolvers; it keeps them in place and is healthy only while they
   # are. Bridges are read from what the engine proxy writes, never guessed.
   # The image is the release's own, iptables included: nothing downloaded at start.
   # Rootless Podman needs none: its bridges live in the user's own namespace.
@@ -739,6 +745,8 @@ services:
     volumes:
       - ./host-firewall.sh:/host-firewall.sh:ro,z
       - bridges:/var/lib/excalibase-bridges:ro
+      # Tenants' DNS is let through only to these resolvers; preflight requires the setting.
+      - ${HOST_RESOLV_CONF:-/etc/resolv.conf}:/etc/host-resolv.conf:ro
     read_only: true
     mem_limit: 64m
     pids_limit: 32

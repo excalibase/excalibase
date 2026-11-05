@@ -40,6 +40,22 @@ grep -qx 'COMPOSE_PROFILES=hostfirewall' "$WORK/.env" || fail "a Docker install 
 sh "$DIR/../init.sh" --env-file "$WORK/nofw.env" --domain example.com --admin-email me@example.com \
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --no-host-firewall >/dev/null
 ! grep -q '^COMPOSE_PROFILES' "$WORK/nofw.env" || fail "--no-host-firewall still runs it"
+# Preflight stops an install with neither the firewall nor this explicit opt-out.
+grep -qx 'HOST_FIREWALL=off' "$WORK/nofw.env" || fail "--no-host-firewall is not recorded as a choice"
+! grep -q '^HOST_FIREWALL=' "$WORK/.env" || fail "a firewalled install says HOST_FIREWALL"
+# The firewall allows DNS to the resolvers Docker forwards to: the file Docker reads.
+grep -q '^HOST_RESOLV_CONF=/' "$WORK/.env" || fail "a firewalled install names no resolv.conf"
+printf 'nameserver 10.0.0.2\n' >"$WORK/plain-resolv.conf"
+HOST_ETC_RESOLV_CONF="$WORK/plain-resolv.conf" sh "$DIR/../init.sh" --env-file "$WORK/plain.env" --domain example.com \
+  --admin-email me@example.com --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 >/dev/null
+grep -qx 'HOST_RESOLV_CONF=/etc/resolv.conf' "$WORK/plain.env" || fail "HOST_RESOLV_CONF: $(grep HOST_RESOLV "$WORK/plain.env")"
+printf 'nameserver 127.0.0.53\noptions edns0\n' >"$WORK/stub-resolv.conf"
+printf 'nameserver 192.168.1.1\n' >"$WORK/upstream-resolv.conf"
+HOST_ETC_RESOLV_CONF="$WORK/stub-resolv.conf" HOST_SYSTEMD_RESOLV_CONF="$WORK/upstream-resolv.conf" sh "$DIR/../init.sh" \
+  --env-file "$WORK/resolved.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 >/dev/null
+grep -qx 'HOST_RESOLV_CONF=/run/systemd/resolve/resolv.conf' "$WORK/resolved.env" \
+  || fail "systemd-resolved's stub: Docker reads the upstream file, $(grep HOST_RESOLV "$WORK/resolved.env")"
 sh "$DIR/../init.sh" --env-file "$WORK/logs.env" --domain example.com --admin-email me@example.com \
   --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --host-logs >/dev/null
 grep -q '^FEATURE_HOSTLOGS=true$' "$WORK/logs.env" && grep -q '^COMPOSE_PROFILES=hostfirewall,hostlogs$' "$WORK/logs.env" \

@@ -73,6 +73,30 @@ if [ "${FEATURE_LOGDRAINS:-}" = true ]; then
   done
 fi
 
+# Host firewall (EXC-683). On Docker the platform's bridges reach the host and
+# the tenants' bridge the LAN unless the hostfirewall profile runs, or the
+# operator turned it off on purpose. A .env from before it has neither: stop
+# here, on every up, rather than run unguarded. Rootless Podman (uid 0, which
+# init.sh writes for it alone) is exempt: its bridges live in the user's own
+# namespace and its engine has no DOCKER-USER chain.
+if [ "${ENGINE_SOCKET_UID:-1000}" != 0 ]; then
+  case ",${COMPOSE_PROFILES:-}," in *,hostfirewall,*) firewall=on ;; *) firewall= ;; esac
+  case "${HOST_FIREWALL:-}" in
+    off) [ -z "$firewall" ] || complain "HOST_FIREWALL=off but COMPOSE_PROFILES runs hostfirewall: keep one" ;;
+    "") [ -n "$firewall" ] || complain "the host firewall is off: add hostfirewall to COMPOSE_PROFILES in .env (COMPOSE_PROFILES=hostfirewall, comma-separated with any others) and HOST_RESOLV_CONF (see init.sh), or set HOST_FIREWALL=off to guard the host yourself" ;;
+    *) complain "HOST_FIREWALL must be off or unset, not ${HOST_FIREWALL}" ;;
+  esac
+  if [ -n "$firewall" ]; then
+    # The firewall runs the release's image; 1.6.2 and before lack iptables and the proxy's bridges file.
+    version=${PLATFORM_TAG#v}
+    if printf '%s' "$version" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+$' &&
+      [ "$(printf '%s\n%s\n' "$version" 1.6.2 | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = 1.6.2 ]; then
+      complain "TAG ${PLATFORM_TAG} has no host firewall: set TAG in .env to a release after 1.6.2, or HOST_FIREWALL=off"
+    fi
+    [ -n "${HOST_RESOLV_CONF:-}" ] || complain "HOST_RESOLV_CONF is unset: the resolv.conf Docker forwards lookups to (/run/systemd/resolve/resolv.conf when /etc/resolv.conf names only 127.0.0.53, else /etc/resolv.conf)"
+  fi
+fi
+
 # Optional: unset means bootstrap generates one and prints it once.
 admin=${ADMIN_PASSWORD:-}
 if [ -n "$admin" ] && { is_weak "$admin" || [ "${#admin}" -lt 12 ]; }; then
@@ -82,4 +106,4 @@ fi
 if [ "$problems" -gt 0 ]; then
   exit 1
 fi
-echo "preflight: secrets ok"
+echo "preflight: ok"

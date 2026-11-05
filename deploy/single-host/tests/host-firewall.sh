@@ -51,11 +51,13 @@ excalibase-platform br-aa11bb22cc33 172.20.0.0/16
 excalibase-edge br-77aa88bb99cc 10.203.250.0/28
 excalibase-drains absent
 EOF
+  # The resolvers Docker forwards to: the stub on loopback and a zoned link-local are never forwarded.
+  printf '# generated\nnameserver 127.0.0.53\nnameserver 192.168.1.1\nnameserver 2001:db8::53\nnameserver fe80::1%%eth0\noptions edns0\n' >"$WORK/resolv.conf"
 }
 
 run() {
   PATH="$WORK/bin:$PATH" HOST_FIREWALL_ONCE=1 HOST_FIREWALL_WAIT=0 HOST_FIREWALL_SYSFS="$WORK/sys" \
-    HOST_FIREWALL_BRIDGES_FILE="$WORK/bridges" \
+    HOST_FIREWALL_BRIDGES_FILE="$WORK/bridges" HOST_FIREWALL_RESOLV_CONF="$WORK/resolv.conf" \
     HOST_FIREWALL_NETWORKS=excalibase-tenants,excalibase-platform,excalibase-edge,excalibase-drains \
     HOST_FIREWALL_TENANT_NETWORKS=excalibase-tenants sh "$DIR/../host-firewall.sh" "$@" >"$WORK/out" 2>&1
 }
@@ -93,8 +95,8 @@ expected4="EXCALIBASE-TENANT -m conntrack --ctstate ESTABLISHED,RELATED -j RETUR
 EXCALIBASE-TENANT -d 172.19.0.0/16 -j RETURN
 EXCALIBASE-TENANT -d 172.20.0.0/16 -j RETURN
 EXCALIBASE-TENANT -d 10.203.250.0/28 -j RETURN
-EXCALIBASE-TENANT -p udp --dport 53 -j RETURN
-EXCALIBASE-TENANT -p tcp --dport 53 -j RETURN
+EXCALIBASE-TENANT -d 192.168.1.1/32 -p udp --dport 53 -j RETURN
+EXCALIBASE-TENANT -d 192.168.1.1/32 -p tcp --dport 53 -j RETURN
 EXCALIBASE-TENANT -d 169.254.0.0/16 -j DROP
 EXCALIBASE-TENANT -d 10.0.0.0/8 -j DROP
 EXCALIBASE-TENANT -d 172.16.0.0/12 -j DROP
@@ -105,13 +107,23 @@ $tenant4"
 tenant6=$(grep '^EXCALIBASE-TENANT' "$WORK/v6.rules")
 expected6="EXCALIBASE-TENANT -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 EXCALIBASE-TENANT -d fd00:19::/64 -j RETURN
-EXCALIBASE-TENANT -p udp --dport 53 -j RETURN
-EXCALIBASE-TENANT -p tcp --dport 53 -j RETURN
+EXCALIBASE-TENANT -d 2001:db8::53/128 -p udp --dport 53 -j RETURN
+EXCALIBASE-TENANT -d 2001:db8::53/128 -p tcp --dport 53 -j RETURN
 EXCALIBASE-TENANT -d fe80::/10 -j DROP
 EXCALIBASE-TENANT -d fc00::/7 -j DROP"
 [ "$tenant6" = "$expected6" ] || fail "IPv6 tenant chain:
 $tenant6"
 grep -q 'br-3f1c9a2b7d4e' "$WORK/out" && grep -q 'are dropped' "$WORK/out" || fail "the guard does not say what it guards: $(cat "$WORK/out")"
+
+# DNS is let through to the host's resolvers alone, never to any address on :53.
+! grep -q '^EXCALIBASE-TENANT -p udp --dport 53' "$WORK/v4.rules" || fail "DNS to any address is let through"
+# A resolver change (DHCP) is picked up by a rerun.
+sed -i 's/192.168.1.1/10.0.0.2/' "$WORK/resolv.conf"
+run || fail "after a resolver change: $(cat "$WORK/out")"
+has v4 "EXCALIBASE-TENANT -d 10.0.0.2/32 -p udp --dport 53 -j RETURN"
+lacks v4 "EXCALIBASE-TENANT -d 192.168.1.1/32 -p udp --dport 53 -j RETURN"
+sed -i 's/10.0.0.2/192.168.1.1/' "$WORK/resolv.conf"
+run
 
 # 3. The health check passes with the rules, fails without any one of them.
 run check || fail "check failed with every rule in place: $(cat "$WORK/out")"
@@ -138,13 +150,14 @@ lacks v4 "DOCKER-USER -i br-3f1c9a2b7d4e -j EXCALIBASE-TENANT"
 
 # 6. Fails loudly, guarding nothing it cannot name: a network the proxy did
 #    not resolve, a bridge not on this host, a missing tenant network, no file.
-for broken in unresolved missing-bridge absent-tenant no-file; do
+for broken in unresolved missing-bridge absent-tenant no-file no-resolv; do
   reset
   case $broken in
     unresolved) sed -i '/^excalibase-platform /d' "$WORK/bridges"; want=excalibase-platform ;;
     missing-bridge) rmdir "$WORK/sys/br-aa11bb22cc33"; want=br-aa11bb22cc33 ;;
     absent-tenant) sed -i 's/^excalibase-tenants .*/excalibase-tenants absent/' "$WORK/bridges"; want=excalibase-tenants ;;
     no-file) rm "$WORK/bridges"; want=bridges ;;
+    no-resolv) rm "$WORK/resolv.conf"; want=resolv.conf ;;
   esac
   if run; then fail "$broken: the guard reported success"; fi
   grep -q "$want" "$WORK/out" || fail "$broken: the error does not name $want: $(cat "$WORK/out")"

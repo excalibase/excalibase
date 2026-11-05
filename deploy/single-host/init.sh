@@ -236,12 +236,27 @@ APP_DOMAIN=$app_domain
 APP_SANDBOX_RUNTIME=$app_sandbox
 ENV
 # Rootless Podman's bridges are in the user's own namespace: no host firewall to set.
+# On Docker, either the firewall or an explicit off, which preflight requires (EXC-683).
 profiles=
-[ "$engine" = docker ] && [ -n "$host_firewall" ] && profiles=hostfirewall
+firewall_env=
+if [ "$engine" = docker ] && [ -n "$host_firewall" ]; then
+  profiles=hostfirewall
+  # The firewall lets tenants' DNS through only to the resolvers Docker forwards to:
+  # systemd-resolved's upstream file when /etc/resolv.conf names only its stub, as Docker reads it.
+  etc_resolv=${HOST_ETC_RESOLV_CONF:-/etc/resolv.conf}
+  resolv=/etc/resolv.conf
+  if ! awk '$1 == "nameserver" && $2 !~ /^(127\.|::1$)/ { found = 1 } END { exit !found }' "$etc_resolv" 2>/dev/null &&
+    [ -r "${HOST_SYSTEMD_RESOLV_CONF:-/run/systemd/resolve/resolv.conf}" ]; then
+    resolv=/run/systemd/resolve/resolv.conf
+  fi
+  firewall_env="HOST_RESOLV_CONF=$resolv"
+elif [ "$engine" = docker ]; then
+  firewall_env="HOST_FIREWALL=off"
+fi
 [ -n "$host_logs" ] && profiles=${profiles:+$profiles,}hostlogs
 [ -n "$log_drains" ] && profiles=${profiles:+$profiles,}logdrains
 profiles=${profiles:+COMPOSE_PROFILES=$profiles}
-for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$profiles" "$hooks" "$drains"; do
+for line in "$edge_ports" "$selinux_label" "$manual_unseal" "$apps" "$documentdb" "$host_metrics" "$host_logs" "$profiles" "$firewall_env" "$hooks" "$drains"; do
   [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
 done
 chmod 600 "$env_file"

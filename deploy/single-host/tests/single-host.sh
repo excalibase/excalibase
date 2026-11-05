@@ -73,7 +73,7 @@ listed = set(doc["services"]["engine-proxy"]["environment"]["PROXY_BRIDGE_NETWOR
 if not names <= listed:
     sys.exit(f"the proxy does not name the bridges of {sorted(names - listed)}")
 '
-render COMPOSE_PROFILES=hostfirewall | python3 -c '
+render COMPOSE_PROFILES=hostfirewall TAG=1.9.9 HOST_RESOLV_CONF=/run/systemd/resolve/resolv.conf | python3 -c '
 import sys, yaml
 doc = yaml.safe_load(sys.stdin)
 fw = doc["services"].get("host-firewall") or sys.exit("no host firewall with its profile")
@@ -89,8 +89,15 @@ if sorted(fw.get("cap_add") or []) != ["NET_ADMIN", "NET_RAW"] or fw.get("cap_dr
 if fw.get("privileged") or fw.get("ports") or not fw.get("read_only"):
     sys.exit("host firewall is privileged, published or writable")
 mounts = {v.get("target"): v for v in fw.get("volumes") or []}
-if set(mounts) != {"/host-firewall.sh", "/var/lib/excalibase-bridges"} or not all(v.get("read_only") for v in mounts.values()):
-    sys.exit(f"host firewall mounts {sorted(mounts)}, want its script and the bridges, read-only")
+if set(mounts) != {"/host-firewall.sh", "/var/lib/excalibase-bridges", "/etc/host-resolv.conf"} or not all(v.get("read_only") for v in mounts.values()):
+    sys.exit(f"host firewall mounts {sorted(mounts)}, want its script, the bridges and the host resolv.conf, read-only")
+if mounts["/etc/host-resolv.conf"].get("source") != "/run/systemd/resolve/resolv.conf":
+    sys.exit("the firewall does not read the resolv.conf HOST_RESOLV_CONF names")
+pre = doc["services"]["preflight"]["environment"]
+want = {"COMPOSE_PROFILES": "hostfirewall", "HOST_FIREWALL": "", "PLATFORM_TAG": "1.9.9", "ENGINE_SOCKET_UID": "1000", "HOST_RESOLV_CONF": "/run/systemd/resolve/resolv.conf"}
+for key, value in want.items():
+    if pre.get(key) != value:
+        sys.exit(f"preflight sees {key}={pre.get(key)!r}, want {value!r}: it cannot refuse an unguarded start")
 if "/var/run/engine.sock" in str(fw):
     sys.exit("the host firewall holds the engine socket")
 if fw["environment"]["HOST_FIREWALL_NETWORKS"] != proxy["environment"]["PROXY_BRIDGE_NETWORKS"]:
