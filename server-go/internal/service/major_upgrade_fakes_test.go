@@ -32,10 +32,17 @@ type memMajorUpgrades struct {
 	// touchHang makes a heartbeat wait until its context ends.
 	touchHang bool
 	touches   int
+	// clock is the database's clock when set.
+	clock func() time.Time
 }
 
 // now is the database's clock; heartbeats are stamped with it.
-func (m *memMajorUpgrades) now() time.Time { return time.Now() }
+func (m *memMajorUpgrades) now() time.Time {
+	if m.clock != nil {
+		return m.clock()
+	}
+	return time.Now()
+}
 
 func (m *memMajorUpgrades) setTouchErr(err error) {
 	m.mu.Lock()

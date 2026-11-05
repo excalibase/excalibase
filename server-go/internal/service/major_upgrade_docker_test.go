@@ -30,6 +30,30 @@ type upgradeEngine struct {
 	copied     map[string][]string // container id -> destinations
 	// after runs once a named step has run.
 	after map[string]func()
+	// onCall sees every call as it is made.
+	onCall func(call string)
+	// notReady keeps an image's server from listening for that many checks;
+	// a negative count is never.
+	notReady map[string]int
+}
+
+func (e *upgradeEngine) note(call string) {
+	e.calls = append(e.calls, call)
+	if e.onCall != nil {
+		e.onCall(call)
+	}
+}
+
+// listening reports whether c's server takes TCP connections now.
+func (e *upgradeEngine) listening(c *engineContainer) bool {
+	left, ok := e.notReady[c.image]
+	if !ok || left == 0 {
+		return true
+	}
+	if left > 0 {
+		e.notReady[c.image] = left - 1
+	}
+	return false
 }
 
 type engineContainer struct {
@@ -41,7 +65,7 @@ type engineContainer struct {
 
 func newUpgradeEngine() *upgradeEngine {
 	engine := &upgradeEngine{byID: map[string]*engineContainer{}, load: provisioner.UpgradeLoaded,
-		fail: map[string]error{}, extensions: []string{"plpgsql", "vector", "citext"}, copied: map[string][]string{}}
+		fail: map[string]error{}, notReady: map[string]int{}, extensions: []string{"plpgsql", "vector", "citext"}, copied: map[string][]string{}}
 	engine.byID["old-id"] = &engineContainer{id: "old-id", name: provisioner.DatabaseContainerName("dk-1"), image: "postgres:16", running: true}
 	return engine
 }
@@ -59,7 +83,7 @@ func (e *upgradeEngine) find(ref string) *engineContainer {
 }
 
 func (e *upgradeEngine) step(name string) error {
-	e.calls = append(e.calls, name)
+	e.note(name)
 	if hook := e.after[name]; hook != nil {
 		hook()
 	}
@@ -110,7 +134,7 @@ func (e *upgradeEngine) StopContainer(_ context.Context, id string) error {
 }
 
 func (e *upgradeEngine) RemoveContainer(_ context.Context, id string) error {
-	e.calls = append(e.calls, "remove:"+id)
+	e.note("remove:" + id)
 	if c := e.find(id); c != nil {
 		delete(e.byID, c.id)
 	}
@@ -159,8 +183,8 @@ func (e *upgradeEngine) ExecInContainer(_ context.Context, id string, cmd []stri
 		return 1, errors.New("not running")
 	}
 	joined := strings.Join(cmd, " ")
-	e.calls = append(e.calls, "exec:"+c.image+":"+joined)
-	if strings.Contains(joined, "pg_isready") && !e.loaded(c) && e.load == "" {
+	e.note("exec:" + c.image + ":" + joined)
+	if strings.Contains(joined, "pg_isready") && ((!e.loaded(c) && e.load == "") || !e.listening(c)) {
 		return 2, nil
 	}
 	return 0, nil
@@ -180,7 +204,7 @@ func (e *upgradeEngine) ExecInContainerStdin(_ context.Context, id string, cmd [
 		}
 		c.fenced = true
 	case stdin == provisioner.UnfenceScript():
-		e.calls = append(e.calls, "unfence:"+c.image)
+		e.note("unfence:" + c.image)
 		c.fenced = false
 	case stdin == provisioner.DumpScript():
 		return "", e.step("dump")
@@ -189,7 +213,7 @@ func (e *upgradeEngine) ExecInContainerStdin(_ context.Context, id string, cmd [
 	case stdin == provisioner.DataMajorScript():
 		return strings.TrimPrefix(c.image, "postgres:") + "\n", nil
 	case stdin == provisioner.CleanupScript():
-		e.calls = append(e.calls, "cleanup:"+c.image)
+		e.note("cleanup:" + c.image)
 	case stdin == afterUpgradeScript:
 		return "", e.step("after")
 	}

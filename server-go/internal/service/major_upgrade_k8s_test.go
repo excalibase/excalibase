@@ -36,6 +36,8 @@ type recordingProgress struct {
 	lost bool
 	// holdErr fails ownership checks the way an unreachable database does.
 	holdErr error
+	// onHold runs inside every ownership check.
+	onHold func()
 }
 
 func (p *recordingProgress) lostErr() error {
@@ -62,6 +64,9 @@ func (p *recordingProgress) WritesStopped(_ context.Context, at time.Time) error
 }
 
 func (p *recordingProgress) Hold(context.Context) error {
+	if p.onHold != nil {
+		p.onHold()
+	}
 	if p.holdErr != nil {
 		return p.holdErr
 	}

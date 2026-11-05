@@ -228,9 +228,10 @@ func leftRunning(cause error) UpgradeOutcome {
 }
 
 // lostRun is non-nil when the run is no longer this actor's, by cause or by
-// a fresh check.
+// a fresh check. A check the database cannot answer leaves the run to the
+// fence, which is read again after it: the fence may be met meanwhile.
 func lostRun(ctx context.Context, cause error, progress UpgradeProgress) error {
-	if fence := context.Cause(ctx); errors.Is(fence, errRunTakenOver) {
+	if fence := runLostBy(ctx); fence != nil {
 		return fmt.Errorf("%w (stopped at: %v)", fence, cause)
 	}
 	if errors.Is(cause, errRunTakenOver) {
@@ -238,6 +239,9 @@ func lostRun(ctx context.Context, cause error, progress UpgradeProgress) error {
 	}
 	if err := progress.Hold(ctx); errors.Is(err, errRunTakenOver) {
 		return fmt.Errorf("%w (stopped at: %v)", err, cause)
+	}
+	if fence := runLostBy(ctx); fence != nil {
+		return fmt.Errorf("%w (stopped at: %v)", fence, cause)
 	}
 	return nil
 }
@@ -394,6 +398,9 @@ func (u *K8sMajorUpgrader) putBack(ctx context.Context, run domain.MajorUpgrade,
 		if major, ok := k8s.ClusterDataMajor(cluster); ok && major == plan.fromMajor && k8s.ClusterPrimaryServing(cluster) {
 			return UpgradeOutcome{RolledBack: true, Cause: why}
 		}
+	}
+	if lost := runLostBy(ctx); lost != nil {
+		return UpgradeOutcome{Cause: fmt.Errorf("%w (putting back: %v)", lost, why)}
 	}
 	return UpgradeOutcome{Public: notPutBackPublic, Cause: fmt.Errorf("%v; the old major did not serve within %s", why, u.timings.PutBack)}
 }

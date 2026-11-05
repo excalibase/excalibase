@@ -19,12 +19,14 @@ import (
 // majorUpgradeHeartbeat is how often an actor marks its run alive, and
 // majorUpgradeHeartbeatTimeout bounds one mark. majorUpgradeStaleAfter is
 // how long without a mark before recovery may claim the run; an actor whose
-// marks have failed for majorUpgradeFenceAfter gives the run up first.
+// marks have failed for majorUpgradeFenceAfter gives the run up first. The
+// check runs on a tick, so giving up can be a heartbeat late, and a step in
+// flight then still finishes: the minute and the heartbeat left cover both.
 const (
 	majorUpgradeHeartbeat        = 30 * time.Second
 	majorUpgradeHeartbeatTimeout = 10 * time.Second
 	majorUpgradeStaleAfter       = 3 * time.Minute
-	majorUpgradeFenceAfter       = majorUpgradeStaleAfter - time.Minute
+	majorUpgradeFenceAfter       = majorUpgradeStaleAfter - time.Minute - majorUpgradeHeartbeat
 )
 
 // newOwner names one actor on one run.
@@ -268,6 +270,27 @@ func (f *fence) attach(cancel context.CancelCauseFunc) {
 	if f.cause != nil {
 		cancel(f.cause)
 	}
+}
+
+// fenceKey holds the context a detached one came from.
+type fenceKey struct{}
+
+// detachFence keeps ctx's values but not its cancellation, so a call in
+// flight is never cut off; runLostBy still sees a fence met on ctx.
+func detachFence(ctx context.Context) context.Context {
+	return context.WithValue(context.WithoutCancel(ctx), fenceKey{}, ctx)
+}
+
+// runLostBy is the cause when ctx, or the context it was detached from, was
+// cancelled because the run is no longer the actor's; checked between steps.
+func runLostBy(ctx context.Context) error {
+	if parent, ok := ctx.Value(fenceKey{}).(context.Context); ok {
+		ctx = parent
+	}
+	if cause := context.Cause(ctx); errors.Is(cause, errRunTakenOver) {
+		return cause
+	}
+	return nil
 }
 
 // admitRecovery lets recovery take any project not being torn down.

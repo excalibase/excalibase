@@ -368,28 +368,51 @@ func (u *DockerMajorUpgrader) undo(ctx context.Context, dc provisioner.DockerCli
 }
 
 // putBack returns the old container to its name, the project and service.
+// No call is cut off mid-flight, but once the run is lost no further step
+// starts: what is left is for the actor that owns the run now.
 func (u *DockerMajorUpgrader) putBack(ctx context.Context, dc provisioner.DockerClient, renamer provisioner.ContainerRenamer, state *swap, cause error) UpgradeOutcome {
-	ctx = context.WithoutCancel(ctx)
+	ctx = detachFence(ctx)
 	log.Printf("major upgrade %s: putting Postgres %s back: %v", state.inst.ProjectID, state.run.FromVersion, cause)
 	var problems []error
-	if state.newID != "" {
-		problems = append(problems, dc.RemoveContainer(ctx, state.newID))
+	for _, step := range u.putBackSteps(dc, renamer, state) {
+		if lost := runLostBy(ctx); lost != nil {
+			return gaveUpPutBack(lost, cause)
+		}
+		problems = append(problems, step(ctx))
 	}
-	if state.renamed {
-		problems = append(problems, renamer.RenameContainer(ctx, state.oldID, provisioner.DatabaseContainerName(state.inst.ProjectID)))
+	err := errors.Join(problems...)
+	if err == nil {
+		err = u.serveOld(ctx, dc, state.oldID)
 	}
-	if state.recorded {
-		problems = append(problems, u.adapter.recordContainer(state.inst, state.oldID))
+	if lost := runLostBy(ctx); lost != nil {
+		return gaveUpPutBack(lost, errors.Join(cause, err))
 	}
-	if err := errors.Join(problems...); err != nil {
-		u.dropDump(ctx, dc, state.oldID)
-		return UpgradeOutcome{Public: notPutBackPublic, Cause: errors.Join(cause, err)}
-	}
-	if err := u.serveOld(ctx, dc, state.oldID); err != nil {
+	if err != nil {
 		u.dropDump(ctx, dc, state.oldID)
 		return UpgradeOutcome{Public: notPutBackPublic, Cause: errors.Join(cause, err)}
 	}
 	return UpgradeOutcome{RolledBack: true, Cause: cause, Public: fmt.Sprintf(putBackPublic, state.run.FromVersion)}
+}
+
+// putBackSteps undo the swap as far as it went.
+func (u *DockerMajorUpgrader) putBackSteps(dc provisioner.DockerClient, renamer provisioner.ContainerRenamer, state *swap) []func(context.Context) error {
+	var steps []func(context.Context) error
+	if state.newID != "" {
+		steps = append(steps, func(ctx context.Context) error { return dc.RemoveContainer(ctx, state.newID) })
+	}
+	if state.renamed {
+		steps = append(steps, func(ctx context.Context) error {
+			return renamer.RenameContainer(ctx, state.oldID, provisioner.DatabaseContainerName(state.inst.ProjectID))
+		})
+	}
+	if state.recorded {
+		steps = append(steps, func(context.Context) error { return u.adapter.recordContainer(state.inst, state.oldID) })
+	}
+	return steps
+}
+
+func gaveUpPutBack(lost, cause error) UpgradeOutcome {
+	return UpgradeOutcome{Cause: fmt.Errorf("%w (putting back: %v)", lost, cause)}
 }
 
 // dropDump removes the dump, which holds every password hash, from a
@@ -412,11 +435,17 @@ func (u *DockerMajorUpgrader) serveOld(ctx context.Context, dc provisioner.Docke
 		return fmt.Errorf("the old database container %s is gone", container)
 	}
 	if !current.Running {
+		if err := runLostBy(ctx); err != nil {
+			return err
+		}
 		if err := provisioner.StartHoldingPort(ctx, dc, restoreStartPoller, container); err != nil {
 			return err
 		}
 	}
 	if err := u.waitTCP(ctx, dc, container); err != nil {
+		return err
+	}
+	if err := runLostBy(ctx); err != nil {
 		return err
 	}
 	if _, err := runScript(ctx, dc, container, provisioner.UnfenceScript()); err != nil {
@@ -431,6 +460,9 @@ func (u *DockerMajorUpgrader) serveOld(ctx context.Context, dc provisioner.Docke
 func (u *DockerMajorUpgrader) waitTCP(ctx context.Context, dc provisioner.DockerClient, container string) error {
 	deadline := u.now().Add(u.timings.Start)
 	for {
+		if err := runLostBy(ctx); err != nil {
+			return err
+		}
 		if code, err := dc.ExecInContainer(ctx, container, tcpReady); err == nil && code == 0 {
 			return nil
 		}
