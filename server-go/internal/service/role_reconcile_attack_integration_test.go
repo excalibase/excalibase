@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -176,11 +177,11 @@ func (p *rolePostgres) execer() roleSQLExecer {
 		if stdin == "" {
 			return p.execOutput(ctx, cmd)
 		}
-		const inputFile = "/tmp/role-sql-stdin"
-		if err := p.container.CopyToContainer(ctx, []byte(stdin), inputFile, 0o644); err != nil {
+		docker, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{})
+		if err != nil {
 			return "", err
 		}
-		return p.execOutput(ctx, append([]string{"sh", "-c", `"$@" < ` + inputFile, "sh"}, cmd...))
+		return docker.ExecInContainerStdin(ctx, p.container.GetContainerID(), cmd, stdin)
 	}
 }
 

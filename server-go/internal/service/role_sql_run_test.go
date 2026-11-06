@@ -5,13 +5,17 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
 type scriptedExecer struct {
-	calls   [][]string
-	inputs  []string
-	outputs []string
-	errs    []error
+	calls  [][]string
+	inputs []string
+	// cutShort leaves out what a role script prints when it reaches its end.
+	cutShort bool
+	outputs  []string
+	errs     []error
 }
 
 func (e *scriptedExecer) exec(_ context.Context, cmd []string, stdin string) (string, error) {
@@ -24,6 +28,9 @@ func (e *scriptedExecer) exec(_ context.Context, cmd []string, stdin string) (st
 	}
 	if i < len(e.errs) {
 		err = e.errs[i]
+	}
+	if strings.Contains(stdin, pgroles.RoleSQLDoneMarker) && !e.cutShort {
+		out += pgroles.RoleSQLDoneMarker
 	}
 	return out, err
 }

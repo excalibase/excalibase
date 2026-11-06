@@ -110,10 +110,7 @@ func (s *ProvisioningService) ReapplyCredentials(ctx context.Context, inst *doma
 		for _, role := range roles {
 			message = redactSecret(message, role.Password)
 		}
-		for _, role := range verifiers {
-			message = redactSecret(message, role.Verifier)
-		}
-		return errors.New("set the filed passwords back: " + message)
+		return withoutVerifiers(errors.New("set the filed passwords back: " + message))
 	}
 	return nil
 }

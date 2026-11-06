@@ -17,6 +17,9 @@ var quietSettings = [][2]string{
 	{"log_transaction_sample_rate", "0"},
 	{"log_error_verbosity", "terse"},
 	{"pgaudit.log", "none"},
+	// A deadlock victim's DETAIL prints what this session is running, under the
+	// victim's settings, so the running statement must not be on record.
+	{"track_activities", "off"},
 }
 
 // QuietSessionOptions are quietSettings as connect-time -c options.
@@ -38,3 +41,13 @@ func QuietSessionSQL() string {
 	}
 	return sql.String()
 }
+
+// QuietSessionPGOptions is the same for a psql in a script, as PGOPTIONS.
+func QuietSessionPGOptions() string {
+	return "-c " + strings.Join(QuietSessionOptions(), " -c ")
+}
+
+// RoleSQLDoneMarker is the last thing a role script prints. psql exits 0 when
+// stdin ends inside a transaction, which rolled it back, so only this says the
+// script reached its end.
+const RoleSQLDoneMarker = "excalibase_role_sql_done"

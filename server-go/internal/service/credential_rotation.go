@@ -334,7 +334,7 @@ func (s *ProvisioningService) alterRolePassword(ctx context.Context, inst *domai
 		return ErrCredentialRotationUnavailable
 	}
 	if err != nil {
-		return errors.New(redactSecret(redactSecret(err.Error(), password), verifier))
+		return withoutVerifiers(errors.New(redactSecret(err.Error(), password)))
 	}
 	return nil
 }

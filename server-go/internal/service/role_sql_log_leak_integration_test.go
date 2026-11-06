@@ -4,13 +4,15 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/excalibase/provisioning-poc/internal/pgroles"
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 )
 
@@ -242,33 +244,39 @@ func TestRoleSQLLockTimeoutRetryLeavesNoPasswordInTheServerLog(t *testing.T) {
 	}
 }
 
-// Rotation and the in-place reapply open a plain session and send the statement
-// on stdin, so the quiet settings have to be in force by the time it arrives.
-func TestAlterRolePasswordStatementLeavesNothingInTheServerLog(t *testing.T) {
+// rotationOn drives the production rotation statement through the real exec
+// stream, on a session as plain as production's.
+func rotationOn(t *testing.T, pg *rolePostgres) (*ProvisioningService, *domain.DatabaseInstance) {
+	t.Helper()
+	docker, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewProvisioningService(nil, nil, nil)
+	svc.SetDockerClient(docker)
+	return svc, &domain.DatabaseInstance{DBType: domain.PostgreSQL, DeploymentMode: domain.ModeDocker, Namespace: pg.container.GetContainerID()}
+}
+
+func TestRotationLeavesNothingInALogThatRecordsEveryStatement(t *testing.T) {
 	logLeakImages(t, func(t *testing.T, start func(*testing.T) *rolePostgres) {
 		pg := start(t)
 		pg.psql(t, "CREATE ROLE rotated LOGIN PASSWORD 'old'")
 		pg.psql(t, "ALTER SYSTEM SET log_statement = 'all'")
 		pg.psql(t, "SELECT pg_reload_conf()")
 		pg.waitForStatementLogging(t)
+		svc, inst := rotationOn(t, pg)
 		password := generatePassword(32)
 		passwords := map[string]string{"rotated": password}
-		psql := []string{"psql", "-U", "postgres", "-d", "app", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}
-		for _, role := range []string{"rotated", "no_such_role"} {
-			verifier, err := newScramVerifier(password)
-			if err != nil {
-				t.Fatal(err)
-			}
-			statement := pgroles.PinnedSearchPath + pgroles.QuietSessionSQL() + alterRolePasswordSQL(role, verifier) + "\n"
-			_, err = pg.execer()(context.Background(), psql, statement)
-			if (err != nil) != (role == "no_such_role") {
-				t.Fatalf("altering %s: %v", role, err)
-			}
-			if err != nil {
-				assertNoPassword(t, "returned error", err.Error(), passwords)
-				assertNoVerifier(t, "returned error", err.Error())
-			}
+		if err := svc.alterRolePassword(context.Background(), inst, "rotated", password); err != nil {
+			t.Fatalf("rotate: %v", err)
 		}
+		err := svc.alterRolePassword(context.Background(), inst, "no_such_role", password)
+		if err == nil {
+			t.Fatal("rotating a role that does not exist did not fail")
+		}
+		assertNoPassword(t, "returned error", err.Error(), passwords)
+		assertNoVerifier(t, "returned error", err.Error())
+		pg.waitForStatementLogging(t)
 		log := pg.serverLog(t)
 		if !strings.Contains(log, "no_such_role") {
 			t.Fatal("the server log does not hold the failure, so this test proves nothing")
@@ -285,7 +293,7 @@ func TestAlterRolePasswordStatementLeavesNothingInTheServerLog(t *testing.T) {
 // A rotation opens a plain session, so a tier's statement_timeout applies, and
 // a customer on the role being rotated can hold its row until that fires.
 // query_canceled is not among PL/pgSQL's OTHERS.
-func TestAlterRolePasswordTimingOutNamesNothing(t *testing.T) {
+func TestRotationTimingOutNamesNothing(t *testing.T) {
 	pg := startRolePostgresImage(t, "postgres:17")
 	pg.psql(t, "CREATE ROLE rotated LOGIN PASSWORD 'Held-Password-1'")
 	session := pg.connect(t, "rotated", "Held-Password-1")
@@ -297,19 +305,181 @@ func TestAlterRolePasswordTimingOutNamesNothing(t *testing.T) {
 	if _, err := tx.Exec("ALTER ROLE rotated PASSWORD 'Held-Password-2'"); err != nil {
 		t.Fatal(err)
 	}
-	password := generatePassword(32)
-	verifier, err := newScramVerifier(password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	statement := "SET statement_timeout = '500ms';\n" + pgroles.PinnedSearchPath + pgroles.QuietSessionSQL() + alterRolePasswordSQL("rotated", verifier) + "\n"
-	psql := []string{"psql", "-U", "postgres", "-d", "app", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}
-	_, err = pg.execer()(context.Background(), psql, statement)
+	pg.psql(t, "ALTER ROLE postgres SET statement_timeout = '500ms'")
+	svc, inst := rotationOn(t, pg)
+	err = svc.alterRolePassword(context.Background(), inst, "rotated", generatePassword(32))
 	if err == nil || !strings.Contains(err.Error(), "statement timeout") {
-		t.Fatalf("the statement did not time out: %v", err)
+		t.Fatalf("the rotation did not time out: %v", err)
 	}
 	assertNoVerifier(t, "returned error", err.Error())
 	assertNoVerifier(t, "server log", pg.serverLog(t))
+}
+
+// Customer roles get a password the customer chose, so a verifier in the log is
+// open to a dictionary. The functions run as the customer's session, which
+// cannot silence the log, so the handlers have to drop the context themselves.
+func TestCustomerRoleFunctionsTimingOutNameNothing(t *testing.T) {
+	pg := startRolePostgresImage(t, "postgres:17")
+	c := newPlatformSchemaCaseOn(t, pg)
+	c.register(t)
+	ctx := context.Background()
+	conn, err := c.admin.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "SET statement_timeout = '500ms'"); err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := newScramVerifier(generatePassword(24))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("create_role", func(t *testing.T) {
+		// A SHARE lock lets the function's guards read and stops only the CREATE.
+		holder, err := c.admin.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = holder.Rollback() }()
+		if _, err := holder.Exec("LOCK TABLE pg_catalog.pg_authid IN SHARE MODE"); err != nil {
+			t.Fatal(err)
+		}
+		_, err = conn.ExecContext(ctx, "SELECT excalibase.create_role('timed_out', $1, true)", verifier)
+		if err == nil || !strings.Contains(err.Error(), "statement timeout") {
+			t.Fatalf("create_role did not time out: %v", err == nil)
+		}
+		assertNoVerifier(t, "returned error", err.Error())
+		assertNoVerifier(t, "server log", pg.serverLog(t))
+	})
+
+	t.Run("alter_role_password", func(t *testing.T) {
+		held, err := newScramVerifier("Held-Password-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.ExecContext(ctx, "SELECT excalibase.create_role('held_role', $1, true)", held); err != nil {
+			t.Fatalf("create the role: %v", err)
+		}
+		tx, err := pg.connect(t, "held_role", "Held-Password-1").Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.Exec("ALTER ROLE held_role PASSWORD 'Held-Password-2'"); err != nil {
+			t.Fatal(err)
+		}
+		_, err = conn.ExecContext(ctx, "SELECT excalibase.alter_role_password('held_role', $1)", verifier)
+		if err == nil || !strings.Contains(err.Error(), "statement timeout") {
+			t.Fatalf("alter_role_password did not time out: %v", err == nil)
+		}
+		assertNoVerifier(t, "returned error", err.Error())
+		assertNoVerifier(t, "server log", pg.serverLog(t))
+	})
+}
+
+// waitForBlockedScript finds the superuser backend waiting on a customer's lock.
+func waitForBlockedScript(t *testing.T, admin *sql.DB) int {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		var pid int
+		err := admin.QueryRow(`SELECT pid FROM pg_stat_activity WHERE usename = 'postgres' AND wait_event_type = 'Lock' LIMIT 1`).Scan(&pid)
+		if err == nil {
+			return pid
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("the role script never blocked")
+	return 0
+}
+
+// blockedRoleScript runs the role SQL with the owner holding its own role row,
+// so the script stops in the block that names the owner's verifier.
+func blockedRoleScript(t *testing.T, major string) (*rolePostgres, *platformSchemaCase, *sql.Tx, <-chan error) {
+	t.Helper()
+	pg := startRolePostgresImage(t, major)
+	c := newPlatformSchemaCaseOn(t, pg)
+	c.registerAsBeforeEXC623(t)
+	spec := c.spec
+	spec.resetPasswords, spec.resetAdmin = true, true
+	spec.adminPassword = generatePassword(32)
+	tx, err := pg.connect(t, customerOwner, customerOwnerPassword).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	if _, err := tx.Exec("ALTER ROLE " + customerOwner + " PASSWORD 'Owner-Self-Held-1'"); err != nil {
+		t.Fatal(err)
+	}
+	script := mustProjectRoleSQL(t, spec, logLeakCreds(), "cdc_watcher_pub")
+	done := make(chan error, 1)
+	go func() {
+		done <- runSuperuserRoleSQL(context.Background(), pg.execer(), "app", reservedSchemaFirstSQL(), script)
+	}()
+	return pg, c, tx, done
+}
+
+// The customer's backend is the deadlock victim, under the customer's settings,
+// and its DETAIL prints what the other process is running.
+func TestDeadlockVictimDoesNotLogTheRoleScript(t *testing.T) {
+	pg, c, tx, done := blockedRoleScript(t, "postgres:14")
+	waitForBlockedScript(t, c.admin)
+	time.Sleep(1300 * time.Millisecond) // past the script's own deadlock check
+	_, err := tx.Exec("GRANT CONNECT ON DATABASE app TO PUBLIC")
+	_ = tx.Rollback()
+	if scriptErr := <-done; err == nil && scriptErr == nil {
+		t.Fatal("no deadlock happened, so this test proves nothing")
+	}
+	log := pg.serverLog(t)
+	if !strings.Contains(log, "deadlock detected") {
+		t.Fatal("no deadlock in the server log, so this test proves nothing")
+	}
+	assertNoVerifier(t, "server log", log)
+}
+
+// A FATAL cannot be caught in PL/pgSQL, so the context reaches the client.
+func TestFatalDuringTheRoleScriptReturnsNoVerifier(t *testing.T) {
+	pg, c, _, done := blockedRoleScript(t, "postgres:14")
+	pid := waitForBlockedScript(t, c.admin)
+	if _, err := c.admin.Exec("SELECT pg_terminate_backend($1)", pid); err != nil {
+		t.Fatal(err)
+	}
+	err := <-done
+	if err == nil {
+		t.Fatal("the terminated script reported success")
+	}
+	assertNoVerifier(t, "returned error", err.Error())
+	assertNoVerifier(t, "server log", pg.serverLog(t))
+}
+
+// stdin that stops short leaves psql at EOF inside a transaction: it rolls back
+// and exits 0, which must not read as success.
+func TestRoleScriptCutShortIsAFailure(t *testing.T) {
+	pg := startRolePostgresImage(t, "postgres:17")
+	cutShort := func(ctx context.Context, cmd []string, stdin string) (string, error) {
+		if stdin != "" {
+			stdin = stdin[:strings.Index(stdin, "CREATE ROLE cut_short;")+len("CREATE ROLE cut_short;")] + "\n"
+		}
+		return pg.execer()(ctx, cmd, stdin)
+	}
+	if err := runSuperuserRoleSQL(context.Background(), cutShort, "app", "CREATE ROLE cut_short;"); err == nil {
+		t.Fatal("a script that never reached its COMMIT reported success")
+	}
+}
+
+// The engine stops reading stdin when psql exits, so a large script that fails
+// early must still report the SQL error rather than a broken pipe.
+func TestRealExecReportsTheSQLErrorOfALargeScript(t *testing.T) {
+	pg := startRolePostgresImage(t, "postgres:17")
+	padding := "-- " + strings.Repeat("x", 1000) + "\n"
+	for _, size := range []int{1 << 20, 8 << 20} {
+		_, err := pg.execer()(context.Background(), superuserPsqlCommand("app", 170000), "SELECT 1/0;\n"+strings.Repeat(padding, size/len(padding)))
+		if err == nil || !strings.Contains(err.Error(), "division by zero") {
+			t.Errorf("%d bytes after the failure: the SQL error was lost: %v", size, err)
+		}
+	}
 }
 
 // A verifier we compute has to open the door with whatever the password holds,

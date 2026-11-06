@@ -87,6 +87,7 @@ func superuserScript(scripts ...string) string {
 	for _, script := range scripts {
 		input.WriteString("BEGIN;\n" + sessionGuardSQL + script + "\nCOMMIT;\n")
 	}
+	input.WriteString("SELECT '" + pgroles.RoleSQLDoneMarker + "';\n")
 	return input.String()
 }
 

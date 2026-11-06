@@ -368,13 +368,13 @@ func (s *ProvisioningService) execMongoUserSQL(ctx context.Context, inst *domain
 			return ErrMongoUsersUnavailable
 		}
 		_, err := s.dockerClient.ExecInContainerStdin(ctx, primary, psql, input)
-		return err
+		return withoutVerifiers(err)
 	}
 	if s.k8sClient == nil {
 		return ErrMongoUsersUnavailable
 	}
 	_, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, primary, "postgres", psql, input)
-	return err
+	return withoutVerifiers(err)
 }
 
 func mongoUserVaultPrefix(projectID string) string {
@@ -395,12 +395,13 @@ func createMongoUserSQL(username, verifier string, role MongoUserRole) string {
 	for _, grant := range append([]string{config.DocumentDBMongoUsersGroup}, role.documentDBGrants()...) {
 		b.WriteString("EXECUTE format('GRANT %I TO %I', '" + grant + "', n); ")
 	}
+	b.WriteString(raiseWithoutContext)
 	return mongoUserBlock(username, b.String())
 }
 
 // mongoUserBlock runs body with n bound to the user's name.
 func mongoUserBlock(username, body string) string {
-	return "DO $$ DECLARE n text := " + sqlTextLiteral(username) + "; BEGIN " + body + " " + raiseWithoutContext + " END $$;"
+	return "DO $$ DECLARE n text := " + sqlTextLiteral(username) + "; BEGIN " + body + " END $$;"
 }
 
 // isMongoUserSQL is true only for a direct member of the Mongo users group
@@ -413,7 +414,7 @@ const notAMongoUserGuard = "IF NOT " + isMongoUserSQL + " THEN RAISE EXCEPTION '
 
 func rotateMongoUserSQL(username, verifier string) string {
 	return mongoUserBlock(username, notAMongoUserGuard+
-		"EXECUTE format('ALTER ROLE %I WITH PASSWORD %L', n, "+sqlTextLiteral(verifier)+");")
+		"EXECUTE format('ALTER ROLE %I WITH PASSWORD %L', n, "+sqlTextLiteral(verifier)+"); "+raiseWithoutContext)
 }
 
 // dropMongoUserSQL drops the user if it exists. Anything it owns goes to the
