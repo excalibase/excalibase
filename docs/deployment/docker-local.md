@@ -261,6 +261,18 @@ logs `WARN: app networks: ...` where it cannot hold:
 - `APP_EGRESS=internet`: an isolated gateway cannot route out, so egress
   networks keep their address on the host; add the same rules.
 
+**After a reboot.** A reboot clears the host firewall's rules, and Docker starts any
+container with a restart policy as soon as it is up, without reading compose's
+dependencies. So project databases and watchers run with no restart policy: the engine
+proxy starts them once `excalibase-host-firewall` is healthy (about 30 seconds after
+boot) and refuses to before that, however long the firewall stays down. It restarts a
+crashed one within about 5 seconds, and leaves one stopped by the platform (a pause)
+stopped, across a reboot too. Tenants of an older release are moved over on the first
+start. To keep one down by hand, pause its project: `docker stop` looks like a crash and
+it comes back. Downgrading to a release before this one leaves them without a restart
+policy, so start them after each reboot. Apps keep Docker's restart policy: the firewall
+adds nothing to their project networks.
+
 Upgrading from a release before this one: on start, and on every network
 reconcile, provisioning remakes each older project network (and any made with
 `APP_EGRESS` other than it is now) (an engine cannot

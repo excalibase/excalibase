@@ -67,6 +67,7 @@ type Handler struct {
 	transport http.RoundTripper
 	forward   *httputil.ReverseProxy
 	dial      func(ctx context.Context) (net.Conn, error)
+	restarts  *restartGuard
 }
 
 // NewHandler proxies allowed calls to target through transport.
@@ -131,7 +132,10 @@ func (h *Handler) authorize(r *http.Request) error {
 			if err := h.requireOwnVolumes(r.Context(), volumes); err != nil {
 				return err
 			}
-			return h.requireManagedJoin(r.Context(), body)
+			if err := h.requireManagedJoin(r.Context(), body); err != nil {
+				return err
+			}
+			return h.holdRestartPolicy(r, body)
 		})
 	}
 	if handled, err := h.authorizeApps(r, api); handled {
@@ -169,6 +173,14 @@ func (h *Handler) authorizeContainer(r *http.Request, id, action string) error {
 			return refuse("a rename names exactly one name")
 		}
 		return h.policy.CheckRename(names[0])
+	}
+	if h.restarts != nil {
+		switch r.Method + " " + action {
+		case "POST /start":
+			return h.beforeStart(r.Context(), id)
+		case "POST /stop":
+			return h.beforeStop(r.Context(), id)
+		}
 	}
 	return nil
 }

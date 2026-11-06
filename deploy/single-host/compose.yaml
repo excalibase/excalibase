@@ -224,6 +224,11 @@ services:
       # Each platform network's real bridge, for the host firewall (EXC-683).
       PROXY_BRIDGE_NETWORKS: *bridge_networks
       PROXY_BRIDGES_FILE: /var/lib/excalibase-bridges/networks
+      # A reboot restarts everything with a restart policy, compose's dependencies unread:
+      # the proxy holds tenants to none and starts them once the firewall is healthy (EXC-683).
+      PROXY_FIREWALL_CONTAINER: excalibase-host-firewall
+      PROXY_STOPPED_FILE: /var/lib/excalibase-bridges/stopped
+      ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
     volumes:
       - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
       - bridges:/var/lib/excalibase-bridges

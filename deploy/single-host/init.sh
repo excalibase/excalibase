@@ -118,6 +118,23 @@ case $engine in
   podman)
     # Rootless: the container's root is this unprivileged user, the socket's owner.
     engine_socket=${engine_socket:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock}
+    # Rootful Podman's bridges are on the host and it has no DOCKER-USER chain:
+    # nothing would keep a tenant off the host (EXC-683). Fail closed.
+    rootless_hint="Run this as an unprivileged user with rootless Podman (systemctl --user enable --now podman.socket), or use Docker."
+    init_uid=${INIT_UID:-$(id -u)}
+    if [ "$init_uid" = 0 ]; then
+      echo "init.sh: rootful Podman is not supported: this is running as root, and nothing would guard the host from tenant containers. $rootless_hint" >&2
+      exit 1
+    fi
+    if [ ! -e "$engine_socket" ]; then
+      echo "init.sh: no engine socket at $engine_socket to check for rootless Podman. Start it first (systemctl --user enable --now podman.socket), or set --engine-socket." >&2
+      exit 1
+    fi
+    socket_owner=$(ls -nLd -- "$engine_socket" | awk '{print $3}')
+    if [ "$socket_owner" != "$init_uid" ]; then
+      echo "init.sh: rootful Podman is not supported: $engine_socket belongs to uid $socket_owner, not this user, and nothing would guard the host from tenant containers. $rootless_hint" >&2
+      exit 1
+    fi
     engine_socket_uid=0
     engine_socket_gid=0
     ;;

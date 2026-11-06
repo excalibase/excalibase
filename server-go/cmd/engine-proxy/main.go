@@ -14,6 +14,9 @@
 //	PROXY_STATS_CONTAINERS platform containers, by exact name, host monitoring reads stats and state of (optional)
 //	PROXY_BRIDGE_NETWORKS and PROXY_BRIDGES_FILE  platform networks whose host bridges the proxy
 //	                      writes to the file for the host firewall (optional, together; EXC-683)
+//	PROXY_FIREWALL_CONTAINER and PROXY_STOPPED_FILE  the firewall tenants wait for, and the record of those
+//	                      stopped on purpose (optional, together; EXC-683); off when ENGINE_SOCKET_UID is 0,
+//	                      rootless Podman, whose bridges live in the user's own namespace
 package main
 
 import (
@@ -48,6 +51,7 @@ type config struct {
 	// bridgeNetworks are written with their host bridges to bridgesFile.
 	bridgeNetworks []string
 	bridgesFile    string
+	restarts       *engineproxy.Restarts
 }
 
 // bridgesEvery is how often the bridges file is rewritten: a network
@@ -74,6 +78,12 @@ func main() {
 	if cfg.bridgesFile != "" {
 		go publishBridges(handler, cfg.bridgeNetworks, cfg.bridgesFile)
 	}
+	if cfg.restarts != nil {
+		if handler, err = handler.WithRestarts(*cfg.restarts); err != nil {
+			log.Fatalf("engine proxy: %v", err)
+		}
+		go handler.SuperviseRestarts(context.Background())
+	}
 	server := &http.Server{
 		Addr:              cfg.listen,
 		Handler:           handler,
@@ -99,6 +109,28 @@ func publishBridges(handler *engineproxy.Handler, networks []string, path string
 		}
 		time.Sleep(bridgesEvery)
 	}
+}
+
+// restartsSetting reads the guard on tenant restarts: both settings or neither.
+func restartsSetting(getenv func(string) string) (*engineproxy.Restarts, error) {
+	firewall := strings.TrimSpace(getenv("PROXY_FIREWALL_CONTAINER"))
+	file := strings.TrimSpace(getenv("PROXY_STOPPED_FILE"))
+	if (firewall == "") != (file == "") {
+		return nil, errors.New("PROXY_FIREWALL_CONTAINER and PROXY_STOPPED_FILE go together")
+	}
+	if firewall == "" {
+		return nil, nil
+	}
+	if !containerName.MatchString(firewall) {
+		return nil, fmt.Errorf("PROXY_FIREWALL_CONTAINER %q is not a container name", firewall)
+	}
+	if !filepath.IsAbs(file) {
+		return nil, fmt.Errorf("PROXY_STOPPED_FILE %q must be an absolute path", file)
+	}
+	if getenv("ENGINE_SOCKET_UID") == "0" {
+		return nil, nil
+	}
+	return &engineproxy.Restarts{FirewallContainer: firewall, StoppedFile: file}, nil
 }
 
 // bridgesSetting reads the networks whose bridges the proxy writes down, and where.
@@ -162,6 +194,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	restarts, err := restartsSetting(getenv)
+	if err != nil {
+		return config{}, err
+	}
 	bindIPs := splitList(getenv("PROXY_PORT_BIND_IPS"))
 	if len(bindIPs) == 0 {
 		bindIPs = []string{"127.0.0.1"}
@@ -187,6 +223,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		},
 		bridgeNetworks: bridgeNetworks,
 		bridgesFile:    bridgesFile,
+		restarts:       restarts,
 	}, nil
 }
 

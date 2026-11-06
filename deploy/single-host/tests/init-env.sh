@@ -94,6 +94,26 @@ if sh "$DIR/../init.sh" --env-file "$WORK/ip.env" --domain 203.0.113.7 --admin-e
   fail "init.sh accepted a bare address"
 fi
 
+# EXC-683: rootful Podman has neither the rootless exemption nor Docker's DOCKER-USER chain,
+# so nothing would guard the host. A root-owned socket, or running as root, is refused.
+refused_rootful() {
+  if env CGROUP_CONTROLLERS="cpu memory" UNPRIVILEGED_PORT_START=80 "$@" sh "$DIR/../init.sh" --env-file "$WORK/rootful.env" --domain example.com \
+    --admin-email me@example.com --engine podman $engine_socket_arg >"$WORK/out" 2>&1; then
+    fail "rootful Podman accepted ($*, socket: $engine_socket_arg)"
+  fi
+  grep -q "rootful Podman" "$WORK/out" || fail "rootful Podman refused without saying so: $(cat "$WORK/out")"
+  grep -q "rootless" "$WORK/out" || fail "the refusal does not say what to do: $(cat "$WORK/out")"
+  [ ! -e "$WORK/rootful.env" ] || fail "rootful Podman refused but .env written"
+}
+: >"$WORK/podman.sock"
+engine_socket_arg="--engine-socket /etc/passwd" refused_rootful
+engine_socket_arg="--engine-socket $WORK/podman.sock" refused_rootful INIT_UID=0
+# No socket to check is no proof of a rootless engine.
+if env CGROUP_CONTROLLERS="cpu memory" UNPRIVILEGED_PORT_START=80 sh "$DIR/../init.sh" --env-file "$WORK/nosock.env" --domain example.com \
+  --admin-email me@example.com --engine podman --engine-socket "$WORK/absent.sock" >"$WORK/out" 2>&1; then
+  fail "podman accepted with no socket to check"
+fi
+grep -q "podman.socket" "$WORK/out" || fail "the refusal does not say how to start the socket: $(cat "$WORK/out")"
 # Rootless Podman: the proxy runs as the container's root, which is the
 # unprivileged owner of the socket; low edge ports need the sysctl.
 host() { env UNPRIVILEGED_PORT_START=1024 CGROUP_CONTROLLERS="cpuset cpu io memory pids" SELINUX_MODE=Disabled "$@"; }

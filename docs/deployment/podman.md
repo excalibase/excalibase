@@ -13,6 +13,10 @@ Nothing runs as root at run time: the engine is the user's own Podman, and the
 engine proxy reaches the user's `podman.sock` (as the container's root, which in
 a rootless container is that unprivileged user).
 
+Rootful Podman is not supported: `init.sh` refuses when run as root or when the
+socket belongs to another user. Its bridges are on the host and it has no
+`DOCKER-USER` chain, so nothing would keep a tenant database off the host.
+
 ## Prerequisites
 
 - Podman 4.9 or newer and `podman compose` backed by **Docker Compose v2**

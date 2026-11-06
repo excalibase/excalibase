@@ -212,3 +212,34 @@ func TestLoadConfigRefusesHalfABridgesSetting(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfigReadsTheRestartGuard(t *testing.T) {
+	settings := map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_FIREWALL_CONTAINER": "excalibase-host-firewall",
+		"PROXY_STOPPED_FILE": "/var/lib/excalibase-bridges/stopped"}
+	cfg, err := loadConfig(env(settings))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.restarts == nil || cfg.restarts.FirewallContainer != "excalibase-host-firewall" || cfg.restarts.StoppedFile != "/var/lib/excalibase-bridges/stopped" {
+		t.Fatalf("restarts %+v", cfg.restarts)
+	}
+	// Rootless Podman's bridges live in the user's namespace: nothing to wait for, as the firewall itself decides.
+	settings["ENGINE_SOCKET_UID"] = "0"
+	if cfg, err = loadConfig(env(settings)); err != nil || cfg.restarts != nil {
+		t.Fatalf("rootless Podman: restarts %+v, err %v", cfg.restarts, err)
+	}
+}
+
+func TestLoadConfigRefusesHalfARestartGuard(t *testing.T) {
+	for _, settings := range []map[string]string{
+		{"PROXY_FIREWALL_CONTAINER": "excalibase-host-firewall"},
+		{"PROXY_STOPPED_FILE": "/var/lib/excalibase-bridges/stopped"},
+		{"PROXY_FIREWALL_CONTAINER": "not a name", "PROXY_STOPPED_FILE": "/var/lib/excalibase-bridges/stopped"},
+		{"PROXY_FIREWALL_CONTAINER": "excalibase-host-firewall", "PROXY_STOPPED_FILE": "relative/stopped"},
+	} {
+		settings["PROXY_NETWORKS"] = "excalibase-tenants"
+		if _, err := loadConfig(env(settings)); err == nil {
+			t.Errorf("%v accepted", settings)
+		}
+	}
+}
