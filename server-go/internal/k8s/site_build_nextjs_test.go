@@ -288,42 +288,65 @@ func TestNextjsPreset_UsersBuildCommandRunsAndOpenNextSkipsItsOwn(t *testing.T) 
 	}
 }
 
-// A repository that declares neither tool still builds: the pinned versions are added to the checkout.
-func TestNextjsPreset_AddsThePinnedToolsToARepositoryThatDoesNotDeclareThem(t *testing.T) {
-	for lockfile, manager := range map[string]string{"": "npm", "pnpm-lock.yaml": "corepack pnpm", "yarn.lock": "corepack yarn"} {
-		work, scripts := t.TempDir(), scriptDir(t)
-		project := filepath.Join(work, "src")
-		nextProject(t, work, "")
-		if err := os.RemoveAll(filepath.Join(project, "node_modules/.bin")); err != nil {
-			t.Fatal(err)
-		}
-		if lockfile != "" {
-			write(t, filepath.Join(project, lockfile), "")
-		}
-		// The package manager stub records the add and then provides the tools, as installing them would.
-		stub := "#!/bin/bash\necho \"$(basename $0) $*\" >> \"$WORK_DIR/adds\"\n[[ $1 == pnpm || $1 == yarn ]] && shift\n[[ $1 == add || $1 == install ]] || exit 0\n" +
-			"mkdir -p node_modules/.bin\nfor tool in opennextjs-cloudflare wrangler; do cp \"$WORK_DIR/tool-$tool\" node_modules/.bin/$tool; done\n"
-		write(t, filepath.Join(work, "bin", "npm"), stub)
-		write(t, filepath.Join(work, "bin", "corepack"), stub)
-		for _, tool := range []string{"opennextjs-cloudflare", "wrangler"} {
-			write(t, filepath.Join(work, "tool-"+tool), "#!/bin/bash\necho \""+tool+" $*\" >> \"$WORK_DIR/calls\"\n"+
-				"while [[ $# -gt 0 ]]; do [[ $1 == --outdir ]] && out=$2; shift; done\n[[ -n ${out:-} ]] && mkdir -p \"$out\" && echo x > \"$out/worker.js\"\n"+
-				"[[ "+tool+" == opennextjs-cloudflare ]] && mkdir -p .open-next/assets .open-next/server-functions/default .next/server && cp \"$WORK_DIR/resolved.mjs\" .open-next/server-functions/default/open-next.config.mjs && cp \"$WORK_DIR/manifest.json\" .next/server/functions-config-manifest.json\nexit 0\n")
-		}
-		code, out := build(t, work, scripts)
-		adds, _ := os.ReadFile(filepath.Join(work, "adds"))
-		if code != 0 || !strings.Contains(string(adds), "@opennextjs/cloudflare@1.20.12 wrangler@4.150.0") || !strings.Contains(string(adds), strings.Fields(manager)[len(strings.Fields(manager))-1]) {
-			t.Errorf("%s: exit %d, adds %q:\n%s", manager, code, adds, out)
+// A repository that declares neither tool still builds: the OpenNext release that supports its Next.js is added to the checkout.
+func TestNextjsPreset_AddsTheToolsOfARepositoryThatDoesNotDeclareThem(t *testing.T) {
+	pairs := map[string]string{"16.3.8": "1.20.11", "16.4.0": "1.20.11", "16.4.1": "1.20.12", "16.5.2": "1.20.12", "15.5.27": "1.20.11", "15.5.28": "1.20.12", "15.6.0": "1.20.12"}
+	for next, opennext := range pairs {
+		for lockfile, manager := range map[string]string{"": "npm", "pnpm-lock.yaml": "pnpm", "yarn.lock": "yarn"} {
+			work, scripts := t.TempDir(), scriptDir(t)
+			project := tooless(t, work, next, lockfile)
+			code, out := build(t, work, scripts)
+			adds, _ := os.ReadFile(filepath.Join(work, "adds"))
+			want := "@opennextjs/cloudflare@" + opennext + " wrangler@4.150.0"
+			if code != 0 || !strings.Contains(string(adds), want) || !strings.Contains(string(adds), manager) {
+				t.Errorf("next %s with %s: exit %d, adds %q, want %q:\n%s", next, manager, code, adds, want, out)
+			}
+			_ = project
 		}
 	}
 }
 
-func TestNextjsPreset_FailedToolInstallIsABuildFailure(t *testing.T) {
-	work, scripts := t.TempDir(), scriptDir(t)
+func TestNextjsPreset_RefusesANextVersionNoOpenNextSupports(t *testing.T) {
+	for _, next := range []string{"14.2.0", "15.5.26", "16.3.7", "16.0.0"} {
+		work, scripts := t.TempDir(), scriptDir(t)
+		tooless(t, work, next, "")
+		code, out := build(t, work, scripts)
+		if code != exitFramework || !strings.Contains(out, "Next.js version") || !strings.Contains(out, "app container") {
+			t.Errorf("next %s: exit %d, want %d naming the version:\n%s", next, code, exitFramework, out)
+		}
+		if adds, _ := os.ReadFile(filepath.Join(work, "adds")); len(adds) != 0 {
+			t.Errorf("next %s: the tools were added anyway: %s", next, adds)
+		}
+	}
+}
+
+// tooless is a project with Next.js at version next that declares neither tool; the package manager stub
+// records the add and then provides the tools, as installing them would.
+func tooless(t *testing.T, work, next, lockfile string) string {
+	t.Helper()
 	project := nextProject(t, work, "")
 	if err := os.RemoveAll(filepath.Join(project, "node_modules/.bin")); err != nil {
 		t.Fatal(err)
 	}
+	write(t, filepath.Join(project, "node_modules/next/package.json"), `{"name":"next","version":"`+next+`"}`)
+	if lockfile != "" {
+		write(t, filepath.Join(project, lockfile), "")
+	}
+	stub := "#!/bin/bash\necho \"$(basename $0) $*\" >> \"$WORK_DIR/adds\"\n[[ $1 == pnpm || $1 == yarn ]] && shift\n[[ $1 == add || $1 == install ]] || exit 0\n" +
+		"mkdir -p node_modules/.bin\nfor tool in opennextjs-cloudflare wrangler; do cp \"$WORK_DIR/tool-$tool\" node_modules/.bin/$tool; done\n"
+	write(t, filepath.Join(work, "bin", "npm"), stub)
+	write(t, filepath.Join(work, "bin", "corepack"), stub)
+	for _, tool := range []string{"opennextjs-cloudflare", "wrangler"} {
+		write(t, filepath.Join(work, "tool-"+tool), "#!/bin/bash\necho \""+tool+" $*\" >> \"$WORK_DIR/calls\"\n"+
+			"while [[ $# -gt 0 ]]; do [[ $1 == --outdir ]] && out=$2; shift; done\n[[ -n ${out:-} ]] && mkdir -p \"$out\" && echo x > \"$out/worker.js\"\n"+
+			"[[ "+tool+" == opennextjs-cloudflare ]] && mkdir -p .open-next/assets .open-next/server-functions/default .next/server && cp \"$WORK_DIR/resolved.mjs\" .open-next/server-functions/default/open-next.config.mjs && cp \"$WORK_DIR/manifest.json\" .next/server/functions-config-manifest.json\nexit 0\n")
+	}
+	return project
+}
+
+func TestNextjsPreset_FailedToolInstallIsABuildFailure(t *testing.T) {
+	work, scripts := t.TempDir(), scriptDir(t)
+	tooless(t, work, "16.4.1", "")
 	write(t, filepath.Join(work, "bin", "npm"), "#!/bin/bash\nexit 1\n")
 	if code, out := build(t, work, scripts); code != exitBuild {
 		t.Fatalf("exit %d, want %d:\n%s", code, exitBuild, out)

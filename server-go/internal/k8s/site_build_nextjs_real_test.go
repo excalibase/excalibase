@@ -3,6 +3,7 @@
 package k8s
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,7 +37,7 @@ func TestNextjsPreset_BuildsAPlainRepoWithRealTools(t *testing.T) {
 	if out, err := exec.Command("chmod", "-R", "a+rwX", work, scripts).CombinedOutput(); err != nil {
 		t.Fatalf("chmod: %v %s", err, out)
 	}
-	run := exec.Command("docker", "run", "--rm", "-u", "1000:1000", "-e", "HOME=/work/home", "-e", "CI=true",
+	run := exec.Command("docker", "run", "--rm", "-u", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "-e", "HOME=/work/home", "-e", "CI=true",
 		"-e", "npm_config_cache=/work/npm-cache", "-e", "NEXT_TELEMETRY_DISABLED=1", "-e", "FRAMEWORK=nextjs", "-e", "ROOT_DIR=", "-e", "OUTPUT_DIR=",
 		"-e", "HOLD_SECONDS=0", "-v", work+":/work", "-v", scripts+":/scripts:ro", "-w", "/work", sitebuilds.PinnedNodeImages["22"],
 		"bash", "-c", "bash /scripts/build.sh; code=$?; echo BUILD_EXIT=$code; [ $code -eq 0 ] && bash /scripts/collect.sh; echo COLLECT_EXIT=$?")

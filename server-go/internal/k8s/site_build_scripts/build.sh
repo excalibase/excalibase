@@ -4,8 +4,6 @@
 # framework preset refused the app (nextjs_preset below).
 set -uo pipefail
 
-# Tested together (spike 2026-10-29: next 16.4.1 with OpenNext 1.20.11 builds green and then fails every dynamic route).
-OPENNEXT_VERSION=1.20.12
 WRANGLER_VERSION=4.150.0
 # The Worker is bundled and published with this one date and these flags, never the repository's.
 COMPAT_DATE=2025-09-01
@@ -24,12 +22,29 @@ package_manager() {
   fi
 }
 
+# opennext_for prints the OpenNext version to add for the project's Next.js, or nothing when none fits. The pairs are
+# the ones each release declares as its peer range; next 16.4.1 with OpenNext 1.20.11 builds green and then fails
+# every dynamic route (spike 2026-10-29), so 16.4.1 and later take 1.20.12.
+opennext_for() {
+  node -e '
+    const [major, minor, patch] = require("next/package.json").version.split("-")[0].split(".").map(Number);
+    const at = (a, b, c) => major > a || (major === a && (minor > b || (minor === b && patch >= c)));
+    if (at(16, 4, 1) || (major === 15 && at(15, 5, 28))) console.log("1.20.12");
+    else if (at(16, 3, 8) || (major === 15 && at(15, 5, 27))) console.log("1.20.11");
+  ' 2>/dev/null
+}
+
 # The tools must resolve from the project: the generated config imports @opennextjs/cloudflare and
 # esbuild looks for it there. A repository that does not declare them gets the pinned versions,
 # added to the throwaway checkout (its package.json is not kept).
 ensure_tools() {
   [[ -x node_modules/.bin/opennextjs-cloudflare && -x node_modules/.bin/wrangler ]] && return 0
-  local packages=("@opennextjs/cloudflare@$OPENNEXT_VERSION" "wrangler@$WRANGLER_VERSION")
+  local opennext
+  opennext=$(opennext_for)
+  if [[ -z "$opennext" ]]; then
+    refuse "its Next.js version is not one OpenNext supports (15.5.27 or later in 15.x, or 16.3.8 or later); upgrade Next.js"
+  fi
+  local packages=("@opennextjs/cloudflare@$opennext" "wrangler@$WRANGLER_VERSION")
   echo "\$ add ${packages[*]} (the repository does not declare them)"
   case "$(package_manager)" in
     pnpm) corepack pnpm add -D --ignore-scripts "${packages[@]}" ;;
