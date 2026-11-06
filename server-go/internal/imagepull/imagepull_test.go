@@ -3,11 +3,15 @@ package imagepull
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 )
@@ -88,5 +92,55 @@ func TestEnsure_GivesUpAfterTheAttempts(t *testing.T) {
 	}
 	if len(engine.pulls) != 3 {
 		t.Fatalf("pulls = %d, want 3", len(engine.pulls))
+	}
+}
+
+func TestDrain_ReadsTheErrorDetailToo(t *testing.T) {
+	err := Drain(strings.NewReader(`{"errorDetail":{"message":"blob unknown"}}` + "\n"))
+	if err == nil || !strings.Contains(err.Error(), "blob unknown") {
+		t.Fatalf("errorDetail alone must fail, got %v", err)
+	}
+}
+
+func TestEnsure_DoesNotRetryARefusalThatWillNotChange(t *testing.T) {
+	engine := &fakeEngine{pullErrs: []error{fmt.Errorf("denied: %w", errdefs.ErrUnauthenticated), nil}}
+	if err := Ensure(context.Background(), engine, "ghcr.io/x/y:1", 3, time.Millisecond); err == nil {
+		t.Fatal("an unauthorized pull must fail")
+	}
+	if len(engine.pulls) != 1 {
+		t.Fatalf("pulls = %d, want 1", len(engine.pulls))
+	}
+}
+
+func TestEnsureLocal_PullsThroughTheDaemonTheEnvironmentNames(t *testing.T) {
+	var pulled []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/_ping", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/json"):
+			http.Error(w, `{"message":"No such image"}`, http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			pulled = append(pulled, r.URL.Query().Get("fromImage"))
+			_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	t.Setenv("DOCKER_HOST", "tcp://"+strings.TrimPrefix(server.URL, "http://"))
+	if err := EnsureLocal(context.Background(), "postgres:16"); err != nil {
+		t.Fatal(err)
+	}
+	if len(pulled) != 1 {
+		t.Fatalf("pulled %v, want one pull", pulled)
+	}
+}
+
+func TestEnsureLocal_LeavesAMissingDaemonToTheCaller(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
+	if err := EnsureLocal(context.Background(), "postgres:16"); err != nil {
+		t.Fatalf("no daemon is not this package's failure: %v", err)
 	}
 }

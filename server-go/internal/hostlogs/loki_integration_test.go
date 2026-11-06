@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net/http"
 	"path/filepath"
 	"runtime"
@@ -34,6 +35,9 @@ func startBundledLoki(t *testing.T) string {
 	ctx := context.Background()
 	_, here, _, _ := runtime.Caller(0)
 	config := filepath.Join(filepath.Dir(here), "..", "..", "..", "deploy", "single-host", "loki", "loki.yaml")
+	if err := imagepull.EnsureLocal(ctx, lokiImage); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        lokiImage,

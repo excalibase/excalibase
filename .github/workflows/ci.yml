@@ -56,6 +56,7 @@ jobs:
               - 'server-go/internal/hostlogs/**'
               - 'server-go/internal/enginestats/**'
               - 'server-go/internal/dockerbuilds/**'
+              - 'server-go/internal/imagepull/**'
               - 'server-go/internal/buildegress/**'
               - 'server-go/cmd/build-egress/**'
               - 'server-go/cmd/server/site_builds.go'

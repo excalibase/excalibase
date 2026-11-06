@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"slices"
 	"strings"
 	"sync"
@@ -46,6 +47,9 @@ func newPGAppStore(t *testing.T) *apphost.PostgresAppStore {
 
 func startPlatformDB() (*sql.DB, error) {
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		return nil, err
+	}
 	c, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("platform_test"),
 		postgres.WithUsername("platform"),

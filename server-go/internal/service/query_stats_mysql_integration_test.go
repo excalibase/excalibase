@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,9 @@ type statsMySQL struct{ addr string }
 func startStatsMySQL(t *testing.T) statsMySQL {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "mysql:8.4"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "mysql:8.4",

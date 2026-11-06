@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"testing"
 	"time"
 
@@ -19,6 +20,9 @@ func setupPG(t *testing.T) (*sql.DB, *sql.DB, func()) {
 	t.Helper()
 	ctx := context.Background()
 
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgContainer, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("superuser"),

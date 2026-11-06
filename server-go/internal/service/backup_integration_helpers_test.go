@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"os/exec"
 	"strings"
 	"testing"
@@ -29,6 +30,9 @@ import (
 // Extracted so the PITR tests share one setup path with low cognitive load.
 func startArchivingPostgres(ctx context.Context, t *testing.T, pgPwd string) (testcontainers.Container, string) {
 	t.Helper()
+	if err := imagepull.EnsureLocal(ctx, "postgres:17"); err != nil {
+		t.Fatal(err)
+	}
 	pgC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: "postgres:17",

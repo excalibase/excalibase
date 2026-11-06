@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"maps"
 	"net/http"
 	"net/url"
@@ -42,6 +43,9 @@ func startZot(t *testing.T, issuer *Issuer) string {
 	conf := `{"distSpecVersion":"1.1.1","storage":{"rootDirectory":"/tmp/zot"},"http":{"address":"0.0.0.0","port":"5000",
 	  "auth":{"bearer":{"realm":"http://token.invalid/internal/registry/token","service":"` + service + `","cert":"/etc/zot/token.pub"}}},"log":{"level":"info"}}`
 	if err := os.WriteFile(config, []byte(conf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := imagepull.EnsureLocal(ctx, zotImage); err != nil {
 		t.Fatal(err)
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
