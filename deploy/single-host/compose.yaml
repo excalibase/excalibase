@@ -47,6 +47,7 @@ services:
       # The host firewall (EXC-683): on Docker, on unless HOST_FIREWALL=off, on a release that has it.
       HOST_FIREWALL: ${HOST_FIREWALL:-}
       APP_EGRESS_EXTRA_DENY_CIDRS: ${APP_EGRESS_EXTRA_DENY_CIDRS:-}
+      APP_HOSTING_ENABLED: ${APP_HOSTING_ENABLED:-false}
       APP_EGRESS: ${APP_EGRESS:-}
       APP_EGRESS_UNGUARDED: ${APP_EGRESS_UNGUARDED:-}
       HOST_RESOLV_CONF: ${HOST_RESOLV_CONF:-}

@@ -360,6 +360,11 @@ func (h *Handler) authorizeApps(r *http.Request, api string) (handled bool, err 
 			return true, err
 		}
 		return true, h.checkBody(r, h.policy.CheckNetworkCreate)
+	case api == "/networks":
+		if err := methodOnly(r, http.MethodGet); err != nil {
+			return true, err
+		}
+		return true, checkManagedFilter(r.URL.Query(), h.policy.ManagedLabel)
 	case api == "/volumes/create":
 		if err := methodOnly(r, http.MethodPost); err != nil {
 			return true, err
@@ -415,6 +420,15 @@ func (h *Handler) checkMember(r *http.Request, network string, body []byte, disc
 	}
 	if h.policy.EdgeContainer != "" && container == h.policy.EdgeContainer {
 		return nil
+	}
+	if !disconnect && h.policy.FenceProjectBridges && network == h.policy.NetworkPrefix+BuildEgressNetwork {
+		found, err := h.inspectGuarded(r.Context(), container)
+		if err != nil {
+			return err
+		}
+		if len(found.Config.Entrypoint) == 0 || found.Config.Entrypoint[0] != BuildEgressEntrypoint {
+			return refuse("network %q is the builds' proxy's alone", network)
+		}
 	}
 	return h.requireManaged(r.Context(), container)
 }

@@ -3,6 +3,7 @@ package dockerapps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -174,6 +175,42 @@ func TestWithdrawingAProjectStopsAReplicaThatCrashedToo(t *testing.T) {
 	}
 	if !slices.Contains(h.engine.calls, "stop "+name) {
 		t.Fatalf("calls %v, want a stop of the crashed replica", h.engine.calls)
+	}
+}
+
+// The proxy reads a crashed replica it will restart as restarting: never moved under its feet.
+func TestADiskMoveRefusesAReplicaBeingRestarted(t *testing.T) {
+	h := newHarness(t, func(o *Options) { o.Egress = true })
+	h.rollout(freeApp(), "dep-1")
+	h.engine.containers[h.appContainers()[0]].state = "restarting"
+	h.engine.calls = nil
+	err := h.rt.RepointAppDisk(context.Background(), testDB, "app-01", "another-claim")
+	if !errors.Is(err, k8s.ErrAppNotPaused) {
+		t.Fatalf("err %v, want ErrAppNotPaused", err)
+	}
+	if len(h.engine.calls) != 0 {
+		t.Fatalf("it touched the engine: %v", h.engine.calls)
+	}
+}
+
+// A project network whose last app record went first (DeleteAppWorkload) still gets remade:
+// its database is attached to it, and the proxy holds that database off an older bridge.
+func TestAnOlderBridgeWithNoAppRecordIsRemadeToo(t *testing.T) {
+	h := newHarness(t, func(o *Options) { o.Egress = true })
+	verified(t, h)
+	h.rollout(freeApp(), "dep-1")
+	if err := h.rt.removeRecord(testProject, "app-01"); err != nil {
+		t.Fatal(err)
+	}
+	delete(h.engine.networks[testNet].options.Options, bridgeNameOption)
+	if err := h.rt.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := projectBridge(h), engineproxy.ProjectBridgeName(testNet); got != want {
+		t.Fatalf("bridge %q, want %q", got, want)
+	}
+	if !slices.Contains(h.engine.networks[testNet].members, testDB) {
+		t.Fatalf("the database is off its network: %v", h.engine.networks[testNet].members)
 	}
 }
 

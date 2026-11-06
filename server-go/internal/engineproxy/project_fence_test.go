@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func fencedPolicy() Policy {
@@ -308,5 +312,246 @@ func TestTheBuildsSidecarNetworkNeedsNoFirewall(t *testing.T) {
 	engine.networks = map[string]map[string]any{sidecar: {"Driver": "bridge", "Internal": false}}
 	if resp := serve(t, handler, http.MethodPost, "/containers/egress/start", ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("start answered %d", resp.StatusCode)
+	}
+}
+
+// A pause's stop landing inside the supervisor's pass, after it read the record and before its start.
+func TestAPauseDuringASupervisorPassKeepsTheReplicaDown(t *testing.T) {
+	engine := &restartEngine{containers: map[string]*restartContainer{"crashed": egressApp("exited"), testFirewall: firewall("running", "healthy")}, networks: fencedEgress()}
+	var proxyURL atomic.Value
+	var firewallReads atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasPrefix(stripVersion(r.URL.Path), "/containers/"+testFirewall+"/json") && firewallReads.Add(1) == 2 {
+			resp, err := http.Post(proxyURL.Load().(string)+"/containers/crashed/stop", "application/json", nil)
+			if err != nil {
+				t.Error(err)
+			} else {
+				resp.Body.Close()
+			}
+		}
+		engine.ServeHTTP(w, r)
+	}))
+	defer upstream.Close()
+	target, _ := url.Parse(upstream.URL)
+	handler, err := NewHandler(testPolicy(), target, http.DefaultTransport).WithRestarts(Restarts{FirewallContainer: testFirewall, StoppedFile: filepath.Join(t.TempDir(), "stopped")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	defer proxy.Close()
+	proxyURL.Store(proxy.URL)
+	handler.superviseOnce(context.Background())
+	handler.superviseOnce(context.Background())
+	if engine.containers["crashed"].status == "running" || !handler.restarts.isStopped("crashed") {
+		t.Fatalf("a paused replica is %s, its record %v", engine.containers["crashed"].status, handler.restarts.isStopped("crashed"))
+	}
+}
+
+// A stop that arrives while the start is on its way to the engine waits for it, then stops what it
+// started; let through at once it would land first, and the start after it would win.
+func TestAStopArrivingDuringASupervisorStartWinsOverIt(t *testing.T) {
+	engine := &restartEngine{containers: map[string]*restartContainer{"crashed": egressApp("exited"), testFirewall: firewall("running", "healthy")}, networks: fencedEgress()}
+	var proxyURL atomic.Value
+	answered := make(chan int, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/crashed/start") {
+			go func() {
+				resp, err := http.Post(proxyURL.Load().(string)+"/containers/crashed/stop", "application/json", nil)
+				if err != nil {
+					t.Error(err)
+					answered <- 0
+					return
+				}
+				resp.Body.Close()
+				answered <- resp.StatusCode
+			}()
+			time.Sleep(100 * time.Millisecond)
+		}
+		engine.ServeHTTP(w, r)
+	}))
+	defer upstream.Close()
+	target, _ := url.Parse(upstream.URL)
+	handler, err := NewHandler(testPolicy(), target, http.DefaultTransport).WithRestarts(Restarts{FirewallContainer: testFirewall, StoppedFile: filepath.Join(t.TempDir(), "stopped")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	defer proxy.Close()
+	proxyURL.Store(proxy.URL)
+	handler.superviseOnce(context.Background())
+	if status := <-answered; status != http.StatusNoContent {
+		t.Fatalf("stop answered %d", status)
+	}
+	handler.superviseOnce(context.Background())
+	if engine.containers["crashed"].status != "exited" || !handler.restarts.isStopped("crashed") {
+		t.Fatalf("status %s, record %v", engine.containers["crashed"].status, handler.restarts.isStopped("crashed"))
+	}
+}
+
+// A start the proxy gave up on may still land in the engine after a stop: that is not "started by hand".
+func TestAStartThatTimedOutCannotOutliveAStop(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"crashed": egressApp("exited"), testFirewall: firewall("running", "healthy")})
+	engine.networks = fencedEgress()
+	engine.hang = map[string]bool{"crashed": true}
+	handler.restarts.startTimeout = 50 * time.Millisecond
+	handler.superviseOnce(context.Background())
+	engine.mu.Lock()
+	engine.hang = nil
+	engine.mu.Unlock()
+	if err := handler.restarts.setStopped("crashed", true); err != nil {
+		t.Fatal(err)
+	}
+	engine.mu.Lock()
+	engine.containers["crashed"].status = "running" // the hung start landed after all
+	engine.mu.Unlock()
+
+	handler.superviseOnce(context.Background())
+	if engine.containers["crashed"].status != "exited" || !handler.restarts.isStopped("crashed") {
+		t.Fatalf("status %s, record %v", engine.containers["crashed"].status, handler.restarts.isStopped("crashed"))
+	}
+}
+
+// Under Docker's policy a crashed replica reads as restarting, and everything that asks "is it paused?"
+// (a disk move above all) relies on that: exited means stopped on purpose.
+func TestACrashedAppTheProxyWillRestartReadsAsRestarting(t *testing.T) {
+	paused := egressApp("running")
+	db := tenant("exited")
+	isolatedApp := egressApp("exited")
+	isolatedApp.mode = "excalibase-proj-isolated"
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"crashed": egressApp("exited"), "paused": paused, "db": db, "isolated": isolatedApp, testFirewall: firewall("running", "starting")})
+	engine.networks = fencedEgress()
+	engine.networks["excalibase-proj-isolated"] = map[string]any{"Driver": "bridge", "Internal": true,
+		"Options": map[string]string{gatewayModeIPv4: gatewayIsolated, gatewayModeIPv6: gatewayIsolated}}
+	if resp := serve(t, handler, http.MethodPost, "/containers/paused/stop", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("stop answered %d", resp.StatusCode)
+	}
+	inspectState := func(id string) (string, bool) {
+		t.Helper()
+		resp := serve(t, handler, http.MethodGet, "/containers/"+id+"/json", "")
+		defer resp.Body.Close()
+		var inspected struct {
+			State struct {
+				Status     string
+				Restarting bool
+			}
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&inspected); err != nil {
+			t.Fatal(err)
+		}
+		return inspected.State.Status, inspected.State.Restarting
+	}
+	if status, restarting := inspectState("crashed"); status != "restarting" || !restarting {
+		t.Fatalf("a crashed app inspects as %s restarting=%v", status, restarting)
+	}
+	for _, id := range []string{"paused", "db", "isolated"} {
+		if status, restarting := inspectState(id); status != "exited" || restarting {
+			t.Fatalf("%s inspects as %s restarting=%v", id, status, restarting)
+		}
+	}
+	resp := serve(t, handler, http.MethodGet, "/containers/json?all=1&filters="+url.QueryEscape(`{"label":{"excalibase.managed=true":true}}`), "")
+	defer resp.Body.Close()
+	var list []struct {
+		ID    string `json:"Id"`
+		State string
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"crashed": "restarting", "paused": "exited", "db": "exited", "isolated": "exited"}
+	for _, listed := range list {
+		if listed.State != want[listed.ID] {
+			t.Errorf("%s lists as %s, want %s", listed.ID, listed.State, want[listed.ID])
+		}
+	}
+	if len(list) != len(want) {
+		t.Fatalf("listed %v", list)
+	}
+}
+
+// Nothing managed runs off the firewall's wildcard: Docker's default bridge has no rule of ours.
+func TestAFencingProxyAdmitsNoContainerOnTheDefaultBridgeOrTheBuildsNetwork(t *testing.T) {
+	p := fencedPolicy()
+	body := func(mode, endpoints string) []byte {
+		return []byte(`{"Image":"x","Labels":{"excalibase.managed":"true"},"HostConfig":{"NetworkMode":"` + mode + `"},"NetworkingConfig":{"EndpointsConfig":{` + endpoints + `}}}`)
+	}
+	for label, create := range map[string][]byte{
+		"docker0 by name":         body("bridge", ""),
+		"docker0 by default":      body("default", ""),
+		"docker0 by no mode":      body("", ""),
+		"the builds' network":     body(p.NetworkPrefix+BuildEgressNetwork, ""),
+		"the builds' as endpoint": body("", `"`+p.NetworkPrefix+BuildEgressNetwork+`":{}`),
+	} {
+		if err := p.CheckCreate("excalibase-appx", create); err == nil {
+			t.Errorf("%s was admitted", label)
+		}
+	}
+	for label, create := range map[string][]byte{
+		"a tenant on its network": body("", `"excalibase-tenants":{}`),
+		"no network":              body("none", ""),
+		"a project network":       body("excalibase-proj-p1", ""),
+	} {
+		if err := p.CheckCreate("excalibase-appx", create); err != nil {
+			t.Errorf("%s: %v", label, err)
+		}
+	}
+	if err := testPolicy().CheckCreate("excalibase-appx", body("bridge", "")); err != nil {
+		t.Errorf("rootless Podman, with no fence: %v", err)
+	}
+}
+
+func TestOnlyTheBuildsProxyJoinsTheirNetwork(t *testing.T) {
+	sidecar := &restartContainer{labels: map[string]string{ManagedLabel: "true", componentLabel: "build"}, mode: "excalibase-proj-build-1", policy: "no", status: "created", entrypoint: []string{BuildEgressEntrypoint}}
+	app := egressApp("running")
+	app.entrypoint = []string{"/app/run"}
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"sidecar": sidecar, "app": app})
+	engine.networks = fencedEgress()
+	handler.policy.FenceProjectBridges = true
+	join := func(container string) error {
+		body, err := json.Marshal(map[string]any{"Container": container})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handler.authorize(httptest.NewRequest(http.MethodPost, "/networks/excalibase-proj-"+BuildEgressNetwork+"/connect", strings.NewReader(string(body))))
+	}
+	if err := join("sidecar"); err != nil {
+		t.Fatalf("the sidecar: %v", err)
+	}
+	if err := join("app"); err == nil {
+		t.Fatal("an app joined the builds' network")
+	}
+}
+
+func TestListingProjectNetworksIsFilteredToManagedOnes(t *testing.T) {
+	_, handler, _ := restartProxy(t, map[string]*restartContainer{})
+	if err := handler.authorize(httptest.NewRequest(http.MethodGet, "/networks?filters="+url.QueryEscape(`{"label":{"excalibase.managed=true":true}}`), nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.authorize(httptest.NewRequest(http.MethodGet, "/networks", nil)); err == nil {
+		t.Fatal("an unfiltered list was admitted")
+	}
+}
+
+// Once the platform has started it again the given-up start is history: a later start by hand is one by hand.
+func TestAStartByTheAPIEndsTheDoubtOverAGivenUpStart(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"crashed": egressApp("exited"), testFirewall: firewall("running", "healthy")})
+	engine.networks = fencedEgress()
+	engine.hang = map[string]bool{"crashed": true}
+	handler.restarts.startTimeout = 50 * time.Millisecond
+	handler.superviseOnce(context.Background())
+	engine.mu.Lock()
+	engine.hang = nil
+	engine.mu.Unlock()
+	if resp := serve(t, handler, http.MethodPost, "/containers/crashed/start", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("start answered %d", resp.StatusCode)
+	}
+	if resp := serve(t, handler, http.MethodPost, "/containers/crashed/stop", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("stop answered %d", resp.StatusCode)
+	}
+	engine.mu.Lock()
+	engine.containers["crashed"].status = "running" // docker start, on the host
+	engine.mu.Unlock()
+	handler.superviseOnce(context.Background())
+	if engine.containers["crashed"].status != "running" || handler.restarts.isStopped("crashed") {
+		t.Fatalf("status %s, record %v", engine.containers["crashed"].status, handler.restarts.isStopped("crashed"))
 	}
 }

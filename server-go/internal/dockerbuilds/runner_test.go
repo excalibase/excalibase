@@ -731,6 +731,33 @@ func TestABoxServesBuildsOtherThanSites(t *testing.T) {
 // firewall's wildcard keeps a build off it. The sidecar's network keeps its own lists and no name.
 const bridgeNameOption = "com.docker.network.bridge.name"
 
+// Docker 27 refuses the isolated gateway: its check network, and then its builds, go under the wildcard.
+func TestDocker27sCheckNetworkIsNamedUnderTheWildcard(t *testing.T) {
+	engine := newFakeEngine()
+	engine.refusesGatewayMode = true
+	runner, _ := newTestRunner(t, engine, "runsc")
+	if err := runner.Verify(context.Background()); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if len(engine.networkOptionsSeen) == 0 || !strings.HasPrefix(engine.networkOptionsSeen[0][bridgeNameOption], engineproxy.ProjectBridgePrefix) {
+		t.Fatalf("check network options %v, want a name a fencing proxy admits", engine.networkOptionsSeen)
+	}
+}
+
+// Docker 26 ignores the option and gives the bridge an address anyway: builds are named, not sent it again.
+func TestAnEngineThatIgnoresTheIsolatedGatewayGetsNamedBuildBridges(t *testing.T) {
+	engine := newFakeEngine()
+	engine.ignoresGatewayMode = true
+	runner, _ := newTestRunner(t, engine, "runsc")
+	if err := runner.Verify(context.Background()); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	options := runner.buildNetworkOptions(buildNetwork, nil)
+	if got, want := options.Options[bridgeNameOption], engineproxy.ProjectBridgeName(buildNetwork); got != want {
+		t.Fatalf("bridge %q, want %q in %+v", got, want, options)
+	}
+}
+
 func TestABuildBridgeWithAHostAddressIsNamedUnderTheFirewallsWildcard(t *testing.T) {
 	options := (&Runner{opts: Options{}}).buildNetworkOptions(buildNetwork, nil)
 	if got, want := options.Options[bridgeNameOption], engineproxy.ProjectBridgeName(buildNetwork); got != want {

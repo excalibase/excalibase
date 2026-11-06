@@ -275,7 +275,7 @@ its first packet with no reconcile. From those bridges:
 | What the edge publishes on 80 and 443 | allowed, as from anywhere: an app can call a public hostname on this host |
 | Any other published port on this host | dropped |
 | Other projects | dropped by Docker's isolation |
-| `APP_EGRESS_EXTRA_DENY_CIDRS` | dropped, the edge's published ports too if the list covers its address |
+| `APP_EGRESS_EXTRA_DENY_CIDRS` (IPv4 only, as provisioning reads it; preflight refuses an IPv6 entry) | dropped, the edge's published ports too if the list covers its address |
 
 The project's database and DocumentDB gateway join the same bridge, and their default route
 moves to it, so all of this covers them too. With `APP_EGRESS=none` on Docker 28 or later
@@ -283,8 +283,16 @@ nothing changes: those networks have no route and no address on the host, so the
 
 With `HOST_FIREWALL=off` none of this is in place: `APP_EGRESS=internet` then reaches
 metadata, the LAN and the host, provisioning logs `WARN: app networks: ...`, and the bridges
-to guard yourself are `exnet+`. A firewall reload that removes the rules leaves apps
-unguarded until the next check puts them back, within 30 seconds.
+to guard yourself are `exnet+`.
+
+**A firewall reload.** A reload that removes the rules (`iptables -F`, a tool managing the
+firewall) leaves apps unguarded until the next check puts them back, within 30 seconds. A
+connection opened in that window stops at the first packet it sends once they are back, even
+one already established. Restarting `nftables.service` on Debian or Ubuntu flushes every table,
+Docker's chains too (`flush ruleset` in the stock config): the guard stays up, hooks its chains on
+`INPUT` and `FORWARD` without them, and stays unhealthy, so nothing held starts, until you
+`systemctl restart docker`. Published ports do not answer until then. Containers already running keep
+running. If the bridges file cannot be read during a reload, the guard puts back the rules it last read.
 
 **After a reboot.** A reboot clears the host firewall's rules, and Docker starts any
 container with a restart policy as soon as it is up, without reading compose's
@@ -309,7 +317,8 @@ tenant starts on its own and a crashed one stays down; the platform's own starts
 recover, `docker exec excalibase-engine-proxy rm /var/lib/excalibase-bridges/stopped`, then
 `docker restart excalibase-engine-proxy`. Every exited tenant then starts, paused projects' too, so pause those
 again. Downgrading to a release before this one leaves them without a restart
-policy, so start them after each reboot. With `APP_EGRESS=internet` or on Docker before 28, apps are
+policy, so start them after each reboot; going back up after that starts every exited tenant, including
+any paused during the downgrade, so pause those again. With `APP_EGRESS=internet` or on Docker before 28, apps are
 held the same way, since their bridges are guarded only once the firewall is back: no
 restart policy, started by the proxy within about 5 seconds, a crash loop retrying every 5
 seconds rather than on Docker's backoff. Studio's restart count for them covers the time since the proxy last

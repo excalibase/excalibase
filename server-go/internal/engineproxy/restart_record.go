@@ -1,6 +1,7 @@
 package engineproxy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -52,12 +53,17 @@ type restartGuard struct {
 	handedBack map[string]bool
 	// restarted counts the apps' crashes this process restarted.
 	restarted map[string]int64
+	// starting serialises the supervisor's start of a container with a stop of it, so a stop
+	// is never overtaken by a start that read the record first.
+	starting map[string]chan struct{}
+	// uncertain is a start given up on, which the engine may yet carry out.
+	uncertain map[string]bool
 }
 
 func newRestartGuard(restarts Restarts) (*restartGuard, error) {
 	guard := &restartGuard{Restarts: restarts, startTimeout: superviseStartTimeout, workers: superviseWorkers, stopGrace: superviseStopGrace,
 		stopped: map[string]bool{}, stopping: map[string]time.Time{}, pending: map[string]bool{}, adopted: map[string]bool{},
-		handedBack: map[string]bool{}, restarted: map[string]int64{}}
+		handedBack: map[string]bool{}, restarted: map[string]int64{}, starting: map[string]chan struct{}{}, uncertain: map[string]bool{}}
 	raw, err := os.ReadFile(restarts.StoppedFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return guard, nil
@@ -165,6 +171,30 @@ func (g *restartGuard) wanted(id string) bool    { return g.holds(g.pending, id)
 func (g *restartGuard) markAdopted(id string)    { g.setIn(g.adopted, id, true) }
 func (g *restartGuard) isAdopted(id string) bool { return g.holds(g.adopted, id) }
 
+// holdStarts waits for a start of the container in progress, and keeps others out until the release.
+func (g *restartGuard) holdStarts(ctx context.Context, id string) error {
+	g.mu.Lock()
+	gate, ok := g.starting[id]
+	if !ok {
+		gate = make(chan struct{}, 1)
+		g.starting[id] = gate
+	}
+	g.mu.Unlock()
+	select {
+	case gate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (g *restartGuard) releaseStarts(id string) {
+	g.mu.Lock()
+	gate := g.starting[id]
+	g.mu.Unlock()
+	<-gate
+}
+
 func (g *restartGuard) noteRestart(id string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -175,6 +205,7 @@ func (g *restartGuard) clearRestarts(id string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.restarted, id)
+	delete(g.uncertain, id)
 }
 
 func (g *restartGuard) restartsOf(id string) int64 {
@@ -214,7 +245,12 @@ func (g *restartGuard) forget(held map[string]bool) error {
 			delete(g.restarted, id)
 		}
 	}
-	for _, set := range []map[string]bool{g.adopted, g.pending, g.handedBack} {
+	for id, gate := range g.starting {
+		if !held[id] && len(gate) == 0 {
+			delete(g.starting, id)
+		}
+	}
+	for _, set := range []map[string]bool{g.adopted, g.pending, g.handedBack, g.uncertain} {
 		for id := range set {
 			if !held[id] {
 				delete(set, id)

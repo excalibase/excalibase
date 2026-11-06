@@ -32,6 +32,9 @@ const ProjectBridgePrefix = "exnet"
 // enforces its own deny and allow lists, which may name a git server on the LAN (EXC-671).
 const BuildEgressNetwork = "build-egress"
 
+// BuildEgressEntrypoint is that proxy: nothing else joins the network.
+const BuildEgressEntrypoint = "/bin/excalibase-build-egress"
+
 // ProjectBridgeName is the interface of a project network: 15 characters, the kernel's limit.
 func ProjectBridgeName(network string) string {
 	sum := sha256.Sum256([]byte(network))

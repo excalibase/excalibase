@@ -5,6 +5,7 @@
 # really answer for the metadata address, private ranges and the internet.
 #
 #   sh deploy/single-host/tests/project-bridge-fence.sh
+#   DIND_IMAGE=docker.io/library/docker:27-dind sh deploy/single-host/tests/project-bridge-fence.sh
 set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -58,9 +59,12 @@ ETH=$(on_machine "ip -4 -o addr show eth0 | awk '{print \$4}' | cut -d/ -f1")
 
 d network create excalibase-tenants >/dev/null
 d network create --subnet 10.203.250.0/28 excalibase-edge >/dev/null
-# What the edge publishes, and something else published on the host.
-d run -d --name edge --network excalibase-edge -p 0.0.0.0:443:443 -p 0.0.0.0:8443:8443 "$IMG" sh -c \
+d network create --internal --subnet 10.203.250.16/28 excalibase-dataplane >/dev/null
+# What the edge publishes, and something else published on the host; wired as compose wires it.
+d create --name edge --network excalibase-edge -p 0.0.0.0:443:443 -p 0.0.0.0:8443:8443 "$IMG" sh -c \
   "python -c '$SERVE' 443 & python -c '$SERVE' 8443 & wait" >/dev/null
+d network connect excalibase-dataplane edge
+d start edge >/dev/null
 d run -d --name tenant-db --network excalibase-tenants "$IMG" python -c "$SERVE" 8080 >/dev/null
 
 mkdir_bridges='mkdir -p /var/lib/excalibase-bridges; : >/var/lib/excalibase-bridges/networks'
@@ -94,17 +98,21 @@ case "$FIRST" in
 esac
 
 fenced_network excalibase-net-b
+# Docker 27 refuses the isolated gateway, and provisioning names its bridge instead.
+ISOLATED=1
 d network create --driver bridge --internal -o com.docker.network.bridge.gateway_mode_ipv4=isolated \
-  -o com.docker.network.bridge.gateway_mode_ipv6=isolated $LABELS excalibase-net-c >/dev/null
+  -o com.docker.network.bridge.gateway_mode_ipv6=isolated $LABELS excalibase-net-c >/dev/null 2>&1 || ISOLATED=
 serve_on() { n=$1; shift; d run -d --name "$n" --label excalibase.managed=true "$@" "$IMG" python -c "$SERVE" 8080 >/dev/null; }
 serve_on app-a --network excalibase-net-a
 serve_on peer-a --network excalibase-net-a
 serve_on app-b --network excalibase-net-b
-serve_on app-c --network excalibase-net-c
+[ -z "$ISOLATED" ] || serve_on app-c --network excalibase-net-c
 serve_on db-a --network excalibase-tenants
 d network connect excalibase-net-a db-a
 d run -d --name documentdb-a --network container:db-a "$IMG" sleep 100000 >/dev/null
 d run -d --name control "$IMG" sleep 100000 >/dev/null
+# The edge joins the project's network when a route goes public: its published ports must still land.
+d network connect excalibase-net-a edge
 
 ip_on() { d inspect -f "{{(index .NetworkSettings.Networks \"$2\").IPAddress}}" "$1"; }
 GW=$(d network inspect excalibase-net-a -f '{{(index .IPAM.Config 0).Gateway}}')
@@ -141,11 +149,18 @@ check_from db-a
 check_from documentdb-a
 
 # APP_EGRESS=none on Docker 28+: nothing to guard, and no route anyway.
-NONE=$(d exec app-c python -c "$PROBE" metadata=169.254.169.254=80 public="$PUBLIC"=80 host=$ETH=2222)
-case "$NONE" in
-  *"metadata unreachable"*"public unreachable"*"host unreachable"*) ok "APP_EGRESS=none: no route to anything" ;;
-  *) ko "APP_EGRESS=none: $NONE" ;;
-esac
+if [ -n "$ISOLATED" ]; then
+  NONE=$(d exec app-c python -c "$PROBE" metadata=169.254.169.254=80 public="$PUBLIC"=80 host=$ETH=2222)
+  case "$NONE" in
+    *"metadata unreachable"*"public unreachable"*"host unreachable"*) ok "APP_EGRESS=none: no route to anything" ;;
+    *) ko "APP_EGRESS=none: $NONE" ;;
+  esac
+else
+  ok "this engine has no isolated gateway: nothing to check for APP_EGRESS=none"
+fi
+EDGE_ON_PROJECT=$(ip_on edge excalibase-net-a)
+THROUGH=$(d exec app-a python -c "$PROBE" edge-direct="$EDGE_ON_PROJECT"=443 edge-other-port="$EDGE_ON_PROJECT"=8443)
+[ "$(result "$THROUGH" edge-direct)" = OPEN ] && ok "app-a: the edge, on its own network, answers" || ko "app-a to the edge on its network: $THROUGH"
 
 # The health check notices, the next pass puts it back: the case a reload leaves open for up to INTERVAL.
 on_machine 'iptables -D DOCKER-USER -i exnet+ -j EXCALIBASE-APP'
@@ -153,6 +168,44 @@ if firewall check >/dev/null 2>&1; then ko "the check passes with the wildcard g
 firewall "" >/dev/null
 firewall check || ko "the rerun did not restore the wildcard"
 ok "a rerun restores it"
+
+# EXC-687 review: what a reload does, with the guard running as the bundle runs it.
+on_machine "HOST_FIREWALL_NETWORKS=excalibase-tenants,excalibase-edge HOST_FIREWALL_TENANT_NETWORKS=excalibase-tenants \
+  HOST_FIREWALL_PROJECT_BRIDGES=exnet+ HOST_FIREWALL_EDGE_NETWORK=excalibase-edge HOST_FIREWALL_RESOLV_CONF=/tmp/resolv \
+  APP_EGRESS_EXTRA_DENY_CIDRS=$DENIED/32 HOST_FIREWALL_INTERVAL=2 nohup sh /host-firewall.sh >/tmp/fw.log 2>&1 & echo \$! >/tmp/fw.pid"
+wait_seconds() { python3 -c "import time;time.sleep($1)" 2>/dev/null || sleep "$1"; }
+guard_alive() { on_machine 'kill -0 $(cat /tmp/fw.pid) 2>/dev/null'; }
+wait_seconds 3
+
+# A connection opened while the rules were gone stops when they return.
+on_machine 'iptables -D DOCKER-USER -i exnet+ -j EXCALIBASE-APP; iptables -D FORWARD -i exnet+ -j EXCALIBASE-APP'
+on_machine 'iptables -D DOCKER-USER -i exnet+ -j EXCALIBASE-APP 2>/dev/null; :'
+d exec -d app-a python -c 'import socket,time
+held=socket.socket();held.settimeout(3);held.connect(("169.254.169.254",80))
+out=open("/tmp/held","w")
+for tick in range(14):
+    try:
+        held.send(b"x");print("sent",file=out,flush=True)
+    except OSError as error:
+        print("cut",error,file=out,flush=True)
+    time.sleep(1)'
+wait_seconds 16
+case "$(d exec app-a cat /tmp/held 2>&1)" in
+  *cut*|"") ok "a connection opened in the reload window does not outlive the rules" ;;
+  *) on_machine "conntrack -L 2>/dev/null | grep 169.254 || true"; ko "the held connection kept sending: $(d exec app-a tail -2 /tmp/held)" ;;
+esac
+
+# Restarting nftables.service flushes everything, Docker's chains too: ours come back without them.
+on_machine 'apk add -q nftables >/dev/null 2>&1; nft flush ruleset'
+wait_seconds 6
+guard_alive && ok "the guard survives a flushed ruleset" || ko "the guard died on a flushed ruleset: $(on_machine 'tail -3 /tmp/fw.log')"
+if firewall check >/dev/null 2>&1; then ko "the check passes with Docker's chains gone"; else ok "the check fails with Docker's chains gone, so nothing held starts"; fi
+AFTER=$(probe app-a)
+for target in metadata private lan extra-deny host-address host-gateway; do
+  [ "$(result "$AFTER" "$target")" = dropped ] && ok "after a flush: $target dropped" || ko "after a flush: $target $(result "$AFTER" "$target")"
+done
+on_machine "iptables -S INPUT | grep -q 'exnet+ -j EXCALIBASE-HOST'" && ok "after a flush: the host's chain is hooked again" || ko "the INPUT wildcard stayed off"
+on_machine 'kill $(cat /tmp/fw.pid) 2>/dev/null; :'
 
 [ "$failed" = 0 ] || { echo "project-bridge-fence: FAILED" >&2; exit 1; }
 echo "project-bridge-fence: ok"

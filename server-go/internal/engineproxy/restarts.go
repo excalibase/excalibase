@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -81,7 +82,7 @@ func (h *Handler) WithRestarts(restarts Restarts) (*Handler, error) {
 	h.restarts = guard
 	h.forward.ModifyResponse = func(resp *http.Response) error {
 		h.stopAnswered(resp.Request.Context(), resp.StatusCode < http.StatusBadRequest)
-		return h.addRestarts(resp)
+		return h.reportAsTheEngineWould(resp)
 	}
 	h.forward.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		h.stopUnanswered(r.Context())
@@ -223,9 +224,12 @@ func (h *Handler) holdRestartPolicy(r *http.Request, body []byte) error {
 // guardedContainer is what the guard reads of one container.
 type guardedContainer struct {
 	ID     string `json:"Id"`
-	Config struct{ Labels map[string]string }
-	State  struct{ Status string }
-	Host   struct {
+	Config struct {
+		Labels     map[string]string
+		Entrypoint []string
+	}
+	State struct{ Status string }
+	Host  struct {
 		NetworkMode   string
 		RestartPolicy struct{ Name string }
 	} `json:"HostConfig"`
@@ -288,6 +292,11 @@ func (h *Handler) beforeStop(r *http.Request, id string) error {
 	if !supervised(h.policy, found.Config.Labels, found.Host.NetworkMode, nothingToGuard(h.fenceReader(r.Context()))) {
 		return nil
 	}
+	// First: a start in the engine finishes and this stop then ends it; a later one reads the record.
+	if err := h.restarts.holdStarts(r.Context(), found.ID); err != nil {
+		return err
+	}
+	defer h.restarts.releaseStarts(found.ID)
 	marked := !h.restarts.isStopped(found.ID)
 	h.restarts.beginStopping(found.ID)
 	if err := h.restarts.setStopped(found.ID, true); err != nil {
@@ -432,6 +441,15 @@ func (h *Handler) settleStartedByHand(ctx context.Context, tenants []listedConta
 		if err != nil || found.State.Status != "running" || guard.isStopping(listed.ID) {
 			continue
 		}
+		// Our own start, given up on and carried out after the stop: not one by hand, and the stop stands.
+		if guard.holds(guard.uncertain, listed.ID) {
+			if err := h.engineCall(ctx, "/containers/"+url.PathEscape(listed.ID)+"/stop", nil); err != nil {
+				log.Printf("engine proxy: restarts: stop %s: %v", listed.ID, err)
+				continue
+			}
+			guard.setIn(guard.uncertain, listed.ID, false)
+			continue
+		}
 		if err := guard.setStopped(listed.ID, false); err != nil {
 			log.Printf("engine proxy: restarts: %v", err)
 		}
@@ -488,15 +506,26 @@ func (h *Handler) startAll(ctx context.Context, targets []startTarget) {
 		go func() {
 			defer func() { <-slots; running.Done() }()
 			// Read again: a slot may have taken a while, and a pause or the firewall gone meanwhile counts.
-			if guard.isStopped(id) || !h.firewallHealthy(ctx) {
+			if !h.firewallHealthy(ctx) {
 				return
 			}
 			started, cancel := context.WithTimeout(ctx, guard.startTimeout)
 			defer cancel()
-			if err := h.engineCall(started, "/containers/"+url.PathEscape(id)+"/start", nil); err != nil {
-				log.Printf("engine proxy: restarts: start %s: %v", id, err)
+			if err := guard.holdStarts(started, id); err != nil {
 				return
 			}
+			defer guard.releaseStarts(id)
+			if guard.isStopped(id) {
+				return
+			}
+			if err := h.engineCall(started, "/containers/"+url.PathEscape(id)+"/start", nil); err != nil {
+				log.Printf("engine proxy: restarts: start %s: %v", id, err)
+				if errors.Is(err, context.DeadlineExceeded) {
+					guard.setIn(guard.uncertain, id, true)
+				}
+				return
+			}
+			guard.setIn(guard.uncertain, id, false)
 			guard.unwant(id)
 			if target.crashedApp {
 				guard.noteRestart(id)
@@ -561,44 +590,114 @@ func (h *Handler) handBack(ctx context.Context, id string) error {
 	return nil
 }
 
-// addRestarts adds the restarts the proxy did to an inspect's RestartCount: only the
-// engine's own policy raises it, and rollouts and Studio read it. Kept for this process's life.
-func (h *Handler) addRestarts(resp *http.Response) error {
+// reportAsTheEngineWould keeps what provisioning reads true to the policy the proxy stands in for:
+// an app it will restart reads as restarting, not exited, which everything asking "is it paused?"
+// relies on, a disk move above all; and RestartCount, which only the engine's own policy raises,
+// counts its restarts, for rollouts and Studio. Kept for this process's life.
+func (h *Handler) reportAsTheEngineWould(resp *http.Response) error {
+	if resp.Request.Method != http.MethodGet || resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	api := stripVersion(resp.Request.URL.Path)
+	if api == "/containers/json" {
+		return h.reportList(resp)
+	}
+	if match := containerPath.FindStringSubmatch(api); match != nil && match[2] == "/json" {
+		return h.reportInspect(resp)
+	}
+	return nil
+}
+
+// willRestart: an app the supervisor brings back, once it may.
+func (h *Handler) willRestart(read func(string) fenceReading, id, status string, labels map[string]string, mode string) bool {
 	guard := h.restarts
-	if resp.Request.Method != http.MethodGet || resp.StatusCode != http.StatusOK || !guard.anyRestarts() {
-		return nil
+	return status == "exited" && labels[componentLabel] == componentApp && !guard.corrupt && !guard.isStopped(id) &&
+		supervised(h.policy, labels, mode, nothingToGuard(read))
+}
+
+func (h *Handler) reportList(resp *http.Response) error {
+	var list []map[string]any
+	if err := readBody(resp, &list); err != nil {
+		return err
 	}
-	match := containerPath.FindStringSubmatch(stripVersion(resp.Request.URL.Path))
-	if match == nil || match[2] != "/json" {
-		return nil
+	read := h.fenceReader(resp.Request.Context())
+	for _, listed := range list {
+		id, _ := listed["Id"].(string)
+		state, _ := listed["State"].(string)
+		var container listedContainer
+		if err := remarshal(listed, &container); err != nil {
+			return err
+		}
+		if h.willRestart(read, id, state, container.Labels, container.Host.NetworkMode) {
+			listed["State"], listed["Status"] = "restarting", "Restarting"
+		}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxListBody))
-	if err != nil {
-		return fmt.Errorf("read an inspect: %w", err)
-	}
-	if err := resp.Body.Close(); err != nil {
-		return fmt.Errorf("read an inspect: %w", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
+	return writeBody(resp, list)
+}
+
+func (h *Handler) reportInspect(resp *http.Response) error {
 	var inspected map[string]any
-	if err := decoder.Decode(&inspected); err != nil {
-		return fmt.Errorf("read an inspect: %w", err)
+	if err := readBody(resp, &inspected); err != nil {
+		return err
 	}
-	id, _ := inspected["Id"].(string)
-	if done := guard.restartsOf(id); done > 0 {
+	var container guardedContainer
+	if err := remarshal(inspected, &container); err != nil {
+		return err
+	}
+	if h.willRestart(h.fenceReader(resp.Request.Context()), container.ID, container.State.Status, container.Config.Labels, container.Host.NetworkMode) {
+		if state, ok := inspected["State"].(map[string]any); ok {
+			state["Status"], state["Restarting"] = "restarting", true
+		}
+	}
+	if done := h.restarts.restartsOf(container.ID); done > 0 {
 		var engine int64
 		if count, ok := inspected["RestartCount"].(json.Number); ok {
 			engine, _ = count.Int64()
 		}
 		inspected["RestartCount"] = engine + done
-		if body, err = json.Marshal(inspected); err != nil {
-			return fmt.Errorf("write an inspect: %w", err)
-		}
 	}
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-	resp.ContentLength = int64(len(body))
-	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	return writeBody(resp, inspected)
+}
+
+// readBody decodes a response whole, numbers kept exact.
+func readBody(resp *http.Response, into any) error {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxListBody))
+	if err != nil {
+		return fmt.Errorf("read an engine answer: %w", err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		return fmt.Errorf("read an engine answer: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(into); err != nil {
+		return fmt.Errorf("read an engine answer: %w", err)
+	}
+	return nil
+}
+
+func writeBody(resp *http.Response, value any) error {
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return fmt.Errorf("write an engine answer: %w", err)
+	}
+	resp.Body = io.NopCloser(&body)
+	resp.ContentLength = int64(body.Len())
+	resp.Header.Set("Content-Length", strconv.Itoa(body.Len()))
+	return nil
+}
+
+// remarshal reads a decoded answer into the fields the guard knows.
+func remarshal(from, into any) error {
+	raw, err := json.Marshal(from)
+	if err != nil {
+		return fmt.Errorf("read an engine answer: %w", err)
+	}
+	if err := json.Unmarshal(raw, into); err != nil {
+		return fmt.Errorf("read an engine answer: %w", err)
+	}
 	return nil
 }
 

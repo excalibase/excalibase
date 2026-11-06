@@ -180,6 +180,31 @@ func (r *Runtime) Reconcile(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("project %s: %w", project, err))
 		}
 	}
+	return errors.Join(append(errs, r.remakeLeftover(ctx, public))...)
+}
+
+// remakeLeftover remakes an older project network with no app record, which DeleteAppWorkload's
+// removal, interrupted, leaves: its database is attached to it, and may not start on an older bridge.
+func (r *Runtime) remakeLeftover(ctx context.Context, walked map[string]bool) error {
+	networks, err := r.engine.NetworkList(ctx, network.ListOptions{Filters: labelFilter()})
+	if err != nil {
+		return fmt.Errorf("list the project networks: %w", err)
+	}
+	var errs []error
+	for _, listed := range networks {
+		project := listed.Labels[labelProject]
+		if _, seen := walked[project]; seen || project == "" || listed.Name != r.networkName(project) || !r.olderNetwork(listed) {
+			continue
+		}
+		database, err := r.opts.Projects.NamespaceOf(project)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("project %s: %w", project, err))
+			continue
+		}
+		if err := r.ensureProjectNetwork(ctx, project, database, false); err != nil {
+			errs = append(errs, fmt.Errorf("project %s: %w", project, err))
+		}
+	}
 	return errors.Join(errs...)
 }
 

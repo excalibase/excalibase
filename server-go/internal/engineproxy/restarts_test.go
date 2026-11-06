@@ -26,6 +26,8 @@ type restartContainer struct {
 	policy   string
 	status   string
 	health   string
+	// entrypoint is the image's command, for what may join the builds' network.
+	entrypoint []string
 }
 
 // restartEngine holds containers by id, with the engine's answers the supervisor reads.
@@ -114,7 +116,7 @@ func (e *restartEngine) act(w http.ResponseWriter, r *http.Request, id, action s
 			attached[network] = map[string]any{}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"Id": id, "State": state, "NetworkSettings": map[string]any{"Networks": attached},
-			"Config":     map[string]any{"Labels": found.labels},
+			"Config":     map[string]any{"Labels": found.labels, "Entrypoint": found.entrypoint},
 			"HostConfig": map[string]any{"NetworkMode": found.mode, "RestartPolicy": map[string]any{"Name": found.policy}}})
 	case "start":
 		if e.hang[id] {
