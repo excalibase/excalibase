@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/features"
 )
@@ -18,8 +19,8 @@ type connectAppRepoArgs struct {
 	Repository     string            `json:"repository" jsonschema:"the GitHub repository as owner/name"`
 	Branch         string            `json:"branch,omitempty" jsonschema:"the branch whose pushes build; the repository's default branch when left out"`
 	Builder        string            `json:"builder,omitempty" jsonschema:"auto (default: a Dockerfile if the repository has one, else buildpacks), dockerfile or buildpacks"`
-	RootDir        string            `json:"root_dir,omitempty" jsonschema:"the build context inside the repository, for a monorepo; the repository root when left out"`
-	DockerfilePath string            `json:"dockerfile_path,omitempty" jsonschema:"the Dockerfile, relative to root_dir; Dockerfile when left out"`
+	RootDir        string            `json:"root_dir,omitempty" jsonschema:"the build context inside the repository, for a monorepo; left out keeps the current one, or the repository root on a first connect"`
+	DockerfilePath string            `json:"dockerfile_path,omitempty" jsonschema:"the Dockerfile, relative to root_dir; left out keeps the current one, or Dockerfile on a first connect"`
 	BuildArgs      map[string]string `json:"build_args,omitempty" jsonschema:"plain build arguments; they end up in the image's history, so never put a secret here. Left out keeps the current ones"`
 }
 
@@ -84,8 +85,9 @@ func connectAppRepo(ctx context.Context, c *call, in connectAppRepoArgs) (any, e
 	if in.Repository == "" {
 		return nil, errors.New("repository is required, as owner/name")
 	}
-	buildArgs := in.BuildArgs
-	if buildArgs == nil {
+	buildArgs, rootDir, dockerfilePath := in.BuildArgs, in.RootDir, in.DockerfilePath
+	if buildArgs == nil || rootDir == "" || dockerfilePath == "" {
+		// A reconnect keeps what the caller leaves out, so it never wipes a monorepo's folder or Dockerfile.
 		var current struct {
 			Connection *appConnectionAnswer `json:"connection"`
 		}
@@ -93,11 +95,15 @@ func connectAppRepo(ctx context.Context, c *call, in connectAppRepoArgs) (any, e
 			return nil, siteBuildFailure(err)
 		}
 		if current.Connection != nil {
-			buildArgs = current.Connection.Settings.BuildArgs
+			settings := current.Connection.Settings
+			if buildArgs == nil {
+				buildArgs = settings.BuildArgs
+			}
+			rootDir, dockerfilePath = defaultString(rootDir, settings.RootDir), defaultString(dockerfilePath, settings.DockerfilePath)
 		}
 	}
 	body := map[string]any{"repository": in.Repository, "settings": map[string]any{
-		"branch": in.Branch, "builder": in.Builder, "rootDir": in.RootDir, "dockerfilePath": in.DockerfilePath, "buildArgs": buildArgs,
+		"branch": in.Branch, "builder": in.Builder, "rootDir": rootDir, "dockerfilePath": dockerfilePath, "buildArgs": buildArgs,
 	}}
 	var result struct {
 		Connection *appConnectionAnswer `json:"connection"`
@@ -105,7 +111,7 @@ func connectAppRepo(ctx context.Context, c *call, in connectAppRepoArgs) (any, e
 		BuildError string               `json:"buildError"`
 	}
 	err = c.send(ctx, http.MethodPut, path+"/git", nil, body, &result)
-	if isStatus(err, http.StatusForbidden) {
+	if isStatus(err, http.StatusForbidden) && strings.Contains(err.Error(), "sign in to GitHub") {
 		return nil, errAppSignInFirst
 	}
 	if err != nil {

@@ -30,12 +30,16 @@ type addAppDomainArgs struct {
 	Hostname string `json:"hostname" jsonschema:"the user's own hostname, such as www.example.com; not a bare registered domain, an address, or a platform domain"`
 }
 
+const appSecretWarning = "WARNING: the value passes through this conversation and the AI tool's logs. Prefer asking the user to set it in Studio " +
+	"(Containers, the app's form); use this only for a test value or when the user explicitly asks."
+
 const appDomainsUnavailableMessage = "custom domains are not set up on this install; the app keeps serving at its own hostname (list_apps)"
 
 func appMoreTools() []entry {
 	return []entry{
 		tool("set_app_secret", "Set one secret environment variable of a container app: the value goes to the project's vault and the variable points at it. "+
-			"The value is never returned, by this or any other tool; the running app reads it after its next deploy_app. "+secretWarning, writeTool, setAppSecret),
+			"The value is never returned, by this or any other tool; the running app reads it after its next deploy_app. It replaces another secret of the same name, but never a literal variable or a database reference (remove those with update_app remove_env first). "+
+			appSecretWarning, writeTool, setAppSecret),
 		tool("redeploy_app", "Roll an earlier deploy of a container app out again as a new deploy, with the config that deploy froze; it does not edit the app. "+
 			"Use it to go back to a version that worked. Needs Developer. Follow it with get_deploy_status.", writeTool, redeployApp),
 		tool("list_app_domains", "A container app's custom domains with their status (pending, issuing, active, issue_failed or detached) and the CNAME target each must point at.", readTool, listAppDomains),
@@ -93,10 +97,14 @@ func setAppSecret(ctx context.Context, c *call, in setAppSecretArgs) (any, error
 	if in.Value == "" {
 		return nil, errors.New("value is required")
 	}
+	replaced, err := existingSecret(ctx, c, path, in.Name)
+	if err != nil {
+		return nil, err
+	}
 	if err := c.send(ctx, http.MethodPut, path+"/secrets/"+name, nil, map[string]string{"value": in.Value}, nil); err != nil {
 		return nil, err
 	}
-	return map[string]any{"name": in.Name, "set": true, "next": "the running app reads it after its next deploy_app"}, nil
+	return map[string]any{"name": in.Name, "set": true, "replaced": replaced, "next": "the running app reads it after its next deploy_app"}, nil
 }
 
 func redeployApp(ctx context.Context, c *call, in redeployAppArgs) (any, error) {
@@ -204,4 +212,29 @@ func appDomainPath(c *call, in appDomainArgs) (string, error) {
 		return "", err
 	}
 	return path + domainID, nil
+}
+
+// existingSecret reports whether the app already has a secret of that name. A
+// literal or a database reference of the name is refused: the write would
+// replace it without the user having decided that.
+func existingSecret(ctx context.Context, c *call, path, name string) (bool, error) {
+	var app struct {
+		Env []struct {
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"env"`
+	}
+	if err := c.get(ctx, path+"/", nil, &app); err != nil {
+		return false, err
+	}
+	for _, variable := range app.Env {
+		switch {
+		case variable.Name != name:
+		case variable.Kind == "secret":
+			return true, nil
+		default:
+			return false, fmt.Errorf("%s is already a %s variable of this app; set_app_secret would replace it. Remove it first with update_app remove_env if that is what the user wants", name, variable.Kind)
+		}
+	}
+	return false, nil
 }
