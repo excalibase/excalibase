@@ -169,6 +169,8 @@ var darkWork = map[features.Feature]string{
 	features.SingleHostBuilds: "TestSiteBuildMode",
 	features.AppGitBuilds:     "TestAppBuilds_NothingWiredWhileTheFlagIsOff",
 	features.LogDeletion:      "TestLogDeletionStartsOnlyWithItsFeature",
+	// Only MCP's invoke_function reads it; no route is gated (internal/mcpserver).
+	features.FunctionInvoke: "TestDarkToolsFollowTheirFeature",
 	// Off, rotation leaves sessions alone, credentials carry no reader and the
 	// read address names the owner (internal/service).
 	features.DBReadRole: "TestRotationLeavesSessionsAloneWhileTheFlagIsOff",

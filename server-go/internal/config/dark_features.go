@@ -42,6 +42,7 @@ var featureEnv = map[features.Feature]string{
 	features.LogDeletion:      "FEATURE_LOGDELETION",
 	features.S3:               "FEATURE_S3",
 	features.SitePreviews:     "FEATURE_SITEPREVIEWS",
+	features.FunctionInvoke:   "FEATURE_FUNCTIONINVOKE",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.

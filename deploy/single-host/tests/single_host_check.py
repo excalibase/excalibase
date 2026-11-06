@@ -252,6 +252,10 @@ if waits.get("condition") != "service_completed_successfully":
 if penv.get("FEATURE_SITEPREVIEWS") != "false":
     failures.append(f"FEATURE_SITEPREVIEWS={penv.get('FEATURE_SITEPREVIEWS')!r} by default, want false")
 
+# EXC-684: MCP invoke_function is off by default.
+if penv.get("FEATURE_FUNCTIONINVOKE") != "false":
+    failures.append(f"FEATURE_FUNCTIONINVOKE={penv.get('FEATURE_FUNCTIONINVOKE')!r} by default, want false")
+
 # EXC-670: host monitoring is off by default and mounts no host file then; the
 # proxy and provisioning read the same platform containers, by exact name.
 if penv.get("FEATURE_HOSTMETRICS") != "false":
