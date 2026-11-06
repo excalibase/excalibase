@@ -42,8 +42,8 @@ func databaseTools() []entry {
 			"and returns the last result set; SELECTs stop after max_execution_time. MySQL DDL is not transactional: "+
 			"each statement commits as it runs, so a failed migration is not rolled back and what ran before the failure stays.", writeTool, executeSQL),
 		tool("execute_sql", "Run one read-only SQL statement on the project's database, in a read-only transaction. Rows come back as data.", readOnlyVariant, executeReadOnlySQL),
-		tool("list_migrations", "List the migrations applied to the project's database.", readTool, listMigrations),
-		tool("apply_migration", "Apply a SQL migration to the project's database and record it in the migration history.", writeTool, applyMigration),
+		tool("list_migrations", "List the migrations applied to the project's database. Postgres only: a MySQL project is refused.", readTool, listMigrations),
+		tool("apply_migration", "Apply a SQL migration to the project's database and record it in the migration history. Postgres only: a MySQL project is refused (use execute_sql).", writeTool, applyMigration),
 		tool("list_permissions", "The project's API permissions: which role may select, insert, update or delete which rows and columns of each table, and which functions are tracked.", readTool, listPermissions),
 		tool("set_permission", "Set or remove one API permission for a (table, role, operation). A table a role has no permission for is hidden from that role. "+
 			"A page's anon role needs select with every column the page reads. "+
