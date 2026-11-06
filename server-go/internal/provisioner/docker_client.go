@@ -459,3 +459,26 @@ func (r *RealDockerClient) ensureImage(ctx context.Context, ref string) error {
 	}
 	return nil
 }
+
+// ManagedContainerLister names every container the provisioner made, running or not.
+type ManagedContainerLister interface {
+	ManagedContainerNames(ctx context.Context) ([]string, error)
+}
+
+// ManagedContainerNames asks the engine, filtered to managed containers as the proxy requires.
+func (r *RealDockerClient) ManagedContainerNames(ctx context.Context) ([]string, error) {
+	list, err := r.c.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", excalibaseLabel+"=true")),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list containers: %w", err)
+	}
+	var names []string
+	for _, listed := range list {
+		for _, name := range listed.Names {
+			names = append(names, strings.TrimPrefix(name, "/"))
+		}
+	}
+	return names, nil
+}

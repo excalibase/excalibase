@@ -179,6 +179,7 @@ jobs:
         env:
           PLATFORM_TAG: ci
           PG_BACKUPS: "1"
+          MAJOR_UPGRADE: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
       - name: Fresh install with manual vault unseal (init, restart, CLI unseal), host monitoring, stored log search, log drains, request charts and slow queries
         env:

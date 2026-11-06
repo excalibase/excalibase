@@ -273,7 +273,10 @@ it comes back. A major upgrade or an in-place restore checks the firewall before
 anything, and refuses while it is down. If it goes down later:
 
 - A major upgrade stays open and recovery finishes it once the database can start, on any failure of
-  the new server to take over. The old database is kept until then, and the project stays upgrading.
+  the new server to take over. The old database is kept until then, and the project stays upgrading. It
+  says why, and names the backup taken before the upgrade. To leave instead of waiting, restore that backup
+  into a new project, then delete this one: the delete keeps its 7 days, and cancelling it goes back to the
+  open upgrade. The old database goes with the project.
 - An in-place restore (Postgres and MySQL) waits up to 10 minutes to start the restored database. If that
   fails it removes the unstarted copy, waits up to 30 more minutes for the firewall, and puts the database
   back from the backup it took just before. If the firewall outlasts that, the project stays stopped and
@@ -282,8 +285,9 @@ anything, and refuses while it is down. If it goes down later:
 If the record of stopped tenants (`stopped`, on the `excalibase-platform-bridges` volume) cannot be read, no
 tenant starts on its own and a crashed one stays down; the platform's own starts and stops still work. To
 recover, `docker exec excalibase-engine-proxy rm /var/lib/excalibase-bridges/stopped`, then
-`docker restart excalibase-engine-proxy`. Every exited tenant then starts, paused projects' too, so pause those
-again. Downgrading to a release before this one leaves them without a restart
+`docker restart excalibase-engine-proxy`. Every exited tenant then starts, paused projects' too. Pause alone
+changes nothing on a project that reads as paused: Resume it, then Pause it. A project scheduled for deletion
+refuses both, so cancel the deletion first (then delete it again if you meant to). Downgrading to a release before this one leaves them without a restart
 policy, so start them after each reboot. Apps keep Docker's restart policy: the firewall
 adds nothing to their project networks.
 

@@ -321,6 +321,9 @@ func (s *MajorUpgradeService) conclude(ctx context.Context, engine MajorUpgrader
 // leaveOpen keeps a run whose conversion has not settled RUNNING, and the
 // project UPGRADING, for recovery to check again once this actor is gone.
 func (s *MajorUpgradeService) leaveOpen(ctx context.Context, run *domain.MajorUpgrade, public string) {
+	if run.SafetyBackupID != "" {
+		public += fmt.Sprintf(". To leave it instead: restore backup %s, taken before the upgrade, into a new project, then delete this one", run.SafetyBackupID)
+	}
 	run.Step = domain.MajorUpgradeStepWaiting
 	run.Error = public
 	_ = s.record(ctx, run, domain.StatusUpgrading, domain.MajorUpgradeStepWaiting, public)

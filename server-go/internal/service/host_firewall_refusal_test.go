@@ -230,6 +230,30 @@ func TestDockerWaitServingNamesEveryFailure(t *testing.T) {
 	}
 }
 
+// A run that stays open says what is true, and how to leave: the backup taken first, by name.
+func TestAnOpenRunNamesTheBackupAndTheWayOut(t *testing.T) {
+	for name, cause := range map[string]error{
+		"firewall":    provisioner.ErrHostFirewallDown,
+		"not serving": fmt.Errorf("%w: never", ErrMajorUpgradeNotServing),
+	} {
+		t.Run(name, func(t *testing.T) {
+			w, svc := newUpgradeWorld(t, upgradeProject())
+			w.servingErr = cause
+			if _, err := svc.Start(context.Background(), "proj-up", confirmed("17"), "user-1"); err != nil {
+				t.Fatal(err)
+			}
+			latest, _ := w.runs.LatestMajorUpgrade(context.Background(), "proj-up")
+			row := projectRow(t, w)
+			for _, said := range []string{latest.Error, row.FailureReason} {
+				if !strings.Contains(said, latest.SafetyBackupID) || latest.SafetyBackupID == "" ||
+					!strings.Contains(said, "new project") || !strings.Contains(said, "checked again") {
+					t.Fatalf("says %q (backup %q)", said, latest.SafetyBackupID)
+				}
+			}
+		})
+	}
+}
+
 func TestANewServerNotServingKeepsTheOldDatabaseAndFinishesOnce(t *testing.T) {
 	w, svc := newUpgradeWorld(t, upgradeProject())
 	w.servingErr = fmt.Errorf("%w: postgres did not start within 2m0s", ErrMajorUpgradeNotServing)
@@ -378,6 +402,77 @@ func TestARollbackTheFirewallOutlastsSaysSo(t *testing.T) {
 	}
 	if row, _ := w.instances.FindByProjectID("proj-a"); row.CurrentStep != domain.RestoreStepRestoreStopped {
 		t.Fatalf("step %s", row.CurrentStep)
+	}
+}
+
+// A retry during the outage has no backup of its own: the one the first failure named stays the way back.
+func TestARestoreRetriedDuringTheOutageKeepsTheBackupName(t *testing.T) {
+	w, restorer := newInPlaceWorld(t, inPlaceProject())
+	w.replaceErrs = []error{fmt.Errorf("start restored container: %w", provisioner.ErrHostFirewallDown)}
+	w.firewallWait = provisioner.ErrHostFirewallDown
+	_ = restorer.Restore(context.Background(), w, "proj-a", restoreAt())
+
+	w.replaceErrs = []error{fmt.Errorf("%w: %w", ErrDatabaseNotReplaced, provisioner.ErrHostFirewallDown)}
+	err := restorer.Restore(context.Background(), w, "proj-a", restoreAt())
+	var public *InPlaceRestoreError
+	if !errors.As(err, &public) || !strings.Contains(public.Public, "safety-1") {
+		t.Fatalf("got %v", err)
+	}
+	row, _ := w.instances.FindByProjectID("proj-a")
+	if !strings.Contains(row.FailureReason, "safety-1") || row.CurrentStep != domain.RestoreStepRestoreStopped {
+		t.Fatalf("row: %s %q", row.CurrentStep, row.FailureReason)
+	}
+}
+
+// With nothing named before, a retry says what it always said.
+func TestARestoreOfAStoppedProjectWithNoBackupNamedSaysRestoreAgain(t *testing.T) {
+	project := inPlaceProject()
+	project.Status = string(domain.StatusRestoring)
+	project.CurrentStep = domain.RestoreStepRestoreStopped
+	w, restorer := newInPlaceWorld(t, project)
+	w.replaceErrs = []error{errors.New("recovered database never became ready")}
+	err := restorer.Restore(context.Background(), w, "proj-a", restoreAt())
+	var public *InPlaceRestoreError
+	if !errors.As(err, &public) || !strings.Contains(public.Public, "restore again from Backups") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// rollbackContexts records the context a rollback's wait and second replace get.
+type rollbackContexts struct {
+	*inPlaceWorld
+	cancel                 func()
+	replaces               int
+	waitErr, secondReplace error
+}
+
+func (c *rollbackContexts) WaitHostFirewall(ctx context.Context) error {
+	c.waitErr = ctx.Err()
+	return nil
+}
+
+func (c *rollbackContexts) ReplaceDatabase(ctx context.Context, _ *domain.DatabaseInstance, _ map[string]interface{}) error {
+	c.replaces++
+	if c.replaces == 1 {
+		c.cancel()
+		return fmt.Errorf("start: %w", provisioner.ErrHostFirewallDown)
+	}
+	c.secondReplace = ctx.Err()
+	return nil
+}
+
+// Whoever asked for the restore may be gone: the project is put back all the same.
+func TestARollbackOutlivesTheRequest(t *testing.T) {
+	w, restorer := newInPlaceWorld(t, inPlaceProject())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cluster := &rollbackContexts{inPlaceWorld: w, cancel: cancel}
+	_ = restorer.Restore(ctx, cluster, "proj-a", restoreAt())
+	if cluster.replaces != 2 || cluster.waitErr != nil || cluster.secondReplace != nil {
+		t.Fatalf("replaces %d, wait saw %v, put back saw %v", cluster.replaces, cluster.waitErr, cluster.secondReplace)
+	}
+	if row, _ := w.instances.FindByProjectID("proj-a"); row.Status != string(domain.StatusActive) {
+		t.Fatalf("status %s", row.Status)
 	}
 }
 

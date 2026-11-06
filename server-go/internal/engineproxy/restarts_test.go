@@ -1,9 +1,11 @@
 package engineproxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -768,5 +770,19 @@ func (e *slowStopEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case <-r.Context().Done():
 	case <-time.After(e.stopTakes):
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// A paused project's Pause does nothing while its row says PAUSED: the way out has to say Resume first.
+func TestTheCorruptRecordLogGivesAWayToStopAPausedProjectAgain(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	guard := &restartGuard{Restarts: Restarts{StoppedFile: "/var/lib/excalibase-bridges/stopped"}}
+	guard.logCorrupt()
+	for _, want := range []string{"Resume", "then Pause", "cancel the deletion first"} {
+		if !strings.Contains(logged.String(), want) {
+			t.Errorf("log %q does not say %q", logged.String(), want)
+		}
 	}
 }

@@ -117,6 +117,44 @@ if env PODMAN_INFO=false CGROUP_CONTROLLERS="cpu memory" UNPRIVILEGED_PORT_START
   fail "podman accepted with an engine that does not say it is rootless"
 fi
 grep -q "podman.socket" "$WORK/out" || fail "the refusal does not say how to start the socket: $(cat "$WORK/out")"
+# A Podman that never runs healthchecks (a static build, no systemd timers) would leave
+# `up -d` waiting forever with no error. Probed with a real container, through a stand-in here.
+fake_podman() {
+  mkdir -p "$WORK/fakebin"
+  cat >"$WORK/fakebin/podman" <<FAKE
+#!/bin/sh
+for arg in "\$@"; do
+  case "\$arg" in
+    run) echo "\$*" >>"$WORK/probe.log"; [ "${2:-}" = no-run ] && exit 125; echo probe-id; exit 0 ;;
+    inspect) echo "$1"; exit 0 ;;
+    rm) echo removed >>"$WORK/probe.log"; exit 0 ;;
+  esac
+done
+exit 0
+FAKE
+  chmod +x "$WORK/fakebin/podman"
+  : >"$WORK/probe.log"
+}
+probed_init() {
+  rm -f "$WORK/probed.env"
+  env PATH="$WORK/fakebin:$PATH" INIT_HEALTH_PROBE_SECONDS=2 CGROUP_CONTROLLERS="cpu memory" UNPRIVILEGED_PORT_START=80 \
+    sh "$DIR/../init.sh" --env-file "$WORK/probed.env" --domain example.com --admin-email me@example.com \
+    --engine podman --engine-socket "$WORK/podman.sock" >"$WORK/out" 2>&1
+}
+fake_podman starting
+if probed_init; then fail "a Podman that runs no healthchecks was accepted"; fi
+grep -q "healthchecks" "$WORK/out" || fail "the refusal does not name healthchecks: $(cat "$WORK/out")"
+grep -q "static" "$WORK/out" || fail "the refusal does not name the static build: $(cat "$WORK/out")"
+[ ! -e "$WORK/probed.env" ] || fail "a refused engine still wrote .env"
+grep -q removed "$WORK/probe.log" || fail "the probe container was left behind"
+grep -q -- "--health-cmd" "$WORK/probe.log" || fail "the probe asked for no healthcheck: $(cat "$WORK/probe.log")"
+fake_podman healthy
+probed_init || fail "a Podman that runs healthchecks was refused: $(cat "$WORK/out")"
+grep -q removed "$WORK/probe.log" || fail "the probe container was left behind on success"
+# Nothing learned (no network for the image): not a reason to refuse a working Podman.
+fake_podman unused no-run
+probed_init || fail "a probe that could not run refused the install: $(cat "$WORK/out")"
+grep -q "could not check" "$WORK/out" || fail "a probe that could not run said nothing: $(cat "$WORK/out")"
 # No socket to check is no proof of a rootless engine.
 if env CGROUP_CONTROLLERS="cpu memory" UNPRIVILEGED_PORT_START=80 sh "$DIR/../init.sh" --env-file "$WORK/nosock.env" --domain example.com \
   --admin-email me@example.com --engine podman --engine-socket "$WORK/absent.sock" >"$WORK/out" 2>&1; then

@@ -60,7 +60,11 @@ const upgradeFenceLine = "host all all all reject # excalibase-major-upgrade"
 // PreUpgradeContainerName is what the old container is renamed to while the
 // new one takes its name.
 func PreUpgradeContainerName(projectID, runID string) string {
-	return DatabaseContainerName(projectID) + "-pre-upgrade-" + runID
+	return preUpgradePrefix(projectID) + runID
+}
+
+func preUpgradePrefix(projectID string) string {
+	return DatabaseContainerName(projectID) + "-pre-upgrade-"
 }
 
 // hbaPrepend puts line first in the server's pg_hba once. The file is

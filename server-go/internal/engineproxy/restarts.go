@@ -297,7 +297,8 @@ func (g *restartGuard) logCorrupt() {
 	g.corruptLogged = time.Now()
 	log.Printf("engine proxy: restarts: %[1]s cannot be read. It may name tenants stopped on purpose, so none is started on its own and a crashed one stays down. "+
 		"To recover: docker exec excalibase-engine-proxy rm %[1]s, then docker restart excalibase-engine-proxy. "+
-		"Every exited tenant then starts, paused projects' too: pause those again", g.StoppedFile)
+		"Every exited tenant then starts, paused projects' too. A paused project's Pause changes nothing while it reads PAUSED: "+
+		"Resume it, then Pause it; one scheduled for deletion refuses both, so cancel the deletion first", g.StoppedFile)
 }
 
 // listTenants is the supervised containers, after the records drop what the engine no longer holds.

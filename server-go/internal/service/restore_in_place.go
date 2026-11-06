@@ -211,6 +211,10 @@ func (r *InPlaceRestore) replace(ctx context.Context, cluster InPlaceCluster, in
 func (r *InPlaceRestore) rollBack(ctx context.Context, cluster InPlaceCluster, inst *domain.DatabaseInstance, safety *safetyBackup, cause error) error {
 	if safety == nil {
 		reason := "the restore did not complete; restore again from Backups"
+		// The backup an earlier failure named is still the way back.
+		if inst.CurrentStep == domain.RestoreStepRestoreStopped && inst.FailureReason != "" {
+			reason = inst.FailureReason
+		}
 		if err := r.setStatus(inst.ProjectID, domain.StatusRestoring, domain.RestoreStepRestoreStopped, reason); err != nil {
 			log.Printf("in-place restore %s: record failure: %v", inst.ProjectID, err)
 		}

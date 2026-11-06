@@ -1,12 +1,16 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 )
@@ -278,5 +282,64 @@ func TestCheckStartupAsksTheEngine(t *testing.T) {
 		if err := checkStartup(config{}, handler); err != nil {
 			t.Errorf("not claiming rootless: %v", err)
 		}
+	}
+}
+
+// The wording fits every engine that gets here, Docker with the wrong setting too.
+func TestCheckStartupDoesNotCallEveryEngineRootfulPodman(t *testing.T) {
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"SecurityOptions":[]}`))
+	}))
+	t.Cleanup(engine.Close)
+	target, err := url.Parse(engine.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := engineproxy.NewHandler(engineproxy.Policy{}, target, http.DefaultTransport)
+	err = checkStartup(config{mustBeRootless: true}, handler)
+	if err == nil {
+		t.Fatal("accepted")
+	}
+	for _, want := range []string{"ENGINE_SOCKET_UID=0", "Docker", "ENGINE_SOCKET_UID=1000", "rootful Podman is not supported"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
+	}
+	if strings.HasPrefix(err.Error(), "rootful Podman") {
+		t.Errorf("%q calls the engine rootful Podman without knowing", err)
+	}
+}
+
+// main itself refuses: with the startup check gone from it, the proxy would listen.
+func TestServeRefusesAnEngineNotRootlessBeforeListening(t *testing.T) {
+	dir, err := os.MkdirTemp("", "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "e.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"SecurityOptions":[]}`))
+	}), ReadHeaderTimeout: time.Second}
+	go func() { _ = engine.Serve(listener) }()
+	t.Cleanup(func() { _ = engine.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		done <- serve(env(map[string]string{
+			"ENGINE_SOCKET": socket, "ENGINE_SOCKET_UID": "0", "PROXY_NETWORKS": "excalibase-tenants", "LISTEN_ADDR": "127.0.0.1:0",
+		}))
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "ENGINE_SOCKET_UID=0") {
+			t.Fatalf("serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the proxy went on to serve an engine that is not rootless")
 	}
 }
