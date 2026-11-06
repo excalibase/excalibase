@@ -1,27 +1,43 @@
 #!/usr/bin/env bash
-# Say "no coverage file" before the Sonar scan instead of letting the scan
-# report a misleading 0.0% coverage when an upstream job produced nothing.
-#   usage: check-coverage-files.sh <go-required: true|false>
-# A missing Go file fails when the Go integration job was expected to run
-# (go-required=true); other missing files only warn, since their jobs can be
-# skipped on a PR that does not touch them.
+# Say which coverage the Sonar scan is missing instead of letting a number
+# mislead: a missing Go report drops Go lines from the analysis, a missing
+# frontend or Deno lcov scores those files 0.0%.
+#   usage: check-coverage-files.sh <go-expected: true|false>
+# Frontend and Deno coverage are expected whenever the scan runs (their jobs run
+# on backend changes too). A missing or empty file is an error annotation and a
+# step-summary line, but never fails the step: the scan runs on what exists.
 set -uo pipefail
-go_required="${1:-false}"
-status=0
+go_expected="${1:-false}"
+missing=()
+
+# usable <path> <kind>: a Go profile needs a line after its "mode:" header, an
+# lcov file needs a source record.
+usable() {
+  case "$2" in
+    go) [ -f "$1" ] && [ "$(wc -l <"$1")" -gt 1 ] ;;
+    lcov) grep -q '^SF:' "$1" 2>/dev/null ;;
+  esac
+}
+
 check() {
-  local label="$1" path="$2" required="$3"
-  if [ -s "$path" ]; then
-    echo "$label coverage: $path ($(wc -l <"$path") lines)"
+  local label="$1" path="$2" kind="$3" expected="$4" effect="$5"
+  if usable "$path" "$kind"; then
+    echo "$label coverage: $path"
     return
   fi
-  if [ "$required" = "true" ]; then
-    echo "::error title=no coverage file::$label coverage file $path is missing or empty; the scan would report 0.0% coverage. Look at the job that should have produced it."
-    status=1
+  if [ "$expected" = "true" ]; then
+    echo "::error title=no coverage file::$label coverage file $path is missing or has no records; $effect. Look at the job that should have produced it."
+    missing+=("$label")
   else
-    echo "::warning title=no coverage file::$label coverage file $path is missing; its coverage is not in this scan."
+    echo "::notice title=no coverage file::$label coverage file $path is missing; its job did not run for this change, so $effect."
   fi
 }
-check "Go" server-go/coverage.out "$go_required"
-check "Deno" deno-server/coverage/lcov.info false
-check "Frontend" frontend/coverage/lcov.info false
-exit "$status"
+
+check "Go" server-go/coverage.out go "$go_expected" "Go lines are left out of this analysis"
+check "Deno" deno-server/coverage/lcov.info lcov true "Deno files read 0.0% coverage"
+check "Frontend" frontend/coverage/lcov.info lcov true "frontend files read 0.0% coverage"
+
+if [ "${#missing[@]}" -gt 0 ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  echo "Sonar coverage is partial: no coverage file for ${missing[*]}." >>"$GITHUB_STEP_SUMMARY"
+fi
+exit 0

@@ -266,7 +266,9 @@ jobs:
     name: Frontend Type Check
     runs-on: ubuntu-latest
     needs: [changes]
-    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    # Also on backend changes: the Sonar scan of a Go-only run would otherwise
+    # carry no frontend lcov, and every Studio file reads 0.0% on main.
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
       run:
         working-directory: frontend
@@ -284,7 +286,7 @@ jobs:
     name: Frontend Unit (vitest)
     runs-on: ubuntu-latest
     needs: [changes, frontend-lint]
-    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
       run:
         working-directory: frontend
@@ -342,7 +344,8 @@ jobs:
     name: Deno Unit (deno-server + vendored lib)
     runs-on: ubuntu-latest
     needs: [changes]
-    if: needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true'
+    # Also on backend changes, for the same reason as the frontend jobs.
+    if: needs.changes.outputs.deno == 'true' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -645,8 +648,9 @@ jobs:
           name: frontend-coverage
           path: frontend/coverage
         continue-on-error: true
-      # A missing go-coverage artifact (the Go job failed or never ran) used to
-      # scan anyway and show 0.0% coverage; say "no coverage file" instead.
+      # A missing coverage artifact makes the scan drop that language's lines
+      # (Go) or score its files 0.0% (frontend, Deno). The scan still runs, but
+      # the run says which coverage is missing so the numbers are not misread.
       - name: Check coverage files
         run: scripts/check-coverage-files.sh "${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true' }}"
       # SonarSource/sonarqube-scan-action v6 wraps sonar-scanner-cli 8.x —
