@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 )
 
@@ -82,13 +83,14 @@ func getProjectInfo(ctx context.Context, c *call, in projectArg) (any, error) {
 	setup := sdkSetup(c.settings.PublicBaseURL, projectID)
 	setup["fetchExample"] = fetchExample(urls)
 	origins := currentOrigins(ctx, c, projectID, info.CorsAllowedOrigins)
+	flags := signInFlagsOn(ctx, c)
 	out := map[string]any{
 		"projectId": projectID, "projectName": info.ProjectName,
 		"endpoints":   urls,
 		"sdkSetup":    setup,
 		"restApi":     restGuide(urls),
-		"endUserAuth": authGuide(urls),
-		"permissions": permissionsGuide(),
+		"endUserAuth": authGuide(urls, flags),
+		"permissions": permissionsGuide(flags.guest),
 		"realtime":    realtimeGuide(urls["graphql"]),
 		"notInMcp":    studioOnly(c.settings.StudioURL, projectID),
 		"cors": map[string]any{
@@ -113,6 +115,11 @@ func getProjectInfo(ctx context.Context, c *call, in projectArg) (any, error) {
 		out["publishableKeysNote"] = "Only the prefix of an existing key can be read back; use the full key saved when it was created, or create a new one."
 	}
 	return out, nil
+}
+
+func signInFlagsOn(ctx context.Context, c *call) signInFlags {
+	enabled := func(feature features.Feature) bool { return features.Enabled(ctx, c.settings.Features, feature) }
+	return signInFlags{oauth: enabled(features.AuthOAuth), otp: enabled(features.AuthOTP), guest: enabled(features.AuthGuest), user: enabled(features.AuthUser)}
 }
 
 // currentOrigins reads the allowlist from its own route, the one the CORS
