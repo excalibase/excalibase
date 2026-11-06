@@ -37,8 +37,8 @@ the token, the project and the outcome; arguments (SQL, secrets) are not kept, a
 read-only SQL is masked in the access log. A call whose arguments fail the tool's
 input schema is refused before it runs and is not audited.
 
-MCP never offers project creation or deletion, members and roles, tiers, sign-in
-providers, backups and restores, credential reads or rotation, or token minting.
+MCP never offers project creation or deletion, members and roles, tiers, changes to sign-in
+providers (it can read sign-in settings and providers, never their secrets), backups and restores, credential reads or rotation, or token minting.
 `create_publishable_key` makes only publishable SDK keys, which ship inside client
 apps and grant what the anon role grants.
 
@@ -47,7 +47,7 @@ apps and grant what the anon role grants.
 | Tool | Route |
 |---|---|
 | `list_projects` | `GET /api/provision/` |
-| `get_project_info` | `GET /api/projects/{id}/info/`, `GET /api/projects/{id}/sdk-keys/`; also returns `restApi`, the REST surface below |
+| `get_project_info` | `GET /api/projects/{id}/info/`, `GET /api/projects/{id}/sdk-keys/`; also returns `restApi`, the REST surface below, and `endUserAuth`, the sign-in guide: it adds provider sign-in, emailed link or code, guest sign-in and account self-service while `FEATURE_AUTHOAUTH`, `FEATURE_AUTHOTP`, `FEATURE_AUTHGUEST` and `FEATURE_AUTHUSER` are on, and with guests on states that the token's `sub` is the account id |
 | `create_publishable_key` | `POST /api/projects/{id}/sdk-keys/` (publishable only) |
 | `list_tables` | `GET /api/schema/{id}/tables` |
 | `describe_table` | `GET /api/schema/{id}/tables/{t}/columns`, `.../indexes`, `GET /api/schema/{id}/relationships` |
@@ -61,8 +61,15 @@ apps and grant what the anon role grants.
 | `create_app` | `POST /api/projects/{id}/apps/` (Studio's plan limits apply), then `GET`/`PUT /api/projects/{id}/cors/` to allow the app's own origin; deleting the app removes that origin again |
 | `update_app` / `delete_app` | `GET` then `PATCH /api/projects/{id}/apps/{app}/` at the version read (`If-Match`; env is merged by name, secrets kept as stored); `PUT /api/projects/{id}/app-network/` for the private-network switch (admin); `DELETE .../apps/{app}/` removes only that app and its CORS origin; an app with a disk is refused |
 | `test_auth_flow` | `GET /api/projects/{id}/info/`, then one register or password sign-in against the project's own auth API with a test account the caller gives; reports status, outcome and the userId and role claims, never the password or a token; with `origin` the CORS preflight is checked first |
-| `get_logs` | database: `GET /api/provision/{id}/logs`; app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs`. A log backend that does not answer gives "not available", never its address |
-| `get_slow_queries` | `GET /api/provision/{id}/slow-queries/?sort=total\|mean&limit=N`: the project's own normalized statements; where `FEATURE_SLOWQUERIES` is off the route answers 404. Reset and turning statistics on stay in Studio |
+| `get_logs` | database: `GET /api/provision/{id}/logs` (optional `query`, and `since` 1h/6h/24h/7d); app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs`. A log backend that does not answer gives "not available", never its address |
+| `get_slow_queries` | `GET /api/provision/{id}/slow-queries/?sort=total\|mean&limit=N`: the project's own normalized statements; the tool is offered only while `FEATURE_SLOWQUERIES` is on. Reset and turning statistics on stay in Studio |
+| `get_request_metrics` | `GET /api/provision/{id}/requests?range=`: request, error and latency charts; offered only while `FEATURE_REQUESTMETRICS` is on |
+| `get_metrics` | `GET .../metrics/current` and, with `history`, `.../metrics/history?limit=N` |
+| `list_alerts` | `GET /api/alerts/project/{id}/` |
+| `get_database_info` | `GET /api/provision/{id}/cluster`: disk, size, plan, settings (Postgres on Kubernetes only; MySQL and single host are refused) |
+| `get_db_endpoint` | `GET /api/projects/{id}/db-endpoint/`: host, port, CA and connection strings without the password; opening the port stays in Studio |
+| `get_db_read_address` | `GET /api/projects/{id}/db-read-address/`; offered only while `FEATURE_DBREADADDRESS` is on |
+| `get_auth_settings` | `GET .../auth-settings/`, plus `.../auth-providers/` while `FEATURE_AUTHOAUTH` is on: how end users may sign in; secrets never; every write stays in Studio |
 | `test_api_request` | `GET /api/projects/{id}/info/`, then one request to the project's own data API (below) |
 | `get_dockerfile_template` | none: Dockerfiles for node, nextjs, vite, python, go, java |
 | `list_sites` / `create_site` / `delete_site` | `GET`/`POST /api/projects/{id}/sites/`, `DELETE .../sites/{site}/`. Sites serve built files from the CDN (ADR 0043); the site's origin joins the project's CORS list on its first deploy |
