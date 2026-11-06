@@ -100,9 +100,10 @@ const (
 	// SitePreviews is a preview per branch or pull request of a site connected
 	// to git, at its own unguessable hostname, removed with its branch or PR (EXC-660).
 	SitePreviews Feature = "sitepreviews"
-	// FunctionInvoke is MCP's invoke_function. A function's answer is whatever its
-	// code returns, secrets and the database URL included, so an agent that can
-	// both deploy and run a function could read them into the conversation (EXC-684).
+	// FunctionInvoke is MCP's invoke_function. It is not a safeguard: code deployed to
+	// a project's functions can already read that project's function secrets and
+	// database URL and return them through its error text or logs. The flag only
+	// removes one convenient way of running such code from the agent (EXC-684).
 	FunctionInvoke Feature = "functioninvoke"
 )
 

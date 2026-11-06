@@ -223,7 +223,8 @@ func TestDeleteFunctionSecretDoesNotSayAllIsWellWhenTheRuntimeIsNotHealthy(t *te
 		f.on(http.MethodGet, projectsA+"/functions/runtime/status", reply.status, reply.body)
 		out := structured(t, callTool(t, session(t, f, &recordingAudit{}, writeCaller()), "delete_function_secret", map[string]any{"project_id": testProjectA, "key": "K"}))
 		warning, _ := out["warning"].(string)
-		if out["deleted"] != "K" || !strings.Contains(warning, "redeploy") {
+		want := map[string]string{"unavailable": "runtime is unavailable", "unreadable": "could not be read"}[name]
+		if out["deleted"] != "K" || !strings.Contains(warning, "redeploy") || !strings.Contains(warning, want) {
 			t.Errorf("%s: out = %v", name, out)
 		}
 	}
@@ -240,6 +241,11 @@ func TestSetBucketAccessRefusesAnonAndGuestAndAnEmptyRuleSet(t *testing.T) {
 		"guest": map[string]any{"user": map[string]any{"read": "own"}, "guest": map[string]any{"write": "own"}},
 		"empty": map[string]any{},
 		"blank": map[string]any{"user": map[string]any{}},
+		// Roles are lower case in storage, but a tool must not rely on that to keep these two out.
+		"Anon":       map[string]any{"Anon": map[string]any{"read": "all"}},
+		" guest ":    map[string]any{" guest ": map[string]any{"read": "all"}},
+		"GUEST":      map[string]any{"GUEST": map[string]any{"read": "own"}},
+		"blank role": map[string]any{"": map[string]any{"read": "own"}, "user": map[string]any{"read": "own"}},
 	} {
 		res := callTool(t, cs, "set_bucket_access", map[string]any{"project_id": testProjectA, "bucket": "photos", "access": access})
 		if !res.IsError {
@@ -299,4 +305,40 @@ func invokeSession(t *testing.T, router http.Handler) *mcp.ClientSession {
 	settings := testSettings
 	settings.Features = features.NewStatic(features.FunctionInvoke)
 	return sessionWith(t, router, &recordingAudit{}, writeCaller(), settings)
+}
+
+// authenticated is a token scope, not a role any token carries, so a rule for it grants nobody.
+func TestSetBucketAccessSaysWhenARoleGrantsNobody(t *testing.T) {
+	settings := testSettings
+	settings.Features = features.NewStatic(features.AppStorage)
+	f := newFakeRoutes()
+	f.on(http.MethodPut, projectsA+"/storage/buckets/photos/access", 200, realJSON(photosBucket(), nil))
+	cs := sessionWith(t, f, &recordingAudit{}, writeCaller(), settings)
+	out := structured(t, callTool(t, cs, "set_bucket_access", map[string]any{"project_id": testProjectA, "bucket": "photos",
+		"access": map[string]any{"authenticated": map[string]any{"read": "all"}, "user": map[string]any{"read": "own"}}}))
+	note, _ := out["note"].(string)
+	if !strings.Contains(note, "authenticated") || !strings.Contains(note, "nobody") {
+		t.Errorf("out = %v", out)
+	}
+	out = structured(t, callTool(t, cs, "set_bucket_access", map[string]any{"project_id": testProjectA, "bucket": "photos",
+		"access": map[string]any{"user": map[string]any{"read": "own"}}}))
+	if out["note"] != nil {
+		t.Errorf("a note without cause: %v", out)
+	}
+}
+
+// deploying code can read the project's function secrets whether or not a tool can run it.
+func TestFunctionToolsSayPlainlyThatDeployedCodeReadsTheSecrets(t *testing.T) {
+	described := toolDescriptions(t)
+	for _, tool := range []string{"deploy_function", "invoke_function"} {
+		text := described[tool]
+		for _, want := range []string{"function secrets", "logs"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q: %s", tool, want, text)
+			}
+		}
+	}
+	if strings.Contains(strings.ToLower(described["invoke_function"]), "flag") {
+		t.Errorf("invoke_function presents its flag as a safeguard: %s", described["invoke_function"])
+	}
 }

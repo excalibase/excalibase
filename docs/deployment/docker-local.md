@@ -548,6 +548,20 @@ restart. DocumentDB projects have no slow-queries page on a single host.
 | `FEATURE_REQUESTMETRICS` | unset (off) | request counting in graphql and auth, and the Requests page |
 | `FEATURE_SLOWQUERIES` | unset (off) | statement statistics for new Postgres projects, and the Slow queries page |
 
+## MCP function invoke
+
+`FEATURE_FUNCTIONINVOKE=true` in `.env` offers the MCP tool `invoke_function`,
+which runs one edge function and returns its answer. It is off by default. It
+is not a safeguard: code deployed to a project's functions can already read that
+project's function secrets and database URL and return them through its error
+text or logs, so anyone who may deploy a function (Developer and above) can read
+them. The setting only decides whether an AI tool gets this one way of running
+the code.
+
+| `.env` | Default | Meaning |
+|---|---|---|
+| `FEATURE_FUNCTIONINVOKE` | unset (off) | the MCP `invoke_function` tool |
+
 ## Refusals you may see
 
 - `run ./init.sh first` — a required value is missing from `.env`.
