@@ -64,7 +64,7 @@ apps and grant what the anon role grants.
 | `get_logs` | database: `GET /api/provision/{id}/logs` (optional `query`, and `since` 1h/6h/24h/7d); app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs`. A log backend that does not answer gives "not available", never its address |
 | `get_slow_queries` | `GET /api/provision/{id}/slow-queries/?sort=total\|mean&limit=N`: the project's own normalized statements; the tool is offered only while `FEATURE_SLOWQUERIES` is on. Reset and turning statistics on stay in Studio |
 | `get_request_metrics` | `GET /api/provision/{id}/requests?range=`: request, error and latency charts; offered only while `FEATURE_REQUESTMETRICS` is on |
-| `get_metrics` | `GET .../metrics/current` and, with `history`, `.../metrics/history?limit=N` |
+| `get_metrics` | `GET .../metrics/current` and, with `history`, `.../metrics/history?limit=N`; while `FEATURE_HOSTMETRICS` is on also `GET /api/projects/{id}/containers/metrics` (the project's own containers on a single host: state, health, CPU, memory, network; samples over `container_range`). A platform that does not report them leaves a `containersNote` and the database answer whole |
 | `list_alerts` | `GET /api/alerts/project/{id}/` |
 | `get_database_info` | `GET /api/provision/{id}/cluster`: disk, size, plan, settings (Postgres) |
 | `get_db_endpoint` | `GET /api/projects/{id}/db-endpoint/`: host, port, CA and connection strings without the password; opening the port stays in Studio |
