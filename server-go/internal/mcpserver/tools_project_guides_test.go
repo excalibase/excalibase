@@ -131,12 +131,12 @@ func TestAuthGuideDescribesGuestSignInAndTheStableSubjectWhileAuthGuestIsOn(t *t
 	guest, _ := auth["guest"].(string)
 	mustContain(t, "guest", guest, "POST "+urls["auth"].(string)+"/guest", "captchaToken", "captcha_required", "isGuest", "role guest", "method_not_enabled")
 	idType, _ := auth["userIdType"].(string)
-	mustContain(t, "userIdType", idType, "JSON number", "sub", "account id", "email claim", "is_guest")
+	mustContain(t, "userIdType", idType, "JSON number", "sub", "account id", "email claim", "is_guest", "falls back to the sub", "X-Excalibase-Is-Guest")
 	if strings.Contains(idType, "the token's sub is the user's email") {
 		t.Errorf("userIdType still says sub is the email: %s", idType)
 	}
 	variables, _ := permissions["sessionVariables"].(string)
-	mustContain(t, "sessionVariables", variables, "X-Excalibase-Email", "email claim", "X-Excalibase-Is-Guest")
+	mustContain(t, "sessionVariables", variables, "X-Excalibase-Email", "email claim", "X-Excalibase-Is-Guest", "falls back to the sub")
 	if strings.Contains(variables, "(the sub claim)") {
 		t.Errorf("sessionVariables still reads the email from sub: %s", variables)
 	}
@@ -156,7 +156,7 @@ func TestAuthGuideDescribesAccountSelfServiceWhileAuthUserIsOn(t *testing.T) {
 // sessionVariables read the same with guests off: the email claim, never sub.
 func TestSessionVariablesNameTheEmailClaimWithGuestsOff(t *testing.T) {
 	variables, _ := guide(t, projectInfo(t), "permissions")["sessionVariables"].(string)
-	mustContain(t, "sessionVariables", variables, "X-Excalibase-Email", "email claim")
+	mustContain(t, "sessionVariables", variables, "X-Excalibase-Email", "email claim", "falls back to the sub")
 	if strings.Contains(variables, "Is-Guest") {
 		t.Errorf("Is-Guest named while authguest is off: %s", variables)
 	}
@@ -165,7 +165,7 @@ func TestSessionVariablesNameTheEmailClaimWithGuestsOff(t *testing.T) {
 // Published auth builds before the guest release carry no email claim, so with guests off the guide must not promise one.
 func TestUserIDTypeDoesNotPromiseAnEmailClaimWithGuestsOff(t *testing.T) {
 	idType, _ := guide(t, projectInfo(t), "endUserAuth")["userIdType"].(string)
-	mustContain(t, "userIdType", idType, "sub is the user's email", "Some auth versions", "no email claim", "missing_session_variable", "test_auth_flow")
+	mustContain(t, "userIdType", idType, "sub is the user's email", "falls back to the sub", "no email claim", "missing_session_variable", "test_auth_flow")
 	if strings.Contains(idType, "the same address is in the email claim") {
 		t.Errorf("userIdType promises an email claim: %s", idType)
 	}
