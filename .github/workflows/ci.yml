@@ -645,6 +645,10 @@ jobs:
           name: frontend-coverage
           path: frontend/coverage
         continue-on-error: true
+      # A missing go-coverage artifact (the Go job failed or never ran) used to
+      # scan anyway and show 0.0% coverage; say "no coverage file" instead.
+      - name: Check coverage files
+        run: scripts/check-coverage-files.sh "${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true' }}"
       # SonarSource/sonarqube-scan-action v6 wraps sonar-scanner-cli 8.x —
       # the same engine SonarCloud runs, so local/CI scans match cloud
       # results. Local validation: ./scripts/sonar-local.sh
