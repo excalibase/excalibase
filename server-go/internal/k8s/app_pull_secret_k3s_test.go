@@ -94,7 +94,12 @@ func (g *gvisorCluster) logPullDiagnostics(t *testing.T, namespace string) {
 		t.Logf("diagnostics: list events: %v", err)
 	}
 	for _, event := range events.Items {
-		t.Logf("diagnostics: event %s %s/%s %s: %s", event.LastTimestamp.Format(time.RFC3339Nano), event.InvolvedObject.Kind, event.InvolvedObject.Name, event.Reason, event.Message)
+		// Events of the newer API leave LastTimestamp zero and carry EventTime.
+		when := event.LastTimestamp.Time
+		if when.IsZero() {
+			when = event.EventTime.Time
+		}
+		t.Logf("diagnostics: event %s %s/%s %s: %s", when.Format(time.RFC3339Nano), event.InvolvedObject.Kind, event.InvolvedObject.Name, event.Reason, event.Message)
 	}
 	reader, err := g.container.Logs(ctx)
 	if err != nil {
