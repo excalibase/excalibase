@@ -684,6 +684,14 @@ func baseRouteCases() []routeCase {
 			expect: []string{"GET " + provisionA + "/logs?lines=50"},
 		},
 		{
+			name: "get_logs database search", tool: "get_logs",
+			args: map[string]any{"project_id": testProjectA, "source": "database", "query": "deadlock", "since": "24h"},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodGet, provisionA+"/logs", 200, `{"logs":[],"retentionHours":168}`)
+			},
+			expect: []string{"GET " + provisionA + "/logs?lines=200&q=deadlock&since=24h"},
+		},
+		{
 			name: "test_api_request", tool: "test_api_request",
 			args: map[string]any{"project_id": testProjectA, "publishable_key": testPublishableKey, "path": "todos"},
 			setup: func(f *fakeRoutes) {

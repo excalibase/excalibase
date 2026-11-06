@@ -50,6 +50,9 @@ type KubeClient interface {
 	IsPodReady(ctx context.Context, namespace, name string) (bool, error)
 	// PodLogTail is the last lines of one container's log.
 	PodLogTail(ctx context.Context, namespace, pod, container string, lines int64) (string, error)
+	// PodLogSince is the last lines of one container's log written within
+	// the window, so a search never returns a line older than it asked for.
+	PodLogSince(ctx context.Context, namespace, pod, container string, lines int64, window time.Duration) (string, error)
 	GetSecret(ctx context.Context, namespace, name string) (map[string][]byte, error)
 	CreateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error
 	// DeleteSecret removes a Secret; one that is already gone is not an error.

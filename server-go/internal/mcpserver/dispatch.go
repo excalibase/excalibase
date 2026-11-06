@@ -123,6 +123,9 @@ func (d dispatcher) build(ctx context.Context, req request) (*http.Request, erro
 	return httpReq, nil
 }
 
+// unmountedRoute is what a route behind a switched-off feature answers (http.NotFound).
+const unmountedRoute = "404 page not found"
+
 // errorMessage pulls the route's refusal text out of its body.
 func errorMessage(body []byte, status int) string {
 	var shaped struct {
@@ -137,7 +140,11 @@ func errorMessage(body []byte, status int) string {
 			return shaped.Message
 		}
 	}
-	if text := strings.TrimSpace(string(body)); text != "" && len(text) < 500 {
+	text := strings.TrimSpace(string(body))
+	if status == http.StatusNotFound && text == unmountedRoute {
+		return "this is not available on this platform: its feature is switched off, or the platform is too old to have it"
+	}
+	if text != "" && len(text) < 500 {
 		return text
 	}
 	return http.StatusText(status)

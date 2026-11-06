@@ -321,3 +321,21 @@ func TestChangeTier_MySQL(t *testing.T) {
 		t.Errorf("FREE: %d %s", w.Code, w.Body.String())
 	}
 }
+
+// A read that fails is not "a change that could not be applied" (EXC-684).
+func TestClusterSettingsReadFailureDoesNotTalkOfAChange(t *testing.T) {
+	f := newClusterChangeFixture(t)
+	if err := f.store.Create(&domain.DatabaseInstance{
+		ProjectID: "bare-db", OrgID: "org1", DBType: domain.PostgreSQL, Tier: domain.Free,
+		Namespace: "org1-bare-db", Status: "ACTIVE", PostgresVersion: "17",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := doRequest(f.router, "GET", "/api/provision/bare-db/cluster", "")
+	if w.Code < 500 {
+		t.Fatalf("got %d %s, want a failure", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "change") || !strings.Contains(w.Body.String(), "read") {
+		t.Errorf("body = %s", w.Body.String())
+	}
+}
