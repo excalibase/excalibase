@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
@@ -43,6 +44,8 @@ type ProvisioningService struct {
 	queryStats bool
 	// runInBackground starts an accepted project build; nil runs it on its own goroutine.
 	runInBackground func(func())
+	// buildTimeout overrides defaultBuildTimeout; zero keeps the default.
+	buildTimeout time.Duration
 	// storageBudget holds every database volume to the platform's share of its storage.
 	storageBudget *storagebudget.Budget
 	store         storage.InstanceStore
@@ -442,13 +445,22 @@ func (s *ProvisioningService) ProvisionInBackground(ctx context.Context, req dom
 	return accepted, nil
 }
 
-// startInBackground runs an accepted build detached from its request.
+// startInBackground runs an accepted build detached from its request. Nothing
+// is left to catch a panic there, and it would take the whole control plane.
 func (s *ProvisioningService) startInBackground(f func()) {
+	guarded := func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("ERROR: background work panicked: %v\n%s", r, debug.Stack())
+			}
+		}()
+		f()
+	}
 	if s.runInBackground != nil {
-		s.runInBackground(f)
+		s.runInBackground(guarded)
 		return
 	}
-	go f()
+	go guarded()
 }
 
 // SetBackgroundRunner replaces how accepted builds are started (tests).
@@ -517,9 +529,15 @@ type provisionFailureHandler func(ctx context.Context, inst *domain.DatabaseInst
 // buildDatabase runs the provisioning pipeline for a project whose row is
 // already written: the cluster, then registration. It is the one path a
 // database comes into being by, whether with its project or added later.
-func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admittedProject) (*domain.ProvisioningResponse, error) {
+func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admittedProject) (resp *domain.ProvisioningResponse, err error) {
 	start, inst, req, prov := admitted.start, admitted.inst, admitted.req, admitted.prov
-	tier, fail, opts := admitted.tier, admitted.fail, admitted.opts
+	tier, opts := admitted.tier, admitted.opts
+	// Nothing below the provisioner has a timeout of its own: an exec whose
+	// commit waits on dead standbys would hold the row PROVISIONING for good.
+	limit := s.buildLimit()
+	deadline := fmt.Errorf("the database build did not finish within %s", limit)
+	ctx, stopClock := context.WithTimeoutCause(ctx, limit, deadline)
+	defer stopClock()
 	// A teardown that claims the project mid-build owns it from that moment.
 	// The pipeline must stop rather than keep creating resources the
 	// teardown has already looked for and not found: it cancels the
@@ -549,6 +567,20 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admit
 			persist()
 		},
 	)
+	fail := func(_ context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest,
+		failure error, pc *provisioner.ProvisionContext) *domain.ProvisioningResponse {
+		if errors.Is(context.Cause(ctx), deadline) {
+			failure = pc.Fail(deadline)
+		}
+		return admitted.fail(context.WithoutCancel(ctx), inst, req, failure, pc)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ERROR: database build of %s panicked: %v\n%s", inst.ProjectID, r, debug.Stack())
+			metrics.ObserveProvision(start, errBuildPanicked)
+			resp, err = fail(ctx, inst, req, errBuildPanicked, pc), nil
+		}
+	}()
 
 	var result *provisioner.ProvisioningResult
 	var provErr error
@@ -563,16 +595,32 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admit
 	// registered. The failure handler runs the compensations.
 	if cause := context.Cause(ctx); cause != nil && isProjectGone(cause) {
 		metrics.ObserveProvision(start, cause)
-		return fail(context.WithoutCancel(ctx), inst, req, cause, pc), nil
+		return fail(ctx, inst, req, cause, pc), nil
 	}
 	if provErr != nil {
 		metrics.ObserveProvision(start, provErr)
-		return fail(context.WithoutCancel(ctx), inst, req, provErr, pc), nil
+		return fail(ctx, inst, req, provErr, pc), nil
 	}
 
-	resp, ferr := s.finalizeProvisioning(ctx, inst, req, result, pc, fail, opts)
-	metrics.ObserveProvision(start, ferr)
-	return resp, ferr
+	resp, err = s.finalizeProvisioning(ctx, inst, req, result, pc, fail, opts)
+	metrics.ObserveProvision(start, err)
+	return resp, err
+}
+
+// defaultBuildTimeout bounds one database build. It sits above the longest pod
+// wait (11 minutes on a paid tier) and below storage.StaleBuildAfter, so a hung
+// build ends itself before a delete may take its row for abandoned.
+const defaultBuildTimeout = 20 * time.Minute
+
+// errBuildPanicked is what a project records when its build panicked; the panic
+// itself goes to the log only.
+var errBuildPanicked = errors.New("the database build stopped on an internal error")
+
+func (s *ProvisioningService) buildLimit() time.Duration {
+	if s.buildTimeout > 0 {
+		return s.buildTimeout
+	}
+	return defaultBuildTimeout
 }
 
 // prepareProvisioning validates the request and creates the initial instance record.
@@ -913,7 +961,11 @@ func (s *ProvisioningService) recordProvisionFailure(
 	} else {
 		log.Printf("WARN: marshal rollback log: %v", jerr)
 	}
-
+	for _, result := range results {
+		if !result.OK {
+			log.Printf("ERROR: rollback of %s: %s failed: %s", req.ProjectName, result.Name, result.Error)
+		}
+	}
 }
 
 // saveProvisionFailure persists the failed row and answers with it.

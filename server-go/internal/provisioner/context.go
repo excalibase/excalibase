@@ -4,9 +4,20 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
+
+// CleanupTimeout bounds one cleanup. The slowest, removing a database from a
+// namespace it shares, waits up to 2 minutes on Helm and 5 on the cluster.
+const CleanupTimeout = 10 * time.Minute
+
+// CleanupContext is what cleanup runs on: it outlives whatever ended the work
+// being undone (a hang-up, a deadline, a claim) and still cannot run forever.
+func CleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), CleanupTimeout)
+}
 
 // CleanupFunc is a compensation action for a successful provisioning step.
 // It's called if a later stage fails, to roll back side effects.
@@ -32,6 +43,8 @@ type ProvisionContext struct {
 	stage    domain.ProvisioningStage
 	step     string
 	cleanups []cleanupEntry
+	// cleanupTimeout overrides how long one cleanup may run; zero is CleanupTimeout.
+	cleanupTimeout time.Duration
 
 	onStage func(stage domain.ProvisioningStage)
 	onStep  func(step string)
@@ -93,6 +106,8 @@ func (pc *ProvisionContext) RegisterCleanup(name string, fn CleanupFunc) {
 
 // Rollback runs all registered cleanups in reverse order. Returns a result for each.
 // Failures in individual cleanups are captured but do not stop subsequent cleanups.
+// Each runs detached from ctx on its own deadline, so a finished ctx cannot
+// strand the cluster and one hung cleanup cannot starve the rest.
 func (pc *ProvisionContext) Rollback(ctx context.Context) []CleanupResult {
 	pc.mu.Lock()
 	cleanups := make([]cleanupEntry, len(pc.cleanups))
@@ -102,7 +117,7 @@ func (pc *ProvisionContext) Rollback(ctx context.Context) []CleanupResult {
 	results := make([]CleanupResult, 0, len(cleanups))
 	for i := len(cleanups) - 1; i >= 0; i-- {
 		c := cleanups[i]
-		err := c.fn(ctx)
+		err := pc.runCleanup(ctx, c)
 		if err != nil {
 			results = append(results, CleanupResult{
 				Name:  c.name,
@@ -117,6 +132,17 @@ func (pc *ProvisionContext) Rollback(ctx context.Context) []CleanupResult {
 		}
 	}
 	return results
+}
+
+func (pc *ProvisionContext) runCleanup(ctx context.Context, c cleanupEntry) error {
+	cleanupCtx, cancel := CleanupContext(ctx)
+	defer cancel()
+	if pc.cleanupTimeout > 0 {
+		var shorten context.CancelFunc
+		cleanupCtx, shorten = context.WithTimeout(cleanupCtx, pc.cleanupTimeout)
+		defer shorten()
+	}
+	return c.fn(cleanupCtx)
 }
 
 // CleanupCount reports how many cleanup actions are currently registered.

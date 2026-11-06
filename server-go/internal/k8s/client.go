@@ -606,7 +606,16 @@ func (c *Client) exec(ctx context.Context, namespace, pod, container string, cmd
 	if stdin != "" {
 		opts.Stdin = strings.NewReader(stdin)
 	}
-	err = exec.StreamWithContext(ctx, opts)
+	// The SPDY handshake ignores the context: an API server that holds the
+	// upgrade open would hold this call open too, past any deadline. The
+	// stream is left to its connection, so the buffers are not read on this path.
+	finished := make(chan error, 1)
+	go func() { finished <- exec.StreamWithContext(ctx, opts) }()
+	select {
+	case <-ctx.Done():
+		return "", fmt.Errorf("exec: %w", ctx.Err())
+	case err = <-finished:
+	}
 	if err != nil {
 		return "", fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
 	}

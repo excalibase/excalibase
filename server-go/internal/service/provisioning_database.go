@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -109,9 +110,7 @@ func (s *ProvisioningService) provisionWithoutDatabase(ctx context.Context, req 
 func (s *ProvisioningService) failProjectWithoutDatabase(ctx context.Context, inst *domain.DatabaseInstance, step string, cause error, removeNamespace bool) *domain.ProvisioningResponse {
 	log.Printf("project %s without a database failed at %s: %v", inst.ProjectID, step, cause)
 	if removeNamespace {
-		if err := s.k8sClient.DeleteNamespace(context.WithoutCancel(ctx), inst.Namespace); err != nil {
-			log.Printf("WARN: remove namespace %s of failed project: %v", inst.Namespace, err)
-		}
+		inst.RollbackLog = s.removeFailedProjectNamespace(ctx, inst.Namespace)
 	}
 	inst.Status = string(domain.StageFailed)
 	inst.CurrentStage = domain.StageFailed
@@ -119,6 +118,24 @@ func (s *ProvisioningService) failProjectWithoutDatabase(ctx context.Context, in
 	inst.FailureStep = step
 	inst.FailureReason = cause.Error()
 	return s.saveProvisionFailure(inst)
+}
+
+// removeFailedProjectNamespace deletes the namespace and answers with the
+// rollback log, the record RetryFailedRollbacks works from if the delete failed.
+func (s *ProvisioningService) removeFailedProjectNamespace(ctx context.Context, namespace string) string {
+	cleanupCtx, cancel := provisioner.CleanupContext(ctx)
+	defer cancel()
+	result := provisioner.CleanupResult{Name: deleteNamespaceCleanup(namespace), OK: true}
+	if err := s.k8sClient.DeleteNamespace(cleanupCtx, namespace); err != nil {
+		log.Printf("ERROR: remove namespace %s of failed project: %v", namespace, err)
+		result = provisioner.CleanupResult{Name: result.Name, Error: err.Error()}
+	}
+	encoded, err := json.Marshal([]provisioner.CleanupResult{result})
+	if err != nil {
+		log.Printf("WARN: marshal rollback log: %v", err)
+		return ""
+	}
+	return string(encoded)
 }
 
 func projectResponse(inst *domain.DatabaseInstance) *domain.ProvisioningResponse {
@@ -149,6 +166,8 @@ func projectResponse(inst *domain.DatabaseInstance) *domain.ProvisioningResponse
 // project's namespace, and the project stays ACTIVE without a database, with
 // the failure recorded, so its apps keep running and the add can be retried.
 func (s *ProvisioningService) AddDatabase(ctx context.Context, projectID string, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
+	// The caller waits for the answer but does not own the build or its lease.
+	ctx = context.WithoutCancel(ctx)
 	add, release, err := s.admitDatabaseAdd(ctx, projectID, req)
 	if err != nil {
 		return nil, err
@@ -277,7 +296,9 @@ func (s *ProvisioningService) purgeFailedAddBackups(ctx context.Context, inst *d
 		inst.FailureReason += "; its backup files were not removed (no backup purger), so a retry will be refused"
 		return
 	}
-	if _, err := s.backupPurger.Purge(ctx, inst); err != nil && !errors.Is(err, ErrNoBackupsForMode) {
+	cleanupCtx, cancel := provisioner.CleanupContext(ctx)
+	defer cancel()
+	if _, err := s.backupPurger.Purge(cleanupCtx, inst); err != nil && !errors.Is(err, ErrNoBackupsForMode) {
 		log.Printf("ERROR: purge backups of the failed database add of %s: %v", inst.ProjectID, err)
 		inst.FailureReason += "; its backup files could not be removed, so a retry will be refused"
 	}
@@ -322,7 +343,9 @@ func (s *ProvisioningService) recoverInterruptedAdd(ctx context.Context, project
 		if err != nil {
 			return err
 		}
-		if err := remover.RemoveDatabase(ctx, inst.Namespace, inst.ProjectID); err != nil {
+		cleanupCtx, cancel := provisioner.CleanupContext(ctx)
+		defer cancel()
+		if err := remover.RemoveDatabase(cleanupCtx, inst.Namespace, inst.ProjectID); err != nil {
 			return err
 		}
 	}
