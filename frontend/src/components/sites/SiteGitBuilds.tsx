@@ -262,7 +262,16 @@ function Connected({
 // Deploy on git push (EXC-354): hidden until the server switches it on; single-host answers why it has none.
 export function SiteGitBuilds(props: SiteProps) {
   // A fresh section per site, so one site's notice and errors never show on another.
-  return <SiteGitSection key={`${props.projectId}/${props.siteId}`} {...props} />;
+  return (
+    <SiteGitSection
+      key={`${props.projectId}/${props.siteId}`}
+      projectId={props.projectId}
+      siteId={props.siteId}
+      canDevelop={props.canDevelop}
+      canAdmin={props.canAdmin}
+      serverSite={props.serverSite}
+    />
+  );
 }
 
 function SiteGitSection({
