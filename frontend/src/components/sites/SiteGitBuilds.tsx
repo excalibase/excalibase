@@ -197,7 +197,10 @@ function Connected({
                 <button
                   type="button"
                   className={secondaryButton}
-                  onClick={() => setEditing(!editing)}
+                  onClick={() => {
+                    if (connect.error) connect.reset();
+                    setEditing(!editing);
+                  }}
                   data-testid="git-edit"
                 >
                   {editing ? 'Close' : 'Settings'}
@@ -215,6 +218,11 @@ function Connected({
           </div>
         )}
       </div>
+      {disconnect.error && (
+        <p role="alert" className="text-xs text-red-400" data-testid="git-disconnect-error">
+          {apiErrorMessage(disconnect.error, 'The repository could not be disconnected')}
+        </p>
+      )}
       {rebuild.error && (
         <p role="alert" className="text-xs text-red-400">
           {apiErrorMessage(rebuild.error, 'The rebuild could not be started')}
@@ -252,7 +260,12 @@ function Connected({
 }
 
 // Deploy on git push (EXC-354): hidden until the server switches it on; single-host answers why it has none.
-export function SiteGitBuilds({
+export function SiteGitBuilds(props: SiteProps) {
+  // A fresh section per site, so one site's notice and errors never show on another.
+  return <SiteGitSection key={`${props.projectId}/${props.siteId}`} {...props} />;
+}
+
+function SiteGitSection({
   projectId,
   siteId,
   canDevelop,
@@ -297,9 +310,9 @@ export function SiteGitBuilds({
         )}
       </div>
       {connect.data?.buildError && (
-        <p className="text-sm text-amber-400" role="status" data-testid="git-build-error">
-          Connected, but no build was started: {connect.data.buildError}
-        </p>
+        <output className="block text-sm text-amber-400" data-testid="git-build-error">
+          Saved, but no build was started: {connect.data.buildError}
+        </output>
       )}
       {state?.connection && (
         <div className="bg-surface-card border border-border-primary rounded-lg">

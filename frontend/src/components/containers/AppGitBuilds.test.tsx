@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppGitBuilds } from './AppGitBuilds';
 import { api } from '../../api/client';
-import type { AppBuild, AppGitConnection } from '../../api/appBuilds';
+import type { AppBuild, AppBuildSettings, AppGitConnection } from '../../api/appBuilds';
 
 vi.mock('../../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -12,7 +12,7 @@ vi.mock('../../api/client', () => ({
 
 const BASE = '/projects/proj-1/apps/app-1';
 
-const settings = {
+const settings: AppBuildSettings = {
   branch: 'main',
   builder: 'auto',
   rootDir: '',
@@ -368,7 +368,7 @@ describe('AppGitBuilds', () => {
     expect(screen.getByTestId('app-git-connect-submit')).toBeDisabled();
   });
 
-  test('a multi-line value set through the API is named, and blocks a save that would lose it', async () => {
+  test('a multi-line value set through the API is listed as kept and does not block the form', async () => {
     serve({
       git: {
         ...connected,
@@ -384,10 +384,18 @@ describe('AppGitBuilds', () => {
         },
       ],
     });
+    vi.mocked(api.put).mockResolvedValue({ data: { connection } } as never);
     renderPanel();
     await userEvent.click(await screen.findByTestId('app-git-edit'));
-    expect(await screen.findByTestId('app-build-args-error')).toHaveTextContent('CERT');
-    expect(screen.getByTestId('app-git-connect-submit')).toBeDisabled();
+    expect(await screen.findByTestId('app-build-args-kept')).toHaveTextContent('CERT: multi-line');
+    expect(screen.queryByTestId('app-build-args-error')).toBeNull();
+    await userEvent.click(screen.getByTestId('app-git-connect-submit'));
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(`${BASE}/git`, {
+        repositoryId: 9001,
+        settings: { ...settings, buildArgs: { CERT: 'a\nb', FLAVOUR: 'blue' } },
+      }),
+    );
   });
 
   test('a build started from Studio reads as manual, a push as a push', async () => {
@@ -398,5 +406,78 @@ describe('AppGitBuilds', () => {
     renderPanel();
     expect(await screen.findByTestId('app-build-m1')).toHaveTextContent('Manual build of main');
     expect(screen.getByTestId('app-build-b1')).toHaveTextContent('Push to main');
+  });
+
+  test('a failed disconnect says so, and the button is not clickable while the call runs', async () => {
+    serve({ git: connected });
+    let fail: (reason: unknown) => void = () => undefined;
+    vi.mocked(api.delete).mockImplementation(
+      () => new Promise((_resolve, reject) => (fail = reject)) as never,
+    );
+    renderPanel();
+    await userEvent.click(await screen.findByTestId('app-git-disconnect'));
+    await userEvent.click(screen.getByTestId('app-git-disconnect-confirm'));
+    await waitFor(() => expect(screen.getByTestId('app-git-disconnect')).toBeDisabled());
+    fail({
+      isAxiosError: true,
+      response: { status: 500, data: { error: 'the registry is busy' } },
+    });
+    expect(await screen.findByTestId('app-git-disconnect-error')).toHaveTextContent(
+      'registry is busy',
+    );
+  });
+
+  test('an error from saving settings is gone when the settings are closed and opened again', async () => {
+    serve({
+      git: connected,
+      repositories: [
+        {
+          installation: { id: 1, account: 'a' },
+          repositories: [{ id: 9001, fullName: 'acme/api', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    vi.mocked(api.put).mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 400, data: { error: 'the branch is not valid' } },
+    });
+    renderPanel();
+    await userEvent.click(await screen.findByTestId('app-git-edit'));
+    await userEvent.click(await screen.findByTestId('app-git-connect-submit'));
+    expect(await screen.findByText('the branch is not valid')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('app-git-edit'));
+    await userEvent.click(screen.getByTestId('app-git-edit'));
+    await screen.findByTestId('app-git-connect');
+    expect(screen.queryByText('the branch is not valid')).toBeNull();
+  });
+
+  test('a notice about one app does not follow the page to another app', async () => {
+    serve({
+      git: notConnected,
+      repositories: [
+        {
+          installation: { id: 1, account: 'a' },
+          repositories: [{ id: 9001, fullName: 'acme/api', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    vi.mocked(api.put).mockImplementation(async () => {
+      serve({ git: connected });
+      return { data: { connection, buildError: 'limit used up' } } as never;
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (appId: string) => (
+      <QueryClientProvider client={client}>
+        <AppGitBuilds projectId="proj-1" appId={appId} canDevelop />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree('app-1'));
+    await userEvent.selectOptions(await screen.findByTestId('app-git-repository'), '9001');
+    await userEvent.click(screen.getByTestId('app-git-connect-submit'));
+    expect(await screen.findByTestId('app-git-build-error')).toHaveTextContent(
+      'Saved, but no build',
+    );
+    rerender(tree('app-2'));
+    expect(screen.queryByTestId('app-git-build-error')).toBeNull();
   });
 });

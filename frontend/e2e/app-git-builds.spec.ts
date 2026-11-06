@@ -67,19 +67,33 @@ const json = (route: Route, body: unknown, status = 200) =>
 
 async function mockAppGit(
   page: Page,
-  opts: { flag: boolean; connected?: boolean; builds?: unknown[]; buildError?: string },
+  opts: {
+    flag: boolean;
+    connected?: boolean;
+    builds?: unknown[];
+    buildError?: string;
+    // Slow answers for the config and the app, as a loaded server gives.
+    delayMs?: number;
+  },
 ): Promise<Recorded> {
   const recorded: Recorded = { connects: [], signIns: [], rebuilds: 0, disconnects: 0 };
   let connected = opts.connected ?? false;
   let builds = opts.builds ?? [];
-  await page.route('**/api/config', (route) =>
-    json(route, {
+  const slowly = async () => {
+    if (opts.delayMs) await new Promise((resolve) => setTimeout(resolve, opts.delayMs));
+  };
+  await page.route('**/api/config', async (route) => {
+    await slowly();
+    return json(route, {
       deploymentMode: 'cloud',
       appHosting: true,
       features: { appgitbuilds: opts.flag },
-    }),
-  );
-  await page.route(new RegExp(`${APP_PATH}$`), (route) => json(route, app));
+    });
+  });
+  await page.route(new RegExp(`${APP_PATH}$`), async (route) => {
+    await slowly();
+    return json(route, app);
+  });
   await page.route(new RegExp(`${APP_PATH}/deploys(\\?.*)?$`), (route) => json(route, []));
   await page.route(new RegExp(`${APP_PATH}/logs`), (route) => json(route, { lines: [] }));
   await page.route('**/api/projects/test-project/sites/build-secrets', (route) => json(route, []));
@@ -225,18 +239,20 @@ test.describe('App git builds', () => {
     page,
   }) => {
     await mockProjectRole(page, 'developer');
-    await mockAppGit(page, { flag: false });
+    await mockAppGit(page, { flag: false, delayMs: 800 });
     // Registered last, so it answers first: Playwright runs the newest matching route.
     const asked: string[] = [];
     await page.route(new RegExp(`${APP_PATH}/(git|builds)`), (route) => {
       asked.push(route.request().url());
       return json(route, {}, 404);
     });
+    const config = page.waitForResponse('**/api/config');
     await page.goto('/project/test-project/containers/app-1');
 
-    await expect(page.getByTestId('container-detail-page')).toBeVisible();
+    await config;
+    // The section only mounts once the app has loaded, so wait for the app itself, then let a stray call leave.
+    await expect(page.getByText(app.image)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId('app-git-builds')).toHaveCount(0);
-    // Give a stray request time to leave before counting.
     await page.waitForTimeout(500);
     expect(asked).toEqual([]);
   });

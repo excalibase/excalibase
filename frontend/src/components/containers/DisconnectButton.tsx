@@ -17,6 +17,7 @@ export function DisconnectButton({
       <button
         type="button"
         className={secondaryButton}
+        disabled={pending}
         onClick={() => setAsking(true)}
         data-testid={testId}
       >

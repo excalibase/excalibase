@@ -191,7 +191,10 @@ function Connected({
                 <button
                   type="button"
                   className={secondaryButton}
-                  onClick={() => setEditing(!editing)}
+                  onClick={() => {
+                    if (connect.error) connect.reset();
+                    setEditing(!editing);
+                  }}
                   data-testid="app-git-edit"
                 >
                   {editing ? 'Close' : 'Settings'}
@@ -209,6 +212,11 @@ function Connected({
           </div>
         )}
       </div>
+      {disconnect.error && (
+        <p role="alert" className="text-xs text-red-400" data-testid="app-git-disconnect-error">
+          {apiErrorMessage(disconnect.error, 'The repository could not be disconnected')}
+        </p>
+      )}
       {rebuild.error && (
         <p role="alert" className="text-xs text-red-400">
           {apiErrorMessage(rebuild.error, 'The rebuild could not be started')}
@@ -246,7 +254,12 @@ function Connected({
 }
 
 // Deploy an app on git push (EXC-547): hidden until the server switches appgitbuilds on.
-export function AppGitBuilds({ projectId, appId, canDevelop }: AppProps) {
+export function AppGitBuilds(props: AppProps) {
+  // A fresh section per app, so one app's notice and errors never show on another.
+  return <AppGitSection key={`${props.projectId}/${props.appId}`} {...props} />;
+}
+
+function AppGitSection({ projectId, appId, canDevelop }: AppProps) {
   const { enabled } = useFeatureEnabled('appgitbuilds');
   const { data: state, error } = useAppGitState(projectId, appId, enabled);
   const connect = useConnectAppRepository(projectId, appId);
@@ -285,9 +298,9 @@ export function AppGitBuilds({ projectId, appId, canDevelop }: AppProps) {
         )}
       </div>
       {connect.data?.buildError && (
-        <p className="text-sm text-amber-400" role="status" data-testid="app-git-build-error">
-          Connected, but no build was started: {connect.data.buildError}
-        </p>
+        <output className="block text-sm text-amber-400" data-testid="app-git-build-error">
+          Saved, but no build was started: {connect.data.buildError}
+        </output>
       )}
       {state?.connection && (
         <div className="bg-surface-card border border-border-primary rounded-lg">

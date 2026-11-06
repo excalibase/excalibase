@@ -19,31 +19,44 @@ export const envToText = (env: Record<string, string>) =>
     .map(([name, value]) => `${name}=${value}`)
     .join('\n');
 
+const LINE_BREAK = /\r?\n/;
+const ENV_NAME = /^[A-Za-z_]\w{0,127}$/;
+
+const isEnvLine = (line: string) => {
+  const trimmed = line.trim();
+  return trimmed !== '' && !trimmed.startsWith('#');
+};
+
+// The value is kept exactly as typed: only the name is trimmed.
 export const textToEnv = (text: string): Record<string, string> =>
   Object.fromEntries(
     text
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line !== '' && !line.startsWith('#') && line.includes('='))
+      .split(LINE_BREAK)
+      .filter((line) => isEnvLine(line) && line.includes('='))
       .map((line) => [line.slice(0, line.indexOf('=')).trim(), line.slice(line.indexOf('=') + 1)]),
   );
 
-// A line the box cannot read as NAME=value; the line is named by number, never quoted, as it may hold a secret.
+// A line the box cannot read as NAME=value. The line is named by number and never quoted: it may hold a secret.
 export const envTextProblem = (text: string): string | null => {
-  const lines = text.split('\n');
-  const bad = lines.findIndex((line) => {
-    const trimmed = line.trim();
-    return trimmed !== '' && !trimmed.startsWith('#') && !trimmed.includes('=');
-  });
-  return bad < 0 ? null : `Line ${bad + 1} is not NAME=value. Nothing is saved until it is fixed.`;
+  const bad = text
+    .split(LINE_BREAK)
+    .findIndex(
+      (line) =>
+        isEnvLine(line) && !ENV_NAME.test(line.slice(0, Math.max(line.indexOf('='), 0)).trim()),
+    );
+  if (bad < 0) return null;
+  return `Line ${bad + 1} is not NAME=value. Nothing is saved until it is fixed.`;
 };
 
-// The box holds one line per variable, so a value with a line break set through the API cannot be shown or kept by it.
+// The box holds one line per variable, so a value with a line break cannot be shown in it. It is kept as it is.
 export const multilineEnvNames = (env: Record<string, string>): string[] =>
   Object.entries(env)
-    .filter(([, value]) => value.includes('\n'))
+    .filter(([, value]) => /[\r\n]/.test(value))
     .map(([name]) => name)
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
+
+const pickNames = (env: Record<string, string>, names: string[]) =>
+  Object.fromEntries(Object.entries(env).filter(([name]) => names.includes(name)));
 
 const withoutNames = (env: Record<string, string>, names: string[]) =>
   Object.fromEntries(Object.entries(env).filter(([name]) => !names.includes(name)));
@@ -65,26 +78,31 @@ export function EnvField({
   readonly onProblem?: (problem: string | null) => void;
 }) {
   const multiline = multilineEnvNames(env);
-  const [typedProblem, setTypedProblem] = useState<string | null>(null);
-  const keptProblem =
-    multiline.length > 0
-      ? `${multiline.join(', ')} ${multiline.length === 1 ? 'has' : 'have'} a value with line breaks, which this box cannot show or keep. Change it through the API, then edit here.`
-      : null;
-  const problem = typedProblem ?? keptProblem;
+  const [problem, setProblem] = useState<string | null>(null);
+  const [typedNames, setTypedNames] = useState<string[]>([]);
+  const kept = multiline.filter((name) => !typedNames.includes(name));
   useEffect(() => onProblem?.(problem), [problem, onProblem]);
+  const leave = (text: string) => {
+    const found = envTextProblem(text);
+    setProblem(found);
+    if (found !== null) return;
+    const typed = textToEnv(text);
+    setTypedNames(Object.keys(typed));
+    onChange({ ...pickNames(env, multiline), ...typed });
+  };
   return (
     <Field label={label} hint={hint}>
       <textarea
         className={`${inputClass} font-mono h-24`}
         defaultValue={envToText(withoutNames(env, multiline))}
-        onBlur={(event) => {
-          const found = envTextProblem(event.target.value);
-          setTypedProblem(found);
-          if (found === null)
-            onChange({ ...textToEnv(event.target.value), ...pickNames(env, multiline) });
-        }}
+        onBlur={(event) => leave(event.target.value)}
         data-testid={testId}
       />
+      {kept.length > 0 && (
+        <span className="block text-xs text-text-tertiary" data-testid={`${testId}-kept`}>
+          {kept.map((name) => `${name}: multi-line, kept as it is`).join('; ')}
+        </span>
+      )}
       {problem && (
         <span role="alert" className="block text-xs text-red-400" data-testid={`${testId}-error`}>
           {problem}
@@ -93,9 +111,6 @@ export function EnvField({
     </Field>
   );
 }
-
-const pickNames = (env: Record<string, string>, names: string[]) =>
-  Object.fromEntries(Object.entries(env).filter(([name]) => names.includes(name)));
 
 function Field({
   label,
