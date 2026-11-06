@@ -14,7 +14,7 @@ type realtimeArgs struct {
 
 func realtimeTools() []entry {
 	return []entry{
-		tool("set_realtime", "Turn realtime on or off for one table (table, or schema.table as set_permission takes it). A GraphQL subscription to <field>Changes (get_graphql_schema) "+
+		tool("set_realtime", "Postgres only (a MySQL project is refused with 409). Turn realtime on or off for one table (table, or schema.table as set_permission takes it). A GraphQL subscription to <field>Changes (get_graphql_schema) "+
 			"fires only for a table with realtime on; events still pass through the subscriber's select permission. "+
 			"Turning it on sets the table to REPLICA IDENTITY FULL, so deletes carry the old row the permission is checked against; "+
 			"each update and delete then writes the whole old row to the WAL.", writeTool, setRealtime),
