@@ -47,7 +47,7 @@ apps and grant what the anon role grants.
 | Tool | Route |
 |---|---|
 | `list_projects` | `GET /api/provision/` |
-| `get_project_info` | `GET /api/projects/{id}/info/`, `GET /api/projects/{id}/sdk-keys/`; also returns `restApi`, the REST surface below |
+| `get_project_info` | `GET /api/projects/{id}/info/`, `GET /api/projects/{id}/sdk-keys/`; also returns `restApi`, the REST surface below, and `endUserAuth`, the sign-in guide: it adds provider sign-in, emailed link or code, guest sign-in and account self-service while `FEATURE_AUTHOAUTH`, `FEATURE_AUTHOTP`, `FEATURE_AUTHGUEST` and `FEATURE_AUTHUSER` are on, and with guests on states that the token's `sub` is the account id |
 | `create_publishable_key` | `POST /api/projects/{id}/sdk-keys/` (publishable only) |
 | `list_tables` | `GET /api/schema/{id}/tables` |
 | `describe_table` | `GET /api/schema/{id}/tables/{t}/columns`, `.../indexes`, `GET /api/schema/{id}/relationships` |
