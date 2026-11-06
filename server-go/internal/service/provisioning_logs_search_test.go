@@ -286,12 +286,12 @@ func TestLogSearchOnASingleHostIsUnavailable(t *testing.T) {
 	}
 }
 
-// The live pod log asks for as many lines as Loki would: 1..5000, else 100.
+// The live pod log asks for as many lines as Loki would: 1..5000 (more is cut to 5000), else 100.
 func TestLogSearchClampsThePodLogTailLikeLoki(t *testing.T) {
 	for _, tc := range []struct {
 		asked int
 		want  int64
-	}{{0, 100}, {-5, 100}, {10000, 100}, {5001, 100}, {5000, 5000}, {1, 1}, {250, 250}} {
+	}{{0, 100}, {-5, 100}, {10000, 5000}, {5001, 5000}, {5000, 5000}, {1, 1}, {250, 250}} {
 		t.Run(strconv.Itoa(tc.asked), func(t *testing.T) {
 			svc, store, mock := setupOpsTest(t)
 			seedMySQLProject(t, store, mock)
@@ -307,5 +307,37 @@ func TestLogSearchClampsThePodLogTailLikeLoki(t *testing.T) {
 				t.Fatalf("tail lines = %v, want %d for both engines", mock.PodLogTailLines, tc.want)
 			}
 		})
+	}
+}
+
+// The live pod log is asked only for the searched window, so an agent is not
+// shown a month-old error as today's (EXC-684).
+func TestLogSearchPodLogIsLimitedToTheWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		since time.Duration
+		want  int64
+	}{{"asked 6h", 6 * time.Hour, 6 * 3600}, {"default window", 0, 3600}} {
+		for _, engine := range []string{"postgres", "mysql"} {
+			t.Run(tc.name+" "+engine, func(t *testing.T) {
+				svc, store, mock := setupOpsTest(t)
+				seedMySQLProject(t, store, mock)
+				project := testOpsDB
+				mock.PodLogs[testOpsDBNS+"/"+testOpsDB+primaryPodSuffix] = "line\n"
+				if engine == "mysql" {
+					project = "my-a"
+					mock.PodLogs["org1-my-a/moco-my-a-mysql-1/mysqld"] = "line\n"
+				}
+				if _, err := svc.SearchLogs(context.Background(), project, LogSearch{Lines: 10, Since: tc.since}); err != nil {
+					t.Fatal(err)
+				}
+				if len(mock.PodLogSinceSeconds) != 1 || mock.PodLogSinceSeconds[0] != tc.want {
+					t.Fatalf("since seconds = %v, want %d", mock.PodLogSinceSeconds, tc.want)
+				}
+				if engine == "mysql" && !strings.Contains(strings.Join(mock.Calls, " "), "moco-my-a-mysql-1") {
+					t.Errorf("the MySQL primary was not read: %v", mock.Calls)
+				}
+			})
+		}
 	}
 }

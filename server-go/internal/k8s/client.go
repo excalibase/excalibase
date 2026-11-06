@@ -451,6 +451,19 @@ func (c *Client) PodLogTail(ctx context.Context, namespace, pod, container strin
 	return string(raw), nil
 }
 
+// PodLogSince is the last lines of one container's log written within window.
+func (c *Client) PodLogSince(ctx context.Context, namespace, pod, container string, lines int64, window time.Duration) (string, error) {
+	seconds := int64(window / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	raw, err := c.clientset.CoreV1().Pods(namespace).GetLogs(pod, &corev1.PodLogOptions{Container: container, TailLines: &lines, SinceSeconds: &seconds}).DoRaw(ctx)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
 // IsPodReady checks if a pod has phase=Running and all containers ready.
 func (c *Client) IsPodReady(ctx context.Context, namespace, name string) (bool, error) {
 	pod, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
