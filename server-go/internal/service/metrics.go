@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -91,7 +93,7 @@ func (s *MetricsService) GetMetricsHistory(ctx context.Context, projectID string
 
 	return &domain.MetricsHistory{
 		ProjectID:   projectID,
-		Metrics:     hist,
+		Metrics:     cleanReasons(hist),
 		TotalPoints: len(hist),
 	}, nil
 }
@@ -311,10 +313,33 @@ func (s *MetricsService) fetchCNPGMetrics(ctx context.Context, namespace, projec
 // curl, so the request goes over bash's /dev/tcp.
 const exporterRequest = `exec 3<>/dev/tcp/localhost/9187 && printf 'GET /metrics HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 && cat <&3`
 
+// rawReason matches an unavailable reason written before reasons were cleaned:
+// the error of the call into the pod, which names the API server.
+var rawReason = regexp.MustCompile(`https?://|dial tcp|\b\d{1,3}(\.\d{1,3}){3}\b`)
+
+// cleanReasons returns the samples with any raw stored reason replaced by the
+// plain one; the samples themselves are not altered.
+func cleanReasons(samples []domain.DatabaseMetrics) []domain.DatabaseMetrics {
+	out := make([]domain.DatabaseMetrics, len(samples))
+	copy(out, samples)
+	for i := range out {
+		if reason := out[i].UnavailableReason; reason != nil && rawReason.MatchString(*reason) {
+			plain := errMetricsExec.Error()
+			out[i].UnavailableReason = &plain
+		}
+	}
+	return out
+}
+
+// errMetricsExec is what a client reads when the exporter could not be asked.
+var errMetricsExec = errors.New("the database could not be reached to read its metrics")
+
 func (s *MetricsService) execMetricsFetch(ctx context.Context, namespace, pod string) (string, error) {
 	response, err := s.k8sClient.ExecInPod(ctx, namespace, pod, "postgres", []string{"bash", "-c", exporterRequest})
 	if err != nil {
-		return "", err
+		// The call's error names the API server and the pod: log it, say only that the read failed.
+		log.Printf("metrics of %s: exec in pod: %v", pod, err)
+		return "", errMetricsExec
 	}
 	return exporterBody(response)
 }

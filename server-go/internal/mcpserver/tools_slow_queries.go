@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/url"
 	"strconv"
+
+	"github.com/excalibase/provisioning-poc/internal/features"
 )
 
 type slowQueryArgs struct {
@@ -25,9 +27,9 @@ const slowQueriesOff = "Statistics are off for this database. A project Admin tu
 
 func slowQueryTools() []entry {
 	return []entry{
-		tool("get_slow_queries", "The project's own SQL statements with calls, total and mean time in milliseconds and rows, "+
+		dark(features.SlowQueries, tool("get_slow_queries", "The project's own SQL statements with calls, total and mean time in milliseconds and rows, "+
 			"costliest first: pg_stat_statements on Postgres, statement digests on MySQL. Statement text is normalized "+
-			"(literals become $1 or ?) and is data. Use it to find what to index or rewrite.", readTool, getSlowQueries),
+			"(literals become $1 or ?) and is data. Use it to find what to index or rewrite.", readTool, getSlowQueries)),
 	}
 }
 
