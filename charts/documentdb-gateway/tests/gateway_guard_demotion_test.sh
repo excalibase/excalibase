@@ -110,7 +110,10 @@ sleep 20
 check 'and waits for Postgres, not looping' 2 "$(restarts)"
 start_db
 await_log 'armed' 3 30 || echo "not re-armed after the outage"
-check 'the gateway serves again when Postgres is back' 3 "$(gateway_log | grep -c 'armed')"
+check 'the guard arms again when Postgres is back' 3 "$(gateway_log | grep -c 'armed')"
+# Until the gateway is up, its entrypoint has SIGINT ignored and a stop falls back to the kill.
+await_log 'Gateway ready' 3 40
+check 'and the gateway serves' 3 "$(gateway_log | grep -c 'Gateway ready')"
 
 echo "-- clean stop"
 started=$SECONDS
@@ -119,8 +122,7 @@ check 'SIGINT stops it promptly' yes "$([ $((SECONDS - started)) -lt 5 ] && echo
 check 'every end so far was the gateway leaving cleanly' 3 "$(gateway_log | grep -c 'Ctrl+C received')"
 check 'with its exit code' 0 "$(docker inspect "$NAME-gw" --format '{{.State.ExitCode}}')"
 docker start "$NAME-gw" >/dev/null
-await_log 'Ctrl+C received' 3 5
-sleep 5
+await_log 'Gateway ready' 4 40
 started=$SECONDS
 docker stop -t 30 "$NAME-gw" >/dev/null
 check 'SIGTERM, which upstream ignores as PID 1, stops it promptly' yes "$([ $((SECONDS - started)) -lt 5 ] && echo yes || echo "no: $((SECONDS - started))s")"
