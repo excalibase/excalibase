@@ -73,18 +73,18 @@ func userIDTypeText(guests bool) string {
 	text := "userId is the user's database id as a JSON number (\"userId\": 42); read it as a number in function code. "
 	if guests {
 		return text + "The token's sub is the account id as a string (\"42\"), never the address, so a guest has one too. " +
-			"The address is the email claim (permissions read it as X-Excalibase-Email); a guest has no email claim and an is_guest claim of true. " +
+			"The address is the email claim (permissions read it as X-Excalibase-Email); a guest has no email claim and an is_guest claim of true, and an engine version that falls back to the sub would read the account id as the guest's X-Excalibase-Email, so identify a guest by X-Excalibase-Is-Guest or X-Excalibase-User-Id. " +
 			"test_auth_flow shows the real claims of a test sign-in. See permissions.ownerColumnType for comparing userId with an owner column."
 	}
-	return text + "The token's sub is the user's email. Some auth versions also put the address in an email claim, which permissions read as X-Excalibase-Email; " +
-		"a token with no email claim has no X-Excalibase-Email, and a permission that uses it fails with missing_session_variable. " +
+	return text + "The token's sub is the user's email. X-Excalibase-Email is read from the email claim when the token has one; an engine version that falls back to the sub reads that otherwise, " +
+		"and one that does not has no X-Excalibase-Email for a token with no email claim, so a permission that uses it fails with missing_session_variable. " +
 		"test_auth_flow shows the real claims of a test sign-in, so check it before relying on the email claim. See permissions.ownerColumnType for comparing userId with an owner column."
 }
 
 // permissionsGuide is how a permission names the signed-in user.
 func permissionsGuide(guests bool) map[string]any {
 	variables := "A permission compares columns with session variables taken from the caller's JWT: X-Excalibase-User-Id is the userId claim, " +
-		"X-Excalibase-Role the role, X-Excalibase-Email the email claim (absent when the token has none; the sub claim is never read as an address)"
+		"X-Excalibase-Role the role, X-Excalibase-Email the email claim (when the token has none, an engine version that falls back to the sub reads that, and a newer one leaves it absent)"
 	if guests {
 		variables += ", X-Excalibase-Is-Guest the is_guest claim"
 	}
