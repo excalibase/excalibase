@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -172,5 +173,25 @@ func TestBackupTriggerWhenCRDFails(t *testing.T) {
 	}
 	if result["type"] != "MANUAL" {
 		t.Error("should be MANUAL backup")
+	}
+}
+
+// The reason a client reads never carries the error of the call into the
+// pod, which can name the API server's address (EXC-684).
+func TestMetricsReasonHidesTheExecError(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := storage.NewFileSystemStore(dir)
+	mock := k8s.NewMockClient()
+	store.Create(&domain.DatabaseInstance{
+		ProjectID: "err-db", Namespace: "ns", Status: "ACTIVE", Tier: domain.Free,
+	})
+	mock.ExecError["ns/err-db-postgres-1"] = fmt.Errorf(`Post "https://10.43.0.1:443/api/v1/namespaces/ns/pods/err-db-postgres-1/exec": dial tcp 10.43.0.1:443: refused`)
+
+	m, err := NewMetricsService(store, mock, dir).GetCurrentMetrics(context.Background(), "err-db")
+	if err != nil || m.UnavailableReason == nil {
+		t.Fatalf("metrics = %+v, err = %v", m, err)
+	}
+	if reason := *m.UnavailableReason; strings.Contains(reason, "10.43") || strings.Contains(reason, "dial") {
+		t.Errorf("reason leaks the call's error: %q", reason)
 	}
 }

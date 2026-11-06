@@ -65,6 +65,7 @@ func schemaTools() []entry {
 				"The engine builds the GraphQL schema per role from these tables and the project's permissions; the returned introspection command fetches the exact schema a role sees.",
 			readTool, getGraphQLSchema),
 		tool("generate_typescript_types", "TypeScript row types for every table in a schema, generated from the database columns. "+
+			"bigint, numeric and decimal are string on both engines (the API answers them as strings of every digit). "+
 			"On a MySQL project the MySQL types are mapped: tinyint(1) is boolean, an enum a union of its values, json unknown, "+
 			"date and time types string.", readTool, generateTypeScriptTypes),
 	}

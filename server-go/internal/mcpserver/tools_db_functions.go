@@ -44,7 +44,7 @@ func dbFunctionTools() []entry {
 		tool("set_db_function_permission", "Let one role call a tracked database function, or take that away. "+
 			"A query function (STABLE/IMMUTABLE) tracked with infer_permissions on (the default) is callable by every role that may select its "+
 			"return table, with or without this permission, so taking it away has no effect while inference is on: remove the role's select "+
-			"on the return table, or track the function again with infer_permissions false. Mutations always need this permission.", writeTool, setDBFunctionPermission),
+			"on the return table, or track the function again with infer_permissions false. Mutations always need this permission. Postgres only: a MySQL project is refused.", writeTool, setDBFunctionPermission),
 	}
 }
 
