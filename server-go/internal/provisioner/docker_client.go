@@ -19,6 +19,8 @@ import (
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 )
 
 // DockerClientOptions configures how NewRealDockerClient reaches the daemon.
@@ -431,9 +433,10 @@ func (r *RealDockerClient) ensureImage(ctx context.Context, ref string) error {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
 	defer reader.Close()
-	// Drain the stream. Abandoning mid-pull leaves a partial image on disk.
-	if _, err := io.Copy(io.Discard, reader); err != nil && !strings.Contains(err.Error(), "context canceled") {
-		return fmt.Errorf("drain pull stream: %w", err)
+	// A pull that fails part-way says so inside the stream; draining it to the
+	// end without reading it left the caller to find "No such image" later.
+	if err := imagepull.Drain(reader); err != nil && !strings.Contains(err.Error(), "context canceled") {
+		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
 	return nil
 }
