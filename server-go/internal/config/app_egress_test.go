@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseEgressExtraDenyCIDRsEmptyMeansNone(t *testing.T) {
 	cidrs, err := parseEgressExtraDenyCIDRs("")
@@ -29,7 +32,7 @@ func TestParseEgressExtraDenyCIDRsReadsCommaSeparatedList(t *testing.T) {
 }
 
 func TestParseEgressExtraDenyCIDRsRefusesUnusableValues(t *testing.T) {
-	for _, raw := range []string{"not-a-cidr", "203.0.113.9", "203.0.113.9/33", "2001:db8::/32", "203.0.113.9/32,not-a-cidr"} {
+	for _, raw := range []string{"not-a-cidr", "203.0.113.9", "203.0.113.9/33", "2001:db8::/32", "::ffff:203.0.113.0/64", "203.0.113.9/32,not-a-cidr"} {
 		if _, err := parseEgressExtraDenyCIDRs(raw); err == nil {
 			t.Fatalf("parseEgressExtraDenyCIDRs(%q) succeeded, want error", raw)
 		}
@@ -56,5 +59,13 @@ func TestBuildDenyListHasNoFallbackToTheApps(t *testing.T) {
 	t.Setenv("BUILD_EGRESS_EXTRA_DENY_CIDRS", "")
 	if got := load().BuildEgressExtraDenyCIDRs; got != nil {
 		t.Fatalf("builds' list fell back to the apps': %v", got)
+	}
+}
+
+// The message serves both lists: it may not call itself the apps'.
+func TestParseEgressExtraDenyCIDRsIPv6ErrorNamesNoOwner(t *testing.T) {
+	_, err := parseEgressExtraDenyCIDRs("2001:db8::/32")
+	if err == nil || strings.Contains(err.Error(), "app egress") {
+		t.Fatalf("error %v", err)
 	}
 }

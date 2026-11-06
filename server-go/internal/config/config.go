@@ -341,7 +341,7 @@ type AppConfig struct {
 	AppEgressExtraDenyCIDRs []string
 
 	// BuildEgressExtraDenyCIDRs are off-cluster ranges denied to git builds of sites and apps.
-	// Builds run untrusted code, so this list is stricter and never falls back to the apps' list.
+	// Builds run untrusted code, so this list never falls back to the apps' list.
 	BuildEgressExtraDenyCIDRs []string
 
 	// AppDomain is the parent of every app hostname: <app>-<project>.<AppDomain>.

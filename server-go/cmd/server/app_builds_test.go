@@ -314,19 +314,28 @@ func TestBuildsAndAppsReadTheirOwnDenyLists(t *testing.T) {
 	}
 }
 
-// The apps' list set and the builds' not is what an upgrade leaves: say so at boot rather than leave builds unlisted quietly.
-func TestBuildDenyListWarning(t *testing.T) {
+// The apps' list set and the builds' not is what an upgrade leaves: the boot stops rather than leave builds unlisted.
+func TestSiteBuildRunner_RefusesTheAppsListWithoutTheBuilds(t *testing.T) {
 	apps, builds := []string{"198.51.100.1/32"}, []string{"203.0.113.1/32"}
 	cases := []struct {
 		name         string
 		apps, builds []string
-		want         bool
+		refused      bool
 	}{{"only the apps'", apps, nil, true}, {"both", apps, builds, false}, {"only the builds'", nil, builds, false}, {"neither", nil, nil, false}}
 	for _, tc := range cases {
 		cfg := config.AppConfig{AppEgressExtraDenyCIDRs: tc.apps, BuildEgressExtraDenyCIDRs: tc.builds}
-		if got := buildDenyListWarning(cfg) != ""; got != tc.want {
-			t.Errorf("%s: warned %v, want %v", tc.name, got, tc.want)
+		_, err := siteBuildRunner(siteBuildArgs{cfg: cfg})
+		if got := err != nil && strings.Contains(err.Error(), "BUILD_EGRESS_EXTRA_DENY_CIDRS"); got != tc.refused {
+			t.Errorf("%s: refused %v (%v), want %v", tc.name, got, err, tc.refused)
 		}
 	}
 }
 
+// The alert webhook is not a build: it keeps the apps' list and never reads the builds'.
+func TestAlertWebhookReadsTheAppsDenyList(t *testing.T) {
+	cfg := config.AppConfig{AppEgressExtraDenyCIDRs: []string{"198.51.100.1/32"}, BuildEgressExtraDenyCIDRs: []string{"203.0.113.1/32"}}
+	got := alertWebhookDenyList(cfg)
+	if len(got) != 1 || got[0].String() != "198.51.100.1/32" {
+		t.Fatalf("alert webhook denies %v, want the apps' list only", got)
+	}
+}
