@@ -49,6 +49,7 @@ jobs:
               - 'deploy/single-host/**'
             gatewayguard:
               - 'charts/documentdb-gateway/**'
+              - 'server-go/internal/config/postgres_catalog.yaml'
             singlehostboot:
               - 'deploy/single-host/**'
               - 'server-go/Dockerfile'
@@ -130,10 +131,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: The guard ends the gateway on a demotion, and only then
+      - name: Guard logic
         run: bash charts/documentdb-gateway/tests/gateway_guard_test.sh
-      - name: The image builds on the pinned gateway
+      - name: Build the image
         run: docker build -q -t documentdb-gateway-guard charts/documentdb-gateway
+      - name: Guard in the image, with real Postgres
+        run: bash charts/documentdb-gateway/tests/gateway_guard_demotion_test.sh documentdb-gateway-guard
+      - name: Trivy (image)
+        uses: ./.github/actions/trivy
+        with:
+          image: documentdb-gateway-guard
 
   sites-router:
     name: Sites router Worker
