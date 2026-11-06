@@ -19,6 +19,9 @@ import (
 // platform's side; the cause is in the log.
 const errClusterChangeFailed = "the change could not be applied; try again later"
 
+// errClusterReadFailed is the same for a read, which changes nothing.
+const errClusterReadFailed = "the cluster settings could not be read; try again later"
+
 // GetClusterSettings answers the project's disk, size, plan and Postgres
 // settings, and which settings may be tuned (EXC-492).
 func (h *ProvisioningHandler) GetClusterSettings(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +90,7 @@ func (h *ProvisioningHandler) TuneParameters(w http.ResponseWriter, r *http.Requ
 func (h *ProvisioningHandler) writeClusterSettings(w http.ResponseWriter, r *http.Request, projectID string) {
 	settings, err := h.svc.ClusterSettings(r.Context(), projectID)
 	if err != nil {
-		writeClusterChangeError(w, projectID, "cluster settings read", err)
+		writeClusterError(w, projectID, "cluster settings read", errClusterReadFailed, err)
 		return
 	}
 	access := custommw.ProjectAccessFromContext(r.Context())
@@ -110,10 +113,15 @@ func decodeStrict(w http.ResponseWriter, r *http.Request, into interface{}) bool
 // writeClusterChangeError answers a refusal with its reason and a platform
 // failure with nothing but that it failed.
 func writeClusterChangeError(w http.ResponseWriter, projectID, what string, err error) {
+	writeClusterError(w, projectID, what, errClusterChangeFailed, err)
+}
+
+// writeClusterError is writeClusterChangeError with the words for a platform failure chosen by the caller.
+func writeClusterError(w http.ResponseWriter, projectID, what, failed string, err error) {
 	status := clusterChangeStatus(err)
 	if status == http.StatusInternalServerError || status == http.StatusServiceUnavailable {
 		log.Printf("ERROR: %s for project %s: %v", what, projectID, err)
-		httpError(w, errClusterChangeFailed, status)
+		httpError(w, failed, status)
 		return
 	}
 	if errors.Is(err, k8s.ErrVolumeExpansionUnsupported) {

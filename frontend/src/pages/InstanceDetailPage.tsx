@@ -35,7 +35,7 @@ export function InstanceDetailPage() {
   const { data: metrics } = useCurrentMetrics(projectId!);
   const { data: backupData, refetch: refetchBackups } = useListBackups(projectId!);
   const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
-  const { data: logs, error: logsError } = useLogs(projectId!, 200);
+  const { data: logs, error: logsError } = useLogs(projectId!, 200, { since: '7d' });
   const deprovision = useDeprovisionDatabase();
   const triggerBackup = useTriggerBackup();
 
@@ -168,7 +168,7 @@ export function InstanceDetailPage() {
               {logs?.trim() === '' && (
                 <div className="text-center py-10 text-text-secondary text-sm">
                   <FileText className="w-10 h-10 mx-auto mb-2 text-text-tertiary" />
-                  No logs available (pod may not be running in this environment).
+                  No logs in the last 7 days (the server keeps what your plan allows).
                 </div>
               )}
               {logs != null && logs.trim() !== '' && (
