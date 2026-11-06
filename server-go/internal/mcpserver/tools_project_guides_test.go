@@ -161,3 +161,12 @@ func TestSessionVariablesNameTheEmailClaimWithGuestsOff(t *testing.T) {
 		t.Errorf("Is-Guest named while authguest is off: %s", variables)
 	}
 }
+
+// Published auth builds before the guest release carry no email claim, so with guests off the guide must not promise one.
+func TestUserIDTypeDoesNotPromiseAnEmailClaimWithGuestsOff(t *testing.T) {
+	idType, _ := guide(t, projectInfo(t), "endUserAuth")["userIdType"].(string)
+	mustContain(t, "userIdType", idType, "sub is the user's email", "Some auth versions", "no email claim", "missing_session_variable", "test_auth_flow")
+	if strings.Contains(idType, "the same address is in the email claim") {
+		t.Errorf("userIdType promises an email claim: %s", idType)
+	}
+}

@@ -204,7 +204,7 @@ func TestEveryCatalogueEntryIsPinned(t *testing.T) {
 			t.Errorf("%s names a capability MCP must never offer", entry.name)
 		}
 		if entry.feature == "" {
-			if !listed[entry.name] && entry.access != readOnlyVariant {
+			if !listed[entry.name] {
 				t.Errorf("%s is not dark and not in offeredTools", entry.name)
 			}
 			continue
