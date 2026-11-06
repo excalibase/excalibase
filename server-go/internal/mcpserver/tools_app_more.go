@@ -38,7 +38,9 @@ const appDomainsUnavailableMessage = "custom domains are not set up on this inst
 func appMoreTools() []entry {
 	return []entry{
 		tool("set_app_secret", "Set one secret environment variable of a container app: the value goes to the project's vault and the variable points at it. "+
-			"The value is never returned, by this or any other tool; the running app reads it after its next deploy_app. It replaces another secret of the same name, but never a literal variable or a database reference (remove those with update_app remove_env first). "+
+			"No tool returns the value; the running app reads it after its next deploy_app, and an image that prints its environment can still write it to the app's logs (get_logs). "+
+			"It replaces another secret of the same name, but refuses a literal variable or a database reference of that name (remove those with update_app remove_env first). "+
+			"That guard stops accidents, not a misled agent: update_app set_env replaces a variable in one call. "+
 			appSecretWarning, writeTool, setAppSecret),
 		tool("redeploy_app", "Roll an earlier deploy of a container app out again as a new deploy, with the config that deploy froze; it does not edit the app. "+
 			"Use it to go back to a version that worked. Needs Developer. Follow it with get_deploy_status.", writeTool, redeployApp),
