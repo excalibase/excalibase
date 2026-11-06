@@ -96,3 +96,47 @@ func TestInstances_RecordingTheDatabaseChoicesIsPinnedToTheExpectedStatus(t *tes
 		t.Fatalf("got %v, want ErrProjectStatusChanged", err)
 	}
 }
+
+// A rollback retry writes its two fields and leaves the rest of the row alone.
+func TestInstances_RecordRollbackRetryWritesOnlyWhatItOwns(t *testing.T) {
+	store := testStore(t)
+	inst := databaseLessRow("proj-nodb0900", "org-nodb")
+	if err := store.Create(inst); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	protected := true
+	inst.DeletionProtection = &protected
+	if err := store.Update(inst); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := store.RecordRollbackRetry(inst.ProjectID, `[{"name":"x","ok":true}]`, "why", "ACTIVE"); err != nil {
+		t.Fatalf("RecordRollbackRetry: %v", err)
+	}
+	got, _ := store.FindByProjectID(inst.ProjectID)
+	if got.RollbackLog != `[{"name":"x","ok":true}]` || got.FailureReason != "why" {
+		t.Fatalf("written: log=%q reason=%q", got.RollbackLog, got.FailureReason)
+	}
+	if got.DeletionProtection == nil || !*got.DeletionProtection {
+		t.Fatal("deletion protection was overwritten")
+	}
+	if err := store.RecordRollbackRetry(inst.ProjectID, "[]", "", "FAILED"); !errors.Is(err, storage.ErrProjectStatusChanged) {
+		t.Fatalf("a stale status: %v, want ErrProjectStatusChanged", err)
+	}
+}
+
+// The row a restore records when it cannot remove what it created.
+func TestInstances_AFailedRestoreRecordIsCreatedAndReadsBack(t *testing.T) {
+	store := testStore(t)
+	row := databaseLessRow("proj-nodb0901", "org-nodb")
+	row.NoDatabase = false
+	row.Status, row.CurrentStage = "FAILED", domain.StageFailed
+	row.RestoredFromProjectID = "proj-nodb0902"
+	row.RollbackLog = `[{"name":"delete restore namespace","ok":false,"error":"x"}]`
+	if err := store.Create(row); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, _ := store.FindByProjectID(row.ProjectID)
+	if got == nil || got.Status != "FAILED" || got.RollbackLog != row.RollbackLog || got.RestoredFromProjectID != "proj-nodb0902" {
+		t.Fatalf("read back %+v", got)
+	}
+}

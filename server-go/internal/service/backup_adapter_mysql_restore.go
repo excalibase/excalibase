@@ -65,7 +65,7 @@ func (a *MySQLBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseI
 	pc := provisioner.NewProvisionContext(nil, nil)
 	restored, err := a.runRestore(ctx, pc, inst, req, target)
 	if err != nil {
-		return nil, failRestore(ctx, pc, target.project, err)
+		return nil, failRestore(ctx, pc, a.instances, failedRestoreRecord(inst, req, target.project, target.namespace), err)
 	}
 	return &domain.ProvisioningResponse{
 		ProjectID: restored.ProjectID, ProjectName: restored.ProjectName, Status: restored.Status,

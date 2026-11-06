@@ -2,7 +2,11 @@ package provisioner
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -30,10 +34,14 @@ type CleanupResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// ErrCleanupSkipped is why a last cleanup did not run.
+var ErrCleanupSkipped = errors.New("skipped: an earlier cleanup failed")
+
 type cleanupEntry struct {
 	name  string
 	stage domain.ProvisioningStage
 	fn    CleanupFunc
+	last  bool
 }
 
 // ProvisionContext tracks current stage/step and cleanup actions for rollback.
@@ -104,6 +112,14 @@ func (pc *ProvisionContext) RegisterCleanup(name string, fn CleanupFunc) {
 	})
 }
 
+// RegisterLastCleanup adds an action that runs after every other cleanup, and
+// only if they all worked: removing the record of what they were removing.
+func (pc *ProvisionContext) RegisterLastCleanup(name string, fn CleanupFunc) {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	pc.cleanups = append(pc.cleanups, cleanupEntry{name: name, stage: pc.stage, fn: fn, last: true})
+}
+
 // Rollback runs all registered cleanups in reverse order. Returns a result for each.
 // Failures in individual cleanups are captured but do not stop subsequent cleanups.
 // Each runs detached from ctx on its own deadline, so a finished ctx cannot
@@ -115,26 +131,40 @@ func (pc *ProvisionContext) Rollback(ctx context.Context) []CleanupResult {
 	pc.mu.Unlock()
 
 	results := make([]CleanupResult, 0, len(cleanups))
-	for i := len(cleanups) - 1; i >= 0; i-- {
-		c := cleanups[i]
-		err := pc.runCleanup(ctx, c)
-		if err != nil {
-			results = append(results, CleanupResult{
-				Name:  c.name,
-				OK:    false,
-				Error: err.Error(),
-			})
-		} else {
-			results = append(results, CleanupResult{
-				Name: c.name,
-				OK:   true,
-			})
+	failed := false
+	for _, wantLast := range []bool{false, true} {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			c := cleanups[i]
+			if c.last != wantLast {
+				continue
+			}
+			var err error = ErrCleanupSkipped
+			if !c.last || !failed {
+				err = pc.runCleanup(ctx, c)
+			}
+			failed = failed || err != nil
+			results = append(results, cleanupResult(c.name, err))
 		}
 	}
 	return results
 }
 
-func (pc *ProvisionContext) runCleanup(ctx context.Context, c cleanupEntry) error {
+func cleanupResult(name string, err error) CleanupResult {
+	if err != nil {
+		return CleanupResult{Name: name, Error: err.Error()}
+	}
+	return CleanupResult{Name: name, OK: true}
+}
+
+func (pc *ProvisionContext) runCleanup(ctx context.Context, c cleanupEntry) (err error) {
+	// A panic is this cleanup's failure; the rest still have to run. The result
+	// reaches the row and API, so the panic itself stays in the log.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ERROR: cleanup %q panicked: %v\n%s", c.name, r, debug.Stack())
+			err = errors.New("the cleanup stopped on an internal error")
+		}
+	}()
 	cleanupCtx, cancel := CleanupContext(ctx)
 	defer cancel()
 	if pc.cleanupTimeout > 0 {
@@ -150,6 +180,22 @@ func (pc *ProvisionContext) CleanupCount() int {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 	return len(pc.cleanups)
+}
+
+// EncodeCleanupResults is the form results take in a project's rollback log.
+func EncodeCleanupResults(results []CleanupResult) (string, error) {
+	encoded, err := json.Marshal(results)
+	return string(encoded), err
+}
+
+// ParseCleanupResults reads a rollback log; an empty one holds no results.
+func ParseCleanupResults(rollbackLog string) ([]CleanupResult, error) {
+	if rollbackLog == "" {
+		return nil, nil
+	}
+	var results []CleanupResult
+	err := json.Unmarshal([]byte(rollbackLog), &results)
+	return results, err
 }
 
 // StageError wraps an error with the stage and step where it occurred.

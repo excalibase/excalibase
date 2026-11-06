@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -171,14 +172,27 @@ func (s *ProvisioningService) RegisterProject(ctx context.Context, inst *domain.
 	if err := s.persistProjectRow(ctx, inst, opts); err != nil {
 		return rollbackIfOwned(ctx, pc, owned, fmt.Errorf("persist project row: %w", err))
 	}
-	if err := s.markDatabaseAdded(inst, opts); err != nil {
-		return rollbackIfOwned(ctx, pc, owned, err)
-	}
 	if err := s.scheduleBackups(ctx, inst, pc); err != nil {
 		return rollbackIfOwned(ctx, pc, owned, err)
 	}
-	s.announceProject(ctx, inst)
+	// Last of anything that can fail: nothing sets the flag back, so a failure
+	// after it would leave a project that says it has a database it does not.
+	if err := s.markDatabaseAdded(inst, opts); err != nil {
+		return rollbackIfOwned(ctx, pc, owned, err)
+	}
+	s.announceRegisteredProject(ctx, inst)
 	return nil
+}
+
+// announceRegisteredProject tells the rest of the platform. The project is
+// registered by now, so a panic here must not roll it back.
+func (s *ProvisioningService) announceRegisteredProject(ctx context.Context, inst *domain.DatabaseInstance) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ERROR: announce project %s panicked: %v\n%s", inst.ProjectID, r, debug.Stack())
+		}
+	}()
+	s.announceProject(ctx, inst)
 }
 
 // persistProjectRow writes the registered project. Creating is the default so
@@ -202,8 +216,8 @@ func (s *ProvisioningService) persistProjectRow(ctx context.Context, inst *domai
 }
 
 // markDatabaseAdded records that a project created without a database now
-// has one. It runs after the row is ACTIVE, so the database routes open only
-// once there is a registered database behind them.
+// has one. It runs after everything else registration does, so the database
+// routes open only once there is a registered database behind them.
 func (s *ProvisioningService) markDatabaseAdded(inst *domain.DatabaseInstance, opts RegistrationOptions) error {
 	if !opts.AddingDatabase {
 		return nil

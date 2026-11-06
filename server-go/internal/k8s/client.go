@@ -564,7 +564,12 @@ func (c *Client) StreamExecInPod(ctx context.Context, namespace, pod, container 
 		return err
 	}
 	stderr := &cappedBuffer{limit: 4096}
-	if err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: stderr}); err != nil {
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: stderr})
+	if ctx.Err() != nil {
+		// The stream's copies may still be writing: the buffer is not ours yet.
+		return fmt.Errorf("exec: %w", ctx.Err())
+	}
+	if err != nil {
 		return fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
 	}
 	return nil
@@ -598,7 +603,7 @@ func (c *Client) executor(namespace, pod, container string, cmd []string, stdin 
 	for _, arg := range cmd {
 		req = req.Param("command", arg)
 	}
-	exec, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
+	exec, err := newCancellableExecutor(c.restConfig, req.URL())
 	if err != nil {
 		return nil, fmt.Errorf("create executor: %w", err)
 	}
@@ -619,15 +624,10 @@ func (c *Client) exec(ctx context.Context, namespace, pod, container string, cmd
 	if stdin != "" {
 		opts.Stdin = strings.NewReader(stdin)
 	}
-	// The SPDY handshake ignores the context: an API server that holds the
-	// upgrade open would hold this call open too, past any deadline. The
-	// stream is left to its connection, so the buffers are not read on this path.
-	finished := make(chan error, 1)
-	go func() { finished <- exec.StreamWithContext(ctx, opts) }()
-	select {
-	case <-ctx.Done():
+	err = exec.StreamWithContext(ctx, opts)
+	if ctx.Err() != nil {
+		// The stream's copies may still be writing: the buffers are not ours yet.
 		return "", fmt.Errorf("exec: %w", ctx.Err())
-	case err = <-finished:
 	}
 	if err != nil {
 		return "", fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())

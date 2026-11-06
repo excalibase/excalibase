@@ -109,6 +109,7 @@ func TestRetryFailedRollbacks_KeepsTryingWhileTheDeleteFails(t *testing.T) {
 	}
 
 	mock.DeleteNamespaceError = nil
+	passRetryWindow(svc)
 	if retried := svc.RetryFailedRollbacks(context.Background()); len(retried) != 1 {
 		t.Fatalf("retried %v once the delete works", retried)
 	}

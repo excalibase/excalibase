@@ -328,7 +328,7 @@ func isLeader(ctx context.Context, leader LeaderChecker) bool {
 	}
 	ok, err := leader.IsLeader(ctx)
 	if err != nil {
-		log.Printf("major upgrade recovery: leadership: %v", err)
+		log.Printf("leadership check: %v", err)
 	}
 	return ok && err == nil
 }

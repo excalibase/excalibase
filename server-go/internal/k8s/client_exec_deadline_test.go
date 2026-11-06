@@ -15,9 +15,17 @@ import (
 // the role SQL's session has a timeout of its own: pin that the real client
 // returns when its context ends, wherever the API server is holding it.
 func TestExecInPod_ReturnsWhenItsContextEnds(t *testing.T) {
+	disconnected := make(chan struct{}, 1)
 	servers := map[string]func(release <-chan struct{}) http.HandlerFunc{
 		"before the upgrade is answered": func(release <-chan struct{}) http.HandlerFunc {
-			return func(http.ResponseWriter, *http.Request) { <-release }
+			return func(_ http.ResponseWriter, r *http.Request) {
+				// The connection must close too, or the hung read leaks for good.
+				select {
+				case <-r.Context().Done():
+					disconnected <- struct{}{}
+				case <-release:
+				}
+			}
 		},
 		"streaming, the command never finishing": func(release <-chan struct{}) http.HandlerFunc {
 			return func(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +68,13 @@ func TestExecInPod_ReturnsWhenItsContextEnds(t *testing.T) {
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("exec did not return after its context ended")
+			}
+			if name == "before the upgrade is answered" {
+				select {
+				case <-disconnected:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the hung handshake's connection stayed open")
+				}
 			}
 		})
 	}

@@ -92,6 +92,9 @@ func (s *ProvisioningService) provisionWithoutDatabase(ctx context.Context, req 
 	if err := s.createProjectRow(ctx, inst, tierType); err != nil {
 		return nil, err
 	}
+	// The row is admitted: from here the caller only waits for the answer.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.buildLimit())
+	defer cancel()
 	if err := s.k8sClient.CreateProjectNamespace(ctx, inst.Namespace, inst.OrgID); err != nil {
 		// A namespace that already existed is not this request's to remove.
 		created := !apierrors.IsAlreadyExists(err)
@@ -234,6 +237,11 @@ func (s *ProvisioningService) startDatabaseAdd(ctx context.Context, inst *domain
 	if inst.DeploymentMode != domain.ModeK8s {
 		return nil, ErrNoDatabaseNeedsKubernetes
 	}
+	// A new add would overwrite the engine and the record the sweep removes the
+	// old cluster by.
+	if failedAddStillStands(inst) {
+		return nil, fmt.Errorf("%w: the database of an earlier failed add is still being removed (%s)", ErrProjectOperationRunning, inst.ProjectID)
+	}
 	start := time.Now()
 	tier, err := s.databaseTier(ctx, &req, inst.Tier)
 	if err != nil {
@@ -270,7 +278,15 @@ func (s *ProvisioningService) startDatabaseAdd(ctx context.Context, inst *domain
 func (s *ProvisioningService) handleAddDatabaseFailure(ctx context.Context, inst *domain.DatabaseInstance,
 	req domain.ProvisioningRequest, err error, pc *provisioner.ProvisionContext) *domain.ProvisioningResponse {
 	s.recordProvisionFailure(ctx, inst, req, err, pc)
-	s.purgeFailedAddBackups(ctx, inst)
+	// A cluster that is still there is still archiving: purging now would leave
+	// new files behind that block every retry. The sweep purges once it has gone.
+	if failedCleanupIn(inst.RollbackLog, removeDatabaseCleanup(inst.Namespace)) {
+		if inst.BackupEnabled != nil && *inst.BackupEnabled {
+			inst.FailureReason += purgeWaitingNote
+		}
+	} else {
+		s.purgeFailedAddBackups(ctx, inst)
+	}
 	inst.Status = string(domain.StatusActive)
 	inst.CurrentStage = domain.StageCompleted
 	inst.CurrentStep = ""
@@ -293,15 +309,22 @@ func (s *ProvisioningService) purgeFailedAddBackups(ctx context.Context, inst *d
 		return
 	}
 	if s.backupPurger == nil {
-		inst.FailureReason += "; its backup files were not removed (no backup purger), so a retry will be refused"
+		inst.FailureReason += purgeNoPurgerNote
 		return
 	}
+	if err := s.purgeAddedDatabaseBackups(ctx, inst); err != nil {
+		inst.FailureReason += purgeFailedNote
+	}
+}
+
+func (s *ProvisioningService) purgeAddedDatabaseBackups(ctx context.Context, inst *domain.DatabaseInstance) error {
 	cleanupCtx, cancel := provisioner.CleanupContext(ctx)
 	defer cancel()
 	if _, err := s.backupPurger.Purge(cleanupCtx, inst); err != nil && !errors.Is(err, ErrNoBackupsForMode) {
 		log.Printf("ERROR: purge backups of the failed database add of %s: %v", inst.ProjectID, err)
-		inst.FailureReason += "; its backup files could not be removed, so a retry will be refused"
+		return err
 	}
+	return nil
 }
 
 // RecoverInterruptedDatabaseAdds finishes what a process that died mid-add

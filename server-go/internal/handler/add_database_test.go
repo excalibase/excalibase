@@ -108,3 +108,20 @@ func TestProjectStatusSaysWhetherTheCallerMayAddADatabase(t *testing.T) {
 		})
 	}
 }
+
+// While an earlier failed add's cluster is still being removed the add is busy,
+// not broken: the same answer as any other operation holding the project.
+func TestAddDatabaseAnswersBusyWhileAFailedAddIsBeingRemoved(t *testing.T) {
+	f := addDatabaseRouterFixture(t)
+	row, _ := f.store.FindByProjectID("apps-only")
+	row.RollbackLog = `[{"name":"remove database from namespace org1-apps-only","ok":false,"error":"x"}]`
+	if err := f.store.Update(row); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	f.router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/provision/apps-only/database",
+		strings.NewReader(`{"databaseType":"POSTGRESQL","postgresVersion":"17"}`)))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "still being removed") {
+		t.Fatalf("got %d %s, want 409", w.Code, w.Body.String())
+	}
+}

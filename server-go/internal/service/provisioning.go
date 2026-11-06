@@ -46,6 +46,9 @@ type ProvisioningService struct {
 	runInBackground func(func())
 	// buildTimeout overrides defaultBuildTimeout; zero keeps the default.
 	buildTimeout time.Duration
+	// imagePullTimeout overrides defaultImagePullTimeout; zero keeps the default.
+	imagePullTimeout time.Duration
+	rollbackRetries  rollbackRetrySchedule
 	// storageBudget holds every database volume to the platform's share of its storage.
 	storageBudget *storagebudget.Budget
 	store         storage.InstanceStore
@@ -532,6 +535,14 @@ type provisionFailureHandler func(ctx context.Context, inst *domain.DatabaseInst
 func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admittedProject) (resp *domain.ProvisioningResponse, err error) {
 	start, inst, req, prov := admitted.start, admitted.inst, admitted.req, admitted.prov
 	tier, opts := admitted.tier, admitted.opts
+	// Before the clock: a first pull takes as long as the network does.
+	if err := s.prepareBuildImages(ctx, prov, req); err != nil {
+		metrics.ObserveProvision(start, err)
+		pulling := provisioner.NewProvisionContext(nil, nil)
+		pulling.SetStage(domain.StageContainerCreation)
+		pulling.SetStep("pull image")
+		return admitted.fail(ctx, inst, req, pulling.Fail(err), pulling), nil
+	}
 	// Nothing below the provisioner has a timeout of its own: an exec whose
 	// commit waits on dead standbys would hold the row PROVISIONING for good.
 	limit := s.buildLimit()
@@ -567,12 +578,13 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admit
 			persist()
 		},
 	)
-	fail := func(_ context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest,
+	// The handler's cleanups detach for themselves, so the finished ctx is fine.
+	fail := func(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest,
 		failure error, pc *provisioner.ProvisionContext) *domain.ProvisioningResponse {
 		if errors.Is(context.Cause(ctx), deadline) {
 			failure = pc.Fail(deadline)
 		}
-		return admitted.fail(context.WithoutCancel(ctx), inst, req, failure, pc)
+		return admitted.fail(ctx, inst, req, failure, pc)
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -587,7 +599,11 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admit
 	if rbProv, ok := prov.(provisioner.RollbackAware); ok {
 		result, provErr = rbProv.ProvisionWithRollback(ctx, req, tier, pc)
 	} else {
-		// Legacy path — no rollback support.
+		// No rollback of its own: what it started is removed the way a delete
+		// removes it, under the namespace the row holds by then.
+		pc.RegisterCleanup(removeFailedBuildCleanup(inst.ProjectID), func(cleanupCtx context.Context) error {
+			return prov.Deprovision(cleanupCtx, inst.Namespace, inst.ProjectID)
+		})
 		result, provErr = prov.Provision(ctx, req, tier, pc.SetStage)
 	}
 	// A cancelled context outranks whatever the provisioner reported: the
@@ -611,6 +627,27 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admit
 // wait (11 minutes on a paid tier) and below storage.StaleBuildAfter, so a hung
 // build ends itself before a delete may take its row for abandoned.
 const defaultBuildTimeout = 20 * time.Minute
+
+// defaultImagePullTimeout bounds fetching a build's images, which runs ahead of
+// the build's own clock.
+const defaultImagePullTimeout = time.Hour
+
+func (s *ProvisioningService) prepareBuildImages(ctx context.Context, prov provisioner.DatabaseProvisioner, req domain.ProvisioningRequest) error {
+	preparer, ok := prov.(provisioner.ImagePreparer)
+	if !ok {
+		return nil
+	}
+	limit := s.imagePullTimeout
+	if limit <= 0 {
+		limit = defaultImagePullTimeout
+	}
+	pullCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	if err := preparer.PrepareImages(pullCtx, req); err != nil {
+		return fmt.Errorf("pull the database's images: %w", err)
+	}
+	return nil
+}
 
 // errBuildPanicked is what a project records when its build panicked; the panic
 // itself goes to the log only.

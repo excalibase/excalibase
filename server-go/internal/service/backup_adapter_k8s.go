@@ -307,7 +307,7 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 
 	restored, err := a.runRestore(ctx, pc, inst, req, target)
 	if err != nil {
-		return nil, failRestore(ctx, pc, newProject, err)
+		return nil, failRestore(ctx, pc, a.instances, failedRestoreRecord(inst, req, target.project, target.namespace), err)
 	}
 	return &domain.ProvisioningResponse{
 		ProjectID:    restored.ProjectID,

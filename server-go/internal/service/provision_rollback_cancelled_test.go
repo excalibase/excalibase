@@ -325,7 +325,7 @@ func TestFailRestore_CompensatesOnACancelledContext(t *testing.T) {
 	finished, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := failRestore(finished, pc, "copy", errors.New("job taken")); !errors.Is(err, ErrRestoreNotObserved) {
+	if err := failRestore(finished, pc, emptyInstanceStore(t), &domain.DatabaseInstance{ProjectID: "copy"}, errors.New("job taken")); !errors.Is(err, ErrRestoreNotObserved) {
 		t.Fatalf("failRestore: %v", err)
 	}
 	if cluster.Namespaces["org1-copy"] {
