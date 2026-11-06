@@ -3,8 +3,10 @@
 package k8s
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +46,7 @@ func TestK3sPrivateRegistryPull(t *testing.T) {
 	t.Run("with the project's credential it rolls out", func(t *testing.T) {
 		auth := &RegistryAuth{Registry: liveRegistry, Username: liveRegistryUser, Password: liveRegistryPass}
 		if err := g.deployWithAuth(t, owner, "private", auth, 3*time.Minute); err != nil {
+			g.logPullDiagnostics(t, owner)
 			t.Fatalf("want success, got %v", err)
 		}
 	})
@@ -69,6 +72,44 @@ func (g *gvisorCluster) deployWithAuth(t *testing.T, namespace, name string, aut
 		t.Fatalf("apply %s: %v", name, err)
 	}
 	return g.client.WaitForAppRollout(ctx, namespace, AppObjectName(name), liveDeployID, timeout)
+}
+
+// logPullDiagnostics prints what a refused credentialed pull needs explaining
+// with: whether the pull Secret existed, the pod's events, and what the kubelet
+// said about the pull secret. The one CI failure of this test (PR 423) answered
+// "no basic auth credentials" for a pod that carried the Secret, and nothing
+// kept to say whether the kubelet had read it.
+func (g *gvisorCluster) logPullDiagnostics(t *testing.T, namespace string) {
+	t.Helper()
+	ctx := context.Background()
+	secrets, err := g.clientset.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		t.Logf("diagnostics: list secrets: %v", err)
+	}
+	for _, secret := range secrets.Items {
+		t.Logf("diagnostics: secret %s type=%s created=%s", secret.Name, secret.Type, secret.CreationTimestamp.Format(time.RFC3339Nano))
+	}
+	events, err := g.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		t.Logf("diagnostics: list events: %v", err)
+	}
+	for _, event := range events.Items {
+		t.Logf("diagnostics: event %s %s/%s %s: %s", event.LastTimestamp.Format(time.RFC3339Nano), event.InvolvedObject.Kind, event.InvolvedObject.Name, event.Reason, event.Message)
+	}
+	reader, err := g.container.Logs(ctx)
+	if err != nil {
+		t.Logf("diagnostics: k3s logs: %v", err)
+		return
+	}
+	defer reader.Close()
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "pull secret") || strings.Contains(line, "app-private") || strings.Contains(line, "failed to sync secret") {
+			t.Logf("diagnostics: k3s: %s", line)
+		}
+	}
 }
 
 // startPrivateRegistry runs a registry demanding basic auth on the node's
