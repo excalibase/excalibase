@@ -318,16 +318,26 @@ func TestLogSearchPodLogIsLimitedToTheWindow(t *testing.T) {
 		since time.Duration
 		want  int64
 	}{{"asked 6h", 6 * time.Hour, 6 * 3600}, {"default window", 0, 3600}} {
-		t.Run(tc.name, func(t *testing.T) {
-			svc, store, mock := setupOpsTest(t)
-			seedMySQLProject(t, store, mock)
-			mock.PodLogs[testOpsDBNS+"/"+testOpsDB+primaryPodSuffix] = "line\n"
-			if _, err := svc.SearchLogs(context.Background(), testOpsDB, LogSearch{Lines: 10, Since: tc.since}); err != nil {
-				t.Fatal(err)
-			}
-			if len(mock.PodLogSinceSeconds) != 1 || mock.PodLogSinceSeconds[0] != tc.want {
-				t.Fatalf("since seconds = %v, want %d", mock.PodLogSinceSeconds, tc.want)
-			}
-		})
+		for _, engine := range []string{"postgres", "mysql"} {
+			t.Run(tc.name+" "+engine, func(t *testing.T) {
+				svc, store, mock := setupOpsTest(t)
+				seedMySQLProject(t, store, mock)
+				project := testOpsDB
+				mock.PodLogs[testOpsDBNS+"/"+testOpsDB+primaryPodSuffix] = "line\n"
+				if engine == "mysql" {
+					project = "my-a"
+					mock.PodLogs["org1-my-a/moco-my-a-mysql-1/mysqld"] = "line\n"
+				}
+				if _, err := svc.SearchLogs(context.Background(), project, LogSearch{Lines: 10, Since: tc.since}); err != nil {
+					t.Fatal(err)
+				}
+				if len(mock.PodLogSinceSeconds) != 1 || mock.PodLogSinceSeconds[0] != tc.want {
+					t.Fatalf("since seconds = %v, want %d", mock.PodLogSinceSeconds, tc.want)
+				}
+				if engine == "mysql" && !strings.Contains(strings.Join(mock.Calls, " "), "moco-my-a-mysql-1") {
+					t.Errorf("the MySQL primary was not read: %v", mock.Calls)
+				}
+			})
+		}
 	}
 }

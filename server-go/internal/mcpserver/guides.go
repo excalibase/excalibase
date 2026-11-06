@@ -76,8 +76,9 @@ func userIDTypeText(guests bool) string {
 			"The address is the email claim (permissions read it as X-Excalibase-Email); a guest has no email claim and an is_guest claim of true. " +
 			"test_auth_flow shows the real claims of a test sign-in. See permissions.ownerColumnType for comparing userId with an owner column."
 	}
-	return text + "The token's sub is the user's email, and the same address is in the email claim, which permissions read as X-Excalibase-Email. " +
-		"test_auth_flow shows the real claims of a test sign-in. See permissions.ownerColumnType for comparing userId with an owner column."
+	return text + "The token's sub is the user's email. Some auth versions also put the address in an email claim, which permissions read as X-Excalibase-Email; " +
+		"a token with no email claim has no X-Excalibase-Email, and a permission that uses it fails with missing_session_variable. " +
+		"test_auth_flow shows the real claims of a test sign-in, so check it before relying on the email claim. See permissions.ownerColumnType for comparing userId with an owner column."
 }
 
 // permissionsGuide is how a permission names the signed-in user.

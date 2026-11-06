@@ -66,7 +66,7 @@ apps and grant what the anon role grants.
 | `get_request_metrics` | `GET /api/provision/{id}/requests?range=`: request, error and latency charts; offered only while `FEATURE_REQUESTMETRICS` is on |
 | `get_metrics` | `GET .../metrics/current` and, with `history`, `.../metrics/history?limit=N` |
 | `list_alerts` | `GET /api/alerts/project/{id}/` |
-| `get_database_info` | `GET /api/provision/{id}/cluster`: disk, size, plan, settings (Postgres) |
+| `get_database_info` | `GET /api/provision/{id}/cluster`: disk, size, plan, settings (Postgres on Kubernetes only; MySQL and single host are refused) |
 | `get_db_endpoint` | `GET /api/projects/{id}/db-endpoint/`: host, port, CA and connection strings without the password; opening the port stays in Studio |
 | `get_db_read_address` | `GET /api/projects/{id}/db-read-address/`; offered only while `FEATURE_DBREADADDRESS` is on |
 | `get_auth_settings` | `GET .../auth-settings/`, plus `.../auth-providers/` while `FEATURE_AUTHOAUTH` is on: how end users may sign in; secrets never; every write stays in Studio |
