@@ -20,11 +20,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 INSTALLATION, REPO_ID, FULL_NAME = 4242, 777, "acme/site"
 REPO = {"id": REPO_ID, "full_name": FULL_NAME, "default_branch": "main", "private": True}
-STATE = {"manifest": {}, "bodies": {}, "lock": threading.Lock()}
+PREVIEW_BRANCH = "feat/preview"
+STATE = {"manifest": {}, "bodies": {}, "calls": [], "lock": threading.Lock()}
 
 
-def head_sha(root):
-    return subprocess.check_output(["git", "-C", os.path.join(root, FULL_NAME + ".git"), "rev-parse", "main"], text=True).strip()
+def head_sha(root, branch="main"):
+    """The branch's head, or None when the branch does not exist (a deleted branch)."""
+    found = subprocess.run(["git", "-C", os.path.join(root, FULL_NAME + ".git"), "rev-parse", "--verify", "-q", "refs/heads/" + branch],
+                           capture_output=True, text=True, check=False)
+    return found.stdout.strip() or None
 
 
 class Fakes(BaseHTTPRequestHandler):
@@ -82,7 +86,10 @@ class Fakes(BaseHTTPRequestHandler):
                 files = {name: STATE["bodies"].get(entry["hash"], "") for name, entry in STATE["manifest"].items()}
             return self.answer(200, {"files": files, "sha": head_sha(self.root)})
         if path == "/_sha":
-            return self.answer(200, {"sha": head_sha(self.root)})
+            return self.answer(200, {"sha": head_sha(self.root), "preview": head_sha(self.root, PREVIEW_BRANCH)})
+        if path == "/_cf_calls":
+            with STATE["lock"]:
+                return self.answer(200, {"calls": list(STATE["calls"])})
         self.answer(404, {"message": "Not Found"})
 
     def github(self, method, path):
@@ -92,13 +99,18 @@ class Fakes(BaseHTTPRequestHandler):
             ("POST", r"/app/installations/\d+/access_tokens", 201, {"token": "ghs_smoke_clone", "expires_at": "2099-01-01T00:00:00Z"}),
             ("DELETE", r"/installation/token", 204, None),
             ("GET", r"/repositories/%d" % REPO_ID, 200, REPO),
-            ("GET", r"/repos/%s/git/ref/heads/main" % FULL_NAME, 200, {"object": {"sha": sha}}),
             ("GET", r"/repos/%s/commits/[0-9a-f]+" % FULL_NAME, 200, {"commit": {"message": "smoke site"}}),
             ("POST", r"/login/oauth/access_token", 200, {"access_token": "gho_smoke_user"}),
             ("GET", r"/user/installations", 200, {"installations": [{"id": INSTALLATION, "account": {"login": "acme"}}]}),
             ("GET", r"/user/installations/%d/repositories" % INSTALLATION, 200, {"repositories": [REPO]}),
             ("DELETE", r"/applications/[^/]+/token", 204, None),
         ]
+        ref = re.fullmatch(r"/repos/%s/git/ref/heads/(.+)" % FULL_NAME, path)
+        if method == "GET" and ref:
+            branch_sha = head_sha(self.root, ref.group(1))
+            if branch_sha is None:
+                return self.answer(404, {"message": "Not Found"})
+            return self.answer(200, {"object": {"sha": branch_sha}})
         for want, pattern, status, payload in routes:
             if method == want and re.fullmatch(pattern, path):
                 return self.answer(status, payload)
@@ -106,6 +118,8 @@ class Fakes(BaseHTTPRequestHandler):
 
     def cf(self, method, path):
         raw = self.body()
+        with STATE["lock"]:
+            STATE["calls"].append(method + " " + path)
         if method == "POST" and path.endswith("/assets-upload-session"):
             manifest = json.loads(raw)["manifest"]
             with STATE["lock"]:
@@ -189,6 +203,10 @@ def make_repo(root):
                GIT_COMMITTER_NAME="smoke", GIT_COMMITTER_EMAIL="smoke@example.com")
     for args in (["init", "-q", "-b", "main"], ["add", "."], ["commit", "-q", "-m", "smoke site"]):
         subprocess.run(["git", "-C", work] + args, env=env, check=True)
+    # A second branch, as a developer's feature branch, for the preview journey.
+    for args in (["checkout", "-q", "-b", PREVIEW_BRANCH], ["commit", "-q", "--allow-empty", "-m", "preview change"]):
+        subprocess.run(["git", "-C", work] + args, env=env, check=True)
+    subprocess.run(["git", "-C", work, "checkout", "-q", "main"], env=env, check=True)
     subprocess.run(["git", "clone", "-q", "--bare", work, bare], check=True)
     subprocess.run(["git", "-C", bare, "config", "uploadpack.allowAnySHA1InWant", "true"], check=True)
 
