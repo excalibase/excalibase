@@ -42,6 +42,8 @@ const (
 // Sites is the Sites service a build deploys through, the same path an upload takes.
 type Sites interface {
 	Get(ctx context.Context, projectID, id string) (*sites.Site, error)
+	// ServerSitesOn is the sitesserver feature: off, a server site is treated as absent.
+	ServerSitesOn(ctx context.Context) bool
 	Deploy(ctx context.Context, request sites.DeployRequest) (*sites.Deploy, error)
 	MaxUploadBytes(ctx context.Context, projectID string) (int64, error)
 	TakeDeploySlot(ctx context.Context, projectID string) error
@@ -118,7 +120,14 @@ func (s *Service) loadSite(ctx context.Context, projectID, siteID string) (*site
 	if err := s.Available(); err != nil {
 		return nil, err
 	}
-	return s.sites.Get(ctx, projectID, siteID)
+	site, err := s.sites.Get(ctx, projectID, siteID)
+	if err != nil {
+		return nil, err
+	}
+	if site.Kind == sites.KindServer && !s.sites.ServerSitesOn(ctx) {
+		return nil, sites.ErrServerSitesOff
+	}
+	return site, nil
 }
 
 // matchKind keeps a server site on a framework preset and a static site off one.
@@ -247,6 +256,10 @@ func (s *Service) Connect(ctx context.Context, request ConnectRequest) (*Connect
 	site, err := s.loadSite(ctx, request.ProjectID, request.SiteID)
 	if err != nil {
 		return nil, err
+	}
+	if request.Settings.Framework != "" && !s.sites.ServerSitesOn(ctx) {
+		// Not even a refusal that names server sites while they are off.
+		return nil, sites.ErrServerSitesOff
 	}
 	if err := s.mayConnect(ctx, request.UserID, request.ProjectID); err != nil {
 		return nil, err
@@ -529,6 +542,9 @@ func (s *Service) pushTargets(ctx context.Context, push *gitprovider.Push) ([]co
 	}
 	targets := make([]connected, 0, len(siteConnections))
 	for _, connection := range siteConnections {
+		if s.hiddenServerSite(ctx, connection) {
+			continue
+		}
 		targets = append(targets, connection)
 	}
 	if !s.appsOn(ctx) {
@@ -655,4 +671,13 @@ func userMessage(err error) string {
 	}
 	log.Printf("git builds: %v", err)
 	return "an internal error stopped this; try again"
+}
+
+// hiddenServerSite is a connection of a server site while server sites are off: a push does not build it.
+func (s *Service) hiddenServerSite(ctx context.Context, connection *Connection) bool {
+	if s.sites.ServerSitesOn(ctx) {
+		return false
+	}
+	site, err := s.sites.Get(ctx, connection.ProjectID, connection.SiteID)
+	return err == nil && site.Kind == sites.KindServer
 }

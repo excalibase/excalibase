@@ -29,7 +29,14 @@ func (k *siteKind) connection(ctx context.Context) (connected, error) {
 	return connection, nil
 }
 
-func (k *siteKind) preflight(context.Context) *outcome { return nil }
+// preflight refuses a queued build of a server site once server sites are off: the customer's build must not run.
+func (k *siteKind) preflight(ctx context.Context) *outcome {
+	service, build := k.execution.dispatcher.service, k.execution.build
+	if _, err := service.loadSite(ctx, build.ProjectID, build.SiteID); errors.Is(err, sites.ErrServerSitesOff) {
+		return refuse(FailPlatform, "server-rendered sites are switched off on this install")
+	}
+	return nil
+}
 
 func (k *siteKind) failureMessage(status RunStatus) string {
 	return failureMessage(status, k.execution.build.Limits, k.execution.build.Settings)

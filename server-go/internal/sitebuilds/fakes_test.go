@@ -559,7 +559,11 @@ func (f *fakePublisher) PublishBuild(_ context.Context, publish AppPublish) (str
 }
 
 // fakeSites is a project with one site whose deploys always succeed.
-type fakeSites struct{ kind string }
+type fakeSites struct {
+	kind string
+	// serverOff is the sitesserver feature off.
+	serverOff bool
+}
 
 func (f fakeSites) Get(_ context.Context, projectID, id string) (*sites.Site, error) {
 	if projectID != testProject || id != testSite {
@@ -571,6 +575,8 @@ func (f fakeSites) Get(_ context.Context, projectID, id string) (*sites.Site, er
 func (fakeSites) Deploy(context.Context, sites.DeployRequest) (*sites.Deploy, error) {
 	return &sites.Deploy{ID: "site-deploy"}, nil
 }
+
+func (f fakeSites) ServerSitesOn(context.Context) bool { return !f.serverOff }
 
 func (fakeSites) MaxUploadBytes(context.Context, string) (int64, error) { return 1 << 20, nil }
 func (fakeSites) TakeDeploySlot(context.Context, string) error          { return nil }
