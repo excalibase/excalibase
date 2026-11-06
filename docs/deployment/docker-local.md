@@ -335,6 +335,7 @@ the firewall rule under Host isolation; on Podman, the same for `podman+`.
 | `.env` | Default | Meaning |
 |---|---|---|
 | `SITES_BUILD_SLOTS` | `1` | Site and app builds at once on this host; an app build takes the last free slot only while no site build is waiting |
+| `BUILD_EGRESS_EXTRA_DENY_CIDRS` | unset | ranges refused to builds, on top of the private ones: the host's own public addresses. Separate from `APP_EGRESS_EXTRA_DENY_CIDRS`, which never applies to builds |
 | `SITES_BUILD_EGRESS_ALLOW` | empty | `host:port` entries builds may reach although private (a git server or registry on your LAN) |
 | `SITES_BUILD_NODE_IMAGE` | Docker Hub's, pinned | a mirror of the Node images builds run in |
 

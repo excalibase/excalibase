@@ -35,3 +35,26 @@ func TestParseEgressExtraDenyCIDRsRefusesUnusableValues(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildAndAppDenyListsAreSeparate(t *testing.T) {
+	t.Setenv("APP_EGRESS_EXTRA_DENY_CIDRS", "198.51.100.1/32")
+	t.Setenv("BUILD_EGRESS_EXTRA_DENY_CIDRS", "203.0.113.1/32")
+	if got := envEgressExtraDenyCIDRs("BUILD_EGRESS_EXTRA_DENY_CIDRS"); len(got) != 1 || got[0] != "203.0.113.1/32" {
+		t.Fatalf("builds' list = %v", got)
+	}
+	cfg := load()
+	if len(cfg.BuildEgressExtraDenyCIDRs) != 1 || cfg.BuildEgressExtraDenyCIDRs[0] != "203.0.113.1/32" {
+		t.Fatalf("builds' list = %v", cfg.BuildEgressExtraDenyCIDRs)
+	}
+	if len(cfg.AppEgressExtraDenyCIDRs) != 1 || cfg.AppEgressExtraDenyCIDRs[0] != "198.51.100.1/32" {
+		t.Fatalf("apps' list = %v", cfg.AppEgressExtraDenyCIDRs)
+	}
+}
+
+func TestBuildDenyListHasNoFallbackToTheApps(t *testing.T) {
+	t.Setenv("APP_EGRESS_EXTRA_DENY_CIDRS", "198.51.100.1/32")
+	t.Setenv("BUILD_EGRESS_EXTRA_DENY_CIDRS", "")
+	if got := load().BuildEgressExtraDenyCIDRs; got != nil {
+		t.Fatalf("builds' list fell back to the apps': %v", got)
+	}
+}

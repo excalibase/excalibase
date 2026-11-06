@@ -142,6 +142,9 @@ func siteBuildDispatcherOptions(cfg config.AppConfig) sitebuilds.DispatcherOptio
 
 // siteBuildRunner is the single host's runner (EXC-671) or the cluster's; nil when this install has neither.
 func siteBuildRunner(args siteBuildArgs) (sitebuilds.Runner, error) {
+	if warning := buildDenyListWarning(args.cfg); warning != "" {
+		log.Print(warning)
+	}
 	cfg := args.cfg
 	if cfg.ProvisionerMode == "docker" {
 		engine, _ := args.docker.(rawClienter)
@@ -156,10 +159,31 @@ func siteBuildRunner(args siteBuildArgs) (sitebuilds.Runner, error) {
 	}
 	log.Printf("INFO: site git builds on: %d slot(s) in namespace %s under RuntimeClass %s",
 		cfg.SiteGit.BuildSlots, cfg.SiteGit.BuildNamespace, cfg.AppRuntimeClass)
-	return k8s.NewSiteBuildRunner(kube, k8s.SiteBuildOptions{
+	return k8s.NewSiteBuildRunner(kube, siteBuildOptions(cfg)), nil
+}
+
+// buildDenyListWarning names the upgrade gap: until BUILD_EGRESS_EXTRA_DENY_CIDRS is set, builds see only the private ranges refused.
+func buildDenyListWarning(cfg config.AppConfig) string {
+	if len(cfg.AppEgressExtraDenyCIDRs) == 0 || len(cfg.BuildEgressExtraDenyCIDRs) != 0 {
+		return ""
+	}
+	return "WARN: APP_EGRESS_EXTRA_DENY_CIDRS is set but BUILD_EGRESS_EXTRA_DENY_CIDRS is not: it covers running apps only, so builds may reach those ranges"
+}
+
+func siteBuildOptions(cfg config.AppConfig) k8s.SiteBuildOptions {
+	return k8s.SiteBuildOptions{
 		Namespace: cfg.SiteGit.BuildNamespace, RuntimeClass: cfg.AppRuntimeClass, PriorityClass: cfg.SiteGit.PriorityClass, Slots: cfg.SiteGit.BuildSlots, PrepareImage: cfg.SiteGit.PrepareImage,
-		ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs,
-	}), nil
+		ExtraDenyCIDRs: cfg.BuildEgressExtraDenyCIDRs,
+	}
+}
+
+func singleHostBuildOptions(cfg config.AppConfig, podman bool) dockerbuilds.Options {
+	apps, git := cfg.SingleHostApps, cfg.SiteGit
+	return dockerbuilds.Options{
+		NetworkPrefix: apps.NetworkPrefix, VolumePrefix: apps.VolumePrefix, SandboxRuntime: apps.SandboxRuntime,
+		EgressImage: git.EgressImage, PrepareImage: git.PrepareImage,
+		ExtraDenyCIDRs: cfg.BuildEgressExtraDenyCIDRs, EgressAllow: git.EgressAllow, Isolate: podman,
+	}
 }
 
 // singleHostBuildRunner runs builds through the engine proxy under the apps' sandbox runtime,
@@ -177,11 +201,7 @@ func singleHostBuildRunner(ctx context.Context, cfg config.AppConfig, engine raw
 	if err != nil {
 		return nil, err
 	}
-	runner, err := dockerbuilds.NewRunner(sdk, dockerbuilds.Options{
-		NetworkPrefix: apps.NetworkPrefix, VolumePrefix: apps.VolumePrefix, SandboxRuntime: apps.SandboxRuntime,
-		EgressImage: git.EgressImage, PrepareImage: git.PrepareImage,
-		ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, EgressAllow: git.EgressAllow, Isolate: podman,
-	})
+	runner, err := dockerbuilds.NewRunner(sdk, singleHostBuildOptions(cfg, podman))
 	if err != nil {
 		return nil, err
 	}

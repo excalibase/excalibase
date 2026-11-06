@@ -325,6 +325,8 @@ services:
       LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
       # The host's own public ranges, refused to apps and to the alert webhook; empty: only private ranges are.
       APP_EGRESS_EXTRA_DENY_CIDRS: ${APP_EGRESS_EXTRA_DENY_CIDRS:-}
+      # The ranges refused to git builds, which run untrusted code. Their own list: the apps' never applies to them.
+      BUILD_EGRESS_EXTRA_DENY_CIDRS: ${BUILD_EGRESS_EXTRA_DENY_CIDRS:-}
       # Server-rendered sites on Cloudflare (EXC-661); needs SITES_ENABLED.
       FEATURE_SITESSERVER: ${FEATURE_SITESSERVER:-false}
       # End-user auth hooks: signed calls to the project's own endpoints (EXC-662).

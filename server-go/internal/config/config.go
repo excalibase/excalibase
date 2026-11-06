@@ -340,6 +340,10 @@ type AppConfig struct {
 	// AppEgressExtraDenyCIDRs are off-cluster ranges denied to apps beyond the fixed private list.
 	AppEgressExtraDenyCIDRs []string
 
+	// BuildEgressExtraDenyCIDRs are off-cluster ranges denied to git builds of sites and apps.
+	// Builds run untrusted code, so this list is stricter and never falls back to the apps' list.
+	BuildEgressExtraDenyCIDRs []string
+
 	// AppDomain is the parent of every app hostname: <app>-<project>.<AppDomain>.
 	AppDomain       string
 	AppIngressClass string
@@ -596,6 +600,7 @@ func load() AppConfig {
 		MySQLEnabled:                   os.Getenv("MYSQL_ENABLED") == "true",
 		AppRuntimeClass:                envOr("APP_RUNTIME_CLASS", "gvisor"),
 		AppEgressExtraDenyCIDRs:        envEgressExtraDenyCIDRs("APP_EGRESS_EXTRA_DENY_CIDRS"),
+		BuildEgressExtraDenyCIDRs:      envEgressExtraDenyCIDRs("BUILD_EGRESS_EXTRA_DENY_CIDRS"),
 		AppDomain:                      os.Getenv("APP_DOMAIN"),
 		AppIngressClass:                envOr("APP_INGRESS_CLASS", "haproxy"),
 		AppIngressFromNamespace:        os.Getenv("APP_INGRESS_FROM_NAMESPACE"),
