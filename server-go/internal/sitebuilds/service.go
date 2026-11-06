@@ -110,11 +110,26 @@ func (s *Service) Available() error {
 }
 
 func (s *Service) mustSite(ctx context.Context, projectID, siteID string) error {
-	if err := s.Available(); err != nil {
-		return err
-	}
-	_, err := s.sites.Get(ctx, projectID, siteID)
+	_, err := s.loadSite(ctx, projectID, siteID)
 	return err
+}
+
+func (s *Service) loadSite(ctx context.Context, projectID, siteID string) (*sites.Site, error) {
+	if err := s.Available(); err != nil {
+		return nil, err
+	}
+	return s.sites.Get(ctx, projectID, siteID)
+}
+
+// matchKind keeps a server site on a framework preset and a static site off one.
+func matchKind(kind string, settings Settings) error {
+	switch {
+	case kind == sites.KindServer && settings.Framework == "":
+		return &InputError{Reason: "a server site is built with a framework; choose one (Next.js)"}
+	case kind != sites.KindServer && settings.Framework != "":
+		return &InputError{Reason: "a framework build needs a server site; create the site as a server site"}
+	}
+	return nil
 }
 
 // StartSignIn answers the git host's sign-in (or install) link for a user connecting a site.
@@ -229,7 +244,8 @@ type ConnectResult struct {
 // Connect checks the user's own sign-in shows them the repository, that the
 // App still reaches it, saves the connection, and queues a first build.
 func (s *Service) Connect(ctx context.Context, request ConnectRequest) (*ConnectResult, error) {
-	if err := s.mustSite(ctx, request.ProjectID, request.SiteID); err != nil {
+	site, err := s.loadSite(ctx, request.ProjectID, request.SiteID)
+	if err != nil {
 		return nil, err
 	}
 	if err := s.mayConnect(ctx, request.UserID, request.ProjectID); err != nil {
@@ -244,6 +260,9 @@ func (s *Service) Connect(ctx context.Context, request ConnectRequest) (*Connect
 	}
 	settings, err := request.Settings.Normalise()
 	if err != nil {
+		return nil, err
+	}
+	if err := matchKind(site.Kind, settings); err != nil {
 		return nil, err
 	}
 	connection := &Connection{SiteID: request.SiteID, GitSource: s.newSource(request.ProjectID, request.UserID, installation, repository), Settings: settings}

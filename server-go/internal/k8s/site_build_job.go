@@ -202,7 +202,7 @@ func buildStepEnv(spec sitebuilds.RunSpec) []corev1.EnvVar {
 func collectContainer(spec sitebuilds.RunSpec) corev1.Container {
 	return corev1.Container{
 		Name: siteBuildCollect, Image: spec.Image, Command: []string{"bash", "/scripts/collect.sh"},
-		Env:             []corev1.EnvVar{{Name: "ROOT_DIR", Value: spec.RootDir}, {Name: "OUTPUT_DIR", Value: spec.OutputDir}},
+		Env:             []corev1.EnvVar{{Name: "ROOT_DIR", Value: spec.RootDir}, {Name: "OUTPUT_DIR", Value: spec.OutputDir}, {Name: "FRAMEWORK", Value: spec.Framework}},
 		SecurityContext: lockedDown(), Resources: guaranteed("250m", "256Mi"),
 		VolumeMounts: append(workMounts(), scriptMount()),
 		ReadinessProbe: &corev1.Probe{

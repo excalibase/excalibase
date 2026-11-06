@@ -52,7 +52,7 @@ func (k *siteKind) start(ctx context.Context, credential gitprovider.CloneCreden
 		BuildID: k.execution.runID, SiteID: build.SiteID, ProjectID: build.ProjectID,
 		Image: NodeImage(service.options.NodeImage, settings.NodeVersion), CloneURL: service.provider.CloneURL(repository),
 		Commit: build.CommitSHA, CloneToken: credential.Token, RootDir: settings.RootDir, OutputDir: settings.OutputDir,
-		InstallCommand: settings.InstallCommand, BuildCommand: settings.BuildCommand,
+		InstallCommand: settings.InstallCommand, BuildCommand: settings.BuildCommand, Framework: settings.Framework,
 		CPUMillis: limits.CPUMillis, Memory: limits.Memory, Disk: limits.Disk, Timeout: time.Duration(limits.TimeoutSeconds) * time.Second,
 		Env: env, LargestPlan: largest,
 	})
