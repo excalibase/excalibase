@@ -58,7 +58,7 @@ func TestViewsKeepTheFieldsTheDescriptionsPromise(t *testing.T) {
 				f.on(http.MethodGet, projectsA+"/db-endpoint/", 200, `{"host":"h","port":1,"requireTls":true,"database":"d","username":"u","caCertificate":"CA",`+
 					`"connectionStrings":{"requireTls":"a","allowPlaintext":"b","mongoRequireTls":"m"},"internal":{"host":"i","port":1,"connectionString":"c"},"mongoPort":2,"mongoAvailable":true}`)
 			},
-			present: []string{"caCertificate", "internal.host", "internal.connectionString", "connectionStrings.requireTls", "connectionStrings.mongoRequireTls", "mongoPort", "mongoAvailable"},
+			present: []string{"caCertificate", "internal.host", "internal.connectionString", "connectionStrings.requireTls", "connectionStrings.allowPlaintext", "connectionStrings.mongoRequireTls", "mongoPort", "mongoAvailable"},
 		},
 		{
 			tool: "get_db_read_address", features: []features.Feature{features.DBReadAddress},

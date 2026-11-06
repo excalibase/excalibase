@@ -100,11 +100,15 @@ const (
 	// SitePreviews is a preview per branch or pull request of a site connected
 	// to git, at its own unguessable hostname, removed with its branch or PR (EXC-660).
 	SitePreviews Feature = "sitepreviews"
+	// FunctionInvoke is MCP's invoke_function. A function's answer is whatever its
+	// code returns, secrets and the database URL included, so an agent that can
+	// both deploy and run a function could read them into the conversation (EXC-684).
+	FunctionInvoke Feature = "functioninvoke"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, FunctionInvoke}
 }
 
 type Flags interface {
