@@ -15,7 +15,7 @@ import (
 var offeredTools = []string{
 	"add_app_domain", "add_cors_origin", "add_site_domain", "apply_migration", "check_site_domain", "connect_site_repo", "create_app", "create_publishable_key", "create_storage_bucket", "create_site", "delete_app", "delete_function", "delete_function_secret",
 	"delete_site", "deploy_app", "deploy_function", "deploy_site", "describe_table", "disconnect_site_repo", "execute_sql", "generate_typescript_types", "get_auth_settings", "get_ci_snippet",
-	"get_database_info", "get_db_endpoint", "get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_metrics", "get_project_info", "invoke_function",
+	"get_database_info", "get_db_endpoint", "get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_metrics", "get_project_info",
 	"list_alerts", "list_app_domains", "list_apps", "list_cors_origins", "list_function_secrets", "list_functions", "list_migrations", "list_permissions", "list_projects",
 	"list_site_build_secrets", "list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_templates", "list_storage_buckets", "list_storage_objects", "list_tables", "rebuild_site", "redeploy_app", "remove_app_domain", "remove_cors_origin", "remove_site_domain", "revoke_publishable_key", "rollback_site", "set_app_secret", "set_db_function_permission", "set_function_outbound_hosts",
 	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "test_auth_flow", "track_db_function", "update_app", "verify_app_domain",
@@ -73,6 +73,8 @@ var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^DELETE /api/projects/[^/]+/functions/secrets/[^/]+$`),
 	// A test run of one function, with no sign-in of its own; the answer is the function's.
 	regexp.MustCompile(`^POST /api/projects/[^/]+/functions/[^/]+/invoke$`),
+	// Whether the runtime is up, read after a secret is deleted (the redeploy that follows is not reported).
+	regexp.MustCompile(`^GET /api/projects/[^/]+/functions/runtime/status$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/functions/[^/]+/logs(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/apps/$`),
 	regexp.MustCompile(`^(PATCH|DELETE) /api/projects/[^/]+/apps/[^/]+/$`),
@@ -173,6 +175,7 @@ var neverReached = []*regexp.Regexp{
 	regexp.MustCompile(`/objects/.`),
 	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/objects`),
 	regexp.MustCompile(`^DELETE .*/storage/buckets`),
+	regexp.MustCompile(`^(PUT|PATCH) .*/storage/buckets/[^/]+/?$`),
 	regexp.MustCompile(`/storage(\?.*)?$`),
 	// An app's secret is set by name and never read: every other secret route stays out.
 	regexp.MustCompile(`^(GET|POST|PATCH|DELETE) .*/apps/[^/]+/secrets`),
@@ -200,6 +203,8 @@ func TestNeverReachedCatchesTheSurfaceItNames(t *testing.T) {
 		"PUT /api/projects/p/db-read-address/",
 		"POST /api/projects/p/storage/s3-keys",
 		"DELETE /api/projects/p/storage/buckets/b",
+		"PUT /api/projects/p/storage/buckets/b",
+		"PATCH /api/projects/p/storage/buckets/b",
 		"POST /api/projects/p/storage/buckets/b/upload-url",
 		"GET /api/projects/p/storage/buckets/b/objects/a.png",
 		"DELETE /api/projects/p/storage/buckets/b/objects/a.png",
@@ -253,7 +258,7 @@ func TestEveryCatalogueEntryIsPinned(t *testing.T) {
 			t.Errorf("%s names a capability MCP must never offer", entry.name)
 		}
 		if entry.feature == "" {
-			if !listed[entry.name] && entry.access != readOnlyVariant {
+			if !listed[entry.name] {
 				t.Errorf("%s is not dark and not in offeredTools", entry.name)
 			}
 			continue

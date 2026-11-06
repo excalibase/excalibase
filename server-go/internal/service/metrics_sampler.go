@@ -125,5 +125,5 @@ func (s *MetricsService) tableHistory(ctx context.Context, projectID string, lim
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
 		rows[i], rows[j] = rows[j], rows[i]
 	}
-	return &domain.MetricsHistory{ProjectID: projectID, Metrics: rows, TotalPoints: len(rows)}, nil
+	return &domain.MetricsHistory{ProjectID: projectID, Metrics: cleanReasons(rows), TotalPoints: len(rows)}, nil
 }

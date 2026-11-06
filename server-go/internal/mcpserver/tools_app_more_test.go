@@ -44,14 +44,15 @@ func appMoreRouteCases() []routeCase {
 		{
 			name: "set_app_secret", tool: "set_app_secret", args: map[string]any{"project_id": testProjectA, "app_id": "web", "name": "API_KEY", "value": "s3cr3t-value"},
 			setup: func(f *fakeRoutes) {
+				f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","env":[{"name":"LOG_LEVEL","kind":"literal","value":"info"}]}`)
 				f.on(http.MethodPut, projectsA+"/apps/web/secrets/API_KEY", 200, `{"name":"API_KEY","set":true}`)
 			},
-			expect: []string{"PUT " + projectsA + "/apps/web/secrets/API_KEY"},
+			expect: []string{"GET " + projectsA + "/apps/web/", "PUT " + projectsA + "/apps/web/secrets/API_KEY"},
 			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
-				if calls[0].Body != `{"value":"s3cr3t-value"}` {
-					t.Errorf("body = %s", calls[0].Body)
+				if calls[1].Body != `{"value":"s3cr3t-value"}` {
+					t.Errorf("body = %s", calls[1].Body)
 				}
-				if out["name"] != "API_KEY" || out["set"] != true || strings.Contains(realJSON(out, nil), "s3cr3t") {
+				if out["name"] != "API_KEY" || out["set"] != true || out["replaced"] != false || strings.Contains(realJSON(out, nil), "s3cr3t") {
 					t.Errorf("out = %v", out)
 				}
 			},
@@ -128,7 +129,7 @@ func appMoreRouteCases() []routeCase {
 		},
 		{
 			name: "connect_app_repo", tool: "connect_app_repo", features: gitOn,
-			args: map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web", "builder": "dockerfile", "build_args": map[string]any{"NODE_ENV": "production"}},
+			args: map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web", "builder": "dockerfile", "root_dir": "apps/web", "dockerfile_path": "Dockerfile.prod", "build_args": map[string]any{"NODE_ENV": "production"}},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodPut, projectsA+"/apps/web/git", 200, realJSON(sitebuilds.AppConnectResult{
 					Connection: &sitebuilds.AppConnection{AppID: "web", GitSource: sitebuilds.GitSource{Repository: "acme/web", InstallationID: 77, ConnectedBy: "user-1"},
@@ -154,19 +155,26 @@ func appMoreRouteCases() []routeCase {
 			},
 		},
 		{
-			name: "connect_app_repo keeps the current build arguments", tool: "connect_app_repo", features: gitOn,
+			name: "connect_app_repo keeps the current settings", tool: "connect_app_repo", features: gitOn,
 			args: map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web"},
 			setup: func(f *fakeRoutes) {
-				f.on(http.MethodGet, projectsA+"/apps/web/git", 200, `{"connected":true,"connection":{"repository":"acme/web","settings":{"buildArgs":{"KEPT":"1"}}}}`)
-				f.on(http.MethodPut, projectsA+"/apps/web/git", 200, `{"connection":{"repository":"acme/web","settings":{"buildArgs":{"KEPT":"1"}}}}`)
+				current := `{"repository":"acme/web","settings":{"rootDir":"apps/web","dockerfilePath":"Dockerfile.prod","buildArgs":{"KEPT":"arg-value-4711"}}}`
+				f.on(http.MethodGet, projectsA+"/apps/web/git", 200, `{"connected":true,"connection":`+current+`}`)
+				f.on(http.MethodPut, projectsA+"/apps/web/git", 200, `{"connection":`+current+`}`)
 			},
 			expect: []string{"GET " + projectsA + "/apps/web/git", "PUT " + projectsA + "/apps/web/git"},
 			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
-				if !strings.Contains(calls[1].Body, `"KEPT":"1"`) {
-					t.Errorf("build arguments not kept: %s", calls[1].Body)
+				for _, want := range []string{`"KEPT":"arg-value-4711"`, `"rootDir":"apps/web"`, `"dockerfilePath":"Dockerfile.prod"`} {
+					if !strings.Contains(calls[1].Body, want) {
+						t.Errorf("not kept, body lacks %s: %s", want, calls[1].Body)
+					}
 				}
-				if connection, _ := out["connection"].(map[string]any); strings.Contains(realJSON(connection, nil), `"1"`) {
-					t.Errorf("connection shows a build argument value: %v", connection)
+				connection, _ := out["connection"].(map[string]any)
+				if strings.Contains(realJSON(connection, nil), "arg-value-4711") || connection["rootDir"] != "apps/web" {
+					t.Errorf("connection = %v", connection)
+				}
+				if names, _ := connection["buildArgNames"].([]any); len(names) != 1 || names[0] != "KEPT" {
+					t.Errorf("buildArgNames = %v", names)
 				}
 			},
 		},
@@ -227,6 +235,7 @@ func ptr[T any](value T) *T { return &value }
 // A secret value is write-only: no tool reads one, and the tool never echoes what it was given.
 func TestSetAppSecretNeverEchoesTheValue(t *testing.T) {
 	f := newFakeRoutes()
+	f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","env":[]}`)
 	f.on(http.MethodPut, projectsA+"/apps/web/secrets/API_KEY", 200, `{"name":"API_KEY","set":true}`)
 	cs := session(t, f, &recordingAudit{}, writeCaller())
 	res := callTool(t, cs, "set_app_secret", map[string]any{"project_id": testProjectA, "app_id": "web", "name": "API_KEY", "value": "s3cr3t-value"})
@@ -239,8 +248,47 @@ func TestSetAppSecretNeverEchoesTheValue(t *testing.T) {
 			t.Errorf("accepted %v", bad)
 		}
 	}
-	if len(f.calls) != 1 {
-		t.Errorf("calls = %d, want only the good one", len(f.calls))
+	if len(f.calls) != 2 {
+		t.Errorf("calls = %d, want the read and the write of the good one", len(f.calls))
+	}
+}
+
+// A secret never silently replaces a literal or a database reference: the user decides that.
+func TestSetAppSecretRefusesToReplaceAVariableOfAnotherKind(t *testing.T) {
+	for kind, env := range map[string]string{
+		"literal":   `{"name":"API_KEY","kind":"literal","value":"plain"}`,
+		"reference": `{"name":"API_KEY","kind":"reference","reference":{"sourceKind":"database","sourceName":"main"}}`,
+	} {
+		f := newFakeRoutes()
+		f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","env":[`+env+`]}`)
+		res := callTool(t, session(t, f, &recordingAudit{}, writeCaller()), "set_app_secret",
+			map[string]any{"project_id": testProjectA, "app_id": "web", "name": "API_KEY", "value": "v"})
+		if !res.IsError || !strings.Contains(resultText(res), kind) || !strings.Contains(resultText(res), "remove_env") {
+			t.Errorf("%s: result = %s", kind, resultText(res))
+		}
+		for _, call := range f.calls {
+			if call.Method == http.MethodPut {
+				t.Errorf("%s: the variable was replaced", kind)
+			}
+		}
+	}
+}
+
+func TestSetAppSecretSaysWhenItReplacedASecret(t *testing.T) {
+	f := newFakeRoutes()
+	f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","env":[{"name":"API_KEY","kind":"secret","secret":{"path":"p","key":"value"}}]}`)
+	f.on(http.MethodPut, projectsA+"/apps/web/secrets/API_KEY", 200, `{"name":"API_KEY","set":true}`)
+	out := structured(t, callTool(t, session(t, f, &recordingAudit{}, writeCaller()), "set_app_secret",
+		map[string]any{"project_id": testProjectA, "app_id": "web", "name": "API_KEY", "value": "v"}))
+	if out["replaced"] != true {
+		t.Errorf("out = %v", out)
+	}
+}
+
+func TestSetAppSecretWarningPointsAtTheAppsPageNotEdgeFunctions(t *testing.T) {
+	text := toolDescriptions(t)["set_app_secret"]
+	if strings.Contains(text, "Edge Functions") || !strings.Contains(text, "Containers") {
+		t.Errorf("description = %s", text)
 	}
 }
 
@@ -256,12 +304,25 @@ func TestAppDomainsExplainAnInstallWithoutThem(t *testing.T) {
 func TestConnectAppRepoSendsTheUserToSignInFirst(t *testing.T) {
 	f := newFakeRoutes()
 	f.on(http.MethodGet, projectsA+"/apps/web/git", 200, `{"connected":false,"connection":null}`)
-	f.on(http.MethodPut, projectsA+"/apps/web/git", 403, `{"error":"sign in to GitHub first"}`)
+	f.on(http.MethodPut, projectsA+"/apps/web/git", 403, `{"error":"sign in to GitHub from this site first: your sign-in has to show you can read that repository"}`)
 	settings := testSettings
 	settings.Features = features.NewStatic(features.AppGitBuilds)
 	res := callTool(t, sessionWith(t, f, &recordingAudit{}, writeCaller(), settings), "connect_app_repo",
 		map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web"})
 	if !res.IsError || !strings.Contains(resultText(res), "GitHub") || !strings.Contains(resultText(res), "never through MCP") {
+		t.Fatalf("result = %s", resultText(res))
+	}
+}
+
+// A role refusal is the route's own words; only the GitHub sign-in refusal sends the user to Studio.
+func TestConnectAppRepoSeparatesARoleRefusalFromTheSignIn(t *testing.T) {
+	f := newFakeRoutes()
+	f.on(http.MethodPut, projectsA+"/apps/web/git", 403, `{"error":"insufficient project role"}`)
+	settings := testSettings
+	settings.Features = features.NewStatic(features.AppGitBuilds)
+	res := callTool(t, sessionWith(t, f, &recordingAudit{}, writeCaller(), settings), "connect_app_repo",
+		map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web", "root_dir": "x", "dockerfile_path": "y", "build_args": map[string]any{}})
+	if !res.IsError || !strings.Contains(resultText(res), "insufficient project role") || strings.Contains(resultText(res), "sign in with GitHub") {
 		t.Fatalf("result = %s", resultText(res))
 	}
 }

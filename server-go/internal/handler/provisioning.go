@@ -619,9 +619,6 @@ func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 			lines = v
 		}
 	}
-	if lines > 5000 {
-		lines = 5000
-	}
 	since := logRanges["1h"]
 	if v := query.Get("since"); v != "" {
 		var ok bool
