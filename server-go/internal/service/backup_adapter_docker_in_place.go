@@ -26,6 +26,14 @@ var errInPlaceTargetMalformed = errors.New("the in-place restore target carries 
 // InPlaceRecoveryTarget resolves req against the project's own backups before
 // anything changes. See InPlaceCluster.
 func (a *DockerBackupAdapter) InPlaceRecoveryTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (map[string]interface{}, error) {
+	a.mu.RLock()
+	dc := a.docker
+	a.mu.RUnlock()
+	if dc != nil {
+		if err := provisioner.RequireHostFirewall(ctx, dc); err != nil {
+			return nil, err
+		}
+	}
 	base, err := a.resolveSourceBackup(ctx, inst, req)
 	if err != nil {
 		return nil, err
@@ -68,6 +76,10 @@ func (a *DockerBackupAdapter) ReplaceDatabase(ctx context.Context, inst *domain.
 	gatewayTLS, err := keptGatewayTLS(ctx, dc, inst)
 	if err != nil {
 		return err
+	}
+	// Last before the old database goes: the new one must be able to start.
+	if err := provisioner.RequireHostFirewall(ctx, dc); err != nil {
+		return fmt.Errorf("%w: %w", ErrDatabaseNotReplaced, err)
 	}
 	if err := a.retireContainer(ctx, dc, inst); err != nil {
 		return err

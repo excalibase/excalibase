@@ -8,6 +8,8 @@ set -eu
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+# The engine's own answer on whether it is rootless; a refusal below sets its own.
+export PODMAN_INFO="echo true"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 sh "$DIR/../init.sh" --env-file "$WORK/.env" --domain example.com --admin-email me@example.com \
@@ -108,6 +110,13 @@ refused_rootful() {
 : >"$WORK/podman.sock"
 engine_socket_arg="--engine-socket /etc/passwd" refused_rootful
 engine_socket_arg="--engine-socket $WORK/podman.sock" refused_rootful INIT_UID=0
+# The file's owner proves nothing alone: a chowned rootful socket, or an engine that does not answer.
+engine_socket_arg="--engine-socket $WORK/podman.sock" refused_rootful PODMAN_INFO="echo false"
+if env PODMAN_INFO=false CGROUP_CONTROLLERS="cpu memory" UNPRIVILEGED_PORT_START=80 sh "$DIR/../init.sh" --env-file "$WORK/mute.env" --domain example.com \
+  --admin-email me@example.com --engine podman --engine-socket "$WORK/podman.sock" >"$WORK/out" 2>&1; then
+  fail "podman accepted with an engine that does not say it is rootless"
+fi
+grep -q "podman.socket" "$WORK/out" || fail "the refusal does not say how to start the socket: $(cat "$WORK/out")"
 # No socket to check is no proof of a rootless engine.
 if env CGROUP_CONTROLLERS="cpu memory" UNPRIVILEGED_PORT_START=80 sh "$DIR/../init.sh" --env-file "$WORK/nosock.env" --domain example.com \
   --admin-email me@example.com --engine podman --engine-socket "$WORK/absent.sock" >"$WORK/out" 2>&1; then

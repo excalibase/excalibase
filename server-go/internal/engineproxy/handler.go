@@ -179,7 +179,7 @@ func (h *Handler) authorizeContainer(r *http.Request, id, action string) error {
 		case "POST /start":
 			return h.beforeStart(r.Context(), id)
 		case "POST /stop":
-			return h.beforeStop(r.Context(), id)
+			return h.beforeStop(r, id)
 		}
 	}
 	return nil
@@ -265,6 +265,8 @@ func (h *Handler) checkBody(r *http.Request, check func([]byte) error) error {
 func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusForbidden
 	switch {
+	case errors.Is(err, errFirewallDown):
+		status = http.StatusServiceUnavailable
 	case errors.Is(err, errNoSuchThing):
 		status = http.StatusNotFound
 	case !errors.Is(err, ErrRefused) && !errors.Is(err, errNotManaged):

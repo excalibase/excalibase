@@ -1582,11 +1582,12 @@ func buildBackupService(
 
 	if cfg.ProvisionerMode == "docker" && dockerClient != nil {
 		dockerSDK, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
-			Host:        os.Getenv("DOCKER_HOST"),
-			CertPath:    os.Getenv("DOCKER_CERT_PATH"),
-			TLSVerify:   os.Getenv("DOCKER_TLS_VERIFY") != "",
-			BindAddress: dbBindAddr(cfg),
-			Network:     cfg.DockerNetwork,
+			Host:              os.Getenv("DOCKER_HOST"),
+			CertPath:          os.Getenv("DOCKER_CERT_PATH"),
+			TLSVerify:         os.Getenv("DOCKER_TLS_VERIFY") != "",
+			BindAddress:       dbBindAddr(cfg),
+			Network:           cfg.DockerNetwork,
+			FirewallContainer: os.Getenv("HOST_FIREWALL_CONTAINER"),
 		})
 		if err == nil {
 			runner := service.NewDockerBackupRunner(dockerSDK.RawClient())
@@ -3106,11 +3107,12 @@ func dbBindAddr(cfg config.AppConfig) string {
 func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient, sqlStore storage.PlatformStore) (*provisioner.Factory, provisioner.DockerClient) {
 	if cfg.ProvisionerMode == "docker" {
 		dockerClient, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
-			Host:        cfg.DockerHost,
-			CertPath:    cfg.DockerCertPath,
-			TLSVerify:   cfg.DockerTLSVerify,
-			BindAddress: dbBindAddr(cfg),
-			Network:     cfg.DockerNetwork,
+			Host:              cfg.DockerHost,
+			CertPath:          cfg.DockerCertPath,
+			TLSVerify:         cfg.DockerTLSVerify,
+			BindAddress:       dbBindAddr(cfg),
+			Network:           cfg.DockerNetwork,
+			FirewallContainer: os.Getenv("HOST_FIREWALL_CONTAINER"),
 		})
 		if err != nil {
 			log.Fatalf("docker provisioner: %v", err)

@@ -21,6 +21,8 @@ var (
 	// ErrInPlaceNoBackups refuses an in-place restore of a project with
 	// backups off: there is nothing to restore from.
 	ErrInPlaceNoBackups = errors.New("this project has no backups to restore from")
+	// ErrDatabaseNotReplaced is a replace that stopped before it changed anything.
+	ErrDatabaseNotReplaced = errors.New("the database was not replaced")
 	// ErrInPlaceRestoreNotConfigured is a platform wired without in-place restores.
 	ErrInPlaceRestoreNotConfigured = errors.New("restore: in-place restore is not configured")
 )
@@ -124,7 +126,21 @@ func (r *InPlaceRestore) Restore(ctx context.Context, cluster InPlaceCluster, pr
 		return r.setStatus(inst.ProjectID, domain.StatusActive, "", "")
 	}
 	log.Printf("in-place restore %s: %v", projectID, cause)
+	if rollback != nil && errors.Is(cause, ErrDatabaseNotReplaced) {
+		return r.resumeUnchanged(ctx, inst, cause)
+	}
 	return r.rollBack(ctx, cluster, inst, rollback, cause)
+}
+
+// resumeUnchanged returns a project whose database was never replaced to service.
+func (r *InPlaceRestore) resumeUnchanged(ctx context.Context, inst *domain.DatabaseInstance, cause error) error {
+	if err := r.projects.RestartReplication(ctx, inst); err != nil {
+		log.Printf("in-place restore %s: restart replication: %v", inst.ProjectID, err)
+	}
+	if err := r.setStatus(inst.ProjectID, domain.StatusActive, "", ""); err != nil {
+		return err
+	}
+	return &InPlaceRestoreError{Public: "the restore could not start, so nothing was changed; try again", Cause: cause}
 }
 
 // safetyPoint is the backup a failed replace is rolled back to. A project

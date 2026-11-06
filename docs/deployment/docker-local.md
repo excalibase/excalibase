@@ -269,7 +269,10 @@ boot) and refuses to before that, however long the firewall stays down. It resta
 crashed one within about 5 seconds, and leaves one stopped by the platform (a pause)
 stopped, across a reboot too. Tenants of an older release are moved over on the first
 start. To keep one down by hand, pause its project: `docker stop` looks like a crash and
-it comes back. Downgrading to a release before this one leaves them without a restart
+it comes back. A major upgrade or an in-place restore checks the firewall before it changes
+anything, and one caught by a firewall outage stays open and is finished once it is healthy.
+If the record of stopped tenants (`stopped`, on the `excalibase-platform-bridges` volume) cannot
+be read, the proxy starts no tenant on its own and refuses stops, and logs what to do. Downgrading to a release before this one leaves them without a restart
 policy, so start them after each reboot. Apps keep Docker's restart policy: the firewall
 adds nothing to their project networks.
 

@@ -98,6 +98,9 @@ const (
 
 // InPlaceRecoveryTarget resolves req against the project's own runs.
 func (a *HostMySQLBackupAdapter) InPlaceRecoveryTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (map[string]interface{}, error) {
+	if err := a.mysql.RequireHostFirewall(ctx); err != nil {
+		return nil, err
+	}
 	runs, marks, err := a.catalog(ctx, inst.ProjectID)
 	if err != nil {
 		return nil, err
@@ -141,6 +144,10 @@ func (a *HostMySQLBackupAdapter) ReplaceDatabase(ctx context.Context, inst *doma
 	}
 	unlock := a.lock(inst.ProjectID)
 	defer unlock()
+	// Last before the data goes: the rebuilt database must be able to start.
+	if err := a.mysql.RequireHostFirewall(ctx); err != nil {
+		return fmt.Errorf("%w: %w", ErrDatabaseNotReplaced, err)
+	}
 	if err := a.mysql.RemoveData(ctx, inst.ProjectID); err != nil {
 		return fmt.Errorf("remove the project's database: %w", err)
 	}

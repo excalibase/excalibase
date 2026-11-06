@@ -23,6 +23,7 @@ import (
 // hostEngine is a container engine in memory: names are ids, every exec
 // answers, and what is fed on stdin is kept.
 type hostEngine struct {
+	firewallDown bool
 	mu         sync.Mutex
 	containers map[string]bool // name → running
 	specs      map[string]provisioner.ContainerSpec
@@ -399,3 +400,5 @@ func TestSingleHostMySQLReaderIsFiledRotatedAndSessionsEnd(t *testing.T) {
 		}
 	}
 }
+
+func (e *hostEngine) HostFirewallHealthy(context.Context) (bool, error) { return !e.firewallDown, nil }

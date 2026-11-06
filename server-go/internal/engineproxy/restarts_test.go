@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const testFirewall = "excalibase-host-firewall"
@@ -20,9 +23,9 @@ type restartContainer struct {
 	mode   string
 	// networks are what the engine reports attached; empty is the mode alone.
 	networks []string
-	policy string
-	status string
-	health string
+	policy   string
+	status   string
+	health   string
 }
 
 // restartEngine holds containers by id, with the engine's answers the supervisor reads.
@@ -31,6 +34,11 @@ type restartEngine struct {
 	containers map[string]*restartContainer
 	started    []string
 	created    string
+	// stopAnswer answers a stop, for an engine that fails one.
+	stopAnswer int
+	// onStart runs on each start, under the lock; hang blocks those ids until their caller gives up.
+	onStart func(id string)
+	hang    map[string]bool
 }
 
 func (e *restartEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -82,10 +90,23 @@ func (e *restartEngine) act(w http.ResponseWriter, r *http.Request, id, action s
 			"Config":     map[string]any{"Labels": found.labels},
 			"HostConfig": map[string]any{"NetworkMode": found.mode, "RestartPolicy": map[string]any{"Name": found.policy}}})
 	case "start":
+		if e.hang[id] {
+			e.mu.Unlock()
+			<-r.Context().Done()
+			e.mu.Lock()
+			return
+		}
+		if e.onStart != nil {
+			e.onStart(id)
+		}
 		found.status = "running"
 		e.started = append(e.started, id)
 		w.WriteHeader(http.StatusNoContent)
 	case "stop":
+		if e.stopAnswer != 0 {
+			http.Error(w, `{"message":"cannot stop"}`, e.stopAnswer)
+			return
+		}
 		found.status = "exited"
 		w.WriteHeader(http.StatusNoContent)
 	case "update":
@@ -197,7 +218,7 @@ func TestAStartIsRefusedUnlessTheFirewallIsHealthy(t *testing.T) {
 	for name, wall := range map[string]*restartContainer{
 		"unhealthy": firewall("running", "unhealthy"),
 		"starting":  firewall("running", "starting"),
-		"stopped":   firewall("exited", "unhealthy"),
+		"stopped":   firewall("exited", "healthy"), // an engine keeps the last health of what exited
 		"no check":  firewall("running", ""),
 		"missing":   nil,
 	} {
@@ -207,7 +228,7 @@ func TestAStartIsRefusedUnlessTheFirewallIsHealthy(t *testing.T) {
 		}
 		engine, handler, _ := restartProxy(t, containers)
 		resp := serve(t, handler, http.MethodPost, "/containers/excalibase-p1-postgres/start", "")
-		if resp.StatusCode != http.StatusForbidden || len(engine.startedOnly()) != 0 {
+		if resp.StatusCode != http.StatusServiceUnavailable || len(engine.startedOnly()) != 0 {
 			t.Errorf("%s: answered %d, started %v", name, resp.StatusCode, engine.startedOnly())
 		}
 	}
@@ -234,7 +255,7 @@ func TestAStartOnAGuardedNetworkWaitsWhateverTheMode(t *testing.T) {
 	both.mode, both.networks = "excalibase-proj-p1", []string{"excalibase-proj-p1", "excalibase-tenants"}
 	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"excalibase-p1-app": both, testFirewall: firewall("running", "starting")})
 	resp := serve(t, handler, http.MethodPost, "/containers/excalibase-p1-app/start", "")
-	if resp.StatusCode != http.StatusForbidden || len(engine.startedOnly()) != 0 {
+	if resp.StatusCode != http.StatusServiceUnavailable || len(engine.startedOnly()) != 0 {
 		t.Fatalf("answered %d, started %v", resp.StatusCode, engine.startedOnly())
 	}
 }
@@ -307,7 +328,7 @@ func TestARefusedStartStillEndsAStop(t *testing.T) {
 		t.Fatalf("stop answered %d", resp.StatusCode)
 	}
 	engine.containers[testFirewall].health = "unhealthy"
-	if resp := serve(t, handler, http.MethodPost, "/containers/excalibase-p1-postgres/start", ""); resp.StatusCode != http.StatusForbidden {
+	if resp := serve(t, handler, http.MethodPost, "/containers/excalibase-p1-postgres/start", ""); resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("start answered %d", resp.StatusCode)
 	}
 	engine.containers[testFirewall].health = "healthy"
@@ -369,5 +390,247 @@ func TestWithoutAGuardRestartPoliciesAndStartsPassThrough(t *testing.T) {
 	}
 	if resp := serve(t, handler, http.MethodPost, "/containers/excalibase-p1-postgres/start", ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("start answered %d", resp.StatusCode)
+	}
+}
+
+// Finding: a stop the engine failed leaves a running tenant that nothing would restart.
+func TestAStopTheEngineFailedIsNotRecorded(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{
+		"excalibase-p1-postgres": tenant("running"), testFirewall: firewall("running", "healthy"),
+	})
+	engine.stopAnswer = http.StatusInternalServerError
+	if resp := serve(t, handler, http.MethodPost, "/containers/excalibase-p1-postgres/stop", ""); resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("stop answered %d", resp.StatusCode)
+	}
+	if handler.restarts.isStopped("excalibase-p1-postgres") {
+		t.Fatal("a failed stop stays on the record")
+	}
+	engine.containers["excalibase-p1-postgres"].status = "exited"
+	handler.superviseOnce(context.Background())
+	if started := engine.startedOnly(); len(started) != 1 {
+		t.Fatalf("started %v: the crash after a failed stop was lost", started)
+	}
+}
+
+// A failed stop of what was already stopped on purpose keeps that record.
+func TestAFailedStopKeepsAnEarlierRecord(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"excalibase-p1-postgres": tenant("exited")})
+	if err := handler.restarts.setStopped("excalibase-p1-postgres", true); err != nil {
+		t.Fatal(err)
+	}
+	engine.stopAnswer = http.StatusInternalServerError
+	serve(t, handler, http.MethodPost, "/containers/excalibase-p1-postgres/stop", "")
+	if !handler.restarts.isStopped("excalibase-p1-postgres") {
+		t.Fatal("a failed stop forgot an earlier stop")
+	}
+}
+
+func TestStopRecordSurvivesARestartExactly(t *testing.T) {
+	engine, handler, file := restartProxy(t, map[string]*restartContainer{"a": tenant("exited"), "b": tenant("exited")})
+	for _, id := range []string{"a", "b"} {
+		if err := handler.restarts.setStopped(id, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upstream := httptest.NewServer(engine)
+	t.Cleanup(upstream.Close)
+	again := guarded(t, upstream.URL, file)
+	if !again.restarts.isStopped("a") || !again.restarts.isStopped("b") || again.restarts.corrupt {
+		t.Fatalf("record after a restart: %+v", again.restarts.stopped)
+	}
+}
+
+// Whatever is left of the file, a reboot starts nothing it may have been told to keep down.
+func TestAnUnreadableStopRecordHoldsTheSupervisorBack(t *testing.T) {
+	for name, content := range map[string]string{
+		"empty":     "",
+		"truncated": stoppedHeader + "\nabc\n",
+		"garbage":   "\x00\x00\x00\x00",
+		"no header": "abc\n" + stoppedEnd + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			old := tenant("running")
+			old.policy = "unless-stopped"
+			engine := &restartEngine{containers: map[string]*restartContainer{"crashed": tenant("exited"), "old": old, testFirewall: firewall("running", "healthy")}}
+			upstream := httptest.NewServer(engine)
+			t.Cleanup(upstream.Close)
+			file := filepath.Join(t.TempDir(), "stopped")
+			if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			handler := guarded(t, upstream.URL, file)
+			handler.superviseOnce(context.Background())
+			if started := engine.startedOnly(); len(started) != 0 {
+				t.Fatalf("started %v from a record it cannot read", started)
+			}
+			if old.policy != "no" {
+				t.Fatalf("an older tenant keeps %s: a reboot would start it unguarded", old.policy)
+			}
+			if resp := serve(t, handler, http.MethodPost, "/containers/crashed/stop", ""); resp.StatusCode == http.StatusNoContent {
+				t.Fatal("a stop that cannot be recorded went through")
+			}
+			if got, _ := os.ReadFile(file); string(got) != content {
+				t.Fatalf("the unreadable record was overwritten: %q", got)
+			}
+		})
+	}
+}
+
+// A rename is only durable once the data and the directory are on disk.
+func TestStopRecordIsSyncedBeforeAndAfterTheRename(t *testing.T) {
+	_, handler, file := restartProxy(t, map[string]*restartContainer{})
+	var synced []string
+	before := syncFile
+	syncFile = func(f *os.File) error {
+		_, statErr := os.Stat(file)
+		synced = append(synced, f.Name()+":"+strconv.FormatBool(statErr == nil))
+		return f.Sync()
+	}
+	t.Cleanup(func() { syncFile = before })
+	if err := handler.restarts.setStopped("a", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(synced) != 2 || !strings.HasSuffix(synced[0], ":false") || synced[1] != filepath.Dir(file)+":true" {
+		t.Fatalf("synced %v", synced)
+	}
+}
+
+// A firewall that goes down during a pass stops the rest of the pass.
+func TestEachStartChecksTheFirewallAgain(t *testing.T) {
+	wall := firewall("running", "healthy")
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"a": tenant("exited"), "b": tenant("exited"), testFirewall: wall})
+	handler.restarts.workers = 1
+	engine.onStart = func(string) { wall.health = "unhealthy" }
+	handler.superviseOnce(context.Background())
+	if started := engine.startedOnly(); len(started) != 1 {
+		t.Fatalf("started %v after the firewall went down", started)
+	}
+}
+
+func TestAHungStartHoldsNoOtherTenantBack(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{
+		"hung": tenant("exited"), "fine": tenant("exited"), testFirewall: firewall("running", "healthy"),
+	})
+	engine.hang = map[string]bool{"hung": true}
+	handler.restarts.startTimeout = 100 * time.Millisecond
+	began := time.Now()
+	handler.superviseOnce(context.Background())
+	if started := engine.startedOnly(); len(started) != 1 || started[0] != "fine" {
+		t.Fatalf("started %v", started)
+	}
+	if elapsed := time.Since(began); elapsed > 5*time.Second {
+		t.Fatalf("a hung start held the pass for %s", elapsed)
+	}
+}
+
+// Disk tools and build steps on no network have nothing a firewall guards.
+func TestAContainerOnNoNetworkNeverWaits(t *testing.T) {
+	step := tenant("exited")
+	step.mode, step.networks = "none", []string{"none"}
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"excalibase-build-1-prepare": step, testFirewall: firewall("running", "starting")})
+	if resp := serve(t, handler, http.MethodPost, "/containers/excalibase-build-1-prepare/start", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("start answered %d", resp.StatusCode)
+	}
+	if !restartExempt(testPolicy(), "none", nil) || restartExempt(testPolicy(), "none", []string{"excalibase-tenants"}) {
+		t.Fatal("network none is exempt alone")
+	}
+	if supervised(testPolicy(), map[string]string{ManagedLabel: "true"}, "none") {
+		t.Fatal("a container on no network is supervised")
+	}
+	if len(engine.startedOnly()) != 1 {
+		t.Fatalf("started %v", engine.startedOnly())
+	}
+}
+
+// The refusal promises the start follows: that holds for one never started too.
+func TestARefusedStartOfANewTenantFollowsTheFirewall(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{
+		"excalibase-p1-postgres": tenant("created"), "never-asked": tenant("created"), testFirewall: firewall("running", "starting"),
+	})
+	if resp := serve(t, handler, http.MethodPost, "/containers/excalibase-p1-postgres/start", ""); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("start answered %d", resp.StatusCode)
+	}
+	engine.containers[testFirewall].health = "healthy"
+	handler.superviseOnce(context.Background())
+	if started := engine.startedOnly(); len(started) != 1 || started[0] != "excalibase-p1-postgres" {
+		t.Fatalf("started %v", started)
+	}
+}
+
+// Started by hand after a stop through the proxy, it is looked after again.
+func TestARunningTenantWithAFinishedStopLeavesTheRecord(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{
+		"excalibase-p1-postgres": tenant("running"), testFirewall: firewall("running", "healthy"),
+	})
+	serve(t, handler, http.MethodPost, "/containers/excalibase-p1-postgres/stop", "")
+	engine.containers["excalibase-p1-postgres"].status = "running" // docker start, not through the proxy
+	handler.superviseOnce(context.Background())
+	engine.containers["excalibase-p1-postgres"].status = "exited"
+	handler.superviseOnce(context.Background())
+	if started := engine.startedOnly(); len(started) != 1 {
+		t.Fatalf("started %v: a tenant started by hand stays down after a crash", started)
+	}
+}
+
+// Still running because its stop has not answered yet: the record must stand.
+func TestAStopInFlightKeepsTheRecord(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{
+		"excalibase-p1-postgres": tenant("running"), testFirewall: firewall("running", "healthy"),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/containers/excalibase-p1-postgres/stop", nil)
+	if err := handler.beforeStop(req, "excalibase-p1-postgres"); err != nil {
+		t.Fatal(err)
+	}
+	handler.superviseOnce(context.Background())
+	engine.containers["excalibase-p1-postgres"].status = "exited"
+	handler.superviseOnce(context.Background())
+	if started := engine.startedOnly(); len(started) != 0 {
+		t.Fatalf("started %v during its own stop", started)
+	}
+}
+
+func TestSupervisedIsAManagedContainerOfItsOwn(t *testing.T) {
+	p := testPolicy()
+	if supervised(p, map[string]string{}, "excalibase-tenants") {
+		t.Error("an unmanaged container is supervised")
+	}
+	if !supervised(p, map[string]string{ManagedLabel: "true"}, "excalibase-tenants") {
+		t.Error("a tenant is not supervised")
+	}
+}
+
+// Removed containers leave both records.
+func TestForgetDropsWhatTheEngineNoLongerHolds(t *testing.T) {
+	engine, handler, file := restartProxy(t, map[string]*restartContainer{"gone": tenant("exited"), "kept": tenant("exited"), testFirewall: firewall("running", "healthy")})
+	for _, id := range []string{"gone", "kept"} {
+		if err := handler.restarts.setStopped(id, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler.superviseOnce(context.Background())
+	if !handler.restarts.adopted["gone"] {
+		t.Fatal("not checked for an older policy")
+	}
+	delete(engine.containers, "gone")
+	handler.superviseOnce(context.Background())
+	if handler.restarts.isStopped("gone") || handler.restarts.adopted["gone"] || !handler.restarts.isStopped("kept") {
+		t.Fatalf("stopped %v adopted %v", handler.restarts.stopped, handler.restarts.adopted)
+	}
+	if raw, _ := os.ReadFile(file); strings.Contains(string(raw), "gone") || !strings.Contains(string(raw), "kept") {
+		t.Fatalf("file %q", raw)
+	}
+}
+
+func TestEngineRootlessReadsTheEngine(t *testing.T) {
+	for options, want := range map[string]bool{`["name=seccomp","name=rootless"]`: true, `["name=seccomp"]`: false} {
+		engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"SecurityOptions":` + options + `}`))
+		}))
+		t.Cleanup(engine.Close)
+		target, _ := url.Parse(engine.URL)
+		got, err := NewHandler(testPolicy(), target, http.DefaultTransport).EngineRootless(context.Background())
+		if err != nil || got != want {
+			t.Errorf("%s: got %v, %v", options, got, err)
+		}
 	}
 }

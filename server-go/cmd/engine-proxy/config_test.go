@@ -243,3 +243,15 @@ func TestLoadConfigRefusesHalfARestartGuard(t *testing.T) {
 		}
 	}
 }
+
+// ENGINE_SOCKET_UID=0 claims a rootless engine: the proxy asks it, wherever the setting came from.
+func TestLoadConfigAsksTheEngineWhenTheSocketUIDClaimsRootless(t *testing.T) {
+	settings := map[string]string{"PROXY_NETWORKS": "excalibase-tenants"}
+	if cfg, err := loadConfig(env(settings)); err != nil || cfg.mustBeRootless {
+		t.Fatalf("docker: %+v, %v", cfg.mustBeRootless, err)
+	}
+	settings["ENGINE_SOCKET_UID"] = "0"
+	if cfg, err := loadConfig(env(settings)); err != nil || !cfg.mustBeRootless {
+		t.Fatalf("uid 0: %+v, %v", cfg.mustBeRootless, err)
+	}
+}

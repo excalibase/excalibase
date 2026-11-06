@@ -192,6 +192,11 @@ func (p *DockerMySQLProvisioner) ConfigureBackup(context.Context, string, string
 // StopReplication has nothing to stop: a single host runs no CDC watcher.
 func (p *DockerMySQLProvisioner) StopReplication(context.Context, string, string) error { return nil }
 
+// RequireHostFirewall answers ErrHostFirewallDown unless the database could start now.
+func (p *DockerMySQLProvisioner) RequireHostFirewall(ctx context.Context) error {
+	return RequireHostFirewall(ctx, p.docker)
+}
+
 // Pause stops the container, keeping its volume, and returns once it is
 // observed stopped.
 func (p *DockerMySQLProvisioner) Pause(ctx context.Context, namespace, _ string) error {

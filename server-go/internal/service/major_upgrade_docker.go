@@ -140,6 +140,9 @@ func (u *DockerMajorUpgrader) Convert(ctx context.Context, inst *domain.Database
 	if renamer == nil {
 		return nothingChanged(run, errors.New(noRenameBlocker))
 	}
+	if err := provisioner.RequireHostFirewall(ctx, dc); err != nil {
+		return nothingChanged(run, err)
+	}
 	image, err := config.DockerPostgresImage(run.ToVersion)
 	if err != nil {
 		return nothingChanged(run, err)
@@ -353,6 +356,8 @@ func (u *DockerMajorUpgrader) waitLoaded(ctx context.Context, dc provisioner.Doc
 // temporary server takes socket connections only.
 var tcpReady = []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres"}
 
+const waitingForFirewallPublic = "the host firewall is not healthy, so the database cannot start yet; the upgrade is checked again every few minutes"
+
 const (
 	putBackPublic = "the upgrade did not complete, so the database was put back on Postgres %s"
 )
@@ -363,6 +368,9 @@ func (u *DockerMajorUpgrader) undo(ctx context.Context, dc provisioner.DockerCli
 	state *swap, progress UpgradeProgress, cause error) UpgradeOutcome {
 	if lost := lostRun(ctx, cause, progress); lost != nil {
 		return UpgradeOutcome{Cause: lost}
+	}
+	if err := errors.Join(hostFirewallCause(cause), provisioner.RequireHostFirewall(ctx, dc)); err != nil {
+		return waitingForFirewall(errors.Join(cause, err))
 	}
 	return u.putBack(ctx, dc, renamer, state, cause)
 }
@@ -387,6 +395,9 @@ func (u *DockerMajorUpgrader) putBack(ctx context.Context, dc provisioner.Docker
 	if lost := runLostBy(ctx); lost != nil {
 		return gaveUpPutBack(lost, errors.Join(cause, err))
 	}
+	if errors.Is(err, provisioner.ErrHostFirewallDown) {
+		return waitingForFirewall(errors.Join(cause, err))
+	}
 	if err != nil {
 		u.dropDump(ctx, dc, state.oldID)
 		return UpgradeOutcome{Public: notPutBackPublic, Cause: errors.Join(cause, err)}
@@ -409,6 +420,20 @@ func (u *DockerMajorUpgrader) putBackSteps(dc provisioner.DockerClient, renamer 
 		steps = append(steps, func(context.Context) error { return u.adapter.recordContainer(state.inst, state.oldID) })
 	}
 	return steps
+}
+
+// hostFirewallCause is cause when it is a start the firewall refused, else nil.
+func hostFirewallCause(cause error) error {
+	if errors.Is(cause, provisioner.ErrHostFirewallDown) {
+		return cause
+	}
+	return nil
+}
+
+// waitingForFirewall leaves a run for the next recovery, what is on the host as
+// it is: a refused start says nothing about the database, and nothing could be started back.
+func waitingForFirewall(cause error) UpgradeOutcome {
+	return UpgradeOutcome{Unsettled: true, Public: waitingForFirewallPublic, Cause: cause}
 }
 
 func gaveUpPutBack(lost, cause error) UpgradeOutcome {
@@ -484,6 +509,9 @@ func (u *DockerMajorUpgrader) Recover(ctx context.Context, inst *domain.Database
 	if err != nil || renamer == nil {
 		return UpgradeOutcome{Public: notPutBackPublic, Cause: errors.Join(err, errors.New(noRenameBlocker))}
 	}
+	if err := provisioner.RequireHostFirewall(ctx, dc); err != nil {
+		return waitingForFirewall(err)
+	}
 	state := &swap{inst: inst, run: run, oldID: inst.Namespace}
 	pre, err := dc.ContainerState(ctx, provisioner.PreUpgradeContainerName(inst.ProjectID, run.ID))
 	if err != nil {
@@ -500,37 +528,44 @@ func (u *DockerMajorUpgrader) Recover(ctx context.Context, inst *domain.Database
 		}
 		state.recorded = inst.Namespace != pre.ID
 	}
-	if state.newID != "" && inst.Namespace == state.newID && u.holdsNewMajor(ctx, dc, state.newID, run.ToVersion) {
-		if err := progress.Converted(ctx, u.now()); err != nil {
-			return notRecorded(err)
+	if state.newID != "" && inst.Namespace == state.newID {
+		holds, err := u.holdsNewMajor(ctx, dc, state.newID, run.ToVersion)
+		if err != nil {
+			return waitingForFirewall(err)
 		}
-		return UpgradeOutcome{Converted: true}
+		if holds {
+			if err := progress.Converted(ctx, u.now()); err != nil {
+				return notRecorded(err)
+			}
+			return UpgradeOutcome{Converted: true}
+		}
 	}
 	return u.undo(ctx, dc, renamer, state, progress, errors.New("the upgrade was interrupted"))
 }
 
 // holdsNewMajor: the new container, started if it is stopped, loaded the
-// dump in full and its data directory is on major.
-func (u *DockerMajorUpgrader) holdsNewMajor(ctx context.Context, dc provisioner.DockerClient, container, major string) bool {
+// dump in full and its data directory is on major. An error is a start the
+// host firewall refused: nothing is known of the container yet.
+func (u *DockerMajorUpgrader) holdsNewMajor(ctx context.Context, dc provisioner.DockerClient, container, major string) (bool, error) {
 	current, err := dc.ContainerState(ctx, container)
 	if err != nil || !current.Found {
-		return false
+		return false, nil
 	}
 	if !current.Running {
 		if err := provisioner.StartHoldingPort(ctx, dc, restoreStartPoller, container); err != nil {
 			log.Printf("major upgrade: start %s to check it: %v", container, err)
-			return false
+			return false, hostFirewallCause(err)
 		}
 	}
 	loaded, err := runScript(ctx, dc, container, provisioner.UpgradeStateScript())
 	if err != nil || strings.TrimSpace(loaded) != provisioner.UpgradeLoaded {
-		return false
+		return false, nil
 	}
 	onDisk, err := runScript(ctx, dc, container, provisioner.DataMajorScript())
 	if err != nil || strings.TrimSpace(onDisk) != major {
-		return false
+		return false, nil
 	}
-	return u.waitTCP(ctx, dc, container) == nil
+	return u.waitTCP(ctx, dc, container) == nil, nil
 }
 
 // WaitServing lets the network in to the new server and waits for it. See

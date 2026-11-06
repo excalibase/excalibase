@@ -52,11 +52,16 @@ type config struct {
 	bridgeNetworks []string
 	bridgesFile    string
 	restarts       *engineproxy.Restarts
+	// mustBeRootless: the settings claim rootless Podman, so the engine has to say so too.
+	mustBeRootless bool
 }
 
 // bridgesEvery is how often the bridges file is rewritten: a network
 // re-created by compose gets a new bridge.
 const bridgesEvery = 15 * time.Second
+
+// rootlessAttempts bounds, in seconds, the wait for the engine to answer whether it is rootless.
+const rootlessAttempts = 30
 
 func main() {
 	cfg, err := loadConfig(os.Getenv)
@@ -75,6 +80,9 @@ func main() {
 	}
 	target := &url.URL{Scheme: "http", Host: "engine"}
 	handler := engineproxy.NewHandler(cfg.policy, target, transport).WithUpgradeDial(dial)
+	if cfg.mustBeRootless {
+		requireRootless(handler)
+	}
 	if cfg.bridgesFile != "" {
 		go publishBridges(handler, cfg.bridgeNetworks, cfg.bridgesFile)
 	}
@@ -92,6 +100,28 @@ func main() {
 	log.Printf("engine proxy: %s -> %s, networks %v prefix %q", cfg.listen, cfg.socket, cfg.policy.Networks, cfg.policy.NetworkPrefix)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("engine proxy: %v", err)
+	}
+}
+
+// requireRootless stops the proxy, and with it everything gated on it, on an
+// engine that is not rootless under ENGINE_SOCKET_UID=0: that value exempts an
+// install from the host firewall, and only rootless Podman's bridges are safe
+// without it (EXC-683). An engine that does not answer yet gets a moment.
+func requireRootless(handler *engineproxy.Handler) {
+	var rootless bool
+	var err error
+	for attempt := 0; attempt < rootlessAttempts; attempt++ {
+		if rootless, err = handler.EngineRootless(context.Background()); err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil {
+		log.Fatalf("engine proxy: ENGINE_SOCKET_UID=0 claims rootless Podman, and the engine does not answer: %v", err)
+	}
+	if !rootless {
+		log.Fatal("engine proxy: rootful Podman is not supported: ENGINE_SOCKET_UID=0 claims a rootless engine, " +
+			"and this one is not, so nothing would guard the host from tenant containers. Use rootless Podman or Docker")
 	}
 }
 
@@ -224,6 +254,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		bridgeNetworks: bridgeNetworks,
 		bridgesFile:    bridgesFile,
 		restarts:       restarts,
+		mustBeRootless: getenv("ENGINE_SOCKET_UID") == "0",
 	}, nil
 }
 

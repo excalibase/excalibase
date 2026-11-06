@@ -4,15 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -33,113 +30,72 @@ import (
 // app replicas, which the engine restarts, and one-shot build and disk steps.
 const componentLabel = "excalibase.component"
 
-// superviseEvery bounds how long a crashed tenant stays down, and paces a crash loop.
-const superviseEvery = 5 * time.Second
+// networkNone is the mode of a container with no network at all, which the firewall has nothing to guard from.
+const networkNone = "none"
 
-// maxListBody bounds a container list: app containers carry long labels.
-const maxListBody = 16 << 20
+const (
+	// superviseEvery bounds how long a crashed tenant stays down, and paces a crash loop.
+	superviseEvery = 5 * time.Second
+	// superviseStartTimeout and superviseWorkers keep a hung start from holding the other tenants' back.
+	superviseStartTimeout = 30 * time.Second
+	superviseWorkers      = 4
+	// maxListBody bounds a container list: app containers carry long labels.
+	maxListBody = 16 << 20
+)
 
-// Restarts turns the guard on. Rootless Podman has no firewall to wait for and goes without.
-type Restarts struct {
-	// FirewallContainer must report healthy before a guarded container starts.
-	FirewallContainer string
-	// StoppedFile keeps the ids stopped on purpose across a reboot, one per line.
-	StoppedFile string
+// errFirewallDown is the proxy's refusal; a client tells it apart by the 503 and this wording.
+var errFirewallDown = fmt.Errorf("%w: the host firewall is not healthy", ErrRefused)
+
+// stopAttempt travels with a forwarded stop, for what its answer means to the record.
+type stopAttempt struct {
+	id     string
+	marked bool
 }
 
-type restartGuard struct {
-	Restarts
-	mu      sync.Mutex
-	stopped map[string]bool
-	// adopted is what this process has checked for an older release's policy.
-	adopted map[string]bool
-	waiting bool
-}
+type stopAttemptKey struct{}
 
 // WithRestarts guards tenant restarts, reading what an earlier run recorded as stopped.
 func (h *Handler) WithRestarts(restarts Restarts) (*Handler, error) {
-	guard := &restartGuard{Restarts: restarts, stopped: map[string]bool{}, adopted: map[string]bool{}}
-	raw, err := os.ReadFile(restarts.StoppedFile)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("read %s: %w", restarts.StoppedFile, err)
-	}
-	for _, id := range strings.Fields(string(raw)) {
-		guard.stopped[id] = true
+	guard, err := newRestartGuard(restarts)
+	if err != nil {
+		return nil, err
 	}
 	h.restarts = guard
+	h.forward.ModifyResponse = func(resp *http.Response) error {
+		h.stopAnswered(resp.Request.Context(), resp.StatusCode < http.StatusBadRequest)
+		return nil
+	}
+	h.forward.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		h.stopAnswered(r.Context(), false)
+		log.Printf("engine proxy: forward %s: %v", logsafe.Value(r.URL.Path), err)
+		w.WriteHeader(http.StatusBadGateway)
+	}
 	return h, nil
 }
 
-// setStopped records a change first: a stop forgotten across a reboot would look like a crash.
-func (g *restartGuard) setStopped(id string, stopped bool) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.stopped[id] == stopped {
-		return nil
+// stopAnswered ends a stop in flight; one the engine failed leaves a running
+// tenant, which a record would keep down after its next crash.
+func (h *Handler) stopAnswered(ctx context.Context, stopped bool) {
+	attempt, ok := ctx.Value(stopAttemptKey{}).(stopAttempt)
+	if !ok {
+		return
 	}
-	next := make(map[string]bool, len(g.stopped)+1)
-	for held := range g.stopped {
-		next[held] = true
+	h.restarts.endStopping(attempt.id)
+	if stopped || !attempt.marked {
+		return
 	}
-	if stopped {
-		next[id] = true
-	} else {
-		delete(next, id)
+	if err := h.restarts.setStopped(attempt.id, false); err != nil {
+		log.Printf("engine proxy: restarts: %v", err)
 	}
-	if err := g.save(next); err != nil {
-		return fmt.Errorf("record %s: %w", g.StoppedFile, err)
-	}
-	g.stopped = next
-	return nil
 }
 
-func (g *restartGuard) save(stopped map[string]bool) error {
-	ids := make([]string, 0, len(stopped))
-	for id := range stopped {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	return WriteBridges(g.StoppedFile, ids)
-}
-
-func (g *restartGuard) isStopped(id string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.stopped[id]
-}
-
-// forget drops what the engine no longer holds.
-func (g *restartGuard) forget(held map[string]bool) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for id := range g.adopted {
-		if !held[id] {
-			delete(g.adopted, id)
-		}
-	}
-	next := make(map[string]bool, len(g.stopped))
-	for id := range g.stopped {
-		if held[id] {
-			next[id] = true
-		}
-	}
-	if len(next) == len(g.stopped) {
-		return nil
-	}
-	if err := g.save(next); err != nil {
-		return fmt.Errorf("record %s: %w", g.StoppedFile, err)
-	}
-	g.stopped = next
-	return nil
-}
-
-// restartExempt: only on project networks alone is a container off the firewall's ground.
+// restartExempt: only on project networks alone, or on none at all, is a container off the firewall's ground.
 func restartExempt(p Policy, mode string, endpoints []string) bool {
-	if !p.underNetworkPrefix(mode) {
+	if mode != networkNone && !p.underNetworkPrefix(mode) {
 		return false
 	}
 	for _, network := range endpoints {
-		if !p.underNetworkPrefix(network) {
+		if network != networkNone && !p.underNetworkPrefix(network) {
 			return false
 		}
 	}
@@ -226,27 +182,37 @@ func (h *Handler) beforeStart(ctx context.Context, id string) error {
 		return err
 	}
 	if !h.firewallHealthy(ctx) {
-		return refuse("the host firewall is not healthy: tenants wait for it (docker logs %s)", h.restarts.FirewallContainer)
+		if found.State.Status == "created" {
+			h.restarts.want(found.ID)
+		}
+		return fmt.Errorf("%w: tenants wait for it (docker logs %s)", errFirewallDown, h.restarts.FirewallContainer)
 	}
 	return nil
 }
 
-// beforeStop records the stop before the container exits, so it never reads as a crash.
-// A stop the engine then fails leaves the record: such a tenant waits for its next start.
-func (h *Handler) beforeStop(ctx context.Context, id string) error {
-	found, err := h.inspectGuarded(ctx, id)
+// beforeStop records the stop before the container exits, so it never reads as
+// a crash; the answer to the stop ends it, and an error undoes the record.
+func (h *Handler) beforeStop(r *http.Request, id string) error {
+	found, err := h.inspectGuarded(r.Context(), id)
 	if err != nil {
 		return err
 	}
 	if !supervised(h.policy, found.Config.Labels, found.Host.NetworkMode) {
 		return nil
 	}
-	return h.restarts.setStopped(found.ID, true)
+	marked := !h.restarts.isStopped(found.ID)
+	h.restarts.beginStopping(found.ID)
+	if err := h.restarts.setStopped(found.ID, true); err != nil {
+		h.restarts.endStopping(found.ID)
+		return err
+	}
+	*r = *r.WithContext(context.WithValue(r.Context(), stopAttemptKey{}, stopAttempt{id: found.ID, marked: marked}))
+	return nil
 }
 
 // supervised is a project's own container on the firewall's ground; apps and one-shot steps are not.
 func supervised(p Policy, labels map[string]string, mode string) bool {
-	return labels[p.ManagedLabel] == "true" && labels[componentLabel] == "" && !p.underNetworkPrefix(mode)
+	return labels[p.ManagedLabel] == "true" && labels[componentLabel] == "" && !restartExempt(p, mode, nil)
 }
 
 func (h *Handler) firewallHealthy(ctx context.Context) bool {
@@ -255,6 +221,15 @@ func (h *Handler) firewallHealthy(ctx context.Context) bool {
 		return false
 	}
 	return state.State.Running && state.State.Health != nil && state.State.Health.Status == "healthy"
+}
+
+// EngineRootless asks the engine whether it runs rootless.
+func (h *Handler) EngineRootless(ctx context.Context) (bool, error) {
+	var info struct{ SecurityOptions []string }
+	if err := h.inspect(ctx, "/info", &info); err != nil {
+		return false, err
+	}
+	return slices.Contains(info.SecurityOptions, "name=rootless"), nil
 }
 
 // SuperviseRestarts keeps tenants running as a restart policy would, behind the firewall.
@@ -278,10 +253,34 @@ type listedContainer struct {
 
 func (h *Handler) superviseOnce(ctx context.Context) {
 	guard := h.restarts
-	list, err := h.listManaged(ctx)
+	tenants, err := h.listTenants(ctx)
 	if err != nil {
 		log.Printf("engine proxy: restarts: %v", err)
 		return
+	}
+	// Before the health check: the policy of an older tenant is what a reboot acts on.
+	for _, listed := range tenants {
+		if err := h.adopt(ctx, listed.ID); err != nil {
+			log.Printf("engine proxy: restarts: take over %s: %v", listed.ID, err)
+		}
+	}
+	if guard.corrupt {
+		log.Printf("engine proxy: restarts: %s cannot be read, so no tenant is started: it may name ones stopped on purpose. "+
+			"Start them through the platform, or remove the file and restart this container to start them all", guard.StoppedFile)
+		return
+	}
+	h.settleStartedByHand(ctx, tenants)
+	if !h.noteFirewall(h.firewallHealthy(ctx)) {
+		return
+	}
+	h.startAll(ctx, h.toStart(tenants))
+}
+
+// listTenants is the supervised containers, after the records drop what the engine no longer holds.
+func (h *Handler) listTenants(ctx context.Context) ([]listedContainer, error) {
+	list, err := h.listManaged(ctx)
+	if err != nil {
+		return nil, err
 	}
 	held := make(map[string]bool, len(list))
 	tenants := make([]listedContainer, 0, len(list))
@@ -291,16 +290,34 @@ func (h *Handler) superviseOnce(ctx context.Context) {
 			tenants = append(tenants, listed)
 		}
 	}
-	if err := guard.forget(held); err != nil {
+	if err := h.restarts.forget(held); err != nil {
 		log.Printf("engine proxy: restarts: %v", err)
 	}
-	// Before the health check: the policy of an older tenant is what a reboot acts on.
+	return tenants, nil
+}
+
+// settleStartedByHand: running with its stop answered, a tenant was started some
+// other way (docker start), and is looked after again. Read again before acting:
+// the list may predate the stop.
+func (h *Handler) settleStartedByHand(ctx context.Context, tenants []listedContainer) {
+	guard := h.restarts
 	for _, listed := range tenants {
-		if err := h.adopt(ctx, listed.ID); err != nil {
-			log.Printf("engine proxy: restarts: take over %s: %v", listed.ID, err)
+		if listed.State != "running" || !guard.isStopped(listed.ID) || guard.isStopping(listed.ID) {
+			continue
+		}
+		found, err := h.inspectGuarded(ctx, listed.ID)
+		if err != nil || found.State.Status != "running" || guard.isStopping(listed.ID) {
+			continue
+		}
+		if err := guard.setStopped(listed.ID, false); err != nil {
+			log.Printf("engine proxy: restarts: %v", err)
 		}
 	}
-	healthy := h.firewallHealthy(ctx)
+}
+
+// noteFirewall logs the changes and answers healthy.
+func (h *Handler) noteFirewall(healthy bool) bool {
+	guard := h.restarts
 	if guard.waiting == healthy {
 		guard.waiting = !healthy
 		if healthy {
@@ -309,29 +326,55 @@ func (h *Handler) superviseOnce(ctx context.Context) {
 			log.Printf("engine proxy: restarts: tenants wait, the host firewall %s is not healthy", guard.FirewallContainer)
 		}
 	}
-	if !healthy {
-		return
-	}
+	return healthy
+}
+
+// toStart is what exited on its own, and what a refused start left wanted.
+func (h *Handler) toStart(tenants []listedContainer) []string {
+	guard := h.restarts
+	var ids []string
 	for _, listed := range tenants {
-		if listed.State != "exited" || guard.isStopped(listed.ID) {
-			continue
+		switch {
+		case listed.State == "exited" && !guard.isStopped(listed.ID):
+			ids = append(ids, listed.ID)
+		case listed.State == "created" && guard.wanted(listed.ID):
+			ids = append(ids, listed.ID)
 		}
-		if err := h.engineCall(ctx, "/containers/"+url.PathEscape(listed.ID)+"/start", nil); err != nil {
-			log.Printf("engine proxy: restarts: start %s: %v", listed.ID, err)
-			continue
-		}
-		log.Printf("engine proxy: restarts: started %s", listed.ID)
 	}
+	return ids
+}
+
+// startAll starts them a few at a time, each bounded and behind a firewall checked just before.
+func (h *Handler) startAll(ctx context.Context, ids []string) {
+	guard := h.restarts
+	slots := make(chan struct{}, guard.workers)
+	var running sync.WaitGroup
+	for _, id := range ids {
+		slots <- struct{}{}
+		running.Add(1)
+		go func() {
+			defer func() { <-slots; running.Done() }()
+			if !h.firewallHealthy(ctx) {
+				return
+			}
+			started, cancel := context.WithTimeout(ctx, guard.startTimeout)
+			defer cancel()
+			if err := h.engineCall(started, "/containers/"+url.PathEscape(id)+"/start", nil); err != nil {
+				log.Printf("engine proxy: restarts: start %s: %v", id, err)
+				return
+			}
+			guard.unwant(id)
+			log.Printf("engine proxy: restarts: started %s", id)
+		}()
+	}
+	running.Wait()
 }
 
 // adopt takes an older release's tenant off the engine's policy. Stopped under
 // that policy, it was stopped on purpose: the engine would have restarted it otherwise.
 func (h *Handler) adopt(ctx context.Context, id string) error {
 	guard := h.restarts
-	guard.mu.Lock()
-	done := guard.adopted[id]
-	guard.mu.Unlock()
-	if done {
+	if guard.isAdopted(id) {
 		return nil
 	}
 	found, err := h.inspectGuarded(ctx, id)
@@ -339,7 +382,8 @@ func (h *Handler) adopt(ctx context.Context, id string) error {
 		return err
 	}
 	if name := found.Host.RestartPolicy.Name; name != "" && name != "no" {
-		if found.State.Status == "exited" {
+		// With the record unreadable this adds no entry, and nothing is started anyway.
+		if found.State.Status == "exited" && !guard.corrupt {
 			if err := guard.setStopped(id, true); err != nil {
 				return err
 			}
@@ -349,9 +393,7 @@ func (h *Handler) adopt(ctx context.Context, id string) error {
 		}
 		log.Printf("engine proxy: restarts: took %s off the engine's %s policy", id, name)
 	}
-	guard.mu.Lock()
-	guard.adopted[id] = true
-	guard.mu.Unlock()
+	guard.markAdopted(id)
 	return nil
 }
 

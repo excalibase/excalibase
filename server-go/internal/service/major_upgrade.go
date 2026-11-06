@@ -12,6 +12,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -343,6 +344,11 @@ func (s *MajorUpgradeService) finishConverted(ctx context.Context, engine MajorU
 	var warnings []string
 	if err := engine.WaitServing(ctx, inst); err != nil {
 		log.Printf("major upgrade %s: wait serving: %v", inst.ProjectID, err)
+		// Cleanup below removes the old database: not until the new one has started, fence lifted.
+		if errors.Is(err, provisioner.ErrHostFirewallDown) {
+			s.leaveOpen(ctx, run, waitingForFirewallPublic)
+			return
+		}
 		warnings = append(warnings, "not every copy of the database was serving when the upgrade finished; replicas may still be copying data")
 	}
 	if s.progressStep(ctx, run, domain.MajorUpgradeStepFinishing) != nil {

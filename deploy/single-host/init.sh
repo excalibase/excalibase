@@ -135,6 +135,17 @@ case $engine in
       echo "init.sh: rootful Podman is not supported: $engine_socket belongs to uid $socket_owner, not this user, and nothing would guard the host from tenant containers. $rootless_hint" >&2
       exit 1
     fi
+    # The owner of a file proves nothing alone: ask the engine. The engine proxy asks it again on every start.
+    rootless=$(${PODMAN_INFO:-podman --url "unix://$engine_socket" info --format '{{.Host.Security.Rootless}}'} 2>/dev/null || true)
+    case $rootless in
+      true) ;;
+      false)
+        echo "init.sh: rootful Podman is not supported: the engine at $engine_socket says it is not rootless, and nothing would guard the host from tenant containers. $rootless_hint" >&2
+        exit 1 ;;
+      *)
+        echo "init.sh: the engine at $engine_socket did not say whether it is rootless. Check it answers (systemctl --user enable --now podman.socket), or set --engine-socket." >&2
+        exit 1 ;;
+    esac
     engine_socket_uid=0
     engine_socket_gid=0
     ;;

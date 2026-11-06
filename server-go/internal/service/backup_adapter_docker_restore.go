@@ -215,7 +215,12 @@ func recoverySpec(source *domain.DatabaseInstance, req domain.RestoreRequest, ta
 // recovery in it; with archive, it then archives WAL as a new project does.
 func (a *DockerBackupAdapter) bringUp(ctx context.Context, dc provisioner.DockerClient, seeded recovered, archive bool) error {
 	containerID, dbName := seeded.containerID, seeded.spec.dbName
-	if err := provisioner.StartHoldingPort(ctx, dc, restoreStartPoller, containerID); err != nil {
+	poller := restoreStartPoller
+	// A restore in place has removed the old database by now: this start is worth a long wait.
+	if provisioner.RequireHostFirewall(ctx, dc) != nil {
+		poller = restoreFirewallPoller
+	}
+	if err := provisioner.StartHoldingPort(ctx, dc, poller, containerID); err != nil {
 		return fmt.Errorf("start restored container: %w", err)
 	}
 	if err := dc.WaitForHealthy(ctx, containerID); err != nil {
@@ -409,6 +414,9 @@ type restoreContainerSpec struct {
 
 // restoreStartPoller bounds the wait for a held host port to come free.
 var restoreStartPoller = provisioner.NewPoller(time.Second, 30*time.Second)
+
+// restoreFirewallPoller bounds the wait for a host firewall that went down during a restore.
+var restoreFirewallPoller = provisioner.NewPoller(2*time.Second, 10*time.Minute)
 
 // restorePlanOf is the plan a new project of the source's org gets, and the
 // container limits it sizes a restored container by.
