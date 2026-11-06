@@ -22,6 +22,7 @@ func slowQueryRouteCases() []routeCase {
 	return []routeCase{
 		{
 			name: "get_slow_queries", tool: "get_slow_queries", args: map[string]any{"project_id": testProjectA, "sort": "mean", "limit": 5},
+			features: []features.Feature{features.SlowQueries},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodGet, provisionA+"/slow-queries/", 200, `{"engine":"postgresql","enabled":true,"sort":"mean","queries":[]}`)
 			},
@@ -29,6 +30,7 @@ func slowQueryRouteCases() []routeCase {
 		},
 		{
 			name: "get_slow_queries by default", tool: "get_slow_queries", args: map[string]any{"project_id": testProjectA},
+			features: []features.Feature{features.SlowQueries},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodGet, provisionA+"/slow-queries/", 200, `{"engine":"postgresql","enabled":false,"sort":"total","queries":[]}`)
 			},

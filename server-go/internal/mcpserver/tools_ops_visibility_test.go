@@ -144,3 +144,28 @@ func TestDeployAppWithACommitReportsTheServersRefusal(t *testing.T) {
 		t.Fatalf("got %s, want the deploy's own refusal", resultText(res))
 	}
 }
+
+// Descriptions say what an engine refuses, so an agent does not try it.
+func TestDescriptionsNameWhatMySQLRefuses(t *testing.T) {
+	cs := session(t, newFakeRoutes(), &recordingAudit{}, writeCaller())
+	listed, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	described := map[string]string{}
+	for _, tool := range listed.Tools {
+		described[tool.Name] = tool.Description
+	}
+	for name, want := range map[string]string{
+		"list_migrations":            "MySQL",
+		"apply_migration":            "MySQL",
+		"set_realtime":               "MySQL",
+		"set_db_function_permission": "MySQL",
+		"generate_typescript_types":  "bigint",
+		"get_logs":                   "retention",
+	} {
+		if !strings.Contains(described[name], want) {
+			t.Errorf("%s does not mention %q: %s", name, want, described[name])
+		}
+	}
+}
