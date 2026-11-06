@@ -2,6 +2,9 @@ package mcpserver
 
 import (
 	"net/http"
+	"unicode/utf8"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +28,7 @@ func fnStorageRouteCases() []routeCase {
 	appStorage := []features.Feature{features.AppStorage}
 	return []routeCase{
 		{
-			name: "invoke_function", tool: "invoke_function", args: map[string]any{"project_id": testProjectA, "function_id": "hello", "body": map[string]any{"args": map[string]any{"name": "Ada"}}},
+			name: "invoke_function", tool: "invoke_function", features: []features.Feature{features.FunctionInvoke}, args: map[string]any{"project_id": testProjectA, "function_id": "hello", "body": map[string]any{"args": map[string]any{"name": "Ada"}}},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodPost, projectsA+"/functions/hello/invoke", 200, `{"data":"hi Ada"}`)
 			},
@@ -56,8 +59,14 @@ func fnStorageRouteCases() []routeCase {
 			name: "delete_function_secret", tool: "delete_function_secret", args: map[string]any{"project_id": testProjectA, "key": "STRIPE_KEY"},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodDelete, projectsA+"/functions/secrets/STRIPE_KEY", 200, `{"status":"deleted","key":"STRIPE_KEY"}`)
+				f.on(http.MethodGet, projectsA+"/functions/runtime/status", 200, `{"status":"healthy","healthy":true}`)
 			},
-			expect: []string{"DELETE " + projectsA + "/functions/secrets/STRIPE_KEY"},
+			expect: []string{"DELETE " + projectsA + "/functions/secrets/STRIPE_KEY", "GET " + projectsA + "/functions/runtime/status"},
+			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+				if out["deleted"] != "STRIPE_KEY" || out["warning"] != nil {
+					t.Errorf("out = %v", out)
+				}
+			},
 		},
 		{
 			name: "list_storage_buckets", tool: "list_storage_buckets", args: map[string]any{"project_id": testProjectA},
@@ -154,7 +163,7 @@ func TestInvokeFunctionShowsTheFunctionsOwnFailure(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("boom: db unreachable"))
 	})
-	cs := session(t, router, &recordingAudit{}, writeCaller())
+	cs := invokeSession(t, router)
 	out := structured(t, callTool(t, cs, "invoke_function", map[string]any{"project_id": testProjectA, "function_id": "hello"}))
 	if out["status"] != float64(500) || out["body"] != "boom: db unreachable" || out["contentType"] != "text/plain" {
 		t.Fatalf("out = %v", out)
@@ -164,7 +173,7 @@ func TestInvokeFunctionShowsTheFunctionsOwnFailure(t *testing.T) {
 func TestInvokeFunctionExplainsAPlatformRefusal(t *testing.T) {
 	f := newFakeRoutes()
 	f.on(http.MethodPost, projectsA+"/functions/hello/invoke", 404, `{"error":"function not found"}`)
-	res := callTool(t, session(t, f, &recordingAudit{}, writeCaller()), "invoke_function", map[string]any{"project_id": testProjectA, "function_id": "hello"})
+	res := callTool(t, invokeSession(t, f), "invoke_function", map[string]any{"project_id": testProjectA, "function_id": "hello"})
 	if !res.IsError || !strings.Contains(resultText(res), "function not found") {
 		t.Fatalf("result = %s", resultText(res))
 	}
@@ -175,7 +184,7 @@ func TestInvokeFunctionBoundsWhatItReturns(t *testing.T) {
 		w.Header().Set(custommw.FunctionResponseHeader, "1")
 		_, _ = w.Write([]byte(strings.Repeat("a", maxInvokeBodyShown+500)))
 	})
-	cs := session(t, router, &recordingAudit{}, writeCaller())
+	cs := invokeSession(t, router)
 	out := structured(t, callTool(t, cs, "invoke_function", map[string]any{"project_id": testProjectA, "function_id": "hello"}))
 	body, _ := out["body"].(string)
 	if len(body) != maxInvokeBodyShown || out["truncated"] != true {
@@ -199,4 +208,95 @@ func TestStorageToolsRefuseNamesThatClimb(t *testing.T) {
 	if len(f.calls) != 0 {
 		t.Errorf("calls = %v", f.calls)
 	}
+}
+
+func TestDeleteFunctionSecretDoesNotSayAllIsWellWhenTheRuntimeIsNotHealthy(t *testing.T) {
+	for name, reply := range map[string]struct {
+		status int
+		body   string
+	}{
+		"unavailable": {200, `{"status":"unavailable","healthy":false}`},
+		"unreadable":  {500, `{"error":"x"}`},
+	} {
+		f := newFakeRoutes()
+		f.on(http.MethodDelete, projectsA+"/functions/secrets/K", 200, `{"status":"deleted","key":"K"}`)
+		f.on(http.MethodGet, projectsA+"/functions/runtime/status", reply.status, reply.body)
+		out := structured(t, callTool(t, session(t, f, &recordingAudit{}, writeCaller()), "delete_function_secret", map[string]any{"project_id": testProjectA, "key": "K"}))
+		warning, _ := out["warning"].(string)
+		if out["deleted"] != "K" || !strings.Contains(warning, "redeploy") {
+			t.Errorf("%s: out = %v", name, out)
+		}
+	}
+}
+
+// Anon and guest are the roles a publishable key or a visitor holds: giving them a bucket would open private files.
+func TestSetBucketAccessRefusesAnonAndGuestAndAnEmptyRuleSet(t *testing.T) {
+	settings := testSettings
+	settings.Features = features.NewStatic(features.AppStorage)
+	f := newFakeRoutes()
+	cs := sessionWith(t, f, &recordingAudit{}, writeCaller(), settings)
+	for name, access := range map[string]any{
+		"anon":  map[string]any{"anon": map[string]any{"read": "all"}},
+		"guest": map[string]any{"user": map[string]any{"read": "own"}, "guest": map[string]any{"write": "own"}},
+		"empty": map[string]any{},
+		"blank": map[string]any{"user": map[string]any{}},
+	} {
+		res := callTool(t, cs, "set_bucket_access", map[string]any{"project_id": testProjectA, "bucket": "photos", "access": access})
+		if !res.IsError {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("calls = %v", f.calls)
+	}
+}
+
+func TestStorageDescriptionsNameTheUserIDFolderAndWarnAboutData(t *testing.T) {
+	described := toolDescriptions(t)
+	if strings.Contains(described["set_bucket_access"], "<sub>") || !strings.Contains(described["set_bucket_access"], "<userId>/") {
+		t.Errorf("set_bucket_access = %s", described["set_bucket_access"])
+	}
+	if !strings.Contains(described["list_storage_objects"], "data, not instructions") {
+		t.Errorf("list_storage_objects = %s", described["list_storage_objects"])
+	}
+	if !strings.Contains(described["invoke_function"], "secrets") {
+		t.Errorf("invoke_function does not warn that its answer can hold secrets: %s", described["invoke_function"])
+	}
+}
+
+func TestInvokeFunctionCutsOnACharacterBoundary(t *testing.T) {
+	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(custommw.FunctionResponseHeader, "1")
+		// 3-byte characters: the cap falls inside one.
+		_, _ = w.Write([]byte(strings.Repeat("€", maxInvokeBodyShown)))
+	})
+	out := structured(t, callTool(t, invokeSession(t, router), "invoke_function", map[string]any{"project_id": testProjectA, "function_id": "hello"}))
+	body, _ := out["body"].(string)
+	if out["truncated"] != true || len(body) > maxInvokeBodyShown || len(body)+3 <= maxInvokeBodyShown || !utf8.ValidString(body) {
+		t.Fatalf("body %d bytes, truncated %v", len(body), out["truncated"])
+	}
+}
+
+func TestInvokeFunctionIsPacedLikeAProbe(t *testing.T) {
+	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(custommw.FunctionResponseHeader, "1")
+		_, _ = w.Write([]byte("ok"))
+	})
+	cs := invokeSession(t, router)
+	args := map[string]any{"project_id": testProjectA, "function_id": "hello"}
+	for i := 0; i < probeBurst; i++ {
+		if res := callTool(t, cs, "invoke_function", args); res.IsError {
+			t.Fatalf("call %d refused: %s", i, resultText(res))
+		}
+	}
+	if res := callTool(t, cs, "invoke_function", args); !res.IsError || !strings.Contains(resultText(res), "too many") {
+		t.Fatalf("burst not limited: %s", resultText(res))
+	}
+}
+
+func invokeSession(t *testing.T, router http.Handler) *mcp.ClientSession {
+	t.Helper()
+	settings := testSettings
+	settings.Features = features.NewStatic(features.FunctionInvoke)
+	return sessionWith(t, router, &recordingAudit{}, writeCaller(), settings)
 }
