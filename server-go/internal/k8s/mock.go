@@ -23,15 +23,16 @@ const podNameFmt = "%s-postgres-%d"
 
 // MockClient is a test double for KubeClient.
 type MockClient struct {
-	mu              sync.Mutex
-	Namespaces      map[string]bool
-	NamespaceLabels map[string]map[string]string
-	CRDs            map[string]*unstructured.Unstructured
-	Secrets         map[string]map[string][]byte
-	Pods            map[string][]corev1.Pod
-	PodLogs         map[string]string   // key: "namespace/pod" or "namespace/pod/container" → log tail
-	PodLogTailLines []int64             // the lines each PodLogTail call asked for
-	PVCs            map[string][]string // namespace → PersistentVolumeClaim names
+	mu                 sync.Mutex
+	Namespaces         map[string]bool
+	NamespaceLabels    map[string]map[string]string
+	CRDs               map[string]*unstructured.Unstructured
+	Secrets            map[string]map[string][]byte
+	Pods               map[string][]corev1.Pod
+	PodLogs            map[string]string   // key: "namespace/pod" or "namespace/pod/container" → log tail
+	PodLogSinceSeconds []int64             // the window each PodLogSince call asked for
+	PodLogTailLines    []int64             // the lines each PodLogTail call asked for
+	PVCs               map[string][]string // namespace → PersistentVolumeClaim names
 	// StuckNamespaces model a namespace whose deletion is accepted but never
 	// completes — a finalizer or a Terminating pod holds it. DeleteNamespace
 	// returns nil for these, yet the namespace and its contents survive.
@@ -598,6 +599,13 @@ func (m *MockClient) PodLogTail(ctx context.Context, namespace, pod, container s
 		return out, nil
 	}
 	return "", fmt.Errorf("no log: %s/%s", namespace, pod)
+}
+
+func (m *MockClient) PodLogSince(ctx context.Context, namespace, pod, container string, lines int64, window time.Duration) (string, error) {
+	m.mu.Lock()
+	m.PodLogSinceSeconds = append(m.PodLogSinceSeconds, int64(window/time.Second))
+	m.mu.Unlock()
+	return m.PodLogTail(ctx, namespace, pod, container, lines)
 }
 
 func (m *MockClient) IsPodReady(ctx context.Context, namespace, name string) (bool, error) {

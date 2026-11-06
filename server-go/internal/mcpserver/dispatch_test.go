@@ -123,3 +123,43 @@ func TestRouteErrorCarriesTheRoutesOwnMessage(t *testing.T) {
 		t.Fatalf("err = %#v", err)
 	}
 }
+
+// A route behind a feature that is off answers a bare 404; the agent is told
+// why instead of "404 page not found".
+func TestARouteThatIsNotMountedIsExplained(t *testing.T) {
+	router := http.NotFoundHandler()
+	d := dispatcher{router: router, caller: callerFor(domain.AccessToken{Scopes: auth.ScopeRead}, true)}
+	err := d.send(context.Background(), http.MethodGet, "/api/provision/p/advisors", nil, nil, nil)
+	var routeErr *RouteError
+	if !errors.As(err, &routeErr) || routeErr.Status != http.StatusNotFound {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(routeErr.Message, "page not found") || !strings.Contains(routeErr.Message, "feature") {
+		t.Errorf("message = %q", routeErr.Message)
+	}
+}
+
+func TestARealNotFoundKeepsTheRoutesWords(t *testing.T) {
+	router := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"app not found"}`))
+	})
+	d := dispatcher{router: router, caller: callerFor(domain.AccessToken{Scopes: auth.ScopeRead}, true)}
+	err := d.send(context.Background(), http.MethodGet, "/api/projects/p/apps/x/", nil, nil, nil)
+	var routeErr *RouteError
+	if !errors.As(err, &routeErr) || routeErr.Message != "app not found" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAPlainTextNotFoundKeepsTheRoutesWords(t *testing.T) {
+	router := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "project not found", http.StatusNotFound)
+	})
+	d := dispatcher{router: router, caller: callerFor(domain.AccessToken{Scopes: auth.ScopeRead}, true)}
+	err := d.send(context.Background(), http.MethodGet, "/api/provision/p/cluster", nil, nil, nil)
+	var routeErr *RouteError
+	if !errors.As(err, &routeErr) || routeErr.Message != "project not found" {
+		t.Fatalf("err = %v", err)
+	}
+}

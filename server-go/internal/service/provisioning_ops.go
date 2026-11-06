@@ -143,7 +143,7 @@ func (s *ProvisioningService) SearchProjectLogs(ctx context.Context, projectID s
 		lokiAnswered = err == nil
 	}
 
-	out, err := s.primaryPodLog(ctx, inst, int64(clampLogLines(search.Lines)))
+	out, err := s.primaryPodLog(ctx, inst, int64(clampLogLines(search.Lines)), search.Since)
 	if err != nil {
 		log.Printf("logs of %s: pod log: %v", projectID, err)
 		if lokiAnswered {
@@ -194,24 +194,27 @@ func (s *ProvisioningService) readEngineLog(ctx context.Context, inst *domain.Da
 
 // primaryPodLog is the live log of the database container on the primary.
 // Never a command on /controller/log/postgres.csv: CNPG's collector reads that pipe.
-func (s *ProvisioningService) primaryPodLog(ctx context.Context, inst *domain.DatabaseInstance, lines int64) (string, error) {
+func (s *ProvisioningService) primaryPodLog(ctx context.Context, inst *domain.DatabaseInstance, lines int64, window time.Duration) (string, error) {
+	if window <= 0 {
+		window = defaultLogSearchWindow
+	}
 	if inst.DBType != domain.MySQL {
-		return s.k8sClient.PodLogTail(ctx, inst.Namespace, inst.ProjectID+primaryPodSuffix, "postgres", lines)
+		return s.k8sClient.PodLogSince(ctx, inst.Namespace, inst.ProjectID+primaryPodSuffix, "postgres", lines, window)
 	}
 	// MOCO moves the primary on failover; its cluster status names the current one.
 	cluster, err := s.k8sClient.GetCRD(ctx, k8s.MOCOClusterGVR, inst.Namespace, k8s.MySQLClusterName(inst.ProjectID))
 	if err != nil {
 		return "", err
 	}
-	return s.k8sClient.PodLogTail(ctx, inst.Namespace, k8s.MySQLPrimaryPod(cluster), mysqlContainer, lines)
+	return s.k8sClient.PodLogSince(ctx, inst.Namespace, k8s.MySQLPrimaryPod(cluster), mysqlContainer, lines, window)
 }
 
 // clampLogLines is how many lines one search returns, from Loki or the pod log.
 func clampLogLines(lines int) int {
-	if lines <= 0 || lines > 5000 {
+	if lines <= 0 {
 		return 100
 	}
-	return lines
+	return min(lines, 5000)
 }
 
 func validateLogSearchTerm(term string) error {
