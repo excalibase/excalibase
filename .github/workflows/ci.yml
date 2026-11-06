@@ -23,6 +23,7 @@ jobs:
       mysqlbackup: ${{ steps.filter.outputs.mysqlbackup }}
       singlehost: ${{ steps.filter.outputs.singlehost }}
       singlehostboot: ${{ steps.filter.outputs.singlehostboot }}
+      gatewayguard: ${{ steps.filter.outputs.gatewayguard }}
       sitesrouter: ${{ steps.filter.outputs.sitesrouter }}
       sitesoutbound: ${{ steps.filter.outputs.sitesoutbound }}
       sitebuilds: ${{ steps.filter.outputs.sitebuilds }}
@@ -46,6 +47,8 @@ jobs:
               - '.github/workflows/**'
             singlehost:
               - 'deploy/single-host/**'
+            gatewayguard:
+              - 'charts/documentdb-gateway/**'
             singlehostboot:
               - 'deploy/single-host/**'
               - 'server-go/Dockerfile'
@@ -119,6 +122,18 @@ jobs:
         run: sh deploy/single-host/tests/sites-edge.sh docker
       - name: API upload size on the edge (real Caddy and Studio nginx)
         run: sh deploy/single-host/tests/api-upload-edge.sh docker
+
+  gateway-guard:
+    name: DocumentDB gateway guard
+    needs: changes
+    if: needs.changes.outputs.gatewayguard == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The guard ends the gateway on a demotion, and only then
+        run: bash charts/documentdb-gateway/tests/gateway_guard_test.sh
+      - name: The image builds on the pinned gateway
+        run: docker build -q -t documentdb-gateway-guard charts/documentdb-gateway
 
   sites-router:
     name: Sites router Worker
