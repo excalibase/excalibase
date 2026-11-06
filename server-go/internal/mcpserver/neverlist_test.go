@@ -17,7 +17,7 @@ var offeredTools = []string{
 	"delete_site", "deploy_app", "deploy_function", "deploy_site", "describe_table", "disconnect_site_repo", "execute_sql", "generate_typescript_types", "get_auth_settings", "get_ci_snippet",
 	"get_database_info", "get_db_endpoint", "get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_metrics", "get_project_info", "invoke_function",
 	"list_alerts", "list_app_domains", "list_apps", "list_cors_origins", "list_function_secrets", "list_functions", "list_migrations", "list_permissions", "list_projects",
-	"list_site_build_secrets", "list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_storage_buckets", "list_storage_objects", "list_tables", "rebuild_site", "redeploy_app", "remove_app_domain", "remove_cors_origin", "remove_site_domain", "rollback_site", "set_app_secret", "set_db_function_permission", "set_function_outbound_hosts",
+	"list_site_build_secrets", "list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_templates", "list_storage_buckets", "list_storage_objects", "list_tables", "rebuild_site", "redeploy_app", "remove_app_domain", "remove_cors_origin", "remove_site_domain", "revoke_publishable_key", "rollback_site", "set_app_secret", "set_db_function_permission", "set_function_outbound_hosts",
 	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "test_auth_flow", "track_db_function", "update_app", "verify_app_domain",
 }
 
@@ -34,6 +34,10 @@ var allowedRoutes = []*regexp.Regexp{
 	// Publishable SDK keys only: they ship inside client apps and grant what
 	// the anon role grants. Secret keys and personal access tokens stay out.
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/sdk-keys/$`),
+	// Revoking a publishable key; the tool lists first and refuses any other type.
+	regexp.MustCompile(`^DELETE /api/projects/[^/]+/sdk-keys/[0-9]+$`),
+	// The built-in templates and what each costs this plan; deploying one hands back generated credentials once, so it stays in Studio.
+	regexp.MustCompile(`^GET /api/projects/[^/]+/app-templates/$`),
 	regexp.MustCompile(`^GET /api/schema/[^/]+/(tables|relationships)(\?.*)?$`),
 	regexp.MustCompile(`^GET /api/schema/[^/]+/tables/[^/]+/(columns|indexes|checks)(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/schema/[^/]+/query(\?.*)?$`),
@@ -174,6 +178,8 @@ var neverReached = []*regexp.Regexp{
 	regexp.MustCompile(`^(GET|POST|PATCH|DELETE) .*/apps/[^/]+/secrets`),
 	regexp.MustCompile(`^PUT .*/apps/[^/]+/secrets/?(\?.*)?$`),
 	// One-way database changes.
+	// A template's deploy answers with credentials it generated, readable once: they stay out of a conversation.
+	regexp.MustCompile(`/app-templates/[^/]+/deploy`),
 	regexp.MustCompile(`/upgrade`),
 	regexp.MustCompile(`/major-upgrade`),
 	regexp.MustCompile(`/parameters`),
@@ -202,6 +208,7 @@ func TestNeverReachedCatchesTheSurfaceItNames(t *testing.T) {
 		"GET /api/projects/p/apps/a/secrets/NAME",
 		"DELETE /api/projects/p/apps/a/secrets/NAME",
 		"PUT /api/projects/p/apps/a/secrets",
+		"POST /api/projects/p/app-templates/valkey/deploy",
 		"POST /api/provision/p/major-upgrade",
 		"PUT /api/provision/p/parameters",
 		"POST /api/provision/p/upgrade",
