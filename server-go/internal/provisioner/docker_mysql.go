@@ -197,6 +197,11 @@ func (p *DockerMySQLProvisioner) RequireHostFirewall(ctx context.Context) error 
 	return RequireHostFirewall(ctx, p.docker)
 }
 
+// WaitHostFirewall waits within poller for the database to be able to start.
+func (p *DockerMySQLProvisioner) WaitHostFirewall(ctx context.Context, poller Poller) error {
+	return WaitHostFirewall(ctx, p.docker, poller)
+}
+
 // Pause stops the container, keeping its volume, and returns once it is
 // observed stopped.
 func (p *DockerMySQLProvisioner) Pause(ctx context.Context, namespace, _ string) error {

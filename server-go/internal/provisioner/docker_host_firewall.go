@@ -33,3 +33,14 @@ func RequireHostFirewall(ctx context.Context, docker DockerClient) error {
 	}
 	return nil
 }
+
+// WaitHostFirewall waits within poller for a tenant to be able to start.
+func WaitHostFirewall(ctx context.Context, docker DockerClient, poller Poller) error {
+	err := poller.WaitUntilReady(ctx, "the host firewall", func(ctx context.Context) (bool, error) {
+		return RequireHostFirewall(ctx, docker) == nil, nil
+	})
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrHostFirewallDown, err)
+	}
+	return nil
+}

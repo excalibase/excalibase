@@ -19,6 +19,7 @@ TENANT=excalibase-reboot-postgres
 PAUSED=excalibase-pausedtenant-postgres
 OLD=excalibase-oldtenant-postgres
 OLD_PAUSED=excalibase-oldpaused-postgres
+STUBBORN=excalibase-stubborn-postgres
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "ok: $*"; }
@@ -155,4 +156,35 @@ until [ "$(state "$OLD")" = running ]; do
 done
 [ "$(state "$OLD_PAUSED")" = exited ] || fail "a paused older tenant came back after a reboot: $(state "$OLD_PAUSED")"
 ok "older tenants follow the firewall too, stopped ones staying stopped"
+
+echo "== a stop whose client hangs up: the engine finishes it, and it stays a stop"
+proxy "/containers/create?name=$STUBBORN" '{"Image":"'"$TENANT_IMAGE"'","Cmd":["sh","-c","trap \"\" TERM; while :; do sleep 1; done"],"Labels":{"excalibase.managed":"true"},"HostConfig":{},"NetworkingConfig":{"EndpointsConfig":{"excalibase-tenants":{}}}}' >/dev/null
+proxy "/containers/$STUBBORN/start" >/dev/null
+d exec "$PROXY" timeout 2 wget -qO- --post-data '' "http://127.0.0.1:2375/containers/$STUBBORN/stop?t=8" >/dev/null 2>&1 || true
+sleep 20
+[ "$(state "$STUBBORN")" = exited ] || fail "a stop whose client hung up was undone: $(state "$STUBBORN")"
+ok "the tenant stays stopped"
+
+echo "== an unreadable stop record: nothing starts on its own, the platform's calls work, the documented way out does"
+d exec "$PROXY" sh -c ': > /var/lib/excalibase-bridges/stopped'
+d restart "$PROXY" >/dev/null
+waited=0
+until proxy "/containers/$TENANT/stop?t=1" >/dev/null 2>&1; do
+  waited=$((waited + 1))
+  [ "$waited" -lt 30 ] || fail "a stop did not go through with the record unreadable"
+  sleep 1
+done
+[ "$(state "$TENANT")" = exited ] || fail "the stop did not stop the tenant"
+sleep 15
+[ "$(state "$TENANT")" = exited ] || fail "a tenant started on its own with the record unreadable"
+d logs "$PROXY" 2>&1 | grep -q "pause those again" || fail "the log does not give the way out"
+d exec "$PROXY" rm /var/lib/excalibase-bridges/stopped
+d restart "$PROXY" >/dev/null
+waited=0
+until [ "$(state "$TENANT")" = running ]; do
+  waited=$((waited + 1))
+  [ "$waited" -lt 60 ] || fail "the way out did not bring the tenant back"
+  sleep 1
+done
+ok "the way out brings the tenants back"
 echo "PASS: reboot order"

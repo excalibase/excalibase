@@ -80,8 +80,8 @@ func main() {
 	}
 	target := &url.URL{Scheme: "http", Host: "engine"}
 	handler := engineproxy.NewHandler(cfg.policy, target, transport).WithUpgradeDial(dial)
-	if cfg.mustBeRootless {
-		requireRootless(handler)
+	if err := checkStartup(cfg, handler); err != nil {
+		log.Fatalf("engine proxy: %v", err)
 	}
 	if cfg.bridgesFile != "" {
 		go publishBridges(handler, cfg.bridgeNetworks, cfg.bridgesFile)
@@ -103,11 +103,14 @@ func main() {
 	}
 }
 
-// requireRootless stops the proxy, and with it everything gated on it, on an
-// engine that is not rootless under ENGINE_SOCKET_UID=0: that value exempts an
-// install from the host firewall, and only rootless Podman's bridges are safe
-// without it (EXC-683). An engine that does not answer yet gets a moment.
-func requireRootless(handler *engineproxy.Handler) {
+// checkStartup is what must hold before the proxy serves. ENGINE_SOCKET_UID=0
+// exempts an install from the host firewall, and only rootless Podman's bridges
+// are safe without it (EXC-683), so the engine has to say it is rootless. An
+// engine that does not answer yet gets a moment.
+func checkStartup(cfg config, handler *engineproxy.Handler) error {
+	if !cfg.mustBeRootless {
+		return nil
+	}
 	var rootless bool
 	var err error
 	for attempt := 0; attempt < rootlessAttempts; attempt++ {
@@ -117,12 +120,13 @@ func requireRootless(handler *engineproxy.Handler) {
 		time.Sleep(time.Second)
 	}
 	if err != nil {
-		log.Fatalf("engine proxy: ENGINE_SOCKET_UID=0 claims rootless Podman, and the engine does not answer: %v", err)
+		return fmt.Errorf("ENGINE_SOCKET_UID=0 claims rootless Podman, and the engine does not answer: %w", err)
 	}
 	if !rootless {
-		log.Fatal("engine proxy: rootful Podman is not supported: ENGINE_SOCKET_UID=0 claims a rootless engine, " +
+		return errors.New("rootful Podman is not supported: ENGINE_SOCKET_UID=0 claims a rootless engine, " +
 			"and this one is not, so nothing would guard the host from tenant containers. Use rootless Podman or Docker")
 	}
+	return nil
 }
 
 // publishBridges keeps the host firewall's bridges file current. A network it

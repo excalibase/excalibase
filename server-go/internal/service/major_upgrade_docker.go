@@ -356,7 +356,14 @@ func (u *DockerMajorUpgrader) waitLoaded(ctx context.Context, dc provisioner.Doc
 // temporary server takes socket connections only.
 var tcpReady = []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres"}
 
-const waitingForFirewallPublic = "the host firewall is not healthy, so the database cannot start yet; the upgrade is checked again every few minutes"
+const (
+	waitingForFirewallPublic = "the host firewall is not healthy, so the database cannot start yet; the upgrade is checked again every few minutes"
+	notServingPublic         = "the upgraded database has not started serving yet; the old one is kept and the upgrade is checked again every few minutes"
+	oldStillStartingPublic   = "the upgrade did not complete and the old database is still starting; it is checked again every few minutes, and the database is offline until then"
+)
+
+// errServerSlow is a server that did not listen in time, which says nothing about its data.
+var errServerSlow = errors.New("the server did not start in time")
 
 const (
 	putBackPublic = "the upgrade did not complete, so the database was put back on Postgres %s"
@@ -397,6 +404,9 @@ func (u *DockerMajorUpgrader) putBack(ctx context.Context, dc provisioner.Docker
 	}
 	if errors.Is(err, provisioner.ErrHostFirewallDown) {
 		return waitingForFirewall(errors.Join(cause, err))
+	}
+	if errors.Is(err, errServerSlow) {
+		return UpgradeOutcome{Unsettled: true, Public: oldStillStartingPublic, Cause: errors.Join(cause, err)}
 	}
 	if err != nil {
 		u.dropDump(ctx, dc, state.oldID)
@@ -492,7 +502,7 @@ func (u *DockerMajorUpgrader) waitTCP(ctx context.Context, dc provisioner.Docker
 			return nil
 		}
 		if !u.now().Before(deadline) {
-			return fmt.Errorf("postgres in %s did not start within %s", container, u.timings.Start)
+			return fmt.Errorf("%w: postgres in %s did not start within %s", errServerSlow, container, u.timings.Start)
 		}
 		if err := u.sleep(ctx, u.timings.Poll); err != nil {
 			return err
@@ -571,6 +581,13 @@ func (u *DockerMajorUpgrader) holdsNewMajor(ctx context.Context, dc provisioner.
 // WaitServing lets the network in to the new server and waits for it. See
 // MajorUpgrader.
 func (u *DockerMajorUpgrader) WaitServing(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if err := u.waitServing(ctx, inst); err != nil {
+		return fmt.Errorf("%w: %w", ErrMajorUpgradeNotServing, err)
+	}
+	return nil
+}
+
+func (u *DockerMajorUpgrader) waitServing(ctx context.Context, inst *domain.DatabaseInstance) error {
 	dc, _, err := u.engine()
 	if err != nil {
 		return err

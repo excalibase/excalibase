@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -153,9 +155,20 @@ func (a *HostMySQLBackupAdapter) ReplaceDatabase(ctx context.Context, inst *doma
 	}
 	pc := provisioner.NewProvisionContext(nil, nil)
 	if _, err := a.build(ctx, pc, inst.ProjectID, restore); err != nil {
+		// The proxy starts a refused container once the firewall is healthy: not an empty database.
+		if errors.Is(err, provisioner.ErrHostFirewallDown) {
+			if removeErr := a.mysql.RemoveData(context.WithoutCancel(ctx), inst.ProjectID); removeErr != nil {
+				log.Printf("mysql restore %s: remove the empty database: %v", inst.ProjectID, removeErr)
+			}
+		}
 		return err
 	}
 	return nil
+}
+
+// WaitHostFirewall waits for the database to be able to start again. See HostFirewallWaiter.
+func (a *HostMySQLBackupAdapter) WaitHostFirewall(ctx context.Context) error {
+	return a.mysql.WaitHostFirewall(ctx, restoreRollbackFirewallPoller)
 }
 
 // pointOf finds the runs a target names.

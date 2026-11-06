@@ -263,6 +263,7 @@ services:
       PLATFORM_DB_URL: "postgres://excalibase:${POSTGRES_PASSWORD:?run ./init.sh first}@postgres:5432/excalibase_platform?sslmode=disable"
       # Tenants start only behind it: an upgrade or restore checks it before changing anything (EXC-683).
       HOST_FIREWALL_CONTAINER: excalibase-host-firewall
+      ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
       # bbolt vault backend lives here (selfhosted, no external VAULT_URL).
       STORAGE_PATH: /var/lib/excalibase
       # Studio is provisioning's only browser origin.

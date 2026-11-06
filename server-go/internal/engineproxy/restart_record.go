@@ -30,9 +30,13 @@ type restartGuard struct {
 	Restarts
 	startTimeout time.Duration
 	workers      int
-	// corrupt: the file holds something it cannot read. It is kept for whoever looks,
-	// no stop can be recorded, and the supervisor starts nothing it might have named.
+	// stopGrace is how long a stop with no answer may still be going on in the engine.
+	stopGrace time.Duration
+	// corrupt: the file holds something it cannot read. It is kept for whoever looks, and
+	// the supervisor starts nothing, so a stop needs no record and platform stops go on working.
 	corrupt bool
+	// corruptLogged is the supervisor's alone.
+	corruptLogged time.Time
 	// waiting is the supervisor's alone.
 	waiting bool
 
@@ -40,15 +44,15 @@ type restartGuard struct {
 	stopped map[string]bool
 	// stopping is stops not answered yet; pending is never-started tenants a refused
 	// start left wanted, for this process: their callers saw the refusal.
-	stopping map[string]bool
+	stopping map[string]time.Time
 	pending  map[string]bool
 	// adopted is what this process has checked for an older release's policy.
 	adopted map[string]bool
 }
 
 func newRestartGuard(restarts Restarts) (*restartGuard, error) {
-	guard := &restartGuard{Restarts: restarts, startTimeout: superviseStartTimeout, workers: superviseWorkers,
-		stopped: map[string]bool{}, stopping: map[string]bool{}, pending: map[string]bool{}, adopted: map[string]bool{}}
+	guard := &restartGuard{Restarts: restarts, startTimeout: superviseStartTimeout, workers: superviseWorkers, stopGrace: superviseStopGrace,
+		stopped: map[string]bool{}, stopping: map[string]time.Time{}, pending: map[string]bool{}, adopted: map[string]bool{}}
 	raw, err := os.ReadFile(restarts.StoppedFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return guard, nil
@@ -58,6 +62,10 @@ func newRestartGuard(restarts Restarts) (*restartGuard, error) {
 	}
 	stopped, ok := parseStopped(string(raw))
 	guard.stopped, guard.corrupt = stopped, !ok
+	// A stop may have been in flight when an earlier run ended: give it the engine's time before reading it as anything else.
+	for id := range stopped {
+		guard.stopping[id] = time.Now().Add(guard.stopGrace)
+	}
 	return guard, nil
 }
 
@@ -82,9 +90,6 @@ func (g *restartGuard) setStopped(id string, stopped bool) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.corrupt {
-		if stopped {
-			return fmt.Errorf("%s cannot be read, so a stop cannot be recorded", g.StoppedFile)
-		}
 		return nil
 	}
 	if g.stopped[id] == stopped {
@@ -122,11 +127,33 @@ func (g *restartGuard) isStopped(id string) bool {
 	return g.stopped[id]
 }
 
-func (g *restartGuard) beginStopping(id string) { g.setIn(g.stopping, id, true) }
-func (g *restartGuard) endStopping(id string)   { g.setIn(g.stopping, id, false) }
-func (g *restartGuard) isStopping(id string) bool {
-	return g.holds(g.stopping, id)
+func (g *restartGuard) beginStopping(id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.stopping[id] = time.Time{}
 }
+
+func (g *restartGuard) endStopping(id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.stopping, id)
+}
+
+// expireStopping gives a stop with no answer the engine's time to finish.
+func (g *restartGuard) expireStopping(id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.stopping[id] = time.Now().Add(g.stopGrace)
+}
+
+// isStopping: a stop unanswered (no end set) or within its grace.
+func (g *restartGuard) isStopping(id string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	until, ok := g.stopping[id]
+	return ok && (until.IsZero() || time.Now().Before(until))
+}
+
 func (g *restartGuard) want(id string)           { g.setIn(g.pending, id, true) }
 func (g *restartGuard) unwant(id string)         { g.setIn(g.pending, id, false) }
 func (g *restartGuard) wanted(id string) bool    { return g.holds(g.pending, id) }
@@ -158,6 +185,11 @@ func (g *restartGuard) forget(held map[string]bool) error {
 			if !held[id] {
 				delete(set, id)
 			}
+		}
+	}
+	for id := range g.stopping {
+		if !held[id] {
+			delete(g.stopping, id)
 		}
 	}
 	if g.corrupt {

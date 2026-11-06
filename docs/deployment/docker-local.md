@@ -270,9 +270,20 @@ crashed one within about 5 seconds, and leaves one stopped by the platform (a pa
 stopped, across a reboot too. Tenants of an older release are moved over on the first
 start. To keep one down by hand, pause its project: `docker stop` looks like a crash and
 it comes back. A major upgrade or an in-place restore checks the firewall before it changes
-anything, and one caught by a firewall outage stays open and is finished once it is healthy.
-If the record of stopped tenants (`stopped`, on the `excalibase-platform-bridges` volume) cannot
-be read, the proxy starts no tenant on its own and refuses stops, and logs what to do. Downgrading to a release before this one leaves them without a restart
+anything, and refuses while it is down. If it goes down later:
+
+- A major upgrade stays open and recovery finishes it once the database can start, on any failure of
+  the new server to take over. The old database is kept until then, and the project stays upgrading.
+- An in-place restore (Postgres and MySQL) waits up to 10 minutes to start the restored database. If that
+  fails it removes the unstarted copy, waits up to 30 more minutes for the firewall, and puts the database
+  back from the backup it took just before. If the firewall outlasts that, the project stays stopped and
+  says which backup to restore once it is healthy; nothing retries on its own.
+
+If the record of stopped tenants (`stopped`, on the `excalibase-platform-bridges` volume) cannot be read, no
+tenant starts on its own and a crashed one stays down; the platform's own starts and stops still work. To
+recover, `docker exec excalibase-engine-proxy rm /var/lib/excalibase-bridges/stopped`, then
+`docker restart excalibase-engine-proxy`. Every exited tenant then starts, paused projects' too, so pause those
+again. Downgrading to a release before this one leaves them without a restart
 policy, so start them after each reboot. Apps keep Docker's restart policy: the firewall
 adds nothing to their project networks.
 

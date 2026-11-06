@@ -1,6 +1,9 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -253,5 +256,27 @@ func TestLoadConfigAsksTheEngineWhenTheSocketUIDClaimsRootless(t *testing.T) {
 	settings["ENGINE_SOCKET_UID"] = "0"
 	if cfg, err := loadConfig(env(settings)); err != nil || !cfg.mustBeRootless {
 		t.Fatalf("uid 0: %+v, %v", cfg.mustBeRootless, err)
+	}
+}
+
+// What main runs before it serves: a claim of rootless on an engine that is not one stops the proxy.
+func TestCheckStartupAsksTheEngine(t *testing.T) {
+	for options, want := range map[string]bool{`["name=rootless"]`: true, `[]`: false} {
+		engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"SecurityOptions":` + options + `}`))
+		}))
+		t.Cleanup(engine.Close)
+		target, err := url.Parse(engine.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler := engineproxy.NewHandler(engineproxy.Policy{}, target, http.DefaultTransport)
+		err = checkStartup(config{mustBeRootless: true}, handler)
+		if (err == nil) != want {
+			t.Errorf("%s: %v", options, err)
+		}
+		if err := checkStartup(config{}, handler); err != nil {
+			t.Errorf("not claiming rootless: %v", err)
+		}
 	}
 }

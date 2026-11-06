@@ -39,6 +39,8 @@ type restartEngine struct {
 	// onStart runs on each start, under the lock; hang blocks those ids until their caller gives up.
 	onStart func(id string)
 	hang    map[string]bool
+	// onList runs once a list is answered, as if the engine moved on right after it.
+	onList func()
 }
 
 func (e *restartEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +50,9 @@ func (e *restartEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && path == "/containers/json":
 		e.list(w)
+		if e.onList != nil {
+			e.onList()
+		}
 	case r.Method == http.MethodPost && path == "/containers/create":
 		body, _ := io.ReadAll(r.Body)
 		e.created = string(body)
@@ -449,9 +454,9 @@ func TestAnUnreadableStopRecordHoldsTheSupervisorBack(t *testing.T) {
 		"no header": "abc\n" + stoppedEnd + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			old := tenant("running")
-			old.policy = "unless-stopped"
-			engine := &restartEngine{containers: map[string]*restartContainer{"crashed": tenant("exited"), "old": old, testFirewall: firewall("running", "healthy")}}
+			old, oldStopped := tenant("running"), tenant("exited")
+			old.policy, oldStopped.policy = "unless-stopped", "unless-stopped"
+			engine := &restartEngine{containers: map[string]*restartContainer{"crashed": tenant("exited"), "old": old, "old-stopped": oldStopped, testFirewall: firewall("running", "healthy")}}
 			upstream := httptest.NewServer(engine)
 			t.Cleanup(upstream.Close)
 			file := filepath.Join(t.TempDir(), "stopped")
@@ -463,11 +468,12 @@ func TestAnUnreadableStopRecordHoldsTheSupervisorBack(t *testing.T) {
 			if started := engine.startedOnly(); len(started) != 0 {
 				t.Fatalf("started %v from a record it cannot read", started)
 			}
-			if old.policy != "no" {
-				t.Fatalf("an older tenant keeps %s: a reboot would start it unguarded", old.policy)
+			if old.policy != "no" || oldStopped.policy != "no" {
+				t.Fatalf("older tenants keep %s, %s: a reboot would start them unguarded", old.policy, oldStopped.policy)
 			}
-			if resp := serve(t, handler, http.MethodPost, "/containers/crashed/stop", ""); resp.StatusCode == http.StatusNoContent {
-				t.Fatal("a stop that cannot be recorded went through")
+			// Nothing starts on its own in this mode, so a stop needs no record: pause, delete and a watcher's replacement go on working.
+			if resp := serve(t, handler, http.MethodPost, "/containers/crashed/stop", ""); resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("stop answered %d", resp.StatusCode)
 			}
 			if got, _ := os.ReadFile(file); string(got) != content {
 				t.Fatalf("the unreadable record was overwritten: %q", got)
@@ -512,13 +518,18 @@ func TestAHungStartHoldsNoOtherTenantBack(t *testing.T) {
 		"hung": tenant("exited"), "fine": tenant("exited"), testFirewall: firewall("running", "healthy"),
 	})
 	engine.hang = map[string]bool{"hung": true}
-	handler.restarts.startTimeout = 100 * time.Millisecond
+	handler.restarts.startTimeout = 2 * time.Second
+	var startedAfter time.Duration
 	began := time.Now()
-	handler.superviseOnce(context.Background())
+	engine.onStart = func(string) { startedAfter = time.Since(began) }
+	handler.startAll(context.Background(), []string{"hung", "fine"})
 	if started := engine.startedOnly(); len(started) != 1 || started[0] != "fine" {
 		t.Fatalf("started %v", started)
 	}
-	if elapsed := time.Since(began); elapsed > 5*time.Second {
+	if startedAfter > time.Second {
+		t.Fatalf("the other tenant waited %s behind a hung start", startedAfter)
+	}
+	if elapsed := time.Since(began); elapsed > 4*time.Second {
 		t.Fatalf("a hung start held the pass for %s", elapsed)
 	}
 }
@@ -632,5 +643,130 @@ func TestEngineRootlessReadsTheEngine(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("%s: got %v, %v", options, got, err)
 		}
+	}
+}
+
+// A client that hangs up does not stop the engine, which finishes the stop anyway.
+func TestAStopWhoseClientHungUpStaysRecorded(t *testing.T) {
+	engine := &slowStopEngine{restartEngine: &restartEngine{containers: map[string]*restartContainer{
+		"paused": tenant("running"), testFirewall: firewall("running", "healthy")}}, stopTakes: 300 * time.Millisecond}
+	upstream := httptest.NewServer(engine)
+	t.Cleanup(upstream.Close)
+	handler := guarded(t, upstream.URL, filepath.Join(t.TempDir(), "stopped"))
+	front := httptest.NewServer(handler)
+	t.Cleanup(front.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, front.URL+"/containers/paused/stop", nil)
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		resp.Body.Close()
+		t.Fatal("the client was meant to give up")
+	}
+	time.Sleep(50 * time.Millisecond)
+	// Still running: a pass here must not read it as started by hand.
+	handler.superviseOnce(context.Background())
+	engine.wg.Wait()
+	handler.superviseOnce(context.Background())
+	if started := engine.startedOnly(); len(started) != 0 || !handler.restarts.isStopped("paused") {
+		t.Fatalf("started %v, recorded %v: the pause was undone", started, handler.restarts.isStopped("paused"))
+	}
+}
+
+// With no answer at all, a tenant still running once the engine has had its time was never stopped.
+func TestAStopWithNoAnswerExpires(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"x": tenant("running"), testFirewall: firewall("running", "healthy")})
+	handler.restarts.stopGrace = time.Millisecond
+	req := httptest.NewRequest(http.MethodPost, "/containers/x/stop", nil)
+	if err := handler.beforeStop(req, "x"); err != nil {
+		t.Fatal(err)
+	}
+	handler.stopUnanswered(req.Context())
+	time.Sleep(5 * time.Millisecond)
+	handler.superviseOnce(context.Background())
+	if handler.restarts.isStopped("x") {
+		t.Fatal("a stop that never happened keeps the tenant on the record")
+	}
+	engine.containers["x"].status = "exited"
+	handler.superviseOnce(context.Background())
+	if len(engine.startedOnly()) != 1 {
+		t.Fatalf("started %v", engine.startedOnly())
+	}
+}
+
+// A stop recorded while a hung start holds the slots is not undone by the start queued behind it.
+func TestAQueuedStartHonoursAStopRecordedMeanwhile(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"a": tenant("exited"), "b": tenant("exited"), testFirewall: firewall("running", "healthy")})
+	engine.hang = map[string]bool{"a": true}
+	handler.restarts.workers, handler.restarts.startTimeout = 1, 300*time.Millisecond
+	done := make(chan struct{})
+	go func() { handler.startAll(context.Background(), []string{"a", "b"}); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	if err := handler.restarts.setStopped("b", true); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if started := engine.startedOnly(); len(started) != 0 {
+		t.Fatalf("started %v after its pause", started)
+	}
+}
+
+// The proxy restarted mid-stop: whatever is running on the record gets the engine's time before reading as started by hand.
+func TestAProxyRestartMidStopKeepsTheRecord(t *testing.T) {
+	engine := &restartEngine{containers: map[string]*restartContainer{"x": tenant("running"), testFirewall: firewall("running", "healthy")}}
+	upstream := httptest.NewServer(engine)
+	t.Cleanup(upstream.Close)
+	file := filepath.Join(t.TempDir(), "stopped")
+	if err := os.WriteFile(file, []byte(stoppedHeader+"\nx\n"+stoppedEnd+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handler := guarded(t, upstream.URL, file)
+	handler.superviseOnce(context.Background())
+	engine.mu.Lock()
+	engine.containers["x"].status = "exited"
+	engine.mu.Unlock()
+	handler.superviseOnce(context.Background())
+	if started := engine.startedOnly(); len(started) != 0 {
+		t.Fatalf("started %v: the stop in flight read as a crash", started)
+	}
+}
+
+// The list predates the stop's end: it is read again before the record goes.
+func TestAStaleListDoesNotReadAsStartedByHand(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{"x": tenant("running"), testFirewall: firewall("running", "healthy")})
+	if err := handler.restarts.setStopped("x", true); err != nil {
+		t.Fatal(err)
+	}
+	handler.restarts.stopping = map[string]time.Time{}
+	engine.onList = func() { engine.containers["x"].status = "exited"; engine.onList = nil }
+	handler.superviseOnce(context.Background())
+	if !handler.restarts.isStopped("x") {
+		t.Fatal("the record went on a list older than the stop")
+	}
+}
+
+type slowStopEngine struct {
+	*restartEngine
+	stopTakes time.Duration
+	wg        sync.WaitGroup
+}
+
+func (e *slowStopEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasSuffix(r.URL.Path, "/stop") {
+		e.restartEngine.ServeHTTP(w, r)
+		return
+	}
+	id := strings.Split(strings.TrimPrefix(r.URL.Path, "/containers/"), "/")[0]
+	e.wg.Add(1)
+	go func() { // as dockerd does: the stop goes on after the client hung up
+		defer e.wg.Done()
+		time.Sleep(e.stopTakes)
+		e.mu.Lock()
+		e.containers[id].status = "exited"
+		e.mu.Unlock()
+	}()
+	select {
+	case <-r.Context().Done():
+	case <-time.After(e.stopTakes):
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

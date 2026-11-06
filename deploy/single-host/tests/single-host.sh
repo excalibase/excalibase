@@ -110,6 +110,8 @@ if proxy_env.get("PROXY_FIREWALL_CONTAINER") != fw.get("container_name"):
     sys.exit("the proxy holds tenants to another container than the host firewall")
 if doc["services"]["provisioning"]["environment"].get("HOST_FIREWALL_CONTAINER") != fw.get("container_name"):
     sys.exit("provisioning checks another container than the host firewall before changing a database")
+if "ENGINE_SOCKET_UID" not in doc["services"]["provisioning"]["environment"]:
+    sys.exit("provisioning cannot tell rootless Podman, which holds no tenant back")
 if fw.get("container_name") not in proxy_env.get("PROXY_STATS_CONTAINERS", "").split(","):
     sys.exit("the proxy does not let provisioning read the state of the host firewall")
 if not proxy_env.get("PROXY_STOPPED_FILE", "").startswith("/var/lib/excalibase-bridges/") or "ENGINE_SOCKET_UID" not in proxy_env:

@@ -36,6 +36,11 @@ const networkNone = "none"
 const (
 	// superviseEvery bounds how long a crashed tenant stays down, and paces a crash loop.
 	superviseEvery = 5 * time.Second
+	// superviseStopGrace is how long a stop with no answer may still be going on in the engine:
+	// provisioning's stops give a container 30 seconds.
+	superviseStopGrace = 2 * time.Minute
+	// corruptLogEvery repeats the way out of an unreadable record.
+	corruptLogEvery = 5 * time.Minute
 	// superviseStartTimeout and superviseWorkers keep a hung start from holding the other tenants' back.
 	superviseStartTimeout = 30 * time.Second
 	superviseWorkers      = 4
@@ -66,7 +71,7 @@ func (h *Handler) WithRestarts(restarts Restarts) (*Handler, error) {
 		return nil
 	}
 	h.forward.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		h.stopAnswered(r.Context(), false)
+		h.stopUnanswered(r.Context())
 		log.Printf("engine proxy: forward %s: %v", logsafe.Value(r.URL.Path), err)
 		w.WriteHeader(http.StatusBadGateway)
 	}
@@ -86,6 +91,15 @@ func (h *Handler) stopAnswered(ctx context.Context, stopped bool) {
 	}
 	if err := h.restarts.setStopped(attempt.id, false); err != nil {
 		log.Printf("engine proxy: restarts: %v", err)
+	}
+}
+
+// stopUnanswered is a stop with no answer, the caller gone: the engine finishes
+// it anyway, so the record stands, and a tenant still running after the grace
+// never stopped (settleStartedByHand).
+func (h *Handler) stopUnanswered(ctx context.Context) {
+	if attempt, ok := ctx.Value(stopAttemptKey{}).(stopAttempt); ok {
+		h.restarts.expireStopping(attempt.id)
 	}
 }
 
@@ -265,8 +279,7 @@ func (h *Handler) superviseOnce(ctx context.Context) {
 		}
 	}
 	if guard.corrupt {
-		log.Printf("engine proxy: restarts: %s cannot be read, so no tenant is started: it may name ones stopped on purpose. "+
-			"Start them through the platform, or remove the file and restart this container to start them all", guard.StoppedFile)
+		guard.logCorrupt()
 		return
 	}
 	h.settleStartedByHand(ctx, tenants)
@@ -274,6 +287,17 @@ func (h *Handler) superviseOnce(ctx context.Context) {
 		return
 	}
 	h.startAll(ctx, h.toStart(tenants))
+}
+
+// logCorrupt says what this mode means and the way out, now and then.
+func (g *restartGuard) logCorrupt() {
+	if time.Since(g.corruptLogged) < corruptLogEvery {
+		return
+	}
+	g.corruptLogged = time.Now()
+	log.Printf("engine proxy: restarts: %[1]s cannot be read. It may name tenants stopped on purpose, so none is started on its own and a crashed one stays down. "+
+		"To recover: docker exec excalibase-engine-proxy rm %[1]s, then docker restart excalibase-engine-proxy. "+
+		"Every exited tenant then starts, paused projects' too: pause those again", g.StoppedFile)
 }
 
 // listTenants is the supervised containers, after the records drop what the engine no longer holds.
@@ -354,7 +378,8 @@ func (h *Handler) startAll(ctx context.Context, ids []string) {
 		running.Add(1)
 		go func() {
 			defer func() { <-slots; running.Done() }()
-			if !h.firewallHealthy(ctx) {
+			// Read again: a slot may have taken a while, and a pause or the firewall gone meanwhile counts.
+			if guard.isStopped(id) || !h.firewallHealthy(ctx) {
 				return
 			}
 			started, cancel := context.WithTimeout(ctx, guard.startTimeout)
@@ -382,8 +407,7 @@ func (h *Handler) adopt(ctx context.Context, id string) error {
 		return err
 	}
 	if name := found.Host.RestartPolicy.Name; name != "" && name != "no" {
-		// With the record unreadable this adds no entry, and nothing is started anyway.
-		if found.State.Status == "exited" && !guard.corrupt {
+		if found.State.Status == "exited" {
 			if err := guard.setStopped(id, true); err != nil {
 				return err
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -41,6 +42,17 @@ func (a *DockerBackupAdapter) InPlaceRecoveryTarget(ctx context.Context, inst *d
 	pinned := req
 	pinned.BackupID = base.ID
 	return map[string]interface{}{inPlaceRequestKey: pinned}, nil
+}
+
+// WaitHostFirewall waits for the database to be able to start again. See HostFirewallWaiter.
+func (a *DockerBackupAdapter) WaitHostFirewall(ctx context.Context) error {
+	a.mu.RLock()
+	dc := a.docker
+	a.mu.RUnlock()
+	if dc == nil {
+		return nil
+	}
+	return provisioner.WaitHostFirewall(ctx, dc, restoreRollbackFirewallPoller)
 }
 
 // TakeSafetyBackup backs the running database up and names the backup.
@@ -95,6 +107,12 @@ func (a *DockerBackupAdapter) ReplaceDatabase(ctx context.Context, inst *domain.
 		return err
 	}
 	if err := a.bringUp(ctx, dc, seeded, backupsOn(inst)); err != nil {
+		// The proxy starts a refused container once the firewall is healthy: not this one, nobody is waiting for it.
+		if errors.Is(err, provisioner.ErrHostFirewallDown) {
+			if removeErr := dc.RemoveContainer(context.WithoutCancel(ctx), seeded.containerID); removeErr != nil {
+				log.Printf("in-place restore %s: remove %s: %v", inst.ProjectID, seeded.containerID, removeErr)
+			}
+		}
 		return err
 	}
 	if err := rebuildGateway(ctx, dc, inst, seeded, gatewayTLS); err != nil {
