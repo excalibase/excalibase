@@ -9,11 +9,12 @@ import (
 	"strings"
 )
 
-// roleSQLExecer runs one psql command in a project's primary database and
-// returns its combined output. A non-zero exit is an error. It is the one
-// seam the role-SQL orchestration needs, so the same orchestration drives
-// both the Kubernetes and Docker paths and a test's own container.
-type roleSQLExecer func(ctx context.Context, cmd []string) (string, error)
+// roleSQLExecer runs one psql command in a project's primary database, with
+// stdin fed to it when there is any, and returns its combined output. A
+// non-zero exit is an error. It is the one seam the role-SQL orchestration
+// needs, so the same orchestration drives both the Kubernetes and Docker paths
+// and a test's own container.
+type roleSQLExecer func(ctx context.Context, cmd []string, stdin string) (string, error)
 
 // roleSQLRetries bounds how many times the role SQL is re-run after
 // terminating the customer backends that blocked it with a lock.
@@ -29,18 +30,19 @@ const roleSQLRetries = 3
 // at once.
 func runSuperuserRoleSQL(ctx context.Context, exec roleSQLExecer, dbName string, scripts ...string) error {
 	versionNum := probeServerVersionNum(ctx, exec, dbName)
-	cmd := superuserPsqlCommand(dbName, versionNum, scripts...)
+	cmd := superuserPsqlCommand(dbName, versionNum)
+	input := superuserScript(scripts...)
 	var err error
 	for attempt := 0; attempt < roleSQLRetries; attempt++ {
 		var out string
-		out, err = exec(ctx, cmd)
+		out, err = exec(ctx, cmd, input)
 		if err == nil {
 			return nil
 		}
 		if !isLockTimeout(out, err) || attempt == roleSQLRetries-1 {
 			return err
 		}
-		if _, termErr := exec(ctx, terminateNonServiceBackendsCommand(dbName)); termErr != nil {
+		if _, termErr := exec(ctx, terminateNonServiceBackendsCommand(dbName), ""); termErr != nil {
 			log.Printf("role SQL: could not terminate the backends blocking %s: %v", dbName, termErr)
 		}
 	}
@@ -67,7 +69,7 @@ func isLockTimeout(output string, err error) bool {
 // transaction_timeout off per transaction, so the only cost is not pinning it
 // at connect.
 func probeServerVersionNum(ctx context.Context, exec roleSQLExecer, dbName string) int {
-	out, err := exec(ctx, serverVersionProbeCommand(dbName))
+	out, err := exec(ctx, serverVersionProbeCommand(dbName), "")
 	if err != nil {
 		log.Printf("role SQL: could not read server version for %s (continuing): %v", dbName, err)
 		return 0
@@ -82,7 +84,7 @@ func probeServerVersionNum(ctx context.Context, exec roleSQLExecer, dbName strin
 // appReachesAuth reports whether excalibase_app can still reach the auth
 // schema. An answer that is neither t nor f is an error, never a guess.
 func appReachesAuth(ctx context.Context, exec roleSQLExecer, dbName string) (bool, error) {
-	out, err := exec(ctx, authAccessProbeCommand(dbName))
+	out, err := exec(ctx, authAccessProbeCommand(dbName), "")
 	if err != nil {
 		return false, fmt.Errorf("probe excalibase_app's access to auth: %w", err)
 	}
@@ -98,10 +100,10 @@ func appReachesAuth(ctx context.Context, exec roleSQLExecer, dbName string) (boo
 // roleSQLExecer returns the execer bound to a project's primary database for
 // the active deployment mode.
 func (s *ProvisioningService) roleSQLExecer(namespace, primaryPod string) roleSQLExecer {
-	return func(ctx context.Context, cmd []string) (string, error) {
+	return func(ctx context.Context, cmd []string, stdin string) (string, error) {
 		if s.dockerClient != nil {
-			return s.dockerClient.ExecInContainerStdin(ctx, namespace, cmd, "")
+			return s.dockerClient.ExecInContainerStdin(ctx, namespace, cmd, stdin)
 		}
-		return s.k8sClient.ExecInPod(ctx, namespace, primaryPod, "postgres", cmd)
+		return s.k8sClient.ExecInPodStdin(ctx, namespace, primaryPod, "postgres", cmd, stdin)
 	}
 }

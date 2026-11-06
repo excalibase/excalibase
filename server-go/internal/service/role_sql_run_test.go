@@ -9,12 +9,14 @@ import (
 
 type scriptedExecer struct {
 	calls   [][]string
+	inputs  []string
 	outputs []string
 	errs    []error
 }
 
-func (e *scriptedExecer) exec(_ context.Context, cmd []string) (string, error) {
+func (e *scriptedExecer) exec(_ context.Context, cmd []string, stdin string) (string, error) {
 	e.calls = append(e.calls, cmd)
+	e.inputs = append(e.inputs, stdin)
 	i := len(e.calls) - 1
 	out, err := "", error(nil)
 	if i < len(e.outputs) {
@@ -51,6 +53,14 @@ func TestRunSuperuserRoleSQL_TerminatesOnLockTimeoutThenRetries(t *testing.T) {
 	}
 	if !isProbe(e.calls[0]) || !isTerminate(e.calls[2]) {
 		t.Fatalf("call order wrong: probe=%v terminate=%v", e.calls[0], e.calls[2])
+	}
+}
+
+// On stdin psql prefixes the error with where it was reading.
+func TestIsLockTimeoutReadsAnErrorFromAScriptOnStdin(t *testing.T) {
+	err := errors.New("exit 3: psql:<stdin>:12: ERROR:  55P03: canceling statement due to lock timeout")
+	if !isLockTimeout("", err) {
+		t.Fatal("a lock timeout on stdin was not recognised, so the retry never runs")
 	}
 }
 
@@ -113,7 +123,7 @@ func TestRoleSQLExecerPrefersDockerThenK8s(t *testing.T) {
 	docker := &fakeDockerClientForAdapter{}
 	svc := NewProvisioningService(nil, nil, nil)
 	svc.SetDockerClient(docker)
-	if _, err := svc.roleSQLExecer("c1", "pod")(context.Background(), []string{"psql", "-c", "SELECT 1"}); err != nil {
+	if _, err := svc.roleSQLExecer("c1", "pod")(context.Background(), []string{"psql", "-f", "-"}, "SELECT 1"); err != nil {
 		t.Fatal(err)
 	}
 	if len(docker.execs) != 1 {

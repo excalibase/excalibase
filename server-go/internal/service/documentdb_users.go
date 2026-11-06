@@ -362,7 +362,7 @@ func clusterPrimary(ctx context.Context, client k8s.KubeClient, inst *domain.Dat
 // arguments land in the exec URL, which the API server audits.
 func (s *ProvisioningService) execMongoUserSQL(ctx context.Context, inst *domain.DatabaseInstance, primary, statement string) error {
 	psql := []string{"psql", "-U", "postgres", "-d", config.DocumentDBDatabase, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}
-	input := pgroles.PinnedSearchPath + statement + "\n"
+	input := pgroles.PinnedSearchPath + pgroles.QuietSessionSQL() + statement + "\n"
 	if inst.DeploymentMode == domain.ModeDocker {
 		if s.dockerClient == nil {
 			return ErrMongoUsersUnavailable
@@ -400,7 +400,7 @@ func createMongoUserSQL(username, verifier string, role MongoUserRole) string {
 
 // mongoUserBlock runs body with n bound to the user's name.
 func mongoUserBlock(username, body string) string {
-	return "DO $$ DECLARE n text := " + sqlTextLiteral(username) + "; BEGIN " + body + " END $$;"
+	return "DO $$ DECLARE n text := " + sqlTextLiteral(username) + "; BEGIN " + body + " " + raiseWithoutContext + " END $$;"
 }
 
 // isMongoUserSQL is true only for a direct member of the Mongo users group
