@@ -63,6 +63,12 @@ apps and grant what the anon role grants.
 | `test_auth_flow` | `GET /api/projects/{id}/info/`, then one register or password sign-in against the project's own auth API with a test account the caller gives; reports status, outcome and the userId and role claims, never the password or a token; with `origin` the CORS preflight is checked first |
 | `get_logs` | database: `GET /api/provision/{id}/logs` (optional `query`, and `since` 1h/6h/24h/7d); app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs`. A log backend that does not answer gives "not available", never its address |
 | `get_slow_queries` | `GET /api/provision/{id}/slow-queries/?sort=total\|mean&limit=N`: the project's own normalized statements; the tool is offered only while `FEATURE_SLOWQUERIES` is on. Reset and turning statistics on stay in Studio |
+| `get_request_metrics` | `GET /api/provision/{id}/requests?range=`: request, error and latency charts; offered only while `FEATURE_REQUESTMETRICS` is on |
+| `get_metrics` | `GET .../metrics/current` and, with `history`, `.../metrics/history?limit=N` |
+| `list_alerts` | `GET /api/alerts/project/{id}/` |
+| `get_database_info` | `GET /api/provision/{id}/cluster`: disk, size, plan, settings (Postgres) |
+| `get_db_endpoint` | `GET /api/projects/{id}/db-endpoint/`: host, port, CA and connection strings without the password; opening the port stays in Studio |
+| `get_db_read_address` | `GET /api/projects/{id}/db-read-address/`; offered only while `FEATURE_DBREADADDRESS` is on |
 | `test_api_request` | `GET /api/projects/{id}/info/`, then one request to the project's own data API (below) |
 | `get_dockerfile_template` | none: Dockerfiles for node, nextjs, vite, python, go, java |
 | `list_sites` / `create_site` / `delete_site` | `GET`/`POST /api/projects/{id}/sites/`, `DELETE .../sites/{site}/`. Sites serve built files from the CDN (ADR 0043); the site's origin joins the project's CORS list on its first deploy |
