@@ -151,3 +151,15 @@ func TestARealNotFoundKeepsTheRoutesWords(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestAPlainTextNotFoundKeepsTheRoutesWords(t *testing.T) {
+	router := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "project not found", http.StatusNotFound)
+	})
+	d := dispatcher{router: router, caller: callerFor(domain.AccessToken{Scopes: auth.ScopeRead}, true)}
+	err := d.send(context.Background(), http.MethodGet, "/api/provision/p/cluster", nil, nil, nil)
+	var routeErr *RouteError
+	if !errors.As(err, &routeErr) || routeErr.Message != "project not found" {
+		t.Fatalf("err = %v", err)
+	}
+}

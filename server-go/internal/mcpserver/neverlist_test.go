@@ -126,6 +126,101 @@ var neverReached = []*regexp.Regexp{
 	regexp.MustCompile(`/documentdb/users`),
 	regexp.MustCompile(`/previews/access`),
 	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/registry-credentials`),
+	// Sign-in providers carry client secrets and hooks call out to a URL: reads only (EXC-684).
+	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/auth-providers`),
+	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/auth-settings`),
+	regexp.MustCompile(`/auth-hooks`),
+	// Token and key minting, and where logs and metrics go.
+	regexp.MustCompile(`/tokens`),
+	regexp.MustCompile(`/metrics-keys`),
+	regexp.MustCompile(`/log-drains`),
+	// The database port and its read address are opened by an Admin in Studio.
+	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/db-endpoint/?(\?.*)?$`),
+	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/db-read-address`),
+	// Storage: S3 keys are minted in Studio; buckets and objects are not an MCP surface.
+	regexp.MustCompile(`^(PUT|POST|PATCH) .*/storage`),
+	regexp.MustCompile(`/storage(\?.*)?$`),
+	regexp.MustCompile(`/storage/(buckets|objects|v1)`),
+	regexp.MustCompile(`/apps/[^/]+/secrets`),
+	// One-way database changes.
+	regexp.MustCompile(`/upgrade`),
+	regexp.MustCompile(`/major-upgrade`),
+	regexp.MustCompile(`/parameters`),
+}
+
+// The patterns above catch what a tool author might reach for (EXC-684 review).
+func TestNeverReachedCatchesTheSurfaceItNames(t *testing.T) {
+	for _, call := range []string{
+		"PUT /api/projects/p/auth-providers/github",
+		"DELETE /api/projects/p/auth-providers/github",
+		"PUT /api/projects/p/auth-settings/",
+		"PUT /api/projects/p/auth-settings/mfa",
+		"GET /api/projects/p/auth-hooks/",
+		"POST /api/projects/p/sites/s/tokens",
+		"GET /api/projects/p/metrics-keys/",
+		"POST /api/projects/p/log-drains/",
+		"PUT /api/projects/p/db-endpoint/",
+		"PUT /api/projects/p/db-read-address/",
+		"POST /api/projects/p/storage/s3-keys",
+		"GET /api/projects/p/storage/buckets",
+		"PUT /api/projects/p/apps/a/secrets/NAME",
+		"POST /api/provision/p/major-upgrade",
+		"PUT /api/provision/p/parameters",
+		"POST /api/provision/p/upgrade",
+		"GET /api/projects/p/credentials",
+	} {
+		if !matchesAny(neverReached, call) {
+			t.Errorf("%s is not on the never-list", call)
+		}
+	}
+	for _, call := range []string{
+		"GET /api/projects/p/auth-providers/",
+		"GET /api/projects/p/auth-settings/",
+		"GET /api/projects/p/db-endpoint/",
+		"GET /api/projects/p/db-read-address/",
+		"PUT /api/projects/p/db-endpoint/allowed-sources/",
+		"GET /api/projects/p/storage/s3-keys",
+		"DELETE /api/projects/p/storage/s3-keys/k",
+	} {
+		if matchesAny(neverReached, call) {
+			t.Errorf("%s is a legitimate call but is on the never-list", call)
+		}
+	}
+}
+
+// Every tool in the catalogue with every feature on is either offered with
+// them off or declared dark, and none names a capability MCP must never offer.
+func TestEveryCatalogueEntryIsPinned(t *testing.T) {
+	forbidden := regexp.MustCompile(`project_(create|delete)|create_project|delete_project|member|role_grant|tier|sso|sign_in|backup|restore|purge|credential|rotate|token|pause|resume`)
+	listed := map[string]bool{}
+	for _, name := range offeredTools {
+		listed[name] = true
+	}
+	for _, entry := range catalogue() {
+		if forbidden.MatchString(entry.name) {
+			t.Errorf("%s names a capability MCP must never offer", entry.name)
+		}
+		if entry.feature == "" {
+			if !listed[entry.name] && entry.access != readOnlyVariant {
+				t.Errorf("%s is not dark and not in offeredTools", entry.name)
+			}
+			continue
+		}
+		if darkTools[entry.name] != entry.feature {
+			t.Errorf("%s is dark behind %q but darkTools says %q", entry.name, entry.feature, darkTools[entry.name])
+		}
+	}
+	dark := map[string]bool{}
+	for _, entry := range catalogue() {
+		if entry.feature != "" {
+			dark[entry.name] = true
+		}
+	}
+	for name := range darkTools {
+		if !dark[name] {
+			t.Errorf("darkTools lists %s, which the catalogue does not make dark", name)
+		}
+	}
 }
 
 func TestToolCatalogueIsExactlyTheCodingSurface(t *testing.T) {

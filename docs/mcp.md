@@ -37,8 +37,8 @@ the token, the project and the outcome; arguments (SQL, secrets) are not kept, a
 read-only SQL is masked in the access log. A call whose arguments fail the tool's
 input schema is refused before it runs and is not audited.
 
-MCP never offers project creation or deletion, members and roles, tiers, sign-in
-providers, backups and restores, credential reads or rotation, or token minting.
+MCP never offers project creation or deletion, members and roles, tiers, changes to sign-in
+providers (it can read sign-in settings and providers, never their secrets), backups and restores, credential reads or rotation, or token minting.
 `create_publishable_key` makes only publishable SDK keys, which ship inside client
 apps and grant what the anon role grants.
 

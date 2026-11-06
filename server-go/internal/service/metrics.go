@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -311,10 +312,15 @@ func (s *MetricsService) fetchCNPGMetrics(ctx context.Context, namespace, projec
 // curl, so the request goes over bash's /dev/tcp.
 const exporterRequest = `exec 3<>/dev/tcp/localhost/9187 && printf 'GET /metrics HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 && cat <&3`
 
+// errMetricsExec is what a client reads when the exporter could not be asked.
+var errMetricsExec = errors.New("the database could not be reached to read its metrics")
+
 func (s *MetricsService) execMetricsFetch(ctx context.Context, namespace, pod string) (string, error) {
 	response, err := s.k8sClient.ExecInPod(ctx, namespace, pod, "postgres", []string{"bash", "-c", exporterRequest})
 	if err != nil {
-		return "", err
+		// The call's error names the API server and the pod: log it, say only that the read failed.
+		log.Printf("metrics of %s: exec in pod: %v", pod, err)
+		return "", errMetricsExec
 	}
 	return exporterBody(response)
 }
