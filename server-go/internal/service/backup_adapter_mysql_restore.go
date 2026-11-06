@@ -157,7 +157,7 @@ func (a *MySQLBackupAdapter) createRestoredCluster(ctx context.Context, pc *prov
 	if err := a.kube.CreateProjectNamespace(ctx, target.namespace, inst.OrgID); err != nil {
 		return fmt.Errorf("create restore namespace: %w", err)
 	}
-	pc.RegisterCleanup("delete restore namespace", func(ctx context.Context) error {
+	pc.RegisterCleanup(restoreNamespaceCleanup(target.namespace), func(ctx context.Context) error {
 		return a.kube.DeleteNamespace(ctx, target.namespace)
 	})
 	if err := a.mysql.WriteBackupAccess(ctx, target.namespace, k8s.MySQLRestoreSourceAccessName, target.sourceCreds); err != nil {

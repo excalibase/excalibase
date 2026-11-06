@@ -124,6 +124,21 @@ func TestInstances_RecordRollbackRetryWritesOnlyWhatItOwns(t *testing.T) {
 	}
 }
 
+// A row a teardown owns is the teardown's, even when the caller expects its status.
+func TestInstances_RecordRollbackRetryRefusesARowBeingDeleted(t *testing.T) {
+	store := testStore(t)
+	inst := databaseLessRow("proj-nodb0903", "org-nodb")
+	if err := store.Create(inst); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.BeginDeletion(inst.ProjectID, nil); err != nil {
+		t.Fatalf("BeginDeletion: %v", err)
+	}
+	if err := store.RecordRollbackRetry(inst.ProjectID, "[]", "why", string(domain.StatusDeleting)); !errors.Is(err, storage.ErrProjectDeleting) {
+		t.Fatalf("got %v, want ErrProjectDeleting", err)
+	}
+}
+
 // The row a restore records when it cannot remove what it created.
 func TestInstances_AFailedRestoreRecordIsCreatedAndReadsBack(t *testing.T) {
 	store := testStore(t)

@@ -114,7 +114,8 @@ func TestProjectStatusSaysWhetherTheCallerMayAddADatabase(t *testing.T) {
 func TestAddDatabaseAnswersBusyWhileAFailedAddIsBeingRemoved(t *testing.T) {
 	f := addDatabaseRouterFixture(t)
 	row, _ := f.store.FindByProjectID("apps-only")
-	row.RollbackLog = `[{"name":"remove database from namespace org1-apps-only","ok":false,"error":"x"}]`
+	row.FailureReason = "exec: boom"
+	row.RollbackLog = `[{"name":"remove database from namespace org1-apps-only","ok":false,"error":"x","forFailure":"exec: boom"}]`
 	if err := f.store.Update(row); err != nil {
 		t.Fatal(err)
 	}

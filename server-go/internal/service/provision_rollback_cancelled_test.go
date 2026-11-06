@@ -176,81 +176,80 @@ func (c *contextRecordingClaimer) Claim(ctx context.Context, projectID string, o
 // rollback done, on every path a database is built by.
 func TestBuild_ADeadlineAtRoleCreationFailsTheBuildAndRollsBack(t *testing.T) {
 	inline := func(f func()) { f() }
-	creates := map[string]func(*ProvisioningService) string{
-		"create": func(svc *ProvisioningService) string {
-			resp, err := svc.Provision(context.Background(), newProjectRequest())
-			if err != nil {
-				t.Fatalf("provision: %v", err)
-			}
-			return resp.ProjectID
+	creates := map[string]func(*ProvisioningService) (*domain.ProvisioningResponse, error){
+		"create": func(svc *ProvisioningService) (*domain.ProvisioningResponse, error) {
+			return svc.Provision(context.Background(), newProjectRequest())
 		},
-		"create in background": func(svc *ProvisioningService) string {
+		"create in background": func(svc *ProvisioningService) (*domain.ProvisioningResponse, error) {
 			svc.SetBackgroundRunner(inline)
-			resp, err := svc.ProvisionInBackground(context.Background(), newProjectRequest())
-			if err != nil {
-				t.Fatalf("provision: %v", err)
-			}
-			return resp.ProjectID
+			return svc.ProvisionInBackground(context.Background(), newProjectRequest())
 		},
 	}
 	for name, create := range creates {
-		t.Run(name, func(t *testing.T) {
-			svc, store, cluster := liveClusterService(t)
-			svc.buildTimeout = 50 * time.Millisecond
-			cluster.hang = true
-			var projectID string
-			within(t, 5*time.Second, "build", func() { projectID = create(svc) })
-
-			row, _ := store.FindByProjectID(projectID)
-			if row.Status != "FAILED" || row.FailureStage != domain.StageRoleCreation {
-				t.Fatalf("status=%s stage=%s reason=%q, want FAILED at ROLE_CREATION", row.Status, row.FailureStage, row.FailureReason)
-			}
-			if !strings.Contains(row.FailureReason, "did not finish within") {
-				t.Errorf("reason %q does not name the deadline", row.FailureReason)
-			}
-			requireCleanRollback(t, row)
-			if cluster.Namespaces[row.Namespace] {
-				t.Errorf("namespace %s survived the rollback", row.Namespace)
-			}
-		})
+		t.Run(name, func(t *testing.T) { requireCreateEndsAtTheDeadline(t, create) })
 	}
-
-	adds := map[string]func(*ProvisioningService, string){
-		"add": func(svc *ProvisioningService, projectID string) {
-			if _, err := svc.AddDatabase(context.Background(), projectID, addPostgres()); err != nil {
-				t.Fatalf("add: %v", err)
-			}
+	adds := map[string]func(*ProvisioningService, string) (*domain.ProvisioningResponse, error){
+		"add": func(svc *ProvisioningService, projectID string) (*domain.ProvisioningResponse, error) {
+			return svc.AddDatabase(context.Background(), projectID, addPostgres())
 		},
-		"add in background": func(svc *ProvisioningService, projectID string) {
+		"add in background": func(svc *ProvisioningService, projectID string) (*domain.ProvisioningResponse, error) {
 			svc.SetBackgroundRunner(inline)
-			if _, err := svc.AddDatabaseInBackground(context.Background(), projectID, addPostgres()); err != nil {
-				t.Fatalf("add: %v", err)
-			}
+			return svc.AddDatabaseInBackground(context.Background(), projectID, addPostgres())
 		},
 	}
 	for name, add := range adds {
-		t.Run(name, func(t *testing.T) {
-			svc, store, cluster := liveClusterService(t)
-			created := createWithoutDatabase(t, svc)
-			svc.buildTimeout = 50 * time.Millisecond
-			cluster.hang = true
-			within(t, 5*time.Second, "add", func() { add(svc, created.ProjectID) })
+		t.Run(name, func(t *testing.T) { requireAddEndsAtTheDeadline(t, add) })
+	}
+}
 
-			row, _ := store.FindByProjectID(created.ProjectID)
-			if row.Status != string(domain.StatusActive) || !row.NoDatabase {
-				t.Fatalf("status=%s noDatabase=%v, want ACTIVE without a database", row.Status, row.NoDatabase)
-			}
-			if !strings.Contains(row.FailureReason, "did not finish within") {
-				t.Errorf("reason %q does not name the deadline", row.FailureReason)
-			}
-			requireCleanRollback(t, row)
-			if len(cluster.CRDs) != 0 {
-				t.Errorf("%d resources of the failed add survived the rollback", len(cluster.CRDs))
-			}
-			if !cluster.Namespaces[row.Namespace] {
-				t.Error("the rollback removed the project's namespace; its apps live there")
-			}
-		})
+func requireCreateEndsAtTheDeadline(t *testing.T, create func(*ProvisioningService) (*domain.ProvisioningResponse, error)) {
+	t.Helper()
+	svc, store, cluster := liveClusterService(t)
+	svc.buildTimeout = 50 * time.Millisecond
+	cluster.hang = true
+	var resp *domain.ProvisioningResponse
+	var err error
+	within(t, 5*time.Second, "build", func() { resp, err = create(svc) })
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	row, _ := store.FindByProjectID(resp.ProjectID)
+	if row.Status != "FAILED" || row.FailureStage != domain.StageRoleCreation {
+		t.Fatalf("status=%s stage=%s reason=%q, want FAILED at ROLE_CREATION", row.Status, row.FailureStage, row.FailureReason)
+	}
+	if !strings.Contains(row.FailureReason, "did not finish within") {
+		t.Errorf("reason %q does not name the deadline", row.FailureReason)
+	}
+	requireCleanRollback(t, row)
+	if cluster.Namespaces[row.Namespace] {
+		t.Errorf("namespace %s survived the rollback", row.Namespace)
+	}
+}
+
+func requireAddEndsAtTheDeadline(t *testing.T, add func(*ProvisioningService, string) (*domain.ProvisioningResponse, error)) {
+	t.Helper()
+	svc, store, cluster := liveClusterService(t)
+	created := createWithoutDatabase(t, svc)
+	svc.buildTimeout = 50 * time.Millisecond
+	cluster.hang = true
+	var err error
+	within(t, 5*time.Second, "add", func() { _, err = add(svc, created.ProjectID) })
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	row, _ := store.FindByProjectID(created.ProjectID)
+	if row.Status != string(domain.StatusActive) || !row.NoDatabase {
+		t.Fatalf("status=%s noDatabase=%v, want ACTIVE without a database", row.Status, row.NoDatabase)
+	}
+	if !strings.Contains(row.FailureReason, "did not finish within") {
+		t.Errorf("reason %q does not name the deadline", row.FailureReason)
+	}
+	requireCleanRollback(t, row)
+	if len(cluster.CRDs) != 0 {
+		t.Errorf("%d resources of the failed add survived the rollback", len(cluster.CRDs))
+	}
+	if !cluster.Namespaces[row.Namespace] {
+		t.Error("the rollback removed the project's namespace; its apps live there")
 	}
 }
 

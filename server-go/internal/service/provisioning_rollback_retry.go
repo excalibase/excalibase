@@ -27,6 +27,9 @@ const (
 	// rollbackRetryParallelism is how many projects one pass works on at once, so
 	// a stuck project does not hold up the rest.
 	rollbackRetryParallelism = 4
+	// rollbackRetrySlack keeps a retry due on the pass it is meant for, whatever
+	// part of the attempt limit the failed attempt used.
+	rollbackRetrySlack = 30 * time.Second
 
 	// The failed add's reason says where its backup files stand. The notes are
 	// the record the sweep works from, and rows already written carry them.
@@ -54,45 +57,61 @@ const (
 	leftoverAddedDatabase
 	leftoverAddBackups
 	leftoverRestore
+	leftoverRestoreDeletion
 )
 
-// leftoverOf reads what a row says was left behind. Only a rollback log naming
-// that very cleanup as failed licenses touching the cluster, because FAILED
-// alone proves nothing: a major upgrade can leave a live project FAILED with its
-// data in the namespace.
+// errRollbackInProgress is a retry that has nothing to do yet: no failure, so no
+// backoff. The next pass looks again.
+var errRollbackInProgress = errors.New("the rollback is waiting")
+
+// leftoverOf reads what a row says was left behind. FAILED alone proves nothing,
+// since a major upgrade can leave a live project FAILED with its data in the
+// namespace, so the sweep touches a row only while it still reports the very
+// failure whose rollback fell short, in its own namespace, and is not protected.
 func (s *ProvisioningService) leftoverOf(inst *domain.DatabaseInstance) leftover {
 	failed := inst.Status == string(domain.StageFailed)
 	switch inst.DeploymentMode {
 	case domain.ModeDocker:
-		if failed && failedCleanupIn(inst.RollbackLog, removeFailedBuildCleanup(inst.ProjectID)) {
+		if failed && !isProtected(inst) && failedCleanupOf(inst, removeFailedBuildCleanup(inst.ProjectID)) {
 			return leftoverSingleHostBuild
 		}
 	case domain.ModeK8s:
-		if s.k8sClient == nil {
-			return noLeftover
-		}
-		if failed {
-			return failedProjectLeftover(inst)
-		}
-		if inst.Status == string(domain.StatusActive) && inst.NoDatabase {
-			return s.failedAddLeftover(inst)
-		}
+		return s.clusterLeftoverOf(inst)
+	}
+	return noLeftover
+}
+
+func (s *ProvisioningService) clusterLeftoverOf(inst *domain.DatabaseInstance) leftover {
+	if s.k8sClient == nil {
+		return noLeftover
+	}
+	switch {
+	case inst.Status == string(domain.StageFailed):
+		return failedProjectLeftover(inst)
+	case inst.Status == string(domain.StatusDeleting) && isFailedRestore(inst):
+		// The sweep's own final delete, stopped part way. Nobody asked for it, so
+		// nobody else will retry it.
+		return leftoverRestoreDeletion
+	case inst.Status == string(domain.StatusActive) && inst.NoDatabase:
+		return s.failedAddLeftover(inst)
 	}
 	return noLeftover
 }
 
 func failedProjectLeftover(inst *domain.DatabaseInstance) leftover {
-	if failedRestoreCleanupIn(inst.RollbackLog) {
+	switch {
+	case isProtected(inst):
+		return noLeftover
+	case isFailedRestore(inst):
 		return leftoverRestore
-	}
-	if failedCleanupIn(inst.RollbackLog, deleteNamespaceCleanup(inst.Namespace)) {
+	case ownsItsNamespace(inst) && failedCleanupOf(inst, deleteNamespaceCleanup(inst.Namespace)):
 		return leftoverNamespace
 	}
 	return noLeftover
 }
 
 func (s *ProvisioningService) failedAddLeftover(inst *domain.DatabaseInstance) leftover {
-	if failedCleanupIn(inst.RollbackLog, removeDatabaseCleanup(inst.Namespace)) {
+	if failedCleanupOf(inst, removeDatabaseCleanup(inst.Namespace)) {
 		return leftoverAddedDatabase
 	}
 	if s.backupPurger != nil && (strings.Contains(inst.FailureReason, purgeWaitingNote) ||
@@ -104,22 +123,39 @@ func (s *ProvisioningService) failedAddLeftover(inst *domain.DatabaseInstance) l
 
 // failedAddStillStands reports a failed add whose cluster has not been seen to go.
 func failedAddStillStands(inst *domain.DatabaseInstance) bool {
-	return failedCleanupIn(inst.RollbackLog, removeDatabaseCleanup(inst.Namespace)) ||
+	return failedCleanupOf(inst, removeDatabaseCleanup(inst.Namespace)) ||
 		strings.Contains(inst.FailureReason, purgeWaitingNote)
 }
 
-func failedCleanupIn(rollbackLog, name string) bool {
-	for _, result := range parseRollbackLog(rollbackLog) {
-		if result.Name == name && !result.OK {
+// ownsItsNamespace is the name every project's namespace is created under.
+func ownsItsNamespace(inst *domain.DatabaseInstance) bool {
+	return inst.Namespace == fmt.Sprintf("%s-%s", inst.OrgID, inst.ProjectID)
+}
+
+// failedCleanupOf reports the named cleanup failing in the rollback of the failure
+// the row still reports. A log kept after the row moved on licenses nothing. The
+// failed add's reason can carry notes after the failure, hence the prefix.
+func failedCleanupOf(inst *domain.DatabaseInstance, name string) bool {
+	for _, result := range parseRollbackLog(inst.RollbackLog) {
+		if result.Name == name && !result.OK && result.ForFailure != "" && strings.HasPrefix(inst.FailureReason, result.ForFailure) {
 			return true
 		}
 	}
 	return false
 }
 
-func failedRestoreCleanupIn(rollbackLog string) bool {
-	for _, result := range parseRollbackLog(rollbackLog) {
-		if !result.OK && (strings.HasPrefix(result.Name, "delete restore ") || result.Name == unverifiedRowCleanup) {
+// isFailedRestore reports the row a restore left when it could not remove its
+// copy. Each condition is something only that path writes together.
+func isFailedRestore(inst *domain.DatabaseInstance) bool {
+	if inst.RestoredFromProjectID == "" || inst.FailureReason != failedRestoreReason || !ownsItsNamespace(inst) {
+		return false
+	}
+	for _, result := range parseRollbackLog(inst.RollbackLog) {
+		if result.OK {
+			continue
+		}
+		switch result.Name {
+		case restoreNamespaceCleanup(inst.Namespace), restoreClusterCleanup(inst.Namespace), unverifiedRowCleanup:
 			return true
 		}
 	}
@@ -174,8 +210,8 @@ func (s *ProvisioningService) retryProjectRollback(ctx context.Context, projectI
 	case err == nil:
 		s.rollbackRetries.succeeded(projectID)
 		return true
-	case errors.Is(err, ErrProjectOperationRunning):
-		// Someone else's turn; the next pass looks again.
+	case errors.Is(err, ErrProjectOperationRunning), errors.Is(err, errRollbackInProgress):
+		// Someone else's turn, or nothing to do yet; the next pass looks again.
 		return false
 	default:
 		log.Printf("ERROR: retry the failed rollback of %s: %v", projectID, err)
@@ -190,6 +226,11 @@ func (s *ProvisioningService) retryRollback(ctx context.Context, projectID strin
 	teardown, err := s.retryUnderLease(ctx, projectID)
 	if err != nil || !teardown {
 		return err
+	}
+	// A delete started while the vault is sealed could only stop at its step and
+	// leave the row in DELETING, so it waits for the vault to open.
+	if s.vault != nil && s.vault.Sealed() {
+		return errRollbackInProgress
 	}
 	// Takes the lease itself. The copy's namespace has been seen to go, so what
 	// is left is the row and the rest of a normal delete.
@@ -215,6 +256,8 @@ func (s *ProvisioningService) retryUnderLease(ctx context.Context, projectID str
 		return false, s.retryAddBackups(attemptCtx, inst, inst.RollbackLog)
 	case leftoverRestore:
 		return s.retryRestoreNamespace(attemptCtx, inst)
+	case leftoverRestoreDeletion:
+		return true, nil
 	default:
 		return false, nil
 	}
@@ -282,7 +325,7 @@ func (s *ProvisioningService) retryRestoreNamespace(ctx context.Context, inst *d
 		return false, err
 	}
 	if exists {
-		return false, fmt.Errorf("namespace %s of the failed restore is still terminating", inst.Namespace)
+		return false, fmt.Errorf("%w: namespace %s is terminating", errRollbackInProgress, inst.Namespace)
 	}
 	return true, nil
 }
@@ -357,7 +400,7 @@ func (r *rollbackRetrySchedule) failed(projectID string) {
 	if entry, waiting := r.next[projectID]; waiting {
 		delay = min(2*entry.delay, rollbackRetryMaxDelay)
 	}
-	r.next[projectID] = retryBackoff{delay: delay, at: r.clock().Add(delay)}
+	r.next[projectID] = retryBackoff{delay: delay, at: r.clock().Add(delay - r.limit() - rollbackRetrySlack)}
 }
 
 func (r *rollbackRetrySchedule) succeeded(projectID string) {

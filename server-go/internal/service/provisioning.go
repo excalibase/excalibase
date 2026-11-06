@@ -625,7 +625,9 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admit
 
 // defaultBuildTimeout bounds one database build. It sits above the longest pod
 // wait (11 minutes on a paid tier) and below storage.StaleBuildAfter, so a hung
-// build ends itself before a delete may take its row for abandoned.
+// build ends itself before a delete may take its row for abandoned. An image pull
+// runs ahead of this clock and can outlast that rule; a delete that takes the row
+// then stops the build at its next stage.
 const defaultBuildTimeout = 20 * time.Minute
 
 // defaultImagePullTimeout bounds fetching a build's images, which runs ahead of
@@ -992,7 +994,7 @@ func (s *ProvisioningService) recordProvisionFailure(
 	log.Printf("Provisioning failed for %s at stage %s (%s): %v — running %d cleanup(s)",
 		req.ProjectName, inst.FailureStage, inst.FailureStep, inst.FailureReason, pc.CleanupCount())
 
-	results := pc.Rollback(ctx)
+	results := provisioner.ScopeCleanupResults(pc.Rollback(ctx), inst.FailureReason)
 	if logJSON, jerr := json.Marshal(results); jerr == nil {
 		inst.RollbackLog = string(logJSON)
 	} else {

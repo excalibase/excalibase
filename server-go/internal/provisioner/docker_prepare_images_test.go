@@ -80,3 +80,36 @@ func TestDockerMySQL_DeprovisionUnderTheAdmittedNamespaceRemovesTheContainer(t *
 		t.Fatalf("container is %s", status)
 	}
 }
+
+func TestDockerPostgres_PreparesTheWatcherToo(t *testing.T) {
+	docker := &imageRecordingDocker{}
+	prov := &DockerPostgreSQLProvisioner{docker: docker}
+	prov.SetWatcher(DockerWatcherConfig{Image: "watcher:pinned"})
+	if err := prov.PrepareImages(context.Background(), domain.ProvisioningRequest{PostgresVersion: "17"}); err != nil {
+		t.Fatalf("PrepareImages: %v", err)
+	}
+	if len(docker.images) != 2 || docker.images[1] != "watcher:pinned" {
+		t.Fatalf("images %v", docker.images)
+	}
+}
+
+// The container a row records goes too, under whatever name it has.
+func TestDockerMySQL_DeprovisionAlsoRemovesTheRecordedContainer(t *testing.T) {
+	engine := newFakeEngine()
+	provisionDockerMySQL(t, engine)
+	recorded, err := engine.CreateContainerSpec(context.Background(), ContainerSpec{Name: "recorded", Image: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.StartContainer(context.Background(), recorded); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := newTestDockerMySQL(engine).Deprovision(context.Background(), recorded, "p1"); err != nil {
+		t.Fatalf("Deprovision: %v", err)
+	}
+
+	if status, _ := engine.ContainerStatus(context.Background(), recorded); status != containerNotFound {
+		t.Fatalf("recorded container is %s", status)
+	}
+}

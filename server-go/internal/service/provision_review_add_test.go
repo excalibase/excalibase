@@ -183,7 +183,7 @@ func addFailedRemovalRow(t *testing.T, store *storage.FileSystemStore, projectID
 	t.Helper()
 	namespace := "org1-" + projectID
 	inst := &domain.DatabaseInstance{ProjectID: projectID, OrgID: "org1", Namespace: namespace, DeploymentMode: domain.ModeK8s, DBType: domain.PostgreSQL,
-		NoDatabase: true, Status: string(domain.StatusActive), RollbackLog: `[{"name":"` + removeDatabaseCleanup(namespace) + `","ok":false,"error":"x"}]`}
+		NoDatabase: true, Status: string(domain.StatusActive), FailureReason: "exec: boom", RollbackLog: scopedFailure(removeDatabaseCleanup(namespace), "exec: boom")}
 	if err := store.Create(inst); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestRetryFailedRollbacks_BacksOffAStuckRemovalAndFreesTheLease(t *testing.T
 
 	passRetryWindow(svc)
 	svc.RetryFailedRollbacks(context.Background())
-	if got := cluster.attempts.Load(); got == first {
+	if cluster.attempts.Load() == first {
 		t.Fatal("never tried again once the backoff passed")
 	}
 }

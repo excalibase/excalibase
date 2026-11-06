@@ -39,6 +39,10 @@ type DatabaseProbe interface {
 // in a rollback's results is what says this restore created the row.
 const unverifiedRowCleanup = "remove unverified restored project"
 
+func restoreNamespaceCleanup(namespace string) string { return "delete restore namespace " + namespace }
+
+func restoreClusterCleanup(namespace string) string { return "delete restore cluster " + namespace }
+
 // failedRestoreReason is what a copy that could not be fully removed reads.
 const failedRestoreReason = "the restore did not complete and what it created is still being removed"
 

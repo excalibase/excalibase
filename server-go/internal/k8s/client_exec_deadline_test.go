@@ -2,8 +2,10 @@ package k8s
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,5 +79,40 @@ func TestExecInPod_ReturnsWhenItsContextEnds(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// An answer that is not an upgrade ends the call, and its connection with it.
+func TestExecInPod_AnErrorAnswerClosesItsConnection(t *testing.T) {
+	var opened, closed atomic.Int32
+	api := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	api.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			opened.Add(1)
+		case http.StateClosed:
+			closed.Add(1)
+		}
+	}
+	api.Start()
+	defer api.Close()
+	client, err := NewClientWith(ClientOptions{APIURL: api.URL, BearerToken: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := client.ExecInPod(context.Background(), "ns", "pod", "c", []string{"true"}); err == nil {
+			t.Fatal("exec succeeded against a 403")
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for closed.Load() < opened.Load() {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d connections opened, %d closed", opened.Load(), closed.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

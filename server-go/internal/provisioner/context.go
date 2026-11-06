@@ -32,6 +32,9 @@ type CleanupResult struct {
 	Name  string `json:"name"`
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	// ForFailure is the failure this rollback was for. A later retry may act on
+	// the result only while the project still reports that failure.
+	ForFailure string `json:"forFailure,omitempty"`
 }
 
 // ErrCleanupSkipped is why a last cleanup did not run.
@@ -180,6 +183,16 @@ func (pc *ProvisionContext) CleanupCount() int {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 	return len(pc.cleanups)
+}
+
+// ScopeCleanupResults ties results to the failure they were a rollback for.
+func ScopeCleanupResults(results []CleanupResult, failure string) []CleanupResult {
+	scoped := make([]CleanupResult, 0, len(results))
+	for _, result := range results {
+		result.ForFailure = failure
+		scoped = append(scoped, result)
+	}
+	return scoped
 }
 
 // EncodeCleanupResults is the form results take in a project's rollback log.

@@ -62,7 +62,7 @@ func TestRestore_AFailedCleanupKeepsTheRowUntilTheSweepFinishesIt(t *testing.T) 
 	if row.Status != string(domain.StageFailed) || row.FailureReason == "" {
 		t.Fatalf("row status=%s reason=%q, want FAILED with a reason", row.Status, row.FailureReason)
 	}
-	requireFailedCleanupRecorded(t, row, "delete restore namespace")
+	requireFailedCleanupRecorded(t, row, restoreNamespaceCleanup(row.Namespace))
 	if !mock.Namespaces[row.Namespace] {
 		t.Fatal("the test needs the namespace left behind")
 	}

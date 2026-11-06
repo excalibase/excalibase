@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -113,7 +112,7 @@ func (s *ProvisioningService) provisionWithoutDatabase(ctx context.Context, req 
 func (s *ProvisioningService) failProjectWithoutDatabase(ctx context.Context, inst *domain.DatabaseInstance, step string, cause error, removeNamespace bool) *domain.ProvisioningResponse {
 	log.Printf("project %s without a database failed at %s: %v", inst.ProjectID, step, cause)
 	if removeNamespace {
-		inst.RollbackLog = s.removeFailedProjectNamespace(ctx, inst.Namespace)
+		inst.RollbackLog = s.removeFailedProjectNamespace(ctx, inst.Namespace, cause.Error())
 	}
 	inst.Status = string(domain.StageFailed)
 	inst.CurrentStage = domain.StageFailed
@@ -125,20 +124,20 @@ func (s *ProvisioningService) failProjectWithoutDatabase(ctx context.Context, in
 
 // removeFailedProjectNamespace deletes the namespace and answers with the
 // rollback log, the record RetryFailedRollbacks works from if the delete failed.
-func (s *ProvisioningService) removeFailedProjectNamespace(ctx context.Context, namespace string) string {
+func (s *ProvisioningService) removeFailedProjectNamespace(ctx context.Context, namespace, failure string) string {
 	cleanupCtx, cancel := provisioner.CleanupContext(ctx)
 	defer cancel()
-	result := provisioner.CleanupResult{Name: deleteNamespaceCleanup(namespace), OK: true}
+	result := provisioner.CleanupResult{Name: deleteNamespaceCleanup(namespace), OK: true, ForFailure: failure}
 	if err := s.k8sClient.DeleteNamespace(cleanupCtx, namespace); err != nil {
 		log.Printf("ERROR: remove namespace %s of failed project: %v", namespace, err)
-		result = provisioner.CleanupResult{Name: result.Name, Error: err.Error()}
+		result.OK, result.Error = false, err.Error()
 	}
-	encoded, err := json.Marshal([]provisioner.CleanupResult{result})
+	encoded, err := provisioner.EncodeCleanupResults([]provisioner.CleanupResult{result})
 	if err != nil {
 		log.Printf("WARN: marshal rollback log: %v", err)
 		return ""
 	}
-	return string(encoded)
+	return encoded
 }
 
 func projectResponse(inst *domain.DatabaseInstance) *domain.ProvisioningResponse {
@@ -280,7 +279,7 @@ func (s *ProvisioningService) handleAddDatabaseFailure(ctx context.Context, inst
 	s.recordProvisionFailure(ctx, inst, req, err, pc)
 	// A cluster that is still there is still archiving: purging now would leave
 	// new files behind that block every retry. The sweep purges once it has gone.
-	if failedCleanupIn(inst.RollbackLog, removeDatabaseCleanup(inst.Namespace)) {
+	if failedCleanupOf(inst, removeDatabaseCleanup(inst.Namespace)) {
 		if inst.BackupEnabled != nil && *inst.BackupEnabled {
 			inst.FailureReason += purgeWaitingNote
 		}

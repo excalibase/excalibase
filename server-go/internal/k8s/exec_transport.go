@@ -25,6 +25,7 @@ const execPingPeriod = 5 * time.Second
 type cancellableUpgrade struct {
 	upstream *spdy.SpdyRoundTripper
 	conn     net.Conn
+	stop     func() bool
 }
 
 func newCancellableExecutor(config *rest.Config, target *url.URL) (remotecommand.Executor, error) {
@@ -49,8 +50,10 @@ func newCancellableExecutor(config *rest.Config, target *url.URL) (remotecommand
 }
 
 // RoundTrip dials, sends the upgrade request and reads the response, closing
-// the connection if the request's context ends first.
+// the connection if the request's context ends first. The watch stays on until
+// NewConnection, because reading an error answer's body can hang too.
 func (u *cancellableUpgrade) RoundTrip(req *http.Request) (*http.Response, error) {
+	u.abandon() // a redirect comes back here with the last connection still open
 	req = utilnet.CloneRequest(req)
 	req.Header.Add(httpstream.HeaderConnection, httpstream.HeaderUpgrade)
 	req.Header.Add(httpstream.HeaderUpgrade, spdy.HeaderSpdy31)
@@ -58,27 +61,38 @@ func (u *cancellableUpgrade) RoundTrip(req *http.Request) (*http.Response, error
 	if err != nil {
 		return nil, err
 	}
-	stop := context.AfterFunc(req.Context(), func() { _ = conn.Close() })
-	defer stop()
+	u.conn = conn
+	u.stop = context.AfterFunc(req.Context(), func() { _ = conn.Close() })
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
-		_ = conn.Close()
+		u.abandon()
 		if ctxErr := req.Context().Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		return nil, err
 	}
-	u.conn = conn
 	return resp, nil
 }
 
 // NewConnection starts SPDY on an upgraded connection. A response that is not an
-// upgrade goes to upstream, which turns it into the API server's error.
+// upgrade goes to upstream, which turns it into the API server's error, and its
+// connection has no further use.
 func (u *cancellableUpgrade) NewConnection(resp *http.Response) (httpstream.Connection, error) {
 	if !isSpdyUpgrade(resp) {
+		defer u.abandon()
 		return u.upstream.NewConnection(resp)
 	}
+	u.stop()
 	return spdy.NewClientConnectionWithPings(u.conn, execPingPeriod)
+}
+
+func (u *cancellableUpgrade) abandon() {
+	if u.conn == nil {
+		return
+	}
+	u.stop()
+	_ = u.conn.Close()
+	u.conn, u.stop = nil, nil
 }
 
 func isSpdyUpgrade(resp *http.Response) bool {
