@@ -24,6 +24,15 @@ for bad in POSTGRES_PASSWORD=password123 POSTGRES_PASSWORD= SETUP_TOKEN=abc123 \
 done
 good ADMIN_PASSWORD='a-long-passphrase-of-mine' >/dev/null || fail "a strong admin password refused"
 
+# EXC-687: the deny list and rootless Podman's egress are refused before anything starts.
+for bad in APP_EGRESS_EXTRA_DENY_CIDRS=300.1.1.1/8 APP_EGRESS_EXTRA_DENY_CIDRS=203.0.113.7 'APP_EGRESS_EXTRA_DENY_CIDRS=203.0.113.0/24 -j ACCEPT'; do
+  if good "$bad" >/dev/null 2>&1; then fail "preflight accepted $bad"; fi
+done
+good APP_EGRESS_EXTRA_DENY_CIDRS='203.0.113.0/24, 2001:db8::/32' >/dev/null || fail "a good deny list refused"
+if good ENGINE_SOCKET_UID=0 APP_EGRESS=internet >/dev/null 2>&1; then fail "rootless Podman's unguarded egress passed"; fi
+good ENGINE_SOCKET_UID=0 APP_EGRESS=internet APP_EGRESS_UNGUARDED=accept >/dev/null || fail "accepted egress refused"
+good ENGINE_SOCKET_UID=0 >/dev/null || fail "rootless Podman without egress refused"
+
 # EXC-662: auth hooks may not start without the host's own addresses refused to them.
 if good FEATURE_AUTHHOOKS=true >/dev/null 2>&1; then
   fail "auth hooks started with no AUTH_HOOKS_DENY_CIDRS"

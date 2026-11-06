@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,13 +23,22 @@ import (
 // proxy does the policy's work: it starts what exited, except what was stopped
 // through it, once the firewall is healthy, and refuses any start before that.
 // It holds the socket and needs neither the platform database nor the vault.
-// An app's project network has no address on the host and no rule of the firewall's,
-// so the engine goes on restarting apps; a stop from the engine's own CLI looks
-// like a crash here, and such a tenant comes back.
+// A stop from the engine's own CLI looks like a crash here, and such a tenant comes back.
+//
+// An app with a route out (APP_EGRESS=internet) or a host address (Docker before 28) is
+// held the same way, since a project bridge is guarded only once the firewall's wildcard
+// is back (EXC-687). On an internal network with an isolated gateway an app can reach
+// nothing with or without the firewall, so the engine goes on restarting it.
 
 // componentLabel marks what is not a project's long-running database or watcher:
-// app replicas, which the engine restarts, and one-shot build and disk steps.
+// app replicas, and one-shot build and disk steps, which are not restarted.
 const componentLabel = "excalibase.component"
+
+// componentApp is an app replica.
+const componentApp = "app"
+
+// appRestartPolicy is what provisioning asks for an app, and what the engine does again once it may.
+const appRestartPolicy = "unless-stopped"
 
 // networkNone is the mode of a container with no network at all, which the firewall has nothing to guard from.
 const networkNone = "none"
@@ -51,6 +61,9 @@ const (
 // errFirewallDown is the proxy's refusal; a client tells it apart by the 503 and this wording.
 var errFirewallDown = fmt.Errorf("%w: the host firewall is not healthy", ErrRefused)
 
+// errBridgeUnfenced: an older release's project network, until provisioning's reconcile remakes it.
+var errBridgeUnfenced = fmt.Errorf("%w: a project network has no bridge the host firewall guards", ErrRefused)
+
 // stopAttempt travels with a forwarded stop, for what its answer means to the record.
 type stopAttempt struct {
 	id     string
@@ -68,7 +81,7 @@ func (h *Handler) WithRestarts(restarts Restarts) (*Handler, error) {
 	h.restarts = guard
 	h.forward.ModifyResponse = func(resp *http.Response) error {
 		h.stopAnswered(resp.Request.Context(), resp.StatusCode < http.StatusBadRequest)
-		return nil
+		return h.addRestarts(resp)
 	}
 	h.forward.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		h.stopUnanswered(r.Context())
@@ -103,17 +116,69 @@ func (h *Handler) stopUnanswered(ctx context.Context) {
 	}
 }
 
-// restartExempt: only on project networks alone, or on none at all, is a container off the firewall's ground.
-func restartExempt(p Policy, mode string, endpoints []string) bool {
-	if mode != networkNone && !p.underNetworkPrefix(mode) {
-		return false
-	}
-	for _, network := range endpoints {
-		if network != networkNone && !p.underNetworkPrefix(network) {
+// restartExempt: only on project networks the firewall has nothing to guard, or on none
+// at all, is a container off the firewall's ground.
+func restartExempt(p Policy, mode string, endpoints []string, nothingToGuard func(string) bool) bool {
+	for _, network := range append([]string{mode}, endpoints...) {
+		if network != networkNone && !(p.underNetworkPrefix(network) && nothingToGuard(network)) {
 			return false
 		}
 	}
 	return true
+}
+
+// fenceReading is what the engine says of a project network.
+type fenceReading struct{ nothingToGuard, fenced bool }
+
+// fenceReader reads project networks at most once per reading. A network it cannot read
+// counts as needing the firewall, with a bridge no rule covers.
+func (h *Handler) fenceReader(ctx context.Context) func(string) fenceReading {
+	read := map[string]fenceReading{}
+	return func(name string) fenceReading {
+		if found, ok := read[name]; ok {
+			return found
+		}
+		found := h.readFence(ctx, name)
+		read[name] = found
+		return found
+	}
+}
+
+func (h *Handler) readFence(ctx context.Context, name string) fenceReading {
+	if name == h.policy.NetworkPrefix+BuildEgressNetwork {
+		return fenceReading{nothingToGuard: true}
+	}
+	var network bridgeNetwork
+	if err := h.inspect(ctx, "/networks/"+url.PathEscape(name), &network); err != nil {
+		return fenceReading{}
+	}
+	if network.Internal && network.Options[gatewayModeIPv4] == gatewayIsolated && network.Options[gatewayModeIPv6] == gatewayIsolated && !network.hasGateway() {
+		return fenceReading{nothingToGuard: true}
+	}
+	return fenceReading{fenced: network.Options[bridgeNameOption] == ProjectBridgeName(name)}
+}
+
+// hasGateway: an address on the host, whatever was asked for (Docker 26 ignores the option).
+func (n bridgeNetwork) hasGateway() bool {
+	return slices.ContainsFunc(n.IPAM.Config, func(config struct{ Subnet, Gateway string }) bool { return config.Gateway != "" })
+}
+
+// nothingToGuard adapts a reader to restartExempt.
+func nothingToGuard(read func(string) fenceReading) func(string) bool {
+	return func(name string) bool { return read(name).nothingToGuard }
+}
+
+// unfenced names a project network with a bridge the firewall's wildcard does not cover.
+func (h *Handler) unfenced(read func(string) fenceReading, networks ...string) string {
+	for _, network := range networks {
+		if !h.policy.underNetworkPrefix(network) {
+			continue
+		}
+		if found := read(network); !found.nothingToGuard && !found.fenced {
+			return network
+		}
+	}
+	return ""
 }
 
 // holdRestartPolicy sends a guarded create to the engine with no policy to act on at boot.
@@ -140,7 +205,7 @@ func (h *Handler) holdRestartPolicy(r *http.Request, body []byte) error {
 			}
 		}
 	}
-	if restartExempt(h.policy, mode, endpoints) {
+	if restartExempt(h.policy, mode, endpoints, nothingToGuard(h.fenceReader(r.Context()))) {
 		return nil
 	}
 	host["RestartPolicy"] = map[string]any{"Name": "no", "MaximumRetryCount": 0}
@@ -188,18 +253,27 @@ func (h *Handler) beforeStart(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if restartExempt(h.policy, found.Host.NetworkMode, found.networks()) {
+	read := h.fenceReader(ctx)
+	if restartExempt(h.policy, found.Host.NetworkMode, found.networks(), nothingToGuard(read)) {
 		return nil
 	}
 	// First: refused now, the start is still wanted, and the supervisor does it once the firewall is healthy.
 	if err := h.restarts.setStopped(found.ID, false); err != nil {
 		return err
 	}
+	// As the engine zeroes its own on a start through the API: a resumed app gets its fresh attempts.
+	h.restarts.clearRestarts(found.ID)
 	if !h.firewallHealthy(ctx) {
 		if found.State.Status == "created" {
 			h.restarts.want(found.ID)
 		}
 		return fmt.Errorf("%w: tenants wait for it (docker logs %s)", errFirewallDown, h.restarts.FirewallContainer)
+	}
+	if network := h.unfenced(read, append(found.networks(), found.Host.NetworkMode)...); network != "" {
+		if found.State.Status == "created" {
+			h.restarts.want(found.ID)
+		}
+		return fmt.Errorf("%w: %s waits for provisioning to remake it", errBridgeUnfenced, network)
 	}
 	return nil
 }
@@ -211,7 +285,7 @@ func (h *Handler) beforeStop(r *http.Request, id string) error {
 	if err != nil {
 		return err
 	}
-	if !supervised(h.policy, found.Config.Labels, found.Host.NetworkMode) {
+	if !supervised(h.policy, found.Config.Labels, found.Host.NetworkMode, nothingToGuard(h.fenceReader(r.Context()))) {
 		return nil
 	}
 	marked := !h.restarts.isStopped(found.ID)
@@ -224,9 +298,12 @@ func (h *Handler) beforeStop(r *http.Request, id string) error {
 	return nil
 }
 
-// supervised is a project's own container on the firewall's ground; apps and one-shot steps are not.
-func supervised(p Policy, labels map[string]string, mode string) bool {
-	return labels[p.ManagedLabel] == "true" && labels[componentLabel] == "" && !restartExempt(p, mode, nil)
+// supervised is a project's own long-running container on the firewall's ground; one-shot steps are not.
+func supervised(p Policy, labels map[string]string, mode string, guardless func(string) bool) bool {
+	if component := labels[componentLabel]; component != "" && component != componentApp {
+		return false
+	}
+	return labels[p.ManagedLabel] == "true" && !restartExempt(p, mode, nil, guardless)
 }
 
 func (h *Handler) firewallHealthy(ctx context.Context) bool {
@@ -259,18 +336,35 @@ func (h *Handler) SuperviseRestarts(ctx context.Context) {
 }
 
 type listedContainer struct {
-	ID     string `json:"Id"`
-	Labels map[string]string
-	State  string
-	Host   struct{ NetworkMode string } `json:"HostConfig"`
+	ID      string `json:"Id"`
+	Labels  map[string]string
+	State   string
+	Host    struct{ NetworkMode string }      `json:"HostConfig"`
+	Network struct{ Networks map[string]any } `json:"NetworkSettings"`
+}
+
+// attached is the mode and what the container is really on: a database's default route is on its project's bridge.
+func (l listedContainer) attached() []string {
+	names := make([]string, 0, len(l.Network.Networks)+1)
+	names = append(names, l.Host.NetworkMode)
+	for name := range l.Network.Networks {
+		names = append(names, name)
+	}
+	return names
 }
 
 func (h *Handler) superviseOnce(ctx context.Context) {
 	guard := h.restarts
-	tenants, err := h.listTenants(ctx)
+	read := h.fenceReader(ctx)
+	tenants, unsupervisedApps, err := h.listTenants(ctx, read)
 	if err != nil {
 		log.Printf("engine proxy: restarts: %v", err)
 		return
+	}
+	for _, id := range unsupervisedApps {
+		if err := h.handBack(ctx, id); err != nil {
+			log.Printf("engine proxy: restarts: hand %s back to the engine: %v", id, err)
+		}
 	}
 	// Before the health check: the policy of an older tenant is what a reboot acts on.
 	for _, listed := range tenants {
@@ -286,7 +380,7 @@ func (h *Handler) superviseOnce(ctx context.Context) {
 	if !h.noteFirewall(h.firewallHealthy(ctx)) {
 		return
 	}
-	h.startAll(ctx, h.toStart(tenants))
+	h.startAll(ctx, h.toStart(tenants, read))
 }
 
 // logCorrupt says what this mode means and the way out, now and then.
@@ -300,24 +394,29 @@ func (g *restartGuard) logCorrupt() {
 		"Every exited tenant then starts, paused projects' too: pause those again", g.StoppedFile)
 }
 
-// listTenants is the supervised containers, after the records drop what the engine no longer holds.
-func (h *Handler) listTenants(ctx context.Context) ([]listedContainer, error) {
+// listTenants is the supervised containers and the apps left to the engine, after the
+// records drop what the engine no longer holds.
+func (h *Handler) listTenants(ctx context.Context, read func(string) fenceReading) ([]listedContainer, []string, error) {
 	list, err := h.listManaged(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	held := make(map[string]bool, len(list))
 	tenants := make([]listedContainer, 0, len(list))
+	var unsupervisedApps []string
 	for _, listed := range list {
 		held[listed.ID] = true
-		if supervised(h.policy, listed.Labels, listed.Host.NetworkMode) {
+		switch {
+		case supervised(h.policy, listed.Labels, listed.Host.NetworkMode, nothingToGuard(read)):
 			tenants = append(tenants, listed)
+		case listed.Labels[componentLabel] == componentApp:
+			unsupervisedApps = append(unsupervisedApps, listed.ID)
 		}
 	}
 	if err := h.restarts.forget(held); err != nil {
 		log.Printf("engine proxy: restarts: %v", err)
 	}
-	return tenants, nil
+	return tenants, unsupervisedApps, nil
 }
 
 // settleStartedByHand: running with its stop answered, a tenant was started some
@@ -353,27 +452,37 @@ func (h *Handler) noteFirewall(healthy bool) bool {
 	return healthy
 }
 
-// toStart is what exited on its own, and what a refused start left wanted.
-func (h *Handler) toStart(tenants []listedContainer) []string {
+// startTarget is one container to start; crashedApp counts as a restart of an app.
+type startTarget struct {
+	id         string
+	crashedApp bool
+}
+
+// toStart is what exited on its own and what a refused start left wanted, on a guarded bridge.
+func (h *Handler) toStart(tenants []listedContainer, read func(string) fenceReading) []startTarget {
 	guard := h.restarts
-	var ids []string
+	var targets []startTarget
 	for _, listed := range tenants {
+		if h.unfenced(read, listed.attached()...) != "" {
+			continue
+		}
 		switch {
 		case listed.State == "exited" && !guard.isStopped(listed.ID):
-			ids = append(ids, listed.ID)
+			targets = append(targets, startTarget{id: listed.ID, crashedApp: listed.Labels[componentLabel] == componentApp})
 		case listed.State == "created" && guard.wanted(listed.ID):
-			ids = append(ids, listed.ID)
+			targets = append(targets, startTarget{id: listed.ID})
 		}
 	}
-	return ids
+	return targets
 }
 
 // startAll starts them a few at a time, each bounded and behind a firewall checked just before.
-func (h *Handler) startAll(ctx context.Context, ids []string) {
+func (h *Handler) startAll(ctx context.Context, targets []startTarget) {
 	guard := h.restarts
 	slots := make(chan struct{}, guard.workers)
 	var running sync.WaitGroup
-	for _, id := range ids {
+	for _, target := range targets {
+		id := target.id
 		slots <- struct{}{}
 		running.Add(1)
 		go func() {
@@ -389,6 +498,9 @@ func (h *Handler) startAll(ctx context.Context, ids []string) {
 				return
 			}
 			guard.unwant(id)
+			if target.crashedApp {
+				guard.noteRestart(id)
+			}
 			log.Printf("engine proxy: restarts: started %s", id)
 		}()
 	}
@@ -418,6 +530,75 @@ func (h *Handler) adopt(ctx context.Context, id string) error {
 		log.Printf("engine proxy: restarts: took %s off the engine's %s policy", id, name)
 	}
 	guard.markAdopted(id)
+	guard.setIn(guard.handedBack, id, false)
+	return nil
+}
+
+// handBack returns an app to the engine's policy once its network needs no firewall
+// (APP_EGRESS back to none), and starts what crashed while none looked after it.
+func (h *Handler) handBack(ctx context.Context, id string) error {
+	guard := h.restarts
+	if guard.holds(guard.handedBack, id) {
+		return nil
+	}
+	found, err := h.inspectGuarded(ctx, id)
+	if err != nil {
+		return err
+	}
+	if found.Host.RestartPolicy.Name == "no" {
+		if err := h.engineCall(ctx, "/containers/"+url.PathEscape(id)+"/update", []byte(`{"RestartPolicy":{"Name":"`+appRestartPolicy+`"}}`)); err != nil {
+			return err
+		}
+		log.Printf("engine proxy: restarts: gave %s back to the engine's %s policy", id, appRestartPolicy)
+		if found.State.Status == "exited" && !guard.isStopped(id) {
+			if err := h.engineCall(ctx, "/containers/"+url.PathEscape(id)+"/start", nil); err != nil {
+				return err
+			}
+		}
+	}
+	guard.setIn(guard.handedBack, id, true)
+	guard.setIn(guard.adopted, id, false)
+	return nil
+}
+
+// addRestarts adds the restarts the proxy did to an inspect's RestartCount: only the
+// engine's own policy raises it, and rollouts and Studio read it. Kept for this process's life.
+func (h *Handler) addRestarts(resp *http.Response) error {
+	guard := h.restarts
+	if resp.Request.Method != http.MethodGet || resp.StatusCode != http.StatusOK || !guard.anyRestarts() {
+		return nil
+	}
+	match := containerPath.FindStringSubmatch(stripVersion(resp.Request.URL.Path))
+	if match == nil || match[2] != "/json" {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxListBody))
+	if err != nil {
+		return fmt.Errorf("read an inspect: %w", err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		return fmt.Errorf("read an inspect: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var inspected map[string]any
+	if err := decoder.Decode(&inspected); err != nil {
+		return fmt.Errorf("read an inspect: %w", err)
+	}
+	id, _ := inspected["Id"].(string)
+	if done := guard.restartsOf(id); done > 0 {
+		var engine int64
+		if count, ok := inspected["RestartCount"].(json.Number); ok {
+			engine, _ = count.Int64()
+		}
+		inspected["RestartCount"] = engine + done
+		if body, err = json.Marshal(inspected); err != nil {
+			return fmt.Errorf("write an inspect: %w", err)
+		}
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	return nil
 }
 

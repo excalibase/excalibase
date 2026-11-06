@@ -55,6 +55,8 @@ type Policy struct {
 	// StatsContainers are the platform's own containers, by exact name, whose
 	// stats and state host monitoring reads (stats.go).
 	StatsContainers []string
+	// FenceProjectBridges admits a project network only where the host firewall covers it (EXC-687).
+	FenceProjectBridges bool
 }
 
 // ErrRefused wraps every policy refusal.

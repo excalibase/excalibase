@@ -102,8 +102,19 @@ if [ "${ENGINE_SOCKET_UID:-1000}" != 0 ]; then
         ;;
     esac
     [ -z "${tag_refused:-}" ] || complain "TAG '${tag}' does not run the host firewall: set TAG in .env to a trunk build (main-<sha>) until a release after 1.6.2 exists, or HOST_FIREWALL=off"
+    # The firewall would refuse these words at the rule; say so before anything starts.
+    octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+    denied=$(printf '%s' "${APP_EGRESS_EXTRA_DENY_CIDRS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' \
+      | grep -Ev "^($octet[.]){3}$octet/([0-9]|[12][0-9]|3[0-2])\$" | grep -Ev '^[0-9a-fA-F:]*:[0-9a-fA-F:]*/([0-9]|[1-9][0-9]|1[01][0-9]|12[0-8])$' || true)
+    [ -z "$denied" ] || complain "APP_EGRESS_EXTRA_DENY_CIDRS must be comma-separated CIDRs; not a CIDR: $(printf '%s' "$denied" | tr '\n' ' ')"
     [ -n "${HOST_RESOLV_CONF:-}" ] || complain "HOST_RESOLV_CONF is unset: the resolv.conf Docker forwards lookups to (/run/systemd/resolve/resolv.conf when /etc/resolv.conf names only 127.0.0.53, else /etc/resolv.conf)"
   fi
+fi
+
+# Rootless Podman's egress leaves as this user's own connections, which nothing here can
+# guard (EXC-687): it takes a yes, here before provisioning fails on it.
+if [ "${ENGINE_SOCKET_UID:-1000}" = 0 ] && [ "${APP_EGRESS:-none}" = internet ] && [ "${APP_EGRESS_UNGUARDED:-}" != accept ]; then
+  complain "APP_EGRESS=internet on rootless Podman reaches the LAN and cloud metadata, unguarded: keep APP_EGRESS=none, use Docker, or set APP_EGRESS_UNGUARDED=accept"
 fi
 
 # Optional: unset means bootstrap generates one and prints it once.

@@ -21,12 +21,14 @@ echo "\$*" >>"$WORK/$2.calls"
 [ "${3:-}" = broken ] && exit 4
 shift # -w
 op=\$1; shift
+# Refuses a rule as iptables refuses a bad address, once it has parsed the call.
+if [ "\$op" = -A ] && [ -r "$WORK/refuse" ] && echo "\$*" | grep -qF -- "\$(cat "$WORK/refuse")"; then exit 2; fi
 if [ "${3:-}" = absent ] && [ "\$op" = -S ] && [ "\$1" = DOCKER-USER ]; then exit 1; fi
 case \$op in
   -C) grep -qxF -- "\$*" "\$rules" ;;
   -A) echo "\$*" >>"\$rules" ;;
   -I) chain=\$1; shift 2; { echo "\$chain \$*"; cat "\$rules"; } >"\$rules.n"; mv "\$rules.n" "\$rules" ;;
-  -D) grep -vxF -- "\$*" "\$rules" >"\$rules.n" || true; mv "\$rules.n" "\$rules" ;;
+  -D) awk -v rule="\$*" '!done && \$0 == rule { done = 1; next } { print }' "\$rules" >"\$rules.n"; mv "\$rules.n" "\$rules" ;;
   -F) grep -v "^\$1 " "\$rules" >"\$rules.n" || true; mv "\$rules.n" "\$rules" ;;
   -S) echo "-N \$1"; grep "^\$1 " "\$rules" | sed 's/^/-A /' || true ;;
   -N) ;;
@@ -36,7 +38,7 @@ EOF
 }
 
 reset() {
-  rm -rf "$WORK/bin" "$WORK/sys" "$WORK"/*.rules "$WORK"/*.calls
+  rm -rf "$WORK/bin" "$WORK/sys" "$WORK"/*.rules "$WORK"/*.calls "$WORK/refuse"
   mkdir -p "$WORK/bin" "$WORK/sys/br-3f1c9a2b7d4e" "$WORK/sys/br-aa11bb22cc33" "$WORK/sys/br-77aa88bb99cc"
   fake iptables-nft v4
   fake ip6tables-nft v6
@@ -101,7 +103,13 @@ EXCALIBASE-TENANT -d 169.254.0.0/16 -j DROP
 EXCALIBASE-TENANT -d 10.0.0.0/8 -j DROP
 EXCALIBASE-TENANT -d 172.16.0.0/12 -j DROP
 EXCALIBASE-TENANT -d 192.168.0.0/16 -j DROP
-EXCALIBASE-TENANT -d 100.64.0.0/10 -j DROP"
+EXCALIBASE-TENANT -d 100.64.0.0/10 -j DROP
+EXCALIBASE-TENANT -d 127.0.0.0/8 -j DROP
+EXCALIBASE-TENANT -d 0.0.0.0/8 -j DROP
+EXCALIBASE-TENANT -d 224.0.0.0/4 -j DROP
+EXCALIBASE-TENANT -d 240.0.0.0/4 -j DROP
+EXCALIBASE-TENANT -d 168.63.129.16/32 -j DROP
+EXCALIBASE-TENANT -d 192.0.0.0/24 -j DROP"
 [ "$tenant4" = "$expected4" ] || fail "IPv4 tenant chain:
 $tenant4"
 tenant6=$(grep '^EXCALIBASE-TENANT' "$WORK/v6.rules")
@@ -110,7 +118,11 @@ EXCALIBASE-TENANT -d fd00:19::/64 -j RETURN
 EXCALIBASE-TENANT -d 2001:db8::53/128 -p udp --dport 53 -j RETURN
 EXCALIBASE-TENANT -d 2001:db8::53/128 -p tcp --dport 53 -j RETURN
 EXCALIBASE-TENANT -d fe80::/10 -j DROP
-EXCALIBASE-TENANT -d fc00::/7 -j DROP"
+EXCALIBASE-TENANT -d fc00::/7 -j DROP
+EXCALIBASE-TENANT -d 64:ff9b::/96 -j DROP
+EXCALIBASE-TENANT -d 64:ff9b:1::/48 -j DROP
+EXCALIBASE-TENANT -d 2002::/16 -j DROP
+EXCALIBASE-TENANT -d ff00::/8 -j DROP"
 [ "$tenant6" = "$expected6" ] || fail "IPv6 tenant chain:
 $tenant6"
 grep -q 'br-3f1c9a2b7d4e' "$WORK/out" && grep -q 'are dropped' "$WORK/out" || fail "the guard does not say what it guards: $(cat "$WORK/out")"
@@ -208,4 +220,83 @@ done
 reset
 rm "$WORK/bridges"
 if HOST_FIREWALL=on run check; then fail "a value other than off turned it off"; fi
+
+# EXC-687: project bridges. One wildcard rule, in place before any such bridge
+# exists, so a new one is fenced with no reconcile and needs no bridges-file line.
+fenced() {
+  HOST_FIREWALL_PROJECT_BRIDGES=exnet+ HOST_FIREWALL_EDGE_NETWORK=excalibase-edge \
+    APP_EGRESS_EXTRA_DENY_CIDRS=${1-} run ${2-}
+}
+reset
+fenced "203.0.113.0/24, 2001:db8:1::/48" || fail "a fenced run failed: $(cat "$WORK/out")"
+for family in v4 v6; do
+  has $family "INPUT -i exnet+ -j EXCALIBASE-HOST"
+  has $family "DOCKER-USER -i exnet+ -j EXCALIBASE-APP"
+  before $family "DOCKER-USER -i exnet+ -j EXCALIBASE-APP" "DOCKER-USER -j RETURN"
+done
+before v4 "INPUT -i exnet+ -j EXCALIBASE-HOST" "INPUT -j ACCEPT"
+app4=$(grep '^EXCALIBASE-APP' "$WORK/v4.rules")
+expected4="EXCALIBASE-APP -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+EXCALIBASE-APP -o exnet+ -m conntrack --ctstate DNAT -j DROP
+EXCALIBASE-APP -o exnet+ -j RETURN
+EXCALIBASE-APP -m conntrack --ctorigdst 203.0.113.0/24 -j DROP
+EXCALIBASE-APP -d 192.168.1.1/32 -p udp --dport 53 -j RETURN
+EXCALIBASE-APP -d 192.168.1.1/32 -p tcp --dport 53 -j RETURN
+EXCALIBASE-APP -d 10.203.250.0/28 -p tcp --dport 80 -m conntrack --ctstate DNAT -j RETURN
+EXCALIBASE-APP -d 10.203.250.0/28 -p tcp --dport 443 -m conntrack --ctstate DNAT -j RETURN"
+for range in 169.254.0.0/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 127.0.0.0/8 0.0.0.0/8 224.0.0.0/4 240.0.0.0/4 168.63.129.16/32 192.0.0.0/24; do
+  expected4="$expected4
+EXCALIBASE-APP -d $range -j DROP"
+done
+[ "$app4" = "$expected4" ] || fail "IPv4 app chain:
+$app4"
+app6=$(grep '^EXCALIBASE-APP' "$WORK/v6.rules")
+expected6="EXCALIBASE-APP -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+EXCALIBASE-APP -o exnet+ -m conntrack --ctstate DNAT -j DROP
+EXCALIBASE-APP -o exnet+ -j RETURN
+EXCALIBASE-APP -m conntrack --ctorigdst 2001:db8:1::/48 -j DROP
+EXCALIBASE-APP -d 2001:db8::53/128 -p udp --dport 53 -j RETURN
+EXCALIBASE-APP -d 2001:db8::53/128 -p tcp --dport 53 -j RETURN
+EXCALIBASE-APP -d fe80::/10 -j DROP
+EXCALIBASE-APP -d fc00::/7 -j DROP
+EXCALIBASE-APP -d 64:ff9b::/96 -j DROP
+EXCALIBASE-APP -d 64:ff9b:1::/48 -j DROP
+EXCALIBASE-APP -d 2002::/16 -j DROP
+EXCALIBASE-APP -d ff00::/8 -j DROP"
+[ "$app6" = "$expected6" ] || fail "IPv6 app chain:
+$app6"
+# The rules alone answer for it: the health check holds, and fails once one is gone.
+fenced "203.0.113.0/24, 2001:db8:1::/48" check || fail "check after a fenced run: $(cat "$WORK/out")"
+grep -vxF "DOCKER-USER -i exnet+ -j EXCALIBASE-APP" "$WORK/v4.rules" >"$WORK/v4.n"; mv "$WORK/v4.n" "$WORK/v4.rules"
+! fenced "203.0.113.0/24, 2001:db8:1::/48" check || fail "check passed with the project bridges' jump gone"
+# A list that is not CIDRs fails loudly, unhealthy, with no rule written from it.
+reset
+! fenced "203.0.113.0/24 -j ACCEPT" || fail "a bad deny list was accepted"
+grep -q 'APP_EGRESS_EXTRA_DENY_CIDRS' "$WORK/out" || fail "the bad list is not named: $(cat "$WORK/out")"
+! grep -q 'ACCEPT$' "$WORK/v4.calls" 2>/dev/null || fail "a bad entry reached iptables"
+# A rule iptables refuses mid-refill (an address past the character check): the chain stays
+# closed, with no way through for apps already running behind the old jump.
+reset
+fenced "" || fail "fenced: $(cat "$WORK/out")"
+echo 300.1.1.1 >"$WORK/refuse"
+! fenced "300.1.1.1/8" || fail "a refused rule passed"
+head_rule=$(grep -m1 '^EXCALIBASE-APP' "$WORK/v4.rules")
+[ "$head_rule" = "EXCALIBASE-APP -j DROP" ] || fail "the chain was left open after a refused rule: $(grep '^EXCALIBASE-APP' "$WORK/v4.rules")"
+has v4 "DOCKER-USER -i exnet+ -j EXCALIBASE-APP"
+# A good refill takes the closed rule away again, and leaves the chain's own last DROP alone.
+reset
+fenced "" || fail "fenced: $(cat "$WORK/out")"
+[ "$(grep -c '^EXCALIBASE-APP -j DROP$' "$WORK/v4.rules")" = 0 ] || fail "the closed rule stayed: $(grep '^EXCALIBASE-APP' "$WORK/v4.rules")"
+[ "$(grep -c '^EXCALIBASE-HOST -j DROP$' "$WORK/v4.rules")" = 1 ] || fail "the host chain: $(grep '^EXCALIBASE-HOST' "$WORK/v4.rules")"
+# Without the setting nothing is added: chart-free callers keep what they had.
+reset
+run || fail "a run without project bridges: $(cat "$WORK/out")"
+lacks v4 "DOCKER-USER -i exnet+ -j EXCALIBASE-APP"
+# Turning it off removes the jumps.
+reset
+fenced "" || fail "fenced: $(cat "$WORK/out")"
+run || fail "unfenced rerun: $(cat "$WORK/out")"
+lacks v4 "INPUT -i exnet+ -j EXCALIBASE-HOST"
+lacks v4 "DOCKER-USER -i exnet+ -j EXCALIBASE-APP"
+
 echo "host-firewall: ok"

@@ -74,7 +74,7 @@ func (r *Runner) layOut(ctx context.Context, b box) error {
 	if err := r.ensureEgressNetwork(ctx); err != nil {
 		return err
 	}
-	if _, err := r.engine.NetworkCreate(ctx, r.buildNetwork(b.id), r.buildNetworkOptions(b.labels)); err != nil {
+	if _, err := r.engine.NetworkCreate(ctx, r.buildNetwork(b.id), r.buildNetworkOptions(r.buildNetwork(b.id), b.labels)); err != nil {
 		return fmt.Errorf("create the build network: %w", err)
 	}
 	if _, err := r.engine.VolumeCreate(ctx, volume.CreateOptions{Name: r.workVolume(b.id), Driver: "local", Labels: b.labels}); err != nil {

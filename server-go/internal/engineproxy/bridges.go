@@ -2,6 +2,8 @@ package engineproxy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -20,14 +22,33 @@ import (
 
 const bridgeNameOption = "com.docker.network.bridge.name"
 
+// ProjectBridgePrefix starts the interface name of every project bridge on Docker
+// (EXC-687). The firewall's one rule on the wildcard exnet+ is in place before any
+// such bridge exists, so a new one is guarded with nothing to learn or wait for.
+// deploy/single-host/compose.yaml names the same wildcard.
+const ProjectBridgePrefix = "exnet"
+
+// BuildEgressNetwork follows the network prefix: the builds' forward proxy alone joins it, and
+// enforces its own deny and allow lists, which may name a git server on the LAN (EXC-671).
+const BuildEgressNetwork = "build-egress"
+
+// ProjectBridgeName is the interface of a project network: 15 characters, the kernel's limit.
+func ProjectBridgeName(network string) string {
+	sum := sha256.Sum256([]byte(network))
+	return ProjectBridgePrefix + hex.EncodeToString(sum[:])[:10]
+}
+
 // interfaceName is a Linux interface name: at most 15 characters, none a firewall rule could read as more.
 var interfaceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$`)
 
 type bridgeNetwork struct {
-	ID      string `json:"Id"`
-	Driver  string
-	Options map[string]string
-	IPAM    struct{ Config []struct{ Subnet string } }
+	ID       string `json:"Id"`
+	Driver   string
+	Internal bool
+	Options  map[string]string
+	IPAM     struct {
+		Config []struct{ Subnet, Gateway string }
+	}
 }
 
 // ResolveBridges answers a line for each network it can name. One it cannot
