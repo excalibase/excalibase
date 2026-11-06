@@ -2,6 +2,7 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { SiteGitBuilds } from './SiteGitBuilds';
 import { textToEnv, envToText } from './SiteBuildSettingsForm';
 import { api } from '../../api/client';
@@ -81,11 +82,18 @@ function serve(routes: Routes) {
   });
 }
 
-function renderPanel(canDevelop = true) {
+function renderPanel(canDevelop = true, serverSite = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <SiteGitBuilds projectId="proj-1" siteId="site-1" canDevelop={canDevelop} />
+      <MemoryRouter>
+        <SiteGitBuilds
+          projectId="proj-1"
+          siteId="site-1"
+          canDevelop={canDevelop}
+          serverSite={serverSite}
+        />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -131,6 +139,42 @@ describe('SiteGitBuilds', () => {
         settings: { ...settings, branch: '', rootDir: 'apps/web' },
       }),
     );
+  });
+
+  test('a server site connects with the Next.js preset and no output folder', async () => {
+    serve({
+      git: { connected: false, connection: null, nodeVersions: ['22'] },
+      repositories: [
+        {
+          installation: { id: 501, account: 'acme' },
+          repositories: [{ id: 9001, fullName: 'acme/site', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    vi.mocked(api.put).mockResolvedValue({ data: { connection, build: failed } } as never);
+    renderPanel(true, true);
+    await userEvent.selectOptions(await screen.findByTestId('git-repository'), '9001');
+    expect(screen.getByTestId('build-framework')).toHaveValue('nextjs');
+    expect(screen.queryByTestId('build-output')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('git-connect-submit'));
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(`${BASE}/git`, {
+        repositoryId: 9001,
+        settings: { ...settings, branch: '', outputDir: '', framework: 'nextjs' },
+      }),
+    );
+  });
+
+  test('a build the preset refused offers the app container instead', async () => {
+    const refused = {
+      ...failed,
+      failureKind: 'framework',
+      failureReason: 'this Next.js app cannot run as a server-rendered site',
+    };
+    serve({ git: { connected: true, connection, nodeVersions: ['22'] }, builds: [refused] });
+    renderPanel(true, true);
+    const link = await screen.findByTestId('site-build-container-b1');
+    expect(link).toHaveAttribute('href', '/project/proj-1/containers');
   });
 
   test('without repositories it offers the sign-in and the App install', async () => {
