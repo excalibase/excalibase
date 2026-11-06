@@ -215,6 +215,9 @@ type AppPublisher interface {
 	PublishBuild(ctx context.Context, publish AppPublish) (string, error)
 }
 
+// ErrTryLater is a publish refused for want of room that will come back; the build goes back to the queue, not to failed.
+var ErrTryLater = errors.New("the platform has no room to take in this build right now")
+
 // BuildFailure is an error that names the failure kind its build records; its message is shown to the user.
 type BuildFailure struct {
 	Kind FailureKind

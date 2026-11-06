@@ -83,7 +83,6 @@ func TestAppBuildQueuePublisher_FindsTheAppAndNamesEachRefusal(t *testing.T) {
 		fmt.Errorf("%w (5 bytes)", ErrImageTooLarge):           appbuilds.FailImageTooLarge,
 		fmt.Errorf("%w: 9 bytes in use", ErrRegistryFull):      appbuilds.FailRegistryFull,
 		fmt.Errorf("%w: a symlink", appregistry.ErrBadArchive): appbuilds.FailBadImage,
-		fmt.Errorf("%w: 1 byte free", ErrSpoolFull):            sitebuilds.FailPlatform,
 	}
 	for refusal, kind := range cases {
 		inner.err = refusal
@@ -92,6 +91,12 @@ func TestAppBuildQueuePublisher_FindsTheAppAndNamesEachRefusal(t *testing.T) {
 		if !errors.As(err, &failure) || failure.Kind != kind || !errors.Is(err, refusal) {
 			t.Errorf("%v: %v, want kind %s", refusal, err, kind)
 		}
+	}
+	// A full spool is not a failure: the dispatcher is told to queue the build again.
+	inner.err = fmt.Errorf("%w: 1 byte free", ErrSpoolFull)
+	_, err = queue.PublishBuild(context.Background(), publish)
+	if !errors.Is(err, sitebuilds.ErrTryLater) || errors.As(err, new(*sitebuilds.BuildFailure)) {
+		t.Errorf("a full spool: %v", err)
 	}
 	inner.err = errors.New("dial tcp 10.0.0.9: refused")
 	if _, err := queue.PublishBuild(context.Background(), publish); err == nil || errors.As(err, new(*sitebuilds.BuildFailure)) {

@@ -255,7 +255,14 @@ func (d *Dispatcher) run(ctx context.Context, build *Build) {
 		return
 	default:
 	}
-	if ctx.Err() != nil {
+	if outcome.requeue && ctx.Err() == nil {
+		// Without a pause the next claim would rebuild at once and meet the same full spool.
+		select {
+		case <-ctx.Done():
+		case <-time.After(d.options.DeployRetry):
+		}
+	}
+	if ctx.Err() != nil || outcome.requeue {
 		if err := d.service.store.RequeueBuild(context.WithoutCancel(ctx), build.ID, d.options.Holder); err != nil {
 			log.Printf("%s build %s: hand back to the queue: %v", build.Kind, build.ID, err)
 		}
@@ -295,6 +302,8 @@ type outcome struct {
 	deployID string
 	kind     FailureKind
 	reason   string
+	// requeue hands the build back to the queue to run again, rather than recording an outcome.
+	requeue bool
 	// previewURL is where a preview build was published.
 	previewURL string
 }

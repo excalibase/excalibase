@@ -111,6 +111,8 @@ func (k *appKind) deliver(ctx context.Context) outcome {
 	switch {
 	case err == nil:
 		return outcome{status: StatusSucceeded, deployID: deployID}
+	case errors.Is(err, ErrTryLater):
+		return outcome{requeue: true}
 	case errors.As(err, &failure):
 		return failedWith(failure.Kind, failure.Error())
 	}

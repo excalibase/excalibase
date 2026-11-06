@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/excalibase/provisioning-poc/internal/appbuilds"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -57,6 +58,9 @@ func (p *appBuildQueuePublisher) PublishBuild(ctx context.Context, publish siteb
 
 // namedFailure gives each refusal the user can act on its own failure kind; anything else stays unnamed.
 func namedFailure(err error) error {
+	if errors.Is(err, ErrSpoolFull) {
+		return fmt.Errorf("%w: %w", sitebuilds.ErrTryLater, err)
+	}
 	if full := (*RegistryFullError)(nil); errors.As(err, &full) {
 		shown := appbuilds.RegistryFullStatus(full.Used, full.Incoming, full.Quota).Detail
 		return &sitebuilds.BuildFailure{Kind: appbuilds.FailRegistryFull, Err: &shownError{shown: shown, err: err}}
@@ -68,7 +72,6 @@ func namedFailure(err error) error {
 		{ErrImageTooLarge, appbuilds.FailImageTooLarge},
 		{ErrRegistryFull, appbuilds.FailRegistryFull},
 		{appregistry.ErrBadArchive, appbuilds.FailBadImage},
-		{ErrSpoolFull, sitebuilds.FailPlatform},
 	}
 	for _, named := range kinds {
 		if errors.Is(err, named.cause) {

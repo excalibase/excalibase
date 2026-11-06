@@ -209,6 +209,17 @@ func (m *memoryStore) ClaimNext(_ context.Context, _ int, _ string, _ time.Time,
 	return nil, nil
 }
 
+func (m *memoryStore) RequeueBuild(_ context.Context, buildID, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, build := range m.builds {
+		if build.ID == buildID && build.Status == StatusRunning {
+			build.Status = StatusQueued
+		}
+	}
+	return nil
+}
+
 func (m *memoryStore) ExpireLostBuilds(context.Context, time.Time, string) ([]LostBuild, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
