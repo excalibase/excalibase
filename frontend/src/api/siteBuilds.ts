@@ -9,6 +9,8 @@ export interface SiteBuildSettings {
   buildCommand: string;
   outputDir: string;
   nodeVersion: string;
+  // The server-rendered build preset; absent builds the output folder as static files.
+  framework?: string;
   // Plain build variables; they end up in the built files.
   env: Record<string, string>;
 }
@@ -87,6 +89,13 @@ export const EMPTY_SETTINGS: SiteBuildSettings = {
   outputDir: 'dist',
   nodeVersion: '22',
   env: {},
+};
+
+// A server site is built by the Next.js preset, which finds its own output.
+export const SERVER_SETTINGS: SiteBuildSettings = {
+  ...EMPTY_SETTINGS,
+  outputDir: '',
+  framework: 'nextjs',
 };
 
 const siteBase = (projectId: string, siteId: string) => `/projects/${projectId}/sites/${siteId}`;

@@ -3,6 +3,7 @@ import { GitBranch, RefreshCw } from 'lucide-react';
 import { apiErrorMessage } from '../../api/apps';
 import {
   EMPTY_SETTINGS,
+  SERVER_SETTINGS,
   startGitSignIn,
   useConnectRepository,
   useDisconnectRepository,
@@ -67,23 +68,35 @@ function SignInLinks({
   );
 }
 
+// A server site always builds with a preset; one saved without it shows Next.js, so it sends it.
+const initialSettings = (
+  current: SiteGitConnection | null,
+  serverSite: boolean,
+): SiteBuildSettings => {
+  if (!serverSite) return current?.settings ?? EMPTY_SETTINGS;
+  const settings = current?.settings ?? SERVER_SETTINGS;
+  return { ...settings, framework: settings.framework || 'nextjs' };
+};
+
 function Connect({
   projectId,
   siteId,
   current,
   nodeVersions,
+  serverSite,
   onDone,
 }: {
   readonly projectId: string;
   readonly siteId: string;
   readonly current: SiteGitConnection | null;
   readonly nodeVersions: string[];
+  readonly serverSite: boolean;
   readonly onDone?: () => void;
 }) {
   const { data: access, error, isLoading } = useGitRepositories(projectId, siteId, true);
   const connect = useConnectRepository(projectId, siteId);
   const [repositoryId, setRepositoryId] = useState<number | null>(current?.repositoryId ?? null);
-  const [settings, setSettings] = useState<SiteBuildSettings>(current?.settings ?? EMPTY_SETTINGS);
+  const [settings, setSettings] = useState<SiteBuildSettings>(initialSettings(current, serverSite));
   const repositories: GitRepository[] = (access ?? []).flatMap((entry) => entry.repositories);
   const submit = () => {
     if (repositoryId === null) return;
@@ -117,6 +130,7 @@ function Connect({
           <SiteBuildSettingsForm
             settings={settings}
             nodeVersions={nodeVersions}
+            serverSite={serverSite}
             onChange={setSettings}
           />
           <button
@@ -150,6 +164,7 @@ function Connected({
   canDevelop,
   connection,
   nodeVersions,
+  serverSite = false,
 }: SiteProps & {
   readonly connection: SiteGitConnection;
   readonly nodeVersions: string[];
@@ -216,6 +231,7 @@ function Connected({
               siteId={siteId}
               current={connection}
               nodeVersions={nodeVersions}
+              serverSite={serverSite}
             />
           )}
         </div>
@@ -226,6 +242,7 @@ function Connected({
           siteId={siteId}
           current={connection}
           nodeVersions={nodeVersions}
+          serverSite={serverSite}
           onDone={() => setEditing(false)}
         />
       )}
@@ -234,7 +251,13 @@ function Connected({
 }
 
 // Deploy on git push (EXC-354): hidden until the server switches it on; single-host answers why it has none.
-export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false, serverSite = false }: SiteProps) {
+export function SiteGitBuilds({
+  projectId,
+  siteId,
+  canDevelop,
+  canAdmin = false,
+  serverSite = false,
+}: SiteProps) {
   const enabled = useSiteGitBuildsEnabled();
   const { data: state, error } = useGitState(projectId, siteId, enabled);
   if (!enabled) return null;
@@ -255,6 +278,7 @@ export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false,
             canDevelop={canDevelop}
             connection={state.connection}
             nodeVersions={state.nodeVersions}
+            serverSite={serverSite}
           />
         )}
         {state && !state.connection && canDevelop && (
@@ -263,6 +287,7 @@ export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false,
             siteId={siteId}
             current={null}
             nodeVersions={state.nodeVersions}
+            serverSite={serverSite}
           />
         )}
         {state && !state.connection && !canDevelop && (

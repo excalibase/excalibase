@@ -42,6 +42,8 @@ const (
 // Sites is the Sites service a build deploys through, the same path an upload takes.
 type Sites interface {
 	Get(ctx context.Context, projectID, id string) (*sites.Site, error)
+	// ServerSitesOn is the sitesserver feature: off, a server site is treated as absent.
+	ServerSitesOn(ctx context.Context) bool
 	Deploy(ctx context.Context, request sites.DeployRequest) (*sites.Deploy, error)
 	MaxUploadBytes(ctx context.Context, projectID string) (int64, error)
 	TakeDeploySlot(ctx context.Context, projectID string) error
@@ -110,11 +112,33 @@ func (s *Service) Available() error {
 }
 
 func (s *Service) mustSite(ctx context.Context, projectID, siteID string) error {
-	if err := s.Available(); err != nil {
-		return err
-	}
-	_, err := s.sites.Get(ctx, projectID, siteID)
+	_, err := s.loadSite(ctx, projectID, siteID)
 	return err
+}
+
+func (s *Service) loadSite(ctx context.Context, projectID, siteID string) (*sites.Site, error) {
+	if err := s.Available(); err != nil {
+		return nil, err
+	}
+	site, err := s.sites.Get(ctx, projectID, siteID)
+	if err != nil {
+		return nil, err
+	}
+	if site.Kind == sites.KindServer && !s.sites.ServerSitesOn(ctx) {
+		return nil, sites.ErrServerSitesOff
+	}
+	return site, nil
+}
+
+// matchKind keeps a server site on a framework preset and a static site off one.
+func matchKind(kind string, settings Settings) error {
+	switch {
+	case kind == sites.KindServer && settings.Framework == "":
+		return &InputError{Reason: "a server site is built with a framework; choose one (Next.js)"}
+	case kind != sites.KindServer && settings.Framework != "":
+		return &InputError{Reason: "a framework build needs a server site; create the site as a server site"}
+	}
+	return nil
 }
 
 // StartSignIn answers the git host's sign-in (or install) link for a user connecting a site.
@@ -229,8 +253,13 @@ type ConnectResult struct {
 // Connect checks the user's own sign-in shows them the repository, that the
 // App still reaches it, saves the connection, and queues a first build.
 func (s *Service) Connect(ctx context.Context, request ConnectRequest) (*ConnectResult, error) {
-	if err := s.mustSite(ctx, request.ProjectID, request.SiteID); err != nil {
+	site, err := s.loadSite(ctx, request.ProjectID, request.SiteID)
+	if err != nil {
 		return nil, err
+	}
+	if request.Settings.Framework != "" && !s.sites.ServerSitesOn(ctx) {
+		// Not even a refusal that names server sites while they are off.
+		return nil, sites.ErrServerSitesOff
 	}
 	if err := s.mayConnect(ctx, request.UserID, request.ProjectID); err != nil {
 		return nil, err
@@ -244,6 +273,9 @@ func (s *Service) Connect(ctx context.Context, request ConnectRequest) (*Connect
 	}
 	settings, err := request.Settings.Normalise()
 	if err != nil {
+		return nil, err
+	}
+	if err := matchKind(site.Kind, settings); err != nil {
 		return nil, err
 	}
 	connection := &Connection{SiteID: request.SiteID, GitSource: s.newSource(request.ProjectID, request.UserID, installation, repository), Settings: settings}
@@ -510,6 +542,9 @@ func (s *Service) pushTargets(ctx context.Context, push *gitprovider.Push) ([]co
 	}
 	targets := make([]connected, 0, len(siteConnections))
 	for _, connection := range siteConnections {
+		if s.hiddenServerSite(ctx, connection) {
+			continue
+		}
 		targets = append(targets, connection)
 	}
 	if !s.appsOn(ctx) {
@@ -636,4 +671,13 @@ func userMessage(err error) string {
 	}
 	log.Printf("git builds: %v", err)
 	return "an internal error stopped this; try again"
+}
+
+// hiddenServerSite is a connection of a server site while server sites are off: a push does not build it.
+func (s *Service) hiddenServerSite(ctx context.Context, connection *Connection) bool {
+	if s.sites.ServerSitesOn(ctx) {
+		return false
+	}
+	site, err := s.sites.Get(ctx, connection.ProjectID, connection.SiteID)
+	return err == nil && site.Kind == sites.KindServer
 }

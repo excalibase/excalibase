@@ -296,3 +296,27 @@ func TestSiteBuildPrepareStepRunsThePrepareImage(t *testing.T) {
 		}
 	}
 }
+
+func TestSiteBuildJob_FrameworkReachesTheBuildAndCollectSteps(t *testing.T) {
+	spec := testRunSpec()
+	spec.Framework = sitebuilds.FrameworkNextjs
+	pod := renderSiteBuildJob(testBuildOptions(), spec).Spec.Template.Spec
+	for _, step := range []corev1.Container{containerNamed(t, pod.InitContainers, "build"), containerNamed(t, pod.Containers, "collect")} {
+		found := false
+		for _, variable := range step.Env {
+			found = found || (variable.Name == "FRAMEWORK" && variable.Value == "nextjs")
+		}
+		if !found {
+			t.Errorf("%s step lacks FRAMEWORK=nextjs: %+v", step.Name, step.Env)
+		}
+	}
+}
+
+func TestSiteBuildStepFailure_FrameworkRefusalIsNamed(t *testing.T) {
+	if got := stepFailureKind("build", exitFramework); got != sitebuilds.FailFramework {
+		t.Errorf("exit %d of build = %s, want framework", exitFramework, got)
+	}
+	if got := stepFailureKind("build", exitBuild); got != sitebuilds.FailBuild {
+		t.Errorf("a plain build failure = %s", got)
+	}
+}
