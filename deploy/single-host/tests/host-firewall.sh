@@ -23,6 +23,8 @@ shift # -w
 op=\$1; shift
 # Refuses a rule as iptables refuses a bad address, once it has parsed the call.
 if [ "\$op" = -A ] && [ -r "$WORK/refuse" ] && echo "\$*" | grep -qF -- "\$(cat "$WORK/refuse")"; then exit 2; fi
+# iptables-nft 1.8.10 answers no to -C on a -p icmpv6 rule that is there, once enough of a chain is written.
+if [ "\$op" = -C ] && [ -e "$WORK/blind-icmpv6" ] && echo "\$*" | grep -qF -- '-p icmpv6'; then exit 1; fi
 if [ "${3:-}" = absent ] && [ "\$op" = -S ] && [ "\$1" = DOCKER-USER ]; then exit 1; fi
 case \$op in
   -C) grep -qxF -- "\$*" "\$rules" ;;
@@ -43,7 +45,7 @@ EOF
 }
 
 reset() {
-  rm -rf "$WORK/bin" "$WORK/sys" "$WORK"/*.rules "$WORK"/*.calls "$WORK"/*.chains "$WORK/refuse"
+  rm -rf "$WORK/bin" "$WORK/sys" "$WORK"/*.rules "$WORK"/*.calls "$WORK"/*.chains "$WORK/refuse" "$WORK/blind-icmpv6"
   mkdir -p "$WORK/bin" "$WORK/sys/br-3f1c9a2b7d4e" "$WORK/sys/br-aa11bb22cc33" "$WORK/sys/br-77aa88bb99cc"
   fake iptables-nft v4
   fake ip6tables-nft v6
@@ -384,6 +386,22 @@ kill "$guard_pid"
 has v4 "INPUT -i exnet+ -j EXCALIBASE-HOST"
 has v4 "DOCKER-USER -i exnet+ -j EXCALIBASE-APP"
 has v4 "INPUT -i br-3f1c9a2b7d4e -j EXCALIBASE-HOST"
+# The -C blind spot of the image's iptables is no reason to close the chain or fail the check.
+reset
+touch "$WORK/blind-icmpv6"
+fenced "" || fail "the rules do not hold where -C cannot see the ICMPv6 rule: $(cat "$WORK/out")"
+fenced "" check || fail "the check fails where -C cannot see the ICMPv6 rule: $(cat "$WORK/out")"
+grep -vxF "EXCALIBASE-HOST -p icmpv6 -j RETURN" "$WORK/v6.rules" >"$WORK/v6.n"; mv "$WORK/v6.n" "$WORK/v6.rules"
+echo "EXCALIBASE-HOST -p tcp --dport 22 -j RETURN" >>"$WORK/v6.rules"
+! fenced "" check || fail "the check passed with the ICMPv6 rule swapped for another"
+# Docker before 29 takes a call to a published port from another bridge through docker-proxy, on INPUT.
+reset
+fenced "" || fail "fenced: $(cat "$WORK/out")"
+for port in 80 443; do
+  has v4 "EXCALIBASE-HOST -i exnet+ -p tcp --dport $port -j RETURN"
+  before v4 "EXCALIBASE-HOST -i exnet+ -p tcp --dport $port -j RETURN" "EXCALIBASE-HOST -j DROP"
+  lacks v6 "EXCALIBASE-HOST -i exnet+ -p tcp --dport $port -j RETURN"
+done
 # Without the setting nothing is added: chart-free callers keep what they had.
 reset
 run || fail "a run without project bridges: $(cat "$WORK/out")"

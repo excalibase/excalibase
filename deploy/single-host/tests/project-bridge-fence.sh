@@ -147,6 +147,8 @@ check_from app-a
 d exec db-a ip route show default | grep -q "via $GW" && ok "db-a: its default route is on the project bridge" || ko "db-a's default route: $(d exec db-a ip route show default)"
 check_from db-a
 check_from documentdb-a
+FROM_B=$(probe app-b)
+[ "$(result "$FROM_B" edge-published)" = OPEN ] && ok "app-b, with the edge not on its network: edge-published open" || ko "app-b: edge-published $(result "$FROM_B" edge-published)"
 
 # APP_EGRESS=none on Docker 28+: nothing to guard, and no route anyway.
 if [ -n "$ISOLATED" ]; then
@@ -169,31 +171,50 @@ firewall "" >/dev/null
 firewall check || ko "the rerun did not restore the wildcard"
 ok "a rerun restores it"
 
-# EXC-687 review: what a reload does, with the guard running as the bundle runs it.
-on_machine "HOST_FIREWALL_NETWORKS=excalibase-tenants,excalibase-edge HOST_FIREWALL_TENANT_NETWORKS=excalibase-tenants \
-  HOST_FIREWALL_PROJECT_BRIDGES=exnet+ HOST_FIREWALL_EDGE_NETWORK=excalibase-edge HOST_FIREWALL_RESOLV_CONF=/tmp/resolv \
-  APP_EGRESS_EXTRA_DENY_CIDRS=$DENIED/32 HOST_FIREWALL_INTERVAL=2 nohup sh /host-firewall.sh >/tmp/fw.log 2>&1 & echo \$! >/tmp/fw.pid"
-wait_seconds() { python3 -c "import time;time.sleep($1)" 2>/dev/null || sleep "$1"; }
-guard_alive() { on_machine 'kill -0 $(cat /tmp/fw.pid) 2>/dev/null'; }
-wait_seconds 3
-
-# A connection opened while the rules were gone stops when they return.
+# EXC-687 review: what a reload does. A connection opened while the rules were gone stops when they return.
+ECHO='import socket
+listener=socket.socket();listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);listener.bind(("0.0.0.0",81));listener.listen(5)
+while True:
+    conn,_=listener.accept()
+    while True:
+        data=conn.recv(100)
+        if not data: break
+        conn.send(data)'
+d exec -d up-meta python -c "$ECHO"
 on_machine 'iptables -D DOCKER-USER -i exnet+ -j EXCALIBASE-APP; iptables -D FORWARD -i exnet+ -j EXCALIBASE-APP'
-on_machine 'iptables -D DOCKER-USER -i exnet+ -j EXCALIBASE-APP 2>/dev/null; :'
 d exec -d app-a python -c 'import socket,time
-held=socket.socket();held.settimeout(3);held.connect(("169.254.169.254",80))
-out=open("/tmp/held","w")
-for tick in range(14):
+held=socket.socket();held.settimeout(3)
+out=open("/tmp/held","a")
+try:
+    held.connect(("169.254.169.254",81))
+except OSError as error:
+    print("no connection",error,file=out,flush=True);raise SystemExit
+for tick in range(20):
     try:
-        held.send(b"x");print("sent",file=out,flush=True)
+        held.send(b"x");print("reply",held.recv(10),file=out,flush=True)
     except OSError as error:
         print("cut",error,file=out,flush=True)
     time.sleep(1)'
-wait_seconds 16
+wait_seconds() { python3 -c "import time;time.sleep($1)" 2>/dev/null || sleep "$1"; }
+wait_seconds 3
 case "$(d exec app-a cat /tmp/held 2>&1)" in
-  *cut*|"") ok "a connection opened in the reload window does not outlive the rules" ;;
-  *) on_machine "conntrack -L 2>/dev/null | grep 169.254 || true"; ko "the held connection kept sending: $(d exec app-a tail -2 /tmp/held)" ;;
+  *reply*) ok "control: with the rules gone a connection to metadata opens and answers" ;;
+  *) ko "control: no connection opened in the window: $(d exec app-a cat /tmp/held 2>&1)" ;;
 esac
+firewall "" >/dev/null
+d exec app-a sh -c ": >/tmp/held"
+wait_seconds 6
+case "$(d exec app-a tail -2 /tmp/held 2>&1)" in
+  *reply*) ko "the held connection outlived the rules: $(d exec app-a tail -2 /tmp/held)" ;;
+  *cut*) ok "a connection opened in the reload window stops when the rules return" ;;
+  *) ko "the held connection: $(d exec app-a cat /tmp/held 2>&1)" ;;
+esac
+
+on_machine "HOST_FIREWALL_NETWORKS=excalibase-tenants,excalibase-edge HOST_FIREWALL_TENANT_NETWORKS=excalibase-tenants \
+  HOST_FIREWALL_PROJECT_BRIDGES=exnet+ HOST_FIREWALL_EDGE_NETWORK=excalibase-edge HOST_FIREWALL_RESOLV_CONF=/tmp/resolv \
+  APP_EGRESS_EXTRA_DENY_CIDRS=$DENIED/32 HOST_FIREWALL_INTERVAL=2 nohup sh /host-firewall.sh >/tmp/fw.log 2>&1 & echo \$! >/tmp/fw.pid"
+guard_alive() { on_machine 'kill -0 $(cat /tmp/fw.pid) 2>/dev/null'; }
+wait_seconds 3
 
 # Restarting nftables.service flushes everything, Docker's chains too: ours come back without them.
 on_machine 'apk add -q nftables >/dev/null 2>&1; nft flush ruleset'

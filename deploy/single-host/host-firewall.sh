@@ -45,6 +45,8 @@ TENANT_CHAIN=EXCALIBASE-TENANT
 APP_CHAIN=EXCALIBASE-APP
 # The wildcard on project bridges, and the network whose published web ports apps may reach.
 PROJECT_BRIDGES=${HOST_FIREWALL_PROJECT_BRIDGES:-}
+# The host ports the edge publishes.
+EDGE_PORTS=${HOST_FIREWALL_EDGE_PORTS:-80 443}
 EDGE_NETWORK=${HOST_FIREWALL_EDGE_NETWORK:-}
 NETWORKS=${HOST_FIREWALL_NETWORKS:?the platform networks to guard}
 TENANTS=${HOST_FIREWALL_TENANT_NETWORKS:?the tenant networks}
@@ -196,6 +198,10 @@ host_rules() {
   fi
   echo "$HOST_CHAIN -p udp --dport 53 -j RETURN"
   echo "$HOST_CHAIN -p tcp --dport 53 -j RETURN"
+  # Docker before 29 serves a call to a published port from another bridge by docker-proxy, on INPUT.
+  if [ -n "$PROJECT_BRIDGES" ] && { [ "$1" = 6 ] && [ -n "$EDGE6" ] || [ "$1" != 6 ] && [ -n "$EDGE4" ]; }; then
+    for port in $EDGE_PORTS; do echo "$HOST_CHAIN -i $PROJECT_BRIDGES -p tcp --dport $port -j RETURN"; done
+  fi
   echo "$HOST_CHAIN -j DROP"
 }
 
@@ -253,11 +259,17 @@ jumps() {
 
 # chain_holds <ipt> <chain> <rules>: exactly these rules are there, so it need not be closed to refill.
 chain_holds() {
-  held=$("$1" -w -S "$2" 2>/dev/null | grep -c '^-A ' || true)
-  [ "$held" = "$(echo "$3" | grep -c .)" ] || return 1
+  listed=$("$1" -w -S "$2" 2>/dev/null) || return 1
+  [ "$(echo "$listed" | grep -c '^-A ' || true)" = "$(echo "$3" | grep -c .)" ] || return 1
   echo "$3" | while read -r rule; do
-    # shellcheck disable=SC2086
-    "$1" -w -C $rule 2>/dev/null || exit 1
+    case "$rule" in
+      # iptables-nft 1.8.10 can answer no to -C here with the rule in place: read the listing instead.
+      *" -p icmpv6 -j RETURN")
+        echo "$listed" | grep -qE -- "^-A $2 -p (ipv6-icmp|icmpv6|58) -j RETURN\$" || exit 1 ;;
+      *)
+        # shellcheck disable=SC2086
+        "$1" -w -C $rule 2>/dev/null || exit 1 ;;
+    esac
   done
 }
 

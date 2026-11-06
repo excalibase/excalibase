@@ -80,7 +80,9 @@ cd excalibase/deploy/single-host
 (`FILES_PUBLIC_URL`), the domain, how
 certificates are obtained (`EXCALIBASE_TLS`: your address for Let's Encrypt, or
 `internal` for `localhost`), who may open Studio (`STUDIO_ALLOW_CIDRS`, default
-everyone — narrow it with `--studio-allow "203.0.113.0/24"`), and the engine
+everyone — narrow it with `--studio-allow "203.0.113.0/24"`; the edge sees an app calling a
+public hostname on this host as `10.203.250.1`, and one sharing its network by the project's own
+subnet, so a range covering either, such as `10.0.0.0/8`, lets apps reach Studio's sign-in), and the engine
 socket and its group. It refuses to overwrite an existing `.env`: the database
 was created with those secrets.
 
@@ -275,7 +277,7 @@ its first packet with no reconcile. From those bridges:
 | What the edge publishes on 80 and 443 | allowed, as from anywhere: an app can call a public hostname on this host |
 | Any other published port on this host | dropped |
 | Other projects | dropped by Docker's isolation |
-| `APP_EGRESS_EXTRA_DENY_CIDRS` (IPv4 only, as provisioning reads it; preflight refuses an IPv6 entry) | dropped, the edge's published ports too if the list covers its address |
+| `APP_EGRESS_EXTRA_DENY_CIDRS` (IPv4 only, as provisioning reads it; preflight refuses an IPv6 entry) | dropped, on Docker 29 and later the edge's published ports too if the list covers the host's address |
 
 The project's database and DocumentDB gateway join the same bridge, and their default route
 moves to it, so all of this covers them too. With `APP_EGRESS=none` on Docker 28 or later
