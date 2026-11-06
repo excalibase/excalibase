@@ -47,6 +47,8 @@ var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^GET /api/provision/[^/]+/advisors$`),
 	// Monitoring reads (EXC-633/656): request charts, CPU and memory, the project's alerts, the database's size and plan.
 	regexp.MustCompile(`^GET /api/provision/[^/]+/(requests(\?.*)?|metrics/current|metrics/history(\?.*)?|cluster)$`),
+	// The project's own containers on a single host (EXC-670).
+	regexp.MustCompile(`^GET /api/projects/[^/]+/containers/metrics(\?.*)?$`),
 	regexp.MustCompile(`^GET /api/alerts/project/[^/]+/$`),
 	// How end users may sign in, read only; every write, and the provider secrets, stay in Studio (ADR 0037).
 	regexp.MustCompile(`^GET /api/projects/[^/]+/(auth-settings|auth-providers)/$`),
