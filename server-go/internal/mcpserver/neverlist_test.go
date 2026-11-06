@@ -13,7 +13,7 @@ import (
 // decision about what an AI tool may do with a person's credential.
 var offeredTools = []string{
 	"add_cors_origin", "add_site_domain", "apply_migration", "check_site_domain", "connect_site_repo", "create_app", "create_publishable_key", "create_site", "delete_app", "delete_function",
-	"delete_site", "deploy_app", "deploy_function", "deploy_site", "describe_table", "execute_sql", "generate_typescript_types", "get_ci_snippet",
+	"delete_site", "deploy_app", "deploy_function", "deploy_site", "describe_table", "execute_sql", "generate_typescript_types", "get_auth_settings", "get_ci_snippet",
 	"get_database_info", "get_db_endpoint", "get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_metrics", "get_project_info",
 	"list_alerts", "list_apps", "list_cors_origins", "list_functions", "list_migrations", "list_permissions", "list_projects",
 	"list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_tables", "remove_cors_origin", "remove_site_domain", "rollback_site", "set_db_function_permission", "set_function_outbound_hosts",
@@ -47,6 +47,8 @@ var allowedRoutes = []*regexp.Regexp{
 	// Monitoring reads (EXC-633/656): request charts, CPU and memory, the project's alerts, the database's size and plan.
 	regexp.MustCompile(`^GET /api/provision/[^/]+/(requests(\?.*)?|metrics/current|metrics/history(\?.*)?|cluster)$`),
 	regexp.MustCompile(`^GET /api/alerts/project/[^/]+/$`),
+	// How end users may sign in, read only; every write, and the provider secrets, stay in Studio (ADR 0037).
+	regexp.MustCompile(`^GET /api/projects/[^/]+/(auth-settings|auth-providers)/$`),
 	// Where to connect: host, port, certificate and connection strings without the password (EXC-666).
 	regexp.MustCompile(`^GET /api/projects/[^/]+/(db-endpoint|db-read-address)/$`),
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/functions/$`),

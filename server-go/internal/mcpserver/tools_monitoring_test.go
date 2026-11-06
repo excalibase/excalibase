@@ -80,3 +80,35 @@ func monitoringRouteCases() []routeCase {
 		},
 	}
 }
+
+func authSettingsRouteCases() []routeCase {
+	settings := `{"requireEmailVerification":true,"siteUrl":"https://app.example.test","redirectUrls":[],"allowNewUsers":true}`
+	return []routeCase{
+		{
+			name: "get_auth_settings with providers off", tool: "get_auth_settings", args: map[string]any{"project_id": testProjectA},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodGet, projectsA+"/auth-settings/", 200, settings)
+			},
+			expect: []string{"GET " + projectsA + "/auth-settings/"},
+			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+				if _, has := out["providers"]; has || out["siteUrl"] != "https://app.example.test" {
+					t.Errorf("out = %v", out)
+				}
+			},
+		},
+		{
+			name: "get_auth_settings with oauth on", tool: "get_auth_settings", args: map[string]any{"project_id": testProjectA},
+			features: []features.Feature{features.AuthOAuth},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodGet, projectsA+"/auth-settings/", 200, settings)
+				f.on(http.MethodGet, projectsA+"/auth-providers/", 200, `[{"provider":"github","enabled":true,"clientSecretSet":true}]`)
+			},
+			expect: []string{"GET " + projectsA + "/auth-settings/", "GET " + projectsA + "/auth-providers/"},
+			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+				if providers, _ := out["providers"].([]any); len(providers) != 1 {
+					t.Errorf("out = %v", out)
+				}
+			},
+		},
+	}
+}

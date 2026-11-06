@@ -32,6 +32,8 @@ func monitoringTools() []entry {
 			readTool, getDatabaseInfo),
 		tool("get_db_endpoint", "Where to connect to the project's database from outside: host, port, TLS and CA certificate, and connection strings that carry no password. "+
 			"Opening or closing the public port is an Admin's choice in Studio.", readTool, getDBEndpoint),
+		tool("get_auth_settings", "How the project's end users may sign in: email verification, site URL, redirect URLs, who may sign up, and (while the features are on) "+
+			"email codes, guest sign-in and the OAuth providers with their callback URLs. Client secrets are never shown. Read-only; needs Developer.", readTool, getAuthSettings),
 		dark(features.DBReadAddress, tool("get_db_read_address", "The database's read-only address to its replicas, internal and public, and whether it is on. Read-only.",
 			readTool, getDBReadAddress)),
 	}
@@ -112,4 +114,27 @@ func getDBReadAddress(ctx context.Context, c *call, in projectArg) (any, error) 
 		return nil, err
 	}
 	return rawRead(ctx, c, projectsAPI+projectID+"/db-read-address/", nil)
+}
+
+// getAuthSettings reads how the project's end users may sign in. The sign-in
+// providers join it only while their feature is on; their client secrets are
+// write-only and never come back.
+func getAuthSettings(ctx context.Context, c *call, in projectArg) (any, error) {
+	projectID, err := c.useProject(in.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	settings, err := rawRead(ctx, c, projectsAPI+projectID+"/auth-settings/", nil)
+	if err != nil {
+		return nil, err
+	}
+	if features.Enabled(ctx, c.settings.Features, features.AuthOAuth) {
+		var providers json.RawMessage
+		if err := c.get(ctx, projectsAPI+projectID+"/auth-providers/", nil, &providers); err != nil {
+			return nil, err
+		}
+		settings["providers"] = providers
+	}
+	settings["note"] = "Read-only. Changing sign-in settings, providers and captcha is done by a project Admin in Studio."
+	return settings, nil
 }

@@ -16,6 +16,7 @@ func routeCases() []routeCase {
 	cases = append(append(append(cases, sitesRouteCases()...), siteDomainRouteCases()...), siteBuildRouteCases()...)
 	cases = append(cases, sitePreviewRouteCases()...)
 	cases = append(cases, monitoringRouteCases()...)
+	cases = append(cases, authSettingsRouteCases()...)
 	return append(append(append(cases, advisorRouteCases()...), dbAllowListRouteCases()...), s3KeyRouteCases()...)
 }
 

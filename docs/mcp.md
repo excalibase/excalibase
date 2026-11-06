@@ -69,6 +69,7 @@ apps and grant what the anon role grants.
 | `get_database_info` | `GET /api/provision/{id}/cluster`: disk, size, plan, settings (Postgres) |
 | `get_db_endpoint` | `GET /api/projects/{id}/db-endpoint/`: host, port, CA and connection strings without the password; opening the port stays in Studio |
 | `get_db_read_address` | `GET /api/projects/{id}/db-read-address/`; offered only while `FEATURE_DBREADADDRESS` is on |
+| `get_auth_settings` | `GET .../auth-settings/`, plus `.../auth-providers/` while `FEATURE_AUTHOAUTH` is on: how end users may sign in; secrets never; every write stays in Studio |
 | `test_api_request` | `GET /api/projects/{id}/info/`, then one request to the project's own data API (below) |
 | `get_dockerfile_template` | none: Dockerfiles for node, nextjs, vite, python, go, java |
 | `list_sites` / `create_site` / `delete_site` | `GET`/`POST /api/projects/{id}/sites/`, `DELETE .../sites/{site}/`. Sites serve built files from the CDN (ADR 0043); the site's origin joins the project's CORS list on its first deploy |
