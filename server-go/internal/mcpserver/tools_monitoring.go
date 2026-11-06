@@ -36,14 +36,17 @@ func monitoringTools() []entry {
 			"Needs Developer. Opening or closing the public port is an Admin's choice in Studio.", readTool, getDBEndpoint),
 		tool("get_auth_settings", "How the project's end users may sign in: email verification and site URL always; redirect URLs and who may sign up only while a sign-in flag "+
 			"(OAuth, email code or guest) is on; email codes and guest sign-in while their features are on; and the OAuth providers with their callback URLs while OAuth is on. "+
-			"Client secrets are never shown. Read-only; needs Developer.", readTool, getAuthSettings),
+			"mfaEnabled says whether end-user MFA is on (its key is never shown). Client secrets are never shown. Read-only; needs Developer.", readTool, getAuthSettings),
 		dark(features.DBReadAddress, tool("get_db_read_address", "The database's read-only address to its replicas, internal and public, and whether it is on. Needs Developer. Read-only.",
 			readTool, getDBReadAddress)),
 	}
 }
 
-// Each answer is read into a view that names what an agent may see. A field
-// the route adds later stays out until a view names it.
+// The cluster, connection address and sign-in answers are read into views
+// that name what an agent may see: a field the route adds later stays out
+// until a view names it. Request charts, metrics and alerts decode into the
+// platform's own typed structs (domain), so a field added there reaches the
+// agent and is reviewed with that change.
 
 type clusterView struct {
 	Tier              domain.TierType   `json:"tier"`
