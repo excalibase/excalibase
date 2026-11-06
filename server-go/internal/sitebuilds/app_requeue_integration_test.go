@@ -264,3 +264,40 @@ func TestRequeue_AStuckAppLeavesTheLastSlotToASite(t *testing.T) {
 		t.Errorf("the slot went to %+v", next)
 	}
 }
+
+// A push mid-enqueue and a build going back must not leave both queued: once the older runs after the newer it
+// deploys over it. The trigger holds the enqueue open between its supersede and its commit, where the two meet.
+func TestRequeue_ABuildGoingBackMeetsAnEnqueueInFlight(t *testing.T) {
+	h := sitebuildstest.New(t, sitebuildstest.Options{AppsOn: true})
+	app := h.AddApp(h.Project)
+	queueAppBuild(t, h, h.Project, app, "", sitebuildstest.FreeAppLimits.Limits)
+	running := claim(t, h, 100)
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	create := fmt.Sprintf(`CREATE FUNCTION hold_%[1]s() RETURNS trigger AS $$ BEGIN
+			IF NEW.app_id = '%[2]s' THEN PERFORM pg_sleep(0.5); END IF; RETURN NEW; END $$ LANGUAGE plpgsql;
+		CREATE TRIGGER hold_%[1]s BEFORE INSERT ON site_builds FOR EACH ROW EXECUTE FUNCTION hold_%[1]s();`, suffix, app)
+	if _, err := h.SQL().Exec(create); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := h.SQL().Exec(fmt.Sprintf(`DROP TRIGGER hold_%[1]s ON site_builds; DROP FUNCTION hold_%[1]s();`, suffix)); err != nil {
+			t.Error(err)
+		}
+	})
+	queuedNewer := make(chan *sitebuilds.Build, 1)
+	go func() { queuedNewer <- queueAppBuild(t, h, h.Project, app, "", sitebuildstest.FreeAppLimits.Limits) }()
+	time.Sleep(150 * time.Millisecond)
+	if err := h.Store.RetryBuildLater(context.Background(), running.ID, "replica-"+h.Project, 0, "no room"); err != nil {
+		t.Fatal(err)
+	}
+	newer := <-queuedNewer
+	if queued := count(t, h, `SELECT COUNT(*) FROM site_builds WHERE app_id = $1 AND status = 'QUEUED'`, app); queued != 1 {
+		t.Errorf("%d builds of one app queued", queued)
+	}
+	if status, _, _, _ := buildRow(t, h, running.ID); status != sitebuilds.StatusCancelled {
+		t.Errorf("the older build is %s", status)
+	}
+	if status, _, _, _ := buildRow(t, h, newer.ID); status != sitebuilds.StatusQueued {
+		t.Errorf("the newer build is %s", status)
+	}
+}

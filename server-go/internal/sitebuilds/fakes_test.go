@@ -45,6 +45,7 @@ type memoryStore struct {
 	signIns         []SignIn
 	appPushErr      error
 	leaseRenewals   int
+	retryDelays     []time.Duration
 }
 
 func newMemoryStore() *memoryStore {
@@ -221,9 +222,10 @@ func (m *memoryStore) RequeueBuild(_ context.Context, buildID, _ string) error {
 	return nil
 }
 
-func (m *memoryStore) RetryBuildLater(_ context.Context, buildID, _ string, _ time.Duration, reason string) error {
+func (m *memoryStore) RetryBuildLater(_ context.Context, buildID, _ string, delay time.Duration, reason string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.retryDelays = append(m.retryDelays, delay)
 	for _, build := range m.builds {
 		if build.ID == buildID && build.Status == StatusRunning {
 			build.Status, build.WaitReason = StatusQueued, reason
@@ -442,6 +444,8 @@ func (f *fakeProvider) revokedTokens() []string {
 
 // fakeJobs plays each started build's outcome: one status with the clone done, then the outcome.
 type fakeJobs struct {
+	// statusErr, while set, answers every status read.
+	statusErr error
 	mu        sync.Mutex
 	outcomes  []RunStatus
 	current   RunStatus
@@ -470,6 +474,9 @@ func (f *fakeJobs) Status(_ context.Context, runID string) (RunStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statusIDs = append(f.statusIDs, runID)
+	if f.statusErr != nil {
+		return RunStatus{}, f.statusErr
+	}
 	f.reads++
 	if f.onStatus != nil {
 		f.onStatus()

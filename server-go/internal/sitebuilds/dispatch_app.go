@@ -114,8 +114,8 @@ func (k *appKind) start(ctx context.Context, credential gitprovider.CloneCredent
 		CloneToken: credential.Token, Secrets: secrets, LargestPlan: largest})
 }
 
-// deliver hands the finished build to the publisher. A refusal for want of room waits here while the Job still holds
-// the image and the lease still renews; only when the wait runs out does the build give the image up.
+// deliver hands the finished build to the publisher. A refusal for want of room waits here while the lease still
+// renews; the build gives the image up when the wait runs out or the Job holding it ends, whose deadline does not stop for the wait.
 func (k *appKind) deliver(ctx context.Context) outcome {
 	run := k.execution
 	options := run.dispatcher.options
@@ -127,7 +127,7 @@ func (k *appKind) deliver(ctx context.Context) outcome {
 		}
 		log.Printf("app build %s: publish refused: %v", run.build.ID, err)
 		if !waited {
-			run.note("== waiting for room ==\nthe platform has no room to take in the finished image yet; the image is kept while this build waits\n")
+			run.note("== waiting for room ==\nthe platform has no room to take in the finished image yet; this build waits, and builds again if the wait or its time limit runs out\n")
 			run.saveLog(ctx)
 		}
 		if !time.Now().Before(giveUp) {
@@ -141,7 +141,25 @@ func (k *appKind) deliver(ctx context.Context) outcome {
 		if reason := run.stillDeployable(ctx); reason != "" {
 			return failedWith(FailPlatform, reason)
 		}
+		if !k.jobHoldsImage(ctx) {
+			return outcome{requeue: true}
+		}
 	}
+}
+
+// jobHoldsImage answers false once the Job ended; a status it cannot read says nothing, so the wait goes on.
+func (k *appKind) jobHoldsImage(ctx context.Context) bool {
+	run := k.execution
+	status, err := k.runner.Status(ctx, run.runID)
+	if err != nil {
+		log.Printf("app build %s: read status during the wait: %v", run.build.ID, err)
+		return true
+	}
+	if status.Phase != RunReady {
+		log.Printf("app build %s: its job ended during the wait: %s", run.build.ID, status.Detail)
+		return false
+	}
+	return true
 }
 
 func (k *appKind) publish(ctx context.Context) (string, error) {

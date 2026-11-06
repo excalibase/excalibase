@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -238,5 +239,111 @@ func TestSiteBuild_NeverRequeuesOnAFailedDeploy(t *testing.T) {
 	}
 	if starts := len(bed.sites.started()); starts != 1 {
 		t.Errorf("started %d site builds", starts)
+	}
+}
+
+// The Job's time limit does not stop for the wait. Once it ends there is no image left to wait with, so the build
+// goes back for its retry; a publish now would fail for want of a pod, ending a healthy build for good.
+func TestAppBuild_AJobThatEndsDuringTheWaitGoesBackInsteadOfFailing(t *testing.T) {
+	bed := newTestBed(true)
+	bed.dispatcher.options.PublishWait = time.Minute
+	bed.publisher.refuse = func(call int) error {
+		if call > 1 {
+			return errors.New("the build has no pod to collect from")
+		}
+		bed.apps.mu.Lock()
+		defer bed.apps.mu.Unlock()
+		bed.apps.current = RunStatus{Phase: RunFailed, Failure: FailPlatform, Detail: "past its deadline"}
+		return errNoRoom
+	}
+	queued := queueApp(t, bed, AppSettings{Builder: AppBuilderBuildpacks})
+	bed.runAll()
+	waiting := bed.store.build(queued.ID)
+	if waiting.Status != StatusQueued || waiting.Requeues != 1 || waiting.FailureReason != "" {
+		t.Errorf("after the Job ended: %+v", waiting)
+	}
+	if calls := bed.publisher.calls(); calls != 1 {
+		t.Errorf("published %d times after the Job ended", calls)
+	}
+}
+
+// A status read that fails says nothing about the Job, so it costs no image.
+func TestAppBuild_AStatusReadThatFailsKeepsWaiting(t *testing.T) {
+	bed := newTestBed(true)
+	bed.dispatcher.options.PublishWait = time.Minute
+	bed.publisher.refuse = func(call int) error {
+		bed.apps.mu.Lock()
+		defer bed.apps.mu.Unlock()
+		switch call {
+		case 1:
+			bed.apps.statusErr = errors.New("the API server blinked")
+			return errNoRoom
+		case 2:
+			bed.apps.statusErr = nil
+			return errNoRoom
+		}
+		return nil
+	}
+	queued := queueApp(t, bed, AppSettings{Builder: AppBuilderBuildpacks})
+	bed.runAll()
+	if done := bed.store.build(queued.ID); done.Status != StatusSucceeded || done.Requeues != 0 {
+		t.Errorf("after the failed read: %+v", done)
+	}
+	if calls := bed.publisher.calls(); calls != 3 {
+		t.Errorf("published %d times, want 3", calls)
+	}
+}
+
+// The log must not promise an image the Job's deadline can still take away.
+func TestAppBuild_TheWaitNoteMakesNoPromiseAboutTheImage(t *testing.T) {
+	bed := newTestBed(true)
+	bed.publisher.err = errNoRoom
+	queued := queueApp(t, bed, AppSettings{Builder: AppBuilderBuildpacks})
+	bed.runAll()
+	note := bed.store.logs[queued.ID]
+	if !strings.Contains(note, "waiting for room") || strings.Contains(note, "is kept") {
+		t.Errorf("the note: %q", note)
+	}
+	if strings.Contains(note, "== retry ==") {
+		t.Errorf("the first run calls itself a retry: %q", note)
+	}
+}
+
+func TestAppBuild_EachRetryWaitsLongerAndSaysWhichItIs(t *testing.T) {
+	bed := newTestBed(true)
+	bed.dispatcher.options.RequeueDelay = 7 * time.Millisecond
+	bed.publisher.err = errNoRoom
+	queued := queueApp(t, bed, AppSettings{Builder: AppBuilderBuildpacks})
+	for range 10 {
+		bed.runAll()
+	}
+	want := []time.Duration{7 * time.Millisecond, 14 * time.Millisecond}
+	if !slices.Equal(bed.store.retryDelays, want) {
+		t.Errorf("delays %v, want %v", bed.store.retryDelays, want)
+	}
+	done := bed.store.build(queued.ID)
+	if !strings.Contains(done.Log, "== retry ==") || !strings.Contains(done.Log, fmt.Sprintf("retry %d of %d", MaxSpoolRequeues, MaxSpoolRequeues)) {
+		t.Errorf("the last run's log: %q", done.Log)
+	}
+}
+
+func TestDispatcherOptions_TheWaitLeavesThePublishHalfTheBudget(t *testing.T) {
+	cases := []struct {
+		name               string
+		wait, budget, want time.Duration
+	}{
+		{"the defaults", 0, 0, 10 * time.Minute},
+		{"a short budget caps the default wait", 0, 8 * time.Minute, 4 * time.Minute},
+		{"a long wait is capped", time.Hour, 20 * time.Minute, 10 * time.Minute},
+		{"a short wait stands", time.Minute, 20 * time.Minute, time.Minute},
+	}
+	for _, tc := range cases {
+		got := DispatcherOptions{PublishWait: tc.wait, DeployBudget: tc.budget}.withDefaults()
+		if got.PublishWait != tc.want {
+			t.Errorf("%s: wait %s, want %s", tc.name, got.PublishWait, tc.want)
+		}
+	}
+	if delay := (DispatcherOptions{}).withDefaults().RequeueDelay; delay != 5*time.Minute {
+		t.Errorf("default delay %s", delay)
 	}
 }

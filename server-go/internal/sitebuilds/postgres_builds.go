@@ -14,6 +14,10 @@ import (
 // dispatchLock serialises claims across replicas, so the slot count read and the claim are one step.
 const dispatchLock = 354_000_001
 
+// buildTargetLock serialises one target's enqueues and requeues: unseen by each other, a push and a build going
+// back would both stay queued, and the older could then deploy over the newer.
+const buildTargetLock = 354_000_003
+
 const supersededReason = "superseded by a newer commit before it started"
 
 // The queries below spell out the columns scanBuild reads, in its order, and one
@@ -124,6 +128,10 @@ func (s *PostgresStore) Enqueue(ctx context.Context, build *Build, keep int) (bo
 	}
 	defer func() { _ = tx.Rollback() }()
 	target := build.Target()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2::text || '/' || $3::text || '/' || $4::text))`,
+		buildTargetLock, target.ProjectID, target.Kind, target.ID); err != nil {
+		return false, fmt.Errorf("lock the %s's builds: %w", target.Kind, err)
+	}
 	if build.DeliveryID != "" {
 		var seen bool
 		if err := tx.QueryRowContext(ctx, deliverySQL, targetArgs(target, build.DeliveryID)...).Scan(&seen); err != nil {
@@ -331,16 +339,34 @@ func (s *PostgresStore) DeliveryQueued(ctx context.Context, target Target, deliv
 
 // RequeueBuild keeps the build's place and count: a replica stopping is not the build's doing.
 func (s *PostgresStore) RequeueBuild(ctx context.Context, buildID, holder string) error {
-	if _, err := s.db.ExecContext(ctx, requeueSQL, buildID, holder, supersededReason, 0, nil, ""); err != nil {
+	if _, err := s.requeue(ctx, buildID, holder, 0, nil, ""); err != nil {
 		return fmt.Errorf("hand the build back to the queue: %w", err)
 	}
 	return nil
 }
 
 func (s *PostgresStore) RetryBuildLater(ctx context.Context, buildID, holder string, delay time.Duration, reason string) error {
-	result, err := s.db.ExecContext(ctx, requeueSQL, buildID, holder, supersededReason, 1, delay.Seconds(), reason)
+	result, err := s.requeue(ctx, buildID, holder, 1, delay.Seconds(), reason)
 	if err != nil {
 		return fmt.Errorf("send the build back to the queue: %w", err)
 	}
 	return requireTouched(result, ErrLeaseLost)
+}
+
+// requeue runs requeueSQL under the target's lock, so it sees any enqueue that began before it.
+func (s *PostgresStore) requeue(ctx context.Context, buildID, holder string, counted int, delaySeconds any, reason string) (sql.Result, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext(project_id || '/' || kind || '/' || COALESCE(site_id, app_id)))
+		FROM site_builds WHERE id = $2`, buildTargetLock, buildID); err != nil {
+		return nil, err
+	}
+	result, err := tx.ExecContext(ctx, requeueSQL, buildID, holder, supersededReason, counted, delaySeconds, reason)
+	if err != nil {
+		return nil, err
+	}
+	return result, tx.Commit()
 }
