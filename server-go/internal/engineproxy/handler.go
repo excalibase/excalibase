@@ -265,7 +265,7 @@ func (h *Handler) checkBody(r *http.Request, check func([]byte) error) error {
 func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusForbidden
 	switch {
-	case errors.Is(err, errFirewallDown):
+	case errors.Is(err, errFirewallDown), errors.Is(err, errBridgeUnfenced):
 		status = http.StatusServiceUnavailable
 	case errors.Is(err, errNoSuchThing):
 		status = http.StatusNotFound

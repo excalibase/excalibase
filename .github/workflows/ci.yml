@@ -175,6 +175,11 @@ jobs:
           docker build -q -t docker.io/excalibase/studio:ci frontend
       - name: Tenants wait for the host firewall across real reboots (Docker in Docker)
         run: sh deploy/single-host/tests/reboot-order.sh
+      - name: Project bridges are fenced from an app's first instruction (Docker in Docker)
+        run: |
+          for version in 27 28 29; do
+            DIND_IMAGE=docker.io/library/docker:$version-dind sh deploy/single-host/tests/project-bridge-fence.sh
+          done
       - name: Fresh install, project, GraphQL/REST, backups by default (WAL archive, point-in-time and in-place restore, purge), files
         env:
           PLATFORM_TAG: ci

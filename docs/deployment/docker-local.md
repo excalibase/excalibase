@@ -80,7 +80,9 @@ cd excalibase/deploy/single-host
 (`FILES_PUBLIC_URL`), the domain, how
 certificates are obtained (`EXCALIBASE_TLS`: your address for Let's Encrypt, or
 `internal` for `localhost`), who may open Studio (`STUDIO_ALLOW_CIDRS`, default
-everyone — narrow it with `--studio-allow "203.0.113.0/24"`), and the engine
+everyone — narrow it with `--studio-allow "203.0.113.0/24"`; the edge sees an app calling a
+public hostname on this host as `10.203.250.1`, and one sharing its network by the project's own
+subnet, so a range covering either, such as `10.0.0.0/8`, lets apps reach Studio's sign-in), and the engine
 socket and its group. It refuses to overwrite an existing `.env`: the database
 was created with those secrets.
 
@@ -222,7 +224,7 @@ with the edge's own CA (`EXCALIBASE_TLS=internal`), as soon as it is routed.
 | Sandbox | gVisor RuntimeClass | gVisor `runsc` with `--network=host` (gVisor's syscall sandbox; sockets use the host kernel's network stack inside the app's namespace), or the opt-out |
 | Between projects | NetworkPolicy | one internal network per project (`excalibase-net-<project>`): only its apps, its database and the edge are on it |
 | Between a project's apps | closed until the project turns its private network on | always open: they share the project's network, and the private-network switch is not offered |
-| Internet from an app | allowed, private ranges denied | none; `APP_EGRESS=internet` in `.env` gives every project's network a route out (Podman: an isolated bridge) |
+| Internet from an app | allowed, private ranges denied | none; `APP_EGRESS=internet` in `.env` gives every project's network a route out, private ranges denied by the host firewall (rootless Podman: not denied, see below) |
 | The host's own services | not reachable | not reachable on Docker 28 or later without egress (see Host isolation) |
 | Disk | a volume of the size asked | a named volume (`excalibase-vol-...`) on the host's disk; the size is recorded, not enforced by the filesystem |
 | Readiness | kubelet probe | the platform's probe, copied into the container, on the app's health check path |
@@ -259,7 +261,40 @@ logs `WARN: app networks: ...` where it cannot hold:
   `host-gateway` would stop working). Persist the rules (`iptables-persistent`,
   or your firewalld/nftables setup): they are gone after a reboot.
 - `APP_EGRESS=internet`: an isolated gateway cannot route out, so egress
-  networks keep their address on the host; add the same rules.
+  networks keep their address on the host. The host firewall guards them, see below.
+
+**Egress and the host firewall (EXC-687).** With `APP_EGRESS=internet`, or on Docker
+before 28, project bridges are named `exnet<hash>`. The firewall holds one rule on the
+wildcard `exnet+`, in place before any such bridge exists, so a new bridge is guarded from
+its first packet with no reconcile. From those bridges:
+
+| Destination | With the firewall |
+|---|---|
+| The internet | allowed |
+| Its own project's apps and database | allowed |
+| The host, on any of its addresses | dropped, except DNS |
+| Cloud metadata, private, CGNAT, link-local, loopback, multicast and reserved ranges, Azure's 168.63.129.16 | dropped, except DNS to the host's resolvers |
+| What the edge publishes on 80 and 443 | allowed, as from anywhere: an app can call a public hostname on this host |
+| Any other published port on this host | dropped |
+| Other projects | dropped by Docker's isolation |
+| `APP_EGRESS_EXTRA_DENY_CIDRS` (IPv4 only, as provisioning reads it; preflight refuses an IPv6 entry) | dropped, on Docker 29 and later the edge's published ports too if the list covers the host's address |
+
+The project's database and DocumentDB gateway join the same bridge, and their default route
+moves to it, so all of this covers them too. With `APP_EGRESS=none` on Docker 28 or later
+nothing changes: those networks have no route and no address on the host, so they need no rule.
+
+With `HOST_FIREWALL=off` none of this is in place: `APP_EGRESS=internet` then reaches
+metadata, the LAN and the host, provisioning logs `WARN: app networks: ...`, and the bridges
+to guard yourself are `exnet+`.
+
+**A firewall reload.** A reload that removes the rules (`iptables -F`, a tool managing the
+firewall) leaves apps unguarded until the next check puts them back, within 30 seconds. A
+connection opened in that window stops at the first packet it sends once they are back, even
+one already established. Restarting `nftables.service` on Debian or Ubuntu flushes every table,
+Docker's chains too (`flush ruleset` in the stock config): the guard stays up, hooks its chains on
+`INPUT` and `FORWARD` without them, and stays unhealthy, so nothing held starts, until you
+`systemctl restart docker`. Published ports do not answer until then. Containers already running keep
+running. If the bridges file cannot be read during a reload, the guard puts back the rules it last read.
 
 **After a reboot.** A reboot clears the host firewall's rules, and Docker starts any
 container with a restart policy as soon as it is up, without reading compose's
@@ -284,8 +319,13 @@ tenant starts on its own and a crashed one stays down; the platform's own starts
 recover, `docker exec excalibase-engine-proxy rm /var/lib/excalibase-bridges/stopped`, then
 `docker restart excalibase-engine-proxy`. Every exited tenant then starts, paused projects' too, so pause those
 again. Downgrading to a release before this one leaves them without a restart
-policy, so start them after each reboot. Apps keep Docker's restart policy: the firewall
-adds nothing to their project networks.
+policy, so start them after each reboot; going back up after that starts every exited tenant, including
+any paused during the downgrade, so pause those again. With `APP_EGRESS=internet` or on Docker before 28, apps are
+held the same way, since their bridges are guarded only once the firewall is back: no
+restart policy, started by the proxy within about 5 seconds, a crash loop retrying every 5
+seconds rather than on Docker's backoff. Studio's restart count for them covers the time since the proxy last
+started, and a reboot counts as a restart. With `APP_EGRESS=none` on Docker 28 or later apps
+keep Docker's restart policy: nothing they can reach depends on the firewall.
 
 Upgrading from a release before this one: on start, and on every network
 reconcile, provisioning remakes each older project network (and any made with
@@ -473,7 +513,7 @@ read; the URL is kept in the vault and shown by its host only.
 | `.env` | Default | Meaning |
 |---|---|---|
 | `FEATURE_HOSTMETRICS` | unset (`true` with `--host-metrics`) | host monitoring, its Studio pages and alerts |
-| `APP_EGRESS_EXTRA_DENY_CIDRS` | unset | the host's own public ranges, comma-separated, refused to the alert webhook and apps |
+| `APP_EGRESS_EXTRA_DENY_CIDRS` | unset | the host's own public ranges, comma-separated, refused to the alert webhook, the log forwarder and running apps (by the host firewall, so not with `HOST_FIREWALL=off` or on rootless Podman) |
 | `HOST_METRICS_NET_DEV_SOURCE` | unset (`/proc/1/net/dev` with `--host-metrics`) | the host file mounted for network counters |
 
 ## Stored log search
