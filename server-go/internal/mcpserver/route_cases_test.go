@@ -15,6 +15,7 @@ func routeCases() []routeCase {
 	cases = append(cases, slowQueryRouteCases()...)
 	cases = append(append(append(cases, sitesRouteCases()...), siteDomainRouteCases()...), siteBuildRouteCases()...)
 	cases = append(append(cases, siteGitRouteCases()...), appMoreRouteCases()...)
+	cases = append(cases, fnStorageRouteCases()...)
 	cases = append(cases, sitePreviewRouteCases()...)
 	cases = append(cases, monitoringRouteCases()...)
 	cases = append(cases, authSettingsRouteCases()...)
