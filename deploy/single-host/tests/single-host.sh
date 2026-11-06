@@ -165,6 +165,9 @@ render COMPOSE_PROFILES=hostlogs,logdrains FEATURE_HOSTLOGS=true FEATURE_LOGDRAI
 # Previews (EXC-660): the flag reaches provisioning.
 render FEATURE_SITEPREVIEWS=true | grep -q 'FEATURE_SITEPREVIEWS: "true"' \
   || { echo "FEATURE_SITEPREVIEWS=true does not reach provisioning" >&2; exit 1; }
+# MCP invoke_function (EXC-684): the flag reaches provisioning.
+render FEATURE_FUNCTIONINVOKE=true | grep -q 'FEATURE_FUNCTIONINVOKE: "true"' \
+  || { echo "FEATURE_FUNCTIONINVOKE=true does not reach provisioning" >&2; exit 1; }
 echo "single-host required settings ok"
 # Email through the operator's own relay (EXC-580) or SES: every setting in .env reaches provisioning.
 out=$(render EMAIL_PROVIDER=smtp SMTP_HOST=mail.example.test SMTP_PORT=2587 SMTP_TLS=starttls \

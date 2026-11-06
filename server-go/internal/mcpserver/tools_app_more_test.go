@@ -1,6 +1,8 @@
 package mcpserver
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -324,5 +326,99 @@ func TestConnectAppRepoSeparatesARoleRefusalFromTheSignIn(t *testing.T) {
 		map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web", "root_dir": "x", "dockerfile_path": "y", "build_args": map[string]any{}})
 	if !res.IsError || !strings.Contains(resultText(res), "insufficient project role") || strings.Contains(resultText(res), "sign in with GitHub") {
 		t.Fatalf("result = %s", resultText(res))
+	}
+}
+
+func connectApp(t *testing.T, f *fakeRoutes, args map[string]any) {
+	t.Helper()
+	settings := testSettings
+	settings.Features = features.NewStatic(features.AppGitBuilds)
+	base := map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web"}
+	for name, value := range args {
+		base[name] = value
+	}
+	if res := callTool(t, sessionWith(t, f, &recordingAudit{}, writeCaller(), settings), "connect_app_repo", base); res.IsError {
+		t.Fatalf("connect_app_repo: %s", resultText(res))
+	}
+}
+
+func connectedWithFolderAndArgs() *fakeRoutes {
+	f := newFakeRoutes()
+	current := `{"repository":"acme/web","settings":{"rootDir":"apps/web","dockerfilePath":"Dockerfile.prod","buildArgs":{"KEPT":"v"}}}`
+	f.on(http.MethodGet, projectsA+"/apps/web/git", 200, `{"connected":true,"connection":`+current+`}`)
+	f.on(http.MethodPut, projectsA+"/apps/web/git", 200, `{"connection":`+current+`}`)
+	return f
+}
+
+// build_args {} is a choice (no arguments), not "left out".
+func TestConnectAppRepoTreatsEmptyBuildArgsAsAChoice(t *testing.T) {
+	f := connectedWithFolderAndArgs()
+	connectApp(t, f, map[string]any{"root_dir": "apps/web", "dockerfile_path": "Dockerfile", "build_args": map[string]any{}})
+	if len(f.calls) != 1 || !strings.Contains(f.calls[0].Body, `"buildArgs":{}`) {
+		t.Fatalf("calls = %v", f.calls)
+	}
+}
+
+// "" keeps the current folder and Dockerfile; "." clears one.
+func TestConnectAppRepoClearsAFieldWithADot(t *testing.T) {
+	f := connectedWithFolderAndArgs()
+	connectApp(t, f, map[string]any{"root_dir": ".", "dockerfile_path": "."})
+	body := f.calls[len(f.calls)-1].Body
+	for _, want := range []string{`"rootDir":""`, `"dockerfilePath":""`, `"KEPT":"v"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %s: %s", want, body)
+		}
+	}
+}
+
+// A different repository starts clean: the old folder, Dockerfile and arguments belong to the old one.
+func TestConnectAppRepoDoesNotCarryOverSettingsToAnotherRepository(t *testing.T) {
+	f := connectedWithFolderAndArgs()
+	connectApp(t, f, map[string]any{"repository": "acme/other"})
+	body := f.calls[len(f.calls)-1].Body
+	for _, old := range []string{"apps/web", "Dockerfile.prod", "KEPT"} {
+		if strings.Contains(body, old) {
+			t.Errorf("body carries %s: %s", old, body)
+		}
+	}
+	// The same repository in another case is the same repository.
+	f = connectedWithFolderAndArgs()
+	connectApp(t, f, map[string]any{"repository": "ACME/Web"})
+	if body := f.calls[len(f.calls)-1].Body; !strings.Contains(body, "apps/web") {
+		t.Errorf("a case change dropped the settings: %s", body)
+	}
+}
+
+func TestConnectAppRepoDescriptionsSayHowToClearAField(t *testing.T) {
+	cs := session(t, newFakeRoutes(), &recordingAudit{}, writeCaller())
+	settings := testSettings
+	settings.Features = features.NewStatic(features.AppGitBuilds)
+	cs = sessionWith(t, newFakeRoutes(), &recordingAudit{}, writeCaller(), settings)
+	listed, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range listed.Tools {
+		if tool.Name != "connect_app_repo" {
+			continue
+		}
+		raw, _ := json.Marshal(tool.InputSchema)
+		if !strings.Contains(string(raw), `\".\" clears`) && !strings.Contains(string(raw), `"." clears`) {
+			t.Errorf("schema does not say how to clear a field: %s", raw)
+		}
+		return
+	}
+	t.Fatal("connect_app_repo not offered")
+}
+
+func TestSetAppSecretDescriptionIsHonestAboutWhatItGuards(t *testing.T) {
+	text := toolDescriptions(t)["set_app_secret"]
+	if strings.Contains(text, "any other tool") {
+		t.Errorf("overclaims: %s", text)
+	}
+	for _, want := range []string{"logs", "accident", "update_app"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("description lacks %q: %s", want, text)
+		}
 	}
 }
