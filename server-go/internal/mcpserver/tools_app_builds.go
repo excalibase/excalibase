@@ -19,9 +19,9 @@ type connectAppRepoArgs struct {
 	Repository     string            `json:"repository" jsonschema:"the GitHub repository as owner/name"`
 	Branch         string            `json:"branch,omitempty" jsonschema:"the branch whose pushes build; the repository's default branch when left out"`
 	Builder        string            `json:"builder,omitempty" jsonschema:"auto (default: a Dockerfile if the repository has one, else buildpacks), dockerfile or buildpacks"`
-	RootDir        string            `json:"root_dir,omitempty" jsonschema:"the build context inside the repository, for a monorepo; left out keeps the current one, or the repository root on a first connect"`
-	DockerfilePath string            `json:"dockerfile_path,omitempty" jsonschema:"the Dockerfile, relative to root_dir; left out keeps the current one, or Dockerfile on a first connect"`
-	BuildArgs      map[string]string `json:"build_args,omitempty" jsonschema:"plain build arguments; they end up in the image's history, so never put a secret here. Left out keeps the current ones"`
+	RootDir        string            `json:"root_dir,omitempty" jsonschema:"the build context inside the repository, for a monorepo; left out keeps the current one for the same repository (the repository root otherwise); \".\" clears it"`
+	DockerfilePath string            `json:"dockerfile_path,omitempty" jsonschema:"the Dockerfile, relative to root_dir; left out keeps the current one for the same repository (Dockerfile otherwise); \".\" clears it"`
+	BuildArgs      map[string]string `json:"build_args,omitempty" jsonschema:"plain build arguments; they end up in the image's history, so never put a secret here. Left out keeps the current ones for the same repository; {} clears them"`
 }
 
 type listAppBuildsArgs struct {
@@ -87,21 +87,21 @@ func connectAppRepo(ctx context.Context, c *call, in connectAppRepoArgs) (any, e
 	}
 	buildArgs, rootDir, dockerfilePath := in.BuildArgs, in.RootDir, in.DockerfilePath
 	if buildArgs == nil || rootDir == "" || dockerfilePath == "" {
-		// A reconnect keeps what the caller leaves out, so it never wipes a monorepo's folder or Dockerfile.
+		// A reconnect of the same repository keeps what the call leaves out, so it never wipes a monorepo's folder or Dockerfile.
 		var current struct {
 			Connection *appConnectionAnswer `json:"connection"`
 		}
 		if err := c.get(ctx, path+"/git", nil, &current); err != nil {
 			return nil, siteBuildFailure(err)
 		}
-		if current.Connection != nil {
-			settings := current.Connection.Settings
+		if connection := current.Connection; connection != nil && strings.EqualFold(connection.Repository, in.Repository) {
 			if buildArgs == nil {
-				buildArgs = settings.BuildArgs
+				buildArgs = connection.Settings.BuildArgs
 			}
-			rootDir, dockerfilePath = defaultString(rootDir, settings.RootDir), defaultString(dockerfilePath, settings.DockerfilePath)
+			rootDir, dockerfilePath = defaultString(rootDir, connection.Settings.RootDir), defaultString(dockerfilePath, connection.Settings.DockerfilePath)
 		}
 	}
+	rootDir, dockerfilePath = clearedDot(rootDir), clearedDot(dockerfilePath)
 	body := map[string]any{"repository": in.Repository, "settings": map[string]any{
 		"branch": in.Branch, "builder": in.Builder, "rootDir": rootDir, "dockerfilePath": dockerfilePath, "buildArgs": buildArgs,
 	}}
@@ -128,6 +128,14 @@ func connectAppRepo(ctx context.Context, c *call, in connectAppRepoArgs) (any, e
 		out["buildError"] = result.BuildError
 	}
 	return out, nil
+}
+
+// clearedDot turns the "." a caller sends to clear a field into the empty value the route stores.
+func clearedDot(value string) string {
+	if value == "." {
+		return ""
+	}
+	return value
 }
 
 func appGitPath(c *call, in appArgs) (string, error) {

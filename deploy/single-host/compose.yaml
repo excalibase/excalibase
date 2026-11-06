@@ -303,7 +303,7 @@ services:
       FEATURE_HOSTMETRICS: ${FEATURE_HOSTMETRICS:-false}
       # A preview per branch or pull request of a git-connected site (EXC-660); needs site git builds.
       FEATURE_SITEPREVIEWS: ${FEATURE_SITEPREVIEWS:-false}
-      # MCP invoke_function: a function may return its own secrets, so it is off until chosen (EXC-684).
+      # MCP invoke_function, off until chosen. Not a safeguard: deployed function code can already read the project's function secrets; this only removes one way of running it (EXC-684).
       FEATURE_FUNCTIONINVOKE: ${FEATURE_FUNCTIONINVOKE:-false}
       HOST_METRICS_CONTAINERS: *platform_containers
       HOST_METRICS_NET_DEV: /host/proc-net-dev
