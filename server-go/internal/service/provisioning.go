@@ -414,7 +414,10 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	if err != nil {
 		return nil, err
 	}
-	return admitted.build(ctx)
+	// The caller waits for the answer but does not own the build: a closed
+	// connection must not cancel it half-way and leave a FAILED project
+	// holding the organisation's slot.
+	return admitted.build(context.WithoutCancel(ctx))
 }
 
 // ProvisionInBackground admits the project as Provision does and answers as
