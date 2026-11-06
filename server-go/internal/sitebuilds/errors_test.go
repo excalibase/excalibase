@@ -24,3 +24,13 @@ func TestStartFailure_NamesAnImageThatDidNotPull(t *testing.T) {
 		t.Fatalf("%+v", other)
 	}
 }
+
+// These refusals reach an app's page too, so none of them may talk about "the site".
+func TestSharedRefusals_DoNotCallTheTargetASite(t *testing.T) {
+	for _, err := range []error{ErrNotConnected, ErrNotAuthorized, ErrStateInvalid, ErrSingleHost} {
+		if strings.Contains(strings.ToLower(err.Error()), "the site") || strings.Contains(strings.ToLower(err.Error()), "this site") ||
+			strings.Contains(strings.ToLower(err.Error()), "from the site") {
+			t.Errorf("%q names a site", err)
+		}
+	}
+}

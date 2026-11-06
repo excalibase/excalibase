@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { SiteBuildSettings } from '../../api/siteBuilds';
 
 const inputClass =
@@ -7,6 +8,8 @@ interface Props {
   readonly settings: SiteBuildSettings;
   readonly nodeVersions: string[];
   readonly onChange: (settings: SiteBuildSettings) => void;
+  // Told whether the variables box holds something that cannot be saved as written.
+  readonly onProblem?: (problem: string | null) => void;
 }
 
 // Variables travel as one KEY=value line each, the way a .env file reads.
@@ -24,6 +27,75 @@ export const textToEnv = (text: string): Record<string, string> =>
       .filter((line) => line !== '' && !line.startsWith('#') && line.includes('='))
       .map((line) => [line.slice(0, line.indexOf('=')).trim(), line.slice(line.indexOf('=') + 1)]),
   );
+
+// A line the box cannot read as NAME=value; the line is named by number, never quoted, as it may hold a secret.
+export const envTextProblem = (text: string): string | null => {
+  const lines = text.split('\n');
+  const bad = lines.findIndex((line) => {
+    const trimmed = line.trim();
+    return trimmed !== '' && !trimmed.startsWith('#') && !trimmed.includes('=');
+  });
+  return bad < 0 ? null : `Line ${bad + 1} is not NAME=value. Nothing is saved until it is fixed.`;
+};
+
+// The box holds one line per variable, so a value with a line break set through the API cannot be shown or kept by it.
+export const multilineEnvNames = (env: Record<string, string>): string[] =>
+  Object.entries(env)
+    .filter(([, value]) => value.includes('\n'))
+    .map(([name]) => name)
+    .sort();
+
+const withoutNames = (env: Record<string, string>, names: string[]) =>
+  Object.fromEntries(Object.entries(env).filter(([name]) => !names.includes(name)));
+
+// One NAME=value per line, shared by site build variables and app build arguments.
+export function EnvField({
+  label,
+  hint,
+  env,
+  testId,
+  onChange,
+  onProblem,
+}: {
+  readonly label: string;
+  readonly hint: string;
+  readonly env: Record<string, string>;
+  readonly testId: string;
+  readonly onChange: (env: Record<string, string>) => void;
+  readonly onProblem?: (problem: string | null) => void;
+}) {
+  const multiline = multilineEnvNames(env);
+  const [typedProblem, setTypedProblem] = useState<string | null>(null);
+  const keptProblem =
+    multiline.length > 0
+      ? `${multiline.join(', ')} ${multiline.length === 1 ? 'has' : 'have'} a value with line breaks, which this box cannot show or keep. Change it through the API, then edit here.`
+      : null;
+  const problem = typedProblem ?? keptProblem;
+  useEffect(() => onProblem?.(problem), [problem, onProblem]);
+  return (
+    <Field label={label} hint={hint}>
+      <textarea
+        className={`${inputClass} font-mono h-24`}
+        defaultValue={envToText(withoutNames(env, multiline))}
+        onBlur={(event) => {
+          const found = envTextProblem(event.target.value);
+          setTypedProblem(found);
+          if (found === null)
+            onChange({ ...textToEnv(event.target.value), ...pickNames(env, multiline) });
+        }}
+        data-testid={testId}
+      />
+      {problem && (
+        <span role="alert" className="block text-xs text-red-400" data-testid={`${testId}-error`}>
+          {problem}
+        </span>
+      )}
+    </Field>
+  );
+}
+
+const pickNames = (env: Record<string, string>, names: string[]) =>
+  Object.fromEntries(Object.entries(env).filter(([name]) => names.includes(name)));
 
 function Field({
   label,
@@ -43,7 +115,7 @@ function Field({
   );
 }
 
-export function SiteBuildSettingsForm({ settings, nodeVersions, onChange }: Props) {
+export function SiteBuildSettingsForm({ settings, nodeVersions, onChange, onProblem }: Props) {
   const set = (field: keyof SiteBuildSettings) => (event: { target: { value: string } }) =>
     onChange({ ...settings, [field]: event.target.value });
   return (
@@ -106,17 +178,14 @@ export function SiteBuildSettingsForm({ settings, nodeVersions, onChange }: Prop
         </select>
       </Field>
       <div className="sm:col-span-2">
-        <Field
+        <EnvField
           label="Build variables"
           hint="One NAME=value per line, such as VITE_API_URL. They end up in the built files anyone can download: never put a secret here."
-        >
-          <textarea
-            className={`${inputClass} font-mono h-24`}
-            defaultValue={envToText(settings.env)}
-            onBlur={(event) => onChange({ ...settings, env: textToEnv(event.target.value) })}
-            data-testid="build-env"
-          />
-        </Field>
+          env={settings.env}
+          testId="build-env"
+          onChange={(env) => onChange({ ...settings, env })}
+          onProblem={onProblem}
+        />
       </div>
     </div>
   );

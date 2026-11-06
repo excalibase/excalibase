@@ -1,5 +1,5 @@
 import type { AppBuilder, AppBuildSettings } from '../../api/appBuilds';
-import { envToText, textToEnv } from '../sites/SiteBuildSettingsForm';
+import { EnvField } from '../sites/SiteBuildSettingsForm';
 
 const inputClass =
   'w-full rounded-md border border-border-primary bg-surface-primary px-3 py-1.5 text-sm text-text-primary';
@@ -32,9 +32,10 @@ interface Props {
   readonly settings: AppBuildSettings;
   readonly builders: AppBuilder[];
   readonly onChange: (settings: AppBuildSettings) => void;
+  readonly onProblem?: (problem: string | null) => void;
 }
 
-export function AppBuildSettingsForm({ settings, builders, onChange }: Props) {
+export function AppBuildSettingsForm({ settings, builders, onChange, onProblem }: Props) {
   const set =
     (field: 'branch' | 'rootDir' | 'dockerfilePath') => (event: { target: { value: string } }) =>
       onChange({ ...settings, [field]: event.target.value });
@@ -85,17 +86,14 @@ export function AppBuildSettingsForm({ settings, builders, onChange }: Props) {
         />
       </Field>
       <div className="sm:col-span-2">
-        <Field
+        <EnvField
           label="Build arguments"
           hint="One NAME=value per line. They end up in the image's history: never put a secret here."
-        >
-          <textarea
-            className={`${inputClass} font-mono h-24`}
-            defaultValue={envToText(settings.buildArgs)}
-            onBlur={(event) => onChange({ ...settings, buildArgs: textToEnv(event.target.value) })}
-            data-testid="app-build-args"
-          />
-        </Field>
+          env={settings.buildArgs}
+          testId="app-build-args"
+          onChange={(buildArgs) => onChange({ ...settings, buildArgs })}
+          onProblem={onProblem}
+        />
       </div>
     </div>
   );

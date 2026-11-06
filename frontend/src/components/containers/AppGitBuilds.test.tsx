@@ -223,7 +223,20 @@ describe('AppGitBuilds', () => {
     vi.mocked(api.delete).mockResolvedValue({ status: 204 } as never);
     renderPanel();
     await userEvent.click(await screen.findByTestId('app-git-disconnect'));
+    // Disconnecting cancels running builds, so the page asks first, in the page.
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(screen.getByTestId('app-git-disconnect-warning')).toHaveTextContent('running builds');
+    await userEvent.click(screen.getByTestId('app-git-disconnect-confirm'));
     expect(api.delete).toHaveBeenCalledWith(`${BASE}/git`);
+  });
+
+  test('keeping the connection after the question deletes nothing', async () => {
+    serve({ git: connected });
+    renderPanel();
+    await userEvent.click(await screen.findByTestId('app-git-disconnect'));
+    await userEvent.click(screen.getByTestId('app-git-disconnect-cancel'));
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('app-git-disconnect-warning')).toBeNull();
   });
 
   test('says when the connector lost the developer rung, and offers a reconnect', async () => {
@@ -241,6 +254,8 @@ describe('AppGitBuilds', () => {
     expect(await screen.findByTestId('app-git-inactive')).toHaveTextContent('can no longer deploy');
     expect(screen.queryByTestId('app-git-rebuild')).toBeNull();
     expect(await screen.findByTestId('app-git-connect')).toBeInTheDocument();
+    // The server lets a developer remove a stopped connection, so the page does too.
+    expect(screen.getByTestId('app-git-disconnect')).toBeInTheDocument();
   });
 
   test('a viewer reads builds but cannot change anything', async () => {
@@ -258,5 +273,130 @@ describe('AppGitBuilds', () => {
     renderPanel(false);
     expect(await screen.findByText('No repository is connected.')).toBeInTheDocument();
     expect(screen.queryByTestId('app-git-connect')).toBeNull();
+  });
+
+  test('says no build started even after the connection replaces the form', async () => {
+    serve({
+      git: notConnected,
+      repositories: [
+        {
+          installation: { id: 501, account: 'acme' },
+          repositories: [{ id: 9001, fullName: 'acme/api', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    vi.mocked(api.put).mockImplementation(async () => {
+      serve({ git: connected });
+      return {
+        data: {
+          connection,
+          buildError: 'this project has queued as many app builds this hour; try again in 59m',
+        },
+      } as never;
+    });
+    renderPanel();
+    await userEvent.selectOptions(await screen.findByTestId('app-git-repository'), '9001');
+    await userEvent.click(screen.getByTestId('app-git-connect-submit'));
+    expect(await screen.findByTestId('app-git-connected')).toBeInTheDocument();
+    expect(screen.getByTestId('app-git-build-error')).toHaveTextContent('no build was started');
+    expect(screen.getByTestId('app-git-build-error')).toHaveTextContent('59m');
+  });
+
+  test('the notice is gone once a rebuild is asked for', async () => {
+    serve({
+      git: notConnected,
+      repositories: [
+        {
+          installation: { id: 1, account: 'a' },
+          repositories: [{ id: 9001, fullName: 'acme/api', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    vi.mocked(api.put).mockImplementation(async () => {
+      serve({ git: connected });
+      return { data: { connection, buildError: 'limit used up' } } as never;
+    });
+    vi.mocked(api.post).mockResolvedValue({
+      data: { ...failed, id: 'b2', status: 'QUEUED' },
+    } as never);
+    renderPanel();
+    await userEvent.selectOptions(await screen.findByTestId('app-git-repository'), '9001');
+    await userEvent.click(screen.getByTestId('app-git-connect-submit'));
+    await userEvent.click(await screen.findByTestId('app-git-rebuild'));
+    await waitFor(() => expect(screen.queryByTestId('app-git-build-error')).toBeNull());
+  });
+
+  test('a failing repository list shows its error, not the sign-in hint', async () => {
+    serve({ git: notConnected });
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === `${BASE}/git/repositories`) {
+        return Promise.reject({
+          isAxiosError: true,
+          response: { status: 500, data: { error: 'GitHub answered 502' } },
+        });
+      }
+      if (url === `${BASE}/git`) return Promise.resolve({ data: notConnected } as never);
+      if (url === '/config') {
+        return Promise.resolve({
+          data: { deploymentMode: 'cloud', appHosting: true, features: { appgitbuilds: true } },
+        } as never);
+      }
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPanel();
+    expect(await screen.findByTestId('app-git-repositories-error')).toHaveTextContent(
+      'GitHub answered 502',
+    );
+    expect(screen.queryByText(/Sign in with GitHub so Studio sees/)).toBeNull();
+  });
+
+  test('a build argument line without = is an error, and nothing is saved', async () => {
+    serve({
+      git: notConnected,
+      repositories: [
+        {
+          installation: { id: 1, account: 'a' },
+          repositories: [{ id: 9001, fullName: 'acme/api', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    renderPanel();
+    await userEvent.selectOptions(await screen.findByTestId('app-git-repository'), '9001');
+    await userEvent.type(screen.getByTestId('app-build-args'), 'FLAVOUR');
+    await userEvent.tab();
+    expect(screen.getByTestId('app-build-args-error')).toHaveTextContent('Line 1');
+    expect(screen.getByTestId('app-git-connect-submit')).toBeDisabled();
+  });
+
+  test('a multi-line value set through the API is named, and blocks a save that would lose it', async () => {
+    serve({
+      git: {
+        ...connected,
+        connection: {
+          ...connection,
+          settings: { ...settings, buildArgs: { CERT: 'a\nb', FLAVOUR: 'blue' } },
+        },
+      },
+      repositories: [
+        {
+          installation: { id: 1, account: 'a' },
+          repositories: [{ id: 9001, fullName: 'acme/api', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    renderPanel();
+    await userEvent.click(await screen.findByTestId('app-git-edit'));
+    expect(await screen.findByTestId('app-build-args-error')).toHaveTextContent('CERT');
+    expect(screen.getByTestId('app-git-connect-submit')).toBeDisabled();
+  });
+
+  test('a build started from Studio reads as manual, a push as a push', async () => {
+    serve({
+      git: connected,
+      builds: [failed, { ...failed, id: 'm1', trigger: 'rebuild', failureReason: undefined }],
+    });
+    renderPanel();
+    expect(await screen.findByTestId('app-build-m1')).toHaveTextContent('Manual build of main');
+    expect(screen.getByTestId('app-build-b1')).toHaveTextContent('Push to main');
   });
 });

@@ -26,18 +26,18 @@ const (
 )
 
 var (
-	ErrNotConnected  = errors.New("this site has no repository connected")
+	ErrNotConnected  = errors.New("no repository is connected here")
 	ErrBuildNotFound = errors.New("build not found")
 	// ErrUnavailable is an install without git builds switched on and wired.
 	ErrUnavailable = errors.New("git builds are not available on this install")
 	// ErrSingleHost is a single-host install, where git builds are not offered yet.
-	ErrSingleHost = errors.New("git builds are not offered on single-host installs yet: build the site in your own CI " +
-		"and deploy the output (Studio → Sites → Deploy from CI, or the get_ci_snippet tool with kind site)")
+	ErrSingleHost = errors.New("git builds are not offered on single-host installs yet: build in your own CI " +
+		"and deploy the result (Studio → Deploy from CI, or the get_ci_snippet tool)")
 	// ErrNotDeveloper is a connect by a member below the developer rung; the route gates it too.
 	ErrNotDeveloper = errors.New("connecting a repository needs the developer role on this project")
 	// ErrNotAuthorized is a repository the caller's own git-host sign-in did not show them.
-	ErrNotAuthorized = errors.New("sign in to GitHub from this site first: your sign-in has to show you can read that repository")
-	ErrStateInvalid  = errors.New("that sign-in link has expired or was already used; start again from the site")
+	ErrNotAuthorized = errors.New("sign in to GitHub from this page first: your sign-in has to show you can read that repository")
+	ErrStateInvalid  = errors.New("that sign-in link has expired or was already used; start again from the page you began on")
 	// ErrConnectionInactive is a connection whose connector can no longer deploy the project.
 	ErrConnectionInactive = errors.New("the member who connected this repository can no longer deploy this project; " +
 		"a developer has to sign in with GitHub and connect it again")

@@ -46,7 +46,7 @@ function BuildRow({
             <code>{build.commitSha.slice(0, 7)}</code> {build.commitMessage?.split('\n')[0] ?? ''}
           </p>
           <p className="text-xs text-text-tertiary">
-            {build.trigger === 'push' ? 'Push' : 'Rebuild'} to{' '}
+            {build.trigger === 'push' ? 'Push to' : 'Manual build of'}{' '}
             {build.app?.branch || 'the default branch'} · {formatWhen(build.createdAt)}
           </p>
         </div>
