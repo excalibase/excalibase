@@ -122,6 +122,10 @@ type Build struct {
 	Preview       *PreviewBuild `json:"preview,omitempty"`
 	FailureKind   FailureKind   `json:"failureKind,omitempty"`
 	FailureReason string        `json:"failureReason,omitempty"`
+	// WaitReason says why a queued build is waiting to run again.
+	WaitReason string `json:"waitReason,omitempty"`
+	// Requeues counts the times a full publish spool sent this build back to run again.
+	Requeues int `json:"-"`
 	// Log is read with one build, never with the list.
 	Log         string     `json:"log,omitempty"`
 	RequestedBy string     `json:"requestedBy"`

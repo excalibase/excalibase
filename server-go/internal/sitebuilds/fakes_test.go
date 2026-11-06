@@ -44,6 +44,7 @@ type memoryStore struct {
 	appAttempts     map[string]int
 	signIns         []SignIn
 	appPushErr      error
+	leaseRenewals   int
 }
 
 func newMemoryStore() *memoryStore {
@@ -214,7 +215,19 @@ func (m *memoryStore) RequeueBuild(_ context.Context, buildID, _ string) error {
 	defer m.mu.Unlock()
 	for _, build := range m.builds {
 		if build.ID == buildID && build.Status == StatusRunning {
-			build.Status = StatusQueued
+			build.Status, build.WaitReason = StatusQueued, ""
+		}
+	}
+	return nil
+}
+
+func (m *memoryStore) RetryBuildLater(_ context.Context, buildID, _ string, _ time.Duration, reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, build := range m.builds {
+		if build.ID == buildID && build.Status == StatusRunning {
+			build.Status, build.WaitReason = StatusQueued, reason
+			build.Requeues++
 		}
 	}
 	return nil
@@ -253,7 +266,18 @@ func (m *memoryStore) CancelQueued(_ context.Context, kind, reason string) (int,
 	return cancelled, nil
 }
 
-func (m *memoryStore) ExtendLease(context.Context, string, string, time.Time) error { return nil }
+func (m *memoryStore) ExtendLease(context.Context, string, string, time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.leaseRenewals++
+	return nil
+}
+
+func (m *memoryStore) renewals() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.leaseRenewals
+}
 
 func (m *memoryStore) SaveLog(_ context.Context, buildID, _, log string) error {
 	m.mu.Lock()
@@ -550,12 +574,29 @@ type fakePublisher struct {
 	mu        sync.Mutex
 	published []AppPublish
 	err       error
+	// refuse, when set, answers each publish by its 1-based call number, in place of err.
+	refuse      func(call int) error
+	capacityErr error
+}
+
+func (f *fakePublisher) CheckCapacity(context.Context, int64) error { return f.capacityErr }
+
+func (f *fakePublisher) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.published)
 }
 
 func (f *fakePublisher) PublishBuild(_ context.Context, publish AppPublish) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.published = append(f.published, publish)
+	if f.refuse != nil {
+		if err := f.refuse(len(f.published)); err != nil {
+			return "", err
+		}
+		return "deploy-" + publish.BuildID[:4], nil
+	}
 	if f.err != nil {
 		return "", f.err
 	}
@@ -636,7 +677,8 @@ func newTestBed(appsOn bool) *testBed {
 	service.EnableApps(AppSupport{Apps: fakeApps{}, Limits: fakeLimits{}, Files: provider, Flags: flags})
 	siteRunner, appRunner, publisher := &fakeSiteRunner{}, &fakeAppRunner{}, &fakePublisher{}
 	dispatcher := NewDispatcher(service, siteRunner, DispatcherOptions{Holder: "replica", StatusPoll: time.Millisecond,
-		LogEvery: time.Millisecond, Lease: time.Minute, PendingGrace: time.Second, DeployRetry: time.Millisecond, ShutdownGrace: time.Second})
+		LogEvery: time.Millisecond, Lease: time.Minute, PendingGrace: time.Second, DeployRetry: time.Millisecond, ShutdownGrace: time.Second,
+		PublishWait: time.Millisecond, RequeueDelay: time.Millisecond})
 	dispatcher.EnableApps(appRunner, publisher)
 	return &testBed{store: store, provider: provider, service: service, dispatcher: dispatcher, sites: siteRunner, apps: appRunner, publisher: publisher}
 }

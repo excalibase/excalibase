@@ -24,16 +24,19 @@ const (
 		WHERE id = $1 RETURNING id, kind, COALESCE(site_id, ''), COALESCE(app_id, ''), project_id, status, trigger, commit_sha,
 	COALESCE(commit_message, ''), settings, COALESCE(delivery_id, ''), cpu_millis, memory, disk, timeout_seconds,
 	project_concurrency, COALESCE(deploy_id, ''), COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by,
-	created_at, started_at, finished_at, COALESCE(preview_id, '')`
+	created_at, started_at, finished_at, COALESCE(preview_id, ''), requeues,
+	CASE WHEN status = 'QUEUED' THEN COALESCE(wait_reason, '') ELSE '' END`
 	listBuildsSQL = `SELECT id, kind, COALESCE(site_id, ''), COALESCE(app_id, ''), project_id, status, trigger, commit_sha,
 	COALESCE(commit_message, ''), settings, COALESCE(delivery_id, ''), cpu_millis, memory, disk, timeout_seconds,
 	project_concurrency, COALESCE(deploy_id, ''), COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by,
-	created_at, started_at, finished_at, COALESCE(preview_id, '')
+	created_at, started_at, finished_at, COALESCE(preview_id, ''), requeues,
+	CASE WHEN status = 'QUEUED' THEN COALESCE(wait_reason, '') ELSE '' END
 		FROM site_builds WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3) ORDER BY created_at DESC LIMIT $4`
 	getBuildSQL = `SELECT id, kind, COALESCE(site_id, ''), COALESCE(app_id, ''), project_id, status, trigger, commit_sha,
 	COALESCE(commit_message, ''), settings, COALESCE(delivery_id, ''), cpu_millis, memory, disk, timeout_seconds,
 	project_concurrency, COALESCE(deploy_id, ''), COALESCE(failure_kind, ''), COALESCE(failure_reason, ''), requested_by,
-	created_at, started_at, finished_at, COALESCE(preview_id, ''), COALESCE(log, '')
+	created_at, started_at, finished_at, COALESCE(preview_id, ''), requeues,
+	CASE WHEN status = 'QUEUED' THEN COALESCE(wait_reason, '') ELSE '' END, COALESCE(log, '')
 		FROM site_builds WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3) AND id = $4`
 	deliverySQL = `SELECT EXISTS (SELECT 1 FROM site_builds
 		WHERE project_id = $1 AND kind = $2 AND (site_id = $3 OR app_id = $3) AND delivery_id = $4)`
@@ -58,7 +61,9 @@ const (
 		NULLIF($20, '')
 		WHERE EXISTS (SELECT 1 FROM sites WHERE $2 = 'site' AND id = $3 AND project_id = $1)
 		   OR EXISTS (SELECT 1 FROM apps WHERE $2 = 'app' AND id = $3 AND project_id = $1)`
-	// claimableSQL finds the oldest queued build of the kinds asked for that fits: running builds of every
+	// claimableSQL finds the longest-waiting queued build of the kinds asked for that fits. A build sent back with a
+	// retry_at sits out until then and takes its place in line from that moment; a build never sent back from when
+	// it was made. Running builds of every
 	// kind fill the install's slots, one runs per site or app and scope (production, or one preview), and the
 	// project's cap counts its own kind. A site's production builds count against the plan's concurrency, its
 	// previews against PreviewsRunningPerProject ($3) on their own, so a flood of pull requests holds at most
@@ -67,6 +72,7 @@ const (
 	// that scope's cap), so a 1-slot install still builds apps.
 	claimableSQL = `SELECT queued.id FROM site_builds queued
 		WHERE queued.status = 'QUEUED' AND queued.kind = ANY($2)
+		  AND (queued.retry_at IS NULL OR queued.retry_at <= NOW())
 		  AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING') < $1
 		  AND (queued.kind = 'site' OR (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING') < $1 - 1
 		      OR NOT EXISTS (SELECT 1 FROM site_builds waiting WHERE waiting.status = 'QUEUED' AND waiting.kind = 'site'
@@ -81,7 +87,22 @@ const (
 		  AND (SELECT COUNT(*) FROM site_builds WHERE status = 'RUNNING' AND project_id = queued.project_id
 		      AND kind = queued.kind AND (preview_id IS NULL) = (queued.preview_id IS NULL))
 		      < CASE WHEN queued.preview_id IS NULL THEN queued.project_concurrency ELSE $3 END
-		ORDER BY queued.created_at LIMIT 1 FOR UPDATE SKIP LOCKED`
+		ORDER BY COALESCE(queued.retry_at, queued.created_at) LIMIT 1 FOR UPDATE SKIP LOCKED`
+	// requeueSQL sends a running build back, or cancels it when a newer one waits: $4 is added to its count,
+	// $5 seconds is its delay (NULL keeps its place in line) and $6 what it tells the customer meanwhile.
+	requeueSQL = `UPDATE site_builds AS running
+		SET status = CASE WHEN newer.id IS NULL THEN 'QUEUED' ELSE 'CANCELLED' END,
+			failure_reason = CASE WHEN newer.id IS NULL THEN NULL ELSE $3 END,
+			finished_at = CASE WHEN newer.id IS NULL THEN NULL ELSE NOW() END,
+			started_at = NULL, lease_holder = NULL, lease_until = NULL,
+			requeues = running.requeues + $4::int,
+			retry_at = CASE WHEN $5::double precision IS NULL THEN running.retry_at ELSE NOW() + make_interval(secs => $5::double precision) END,
+			wait_reason = NULLIF($6::text, '')
+		FROM site_builds AS this
+		LEFT JOIN LATERAL (SELECT id FROM site_builds WHERE kind = this.kind AND project_id = this.project_id
+			AND (site_id = this.site_id OR app_id = this.app_id) AND status = 'QUEUED'
+			AND preview_id IS NOT DISTINCT FROM this.preview_id LIMIT 1) AS newer ON TRUE
+		WHERE running.id = $1 AND this.id = $1 AND running.status = 'RUNNING' AND running.lease_holder = $2`
 )
 
 func targetArgs(target Target, more ...any) []any {
@@ -168,7 +189,7 @@ func scanBuild(row scanner) (*Build, error) {
 	limits := &build.Limits
 	err := row.Scan(&build.ID, &build.Kind, &build.SiteID, &build.AppID, &build.ProjectID, &build.Status, &build.Trigger, &build.CommitSHA, &build.CommitMessage,
 		&snapshot, &build.DeliveryID, &limits.CPUMillis, &limits.Memory, &limits.Disk, &limits.TimeoutSeconds, &limits.ProjectConcurrency,
-		&build.DeployID, &build.FailureKind, &build.FailureReason, &build.RequestedBy, &build.CreatedAt, &started, &finished, &build.PreviewID)
+		&build.DeployID, &build.FailureKind, &build.FailureReason, &build.RequestedBy, &build.CreatedAt, &started, &finished, &build.PreviewID, &build.Requeues, &build.WaitReason)
 	if err != nil {
 		return nil, err
 	}
@@ -308,20 +329,18 @@ func (s *PostgresStore) DeliveryQueued(ctx context.Context, target Target, deliv
 	return queued, nil
 }
 
+// RequeueBuild keeps the build's place and count: a replica stopping is not the build's doing.
 func (s *PostgresStore) RequeueBuild(ctx context.Context, buildID, holder string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE site_builds AS running
-		SET status = CASE WHEN newer.id IS NULL THEN 'QUEUED' ELSE 'CANCELLED' END,
-			failure_reason = CASE WHEN newer.id IS NULL THEN NULL ELSE $3 END,
-			finished_at = CASE WHEN newer.id IS NULL THEN NULL ELSE NOW() END,
-			started_at = NULL, lease_holder = NULL, lease_until = NULL
-		FROM site_builds AS this
-		LEFT JOIN LATERAL (SELECT id FROM site_builds WHERE kind = this.kind AND project_id = this.project_id
-			AND (site_id = this.site_id OR app_id = this.app_id) AND status = 'QUEUED'
-			AND preview_id IS NOT DISTINCT FROM this.preview_id LIMIT 1) AS newer ON TRUE
-		WHERE running.id = $1 AND this.id = $1 AND running.status = 'RUNNING' AND running.lease_holder = $2`,
-		buildID, holder, supersededReason)
-	if err != nil {
+	if _, err := s.db.ExecContext(ctx, requeueSQL, buildID, holder, supersededReason, 0, nil, ""); err != nil {
 		return fmt.Errorf("hand the build back to the queue: %w", err)
 	}
 	return nil
+}
+
+func (s *PostgresStore) RetryBuildLater(ctx context.Context, buildID, holder string, delay time.Duration, reason string) error {
+	result, err := s.db.ExecContext(ctx, requeueSQL, buildID, holder, supersededReason, 1, delay.Seconds(), reason)
+	if err != nil {
+		return fmt.Errorf("send the build back to the queue: %w", err)
+	}
+	return requireTouched(result, ErrLeaseLost)
 }

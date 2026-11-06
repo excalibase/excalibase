@@ -213,7 +213,12 @@ type AppPublish struct {
 // AppPublisher takes a finished build's image into the registry and deploys it, answering the deploy's id.
 type AppPublisher interface {
 	PublishBuild(ctx context.Context, publish AppPublish) (string, error)
+	// CheckCapacity refuses an image size this install could never take in, however empty it is.
+	CheckCapacity(ctx context.Context, maxImageBytes int64) error
 }
+
+// MaxSpoolRequeues is how many extra builds one push can cost when the spool stays full.
+const MaxSpoolRequeues = 2
 
 // ErrTryLater is a publish refused for want of room that will come back; the build goes back to the queue, not to failed.
 var ErrTryLater = errors.New("the platform has no room to take in this build right now")

@@ -13,6 +13,10 @@ import (
 const (
 	lostBuildReason  = "the build controller stopped while this build ran; push again or rebuild"
 	stuckBuildReason = "the cluster did not finish the build in time; build again"
+	// spoolWaitReason is what a build sent back says while it waits: its retry number, then the bound.
+	spoolWaitReason = "the platform had no room to take in the finished image, so it was discarded; this commit builds again by itself (retry %d of %d)"
+	// spoolFailReason names the builds one push cost.
+	spoolFailReason = "the platform had no room to take in the finished image after %d builds of this commit; nothing was deployed. Push or build again later"
 )
 
 // DispatcherOptions pace the dispatcher; zero values take the defaults.
@@ -35,6 +39,10 @@ type DispatcherOptions struct {
 	PendingGrace time.Duration
 	// DeployBudget bounds collecting the output and deploying it, retries included.
 	DeployBudget time.Duration
+	// PublishWait is how long a finished app build waits in place for room on the publish spool before giving up its image.
+	PublishWait time.Duration
+	// RequeueDelay is how long a build that gave up its image stays out of the queue, multiplied by its retry number.
+	RequeueDelay time.Duration
 	// ShutdownGrace is how long a stopping dispatcher lets running builds finish before handing them back to the queue.
 	ShutdownGrace time.Duration
 }
@@ -42,7 +50,8 @@ type DispatcherOptions struct {
 func (o DispatcherOptions) withDefaults() DispatcherOptions {
 	defaults := DispatcherOptions{Slots: 1, Poll: 5 * time.Second, StatusPoll: 3 * time.Second, LogEvery: 15 * time.Second,
 		Lease: 90 * time.Second, DeployRetry: 15 * time.Second, DeployTries: 8, StartTimeout: time.Minute,
-		PendingGrace: 10 * time.Minute, DeployBudget: 20 * time.Minute, ShutdownGrace: 10 * time.Second}
+		PendingGrace: 10 * time.Minute, DeployBudget: 20 * time.Minute, ShutdownGrace: 10 * time.Second,
+		PublishWait: 10 * time.Minute, RequeueDelay: 5 * time.Minute}
 	if o.Slots <= 0 {
 		o.Slots = defaults.Slots
 	}
@@ -54,6 +63,7 @@ func (o DispatcherOptions) withDefaults() DispatcherOptions {
 		{&o.Poll, &defaults.Poll}, {&o.StatusPoll, &defaults.StatusPoll}, {&o.LogEvery, &defaults.LogEvery},
 		{&o.Lease, &defaults.Lease}, {&o.DeployRetry, &defaults.DeployRetry}, {&o.StartTimeout, &defaults.StartTimeout},
 		{&o.PendingGrace, &defaults.PendingGrace}, {&o.DeployBudget, &defaults.DeployBudget}, {&o.ShutdownGrace, &defaults.ShutdownGrace},
+		{&o.PublishWait, &defaults.PublishWait}, {&o.RequeueDelay, &defaults.RequeueDelay},
 	} {
 		if *pair.value <= 0 {
 			*pair.value = *pair.fallback
@@ -62,6 +72,8 @@ func (o DispatcherOptions) withDefaults() DispatcherOptions {
 	if o.DeployTries <= 0 {
 		o.DeployTries = defaults.DeployTries
 	}
+	// The wait shares DeployBudget with the publish it waits for, which needs the rest.
+	o.PublishWait = min(o.PublishWait, o.DeployBudget/2)
 	return o
 }
 
@@ -255,18 +267,19 @@ func (d *Dispatcher) run(ctx context.Context, build *Build) {
 		return
 	default:
 	}
-	if outcome.requeue && ctx.Err() == nil {
-		// Without a pause the next claim would rebuild at once and meet the same full spool.
-		select {
-		case <-ctx.Done():
-		case <-time.After(d.options.DeployRetry):
-		}
-	}
-	if ctx.Err() != nil || outcome.requeue {
+	if ctx.Err() != nil {
 		if err := d.service.store.RequeueBuild(context.WithoutCancel(ctx), build.ID, d.options.Holder); err != nil {
 			log.Printf("%s build %s: hand back to the queue: %v", build.Kind, build.ID, err)
 		}
 		return
+	}
+	if outcome.requeue && build.Requeues < MaxSpoolRequeues {
+		d.retryLater(ctx, build)
+		return
+	}
+	if outcome.requeue {
+		log.Printf("%s build %s: no room on the publish spool after %d builds; failing it", build.Kind, build.ID, build.Requeues+1)
+		outcome = failedWith(FailPlatform, fmt.Sprintf(spoolFailReason, build.Requeues+1))
 	}
 	build.Status, build.DeployID, build.FailureKind, build.FailureReason = outcome.status, outcome.deployID, outcome.kind, outcome.reason
 	build.Log = redact(execution.fullLog(), execution.secrets)
@@ -274,6 +287,17 @@ func (d *Dispatcher) run(ctx context.Context, build *Build) {
 		log.Printf("%s build %s: record outcome: %v", build.Kind, build.ID, err)
 	}
 	execution.reportPreview(context.WithoutCancel(ctx), outcome)
+}
+
+// retryLater frees the slot at once: the build waits in the queue, where the delay keeps it from meeting the same full spool.
+func (d *Dispatcher) retryLater(ctx context.Context, build *Build) {
+	retry := build.Requeues + 1
+	delay := d.options.RequeueDelay * time.Duration(retry)
+	log.Printf("%s build %s: no room on the publish spool; retry %d of %d in %s", build.Kind, build.ID, retry, MaxSpoolRequeues, delay)
+	reason := fmt.Sprintf(spoolWaitReason, retry, MaxSpoolRequeues)
+	if err := d.service.store.RetryBuildLater(context.WithoutCancel(ctx), build.ID, d.options.Holder, delay, reason); err != nil {
+		log.Printf("%s build %s: send back to the queue: %v", build.Kind, build.ID, err)
+	}
 }
 
 func (d *Dispatcher) holdLease(ctx context.Context, cancel context.CancelFunc, buildID string, lost chan<- struct{}) {

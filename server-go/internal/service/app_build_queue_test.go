@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/appbuilds"
@@ -51,8 +52,10 @@ func TestAppBuildLimits_ReadTheOrganisationsPlan(t *testing.T) {
 }
 
 type fakeAppPublisher struct {
-	result AppBuildResult
-	err    error
+	result      AppBuildResult
+	err         error
+	checked     int64
+	capacityErr error
 }
 
 func (f *fakeAppPublisher) Publish(_ context.Context, result AppBuildResult) (*apphost.Deploy, error) {
@@ -61,6 +64,11 @@ func (f *fakeAppPublisher) Publish(_ context.Context, result AppBuildResult) (*a
 		return nil, f.err
 	}
 	return &apphost.Deploy{ID: "deploy-7"}, nil
+}
+
+func (f *fakeAppPublisher) CheckCapacity(maxImage int64) error {
+	f.checked = maxImage
+	return f.capacityErr
 }
 
 type fakeAppGetter map[string]*apphost.App
@@ -122,5 +130,26 @@ func TestAppBuildQueuePublisher_AFullRegistryIsWordedInGiB(t *testing.T) {
 	}
 	if want := appbuilds.RegistryFullStatus(full.Used, full.Incoming, full.Quota).Detail; failure.Error() != want {
 		t.Fatalf("shown %q, want %q", failure.Error(), want)
+	}
+}
+
+func TestAppBuildQueuePublisher_CheckCapacityNamesASpoolTooSmall(t *testing.T) {
+	inner := &fakeAppPublisher{}
+	queue := newAppBuildQueuePublisher(inner, fakeAppGetter{})
+	if err := queue.CheckCapacity(context.Background(), 7); err != nil || inner.checked != 7 {
+		t.Fatalf("%v, checked %d", err, inner.checked)
+	}
+	inner.capacityErr = fmt.Errorf("%w (6 bytes on the volume)", ErrSpoolTooSmall)
+	var failure *sitebuilds.BuildFailure
+	err := queue.CheckCapacity(context.Background(), 7)
+	if !errors.As(err, &failure) || failure.Kind != sitebuilds.FailPlatform || !strings.Contains(err.Error(), "too small") {
+		t.Fatalf("a spool too small: %v", err)
+	}
+	if strings.Contains(err.Error(), "6 bytes") {
+		t.Errorf("the customer saw the volume's size: %v", err)
+	}
+	inner.capacityErr = errors.New("statfs: gone")
+	if err := queue.CheckCapacity(context.Background(), 7); err == nil || errors.As(err, new(*sitebuilds.BuildFailure)) {
+		t.Errorf("an unread capacity stays the dispatcher's to word: %v", err)
 	}
 }

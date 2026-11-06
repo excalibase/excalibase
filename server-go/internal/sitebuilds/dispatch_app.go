@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/gitprovider"
 )
@@ -46,12 +48,23 @@ func (k *appKind) preflight(ctx context.Context) *outcome {
 	if k.execution.build.App == nil {
 		return refuse(FailPlatform, "the build has no app settings; build again")
 	}
+	if err := k.publisher.CheckCapacity(ctx, k.execution.build.App.MaxImageBytes); err != nil {
+		return capacityRefusal(err)
+	}
 	builder, err := k.resolveBuilder(ctx)
 	if err != nil {
 		return refusal(err)
 	}
 	k.builder = builder
 	return nil
+}
+
+func capacityRefusal(err error) *outcome {
+	var failure *BuildFailure
+	if errors.As(err, &failure) {
+		return refuse(failure.Kind, failure.Error())
+	}
+	return refuse(FailPlatform, userMessage(err))
 }
 
 // resolveBuilder answers dockerfile when the commit has the Dockerfile, buildpacks otherwise; it never guesses.
@@ -101,18 +114,50 @@ func (k *appKind) start(ctx context.Context, credential gitprovider.CloneCredent
 		CloneToken: credential.Token, Secrets: secrets, LargestPlan: largest})
 }
 
-// deliver hands the finished build to the publisher; a failure it names keeps its kind.
+// deliver hands the finished build to the publisher. A refusal for want of room waits here while the Job still holds
+// the image and the lease still renews; only when the wait runs out does the build give the image up.
 func (k *appKind) deliver(ctx context.Context) outcome {
+	run := k.execution
+	options := run.dispatcher.options
+	giveUp := time.Now().Add(options.PublishWait)
+	for waited := false; ; waited = true {
+		deployID, err := k.publish(ctx)
+		if !errors.Is(err, ErrTryLater) {
+			return publishOutcome(deployID, err)
+		}
+		log.Printf("app build %s: publish refused: %v", run.build.ID, err)
+		if !waited {
+			run.note("== waiting for room ==\nthe platform has no room to take in the finished image yet; the image is kept while this build waits\n")
+			run.saveLog(ctx)
+		}
+		if !time.Now().Before(giveUp) {
+			return outcome{requeue: true}
+		}
+		select {
+		case <-ctx.Done():
+			return outcome{requeue: true}
+		case <-time.After(options.DeployRetry):
+		}
+		if reason := run.stillDeployable(ctx); reason != "" {
+			return failedWith(FailPlatform, reason)
+		}
+	}
+}
+
+func (k *appKind) publish(ctx context.Context) (string, error) {
 	build := k.execution.build
 	deployID, err := k.publisher.PublishBuild(ctx, AppPublish{BuildID: build.ID, RunID: k.execution.runID, ProjectID: build.ProjectID, AppID: build.AppID,
 		CommitSHA: build.CommitSHA, MaxImageBytes: build.App.MaxImageBytes})
 	k.execution.refreshLog(ctx)
+	return deployID, err
+}
+
+// publishOutcome records a publish that was not refused for room; a failure it names keeps its kind.
+func publishOutcome(deployID string, err error) outcome {
 	var failure *BuildFailure
 	switch {
 	case err == nil:
 		return outcome{status: StatusSucceeded, deployID: deployID}
-	case errors.Is(err, ErrTryLater):
-		return outcome{requeue: true}
 	case errors.As(err, &failure):
 		return failedWith(failure.Kind, failure.Error())
 	}
