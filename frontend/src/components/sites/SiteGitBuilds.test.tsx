@@ -165,6 +165,34 @@ describe('SiteGitBuilds', () => {
     );
   });
 
+  test('a server site saved without a framework sends the one the form shows', async () => {
+    serve({
+      git: {
+        connected: true,
+        connection: { ...connection, settings: { ...settings, outputDir: '' } },
+        nodeVersions: ['22'],
+      },
+      repositories: [
+        {
+          installation: { id: 501, account: 'acme' },
+          repositories: [{ id: 9001, fullName: 'acme/site', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    vi.mocked(api.put).mockResolvedValue({ data: { connection, build: failed } } as never);
+    renderPanel(true, true);
+    await userEvent.click(await screen.findByTestId('git-edit'));
+    expect(await screen.findByTestId('build-framework')).toHaveValue('nextjs');
+    await userEvent.selectOptions(screen.getByTestId('git-repository'), '9001');
+    await userEvent.click(screen.getByTestId('git-connect-submit'));
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(`${BASE}/git`, {
+        repositoryId: 9001,
+        settings: expect.objectContaining({ framework: 'nextjs' }),
+      }),
+    );
+  });
+
   test('a build the preset refused offers the app container instead', async () => {
     const refused = {
       ...failed,

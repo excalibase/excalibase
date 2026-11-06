@@ -68,6 +68,16 @@ function SignInLinks({
   );
 }
 
+// A server site always builds with a preset; one saved without it shows Next.js, so it sends it.
+const initialSettings = (
+  current: SiteGitConnection | null,
+  serverSite: boolean,
+): SiteBuildSettings => {
+  if (!serverSite) return current?.settings ?? EMPTY_SETTINGS;
+  const settings = current?.settings ?? SERVER_SETTINGS;
+  return { ...settings, framework: settings.framework || 'nextjs' };
+};
+
 function Connect({
   projectId,
   siteId,
@@ -86,9 +96,7 @@ function Connect({
   const { data: access, error, isLoading } = useGitRepositories(projectId, siteId, true);
   const connect = useConnectRepository(projectId, siteId);
   const [repositoryId, setRepositoryId] = useState<number | null>(current?.repositoryId ?? null);
-  const [settings, setSettings] = useState<SiteBuildSettings>(
-    current?.settings ?? (serverSite ? SERVER_SETTINGS : EMPTY_SETTINGS),
-  );
+  const [settings, setSettings] = useState<SiteBuildSettings>(initialSettings(current, serverSite));
   const repositories: GitRepository[] = (access ?? []).flatMap((entry) => entry.repositories);
   const submit = () => {
     if (repositoryId === null) return;
