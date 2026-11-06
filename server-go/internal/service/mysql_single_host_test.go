@@ -24,12 +24,12 @@ import (
 // answers, and what is fed on stdin is kept.
 type hostEngine struct {
 	afterRemoveVolume func()
-	refuseStarts bool
-	firewallDown bool
-	mu           sync.Mutex
-	containers   map[string]bool // name → running
-	specs        map[string]provisioner.ContainerSpec
-	stdin        []string
+	refuseStarts      bool
+	firewallDown      bool
+	mu                sync.Mutex
+	containers        map[string]bool // name → running
+	specs             map[string]provisioner.ContainerSpec
+	stdin             []string
 	// answer replies to a statement batch fed on stdin.
 	answer func(container, stdin string) (string, error)
 	copied map[string][]string // container → tar entry names copied in
