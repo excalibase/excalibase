@@ -212,7 +212,7 @@ func (h *Handler) inspectGuarded(ctx context.Context, id string) (guardedContain
 	return found, err
 }
 
-// beforeStart refuses a guarded start until the firewall is healthy, and ends a stop.
+// beforeStart ends a stop, and refuses a guarded start until the firewall is healthy.
 func (h *Handler) beforeStart(ctx context.Context, id string) error {
 	found, err := h.inspectGuarded(ctx, id)
 	if err != nil {
@@ -221,10 +221,14 @@ func (h *Handler) beforeStart(ctx context.Context, id string) error {
 	if restartExempt(h.policy, found.Host.NetworkMode, found.networks()) {
 		return nil
 	}
+	// First: refused now, the start is still wanted, and the supervisor does it once the firewall is healthy.
+	if err := h.restarts.setStopped(found.ID, false); err != nil {
+		return err
+	}
 	if !h.firewallHealthy(ctx) {
 		return refuse("the host firewall is not healthy: tenants wait for it (docker logs %s)", h.restarts.FirewallContainer)
 	}
-	return h.restarts.setStopped(found.ID, false)
+	return nil
 }
 
 // beforeStop records the stop before the container exits, so it never reads as a crash.

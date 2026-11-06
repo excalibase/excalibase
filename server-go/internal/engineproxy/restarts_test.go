@@ -298,6 +298,25 @@ func TestAStoppedTenantStaysStoppedUntilStartedAgain(t *testing.T) {
 	}
 }
 
+// A start asked for while the firewall is down still ends the stop: the tenant follows once it is healthy.
+func TestARefusedStartStillEndsAStop(t *testing.T) {
+	engine, handler, _ := restartProxy(t, map[string]*restartContainer{
+		"excalibase-p1-postgres": tenant("running"), testFirewall: firewall("running", "healthy"),
+	})
+	if resp := serve(t, handler, http.MethodPost, "/containers/excalibase-p1-postgres/stop", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("stop answered %d", resp.StatusCode)
+	}
+	engine.containers[testFirewall].health = "unhealthy"
+	if resp := serve(t, handler, http.MethodPost, "/containers/excalibase-p1-postgres/start", ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("start answered %d", resp.StatusCode)
+	}
+	engine.containers[testFirewall].health = "healthy"
+	handler.superviseOnce(context.Background())
+	if started := engine.startedOnly(); len(started) != 1 {
+		t.Fatalf("started %v: the restart asked for was lost", started)
+	}
+}
+
 // A stop that cannot be recorded would look like a crash and come back: it is refused.
 func TestAStopThatCannotBeRecordedIsRefused(t *testing.T) {
 	engine := &restartEngine{containers: map[string]*restartContainer{"excalibase-p1-postgres": tenant("running")}}
