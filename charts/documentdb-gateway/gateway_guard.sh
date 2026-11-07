@@ -2,14 +2,18 @@
 # Runs the upstream gateway and ends it when its clients can only be failing:
 # this instance was primary and is now a standby, or Postgres has stopped
 # answering. The gateway keeps client connections across both, reports itself
-# writable and answers with errors that make no driver reconnect. Ending it
-# resets them, so they come back through the Service, to the current primary.
+# writable and answers with errors that make no driver reconnect. Draining and
+# ending it makes them come back through the Service, to the current primary.
 set -u
 
 INTERVAL="${GATEWAY_GUARD_INTERVAL:-3}"
 PROBE_TIMEOUT="${GATEWAY_GUARD_PROBE_TIMEOUT:-5}"
 OUTAGE_LIMIT="${GATEWAY_GUARD_OUTAGE_LIMIT:-15}"
 STOP_GRACE="${GATEWAY_GUARD_STOP_GRACE:-5}"
+# Longer than a driver's default 10 s between heartbeats, so its monitor has left too.
+DRAIN="${GATEWAY_GUARD_DRAIN:-12}"
+# The Dockerfile names this file as the gateway's DynamicConfigurationFile.
+HOST_CONFIG="${GATEWAY_GUARD_HOST_CONFIG:-/tmp/gateway-host-config.json}"
 ENTRYPOINT="${GATEWAY_ENTRYPOINT:-/home/documentdb/gateway/scripts/gateway_entrypoint.sh}"
 
 pg_port=5432
@@ -21,6 +25,7 @@ done
 
 log() { echo "gateway guard: $*"; }
 
+rm -f "$HOST_CONFIG"
 "$ENTRYPOINT" "$@" &
 gateway=$!
 
@@ -33,8 +38,21 @@ stop_gateway() {
   kill -KILL "$gateway" 2>/dev/null
 }
 
+# Closing every connection at once can hang a Node driver for good: a heartbeat
+# started as its monitor's socket closes never settles (mongodb 6.22, 7.8). Code
+# 91 ends each connection on its own next request instead, the monitor's too.
+drain_connections() {
+  if ! echo -n '{"IsPrimary":"true","SendShutdownResponses":"true"}' 2>/dev/null > "$HOST_CONFIG"; then
+    log "cannot ask for shutdown answers in $HOST_CONFIG"
+    return
+  fi
+  local deadline=$((SECONDS + DRAIN))
+  while kill -0 "$gateway" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.1; done
+}
+
 end_clients() {
   log "$1, ending client connections"
+  drain_connections
   stop_gateway
   exit 1
 }

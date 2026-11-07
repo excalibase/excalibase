@@ -41,6 +41,8 @@ open("$dir/args", "w").write(" ".join(sys.argv[1:]))
 mode = open("$dir/mode").read().strip()
 def received(number, _):
     open("$dir/signals", "a").write(signal.Signals(number).name + "\n")
+    if os.path.exists("$dir/host.json"):
+        open("$dir/config-at-signal", "w").write(open("$dir/host.json").read())
     if mode != "deaf":
         sys.exit(0)
 for number in (signal.SIGINT, signal.SIGTERM):
@@ -64,8 +66,9 @@ start_guard() {
   printf '%b' "$ready" > "$dir/ready"
   echo "$mode" > "$dir/mode"
   make_fakes "$dir" "$port"
+  [ -z "${stale_config:-}" ] || echo stale > "$dir/host.json"
   PATH="$dir:$PATH" GATEWAY_GUARD_INTERVAL=0.1 GATEWAY_GUARD_PROBE_TIMEOUT=1 GATEWAY_GUARD_OUTAGE_LIMIT=1 \
-    GATEWAY_GUARD_STOP_GRACE=1 GATEWAY_ENTRYPOINT="$dir/gateway" \
+    GATEWAY_GUARD_STOP_GRACE=1 GATEWAY_GUARD_DRAIN="${drain:-0}" GATEWAY_GUARD_HOST_CONFIG="${host_config:-$dir/host.json}" GATEWAY_ENTRYPOINT="$dir/gateway" \
     env --default-signal=INT "$GUARD" --pg-port "$port" > "$dir/out" 2>&1 &
   guard_pid=$!
   # A background job starts with SIGINT ignored; the guard, as PID 1, does not.
@@ -96,6 +99,37 @@ check() {
 }
 
 logged() { grep -c -- "$1" "$dir/out"; }
+SHUTDOWN_CONFIG='{"IsPrimary":"true","SendShutdownResponses":"true"}'
+
+start_guard 'f\nf\nt\n' '0\n'; await_guard 5
+check 'a demotion asks for shutdown answers before the gateway is stopped' "$SHUTDOWN_CONFIG" "$(cat "$dir/config-at-signal" 2>/dev/null)"
+finish
+
+start_guard 'f\nfail\n' '2\n'; await_guard 5
+check 'so does an outage past the limit' "$SHUTDOWN_CONFIG" "$(cat "$dir/config-at-signal" 2>/dev/null)"
+finish
+
+drain=30 start_guard 'f\nt\n' '0\n'; sleep 1.5
+check 'the gateway keeps running while connections drain' yes "$(gateway_alive)"
+check 'and has not been signalled' no "$([ -e "$dir/signals" ] && echo yes || echo no)"
+kill -TERM "$guard_pid"; await_guard 3
+check 'SIGTERM cuts the drain short' 'no 0' "$(gateway_alive) $rc"
+finish
+
+drain=30 start_guard 'f\nt\n' '0\n'; sleep 1
+kill -KILL "$(cat "$dir/pid")"; await_guard 3
+check 'a gateway dying during the drain is noticed' 1 "$rc"
+finish
+
+stale_config=1 start_guard 't\n' '0\n'; sleep 0.5
+check 'a shutdown setting from before a restart is gone' no "$([ -e "$dir/host.json" ] && echo yes || echo no)"
+finish
+
+host_config=/nonexistent/host.json start_guard 'f\nt\n' '0\n'; await_guard 5
+check 'a drain that cannot be asked for still ends the gateway' 'no 1' "$(gateway_alive) $rc"
+check 'and says so' 1 "$(logged 'cannot ask for shutdown answers')"
+finish
+
 
 start_guard 'f\nf\nt\n' '0\n'; await_guard 5
 check 'a demoted primary ends the gateway' 'no 1' "$(gateway_alive) $rc"

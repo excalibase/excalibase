@@ -93,6 +93,7 @@ demote
 check 'Postgres really is a standby' t "$(sql 'SELECT pg_is_in_recovery()')"
 check 'the client connection is ended' ended "$(await_client_end 40)"
 check 'the guard says why' 1 "$(gateway_log | grep -c 'no longer the primary')"
+check 'the gateway took the shutdown setting' 1 "$(gateway_log | grep -c 'Config file state changed')"
 await_log 'Gateway ready' 2 40
 check 'the gateway came back once' 1 "$(restarts)"
 sleep 10

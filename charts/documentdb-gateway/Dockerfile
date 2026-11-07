@@ -7,6 +7,9 @@ USER root
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN config=/home/documentdb/gateway/pg_documentdb_gw/SetupConfiguration.json \
+  && jq '.DynamicConfigurationFile="/tmp/gateway-host-config.json"' "$config" > /tmp/config.json \
+  && cat /tmp/config.json > "$config" && rm /tmp/config.json
 COPY NOTICE /home/documentdb/gateway/NOTICE
 COPY gateway_guard.sh /home/documentdb/gateway/scripts/gateway_guard.sh
 USER documentdb
