@@ -13,7 +13,7 @@ permissions:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
@@ -105,7 +105,7 @@ jobs:
     name: Single-host bundle
     needs: changes
     if: needs.changes.outputs.singlehost == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Hardening, init, preflight and bootstrap
@@ -124,7 +124,7 @@ jobs:
     name: Sites router Worker
     needs: changes
     if: needs.changes.outputs.sitesrouter == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: edge/sites-router
@@ -144,7 +144,7 @@ jobs:
     name: Sites outbound Worker
     needs: changes
     if: needs.changes.outputs.sitesoutbound == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: edge/sites-outbound
@@ -164,7 +164,7 @@ jobs:
     name: Single-host boot (Docker)
     needs: changes
     if: needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Four fresh installs, each walking realtime too (EXC-612).
     timeout-minutes: 145
     steps:
@@ -214,7 +214,7 @@ jobs:
 
   go-lint:
     name: Go Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
@@ -243,7 +243,7 @@ jobs:
 
   go-test:
     name: Go Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
@@ -264,7 +264,7 @@ jobs:
 
   frontend-lint:
     name: Frontend Type Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
@@ -282,7 +282,7 @@ jobs:
 
   frontend-test:
     name: Frontend Unit (vitest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, frontend-lint]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
@@ -311,7 +311,7 @@ jobs:
 
   frontend-e2e:
     name: Studio E2E (Playwright)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, frontend-lint]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
@@ -340,7 +340,7 @@ jobs:
 
   deno-test:
     name: Deno Unit (deno-server + vendored lib)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true'
     steps:
@@ -402,7 +402,7 @@ jobs:
 
   defend:
     name: Defend (secrets + vulns + audit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     steps:
@@ -448,11 +448,11 @@ jobs:
 
   go-integration-shard:
     name: Go Integration shard ${{ matrix.shard }}/4
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # Integration tests need a Docker daemon (testcontainers spins up
     # Postgres, NATS, LocalStack, and one-off postgres containers for
-    # restore E2Es). ubuntu-latest has Docker available out of the box.
+    # restore E2Es). ubuntu-24.04 has Docker available out of the box.
     # Gated on backend changes — skipped on frontend-only PRs to keep
     # CI cost down.
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
@@ -489,7 +489,7 @@ jobs:
     # The required check: passes only when every shard passed, and gates the
     # coverage of the shards together.
     name: Go Integration (testcontainers)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-integration-shard]
     # !cancelled(): a failed shard must fail this check, not skip it.
     if: ${{ !cancelled() && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true') }}
@@ -528,7 +528,7 @@ jobs:
 
   live-cluster:
     name: Live cluster tests (hosting)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # Real k3s clusters (gVisor, deploy rollouts, Cilium egress); only when hosting code changes.
     if: needs.changes.outputs.hosting == 'true'
@@ -546,7 +546,7 @@ jobs:
 
   live-start-fence:
     name: Live cluster tests (start fence)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # EXC-622: workloads start the real way with a probe at t=0; nothing fenced may answer.
     if: needs.changes.outputs.hosting == 'true'
@@ -564,7 +564,7 @@ jobs:
 
   live-mysql-backup:
     name: Live cluster tests (MySQL backup)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # EXC-586: MOCO's real backup Job under the project policies, on kube-router and on production Cilium.
     if: needs.changes.outputs.mysqlbackup == 'true'
@@ -582,7 +582,7 @@ jobs:
 
   live-site-builds:
     name: Live site builds (gVisor)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # A real Vite build through the site build Job under gVisor (EXC-354); its own job so the hosting suite keeps its time.
     if: needs.changes.outputs.sitebuilds == 'true'
@@ -600,7 +600,7 @@ jobs:
 
   live-app-builds:
     name: Live app builds (gVisor)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # Dockerfile (rootless BuildKit) and Buildpacks image builds through the app build Job under gVisor (EXC-547).
     if: needs.changes.outputs.appbuilds == 'true'
@@ -617,7 +617,7 @@ jobs:
 
   sonarcloud:
     name: SonarCloud Scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # frontend-test produces the TypeScript lcov, so the scan has to wait for
     # it too; !cancelled() below still lets the scan run when it is skipped.
     needs: [changes, go-integration, deno-test, frontend-test]
