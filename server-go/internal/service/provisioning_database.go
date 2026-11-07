@@ -241,6 +241,14 @@ func (s *ProvisioningService) startDatabaseAdd(ctx context.Context, inst *domain
 	if failedAddStillStands(inst) {
 		return nil, fmt.Errorf("%w: the database of an earlier failed add is still being removed (%s)", ErrProjectOperationRunning, inst.ProjectID)
 	}
+	// The earlier add may have left logins it could not remove, a sealed vault for
+	// one. With no failure on record, filed credentials are not ours to clear (EXC-415).
+	if inst.FailureReason != "" {
+		if err := s.deleteDatabaseCredentials(inst.ProjectID); err != nil {
+			log.Printf("ERROR: clear the failed add's logins of %s: %v", inst.ProjectID, err)
+			return nil, fmt.Errorf("%w: the logins of an earlier failed add cannot be removed yet (%s)", ErrProjectOperationRunning, inst.ProjectID)
+		}
+	}
 	start := time.Now()
 	tier, err := s.databaseTier(ctx, &req, inst.Tier)
 	if err != nil {
@@ -407,13 +415,17 @@ func requireBuilding(projectID, status string) error {
 	return nil
 }
 
+// databaseLoginRoles are the logins filed for a database. They are named because
+// the credential prefix also holds secrets that aren't the database's (jwt_keys).
+var databaseLoginRoles = []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher, roleScheduler, roleReader, docBrowserCredential}
+
 // deleteDatabaseCredentials removes the database logins filed for a project,
 // and nothing else it keeps in the vault.
 func (s *ProvisioningService) deleteDatabaseCredentials(projectID string) error {
 	if s.vault == nil {
 		return nil
 	}
-	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher} {
+	for _, role := range databaseLoginRoles {
 		if err := s.vault.Delete(vaultCredentialPath(projectID, role)); err != nil && !errors.Is(err, vault.ErrNotFound) {
 			return fmt.Errorf("delete %s credential: %w", role, err)
 		}

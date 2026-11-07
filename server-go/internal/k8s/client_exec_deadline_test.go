@@ -2,15 +2,20 @@ package k8s
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/apimachinery/pkg/util/httpstream/spdy"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 )
 
 // The build's deadline is what ends a hung exec, since neither the client nor
@@ -114,5 +119,89 @@ func TestExecInPod_AnErrorAnswerClosesItsConnection(t *testing.T) {
 			t.Fatalf("%d connections opened, %d closed", opened.Load(), closed.Load())
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A proxy that takes the connection and never answers CONNECT. The proxy is given
+// directly: http.ProxyFromEnvironment reads the environment once per process.
+func TestExecThroughASilentProxy_EndsAtItsDeadline(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accepted atomic.Int32
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			defer conn.Close()
+		}
+	}()
+	defer listener.Close()
+	proxyURL := &url.URL{Scheme: "http", Host: listener.Addr().String()}
+	target := &url.URL{Scheme: "http", Host: "kube.invalid:6443", Path: "/exec"}
+	executor, err := newCancellableExecutor(&rest.Config{Host: "http://kube.invalid:6443", Proxy: http.ProxyURL(proxyURL)}, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	returned := make(chan error, 1)
+	go func() { returned <- executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: io.Discard}) }()
+	select {
+	case err := <-returned:
+		// client-go flattens the cause into its message.
+		if err == nil || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+			t.Errorf("err = %v, want the deadline", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("exec through a silent proxy outlived its deadline")
+	}
+	if accepted.Load() == 0 {
+		t.Fatal("the proxy was never used, so this proved nothing")
+	}
+}
+
+// The dial left waiting on a proxy closes what it gets once nobody wants it.
+func TestExecThroughALateProxy_ClosesTheConnectionItNoLongerWants(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	closed := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			closed <- err
+			return
+		}
+		defer conn.Close()
+		<-ctx.Done()
+		time.Sleep(100 * time.Millisecond)
+		if _, err := conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n")); err != nil {
+			closed <- err
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, err = io.Copy(io.Discard, conn)
+		closed <- err
+	}()
+	proxyURL := &url.URL{Scheme: "http", Host: listener.Addr().String()}
+	target := &url.URL{Scheme: "http", Host: "kube.invalid:6443", Path: "/exec"}
+	executor, err := newCancellableExecutor(&rest.Config{Host: "http://kube.invalid:6443", Proxy: http.ProxyURL(proxyURL)}, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: io.Discard}); err == nil {
+		t.Fatal("exec succeeded")
+	}
+	if err := <-closed; err != nil {
+		t.Fatalf("the proxy's connection stayed open: %v", err)
 	}
 }

@@ -299,6 +299,7 @@ func (s *ProvisioningService) markPendingDeletion(ctx context.Context, projectID
 	if err := s.stopWorkloads(ctx, projectID); err != nil {
 		return nil, err
 	}
+	inst.RollbackLog = s.removeFailedAddCluster(ctx, inst)
 	now := s.deletionClock()
 	inst.Status = string(domain.StatusPendingDeletion)
 	inst.CurrentStage = domain.StatusPendingDeletion
@@ -315,6 +316,22 @@ func (s *ProvisioningService) markPendingDeletion(ctx context.Context, projectID
 	log.Printf("action=schedule_deletion project=%s due=%s delete_backups=%t",
 		projectID, inst.DeletionDueAt.Format(time.RFC3339), inst.DeletionDeleteBackups)
 	return inst, nil
+}
+
+// removeFailedAddCluster answers with the rollback log once it has tried to remove
+// a failed add's cluster: nothing would use it through the grace period. A failure
+// doesn't stop the DELETE; the sweep goes on trying. Backups are the grace period's.
+func (s *ProvisioningService) removeFailedAddCluster(ctx context.Context, inst *domain.DatabaseInstance) string {
+	if !inst.NoDatabase || inst.DeploymentMode != domain.ModeK8s || !failedAddRemovalFailed(inst) {
+		return inst.RollbackLog
+	}
+	attemptCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.rollbackRetries.limit())
+	defer cancel()
+	if err := s.removeAddedDatabase(attemptCtx, inst); err != nil {
+		log.Printf("ERROR: remove the failed add's cluster of %s: %v", inst.ProjectID, err)
+		return inst.RollbackLog
+	}
+	return rollbackLogWithCleanupDone(inst.RollbackLog, removeDatabaseCleanup(inst.Namespace))
 }
 
 // updatePendingChoice answers a repeated DELETE: the due date stands, and an

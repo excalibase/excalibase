@@ -58,6 +58,7 @@ const (
 	leftoverAddBackups
 	leftoverRestore
 	leftoverRestoreDeletion
+	leftoverAddedDatabaseAwaitingDeletion
 )
 
 // errRollbackInProgress is a retry that has nothing to do yet: no failure, so no
@@ -94,6 +95,9 @@ func (s *ProvisioningService) clusterLeftoverOf(inst *domain.DatabaseInstance) l
 		return leftoverRestoreDeletion
 	case inst.Status == string(domain.StatusActive) && inst.NoDatabase:
 		return s.failedAddLeftover(inst)
+	case inst.Status == string(domain.StatusPendingDeletion) && inst.NoDatabase && !isProtected(inst) && failedAddRemovalFailed(inst):
+		// Only the cluster: what it archived stays for the grace period to decide.
+		return leftoverAddedDatabaseAwaitingDeletion
 	}
 	return noLeftover
 }
@@ -111,7 +115,7 @@ func failedProjectLeftover(inst *domain.DatabaseInstance) leftover {
 }
 
 func (s *ProvisioningService) failedAddLeftover(inst *domain.DatabaseInstance) leftover {
-	if failedCleanupOf(inst, removeDatabaseCleanup(inst.Namespace)) {
+	if failedAddRemovalFailed(inst) {
 		return leftoverAddedDatabase
 	}
 	if s.backupPurger != nil && (strings.Contains(inst.FailureReason, purgeWaitingNote) ||
@@ -121,9 +125,23 @@ func (s *ProvisioningService) failedAddLeftover(inst *domain.DatabaseInstance) l
 	return noLeftover
 }
 
+// failedAddRemovalFailed reports a failed add whose cluster removal fell short.
+// Unlike a FAILED row's log this one needs no scope, old rows' logs included: a row
+// without a database cannot leave this failure except by a new add, which clears
+// the log, and what it licenses is a cluster the row says it doesn't have.
+func failedAddRemovalFailed(inst *domain.DatabaseInstance) bool {
+	name := removeDatabaseCleanup(inst.Namespace)
+	for _, result := range parseRollbackLog(inst.RollbackLog) {
+		if result.Name == name && !result.OK {
+			return true
+		}
+	}
+	return false
+}
+
 // failedAddStillStands reports a failed add whose cluster has not been seen to go.
 func failedAddStillStands(inst *domain.DatabaseInstance) bool {
-	return failedCleanupOf(inst, removeDatabaseCleanup(inst.Namespace)) ||
+	return failedAddRemovalFailed(inst) ||
 		strings.Contains(inst.FailureReason, purgeWaitingNote)
 }
 
@@ -252,6 +270,8 @@ func (s *ProvisioningService) retryUnderLease(ctx context.Context, projectID str
 		return false, s.retrySingleHostBuild(attemptCtx, inst)
 	case leftoverAddedDatabase:
 		return false, s.retryAddedDatabase(attemptCtx, inst)
+	case leftoverAddedDatabaseAwaitingDeletion:
+		return false, s.retryCleanup(inst, removeDatabaseCleanup(inst.Namespace), s.removeAddedDatabase(attemptCtx, inst))
 	case leftoverAddBackups:
 		return false, s.retryAddBackups(attemptCtx, inst, inst.RollbackLog)
 	case leftoverRestore:
@@ -278,12 +298,16 @@ func (s *ProvisioningService) retrySingleHostBuild(ctx context.Context, inst *do
 	return s.retryCleanup(inst, removeFailedBuildCleanup(inst.ProjectID), prov.Deprovision(ctx, inst.Namespace, inst.ProjectID))
 }
 
-func (s *ProvisioningService) retryAddedDatabase(ctx context.Context, inst *domain.DatabaseInstance) error {
+func (s *ProvisioningService) removeAddedDatabase(ctx context.Context, inst *domain.DatabaseInstance) error {
 	remover, err := s.databaseRemover(inst.DBType)
 	if err != nil {
 		return err
 	}
-	if err := remover.RemoveDatabase(ctx, inst.Namespace, inst.ProjectID); err != nil {
+	return remover.RemoveDatabase(ctx, inst.Namespace, inst.ProjectID)
+}
+
+func (s *ProvisioningService) retryAddedDatabase(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if err := s.removeAddedDatabase(ctx, inst); err != nil {
 		return err
 	}
 	rollbackLog := rollbackLogWithCleanupDone(inst.RollbackLog, removeDatabaseCleanup(inst.Namespace))

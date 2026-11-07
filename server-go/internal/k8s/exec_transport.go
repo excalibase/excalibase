@@ -24,6 +24,7 @@ const execPingPeriod = 5 * time.Second
 // its connection for as long as it likes, past any deadline.
 type cancellableUpgrade struct {
 	upstream *spdy.SpdyRoundTripper
+	proxy    func(*http.Request) (*url.URL, error)
 	conn     net.Conn
 	stop     func() bool
 }
@@ -41,7 +42,7 @@ func newCancellableExecutor(config *rest.Config, target *url.URL) (remotecommand
 	if err != nil {
 		return nil, err
 	}
-	upgrade := &cancellableUpgrade{upstream: upstream}
+	upgrade := &cancellableUpgrade{upstream: upstream, proxy: proxy}
 	wrapper, err := rest.HTTPWrappersForConfig(config, upgrade)
 	if err != nil {
 		return nil, err
@@ -57,7 +58,7 @@ func (u *cancellableUpgrade) RoundTrip(req *http.Request) (*http.Response, error
 	req = utilnet.CloneRequest(req)
 	req.Header.Add(httpstream.HeaderConnection, httpstream.HeaderUpgrade)
 	req.Header.Add(httpstream.HeaderUpgrade, spdy.HeaderSpdy31)
-	conn, err := u.upstream.Dial(req)
+	conn, err := u.dial(req)
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +73,41 @@ func (u *cancellableUpgrade) RoundTrip(req *http.Request) (*http.Response, error
 		return nil, err
 	}
 	return resp, nil
+}
+
+// dial ends with the request's context. Upstream honours it except in a proxy's
+// CONNECT, whose connection it keeps to itself, so that wait runs aside: if the
+// proxy stays silent the goroutine and its socket stay until the proxy answers or
+// hangs up. Only a proxied exec past its deadline can leave one behind.
+func (u *cancellableUpgrade) dial(req *http.Request) (net.Conn, error) {
+	proxyURL, err := u.proxy(req)
+	if err != nil {
+		return nil, err
+	}
+	if proxyURL == nil {
+		return u.upstream.Dial(req)
+	}
+	type dialed struct {
+		conn net.Conn
+		err  error
+	}
+	result := make(chan dialed)
+	go func() {
+		conn, err := u.upstream.Dial(req)
+		select {
+		case result <- dialed{conn, err}:
+		case <-req.Context().Done():
+			if conn != nil {
+				_ = conn.Close()
+			}
+		}
+	}()
+	select {
+	case got := <-result:
+		return got.conn, got.err
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
+	}
 }
 
 // NewConnection starts SPDY on an upgraded connection. A response that is not an
