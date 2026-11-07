@@ -23,6 +23,10 @@ var darkTools = map[string]features.Feature{
 	"list_site_previews":     features.SitePreviews,
 	"set_site_preview_mode":  features.SitePreviews,
 	"remove_site_preview":    features.SitePreviews,
+	"connect_app_repo":       features.AppGitBuilds,
+	"disconnect_app_repo":    features.AppGitBuilds,
+	"rebuild_app":            features.AppGitBuilds,
+	"list_app_builds":        features.AppGitBuilds,
 }
 
 func advisorRouteCases() []routeCase {

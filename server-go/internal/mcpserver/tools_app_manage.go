@@ -12,7 +12,7 @@ import (
 
 type envSetting struct {
 	Name  string `json:"name" jsonschema:"the variable's name, e.g. LOG_LEVEL"`
-	Value string `json:"value" jsonschema:"its literal value; secrets are never set through MCP (Studio keeps them out of the conversation)"`
+	Value string `json:"value" jsonschema:"its literal value; a secret goes through set_app_secret, which stores it in the project's vault"`
 }
 
 type updateAppArgs struct {
