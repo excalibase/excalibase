@@ -14,6 +14,7 @@ import {
   type SiteGitConnection,
 } from '../../api/siteBuilds';
 import { useSiteGitBuildsEnabled } from '../../hooks/useDeploymentMode';
+import { DisconnectButton } from '../containers/DisconnectButton';
 import { Spinner, primaryButton, secondaryButton } from '../containers/ContainerBits';
 import { SiteBuildList } from './SiteBuildList';
 import { SiteBuildSecrets } from './SiteBuildSecrets';
@@ -67,21 +68,26 @@ function SignInLinks({
   );
 }
 
+type ConnectMutation = ReturnType<typeof useConnectRepository>;
+
+// The connect call lives in the section, not in this form: the form goes away the moment the connection exists.
 function Connect({
   projectId,
   siteId,
   current,
   nodeVersions,
+  connect,
   onDone,
 }: {
   readonly projectId: string;
   readonly siteId: string;
   readonly current: SiteGitConnection | null;
   readonly nodeVersions: string[];
+  readonly connect: ConnectMutation;
   readonly onDone?: () => void;
 }) {
   const { data: access, error, isLoading } = useGitRepositories(projectId, siteId, true);
-  const connect = useConnectRepository(projectId, siteId);
+  const [problem, setProblem] = useState<string | null>(null);
   const [repositoryId, setRepositoryId] = useState<number | null>(current?.repositoryId ?? null);
   const [settings, setSettings] = useState<SiteBuildSettings>(current?.settings ?? EMPTY_SETTINGS);
   const repositories: GitRepository[] = (access ?? []).flatMap((entry) => entry.repositories);
@@ -92,7 +98,12 @@ function Connect({
   if (isLoading) return <Spinner />;
   return (
     <div className="space-y-3" data-testid="git-connect">
-      {(error || repositories.length === 0) && (
+      {error && (
+        <p role="alert" className="text-sm text-red-400" data-testid="git-repositories-error">
+          {apiErrorMessage(error, 'GitHub could not be asked for your repositories')}
+        </p>
+      )}
+      {!error && repositories.length === 0 && (
         <p className="text-sm text-text-secondary">
           Sign in with GitHub so Studio sees the repositories you can read. If yours is not listed,
           install the GitHub App on it first.
@@ -118,22 +129,18 @@ function Connect({
             settings={settings}
             nodeVersions={nodeVersions}
             onChange={setSettings}
+            onProblem={setProblem}
           />
           <button
             type="button"
             className={primaryButton}
-            disabled={repositoryId === null || connect.isPending}
+            disabled={repositoryId === null || connect.isPending || problem !== null}
             onClick={submit}
             data-testid="git-connect-submit"
           >
             {current ? 'Save and rebuild' : 'Connect and build'}
           </button>
         </>
-      )}
-      {connect.data?.buildError && (
-        <p className="text-xs text-amber-400" data-testid="git-build-error">
-          Connected, but no build was started: {connect.data.buildError}
-        </p>
       )}
       {connect.error && (
         <p role="alert" className="text-xs text-red-400">
@@ -150,10 +157,13 @@ function Connected({
   canDevelop,
   connection,
   nodeVersions,
+  connect,
 }: SiteProps & {
   readonly connection: SiteGitConnection;
   readonly nodeVersions: string[];
+  readonly connect: ConnectMutation;
 }) {
+  const stopped = connection.inactiveReason !== undefined && connection.inactiveReason !== '';
   const rebuild = useRebuildSite(projectId, siteId);
   const disconnect = useDisconnectRepository(projectId, siteId);
   const [editing, setEditing] = useState(false);
@@ -168,43 +178,57 @@ function Connected({
             Connected by {connection.connectedByName || connection.connectedBy}
           </span>
         </p>
-        {canDevelop && !connection.inactiveReason && (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className={secondaryButton}
-              disabled={rebuild.isPending}
-              onClick={() => rebuild.mutate()}
-              data-testid="git-rebuild"
-            >
-              <RefreshCw className="w-4 h-4" /> Rebuild
-            </button>
-            <button
-              type="button"
-              className={secondaryButton}
-              onClick={() => setEditing(!editing)}
-              data-testid="git-edit"
-            >
-              {editing ? 'Close' : 'Settings'}
-            </button>
-            <button
-              type="button"
-              className={secondaryButton}
-              disabled={disconnect.isPending}
-              onClick={() => disconnect.mutate()}
-              data-testid="git-disconnect"
-            >
-              Disconnect
-            </button>
+        {canDevelop && (
+          <div className="flex flex-wrap items-center gap-2">
+            {!stopped && (
+              <>
+                <button
+                  type="button"
+                  className={secondaryButton}
+                  disabled={rebuild.isPending}
+                  onClick={() => {
+                    connect.reset();
+                    rebuild.mutate();
+                  }}
+                  data-testid="git-rebuild"
+                >
+                  <RefreshCw className="w-4 h-4" /> Rebuild
+                </button>
+                <button
+                  type="button"
+                  className={secondaryButton}
+                  onClick={() => {
+                    if (connect.error) connect.reset();
+                    setEditing(!editing);
+                  }}
+                  data-testid="git-edit"
+                >
+                  {editing ? 'Close' : 'Settings'}
+                </button>
+              </>
+            )}
+            <DisconnectButton
+              testId="git-disconnect"
+              pending={disconnect.isPending}
+              onConfirm={() => {
+                connect.reset();
+                disconnect.mutate();
+              }}
+            />
           </div>
         )}
       </div>
+      {disconnect.error && (
+        <p role="alert" className="text-xs text-red-400" data-testid="git-disconnect-error">
+          {apiErrorMessage(disconnect.error, 'The repository could not be disconnected')}
+        </p>
+      )}
       {rebuild.error && (
         <p role="alert" className="text-xs text-red-400">
           {apiErrorMessage(rebuild.error, 'The rebuild could not be started')}
         </p>
       )}
-      {connection.inactiveReason && (
+      {stopped && (
         <div className="space-y-2" data-testid="git-inactive">
           <p className="text-sm text-amber-400">
             Builds are stopped: {connection.inactiveReason}. A developer signs in with GitHub and
@@ -216,6 +240,7 @@ function Connected({
               siteId={siteId}
               current={connection}
               nodeVersions={nodeVersions}
+              connect={connect}
             />
           )}
         </div>
@@ -226,6 +251,7 @@ function Connected({
           siteId={siteId}
           current={connection}
           nodeVersions={nodeVersions}
+          connect={connect}
           onDone={() => setEditing(false)}
         />
       )}
@@ -234,9 +260,30 @@ function Connected({
 }
 
 // Deploy on git push (EXC-354): hidden until the server switches it on; single-host answers why it has none.
-export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false, serverSite = false }: SiteProps) {
+export function SiteGitBuilds(props: SiteProps) {
+  // A fresh section per site, so one site's notice and errors never show on another.
+  return (
+    <SiteGitSection
+      key={`${props.projectId}/${props.siteId}`}
+      projectId={props.projectId}
+      siteId={props.siteId}
+      canDevelop={props.canDevelop}
+      canAdmin={props.canAdmin}
+      serverSite={props.serverSite}
+    />
+  );
+}
+
+function SiteGitSection({
+  projectId,
+  siteId,
+  canDevelop,
+  canAdmin = false,
+  serverSite = false,
+}: SiteProps) {
   const enabled = useSiteGitBuildsEnabled();
   const { data: state, error } = useGitState(projectId, siteId, enabled);
+  const connect = useConnectRepository(projectId, siteId);
   if (!enabled) return null;
   return (
     <section className="space-y-2 mb-6" data-testid="site-git-builds">
@@ -255,6 +302,7 @@ export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false,
             canDevelop={canDevelop}
             connection={state.connection}
             nodeVersions={state.nodeVersions}
+            connect={connect}
           />
         )}
         {state && !state.connection && canDevelop && (
@@ -263,12 +311,18 @@ export function SiteGitBuilds({ projectId, siteId, canDevelop, canAdmin = false,
             siteId={siteId}
             current={null}
             nodeVersions={state.nodeVersions}
+            connect={connect}
           />
         )}
         {state && !state.connection && !canDevelop && (
           <p className="text-sm text-text-tertiary">No repository is connected.</p>
         )}
       </div>
+      {connect.data?.buildError && (
+        <output className="block text-sm text-amber-400" data-testid="git-build-error">
+          Saved, but no build was started: {connect.data.buildError}
+        </output>
+      )}
       {state?.connection && (
         <div className="bg-surface-card border border-border-primary rounded-lg">
           <SiteBuildList projectId={projectId} siteId={siteId} canReadLogs={canDevelop} />
