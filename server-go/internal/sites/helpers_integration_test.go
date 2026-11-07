@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net/url"
 	"sync"
 	"testing"
@@ -41,6 +42,9 @@ func platformDB(t *testing.T) *postgres.Store {
 func startPlatformDB() (*postgres.Store, error) {
 	ctx := context.Background()
 	password := testutil.FixturePassword("sites-itest")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		return nil, err
+	}
 	container, err := pgmod.Run(ctx, "postgres:16-alpine",
 		pgmod.WithDatabase("platform_test"),
 		pgmod.WithUsername("platform"),

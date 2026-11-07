@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,5 +46,14 @@ func TestEnsureImage_AcceptsACompletePull(t *testing.T) {
 	docker := stubDaemon(t, `{"status":"Status: Downloaded newer image"}`+"\n")
 	if err := docker.ensureImage(context.Background(), "postgres:16"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEnsureImage_ReportsACancelledContextNotSuccess(t *testing.T) {
+	docker := stubDaemon(t, `{"status":"Pulling"}`+"\n"+`{"error":"context canceled"}`+"\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := docker.ensureImage(ctx, "postgres:16"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled pull must report the cancellation, got %v", err)
 	}
 }

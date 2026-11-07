@@ -5,6 +5,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"strings"
 	"testing"
@@ -109,6 +110,9 @@ func TestK3sCiliumMySQLBackupNeedsNoWait(t *testing.T) {
 func startMOCOLab(t *testing.T) *mocoLab {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1")
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)

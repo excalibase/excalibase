@@ -434,7 +434,10 @@ func (r *RealDockerClient) ensureImage(ctx context.Context, ref string) error {
 	defer reader.Close()
 	// A pull that fails part-way says so inside the stream; draining it to the
 	// end without reading it left the caller to find "No such image" later.
-	if err := imagepull.Drain(reader); err != nil && ctx.Err() == nil {
+	if err := imagepull.Drain(reader); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("pull image %s: %w", ref, ctx.Err())
+		}
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
 	return nil

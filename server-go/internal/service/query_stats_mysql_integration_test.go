@@ -97,6 +97,26 @@ func TestIntegration_SlowQueriesOnMySQLAreTheProjectDatabasesOnly(t *testing.T) 
 	inst := &domain.DatabaseInstance{ProjectID: "m1", DBType: domain.MySQL, Status: "ACTIVE", DatabaseName: "shop"}
 	svc := NewQueryStatsService(statsProjects(inst), &fakeStatsDatabases{}, statsOpener{db: app}, features.NewStatic(features.MySQL))
 	ctx := context.Background()
+	assertOnlyTheProjectsDigests(t, ctx, svc)
+	assertResetClearsDigests(t, ctx, svc)
+
+	// A login without the grant, as excalibase_app is on a project created before the feature.
+	mustExecMySQL(t, root, "CREATE USER 'ungranted'@'%' IDENTIFIED BY 'ungranted-pw' REQUIRE SSL; GRANT ALL ON shop.* TO 'ungranted'@'%'")
+	svc = NewQueryStatsService(statsProjects(inst), &fakeStatsDatabases{}, statsOpener{db: server.connect(t, "ungranted", "ungranted-pw", "shop", false)},
+		features.NewStatic(features.MySQL))
+	off, err := svc.List(ctx, "m1", "total", 10)
+	if err != nil || off.Enabled {
+		t.Errorf("without the grant: %+v, %v", off, err)
+	}
+	if err := svc.Reset(ctx, "m1"); err == nil {
+		t.Error("reset without the grant reported success")
+	}
+}
+
+// assertOnlyTheProjectsDigests checks the report has the project's insert, with
+// a cost, and none of the statements it must never return.
+func assertOnlyTheProjectsDigests(t *testing.T, ctx context.Context, svc *QueryStatsService) {
+	t.Helper()
 	report, err := svc.List(ctx, "m1", "total", 100)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +139,11 @@ func TestIntegration_SlowQueriesOnMySQLAreTheProjectDatabasesOnly(t *testing.T) 
 			t.Errorf("answered %q:\n%s", refused, text)
 		}
 	}
+}
 
+// assertResetClearsDigests resets the project's statistics and expects none left.
+func assertResetClearsDigests(t *testing.T, ctx context.Context, svc *QueryStatsService) {
+	t.Helper()
 	if err := svc.Reset(ctx, "m1"); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
@@ -129,17 +153,5 @@ func TestIntegration_SlowQueriesOnMySQLAreTheProjectDatabasesOnly(t *testing.T) 
 	}
 	if len(after.Queries) != 0 {
 		t.Errorf("reset left %+v", after.Queries)
-	}
-
-	// A login without the grant, as excalibase_app is on a project created before the feature.
-	mustExecMySQL(t, root, "CREATE USER 'ungranted'@'%' IDENTIFIED BY 'ungranted-pw' REQUIRE SSL; GRANT ALL ON shop.* TO 'ungranted'@'%'")
-	svc = NewQueryStatsService(statsProjects(inst), &fakeStatsDatabases{}, statsOpener{db: server.connect(t, "ungranted", "ungranted-pw", "shop", false)},
-		features.NewStatic(features.MySQL))
-	off, err := svc.List(ctx, "m1", "total", 10)
-	if err != nil || off.Enabled {
-		t.Errorf("without the grant: %+v, %v", off, err)
-	}
-	if err := svc.Reset(ctx, "m1"); err == nil {
-		t.Error("reset without the grant reported success")
 	}
 }

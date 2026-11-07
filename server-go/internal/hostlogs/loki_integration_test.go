@@ -75,6 +75,25 @@ func (downEngine) Logs(context.Context, string, int, time.Time) (string, error) 
 // through the project log search; each project finds only its own.
 func TestBundledLokiKeepsEachProjectsLinesApart(t *testing.T) {
 	lokiURL := startBundledLoki(t)
+	shipTwoProjects(t, lokiURL)
+	svc := searchService(t, lokiURL)
+
+	if got := searchUntilFound(svc, "proj-a", "marker"); !strings.Contains(got, "marker_a") || strings.Contains(got, "marker_b") {
+		t.Errorf("proj-a found %q", got)
+	}
+	if got := searchUntilFound(svc, "proj-b", "marker"); !strings.Contains(got, "marker_b") || strings.Contains(got, "marker_a") {
+		t.Errorf("proj-b found %q", got)
+	}
+	// A term shaped like a selector stays a literal filter on the project's own lines.
+	page, err := svc.SearchProjectLogs(context.Background(), "proj-a", service.LogSearch{Lines: 100, Term: `"} or {project_id="proj-b`, Since: time.Hour})
+	if err != nil || strings.Contains(page.Lines, "marker_b") {
+		t.Errorf("injected term found %q (%v)", page.Lines, err)
+	}
+}
+
+// shipTwoProjects pushes one error line per project into Loki.
+func shipTwoProjects(t *testing.T, lokiURL string) {
+	t.Helper()
 	at := time.Now().Add(-time.Minute)
 	engine := &fakeEngine{logs: map[string][]enginestats.LogLine{
 		"db-a": {{At: at, Text: `ERROR:  relation "marker_a" does not exist`}},
@@ -91,7 +110,11 @@ func TestBundledLokiKeepsEachProjectsLinesApart(t *testing.T) {
 			t.Fatalf("ship %s: %v", project, err)
 		}
 	}
+}
 
+// searchService answers log searches for the two projects from the Loki at lokiURL.
+func searchService(t *testing.T, lokiURL string) *service.ProvisioningService {
+	t.Helper()
 	store, err := storage.NewFileSystemStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -105,27 +128,17 @@ func TestBundledLokiKeepsEachProjectsLinesApart(t *testing.T) {
 	svc := service.NewProvisioningService(store, provisioner.NewFactory(), nil)
 	svc.SetHostLogStore(lokiURL)
 	svc.SetSingleHostLogs(downEngine{})
+	return svc
+}
 
-	search := func(project, term string) string {
-		var lines string
-		for i := 0; i < 30; i++ {
-			page, err := svc.SearchProjectLogs(context.Background(), project, service.LogSearch{Lines: 100, Term: term, Since: time.Hour})
-			if err == nil && page.Lines != "" {
-				return page.Lines
-			}
-			time.Sleep(time.Second)
+// searchUntilFound retries while Loki indexes what was pushed.
+func searchUntilFound(svc *service.ProvisioningService, project, term string) string {
+	for i := 0; i < 30; i++ {
+		page, err := svc.SearchProjectLogs(context.Background(), project, service.LogSearch{Lines: 100, Term: term, Since: time.Hour})
+		if err == nil && page.Lines != "" {
+			return page.Lines
 		}
-		return lines
+		time.Sleep(time.Second)
 	}
-	if got := search("proj-a", "marker"); !strings.Contains(got, "marker_a") || strings.Contains(got, "marker_b") {
-		t.Errorf("proj-a found %q", got)
-	}
-	if got := search("proj-b", "marker"); !strings.Contains(got, "marker_b") || strings.Contains(got, "marker_a") {
-		t.Errorf("proj-b found %q", got)
-	}
-	// A term shaped like a selector stays a literal filter on the project's own lines.
-	page, err := svc.SearchProjectLogs(context.Background(), "proj-a", service.LogSearch{Lines: 100, Term: `"} or {project_id="proj-b`, Since: time.Hour})
-	if err != nil || strings.Contains(page.Lines, "marker_b") {
-		t.Errorf("injected term found %q (%v)", page.Lines, err)
-	}
+	return ""
 }

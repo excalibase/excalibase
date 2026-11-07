@@ -7,6 +7,7 @@ package sitebuildstest
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"net/http"
 	"net/url"
@@ -58,6 +59,9 @@ func platformDB(t *testing.T) *postgres.Store {
 func startPlatformDB() (*postgres.Store, error) {
 	ctx := context.Background()
 	password := testutil.FixturePassword("sitebuilds-itest")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		return nil, err
+	}
 	container, err := pgmod.Run(ctx, "postgres:16-alpine", pgmod.WithDatabase("platform_test"), pgmod.WithUsername("platform"),
 		pgmod.WithPassword(password), testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
 			WithOccurrence(2).WithStartupTimeout(60*time.Second)))
