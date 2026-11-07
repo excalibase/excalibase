@@ -271,6 +271,7 @@ func dispatcherOptions(project, spool string, slots int) sitebuilds.DispatcherOp
 	return sitebuilds.DispatcherOptions{
 		Slots: slots, Holder: "replica-" + project, SpoolDir: spool, StatusPoll: 10 * time.Millisecond,
 		LogEvery: 10 * time.Millisecond, DeployRetry: 10 * time.Millisecond, Lease: 30 * time.Second,
+		PublishWait: time.Millisecond, RequeueDelay: time.Millisecond,
 		PendingGrace: 200 * time.Millisecond, ShutdownGrace: 50 * time.Millisecond,
 	}
 }

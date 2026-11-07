@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -433,6 +434,9 @@ func (f *fakeDockerClientForAdapter) ContainerState(context.Context, string) (pr
 func (f *fakeDockerClientForAdapter) ExecInContainerStdin(_ context.Context, _ string, cmd []string, stdin string) (string, error) {
 	f.execs = append(f.execs, cmd)
 	f.stdins = append(f.stdins, stdin)
+	if strings.Contains(stdin, pgroles.RoleSQLDoneMarker) {
+		return pgroles.RoleSQLDoneMarker, nil
+	}
 	if strings.Contains(strings.Join(cmd, " "), "pg_walfile_name") {
 		return f.walName + "\n", nil
 	}

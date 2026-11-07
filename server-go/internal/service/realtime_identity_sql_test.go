@@ -6,7 +6,7 @@ import (
 )
 
 func TestProjectRoleSQL_KeepsPublishedTablesAtFullIdentity(t *testing.T) {
-	sql := projectRoleSQL(projectRoleSpec{databaseName: "app", adminUsername: "app"}, projectRoleCredentials{}, "rt_pub")
+	sql := mustProjectRoleSQL(t, projectRoleSpec{databaseName: "app", adminUsername: "app"}, projectRoleCredentials{}, "rt_pub")
 	for _, want := range []string{
 		"DROP ROUTINE IF EXISTS excalibase.keep_realtime_identity();",
 		"CREATE EVENT TRIGGER excalibase_keep_realtime_identity ON ddl_command_end WHEN TAG IN ('ALTER TABLE')",

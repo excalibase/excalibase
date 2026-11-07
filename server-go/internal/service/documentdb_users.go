@@ -362,19 +362,19 @@ func clusterPrimary(ctx context.Context, client k8s.KubeClient, inst *domain.Dat
 // arguments land in the exec URL, which the API server audits.
 func (s *ProvisioningService) execMongoUserSQL(ctx context.Context, inst *domain.DatabaseInstance, primary, statement string) error {
 	psql := []string{"psql", "-U", "postgres", "-d", config.DocumentDBDatabase, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}
-	input := pgroles.PinnedSearchPath + statement + "\n"
+	input := pgroles.PinnedSearchPath + pgroles.QuietSessionSQL() + statement + "\n"
 	if inst.DeploymentMode == domain.ModeDocker {
 		if s.dockerClient == nil {
 			return ErrMongoUsersUnavailable
 		}
 		_, err := s.dockerClient.ExecInContainerStdin(ctx, primary, psql, input)
-		return err
+		return withoutVerifiers(err)
 	}
 	if s.k8sClient == nil {
 		return ErrMongoUsersUnavailable
 	}
 	_, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, primary, "postgres", psql, input)
-	return err
+	return withoutVerifiers(err)
 }
 
 func mongoUserVaultPrefix(projectID string) string {
@@ -395,6 +395,7 @@ func createMongoUserSQL(username, verifier string, role MongoUserRole) string {
 	for _, grant := range append([]string{config.DocumentDBMongoUsersGroup}, role.documentDBGrants()...) {
 		b.WriteString("EXECUTE format('GRANT %I TO %I', '" + grant + "', n); ")
 	}
+	b.WriteString(raiseWithoutContext)
 	return mongoUserBlock(username, b.String())
 }
 
@@ -413,7 +414,7 @@ const notAMongoUserGuard = "IF NOT " + isMongoUserSQL + " THEN RAISE EXCEPTION '
 
 func rotateMongoUserSQL(username, verifier string) string {
 	return mongoUserBlock(username, notAMongoUserGuard+
-		"EXECUTE format('ALTER ROLE %I WITH PASSWORD %L', n, "+sqlTextLiteral(verifier)+");")
+		"EXECUTE format('ALTER ROLE %I WITH PASSWORD %L', n, "+sqlTextLiteral(verifier)+"); "+raiseWithoutContext)
 }
 
 // dropMongoUserSQL drops the user if it exists. Anything it owns goes to the

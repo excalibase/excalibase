@@ -53,7 +53,7 @@ func newPlatformSchemaCaseOn(t *testing.T, pg *rolePostgres) *platformSchemaCase
 // startup reconcile all do, then logs every platform role in.
 func (c *platformSchemaCase) register(t *testing.T) {
 	t.Helper()
-	c.pg.psql(t, projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub"))
+	c.pg.psql(t, mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"))
 	c.app = c.pg.connect(t, roleApp, customerAppPassword)
 	c.scheduler = c.pg.connect(t, roleScheduler, platformSchedulerPassword)
 	c.authAdmin = c.pg.connect(t, roleAuthAdmin, platformAuthPassword)

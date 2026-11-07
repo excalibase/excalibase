@@ -94,12 +94,28 @@ func (f *FakeAppRunner) FailureMessage(status sitebuilds.RunStatus, _ *sitebuild
 type FakePublisher struct {
 	mu        sync.Mutex
 	published []sitebuilds.AppPublish
+	// Refuse, when set, may refuse a publish.
+	Refuse func(sitebuilds.AppPublish) error
 }
+
+// SetRefuse changes which publishes are refused.
+func (f *FakePublisher) SetRefuse(refuse func(sitebuilds.AppPublish) error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Refuse = refuse
+}
+
+func (f *FakePublisher) CheckCapacity(context.Context, int64) error { return nil }
 
 func (f *FakePublisher) PublishBuild(_ context.Context, publish sitebuilds.AppPublish) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.published = append(f.published, publish)
+	if f.Refuse != nil {
+		if err := f.Refuse(publish); err != nil {
+			return "", err
+		}
+	}
 	return "deploy-of-" + publish.BuildID, nil
 }
 
