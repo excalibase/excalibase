@@ -26,6 +26,9 @@ var statsServerArgs = []string{"-c", "shared_preload_libraries=pg_stat_statement
 func startStatsPostgres(t *testing.T) *rolePostgres {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pg, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("postgres"), postgres.WithPassword("p"),
 		testcontainers.WithCmd(append([]string{"postgres"}, statsServerArgs...)...),

@@ -91,6 +91,9 @@ func restartPostgres(ctx context.Context, t *testing.T, pgC testcontainers.Conta
 // pointed at it, and creates the named bucket. Returns the ready uploader.
 func newLocalStackUploader(ctx context.Context, t *testing.T, bucket string) *AWSS3Uploader {
 	t.Helper()
+	if err := imagepull.EnsureLocal(ctx, "localstack/localstack:3.7"); err != nil {
+		t.Fatal(err)
+	}
 	lsC, err := tclocalstack.Run(ctx, "localstack/localstack:3.7",
 		testcontainers.WithEnv(map[string]string{"SERVICES": "s3"}))
 	if err != nil {
