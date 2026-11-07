@@ -16,6 +16,8 @@ import (
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 )
 
 var hostilePasswords = map[string][3]string{
@@ -50,6 +52,9 @@ func startRolePostgres(t *testing.T) *rolePostgres {
 func startRolePostgresImage(t *testing.T, image string) *rolePostgres {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, image); err != nil {
+		t.Fatal(err)
+	}
 	pg, err := postgres.Run(ctx, image,
 		postgres.WithDatabase("app"),
 		postgres.WithUsername("postgres"),

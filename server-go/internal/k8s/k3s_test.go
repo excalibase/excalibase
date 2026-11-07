@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,9 @@ func TestK3sNamespaceAndSecret(t *testing.T) {
 
 	// Start k3s in Docker
 	t.Log("Starting k3s container...")
+	if err := imagepull.EnsureLocal(ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1")
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)
@@ -126,6 +130,9 @@ func TestK3sWithCNPGOperator(t *testing.T) {
 	ctx := context.Background()
 
 	t.Log("Starting k3s container...")
+	if err := imagepull.EnsureLocal(ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1")
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)

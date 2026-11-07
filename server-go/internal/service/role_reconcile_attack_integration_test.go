@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
@@ -367,6 +368,9 @@ func startCNPGRolePostgres(t *testing.T, major string) *rolePostgres {
 		t.Fatalf("no catalogue entry for Postgres %s", major)
 	}
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, image); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        image,

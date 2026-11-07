@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,6 +41,9 @@ func TestK3sHelmInstallUninstall(t *testing.T) {
 
 	// Start k3s
 	t.Log(testK3SStartMsg)
+	if err := imagepull.EnsureLocal(ctx, testK3SImage); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, testK3SImage)
 	if err != nil {
 		t.Fatalf(testK3SStartFmt, err)
@@ -141,6 +145,9 @@ func TestK3sHelmInstallWithOverrides(t *testing.T) {
 	}
 
 	t.Log(testK3SStartMsg)
+	if err := imagepull.EnsureLocal(ctx, testK3SImage); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, testK3SImage)
 	if err != nil {
 		t.Fatalf(testK3SStartFmt, err)
@@ -204,6 +211,9 @@ func TestK3sHelmInstallBadChart(t *testing.T) {
 	ctx := context.Background()
 
 	t.Log(testK3SStartMsg)
+	if err := imagepull.EnsureLocal(ctx, testK3SImage); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, testK3SImage)
 	if err != nil {
 		t.Fatalf(testK3SStartFmt, err)

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,9 @@ import (
 func setupSchedulerPG(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	c, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("sched_test"),
 		postgres.WithUsername("postgres"),

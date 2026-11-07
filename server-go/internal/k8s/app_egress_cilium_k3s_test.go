@@ -3,6 +3,7 @@
 package k8s
 
 import (
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"maps"
 	"net"
 	"os"
@@ -78,6 +79,9 @@ func (lab *egressLab) startCiliumClusterWith(t *testing.T, extra ...testcontaine
 		// The module waits for a node sync that never comes while no CNI is installed.
 		testcontainers.WithWaitStrategyAndDeadline(3*time.Minute, wait.ForLog("k3s is up and running").WithStartupTimeout(3*time.Minute)),
 	}, extra...)
+	if err := imagepull.EnsureLocal(lab.ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(lab.ctx, "rancher/k3s:v1.31.6-k3s1", options...)
 	// Registered before the error check: a container that failed to become ready still runs.
 	testcontainers.CleanupContainer(t, container)

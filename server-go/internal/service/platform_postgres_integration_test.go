@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"testing"
 	"time"
 
@@ -20,6 +21,9 @@ import (
 func startPlatformPostgres(ctx context.Context, t *testing.T) *pgstore.Store {
 	t.Helper()
 	pgPwd := testutil.FixturePassword("platform-int")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("platform"),
 		tcpg.WithUsername("platform"),
