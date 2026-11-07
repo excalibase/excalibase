@@ -143,6 +143,7 @@ SITES_GITHUB_API_URL=http://$SITE_FAKES:8080/gh
 SITES_GITHUB_WEB_URL=http://$SITE_FAKES:8080/gh
 SITES_GITHUB_APP_PRIVATE_KEY_FILE=/run/excalibase-github/app.pem
 SITES_BUILD_EGRESS_ALLOW=$SITE_FAKES:8080
+FEATURE_SITEPREVIEWS=true
 EOF
   printf 'services:\n  provisioning:\n    volumes:\n      - %s:/run/excalibase-github/app.pem:ro\n' "$W/github-app.pem" > "$W/sitebuilds.yml"
   P="$P -f $W/sitebuilds.yml"

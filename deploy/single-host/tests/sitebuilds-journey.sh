@@ -76,3 +76,49 @@ $DOCKER volume ls -q | grep -q "build-$BUILD" && ko "the build's work volume is 
 LOGB=$(c "${auth[@]}" "$S/$SITE/builds/$BUILD")
 echo "$LOGB" | grep -q 'ghs_smoke_clone' && ko "the clone token reached the build log" || ok "the clone token is not in the build log"
 kill "$HOST_LISTENER" 2>/dev/null
+
+echo "== branch previews of a site on a single host"
+# Previews are off until a developer picks a mode; a push to another branch then gets its own link.
+pv=$(c "${auth[@]}" -H 'Content-Type: application/json' -X PUT "$S/$SITE/previews/mode" -d '{"mode":"branches"}' -w ' %{http_code}')
+case "$pv" in *" 200") ok "previews switched to branches" ;; *) ko "preview mode: ${pv:0:300}" ;; esac
+BRANCH=feat/preview
+PSHA=$($DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_sha | json 'd["preview"]')
+send_push() { # deleted flag, sha, delivery suffix
+  local body sig
+  body=$(printf '{"ref":"refs/heads/%s","after":"%s","deleted":%s,"installation":{"id":4242},"repository":{"id":777,"full_name":"acme/site"},"head_commit":{"message":"preview change"}}' "$BRANCH" "$2" "$1")
+  sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SITE_WEBHOOK_SECRET" | sed 's/^.* //')
+  c -o /dev/null -w '%{http_code}' -X POST "https://studio.localhost:$PORT/api/sites/github/webhook" -H 'Content-Type: application/json' \
+    -H 'X-GitHub-Event: push' -H "X-GitHub-Delivery: smoke-$3-$(date +%s)" -H "X-Hub-Signature-256: sha256=$sig" --data-binary "$body"
+}
+[ "$(send_push false "$PSHA" preview)" = 202 ] && ok "signed push to $BRANCH accepted" || ko "preview push not accepted"
+pst=; PURL=; PID_PV=
+for i in $(seq 200); do
+  PV=$(c "${auth[@]}" "$S/$SITE/previews")
+  pst=$(echo "$PV" | json '(d.get("previews") or [{}])[0].get("status","")')
+  PURL=$(echo "$PV" | json '(d.get("previews") or [{}])[0].get("hostname","")')
+  PID_PV=$(echo "$PV" | json '(d.get("previews") or [{}])[0].get("id","")')
+  case "$pst" in READY|FAILED) break ;; esac
+  sleep 3
+done
+[ "$pst" = READY ] && ok "the branch preview is ready" || ko "preview $pst: $(c "${auth[@]}" "$S/$SITE/previews" | head -c 600)"
+case "$PURL" in "smoke-site--"*".sites.test") ok "the preview host is the site's name and a random label" ;; *) ko "preview host '$PURL'" ;; esac
+label=${PURL#smoke-site--}; label=${label%%.*}
+[ ${#label} = 26 ] && ok "the label is 26 characters" || ko "label '$label'"
+LIVE_AFTER=$(c "${auth[@]}" "$S/$SITE" | json 'd.get("liveDeployId","")')
+[ "$LIVE_AFTER" = "$LIVE" ] && ok "production stayed on its own deploy" || ko "live deploy moved from '$LIVE' to '$LIVE_AFTER'"
+CF=$($DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_cf_calls)
+echo "$CF" | grep -q "PUT .*/scripts/site-pv-$PID_PV" && ok "the preview went to its own script" || ko "no preview script upload: ${CF:0:600}"
+
+# The branch goes away on the host; the delete event removes the preview and its script.
+$DOCKER exec "$SITE_FAKES" git -C "/repos/acme/site.git" branch -D "$BRANCH" >/dev/null 2>&1
+[ "$(send_push true "0000000000000000000000000000000000000000" delete)" = 202 ] && ok "signed branch delete accepted" || ko "delete push not accepted"
+left=x
+for i in $(seq 60); do
+  left=$(c "${auth[@]}" "$S/$SITE/previews" | json 'len(d.get("previews") or [])')
+  [ "$left" = 0 ] && break
+  sleep 2
+done
+[ "$left" = 0 ] && ok "the preview is gone with its branch" || ko "$left previews left after the branch was deleted"
+CF=$($DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_cf_calls)
+echo "$CF" | grep -q "DELETE .*/scripts/site-pv-$PID_PV" && ok "the preview's script was deleted" || ko "no script delete: ${CF: -600}"
+c "${auth[@]}" "$S/$SITE" | json 'd.get("liveDeployId","")' | grep -q "^$LIVE$" && ok "production is still live after the cleanup" || ko "production deploy changed by the cleanup"
