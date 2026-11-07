@@ -3,7 +3,7 @@ import { useSiteBuild, useSiteBuilds, type SiteBuild } from '../../api/siteBuild
 import { formatWhen, type Tone } from '../containers/appCopy';
 import { Spinner, ToneBadge, secondaryButton } from '../containers/ContainerBits';
 
-export function buildStatus(build: SiteBuild): { label: string; tone: Tone } {
+export function buildStatus(build: Pick<SiteBuild, 'status'>): { label: string; tone: Tone } {
   switch (build.status) {
     case 'QUEUED':
       return { label: 'Queued', tone: 'neutral' };
