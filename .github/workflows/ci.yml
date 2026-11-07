@@ -278,7 +278,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npx tsc --noEmit
+      - run: npx tsc -b --noEmit
 
   frontend-test:
     name: Frontend Unit (vitest)
