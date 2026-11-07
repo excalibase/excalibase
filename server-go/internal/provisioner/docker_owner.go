@@ -69,7 +69,7 @@ func (p *DockerPostgreSQLProvisioner) createOwner(ctx context.Context, container
 	if err != nil {
 		return "", err
 	}
-	if _, err := p.docker.ExecInContainerStdin(ctx, containerID, psqlScript(database), statement); err != nil {
+	if _, err := p.docker.ExecInContainerStdin(ctx, containerID, psqlScript(database), pgroles.QuietSessionSQL()+statement); err != nil {
 		return "", fmt.Errorf("create the owner login %s: %w", owner, err)
 	}
 	return password, nil

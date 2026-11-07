@@ -5,6 +5,7 @@ package logdelete
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -45,6 +46,9 @@ func startSingleHostLoki(t *testing.T) string {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, lokiImage); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        lokiImage,

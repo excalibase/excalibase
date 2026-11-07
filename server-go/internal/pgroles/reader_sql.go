@@ -46,10 +46,13 @@ var largeObjectCreators = []string{
 // shares a schema either of them creates. Its sessions start read-only and an
 // event trigger refuses it any DDL, which Postgres 14 would otherwise allow
 // in public through PUBLIC's CREATE.
-func ReaderRoleSQL(owner, password string) string {
+//
+// verifier is the SCRAM verifier of the reader's password, never the password:
+// a failed statement goes to the server log in full.
+func ReaderRoleSQL(owner, verifier string) string {
 	return strings.NewReplacer(
 		"{{READER}}", quoteLiteral(ReaderRole),
-		"{{PASSWORD}}", textLiteral(password),
+		"{{VERIFIER}}", textLiteral(verifier),
 		"{{CREATORS}}", "ARRAY["+textLiteral(owner)+", "+quoteLiteral(appRole)+"]",
 		"{{USER_SCHEMA}}", UserSchemaPredicate,
 		"{{SHARE_TRIGGER}}", readerShareTrigger,
@@ -102,10 +105,13 @@ const readerRoleTemplate = `
 DO $excalibase_reader_role$
 BEGIN
   IF to_regrole({{READER}}) IS NULL THEN
-    EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L', {{READER}}, {{PASSWORD}});
+    EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L', {{READER}}, {{VERIFIER}});
   END IF;
   EXECUTE format('ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS', {{READER}});
   EXECUTE format('ALTER ROLE %I SET default_transaction_read_only = on', {{READER}});
+-- Raised again without its context, which quotes the statement and so the verifier.
+EXCEPTION WHEN OTHERS OR query_canceled THEN
+  RAISE EXCEPTION USING ERRCODE = SQLSTATE, MESSAGE = SQLERRM;
 END
 $excalibase_reader_role$;
 

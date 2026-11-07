@@ -5,6 +5,7 @@ package schema
 import (
 	"context"
 	"database/sql"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net/url"
 	"testing"
 	"time"
@@ -17,6 +18,9 @@ import (
 
 func TestIntegration_CreateRoleStoresAHostilePasswordVerbatim(t *testing.T) {
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pg, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("superuser"),

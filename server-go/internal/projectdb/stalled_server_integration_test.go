@@ -5,6 +5,7 @@ package projectdb
 import (
 	"context"
 	"database/sql"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net"
 	"strconv"
 	"sync"
@@ -173,6 +174,9 @@ func failsFastThenReconnects(t *testing.T, proxy *stallingProxy, db *sql.DB, fai
 func startPlainPostgres(t *testing.T) (host, port string) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("excalibase_app"), postgres.WithPassword("app-pw"),
 		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").

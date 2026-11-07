@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"os"
 	"os/exec"
@@ -51,6 +52,9 @@ func TestDockerBackupAdapter_R2_E2E(t *testing.T) {
 
 	// --- Postgres container -------------------------------------------------
 	pgPwd := testutil.FixturePassword("pg-bk-r2")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("app"),
 		tcpg.WithUsername("postgres"),

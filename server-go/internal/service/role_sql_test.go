@@ -128,7 +128,7 @@ func TestBuildProjectRoleSQL_NeverEmbedsSecretText(t *testing.T) {
 	hostile := []string{"a$$; SELECT 1; DO $$ BEGIN", `x\'; --`, "$t$'\"", "pw'd"}
 	for _, pw := range hostile {
 		sql := BuildProjectRoleSQL(pw, pw, pw, "app", "cdc_watcher_pub") +
-			BuildProjectRoleResetSQL([]RolePassword{{Role: "owner$$", Password: pw}})
+			BuildProjectRoleResetSQL([]RoleVerifier{{Role: "owner$$", Verifier: pw}})
 		if strings.Contains(sql, pw) {
 			t.Errorf("password %q appears verbatim in the SQL", pw)
 		}
@@ -167,7 +167,7 @@ func TestBuildProjectRoleSQL_WatcherWritesOnlyItsOwnSchema(t *testing.T) {
 func TestProjectRoleSQL_InstallsTheCustomerRoleFunctionsForTheOwner(t *testing.T) {
 	spec := projectRoleSpec{databaseName: "app", adminUsername: "owner_x", resetPasswords: true}
 	creds := projectRoleCredentials{authPassword: "a", appPassword: "b", watcherPassword: "c"}
-	sql := projectRoleSQL(spec, creds, "pub")
+	sql := mustProjectRoleSQL(t, spec, creds, "pub")
 	functions := strings.Index(sql, pgroles.CustomerRoleSQL("owner_x"))
 	if functions < 0 {
 		t.Fatal("the customer role functions are not installed")
@@ -208,7 +208,7 @@ func TestBuildProjectRoleSQL_PlatformRoleMayCreateSchemas(t *testing.T) {
 func TestProjectRoleSQL_SharesPlatformTablesWithTheOwner(t *testing.T) {
 	spec := projectRoleSpec{databaseName: "app", adminUsername: "owner_x"}
 	creds := projectRoleCredentials{authPassword: "a", appPassword: "b", watcherPassword: "c"}
-	sql := projectRoleSQL(spec, creds, "pub")
+	sql := mustProjectRoleSQL(t, spec, creds, "pub")
 	access := strings.Index(sql, pgroles.OwnerAccessSQL("owner_x"))
 	if access < 0 {
 		t.Fatal("owner access is not installed")

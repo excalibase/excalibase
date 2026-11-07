@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"os/exec"
 	"strings"
 	"testing"
@@ -52,6 +53,9 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 
 	// --- Source postgres + seed -------------------------------------------
 	pgPwd := testutil.FixturePassword("pg-restore-int")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("app"),
 		tcpg.WithUsername("postgres"),
@@ -190,6 +194,9 @@ func TestDockerBackupAdapter_RestoreRejectedCredentialsE2E(t *testing.T) {
 	defer cancel()
 
 	pgPwd := testutil.FixturePassword("pg-restore-reject")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("app"),
 		tcpg.WithUsername("postgres"),

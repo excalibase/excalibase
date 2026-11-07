@@ -301,12 +301,13 @@ func (s *ProvisioningService) resumePendingPassword(pendingPath string, filed bo
 }
 
 // alterRolePassword sets one role's password in the project's database.
-// Re-running it with the same password is a no-op, which is what makes a
-// retried rotation safe.
+// Re-running it with the same password leaves that password working (only the
+// salt changes), which is what makes a retried rotation safe.
 //
-// The statement carries the password and a failing psql echoes the statement
-// it could not run, so the error is scrubbed of the value before it can reach
-// a log line or an API response.
+// The statement carries the password's SCRAM verifier, never the password,
+// because Postgres logs a failed statement. A failing psql can echo what it
+// could not run, so the error is scrubbed of the verifier before it can reach a
+// log line or an API response.
 // The statement is streamed on stdin, never passed as an exec argument: the
 // client puts every argument into the exec request's URL, where the API
 // server records it in its audit log.
@@ -318,9 +319,12 @@ func (s *ProvisioningService) alterRolePassword(ctx context.Context, inst *domai
 		}
 		return mysql.SetUserPassword(ctx, inst.Namespace, inst.ProjectID, username, password)
 	}
-	sqlText := pgroles.PinnedSearchPath + alterRolePasswordSQL(username, password) + "\n"
+	verifier, err := newScramVerifier(password)
+	if err != nil {
+		return fmt.Errorf("hash the password of %s: %w", username, err)
+	}
+	sqlText := pgroles.PinnedSearchPath + pgroles.QuietSessionSQL() + alterRolePasswordSQL(username, verifier) + "\n"
 	psql := []string{"psql", "-U", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}
-	var err error
 	switch {
 	case inst.DeploymentMode == domain.ModeDocker && s.dockerClient != nil:
 		_, err = s.dockerClient.ExecInContainerStdin(ctx, inst.Namespace, psql, sqlText)
@@ -330,7 +334,7 @@ func (s *ProvisioningService) alterRolePassword(ctx context.Context, inst *domai
 		return ErrCredentialRotationUnavailable
 	}
 	if err != nil {
-		return errors.New(redactSecret(err.Error(), password))
+		return withoutVerifiers(errors.New(redactSecret(err.Error(), password)))
 	}
 	return nil
 }

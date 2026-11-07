@@ -115,9 +115,16 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	if err != nil {
 		return err
 	}
-	roleSQL := projectRoleSQL(spec, creds, s.publicationName)
+	roleSQL, err := projectRoleSQL(spec, creds, s.publicationName)
+	if err != nil {
+		return err
+	}
 	if mintScheduler {
-		roleSQL += BuildProjectRoleResetSQL([]RolePassword{{Role: roleScheduler, Password: creds.schedulerPassword}})
+		scheduler, err := roleVerifiers([]RolePassword{{Role: roleScheduler, Password: creds.schedulerPassword}})
+		if err != nil {
+			return err
+		}
+		roleSQL += BuildProjectRoleResetSQL(scheduler)
 	}
 	exec := s.roleSQLExecer(spec.namespace, spec.projectID+primaryPodSuffix)
 	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL); err != nil {
