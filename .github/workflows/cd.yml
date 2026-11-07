@@ -17,7 +17,7 @@ env:
 jobs:
   docker:
     name: Build & Push Docker Image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # On workflow_run, only when CI succeeded. On tag push, always.
     if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
 
@@ -75,7 +75,7 @@ jobs:
 
   studio:
     name: Build & Push Studio Image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Same gate as provisioning: after CI on main, or on any version tag.
     if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
 
@@ -133,7 +133,7 @@ jobs:
 
   deno-runtime:
     name: Build & Push Deno Runtime Image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Same gate as provisioning: after CI on main, or on any version tag.
     if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
 
