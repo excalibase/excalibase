@@ -96,17 +96,17 @@ func startFailureLab(t *testing.T) *failureLab {
 	backup.installBackupStack(t)
 	doc := backup.documentDBLab
 	store := pgstore.New(t)
-	real, err := vault.NewWithStore(vault.NewPostgresStore(store.DB()))
+	platformVault, err := vault.NewWithStore(vault.NewPostgresStore(store.DB()))
 	if err != nil {
 		t.Fatalf("vault: %v", err)
 	}
-	init, err := real.Init(1, 1)
+	init, err := platformVault.Init(1, 1)
 	if err != nil {
 		t.Fatalf("vault init: %v", err)
 	}
 	lab := &failureLab{backup: backup, doc: doc, kube: &faultyKube{KubeClient: doc.client}, store: store,
-		vault: &sealTimedVault{Vault: real}, share: init.Shares[0], orgs: fakestore.NewOrgs(), ctx: doc.ctx}
-	if real.Sealed() {
+		vault: &sealTimedVault{Vault: platformVault}, share: init.Shares[0], orgs: fakestore.NewOrgs(), ctx: doc.ctx}
+	if platformVault.Sealed() {
 		lab.unseal(t)
 	}
 	lab.svc = NewProvisioningService(store, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(lab.kube, "")), lab.kube)
@@ -608,7 +608,7 @@ func failureRestoreDeleteStoppedBySeal(t *testing.T, lab *failureLab) {
 		}
 		return true
 	})
-	if got := lab.row(t, id); got == nil {
+	if lab.row(t, id) == nil {
 		t.Fatal("the sweep finished before the test could seal")
 	}
 	// The guard reads open; the real seal lands before the delete's vault step.
