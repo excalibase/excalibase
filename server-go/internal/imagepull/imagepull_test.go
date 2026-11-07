@@ -117,6 +117,7 @@ func TestEnsure_DoesNotRetryARefusalThatWillNotChange(t *testing.T) {
 
 func TestEnsureLocal_PullsThroughTheDaemonTheEnvironmentNames(t *testing.T) {
 	ryukOnce = sync.Once{}
+	t.Setenv("HOME", t.TempDir())
 	var pulled []string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_ping", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -171,21 +172,77 @@ func TestEnsure_FailsOnceOnARefusalRetryingCannotChange(t *testing.T) {
 	}
 }
 
-func TestDockerHost_TakesTheEnvironmentThenTestcontainersProperties(t *testing.T) {
+func TestDockerHost_FollowsTestcontainersOrder(t *testing.T) {
+	// testcontainers v0.42.0 core.extractDockerHost: tc.host, DOCKER_HOST,
+	// the default socket when it exists, then docker.host.
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, ".testcontainers.properties"), []byte("# c\ndocker.host=unix:///custom/docker.sock\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".testcontainers.properties"), []byte("# c\ntc.host=tcp://tc:1\ndocker.host=unix:///custom/docker.sock\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	onlyDockerHost := t.TempDir()
+	if err := os.WriteFile(filepath.Join(onlyDockerHost, ".testcontainers.properties"), []byte("docker.host=unix:///custom/docker.sock\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := func(values map[string]string) func(string) string {
 		return func(key string) string { return values[key] }
 	}
-	if got := dockerHost(env(map[string]string{"DOCKER_HOST": "tcp://h:2375"}), home); got != "tcp://h:2375" {
-		t.Errorf("DOCKER_HOST must win, got %q", got)
+	socketThere := func(string) bool { return true }
+	socketGone := func(string) bool { return false }
+	cases := []struct {
+		name   string
+		env    map[string]string
+		home   string
+		socket func(string) bool
+		want   string
+	}{
+		{"tc.host beats DOCKER_HOST", map[string]string{"DOCKER_HOST": "tcp://h:2375"}, home, socketThere, "tcp://tc:1"},
+		{"DOCKER_HOST beats the socket", map[string]string{"DOCKER_HOST": "tcp://h:2375"}, onlyDockerHost, socketThere, "tcp://h:2375"},
+		{"the default socket beats docker.host", nil, onlyDockerHost, socketThere, ""},
+		{"docker.host when there is no socket", nil, onlyDockerHost, socketGone, "unix:///custom/docker.sock"},
+		{"nothing configured", nil, t.TempDir(), socketGone, ""},
 	}
-	if got := dockerHost(env(nil), home); got != "unix:///custom/docker.sock" {
-		t.Errorf("properties file docker.host, got %q", got)
+	for _, tc := range cases {
+		if got := dockerHost(env(tc.env), tc.home, tc.socket); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
 	}
-	if got := dockerHost(env(nil), t.TempDir()); got != "" {
-		t.Errorf("nothing configured must leave the client default, got %q", got)
+}
+
+func TestPermanent_ALocalPermissionErrorIsNotARegistryRefusal(t *testing.T) {
+	local := errors.New("Cannot connect: dial unix /var/run/docker.sock: connect: permission denied")
+	if permanent(local) {
+		t.Error("a local socket permission error must not be reported as a registry refusal")
+	}
+	if !permanent(errors.New("pull access denied for x, repository does not exist")) {
+		t.Error("a registry denial is a refusal")
+	}
+}
+
+func TestRyukDisabled_ReadsEnvironmentAndPropertiesLikeTestcontainers(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".testcontainers.properties"), []byte("ryuk.disabled=true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := func(values map[string]string) func(string) string {
+		return func(key string) string { return values[key] }
+	}
+	cases := []struct {
+		name string
+		env  map[string]string
+		home string
+		want bool
+	}{
+		{"env true", map[string]string{"TESTCONTAINERS_RYUK_DISABLED": "true"}, t.TempDir(), true},
+		{"properties true", nil, home, true},
+		{"env false overrides properties true", map[string]string{"TESTCONTAINERS_RYUK_DISABLED": "false"}, home, false},
+		// v0.42.0 config.read sets RyukDisabled = (value == "true") for any boolean value,
+		// so "1" does not disable the reaper there and it still has to be pulled.
+		{"env 1 does not disable it", map[string]string{"TESTCONTAINERS_RYUK_DISABLED": "1"}, t.TempDir(), false},
+		{"nothing set", nil, t.TempDir(), false},
+	}
+	for _, tc := range cases {
+		if got := ryukDisabled(env(tc.env), tc.home); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

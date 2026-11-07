@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -93,7 +94,8 @@ func permanent(err error) bool {
 		errdefs.IsNotFound(err) || errdefs.IsResourceExhausted(err) {
 		return true
 	}
-	text := strings.ToLower(err.Error())
+	// A refused socket ("permission denied") is the local daemon, not a registry.
+	text := strings.ReplaceAll(strings.ToLower(err.Error()), "permission denied", "")
 	for _, marker := range []string{"toomanyrequests", "too many requests", "manifest unknown", "unauthorized", "denied", "name unknown"} {
 		if strings.Contains(text, marker) {
 			return true
@@ -131,7 +133,7 @@ var ryukOnce sync.Once
 // not hold yet. The first call also pre-pulls the reaper image.
 func EnsureLocal(ctx context.Context, ref string) error {
 	options := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
-	if host := dockerHost(os.Getenv, os.Getenv("HOME")); host != "" {
+	if host := dockerHost(os.Getenv, os.Getenv("HOME"), pathExists); host != "" {
 		options = append(options, client.WithHost(host))
 	}
 	engine, err := client.NewClientWithOpts(options...)
@@ -145,7 +147,7 @@ func EnsureLocal(ctx context.Context, ref string) error {
 		log.Printf("imagepull: docker daemon unreachable (%v); %s is left to testcontainers", err, ref)
 		return nil
 	}
-	if os.Getenv("TESTCONTAINERS_RYUK_DISABLED") != "true" {
+	if !ryukDisabled(os.Getenv, os.Getenv("HOME")) {
 		ryukOnce.Do(func() {
 			if err := Ensure(ctx, engine, ryukImage, 3, 5*time.Second); err != nil {
 				log.Printf("imagepull: %v", err)
@@ -155,21 +157,57 @@ func EnsureLocal(ctx context.Context, ref string) error {
 	return Ensure(ctx, engine, ref, 3, 5*time.Second)
 }
 
-// dockerHost is the daemon address testcontainers would use that the Docker
-// client's environment handling does not know: DOCKER_HOST first, then the
-// docker.host of ~/.testcontainers.properties. Empty leaves the client default.
-func dockerHost(env func(string) string, home string) string {
-	if host := env("DOCKER_HOST"); host != "" {
-		return host
-	}
-	body, err := os.ReadFile(filepath.Join(home, ".testcontainers.properties"))
-	if err != nil {
+// socketPath is the default daemon socket testcontainers looks for.
+const socketPath = "/var/run/docker.sock"
+
+// dockerHost is the daemon address testcontainers v0.42.0 would use, in its
+// order (core.extractDockerHost): tc.host from ~/.testcontainers.properties,
+// DOCKER_HOST, the default socket when it exists, then docker.host from the
+// properties. Empty leaves the Docker client's own default, which is the socket.
+func dockerHost(env func(string) string, home string, exists func(string) bool) string {
+	properties := readProperties(home)
+	switch {
+	case properties["tc.host"] != "":
+		return properties["tc.host"]
+	case env("DOCKER_HOST") != "":
+		return env("DOCKER_HOST")
+	case exists(socketPath):
 		return ""
+	default:
+		return properties["docker.host"]
 	}
-	for _, line := range strings.Split(string(body), "\n") {
-		if key, value, found := strings.Cut(strings.TrimSpace(line), "="); found && strings.TrimSpace(key) == "docker.host" {
-			return strings.TrimSpace(value)
+}
+
+// ryukDisabled mirrors testcontainers v0.42.0 config.read: ryuk.disabled from
+// the properties file, then any boolean TESTCONTAINERS_RYUK_DISABLED replaces it
+// with whether the text is exactly "true" (so "1" does not disable the reaper).
+func ryukDisabled(env func(string) string, home string) bool {
+	disabled, _ := strconv.ParseBool(readProperties(home)["ryuk.disabled"])
+	if value := env("TESTCONTAINERS_RYUK_DISABLED"); value != "" {
+		if _, err := strconv.ParseBool(value); err == nil {
+			disabled = value == "true"
 		}
 	}
-	return ""
+	return disabled
+}
+
+// readProperties reads ~/.testcontainers.properties as key=value lines.
+func readProperties(home string) map[string]string {
+	properties := map[string]string{}
+	body, err := os.ReadFile(filepath.Join(home, ".testcontainers.properties"))
+	if err != nil {
+		return properties
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if key, value, found := strings.Cut(line, "="); found && !strings.HasPrefix(line, "#") {
+			properties[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	return properties
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
