@@ -201,4 +201,11 @@ for want in 'SITES_GIT_BUILDS_ENABLED: "true"' 'FEATURE_SINGLEHOSTBUILDS: "true"
   'SITES_BUILD_EGRESS_IMAGE: docker.io/excalibase/provisioning:9.9.9' 'SITES_GITHUB_API_URL: https://api.github.com'; do
   printf '%s\n' "$out" | grep -qF "$want" || { echo "site build setting does not reach provisioning: $want" >&2; exit 1; }
 done
+# Each deny list reaches provisioning under its own name, and neither stands in for the other (EXC-547).
+out=$(render APP_EGRESS_EXTRA_DENY_CIDRS=198.51.100.1/32)
+printf '%s\n' "$out" | grep -qF 'APP_EGRESS_EXTRA_DENY_CIDRS: 198.51.100.1/32' || { echo "the apps' list does not reach provisioning" >&2; exit 1; }
+printf '%s\n' "$out" | grep -qF 'BUILD_EGRESS_EXTRA_DENY_CIDRS: ""' || { echo "the apps' list stood in for the builds'" >&2; exit 1; }
+out=$(render BUILD_EGRESS_EXTRA_DENY_CIDRS=203.0.113.1/32)
+printf '%s\n' "$out" | grep -qF 'BUILD_EGRESS_EXTRA_DENY_CIDRS: 203.0.113.1/32' || { echo "the builds' list does not reach provisioning" >&2; exit 1; }
+printf '%s\n' "$out" | grep -qF 'APP_EGRESS_EXTRA_DENY_CIDRS: ""' || { echo "the builds' list stood in for the apps'" >&2; exit 1; }
 echo "single-host site build settings ok"

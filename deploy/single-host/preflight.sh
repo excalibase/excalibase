@@ -62,6 +62,19 @@ if [ "${FEATURE_AUTHHOOKS:-}" = true ]; then
   fi
 fi
 
+# Git builds run untrusted code (EXC-547): the chart requires their list and so
+# does this. IPv4 only, as the builds' policy has no IPv6 rule to deny from.
+if [ "${SITES_GIT_BUILDS_ENABLED:-}" = true ]; then
+  ipv4='^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/([1-9]|[12][0-9]|3[0-2])$'
+  entries=$(printf '%s' "${BUILD_EGRESS_EXTRA_DENY_CIDRS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' || true)
+  invalid=$(printf '%s\n' "$entries" | grep -v '^$' | grep -Ev "$ipv4" || true)
+  if [ -z "$entries" ]; then
+    complain "SITES_GIT_BUILDS_ENABLED needs BUILD_EGRESS_EXTRA_DENY_CIDRS: the host's own public addresses, comma-separated; APP_EGRESS_EXTRA_DENY_CIDRS does not apply to builds"
+  elif [ -n "$invalid" ]; then
+    complain "BUILD_EGRESS_EXTRA_DENY_CIDRS must be comma-separated IPv4 CIDRs such as 203.0.113.7/32; refused: $(printf '%s' "$invalid" | tr '\n' ' ')"
+  fi
+fi
+
 # Log drains (EXC-658): the forwarder's token unlocks every drain's key.
 if [ "${FEATURE_LOGDRAINS:-}" = true ]; then
   check_secret LOG_FORWARDER_TOKEN "${LOG_FORWARDER_TOKEN:-}"
