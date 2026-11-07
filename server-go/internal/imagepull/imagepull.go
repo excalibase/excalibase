@@ -13,6 +13,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/containerd/errdefs"
@@ -68,7 +72,7 @@ func Ensure(ctx context.Context, engine Engine, ref string, attempts int, pause 
 		}
 		previous = last
 		if permanent(last) {
-			return fmt.Errorf("pull %s: %w", ref, last)
+			return fmt.Errorf("pull %s: registry refused, not retrying: %w", ref, last)
 		}
 		if attempt == attempts {
 			break
@@ -82,9 +86,20 @@ func Ensure(ctx context.Context, engine Engine, ref string, attempts int, pause 
 	return fmt.Errorf("pull %s after %d attempts: %w", ref, attempts, last)
 }
 
-// permanent is a refusal that asking again will not change.
+// permanent is a refusal that asking again will not change, or will only make
+// worse: bad credentials, a missing image, and a registry that is throttling.
 func permanent(err error) bool {
-	return errdefs.IsUnauthorized(err) || errdefs.IsPermissionDenied(err) || errdefs.IsInvalidArgument(err) || errdefs.IsNotFound(err)
+	if errdefs.IsUnauthorized(err) || errdefs.IsPermissionDenied(err) || errdefs.IsInvalidArgument(err) ||
+		errdefs.IsNotFound(err) || errdefs.IsResourceExhausted(err) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{"toomanyrequests", "too many requests", "manifest unknown", "unauthorized", "denied", "name unknown"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmpty(values ...string) string {
@@ -105,19 +120,56 @@ func pullOnce(ctx context.Context, engine Engine, ref string) error {
 	return Drain(stream)
 }
 
-// EnsureLocal is Ensure against the engine the environment names
-// (DOCKER_HOST, else the default socket), for integration tests that start a
-// container from an image the engine may not hold yet.
+// ryukImage is the reaper container testcontainers starts before the first
+// container of a run; it pulls it through the same path that drops failures.
+const ryukImage = "testcontainers/ryuk:0.13.0"
+
+var ryukOnce sync.Once
+
+// EnsureLocal is Ensure against the engine the tests will use (see dockerHost),
+// for integration tests that start a container from an image the engine may
+// not hold yet. The first call also pre-pulls the reaper image.
 func EnsureLocal(ctx context.Context, ref string) error {
-	engine, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	options := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	if host := dockerHost(os.Getenv, os.Getenv("HOME")); host != "" {
+		options = append(options, client.WithHost(host))
+	}
+	engine, err := client.NewClientWithOpts(options...)
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
 	defer engine.Close()
 	if _, err := engine.Ping(ctx); err != nil {
-		// No daemon: leave it to the container library, which reports or skips
-		// as the test already did.
+		// No daemon: leave the start to the container library, which reports
+		// or skips as the test already did. Said out loud so it is not a mystery.
+		log.Printf("imagepull: docker daemon unreachable (%v); %s is left to testcontainers", err, ref)
 		return nil
 	}
+	if os.Getenv("TESTCONTAINERS_RYUK_DISABLED") != "true" {
+		ryukOnce.Do(func() {
+			if err := Ensure(ctx, engine, ryukImage, 3, 5*time.Second); err != nil {
+				log.Printf("imagepull: %v", err)
+			}
+		})
+	}
 	return Ensure(ctx, engine, ref, 3, 5*time.Second)
+}
+
+// dockerHost is the daemon address testcontainers would use that the Docker
+// client's environment handling does not know: DOCKER_HOST first, then the
+// docker.host of ~/.testcontainers.properties. Empty leaves the client default.
+func dockerHost(env func(string) string, home string) string {
+	if host := env("DOCKER_HOST"); host != "" {
+		return host
+	}
+	body, err := os.ReadFile(filepath.Join(home, ".testcontainers.properties"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		if key, value, found := strings.Cut(strings.TrimSpace(line), "="); found && strings.TrimSpace(key) == "docker.host" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

@@ -7,7 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,9 +88,9 @@ func TestEnsure_RetriesAPullThatFailedInTheStream(t *testing.T) {
 }
 
 func TestEnsure_GivesUpAfterTheAttempts(t *testing.T) {
-	engine := &fakeEngine{pullErrs: []error{errors.New("denied"), errors.New("denied"), errors.New("denied")}}
+	engine := &fakeEngine{pullErrs: []error{errors.New("connection reset"), errors.New("connection reset"), errors.New("connection reset")}}
 	err := Ensure(context.Background(), engine, "postgres:16", 3, time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "denied") {
+	if err == nil || !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("want the last pull error, got %v", err)
 	}
 	if len(engine.pulls) != 3 {
@@ -113,6 +116,7 @@ func TestEnsure_DoesNotRetryARefusalThatWillNotChange(t *testing.T) {
 }
 
 func TestEnsureLocal_PullsThroughTheDaemonTheEnvironmentNames(t *testing.T) {
+	ryukOnce = sync.Once{}
 	var pulled []string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_ping", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -133,8 +137,8 @@ func TestEnsureLocal_PullsThroughTheDaemonTheEnvironmentNames(t *testing.T) {
 	if err := EnsureLocal(context.Background(), "postgres:16"); err != nil {
 		t.Fatal(err)
 	}
-	if len(pulled) != 1 {
-		t.Fatalf("pulled %v, want one pull", pulled)
+	if len(pulled) != 2 || !strings.Contains(pulled[0], "ryuk") || !strings.Contains(pulled[1], "postgres") {
+		t.Fatalf("pulled %v, want the reaper image then the requested one", pulled)
 	}
 }
 
@@ -142,5 +146,46 @@ func TestEnsureLocal_LeavesAMissingDaemonToTheCaller(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
 	if err := EnsureLocal(context.Background(), "postgres:16"); err != nil {
 		t.Fatalf("no daemon is not this package's failure: %v", err)
+	}
+}
+
+func TestEnsure_FailsOnceOnARefusalRetryingCannotChange(t *testing.T) {
+	cases := map[string]*fakeEngine{
+		"http 429":                    {pullErrs: []error{fmt.Errorf("denied: %w", errdefs.ErrResourceExhausted)}},
+		"500 toomanyrequests":         {pullErrs: []error{errors.New("Error response from daemon: toomanyrequests: retry-after: 1ms, allowed: 44000/minute")}},
+		"in-stream toomanyrequests":   {streams: []string{`{"error":"toomanyrequests: rate exceeded"}`}},
+		"in-stream manifest unknown":  {streams: []string{`{"error":"manifest unknown"}`}},
+		"in-stream too many requests": {streams: []string{`{"errorDetail":{"message":"Too Many Requests"}}`}},
+	}
+	for name, engine := range cases {
+		err := Ensure(context.Background(), engine, "ghcr.io/x/y:1", 3, time.Millisecond)
+		if err == nil {
+			t.Errorf("%s: want a failure", name)
+		}
+		if len(engine.pulls) != 1 {
+			t.Errorf("%s: pulls = %d, want 1 (a refusal is not retried)", name, len(engine.pulls))
+		}
+		if err != nil && !strings.Contains(err.Error(), "registry refused") {
+			t.Errorf("%s: error should say the registry refused it: %v", name, err)
+		}
+	}
+}
+
+func TestDockerHost_TakesTheEnvironmentThenTestcontainersProperties(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".testcontainers.properties"), []byte("# c\ndocker.host=unix:///custom/docker.sock\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := func(values map[string]string) func(string) string {
+		return func(key string) string { return values[key] }
+	}
+	if got := dockerHost(env(map[string]string{"DOCKER_HOST": "tcp://h:2375"}), home); got != "tcp://h:2375" {
+		t.Errorf("DOCKER_HOST must win, got %q", got)
+	}
+	if got := dockerHost(env(nil), home); got != "unix:///custom/docker.sock" {
+		t.Errorf("properties file docker.host, got %q", got)
+	}
+	if got := dockerHost(env(nil), t.TempDir()); got != "" {
+		t.Errorf("nothing configured must leave the client default, got %q", got)
 	}
 }
