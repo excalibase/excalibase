@@ -103,6 +103,7 @@ func TestRestore_TheMySQLAdaptersFailedRowIsSwept(t *testing.T) {
 	if row == nil {
 		t.Fatal("no row kept")
 	}
+	requireFailedCleanupRecorded(t, row, restoreNamespaceCleanup(row.Namespace))
 	svc := NewProvisioningService(lab.adapter.instances, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(lab.mock, "")), lab.mock)
 	if got := svc.leftoverOf(row); got != leftoverRestore {
 		t.Fatalf("leftover %v for row status=%s reason=%q from=%q ns=%s log=%s", got, row.Status, row.FailureReason, row.RestoredFromProjectID, row.Namespace, row.RollbackLog)
@@ -436,5 +437,43 @@ func TestAddDatabase_RefusedWhileThePurgeStillWaits(t *testing.T) {
 	}
 	if _, err := svc.AddDatabase(context.Background(), created.ProjectID, addPostgres()); !errors.Is(err, ErrProjectOperationRunning) {
 		t.Fatalf("add: %v", err)
+	}
+}
+
+// The cluster's cleanup names its namespace as the namespace's does: the sweep
+// compares the name with the row, so a bare name would license nothing.
+func TestRestore_AFailedClusterRemovalIsRecordedUnderItsNamespace(t *testing.T) {
+	registrar := &fakeRegistrar{carryErr: errors.New("settings refused")}
+	adapter, _, store, mock := restoreLab(t, registrar)
+	mock.DeleteCRDError = errors.New("etcdserver: request timed out")
+
+	if _, err := adapter.Restore(context.Background(), restoreSource(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"}); !errors.Is(err, ErrRestoreNotObserved) {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	row, _ := store.FindByProjectID("dst")
+	if row == nil {
+		t.Fatal("no row kept")
+	}
+	requireFailedCleanupRecorded(t, row, restoreClusterCleanup(row.Namespace))
+}
+
+func TestRetryFailedRollbacks_DeletionProtectionStopsASingleHostRemoval(t *testing.T) {
+	prov := &singleHostProvisioner{provisionErr: errors.New("never healthy"), deprovisionOn: errors.New("engine busy")}
+	svc, store := singleHostService(t, prov)
+	resp, err := svc.Provision(context.Background(), newProjectRequest())
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	row, _ := store.FindByProjectID(resp.ProjectID)
+	protected := true
+	row.DeploymentMode, row.DeletionProtection = domain.ModeDocker, &protected
+	if err := store.Update(row); err != nil {
+		t.Fatal(err)
+	}
+
+	prov.deprovisionOn = nil
+	if finished := svc.RetryFailedRollbacks(context.Background()); len(finished) != 0 {
+		t.Fatalf("finished %v on a protected row", finished)
 	}
 }
