@@ -1,0 +1,39 @@
+name: Publish the DocumentDB gateway image
+
+# EXC-587. Publishes excalibase/documentdb-gateway, upstream's gateway with the
+# guard that ends client connections when its instance is demoted or Postgres
+# stops answering. One build: what the tests and the scan saw is what is pushed.
+# The digest in the job summary then goes into the catalogue.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE: excalibase/documentdb-gateway:0.117.0
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard logic
+        run: bash charts/documentdb-gateway/tests/gateway_guard_test.sh
+      - name: Build the candidate image
+        run: docker build --pull --platform linux/amd64 -t "$CANDIDATE" charts/documentdb-gateway
+      - name: Guard in the image, with real Postgres
+        run: bash charts/documentdb-gateway/tests/gateway_guard_demotion_test.sh "$CANDIDATE"
+      - name: Trivy (candidate)
+        uses: ./.github/actions/trivy
+        with:
+          image: ${{ env.CANDIDATE }}
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish the verified image
+        run: |
+          docker push "$CANDIDATE"
+          digest="$(docker inspect "$CANDIDATE" --format '{{index .RepoDigests 0}}')"
+          echo "Pin this in the catalogue: documentDBGatewayImage: $digest" >> "$GITHUB_STEP_SUMMARY"
