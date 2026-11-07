@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/pkg/stdcopy"
 )
@@ -104,17 +105,32 @@ func (r *RealDockerClient) ExecInContainerStdin(ctx context.Context, id string, 
 		return "", fmt.Errorf("exec attach: %w", err)
 	}
 	defer attached.Close()
-	if _, err := io.Copy(attached.Conn, strings.NewReader(stdin)); err != nil {
-		return "", fmt.Errorf("exec stdin: %w", err)
-	}
-	if err := attached.CloseWrite(); err != nil {
-		return "", fmt.Errorf("exec stdin close: %w", err)
-	}
+	// Fed alongside the read: a command that exits early stops reading, and what
+	// it printed is the real error, not the broken pipe.
+	fed := make(chan error, 1)
+	go func() { fed <- feedExecStdin(attached, stdin) }()
 	var stdout, stderr bytes.Buffer
 	if _, err := stdcopy.StdCopy(&limitedWriter{&stdout}, &limitedWriter{&stderr}, attached.Reader); err != nil {
 		return "", fmt.Errorf("exec output: %w", err)
 	}
-	return r.execResult(ctx, create.ID, stdout.String(), stderr.String())
+	out, err := r.execResult(ctx, create.ID, stdout.String(), stderr.String())
+	if err != nil {
+		return out, err
+	}
+	if err := <-fed; err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func feedExecStdin(attached types.HijackedResponse, stdin string) error {
+	if _, err := io.Copy(attached.Conn, strings.NewReader(stdin)); err != nil {
+		return fmt.Errorf("exec stdin: %w", err)
+	}
+	if err := attached.CloseWrite(); err != nil {
+		return fmt.Errorf("exec stdin close: %w", err)
+	}
+	return nil
 }
 
 // execResult waits for the exec's exit code once its streams have ended.

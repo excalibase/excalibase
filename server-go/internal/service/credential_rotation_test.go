@@ -535,12 +535,8 @@ func TestRotateCredentialsNeverWritesThePasswordIntoTheStatement(t *testing.T) {
 	}
 
 	for _, path := range []string{rotAdminCurrent, rotAuthCurrent, rotAppCurrent} {
-		password := h.vault.data[path]["password"]
-		for _, stmt := range h.kube.ExecStdin {
-			if strings.Contains(stmt, password) {
-				t.Errorf("%s password appears verbatim in the SQL sent to psql", path)
-			}
-		}
+		passwords := map[string]string{path: h.vault.data[path]["password"]}
+		assertNoPassword(t, "the SQL sent to psql", strings.Join(h.kube.ExecStdin, "\n"), passwords)
 	}
 }
 
