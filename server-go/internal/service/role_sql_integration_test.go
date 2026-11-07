@@ -165,12 +165,12 @@ func (p *rolePostgres) assertRolePasswords(t *testing.T, passwords [3]string) {
 	}
 }
 
-func resetAll(passwords [3]string) string {
-	return BuildProjectRoleResetSQL([]RolePassword{
+func resetAll(t *testing.T, passwords [3]string) string {
+	return BuildProjectRoleResetSQL(mustRoleVerifiers(t, []RolePassword{
 		{Role: roleAuthAdmin, Password: passwords[0]},
 		{Role: roleApp, Password: passwords[1]},
 		{Role: roleWatcher, Password: passwords[2]},
-	})
+	}))
 }
 
 func TestProjectRoleSQL_HostilePasswordsAreStoredVerbatimAndRunNothing(t *testing.T) {
@@ -183,7 +183,7 @@ func TestProjectRoleSQL_HostilePasswordsAreStoredVerbatimAndRunNothing(t *testin
 
 	for name, passwords := range hostilePasswords {
 		t.Run("reset "+name, func(t *testing.T) {
-			pg.psql(t, resetAll(passwords))
+			pg.psql(t, resetAll(t, passwords))
 			pg.assertNoInjectedEffects(t)
 			pg.assertRolePasswords(t, passwords)
 		})
@@ -202,7 +202,7 @@ func TestProjectRoleSQL_HostilePasswordsWithNonStandardStrings(t *testing.T) {
 
 	for name, next := range hostilePasswords {
 		t.Run("reset "+name, func(t *testing.T) {
-			pg.psql(t, resetAll(next))
+			pg.psql(t, resetAll(t, next))
 			pg.assertNoInjectedEffects(t)
 			pg.assertRolePasswords(t, next)
 		})
@@ -214,7 +214,7 @@ func TestProjectRoleSQL_ResetAdminWithHostileName(t *testing.T) {
 	pg.psql(t, `CREATE ROLE "owner$$x" LOGIN PASSWORD 'old'`)
 	password := fmt.Sprintf("n$$; CREATE ROLE pwned_admin SUPERUSER; --%s", `\'`)
 
-	pg.psql(t, BuildProjectRoleResetSQL([]RolePassword{{Role: "owner$$x", Password: password}}))
+	pg.psql(t, BuildProjectRoleResetSQL(mustRoleVerifiers(t, []RolePassword{{Role: "owner$$x", Password: password}})))
 
 	pg.assertNoInjectedEffects(t)
 	pg.assertLogin(t, "owner$$x", password)

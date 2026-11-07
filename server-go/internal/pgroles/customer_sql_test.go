@@ -94,3 +94,15 @@ func TestSquatGuardCoversEveryReservedName(t *testing.T) {
 		t.Fatalf("the guard does not look for a non-superuser administering a platform role:\n%s", sql)
 	}
 }
+
+// OTHERS leaves out query_canceled, and the context it would drop quotes the
+// verifier of a password the customer chose.
+func TestCustomerRoleHandlersAlsoCatchACancelledStatement(t *testing.T) {
+	sql := CustomerRoleSQL("owner")
+	if got := strings.Count(sql, "EXCEPTION WHEN OTHERS OR query_canceled THEN"); got != 2 {
+		t.Errorf("handlers that catch a cancelled statement = %d, want create_role and alter_role_password", got)
+	}
+	if strings.Contains(sql, "EXCEPTION WHEN OTHERS THEN") {
+		t.Error("a role handler lets a cancelled statement keep its context")
+	}
+}

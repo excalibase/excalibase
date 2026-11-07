@@ -11,6 +11,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -75,7 +76,7 @@ func roleReconcileAttackSuite(t *testing.T, start func(*testing.T) *rolePostgres
 			}
 
 			err := runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app",
-				reservedSchemaFirstSQL(), projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub"))
+				reservedSchemaFirstSQL(), mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"))
 			if attack.blocksRegistration {
 				if err == nil {
 					t.Fatal("registration went on over a squatted platform role")
@@ -112,7 +113,7 @@ func roleReconcileAttackSuite(t *testing.T, start func(*testing.T) *rolePostgres
 func TestRegistrationSQLAloneTakesTheSchemaBack(t *testing.T) {
 	c := newPlatformSchemaCase(t)
 	c.registerAsBeforeEXC623(t)
-	c.pg.psql(t, projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub"))
+	c.pg.psql(t, mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"))
 	c.assertSchemaTakenBack(t)
 }
 
@@ -121,7 +122,7 @@ func TestRegistrationSQLAloneTakesTheSchemaBack(t *testing.T) {
 // scheduler login exists.
 func (c *platformSchemaCase) registerAsBeforeEXC623(t *testing.T) {
 	t.Helper()
-	c.pg.psql(t, projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub"))
+	c.pg.psql(t, mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"))
 	c.pg.psql(t, "DROP OWNED BY "+roleScheduler+"; DROP ROLE "+roleScheduler+";"+
 		"GRANT CREATE ON SCHEMA excalibase TO "+roleApp+";"+
 		"GRANT ALL ON ALL TABLES IN SCHEMA excalibase TO "+roleApp+";"+
@@ -173,8 +174,15 @@ func (p *rolePostgres) execCommand(argv []string) error {
 // execer drives role SQL through the container the way the service drives it
 // through a pod or a docker container.
 func (p *rolePostgres) execer() roleSQLExecer {
-	return func(ctx context.Context, cmd []string) (string, error) {
-		return p.execOutput(ctx, cmd)
+	return func(ctx context.Context, cmd []string, stdin string) (string, error) {
+		if stdin == "" {
+			return p.execOutput(ctx, cmd)
+		}
+		docker, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{})
+		if err != nil {
+			return "", err
+		}
+		return docker.ExecInContainerStdin(ctx, p.container.GetContainerID(), cmd, stdin)
 	}
 }
 
@@ -333,7 +341,7 @@ func lockHolderCase(t *testing.T, pg *rolePostgres, blocker lockBlocker) {
 		spec.adminPassword = customerOwnerPassword
 	}
 	err = runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app",
-		reservedSchemaFirstSQL(), projectRoleSQL(spec, c.creds, "cdc_watcher_pub"))
+		reservedSchemaFirstSQL(), mustProjectRoleSQL(t, spec, c.creds, "cdc_watcher_pub"))
 	switch {
 	case blocker.squatted && err == nil:
 		t.Fatal("registration went on over a squatted platform role")
