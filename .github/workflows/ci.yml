@@ -101,6 +101,9 @@ jobs:
               - 'server-go/internal/service/app_deploy*'
             mysqlbackup:
               - 'server-go/internal/k8s/moco_*'
+              - 'server-go/internal/k8s/mysql_tls*'
+              - 'server-go/internal/k8s/client.go'
+              - 'server-go/internal/k8s/app_egress_k3s_test.go'
 
   single-host:
     name: Single-host bundle

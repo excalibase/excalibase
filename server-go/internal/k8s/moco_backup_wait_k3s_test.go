@@ -268,6 +268,9 @@ func (lab *mocoLab) startMySQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, object := range BuildMySQLTLS(opts) {
+		lab.apply(t, object.GVR, object.Object)
+	}
 	lab.apply(t, ServiceAccountGVR, BuildMySQLBackupServiceAccount(mocoLabNamespace))
 	lab.apply(t, ConfigMapGVR, settings)
 	lab.apply(t, MOCOBackupPolicyGVR, policy)
