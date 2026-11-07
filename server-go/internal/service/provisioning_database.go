@@ -91,6 +91,9 @@ func (s *ProvisioningService) provisionWithoutDatabase(ctx context.Context, req 
 	if err := s.createProjectRow(ctx, inst, tierType); err != nil {
 		return nil, err
 	}
+	// The row is admitted: from here the caller only waits for the answer.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.buildLimit())
+	defer cancel()
 	if err := s.k8sClient.CreateProjectNamespace(ctx, inst.Namespace, inst.OrgID); err != nil {
 		// A namespace that already existed is not this request's to remove.
 		created := !apierrors.IsAlreadyExists(err)
@@ -109,9 +112,7 @@ func (s *ProvisioningService) provisionWithoutDatabase(ctx context.Context, req 
 func (s *ProvisioningService) failProjectWithoutDatabase(ctx context.Context, inst *domain.DatabaseInstance, step string, cause error, removeNamespace bool) *domain.ProvisioningResponse {
 	log.Printf("project %s without a database failed at %s: %v", inst.ProjectID, step, cause)
 	if removeNamespace {
-		if err := s.k8sClient.DeleteNamespace(context.WithoutCancel(ctx), inst.Namespace); err != nil {
-			log.Printf("WARN: remove namespace %s of failed project: %v", inst.Namespace, err)
-		}
+		inst.RollbackLog = s.removeFailedProjectNamespace(ctx, inst.Namespace, cause.Error())
 	}
 	inst.Status = string(domain.StageFailed)
 	inst.CurrentStage = domain.StageFailed
@@ -119,6 +120,24 @@ func (s *ProvisioningService) failProjectWithoutDatabase(ctx context.Context, in
 	inst.FailureStep = step
 	inst.FailureReason = cause.Error()
 	return s.saveProvisionFailure(inst)
+}
+
+// removeFailedProjectNamespace deletes the namespace and answers with the
+// rollback log, the record RetryFailedRollbacks works from if the delete failed.
+func (s *ProvisioningService) removeFailedProjectNamespace(ctx context.Context, namespace, failure string) string {
+	cleanupCtx, cancel := provisioner.CleanupContext(ctx)
+	defer cancel()
+	result := provisioner.CleanupResult{Name: deleteNamespaceCleanup(namespace), OK: true, ForFailure: failure}
+	if err := s.k8sClient.DeleteNamespace(cleanupCtx, namespace); err != nil {
+		log.Printf("ERROR: remove namespace %s of failed project: %v", namespace, err)
+		result.OK, result.Error = false, err.Error()
+	}
+	encoded, err := provisioner.EncodeCleanupResults([]provisioner.CleanupResult{result})
+	if err != nil {
+		log.Printf("WARN: marshal rollback log: %v", err)
+		return ""
+	}
+	return encoded
 }
 
 func projectResponse(inst *domain.DatabaseInstance) *domain.ProvisioningResponse {
@@ -149,6 +168,8 @@ func projectResponse(inst *domain.DatabaseInstance) *domain.ProvisioningResponse
 // project's namespace, and the project stays ACTIVE without a database, with
 // the failure recorded, so its apps keep running and the add can be retried.
 func (s *ProvisioningService) AddDatabase(ctx context.Context, projectID string, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
+	// The caller waits for the answer but does not own the build or its lease.
+	ctx = context.WithoutCancel(ctx)
 	add, release, err := s.admitDatabaseAdd(ctx, projectID, req)
 	if err != nil {
 		return nil, err
@@ -215,6 +236,11 @@ func (s *ProvisioningService) startDatabaseAdd(ctx context.Context, inst *domain
 	if inst.DeploymentMode != domain.ModeK8s {
 		return nil, ErrNoDatabaseNeedsKubernetes
 	}
+	// A new add would overwrite the engine and the record the sweep removes the
+	// old cluster by.
+	if failedAddStillStands(inst) {
+		return nil, fmt.Errorf("%w: the database of an earlier failed add is still being removed (%s)", ErrProjectOperationRunning, inst.ProjectID)
+	}
 	start := time.Now()
 	tier, err := s.databaseTier(ctx, &req, inst.Tier)
 	if err != nil {
@@ -251,7 +277,15 @@ func (s *ProvisioningService) startDatabaseAdd(ctx context.Context, inst *domain
 func (s *ProvisioningService) handleAddDatabaseFailure(ctx context.Context, inst *domain.DatabaseInstance,
 	req domain.ProvisioningRequest, err error, pc *provisioner.ProvisionContext) *domain.ProvisioningResponse {
 	s.recordProvisionFailure(ctx, inst, req, err, pc)
-	s.purgeFailedAddBackups(ctx, inst)
+	// A cluster that is still there is still archiving: purging now would leave
+	// new files behind that block every retry. The sweep purges once it has gone.
+	if failedCleanupOf(inst, removeDatabaseCleanup(inst.Namespace)) {
+		if inst.BackupEnabled != nil && *inst.BackupEnabled {
+			inst.FailureReason += purgeWaitingNote
+		}
+	} else {
+		s.purgeFailedAddBackups(ctx, inst)
+	}
 	inst.Status = string(domain.StatusActive)
 	inst.CurrentStage = domain.StageCompleted
 	inst.CurrentStep = ""
@@ -274,13 +308,22 @@ func (s *ProvisioningService) purgeFailedAddBackups(ctx context.Context, inst *d
 		return
 	}
 	if s.backupPurger == nil {
-		inst.FailureReason += "; its backup files were not removed (no backup purger), so a retry will be refused"
+		inst.FailureReason += purgeNoPurgerNote
 		return
 	}
-	if _, err := s.backupPurger.Purge(ctx, inst); err != nil && !errors.Is(err, ErrNoBackupsForMode) {
-		log.Printf("ERROR: purge backups of the failed database add of %s: %v", inst.ProjectID, err)
-		inst.FailureReason += "; its backup files could not be removed, so a retry will be refused"
+	if err := s.purgeAddedDatabaseBackups(ctx, inst); err != nil {
+		inst.FailureReason += purgeFailedNote
 	}
+}
+
+func (s *ProvisioningService) purgeAddedDatabaseBackups(ctx context.Context, inst *domain.DatabaseInstance) error {
+	cleanupCtx, cancel := provisioner.CleanupContext(ctx)
+	defer cancel()
+	if _, err := s.backupPurger.Purge(cleanupCtx, inst); err != nil && !errors.Is(err, ErrNoBackupsForMode) {
+		log.Printf("ERROR: purge backups of the failed database add of %s: %v", inst.ProjectID, err)
+		return err
+	}
+	return nil
 }
 
 // RecoverInterruptedDatabaseAdds finishes what a process that died mid-add
@@ -322,7 +365,9 @@ func (s *ProvisioningService) recoverInterruptedAdd(ctx context.Context, project
 		if err != nil {
 			return err
 		}
-		if err := remover.RemoveDatabase(ctx, inst.Namespace, inst.ProjectID); err != nil {
+		cleanupCtx, cancel := provisioner.CleanupContext(ctx)
+		defer cancel()
+		if err := remover.RemoveDatabase(cleanupCtx, inst.Namespace, inst.ProjectID); err != nil {
 			return err
 		}
 	}

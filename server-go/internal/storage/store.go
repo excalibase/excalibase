@@ -175,6 +175,10 @@ type InstanceStore interface {
 	// is not RESTORING, so it can never revive a project or disturb one
 	// whose restore finished.
 	RecordRestoreInterrupted(projectID, step, reason string) error
+	// RecordRollbackRetry writes what retrying a failed rollback found, and
+	// nothing else, so a retry that took minutes cannot undo what was written
+	// meanwhile. It holds to the same rule as UpdateIfStatus.
+	RecordRollbackRetry(projectID, rollbackLog, failureReason, expected string) error
 	// UpdateIfStatus persists changes only while the stored row still holds
 	// expected. It returns ErrProjectStatusChanged when it does not, so an
 	// operation whose precondition has gone stops rather than writing over
