@@ -347,16 +347,18 @@ func TestDockerAdapter_List_FiltersByProjectID_NotByRequest(t *testing.T) {
 // fakeDockerClientForAdapter is a tiny mock for the Phase 1 docker
 // restore path. Records the lifecycle calls + the bytes copied in.
 type fakeDockerClientForAdapter struct {
-	createdName string
-	createdImg  string
-	createdEnv  map[string]string
-	limits      provisioner.ContainerLimits
-	started     bool
-	healthy     bool
-	copyDst     string
-	copyBytes   int64
-	copyCalls   int
-	failOn      string // "create" | "copy" | "start" | "health"
+	firewallMu   sync.Mutex
+	firewallDown bool
+	createdName  string
+	createdImg   string
+	createdEnv   map[string]string
+	limits       provisioner.ContainerLimits
+	started      bool
+	healthy      bool
+	copyDst      string
+	copyBytes    int64
+	copyCalls    int
+	failOn       string // "create" | "copy" | "start" | "health"
 	// execCode is what ExecInContainer reports; non-zero stands for a
 	// postgres that has not finished recovery.
 	execCode int
@@ -382,7 +384,21 @@ func (f *fakeDockerClientForAdapter) CreateContainer(_ context.Context, name, im
 	f.createdEnv = env
 	return "container-" + name, nil
 }
+func (f *fakeDockerClientForAdapter) HostFirewallHealthy(context.Context) (bool, error) {
+	f.firewallMu.Lock()
+	defer f.firewallMu.Unlock()
+	return !f.firewallDown, nil
+}
+func (f *fakeDockerClientForAdapter) createdContainerID() string { return "container-" + f.createdName }
+func (f *fakeDockerClientForAdapter) setFirewallDown(down bool) {
+	f.firewallMu.Lock()
+	defer f.firewallMu.Unlock()
+	f.firewallDown = down
+}
 func (f *fakeDockerClientForAdapter) StartContainer(_ context.Context, _ string) error {
+	if healthy, _ := f.HostFirewallHealthy(context.Background()); !healthy {
+		return provisioner.ErrHostFirewallDown
+	}
 	if f.failOn == "start" {
 		return errors.New("start failed")
 	}

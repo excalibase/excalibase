@@ -13,6 +13,12 @@ Nothing runs as root at run time: the engine is the user's own Podman, and the
 engine proxy reaches the user's `podman.sock` (as the container's root, which in
 a rootless container is that unprivileged user).
 
+Rootful Podman is not supported: `init.sh` refuses when run as root, when the
+socket belongs to another user, or when the engine does not say it is rootless,
+and the engine proxy asks the engine again on every start, so an install made
+earlier stops there too. Its bridges are on the host and it has no
+`DOCKER-USER` chain, so nothing would keep a tenant database off the host.
+
 ## Prerequisites
 
 - Podman 4.9 or newer and `podman compose` backed by **Docker Compose v2**
@@ -20,7 +26,9 @@ a rootless container is that unprivileged user).
   installed: Fedora/RHEL `dnf install podman docker-compose`, Debian/Ubuntu
   `apt install podman docker-compose-v2`. Check with `podman compose version`
   (it names the provider). Use the distribution's Podman, not a static build:
-  healthchecks run through systemd user timers.
+  healthchecks run through systemd user timers, and without them `up -d` waits
+  forever with no error. `./init.sh` starts a small test container and refuses
+  a Podman that does not run its healthcheck.
 
   `podman-compose` (1.6) is **not supported**: it turns every `depends_on`
   into a hard Podman dependency, so a service behind a finished one-shot

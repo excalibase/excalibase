@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -484,3 +485,53 @@ func TestDockerProvisioner_RefusesATierWithoutASizeBeforeAnyContainer(t *testing
 		t.Fatalf("containers created: %v", docker.containers)
 	}
 }
+
+// listingDocker is an engine that can name its managed containers.
+type listingDocker struct {
+	*mockDockerClient
+	listErr error
+}
+
+func (d *listingDocker) ManagedContainerNames(context.Context) ([]string, error) {
+	if d.listErr != nil {
+		return nil, d.listErr
+	}
+	names := make([]string, 0, len(d.containers))
+	for name := range d.containers {
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+// An upgrade's old container holds a whole copy of the data and a dump of every
+// password hash, and the run naming it goes with the project's row.
+func TestDeprovisionRemovesTheContainersAnUpgradeKept(t *testing.T) {
+	docker := &listingDocker{mockDockerClient: newMockDocker()}
+	kept := PreUpgradeContainerName("p1", "mu-1")
+	alsoKept := PreUpgradeContainerName("p1", "mu-2")
+	other := PreUpgradeContainerName("p10", "mu-3")
+	for _, name := range []string{kept, alsoKept, other, DatabaseContainerName("p1")} {
+		docker.containers[name] = "stopped"
+	}
+	if err := NewDockerPostgreSQLProvisioner(docker).Deprovision(context.Background(), DatabaseContainerName("p1"), "p1"); err != nil {
+		t.Fatalf("Deprovision: %v", err)
+	}
+	for _, gone := range []string{kept, alsoKept, DatabaseContainerName("p1")} {
+		if _, there := docker.containers[gone]; there {
+			t.Errorf("%s left behind", gone)
+		}
+	}
+	if _, there := docker.containers[other]; !there {
+		t.Errorf("removed another project's %s", other)
+	}
+}
+
+// Going on would drop the row, and with it the last record that the copy exists.
+func TestDeprovisionFailsWhenItCannotLookForThem(t *testing.T) {
+	docker := &listingDocker{mockDockerClient: newMockDocker(), listErr: errors.New("engine unreachable")}
+	if err := NewDockerPostgreSQLProvisioner(docker).Deprovision(context.Background(), DatabaseContainerName("p1"), "p1"); err == nil {
+		t.Fatal("teardown reported done without looking")
+	}
+}
+
+var _ ManagedContainerLister = (*RealDockerClient)(nil)

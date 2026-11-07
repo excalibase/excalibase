@@ -91,7 +91,11 @@ func bridgeInterface(network bridgeNetwork) (string, error) {
 	return iface, nil
 }
 
-// WriteBridges replaces the file whole, so the firewall never reads half of it.
+// syncFile puts a file's or a directory's content on disk.
+var syncFile = (*os.File).Sync
+
+// WriteBridges replaces the file whole, so a reader never sees half of it, and
+// a power cut leaves the old file or the new one, never an empty one.
 func WriteBridges(path string, lines []string) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".bridges-*")
 	if err != nil {
@@ -110,8 +114,20 @@ func WriteBridges(path string, lines []string) error {
 		tmp.Close()
 		return err
 	}
+	if err := syncFile(tmp); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return syncFile(dir)
 }

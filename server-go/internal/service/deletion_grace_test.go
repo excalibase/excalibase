@@ -20,6 +20,16 @@ type stoppingPauser struct {
 	calls  []string
 	reason string
 	err    error
+	// upgradeStops are the projects stopped mid-upgrade, with no backup.
+	upgradeStops []string
+}
+
+func (p *stoppingPauser) StopOpenUpgrade(_ context.Context, inst *domain.DatabaseInstance) error {
+	if p.err != nil {
+		return p.err
+	}
+	p.upgradeStops = append(p.upgradeStops, inst.ProjectID)
+	return nil
 }
 
 func (p *stoppingPauser) Pause(_ context.Context, projectID, reason string) error {
@@ -324,7 +334,8 @@ func TestScheduleDeletionOfAResumingProjectIsRefusedNotDeleted(t *testing.T) {
 // noopPauser mirrors PauseService on a project it may not pause: nothing happens.
 type noopPauser struct{}
 
-func (noopPauser) Pause(context.Context, string, string) error { return nil }
+func (noopPauser) Pause(context.Context, string, string) error                     { return nil }
+func (noopPauser) StopOpenUpgrade(context.Context, *domain.DatabaseInstance) error { return nil }
 
 // The sweep's list is read before each teardown takes the lease. A project
 // cancelled (and even unprotected) in between is not due and must survive.
@@ -370,6 +381,9 @@ func TestSweepRetriesAScheduledDeletionStuckAtTheBackupPurge(t *testing.T) {
 type unsupportedPauser struct{}
 
 func (unsupportedPauser) Pause(context.Context, string, string) error { return ErrPauseUnsupported }
+func (unsupportedPauser) StopOpenUpgrade(context.Context, *domain.DatabaseInstance) error {
+	return ErrPauseUnsupported
+}
 
 func TestScheduleDeletionWithAnUnsupportedModeIsUnavailable(t *testing.T) {
 	h := newGraceHarness(t)

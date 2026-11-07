@@ -42,6 +42,9 @@ type DockerClientOptions struct {
 	// containers to, so graphql/schema can resolve them by name. Empty →
 	// default bridge (no name resolution across containers).
 	Network string
+	// FirewallContainer is the single host's firewall tenants wait for (EXC-683);
+	// empty on an engine with none.
+	FirewallContainer string
 }
 
 // RealDockerClient implements DockerClient against a real Docker daemon via
@@ -50,6 +53,7 @@ type RealDockerClient struct {
 	c        *client.Client
 	bindAddr string // host IP for published DB ports; "" → 127.0.0.1
 	netName  string // user-defined network to attach DB containers to; "" → bridge
+	firewall string // the host firewall tenants wait for; "" → none
 }
 
 // RawClient returns the underlying SDK client. Used by the backup
@@ -99,7 +103,7 @@ func NewRealDockerClient(opts DockerClientOptions) (*RealDockerClient, error) {
 		return nil, fmt.Errorf("ping docker daemon: %w", err)
 	}
 
-	return &RealDockerClient{c: c, bindAddr: opts.BindAddress, netName: opts.Network}, nil
+	return &RealDockerClient{c: c, bindAddr: opts.BindAddress, netName: opts.Network, firewall: opts.FirewallContainer}, nil
 }
 
 // excalibaseLabel marks every container created by the provisioner so
@@ -214,10 +218,28 @@ func envList(env map[string]string) []string {
 }
 
 func (r *RealDockerClient) StartContainer(ctx context.Context, id string) error {
-	if err := r.c.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
-		return fmt.Errorf("start container %s: %w", id, err)
+	err := r.c.ContainerStart(ctx, id, container.StartOptions{})
+	if err == nil {
+		return nil
 	}
-	return nil
+	// The engine proxy's 503, which names the firewall (EXC-683).
+	if errdefs.IsUnavailable(err) && strings.Contains(err.Error(), ErrHostFirewallDown.Error()) {
+		return fmt.Errorf("start container %s: %w: %v", id, ErrHostFirewallDown, err)
+	}
+	return fmt.Errorf("start container %s: %w", id, err)
+}
+
+// HostFirewallHealthy reads the firewall tenants wait for; with none configured, nothing is in the way.
+func (r *RealDockerClient) HostFirewallHealthy(ctx context.Context) (bool, error) {
+	if r.firewall == "" {
+		return true, nil
+	}
+	inspect, err := r.c.ContainerInspect(ctx, r.firewall)
+	if err != nil {
+		return false, fmt.Errorf("inspect %s: %w", r.firewall, err)
+	}
+	state := inspect.State
+	return state != nil && state.Running && state.Health != nil && state.Health.Status == container.Healthy, nil
 }
 
 // StopContainer tries to stop gracefully (30s) then lets Docker kill. Missing
@@ -436,4 +458,27 @@ func (r *RealDockerClient) ensureImage(ctx context.Context, ref string) error {
 		return fmt.Errorf("drain pull stream: %w", err)
 	}
 	return nil
+}
+
+// ManagedContainerLister names every container the provisioner made, running or not.
+type ManagedContainerLister interface {
+	ManagedContainerNames(ctx context.Context) ([]string, error)
+}
+
+// ManagedContainerNames asks the engine, filtered to managed containers as the proxy requires.
+func (r *RealDockerClient) ManagedContainerNames(ctx context.Context) ([]string, error) {
+	list, err := r.c.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", excalibaseLabel+"=true")),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list containers: %w", err)
+	}
+	var names []string
+	for _, listed := range list {
+		for _, name := range listed.Names {
+			names = append(names, strings.TrimPrefix(name, "/"))
+		}
+	}
+	return names, nil
 }
