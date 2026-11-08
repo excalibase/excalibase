@@ -9,7 +9,7 @@
 echo "== git builds of a site on a single host"
 S=https://studio.localhost:$PORT/api/projects/$PID/sites
 auth=(-H "Authorization: Bearer $T")
-json() { python3 -c "import json,sys;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
+json() { python3 -c "import json,re,sys;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
 
 SITE=$(c "${auth[@]}" -H 'Content-Type: application/json' -X POST "$S/" -d '{"name":"smoke-site"}' | json 'd.get("id","")')
 [ -n "$SITE" ] && ok "site created" || ko "site create"
@@ -109,6 +109,30 @@ LIVE_AFTER=$(c "${auth[@]}" "$S/$SITE" | json 'd.get("liveDeployId","")')
 CF=$($DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_cf_calls)
 echo "$CF" | grep -q "PUT .*/scripts/site-pv-$PID_PV" && ok "the preview went to its own script" || ko "no preview script upload: ${CF:0:600}"
 
+# The preview is the branch's commit, not production's: the sha is recorded and the branch's own file was uploaded.
+PV_SHA=$(c "${auth[@]}" "$S/$SITE/previews" | json '(d.get("previews") or [{}])[0].get("deployedSha","")')
+[ -n "$PSHA" ] && [ "$PV_SHA" = "$PSHA" ] && ok "the preview deployed the branch commit" || ko "preview deployedSha '$PV_SHA', branch commit '$PSHA'"
+[ "$PV_SHA" != "$SHA" ] && ok "the preview is not production's commit" || ko "preview deployedSha equals production's $SHA"
+PV_FILES=$($DOCKER exec "$SITE_FAKES" wget -qO- "http://127.0.0.1:8080/_seen?script=site-pv-$PID_PV")
+echo "$PV_FILES" | json 'd["files"].get("/branch.txt","")' | grep -q 'served only by the feature branch' && ok "the preview uploaded the branch's file" || ko "preview files: ${PV_FILES:0:600}"
+PROD_FILES=$($DOCKER exec "$SITE_FAKES" wget -qO- "http://127.0.0.1:8080/_seen?script=site-$SITE")
+[ "$(echo "$PROD_FILES" | json '"/branch.txt" in d["files"]')" = False ] && [ -n "$(echo "$PROD_FILES" | json 'd["files"].get("/index.html","")')" ] && ok "production's upload has no branch file" || ko "production files: ${PROD_FILES:0:600}"
+
+# The preview route: the hosts table maps the preview host to the preview's script.
+KV=$($DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_kv)
+kv_count() { echo "$KV" | json "sum(1 for w in d['writes'] if w['method']=='$1' and w['key']=='$PURL'$2)"; }
+[ "$(kv_count PUT " and w['body']=='site-pv-$PID_PV'")" = 1 ] && ok "the preview host routes to its own script" || ko "no hosts-table write of site-pv-$PID_PV for $PURL: ${KV:0:600}"
+
+# Production stayed alone: one production build, one production script upload, before and after the cleanup.
+only_production() { # label
+  local builds uploads
+  builds=$(c "${auth[@]}" "$S/$SITE/builds" | json 'sum(1 for b in (d if isinstance(d,list) else d.get("builds",[])) if not b.get("previewId"))')
+  uploads=$(echo "$(c_cf)" | json "sum(1 for x in d['calls'] if re.search(r'^PUT .*/scripts/site-$SITE\$', x))")
+  [ "$builds" = 1 ] && [ "$uploads" = 1 ] && ok "production stayed alone $1 (builds $builds, script uploads $uploads)" || ko "production not alone $1: builds '$builds', script uploads '$uploads'"
+}
+c_cf() { $DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_cf_calls; }
+only_production "while the preview is ready"
+
 # The branch goes away on the host; the delete event removes the preview and its script.
 $DOCKER exec "$SITE_FAKES" git -C "/repos/acme/site.git" branch -D "$BRANCH" >/dev/null 2>&1
 [ "$(send_push true "0000000000000000000000000000000000000000" delete)" = 202 ] && ok "signed branch delete accepted" || ko "delete push not accepted"
@@ -122,3 +146,6 @@ done
 CF=$($DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_cf_calls)
 echo "$CF" | grep -q "DELETE .*/scripts/site-pv-$PID_PV" && ok "the preview's script was deleted" || ko "no script delete: ${CF: -600}"
 c "${auth[@]}" "$S/$SITE" | json 'd.get("liveDeployId","")' | grep -q "^$LIVE$" && ok "production is still live after the cleanup" || ko "production deploy changed by the cleanup"
+KV=$($DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_kv)
+[ "$(kv_count DELETE "")" -ge 1 ] && ok "the preview host left the hosts table" || ko "no hosts-table delete for $PURL: ${KV:0:600}"
+only_production "after the branch delete"

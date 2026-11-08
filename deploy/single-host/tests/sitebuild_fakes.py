@@ -21,7 +21,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 INSTALLATION, REPO_ID, FULL_NAME = 4242, 777, "acme/site"
 REPO = {"id": REPO_ID, "full_name": FULL_NAME, "default_branch": "main", "private": True}
 PREVIEW_BRANCH = "feat/preview"
-STATE = {"manifest": {}, "bodies": {}, "calls": [], "lock": threading.Lock()}
+BRANCH_MARKER = "served only by the feature branch"
+STATE = {"manifest": {}, "scripts": {}, "bodies": {}, "calls": [], "kv": [], "lock": threading.Lock()}
 
 
 def head_sha(root, branch="main"):
@@ -82,9 +83,15 @@ class Fakes(BaseHTTPRequestHandler):
         if path.startswith("/cf/"):
             return self.cf(method, path[3:])
         if path == "/_seen":
+            # The last deploy's files, or the named script's with ?script=<name>.
+            wanted = re.search(r"[?&]script=([^&]+)", self.path)
             with STATE["lock"]:
-                files = {name: STATE["bodies"].get(entry["hash"], "") for name, entry in STATE["manifest"].items()}
+                manifest = STATE["scripts"].get(wanted.group(1), {}) if wanted else STATE["manifest"]
+                files = {name: STATE["bodies"].get(entry["hash"], "") for name, entry in manifest.items()}
             return self.answer(200, {"files": files, "sha": head_sha(self.root)})
+        if path == "/_kv":
+            with STATE["lock"]:
+                return self.answer(200, {"writes": list(STATE["kv"])})
         if path == "/_sha":
             return self.answer(200, {"sha": head_sha(self.root), "preview": head_sha(self.root, PREVIEW_BRANCH)})
         if path == "/_cf_calls":
@@ -120,10 +127,16 @@ class Fakes(BaseHTTPRequestHandler):
         raw = self.body()
         with STATE["lock"]:
             STATE["calls"].append(method + " " + path)
+            key = re.search(r"/storage/kv/namespaces/[^/]+/values/([^/]+)$", path)
+            if key:
+                STATE["kv"].append({"method": method, "key": key.group(1), "body": raw.decode("utf-8", "replace")})
         if method == "POST" and path.endswith("/assets-upload-session"):
             manifest = json.loads(raw)["manifest"]
             with STATE["lock"]:
                 STATE["manifest"] = manifest
+                script = re.search(r"/scripts/([^/]+)/assets-upload-session$", path)
+                if script:
+                    STATE["scripts"][script.group(1)] = manifest
             hashes = sorted({entry["hash"] for entry in manifest.values()})
             return self.cloudflare(200, {"jwt": "smoke-upload", "buckets": [hashes] if hashes else []})
         if method == "POST" and path.endswith("/workers/assets/upload"):
@@ -170,7 +183,8 @@ class Fakes(BaseHTTPRequestHandler):
 FIXTURE = {
     "package.json": '{"name":"smoke-site","version":"1.0.0","private":true,"scripts":{"build":"node build.js"}}\n',
     "build.js": 'const fs = require("fs");\nfs.mkdirSync("dist", { recursive: true });\n'
-                'fs.writeFileSync("dist/index.html", "<h1>" + process.env.GREETING + "</h1>\\n");\n',
+                'fs.writeFileSync("dist/index.html", "<h1>" + process.env.GREETING + "</h1>\\n");\n'
+                'if (fs.existsSync("branch.txt")) fs.copyFileSync("branch.txt", "dist/branch.txt");\n',
     "probe.sh": """set -u
 mkdir -p dist
 reach() { if timeout 4 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; then echo "$3=open"; else echo "$3=closed"; fi; }
@@ -204,7 +218,11 @@ def make_repo(root):
     for args in (["init", "-q", "-b", "main"], ["add", "."], ["commit", "-q", "-m", "smoke site"]):
         subprocess.run(["git", "-C", work] + args, env=env, check=True)
     # A second branch, as a developer's feature branch, for the preview journey.
-    for args in (["checkout", "-q", "-b", PREVIEW_BRANCH], ["commit", "-q", "--allow-empty", "-m", "preview change"]):
+    # Its commit adds a file the built site serves, so the preview differs from production.
+    subprocess.run(["git", "-C", work, "checkout", "-q", "-b", PREVIEW_BRANCH], env=env, check=True)
+    with open(os.path.join(work, "branch.txt"), "w", encoding="utf-8") as out:
+        out.write(BRANCH_MARKER + "\n")
+    for args in (["add", "branch.txt"], ["commit", "-q", "-m", "preview change"]):
         subprocess.run(["git", "-C", work] + args, env=env, check=True)
     subprocess.run(["git", "-C", work, "checkout", "-q", "main"], env=env, check=True)
     subprocess.run(["git", "clone", "-q", "--bare", work, bare], check=True)
