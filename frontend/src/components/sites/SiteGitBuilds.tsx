@@ -3,6 +3,7 @@ import { GitBranch, RefreshCw } from 'lucide-react';
 import { apiErrorMessage } from '../../api/apps';
 import {
   EMPTY_SETTINGS,
+  SERVER_SETTINGS,
   startGitSignIn,
   useConnectRepository,
   useDisconnectRepository,
@@ -68,6 +69,16 @@ function SignInLinks({
   );
 }
 
+// A server site always builds with a preset; one saved without it shows Next.js, so it sends it.
+const initialSettings = (
+  current: SiteGitConnection | null,
+  serverSite: boolean,
+): SiteBuildSettings => {
+  if (!serverSite) return current?.settings ?? EMPTY_SETTINGS;
+  const settings = current?.settings ?? SERVER_SETTINGS;
+  return { ...settings, framework: settings.framework || 'nextjs' };
+};
+
 type ConnectMutation = ReturnType<typeof useConnectRepository>;
 
 // The connect call lives in the section, not in this form: the form goes away the moment the connection exists.
@@ -76,6 +87,7 @@ function Connect({
   siteId,
   current,
   nodeVersions,
+  serverSite,
   connect,
   onDone,
 }: {
@@ -83,13 +95,14 @@ function Connect({
   readonly siteId: string;
   readonly current: SiteGitConnection | null;
   readonly nodeVersions: string[];
+  readonly serverSite: boolean;
   readonly connect: ConnectMutation;
   readonly onDone?: () => void;
 }) {
   const { data: access, error, isLoading } = useGitRepositories(projectId, siteId, true);
   const [problem, setProblem] = useState<string | null>(null);
   const [repositoryId, setRepositoryId] = useState<number | null>(current?.repositoryId ?? null);
-  const [settings, setSettings] = useState<SiteBuildSettings>(current?.settings ?? EMPTY_SETTINGS);
+  const [settings, setSettings] = useState<SiteBuildSettings>(initialSettings(current, serverSite));
   const repositories: GitRepository[] = (access ?? []).flatMap((entry) => entry.repositories);
   const submit = () => {
     if (repositoryId === null) return;
@@ -128,6 +141,7 @@ function Connect({
           <SiteBuildSettingsForm
             settings={settings}
             nodeVersions={nodeVersions}
+            serverSite={serverSite}
             onChange={setSettings}
             onProblem={setProblem}
           />
@@ -157,6 +171,7 @@ function Connected({
   canDevelop,
   connection,
   nodeVersions,
+  serverSite = false,
   connect,
 }: SiteProps & {
   readonly connection: SiteGitConnection;
@@ -240,6 +255,7 @@ function Connected({
               siteId={siteId}
               current={connection}
               nodeVersions={nodeVersions}
+              serverSite={serverSite}
               connect={connect}
             />
           )}
@@ -251,6 +267,7 @@ function Connected({
           siteId={siteId}
           current={connection}
           nodeVersions={nodeVersions}
+          serverSite={serverSite}
           connect={connect}
           onDone={() => setEditing(false)}
         />
@@ -302,6 +319,7 @@ function SiteGitSection({
             canDevelop={canDevelop}
             connection={state.connection}
             nodeVersions={state.nodeVersions}
+            serverSite={serverSite}
             connect={connect}
           />
         )}
@@ -311,6 +329,7 @@ function SiteGitSection({
             siteId={siteId}
             current={null}
             nodeVersions={state.nodeVersions}
+            serverSite={serverSite}
             connect={connect}
           />
         )}

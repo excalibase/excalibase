@@ -17,6 +17,7 @@ type connectSiteRepoArgs struct {
 	InstallCommand string            `json:"install_command,omitempty" jsonschema:"left out, the lockfile decides: npm ci, pnpm install --frozen-lockfile or yarn install"`
 	BuildCommand   string            `json:"build_command,omitempty" jsonschema:"npm run build when left out"`
 	OutputDir      string            `json:"output_dir,omitempty" jsonschema:"where the build writes its files, relative to root_dir: dist (Vite), build, out (Next export); dist when left out"`
+	Framework      string            `json:"framework,omitempty" jsonschema:"nextjs for a server-rendered site (create_site with kind server, only on installs that offer them; elsewhere not found); it knows its own output, so output_dir is ignored. Left out builds static files"`
 	NodeVersion    string            `json:"node_version,omitempty" jsonschema:"the Node major: 20, 22 or 24; 22 when left out"`
 	BuildEnv       map[string]string `json:"build_env,omitempty" jsonschema:"plain build variables such as VITE_API_URL; they end up in the built files, so never put a secret here. Left out keeps the current ones"`
 }
@@ -81,7 +82,7 @@ func connectSiteRepo(ctx context.Context, c *call, in connectSiteRepoArgs) (any,
 	}
 	body := map[string]any{"repository": in.Repository, "settings": map[string]any{
 		"branch": in.Branch, "rootDir": in.RootDir, "installCommand": in.InstallCommand, "buildCommand": in.BuildCommand,
-		"outputDir": defaultString(in.OutputDir, "dist"), "nodeVersion": in.NodeVersion, "env": env,
+		"outputDir": defaultString(in.OutputDir, "dist"), "nodeVersion": in.NodeVersion, "framework": in.Framework, "env": env,
 	}}
 	var result map[string]any
 	err = c.send(ctx, http.MethodPut, path+"/git", nil, body, &result)

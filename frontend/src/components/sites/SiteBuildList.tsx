@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useSiteBuild, useSiteBuilds, type SiteBuild } from '../../api/siteBuilds';
 import { formatWhen, type Tone } from '../containers/appCopy';
 import { Spinner, ToneBadge, secondaryButton } from '../containers/ContainerBits';
@@ -82,6 +83,15 @@ function BuildRow({
         <p className="mt-1 text-xs text-red-400" data-testid={`site-build-reason-${build.id}`}>
           {build.failureReason}
         </p>
+      )}
+      {build.failureKind === 'framework' && (
+        <Link
+          to={`/project/${projectId}/containers`}
+          className="mt-1 inline-block text-xs text-purple-400 hover:underline"
+          data-testid={`site-build-container-${build.id}`}
+        >
+          Deploy this repository as an app container
+        </Link>
       )}
       {open && <BuildLog projectId={projectId} siteId={siteId} buildId={build.id} />}
     </li>

@@ -242,7 +242,13 @@ func failureMessage(status RunStatus, limits Limits, settings Settings) string {
 	case FailBuild:
 		return fmt.Sprintf("the build command failed (exit %d); see the log", status.ExitCode)
 	case FailNoOutput:
+		if settings.Framework == FrameworkNextjs {
+			return "the Next.js build wrote no server bundle or assets; see the log"
+		}
 		return fmt.Sprintf("the build finished but wrote no %q directory; check the output directory", settings.OutputDir)
+	case FailFramework:
+		return "this Next.js app cannot run as a server-rendered site (the log says why, for example Node.js middleware); " +
+			"deploy it as an app container instead"
 	case FailImage:
 		return "the Node image for this build could not be pulled: " + status.Detail
 	default:

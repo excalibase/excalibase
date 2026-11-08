@@ -7,6 +7,8 @@ const inputClass =
 interface Props {
   readonly settings: SiteBuildSettings;
   readonly nodeVersions: string[];
+  // A server site is built by a framework preset, which knows its own output.
+  readonly serverSite?: boolean;
   readonly onChange: (settings: SiteBuildSettings) => void;
   // Told whether the variables box holds something that cannot be saved as written.
   readonly onProblem?: (problem: string | null) => void;
@@ -130,7 +132,13 @@ function Field({
   );
 }
 
-export function SiteBuildSettingsForm({ settings, nodeVersions, onChange, onProblem }: Props) {
+export function SiteBuildSettingsForm({
+  settings,
+  nodeVersions,
+  serverSite = false,
+  onChange,
+  onProblem,
+}: Props) {
   const set = (field: keyof SiteBuildSettings) => (event: { target: { value: string } }) =>
     onChange({ ...settings, [field]: event.target.value });
   return (
@@ -170,14 +178,30 @@ export function SiteBuildSettingsForm({ settings, nodeVersions, onChange, onProb
           data-testid="build-command"
         />
       </Field>
-      <Field label="Output directory" hint="Relative to the root directory: dist, build or out.">
-        <input
-          className={inputClass}
-          value={settings.outputDir}
-          onChange={set('outputDir')}
-          data-testid="build-output"
-        />
-      </Field>
+      {serverSite ? (
+        <Field
+          label="Framework"
+          hint="Built for the edge with OpenNext. Other frameworks deploy as an app container."
+        >
+          <select
+            className={inputClass}
+            value={settings.framework ?? 'nextjs'}
+            onChange={set('framework')}
+            data-testid="build-framework"
+          >
+            <option value="nextjs">Next.js</option>
+          </select>
+        </Field>
+      ) : (
+        <Field label="Output directory" hint="Relative to the root directory: dist, build or out.">
+          <input
+            className={inputClass}
+            value={settings.outputDir}
+            onChange={set('outputDir')}
+            data-testid="build-output"
+          />
+        </Field>
+      )}
       <Field label="Node version" hint="The Node major the build runs on.">
         <select
           className={inputClass}

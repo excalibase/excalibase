@@ -64,6 +64,13 @@ func (m *memoryStore) GetConnection(_ context.Context, projectID, siteID string)
 	return &copied, nil
 }
 
+func (m *memoryStore) SaveConnection(_ context.Context, connection *Connection) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.siteConnections[connection.SiteID] = connection
+	return nil
+}
+
 func (m *memoryStore) ConnectionsForPush(_ context.Context, _ string, installationID, repositoryID int64, branch string) ([]*Connection, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -611,18 +618,24 @@ func (f *fakePublisher) PublishBuild(_ context.Context, publish AppPublish) (str
 }
 
 // fakeSites is a project with one site whose deploys always succeed.
-type fakeSites struct{}
+type fakeSites struct {
+	kind string
+	// serverOff is the sitesserver feature off.
+	serverOff bool
+}
 
-func (fakeSites) Get(_ context.Context, projectID, id string) (*sites.Site, error) {
+func (f fakeSites) Get(_ context.Context, projectID, id string) (*sites.Site, error) {
 	if projectID != testProject || id != testSite {
 		return nil, sites.ErrSiteNotFound
 	}
-	return &sites.Site{ID: id, ProjectID: projectID}, nil
+	return &sites.Site{ID: id, ProjectID: projectID, Kind: f.kind}, nil
 }
 
 func (fakeSites) Deploy(context.Context, sites.DeployRequest) (*sites.Deploy, error) {
 	return &sites.Deploy{ID: "site-deploy"}, nil
 }
+
+func (f fakeSites) ServerSitesOn(context.Context) bool { return !f.serverOff }
 
 func (fakeSites) MaxUploadBytes(context.Context, string) (int64, error) { return 1 << 20, nil }
 func (fakeSites) TakeDeploySlot(context.Context, string) error          { return nil }

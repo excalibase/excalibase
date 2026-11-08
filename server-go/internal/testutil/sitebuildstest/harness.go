@@ -317,8 +317,12 @@ func (h *Harness) SignIn() {
 func (h *Harness) Connect() *sitebuilds.ConnectResult {
 	h.t.Helper()
 	h.SignIn()
+	settings := sitebuilds.Settings{OutputDir: "dist"}
+	if h.Site.Kind == sites.KindServer {
+		settings = sitebuilds.Settings{Framework: sitebuilds.FrameworkNextjs}
+	}
 	result, err := h.Service.Connect(context.Background(), sitebuilds.ConnectRequest{ProjectID: h.Project, SiteID: h.Site.ID,
-		UserID: h.User, Repository: siteRepoName, Settings: sitebuilds.Settings{OutputDir: "dist"}})
+		UserID: h.User, Repository: siteRepoName, Settings: settings})
 	if err != nil {
 		h.t.Fatalf("connect: %v", err)
 	}

@@ -27,6 +27,20 @@ func siteBuildRouteCases() []routeCase {
 			},
 		},
 		{
+			name: "connect_site_repo builds a server site with a framework", tool: "connect_site_repo",
+			args: map[string]any{"project_id": testProjectA, "site_id": "s1", "repository": "acme/shop", "framework": "nextjs"},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodGet, projectsA+"/sites/s1/git", 200, `{"connected":false,"connection":null}`)
+				f.on(http.MethodPut, projectsA+"/sites/s1/git", 200, `{"connection":{}}`)
+			},
+			expect: []string{"GET " + projectsA + "/sites/s1/git", "PUT " + projectsA + "/sites/s1/git"},
+			check: func(t *testing.T, calls []recordedCall, _ map[string]any) {
+				if !strings.Contains(calls[1].Body, `"framework":"nextjs"`) {
+					t.Errorf("framework not sent: %s", calls[1].Body)
+				}
+			},
+		},
+		{
 			name: "connect_site_repo keeps the current variables", tool: "connect_site_repo",
 			args: map[string]any{"project_id": testProjectA, "site_id": "s1", "repository": "acme/site"},
 			setup: func(f *fakeRoutes) {

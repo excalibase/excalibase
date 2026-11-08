@@ -228,6 +228,25 @@ func TestSandboxOptOutLeavesTheRuntimeDefault(t *testing.T) {
 	}
 }
 
+// The collect step packs the layout of the preset, so it has to be told which.
+func TestFrameworkReachesTheBuildAndCollectSteps(t *testing.T) {
+	engine := newFakeEngine()
+	runner, _ := newTestRunner(t, engine, "runsc")
+	if err := runner.Verify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	spec := testSpec()
+	spec.Framework = sitebuilds.FrameworkNextjs
+	if err := runner.Start(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"build", "collect"} {
+		if got := env(engine.get(step(name)))["FRAMEWORK"]; got != "nextjs" {
+			t.Errorf("%s step FRAMEWORK = %q", name, got)
+		}
+	}
+}
+
 func TestCredentialsReachOnlyTheirStep(t *testing.T) {
 	engine := newFakeEngine()
 	runner, _ := newTestRunner(t, engine, "runsc")
