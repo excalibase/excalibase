@@ -3115,6 +3115,12 @@ func hostFirewallContainer(getenv func(string) string) string {
 	return getenv("HOST_FIREWALL_CONTAINER")
 }
 
+// appsWaitForHostFirewall says whether apps are held until the host firewall is healthy;
+// HOST_FIREWALL=off turns that off.
+func appsWaitForHostFirewall() bool {
+	return hostFirewallContainer(os.Getenv) != "" && os.Getenv("HOST_FIREWALL") != "off"
+}
+
 func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient, sqlStore storage.PlatformStore) (*provisioner.Factory, provisioner.DockerClient) {
 	if cfg.ProvisionerMode == "docker" {
 		dockerClient, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
