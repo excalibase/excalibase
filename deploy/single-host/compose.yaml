@@ -16,6 +16,8 @@ x-edge-aliases: &edge_aliases studio.${EXCALIBASE_DOMAIN:?run ./init.sh first},a
 x-watcher-image: &watcher_image docker.io/excalibase/excalibase-watcher-go@sha256:7b2f9feb21b2a92b34c3f7b136399c619d460bf5d296215b8662a7a334126d9e
 # The networks the host firewall guards (EXC-683): their bridges drop new
 # connections to the host; the tenants' also drop metadata and private ranges.
+# Project networks with a route out or a host address are on bridges exnet<hash>, under
+# one wildcard rule in place before any of them exists (EXC-687).
 x-bridge-networks: &bridge_networks excalibase-platform,excalibase-engine,excalibase-tenants,excalibase-edge,excalibase-dataplane,excalibase-metrics,excalibase-cdc,excalibase-logs,excalibase-drains,excalibase-drains-out,excalibase-egress
 # The platform's long-running containers host monitoring reads (EXC-670): the
 # proxy admits their stats and state, by these exact names, and nothing else of theirs.
@@ -44,6 +46,10 @@ services:
       LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
       # The host firewall (EXC-683): on Docker, on unless HOST_FIREWALL=off, on a release that has it.
       HOST_FIREWALL: ${HOST_FIREWALL:-}
+      APP_EGRESS_EXTRA_DENY_CIDRS: ${APP_EGRESS_EXTRA_DENY_CIDRS:-}
+      APP_HOSTING_ENABLED: ${APP_HOSTING_ENABLED:-false}
+      APP_EGRESS: ${APP_EGRESS:-}
+      APP_EGRESS_UNGUARDED: ${APP_EGRESS_UNGUARDED:-}
       HOST_RESOLV_CONF: ${HOST_RESOLV_CONF:-}
       ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
       PLATFORM_TAG: ${TAG:-1.5.0}
@@ -224,6 +230,11 @@ services:
       # Each platform network's real bridge, for the host firewall (EXC-683).
       PROXY_BRIDGE_NETWORKS: *bridge_networks
       PROXY_BRIDGES_FILE: /var/lib/excalibase-bridges/networks
+      # A reboot restarts everything with a restart policy, compose's dependencies unread:
+      # the proxy holds tenants to none and starts them once the firewall is healthy (EXC-683).
+      PROXY_FIREWALL_CONTAINER: excalibase-host-firewall
+      PROXY_STOPPED_FILE: /var/lib/excalibase-bridges/stopped
+      ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
     volumes:
       - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
       - bridges:/var/lib/excalibase-bridges
@@ -256,6 +267,9 @@ services:
       TRUSTED_PROXY_CIDRS: ${AIO_EDGE_SUBNET:-10.203.250.0/28}
       # Platform store (control-plane metadata and vault).
       PLATFORM_DB_URL: "postgres://excalibase:${POSTGRES_PASSWORD:?run ./init.sh first}@postgres:5432/excalibase_platform?sslmode=disable"
+      # Tenants start only behind it: an upgrade or restore checks it before changing anything (EXC-683).
+      HOST_FIREWALL_CONTAINER: excalibase-host-firewall
+      ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
       # bbolt vault backend lives here (selfhosted, no external VAULT_URL).
       STORAGE_PATH: /var/lib/excalibase
       # Studio is provisioning's only browser origin.
@@ -323,8 +337,11 @@ services:
       # the log-forwarder below, read from the Loki above, so they need FEATURE_HOSTLOGS.
       FEATURE_LOGDRAINS: ${FEATURE_LOGDRAINS:-false}
       LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
-      # The host's own public ranges, refused to apps and to the alert webhook; empty: only private ranges are.
+      # The host's own public ranges, refused to running apps (by the host firewall), the alert webhook and the
+      # log forwarder; empty: only private ranges are.
       APP_EGRESS_EXTRA_DENY_CIDRS: ${APP_EGRESS_EXTRA_DENY_CIDRS:-}
+      # The ranges refused to git builds, which run untrusted code. Their own list: the apps' never applies to them.
+      BUILD_EGRESS_EXTRA_DENY_CIDRS: ${BUILD_EGRESS_EXTRA_DENY_CIDRS:-}
       # Server-rendered sites on Cloudflare (EXC-661); needs SITES_ENABLED.
       FEATURE_SITESSERVER: ${FEATURE_SITESSERVER:-false}
       # End-user auth hooks: signed calls to the project's own endpoints (EXC-662).
@@ -441,6 +458,9 @@ services:
       APP_SANDBOX_RUNTIME: ${APP_SANDBOX_RUNTIME:-runsc}
       # "internet" lets apps call out; by default they reach only their project.
       APP_EGRESS: ${APP_EGRESS:-none}
+      # Rootless Podman's egress reaches the LAN and metadata, unguardable: accept takes that knowingly.
+      APP_EGRESS_UNGUARDED: ${APP_EGRESS_UNGUARDED:-}
+      HOST_FIREWALL: ${HOST_FIREWALL:-}
       APP_NETWORK_PREFIX: excalibase-net-
       APP_VOLUME_PREFIX: excalibase-vol-
       APP_EDGE_CONTAINER: excalibase-edge
@@ -749,6 +769,11 @@ services:
       HOST_FIREWALL_NETWORKS: *bridge_networks
       HOST_FIREWALL_TENANT_NETWORKS: excalibase-tenants
       HOST_FIREWALL_BRIDGES_FILE: /var/lib/excalibase-bridges/networks
+      # engineproxy.ProjectBridgePrefix; apps reach what the edge publishes, as the internet does.
+      HOST_FIREWALL_PROJECT_BRIDGES: exnet+
+      HOST_FIREWALL_EDGE_NETWORK: excalibase-edge
+      HOST_FIREWALL_EDGE_PORTS: ${EDGE_HTTP_PORT:-80} ${EDGE_HTTPS_PORT:-443}
+      APP_EGRESS_EXTRA_DENY_CIDRS: ${APP_EGRESS_EXTRA_DENY_CIDRS:-}
       # Off on purpose: HOST_FIREWALL=off (init.sh --no-host-firewall) or rootless Podman (uid 0).
       HOST_FIREWALL: ${HOST_FIREWALL:-}
       ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}

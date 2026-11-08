@@ -150,3 +150,18 @@ func TestDocumentDBKeepsTheReaderToItsDatabase(t *testing.T) {
 		t.Fatalf("reader lines out of place: %v", hba)
 	}
 }
+
+func TestOwnerStatementSilencesTheServerLogBeforeItNamesAVerifier(t *testing.T) {
+	engine := newFakeEngine()
+	prov := NewDockerPostgreSQLProvisioner(engine)
+	if _, err := prov.createOwner(context.Background(), "container", "app", "shop_owner"); err != nil {
+		t.Fatalf("createOwner: %v", err)
+	}
+	if len(engine.stdin) != 1 {
+		t.Fatalf("statements = %d", len(engine.stdin))
+	}
+	quiet, verifier := strings.Index(engine.stdin[0], pgroles.QuietSessionSQL()), strings.Index(engine.stdin[0], "SCRAM-SHA-256$")
+	if quiet < 0 || verifier < 0 || quiet > verifier {
+		t.Error("the owner statement names a verifier before silencing the server log")
+	}
+}

@@ -55,7 +55,7 @@ type SiteBuildOptions struct {
 	Slots int
 	// PrepareImage runs the root chmod of the work dirs.
 	PrepareImage string
-	// ExtraDenyCIDRs are the install's own off-cluster ranges denied to apps (APP_EGRESS_EXTRA_DENY_CIDRS).
+	// ExtraDenyCIDRs are the install's own off-cluster ranges denied to builds (BUILD_EGRESS_EXTRA_DENY_CIDRS).
 	ExtraDenyCIDRs []string
 }
 
@@ -202,7 +202,7 @@ func buildStepEnv(spec sitebuilds.RunSpec) []corev1.EnvVar {
 func collectContainer(spec sitebuilds.RunSpec) corev1.Container {
 	return corev1.Container{
 		Name: siteBuildCollect, Image: spec.Image, Command: []string{"bash", "/scripts/collect.sh"},
-		Env:             []corev1.EnvVar{{Name: "ROOT_DIR", Value: spec.RootDir}, {Name: "OUTPUT_DIR", Value: spec.OutputDir}},
+		Env:             []corev1.EnvVar{{Name: "ROOT_DIR", Value: spec.RootDir}, {Name: "OUTPUT_DIR", Value: spec.OutputDir}, {Name: "FRAMEWORK", Value: spec.Framework}},
 		SecurityContext: lockedDown(), Resources: guaranteed("250m", "256Mi"),
 		VolumeMounts: append(workMounts(), scriptMount()),
 		ReadinessProbe: &corev1.Probe{

@@ -5,22 +5,58 @@ import { useCreateSite } from '../api/sites';
 import { primaryButton, secondaryButton } from '../components/containers/ContainerBits';
 import { SitesGate, SitesHeader } from '../components/sites/SiteBits';
 import { siteNameProblem } from '../components/sites/siteName';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { useProjectRole } from '../hooks/useProjectRole';
+
+function KindChoice({
+  kind,
+  onChange,
+}: {
+  readonly kind: 'static' | 'server';
+  readonly onChange: (kind: 'static' | 'server') => void;
+}) {
+  const option = (value: 'static' | 'server', label: string) => (
+    <label className="flex items-center gap-2 text-sm text-text-primary">
+      <input
+        type="radio"
+        name="site-kind"
+        checked={kind === value}
+        onChange={() => onChange(value)}
+        data-testid={`site-kind-${value}`}
+      />
+      {label}
+    </label>
+  );
+  return (
+    <fieldset className="space-y-2" data-testid="site-kind">
+      <legend className="text-sm font-medium text-text-primary">Kind</legend>
+      {option('static', 'Static files (Vite, Astro static, a Next.js export)')}
+      {option('server', 'Server-rendered (Next.js)')}
+      <p className="text-xs text-text-tertiary" data-testid="site-kind-hint">
+        {kind === 'server'
+          ? 'Next.js runs on the edge and is built from git. It cannot be changed later. An app that does not fit runs as a container instead.'
+          : 'The built files are served from the CDN. It cannot be changed later.'}
+      </p>
+    </fieldset>
+  );
+}
 
 function CreateSiteForm({ projectId }: { readonly projectId: string }) {
   const navigate = useNavigate();
   const create = useCreateSite(projectId);
   const [name, setName] = useState('');
   const [spaFallback, setSpaFallback] = useState(true);
+  const { enabled: serverSitesOn } = useFeatureEnabled('sitesserver');
+  const [kind, setKind] = useState<'static' | 'server'>('static');
+  const server = serverSitesOn && kind === 'server';
   const problem = name === '' ? null : siteNameProblem(name);
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (name === '' || problem) return;
-    create.mutate(
-      { name, spaFallback },
-      { onSuccess: (site) => navigate(`/project/${projectId}/sites/${site.id}`) },
-    );
+    create.mutate(server ? { name, kind: 'server', spaFallback: false } : { name, spaFallback }, {
+      onSuccess: (site) => navigate(`/project/${projectId}/sites/${site.id}`),
+    });
   };
 
   return (
@@ -50,21 +86,24 @@ function CreateSiteForm({ projectId }: { readonly projectId: string }) {
           </p>
         )}
       </div>
-      <label className="flex items-start gap-3 text-sm text-text-primary">
-        <input
-          type="checkbox"
-          checked={spaFallback}
-          onChange={(event) => setSpaFallback(event.target.checked)}
-          className="mt-0.5"
-          data-testid="site-spa-fallback"
-        />
-        <span>
-          Single-page app
-          <span className="block text-xs text-text-tertiary">
-            Unknown paths load index.html so client-side routes work. Off, they get your 404.html.
+      {serverSitesOn && <KindChoice kind={kind} onChange={setKind} />}
+      {!server && (
+        <label className="flex items-start gap-3 text-sm text-text-primary">
+          <input
+            type="checkbox"
+            checked={spaFallback}
+            onChange={(event) => setSpaFallback(event.target.checked)}
+            className="mt-0.5"
+            data-testid="site-spa-fallback"
+          />
+          <span>
+            Single-page app
+            <span className="block text-xs text-text-tertiary">
+              Unknown paths load index.html so client-side routes work. Off, they get your 404.html.
+            </span>
           </span>
-        </span>
-      </label>
+        </label>
+      )}
       {create.error && (
         <div
           role="alert"

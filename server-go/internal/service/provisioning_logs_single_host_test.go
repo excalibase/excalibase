@@ -65,8 +65,8 @@ func TestLogSearchOnASingleHostClampsLikeThePodLog(t *testing.T) {
 	if _, err := svc.SearchProjectLogs(context.Background(), "host-a", LogSearch{Lines: 99999}); err != nil {
 		t.Fatal(err)
 	}
-	if logs.tail != 100 || !logs.since.IsZero() {
-		t.Errorf("tail %d since %v, want 100 and the whole log", logs.tail, logs.since)
+	if logs.tail != 5000 || !logs.since.IsZero() {
+		t.Errorf("tail %d since %v, want 5000 and the whole log", logs.tail, logs.since)
 	}
 }
 

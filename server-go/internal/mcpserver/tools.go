@@ -102,12 +102,14 @@ func catalogue() []entry {
 	tools = append(tools, siteTools()...)
 	tools = append(tools, siteDomainTools()...)
 	tools = append(tools, siteBuildTools()...)
+	tools = append(tools, siteGitTools()...)
 	tools = append(tools, sitePreviewTools()...)
 	tools = append(tools, shippingTools()...)
 	tools = append(tools, probeTools()...)
 	tools = append(tools, authFlowTools()...)
 	tools = append(tools, advisorTools()...)
 	tools = append(tools, dbAllowListTools()...)
+	tools = append(tools, monitoringTools()...)
 	return tools
 }
 

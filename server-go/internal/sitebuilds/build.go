@@ -26,18 +26,18 @@ const (
 )
 
 var (
-	ErrNotConnected  = errors.New("this site has no repository connected")
+	ErrNotConnected  = errors.New("no repository is connected here")
 	ErrBuildNotFound = errors.New("build not found")
 	// ErrUnavailable is an install without git builds switched on and wired.
 	ErrUnavailable = errors.New("git builds are not available on this install")
 	// ErrSingleHost is a single-host install, where git builds are not offered yet.
-	ErrSingleHost = errors.New("git builds are not offered on single-host installs yet: build the site in your own CI " +
-		"and deploy the output (Studio → Sites → Deploy from CI, or the get_ci_snippet tool with kind site)")
+	ErrSingleHost = errors.New("git builds are not offered on single-host installs yet: build in your own CI " +
+		"and deploy the result (Studio → Deploy from CI, or the get_ci_snippet tool)")
 	// ErrNotDeveloper is a connect by a member below the developer rung; the route gates it too.
 	ErrNotDeveloper = errors.New("connecting a repository needs the developer role on this project")
 	// ErrNotAuthorized is a repository the caller's own git-host sign-in did not show them.
-	ErrNotAuthorized = errors.New("sign in to GitHub from this site first: your sign-in has to show you can read that repository")
-	ErrStateInvalid  = errors.New("that sign-in link has expired or was already used; start again from the site")
+	ErrNotAuthorized = errors.New("sign in to GitHub from this page first: your sign-in has to show you can read that repository")
+	ErrStateInvalid  = errors.New("that sign-in link has expired or was already used; start again from the page you began on")
 	// ErrConnectionInactive is a connection whose connector can no longer deploy the project.
 	ErrConnectionInactive = errors.New("the member who connected this repository can no longer deploy this project; " +
 		"a developer has to sign in with GitHub and connect it again")
@@ -122,6 +122,10 @@ type Build struct {
 	Preview       *PreviewBuild `json:"preview,omitempty"`
 	FailureKind   FailureKind   `json:"failureKind,omitempty"`
 	FailureReason string        `json:"failureReason,omitempty"`
+	// WaitReason says why a queued build is waiting to run again.
+	WaitReason string `json:"waitReason,omitempty"`
+	// Requeues counts the times a full publish spool sent this build back to run again.
+	Requeues int `json:"-"`
 	// Log is read with one build, never with the list.
 	Log         string     `json:"log,omitempty"`
 	RequestedBy string     `json:"requestedBy"`
@@ -238,7 +242,13 @@ func failureMessage(status RunStatus, limits Limits, settings Settings) string {
 	case FailBuild:
 		return fmt.Sprintf("the build command failed (exit %d); see the log", status.ExitCode)
 	case FailNoOutput:
+		if settings.Framework == FrameworkNextjs {
+			return "the Next.js build wrote no server bundle or assets; see the log"
+		}
 		return fmt.Sprintf("the build finished but wrote no %q directory; check the output directory", settings.OutputDir)
+	case FailFramework:
+		return "this Next.js app cannot run as a server-rendered site (the log says why, for example Node.js middleware); " +
+			"deploy it as an app container instead"
 	case FailImage:
 		return "the Node image for this build could not be pulled: " + status.Detail
 	default:

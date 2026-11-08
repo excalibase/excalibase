@@ -17,10 +17,12 @@ const (
 
 // Exit codes build.sh and collect.sh use to name the failing step.
 const (
-	exitInstall  = 10
-	exitBuild    = 11
-	exitRootDir  = 12
-	exitNoOutput = 3
+	exitInstall = 10
+	exitBuild   = 11
+	exitRootDir = 12
+	// exitFramework is a framework preset refusing the app as a server-rendered site (EXC-661).
+	exitFramework = 13
+	exitNoOutput  = 3
 )
 
 // interpretSiteBuild reads the Job and its pod. Kills are read from each
@@ -155,6 +157,8 @@ func stepFailureKind(step string, code int32) sitebuilds.FailureKind {
 			return sitebuilds.FailInstall
 		case exitRootDir:
 			return sitebuilds.FailRootDir
+		case exitFramework:
+			return sitebuilds.FailFramework
 		default:
 			return sitebuilds.FailBuild
 		}

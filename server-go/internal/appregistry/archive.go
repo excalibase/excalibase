@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -155,6 +156,29 @@ func checkLayoutFile(r io.Reader) error {
 }
 
 // writeBlob stores a blob under its hex digest, refusing bytes that hash to anything else.
+// savedBlob is what saveBlob wrote: how many bytes, and their digest.
+type savedBlob struct {
+	size      int64
+	hexDigest string
+}
+
+func saveBlob(file io.Writer, r io.Reader) (savedBlob, error) {
+	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(file, hash), r)
+	if err != nil {
+		return savedBlob{}, blobWriteError(err)
+	}
+	return savedBlob{size: written, hexDigest: hex.EncodeToString(hash.Sum(nil))}, nil
+}
+
+// blobWriteError keeps a full disk apart from a bad archive: the first is the platform's room, the second the build's fault.
+func blobWriteError(err error) error {
+	if errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EDQUOT) {
+		return fmt.Errorf("write a blob: %w", err)
+	}
+	return fmt.Errorf("%w: %v", ErrBadArchive, err)
+}
+
 func (l *Layout) writeBlob(r io.Reader, hexDigest string, size int64) error {
 	if _, dup := l.blobs["sha256:"+hexDigest]; dup {
 		return fmt.Errorf("%w: blob %s twice", ErrBadArchive, hexDigest)
@@ -163,15 +187,15 @@ func (l *Layout) writeBlob(r io.Reader, hexDigest string, size int64) error {
 	if err != nil {
 		return err
 	}
-	hash := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(file, hash), r)
-	if closeErr := file.Close(); copyErr == nil {
-		copyErr = closeErr
+	saved, saveErr := saveBlob(file, r)
+	closeErr := file.Close()
+	if saveErr != nil {
+		return saveErr
 	}
-	if copyErr != nil {
-		return fmt.Errorf("%w: %v", ErrBadArchive, copyErr)
+	if closeErr != nil {
+		return blobWriteError(closeErr)
 	}
-	if written != size || hex.EncodeToString(hash.Sum(nil)) != hexDigest {
+	if saved.size != size || saved.hexDigest != hexDigest {
 		return fmt.Errorf("%w: blob %s does not hash to its name", ErrBadArchive, hexDigest)
 	}
 	l.blobs["sha256:"+hexDigest] = size

@@ -127,3 +127,33 @@ func TestRedactCoversASecretCutByTheTail(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestSettings_NextjsNeedsNoOutputDir(t *testing.T) {
+	settings := Settings{Branch: "main", Framework: FrameworkNextjs}
+	normalised, err := settings.Normalise()
+	if err != nil {
+		t.Fatalf("a Next.js site names no output folder: %v", err)
+	}
+	if normalised.Framework != FrameworkNextjs || normalised.OutputDir != "" {
+		t.Errorf("normalised %+v", normalised)
+	}
+}
+
+func TestSettings_UnknownFrameworkPointsToAContainer(t *testing.T) {
+	for _, framework := range []string{"nuxt", "astro", "sveltekit", "rails"} {
+		_, err := Settings{Branch: "main", Framework: framework}.Normalise()
+		if err == nil || !strings.Contains(err.Error(), "app container") {
+			t.Errorf("framework %q: want a refusal that names the app container, got %v", framework, err)
+		}
+	}
+}
+
+// A refused name may be a pasted secret, so the refusal never echoes it.
+func TestSettings_ABadVariableNameIsNotEchoed(t *testing.T) {
+	settings := validSettings()
+	settings.Env = map[string]string{"sk-live-pasted secret": "x"}
+	_, err := settings.Normalise()
+	if err == nil || strings.Contains(err.Error(), "sk-live") || strings.Contains(err.Error(), "pasted") {
+		t.Fatalf("refusal %v", err)
+	}
+}

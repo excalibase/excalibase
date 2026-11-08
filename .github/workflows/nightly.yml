@@ -18,7 +18,7 @@ permissions:
 jobs:
   real-r2-integration:
     name: Real R2 E2E (gated)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Only does real work when R2_ACCESS_KEY_ID (+ friends) is set in the GH
     # Actions environment. Unset = the test skips itself cleanly. Set CI
     # secrets in repo Settings → Secrets and Variables → Actions:
@@ -47,7 +47,7 @@ jobs:
 
   real-resend-integration:
     name: Real Resend E2E (gated)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Same shape as real-r2: gated on RESEND_API_KEY secret. Sends
     # to delivered@resend.dev (Resend's documented test sink — never
     # bounces real inboxes). Override RESEND_TEST_TO + RESEND_TEST_FROM
