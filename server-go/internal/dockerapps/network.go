@@ -26,6 +26,8 @@ func (r *Runtime) networkOptions(project string) network.CreateOptions {
 		options.Options = map[string]string{"isolate": "true"}
 	case r.isolatedGateway():
 		options.Options = IsolatedGatewayOptions()
+	case !r.opts.Isolate:
+		options.Options = FencedBridgeOptions(r.networkName(project))
 	}
 	return options
 }
@@ -80,10 +82,14 @@ func (r *Runtime) joinEdge(ctx context.Context, inspect network.Inspect) error {
 }
 
 func (r *Runtime) join(ctx context.Context, inspect network.Inspect, container string) error {
+	return r.joinAs(ctx, inspect, container, nil)
+}
+
+func (r *Runtime) joinAs(ctx context.Context, inspect network.Inspect, container string, settings *network.EndpointSettings) error {
 	if isMember(inspect, container) {
 		return nil
 	}
-	return r.connect(ctx, inspect.Name, container, nil)
+	return r.connect(ctx, inspect.Name, container, settings)
 }
 
 func isMember(inspect network.Inspect, container string) bool {
@@ -153,14 +159,17 @@ func (r *Runtime) Reconcile(ctx context.Context) error {
 		return err
 	}
 	public := map[string]bool{}
+	var errs []error
 	for _, record := range records {
 		rendered, err := r.renderRoute(record)
 		if err != nil {
-			return err
+			// The others' bridges still get remade; this one's route is read as public, which only keeps the edge on.
+			errs = append(errs, fmt.Errorf("project %s: %w", record.Project, err))
+			public[record.Project] = true
+			continue
 		}
 		public[record.Project] = public[record.Project] || rendered != ""
 	}
-	var errs []error
 	for project, routed := range public {
 		database, err := r.opts.Projects.NamespaceOf(project)
 		if err != nil {
@@ -168,6 +177,31 @@ func (r *Runtime) Reconcile(ctx context.Context) error {
 			continue
 		}
 		if err := r.ensureProjectNetwork(ctx, project, database, routed); err != nil {
+			errs = append(errs, fmt.Errorf("project %s: %w", project, err))
+		}
+	}
+	return errors.Join(append(errs, r.remakeLeftover(ctx, public))...)
+}
+
+// remakeLeftover remakes an older project network with no app record, which DeleteAppWorkload's
+// removal, interrupted, leaves: its database is attached to it, and may not start on an older bridge.
+func (r *Runtime) remakeLeftover(ctx context.Context, walked map[string]bool) error {
+	networks, err := r.engine.NetworkList(ctx, network.ListOptions{Filters: labelFilter()})
+	if err != nil {
+		return fmt.Errorf("list the project networks: %w", err)
+	}
+	var errs []error
+	for _, listed := range networks {
+		project := listed.Labels[labelProject]
+		if _, seen := walked[project]; seen || project == "" || listed.Name != r.networkName(project) || !r.olderNetwork(listed) {
+			continue
+		}
+		database, err := r.opts.Projects.NamespaceOf(project)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("project %s: %w", project, err))
+			continue
+		}
+		if err := r.ensureProjectNetwork(ctx, project, database, false); err != nil {
 			errs = append(errs, fmt.Errorf("project %s: %w", project, err))
 		}
 	}

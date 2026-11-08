@@ -16,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 )
 
 // The settings CNPG renders for a cluster with the feature on (EXC-654).
@@ -25,6 +26,9 @@ var statsServerArgs = []string{"-c", "shared_preload_libraries=pg_stat_statement
 func startStatsPostgres(t *testing.T) *rolePostgres {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pg, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("postgres"), postgres.WithPassword("p"),
 		testcontainers.WithCmd(append([]string{"postgres"}, statsServerArgs...)...),
@@ -46,6 +50,9 @@ func startStatsCNPGPostgres(t *testing.T) *rolePostgres {
 	t.Helper()
 	entry := config.PostgresCatalogEntries()[0]
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, entry.BaseImage); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        entry.BaseImage,

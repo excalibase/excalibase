@@ -3,7 +3,7 @@ name: E2E (k3d smoke)
 # Scoped control-plane smoke on a real Kubernetes cluster. We use k3d (k3s in
 # Docker), NOT minikube: minikube's docker driver aborts on hosted runners
 # (exit 29 "docker only supported on Linux with ...") whereas k3d's k3s-in-a-
-# container works reliably on ubuntu-latest.
+# container works reliably on ubuntu-24.04.
 #
 # Scope (deliberately narrow — reliability over ambition):
 #   * bring up the provisioning service + its Postgres platform store, using
@@ -48,7 +48,7 @@ jobs:
     # Hosted 2-core/7GB runner. Safe for this scoped smoke (one Postgres + the
     # provisioning pod, no CNPG/ingress/cert-manager). If the scope ever grows
     # to the full multi-tenant stack, move this to a self-hosted label instead.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       K3D_VERSION: v5.7.4

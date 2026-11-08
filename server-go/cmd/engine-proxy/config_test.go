@@ -1,9 +1,16 @@
 package main
 
 import (
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 )
@@ -210,5 +217,129 @@ func TestLoadConfigRefusesHalfABridgesSetting(t *testing.T) {
 		if _, err := loadConfig(env(settings)); err == nil {
 			t.Errorf("%v accepted", settings)
 		}
+	}
+}
+
+func TestLoadConfigReadsTheRestartGuard(t *testing.T) {
+	settings := map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_FIREWALL_CONTAINER": "excalibase-host-firewall",
+		"PROXY_STOPPED_FILE": "/var/lib/excalibase-bridges/stopped"}
+	cfg, err := loadConfig(env(settings))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.restarts == nil || cfg.restarts.FirewallContainer != "excalibase-host-firewall" || cfg.restarts.StoppedFile != "/var/lib/excalibase-bridges/stopped" {
+		t.Fatalf("restarts %+v", cfg.restarts)
+	}
+	// Rootless Podman's bridges live in the user's namespace: nothing to wait for, as the firewall itself decides.
+	settings["ENGINE_SOCKET_UID"] = "0"
+	if cfg, err = loadConfig(env(settings)); err != nil || cfg.restarts != nil {
+		t.Fatalf("rootless Podman: restarts %+v, err %v", cfg.restarts, err)
+	}
+}
+
+func TestLoadConfigRefusesHalfARestartGuard(t *testing.T) {
+	for _, settings := range []map[string]string{
+		{"PROXY_FIREWALL_CONTAINER": "excalibase-host-firewall"},
+		{"PROXY_STOPPED_FILE": "/var/lib/excalibase-bridges/stopped"},
+		{"PROXY_FIREWALL_CONTAINER": "not a name", "PROXY_STOPPED_FILE": "/var/lib/excalibase-bridges/stopped"},
+		{"PROXY_FIREWALL_CONTAINER": "excalibase-host-firewall", "PROXY_STOPPED_FILE": "relative/stopped"},
+	} {
+		settings["PROXY_NETWORKS"] = "excalibase-tenants"
+		if _, err := loadConfig(env(settings)); err == nil {
+			t.Errorf("%v accepted", settings)
+		}
+	}
+}
+
+// ENGINE_SOCKET_UID=0 claims a rootless engine: the proxy asks it, wherever the setting came from.
+func TestLoadConfigAsksTheEngineWhenTheSocketUIDClaimsRootless(t *testing.T) {
+	settings := map[string]string{"PROXY_NETWORKS": "excalibase-tenants"}
+	if cfg, err := loadConfig(env(settings)); err != nil || cfg.mustBeRootless {
+		t.Fatalf("docker: %+v, %v", cfg.mustBeRootless, err)
+	}
+	settings["ENGINE_SOCKET_UID"] = "0"
+	if cfg, err := loadConfig(env(settings)); err != nil || !cfg.mustBeRootless {
+		t.Fatalf("uid 0: %+v, %v", cfg.mustBeRootless, err)
+	}
+}
+
+// What main runs before it serves: a claim of rootless on an engine that is not one stops the proxy.
+func TestCheckStartupAsksTheEngine(t *testing.T) {
+	for options, want := range map[string]bool{`["name=rootless"]`: true, `[]`: false} {
+		engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"SecurityOptions":` + options + `}`))
+		}))
+		t.Cleanup(engine.Close)
+		target, err := url.Parse(engine.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler := engineproxy.NewHandler(engineproxy.Policy{}, target, http.DefaultTransport)
+		err = checkStartup(config{mustBeRootless: true}, handler)
+		if (err == nil) != want {
+			t.Errorf("%s: %v", options, err)
+		}
+		if err := checkStartup(config{}, handler); err != nil {
+			t.Errorf("not claiming rootless: %v", err)
+		}
+	}
+}
+
+// The wording fits every engine that gets here, Docker with the wrong setting too.
+func TestCheckStartupDoesNotCallEveryEngineRootfulPodman(t *testing.T) {
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"SecurityOptions":[]}`))
+	}))
+	t.Cleanup(engine.Close)
+	target, err := url.Parse(engine.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := engineproxy.NewHandler(engineproxy.Policy{}, target, http.DefaultTransport)
+	err = checkStartup(config{mustBeRootless: true}, handler)
+	if err == nil {
+		t.Fatal("accepted")
+	}
+	for _, want := range []string{"ENGINE_SOCKET_UID=0", "Docker", "ENGINE_SOCKET_UID=1000", "rootful Podman is not supported"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
+	}
+	if strings.HasPrefix(err.Error(), "rootful Podman") {
+		t.Errorf("%q calls the engine rootful Podman without knowing", err)
+	}
+}
+
+// main itself refuses: with the startup check gone from it, the proxy would listen.
+func TestServeRefusesAnEngineNotRootlessBeforeListening(t *testing.T) {
+	dir, err := os.MkdirTemp("", "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "e.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"SecurityOptions":[]}`))
+	}), ReadHeaderTimeout: time.Second}
+	go func() { _ = engine.Serve(listener) }()
+	t.Cleanup(func() { _ = engine.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		done <- serve(env(map[string]string{
+			"ENGINE_SOCKET": socket, "ENGINE_SOCKET_UID": "0", "PROXY_NETWORKS": "excalibase-tenants", "LISTEN_ADDR": "127.0.0.1:0",
+		}))
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "ENGINE_SOCKET_UID=0") {
+			t.Fatalf("serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the proxy went on to serve an engine that is not rootless")
 	}
 }

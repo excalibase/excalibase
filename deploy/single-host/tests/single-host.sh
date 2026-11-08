@@ -105,6 +105,23 @@ if fw["environment"]["HOST_FIREWALL_NETWORKS"] != proxy["environment"]["PROXY_BR
 for key in ("HOST_FIREWALL", "ENGINE_SOCKET_UID"):
     if key not in fw["environment"]:
         sys.exit(f"the firewall cannot tell it is off: no {key}")
+proxy_env = proxy["environment"]
+if proxy_env.get("PROXY_FIREWALL_CONTAINER") != fw.get("container_name"):
+    sys.exit("the proxy holds tenants to another container than the host firewall")
+if doc["services"]["provisioning"]["environment"].get("HOST_FIREWALL_CONTAINER") != fw.get("container_name"):
+    sys.exit("provisioning checks another container than the host firewall before changing a database")
+if "ENGINE_SOCKET_UID" not in doc["services"]["provisioning"]["environment"]:
+    sys.exit("provisioning cannot tell rootless Podman, which holds no tenant back")
+if fw.get("container_name") not in proxy_env.get("PROXY_STATS_CONTAINERS", "").split(","):
+    sys.exit("the proxy does not let provisioning read the state of the host firewall")
+if not proxy_env.get("PROXY_STOPPED_FILE", "").startswith("/var/lib/excalibase-bridges/") or "ENGINE_SOCKET_UID" not in proxy_env:
+    sys.exit("the proxy cannot record stops on its volume, or cannot tell rootless Podman")
+if fw["environment"].get("HOST_FIREWALL_PROJECT_BRIDGES") != "exnet+" or fw["environment"].get("HOST_FIREWALL_EDGE_NETWORK") != "excalibase-edge":
+    sys.exit("the firewall does not guard project bridges by the wildcard engineproxy names them under")
+if "APP_EGRESS_EXTRA_DENY_CIDRS" not in fw["environment"]:
+    sys.exit("the firewall does not read the deny list of the operator")
+if "HOST_FIREWALL" not in doc["services"]["provisioning"]["environment"]:
+    sys.exit("provisioning cannot tell the firewall is off, and would count apps as guarded")
 if fw["environment"]["HOST_FIREWALL_TENANT_NETWORKS"] != "excalibase-tenants":
     sys.exit("the tenant network is not the one guarded from metadata and the LAN")
 if fw.get("healthcheck", {}).get("test") != ["CMD", "sh", "/host-firewall.sh", "check"]:

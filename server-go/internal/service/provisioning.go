@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
@@ -43,6 +44,11 @@ type ProvisioningService struct {
 	queryStats bool
 	// runInBackground starts an accepted project build; nil runs it on its own goroutine.
 	runInBackground func(func())
+	// buildTimeout overrides defaultBuildTimeout; zero keeps the default.
+	buildTimeout time.Duration
+	// imagePullTimeout overrides defaultImagePullTimeout; zero keeps the default.
+	imagePullTimeout time.Duration
+	rollbackRetries  rollbackRetrySchedule
 	// storageBudget holds every database volume to the platform's share of its storage.
 	storageBudget *storagebudget.Budget
 	store         storage.InstanceStore
@@ -414,7 +420,10 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	if err != nil {
 		return nil, err
 	}
-	return admitted.build(ctx)
+	// The caller waits for the answer but does not own the build: a closed
+	// connection must not cancel it half-way and leave a FAILED project
+	// holding the organisation's slot.
+	return admitted.build(context.WithoutCancel(ctx))
 }
 
 // ProvisionInBackground admits the project as Provision does and answers as
@@ -439,13 +448,22 @@ func (s *ProvisioningService) ProvisionInBackground(ctx context.Context, req dom
 	return accepted, nil
 }
 
-// startInBackground runs an accepted build detached from its request.
+// startInBackground runs an accepted build detached from its request. Nothing
+// is left to catch a panic there, and it would take the whole control plane.
 func (s *ProvisioningService) startInBackground(f func()) {
+	guarded := func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("ERROR: background work panicked: %v\n%s", r, debug.Stack())
+			}
+		}()
+		f()
+	}
 	if s.runInBackground != nil {
-		s.runInBackground(f)
+		s.runInBackground(guarded)
 		return
 	}
-	go f()
+	go guarded()
 }
 
 // SetBackgroundRunner replaces how accepted builds are started (tests).
@@ -514,9 +532,23 @@ type provisionFailureHandler func(ctx context.Context, inst *domain.DatabaseInst
 // buildDatabase runs the provisioning pipeline for a project whose row is
 // already written: the cluster, then registration. It is the one path a
 // database comes into being by, whether with its project or added later.
-func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admittedProject) (*domain.ProvisioningResponse, error) {
+func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admittedProject) (resp *domain.ProvisioningResponse, err error) {
 	start, inst, req, prov := admitted.start, admitted.inst, admitted.req, admitted.prov
-	tier, fail, opts := admitted.tier, admitted.fail, admitted.opts
+	tier, opts := admitted.tier, admitted.opts
+	// Before the clock: a first pull takes as long as the network does.
+	if err := s.prepareBuildImages(ctx, prov, req); err != nil {
+		metrics.ObserveProvision(start, err)
+		pulling := provisioner.NewProvisionContext(nil, nil)
+		pulling.SetStage(domain.StageContainerCreation)
+		pulling.SetStep("pull image")
+		return admitted.fail(ctx, inst, req, pulling.Fail(err), pulling), nil
+	}
+	// Nothing below the provisioner has a timeout of its own: an exec whose
+	// commit waits on dead standbys would hold the row PROVISIONING for good.
+	limit := s.buildLimit()
+	deadline := fmt.Errorf("the database build did not finish within %s", limit)
+	ctx, stopClock := context.WithTimeoutCause(ctx, limit, deadline)
+	defer stopClock()
 	// A teardown that claims the project mid-build owns it from that moment.
 	// The pipeline must stop rather than keep creating resources the
 	// teardown has already looked for and not found: it cancels the
@@ -546,13 +578,32 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admit
 			persist()
 		},
 	)
+	// The handler's cleanups detach for themselves, so the finished ctx is fine.
+	fail := func(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest,
+		failure error, pc *provisioner.ProvisionContext) *domain.ProvisioningResponse {
+		if errors.Is(context.Cause(ctx), deadline) {
+			failure = pc.Fail(deadline)
+		}
+		return admitted.fail(ctx, inst, req, failure, pc)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ERROR: database build of %s panicked: %v\n%s", inst.ProjectID, r, debug.Stack())
+			metrics.ObserveProvision(start, errBuildPanicked)
+			resp, err = fail(ctx, inst, req, errBuildPanicked, pc), nil
+		}
+	}()
 
 	var result *provisioner.ProvisioningResult
 	var provErr error
 	if rbProv, ok := prov.(provisioner.RollbackAware); ok {
 		result, provErr = rbProv.ProvisionWithRollback(ctx, req, tier, pc)
 	} else {
-		// Legacy path — no rollback support.
+		// No rollback of its own: what it started is removed the way a delete
+		// removes it, under the namespace the row holds by then.
+		pc.RegisterCleanup(removeFailedBuildCleanup(inst.ProjectID), func(cleanupCtx context.Context) error {
+			return prov.Deprovision(cleanupCtx, inst.Namespace, inst.ProjectID)
+		})
 		result, provErr = prov.Provision(ctx, req, tier, pc.SetStage)
 	}
 	// A cancelled context outranks whatever the provisioner reported: the
@@ -560,16 +611,55 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admit
 	// registered. The failure handler runs the compensations.
 	if cause := context.Cause(ctx); cause != nil && isProjectGone(cause) {
 		metrics.ObserveProvision(start, cause)
-		return fail(context.WithoutCancel(ctx), inst, req, cause, pc), nil
+		return fail(ctx, inst, req, cause, pc), nil
 	}
 	if provErr != nil {
 		metrics.ObserveProvision(start, provErr)
-		return fail(context.WithoutCancel(ctx), inst, req, provErr, pc), nil
+		return fail(ctx, inst, req, provErr, pc), nil
 	}
 
-	resp, ferr := s.finalizeProvisioning(ctx, inst, req, result, pc, fail, opts)
-	metrics.ObserveProvision(start, ferr)
-	return resp, ferr
+	resp, err = s.finalizeProvisioning(ctx, inst, req, result, pc, fail, opts)
+	metrics.ObserveProvision(start, err)
+	return resp, err
+}
+
+// defaultBuildTimeout bounds one database build. It sits above the longest pod
+// wait (11 minutes on a paid tier) and below storage.StaleBuildAfter, so a hung
+// build ends itself before a delete may take its row for abandoned. An image pull
+// runs ahead of this clock and can outlast that rule; a delete that takes the row
+// then stops the build at its next stage.
+const defaultBuildTimeout = 20 * time.Minute
+
+// defaultImagePullTimeout bounds fetching a build's images, which runs ahead of
+// the build's own clock.
+const defaultImagePullTimeout = time.Hour
+
+func (s *ProvisioningService) prepareBuildImages(ctx context.Context, prov provisioner.DatabaseProvisioner, req domain.ProvisioningRequest) error {
+	preparer, ok := prov.(provisioner.ImagePreparer)
+	if !ok {
+		return nil
+	}
+	limit := s.imagePullTimeout
+	if limit <= 0 {
+		limit = defaultImagePullTimeout
+	}
+	pullCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	if err := preparer.PrepareImages(pullCtx, req); err != nil {
+		return fmt.Errorf("pull the database's images: %w", err)
+	}
+	return nil
+}
+
+// errBuildPanicked is what a project records when its build panicked; the panic
+// itself goes to the log only.
+var errBuildPanicked = errors.New("the database build stopped on an internal error")
+
+func (s *ProvisioningService) buildLimit() time.Duration {
+	if s.buildTimeout > 0 {
+		return s.buildTimeout
+	}
+	return defaultBuildTimeout
 }
 
 // prepareProvisioning validates the request and creates the initial instance record.
@@ -904,13 +994,17 @@ func (s *ProvisioningService) recordProvisionFailure(
 	log.Printf("Provisioning failed for %s at stage %s (%s): %v — running %d cleanup(s)",
 		req.ProjectName, inst.FailureStage, inst.FailureStep, inst.FailureReason, pc.CleanupCount())
 
-	results := pc.Rollback(ctx)
+	results := provisioner.ScopeCleanupResults(pc.Rollback(ctx), inst.FailureReason)
 	if logJSON, jerr := json.Marshal(results); jerr == nil {
 		inst.RollbackLog = string(logJSON)
 	} else {
 		log.Printf("WARN: marshal rollback log: %v", jerr)
 	}
-
+	for _, result := range results {
+		if !result.OK {
+			log.Printf("ERROR: rollback of %s: %s failed: %s", req.ProjectName, result.Name, result.Error)
+		}
+	}
 }
 
 // saveProvisionFailure persists the failed row and answers with it.

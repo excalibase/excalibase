@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"maps"
 	"slices"
 	"strings"
@@ -23,15 +24,16 @@ const podNameFmt = "%s-postgres-%d"
 
 // MockClient is a test double for KubeClient.
 type MockClient struct {
-	mu              sync.Mutex
-	Namespaces      map[string]bool
-	NamespaceLabels map[string]map[string]string
-	CRDs            map[string]*unstructured.Unstructured
-	Secrets         map[string]map[string][]byte
-	Pods            map[string][]corev1.Pod
-	PodLogs         map[string]string   // key: "namespace/pod" or "namespace/pod/container" → log tail
-	PodLogTailLines []int64             // the lines each PodLogTail call asked for
-	PVCs            map[string][]string // namespace → PersistentVolumeClaim names
+	mu                 sync.Mutex
+	Namespaces         map[string]bool
+	NamespaceLabels    map[string]map[string]string
+	CRDs               map[string]*unstructured.Unstructured
+	Secrets            map[string]map[string][]byte
+	Pods               map[string][]corev1.Pod
+	PodLogs            map[string]string   // key: "namespace/pod" or "namespace/pod/container" → log tail
+	PodLogSinceSeconds []int64             // the window each PodLogSince call asked for
+	PodLogTailLines    []int64             // the lines each PodLogTail call asked for
+	PVCs               map[string][]string // namespace → PersistentVolumeClaim names
 	// StuckNamespaces model a namespace whose deletion is accepted but never
 	// completes — a finalizer or a Terminating pod holds it. DeleteNamespace
 	// returns nil for these, yet the namespace and its contents survive.
@@ -76,6 +78,8 @@ type MockClient struct {
 	WildcardExecOutput string
 	// ExecAnswer, when set, answers every ExecInPod by its argv instead.
 	ExecAnswer func(cmd []string) (string, error)
+	// ExecAnswerStdin answers a command given stdin by what it was fed; it is asked first.
+	ExecAnswerStdin func(stdin string) (string, error)
 	// ExecAnswerInPod answers by pod as well as command; it is asked before ExecAnswer.
 	ExecAnswerInPod func(pod string, cmd []string) (string, error)
 
@@ -600,6 +604,13 @@ func (m *MockClient) PodLogTail(ctx context.Context, namespace, pod, container s
 	return "", fmt.Errorf("no log: %s/%s", namespace, pod)
 }
 
+func (m *MockClient) PodLogSince(ctx context.Context, namespace, pod, container string, lines int64, window time.Duration) (string, error) {
+	m.mu.Lock()
+	m.PodLogSinceSeconds = append(m.PodLogSinceSeconds, int64(window/time.Second))
+	m.mu.Unlock()
+	return m.PodLogTail(ctx, namespace, pod, container, lines)
+}
+
 func (m *MockClient) IsPodReady(ctx context.Context, namespace, name string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -692,7 +703,12 @@ func (m *MockClient) ExecInPod(ctx context.Context, namespace, pod, container st
 // the real client: argv becomes URL query parameters the API server audits,
 // stdin stays in the request body.
 func (m *MockClient) ExecInPodStdin(ctx context.Context, namespace, pod, container string, cmd []string, stdin string) (string, error) {
-	return m.exec(namespace, pod, cmd, stdin)
+	out, err := m.exec(namespace, pod, cmd, stdin)
+	// A role script that ran prints its end marker, whatever else it was told to say.
+	if err == nil && strings.Contains(stdin, pgroles.RoleSQLDoneMarker) {
+		out += pgroles.RoleSQLDoneMarker + "\n"
+	}
+	return out, err
 }
 
 func (m *MockClient) exec(namespace, pod string, cmd []string, stdin string) (string, error) {
@@ -706,6 +722,9 @@ func (m *MockClient) exec(namespace, pod string, cmd []string, stdin string) (st
 	key := namespace + "/" + pod
 	if err, ok := m.ExecError[key]; ok && err != nil {
 		return "", err
+	}
+	if m.ExecAnswerStdin != nil && stdin != "" {
+		return m.ExecAnswerStdin(stdin)
 	}
 	if m.ExecAnswerInPod != nil {
 		return m.ExecAnswerInPod(pod, cmd)

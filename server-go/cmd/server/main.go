@@ -294,6 +294,8 @@ func runServer(cfg config.AppConfig) {
 	}
 	stopDeletionSweep := startDeletionSweeper(cfg, sqlStore, provSvc, deps.backupHandler.Service())
 	defer stopDeletionSweep()
+	stopRollbackRetry := startRollbackRetrySweeper(cfg, sqlStore, provSvc)
+	defer stopRollbackRetry()
 	stopIdlePause := startIdlePauseScheduler(cfg, sqlStore, store, provSvc, pauseSvc, deps.emailSender)
 	defer stopIdlePause()
 
@@ -1582,11 +1584,12 @@ func buildBackupService(
 
 	if cfg.ProvisionerMode == "docker" && dockerClient != nil {
 		dockerSDK, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
-			Host:        os.Getenv("DOCKER_HOST"),
-			CertPath:    os.Getenv("DOCKER_CERT_PATH"),
-			TLSVerify:   os.Getenv("DOCKER_TLS_VERIFY") != "",
-			BindAddress: dbBindAddr(cfg),
-			Network:     cfg.DockerNetwork,
+			Host:              os.Getenv("DOCKER_HOST"),
+			CertPath:          os.Getenv("DOCKER_CERT_PATH"),
+			TLSVerify:         os.Getenv("DOCKER_TLS_VERIFY") != "",
+			BindAddress:       dbBindAddr(cfg),
+			Network:           cfg.DockerNetwork,
+			FirewallContainer: hostFirewallContainer(os.Getenv),
 		})
 		if err == nil {
 			runner := service.NewDockerBackupRunner(dockerSDK.RawClient())
@@ -3103,14 +3106,30 @@ func dbBindAddr(cfg config.AppConfig) string {
 	return "127.0.0.1"
 }
 
+// hostFirewallContainer is the firewall this host's tenants wait for. On rootless
+// Podman (uid 0) the proxy holds no tenant back, and its healthchecks may never run.
+func hostFirewallContainer(getenv func(string) string) string {
+	if getenv("ENGINE_SOCKET_UID") == "0" {
+		return ""
+	}
+	return getenv("HOST_FIREWALL_CONTAINER")
+}
+
+// appsWaitForHostFirewall says whether apps are held until the host firewall is healthy;
+// HOST_FIREWALL=off turns that off.
+func appsWaitForHostFirewall() bool {
+	return hostFirewallContainer(os.Getenv) != "" && os.Getenv("HOST_FIREWALL") != "off"
+}
+
 func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient, sqlStore storage.PlatformStore) (*provisioner.Factory, provisioner.DockerClient) {
 	if cfg.ProvisionerMode == "docker" {
 		dockerClient, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
-			Host:        cfg.DockerHost,
-			CertPath:    cfg.DockerCertPath,
-			TLSVerify:   cfg.DockerTLSVerify,
-			BindAddress: dbBindAddr(cfg),
-			Network:     cfg.DockerNetwork,
+			Host:              cfg.DockerHost,
+			CertPath:          cfg.DockerCertPath,
+			TLSVerify:         cfg.DockerTLSVerify,
+			BindAddress:       dbBindAddr(cfg),
+			Network:           cfg.DockerNetwork,
+			FirewallContainer: hostFirewallContainer(os.Getenv),
 		})
 		if err != nil {
 			log.Fatalf("docker provisioner: %v", err)

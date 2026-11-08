@@ -14,6 +14,8 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 )
 
 // box is one build's sandbox on this host, whatever the build makes: an internal network whose only
@@ -74,7 +76,7 @@ func (r *Runner) layOut(ctx context.Context, b box) error {
 	if err := r.ensureEgressNetwork(ctx); err != nil {
 		return err
 	}
-	if _, err := r.engine.NetworkCreate(ctx, r.buildNetwork(b.id), r.buildNetworkOptions(b.labels)); err != nil {
+	if _, err := r.engine.NetworkCreate(ctx, r.buildNetwork(b.id), r.buildNetworkOptions(r.buildNetwork(b.id), b.labels)); err != nil {
 		return fmt.Errorf("create the build network: %w", err)
 	}
 	if _, err := r.engine.VolumeCreate(ctx, volume.CreateOptions{Name: r.workVolume(b.id), Driver: "local", Labels: b.labels}); err != nil {
@@ -105,7 +107,7 @@ func (r *Runner) ensureEgressNetwork(ctx context.Context) error {
 // under gVisor a step may not reach the engine's resolver.
 func (r *Runner) startEgress(ctx context.Context, b box) (string, error) {
 	config := &container.Config{
-		Image: r.opts.EgressImage, User: buildUser, Entrypoint: []string{"/bin/excalibase-build-egress"},
+		Image: r.opts.EgressImage, User: buildUser, Entrypoint: []string{engineproxy.BuildEgressEntrypoint},
 		Env: []string{
 			"EGRESS_LISTEN=:" + egressPort,
 			"EGRESS_EXTRA_DENY_CIDRS=" + strings.Join(r.opts.ExtraDenyCIDRs, ","),

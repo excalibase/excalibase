@@ -451,6 +451,19 @@ func (c *Client) PodLogTail(ctx context.Context, namespace, pod, container strin
 	return string(raw), nil
 }
 
+// PodLogSince is the last lines of one container's log written within window.
+func (c *Client) PodLogSince(ctx context.Context, namespace, pod, container string, lines int64, window time.Duration) (string, error) {
+	seconds := int64(window / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	raw, err := c.clientset.CoreV1().Pods(namespace).GetLogs(pod, &corev1.PodLogOptions{Container: container, TailLines: &lines, SinceSeconds: &seconds}).DoRaw(ctx)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
 // IsPodReady checks if a pod has phase=Running and all containers ready.
 func (c *Client) IsPodReady(ctx context.Context, namespace, name string) (bool, error) {
 	pod, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -551,7 +564,12 @@ func (c *Client) StreamExecInPod(ctx context.Context, namespace, pod, container 
 		return err
 	}
 	stderr := &cappedBuffer{limit: 4096}
-	if err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: stderr}); err != nil {
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: stderr})
+	if ctx.Err() != nil {
+		// The stream's copies may still be writing: the buffer is not ours yet.
+		return fmt.Errorf("exec: %w", ctx.Err())
+	}
+	if err != nil {
 		return fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
 	}
 	return nil
@@ -585,7 +603,7 @@ func (c *Client) executor(namespace, pod, container string, cmd []string, stdin 
 	for _, arg := range cmd {
 		req = req.Param("command", arg)
 	}
-	exec, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
+	exec, err := newCancellableExecutor(c.restConfig, req.URL())
 	if err != nil {
 		return nil, fmt.Errorf("create executor: %w", err)
 	}
@@ -607,6 +625,10 @@ func (c *Client) exec(ctx context.Context, namespace, pod, container string, cmd
 		opts.Stdin = strings.NewReader(stdin)
 	}
 	err = exec.StreamWithContext(ctx, opts)
+	if ctx.Err() != nil {
+		// The stream's copies may still be writing: the buffers are not ours yet.
+		return "", fmt.Errorf("exec: %w", ctx.Err())
+	}
 	if err != nil {
 		return "", fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
 	}
