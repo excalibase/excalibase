@@ -337,8 +337,8 @@ services:
       # the log-forwarder below, read from the Loki above, so they need FEATURE_HOSTLOGS.
       FEATURE_LOGDRAINS: ${FEATURE_LOGDRAINS:-false}
       LOG_FORWARDER_TOKEN: ${LOG_FORWARDER_TOKEN:-}
-      # The host's own public ranges, refused to the alert webhook and the log forwarder; empty: only private ranges are.
-      # Running apps on a single host read no list: they get a route out only with APP_EGRESS=internet.
+      # The host's own public ranges, refused to running apps (by the host firewall), the alert webhook and the
+      # log forwarder; empty: only private ranges are.
       APP_EGRESS_EXTRA_DENY_CIDRS: ${APP_EGRESS_EXTRA_DENY_CIDRS:-}
       # The ranges refused to git builds, which run untrusted code. Their own list: the apps' never applies to them.
       BUILD_EGRESS_EXTRA_DENY_CIDRS: ${BUILD_EGRESS_EXTRA_DENY_CIDRS:-}
