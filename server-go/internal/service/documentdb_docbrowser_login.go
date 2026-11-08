@@ -21,8 +21,10 @@ const docBrowserStep = "create document browser login"
 // docBrowserVaultPath files the login beside the platform's own credentials,
 // outside the prefix the project's Mongo user listing reads.
 func docBrowserVaultPath(projectID string) string {
-	return vaultCredentialPath(projectID, "docbrowser")
+	return vaultCredentialPath(projectID, docBrowserCredential)
 }
+
+const docBrowserCredential = "docbrowser"
 
 // createDocBrowserLogin creates the login with a fresh password, maps it for
 // the extension's socket and files it. It reuses the Mongo user statements

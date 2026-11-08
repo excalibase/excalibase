@@ -294,6 +294,8 @@ func runServer(cfg config.AppConfig) {
 	}
 	stopDeletionSweep := startDeletionSweeper(cfg, sqlStore, provSvc, deps.backupHandler.Service())
 	defer stopDeletionSweep()
+	stopRollbackRetry := startRollbackRetrySweeper(cfg, sqlStore, provSvc)
+	defer stopRollbackRetry()
 	stopIdlePause := startIdlePauseScheduler(cfg, sqlStore, store, provSvc, pauseSvc, deps.emailSender)
 	defer stopIdlePause()
 

@@ -476,3 +476,40 @@ func generatePassword() string {
 	_, _ = rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
+
+// imageFetcher is the part of a Docker client that can pull ahead of a build.
+type imageFetcher interface {
+	EnsureImage(ctx context.Context, image string) error
+}
+
+// PrepareImages fetches what the build will start. A request naming no listed
+// version is left for Provision to refuse, as it always has.
+func (p *DockerPostgreSQLProvisioner) PrepareImages(ctx context.Context, req domain.ProvisioningRequest) error {
+	fetcher, ok := p.docker.(imageFetcher)
+	if !ok {
+		return nil
+	}
+	images := []string{}
+	if req.DocumentDB {
+		image, err := config.DockerDocumentDBImage(req.PostgresVersion)
+		if err != nil {
+			return nil
+		}
+		images = append(images, image, config.DocumentDBGatewayImage())
+	} else {
+		image, err := config.DockerPostgresImage(req.PostgresVersion)
+		if err != nil {
+			return nil
+		}
+		images = append(images, image)
+	}
+	if p.watcher.Image != "" {
+		images = append(images, p.watcher.Image)
+	}
+	for _, image := range images {
+		if err := fetcher.EnsureImage(ctx, image); err != nil {
+			return err
+		}
+	}
+	return nil
+}

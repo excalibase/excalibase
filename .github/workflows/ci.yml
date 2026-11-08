@@ -21,6 +21,7 @@ jobs:
       ci: ${{ steps.filter.outputs.ci }}
       hosting: ${{ steps.filter.outputs.hosting }}
       mysqlbackup: ${{ steps.filter.outputs.mysqlbackup }}
+      failedprovisioning: ${{ steps.filter.outputs.failedprovisioning }}
       singlehost: ${{ steps.filter.outputs.singlehost }}
       singlehostboot: ${{ steps.filter.outputs.singlehostboot }}
       sitesrouter: ${{ steps.filter.outputs.sitesrouter }}
@@ -104,6 +105,15 @@ jobs:
               - 'server-go/internal/k8s/mysql_tls*'
               - 'server-go/internal/k8s/client.go'
               - 'server-go/internal/k8s/app_egress_k3s_test.go'
+            failedprovisioning:
+              - 'server-go/internal/service/provisioning_rollback_retry.go'
+              - 'server-go/internal/service/provisioning_database.go'
+              - 'server-go/internal/service/restore_completion.go'
+              - 'server-go/internal/service/deletion_grace.go'
+              - 'server-go/internal/service/project_registration.go'
+              - 'server-go/internal/service/provisioning_failure_live_test.go'
+              - 'server-go/internal/provisioner/context.go'
+              - 'server-go/internal/k8s/exec_transport.go'
 
   single-host:
     name: Single-host bundle
@@ -583,6 +593,24 @@ jobs:
           cache-dependency-path: server-go/go.sum
       - name: Run MySQL backup egress probes
         run: go test -tags=live ./internal/k8s/ -run 'TestK3s.*MySQLBackup' -v -timeout 40m
+
+  live-failed-provisioning:
+    name: Live failed provisioning
+    runs-on: ubuntu-24.04
+    needs: [changes, go-lint]
+    # EXC-534: seals, dropped requests and failed rollbacks on real k3s, CloudNativePG and vault; about 15 minutes.
+    if: needs.changes.outputs.failedprovisioning == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: server-go/go.sum
+      - name: Run failed provisioning scenarios
+        run: go test -tags=live ./internal/service/ -run 'TestLiveFailedProvisioning' -v -count=1 -timeout 45m
 
   live-site-builds:
     name: Live site builds (gVisor)

@@ -174,3 +174,5 @@ func TestAdmin_QueryLogs_NoLokiURL(t *testing.T) {
 		t.Errorf("missing LOKI_URL should 503, got %d", w.Code)
 	}
 }
+
+func (_ errInstanceStore) RecordRollbackRetry(string, string, string, string) error { return nil }
