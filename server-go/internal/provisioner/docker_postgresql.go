@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -356,6 +357,27 @@ func (p *DockerPostgreSQLProvisioner) Resume(ctx context.Context, namespace, pro
 	return nil
 }
 
+// keptByUpgrades finds the old containers major upgrades left. Each holds a whole
+// copy of the data and a dump with every password hash, and the runs naming them
+// go with the project's row, so they are looked for by name.
+func (p *DockerPostgreSQLProvisioner) keptByUpgrades(ctx context.Context, projectID string) ([]string, error) {
+	lister, ok := p.docker.(ManagedContainerLister)
+	if !ok {
+		return nil, nil
+	}
+	names, err := lister.ManagedContainerNames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("find the containers upgrades kept: %w", err)
+	}
+	var kept []string
+	for _, name := range names {
+		if strings.HasPrefix(name, preUpgradePrefix(projectID)) {
+			kept = append(kept, name)
+		}
+	}
+	return kept, nil
+}
+
 // Deprovision removes the project's containers, a DocumentDB gateway first
 // (Podman refuses to remove a container another joined), and returns only
 // once the daemon reports them gone. A container that is already absent
@@ -372,7 +394,11 @@ func (p *DockerPostgreSQLProvisioner) Deprovision(ctx context.Context, namespace
 	if named := DatabaseContainerName(projectID); named != namespace {
 		containers = append(containers, named)
 	}
-	for _, id := range containers {
+	kept, err := p.keptByUpgrades(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	for _, id := range append(containers, kept...) {
 		if err := p.removeObserved(ctx, id); err != nil {
 			return err
 		}

@@ -14,6 +14,9 @@
 //	PROXY_STATS_CONTAINERS platform containers, by exact name, host monitoring reads stats and state of (optional)
 //	PROXY_BRIDGE_NETWORKS and PROXY_BRIDGES_FILE  platform networks whose host bridges the proxy
 //	                      writes to the file for the host firewall (optional, together; EXC-683)
+//	PROXY_FIREWALL_CONTAINER and PROXY_STOPPED_FILE  the firewall tenants wait for, and the record of those
+//	                      stopped on purpose (optional, together; EXC-683); off when ENGINE_SOCKET_UID is 0,
+//	                      rootless Podman, whose bridges live in the user's own namespace
 package main
 
 import (
@@ -48,19 +51,32 @@ type config struct {
 	// bridgeNetworks are written with their host bridges to bridgesFile.
 	bridgeNetworks []string
 	bridgesFile    string
+	restarts       *engineproxy.Restarts
+	// mustBeRootless: the settings claim rootless Podman, so the engine has to say so too.
+	mustBeRootless bool
 }
 
 // bridgesEvery is how often the bridges file is rewritten: a network
 // re-created by compose gets a new bridge.
 const bridgesEvery = 15 * time.Second
 
+// rootlessAttempts bounds, in seconds, the wait for the engine to answer whether it is rootless.
+const rootlessAttempts = 30
+
 func main() {
-	cfg, err := loadConfig(os.Getenv)
-	if err != nil {
+	if err := serve(os.Getenv); err != nil {
 		log.Fatalf("engine proxy: %v", err)
 	}
+}
+
+// serve runs the proxy until it cannot.
+func serve(getenv func(string) string) error {
+	cfg, err := loadConfig(getenv)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(cfg.socket); err != nil {
-		log.Fatalf("engine proxy: engine socket: %v", err)
+		return fmt.Errorf("engine socket: %w", err)
 	}
 	dial := func(ctx context.Context) (net.Conn, error) {
 		var dialer net.Dialer
@@ -71,8 +87,17 @@ func main() {
 	}
 	target := &url.URL{Scheme: "http", Host: "engine"}
 	handler := engineproxy.NewHandler(cfg.policy, target, transport).WithUpgradeDial(dial)
+	if err := checkStartup(cfg, handler); err != nil {
+		return err
+	}
 	if cfg.bridgesFile != "" {
 		go publishBridges(handler, cfg.bridgeNetworks, cfg.bridgesFile)
+	}
+	if cfg.restarts != nil {
+		if handler, err = handler.WithRestarts(*cfg.restarts); err != nil {
+			return err
+		}
+		go handler.SuperviseRestarts(context.Background())
 	}
 	server := &http.Server{
 		Addr:              cfg.listen,
@@ -81,8 +106,35 @@ func main() {
 	}
 	log.Printf("engine proxy: %s -> %s, networks %v prefix %q", cfg.listen, cfg.socket, cfg.policy.Networks, cfg.policy.NetworkPrefix)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("engine proxy: %v", err)
+		return err
 	}
+	return nil
+}
+
+// checkStartup is what must hold before the proxy serves. ENGINE_SOCKET_UID=0
+// exempts an install from the host firewall, and only rootless Podman's bridges
+// are safe without it (EXC-683), so the engine has to say it is rootless. An
+// engine that does not answer yet gets a moment.
+func checkStartup(cfg config, handler *engineproxy.Handler) error {
+	if !cfg.mustBeRootless {
+		return nil
+	}
+	var rootless bool
+	var err error
+	for attempt := 0; attempt < rootlessAttempts; attempt++ {
+		if rootless, err = handler.EngineRootless(context.Background()); err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil {
+		return fmt.Errorf("ENGINE_SOCKET_UID=0 claims rootless Podman, and the engine does not answer: %w", err)
+	}
+	if !rootless {
+		return errors.New("ENGINE_SOCKET_UID=0 claims rootless Podman, and this engine runs as root, so nothing would guard the host " +
+			"from tenant containers. On Docker, set ENGINE_SOCKET_UID=1000 (./init.sh writes it); rootful Podman is not supported, so use rootless Podman or Docker")
+	}
+	return nil
 }
 
 // publishBridges keeps the host firewall's bridges file current. A network it
@@ -99,6 +151,28 @@ func publishBridges(handler *engineproxy.Handler, networks []string, path string
 		}
 		time.Sleep(bridgesEvery)
 	}
+}
+
+// restartsSetting reads the guard on tenant restarts: both settings or neither.
+func restartsSetting(getenv func(string) string) (*engineproxy.Restarts, error) {
+	firewall := strings.TrimSpace(getenv("PROXY_FIREWALL_CONTAINER"))
+	file := strings.TrimSpace(getenv("PROXY_STOPPED_FILE"))
+	if (firewall == "") != (file == "") {
+		return nil, errors.New("PROXY_FIREWALL_CONTAINER and PROXY_STOPPED_FILE go together")
+	}
+	if firewall == "" {
+		return nil, nil
+	}
+	if !containerName.MatchString(firewall) {
+		return nil, fmt.Errorf("PROXY_FIREWALL_CONTAINER %q is not a container name", firewall)
+	}
+	if !filepath.IsAbs(file) {
+		return nil, fmt.Errorf("PROXY_STOPPED_FILE %q must be an absolute path", file)
+	}
+	if getenv("ENGINE_SOCKET_UID") == "0" {
+		return nil, nil
+	}
+	return &engineproxy.Restarts{FirewallContainer: firewall, StoppedFile: file}, nil
 }
 
 // bridgesSetting reads the networks whose bridges the proxy writes down, and where.
@@ -162,6 +236,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	restarts, err := restartsSetting(getenv)
+	if err != nil {
+		return config{}, err
+	}
 	bindIPs := splitList(getenv("PROXY_PORT_BIND_IPS"))
 	if len(bindIPs) == 0 {
 		bindIPs = []string{"127.0.0.1"}
@@ -187,6 +265,8 @@ func loadConfig(getenv func(string) string) (config, error) {
 		},
 		bridgeNetworks: bridgeNetworks,
 		bridgesFile:    bridgesFile,
+		restarts:       restarts,
+		mustBeRootless: getenv("ENGINE_SOCKET_UID") == "0",
 	}, nil
 }
 

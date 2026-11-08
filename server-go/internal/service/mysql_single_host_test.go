@@ -24,10 +24,13 @@ import (
 // hostEngine is a container engine in memory: names are ids, every exec
 // answers, and what is fed on stdin is kept.
 type hostEngine struct {
-	mu         sync.Mutex
-	containers map[string]bool // name → running
-	specs      map[string]provisioner.ContainerSpec
-	stdin      []string
+	afterRemoveVolume func()
+	refuseStarts      bool
+	firewallDown      bool
+	mu                sync.Mutex
+	containers        map[string]bool // name → running
+	specs             map[string]provisioner.ContainerSpec
+	stdin             []string
 	// answer replies to a statement batch fed on stdin.
 	answer func(container, stdin string) (string, error)
 	copied map[string][]string // container → tar entry names copied in
@@ -67,6 +70,9 @@ func (h *hostEngine) CreateContainerSpec(_ context.Context, spec provisioner.Con
 func (h *hostEngine) StartContainer(_ context.Context, id string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.refuseStarts {
+		return fmt.Errorf("start container %s: %w", id, provisioner.ErrHostFirewallDown)
+	}
 	if _, ok := h.containers[id]; !ok {
 		return fmt.Errorf("no container %s", id)
 	}
@@ -195,6 +201,9 @@ func (h *hostEngine) RemoveVolume(_ context.Context, name string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.volumes, name)
+	if h.afterRemoveVolume != nil {
+		defer h.afterRemoveVolume()
+	}
 	h.removedVolumes = append(h.removedVolumes, name)
 	return nil
 }
@@ -402,4 +411,16 @@ func TestSingleHostMySQLReaderIsFiledRotatedAndSessionsEnd(t *testing.T) {
 			t.Errorf("the %s sessions were not looked for", user)
 		}
 	}
+}
+
+func (e *hostEngine) HostFirewallHealthy(context.Context) (bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return !e.firewallDown, nil
+}
+
+func (e *hostEngine) setFirewallDown(down bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.firewallDown = down
 }

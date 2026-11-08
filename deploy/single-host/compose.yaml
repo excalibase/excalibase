@@ -224,6 +224,11 @@ services:
       # Each platform network's real bridge, for the host firewall (EXC-683).
       PROXY_BRIDGE_NETWORKS: *bridge_networks
       PROXY_BRIDGES_FILE: /var/lib/excalibase-bridges/networks
+      # A reboot restarts everything with a restart policy, compose's dependencies unread:
+      # the proxy holds tenants to none and starts them once the firewall is healthy (EXC-683).
+      PROXY_FIREWALL_CONTAINER: excalibase-host-firewall
+      PROXY_STOPPED_FILE: /var/lib/excalibase-bridges/stopped
+      ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
     volumes:
       - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
       - bridges:/var/lib/excalibase-bridges
@@ -256,6 +261,9 @@ services:
       TRUSTED_PROXY_CIDRS: ${AIO_EDGE_SUBNET:-10.203.250.0/28}
       # Platform store (control-plane metadata and vault).
       PLATFORM_DB_URL: "postgres://excalibase:${POSTGRES_PASSWORD:?run ./init.sh first}@postgres:5432/excalibase_platform?sslmode=disable"
+      # Tenants start only behind it: an upgrade or restore checks it before changing anything (EXC-683).
+      HOST_FIREWALL_CONTAINER: excalibase-host-firewall
+      ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
       # bbolt vault backend lives here (selfhosted, no external VAULT_URL).
       STORAGE_PATH: /var/lib/excalibase
       # Studio is provisioning's only browser origin.

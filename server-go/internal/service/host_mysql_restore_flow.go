@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -98,6 +100,9 @@ const (
 
 // InPlaceRecoveryTarget resolves req against the project's own runs.
 func (a *HostMySQLBackupAdapter) InPlaceRecoveryTarget(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (map[string]interface{}, error) {
+	if err := a.mysql.RequireHostFirewall(ctx); err != nil {
+		return nil, err
+	}
 	runs, marks, err := a.catalog(ctx, inst.ProjectID)
 	if err != nil {
 		return nil, err
@@ -141,14 +146,29 @@ func (a *HostMySQLBackupAdapter) ReplaceDatabase(ctx context.Context, inst *doma
 	}
 	unlock := a.lock(inst.ProjectID)
 	defer unlock()
+	// Last before the data goes: the rebuilt database must be able to start.
+	if err := a.mysql.RequireHostFirewall(ctx); err != nil {
+		return fmt.Errorf("%w: %w", ErrDatabaseNotReplaced, err)
+	}
 	if err := a.mysql.RemoveData(ctx, inst.ProjectID); err != nil {
 		return fmt.Errorf("remove the project's database: %w", err)
 	}
 	pc := provisioner.NewProvisionContext(nil, nil)
 	if _, err := a.build(ctx, pc, inst.ProjectID, restore); err != nil {
+		// The proxy starts a refused container once the firewall is healthy: not an empty database.
+		if errors.Is(err, provisioner.ErrHostFirewallDown) {
+			if removeErr := a.mysql.RemoveData(context.WithoutCancel(ctx), inst.ProjectID); removeErr != nil {
+				log.Printf("mysql restore %s: remove the empty database: %v", inst.ProjectID, removeErr)
+			}
+		}
 		return err
 	}
 	return nil
+}
+
+// WaitHostFirewall waits for the database to be able to start again. See HostFirewallWaiter.
+func (a *HostMySQLBackupAdapter) WaitHostFirewall(ctx context.Context) error {
+	return a.mysql.WaitHostFirewall(ctx, restoreRollbackFirewallPoller)
 }
 
 // pointOf finds the runs a target names.
