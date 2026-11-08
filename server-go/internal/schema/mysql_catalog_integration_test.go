@@ -8,6 +8,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"strings"
 	"sync"
 	"testing"
@@ -33,6 +34,9 @@ func mysqlProject(t *testing.T) (single, script *sql.DB) {
 func mysqlServer(t *testing.T) (single, script *sql.DB, address string) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, mysqlTestImage); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        mysqlTestImage,

@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
+	"log"
 
 	"github.com/excalibase/provisioning-poc/internal/appbuilds"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -14,6 +16,7 @@ import (
 // appImagePublisher is AppBuildPublisher as the queue adapter uses it.
 type appImagePublisher interface {
 	Publish(ctx context.Context, result AppBuildResult) (*apphost.Deploy, error)
+	CheckCapacity(maxImage int64) error
 }
 
 // AppGetter finds a project's app; nil for one it does not hold.
@@ -55,8 +58,21 @@ func (p *appBuildQueuePublisher) PublishBuild(ctx context.Context, publish siteb
 	return deploy.ID, nil
 }
 
+// CheckCapacity logs the volume's numbers for the operator and tells the customer only what happened.
+func (p *appBuildQueuePublisher) CheckCapacity(_ context.Context, maxImageBytes int64) error {
+	err := p.publisher.CheckCapacity(maxImageBytes)
+	if errors.Is(err, ErrSpoolTooSmall) {
+		log.Printf("WARN: app builds refused: %v", err)
+		return &sitebuilds.BuildFailure{Kind: sitebuilds.FailPlatform, Err: ErrSpoolTooSmall}
+	}
+	return err
+}
+
 // namedFailure gives each refusal the user can act on its own failure kind; anything else stays unnamed.
 func namedFailure(err error) error {
+	if errors.Is(err, ErrSpoolFull) {
+		return fmt.Errorf("%w: %w", sitebuilds.ErrTryLater, err)
+	}
 	if full := (*RegistryFullError)(nil); errors.As(err, &full) {
 		shown := appbuilds.RegistryFullStatus(full.Used, full.Incoming, full.Quota).Detail
 		return &sitebuilds.BuildFailure{Kind: appbuilds.FailRegistryFull, Err: &shownError{shown: shown, err: err}}
@@ -68,7 +84,6 @@ func namedFailure(err error) error {
 		{ErrImageTooLarge, appbuilds.FailImageTooLarge},
 		{ErrRegistryFull, appbuilds.FailRegistryFull},
 		{appregistry.ErrBadArchive, appbuilds.FailBadImage},
-		{ErrSpoolFull, sitebuilds.FailPlatform},
 	}
 	for _, named := range kinds {
 		if errors.Is(err, named.cause) {

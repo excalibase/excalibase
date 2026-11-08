@@ -41,7 +41,7 @@ func SiteBuildStepEnv(spec sitebuilds.RunSpec) []EnvPair {
 		{"COREPACK_HOME", "/work/corepack"}, {"COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"},
 		{"CI", "true"}, {"NEXT_TELEMETRY_DISABLED", "1"}, {"ASTRO_TELEMETRY_DISABLED", "1"},
 		{"ROOT_DIR", spec.RootDir}, {"INSTALL_COMMAND", spec.InstallCommand},
-		{"BUILD_COMMAND", spec.BuildCommand},
+		{"BUILD_COMMAND", spec.BuildCommand}, {"FRAMEWORK", spec.Framework},
 	}
 }
 

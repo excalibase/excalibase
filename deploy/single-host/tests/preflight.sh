@@ -24,6 +24,20 @@ for bad in POSTGRES_PASSWORD=password123 POSTGRES_PASSWORD= SETUP_TOKEN=abc123 \
 done
 good ADMIN_PASSWORD='a-long-passphrase-of-mine' >/dev/null || fail "a strong admin password refused"
 
+# EXC-687: the deny list and rootless Podman's egress are refused before anything starts.
+for bad in APP_EGRESS_EXTRA_DENY_CIDRS=300.1.1.1/8 APP_EGRESS_EXTRA_DENY_CIDRS=203.0.113.7 'APP_EGRESS_EXTRA_DENY_CIDRS=203.0.113.0/24 -j ACCEPT'; do
+  if good "$bad" >/dev/null 2>&1; then fail "preflight accepted $bad"; fi
+done
+good APP_EGRESS_EXTRA_DENY_CIDRS='203.0.113.0/24, 198.51.100.7/32' >/dev/null || fail "a good deny list refused"
+# IPv4 alone, by notation, as provisioning's parser reads it: it stops the boot otherwise.
+for bad in APP_EGRESS_EXTRA_DENY_CIDRS=2001:db8::/32 APP_EGRESS_EXTRA_DENY_CIDRS=::ffff:203.0.113.0/120; do
+  if good "$bad" >/dev/null 2>&1; then fail "preflight accepted $bad"; fi
+done
+if good ENGINE_SOCKET_UID=0 APP_HOSTING_ENABLED=true APP_EGRESS=internet >/dev/null 2>&1; then fail "rootless Podman's unguarded egress passed"; fi
+good ENGINE_SOCKET_UID=0 APP_HOSTING_ENABLED=true APP_EGRESS=internet APP_EGRESS_UNGUARDED=accept >/dev/null || fail "accepted egress refused"
+good ENGINE_SOCKET_UID=0 APP_EGRESS=internet >/dev/null || fail "refused egress with app hosting off, where nothing uses it"
+good ENGINE_SOCKET_UID=0 >/dev/null || fail "rootless Podman without egress refused"
+
 # EXC-662: auth hooks may not start without the host's own addresses refused to them.
 if good FEATURE_AUTHHOOKS=true >/dev/null 2>&1; then
   fail "auth hooks started with no AUTH_HOOKS_DENY_CIDRS"

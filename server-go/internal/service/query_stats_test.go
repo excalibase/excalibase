@@ -27,7 +27,7 @@ type fakeStatsDatabases struct {
 }
 
 func (f *fakeStatsDatabases) primaryPsql(context.Context, *domain.DatabaseInstance) (roleSQLExecer, error) {
-	return func(_ context.Context, cmd []string) (string, error) {
+	return func(_ context.Context, cmd []string, _ string) (string, error) {
 		f.commands = append(f.commands, cmd)
 		if f.version != "" && strings.Contains(strings.Join(cmd, " "), "SHOW server_version_num") {
 			return f.version, nil

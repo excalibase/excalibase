@@ -7,9 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"testing/iotest"
 
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -206,5 +209,30 @@ func TestReadLayout_RefusesMoreEntriesThanItsCap(t *testing.T) {
 	archive := tarOf(t, slices.Concat([]entry{layoutFile, indexEntry(t, root)}, good, dirs)...)
 	if _, err := readLayout(t, archive); !errors.Is(err, ErrBadArchive) {
 		t.Fatalf("%d entries: %v", maxArchiveEntries+len(good)+2, err)
+	}
+}
+
+// /dev/full answers every write with the kernel's own ENOSPC: a full disk is no fault of the archive.
+func TestSaveBlob_AFullDiskIsNotABadArchive(t *testing.T) {
+	full, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skip("no /dev/full here")
+	}
+	defer full.Close()
+	_, err = saveBlob(full, strings.NewReader("layer"))
+	if !errors.Is(err, syscall.ENOSPC) || errors.Is(err, ErrBadArchive) {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestSaveBlob_AStreamThatBreaksIsABadArchive(t *testing.T) {
+	file, err := os.Create(t.TempDir() + "/blob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	_, err = saveBlob(file, iotest.ErrReader(errors.New("truncated")))
+	if !errors.Is(err, ErrBadArchive) {
+		t.Fatalf("%v", err)
 	}
 }

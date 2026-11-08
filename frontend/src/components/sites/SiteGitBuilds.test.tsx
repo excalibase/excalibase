@@ -2,6 +2,7 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { SiteGitBuilds } from './SiteGitBuilds';
 import { textToEnv, envToText } from './SiteBuildSettingsForm';
 import { api } from '../../api/client';
@@ -81,11 +82,18 @@ function serve(routes: Routes) {
   });
 }
 
-function renderPanel(canDevelop = true) {
+function renderPanel(canDevelop = true, serverSite = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <SiteGitBuilds projectId="proj-1" siteId="site-1" canDevelop={canDevelop} />
+      <MemoryRouter>
+        <SiteGitBuilds
+          projectId="proj-1"
+          siteId="site-1"
+          canDevelop={canDevelop}
+          serverSite={serverSite}
+        />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -131,6 +139,70 @@ describe('SiteGitBuilds', () => {
         settings: { ...settings, branch: '', rootDir: 'apps/web' },
       }),
     );
+  });
+
+  test('a server site connects with the Next.js preset and no output folder', async () => {
+    serve({
+      git: { connected: false, connection: null, nodeVersions: ['22'] },
+      repositories: [
+        {
+          installation: { id: 501, account: 'acme' },
+          repositories: [{ id: 9001, fullName: 'acme/site', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    vi.mocked(api.put).mockResolvedValue({ data: { connection, build: failed } } as never);
+    renderPanel(true, true);
+    await userEvent.selectOptions(await screen.findByTestId('git-repository'), '9001');
+    expect(screen.getByTestId('build-framework')).toHaveValue('nextjs');
+    expect(screen.queryByTestId('build-output')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('git-connect-submit'));
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(`${BASE}/git`, {
+        repositoryId: 9001,
+        settings: { ...settings, branch: '', outputDir: '', framework: 'nextjs' },
+      }),
+    );
+  });
+
+  test('a server site saved without a framework sends the one the form shows', async () => {
+    serve({
+      git: {
+        connected: true,
+        connection: { ...connection, settings: { ...settings, outputDir: '' } },
+        nodeVersions: ['22'],
+      },
+      repositories: [
+        {
+          installation: { id: 501, account: 'acme' },
+          repositories: [{ id: 9001, fullName: 'acme/site', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    vi.mocked(api.put).mockResolvedValue({ data: { connection, build: failed } } as never);
+    renderPanel(true, true);
+    await userEvent.click(await screen.findByTestId('git-edit'));
+    expect(await screen.findByTestId('build-framework')).toHaveValue('nextjs');
+    await userEvent.selectOptions(screen.getByTestId('git-repository'), '9001');
+    await userEvent.click(screen.getByTestId('git-connect-submit'));
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(`${BASE}/git`, {
+        repositoryId: 9001,
+        settings: expect.objectContaining({ framework: 'nextjs' }),
+      }),
+    );
+  });
+
+  test('a build the preset refused offers the app container instead', async () => {
+    const refused = {
+      ...failed,
+      failureKind: 'framework',
+      failureReason: 'this Next.js app cannot run as a server-rendered site',
+    };
+    serve({ git: { connected: true, connection, nodeVersions: ['22'] }, builds: [refused] });
+    renderPanel(true, true);
+    const link = await screen.findByTestId('site-build-container-b1');
+    expect(link).toHaveAttribute('href', '/project/proj-1/containers');
   });
 
   test('without repositories it offers the sign-in and the App install', async () => {
@@ -207,6 +279,102 @@ describe('SiteGitBuilds', () => {
     expect(api.put).toHaveBeenCalledWith('/projects/proj-1/sites/build-secrets', {
       buildVisible: ['STRIPE_PK'],
     });
+  });
+});
+
+describe('SiteGitBuilds review fixes', () => {
+  const repos = [
+    {
+      installation: { id: 501, account: 'acme' },
+      repositories: [{ id: 9001, fullName: 'acme/site', defaultBranch: 'main', private: true }],
+    },
+  ];
+
+  test('says no build started even after the connection replaces the form', async () => {
+    serve({
+      git: { connected: false, connection: null, nodeVersions: ['22'] },
+      repositories: repos,
+    });
+    vi.mocked(api.put).mockImplementation(async () => {
+      serve({ git: { connected: true, connection, nodeVersions: ['22'] } });
+      return { data: { connection, buildError: 'the plan allows 30 builds an hour' } } as never;
+    });
+    renderPanel();
+    await userEvent.selectOptions(await screen.findByTestId('git-repository'), '9001');
+    await userEvent.click(screen.getByTestId('git-connect-submit'));
+    expect(await screen.findByTestId('git-connected')).toBeInTheDocument();
+    expect(screen.getByTestId('git-build-error')).toHaveTextContent('no build was started');
+  });
+
+  test('a stopped connection can still be disconnected, after a question in the page', async () => {
+    serve({
+      git: {
+        connected: true,
+        connection: { ...connection, inactiveReason: 'the connector left' },
+        nodeVersions: ['22'],
+      },
+    });
+    vi.mocked(api.delete).mockResolvedValue({ status: 204 } as never);
+    renderPanel();
+    await userEvent.click(await screen.findByTestId('git-disconnect'));
+    expect(api.delete).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId('git-disconnect-confirm'));
+    expect(api.delete).toHaveBeenCalledWith(`${BASE}/git`);
+  });
+
+  test('a build variable line without = is an error and blocks the save', async () => {
+    serve({
+      git: { connected: false, connection: null, nodeVersions: ['22'] },
+      repositories: repos,
+    });
+    renderPanel();
+    await userEvent.selectOptions(await screen.findByTestId('git-repository'), '9001');
+    await userEvent.type(screen.getByTestId('build-env'), 'VITE_API');
+    await userEvent.tab();
+    expect(screen.getByTestId('build-env-error')).toHaveTextContent('Line 1');
+    expect(screen.getByTestId('git-connect-submit')).toBeDisabled();
+  });
+});
+
+describe('SiteGitBuilds disconnect and notices', () => {
+  test('a failed disconnect says so', async () => {
+    serve({ git: { connected: true, connection, nodeVersions: ['22'] } });
+    vi.mocked(api.delete).mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 500, data: { error: 'the site is busy' } },
+    });
+    renderPanel();
+    await userEvent.click(await screen.findByTestId('git-disconnect'));
+    await userEvent.click(screen.getByTestId('git-disconnect-confirm'));
+    expect(await screen.findByTestId('git-disconnect-error')).toHaveTextContent('busy');
+  });
+
+  test('a notice about one site does not follow the page to another site', async () => {
+    serve({
+      git: { connected: false, connection: null, nodeVersions: ['22'] },
+      repositories: [
+        {
+          installation: { id: 501, account: 'acme' },
+          repositories: [{ id: 9001, fullName: 'acme/site', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    vi.mocked(api.put).mockImplementation(async () => {
+      serve({ git: { connected: true, connection, nodeVersions: ['22'] } });
+      return { data: { connection, buildError: 'limit used up' } } as never;
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (siteId: string) => (
+      <QueryClientProvider client={client}>
+        <SiteGitBuilds projectId="proj-1" siteId={siteId} canDevelop />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree('site-1'));
+    await userEvent.selectOptions(await screen.findByTestId('git-repository'), '9001');
+    await userEvent.click(screen.getByTestId('git-connect-submit'));
+    expect(await screen.findByTestId('git-build-error')).toHaveTextContent('Saved, but no build');
+    rerender(tree('site-2'));
+    expect(screen.queryByTestId('git-build-error')).toBeNull();
   });
 });
 

@@ -26,7 +26,9 @@ type inPlaceWorld struct {
 	// safetyTargetErr fails resolving the safety backup as a target.
 	safetyTargetErr error
 	replaceErrs     []error // one per ReplaceDatabase call, in order
-	probeErrs       []error
+	// firewallWait answers WaitHostFirewall, which a rollback after a refusal asks first.
+	firewallWait error
+	probeErrs    []error
 	// One-shot failures of the project-side steps, by step name.
 	failOnce     map[string]error
 	targets      []map[string]interface{}
@@ -109,6 +111,11 @@ func (w *inPlaceWorld) ReplaceDatabase(_ context.Context, inst *domain.DatabaseI
 	row, _ := w.instances.FindByProjectID(inst.ProjectID)
 	w.statusesSeen = append(w.statusesSeen, row.Status)
 	return err
+}
+
+func (w *inPlaceWorld) WaitHostFirewall(context.Context) error {
+	w.record("wait-firewall")
+	return w.firewallWait
 }
 
 func (w *inPlaceWorld) Probe(context.Context, string) error {

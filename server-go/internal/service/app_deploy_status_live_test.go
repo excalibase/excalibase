@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"net"
 	"net/http"
@@ -120,6 +121,9 @@ func startAppLiveLabWith(t *testing.T, runtimeClass, handler string, extra ...te
 		testcontainers.WithCmdArgs("--flannel-backend=none", "--disable-network-policy", "--disable=traefik"),
 		testcontainers.WithWaitStrategyAndDeadline(3*time.Minute, wait.ForLog("k3s is up and running").WithStartupTimeout(3*time.Minute)),
 	}, extra...)
+	if err := imagepull.EnsureLocal(lab.ctx, appLiveK3s); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(lab.ctx, appLiveK3s, options...)
 	testcontainers.CleanupContainer(t, container)
 	if err != nil {
