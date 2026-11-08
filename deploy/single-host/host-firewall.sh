@@ -15,7 +15,7 @@
 #    wildcard the kernel matches on names, so a bridge made later is covered from
 #    its first packet: nothing here has to learn of it. Their forwarded traffic
 #    drops to the same ranges and APP_EGRESS_EXTRA_DENY_CIDRS; a project's own
-#    bridge passes, and Docker's isolation still drops one project's to another's;
+#    bridge passes, and the firewall drops one project's to another's;
 #  - hooks the tenant and project chains on FORWARD as well as DOCKER-USER: Docker keeps
 #    DOCKER-USER first across its own restart, and FORWARD needs nothing of Docker's when a
 #    flushed ruleset (restarting nftables.service) takes its chains away;
@@ -219,9 +219,9 @@ tenant_rules() {
   for range in $deny; do echo "$TENANT_CHAIN -d $range -j DROP"; done
 }
 
-# app_rules <family>: what a project bridge may forward to. Its own bridge passes; for
-# another project's, -o only hands over to Docker's isolation, which drops it, but not
-# through a published port, which Docker lets cross bridges: that drops here. The deny
+# app_rules <family>: what a project bridge may forward to. Its own bridge passes; any
+# other project's bridge drops here, by our rule rather than Docker's isolation chains, which
+# a flushed ruleset removes, and a published port, which Docker lets cross bridges, drops too. The deny
 # list reads the address the app asked for, so it also holds through a published port.
 # What the edge publishes on 80 and 443 stays reachable, as from anywhere on the internet:
 # an app calling a public hostname on this host; any other published port drops as private.
@@ -230,7 +230,9 @@ app_rules() {
   if [ "$1" = 6 ]; then deny=$DENY6 dns=$DNS6 edge=$EDGE6; else deny=$DENY4 dns=$DNS4 extra=$EXTRA4 edge=$EDGE4; fi
   replies "$APP_CHAIN"
   echo "$APP_CHAIN -o $PROJECT_BRIDGES -m conntrack --ctstate DNAT -j DROP"
-  echo "$APP_CHAIN -o $PROJECT_BRIDGES -j RETURN"
+  # Same-bridge traffic (physdev) is the only pass; routing to any other project bridge drops here, so a flushed Docker isolation chain cannot open it.
+  echo "$APP_CHAIN -o $PROJECT_BRIDGES -m physdev --physdev-is-bridged -j RETURN"
+  echo "$APP_CHAIN -o $PROJECT_BRIDGES -j DROP"
   for cidr in $extra; do echo "$APP_CHAIN -m conntrack --ctorigdst $cidr -j DROP"; done
   for server in $dns; do
     echo "$APP_CHAIN -d $server -p udp --dport 53 -j RETURN"

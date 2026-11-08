@@ -222,7 +222,7 @@ wait_seconds 6
 guard_alive && ok "the guard survives a flushed ruleset" || ko "the guard died on a flushed ruleset: $(on_machine 'tail -3 /tmp/fw.log')"
 if firewall check >/dev/null 2>&1; then ko "the check passes with Docker's chains gone"; else ok "the check fails with Docker's chains gone, so nothing held starts"; fi
 AFTER=$(probe app-a)
-for target in metadata private lan extra-deny host-address host-gateway; do
+for target in metadata private lan extra-deny host-address host-gateway other-project tenant-db; do
   [ "$(result "$AFTER" "$target")" = dropped ] && ok "after a flush: $target dropped" || ko "after a flush: $target $(result "$AFTER" "$target")"
 done
 on_machine "iptables -S INPUT | grep -q 'exnet+ -j EXCALIBASE-HOST'" && ok "after a flush: the host's chain is hooked again" || ko "the INPUT wildcard stayed off"

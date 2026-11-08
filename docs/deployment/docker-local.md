@@ -276,7 +276,7 @@ its first packet with no reconcile. From those bridges:
 | Cloud metadata, private, CGNAT, link-local, loopback, multicast and reserved ranges, Azure's 168.63.129.16 | dropped, except DNS to the host's resolvers |
 | What the edge publishes on 80 and 443 | allowed, as from anywhere: an app can call a public hostname on this host |
 | Any other published port on this host | dropped |
-| Other projects | dropped by Docker's isolation |
+| Other projects | dropped by the firewall itself, so a flushed ruleset (nftables restarted) does not open them |
 | `APP_EGRESS_EXTRA_DENY_CIDRS` (IPv4 only, as provisioning reads it; preflight refuses an IPv6 entry) | dropped, on Docker 29 and later the edge's published ports too if the list covers the host's address |
 
 The project's database and DocumentDB gateway join the same bridge, and their default route

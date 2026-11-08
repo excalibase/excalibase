@@ -253,7 +253,8 @@ app4=$(grep '^EXCALIBASE-APP' "$WORK/v4.rules")
 expected4="EXCALIBASE-APP -m conntrack --ctstate ESTABLISHED --ctdir REPLY -j RETURN
 EXCALIBASE-APP -m conntrack --ctstate RELATED -j RETURN
 EXCALIBASE-APP -o exnet+ -m conntrack --ctstate DNAT -j DROP
-EXCALIBASE-APP -o exnet+ -j RETURN
+EXCALIBASE-APP -o exnet+ -m physdev --physdev-is-bridged -j RETURN
+EXCALIBASE-APP -o exnet+ -j DROP
 EXCALIBASE-APP -m conntrack --ctorigdst 203.0.113.0/24 -j DROP
 EXCALIBASE-APP -d 192.168.1.1/32 -p udp --dport 53 -j RETURN
 EXCALIBASE-APP -d 192.168.1.1/32 -p tcp --dport 53 -j RETURN
@@ -269,7 +270,8 @@ app6=$(grep '^EXCALIBASE-APP' "$WORK/v6.rules")
 expected6="EXCALIBASE-APP -m conntrack --ctstate ESTABLISHED --ctdir REPLY -j RETURN
 EXCALIBASE-APP -m conntrack --ctstate RELATED -j RETURN
 EXCALIBASE-APP -o exnet+ -m conntrack --ctstate DNAT -j DROP
-EXCALIBASE-APP -o exnet+ -j RETURN
+EXCALIBASE-APP -o exnet+ -m physdev --physdev-is-bridged -j RETURN
+EXCALIBASE-APP -o exnet+ -j DROP
 EXCALIBASE-APP -d 2001:db8::53/128 -p udp --dport 53 -j RETURN
 EXCALIBASE-APP -d 2001:db8::53/128 -p tcp --dport 53 -j RETURN
 EXCALIBASE-APP -d fe80::/10 -j DROP
