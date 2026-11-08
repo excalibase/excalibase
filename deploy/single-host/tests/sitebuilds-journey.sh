@@ -90,6 +90,19 @@ send_push() { # deleted flag, sha, delivery suffix
   c -o /dev/null -w '%{http_code}' -X POST "https://studio.localhost:$PORT/api/sites/github/webhook" -H 'Content-Type: application/json' \
     -H 'X-GitHub-Event: push' -H "X-GitHub-Delivery: smoke-$3-$(date +%s)" -H "X-Hub-Signature-256: sha256=$sig" --data-binary "$body"
 }
+# Production's builds and script uploads, counted before the preview push: connecting queues a build of the
+# head and the signed push to main queues another, so the count is a baseline, not a constant.
+prod_builds() { c "${auth[@]}" "$S/$SITE/builds" | json 'sum(1 for b in (d if isinstance(d,list) else d.get("builds",[])) if not b.get("previewId"))'; }
+prod_uploads() { $DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_cf_calls | json "sum(1 for x in d['calls'] if re.search(r'^PUT .*/scripts/site-$SITE\$', x))"; }
+prod_with_commit() { c "${auth[@]}" "$S/$SITE/builds" | json "sum(1 for b in (d if isinstance(d,list) else d.get('builds',[])) if not b.get('previewId') and b.get('commitSha')=='$1')"; }
+BASE_BUILDS=$(prod_builds); BASE_UPLOADS=$(prod_uploads)
+{ [ -n "$BASE_BUILDS" ] && [ "$BASE_BUILDS" -ge 1 ] && [ "$BASE_UPLOADS" -ge 1 ]; } && ok "production before the preview push: $BASE_BUILDS builds, $BASE_UPLOADS script uploads" || ko "baseline: builds '$BASE_BUILDS', uploads '$BASE_UPLOADS'"
+only_production() { # label: nothing in production moved since the baseline, and none of its builds is the branch commit
+  local builds uploads onbranch
+  builds=$(prod_builds); uploads=$(prod_uploads); onbranch=$(prod_with_commit "$PSHA")
+  [ "$builds" = "$BASE_BUILDS" ] && [ "$uploads" = "$BASE_UPLOADS" ] && [ "$onbranch" = 0 ] && ok "production stayed alone $1 (builds $builds, script uploads $uploads, none on the branch commit)" \
+    || ko "production not alone $1: builds '$builds' (was $BASE_BUILDS), script uploads '$uploads' (was $BASE_UPLOADS), builds on the branch commit '$onbranch'"
+}
 [ "$(send_push false "$PSHA" preview)" = 202 ] && ok "signed push to $BRANCH accepted" || ko "preview push not accepted"
 pst=; PURL=; PID_PV=
 for i in $(seq 200); do
@@ -123,14 +136,6 @@ KV=$($DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_kv)
 kv_count() { echo "$KV" | json "sum(1 for w in d['writes'] if w['method']=='$1' and w['key']=='$PURL'$2)"; }
 [ "$(kv_count PUT " and w['body']=='site-pv-$PID_PV'")" = 1 ] && ok "the preview host routes to its own script" || ko "no hosts-table write of site-pv-$PID_PV for $PURL: ${KV:0:600}"
 
-# Production stayed alone: one production build, one production script upload, before and after the cleanup.
-only_production() { # label
-  local builds uploads
-  builds=$(c "${auth[@]}" "$S/$SITE/builds" | json 'sum(1 for b in (d if isinstance(d,list) else d.get("builds",[])) if not b.get("previewId"))')
-  uploads=$(echo "$(c_cf)" | json "sum(1 for x in d['calls'] if re.search(r'^PUT .*/scripts/site-$SITE\$', x))")
-  [ "$builds" = 1 ] && [ "$uploads" = 1 ] && ok "production stayed alone $1 (builds $builds, script uploads $uploads)" || ko "production not alone $1: builds '$builds', script uploads '$uploads'"
-}
-c_cf() { $DOCKER exec "$SITE_FAKES" wget -qO- http://127.0.0.1:8080/_cf_calls; }
 only_production "while the preview is ready"
 
 # The branch goes away on the host; the delete event removes the preview and its script.
