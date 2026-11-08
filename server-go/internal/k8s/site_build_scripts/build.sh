@@ -67,7 +67,8 @@ const refuse = (reason) => {
   console.log("deploy it as an app container instead, or build it in your own CI and upload the output");
   process.exit(13);
 };
-const filled = (value) => (Array.isArray(value) ? value.length > 0 : value && typeof value === "object" ? Object.keys(value).length > 0 : Boolean(value));
+// Wrangler's resolved config carries empty containers (triggers: {crons: []}); only a set value counts.
+const filled = (value) => (Array.isArray(value) ? value.length > 0 : value && typeof value === "object" ? Object.values(value).some(filled) : Boolean(value));
 
 async function wranglerFile() {
   const file = ["wrangler.jsonc", "wrangler.json", "wrangler.toml"].find((name) => existsSync(name));
@@ -134,6 +135,10 @@ nextjs_preset() {
   export SKIP_WRANGLER_CONFIG_CHECK=yes WRANGLER_SEND_METRICS=false
   ensure_tools || exit 11
   check_with wrangler || exit $?
+  # next.config is optional in Next.js, but OpenNext refuses to run without one.
+  if ! compgen -G 'next.config.*' > /dev/null; then
+    echo 'export default {};' > next.config.mjs
+  fi
   if [[ ! -f open-next.config.ts ]]; then
     cat > open-next.config.ts <<'CONFIG'
 import { defineCloudflareConfig } from "@opennextjs/cloudflare";

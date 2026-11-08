@@ -207,6 +207,46 @@ func TestNextjsPreset_SaysWhichRepositorySettingsItIgnores(t *testing.T) {
 	}
 }
 
+// wrangler's resolved config always carries triggers: {crons: []}; only a cron the repository set is worth a note.
+func TestNextjsPreset_AnEmptyTriggersObjectIsNotANote(t *testing.T) {
+	work, scripts := t.TempDir(), scriptDir(t)
+	project := nextProject(t, work, "")
+	write(t, filepath.Join(project, "wrangler.jsonc"), `{"name":"plain","triggers":{"crons":[]}}`)
+	code, out := build(t, work, scripts)
+	if code != 0 || strings.Contains(out, "note:") {
+		t.Fatalf("exit %d, want no note for empty triggers:\n%s", code, out)
+	}
+	write(t, filepath.Join(project, "wrangler.jsonc"), `{"name":"plain","triggers":{"crons":["0 * * * *"]}}`)
+	code, out = build(t, work, scripts)
+	if code != 0 || !strings.Contains(out, "sets triggers") {
+		t.Fatalf("exit %d, want a note naming triggers:\n%s", code, out)
+	}
+}
+
+// next.config is optional in Next.js but OpenNext refuses to run without one: the build supplies an empty one.
+func TestNextjsPreset_WritesANextConfigOnlyWhenTheRepositoryHasNone(t *testing.T) {
+	work, scripts := t.TempDir(), scriptDir(t)
+	project := nextProject(t, work, "")
+	if code, out := build(t, work, scripts); code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(project, "next.config.mjs")); err != nil {
+		t.Errorf("no next.config was supplied: %v", err)
+	}
+	for _, name := range []string{"next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs"} {
+		work, scripts := t.TempDir(), scriptDir(t)
+		project := nextProject(t, work, "")
+		write(t, filepath.Join(project, name), "// mine")
+		if code, out := build(t, work, scripts); code != 0 {
+			t.Fatalf("%s: exit %d:\n%s", name, code, out)
+		}
+		entries, _ := filepath.Glob(filepath.Join(project, "next.config.*"))
+		if len(entries) != 1 {
+			t.Errorf("%s: the build added a second config: %v", name, entries)
+		}
+	}
+}
+
 func TestNextjsPreset_RefusesNodeMiddlewareFromNextsOwnManifest(t *testing.T) {
 	work, scripts := t.TempDir(), scriptDir(t)
 	nextProject(t, work, "")
