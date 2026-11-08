@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net/http"
 	"strings"
 	"testing"
@@ -33,6 +34,9 @@ type mcpTenant struct {
 func startMCPTenant(t *testing.T) mcpTenant {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("tenant"),
 		postgres.WithUsername("postgres"),

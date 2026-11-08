@@ -65,6 +65,9 @@ func newExecution(dispatcher *Dispatcher, build *Build) *execution {
 }
 
 func (e *execution) execute(ctx context.Context) outcome {
+	if e.build.Requeues > 0 {
+		e.note(fmt.Sprintf("== retry ==\nan earlier build of this commit found no room to be taken in; retry %d of %d\n", e.build.Requeues, MaxSpoolRequeues))
+	}
 	if refused := e.checkSource(ctx); refused != nil {
 		return *refused
 	}
@@ -283,7 +286,11 @@ func (e *execution) refreshLog(ctx context.Context) {
 		return
 	}
 	e.log = logs
-	err = e.dispatcher.service.store.SaveLog(context.WithoutCancel(ctx), e.build.ID, e.dispatcher.options.Holder, redact(e.fullLog(), e.secrets))
+	e.saveLog(ctx)
+}
+
+func (e *execution) saveLog(ctx context.Context) {
+	err := e.dispatcher.service.store.SaveLog(context.WithoutCancel(ctx), e.build.ID, e.dispatcher.options.Holder, redact(e.fullLog(), e.secrets))
 	if err != nil && !errors.Is(err, ErrLeaseLost) {
 		log.Printf("%s build %s: save logs: %v", e.build.Kind, e.build.ID, err)
 	}

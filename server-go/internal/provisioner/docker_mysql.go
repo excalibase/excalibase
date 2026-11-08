@@ -110,6 +110,22 @@ func (p *DockerMySQLProvisioner) Provision(ctx context.Context, req domain.Provi
 	}, nil
 }
 
+// PrepareImages fetches the image the build will start. A request that names no
+// listed version is left for Provision to refuse.
+func (p *DockerMySQLProvisioner) PrepareImages(ctx context.Context, req domain.ProvisioningRequest) error {
+	fetcher, ok := p.docker.(imageFetcher)
+	if !ok {
+		return nil
+	}
+	shape := req
+	shape.Backup = nil
+	_, image, err := validateMySQLRequest(shape)
+	if err != nil {
+		return nil
+	}
+	return fetcher.EnsureImage(ctx, image)
+}
+
 // StartOnVolume creates and starts the project's container on image over its
 // data volume (initialised when empty) and returns once mysqld answers. A container that was created is named even on failure,
 // so the caller can remove it.
@@ -248,12 +264,16 @@ func (p *DockerMySQLProvisioner) WorkloadStopped(ctx context.Context, namespace,
 // Deprovision removes the container with its volume and returns once it is
 // observed gone. An absent container counts as removed.
 func (p *DockerMySQLProvisioner) Deprovision(ctx context.Context, namespace, projectID string) error {
-	container := namespace
-	if container == "" {
-		container = MySQLContainerName(projectID)
+	// A build that failed before recording the container id left the admitted
+	// namespace on the row; the container is still named for the project.
+	containers := []string{MySQLContainerName(projectID)}
+	if namespace != "" && namespace != containers[0] {
+		containers = append(containers, namespace)
 	}
-	if err := p.RemoveContainer(ctx, container); err != nil {
-		return err
+	for _, container := range containers {
+		if err := p.RemoveContainer(ctx, container); err != nil {
+			return err
+		}
 	}
 	if err := p.removeVolume(ctx, projectID); err != nil {
 		return err

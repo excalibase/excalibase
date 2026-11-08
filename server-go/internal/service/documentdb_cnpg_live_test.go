@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"os"
 	"os/exec"
@@ -155,6 +156,9 @@ func (lab *documentDBLab) expectDeletionWithinWindow(t *testing.T) {
 func startDocumentDBLab(t *testing.T) *documentDBLab {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, documentDBLiveK3s); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, documentDBLiveK3s)
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)

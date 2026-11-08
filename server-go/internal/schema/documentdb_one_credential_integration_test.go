@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"os"
 	"strings"
 	"testing"
@@ -62,6 +63,9 @@ func requireProtocolTests(t *testing.T) {
 // exactly how the gateway reaches Postgres in production.
 func documentDBLocal(ctx context.Context, t *testing.T) testcontainers.Container {
 	t.Helper()
+	if err := imagepull.EnsureLocal(ctx, documentDBLocalImage); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: documentDBLocalImage,
