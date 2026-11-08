@@ -26,7 +26,9 @@ earlier stops there too. Its bridges are on the host and it has no
   installed: Fedora/RHEL `dnf install podman docker-compose`, Debian/Ubuntu
   `apt install podman docker-compose-v2`. Check with `podman compose version`
   (it names the provider). Use the distribution's Podman, not a static build:
-  healthchecks run through systemd user timers.
+  healthchecks run through systemd user timers, and without them `up -d` waits
+  forever with no error. `./init.sh` starts a small test container and refuses
+  a Podman that does not run its healthcheck.
 
   `podman-compose` (1.6) is **not supported**: it turns every `depends_on`
   into a hard Podman dependency, so a service behind a finished one-shot

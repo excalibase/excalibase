@@ -64,12 +64,19 @@ const bridgesEvery = 15 * time.Second
 const rootlessAttempts = 30
 
 func main() {
-	cfg, err := loadConfig(os.Getenv)
-	if err != nil {
+	if err := serve(os.Getenv); err != nil {
 		log.Fatalf("engine proxy: %v", err)
 	}
+}
+
+// serve runs the proxy until it cannot.
+func serve(getenv func(string) string) error {
+	cfg, err := loadConfig(getenv)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(cfg.socket); err != nil {
-		log.Fatalf("engine proxy: engine socket: %v", err)
+		return fmt.Errorf("engine socket: %w", err)
 	}
 	dial := func(ctx context.Context) (net.Conn, error) {
 		var dialer net.Dialer
@@ -81,14 +88,14 @@ func main() {
 	target := &url.URL{Scheme: "http", Host: "engine"}
 	handler := engineproxy.NewHandler(cfg.policy, target, transport).WithUpgradeDial(dial)
 	if err := checkStartup(cfg, handler); err != nil {
-		log.Fatalf("engine proxy: %v", err)
+		return err
 	}
 	if cfg.bridgesFile != "" {
 		go publishBridges(handler, cfg.bridgeNetworks, cfg.bridgesFile)
 	}
 	if cfg.restarts != nil {
 		if handler, err = handler.WithRestarts(*cfg.restarts); err != nil {
-			log.Fatalf("engine proxy: %v", err)
+			return err
 		}
 		go handler.SuperviseRestarts(context.Background())
 	}
@@ -99,8 +106,9 @@ func main() {
 	}
 	log.Printf("engine proxy: %s -> %s, networks %v prefix %q", cfg.listen, cfg.socket, cfg.policy.Networks, cfg.policy.NetworkPrefix)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("engine proxy: %v", err)
+		return err
 	}
+	return nil
 }
 
 // checkStartup is what must hold before the proxy serves. ENGINE_SOCKET_UID=0
@@ -123,8 +131,8 @@ func checkStartup(cfg config, handler *engineproxy.Handler) error {
 		return fmt.Errorf("ENGINE_SOCKET_UID=0 claims rootless Podman, and the engine does not answer: %w", err)
 	}
 	if !rootless {
-		return errors.New("rootful Podman is not supported: ENGINE_SOCKET_UID=0 claims a rootless engine, " +
-			"and this one is not, so nothing would guard the host from tenant containers. Use rootless Podman or Docker")
+		return errors.New("ENGINE_SOCKET_UID=0 claims rootless Podman, and this engine runs as root, so nothing would guard the host " +
+			"from tenant containers. On Docker, set ENGINE_SOCKET_UID=1000 (./init.sh writes it); rootful Podman is not supported, so use rootless Podman or Docker")
 	}
 	return nil
 }

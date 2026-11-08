@@ -239,7 +239,7 @@ done
 [ "$(state "$TENANT")" = exited ] || fail "the stop did not stop the tenant"
 sleep 15
 [ "$(state "$TENANT")" = exited ] || fail "a tenant started on its own with the record unreadable"
-d logs "$PROXY" 2>&1 | grep -q "pause those again" || fail "the log does not give the way out"
+d logs "$PROXY" 2>&1 | grep -q "Resume it, then Pause it" || fail "the log does not give the way out"
 d exec "$PROXY" rm /var/lib/excalibase-bridges/stopped
 d restart "$PROXY" >/dev/null
 waited=0

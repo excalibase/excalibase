@@ -31,6 +31,8 @@ func behindGuard(t *testing.T, health string, firewallRunning bool) *RealDockerC
 				"HostConfig": map[string]any{"NetworkMode": "excalibase-tenants"}})
 		case strings.HasSuffix(r.URL.Path, "/start"):
 			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/containers/json"):
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"Id": "old", "Names": []string{"/excalibase-p1-postgres-pre-upgrade-mu-1"}}})
 		default:
 			w.Header().Set("Api-Version", "1.47")
 			w.WriteHeader(http.StatusOK)
@@ -55,6 +57,17 @@ func behindGuard(t *testing.T, health string, firewallRunning bool) *RealDockerC
 		t.Fatal(err)
 	}
 	return client
+}
+
+// A teardown looks for what upgrades kept through the proxy, which lists only what is filtered to managed.
+func TestTheProxyAnswersTheListATeardownAsksFor(t *testing.T) {
+	names, err := behindGuard(t, "healthy", true).ManagedContainerNames(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(names) != 1 || names[0] != "excalibase-p1-postgres-pre-upgrade-mu-1" {
+		t.Fatalf("names %v", names)
+	}
 }
 
 // The proxy's refusal reaches the caller as the one error recovery acts on, and no other failure does.

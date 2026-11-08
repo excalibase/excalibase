@@ -25,7 +25,7 @@ permissions:
 jobs:
   matrix:
     name: Read catalogue
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       majors: ${{ steps.read.outputs.majors }}
     defaults:
@@ -47,7 +47,7 @@ jobs:
 
   build-push:
     name: Postgres ${{ matrix.entry.major }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [matrix]
     strategy:
       # Serial: four Postgres images at once is a lot of registry traffic for
@@ -208,7 +208,7 @@ jobs:
 
   cluster-image-catalog:
     name: Render ClusterImageCatalog
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [build-push]
     defaults:
       run:

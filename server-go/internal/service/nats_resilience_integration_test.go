@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net"
 	"net/netip"
 	"strconv"
@@ -87,6 +88,9 @@ func reserveHostPort(t *testing.T) int {
 func startNATSOnHostPort(t *testing.T, port int) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "nats:2.10-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "nats:2.10-alpine",

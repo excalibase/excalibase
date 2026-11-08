@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -37,6 +38,9 @@ func TestSingleHostRestoredCopyCarriesTheSourcesAPISettings(t *testing.T) {
 	defer cancel()
 
 	pgPwd := testutil.FixturePassword("pg-restore-settings")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("app"), tcpg.WithUsername("postgres"), tcpg.WithPassword(pgPwd),
 		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").

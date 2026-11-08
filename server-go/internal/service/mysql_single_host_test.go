@@ -14,6 +14,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -126,7 +127,10 @@ func (h *hostEngine) WaitForHealthy(context.Context, string) error { return nil 
 
 func (h *hostEngine) ExecInContainer(context.Context, string, []string) (int, error) { return 0, nil }
 
-func (h *hostEngine) ExecInContainerStdin(_ context.Context, id string, _ []string, stdin string) (string, error) {
+func (h *hostEngine) ExecInContainerStdin(_ context.Context, id string, _ []string, stdin string) (out string, err error) {
+	if strings.Contains(stdin, pgroles.RoleSQLDoneMarker) {
+		defer func() { out += pgroles.RoleSQLDoneMarker }()
+	}
 	h.mu.Lock()
 	h.stdin = append(h.stdin, stdin)
 	answer := h.answer

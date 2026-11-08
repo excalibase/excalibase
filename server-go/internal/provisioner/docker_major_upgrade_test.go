@@ -87,3 +87,11 @@ func TestFenceAndUnfence(t *testing.T) {
 		t.Fatal("dump or cleanup scripts")
 	}
 }
+
+// globals.sql holds every role's verifier, and a failed ALTER ROLE would log it.
+func TestUpgradeLoadsTheRolesWithTheServerLogSilenced(t *testing.T) {
+	script := upgradeInitScript("shop")
+	if !strings.Contains(script, `load() { PGOPTIONS="`+pgroles.QuietSessionPGOptions()+`" psql`) {
+		t.Error("load() runs with default logging")
+	}
+}

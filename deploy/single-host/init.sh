@@ -51,6 +51,35 @@ env_file=.env
 domain=
 admin_email=
 engine=docker
+# Compose waits for healthy services, and only Podman built with systemd, in a
+# user session, runs their checks; elsewhere `up -d` waits forever with no error.
+# Asked of a real container: nothing Podman reports says so. A probe that cannot
+# run learned nothing, and refuses nothing.
+check_podman_healthchecks() {
+  probe_seconds=${INIT_HEALTH_PROBE_SECONDS:-30}
+  probe_name=excalibase-health-probe-$$
+  podman_api="podman --url unix://$engine_socket"
+  if ! $podman_api run -d --name "$probe_name" --health-cmd true --health-interval 1s --health-retries 1 \
+    docker.io/library/alpine:3.20 sleep "$((probe_seconds + 30))" >/dev/null 2>&1; then
+    $podman_api rm -f -t 0 "$probe_name" >/dev/null 2>&1 || true
+    echo "init.sh: could not check that Podman runs healthchecks (the probe container did not start); continuing. If up -d waits forever, see docs/deployment/podman.md" >&2
+    return 0
+  fi
+  probe_health=
+  waited=0
+  while [ "$waited" -lt "$probe_seconds" ]; do
+    probe_health=$($podman_api inspect --format '{{.State.Health.Status}}' "$probe_name" 2>/dev/null || true)
+    [ "$probe_health" = healthy ] && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  $podman_api rm -f -t 0 "$probe_name" >/dev/null 2>&1 || true
+  if [ "$probe_health" != healthy ]; then
+    echo "init.sh: this Podman does not run healthchecks: a test container stayed '${probe_health:-unknown}' for ${probe_seconds}s, so the install would wait forever at up -d with no error. They run through systemd user timers, which a static Podman build and a host without a systemd user session do not have. Use the distribution's Podman, with lingering on (loginctl enable-linger), or use Docker. See docs/deployment/podman.md" >&2
+    exit 1
+  fi
+}
+
 engine_socket=
 engine_socket_uid=
 engine_socket_gid=
@@ -146,6 +175,7 @@ case $engine in
         echo "init.sh: the engine at $engine_socket did not say whether it is rootless. Check it answers (systemctl --user enable --now podman.socket), or set --engine-socket." >&2
         exit 1 ;;
     esac
+    check_podman_healthchecks
     engine_socket_uid=0
     engine_socket_gid=0
     ;;

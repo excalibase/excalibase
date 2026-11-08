@@ -13,6 +13,9 @@ import (
 // darkTools is every tool offered only while its feature is on.
 var darkTools = map[string]features.Feature{
 	"get_advisors":           features.Advisors,
+	"get_request_metrics":    features.RequestMetrics,
+	"get_db_read_address":    features.DBReadAddress,
+	"get_slow_queries":       features.SlowQueries,
 	"get_db_allowed_sources": features.DBAllowList,
 	"set_db_allowed_sources": features.DBAllowList,
 	"list_s3_keys":           features.S3,

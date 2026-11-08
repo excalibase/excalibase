@@ -12,6 +12,7 @@ package pgstore
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"testing"
 	"time"
 
@@ -31,6 +32,9 @@ func New(t *testing.T) *postgres.Store {
 	ctx := context.Background()
 
 	containerPwd := testutil.FixturePassword("pg-container")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgContainer, err := pgmod.Run(ctx, "postgres:16-alpine",
 		pgmod.WithDatabase("platform_test"),
 		pgmod.WithUsername("platform"),

@@ -38,7 +38,7 @@ func (a *HostMySQLBackupAdapter) Restore(ctx context.Context, inst *domain.Datab
 	pc := provisioner.NewProvisionContext(nil, nil)
 	restored, err := a.restoreInto(ctx, pc, inst, req, restore)
 	if err != nil {
-		return nil, failRestore(ctx, pc, req.TargetProjectID, err)
+		return nil, failRestore(ctx, pc, a.instances, &domain.DatabaseInstance{ProjectID: req.TargetProjectID}, err)
 	}
 	return &domain.ProvisioningResponse{
 		ProjectID: restored.ProjectID, ProjectName: restored.ProjectName, Status: restored.Status,

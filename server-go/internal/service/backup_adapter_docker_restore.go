@@ -87,7 +87,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		return dc.RemoveContainer(ctx, recovered.containerID)
 	})
 	if err := a.bringUp(ctx, dc, recovered, plan.Backup != nil && plan.Backup.Enabled); err != nil {
-		return nil, failRestore(ctx, pc, newProject, err)
+		return nil, failRestore(ctx, pc, store, &domain.DatabaseInstance{ProjectID: newProject}, err)
 	}
 	newInst := restoredDockerInstance(inst, restoredDockerSpec{
 		projectID:     newProject,
@@ -101,11 +101,11 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	})
 	deps := restoreDeps{dc: dc, gatewayLimits: recovered.spec.gatewayLimits()}
 	if err := startRestoredGateway(ctx, pc, deps, newInst, recovered.containerID); err != nil {
-		return nil, failRestore(ctx, pc, newProject, err)
+		return nil, failRestore(ctx, pc, store, &domain.DatabaseInstance{ProjectID: newProject}, err)
 	}
 	if err := registerVerifiedProject(ctx, pc, registrar, store, probe, newInst,
 		RegistrationOptions{ResetRolePasswords: true, ResetAdminPassword: true}); err != nil {
-		return nil, failRestore(ctx, pc, newProject, err)
+		return nil, failRestore(ctx, pc, store, &domain.DatabaseInstance{ProjectID: newProject}, err)
 	}
 	return &domain.ProvisioningResponse{
 		ProjectID:    newInst.ProjectID,

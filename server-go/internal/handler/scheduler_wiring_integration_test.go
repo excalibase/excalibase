@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -41,6 +42,9 @@ const (
 func startProjectPG(t *testing.T) (*sql.DB, map[string]map[string]string) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("tenant"),
 		postgres.WithUsername("postgres"),
