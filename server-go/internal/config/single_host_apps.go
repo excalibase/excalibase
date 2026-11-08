@@ -23,6 +23,8 @@ type SingleHostAppsConfig struct {
 	SandboxRuntime string
 	// Egress gives apps a route to the internet (APP_EGRESS=internet); off by default.
 	Egress bool
+	// AcceptUnguardedEgress is APP_EGRESS_UNGUARDED=accept: egress where no firewall can guard it (rootless Podman).
+	AcceptUnguardedEgress bool
 	// EgressInvalid keeps an APP_EGRESS value that is neither, for Validate to name.
 	EgressInvalid               string
 	NetworkPrefix, VolumePrefix string
@@ -58,6 +60,7 @@ func loadSingleHostApps() SingleHostAppsConfig {
 	if cfg.SandboxRuntime == appSandboxOptOut {
 		cfg.SandboxRuntime = ""
 	}
+	cfg.AcceptUnguardedEgress = os.Getenv("APP_EGRESS_UNGUARDED") == "accept"
 	switch egress := envOr("APP_EGRESS", "none"); egress {
 	case "none":
 	case "internet":

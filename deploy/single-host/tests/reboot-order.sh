@@ -20,6 +20,11 @@ PAUSED=excalibase-pausedtenant-postgres
 OLD=excalibase-oldtenant-postgres
 OLD_PAUSED=excalibase-oldpaused-postgres
 STUBBORN=excalibase-stubborn-postgres
+# EXC-687: an app with a route out comes back behind the firewall too; one on an isolated network keeps Docker's policy.
+EGRESS_NET=excalibase-net-rebootegress
+ISOLATED_NET=excalibase-net-rebootisolated
+EGRESS_APP=excalibase-app-rebootegress
+ISOLATED_APP=excalibase-app-rebootisolated
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "ok: $*"; }
@@ -43,6 +48,10 @@ proxy() {
 }
 create_tenant() {
   proxy "/containers/create?name=$1" '{"Image":"'"$TENANT_IMAGE"'","Cmd":["sleep","1000000"],"Labels":{"excalibase.managed":"true"},"HostConfig":{"RestartPolicy":{"Name":"unless-stopped","MaximumRetryCount":0}},"NetworkingConfig":{"EndpointsConfig":{"excalibase-tenants":{}}}}' >/dev/null
+  proxy "/containers/$1/start" >/dev/null
+}
+create_app() {
+  proxy "/containers/create?name=$1" '{"Image":"'"$TENANT_IMAGE"'","Cmd":["sleep","1000000"],"Labels":{"excalibase.managed":"true","excalibase.component":"app"},"HostConfig":{"NetworkMode":"'"$2"'","RestartPolicy":{"Name":"unless-stopped","MaximumRetryCount":0}},"NetworkingConfig":{"EndpointsConfig":{"'"$2"'":{}}}}' >/dev/null
   proxy "/containers/$1/start" >/dev/null
 }
 reboot() {
@@ -85,9 +94,35 @@ create_tenant "$TENANT"
 [ "$(state "$TENANT")" = running ] || fail "the tenant did not start"
 ok "a tenant runs behind the healthy firewall"
 
+echo "== apps: a bridge the firewall covers, or none to cover"
+if proxy /networks/create '{"Name":"'"$EGRESS_NET"'","Driver":"bridge","Labels":{"excalibase.managed":"true"}}' >/dev/null 2>&1; then
+  fail "the proxy made a project network with a route out and no bridge the firewall covers"
+fi
+ok "the proxy refuses a project network off the firewall's wildcard"
+bridge=exnet$(printf '%s' "$EGRESS_NET" | sha256sum | cut -c1-10)
+proxy /networks/create '{"Name":"'"$EGRESS_NET"'","Driver":"bridge","Labels":{"excalibase.managed":"true"},"Options":{"com.docker.network.bridge.name":"'"$bridge"'"}}' >/dev/null
+proxy /networks/create '{"Name":"'"$ISOLATED_NET"'","Driver":"bridge","Internal":true,"Labels":{"excalibase.managed":"true"},"Options":{"com.docker.network.bridge.gateway_mode_ipv4":"isolated","com.docker.network.bridge.gateway_mode_ipv6":"isolated"}}' >/dev/null
+create_app "$EGRESS_APP" "$EGRESS_NET"
+create_app "$ISOLATED_APP" "$ISOLATED_NET"
+[ "$(policy "$EGRESS_APP")" = no ] || fail "an app with a route out kept the policy a reboot acts on: $(policy "$EGRESS_APP")"
+[ "$(policy "$ISOLATED_APP")" = unless-stopped ] || fail "an app with no route lost Docker's policy: $(policy "$ISOLATED_APP")"
+[ "$(state "$EGRESS_APP")" = running ] && [ "$(state "$ISOLATED_APP")" = running ] || fail "the apps did not start"
+docker exec "$MACHINE" iptables -S DOCKER-USER | grep -q -- '-i exnet+ -j EXCALIBASE-APP' \
+  || docker exec "$MACHINE" iptables-legacy -S DOCKER-USER | grep -q -- '-i exnet+ -j EXCALIBASE-APP' \
+  || fail "no wildcard on project bridges"
+ok "the apps run, the wildcard is in place"
+
 echo "== a clean reboot"
 reboot clean
 tenant_waits_for_firewall "after a clean reboot"
+waited=0
+until [ "$(state "$EGRESS_APP")" = running ]; do
+  waited=$((waited + 1))
+  [ "$waited" -lt 60 ] || fail "the app with a route out did not come back"
+  sleep 1
+done
+[ "$(health "$FIREWALL")" = healthy ] || fail "the app runs while the firewall is $(health "$FIREWALL")"
+ok "after a clean reboot the app with a route out came back behind the firewall"
 
 echo "== a power cut with the firewall down: tenants stay down until it is healthy"
 d stop "$FIREWALL" >/dev/null
@@ -96,11 +131,38 @@ sleep 45
 [ "$(state "$PROXY")" = running ] || fail "the proxy did not come back: $(state "$PROXY")"
 [ "$(state "$TENANT")" != running ] || fail "the tenant runs with the firewall down"
 ok "45s after the power cut the tenant is still down"
+[ "$(state "$EGRESS_APP")" != running ] || fail "the app with a route out runs with the firewall down"
+ok "45s after the power cut the app with a route out is still down"
+[ "$(state "$ISOLATED_APP")" = running ] || fail "the app with no route is down: $(state "$ISOLATED_APP")"
+ok "the app with no route came back on Docker's policy: it can reach nothing anyway"
+if proxy "/containers/$EGRESS_APP/start" >/dev/null 2>&1; then fail "the proxy started an app with a route out with the firewall down"; fi
 if proxy "/containers/$TENANT/start" >/dev/null 2>&1; then fail "the proxy started a tenant with the firewall down"; fi
 [ "$(state "$TENANT")" != running ] || fail "a start through the proxy got past the firewall"
 ok "the proxy refuses to start a tenant with the firewall down"
 d start "$FIREWALL" >/dev/null
 tenant_waits_for_firewall "once the firewall returned"
+waited=0
+until [ "$(state "$EGRESS_APP")" = running ]; do
+  waited=$((waited + 1))
+  [ "$waited" -lt 60 ] || fail "the app with a route out did not come back once the firewall did"
+  sleep 1
+done
+ok "the app with a route out came back once the firewall did"
+pid=$(d inspect -f '{{.State.Pid}}' "$EGRESS_APP")
+docker exec "$MACHINE" kill -9 "$pid"
+waited=0
+until now=$(d inspect -f '{{.State.Pid}}' "$EGRESS_APP") && [ "$now" != "$pid" ] && [ "$now" != 0 ]; do
+  waited=$((waited + 1))
+  [ "$waited" -lt 30 ] || fail "a crashed app with a route out did not come back in 30s"
+  sleep 1
+done
+count=$(d exec "$PROXY" wget -qO- "http://127.0.0.1:2375/containers/$EGRESS_APP/json" | sed -n 's/.*"RestartCount":\([0-9]*\).*/\1/p')
+[ "${count:-0}" -ge 1 ] || fail "provisioning reads no restart of the crashed app: RestartCount=$count"
+ok "a crashed app came back in ${waited}s, its restart counted"
+proxy "/containers/$EGRESS_APP/stop?t=1" >/dev/null
+sleep 12
+[ "$(state "$EGRESS_APP")" = exited ] || fail "a paused app came back"
+ok "a paused app stays down"
 
 echo "== a crash comes back; a stop stays stopped, across a reboot too"
 pid=$(d inspect -f '{{.State.Pid}}' "$TENANT")

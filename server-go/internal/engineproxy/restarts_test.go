@@ -28,6 +28,8 @@ type restartContainer struct {
 	policy   string
 	status   string
 	health   string
+	// entrypoint is the image's command, for what may join the builds' network.
+	entrypoint []string
 }
 
 // restartEngine holds containers by id, with the engine's answers the supervisor reads.
@@ -43,6 +45,8 @@ type restartEngine struct {
 	hang    map[string]bool
 	// onList runs once a list is answered, as if the engine moved on right after it.
 	onList func()
+	// networks answers network inspects; nil answers every project network internal and isolated.
+	networks map[string]map[string]any
 }
 
 func (e *restartEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +63,8 @@ func (e *restartEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		e.created = string(body)
 		_ = json.NewEncoder(w).Encode(map[string]any{"Id": "new"})
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/networks/"):
+		e.network(w, strings.TrimPrefix(path, "/networks/"))
 	default:
 		id, action, _ := strings.Cut(strings.TrimPrefix(path, "/containers/"), "/")
 		found, ok := e.containers[id]
@@ -70,14 +76,32 @@ func (e *restartEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (e *restartEngine) network(w http.ResponseWriter, name string) {
+	if e.networks == nil {
+		_ = json.NewEncoder(w).Encode(map[string]any{"Driver": "bridge", "Internal": true,
+			"Options": map[string]string{gatewayModeIPv4: gatewayIsolated, gatewayModeIPv6: gatewayIsolated}})
+		return
+	}
+	found, ok := e.networks[name]
+	if !ok {
+		http.Error(w, `{"message":"No such network"}`, http.StatusNotFound)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(found)
+}
+
 func (e *restartEngine) list(w http.ResponseWriter) {
 	list := []map[string]any{}
 	for id, found := range e.containers {
 		if found.labels[ManagedLabel] != "true" {
 			continue
 		}
+		attached := map[string]any{}
+		for _, network := range found.networks {
+			attached[network] = map[string]any{}
+		}
 		list = append(list, map[string]any{"Id": id, "Labels": found.labels, "State": found.status,
-			"HostConfig": map[string]any{"NetworkMode": found.mode}})
+			"HostConfig": map[string]any{"NetworkMode": found.mode}, "NetworkSettings": map[string]any{"Networks": attached}})
 	}
 	_ = json.NewEncoder(w).Encode(list)
 }
@@ -94,7 +118,7 @@ func (e *restartEngine) act(w http.ResponseWriter, r *http.Request, id, action s
 			attached[network] = map[string]any{}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"Id": id, "State": state, "NetworkSettings": map[string]any{"Networks": attached},
-			"Config":     map[string]any{"Labels": found.labels},
+			"Config":     map[string]any{"Labels": found.labels, "Entrypoint": found.entrypoint},
 			"HostConfig": map[string]any{"NetworkMode": found.mode, "RestartPolicy": map[string]any{"Name": found.policy}}})
 	case "start":
 		if e.hang[id] {
@@ -131,6 +155,8 @@ func (e *restartEngine) startedOnly() []string {
 	defer e.mu.Unlock()
 	return append([]string{}, e.started...)
 }
+
+func isolatedNetworks(string) bool { return true }
 
 func tenant(status string) *restartContainer {
 	return &restartContainer{labels: map[string]string{ManagedLabel: "true"}, mode: "excalibase-tenants", policy: "no", status: status}
@@ -194,8 +220,8 @@ func TestTenantsAreCreatedWithoutARestartPolicyTheEngineWouldActOn(t *testing.T)
 	}
 }
 
-// An app's network is internal and has no address on the host, firewall or not: the engine keeps restarting it.
-func TestAppsOnAProjectNetworkKeepTheirRestartPolicy(t *testing.T) {
+// An app's network here is internal and has no address on the host, firewall or not: the engine keeps restarting it.
+func TestAppsOnAnIsolatedProjectNetworkKeepTheirRestartPolicy(t *testing.T) {
 	engine, handler, _ := restartProxy(t, map[string]*restartContainer{})
 	body := createBody(t, func(b map[string]any) {
 		hostConfig(b)["NetworkMode"] = "excalibase-proj-p1"
@@ -213,10 +239,10 @@ func TestAppsOnAProjectNetworkKeepTheirRestartPolicy(t *testing.T) {
 
 // A project network named as the mode does not exempt a create that also joins a guarded one.
 func TestACreateJoiningAGuardedNetworkIsHeldWhateverItsMode(t *testing.T) {
-	if restartExempt(testPolicy(), "excalibase-proj-p1", []string{"excalibase-proj-p1", "excalibase-tenants"}) {
+	if restartExempt(testPolicy(), "excalibase-proj-p1", []string{"excalibase-proj-p1", "excalibase-tenants"}, isolatedNetworks) {
 		t.Fatal("a create joining the tenants' network is exempt")
 	}
-	if !restartExempt(testPolicy(), "excalibase-proj-p1", []string{"excalibase-proj-p1"}) {
+	if !restartExempt(testPolicy(), "excalibase-proj-p1", []string{"excalibase-proj-p1"}, isolatedNetworks) {
 		t.Fatal("an app on its project network is held")
 	}
 }
@@ -524,7 +550,7 @@ func TestAHungStartHoldsNoOtherTenantBack(t *testing.T) {
 	var startedAfter time.Duration
 	began := time.Now()
 	engine.onStart = func(string) { startedAfter = time.Since(began) }
-	handler.startAll(context.Background(), []string{"hung", "fine"})
+	handler.startAll(context.Background(), []startTarget{{id: "hung"}, {id: "fine"}})
 	if started := engine.startedOnly(); len(started) != 1 || started[0] != "fine" {
 		t.Fatalf("started %v", started)
 	}
@@ -544,10 +570,10 @@ func TestAContainerOnNoNetworkNeverWaits(t *testing.T) {
 	if resp := serve(t, handler, http.MethodPost, "/containers/excalibase-build-1-prepare/start", ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("start answered %d", resp.StatusCode)
 	}
-	if !restartExempt(testPolicy(), "none", nil) || restartExempt(testPolicy(), "none", []string{"excalibase-tenants"}) {
+	if !restartExempt(testPolicy(), "none", nil, isolatedNetworks) || restartExempt(testPolicy(), "none", []string{"excalibase-tenants"}, isolatedNetworks) {
 		t.Fatal("network none is exempt alone")
 	}
-	if supervised(testPolicy(), map[string]string{ManagedLabel: "true"}, "none") {
+	if supervised(testPolicy(), map[string]string{ManagedLabel: "true"}, "none", isolatedNetworks) {
 		t.Fatal("a container on no network is supervised")
 	}
 	if len(engine.startedOnly()) != 1 {
@@ -604,10 +630,10 @@ func TestAStopInFlightKeepsTheRecord(t *testing.T) {
 
 func TestSupervisedIsAManagedContainerOfItsOwn(t *testing.T) {
 	p := testPolicy()
-	if supervised(p, map[string]string{}, "excalibase-tenants") {
+	if supervised(p, map[string]string{}, "excalibase-tenants", isolatedNetworks) {
 		t.Error("an unmanaged container is supervised")
 	}
-	if !supervised(p, map[string]string{ManagedLabel: "true"}, "excalibase-tenants") {
+	if !supervised(p, map[string]string{ManagedLabel: "true"}, "excalibase-tenants", isolatedNetworks) {
 		t.Error("a tenant is not supervised")
 	}
 }
@@ -701,7 +727,7 @@ func TestAQueuedStartHonoursAStopRecordedMeanwhile(t *testing.T) {
 	engine.hang = map[string]bool{"a": true}
 	handler.restarts.workers, handler.restarts.startTimeout = 1, 300*time.Millisecond
 	done := make(chan struct{})
-	go func() { handler.startAll(context.Background(), []string{"a", "b"}); close(done) }()
+	go func() { handler.startAll(context.Background(), []startTarget{{id: "a"}, {id: "b"}}); close(done) }()
 	time.Sleep(50 * time.Millisecond)
 	if err := handler.restarts.setStopped("b", true); err != nil {
 		t.Fatal(err)

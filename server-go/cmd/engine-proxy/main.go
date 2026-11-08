@@ -241,6 +241,8 @@ func loadConfig(getenv func(string) string) (config, error) {
 		return config{}, err
 	}
 	bindIPs := splitList(getenv("PROXY_PORT_BIND_IPS"))
+	// Where tenants wait for the firewall, project networks must also be ones it covers (EXC-687).
+	fenceProjectBridges := restarts != nil
 	if len(bindIPs) == 0 {
 		bindIPs = []string{"127.0.0.1"}
 	}
@@ -262,6 +264,8 @@ func loadConfig(getenv func(string) string) (config, error) {
 			CDCNetwork:      cdcNetwork,
 			CDCImages:       cdcImages,
 			StatsContainers: monitored,
+
+			FenceProjectBridges: fenceProjectBridges,
 		},
 		bridgeNetworks: bridgeNetworks,
 		bridgesFile:    bridgesFile,
