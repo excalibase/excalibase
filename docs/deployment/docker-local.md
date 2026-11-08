@@ -279,6 +279,8 @@ its first packet with no reconcile. From those bridges:
 | Other projects | dropped by the firewall itself, so a flushed ruleset (nftables restarted) does not open them |
 | `APP_EGRESS_EXTRA_DENY_CIDRS` (IPv4 only, as provisioning reads it; preflight refuses an IPv6 entry) | dropped, on Docker 29 and later the edge's published ports too if the list covers the host's address |
 
+The firewall never loads `br_netfilter` itself: it writes the same-project pass only while Docker or the admin has already loaded it, and re-reads that on every pass.
+
 The project's database and DocumentDB gateway join the same bridge, and their default route
 moves to it, so all of this covers them too. With `APP_EGRESS=none` on Docker 28 or later
 nothing changes: those networks have no route and no address on the host, so they need no rule.

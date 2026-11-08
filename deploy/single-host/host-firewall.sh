@@ -55,6 +55,7 @@ SYSFS=${HOST_FIREWALL_SYSFS:-/sys/class/net}
 # The host's resolv.conf Docker reads: tenants' lookups are forwarded to its resolvers.
 RESOLV_CONF=${HOST_FIREWALL_RESOLV_CONF:-/etc/host-resolv.conf}
 INTERVAL=${HOST_FIREWALL_INTERVAL:-30}
+BRIDGE_NF=${HOST_FIREWALL_BRIDGE_NF:-/proc/sys/net/bridge}
 # How long a first start waits for the engine proxy to name the bridges.
 WAIT=${HOST_FIREWALL_WAIT:-120}
 # As the Kubernetes policies deny, plus Azure's host endpoint (public, but answers
@@ -230,8 +231,9 @@ app_rules() {
   if [ "$1" = 6 ]; then deny=$DENY6 dns=$DNS6 edge=$EDGE6; else deny=$DENY4 dns=$DNS4 extra=$EXTRA4 edge=$EDGE4; fi
   replies "$APP_CHAIN"
   echo "$APP_CHAIN -o $PROJECT_BRIDGES -m conntrack --ctstate DNAT -j DROP"
-  # Same-bridge traffic (physdev) is the only pass; routing to any other project bridge drops here, so a flushed Docker isolation chain cannot open it.
-  echo "$APP_CHAIN -o $PROJECT_BRIDGES -m physdev --physdev-is-bridged -j RETURN"
+  # Same-bridge traffic reaches FORWARD only once br_netfilter is loaded, and naming physdev would load it
+  # (breaking other bridges on the host), so the pass is written only while it is there; every pass re-reads this.
+  [ ! -e "$BRIDGE_NF" ] || echo "$APP_CHAIN -o $PROJECT_BRIDGES -m physdev --physdev-is-bridged -j RETURN"
   echo "$APP_CHAIN -o $PROJECT_BRIDGES -j DROP"
   for cidr in $extra; do echo "$APP_CHAIN -m conntrack --ctorigdst $cidr -j DROP"; done
   for server in $dns; do

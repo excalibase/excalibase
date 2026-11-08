@@ -45,8 +45,8 @@ EOF
 }
 
 reset() {
-  rm -rf "$WORK/bin" "$WORK/sys" "$WORK"/*.rules "$WORK"/*.calls "$WORK"/*.chains "$WORK/refuse" "$WORK/blind-icmpv6"
-  mkdir -p "$WORK/bin" "$WORK/sys/br-3f1c9a2b7d4e" "$WORK/sys/br-aa11bb22cc33" "$WORK/sys/br-77aa88bb99cc"
+  rm -rf "$WORK/brnf" "$WORK/bin" "$WORK/sys" "$WORK"/*.rules "$WORK"/*.calls "$WORK"/*.chains "$WORK/refuse" "$WORK/blind-icmpv6"
+  mkdir -p "$WORK/brnf" "$WORK/bin" "$WORK/sys/br-3f1c9a2b7d4e" "$WORK/sys/br-aa11bb22cc33" "$WORK/sys/br-77aa88bb99cc"
   fake iptables-nft v4
   fake ip6tables-nft v6
   # Docker installs FORWARD -> DOCKER-USER; the guard checks it is still there.
@@ -65,7 +65,7 @@ EOF
 }
 
 run() {
-  PATH="$WORK/bin:$PATH" HOST_FIREWALL_ONCE=1 HOST_FIREWALL_WAIT=0 HOST_FIREWALL_SYSFS="$WORK/sys" \
+  PATH="$WORK/bin:$PATH" HOST_FIREWALL_ONCE=1 HOST_FIREWALL_WAIT=0 HOST_FIREWALL_SYSFS="$WORK/sys" HOST_FIREWALL_BRIDGE_NF="$WORK/brnf" \
     HOST_FIREWALL_BRIDGES_FILE="$WORK/bridges" HOST_FIREWALL_RESOLV_CONF="$WORK/resolv.conf" \
     HOST_FIREWALL_NETWORKS=excalibase-tenants,excalibase-platform,excalibase-edge,excalibase-drains \
     HOST_FIREWALL_TENANT_NETWORKS=excalibase-tenants sh "$DIR/../host-firewall.sh" "$@" >"$WORK/out" 2>&1
@@ -326,6 +326,19 @@ reset
 fenced "" || fail "fenced: $(cat "$WORK/out")"
 has v4 "FORWARD -i exnet+ -j EXCALIBASE-APP"
 has v4 "FORWARD -i br-3f1c9a2b7d4e -j EXCALIBASE-TENANT"
+# The firewall never loads br_netfilter: physdev is written only while it is already there.
+bridged="EXCALIBASE-APP -o exnet+ -m physdev --physdev-is-bridged -j RETURN"
+reset
+rmdir "$WORK/brnf"
+fenced "" || fail "fenced without br_netfilter: $(cat "$WORK/out")"
+for family in v4 v6; do lacks $family "$bridged"; has $family "EXCALIBASE-APP -o exnet+ -j DROP"; done
+fenced "" check || fail "check without br_netfilter: $(cat "$WORK/out")"
+# It appears later: the check fails, the next pass puts the RETURN in front of the DROP.
+mkdir "$WORK/brnf"
+! fenced "" check || fail "check passed with br_netfilter present and no RETURN"
+fenced "" || fail "next pass: $(cat "$WORK/out")"
+for family in v4 v6; do before $family "$bridged" "EXCALIBASE-APP -o exnet+ -j DROP"; done
+fenced "" check || fail "check after the pass: $(cat "$WORK/out")"
 # The check notices any rule of the app chain gone, and an extra one.
 reset
 fenced "203.0.113.0/24" || fail "fenced: $(cat "$WORK/out")"
