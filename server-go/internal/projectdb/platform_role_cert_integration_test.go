@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/pem"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"math/big"
 	"net/url"
 	"strings"
@@ -125,6 +126,9 @@ func startCertPostgres(t *testing.T) certPostgres {
 	serverCert, serverKey := ca.serverPair(t)
 	file := func(name string, content []byte, mode int64) testcontainers.ContainerFile {
 		return testcontainers.ContainerFile{Reader: strings.NewReader(string(content)), ContainerFilePath: name, FileMode: mode}
+	}
+	if err := imagepull.EnsureLocal(ctx, "postgres:17-alpine"); err != nil {
+		t.Fatal(err)
 	}
 	pg, err := postgres.Run(ctx, "postgres:17-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("postgres"), postgres.WithPassword("super-pw"),

@@ -74,7 +74,7 @@ func siteBuildRouteCases() []routeCase {
 // Without a GitHub sign-in the tool sends the user to Studio, and starts no sign-in it could hand to someone else.
 func TestConnectSiteRepo_SendsTheUserToStudioToSignIn(t *testing.T) {
 	f := newFakeRoutes()
-	f.on(http.MethodPut, projectsA+"/sites/s1/git", 403, `{"error":"sign in to GitHub from this site first"}`)
+	f.on(http.MethodPut, projectsA+"/sites/s1/git", 403, `{"error":"sign in to GitHub from this page first"}`)
 	cs := session(t, f, &recordingAudit{}, writeCaller())
 	res := callTool(t, cs, "connect_site_repo", map[string]any{"project_id": testProjectA, "site_id": "s1", "repository": "acme/site",
 		"build_env": map[string]any{}})
@@ -86,10 +86,11 @@ func TestConnectSiteRepo_SendsTheUserToStudioToSignIn(t *testing.T) {
 // Single-host says why, in the server's own words.
 func TestListSiteBuilds_SingleHost(t *testing.T) {
 	f := newFakeRoutes()
-	f.on(http.MethodGet, projectsA+"/sites/s1/builds", 503, `{"error":"git builds are not offered on single-host installs yet"}`)
+	f.on(http.MethodGet, projectsA+"/sites/s1/builds", 503, `{"error":"git builds are not offered on single-host installs yet: build in your own CI and deploy the result (Studio → Deploy from CI, or the get_ci_snippet tool)"}`)
 	cs := session(t, f, &recordingAudit{}, writeCaller())
 	res := callTool(t, cs, "list_site_builds", map[string]any{"project_id": testProjectA, "site_id": "s1"})
-	if !res.IsError || !strings.Contains(resultText(res), "single-host") {
+	// get_ci_snippet defaults to an app, so a site agent is told which kind to ask for.
+	if !res.IsError || !strings.Contains(resultText(res), "single-host") || !strings.Contains(resultText(res), "get_ci_snippet with kind site") {
 		t.Fatalf("result = %s", resultText(res))
 	}
 }

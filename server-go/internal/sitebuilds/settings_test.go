@@ -147,3 +147,13 @@ func TestSettings_UnknownFrameworkPointsToAContainer(t *testing.T) {
 		}
 	}
 }
+
+// A refused name may be a pasted secret, so the refusal never echoes it.
+func TestSettings_ABadVariableNameIsNotEchoed(t *testing.T) {
+	settings := validSettings()
+	settings.Env = map[string]string{"sk-live-pasted secret": "x"}
+	_, err := settings.Normalise()
+	if err == nil || strings.Contains(err.Error(), "sk-live") || strings.Contains(err.Error(), "pasted") {
+		t.Fatalf("refusal %v", err)
+	}
+}

@@ -21,13 +21,16 @@ import (
 // new container's first start ends as load says: "loaded", "failed", or ""
 // (it never ends).
 type upgradeEngine struct {
-	byID       map[string]*engineContainer
-	nextID     int
-	load       string
-	fail       map[string]error
-	extensions []string
-	calls      []string
-	copied     map[string][]string // container id -> destinations
+	// firewallDown fails the check and every start; refuseStart only the starts,
+	// as when the firewall goes down after the check.
+	firewallDown, refuseStart bool
+	byID                      map[string]*engineContainer
+	nextID                    int
+	load                      string
+	fail                      map[string]error
+	extensions                []string
+	calls                     []string
+	copied                    map[string][]string // container id -> destinations
 	// after runs once a named step has run.
 	after map[string]func()
 	// onCall sees every call as it is made.
@@ -111,10 +114,18 @@ func (e *upgradeEngine) CreateContainerSpec(_ context.Context, spec provisioner.
 	return id, nil
 }
 
+// HostFirewallHealthy is what the upgrader asks before it changes anything.
+func (e *upgradeEngine) HostFirewallHealthy(context.Context) (bool, error) {
+	return !e.firewallDown, nil
+}
+
 func (e *upgradeEngine) StartContainer(_ context.Context, id string) error {
 	c := e.find(id)
 	if c == nil {
 		return errors.New("no such container")
+	}
+	if e.refuseStart || e.firewallDown {
+		return fmt.Errorf("start container %s: %w", id, provisioner.ErrHostFirewallDown)
 	}
 	if err := e.step("start:" + c.image); err != nil {
 		return err

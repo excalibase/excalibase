@@ -5,6 +5,7 @@ package natsauth
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,6 +134,9 @@ func setupCalloutEnvWith(t *testing.T, optionsFor func(*calloutEnv) []ResponderO
 	calloutPassword, _ := NewPassword()
 	confPath := writeServerConf(t, issuerPub, calloutPassword)
 
+	if err := imagepull.EnsureLocal(ctx, "nats:2.10-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "nats:2.10-alpine",

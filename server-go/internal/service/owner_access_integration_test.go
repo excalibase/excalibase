@@ -32,7 +32,7 @@ func ownerAccessSuite(t *testing.T, image string) {
 		spec:  projectRoleSpec{databaseName: "app", adminUsername: customerOwner},
 		creds: projectRoleCredentials{authPassword: "Auth-Password-1", appPassword: customerAppPassword, watcherPassword: "Watcher-Password-1"},
 	}
-	pg.psql(t, projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub"))
+	pg.psql(t, mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"))
 	c.owner = pg.connect(t, customerOwner, customerOwnerPassword)
 	c.app = pg.connect(t, roleApp, customerAppPassword)
 	c.admin = pg.connect(t, "postgres", "p")
@@ -83,7 +83,7 @@ func (c *ownerAccessCase) plantedRoutinesAreReplaced(t *testing.T) {
 	mustExec(t, c.app, "CREATE PROCEDURE excalibase.drop_role(text) LANGUAGE sql AS $$ SELECT 1 $$")
 	restore := c.spec
 	restore.resetPasswords = true
-	if err := c.pg.psqlErr(projectRoleSQL(restore, c.creds, "cdc_watcher_pub")); err != nil {
+	if err := c.pg.psqlErr(mustProjectRoleSQL(t, restore, c.creds, "cdc_watcher_pub")); err != nil {
 		t.Fatalf("registration failed on a planted routine: %v", err)
 	}
 	if got := scanString(t, c.admin, "SELECT count(*)::text FROM pg_proc WHERE pronamespace = 'excalibase'::regnamespace AND prokind = 'p'"); got != "0" {
@@ -161,7 +161,7 @@ func (c *ownerAccessCase) ownerDDLUnaffected(t *testing.T) {
 func (c *ownerAccessCase) reRegistrationKeepsAccess(t *testing.T) {
 	restore := c.spec
 	restore.resetPasswords = true
-	c.pg.psql(t, projectRoleSQL(restore, c.creds, "cdc_watcher_pub"))
+	c.pg.psql(t, mustProjectRoleSQL(t, restore, c.creds, "cdc_watcher_pub"))
 	mustExec(t, c.app, "CREATE SCHEMA later")
 	mustExec(t, c.app, "CREATE TABLE later.items (id serial PRIMARY KEY)")
 	mustExec(t, c.owner, "INSERT INTO later.items DEFAULT VALUES")

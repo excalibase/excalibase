@@ -71,16 +71,24 @@ END
 $excalibase_session$;
 `
 
-// superuserPsqlCommand is psql as postgres in dbName with the session pinned.
-// Each script is its own -c, so its own transaction, and the first failure
-// stops the rest. serverVersionNum is the server_version_num the probe read,
-// or 0 when it is unknown.
-func superuserPsqlCommand(dbName string, serverVersionNum int, scripts ...string) []string {
-	cmd := []string{"psql", "-X", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose", "-U", "postgres", "-d", superuserConninfo(dbName, serverVersionNum)}
+// superuserPsqlCommand is psql as postgres in dbName with the session pinned and
+// kept out of the server log, since role SQL names SCRAM verifiers. It reads its
+// script from stdin: an exec argument lands in the exec URL, which the API
+// server audits. serverVersionNum is the server_version_num the probe
+// read, or 0 when it is unknown.
+func superuserPsqlCommand(dbName string, serverVersionNum int) []string {
+	return []string{"psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose", "-U", "postgres", "-d", conninfoWith(dbName, serverVersionNum, pgroles.QuietSessionOptions()), "-f", "-"}
+}
+
+// superuserScript is what superuserPsqlCommand reads. Each script is its own
+// transaction, and the first failure stops the rest.
+func superuserScript(scripts ...string) string {
+	var input strings.Builder
 	for _, script := range scripts {
-		cmd = append(cmd, "-c", sessionGuardSQL+script)
+		input.WriteString("BEGIN;\n" + sessionGuardSQL + script + "\nCOMMIT;\n")
 	}
-	return cmd
+	input.WriteString("SELECT '" + pgroles.RoleSQLDoneMarker + "';\n")
+	return input.String()
 }
 
 // serverVersionProbeCommand reads server_version_num with the connect-safe
@@ -111,8 +119,12 @@ func authAccessProbeCommand(dbName string) []string {
 }
 
 func superuserConninfo(dbName string, serverVersionNum int) string {
-	options := make([]string, 0, len(pinnedSessionOptions)+1)
-	for _, option := range pinnedSessionOptions {
+	return conninfoWith(dbName, serverVersionNum, nil)
+}
+
+func conninfoWith(dbName string, serverVersionNum int, extra []string) string {
+	options := make([]string, 0, len(pinnedSessionOptions)+len(extra)+2)
+	for _, option := range append(append([]string{}, pinnedSessionOptions...), extra...) {
 		options = append(options, "-c "+option)
 	}
 	if serverVersionNum >= scramIterationsMinVersion {

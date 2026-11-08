@@ -14,7 +14,7 @@ import (
 // none, and a reader a restored copy brought cannot sign in.
 
 func registeredStatements(h *registrationHarness) string {
-	return strings.Join(h.kube.ExecCommands, "\n")
+	return strings.Join(h.kube.ExecStdin, "\n")
 }
 
 func TestRegistrationFilesTheReaderWhileItsFeatureIsOn(t *testing.T) {
@@ -31,9 +31,8 @@ func TestRegistrationFilesTheReaderWhileItsFeatureIsOn(t *testing.T) {
 	if !strings.Contains(sql, "excalibase_reader_refuses_ddl") || strings.Contains(sql, "excalibase_reader_lock") {
 		t.Error("the reader was not created")
 	}
-	if strings.Contains(sql, record["password"]) {
-		t.Error("the reader's password reached the statement text")
-	}
+	assertNoPassword(t, "the role SQL", sql+strings.Join(h.kube.ExecCommands, "\n"), map[string]string{roleReader: record["password"]})
+	assertSetsVerifierOf(t, sql, roleReader, record["password"])
 	if !strings.Contains(sql, "ALTER ROLE %I WITH LOGIN PASSWORD %L', "+sqlTextLiteral(roleReader)) {
 		t.Error("a restored copy's reader keeps the source's password")
 	}

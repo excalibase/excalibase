@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"testing"
 	"time"
 
@@ -18,6 +19,9 @@ import (
 func setupMigratorPG(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	c, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("migrate_test"),
 		postgres.WithUsername("postgres"),
@@ -271,6 +275,9 @@ func TestApplySchema_IndexRemovedIsNoOp(t *testing.T) {
 func setupMigratorPGWithVector(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "pgvector/pgvector:pg16"); err != nil {
+		t.Fatal(err)
+	}
 	c, err := postgres.Run(ctx, "pgvector/pgvector:pg16",
 		postgres.WithDatabase("migrate_test"),
 		postgres.WithUsername("postgres"),

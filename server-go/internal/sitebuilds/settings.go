@@ -177,7 +177,7 @@ func validVariables(what string, values map[string]string, reserved func(string)
 	for _, name := range names {
 		value := values[name]
 		if !envNamePattern.MatchString(name) {
-			return fmt.Errorf("%s %q: a name is letters, digits and '_', not starting with a digit", what, name)
+			return fmt.Errorf("a %s name is letters, digits and '_', not starting with a digit, at most 128 characters", what)
 		}
 		if reserved != nil {
 			if err := reserved(name); err != nil {

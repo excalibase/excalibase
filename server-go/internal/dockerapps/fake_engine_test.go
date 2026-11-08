@@ -388,6 +388,16 @@ func (f *fakeEngine) NetworkCreate(_ context.Context, name string, options netwo
 	return network.CreateResponse{ID: name}, nil
 }
 
+func (f *fakeEngine) NetworkList(_ context.Context, _ network.ListOptions) ([]network.Summary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	list := make([]network.Summary, 0, len(f.networks))
+	for name, net := range f.networks {
+		list = append(list, network.Summary{Name: name, Internal: net.options.Internal, Options: net.options.Options, Labels: net.options.Labels})
+	}
+	return list, nil
+}
+
 func (f *fakeEngine) NetworkInspect(_ context.Context, name string, _ network.InspectOptions) (network.Inspect, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

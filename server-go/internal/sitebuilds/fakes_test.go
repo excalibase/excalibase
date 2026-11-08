@@ -44,6 +44,8 @@ type memoryStore struct {
 	appAttempts     map[string]int
 	signIns         []SignIn
 	appPushErr      error
+	leaseRenewals   int
+	retryDelays     []time.Duration
 }
 
 func newMemoryStore() *memoryStore {
@@ -216,6 +218,30 @@ func (m *memoryStore) ClaimNext(_ context.Context, _ int, _ string, _ time.Time,
 	return nil, nil
 }
 
+func (m *memoryStore) RequeueBuild(_ context.Context, buildID, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, build := range m.builds {
+		if build.ID == buildID && build.Status == StatusRunning {
+			build.Status, build.WaitReason = StatusQueued, ""
+		}
+	}
+	return nil
+}
+
+func (m *memoryStore) RetryBuildLater(_ context.Context, buildID, _ string, delay time.Duration, reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.retryDelays = append(m.retryDelays, delay)
+	for _, build := range m.builds {
+		if build.ID == buildID && build.Status == StatusRunning {
+			build.Status, build.WaitReason = StatusQueued, reason
+			build.Requeues++
+		}
+	}
+	return nil
+}
+
 func (m *memoryStore) ExpireLostBuilds(context.Context, time.Time, string) ([]LostBuild, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -249,7 +275,18 @@ func (m *memoryStore) CancelQueued(_ context.Context, kind, reason string) (int,
 	return cancelled, nil
 }
 
-func (m *memoryStore) ExtendLease(context.Context, string, string, time.Time) error { return nil }
+func (m *memoryStore) ExtendLease(context.Context, string, string, time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.leaseRenewals++
+	return nil
+}
+
+func (m *memoryStore) renewals() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.leaseRenewals
+}
 
 func (m *memoryStore) SaveLog(_ context.Context, buildID, _, log string) error {
 	m.mu.Lock()
@@ -414,6 +451,8 @@ func (f *fakeProvider) revokedTokens() []string {
 
 // fakeJobs plays each started build's outcome: one status with the clone done, then the outcome.
 type fakeJobs struct {
+	// statusErr, while set, answers every status read.
+	statusErr error
 	mu        sync.Mutex
 	outcomes  []RunStatus
 	current   RunStatus
@@ -442,6 +481,9 @@ func (f *fakeJobs) Status(_ context.Context, runID string) (RunStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statusIDs = append(f.statusIDs, runID)
+	if f.statusErr != nil {
+		return RunStatus{}, f.statusErr
+	}
 	f.reads++
 	if f.onStatus != nil {
 		f.onStatus()
@@ -546,12 +588,29 @@ type fakePublisher struct {
 	mu        sync.Mutex
 	published []AppPublish
 	err       error
+	// refuse, when set, answers each publish by its 1-based call number, in place of err.
+	refuse      func(call int) error
+	capacityErr error
+}
+
+func (f *fakePublisher) CheckCapacity(context.Context, int64) error { return f.capacityErr }
+
+func (f *fakePublisher) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.published)
 }
 
 func (f *fakePublisher) PublishBuild(_ context.Context, publish AppPublish) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.published = append(f.published, publish)
+	if f.refuse != nil {
+		if err := f.refuse(len(f.published)); err != nil {
+			return "", err
+		}
+		return "deploy-" + publish.BuildID[:4], nil
+	}
 	if f.err != nil {
 		return "", f.err
 	}
@@ -638,7 +697,8 @@ func newTestBed(appsOn bool) *testBed {
 	service.EnableApps(AppSupport{Apps: fakeApps{}, Limits: fakeLimits{}, Files: provider, Flags: flags})
 	siteRunner, appRunner, publisher := &fakeSiteRunner{}, &fakeAppRunner{}, &fakePublisher{}
 	dispatcher := NewDispatcher(service, siteRunner, DispatcherOptions{Holder: "replica", StatusPoll: time.Millisecond,
-		LogEvery: time.Millisecond, Lease: time.Minute, PendingGrace: time.Second, DeployRetry: time.Millisecond, ShutdownGrace: time.Second})
+		LogEvery: time.Millisecond, Lease: time.Minute, PendingGrace: time.Second, DeployRetry: time.Millisecond, ShutdownGrace: time.Second,
+		PublishWait: time.Millisecond, RequeueDelay: time.Millisecond})
 	dispatcher.EnableApps(appRunner, publisher)
 	return &testBed{store: store, provider: provider, service: service, dispatcher: dispatcher, sites: siteRunner, apps: appRunner, publisher: publisher}
 }

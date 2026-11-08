@@ -54,7 +54,8 @@ func siteBuildFailure(err error) error {
 	var routeErr *RouteError
 	switch {
 	case isStatus(err, http.StatusServiceUnavailable) && errors.As(err, &routeErr) && routeErr.Message != "":
-		return errors.New(routeErr.Message)
+		// get_ci_snippet defaults to an app, so the site kind is named here.
+		return errors.New(routeErr.Message + ". For a site, call get_ci_snippet with kind site")
 	case isStatus(err, http.StatusNotFound):
 		return errors.New("not found: the site or build does not exist, or " + siteBuildsUnavailableMessage)
 	}

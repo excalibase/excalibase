@@ -13,6 +13,12 @@ Nothing runs as root at run time: the engine is the user's own Podman, and the
 engine proxy reaches the user's `podman.sock` (as the container's root, which in
 a rootless container is that unprivileged user).
 
+Rootful Podman is not supported: `init.sh` refuses when run as root, when the
+socket belongs to another user, or when the engine does not say it is rootless,
+and the engine proxy asks the engine again on every start, so an install made
+earlier stops there too. Its bridges are on the host and it has no
+`DOCKER-USER` chain, so nothing would keep a tenant database off the host.
+
 ## Prerequisites
 
 - Podman 4.9 or newer and `podman compose` backed by **Docker Compose v2**
@@ -20,7 +26,9 @@ a rootless container is that unprivileged user).
   installed: Fedora/RHEL `dnf install podman docker-compose`, Debian/Ubuntu
   `apt install podman docker-compose-v2`. Check with `podman compose version`
   (it names the provider). Use the distribution's Podman, not a static build:
-  healthchecks run through systemd user timers.
+  healthchecks run through systemd user timers, and without them `up -d` waits
+  forever with no error. `./init.sh` starts a small test container and refuses
+  a Podman that does not run its healthcheck.
 
   `podman-compose` (1.6) is **not supported**: it turns every `depends_on`
   into a hard Podman dependency, so a service behind a finished one-shot
@@ -115,11 +123,18 @@ gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
 - The host's own services (EXC-676): netavark refuses Docker's isolated
   gateway, so project networks keep a bridge address, but rootless Podman keeps
   that address inside its rootless network namespace: without egress an app
-  reaches no host service. With `APP_EGRESS=internet`, pasta forwards
-  `host.containers.internal` (169.254.1.2) to the host, so an app reaches host
-  services listening on the host's own addresses (not those on 127.0.0.1 only);
-  a host firewall cannot tell that traffic apart, so bind such services to
-  127.0.0.1 or keep egress off. Rootful Podman gives the bridge an address on
+  reaches no host service.
+- `APP_EGRESS=internet` is refused here unless `APP_EGRESS_UNGUARDED=accept` is
+  also set (EXC-687). An app's traffic leaves through pasta as your own user's
+  connections, which the bundle's firewall cannot see (it is off here), so:
+  - reached: the internet, your LAN, cloud metadata, and host services on
+    `host.containers.internal` (169.254.1.2) that listen on the host's own
+    addresses. `APP_EGRESS_EXTRA_DENY_CIDRS` does not apply to running apps;
+  - not reached: other projects' bridges (netavark's `isolate`), and host services
+    on 127.0.0.1 alone.
+
+  Use Docker for egress with untrusted code, or keep egress off.
+- Rootful Podman gives the bridge an address on
   the host, and its resolver listens there, so drop everything but DNS (in
   this order: each `-I` goes on top), and persist the rules:
 

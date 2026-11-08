@@ -42,7 +42,7 @@ func TestSingleHostAppLoginIsTheRestrictedOwner(t *testing.T) {
 	spec := projectRoleSpec{databaseName: result.DatabaseName, adminUsername: result.Username}
 	creds := projectRoleCredentials{authPassword: "Auth-Password-1", appPassword: "App-Password-1", watcherPassword: "Watcher-Password-1", schedulerPassword: "Scheduler-Password-1"}
 	superuser := []string{"psql", "-U", "postgres", "-d", result.DatabaseName, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}
-	if _, err := docker.ExecInContainerStdin(ctx, result.Namespace, superuser, projectRoleSQL(spec, creds, "cdc_watcher_pub")); err != nil {
+	if _, err := docker.ExecInContainerStdin(ctx, result.Namespace, superuser, mustProjectRoleSQL(t, spec, creds, "cdc_watcher_pub")); err != nil {
 		t.Fatalf("register roles: %v", err)
 	}
 	// A platform table in the reserved schema is the superuser's (EXC-623).
