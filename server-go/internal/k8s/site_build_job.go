@@ -55,7 +55,7 @@ type SiteBuildOptions struct {
 	Slots int
 	// PrepareImage runs the root chmod of the work dirs.
 	PrepareImage string
-	// ExtraDenyCIDRs are the install's own off-cluster ranges denied to apps (APP_EGRESS_EXTRA_DENY_CIDRS).
+	// ExtraDenyCIDRs are the install's own off-cluster ranges denied to builds (BUILD_EGRESS_EXTRA_DENY_CIDRS).
 	ExtraDenyCIDRs []string
 }
 

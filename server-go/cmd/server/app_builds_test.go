@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -198,7 +199,7 @@ func TestVerifyAppBuildCluster(t *testing.T) {
 func TestAppBuildOptions_ShareTheSiteBuildsSlotsAndClass(t *testing.T) {
 	cfg := gitBuildConfig(t, features.AppGitBuilds)
 	cfg.SiteGit.PriorityClass, cfg.SiteGit.BuildSlots, cfg.SiteGit.PrepareImage = "builds-low", 2, "busybox@sha256:1"
-	cfg.AppBuild.BuildKitImage, cfg.AppEgressExtraDenyCIDRs = "buildkit@sha256:2", []string{"10.0.0.0/8"}
+	cfg.AppBuild.BuildKitImage, cfg.BuildEgressExtraDenyCIDRs = "buildkit@sha256:2", []string{"10.0.0.0/8"}
 	options := appBuildOptions(cfg)
 	if options.Namespace != testAppBuildNamespace || options.RuntimeClass != testRuntimeClass || options.PriorityClass != "builds-low" ||
 		options.Slots != 2 || options.PrepareImage != "busybox@sha256:1" || options.BuildKitImage != "buildkit@sha256:2" ||
@@ -282,5 +283,59 @@ func TestSweepSpoolEntry_WarnsWhenAnEntryCannotBeRead(t *testing.T) {
 	sweepSpoolEntry(t.TempDir(), unreadableEntry{}, time.Now())
 	if line := logged.String(); !strings.Contains(line, "WARN: app build spool") || !strings.Contains(line, "app-image-gone") || !strings.Contains(line, "no such file") {
 		t.Errorf("logged %q", line)
+	}
+}
+
+// Builds run untrusted code and keep the stricter list; the list for running apps never reaches them, nor theirs the apps.
+func TestBuildsAndAppsReadTheirOwnDenyLists(t *testing.T) {
+	builds, apps := []string{"203.0.113.1/32"}, []string{"198.51.100.1/32"}
+	both := gitBuildConfig(t, features.AppGitBuilds)
+	both.BuildEgressExtraDenyCIDRs, both.AppEgressExtraDenyCIDRs = builds, apps
+	onlyApps := gitBuildConfig(t, features.AppGitBuilds)
+	onlyApps.AppEgressExtraDenyCIDRs = apps
+
+	cases := []struct {
+		name string
+		got  []string
+		want []string
+	}{
+		{"app builds", appBuildOptions(both).ExtraDenyCIDRs, builds},
+		{"site builds", siteBuildOptions(both).ExtraDenyCIDRs, builds},
+		{"site builds on a single host", singleHostBuildOptions(both, false).ExtraDenyCIDRs, builds},
+		{"running apps", appRenderOptions(both).ExtraDenyCIDRs, apps},
+		{"app builds never fall back to the apps' list", appBuildOptions(onlyApps).ExtraDenyCIDRs, nil},
+		{"site builds never fall back to the apps' list", siteBuildOptions(onlyApps).ExtraDenyCIDRs, nil},
+		{"single-host builds never fall back to the apps' list", singleHostBuildOptions(onlyApps, false).ExtraDenyCIDRs, nil},
+	}
+	for _, tc := range cases {
+		if !slices.Equal(tc.got, tc.want) {
+			t.Errorf("%s: %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+// The apps' list set and the builds' not is what an upgrade leaves: the boot stops rather than leave builds unlisted.
+func TestSiteBuildRunner_RefusesTheAppsListWithoutTheBuilds(t *testing.T) {
+	apps, builds := []string{"198.51.100.1/32"}, []string{"203.0.113.1/32"}
+	cases := []struct {
+		name         string
+		apps, builds []string
+		refused      bool
+	}{{"only the apps'", apps, nil, true}, {"both", apps, builds, false}, {"only the builds'", nil, builds, false}, {"neither", nil, nil, false}}
+	for _, tc := range cases {
+		cfg := config.AppConfig{AppEgressExtraDenyCIDRs: tc.apps, BuildEgressExtraDenyCIDRs: tc.builds}
+		_, err := siteBuildRunner(siteBuildArgs{cfg: cfg})
+		if got := err != nil && strings.Contains(err.Error(), "BUILD_EGRESS_EXTRA_DENY_CIDRS"); got != tc.refused {
+			t.Errorf("%s: refused %v (%v), want %v", tc.name, got, err, tc.refused)
+		}
+	}
+}
+
+// The alert webhook is not a build: it keeps the apps' list and never reads the builds'.
+func TestAlertWebhookReadsTheAppsDenyList(t *testing.T) {
+	cfg := config.AppConfig{AppEgressExtraDenyCIDRs: []string{"198.51.100.1/32"}, BuildEgressExtraDenyCIDRs: []string{"203.0.113.1/32"}}
+	got := alertWebhookDenyList(cfg)
+	if len(got) != 1 || got[0].String() != "198.51.100.1/32" {
+		t.Fatalf("alert webhook denies %v, want the apps' list only", got)
 	}
 }

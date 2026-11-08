@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseEgressExtraDenyCIDRsEmptyMeansNone(t *testing.T) {
 	cidrs, err := parseEgressExtraDenyCIDRs("")
@@ -29,9 +32,40 @@ func TestParseEgressExtraDenyCIDRsReadsCommaSeparatedList(t *testing.T) {
 }
 
 func TestParseEgressExtraDenyCIDRsRefusesUnusableValues(t *testing.T) {
-	for _, raw := range []string{"not-a-cidr", "203.0.113.9", "203.0.113.9/33", "2001:db8::/32", "203.0.113.9/32,not-a-cidr"} {
+	for _, raw := range []string{"not-a-cidr", "203.0.113.9", "203.0.113.9/33", "2001:db8::/32", "::ffff:203.0.113.0/64", "203.0.113.9/32,not-a-cidr"} {
 		if _, err := parseEgressExtraDenyCIDRs(raw); err == nil {
 			t.Fatalf("parseEgressExtraDenyCIDRs(%q) succeeded, want error", raw)
 		}
+	}
+}
+
+func TestBuildAndAppDenyListsAreSeparate(t *testing.T) {
+	t.Setenv("APP_EGRESS_EXTRA_DENY_CIDRS", "198.51.100.1/32")
+	t.Setenv("BUILD_EGRESS_EXTRA_DENY_CIDRS", "203.0.113.1/32")
+	if got := envEgressExtraDenyCIDRs("BUILD_EGRESS_EXTRA_DENY_CIDRS"); len(got) != 1 || got[0] != "203.0.113.1/32" {
+		t.Fatalf("builds' list = %v", got)
+	}
+	cfg := load()
+	if len(cfg.BuildEgressExtraDenyCIDRs) != 1 || cfg.BuildEgressExtraDenyCIDRs[0] != "203.0.113.1/32" {
+		t.Fatalf("builds' list = %v", cfg.BuildEgressExtraDenyCIDRs)
+	}
+	if len(cfg.AppEgressExtraDenyCIDRs) != 1 || cfg.AppEgressExtraDenyCIDRs[0] != "198.51.100.1/32" {
+		t.Fatalf("apps' list = %v", cfg.AppEgressExtraDenyCIDRs)
+	}
+}
+
+func TestBuildDenyListHasNoFallbackToTheApps(t *testing.T) {
+	t.Setenv("APP_EGRESS_EXTRA_DENY_CIDRS", "198.51.100.1/32")
+	t.Setenv("BUILD_EGRESS_EXTRA_DENY_CIDRS", "")
+	if got := load().BuildEgressExtraDenyCIDRs; got != nil {
+		t.Fatalf("builds' list fell back to the apps': %v", got)
+	}
+}
+
+// The message serves both lists: it may not call itself the apps'.
+func TestParseEgressExtraDenyCIDRsIPv6ErrorNamesNoOwner(t *testing.T) {
+	_, err := parseEgressExtraDenyCIDRs("2001:db8::/32")
+	if err == nil || strings.Contains(err.Error(), "app egress") {
+		t.Fatalf("error %v", err)
 	}
 }

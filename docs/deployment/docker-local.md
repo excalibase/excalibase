@@ -363,6 +363,7 @@ this host (EXC-671). Off by default; in `.env`:
 ```bash
 SITES_GIT_BUILDS_ENABLED=true
 FEATURE_SINGLEHOSTBUILDS=true
+BUILD_EGRESS_EXTRA_DENY_CIDRS=...  # required: this host's public addresses, IPv4 CIDRs
 SITES_GITHUB_APP_ID=...            # your GitHub App, as on Kubernetes
 SITES_GITHUB_APP_SLUG=...
 SITES_GITHUB_CLIENT_ID=...
@@ -407,6 +408,7 @@ the firewall rule under Host isolation; on Podman, the same for `podman+`.
 | `.env` | Default | Meaning |
 |---|---|---|
 | `SITES_BUILD_SLOTS` | `1` | Site and app builds at once on this host; an app build takes the last free slot only while no site build is waiting |
+| `BUILD_EGRESS_EXTRA_DENY_CIDRS` | unset | required with `SITES_GIT_BUILDS_ENABLED`: IPv4 ranges refused to builds, on top of the private ones, such as the host's own public addresses. Separate from `APP_EGRESS_EXTRA_DENY_CIDRS`, which never applies to builds |
 | `SITES_BUILD_EGRESS_ALLOW` | empty | `host:port` entries builds may reach although private (a git server or registry on your LAN) |
 | `SITES_BUILD_NODE_IMAGE` | Docker Hub's, pinned | a mirror of the Node images builds run in |
 
