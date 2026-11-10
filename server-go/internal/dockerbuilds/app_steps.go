@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	// secretEnvPrefix carries a build-visible secret into the step that writes it to a file and forgets the variable.
-	secretEnvPrefix = "EXC_SECRET_"
-	secretsTmpfs    = "rw,noexec,nosuid,nodev,size=8m,mode=1777"
-	appPlatformEnv  = k8s.AppBuildPlatformDir + "/env"
+	// buildVarPrefix carries a build-visible variable into the step that writes it to a file and forgets the variable.
+	buildVarPrefix = "EXC_BUILDVAR_"
+	secretsTmpfs   = "rw,noexec,nosuid,nodev,size=8m,mode=1777"
+	appPlatformEnv = k8s.AppBuildPlatformDir + "/env"
 )
 
 var cnbUser = strconv.Itoa(k8s.AppBuildCNBUID) + ":" + strconv.Itoa(k8s.AppBuildCNBUID)
@@ -150,7 +150,7 @@ func secretFiles(dir string, secrets map[string]string) string {
 	var script strings.Builder
 	fmt.Fprintf(&script, "mkdir -p %s; ", dir)
 	for _, name := range sortedKeys(secrets) {
-		fmt.Fprintf(&script, `printf %%s "$%[1]s%[2]s" > %[3]s/%[2]s; unset %[1]s%[2]s; `, secretEnvPrefix, name, dir)
+		fmt.Fprintf(&script, `printf %%s "$%[1]s%[2]s" > %[3]s/%[2]s; unset %[1]s%[2]s; `, buildVarPrefix, name, dir)
 	}
 	return script.String() + "\n"
 }
@@ -158,7 +158,7 @@ func secretFiles(dir string, secrets map[string]string) string {
 func secretEnv(secrets map[string]string) []string {
 	env := make([]string, 0, len(secrets))
 	for _, name := range sortedKeys(secrets) {
-		env = append(env, secretEnvPrefix+name+"="+secrets[name])
+		env = append(env, buildVarPrefix+name+"="+secrets[name])
 	}
 	return env
 }

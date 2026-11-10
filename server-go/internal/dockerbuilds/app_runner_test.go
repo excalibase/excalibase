@@ -124,7 +124,7 @@ func TestADockerfileBuildLaysOutItsStepsAndTheSecretsStayOffTheCommandLine(t *te
 	if !strings.Contains(entry, "buildctl-daemonless.sh") || !strings.Contains(entry, "/work/src/api") || strings.Contains(entry, testSecret) {
 		t.Fatalf("entry %s", entry)
 	}
-	if !strings.Contains(strings.Join(kit.config.Cmd, " "), "id=NPM_TOKEN,src=/run/build-secrets/NPM_TOKEN") || env(kit)["EXC_SECRET_NPM_TOKEN"] != testSecret {
+	if !strings.Contains(strings.Join(kit.config.Cmd, " "), "id=NPM_TOKEN,src=/run/build-secrets/NPM_TOKEN") || env(kit)["EXC_BUILDVAR_NPM_TOKEN"] != testSecret {
 		t.Fatalf("secret not delivered as a file: %v", kit.config.Cmd)
 	}
 	if _, ok := kit.host.Tmpfs["/run/build-secrets"]; !ok {
@@ -138,13 +138,8 @@ func TestADockerfileBuildLaysOutItsStepsAndTheSecretsStayOffTheCommandLine(t *te
 	}
 }
 
-func TestBuildpacksRunEveryPhaseLockedDownAsTheCNBUser(t *testing.T) {
-	engine := newFakeEngine()
-	app := newTestAppRunner(t, engine, "runsc", false)
-	startApp(t, app, appbuilds.BuilderBuildpacks)
-	if engine.get(step("buildkit")) != nil {
-		t.Fatal("a buildkit step in a buildpacks build")
-	}
+func assertBuildpackPhasesLockedDown(t *testing.T, engine *fakeEngine) {
+	t.Helper()
 	online := map[string]bool{"run-image": true, "buildpacks": true}
 	for _, name := range []string{"share-checkout", "run-image", "analyze", "buildpacks", "export", "collect"} {
 		c := engine.get(step(name))
@@ -163,16 +158,31 @@ func TestBuildpacksRunEveryPhaseLockedDownAsTheCNBUser(t *testing.T) {
 			t.Errorf("%s runs as %q", name, user)
 		}
 	}
+}
+
+func assertBuildpackEnvAndImages(t *testing.T, engine *fakeEngine) {
+	t.Helper()
 	buildpacks := engine.get(step("buildpacks"))
-	if env(buildpacks)["HTTPS_PROXY"] != testProxy || env(buildpacks)["EXC_SECRET_NPM_TOKEN"] != testSecret || env(buildpacks)["APP_DIR"] != "/work/src/api" {
+	if env(buildpacks)["HTTPS_PROXY"] != testProxy || env(buildpacks)["EXC_BUILDVAR_NPM_TOKEN"] != testSecret || env(buildpacks)["APP_DIR"] != "/work/src/api" {
 		t.Fatalf("env %v", env(buildpacks))
 	}
-	if env(engine.get(step("analyze")))["EXC_SECRET_NPM_TOKEN"] != "" {
+	if env(engine.get(step("analyze")))["EXC_BUILDVAR_NPM_TOKEN"] != "" {
 		t.Fatal("secrets reached a step that runs no app code")
 	}
 	if !slices.Contains(engine.pulled, testBuilder) || !slices.Contains(engine.pulled, testCrane) {
 		t.Fatalf("pulled %v", engine.pulled)
 	}
+}
+
+func TestBuildpacksRunEveryPhaseLockedDownAsTheCNBUser(t *testing.T) {
+	engine := newFakeEngine()
+	app := newTestAppRunner(t, engine, "runsc", false)
+	startApp(t, app, appbuilds.BuilderBuildpacks)
+	if engine.get(step("buildkit")) != nil {
+		t.Fatal("a buildkit step in a buildpacks build")
+	}
+	assertBuildpackPhasesLockedDown(t, engine)
+	assertBuildpackEnvAndImages(t, engine)
 }
 
 func TestADockerfileBuildIsRefusedWithoutGVisorByName(t *testing.T) {
