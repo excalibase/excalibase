@@ -25,6 +25,8 @@ func TestSiteRowsSitOnTheAuthoringRung(t *testing.T) {
 		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/sites/{siteId}/deploys/{deployId}"}:           domain.OrgRoleViewer,
 		{Method: http.MethodPost, Pattern: "/api/projects/{projectId}/sites/{siteId}/deploys/{deployId}/rollback"}: domain.OrgRoleDeveloper,
 		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/sites/limits"}:                                domain.OrgRoleViewer,
+		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/sites/{siteId}/env"}:                          domain.OrgRoleDeveloper,
+		{Method: http.MethodPut, Pattern: "/api/projects/{projectId}/sites/{siteId}/env"}:                          domain.OrgRoleDeveloper,
 		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/sites/{siteId}/tokens"}:                       domain.OrgRoleDeveloper,
 		{Method: http.MethodPost, Pattern: "/api/projects/{projectId}/sites/{siteId}/tokens"}:                      domain.OrgRoleDeveloper,
 		{Method: http.MethodDelete, Pattern: "/api/projects/{projectId}/sites/{siteId}/tokens/{tokenId}"}:          domain.OrgRoleDeveloper,
