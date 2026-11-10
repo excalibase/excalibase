@@ -54,6 +54,8 @@ func (h *SiteHandler) Routes(r chi.Router, developer func(http.Handler) http.Han
 		r.With(developer).Get("/tokens", h.available(h.listTokens))
 		r.With(developer).Post("/tokens", h.available(h.createToken))
 		r.With(developer).Delete("/tokens/{tokenId}", h.available(h.revokeToken))
+		r.With(developer).Get("/env", h.available(h.getEnv))
+		r.With(developer).Put("/env", h.available(h.putEnv))
 		h.domainRoutes(r, developer)
 	})
 }

@@ -17,6 +17,9 @@ type Store interface {
 	List(ctx context.Context, projectID string) ([]*Site, error)
 	// ListServerSites answers every project's server-rendered sites, for routing them on or off as a whole.
 	ListServerSites(ctx context.Context) ([]*Site, error)
+	// RuntimeVars and SetRuntimeVars keep a server site's plain variables; the whole set is replaced.
+	RuntimeVars(ctx context.Context, projectID, id string) (map[string]string, error)
+	SetRuntimeVars(ctx context.Context, projectID, id string, vars map[string]string) error
 	UpdateSettings(ctx context.Context, projectID, id string, spaFallback bool) (*Site, error)
 	// Delete removes the site and its deploy history while lease still holds it.
 	Delete(ctx context.Context, projectID, id, lease string) error

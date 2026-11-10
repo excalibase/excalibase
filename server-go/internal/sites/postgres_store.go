@@ -3,6 +3,7 @@ package sites
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -201,6 +202,40 @@ func (s *PostgresStore) execOne(ctx context.Context, what, query string, args ..
 		return fmt.Errorf("%s: %w", what, err)
 	}
 	if touched == 0 {
+		return ErrSiteNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) RuntimeVars(ctx context.Context, projectID, id string) (map[string]string, error) {
+	var raw []byte
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(v.vars, '{}'::jsonb) FROM sites s LEFT JOIN site_runtime_vars v ON v.site_id = s.id
+		WHERE s.project_id = $1 AND s.id = $2`, projectID, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrSiteNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read runtime variables: %w", err)
+	}
+	vars := map[string]string{}
+	if err := json.Unmarshal(raw, &vars); err != nil {
+		return nil, fmt.Errorf("decode runtime variables: %w", err)
+	}
+	return vars, nil
+}
+
+func (s *PostgresStore) SetRuntimeVars(ctx context.Context, projectID, id string, vars map[string]string) error {
+	encoded, err := json.Marshal(vars)
+	if err != nil {
+		return fmt.Errorf("encode runtime variables: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `INSERT INTO site_runtime_vars (site_id, vars, updated_at)
+		SELECT id, $3::jsonb, NOW() FROM sites WHERE project_id = $1 AND id = $2
+		ON CONFLICT (site_id) DO UPDATE SET vars = EXCLUDED.vars, updated_at = NOW()`, projectID, id, encoded)
+	if err != nil {
+		return fmt.Errorf("save runtime variables: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
 		return ErrSiteNotFound
 	}
 	return nil
