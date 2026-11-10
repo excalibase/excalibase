@@ -53,7 +53,7 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 		Projects: projectGate{instances: sqlStore, claimer: claimer}, Previews: previewStore(cfg, store), MaxPreviews: cfg.Sites.MaxPreviews,
 		PreviewsDark: previewsDark(cfg),
 		// Server sites keep their code beside the deploy records (EXC-661).
-		Flags: cfg.Features(), Code: store, OutboundWorker: cfg.Sites.OutboundWorker, Outbound: outbound,
+		Flags: cfg.Features(), Code: store, OutboundWorker: cfg.Sites.OutboundWorker, Outbound: outbound, APIBaseURL: cfg.PublicBaseURL,
 	})
 	if err != nil {
 		log.Fatalf("sites: %v", err)

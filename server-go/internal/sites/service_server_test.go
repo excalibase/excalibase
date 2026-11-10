@@ -3,6 +3,7 @@ package sites_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func newServerHarness(t *testing.T, on bool) *serviceHarness {
 }
 
 func serverOptions(t *testing.T, flags features.Flags, code sites.CodeStore) sites.Options {
-	return sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(), Flags: flags, Code: code, OutboundWorker: "excalibase-sites-outbound",
+	return sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(), Flags: flags, Code: code, OutboundWorker: "excalibase-sites-outbound", APIBaseURL: "https://api.example.test",
 		Outbound: &sitestest.Outbound{Worker: "excalibase-sites-outbound"}}
 }
 
@@ -107,8 +108,13 @@ func TestServerDeployPublishesModulesAndKeepsThemOutOfTheAssets(t *testing.T) {
 	if version.Limits == nil || version.Limits.CPUMillis != sites.DefaultLimits.MaxServerCPUMillis || version.Limits.Subrequests != sites.DefaultLimits.MaxServerSubrequests {
 		t.Errorf("limits = %+v", version.Limits)
 	}
-	if len(version.Bindings) != 0 {
-		t.Errorf("bindings = %v; v1 binds only ASSETS", version.Bindings)
+	// ADR 0045 decision 4: the code finds its project's API through two plain variables, and nothing else is bound.
+	wantBindings := []cfworkers.Binding{
+		{Type: cfworkers.BindingPlainText, Name: "EXCALIBASE_URL", Text: "https://api.example.test"},
+		{Type: cfworkers.BindingPlainText, Name: "EXCALIBASE_PROJECT_ID", Text: testProject},
+	}
+	if !reflect.DeepEqual(version.Bindings, wantBindings) {
+		t.Errorf("bindings = %v, want %v", version.Bindings, wantBindings)
 	}
 	if body := h.publisher.ModuleBodies[sites.ScriptName(site)]["worker.js"]; body != "export default 1" {
 		t.Errorf("worker.js = %q", body)
