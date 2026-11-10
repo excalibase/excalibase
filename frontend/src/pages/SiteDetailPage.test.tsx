@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -35,13 +35,28 @@ const failed = siteDeployFixture({
   failureReason: 'the CDN refused the upload',
 });
 
+// The Environment section follows the role and the feature flags by a render or two; a test that says it is absent waits them out.
+const settle = () => act(async () => new Promise((resolve) => setTimeout(resolve, 150)));
+
 function renderPage({
   site = siteFixture() as Site,
   deploys = [older, live] as SiteDeploy[],
+  memberRole = 'developer',
+  features = {} as Record<string, boolean>,
 } = {}) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/config')
-      return Promise.resolve({ data: { deploymentMode: 'cloud', sites: true } } as never);
+      return Promise.resolve({
+        data: { deploymentMode: 'cloud', sites: true, features },
+      } as never);
+    if (url === '/orgs')
+      return Promise.resolve({
+        data: [{ id: 'o1', name: 'O', slug: 'o', role: memberRole }],
+      } as never);
+    if (url === '/projects/proj-1/sites/site-1/env')
+      return Promise.resolve({ data: { vars: {} } } as never);
+    if (url === '/projects/proj-1/sites/server-secrets')
+      return Promise.resolve({ data: [] } as never);
     if (url === '/projects/proj-1/sites/site-1') return Promise.resolve({ data: site } as never);
     if (url === '/projects/proj-1/sites/site-1/deploys')
       return Promise.resolve({ data: deploys } as never);
@@ -67,6 +82,40 @@ function renderPage({
     </QueryClientProvider>,
   );
 }
+
+describe('SiteDetailPage server environment', () => {
+  beforeEach(() => {
+    signInAsMember();
+    vi.mocked(api.get).mockReset();
+  });
+  const serverSite = siteFixture({ kind: 'server' }) as Site;
+
+  test('a developer sees the Environment section of a server site', async () => {
+    renderPage({ site: serverSite, features: { sitesserver: true } });
+    expect(await screen.findByTestId('site-server-env')).toBeInTheDocument();
+  });
+
+  test('a viewer does not', async () => {
+    renderPage({ site: serverSite, memberRole: 'viewer', features: { sitesserver: true } });
+    await screen.findByTestId('site-spa-state');
+    await settle();
+    expect(screen.queryByTestId('site-server-env')).not.toBeInTheDocument();
+  });
+
+  test('with the flag off nobody sees it, since its routes answer 404', async () => {
+    renderPage({ site: serverSite, features: { sitesserver: false } });
+    await screen.findByTestId('site-spa-toggle');
+    await settle();
+    expect(screen.queryByTestId('site-server-env')).not.toBeInTheDocument();
+  });
+
+  test('a static site never has one', async () => {
+    renderPage({ features: { sitesserver: true } });
+    await screen.findByTestId('site-spa-toggle');
+    await settle();
+    expect(screen.queryByTestId('site-server-env')).not.toBeInTheDocument();
+  });
+});
 
 describe('SiteDetailPage', () => {
   beforeEach(() => {
