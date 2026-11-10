@@ -19,6 +19,7 @@ import { SiteUpload } from '../components/sites/SiteUpload';
 import { SiteCiSnippet } from '../components/sites/SiteCiSnippet';
 import { SiteDeployTokens } from '../components/sites/SiteDeployTokens';
 import { SiteDomains } from '../components/sites/SiteDomains';
+import { SiteServerEnv } from '../components/sites/SiteServerEnv';
 import { SiteGitBuilds } from '../components/sites/SiteGitBuilds';
 import { useProjectRole } from '../hooks/useProjectRole';
 
@@ -183,6 +184,12 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
         canAdmin={canAdmin}
         serverSite={site.kind === 'server'}
       />
+      {site.kind === 'server' && canDevelop && (
+        <section className="space-y-2 mb-6">
+          <h4 className="text-sm font-semibold text-text-primary">Environment</h4>
+          <SiteServerEnv projectId={projectId} siteId={siteId} />
+        </section>
+      )}
       <section className="space-y-2 mb-6">
         <h4 className="text-sm font-semibold text-text-primary">Custom domains</h4>
         <SiteDomains projectId={projectId} siteId={siteId} canDevelop={canDevelop} />
