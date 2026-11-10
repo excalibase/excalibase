@@ -5,18 +5,23 @@ set -euo pipefail
 # The build step shares /work: drop anything it left here, a fake ready mark included.
 work=${WORK_DIR:-/work}
 rm -rf "$work/collect"
-if [[ "${FRAMEWORK:-}" == "nextjs" ]]; then
-  # The server layout: server/ (the bundled module), assets/ (public files) and site.json.
-  assets="$work/src/${ROOT_DIR:+${ROOT_DIR}/}.open-next/assets"
-  if [[ ! -f "$work/bundle/worker.js" || ! -f "$work/site.json" || ! -d "$assets" ]]; then
-    echo "the Next.js build wrote no server bundle or assets"
+if [[ -n "${FRAMEWORK:-}" ]]; then
+  # The server layout: server/ (the bundled module), assets/ (public files) and site.json. Next.js keeps its
+  # assets under .open-next; the other presets name theirs in assets-dir.
+  assets_path=.open-next/assets
+  [[ -f "$work/assets-dir" ]] && assets_path=$(cat "$work/assets-dir")
+  assets="$work/src/${ROOT_DIR:+${ROOT_DIR}/}$assets_path"
+  main=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).main || "")' "$work/site.json" 2>/dev/null || true)
+  if [[ -z "$main" || ! -f "$work/bundle/$main" || ! -d "$assets" ]]; then
+    echo "the $FRAMEWORK build wrote no server bundle or assets"
     exit 3
   fi
   pack="$work/collect-pack"
   rm -rf "$pack"
   mkdir -p "$pack/server" "$work/collect"
   tar -C "$work/bundle" --exclude=README.md --exclude='*.map' -cf - . | tar -C "$pack/server" -xf -
-  cp -R "$assets" "$pack/assets"
+  # Server code is never a public file: a worker kept inside the assets folder stays out of it.
+  tar -C "$assets" --exclude=./_worker.js --exclude=./.assetsignore -cf - . | { mkdir -p "$pack/assets" && tar -C "$pack/assets" -xf -; }
   cp "$work/site.json" "$pack/site.json"
   tar -czf "$work/collect/site.tar.gz" -C "$pack" .
   printf %s "${READY_TOKEN:-}" > "$work/collect/ready"
