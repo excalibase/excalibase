@@ -760,7 +760,7 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 	if err != nil {
 		return domain.ProjectInfo{}, "auth hooks unavailable"
 	}
-	mfa, err := h.mfaForInfo(ctx, projectID)
+	mfa, mfaFingerprint, err := h.mfaForInfo(ctx, projectID)
 	if err != nil {
 		return domain.ProjectInfo{}, "auth mfa settings unavailable"
 	}
@@ -773,6 +773,7 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 		StableSubject:            h.stableSubjectForInfo(ctx),
 		AuthHooks:                hooks,
 		MFAEnabled:               mfa,
+		MFAKeyFingerprint:        mfaFingerprint,
 	}, ""
 }
 
