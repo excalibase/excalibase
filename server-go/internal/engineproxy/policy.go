@@ -55,6 +55,8 @@ type Policy struct {
 	// StatsContainers are the platform's own containers, by exact name, whose
 	// stats and state host monitoring reads (stats.go).
 	StatsContainers []string
+	// FenceProjectBridges admits a project network only where the host firewall covers it (EXC-687).
+	FenceProjectBridges bool
 }
 
 // ErrRefused wraps every policy refusal.
@@ -162,6 +164,9 @@ func (p Policy) CheckCreate(name string, body []byte) error {
 	if create.HostConfig == nil {
 		return refuse("container create must send a HostConfig")
 	}
+	if err := p.checkOnTheWildcard(create.HostConfig, create.NetworkingConfig.EndpointsConfig); err != nil {
+		return err
+	}
 	if err := p.checkNetnsJoin(create.Image, create.HostConfig, create.NetworkingConfig.EndpointsConfig); err != nil {
 		return err
 	}
@@ -240,6 +245,23 @@ func CheckExecCreate(body []byte) error {
 	}
 	if !isZero(exec["Privileged"]) {
 		return refuse("exec may not be Privileged")
+	}
+	return nil
+}
+
+// checkOnTheWildcard refuses, under the fence, what no firewall rule covers: Docker's default
+// bridge, however named or left unnamed, and the builds' network, which their proxy joins by a connect.
+func (p Policy) checkOnTheWildcard(hostConfig map[string]any, endpoints map[string]json.RawMessage) error {
+	if !p.FenceProjectBridges {
+		return nil
+	}
+	mode, _ := hostConfig["NetworkMode"].(string)
+	if mode == "bridge" || ((mode == "" || mode == "default") && len(endpoints) == 0) {
+		return refuse("a container may not run on the engine's default bridge, which the host firewall does not guard")
+	}
+	buildEgress := p.NetworkPrefix + BuildEgressNetwork
+	if _, joined := endpoints[buildEgress]; joined || mode == buildEgress {
+		return refuse("network %q is the builds' proxy's alone", buildEgress)
 	}
 	return nil
 }

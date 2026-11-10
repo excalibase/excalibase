@@ -40,10 +40,11 @@ var (
 	ErrDeletionNotDue = errors.New("project deletion is not due")
 )
 
-// DeletionPauser stops a project's workload with a backup first. PauseService
-// implements it.
+// DeletionPauser stops a project's workload, with a backup first unless its
+// major upgrade is left open. PauseService implements it.
 type DeletionPauser interface {
 	Pause(ctx context.Context, projectID, reason string) error
+	StopOpenUpgrade(ctx context.Context, inst *domain.DatabaseInstance) error
 }
 
 // SetDeletionPauser wires the pause a scheduled deletion stops the project with.
@@ -119,7 +120,8 @@ func (s *ProvisioningService) deletionClock() time.Time {
 // holdsCustomerData reports whether a project in this status has a database
 // worth a grace period. Anything else (FAILED, RESTORING, a teardown already
 // running) is deleted at once, as before. A RESUMING project is not paused by
-// the pause service, so its schedule is refused until it settles.
+// the pause service, so its schedule is refused until it settles. UPGRADING is
+// answered before this: it holds data, and no pause takes it.
 func holdsCustomerData(status string) bool {
 	switch status {
 	case string(domain.StatusActive), string(domain.StatusPaused), string(domain.StatusPausing),
@@ -222,7 +224,8 @@ func (s *ProvisioningService) admitDeletion(ctx context.Context, projectID strin
 		scheduled, err := s.updatePendingChoice(ctx, inst, opts)
 		return true, scheduled, err
 	}
-	if !holdsCustomerData(inst.Status) {
+	upgrading := inst.Status == string(domain.StatusUpgrading)
+	if !upgrading && !holdsCustomerData(inst.Status) {
 		deleting, err := deprovision(ctx, projectID, opts)
 		return true, deleting, err
 	}
@@ -245,7 +248,38 @@ func (s *ProvisioningService) admitDeletion(ctx context.Context, projectID strin
 		scheduled, err := s.markPendingDeletion(ctx, projectID, opts)
 		return true, scheduled, err
 	}
+	if upgrading {
+		scheduled, err := s.scheduleOpenUpgrade(ctx, projectID, opts)
+		return true, scheduled, err
+	}
 	return false, nil, nil
+}
+
+// scheduleOpenUpgrade gives a project whose upgrade nobody is driving its grace
+// period; a driver at work holds the lease, and the caller is told to retry.
+// Recovery leaves it alone while it is scheduled. The run stays open under the
+// step kept on the row, which a cancel returns to.
+func (s *ProvisioningService) scheduleOpenUpgrade(ctx context.Context, projectID string, opts DeprovisionOptions) (*domain.DatabaseInstance, error) {
+	ctx = context.WithoutCancel(ctx)
+	release, err := s.holdLifecycle(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
+	}
+	if inst.Status != string(domain.StatusUpgrading) {
+		return nil, fmt.Errorf("%w: %s is %s", storage.ErrProjectStatusChanged, projectID, inst.Status)
+	}
+	if isProtected(inst) {
+		return nil, fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
+	}
+	if err := s.deletionPauser.StopOpenUpgrade(ctx, inst); err != nil {
+		return nil, deletionStopError(err)
+	}
+	return s.writePendingDeletion(inst, opts, string(domain.StatusUpgrading), domain.MajorUpgradeStepWaiting)
 }
 
 func deletionStopError(err error) error {
@@ -263,6 +297,15 @@ func settledStatus(inst *domain.DatabaseInstance) string {
 		return string(domain.StatusActive)
 	}
 	return string(domain.StatusPaused)
+}
+
+// cancelledStatus is what a cancel returns to: a major upgrade left open goes
+// back to being checked, since nothing says its database is good to resume.
+func cancelledStatus(inst *domain.DatabaseInstance) string {
+	if inst.CurrentStep == domain.MajorUpgradeStepWaiting {
+		return string(domain.StatusUpgrading)
+	}
+	return settledStatus(inst)
 }
 
 // holdLifecycle takes the per-project lease deletion, pause and resume share.
@@ -299,22 +342,44 @@ func (s *ProvisioningService) markPendingDeletion(ctx context.Context, projectID
 	if err := s.stopWorkloads(ctx, projectID); err != nil {
 		return nil, err
 	}
+	inst.RollbackLog = s.removeFailedAddCluster(ctx, inst)
+	return s.writePendingDeletion(inst, opts, settled, "")
+}
+
+// writePendingDeletion starts the grace period of a stopped project; step is what a cancel returns to.
+func (s *ProvisioningService) writePendingDeletion(inst *domain.DatabaseInstance, opts DeprovisionOptions, expected, step string) (*domain.DatabaseInstance, error) {
 	now := s.deletionClock()
 	inst.Status = string(domain.StatusPendingDeletion)
 	inst.CurrentStage = domain.StatusPendingDeletion
-	inst.CurrentStep = ""
+	inst.CurrentStep = step
 	inst.DeletionDeleteBackups = opts.DeleteBackups != nil && *opts.DeleteBackups
 	scheduledAt := now.UTC()
 	inst.DeletionScheduledAt = &scheduledAt
 	dueAt := now.Add(DeletionGracePeriod).UTC()
 	inst.DeletionDueAt = &dueAt
 	inst.UpdatedAt = &domain.FlexTime{Time: now}
-	if err := s.store.UpdateIfStatus(inst, settled); err != nil {
+	if err := s.store.UpdateIfStatus(inst, expected); err != nil {
 		return nil, err
 	}
 	log.Printf("action=schedule_deletion project=%s due=%s delete_backups=%t",
-		projectID, inst.DeletionDueAt.Format(time.RFC3339), inst.DeletionDeleteBackups)
+		inst.ProjectID, inst.DeletionDueAt.Format(time.RFC3339), inst.DeletionDeleteBackups)
 	return inst, nil
+}
+
+// removeFailedAddCluster answers with the rollback log once it has tried to remove
+// a failed add's cluster: nothing would use it through the grace period. A failure
+// doesn't stop the DELETE; the sweep goes on trying. Backups are the grace period's.
+func (s *ProvisioningService) removeFailedAddCluster(ctx context.Context, inst *domain.DatabaseInstance) string {
+	if !inst.NoDatabase || inst.DeploymentMode != domain.ModeK8s || !failedAddRemovalFailed(inst) {
+		return inst.RollbackLog
+	}
+	attemptCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.rollbackRetries.limit())
+	defer cancel()
+	if err := s.removeAddedDatabase(attemptCtx, inst); err != nil {
+		log.Printf("ERROR: remove the failed add's cluster of %s: %v", inst.ProjectID, err)
+		return inst.RollbackLog
+	}
+	return rollbackLogWithCleanupDone(inst.RollbackLog, removeDatabaseCleanup(inst.Namespace))
 }
 
 // updatePendingChoice answers a repeated DELETE: the due date stands, and an
@@ -344,8 +409,8 @@ func (s *ProvisioningService) updatePendingChoice(ctx context.Context, inst *dom
 	return inst, nil
 }
 
-// CancelDeletion ends a project's grace period. The project stays PAUSED, with
-// its disk, and deletion protection is turned back on. Its function runtime
+// CancelDeletion ends a project's grace period. The project stays PAUSED (or goes
+// back to an upgrade left open), with its disk, and deletion protection is turned back on. Its function runtime
 // starts again; its apps stay paused, each resumed (or redeployed) on its own.
 // A deleted project gave its plan slot up, so restoring it needs a free one.
 func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID string) error {
@@ -370,7 +435,7 @@ func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID stri
 			return fmt.Errorf("restart the project's function runtime: %w", err)
 		}
 	}
-	inst.Status = settledStatus(inst)
+	inst.Status = cancelledStatus(inst)
 	inst.CurrentStage = domain.ProvisioningStage(inst.Status)
 	if inst.NoDatabase {
 		inst.CurrentStage = domain.StageCompleted

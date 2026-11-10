@@ -2,6 +2,8 @@ package engineproxy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -20,14 +22,36 @@ import (
 
 const bridgeNameOption = "com.docker.network.bridge.name"
 
+// ProjectBridgePrefix starts the interface name of every project bridge on Docker
+// (EXC-687). The firewall's one rule on the wildcard exnet+ is in place before any
+// such bridge exists, so a new one is guarded with nothing to learn or wait for.
+// deploy/single-host/compose.yaml names the same wildcard.
+const ProjectBridgePrefix = "exnet"
+
+// BuildEgressNetwork follows the network prefix: the builds' forward proxy alone joins it, and
+// enforces its own deny and allow lists, which may name a git server on the LAN (EXC-671).
+const BuildEgressNetwork = "build-egress"
+
+// BuildEgressEntrypoint is that proxy: nothing else joins the network.
+const BuildEgressEntrypoint = "/bin/excalibase-build-egress"
+
+// ProjectBridgeName is the interface of a project network: 15 characters, the kernel's limit.
+func ProjectBridgeName(network string) string {
+	sum := sha256.Sum256([]byte(network))
+	return ProjectBridgePrefix + hex.EncodeToString(sum[:])[:10]
+}
+
 // interfaceName is a Linux interface name: at most 15 characters, none a firewall rule could read as more.
 var interfaceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$`)
 
 type bridgeNetwork struct {
-	ID      string `json:"Id"`
-	Driver  string
-	Options map[string]string
-	IPAM    struct{ Config []struct{ Subnet string } }
+	ID       string `json:"Id"`
+	Driver   string
+	Internal bool
+	Options  map[string]string
+	IPAM     struct {
+		Config []struct{ Subnet, Gateway string }
+	}
 }
 
 // ResolveBridges answers a line for each network it can name. One it cannot
@@ -91,7 +115,11 @@ func bridgeInterface(network bridgeNetwork) (string, error) {
 	return iface, nil
 }
 
-// WriteBridges replaces the file whole, so the firewall never reads half of it.
+// syncFile puts a file's or a directory's content on disk.
+var syncFile = (*os.File).Sync
+
+// WriteBridges replaces the file whole, so a reader never sees half of it, and
+// a power cut leaves the old file or the new one, never an empty one.
 func WriteBridges(path string, lines []string) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".bridges-*")
 	if err != nil {
@@ -110,8 +138,20 @@ func WriteBridges(path string, lines []string) error {
 		tmp.Close()
 		return err
 	}
+	if err := syncFile(tmp); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return syncFile(dir)
 }

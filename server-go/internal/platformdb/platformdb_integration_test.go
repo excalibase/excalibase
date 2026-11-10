@@ -5,6 +5,7 @@ package platformdb
 import (
 	"context"
 	"database/sql"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"testing"
 	"time"
 
@@ -17,6 +18,9 @@ import (
 func startPG(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	c, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("platformdb_test"),
 		postgres.WithUsername("postgres"),

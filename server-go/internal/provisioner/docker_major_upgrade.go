@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
 // A single host's Postgres moved to a newer major (EXC-668): the old server
@@ -60,7 +62,11 @@ const upgradeFenceLine = "host all all all reject # excalibase-major-upgrade"
 // PreUpgradeContainerName is what the old container is renamed to while the
 // new one takes its name.
 func PreUpgradeContainerName(projectID, runID string) string {
-	return DatabaseContainerName(projectID) + "-pre-upgrade-" + runID
+	return preUpgradePrefix(projectID) + runID
+}
+
+func preUpgradePrefix(projectID string) string {
+	return DatabaseContainerName(projectID) + "-pre-upgrade-"
 }
 
 // hbaPrepend puts line first in the server's pg_hba once. The file is
@@ -155,7 +161,7 @@ trap '[ -s "$state" ] || echo "` + UpgradeFailed + `" > "$state"' EXIT
 log=` + UpgradeDir + `/load.log
 : > "$log"
 tab=$(printf '\t')
-load() { psql -X -q -v ON_ERROR_STOP=0 -U ` + defaultPostgresSuperuser + ` "$@" >/dev/null 2>>"$log"; }
+load() { PGOPTIONS="` + pgroles.QuietSessionPGOptions() + `" psql -X -q -v ON_ERROR_STOP=0 -U ` + defaultPostgresSuperuser + ` "$@" >/dev/null 2>>"$log"; }
 restore() { pg_restore -U ` + defaultPostgresSuperuser + ` --exit-on-error "$@" 2>>"$log"; }
 [ -r ` + UpgradeGlobalsFile + ` ] && [ -r ` + UpgradeDatabasesFile + ` ] || fail "the dump is incomplete"
 load -d postgres -f ` + UpgradeGlobalsFile + ` || fail "the roles did not load"

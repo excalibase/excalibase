@@ -12,6 +12,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -43,6 +44,10 @@ func (e *MajorUpgradeBlockedError) Error() string {
 }
 
 func (e *MajorUpgradeBlockedError) Unwrap() error { return ErrMajorUpgradeBlocked }
+
+// ErrMajorUpgradeNotServing is a WaitServing whose new server has not taken
+// over: the old database is the only way back, so the run stays open.
+var ErrMajorUpgradeNotServing = errors.New("the upgraded database is not serving yet")
 
 // UpgradeOutcome is how a conversion ended. Converted: the data is on the
 // new major. RolledBack: it never left the old one and the database runs on
@@ -316,6 +321,9 @@ func (s *MajorUpgradeService) conclude(ctx context.Context, engine MajorUpgrader
 // leaveOpen keeps a run whose conversion has not settled RUNNING, and the
 // project UPGRADING, for recovery to check again once this actor is gone.
 func (s *MajorUpgradeService) leaveOpen(ctx context.Context, run *domain.MajorUpgrade, public string) {
+	if run.SafetyBackupID != "" {
+		public += fmt.Sprintf(". To leave it instead: restore backup %s, taken before the upgrade, into a new project, then delete this one", run.SafetyBackupID)
+	}
 	run.Step = domain.MajorUpgradeStepWaiting
 	run.Error = public
 	_ = s.record(ctx, run, domain.StatusUpgrading, domain.MajorUpgradeStepWaiting, public)
@@ -343,6 +351,15 @@ func (s *MajorUpgradeService) finishConverted(ctx context.Context, engine MajorU
 	var warnings []string
 	if err := engine.WaitServing(ctx, inst); err != nil {
 		log.Printf("major upgrade %s: wait serving: %v", inst.ProjectID, err)
+		// Cleanup below removes the old database: not until the new one serves, fence lifted.
+		if errors.Is(err, provisioner.ErrHostFirewallDown) {
+			s.leaveOpen(ctx, run, waitingForFirewallPublic)
+			return
+		}
+		if errors.Is(err, ErrMajorUpgradeNotServing) {
+			s.leaveOpen(ctx, run, notServingPublic)
+			return
+		}
 		warnings = append(warnings, "not every copy of the database was serving when the upgrade finished; replicas may still be copying data")
 	}
 	if s.progressStep(ctx, run, domain.MajorUpgradeStepFinishing) != nil {

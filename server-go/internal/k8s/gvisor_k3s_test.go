@@ -5,6 +5,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"os"
 	"testing"
@@ -57,6 +58,9 @@ func startGVisorK3s(t *testing.T, platform string) *gvisorCluster {
 		}
 	}
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, gvisorK3sImage); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, gvisorK3sImage, testcontainers.WithFiles(gvisorFiles(t, platform)...))
 	testcontainers.CleanupContainer(t, container)
 	if err != nil {

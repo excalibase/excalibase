@@ -51,6 +51,35 @@ env_file=.env
 domain=
 admin_email=
 engine=docker
+# Compose waits for healthy services, and only Podman built with systemd, in a
+# user session, runs their checks; elsewhere `up -d` waits forever with no error.
+# Asked of a real container: nothing Podman reports says so. A probe that cannot
+# run learned nothing, and refuses nothing.
+check_podman_healthchecks() {
+  probe_seconds=${INIT_HEALTH_PROBE_SECONDS:-30}
+  probe_name=excalibase-health-probe-$$
+  podman_api="podman --url unix://$engine_socket"
+  if ! $podman_api run -d --name "$probe_name" --health-cmd true --health-interval 1s --health-retries 1 \
+    docker.io/library/alpine:3.20 sleep "$((probe_seconds + 30))" >/dev/null 2>&1; then
+    $podman_api rm -f -t 0 "$probe_name" >/dev/null 2>&1 || true
+    echo "init.sh: could not check that Podman runs healthchecks (the probe container did not start); continuing. If up -d waits forever, see docs/deployment/podman.md" >&2
+    return 0
+  fi
+  probe_health=
+  waited=0
+  while [ "$waited" -lt "$probe_seconds" ]; do
+    probe_health=$($podman_api inspect --format '{{.State.Health.Status}}' "$probe_name" 2>/dev/null || true)
+    [ "$probe_health" = healthy ] && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  $podman_api rm -f -t 0 "$probe_name" >/dev/null 2>&1 || true
+  if [ "$probe_health" != healthy ]; then
+    echo "init.sh: this Podman does not run healthchecks: a test container stayed '${probe_health:-unknown}' for ${probe_seconds}s, so the install would wait forever at up -d with no error. They run through systemd user timers, which a static Podman build and a host without a systemd user session do not have. Use the distribution's Podman, with lingering on (loginctl enable-linger), or use Docker. See docs/deployment/podman.md" >&2
+    exit 1
+  fi
+}
+
 engine_socket=
 engine_socket_uid=
 engine_socket_gid=
@@ -118,6 +147,35 @@ case $engine in
   podman)
     # Rootless: the container's root is this unprivileged user, the socket's owner.
     engine_socket=${engine_socket:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock}
+    # Rootful Podman's bridges are on the host and it has no DOCKER-USER chain:
+    # nothing would keep a tenant off the host (EXC-683). Fail closed.
+    rootless_hint="Run this as an unprivileged user with rootless Podman (systemctl --user enable --now podman.socket), or use Docker."
+    init_uid=${INIT_UID:-$(id -u)}
+    if [ "$init_uid" = 0 ]; then
+      echo "init.sh: rootful Podman is not supported: this is running as root, and nothing would guard the host from tenant containers. $rootless_hint" >&2
+      exit 1
+    fi
+    if [ ! -e "$engine_socket" ]; then
+      echo "init.sh: no engine socket at $engine_socket to check for rootless Podman. Start it first (systemctl --user enable --now podman.socket), or set --engine-socket." >&2
+      exit 1
+    fi
+    socket_owner=$(ls -nLd -- "$engine_socket" | awk '{print $3}')
+    if [ "$socket_owner" != "$init_uid" ]; then
+      echo "init.sh: rootful Podman is not supported: $engine_socket belongs to uid $socket_owner, not this user, and nothing would guard the host from tenant containers. $rootless_hint" >&2
+      exit 1
+    fi
+    # The owner of a file proves nothing alone: ask the engine. The engine proxy asks it again on every start.
+    rootless=$(${PODMAN_INFO:-podman --url "unix://$engine_socket" info --format '{{.Host.Security.Rootless}}'} 2>/dev/null || true)
+    case $rootless in
+      true) ;;
+      false)
+        echo "init.sh: rootful Podman is not supported: the engine at $engine_socket says it is not rootless, and nothing would guard the host from tenant containers. $rootless_hint" >&2
+        exit 1 ;;
+      *)
+        echo "init.sh: the engine at $engine_socket did not say whether it is rootless. Check it answers (systemctl --user enable --now podman.socket), or set --engine-socket." >&2
+        exit 1 ;;
+    esac
+    check_podman_healthchecks
     engine_socket_uid=0
     engine_socket_gid=0
     ;;

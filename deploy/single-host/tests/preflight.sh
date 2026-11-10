@@ -24,6 +24,20 @@ for bad in POSTGRES_PASSWORD=password123 POSTGRES_PASSWORD= SETUP_TOKEN=abc123 \
 done
 good ADMIN_PASSWORD='a-long-passphrase-of-mine' >/dev/null || fail "a strong admin password refused"
 
+# EXC-687: the deny list and rootless Podman's egress are refused before anything starts.
+for bad in APP_EGRESS_EXTRA_DENY_CIDRS=300.1.1.1/8 APP_EGRESS_EXTRA_DENY_CIDRS=203.0.113.7 'APP_EGRESS_EXTRA_DENY_CIDRS=203.0.113.0/24 -j ACCEPT'; do
+  if good "$bad" >/dev/null 2>&1; then fail "preflight accepted $bad"; fi
+done
+good APP_EGRESS_EXTRA_DENY_CIDRS='203.0.113.0/24, 198.51.100.7/32' >/dev/null || fail "a good deny list refused"
+# IPv4 alone, by notation, as provisioning's parser reads it: it stops the boot otherwise.
+for bad in APP_EGRESS_EXTRA_DENY_CIDRS=2001:db8::/32 APP_EGRESS_EXTRA_DENY_CIDRS=::ffff:203.0.113.0/120; do
+  if good "$bad" >/dev/null 2>&1; then fail "preflight accepted $bad"; fi
+done
+if good ENGINE_SOCKET_UID=0 APP_HOSTING_ENABLED=true APP_EGRESS=internet >/dev/null 2>&1; then fail "rootless Podman's unguarded egress passed"; fi
+good ENGINE_SOCKET_UID=0 APP_HOSTING_ENABLED=true APP_EGRESS=internet APP_EGRESS_UNGUARDED=accept >/dev/null || fail "accepted egress refused"
+good ENGINE_SOCKET_UID=0 APP_EGRESS=internet >/dev/null || fail "refused egress with app hosting off, where nothing uses it"
+good ENGINE_SOCKET_UID=0 >/dev/null || fail "rootless Podman without egress refused"
+
 # EXC-662: auth hooks may not start without the host's own addresses refused to them.
 if good FEATURE_AUTHHOOKS=true >/dev/null 2>&1; then
   fail "auth hooks started with no AUTH_HOOKS_DENY_CIDRS"
@@ -37,6 +51,22 @@ good FEATURE_AUTHHOOKS=true AUTH_HOOKS_DENY_CIDRS=203.0.113.7/32 >/dev/null || f
 good FEATURE_AUTHHOOKS=true 'AUTH_HOOKS_DENY_CIDRS=203.0.113.0/24, 2001:db8::7/128,' >/dev/null \
   || fail "a deny list with spaces and a trailing comma refused, which the chart accepts"
 good FEATURE_AUTHHOOKS=false >/dev/null || fail "auth hooks off needs no deny list"
+
+# EXC-547: git builds run untrusted code; they may not start without the host's own addresses refused to them.
+if good SITES_GIT_BUILDS_ENABLED=true >/dev/null 2>&1; then
+  fail "git builds started with no BUILD_EGRESS_EXTRA_DENY_CIDRS"
+fi
+for bad_list in , ' , ' 203.0.113.7 not-a-cidr/32 203.0.113.7/33 2001:db8::/32 ::ffff:203.0.113.0/64 203.0.113.7/32,2001:db8::/32 0.0.0.0/0; do
+  if good SITES_GIT_BUILDS_ENABLED=true "BUILD_EGRESS_EXTRA_DENY_CIDRS=$bad_list" >/dev/null 2>&1; then
+    fail "git builds started with BUILD_EGRESS_EXTRA_DENY_CIDRS='$bad_list'"
+  fi
+done
+if good SITES_GIT_BUILDS_ENABLED=true APP_EGRESS_EXTRA_DENY_CIDRS=203.0.113.7/32 >/dev/null 2>&1; then
+  fail "the apps' list stood in for the builds'"
+fi
+good SITES_GIT_BUILDS_ENABLED=true 'BUILD_EGRESS_EXTRA_DENY_CIDRS=203.0.113.0/24, 198.51.100.7/32,' >/dev/null \
+  || fail "a builds' list with spaces and a trailing comma refused, which the chart accepts"
+good SITES_GIT_BUILDS_ENABLED=false >/dev/null || fail "git builds off need no list"
 
 # EXC-658: the log forwarder's token unlocks every drain's key; checked when drains are on.
 good LOG_FORWARDER_TOKEN=weak >/dev/null || fail "the forwarder token was checked with drains off"

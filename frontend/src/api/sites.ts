@@ -80,6 +80,8 @@ export interface IssuedDeployToken extends DeployToken {
 export interface SiteInput {
   name: string;
   spaFallback: boolean;
+  // Absent creates a static site; the server only takes `server` while sitesserver is on.
+  kind?: 'static' | 'server';
 }
 
 // The server may hold a deploy for up to 15 minutes while the CDN publishes it.

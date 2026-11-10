@@ -62,6 +62,19 @@ if [ "${FEATURE_AUTHHOOKS:-}" = true ]; then
   fi
 fi
 
+# Git builds run untrusted code (EXC-547): the chart requires their list and so
+# does this. IPv4 only, as the builds' policy has no IPv6 rule to deny from.
+if [ "${SITES_GIT_BUILDS_ENABLED:-}" = true ]; then
+  ipv4='^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/([1-9]|[12][0-9]|3[0-2])$'
+  entries=$(printf '%s' "${BUILD_EGRESS_EXTRA_DENY_CIDRS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' || true)
+  invalid=$(printf '%s\n' "$entries" | grep -v '^$' | grep -Ev "$ipv4" || true)
+  if [ -z "$entries" ]; then
+    complain "SITES_GIT_BUILDS_ENABLED needs BUILD_EGRESS_EXTRA_DENY_CIDRS: the host's own public addresses, comma-separated; APP_EGRESS_EXTRA_DENY_CIDRS does not apply to builds"
+  elif [ -n "$invalid" ]; then
+    complain "BUILD_EGRESS_EXTRA_DENY_CIDRS must be comma-separated IPv4 CIDRs such as 203.0.113.7/32; refused: $(printf '%s' "$invalid" | tr '\n' ' ')"
+  fi
+fi
+
 # Log drains (EXC-658): the forwarder's token unlocks every drain's key.
 if [ "${FEATURE_LOGDRAINS:-}" = true ]; then
   check_secret LOG_FORWARDER_TOKEN "${LOG_FORWARDER_TOKEN:-}"
@@ -102,8 +115,19 @@ if [ "${ENGINE_SOCKET_UID:-1000}" != 0 ]; then
         ;;
     esac
     [ -z "${tag_refused:-}" ] || complain "TAG '${tag}' does not run the host firewall: set TAG in .env to a trunk build (main-<sha>) until a release after 1.6.2 exists, or HOST_FIREWALL=off"
+    # The firewall would refuse these words at the rule; say so before anything starts.
+    octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+    denied=$(printf '%s' "${APP_EGRESS_EXTRA_DENY_CIDRS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' \
+      | grep -Ev "^($octet[.]){3}$octet/([0-9]|[12][0-9]|3[0-2])\$" || true)
+    [ -z "$denied" ] || complain "APP_EGRESS_EXTRA_DENY_CIDRS must be comma-separated IPv4 CIDRs, as provisioning reads it; not one: $(printf '%s' "$denied" | tr '\n' ' ')"
     [ -n "${HOST_RESOLV_CONF:-}" ] || complain "HOST_RESOLV_CONF is unset: the resolv.conf Docker forwards lookups to (/run/systemd/resolve/resolv.conf when /etc/resolv.conf names only 127.0.0.53, else /etc/resolv.conf)"
   fi
+fi
+
+# Rootless Podman's egress leaves as this user's own connections, which nothing here can
+# guard (EXC-687): it takes a yes, here before provisioning fails on it.
+if [ "${ENGINE_SOCKET_UID:-1000}" = 0 ] && [ "${APP_HOSTING_ENABLED:-false}" = true ] && [ "${APP_EGRESS:-none}" = internet ] && [ "${APP_EGRESS_UNGUARDED:-}" != accept ]; then
+  complain "APP_EGRESS=internet on rootless Podman reaches the LAN and cloud metadata, unguarded: keep APP_EGRESS=none, use Docker, or set APP_EGRESS_UNGUARDED=accept"
 fi
 
 # Optional: unset means bootstrap generates one and prints it once.

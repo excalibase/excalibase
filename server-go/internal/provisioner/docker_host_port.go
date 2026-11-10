@@ -2,18 +2,20 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 )
 
 // StartHoldingPort starts a container published on its project's held host
-// port, waiting out a predecessor that has just freed it: rootless Podman's
-// port forwarder can hold the port a moment longer.
+// port, waiting out a predecessor that has just freed it (rootless Podman's
+// port forwarder can hold the port a moment longer) and a host firewall not
+// healthy yet, which it answers as ErrHostFirewallDown if that outlasts poller.
 func StartHoldingPort(ctx context.Context, docker DockerClient, poller Poller, container string) error {
 	var last error
 	err := poller.WaitUntilReady(ctx, "host port of "+container, func(ctx context.Context) (bool, error) {
 		last = docker.StartContainer(ctx, container)
-		if last != nil && strings.Contains(last.Error(), "address already in use") {
+		if last != nil && (strings.Contains(last.Error(), "address already in use") || errors.Is(last, ErrHostFirewallDown)) {
 			return false, nil
 		}
 		return true, last

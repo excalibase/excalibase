@@ -87,7 +87,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		return dc.RemoveContainer(ctx, recovered.containerID)
 	})
 	if err := a.bringUp(ctx, dc, recovered, plan.Backup != nil && plan.Backup.Enabled); err != nil {
-		return nil, failRestore(ctx, pc, newProject, err)
+		return nil, failRestore(ctx, pc, store, &domain.DatabaseInstance{ProjectID: newProject}, err)
 	}
 	newInst := restoredDockerInstance(inst, restoredDockerSpec{
 		projectID:     newProject,
@@ -101,11 +101,11 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	})
 	deps := restoreDeps{dc: dc, gatewayLimits: recovered.spec.gatewayLimits()}
 	if err := startRestoredGateway(ctx, pc, deps, newInst, recovered.containerID); err != nil {
-		return nil, failRestore(ctx, pc, newProject, err)
+		return nil, failRestore(ctx, pc, store, &domain.DatabaseInstance{ProjectID: newProject}, err)
 	}
 	if err := registerVerifiedProject(ctx, pc, registrar, store, probe, newInst,
 		RegistrationOptions{ResetRolePasswords: true, ResetAdminPassword: true}); err != nil {
-		return nil, failRestore(ctx, pc, newProject, err)
+		return nil, failRestore(ctx, pc, store, &domain.DatabaseInstance{ProjectID: newProject}, err)
 	}
 	return &domain.ProvisioningResponse{
 		ProjectID:    newInst.ProjectID,
@@ -215,6 +215,10 @@ func recoverySpec(source *domain.DatabaseInstance, req domain.RestoreRequest, ta
 // recovery in it; with archive, it then archives WAL as a new project does.
 func (a *DockerBackupAdapter) bringUp(ctx context.Context, dc provisioner.DockerClient, seeded recovered, archive bool) error {
 	containerID, dbName := seeded.containerID, seeded.spec.dbName
+	// A restore in place has removed the old database by now: this start is worth a long wait.
+	if err := provisioner.WaitHostFirewall(ctx, dc, restoreFirewallPoller); err != nil {
+		return fmt.Errorf("start restored container: %w", err)
+	}
 	if err := provisioner.StartHoldingPort(ctx, dc, restoreStartPoller, containerID); err != nil {
 		return fmt.Errorf("start restored container: %w", err)
 	}
@@ -409,6 +413,12 @@ type restoreContainerSpec struct {
 
 // restoreStartPoller bounds the wait for a held host port to come free.
 var restoreStartPoller = provisioner.NewPoller(time.Second, 30*time.Second)
+
+// restoreFirewallPoller bounds the wait for a host firewall that went down during a restore.
+var restoreFirewallPoller = provisioner.NewPoller(2*time.Second, 10*time.Minute)
+
+// restoreRollbackFirewallPoller bounds the wait to put a database back after one.
+var restoreRollbackFirewallPoller = provisioner.NewPoller(2*time.Second, 30*time.Minute)
 
 // restorePlanOf is the plan a new project of the source's org gets, and the
 // container limits it sizes a restored container by.
