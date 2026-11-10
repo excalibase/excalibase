@@ -55,8 +55,6 @@ const (
 	appBuildPlatformDir = "/run/platform"
 )
 
-var appBuildPhases = []string{appBuildAnalyze, appBuildBuildpacks, appBuildExport}
-
 // AppBuildOptions is where and how this install runs app builds.
 type AppBuildOptions struct {
 	Namespace string
@@ -131,12 +129,16 @@ func renderAppBuildPod(options AppBuildOptions, spec appbuilds.RunSpec) corev1.P
 	return buildPodSpec(options.RuntimeClass, options.PriorityClass, inits, appCollectContainer(options, spec), appBuildVolumes(spec))
 }
 
+// AppBuildPrepareScript makes the directories the image builders write to, each sticky and open to their two users.
+const AppBuildPrepareScript = "mkdir -p " + appBuildDirs + " && chmod 1777 " + appBuildDirs
+
+const appBuildDirs = "/work /tmp /work/out /work/layers /work/cnb-home"
+
 // appPrepareContainer is the site builds' root chmod, plus the directories the
 // image builders write to, each sticky and open to the builders' two users.
 func appPrepareContainer(image string) corev1.Container {
 	prepare := prepareWorkdirContainer(image)
-	dirs := "/work /tmp /work/out /work/layers /work/cnb-home"
-	prepare.Command = []string{"sh", "-c", "mkdir -p " + dirs + " && chmod 1777 " + dirs}
+	prepare.Command = []string{"sh", "-c", AppBuildPrepareScript}
 	return prepare
 }
 
@@ -157,12 +159,8 @@ test -f "$2" || { echo "no Dockerfile at ${2#/work/src/}"; exit 12; }
 inside "$2" || { echo "the Dockerfile is not inside the repository"; exit 13; }
 mkdir -p /work/out; shift 2; exec buildctl-daemonless.sh "$@"`
 
-// buildKitContainer runs one throwaway rootless buildkitd inside the sandbox
-// (no daemon socket, nothing shared between builds) and writes an OCI archive.
-// Secrets are files for RUN --mount=type=secret; without BuildKit's process
-// sandbox any RUN step can read them too, so they are build-visible, not step-scoped.
-// Build args are plain.
-func buildKitContainer(options AppBuildOptions, spec appbuilds.RunSpec) corev1.Container {
+// buildKitArgs is the buildctl command line after the context and Dockerfile checks.
+func buildKitArgs(spec appbuilds.RunSpec) []string {
 	dockerfile := spec.DockerfileFile()
 	args := []string{"build", "--frontend", "dockerfile.v0",
 		"--local", "context=" + spec.ContextDir(), "--local", "dockerfile=" + path.Dir(dockerfile),
@@ -173,7 +171,34 @@ func buildKitContainer(options AppBuildOptions, spec appbuilds.RunSpec) corev1.C
 	for _, name := range sortedNames(spec.Secrets) {
 		args = append(args, "--secret", "id="+name+",src="+appBuildSecretsDir+"/"+name)
 	}
-	args = append(args, "--output", "type=oci,dest=/work/out/image.tar")
+	return append(args, "--output", "type=oci,dest=/work/out/image.tar")
+}
+
+func buildKitEnv() []EnvPair {
+	return []EnvPair{
+		{"BUILDKITD_FLAGS", "--oci-worker-no-process-sandbox --root /work/buildkit"},
+		{"HOME", "/work/home"}, {"XDG_RUNTIME_DIR", "/tmp/run"},
+		// The image points TMPDIR into its own home; the root filesystem is read-only.
+		{"TMPDIR", "/tmp"},
+	}
+}
+
+func envVars(pairs []EnvPair) []corev1.EnvVar {
+	vars := make([]corev1.EnvVar, 0, len(pairs))
+	for _, pair := range pairs {
+		vars = append(vars, corev1.EnvVar{Name: pair.Name, Value: pair.Value})
+	}
+	return vars
+}
+
+// buildKitContainer runs one throwaway rootless buildkitd inside the sandbox
+// (no daemon socket, nothing shared between builds) and writes an OCI archive.
+// Secrets are files for RUN --mount=type=secret; without BuildKit's process
+// sandbox any RUN step can read them too, so they are build-visible, not step-scoped.
+// Build args are plain.
+func buildKitContainer(options AppBuildOptions, spec appbuilds.RunSpec) corev1.Container {
+	dockerfile := spec.DockerfileFile()
+	args := buildKitArgs(spec)
 	security := lockedDown()
 	// rootlesskit maps the build's user namespace through the setuid newuidmap,
 	// inside gVisor: escalation on, and only the two capabilities it hands out.
@@ -181,13 +206,8 @@ func buildKitContainer(options AppBuildOptions, spec appbuilds.RunSpec) corev1.C
 	security.Capabilities = &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}, Add: []corev1.Capability{"SETUID", "SETGID"}}
 	return corev1.Container{
 		Name: appBuildBuildKit, Image: options.BuildKitImage, Command: []string{"sh", "-c", buildKitEntry, "buildkit", spec.ContextDir(), dockerfile},
-		Args: args,
-		Env: []corev1.EnvVar{
-			{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox --root /work/buildkit"},
-			{Name: "HOME", Value: "/work/home"}, {Name: "XDG_RUNTIME_DIR", Value: "/tmp/run"},
-			// The image points TMPDIR into its own home; the root filesystem is read-only.
-			{Name: "TMPDIR", Value: "/tmp"},
-		},
+		Args:            args,
+		Env:             envVars(buildKitEnv()),
 		SecurityContext: security, Resources: appBuildResources(spec),
 		VolumeMounts: append(workMounts(), secretsMount()),
 	}
@@ -203,17 +223,8 @@ func buildpacksContainers(options AppBuildOptions, spec appbuilds.RunSpec) []cor
 	security.RunAsUser, security.RunAsGroup = pointerTo(appBuildCNBUID), pointerTo(appBuildCNBUID)
 	fetch := corev1.Container{
 		Name: appBuildRunImage, Image: options.CraneImage, Command: []string{"crane"},
-		Args:            []string{"pull", "--platform=" + options.platform(), "--format=oci", runRef, path.Join(appBuildLayoutDir, layoutPath(runRef))},
+		Args:            AppBuildRunImageArgs(runRef, options.platform()),
 		SecurityContext: security, Resources: guaranteed("500m", "512Mi"), VolumeMounts: workMounts(),
-	}
-	layers, layout := "-layers=/work/layers", "-layout -layout-dir="+appBuildLayoutDir
-	// The root directory comes from the repository's settings: the scripts read it from APP_DIR, never inline.
-	app := `-app="$APP_DIR"`
-	phases := map[string]string{
-		appBuildAnalyze: appInsideCheckout + " && " + lifecycle("analyzer", layers, "-run-image="+byTag(runRef), layout, appBuildImageRef),
-		appBuildBuildpacks: lifecycle("detector", layers, app, "-platform="+appBuildPlatformDir) + " && " +
-			lifecycle("restorer", layers, layout) + " && " + lifecycle("builder", layers, app, "-platform="+appBuildPlatformDir),
-		appBuildExport: lifecycle("exporter", layers, app, layout, appBuildImageRef),
 	}
 	// The clone step's user owns the checkout; the buildpacks write into it as the CNB user.
 	share := corev1.Container{
@@ -221,22 +232,47 @@ func buildpacksContainers(options AppBuildOptions, spec appbuilds.RunSpec) []cor
 		SecurityContext: lockedDown(), Resources: guaranteed("100m", "32Mi"), VolumeMounts: workMounts(),
 	}
 	containers := []corev1.Container{share, fetch}
-	for _, phase := range appBuildPhases {
+	for _, phase := range AppBuildpackPhases(runRef) {
 		resources, mounts := guaranteed("500m", "512Mi"), workMounts()
-		if phase == appBuildBuildpacks {
+		if phase.Name == appBuildBuildpacks {
 			resources = appBuildResources(spec)
 			mounts = append(mounts, corev1.VolumeMount{Name: "build-secrets", MountPath: appBuildPlatformDir + "/env", ReadOnly: true})
 		}
 		containers = append(containers, corev1.Container{
-			Name: phase, Image: options.BuilderImage, Command: []string{"bash", "-c", "set -e; " + phases[phase]},
-			Env: []corev1.EnvVar{
-				{Name: "CNB_PLATFORM_API", Value: "0.14"}, {Name: "CNB_EXPERIMENTAL_MODE", Value: "warn"},
-				{Name: "HOME", Value: "/work/cnb-home"}, {Name: "APP_DIR", Value: spec.ContextDir()},
-			},
-			SecurityContext: security, Resources: resources, VolumeMounts: mounts,
+			Name: phase.Name, Image: options.BuilderImage, Command: []string{"bash", "-c", "set -e; " + phase.Script},
+			Env: envVars(AppBuildCNBEnv(spec)), SecurityContext: security, Resources: resources, VolumeMounts: mounts,
 		})
 	}
 	return containers
+}
+
+// AppBuildRunImageArgs is crane's command line fetching the run image into the OCI layout the exporter writes to.
+func AppBuildRunImageArgs(runRef, platform string) []string {
+	return []string{"pull", "--platform=" + platform, "--format=oci", runRef, path.Join(appBuildLayoutDir, layoutPath(runRef))}
+}
+
+// AppBuildCNBEnv is the lifecycle steps' variables; the root directory is read from APP_DIR, never inline.
+func AppBuildCNBEnv(spec appbuilds.RunSpec) []EnvPair {
+	return []EnvPair{
+		{"CNB_PLATFORM_API", "0.14"}, {"CNB_EXPERIMENTAL_MODE", "warn"},
+		{"HOME", "/work/cnb-home"}, {"APP_DIR", spec.ContextDir()},
+	}
+}
+
+// AppBuildpackPhase is one CNB lifecycle phase's bash script; every argument in it is ours, never the user's.
+type AppBuildpackPhase struct{ Name, Script string }
+
+// AppBuildpackPhases are the lifecycle phases in order: analyze and export are the platform's side,
+// detect, restore and build run as one phase with the app's code and the build-visible secrets.
+func AppBuildpackPhases(runRef string) []AppBuildpackPhase {
+	layers, layout := "-layers=/work/layers", "-layout -layout-dir="+appBuildLayoutDir
+	app := `-app="$APP_DIR"`
+	return []AppBuildpackPhase{
+		{appBuildAnalyze, appInsideCheckout + " && " + lifecycle("analyzer", layers, "-run-image="+byTag(runRef), layout, appBuildImageRef)},
+		{appBuildBuildpacks, lifecycle("detector", layers, app, "-platform="+appBuildPlatformDir) + " && " +
+			lifecycle("restorer", layers, layout) + " && " + lifecycle("builder", layers, app, "-platform="+appBuildPlatformDir)},
+		{appBuildExport, lifecycle("exporter", layers, app, layout, appBuildImageRef)},
+	}
 }
 
 // appInsideCheckout refuses a root directory that resolves outside the checkout (exit 13), before any buildpack runs.
@@ -279,7 +315,7 @@ func appCollectContainer(options AppBuildOptions, spec appbuilds.RunSpec) corev1
 	return corev1.Container{
 		Name: siteBuildCollect, Image: options.PrepareImage, Command: []string{"sh", "/scripts/collect.sh"},
 		Env: []corev1.EnvVar{{Name: "BUILDER", Value: string(spec.Builder)},
-			{Name: "IMAGE_DIR", Value: path.Join(appBuildLayoutDir, layoutPath(appBuildImageRef))}},
+			{Name: "IMAGE_DIR", Value: AppBuildImageDir()}},
 		SecurityContext: security, Resources: guaranteed("250m", "128Mi"),
 		VolumeMounts: append(workMounts(), scriptMount()),
 		ReadinessProbe: &corev1.Probe{

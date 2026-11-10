@@ -12,7 +12,6 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/pkg/stdcopy"
 
-	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 )
 
@@ -22,14 +21,13 @@ const (
 	logStepBytes = 128 << 10
 )
 
-// logSteps are the steps whose output the history keeps, in order; the sidecar's refusals come first.
-var logSteps = []struct{ step, title string }{
-	{stepEgress, "network"}, {stepClone, "clone"}, {stepBuild, "build"}, {stepCollect, "collect"},
-}
-
 // Collect streams the packed output out of the collect step into w, failing past limit bytes.
 func (r *Runner) Collect(ctx context.Context, buildID string, w io.Writer, limit int64) error {
-	stream, _, err := r.engine.CopyFromContainer(ctx, containerName(buildID, stepCollect), k8s.SiteBuildArchivePath)
+	return r.collectFrom(ctx, buildID, sitePlan.archive, w, limit)
+}
+
+func (r *Runner) collectFrom(ctx context.Context, buildID, archivePath string, w io.Writer, limit int64) error {
+	stream, _, err := r.engine.CopyFromContainer(ctx, containerName(buildID, stepCollect), archivePath)
 	if err != nil {
 		return fmt.Errorf("read the packed output: %w", err)
 	}
@@ -75,8 +73,12 @@ func (c *cappedWriter) Write(chunk []byte) (int, error) {
 
 // Logs answers each started step's tail, under a header per step.
 func (r *Runner) Logs(ctx context.Context, buildID string) (string, error) {
+	return r.logsOf(ctx, buildID, sitePlan.logs)
+}
+
+func (r *Runner) logsOf(ctx context.Context, buildID string, entries []logStep) (string, error) {
 	var out strings.Builder
-	for _, entry := range logSteps {
+	for _, entry := range entries {
 		name := containerName(buildID, entry.step)
 		inspect, err := r.engine.ContainerInspect(ctx, name)
 		if errdefs.IsNotFound(err) {
