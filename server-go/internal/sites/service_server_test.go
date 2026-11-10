@@ -33,6 +33,14 @@ func serverOptions(t *testing.T, flags features.Flags, code sites.CodeStore) sit
 		Outbound: &sitestest.Outbound{Worker: "excalibase-sites-outbound"}}
 }
 
+// wantServerBindings is what every server publish, deploy or rollback, binds.
+func wantServerBindings() []cfworkers.Binding {
+	return []cfworkers.Binding{
+		{Type: cfworkers.BindingPlainText, Name: "EXCALIBASE_URL", Text: "https://api.example.test"},
+		{Type: cfworkers.BindingPlainText, Name: "EXCALIBASE_PROJECT_ID", Text: testProject},
+	}
+}
+
 func (h *serviceHarness) createServerSite(t *testing.T, name string) *sites.Site {
 	t.Helper()
 	site, err := h.service.CreateKind(context.Background(), testProject, name, sites.KindServer, nil, testActor)
@@ -109,12 +117,8 @@ func TestServerDeployPublishesModulesAndKeepsThemOutOfTheAssets(t *testing.T) {
 		t.Errorf("limits = %+v", version.Limits)
 	}
 	// ADR 0045 decision 4: the code finds its project's API through two plain variables, and nothing else is bound.
-	wantBindings := []cfworkers.Binding{
-		{Type: cfworkers.BindingPlainText, Name: "EXCALIBASE_URL", Text: "https://api.example.test"},
-		{Type: cfworkers.BindingPlainText, Name: "EXCALIBASE_PROJECT_ID", Text: testProject},
-	}
-	if !reflect.DeepEqual(version.Bindings, wantBindings) {
-		t.Errorf("bindings = %v, want %v", version.Bindings, wantBindings)
+	if want := wantServerBindings(); !reflect.DeepEqual(version.Bindings, want) {
+		t.Errorf("bindings = %v, want %v", version.Bindings, want)
 	}
 	if body := h.publisher.ModuleBodies[sites.ScriptName(site)]["worker.js"]; body != "export default 1" {
 		t.Errorf("worker.js = %q", body)
@@ -171,6 +175,9 @@ func TestRollbackRepublishesTheEarlierDeploysCode(t *testing.T) {
 	}
 	if version := h.publisher.Versions[script]; version.MainModule != "worker.js" || version.Assets.NotFoundHandling != cfworkers.NotFoundNone {
 		t.Fatalf("version = %+v", version)
+	}
+	if want := wantServerBindings(); !reflect.DeepEqual(h.publisher.Versions[script].Bindings, want) {
+		t.Fatalf("bindings after rollback = %v, want %v", h.publisher.Versions[script].Bindings, want)
 	}
 }
 

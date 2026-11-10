@@ -21,6 +21,11 @@ Per Cloudflare's outbound Workers docs, a bound outbound Worker also blocks
 certificate bindings. A site Worker can hold only text bindings and
 `ASSETS`, so it gets neither.
 
+`EXCALIBASE_URL` is the value to pass as `createClient`'s `url`. It is
+`PUBLIC_BASE_URL` (host only, no path prefix, no trailing slash) and its host must
+match the outbound Worker's `API_HOST`; otherwise the site's API calls get 403.
+The SDK rejects a `/functions/v1` URL, so a site's value is the host root.
+
 ## Preconditions before turning on server sites in prod
 
 The fence matches names and IP literals. It cannot see what a name resolves
