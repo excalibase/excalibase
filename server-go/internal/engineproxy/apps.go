@@ -80,7 +80,8 @@ var networkCreateFields = map[string]func(Policy, any) error{
 	"Options": func(_ Policy, value any) error {
 		options, _ := value.(map[string]any)
 		for key, option := range options {
-			allowed := (key == bridgeIsolate && option == "true") || (isGatewayMode(key) && option == gatewayIsolated)
+			// checkProjectBridge reads the name.
+			allowed := key == bridgeNameOption || (key == bridgeIsolate && option == "true") || (isGatewayMode(key) && option == gatewayIsolated)
 			if !allowed {
 				return refuse("network Options %s=%v may not be set; only isolate=true or %s=%s", key, option, gatewayModeIPv4, gatewayIsolated)
 			}
@@ -130,7 +131,31 @@ func (p Policy) CheckNetworkCreate(body []byte) error {
 	if err := checkFields("network create", create, networkCreateFields, p); err != nil {
 		return err
 	}
-	return checkIsolatedGateway(create)
+	if err := checkIsolatedGateway(create); err != nil {
+		return err
+	}
+	return p.checkProjectBridge(name, create)
+}
+
+// checkProjectBridge: a bridge name is only ever the network's own, and under the fence a
+// network with a route or a host address has one. Only an internal network with an isolated
+// gateway has nothing for the firewall to guard, and the builds' proxy polices itself.
+func (p Policy) checkProjectBridge(name string, create map[string]any) error {
+	options, _ := create["Options"].(map[string]any)
+	bridge, named := options[bridgeNameOption]
+	if named {
+		if bridge != ProjectBridgeName(name) {
+			return refuse("network Options on %q may name the bridge %q alone, not %v", name, ProjectBridgeName(name), bridge)
+		}
+		return nil
+	}
+	if !p.FenceProjectBridges || name == p.NetworkPrefix+BuildEgressNetwork {
+		return nil
+	}
+	if create["Internal"] == true && options[gatewayModeIPv4] == gatewayIsolated && options[gatewayModeIPv6] == gatewayIsolated {
+		return nil
+	}
+	return refuse("network %q must name the bridge %q, which the host firewall guards", name, ProjectBridgeName(name))
 }
 
 // CheckNetworkConnect admits joining a container with no endpoint settings:
@@ -335,6 +360,11 @@ func (h *Handler) authorizeApps(r *http.Request, api string) (handled bool, err 
 			return true, err
 		}
 		return true, h.checkBody(r, h.policy.CheckNetworkCreate)
+	case api == "/networks":
+		if err := methodOnly(r, http.MethodGet); err != nil {
+			return true, err
+		}
+		return true, checkManagedFilter(r.URL.Query(), h.policy.ManagedLabel)
 	case api == "/volumes/create":
 		if err := methodOnly(r, http.MethodPost); err != nil {
 			return true, err
@@ -366,16 +396,19 @@ func (h *Handler) authorizeNetwork(r *http.Request, name, action string) error {
 	case action == "" && (r.Method == http.MethodGet || r.Method == http.MethodDelete):
 		return nil
 	case action == "/connect" && r.Method == http.MethodPost:
-		return h.checkBody(r, func(body []byte) error { return h.checkMember(r, body, false) })
+		return h.checkBody(r, func(body []byte) error { return h.checkMember(r, name, body, false) })
 	case action == "/disconnect" && r.Method == http.MethodPost:
-		return h.checkBody(r, func(body []byte) error { return h.checkMember(r, body, true) })
+		return h.checkBody(r, func(body []byte) error { return h.checkMember(r, name, body, true) })
 	}
 	return refuse("%s /networks/{name}%s is not a call provisioning makes", r.Method, action)
 }
 
 // checkMember admits the named edge or a managed container, and nothing else.
-func (h *Handler) checkMember(r *http.Request, body []byte, disconnect bool) error {
+func (h *Handler) checkMember(r *http.Request, network string, body []byte, disconnect bool) error {
 	if !disconnect {
+		if rejoin, err := h.checkAppRejoin(r, network, body); rejoin || err != nil {
+			return err
+		}
 		if err := h.policy.CheckNetworkConnect(body); err != nil {
 			return err
 		}
@@ -388,7 +421,49 @@ func (h *Handler) checkMember(r *http.Request, body []byte, disconnect bool) err
 	if h.policy.EdgeContainer != "" && container == h.policy.EdgeContainer {
 		return nil
 	}
+	if !disconnect && h.policy.FenceProjectBridges && network == h.policy.NetworkPrefix+BuildEgressNetwork {
+		found, err := h.inspectGuarded(r.Context(), container)
+		if err != nil {
+			return err
+		}
+		if len(found.Config.Entrypoint) == 0 || found.Config.Entrypoint[0] != BuildEgressEntrypoint {
+			return refuse("network %q is the builds' proxy's alone", network)
+		}
+	}
 	return h.requireManaged(r.Context(), container)
+}
+
+// appNameLabel names an app on a container: its service name is that, under AppServiceDomain.
+const appNameLabel = "excalibase.app-name"
+
+// checkAppRejoin admits a managed app back on the network it runs on, under its own service
+// name and no other, as a create admits it; a remade network takes every member off.
+func (h *Handler) checkAppRejoin(r *http.Request, network string, body []byte) (bool, error) {
+	var member map[string]any
+	if err := json.Unmarshal(body, &member); err != nil {
+		return false, refuse("network member body: %v", err)
+	}
+	endpoint, aliased := member["EndpointConfig"]
+	name, _ := member["Container"].(string)
+	if !aliased || isZero(endpoint) || name == "" || name == h.policy.EdgeContainer || h.policy.checkServiceAlias(endpoint) != nil {
+		return false, nil
+	}
+	if err := checkSpelling("network connect", member, connectNames...); err != nil {
+		return true, err
+	}
+	if err := checkObjectSpelling("network EndpointConfig", endpoint, endpointNames); err != nil {
+		return true, err
+	}
+	found, err := h.inspectGuarded(r.Context(), name)
+	if err != nil {
+		return true, err
+	}
+	aliases, _ := endpoint.(map[string]any)["Aliases"].([]any)
+	want := found.Config.Labels[appNameLabel] + "." + AppServiceDomain
+	if found.Config.Labels[h.policy.ManagedLabel] != "true" || found.Host.NetworkMode != network || aliases[0] != want {
+		return true, refuse("%s may rejoin only its own network under its own service name", name)
+	}
+	return true, nil
 }
 
 func methodOnly(r *http.Request, method string) error {

@@ -168,7 +168,7 @@ BEGIN
         EXECUTE format('GRANT %I TO %I', parent, target);
       END IF;
     END LOOP;
-  EXCEPTION WHEN OTHERS THEN
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
     -- Raised again without its context, which quotes the statement and so the password.
     RAISE EXCEPTION USING ERRCODE = SQLSTATE, MESSAGE = SQLERRM;
   END;
@@ -191,7 +191,7 @@ BEGIN
   {{CUSTOMER_GUARD_TARGET}}
   BEGIN
     EXECUTE format('ALTER ROLE %I PASSWORD %L', target, role_password);
-  EXCEPTION WHEN OTHERS THEN
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
     RAISE EXCEPTION USING ERRCODE = SQLSTATE, MESSAGE = SQLERRM;
   END;
 END

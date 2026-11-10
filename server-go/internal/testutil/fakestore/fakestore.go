@@ -90,6 +90,19 @@ func (s *Instances) RecordRestoreInterrupted(projectID, step, reason string) err
 }
 
 // UpdateIfStatus persists only while the row still holds expected.
+func (s *Instances) RecordRollbackRetry(projectID, rollbackLog, failureReason, expected string) error {
+	stored, ok := s.Items[projectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	updated, err := storage.ApplyRollbackRetry(stored, rollbackLog, failureReason, expected)
+	if err != nil {
+		return err
+	}
+	s.Items[projectID] = updated
+	return nil
+}
+
 func (s *Instances) UpdateIfStatus(inst *domain.DatabaseInstance, expected string) error {
 	existing, ok := s.Items[inst.ProjectID]
 	if !ok {

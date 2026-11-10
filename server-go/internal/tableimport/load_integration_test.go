@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,9 @@ import (
 func startTenant(t *testing.T) (*sql.DB, *sql.DB) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:17-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := postgres.Run(ctx, "postgres:17-alpine",
 		postgres.WithDatabase("tenant"), postgres.WithUsername("super"), postgres.WithPassword("superpass"),
 		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").

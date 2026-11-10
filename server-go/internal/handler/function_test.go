@@ -1285,6 +1285,18 @@ func (s *inMemoryInstanceStore) UpdateIfStatusWithinOrgLimit(*domain.DatabaseIns
 	return nil
 }
 
+func (s *inMemoryInstanceStore) RecordRollbackRetry(projectID, rollbackLog, failureReason, expected string) error {
+	stored, err := s.FindByProjectID(projectID)
+	if err != nil {
+		return err
+	}
+	updated, err := storage.ApplyRollbackRetry(stored, rollbackLog, failureReason, expected)
+	if err != nil {
+		return err
+	}
+	return s.Update(updated)
+}
+
 func (s *inMemoryInstanceStore) UpdateIfStatus(*domain.DatabaseInstance, string) error {
 	return nil
 }

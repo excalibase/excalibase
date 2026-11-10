@@ -11,6 +11,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 )
 
@@ -224,6 +225,25 @@ func TestSandboxOptOutLeavesTheRuntimeDefault(t *testing.T) {
 	startBuild(t, runner)
 	if runtime := engine.get(step("build")).host.Runtime; runtime != "" {
 		t.Fatalf("runtime %q after the opt-out", runtime)
+	}
+}
+
+// The collect step packs the layout of the preset, so it has to be told which.
+func TestFrameworkReachesTheBuildAndCollectSteps(t *testing.T) {
+	engine := newFakeEngine()
+	runner, _ := newTestRunner(t, engine, "runsc")
+	if err := runner.Verify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	spec := testSpec()
+	spec.Framework = sitebuilds.FrameworkNextjs
+	if err := runner.Start(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"build", "collect"} {
+		if got := env(engine.get(step(name)))["FRAMEWORK"]; got != "nextjs" {
+			t.Errorf("%s step FRAMEWORK = %q", name, got)
+		}
 	}
 }
 
@@ -726,6 +746,52 @@ func TestABoxServesBuildsOtherThanSites(t *testing.T) {
 
 // Docker 27 refuses the isolated gateway with a 400: Verify still passes, says the host is reachable,
 // and builds are laid out without the option instead of failing.
+// EXC-687: without an isolated gateway a build's bridge has an address on the host, and only the
+// firewall's wildcard keeps a build off it. The sidecar's network keeps its own lists and no name.
+const bridgeNameOption = "com.docker.network.bridge.name"
+
+// Docker 27 refuses the isolated gateway: its check network, and then its builds, go under the wildcard.
+func TestDocker27sCheckNetworkIsNamedUnderTheWildcard(t *testing.T) {
+	engine := newFakeEngine()
+	engine.refusesGatewayMode = true
+	runner, _ := newTestRunner(t, engine, "runsc")
+	if err := runner.Verify(context.Background()); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if len(engine.networkOptionsSeen) == 0 || !strings.HasPrefix(engine.networkOptionsSeen[0][bridgeNameOption], engineproxy.ProjectBridgePrefix) {
+		t.Fatalf("check network options %v, want a name a fencing proxy admits", engine.networkOptionsSeen)
+	}
+}
+
+// Docker 26 ignores the option and gives the bridge an address anyway: builds are named, not sent it again.
+func TestAnEngineThatIgnoresTheIsolatedGatewayGetsNamedBuildBridges(t *testing.T) {
+	engine := newFakeEngine()
+	engine.ignoresGatewayMode = true
+	runner, _ := newTestRunner(t, engine, "runsc")
+	if err := runner.Verify(context.Background()); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	options := runner.buildNetworkOptions(buildNetwork, nil)
+	if got, want := options.Options[bridgeNameOption], engineproxy.ProjectBridgeName(buildNetwork); got != want {
+		t.Fatalf("bridge %q, want %q in %+v", got, want, options)
+	}
+}
+
+func TestABuildBridgeWithAHostAddressIsNamedUnderTheFirewallsWildcard(t *testing.T) {
+	options := (&Runner{opts: Options{}}).buildNetworkOptions(buildNetwork, nil)
+	if got, want := options.Options[bridgeNameOption], engineproxy.ProjectBridgeName(buildNetwork); got != want {
+		t.Fatalf("bridge %q, want %q", got, want)
+	}
+	isolated := (&Runner{gateway: true}).buildNetworkOptions(buildNetwork, nil)
+	if _, set := isolated.Options[bridgeNameOption]; set {
+		t.Fatalf("an isolated build network was named: %+v", isolated)
+	}
+	podman := (&Runner{opts: Options{Isolate: true}}).buildNetworkOptions(buildNetwork, nil)
+	if _, set := podman.Options[bridgeNameOption]; set {
+		t.Fatalf("Podman was sent a bridge name: %+v", podman)
+	}
+}
+
 func TestAnEngineThatRefusesTheIsolatedGatewayStillBuilds(t *testing.T) {
 	engine := newFakeEngine()
 	engine.refusesGatewayMode = true
@@ -738,7 +804,7 @@ func TestAnEngineThatRefusesTheIsolatedGatewayStillBuilds(t *testing.T) {
 	}
 	startBuild(t, runner)
 	options := engine.networks[buildNetwork]
-	if !options.Internal || len(options.Options) != 0 {
+	if _, refused := options.Options["com.docker.network.bridge.gateway_mode_ipv4"]; !options.Internal || refused {
 		t.Fatalf("build network %+v: internal, without the refused option", options)
 	}
 }

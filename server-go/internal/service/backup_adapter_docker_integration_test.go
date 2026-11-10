@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"os/exec"
 	"strings"
@@ -39,6 +40,9 @@ func TestDockerBackupAdapter_IntegrationE2E(t *testing.T) {
 
 	// --- Postgres container -------------------------------------------------
 	pgPwd := testutil.FixturePassword("pg-bk-int")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("app"),
 		tcpg.WithUsername("postgres"),
@@ -62,6 +66,9 @@ func TestDockerBackupAdapter_IntegrationE2E(t *testing.T) {
 	}
 
 	// --- LocalStack S3 ------------------------------------------------------
+	if err := imagepull.EnsureLocal(ctx, "localstack/localstack:3.7"); err != nil {
+		t.Fatal(err)
+	}
 	lsC, err := tclocalstack.Run(ctx, "localstack/localstack:3.7",
 		testcontainers.WithEnv(map[string]string{"SERVICES": "s3"}),
 	)

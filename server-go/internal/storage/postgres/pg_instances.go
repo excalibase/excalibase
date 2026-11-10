@@ -104,6 +104,29 @@ func (s *Store) UpdateIfStatus(inst *domain.DatabaseInstance, expected string) e
 	return s.update(inst, expected)
 }
 
+// RecordRollbackRetry writes what a rollback retry found. See
+// storage.InstanceStore.
+func (s *Store) RecordRollbackRetry(projectID, rollbackLog, failureReason, expected string) error {
+	if expected == "" {
+		return fmt.Errorf("%w: no expected status given for %s", storage.ErrProjectStatusChanged, projectID)
+	}
+	res, err := s.db.Exec(`
+		UPDATE database_instances SET rollback_log = $2, failure_reason = $3, updated_at = now()
+		WHERE project_id = $1 AND status = $4 AND status <> ALL($5)`,
+		projectID, rollbackLog, failureReason, expected, pq.Array(deletionStatuses))
+	if err != nil {
+		return fmt.Errorf("record rollback retry: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return s.explainRefusedUpdate(projectID, expected)
+	}
+	return nil
+}
+
 // UpdateParametersIfStatus rewrites the recorded tenant parameters. See
 // storage.ProjectParametersStore.
 func (s *Store) UpdateParametersIfStatus(projectID string, parameters map[string]string, expected string) error {

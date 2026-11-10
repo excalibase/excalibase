@@ -33,6 +33,10 @@ func (p *pausingStub) Pause(_ context.Context, projectID, _ string) error {
 	return p.store.Update(inst)
 }
 
+func (p *pausingStub) StopOpenUpgrade(context.Context, *domain.DatabaseInstance) error {
+	return p.err
+}
+
 func graceRouter(t *testing.T, pauser service.DeletionPauser) (chi.Router, *storage.FileSystemStore) {
 	t.Helper()
 	store, _ := storage.NewFileSystemStore(t.TempDir())

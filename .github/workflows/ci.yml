@@ -13,7 +13,7 @@ permissions:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
@@ -21,8 +21,10 @@ jobs:
       ci: ${{ steps.filter.outputs.ci }}
       hosting: ${{ steps.filter.outputs.hosting }}
       mysqlbackup: ${{ steps.filter.outputs.mysqlbackup }}
+      failedprovisioning: ${{ steps.filter.outputs.failedprovisioning }}
       singlehost: ${{ steps.filter.outputs.singlehost }}
       singlehostboot: ${{ steps.filter.outputs.singlehostboot }}
+      gatewayguard: ${{ steps.filter.outputs.gatewayguard }}
       sitesrouter: ${{ steps.filter.outputs.sitesrouter }}
       sitesoutbound: ${{ steps.filter.outputs.sitesoutbound }}
       sitebuilds: ${{ steps.filter.outputs.sitebuilds }}
@@ -46,6 +48,9 @@ jobs:
               - '.github/workflows/**'
             singlehost:
               - 'deploy/single-host/**'
+            gatewayguard:
+              - 'charts/documentdb-gateway/**'
+              - 'server-go/internal/config/postgres_catalog.yaml'
             singlehostboot:
               - 'deploy/single-host/**'
               - 'server-go/Dockerfile'
@@ -56,6 +61,7 @@ jobs:
               - 'server-go/internal/hostlogs/**'
               - 'server-go/internal/enginestats/**'
               - 'server-go/internal/dockerbuilds/**'
+              - 'server-go/internal/imagepull/**'
               - 'server-go/internal/buildegress/**'
               - 'server-go/cmd/build-egress/**'
               - 'server-go/cmd/server/site_builds.go'
@@ -100,12 +106,24 @@ jobs:
               - 'server-go/internal/service/app_deploy*'
             mysqlbackup:
               - 'server-go/internal/k8s/moco_*'
+              - 'server-go/internal/k8s/mysql_tls*'
+              - 'server-go/internal/k8s/client.go'
+              - 'server-go/internal/k8s/app_egress_k3s_test.go'
+            failedprovisioning:
+              - 'server-go/internal/service/provisioning_rollback_retry.go'
+              - 'server-go/internal/service/provisioning_database.go'
+              - 'server-go/internal/service/restore_completion.go'
+              - 'server-go/internal/service/deletion_grace.go'
+              - 'server-go/internal/service/project_registration.go'
+              - 'server-go/internal/service/provisioning_failure_live_test.go'
+              - 'server-go/internal/provisioner/context.go'
+              - 'server-go/internal/k8s/exec_transport.go'
 
   single-host:
     name: Single-host bundle
     needs: changes
     if: needs.changes.outputs.singlehost == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Hardening, init, preflight and bootstrap
@@ -120,11 +138,29 @@ jobs:
       - name: API upload size on the edge (real Caddy and Studio nginx)
         run: sh deploy/single-host/tests/api-upload-edge.sh docker
 
+  gateway-guard:
+    name: DocumentDB gateway guard
+    needs: changes
+    if: needs.changes.outputs.gatewayguard == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard logic
+        run: bash charts/documentdb-gateway/tests/gateway_guard_test.sh
+      - name: Build the image
+        run: docker build -q -t documentdb-gateway-guard charts/documentdb-gateway
+      - name: Guard in the image, with real Postgres
+        run: bash charts/documentdb-gateway/tests/gateway_guard_demotion_test.sh documentdb-gateway-guard
+      - name: Trivy (image)
+        uses: ./.github/actions/trivy
+        with:
+          image: documentdb-gateway-guard
+
   sites-router:
     name: Sites router Worker
     needs: changes
     if: needs.changes.outputs.sitesrouter == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: edge/sites-router
@@ -144,7 +180,7 @@ jobs:
     name: Sites outbound Worker
     needs: changes
     if: needs.changes.outputs.sitesoutbound == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: edge/sites-outbound
@@ -164,7 +200,7 @@ jobs:
     name: Single-host boot (Docker)
     needs: changes
     if: needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Four fresh installs, each walking realtime too (EXC-612).
     timeout-minutes: 145
     steps:
@@ -173,10 +209,18 @@ jobs:
         run: |
           docker build -q -t docker.io/excalibase/provisioning:ci server-go
           docker build -q -t docker.io/excalibase/studio:ci frontend
+      - name: Tenants wait for the host firewall across real reboots (Docker in Docker)
+        run: sh deploy/single-host/tests/reboot-order.sh
+      - name: Project bridges are fenced from an app's first instruction (Docker in Docker)
+        run: |
+          for version in 27 28 29; do
+            DIND_IMAGE=docker.io/library/docker:$version-dind sh deploy/single-host/tests/project-bridge-fence.sh
+          done
       - name: Fresh install, project, GraphQL/REST, backups by default (WAL archive, point-in-time and in-place restore, purge), files
         env:
           PLATFORM_TAG: ci
           PG_BACKUPS: "1"
+          MAJOR_UPGRADE: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
       - name: Fresh install with manual vault unseal (init, restart, CLI unseal), host monitoring, stored log search, log drains, request charts and slow queries
         env:
@@ -214,7 +258,7 @@ jobs:
 
   go-lint:
     name: Go Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
@@ -243,7 +287,7 @@ jobs:
 
   go-test:
     name: Go Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
@@ -264,7 +308,7 @@ jobs:
 
   frontend-lint:
     name: Frontend Type Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
@@ -278,11 +322,11 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npx tsc --noEmit
+      - run: npx tsc -b --noEmit
 
   frontend-test:
     name: Frontend Unit (vitest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, frontend-lint]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
@@ -311,7 +355,7 @@ jobs:
 
   frontend-e2e:
     name: Studio E2E (Playwright)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, frontend-lint]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
@@ -340,7 +384,7 @@ jobs:
 
   deno-test:
     name: Deno Unit (deno-server + vendored lib)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true'
     steps:
@@ -402,7 +446,7 @@ jobs:
 
   defend:
     name: Defend (secrets + vulns + audit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     steps:
@@ -448,11 +492,11 @@ jobs:
 
   go-integration-shard:
     name: Go Integration shard ${{ matrix.shard }}/4
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # Integration tests need a Docker daemon (testcontainers spins up
     # Postgres, NATS, LocalStack, and one-off postgres containers for
-    # restore E2Es). ubuntu-latest has Docker available out of the box.
+    # restore E2Es). ubuntu-24.04 has Docker available out of the box.
     # Gated on backend changes — skipped on frontend-only PRs to keep
     # CI cost down.
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
@@ -489,7 +533,7 @@ jobs:
     # The required check: passes only when every shard passed, and gates the
     # coverage of the shards together.
     name: Go Integration (testcontainers)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-integration-shard]
     # !cancelled(): a failed shard must fail this check, not skip it.
     if: ${{ !cancelled() && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true') }}
@@ -528,7 +572,7 @@ jobs:
 
   live-cluster:
     name: Live cluster tests (hosting)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # Real k3s clusters (gVisor, deploy rollouts, Cilium egress); only when hosting code changes.
     if: needs.changes.outputs.hosting == 'true'
@@ -546,7 +590,7 @@ jobs:
 
   live-start-fence:
     name: Live cluster tests (start fence)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # EXC-622: workloads start the real way with a probe at t=0; nothing fenced may answer.
     if: needs.changes.outputs.hosting == 'true'
@@ -564,7 +608,7 @@ jobs:
 
   live-mysql-backup:
     name: Live cluster tests (MySQL backup)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # EXC-586: MOCO's real backup Job under the project policies, on kube-router and on production Cilium.
     if: needs.changes.outputs.mysqlbackup == 'true'
@@ -580,9 +624,27 @@ jobs:
       - name: Run MySQL backup egress probes
         run: go test -tags=live ./internal/k8s/ -run 'TestK3s.*MySQLBackup' -v -timeout 40m
 
+  live-failed-provisioning:
+    name: Live failed provisioning
+    runs-on: ubuntu-24.04
+    needs: [changes, go-lint]
+    # EXC-534: seals, dropped requests and failed rollbacks on real k3s, CloudNativePG and vault; about 15 minutes.
+    if: needs.changes.outputs.failedprovisioning == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: server-go/go.sum
+      - name: Run failed provisioning scenarios
+        run: go test -tags=live ./internal/service/ -run 'TestLiveFailedProvisioning' -v -count=1 -timeout 45m
+
   live-site-builds:
     name: Live site builds (gVisor)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # A real Vite build through the site build Job under gVisor (EXC-354); its own job so the hosting suite keeps its time.
     if: needs.changes.outputs.sitebuilds == 'true'
@@ -600,7 +662,7 @@ jobs:
 
   live-app-builds:
     name: Live app builds (gVisor)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # Dockerfile (rootless BuildKit) and Buildpacks image builds through the app build Job under gVisor (EXC-547).
     if: needs.changes.outputs.appbuilds == 'true'
@@ -617,7 +679,7 @@ jobs:
 
   sonarcloud:
     name: SonarCloud Scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # frontend-test produces the TypeScript lcov, so the scan has to wait for
     # it too; !cancelled() below still lets the scan run when it is skipped.
     needs: [changes, go-integration, deno-test, frontend-test]

@@ -148,6 +148,29 @@ describe('MajorUpgradeCard', () => {
     expect(screen.getByTestId('major-upgrade-btn')).toBeDisabled();
   });
 
+
+  test('a run left open says why, with no spinner, and names the backup and the way out', async () => {
+    const error =
+      'the upgraded database has not started serving yet; the old one is kept and the upgrade is checked again every few minutes';
+    renderCard({ responses: [info({ latest: run({ step: 'UPGRADE_WAITING', converted: true, error }) })] });
+
+    const waiting = await screen.findByTestId('major-upgrade-waiting');
+    expect(waiting).toHaveTextContent(error);
+    expect(waiting).toHaveTextContent('backup-42');
+    expect(waiting).toHaveTextContent('new project');
+    expect(waiting).not.toHaveTextContent('Still converting');
+    expect(waiting.querySelector('.animate-spin')).toBeNull();
+    expect(screen.queryByTestId('major-upgrade-running')).toBeNull();
+  });
+
+  test('a run left open from before the error was kept still says it is waiting', async () => {
+    renderCard({ responses: [info({ latest: run({ step: 'UPGRADE_WAITING', safetyBackupId: undefined }) })] });
+
+    const waiting = await screen.findByTestId('major-upgrade-waiting');
+    expect(waiting).toHaveTextContent('checked again every few minutes');
+    expect(waiting).not.toHaveTextContent('new project');
+  });
+
   test('starts only after the project name is typed exactly, and sends confirm', async () => {
     const user = userEvent.setup();
     vi.mocked(api.post).mockResolvedValue({ data: { upgrade: run({ step: 'UPGRADE_CHECKING' }) } } as never);

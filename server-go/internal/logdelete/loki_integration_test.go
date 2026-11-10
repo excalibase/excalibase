@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -31,6 +32,9 @@ func startLoki(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
 	_, here, _, _ := runtime.Caller(0)
+	if err := imagepull.EnsureLocal(ctx, lokiImage); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        lokiImage,

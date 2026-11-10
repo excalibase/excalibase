@@ -39,3 +39,16 @@ func ApplyDatabaseAdded(stored *domain.DatabaseInstance) (*domain.DatabaseInstan
 	updated.NoDatabase = false
 	return updated, nil
 }
+
+// ApplyRollbackRetry is the in-memory stores' RecordRollbackRetry.
+func ApplyRollbackRetry(stored *domain.DatabaseInstance, rollbackLog, failureReason, expected string) (*domain.DatabaseInstance, error) {
+	if err := CheckUpdatable(stored); err != nil {
+		return nil, err
+	}
+	if stored.Status != expected {
+		return nil, fmt.Errorf("%w: %s is %s, expected %s", ErrProjectStatusChanged, stored.ProjectID, stored.Status, expected)
+	}
+	updated := stored.Clone()
+	updated.RollbackLog, updated.FailureReason = rollbackLog, failureReason
+	return updated, nil
+}

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,6 +43,9 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 	ctx := context.Background()
 
 	// 1. Start postgres container
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgContainer, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("superuser"),

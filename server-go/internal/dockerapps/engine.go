@@ -37,6 +37,7 @@ type Engine interface {
 	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
 
 	NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
+	NetworkList(ctx context.Context, options network.ListOptions) ([]network.Summary, error)
 	NetworkInspect(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error)
 	NetworkRemove(ctx context.Context, networkID string) error
 	NetworkConnect(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error

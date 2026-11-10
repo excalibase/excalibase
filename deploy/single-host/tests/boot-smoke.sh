@@ -37,6 +37,8 @@
 # drain routes answer 404.
 # PLATFORM_TAG names locally built provisioning/studio images (default: TAG);
 # GRAPHQL_IMAGE and AUTH_IMAGE locally built engine images.
+# MAJOR_UPGRADE=1 walks a major upgrade left open by a firewall outage (EXC-683, major-upgrade-journey.sh):
+# what it says, its delete, its cancel, the way out it names, and a teardown that takes the old database.
 # Every run checks the read address (EXC-666, read-address-journey.sh): one copy, none.
 # Every run walks realtime (EXC-612, realtime-journey.sh): a subscriber receives
 # a table's changes across a NATS restart, a pause and a resume.
@@ -106,6 +108,7 @@ echo "== install"
 sed -i '/^EDGE_HTTP_PORT=\|^EDGE_HTTPS_PORT=/d; s|^FILES_PUBLIC_URL=.*|FILES_PUBLIC_URL=https://files.localhost:'"$PORT"'|' "$W/.env"
 [ -n "${APPS:-}" ] && echo "APP_DOMAIN_RESOLVER=$SMOKE_DNS:53" >> "$W/.env"
 [ -n "${MYSQL:-}" ] && echo "FEATURE_MYSQL=true" >> "$W/.env"
+[ -n "${MAJOR_UPGRADE:-}" ] && echo "FEATURE_MAJORUPGRADE=true" >> "$W/.env"
 echo "FEATURE_DBREADADDRESS=true" >> "$W/.env"
 # The read-only login and rotation ending old sessions (EXC-675, rotation-journey.sh).
 echo "FEATURE_DBREADROLE=true" >> "$W/.env"
@@ -133,6 +136,7 @@ SITES_HOSTS_KV_NAMESPACE_ID=smoke-kv
 SITES_BASE_DOMAIN=sites.test
 SITES_CLOUDFLARE_API_URL=http://$SITE_FAKES:8080/cf
 SITES_GIT_BUILDS_ENABLED=true
+BUILD_EGRESS_EXTRA_DENY_CIDRS=192.0.2.0/24
 FEATURE_SINGLEHOSTBUILDS=true
 SITES_GITHUB_APP_ID=4242
 SITES_GITHUB_APP_SLUG=smoke-app
@@ -143,6 +147,7 @@ SITES_GITHUB_API_URL=http://$SITE_FAKES:8080/gh
 SITES_GITHUB_WEB_URL=http://$SITE_FAKES:8080/gh
 SITES_GITHUB_APP_PRIVATE_KEY_FILE=/run/excalibase-github/app.pem
 SITES_BUILD_EGRESS_ALLOW=$SITE_FAKES:8080
+FEATURE_SITEPREVIEWS=true
 EOF
   printf 'services:\n  provisioning:\n    volumes:\n      - %s:/run/excalibase-github/app.pem:ro\n' "$W/github-app.pem" > "$W/sitebuilds.yml"
   P="$P -f $W/sitebuilds.yml"
@@ -281,6 +286,7 @@ fi
 [ -n "${DOCUMENTDB:-}" ] && . "$TESTS/documentdb-journey.sh"
 [ -n "${MYSQL:-}" ] && . "$TESTS/mysql-journey.sh"
 [ -n "${PG_BACKUPS:-}" ] && . "$TESTS/postgres-backup-journey.sh"
+[ -n "${MAJOR_UPGRADE:-}" ] && . "$TESTS/major-upgrade-journey.sh"
 if [ -n "${REQUEST_METRICS:-}" ]; then
   . "$TESTS/request-charts-journey.sh"
 else

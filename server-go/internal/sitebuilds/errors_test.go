@@ -2,6 +2,7 @@ package sitebuilds
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -22,5 +23,15 @@ func TestStartFailure_NamesAnImageThatDidNotPull(t *testing.T) {
 	}
 	if other := startFailure(fmt.Errorf("create network: boom")); other.kind != FailPlatform {
 		t.Fatalf("%+v", other)
+	}
+}
+
+// These refusals reach an app's page too, so none of them may talk about a site.
+func TestSharedRefusals_DoNotCallTheTargetASite(t *testing.T) {
+	site := regexp.MustCompile(`(?i)\bsites?\b`)
+	for _, err := range []error{ErrNotConnected, ErrNotAuthorized, ErrStateInvalid, ErrSingleHost} {
+		if site.MatchString(err.Error()) {
+			t.Errorf("%q names a site", err)
+		}
 	}
 }

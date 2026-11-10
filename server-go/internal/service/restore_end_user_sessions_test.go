@@ -26,7 +26,7 @@ func TestProjectRoleSQL_EndsTheSourcesSessionsOnlyForARestoredCopy(t *testing.T)
 		"reconcile of copy": {reconcileSpec(restored), false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			sql := projectRoleSQL(tc.spec, creds, "pub")
+			sql := mustProjectRoleSQL(t, tc.spec, creds, "pub")
 			if got := strings.Contains(sql, endUserSessionsRevokeSQL); got != tc.ends {
 				t.Fatalf("ends sessions = %v, want %v", got, tc.ends)
 			}

@@ -27,6 +27,8 @@ import { useCustomDomainsEnabled, useFeatureEnabled } from '../hooks/useDeployme
 import { LifecycleActions } from '../components/containers/LifecycleActions';
 import { AppLogs } from '../components/containers/AppLogs';
 import { AppDiskCard } from '../components/containers/AppDiskCard';
+import { AppGitBuilds } from '../components/containers/AppGitBuilds';
+import { useProjectRole } from '../hooks/useProjectRole';
 import {
   ContainersHeader,
   HostingGate,
@@ -161,6 +163,7 @@ function Detail({
   const [lifecycleError, setLifecycleError] = useState<unknown>(null);
   const customDomains = useCustomDomainsEnabled();
   const { enabled: pipeline } = useFeatureEnabled('pipeline');
+  const { canDevelop } = useProjectRole(projectId);
 
   if (isLoading) return <Spinner />;
   if (error || !app) {
@@ -270,6 +273,7 @@ function Detail({
           <AppDomains projectId={projectId} appId={appId} />
         </div>
       )}
+      <AppGitBuilds projectId={projectId} appId={appId} canDevelop={canDevelop} />
       <section className="space-y-2">
         <h4 className="text-sm font-semibold text-text-primary">Deployments</h4>
         <div className="bg-surface-card border border-border-primary rounded-lg">

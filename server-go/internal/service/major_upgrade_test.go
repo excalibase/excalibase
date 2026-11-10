@@ -18,6 +18,7 @@ import (
 type upgradeWorld struct {
 	mu    sync.Mutex
 	calls []string
+	holds int
 
 	instances storage.InstanceStore
 	runs      *memMajorUpgrades
@@ -83,6 +84,7 @@ func (w *upgradeWorld) hold(projectID string, admit func(string) error) (*domain
 }
 
 func (w *upgradeWorld) HoldForMajorUpgrade(_ context.Context, projectID string, admit func(status string) error) (*domain.DatabaseInstance, func(), error) {
+	w.holds++
 	return w.hold(projectID, admit)
 }
 
