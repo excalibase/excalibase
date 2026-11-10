@@ -16,7 +16,7 @@ import (
 const (
 	// buildVarPrefix carries a build-visible variable into the step that writes it to a file and forgets the variable.
 	buildVarPrefix = "EXC_BUILDVAR_"
-	secretsTmpfs   = "rw,noexec,nosuid,nodev,size=8m,mode=1777"
+	credFilesTmpfs = "rw,noexec,nosuid,nodev,size=8m,mode=1777"
 	appPlatformEnv = k8s.AppBuildPlatformDir + "/env"
 )
 
@@ -105,7 +105,7 @@ func (a *AppRunner) buildKitStep(sandbox box, spec appbuilds.RunSpec, proxy stri
 	planned.config.Env = slices.Concat(pairEnv(k8s.AppBuildKitEnv()), proxyEnv(proxy), secretEnv(spec.Secrets))
 	planned.host.SecurityOpt = nil
 	planned.host.CapAdd = []string{"SETUID", "SETGID"}
-	planned.host.Tmpfs[secrets] = secretsTmpfs
+	planned.host.Tmpfs[secrets] = credFilesTmpfs
 }
 
 // lifecycleStep runs one CNB lifecycle phase as the CNB user. Only the phase that runs the app's code
@@ -121,7 +121,7 @@ func (a *AppRunner) lifecycleStep(sandbox box, spec appbuilds.RunSpec, name, pro
 	if name == stepPacks {
 		script = secretFiles(appPlatformEnv, spec.Secrets) + script
 		env = slices.Concat(env, proxyEnv(proxy), secretEnv(spec.Secrets))
-		planned.host.Tmpfs[appPlatformEnv] = secretsTmpfs
+		planned.host.Tmpfs[appPlatformEnv] = credFilesTmpfs
 	}
 	planned.config.User = cnbUser
 	planned.config.Entrypoint = sandbox.deadlined("bash", "-c", "set -e; "+script)
