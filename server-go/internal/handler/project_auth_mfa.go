@@ -199,16 +199,22 @@ func (h *ProvisioningHandler) mfaView(ctx context.Context, projectID string) (*b
 	return &signIn.MFAEnabled, nil
 }
 
-// mfaForInfo is /info's mfaEnabled: true only while authmfa is on and the
-// project switched MFA on; otherwise the key stays off the wire.
-func (h *ProvisioningHandler) mfaForInfo(ctx context.Context, projectID string) (*bool, error) {
-	if !h.authMFAOn(ctx) || h.authOAuth.SignIn == nil {
-		return nil, nil
+// mfaForInfo is /info's mfaEnabled and mfaKeyFingerprint: set only while
+// authmfa is on and the project switched MFA on; otherwise the key stays off
+// the wire. The fingerprint names the key the factors were sealed with, so
+// the auth service can refuse any other key the vault answers.
+func (h *ProvisioningHandler) mfaForInfo(ctx context.Context, projectID string) (*bool, string, error) {
+	if !h.authMFAOn(ctx) || h.authOAuth.SignIn == nil || h.authOAuth.MFA == nil {
+		return nil, "", nil
 	}
 	signIn, err := h.authOAuth.SignIn.GetAuthSignIn(ctx, projectID)
 	if err != nil || !signIn.MFAEnabled {
-		return nil, err
+		return nil, "", err
+	}
+	fingerprint, err := h.authOAuth.MFA.MFAKeyFingerprint(ctx, projectID)
+	if err != nil {
+		return nil, "", err
 	}
 	on := true
-	return &on, nil
+	return &on, fingerprint, nil
 }
