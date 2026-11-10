@@ -15,7 +15,7 @@
 #   - AIO deployed in excalibase-platform ns (provisioning, auth, graphql,
 #     watcher, floci, NATS, platform-db)
 #   - port-forwards open: 24005 (provisioning), 24000 (auth), 10000 (graphql),
-#     4566 (floci/S3)
+#     8081 (graphql management: health and metrics), 4566 (floci/S3)
 #   - aws CLI on PATH for floci bucket ops
 #   - jq, curl
 
@@ -24,6 +24,7 @@ set -uo pipefail
 API_PROV="${API_PROV:-http://localhost:24005}"
 API_AUTH="${API_AUTH:-http://localhost:24000}"
 API_GQL="${API_GQL:-http://localhost:10000}"
+API_GQL_MGMT="${API_GQL_MGMT:-http://localhost:8081}"
 API_S3="${API_S3:-http://localhost:4566}"
 
 PASS=0
@@ -57,9 +58,9 @@ for s in "$API_PROV/healthz:provisioning" "$API_AUTH/.well-known/jwks.json:auth"
   url="${s%:*}"; name="${s##*:}"
   curl -sf "$url" > /dev/null 2>&1 && pass "$name reachable" || fail "$name" "unreachable"
 done
-# Unauthenticated reachability uses the exempted health endpoint — introspection
+# Unauthenticated reachability uses the health endpoint on the management port — introspection
 # now requires a JWT (fail-closed auth); F16 covers authenticated introspection.
-curl -sf "$API_GQL/actuator/health" | grep -q '"status":"UP"' \
+curl -sf "$API_GQL_MGMT/actuator/health" | grep -q '"status":"UP"' \
    && pass "graphql reachable" || fail "graphql" "health not UP"
 
 ###############################################################################
