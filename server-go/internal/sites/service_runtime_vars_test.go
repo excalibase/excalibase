@@ -69,7 +69,7 @@ func TestARollbackRunsUnderTheVariablesOfTheDeployItRestores(t *testing.T) {
 func TestRuntimeVariableNamesThePlatformOwnsAreRefused(t *testing.T) {
 	h := newServerHarness(t, true)
 	site := h.createServerSite(t, "ssr")
-	for _, name := range []string{"EXCALIBASE_URL", "EXCALIBASE_PROJECT_ID", "EXCALIBASE_DB_URL", "ASSETS", "WORKER_SELF_REFERENCE",
+	for _, name := range []string{"EXCALIBASE_URL", "excalibase_url", "Excalibase_Project_Id", "EXCALIBASE_PROJECT_ID", "EXCALIBASE_DB_URL", "ASSETS", "WORKER_SELF_REFERENCE",
 		"NEXT_INC_CACHE_R2_BUCKET", "NEXT_TAG_CACHE_D1", "bad name", "1ABC", ""} {
 		err := h.service.SetRuntimeVars(context.Background(), testProject, site.ID, map[string]string{name: "x"})
 		var input *sites.InputError
