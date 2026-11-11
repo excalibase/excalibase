@@ -213,3 +213,74 @@ func TestWorkerPresets_TheRepositorysAssetsignoreKeepsItsFilesOutOfThePublicAsse
 		t.Errorf("a file nobody ignored was dropped: %v", got)
 	}
 }
+
+const yarnEnvRecorder = "#!/bin/bash\necho \"scripts=${YARN_ENABLE_SCRIPTS:-} ignore=${YARN_IGNORE_SCRIPTS:-}\" >> \"$WORK_DIR/yarn-env\"\n"
+
+func assertYarnScriptsOff(t *testing.T, work string) {
+	t.Helper()
+	got, err := os.ReadFile(filepath.Join(work, "yarn-env"))
+	if err != nil {
+		t.Fatalf("yarn was never asked to install the tools: %v", err)
+	}
+	// Yarn 2+ reads YARN_ENABLE_SCRIPTS, Yarn 1 (what corepack gives a repository without packageManager) only YARN_IGNORE_SCRIPTS.
+	if !strings.Contains(string(got), "scripts=0 ignore=true") {
+		t.Errorf("install scripts may run: %q", got)
+	}
+}
+
+func TestWorkerPresets_ToolInstallWithYarnRunsNoInstallScripts(t *testing.T) {
+	p := presets["astro"]
+	work, scripts := t.TempDir(), scriptDir(t)
+	project := presetProject(t, work, p, true, false)
+	write(t, filepath.Join(project, "yarn.lock"), "")
+	wrangler, _ := os.ReadFile(filepath.Join(project, "node_modules/.bin/wrangler"))
+	write(t, filepath.Join(work, "tool-wrangler"), string(wrangler))
+	if err := os.Remove(filepath.Join(project, "node_modules/.bin/wrangler")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(work, "bin", "corepack"), yarnEnvRecorder+"mkdir -p node_modules/.bin\ncp \"$WORK_DIR/tool-wrangler\" node_modules/.bin/wrangler\n")
+	if code, out := presetBuild(t, work, scripts, p.framework); code != 0 {
+		t.Fatalf("build exit %d:\n%s", code, out)
+	}
+	assertYarnScriptsOff(t, work)
+}
+
+func TestNextjsPreset_ToolInstallWithYarnRunsNoInstallScripts(t *testing.T) {
+	work, scripts := t.TempDir(), scriptDir(t)
+	tooless(t, work, "16.4.1", "yarn.lock")
+	stub, _ := os.ReadFile(filepath.Join(work, "bin", "corepack"))
+	write(t, filepath.Join(work, "bin", "corepack"), yarnEnvRecorder+strings.TrimPrefix(string(stub), "#!/bin/bash\n"))
+	build(t, work, scripts, "")
+	assertYarnScriptsOff(t, work)
+}
+
+func TestWorkerPresets_AnAssetsignorePatternIsKeptOrSkippedByItsLeadingParentOnly(t *testing.T) {
+	p := presets["sveltekit"]
+	built := map[string]string{}
+	for path, body := range p.built {
+		built[path] = body
+	}
+	built[".svelte-kit/cloudflare/notes..bak"] = "no"
+	built[".svelte-kit/cloudflare/keep.txt"] = "kept"
+	p.built = built
+	work, scripts := t.TempDir(), scriptDir(t)
+	presetProject(t, work, p, true, false)
+	command, _ := os.ReadFile(filepath.Join(work, "build-command.sh"))
+	write(t, filepath.Join(work, "build-command.sh"), string(command)+"printf 'notes..bak\\n../keep.txt\\n' > .svelte-kit/cloudflare/.assetsignore\n")
+	if code, out := presetBuild(t, work, scripts, p.framework); code != 0 {
+		t.Fatalf("build exit %d:\n%s", code, out)
+	}
+	bundle := packPreset(t, work, scripts, p.framework)
+	var got []string
+	for _, file := range bundle.Files {
+		got = append(got, file.Path)
+	}
+	for _, public := range got {
+		if strings.Contains(public, "notes..bak") {
+			t.Errorf("notes..bak is public although .assetsignore names it: %v", got)
+		}
+	}
+	if !slices.Contains(got, "/keep.txt") && !slices.Contains(got, "keep.txt") {
+		t.Errorf("a pattern that leaves the folder must be skipped, not applied: %v", got)
+	}
+}

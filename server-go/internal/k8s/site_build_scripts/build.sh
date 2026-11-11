@@ -48,7 +48,7 @@ ensure_tools() {
   echo "\$ add ${packages[*]} (the repository does not declare them)"
   case "$(package_manager)" in
     pnpm) corepack pnpm add -D --ignore-scripts "${packages[@]}" ;;
-    yarn) YARN_ENABLE_SCRIPTS=0 corepack yarn add -D "${packages[@]}" ;;
+    yarn) YARN_ENABLE_SCRIPTS=0 YARN_IGNORE_SCRIPTS=true corepack yarn add -D "${packages[@]}" ;;
     *) npm install -D --no-audit --no-fund --ignore-scripts "${packages[@]}" ;;
   esac
 }
@@ -212,7 +212,7 @@ worker_preset() {
     echo "\$ add wrangler@$WRANGLER_VERSION (the repository does not declare it)"
     case "$(package_manager)" in
       pnpm) corepack pnpm add -D --ignore-scripts "wrangler@$WRANGLER_VERSION" ;;
-      yarn) YARN_ENABLE_SCRIPTS=0 corepack yarn add -D "wrangler@$WRANGLER_VERSION" ;;
+      yarn) YARN_ENABLE_SCRIPTS=0 YARN_IGNORE_SCRIPTS=true corepack yarn add -D "wrangler@$WRANGLER_VERSION" ;;
       *) npm install -D --no-audit --no-fund --ignore-scripts "wrangler@$WRANGLER_VERSION" ;;
     esac || exit 11
   fi

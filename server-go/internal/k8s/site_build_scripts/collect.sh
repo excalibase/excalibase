@@ -27,7 +27,7 @@ if [[ -n "${FRAMEWORK:-}" ]]; then
   if [[ -f "$assets/.assetsignore" ]]; then
     while IFS= read -r pattern || [[ -n "$pattern" ]]; do
       pattern=${pattern%$'\r'}
-      [[ -z "$pattern" || "$pattern" == \#* || "$pattern" == *..* ]] && continue
+      [[ -z "$pattern" || "$pattern" == \#* || "$pattern" == ../* ]] && continue
       anchored=0
       [[ "$pattern" == /* ]] && anchored=1
       pattern=${pattern#/}
