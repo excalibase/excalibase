@@ -3,6 +3,7 @@ package sites
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
@@ -104,7 +105,8 @@ func (s *Service) secretBindings(ctx context.Context, projectID string) ([]cfwor
 	for _, name := range marked {
 		// Checked again here: a marking can predate a longer reserved list, and a secret must never displace
 		// a platform binding or make Cloudflare refuse the whole publish with a name it will not take.
-		if !runtimeVarName.MatchString(name) || runtimeVarReserved(name) {
+		if !bindableName(name) {
+			log.Printf("site project %s: marked secret %s is reserved or invalid, not bound", projectID, name)
 			continue
 		}
 		if value, held := values[name]; held {
