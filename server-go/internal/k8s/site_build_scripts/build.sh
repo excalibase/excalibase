@@ -185,10 +185,11 @@ CONFIG
 
 # declares succeeds when the repository's package.json lists the package in dependencies or devDependencies.
 declares() {
+  local package=$1
   node -e '
     const pkg = require("./package.json");
     process.exit({ ...pkg.dependencies, ...pkg.devDependencies }[process.argv[1]] ? 0 : 1);
-  ' "$1" 2>/dev/null
+  ' "$package" 2>/dev/null
 }
 
 # worker_preset builds a Nuxt, SvelteKit or Astro app that already targets Cloudflare Workers (EXC-661, ADR 0045).
@@ -212,7 +213,7 @@ worker_preset() {
     case "$(package_manager)" in
       pnpm) corepack pnpm add -D --ignore-scripts "wrangler@$WRANGLER_VERSION" ;;
       yarn) corepack yarn add -D "wrangler@$WRANGLER_VERSION" ;;
-      *) npm install -D --no-audit --no-fund "wrangler@$WRANGLER_VERSION" ;;
+      *) npm install -D --no-audit --no-fund --ignore-scripts "wrangler@$WRANGLER_VERSION" ;;
     esac || exit 11
   fi
   check_with wrangler || exit $?
@@ -265,6 +266,7 @@ bash -c "$install" || exit 10
 case "${FRAMEWORK:-}" in
   nextjs) nextjs_preset; exit $? ;;
   nuxt|sveltekit|astro) worker_preset "$FRAMEWORK"; exit $? ;;
+  *) ;;
 esac
 build=${BUILD_COMMAND:-npm run build}
 echo "\$ $build"

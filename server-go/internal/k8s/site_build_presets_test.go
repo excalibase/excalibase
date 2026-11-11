@@ -69,38 +69,58 @@ func TestWorkerPresets_BuildBundleAndPackWhatTheDeployPathAccepts(t *testing.T) 
 			if code, out := presetBuild(t, work, scripts, p.framework); code != 0 {
 				t.Fatalf("build exit %d:\n%s", code, out)
 			}
-			used := bundledWith(t, work)
-			if !strings.Contains(used, `"main": "`+p.entry+`"`) || !strings.Contains(used, `"directory": "`+p.assets+`"`) ||
-				!strings.Contains(used, `"binding": "ASSETS"`) || !strings.Contains(used, `"compatibility_date": "2025-09-01"`) {
-				t.Errorf("bundled with the wrong config:\n%s", used)
-			}
-			if code, out := runScript(t, work, scripts, "collect.sh", "FRAMEWORK="+p.framework, "ROOT_DIR=", "OUTPUT_DIR="); code != 0 {
-				t.Fatalf("collect exit %d:\n%s", code, out)
-			}
-			archive, err := os.Open(filepath.Join(work, "collect", "site.tar.gz"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer archive.Close()
-			bundle, err := sites.ReadServerArchive(archive, sites.DefaultLimits, t.TempDir())
-			if err != nil {
-				t.Fatalf("the deploy path refused the packed output: %v", err)
-			}
-			defer bundle.Close()
-			if bundle.Server == nil || bundle.Server.Framework != p.framework || bundle.Server.CompatibilityDate != "2025-09-01" {
-				t.Errorf("server config %+v", bundle.Server)
-			}
-			// Server code must never be served as a public file.
-			for _, file := range bundle.Files {
-				if strings.Contains(file.Path, "_worker.js") || strings.HasSuffix(file.Path, "index.mjs") || strings.Contains(file.Path, ".assetsignore") {
-					t.Errorf("the worker is public: %s", file.Path)
-				}
-			}
-			if len(bundle.Modules) != 1 || len(bundle.Files) < 2 {
-				t.Errorf("modules %d, assets %d", len(bundle.Modules), len(bundle.Files))
-			}
+			assertBundledWith(t, work, p)
+			bundle := packPreset(t, work, scripts, p.framework)
+			assertPackedLayout(t, bundle, p)
 		})
 	}
+}
+
+func assertBundledWith(t *testing.T, work string, p preset) {
+	t.Helper()
+	used := bundledWith(t, work)
+	if !strings.Contains(used, `"main": "`+p.entry+`"`) || !strings.Contains(used, `"directory": "`+p.assets+`"`) ||
+		!strings.Contains(used, `"binding": "ASSETS"`) || !strings.Contains(used, `"compatibility_date": "2025-09-01"`) {
+		t.Errorf("bundled with the wrong config:\n%s", used)
+	}
+}
+
+func packPreset(t *testing.T, work, scripts, framework string) *sites.Bundle {
+	t.Helper()
+	if code, out := runScript(t, work, scripts, "collect.sh", "FRAMEWORK="+framework, "ROOT_DIR=", "OUTPUT_DIR="); code != 0 {
+		t.Fatalf("collect exit %d:\n%s", code, out)
+	}
+	archive, err := os.Open(filepath.Join(work, "collect", "site.tar.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+	bundle, err := sites.ReadServerArchive(archive, sites.DefaultLimits, t.TempDir())
+	if err != nil {
+		t.Fatalf("the deploy path refused the packed output: %v", err)
+	}
+	t.Cleanup(func() { _ = bundle.Close() })
+	return bundle
+}
+
+func assertPackedLayout(t *testing.T, bundle *sites.Bundle, p preset) {
+	t.Helper()
+	if bundle.Server == nil || bundle.Server.Framework != p.framework || bundle.Server.CompatibilityDate != "2025-09-01" {
+		t.Errorf("server config %+v", bundle.Server)
+	}
+	// Server code must never be served as a public file.
+	for _, file := range bundle.Files {
+		if workerIsPublic(file.Path) {
+			t.Errorf("the worker is public: %s", file.Path)
+		}
+	}
+	if len(bundle.Modules) != 1 || len(bundle.Files) < 2 {
+		t.Errorf("modules %d, assets %d", len(bundle.Modules), len(bundle.Files))
+	}
+}
+
+func workerIsPublic(path string) bool {
+	return strings.Contains(path, "_worker.js") || strings.HasSuffix(path, "index.mjs") || strings.Contains(path, ".assetsignore")
 }
 
 func TestWorkerPresets_NuxtBuildsForTheCloudflareModulePreset(t *testing.T) {
