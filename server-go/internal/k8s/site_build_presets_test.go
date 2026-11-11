@@ -3,6 +3,7 @@ package k8s
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -168,5 +169,47 @@ func TestWorkerPresets_RepositoryBindingsAreRefusedLikeNextjs(t *testing.T) {
 	code, out := presetBuild(t, work, scripts, "nuxt")
 	if code != exitFramework || !strings.Contains(out, "an R2 bucket") {
 		t.Fatalf("exit %d:\n%s", code, out)
+	}
+}
+
+// wrangler publishes nothing a repository's own .assetsignore names, besides the worker.
+func TestWorkerPresets_TheRepositorysAssetsignoreKeepsItsFilesOutOfThePublicAssets(t *testing.T) {
+	p := presets["sveltekit"]
+	built := map[string]string{}
+	for path, body := range p.built {
+		built[path] = body
+	}
+	built[".svelte-kit/cloudflare/_headers"] = "/*"
+	built[".svelte-kit/cloudflare/_routes.json"] = "{}"
+	built[".svelte-kit/cloudflare/keep/me.txt"] = "kept"
+	built[".svelte-kit/cloudflare/deep/notes.private"] = "no"
+	built[".svelte-kit/cloudflare/private-dir/a.txt"] = "no"
+	p.built = built
+	work, scripts := t.TempDir(), scriptDir(t)
+	project := presetProject(t, work, p, true, false)
+	// No trailing newline, a comment, a blank line, CRLF, a directory, a wildcard and a pattern that tries to leave the folder.
+	write(t, filepath.Join(project, ".svelte-kit/cloudflare/.assetsignore"), "# private\r\n\r\n_headers\r\n/_routes.json\r\n*.private\r\nprivate-dir/\r\n../../../etc/passwd\r\nlast-line-no-newline")
+	// The build command rewrites the assets folder, so the repository's file is laid down by it.
+	command, _ := os.ReadFile(filepath.Join(work, "build-command.sh"))
+	ignore, _ := os.ReadFile(filepath.Join(project, ".svelte-kit/cloudflare/.assetsignore"))
+	_ = os.Remove(filepath.Join(project, ".svelte-kit/cloudflare/.assetsignore"))
+	write(t, filepath.Join(work, "build-command.sh"), string(command)+"printf '%s' '"+strings.ReplaceAll(string(ignore), "'", "")+"' > .svelte-kit/cloudflare/.assetsignore\n")
+	if code, out := presetBuild(t, work, scripts, p.framework); code != 0 {
+		t.Fatalf("build exit %d:\n%s", code, out)
+	}
+	bundle := packPreset(t, work, scripts, p.framework)
+	var got []string
+	for _, file := range bundle.Files {
+		got = append(got, file.Path)
+	}
+	for _, public := range got {
+		for _, hidden := range []string{"_headers", "_routes.json", ".private", "private-dir", "_worker.js", ".assetsignore"} {
+			if strings.Contains(public, hidden) {
+				t.Errorf("%s is public although the repository's .assetsignore names it (%v)", public, got)
+			}
+		}
+	}
+	if !slices.Contains(got, "/keep/me.txt") && !slices.Contains(got, "keep/me.txt") {
+		t.Errorf("a file nobody ignored was dropped: %v", got)
 	}
 }

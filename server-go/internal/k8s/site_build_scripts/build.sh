@@ -48,8 +48,8 @@ ensure_tools() {
   echo "\$ add ${packages[*]} (the repository does not declare them)"
   case "$(package_manager)" in
     pnpm) corepack pnpm add -D --ignore-scripts "${packages[@]}" ;;
-    yarn) corepack yarn add -D "${packages[@]}" ;;
-    *) npm install -D --no-audit --no-fund "${packages[@]}" ;;
+    yarn) YARN_ENABLE_SCRIPTS=0 corepack yarn add -D "${packages[@]}" ;;
+    *) npm install -D --no-audit --no-fund --ignore-scripts "${packages[@]}" ;;
   esac
 }
 
@@ -212,7 +212,7 @@ worker_preset() {
     echo "\$ add wrangler@$WRANGLER_VERSION (the repository does not declare it)"
     case "$(package_manager)" in
       pnpm) corepack pnpm add -D --ignore-scripts "wrangler@$WRANGLER_VERSION" ;;
-      yarn) corepack yarn add -D "wrangler@$WRANGLER_VERSION" ;;
+      yarn) YARN_ENABLE_SCRIPTS=0 corepack yarn add -D "wrangler@$WRANGLER_VERSION" ;;
       *) npm install -D --no-audit --no-fund --ignore-scripts "wrangler@$WRANGLER_VERSION" ;;
     esac || exit 11
   fi
@@ -225,6 +225,7 @@ worker_preset() {
     refuse "the $framework build wrote no worker at $entry (and files at $assets)"
   fi
   # wrangler refuses a worker left inside the assets folder unless it is named here; it is never a public file.
+  [[ -s "$assets/.assetsignore" && -n "$(tail -c1 "$assets/.assetsignore")" ]] && echo >> "$assets/.assetsignore"
   echo _worker.js >> "$assets/.assetsignore"
   local own=wrangler.excalibase.jsonc
   cat > "$own" <<CONFIG

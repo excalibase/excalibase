@@ -21,7 +21,23 @@ if [[ -n "${FRAMEWORK:-}" ]]; then
   mkdir -p "$pack/server" "$work/collect"
   tar -C "$work/bundle" --exclude=README.md --exclude='*.map' -cf - . | tar -C "$pack/server" -xf -
   # Server code is never a public file: a worker kept inside the assets folder stays out of it.
-  tar -C "$assets" --exclude=./_worker.js --exclude=./.assetsignore -cf - . | { mkdir -p "$pack/assets" && tar -C "$pack/assets" -xf -; }
+  # Like wrangler, nothing the repository's own .assetsignore names is published (a pattern without a slash matches at
+  # any depth). A pattern that would leave the folder is ignored.
+  excludes=(--exclude=./_worker.js --exclude=./.assetsignore)
+  if [[ -f "$assets/.assetsignore" ]]; then
+    while IFS= read -r pattern || [[ -n "$pattern" ]]; do
+      pattern=${pattern%$'\r'}
+      [[ -z "$pattern" || "$pattern" == \#* || "$pattern" == *..* ]] && continue
+      anchored=0
+      [[ "$pattern" == /* ]] && anchored=1
+      pattern=${pattern#/}
+      pattern=${pattern%/}
+      [[ -z "$pattern" ]] && continue
+      excludes+=("--exclude=./$pattern")
+      [[ $anchored == 0 && "$pattern" != */* ]] && excludes+=("--exclude=./*/$pattern")
+    done < "$assets/.assetsignore"
+  fi
+  tar -C "$assets" "${excludes[@]}" -cf - . | { mkdir -p "$pack/assets" && tar -C "$pack/assets" -xf -; }
   cp "$work/site.json" "$pack/site.json"
   tar -czf "$work/collect/site.tar.gz" -C "$pack" .
   printf %s "${READY_TOKEN:-}" > "$work/collect/ready"
