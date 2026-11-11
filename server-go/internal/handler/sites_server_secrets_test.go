@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -50,5 +51,43 @@ func TestSites_ServerSecretsAnswerAsUnmountedWhileOff(t *testing.T) {
 	response := h.do(t, http.MethodGet, "/server-secrets", nil)
 	if response.Code != http.StatusNotFound || response.Body.String() != "404 page not found\n" {
 		t.Fatalf("get = %d %q", response.Code, response.Body)
+	}
+}
+
+func newManySecretsHarness(t *testing.T, count int) (*sitesHarness, []string) {
+	t.Helper()
+	store := sitestest.NewMemoryStore()
+	values, names := map[string]string{}, []string{}
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("%s_%03d", strings.Repeat("S", 59), i)
+		values[name] = "v"
+		names = append(names, name)
+	}
+	service, err := sites.NewService(store, sitestest.NewPublisher(), sitestest.NewOrigins(), sites.Options{BaseDomain: "excalibase.app", SpoolDir: t.TempDir(),
+		Flags: features.NewStatic(features.SitesServer), Code: store, OutboundWorker: "excalibase-sites-outbound",
+		Outbound: &sitestest.Outbound{Worker: "excalibase-sites-outbound"}, Secrets: sitestest.NewSecrets(values)})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	return &sitesHarness{router: sitesRouter(NewSiteHandler(service))}, names
+}
+
+// 100 secrets of 64-character names is a list of about 6.7 KB: bigger than the 4 KB a site body may be.
+func TestSites_ServerSecretsListOfAHundredLongNamesIsAccepted(t *testing.T) {
+	h, names := newManySecretsHarness(t, 100)
+	body := `{"serverVisible":["` + strings.Join(names, `","`) + `"]}`
+	if len(body) <= 4*1024 {
+		t.Fatalf("the body is %d bytes, not past the site body cap", len(body))
+	}
+	if put := h.do(t, http.MethodPut, "/server-secrets", []byte(body)); put.Code != http.StatusOK {
+		t.Fatalf("put = %d %.200s", put.Code, put.Body)
+	}
+}
+
+func TestSites_ServerSecretsBodyPastTheCapIs413NotInvalidJSON(t *testing.T) {
+	h, _ := newManySecretsHarness(t, 1)
+	body := `{"serverVisible":["` + strings.Repeat("A", 200*1024) + `"]}`
+	if put := h.do(t, http.MethodPut, "/server-secrets", []byte(body)); put.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("put = %d %.200s, want 413", put.Code, put.Body)
 	}
 }

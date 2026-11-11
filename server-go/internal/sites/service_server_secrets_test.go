@@ -156,3 +156,30 @@ func TestMarkingRefusesUnknownAndReservedSecretsAndWhileOff(t *testing.T) {
 		t.Errorf("flag off: err = %v", err)
 	}
 }
+
+// Marking checks the reserved names, but the list can grow and an old marking can predate it: a publish never binds one.
+func TestAPublishNeverLetsASecretDisplaceAPlatformBinding(t *testing.T) {
+	secrets := sitestest.NewSecrets(map[string]string{"EXCALIBASE_URL": "https://evil.test", "ASSETS": "x", "bad-name": "x", "OK": "fine"})
+	h := newSecretsHarness(t, secrets)
+	ctx := context.Background()
+	// Written straight to the store, as an older release (with a shorter reserved list) would have.
+	if err := h.store.SetServerVisibleSecrets(ctx, testProject, []string{"EXCALIBASE_URL", "ASSETS", "bad-name", "OK"}, testActor); err != nil {
+		t.Fatal(err)
+	}
+	site := h.createServerSite(t, "ssr")
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1")); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	version := h.publisher.Versions[sites.ScriptName(site)]
+	if got, plain := bindingText(version, "EXCALIBASE_URL"); !plain || got != "https://api.example.test" {
+		t.Errorf("EXCALIBASE_URL = %q plain=%v, the platform's value must stand", got, plain)
+	}
+	for _, name := range []string{"EXCALIBASE_URL", "ASSETS", "bad-name"} {
+		if _, ok := secretBinding(version, name); ok {
+			t.Errorf("%s was bound as a secret", name)
+		}
+	}
+	if got, ok := secretBinding(version, "OK"); !ok || got != "fine" {
+		t.Errorf("a harmless marked secret was dropped: %q %v", got, ok)
+	}
+}

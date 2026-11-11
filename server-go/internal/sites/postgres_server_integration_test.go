@@ -290,10 +290,20 @@ func TestPostgresServerVisibleSecretsAreReplacedWhole(t *testing.T) {
 			t.Fatalf("after %v: %v err=%v", names, got, err)
 		}
 	}
+	// Project A is left non-empty, so a write for B that forgot its project filter would change it.
+	if err := store.SetServerVisibleSecrets(ctx, "proj-secrets-a", []string{"KEEP1", "KEEP2"}, "dev"); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.SetServerVisibleSecrets(ctx, "proj-secrets-b", []string{"X"}, "dev"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := store.ServerVisibleSecrets(ctx, "proj-secrets-a"); len(got) != 0 {
-		t.Fatalf("another project's marking leaked: %v", got)
+	if err := store.SetServerVisibleSecrets(ctx, "proj-secrets-b", []string{"Y"}, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.ServerVisibleSecrets(ctx, "proj-secrets-a"); len(got) != 2 || got[0] != "KEEP1" || got[1] != "KEEP2" {
+		t.Fatalf("project A changed when B was written: %v", got)
+	}
+	if got, _ := store.ServerVisibleSecrets(ctx, "proj-secrets-b"); len(got) != 1 || got[0] != "Y" {
+		t.Fatalf("project B = %v", got)
 	}
 }
