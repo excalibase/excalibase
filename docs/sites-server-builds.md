@@ -61,6 +61,17 @@ Worker lets the code reach only its own project's). Nothing else is bound: no
 publishable key yet (keys are shown once, so it will be a site variable the owner
 sets), and never a binding from the repository.
 
+Runtime variables are set per site (`PUT /sites/{id}/env`, Developers) and reach
+the code with the next deploy; each deploy keeps its own copy, so a rollback runs
+under the variables of the deploy it restores. `EXCALIBASE_PUBLISHABLE_KEY` is the
+one `EXCALIBASE_` name a site sets itself.
+
+Project secrets reach server code only when marked server-visible
+(`PUT /sites/server-secrets`, a third marking beside build-visible). They are bound
+as secret text by name, read at every publish, so a rollback uses the secret's
+current value. Mark one only if the repository's code should hold it: it runs in
+that Worker. A secret replaces a plain variable of the same name.
+
 ## What is protection and what is a usability aid
 
 The protection is that **no repository binding is ever sent**: provisioning

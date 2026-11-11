@@ -276,3 +276,34 @@ func TestPostgresRuntimeVariablesAreSnapshottedWithTheDeploy(t *testing.T) {
 		t.Fatalf("variables left after the site: %d err=%v", left, err)
 	}
 }
+
+// Migration 000110: the server-visible list is per project and replaced whole.
+func TestPostgresServerVisibleSecretsAreReplacedWhole(t *testing.T) {
+	store := sites.NewPostgresStore(platformDB(t).DB())
+	ctx := context.Background()
+	for _, names := range [][]string{{"A", "B"}, {"B", "C"}, {}} {
+		if err := store.SetServerVisibleSecrets(ctx, "proj-secrets-a", names, "dev"); err != nil {
+			t.Fatalf("set %v: %v", names, err)
+		}
+		got, err := store.ServerVisibleSecrets(ctx, "proj-secrets-a")
+		if err != nil || len(got) != len(names) {
+			t.Fatalf("after %v: %v err=%v", names, got, err)
+		}
+	}
+	// Project A is left non-empty, so a write for B that forgot its project filter would change it.
+	if err := store.SetServerVisibleSecrets(ctx, "proj-secrets-a", []string{"KEEP1", "KEEP2"}, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetServerVisibleSecrets(ctx, "proj-secrets-b", []string{"X"}, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetServerVisibleSecrets(ctx, "proj-secrets-b", []string{"Y"}, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.ServerVisibleSecrets(ctx, "proj-secrets-a"); len(got) != 2 || got[0] != "KEEP1" || got[1] != "KEEP2" {
+		t.Fatalf("project A changed when B was written: %v", got)
+	}
+	if got, _ := store.ServerVisibleSecrets(ctx, "proj-secrets-b"); len(got) != 1 || got[0] != "Y" {
+		t.Fatalf("project B = %v", got)
+	}
+}

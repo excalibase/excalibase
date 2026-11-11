@@ -67,6 +67,8 @@ type Options struct {
 	Outbound OutboundReader
 	// APIBaseURL is the public API host server sites reach their project through (EXCALIBASE_URL).
 	APIBaseURL string
+	// Secrets reads the project's secrets, the ones marked server-visible reach server code; nil offers none.
+	Secrets SecretReader
 	// Previews keeps branch and pull request previews (EXC-660); nil means previews are not offered.
 	Previews PreviewStore
 	// PreviewsDark refuses new previews (the flag is off) while the held ones are still removed

@@ -43,6 +43,8 @@ func (h *SiteHandler) Routes(r chi.Router, developer func(http.Handler) http.Han
 	r.Get("/", h.available(h.list))
 	r.With(developer).Post("/", h.available(h.create))
 	r.Get("/limits", h.available(h.limits))
+	r.With(developer).Get("/server-secrets", h.available(h.listServerSecrets))
+	r.With(developer).Put("/server-secrets", h.available(h.setServerSecrets))
 	r.Route("/{siteId}", func(r chi.Router) {
 		r.Get("/", h.available(h.get))
 		r.With(developer).Patch("/", h.available(h.update))
