@@ -78,7 +78,13 @@ func (h *SiteHandler) setServerSecrets(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ServerVisible []string `json:"serverVisible"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSiteBodyBytes)).Decode(&body); err != nil || body.ServerVisible == nil {
+	// A list of a hundred long secret names is bigger than a site body may be.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxGitSettingsBytes)).Decode(&body); err != nil || body.ServerVisible == nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpError(w, "the list is larger than a project may mark", http.StatusRequestEntityTooLarge)
+			return
+		}
 		httpError(w, "send serverVisible: the whole list of secret names (an empty list hides every secret)", http.StatusBadRequest)
 		return
 	}

@@ -102,6 +102,11 @@ func (s *Service) secretBindings(ctx context.Context, projectID string) ([]cfwor
 	}
 	var bindings []cfworkers.Binding
 	for _, name := range marked {
+		// Checked again here: a marking can predate a longer reserved list, and a secret must never displace
+		// a platform binding or make Cloudflare refuse the whole publish with a name it will not take.
+		if !runtimeVarName.MatchString(name) || runtimeVarReserved(name) {
+			continue
+		}
 		if value, held := values[name]; held {
 			bindings = append(bindings, cfworkers.Binding{Type: cfworkers.BindingSecretText, Name: name, Text: value})
 		}
