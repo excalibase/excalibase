@@ -339,6 +339,9 @@ func (s *Service) publish(ctx context.Context, site *Site, rel release) error {
 	if err != nil {
 		return err
 	}
+	if rel.deploy.Kind == KindServer {
+		version.Bindings = s.runtimeBindings(site)
+	}
 	if err := s.publisher.PutScript(ctx, script, version); err != nil {
 		return publishFailure(site, stepPublish, err)
 	}
@@ -412,5 +415,14 @@ func bundleAssets(bundle *Bundle) func([]string) ([]cfworkers.Asset, error) {
 			})
 		}
 		return assets, nil
+	}
+}
+
+// runtimeBindings are the plain variables a server site's code finds its project's
+// API with (ADR 0045 decision 4). They are ours alone: nothing from the repository is bound.
+func (s *Service) runtimeBindings(site *Site) []cfworkers.Binding {
+	return []cfworkers.Binding{
+		{Type: cfworkers.BindingPlainText, Name: "EXCALIBASE_URL", Text: s.options.APIBaseURL},
+		{Type: cfworkers.BindingPlainText, Name: "EXCALIBASE_PROJECT_ID", Text: site.ProjectID},
 	}
 }

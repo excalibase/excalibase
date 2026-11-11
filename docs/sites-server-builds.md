@@ -52,6 +52,15 @@ rollback and go-live as an upload deploy. `_headers` and `_redirects` files in
 `public/` are uploaded as plain files; the Worker ignores them. If the repository
 has no `open-next.config.ts`, the preset writes ours (static-assets cache).
 
+## What the code finds at runtime
+
+Every server publish (a deploy and a rollback) binds two plain variables:
+`EXCALIBASE_URL`, the platform's public API host (`PUBLIC_BASE_URL`), and
+`EXCALIBASE_PROJECT_ID`. The project's API paths hang under them (the outbound
+Worker lets the code reach only its own project's). Nothing else is bound: no
+publishable key yet (keys are shown once, so it will be a site variable the owner
+sets), and never a binding from the repository.
+
 ## What is protection and what is a usability aid
 
 The protection is that **no repository binding is ever sent**: provisioning
