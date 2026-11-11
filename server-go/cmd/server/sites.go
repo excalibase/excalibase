@@ -53,13 +53,16 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 		Projects: projectGate{instances: sqlStore, claimer: claimer}, Previews: previewStore(cfg, store), MaxPreviews: cfg.Sites.MaxPreviews,
 		PreviewsDark: previewsDark(cfg),
 		// Server sites keep their code beside the deploy records (EXC-661).
-		Flags: cfg.Features(), Code: store, OutboundWorker: cfg.Sites.OutboundWorker, Outbound: outbound,
+		Flags: cfg.Features(), Code: store, OutboundWorker: cfg.Sites.OutboundWorker, Outbound: outbound, APIBaseURL: siteAPIBaseURL(cfg),
 	})
 	if err != nil {
 		log.Fatalf("sites: %v", err)
 	}
 	return service
 }
+
+// siteAPIBaseURL is EXCALIBASE_URL for server sites: the public API host, without a trailing slash.
+func siteAPIBaseURL(cfg config.AppConfig) string { return strings.TrimRight(cfg.PublicBaseURL, "/") }
 
 // previewStore keeps previews (EXC-660) wherever Sites is offered, flag or not: with sitepreviews
 // off none is made, but the held ones are still removed with their site and swept.
