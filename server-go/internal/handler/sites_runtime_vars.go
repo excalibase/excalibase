@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -44,7 +45,12 @@ func (h *SiteHandler) putEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body siteEnvBody
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSiteBodyBytes)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, sites.MaxRuntimeVarsBodyBytes)).Decode(&body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpError(w, "the variables are larger than a site may set", http.StatusRequestEntityTooLarge)
+			return
+		}
 		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
