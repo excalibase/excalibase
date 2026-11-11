@@ -3,6 +3,7 @@ package sites
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -48,6 +49,11 @@ func ValidateRuntimeVars(vars map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// bindableName is a name a Worker may be given from a site's own settings: a plain name the platform does not own.
+func bindableName(name string) bool {
+	return runtimeVarName.MatchString(name) && !runtimeVarReserved(name)
 }
 
 func runtimeVarReserved(name string) bool {
@@ -121,6 +127,11 @@ func (s *Service) runtimeBindings(deploy *Deploy) []cfworkers.Binding {
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		// A stored name can predate a longer reserved list; it must never double or displace a platform binding.
+		if !bindableName(name) {
+			log.Printf("site project %s: variable %s is reserved or invalid, not bound", deploy.ProjectID, name)
+			continue
+		}
 		bindings = append(bindings, cfworkers.Binding{Type: cfworkers.BindingPlainText, Name: name, Text: deploy.Server.RuntimeVars[name]})
 	}
 	return bindings

@@ -1,8 +1,12 @@
 package sites_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
@@ -181,5 +185,71 @@ func TestAPublishNeverLetsASecretDisplaceAPlatformBinding(t *testing.T) {
 	}
 	if got, ok := secretBinding(version, "OK"); !ok || got != "fine" {
 		t.Errorf("a harmless marked secret was dropped: %q %v", got, ok)
+	}
+}
+
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var out bytes.Buffer
+	log.SetOutput(&out)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return &out
+}
+
+// A skipped secret is said in the log by name, never by value, so an operator can see why it did not arrive.
+func TestASkippedMarkedSecretIsLoggedByNameOnly(t *testing.T) {
+	h := newSecretsHarness(t, sitestest.NewSecrets(map[string]string{"EXCALIBASE_URL": "super-secret-value", "bad-name": "other-secret"}))
+	if err := h.store.SetServerVisibleSecrets(context.Background(), testProject, []string{"EXCALIBASE_URL", "bad-name"}, testActor); err != nil {
+		t.Fatal(err)
+	}
+	logged := captureLog(t)
+	site := h.createServerSite(t, "ssr")
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"EXCALIBASE_URL", "bad-name"} {
+		want := "site project " + testProject + ": marked secret " + name + " is reserved or invalid, not bound"
+		if !strings.Contains(logged.String(), want) {
+			t.Errorf("log lacks %q:\n%s", want, logged)
+		}
+	}
+	if strings.Contains(logged.String(), "super-secret-value") || strings.Contains(logged.String(), "other-secret") {
+		t.Errorf("a secret value reached the log:\n%s", logged)
+	}
+}
+
+// A stored plain variable whose name is reserved since (or never valid) is skipped like a secret, and said in the log.
+func TestAStoredVariableWhoseNameIsNowReservedIsNotBound(t *testing.T) {
+	h := newSecretsHarness(t, sitestest.NewSecrets(map[string]string{}))
+	site := h.createServerSite(t, "ssr")
+	// Straight to the store, as an older release (with a shorter reserved list) would have kept it.
+	if err := h.store.SetRuntimeVars(context.Background(), testProject, site.ID, map[string]string{"EXCALIBASE_URL": "https://evil.test", "NEXT_TAG_CACHE_D1": "x", "OK": "fine"}); err != nil {
+		t.Fatal(err)
+	}
+	logged := captureLog(t)
+	if _, err := h.deploy(t, site, sitestest.ServerDist(t, "export default 1")); err != nil {
+		t.Fatal(err)
+	}
+	version := h.publisher.Versions[sites.ScriptName(site)]
+	count := 0
+	for _, binding := range version.Bindings {
+		if binding.Name == "EXCALIBASE_URL" {
+			count++
+		}
+	}
+	if got, plain := bindingText(version, "EXCALIBASE_URL"); !plain || got != "https://api.example.test" || count != 1 {
+		t.Errorf("EXCALIBASE_URL bound %d times as %q: the platform's value must stand", count, got)
+	}
+	if _, ok := bindingText(version, "NEXT_TAG_CACHE_D1"); ok {
+		t.Error("a reserved cache name was bound")
+	}
+	if got, _ := bindingText(version, "OK"); got != "fine" {
+		t.Errorf("a harmless variable was dropped: %q", got)
+	}
+	if want := "site project " + testProject + ": variable EXCALIBASE_URL is reserved or invalid, not bound"; !strings.Contains(logged.String(), want) {
+		t.Errorf("log lacks %q:\n%s", want, logged)
+	}
+	if strings.Contains(logged.String(), "evil.test") {
+		t.Errorf("a variable value reached the log:\n%s", logged)
 	}
 }

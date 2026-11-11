@@ -22,6 +22,19 @@ package_manager() {
   fi
 }
 
+# yarn_add_dev adds dev dependencies without running any install script. Yarn 1 (what corepack gives a repository
+# that names no packageManager) reads only YARN_IGNORE_SCRIPTS and Yarn 2+ only YARN_ENABLE_SCRIPTS, and each
+# refuses the other's name as an unknown setting, so the one for the repository's Yarn is set, never both.
+yarn_add_dev() {
+  local version
+  version=$(corepack yarn --version) || return 1
+  if [[ "$version" == 1.* ]]; then
+    YARN_IGNORE_SCRIPTS=true corepack yarn add -D "$@"
+  else
+    YARN_ENABLE_SCRIPTS=0 corepack yarn add -D "$@"
+  fi
+}
+
 # opennext_for prints the OpenNext version to add for the project's Next.js, or nothing when none fits. The pairs are
 # the ones each release declares as its peer range; next 16.4.1 with OpenNext 1.20.11 builds green and then fails
 # every dynamic route (spike 2026-10-29), so 16.4.1 and later take 1.20.12.
@@ -48,9 +61,9 @@ ensure_tools() {
   echo "\$ add ${packages[*]} (the repository does not declare them)"
   case "$(package_manager)" in
     pnpm) corepack pnpm add -D --ignore-scripts "${packages[@]}" ;;
-    yarn) corepack yarn add -D "${packages[@]}" ;;
-    *) npm install -D --no-audit --no-fund "${packages[@]}" ;;
-  esac
+    yarn) yarn_add_dev "${packages[@]}" ;;
+    *) npm install -D --no-audit --no-fund --ignore-scripts "${packages[@]}" ;;
+  esac || { echo "could not add ${packages[*]}; declare them in the repository or fix the install"; return 1; }
 }
 
 # check_with runs the named check of the resolved configuration; it answers 13 with the reason when
@@ -183,6 +196,73 @@ CONFIG
     "$COMPAT_DATE" "$COMPAT_FLAGS" > "$work/site.json"
 }
 
+# declares succeeds when the repository's package.json lists the package in dependencies or devDependencies.
+declares() {
+  local package=$1
+  node -e '
+    const pkg = require("./package.json");
+    process.exit({ ...pkg.dependencies, ...pkg.devDependencies }[process.argv[1]] ? 0 : 1);
+  ' "$package" 2>/dev/null
+}
+
+# worker_preset builds a Nuxt, SvelteKit or Astro app that already targets Cloudflare Workers (EXC-661, ADR 0045).
+# Nuxt is told the preset by environment; SvelteKit and Astro pick their output from an adapter in the repository's
+# own config, which the build does not edit, so a repository without it is refused by name. wrangler bundles the
+# framework's worker with our config into $work/bundle; collect.sh packs it with the assets ($work/assets-dir).
+worker_preset() {
+  local framework=$1 entry assets adapter=""
+  case "$framework" in
+    nuxt) entry=.output/server/index.mjs assets=.output/public ;;
+    sveltekit) entry=.svelte-kit/cloudflare/_worker.js assets=.svelte-kit/cloudflare adapter=@sveltejs/adapter-cloudflare ;;
+    astro) entry=dist/_worker.js/index.js assets=dist adapter=@astrojs/cloudflare ;;
+    *) refuse "the framework $framework has no preset" ;;
+  esac
+  export SKIP_WRANGLER_CONFIG_CHECK=yes WRANGLER_SEND_METRICS=false
+  if [[ -n "$adapter" ]] && ! declares "$adapter"; then
+    refuse "the repository does not use $adapter, which makes $framework write a Cloudflare worker; add it and its configuration"
+  fi
+  if [[ ! -x node_modules/.bin/wrangler ]]; then
+    echo "\$ add wrangler@$WRANGLER_VERSION (the repository does not declare it)"
+    case "$(package_manager)" in
+      pnpm) corepack pnpm add -D --ignore-scripts "wrangler@$WRANGLER_VERSION" ;;
+      yarn) yarn_add_dev "wrangler@$WRANGLER_VERSION" ;;
+      *) npm install -D --no-audit --no-fund --ignore-scripts "wrangler@$WRANGLER_VERSION" ;;
+    esac || { echo "could not add wrangler@$WRANGLER_VERSION; declare it in the repository or fix the install"; exit 11; }
+  fi
+  check_with wrangler || exit $?
+  [[ "$framework" == "nuxt" ]] && export NITRO_PRESET=cloudflare_module
+  local build=${BUILD_COMMAND:-npm run build}
+  echo "\$ $build"
+  bash -c "$build" || exit 11
+  if [[ ! -f "$entry" || ! -d "$assets" ]]; then
+    refuse "the $framework build wrote no worker at $entry (and files at $assets)"
+  fi
+  # wrangler refuses a worker left inside the assets folder unless it is named here; it is never a public file.
+  [[ -s "$assets/.assetsignore" && -n "$(tail -c1 "$assets/.assetsignore")" ]] && echo >> "$assets/.assetsignore"
+  echo _worker.js >> "$assets/.assetsignore"
+  local own=wrangler.excalibase.jsonc
+  cat > "$own" <<CONFIG
+{
+  "name": "site",
+  "main": "$entry",
+  "compatibility_date": "$COMPAT_DATE",
+  "compatibility_flags": [$COMPAT_FLAGS],
+  "assets": { "directory": "$assets", "binding": "ASSETS" }
+}
+CONFIG
+  rm -rf "$work/bundle"
+  echo "\$ wrangler deploy --dry-run --minify --outdir $work/bundle"
+  node_modules/.bin/wrangler deploy --dry-run --minify --outdir "$work/bundle" --config "$own" || exit 11
+  local modules
+  modules=$(cd "$work/bundle" && ls | grep -E '\.m?js$' || true)
+  if [[ "$(echo "$modules" | grep -c .)" != "1" ]]; then
+    refuse "the bundle is not one module (found: $(echo $modules))"
+  fi
+  printf '{"kind":"server","main":"%s","compatibilityDate":"%s","compatibilityFlags":[%s],"framework":"%s"}' \
+    "$modules" "$COMPAT_DATE" "$COMPAT_FLAGS" "$framework" > "$work/site.json"
+  printf %s "$assets" > "$work/assets-dir"
+}
+
 work=${WORK_DIR:-/work}
 mkdir -p -m 700 "$HOME"
 cd "$work/src/${ROOT_DIR}" 2>/dev/null || { echo "the root directory '${ROOT_DIR}' is not in the repository"; exit 12; }
@@ -197,10 +277,11 @@ if [[ -z "$install" ]]; then
 fi
 echo "\$ $install"
 bash -c "$install" || exit 10
-if [[ "${FRAMEWORK:-}" == "nextjs" ]]; then
-  nextjs_preset
-  exit $?
-fi
+case "${FRAMEWORK:-}" in
+  nextjs) nextjs_preset; exit $? ;;
+  nuxt|sveltekit|astro) worker_preset "$FRAMEWORK"; exit $? ;;
+  *) ;;
+esac
 build=${BUILD_COMMAND:-npm run build}
 echo "\$ $build"
 bash -c "$build" || exit 11

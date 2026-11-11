@@ -134,7 +134,7 @@ func (s *Service) loadSite(ctx context.Context, projectID, siteID string) (*site
 func matchKind(kind string, settings Settings) error {
 	switch {
 	case kind == sites.KindServer && settings.Framework == "":
-		return &InputError{Reason: "a server site is built with a framework; choose one (Next.js)"}
+		return &InputError{Reason: "a server site is built with a framework; choose one (Next.js, Nuxt, SvelteKit or Astro)"}
 	case kind != sites.KindServer && settings.Framework != "":
 		return &InputError{Reason: "a framework build needs a server site; create the site as a server site"}
 	}

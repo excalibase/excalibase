@@ -165,6 +165,33 @@ describe('SiteGitBuilds', () => {
     );
   });
 
+  test('a server site can pick Nuxt, SvelteKit or Astro, and still sends no output folder', async () => {
+    serve({
+      git: { connected: false, connection: null, nodeVersions: ['22'] },
+      repositories: [
+        {
+          installation: { id: 501, account: 'acme' },
+          repositories: [{ id: 9001, fullName: 'acme/site', defaultBranch: 'main', private: true }],
+        },
+      ],
+    });
+    vi.mocked(api.put).mockResolvedValue({ data: { connection, build: failed } } as never);
+    renderPanel(true, true);
+    await userEvent.selectOptions(await screen.findByTestId('git-repository'), '9001');
+    const options = Array.from(
+      screen.getByTestId('build-framework').querySelectorAll('option'),
+    ).map((option) => option.value);
+    expect(options).toEqual(['nextjs', 'nuxt', 'sveltekit', 'astro']);
+    await userEvent.selectOptions(screen.getByTestId('build-framework'), 'astro');
+    await userEvent.click(screen.getByTestId('git-connect-submit'));
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(`${BASE}/git`, {
+        repositoryId: 9001,
+        settings: { ...settings, branch: '', outputDir: '', framework: 'astro' },
+      }),
+    );
+  });
+
   test('a server site saved without a framework sends the one the form shows', async () => {
     serve({
       git: {

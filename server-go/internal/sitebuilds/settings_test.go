@@ -140,10 +140,19 @@ func TestSettings_NextjsNeedsNoOutputDir(t *testing.T) {
 }
 
 func TestSettings_UnknownFrameworkPointsToAContainer(t *testing.T) {
-	for _, framework := range []string{"nuxt", "astro", "sveltekit", "rails"} {
+	for _, framework := range []string{"remix", "rails", "Nuxt"} {
 		_, err := Settings{Branch: "main", Framework: framework}.Normalise()
 		if err == nil || !strings.Contains(err.Error(), "app container") {
 			t.Errorf("framework %q: want a refusal that names the app container, got %v", framework, err)
+		}
+	}
+}
+
+func TestSettings_WorkerFrameworksNeedNoOutputDir(t *testing.T) {
+	for _, framework := range []string{FrameworkNuxt, FrameworkSvelteKit, FrameworkAstro} {
+		normalised, err := Settings{Branch: "main", Framework: framework, OutputDir: "dist"}.Normalise()
+		if err != nil || normalised.Framework != framework || normalised.OutputDir != "" {
+			t.Errorf("%s: %+v err=%v; the preset knows its own output", framework, normalised, err)
 		}
 	}
 }
