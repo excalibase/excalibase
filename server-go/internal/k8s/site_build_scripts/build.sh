@@ -22,6 +22,19 @@ package_manager() {
   fi
 }
 
+# yarn_add_dev adds dev dependencies without running any install script. Yarn 1 (what corepack gives a repository
+# that names no packageManager) reads only YARN_IGNORE_SCRIPTS and Yarn 2+ only YARN_ENABLE_SCRIPTS, and each
+# refuses the other's name as an unknown setting, so the one for the repository's Yarn is set, never both.
+yarn_add_dev() {
+  local version
+  version=$(corepack yarn --version) || return 1
+  if [[ "$version" == 1.* ]]; then
+    YARN_IGNORE_SCRIPTS=true corepack yarn add -D "$@"
+  else
+    YARN_ENABLE_SCRIPTS=0 corepack yarn add -D "$@"
+  fi
+}
+
 # opennext_for prints the OpenNext version to add for the project's Next.js, or nothing when none fits. The pairs are
 # the ones each release declares as its peer range; next 16.4.1 with OpenNext 1.20.11 builds green and then fails
 # every dynamic route (spike 2026-10-29), so 16.4.1 and later take 1.20.12.
@@ -48,9 +61,9 @@ ensure_tools() {
   echo "\$ add ${packages[*]} (the repository does not declare them)"
   case "$(package_manager)" in
     pnpm) corepack pnpm add -D --ignore-scripts "${packages[@]}" ;;
-    yarn) YARN_ENABLE_SCRIPTS=0 YARN_IGNORE_SCRIPTS=true corepack yarn add -D "${packages[@]}" ;;
+    yarn) yarn_add_dev "${packages[@]}" ;;
     *) npm install -D --no-audit --no-fund --ignore-scripts "${packages[@]}" ;;
-  esac
+  esac || { echo "could not add ${packages[*]}; declare them in the repository or fix the install"; return 1; }
 }
 
 # check_with runs the named check of the resolved configuration; it answers 13 with the reason when
@@ -212,9 +225,9 @@ worker_preset() {
     echo "\$ add wrangler@$WRANGLER_VERSION (the repository does not declare it)"
     case "$(package_manager)" in
       pnpm) corepack pnpm add -D --ignore-scripts "wrangler@$WRANGLER_VERSION" ;;
-      yarn) YARN_ENABLE_SCRIPTS=0 YARN_IGNORE_SCRIPTS=true corepack yarn add -D "wrangler@$WRANGLER_VERSION" ;;
+      yarn) yarn_add_dev "wrangler@$WRANGLER_VERSION" ;;
       *) npm install -D --no-audit --no-fund --ignore-scripts "wrangler@$WRANGLER_VERSION" ;;
-    esac || exit 11
+    esac || { echo "could not add wrangler@$WRANGLER_VERSION; declare it in the repository or fix the install"; exit 11; }
   fi
   check_with wrangler || exit $?
   [[ "$framework" == "nuxt" ]] && export NITRO_PRESET=cloudflare_module

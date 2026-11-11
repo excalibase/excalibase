@@ -214,44 +214,93 @@ func TestWorkerPresets_TheRepositorysAssetsignoreKeepsItsFilesOutOfThePublicAsse
 	}
 }
 
-const yarnEnvRecorder = "#!/bin/bash\necho \"scripts=${YARN_ENABLE_SCRIPTS:-} ignore=${YARN_IGNORE_SCRIPTS:-}\" >> \"$WORK_DIR/yarn-env\"\n"
+// yarnStub answers `yarn --version` with the version in $WORK_DIR/yarn-version and records the install scripts
+// switches an add runs with; it then runs the rest of the given stub (which provides the tools).
+func yarnStub(rest string) string {
+	return "#!/bin/bash\nif [[ $1 == yarn && $2 == --version ]]; then cat \"$WORK_DIR/yarn-version\"; exit 0; fi\n" +
+		"echo \"scripts=${YARN_ENABLE_SCRIPTS:-} ignore=${YARN_IGNORE_SCRIPTS:-}\" >> \"$WORK_DIR/yarn-env\"\n" + rest
+}
 
-func assertYarnScriptsOff(t *testing.T, work string) {
+// yarnSwitches: Yarn 1 reads only YARN_IGNORE_SCRIPTS and Yarn 2+ refuses it as an unknown setting, so exactly one is set.
+var yarnSwitches = map[string]string{"1.22.22": "scripts= ignore=true\n", "2.4.3": "scripts=0 ignore=\n", "3.8.7": "scripts=0 ignore=\n", "4.5.3": "scripts=0 ignore=\n"}
+
+func assertYarnSwitches(t *testing.T, work, want string) {
 	t.Helper()
 	got, err := os.ReadFile(filepath.Join(work, "yarn-env"))
 	if err != nil {
 		t.Fatalf("yarn was never asked to install the tools: %v", err)
 	}
-	// Yarn 2+ reads YARN_ENABLE_SCRIPTS, Yarn 1 (what corepack gives a repository without packageManager) only YARN_IGNORE_SCRIPTS.
-	if !strings.Contains(string(got), "scripts=0 ignore=true") {
-		t.Errorf("install scripts may run: %q", got)
+	if string(got) != want {
+		t.Errorf("install script switches = %q, want %q", got, want)
 	}
 }
 
 func TestWorkerPresets_ToolInstallWithYarnRunsNoInstallScripts(t *testing.T) {
+	for version, want := range yarnSwitches {
+		t.Run(version, func(t *testing.T) {
+			p := presets["astro"]
+			work, scripts := t.TempDir(), scriptDir(t)
+			project := presetProject(t, work, p, true, false)
+			write(t, filepath.Join(project, "yarn.lock"), "")
+			write(t, filepath.Join(work, "yarn-version"), version+"\n")
+			wrangler, _ := os.ReadFile(filepath.Join(project, "node_modules/.bin/wrangler"))
+			write(t, filepath.Join(work, "tool-wrangler"), string(wrangler))
+			if err := os.Remove(filepath.Join(project, "node_modules/.bin/wrangler")); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(work, "bin", "corepack"), yarnStub("mkdir -p node_modules/.bin\ncp \"$WORK_DIR/tool-wrangler\" node_modules/.bin/wrangler\n"))
+			if code, out := presetBuild(t, work, scripts, p.framework); code != 0 {
+				t.Fatalf("build exit %d:\n%s", code, out)
+			}
+			assertYarnSwitches(t, work, want)
+		})
+	}
+}
+
+func TestNextjsPreset_ToolInstallWithYarnRunsNoInstallScripts(t *testing.T) {
+	for version, want := range yarnSwitches {
+		t.Run(version, func(t *testing.T) {
+			work, scripts := t.TempDir(), scriptDir(t)
+			tooless(t, work, "16.4.1", "yarn.lock")
+			write(t, filepath.Join(work, "yarn-version"), version+"\n")
+			stub, _ := os.ReadFile(filepath.Join(work, "bin", "corepack"))
+			write(t, filepath.Join(work, "bin", "corepack"), yarnStub(strings.TrimPrefix(string(stub), "#!/bin/bash\n")))
+			if code, out := build(t, work, scripts); code != 0 {
+				t.Fatalf("build exit %d:\n%s", code, out)
+			}
+			assertYarnSwitches(t, work, want)
+		})
+	}
+}
+
+func TestWorkerPresets_FailedYarnToolInstallStopsTheBuildThere(t *testing.T) {
 	p := presets["astro"]
 	work, scripts := t.TempDir(), scriptDir(t)
 	project := presetProject(t, work, p, true, false)
 	write(t, filepath.Join(project, "yarn.lock"), "")
-	wrangler, _ := os.ReadFile(filepath.Join(project, "node_modules/.bin/wrangler"))
-	write(t, filepath.Join(work, "tool-wrangler"), string(wrangler))
+	write(t, filepath.Join(work, "yarn-version"), "4.5.3\n")
 	if err := os.Remove(filepath.Join(project, "node_modules/.bin/wrangler")); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(work, "bin", "corepack"), yarnEnvRecorder+"mkdir -p node_modules/.bin\ncp \"$WORK_DIR/tool-wrangler\" node_modules/.bin/wrangler\n")
-	if code, out := presetBuild(t, work, scripts, p.framework); code != 0 {
-		t.Fatalf("build exit %d:\n%s", code, out)
+	write(t, filepath.Join(work, "bin", "corepack"), yarnStub("exit 1\n"))
+	code, out := presetBuild(t, work, scripts, p.framework)
+	if code != 11 || !strings.Contains(out, "could not add wrangler") {
+		t.Errorf("exit %d, want 11 with a clear message:\n%s", code, out)
 	}
-	assertYarnScriptsOff(t, work)
+	if strings.Contains(out, "$ bash") {
+		t.Errorf("the build ran after the failed install:\n%s", out)
+	}
 }
 
-func TestNextjsPreset_ToolInstallWithYarnRunsNoInstallScripts(t *testing.T) {
+func TestNextjsPreset_FailedYarnToolInstallStopsTheBuildThere(t *testing.T) {
 	work, scripts := t.TempDir(), scriptDir(t)
 	tooless(t, work, "16.4.1", "yarn.lock")
-	stub, _ := os.ReadFile(filepath.Join(work, "bin", "corepack"))
-	write(t, filepath.Join(work, "bin", "corepack"), yarnEnvRecorder+strings.TrimPrefix(string(stub), "#!/bin/bash\n"))
-	build(t, work, scripts, "")
-	assertYarnScriptsOff(t, work)
+	write(t, filepath.Join(work, "yarn-version"), "4.5.3\n")
+	write(t, filepath.Join(work, "bin", "corepack"), yarnStub("exit 1\n"))
+	code, out := build(t, work, scripts)
+	if code != 11 || !strings.Contains(out, "could not add") {
+		t.Errorf("exit %d, want 11 with a clear message:\n%s", code, out)
+	}
 }
 
 func TestWorkerPresets_AnAssetsignorePatternIsKeptOrSkippedByItsLeadingParentOnly(t *testing.T) {
