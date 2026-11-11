@@ -6,6 +6,7 @@ import {
   useSetSiteEnv,
   useSiteEnv,
 } from '../../api/siteServer';
+import { SecretChecklist } from './SecretChecklist';
 import { primaryButton, secondaryButton, Spinner } from '../containers/ContainerBits';
 
 function ServerSecrets({ projectId }: { readonly projectId: string }) {
@@ -23,27 +24,13 @@ function ServerSecrets({ projectId }: { readonly projectId: string }) {
         deploy reads it: it runs in that Worker. A rollback uses the secret&apos;s current value.
         Mark only what the code needs.
       </p>
-      <ul className="space-y-1">
-        {secrets.map((secret) => (
-          <li key={secret.name}>
-            <label className="flex items-center gap-2 text-sm text-text-primary">
-              <input
-                type="checkbox"
-                checked={secret.serverVisible}
-                disabled={update.isPending}
-                onChange={(event) => toggle(secret.name, event.target.checked)}
-                data-testid={`server-secret-${secret.name}`}
-              />
-              <code>{secret.name}</code>
-            </label>
-          </li>
-        ))}
-      </ul>
-      {update.error && (
-        <p role="alert" className="text-xs text-red-400">
-          {apiErrorMessage(update.error, 'The change could not be saved')}
-        </p>
-      )}
+      <SecretChecklist
+        rows={secrets.map((secret) => ({ name: secret.name, checked: secret.serverVisible }))}
+        pending={update.isPending}
+        error={update.error}
+        testIdPrefix="server-secret"
+        onToggle={toggle}
+      />
     </div>
   );
 }
