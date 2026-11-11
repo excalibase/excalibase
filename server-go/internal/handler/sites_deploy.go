@@ -32,7 +32,7 @@ func (h *SiteHandler) deploy(w http.ResponseWriter, r *http.Request) {
 		writeSiteError(w, err)
 		return
 	}
-	writeJSONStatus(w, http.StatusCreated, deployResponse{Deploy: deploy, Live: true})
+	writeJSONStatus(w, http.StatusCreated, presentDeploy(deploy, true))
 }
 
 func (h *SiteHandler) listDeploys(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +53,7 @@ func (h *SiteHandler) listDeploys(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]deployResponse, 0, len(deploys))
 	for _, deploy := range deploys {
-		out = append(out, deployResponse{Deploy: deploy, Live: deploy.ID == site.LiveDeployID})
+		out = append(out, presentDeploy(deploy, deploy.ID == site.LiveDeployID))
 	}
 	writeJSON(w, out)
 }
@@ -78,7 +78,7 @@ func (h *SiteHandler) getDeploy(w http.ResponseWriter, r *http.Request) {
 		writeSiteError(w, err)
 		return
 	}
-	writeJSON(w, deployResponse{Deploy: deploy, Live: deploy.ID == site.LiveDeployID})
+	writeJSON(w, presentDeploy(deploy, deploy.ID == site.LiveDeployID))
 }
 
 func (h *SiteHandler) rollback(w http.ResponseWriter, r *http.Request) {
