@@ -26,7 +26,9 @@ type MemoryStore struct {
 	// Attempts are each project's deploy attempts, for the hourly rate.
 	Attempts map[string][]time.Time
 	// Code is each server deploy's kept modules, by deploy id; CodeReads counts GetCode calls.
-	Code      map[string][]byte
+	Code map[string][]byte
+	// Vars are the sites' runtime variables by site id.
+	Vars      map[string]map[string]string
 	CodeReads int
 	// prunedBudget is the byte budget of each site's last prune; published each site's last published deploy.
 	prunedBudget map[string]int64
@@ -136,6 +138,36 @@ func (m *MemoryStore) UpdateSettings(_ context.Context, projectID, id string, sp
 	return m.edit(projectID, id, func(site *sites.Site) { site.SPAFallback = spaFallback })
 }
 
+func (m *MemoryStore) RuntimeVars(_ context.Context, projectID, id string) (map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if site, ok := m.Sites[id]; !ok || site.ProjectID != projectID {
+		return nil, sites.ErrSiteNotFound
+	}
+	copied := map[string]string{}
+	for name, value := range m.Vars[id] {
+		copied[name] = value
+	}
+	return copied, nil
+}
+
+func (m *MemoryStore) SetRuntimeVars(_ context.Context, projectID, id string, vars map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if site, ok := m.Sites[id]; !ok || site.ProjectID != projectID {
+		return sites.ErrSiteNotFound
+	}
+	if m.Vars == nil {
+		m.Vars = map[string]map[string]string{}
+	}
+	copied := map[string]string{}
+	for name, value := range vars {
+		copied[name] = value
+	}
+	m.Vars[id] = copied
+	return nil
+}
+
 func (m *MemoryStore) edit(projectID, id string, change func(*sites.Site)) (*sites.Site, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -159,6 +191,7 @@ func (m *MemoryStore) Delete(_ context.Context, projectID, id, lease string) err
 		return sites.ErrLeaseLost
 	}
 	delete(m.Sites, id)
+	delete(m.Vars, id)
 	for deployID, deploy := range m.Deploys {
 		if deploy.SiteID == id {
 			delete(m.Deploys, deployID)

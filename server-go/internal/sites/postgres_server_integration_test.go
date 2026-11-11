@@ -242,3 +242,37 @@ func TestPostgresServerCodeCloudflareRunsOutlivesLaterFailures(t *testing.T) {
 		t.Fatalf("stale pending code: err=%v", err)
 	}
 }
+
+// Migration 000109: a site's variables are kept, snapshotted with a deploy and gone with the site.
+func TestPostgresRuntimeVariablesAreSnapshottedWithTheDeploy(t *testing.T) {
+	h := newPostgresServerSites(t, "proj-server-vars")
+	ctx := context.Background()
+	site, err := h.service.CreateKind(ctx, h.project, "server-vars", sites.KindServer, nil, "dev")
+	if err != nil {
+		t.Fatalf("CreateKind: %v", err)
+	}
+	if err := h.service.SetRuntimeVars(ctx, h.project, site.ID, map[string]string{"MODE": "one"}); err != nil {
+		t.Fatalf("SetRuntimeVars: %v", err)
+	}
+	deploy, err := h.deploy(t, site, "export default 1")
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if err := h.service.SetRuntimeVars(ctx, h.project, site.ID, map[string]string{"MODE": "two"}); err != nil {
+		t.Fatalf("SetRuntimeVars again: %v", err)
+	}
+	read, err := h.store.GetDeploy(ctx, h.project, site.ID, deploy.ID)
+	if err != nil || read.Server == nil || read.Server.RuntimeVars["MODE"] != "one" {
+		t.Fatalf("snapshot = %+v err=%v", read, err)
+	}
+	if vars, err := h.store.RuntimeVars(ctx, "proj-other", site.ID); !errors.Is(err, sites.ErrSiteNotFound) {
+		t.Fatalf("another project read %v, err=%v", vars, err)
+	}
+	if err := h.service.Delete(ctx, h.project, site.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	var left int
+	if err := platformDB(t).DB().QueryRow(`SELECT count(*) FROM site_runtime_vars WHERE site_id = $1`, site.ID).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("variables left after the site: %d err=%v", left, err)
+	}
+}
