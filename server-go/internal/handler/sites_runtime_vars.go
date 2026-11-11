@@ -64,3 +64,28 @@ func (h *SiteHandler) putEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, siteEnvBody{Vars: body.Vars})
 }
+
+func (h *SiteHandler) listServerSecrets(w http.ResponseWriter, r *http.Request) {
+	listed, err := h.sites.ServerSecretVisibility(r.Context(), chi.URLParam(r, "projectId"))
+	if err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	writeJSON(w, listed)
+}
+
+func (h *SiteHandler) setServerSecrets(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ServerVisible []string `json:"serverVisible"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSiteBodyBytes)).Decode(&body); err != nil || body.ServerVisible == nil {
+		httpError(w, "send serverVisible: the whole list of secret names (an empty list hides every secret)", http.StatusBadRequest)
+		return
+	}
+	projectID := chi.URLParam(r, "projectId")
+	if err := h.sites.SetServerVisibleSecrets(r.Context(), projectID, body.ServerVisible, actorID(r)); err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	h.listServerSecrets(w, r)
+}
