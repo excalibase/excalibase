@@ -28,10 +28,8 @@ type MemoryStore struct {
 	// Code is each server deploy's kept modules, by deploy id; CodeReads counts GetCode calls.
 	Code map[string][]byte
 	// Vars are the sites' runtime variables by site id.
-	Vars map[string]map[string]string
-	// ServerSecrets are each project's server-visible secret names.
-	ServerSecrets map[string][]string
-	CodeReads     int
+	Vars      map[string]map[string]string
+	CodeReads int
 	// prunedBudget is the byte budget of each site's last prune; published each site's last published deploy.
 	prunedBudget map[string]int64
 	published    map[string]string
@@ -167,24 +165,6 @@ func (m *MemoryStore) SetRuntimeVars(_ context.Context, projectID, id string, va
 		copied[name] = value
 	}
 	m.Vars[id] = copied
-	return nil
-}
-
-func (m *MemoryStore) ServerVisibleSecrets(_ context.Context, projectID string) ([]string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]string{}, m.ServerSecrets[projectID]...), nil
-}
-
-func (m *MemoryStore) SetServerVisibleSecrets(_ context.Context, projectID string, names []string, _ string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.ServerSecrets == nil {
-		m.ServerSecrets = map[string][]string{}
-	}
-	sorted := append([]string{}, names...)
-	sort.Strings(sorted)
-	m.ServerSecrets[projectID] = sorted
 	return nil
 }
 
@@ -691,28 +671,4 @@ func (f *Origins) ReleaseAppCorsOrigins(_ context.Context, _, owner string) ([]s
 	}
 	f.Origins = kept
 	return released, nil
-}
-
-// Secrets is a stand-in for the project's secret store; Err fails every read.
-type Secrets struct {
-	mu     sync.Mutex
-	Values map[string]string
-	Err    error
-	Reads  int
-}
-
-func NewSecrets(values map[string]string) *Secrets { return &Secrets{Values: values} }
-
-func (s *Secrets) Secrets(_ context.Context, _ string) (map[string]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Reads++
-	if s.Err != nil {
-		return nil, s.Err
-	}
-	copied := map[string]string{}
-	for name, value := range s.Values {
-		copied[name] = value
-	}
-	return copied, nil
 }

@@ -20,9 +20,6 @@ type Store interface {
 	// RuntimeVars and SetRuntimeVars keep a server site's plain variables; the whole set is replaced.
 	RuntimeVars(ctx context.Context, projectID, id string) (map[string]string, error)
 	SetRuntimeVars(ctx context.Context, projectID, id string, vars map[string]string) error
-	// ServerVisibleSecrets is the project's list of secrets its server sites are bound with; the whole list is replaced.
-	ServerVisibleSecrets(ctx context.Context, projectID string) ([]string, error)
-	SetServerVisibleSecrets(ctx context.Context, projectID string, names []string, actor string) error
 	UpdateSettings(ctx context.Context, projectID, id string, spaFallback bool) (*Site, error)
 	// Delete removes the site and its deploy history while lease still holds it.
 	Delete(ctx context.Context, projectID, id, lease string) error

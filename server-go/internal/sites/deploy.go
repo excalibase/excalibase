@@ -344,11 +344,7 @@ func (s *Service) publish(ctx context.Context, site *Site, rel release) error {
 		return err
 	}
 	if rel.deploy.Kind == KindServer {
-		secrets, err := s.secretBindings(ctx, site.ProjectID)
-		if err != nil {
-			return publishFailure(site, stepPublish, err)
-		}
-		version.Bindings = withSecrets(s.runtimeBindings(rel.deploy), secrets)
+		version.Bindings = s.runtimeBindings(rel.deploy)
 	}
 	if err := s.publisher.PutScript(ctx, script, version); err != nil {
 		return publishFailure(site, stepPublish, err)

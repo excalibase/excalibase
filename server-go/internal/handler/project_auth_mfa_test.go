@@ -314,6 +314,20 @@ func TestAuthMFA_InfoSaysOnOnlyWithTheFlagAndTheSwitch(t *testing.T) {
 	}
 }
 
+func TestAuthMFA_InfoCarriesTheRecordedKeyFingerprintOnlyWhileOn(t *testing.T) {
+	recorded := domain.MFAKeyFingerprint("a-key")
+	for _, on := range []bool{true, false} {
+		f := setupMFAHandler(t, features.AuthMFA)
+		f.signIn.signIn[testOAuthProject] = domain.ProjectAuthSignIn{RedirectURLs: []string{}, AllowNewUsers: true, MFAEnabled: on}
+		f.signIn.mfaKeyFingerprints = map[string]string{testOAuthProject: recorded}
+		w := doJSON(f.router, http.MethodGet, testOAuthInfo, nil)
+		got, present := decodeObject(t, w.Body.Bytes())["mfaKeyFingerprint"]
+		if present != on || (on && got != recorded) {
+			t.Errorf("switch %v: mfaKeyFingerprint = %v (present %v)", on, got, present)
+		}
+	}
+}
+
 // Two enables at once: the one that loses the conditional write uses the key
 // the winner stored and never writes its own.
 func TestAuthMFA_ALostRaceUsesTheStoredKey(t *testing.T) {

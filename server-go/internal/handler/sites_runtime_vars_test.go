@@ -44,3 +44,21 @@ func TestSites_RuntimeVariablesAnswerAsUnmountedWhileOff(t *testing.T) {
 		t.Fatalf("get = %d %q", response.Code, response.Body)
 	}
 }
+
+func TestSites_RuntimeVariableBodyCapFollowsTheLimits(t *testing.T) {
+	h := newServerSitesHarness(t, true)
+	var site sites.Site
+	decodeSiteBody(t, h.do(t, http.MethodPost, "/", []byte(`{"name":"ssr","kind":"server"}`)), &site)
+	big := `{"vars":{"CERT":"` + strings.Repeat("x", 5*1024) + `"}}`
+	if put := h.do(t, http.MethodPut, "/"+site.ID+"/env", []byte(big)); put.Code != http.StatusOK {
+		t.Fatalf("a 5 KB value = %d %s, want the documented limit reachable", put.Code, put.Body)
+	}
+	over := `{"vars":{"CERT":"` + strings.Repeat("x", sites.MaxRuntimeVarsBodyBytes) + `"}}`
+	if put := h.do(t, http.MethodPut, "/"+site.ID+"/env", []byte(over)); put.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("a body past the cap = %d %s, want 413", put.Code, put.Body)
+	}
+	if put := h.do(t, http.MethodPut, "/"+site.ID+"/env", []byte(`{"vars":{"A":"`+strings.Repeat("x", 5*1024+1)+`"}}`)); put.Code != http.StatusBadRequest ||
+		!strings.Contains(put.Body.String(), "larger than") {
+		t.Fatalf("a value past 5 KB = %d %s, want the validator's reason", put.Code, put.Body)
+	}
+}

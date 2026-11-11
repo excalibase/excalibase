@@ -276,24 +276,3 @@ func TestPostgresRuntimeVariablesAreSnapshottedWithTheDeploy(t *testing.T) {
 		t.Fatalf("variables left after the site: %d err=%v", left, err)
 	}
 }
-
-// Migration 000110: the server-visible list is per project and replaced whole.
-func TestPostgresServerVisibleSecretsAreReplacedWhole(t *testing.T) {
-	store := sites.NewPostgresStore(platformDB(t).DB())
-	ctx := context.Background()
-	for _, names := range [][]string{{"A", "B"}, {"B", "C"}, {}} {
-		if err := store.SetServerVisibleSecrets(ctx, "proj-secrets-a", names, "dev"); err != nil {
-			t.Fatalf("set %v: %v", names, err)
-		}
-		got, err := store.ServerVisibleSecrets(ctx, "proj-secrets-a")
-		if err != nil || len(got) != len(names) {
-			t.Fatalf("after %v: %v err=%v", names, got, err)
-		}
-	}
-	if err := store.SetServerVisibleSecrets(ctx, "proj-secrets-b", []string{"X"}, "dev"); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := store.ServerVisibleSecrets(ctx, "proj-secrets-a"); len(got) != 0 {
-		t.Fatalf("another project's marking leaked: %v", got)
-	}
-}

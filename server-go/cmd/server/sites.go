@@ -16,10 +16,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
-	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
 // hostnameSweepInterval spaces the passes that route custom domains whose DNS is now in place.
@@ -30,7 +28,7 @@ const hostnameSweepInterval = 2 * time.Minute
 // and project deletion still refuses to forget sites it cannot remove. Limits
 // follow each project's plan (EXC-620).
 func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limits sites.DeployLimiter,
-	claimer service.ProjectOperationClaimer, secrets sites.SecretReader) *sites.Service {
+	claimer service.ProjectOperationClaimer) *sites.Service {
 	origins, ok := sqlStore.(storage.ProjectCorsEditor)
 	if !ok {
 		log.Fatal("sites: the platform store cannot edit a project's CORS list")
@@ -55,7 +53,7 @@ func newSitesService(cfg config.AppConfig, sqlStore storage.PlatformStore, limit
 		Projects: projectGate{instances: sqlStore, claimer: claimer}, Previews: previewStore(cfg, store), MaxPreviews: cfg.Sites.MaxPreviews,
 		PreviewsDark: previewsDark(cfg),
 		// Server sites keep their code beside the deploy records (EXC-661).
-		Flags: cfg.Features(), Code: store, OutboundWorker: cfg.Sites.OutboundWorker, Outbound: outbound, APIBaseURL: siteAPIBaseURL(cfg), Secrets: secrets,
+		Flags: cfg.Features(), Code: store, OutboundWorker: cfg.Sites.OutboundWorker, Outbound: outbound, APIBaseURL: siteAPIBaseURL(cfg),
 	})
 	if err != nil {
 		log.Fatalf("sites: %v", err)
@@ -235,12 +233,4 @@ func startHostnameSweep(ctx context.Context, service *sites.Service) {
 			}
 		}
 	}()
-}
-
-// siteSecretReader reads the project secrets server sites are bound with; with no vault, none are offered.
-func siteSecretReader(vc vaultclient.VaultClient) sites.SecretReader {
-	if vc == nil {
-		return nil
-	}
-	return sitebuilds.NewVaultSecrets(vc)
 }

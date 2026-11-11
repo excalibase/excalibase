@@ -19,6 +19,10 @@ const (
 	PublishableKeyVar = "EXCALIBASE_PUBLISHABLE_KEY"
 )
 
+// MaxRuntimeVarsBodyBytes bounds a request that sets variables: the most the validator allows (a name of at most
+// 128 bytes and a value of at most 5 KB, 64 times) with room for the JSON around them.
+const MaxRuntimeVarsBodyBytes = maxRuntimeVars*(maxRuntimeVarBytes+128+16) + 4096
+
 var runtimeVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
 // reservedRuntimePrefixes are names the platform or OpenNext's storage overrides own.
