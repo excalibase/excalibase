@@ -208,7 +208,7 @@ func (c *Client) ensureNamespaceQuota(ctx context.Context, namespace string) err
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create namespace quota: %w", err)
 	}
-	return nil
+	return c.ensureNamespaceLimitRange(ctx, namespace)
 }
 
 const (
