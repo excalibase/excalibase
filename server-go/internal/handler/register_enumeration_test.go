@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/email"
 )
 
 // signupFixture runs a sign-up with its mail held back, so a test sees what the
@@ -91,4 +95,34 @@ func TestRegister_InviteOnlyRefusesBeforeRevealingATakenName(t *testing.T) {
 	if w := postRegister(h, "existing", "fresh@company.test"); w.Code != http.StatusForbidden {
 		t.Fatalf("got %d, want 403", w.Code)
 	}
+}
+
+// A taken name on the very first registration is a plain conflict: only a setup-token holder gets that far.
+func TestRegister_FirstRegistrationConflictIsReported(t *testing.T) {
+	us := newMockUserStore()
+	us.users["svc"] = &domain.User{ID: "svc", Username: "taken", Email: "svc@svc.excalibase.internal", Kind: domain.UserKindService}
+	h := registerHandler(us, &inviteOrgStore{}, false)
+	if w := postRegisterWithToken(h, "taken", "me@x.test", "setup-token"); w.Code != http.StatusConflict {
+		t.Fatalf("got %d, want 409", w.Code)
+	}
+}
+
+func TestNotifyAccountExists_FailuresSurface(t *testing.T) {
+	ctx := context.Background()
+	if err := NewEmailVerifier(newFakeVerificationStore(), email.NewNoopSender(), testStudioURL, "").NotifyAccountExists(ctx, "a@x.test", false); !errors.Is(err, ErrVerificationUnavailable) {
+		t.Fatalf("got %v, want ErrVerificationUnavailable", err)
+	}
+	sender := &recordingSender{err: errors.New("provider down")}
+	if err := NewEmailVerifier(newFakeVerificationStore(), sender, testStudioURL, "").NotifyAccountExists(ctx, "a@x.test", true); err == nil {
+		t.Fatal("a failed send must surface")
+	}
+}
+
+func TestRegister_FailedAccountExistsMailIsOnlyLogged(t *testing.T) {
+	f := newSignupFixture(false)
+	f.sender.err = errors.New("provider down")
+	if w := postRegister(f.h, "existing", "fresh@company.test"); w.Code != http.StatusCreated {
+		t.Fatalf("got %d", w.Code)
+	}
+	f.runQueued()
 }

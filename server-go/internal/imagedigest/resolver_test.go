@@ -212,3 +212,12 @@ func TestRefuseDeniedAddress_RefusesTheInstallsOwnRanges(t *testing.T) {
 		t.Errorf("a public address was refused: %v", err)
 	}
 }
+
+func TestRefuseInternalOrDenied_UnparseableAddressesAreRefused(t *testing.T) {
+	control := refuseInternalOrDenied(nil)
+	for _, address := range []string{"no-port", "not-an-ip:443"} {
+		if err := control("tcp", address, nil); !errors.Is(err, publicaddr.ErrInternalAddress) {
+			t.Errorf("%s: got %v, want ErrInternalAddress", address, err)
+		}
+	}
+}
