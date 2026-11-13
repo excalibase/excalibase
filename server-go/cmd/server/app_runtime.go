@@ -47,28 +47,6 @@ func requireGVisorHandler(ctx context.Context, class string, kube k8s.KubeClient
 	return nil
 }
 
-// verifyFunctionSandbox checks the class tenant functions run under. A missing
-// class only warns (the runtime pods stay Pending, which fails closed); a class
-// that exists but is not gVisor stops the platform.
-func verifyFunctionSandbox(ctx context.Context, cfg config.AppConfig, kube k8s.KubeClient) error {
-	if cfg.ProvisionerMode == "docker" || kube == nil {
-		return nil
-	}
-	class := cfg.AppRuntimeClass
-	if class == "" {
-		class = k8s.DefaultSandboxRuntimeClass
-	}
-	found, err := kube.RuntimeClassExists(ctx, class)
-	if err != nil {
-		return fmt.Errorf("check RuntimeClass %q: %w", class, err)
-	}
-	if !found {
-		log.Printf("WARN: RuntimeClass %q does not exist: edge function runtimes stay Pending until it does", class)
-		return nil
-	}
-	return requireGVisorHandler(ctx, class, kube)
-}
-
 func appRoute(cfg config.AppConfig) k8s.AppRouteOptions {
 	return k8s.AppRouteOptions{
 		Domain:               cfg.AppDomain,

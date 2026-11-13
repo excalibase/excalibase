@@ -151,6 +151,9 @@ jobs:
       - name: Chart lets provisioning check a volume can grow
         run: sh charts/provisioning/tests/disk-resize-rbac.sh
 
+      - name: Chart lets provisioning read the sandbox RuntimeClass
+        run: sh charts/provisioning/tests/runtimeclass-rbac.sh
+
       - name: Chart requires the first-admin setup token
         run: sh charts/provisioning/tests/setup-token.sh
 

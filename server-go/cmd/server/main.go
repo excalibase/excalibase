@@ -152,9 +152,6 @@ func runServer(cfg config.AppConfig) {
 	if err := verifyAppRuntime(context.Background(), cfg, k8sClient); err != nil {
 		log.Fatalf("app hosting: %v", err)
 	}
-	if err := verifyFunctionSandbox(context.Background(), cfg, k8sClient); err != nil {
-		log.Fatalf("edge functions: %v", err)
-	}
 	if err := verifyAppDomainIssuer(context.Background(), cfg, k8sClient); err != nil {
 		log.Fatalf("custom domains: %v", err)
 	}
@@ -262,6 +259,9 @@ func runServer(cfg config.AppConfig) {
 	fnSchedHandles := startFunctionScheduler(cfg, sqlStore, fnHandler, projectDB)
 	defer fnSchedHandles.Stop()
 
+	// Runtimes made before the sandbox class was required move into it now,
+	// in the background: a cluster that cannot offer it fails functions, never boot.
+	go fnHandler.ReconcileRuntimes(context.Background())
 	stopReplayer := startFunctionReplayer(cfg, fnHandler)
 	defer stopReplayer()
 
