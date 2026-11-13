@@ -67,10 +67,12 @@ type FunctionHandler struct {
 	runtimeEdge k8s.EdgePeer
 	// runtimeCiliumFQDN fences each runtime by host name (EXC-558).
 	runtimeCiliumFQDN bool
-	runtimeURLFn      func(namespace string) string // tests override; nil → cluster DNS
-	clientMu          sync.Mutex
-	clients           map[string]*edgefn.RuntimeClient // keyed by projectId
-	runtimeWait       runtimeWait
+	// runtimeClass is the sandbox RuntimeClass the runtime pod runs under.
+	runtimeClass string
+	runtimeURLFn func(namespace string) string // tests override; nil → cluster DNS
+	clientMu     sync.Mutex
+	clients      map[string]*edgefn.RuntimeClient // keyed by projectId
+	runtimeWait  runtimeWait
 
 	// Rate limiting for the public invoke route. Token bucket per project.
 	limiterMu     sync.Mutex

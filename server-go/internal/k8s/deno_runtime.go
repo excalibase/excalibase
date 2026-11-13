@@ -131,12 +131,14 @@ func (c *Client) reconcileDenoEgress(ctx context.Context, namespace string, dep 
 	fence := denoFenceContainer(image, spec.Tier)
 	initContainers, fenceChanged := withDenoFence(dep.Spec.Template.Spec.InitContainers, fence)
 	// A runtime made before EXC-642 moves its secret into a Secret and drops its privileges.
-	hardened := denoHardeningCurrent(dep, spec.RuntimeSecret)
+	hardened := denoHardeningCurrent(dep, spec.RuntimeSecret) && sandboxedUnder(dep, denoRuntimeClass(spec))
 	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) && !fenceChanged && !imageChanged && hardened {
 		return nil
 	}
 	updated := dep.DeepCopy()
 	hardenDeno(updated, spec.RuntimeSecret)
+	runtimeClass := denoRuntimeClass(spec)
+	updated.Spec.Template.Spec.RuntimeClassName = &runtimeClass
 	updated.Spec.Template.Spec.Containers[0].Image = image
 	setAllowedHosts(updated, want)
 	setEnv(updated, settings)
@@ -199,6 +201,11 @@ func setEnv(dep *appsv1.Deployment, vars []corev1.EnvVar) {
 	}
 }
 
+func sandboxedUnder(dep *appsv1.Deployment, class string) bool {
+	current := dep.Spec.Template.Spec.RuntimeClassName
+	return current != nil && *current == class
+}
+
 func currentAllowedHosts(dep *appsv1.Deployment) string {
 	for _, container := range dep.Spec.Template.Spec.Containers {
 		for _, env := range container.Env {
@@ -248,6 +255,7 @@ func buildDenoDeployment(namespace string, spec DenoRuntimeSpec) *appsv1.Deploym
 	one := int32(1)
 	falseVal := false
 	allowed := workerAllowedHosts(spec)
+	runtimeClass := denoRuntimeClass(spec)
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: denoRuntimeName, Namespace: namespace, Labels: labels},
 		Spec: appsv1.DeploymentSpec{
@@ -262,6 +270,8 @@ func buildDenoDeployment(namespace string, spec DenoRuntimeSpec) *appsv1.Deploym
 					},
 				},
 				Spec: corev1.PodSpec{
+					// Tenant code that escapes the V8 isolate must land in gVisor, not on the host kernel.
+					RuntimeClassName: &runtimeClass,
 					// The Deno runtime executes tenant-authored code and never calls
 					// the k8s API — don't mount a service-account token it could pivot
 					// with if a function escapes its isolate (EXC-322).
@@ -273,6 +283,15 @@ func buildDenoDeployment(namespace string, spec DenoRuntimeSpec) *appsv1.Deploym
 			},
 		},
 	}
+}
+
+// denoRuntimeClass is the sandbox class for the runtime pod; it is never empty,
+// so a spec that names none still runs sandboxed.
+func denoRuntimeClass(spec DenoRuntimeSpec) string {
+	if spec.RuntimeClass == "" {
+		return DefaultSandboxRuntimeClass
+	}
+	return spec.RuntimeClass
 }
 
 func buildDenoContainer(spec DenoRuntimeSpec, allowedHosts string) corev1.Container {

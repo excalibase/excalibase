@@ -239,6 +239,8 @@ type AppPods struct {
 
 // RuntimePlacement is what a RuntimeClass adds to each pod and where it may run.
 type RuntimePlacement struct {
+	// Handler is the container runtime the class runs pods with.
+	Handler          string
 	OverheadCPUMilli int64
 	OverheadMemBytes int64
 	NodeSelector     map[string]string
@@ -295,6 +297,10 @@ type DenoRuntimeSpec struct {
 	// ProvisioningURL is provisioning's in-cluster address, which ctx.storage
 	// and the export-metadata callback call with the project's runtime token.
 	ProvisioningURL string
+	// RuntimeClass is the sandbox RuntimeClass the runtime pod runs under: it
+	// executes tenant-authored code, so it never runs on the host kernel. Empty
+	// means the platform default.
+	RuntimeClass string
 }
 
 // Verify Client implements KubeClient at compile time.

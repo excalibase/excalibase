@@ -152,6 +152,9 @@ func runServer(cfg config.AppConfig) {
 	if err := verifyAppRuntime(context.Background(), cfg, k8sClient); err != nil {
 		log.Fatalf("app hosting: %v", err)
 	}
+	if err := verifyFunctionSandbox(context.Background(), cfg, k8sClient); err != nil {
+		log.Fatalf("edge functions: %v", err)
+	}
 	if err := verifyAppDomainIssuer(context.Background(), cfg, k8sClient); err != nil {
 		log.Fatalf("custom domains: %v", err)
 	}
@@ -1241,6 +1244,7 @@ func buildFunctionHandler(
 		fnHandler.SetRuntimeProvisioningURL(cfg.DenoProvisioningURL)
 		fnHandler.SetRuntimeEdge(edgePeer(cfg))
 		fnHandler.SetRuntimeCiliumFQDN(cfg.FunctionEgressByName())
+		fnHandler.SetRuntimeClass(cfg.AppRuntimeClass)
 	}
 	fnHandler.SetVault(vc)
 	// Without this resolver a deploy stores the declared schema and never
