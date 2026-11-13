@@ -10,7 +10,44 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const namespaceQuotaName = "namespace-quota"
+const (
+	namespaceQuotaName      = "namespace-quota"
+	namespaceLimitRangeName = "namespace-disk-limits"
+)
+
+// Backstop for a pod that declares no ephemeral-storage of its own (CNPG jobs,
+// the function runtime, a future workload): it gets a ceiling instead of the
+// whole node disk. The ceiling is the largest app tier's, so it never cuts a
+// pod that an app tier would allow; the request stays small so the default
+// does not reserve the ceiling on every pod.
+const (
+	defaultEphemeralLimit   = "4Gi"
+	defaultEphemeralRequest = "64Mi"
+)
+
+func buildNamespaceLimitRange(namespace string) *corev1.LimitRange {
+	return &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      namespaceLimitRangeName,
+			Namespace: namespace,
+			Labels:    map[string]string{componentLabelKey: "quota"},
+		},
+		Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{
+			Type:           corev1.LimitTypeContainer,
+			Default:        corev1.ResourceList{corev1.ResourceEphemeralStorage: resource.MustParse(defaultEphemeralLimit)},
+			DefaultRequest: corev1.ResourceList{corev1.ResourceEphemeralStorage: resource.MustParse(defaultEphemeralRequest)},
+		}}},
+	}
+}
+
+// ensureNamespaceLimitRange creates the disk backstop if it is absent.
+func (c *Client) ensureNamespaceLimitRange(ctx context.Context, namespace string) error {
+	_, err := c.clientset.CoreV1().LimitRanges(namespace).Create(ctx, buildNamespaceLimitRange(namespace), metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create namespace disk limits: %w", err)
+	}
+	return nil
+}
 
 // NamespaceQuota is the object-count ceiling of one project namespace (EXC-329).
 type NamespaceQuota struct {
@@ -67,6 +104,13 @@ func buildNamespaceQuota(namespace string, q NamespaceQuota) *corev1.ResourceQuo
 // absent, but never below what the namespace already holds: a downgrade
 // refuses new objects and keeps the running ones.
 func (c *Client) EnsureNamespaceQuota(ctx context.Context, namespace string, q NamespaceQuota) error {
+	if err := c.ensureNamespaceLimitRange(ctx, namespace); err != nil {
+		return err
+	}
+	return c.ensureNamespaceObjectQuota(ctx, namespace, q)
+}
+
+func (c *Client) ensureNamespaceObjectQuota(ctx context.Context, namespace string, q NamespaceQuota) error {
 	used, err := c.namespaceUsage(ctx, namespace)
 	if err != nil {
 		return err

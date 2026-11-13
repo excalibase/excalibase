@@ -17,6 +17,10 @@ type AppTierConfig struct {
 	CPULimit      string
 	MemoryRequest string
 	MemoryLimit   string
+	// EphemeralStorage* bound what one pod may write to its own filesystem and
+	// logs, so a tenant app cannot fill the node and get its neighbours evicted.
+	EphemeralStorageRequest string
+	EphemeralStorageLimit   string
 	// MaxReplicas caps the replica count for the tier. The resource model
 	// caps replicas globally too; the tier cap is the tighter of the two.
 	MaxReplicas int
@@ -27,25 +31,31 @@ type AppTierConfig struct {
 // a container that never uses it.
 var appTiers = map[domain.TierType]AppTierConfig{
 	domain.Free: {
-		CPURequest:    "50m",
-		CPULimit:      "250m",
-		MemoryRequest: "128Mi",
-		MemoryLimit:   "256Mi",
-		MaxReplicas:   1,
+		CPURequest:              "50m",
+		CPULimit:                "250m",
+		MemoryRequest:           "128Mi",
+		MemoryLimit:             "256Mi",
+		MaxReplicas:             1,
+		EphemeralStorageRequest: "128Mi",
+		EphemeralStorageLimit:   "1Gi",
 	},
 	domain.Standard: {
-		CPURequest:    "250m",
-		CPULimit:      "1",
-		MemoryRequest: "512Mi",
-		MemoryLimit:   "1Gi",
-		MaxReplicas:   3,
+		CPURequest:              "250m",
+		CPULimit:                "1",
+		MemoryRequest:           "512Mi",
+		MemoryLimit:             "1Gi",
+		MaxReplicas:             3,
+		EphemeralStorageRequest: "256Mi",
+		EphemeralStorageLimit:   "2Gi",
 	},
 	domain.Enterprise: {
-		CPURequest:    "1",
-		CPULimit:      "2",
-		MemoryRequest: "2Gi",
-		MemoryLimit:   "4Gi",
-		MaxReplicas:   3,
+		CPURequest:              "1",
+		CPULimit:                "2",
+		MemoryRequest:           "2Gi",
+		MemoryLimit:             "4Gi",
+		MaxReplicas:             3,
+		EphemeralStorageRequest: "512Mi",
+		EphemeralStorageLimit:   "4Gi",
 	},
 }
 
