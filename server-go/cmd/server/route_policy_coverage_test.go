@@ -78,6 +78,7 @@ var gateRefusalBodies = map[string]bool{
 	`{"error":"insufficient permissions"}`:                                         true,
 	`{"error":"token lacks required scope: write"}`:                                true,
 	`{"error":"this route requires a session or an unrestricted token"}`:           true,
+	`{"error":"a token bound to one project cannot create projects"}`:              true,
 	`{"error":"this route requires a write-capable credential"}`:                   true,
 	`{"error":"token is not permitted to call this endpoint"}`:                     true,
 	`{"error":"a deploy token may only deploy its own site and read its deploys"}`: true,
@@ -208,6 +209,12 @@ func policyPrincipals(platform *fakePlatform) []principal {
 		policyAdminID, "user", domain.AccessToken{Scopes: auth.ScopeRead})
 	add(routepolicy.Principal{Name: "patBoundToOtherProject", OrgRole: domain.OrgRoleAdmin, Restricted: true, ForeignProject: true},
 		policyBoundID, "user", domain.AccessToken{ProjectID: matrixProjectB})
+	// A PAT bound to the very project in the path, and an unbound write-scoped
+	// one (what Studio makes for automation).
+	add(routepolicy.Principal{Name: "patBoundToThisProject", OrgRole: domain.OrgRoleAdmin, Restricted: true, BoundSameProject: true},
+		policyAdminID, "user", domain.AccessToken{ProjectID: matrixProjectA})
+	add(routepolicy.Principal{Name: "scopedWritePAT", OrgRole: domain.OrgRoleAdmin, Restricted: true},
+		policyAdminID, "user", domain.AccessToken{Scopes: auth.ScopeRead + "," + auth.ScopeWrite})
 	// A platform admin holding a project-bound PAT: every platform permission,
 	// yet a credential narrowed to one tenant. The routes that hand out or
 	// destroy platform-wide authority must refuse it.

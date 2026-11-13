@@ -116,6 +116,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			ctx := auth.SetUser(req.Context(), &domain.User{ID: "test-admin", Role: "platform_admin", Active: true})
+			ctx = auth.SetToken(ctx, &domain.AccessToken{Scopes: auth.ScopeSession})
 			next.ServeHTTP(w, req.WithContext(ctx))
 		})
 	})
