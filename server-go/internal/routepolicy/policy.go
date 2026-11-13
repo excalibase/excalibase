@@ -147,6 +147,10 @@ type Row struct {
 	// Unrestricted marks a route that refuses any narrowed PAT — a
 	// scope-limited or project-bound credential is not enough.
 	Unrestricted bool
+	// Unbound marks a route that refuses a project-bound PAT but accepts an
+	// unbound one with write scope (project creation: Studio makes such tokens
+	// for automation). Read-only tokens are refused by the write gate already.
+	Unbound bool
 	// Capability is the capability a platform service token may call this
 	// route with, or "" when no capability token may reach it.
 	Capability string
