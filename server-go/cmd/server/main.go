@@ -1843,6 +1843,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 	provHandler := handler.NewProvisioningHandler(provSvc, sqlStore)
 	provHandler.SetActivityStore(sqlStore)
+	provHandler.SetAuthHookDeny(cfg.ExtraDenyPrefixes())
 	wireProjectCors(sqlStore, provHandler)
 	wireProjectAuthSettings(sqlStore, provHandler)
 	wireAuthOAuth(cfg, sqlStore, vc, provHandler)
@@ -1864,7 +1865,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	if origins, ok := sqlStore.(storage.ProjectCorsEditor); ok {
 		appDeploySvc.SetCorsOriginReleaser(origins)
 	}
-	appDeploySvc.SetImageResolver(imagedigest.NewResolver())
+	appDeploySvc.SetImageResolver(imagedigest.NewResolver(cfg.ExtraDenyPrefixes()))
 	appDeploySvc.SetLocalRegistries(cfg.AppLocalRegistries)
 	appNetworkSvc := newAppNetworkService(sqlStore, store, appRuntime, a.claimer)
 	schemaHandler := newSchemaHandler(cfg, vc, store)

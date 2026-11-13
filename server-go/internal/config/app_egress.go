@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 )
@@ -32,6 +33,19 @@ func parseEgressExtraDenyCIDRs(raw string) ([]string, error) {
 		cidrs = append(cidrs, network.String())
 	}
 	return cidrs, nil
+}
+
+// ExtraDenyPrefixes are the install's own off-cluster ranges (its node and
+// load-balancer addresses) as prefixes, for the checks that run in the control
+// plane itself: image registries and auth-hook URLs.
+func (c AppConfig) ExtraDenyPrefixes() []netip.Prefix {
+	prefixes := make([]netip.Prefix, 0, len(c.AppEgressExtraDenyCIDRs))
+	for _, cidr := range c.AppEgressExtraDenyCIDRs {
+		if prefix, err := netip.ParsePrefix(cidr); err == nil {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	return prefixes
 }
 
 func envEgressExtraDenyCIDRs(key string) []string {

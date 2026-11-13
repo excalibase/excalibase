@@ -69,3 +69,14 @@ func TestParseEgressExtraDenyCIDRsIPv6ErrorNamesNoOwner(t *testing.T) {
 		t.Fatalf("error %v", err)
 	}
 }
+
+func TestExtraDenyPrefixes(t *testing.T) {
+	cfg := AppConfig{AppEgressExtraDenyCIDRs: []string{"203.0.113.0/28", "198.51.100.7/32"}}
+	got := cfg.ExtraDenyPrefixes()
+	if len(got) != 2 || got[0].String() != "203.0.113.0/28" || got[1].String() != "198.51.100.7/32" {
+		t.Fatalf("prefixes = %v", got)
+	}
+	if len((AppConfig{}).ExtraDenyPrefixes()) != 0 {
+		t.Fatal("no ranges configured must deny nothing extra")
+	}
+}

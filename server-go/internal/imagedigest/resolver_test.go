@@ -6,11 +6,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/publicaddr"
 )
 
 const testDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -172,7 +174,7 @@ func TestResolveNeverDialsAnInternalAddress(t *testing.T) {
 	t.Cleanup(server.Close)
 	host := strings.TrimPrefix(server.URL, "http://")
 
-	resolver := NewResolver()
+	resolver := NewResolver(nil)
 	resolver.plainHTTP = true
 	for _, image := range []string{host + "/acme/web:main", "169.254.169.254/latest/meta:data", "localhost:5000/web:1"} {
 		_, err := resolver.Resolve(context.Background(), image, nil)
@@ -194,5 +196,19 @@ func TestRepositoryLocation(t *testing.T) {
 		if got != want {
 			t.Errorf("repositoryLocation(%q) = %q, want %q", image, got, want)
 		}
+	}
+}
+
+// A registry that resolves to the install's own address is refused like a private one.
+func TestRefuseDeniedAddress_RefusesTheInstallsOwnRanges(t *testing.T) {
+	control := refuseInternalOrDenied([]netip.Prefix{netip.MustParsePrefix("93.184.216.0/28")})
+	if err := control("tcp", "93.184.216.4:443", nil); !errors.Is(err, publicaddr.ErrInternalAddress) {
+		t.Errorf("a denied node address was allowed: %v", err)
+	}
+	if err := control("tcp", "10.0.0.1:443", nil); !errors.Is(err, publicaddr.ErrInternalAddress) {
+		t.Errorf("a private address was allowed: %v", err)
+	}
+	if err := control("tcp", "8.8.4.4:443", nil); err != nil {
+		t.Errorf("a public address was refused: %v", err)
 	}
 }
