@@ -2096,8 +2096,8 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 	r.Route("/api/provision", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		r.Get("/", d.provHandler.ListInstances)
-		// A project-bound or scope-limited PAT may not mint new projects.
-		r.With(auth.RequireUnrestrictedCredentialForWrites, custommw.LimitBody(custommw.DefaultBodyLimit)).Post("/", d.provHandler.Provision)
+		// A project-bound PAT may not mint new projects.
+		r.With(auth.RequireUnboundCredential, custommw.LimitBody(custommw.DefaultBodyLimit)).Post("/", d.provHandler.Provision)
 		r.Post("/estimate", d.provHandler.EstimateCost)
 
 		r.Route("/{projectId}", func(r chi.Router) {
@@ -2186,7 +2186,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 
 			// Admin+ — copying the database into a new project (EXC-667). The
 			// flag is asked first so the route is unmounted, not forbidden, while off.
-			r.With(features.Require(d.features, features.DBCopy), admin, db).Post("/backup/copy", d.backupHandler.Copy)
+			r.With(features.Require(d.features, features.DBCopy), auth.RequireUnboundCredential, admin, db).Post("/backup/copy", d.backupHandler.Copy)
 
 			// Admin+ subtrees — backup/restore and full-DB snapshots (dump +
 			// restore are destructive/exfil; kept Admin-only as the safe default).
