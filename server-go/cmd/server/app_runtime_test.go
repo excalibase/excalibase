@@ -48,6 +48,7 @@ func TestVerifyAppRuntime_HostingDisabledChecksNothing(t *testing.T) {
 func TestVerifyAppRuntime_PresentRuntimeClassPasses(t *testing.T) {
 	kube := k8s.NewMockClient()
 	kube.RuntimeClasses["gvisor"] = true
+	kube.Placement = k8s.RuntimePlacement{Handler: "runsc"}
 	if err := verifyAppRuntime(context.Background(), hostingConfig(true), kube); err != nil {
 		t.Fatalf("want success, got %v", err)
 	}
@@ -103,5 +104,39 @@ func TestRegistryCredentialWiring(t *testing.T) {
 	deploys := service.NewAppDeployService(nil, nil, k8s.NewMockClient(), fakestore.NewInstances(), nil, k8s.AppRenderOptions{})
 	if withRegistryCredentials(deploys, nil) != deploys || withRegistryCredentials(deploys, creds) != deploys {
 		t.Fatal("the deploy service is returned as given")
+	}
+}
+
+func TestVerifyAppRuntime_HandlerMustBeGVisor(t *testing.T) {
+	kube := k8s.NewMockClient()
+	kube.RuntimeClasses["gvisor"] = true
+	kube.Placement = k8s.RuntimePlacement{Handler: "runc"}
+	err := verifyAppRuntime(context.Background(), hostingConfig(true), kube)
+	if err == nil || !strings.Contains(err.Error(), "runsc") {
+		t.Fatalf("a RuntimeClass named gvisor that runs plain runc must be refused, got %v", err)
+	}
+	kube.Placement = k8s.RuntimePlacement{Handler: "runsc"}
+	if err := verifyAppRuntime(context.Background(), hostingConfig(true), kube); err != nil {
+		t.Fatalf("runsc handler: %v", err)
+	}
+}
+
+func TestVerifyFunctionSandbox(t *testing.T) {
+	cfg := config.AppConfig{ProvisionerMode: "k8s", AppRuntimeClass: "gvisor"}
+	kube := k8s.NewMockClient()
+	kube.RuntimeClasses["gvisor"] = true
+	kube.Placement = k8s.RuntimePlacement{Handler: "runc"}
+	if err := verifyFunctionSandbox(context.Background(), cfg, kube); err == nil {
+		t.Fatal("a non-gVisor handler must stop the platform from running tenant functions")
+	}
+	kube.Placement = k8s.RuntimePlacement{Handler: "runsc"}
+	if err := verifyFunctionSandbox(context.Background(), cfg, kube); err != nil {
+		t.Fatalf("runsc: %v", err)
+	}
+	if err := verifyFunctionSandbox(context.Background(), cfg, k8s.NewMockClient()); err != nil {
+		t.Fatalf("a missing class is a warning, pods stay Pending: %v", err)
+	}
+	if err := verifyFunctionSandbox(context.Background(), config.AppConfig{ProvisionerMode: "docker"}, nil); err != nil {
+		t.Fatalf("docker mode: %v", err)
 	}
 }

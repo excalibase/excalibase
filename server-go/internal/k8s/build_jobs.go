@@ -23,6 +23,13 @@ const cloneSecretSuffix = "-git"
 // gvisorHandler is the containerd handler every install registers for gVisor (rke2/node, single-host, tests).
 const gvisorHandler = "runsc"
 
+// DefaultSandboxRuntimeClass is the RuntimeClass tenant code runs under when none is configured.
+const DefaultSandboxRuntimeClass = "gvisor"
+
+// IsGVisorHandler reports whether a RuntimeClass handler is gVisor, so a class
+// merely named "gvisor" that runs plain runc is not mistaken for a sandbox.
+func IsGVisorHandler(handler string) bool { return handler == gvisorHandler }
+
 // buildLogStep is a step whose output a build's history keeps, under its title.
 type buildLogStep struct{ container, title string }
 
