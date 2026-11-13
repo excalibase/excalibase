@@ -47,6 +47,10 @@ func TestCreateProjectNamespace_AddsADiskLimitRangeBackstop(t *testing.T) {
 	if item.Default.StorageEphemeral().IsZero() || item.DefaultRequest.StorageEphemeral().IsZero() {
 		t.Fatalf("default limit and request must both name ephemeral storage: %+v", item)
 	}
+	// The backstop follows the largest app tier, so it never cuts what a tier allows.
+	if largest := config.LargestAppEphemeralStorageLimit(); item.Default.StorageEphemeral().Cmp(largest) != 0 {
+		t.Errorf("default limit %s, want the largest tier's %s", item.Default.StorageEphemeral(), largest.String())
+	}
 	if item.DefaultRequest.StorageEphemeral().Cmp(*item.Default.StorageEphemeral()) >= 0 {
 		t.Errorf("the default request must stay below the default limit, or every pod reserves its whole ceiling")
 	}

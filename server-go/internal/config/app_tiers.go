@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
@@ -57,6 +58,18 @@ var appTiers = map[domain.TierType]AppTierConfig{
 		EphemeralStorageRequest: "512Mi",
 		EphemeralStorageLimit:   "4Gi",
 	},
+}
+
+// LargestAppEphemeralStorageLimit is the biggest disk ceiling any app tier
+// grants, which a namespace's default limit follows so it never cuts a tier.
+func LargestAppEphemeralStorageLimit() resource.Quantity {
+	var largest resource.Quantity
+	for _, tier := range appTiers {
+		if limit := resource.MustParse(tier.EphemeralStorageLimit); limit.Cmp(largest) > 0 {
+			largest = limit
+		}
+	}
+	return largest
 }
 
 // GetAppTierConfig returns the resource envelope for a tier. An unknown tier

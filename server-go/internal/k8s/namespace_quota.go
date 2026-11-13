@@ -8,6 +8,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/excalibase/provisioning-poc/internal/config"
 )
 
 const (
@@ -20,10 +22,7 @@ const (
 // whole node disk. The ceiling is the largest app tier's, so it never cuts a
 // pod that an app tier would allow; the request stays small so the default
 // does not reserve the ceiling on every pod.
-const (
-	defaultEphemeralLimit   = "4Gi"
-	defaultEphemeralRequest = "64Mi"
-)
+const defaultEphemeralRequest = "64Mi"
 
 func buildNamespaceLimitRange(namespace string) *corev1.LimitRange {
 	return &corev1.LimitRange{
@@ -34,7 +33,7 @@ func buildNamespaceLimitRange(namespace string) *corev1.LimitRange {
 		},
 		Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{
 			Type:           corev1.LimitTypeContainer,
-			Default:        corev1.ResourceList{corev1.ResourceEphemeralStorage: resource.MustParse(defaultEphemeralLimit)},
+			Default:        corev1.ResourceList{corev1.ResourceEphemeralStorage: config.LargestAppEphemeralStorageLimit()},
 			DefaultRequest: corev1.ResourceList{corev1.ResourceEphemeralStorage: resource.MustParse(defaultEphemeralRequest)},
 		}}},
 	}
