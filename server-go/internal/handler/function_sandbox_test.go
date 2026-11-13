@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
@@ -103,3 +104,84 @@ func TestFunctionHandler_ReconcileRuntimes(t *testing.T) {
 		t.Fatalf("a project with no runtime must not get one at startup, got %d", fake.ensured)
 	}
 }
+
+func TestSandboxGate_CachesUntilExpired(t *testing.T) {
+	mock := k8s.NewMockClient()
+	mock.RuntimeClasses["gvisor"] = true
+	mock.Placement = k8s.RuntimePlacement{Handler: "runsc"}
+	gate := &sandboxGate{ttl: time.Hour}
+	for range 3 {
+		if err := gate.check(context.Background(), mock, "gvisor"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if reads := countCalls(mock, "RuntimeClassExists:gvisor"); reads != 1 {
+		t.Fatalf("%d cluster reads for three checks, want 1", reads)
+	}
+	gate.expire()
+	_ = gate.check(context.Background(), mock, "gvisor")
+	if reads := countCalls(mock, "RuntimeClassExists:gvisor"); reads != 2 {
+		t.Fatalf("%d cluster reads after expiry, want 2", reads)
+	}
+}
+
+func countCalls(mock *k8s.MockClient, call string) int {
+	n := 0
+	for _, c := range mock.Calls {
+		if c == call {
+			n++
+		}
+	}
+	return n
+}
+
+func TestReadSandbox_PlacementReadFailureIsUnavailable(t *testing.T) {
+	mock := k8s.NewMockClient()
+	mock.RuntimeClasses["gvisor"] = true
+	mock.PlacementErr = errors.New("forbidden")
+	if err := readSandbox(context.Background(), mock, "gvisor"); !errors.Is(err, ErrSandboxUnavailable) {
+		t.Fatalf("got %v, want ErrSandboxUnavailable", err)
+	}
+}
+
+func TestRequireSandbox_OffWithoutAClassOrCluster(t *testing.T) {
+	h := &FunctionHandler{sandbox: &sandboxGate{ttl: time.Hour}}
+	if err := h.requireSandbox(context.Background()); err != nil {
+		t.Fatalf("no cluster: %v", err)
+	}
+	h.k8sClient = k8s.NewMockClient()
+	if err := h.requireSandbox(context.Background()); err != nil {
+		t.Fatalf("no class named: %v", err)
+	}
+}
+
+func TestEnsureRuntime_RefusedWithoutSandboxOrOnEnsureFailure(t *testing.T) {
+	f := setupRestartHandler(t)
+	f.handler.SetRuntimeClass("gvisor")
+	if err := f.handler.ensureRuntime(context.Background(), testRestartProject, testRestartNS, time.Second); !errors.Is(err, ErrSandboxUnavailable) {
+		t.Fatalf("got %v, want ErrSandboxUnavailable", err)
+	}
+	f.k8s.RuntimeClasses["gvisor"] = true
+	f.k8s.Placement = k8s.RuntimePlacement{Handler: "runsc"}
+	f.k8s.EnsureDenoError = errors.New("boom")
+	if err := f.handler.ensureRuntime(context.Background(), testRestartProject, testRestartNS, time.Second); err == nil {
+		t.Fatal("an EnsureDenoRuntime failure must surface")
+	}
+}
+
+func TestReconcileRuntimes_SkipsWhenTheSandboxIsUnavailable(t *testing.T) {
+	rt := newRestartableRuntime(t, "boot-1")
+	h, store, fake := newReplayHandler(t, rt)
+	saveReplayFn(t, store, "alpha", "")
+	fake.hasRuntime = true
+	h.SetRuntimeClass("gvisor")
+	h.k8sClient = &sandboxlessK8s{replayK8s: fake}
+	h.ReconcileRuntimes(context.Background())
+	if fake.ensured != 0 {
+		t.Fatalf("reconciled %d runtimes without a sandbox", fake.ensured)
+	}
+}
+
+type sandboxlessK8s struct{ *replayK8s }
+
+func (s *sandboxlessK8s) RuntimeClassExists(context.Context, string) (bool, error) { return false, nil }
