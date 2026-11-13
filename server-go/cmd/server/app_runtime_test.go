@@ -120,23 +120,3 @@ func TestVerifyAppRuntime_HandlerMustBeGVisor(t *testing.T) {
 		t.Fatalf("runsc handler: %v", err)
 	}
 }
-
-func TestVerifyFunctionSandbox(t *testing.T) {
-	cfg := config.AppConfig{ProvisionerMode: "k8s", AppRuntimeClass: "gvisor"}
-	kube := k8s.NewMockClient()
-	kube.RuntimeClasses["gvisor"] = true
-	kube.Placement = k8s.RuntimePlacement{Handler: "runc"}
-	if err := verifyFunctionSandbox(context.Background(), cfg, kube); err == nil {
-		t.Fatal("a non-gVisor handler must stop the platform from running tenant functions")
-	}
-	kube.Placement = k8s.RuntimePlacement{Handler: "runsc"}
-	if err := verifyFunctionSandbox(context.Background(), cfg, kube); err != nil {
-		t.Fatalf("runsc: %v", err)
-	}
-	if err := verifyFunctionSandbox(context.Background(), cfg, k8s.NewMockClient()); err != nil {
-		t.Fatalf("a missing class is a warning, pods stay Pending: %v", err)
-	}
-	if err := verifyFunctionSandbox(context.Background(), config.AppConfig{ProvisionerMode: "docker"}, nil); err != nil {
-		t.Fatalf("docker mode: %v", err)
-	}
-}

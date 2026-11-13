@@ -46,3 +46,7 @@ rules:
   - apiGroups: ["monitoring.coreos.com"]
     resources: ["podmonitors"]
     verbs: ["get", "list", "create", "update", "delete"]
+  # The sandbox class's handler is checked before a function runtime starts (EXC-715)
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get"]
