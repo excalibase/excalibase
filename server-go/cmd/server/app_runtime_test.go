@@ -120,3 +120,12 @@ func TestVerifyAppRuntime_HandlerMustBeGVisor(t *testing.T) {
 		t.Fatalf("runsc handler: %v", err)
 	}
 }
+
+func TestRequireGVisorHandler_UnreadableClassIsRefused(t *testing.T) {
+	kube := k8s.NewMockClient()
+	kube.PlacementErr = errors.New("forbidden")
+	err := requireGVisorHandler(context.Background(), "gvisor", kube)
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("got %v, want the read failure", err)
+	}
+}
