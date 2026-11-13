@@ -176,7 +176,12 @@ func TestSleepContext(t *testing.T) {
 func TestLoginStopsWaitingWhenTheRequestIsGone(t *testing.T) {
 	r, h, _, user, password := slowedLoginHandler(t)
 	h.SetLoginSleep(func(ctx context.Context, _ time.Duration) error { return context.Canceled })
-	if code := loginFrom(r, "203.0.113.9:1", user, password); code == http.StatusOK {
-		t.Fatalf("a cancelled wait still signed in")
+	req := httptest.NewRequest(http.MethodPost, routeLogin, strings.NewReader(loginBody(user, password)))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.9:1"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Body.Len() != 0 || w.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("a cancelled wait still answered: %s", w.Body.String())
 	}
 }
