@@ -2,10 +2,13 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -64,5 +67,43 @@ func TestEnsureNamespaceQuota_AlsoRestoresTheLimitRange(t *testing.T) {
 	}
 	if _, err := c.clientset.CoreV1().LimitRanges("org1-proj-restore").Get(ctx, namespaceLimitRangeName, metav1.GetOptions{}); err != nil {
 		t.Fatalf("the plan sync must leave the LimitRange in place: %v", err)
+	}
+}
+
+func TestEnsureNamespaceQuota_RefusedLimitRangeFails(t *testing.T) {
+	c := newFakeClient()
+	c.clientset.(interface {
+		PrependReactor(string, string, ktesting.ReactionFunc)
+	}).PrependReactor("create", "limitranges", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("create refused")
+	})
+	if err := c.EnsureNamespaceQuota(context.Background(), "org1-proj-lr", DefaultNamespaceQuota); err == nil {
+		t.Fatal("a LimitRange that cannot be made must fail the sync, not pass silently")
+	}
+}
+
+func TestEnsureNamespaceQuota_ExistingLimitRangeIsKept(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	for range 2 {
+		if err := c.EnsureNamespaceQuota(ctx, "org1-proj-twice", DefaultNamespaceQuota); err != nil {
+			t.Fatalf("ensure: %v", err)
+		}
+	}
+	list, _ := c.clientset.CoreV1().LimitRanges("org1-proj-twice").List(ctx, metav1.ListOptions{})
+	if len(list.Items) != 1 {
+		t.Fatalf("%d LimitRanges, want one", len(list.Items))
+	}
+}
+
+func TestCreateProjectNamespace_RefusedLimitRangeFails(t *testing.T) {
+	c := newFakeClient()
+	c.clientset.(interface {
+		PrependReactor(string, string, ktesting.ReactionFunc)
+	}).PrependReactor("create", "limitranges", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("create refused")
+	})
+	if err := c.ensureNamespaceQuota(context.Background(), "org1-proj-lr2"); err == nil {
+		t.Fatal("a namespace without its disk backstop must not be reported ready")
 	}
 }

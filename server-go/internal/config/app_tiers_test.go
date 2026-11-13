@@ -53,3 +53,16 @@ func TestAppTiersCarryAnEphemeralStorageEnvelope(t *testing.T) {
 		previous = limit
 	}
 }
+
+func TestLargestAppEphemeralStorageLimitIsTheTopTiers(t *testing.T) {
+	largest := LargestAppEphemeralStorageLimit()
+	for _, tier := range []domain.TierType{domain.Free, domain.Standard, domain.Enterprise} {
+		tc, _ := GetAppTierConfig(tier)
+		if limit := resource.MustParse(tc.EphemeralStorageLimit); limit.Cmp(largest) > 0 {
+			t.Errorf("%s limit %s exceeds the reported largest %s", tier, limit.String(), largest.String())
+		}
+	}
+	if enterprise, _ := GetAppTierConfig(domain.Enterprise); largest.Cmp(resource.MustParse(enterprise.EphemeralStorageLimit)) != 0 {
+		t.Errorf("largest %s, want the enterprise tier's %s", largest.String(), enterprise.EphemeralStorageLimit)
+	}
+}
