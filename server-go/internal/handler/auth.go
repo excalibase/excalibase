@@ -33,6 +33,8 @@ type AuthHandler struct {
 	ceilings   map[string][]string
 	verifier   *EmailVerifier
 	loginGuard *loginguard.Guard
+	// accountGuard bounds guesses at one account across every address.
+	accountGuard *loginguard.Guard
 	// personalOrgs gives every account its personal org when it signs in
 	// (EXC-553); nil in self-hosted mode, which keeps its one default org.
 	personalOrgs auth.PersonalOrgStore
@@ -41,13 +43,16 @@ type AuthHandler struct {
 // SetPersonalOrgs makes every sign-in ensure the account's personal org.
 func (h *AuthHandler) SetPersonalOrgs(s auth.PersonalOrgStore) { h.personalOrgs = s }
 
-// Five guesses per account per quarter hour, whatever address they come from.
+// Five guesses per account and address per quarter hour: whoever is guessing
+// locks only their own address, never the owner signing in from another. A much
+// larger account-wide budget still bounds guessing spread over many addresses.
 const (
-	defaultLoginAttempts = 5
-	defaultLoginWindow   = 15 * time.Minute
+	defaultLoginAttempts        = 5
+	defaultAccountLoginAttempts = 100
+	defaultLoginWindow          = 15 * time.Minute
 )
 
-// SetLoginGuard replaces the per-account sign-in budget.
+// SetLoginGuard replaces the per-account-and-address sign-in budget.
 func (h *AuthHandler) SetLoginGuard(g *loginguard.Guard) { h.loginGuard = g }
 
 // SetEmailVerifier wires the verification mail every Studio account must
@@ -68,9 +73,10 @@ func (h *AuthHandler) SetInstanceStore(s storage.InstanceStore) { h.instanceStor
 
 func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) *AuthHandler {
 	return &AuthHandler{
-		userStore:  userStore,
-		tokenStore: tokenStore,
-		loginGuard: loginguard.New(defaultLoginAttempts, defaultLoginWindow),
+		userStore:    userStore,
+		tokenStore:   tokenStore,
+		loginGuard:   loginguard.New(defaultLoginAttempts, defaultLoginWindow),
+		accountGuard: loginguard.New(defaultAccountLoginAttempts, defaultLoginWindow),
 	}
 }
 
@@ -320,7 +326,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		guardKey = "user:" + user.ID
 	}
-	if !h.loginGuard.Attempt(guardKey) {
+	addressKey := guardKey + "@" + clientIP(r)
+	if !h.loginGuard.Attempt(addressKey) || !h.accountGuard.Attempt(guardKey) {
 		w.Header().Set("Retry-After", strconv.Itoa(int(defaultLoginWindow.Seconds())))
 		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
 		return
@@ -336,7 +343,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	h.loginGuard.Succeeded(guardKey)
+	h.loginGuard.Succeeded(addressKey)
 	if user.EmailVerifiedAt == nil {
 		writeEmailNotVerified(w)
 		return
