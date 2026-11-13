@@ -563,6 +563,29 @@ func TestProjectMember_InvalidRoleRejected(t *testing.T) {
 	}
 }
 
+// EXC-728: changing a member's role takes the same role names as adding one.
+func TestProjectMember_UpdateWithInvalidRoleRejected(t *testing.T) {
+	r, _, instances := setupOrgRouterWithInstances(t, true)
+
+	w := orgRequest(r, "POST", testOrgsPath, `{"name":"UOrg","slug":"u-org"}`, testAliceID)
+	var org domain.Org
+	json.NewDecoder(w.Body).Decode(&org)
+	instances.Create(&domain.DatabaseInstance{ProjectID: "my-proj", OrgID: org.ID})
+	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	orgRequest(r, "POST", testOrgsSlash+org.ID+testMyProjMembers, `{"userId":"`+testBobID+`","role":"viewer"}`, testAliceID)
+
+	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID+"/projects/my-proj/members/"+testBobID, `{"role":"superuser"}`, testAliceID)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("invalid project role on update: got %d, want 400. Body: %s", w2.Code, w2.Body.String())
+	}
+	w3 := orgRequest(r, "GET", testOrgsSlash+org.ID+testMyProjMembers, "", testAliceID)
+	var members []domain.ProjectMember
+	json.NewDecoder(w3.Body).Decode(&members)
+	if len(members) != 1 || members[0].Role != "viewer" {
+		t.Errorf("the refused update changed the role: %+v", members)
+	}
+}
+
 // TestProjectMember_CrossOrgProjectReturns404 proves the cross-org
 // enumeration hole is closed: a legitimate member/owner of org A cannot
 // read or mutate the project members of a project that belongs to org B
