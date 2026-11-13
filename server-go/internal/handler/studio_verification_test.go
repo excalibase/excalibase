@@ -55,6 +55,8 @@ func newVerificationHarness(t *testing.T, sender email.Sender) *verificationHarn
 	h.handler = NewAuthHandler(h.users, h.tokens)
 	h.handler.SetEmailVerifier(NewEmailVerifier(h.links, sender, testStudioURL, ""))
 	h.handler.SetAuditLog(h.audit)
+	// Sign-up mail leaves the request in the background; the harness runs it inline.
+	h.handler.SetBackground(func(task func()) { task() })
 	admin := &domain.User{ID: "admin", Role: "platform_admin", Active: true}
 	h.users.users[admin.ID] = admin
 	r := chi.NewRouter()
@@ -164,8 +166,9 @@ func TestSignUpIsRefusedWhenNoMailCanBeSent(t *testing.T) {
 func TestSignUpWhoseMailFailsLeavesNoAccount(t *testing.T) {
 	h := newVerificationHarness(t, &recordingSender{err: errors.New("provider down")})
 
-	if status, _ := h.register("ivy"); status != http.StatusServiceUnavailable {
-		t.Fatalf("got %d, want 503", status)
+	// The mail goes out after the answer, so the answer is the same 201 and the account is removed once the send fails.
+	if status, _ := h.register("ivy"); status != http.StatusCreated {
+		t.Fatalf("got %d, want 201", status)
 	}
 	if h.userNamed("ivy") != nil {
 		t.Fatal("the account survived a verification mail that was never sent")

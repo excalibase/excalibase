@@ -22,8 +22,7 @@ func TestUpdateOrgMemberRole_HappyPath(t *testing.T) {
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
 
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath,
-		`{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 
 	w = orgRequest(r, "PATCH", testOrgsSlash+org.ID+testMembersSlash+testBobID,
 		`{"role":"admin"}`, testAliceID)
@@ -37,8 +36,7 @@ func TestUpdateOrgMemberRole_InvalidRole(t *testing.T) {
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"Team","slug":"team-x"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath,
-		`{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 
 	w = orgRequest(r, "PATCH", testOrgsSlash+org.ID+testMembersSlash+testBobID,
 		`{"role":"emperor"}`, testAliceID)
@@ -52,8 +50,7 @@ func TestUpdateOrgMemberRole_NonAdmin_Forbidden(t *testing.T) {
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"Team","slug":"team-x"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath,
-		`{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 
 	// Bob is a developer — no manage-members permission. Should 403.
 	w = orgRequest(r, "PATCH", testOrgsSlash+org.ID+testMembersSlash+testBobID,
@@ -71,8 +68,7 @@ func TestUpdateOrgMemberRole_BadJSON(t *testing.T) {
 	}
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath,
-		`{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 
 	w = orgRequest(r, "PATCH", testOrgsSlash+org.ID+testMembersSlash+testBobID,
 		`not-json`, testAliceID)
@@ -86,8 +82,7 @@ func TestRemoveOrgMember_HappyPath(t *testing.T) {
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"Team","slug":"team-x"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath,
-		`{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 
 	w = orgRequest(r, "DELETE", testOrgsSlash+org.ID+testMembersSlash+testBobID, "", testAliceID)
 	if w.Code != http.StatusOK {
@@ -100,8 +95,7 @@ func TestRemoveOrgMember_NonAdmin_Forbidden(t *testing.T) {
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"Team","slug":"team-x"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath,
-		`{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 
 	w = orgRequest(r, "DELETE", testOrgsSlash+org.ID+testMembersSlash+testBobID, "", testBobID)
 	if w.Code != http.StatusForbidden {

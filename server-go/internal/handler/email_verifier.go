@@ -75,6 +75,27 @@ func (v *EmailVerifier) Send(ctx context.Context, user *domain.User) error {
 	return nil
 }
 
+// NotifyAccountExists mails the address a sign-up named, saying why no account
+// was made: it already has one, or the chosen username is taken.
+func (v *EmailVerifier) NotifyAccountExists(ctx context.Context, address string, usernameTaken bool) error {
+	if !v.Available() {
+		return ErrVerificationUnavailable
+	}
+	msg, err := email.BuildAccountExistsEmail(email.AccountExistsData{
+		UserEmail: address, UsernameTaken: usernameTaken, SignInURL: v.studioURL + "/login", ProductName: v.productName,
+	})
+	if err != nil {
+		return fmt.Errorf("build sign-up notice: %w", err)
+	}
+	msg.To = []string{address}
+	messageID, err := v.sender.Send(ctx, msg)
+	if err != nil {
+		return fmt.Errorf("send sign-up notice: %w", err)
+	}
+	logEmailSent("account_exists", address, messageID, "")
+	return nil
+}
+
 // Confirm spends a link and marks its account verified, returning the
 // account's id.
 func (v *EmailVerifier) Confirm(ctx context.Context, token string) (string, error) {

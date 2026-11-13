@@ -36,6 +36,9 @@ type AuthHandler struct {
 	// personalOrgs gives every account its personal org when it signs in
 	// (EXC-553); nil in self-hosted mode, which keeps its one default org.
 	personalOrgs auth.PersonalOrgStore
+	// background runs the work a sign-up does off its request, so a taken and a
+	// new account cost the same: the default is a goroutine.
+	background func(func())
 }
 
 // SetPersonalOrgs makes every sign-in ensure the account's personal org.
@@ -71,6 +74,7 @@ func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) 
 		userStore:  userStore,
 		tokenStore: tokenStore,
 		loginGuard: loginguard.New(defaultLoginAttempts, defaultLoginWindow),
+		background: func(task func()) { go task() },
 	}
 }
 
@@ -138,15 +142,16 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.registrationTaken(r.Context(), req.Username, req.Email) {
+	if usernameTaken, emailTaken := h.registrationTaken(r.Context(), req.Username, req.Email); usernameTaken || emailTaken {
 		if isFirstUser {
 			httpError(w, "username or email already in use", http.StatusConflict)
 			return
 		}
-		// The same answer a new sign-up gets, so the form cannot be used to
-		// learn which usernames and addresses already have an account.
-		w.WriteHeader(http.StatusCreated)
-		writeJSON(w, map[string]string{"status": "verification_required", "email": req.Email})
+		// The same answer and the same work as a new sign-up, so the form cannot
+		// be used to learn which usernames and addresses already have an account:
+		// the outcome goes to the address by mail, off the request path.
+		h.background(func() { h.mailAccountExists(req.Email, emailTaken) })
+		writeRegistrationPending(w, req.Email)
 		return
 	}
 
@@ -189,20 +194,45 @@ func (h *AuthHandler) registerMember(w http.ResponseWriter, r *http.Request, inv
 	if !h.createSubsequentUser(w, r, user) {
 		return
 	}
-	if err := h.verifier.Send(r.Context(), user); err != nil {
-		log.Printf("ERROR: registration of %s: %v", user.ID, err)
-		if derr := h.userStore.DeleteUser(r.Context(), user.ID); derr != nil {
-			log.Printf("WARN: remove account %s after a failed verification mail: %v", user.ID, derr)
-		}
-		httpError(w, "sign-up is unavailable: verification email could not be sent", http.StatusServiceUnavailable)
-		return
-	}
 	if !h.joinInviteIfAny(w, r, inviteHash, user) {
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]string{"status": "verification_required", "email": user.Email})
+	h.background(func() { h.mailVerification(user) })
+	writeRegistrationPending(w, user.Email)
 }
+
+// writeRegistrationPending is the one answer to a sign-up that needs its address checked.
+func writeRegistrationPending(w http.ResponseWriter, address string) {
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{"status": "verification_required", "email": address})
+}
+
+const registrationMailTimeout = 30 * time.Second
+
+// mailVerification sends the link off the request path. An account whose link
+// could not be sent is removed again, so the address stays free to try again.
+func (h *AuthHandler) mailVerification(user *domain.User) {
+	ctx, cancel := context.WithTimeout(context.Background(), registrationMailTimeout)
+	defer cancel()
+	if err := h.verifier.Send(ctx, user); err != nil {
+		log.Printf("ERROR: registration of %s: %v", user.ID, err)
+		if derr := h.userStore.DeleteUser(ctx, user.ID); derr != nil {
+			log.Printf("WARN: remove account %s after a failed verification mail: %v", user.ID, derr)
+		}
+	}
+}
+
+// mailAccountExists tells the address's owner why no account was made.
+func (h *AuthHandler) mailAccountExists(address string, emailTaken bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), registrationMailTimeout)
+	defer cancel()
+	if err := h.verifier.NotifyAccountExists(ctx, address, !emailTaken); err != nil {
+		log.Printf("WARN: sign-up notice: %v", err)
+	}
+}
+
+// SetBackground replaces how mail is sent off the request path; tests hold it back.
+func (h *AuthHandler) SetBackground(run func(func())) { h.background = run }
 
 // joinInviteIfAny spends the registration's invite, writing the refusal and
 // returning false when it cannot be spent.
@@ -579,15 +609,13 @@ func (h *AuthHandler) checkRegistration(ctx context.Context, username, email, pa
 	return 0, ""
 }
 
-// registrationTaken reports whether the username or the address already has an
-// account. A service principal occupies its name too: registration can never
-// take over a service identity.
-func (h *AuthHandler) registrationTaken(ctx context.Context, username, email string) bool {
-	if existing, _ := h.userStore.FindUserByUsername(ctx, username); existing != nil {
-		return true
-	}
-	existing, _ := h.userStore.FindUserByEmail(ctx, email)
-	return existing != nil
+// registrationTaken reports whether the username and the address already have an
+// account; both lookups always run. A service principal occupies its name too:
+// registration can never take over a service identity.
+func (h *AuthHandler) registrationTaken(ctx context.Context, username, email string) (usernameTaken, emailTaken bool) {
+	byName, _ := h.userStore.FindUserByUsername(ctx, username)
+	byEmail, _ := h.userStore.FindUserByEmail(ctx, email)
+	return byName != nil, byEmail != nil
 }
 
 // checkRegistrationInvite validates an invite token before any account is

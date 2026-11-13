@@ -45,9 +45,12 @@ func (s *memberOrgStore) CreatePendingInvite(context.Context, *domain.PendingInv
 type emailUserStore struct {
 	storage.UserStore
 	byEmail map[string]*domain.User
+	byID    map[string]*domain.User
 }
 
-func (s *emailUserStore) FindUserByID(context.Context, string) (*domain.User, error) { return nil, nil }
+func (s *emailUserStore) FindUserByID(_ context.Context, id string) (*domain.User, error) {
+	return s.byID[id], nil
+}
 
 func (s *emailUserStore) FindUserByEmail(_ context.Context, email string) (*domain.User, error) {
 	return s.byEmail[email], nil
@@ -81,42 +84,57 @@ func TestInviteByAddressAlwaysFilesAPendingInvite(t *testing.T) {
 	}
 }
 
-// EXC-555: inviting by a user id the caller holds still says why it refuses.
-func TestInviteByUserIdRefusalsSayWhy(t *testing.T) {
-	users := &emailUserStore{byEmail: map[string]*domain.User{}}
+// EXC-728: a user id is no way round consent. It files a pending invite for that
+// user's own address, which they accept themselves; nobody is added directly.
+func TestInviteByUserIdFilesAPendingInvite(t *testing.T) {
+	users := &emailUserStore{byID: map[string]*domain.User{
+		"u-ann": {ID: "u-ann", Email: "ann@x.test", Role: "user"},
+		"u-svc": {ID: "u-svc", Email: "svc@svc.excalibase.internal", Kind: domain.UserKindService},
+	}}
 
-	t.Run("already a member", func(t *testing.T) {
-		orgs := &memberOrgStore{existing: map[string]bool{"u-ann": true}}
-		w := httptest.NewRecorder()
-		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-ann", "", "viewer")
-		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "already a member") {
-			t.Fatalf("got %d %s, want 409 naming the membership", w.Code, w.Body.String())
-		}
-		if len(orgs.added) != 0 {
-			t.Errorf("an existing member must not be re-added")
+	t.Run("an existing member or not, the answer is a pending invite", func(t *testing.T) {
+		for _, member := range []bool{true, false} {
+			orgs := &memberOrgStore{existing: map[string]bool{"u-ann": member}}
+			w := httptest.NewRecorder()
+			NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-ann", "", "viewer")
+			if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"status":"pending"`) {
+				t.Fatalf("member=%v: got %d %s, want 201 pending", member, w.Code, w.Body.String())
+			}
+			if orgs.invites != 1 || len(orgs.added) != 0 {
+				t.Errorf("member=%v: invites %d, added %v", member, orgs.invites, orgs.added)
+			}
 		}
 	})
 
-	t.Run("someone not yet a member is added", func(t *testing.T) {
+	t.Run("an unknown id is not found", func(t *testing.T) {
 		orgs := &memberOrgStore{}
 		w := httptest.NewRecorder()
-		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-ann", "", "viewer")
-		if w.Code != http.StatusCreated || len(orgs.added) != 1 {
-			t.Fatalf("got %d %s (added %v), want 201 and one new member", w.Code, w.Body.String(), orgs.added)
+		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-nobody", "", "viewer")
+		if w.Code != http.StatusNotFound || orgs.invites != 0 {
+			t.Fatalf("got %d with %d invites, want 404 and none", w.Code, orgs.invites)
 		}
 	})
 
-	t.Run("a membership lookup that fails is not taken for no membership", func(t *testing.T) {
-		orgs := &memberOrgStore{lookup: fmt.Errorf("org member not found: %w", sql.ErrConnDone)}
+	t.Run("a service account is refused", func(t *testing.T) {
+		orgs := &memberOrgStore{}
 		w := httptest.NewRecorder()
-		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-ann", "", "viewer")
-		if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "connection") {
-			t.Fatalf("got %d %s, want a plain 500", w.Code, w.Body.String())
-		}
-		if len(orgs.added) != 0 {
-			t.Errorf("nobody may be added when membership is unknown")
+		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-svc", "", "viewer")
+		if w.Code != http.StatusBadRequest || orgs.invites != 0 {
+			t.Fatalf("got %d with %d invites, want 400 and none", w.Code, orgs.invites)
 		}
 	})
+}
+
+// The internal service-account domain is refused by its spelling, with no lookup.
+func TestInviteByAddressRefusesTheServiceAccountDomain(t *testing.T) {
+	orgs := &memberOrgStore{}
+	for _, email := range []string{"svc-graphql@svc.excalibase.internal", "Anything@SVC.Excalibase.Internal"} {
+		w := httptest.NewRecorder()
+		NewOrgHandler(orgs, &emailUserStore{}).resolveAndAddMember(w, inviteRequest(), "org1", "", email, "viewer")
+		if w.Code != http.StatusBadRequest || orgs.invites != 0 {
+			t.Fatalf("%s: got %d with %d invites, want 400 and none", email, w.Code, orgs.invites)
+		}
+	}
 }
 
 // EXC-555: a malformed address got an invite link nobody could use.

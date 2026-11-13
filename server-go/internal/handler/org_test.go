@@ -3,12 +3,15 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -54,14 +57,15 @@ func setupOrgRouterWithInstances(t *testing.T, isCloud bool) (chi.Router, *pgsto
 	t.Helper()
 	store := pgtest.New(t)
 
-	// Create test users
+	// Create test users, verified: an invite is accepted with a verified address.
+	verifiedAt := time.Now()
 	store.CreateUser(t.Context(), &domain.User{
 		ID: testAliceID, Username: testutil.FixtureToken("alice"), Email: "alice@test.com",
-		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true,
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true, EmailVerifiedAt: &verifiedAt,
 	})
 	store.CreateUser(t.Context(), &domain.User{
 		ID: testBobID, Username: testutil.FixtureToken("bob"), Email: "bob@test.com",
-		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true,
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true, EmailVerifiedAt: &verifiedAt,
 	})
 
 	instances := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}
@@ -232,6 +236,7 @@ func TestInviteAndListMembers(t *testing.T) {
 	if w2.Code != http.StatusCreated {
 		t.Fatalf("InviteMember: got %d. Body: %s", w2.Code, w2.Body.String())
 	}
+	acceptInvite(t, r, w2, testBobID)
 
 	// List members — should be alice (owner) + bob (developer)
 	w3 := orgRequest(r, "GET", testOrgsSlash+org.ID+testMembersPath, "", testAliceID)
@@ -463,7 +468,7 @@ func TestProjectMemberCRUD(t *testing.T) {
 	// ownership check passes for the legitimate same-org flow.
 	instances.Create(&domain.DatabaseInstance{ProjectID: "my-proj", OrgID: org.ID})
 	// Project members are drawn from the org's members (EXC-555).
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 
 	// Alice (owner) adds bob as editor
 	w2 := orgRequest(r, "POST", testOrgsSlash+org.ID+testMyProjMembers,
@@ -520,7 +525,7 @@ func TestProjectMember_DeveloperCannotAdd(t *testing.T) {
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"DevOrg","slug":"dev-org"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 
 	// Bob (developer) tries to add project member — should fail
 	w2 := orgRequest(r, "POST", testOrgsSlash+org.ID+testProj1Members,
@@ -571,7 +576,7 @@ func TestProjectMember_UpdateWithInvalidRoleRejected(t *testing.T) {
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
 	instances.Create(&domain.DatabaseInstance{ProjectID: "my-proj", OrgID: org.ID})
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 	orgRequest(r, "POST", testOrgsSlash+org.ID+testMyProjMembers, `{"userId":"`+testBobID+`","role":"viewer"}`, testAliceID)
 
 	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID+"/projects/my-proj/members/"+testBobID, `{"role":"superuser"}`, testAliceID)
@@ -641,7 +646,7 @@ func TestProjectMember_SameOrgProjectSucceeds(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&org)
 	instances.Create(&domain.DatabaseInstance{ProjectID: "own-proj", OrgID: org.ID})
 	// Project members are drawn from the org's members (EXC-555).
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 
 	base := testOrgsSlash + org.ID + "/projects/own-proj/members"
 
@@ -702,7 +707,7 @@ func TestDeleteOrg_CascadesMembers(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&org)
 
 	// Invite bob + add pending invite
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"email":"pending@t.com","role":"viewer"}`, testAliceID)
 	if invites, _ := store.ListPendingInvites(ctx, org.ID); len(invites) != 1 {
 		t.Fatalf("expected the pending invite before delete, got %d", len(invites))
@@ -730,7 +735,7 @@ func TestDeveloperCannotSeeSettings(t *testing.T) {
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"DevOrg2","slug":"dev-org2"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 
 	// Bob (developer) tries to update org — should fail
 	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"name":"hacked"}`, testBobID)
@@ -751,7 +756,7 @@ func TestAdminCannotDeleteOrg(t *testing.T) {
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"AdmOrg","slug":"adm-org"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
-	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"admin"}`, testAliceID)
+	joinOrg(t, r, org.ID, testBobID, "admin", testAliceID)
 
 	// Bob (admin) can update
 	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"name":"Updated"}`, testBobID)
@@ -878,5 +883,35 @@ func TestProjectMember_WritesRefusedWhileProjectIsDeleting(t *testing.T) {
 
 	if got := orgRequest(r, "GET", base, "", testAliceID); got.Code != http.StatusOK {
 		t.Errorf("listing members of a deleting project: got %d, want 200", got.Code)
+	}
+}
+
+// joinOrg adds userID to the org the only way there is: the owner invites them
+// by id, and they accept the invite with their own account.
+func joinOrg(t *testing.T, r chi.Router, orgID, userID, role, inviterID string) {
+	t.Helper()
+	w := orgRequest(r, "POST", testOrgsSlash+orgID+testMembersPath, `{"userId":"`+userID+`","role":"`+role+`"}`, inviterID)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("invite %s: %d %s", userID, w.Code, w.Body.String())
+	}
+	acceptInvite(t, r, w, userID)
+}
+
+// acceptInvite spends the invite link in an invite response as userID.
+func acceptInvite(t *testing.T, r chi.Router, invite *httptest.ResponseRecorder, userID string) {
+	t.Helper()
+	var body struct {
+		InviteLink string `json:"inviteLink"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(invite.Body.Bytes())).Decode(&body); err != nil || body.InviteLink == "" {
+		t.Fatalf("no invite link in %s", invite.Body.String())
+	}
+	link, err := url.Parse(body.InviteLink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accept := orgRequest(r, "POST", testOrgsSlash+"invites/accept", `{"token":"`+link.Query().Get("invite")+`"}`, userID)
+	if accept.Code != http.StatusOK {
+		t.Fatalf("accept as %s: %d %s", userID, accept.Code, accept.Body.String())
 	}
 }
