@@ -175,6 +175,8 @@ jobs:
       - run: npm test
       - name: Deploy script (curl faked, nothing reaches Cloudflare)
         run: sh test/deploy.sh
+      - name: Public Suffix List check (local list, no network)
+        run: sh test/check-psl.sh
 
   sites-outbound:
     name: Sites outbound Worker
