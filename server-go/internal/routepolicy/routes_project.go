@@ -5,7 +5,7 @@ package routepolicy
 // is not visible to gets 404 before any role is considered.
 var provisionRows = []Row{
 	{Methods: get, Pattern: "/api/provision/", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "lists only the caller's own projects"},
-	{Methods: post, Pattern: "/api/provision/", Auth: AuthSession, Owner: OwnerNone, Note: "tier admission decides whether the caller's org may provision"},
+	{Methods: post, Pattern: "/api/provision/", Auth: AuthSession, Owner: OwnerNone, Unrestricted: true, Note: "tier admission decides whether the caller's org may provision"},
 	{Methods: post, Pattern: "/api/provision/estimate", Auth: AuthSession, Owner: OwnerNone},
 
 	{Methods: get, Pattern: "/api/provision/{projectId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
