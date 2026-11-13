@@ -2096,7 +2096,8 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 	r.Route("/api/provision", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		r.Get("/", d.provHandler.ListInstances)
-		r.With(custommw.LimitBody(custommw.DefaultBodyLimit)).Post("/", d.provHandler.Provision)
+		// A project-bound PAT may not mint new projects.
+		r.With(auth.RequireUnboundCredential, custommw.LimitBody(custommw.DefaultBodyLimit)).Post("/", d.provHandler.Provision)
 		r.Post("/estimate", d.provHandler.EstimateCost)
 
 		r.Route("/{projectId}", func(r chi.Router) {
@@ -2185,7 +2186,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 
 			// Admin+ — copying the database into a new project (EXC-667). The
 			// flag is asked first so the route is unmounted, not forbidden, while off.
-			r.With(features.Require(d.features, features.DBCopy), admin, db).Post("/backup/copy", d.backupHandler.Copy)
+			r.With(features.Require(d.features, features.DBCopy), auth.RequireUnboundCredential, admin, db).Post("/backup/copy", d.backupHandler.Copy)
 
 			// Admin+ subtrees — backup/restore and full-DB snapshots (dump +
 			// restore are destructive/exfil; kept Admin-only as the safe default).
@@ -2240,6 +2241,7 @@ func mountSimpleAuthRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 	})
 	r.Route("/api/parameter-groups", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
+		r.Use(auth.RequireUnrestrictedCredentialForWrites)
 		d.pgHandler.Routes(r)
 	})
 }
@@ -2303,7 +2305,7 @@ func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 		r.Route("/oauth", func(r chi.Router) { d.oauthHandler.Routes(r, d.rlUnauth) })
 		r.With(d.rlAuthed).Post("/logout", d.authHandler.Logout)
 		r.With(auth.RequireAuth, d.rlAuthed).Get("/me", d.authHandler.Me)
-		r.With(auth.RequireAuth, d.rlAuthed).Route("/users", func(r chi.Router) {
+		r.With(auth.RequireAuth, d.rlAuthed, auth.RequireUnrestrictedCredentialForWrites).Route("/users", func(r chi.Router) {
 			r.With(auth.RequirePermission(auth.PermManageUsers)).Get("/", d.authHandler.ListUsers)
 			r.With(auth.RequirePermission(auth.PermManageUsers)).Post("/", d.authHandler.CreateUser)
 			r.With(auth.RequirePermission(auth.PermManageUsers)).Delete("/{userId}", d.authHandler.DeleteUser)
@@ -2322,11 +2324,15 @@ func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 	r.Route("/api/orgs", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
+		// Membership and org lifecycle widen who holds authority, so a
+		// narrowed PAT (project-bound or scope-limited) may only read here.
+		r.Use(auth.RequireUnrestrictedCredentialForWrites)
 		r.Use(custommw.LimitBody(custommw.DefaultBodyLimit))
 		d.orgHandler.Routes(r, cfg.IsCloud(), d.rlOrgCreate)
 	})
 	r.Route("/api/admin", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
+		r.Use(auth.RequireUnrestrictedCredentialForWrites)
 		r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
 		r.Route("/tiers", func(r chi.Router) {
 			r.Use(auth.RequirePermission(auth.PermViewAny))
