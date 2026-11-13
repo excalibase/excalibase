@@ -356,6 +356,17 @@ func (h *OrgHandler) InviteOrgMember(w http.ResponseWriter, r *http.Request) {
 	h.resolveAndAddMember(w, r, orgID, req.UserID, req.Email, req.Role)
 }
 
+const errInvalidProjectRole = "invalid role: must be admin, editor, or viewer"
+
+// isValidProjectRole checks the role names a project member may hold.
+func isValidProjectRole(role string) bool {
+	switch role {
+	case domain.ProjectRoleAdmin, domain.ProjectRoleEditor, domain.ProjectRoleViewer:
+		return true
+	}
+	return false
+}
+
 // isValidOrgRole checks if the role is one of the allowed org-level roles.
 func isValidOrgRole(role string) bool {
 	switch role {
@@ -578,12 +589,8 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate project role
-	validProjectRoles := map[string]bool{
-		domain.ProjectRoleAdmin: true, domain.ProjectRoleEditor: true, domain.ProjectRoleViewer: true,
-	}
-	if !validProjectRoles[req.Role] {
-		httpError(w, "invalid role: must be admin, editor, or viewer", http.StatusBadRequest)
+	if !isValidProjectRole(req.Role) {
+		httpError(w, errInvalidProjectRole, http.StatusBadRequest)
 		return
 	}
 
@@ -624,6 +631,11 @@ func (h *OrgHandler) UpdateProjectMemberRole(w http.ResponseWriter, r *http.Requ
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, errInvalidRequest, http.StatusBadRequest)
+		return
+	}
+
+	if !isValidProjectRole(req.Role) {
+		httpError(w, errInvalidProjectRole, http.StatusBadRequest)
 		return
 	}
 
