@@ -386,17 +386,17 @@ type permissionRoute struct {
 
 var permissionRoutes = []permissionRoute{
 	{group: "parameter groups read", method: http.MethodGet, path: "/api/parameter-groups/"},
-	{group: "parameter groups create", method: http.MethodPost, path: "/api/parameter-groups/"},
-	{group: "parameter groups update", method: http.MethodPut, path: "/api/parameter-groups/pg-1"},
-	{group: "parameter groups delete", method: http.MethodDelete, path: "/api/parameter-groups/pg-1"},
+	{group: "parameter groups create", method: http.MethodPost, path: "/api/parameter-groups/", unrestrictedOnly: true},
+	{group: "parameter groups update", method: http.MethodPut, path: "/api/parameter-groups/pg-1", unrestrictedOnly: true},
+	{group: "parameter groups delete", method: http.MethodDelete, path: "/api/parameter-groups/pg-1", unrestrictedOnly: true},
 	{group: "platform users read", method: http.MethodGet, path: "/api/auth/users/"},
-	{group: "platform users create", method: http.MethodPost, path: "/api/auth/users/"},
-	{group: "platform users delete", method: http.MethodDelete, path: "/api/auth/users/u-1"},
+	{group: "platform users create", method: http.MethodPost, path: "/api/auth/users/", unrestrictedOnly: true},
+	{group: "platform users delete", method: http.MethodDelete, path: "/api/auth/users/u-1", unrestrictedOnly: true},
 	{group: "service accounts read", method: http.MethodGet, path: "/api/admin/service-accounts/"},
 	{group: "service accounts create", method: http.MethodPost, path: "/api/admin/service-accounts/", unrestrictedOnly: true},
 	{group: "tier config read", method: http.MethodGet, path: "/api/admin/tiers/"},
-	{group: "tier config update", method: http.MethodPut, path: "/api/admin/tiers/STANDARD"},
-	{group: "operator install", method: http.MethodPost, path: "/api/setup/install/postgres"},
+	{group: "tier config update", method: http.MethodPut, path: "/api/admin/tiers/STANDARD", unrestrictedOnly: true},
+	{group: "operator install", method: http.MethodPost, path: "/api/setup/install/postgres", unrestrictedOnly: true},
 	{group: "admin force drop", method: http.MethodDelete, path: "/api/admin/projects/proj-a", unrestrictedOnly: true},
 }
 
