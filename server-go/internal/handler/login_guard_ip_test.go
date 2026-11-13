@@ -158,3 +158,25 @@ func TestLoginOwnerStillGetsInUnderTheCap(t *testing.T) {
 		t.Fatalf("the owner got %d with 100 failures against the account, want 200", code)
 	}
 }
+
+func TestSleepContext(t *testing.T) {
+	if err := sleepContext(context.Background(), 0); err != nil {
+		t.Fatalf("no wait returned %v", err)
+	}
+	if err := sleepContext(context.Background(), time.Millisecond); err != nil {
+		t.Fatalf("a short wait returned %v", err)
+	}
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := sleepContext(gone, time.Minute); err == nil {
+		t.Fatal("a request that is gone must stop the wait")
+	}
+}
+
+func TestLoginStopsWaitingWhenTheRequestIsGone(t *testing.T) {
+	r, h, _, user, password := slowedLoginHandler(t)
+	h.SetLoginSleep(func(ctx context.Context, _ time.Duration) error { return context.Canceled })
+	if code := loginFrom(r, "203.0.113.9:1", user, password); code == http.StatusOK {
+		t.Fatalf("a cancelled wait still signed in")
+	}
+}
