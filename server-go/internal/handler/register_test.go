@@ -86,8 +86,9 @@ func TestRegister_DuplicateEmail(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
 
-	if w2.Code != http.StatusConflict {
-		t.Errorf("duplicate: got %d, want %d", w2.Code, http.StatusConflict)
+	// Answered like a new sign-up, so the form never says which addresses have an account (EXC-728).
+	if w2.Code != http.StatusCreated {
+		t.Errorf("duplicate: got %d, want %d", w2.Code, http.StatusCreated)
 	}
 }
 

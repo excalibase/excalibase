@@ -63,18 +63,21 @@ func TestRegister_InviteSpentBeforeJoiningRemovesTheNewAccount(t *testing.T) {
 	}
 }
 
-func TestRegister_TakenUsernameIsAConflict(t *testing.T) {
-	h := registerHandler(seededStore(), nil, false)
-	if w := postRegister(h, "existing", "other@x.test"); w.Code != http.StatusConflict {
-		t.Fatalf("got %d, want 409", w.Code)
+// A taken username is answered like a new sign-up and creates nothing (EXC-728).
+func TestRegister_TakenUsernameCreatesNoAccount(t *testing.T) {
+	us := seededStore()
+	h := registerHandler(us, nil, false)
+	if w := postRegister(h, "existing", "other@x.test"); w.Code != http.StatusCreated || len(us.users) != 1 {
+		t.Fatalf("got %d with %d accounts, want 201 and the one account", w.Code, len(us.users))
 	}
 }
 
 // Existing and existing in other letters would read as the same person.
-func TestRegister_AUsernameDifferingOnlyByCaseIsAConflict(t *testing.T) {
-	h := registerHandler(seededStore(), nil, false)
-	if w := postRegister(h, "EXISTING", "other@x.test"); w.Code != http.StatusConflict {
-		t.Fatalf("got %d, want 409", w.Code)
+func TestRegister_AUsernameDifferingOnlyByCaseCreatesNoAccount(t *testing.T) {
+	us := seededStore()
+	h := registerHandler(us, nil, false)
+	if w := postRegister(h, "EXISTING", "other@x.test"); w.Code != http.StatusCreated || len(us.users) != 1 {
+		t.Fatalf("got %d with %d accounts, want 201 and the one account", w.Code, len(us.users))
 	}
 }
 

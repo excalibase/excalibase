@@ -138,6 +138,18 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.registrationTaken(r.Context(), req.Username, req.Email) {
+		if isFirstUser {
+			httpError(w, "username or email already in use", http.StatusConflict)
+			return
+		}
+		// The same answer a new sign-up gets, so the form cannot be used to
+		// learn which usernames and addresses already have an account.
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]string{"status": "verification_required", "email": req.Email})
+		return
+	}
+
 	now := time.Now()
 	user := &domain.User{
 		ID:           auth.GenerateID(),
@@ -548,9 +560,9 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, user)
 }
 
-// checkRegistration validates the submitted fields and refuses a name or
-// address already in use. A service principal occupies its name too:
-// registration can never take over a service identity.
+// checkRegistration validates the submitted fields. It says nothing about
+// whether the name or address is in use: that is registrationTaken's question,
+// asked only once the caller is allowed to register at all.
 func (h *AuthHandler) checkRegistration(ctx context.Context, username, email, password string) (int, string) {
 	if username == "" || email == "" || password == "" {
 		return http.StatusBadRequest, "username, email, and password are required"
@@ -564,13 +576,18 @@ func (h *AuthHandler) checkRegistration(ctx context.Context, username, email, pa
 	if msg := isValidPassword(password); msg != "" {
 		return http.StatusBadRequest, msg
 	}
-	if existing, _ := h.userStore.FindUserByUsername(ctx, username); existing != nil {
-		return http.StatusConflict, "username already taken"
-	}
-	if existing, _ := h.userStore.FindUserByEmail(ctx, email); existing != nil {
-		return http.StatusConflict, "email already registered"
-	}
 	return 0, ""
+}
+
+// registrationTaken reports whether the username or the address already has an
+// account. A service principal occupies its name too: registration can never
+// take over a service identity.
+func (h *AuthHandler) registrationTaken(ctx context.Context, username, email string) bool {
+	if existing, _ := h.userStore.FindUserByUsername(ctx, username); existing != nil {
+		return true
+	}
+	existing, _ := h.userStore.FindUserByEmail(ctx, email)
+	return existing != nil
 }
 
 // checkRegistrationInvite validates an invite token before any account is
