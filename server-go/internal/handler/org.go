@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -357,17 +356,6 @@ func (h *OrgHandler) InviteOrgMember(w http.ResponseWriter, r *http.Request) {
 	h.resolveAndAddMember(w, r, orgID, req.UserID, req.Email, req.Role)
 }
 
-// resolveInvitee finds the user an invite names, by id or by email.
-func (h *OrgHandler) resolveInvitee(ctx context.Context, userID, email string) (*domain.User, error) {
-	if userID != "" {
-		return h.userStore.FindUserByID(ctx, userID)
-	}
-	if email == "" {
-		return nil, nil
-	}
-	return h.userStore.FindUserByEmail(ctx, email)
-}
-
 // isValidOrgRole checks if the role is one of the allowed org-level roles.
 func isValidOrgRole(role string) bool {
 	switch role {
@@ -377,48 +365,56 @@ func isValidOrgRole(role string) bool {
 	return false
 }
 
-// resolveAndAddMember looks up the user by email if needed, then either adds
-// them as a member directly (user exists) or creates a pending invite.
+// resolveAndAddMember files a pending invite for an address, or adds a member
+// by the user id the caller already holds. An address is never looked up: the
+// answer is the same whether or not it has an account or is already a member,
+// so inviting cannot be used to learn who has one, and the invitee joins only
+// by accepting with their own verified address.
 func (h *OrgHandler) resolveAndAddMember(w http.ResponseWriter, r *http.Request, orgID, userID, email, role string) {
-	if userID == "" && !isEmailAddress(email) {
-		httpError(w, "enter a valid e-mail address, like name@example.com", http.StatusBadRequest)
+	if userID == "" {
+		if !isEmailAddress(email) {
+			httpError(w, "enter a valid e-mail address, like name@example.com", http.StatusBadRequest)
+			return
+		}
+		h.createInviteLink(w, r, orgID, email, role)
 		return
 	}
-	if h.userStore != nil {
-		if u, _ := h.resolveInvitee(r.Context(), userID, email); u != nil {
-			if u.IsService() {
-				// A service principal is platform-scoped: it authenticates
-				// with a capability token, never through an org membership.
-				httpError(w, "service accounts cannot be organization members", http.StatusBadRequest)
-				return
-			}
-			userID = u.ID
-		}
+	if h.rejectServiceInvitee(w, r, userID) {
+		return
 	}
+	// The store answers "not a member" with sql.ErrNoRows.
+	existing, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		log.Printf("invite to %s: look up membership: %v", orgID, err)
+		httpError(w, errAddMemberFailed, http.StatusInternalServerError)
+		return
+	}
+	if existing != nil {
+		httpError(w, "that person is already a member of this organization; change their role in the list instead", http.StatusConflict)
+		return
+	}
+	if err := h.orgStore.AddOrgMember(r.Context(), &domain.OrgMember{
+		OrgID: orgID, UserID: userID, Role: role,
+	}); err != nil {
+		httpError(w, errAddMemberFailed, http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{"status": "invited"})
+}
 
-	if userID != "" {
-		// The store answers "not a member" with sql.ErrNoRows.
-		existing, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			log.Printf("invite to %s: look up membership: %v", orgID, err)
-			httpError(w, errAddMemberFailed, http.StatusInternalServerError)
-			return
-		}
-		if existing != nil {
-			httpError(w, "that person is already a member of this organization; change their role in the list instead", http.StatusConflict)
-			return
-		}
-		if err := h.orgStore.AddOrgMember(r.Context(), &domain.OrgMember{
-			OrgID: orgID, UserID: userID, Role: role,
-		}); err != nil {
-			httpError(w, errAddMemberFailed, http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-		writeJSON(w, map[string]string{"status": "invited"})
-		return
+// rejectServiceInvitee refuses a service principal: it is platform-scoped and
+// authenticates with a capability token, never through an org membership.
+func (h *OrgHandler) rejectServiceInvitee(w http.ResponseWriter, r *http.Request, userID string) bool {
+	if h.userStore == nil {
+		return false
 	}
-	h.createInviteLink(w, r, orgID, email, role)
+	u, _ := h.userStore.FindUserByID(r.Context(), userID)
+	if u == nil || !u.IsService() {
+		return false
+	}
+	httpError(w, "service accounts cannot be organization members", http.StatusBadRequest)
+	return true
 }
 
 func (h *OrgHandler) UpdateOrgMemberRole(w http.ResponseWriter, r *http.Request) {

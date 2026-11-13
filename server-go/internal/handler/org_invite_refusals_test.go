@@ -47,19 +47,48 @@ type emailUserStore struct {
 	byEmail map[string]*domain.User
 }
 
+func (s *emailUserStore) FindUserByID(context.Context, string) (*domain.User, error) { return nil, nil }
+
 func (s *emailUserStore) FindUserByEmail(_ context.Context, email string) (*domain.User, error) {
 	return s.byEmail[email], nil
 }
 
-// EXC-555: inviting someone already in the org answered 500 "failed to add
-// member", and a malformed address got an invite link nobody could use.
-func TestInviteRefusalsSayWhy(t *testing.T) {
+// EXC-728: an invited address is never looked up, so an existing member, an
+// existing account and a stranger all get the same pending invite and nobody is
+// added without accepting it.
+func TestInviteByAddressAlwaysFilesAPendingInvite(t *testing.T) {
 	users := &emailUserStore{byEmail: map[string]*domain.User{"ann@x.test": {ID: "u-ann", Role: "user"}}}
+	cases := map[string]struct {
+		orgs  *memberOrgStore
+		email string
+	}{
+		"already a member":    {&memberOrgStore{existing: map[string]bool{"u-ann": true}}, "ann@x.test"},
+		"has an account":      {&memberOrgStore{}, "ann@x.test"},
+		"no account":          {&memberOrgStore{}, "new@x.test"},
+		"membership look-ups": {&memberOrgStore{lookup: fmt.Errorf("org member not found: %w", sql.ErrConnDone)}, "ann@x.test"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			NewOrgHandler(tc.orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "", tc.email, "viewer")
+			if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"status":"pending"`) {
+				t.Fatalf("got %d %s, want 201 pending", w.Code, w.Body.String())
+			}
+			if tc.orgs.invites != 1 || len(tc.orgs.added) != 0 {
+				t.Errorf("invites %d, added %v: want one pending invite and nobody added", tc.orgs.invites, tc.orgs.added)
+			}
+		})
+	}
+}
+
+// EXC-555: inviting by a user id the caller holds still says why it refuses.
+func TestInviteByUserIdRefusalsSayWhy(t *testing.T) {
+	users := &emailUserStore{byEmail: map[string]*domain.User{}}
 
 	t.Run("already a member", func(t *testing.T) {
 		orgs := &memberOrgStore{existing: map[string]bool{"u-ann": true}}
 		w := httptest.NewRecorder()
-		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "", "ann@x.test", "viewer")
+		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-ann", "", "viewer")
 		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "already a member") {
 			t.Fatalf("got %d %s, want 409 naming the membership", w.Code, w.Body.String())
 		}
@@ -71,7 +100,7 @@ func TestInviteRefusalsSayWhy(t *testing.T) {
 	t.Run("someone not yet a member is added", func(t *testing.T) {
 		orgs := &memberOrgStore{}
 		w := httptest.NewRecorder()
-		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "", "ann@x.test", "viewer")
+		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-ann", "", "viewer")
 		if w.Code != http.StatusCreated || len(orgs.added) != 1 {
 			t.Fatalf("got %d %s (added %v), want 201 and one new member", w.Code, w.Body.String(), orgs.added)
 		}
@@ -80,7 +109,7 @@ func TestInviteRefusalsSayWhy(t *testing.T) {
 	t.Run("a membership lookup that fails is not taken for no membership", func(t *testing.T) {
 		orgs := &memberOrgStore{lookup: fmt.Errorf("org member not found: %w", sql.ErrConnDone)}
 		w := httptest.NewRecorder()
-		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "", "ann@x.test", "viewer")
+		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-ann", "", "viewer")
 		if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "connection") {
 			t.Fatalf("got %d %s, want a plain 500", w.Code, w.Body.String())
 		}
@@ -88,6 +117,11 @@ func TestInviteRefusalsSayWhy(t *testing.T) {
 			t.Errorf("nobody may be added when membership is unknown")
 		}
 	})
+}
+
+// EXC-555: a malformed address got an invite link nobody could use.
+func TestInviteRefusalsSayWhy(t *testing.T) {
+	users := &emailUserStore{byEmail: map[string]*domain.User{}}
 
 	t.Run("not an e-mail address", func(t *testing.T) {
 		orgs := &memberOrgStore{}
