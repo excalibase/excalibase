@@ -42,6 +42,8 @@ type Principal struct {
 	// ForeignProject is a PAT bound to a project other than the one in the
 	// path, which may never leave its binding.
 	ForeignProject bool
+	// BoundSameProject is a PAT bound to the project the path names.
+	BoundSameProject bool
 	// Capabilities is the permission list of a platform service token. A
 	// non-empty list makes this a capability token, which is default-deny.
 	Capabilities []string
@@ -52,6 +54,9 @@ type Principal struct {
 	// like a deploy token; past its gate it is its creator, read-only.
 	MetricsKey bool
 }
+
+// IsBound reports whether the principal holds a project-bound PAT, whichever project.
+func (p Principal) IsBound() bool { return p.ForeignProject || p.BoundSameProject }
 
 // IsCapabilityToken reports whether the principal authenticates with a
 // service capability token rather than a session or human PAT.
@@ -127,6 +132,9 @@ func expectSession(row Row, method string, p Principal) Expectation {
 		return Deny403
 	}
 	if row.Unrestricted && p.Restricted {
+		return Deny403
+	}
+	if row.Unbound && p.IsBound() {
 		return Deny403
 	}
 	if p.PlatformAdmin {

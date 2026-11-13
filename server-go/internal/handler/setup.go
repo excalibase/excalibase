@@ -28,7 +28,7 @@ func (h *SetupHandler) Routes(r chi.Router, statusLimits ...func(http.Handler) h
 	r.With(statusLimits...).Get("/status", h.GetStatus)
 	// Installing a DB operator applies a remote YAML cluster-wide — restrict to
 	// platform_admin (manage_setup), not any authenticated user (SEC-H5).
-	r.With(auth.RequireAuth, auth.RequirePermission(auth.PermManageSetup)).
+	r.With(auth.RequireAuth, auth.RequireUnrestrictedCredential, auth.RequirePermission(auth.PermManageSetup)).
 		Post("/install/{databaseType}", h.Install)
 }
 
