@@ -2117,7 +2117,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 
 			// Reads — any member.
 			r.Get("/", d.provHandler.GetStatus)
-			r.With(db).Get("/logs", d.provHandler.GetLogs)
+			r.With(dev, db).Get("/logs", d.provHandler.GetLogs)
 			r.With(db).Get("/maintenance-window", d.provHandler.GetMaintenanceWindow)
 			r.With(db).Get("/cluster", d.provHandler.GetClusterSettings)
 
@@ -2433,7 +2433,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Get("/", d.fnHandler.Get)
 			r.With(dev).Delete("/", d.fnHandler.Delete)
 			r.With(dev).Post("/invoke", d.fnHandler.Invoke)
-			r.Get("/logs", d.fnHandler.Logs)
+			r.With(dev).Get("/logs", d.fnHandler.Logs)
 		})
 	})
 	// Customer applications (EXC-378): unmounted, so 404, until the hosting
@@ -2459,7 +2459,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.Get("/deploys", d.appDeployHandler.ListDeploys)
 				// What CI polls (EXC-543), dark with the pipeline.
 				r.With(features.Require(d.features, features.Pipeline)).Get("/deploys/{deployId}", d.appDeployHandler.GetDeploy)
-				r.Get("/logs", d.appLogHandler.Logs)
+				r.With(dev).Get("/logs", d.appLogHandler.Logs)
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
 				r.With(dev).Put("/secrets/{name}", d.appSecretHandler.Set)
 				// Git builds of apps (EXC-547): dark with appgitbuilds, but a connection can always be removed.
