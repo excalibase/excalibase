@@ -209,6 +209,21 @@ func RequireUnrestrictedCredentialForWrites(next http.Handler) http.Handler {
 	})
 }
 
+// RequireUnboundCredential refuses a project-bound PAT. It guards the routes
+// that make a new project: a credential narrowed to one project must not
+// create another, but an unbound token with write scope may (Studio mints
+// those for automation), and a read-only one is already refused by the
+// write gate.
+func RequireUnboundCredential(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if token := GetToken(r.Context()); token != nil && token.ProjectID != "" {
+			writeForbidden(w, "a token bound to one project cannot create projects")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // RequireWriteCapableForSecrets refuses a write-less PAT on a route that
 // returns credential or secret material (routepolicy Discloses: Secret).
 func RequireWriteCapableForSecrets(next http.Handler) http.Handler {
