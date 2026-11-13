@@ -25,6 +25,13 @@ const testRegisterPath = "/api/auth/register"
 // exercise the first ("becomes platform_admin") registration; tests of the
 // ordinary path just ignore it.
 func setupRegisterRouter(t *testing.T) (chi.Router, *pgstore.Store, string) {
+	r, store, setupToken, _ := setupRegisterRouterWithMail(t)
+	return r, store, setupToken
+}
+
+// setupRegisterRouterWithMail also returns the sender, with mail sent inside
+// the request so a test can read what a sign-up mailed.
+func setupRegisterRouterWithMail(t *testing.T) (chi.Router, *pgstore.Store, string, *capturingSender) {
 	t.Helper()
 	store := pgtest.New(t)
 
@@ -36,12 +43,14 @@ func setupRegisterRouter(t *testing.T) (chi.Router, *pgstore.Store, string) {
 	authHandler := NewAuthHandler(store, store)
 	authHandler.SetOrgStore(store)
 	authHandler.SetSetupTokenStore(store)
-	authHandler.SetEmailVerifier(NewEmailVerifier(store, &capturingSender{}, "https://studio.example.com", ""))
+	sender := &capturingSender{}
+	authHandler.SetEmailVerifier(NewEmailVerifier(store, sender, "https://studio.example.com", ""))
+	authHandler.SetBackground(func(task func()) { task() })
 
 	r := chi.NewRouter()
 	r.Post(testRegisterPath, authHandler.Register)
 	r.Post("/api/auth/login", authHandler.Login)
-	return r, store, setupToken
+	return r, store, setupToken, sender
 }
 
 func TestRegister_Success(t *testing.T) {
@@ -69,7 +78,7 @@ func TestRegister_Success(t *testing.T) {
 }
 
 func TestRegister_DuplicateEmail(t *testing.T) {
-	r, _, setupToken := setupRegisterRouter(t)
+	r, store, setupToken, sender := setupRegisterRouterWithMail(t)
 
 	alicePwd := testutil.FixturePassword("alice-dup")
 	body := fmt.Sprintf(`{"username":"alice","email":"alice@test.com","password":%q,"setupToken":%q}`, alicePwd, setupToken)
@@ -78,7 +87,7 @@ func TestRegister_DuplicateEmail(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Second registration with same email — no admin left to bootstrap, so
+	// Second registration with same email: no admin left to bootstrap, so
 	// no setup token is needed (or checked) for this one.
 	body2 := fmt.Sprintf(`{"username":"alice2","email":"alice@test.com","password":%q}`, alicePwd)
 	req2 := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body2))
@@ -87,8 +96,20 @@ func TestRegister_DuplicateEmail(t *testing.T) {
 	r.ServeHTTP(w2, req2)
 
 	// Answered like a new sign-up, so the form never says which addresses have an account (EXC-728).
-	if w2.Code != http.StatusCreated {
-		t.Errorf("duplicate: got %d, want %d", w2.Code, http.StatusCreated)
+	if w2.Code != http.StatusCreated || !strings.Contains(w2.Body.String(), "verification_required") {
+		t.Fatalf("duplicate: got %d %s, want 201 verification_required", w2.Code, w2.Body.String())
+	}
+	users, err := store.FindAllUsers(t.Context())
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	if len(users) != 1 || users[0].Username != "alice" {
+		t.Fatalf("the duplicate sign-up left %d accounts, want only alice", len(users))
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if sender.latest.Subject != "You already have an account" || len(sender.latest.To) != 1 || sender.latest.To[0] != "alice@test.com" {
+		t.Fatalf("notice mail %+v, want an account-exists notice to alice@test.com", sender.latest)
 	}
 }
 

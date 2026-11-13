@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -28,7 +29,14 @@ type EmailVerifier struct {
 	studioURL   string
 	productName string
 	now         func() time.Time
+
+	noticeMu   sync.Mutex
+	noticeSent map[string]time.Time
 }
+
+// noticeInterval is how often one address is told it already has an account, so
+// the sign-up form cannot be used to flood a mailbox. Kept in memory: one replica.
+const noticeInterval = time.Hour
 
 func NewEmailVerifier(store storage.EmailVerificationStore, sender email.Sender, studioURL, productName string) *EmailVerifier {
 	if productName == "" {
@@ -36,7 +44,7 @@ func NewEmailVerifier(store storage.EmailVerificationStore, sender email.Sender,
 	}
 	return &EmailVerifier{
 		store: store, sender: sender, studioURL: strings.TrimRight(studioURL, "/"),
-		productName: productName, now: time.Now,
+		productName: productName, now: time.Now, noticeSent: map[string]time.Time{},
 	}
 }
 
@@ -81,6 +89,10 @@ func (v *EmailVerifier) NotifyAccountExists(ctx context.Context, address string,
 	if !v.Available() {
 		return ErrVerificationUnavailable
 	}
+	key := strings.ToLower(strings.TrimSpace(address))
+	if !v.noticeDue(key) {
+		return nil
+	}
 	msg, err := email.BuildAccountExistsEmail(email.AccountExistsData{
 		UserEmail: address, UsernameTaken: usernameTaken, SignInURL: v.studioURL + "/login", ProductName: v.productName,
 	})
@@ -92,8 +104,30 @@ func (v *EmailVerifier) NotifyAccountExists(ctx context.Context, address string,
 	if err != nil {
 		return fmt.Errorf("send sign-up notice: %w", err)
 	}
+	v.noticeSentTo(key)
 	logEmailSent("account_exists", address, messageID, "")
 	return nil
+}
+
+// noticeDue reports whether the address may be mailed a notice now, and drops
+// the records that have aged out.
+func (v *EmailVerifier) noticeDue(key string) bool {
+	v.noticeMu.Lock()
+	defer v.noticeMu.Unlock()
+	now := v.now()
+	for address, sentAt := range v.noticeSent {
+		if now.Sub(sentAt) >= noticeInterval {
+			delete(v.noticeSent, address)
+		}
+	}
+	_, recent := v.noticeSent[key]
+	return !recent
+}
+
+func (v *EmailVerifier) noticeSentTo(key string) {
+	v.noticeMu.Lock()
+	defer v.noticeMu.Unlock()
+	v.noticeSent[key] = v.now()
 }
 
 // Confirm spends a link and marks its account verified, returning the

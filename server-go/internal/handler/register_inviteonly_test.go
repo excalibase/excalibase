@@ -45,7 +45,8 @@ func (s *inviteOrgStore) FindPendingInviteByToken(_ context.Context, hash string
 	if address == "" {
 		address = "bob@company.test"
 	}
-	return &domain.PendingInvite{ID: 1, OrgID: "org1", Role: "developer", Email: address}, nil
+	expires := domain.FlexTime{Time: time.Now().Add(time.Hour)}
+	return &domain.PendingInvite{ID: 1, OrgID: "org1", Role: "developer", Email: address, ExpiresAt: &expires}, nil
 }
 
 func (s *inviteOrgStore) AcceptPendingInvite(ctx context.Context, hash, userID string, now time.Time) (*domain.PendingInvite, error) {

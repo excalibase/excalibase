@@ -1,11 +1,15 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/email"
@@ -121,8 +125,104 @@ func TestNotifyAccountExists_FailuresSurface(t *testing.T) {
 func TestRegister_FailedAccountExistsMailIsOnlyLogged(t *testing.T) {
 	f := newSignupFixture(false)
 	f.sender.err = errors.New("provider down")
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	before := len(f.users.users)
+
 	if w := postRegister(f.h, "existing", "fresh@company.test"); w.Code != http.StatusCreated {
 		t.Fatalf("got %d", w.Code)
 	}
 	f.runQueued()
+
+	if !strings.Contains(logged.String(), "sign-up notice") || !strings.Contains(logged.String(), "provider down") {
+		t.Errorf("the failed notice was not logged with its cause: %q", logged.String())
+	}
+	if len(f.users.users) != before || len(f.sender.sent) != 0 || len(f.queued) != 0 {
+		t.Errorf("a failed notice changed something: %d accounts (was %d), %d sent, %d queued", len(f.users.users), before, len(f.sender.sent), len(f.queued))
+	}
+}
+
+// One notice per address per hour, so the form cannot be used to mail-bomb someone.
+func TestRegister_NoticeMailIsLimitedPerAddress(t *testing.T) {
+	f := newSignupFixture(false)
+	clock := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+	f.h.verifier.now = func() time.Time { return clock }
+	attempt := func(address string) {
+		if w := postRegister(f.h, "existing", address); w.Code != http.StatusCreated {
+			t.Fatalf("got %d", w.Code)
+		}
+		f.runQueued()
+	}
+	for i := 0; i < 5; i++ {
+		attempt("Victim@company.test")
+	}
+	if len(f.sender.sent) != 1 {
+		t.Fatalf("%d notices to one address inside an hour, want 1", len(f.sender.sent))
+	}
+	attempt("other@company.test")
+	if len(f.sender.sent) != 2 {
+		t.Fatalf("another address got no notice: %d sent", len(f.sender.sent))
+	}
+	clock = clock.Add(time.Hour + time.Minute)
+	attempt("victim@company.test")
+	if len(f.sender.sent) != 3 {
+		t.Fatalf("no notice after the hour: %d sent", len(f.sender.sent))
+	}
+}
+
+// A failed send must not use up the address's hour: the next attempt tries again.
+func TestRegister_FailedNoticeDoesNotSpendTheHour(t *testing.T) {
+	f := newSignupFixture(false)
+	f.sender.err = errors.New("provider down")
+	postRegister(f.h, "existing", "victim@company.test")
+	f.runQueued()
+	f.sender.err = nil
+	postRegister(f.h, "existing", "victim@company.test")
+	f.runQueued()
+	if len(f.sender.sent) != 1 {
+		t.Fatalf("%d sent, want 1 after the provider recovered", len(f.sender.sent))
+	}
+}
+
+// An invite spent by an account that is then removed because its mail could not
+// be sent goes back to pending, so the invited person can try again.
+func TestRegister_FailedVerificationMailRestoresTheInvite(t *testing.T) {
+	const token = "invite-token"
+	f := newSignupFixture(true)
+	org := &inviteOrgStore{tokenHash: hashToken(token)}
+	f.h.SetOrgStore(org)
+	f.sender.err = errors.New("provider down")
+
+	if w := postRegisterWithInvite(f.h, "bob", "bob@company.test", token); w.Code != http.StatusCreated {
+		t.Fatalf("got %d", w.Code)
+	}
+	if len(org.accepted) != 1 {
+		t.Fatalf("the invite was not spent by the sign-up: %v", org.accepted)
+	}
+	f.runQueued()
+
+	if len(f.users.users) != 1 {
+		t.Fatalf("%d accounts, want only the seeded one", len(f.users.users))
+	}
+	if len(org.created) != 1 {
+		t.Fatalf("the invite was restored %d times, want 1", len(org.created))
+	}
+	restored := org.created[0]
+	if restored.TokenHash != hashToken(token) || restored.OrgID != "org1" || restored.Role != "developer" || restored.Email != "bob@company.test" || restored.ExpiresAt == nil {
+		t.Fatalf("restored invite %+v does not match the spent one", restored)
+	}
+}
+
+// With a sent mail the invite stays spent.
+func TestRegister_SentVerificationMailKeepsTheInviteSpent(t *testing.T) {
+	const token = "invite-token"
+	f := newSignupFixture(true)
+	org := &inviteOrgStore{tokenHash: hashToken(token)}
+	f.h.SetOrgStore(org)
+	postRegisterWithInvite(f.h, "bob", "bob@company.test", token)
+	f.runQueued()
+	if len(org.created) != 0 {
+		t.Fatalf("a delivered sign-up restored its invite: %+v", org.created)
+	}
 }

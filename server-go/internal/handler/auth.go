@@ -181,7 +181,7 @@ func (h *AuthHandler) registerFirstAdmin(w http.ResponseWriter, r *http.Request,
 	if !h.createFirstAdmin(w, r, setupToken, user) {
 		return
 	}
-	if !h.joinInviteIfAny(w, r, inviteHash, user) {
+	if _, ok := h.joinInviteIfAny(w, r, inviteHash, user); !ok {
 		return
 	}
 	h.issueRegistrationToken(w, r, user)
@@ -194,10 +194,11 @@ func (h *AuthHandler) registerMember(w http.ResponseWriter, r *http.Request, inv
 	if !h.createSubsequentUser(w, r, user) {
 		return
 	}
-	if !h.joinInviteIfAny(w, r, inviteHash, user) {
+	invite, ok := h.joinInviteIfAny(w, r, inviteHash, user)
+	if !ok {
 		return
 	}
-	h.background(func() { h.mailVerification(user) })
+	h.background(func() { h.mailVerification(user, inviteHash, invite) })
 	writeRegistrationPending(w, user.Email)
 }
 
@@ -210,15 +211,30 @@ func writeRegistrationPending(w http.ResponseWriter, address string) {
 const registrationMailTimeout = 30 * time.Second
 
 // mailVerification sends the link off the request path. An account whose link
-// could not be sent is removed again, so the address stays free to try again.
-func (h *AuthHandler) mailVerification(user *domain.User) {
+// could not be sent is removed again, so the address stays free to try again,
+// and the invite it spent goes back to pending for the invited person.
+func (h *AuthHandler) mailVerification(user *domain.User, inviteHash string, spent *domain.PendingInvite) {
 	ctx, cancel := context.WithTimeout(context.Background(), registrationMailTimeout)
 	defer cancel()
 	if err := h.verifier.Send(ctx, user); err != nil {
 		log.Printf("ERROR: registration of %s: %v", user.ID, err)
 		if derr := h.userStore.DeleteUser(ctx, user.ID); derr != nil {
 			log.Printf("WARN: remove account %s after a failed verification mail: %v", user.ID, derr)
+			return
 		}
+		h.restoreInvite(ctx, inviteHash, spent)
+	}
+}
+
+// restoreInvite files the invite an account spent again, once the account is gone.
+func (h *AuthHandler) restoreInvite(ctx context.Context, hash string, spent *domain.PendingInvite) {
+	if spent == nil {
+		return
+	}
+	restored := *spent
+	restored.TokenHash = hash
+	if err := h.orgStore.CreatePendingInvite(ctx, &restored); err != nil {
+		log.Printf("WARN: restore the invite for %s after a failed verification mail: %v", spent.Email, err)
 	}
 }
 
@@ -235,16 +251,18 @@ func (h *AuthHandler) mailAccountExists(address string, emailTaken bool) {
 func (h *AuthHandler) SetBackground(run func(func())) { h.background = run }
 
 // joinInviteIfAny spends the registration's invite, writing the refusal and
-// returning false when it cannot be spent.
-func (h *AuthHandler) joinInviteIfAny(w http.ResponseWriter, r *http.Request, inviteHash string, user *domain.User) bool {
+// returning false when it cannot be spent. The spent invite is returned so a
+// rolled-back sign-up can restore it.
+func (h *AuthHandler) joinInviteIfAny(w http.ResponseWriter, r *http.Request, inviteHash string, user *domain.User) (*domain.PendingInvite, bool) {
 	if inviteHash == "" {
-		return true
+		return nil, true
 	}
-	if status, msg := h.joinInvitedOrg(r.Context(), inviteHash, user); status != 0 {
+	invite, status, msg := h.joinInvitedOrg(r.Context(), inviteHash, user)
+	if status != 0 {
 		httpError(w, msg, status)
-		return false
+		return nil, false
 	}
-	return true
+	return invite, true
 }
 
 // createFirstAdmin handles the very first registration: it requires the
@@ -645,15 +663,15 @@ func (h *AuthHandler) checkRegistrationInvite(ctx context.Context, token, addres
 // joinInvitedOrg spends the invite for the account just created. If the token
 // was spent in between, the account is removed again so a refused invite
 // leaves nothing behind.
-func (h *AuthHandler) joinInvitedOrg(ctx context.Context, hash string, user *domain.User) (int, string) {
-	_, err := h.orgStore.AcceptPendingInvite(ctx, hash, user.ID, time.Now())
+func (h *AuthHandler) joinInvitedOrg(ctx context.Context, hash string, user *domain.User) (*domain.PendingInvite, int, string) {
+	invite, err := h.orgStore.AcceptPendingInvite(ctx, hash, user.ID, time.Now())
 	if err == nil {
-		return 0, ""
+		return invite, 0, ""
 	}
 	if derr := h.userStore.DeleteUser(ctx, user.ID); derr != nil {
 		log.Printf("WARN: remove account %s after a refused invite: %v", user.ID, derr)
 	}
-	return inviteErrorStatus(err), inviteErrorMessage(err)
+	return nil, inviteErrorStatus(err), inviteErrorMessage(err)
 }
 
 const (
