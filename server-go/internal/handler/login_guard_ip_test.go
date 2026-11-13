@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,6 +91,11 @@ func TestLoginSuccessOnlyClearsTheCallersAddress(t *testing.T) {
 
 // slowedLoginRouter is guardedLoginRouter whose delays are recorded, not slept.
 func slowedLoginRouter(t *testing.T) (chi.Router, *recordingSleep, string, string) {
+	r, _, rec, user, password := slowedLoginHandler(t)
+	return r, rec, user, password
+}
+
+func slowedLoginHandler(t *testing.T) (chi.Router, *AuthHandler, *recordingSleep, string, string) {
 	t.Helper()
 	us := newMockUserStore()
 	password := testutil.FixturePassword("carol-login")
@@ -101,7 +108,7 @@ func slowedLoginRouter(t *testing.T) (chi.Router, *recordingSleep, string, strin
 	h.SetLoginSleep(rec.sleep)
 	r := chi.NewRouter()
 	r.Post(routeLogin, h.Login)
-	return r, rec, "carol@example.test", password
+	return r, h, rec, "carol@example.test", password
 }
 
 type recordingSleep struct{ slept []time.Duration }
@@ -109,4 +116,45 @@ type recordingSleep struct{ slept []time.Duration }
 func (r *recordingSleep) sleep(_ context.Context, d time.Duration) error {
 	r.slept = append(r.slept, d)
 	return nil
+}
+
+// Over the account-wide failure cap, guessing from fresh addresses is refused
+// outright, in parallel as well as in turn; under it, the owner still gets in.
+func TestLoginAccountFailureCapRefusesAParallelFlood(t *testing.T) {
+	r, h, _, user, password := slowedLoginHandler(t)
+	h.SetAccountFailureCap(100)
+	h.SetLoginSleep(func(context.Context, time.Duration) error { return nil })
+	var wg sync.WaitGroup
+	var checked atomic.Int64
+	restore := checkPassword
+	checkPassword = func(p, hash string) bool { checked.Add(1); return restore(p, hash) }
+	t.Cleanup(func() { checkPassword = restore })
+	for a := 0; a < 40; a++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for g := 0; g < 5; g++ {
+				loginFrom(r, fmt.Sprintf("198.18.%d.%d:1", a/200, a%200+1), user, "wrong")
+			}
+		}()
+	}
+	wg.Wait()
+	if n := checked.Load(); n > 100+40 {
+		t.Fatalf("%d passwords were checked, the cap is 100 failures", n)
+	}
+	if code := loginFrom(r, "203.0.113.200:1", user, password); code != http.StatusTooManyRequests {
+		t.Fatalf("over the cap even the right password is refused, got %d", code)
+	}
+}
+
+func TestLoginOwnerStillGetsInUnderTheCap(t *testing.T) {
+	r, _, user, password := slowedLoginRouter(t)
+	for a := 0; a < 20; a++ {
+		for g := 0; g < 5; g++ {
+			loginFrom(r, fmt.Sprintf("203.0.113.%d:1", a+1), user, "wrong")
+		}
+	}
+	if code := loginFrom(r, "198.51.100.7:1", user, password); code != http.StatusOK {
+		t.Fatalf("the owner got %d with 100 failures against the account, want 200", code)
+	}
 }

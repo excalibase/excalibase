@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"github.com/excalibase/provisioning-poc/internal/loginguard"
 	"net/netip"
 	"time"
 )
@@ -38,4 +39,9 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// SetAccountFailureCap sets how many failed sign-ins one account takes per window before it refuses all attempts.
+func (h *AuthHandler) SetAccountFailureCap(limit int) {
+	h.accountSlowdown = loginguard.NewSlowdown(accountFreeFailures, accountDelayStep, accountDelayCap, limit, defaultLoginWindow)
 }

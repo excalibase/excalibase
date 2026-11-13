@@ -53,9 +53,13 @@ func (h *AuthHandler) SetPersonalOrgs(s auth.PersonalOrgStore) { h.personalOrgs 
 const (
 	defaultLoginAttempts = 5
 	accountFreeFailures  = 20
-	accountDelayStep     = 250 * time.Millisecond
-	accountDelayCap      = 5 * time.Second
-	defaultLoginWindow   = 15 * time.Minute
+	// DefaultAccountFailureCap is how many failed sign-ins one account takes in a
+	// window, from all addresses together, before it refuses every attempt: ten
+	// times the old cap, so locking an owner out takes hundreds of addresses.
+	DefaultAccountFailureCap = 1000
+	accountDelayStep         = 250 * time.Millisecond
+	accountDelayCap          = 5 * time.Second
+	defaultLoginWindow       = 15 * time.Minute
 )
 
 // SetLoginGuard replaces the per-account-and-address sign-in budget.
@@ -82,7 +86,7 @@ func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) 
 		userStore:       userStore,
 		tokenStore:      tokenStore,
 		loginGuard:      loginguard.New(defaultLoginAttempts, defaultLoginWindow),
-		accountSlowdown: loginguard.NewSlowdown(accountFreeFailures, accountDelayStep, accountDelayCap, defaultLoginWindow),
+		accountSlowdown: loginguard.NewSlowdown(accountFreeFailures, accountDelayStep, accountDelayCap, DefaultAccountFailureCap, defaultLoginWindow),
 		sleep:           sleepContext,
 	}
 }
@@ -339,7 +343,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
 		return
 	}
-	if err := h.sleep(r.Context(), h.accountSlowdown.Delay(guardKey)); err != nil {
+	delay, within := h.accountSlowdown.Begin(guardKey)
+	if !within {
+		w.Header().Set("Retry-After", strconv.Itoa(int(defaultLoginWindow.Seconds())))
+		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
+	if err := h.sleep(r.Context(), delay); err != nil {
 		return
 	}
 	// A service principal has no password and must never hold a session: its
@@ -350,7 +360,6 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		hash = user.PasswordHash
 	}
 	if !checkPassword(req.Password, hash) || user == nil || user.IsService() {
-		h.accountSlowdown.Failed(guardKey)
 		httpError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
