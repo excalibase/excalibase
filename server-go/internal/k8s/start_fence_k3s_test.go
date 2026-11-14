@@ -78,7 +78,9 @@ func TestK3sCiliumStartFence(t *testing.T) {
 // k3s's own policy controller (kube-router) enforces the function fence's NetworkPolicy, as on a default k3s AIO.
 func TestK3sNetworkPolicyStartFence(t *testing.T) {
 	lab := &egressLab{ctx: context.Background()}
-	lab.startCluster(t)
+	// The function runtime always runs under gVisor, so this cluster has it too; only its CNI differs from the Cilium test.
+	lab.startClusterWith(t, testcontainers.WithFiles(gvisorFiles(t, gvisorPlatformSystrap)...))
+	lab.createGVisorRuntimeClass(t)
 	fence := newFenceLab(t, lab)
 	fence.runFunctionStartFence(t, false)
 }
