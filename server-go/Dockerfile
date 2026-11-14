@@ -1,4 +1,4 @@
-FROM golang:1.26.10-alpine AS build
+FROM golang:1.27.0-alpine AS build
 
 RUN apk add --no-cache gcc musl-dev
 
@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 go build -o /bin/excalibase-log-forwarder ./cmd/log-forwarder/
 # A single host's git builds reach the internet only through this proxy (EXC-671), one per build.
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /bin/excalibase-build-egress ./cmd/build-egress/
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 # iptables for the single host's firewall (EXC-683), which runs this image: in
 # the image, so a start with no network still sets its rules. Both backends: it
