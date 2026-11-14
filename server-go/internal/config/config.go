@@ -282,6 +282,9 @@ type AppConfig struct {
 	// checked.
 	FnReplayEnabled      bool
 	FnReplayPollInterval time.Duration
+	// LoginAccountFailureCap is how many failed Studio sign-ins one account takes
+	// per 15 minutes, from all addresses together, before it refuses every attempt.
+	LoginAccountFailureCap int
 	// Public database endpoints (EXC-410). DBEndpointDomain is the suffix a
 	// customer's endpoint name hangs off — they dial
 	// <projectId>.<DBEndpointDomain>:<port> — and empty means the platform
@@ -590,6 +593,7 @@ func load() AppConfig {
 		BackupCredentialsRenewInterval: envDuration("BACKUP_CREDENTIALS_RENEW_INTERVAL", defaultBackupCredentialsRenewInterval),
 		BackupRegion:                   envOr("BACKUP_DEFAULT_REGION", "auto"),
 		FnReplayEnabled:                envBool("EXCALIBASE_FN_REPLAY_ENABLED", true),
+		LoginAccountFailureCap:         envLoginAccountFailureCap("LOGIN_ACCOUNT_FAILURE_CAP"),
 		FnReplayPollInterval:           envMillis("EXCALIBASE_FN_REPLAY_POLL_MS", defaultReplayPoll),
 		AppHostingEnabled:              envOr("APP_HOSTING_ENABLED", "") == "true",
 		SitesEnabled:                   os.Getenv("SITES_ENABLED") == "true",
@@ -937,6 +941,29 @@ func envPositiveInt(key string, fallback int) int {
 		log.Fatalf("%s: %v", key, err)
 	}
 	return n
+}
+
+// minLoginAccountFailureCap sits above the 20 attempts an account takes before
+// sign-in starts to wait, so the cap is always a real backstop.
+const minLoginAccountFailureCap = 100
+
+func envLoginAccountFailureCap(key string) int {
+	limit, err := parseLoginAccountFailureCap(os.Getenv(key))
+	if err != nil {
+		log.Fatalf("%s: %v", key, err)
+	}
+	return limit
+}
+
+func parseLoginAccountFailureCap(raw string) (int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 1000, nil
+	}
+	limit, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || limit < minLoginAccountFailureCap {
+		return 0, fmt.Errorf("%q is not a whole number of at least %d", raw, minLoginAccountFailureCap)
+	}
+	return limit, nil
 }
 
 func envInt(key string, fallback int) int {

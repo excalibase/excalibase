@@ -33,6 +33,11 @@ type AuthHandler struct {
 	ceilings   map[string][]string
 	verifier   *EmailVerifier
 	loginGuard *loginguard.Guard
+	// accountSlowdown makes guessing at one account across many addresses cost
+	// time; it never refuses, so it cannot lock the owner out.
+	accountSlowdown *loginguard.Slowdown
+	// sleep waits out a delay; tests replace it.
+	sleep func(context.Context, time.Duration) error
 	// personalOrgs gives every account its personal org when it signs in
 	// (EXC-553); nil in self-hosted mode, which keeps its one default org.
 	personalOrgs auth.PersonalOrgStore
@@ -41,13 +46,23 @@ type AuthHandler struct {
 // SetPersonalOrgs makes every sign-in ensure the account's personal org.
 func (h *AuthHandler) SetPersonalOrgs(s auth.PersonalOrgStore) { h.personalOrgs = s }
 
-// Five guesses per account per quarter hour, whatever address they come from.
+// Five guesses per account and address per quarter hour (IPv6 per /64):
+// whoever is guessing locks only their own address, never the owner signing in
+// from another. Past 20 wrong guesses at one account from anywhere, each further
+// one adds a wait before the password is checked, up to five seconds.
 const (
 	defaultLoginAttempts = 5
-	defaultLoginWindow   = 15 * time.Minute
+	accountFreeFailures  = 20
+	// DefaultAccountFailureCap is how many failed sign-ins one account takes in a
+	// window, from all addresses together, before it refuses every attempt: ten
+	// times the old cap, so locking an owner out takes hundreds of addresses.
+	DefaultAccountFailureCap = 1000
+	accountDelayStep         = 250 * time.Millisecond
+	accountDelayCap          = 5 * time.Second
+	defaultLoginWindow       = 15 * time.Minute
 )
 
-// SetLoginGuard replaces the per-account sign-in budget.
+// SetLoginGuard replaces the per-account-and-address sign-in budget.
 func (h *AuthHandler) SetLoginGuard(g *loginguard.Guard) { h.loginGuard = g }
 
 // SetEmailVerifier wires the verification mail every Studio account must
@@ -68,9 +83,11 @@ func (h *AuthHandler) SetInstanceStore(s storage.InstanceStore) { h.instanceStor
 
 func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) *AuthHandler {
 	return &AuthHandler{
-		userStore:  userStore,
-		tokenStore: tokenStore,
-		loginGuard: loginguard.New(defaultLoginAttempts, defaultLoginWindow),
+		userStore:       userStore,
+		tokenStore:      tokenStore,
+		loginGuard:      loginguard.New(defaultLoginAttempts, defaultLoginWindow),
+		accountSlowdown: newAccountSlowdown(DefaultAccountFailureCap),
+		sleep:           sleepContext,
 	}
 }
 
@@ -320,9 +337,19 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		guardKey = "user:" + user.ID
 	}
-	if !h.loginGuard.Attempt(guardKey) {
+	addressKey := guardKey + "@" + loginAddress(clientIP(r))
+	if !h.loginGuard.Attempt(addressKey) {
 		w.Header().Set("Retry-After", strconv.Itoa(int(defaultLoginWindow.Seconds())))
 		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
+	delay, within := h.accountSlowdown.Begin(guardKey, user != nil)
+	if !within {
+		w.Header().Set("Retry-After", strconv.Itoa(int(defaultLoginWindow.Seconds())))
+		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
+	if err := h.sleep(r.Context(), delay); err != nil {
 		return
 	}
 	// A service principal has no password and must never hold a session: its
@@ -336,7 +363,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	h.loginGuard.Succeeded(guardKey)
+	h.loginGuard.Succeeded(addressKey)
+	h.accountSlowdown.Succeeded(guardKey)
 	if user.EmailVerifiedAt == nil {
 		writeEmailNotVerified(w)
 		return

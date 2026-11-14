@@ -1800,6 +1800,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	tierHandler.SetPlanChangeHook(planChanged)
 
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
+	authHandler.SetAccountFailureCap(cfg.LoginAccountFailureCap)
 	authHandler.SetOrgStore(sqlStore)
 	authHandler.SetAuditLog(sqlStore)
 	authHandler.SetInstanceStore(store)
