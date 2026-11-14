@@ -138,6 +138,16 @@ jobs:
       - name: API upload size on the edge (real Caddy and Studio nginx)
         run: sh deploy/single-host/tests/api-upload-edge.sh docker
 
+  release-tags:
+    name: Release tag plan
+    needs: changes
+    if: needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Native tag plan
+        run: bash tests/release-native-tags-test.sh
+
   gateway-guard:
     name: DocumentDB gateway guard
     needs: changes
