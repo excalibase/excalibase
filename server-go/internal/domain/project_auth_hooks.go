@@ -90,6 +90,12 @@ func AuthHooksSecretPath(projectID string) string {
 // it with the host lower-cased. The auth service checks every resolved
 // address again when it connects.
 func ValidateAuthHookURL(raw string) (string, error) {
+	return ValidateAuthHookURLWithDeny(raw, nil)
+}
+
+// ValidateAuthHookURLWithDeny is ValidateAuthHookURL that also refuses an IP
+// literal inside deny, the install's own node and load-balancer ranges.
+func ValidateAuthHookURLWithDeny(raw string, deny []netip.Prefix) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || len(raw) > maxAuthHookURLLength || strings.ContainsFunc(raw, unicode.IsControl) {
 		return "", ErrInvalidAuthHookURL
@@ -105,7 +111,7 @@ func ValidateAuthHookURL(raw string) (string, error) {
 		return "", ErrAuthHookURLPort
 	}
 	host := strings.ToLower(parsed.Hostname())
-	if err := checkAuthHookHost(host); err != nil {
+	if err := checkAuthHookHost(host, deny); err != nil {
 		return "", err
 	}
 	parsed.Host = joinAuthHookHost(host, parsed.Port())
@@ -122,13 +128,13 @@ func joinAuthHookHost(host, port string) string {
 	return host
 }
 
-func checkAuthHookHost(host string) error {
+func checkAuthHookHost(host string, deny []netip.Prefix) error {
 	if err := publicaddr.ValidateHostSyntax(host); err != nil {
 		return ErrInvalidAuthHookURL
 	}
 	addr, err := netip.ParseAddr(host)
 	if err == nil {
-		if publicaddr.ClassifyAddr(addr) != nil {
+		if publicaddr.NewDialer(nil, deny).Check(addr) != nil {
 			return ErrInvalidAuthHookURL
 		}
 		return nil

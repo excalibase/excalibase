@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/base64"
 	"errors"
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -103,6 +104,22 @@ func TestValidateAuthHookURL_RefusesWhatCouldReachInside(t *testing.T) {
 			t.Errorf("%q accepted as %q", raw, got)
 		} else if !errors.Is(err, ErrInvalidAuthHookURL) {
 			t.Errorf("%q: %v is not ErrInvalidAuthHookURL", raw, err)
+		}
+	}
+}
+
+// The node's own public address is an IP literal a hook could name; the install's
+// node and load-balancer ranges are refused beside the fixed private ones.
+func TestValidateAuthHookURLWithDeny_RefusesTheInstallsOwnAddresses(t *testing.T) {
+	deny := []netip.Prefix{netip.MustParsePrefix("93.184.216.0/28"), netip.MustParsePrefix("8.8.4.4/32")}
+	for _, raw := range []string{"https://93.184.216.4/hook", "https://8.8.4.4/hook", "https://[::ffff:93.184.216.4]/hook"} {
+		if got, err := ValidateAuthHookURLWithDeny(raw, deny); !errors.Is(err, ErrInvalidAuthHookURL) {
+			t.Errorf("%q accepted as %q (%v)", raw, got, err)
+		}
+	}
+	for _, raw := range []string{"https://93.184.216.99/hook", "https://hooks.example.com/hook"} {
+		if _, err := ValidateAuthHookURLWithDeny(raw, deny); err != nil {
+			t.Errorf("%q refused: %v", raw, err)
 		}
 	}
 }

@@ -43,8 +43,10 @@ type Resolver struct {
 // NewResolver reaches registries only on public addresses, checked on the
 // address actually dialled, so neither a registry host nor a token realm can
 // point the control plane at the cluster's own network.
-func NewResolver() *Resolver {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: refuseInternalAddress}
+//
+// deny adds the install's own node and load-balancer ranges to what is refused.
+func NewResolver(deny []netip.Prefix) *Resolver {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: refuseInternalOrDenied(deny)}
 	transport := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           dialer.DialContext,
@@ -141,14 +143,17 @@ func classifyStatus(image string, status int) error {
 	}
 }
 
-func refuseInternalAddress(_, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return publicaddr.ErrInternalAddress
+func refuseInternalOrDenied(deny []netip.Prefix) func(string, string, syscall.RawConn) error {
+	checker := publicaddr.NewDialer(nil, deny)
+	return func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return publicaddr.ErrInternalAddress
+		}
+		addr, err := netip.ParseAddr(host)
+		if err != nil {
+			return publicaddr.ErrInternalAddress
+		}
+		return checker.Check(addr)
 	}
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
-		return publicaddr.ErrInternalAddress
-	}
-	return publicaddr.ClassifyAddr(addr)
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,8 @@ type ProvisioningHandler struct {
 	dbEndpoints DBEndpointAPI
 	// authOAuth backs end-user OAuth sign-in (EXC-662) behind the authoauth flag.
 	authOAuth AuthOAuthDeps
+	// authHookDeny is the install's own node and load-balancer ranges, which a hook URL may not name.
+	authHookDeny []netip.Prefix
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {

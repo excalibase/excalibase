@@ -281,7 +281,7 @@ func (h *StudioOAuthHandler) createFromIdentity(ctx context.Context, identity st
 	if inviteHash == "" {
 		return user, false, nil
 	}
-	if status, _ := h.auth.joinInvitedOrg(ctx, inviteHash, user); status != 0 {
+	if _, status, _ := h.auth.joinInvitedOrg(ctx, inviteHash, user); status != 0 {
 		return nil, false, signInRefusal("invite_invalid")
 	}
 	return user, true, nil

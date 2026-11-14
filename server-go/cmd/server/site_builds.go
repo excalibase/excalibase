@@ -275,7 +275,7 @@ func verifyBuildCluster(client *k8s.Client, namespace, missing, runtimeClass str
 	if !found {
 		return fmt.Errorf("RuntimeClass %q (APP_RUNTIME_CLASS) does not exist; builds run only under the sandbox", runtimeClass)
 	}
-	return nil
+	return requireGVisorHandler(ctx, runtimeClass, client)
 }
 
 // startSiteBuildDispatcher runs queued builds until the server stops; every replica runs one.

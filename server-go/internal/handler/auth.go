@@ -41,6 +41,9 @@ type AuthHandler struct {
 	// personalOrgs gives every account its personal org when it signs in
 	// (EXC-553); nil in self-hosted mode, which keeps its one default org.
 	personalOrgs auth.PersonalOrgStore
+	// background runs the work a sign-up does off its request, so a taken and a
+	// new account cost the same: the default is a goroutine.
+	background func(func())
 }
 
 // SetPersonalOrgs makes every sign-in ensure the account's personal org.
@@ -88,6 +91,7 @@ func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) 
 		loginGuard:      loginguard.New(defaultLoginAttempts, defaultLoginWindow),
 		accountSlowdown: newAccountSlowdown(DefaultAccountFailureCap),
 		sleep:           sleepContext,
+		background:      func(task func()) { go task() },
 	}
 }
 
@@ -155,6 +159,19 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if usernameTaken, emailTaken := h.registrationTaken(r.Context(), req.Username, req.Email); usernameTaken || emailTaken {
+		if isFirstUser {
+			httpError(w, "username or email already in use", http.StatusConflict)
+			return
+		}
+		// The same answer and the same work as a new sign-up, so the form cannot
+		// be used to learn which usernames and addresses already have an account:
+		// the outcome goes to the address by mail, off the request path.
+		h.background(func() { h.mailAccountExists(req.Email, emailTaken) })
+		writeRegistrationPending(w, req.Email)
+		return
+	}
+
 	now := time.Now()
 	user := &domain.User{
 		ID:           auth.GenerateID(),
@@ -181,7 +198,7 @@ func (h *AuthHandler) registerFirstAdmin(w http.ResponseWriter, r *http.Request,
 	if !h.createFirstAdmin(w, r, setupToken, user) {
 		return
 	}
-	if !h.joinInviteIfAny(w, r, inviteHash, user) {
+	if _, ok := h.joinInviteIfAny(w, r, inviteHash, user); !ok {
 		return
 	}
 	h.issueRegistrationToken(w, r, user)
@@ -194,32 +211,75 @@ func (h *AuthHandler) registerMember(w http.ResponseWriter, r *http.Request, inv
 	if !h.createSubsequentUser(w, r, user) {
 		return
 	}
-	if err := h.verifier.Send(r.Context(), user); err != nil {
-		log.Printf("ERROR: registration of %s: %v", user.ID, err)
-		if derr := h.userStore.DeleteUser(r.Context(), user.ID); derr != nil {
-			log.Printf("WARN: remove account %s after a failed verification mail: %v", user.ID, derr)
-		}
-		httpError(w, "sign-up is unavailable: verification email could not be sent", http.StatusServiceUnavailable)
+	invite, ok := h.joinInviteIfAny(w, r, inviteHash, user)
+	if !ok {
 		return
 	}
-	if !h.joinInviteIfAny(w, r, inviteHash, user) {
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]string{"status": "verification_required", "email": user.Email})
+	h.background(func() { h.mailVerification(user, inviteHash, invite) })
+	writeRegistrationPending(w, user.Email)
 }
 
+// writeRegistrationPending is the one answer to a sign-up that needs its address checked.
+func writeRegistrationPending(w http.ResponseWriter, address string) {
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{"status": "verification_required", "email": address})
+}
+
+const registrationMailTimeout = 30 * time.Second
+
+// mailVerification sends the link off the request path. An account whose link
+// could not be sent is removed again, so the address stays free to try again,
+// and the invite it spent goes back to pending for the invited person.
+func (h *AuthHandler) mailVerification(user *domain.User, inviteHash string, spent *domain.PendingInvite) {
+	ctx, cancel := context.WithTimeout(context.Background(), registrationMailTimeout)
+	defer cancel()
+	if err := h.verifier.Send(ctx, user); err != nil {
+		log.Printf("ERROR: registration of %s: %v", user.ID, err)
+		if derr := h.userStore.DeleteUser(ctx, user.ID); derr != nil {
+			log.Printf("WARN: remove account %s after a failed verification mail: %v", user.ID, derr)
+			return
+		}
+		h.restoreInvite(ctx, inviteHash, spent)
+	}
+}
+
+// restoreInvite files the invite an account spent again, once the account is gone.
+func (h *AuthHandler) restoreInvite(ctx context.Context, hash string, spent *domain.PendingInvite) {
+	if spent == nil {
+		return
+	}
+	restored := *spent
+	restored.TokenHash = hash
+	if err := h.orgStore.RestorePendingInvite(ctx, &restored); err != nil {
+		log.Printf("WARN: restore the invite for %s after a failed verification mail: %v", spent.Email, err)
+	}
+}
+
+// mailAccountExists tells the address's owner why no account was made.
+func (h *AuthHandler) mailAccountExists(address string, emailTaken bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), registrationMailTimeout)
+	defer cancel()
+	if err := h.verifier.NotifyAccountExists(ctx, address, !emailTaken); err != nil {
+		log.Printf("WARN: sign-up notice: %v", err)
+	}
+}
+
+// SetBackground replaces how mail is sent off the request path; tests hold it back.
+func (h *AuthHandler) SetBackground(run func(func())) { h.background = run }
+
 // joinInviteIfAny spends the registration's invite, writing the refusal and
-// returning false when it cannot be spent.
-func (h *AuthHandler) joinInviteIfAny(w http.ResponseWriter, r *http.Request, inviteHash string, user *domain.User) bool {
+// returning false when it cannot be spent. The spent invite is returned so a
+// rolled-back sign-up can restore it.
+func (h *AuthHandler) joinInviteIfAny(w http.ResponseWriter, r *http.Request, inviteHash string, user *domain.User) (*domain.PendingInvite, bool) {
 	if inviteHash == "" {
-		return true
+		return nil, true
 	}
-	if status, msg := h.joinInvitedOrg(r.Context(), inviteHash, user); status != 0 {
+	invite, status, msg := h.joinInvitedOrg(r.Context(), inviteHash, user)
+	if status != 0 {
 		httpError(w, msg, status)
-		return false
+		return nil, false
 	}
-	return true
+	return invite, true
 }
 
 // createFirstAdmin handles the very first registration: it requires the
@@ -576,9 +636,9 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, user)
 }
 
-// checkRegistration validates the submitted fields and refuses a name or
-// address already in use. A service principal occupies its name too:
-// registration can never take over a service identity.
+// checkRegistration validates the submitted fields. It says nothing about
+// whether the name or address is in use: that is registrationTaken's question,
+// asked only once the caller is allowed to register at all.
 func (h *AuthHandler) checkRegistration(ctx context.Context, username, email, password string) (int, string) {
 	if username == "" || email == "" || password == "" {
 		return http.StatusBadRequest, "username, email, and password are required"
@@ -592,13 +652,16 @@ func (h *AuthHandler) checkRegistration(ctx context.Context, username, email, pa
 	if msg := isValidPassword(password); msg != "" {
 		return http.StatusBadRequest, msg
 	}
-	if existing, _ := h.userStore.FindUserByUsername(ctx, username); existing != nil {
-		return http.StatusConflict, "username already taken"
-	}
-	if existing, _ := h.userStore.FindUserByEmail(ctx, email); existing != nil {
-		return http.StatusConflict, "email already registered"
-	}
 	return 0, ""
+}
+
+// registrationTaken reports whether the username and the address already have an
+// account; both lookups always run. A service principal occupies its name too:
+// registration can never take over a service identity.
+func (h *AuthHandler) registrationTaken(ctx context.Context, username, email string) (usernameTaken, emailTaken bool) {
+	byName, _ := h.userStore.FindUserByUsername(ctx, username)
+	byEmail, _ := h.userStore.FindUserByEmail(ctx, email)
+	return byName != nil, byEmail != nil
 }
 
 // checkRegistrationInvite validates an invite token before any account is
@@ -628,15 +691,15 @@ func (h *AuthHandler) checkRegistrationInvite(ctx context.Context, token, addres
 // joinInvitedOrg spends the invite for the account just created. If the token
 // was spent in between, the account is removed again so a refused invite
 // leaves nothing behind.
-func (h *AuthHandler) joinInvitedOrg(ctx context.Context, hash string, user *domain.User) (int, string) {
-	_, err := h.orgStore.AcceptPendingInvite(ctx, hash, user.ID, time.Now())
+func (h *AuthHandler) joinInvitedOrg(ctx context.Context, hash string, user *domain.User) (*domain.PendingInvite, int, string) {
+	invite, err := h.orgStore.AcceptPendingInvite(ctx, hash, user.ID, time.Now())
 	if err == nil {
-		return 0, ""
+		return invite, 0, ""
 	}
 	if derr := h.userStore.DeleteUser(ctx, user.ID); derr != nil {
 		log.Printf("WARN: remove account %s after a refused invite: %v", user.ID, derr)
 	}
-	return inviteErrorStatus(err), inviteErrorMessage(err)
+	return nil, inviteErrorStatus(err), inviteErrorMessage(err)
 }
 
 const (

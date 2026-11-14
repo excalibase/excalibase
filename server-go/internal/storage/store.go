@@ -548,6 +548,9 @@ type OrgStore interface {
 	GetProjectMember(ctx context.Context, projectID, userID string) (*domain.ProjectMember, error)
 
 	CreatePendingInvite(ctx context.Context, invite *domain.PendingInvite) error
+	// RestorePendingInvite files an invite that was spent by a sign-up that was
+	// then rolled back, unless the address has been invited again since.
+	RestorePendingInvite(ctx context.Context, invite *domain.PendingInvite) error
 	// FindPendingInviteByToken returns the live invite a token hash names, or
 	// ErrInviteInvalid when there is none or it has expired.
 	FindPendingInviteByToken(ctx context.Context, tokenHash string, now time.Time) (*domain.PendingInvite, error)
