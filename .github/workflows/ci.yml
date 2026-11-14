@@ -357,7 +357,7 @@ jobs:
       # TypeScript (sonar.javascript.lcov.reportPaths), and without it every
       # changed .ts/.tsx line counts as uncovered against the new-code gate.
       - run: npm run test:coverage
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: frontend-coverage
@@ -385,7 +385,7 @@ jobs:
       - run: npx playwright test
         env:
           CI: '1'
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: playwright-report
@@ -449,7 +449,7 @@ jobs:
       # as a project runtime has none by default (EXC-518).
       - name: Runtime image runs functions offline
         run: sh deno-server/scripts/image-offline-test.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deno-coverage
           path: deno-server/coverage/lcov.info
@@ -533,7 +533,7 @@ jobs:
           go test -tags=integration ./internal/... ./pkg/... -race -cover
           -coverprofile=coverage-${{ matrix.shard }}.out -timeout 12m
           -run "$(scripts/integration-shard.sh ${{ matrix.shard }} 4)"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: go-coverage-shard-${{ matrix.shard }}
@@ -574,7 +574,7 @@ jobs:
             echo "Coverage ${total}% is below 70% threshold"
             exit 1
           fi
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: go-coverage
