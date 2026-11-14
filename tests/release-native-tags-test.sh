@@ -28,6 +28,7 @@ case "$STUB_MODE" in
   auth) echo 'unauthorized: incorrect username or password' >&2; exit 1 ;;
   ratelimit) echo 'toomanyrequests: 429' >&2; exit 1 ;;
   outage) echo '503 Service Unavailable' >&2; exit 1 ;;
+  url404) echo 'GET https://registry/v2/x/manifests/main-a404bc1-native: 503 Service Unavailable' >&2; exit 1 ;;
   nodigest) printf 'Name: x\n' ;;
 esac
 STUB
@@ -46,6 +47,7 @@ status_of manifest 3
 status_of auth 1
 status_of ratelimit 1
 status_of outage 1
+status_of url404 1
 status_of nodigest 1
 digest="$(STUB_MODE=found INSPECT_CMD="$stub" bash "$inspect" example/image:tag)"
 [ "$digest" = "sha256:abc" ] || { echo "FAIL digest: got '$digest'"; fail=1; }

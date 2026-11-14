@@ -17,7 +17,7 @@ if output="$($inspect "$ref" 2>"$errors")"; then
   echo "$digest"
   exit 0
 fi
-if grep -qiE 'not found|manifest unknown|no such manifest|404' "$errors"; then
+if grep -qiE 'not found|manifest unknown|no such manifest' "$errors"; then
   exit 3
 fi
 cat "$errors" >&2
