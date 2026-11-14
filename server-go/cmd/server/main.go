@@ -2338,21 +2338,25 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 	})
 	r.Route("/api/admin", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
-		r.Use(auth.RequireUnrestrictedCredentialForWrites)
-		r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
-		r.Route("/tiers", func(r chi.Router) {
-			r.Use(auth.RequirePermission(auth.PermViewAny))
-			d.tierHandler.Routes(r)
-		})
-		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/storage", d.storageBudgetH.Report)
-		mountHostMonitoring(r, d)
+		// Service accounts keep their own gates: the bootstrap Job's capability
+		// token may create the principals it manages, which the blanket
+		// unrestricted-write gate below would refuse before the handler runs.
 		r.Route("/service-accounts", func(r chi.Router) { d.svcAcctHandler.Routes(r) })
-		// Studio sign-in providers: the OAuth client decides who can sign in,
-		// so only an unnarrowed platform-admin credential may change it.
-		r.Route("/sso-providers", func(r chi.Router) {
-			r.Use(auth.RequirePermission(auth.PermManageUsers))
+		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireUnrestrictedCredentialForWrites)
-			d.ssoHandler.Routes(r)
+			r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
+			r.Route("/tiers", func(r chi.Router) {
+				r.Use(auth.RequirePermission(auth.PermViewAny))
+				d.tierHandler.Routes(r)
+			})
+			r.With(auth.RequirePermission(auth.PermViewAny)).Get("/storage", d.storageBudgetH.Report)
+			mountHostMonitoring(r, d)
+			// Studio sign-in providers: the OAuth client decides who can sign in,
+			// so only an unnarrowed platform-admin credential may change it.
+			r.Route("/sso-providers", func(r chi.Router) {
+				r.Use(auth.RequirePermission(auth.PermManageUsers))
+				d.ssoHandler.Routes(r)
+			})
 		})
 	})
 }
