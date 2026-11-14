@@ -25,6 +25,8 @@ jobs:
     name: Retag ${{ inputs.version }}
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
@@ -52,6 +54,36 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
             echo "tags=$version $major.$minor $major latest" >> "$GITHUB_OUTPUT"
           fi
+
+      # The native engine image is a supported choice for small machines. It is
+      # promoted from the same commit's <source_tag>-native, by name. An engine
+      # build from before the native tags existed has none: skip it, say so.
+      - name: Retag the native engine image
+        if: contains(format(',{0},', inputs.services), ',excalibase-graphql,')
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -eu
+          repository="excalibase/excalibase-graphql"
+          source="$repository:$SOURCE_TAG-native"
+          digest=$(docker buildx imagetools inspect "$source" 2>/dev/null | awk '/^Digest:/ { print $2; exit }') || true
+          if [ -z "${digest:-}" ] || [ "$digest" = "null" ]; then
+            echo "::notice::$source does not exist (engine build without a native image); native not released for $VERSION"
+            echo "Native image: skipped, $source does not exist" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if docker buildx imagetools inspect "$repository:$VERSION-native" >/dev/null 2>&1; then
+            echo "::error::$repository:$VERSION-native already exists; cut a new version instead"
+            exit 1
+          fi
+          tags=$(bash scripts/release-native-tags.sh "$VERSION")
+          refs=""
+          for tag in $tags; do refs="$refs -t $repository:$tag"; done
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $refs "$repository@$digest"
+          echo "released $repository@$digest as $tags"
+          echo "Native image: $repository@$digest as $tags" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Retag each service
         run: |
