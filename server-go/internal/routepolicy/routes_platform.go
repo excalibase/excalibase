@@ -91,9 +91,9 @@ var platformRows = []Row{
 	{Methods: post, Pattern: "/api/auth/users/{userId}/verify-email", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true, Note: "an admin vouches for an address when no mail can be sent; audited"},
 
 	{Methods: get, Pattern: "/api/auth/tokens/", Auth: AuthSession, Owner: OwnerTokenSubject, Discloses: NoSecret, Note: "lists only the caller's own personal access tokens; sessions and service tokens never appear"},
-	{Methods: post, Pattern: "/api/auth/tokens/", Auth: AuthSession, Owner: OwnerTokenSubject, Note: "a narrowed PAT may only mint a subset of its own scopes; 20 mints per user per hour; audited"},
-	{Methods: del, Pattern: "/api/auth/tokens/{tokenHash}", Auth: AuthSession, Owner: OwnerTokenSubject},
-	{Methods: post, Pattern: "/api/auth/tokens/{tokenHash}/rotate", Auth: AuthSession, Owner: OwnerTokenSubject},
+	{Methods: post, Pattern: "/api/auth/tokens/", Bootstrap: true, Auth: AuthSession, Owner: OwnerTokenSubject, Note: "a narrowed PAT may only mint a subset of its own scopes; 20 mints per user per hour; audited"},
+	{Methods: del, Pattern: "/api/auth/tokens/{tokenHash}", Bootstrap: true, Auth: AuthSession, Owner: OwnerTokenSubject},
+	{Methods: post, Pattern: "/api/auth/tokens/{tokenHash}/rotate", Bootstrap: true, Auth: AuthSession, Owner: OwnerTokenSubject},
 
 	{Methods: get, Pattern: "/api/admin/projects", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole, Discloses: NoSecret},
 	{Methods: get, Pattern: "/api/admin/logs", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole, Discloses: NoSecret},
@@ -112,7 +112,7 @@ var platformRows = []Row{
 	{Methods: get, Pattern: "/api/admin/sso-providers/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Discloses: NoSecret, Note: "client secrets are reported as set or not, never returned"},
 	{Methods: put, Pattern: "/api/admin/sso-providers/{provider}", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true, Note: "the OAuth client decides who can sign in to Studio; audited without the secret"},
 	{Methods: get, Pattern: "/api/admin/service-accounts/{name}/tokens", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Discloses: NoSecret},
-	{Methods: post, Pattern: "/api/admin/service-accounts/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true, Note: "minting a service credential from a narrowed PAT would launder it into a wider one"},
+	{Methods: post, Pattern: "/api/admin/service-accounts/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true, Bootstrap: true, Note: "minting a service credential from a narrowed PAT would launder it into a wider one"},
 	{Methods: del, Pattern: "/api/admin/service-accounts/{name}", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true},
 }
 
@@ -121,8 +121,8 @@ var platformRows = []Row{
 // overwrites key material additionally refuses any narrowed PAT, so a
 // project-bound credential can never reach platform-wide authority.
 var vaultRows = []Row{
-	{Methods: post, Pattern: "/api/vault/init", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true, Note: "returns the unseal shares"},
-	{Methods: post, Pattern: "/api/vault/unseal", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
+	{Methods: post, Pattern: "/api/vault/init", Bootstrap: true, Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true, Note: "returns the unseal shares"},
+	{Methods: post, Pattern: "/api/vault/unseal", Bootstrap: true, Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
 	{Methods: post, Pattern: "/api/vault/seal", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
 	{Methods: post, Pattern: "/api/vault/rekey", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
 	{Methods: get, Pattern: "/api/vault/secrets-list", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true, Discloses: NoSecret, Note: "a prefix spanning projects inventories every tenant; a prefix naming one is bound to it like any other project read"},

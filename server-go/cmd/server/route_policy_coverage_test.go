@@ -55,6 +55,7 @@ const (
 	policyBoundID    = "bound-a"
 	policySvcAuthID  = "svc-auth-policy"
 	policySvcGqlID   = "svc-graphql-policy"
+	policySvcBootID  = "svc-bootstrap-policy"
 	policyOtherOrgID = "member-b"
 )
 
@@ -228,6 +229,7 @@ func policyPrincipals(platform *fakePlatform) []principal {
 	add(routepolicy.Principal{Name: "metricsKey", OrgRole: domain.OrgRoleAdmin, ReadOnly: true, Restricted: true, MetricsKey: true},
 		policyAdminID, "user", domain.AccessToken{Scopes: auth.ScopeMetricsRead, ProjectID: matrixProjectA})
 	addCapability(platform, &out, "svcAuthToken", policySvcAuthID, chartPermissions[svcAuth])
+	addCapability(platform, &out, "svcBootstrapToken", policySvcBootID, chartPermissions[svcBootstrap])
 	addCapability(platform, &out, "svcGraphqlToken", policySvcGqlID, chartPermissions[svcGraphql])
 	return out
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,7 +10,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 )
 
 // The platform-bootstrap Job authenticates as svc-bootstrap with a capability
@@ -17,7 +20,9 @@ import (
 // service-account handler, which scopes it to the principals it manages.
 func TestCapabilityTokenReachesServiceAccountCreate(t *testing.T) {
 	raw := testutil.FixtureToken("bootstrap-capability")
-	router, _, _, _ := buildMatrixPlatform(t, config.AppConfig{DeploymentMode: "selfhosted"}, func(_ *handlerDeps, platform *fakePlatform) {
+	router, _, _, _ := buildMatrixPlatform(t, config.AppConfig{DeploymentMode: "selfhosted"}, func(deps *handlerDeps, platform *fakePlatform) {
+		users := fakestore.NewUsers()
+		deps.svcAcctHandler = handler.NewServiceAccountHandler(users, &policyTokenStore{Tokens: platform.Tokens}, nil)
 		hash := auth.HashToken(raw)
 		platform.ByHash[hash] = &domain.AccessToken{
 			TokenHash: hash, UserID: matrixAdminID,
@@ -31,7 +36,13 @@ func TestCapabilityTokenReachesServiceAccountCreate(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if strings.Contains(w.Body.String(), "requires a session or an unrestricted token") {
-		t.Fatalf("the admin write gate refused the bootstrap capability token: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("creating svc-auth as the bootstrap token: got %d %s, want 201", w.Code, w.Body.String())
+	}
+	var created struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil || created.Username != "svc-auth" {
+		t.Fatalf("response is not the created svc-auth principal: %s (%v)", w.Body.String(), err)
 	}
 }

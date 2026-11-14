@@ -2,6 +2,7 @@ package routepolicy
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 )
@@ -70,7 +71,7 @@ func Expect(row Row, method string, p Principal) Expectation {
 		return Unasserted
 	}
 	if p.IsCapabilityToken() {
-		return expectCapabilityToken(row)
+		return expectCapabilityToken(row, p)
 	}
 	if p.SiteDeployToken && !row.SiteDeployToken {
 		return Deny403
@@ -104,11 +105,30 @@ func Expect(row Row, method string, p Principal) Expectation {
 // principal's platform role would otherwise permit. The allow direction needs
 // the concrete selector of the request (a vault secret path, say), so it is
 // left to the service-token contract test rather than asserted from a pattern.
-func expectCapabilityToken(row Row) Expectation {
+func expectCapabilityToken(row Row, p Principal) Expectation {
+	if row.Bootstrap {
+		// The capability gate admits the bootstrap token; every other
+		// capability token is default-denied here.
+		if p.isBootstrap() {
+			return Allow
+		}
+		return Deny403
+	}
 	if row.Capability == "" {
 		return Deny403
 	}
 	return Unasserted
+}
+
+// isBootstrap reports whether the principal holds a
+// service-tokens:manage permission, which only svc-bootstrap carries.
+func (p Principal) isBootstrap() bool {
+	for _, capability := range p.Capabilities {
+		if strings.HasPrefix(capability, "service-tokens:manage:") {
+			return true
+		}
+	}
+	return false
 }
 
 // expectSession applies the gates a session or human PAT meets, in the order
