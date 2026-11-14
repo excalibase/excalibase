@@ -1,4 +1,4 @@
-FROM golang:1.26.10-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 
 WORKDIR /build
 
@@ -11,7 +11,7 @@ WORKDIR /build/excalibase-vault
 RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /vault ./cmd/server/
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk --no-cache add ca-certificates
 COPY --from=builder /vault /vault
