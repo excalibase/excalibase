@@ -12,12 +12,12 @@ import (
 // list on purpose: the endpoint is built for coding, and every addition is a
 // decision about what an AI tool may do with a person's credential.
 var offeredTools = []string{
-	"add_cors_origin", "add_site_domain", "apply_migration", "check_site_domain", "connect_site_repo", "create_app", "create_publishable_key", "create_site", "delete_app", "delete_function",
+	"add_app_domain", "add_cors_origin", "add_site_domain", "apply_migration", "check_site_domain", "connect_site_repo", "create_app", "create_publishable_key", "create_site", "delete_app", "delete_function",
 	"delete_site", "deploy_app", "deploy_function", "deploy_site", "describe_table", "disconnect_site_repo", "execute_sql", "generate_typescript_types", "get_auth_settings", "get_ci_snippet",
 	"get_database_info", "get_db_endpoint", "get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_metrics", "get_project_info",
-	"list_alerts", "list_apps", "list_cors_origins", "list_functions", "list_migrations", "list_permissions", "list_projects",
-	"list_site_build_secrets", "list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_tables", "rebuild_site", "remove_cors_origin", "remove_site_domain", "rollback_site", "set_db_function_permission", "set_function_outbound_hosts",
-	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "test_auth_flow", "track_db_function", "update_app",
+	"list_alerts", "list_app_domains", "list_apps", "list_cors_origins", "list_functions", "list_migrations", "list_permissions", "list_projects",
+	"list_site_build_secrets", "list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_tables", "rebuild_site", "redeploy_app", "remove_app_domain", "remove_cors_origin", "remove_site_domain", "rollback_site", "set_app_secret", "set_db_function_permission", "set_function_outbound_hosts",
+	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "test_auth_flow", "track_db_function", "update_app", "verify_app_domain",
 }
 
 // allowedRoutes is every route a tool may call. Anything else is refused by
@@ -65,6 +65,17 @@ var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^GET /api/projects/[^/]+/functions/[^/]+/logs(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/apps/$`),
 	regexp.MustCompile(`^(PATCH|DELETE) /api/projects/[^/]+/apps/[^/]+/$`),
+	// A secret variable's value is written to the vault and never read back; no route returns one.
+	regexp.MustCompile(`^PUT /api/projects/[^/]+/apps/[^/]+/secrets/[^/]+$`),
+	regexp.MustCompile(`^POST /api/projects/[^/]+/apps/[^/]+/deploys/[^/]+/redeploy$`),
+	// Custom domains of an app: the user adds the CNAME, the platform checks it.
+	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/apps/[^/]+/domains/$`),
+	regexp.MustCompile(`^POST /api/projects/[^/]+/apps/[^/]+/domains/[^/]+/verify$`),
+	regexp.MustCompile(`^DELETE /api/projects/[^/]+/apps/[^/]+/domains/[^/]+$`),
+	// Git builds of apps (EXC-547, appgitbuilds): connect, rebuild and read builds; the GitHub sign-in happens in Studio only.
+	regexp.MustCompile(`^(GET|PUT|DELETE) /api/projects/[^/]+/apps/[^/]+/git$`),
+	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/builds(/[^/]+)?$`),
+	regexp.MustCompile(`^POST /api/projects/[^/]+/apps/[^/]+/builds$`),
 	// Names of the registries with a saved login; never a username or password.
 	regexp.MustCompile(`^GET /api/projects/[^/]+/registry-credentials/$`),
 	// Whether the project's apps may reach each other (the route asks for admin to change it).
@@ -144,7 +155,9 @@ var neverReached = []*regexp.Regexp{
 	regexp.MustCompile(`^(PUT|POST|PATCH) .*/storage`),
 	regexp.MustCompile(`/storage(\?.*)?$`),
 	regexp.MustCompile(`/storage/(buckets|objects|v1)`),
-	regexp.MustCompile(`/apps/[^/]+/secrets`),
+	// An app's secret is set by name and never read: every other secret route stays out.
+	regexp.MustCompile(`^(GET|POST|PATCH|DELETE) .*/apps/[^/]+/secrets`),
+	regexp.MustCompile(`^PUT .*/apps/[^/]+/secrets/?(\?.*)?$`),
 	// One-way database changes.
 	regexp.MustCompile(`/upgrade`),
 	regexp.MustCompile(`/major-upgrade`),
@@ -166,7 +179,9 @@ func TestNeverReachedCatchesTheSurfaceItNames(t *testing.T) {
 		"PUT /api/projects/p/db-read-address/",
 		"POST /api/projects/p/storage/s3-keys",
 		"GET /api/projects/p/storage/buckets",
-		"PUT /api/projects/p/apps/a/secrets/NAME",
+		"GET /api/projects/p/apps/a/secrets/NAME",
+		"DELETE /api/projects/p/apps/a/secrets/NAME",
+		"PUT /api/projects/p/apps/a/secrets",
 		"POST /api/provision/p/major-upgrade",
 		"PUT /api/provision/p/parameters",
 		"POST /api/provision/p/upgrade",
@@ -182,6 +197,7 @@ func TestNeverReachedCatchesTheSurfaceItNames(t *testing.T) {
 		"GET /api/projects/p/db-endpoint/",
 		"GET /api/projects/p/db-read-address/",
 		"PUT /api/projects/p/db-endpoint/allowed-sources/",
+		"PUT /api/projects/p/apps/a/secrets/NAME",
 		"GET /api/projects/p/storage/s3-keys",
 		"DELETE /api/projects/p/storage/s3-keys/k",
 	} {
