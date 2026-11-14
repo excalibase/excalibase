@@ -1,6 +1,7 @@
 package loginguard
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -76,5 +77,52 @@ func TestSlowdown_IsPerAccount(t *testing.T) {
 	begin(s, "alice", 50)
 	if _, ok := s.Begin("carol"); !ok {
 		t.Fatal("one account's flood refused another")
+	}
+}
+
+func TestSlowdown_TableIsBoundedAndEvictsTheOldest(t *testing.T) {
+	s, c := newTestSlowdown()
+	s.maxTracked = 100
+	begin(s, "first", 3)
+	for i := 0; i < 500; i++ {
+		c.at = c.at.Add(time.Millisecond)
+		s.Begin(fmt.Sprintf("name-%d", i))
+	}
+	if got := s.order.Len(); got != 100 || len(s.failures) != 100 {
+		t.Fatalf("tracking %d (list) / %d (map) identities, want 100", got, len(s.failures))
+	}
+	if s.Failures("first") != 0 {
+		t.Fatal("the oldest identity was not the one evicted")
+	}
+	if s.Failures("name-499") != 1 {
+		t.Fatal("the newest identity was evicted")
+	}
+}
+
+func TestSlowdown_AgesOutOnlyWhatHasExpired(t *testing.T) {
+	s, c := newTestSlowdown()
+	s.Begin("old")
+	c.at = c.at.Add(40 * time.Second)
+	s.Begin("recent")
+	c.at = c.at.Add(30 * time.Second)
+	s.Begin("trigger")
+	if s.Failures("old") != 0 || s.Failures("recent") != 1 || len(s.failures) != 2 {
+		t.Fatalf("old %d recent %d tracked %d", s.Failures("old"), s.Failures("recent"), len(s.failures))
+	}
+}
+
+// Begin must not cost more as the table grows: a large table of live entries is not scanned.
+func TestSlowdown_BeginDoesNotScanTheTable(t *testing.T) {
+	s, _ := newTestSlowdown()
+	s.maxTracked = 200_000
+	for i := 0; i < 200_000; i++ {
+		s.Begin(fmt.Sprintf("name-%d", i))
+	}
+	start := time.Now()
+	for i := 0; i < 2000; i++ {
+		s.Begin("probe")
+	}
+	if per := time.Since(start) / 2000; per > 100*time.Microsecond {
+		t.Fatalf("a Begin took %s with 200k tracked, want it independent of the table size", per)
 	}
 }
