@@ -24,7 +24,7 @@
 # import map references. We tag the stage `lib-build` so a downstream
 # `COPY --from=lib-build` can grab just the dist without dragging
 # node_modules into the final image.
-FROM node:20-alpine AS lib-build
+FROM node:25-alpine AS lib-build
 
 WORKDIR /lib
 
