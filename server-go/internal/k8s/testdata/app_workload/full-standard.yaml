@@ -29,7 +29,7 @@ spec:
   template:
     metadata:
       annotations:
-        excalibase.io/app-config-hash: 5b82bef8943eb1aa
+        excalibase.io/app-config-hash: 782bf2312a7f4dec
         excalibase.io/app-env-revision: "7"
       labels:
         app.kubernetes.io/component: app
@@ -80,9 +80,11 @@ spec:
         resources:
           limits:
             cpu: "1"
+            ephemeral-storage: 2Gi
             memory: 1Gi
           requests:
             cpu: 250m
+            ephemeral-storage: 256Mi
             memory: 512Mi
         securityContext:
           allowPrivilegeEscalation: false
