@@ -1,7 +1,7 @@
 # Studio frontend — Vite build served by nginx, with /api proxied to the
 # provisioning backend (see nginx.conf). Part of the all-in-one stack, published
 # as excalibase/studio and referenced by the platform-aio Helm chart.
-FROM node:20-alpine AS build
+FROM node:25-alpine AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
