@@ -80,3 +80,17 @@ func TestExtraDenyPrefixes(t *testing.T) {
 		t.Fatal("no ranges configured must deny nothing extra")
 	}
 }
+
+func TestParseLoginAccountFailureCap(t *testing.T) {
+	if got, err := parseLoginAccountFailureCap(""); err != nil || got != 1000 {
+		t.Fatalf("default = %d, %v; want 1000", got, err)
+	}
+	if got, err := parseLoginAccountFailureCap(" 250 "); err != nil || got != 250 {
+		t.Fatalf("250 = %d, %v", got, err)
+	}
+	for _, bad := range []string{"abc", "99", "-1", "1.5"} {
+		if _, err := parseLoginAccountFailureCap(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
