@@ -259,6 +259,9 @@ func runServer(cfg config.AppConfig) {
 	fnSchedHandles := startFunctionScheduler(cfg, sqlStore, fnHandler, projectDB)
 	defer fnSchedHandles.Stop()
 
+	// Runtimes made before the sandbox class was required move into it now,
+	// in the background: a cluster that cannot offer it fails functions, never boot.
+	go fnHandler.ReconcileRuntimes(context.Background())
 	stopReplayer := startFunctionReplayer(cfg, fnHandler)
 	defer stopReplayer()
 
@@ -1241,6 +1244,7 @@ func buildFunctionHandler(
 		fnHandler.SetRuntimeProvisioningURL(cfg.DenoProvisioningURL)
 		fnHandler.SetRuntimeEdge(edgePeer(cfg))
 		fnHandler.SetRuntimeCiliumFQDN(cfg.FunctionEgressByName())
+		fnHandler.SetRuntimeClass(cfg.AppRuntimeClass)
 	}
 	fnHandler.SetVault(vc)
 	// Without this resolver a deploy stores the declared schema and never

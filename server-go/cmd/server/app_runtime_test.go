@@ -48,6 +48,7 @@ func TestVerifyAppRuntime_HostingDisabledChecksNothing(t *testing.T) {
 func TestVerifyAppRuntime_PresentRuntimeClassPasses(t *testing.T) {
 	kube := k8s.NewMockClient()
 	kube.RuntimeClasses["gvisor"] = true
+	kube.Placement = k8s.RuntimePlacement{Handler: "runsc"}
 	if err := verifyAppRuntime(context.Background(), hostingConfig(true), kube); err != nil {
 		t.Fatalf("want success, got %v", err)
 	}
@@ -103,5 +104,28 @@ func TestRegistryCredentialWiring(t *testing.T) {
 	deploys := service.NewAppDeployService(nil, nil, k8s.NewMockClient(), fakestore.NewInstances(), nil, k8s.AppRenderOptions{})
 	if withRegistryCredentials(deploys, nil) != deploys || withRegistryCredentials(deploys, creds) != deploys {
 		t.Fatal("the deploy service is returned as given")
+	}
+}
+
+func TestVerifyAppRuntime_HandlerMustBeGVisor(t *testing.T) {
+	kube := k8s.NewMockClient()
+	kube.RuntimeClasses["gvisor"] = true
+	kube.Placement = k8s.RuntimePlacement{Handler: "runc"}
+	err := verifyAppRuntime(context.Background(), hostingConfig(true), kube)
+	if err == nil || !strings.Contains(err.Error(), "runsc") {
+		t.Fatalf("a RuntimeClass named gvisor that runs plain runc must be refused, got %v", err)
+	}
+	kube.Placement = k8s.RuntimePlacement{Handler: "runsc"}
+	if err := verifyAppRuntime(context.Background(), hostingConfig(true), kube); err != nil {
+		t.Fatalf("runsc handler: %v", err)
+	}
+}
+
+func TestRequireGVisorHandler_UnreadableClassIsRefused(t *testing.T) {
+	kube := k8s.NewMockClient()
+	kube.PlacementErr = errors.New("forbidden")
+	err := requireGVisorHandler(context.Background(), "gvisor", kube)
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("got %v, want the read failure", err)
 	}
 }

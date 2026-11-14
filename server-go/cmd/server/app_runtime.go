@@ -31,6 +31,19 @@ func verifyAppRuntime(ctx context.Context, cfg config.AppConfig, kube k8s.KubeCl
 	if !found {
 		return fmt.Errorf("RuntimeClass %q (APP_RUNTIME_CLASS) does not exist in the cluster; app hosting cannot run without it", cfg.AppRuntimeClass)
 	}
+	return requireGVisorHandler(ctx, cfg.AppRuntimeClass, kube)
+}
+
+// requireGVisorHandler refuses a RuntimeClass whose handler is not gVisor: a class
+// that is only named "gvisor" would run tenant code on the host kernel.
+func requireGVisorHandler(ctx context.Context, class string, kube k8s.KubeClient) error {
+	placement, err := kube.RuntimeClassPlacement(ctx, class)
+	if err != nil {
+		return fmt.Errorf("read RuntimeClass %q (APP_RUNTIME_CLASS): %w", class, err)
+	}
+	if !k8s.IsGVisorHandler(placement.Handler) {
+		return fmt.Errorf("RuntimeClass %q (APP_RUNTIME_CLASS) has handler %q, want runsc: tenant code must run under gVisor", class, placement.Handler)
+	}
 	return nil
 }
 

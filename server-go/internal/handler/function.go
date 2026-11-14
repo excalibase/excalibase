@@ -67,10 +67,14 @@ type FunctionHandler struct {
 	runtimeEdge k8s.EdgePeer
 	// runtimeCiliumFQDN fences each runtime by host name (EXC-558).
 	runtimeCiliumFQDN bool
-	runtimeURLFn      func(namespace string) string // tests override; nil → cluster DNS
-	clientMu          sync.Mutex
-	clients           map[string]*edgefn.RuntimeClient // keyed by projectId
-	runtimeWait       runtimeWait
+	// runtimeClass is the sandbox RuntimeClass the runtime pod runs under.
+	runtimeClass string
+	// sandbox caches the check of that class's handler.
+	sandbox      *sandboxGate
+	runtimeURLFn func(namespace string) string // tests override; nil → cluster DNS
+	clientMu     sync.Mutex
+	clients      map[string]*edgefn.RuntimeClient // keyed by projectId
+	runtimeWait  runtimeWait
 
 	// Rate limiting for the public invoke route. Token bucket per project.
 	limiterMu     sync.Mutex
@@ -207,6 +211,7 @@ func NewFunctionHandler(
 		// SetAutoMigrate.
 		autoMigrate: true,
 		runtimeWait: defaultRuntimeWait(),
+		sandbox:     &sandboxGate{ttl: sandboxCheckTTL},
 	}
 	// Backwards-compat: if a single shared client is supplied, use it for all
 	// projects until k8sClient is set.
@@ -280,6 +285,9 @@ func (h *FunctionHandler) SetRuntimeURLFn(fn func(namespace string) string) {
 // project. In per-project mode it points at the in-namespace deno-runtime
 // service; in shared mode it returns the single client supplied at construction.
 func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string) (*edgefn.RuntimeClient, error) {
+	if err := h.requireSandbox(ctx); err != nil {
+		return nil, err
+	}
 	h.clientMu.Lock()
 	if c, ok := h.clients[projectID]; ok {
 		h.clientMu.Unlock()
@@ -312,13 +320,10 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if namespace == "" {
 		return nil, fmt.Errorf("no namespace for project %s", projectID)
 	}
-	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.denoRuntimeSpecFor(projectID)); err != nil {
-		return nil, fmt.Errorf("ensure deno runtime: %w", err)
-	}
 	// EnsureDenoRuntime may have just created the runtime or rolled its pod
 	// (EXC-569). Until the rollout finishes, the pod answering can be the old
 	// one, and whatever is deployed to it goes with it.
-	if err := h.waitForRollout(ctx, namespace, h.runtimeWait.coldStart); err != nil {
+	if err := h.ensureRuntime(ctx, projectID, namespace, h.runtimeWait.coldStart); err != nil {
 		return nil, err
 	}
 
