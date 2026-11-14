@@ -233,7 +233,7 @@ func (h *AuthHandler) restoreInvite(ctx context.Context, hash string, spent *dom
 	}
 	restored := *spent
 	restored.TokenHash = hash
-	if err := h.orgStore.CreatePendingInvite(ctx, &restored); err != nil {
+	if err := h.orgStore.RestorePendingInvite(ctx, &restored); err != nil {
 		log.Printf("WARN: restore the invite for %s after a failed verification mail: %v", spent.Email, err)
 	}
 }

@@ -69,6 +69,7 @@ func (a *adminOrgStore) GetProjectMember(context.Context, string, string) (*doma
 	return nil, nil
 }
 func (a *adminOrgStore) CreatePendingInvite(context.Context, *domain.PendingInvite) error { return nil }
+func (a *adminOrgStore) RestorePendingInvite(context.Context, *domain.PendingInvite) error { return nil }
 func (a *adminOrgStore) FindPendingInviteByToken(context.Context, string, time.Time) (*domain.PendingInvite, error) {
 	return nil, storage.ErrInviteInvalid
 }

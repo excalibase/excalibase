@@ -30,8 +30,9 @@ type EmailVerifier struct {
 	productName string
 	now         func() time.Time
 
-	noticeMu   sync.Mutex
-	noticeSent map[string]time.Time
+	noticeMu    sync.Mutex
+	noticeSent  map[string]time.Time
+	noticeSwept time.Time
 }
 
 // noticeInterval is how often one address is told it already has an account, so
@@ -90,9 +91,15 @@ func (v *EmailVerifier) NotifyAccountExists(ctx context.Context, address string,
 		return ErrVerificationUnavailable
 	}
 	key := strings.ToLower(strings.TrimSpace(address))
-	if !v.noticeDue(key) {
+	if !v.reserveNotice(key) {
 		return nil
 	}
+	sent := false
+	defer func() {
+		if !sent {
+			v.releaseNotice(key)
+		}
+	}()
 	msg, err := email.BuildAccountExistsEmail(email.AccountExistsData{
 		UserEmail: address, UsernameTaken: usernameTaken, SignInURL: v.studioURL + "/login", ProductName: v.productName,
 	})
@@ -104,30 +111,37 @@ func (v *EmailVerifier) NotifyAccountExists(ctx context.Context, address string,
 	if err != nil {
 		return fmt.Errorf("send sign-up notice: %w", err)
 	}
-	v.noticeSentTo(key)
+	sent = true
 	logEmailSent("account_exists", address, messageID, "")
 	return nil
 }
 
-// noticeDue reports whether the address may be mailed a notice now, and drops
-// the records that have aged out.
-func (v *EmailVerifier) noticeDue(key string) bool {
+// reserveNotice claims the address's hour before the send, so requests in
+// parallel cannot all pass the check; it drops the records that have aged out.
+func (v *EmailVerifier) reserveNotice(key string) bool {
 	v.noticeMu.Lock()
 	defer v.noticeMu.Unlock()
 	now := v.now()
-	for address, sentAt := range v.noticeSent {
-		if now.Sub(sentAt) >= noticeInterval {
-			delete(v.noticeSent, address)
+	if now.Sub(v.noticeSwept) >= noticeInterval {
+		v.noticeSwept = now
+		for address, sentAt := range v.noticeSent {
+			if now.Sub(sentAt) >= noticeInterval {
+				delete(v.noticeSent, address)
+			}
 		}
 	}
-	_, recent := v.noticeSent[key]
-	return !recent
+	if sentAt, recent := v.noticeSent[key]; recent && now.Sub(sentAt) < noticeInterval {
+		return false
+	}
+	v.noticeSent[key] = now
+	return true
 }
 
-func (v *EmailVerifier) noticeSentTo(key string) {
+// releaseNotice gives the hour back when the send failed.
+func (v *EmailVerifier) releaseNotice(key string) {
 	v.noticeMu.Lock()
 	defer v.noticeMu.Unlock()
-	v.noticeSent[key] = v.now()
+	delete(v.noticeSent, key)
 }
 
 // Confirm spends a link and marks its account verified, returning the

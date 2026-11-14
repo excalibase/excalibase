@@ -281,6 +281,20 @@ func (s *Store) GetProjectMember(ctx context.Context, projectID, userID string) 
 
 // --- Pending Invites ---
 
+// RestorePendingInvite files a spent invite again, but never over one that
+// exists for the address: an admin's newer invite wins.
+func (s *Store) RestorePendingInvite(ctx context.Context, invite *domain.PendingInvite) error {
+	if invite.TokenHash == "" || invite.ExpiresAt == nil {
+		return errors.New("pending invite needs a token hash and an expiry")
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO pending_invites (org_id, email, role, invited_by, token_hash, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (org_id, lower(email)) DO NOTHING`,
+		invite.OrgID, invite.Email, invite.Role, invite.InvitedBy, invite.TokenHash, invite.ExpiresAt.Time)
+	return err
+}
+
 // CreatePendingInvite files the invite, replacing any earlier one for the same
 // address in the org, in any case: re-inviting issues a new link and the old one stops working.
 func (s *Store) CreatePendingInvite(ctx context.Context, invite *domain.PendingInvite) error {

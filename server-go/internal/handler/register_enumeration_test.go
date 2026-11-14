@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -205,10 +206,10 @@ func TestRegister_FailedVerificationMailRestoresTheInvite(t *testing.T) {
 	if len(f.users.users) != 1 {
 		t.Fatalf("%d accounts, want only the seeded one", len(f.users.users))
 	}
-	if len(org.created) != 1 {
-		t.Fatalf("the invite was restored %d times, want 1", len(org.created))
+	if len(org.restored) != 1 {
+		t.Fatalf("the invite was restored %d times, want 1", len(org.restored))
 	}
-	restored := org.created[0]
+	restored := org.restored[0]
 	if restored.TokenHash != hashToken(token) || restored.OrgID != "org1" || restored.Role != "developer" || restored.Email != "bob@company.test" || restored.ExpiresAt == nil {
 		t.Fatalf("restored invite %+v does not match the spent one", restored)
 	}
@@ -222,7 +223,35 @@ func TestRegister_SentVerificationMailKeepsTheInviteSpent(t *testing.T) {
 	f.h.SetOrgStore(org)
 	postRegisterWithInvite(f.h, "bob", "bob@company.test", token)
 	f.runQueued()
-	if len(org.created) != 0 {
-		t.Fatalf("a delivered sign-up restored its invite: %+v", org.created)
+	if len(org.restored) != 0 {
+		t.Fatalf("a delivered sign-up restored its invite: %+v", org.restored)
 	}
+}
+
+// Parallel sign-ups for one address mail it once: the address is reserved before the send.
+func TestNotifyAccountExists_ParallelRequestsMailOnce(t *testing.T) {
+	sender := &recordingSender{}
+	verifier := NewEmailVerifier(newFakeVerificationStore(), slowSender{sender}, testStudioURL, "")
+	var wg sync.WaitGroup
+	for i := 0; i < 30; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = verifier.NotifyAccountExists(context.Background(), "Victim@company.test", false)
+		}()
+	}
+	wg.Wait()
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("%d notices from 30 parallel requests, want 1", len(sender.sent))
+	}
+}
+
+// slowSender holds each send long enough for parallel requests to overlap.
+type slowSender struct{ *recordingSender }
+
+func (s slowSender) Send(ctx context.Context, msg email.Message) (string, error) {
+	time.Sleep(20 * time.Millisecond)
+	return s.recordingSender.Send(ctx, msg)
 }

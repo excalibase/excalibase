@@ -297,7 +297,8 @@ func (s *Orgs) ListProjectMembers(context.Context, string) ([]*domain.ProjectMem
 func (s *Orgs) GetProjectMember(context.Context, string, string) (*domain.ProjectMember, error) {
 	return nil, nil
 }
-func (s *Orgs) CreatePendingInvite(context.Context, *domain.PendingInvite) error { return nil }
+func (s *Orgs) CreatePendingInvite(context.Context, *domain.PendingInvite) error  { return nil }
+func (s *Orgs) RestorePendingInvite(context.Context, *domain.PendingInvite) error { return nil }
 func (s *Orgs) FindPendingInviteByToken(context.Context, string, time.Time) (*domain.PendingInvite, error) {
 	return nil, storage.ErrInviteInvalid
 }
