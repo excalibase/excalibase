@@ -43,5 +43,14 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 
 // SetAccountFailureCap sets how many failed sign-ins one account takes per window before it refuses all attempts.
 func (h *AuthHandler) SetAccountFailureCap(limit int) {
-	h.accountSlowdown = loginguard.NewSlowdown(accountFreeFailures, accountDelayStep, accountDelayCap, limit, defaultLoginWindow)
+	h.accountSlowdown = newAccountSlowdown(limit)
+}
+
+// unknownNameMemoryShare is the part of the container's memory that sign-in
+// counters for names matching no account may use.
+const unknownNameMemoryShare = 0.03
+
+func newAccountSlowdown(failureCap int) *loginguard.Slowdown {
+	bound := loginguard.UnknownNameBound(loginguard.ContainerMemoryLimit(), unknownNameMemoryShare)
+	return loginguard.NewSlowdown(accountFreeFailures, accountDelayStep, accountDelayCap, failureCap, defaultLoginWindow, bound)
 }

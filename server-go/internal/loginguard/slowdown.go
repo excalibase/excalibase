@@ -15,6 +15,11 @@ import (
 // the window passes. The wait never refuses a correct password; the hard cap is
 // set high enough that spreading it over many addresses is expensive, and the
 // Guard's per-address limit is what stops a single address.
+//
+// Identities of real accounts and names that match no account are tracked in
+// separate tables. The first is as large as the number of users and is never
+// evicted, so flooding with junk names cannot reset a real account's count;
+// only the second is bounded, evicting its oldest name when full.
 type Slowdown struct {
 	mu       sync.Mutex
 	free     int
@@ -22,42 +27,71 @@ type Slowdown struct {
 	maxDelay time.Duration
 	hardCap  int
 	window   time.Duration
-	// failures is by identity; order holds the same entries oldest first, which
-	// is also expiry order, so aging out and eviction take from the front.
-	failures   map[string]*list.Element
-	order      *list.List
-	maxTracked int
-	now        func() time.Time
+	accounts *counterTable
+	unknown  *counterTable
+	now      func() time.Time
 }
 
-// slowdownEntry is one tracked identity.
-type slowdownEntry struct {
+// counterTable holds attempt counts by identity, oldest first, which is also
+// expiry order, so aging out and eviction take from the front. A maxTracked of
+// zero means no bound.
+type counterTable struct {
+	byIdentity map[string]*list.Element
+	order      *list.List
+	maxTracked int
+}
+
+// tableEntry is one tracked identity.
+type tableEntry struct {
 	identity string
 	entry
 }
 
-// defaultMaxTracked bounds the table: names that are not accounts create
-// entries too, and at about 150 bytes each this is a few tens of megabytes.
-const defaultMaxTracked = 200_000
+func newCounterTable(maxTracked int) *counterTable {
+	return &counterTable{byIdentity: map[string]*list.Element{}, order: list.New(), maxTracked: maxTracked}
+}
+
+// BytesPerUnknownName is what one tracked name costs: the map slot, the list
+// element, the entry and the key string.
+const BytesPerUnknownName = 170
+
+// minUnknownNames keeps the bound useful on a container with very little memory.
+const minUnknownNames = 10_000
+
+// UnknownNameBound is how many unknown names to track: a share of the memory
+// limit, in entries, never below a floor. Without a known limit it assumes 512 MiB.
+func UnknownNameBound(memoryLimit uint64, share float64) int {
+	if memoryLimit == 0 {
+		memoryLimit = 512 << 20
+	}
+	return max(minUnknownNames, int(float64(memoryLimit)*share/BytesPerUnknownName))
+}
 
 // NewSlowdown panics on values that make no sense, like New does.
-func NewSlowdown(free int, step, maxDelay time.Duration, hardCap int, window time.Duration) *Slowdown {
-	if free < 0 || step <= 0 || maxDelay < step || hardCap <= free || window <= 0 {
-		panic(fmt.Sprintf("loginguard: slowdown free %d step %s cap %s hard cap %d window %s are invalid", free, step, maxDelay, hardCap, window))
+// maxUnknown bounds the table of names that match no account.
+func NewSlowdown(free int, step, maxDelay time.Duration, hardCap int, window time.Duration, maxUnknown int) *Slowdown {
+	if free < 0 || step <= 0 || maxDelay < step || hardCap <= free || window <= 0 || maxUnknown < 1 {
+		panic(fmt.Sprintf("loginguard: slowdown free %d step %s cap %s hard cap %d window %s unknown %d are invalid", free, step, maxDelay, hardCap, window, maxUnknown))
 	}
 	return &Slowdown{free: free, step: step, maxDelay: maxDelay, hardCap: hardCap, window: window,
-		failures: map[string]*list.Element{}, order: list.New(), maxTracked: defaultMaxTracked, now: time.Now}
+		accounts: newCounterTable(0), unknown: newCounterTable(maxUnknown), now: time.Now}
 }
 
 // Begin counts an attempt at the identity and says how long it waits before its
-// password is checked, or that the account is over its failure cap.
-func (s *Slowdown) Begin(identity string) (delay time.Duration, ok bool) {
+// password is checked, or that the account is over its failure cap. known says
+// the identity is a real account.
+func (s *Slowdown) Begin(identity string, known bool) (delay time.Duration, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := normalise(identity)
 	now := s.now()
-	s.expire(now)
-	e := s.track(key, now)
+	s.accounts.expire(now, s.window)
+	s.unknown.expire(now, s.window)
+	table := s.unknown
+	if known {
+		table = s.accounts
+	}
+	e := table.track(key, now)
 	if e.attempts >= s.hardCap {
 		return 0, false
 	}
@@ -72,52 +106,64 @@ func (s *Slowdown) Begin(identity string) (delay time.Duration, ok bool) {
 func (s *Slowdown) Succeeded(identity string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if element, ok := s.failures[normalise(identity)]; ok {
-		s.drop(element)
-	}
+	key := normalise(identity)
+	s.accounts.remove(key)
+	s.unknown.remove(key)
 }
 
 // Failures is how many attempts the identity has counted in the window.
 func (s *Slowdown) Failures(identity string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	element, ok := s.failures[normalise(identity)]
+	key := normalise(identity)
+	now := s.now()
+	return max(s.accounts.attempts(key, now, s.window), s.unknown.attempts(key, now, s.window))
+}
+
+func (t *counterTable) attempts(key string, now time.Time, window time.Duration) int {
+	element, ok := t.byIdentity[key]
 	if !ok {
 		return 0
 	}
-	e := element.Value.(*slowdownEntry)
-	if s.now().Sub(e.since) >= s.window {
+	e := element.Value.(*tableEntry)
+	if now.Sub(e.since) >= window {
 		return 0
 	}
 	return e.attempts
 }
 
-// expire drops identities whose window has passed. They sit oldest first, so
-// this stops at the first live one: each attempt pays only for what it removes.
-func (s *Slowdown) expire(now time.Time) {
-	for front := s.order.Front(); front != nil; front = s.order.Front() {
-		if now.Sub(front.Value.(*slowdownEntry).since) < s.window {
+// expire drops identities whose window has passed, stopping at the first live
+// one: each attempt pays only for what it removes.
+func (t *counterTable) expire(now time.Time, window time.Duration) {
+	for front := t.order.Front(); front != nil; front = t.order.Front() {
+		if now.Sub(front.Value.(*tableEntry).since) < window {
 			return
 		}
-		s.drop(front)
+		t.drop(front)
 	}
 }
 
-// track returns the identity's entry, adding it at the back and, when the table
-// is full, evicting the oldest first.
-func (s *Slowdown) track(key string, now time.Time) *slowdownEntry {
-	if element, ok := s.failures[key]; ok {
-		return element.Value.(*slowdownEntry)
+// track returns the identity's entry, adding it at the back and, when a bounded
+// table is full, evicting the oldest first.
+func (t *counterTable) track(key string, now time.Time) *tableEntry {
+	if element, ok := t.byIdentity[key]; ok {
+		return element.Value.(*tableEntry)
 	}
-	for s.order.Len() >= s.maxTracked {
-		s.drop(s.order.Front())
+	for t.maxTracked > 0 && t.order.Len() >= t.maxTracked {
+		t.drop(t.order.Front())
 	}
-	e := &slowdownEntry{identity: key, entry: entry{since: now}}
-	s.failures[key] = s.order.PushBack(e)
+	e := &tableEntry{identity: key, entry: entry{since: now}}
+	t.byIdentity[key] = t.order.PushBack(e)
 	return e
 }
 
-func (s *Slowdown) drop(element *list.Element) {
-	delete(s.failures, element.Value.(*slowdownEntry).identity)
-	s.order.Remove(element)
+func (t *counterTable) remove(key string) {
+	if element, ok := t.byIdentity[key]; ok {
+		t.drop(element)
+	}
+}
+
+func (t *counterTable) drop(element *list.Element) {
+	delete(t.byIdentity, element.Value.(*tableEntry).identity)
+	t.order.Remove(element)
 }

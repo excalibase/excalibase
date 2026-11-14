@@ -86,7 +86,7 @@ func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) 
 		userStore:       userStore,
 		tokenStore:      tokenStore,
 		loginGuard:      loginguard.New(defaultLoginAttempts, defaultLoginWindow),
-		accountSlowdown: loginguard.NewSlowdown(accountFreeFailures, accountDelayStep, accountDelayCap, DefaultAccountFailureCap, defaultLoginWindow),
+		accountSlowdown: newAccountSlowdown(DefaultAccountFailureCap),
 		sleep:           sleepContext,
 	}
 }
@@ -343,7 +343,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
 		return
 	}
-	delay, within := h.accountSlowdown.Begin(guardKey)
+	delay, within := h.accountSlowdown.Begin(guardKey, user != nil)
 	if !within {
 		w.Header().Set("Retry-After", strconv.Itoa(int(defaultLoginWindow.Seconds())))
 		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
