@@ -89,6 +89,18 @@ func writeJSONStatus(w http.ResponseWriter, code int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// writeIfPoolBusy answers 503 with Retry-After when err says the platform
+// database could not give the operation a connection in time; the request was
+// not judged, so it is neither a conflict nor a server fault.
+func writeIfPoolBusy(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, storage.ErrPoolBusy) {
+		return false
+	}
+	w.Header().Set("Retry-After", "5")
+	httpError(w, "the platform is busy; retry shortly", http.StatusServiceUnavailable)
+	return true
+}
+
 func httpError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(code)

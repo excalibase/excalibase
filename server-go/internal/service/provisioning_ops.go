@@ -415,7 +415,7 @@ func (s *ProvisioningService) holdProject(ctx context.Context, projectID string,
 	if !claimed {
 		return nil, nil, fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
 	}
-	inst, err := s.GetInstance(projectID)
+	inst, err := s.getInstanceBounded(ctx, projectID)
 	if err == nil {
 		err = admit(projectID, inst.Status)
 	}
@@ -580,4 +580,36 @@ func generateProjectRef() string {
 		out[i] = alphabet[int(x)%len(alphabet)]
 	}
 	return "proj-" + string(out)
+}
+
+// defaultProjectReadTimeout bounds the project read made while a lifecycle
+// lock is held: the lock must never wait on a full pool without a deadline.
+const defaultProjectReadTimeout = 5 * time.Second
+
+// contextInstanceFinder is an InstanceStore that can bound its project read.
+type contextInstanceFinder interface {
+	FindByProjectIDContext(ctx context.Context, projectID string) (*domain.DatabaseInstance, error)
+}
+
+// getInstanceBounded is GetInstance that gives up after the read timeout when
+// the store can honour a context.
+func (s *ProvisioningService) getInstanceBounded(ctx context.Context, projectID string) (*domain.DatabaseInstance, error) {
+	finder, ok := s.store.(contextInstanceFinder)
+	if !ok {
+		return s.GetInstance(projectID)
+	}
+	timeout := s.projectReadTimeout
+	if timeout <= 0 {
+		timeout = defaultProjectReadTimeout
+	}
+	readCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	inst, err := finder.FindByProjectIDContext(readCtx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if inst == nil {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+	return inst, nil
 }

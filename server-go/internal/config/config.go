@@ -823,10 +823,9 @@ func stuckRetryAfter(pauseTimeout time.Duration) time.Duration {
 const DefaultPlatformDBMaxConns = 20
 
 // MinPlatformDBMaxConns is the smallest pool that can do any work at all:
-// five standing leadership claims (backup scheduler, idle pause, storage
-// reap, restore sweep, and the function scheduler's cron half) pin one
-// connection each, plus one for a lifecycle operation in flight and one for
-// a query. Tenant databases are reached through their own pools and cost
+// every standing leadership claim (backup scheduler, idle pause, storage
+// reap and the other sweepers) shares one pinned session, plus one for a
+// query. Project lifecycle locks use a pool of their own (LifecycleLock). Tenant databases are reached through their own pools and cost
 // nothing here.
 const MinPlatformDBMaxConns = 7
 
@@ -845,7 +844,7 @@ func parsePlatformDBMaxConns(raw string) (int, error) {
 	}
 	if n < MinPlatformDBMaxConns {
 		return 0, fmt.Errorf(
-			"%d is below the minimum of %d: the control plane holds 5 standing leadership claims, plus one connection per lifecycle operation in flight and one for a query",
+			"%d is below the minimum of %d: the control plane's standing leadership claims share one connection, and it needs more for queries",
 			n, MinPlatformDBMaxConns)
 	}
 	return n, nil

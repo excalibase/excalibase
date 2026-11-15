@@ -63,6 +63,9 @@ func (h *ProvisioningHandler) UpgradeMinorVersion(w http.ResponseWriter, r *http
 	}
 
 	if err := h.svc.UpgradeVersion(r.Context(), projectID, inst.PostgresVersion); err != nil {
+		if writeIfPoolBusy(w, err) {
+			return
+		}
 		httpError(w, safeError(err), unsettledOr(err, http.StatusInternalServerError))
 		return
 	}
@@ -82,6 +85,9 @@ func (h *ProvisioningHandler) UpgradeMinorVersion(w http.ResponseWriter, r *http
 
 func (h *ProvisioningHandler) upgradeMySQLMinor(w http.ResponseWriter, r *http.Request, projectID string) {
 	if err := h.svc.UpgradeVersion(r.Context(), projectID, config.DefaultMySQLVersion()); err != nil {
+		if writeIfPoolBusy(w, err) {
+			return
+		}
 		httpError(w, safeError(err), unsettledOr(err, http.StatusInternalServerError))
 		return
 	}

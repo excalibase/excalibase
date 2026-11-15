@@ -96,18 +96,17 @@ func TestParsePlatformDBMaxConnsRefusesUnusableSizes(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "7") {
 		t.Errorf("the error must state the minimum, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "5 standing") {
-		t.Errorf("the error must explain the standing claims, got %v", err)
+	if !strings.Contains(err.Error(), "share one connection") || strings.Contains(err.Error(), "5 standing") {
+		t.Errorf("the error must describe the shared leadership session, got %v", err)
 	}
 }
 
-// The function scheduler's cron half leads on the platform database too, so
-// it is a fifth standing claim and the minimum pool has to account for it.
-func TestMinPlatformDBMaxConnsCountsTheCronLeadershipClaim(t *testing.T) {
-	const standingClaims = 5 // backup, idle pause, storage reap, restore sweep, function cron
-	if MinPlatformDBMaxConns != standingClaims+2 {
-		t.Errorf("minimum pool: got %d, want %d (%d standing claims + one operation + one query)",
-			MinPlatformDBMaxConns, standingClaims+2, standingClaims)
+// Standing leadership claims share one connection and lifecycle locks use a
+// pool of their own, so the minimum no longer grows with the number of
+// schedulers; it only has to leave room for the shared session and queries.
+func TestMinPlatformDBMaxConnsDoesNotScaleWithSchedulers(t *testing.T) {
+	if MinPlatformDBMaxConns < 3 {
+		t.Errorf("minimum pool %d leaves no room for the shared session plus queries", MinPlatformDBMaxConns)
 	}
 }
 
