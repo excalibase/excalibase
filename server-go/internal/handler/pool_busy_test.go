@@ -21,6 +21,13 @@ func TestLifecycleErrorWriters_PoolBusyIs503WithRetryAfter(t *testing.T) {
 		"endpoint":    func(w http.ResponseWriter) { writeDBEndpointError(w, busy) },
 		"domain":      func(w http.ResponseWriter) { writeDomainError(w, busy) },
 		"site":        func(w http.ResponseWriter) { writeSiteError(w, busy) },
+		"add db":      func(w http.ResponseWriter) { writeAddDatabaseError(w, "p1", busy) },
+		"disk":        func(w http.ResponseWriter) { (&AppDeployHandler{}).writeDiskError(w, busy) },
+		"app deploy":  func(w http.ResponseWriter) { (&AppDeployHandler{}).writeError(w, busy) },
+		"cluster":     func(w http.ResponseWriter) { writeClusterChangeError(w, "p1", "resize", busy) },
+		"read addr":   func(w http.ResponseWriter) { writeDBReadAddressError(w, "p1", busy) },
+		"allow list":  func(w http.ResponseWriter) { writeDBAllowListError(w, "p1", busy) },
+		"pause":       func(w http.ResponseWriter) { (&ProvisioningHandler{}).writeLifecycleError(w, "p1", busy) },
 	}
 	for name, write := range writers {
 		rec := httptest.NewRecorder()
