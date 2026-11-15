@@ -20,8 +20,10 @@ uwait() {
 uprovision() {
   local id
   id=$(uapi -X POST "$UAPI/provision/" -d "{\"projectName\":\"$1\",\"orgId\":\"$ORG\",\"databaseType\":\"POSTGRESQL\",\"postgresVersion\":\"16\"}" | ujson 'd.get("projectId","")')
-  [ "$(uwait "$id" ACTIVE)" = ACTIVE ] || ko "project $id never became ACTIVE: $(uapi "$UAPI/provision/$id/" | head -c 600)" >&2
   echo "$id"
+  [ "$(uwait "$id" ACTIVE)" = ACTIVE ] && return 0
+  echo "project $id never became ACTIVE: $(uapi "$UAPI/provision/$id/" | head -c 600)" >&2
+  return 1
 }
 usql() { $DOCKER exec "excalibase-$1-postgres" psql -qtAX -U postgres -d "$(uapi "$UAPI/provision/$1/" | ujson 'd.get("databaseName") or "postgres"')" -c "$2" 2>&1; }
 urun() { uapi "$UAPI/provision/$1/major-upgrade" | ujson "(d.get('latest') or {}).get('$2') or ''"; }
@@ -75,7 +77,7 @@ major_upgrade_journey() {
   local one two said backup kept due job restored left
   echo "== major upgrade left open"
   [ "$ENGINE" = docker ] || { ok "rootless Podman has no host firewall to lose"; return; }
-  one=$(uprovision upgrade-one)
+  one=$(uprovision upgrade-one) || { ko "upgrade-one never became ACTIVE"; return; }
   usql "$one" "CREATE TABLE kept (body text); INSERT INTO kept VALUES ('before the upgrade')" >/dev/null
   left_open "$one" || { firewall_up; return; }
   ok "a firewall lost in the swap leaves the run open"
@@ -136,7 +138,7 @@ major_upgrade_journey() {
 teardown_part() {
   local two kept left
   echo "== teardown of an upgrade left open"
-  two=$(uprovision upgrade-two)
+  two=$(uprovision upgrade-two) || { ko "upgrade-two never became ACTIVE"; return; }
   left_open "$two" || { firewall_up; return; }
   kept=$(kept_container "$two")
   udelete "$two"
