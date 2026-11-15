@@ -146,6 +146,13 @@ func currentGate() *hashGate {
 	return passwordGate.Load()
 }
 
+// RunInPasswordGate runs fn inside a slot of the shared gate on behalf of
+// client, exactly as a password check does. Tests use it to hold slots open and
+// saturate the gate; it returns ErrBusy when no slot frees up in time.
+func RunInPasswordGate(client string, fn func()) error {
+	return currentGate().runFor(client, fn)
+}
+
 // ConfigurePasswordGate replaces the gate (zero slots refuses everything) and
 // returns a function that puts the previous one back.
 func ConfigurePasswordGate(slots int, wait time.Duration) (restore func()) {

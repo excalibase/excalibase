@@ -118,6 +118,23 @@ func recordedLoginFrom(r chi.Router, ip, username, password string) *httptest.Re
 	return w
 }
 
+// holdSlotsFor makes every password check from client keep its gate slot for
+// hold, so a flood from it really saturates the gate instead of finishing as
+// fast as the CPU allows.
+func holdSlotsFor(t *testing.T, client string, hold time.Duration) {
+	t.Helper()
+	original := verifyPassword
+	verifyPassword = func(password, hash, from string) (bool, error) {
+		if from == client {
+			if err := auth.RunInPasswordGate(from, func() { time.Sleep(hold) }); err != nil {
+				return false, err
+			}
+		}
+		return original(password, hash, from)
+	}
+	t.Cleanup(func() { verifyPassword = original })
+}
+
 // floodFrom keeps one client address busy with sign-ins for unknown names until
 // the returned stop is called.
 func floodFrom(r chi.Router, ip string, workers int) (stop func()) {
@@ -146,6 +163,7 @@ func TestLoginFromAnotherAddressSucceedsDuringAFlood(t *testing.T) {
 	r, user, password := guardedLoginRouter(t, 1_000_000)
 	defer auth.ConfigurePasswordGate(4, 100*time.Millisecond)()
 	recordedLoginFrom(r, "203.0.113.1", "warm-up", "wrong-pass") // cold start of the cached dummy hash
+	holdSlotsFor(t, "203.0.113.1", 150*time.Millisecond)
 	defer floodFrom(r, "203.0.113.1", 32)()
 	time.Sleep(50 * time.Millisecond)
 
