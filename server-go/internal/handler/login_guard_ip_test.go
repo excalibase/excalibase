@@ -124,11 +124,20 @@ func TestLoginAccountFailureCapRefusesAParallelFlood(t *testing.T) {
 	r, h, _, user, password := slowedLoginHandler(t)
 	h.SetAccountFailureCap(100)
 	h.SetLoginSleep(func(context.Context, time.Duration) error { return nil })
+	// Room for every goroutine: this pins the failure cap, not load shedding.
+	restoreGate := auth.ConfigurePasswordGate(64, time.Minute)
+	t.Cleanup(restoreGate)
 	var wg sync.WaitGroup
 	var checked atomic.Int64
-	restore := checkPassword
-	checkPassword = func(p, hash string) bool { checked.Add(1); return restore(p, hash) }
-	t.Cleanup(func() { checkPassword = restore })
+	restore := verifyPassword
+	verifyPassword = func(p, hash string) (bool, error) {
+		matched, err := restore(p, hash)
+		if err == nil { // a check the gate refused guessed nothing
+			checked.Add(1)
+		}
+		return matched, err
+	}
+	t.Cleanup(func() { verifyPassword = restore })
 	for a := 0; a < 40; a++ {
 		wg.Add(1)
 		go func() {
