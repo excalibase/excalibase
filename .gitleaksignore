@@ -1,6 +1,0 @@
-# EXC-759: made-up test fixtures in the first commit of PR 533 (replaced since); history is never rewritten.
-c85ce279258864de6c9baf0e27724be5180e34dc:frontend/src/components/OneTimePasswordPanel.test.tsx:generic-api-key:8
-c85ce279258864de6c9baf0e27724be5180e34dc:frontend/src/utils/databaseCredentialsCsv.test.ts:generic-api-key:4
-# gitleaks 8.18.4 reports the same two findings under the merge commit that precedes c85ce279 in the full-history log of PR 520's branch.
-f805c34d48ebeb55d053b24ebffd0cddac55a8f9:frontend/src/components/OneTimePasswordPanel.test.tsx:generic-api-key:8
-f805c34d48ebeb55d053b24ebffd0cddac55a8f9:frontend/src/utils/databaseCredentialsCsv.test.ts:generic-api-key:4
