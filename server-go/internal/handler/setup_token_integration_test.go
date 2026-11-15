@@ -76,7 +76,8 @@ func TestRegister_ConcurrentFirstRegistrations_ExactlyOneAdminOnRealStore(t *tes
 	wg.Wait()
 
 	for _, code := range codes {
-		if code != http.StatusCreated && code != http.StatusForbidden {
+		// 503: the password gate (one slot on a small runner) refused a racer; it never got to register.
+		if code != http.StatusCreated && code != http.StatusForbidden && code != http.StatusServiceUnavailable {
 			t.Errorf("unexpected status %d", code)
 		}
 	}
