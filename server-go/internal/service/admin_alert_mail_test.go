@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
@@ -23,10 +24,12 @@ type allUsers struct {
 
 func (a allUsers) FindAllUsers(context.Context) ([]*domain.User, error) { return a.users, nil }
 
-func TestPlatformAdminEmails_HumanAdminsWithAnAddressOnly(t *testing.T) {
+func TestPlatformAdminEmails_HumanAdminsWithAVerifiedAddressOnly(t *testing.T) {
+	verified := time.Now()
 	admins := PlatformAdminEmails{Users: allUsers{users: []*domain.User{
-		{Email: "a@x.io", Role: "platform_admin", Kind: domain.UserKindHuman, Active: true},
-		{Email: "svc@x.io", Role: "platform_admin", Kind: domain.UserKindService, Active: true},
+		{Email: "a@x.io", Role: "platform_admin", Kind: domain.UserKindHuman, Active: true, EmailVerifiedAt: &verified},
+		{Email: "unverified@x.io", Role: "platform_admin", Kind: domain.UserKindHuman, Active: true},
+		{Email: "svc@x.io", Role: "platform_admin", Kind: domain.UserKindService, Active: true, EmailVerifiedAt: &verified},
 		{Email: "m@x.io", Role: "member", Kind: domain.UserKindHuman, Active: true},
 		{Email: "", Role: "platform_admin", Kind: domain.UserKindHuman, Active: true},
 		{Email: "off@x.io", Role: "platform_admin", Kind: domain.UserKindHuman, Active: false},
@@ -65,5 +68,30 @@ func TestAdminAlertMail_IgnoresAResolveAndSurvivesAFailingLookup(t *testing.T) {
 	failing.Notify(context.Background(), raised("x"))
 	if len(sender.sent) != 0 {
 		t.Fatal("mailed without a recipient list")
+	}
+}
+
+// A metric that keeps flapping is one mail an hour, not one a minute; another metric is not held back by it.
+func TestAdminAlertMail_AtMostOneMailPerMetricPerHour(t *testing.T) {
+	sender := &captureSender{}
+	now := time.Now()
+	mailer := NewAdminAlertMail(AdminAlertMailConfig{Admins: fakeAdmins{emails: []string{"a@x.io"}}, Sender: sender,
+		Now: func() time.Time { return now }})
+	mailer.Notify(context.Background(), raised("first"))
+	now = now.Add(5 * time.Minute)
+	mailer.Notify(context.Background(), raised("flapped back"))
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent %d mails inside the hour, want 1", len(sender.sent))
+	}
+	other := raised("another node")
+	other.Raised.Metric = "cluster.pods:n2"
+	mailer.Notify(context.Background(), other)
+	if len(sender.sent) != 2 {
+		t.Fatalf("a different metric was held back: %d mails", len(sender.sent))
+	}
+	now = now.Add(time.Hour)
+	mailer.Notify(context.Background(), raised("still there an hour later"))
+	if len(sender.sent) != 3 {
+		t.Fatalf("no mail after the cooldown: %d", len(sender.sent))
 	}
 }

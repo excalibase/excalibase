@@ -12,8 +12,11 @@ import (
 )
 
 const (
-	// podUsageThreshold is the share of a node's pod limit above which it is nearly full.
-	podUsageThreshold = 0.85
+	// podUsageRaise is the share of a node's pod limit at which it is nearly full,
+	// and podUsageResolve the share it must fall below to stop being so: the gap
+	// keeps churn around one line from raising and resolving every minute.
+	podUsageRaise   = 0.85
+	podUsageResolve = 0.80
 	// pendingAfter is how long a pod may wait before it is a problem.
 	pendingAfter = 10 * time.Minute
 )
@@ -74,8 +77,10 @@ func (m *PodPressureMonitor) checkNodes(ctx context.Context) {
 			continue
 		}
 		ratio := float64(node.Pods) / float64(node.AllocatablePods)
-		change := m.alerts.Track("", nodePodsMetricPrefix+node.Name, ratio > podUsageThreshold, func() domain.Alert {
-			percent, threshold := ratio*100, podUsageThreshold*100
+		metric := nodePodsMetricPrefix + node.Name
+		breached := ratio >= podUsageRaise || (ratio >= podUsageResolve && m.isOpen(metric))
+		change := m.alerts.Track("", metric, breached, func() domain.Alert {
+			percent, threshold := ratio*100, podUsageRaise*100
 			return domain.Alert{
 				ID: fmt.Sprintf("cluster.pods-%s-%d", node.Name, now.UnixNano()), Severity: "WARNING",
 				Message: fmt.Sprintf("Node %s runs %d of %d pods; at the limit new pods stay Pending with \"Too many pods\"",
@@ -91,6 +96,15 @@ func (m *PodPressureMonitor) checkNodes(ctx context.Context) {
 			m.alerts.Track("", open.Metric, false, nil)
 		}
 	}
+}
+
+func (m *PodPressureMonitor) isOpen(metric string) bool {
+	for _, open := range m.alerts.GetActiveAlerts() {
+		if open.ProjectID == "" && open.Metric == metric {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *PodPressureMonitor) checkPending(ctx context.Context) {

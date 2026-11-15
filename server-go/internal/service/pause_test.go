@@ -234,13 +234,14 @@ func TestPauseService_Pause_WorkloadStopFails_RetainsPausing(t *testing.T) {
 }
 
 // A resume brings the database pods back; with no pod slot they would sit Pending, so it is refused and the project stays paused.
+// The pause stopped the database and the watcher, so a resume needs the tier's instances plus the watcher.
 func TestPauseService_Resume_RefusedWhenNoPodSlotsAreFree(t *testing.T) {
 	svc, store, pauser, _ := setupPauseTest(t)
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", Status: string(domain.StatusPaused),
 		DeploymentMode: domain.ModeK8s, Tier: domain.Free, Namespace: "o-p1",
 	})
-	svc.SetPodSlots(&fakePodSource{capacity: nodePods(110, 110)})
+	svc.SetPodSlots(&fakePodSource{capacity: nodePods(110, 109)}) // the Free plan needs 2
 
 	if err := svc.Resume(context.Background(), "p1"); !errors.Is(err, ErrNoPodSlots) {
 		t.Fatalf("err = %v, want ErrNoPodSlots", err)
@@ -252,8 +253,25 @@ func TestPauseService_Resume_RefusedWhenNoPodSlotsAreFree(t *testing.T) {
 		t.Errorf("status = %s, want PAUSED kept", got.Status)
 	}
 
-	svc.SetPodSlots(&fakePodSource{capacity: nodePods(110, 50)})
+	svc.SetPodSlots(&fakePodSource{capacity: nodePods(110, 108)})
 	if err := svc.Resume(context.Background(), "p1"); err != nil {
 		t.Fatalf("Resume with room: %v", err)
+	}
+}
+
+// A project stuck in RESUMING already has its database pods; the retry must not be refused for slots they hold.
+func TestPauseService_Resume_RetryOfAStuckResumeIsNotCheckedForSlots(t *testing.T) {
+	svc, store, pauser, _ := setupPauseTest(t)
+	store.Create(&domain.DatabaseInstance{
+		ProjectID: "p1", OrgID: "o", Status: string(domain.StatusResuming),
+		DeploymentMode: domain.ModeK8s, Tier: domain.Free, Namespace: "o-p1",
+	})
+	svc.SetPodSlots(&fakePodSource{capacity: nodePods(110, 110)})
+
+	if err := svc.Resume(context.Background(), "p1"); err != nil {
+		t.Fatalf("retry of a stuck resume refused: %v", err)
+	}
+	if pauser.resumeCalls != 1 {
+		t.Errorf("resume calls = %d, want 1", pauser.resumeCalls)
 	}
 }

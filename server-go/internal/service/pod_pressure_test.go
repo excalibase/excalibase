@@ -34,27 +34,31 @@ func newPressure(t *testing.T, source *fakePodSource, now time.Time) (*PodPressu
 	return NewPodPressureMonitor(source, alerts, func() time.Time { return now }), alerts
 }
 
-func TestPodPressure_AlertsAboveEightyFivePercentAndResolvesBelow(t *testing.T) {
-	now := time.Now()
-	source := &fakePodSource{capacity: nodePods(200, 170)} // exactly 85%: not above
-	monitor, alerts := newPressure(t, source, now)
-	monitor.Sample(context.Background())
-	if got := alerts.GetActiveAlerts(); len(got) != 0 {
-		t.Fatalf("85%% alerted: %+v", got)
+// Raise at 85% or more, resolve only below 80%: churn around the line is one alert, not one per minute.
+func TestPodPressure_RaisesAtEightyFiveAndResolvesBelowEighty(t *testing.T) {
+	source := &fakePodSource{capacity: nodePods(200, 169)} // 84.5%
+	monitor, alerts := newPressure(t, source, time.Now())
+	steps := []struct {
+		running int64
+		open    bool
+	}{
+		{169, false}, // below 85%: nothing yet
+		{170, true},  // exactly 85%: raised
+		{169, true},  // back under 85%: still open
+		{160, true},  // exactly 80%: still open
+		{159, false}, // below 80%: resolved
+		{169, false}, // and 84.5% does not raise it again
 	}
-
-	source.capacity = nodePods(200, 180)
-	monitor.Sample(context.Background())
-	monitor.Sample(context.Background()) // still one alert while it stays high
-	got := alerts.GetActiveAlerts()
-	if len(got) != 1 || got[0].Metric != "cluster.pods:n1" || !strings.Contains(got[0].Message, "180 of 200") {
-		t.Fatalf("alerts = %+v", got)
-	}
-
-	source.capacity = nodePods(200, 100)
-	monitor.Sample(context.Background())
-	if got := alerts.GetActiveAlerts(); len(got) != 0 {
-		t.Fatalf("not resolved: %+v", got)
+	for _, step := range steps {
+		source.capacity = nodePods(200, step.running)
+		monitor.Sample(context.Background())
+		got := alerts.GetActiveAlerts()
+		if (len(got) == 1) != step.open {
+			t.Fatalf("at %d of 200 pods: open alerts = %+v, want open=%v", step.running, got, step.open)
+		}
+		if step.open && (got[0].Metric != "cluster.pods:n1" || !strings.Contains(got[0].Message, "of 200")) {
+			t.Fatalf("alert = %+v", got[0])
+		}
 	}
 }
 
