@@ -18,7 +18,6 @@ import (
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
@@ -172,7 +171,7 @@ func startRegistrySweeper(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), appRegistrySweepLockID)
+		lock = standingLock(sqlStore, appRegistrySweepLockID)
 	}
 	return parts.sweeper.Start(context.Background(), service.NewLeadership(lock), appRegistrySweepInterval)
 }

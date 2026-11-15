@@ -8,6 +8,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/golang-migrate/migrate/v4"
 	migpg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -20,7 +21,12 @@ var migrationsFS embed.FS
 // Store is the PostgreSQL-backed storage for all domain entities.
 type Store struct {
 	db *sql.DB
-	m  *migrate.Migrate
+	// schemaVersion is what the migrator left the schema at; the migrator
+	// itself is closed once it has run (see migrate).
+	schemaVersion    uint
+	schemaVersionSet bool
+	databaseURL      string
+	leaders          *LeaderSession
 }
 
 // scanner is satisfied by both *sql.Row and *sql.Rows.
@@ -43,10 +49,9 @@ func NewWithMaxConns(databaseURL string, maxOpen int) (*Store, error) {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
-	// Pool arithmetic. Standing leadership claims pin one connection each
-	// (backup scheduler, idle pause, storage reap, restore sweep = 4), and
-	// every in-flight lifecycle operation pins one more for its duration —
-	// a pause can run for minutes. Sized by PLATFORM_DB_MAX_CONNS; see
+	// Pool arithmetic. All standing leadership claims share one pinned
+	// session (LeaderSession), and every in-flight lifecycle operation pins
+	// one more for its duration — a pause can run for minutes. Sized by PLATFORM_DB_MAX_CONNS; see
 	// config.MinPlatformDBMaxConns and OPERATOR.md.
 	db.SetMaxOpenConns(maxOpen)
 	db.SetMaxIdleConns(maxOpen / 2)
@@ -56,12 +61,19 @@ func NewWithMaxConns(databaseURL string, maxOpen int) (*Store, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	store := &Store{db: db}
-	if err := store.migrate(); err != nil {
+	store := &Store{db: db, databaseURL: databaseURL, leaders: NewLeaderSession(db)}
+	if err := store.migrate(databaseURL); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
 	return store, nil
+}
+
+// LeaderLock is the standing leadership claim for key. All such claims in the
+// process share one database session, so their number never competes with
+// requests for pool connections.
+func (s *Store) LeaderLock(key int64) storage.LeaderLock {
+	return s.leaders.Lock(key)
 }
 
 func (s *Store) Close() error {
@@ -73,35 +85,54 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
-func (s *Store) migrate() error {
+// newMigrator builds the embedded-migrations runner on a pool of its own.
+// golang-migrate pins one connection for as long as its driver lives, so
+// running it on the shared pool left that pool one connection short for the
+// life of the process; a throwaway pool is closed with the migrator
+// (migrate.Close) and takes the pin with it.
+func newMigrator(databaseURL string) (*migrate.Migrate, error) {
 	source, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
-		return fmt.Errorf("migration source: %w", err)
+		return nil, fmt.Errorf("migration source: %w", err)
 	}
-
-	driver, err := migpg.WithInstance(s.db, &migpg.Config{})
+	migrationDB, err := sql.Open("postgres", databaseURL)
 	if err != nil {
-		return fmt.Errorf("migration driver: %w", err)
+		return nil, fmt.Errorf("migration pool: %w", err)
 	}
-
+	driver, err := migpg.WithInstance(migrationDB, &migpg.Config{})
+	if err != nil {
+		_ = migrationDB.Close()
+		return nil, fmt.Errorf("migration driver: %w", err)
+	}
 	m, err := migrate.NewWithInstance("iofs", source, "postgres", driver)
 	if err != nil {
-		return fmt.Errorf("migration init: %w", err)
+		_ = driver.Close()
+		return nil, fmt.Errorf("migration init: %w", err)
 	}
+	return m, nil
+}
+
+func (s *Store) migrate(databaseURL string) error {
+	m, err := newMigrator(databaseURL)
+	if err != nil {
+		return err
+	}
+	defer func() { _, _ = m.Close() }()
 
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		return fmt.Errorf("migration up: %w", err)
 	}
-
-	s.m = m
+	if version, dirty, err := m.Version(); err == nil && !dirty {
+		s.schemaVersion, s.schemaVersionSet = version, true
+	}
 	return nil
 }
 
 func (s *Store) MigrationVersion() (uint, bool, error) {
-	if s.m == nil {
+	if !s.schemaVersionSet {
 		return 0, false, fmt.Errorf("migrations not initialized")
 	}
-	return s.m.Version()
+	return s.schemaVersion, false, nil
 }
 
 // --- Shared helpers ---

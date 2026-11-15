@@ -20,6 +20,9 @@ const (
 	ExpiresNever = "never"
 	// ErrCodeTokenExpired is the machine-readable 401 code for an expired token.
 	ErrCodeTokenExpired = "token_expired"
+	// ErrCodeUnavailable is the machine-readable 503 code for a request the
+	// platform database could not judge; the credential is not at fault.
+	ErrCodeUnavailable = "unavailable"
 	// lastUsedThrottle bounds last_used writes to one per token per interval.
 	lastUsedThrottle = time.Minute
 )
