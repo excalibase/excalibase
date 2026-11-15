@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,49 +25,58 @@ const (
 	gateWait       = 500 * time.Millisecond
 )
 
-// gateReservedPercent is the share of slots only checks against accounts that
-// exist may use, so a flood of unknown usernames cannot fill the whole gate.
-const gateReservedPercent = 25
+// gateClientPercent is the share of the gate one client address may hold at
+// once, so a few addresses cannot fill it. It is the same for every request:
+// the gate never looks at whether the account exists, which would tell a
+// guesser which names are real by who gets refused.
+const gateClientPercent = 25
 
 // hashGate bounds how many argon2 runs are in flight; a run holds
-// argon2Memory and several threads for its whole duration. Runs for unknown
-// accounts also draw from the smaller unknown pool, so the reserved slots are
-// always free for real accounts.
+// argon2Memory and several threads for its whole duration, and one client may
+// hold at most clientShare of the slots.
 type hashGate struct {
-	slots   chan struct{}
-	unknown chan struct{}
-	wait    time.Duration
+	slots     chan struct{}
+	wait      time.Duration
+	perClient int
+
+	mu      sync.Mutex
+	clients map[string]*clientSlots
+}
+
+type clientSlots struct {
+	held    chan struct{}
+	waiting int
 }
 
 func newHashGate(slots int, wait time.Duration) *hashGate {
 	return &hashGate{
-		slots:   make(chan struct{}, slots),
-		unknown: make(chan struct{}, slots-reservedSlots(slots)),
-		wait:    wait,
+		slots:     make(chan struct{}, slots),
+		wait:      wait,
+		perClient: clientShare(slots),
+		clients:   map[string]*clientSlots{},
 	}
 }
 
-// reservedSlots is a quarter of the gate, at least one. A single slot cannot
-// be split, so it stays shared and unknown names are served there too.
-func reservedSlots(slots int) int {
-	if slots < 2 {
-		return 0
-	}
-	return max(slots*gateReservedPercent/100, 1)
+// clientShare is a quarter of the gate, at least one.
+func clientShare(slots int) int {
+	return max(slots*gateClientPercent/100, 1)
 }
 
-// run executes fn for a real account's work inside a slot, or returns ErrBusy
-// after the wait.
-func (g *hashGate) run(fn func()) error { return g.runFor(true, fn) }
+// run executes fn for work that belongs to no client address, bounded by the
+// gate alone.
+func (g *hashGate) run(fn func()) error { return g.runFor("", fn) }
 
-// runFor is run for work on behalf of a known account or an unknown name.
-func (g *hashGate) runFor(knownAccount bool, fn func()) error {
+// runFor executes fn inside a slot on behalf of client (an address, IPv6
+// grouped by /64; empty for none), or returns ErrBusy after the wait.
+func (g *hashGate) runFor(client string, fn func()) error {
 	timer := time.NewTimer(g.wait)
 	defer timer.Stop()
-	if !knownAccount {
+	if client != "" {
+		entry := g.enter(client)
+		defer g.leave(client, entry)
 		select {
-		case g.unknown <- struct{}{}:
-			defer func() { <-g.unknown }()
+		case entry.held <- struct{}{}:
+			defer func() { <-entry.held }()
 		case <-timer.C:
 			return ErrBusy
 		}
@@ -79,6 +89,34 @@ func (g *hashGate) runFor(knownAccount bool, fn func()) error {
 	defer func() { <-g.slots }()
 	fn()
 	return nil
+}
+
+func (g *hashGate) enter(client string) *clientSlots {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	entry, ok := g.clients[client]
+	if !ok {
+		entry = &clientSlots{held: make(chan struct{}, g.perClient)}
+		g.clients[client] = entry
+	}
+	entry.waiting++
+	return entry
+}
+
+// leave forgets a client once nothing of it is waiting or running.
+func (g *hashGate) leave(client string, entry *clientSlots) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	entry.waiting--
+	if entry.waiting == 0 {
+		delete(g.clients, client)
+	}
+}
+
+func (g *hashGate) trackedClients() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.clients)
 }
 
 // gateSlots sizes the gate as the smaller of a memory share and a CPU share,

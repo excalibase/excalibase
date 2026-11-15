@@ -3,6 +3,8 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -74,9 +76,9 @@ func TestLoginHashesThePasswordEvenForAnUnknownIdentifier(t *testing.T) {
 	r, _, _ := identifierLoginRouter(t, 10)
 	calls := 0
 	original := verifyPassword
-	verifyPassword = func(password, hash string, known bool) (bool, error) {
+	verifyPassword = func(password, hash, client string) (bool, error) {
 		calls++
-		return original(password, hash, known)
+		return original(password, hash, client)
 	}
 	t.Cleanup(func() { verifyPassword = original })
 
@@ -107,39 +109,80 @@ func TestLoginGuessBudgetIsSharedByUsernameAndEmail(t *testing.T) {
 	}
 }
 
-// A flood of unknown usernames fills the gate's unknown share, never the slots
-// kept for existing accounts: a real admin's new sign-in still gets in (EXC-749).
-func TestLoginOfAKnownAccountSucceedsDuringAnUnknownNameFlood(t *testing.T) {
-	r, user, password := guardedLoginRouter(t, 1_000_000)
-	restore := auth.ConfigurePasswordGate(2, 100*time.Millisecond)
-	defer restore()
+func recordedLoginFrom(r chi.Router, ip, username, password string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("POST", routeLogin, strings.NewReader(loginBody(username, password)))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = ip + ":40000"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
 
-	// The first unknown name hashes the cached dummy; do that before the flood
-	// so the test measures the gate, not the cold start.
-	doRequest(r, "POST", routeLogin, loginBody("warm-up", "wrong-pass"))
-
-	stop := make(chan struct{})
-	var flood sync.WaitGroup
-	for worker := 0; worker < 32; worker++ {
-		flood.Add(1)
+// floodFrom keeps one client address busy with sign-ins for unknown names until
+// the returned stop is called.
+func floodFrom(r chi.Router, ip string, workers int) (stop func()) {
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
 		go func() {
-			defer flood.Done()
+			defer wg.Done()
 			for attempt := 0; ; attempt++ {
 				select {
-				case <-stop:
+				case <-done:
 					return
 				default:
 				}
-				doRequest(r, "POST", routeLogin, loginBody(fmt.Sprintf("ghost-%d-%d", worker, attempt), "wrong-pass"))
+				recordedLoginFrom(r, ip, fmt.Sprintf("ghost-%d-%d", worker, attempt), "wrong-pass")
 			}
 		}()
 	}
-	defer func() { close(stop); flood.Wait() }()
+	return func() { close(done); wg.Wait() }
+}
+
+// One flooding address cannot fill the gate: a real admin signing in from
+// another address still gets in (EXC-749).
+func TestLoginFromAnotherAddressSucceedsDuringAFlood(t *testing.T) {
+	r, user, password := guardedLoginRouter(t, 1_000_000)
+	defer auth.ConfigurePasswordGate(4, 100*time.Millisecond)()
+	recordedLoginFrom(r, "203.0.113.1", "warm-up", "wrong-pass") // cold start of the cached dummy hash
+	defer floodFrom(r, "203.0.113.1", 32)()
 	time.Sleep(50 * time.Millisecond)
 
 	for attempt := 0; attempt < 20; attempt++ {
-		if w := doRequest(r, "POST", routeLogin, loginBody(user, password)); w.Code != http.StatusOK {
-			t.Fatalf("known login %d during the flood: got %d %s, want 200", attempt, w.Code, w.Body.String())
+		if w := recordedLoginFrom(r, "198.51.100.7", user, password); w.Code != http.StatusOK {
+			t.Fatalf("sign-in %d from a quiet address during the flood: got %d %s, want 200", attempt, w.Code, w.Body.String())
 		}
+	}
+}
+
+// The refusal must not say whether an account exists: during a flood, wrong
+// passwords for a real account and for unknown names are refused alike.
+func TestBusyRefusalDoesNotTellARealAccountFromAnUnknownName(t *testing.T) {
+	r, user, _ := guardedLoginRouter(t, 1_000_000)
+	defer auth.ConfigurePasswordGate(2, 100*time.Millisecond)()
+	recordedLoginFrom(r, "203.0.113.1", "warm-up", "wrong-pass")
+	defer floodFrom(r, "203.0.113.1", 32)()
+	time.Sleep(50 * time.Millisecond)
+
+	const probes = 30
+	refused := map[string]int{}
+	for attempt := 0; attempt < probes; attempt++ {
+		for name, identifier := range map[string]string{"known": user, "unknown": fmt.Sprintf("nobody-%d", attempt)} {
+			w := recordedLoginFrom(r, "203.0.113.1", identifier, "wrong-pass")
+			switch w.Code {
+			case http.StatusServiceUnavailable:
+				if w.Header().Get("Retry-After") == "" {
+					t.Fatal("a busy refusal without Retry-After")
+				}
+				refused[name]++
+			case http.StatusUnauthorized:
+			default:
+				t.Fatalf("%s: unexpected %d", name, w.Code)
+			}
+		}
+	}
+	if diff := refused["known"] - refused["unknown"]; diff > 8 || diff < -8 {
+		t.Fatalf("refusals differ by account: known %d, unknown %d of %d", refused["known"], refused["unknown"], probes)
 	}
 }
