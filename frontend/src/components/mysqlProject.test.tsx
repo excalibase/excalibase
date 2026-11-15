@@ -68,7 +68,7 @@ describe('MySQL projects in Studio', () => {
   });
 
   test('the navigation lists only what works on MySQL', () => {
-    const sections = visibleProjectNav({ appHosting: true, mcp: false, postgres: false });
+    const sections = visibleProjectNav({ appHosting: true, mcp: false, postgres: false, platformStaff: true });
     const keys = sections.map((section) => section.key);
     for (const hidden of ['auth', 'api-keys']) {
       expect(keys).not.toContain(hidden);
