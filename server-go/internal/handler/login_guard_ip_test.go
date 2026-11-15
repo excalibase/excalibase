@@ -130,8 +130,8 @@ func TestLoginAccountFailureCapRefusesAParallelFlood(t *testing.T) {
 	var wg sync.WaitGroup
 	var checked atomic.Int64
 	restore := verifyPassword
-	verifyPassword = func(p, hash string) (bool, error) {
-		matched, err := restore(p, hash)
+	verifyPassword = func(p, hash, client string) (bool, error) {
+		matched, err := restore(p, hash, client)
 		if err == nil { // a check the gate refused guessed nothing
 			checked.Add(1)
 		}
