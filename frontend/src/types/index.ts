@@ -77,8 +77,9 @@ export interface DatabaseInstance {
   // Whether this caller may add a database now. Decided by the server
   // (Admin and up, on a running project without one).
   canAddDatabase?: boolean;
-  namespace: string;
-  host: string;
+  // Platform admins only; a customer's project answer carries neither (EXC-759).
+  namespace?: string;
+  host?: string;
   port: number;
   databaseName: string;
   username: string;
@@ -119,7 +120,7 @@ export interface DatabaseInstance {
 
 export interface CredentialsResponse {
   projectId: string;
-  host: string;
+  host?: string;
   readOnlyHost?: string;
   port: number;
   databaseName: string;

@@ -13,13 +13,12 @@ vi.mock('../hooks/useHostsApps', () => ({ useHostsApps: () => hostedApps.length 
 
 const CREDENTIALS = {
   projectId: 'p-1',
-  host: 'p-1-postgres-rw.org-1.svc.cluster.local',
   port: 5432,
   databaseName: 'appdb',
   username: 'app',
   sslMode: 'require',
   connectionUrl:
-    'postgresql://app:<password>@p-1-postgres-rw.org-1.svc.cluster.local:5432/appdb?sslmode=require',
+    'postgresql://app:<password>@<host>:<port>/appdb?sslmode=require',
 };
 
 // A project whose public port is open and answering, as GET
@@ -153,10 +152,11 @@ describe('ConnectionStrings — internal versus public', () => {
     expect(screen.getByTestId('conn-postgres-public')).toHaveTextContent('@p-1.db.excalibase.io:26257/appdb');
   });
 
-  test('falls back to the in-cluster credentials for apps when no endpoint has been read', async () => {
+  test('never prints a cluster address from the credentials when no endpoint has been read', async () => {
     renderStrings();
     const internal = await screen.findByTestId('conn-postgres-internal');
-    expect(internal).toHaveTextContent('@p-1-postgres-rw.org-1.svc.cluster.local:5432/appdb');
+    expect(internal).toHaveTextContent('@<host>:5432/appdb');
+    expect(internal).not.toHaveTextContent('svc.cluster.local');
     expect(screen.queryByTestId('conn-postgres-public')).not.toBeInTheDocument();
   });
 });
@@ -359,7 +359,7 @@ describe('ConnectionStrings — MySQL driver examples', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <ConnectionStrings projectId="p-1" documentDb={false} />
+        <ConnectionStrings projectId="p-1" documentDb={false} endpoint={{ ...SINGLE_HOST, port: 0, publicEnabled: false, available: false, requireTls: true, username: 'admin', database: 'shop', mongo: undefined, internal: { host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, connectionString: '' } }} />
       </QueryClientProvider>
     );
     expect(await screen.findByTestId('conn-mysql-internal')).toHaveTextContent(
@@ -394,7 +394,7 @@ describe('ConnectionStrings — MySQL driver examples', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <ConnectionStrings projectId="p-1" documentDb={false} />
+        <ConnectionStrings projectId="p-1" documentDb={false} endpoint={{ ...SINGLE_HOST, port: 0, publicEnabled: false, available: false, requireTls: true, username: 'admin', database: 'shop', caCertificate: '', mongo: undefined, internal: { host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, connectionString: '' } }} />
       </QueryClientProvider>
     );
     expect(await screen.findByTestId('conn-mysql-connectorj')).toHaveTextContent(

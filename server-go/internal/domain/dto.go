@@ -92,12 +92,13 @@ type MaintenanceWindowConfig struct {
 }
 
 type ProvisioningResponse struct {
-	ProjectID     string            `json:"projectId"`
-	ProjectName   string            `json:"projectName,omitempty"`
-	Status        string            `json:"status"`
-	CurrentStage  ProvisioningStage `json:"currentStage"`
-	Namespace     string            `json:"namespace"`
-	Host          string            `json:"host,omitempty"`
+	ProjectID    string            `json:"projectId"`
+	ProjectName  string            `json:"projectName,omitempty"`
+	Status       string            `json:"status"`
+	CurrentStage ProvisioningStage `json:"currentStage"`
+	// Namespace and Host are cluster-internal and never in an answer.
+	Namespace     string            `json:"-"`
+	Host          string            `json:"-"`
 	Port          *int              `json:"port,omitempty"`
 	DatabaseName  string            `json:"databaseName,omitempty"`
 	FailureReason string            `json:"failureReason,omitempty"`
@@ -112,7 +113,7 @@ type ProvisioningResponse struct {
 
 type CredentialsResponse struct {
 	ProjectID    string `json:"projectId"`
-	Host         string `json:"host"`
+	Host         string `json:"host,omitempty"`
 	ReadOnlyHost string `json:"readOnlyHost,omitempty"`
 	Port         int    `json:"port"`
 	DatabaseName string `json:"databaseName"`

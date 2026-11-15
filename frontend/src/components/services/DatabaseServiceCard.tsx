@@ -81,7 +81,7 @@ function MySQLEndpoint({ project }: { readonly project: DatabaseInstance }) {
   const { data: endpoint } = useProjectEndpoint(project.projectId);
   const hostsApps = useHostsApps(project.projectId);
   const external = publicTarget(endpoint);
-  const address = external ?? (hostsApps ? { host: project.host, port: project.port } : null);
+  const address = external ?? (hostsApps && endpoint ? { host: endpoint.internal.host, port: endpoint.internal.port } : null);
   return (
     <AccessNote testId="service-database-mysql-endpoint">
       {address ? (

@@ -1720,7 +1720,11 @@ func (s *ProvisioningService) oneTimeCredentials(ctx context.Context) bool {
 
 // passwordSentinel stands where a connection string's password goes while the
 // string is built as a template.
-const passwordSentinel = "PASSWORDPLACEHOLDER"
+const (
+	passwordSentinel = "PASSWORDPLACEHOLDER"
+	hostSentinel     = "HOSTPLACEHOLDER"
+	portSentinel     = "PORTPLACEHOLDER"
+)
 
 // storedCredentials reads the owner and reader passwords from the vault. It is
 // for the platform's own use; no route returns its result unredacted while
@@ -1751,24 +1755,31 @@ func (s *ProvisioningService) storedCredentials(ctx context.Context, projectID s
 	if err != nil {
 		return nil, err
 	}
-	inURL := password
+	inURL, urlHost, urlPort := password, inst.Host, ""
 	if template {
-		inURL = passwordSentinel
+		inURL, urlHost, urlPort = passwordSentinel, hostSentinel, portSentinel
 	}
 	if inst.DBType == domain.MySQL {
 		creds := mysqlCredentials(inst, password)
-		creds.ConnectionURL = domain.MySQLURL(inst.Host, strconv.Itoa(creds.Port), inst.Username, inURL, inst.DatabaseName)
+		if urlPort == "" {
+			urlPort = strconv.Itoa(creds.Port)
+		}
+		creds.ConnectionURL = domain.MySQLURL(urlHost, urlPort, inst.Username, inURL, inst.DatabaseName)
+		creds.JDBCURL = domain.MySQLJDBCURL(urlHost, urlPort, inst.DatabaseName)
 		return withReader(creds, readerPassword), nil
 	}
 	port := 5432
 	if inst.Port != nil {
 		port = *inst.Port
 	}
+	if urlPort == "" {
+		urlPort = strconv.Itoa(port)
+	}
 
 	connURL := url.URL{
 		Scheme:   "postgresql",
 		User:     url.UserPassword(inst.Username, inURL),
-		Host:     net.JoinHostPort(inst.Host, strconv.Itoa(port)),
+		Host:     net.JoinHostPort(urlHost, urlPort),
 		Path:     "/" + inst.DatabaseName,
 		RawQuery: url.Values{"sslmode": {inst.SSLMode}}.Encode(),
 	}
@@ -1786,11 +1797,15 @@ func (s *ProvisioningService) storedCredentials(ctx context.Context, projectID s
 	}, readerPassword), nil
 }
 
-// withoutPasswords is creds with every password removed and the connection
-// string's placeholder written as <password>.
+// withoutPasswords is creds as a customer sees them: no password, no internal
+// address (the project's public endpoint is its own answer), and the
+// connection strings' placeholders written as <password>, <host> and <port>.
 func withoutPasswords(creds *domain.CredentialsResponse) *domain.CredentialsResponse {
 	redacted := *creds
-	redacted.ConnectionURL = strings.Replace(creds.ConnectionURL, passwordSentinel, "<password>", 1)
+	placeholders := strings.NewReplacer(passwordSentinel, "<password>", hostSentinel, "<host>", portSentinel, "<port>")
+	redacted.ConnectionURL = placeholders.Replace(creds.ConnectionURL)
+	redacted.JDBCURL = placeholders.Replace(creds.JDBCURL)
+	redacted.Host, redacted.ReadOnlyHost = "", ""
 	redacted.Password, redacted.ReaderPassword = "", ""
 	return &redacted
 }

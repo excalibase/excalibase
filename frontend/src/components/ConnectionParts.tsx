@@ -19,7 +19,7 @@ export interface Target {
 // database should use it and needs no public port.
 export function internalTarget(credentials: CredentialsResponse, endpoint?: ProjectEndpoint): Target {
   if (endpoint) return { host: endpoint.internal.host, port: endpoint.internal.port };
-  return { host: credentials.host, port: credentials.port };
+  return { host: '<host>', port: credentials.port };
 }
 
 // publicTarget is the port a client outside the cluster dials, or null when
@@ -51,12 +51,7 @@ export type ConnectAddress =
 export function connectAddress(credentials: CredentialsResponse | undefined, endpoint: ProjectEndpoint | undefined, hostsApps: boolean): ConnectAddress {
   const external = publicTarget(endpoint);
   if (external) return { kind: 'public', ...external };
-  if (hostsApps && (endpoint || credentials)) {
-    const internal = endpoint
-      ? { host: endpoint.internal.host, port: endpoint.internal.port }
-      : { host: credentials!.host, port: credentials!.port };
-    return { kind: 'internal', ...internal };
-  }
+  if (hostsApps && endpoint) return { kind: 'internal', host: endpoint.internal.host, port: endpoint.internal.port };
   return { kind: 'none' };
 }
 

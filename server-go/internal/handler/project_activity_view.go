@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -29,6 +30,7 @@ func (h *ProvisioningHandler) SetActivityStore(s storage.ProjectActivityStore) {
 
 // projectResponse decorates one instance with its last-seen marker.
 func (h *ProvisioningHandler) projectResponse(ctx context.Context, inst *domain.DatabaseInstance) projectView {
+	inst = visibleTo(ctx, inst)
 	if h.activity == nil {
 		return projectView{DatabaseInstance: inst}
 	}
@@ -41,6 +43,11 @@ func (h *ProvisioningHandler) projectResponse(ctx context.Context, inst *domain.
 
 // projectListResponse decorates a list with one activity read, not one per row.
 func (h *ProvisioningHandler) projectListResponse(ctx context.Context, insts []*domain.DatabaseInstance) any {
+	visible := make([]*domain.DatabaseInstance, len(insts))
+	for i, inst := range insts {
+		visible[i] = visibleTo(ctx, inst)
+	}
+	insts = visible
 	if h.activity == nil {
 		return insts
 	}
@@ -66,4 +73,17 @@ func withActivity(inst *domain.DatabaseInstance, activity domain.ProjectActivity
 		view.IdleWarnedAt = &domain.FlexTime{Time: *activity.IdleWarnedAt}
 	}
 	return view
+}
+
+// visibleTo is the project as the caller may see it. The cluster's internal
+// addresses and namespace are for platform admins and the console; a customer
+// reaches the database through its public endpoint (EXC-759).
+func visibleTo(ctx context.Context, inst *domain.DatabaseInstance) *domain.DatabaseInstance {
+	if user := auth.GetUser(ctx); user != nil && auth.HasPermission(user.Role, auth.PermManageUsers) {
+		return inst
+	}
+	customer := *inst
+	customer.Host, customer.ReadOnlyHost, customer.Namespace = "", "", ""
+	customer.PoolerHost, customer.MetricsEndpoint = "", ""
+	return &customer
 }

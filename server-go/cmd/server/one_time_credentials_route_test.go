@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
@@ -13,8 +14,14 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
+)
+
+const (
+	callerOrgAdmin   = "orgAdmin"
+	callerOrgAdminID = "org-admin-a"
 )
 
 const storedOwnerSecret = "stored-owner-secret-0123456789"
@@ -35,7 +42,7 @@ func (storedSecretsVault) Get(path string) (map[string]string, error) {
 func passwordRouter(t *testing.T) (http.Handler, callers, callers) {
 	t.Helper()
 	cfg := config.AppConfig{DeploymentMode: "selfhosted", DarkFeatures: []features.Feature{features.OneTimeCredentials}}
-	return buildMatrixWith(t, cfg, func(deps *handlerDeps) {
+	router, who, admins, platform := buildMatrixPlatform(t, cfg, func(deps *handlerDeps, _ *fakePlatform) {
 		port := 5432
 		store := fakestore.NewInstances()
 		store.Create(&domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE", Username: "owner",
@@ -45,6 +52,14 @@ func passwordRouter(t *testing.T) (http.Handler, callers, callers) {
 		svc.SetFeatures(cfg.Features())
 		deps.provHandler = handler.NewProvisioningHandler(svc, nil)
 	})
+	// An org admin may read credentials and reset the password, but is no platform role.
+	platform.AddMember(matrixOrgA, callerOrgAdminID, domain.OrgRoleAdmin)
+	platform.Users[callerOrgAdminID] = &domain.User{ID: callerOrgAdminID, Role: "user", Active: true}
+	raw := testutil.FixtureToken(callerOrgAdmin)
+	hash := auth.HashToken(raw)
+	platform.ByHash[hash] = &domain.AccessToken{TokenHash: hash, UserID: callerOrgAdminID, Scopes: auth.ScopeSession}
+	who[callerOrgAdmin] = raw
+	return router, who, admins
 }
 
 func bodyOf(router http.Handler, method, path, token string) (int, string) {
@@ -69,10 +84,17 @@ func TestAMemberWithoutAdminCannotGetTheStoredPasswordByAnyRoute(t *testing.T) {
 		{http.MethodGet, "/api/projects/proj-a/info/"},
 	}
 	for _, route := range routes {
-		for _, caller := range []string{callerDeveloper, callerReadOnly, callerOtherOrg, callerBoundElsewhere, callerAnonymous} {
+		for _, caller := range []string{callerDeveloper, callerReadOnly, callerOtherOrg, callerBoundElsewhere, callerAnonymous, callerOrgAdmin} {
 			code, body := bodyOf(router, route.method, route.path, who[caller])
 			if strings.Contains(body, storedOwnerSecret) {
 				t.Errorf("%s %s as %s leaked the stored password: %s", route.method, route.path, caller, body)
+			}
+			// An org admin owns the project: the credentials routes answer them, never with the password.
+			if caller == callerOrgAdmin && strings.HasPrefix(route.path, "/api/provision/proj-a/credentials") {
+				if strings.Contains(body, storedOwnerSecret) {
+					t.Errorf("%s %s as an org admin leaked the stored password", route.method, route.path)
+				}
+				continue
 			}
 			if route.path != "/api/provision/proj-a/" && route.path != "/api/projects/proj-a/info/" && code < 400 {
 				t.Errorf("%s %s as %s answered %d", route.method, route.path, caller, code)
