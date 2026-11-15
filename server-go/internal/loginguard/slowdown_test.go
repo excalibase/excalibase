@@ -141,3 +141,16 @@ func TestSlowdown_BeginDoesNotScanTheTable(t *testing.T) {
 		t.Fatalf("a Begin took %s with 200k tracked, want it independent of the table size", per)
 	}
 }
+
+func TestSlowdown_RefundGivesBackAnUncheckedAttempt(t *testing.T) {
+	s, _ := newTestSlowdown()
+	begin(s, "alice", 3)
+	s.Refund("alice", true)
+	if got := s.Failures("alice"); got != 2 {
+		t.Fatalf("failures after a refund = %d, want 2", got)
+	}
+	s.Refund("ghost", false)
+	if got := s.Failures("ghost"); got != 0 {
+		t.Fatalf("a refund for an unseen name counted %d", got)
+	}
+}

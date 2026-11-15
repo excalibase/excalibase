@@ -71,12 +71,12 @@ func TestLoginAnswersAnUnknownAddressLikeAWrongPassword(t *testing.T) {
 func TestLoginHashesThePasswordEvenForAnUnknownIdentifier(t *testing.T) {
 	r, _, _ := identifierLoginRouter(t, 10)
 	calls := 0
-	original := checkPassword
-	checkPassword = func(password, hash string) bool {
+	original := verifyPassword
+	verifyPassword = func(password, hash string) (bool, error) {
 		calls++
 		return original(password, hash)
 	}
-	t.Cleanup(func() { checkPassword = original })
+	t.Cleanup(func() { verifyPassword = original })
 
 	for _, identifier := range []string{"nobody@example.test", "nobody"} {
 		calls = 0
