@@ -52,15 +52,24 @@ func TestNodeCapacity_UnknownPodLimitHasRoom(t *testing.T) {
 	}
 }
 
-func TestPendingPods_ListsOnlyPendingPodsWithTheirAge(t *testing.T) {
+func scheduledCondition(status corev1.ConditionStatus, reason string) corev1.PodCondition {
+	return corev1.PodCondition{Type: corev1.PodScheduled, Status: status, Reason: reason}
+}
+
+// Only a pod the scheduler could not place counts: one customer's ImagePullBackOff is Pending too, and must not hold the alert open.
+func TestPendingPods_ListsOnlyUnschedulablePodsWithTheirAge(t *testing.T) {
 	waiting := podOn("waiting", "", corev1.PodPending)
 	waiting.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
-	c := newFakeClient(waiting, podOn("running", "n1", corev1.PodRunning))
+	waiting.Status.Conditions = []corev1.PodCondition{scheduledCondition(corev1.ConditionFalse, corev1.PodReasonUnschedulable)}
+	pulling := podOn("bad-image", "n1", corev1.PodPending)
+	pulling.Status.Conditions = []corev1.PodCondition{scheduledCondition(corev1.ConditionTrue, "")}
+	fresh := podOn("not-yet-looked-at", "", corev1.PodPending)
+	c := newFakeClient(waiting, pulling, fresh, podOn("running", "n1", corev1.PodRunning))
 	got, err := c.PendingPods(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Name != "waiting" || got[0].Namespace != "ns" || !got[0].Since.Equal(time.Unix(1000, 0)) {
-		t.Fatalf("pending = %+v", got)
+		t.Fatalf("pending = %+v, want only the unschedulable pod", got)
 	}
 }

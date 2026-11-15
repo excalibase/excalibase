@@ -1,9 +1,12 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"log"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
@@ -15,6 +18,33 @@ var ErrNoPodSlots = errors.New("the platform has no free pod slots right now; tr
 // projectSidecarPods are the pods every project runs beside its database
 // instances: the CDC watcher and the function runtime.
 const projectSidecarPods = 2
+
+// PodSlotSource reads the nodes' pod slots.
+type PodSlotSource interface {
+	GetClusterCapacity(ctx context.Context) (k8s.ClusterCapacity, error)
+}
+
+// SetPodSlots makes a resume check that the database's pods have slots to start in.
+func (s *PauseService) SetPodSlots(source PodSlotSource) { s.podSlots = source }
+
+// requirePodSlotsToResume refuses a resume with no slot for the database's
+// instances and sidecars. A capacity read that fails does not refuse: the
+// project is paused already, and the resume itself reports what then happens.
+func (s *PauseService) requirePodSlotsToResume(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if s.podSlots == nil || inst.DeploymentMode != domain.ModeK8s {
+		return nil
+	}
+	instances := 1
+	if tier, err := config.GetTierConfig(inst.Tier); err == nil {
+		instances = max(tier.Instances, 1)
+	}
+	capacity, err := s.podSlots.GetClusterCapacity(ctx)
+	if err != nil {
+		log.Printf("resume %s: pod slots unknown: %v", inst.ProjectID, err)
+		return nil
+	}
+	return requirePodSlots(capacity, int64(instances+projectSidecarPods), "resume of "+inst.ProjectID)
+}
 
 // requirePodSlots refuses when the nodes report a pod limit and fewer than
 // count slots are free. A cluster that reports none is not refused.

@@ -232,3 +232,28 @@ func TestPauseService_Pause_WorkloadStopFails_RetainsPausing(t *testing.T) {
 		t.Errorf("expected stuck PAUSING status, got %q", got.Status)
 	}
 }
+
+// A resume brings the database pods back; with no pod slot they would sit Pending, so it is refused and the project stays paused.
+func TestPauseService_Resume_RefusedWhenNoPodSlotsAreFree(t *testing.T) {
+	svc, store, pauser, _ := setupPauseTest(t)
+	store.Create(&domain.DatabaseInstance{
+		ProjectID: "p1", OrgID: "o", Status: string(domain.StatusPaused),
+		DeploymentMode: domain.ModeK8s, Tier: domain.Free, Namespace: "o-p1",
+	})
+	svc.SetPodSlots(&fakePodSource{capacity: nodePods(110, 110)})
+
+	if err := svc.Resume(context.Background(), "p1"); !errors.Is(err, ErrNoPodSlots) {
+		t.Fatalf("err = %v, want ErrNoPodSlots", err)
+	}
+	if pauser.resumeCalls != 0 {
+		t.Error("the workload was started without a pod slot for it")
+	}
+	if got, _ := store.FindByProjectID("p1"); got.Status != string(domain.StatusPaused) {
+		t.Errorf("status = %s, want PAUSED kept", got.Status)
+	}
+
+	svc.SetPodSlots(&fakePodSource{capacity: nodePods(110, 50)})
+	if err := svc.Resume(context.Background(), "p1"); err != nil {
+		t.Fatalf("Resume with room: %v", err)
+	}
+}

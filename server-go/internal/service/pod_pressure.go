@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -27,10 +28,27 @@ type PodPressureSource interface {
 // or a pod stays Pending (EXC-747). It runs on the metrics loop: the platform
 // has no Prometheus (EXC-633), so its rules cannot live there.
 type PodPressureMonitor struct {
-	source PodPressureSource
-	alerts *AlertingService
-	now    func() time.Time
+	source   PodPressureSource
+	alerts   *AlertingService
+	now      func() time.Time
+	notifier AlertNotifier
 }
+
+// AlertNotifier tells the people who run the platform that an alert changed.
+type AlertNotifier interface {
+	Notify(ctx context.Context, change AlertChange)
+}
+
+// SetNotifier sends every raised alert on; without one it is only recorded.
+func (m *PodPressureMonitor) SetNotifier(notifier AlertNotifier) { m.notifier = notifier }
+
+func (m *PodPressureMonitor) notify(ctx context.Context, change AlertChange) {
+	if m.notifier != nil && (change.Raised != nil || change.Resolved != nil) {
+		m.notifier.Notify(ctx, change)
+	}
+}
+
+const nodePodsMetricPrefix = "cluster.pods:"
 
 func NewPodPressureMonitor(source PodPressureSource, alerts *AlertingService, now func() time.Time) *PodPressureMonitor {
 	return &PodPressureMonitor{source: source, alerts: alerts, now: now}
@@ -49,12 +67,14 @@ func (m *PodPressureMonitor) checkNodes(ctx context.Context) {
 		return
 	}
 	now := m.now()
+	listed := map[string]bool{}
 	for _, node := range capacity.Nodes {
+		listed[nodePodsMetricPrefix+node.Name] = true
 		if node.AllocatablePods == 0 {
 			continue
 		}
 		ratio := float64(node.Pods) / float64(node.AllocatablePods)
-		m.alerts.Track("", "cluster.pods:"+node.Name, ratio > podUsageThreshold, func() domain.Alert {
+		change := m.alerts.Track("", nodePodsMetricPrefix+node.Name, ratio > podUsageThreshold, func() domain.Alert {
 			percent, threshold := ratio*100, podUsageThreshold*100
 			return domain.Alert{
 				ID: fmt.Sprintf("cluster.pods-%s-%d", node.Name, now.UnixNano()), Severity: "WARNING",
@@ -63,6 +83,13 @@ func (m *PodPressureMonitor) checkNodes(ctx context.Context) {
 				Value: &percent, Threshold: &threshold, Timestamp: &domain.FlexTime{Time: now},
 			}
 		})
+		m.notify(ctx, change)
+	}
+	// A node that was cordoned or removed is no longer listed; its alert is over.
+	for _, open := range m.alerts.GetActiveAlerts() {
+		if open.ProjectID == "" && strings.HasPrefix(open.Metric, nodePodsMetricPrefix) && !listed[open.Metric] {
+			m.alerts.Track("", open.Metric, false, nil)
+		}
 	}
 }
 
@@ -79,7 +106,7 @@ func (m *PodPressureMonitor) checkPending(ctx context.Context) {
 			stuck = append(stuck, pod)
 		}
 	}
-	m.alerts.Track("", "cluster.pending", len(stuck) > 0, func() domain.Alert {
+	change := m.alerts.Track("", "cluster.pending", len(stuck) > 0, func() domain.Alert {
 		oldest := stuck[0]
 		for _, pod := range stuck[1:] {
 			if pod.Since.Before(oldest.Since) {
@@ -88,9 +115,10 @@ func (m *PodPressureMonitor) checkPending(ctx context.Context) {
 		}
 		return domain.Alert{
 			ID: fmt.Sprintf("cluster.pending-%d", now.UnixNano()), Severity: "WARNING",
-			Message: fmt.Sprintf("%d pod(s) Pending for more than %d minutes; oldest %s/%s for %s",
+			Message: fmt.Sprintf("%d pod(s) unschedulable for more than %d minutes; oldest %s/%s for %s",
 				len(stuck), int(pendingAfter.Minutes()), oldest.Namespace, oldest.Name, now.Sub(oldest.Since).Round(time.Minute)),
 			Timestamp: &domain.FlexTime{Time: now},
 		}
 	})
+	m.notify(ctx, change)
 }

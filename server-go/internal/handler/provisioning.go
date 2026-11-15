@@ -113,6 +113,10 @@ func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, project
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if errors.Is(err, service.ErrNoPodSlots) {
+		httpError(w, service.ErrNoPodSlots.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	status := http.StatusInternalServerError
 	// A busy project, an unsettled one, and a status that moved under the
 	// operation are all "come back in a moment", not server faults.

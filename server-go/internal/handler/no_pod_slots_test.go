@@ -20,3 +20,11 @@ func TestAProjectRefusedForPodSlotsIsAnsweredWith503(t *testing.T) {
 		t.Errorf("status %d body %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestAResumeRefusedForPodSlotsIsAnsweredWith503(t *testing.T) {
+	rec := httptest.NewRecorder()
+	(&ProvisioningHandler{}).writeLifecycleError(rec, "p1", fmt.Errorf("resume: %w", service.ErrNoPodSlots))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), service.ErrNoPodSlots.Error()) {
+		t.Errorf("status %d body %s", rec.Code, rec.Body.String())
+	}
+}

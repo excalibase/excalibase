@@ -121,19 +121,20 @@ func (s *AppDeployService) admit(ctx context.Context, namespace string, deploy *
 	}
 	needCPU, needMem, perCPU, perMem := rolloutNeed(live, replicas, podCPU, podMem)
 	needPods := int64(max(live.Count, replicas+rolloutSurge(live)) - live.Count)
-	reservedCPU, reservedMem, err := s.reservedByOtherRollouts(deploy, placement)
+	reserved, err := s.reservedByOtherRollouts(deploy, placement)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
 	return s.clusterHolds(ctx, placement, podNeed{cpu: needCPU, mem: needMem, perCPU: perCPU, perMem: perMem, pods: needPods},
-		reservedCPU, reservedMem, "app "+deploy.AppID)
+		reserved, "app "+deploy.AppID)
 }
 
 type podNeed struct{ cpu, mem, perCPU, perMem, pods int64 }
 
 // clusterHolds is the room check every admission ends in; anything the cluster cannot answer refuses.
 func (s *AppDeployService) clusterHolds(ctx context.Context, placement k8s.RuntimePlacement, need podNeed,
-	reservedCPU, reservedMem int64, who string) error {
+	reserved reservation, who string) error {
+	reservedCPU, reservedMem := reserved.cpuMilli, reserved.memBytes
 	capacity, err := s.runtime.GetClusterCapacity(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
@@ -145,7 +146,7 @@ func (s *AppDeployService) clusterHolds(ctx context.Context, placement k8s.Runti
 		return fmt.Errorf("%w (runtime class %q)", ErrAppNoSandboxNode, s.render.RuntimeClass)
 	}
 	capacity.HeadroomPercent = s.headroomPercent
-	if err := requirePodSlots(capacity, need.pods, who); err != nil {
+	if err := requirePodSlots(capacity, need.pods+reserved.pods, who); err != nil {
 		return err
 	}
 	if capacity.FreeCPUMilli()-reservedCPU < need.cpu || capacity.FreeMemBytes()-reservedMem < need.mem ||
@@ -184,12 +185,12 @@ func (s *AppDeployService) AdmitNewApps(ctx context.Context, projectID string, r
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
-	reservedCPU, reservedMem, err := s.reservedByOtherRollouts(&apphost.Deploy{}, placement)
+	reserved, err := s.reservedByOtherRollouts(&apphost.Deploy{}, placement)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
 	need := podNeed{cpu: int64(total) * podCPU, mem: int64(total) * podMem, perCPU: podCPU, perMem: podMem, pods: int64(total)}
-	return s.clusterHolds(ctx, placement, need, reservedCPU, reservedMem, "new apps of project "+projectID)
+	return s.clusterHolds(ctx, placement, need, reserved, "new apps of project "+projectID)
 }
 
 func rolloutNeed(live k8s.AppPods, replicas int, podCPU, podMem int64) (needCPU, needMem, perCPU, perMem int64) {
@@ -226,10 +227,11 @@ func anyNodeFits(capacity k8s.ClusterCapacity, selector map[string]string, cpu, 
 
 // reservedByOtherRollouts charges every other app's unfinished deploy its full
 // size, so two deploys admitted together cannot both count the same room.
-func (s *AppDeployService) reservedByOtherRollouts(self *apphost.Deploy, placement k8s.RuntimePlacement) (cpuMilli, memBytes int64, err error) {
+func (s *AppDeployService) reservedByOtherRollouts(self *apphost.Deploy, placement k8s.RuntimePlacement) (reservation, error) {
+	var total reservation
 	unfinished, err := s.deploys.ListUnfinished()
 	if err != nil {
-		return 0, 0, fmt.Errorf("list unfinished deploys: %w", err)
+		return reservation{}, fmt.Errorf("list unfinished deploys: %w", err)
 	}
 	for _, other := range unfinished {
 		if other.ID == self.ID || other.AppID == self.AppID || other.Spec.Replicas == 0 {
@@ -237,14 +239,19 @@ func (s *AppDeployService) reservedByOtherRollouts(self *apphost.Deploy, placeme
 		}
 		cpu, mem, err := requestFootprint(other.Spec.Resources.CPURequest, other.Spec.Resources.MemoryRequest, placement)
 		if err != nil {
-			return 0, 0, fmt.Errorf("deploy %s: %w", other.ID, err)
+			return reservation{}, fmt.Errorf("deploy %s: %w", other.ID, err)
 		}
 		pods := int64(other.Spec.Replicas + 1)
-		cpuMilli += pods * cpu
-		memBytes += pods * mem
+		total.cpuMilli += pods * cpu
+		total.memBytes += pods * mem
+		total.pods += pods
 	}
-	return cpuMilli, memBytes, nil
+	return total, nil
 }
+
+// reservation is what the deploys still rolling out will take: their pods, and
+// the room those pods ask for.
+type reservation struct{ cpuMilli, memBytes, pods int64 }
 
 // requestFootprint is one pod as the scheduler charges it: its requests plus the sandbox's overhead.
 func requestFootprint(cpuRequest, memRequest string, placement k8s.RuntimePlacement) (cpuMilli, memBytes int64, err error) {

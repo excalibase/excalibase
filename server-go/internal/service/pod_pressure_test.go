@@ -98,3 +98,40 @@ func TestPodPressure_AFailedReadChangesNothing(t *testing.T) {
 		t.Fatalf("alerts = %+v, want the open one kept", got)
 	}
 }
+
+type recordingNotifier struct{ raised []string }
+
+func (r *recordingNotifier) Notify(_ context.Context, change AlertChange) {
+	if change.Raised != nil {
+		r.raised = append(r.raised, change.Raised.Metric)
+	}
+}
+
+// An alert nobody reads is no alert: a raise is sent to the admins, once, not on every tick.
+func TestPodPressure_NotifiesOnRaiseOnly(t *testing.T) {
+	now := time.Now()
+	source := &fakePodSource{capacity: nodePods(200, 190), pending: []k8s.PendingPod{{Namespace: "a", Name: "old", Since: now.Add(-time.Hour)}}}
+	monitor, _ := newPressure(t, source, now)
+	notifier := &recordingNotifier{}
+	monitor.SetNotifier(notifier)
+	monitor.Sample(context.Background())
+	monitor.Sample(context.Background())
+	if len(notifier.raised) != 2 || notifier.raised[0] != "cluster.pods:n1" || notifier.raised[1] != "cluster.pending" {
+		t.Fatalf("notified of %v, want each raise once", notifier.raised)
+	}
+}
+
+// A node that is cordoned or gone is not in the capacity read; its alert must not stay open for ever.
+func TestPodPressure_ResolvesTheAlertOfANodeThatIsGone(t *testing.T) {
+	source := &fakePodSource{capacity: nodePods(200, 190)}
+	monitor, alerts := newPressure(t, source, time.Now())
+	monitor.Sample(context.Background())
+	if len(alerts.GetActiveAlerts()) != 1 {
+		t.Fatal("setup: the alert was not raised")
+	}
+	source.capacity = k8s.ClusterCapacity{}
+	monitor.Sample(context.Background())
+	if got := alerts.GetActiveAlerts(); len(got) != 0 {
+		t.Fatalf("alert of a node that is gone stayed open: %+v", got)
+	}
+}

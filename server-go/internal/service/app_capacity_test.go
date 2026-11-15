@@ -269,3 +269,26 @@ func TestAppAdmission_AdmitsWhenAPodSlotIsFree(t *testing.T) {
 		t.Fatalf("deploy = %s %q", got.Status, got.FailureReason)
 	}
 }
+
+// A rollout in flight holds pod slots as it holds CPU: two rollouts must not both count the last slot.
+func TestAppAdmission_AnotherRolloutInFlightIsChargedPodSlots(t *testing.T) {
+	app := sampleDeployApp()
+	svc, deploys, kube := newDeployTestService(t, app)
+	kube.Capacity = oneNodeCluster(4000, 4000*mi, 100, 100*mi)
+	kube.Capacity.AllocatablePods, kube.Capacity.Pods = 110, 107
+	kube.Capacity.Nodes[0].AllocatablePods, kube.Capacity.Nodes[0].Pods = 110, 107
+	other := &apphost.Deploy{ID: "other", AppID: "app-other", ProjectID: "p2", Status: apphost.DeployStatusRolling,
+		Spec: apphost.DeploySpec{Replicas: 1, Resources: apphost.DeployResources{CPURequest: "50m", MemoryRequest: "128Mi"}}}
+	if err := deploys.Create(other); err != nil {
+		t.Fatal(err)
+	}
+	// 3 free, the other rollout reserves 2 (its pod and a surge pod), one is left: the first app needs 1 and fits...
+	if got := deployOutcome(t, svc, deploys, app); got.Status != apphost.DeployStatusSucceeded {
+		t.Fatalf("one slot is left after the reservation: %s %q", got.Status, got.FailureReason)
+	}
+	// ...but with only 2 free the reservation leaves nothing.
+	kube.Capacity.Pods, kube.Capacity.Nodes[0].Pods = 108, 108
+	if got := deployOutcome(t, svc, deploys, app); got.Status != apphost.DeployStatusFailed || !strings.Contains(got.FailureReason, "pod") {
+		t.Fatalf("a slot the other rollout holds was counted as free: %s %q", got.Status, got.FailureReason)
+	}
+}

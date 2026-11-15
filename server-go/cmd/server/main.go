@@ -288,6 +288,9 @@ func runServer(cfg config.AppConfig) {
 		})
 		// A paused project's database is down for as long as it stays paused;
 		// its pool must not keep connections open against it.
+		if k8sClient != nil {
+			pauseSvc.SetPodSlots(k8sClient)
+		}
 		pauseSvc.AddStatusObserver(projectDB)
 		pauseSvc.AddStatusObserver(deps.schemaHandler)
 		deps.provHandler.SetPauseService(pauseSvc)
@@ -620,7 +623,7 @@ const (
 // single host with hostmetrics on, samples every running database, and with
 // requestmetrics on every graphql and auth pod, into it once a minute on the
 // leading replica.
-func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8sClient k8s.KubeClient, metrics *service.MetricsService, alerts *service.AlertingService, requests *service.RequestMetricsService) {
+func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8sClient k8s.KubeClient, metrics *service.MetricsService, alerts *service.AlertingService, requests *service.RequestMetricsService, mail email.Sender) {
 	table, ok := sqlStore.(metricsTable)
 	if !ok {
 		return
@@ -632,7 +635,13 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 	}
 	metrics.SetHistory(table, alerts)
 	if source, ok := k8sClient.(service.PodPressureSource); ok {
-		metrics.SetClusterSampler(service.NewPodPressureMonitor(source, alerts, time.Now))
+		monitor := service.NewPodPressureMonitor(source, alerts, time.Now)
+		if users, ok := sqlStore.(storage.UserStore); ok && email.Configured(mail) {
+			monitor.SetNotifier(service.NewAdminAlertMail(service.AdminAlertMailConfig{
+				Admins: service.PlatformAdminEmails{Users: users}, Sender: mail,
+				From: cfg.EmailFromAddress, FromName: cfg.EmailFromName, DashboardURL: cfg.StudioURL}))
+		}
+		metrics.SetClusterSampler(monitor)
 	}
 	if sampler != nil {
 		metrics.SetRequestSampler(sampler)
@@ -1758,7 +1767,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	if shipper := wireHostLogs(hostLogDeps{cfg: cfg, sqlStore: sqlStore, instances: store, provisioning: provSvc}); shipper != nil {
 		go shipper.Run(context.Background())
 	}
-	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc)
+	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc, emailSender)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 	logDrainSvc := newLogDrainService(cfg, sqlStore, vc, provSvc)
 
