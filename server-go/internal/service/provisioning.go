@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -1039,6 +1040,9 @@ func (s *ProvisioningService) saveProvisionFailure(inst *domain.DatabaseInstance
 func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest,
 	result *provisioner.ProvisioningResult, pc *provisioner.ProvisionContext, fail provisionFailureHandler, opts RegistrationOptions) (*domain.ProvisioningResponse, error) {
 	applyProvisioningResult(inst, req, result)
+	if err := s.applyChosenOwnerPassword(ctx, inst, req, pc); err != nil {
+		return fail(ctx, inst, req, err, pc), nil
+	}
 
 	opts.Context = pc
 	opts.RowAlreadyCreated = true
@@ -1057,6 +1061,26 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 		DatabaseName: inst.DatabaseName,
 		CreatedAt:    inst.CreatedAt,
 	}, nil
+}
+
+// applyChosenOwnerPassword gives the owner the password the create request
+// carries (EXC-759): the one the customer chose, or the one generated so it
+// could be shown once. A MySQL owner is created with it by registration; a
+// Postgres owner is told it now, before registration files it in the vault.
+func (s *ProvisioningService) applyChosenOwnerPassword(ctx context.Context, inst *domain.DatabaseInstance,
+	req domain.ProvisioningRequest, pc *provisioner.ProvisionContext) error {
+	if req.OwnerPassword == "" {
+		return nil
+	}
+	if req.DBType != domain.MySQL {
+		pc.SetStage(domain.StageRoleCreation)
+		pc.SetStep("set the owner password")
+		if err := s.alterRolePassword(ctx, inst, inst.Username, req.OwnerPassword); err != nil {
+			return pc.Fail(fmt.Errorf("set the owner password: %w", err))
+		}
+	}
+	inst.Password = req.OwnerPassword
+	return nil
 }
 
 // applyProvisioningResult copies the provisioner's output onto the instance.
@@ -1669,7 +1693,40 @@ func notServableErr(status string) error {
 	return ErrProjectDeleting
 }
 
+// GetCredentials is the connection details of a project's database. With
+// OneTimeCredentials on it carries no password at all and its connection
+// string a <password> template: a password is shown once, at creation and at a
+// reset, and never read back (EXC-759).
 func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
+	if s.oneTimeCredentials(ctx) {
+		creds, err := s.storedCredentials(ctx, projectID, true)
+		if err != nil {
+			return nil, err
+		}
+		return withoutPasswords(creds), nil
+	}
+	return s.storedCredentials(ctx, projectID, false)
+}
+
+// OneTimeCredentials reports whether database passwords are shown once and
+// never read back (EXC-759).
+func (s *ProvisioningService) OneTimeCredentials(ctx context.Context) bool {
+	return s.oneTimeCredentials(ctx)
+}
+
+func (s *ProvisioningService) oneTimeCredentials(ctx context.Context) bool {
+	return features.Enabled(ctx, s.flags, features.OneTimeCredentials)
+}
+
+// passwordSentinel stands where a connection string's password goes while the
+// string is built as a template.
+const passwordSentinel = "PASSWORDPLACEHOLDER"
+
+// storedCredentials reads the owner and reader passwords from the vault. It is
+// for the platform's own use; no route returns its result unredacted while
+// OneTimeCredentials is on. With template, the connection strings carry
+// <password> where the password goes.
+func (s *ProvisioningService) storedCredentials(ctx context.Context, projectID string, template bool) (*domain.CredentialsResponse, error) {
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return nil, err
@@ -1694,8 +1751,14 @@ func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID stri
 	if err != nil {
 		return nil, err
 	}
+	inURL := password
+	if template {
+		inURL = passwordSentinel
+	}
 	if inst.DBType == domain.MySQL {
-		return withReader(mysqlCredentials(inst, password), readerPassword), nil
+		creds := mysqlCredentials(inst, password)
+		creds.ConnectionURL = domain.MySQLURL(inst.Host, strconv.Itoa(creds.Port), inst.Username, inURL, inst.DatabaseName)
+		return withReader(creds, readerPassword), nil
 	}
 	port := 5432
 	if inst.Port != nil {
@@ -1704,7 +1767,7 @@ func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID stri
 
 	connURL := url.URL{
 		Scheme:   "postgresql",
-		User:     url.UserPassword(inst.Username, password),
+		User:     url.UserPassword(inst.Username, inURL),
 		Host:     net.JoinHostPort(inst.Host, strconv.Itoa(port)),
 		Path:     "/" + inst.DatabaseName,
 		RawQuery: url.Values{"sslmode": {inst.SSLMode}}.Encode(),
@@ -1721,6 +1784,15 @@ func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID stri
 		SSLMode:       inst.SSLMode,
 		ConnectionURL: connURL.String(),
 	}, readerPassword), nil
+}
+
+// withoutPasswords is creds with every password removed and the connection
+// string's placeholder written as <password>.
+func withoutPasswords(creds *domain.CredentialsResponse) *domain.CredentialsResponse {
+	redacted := *creds
+	redacted.ConnectionURL = strings.Replace(creds.ConnectionURL, passwordSentinel, "<password>", 1)
+	redacted.Password, redacted.ReaderPassword = "", ""
+	return &redacted
 }
 
 // readerPassword is the filed SELECT-only login's password, or "" while its

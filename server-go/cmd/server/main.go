@@ -1849,6 +1849,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler.SetPublicationName(name)
 	}
 	provHandler := handler.NewProvisioningHandler(provSvc, sqlStore)
+	provHandler.SetAuditLog(sqlStore)
 	provHandler.SetActivityStore(sqlStore)
 	provHandler.SetAuthHookDeny(cfg.ExtraDenyPrefixes())
 	wireProjectCors(sqlStore, provHandler)

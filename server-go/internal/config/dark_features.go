@@ -37,18 +37,25 @@ var featureEnv = map[features.Feature]string{
 	features.TemplateCatalog: "FEATURE_TEMPLATECATALOG",
 	features.HostLogs:        "FEATURE_HOSTLOGS",
 	// Single-host only (the compose file); Kubernetes builds do not read it.
-	features.SingleHostBuilds: "FEATURE_SINGLEHOSTBUILDS",
-	features.AppGitBuilds:     "FEATURE_APPGITBUILDS",
-	features.LogDeletion:      "FEATURE_LOGDELETION",
-	features.S3:               "FEATURE_S3",
-	features.SitePreviews:     "FEATURE_SITEPREVIEWS",
+	features.SingleHostBuilds:   "FEATURE_SINGLEHOSTBUILDS",
+	features.AppGitBuilds:       "FEATURE_APPGITBUILDS",
+	features.LogDeletion:        "FEATURE_LOGDELETION",
+	features.S3:                 "FEATURE_S3",
+	features.SitePreviews:       "FEATURE_SITEPREVIEWS",
+	features.OneTimeCredentials: "FEATURE_ONETIMECREDENTIALS",
 }
 
-// loadDarkFeatures reads once at startup; only the exact value "true" turns one on.
+// defaultOn are the features that are on unless their variable says exactly
+// "false": a security fix ships on, with an off switch.
+var defaultOn = map[features.Feature]bool{features.OneTimeCredentials: true}
+
+// loadDarkFeatures reads once at startup; only the exact value "true" turns a
+// dark feature on, and only the exact value "false" turns a default-on one off.
 func loadDarkFeatures() []features.Feature {
 	var on []features.Feature
 	for _, feature := range features.All() {
-		if os.Getenv(featureEnv[feature]) == "true" {
+		value := os.Getenv(featureEnv[feature])
+		if value == "true" || (defaultOn[feature] && value != "false") {
 			on = append(on, feature)
 		}
 	}

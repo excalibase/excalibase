@@ -35,13 +35,16 @@ func (h *ProvisioningHandler) AddDatabase(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	if !h.settleOwnerPassword(w, r, &req) {
+		return
+	}
 	if prefersRespondAsync(r) {
 		resp, err := h.svc.AddDatabaseInBackground(r.Context(), projectID, req)
 		if err != nil {
 			writeAddDatabaseError(w, projectID, err)
 			return
 		}
-		writeJSONStatus(w, http.StatusAccepted, resp)
+		writeJSONStatus(w, http.StatusAccepted, shownOnce(resp, req.OwnerPassword))
 		return
 	}
 	resp, err := h.svc.AddDatabase(r.Context(), projectID, req)
@@ -49,7 +52,7 @@ func (h *ProvisioningHandler) AddDatabase(w http.ResponseWriter, r *http.Request
 		writeAddDatabaseError(w, projectID, err)
 		return
 	}
-	writeJSON(w, resp)
+	writeJSON(w, shownOnce(resp, req.OwnerPassword))
 }
 
 func writeAddDatabaseError(w http.ResponseWriter, projectID string, err error) {

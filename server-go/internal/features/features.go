@@ -100,11 +100,15 @@ const (
 	// SitePreviews is a preview per branch or pull request of a site connected
 	// to git, at its own unguessable hostname, removed with its branch or PR (EXC-660).
 	SitePreviews Feature = "sitepreviews"
+	// OneTimeCredentials shows a database password once, at creation and at a
+	// reset, and never returns it again: the credentials route carries no
+	// password and the connection string a template (EXC-759).
+	OneTimeCredentials Feature = "onetimecredentials"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, OneTimeCredentials}
 }
 
 type Flags interface {
