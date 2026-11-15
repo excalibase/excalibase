@@ -154,6 +154,7 @@ jobs:
       - name: Release gate
         run: |
           bash tests/cve-watch/gate-test.sh
+          bash tests/cve-watch/workflow-test.sh
 
   gateway-guard:
     name: DocumentDB gateway guard

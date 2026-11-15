@@ -132,8 +132,11 @@ jobs:
           while read -r repository digest tags; do
             index=$((index + 1))
             report="$RUNNER_TEMP/trivy-$index.json"
-            trivy image --quiet --image-src remote --scanners vuln --severity CRITICAL --ignore-unfixed \
-              --format json --output "$report" "$repository@$digest"
+            # From RUNNER_TEMP with an empty ignore file, so a trivy.yaml or .trivyignore in the
+            # checkout cannot skip the waiver rules.
+            (cd "$RUNNER_TEMP" && trivy image --quiet --image-src remote --ignorefile /dev/null \
+              --scanners vuln --severity CRITICAL --ignore-unfixed \
+              --format json --output "$report" "$repository@$digest")
             reports+=("$report")
           done < "$plan"
           bash scripts/cve-watch/gate.sh --waivers security/release-waivers.json "${reports[@]}"

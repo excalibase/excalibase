@@ -15,6 +15,7 @@ runs:
   steps:
     - uses: ./.github/actions/install-trivy
 
+    # Counts only: the public log and step summary never carry a vulnerability table.
     - name: Fixable CRITICAL fails
       shell: bash
       env:
@@ -23,21 +24,26 @@ runs:
       run: |
         ignore=()
         [ -f .trivyignore.yaml ] && ignore=(--ignorefile .trivyignore.yaml)
-        code=0
-        [ "$FAIL" = true ] && code=1
-        trivy image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code "$code" \
-          "${ignore[@]}" "$IMAGE"
+        report="$RUNNER_TEMP/trivy-gate.json"
+        trivy image --quiet --scanners vuln --severity CRITICAL --ignore-unfixed --format json \
+          --output "$report" "${ignore[@]}" "$IMAGE"
+        blocked=$(jq '[.Results[]?.Vulnerabilities[]?] | length' "$report")
+        echo "fixable Critical: $blocked"
+        if [ "$FAIL" = true ] && [ "$blocked" -gt 0 ]; then
+          echo "::error::blocked: $blocked fixable Critical"
+          exit 1
+        fi
 
-    - name: HIGH, reported
+    - name: HIGH and CRITICAL counts
       if: always()
       shell: bash
       env:
         IMAGE: ${{ inputs.image }}
       run: |
-        {
-          echo "### Trivy HIGH and CRITICAL: \`$IMAGE\`"
-          echo '```'
-          trivy image --skip-db-update --skip-java-db-update --scanners vuln --severity HIGH,CRITICAL \
-            --format table "$IMAGE" 2>/dev/null | tail -n +2 || echo "scan failed"
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
+        report="$RUNNER_TEMP/trivy-counts.json"
+        if trivy image --quiet --skip-db-update --skip-java-db-update --scanners vuln --severity HIGH,CRITICAL \
+             --format json --output "$report" "$IMAGE" 2>/dev/null; then
+          jq -r '"### Trivy: \([.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length) Critical, \([.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length) High (counts only)"' "$report" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "### Trivy counts: scan failed" >> "$GITHUB_STEP_SUMMARY"
+        fi
