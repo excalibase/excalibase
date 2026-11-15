@@ -24,13 +24,13 @@ const (
 	resumeSidecarPods = 1
 )
 
-// PodSlotSource reads the nodes' pod slots.
-type PodSlotSource interface {
+// PodSlotReader reads the nodes' pod slots.
+type PodSlotReader interface {
 	GetClusterCapacity(ctx context.Context) (k8s.ClusterCapacity, error)
 }
 
 // SetPodSlots makes a resume check that the database's pods have slots to start in.
-func (s *PauseService) SetPodSlots(source PodSlotSource) { s.podSlots = source }
+func (s *PauseService) SetPodSlots(source PodSlotReader) { s.podSlots = source }
 
 // requirePodSlotsToResume refuses a resume with no slot for the database's
 // instances and watcher. It checks only a project whose workload is stopped:

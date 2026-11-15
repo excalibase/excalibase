@@ -13,8 +13,8 @@ import (
 
 const adminMailTimeout = 15 * time.Second
 
-// AdminEmails are the addresses a platform alert goes to.
-type AdminEmails interface {
+// AdminEmailLister are the addresses a platform alert goes to.
+type AdminEmailLister interface {
 	PlatformAdminEmails(ctx context.Context) ([]string, error)
 }
 
@@ -38,7 +38,7 @@ func (p PlatformAdminEmails) PlatformAdminEmails(ctx context.Context) ([]string,
 
 // AdminAlertMailConfig wires AdminAlertMail.
 type AdminAlertMailConfig struct {
-	Admins       AdminEmails
+	Admins       AdminEmailLister
 	Sender       email.Sender
 	From         string
 	FromName     string

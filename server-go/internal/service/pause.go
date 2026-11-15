@@ -76,7 +76,7 @@ type PauseService struct {
 	runInBackground func(func())
 	// podSlots reads the cluster's pod slots so a resume that would leave the
 	// database pods Pending is refused (EXC-747); nil on a single host.
-	podSlots PodSlotSource
+	podSlots PodSlotReader
 
 	mu sync.Mutex
 }
