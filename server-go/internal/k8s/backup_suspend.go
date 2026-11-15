@@ -74,6 +74,17 @@ func ScheduledBackupSuspended(ctx context.Context, client KubeClient, namespace,
 	return false, nil
 }
 
+// ClusterHibernated reports whether the project's CNPG cluster carries
+// cnpg.io/hibernation=on. A cluster that cannot be read is an error: guessing
+// either way would suspend or start backups on no evidence.
+func ClusterHibernated(ctx context.Context, client KubeClient, namespace, projectID string) (bool, error) {
+	cluster, err := client.GetCRD(ctx, CNPGClusterGVR, namespace, projectID+"-postgres")
+	if err != nil {
+		return false, fmt.Errorf("get cluster for hibernation state: %w", err)
+	}
+	return cluster.GetAnnotations()["cnpg.io/hibernation"] == "on", nil
+}
+
 // DeleteHibernatedBackupFailures removes the Backups that failed only because
 // the cluster was hibernated. They hold no data. A Backup that failed for any
 // other reason stays: it is the evidence of a real problem.

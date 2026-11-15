@@ -96,3 +96,67 @@ func TestReconcilePausedBackups_NothingToDoOnSingleHost(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 }
+
+func (h *rotationHarness) seedCluster(hibernated bool) {
+	cluster := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster",
+		"metadata": map[string]interface{}{"name": rotProject + "-postgres", "namespace": rotNamespace},
+	}}
+	if hibernated {
+		cluster.SetAnnotations(map[string]string{"cnpg.io/hibernation": "on"})
+	}
+	h.kube.CRDs[rotNamespace+"/"+rotProject+"-postgres"] = cluster
+}
+
+// A suspend that outlived its pause (failed pause, manual un-hibernate, a
+// resume fixed by hand) must not keep a running project's backups off.
+func TestReconcilePausedBackups_ResumesTheScheduleOfARunningProject(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedSchedule(t, "ACTIVE")
+	h.seedCluster(false)
+	if err := k8s.SetScheduledBackupSuspended(context.Background(), h.kube, rotNamespace, rotProject, true); err != nil {
+		t.Fatal(err)
+	}
+
+	report := h.svc.ReconcilePausedBackups(context.Background())
+	if len(report.Failed) != 0 {
+		t.Fatalf("failed: %v", report.Failed)
+	}
+	if h.scheduleSuspended() {
+		t.Fatal("a running, un-hibernated project kept its backups off")
+	}
+}
+
+func TestReconcilePausedBackups_KeepsTheScheduleOffWhileTheClusterIsHibernated(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedSchedule(t, "ACTIVE")
+	h.seedCluster(true)
+	if err := k8s.SetScheduledBackupSuspended(context.Background(), h.kube, rotNamespace, rotProject, true); err != nil {
+		t.Fatal(err)
+	}
+
+	h.svc.ReconcilePausedBackups(context.Background())
+	if !h.scheduleSuspended() {
+		t.Fatal("backups were turned on against a hibernated cluster")
+	}
+}
+
+// The list is read once; a resume that finishes during the pass must not be
+// undone by the stale PAUSED row it started from.
+func TestReconcilePausedBackups_RereadsTheProjectBeforeSuspending(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedSchedule(t, "ACTIVE")
+	h.seedCluster(false)
+	stale, err := h.store.FindByProjectID(rotProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.Status = string(domain.StatusPaused)
+
+	if err := h.svc.reconcileBackupsOf(context.Background(), stale, &PausedBackupsReport{}); err != nil {
+		t.Fatal(err)
+	}
+	if h.scheduleSuspended() {
+		t.Fatal("a stale PAUSED row suspended the backups of a running project")
+	}
+}

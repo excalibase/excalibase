@@ -63,14 +63,58 @@ func TestPostgreSQLResume_ResumesTheNightlyBackup(t *testing.T) {
 func TestPostgreSQLConfigureBackup_KeepsAPausedScheduleSuspended(t *testing.T) {
 	mock, prov := setupHibernationTest(t)
 	seedPauseSchedule(t, mock)
-	if err := k8s.SetScheduledBackupSuspended(context.Background(), mock, pauseTestNS, pauseTestProject, true); err != nil {
-		t.Fatal(err)
-	}
+	storedCluster(t, mock).SetAnnotations(map[string]string{hibernationAnnotation: hibernationOn})
 
 	if err := prov.ConfigureBackup(context.Background(), pauseTestNS, pauseTestProject, "0 3 * * *", 7); err != nil {
 		t.Fatal(err)
 	}
 	if !pauseScheduleSuspended(mock) {
 		t.Fatal("changing the schedule resumed the nightly backup of a paused project")
+	}
+}
+
+// A pause that fails after the suspend must hand the schedule back: the
+// project is still running, so its nightly backup has to keep firing.
+func TestPostgreSQLPause_UndoesTheSuspendWhenHibernationFails(t *testing.T) {
+	mock, prov := setupHibernationTest(t)
+	seedPauseSchedule(t, mock)
+	delete(mock.CRDs, pauseTestClusterKey)
+
+	if err := prov.Pause(context.Background(), pauseTestNS, pauseTestProject); err == nil {
+		t.Fatal("Pause succeeded without a cluster")
+	}
+	if pauseScheduleSuspended(mock) {
+		t.Fatal("a pause that never hibernated left the nightly backup off")
+	}
+}
+
+// A schedule created while the cluster is hibernated starts suspended even
+// when the project had no schedule before.
+func TestPostgreSQLConfigureBackup_SuspendsANewScheduleOnAHibernatedCluster(t *testing.T) {
+	mock, prov := setupHibernationTest(t)
+	cluster := storedCluster(t, mock)
+	cluster.SetAnnotations(map[string]string{hibernationAnnotation: hibernationOn, tierInstancesKey: "3"})
+
+	if err := prov.ConfigureBackup(context.Background(), pauseTestNS, pauseTestProject, "0 3 * * *", 7); err != nil {
+		t.Fatal(err)
+	}
+	if !pauseScheduleSuspended(mock) {
+		t.Fatal("a paused project got a live nightly backup")
+	}
+}
+
+// A schedule left suspended on a running cluster must not keep a running
+// project's backups off when it is reconfigured.
+func TestPostgreSQLConfigureBackup_LiveOnARunningClusterEvenIfSuspendedBefore(t *testing.T) {
+	mock, prov := setupHibernationTest(t)
+	seedPauseSchedule(t, mock)
+	if err := k8s.SetScheduledBackupSuspended(context.Background(), mock, pauseTestNS, pauseTestProject, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := prov.ConfigureBackup(context.Background(), pauseTestNS, pauseTestProject, "0 3 * * *", 7); err != nil {
+		t.Fatal(err)
+	}
+	if pauseScheduleSuspended(mock) {
+		t.Fatal("a running cluster's new schedule stayed suspended")
 	}
 }

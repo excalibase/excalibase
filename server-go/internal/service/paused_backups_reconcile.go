@@ -13,13 +13,16 @@ import (
 type PausedBackupsReport struct {
 	// Suspended counts paused projects whose nightly schedule the pass turned off.
 	Suspended int
+	// Resumed counts running projects whose schedule was left suspended and
+	// the pass turned back on.
+	Resumed int
 	// Cleared counts the failed "hibernated" Backups it deleted.
 	Cleared int
 	Failed  []error
 }
 
 // ReconcilePausedBackups turns off the nightly backup of every paused Postgres
-// project and deletes the Backups that failed only because the cluster was
+// project, turns it back on for running ones whose cluster is not hibernated, and deletes the Backups that failed only because the cluster was
 // hibernated (EXC-758). Pausing now suspends the schedule itself; this fixes
 // the projects paused before that, and any whose suspend was lost. It reads
 // the cluster, not the vault, so a sealed vault does not hold it up.
@@ -44,17 +47,29 @@ func (s *ProvisioningService) ReconcilePausedBackups(ctx context.Context) Paused
 	return report
 }
 
-func (s *ProvisioningService) reconcileBackupsOf(ctx context.Context, inst *domain.DatabaseInstance, report *PausedBackupsReport) error {
-	if inst.Status == string(domain.StatusPaused) {
-		suspended, err := k8s.ScheduledBackupSuspended(ctx, s.k8sClient, inst.Namespace, inst.ProjectID)
+func (s *ProvisioningService) reconcileBackupsOf(ctx context.Context, listed *domain.DatabaseInstance, report *PausedBackupsReport) error {
+	// The list may be stale: a resume can finish while the pass runs.
+	inst, err := s.store.FindByProjectID(listed.ProjectID)
+	if err != nil {
+		return err
+	}
+	if inst == nil {
+		return nil
+	}
+	switch inst.Status {
+	case string(domain.StatusPaused):
+		if err := s.setBackupsSuspended(ctx, inst, true, &report.Suspended); err != nil {
+			return err
+		}
+	case string(domain.StatusActive):
+		hibernated, err := k8s.ClusterHibernated(ctx, s.k8sClient, inst.Namespace, inst.ProjectID)
 		if err != nil {
 			return err
 		}
-		if !suspended {
-			if err := k8s.SetScheduledBackupSuspended(ctx, s.k8sClient, inst.Namespace, inst.ProjectID, true); err != nil {
+		if !hibernated {
+			if err := s.setBackupsSuspended(ctx, inst, false, &report.Resumed); err != nil {
 				return err
 			}
-			report.Suspended++
 		}
 	}
 	cleared, err := k8s.DeleteHibernatedBackupFailures(ctx, s.k8sClient, inst.Namespace)
@@ -62,11 +77,28 @@ func (s *ProvisioningService) reconcileBackupsOf(ctx context.Context, inst *doma
 	return err
 }
 
+// setBackupsSuspended moves the schedule to the wanted state and counts the
+// change; a schedule already there is left alone.
+func (s *ProvisioningService) setBackupsSuspended(ctx context.Context, inst *domain.DatabaseInstance, want bool, changed *int) error {
+	current, err := k8s.ScheduledBackupSuspended(ctx, s.k8sClient, inst.Namespace, inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	if current == want {
+		return nil
+	}
+	if err := k8s.SetScheduledBackupSuspended(ctx, s.k8sClient, inst.Namespace, inst.ProjectID, want); err != nil {
+		return err
+	}
+	*changed++
+	return nil
+}
+
 func (s *ProvisioningService) logPausedBackups(report PausedBackupsReport) {
 	for _, failure := range report.Failed {
 		log.Printf("ERROR: paused project backups: %v", failure)
 	}
-	if report.Suspended > 0 || report.Cleared > 0 {
-		log.Printf("paused project backups: %d schedule(s) suspended, %d hibernated failure(s) cleared", report.Suspended, report.Cleared)
+	if report.Suspended > 0 || report.Resumed > 0 || report.Cleared > 0 {
+		log.Printf("paused project backups: %d schedule(s) suspended, %d resumed, %d hibernated failure(s) cleared", report.Suspended, report.Resumed, report.Cleared)
 	}
 }

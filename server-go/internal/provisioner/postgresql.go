@@ -553,6 +553,10 @@ func (p *PostgreSQLProvisioner) Pause(ctx context.Context, namespace, projectID 
 		return err
 	}
 	if err := p.setHibernation(ctx, namespace, projectID, hibernationOn); err != nil {
+		// Still running: hand the nightly backup back rather than leave it off.
+		if undoErr := k8s.SetScheduledBackupSuspended(context.WithoutCancel(ctx), p.client, namespace, projectID, false); undoErr != nil {
+			return errors.Join(err, fmt.Errorf("restore nightly backup: %w", undoErr))
+		}
 		return err
 	}
 	return p.pausePoller.WaitUntilClear(ctx, "database pods in "+namespace,
@@ -814,8 +818,9 @@ func (p *PostgreSQLProvisioner) ConfigureBackup(ctx context.Context, namespace, 
 	if err != nil {
 		return err
 	}
-	// A new schedule on a paused project stays suspended.
-	suspended, err := k8s.ScheduledBackupSuspended(ctx, p.client, namespace, projectID)
+	// A schedule on a hibernated cluster starts suspended, whether or not
+	// one existed before.
+	suspended, err := k8s.ClusterHibernated(ctx, p.client, namespace, projectID)
 	if err != nil {
 		return err
 	}

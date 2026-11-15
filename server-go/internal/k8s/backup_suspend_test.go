@@ -107,3 +107,22 @@ func TestDeleteHibernatedBackupFailures_RemovesOnlyThose(t *testing.T) {
 		}
 	}
 }
+
+func TestClusterHibernated(t *testing.T) {
+	mock := NewMockClient()
+	cluster := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster",
+		"metadata": map[string]interface{}{"name": "p-postgres", "namespace": "ns"},
+	}}
+	mock.CRDs["ns/p-postgres"] = cluster
+	if on, err := ClusterHibernated(context.Background(), mock, "ns", "p"); err != nil || on {
+		t.Fatalf("plain cluster: %v %v", on, err)
+	}
+	cluster.SetAnnotations(map[string]string{"cnpg.io/hibernation": "on"})
+	if on, err := ClusterHibernated(context.Background(), mock, "ns", "p"); err != nil || !on {
+		t.Fatalf("hibernated cluster: %v %v", on, err)
+	}
+	if _, err := ClusterHibernated(context.Background(), mock, "ns", "missing"); err == nil {
+		t.Fatal("a missing cluster must be an error, not 'not hibernated'")
+	}
+}
