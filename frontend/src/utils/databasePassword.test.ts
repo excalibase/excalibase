@@ -24,7 +24,7 @@ describe('passwordProblem', () => {
   });
 
   test('accepts a long random password and a passphrase of words', () => {
-    expect(passwordProblem('k8Xq2Lm9Zp4Rt7Vw')).toBeNull();
+    expect(passwordProblem('test-password-not-real')).toBeNull();
     expect(passwordProblem('correct horse battery staple')).toBeNull();
   });
 

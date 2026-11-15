@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { OneTimePasswordPanel } from './OneTimePasswordPanel';
 import type { ConnectAddress } from './ConnectionParts';
 
-const PASSWORD = 'k8Xq2Lm9Zp4Rt7Vw';
+const PASSWORD = 'test-password-not-real';
 
 function Harness({ address }: { readonly address: ConnectAddress }) {
   const [open, setOpen] = useState(true);
@@ -54,7 +54,7 @@ describe('OneTimePasswordPanel', () => {
     expect(link).toHaveAttribute('download', 'p-1-database-credentials.csv');
     const csv = decodeURIComponent(link.getAttribute('href')!.split(',').slice(1).join(','));
     expect(csv).toBe(
-      'host,port,database,user,password,sslmode\n"p1.db.excalibase.io","26257","appdb","app","k8Xq2Lm9Zp4Rt7Vw","require"\n'
+      'host,port,database,user,password,sslmode\n"p1.db.excalibase.io","26257","appdb","app","test-password-not-real","require"\n'
         .replace('p1.', 'p-1.'),
     );
   });

@@ -1,12 +1,12 @@
 import { describe, test, expect } from 'vitest';
 import { credentialsCsv, credentialsCsvFileName } from './databaseCredentialsCsv';
 
-const base = { host: 'p1.db.excalibase.io', port: '26257', database: 'appdb', user: 'app', password: 'k8Xq2Lm9Zp4Rt7Vw', sslmode: 'verify-full' };
+const base = { host: 'p1.db.excalibase.io', port: '26257', database: 'appdb', user: 'app', password: 'test-password-not-real', sslmode: 'verify-full' };
 
 describe('credentialsCsv', () => {
   test('has the header row and one data row', () => {
     expect(credentialsCsv(base)).toBe(
-      'host,port,database,user,password,sslmode\n"p1.db.excalibase.io","26257","appdb","app","k8Xq2Lm9Zp4Rt7Vw","verify-full"\n',
+      'host,port,database,user,password,sslmode\n"p1.db.excalibase.io","26257","appdb","app","test-password-not-real","verify-full"\n',
     );
   });
 
