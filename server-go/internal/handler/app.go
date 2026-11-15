@@ -18,6 +18,7 @@ import (
 	"errors"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
+	vaultpkg "github.com/excalibase/provisioning-poc/pkg/vault"
 	"log"
 	"net/http"
 	"strconv"
@@ -343,7 +344,7 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.Create(app, maxApps); err != nil {
-		h.forgetSealed(sealed)
+		sealed()
 		h.writeStoreError(w, err)
 		return
 	}
@@ -431,7 +432,7 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.Update(existing, expectedVersion); err != nil {
-		h.forgetSealed(sealed)
+		sealed()
 		h.writeStoreError(w, err)
 		return
 	}
@@ -673,31 +674,54 @@ func withoutValuesUnless(mayRead bool, app *apphost.App) *apphost.App {
 // sealCredentials makes every plain variable named like a credential a secret
 // and stores its value in the vault, before the app is saved, so a variable
 // never points at a value that was not stored. With no vault to hold it the
-// write is refused rather than saved as plain.
-func (h *AppHandler) sealCredentials(w http.ResponseWriter, app *apphost.App) (map[apphost.SecretRef]string, bool) {
+// write is refused rather than saved as plain. The returned undo puts the
+// vault back as it was if the app is then not saved: a value this write
+// created is removed, and one it replaced is restored.
+func (h *AppHandler) sealCredentials(w http.ResponseWriter, app *apphost.App) (undo func(), ok bool) {
 	sealed := app.SealCredentialLiterals()
 	if len(sealed) == 0 {
-		return nil, true
+		return func() {}, true
 	}
 	if h.vault == nil {
 		httpError(w, "secrets are unavailable: no vault is configured, so a variable named like a credential cannot be saved", http.StatusServiceUnavailable)
 		return nil, false
 	}
+	// Read what is there first: a write that cannot tell absence from a failure is refused.
+	before := make(map[string]map[string]string, len(sealed))
+	for ref := range sealed {
+		held, err := h.vault.Get(ref.Path)
+		switch {
+		case errors.Is(err, vaultpkg.ErrNotFound):
+			before[ref.Path] = nil
+		case err != nil:
+			httpError(w, "could not read the secret store", http.StatusServiceUnavailable)
+			return nil, false
+		default:
+			before[ref.Path] = held
+		}
+	}
+	undo = func() { h.restoreSecrets(before) }
 	for ref, value := range sealed {
 		if err := h.vault.Put(ref.Path, map[string]string{ref.Key: value}); err != nil {
-			h.forgetSealed(sealed)
+			undo()
 			httpError(w, "could not store the secret", http.StatusInternalServerError)
 			return nil, false
 		}
 	}
-	return sealed, true
+	return undo, true
 }
 
-// forgetSealed removes values stored for a write that was then refused.
-func (h *AppHandler) forgetSealed(sealed map[apphost.SecretRef]string) {
-	for ref := range sealed {
-		if err := h.vault.Delete(ref.Path); err != nil {
-			log.Printf("app secret: remove a value stored for a refused write: %v", err)
+// restoreSecrets returns each path to what it held: removed when it held nothing.
+func (h *AppHandler) restoreSecrets(before map[string]map[string]string) {
+	for path, held := range before {
+		var err error
+		if held == nil {
+			err = h.vault.Delete(path)
+		} else {
+			err = h.vault.Put(path, held)
+		}
+		if err != nil {
+			log.Printf("app secret: put back a value after a refused write: %v", err)
 		}
 	}
 }

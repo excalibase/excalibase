@@ -122,3 +122,39 @@ func TestCredentialLookingVariableIsRefusedWhenNoVaultCanHoldIt(t *testing.T) {
 		t.Fatal("an app was saved with the key as a plain value")
 	}
 }
+
+// A write that is refused after its values were stored removes only what it
+// created. A secret the app already held under that name keeps its old value.
+func TestRefusedUpdateRestoresAnExistingSecretAndRemovesAFreshOne(t *testing.T) {
+	vault := newFakeVault()
+	store := &conflictingAppStore{newFakeAppStore()}
+	h := NewAppHandler(store, newFakeSources("storefront_db"), testAppRoute)
+	h.SetAppLimits(fakeAppLimits{limit: testAppLimit})
+	h.SetSecretVault(vault)
+	r := chi.NewRouter()
+	r.Use(callerWithProjectRole(domain.OrgRoleDeveloper))
+	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })
+
+	secretRef := apphost.AppSecretRef(appTestProject, "app-1", "API_TOKEN")
+	vault.data[secretRef.Path] = map[string]string{secretRef.Key: "the-old-value"}
+	existing := secretRef
+	store.apps[appKey(appTestProject, "app-1")] = apphost.App{
+		ID: "app-1", ProjectID: appTestProject, Name: "web", Image: "nginx:1", Port: 8080, Replicas: 1, Version: 1,
+		Tier: domain.Standard, Status: apphost.StatusCreated,
+		Env: []apphost.EnvVar{{Name: "API_TOKEN", Kind: apphost.KindSecret, Secret: &existing}},
+	}
+
+	w := doAppRequest(t, r, http.MethodPatch, "/api/projects/"+appTestProject+"/apps/app-1/", map[string]any{
+		"env": []map[string]any{literal("API_TOKEN", "the-new-value"), literal("NEW_SECRET", "fresh")},
+	})
+	if w.Code == http.StatusOK {
+		t.Fatalf("the conflicting store must refuse the write, got %d", w.Code)
+	}
+	if got := vault.data[secretRef.Path][secretRef.Key]; got != "the-old-value" {
+		t.Fatalf("the existing secret was lost or changed: %q", got)
+	}
+	fresh := apphost.AppSecretRef(appTestProject, "app-1", "NEW_SECRET")
+	if _, kept := vault.data[fresh.Path]; kept {
+		t.Fatal("a value stored for the refused write was left behind")
+	}
+}
