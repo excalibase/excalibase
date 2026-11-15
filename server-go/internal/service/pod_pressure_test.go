@@ -139,3 +139,19 @@ func TestPodPressure_ResolvesTheAlertOfANodeThatIsGone(t *testing.T) {
 		t.Fatalf("alert of a node that is gone stayed open: %+v", got)
 	}
 }
+
+// The alert names the pod that has waited longest, whichever order the cluster lists them in.
+func TestPodPressure_NamesTheOldestOfSeveralStuckPods(t *testing.T) {
+	now := time.Now()
+	source := &fakePodSource{capacity: nodePods(200, 10), pending: []k8s.PendingPod{
+		{Namespace: "a", Name: "newer", Since: now.Add(-time.Hour)},
+		{Namespace: "b", Name: "oldest", Since: now.Add(-5 * time.Hour)},
+		{Namespace: "c", Name: "middle", Since: now.Add(-2 * time.Hour)},
+	}}
+	monitor, alerts := newPressure(t, source, now)
+	monitor.Sample(context.Background())
+	got := alerts.GetActiveAlerts()
+	if len(got) != 1 || !strings.Contains(got[0].Message, "b/oldest") || !strings.Contains(got[0].Message, "3 pod(s)") {
+		t.Fatalf("alerts = %+v", got)
+	}
+}

@@ -275,3 +275,20 @@ func TestPauseService_Resume_RetryOfAStuckResumeIsNotCheckedForSlots(t *testing.
 		t.Errorf("resume calls = %d, want 1", pauser.resumeCalls)
 	}
 }
+
+// Capacity that cannot be read is not a refusal: the resume goes ahead rather than strand a paused project.
+func TestPauseService_Resume_ProceedsWhenPodSlotsCannotBeRead(t *testing.T) {
+	svc, store, pauser, _ := setupPauseTest(t)
+	store.Create(&domain.DatabaseInstance{
+		ProjectID: "p1", OrgID: "o", Status: string(domain.StatusPaused),
+		DeploymentMode: domain.ModeK8s, Tier: domain.Free, Namespace: "o-p1",
+	})
+	svc.SetPodSlots(&fakePodSource{err: errors.New("api down")})
+
+	if err := svc.Resume(context.Background(), "p1"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if pauser.resumeCalls != 1 {
+		t.Errorf("resumeCalls = %d, want 1", pauser.resumeCalls)
+	}
+}
