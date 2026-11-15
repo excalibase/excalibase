@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,7 +17,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // setupSchedulerPG spins up Postgres in a container, creates the scheduler
@@ -33,8 +33,7 @@ func setupSchedulerPG(t *testing.T) (*sql.DB, func()) {
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
+			pgready.Strategy(),
 		),
 	)
 	if err != nil {

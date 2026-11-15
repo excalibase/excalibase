@@ -9,14 +9,13 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"net/url"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/testcontainers/testcontainers-go"
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 	"github.com/excalibase/provisioning-poc/internal/storage/postgres"
@@ -49,8 +48,7 @@ func startPlatformDB() (*postgres.Store, error) {
 		pgmod.WithDatabase("platform_test"),
 		pgmod.WithUsername("platform"),
 		pgmod.WithPassword(password),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2).WithStartupTimeout(60*time.Second)),
+		testcontainers.WithWaitStrategy(pgready.Strategy()),
 	)
 	if err != nil {
 		return nil, err

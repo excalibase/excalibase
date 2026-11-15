@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"io"
 	"os"
 	"os/exec"
@@ -16,7 +17,6 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/testcontainers/testcontainers-go"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -60,8 +60,7 @@ func TestDockerBackupAdapter_R2_E2E(t *testing.T) {
 		tcpg.WithUsername("postgres"),
 		tcpg.WithPassword(pgPwd),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60*time.Second),
+			pgready.Strategy(),
 		),
 	)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"strings"
 	"testing"
 	"time"
@@ -146,7 +147,7 @@ func startPostgres(t *testing.T) *sql.DB {
 	}
 	container, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("app"), postgres.WithPassword("app-pw"),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(time.Minute)))
+		testcontainers.WithWaitStrategy(pgready.Strategy()))
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
 	}

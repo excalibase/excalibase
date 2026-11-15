@@ -7,13 +7,12 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"testing"
-	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func setupPG(t *testing.T) (*sql.DB, *sql.DB, func()) {
@@ -28,8 +27,7 @@ func setupPG(t *testing.T) (*sql.DB, *sql.DB, func()) {
 		postgres.WithUsername("superuser"),
 		postgres.WithPassword("superpass"),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
+			pgready.Strategy(),
 		),
 	)
 	if err != nil {

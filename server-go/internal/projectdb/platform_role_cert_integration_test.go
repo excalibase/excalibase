@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"encoding/pem"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"math/big"
 	"net/url"
 	"strings"
@@ -21,7 +22,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -139,8 +139,7 @@ func startCertPostgres(t *testing.T) certPostgres {
 			file("/tls/pg_hba.conf", []byte(renderedHBA(t)), 0o644),
 			file("/docker-entrypoint-initdb.d/tls.sh", []byte(initScript), 0o755),
 		),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2).WithStartupTimeout(60*time.Second)),
+		testcontainers.WithWaitStrategy(pgready.Strategy()),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

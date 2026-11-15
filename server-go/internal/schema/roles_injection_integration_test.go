@@ -6,14 +6,13 @@ import (
 	"context"
 	"database/sql"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"net/url"
 	"testing"
-	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func TestIntegration_CreateRoleStoresAHostilePasswordVerbatim(t *testing.T) {
@@ -26,8 +25,7 @@ func TestIntegration_CreateRoleStoresAHostilePasswordVerbatim(t *testing.T) {
 		postgres.WithUsername("superuser"),
 		postgres.WithPassword("superpass"),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
+			pgready.Strategy(),
 		),
 	)
 	if err != nil {

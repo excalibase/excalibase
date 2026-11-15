@@ -6,12 +6,11 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"testing"
-	"time"
 
 	"github.com/testcontainers/testcontainers-go"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
@@ -29,8 +28,7 @@ func startPlatformPostgres(ctx context.Context, t *testing.T) *pgstore.Store {
 		tcpg.WithUsername("platform"),
 		tcpg.WithPassword(pgPwd),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60*time.Second),
+			pgready.Strategy(),
 		),
 	)
 	if err != nil {

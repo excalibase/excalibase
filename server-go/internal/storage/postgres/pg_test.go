@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 const (
@@ -43,8 +43,7 @@ func testStore(t *testing.T) *Store {
 		postgres.WithUsername("platform"),
 		postgres.WithPassword(containerPwd),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
+			pgready.Strategy(),
 		),
 	)
 	if err != nil {

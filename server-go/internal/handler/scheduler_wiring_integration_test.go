@@ -9,10 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
@@ -23,7 +23,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 const wiringProjectID = "proj_wiring"
@@ -50,8 +49,7 @@ func startProjectPG(t *testing.T) (*sql.DB, map[string]map[string]string) {
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60*time.Second),
+			pgready.Strategy(),
 		),
 	)
 	if err != nil {

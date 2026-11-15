@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // startTenant runs Postgres and returns a pool logged in as a non-superuser
@@ -28,8 +28,7 @@ func startTenant(t *testing.T) (*sql.DB, *sql.DB) {
 	}
 	container, err := postgres.Run(ctx, "postgres:17-alpine",
 		postgres.WithDatabase("tenant"), postgres.WithUsername("super"), postgres.WithPassword("superpass"),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2).WithStartupTimeout(60*time.Second)))
+		testcontainers.WithWaitStrategy(pgready.Strategy()))
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
 	}
