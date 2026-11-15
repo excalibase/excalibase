@@ -13,6 +13,12 @@ import { formatBytes } from '../utils/formatBytes';
 
 type Tab = 'backups' | 'restore' | 'copy';
 
+const HIBERNATED_FAILURE = 'cannot backup a hibernated cluster';
+
+function isHibernatedFailure(backup: { error?: string }): boolean {
+  return (backup.error ?? '').includes(HIBERNATED_FAILURE);
+}
+
 export function BackupsPage() {
   const projectId = useRouteProjectId();
   const [tab, setTab] = useState<Tab>('backups');
@@ -23,12 +29,14 @@ export function BackupsPage() {
   const mysql = isMySQLProject(instance);
   const paused = instance?.status === 'PAUSED';
   const allBackups = Array.isArray(backupData?.backups) ? backupData.backups : [];
-  // A paused database takes no scheduled backups, so a failed run listed here is noise.
-  const backups = paused ? allBackups.filter((b) => b.status !== 'FAILED') : allBackups;
-  // The pause takes a final backup and nothing runs after it: the newest completed one.
-  const finalBackup = paused
+  // A paused database cannot be backed up, so the failures CNPG recorded for
+  // that reason are noise; any other failure is a real problem and stays.
+  const backups = paused ? allBackups.filter((b) => !(b.status === 'FAILED' && isHibernatedFailure(b))) : allBackups;
+  const newestCompleted = paused
     ? backups.filter((b) => b.status === 'COMPLETED').sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]
     : undefined;
+  // Call it the final backup only when it is the one the pause took.
+  const isPauseBackup = !!newestCompleted && newestCompleted.id === instance?.pauseBackupId;
   const triggerBackup = useTriggerBackup();
   // Copying into a new project ships dark (EXC-667).
   const { enabled: copyOn } = useFeatureEnabled('dbcopy');
@@ -57,7 +65,11 @@ export function BackupsPage() {
       {paused && (
         <div data-testid="paused-backups" className="px-4 py-3 rounded-lg text-sm border border-border-primary bg-surface-card text-text-secondary">
           Paused: nightly backups stop while paused
-          {finalBackup ? `; the pause took a final backup ${finalBackup.id}` : ''}
+          {newestCompleted
+            ? isPauseBackup
+              ? `; the pause took a final backup ${newestCompleted.id}`
+              : `; the latest completed backup is ${newestCompleted.id}`
+            : ''}
         </div>
       )}
 
