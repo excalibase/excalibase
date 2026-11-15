@@ -106,3 +106,27 @@ func TestNewRefusesAnEmptyBudget(t *testing.T) {
 	}()
 	New(0, time.Minute)
 }
+
+// An attempt that was refused for load never had its password checked, so it
+// must not spend the account's budget.
+func TestRefundGivesBackAnAttemptThatWasNeverChecked(t *testing.T) {
+	g := New(2, time.Hour)
+	for i := 0; i < 5; i++ {
+		if !g.Attempt("alice") {
+			t.Fatalf("attempt %d refused", i)
+		}
+		g.Refund("alice")
+	}
+	if !g.Attempt("alice") || !g.Attempt("alice") || g.Attempt("alice") {
+		t.Fatal("refunds must leave exactly the original budget")
+	}
+}
+
+func TestRefundNeverGoesBelowZeroOrCreatesAnEntry(t *testing.T) {
+	g := New(1, time.Hour)
+	g.Refund("nobody")
+	g.Refund("nobody")
+	if !g.Attempt("nobody") || g.Attempt("nobody") {
+		t.Fatal("an unmatched refund changed the budget")
+	}
+}

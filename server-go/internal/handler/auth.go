@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -136,7 +136,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
-		httpError(w, "internal error", http.StatusInternalServerError)
+		writePasswordBusy(w, err)
 		return
 	}
 
@@ -360,18 +360,45 @@ func (h *AuthHandler) issueRegistrationToken(w http.ResponseWriter, r *http.Requ
 // "Create token" UI which sets ExpiresAt=nil.
 const sessionTokenTTL = 12 * time.Hour
 
-// checkPassword is swapped in tests to count password checks.
-var checkPassword = auth.CheckPassword
+// verifyPassword is swapped in tests to count password checks.
+var verifyPassword = auth.VerifyPassword
+
+// writePasswordBusy answers a password check the gate refused with a fast 503
+// and Retry-After; any other error is an internal one.
+func writePasswordBusy(w http.ResponseWriter, err error) {
+	if errors.Is(err, auth.ErrBusy) {
+		w.Header().Set("Retry-After", strconv.Itoa(passwordBusyRetrySeconds))
+		httpError(w, "server is busy; try again shortly", http.StatusServiceUnavailable)
+		return
+	}
+	httpError(w, "internal error", http.StatusInternalServerError)
+}
+
+const passwordBusyRetrySeconds = 2
+
+// refundAttempt gives back an attempt whose password was never checked, so a
+// flood cannot lock an account by crowding it out.
+func (h *AuthHandler) refundAttempt(addressKey, guardKey string, known bool) {
+	h.loginGuard.Refund(addressKey)
+	h.accountSlowdown.Refund(guardKey, known)
+}
 
 // dummyPasswordHash is checked when no account matches, so an unknown
-// identifier costs the same hash as a wrong password.
-var dummyPasswordHash = sync.OnceValue(func() string {
+// identifier costs the same hash as a wrong password. A refused or failed
+// hash is not remembered; the next sign-in tries again.
+var dummyHashCache atomic.Pointer[string]
+
+func dummyHash() (string, error) {
+	if cached := dummyHashCache.Load(); cached != nil {
+		return *cached, nil
+	}
 	hash, err := auth.HashPassword(auth.GenerateToken())
 	if err != nil {
-		log.Printf("ERROR: dummy password hash: %v", err)
+		return "", err
 	}
-	return hash
-})
+	dummyHashCache.Store(&hash)
+	return hash, nil
+}
 
 // Login signs in with a username or an e-mail address in the username field.
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -415,11 +442,22 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	// A service principal has no password and must never hold a session: its
 	// only credential is a capability token minted by a platform admin. Every
 	// refusal hashes once and reads the same, so the form confirms nothing.
-	hash := dummyPasswordHash()
+	hash, err := dummyHash()
+	if err != nil {
+		h.refundAttempt(addressKey, guardKey, user != nil)
+		writePasswordBusy(w, err)
+		return
+	}
 	if user != nil && !user.IsService() {
 		hash = user.PasswordHash
 	}
-	if !checkPassword(req.Password, hash) || user == nil || user.IsService() {
+	matched, err := verifyPassword(req.Password, hash)
+	if err != nil {
+		h.refundAttempt(addressKey, guardKey, user != nil)
+		writePasswordBusy(w, err)
+		return
+	}
+	if !matched || user == nil || user.IsService() {
 		httpError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -605,7 +643,7 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
-		httpError(w, "failed to hash password", http.StatusInternalServerError)
+		writePasswordBusy(w, err)
 		return
 	}
 
