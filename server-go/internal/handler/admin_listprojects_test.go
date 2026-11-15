@@ -176,3 +176,25 @@ func TestAdmin_QueryLogs_NoLokiURL(t *testing.T) {
 }
 
 func (_ errInstanceStore) RecordRollbackRetry(string, string, string, string) error { return nil }
+
+func TestAdmin_ListAllProjects_MarksProjectsOfSuspendedOwners(t *testing.T) {
+	h := adminWithStore(nil)
+	h.SetSuspendedOrgs(func(context.Context) (map[string]bool, error) { return map[string]bool{"org-2": true}, nil })
+	w := httptest.NewRecorder()
+	h.ListAllProjects(w, httptest.NewRequest("GET", "/api/admin/projects", nil))
+
+	var out []map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &out)
+	suspended := 0
+	for _, row := range out {
+		if row["ownerSuspended"] == true {
+			suspended++
+			if row["orgId"] != "org-2" {
+				t.Fatalf("wrong project marked: %v", row)
+			}
+		}
+	}
+	if suspended != 1 {
+		t.Fatalf("marked %d projects, want 1", suspended)
+	}
+}

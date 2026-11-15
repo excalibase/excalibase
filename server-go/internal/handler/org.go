@@ -173,15 +173,9 @@ func (h *OrgHandler) ListMyOrgs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var orgs []*domain.Org
-	var err error
-
-	// Platform admins see all orgs
-	if auth.HasPermission(user.Role, auth.PermViewAny) {
-		orgs, err = h.orgStore.FindAllOrgs(r.Context())
-	} else {
-		orgs, err = h.orgStore.FindOrgsByUser(r.Context(), user.ID)
-	}
+	// A platform admin lists the orgs they belong to like anyone else; every
+	// customer org is reached through the admin console (EXC-757).
+	orgs, err := h.orgStore.FindOrgsByUser(r.Context(), user.ID)
 
 	if err != nil {
 		httpError(w, "failed to list orgs", http.StatusInternalServerError)

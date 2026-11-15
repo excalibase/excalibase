@@ -41,6 +41,8 @@ type ProvisioningHandler struct {
 	instances storage.InstanceStore
 	// activity supplies lastSeenAt for GET / list; nil → field omitted.
 	activity storage.ProjectActivityStore
+	// suspendedOrgs names the orgs whose owner is suspended (EXC-757); nil → no marker.
+	suspendedOrgs SuspendedOrgsLookup
 	// corsStore backs /cors and the corsAllowedOrigins field on /info;
 	// nil → /cors returns 503 and /info reports no origins.
 	corsStore storage.ProjectCorsStore

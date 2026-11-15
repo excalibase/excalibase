@@ -40,7 +40,12 @@ type AdminHandler struct {
 	k8sClient k8s.KubeClient
 	lokiURL   string
 	prom      promQuerier // nil-safe — usage stats fall back to "unknown" if Prometheus is unreachable
+	// suspendedOrgs marks projects whose owner is suspended; nil leaves them unmarked.
+	suspendedOrgs SuspendedOrgsLookup
 }
+
+// SetSuspendedOrgs wires the suspended-owner lookup the project list marks rows with.
+func (h *AdminHandler) SetSuspendedOrgs(lookup SuspendedOrgsLookup) { h.suspendedOrgs = lookup }
 
 // promQuerier is a tiny shim for the one Prometheus call we make from the
 // admin handler (per-pod CPU + memory). Implemented as a free function in
@@ -90,6 +95,14 @@ func (h *AdminHandler) ListAllProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	suspended := map[string]bool{}
+	if h.suspendedOrgs != nil {
+		if orgs, err := h.suspendedOrgs(r.Context()); err != nil {
+			log.Printf("WARN: suspended owners lookup failed: %v", err)
+		} else {
+			suspended = orgs
+		}
+	}
 	out := make([]map[string]interface{}, 0, len(instances))
 	for _, inst := range instances {
 		row := map[string]interface{}{
@@ -102,6 +115,7 @@ func (h *AdminHandler) ListAllProjects(w http.ResponseWriter, r *http.Request) {
 			"dbType":             inst.DBType,
 			"createdAt":          inst.CreatedAt,
 			"deletionProtection": inst.DeletionProtection != nil && *inst.DeletionProtection,
+			"ownerSuspended":     suspended[inst.OrgID],
 		}
 		if h.prom != nil {
 			// Prometheus container_* metrics use the project pod label;

@@ -476,6 +476,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "token creation failed", http.StatusInternalServerError)
 		return
 	}
+	h.recordLogin(r, user)
 
 	writeJSON(w, map[string]interface{}{
 		// Token is also returned in the body so SDK / curl callers can
@@ -485,6 +486,23 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		"expiresAt": expiry,
 		"user":      user,
 	})
+}
+
+// LoginRecorder is the optional store capability that remembers the last sign-in.
+type LoginRecorder interface {
+	RecordUserLogin(ctx context.Context, userID, ip string, at time.Time) error
+}
+
+// recordLogin stores when and from where the account signed in, for the admin
+// console. Best effort: a failed bookkeeping write never fails a sign-in.
+func (h *AuthHandler) recordLogin(r *http.Request, user *domain.User) {
+	recorder, ok := h.userStore.(LoginRecorder)
+	if !ok {
+		return
+	}
+	if err := recorder.RecordUserLogin(r.Context(), user.ID, clientIP(r), time.Now()); err != nil {
+		log.Printf("WARN: record sign-in for %s: %v", user.ID, err)
+	}
 }
 
 // findLoginUser resolves a sign-in identifier. One with "@" is an address,
