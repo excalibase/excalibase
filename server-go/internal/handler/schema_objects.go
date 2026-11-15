@@ -48,6 +48,10 @@ func (h *SchemaHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "name is required", http.StatusBadRequest)
 		return
 	}
+	if (req.Login || req.Password != nil) && !callerMay(r, PermCreateLoginRole) {
+		httpError(w, errCredentialAdminOnly, http.StatusForbidden)
+		return
+	}
 	if err := h.introspector.CreateRole(r.Context(), db, req); err != nil {
 		schemaError(w, err, roleErrorStatus(err))
 		return

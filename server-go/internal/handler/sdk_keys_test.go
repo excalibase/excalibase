@@ -67,6 +67,10 @@ func (s sdkKeyOrgs) FindOrgByID(_ context.Context, id string) (*domain.Org, erro
 }
 
 func newSDKKeysRouter(keys SDKKeyManager) (chi.Router, *sdkKeyAudit) {
+	return newSDKKeysRouterAs(keys, domain.OrgRoleAdmin)
+}
+
+func newSDKKeysRouterAs(keys SDKKeyManager, role string) (chi.Router, *sdkKeyAudit) {
 	instances := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
 		"proj-a":      {ProjectID: "proj-a", OrgID: "org-1"},
 		"proj-orphan": {ProjectID: "proj-orphan", OrgID: "org-gone"},
@@ -79,6 +83,7 @@ func newSDKKeysRouter(keys SDKKeyManager) (chi.Router, *sdkKeyAudit) {
 			next.ServeHTTP(w, r.WithContext(auth.SetUser(r.Context(), &domain.User{ID: "dev-1"})))
 		})
 	})
+	r.Use(callerWithProjectRole(role))
 	r.Route("/api/projects/{projectId}/sdk-keys", h.Routes)
 	return r, audit
 }
@@ -248,5 +253,32 @@ func TestSDKKeysWithoutAnAuditWriterOrSignedInUser(t *testing.T) {
 	}
 	if len(audit.entries) != 1 || audit.entries[0].UserID != "" {
 		t.Fatalf("audit: %+v", audit.entries)
+	}
+}
+
+// EXC-761: a secret (service-role) key is a credential above a Developer, so a
+// Developer's request for one is refused before auth is ever called; a
+// publishable key, which grants nothing, is still theirs to make.
+func TestSDKKeysSecretKeyIsRefusedBelowAdmin(t *testing.T) {
+	for _, role := range []string{domain.OrgRoleViewer, domain.OrgRoleDeveloper, ""} {
+		t.Run("role="+role, func(t *testing.T) {
+			keys := &fakeSDKKeys{}
+			r, audit := newSDKKeysRouterAs(keys, role)
+			w := doRequest(r, "POST", "/api/projects/proj-a/sdk-keys/", `{"name":"server","keyType":"secret"}`)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("got %d %s, want 403", w.Code, w.Body.String())
+			}
+			if len(keys.created) != 0 || len(audit.entries) != 0 {
+				t.Fatal("a refused request reached auth or the audit log")
+			}
+		})
+	}
+}
+
+func TestSDKKeysPublishableKeyStaysWithDevelopers(t *testing.T) {
+	keys := &fakeSDKKeys{}
+	r, _ := newSDKKeysRouterAs(keys, domain.OrgRoleDeveloper)
+	if w := doRequest(r, "POST", "/api/projects/proj-a/sdk-keys/", `{"name":"web","keyType":"publishable"}`); w.Code != http.StatusCreated {
+		t.Fatalf("got %d %s, want 201", w.Code, w.Body.String())
 	}
 }

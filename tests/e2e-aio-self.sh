@@ -46,7 +46,7 @@ section(){ echo ""; cyan "=== $* ==="; }
 ADMIN_PASS=${ADMIN_PASSWORD:-$( [ -n "${ADMIN_PASSWORD_FILE:-}" ] && cat "$ADMIN_PASSWORD_FILE" )}
 if [ -z "$ADMIN_PASS" ]; then red "set ADMIN_PASSWORD or ADMIN_PASSWORD_FILE to the platform admin's password"; exit 1; fi
 
-BOOT_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H 'Content-Type: application/json' \
+BOOT_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}")
 ADMIN_PAT=$(echo "$BOOT_LOGIN" | jq -r '.token' 2>/dev/null)
 [ -z "$ADMIN_PAT" ] || [ "$ADMIN_PAT" = "null" ] && { red "Initial admin login failed: $BOOT_LOGIN"; exit 1; }
@@ -67,7 +67,7 @@ curl -sf "$API_GQL_MGMT/actuator/health" | grep -q '"status":"UP"' \
 section "F2. Cookie auth, scope, expiry, security headers"
 COOKIE_JAR=$(mktemp); trap "rm -f $COOKIE_JAR" EXIT
 
-LOGIN_RESP=$(curl -s -i -c "$COOKIE_JAR" -X POST "$API_PROV/api/auth/login" \
+LOGIN_RESP=$(curl -s -i -c "$COOKIE_JAR" -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}")
 
@@ -197,7 +197,7 @@ if [ -z "${SKIP_PROVISIONED:-}" ]; then
   curl -sf -X POST -H "$PAT_HDR" -H 'Content-Type: application/json' \
     -d '{"username":"alice","email":"alice@e2e.test","password":"AliceP@ss123","role":"user"}' \
     "$API_PROV/api/auth/users" > /dev/null 2>&1 || true
-  ALICE_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H 'Content-Type: application/json' \
+  ALICE_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' \
     -d '{"username":"alice","password":"AliceP@ss123"}' 2>/dev/null)
   ALICE_PAT=$(echo "$ALICE_LOGIN" | jq -r '.token' 2>/dev/null)
   if [ -n "$ALICE_PAT" ] && [ "$ALICE_PAT" != "null" ]; then
@@ -558,7 +558,7 @@ if [ -n "$EMAIL_E2E" ]; then
   TEST_PASS="EmailTest@Pass123"
 
   # Register a new platform user with the sandbox-allowed email.
-  REG_RESP=$(curl -s -X POST "$API_PROV/api/auth/register" \
+  REG_RESP=$(curl -s -X POST "$API_PROV/api/auth/register" -H "X-Return-Session-Token: true" \
     -H 'Content-Type: application/json' \
     -d "{\"username\":\"$TEST_USER\",\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASS\"}")
   if echo "$REG_RESP" | jq -e '.token // .access_token' > /dev/null 2>&1; then
@@ -630,7 +630,7 @@ fi
 section "F22. Rate limiting (runs last)"
 HITS_429=0
 for i in $(seq 1 60); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_PROV/api/auth/login" \
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" \
     -H 'Content-Type: application/json' \
     -d '{"username":"nope","password":"wrong"}')
   [ "$code" = "429" ] && HITS_429=$((HITS_429+1))

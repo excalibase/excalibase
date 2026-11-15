@@ -258,11 +258,14 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Platform admins (PermViewAny) see everything. An unauthenticated request
-	// that reached this far also sees the unscoped list — but in practice this
-	// route is mounted behind RequireAuth, so user is non-nil; the nil-guard is
-	// retained only as defense against a misconfigured mount.
-	if user == nil || auth.HasPermission(user.Role, auth.PermViewAny) {
+	// No caller is no list: a mount that lost its auth middleware must answer
+	// 401, never hand every tenant's projects to whoever asks (EXC-761).
+	if user == nil {
+		httpError(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	// Platform roles with PermViewAny see everything.
+	if auth.HasPermission(user.Role, auth.PermViewAny) {
 		writeJSON(w, h.projectListResponse(r.Context(), allInstances))
 		return
 	}

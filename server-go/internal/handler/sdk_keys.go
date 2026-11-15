@@ -83,6 +83,10 @@ func (h *SDKKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "name must be "+strconv.Itoa(maxSDKKeyNameLength)+" characters or fewer", http.StatusBadRequest)
 		return
 	}
+	if req.KeyType == "secret" && !callerMay(r, PermCreateServiceKey) {
+		httpError(w, errCredentialAdminOnly, http.StatusForbidden)
+		return
+	}
 	projectID, orgSlug, ok := h.resolve(w, r)
 	if !ok {
 		return

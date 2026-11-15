@@ -2073,7 +2073,10 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 		w.Write([]byte("ok"))
 	})
 	r.Get("/api/config", serveConfig(cfg, d.features))
-	r.Get("/api/capacity", auth.RequireAuth(http.HandlerFunc(d.capDeps.serveCapacity)).ServeHTTP)
+	// Cluster CPU and memory, platform-wide tier counts and raw runtime errors
+	// are the operator's, not any signed-in customer's.
+	r.Get("/api/capacity", auth.RequireAuth(auth.RequirePermission(auth.PermViewAny)(
+		http.HandlerFunc(d.capDeps.serveCapacity))).ServeHTTP)
 
 	mountProvisioningRoutes(r, sqlStore, store, d)
 	mountSimpleAuthRoutes(r, sqlStore, store, d)
@@ -2572,15 +2575,15 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	// Browser-origin allowlist (EXC-23): it decides which web apps may call
 	// the project's data plane, so reads and writes carry the same Developer+
 	// gate as the other data-plane authoring surfaces.
-	// SDK api keys (EXC-10): any member sees prefixes; generating and
-	// revoking are Developer+. The browser never holds the credential auth
+	// SDK api keys (EXC-10): any member sees prefixes; a publishable key is
+	// Developer+, a secret (service-role) key is Admin. The browser never holds the credential auth
 	// is called with.
 	r.Route("/api/projects/{projectId}/sdk-keys", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
-		d.sdkKeysHandler.Routes(r)
+		d.sdkKeysHandler.Routes(r) // a secret (service-role) key is Admin-only, checked in Create
 	})
 	mountMetricsEndpoint(r, sqlStore, store, d)
 	mountProjectContainers(r, sqlStore, store, d)
@@ -2742,7 +2745,10 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			d.storageHandler.Routes(r)
 			r.With(features.Require(d.features, features.AppStorage)).Put("/buckets/{bucket}/access", d.storageHandler.UpdateBucketAccess)
 			if d.s3KeysHandler != nil {
-				r.With(features.Require(d.features, features.S3)).Group(d.s3KeysHandler.Routes)
+				// An S3 key is a credential: minting or revoking one is Admin
+				// work, as it is for every other project credential.
+				r.With(features.Require(d.features, features.S3),
+					handler.RequireCredentialPermission(handler.PermCreateAccessKey)).Group(d.s3KeysHandler.Routes)
 			}
 		})
 		mountAppStorage(r, sqlStore, store, d)

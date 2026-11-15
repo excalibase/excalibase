@@ -434,11 +434,11 @@ func TestRBACAdminHasAllPermissions(t *testing.T) {
 
 func TestRBACOperatorPermissions(t *testing.T) {
 	allowed := []Permission{
-		PermProvision, PermDelete, PermViewInstances, PermViewCredentials,
+		PermProvision, PermViewInstances, PermViewCredentials,
 		PermManageBackups, PermApplyMigrations, PermManageSnapshots,
 		PermManageFunctions, PermViewAny,
 	}
-	denied := []Permission{PermRestore, PermManageSetup, PermManageUsers}
+	denied := []Permission{PermRestore, PermManageSetup, PermManageUsers, PermDelete}
 
 	for _, perm := range allowed {
 		if !HasPermission("platform_operator", perm) {

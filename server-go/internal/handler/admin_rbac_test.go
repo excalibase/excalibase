@@ -48,8 +48,8 @@ func adminRouterWith(role string, token *domain.AccessToken, h *AdminHandler) ht
 // TestAdmin_DestructiveRoutesRBAC pins the RBAC on the admin surface (SEC-C6):
 // a read permission (view_any) must NOT authorize destructive operations. A
 // platform_viewer can list but never force-drop a project or revoke an org; a
-// platform_operator can force-drop stuck projects but not revoke a whole org
-// (a cross-tenant governance action reserved for platform_admin).
+// platform_operator is read-only like Studio says: it can neither force-drop a
+// project nor revoke a whole org, both reserved for platform_admin (EXC-761).
 func TestAdmin_DestructiveRoutesRBAC(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -62,7 +62,8 @@ func TestAdmin_DestructiveRoutesRBAC(t *testing.T) {
 		{"viewer cannot revoke org", "platform_viewer", "DELETE", "/api/admin/orgs/org-1?cascade=true", true},
 		{"operator cannot revoke org", "platform_operator", "DELETE", "/api/admin/orgs/org-1?cascade=true", true},
 		{"viewer can list projects", "platform_viewer", "GET", "/api/admin/projects", false},
-		{"operator can force-drop project", "platform_operator", "DELETE", "/api/admin/projects/proj-x", false},
+		{"operator cannot force-drop project", "platform_operator", "DELETE", "/api/admin/projects/proj-x", true},
+		{"admin can force-drop project", "platform_admin", "DELETE", "/api/admin/projects/proj-x", false},
 		{"admin can revoke org", "platform_admin", "DELETE", "/api/admin/orgs/org-1?cascade=true", false},
 	}
 	for _, tc := range cases {

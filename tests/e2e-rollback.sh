@@ -22,7 +22,7 @@ kubectl -n $NS port-forward svc/provisioning 24005:24005 > /dev/null 2>&1 &
 sleep 4
 
 # Login
-TOKEN=$(curl -s http://localhost:24005/api/auth/login \
+TOKEN=$(curl -s http://localhost:24005/api/auth/login -H "X-Return-Session-Token: true" \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin123"}' | jq -r '.token')
 if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then

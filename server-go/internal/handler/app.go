@@ -239,9 +239,10 @@ func (h *AppHandler) List(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
+	mayReadValues := callerMayReadAppValues(r)
 	out := make([]appResponse, 0, len(apps))
 	for _, app := range apps {
-		out = append(out, h.withRestarts(r.Context(), h.present(app)))
+		out = append(out, h.withRestarts(r.Context(), h.present(withoutValuesUnless(mayReadValues, app))))
 	}
 	writeJSON(w, out)
 }
@@ -261,7 +262,7 @@ func (h *AppHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", strconv.Itoa(app.Version))
-	writeJSON(w, h.withRestarts(r.Context(), h.present(app)))
+	writeJSON(w, h.withRestarts(r.Context(), h.present(withoutValuesUnless(callerMayReadAppValues(r), app))))
 }
 
 // Create stores a new app. The id is assigned here rather than taken from the
@@ -633,4 +634,21 @@ func (h *AppHandler) writeStoreError(w http.ResponseWriter, err error) {
 	default:
 		httpError(w, safeError(err), http.StatusInternalServerError)
 	}
+}
+
+// withoutValuesUnless returns the app with its plain variable values removed
+// unless the caller may read them. Plain values are where owners paste keys,
+// so a Viewer sees the names and kinds and nothing the variables hold. The
+// stored app is never touched.
+func withoutValuesUnless(mayRead bool, app *apphost.App) *apphost.App {
+	if mayRead {
+		return app
+	}
+	redacted := *app
+	redacted.Env = make([]apphost.EnvVar, len(app.Env))
+	for i, variable := range app.Env {
+		variable.Value = nil
+		redacted.Env[i] = variable
+	}
+	return &redacted
 }

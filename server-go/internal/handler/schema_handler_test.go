@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
@@ -39,6 +40,11 @@ const (
 // setupSchemaRouter creates a chi router with SchemaHandler wired to a real
 // PostgreSQL via testcontainers, vault unsealed with credentials stored.
 func setupSchemaRouter(t *testing.T) chi.Router {
+	return setupSchemaRouterAs(t, domain.OrgRoleAdmin)
+}
+
+// setupSchemaRouterAs serves the schema routes to a caller holding role on the project.
+func setupSchemaRouterAs(t *testing.T, role string) chi.Router {
 	t.Helper()
 	ctx := context.Background()
 
@@ -136,6 +142,7 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 	t.Setenv("SCHEMA_DB_SSLMODE", "disable")
 	h := schemaHandlerOver(t, v, "test-proj")
 	r := chi.NewRouter()
+	r.Use(callerWithProjectRole(role))
 	r.Route(testSchemaBase, h.Routes)
 	return r
 }
@@ -842,5 +849,31 @@ func TestSchemaHandler_DDLRunsUnderTheSessionTimeouts(t *testing.T) {
 	w := schemaRequest(r, "POST", "/api/schema/test-proj/query", `{"query":"SHOW lock_timeout"}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "5s") {
 		t.Fatalf("lock_timeout on the Studio pool: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// EXC-761: a LOGIN role, or any role with a password, is a database credential
+// above a Developer's rung. Nothing is created for a Developer; a role that
+// cannot log in stays theirs to make.
+func TestSchemaHandler_CreateRole_LoginNeedsAdmin(t *testing.T) {
+	r := setupSchemaRouterAs(t, domain.OrgRoleDeveloper)
+	pwd := testutil.FixturePassword("dev-login-role")
+
+	for name, body := range map[string]string{
+		"login":    `{"name":"dev_login","login":true}`,
+		"password": fmt.Sprintf(`{"name":"dev_pwd","password":%q,"login":false}`, pwd),
+	} {
+		if w := schemaRequest(r, "POST", testRolesPath, body); w.Code != http.StatusForbidden {
+			t.Errorf("%s: got %d %s, want 403", name, w.Code, w.Body.String())
+		}
+	}
+	w := schemaRequest(r, "GET", testRolesPath, "")
+	for _, refused := range []string{"dev_login", "dev_pwd"} {
+		if strings.Contains(w.Body.String(), refused) {
+			t.Errorf("role %s was created despite the refusal", refused)
+		}
+	}
+	if w := schemaRequest(r, "POST", testRolesPath, `{"name":"dev_group","login":false}`); w.Code != http.StatusCreated {
+		t.Errorf("a NOLOGIN role is a Developer's: got %d %s", w.Code, w.Body.String())
 	}
 }

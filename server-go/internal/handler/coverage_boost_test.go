@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -870,6 +872,12 @@ func TestProvisioningHandlerRoutes_NewMethodsWired(t *testing.T) {
 	h := NewProvisioningHandler(svc, &adminOrgStore{})
 
 	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			user := &domain.User{ID: "admin-1", Role: "platform_admin", Active: true}
+			next.ServeHTTP(w, req.WithContext(auth.SetUser(req.Context(), user)))
+		})
+	})
 	r.Route("/p", h.Routes)
 
 	// Routes() does not include GetLogs/RotateCredentials — just confirm it

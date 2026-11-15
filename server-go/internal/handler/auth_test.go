@@ -295,15 +295,30 @@ func TestAuthLogin_Success(t *testing.T) {
 	}
 
 	r := setupAuthRouter(t, us, ts)
-	w := doRequest(r, "POST", routeLogin, fmt.Sprintf(`{"username":%q,"password":%q}`, aliceUser, alicePwd))
+	body := fmt.Sprintf(`{"username":%q,"password":%q}`, aliceUser, alicePwd)
+	w := doRequest(r, "POST", routeLogin, body)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("login: got %d, body: %s", w.Code, w.Body.String())
 	}
+	if !strings.Contains(w.Header().Get("Set-Cookie"), "HttpOnly") {
+		t.Errorf("the session belongs in an httpOnly cookie, got %q", w.Header().Get("Set-Cookie"))
+	}
 	var resp map[string]interface{}
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["token"] == nil || resp["token"] == "" {
-		t.Error("token should be present in response")
+	// EXC-761: script on the page must not be able to read the session secret.
+	if _, present := resp["token"]; present {
+		t.Errorf("the session secret must not be in the body unless asked for, got %v", resp)
+	}
+
+	req := httptest.NewRequest("POST", routeLogin, strings.NewReader(body))
+	req.Header.Set(ReturnSessionTokenHeader, "true")
+	opted := httptest.NewRecorder()
+	r.ServeHTTP(opted, req)
+	var optedResp map[string]interface{}
+	json.NewDecoder(opted.Body).Decode(&optedResp)
+	if optedResp["token"] == nil || optedResp["token"] == "" {
+		t.Error("a caller that opts in must receive the token")
 	}
 }
 
