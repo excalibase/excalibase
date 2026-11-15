@@ -31,10 +31,15 @@ type Store struct {
 	lockDB *sql.DB
 }
 
-// lifecycleLockConns bounds how many project operations can hold a lock at
-// once. It is deliberately well below the main pool, and what the locks use
-// is never the main pool.
-const lifecycleLockConns = 16
+// lifecycleLockShare is the share of the main pool's size given to the lock
+// pool: it bounds how many project operations can hold a lock at once. The
+// locks never use the main pool itself.
+const lifecycleLockShare = 0.5
+
+// lifecycleLockConns sizes the lock pool from the main pool's size.
+func lifecycleLockConns(mainPool int) int {
+	return max(2, int(float64(mainPool)*lifecycleLockShare))
+}
 
 // scanner is satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
@@ -72,7 +77,7 @@ func NewWithMaxConns(databaseURL string, maxOpen int) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open lock pool: %w", err)
 	}
-	lockDB.SetMaxOpenConns(lifecycleLockConns)
+	lockDB.SetMaxOpenConns(lifecycleLockConns(maxOpen))
 	lockDB.SetMaxIdleConns(2)
 	lockDB.SetConnMaxLifetime(5 * time.Minute)
 	store := &Store{db: db, databaseURL: databaseURL, leaders: NewLeaderSession(db), lockDB: lockDB}

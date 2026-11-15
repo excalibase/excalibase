@@ -49,6 +49,8 @@ func TestRequestDeadline_LongRoutesAreExemptByMethodAndPattern(t *testing.T) {
 		{"POST", "/api/projects/p1/apps/a1/deploy"},
 		{"POST", "/api/projects/p1/sites/s1/deploy"},
 		{"GET", "/api/projects/p1/apps/a1/logs"},
+		{"POST", "/api/schema/p1/import"},
+		{"POST", "/api/projects/p1/apps/a1/resume"},
 		{"POST", "/mcp"},
 		{"PUT", "/storage/v1/p1/object/b/k"},
 	} {
@@ -73,6 +75,8 @@ func TestRequestDeadline_OrdinaryRoutesStayBoundedWhateverTheClientSends(t *test
 		{"GET", "/api/projects", map[string]string{"Accept": "text/event-stream"}},
 		{"GET", "/api/provision/p1/snapshot/export", nil}, // right path, wrong method
 		{"GET", "/api/provision/p1/x/logs", nil},
+		{"GET", "/api/schema/p1/import", nil},
+		{"GET", "/api/schema/p1/tables", nil},
 	} {
 		if !deadlineFor(t, tc.method, tc.path, tc.headers) {
 			t.Errorf("%s %s %v escaped the deadline", tc.method, tc.path, tc.headers)

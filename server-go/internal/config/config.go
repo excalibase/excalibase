@@ -844,7 +844,7 @@ func parsePlatformDBMaxConns(raw string) (int, error) {
 	}
 	if n < MinPlatformDBMaxConns {
 		return 0, fmt.Errorf(
-			"%d is below the minimum of %d: the control plane holds 5 standing leadership claims, plus one connection per lifecycle operation in flight and one for a query",
+			"%d is below the minimum of %d: the control plane's standing leadership claims share one connection, and it needs more for queries",
 			n, MinPlatformDBMaxConns)
 	}
 	return n, nil

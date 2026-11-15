@@ -40,7 +40,7 @@ const seg = `[^/]+`
 
 // longRoutes are the routes that stream or wait synchronously on long work:
 // log follows, deploys, backups and restores, snapshot export and download,
-// upgrades, project create, pause, resume and delete, and the prefixes that
+// table import, upgrades, project create, pause, resume and delete, and the prefixes that
 // proxy or stream (MCP, object storage, functions).
 var longRoutes = []longRoute{
 	route(`/api/projects/`+seg+`/apps/`+seg+`/logs`, http.MethodGet),
@@ -49,7 +49,8 @@ var longRoutes = []longRoute{
 	route(`/api/admin/logs`, http.MethodGet),
 	route(`/api/projects/`+seg+`/apps/`+seg+`/deploy`, http.MethodGet, http.MethodPost),
 	route(`/api/projects/`+seg+`/apps/`+seg+`/deploys/`+seg+`/redeploy`, http.MethodPost),
-	route(`/api/projects/`+seg+`/apps/`+seg+`/pause`, http.MethodPost),
+	route(`/api/projects/`+seg+`/apps/`+seg+`/(pause|resume)`, http.MethodPost),
+	route(`/api/schema/`+seg+`/import`, http.MethodPost),
 	route(`/api/projects/`+seg+`/app-templates/`+seg+`/deploy`, http.MethodPost),
 	route(`/api/projects/`+seg+`/sites/`+seg+`/deploy`, http.MethodPost),
 	route(`/api/projects/`+seg+`/sites/`+seg+`/deploys/`+seg+`/rollback`, http.MethodPost),

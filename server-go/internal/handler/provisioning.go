@@ -475,6 +475,9 @@ func (h *ProvisioningHandler) deleteResponse(projectID string, inst *domain.Data
 // is a cluster/vault detail that belongs in the server log, while the row
 // keeps the failing step so an operator can see it through GET.
 func writeDeprovisionError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrProjectNotFound):
 		httpError(w, "project not found", http.StatusNotFound)
