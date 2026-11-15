@@ -46,6 +46,9 @@ jobs:
               - 'server-go/internal/k8s/deno_fence.ts'
             ci:
               - '.github/workflows/**'
+              - 'scripts/cve-watch/**'
+              - 'tests/cve-watch/**'
+              - 'security/**'
             singlehost:
               - 'deploy/single-host/**'
             gatewayguard:
@@ -147,6 +150,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Native tag plan
         run: bash tests/release-native-tags-test.sh
+
+      - name: Vulnerability watch and release gate
+        run: |
+          bash tests/cve-watch/gate-test.sh
+          bash tests/cve-watch/report-test.sh
+          bash tests/cve-watch/plan-test.sh
 
   gateway-guard:
     name: DocumentDB gateway guard
