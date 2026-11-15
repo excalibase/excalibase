@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"log"
 	"net/http"
 	"strconv"
@@ -26,6 +27,7 @@ type AuthHandler struct {
 	orgStore      storage.OrgStore      // optional — joins an org through an invite token at registration
 	instanceStore storage.InstanceStore // optional — lets CreateToken bind a PAT to a project the caller can see
 	auditLog      auditWriter           // optional — records PAT rotations
+	signupGuard   *abuse.SignupGuard    // optional — EXC-755
 	inviteOnly    bool                  // when true, only an invite token (or the first admin) may register
 	setupTokens   storage.SetupTokenStore
 	// ceilings bound what a service token may mint or rotate for each
@@ -104,6 +106,9 @@ func (h *AuthHandler) SetAuditLog(auditLog auditWriter) { h.auditLog = auditLog 
 // keeps registration open for back-compat / self-hosted single-tenant use.
 func (h *AuthHandler) SetInviteOnly(v bool) { h.inviteOnly = v }
 
+// SetSignupGuard refuses throwaway mail and floods of sign-ups from one network (EXC-755); nil allows all.
+func (h *AuthHandler) SetSignupGuard(guard *abuse.SignupGuard) { h.signupGuard = guard }
+
 func (h *AuthHandler) SetOrgStore(orgStore storage.OrgStore) {
 	h.orgStore = orgStore
 }
@@ -148,6 +153,10 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isFirstUser := len(domain.HumanUsers(allUsers)) == 0
+
+	if !isFirstUser && !h.admitSignup(w, r, req.Email) {
+		return
+	}
 
 	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, req.Email, isFirstUser)
 	if status != 0 {
@@ -637,6 +646,10 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// An admin-made account meets the same rules a sign-up does.
 	if !isValidEmail(req.Email) {
 		httpError(w, "invalid email format", http.StatusBadRequest)
+		return
+	}
+	if err := h.signupGuard.CheckEmail(r.Context(), req.Email); err != nil {
+		writeSignupRefusal(w, err)
 		return
 	}
 	if msg := isValidPassword(req.Password); msg != "" {

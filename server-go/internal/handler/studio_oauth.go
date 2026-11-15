@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/studiooauth"
@@ -108,7 +109,7 @@ func (h *StudioOAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, finishRefusal(err))
 		return
 	}
-	user, created, err := h.accountFor(r.Context(), identity, inviteHash)
+	user, created, err := h.accountFor(withClientAddr(r.Context(), clientaddr.FromRequest(r)), identity, inviteHash)
 	if err != nil {
 		h.refuse(w, r, accountRefusal(err))
 		return
@@ -306,6 +307,9 @@ func (h *StudioOAuthHandler) checkSignUp(ctx context.Context, address, inviteHas
 	}
 	if len(domain.HumanUsers(users)) == 0 {
 		return signInRefusal("setup_required")
+	}
+	if err := h.auth.admitOAuthSignup(ctx, address); err != nil {
+		return err
 	}
 	if inviteHash == "" {
 		if h.auth.inviteOnly {
