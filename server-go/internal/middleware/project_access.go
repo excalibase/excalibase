@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -141,21 +142,57 @@ func ProjectAccessFromContext(ctx context.Context) *ProjectAccess {
 // The data plane is where such a project stops being served — see
 // GetProjectInfo.
 func ResolveProjectAccess(ctx context.Context, user *domain.User, token *domain.AccessToken, projectID string, instStore storage.InstanceStore, orgStore storage.OrgStore) *ProjectAccess {
+	access, _ := resolveProjectAccess(ctx, user, token, projectID, instStore, orgStore)
+	return access
+}
+
+// resolveProjectAccess is ResolveProjectAccess that also says when the
+// answer is "the database could not tell" (the error satisfies
+// storage.IsUnavailable) rather than "no access": callers turn that into 503,
+// never into the 404 that means the project does not exist.
+func resolveProjectAccess(ctx context.Context, user *domain.User, token *domain.AccessToken, projectID string, instStore storage.InstanceStore, orgStore storage.OrgStore) (*ProjectAccess, error) {
 	if user == nil || !auth.TokenBoundToProject(token, projectID) {
-		return nil
+		return nil, nil
 	}
 	if auth.HasPermission(user.Role, auth.PermManageUsers) {
-		return &ProjectAccess{PlatformAdmin: true, projectID: projectID}
+		return &ProjectAccess{PlatformAdmin: true, projectID: projectID}, nil
 	}
-	inst, err := instStore.FindByProjectID(projectID)
+	inst, err := findProject(ctx, instStore, projectID)
+	if storage.IsUnavailable(err) {
+		return nil, err
+	}
 	if err != nil || inst == nil || inst.OrgID == "" || orgStore == nil {
-		return nil
+		return nil, nil
 	}
-	member, err := orgStore.GetOrgMember(ctx, inst.OrgID, user.ID)
+	memberCtx, cancel := context.WithTimeout(ctx, accessLookupTimeout)
+	defer cancel()
+	member, err := orgStore.GetOrgMember(memberCtx, inst.OrgID, user.ID)
+	if storage.IsUnavailable(err) {
+		return nil, err
+	}
 	if err != nil || member == nil {
-		return nil
+		return nil, nil
 	}
-	return &ProjectAccess{Instance: inst, Member: member, projectID: projectID}
+	return &ProjectAccess{Instance: inst, Member: member, projectID: projectID}, nil
+}
+
+// accessLookupTimeout bounds the project and membership reads every
+// project-scoped request makes, so a full pool costs seconds, not the request.
+const accessLookupTimeout = 3 * time.Second
+
+// contextProjectFinder is an InstanceStore that can bound its project read.
+type contextProjectFinder interface {
+	FindByProjectIDContext(ctx context.Context, projectID string) (*domain.DatabaseInstance, error)
+}
+
+func findProject(ctx context.Context, instStore storage.InstanceStore, projectID string) (*domain.DatabaseInstance, error) {
+	finder, ok := instStore.(contextProjectFinder)
+	if !ok {
+		return instStore.FindByProjectID(projectID)
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, accessLookupTimeout)
+	defer cancel()
+	return finder.FindByProjectIDContext(lookupCtx, projectID)
 }
 
 // RequireProjectAccess binds the {projectId} in the path to the caller before
@@ -227,6 +264,8 @@ func RequireProjectRoleForWrites(minRole string, instStore storage.InstanceStore
 	}
 }
 
+const errBodyUnavailable = `{"error":"service temporarily unavailable","code":"unavailable"}`
+
 // gateProjectAccess resolves access (reusing a cached resolution when the
 // request already passed RequireProjectAccess) and writes 401/404 on refusal.
 func gateProjectAccess(w http.ResponseWriter, r *http.Request, instStore storage.InstanceStore, orgStore storage.OrgStore) (*ProjectAccess, bool) {
@@ -238,7 +277,15 @@ func gateProjectAccess(w http.ResponseWriter, r *http.Request, instStore storage
 	}
 	access := ProjectAccessFromContext(ctx)
 	if access == nil {
-		access = ResolveProjectAccess(ctx, user, auth.GetToken(ctx), chi.URLParam(r, "projectId"), instStore, orgStore)
+		var err error
+		access, err = resolveProjectAccess(ctx, user, auth.GetToken(ctx), chi.URLParam(r, "projectId"), instStore, orgStore)
+		if err != nil {
+			w.Header().Set("Retry-After", "5")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(errBodyUnavailable))
+			return nil, false
+		}
 	}
 	if access == nil {
 		http.Error(w, errBodyProjectNotFound, http.StatusNotFound)

@@ -13,6 +13,7 @@ const refusals: Record<string, string> = {
   invite_only: 'Sign-up here needs an invite. Use the link from your invite.',
   invite_invalid: 'That invite is invalid, expired, or was issued to a different email address.',
   unavailable: 'That sign-in provider is not available.',
+  busy: 'Sign-in is busy right now. Please try again in a few seconds.',
   failed: 'Sign-in failed. Please try again.',
 };
 

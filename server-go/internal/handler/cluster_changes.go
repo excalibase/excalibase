@@ -113,6 +113,9 @@ func decodeStrict(w http.ResponseWriter, r *http.Request, into interface{}) bool
 // writeClusterChangeError answers a refusal with its reason and a platform
 // failure with nothing but that it failed.
 func writeClusterChangeError(w http.ResponseWriter, projectID, what string, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	writeClusterError(w, projectID, what, errClusterChangeFailed, err)
 }
 

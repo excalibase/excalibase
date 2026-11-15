@@ -370,6 +370,9 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, into any) error 
 }
 
 func (h *AppDeployHandler) writeDiskError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, apphost.ErrInvalidDisk), errors.Is(err, service.ErrAppDiskSameSize):
 		httpError(w, err.Error(), http.StatusBadRequest)
@@ -426,6 +429,9 @@ func (h *AppDeployHandler) lifecycleAccepted(w http.ResponseWriter, r *http.Requ
 const registryRetryAfter = "60"
 
 func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, apphost.ErrInvalidImage), errors.Is(err, appregistry.ErrInternalImage):
 		httpError(w, err.Error(), http.StatusBadRequest)

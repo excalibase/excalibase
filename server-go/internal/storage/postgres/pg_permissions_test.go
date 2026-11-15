@@ -232,7 +232,7 @@ func tableExists(t *testing.T, store *Store, name string) bool {
 func TestPermissions_MigrationDownAndUp(t *testing.T) {
 	store := testStore(t)
 	tables := []string{"api_permissions", "tracked_functions", "function_permissions", "permission_versions"}
-	if err := store.m.Migrate(migrationBeforePermissions); err != nil {
+	if err := store.migrateTo(migrationBeforePermissions); err != nil {
 		t.Fatalf("migrate down to %d: %v", migrationBeforePermissions, err)
 	}
 	for _, table := range append(tables, "legacy_permissions_migrated") {
@@ -240,7 +240,7 @@ func TestPermissions_MigrationDownAndUp(t *testing.T) {
 			t.Errorf("%s survived the down migration", table)
 		}
 	}
-	if err := store.m.Migrate(migrationPermissions); err != nil {
+	if err := store.migrateTo(migrationPermissions); err != nil {
 		t.Fatalf("migrate up to %d: %v", migrationPermissions, err)
 	}
 	for _, table := range tables {
@@ -264,7 +264,7 @@ func TestPermissions_LegacyAccessStoresAreGone(t *testing.T) {
 
 func TestPermissions_LegacyDropDownRecreatesEmptyStores(t *testing.T) {
 	store := testStore(t)
-	if err := store.m.Migrate(migrationPermissions); err != nil {
+	if err := store.migrateTo(migrationPermissions); err != nil {
 		t.Fatalf("migrate down to %d: %v", migrationPermissions, err)
 	}
 	for _, table := range legacyAccessTables {
@@ -276,7 +276,7 @@ func TestPermissions_LegacyDropDownRecreatesEmptyStores(t *testing.T) {
 		VALUES ('g1', 'p', 'public.orders', '{SELECT}', 'service')`); err == nil {
 		t.Error("the recreated table_grants lost its role constraint")
 	}
-	if err := store.m.Migrate(migrationLegacyDropped); err != nil {
+	if err := store.migrateTo(migrationLegacyDropped); err != nil {
 		t.Fatalf("migrate up to %d: %v", migrationLegacyDropped, err)
 	}
 	for _, table := range legacyAccessTables {

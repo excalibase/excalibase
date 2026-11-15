@@ -125,6 +125,9 @@ func templatePath(w http.ResponseWriter, r *http.Request) (string, string, bool)
 }
 
 func writeTemplateError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	var refused *service.TemplateRefusedError
 	var failed *service.TemplateFailedError
 	var incomplete *service.TemplateRollbackError

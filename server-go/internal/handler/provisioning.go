@@ -109,6 +109,9 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 // and nothing failed on the server's side of the contract; the project is in
 // a state that has not settled yet, and the same call repeated converges.
 func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, projectID string, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	if errors.Is(err, service.ErrPauseUnsupported) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -437,6 +440,9 @@ const errDeletionStopFailed = "the project could not be stopped for deletion and
 func (h *ProvisioningHandler) CancelDeletion(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	err := h.svc.CancelDeletion(r.Context(), projectID)
+	if err != nil && writeIfPoolBusy(w, err) {
+		return
+	}
 	var limitErr *service.RestoreProjectLimitError
 	switch {
 	case err == nil:
@@ -479,6 +485,9 @@ func (h *ProvisioningHandler) deleteResponse(projectID string, inst *domain.Data
 // is a cluster/vault detail that belongs in the server log, while the row
 // keeps the failing step so an operator can see it through GET.
 func writeDeprovisionError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrProjectNotFound):
 		httpError(w, "project not found", http.StatusNotFound)
@@ -663,6 +672,9 @@ func (h *ProvisioningHandler) RotateCredentials(w http.ResponseWriter, r *http.R
 	projectID := chi.URLParam(r, "projectId")
 	creds, err := h.svc.RotateCredentials(r.Context(), projectID)
 	if err != nil {
+		if writeIfPoolBusy(w, err) {
+			return
+		}
 		httpError(w, safeError(err), unsettledOr(err, http.StatusInternalServerError))
 		return
 	}
@@ -677,6 +689,9 @@ func (h *ProvisioningHandler) SetMaintenanceWindow(w http.ResponseWriter, r *htt
 		return
 	}
 	if err := h.svc.SetMaintenanceWindow(r.Context(), projectID, cfg); err != nil {
+		if writeIfPoolBusy(w, err) {
+			return
+		}
 		httpError(w, safeError(err), unsettledOr(err, http.StatusBadRequest))
 		return
 	}

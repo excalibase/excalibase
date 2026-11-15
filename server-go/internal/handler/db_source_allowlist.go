@@ -160,6 +160,9 @@ func (h *DBAllowListHandler) record(r *http.Request, projectID string, asked dom
 }
 
 func writeDBAllowListError(w http.ResponseWriter, projectID string, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrDBAllowListOff):
 		httpError(w, "not found", http.StatusNotFound)

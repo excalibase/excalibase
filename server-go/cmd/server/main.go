@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -427,7 +428,7 @@ func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStor
 	// restart, and only one replica should be doing it.
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), restoreSweepLockID)
+		lock = standingLock(sqlStore, restoreSweepLockID)
 	}
 	return orchestrator.StartSweeper(context.Background(), service.NewLeadership(lock), restoreSweepInterval)
 }
@@ -481,7 +482,7 @@ func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.Platfor
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() && sqlStore != nil {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), backupCredentialRenewLockID)
+		lock = standingLock(sqlStore, backupCredentialRenewLockID)
 	}
 	renewer := service.NewBackupCredentialRenewer(service.BackupCredentialRenewerConfig{
 		Instances: store, Kube: k8sClient, Storage: provSvc, Issuer: issuer,
@@ -502,7 +503,7 @@ func startRoleCertificateRenewer(cfg config.AppConfig, sqlStore storage.Platform
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() && sqlStore != nil {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), roleCertRenewLockID)
+		lock = standingLock(sqlStore, roleCertRenewLockID)
 	}
 	renewer := service.NewRoleCertificateRenewer(service.RoleCertificateRenewerConfig{
 		Instances: store, Kube: k8sClient, Vault: vc, RestartReplication: provSvc.RestartReplication,
@@ -517,7 +518,7 @@ func startRoleCertificateRenewer(cfg config.AppConfig, sqlStore storage.Platform
 func startPlatformRoleReconcile(cfg config.AppConfig, sqlStore storage.PlatformStore, provSvc *service.ProvisioningService) func() {
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() && sqlStore != nil {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), platformRoleReconcileLockID)
+		lock = standingLock(sqlStore, platformRoleReconcileLockID)
 	}
 	return provSvc.StartRoleReconcile(context.Background(), service.NewLeadership(lock), platformRoleReconcileInterval)
 }
@@ -545,7 +546,7 @@ func startMySQLTLSMaintenance(cfg config.AppConfig, sqlStore storage.PlatformSto
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() && sqlStore != nil {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), mysqlTLSLockID)
+		lock = standingLock(sqlStore, mysqlTLSLockID)
 	}
 	log.Printf("MySQL TLS maintenance started (every %s)", mysqlTLSInterval)
 	return service.NewMySQLTLSMaintenance(provSvc).Start(context.Background(), service.NewLeadership(lock), mysqlTLSInterval)
@@ -570,7 +571,7 @@ func startAppRolloutSweeper(cfg config.AppConfig, sqlStore storage.PlatformStore
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() && sqlStore != nil {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), appRolloutSweepLockID)
+		lock = standingLock(sqlStore, appRolloutSweepLockID)
 	}
 	return deploys.StartRolloutSweeper(context.Background(), service.NewLeadership(lock), appRolloutSweepInterval)
 }
@@ -602,7 +603,7 @@ func startImageWatcher(cfg config.AppConfig, flags features.Flags, sqlStore stor
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), appImageWatchLockID)
+		lock = standingLock(sqlStore, appImageWatchLockID)
 	}
 	watcher := service.NewImageWatcher(apphost.NewPostgresAppStore(sqlStore.DB()), deploys, appImageWatchInterval)
 	return watcher.Start(context.Background(), service.NewLeadership(lock), appImageWatchTick)
@@ -648,7 +649,7 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), metricsSampleLockID)
+		lock = standingLock(sqlStore, metricsSampleLockID)
 	}
 	metrics.StartSampler(context.Background(), service.NewLeadership(lock), metricsSampleInterval)
 }
@@ -853,7 +854,7 @@ func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), backupSchedulerLockID)
+		lock = standingLock(sqlStore, backupSchedulerLockID)
 	}
 	scheduler := service.NewBackupScheduler(service.BackupSchedulerConfig{
 		Schedules: sqlStore.BackupSchedules(),
@@ -895,7 +896,7 @@ func startIdlePauseScheduler(
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), idlePauseLockID)
+		lock = standingLock(sqlStore, idlePauseLockID)
 	}
 	scheduler := service.NewIdlePauseScheduler(service.IdlePauseSchedulerConfig{
 		Instances: store,
@@ -961,7 +962,7 @@ func startStorageReaper(cfg config.AppConfig, sqlStore storage.PlatformStore, st
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() && sqlStore != nil {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), storageReapLockID)
+		lock = standingLock(sqlStore, storageReapLockID)
 	}
 	grace := storageReapGrace()
 	reaper := service.NewStorageReaper(service.StorageReaperConfig{
@@ -1053,7 +1054,7 @@ func schedulerLimits(cfg config.AppConfig) scheduler.Limits {
 // replicas) and a no-op claim self-hosted (one process).
 func functionCronLock(cfg config.AppConfig, sqlStore storage.PlatformStore) storage.LeaderLock {
 	if cfg.IsCloud() && sqlStore != nil && sqlStore.DB() != nil {
-		return pgstore.NewAdvisoryLock(sqlStore.DB(), functionCronLockID)
+		return standingLock(sqlStore, functionCronLockID)
 	}
 	return service.AlwaysLeader{}
 }
@@ -1391,7 +1392,7 @@ func buildProvisioningService(
 	// project can only be under one lifecycle operation at a time.
 	if pg, ok := sqlStore.(*pgstore.Store); ok {
 		lifecycleClaimer = service.NewAdvisoryOperationClaimer(
-			func(key int64) storage.LeaderLock { return pgstore.NewAdvisoryLock(pg.DB(), key) })
+			pg.LifecycleLock)
 		provSvc.SetOperationClaimer(lifecycleClaimer)
 		// A deleted project's apps go with it, whether or not hosting is on now.
 		provSvc.SetAppPurger(apphost.NewPostgresAppStore(pg.DB()))
@@ -1756,6 +1757,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	snapshotSvc := buildSnapshotService(store, k8sClient, cfg.StoragePath, buildDocumentConnector(k8sClient, nil, vc, store))
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
+	startPoolPressureMonitor(sqlStore, alertSvc)
 	requestMetricsSvc := newRequestMetricsService(cfg, sqlStore, store)
 	requestTotals := metricsEndpointTotals(cfg, sqlStore)
 	if requestMetricsSvc != nil && requestTotals != nil {
@@ -2040,6 +2042,14 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 	}
 }
 
+// poolGuardWait is how long a request waits for a platform-database
+// connection to free up before the router answers 503.
+const poolGuardWait = 2 * time.Second
+
+// requestDeadline bounds ordinary requests, and with them every platform
+// database call they make; long-lived routes are exempt (RequestDeadline).
+const requestDeadline = 2 * time.Minute
+
 // buildRouter wires the chi router with global middleware and mounts every
 // API subtree. The per-subtree mounting is delegated to focused helpers so
 // this top-level remains a manifest of which features are exposed.
@@ -2054,6 +2064,11 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	// allowlist (the handler does it); the Studio list is for everything else.
 	r.Use(custommw.ExceptPathPrefix("/functions/v1/", custommw.ExceptPathPrefix("/storage/v1/", custommw.CORS(cfg.CORSOrigins))))
 	r.Use(custommw.RequireTrustedOriginForCookies(custommw.TrustedOrigins(cfg.StudioURL, cfg.CORSOrigins)))
+	if pool, ok := sqlStore.(interface{ DB() *sql.DB }); ok {
+		// An exhausted platform pool answers 503 fast instead of hanging every request.
+		r.Use(custommw.PoolGuard(pool.DB().Stats, poolGuardWait))
+	}
+	r.Use(custommw.RequestDeadline(requestDeadline))
 	r.Use(auth.ExtractAuth(sqlStore))
 	// A site deploy token (EXC-620) reaches only its own site's deploys.
 	r.Use(custommw.SiteDeployTokenGate(d.siteDeployTokens, sqlStore))
@@ -2922,6 +2937,9 @@ func buildPlatformStore(cfg config.AppConfig) storage.PlatformStore {
 	pgStore, err := pgstore.NewWithMaxConns(cfg.PlatformDBURL, cfg.PlatformDBMaxConns)
 	if err != nil {
 		log.Fatalf("Failed to init Postgres platform store: %v", err)
+	}
+	if err := metrics.RegisterPoolStats(pgStore.DB(), "platform"); err != nil {
+		log.Printf("platform pool metrics: %v", err)
 	}
 	log.Println("Using PostgreSQL platform store")
 	return pgStore

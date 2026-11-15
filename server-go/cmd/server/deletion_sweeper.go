@@ -7,7 +7,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 )
 
 const deletionSweepLockID int64 = 0x6168_0acb_de1e_7e47
@@ -20,7 +19,7 @@ func startDeletionSweeper(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 	retention service.BackupRetentionWork) func() {
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() && sqlStore != nil {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), deletionSweepLockID)
+		lock = standingLock(sqlStore, deletionSweepLockID)
 	}
 	sweeper := service.NewDeletionSweeper(service.DeletionSweeperConfig{Work: work, Retention: retention, Lock: lock})
 	sweeper.Start(context.Background())

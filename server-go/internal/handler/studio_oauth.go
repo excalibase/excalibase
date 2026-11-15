@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -175,11 +176,21 @@ func accountRefusal(err error) string {
 	if errors.As(err, &refusal) {
 		return string(refusal)
 	}
+	if errors.Is(err, auth.ErrBusy) {
+		return refusalBusy
+	}
 	log.Printf("ERROR: studio sign-in account: %v", err)
 	return "failed"
 }
 
+// refusalBusy is the sign-in the password gate turned away for load; the
+// response says when to try again.
+const refusalBusy = "busy"
+
 func (h *StudioOAuthHandler) refuse(w http.ResponseWriter, r *http.Request, reason string) {
+	if reason == refusalBusy {
+		w.Header().Set(headerRetryAfter, strconv.Itoa(passwordBusyRetrySeconds))
+	}
 	http.Redirect(w, r, h.studioURL+"/login?"+url.Values{"oauth_error": {reason}}.Encode(), http.StatusFound)
 }
 

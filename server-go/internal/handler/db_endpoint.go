@@ -201,6 +201,9 @@ func (h *ProvisioningHandler) dbEndpointRequestProject(w http.ResponseWriter, r 
 // cannot have one", "there is no port left" and "we asked and could not
 // confirm it" call for four different reactions.
 func writeDBEndpointError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrDBEndpointNotConfigured),
 		errors.Is(err, storage.ErrDBEndpointPortsExhausted),
