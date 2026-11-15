@@ -15,8 +15,22 @@ func TestLoad_DarkFeaturesDefaultOff(t *testing.T) {
 	}
 	flags := Load().Features()
 	for _, feature := range features.All() {
-		if flags.Enabled(context.Background(), feature) {
-			t.Errorf("%s is on with nothing set", feature)
+		if flags.Enabled(context.Background(), feature) != defaultOn[feature] {
+			t.Errorf("%s is %v with nothing set", feature, !defaultOn[feature])
+		}
+	}
+}
+
+// EXC-755: the abuse guards are security fixes, so they are on until an install says "false".
+func TestLoad_AbuseGuardsAreOnUnlessSwitchedOff(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	for _, feature := range []features.Feature{features.ProxyBlock, features.SignupGuard} {
+		env := featureEnv[feature]
+		for value, want := range map[string]bool{"": true, "true": true, "yes": true, "false": false} {
+			t.Setenv(env, value)
+			if got := Load().Features().Enabled(context.Background(), feature); got != want {
+				t.Errorf("%s=%q: enabled=%v, want %v", env, value, got, want)
+			}
 		}
 	}
 }
@@ -28,13 +42,16 @@ func TestLoad_EachDarkFeatureIsTurnedOnByItsOwnVariable(t *testing.T) {
 			for _, other := range featureEnv {
 				t.Setenv(other, "")
 			}
+			if defaultOn[feature] {
+				t.Skip("on without its variable; covered by TestLoad_AbuseGuardsAreOnUnlessSwitchedOff")
+			}
 			t.Setenv(env, "true")
 			if feature == features.HostMetrics || feature == features.HostLogs {
 				t.Setenv("PROVISIONER_MODE", "docker")
 			}
 			flags := Load().Features()
 			for _, each := range features.All() {
-				if got := flags.Enabled(context.Background(), each); got != (each == feature) {
+				if got := flags.Enabled(context.Background(), each); got != (each == feature || defaultOn[each]) {
 					t.Errorf("%s=true: %s enabled=%v", env, each, got)
 				}
 			}
@@ -162,5 +179,16 @@ func TestDarkFeatures_HostLogsIsOnOnlyOnASingleHost(t *testing.T) {
 func TestDarkFeatures_SingleHostBuildsVariable(t *testing.T) {
 	if got := featureEnv[features.SingleHostBuilds]; got != "FEATURE_SINGLEHOSTBUILDS" {
 		t.Errorf("single-host builds variable = %q", got)
+	}
+}
+
+func TestLoad_SignupsPerHour(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	if got := Load().SignupsPerHour; got != 10 {
+		t.Errorf("default = %d, want 10", got)
+	}
+	t.Setenv("SIGNUPS_PER_NETWORK_PER_HOUR", "3")
+	if got := Load().SignupsPerHour; got != 3 {
+		t.Errorf("SIGNUPS_PER_NETWORK_PER_HOUR=3: %d", got)
 	}
 }

@@ -335,6 +335,8 @@ type AppConfig struct {
 	// DarkFeatures are the features shipped dark that this install turned on
 	// (EXC-554); feature code asks Features(), never this list.
 	DarkFeatures []features.Feature
+	// SignupsPerHour is how many accounts one network (a /24, or an IPv6 /64) may open per hour (EXC-755).
+	SignupsPerHour int
 	// LogRetention is how long Loki keeps each plan's project logs (EXC-659).
 	LogRetention LogRetention
 	// AppRuntimeClass names the sandbox RuntimeClass every app pod runs under.
@@ -599,6 +601,7 @@ func load() AppConfig {
 		SitesEnabled:                   os.Getenv("SITES_ENABLED") == "true",
 		Sites:                          loadSites(),
 		DarkFeatures:                   loadDarkFeatures(),
+		SignupsPerHour:                 envInt("SIGNUPS_PER_NETWORK_PER_HOUR", 10),
 		LogRetention:                   loadLogRetention(),
 		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
 		MySQLEnabled:                   os.Getenv("MYSQL_ENABLED") == "true",
