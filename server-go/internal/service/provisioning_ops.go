@@ -606,6 +606,11 @@ func (s *ProvisioningService) getInstanceBounded(ctx context.Context, projectID 
 	defer cancel()
 	inst, err := finder.FindByProjectIDContext(readCtx, projectID)
 	if err != nil {
+		// Our own deadline, not the caller leaving: the pool had no connection
+		// in time, which the handlers answer as a retryable 503.
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return nil, fmt.Errorf("%w: reading project %s: %v", storage.ErrPoolBusy, projectID, err)
+		}
 		return nil, err
 	}
 	if inst == nil {
