@@ -48,4 +48,9 @@ describe('provider sign-in refusals', () => {
     render(<ProviderRefusal reason="something-new" />);
     expect(screen.getByText('Sign-in failed. Please try again.')).toBeInTheDocument();
   });
+
+  test('a busy refusal asks the user to wait a few seconds', () => {
+    render(<ProviderRefusal reason="busy" />);
+    expect(screen.getByText(/busy right now/)).toBeInTheDocument();
+  });
 });
