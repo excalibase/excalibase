@@ -367,14 +367,17 @@ var verifyPassword = auth.VerifyPassword
 // and Retry-After; any other error is an internal one.
 func writePasswordBusy(w http.ResponseWriter, err error) {
 	if errors.Is(err, auth.ErrBusy) {
-		w.Header().Set("Retry-After", strconv.Itoa(passwordBusyRetrySeconds))
+		w.Header().Set(headerRetryAfter, strconv.Itoa(passwordBusyRetrySeconds))
 		httpError(w, "server is busy; try again shortly", http.StatusServiceUnavailable)
 		return
 	}
 	httpError(w, "internal error", http.StatusInternalServerError)
 }
 
-const passwordBusyRetrySeconds = 2
+const (
+	headerRetryAfter         = "Retry-After"
+	passwordBusyRetrySeconds = 2
+)
 
 // refundAttempt gives back an attempt whose password was never checked, so a
 // flood cannot lock an account by crowding it out.
@@ -426,13 +429,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	addressKey := guardKey + "@" + loginAddress(clientIP(r))
 	if !h.loginGuard.Attempt(addressKey) {
-		w.Header().Set("Retry-After", strconv.Itoa(int(defaultLoginWindow.Seconds())))
+		w.Header().Set(headerRetryAfter, strconv.Itoa(int(defaultLoginWindow.Seconds())))
 		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
 		return
 	}
 	delay, within := h.accountSlowdown.Begin(guardKey, user != nil)
 	if !within {
-		w.Header().Set("Retry-After", strconv.Itoa(int(defaultLoginWindow.Seconds())))
+		w.Header().Set(headerRetryAfter, strconv.Itoa(int(defaultLoginWindow.Seconds())))
 		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
 		return
 	}

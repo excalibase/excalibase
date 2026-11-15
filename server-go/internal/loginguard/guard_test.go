@@ -117,7 +117,12 @@ func TestRefundGivesBackAnAttemptThatWasNeverChecked(t *testing.T) {
 		}
 		g.Refund("alice")
 	}
-	if !g.Attempt("alice") || !g.Attempt("alice") || g.Attempt("alice") {
+	for i := 1; i <= 2; i++ {
+		if !g.Attempt("alice") {
+			t.Fatalf("attempt %d refused inside the budget", i)
+		}
+	}
+	if g.Attempt("alice") {
 		t.Fatal("refunds must leave exactly the original budget")
 	}
 }
