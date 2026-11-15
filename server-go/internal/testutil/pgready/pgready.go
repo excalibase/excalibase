@@ -1,5 +1,3 @@
-//go:build integration || live
-
 // Package pgready is the one readiness check every Postgres test container
 // shares. The image logs "ready to accept connections" twice (init server,
 // then the real one) and a slow runner can miss the second line by seconds;
