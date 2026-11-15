@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"net/http"
@@ -75,7 +76,7 @@ func (h *OrgHandler) recordTierChange(r *http.Request, org *domain.Org, previous
 	if user := auth.GetUser(r.Context()); user != nil {
 		actor = user.ID
 	}
-	_ = h.audit.LogAudit(r.Context(), &domain.AuditEntry{
+	err := h.audit.LogAudit(r.Context(), &domain.AuditEntry{
 		UserID:     actor,
 		Action:     "admin.set_org_tier",
 		Resource:   "org",
@@ -83,4 +84,7 @@ func (h *OrgHandler) recordTierChange(r *http.Request, org *domain.Org, previous
 		Details:    fmt.Sprintf("from=%s to=%s reason=%q", previous, org.Tier, reason),
 		IPAddress:  clientIP(r),
 	})
+	if err != nil {
+		log.Printf("ERROR: audit admin.set_org_tier %s: %v", org.ID, err)
+	}
 }

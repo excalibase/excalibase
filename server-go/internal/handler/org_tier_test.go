@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -87,5 +90,30 @@ func TestSetOrgTier_RefusesWithoutAReasonOrWithAnInvalidTier(t *testing.T) {
 func TestUpdateOrgTier_NotForAForeignPlatformAdmin(t *testing.T) {
 	if w := patchOrgAs(t, consoleAdmin, `{"tier":"ENTERPRISE"}`); w.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404; body %s", w.Code, w.Body.String())
+	}
+}
+
+// A failed audit write is logged, and the change it describes still stands.
+func TestSetOrgTier_ALostAuditWriteIsLoggedNotSwallowed(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+
+	orgs := fakestore.NewOrgs()
+	orgs.AddOrg("org-plan", domain.Free)
+	h := NewOrgHandler(orgs, nil)
+	h.SetNodePlacement(&fakeNodes{nodes: 5})
+	h.SetAudit(failingAudit{})
+	r := chi.NewRouter()
+	r.Patch("/orgs/{orgId}/tier", h.SetOrgTier)
+	req := httptest.NewRequest("PATCH", "/orgs/org-plan/tier", strings.NewReader(`{"tier":"STANDARD","reason":"agreed upgrade"}`))
+	req = req.WithContext(auth.SetUser(req.Context(), consoleAdmin))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+	if !strings.Contains(logged.String(), "audit admin.set_org_tier") || !strings.Contains(logged.String(), "audit store down") {
+		t.Fatalf("the failed audit write was not logged: %q", logged.String())
 	}
 }
