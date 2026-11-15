@@ -20,7 +20,7 @@ uwait() {
 uprovision() {
   local id
   id=$(uapi -X POST "$UAPI/provision/" -d "{\"projectName\":\"$1\",\"orgId\":\"$ORG\",\"databaseType\":\"POSTGRESQL\",\"postgresVersion\":\"16\"}" | ujson 'd.get("projectId","")')
-  uwait "$id" ACTIVE >/dev/null
+  [ "$(uwait "$id" ACTIVE)" = ACTIVE ] || ko "project $id never became ACTIVE: $(uapi "$UAPI/provision/$id/" | head -c 600)" >&2
   echo "$id"
 }
 usql() { $DOCKER exec "excalibase-$1-postgres" psql -qtAX -U postgres -d "$(uapi "$UAPI/provision/$1/" | ujson 'd.get("databaseName") or "postgres"')" -c "$2" 2>&1; }
@@ -41,11 +41,11 @@ left_open() {
   usql "$1" "CREATE TABLE ballast AS SELECT md5(i::text) || md5(i::text) AS body FROM generate_series(1, 4000000) i" >/dev/null
   # 503 is a check that could not run yet, and says to try again.
   for i in $(seq 20); do
-    code=$(uapi -X POST "$UAPI/provision/$1/major-upgrade" -d '{"targetVersion":"17","confirm":true}' -o /dev/null -w '%{http_code}')
+    code=$(uapi -X POST "$UAPI/provision/$1/major-upgrade" -d '{"targetVersion":"17","confirm":true}' -o "$W/upgrade-start.json" -w '%{http_code}')
     [ "$code" != 503 ] && break
     sleep 10
   done
-  case "$code" in 2*) ;; *) ko "upgrade of $1 refused: $code"; return 1 ;; esac
+  case "$code" in 2*) ;; *) ko "upgrade of $1 refused: $code $(head -c 400 "$W/upgrade-start.json")"; return 1 ;; esac
   for i in $(seq 3000); do
     [ -n "$(kept_container "$1")" ] && break
     sleep 0.2
