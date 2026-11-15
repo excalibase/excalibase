@@ -631,6 +631,9 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 		return
 	}
 	metrics.SetHistory(table, alerts)
+	if source, ok := k8sClient.(service.PodPressureSource); ok {
+		metrics.SetClusterSampler(service.NewPodPressureMonitor(source, alerts, time.Now))
+	}
 	if sampler != nil {
 		metrics.SetRequestSampler(sampler)
 	}

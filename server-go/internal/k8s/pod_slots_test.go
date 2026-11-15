@@ -2,7 +2,9 @@ package k8s
 
 import (
 	"context"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -47,5 +49,18 @@ func TestNodeCapacity_UnknownPodLimitHasRoom(t *testing.T) {
 	}
 	if (ClusterCapacity{}).PodSlotsKnown() {
 		t.Fatal("no allocatable pods means the limit is unknown")
+	}
+}
+
+func TestPendingPods_ListsOnlyPendingPodsWithTheirAge(t *testing.T) {
+	waiting := podOn("waiting", "", corev1.PodPending)
+	waiting.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	c := newFakeClient(waiting, podOn("running", "n1", corev1.PodRunning))
+	got, err := c.PendingPods(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "waiting" || got[0].Namespace != "ns" || !got[0].Since.Equal(time.Unix(1000, 0)) {
+		t.Fatalf("pending = %+v", got)
 	}
 }
