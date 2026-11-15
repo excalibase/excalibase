@@ -78,6 +78,7 @@ test.describe('Studio v2 shell', () => {
     await dialog.getByRole('combobox').fill('access tokens');
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/\/account\/tokens$/);
+    await expect(dialog).toBeHidden();
     await page.keyboard.press('Control+k');
     await expect(dialog).toBeVisible();
     await page.keyboard.press('Escape');

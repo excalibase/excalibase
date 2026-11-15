@@ -54,10 +54,10 @@ describe('studio_v2 flag gate', () => {
     expect(screen.getByText('page')).toBeInTheDocument();
   });
 
-  test('until the server answers, neither layout is guessed', () => {
+  test('until the server answers, the flag counts as off', () => {
     vi.mocked(api.get).mockReturnValue(new Promise(() => {}) as never);
     renderSwitch();
     expect(screen.queryByTestId('studio-shell')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('platform-nav')).not.toBeInTheDocument();
+    expect(screen.getByTestId('platform-nav')).toBeInTheDocument();
   });
 });
