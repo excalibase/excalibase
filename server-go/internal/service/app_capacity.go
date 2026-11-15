@@ -120,15 +120,16 @@ func (s *AppDeployService) admit(ctx context.Context, namespace string, deploy *
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
 	needCPU, needMem, perCPU, perMem := rolloutNeed(live, replicas, podCPU, podMem)
+	needPods := int64(max(live.Count, replicas+rolloutSurge(live)) - live.Count)
 	reservedCPU, reservedMem, err := s.reservedByOtherRollouts(deploy, placement)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
-	return s.clusterHolds(ctx, placement, podNeed{cpu: needCPU, mem: needMem, perCPU: perCPU, perMem: perMem},
+	return s.clusterHolds(ctx, placement, podNeed{cpu: needCPU, mem: needMem, perCPU: perCPU, perMem: perMem, pods: needPods},
 		reservedCPU, reservedMem, "app "+deploy.AppID)
 }
 
-type podNeed struct{ cpu, mem, perCPU, perMem int64 }
+type podNeed struct{ cpu, mem, perCPU, perMem, pods int64 }
 
 // clusterHolds is the room check every admission ends in; anything the cluster cannot answer refuses.
 func (s *AppDeployService) clusterHolds(ctx context.Context, placement k8s.RuntimePlacement, need podNeed,
@@ -144,6 +145,9 @@ func (s *AppDeployService) clusterHolds(ctx context.Context, placement k8s.Runti
 		return fmt.Errorf("%w (runtime class %q)", ErrAppNoSandboxNode, s.render.RuntimeClass)
 	}
 	capacity.HeadroomPercent = s.headroomPercent
+	if err := requirePodSlots(capacity, need.pods, who); err != nil {
+		return err
+	}
 	if capacity.FreeCPUMilli()-reservedCPU < need.cpu || capacity.FreeMemBytes()-reservedMem < need.mem ||
 		!anyNodeFits(capacity, placement.NodeSelector, need.perCPU, need.perMem) {
 		log.Printf("INFO: %s refused: need %dm/%d (one pod %dm/%d) free %dm/%d reserved %dm/%d headroom %d%%",
@@ -184,18 +188,22 @@ func (s *AppDeployService) AdmitNewApps(ctx context.Context, projectID string, r
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
-	need := podNeed{cpu: int64(total) * podCPU, mem: int64(total) * podMem, perCPU: podCPU, perMem: podMem}
+	need := podNeed{cpu: int64(total) * podCPU, mem: int64(total) * podMem, perCPU: podCPU, perMem: podMem, pods: int64(total)}
 	return s.clusterHolds(ctx, placement, need, reservedCPU, reservedMem, "new apps of project "+projectID)
 }
 
 func rolloutNeed(live k8s.AppPods, replicas int, podCPU, podMem int64) (needCPU, needMem, perCPU, perMem int64) {
-	surge := 0
-	if live.Count > 0 {
-		surge = 1
-	}
-	peak := int64(max(live.Count, replicas+surge))
+	peak := int64(max(live.Count, replicas+rolloutSurge(live)))
 	perCPU, perMem = max(podCPU, live.MaxCPUMilli), max(podMem, live.MaxMemBytes)
 	return max(peak*perCPU-live.CPUMilli, 0), max(peak*perMem-live.MemBytes, 0), podCPU, podMem
+}
+
+// rolloutSurge is the one pod a rolling update runs over the replica count.
+func rolloutSurge(live k8s.AppPods) int {
+	if live.Count > 0 {
+		return 1
+	}
+	return 0
 }
 
 func anyNodeMatches(capacity k8s.ClusterCapacity, selector map[string]string) bool {
@@ -209,7 +217,7 @@ func anyNodeMatches(capacity k8s.ClusterCapacity, selector map[string]string) bo
 
 func anyNodeFits(capacity k8s.ClusterCapacity, selector map[string]string, cpu, mem int64) bool {
 	for _, node := range capacity.Nodes {
-		if node.Matches(selector) && node.Fits(cpu, mem, capacity.HeadroomPercent) {
+		if node.Matches(selector) && node.Fits(cpu, mem, capacity.HeadroomPercent) && node.HasPodSlots(1) {
 			return true
 		}
 	}

@@ -136,6 +136,8 @@ func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 		httpError(w, limitErr.Error(), http.StatusConflict)
 	case errors.Is(err, storagebudget.ErrExceeded):
 		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, service.ErrNoPodSlots):
+		httpError(w, service.ErrNoPodSlots.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, service.ErrDocumentDBNotInstalled):
 		httpError(w, service.ErrDocumentDBNotInstalled.Error(), http.StatusConflict)
 	case errors.Is(err, service.ErrProjectStoreUnavailable):
