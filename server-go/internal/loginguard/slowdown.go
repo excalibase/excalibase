@@ -111,6 +111,22 @@ func (s *Slowdown) Succeeded(identity string) {
 	s.unknown.remove(key)
 }
 
+// Refund gives back an attempt Begin counted when its password was never
+// checked (refused for load). known must match the Begin call.
+func (s *Slowdown) Refund(identity string, known bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	table := s.unknown
+	if known {
+		table = s.accounts
+	}
+	if element, ok := table.byIdentity[normalise(identity)]; ok {
+		if e := element.Value.(*tableEntry); e.attempts > 0 {
+			e.attempts--
+		}
+	}
+}
+
 // Failures is how many attempts the identity has counted in the window.
 func (s *Slowdown) Failures(identity string) int {
 	s.mu.Lock()
