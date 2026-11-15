@@ -548,6 +548,10 @@ func (p *PostgreSQLProvisioner) stageBackup(ctx context.Context, req domain.Prov
 // shut down; a project recorded PAUSED while its pods are still Terminating
 // is still consuming the CPU capacity admission plans against.
 func (p *PostgreSQLProvisioner) Pause(ctx context.Context, namespace, projectID string) error {
+	// A hibernated cluster cannot be backed up: stop the nightly run first.
+	if err := k8s.SetScheduledBackupSuspended(ctx, p.client, namespace, projectID, true); err != nil {
+		return err
+	}
 	if err := p.setHibernation(ctx, namespace, projectID, hibernationOn); err != nil {
 		return err
 	}
@@ -590,7 +594,12 @@ func (p *PostgreSQLProvisioner) Resume(ctx context.Context, namespace, projectID
 	if err := p.setHibernation(ctx, namespace, projectID, hibernationOff); err != nil {
 		return err
 	}
-	return p.waitForClusterReady(ctx, namespace, projectID+clusterNameSuffix)
+	if err := p.waitForClusterReady(ctx, namespace, projectID+clusterNameSuffix); err != nil {
+		return err
+	}
+	// Only once the primary serves: a backup fired at a cluster still coming
+	// back would fail like one fired at a hibernated cluster.
+	return k8s.SetScheduledBackupSuspended(ctx, p.client, namespace, projectID, false)
 }
 
 // setHibernation flips the hibernation annotation, re-reading the Cluster and
@@ -804,6 +813,16 @@ func (p *PostgreSQLProvisioner) ConfigureBackup(ctx context.Context, namespace, 
 	backup, err := k8s.BuildScheduledBackup(projectID, namespace, schedule)
 	if err != nil {
 		return err
+	}
+	// A new schedule on a paused project stays suspended.
+	suspended, err := k8s.ScheduledBackupSuspended(ctx, p.client, namespace, projectID)
+	if err != nil {
+		return err
+	}
+	if suspended {
+		if err := unstructured.SetNestedField(backup.Object, true, "spec", "suspend"); err != nil {
+			return err
+		}
 	}
 	return p.client.ApplyCRD(ctx, k8s.CNPGScheduledBackupGVR, namespace, backup)
 }

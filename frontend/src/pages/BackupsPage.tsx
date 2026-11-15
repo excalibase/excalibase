@@ -19,8 +19,16 @@ export function BackupsPage() {
 
   const { data: backupData, isLoading } = useListBackups(projectId);
   // MySQL restores within its backup window only (ADR 0041).
-  const mysql = isMySQLProject(useInstance(projectId).data);
-  const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
+  const instance = useInstance(projectId).data;
+  const mysql = isMySQLProject(instance);
+  const paused = instance?.status === 'PAUSED';
+  const allBackups = Array.isArray(backupData?.backups) ? backupData.backups : [];
+  // A paused database takes no scheduled backups, so a failed run listed here is noise.
+  const backups = paused ? allBackups.filter((b) => b.status !== 'FAILED') : allBackups;
+  // The pause takes a final backup and nothing runs after it: the newest completed one.
+  const finalBackup = paused
+    ? backups.filter((b) => b.status === 'COMPLETED').sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]
+    : undefined;
   const triggerBackup = useTriggerBackup();
   // Copying into a new project ships dark (EXC-667).
   const { enabled: copyOn } = useFeatureEnabled('dbcopy');
@@ -43,6 +51,13 @@ export function BackupsPage() {
       {toast && (
         <div className={`px-4 py-2 rounded-lg text-sm font-medium border ${toast.ok ? 'bg-green-900/20 text-green-400 border-green-500/30' : 'bg-red-900/20 text-red-400 border-red-500/30'}`}>
           {toast.msg}
+        </div>
+      )}
+
+      {paused && (
+        <div data-testid="paused-backups" className="px-4 py-3 rounded-lg text-sm border border-border-primary bg-surface-card text-text-secondary">
+          Paused: nightly backups stop while paused
+          {finalBackup ? `; the pause took a final backup ${finalBackup.id}` : ''}
         </div>
       )}
 
