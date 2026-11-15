@@ -5,10 +5,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ProvisionPage } from './ProvisionPage';
 import { api } from '../api/client';
-import { listMyOrgs } from '../api/orgs';
+import { listMemberOrgs } from '../api/orgs';
 
 vi.mock('../api/client', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
-vi.mock('../api/orgs', () => ({ listMyOrgs: vi.fn() }));
+vi.mock('../api/orgs', () => ({ listMemberOrgs: vi.fn() }));
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
   return { ...actual, useNavigate: () => vi.fn() };
@@ -17,7 +17,7 @@ vi.mock('react-router-dom', async () => {
 const MYSQL_CATALOG = { defaultVersion: '8.4.10', versions: [{ version: '8.4.10' }, { version: '8.4.9' }] };
 
 function renderPage(mysql: boolean) {
-  vi.mocked(listMyOrgs).mockResolvedValue([{ id: 'org-1', name: 'Acme', slug: 'acme', tier: 'FREE', ownerId: 'u1' }]);
+  vi.mocked(listMemberOrgs).mockResolvedValue([{ id: 'org-1', name: 'Acme', slug: 'acme', tier: 'FREE', ownerId: 'u1' }]);
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/config') return Promise.resolve({ data: { deploymentMode: 'cloud', features: { mysql } } } as never);
     if (url === '/postgres/catalog') return Promise.resolve({ data: { majors: [] } } as never);

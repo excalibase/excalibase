@@ -1679,7 +1679,7 @@ func newSchemaHandler(cfg config.AppConfig, vc vaultclient.VaultClient, instance
 
 func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore storage.PlatformStore,
 	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget, restarts handler.AppRestartReader,
-	internal *appregistry.Internal) *handler.AppHandler {
+	internal *appregistry.Internal, vault vaultclient.VaultClient) *handler.AppHandler {
 	plans := service.NewOrgPlanTiers(store, sqlStore)
 	h := handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
 		handler.NewProjectSourceLookup(store, plans), appPublicRoute(cfg))
@@ -1689,6 +1689,7 @@ func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore s
 	h.SetFeatures(cfg.Features())
 	h.SetRestarts(restarts)
 	h.SetInternalRegistry(internal)
+	h.SetSecretVault(vault)
 	return h
 }
 
@@ -1927,7 +1928,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:       realtimeHandler,
 		permissionHandler:     newPermissionHandler(cfg, sqlStore, store, a.projectDB),
 		advisorsHandler:       handler.NewAdvisorsHandler(advisors.NewService(a.projectDB, sqlStore.Permissions(), advisors.Options{})),
-		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
+		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry, vc),
 		registryToken:         newRegistryTokenHandler(internalRegistry, store),
 		internalRegistry:      internalRegistry,
 		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc), store, appRuntime),

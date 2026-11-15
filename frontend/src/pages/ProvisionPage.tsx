@@ -4,7 +4,7 @@ import { useProvisionDatabase } from '../hooks/useProvisioning';
 import { DatabaseType } from '../types';
 import { Button } from '../components/Button';
 import { Box, Database, Loader2, Server, Cloud } from 'lucide-react';
-import { listMyOrgs, type Org } from '../api/orgs';
+import { listMemberOrgs, type Org } from '../api/orgs';
 import { useTiers, type TierConfig } from '../api/tiers';
 import { usePostgresCatalog, findMajor, type PostgresMajor } from '../api/postgresCatalog';
 import { PostgresVersionPicker } from '../components/PostgresVersionPicker';
@@ -156,7 +156,7 @@ export function ProvisionPage() {
   const planConfig = tierConfigs?.find((tc) => tc.tier === selectedOrg?.tier);
 
   useEffect(() => {
-    listMyOrgs()
+    listMemberOrgs()
       .then((data) => {
         setOrgs(data);
         setOrgsLoaded(true);

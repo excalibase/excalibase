@@ -33,7 +33,7 @@ func (h *SchemaHandler) GetRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getOwnerDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -62,7 +62,7 @@ func (h *SchemaHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropRole(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getOwnerDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return

@@ -915,3 +915,29 @@ func acceptInvite(t *testing.T, r chi.Router, invite *httptest.ResponseRecorder,
 		t.Fatalf("accept as %s: %d %s", userID, accept.Code, accept.Body.String())
 	}
 }
+
+// EXC-761: platform staff can list every org, but a picker asks for its own
+// (?scope=member) and must never be offered a customer's.
+func TestListOrgs_MemberScopeIsTheCallersOwnOrgsEvenForStaff(t *testing.T) {
+	r, store := setupOrgRouter(t)
+	addPlatformAdmin(t, store)
+
+	orgRequest(r, "POST", testOrgsPath, `{"name":"Customer","slug":"customer-org"}`, testAliceID)
+	orgRequest(r, "POST", testOrgsPath, `{"name":"Staff","slug":"staff-org"}`, testPlatformAdminID)
+
+	slugs := func(path string) []string {
+		var orgs []domain.Org
+		json.NewDecoder(orgRequest(r, "GET", path, "", testPlatformAdminID).Body).Decode(&orgs)
+		out := make([]string, 0, len(orgs))
+		for _, org := range orgs {
+			out = append(out, org.Slug)
+		}
+		return out
+	}
+	if all := slugs(testOrgsPath); len(all) < 2 {
+		t.Fatalf("staff must still be able to list every org, got %v", all)
+	}
+	if own := slugs(testOrgsPath + "?scope=member"); len(own) != 1 || own[0] != "staff-org" {
+		t.Fatalf("scope=member listed %v, want only the staff account's own org", own)
+	}
+}

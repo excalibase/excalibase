@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"log"
 	"net/http"
 	"strconv"
@@ -50,6 +51,8 @@ type AppHandler struct {
 	// limits caps the project's app count by its plan; unset, no app is created.
 	limits apphost.AppLimits
 	budget *storagebudget.Budget
+	// vault keeps the values of variables sealed as secrets by the server.
+	vault vaultclient.VaultClient
 	// features gates auto-deploy, part of the pipeline (EXC-554); nil keeps it dark.
 	features features.Flags
 	// restarts reads what the runtime saw of the app's containers; unset, none is shown.
@@ -74,6 +77,10 @@ func (h *AppHandler) SetRestarts(restarts AppRestartReader) { h.restarts = resta
 
 // SetFeatures wires the flags that decide whether auto-deploy may be set.
 func (h *AppHandler) SetFeatures(flags features.Flags) { h.features = flags }
+
+// SetSecretVault is where a plain variable that holds a credential is kept
+// once it is made a secret.
+func (h *AppHandler) SetSecretVault(v vaultclient.VaultClient) { h.vault = v }
 
 // SetAppLimits wires the plan's app count (EXC-524).
 func (h *AppHandler) SetAppLimits(limits apphost.AppLimits) { h.limits = limits }
@@ -331,7 +338,12 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	sealed, ok := h.sealCredentials(w, app)
+	if !ok {
+		return
+	}
 	if err := h.store.Create(app, maxApps); err != nil {
+		h.forgetSealed(sealed)
 		h.writeStoreError(w, err)
 		return
 	}
@@ -414,7 +426,12 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 		h.writeReferenceError(w, err)
 		return
 	}
+	sealed, ok := h.sealCredentials(w, existing)
+	if !ok {
+		return
+	}
 	if err := h.store.Update(existing, expectedVersion); err != nil {
+		h.forgetSealed(sealed)
 		h.writeStoreError(w, err)
 		return
 	}
@@ -651,4 +668,36 @@ func withoutValuesUnless(mayRead bool, app *apphost.App) *apphost.App {
 		redacted.Env[i] = variable
 	}
 	return &redacted
+}
+
+// sealCredentials makes every plain variable named like a credential a secret
+// and stores its value in the vault, before the app is saved, so a variable
+// never points at a value that was not stored. With no vault to hold it the
+// write is refused rather than saved as plain.
+func (h *AppHandler) sealCredentials(w http.ResponseWriter, app *apphost.App) (map[apphost.SecretRef]string, bool) {
+	sealed := app.SealCredentialLiterals()
+	if len(sealed) == 0 {
+		return nil, true
+	}
+	if h.vault == nil {
+		httpError(w, "secrets are unavailable: no vault is configured, so a variable named like a credential cannot be saved", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	for ref, value := range sealed {
+		if err := h.vault.Put(ref.Path, map[string]string{ref.Key: value}); err != nil {
+			h.forgetSealed(sealed)
+			httpError(w, "could not store the secret", http.StatusInternalServerError)
+			return nil, false
+		}
+	}
+	return sealed, true
+}
+
+// forgetSealed removes values stored for a write that was then refused.
+func (h *AppHandler) forgetSealed(sealed map[apphost.SecretRef]string) {
+	for ref := range sealed {
+		if err := h.vault.Delete(ref.Path); err != nil {
+			log.Printf("app secret: remove a value stored for a refused write: %v", err)
+		}
+	}
 }

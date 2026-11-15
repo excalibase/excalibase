@@ -274,6 +274,21 @@ func (o *Opener) OpenScheduler(_ context.Context, projectID string) (*sql.DB, er
 	return o.cached(projectID, schedulerKey(projectID), schedulerRole, o.openPostgres)
 }
 
+// OpenOwner returns the project's pool logged in as its owner. Only role
+// management uses it, because the role functions run for the owner alone;
+// customer SQL runs as excalibase_app and is never handed this pool (EXC-761).
+func (o *Opener) OpenOwner(_ context.Context, projectID string) (*sql.DB, error) {
+	if err := o.checkServable(projectID); err != nil {
+		return nil, err
+	}
+	return o.cached(projectID, ownerKey(projectID), ownerRole, o.openPostgres)
+}
+
+// ownerRole is the vault record name of the project's owner login.
+const ownerRole = "admin"
+
+func ownerKey(projectID string) string { return projectID + "#owner" }
+
 // schedulerKey caches the scheduler's pool apart from the app role's.
 func schedulerKey(projectID string) string { return projectID + "#scheduler" }
 

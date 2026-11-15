@@ -176,8 +176,10 @@ func (h *OrgHandler) ListMyOrgs(w http.ResponseWriter, r *http.Request) {
 	var orgs []*domain.Org
 	var err error
 
-	// Platform admins see all orgs
-	if auth.HasPermission(user.Role, auth.PermViewAny) {
+	// Platform staff see every org, unless the caller asks for its own
+	// (?scope=member): a picker that creates something in an org must offer
+	// only the orgs the caller belongs to, never a customer's (EXC-761).
+	if auth.HasPermission(user.Role, auth.PermViewAny) && r.URL.Query().Get("scope") != "member" {
 		orgs, err = h.orgStore.FindAllOrgs(r.Context())
 	} else {
 		orgs, err = h.orgStore.FindOrgsByUser(r.Context(), user.ID)

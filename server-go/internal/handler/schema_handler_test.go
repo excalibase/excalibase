@@ -82,7 +82,7 @@ func setupSchemaRouterAs(t *testing.T, role string) chi.Router {
 		GRANT ALL ON SCHEMA public TO excalibase_app;
 		ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO excalibase_app;
 		ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO excalibase_app;
-		CREATE ROLE app_owner LOGIN;
+		CREATE ROLE app_owner LOGIN PASSWORD 'ownerpass';
 		CREATE SCHEMA excalibase;
 		GRANT USAGE ON SCHEMA excalibase TO excalibase_app;
 	`+pgroles.CustomerRoleSQL("app_owner"))
@@ -136,6 +136,18 @@ func setupSchemaRouterAs(t *testing.T, role string) chi.Router {
 	})
 	if err != nil {
 		t.Fatalf("vault put: %v", err)
+	}
+
+	// The owner's login, which runs role management (EXC-761).
+	err = v.Put("projects/test-proj/credentials/admin", map[string]string{
+		"host":     host,
+		"port":     port.Port(),
+		"username": "app_owner",
+		"password": "ownerpass",
+		"database": "testdb",
+	})
+	if err != nil {
+		t.Fatalf("vault put owner: %v", err)
 	}
 
 	// 3. Wire handler (testcontainers postgres has no SSL)
@@ -875,5 +887,33 @@ func TestSchemaHandler_CreateRole_LoginNeedsAdmin(t *testing.T) {
 	}
 	if w := schemaRequest(r, "POST", testRolesPath, `{"name":"dev_group","login":false}`); w.Code != http.StatusCreated {
 		t.Errorf("a NOLOGIN role is a Developer's: got %d %s", w.Code, w.Body.String())
+	}
+}
+
+// EXC-761: the role functions are callable by the owner's login only. A
+// Developer's SQL runs as excalibase_app, so it cannot mint a LOGIN role, set a
+// role's password or drop a role by calling them, however the SQL reaches the
+// database.
+func TestSchemaHandler_CustomerSQLCannotCallTheRoleFunctions(t *testing.T) {
+	r := setupSchemaRouterAs(t, domain.OrgRoleDeveloper)
+	pwd := testutil.FixturePassword("sql-role")
+
+	for name, statement := range map[string]string{
+		"create": fmt.Sprintf(`SELECT excalibase.create_role('sneaky', %q, true)`, pwd),
+		"alter":  fmt.Sprintf(`SELECT excalibase.alter_role_password('sneaky', %q)`, pwd),
+		"drop":   `SELECT excalibase.drop_role('sneaky')`,
+	} {
+		for path, body := range map[string]string{
+			testSchemaBase + "/query": fmt.Sprintf(`{"query":%q}`, statement),
+			testSchemaBase + "/ddl":   fmt.Sprintf(`{"sql":%q}`, statement),
+		} {
+			w := schemaRequest(r, "POST", path, body)
+			if w.Code == http.StatusOK && !strings.Contains(w.Body.String(), "permission denied") {
+				t.Errorf("%s via %s was not refused: %d %s", name, path, w.Code, w.Body.String())
+			}
+		}
+	}
+	if w := schemaRequest(r, "GET", testRolesPath, ""); strings.Contains(w.Body.String(), "sneaky") {
+		t.Fatal("a role was created through SQL")
 	}
 }

@@ -37,6 +37,13 @@ export async function listMyOrgs(): Promise<Org[]> {
   return data;
 }
 
+// The orgs the caller belongs to, even for platform staff who can see every
+// org: what a picker offers must be somewhere the caller may act as a member.
+export async function listMemberOrgs(): Promise<Org[]> {
+  const { data } = await api.get<Org[]>('/orgs', { params: { scope: 'member' } });
+  return data;
+}
+
 export async function getOrg(orgId: string): Promise<Org> {
   const { data } = await api.get<Org>(`/orgs/${orgId}`);
   return data;

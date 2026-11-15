@@ -29,7 +29,10 @@ func (f *fakeSDKKeys) List(_ context.Context, orgSlug, projectID string) ([]sdkk
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	return []sdkkeys.Key{{ID: 7, KeyPrefix: "abc", KeyType: "publishable", Name: "web"}}, nil
+	return []sdkkeys.Key{
+		{ID: 7, KeyPrefix: "abc", KeyType: "publishable", Name: "web"},
+		{ID: 9, KeyPrefix: "sec", KeyType: "secret", Name: "server"},
+	}, nil
 }
 
 func (f *fakeSDKKeys) Create(_ context.Context, orgSlug, projectID string, req sdkkeys.CreateRequest) (*sdkkeys.CreatedKey, error) {
@@ -280,5 +283,38 @@ func TestSDKKeysPublishableKeyStaysWithDevelopers(t *testing.T) {
 	r, _ := newSDKKeysRouterAs(keys, domain.OrgRoleDeveloper)
 	if w := doRequest(r, "POST", "/api/projects/proj-a/sdk-keys/", `{"name":"web","keyType":"publishable"}`); w.Code != http.StatusCreated {
 		t.Fatalf("got %d %s, want 201", w.Code, w.Body.String())
+	}
+}
+
+// EXC-761: revoking a service-role key is as much an Admin act as making one;
+// a Developer may still revoke a publishable key.
+func TestSDKKeysRevokingASecretKeyNeedsAdmin(t *testing.T) {
+	keys := &fakeSDKKeys{}
+	r, _ := newSDKKeysRouterAs(keys, domain.OrgRoleDeveloper)
+
+	if w := doRequest(r, "DELETE", "/api/projects/proj-a/sdk-keys/9", ""); w.Code != http.StatusForbidden {
+		t.Fatalf("secret key: got %d %s, want 403", w.Code, w.Body.String())
+	}
+	if len(keys.revoked) != 0 {
+		t.Fatal("a refused revoke reached auth")
+	}
+	if w := doRequest(r, "DELETE", "/api/projects/proj-a/sdk-keys/7", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("publishable key: got %d %s, want 204", w.Code, w.Body.String())
+	}
+	admin, _ := newSDKKeysRouterAs(keys, domain.OrgRoleAdmin)
+	if w := doRequest(admin, "DELETE", "/api/projects/proj-a/sdk-keys/9", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("admin secret key: got %d, want 204", w.Code)
+	}
+}
+
+// A key that cannot be looked up is not revoked on a Developer's word.
+func TestSDKKeysRevokeFailsClosedWhenTheKeyTypeIsUnknown(t *testing.T) {
+	keys := &fakeSDKKeys{listErr: errors.New("auth down")}
+	r, _ := newSDKKeysRouterAs(keys, domain.OrgRoleDeveloper)
+	if w := doRequest(r, "DELETE", "/api/projects/proj-a/sdk-keys/9", ""); w.Code == http.StatusNoContent {
+		t.Fatalf("revoked without knowing the key's type: %d", w.Code)
+	}
+	if len(keys.revoked) != 0 {
+		t.Fatal("the revoke reached auth")
 	}
 }
