@@ -60,15 +60,6 @@ func (g *SignupGuard) CheckEmail(ctx context.Context, address string) error {
 	return g.email.Check(ctx, address)
 }
 
-// Admit is the whole check of a new account: the network's budget first, which is
-// cheap, then the address. It returns ErrSignupRateLimited or an *EmailRefusal.
-func (g *SignupGuard) Admit(ctx context.Context, clientAddr, address string) error {
-	if !g.AllowSignup(ctx, clientAddr) {
-		return ErrSignupRateLimited
-	}
-	return g.CheckEmail(ctx, address)
-}
-
 // AllowSignup takes one sign-up from the address's network budget.
 func (g *SignupGuard) AllowSignup(ctx context.Context, clientAddr string) bool {
 	if g == nil || !features.Enabled(ctx, g.flags, features.SignupGuard) {

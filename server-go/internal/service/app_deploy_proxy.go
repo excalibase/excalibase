@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -28,4 +29,24 @@ func appSubject(app *apphost.App, image string, env []apphost.EnvVar, actor, sur
 		ProjectID: app.ProjectID, AppID: app.ID, Name: app.Name, Image: image,
 		EnvNames: names, Actor: actor, Surface: surface,
 	}
+}
+
+// refuseProxyOnResume checks what a resume would bring back: the app as it is
+// now and the config of the deploy that last ran, which the paused workload
+// still carries. The app is left stopped when either is a proxy node.
+func (s *AppDeployService) refuseProxyOnResume(ctx context.Context, app *apphost.App, actor string) error {
+	if s.proxyGuard == nil {
+		return nil
+	}
+	if err := s.proxyGuard.Check(ctx, appSubject(app, app.Image, app.Env, actor, "resume")); err != nil {
+		return err
+	}
+	last, err := s.deploys.GetLastSucceeded(app.ProjectID, app.ID)
+	if err != nil {
+		return fmt.Errorf("look up the last deploy: %w", err)
+	}
+	if last == nil {
+		return nil
+	}
+	return s.proxyGuard.Check(ctx, appSubject(app, last.Config.Image, last.Config.Env, actor, "resume"))
 }

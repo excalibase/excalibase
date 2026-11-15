@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/abuse"
@@ -129,4 +130,46 @@ func TestDeploy_AllowsANormalAppAndAZeroReplicaStop(t *testing.T) {
 		t.Fatalf("a zero-replica deploy runs nothing and is allowed: %v", err)
 	}
 	waitForDeployStatus(t, deploys2, stop.ID, apphost.DeployStatusSucceeded)
+}
+
+func TestResumeApp_RechecksTheAppAgainstTheProxyRules(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusStopped)
+	f.svc.SetProxyGuard(proxyGuardOn(&proxyAudit{}))
+	f.app.Image = "teddysun/xray:latest"
+
+	_, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev")
+
+	if !errors.Is(err, abuse.ErrProxyApp) {
+		t.Fatalf("err = %v", err)
+	}
+	if slices.Contains(f.kube.Calls, "ResumeAppWorkload:"+f.key()) {
+		t.Errorf("a refused resume scaled the app up: %v", f.kube.Calls)
+	}
+	if f.status() != apphost.StatusStopped {
+		t.Errorf("status = %q, want the app left stopped", f.status())
+	}
+}
+
+// The workload that would come back runs the last deploy's config, which may no longer match the record.
+func TestResumeApp_RechecksTheLastDeployedConfig(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusStopped)
+	f.svc.SetProxyGuard(proxyGuardOn(&proxyAudit{}))
+	deploy := &apphost.Deploy{ID: "d1", AppID: f.app.ID, ProjectID: f.app.ProjectID, Status: apphost.DeployStatusSucceeded,
+		Config: apphost.DeployConfig{Image: "someone/v2ray", Replicas: 1}}
+	if err := f.deploys.Create(deploy); err != nil {
+		t.Fatal(err)
+	}
+	f.deploys.finishSeeded("d1")
+
+	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev"); !errors.Is(err, abuse.ErrProxyApp) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestResumeApp_AllowsANormalApp(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusStopped)
+	f.svc.SetProxyGuard(proxyGuardOn(&proxyAudit{}))
+	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev"); err != nil {
+		t.Fatalf("normal app: %v", err)
+	}
 }

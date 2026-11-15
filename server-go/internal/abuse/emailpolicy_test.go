@@ -160,8 +160,8 @@ func TestEmailPolicy_LooksUpWithAShortDeadline(t *testing.T) {
 	if err := policy.Check(context.Background(), "a@gmail.com"); err != nil {
 		t.Fatal(err)
 	}
-	if len(dns.deadlines) != 1 || dns.deadlines[0] <= 0 || dns.deadlines[0] > 5*time.Second {
-		t.Errorf("deadlines = %v, want one of at most 5s", dns.deadlines)
+	if len(dns.deadlines) != 1 || dns.deadlines[0] <= 5*time.Second || dns.deadlines[0] > 6*time.Second {
+		t.Errorf("deadlines = %v, want one of about 6s", dns.deadlines)
 	}
 }
 
@@ -195,5 +195,56 @@ func TestTempMailLists_HoldWhatTheTicketNames(t *testing.T) {
 		if TempMailHost(host) {
 			t.Errorf("%s is a temp-mail mail host", host)
 		}
+	}
+}
+
+func TestEmailPolicy_CachesGoodAnswersForTenMinutes(t *testing.T) {
+	dns := newDNS()
+	policy := NewEmailPolicy(dns)
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	policy.now = func() time.Time { return now }
+
+	for range 3 {
+		if err := policy.Check(context.Background(), "a@gmail.com"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(dns.asked) != 1 {
+		t.Fatalf("lookups = %v, want one", dns.asked)
+	}
+	now = now.Add(9 * time.Minute)
+	_ = policy.Check(context.Background(), "b@GMAIL.com")
+	if len(dns.asked) != 1 {
+		t.Errorf("a 9 minute old answer was asked again: %v", dns.asked)
+	}
+	now = now.Add(2 * time.Minute)
+	_ = policy.Check(context.Background(), "a@gmail.com")
+	if len(dns.asked) != 2 {
+		t.Errorf("an 11 minute old answer was reused: %v", dns.asked)
+	}
+}
+
+func TestEmailPolicy_NeverCachesARefusalOrAFailure(t *testing.T) {
+	dns := newDNS()
+	policy := NewEmailPolicy(dns)
+	for _, address := range []string{"a@fresh-throw.test", "a@slow.test", "a@no-such-domain.test"} {
+		_ = policy.Check(context.Background(), address)
+		before := len(dns.asked)
+		_ = policy.Check(context.Background(), address)
+		if len(dns.asked) == before {
+			t.Errorf("%s: the second answer came from the cache", address)
+		}
+	}
+}
+
+func TestEmailPolicy_ListedDomainsAreRefusedEvenIfCached(t *testing.T) {
+	dns := newDNS()
+	dns.mx["later-listed.test"] = []string{"mx.later-listed.test."}
+	policy := NewEmailPolicy(dns)
+	if err := policy.Check(context.Background(), "a@later-listed.test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.Check(context.Background(), "a@fldubai.com"); !errors.Is(err, ErrEmailRefused) {
+		t.Fatal("a listed domain passed")
 	}
 }

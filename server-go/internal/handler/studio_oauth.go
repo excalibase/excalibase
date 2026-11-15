@@ -308,14 +308,14 @@ func (h *StudioOAuthHandler) checkSignUp(ctx context.Context, address, inviteHas
 	if len(domain.HumanUsers(users)) == 0 {
 		return signInRefusal("setup_required")
 	}
-	if err := h.auth.admitOAuthSignup(ctx, address); err != nil {
+	if err := h.auth.checkOAuthEmail(ctx, address); err != nil {
 		return err
 	}
 	if inviteHash == "" {
 		if h.auth.inviteOnly {
 			return signInRefusal("invite_only")
 		}
-		return nil
+		return h.auth.spendOAuthSignup(ctx)
 	}
 	if h.auth.orgStore == nil {
 		return signInRefusal("invite_invalid")

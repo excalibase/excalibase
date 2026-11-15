@@ -14,7 +14,17 @@ func TestMatchImageOrName_Signatures(t *testing.T) {
 		{"apernet/hysteria2", "web"},
 		{"shadowsocks/shadowsocks-libev", "web"},
 		{"someone/ss-server", "web"},
-		{"someone/edge-ws-cover:1", "web"},
+		{"edgerelay2610/edge-ws-cover:1", "web"},
+		{"someone/edge-ws-cover", "web"},
+		{"teddysun/xray", "web"},
+		{"iamybj/docker-xray:latest", "web"},
+		{"xtls/xray-core", "web"},
+		{"ghcr.io/xtls/anything:1", "web"},
+		{"txthinking/brook", "web"},
+		{"someone/ss-server:1", "web"},
+		{"nginx:1", "ss-server"},
+		{"nginx:1", "brook"},
+		{"nginx:1", "xray"},
 		{"someone/ws-runtime", "web"},
 		{"eooce/node", "web"},
 		{"someone/pxnode", "web"},
@@ -52,6 +62,46 @@ func TestMatchImageOrName_NormalAppsPass(t *testing.T) {
 	}
 }
 
+// Software that shares a word with a proxy is not a proxy (EXC-755 review).
+func TestMatchImageOrName_FalsePositivesPass(t *testing.T) {
+	allowed := []struct{ image, name string }{
+		{"amazon/aws-xray-daemon", "tracing"},
+		{"public.ecr.aws/xray/aws-xray-daemon:3", "tracing"},
+		{"jfrog/xray-server", "xray-server"},
+		{"releases-docker.jfrog.io/jfrog/xray-server:3", "scanner"},
+		{"nginx:1", "aws-xray"},
+		{"someone/edge-ws-gateway", "web"},
+		{"nginx:1", "edge-ws-gateway"},
+		{"someone/ss-server-metrics", "web"},
+		{"nginx:1", "ss-server-metrics"},
+		{"someone/brook-scheduler", "web"},
+		{"nginx:1", "brook-scheduler"},
+	}
+	for _, c := range allowed {
+		if got := MatchImageOrName(c.image, c.name); got != "" {
+			t.Errorf("image %q name %q refused on %q", c.image, c.name, got)
+		}
+	}
+}
+
+func TestFindProxy_ArgoWorkflowsEnvironmentsPass(t *testing.T) {
+	for _, keys := range [][]string{
+		{"ARGO_SERVER", "ARGO_TOKEN"},
+		{"UUID", "ARGO_NAMESPACE"},
+		{"ARGO_BASE_HREF", "ARGO_NAMESPACE", "ARGO_SECURE"},
+	} {
+		if f := FindProxy("quay.io/argoproj/argocli", "workflows", keys); f != nil {
+			t.Errorf("%v refused: %s", keys, f.Reason())
+		}
+	}
+	if f := FindProxy("node:22", "api", []string{"ARGO_AUTH", "ARGO_DOMAIN"}); f == nil {
+		t.Error("the tunnel's ARGO_AUTH and ARGO_DOMAIN were allowed")
+	}
+	if f := FindProxy("node:22", "api", []string{"UUID", "ARGO_AUTH"}); f == nil {
+		t.Error("UUID with ARGO_AUTH was allowed")
+	}
+}
+
 func TestProxyEnvKeys(t *testing.T) {
 	cases := []struct {
 		keys []string
@@ -65,9 +115,10 @@ func TestProxyEnvKeys(t *testing.T) {
 		{[]string{"UUID", "STREAM_PATH", "PORT"}, 2},
 		{[]string{"VLESS_PORT", "VMESS_ID"}, 2},
 		{[]string{"XRAY_CONFIG", "ARGO_AUTH"}, 2},
+		{[]string{"ARGO_DOMAIN", "argo_auth"}, 2},
 		{[]string{"NEZHA_SERVER", "NEZHA_KEY", "TROJAN_PASS"}, 3},
 		{[]string{"UUID", "UUID"}, 1},
-		{[]string{"ARGOCD_TOKEN"}, 0},
+		{[]string{"ARGOCD_TOKEN", "ARGO_SERVER", "ARGO_TOKEN", "ARGO_NAMESPACE"}, 0},
 	}
 	for _, c := range cases {
 		if got := len(ProxyEnvKeys(c.keys)); got != c.want {

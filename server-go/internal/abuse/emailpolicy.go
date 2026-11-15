@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -126,11 +127,22 @@ type Resolver interface {
 }
 
 // DNSTimeout bounds the whole check of one address.
-const DNSTimeout = 3 * time.Second
+const DNSTimeout = 6 * time.Second
+
+// goodAnswerTTL is how long a domain whose mail servers passed is not asked about again.
+const goodAnswerTTL = 10 * time.Minute
+
+// maxCachedDomains bounds the cache; past it, expired entries go and, if that is not
+// enough, the cache starts over.
+const maxCachedDomains = 20000
 
 // EmailPolicy refuses throwaway mail: the lists first, then the domain's mail servers.
 type EmailPolicy struct {
 	dns Resolver
+	now func() time.Time
+
+	mu     sync.Mutex
+	passed map[string]time.Time // domain -> when its good answer expires
 }
 
 // NewEmailPolicy: a nil resolver uses the system one.
@@ -138,7 +150,7 @@ func NewEmailPolicy(dns Resolver) *EmailPolicy {
 	if dns == nil {
 		dns = net.DefaultResolver
 	}
-	return &EmailPolicy{dns: dns}
+	return &EmailPolicy{dns: dns, now: time.Now, passed: map[string]time.Time{}}
 }
 
 // Check returns nil for an address that may sign up, and an *EmailRefusal otherwise.
@@ -154,9 +166,41 @@ func (p *EmailPolicy) Check(ctx context.Context, address string) error {
 	if DisposableDomain(domain) {
 		return &EmailRefusal{Kind: KindDisposable}
 	}
+	if p.recentlyPassed(domain) {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, DNSTimeout)
 	defer cancel()
-	return p.checkMailServers(ctx, domain)
+	if err := p.checkMailServers(ctx, domain); err != nil {
+		return err
+	}
+	p.remember(domain)
+	return nil
+}
+
+func (p *EmailPolicy) recentlyPassed(domain string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	expires, ok := p.passed[domain]
+	return ok && p.now().Before(expires)
+}
+
+// remember keeps only good answers: a refusal or a failed lookup is asked again.
+func (p *EmailPolicy) remember(domain string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := p.now()
+	if len(p.passed) >= maxCachedDomains {
+		for name, expires := range p.passed {
+			if !now.Before(expires) {
+				delete(p.passed, name)
+			}
+		}
+		if len(p.passed) >= maxCachedDomains {
+			p.passed = map[string]time.Time{}
+		}
+	}
+	p.passed[domain] = now.Add(goodAnswerTTL)
 }
 
 func (p *EmailPolicy) checkMailServers(ctx context.Context, domain string) error {

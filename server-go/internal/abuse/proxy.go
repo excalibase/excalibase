@@ -12,24 +12,41 @@ import (
 // proxySignatures are matched as whole tokens of an image reference or app
 // name, case-insensitively. Tokens are runs of letters and digits, so
 // "sing-box", "sing_box" and "singbox" are one signature and "gostbusters"
-// does not contain "gost".
+// does not contain "gost". Words that real software shares (edge-ws, brook,
+// ss-server, a bare xray) are not here; see exactNames and ambiguousSignatures.
 var proxySignatures = [][]string{
-	{"xray"}, {"v2ray"}, {"vless"}, {"vmess"}, {"trojan"},
+	{"xray", "core"}, {"teddysun", "xray"}, {"docker", "xray"}, {"xtls"},
+	{"v2ray"}, {"vless"}, {"vmess"}, {"trojan"},
 	{"sing", "box"}, {"singbox"},
 	{"hysteria"}, {"hysteria2"},
-	{"shadowsocks"}, {"ss", "server"},
-	{"edge", "ws"}, {"ws", "runtime"},
+	{"shadowsocks"},
+	{"edge", "ws", "cover"}, {"edgerelay2610"}, {"ws", "runtime"},
 	{"eooce"}, {"pxnode"}, {"nezha"}, {"nezhahq"}, {"gost"},
 	{"naiveproxy"}, {"naive", "proxy"},
-	{"tuic"}, {"brook"},
+	{"tuic"}, {"txthinking", "brook"},
 }
+
+// ambiguousSignatures name proxy software that other software shares a word
+// with: Amazon's X-Ray daemon and JFrog Xray are not proxies.
+var ambiguousSignatures = []struct {
+	signature []string
+	unless    []string
+}{
+	{signature: []string{"xray"}, unless: []string{"aws", "amazon", "jfrog"}},
+}
+
+// exactNames are matched against the whole app name or the whole last path
+// segment of the image repository, so brook-scheduler and ss-server-metrics pass.
+var exactNames = []string{"brook", "ss-server", "ss_server", "ssserver"}
 
 // proxyEnvNames are environment variable names a proxy node is configured by.
+// Argo Workflows and Argo CD read ARGO_* too, so only the tunnel's own are named.
 var proxyEnvNames = map[string]bool{
 	"UUID": true, "NODE_UUID": true, "WS_PATH": true, "WSPATH": true, "STREAM_PATH": true,
+	"ARGO_AUTH": true, "ARGO_DOMAIN": true,
 }
 
-var proxyEnvPrefixes = []string{"VLESS_", "VMESS_", "XRAY_", "ARGO_", "NEZHA_", "TROJAN_"}
+var proxyEnvPrefixes = []string{"VLESS_", "VMESS_", "XRAY_", "NEZHA_", "TROJAN_"}
 
 // MinProxyEnvKeys is how many proxy-shaped variables make an app a proxy.
 const MinProxyEnvKeys = 2
@@ -72,14 +89,64 @@ func hasRun(haystack, needle []string) bool {
 	return false
 }
 
+func hasAny(words, wanted []string) bool {
+	for _, word := range words {
+		for _, candidate := range wanted {
+			if word == candidate {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// repositoryName is the last path segment of an image reference without its tag or digest.
+func repositoryName(image string) string {
+	image = strings.ToLower(strings.TrimSpace(image))
+	if at := strings.IndexByte(image, '@'); at >= 0 {
+		image = image[:at]
+	}
+	if slash := strings.LastIndexByte(image, '/'); slash >= 0 {
+		image = image[slash+1:]
+	}
+	if colon := strings.IndexByte(image, ':'); colon >= 0 {
+		image = image[:colon]
+	}
+	return image
+}
+
+// matchText looks for a signature in text. A software's own image is what
+// says an ambiguous word is not a proxy, so a name is judged with the image's
+// words too, and an image only with its own.
+func matchText(text string, alongside []string) string {
+	words := tokens(text)
+	for _, signature := range proxySignatures {
+		if hasRun(words, signature) {
+			return strings.Join(signature, "-")
+		}
+	}
+	for _, ambiguous := range ambiguousSignatures {
+		if hasRun(words, ambiguous.signature) && !hasAny(words, ambiguous.unless) && !hasAny(alongside, ambiguous.unless) {
+			return strings.Join(ambiguous.signature, "-")
+		}
+	}
+	return ""
+}
+
 // MatchImageOrName returns the signature an image reference or app name
 // carries, or "".
 func MatchImageOrName(image, name string) string {
-	for _, text := range []string{image, name} {
-		words := tokens(text)
-		for _, signature := range proxySignatures {
-			if hasRun(words, signature) {
-				return strings.Join(signature, "-")
+	if signature := matchText(image, nil); signature != "" {
+		return signature
+	}
+	if signature := matchText(name, tokens(image)); signature != "" {
+		return signature
+	}
+	whole := []string{repositoryName(image), strings.ToLower(strings.TrimSpace(name))}
+	for _, candidate := range whole {
+		for _, exact := range exactNames {
+			if candidate == exact {
+				return exact
 			}
 		}
 	}

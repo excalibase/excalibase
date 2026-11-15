@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/excalibase/provisioning-poc/internal/abuse"
+	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"log"
 	"net/http"
 	"strconv"
@@ -154,13 +155,22 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	isFirstUser := len(domain.HumanUsers(allUsers)) == 0
 
-	if !isFirstUser && !h.admitSignup(w, r, req.Email) {
-		return
+	if !isFirstUser {
+		if err := h.signupGuard.CheckEmail(r.Context(), req.Email); err != nil {
+			writeSignupRefusal(w, err)
+			return
+		}
 	}
 
 	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, req.Email, isFirstUser)
 	if status != 0 {
 		httpError(w, msg, status)
+		return
+	}
+	// The network's budget is spent only by a sign-up nothing has refused, and
+	// never by a live invite, which names the address it is for.
+	if !isFirstUser && inviteHash == "" && !h.signupGuard.AllowSignup(r.Context(), clientaddr.FromRequest(r)) {
+		writeSignupRefusal(w, abuse.ErrSignupRateLimited)
 		return
 	}
 	if !isFirstUser && !h.verifier.Available() {

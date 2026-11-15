@@ -150,3 +150,56 @@ func TestOAuth_LimitsNewAccountsPerNetworkAndAllowsRealOnes(t *testing.T) {
 		t.Fatalf("oauth_error = %q", got)
 	}
 }
+
+// A refused attempt spends nothing from the network's budget.
+func TestRegister_RefusedAttemptsDoNotSpendTheBudget(t *testing.T) {
+	f := guardedSignup(1)
+	for _, address := range []string{"a@fldubai.com", "b@newthrowaway.test", "c@no-mail-here.test", "d@slow.test"} {
+		if w := postRegister(f.h, "bob", address); w.Code == http.StatusCreated || w.Code == http.StatusTooManyRequests {
+			t.Fatalf("%s: %d", address, w.Code)
+		}
+	}
+	if w := postRegister(f.h, "bob", "bob@gmail.com"); w.Code != http.StatusCreated {
+		t.Fatalf("a real sign-up after four refusals: %d %s", w.Code, w.Body.String())
+	}
+	if w := postRegister(f.h, "carol", "carol@gmail.com"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("the budget of one was not spent by the real sign-up: %d", w.Code)
+	}
+}
+
+// A live invite names the address it is for, so accepting one never spends the budget.
+func TestRegister_AValidInviteIsNotLimitedByTheNetworkBudget(t *testing.T) {
+	const token = "invite-token"
+	f := guardedSignup(1)
+	f.h.SetOrgStore(&inviteOrgStore{tokenHash: hashToken(token), email: "bob@company.test"})
+	if w := postRegister(f.h, "alice", "alice@gmail.com"); w.Code != http.StatusCreated {
+		t.Fatalf("budget spend: %d", w.Code)
+	}
+	if w := postRegisterWithInvite(f.h, "bob", "bob@company.test", token); w.Code != http.StatusCreated {
+		t.Fatalf("invited sign-up after the budget is spent: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRegister_AnInviteDoesNotExemptADisposableAddress(t *testing.T) {
+	const token = "invite-token"
+	f := guardedSignup(5)
+	f.h.SetOrgStore(&inviteOrgStore{tokenHash: hashToken(token), email: "bob@fldubai.com"})
+	if w := postRegisterWithInvite(f.h, "bob", "bob@fldubai.com", token); w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestOAuth_RefusedAttemptsDoNotSpendTheBudget(t *testing.T) {
+	h := newOAuthHarness(t, false)
+	h.auth.SetSignupGuard(newSignupGuardOn(1))
+	h.signIn.identity.Email = "dev@fldubai.com"
+	for range 3 {
+		if got := redirectedTo(t, h.callback("st4te")).Query().Get("oauth_error"); got != "email_not_allowed" {
+			t.Fatalf("oauth_error = %q", got)
+		}
+	}
+	h.signIn.identity.Email = "dev@gmail.com"
+	if got := redirectedTo(t, h.callback("st4te")); got.Path != "/oauth/complete" {
+		t.Fatalf("a real sign-up after refusals: %s", got)
+	}
+}
