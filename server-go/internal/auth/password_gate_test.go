@@ -90,7 +90,48 @@ func TestPasswordFunctionsRefuseWhenTheGateIsFull(t *testing.T) {
 	if _, err := HashPassword(testutil.FixturePassword("gate-hash")); !errors.Is(err, ErrBusy) {
 		t.Errorf("HashPassword: got %v, want ErrBusy", err)
 	}
-	if _, err := VerifyPassword(testutil.FixturePassword("gate-seed"), hash); !errors.Is(err, ErrBusy) {
+	if _, err := VerifyPassword(testutil.FixturePassword("gate-seed"), hash, true); !errors.Is(err, ErrBusy) {
 		t.Errorf("VerifyPassword: got %v, want ErrBusy", err)
+	}
+}
+
+// Unknown usernames can fill their share of the gate but never the slots kept
+// for accounts that exist, so a flood cannot lock a real admin out (EXC-749).
+func TestGateKeepsSlotsForKnownAccountsWhenUnknownNamesFloodIt(t *testing.T) {
+	g := newHashGate(4, 20*time.Millisecond)
+	release := make(chan struct{})
+	var started sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		started.Add(1)
+		go func() { _ = g.runFor(false, func() { started.Done(); <-release }) }()
+	}
+	started.Wait()
+
+	if err := g.runFor(false, func() { t.Error("an unknown name took a reserved slot") }); !errors.Is(err, ErrBusy) {
+		t.Fatalf("fourth unknown: got %v, want ErrBusy", err)
+	}
+	ran := false
+	if err := g.runFor(true, func() { ran = true }); err != nil || !ran {
+		t.Fatalf("known account refused behind a flood: err=%v ran=%v", err, ran)
+	}
+	close(release)
+}
+
+func TestGateReservesAQuarterOfTheSlotsAndAtLeastOne(t *testing.T) {
+	cases := map[int]int{2: 1, 3: 1, 4: 1, 8: 2, 16: 4}
+	for slots, reserved := range cases {
+		if got := reservedSlots(slots); got != reserved {
+			t.Errorf("%d slots: reserved %d, want %d", slots, got, reserved)
+		}
+	}
+}
+
+// One slot cannot be split: unknown names must still be able to sign in
+// (and be refused) there, or the gate would answer them differently.
+func TestGateWithOneSlotServesUnknownNamesToo(t *testing.T) {
+	g := newHashGate(1, 20*time.Millisecond)
+	ran := false
+	if err := g.runFor(false, func() { ran = true }); err != nil || !ran {
+		t.Fatalf("err=%v ran=%v", err, ran)
 	}
 }

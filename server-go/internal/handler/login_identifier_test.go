@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -72,9 +74,9 @@ func TestLoginHashesThePasswordEvenForAnUnknownIdentifier(t *testing.T) {
 	r, _, _ := identifierLoginRouter(t, 10)
 	calls := 0
 	original := verifyPassword
-	verifyPassword = func(password, hash string) (bool, error) {
+	verifyPassword = func(password, hash string, known bool) (bool, error) {
 		calls++
-		return original(password, hash)
+		return original(password, hash, known)
 	}
 	t.Cleanup(func() { verifyPassword = original })
 
@@ -102,5 +104,42 @@ func TestLoginGuessBudgetIsSharedByUsernameAndEmail(t *testing.T) {
 	doRequest(r, "POST", routeLogin, loginBody(user.Email, "wrong"))
 	if w := doRequest(r, "POST", routeLogin, loginBody("ERIN@example.test", password)); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("third attempt by another identifier: got %d, want 429", w.Code)
+	}
+}
+
+// A flood of unknown usernames fills the gate's unknown share, never the slots
+// kept for existing accounts: a real admin's new sign-in still gets in (EXC-749).
+func TestLoginOfAKnownAccountSucceedsDuringAnUnknownNameFlood(t *testing.T) {
+	r, user, password := guardedLoginRouter(t, 1_000_000)
+	restore := auth.ConfigurePasswordGate(2, 100*time.Millisecond)
+	defer restore()
+
+	// The first unknown name hashes the cached dummy; do that before the flood
+	// so the test measures the gate, not the cold start.
+	doRequest(r, "POST", routeLogin, loginBody("warm-up", "wrong-pass"))
+
+	stop := make(chan struct{})
+	var flood sync.WaitGroup
+	for worker := 0; worker < 32; worker++ {
+		flood.Add(1)
+		go func() {
+			defer flood.Done()
+			for attempt := 0; ; attempt++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				doRequest(r, "POST", routeLogin, loginBody(fmt.Sprintf("ghost-%d-%d", worker, attempt), "wrong-pass"))
+			}
+		}()
+	}
+	defer func() { close(stop); flood.Wait() }()
+	time.Sleep(50 * time.Millisecond)
+
+	for attempt := 0; attempt < 20; attempt++ {
+		if w := doRequest(r, "POST", routeLogin, loginBody(user, password)); w.Code != http.StatusOK {
+			t.Fatalf("known login %d during the flood: got %d %s, want 200", attempt, w.Code, w.Body.String())
+		}
 	}
 }

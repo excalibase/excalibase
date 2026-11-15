@@ -24,21 +24,53 @@ const (
 	gateWait       = 500 * time.Millisecond
 )
 
+// gateReservedPercent is the share of slots only checks against accounts that
+// exist may use, so a flood of unknown usernames cannot fill the whole gate.
+const gateReservedPercent = 25
+
 // hashGate bounds how many argon2 runs are in flight; a run holds
-// argon2Memory and several threads for its whole duration.
+// argon2Memory and several threads for its whole duration. Runs for unknown
+// accounts also draw from the smaller unknown pool, so the reserved slots are
+// always free for real accounts.
 type hashGate struct {
-	slots chan struct{}
-	wait  time.Duration
+	slots   chan struct{}
+	unknown chan struct{}
+	wait    time.Duration
 }
 
 func newHashGate(slots int, wait time.Duration) *hashGate {
-	return &hashGate{slots: make(chan struct{}, slots), wait: wait}
+	return &hashGate{
+		slots:   make(chan struct{}, slots),
+		unknown: make(chan struct{}, slots-reservedSlots(slots)),
+		wait:    wait,
+	}
 }
 
-// run executes fn inside a slot, or returns ErrBusy after the wait.
-func (g *hashGate) run(fn func()) error {
+// reservedSlots is a quarter of the gate, at least one. A single slot cannot
+// be split, so it stays shared and unknown names are served there too.
+func reservedSlots(slots int) int {
+	if slots < 2 {
+		return 0
+	}
+	return max(slots*gateReservedPercent/100, 1)
+}
+
+// run executes fn for a real account's work inside a slot, or returns ErrBusy
+// after the wait.
+func (g *hashGate) run(fn func()) error { return g.runFor(true, fn) }
+
+// runFor is run for work on behalf of a known account or an unknown name.
+func (g *hashGate) runFor(knownAccount bool, fn func()) error {
 	timer := time.NewTimer(g.wait)
 	defer timer.Stop()
+	if !knownAccount {
+		select {
+		case g.unknown <- struct{}{}:
+			defer func() { <-g.unknown }()
+		case <-timer.C:
+			return ErrBusy
+		}
+	}
 	select {
 	case g.slots <- struct{}{}:
 	case <-timer.C:

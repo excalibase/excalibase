@@ -454,7 +454,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if user != nil && !user.IsService() {
 		hash = user.PasswordHash
 	}
-	matched, err := verifyPassword(req.Password, hash)
+	matched, err := verifyPassword(req.Password, hash, user != nil && !user.IsService())
 	if err != nil {
 		h.refundAttempt(addressKey, guardKey, user != nil)
 		writePasswordBusy(w, err)
