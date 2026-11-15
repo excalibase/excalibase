@@ -64,12 +64,15 @@ func (l *sessionLock) Acquire(ctx context.Context) (storage.LeaderLease, bool, e
 		defer cancel()
 		conn, err := s.db.Conn(connCtx)
 		if err != nil {
-			return nil, false, fmt.Errorf("acquire conn: %w", err)
+			return nil, false, fmt.Errorf("%w: acquire conn: %v", storage.ErrPoolBusy, err)
 		}
 		s.conn = conn
 		s.gen++
 	}
-	opCtx, cancel := context.WithTimeout(ctx, sessionOpTimeout)
+	// Not derived from the caller's cancellation: a cancelled query ends the
+	// session, and with it every other leader's lock. One caller giving up
+	// must not take the others down.
+	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionOpTimeout)
 	defer cancel()
 	var got bool
 	if err := s.conn.QueryRowContext(opCtx, `SELECT pg_try_advisory_lock($1)`, l.key).Scan(&got); err != nil {
@@ -128,7 +131,7 @@ func (l *sessionLease) Valid(ctx context.Context) bool {
 	if !l.live() {
 		return false
 	}
-	pingCtx, cancel := context.WithTimeout(ctx, sessionOpTimeout)
+	pingCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionOpTimeout)
 	defer cancel()
 	if err := s.conn.PingContext(pingCtx); err != nil {
 		s.dropLocked()

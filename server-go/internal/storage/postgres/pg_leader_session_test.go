@@ -4,8 +4,12 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 // Every scheduler holds a standing leadership claim for as long as it leads.
@@ -106,5 +110,66 @@ func TestLeaderSession_ContestedKeyIsRefusedAndFreesTheConnection(t *testing.T) 
 	}
 	if now := inUse(t, store); now != held {
 		t.Fatalf("a refused claim holds a connection: %d vs %d", now, held)
+	}
+}
+
+// A lifecycle operation holds its project lock and then reads the project row,
+// which needs a connection of its own. When the lock itself pinned a
+// connection, enough concurrent operations took the whole pool for locks and
+// every one of them waited forever for the connection to read with (EXC-746).
+// Locks on the shared session cost no pool connection, so this must finish.
+func TestLeaderSession_ConcurrentLockHoldersStillGetConnectionsToWork(t *testing.T) {
+	store := testStore(t)
+	store.DB().SetMaxOpenConns(3)
+	runLifecycleLikeOperations(t, store, store.LeaderLock, 12)
+}
+
+func runLifecycleLikeOperations(t *testing.T, store *Store, lockFor func(int64) storage.LeaderLock, operations int) {
+	t.Helper()
+	var wg sync.WaitGroup
+	failures := make(chan string, operations)
+	for i := 0; i < operations; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			lease, got, err := lockFor(testLockKeyA + int64(i)).Acquire(ctx)
+			if err != nil || !got {
+				failures <- fmt.Sprintf("op %d: acquire got=%v err=%v", i, got, err)
+				return
+			}
+			defer func() { _ = lease.Release(context.Background()) }()
+			time.Sleep(300 * time.Millisecond) // every operation holds its lock while the others start
+			var one int
+			if err := store.DB().QueryRowContext(ctx, `SELECT 1`).Scan(&one); err != nil {
+				failures <- fmt.Sprintf("op %d: read under the lock: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(failures)
+	for failure := range failures {
+		t.Error(failure)
+	}
+}
+
+// One caller giving up must not cost the others their leadership: a cancelled
+// claim used to end the shared session, and every lock on it.
+func TestLeaderSession_ACancelledClaimLeavesOtherLeasesValid(t *testing.T) {
+	store := testStore(t)
+	session := NewLeaderSession(store.DB())
+	other, got, err := session.Lock(testLockKeyA).Acquire(context.Background())
+	if err != nil || !got {
+		t.Fatalf("Acquire: %v %v", got, err)
+	}
+	defer other.Release(context.Background())
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, _ = session.Lock(testLockKeyB).Acquire(cancelled)
+
+	if !other.Valid(context.Background()) {
+		t.Fatal("another leader lost its lease because one claim was cancelled")
 	}
 }

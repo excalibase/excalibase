@@ -1380,7 +1380,7 @@ func buildProvisioningService(
 	// project can only be under one lifecycle operation at a time.
 	if pg, ok := sqlStore.(*pgstore.Store); ok {
 		lifecycleClaimer = service.NewAdvisoryOperationClaimer(
-			func(key int64) storage.LeaderLock { return pgstore.NewAdvisoryLock(pg.DB(), key) })
+			pg.LeaderLock)
 		provSvc.SetOperationClaimer(lifecycleClaimer)
 		// A deleted project's apps go with it, whether or not hosting is on now.
 		provSvc.SetAppPurger(apphost.NewPostgresAppStore(pg.DB()))
@@ -2033,6 +2033,10 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 // connection to free up before the router answers 503.
 const poolGuardWait = 2 * time.Second
 
+// requestDeadline bounds ordinary requests, and with them every platform
+// database call they make; long-lived routes are exempt (RequestDeadline).
+const requestDeadline = 2 * time.Minute
+
 // buildRouter wires the chi router with global middleware and mounts every
 // API subtree. The per-subtree mounting is delegated to focused helpers so
 // this top-level remains a manifest of which features are exposed.
@@ -2051,6 +2055,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 		// An exhausted platform pool answers 503 fast instead of hanging every request.
 		r.Use(custommw.PoolGuard(pool.DB().Stats, poolGuardWait))
 	}
+	r.Use(custommw.RequestDeadline(requestDeadline))
 	r.Use(auth.ExtractAuth(sqlStore))
 	// A site deploy token (EXC-620) reaches only its own site's deploys.
 	r.Use(custommw.SiteDeployTokenGate(d.siteDeployTokens, sqlStore))

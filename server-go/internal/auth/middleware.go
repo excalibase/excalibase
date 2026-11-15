@@ -127,8 +127,13 @@ func recordLastUsed(ctx context.Context, lookup TokenLookup, token *domain.Acces
 	if !ok || !lastUsedStale(token, now) {
 		return
 	}
-	_ = recorder.TouchTokenLastUsed(ctx, token.TokenHash, now)
+	// A bookkeeping write must not hold a request on a full pool.
+	touchCtx, cancel := context.WithTimeout(ctx, lastUsedTimeout)
+	defer cancel()
+	_ = recorder.TouchTokenLastUsed(touchCtx, token.TokenHash, now)
 }
+
+const lastUsedTimeout = time.Second
 
 // authFailure returns the machine-readable reason ExtractAuth refused the
 // presented token, or "" when no token was presented or it was unknown.

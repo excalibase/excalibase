@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -76,5 +77,35 @@ func TestExtractAuth_UnknownTokenStillContinuesUnauthenticated(t *testing.T) {
 	}
 	if rec2 := serveWithFailingLookup(failingLookup{token: &domain.AccessToken{UserID: "u"}, userErr: errors.New("user not found")}); rec2.Code != http.StatusOK {
 		t.Fatalf("a missing user is not an outage; status = %d", rec2.Code)
+	}
+}
+
+type blockingRecorder struct {
+	failingLookup
+	user *domain.User
+}
+
+func (b blockingRecorder) FindUserByID(context.Context, string) (*domain.User, error) {
+	return b.user, nil
+}
+
+func (blockingRecorder) TouchTokenLastUsed(ctx context.Context, _ string, _ time.Time) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// The last-used write is best effort; on a full pool it must not hold the
+// request of a token that already authenticated.
+func TestExtractAuth_LastUsedWriteIsBounded(t *testing.T) {
+	lookup := blockingRecorder{
+		failingLookup: failingLookup{token: &domain.AccessToken{UserID: "u"}},
+		user:          &domain.User{ID: "u", Active: true},
+	}
+	done := make(chan struct{})
+	go func() { serveWithFailingLookup(lookup); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the request is still waiting on the last-used write")
 	}
 }
