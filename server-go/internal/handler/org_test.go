@@ -915,3 +915,25 @@ func acceptInvite(t *testing.T, r chi.Router, invite *httptest.ResponseRecorder,
 		t.Fatalf("accept as %s: %d %s", userID, accept.Code, accept.Body.String())
 	}
 }
+
+// Deleting an org must not leave its projects running with no owner to see them.
+func TestDeleteOrg_RefusedWhileProjectsExist(t *testing.T) {
+	r, store, instances := setupOrgRouterWithInstances(t, true)
+
+	w := orgRequest(r, "POST", testOrgsPath, `{"name":"Busy","slug":"busy-org"}`, testAliceID)
+	var org domain.Org
+	json.NewDecoder(w.Body).Decode(&org)
+	instances.insts["proj-busy0001"] = &domain.DatabaseInstance{ProjectID: "proj-busy0001", OrgID: org.ID}
+
+	if got := orgRequest(r, "DELETE", testOrgsSlash+org.ID, "", testAliceID); got.Code != http.StatusConflict {
+		t.Fatalf("delete with a project: got %d, want 409. Body: %s", got.Code, got.Body.String())
+	}
+	if found, _ := store.FindOrgByID(t.Context(), org.ID); found == nil {
+		t.Fatal("the org must survive a refused delete")
+	}
+
+	delete(instances.insts, "proj-busy0001")
+	if got := orgRequest(r, "DELETE", testOrgsSlash+org.ID, "", testAliceID); got.Code != http.StatusOK {
+		t.Fatalf("delete once empty: got %d, want 200", got.Code)
+	}
+}

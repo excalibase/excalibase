@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -81,9 +82,32 @@ func (s *Store) UpdateOrg(ctx context.Context, org *domain.Org) error {
 	return err
 }
 
+// DeleteOrg: see storage.OrgStore. A deleted free org is recorded on its
+// owner, so the free allowance is not handed back.
 func (s *Store) DeleteOrg(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM orgs WHERE id = $1`, id)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin org delete: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var ownerID, tier string
+	err = tx.QueryRowContext(ctx, `DELETE FROM orgs WHERE id = $1 RETURNING owner_id, tier`, id).Scan(&ownerID, &tier)
+	var pqErr *pq.Error
+	switch {
+	case errors.As(err, &pqErr) && string(pqErr.Code) == foreignKeyViolation:
+		return storage.ErrOrgHasProjects
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return err
+	}
+	if strings.EqualFold(tier, string(domain.Free)) {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE users SET free_orgs_deleted = free_orgs_deleted + 1 WHERE id = $1`, ownerID); err != nil {
+			return fmt.Errorf("record deleted free org: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // --- Org Members ---

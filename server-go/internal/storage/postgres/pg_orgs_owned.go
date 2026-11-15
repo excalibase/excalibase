@@ -24,11 +24,9 @@ const orgSlugConstraint = "orgs_slug_key"
 func (s *Store) CreateOrgWithOwner(ctx context.Context, org *domain.Org, maxFreeOrgs int) error {
 	return s.underCreatorLock(ctx, org.OwnerID, func(tx *sql.Tx) error {
 		if maxFreeOrgs > 0 && org.Tier == domain.Free {
-			var held int
-			if err := tx.QueryRowContext(ctx,
-				`SELECT count(*) FROM orgs WHERE owner_id = $1 AND upper(tier) = 'FREE'`,
-				org.OwnerID).Scan(&held); err != nil {
-				return fmt.Errorf("count free orgs: %w", err)
+			held, err := freeOrgsEverCreated(ctx, tx, org.OwnerID)
+			if err != nil {
+				return err
 			}
 			if held >= maxFreeOrgs {
 				return storage.ErrFreeOrgLimitReached
@@ -46,7 +44,9 @@ func (s *Store) EnsurePersonalOrg(ctx context.Context, org *domain.Org) (bool, e
 	err := s.underCreatorLock(ctx, org.OwnerID, func(tx *sql.Tx) error {
 		var exists bool
 		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM orgs WHERE owner_id = $1)`, org.OwnerID).Scan(&exists); err != nil {
+			`SELECT EXISTS (SELECT 1 FROM orgs WHERE owner_id = $1)
+			     OR EXISTS (SELECT 1 FROM users WHERE id = $1 AND free_orgs_deleted > 0)`,
+			org.OwnerID).Scan(&exists); err != nil {
 			return fmt.Errorf("find orgs created by the account: %w", err)
 		}
 		if exists {
@@ -59,6 +59,20 @@ func (s *Store) EnsurePersonalOrg(ctx context.Context, org *domain.Org) (bool, e
 		return nil
 	})
 	return created && err == nil, err
+}
+
+// freeOrgsEverCreated counts the free orgs the account holds plus those it
+// deleted: the allowance belongs to the account, not to the org rows left.
+func freeOrgsEverCreated(ctx context.Context, tx *sql.Tx, ownerID string) (int, error) {
+	var ever int
+	err := tx.QueryRowContext(ctx,
+		`SELECT (SELECT count(*) FROM orgs WHERE owner_id = $1 AND upper(tier) = 'FREE')
+		      + COALESCE((SELECT free_orgs_deleted FROM users WHERE id = $1), 0)`,
+		ownerID).Scan(&ever)
+	if err != nil {
+		return 0, fmt.Errorf("count free orgs: %w", err)
+	}
+	return ever, nil
 }
 
 func (s *Store) underCreatorLock(ctx context.Context, ownerID string, write func(*sql.Tx) error) error {
