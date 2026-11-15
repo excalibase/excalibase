@@ -1,3 +1,4 @@
+import { describeBackupSchedule } from '../utils/backupSchedule';
 import { useState } from 'react';
 import { useInstance, useListBackups, useTriggerBackup } from '../hooks/useProvisioning';
 import { isMySQLProject } from '../utils/engine';
@@ -56,7 +57,7 @@ export function BackupsPage() {
           </div>
           <div className="bg-surface-card border border-border-primary rounded-xl p-4">
             <p className="text-xs text-text-tertiary mb-1">Schedule</p>
-            <p className="text-sm font-medium text-text-primary font-mono">{backupData.schedule ?? '—'}</p>
+            <p className="text-sm font-medium text-text-primary">{describeBackupSchedule(backupData.schedule)}</p>
           </div>
           <div className="bg-surface-card border border-border-primary rounded-xl p-4">
             <p className="text-xs text-text-tertiary mb-1">Retention</p>

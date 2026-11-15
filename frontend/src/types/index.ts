@@ -38,12 +38,15 @@ export interface PostgresSettings {
   // Asks for an image carrying the DocumentDB extension. Create-time only —
   // the image a cluster runs is fixed when it is provisioned.
   documentDb?: boolean;
+  // The owner password the customer chose; absent asks for a generated one.
+  password?: string;
 }
 
 // A MySQL project (ADR 0041) names a version from the MySQL catalogue.
 export interface MySQLSettings {
   databaseType: typeof DatabaseType.MYSQL;
   mysqlVersion: string;
+  password?: string;
 }
 
 export type DatabaseSettings = PostgresSettings | MySQLSettings;
@@ -121,7 +124,6 @@ export interface CredentialsResponse {
   port: number;
   databaseName: string;
   username: string;
-  password: string;
   sslMode?: string;
   // The control plane serves this as `connectionUrl`; `connectionString` was
   // never a field it sent.
@@ -132,8 +134,13 @@ export interface CredentialsResponse {
   jdbcUrl?: string;
   // The SELECT-only login the read address names (EXC-675), when the project has one.
   readerUsername?: string;
-  readerPassword?: string;
 }
+
+// A database password is in exactly two answers, shown once: creating (or
+// adding) a database, and resetting the password. It is never stored here.
+export type WithPassword<T> = T & { readonly password?: string };
+
+export type RotatedCredentials = CredentialsResponse & { readonly password: string };
 
 export interface BackupConfig {
   schedule: string;

@@ -7,6 +7,9 @@ import { api } from '../api/client';
 import type { ProjectEndpoint } from '../api/projectEndpoint';
 
 vi.mock('../api/client', () => ({ api: { get: vi.fn() } }));
+vi.mock('../hooks/useProjectRole', () => ({ useProjectRole: () => ({ canAdmin: false, canDevelop: false, role: null, isLoading: false }) }));
+// Whether the project hosts apps is its own tested hook; here it is a switch.
+vi.mock('../hooks/useHostsApps', () => ({ useHostsApps: () => hostedApps.length > 0 }));
 
 const CREDENTIALS = {
   projectId: 'p-1',
@@ -14,10 +17,9 @@ const CREDENTIALS = {
   port: 5432,
   databaseName: 'appdb',
   username: 'app',
-  password: 's3cret',
   sslMode: 'require',
   connectionUrl:
-    'postgresql://app:s3cret@p-1-postgres-rw.org-1.svc.cluster.local:5432/appdb?sslmode=require',
+    'postgresql://app:<password>@p-1-postgres-rw.org-1.svc.cluster.local:5432/appdb?sslmode=require',
 };
 
 // A project whose public port is open and answering, as GET
@@ -54,8 +56,16 @@ const WITH_MONGO: ProjectEndpoint = {
   },
 };
 
+// A project that hosts an app is the one whose internal address is shown.
+const APPS = [{ id: 'a1', name: 'web' }];
+let hostedApps: unknown[] = APPS;
+
+function mockCredentials(data: object) {
+  vi.mocked(api.get).mockImplementation(async () => ({ data }) as never);
+}
+
 function renderStrings(props: { documentDb?: boolean; endpoint?: ProjectEndpoint } = {}) {
-  vi.mocked(api.get).mockResolvedValue({ data: CREDENTIALS } as never);
+  mockCredentials(CREDENTIALS);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -64,7 +74,10 @@ function renderStrings(props: { documentDb?: boolean; endpoint?: ProjectEndpoint
   );
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  hostedApps = APPS;
+});
 
 // userEvent.setup() installs its own clipboard stub, so the recorder has to go
 // in after it or the writes land somewhere nothing reads.
@@ -78,28 +91,23 @@ function recordClipboard(): string[] {
 }
 
 describe('ConnectionStrings — one credential', () => {
-  test('shows a single username and a single password, whatever protocols the project answers', async () => {
+  test('shows a single username and no password, whatever protocols the project answers', async () => {
     renderStrings({ documentDb: true, endpoint: WITH_MONGO });
     await screen.findByTestId('conn-username');
     expect(screen.getAllByTestId('conn-username')).toHaveLength(1);
-    expect(screen.getAllByTestId('conn-password')).toHaveLength(1);
+    expect(screen.queryByTestId('conn-password')).not.toBeInTheDocument();
     expect(screen.getByTestId('conn-username')).toHaveTextContent('app');
   });
 
-  test('keeps the password masked until it is revealed, in every string at once', async () => {
-    const user = userEvent.setup();
+  test('every string carries the <password> placeholder, never a password', async () => {
     renderStrings({ documentDb: true, endpoint: WITH_MONGO });
     await screen.findByTestId('conn-postgres-public');
-    expect(screen.getByTestId('conn-postgres-public')).not.toHaveTextContent('s3cret');
-    expect(screen.getByTestId('conn-mongo-public')).not.toHaveTextContent('s3cret');
-
-    await user.click(screen.getByTestId('conn-reveal-password'));
-    expect(screen.getByTestId('conn-postgres-public')).toHaveTextContent('s3cret');
-    expect(screen.getByTestId('conn-mongo-public')).toHaveTextContent('s3cret');
-    expect(screen.getByTestId('conn-password')).toHaveTextContent('s3cret');
+    expect(screen.getByTestId('conn-postgres-public')).toHaveTextContent('postgresql://app:<password>@');
+    expect(screen.getByTestId('conn-mongo-public')).toHaveTextContent('mongodb://app:<password>@');
+    expect(screen.queryByTestId('conn-reveal-password')).not.toBeInTheDocument();
   });
 
-  test('copies the real string, password included', async () => {
+  test('copies the string with the <password> placeholder', async () => {
     const user = userEvent.setup();
     renderStrings({ endpoint: PUBLIC_ENDPOINT });
     await screen.findByTestId('conn-postgres-public');
@@ -107,26 +115,37 @@ describe('ConnectionStrings — one credential', () => {
 
     await user.click(screen.getByTestId('conn-copy-postgres-public'));
     expect(written).toEqual([
-      'postgresql://app:s3cret@p-1.db.excalibase.io:26257/appdb?sslmode=verify-full',
+      'postgresql://app:<password>@p-1.db.excalibase.io:26257/appdb?sslmode=verify-full',
     ]);
   });
 });
 
 describe('ConnectionStrings — internal versus public', () => {
-  test('shows the internal address even when the project publishes no public port', async () => {
+  test('a project with no apps and no public port is not reachable and shows no internal host', async () => {
+    hostedApps = [];
+    renderStrings({
+      endpoint: { ...PUBLIC_ENDPOINT, publicEnabled: false, available: false, port: 0, caCertificate: '' },
+    });
+    expect(await screen.findByTestId('conn-postgres-public-absent')).toHaveTextContent(/not reachable from the internet/i);
+    expect(screen.queryByTestId('conn-postgres-internal')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('conn-postgres-public')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('svc.cluster.local');
+  });
+
+  test('a project that hosts apps shows the internal address, labelled for them', async () => {
     renderStrings({
       endpoint: { ...PUBLIC_ENDPOINT, publicEnabled: false, available: false, port: 0, caCertificate: '' },
     });
     const internal = await screen.findByTestId('conn-postgres-internal');
     expect(internal).toHaveTextContent('@p-1-postgres-rw.org-1.svc.cluster.local:5432/appdb');
-    expect(screen.queryByTestId('conn-postgres-public')).not.toBeInTheDocument();
+    expect(screen.getByTestId('conn-postgres-internal-label')).toHaveTextContent(/for your apps on Excalibase/i);
     expect(screen.getByTestId('conn-postgres-public-absent')).toBeInTheDocument();
   });
 
   test('shows the internal address alongside the public one, each labelled', async () => {
     renderStrings({ endpoint: PUBLIC_ENDPOINT });
     await screen.findByTestId('conn-postgres-public');
-    expect(screen.getByTestId('conn-postgres-internal-label')).toHaveTextContent(/internal/i);
+    expect(screen.getByTestId('conn-postgres-internal-label')).toHaveTextContent(/for your apps/i);
     expect(screen.getByTestId('conn-postgres-public-label')).toHaveTextContent(/public/i);
     expect(screen.getByTestId('conn-postgres-internal')).toHaveTextContent(
       '@p-1-postgres-rw.org-1.svc.cluster.local:5432/appdb'
@@ -134,7 +153,7 @@ describe('ConnectionStrings — internal versus public', () => {
     expect(screen.getByTestId('conn-postgres-public')).toHaveTextContent('@p-1.db.excalibase.io:26257/appdb');
   });
 
-  test('falls back to the in-cluster credentials when no endpoint has been read', async () => {
+  test('falls back to the in-cluster credentials for apps when no endpoint has been read', async () => {
     renderStrings();
     const internal = await screen.findByTestId('conn-postgres-internal');
     expect(internal).toHaveTextContent('@p-1-postgres-rw.org-1.svc.cluster.local:5432/appdb');
@@ -150,12 +169,11 @@ describe('ConnectionStrings — DocumentDB', () => {
     expect(screen.queryByTestId('conn-mongo-unavailable')).not.toBeInTheDocument();
   });
 
-  test('renders one credential with a Postgres and a Mongo string beside it', async () => {
+  test('renders one username with a Postgres and a Mongo string beside it', async () => {
     renderStrings({ documentDb: true, endpoint: WITH_MONGO });
     await screen.findByTestId('conn-mongo-public');
     expect(screen.getByTestId('conn-postgres-public')).toHaveTextContent('postgresql://app:');
     expect(screen.getByTestId('conn-mongo-public')).toHaveTextContent('mongodb://app:');
-    expect(screen.getAllByTestId('conn-password')).toHaveLength(1);
   });
 
   test('spells TLS the way a Mongo driver reads it', async () => {
@@ -303,9 +321,7 @@ const MYSQL_CA = '-----BEGIN CERTIFICATE-----\nMYSQLCA\n-----END CERTIFICATE----
 
 describe('ConnectionStrings — single-host MySQL', () => {
   test('gives the loopback string with TLS and says how to tunnel to it', async () => {
-    vi.mocked(api.get).mockResolvedValue({
-      data: { ...CREDENTIALS, engine: 'mysql', host: 'excalibase-p-1-mysql', port: 3306, username: 'admin', databaseName: 'shop' },
-    } as never);
+    mockCredentials({ ...CREDENTIALS, engine: 'mysql', host: 'excalibase-p-1-mysql', port: 3306, username: 'admin', databaseName: 'shop' });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
@@ -336,12 +352,10 @@ describe('ConnectionStrings — single-host MySQL', () => {
 // ADR 0041 decision 9: a MySQL project shows how its drivers connect, TLS on.
 describe('ConnectionStrings — MySQL driver examples', () => {
   test('gives a Node (mysql2) and a Connector/J example on the internal address', async () => {
-    vi.mocked(api.get).mockResolvedValue({
-      data: {
+    mockCredentials({
         ...CREDENTIALS, engine: 'mysql', host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, username: 'admin',
         databaseName: 'shop', jdbcUrl: 'jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=VERIFY_IDENTITY',
-      },
-    } as never);
+      });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
@@ -349,7 +363,7 @@ describe('ConnectionStrings — MySQL driver examples', () => {
       </QueryClientProvider>
     );
     expect(await screen.findByTestId('conn-mysql-internal')).toHaveTextContent(
-      'mysql://admin:••••••••@moco-p-1-mysql-primary.o-p-1.svc:3306/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-1-ca.crt',
+      'mysql://admin:<password>@moco-p-1-mysql-primary.o-p-1.svc:3306/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-1-ca.crt',
     );
     const node = screen.getByTestId('conn-mysql-node');
     expect(node).toHaveTextContent("import mysql from 'mysql2/promise'");
@@ -376,9 +390,7 @@ describe('ConnectionStrings — MySQL driver examples', () => {
   });
 
   test('builds a verifying JDBC URL itself when the credentials carry none', async () => {
-    vi.mocked(api.get).mockResolvedValue({
-      data: { ...CREDENTIALS, engine: 'mysql', host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, username: 'admin', databaseName: 'shop' },
-    } as never);
+    mockCredentials({ ...CREDENTIALS, engine: 'mysql', host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, username: 'admin', databaseName: 'shop' });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
@@ -392,13 +404,13 @@ describe('ConnectionStrings — MySQL driver examples', () => {
   });
 });
 
-// EXC-636: a password the URL grammar reserves is escaped, so the string
-// still parses and hands the driver the password itself.
-describe('ConnectionStrings — reserved characters in the password', () => {
-  const PASSWORD = 'p@ss:w/rd?#%x';
+// EXC-759: the strings carry a placeholder, so a username with reserved
+// characters is still escaped and the string still parses.
+describe('ConnectionStrings — reserved characters in the username', () => {
+  const USERNAME = 'p@ss:w/rd';
 
   async function copied(testId: string, data: object, endpoint: ProjectEndpoint): Promise<URL> {
-    vi.mocked(api.get).mockResolvedValue({ data: { ...CREDENTIALS, password: PASSWORD, ...data } } as never);
+    mockCredentials({ ...CREDENTIALS, username: USERNAME, ...data });
     const user = userEvent.setup();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -409,33 +421,32 @@ describe('ConnectionStrings — reserved characters in the password', () => {
     await screen.findByTestId(testId);
     const written = recordClipboard();
     await user.click(screen.getByTestId(`conn-copy-${testId.replace('conn-', '')}`));
-    return new URL(written[0]);
+    return new URL(written[0].replace('<password>', 'x'));
   }
 
-  test('the Postgres string round-trips the password', async () => {
+  test('the Postgres string parses', async () => {
     const parsed = await copied('conn-postgres-public', {}, PUBLIC_ENDPOINT);
-    expect(decodeURIComponent(parsed.password)).toBe(PASSWORD);
+    expect(decodeURIComponent(parsed.username)).toBe(USERNAME);
     expect(parsed.host).toBe('p-1.db.excalibase.io:26257');
     expect(parsed.pathname).toBe('/appdb');
   });
 
-  test('the MySQL string round-trips the password', async () => {
+  test('the MySQL string parses', async () => {
     const parsed = await copied(
-      'conn-mysql-internal',
-      { engine: 'mysql', username: 'admin', databaseName: 'shop' },
+      'conn-mysql-public',
+      { engine: 'mysql', databaseName: 'shop' },
       { ...PUBLIC_ENDPOINT, mongo: undefined },
     );
-    expect(decodeURIComponent(parsed.password)).toBe(PASSWORD);
-    expect(decodeURIComponent(parsed.username)).toBe('admin');
+    expect(decodeURIComponent(parsed.username)).toBe(USERNAME);
     expect(parsed.pathname).toBe('/shop');
   });
 });
 
-// EXC-675: an Admin also sees the SELECT-only login the read address names,
-// its password masked like the owner's.
+// EXC-675: an Admin also sees the SELECT-only login the read address names;
+// no password of it is stored or shown (EXC-759).
 describe('ConnectionStrings read-only login', () => {
   function renderWithReader(reader: Record<string, string>) {
-    vi.mocked(api.get).mockResolvedValue({ data: { ...CREDENTIALS, ...reader } } as never);
+    mockCredentials({ ...CREDENTIALS, ...reader });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return render(
       <QueryClientProvider client={client}>
@@ -444,12 +455,10 @@ describe('ConnectionStrings read-only login', () => {
     );
   }
 
-  test('shows the reader beside the owner, masked until revealed', async () => {
-    renderWithReader({ readerUsername: 'excalibase_reader', readerPassword: 'r3ad' });
+  test('shows the reader username beside the owner and no reader password', async () => {
+    renderWithReader({ readerUsername: 'excalibase_reader' });
     expect(await screen.findByTestId('conn-reader-username')).toHaveTextContent('excalibase_reader');
-    expect(screen.getByTestId('conn-reader-password')).not.toHaveTextContent('r3ad');
-    await userEvent.click(screen.getByTestId('conn-reveal-password'));
-    expect(screen.getByTestId('conn-reader-password')).toHaveTextContent('r3ad');
+    expect(screen.queryByTestId('conn-reader-password')).not.toBeInTheDocument();
   });
 
   test('shows nothing for a project without one', async () => {

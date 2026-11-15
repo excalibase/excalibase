@@ -21,7 +21,6 @@ const CREDENTIALS = {
   port: 5432,
   databaseName: 'app',
   username: 'excalibase_app',
-  password: 's3cret',
   sslMode: 'require',
   connectionUrl: '',
 };
@@ -93,14 +92,26 @@ test.describe('Project connection strings and minor upgrade', () => {
     await loginAs(page);
   });
 
-  test('shows the Mongo strings of a DocumentDB project', async ({ page }) => {
+  test('shows the Mongo strings of a DocumentDB project, the internal one for its apps', async ({ page }) => {
     await mockSettingsProject(page, true);
+    await json(page, '**/api/config', { deploymentMode: 'cloud', appHosting: true, features: {} });
+    await json(page, `**/api/projects/${PROJECT_ID}/apps/`, [{ id: 'a1', name: 'web' }]);
     await page.goto(`/project/${PROJECT_ID}/settings`);
     await expect(page.getByTestId('connection-strings')).toBeVisible({ timeout: FIRST_RENDER });
     await expect(page.getByTestId('conn-postgres-public')).toContainText('@test-project.db.example.com:30100/app');
     await expect(page.getByTestId('conn-mongo-public')).toContainText('@test-project.db.example.com:30101/?tls=true');
     await expect(page.getByTestId('conn-mongo-internal')).toContainText(`@${MONGO_INTERNAL_HOST}:10260/`);
     await expect(page.getByTestId('conn-mongo-internal')).toContainText('directConnection=true');
+  });
+
+  test('keeps the internal address off a project that hosts no apps', async ({ page }) => {
+    await mockSettingsProject(page, true);
+    await page.goto(`/project/${PROJECT_ID}/settings`);
+    await expect(page.getByTestId('conn-mongo-public')).toBeVisible({ timeout: FIRST_RENDER });
+    await expect(page.getByTestId('conn-mongo-internal')).toHaveCount(0);
+    await expect(page.getByTestId('conn-postgres-internal')).toHaveCount(0);
+    await expect(page.getByTestId('connection-strings')).not.toContainText('svc.cluster.local');
+    await expect(page.getByTestId('conn-postgres-public')).toContainText(':<password>@');
   });
 
   test('offers nothing Mongo-shaped for a project created without DocumentDB', async ({ page }) => {

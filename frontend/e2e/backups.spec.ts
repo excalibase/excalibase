@@ -117,7 +117,8 @@ test.describe('Backups page', () => {
 
     // Config tiles
     await expect(page.getByText('Enabled')).toBeVisible();
-    await expect(page.getByText('0 2 * * *')).toBeVisible();
+    await expect(page.getByText('Nightly backups at 02:00 UTC')).toBeVisible();
+    await expect(page.getByText('0 2 * * *')).toHaveCount(0);
     await expect(page.getByText('7 days')).toBeVisible();
 
     // Table headers

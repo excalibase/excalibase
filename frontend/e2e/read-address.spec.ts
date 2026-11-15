@@ -57,13 +57,13 @@ test.describe('Read-only address', () => {
     await page.goto('/project/test-project/settings');
     const card = page.getByTestId('read-address-card');
     await expect(card.getByTestId('read-address-replicas')).toHaveText('2 replicas serve reads.');
-    await expect(card.getByTestId('read-address-internal')).toContainText('test-project-postgres-ro');
+    await expect(card.getByTestId('read-address-internal')).toHaveCount(0);
     await card.getByTestId('read-address-toggle').click();
     await expect(card.getByTestId('read-address-public')).toContainText('test-project.db.example.test:31002');
     expect(puts).toEqual([{ enabled: true }]);
   });
 
-  // EXC-675: the card names the read-only login and Connect hands an admin its password.
+  // EXC-675: the card names the read-only login; no password is stored or shown (EXC-759).
   test('the read address signs in with the read-only login', async ({ page }) => {
     await mockControlPlane(page, { dbreadaddress: true, dbreadrole: true },
       { ...readAddress, username: 'excalibase_reader', readOnlyLogin: true } as never);
@@ -72,17 +72,17 @@ test.describe('Read-only address', () => {
         status: 200, contentType: 'application/json',
         body: JSON.stringify({
           projectId: 'test-project', host: 'localhost', port: 5432, databaseName: 'testdb', username: 'app',
-          password: 'owner-pass', connectionUrl: 'postgresql://app:owner-pass@localhost:5432/testdb',
-          readerUsername: 'excalibase_reader', readerPassword: 'reader-pass',
+          connectionUrl: 'postgresql://app:<password>@localhost:5432/testdb',
+          readerUsername: 'excalibase_reader',
         }),
       }),
     );
     await page.goto('/project/test-project/settings');
     await expect(page.getByTestId('read-address-login')).toContainText('excalibase_reader, a login that can only read');
     await expect(page.getByTestId('conn-reader-username').first()).toHaveText('excalibase_reader');
-    await expect(page.getByTestId('conn-reader-password').first()).not.toContainText('reader-pass');
-    await page.getByTestId('conn-reveal-password').first().click();
-    await expect(page.getByTestId('conn-reader-password').first()).toHaveText('reader-pass');
+    await expect(page.getByTestId('conn-reader-password')).toHaveCount(0);
+    await expect(page.getByTestId('conn-reveal-password')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('reader-pass');
   });
 
   test('one copy explains there is no replica', async ({ page }) => {

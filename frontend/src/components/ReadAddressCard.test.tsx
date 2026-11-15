@@ -9,6 +9,10 @@ vi.mock('../api/client', () => ({
   api: { get: vi.fn(), put: vi.fn() },
 }));
 
+// Whether the project hosts apps is its own tested hook; here it is a switch.
+let hostedApps = true;
+vi.mock('../hooks/useHostsApps', () => ({ useHostsApps: () => hostedApps }));
+
 const URL = '/projects/p-1/db-read-address';
 
 const replicas = {
@@ -162,7 +166,16 @@ describe('ReadAddressCard', () => {
     expect(await screen.findByTestId('read-address-toggle')).toBeEnabled();
   });
 
-  test('an installation without public ports keeps the internal address', async () => {
+  test('a project without apps shows no internal address', async () => {
+    hostedApps = false;
+    renderCard(replicas);
+    await screen.findByTestId('read-address-replicas');
+    expect(screen.queryByTestId('read-address-internal')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('svc.cluster.local');
+    hostedApps = true;
+  });
+
+  test('an installation without public ports keeps the internal address for apps', async () => {
     renderCard({ ...replicas, publicOffered: false, publicOpen: false });
     expect(await screen.findByTestId('read-address-internal')).toBeInTheDocument();
     expect(screen.getByText(/does not offer public database ports/)).toBeInTheDocument();

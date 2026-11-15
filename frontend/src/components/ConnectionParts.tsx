@@ -4,7 +4,7 @@ import type { ProjectEndpoint } from '../api/projectEndpoint';
 import type { CredentialsResponse } from '../types';
 
 // What every engine's connection section shares: where a client dials and
-// the row that shows a string masked and copies the real one.
+// the row that shows a string and copies it.
 
 // A target is one address a client can dial. Every project has an internal
 // one; a public one exists only when the customer opened a port and it is
@@ -29,42 +29,66 @@ export function publicTarget(endpoint?: ProjectEndpoint): Target | null {
   return { host: endpoint.host, port: endpoint.port };
 }
 
-// Labels for where each string works. A single host's "public" port is on
-// the host itself, and its internal address is the container's name.
+// Where a string works. The internal address is shown only for apps hosted
+// beside the database; nobody else can dial it.
 export function labels(endpoint?: ProjectEndpoint): { internal: string; external: string } {
   if (endpoint?.singleHost) {
-    return { internal: 'Internal — from containers on this host', external: 'On the host — 127.0.0.1' };
+    return { internal: 'For your apps on Excalibase (containers on this host)', external: 'On the host — 127.0.0.1' };
   }
-  return { internal: 'Internal — from inside the cluster', external: 'Public — from outside the cluster' };
+  return { internal: 'For your apps on Excalibase', external: 'Public — from outside the cluster' };
 }
 
-export const MASKED = '••••••••';
+export const PASSWORD_PLACEHOLDER = '<password>';
 
-// userinfo is a string's user:password, escaped so a reserved character in
-// either still parses; the mask is shown as it is.
-export function userinfo(username: string, password: string): string {
-  const shown = password === MASKED ? MASKED : encodeURIComponent(password);
-  return `${encodeURIComponent(username)}:${shown}`;
+// The address a customer's own machine should be told about: the public one
+// when it answers, the internal one only for a project that hosts apps, and
+// otherwise none, because the database cannot be reached from the internet.
+export type ConnectAddress =
+  | { kind: 'public'; host: string; port: number }
+  | { kind: 'internal'; host: string; port: number }
+  | { kind: 'none' };
+
+export function connectAddress(credentials: CredentialsResponse | undefined, endpoint: ProjectEndpoint | undefined, hostsApps: boolean): ConnectAddress {
+  const external = publicTarget(endpoint);
+  if (external) return { kind: 'public', ...external };
+  if (hostsApps && (endpoint || credentials)) {
+    const internal = endpoint
+      ? { host: endpoint.internal.host, port: endpoint.internal.port }
+      : { host: credentials!.host, port: credentials!.port };
+    return { kind: 'internal', ...internal };
+  }
+  return { kind: 'none' };
 }
+
+// userinfo is a string's user:password with the placeholder where the secret
+// goes; a stored password is never shown.
+export function userinfo(username: string): string {
+  return `${encodeURIComponent(username)}:${PASSWORD_PLACEHOLDER}`;
+}
+
+export const NOT_REACHABLE =
+  'Not reachable from the internet. Turn on public access (with an IP allowlist) to connect from your own machine.';
 
 export interface SectionProps {
   readonly projectId: string;
   readonly credentials: CredentialsResponse;
   readonly endpoint?: ProjectEndpoint;
-  readonly shownPassword: string;
+  readonly hostsApps: boolean;
 }
 
 interface StringRowProps {
   readonly testId: string;
   readonly label: string;
-  readonly shown: string;
-  readonly copied: string;
+  readonly value?: string;
+  // Other cards mask a secret on screen and copy the real one; connection
+  // strings carry no secret, so these default to the value.
+  readonly shown?: string;
+  readonly copied?: string;
 }
 
-// StringRow shows a connection string with the password masked and copies the
-// real one. What goes to the clipboard is what a client needs; what goes on
-// screen is what is safe over someone's shoulder.
-export function StringRow({ testId, label, shown, copied }: StringRowProps) {
+// StringRow shows a connection string with the password placeholder and
+// copies the same text.
+export function StringRow({ testId, label, value = '', shown = value, copied = value }: StringRowProps) {
   const [justCopied, setJustCopied] = useState(false);
   const onCopy = () => {
     navigator.clipboard.writeText(copied).then(

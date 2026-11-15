@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Check, Copy, Loader2, UserCog } from 'lucide-react';
 import { Button } from '../components/Button';
 import { useProjectIsDocumentDB } from '../hooks/useDocuments';
+import { useHostsApps } from '../hooks/useHostsApps';
 import { useProjectEndpoint, type ProjectEndpoint } from '../api/projectEndpoint';
 import {
   MONGO_USERNAME_PATTERN,
@@ -25,13 +26,14 @@ function errorText(err: unknown, fallback: string): string {
 // in-cluster one always, the public one only while it is answering.
 function connectionStrings(
   cred: MongoUserCredential,
-  endpoint?: ProjectEndpoint,
+  endpoint: ProjectEndpoint | undefined,
+  hostsApps: boolean,
 ): { label: string; uri: string }[] {
   const strings: { label: string; uri: string }[] = [];
-  const internal = endpoint?.mongo?.internal;
+  const internal = hostsApps ? endpoint?.mongo?.internal : undefined;
   if (internal) {
     strings.push({
-      label: 'Internal',
+      label: 'For your apps on Excalibase',
       uri: mongoUserUri(cred.username, cred.password, internal.host, internal.port, true),
     });
   }
@@ -73,12 +75,15 @@ function CopyButton({ value, label }: { readonly value: string; readonly label: 
 function NewCredentialNotice({
   cred,
   endpoint,
+  projectId,
   onDone,
 }: {
   readonly cred: MongoUserCredential;
   readonly endpoint?: ProjectEndpoint;
+  readonly projectId: string;
   readonly onDone: () => void;
 }) {
+  const hostsApps = useHostsApps(projectId);
   return (
     <div
       data-testid="new-mongo-user"
@@ -93,7 +98,7 @@ function NewCredentialNotice({
         </code>
         <CopyButton value={cred.password} label="Copy password" />
       </div>
-      {connectionStrings(cred, endpoint).map(({ label, uri }) => (
+      {connectionStrings(cred, endpoint, hostsApps).map(({ label, uri }) => (
         <div key={label}>
           <p className="text-xs text-text-secondary mb-1">{label}</p>
           <div className="flex items-center gap-2">
@@ -199,7 +204,7 @@ export function MongoUsersPage() {
         </div>
       )}
       {shown && (
-        <NewCredentialNotice cred={shown} endpoint={endpoint.data} onDone={() => setShown(null)} />
+        <NewCredentialNotice cred={shown} endpoint={endpoint.data} projectId={projectId} onDone={() => setShown(null)} />
       )}
 
       <form onSubmit={create} className="flex flex-wrap items-end gap-3">

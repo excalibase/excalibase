@@ -15,8 +15,8 @@ const MYSQL_PROJECT = {
 
 const MYSQL_CREDENTIALS = {
   projectId: 'p-my', host: MYSQL_PROJECT.host, port: 3306, databaseName: 'app', username: 'admin',
-  password: 's3cr3t', sslMode: 'VERIFY_IDENTITY', engine: 'mysql',
-  connectionUrl: `mysql://admin:s3cr3t@${MYSQL_PROJECT.host}:3306/app?ssl-mode=VERIFY_IDENTITY`,
+  sslMode: 'VERIFY_IDENTITY', engine: 'mysql',
+  connectionUrl: `mysql://admin:<password>@${MYSQL_PROJECT.host}:3306/app?ssl-mode=VERIFY_IDENTITY`,
   jdbcUrl: `jdbc:mysql://${MYSQL_PROJECT.host}:3306/app?sslMode=VERIFY_IDENTITY`,
 };
 
@@ -71,26 +71,28 @@ describe('SettingsPage — MySQL', () => {
   });
 
   // EXC-584: the owner's login, as MySQL clients take it, TLS required.
-  test('shows the MySQL login and its connection strings, password masked', async () => {
+  test('shows the MySQL login and its connection strings with a password placeholder, no internal host', async () => {
     renderSettings();
     expect(await screen.findByTestId('conn-mysql-section')).toBeInTheDocument();
     expect(screen.getByTestId('conn-username')).toHaveTextContent('admin');
-    expect(screen.getByTestId('conn-mysql-internal')).toHaveTextContent(
-      `mysql://admin:••••••••@${MYSQL_PROJECT.host}:3306/app?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-my-ca.crt`,
+    expect(await screen.findByTestId('conn-mysql-public')).toHaveTextContent(
+      'mysql://admin:<password>@p-my.db.example.com:32010/app?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-my-ca.crt',
     );
+    expect(screen.queryByTestId('conn-mysql-internal')).not.toBeInTheDocument();
     expect(screen.getByTestId('conn-mysql-jdbc')).toHaveTextContent(
-      `jdbc:mysql://${MYSQL_PROJECT.host}:3306/app?sslMode=VERIFY_IDENTITY`,
+      'jdbc:mysql://p-my.db.example.com:32010/app?sslMode=VERIFY_IDENTITY',
     );
     expect(screen.getByTestId('conn-mysql-section')).toHaveTextContent('TLS required');
     expect(screen.queryByTestId('conn-postgres-section')).not.toBeInTheDocument();
     expect(screen.queryByText(/postgresql:\/\//)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('svc.cluster.local');
   });
 
   test('offers the public port, its verifying MySQL string and the project CA', async () => {
     renderSettings();
     expect(await screen.findByTestId('public-port-card')).toBeInTheDocument();
     expect(await screen.findByTestId('conn-mysql-public')).toHaveTextContent(
-      'mysql://admin:••••••••@p-my.db.example.com:32010/app?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-my-ca.crt',
+      'mysql://admin:<password>@p-my.db.example.com:32010/app?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-my-ca.crt',
     );
     expect(screen.getByTestId('conn-ca-download')).toHaveAttribute('download', 'p-my-ca.crt');
   });

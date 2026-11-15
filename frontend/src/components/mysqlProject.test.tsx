@@ -132,9 +132,8 @@ describe('MySQL projects in Studio', () => {
   test('the overview shows the MySQL version and where to connect', async () => {
     renderWithProject(<DatabaseServiceCard projectId="p-my" />);
     expect(await screen.findByText('MySQL 8.4.10')).toBeInTheDocument();
-    expect(screen.getByTestId('service-database-mysql-endpoint')).toHaveTextContent(
-      'moco-p-my-mysql-primary.o-p-my.svc.cluster.local:3306'
-    );
+    expect(screen.getByTestId('service-database-mysql-endpoint')).toHaveTextContent(/not reachable from the internet/i);
+    expect(document.body.textContent).not.toContain('svc.cluster.local');
     expect(screen.getByTestId('service-database-mysql-endpoint')).toHaveTextContent(/TLS required/i);
     expect(screen.queryByText('Open database')).not.toBeInTheDocument();
     // No generated API serves a MySQL project yet.

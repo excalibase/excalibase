@@ -7,6 +7,7 @@ import { MongoUsersPage } from './MongoUsersPage';
 import { SubNav } from '../components/layout/SubNav';
 import { api } from '../api/client';
 
+vi.mock('../hooks/useHostsApps', () => ({ useHostsApps: () => true }));
 vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
 }));

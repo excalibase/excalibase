@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { useCredentials } from '../hooks/useProvisioning';
+import { useHostsApps } from '../hooks/useHostsApps';
+import { useProjectEndpoint } from '../api/projectEndpoint';
 import { Button } from './Button';
-import { Copy, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Copy, Loader2 } from 'lucide-react';
+import { NOT_REACHABLE, connectAddress, userinfo } from './ConnectionParts';
+import { ResetPasswordButton } from './ResetPasswordButton';
 
 interface CredentialsViewerProps {
   readonly projectId: string;
@@ -9,7 +13,8 @@ interface CredentialsViewerProps {
 
 export function CredentialsViewer({ projectId }: CredentialsViewerProps) {
   const { data: credentials, isLoading, error } = useCredentials(projectId);
-  const [showPassword, setShowPassword] = useState(false);
+  const { data: endpoint } = useProjectEndpoint(projectId);
+  const hostsApps = useHostsApps(projectId);
   const [copied, setCopied] = useState<string | null>(null);
 
   const copyToClipboard = (text: string, field: string) => {
@@ -36,115 +41,55 @@ export function CredentialsViewer({ projectId }: CredentialsViewerProps) {
 
   if (!credentials) return null;
 
+  const address = connectAddress(credentials, endpoint, hostsApps);
+  const connectionString = address.kind === 'none'
+    ? null
+    : `postgresql://${userinfo(credentials.username)}@${address.host}:${address.port}/${credentials.databaseName}?sslmode=${credentials.sslMode ?? 'require'}`;
+  const rows: [string, string][] = [
+    ...(address.kind === 'none' ? [] : [['Host', address.host], ['Port', String(address.port)]] as [string, string][]),
+    ['Database', credentials.databaseName],
+    ['Username', credentials.username],
+  ];
+
   return (
     <div className="bg-bg-tertiary rounded-lg p-4 space-y-3">
-      <h4 className="text-sm font-medium text-text-primary mb-3">Connection Credentials</h4>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h4 className="text-sm font-medium text-text-primary">Connection Credentials</h4>
+        <ResetPasswordButton projectId={projectId} />
+      </div>
+
+      {address.kind === 'none' && <p className="text-sm text-text-secondary">{NOT_REACHABLE}</p>}
+      {address.kind === 'internal' && <p className="text-xs text-text-tertiary">This address is for your apps on Excalibase.</p>}
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-text-tertiary">Host:</span>
-          <div className="flex items-center gap-2">
-            <code className="text-sm text-text-primary bg-bg-primary px-2 py-1 rounded">
-              {credentials.host}
-            </code>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => copyToClipboard(credentials.host, 'host')}
-            >
-              <Copy className="w-4 h-4" />
-            </Button>
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex items-center justify-between">
+            <span className="text-sm text-text-tertiary">{label}:</span>
+            <div className="flex items-center gap-2">
+              <code className="text-sm text-text-primary bg-bg-primary px-2 py-1 rounded">{value}</code>
+              <Button variant="secondary" size="sm" aria-label={`Copy ${label.toLowerCase()}`} onClick={() => copyToClipboard(value, label)}>
+                <Copy className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-text-tertiary">Port:</span>
-          <div className="flex items-center gap-2">
-            <code className="text-sm text-text-primary bg-bg-primary px-2 py-1 rounded">
-              {credentials.port}
-            </code>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => copyToClipboard(String(credentials.port), 'port')}
-            >
-              <Copy className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-text-tertiary">Database:</span>
-          <div className="flex items-center gap-2">
-            <code className="text-sm text-text-primary bg-bg-primary px-2 py-1 rounded">
-              {credentials.databaseName}
-            </code>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => copyToClipboard(credentials.databaseName, 'database')}
-            >
-              <Copy className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-text-tertiary">Username:</span>
-          <div className="flex items-center gap-2">
-            <code className="text-sm text-text-primary bg-bg-primary px-2 py-1 rounded">
-              {credentials.username}
-            </code>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => copyToClipboard(credentials.username, 'username')}
-            >
-              <Copy className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-text-tertiary">Password:</span>
-          <div className="flex items-center gap-2">
-            <code className="text-sm text-text-primary bg-bg-primary px-2 py-1 rounded">
-              {showPassword ? credentials.password : '••••••••'}
-            </code>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setShowPassword(!showPassword)}
-            >
-              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => copyToClipboard(credentials.password, 'password')}
-            >
-              <Copy className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
+        ))}
+        <p className="text-xs text-text-tertiary">
+          The password is shown once, when you create the database or reset it. Reset password to get new credentials.
+        </p>
       </div>
 
-      <div className="pt-3 border-t border-border-primary">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-text-tertiary">Connection String:</span>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => copyToClipboard(credentials.connectionUrl, 'connectionString')}
-          >
-            <Copy className="w-4 h-4 mr-2" />
-            {copied === 'connectionString' ? 'Copied!' : 'Copy'}
-          </Button>
+      {connectionString && (
+        <div className="pt-3 border-t border-border-primary">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-text-tertiary">Connection String:</span>
+            <Button variant="secondary" size="sm" onClick={() => copyToClipboard(connectionString, 'connectionString')}>
+              <Copy className="w-4 h-4 mr-2" />
+              {copied === 'connectionString' ? 'Copied!' : 'Copy'}
+            </Button>
+          </div>
+          <code className="block text-xs text-text-primary bg-bg-primary px-3 py-2 rounded mt-2 break-all">{connectionString}</code>
         </div>
-        <code className="block text-xs text-text-primary bg-bg-primary px-3 py-2 rounded mt-2 break-all">
-          {credentials.connectionUrl}
-        </code>
-      </div>
+      )}
     </div>
   );
 }
