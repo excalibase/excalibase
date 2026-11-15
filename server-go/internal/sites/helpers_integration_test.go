@@ -14,7 +14,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/testcontainers/testcontainers-go"
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
@@ -48,7 +47,7 @@ func startPlatformDB() (*postgres.Store, error) {
 		pgmod.WithDatabase("platform_test"),
 		pgmod.WithUsername("platform"),
 		pgmod.WithPassword(password),
-		testcontainers.WithWaitStrategy(pgready.Strategy()),
+		pgready.Wait(),
 	)
 	if err != nil {
 		return nil, err

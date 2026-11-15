@@ -33,7 +33,7 @@ func startStatsPostgres(t *testing.T) *rolePostgres {
 	pg, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("postgres"), postgres.WithPassword("p"),
 		testcontainers.WithCmd(append([]string{"postgres"}, statsServerArgs...)...),
-		testcontainers.WithWaitStrategy(pgready.Strategy()),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

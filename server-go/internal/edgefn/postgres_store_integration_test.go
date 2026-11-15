@@ -9,7 +9,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"testing"
 
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
@@ -36,9 +35,7 @@ func newPGPlatformDB(t *testing.T) *sql.DB {
 		postgres.WithDatabase("platform_test"),
 		postgres.WithUsername("platform"),
 		postgres.WithPassword("edgefn-itest"),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Skipf("docker unavailable, skipping integration test: %v", err)

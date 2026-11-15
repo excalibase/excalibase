@@ -9,7 +9,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"testing"
 
-	"github.com/testcontainers/testcontainers-go"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
@@ -27,9 +26,7 @@ func startPlatformPostgres(ctx context.Context, t *testing.T) *pgstore.Store {
 		tcpg.WithDatabase("platform"),
 		tcpg.WithUsername("platform"),
 		tcpg.WithPassword(pgPwd),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

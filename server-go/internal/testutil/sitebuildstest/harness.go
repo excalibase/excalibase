@@ -28,7 +28,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/testutil/githubfake"
 	"github.com/excalibase/provisioning-poc/internal/testutil/sitestest"
 	"github.com/google/uuid"
-	"github.com/testcontainers/testcontainers-go"
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -62,7 +61,7 @@ func startPlatformDB() (*postgres.Store, error) {
 		return nil, err
 	}
 	container, err := pgmod.Run(ctx, "postgres:16-alpine", pgmod.WithDatabase("platform_test"), pgmod.WithUsername("platform"),
-		pgmod.WithPassword(password), testcontainers.WithWaitStrategy(pgready.Strategy()))
+		pgmod.WithPassword(password), pgready.Wait())
 	if err != nil {
 		return nil, err
 	}

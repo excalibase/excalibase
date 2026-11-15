@@ -14,7 +14,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -53,9 +52,7 @@ func startPlatformDB() (*sql.DB, error) {
 		postgres.WithDatabase("platform_test"),
 		postgres.WithUsername("platform"),
 		postgres.WithPassword("apphost-itest"),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		return nil, err

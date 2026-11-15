@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/docker/docker/client"
-	"github.com/testcontainers/testcontainers-go"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -59,9 +58,7 @@ func TestDockerBackupAdapter_R2_E2E(t *testing.T) {
 		tcpg.WithDatabase("app"),
 		tcpg.WithUsername("postgres"),
 		tcpg.WithPassword(pgPwd),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

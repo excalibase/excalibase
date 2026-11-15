@@ -14,7 +14,6 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -28,7 +27,7 @@ func startTenant(t *testing.T) (*sql.DB, *sql.DB) {
 	}
 	container, err := postgres.Run(ctx, "postgres:17-alpine",
 		postgres.WithDatabase("tenant"), postgres.WithUsername("super"), postgres.WithPassword("superpass"),
-		testcontainers.WithWaitStrategy(pgready.Strategy()))
+		pgready.Wait())
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
 	}

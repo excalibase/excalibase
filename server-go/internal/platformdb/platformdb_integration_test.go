@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	_ "github.com/lib/pq"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -24,9 +23,7 @@ func startPG(t *testing.T) (*sql.DB, func()) {
 		postgres.WithDatabase("platformdb_test"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

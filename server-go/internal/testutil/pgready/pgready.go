@@ -8,6 +8,7 @@ package pgready
 import (
 	"time"
 
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
@@ -22,5 +23,11 @@ func Strategy() wait.Strategy {
 	return wait.ForAll(
 		wait.ForListeningPort("5432/tcp"),
 		wait.ForExec([]string{"sh", "-c", `psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc 'SELECT 1' | grep -qx 1`}),
-	).WithDeadline(StartupTimeout)
+	).WithStartupTimeoutDefault(StartupTimeout).WithDeadline(StartupTimeout)
+}
+
+// Wait is the container option to use: testcontainers.WithWaitStrategy would
+// wrap Strategy in its own 60s deadline and cancel it early.
+func Wait() testcontainers.CustomizeRequestOption {
+	return testcontainers.WithWaitStrategyAndDeadline(StartupTimeout, Strategy())
 }

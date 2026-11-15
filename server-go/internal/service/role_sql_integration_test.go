@@ -58,9 +58,7 @@ func startRolePostgresImage(t *testing.T, image string) *rolePostgres {
 		postgres.WithDatabase("app"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("p"),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

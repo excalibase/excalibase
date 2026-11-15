@@ -139,7 +139,7 @@ func startCertPostgres(t *testing.T) certPostgres {
 			file("/tls/pg_hba.conf", []byte(renderedHBA(t)), 0o644),
 			file("/docker-entrypoint-initdb.d/tls.sh", []byte(initScript), 0o755),
 		),
-		testcontainers.WithWaitStrategy(pgready.Strategy()),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

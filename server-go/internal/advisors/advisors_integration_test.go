@@ -301,7 +301,7 @@ func startPostgres(t *testing.T) server {
 	}
 	container, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("app"), postgres.WithPassword("app-pw"),
-		testcontainers.WithWaitStrategy(pgready.Strategy()))
+		pgready.Wait())
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
 	}

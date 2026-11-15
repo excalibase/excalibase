@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/testcontainers/testcontainers-go"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -60,9 +59,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 		tcpg.WithDatabase("app"),
 		tcpg.WithUsername("postgres"),
 		tcpg.WithPassword(pgPwd),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start source postgres: %v", err)
@@ -200,9 +197,7 @@ func TestDockerBackupAdapter_RestoreRejectedCredentialsE2E(t *testing.T) {
 		tcpg.WithDatabase("app"),
 		tcpg.WithUsername("postgres"),
 		tcpg.WithPassword(pgPwd),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start source postgres: %v", err)

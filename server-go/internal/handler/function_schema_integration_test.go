@@ -16,7 +16,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -94,9 +93,7 @@ func setupSchemaPG(t *testing.T) (*sql.DB, func()) {
 		postgres.WithDatabase("fn_schema_test"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

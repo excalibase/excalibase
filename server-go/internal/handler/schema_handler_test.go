@@ -20,7 +20,6 @@ import (
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -49,9 +48,7 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("superuser"),
 		postgres.WithPassword("superpass"),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

@@ -47,9 +47,7 @@ func TestDockerBackupAdapter_IntegrationE2E(t *testing.T) {
 		tcpg.WithDatabase("app"),
 		tcpg.WithUsername("postgres"),
 		tcpg.WithPassword(pgPwd),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

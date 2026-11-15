@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/testcontainers/testcontainers-go"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -35,7 +34,7 @@ func TestCopyNow_HasWhatWasWrittenAfterTheLastBackup(t *testing.T) {
 	}
 	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("app"), tcpg.WithUsername("postgres"), tcpg.WithPassword(pgPwd),
-		testcontainers.WithWaitStrategy(pgready.Strategy()),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start source postgres: %v", err)

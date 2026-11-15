@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -179,7 +178,7 @@ func startPlainPostgres(t *testing.T) (host, port string) {
 	}
 	container, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("excalibase_app"), postgres.WithPassword("app-pw"),
-		testcontainers.WithWaitStrategy(pgready.Strategy()))
+		pgready.Wait())
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
 	}

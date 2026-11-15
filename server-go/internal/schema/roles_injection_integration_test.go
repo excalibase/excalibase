@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	_ "github.com/lib/pq"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -24,9 +23,7 @@ func TestIntegration_CreateRoleStoresAHostilePasswordVerbatim(t *testing.T) {
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("superuser"),
 		postgres.WithPassword("superpass"),
-		testcontainers.WithWaitStrategy(
-			pgready.Strategy(),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
