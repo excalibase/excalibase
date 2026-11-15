@@ -59,11 +59,11 @@ func TestAdmin_DestructiveRoutesRBAC(t *testing.T) {
 		wantForbidden bool
 	}{
 		{"viewer cannot force-drop project", "platform_viewer", "DELETE", "/api/admin/projects/proj-x", true},
-		{"viewer cannot revoke org", "platform_viewer", "DELETE", "/api/admin/orgs/org-1?cascade=true", true},
-		{"operator cannot revoke org", "platform_operator", "DELETE", "/api/admin/orgs/org-1?cascade=true", true},
+		{"viewer cannot revoke org", "platform_viewer", "DELETE", "/api/admin/orgs/org-1?cascade=true&reason=evicting+abusive+tenant", true},
+		{"operator cannot revoke org", "platform_operator", "DELETE", "/api/admin/orgs/org-1?cascade=true&reason=evicting+abusive+tenant", true},
 		{"viewer can list projects", "platform_viewer", "GET", "/api/admin/projects", false},
 		{"operator can force-drop project", "platform_operator", "DELETE", "/api/admin/projects/proj-x", false},
-		{"admin can revoke org", "platform_admin", "DELETE", "/api/admin/orgs/org-1?cascade=true", false},
+		{"admin can revoke org", "platform_admin", "DELETE", "/api/admin/orgs/org-1?cascade=true&reason=evicting+abusive+tenant", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

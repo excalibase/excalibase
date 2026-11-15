@@ -104,7 +104,7 @@ func TestProjectDetailReadsRunningStateFromTheRuntime(t *testing.T) {
 	console := NewConsole(reader, apps, probe)
 	console.SetObjectName(func(name string) string { return "app-" + name })
 
-	detail, err := console.Project(context.Background(), "p1")
+	detail, err := console.Project(context.Background(), admin, "p1", "checking the abuse report")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestProjectDetailReportsUnknownWhenTheRuntimeCannotBeAsked(t *testing.T) {
 	apps := fakeAppLister{apps: []*apphost.App{{ID: "a1", Name: "web", Replicas: 1, Status: apphost.StatusRunning}}}
 	console := NewConsole(reader, apps, fakeProbe{err: errors.New("api down")})
 
-	detail, err := console.Project(context.Background(), "p1")
+	detail, err := console.Project(context.Background(), admin, "p1", "checking the abuse report")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,39 @@ func TestProjectDetailReportsUnknownWhenTheRuntimeCannotBeAsked(t *testing.T) {
 }
 
 func TestProjectDetailUnknownProject(t *testing.T) {
-	if _, err := NewConsole(&fakeReader{}, nil, nil).Project(context.Background(), "nope"); !errors.Is(err, ErrProjectNotFound) {
+	if _, err := NewConsole(&fakeReader{}, nil, nil).Project(context.Background(), admin, "nope", "checking the abuse report"); !errors.Is(err, ErrProjectNotFound) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOpeningAProjectIsAuditedWithItsReason(t *testing.T) {
+	reader := &fakeReader{core: &ProjectCore{ProjectID: "p1", Namespace: "ns-p1"}}
+	audit := &captureAudit{}
+	console := NewConsole(reader, nil, nil)
+	console.SetAudit(audit)
+
+	if _, err := console.Project(context.Background(), admin, "p1", "checking the abuse report"); err != nil {
+		t.Fatal(err)
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit = %+v", audit.entries)
+	}
+	entry := audit.entries[0]
+	if entry.Action != AuditActionProjectOpen || entry.ProjectID != "p1" || entry.UserID != "boss" || entry.Details != "checking the abuse report" {
+		t.Fatalf("entry = %+v", entry)
+	}
+}
+
+func TestOpeningAProjectNeedsAReasonAndReadsNothingWithout(t *testing.T) {
+	reader := &fakeReader{core: &ProjectCore{ProjectID: "p1"}}
+	audit := &captureAudit{}
+	console := NewConsole(reader, nil, nil)
+	console.SetAudit(audit)
+
+	if _, err := console.Project(context.Background(), admin, "p1", "  "); !errors.Is(err, ErrReasonRequired) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(audit.entries) != 0 {
+		t.Fatal("a refused opening writes no audit entry")
 	}
 }

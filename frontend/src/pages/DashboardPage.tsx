@@ -1,4 +1,5 @@
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
+import { useIsAdminHost } from '../hooks/useDeploymentMode';
 import { useInstances } from '../hooks/useProvisioning';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { ProjectNameCell } from '../components/shared/ProjectNameCell';
@@ -10,6 +11,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export function DashboardPage() {
   useDocumentTitle('Projects');
+  const onAdminHost = useIsAdminHost();
   const { data: instances = [], isLoading } = useInstances();
   const navigate = useNavigate();
 
@@ -20,6 +22,7 @@ export function DashboardPage() {
   const provisioning = instances.filter((i) => i.status === 'PROVISIONING').length;
   const failed      = instances.filter((i) => i.status === 'FAILED' || i.currentStage === 'FAILED').length;
 
+  if (onAdminHost) return <Navigate to="/admin" replace />;
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
       {/* Stat cards */}

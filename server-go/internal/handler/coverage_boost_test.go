@@ -870,6 +870,7 @@ func TestProvisioningHandlerRoutes_NewMethodsWired(t *testing.T) {
 	h := NewProvisioningHandler(svc, &adminOrgStore{})
 
 	r := chi.NewRouter()
+	r.Use(signedInAs("u1", "user"))
 	r.Route("/p", h.Routes)
 
 	// Routes() does not include GetLogs/RotateCredentials — just confirm it

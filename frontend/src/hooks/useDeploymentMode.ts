@@ -44,6 +44,8 @@ interface ConfigResponse {
   features?: Partial<Record<Feature, boolean>>;
   // The public API base the SDK, REST and GraphQL calls go to.
   apiUrl?: string;
+  // Where the operator console is also served (EXC-757); absent when it is not.
+  adminHost?: string;
 }
 
 function useStudioConfig() {
@@ -119,4 +121,25 @@ export function useApiUrl(): { apiUrl: string | undefined; isLoading: boolean } 
   const { data, isLoading } = useStudioConfig();
   const apiUrl = data?.apiUrl?.trim();
   return { apiUrl: apiUrl || undefined, isLoading };
+}
+
+// useIsAdminHost is true on the hostname the operator console is served at, so
+// the root page there is the console and not a customer's dashboard.
+export function useIsAdminHost(currentHost: string = globalThis.location?.hostname ?? ''): boolean {
+  const { data } = useStudioConfig();
+  const adminHost = data?.adminHost?.trim().toLowerCase();
+  return !!adminHost && currentHost.toLowerCase() === adminHost;
+}
+
+// AdminRouteRule says whether the console's pages may be shown on this host:
+// with an admin host configured they are served there and nowhere else, so any
+// other host gets the page a missing route gets (EXC-757).
+export type AdminRouteRule = 'loading' | 'allowed' | 'refused';
+
+export function useAdminRouteRule(currentHost: string = globalThis.location?.hostname ?? ''): AdminRouteRule {
+  const { data, isLoading } = useStudioConfig();
+  if (isLoading) return 'loading';
+  const adminHost = data?.adminHost?.trim().toLowerCase();
+  if (!adminHost) return 'allowed';
+  return currentHost.toLowerCase() === adminHost ? 'allowed' : 'refused';
 }

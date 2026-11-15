@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -36,16 +38,29 @@ type AdminHandler struct {
 	provSvc   *service.ProvisioningService
 	store     storage.InstanceStore
 	orgStore  storage.OrgStore
+	suspender OwnerSuspender
 	auditLog  auditWriter
 	k8sClient k8s.KubeClient
 	lokiURL   string
 	prom      promQuerier // nil-safe — usage stats fall back to "unknown" if Prometheus is unreachable
-	// suspendedOrgs marks projects whose owner is suspended; nil leaves them unmarked.
-	suspendedOrgs SuspendedOrgsLookup
+	// facts names each project's org and owner and supplies stored usage; nil leaves them out.
+	facts ProjectFactsLookup
 }
 
-// SetSuspendedOrgs wires the suspended-owner lookup the project list marks rows with.
-func (h *AdminHandler) SetSuspendedOrgs(lookup SuspendedOrgsLookup) { h.suspendedOrgs = lookup }
+// ProjectFactsLookup reads every project's org, owner and latest stored usage.
+type ProjectFactsLookup func(ctx context.Context) (map[string]adminconsole.ProjectFact, error)
+
+// OwnerSuspender is the one suspend operation the console uses; revoking an
+// org goes through it so the owner's account is blocked the same way.
+type OwnerSuspender interface {
+	Suspend(ctx context.Context, actor adminconsole.Actor, userID, reason string) (*adminconsole.Result, error)
+}
+
+// SetOwnerSuspender wires the suspension a revoke applies to the org's owner.
+func (h *AdminHandler) SetOwnerSuspender(s OwnerSuspender) { h.suspender = s }
+
+// SetProjectFacts wires the lookup the project list names owners with.
+func (h *AdminHandler) SetProjectFacts(lookup ProjectFactsLookup) { h.facts = lookup }
 
 // promQuerier is a tiny shim for the one Prometheus call we make from the
 // admin handler (per-pod CPU + memory). Implemented as a free function in
@@ -95,12 +110,12 @@ func (h *AdminHandler) ListAllProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	suspended := map[string]bool{}
-	if h.suspendedOrgs != nil {
-		if orgs, err := h.suspendedOrgs(r.Context()); err != nil {
-			log.Printf("WARN: suspended owners lookup failed: %v", err)
+	facts := map[string]adminconsole.ProjectFact{}
+	if h.facts != nil {
+		if found, err := h.facts(r.Context()); err != nil {
+			log.Printf("WARN: project facts lookup failed: %v", err)
 		} else {
-			suspended = orgs
+			facts = found
 		}
 	}
 	out := make([]map[string]interface{}, 0, len(instances))
@@ -115,22 +130,38 @@ func (h *AdminHandler) ListAllProjects(w http.ResponseWriter, r *http.Request) {
 			"dbType":             inst.DBType,
 			"createdAt":          inst.CreatedAt,
 			"deletionProtection": inst.DeletionProtection != nil && *inst.DeletionProtection,
-			"ownerSuspended":     suspended[inst.OrgID],
 		}
-		if h.prom != nil {
-			// Prometheus container_* metrics use the project pod label;
-			// use a 5m rate so transients don't dominate.
-			pod := inst.ProjectID + "-postgres-1"
-			cpu, _ := h.prom.InstantValue(r.Context(),
-				fmt.Sprintf(`rate(container_cpu_usage_seconds_total{namespace=%q, pod=%q, container="postgres"}[5m])`, inst.Namespace, pod))
-			mem, _ := h.prom.InstantValue(r.Context(),
-				fmt.Sprintf(`container_memory_working_set_bytes{namespace=%q, pod=%q, container="postgres"}`, inst.Namespace, pod))
-			row["cpuCores"] = cpu
-			row["memBytes"] = mem
-		}
+		fact := facts[inst.ProjectID]
+		row["orgName"] = fact.OrgName
+		row["ownerEmail"] = fact.OwnerEmail
+		row["ownerStatus"] = fact.OwnerStatus
+		row["ownerSuspended"] = fact.OwnerStatus == adminconsole.StatusSuspended
+		h.addUsage(r.Context(), row, inst, fact)
 		out = append(out, row)
 	}
 	writeJSON(w, out)
+}
+
+// addUsage puts the project's CPU and memory on the row. A reading that could
+// not be taken is left out: the Studio shows "—", never a zero that reads as an
+// idle project. Prometheus answers first; the stored sample stands in without it.
+func (h *AdminHandler) addUsage(ctx context.Context, row map[string]interface{}, inst *domain.DatabaseInstance, fact adminconsole.ProjectFact) {
+	if h.prom != nil {
+		// Prometheus container_* metrics use the project pod label;
+		// use a 5m rate so transients don't dominate.
+		pod := inst.ProjectID + "-postgres-1"
+		cpu, cpuErr := h.prom.InstantValue(ctx,
+			fmt.Sprintf(`rate(container_cpu_usage_seconds_total{namespace=%q, pod=%q, container="postgres"}[5m])`, inst.Namespace, pod))
+		mem, memErr := h.prom.InstantValue(ctx,
+			fmt.Sprintf(`container_memory_working_set_bytes{namespace=%q, pod=%q, container="postgres"}`, inst.Namespace, pod))
+		if cpuErr == nil && memErr == nil {
+			row["cpuCores"], row["memBytes"] = cpu, mem
+			return
+		}
+	}
+	if fact.HasUsage {
+		row["cpuCores"], row["memBytes"] = fact.CPUCores, fact.MemoryMB*1024*1024
+	}
 }
 
 // ForceDropProject deprovisions a project even when deletion_protection is on.
@@ -204,6 +235,11 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "?cascade=true is required to confirm intent", http.StatusBadRequest)
 		return
 	}
+	reason := strings.TrimSpace(r.URL.Query().Get("reason"))
+	if reason == "" {
+		httpError(w, "a written reason is required to revoke an org", http.StatusBadRequest)
+		return
+	}
 	orgID := chi.URLParam(r, "orgId")
 	userID := extractUserID(r)
 
@@ -214,6 +250,14 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 	org, err := h.orgStore.FindOrgByID(r.Context(), orgID)
 	if err != nil || org == nil {
 		httpError(w, "org not found", http.StatusNotFound)
+		return
+	}
+
+	// The owner is blocked first and the block stands whatever the teardown
+	// does: an org must never be destroyed while its owner can sign in again.
+	// Teardown spans the cluster, so it cannot share a database transaction;
+	// ordering is what keeps the two from disagreeing.
+	if !h.suspendOwner(w, r, org, reason) {
 		return
 	}
 
@@ -253,6 +297,34 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 		"dropped": dropped,
 		"failed":  failed,
 	})
+}
+
+// suspendOwner blocks the org owner's account and answers the request itself
+// when it cannot.
+func (h *AdminHandler) suspendOwner(w http.ResponseWriter, r *http.Request, org *domain.Org, reason string) bool {
+	if org.OwnerID == "" {
+		return true
+	}
+	if h.suspender == nil {
+		httpError(w, "owner suspension unavailable; nothing was deleted", http.StatusServiceUnavailable)
+		return false
+	}
+	actor := adminconsole.Actor{ID: extractUserID(r), IP: clientIP(r)}
+	if _, err := h.suspender.Suspend(r.Context(), actor, org.OwnerID, "org revoked: "+reason); err != nil {
+		switch {
+		case errors.Is(err, adminconsole.ErrProtectedAccount):
+			httpError(w, "the org's owner is a platform account and cannot be suspended; nothing was deleted", http.StatusConflict)
+		case errors.Is(err, adminconsole.ErrReasonTooLong):
+			httpError(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, adminconsole.ErrUserNotFound):
+			return true
+		default:
+			log.Printf("ERROR: revoke org %s: suspend owner: %v", org.ID, err)
+			httpError(w, "the owner could not be suspended; nothing was deleted", http.StatusInternalServerError)
+		}
+		return false
+	}
+	return true
 }
 
 // deprovisionOrgProjects removes deletion protection and deprovisions every

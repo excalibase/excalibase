@@ -172,6 +172,44 @@ func TestAdminConsoleOrgsShowOwnerStatusAndUsage(t *testing.T) {
 	}
 }
 
+func TestAdminConsoleProjectFactsNameOrgOwnerAndUsage(t *testing.T) {
+	store, console := consoleFixture(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO database_metrics (project_id, timestamp, cpu_usage_cores, memory_usage_mb) VALUES ('p-cust', NOW(), 0.4, 310)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := console.Suspend(ctx, adminconsole.Suspension{UserID: "u-other", Reason: "x", At: time.Now()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := console.ProjectFacts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := facts["p-cust"]; got.OrgName != "Cust Co" || got.OwnerEmail != "cust@mailinator.test" || !got.HasUsage || got.CPUCores != 0.4 || got.MemoryMB != 310 {
+		t.Fatalf("p-cust = %+v", got)
+	}
+	if got := facts["p-other"]; got.OwnerStatus != adminconsole.StatusSuspended || got.HasUsage {
+		t.Fatalf("p-other = %+v", got)
+	}
+}
+
+func TestRecordUserLoginStoresTimeAndAddress(t *testing.T) {
+	store, _ := consoleFixture(t)
+	ctx := context.Background()
+	at := time.Now().UTC().Truncate(time.Second)
+	if err := store.RecordUserLogin(ctx, "u-other", "198.51.100.7", at); err != nil {
+		t.Fatal(err)
+	}
+	var ip string
+	var seen time.Time
+	if err := store.db.QueryRowContext(ctx, `SELECT last_login_ip, last_login_at FROM users WHERE id = 'u-other'`).Scan(&ip, &seen); err != nil {
+		t.Fatal(err)
+	}
+	if ip != "198.51.100.7" || !seen.Equal(at) {
+		t.Fatalf("stored %q at %v", ip, seen)
+	}
+}
+
 func TestAdminConsoleProjectDetailNamesTheOwner(t *testing.T) {
 	_, console := consoleFixture(t)
 	core, err := console.ProjectCore(context.Background(), "p-cust")

@@ -148,13 +148,22 @@ func expectSession(row Row, method string, p Principal) Expectation {
 	if row.Param == ParamProject && p.ForeignProject {
 		return Deny404
 	}
-	if (isWrite(method) || row.Discloses == Secret) && p.ReadOnly {
+	if isWrite(method) && p.ReadOnly {
 		return Deny403
 	}
 	if row.Unrestricted && p.Restricted {
 		return Deny403
 	}
 	if row.Unbound && p.IsBound() {
+		return Deny403
+	}
+	// Platform authority does not reach a tenant's project: a human platform
+	// admin meets the membership gate like any customer, and only a platform
+	// route naming a permission is theirs (EXC-757).
+	if p.PlatformAdmin && row.Param == ParamProject && row.Permission == "" && p.OrgRole == "" {
+		return Deny404
+	}
+	if row.Discloses == Secret && p.ReadOnly {
 		return Deny403
 	}
 	if p.PlatformAdmin {

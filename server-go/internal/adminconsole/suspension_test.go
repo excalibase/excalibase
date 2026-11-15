@@ -195,13 +195,26 @@ func TestSuspendUnknownUser(t *testing.T) {
 	}
 }
 
+func TestUnsuspendRefusesWithoutAReason(t *testing.T) {
+	svc, store, _, _ := newSuspensionFixture()
+	if _, err := svc.Suspend(context.Background(), admin, "victim", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Unsuspend(context.Background(), admin, "victim", " "); !errors.Is(err, ErrReasonRequired) {
+		t.Fatalf("err = %v, want ErrReasonRequired", err)
+	}
+	if store.users["victim"].Active {
+		t.Fatal("nothing may change without a reason")
+	}
+}
+
 func TestUnsuspendReactivatesAndResumesOnlyWhatSuspendStopped(t *testing.T) {
 	svc, store, control, audit := newSuspensionFixture()
 	if _, err := svc.Suspend(context.Background(), admin, "victim", "proxy abuse"); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := svc.Unsuspend(context.Background(), admin, "victim")
+	result, err := svc.Unsuspend(context.Background(), admin, "victim", "appeal verified by email")
 	if err != nil {
 		t.Fatalf("Unsuspend: %v", err)
 	}
@@ -214,7 +227,7 @@ func TestUnsuspendReactivatesAndResumesOnlyWhatSuspendStopped(t *testing.T) {
 	if len(store.recorded["victim"]) != 0 || len(result.AppsRestored) != 2 {
 		t.Fatalf("recorded = %+v result = %+v", store.recorded["victim"], result)
 	}
-	if last := audit.entries[len(audit.entries)-1]; last.Action != AuditActionUnsuspend {
+	if last := audit.entries[len(audit.entries)-1]; last.Action != AuditActionUnsuspend || last.Details != "appeal verified by email" {
 		t.Fatalf("last audit = %+v", last)
 	}
 }
@@ -226,7 +239,7 @@ func TestUnsuspendKeepsTheRecordOfAnAppThatDidNotResume(t *testing.T) {
 	}
 	control.failResume["a1"] = errors.New("over plan")
 
-	result, err := svc.Unsuspend(context.Background(), admin, "victim")
+	result, err := svc.Unsuspend(context.Background(), admin, "victim", "appeal verified by email")
 	if err != nil {
 		t.Fatalf("Unsuspend: %v", err)
 	}

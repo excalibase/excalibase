@@ -260,16 +260,15 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Platform admins (PermViewAny) see everything. An unauthenticated request
-	// that reached this far also sees the unscoped list — but in practice this
-	// route is mounted behind RequireAuth, so user is non-nil; the nil-guard is
-	// retained only as defense against a misconfigured mount.
-	if user == nil || auth.HasPermission(user.Role, auth.PermViewAny) {
-		writeJSON(w, h.projectListResponse(r.Context(), allInstances))
+	// The list is the caller's own projects, whatever their platform role: a
+	// platform admin is a customer of every org but their own, and reaches
+	// other customers' projects through the admin console only (EXC-757). This
+	// route is mounted behind RequireAuth, so a missing user is a mis-mount.
+	if user == nil {
+		httpError(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
-	// Regular users see only instances belonging to their orgs
 	myOrgs, _ := h.orgStore.FindOrgsByUser(r.Context(), user.ID)
 	orgIDs := make(map[string]bool, len(myOrgs))
 	for _, org := range myOrgs {

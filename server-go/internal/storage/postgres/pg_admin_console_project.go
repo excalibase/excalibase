@@ -97,3 +97,31 @@ func (a *AdminConsole) ProjectAudit(ctx context.Context, projectID string, limit
 	}
 	return out, rows.Err()
 }
+
+// ProjectFacts names every project's org and owner and gives its latest stored
+// usage, for the project list. One query for the whole list, never one per row.
+func (a *AdminConsole) ProjectFacts(ctx context.Context) (map[string]adminconsole.ProjectFact, error) {
+	rows, err := a.db.QueryContext(ctx, `
+		WITH usage AS (`+latestMetricsSQL+`)
+		SELECT di.project_id, o.name, COALESCE(u.email, ''), `+statusExpr+`,
+		       usage.project_id IS NOT NULL, COALESCE(usage.cpu_usage_cores, 0), COALESCE(usage.memory_usage_mb, 0)
+		FROM database_instances di
+		JOIN orgs o ON o.id = di.org_id
+		JOIN users u ON u.id = o.owner_id
+		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
+		LEFT JOIN usage ON usage.project_id = di.project_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	facts := map[string]adminconsole.ProjectFact{}
+	for rows.Next() {
+		var projectID string
+		var fact adminconsole.ProjectFact
+		if err := rows.Scan(&projectID, &fact.OrgName, &fact.OwnerEmail, &fact.OwnerStatus, &fact.HasUsage, &fact.CPUCores, &fact.MemoryMB); err != nil {
+			return nil, err
+		}
+		facts[projectID] = fact
+	}
+	return facts, rows.Err()
+}

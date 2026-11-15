@@ -19,6 +19,7 @@ type fakeConsole struct {
 	lastUsers adminconsole.UserQuery
 	lastOrgs  adminconsole.OrgQuery
 	project   *adminconsole.ProjectDetail
+	opened    []string
 	projectEr error
 }
 
@@ -33,7 +34,8 @@ func (f *fakeConsole) Orgs(_ context.Context, q adminconsole.OrgQuery) (admincon
 func (f *fakeConsole) Overview(context.Context) (*adminconsole.Overview, error) {
 	return &adminconsole.Overview{Signups24h: 7}, nil
 }
-func (f *fakeConsole) Project(context.Context, string) (*adminconsole.ProjectDetail, error) {
+func (f *fakeConsole) Project(_ context.Context, actor adminconsole.Actor, projectID, reason string) (*adminconsole.ProjectDetail, error) {
+	f.opened = append(f.opened, actor.ID+"/"+projectID+"/"+reason)
 	return f.project, f.projectEr
 }
 
@@ -49,8 +51,8 @@ func (f *fakeSuspender) Suspend(_ context.Context, actor adminconsole.Actor, use
 	f.suspended, f.reason, f.actor = append(f.suspended, userID), reason, actor
 	return &adminconsole.Result{UserID: userID, Status: adminconsole.StatusSuspended}, f.err
 }
-func (f *fakeSuspender) Unsuspend(_ context.Context, _ adminconsole.Actor, userID string) (*adminconsole.Result, error) {
-	f.unsuspended = append(f.unsuspended, userID)
+func (f *fakeSuspender) Unsuspend(_ context.Context, _ adminconsole.Actor, userID, reason string) (*adminconsole.Result, error) {
+	f.unsuspended = append(f.unsuspended, userID+"/"+reason)
 	return &adminconsole.Result{UserID: userID, Status: adminconsole.StatusActive}, f.err
 }
 
@@ -81,9 +83,9 @@ func TestAdminConsole_OnlyAPlatformAdminMayCall(t *testing.T) {
 		{http.MethodGet, "/api/admin/console/overview", ""},
 		{http.MethodGet, "/api/admin/console/users", ""},
 		{http.MethodGet, "/api/admin/console/orgs", ""},
-		{http.MethodGet, "/api/admin/console/projects/p1", ""},
+		{http.MethodGet, "/api/admin/console/projects/p1?reason=checking+an+abuse+report", ""},
 		{http.MethodPost, "/api/admin/console/users/u1/suspend", `{"reason":"x"}`},
-		{http.MethodPost, "/api/admin/console/users/u1/unsuspend", ""},
+		{http.MethodPost, "/api/admin/console/users/u1/unsuspend", `{"reason":"appeal verified"}`},
 	}
 	for _, role := range []string{"platform_operator", "platform_viewer", "user"} {
 		router := consoleRouter(role, &fakeConsole{project: &adminconsole.ProjectDetail{}}, &fakeSuspender{})
@@ -181,5 +183,48 @@ func TestAdminConsole_ANarrowedTokenIsRefusedEvenForAPlatformAdmin(t *testing.T)
 	r.Route("/api/admin", func(r chi.Router) { h.Routes(r) })
 	if w := consoleCall(r, http.MethodGet, "/api/admin/console/users", ""); w.Code != http.StatusForbidden {
 		t.Fatalf("code = %d", w.Code)
+	}
+}
+
+func TestAdminConsole_UnsuspendCarriesItsReason(t *testing.T) {
+	suspender := &fakeSuspender{}
+	router := consoleRouter("platform_admin", &fakeConsole{}, suspender)
+	if w := consoleCall(router, http.MethodPost, "/api/admin/console/users/u3/unsuspend", `{"reason":"appeal verified"}`); w.Code != http.StatusOK {
+		t.Fatalf("code = %d", w.Code)
+	}
+	if len(suspender.unsuspended) != 1 || suspender.unsuspended[0] != "u3/appeal verified" {
+		t.Fatalf("unsuspended = %v", suspender.unsuspended)
+	}
+}
+
+func TestAdminConsole_OpeningAProjectPassesTheReasonAndTheActor(t *testing.T) {
+	console := &fakeConsole{project: &adminconsole.ProjectDetail{}}
+	router := consoleRouter("platform_admin", console, &fakeSuspender{})
+	consoleCall(router, http.MethodGet, "/api/admin/console/projects/p9?reason=abuse+report+123", "")
+	if len(console.opened) != 1 || console.opened[0] != "boss/p9/abuse report 123" {
+		t.Fatalf("opened = %v", console.opened)
+	}
+}
+
+func TestAdminConsole_OnlyASessionMayCall(t *testing.T) {
+	h := NewAdminConsoleHandler(&fakeConsole{}, &fakeSuspender{})
+	for name, token := range map[string]*domain.AccessToken{
+		"an unrestricted personal token": {},
+		"no token":                       nil,
+	} {
+		r := chi.NewRouter()
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				ctx := auth.SetUser(req.Context(), &domain.User{ID: "boss", Role: "platform_admin", Active: true})
+				if token != nil {
+					ctx = auth.SetToken(ctx, token)
+				}
+				next.ServeHTTP(w, req.WithContext(ctx))
+			})
+		})
+		r.Route("/api/admin", func(r chi.Router) { h.Routes(r) })
+		if w := consoleCall(r, http.MethodGet, "/api/admin/console/users", ""); w.Code != http.StatusForbidden {
+			t.Errorf("%s: code = %d, want 403", name, w.Code)
+		}
 	}
 }

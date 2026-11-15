@@ -83,7 +83,7 @@ func TestRevokeOrgCascadeHoldsOneLifecycleLeaseAtATime(t *testing.T) {
 
 	router := chi.NewRouter()
 	router.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
-	req := httptest.NewRequest(http.MethodDelete, "/api/admin/orgs/org-cascade?cascade=true", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/orgs/org-cascade?cascade=true&reason=evicting+abusive+tenant", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 

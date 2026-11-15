@@ -22,6 +22,8 @@ import (
 type adminOrgStore struct {
 	org     *domain.Org
 	deleted bool
+	// member is what the caller belongs to; FindOrgsByUser answers it for anyone.
+	member []*domain.Org
 }
 
 func (a *adminOrgStore) CreateOrg(context.Context, *domain.Org) error { return nil }
@@ -39,7 +41,7 @@ func (a *adminOrgStore) FindOrgByID(_ context.Context, id string) (*domain.Org, 
 }
 func (a *adminOrgStore) FindOrgBySlug(context.Context, string) (*domain.Org, error) { return nil, nil }
 func (a *adminOrgStore) FindOrgsByUser(context.Context, string) ([]*domain.Org, error) {
-	return nil, nil
+	return a.member, nil
 }
 func (a *adminOrgStore) FindAllOrgs(context.Context) ([]*domain.Org, error) { return nil, nil }
 func (a *adminOrgStore) UpdateOrg(context.Context, *domain.Org) error       { return nil }
@@ -223,7 +225,7 @@ func TestAdmin_RevokeOrg_HappyPath(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
-	req := httptest.NewRequest("DELETE", "/api/admin/orgs/org-9?cascade=true", nil)
+	req := httptest.NewRequest("DELETE", "/api/admin/orgs/org-9?cascade=true&reason=evicting+abusive+tenant", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -249,7 +251,7 @@ func TestAdmin_RevokeOrg_NotFound(t *testing.T) {
 	h := NewAdminHandler(provSvc, store, &adminOrgStore{}, &captureAudit{}, nil, "", nil)
 	r := chi.NewRouter()
 	r.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
-	req := httptest.NewRequest("DELETE", "/api/admin/orgs/ghost?cascade=true", nil)
+	req := httptest.NewRequest("DELETE", "/api/admin/orgs/ghost?cascade=true&reason=evicting+abusive+tenant", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {

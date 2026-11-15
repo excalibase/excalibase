@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	AuditActionSuspend   = "user.suspend"
-	AuditActionUnsuspend = "user.unsuspend"
-	auditResourceUser    = "user"
-	maxReasonLength      = 500
-	platformRolePrefix   = "platform_"
+	AuditActionSuspend     = "user.suspend"
+	AuditActionUnsuspend   = "user.unsuspend"
+	AuditActionProjectOpen = "admin.project.open"
+	auditResourceUser      = "user"
+	maxReasonLength        = 500
+	platformRolePrefix     = "platform_"
 )
 
 var (
@@ -127,12 +128,9 @@ func NewSuspensionService(store SuspensionStore, apps AppControl, audit AuditWri
 // runs. The block comes first and stands whatever happens to the apps: an app
 // that will not stop is reported, never a reason to leave the account usable.
 func (s *SuspensionService) Suspend(ctx context.Context, actor Actor, userID, reason string) (*Result, error) {
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return nil, ErrReasonRequired
-	}
-	if len(reason) > maxReasonLength {
-		return nil, ErrReasonTooLong
+	reason, err := cleanReason(reason)
+	if err != nil {
+		return nil, err
 	}
 	user, err := s.store.FindUser(ctx, userID)
 	if err != nil {
@@ -168,7 +166,11 @@ func (s *SuspensionService) Suspend(ctx context.Context, actor Actor, userID, re
 
 // Unsuspend reactivates the account and resumes the apps the suspension
 // stopped. An app that cannot resume keeps its record, so unsuspending again retries it.
-func (s *SuspensionService) Unsuspend(ctx context.Context, actor Actor, userID string) (*Result, error) {
+func (s *SuspensionService) Unsuspend(ctx context.Context, actor Actor, userID, reason string) (*Result, error) {
+	reason, err := cleanReason(reason)
+	if err != nil {
+		return nil, err
+	}
 	user, err := s.store.FindUser(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("look up user: %w", err)
@@ -179,7 +181,7 @@ func (s *SuspensionService) Unsuspend(ctx context.Context, actor Actor, userID s
 	if err := s.store.Unsuspend(ctx, userID); err != nil {
 		return nil, fmt.Errorf("unsuspend account: %w", err)
 	}
-	s.record(ctx, actor, AuditActionUnsuspend, userID, "")
+	s.record(ctx, actor, AuditActionUnsuspend, userID, reason)
 
 	stopped, err := s.store.SuspendedApps(ctx, userID)
 	if err != nil {
@@ -197,6 +199,19 @@ func (s *SuspensionService) Unsuspend(ctx context.Context, actor Actor, userID s
 		result.AppsRestored = append(result.AppsRestored, app)
 	}
 	return result, nil
+}
+
+// cleanReason trims the written reason every admin action carries and refuses
+// a blank or oversized one.
+func cleanReason(reason string) (string, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "", ErrReasonRequired
+	}
+	if len(reason) > maxReasonLength {
+		return "", ErrReasonTooLong
+	}
+	return reason, nil
 }
 
 // appsThatMayRun picks the apps a pause would stop: the ones with pods, which

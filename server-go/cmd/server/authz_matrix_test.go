@@ -489,12 +489,12 @@ func (matrixConsole) Orgs(context.Context, adminconsole.OrgQuery) (adminconsole.
 func (matrixConsole) Overview(context.Context) (*adminconsole.Overview, error) {
 	return &adminconsole.Overview{}, nil
 }
-func (matrixConsole) Project(context.Context, string) (*adminconsole.ProjectDetail, error) {
+func (matrixConsole) Project(context.Context, adminconsole.Actor, string, string) (*adminconsole.ProjectDetail, error) {
 	return nil, adminconsole.ErrProjectNotFound
 }
 func (matrixConsole) Suspend(context.Context, adminconsole.Actor, string, string) (*adminconsole.Result, error) {
 	return &adminconsole.Result{}, nil
 }
-func (matrixConsole) Unsuspend(context.Context, adminconsole.Actor, string) (*adminconsole.Result, error) {
+func (matrixConsole) Unsuspend(context.Context, adminconsole.Actor, string, string) (*adminconsole.Result, error) {
 	return &adminconsole.Result{}, nil
 }

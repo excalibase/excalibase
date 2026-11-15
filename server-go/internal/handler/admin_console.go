@@ -18,13 +18,13 @@ type ConsoleReads interface {
 	Users(ctx context.Context, query adminconsole.UserQuery) (adminconsole.Page[adminconsole.UserRow], error)
 	Orgs(ctx context.Context, query adminconsole.OrgQuery) (adminconsole.Page[adminconsole.OrgRow], error)
 	Overview(ctx context.Context) (*adminconsole.Overview, error)
-	Project(ctx context.Context, projectID string) (*adminconsole.ProjectDetail, error)
+	Project(ctx context.Context, actor adminconsole.Actor, projectID, reason string) (*adminconsole.ProjectDetail, error)
 }
 
 // ConsoleActions is the one write the console makes.
 type ConsoleActions interface {
 	Suspend(ctx context.Context, actor adminconsole.Actor, userID, reason string) (*adminconsole.Result, error)
-	Unsuspend(ctx context.Context, actor adminconsole.Actor, userID string) (*adminconsole.Result, error)
+	Unsuspend(ctx context.Context, actor adminconsole.Actor, userID, reason string) (*adminconsole.Result, error)
 }
 
 // AdminConsoleHandler serves the platform admin console (EXC-757). Every route
@@ -44,9 +44,10 @@ func NewAdminConsoleHandler(reads ConsoleReads, actions ConsoleActions) *AdminCo
 func (h *AdminConsoleHandler) Routes(r chi.Router) {
 	r.Route("/console", func(r chi.Router) {
 		r.Use(auth.RequirePermission(auth.PermManageOrgs))
-		// Every account's address and sign-in address: a token narrowed to one
-		// project or one scope must not reach it, even a platform admin's.
-		r.Use(auth.RequireUnrestrictedCredential)
+		// Every account's address and sign-in address: only a signed-in Studio
+		// session reaches it. A personal access token never does, whatever its
+		// scopes, so the console adds no power to a stolen token (EXC-757).
+		r.Use(requireSession)
 		r.Get("/overview", h.Overview)
 		r.Get("/users", h.Users)
 		r.Get("/orgs", h.Orgs)
@@ -92,7 +93,7 @@ func (h *AdminConsoleHandler) Orgs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminConsoleHandler) Project(w http.ResponseWriter, r *http.Request) {
-	detail, err := h.reads.Project(r.Context(), chi.URLParam(r, "projectId"))
+	detail, err := h.reads.Project(r.Context(), consoleActor(r), chi.URLParam(r, "projectId"), r.URL.Query().Get("reason"))
 	if err != nil {
 		consoleFailure(w, "project", err)
 		return
@@ -101,14 +102,11 @@ func (h *AdminConsoleHandler) Project(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminConsoleHandler) Suspend(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Reason string `json:"reason"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+	reason, ok := decodeReason(w, r)
+	if !ok {
 		return
 	}
-	result, err := h.actions.Suspend(r.Context(), consoleActor(r), chi.URLParam(r, "userId"), body.Reason)
+	result, err := h.actions.Suspend(r.Context(), consoleActor(r), chi.URLParam(r, "userId"), reason)
 	if err != nil {
 		consoleFailure(w, "suspend", err)
 		return
@@ -117,12 +115,39 @@ func (h *AdminConsoleHandler) Suspend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminConsoleHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
-	result, err := h.actions.Unsuspend(r.Context(), consoleActor(r), chi.URLParam(r, "userId"))
+	reason, ok := decodeReason(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.actions.Unsuspend(r.Context(), consoleActor(r), chi.URLParam(r, "userId"), reason)
 	if err != nil {
 		consoleFailure(w, "unsuspend", err)
 		return
 	}
 	writeJSON(w, result)
+}
+
+// decodeReason reads the written reason every console action carries.
+func decodeReason(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return "", false
+	}
+	return body.Reason, true
+}
+
+// requireSession refuses every credential but a signed-in Studio session.
+func requireSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !auth.IsSessionToken(auth.GetToken(r.Context())) {
+			httpError(w, "the admin console needs a signed-in session, not an access token", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func consoleActor(r *http.Request) adminconsole.Actor {

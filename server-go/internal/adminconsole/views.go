@@ -171,3 +171,14 @@ type ProjectDetail struct {
 	Functions []FunctionBrief `json:"functions"`
 	Audit     []AuditBrief    `json:"audit"`
 }
+
+// ProjectFact is what the project list shows beside the project row: whose it
+// is and how much it uses now. Usage is absent without a live sample.
+type ProjectFact struct {
+	OrgName     string
+	OwnerEmail  string
+	OwnerStatus string
+	HasUsage    bool
+	CPUCores    float64
+	MemoryMB    float64
+}

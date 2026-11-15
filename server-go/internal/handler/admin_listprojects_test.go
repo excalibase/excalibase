@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/go-chi/chi/v5"
 )
@@ -157,7 +158,7 @@ func TestAdmin_RevokeOrg_NoOrgStore(t *testing.T) {
 	h := NewAdminHandler(nil, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}, nil, nil, nil, "", nil)
 	r := chi.NewRouter()
 	r.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
-	req := httptest.NewRequest("DELETE", "/api/admin/orgs/org-1?cascade=true", nil)
+	req := httptest.NewRequest("DELETE", "/api/admin/orgs/org-1?cascade=true&reason=evicting+abusive+tenant", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusServiceUnavailable {
@@ -177,24 +178,64 @@ func TestAdmin_QueryLogs_NoLokiURL(t *testing.T) {
 
 func (_ errInstanceStore) RecordRollbackRetry(string, string, string, string) error { return nil }
 
-func TestAdmin_ListAllProjects_MarksProjectsOfSuspendedOwners(t *testing.T) {
-	h := adminWithStore(nil)
-	h.SetSuspendedOrgs(func(context.Context) (map[string]bool, error) { return map[string]bool{"org-2": true}, nil })
+func projectFacts(facts map[string]adminconsole.ProjectFact) ProjectFactsLookup {
+	return func(context.Context) (map[string]adminconsole.ProjectFact, error) { return facts, nil }
+}
+
+func listRows(t *testing.T, h *AdminHandler) map[string]map[string]interface{} {
+	t.Helper()
 	w := httptest.NewRecorder()
 	h.ListAllProjects(w, httptest.NewRequest("GET", "/api/admin/projects", nil))
-
 	var out []map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &out)
-	suspended := 0
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]map[string]interface{}{}
 	for _, row := range out {
-		if row["ownerSuspended"] == true {
-			suspended++
-			if row["orgId"] != "org-2" {
-				t.Fatalf("wrong project marked: %v", row)
-			}
+		rows[row["projectId"].(string)] = row
+	}
+	return rows
+}
+
+func TestAdmin_ListAllProjects_NamesTheOrgAndOwnerAndMarksSuspendedOwners(t *testing.T) {
+	h := adminWithStore(nil)
+	h.SetProjectFacts(projectFacts(map[string]adminconsole.ProjectFact{
+		"proj-1": {OrgName: "One Co", OwnerEmail: "one@x.test", OwnerStatus: adminconsole.StatusActive},
+		"proj-2": {OrgName: "Two Co", OwnerEmail: "two@mailinator.test", OwnerStatus: adminconsole.StatusSuspended},
+	}))
+	rows := listRows(t, h)
+	if rows["proj-1"]["orgName"] != "One Co" || rows["proj-1"]["ownerEmail"] != "one@x.test" || rows["proj-1"]["ownerSuspended"] != false {
+		t.Fatalf("proj-1 = %v", rows["proj-1"])
+	}
+	if rows["proj-2"]["ownerSuspended"] != true || rows["proj-2"]["ownerStatus"] != "suspended" {
+		t.Fatalf("proj-2 = %v", rows["proj-2"])
+	}
+}
+
+// A failed Prometheus query used to be shown as "0.00 cores / 0 MiB".
+func TestAdmin_ListAllProjects_AFailedUsageQueryIsAbsentNotZero(t *testing.T) {
+	h := adminWithStore(&fakeProm{err: errors.New("prometheus down")})
+	rows := listRows(t, h)
+	for id, row := range rows {
+		if _, present := row["cpuCores"]; present {
+			t.Fatalf("%s: cpuCores must be absent when the query failed: %v", id, row)
+		}
+		if _, present := row["memBytes"]; present {
+			t.Fatalf("%s: memBytes must be absent when the query failed: %v", id, row)
 		}
 	}
-	if suspended != 1 {
-		t.Fatalf("marked %d projects, want 1", suspended)
+}
+
+func TestAdmin_ListAllProjects_FallsBackToTheStoredMetricsWhenPrometheusIsAbsent(t *testing.T) {
+	h := adminWithStore(nil)
+	h.SetProjectFacts(projectFacts(map[string]adminconsole.ProjectFact{
+		"proj-1": {HasUsage: true, CPUCores: 0.25, MemoryMB: 128},
+	}))
+	rows := listRows(t, h)
+	if rows["proj-1"]["cpuCores"] != 0.25 || rows["proj-1"]["memBytes"] != float64(128*1024*1024) {
+		t.Fatalf("proj-1 = %v", rows["proj-1"])
+	}
+	if _, present := rows["proj-2"]["cpuCores"]; present {
+		t.Fatalf("a project without a sample shows no usage: %v", rows["proj-2"])
 	}
 }

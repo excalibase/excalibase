@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/adminaccess"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"net"
@@ -118,6 +119,9 @@ func runServer(cfg config.AppConfig) {
 		log.Fatal(err)
 	}
 	if err := cfg.CheckPublicListener(); err != nil {
+		log.Fatal(err)
+	}
+	if err := cfg.CheckAdminHost(); err != nil {
 		log.Fatal(err)
 	}
 	if err := cfg.CheckDenoProvisioningURL(); err != nil {
@@ -1077,15 +1081,17 @@ type handlerDeps struct {
 	adminHandler     *handler.AdminHandler
 	// adminConsoleHandler is the platform admin's view of every account, org and project (EXC-757).
 	adminConsoleHandler *handler.AdminConsoleHandler
-	authHandler         *handler.AuthHandler
-	oauthHandler        *handler.StudioOAuthHandler
-	ssoHandler          *handler.SSOProvidersHandler
-	svcAcctHandler      *handler.ServiceAccountHandler
-	orgHandler          *handler.OrgHandler
-	vaultHandler        *handler.VaultHandler
-	schemaHandler       *handler.SchemaHandler
-	realtimeHandler     *handler.RealtimeHandler
-	fnHandler           *handler.FunctionHandler
+	// adminAssertions checks Cloudflare Access assertions on the admin host; nil builds the real one from config.
+	adminAssertions adminaccess.Checker
+	authHandler     *handler.AuthHandler
+	oauthHandler    *handler.StudioOAuthHandler
+	ssoHandler      *handler.SSOProvidersHandler
+	svcAcctHandler  *handler.ServiceAccountHandler
+	orgHandler      *handler.OrgHandler
+	vaultHandler    *handler.VaultHandler
+	schemaHandler   *handler.SchemaHandler
+	realtimeHandler *handler.RealtimeHandler
+	fnHandler       *handler.FunctionHandler
 	// tableImportHandler loads CSV, XLSX and Google Sheets into a table (EXC-368).
 	tableImportHandler *handler.TableImportHandler
 	// permissionHandler serves permissions, tracked functions and function
@@ -1801,7 +1807,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		promClient = handler.NewPromClient(cfg.PromURL)
 	}
 	adminHandler := handler.NewAdminHandler(provSvc, store, sqlStore, sqlStore, k8sClient, cfg.LokiURL, promClient)
-	adminHandler.SetSuspendedOrgs(pgstore.NewAdminConsole(sqlStore.DB()).OwnerSuspendedOrgs)
+	adminHandler.SetProjectFacts(pgstore.NewAdminConsole(sqlStore.DB()).ProjectFacts)
 	tierHandler := handler.NewTierHandler(sqlStore)
 	tierHandler.SetNodePlacement(provSvc)
 	tierHandler.SetFeatures(cfg.Features())
@@ -1897,6 +1903,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		apps: appBuildArgs{internal: internalRegistry, registry: appRegistry, deploys: appDeploySvc,
 			apps: apphost.NewPostgresAppStore(sqlStore.DB()), limits: service.NewAppBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
 			platformDB: sqlStore.DB()}})
+	adminConsole, suspensions := buildAdminConsole(sqlStore, appRuntime, appDeploySvc)
+	// Revoking an org suspends its owner through the same operation the console uses.
+	adminHandler.SetOwnerSuspender(suspensions)
 	return &handlerDeps{
 		appRegistry:           appRegistry,
 		siteBuilds:            builds,
@@ -1921,7 +1930,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		s3KeysHandler:         wireS3Keys(cfg, newS3Keys(sqlStore, store, vc, storageSvc), sqlStore, provSvc),
 		documentsHandler:      buildDocumentBrowser(k8sClient, a.dockerClient, vc, store),
 		adminHandler:          adminHandler,
-		adminConsoleHandler:   buildAdminConsole(sqlStore, appRuntime, appDeploySvc),
+		adminConsoleHandler:   adminConsole,
 		authHandler:           authHandler,
 		oauthHandler:          buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
 		ssoHandler:            buildSSOProvidersHandler(cfg, vc, sqlStore),
@@ -2023,12 +2032,14 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 		Features map[string]bool `json:"features"`
 		// The public API base Studio's connect snippets point at (the SDK's url).
 		APIURL string `json:"apiUrl"`
+		// AdminHost is where the operator console is also served (EXC-757).
+		AdminHost string `json:"adminHost,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled, Sites: cfg.SitesAvailable(),
 			SiteGitBuilds: cfg.SiteGitBuildsOn(),
 			CustomDomains: customDomainsOn(cfg), SiteCustomDomains: cfg.SitesCustomDomainsAvailable(), Features: features.Snapshot(r.Context(), flags),
-			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/")}
+			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/"), AdminHost: cfg.AdminHost}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
 			log.Printf("write /api/config: %v", err)
@@ -2052,6 +2063,9 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	r.Use(custommw.RedactQueryParams(accessLogRedactedParams...))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	// The console's hostname and Cloudflare Access fence come before anything
+	// that would act on the request (EXC-757).
+	r.Use(adminaccess.Gate(adminGate(cfg, d)))
 	r.Use(metrics.Middleware)
 	r.Use(custommw.SecurityHeaders)
 	// A project's public functions answer CORS from that project's own

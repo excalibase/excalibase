@@ -466,6 +466,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	h.loginGuard.Succeeded(addressKey)
 	h.accountSlowdown.Succeeded(guardKey)
+	// A suspended or revoked account holds no session: it would only meet 401s.
+	// The right password has proved who is asking, so saying why is no leak.
+	if !user.Active {
+		httpError(w, "this account is suspended", http.StatusForbidden)
+		return
+	}
 	if user.EmailVerifiedAt == nil {
 		writeEmailNotVerified(w)
 		return

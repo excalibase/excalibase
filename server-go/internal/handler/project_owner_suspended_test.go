@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
@@ -40,5 +42,15 @@ func TestProjectResponse_ALookupFailureLeavesTheProjectUnmarked(t *testing.T) {
 	view := h.projectResponse(context.Background(), &domain.DatabaseInstance{ProjectID: "p1", OrgID: "o-bad"})
 	if view.OwnerSuspended {
 		t.Fatal("a failed lookup must not claim a suspension")
+	}
+}
+
+// signedInAs puts a session user on every request, as RequireAuth does in production.
+func signedInAs(userID, role string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := auth.SetUser(r.Context(), &domain.User{ID: userID, Role: role, Active: true})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
 	}
 }

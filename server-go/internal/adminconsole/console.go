@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -49,6 +50,7 @@ type Console struct {
 	probe      AppProbe
 	tempMail   func(email string) bool
 	objectName func(appName string) string
+	audit      AuditWriter
 	now        func() time.Time
 }
 
@@ -58,6 +60,9 @@ func NewConsole(reader Reader, apps AppLister, probe AppProbe) *Console {
 
 // SetTempMailCheck wires the disposable-address list; without it the flag stays unknown.
 func (c *Console) SetTempMailCheck(check func(email string) bool) { c.tempMail = check }
+
+// SetAudit wires the log an opening of a project's data is written to.
+func (c *Console) SetAudit(audit AuditWriter) { c.audit = audit }
 
 // SetObjectName overrides how an app's name becomes its workload's name.
 func (c *Console) SetObjectName(name func(appName string) string) { c.objectName = name }
@@ -112,7 +117,11 @@ func (c *Console) Overview(ctx context.Context) (*Overview, error) {
 
 // Project is one project's detail: owner, database, apps with their running
 // state, sites, functions and recent audit events.
-func (c *Console) Project(ctx context.Context, projectID string) (*ProjectDetail, error) {
+func (c *Console) Project(ctx context.Context, actor Actor, projectID, reason string) (*ProjectDetail, error) {
+	reason, err := cleanReason(reason)
+	if err != nil {
+		return nil, err
+	}
 	core, err := c.reader.ProjectCore(ctx, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("read project: %w", err)
@@ -120,6 +129,7 @@ func (c *Console) Project(ctx context.Context, projectID string) (*ProjectDetail
 	if core == nil {
 		return nil, ErrProjectNotFound
 	}
+	c.recordOpen(ctx, actor, projectID, reason)
 	detail := &ProjectDetail{ProjectCore: *core, Apps: []AppView{}, Sites: []SiteBrief{}, Functions: []FunctionBrief{}, Audit: []AuditBrief{}}
 	if detail.Apps, err = c.appViews(ctx, core); err != nil {
 		return nil, err
@@ -182,4 +192,18 @@ func podSize(app *apphost.App) (cpuMilli, memoryMiB int) {
 		memoryMiB = int(memory.Value() / (1024 * 1024))
 	}
 	return cpuMilli, memoryMiB
+}
+
+// recordOpen writes who opened a customer's project and why, before any of it
+// is read. A failed write is logged, not fatal: the log is for the owner's
+// review, and a down audit table must not hide a failing project.
+func (c *Console) recordOpen(ctx context.Context, actor Actor, projectID, reason string) {
+	if c.audit == nil {
+		return
+	}
+	entry := &domain.AuditEntry{UserID: actor.ID, Action: AuditActionProjectOpen, Resource: "project", ResourceID: projectID,
+		ProjectID: projectID, Details: reason, IPAddress: actor.IP}
+	if err := c.audit.LogAudit(ctx, entry); err != nil {
+		log.Printf("ERROR: audit %s %s: %v", AuditActionProjectOpen, projectID, err)
+	}
 }
