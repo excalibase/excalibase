@@ -4,9 +4,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -168,5 +170,25 @@ func TestSignInRefusalReadsAsItsReason(t *testing.T) {
 	}
 	if accountRefusal(errIdentityStore) != "failed" {
 		t.Fatal("a store failure was reported as a refusal")
+	}
+}
+
+// A sign-in that could not hash for load says when to come back, and the
+// Studio page can tell it from a real failure (EXC-749).
+func TestOAuthBusyRefusalSaysWhenToRetry(t *testing.T) {
+	h := newOAuthHarness(t, false)
+	seedPasswordAccount(t, h, false)
+	restore := auth.ConfigurePasswordGate(0, time.Millisecond)
+	w := h.callback("st4te")
+	restore()
+
+	if got := redirectedTo(t, w).Query().Get("oauth_error"); got != "busy" {
+		t.Fatalf("oauth_error=%q, want busy", got)
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Fatal("a busy refusal must carry Retry-After")
+	}
+	if sessionCookie(w) != nil {
+		t.Fatal("a session was issued")
 	}
 }

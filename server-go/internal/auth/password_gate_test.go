@@ -90,7 +90,52 @@ func TestPasswordFunctionsRefuseWhenTheGateIsFull(t *testing.T) {
 	if _, err := HashPassword(testutil.FixturePassword("gate-hash")); !errors.Is(err, ErrBusy) {
 		t.Errorf("HashPassword: got %v, want ErrBusy", err)
 	}
-	if _, err := VerifyPassword(testutil.FixturePassword("gate-seed"), hash); !errors.Is(err, ErrBusy) {
+	if _, err := VerifyPassword(testutil.FixturePassword("gate-seed"), hash, "203.0.113.5"); !errors.Is(err, ErrBusy) {
 		t.Errorf("VerifyPassword: got %v, want ErrBusy", err)
+	}
+}
+
+// One client can hold only a share of the gate, whatever it asks about, so a
+// few addresses cannot fill it (EXC-749). The cap never looks at the account.
+func TestGateCapsInFlightHashesPerClient(t *testing.T) {
+	g := newHashGate(4, 20*time.Millisecond)
+	release := make(chan struct{})
+	started := make(chan struct{})
+	go func() { _ = g.runFor("203.0.113.1", func() { close(started); <-release }) }()
+	<-started
+
+	if err := g.runFor("203.0.113.1", func() { t.Error("one client took a second slot") }); !errors.Is(err, ErrBusy) {
+		t.Fatalf("same client, second hash: got %v, want ErrBusy", err)
+	}
+	ran := false
+	if err := g.runFor("203.0.113.2", func() { ran = true }); err != nil || !ran {
+		t.Fatalf("another client refused while slots are free: err=%v ran=%v", err, ran)
+	}
+	close(release)
+}
+
+func TestGateClientShareIsAQuarterAtLeastOne(t *testing.T) {
+	cases := map[int]int{1: 1, 2: 1, 4: 1, 8: 2, 16: 4}
+	for slots, want := range cases {
+		if got := clientShare(slots); got != want {
+			t.Errorf("%d slots: share %d, want %d", slots, got, want)
+		}
+	}
+}
+
+// Work with no client (a hash made for the platform itself) is bounded by the
+// gate alone, and a finished client leaves nothing behind.
+func TestGateWithoutAClientIsOnlyBoundedByTheGateAndForgetsClients(t *testing.T) {
+	g := newHashGate(2, 20*time.Millisecond)
+	for i := 0; i < 2; i++ {
+		if err := g.runFor("", func() {}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := g.runFor("203.0.113.9", func() {}); err != nil {
+		t.Fatal(err)
+	}
+	if n := g.trackedClients(); n != 0 {
+		t.Fatalf("%d clients still tracked after their work finished", n)
 	}
 }

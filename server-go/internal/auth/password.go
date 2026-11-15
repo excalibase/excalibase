@@ -48,14 +48,16 @@ func hashArgon2id(password string) (string, error) {
 }
 
 // VerifyPassword checks a password against an argon2id hash inside the shared
-// password gate. It returns ErrBusy when no slot frees up in time; a hash that
-// is empty or not argon2id costs nothing and is simply false.
-func VerifyPassword(password, hash string) (bool, error) {
+// password gate. client is the caller's address (IPv6 grouped by /64): one
+// client may hold only a share of the gate, whether or not the account exists.
+// It returns ErrBusy when no slot frees up in time; a hash that is empty or
+// not argon2id costs nothing and is simply false.
+func VerifyPassword(password, hash, client string) (bool, error) {
 	if hash == "" || !strings.HasPrefix(hash, "$argon2id$") {
 		return false, nil
 	}
 	var ok bool
-	if err := currentGate().run(func() { ok = checkArgon2id(password, hash) }); err != nil {
+	if err := currentGate().runFor(client, func() { ok = checkArgon2id(password, hash) }); err != nil {
 		return false, err
 	}
 	return ok, nil
@@ -64,7 +66,7 @@ func VerifyPassword(password, hash string) (bool, error) {
 // CheckPassword is VerifyPassword for callers that cannot act on a refusal: a
 // busy gate reads as a mismatch. Request handlers use VerifyPassword.
 func CheckPassword(password, hash string) bool {
-	ok, _ := VerifyPassword(password, hash)
+	ok, _ := VerifyPassword(password, hash, "")
 	return ok
 }
 
