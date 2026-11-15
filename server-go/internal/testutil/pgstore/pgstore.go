@@ -59,5 +59,9 @@ func New(t *testing.T) *postgres.Store {
 		t.Fatalf("New postgres store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	// Most tests seed projects for orgs they never create.
+	if _, err := store.DB().Exec(`ALTER TABLE database_instances DISABLE TRIGGER database_instances_require_org`); err != nil {
+		t.Fatalf("relax the org guard for tests: %v", err)
+	}
 	return store
 }

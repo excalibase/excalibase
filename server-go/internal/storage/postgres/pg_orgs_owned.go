@@ -45,7 +45,7 @@ func (s *Store) EnsurePersonalOrg(ctx context.Context, org *domain.Org) (bool, e
 		var exists bool
 		if err := tx.QueryRowContext(ctx,
 			`SELECT EXISTS (SELECT 1 FROM orgs WHERE owner_id = $1)
-			     OR EXISTS (SELECT 1 FROM users WHERE id = $1 AND free_orgs_deleted > 0)`,
+			     OR EXISTS (SELECT 1 FROM users WHERE id = $1 AND personal_org_issued_at IS NOT NULL)`,
 			org.OwnerID).Scan(&exists); err != nil {
 			return fmt.Errorf("find orgs created by the account: %w", err)
 		}
@@ -103,6 +103,11 @@ func insertOwnedOrg(ctx context.Context, tx *sql.Tx, org *domain.Org) error {
 	}
 	if err != nil {
 		return fmt.Errorf("insert org: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE users SET personal_org_issued_at = COALESCE(personal_org_issued_at, $2) WHERE id = $1`,
+		org.OwnerID, now); err != nil {
+		return fmt.Errorf("record the account's org: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO org_members (org_id, user_id, role, created_at) VALUES ($1, $2, $3, $4)`,

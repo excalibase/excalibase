@@ -90,6 +90,12 @@ func (s *Store) DeleteOrg(ctx context.Context, id string) error {
 		return fmt.Errorf("begin org delete: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// The lock project creation takes: a create that began first finishes, and
+	// one that begins after sees the org gone.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		orgProjectLimitLockSpace, id); err != nil {
+		return fmt.Errorf("lock org project slots: %w", err)
+	}
 	var ownerID, tier string
 	err = tx.QueryRowContext(ctx, `DELETE FROM orgs WHERE id = $1 RETURNING owner_id, tier`, id).Scan(&ownerID, &tier)
 	var pqErr *pq.Error
