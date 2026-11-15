@@ -131,6 +131,7 @@ func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, project
 	body := map[string]interface{}{"error": safeError(err), "status": status}
 	if h.instances != nil {
 		if inst, _ := h.instances.FindByProjectID(projectID); inst != nil {
+			body["error"] = safeErrorIn(err, inst.Namespace)
 			body["projectId"] = inst.ProjectID
 			body["status"] = inst.Status
 			body["currentStep"] = inst.CurrentStep

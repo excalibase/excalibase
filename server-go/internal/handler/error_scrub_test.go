@@ -12,7 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
-const rawFailure = "dial tcp p1-postgres-rw.org1-p1.svc.cluster.local:5432: connect to 10.42.3.7 in namespace org1-p1 timed out"
+const rawFailure = "dial tcp p1-postgres-rw.org1-p1.svc.cluster.local:5432: connect to 10.42.3.7 in namespace \"org1-p1\" timed out"
 
 func assertScrubbed(t *testing.T, carrier, text string) {
 	t.Helper()

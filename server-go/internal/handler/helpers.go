@@ -112,7 +112,10 @@ func httpError(w http.ResponseWriter, msg string, code int) {
 
 // safeError returns a sanitized error message safe for client responses.
 // It strips PG internals and truncates to 200 chars.
-func safeError(err error) string {
+func safeError(err error) string { return safeErrorIn(err) }
+
+// safeErrorIn is safeError that also scrubs the namespaces the caller knows.
+func safeErrorIn(err error, namespaces ...string) string {
 	msg := err.Error()
 	// Strip common PG detail prefixes that leak schema info
 	// The driver prefix also appears after our own wrapping ("create table: pq: ...").
@@ -126,7 +129,7 @@ func safeError(err error) string {
 		msg = msg[:idx]
 	}
 	// Scrub before truncating so a half-cut host cannot slip through; the raw error is in the log.
-	msg = domain.ScrubClusterText(msg)
+	msg = domain.ScrubClusterText(msg, namespaces...)
 	if len(msg) > 200 {
 		msg = msg[:200]
 	}
