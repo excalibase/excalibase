@@ -4,10 +4,11 @@ import type { ProjectEndpoint } from '../api/projectEndpoint';
 import type { CredentialsResponse } from '../types';
 import { SshTunnelNote } from './SshTunnelNote';
 import { CertificateAuthority } from './CertificateAuthority';
-import { NOT_REACHABLE, StringRow, internalTarget, labels, publicTarget, userinfo, type SectionProps, type Target } from './ConnectionParts';
+import { NOT_REACHABLE, StringRow, publicLabel, publicTarget, userinfo, type SectionProps, type Target } from './ConnectionParts';
 import { ResetPasswordButton } from './ResetPasswordButton';
 import { useHostsApps } from '../hooks/useHostsApps';
 import { MySQLSection } from './MySQLConnection';
+import { AppsConnectionNote } from './AppsConnectionNote';
 
 interface ConnectionStringsProps {
   readonly projectId: string;
@@ -45,18 +46,9 @@ function mongoPublicTarget(endpoint?: ProjectEndpoint): Target | null {
 }
 
 // A single host's Postgres serves no TLS; its strings say so rather than prefer it.
-function postgresModes(credentials: CredentialsResponse, endpoint?: ProjectEndpoint): { internal: string; external: string } {
-  if (endpoint?.singleHost) return { internal: 'disable', external: 'disable' };
-  return {
-    internal: endpoint ? 'prefer' : (credentials.sslMode ?? 'require'),
-    external: endpoint?.requireTls ? 'verify-full' : 'prefer',
-  };
-}
-
-function mongoInternalTarget(endpoint?: ProjectEndpoint): Target | null {
-  const internal = endpoint?.mongo?.internal;
-  if (!internal) return null;
-  return { host: internal.host, port: internal.port };
+function postgresSslMode(endpoint?: ProjectEndpoint): string {
+  if (endpoint?.singleHost) return 'disable';
+  return endpoint?.requireTls ? 'verify-full' : 'prefer';
 }
 
 function CredentialField({ testId, label, value }: { readonly testId: string; readonly label: string; readonly value: string }) {
@@ -74,46 +66,37 @@ function CredentialField({ testId, label, value }: { readonly testId: string; re
 }
 
 function PostgresSection({ projectId, credentials, endpoint, hostsApps }: SectionProps) {
-  const internal = internalTarget(credentials, endpoint);
   const external = publicTarget(endpoint);
-  const modes = postgresModes(credentials, endpoint);
-  const label = labels(endpoint);
 
   return (
     <div className="space-y-2" data-testid="conn-postgres-section">
       <h5 className="text-sm font-medium text-text-primary">PostgreSQL</h5>
-      {hostsApps && (
-        <StringRow testId="conn-postgres-internal" label={label.internal} value={postgresUri(credentials, internal, modes.internal)} />
-      )}
+      {hostsApps && <AppsConnectionNote />}
       {external ? (
-        <StringRow testId="conn-postgres-public" label={label.external} value={postgresUri(credentials, external, modes.external)} />
+        <StringRow testId="conn-postgres-public" label={publicLabel(endpoint)} value={postgresUri(credentials, external, postgresSslMode(endpoint))} />
       ) : (
-        <p className="text-xs text-text-tertiary" data-testid="conn-postgres-public-absent">{NOT_REACHABLE}</p>
+        !hostsApps && <p className="text-xs text-text-tertiary" data-testid="conn-postgres-public-absent">{NOT_REACHABLE}</p>
       )}
       {external && endpoint?.singleHost && <SshTunnelNote port={external.port} />}
-      {!endpoint?.singleHost && (external || hostsApps) && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}
+      {!endpoint?.singleHost && external && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}
     </div>
   );
 }
 
 function MongoSection({ projectId, endpoint, credentials, hostsApps }: SectionProps) {
-  const internal = hostsApps ? mongoInternalTarget(endpoint) : null;
   const external = mongoPublicTarget(endpoint);
-  const label = labels(endpoint);
 
   return (
     <div className="border-t border-border-primary pt-4 space-y-2" data-testid="conn-mongo-section">
       <h5 className="text-sm font-medium text-text-primary">MongoDB (DocumentDB)</h5>
-      {internal && (
-        <StringRow testId="conn-mongo-internal" label={label.internal} value={mongoUri(credentials, internal, true)} />
-      )}
+      {hostsApps && <AppsConnectionNote />}
       {external && (
         // The gateway takes TLS only; Require TLS changes Postgres alone (EXC-530).
-        <StringRow testId="conn-mongo-public" label={label.external} value={mongoUri(credentials, external, true)} />
+        <StringRow testId="conn-mongo-public" label={publicLabel(endpoint)} value={mongoUri(credentials, external, true)} />
       )}
       {external && endpoint?.singleHost && <SshTunnelNote port={external.port} />}
-      {(internal || external) && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}
-      {!external && (!internal || endpoint?.mongo?.port) && (
+      {external && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}
+      {!external && (endpoint?.publicEnabled || !hostsApps) && (
         <p className="text-xs text-text-tertiary" data-testid="conn-mongo-unavailable">
           {endpoint?.publicEnabled
             ? 'This project carries DocumentDB, but its MongoDB endpoint is not answering yet — it starts after the database and creates its user first. The PostgreSQL endpoint above already works, and both speak to the same database with the same credential.'

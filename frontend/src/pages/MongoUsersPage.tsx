@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Check, Copy, Loader2, UserCog } from 'lucide-react';
 import { Button } from '../components/Button';
+import { AppsConnectionNote } from '../components/AppsConnectionNote';
 import { useProjectIsDocumentDB } from '../hooks/useDocuments';
 import { useHostsApps } from '../hooks/useHostsApps';
 import { useProjectEndpoint, type ProjectEndpoint } from '../api/projectEndpoint';
@@ -23,20 +24,12 @@ function errorText(err: unknown, fallback: string): string {
 }
 
 // connectionStrings are the Mongo addresses this credential works on: the
-// in-cluster one always, the public one only while it is answering.
+// public one, only while it is answering.
 function connectionStrings(
   cred: MongoUserCredential,
   endpoint: ProjectEndpoint | undefined,
-  hostsApps: boolean,
 ): { label: string; uri: string }[] {
   const strings: { label: string; uri: string }[] = [];
-  const internal = hostsApps ? endpoint?.mongo?.internal : undefined;
-  if (internal) {
-    strings.push({
-      label: 'For your apps on Excalibase',
-      uri: mongoUserUri(cred.username, cred.password, internal.host, internal.port, true),
-    });
-  }
   const mongo = endpoint?.mongo;
   if (endpoint?.publicEnabled && endpoint.available && mongo?.available && mongo.port) {
     strings.push({
@@ -98,7 +91,7 @@ function NewCredentialNotice({
         </code>
         <CopyButton value={cred.password} label="Copy password" />
       </div>
-      {connectionStrings(cred, endpoint, hostsApps).map(({ label, uri }) => (
+      {connectionStrings(cred, endpoint).map(({ label, uri }) => (
         <div key={label}>
           <p className="text-xs text-text-secondary mb-1">{label}</p>
           <div className="flex items-center gap-2">
@@ -109,6 +102,7 @@ function NewCredentialNotice({
           </div>
         </div>
       ))}
+      {hostsApps && <AppsConnectionNote />}
       <Button type="button" onClick={onDone}>
         I have saved it
       </Button>

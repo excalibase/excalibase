@@ -102,7 +102,7 @@ test.describe('Studio on a MySQL project', () => {
     await json(page, `**/api/projects/${PROJECT_ID}/db-endpoint`, {
       projectId: PROJECT_ID, publicOffered: true, publicEnabled: true, available: true, host: 'shop.db.example.test', port: 33061,
       requireTls: true, database: 'shop', username: 'admin', connectionStrings: { requireTls: '', allowPlaintext: '' },
-      caCertificate: CA_PEM, internal: { host: HOST, port: 3306, connectionString: '' },
+      caCertificate: CA_PEM,
     });
     await page.goto(`/project/${PROJECT_ID}/settings`);
     await expect(page.getByTestId('conn-mysql-public')).toContainText(

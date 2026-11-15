@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useCredentials } from '../hooks/useProvisioning';
 import { useHostsApps } from '../hooks/useHostsApps';
+import { AppsConnectionNote } from './AppsConnectionNote';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import { Button } from './Button';
 import { Copy, Loader2 } from 'lucide-react';
@@ -41,7 +42,7 @@ export function CredentialsViewer({ projectId }: CredentialsViewerProps) {
 
   if (!credentials) return null;
 
-  const address = connectAddress(credentials, endpoint, hostsApps);
+  const address = connectAddress(endpoint);
   const connectionString = address.kind === 'none'
     ? null
     : `postgresql://${userinfo(credentials.username)}@${address.host}:${address.port}/${credentials.databaseName}?sslmode=${credentials.sslMode ?? 'require'}`;
@@ -58,8 +59,8 @@ export function CredentialsViewer({ projectId }: CredentialsViewerProps) {
         <ResetPasswordButton projectId={projectId} />
       </div>
 
-      {address.kind === 'none' && <p className="text-sm text-text-secondary">{NOT_REACHABLE}</p>}
-      {address.kind === 'internal' && <p className="text-xs text-text-tertiary">This address is for your apps on Excalibase.</p>}
+      {address.kind === 'none' && !hostsApps && <p className="text-sm text-text-secondary">{NOT_REACHABLE}</p>}
+      {hostsApps && <AppsConnectionNote />}
 
       <div className="space-y-2">
         {rows.map(([label, value]) => (

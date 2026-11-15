@@ -26,7 +26,6 @@ const MYSQL_ENDPOINT = {
   host: 'p-my.db.example.com', port: 32010, requireTls: true, engine: 'mysql', database: 'app', username: 'admin',
   connectionStrings: { requireTls: 'mysql://admin@p-my.db.example.com:32010/app?ssl-mode=VERIFY_IDENTITY', allowPlaintext: '' },
   caCertificate: '-----BEGIN CERTIFICATE-----\nMYSQLCA\n-----END CERTIFICATE-----\n',
-  internal: { host: MYSQL_PROJECT.host, port: 3306, connectionString: '' },
 };
 
 function renderSettings() {

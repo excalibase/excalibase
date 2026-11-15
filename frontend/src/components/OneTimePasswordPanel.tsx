@@ -13,25 +13,22 @@ interface OneTimePasswordPanelProps {
   readonly onDone: () => void;
 }
 
-const UNREACHABLE_HOST = 'not reachable from the internet';
-
 interface Shown {
   readonly host: string;
   readonly port: string;
 }
 
 function shownAddress(address: ConnectAddress): Shown {
-  if (address.kind === 'none') return { host: UNREACHABLE_HOST, port: '' };
+  if (address.kind === 'none') return { host: '', port: '' };
   return { host: address.host, port: String(address.port) };
 }
 
-function Field({ testId, label, value, note }: { readonly testId: string; readonly label: string; readonly value: string; readonly note?: string }) {
+function Field({ testId, label, value }: { readonly testId: string; readonly label: string; readonly value: string }) {
   return (
     <div>
       <div className="text-xs text-text-tertiary mb-1">{label}</div>
       <code data-testid={testId} className="block bg-bg-tertiary border border-border-primary rounded px-3 py-2 text-xs font-mono text-text-primary break-all">
         {value || '—'}
-        {note && <span className="block text-text-tertiary mt-1">{note}</span>}
       </code>
     </div>
   );
@@ -56,11 +53,7 @@ export function OneTimePasswordPanel({ projectId, password, address, database, u
         <p className="text-sm text-text-secondary mt-1">Copy it now. It will not be shown again.</p>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <Field
-          testId="otp-host" label="Host"
-          value={address.kind === 'none' ? 'Not reachable from the internet' : shown.host}
-          note={address.kind === 'internal' ? 'for your apps on Excalibase' : undefined}
-        />
+        <Field testId="otp-host" label="Host" value={address.kind === 'none' ? 'Not reachable from the internet' : shown.host} />
         <Field testId="otp-port" label="Port" value={shown.port} />
         <Field testId="otp-database" label="Database" value={database} />
         <Field testId="otp-user" label="User" value={user} />

@@ -27,7 +27,6 @@ const PUBLIC_ENDPOINT = {
   projectId: 'p-1', publicEnabled: true, available: true, host: 'p-1.db.excalibase.io', port: 26257, requireTls: true,
   database: 'appdb', username: 'app', connectionStrings: { requireTls: '', allowPlaintext: '' },
   caCertificate: '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n',
-  internal: { host: INTERNAL_HOST, port: 5432, connectionString: '' },
 };
 const PRIVATE_ENDPOINT = { ...PUBLIC_ENDPOINT, publicEnabled: false, available: false, port: 0 };
 
@@ -87,12 +86,12 @@ describe('credentials never display a stored password', () => {
     expectNoLeaks(document.body.textContent ?? '');
   });
 
-  test('a project that hosts apps shows the internal address, labelled for those apps', async () => {
+  test('a project that hosts apps shows the DATABASE_URL note and no address', async () => {
     mockApi({ apps: [{ id: 'a1', name: 'web' }] });
     wrap(<ConnectionStrings projectId="p-1" documentDb={false} endpoint={PRIVATE_ENDPOINT as never} />);
-    const row = await screen.findByTestId('conn-postgres-internal');
-    expect(row).toHaveTextContent(`postgresql://app:<password>@${INTERNAL_HOST}:5432/appdb`);
-    expect(screen.getByTestId('conn-postgres-internal-label')).toHaveTextContent(/for your apps on Excalibase/i);
+    expect(await screen.findByTestId('apps-database-url-note')).toHaveTextContent(/DATABASE_URL injected automatically/);
+    expect(screen.queryByTestId('conn-postgres-internal')).not.toBeInTheDocument();
+    expectNoLeaks(document.body.textContent ?? '');
   });
 
   test('copy puts the <password> placeholder on the clipboard', async () => {

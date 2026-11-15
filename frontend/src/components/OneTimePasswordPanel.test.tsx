@@ -72,12 +72,13 @@ describe('OneTimePasswordPanel', () => {
     render(<Harness address={{ kind: 'none' }} />);
     expect(screen.getByTestId('otp-host')).toHaveTextContent('Not reachable from the internet');
     const csv = decodeURIComponent(screen.getByRole('link', { name: /download csv/i }).getAttribute('href')!);
-    expect(csv).toContain('"not reachable from the internet"');
   });
 
-  test('the internal address is offered only for apps beside the database', () => {
-    render(<Harness address={{ kind: 'internal', host: 'p-1-rw', port: 5432 }} />);
-    expect(screen.getByTestId('otp-host')).toHaveTextContent('p-1-rw');
-    expect(screen.getByTestId('otp-host')).toHaveTextContent('for your apps on Excalibase');
+  test('with no public endpoint the panel host says so and the CSV host cell is empty', () => {
+    render(<Harness address={{ kind: 'none' }} />);
+    expect(screen.getByTestId('otp-host')).toHaveTextContent('Not reachable from the internet');
+    const csv = decodeURIComponent(screen.getByRole('link', { name: /download csv/i }).getAttribute('href')!);
+    expect(csv.split('\n')[1].startsWith('"","",')).toBe(true);
+    expect(csv).not.toContain('not reachable');
   });
 });

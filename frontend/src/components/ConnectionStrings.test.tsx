@@ -37,25 +37,15 @@ const PUBLIC_ENDPOINT: ProjectEndpoint = {
     allowPlaintext: 'postgresql://app@p-1.db.excalibase.io:26257/appdb?sslmode=prefer',
   },
   caCertificate: '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n',
-  internal: {
-    host: 'p-1-postgres-rw.org-1.svc.cluster.local',
-    port: 5432,
-    connectionString:
-      'postgresql://app@p-1-postgres-rw.org-1.svc.cluster.local:5432/appdb?sslmode=prefer',
-  },
 };
 
 // The same project once its Mongo gateway is up and has created its user.
 const WITH_MONGO: ProjectEndpoint = {
   ...PUBLIC_ENDPOINT,
-  mongo: {
-    available: true,
-    port: 27018,
-    internal: { host: 'p-1-documentdb.org-1.svc.cluster.local', port: 27017 },
-  },
+  mongo: { available: true, port: 27018 },
 };
 
-// A project that hosts an app is the one whose internal address is shown.
+// A project that hosts an app is told its apps get DATABASE_URL.
 const APPS = [{ id: 'a1', name: 'web' }];
 let hostedApps: unknown[] = APPS;
 
@@ -119,45 +109,44 @@ describe('ConnectionStrings — one credential', () => {
   });
 });
 
-describe('ConnectionStrings — internal versus public', () => {
+describe('ConnectionStrings — apps versus public', () => {
   test('a project with no apps and no public port is not reachable and shows no internal host', async () => {
     hostedApps = [];
     renderStrings({
       endpoint: { ...PUBLIC_ENDPOINT, publicEnabled: false, available: false, port: 0, caCertificate: '' },
     });
     expect(await screen.findByTestId('conn-postgres-public-absent')).toHaveTextContent(/not reachable from the internet/i);
+    expect(screen.queryByTestId('apps-database-url-note')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('conn-postgres-public')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('svc.cluster.local');
+  });
+
+  test('a project that hosts apps gets a note instead of an address', async () => {
+    renderStrings({
+      endpoint: { ...PUBLIC_ENDPOINT, publicEnabled: false, available: false, port: 0, caCertificate: '' },
+    });
+    expect(await screen.findByTestId('apps-database-url-note')).toHaveTextContent(
+      'Apps you host on Excalibase get DATABASE_URL injected automatically. There is nothing to copy.',
+    );
     expect(screen.queryByTestId('conn-postgres-internal')).not.toBeInTheDocument();
     expect(screen.queryByTestId('conn-postgres-public')).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain('svc.cluster.local');
   });
 
-  test('a project that hosts apps shows the internal address, labelled for them', async () => {
-    renderStrings({
-      endpoint: { ...PUBLIC_ENDPOINT, publicEnabled: false, available: false, port: 0, caCertificate: '' },
-    });
-    const internal = await screen.findByTestId('conn-postgres-internal');
-    expect(internal).toHaveTextContent('@p-1-postgres-rw.org-1.svc.cluster.local:5432/appdb');
-    expect(screen.getByTestId('conn-postgres-internal-label')).toHaveTextContent(/for your apps on Excalibase/i);
-    expect(screen.getByTestId('conn-postgres-public-absent')).toBeInTheDocument();
-  });
-
-  test('shows the internal address alongside the public one, each labelled', async () => {
+  test('shows the note beside the public string', async () => {
     renderStrings({ endpoint: PUBLIC_ENDPOINT });
     await screen.findByTestId('conn-postgres-public');
-    expect(screen.getByTestId('conn-postgres-internal-label')).toHaveTextContent(/for your apps/i);
-    expect(screen.getByTestId('conn-postgres-public-label')).toHaveTextContent(/public/i);
-    expect(screen.getByTestId('conn-postgres-internal')).toHaveTextContent(
-      '@p-1-postgres-rw.org-1.svc.cluster.local:5432/appdb'
-    );
+    expect(screen.getByTestId('apps-database-url-note')).toBeInTheDocument();
     expect(screen.getByTestId('conn-postgres-public')).toHaveTextContent('@p-1.db.excalibase.io:26257/appdb');
+    expect(screen.queryByTestId('conn-postgres-internal')).not.toBeInTheDocument();
   });
 
-  test('never prints a cluster address from the credentials when no endpoint has been read', async () => {
+  test('never prints a cluster address when no endpoint has been read', async () => {
     renderStrings();
-    const internal = await screen.findByTestId('conn-postgres-internal');
-    expect(internal).toHaveTextContent('@<host>:5432/appdb');
-    expect(internal).not.toHaveTextContent('svc.cluster.local');
+    await screen.findByTestId('apps-database-url-note');
+    expect(screen.queryByTestId('conn-postgres-internal')).not.toBeInTheDocument();
     expect(screen.queryByTestId('conn-postgres-public')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('<host>');
   });
 });
 
@@ -202,32 +191,21 @@ describe('ConnectionStrings — DocumentDB', () => {
 
   // The gateway is one server, not a replica set: without directConnection a
   // driver follows the member address the gateway reports and cannot reach it.
-  test('connects directly to the one gateway, internal and public', async () => {
+  test('connects directly to the one gateway', async () => {
     renderStrings({ documentDb: true, endpoint: WITH_MONGO });
     expect(await screen.findByTestId('conn-mongo-public')).toHaveTextContent('directConnection=true');
-    expect(screen.getByTestId('conn-mongo-internal')).toHaveTextContent('directConnection=true');
+    expect(screen.queryByTestId('conn-mongo-internal')).not.toBeInTheDocument();
   });
 
-  test('shows the internal Mongo address too, over TLS', async () => {
-    renderStrings({ documentDb: true, endpoint: WITH_MONGO });
-    const internal = await screen.findByTestId('conn-mongo-internal');
-    expect(internal).toHaveTextContent('@p-1-documentdb.org-1.svc.cluster.local:27017/?tls=true');
-  });
-
-  test('shows the internal Mongo address of a project that publishes no public port', async () => {
+  test('a Mongo project with no public port and hosted apps gets the note, no address', async () => {
     renderStrings({
       documentDb: true,
-      endpoint: {
-        ...PUBLIC_ENDPOINT,
-        publicEnabled: false,
-        available: false,
-        port: 0,
-        mongo: { available: false, internal: { host: 'p-1-postgres-rw.org-1.svc.cluster.local', port: 10260 } },
-      },
+      endpoint: { ...PUBLIC_ENDPOINT, publicEnabled: false, available: false, port: 0 },
     });
-    const internal = await screen.findByTestId('conn-mongo-internal');
-    expect(internal).toHaveTextContent('@p-1-postgres-rw.org-1.svc.cluster.local:10260/');
-    expect(screen.queryByTestId('conn-mongo-unavailable')).not.toBeInTheDocument();
+    const section = await screen.findByTestId('conn-mongo-section');
+    expect(section.querySelector('[data-testid="apps-database-url-note"]')).not.toBeNull();
+    expect(screen.queryByTestId('conn-mongo-internal')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('svc.cluster.local');
   });
 
   test('says the Mongo endpoint is not answering yet while Postgres already is', async () => {
@@ -235,7 +213,7 @@ describe('ConnectionStrings — DocumentDB', () => {
       documentDb: true,
       endpoint: {
         ...PUBLIC_ENDPOINT,
-        mongo: { available: false, port: 27018, internal: { host: 'p-1-postgres-rw.org-1.svc.cluster.local', port: 10260 } },
+        mongo: { available: false, port: 27018 },
       },
     });
     await screen.findByTestId('conn-mongo-section');
@@ -260,20 +238,19 @@ describe('ConnectionStrings — certificate authority', () => {
     expect(links[0]).toHaveAttribute('download', 'p-1-ca.crt');
   });
 
-  // In-cluster logins need TLS too, so a private project still gets its CA.
-  test('offers the CA beside the internal strings of a project with no public port', async () => {
+  test('offers no CA for a project with no public port', async () => {
     renderStrings({
       documentDb: true,
-      endpoint: { ...WITH_MONGO, publicEnabled: false, available: false, port: 0, mongo: { available: false, internal: WITH_MONGO.mongo!.internal } },
+      endpoint: { ...WITH_MONGO, publicEnabled: false, available: false, port: 0, mongo: { available: false } },
     });
-    await screen.findByTestId('conn-mongo-internal');
+    await screen.findByTestId('conn-mongo-section');
     expect(screen.queryByTestId('conn-postgres-public')).not.toBeInTheDocument();
-    expect(screen.getAllByTestId('conn-ca-download')).toHaveLength(2);
+    expect(screen.queryByTestId('conn-ca-download')).not.toBeInTheDocument();
   });
 
   test('offers no download while the endpoint publishes no CA', async () => {
     renderStrings();
-    await screen.findByTestId('conn-postgres-internal');
+    await screen.findByTestId('apps-database-url-note');
     expect(screen.queryByTestId('conn-ca-download')).not.toBeInTheDocument();
   });
 });
@@ -293,8 +270,7 @@ const SINGLE_HOST: ProjectEndpoint = {
   username: 'postgres',
   connectionStrings: { requireTls: '', allowPlaintext: 'postgresql://postgres@127.0.0.1:32801/appdb?sslmode=disable' },
   caCertificate: '-----BEGIN CERTIFICATE-----\nGW\n-----END CERTIFICATE-----\n',
-  internal: { host: 'excalibase-p-1-postgres', port: 5432, connectionString: '' },
-  mongo: { available: true, port: 32802, internal: { host: 'excalibase-p-1-postgres', port: 10260 } },
+  mongo: { available: true, port: 32802 },
 };
 
 describe('ConnectionStrings — single host', () => {
@@ -302,7 +278,7 @@ describe('ConnectionStrings — single host', () => {
     renderStrings({ documentDb: true, endpoint: SINGLE_HOST });
     expect(await screen.findByTestId('conn-postgres-public')).toHaveTextContent('@127.0.0.1:32801/appdb?sslmode=disable');
     expect(screen.getByTestId('conn-postgres-public-label')).toHaveTextContent('On the host');
-    expect(screen.getByTestId('conn-postgres-internal')).toHaveTextContent('@excalibase-p-1-postgres:5432/appdb?sslmode=disable');
+    expect(screen.queryByTestId('conn-postgres-internal')).not.toBeInTheDocument();
     expect(screen.getByTestId('conn-mongo-public')).toHaveTextContent('@127.0.0.1:32802/?tls=true');
     expect(screen.getAllByTestId('conn-ssh-tunnel')[0]).toHaveTextContent('ssh -N -L 32801:127.0.0.1:32801');
   });
@@ -330,7 +306,7 @@ describe('ConnectionStrings — single-host MySQL', () => {
           documentDb={false}
           endpoint={{
             ...SINGLE_HOST, port: 33061, requireTls: true, username: 'admin', database: 'shop',
-            caCertificate: MYSQL_CA, mongo: undefined, internal: { host: 'excalibase-p-1-mysql', port: 3306, connectionString: '' },
+            caCertificate: MYSQL_CA, mongo: undefined,
           }}
         />
       </QueryClientProvider>
@@ -338,9 +314,7 @@ describe('ConnectionStrings — single-host MySQL', () => {
     expect(await screen.findByTestId('conn-mysql-public')).toHaveTextContent(
       '@127.0.0.1:33061/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-1-ca.crt',
     );
-    expect(screen.getByTestId('conn-mysql-internal')).toHaveTextContent(
-      '@excalibase-p-1-mysql:3306/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-1-ca.crt',
-    );
+    expect(screen.queryByTestId('conn-mysql-internal')).not.toBeInTheDocument();
     expect(screen.getByTestId('conn-ssh-tunnel')).toHaveTextContent('ssh -N -L 33061:127.0.0.1:33061');
     // EXC-589: unlike a single host's Postgres, its MySQL serves TLS, so the CA is offered.
     const download = screen.getByTestId('conn-mysql-section').querySelector('[data-testid="conn-ca-download"]');
@@ -351,23 +325,20 @@ describe('ConnectionStrings — single-host MySQL', () => {
 
 // ADR 0041 decision 9: a MySQL project shows how its drivers connect, TLS on.
 describe('ConnectionStrings — MySQL driver examples', () => {
-  test('gives a Node (mysql2) and a Connector/J example on the internal address', async () => {
-    mockCredentials({
-        ...CREDENTIALS, engine: 'mysql', host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, username: 'admin',
-        databaseName: 'shop', jdbcUrl: 'jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=VERIFY_IDENTITY',
-      });
+  test('gives a Node (mysql2) and a Connector/J example on the public address', async () => {
+    mockCredentials({ ...CREDENTIALS, engine: 'mysql', port: 3306, username: 'admin', databaseName: 'shop' });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <ConnectionStrings projectId="p-1" documentDb={false} endpoint={{ ...SINGLE_HOST, port: 0, publicEnabled: false, available: false, requireTls: true, username: 'admin', database: 'shop', mongo: undefined, internal: { host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, connectionString: '' } }} />
+        <ConnectionStrings projectId="p-1" documentDb={false} endpoint={{ ...SINGLE_HOST, host: 'p-1.db.excalibase.io', port: 33061, requireTls: true, username: 'admin', database: 'shop', mongo: undefined }} />
       </QueryClientProvider>
     );
-    expect(await screen.findByTestId('conn-mysql-internal')).toHaveTextContent(
-      'mysql://admin:<password>@moco-p-1-mysql-primary.o-p-1.svc:3306/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-1-ca.crt',
+    expect(await screen.findByTestId('conn-mysql-public')).toHaveTextContent(
+      'mysql://admin:<password>@p-1.db.excalibase.io:33061/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=p-1-ca.crt',
     );
     const node = screen.getByTestId('conn-mysql-node');
     expect(node).toHaveTextContent("import mysql from 'mysql2/promise'");
-    expect(node).toHaveTextContent("host: 'moco-p-1-mysql-primary.o-p-1.svc'");
+    expect(node).toHaveTextContent("host: 'p-1.db.excalibase.io'");
     expect(node).toHaveTextContent("user: 'admin'");
     expect(node).toHaveTextContent("database: 'shop'");
     expect(node).toHaveTextContent('password: process.env.MYSQL_PASSWORD');
@@ -376,7 +347,7 @@ describe('ConnectionStrings — MySQL driver examples', () => {
     expect(node).not.toHaveTextContent('rejectUnauthorized');
     expect(node).not.toHaveTextContent('s3cret');
     const java = screen.getByTestId('conn-mysql-connectorj');
-    expect(java).toHaveTextContent('"jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=VERIFY_IDENTITY"');
+    expect(java).toHaveTextContent('"jdbc:mysql://p-1.db.excalibase.io:33061/shop?sslMode=VERIFY_IDENTITY"');
     expect(java).toHaveTextContent('DriverManager.getConnection(url, "admin", System.getenv("MYSQL_PASSWORD"))');
     expect(screen.getByTestId('conn-mysql-connectorj-truststore')).toHaveTextContent(
       'keytool -importcert -alias excalibase-ca -file p-1-ca.crt -keystore p-1-ca.p12 -storetype PKCS12',
@@ -389,17 +360,18 @@ describe('ConnectionStrings — MySQL driver examples', () => {
     expect(note).not.toHaveTextContent(/not verified/);
   });
 
-  test('builds a verifying JDBC URL itself when the credentials carry none', async () => {
-    mockCredentials({ ...CREDENTIALS, engine: 'mysql', host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, username: 'admin', databaseName: 'shop' });
+  test('a MySQL project with no public port shows the note and placeholders, never a cluster address', async () => {
+    mockCredentials({ ...CREDENTIALS, engine: 'mysql', port: 3306, username: 'admin', databaseName: 'shop' });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <ConnectionStrings projectId="p-1" documentDb={false} endpoint={{ ...SINGLE_HOST, port: 0, publicEnabled: false, available: false, requireTls: true, username: 'admin', database: 'shop', caCertificate: '', mongo: undefined, internal: { host: 'moco-p-1-mysql-primary.o-p-1.svc', port: 3306, connectionString: '' } }} />
+        <ConnectionStrings projectId="p-1" documentDb={false} endpoint={{ ...SINGLE_HOST, port: 0, publicEnabled: false, available: false, requireTls: true, username: 'admin', database: 'shop', caCertificate: '', mongo: undefined }} />
       </QueryClientProvider>
     );
-    expect(await screen.findByTestId('conn-mysql-connectorj')).toHaveTextContent(
-      '"jdbc:mysql://moco-p-1-mysql-primary.o-p-1.svc:3306/shop?sslMode=VERIFY_IDENTITY"',
-    );
+    expect(await screen.findByTestId('apps-database-url-note')).toBeInTheDocument();
+    expect(screen.queryByTestId('conn-mysql-internal')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('conn-mysql-public')).not.toBeInTheDocument();
+    expect(screen.getByTestId('conn-mysql-connectorj')).toHaveTextContent('"jdbc:mysql://<host>:<port>/shop?sslMode=VERIFY_IDENTITY"');
     expect(screen.queryByTestId('conn-ca-download')).not.toBeInTheDocument();
   });
 });

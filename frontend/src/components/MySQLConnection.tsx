@@ -1,6 +1,7 @@
 import { SshTunnelNote } from './SshTunnelNote';
 import { CertificateAuthority, caFileName } from './CertificateAuthority';
-import { NOT_REACHABLE, StringRow, internalTarget, labels, publicTarget, userinfo, type SectionProps, type Target } from './ConnectionParts';
+import { AppsConnectionNote } from './AppsConnectionNote';
+import { NOT_REACHABLE, StringRow, publicLabel, publicTarget, userinfo, type SectionProps, type Target } from './ConnectionParts';
 
 interface SnippetTarget {
   readonly host: string;
@@ -62,24 +63,21 @@ export function MySQLSection({ projectId, credentials, endpoint, hostsApps }: Se
   const caFile = caFileName(projectId);
   const uri = (target: Target) =>
     `mysql://${userinfo(credentials.username)}@${target.host}:${target.port}/${credentials.databaseName}?ssl-mode=VERIFY_IDENTITY&ssl-ca=${caFile}`;
-  const internal = internalTarget(credentials, endpoint);
   const external = publicTarget(endpoint);
-  const label = labels(endpoint);
-  const reachable = external ?? (hostsApps ? internal : null);
-  const snippetTarget: SnippetTarget = reachable ?? { host: '<host>', port: '<port>' };
+  const snippetTarget: SnippetTarget = external ?? { host: '<host>', port: '<port>' };
   const jdbcUrl = `jdbc:mysql://${snippetTarget.host}:${snippetTarget.port}/${credentials.databaseName}?sslMode=VERIFY_IDENTITY`;
   return (
     <div className="space-y-2" data-testid="conn-mysql-section">
       <h5 className="text-sm font-medium text-text-primary">MySQL — TLS required</h5>
-      {hostsApps && <StringRow testId="conn-mysql-internal" label={label.internal} value={uri(internal)} />}
+      {hostsApps && <AppsConnectionNote />}
       {external ? (
-        <StringRow testId="conn-mysql-public" label={label.external} value={uri(external)} />
+        <StringRow testId="conn-mysql-public" label={publicLabel(endpoint)} value={uri(external)} />
       ) : (
-        <p className="text-xs text-text-tertiary" data-testid="conn-mysql-public-absent">{NOT_REACHABLE}</p>
+        !hostsApps && <p className="text-xs text-text-tertiary" data-testid="conn-mysql-public-absent">{NOT_REACHABLE}</p>
       )}
       {external && endpoint?.singleHost && <SshTunnelNote port={external.port} />}
-      {reachable && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}
-      {reachable && (
+      {external && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}
+      {external && (
         <StringRow testId="conn-mysql-jdbc" label="JDBC (Connector/J) — pass the username and password separately" value={jdbcUrl} />
       )}
       <Snippet testId="conn-mysql-node" label="Node (mysql2)" code={nodeExample(snippetTarget, credentials.username, credentials.databaseName, caFile)} />

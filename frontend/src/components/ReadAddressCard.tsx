@@ -4,6 +4,7 @@ import { refusalMessage } from '../api/clusterSettings';
 import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { useHostsApps } from '../hooks/useHostsApps';
 import { Button } from './Button';
+import { AppsConnectionNote } from './AppsConnectionNote';
 
 interface ReadAddressCardProps {
   readonly projectId: string;
@@ -85,13 +86,10 @@ function ReadAddressBody({
           ? 'No replica is serving right now, so this address refuses connections.'
           : `${view.replicas} ${view.replicas === 1 ? 'replica serves' : 'replicas serve'} reads.`}
       </p>
-      {hostsApps && view.internal && (
-        <p className="text-sm text-text-primary mb-2" data-testid="read-address-internal">
-          For your apps on Excalibase:{' '}
-          <code className="font-mono text-xs">
-            {view.internal.host}:{view.internal.port}
-          </code>
-        </p>
+      {hostsApps && (
+        <div className="mb-2">
+          <AppsConnectionNote />
+        </div>
       )}
       {view.username && <ReadLogin view={view} />}
       <PublicReadPort projectId={projectId} status={status} view={view} />

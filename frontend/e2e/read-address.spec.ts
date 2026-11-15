@@ -7,12 +7,11 @@ const endpoint = {
   projectId: 'test-project', publicOffered: true, publicEnabled: true, available: true,
   host: 'test-project.db.example.test', port: 31001, requireTls: true, database: 'testdb', username: 'app',
   connectionStrings: { requireTls: '', allowPlaintext: '' }, caCertificate: '',
-  internal: { host: 'localhost', port: 5432, connectionString: '' }, canChange: true,
+  canChange: true,
 };
 
 const readAddress = {
   projectId: 'test-project', replicas: 2,
-  internal: { host: 'test-project-postgres-ro.excalibase-test.svc.cluster.local', port: 5432, connectionString: '' },
   publicOffered: true, publicOpen: true, enabled: false, available: false,
   host: 'test-project.db.example.test', canChange: true,
 };
@@ -58,6 +57,7 @@ test.describe('Read-only address', () => {
     const card = page.getByTestId('read-address-card');
     await expect(card.getByTestId('read-address-replicas')).toHaveText('2 replicas serve reads.');
     await expect(card.getByTestId('read-address-internal')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('svc.cluster.local');
     await card.getByTestId('read-address-toggle').click();
     await expect(card.getByTestId('read-address-public')).toContainText('test-project.db.example.test:31002');
     expect(puts).toEqual([{ enabled: true }]);

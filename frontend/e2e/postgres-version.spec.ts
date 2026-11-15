@@ -25,14 +25,7 @@ const CREDENTIALS = {
   connectionUrl: '',
 };
 
-const INTERNAL = {
-  host: 'test-project-postgres-rw.org-1.svc.cluster.local',
-  port: 5432,
-  connectionString: 'postgresql://excalibase_app@test-project-postgres-rw.org-1.svc.cluster.local:5432/app?sslmode=prefer',
-};
-
-// The gateway's own Service: the Postgres host does not serve the Mongo port.
-const MONGO_INTERNAL_HOST = 'test-project-documentdb.org-1.svc.cluster.local';
+const PROVISION_HOST = 'test-project-postgres-rw.org-1.svc.cluster.local';
 
 async function json(page: Page, pattern: string, body: unknown) {
   await page.route(pattern, (route) =>
@@ -46,7 +39,7 @@ async function mockSettingsProject(page: Page, documentDb: boolean) {
   await json(page, '**/api/postgres/catalog', CATALOG);
   await json(page, `**/api/provision/${PROJECT_ID}`, {
     projectId: PROJECT_ID, databaseType: 'POSTGRESQL', tier: 'FREE', namespace: 'org-1-test-project',
-    status: 'ACTIVE', currentStage: 'COMPLETED', host: INTERNAL.host, port: 5432, databaseName: 'app',
+    status: 'ACTIVE', currentStage: 'COMPLETED', host: PROVISION_HOST, port: 5432, databaseName: 'app',
     postgresVersion: '17', documentDb, backupEnabled: false, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
   });
   await json(page, `**/api/provision/${PROJECT_ID}/credentials`, CREDENTIALS);
@@ -55,7 +48,6 @@ async function mockSettingsProject(page: Page, documentDb: boolean) {
     requireTls: true, database: 'app', username: 'excalibase_app',
     connectionStrings: { requireTls: '', allowPlaintext: '' },
     caCertificate: '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n',
-    internal: documentDb ? { ...INTERNAL, mongoHost: MONGO_INTERNAL_HOST, mongoPort: 10260 } : INTERNAL,
     ...(documentDb ? { mongoPort: 30101, mongoAvailable: true } : {}),
   });
 }
@@ -92,7 +84,7 @@ test.describe('Project connection strings and minor upgrade', () => {
     await loginAs(page);
   });
 
-  test('shows the Mongo strings of a DocumentDB project, the internal one for its apps', async ({ page }) => {
+  test('shows the Mongo strings of a DocumentDB project, and the DATABASE_URL note for its apps', async ({ page }) => {
     await mockSettingsProject(page, true);
     await json(page, '**/api/config', { deploymentMode: 'cloud', appHosting: true, features: {} });
     await json(page, `**/api/projects/${PROJECT_ID}/apps/`, [{ id: 'a1', name: 'web' }]);
@@ -100,16 +92,19 @@ test.describe('Project connection strings and minor upgrade', () => {
     await expect(page.getByTestId('connection-strings')).toBeVisible({ timeout: FIRST_RENDER });
     await expect(page.getByTestId('conn-postgres-public')).toContainText('@test-project.db.example.com:30100/app');
     await expect(page.getByTestId('conn-mongo-public')).toContainText('@test-project.db.example.com:30101/?tls=true');
-    await expect(page.getByTestId('conn-mongo-internal')).toContainText(`@${MONGO_INTERNAL_HOST}:10260/`);
-    await expect(page.getByTestId('conn-mongo-internal')).toContainText('directConnection=true');
+    await expect(page.getByTestId('conn-mongo-public')).toContainText('directConnection=true');
+    await expect(page.getByTestId('apps-database-url-note').first()).toContainText('DATABASE_URL injected automatically');
+    await expect(page.getByTestId('conn-mongo-internal')).toHaveCount(0);
+    await expect(page.getByTestId('connection-strings')).not.toContainText('svc.cluster.local');
   });
 
-  test('keeps the internal address off a project that hosts no apps', async ({ page }) => {
+  test('shows no note and no internal address on a project that hosts no apps', async ({ page }) => {
     await mockSettingsProject(page, true);
     await page.goto(`/project/${PROJECT_ID}/settings`);
     await expect(page.getByTestId('conn-mongo-public')).toBeVisible({ timeout: FIRST_RENDER });
     await expect(page.getByTestId('conn-mongo-internal')).toHaveCount(0);
     await expect(page.getByTestId('conn-postgres-internal')).toHaveCount(0);
+    await expect(page.getByTestId('apps-database-url-note')).toHaveCount(0);
     await expect(page.getByTestId('connection-strings')).not.toContainText('svc.cluster.local');
     await expect(page.getByTestId('conn-postgres-public')).toContainText(':<password>@');
   });

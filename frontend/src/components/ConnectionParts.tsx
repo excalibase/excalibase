@@ -6,20 +6,11 @@ import type { CredentialsResponse } from '../types';
 // What every engine's connection section shares: where a client dials and
 // the row that shows a string and copies it.
 
-// A target is one address a client can dial. Every project has an internal
-// one; a public one exists only when the customer opened a port and it is
-// answering.
+// A target is one address a client can dial. It exists only when the customer
+// opened a public port and it is answering.
 export interface Target {
   host: string;
   port: number;
-}
-
-// internalTarget is where a workload inside the cluster connects. It is shown
-// whether or not the project publishes publicly: an app hosted beside the
-// database should use it and needs no public port.
-export function internalTarget(credentials: CredentialsResponse, endpoint?: ProjectEndpoint): Target {
-  if (endpoint) return { host: endpoint.internal.host, port: endpoint.internal.port };
-  return { host: '<host>', port: credentials.port };
 }
 
 // publicTarget is the port a client outside the cluster dials, or null when
@@ -29,30 +20,23 @@ export function publicTarget(endpoint?: ProjectEndpoint): Target | null {
   return { host: endpoint.host, port: endpoint.port };
 }
 
-// Where a string works. The internal address is shown only for apps hosted
-// beside the database; nobody else can dial it.
-export function labels(endpoint?: ProjectEndpoint): { internal: string; external: string } {
-  if (endpoint?.singleHost) {
-    return { internal: 'For your apps on Excalibase (containers on this host)', external: 'On the host — 127.0.0.1' };
-  }
-  return { internal: 'For your apps on Excalibase', external: 'Public — from outside the cluster' };
+// Where a string works.
+export function publicLabel(endpoint?: ProjectEndpoint): string {
+  return endpoint?.singleHost ? 'On the host — 127.0.0.1' : 'Public — from outside the cluster';
 }
 
 export const PASSWORD_PLACEHOLDER = '<password>';
 
 // The address a customer's own machine should be told about: the public one
-// when it answers, the internal one only for a project that hosts apps, and
-// otherwise none, because the database cannot be reached from the internet.
+// when it answers, otherwise none, because the database cannot be reached
+// from the internet.
 export type ConnectAddress =
   | { kind: 'public'; host: string; port: number }
-  | { kind: 'internal'; host: string; port: number }
   | { kind: 'none' };
 
-export function connectAddress(credentials: CredentialsResponse | undefined, endpoint: ProjectEndpoint | undefined, hostsApps: boolean): ConnectAddress {
+export function connectAddress(endpoint: ProjectEndpoint | undefined): ConnectAddress {
   const external = publicTarget(endpoint);
-  if (external) return { kind: 'public', ...external };
-  if (hostsApps && endpoint) return { kind: 'internal', host: endpoint.internal.host, port: endpoint.internal.port };
-  return { kind: 'none' };
+  return external ? { kind: 'public', ...external } : { kind: 'none' };
 }
 
 // userinfo is a string's user:password with the placeholder where the secret

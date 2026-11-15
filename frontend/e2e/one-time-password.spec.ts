@@ -18,7 +18,7 @@ const ENDPOINT = {
   projectId: PROJECT_ID, publicOffered: true, publicEnabled: true, available: true, host: 'test-project.db.example.test',
   port: 30100, requireTls: true, database: 'app', username: 'excalibase_app',
   connectionStrings: { requireTls: '', allowPlaintext: '' }, caCertificate: '',
-  internal: { host: CREDENTIALS.host, port: 5432, connectionString: '' }, canChange: true,
+  canChange: true,
 };
 
 async function json(page: Page, pattern: string, body: unknown, status = 200) {
