@@ -103,9 +103,9 @@ func TestPodPressure_AFailedReadChangesNothing(t *testing.T) {
 	}
 }
 
-type recordingNotifier struct{ raised []string }
+type raisedMessageNotifier struct{ raised []string }
 
-func (r *recordingNotifier) Notify(_ context.Context, change AlertChange) {
+func (r *raisedMessageNotifier) Notify(_ context.Context, change AlertChange) {
 	if change.Raised != nil {
 		r.raised = append(r.raised, change.Raised.Metric)
 	}
@@ -116,7 +116,7 @@ func TestPodPressure_NotifiesOnRaiseOnly(t *testing.T) {
 	now := time.Now()
 	source := &fakePodSource{capacity: nodePods(200, 190), pending: []k8s.PendingPod{{Namespace: "a", Name: "old", Since: now.Add(-time.Hour)}}}
 	monitor, _ := newPressure(t, source, now)
-	notifier := &recordingNotifier{}
+	notifier := &raisedMessageNotifier{}
 	monitor.SetNotifier(notifier)
 	monitor.Sample(context.Background())
 	monitor.Sample(context.Background())
