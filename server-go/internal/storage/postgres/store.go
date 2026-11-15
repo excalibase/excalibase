@@ -27,7 +27,14 @@ type Store struct {
 	schemaVersionSet bool
 	databaseURL      string
 	leaders          *LeaderSession
+	// lockDB is a small pool kept for project lifecycle locks only; see LifecycleLock.
+	lockDB *sql.DB
 }
+
+// lifecycleLockConns bounds how many project operations can hold a lock at
+// once. It is deliberately well below the main pool, and what the locks use
+// is never the main pool.
+const lifecycleLockConns = 16
 
 // scanner is satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
@@ -50,8 +57,8 @@ func NewWithMaxConns(databaseURL string, maxOpen int) (*Store, error) {
 	}
 
 	// Pool arithmetic. All standing leadership claims share one pinned
-	// session (LeaderSession), and every in-flight lifecycle operation pins
-	// one more for its duration — a pause can run for minutes. Sized by PLATFORM_DB_MAX_CONNS; see
+	// session (LeaderSession); project lifecycle locks live on a pool of their
+	// own (LifecycleLock), so a pause that runs for minutes pins nothing here. Sized by PLATFORM_DB_MAX_CONNS; see
 	// config.MinPlatformDBMaxConns and OPERATOR.md.
 	db.SetMaxOpenConns(maxOpen)
 	db.SetMaxIdleConns(maxOpen / 2)
@@ -61,7 +68,14 @@ func NewWithMaxConns(databaseURL string, maxOpen int) (*Store, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	store := &Store{db: db, databaseURL: databaseURL, leaders: NewLeaderSession(db)}
+	lockDB, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("open lock pool: %w", err)
+	}
+	lockDB.SetMaxOpenConns(lifecycleLockConns)
+	lockDB.SetMaxIdleConns(2)
+	lockDB.SetConnMaxLifetime(5 * time.Minute)
+	store := &Store{db: db, databaseURL: databaseURL, leaders: NewLeaderSession(db), lockDB: lockDB}
 	if err := store.migrate(databaseURL); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
@@ -76,7 +90,19 @@ func (s *Store) LeaderLock(key int64) storage.LeaderLock {
 	return s.leaders.Lock(key)
 }
 
+// LifecycleLock is the lock one project operation holds for its whole run.
+// Each lock owns a connection from a pool of its own, never the main pool: an
+// operation that holds a lock and then reads the project needs a main-pool
+// connection, and locks taking those same connections made enough concurrent
+// operations wait on each other forever. It is not on the schedulers' shared
+// session either: a failure there would silently release a lock whose
+// operation is still running.
+func (s *Store) LifecycleLock(key int64) storage.LeaderLock {
+	return NewAdvisoryLock(s.lockDB, key)
+}
+
 func (s *Store) Close() error {
+	_ = s.lockDB.Close()
 	return s.db.Close()
 }
 

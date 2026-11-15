@@ -121,7 +121,7 @@ func TestLeaderSession_ContestedKeyIsRefusedAndFreesTheConnection(t *testing.T) 
 func TestLeaderSession_ConcurrentLockHoldersStillGetConnectionsToWork(t *testing.T) {
 	store := testStore(t)
 	store.DB().SetMaxOpenConns(3)
-	runLifecycleLikeOperations(t, store, store.LeaderLock, 12)
+	runLifecycleLikeOperations(t, store, store.LifecycleLock, 12)
 }
 
 func runLifecycleLikeOperations(t *testing.T, store *Store, lockFor func(int64) storage.LeaderLock, operations int) {
@@ -171,5 +171,44 @@ func TestLeaderSession_ACancelledClaimLeavesOtherLeasesValid(t *testing.T) {
 
 	if !other.Valid(context.Background()) {
 		t.Fatal("another leader lost its lease because one claim was cancelled")
+	}
+}
+
+// killBackendHolding ends the database session that holds the advisory lock
+// for key, as a network drop or a failover would.
+func killBackendHolding(t *testing.T, store *Store, key int64) {
+	t.Helper()
+	if _, err := store.DB().Exec(`SELECT pg_terminate_backend(pid) FROM pg_locks
+		WHERE locktype = 'advisory' AND classid = $1::bigint AND objid = $2::bigint AND pid <> pg_backend_pid()`,
+		key>>32, key&0xffffffff); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+}
+
+// A failure on the schedulers' shared session must never release a project's
+// lifecycle lock: pause, delete or restore is still running under it, and a
+// second operation on the same project would be let in.
+func TestLifecycleLock_SurvivesALostSchedulerSession(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	project, got, err := store.LifecycleLock(testLockKeyB).Acquire(ctx)
+	if err != nil || !got {
+		t.Fatalf("lifecycle Acquire: %v %v", got, err)
+	}
+	defer project.Release(ctx)
+	scheduler, got, err := store.LeaderLock(testLockKeyA).Acquire(ctx)
+	if err != nil || !got {
+		t.Fatalf("scheduler Acquire: %v %v", got, err)
+	}
+
+	killBackendHolding(t, store, testLockKeyA)
+	if scheduler.Valid(ctx) {
+		t.Fatal("the scheduler lease must notice its session died")
+	}
+
+	if second, got, _ := store.LifecycleLock(testLockKeyB).Acquire(ctx); got {
+		_ = second.Release(ctx)
+		t.Fatal("a second operation was let into a project whose first operation is still running")
 	}
 }

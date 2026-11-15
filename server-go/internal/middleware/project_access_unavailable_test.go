@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/sites"
@@ -70,3 +71,38 @@ func TestSiteDeployTokenGate_DatabaseDownAnswers503Other500(t *testing.T) {
 type errBoom struct{}
 
 func (errBoom) Error() string { return "boom" }
+
+// blockingInstances answers only through the context-taking lookup, and only
+// once that context ends: a pool with no free connection.
+type blockingInstances struct{ *fakestore.Instances }
+
+func (blockingInstances) FindByProjectIDContext(ctx context.Context, _ string) (*domain.DatabaseInstance, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// The project lookup on the auth path must not wait for a connection forever:
+// it is bounded, and a bounded failure is an outage (503), not a missing project.
+func TestRequireProjectAccess_FullPoolFailsFastWith503(t *testing.T) {
+	_, orgs := storesWithMember("u1", "owner")
+	handler := RequireProjectAccess(blockingInstances{fakestore.NewInstances()}, orgs)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("handler must not run")
+	}))
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(rec, projectRequest(http.MethodGet, testProject, memberUser("u1"), nil))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the lookup waited on a full pool without a deadline")
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+}

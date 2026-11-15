@@ -1380,7 +1380,7 @@ func buildProvisioningService(
 	// project can only be under one lifecycle operation at a time.
 	if pg, ok := sqlStore.(*pgstore.Store); ok {
 		lifecycleClaimer = service.NewAdvisoryOperationClaimer(
-			pg.LeaderLock)
+			pg.LifecycleLock)
 		provSvc.SetOperationClaimer(lifecycleClaimer)
 		// A deleted project's apps go with it, whether or not hosting is on now.
 		provSvc.SetAppPurger(apphost.NewPostgresAppStore(pg.DB()))
@@ -1745,6 +1745,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	snapshotSvc := buildSnapshotService(store, k8sClient, cfg.StoragePath, buildDocumentConnector(k8sClient, nil, vc, store))
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
+	startPoolPressureMonitor(sqlStore, alertSvc)
 	requestMetricsSvc := newRequestMetricsService(cfg, sqlStore, store)
 	requestTotals := metricsEndpointTotals(cfg, sqlStore)
 	if requestMetricsSvc != nil && requestTotals != nil {

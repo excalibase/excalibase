@@ -27,26 +27,55 @@ func TestRequestDeadline_BoundsOrdinaryRequests(t *testing.T) {
 	}
 }
 
-func TestRequestDeadline_LeavesLongLivedRequestsAlone(t *testing.T) {
-	for name, req := range map[string]*http.Request{
-		"event stream": func() *http.Request {
-			r := httptest.NewRequest(http.MethodGet, "/api/projects/p/events", nil)
-			r.Header.Set("Accept", "text/event-stream")
-			return r
-		}(),
-		"websocket": func() *http.Request {
-			r := httptest.NewRequest(http.MethodGet, "/ws", nil)
-			r.Header.Set("Upgrade", "websocket")
-			return r
-		}(),
-		"log follow":  httptest.NewRequest(http.MethodGet, "/api/projects/p/logs?follow=true", nil),
-		"deploy wait": httptest.NewRequest(http.MethodGet, "/api/projects/p/apps/a/deploy?wait=true", nil),
-		"mcp":         httptest.NewRequest(http.MethodPost, "/mcp", nil),
-		"storage":     httptest.NewRequest(http.MethodPut, "/storage/v1/object/b/k", nil),
-		"upload":      httptest.NewRequest(http.MethodPost, "/api/projects/p/sites/s/deploy", nil),
+func deadlineFor(t *testing.T, method, target string, headers map[string]string) bool {
+	t.Helper()
+	req := httptest.NewRequest(method, target, nil)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	_, ok := deadlineOf(t, req)
+	return ok
+}
+
+// Routes that wait on long work by design keep the connection's lifetime.
+func TestRequestDeadline_LongRoutesAreExemptByMethodAndPattern(t *testing.T) {
+	for _, tc := range []struct{ method, path string }{
+		{"POST", "/api/provision/p1/snapshot/export"},
+		{"GET", "/api/provision/p1/snapshot/s1/download"},
+		{"POST", "/api/provision/p1/backup/restore"},
+		{"POST", "/api/provision/p1/upgrade"},
+		{"POST", "/api/provision/p1/major-upgrade/"},
+		{"POST", "/api/provision/"},
+		{"POST", "/api/projects/p1/apps/a1/deploy"},
+		{"POST", "/api/projects/p1/sites/s1/deploy"},
+		{"GET", "/api/projects/p1/apps/a1/logs"},
+		{"POST", "/mcp"},
+		{"PUT", "/storage/v1/p1/object/b/k"},
 	} {
-		if _, ok := deadlineOf(t, req); ok {
-			t.Errorf("%s got a deadline", name)
+		if deadlineFor(t, tc.method, tc.path, nil) {
+			t.Errorf("%s %s got a deadline", tc.method, tc.path)
+		}
+	}
+}
+
+// An ordinary CRUD route is bounded, and nothing the client sends lifts it.
+func TestRequestDeadline_OrdinaryRoutesStayBoundedWhateverTheClientSends(t *testing.T) {
+	for _, tc := range []struct {
+		method, path string
+		headers      map[string]string
+	}{
+		{"GET", "/api/provision/p1/backup/list", nil},
+		{"GET", "/api/provision/p1/snapshot/", nil},
+		{"GET", "/api/projects", nil},
+		{"GET", "/api/provision/p1/backup/list?wait=true", nil},
+		{"GET", "/api/projects?follow=true", nil},
+		{"GET", "/api/projects", map[string]string{"Upgrade": "websocket"}},
+		{"GET", "/api/projects", map[string]string{"Accept": "text/event-stream"}},
+		{"GET", "/api/provision/p1/snapshot/export", nil}, // right path, wrong method
+		{"GET", "/api/provision/p1/x/logs", nil},
+	} {
+		if !deadlineFor(t, tc.method, tc.path, tc.headers) {
+			t.Errorf("%s %s %v escaped the deadline", tc.method, tc.path, tc.headers)
 		}
 	}
 }

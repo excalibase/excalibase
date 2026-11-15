@@ -824,9 +824,8 @@ const DefaultPlatformDBMaxConns = 20
 
 // MinPlatformDBMaxConns is the smallest pool that can do any work at all:
 // every standing leadership claim (backup scheduler, idle pause, storage
-// reap and the other sweepers) shares one pinned session, plus one connection
-// per lifecycle operation in flight (two for a site operation) and one for a
-// query. Tenant databases are reached through their own pools and cost
+// reap and the other sweepers) shares one pinned session, plus one for a
+// query. Project lifecycle locks use a pool of their own (LifecycleLock). Tenant databases are reached through their own pools and cost
 // nothing here.
 const MinPlatformDBMaxConns = 7
 
