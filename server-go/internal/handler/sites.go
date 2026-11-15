@@ -224,6 +224,9 @@ func sitePathID(w http.ResponseWriter, r *http.Request, param string) (string, b
 
 // writeSiteError maps the service's refusals; anything else is logged and answered without detail.
 func writeSiteError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	var archiveErr *sites.ArchiveError
 	var inputErr *sites.InputError
 	var publishErr *sites.PublishError

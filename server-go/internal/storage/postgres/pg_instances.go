@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -522,7 +523,13 @@ const (
 )
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
-	row := s.db.QueryRow(findInstanceByProjectIDSQL, projectID)
+	return s.FindByProjectIDContext(context.Background(), projectID)
+}
+
+// FindByProjectIDContext is FindByProjectID that gives up when ctx ends, so a
+// caller on the request path never waits on a full pool without a deadline.
+func (s *Store) FindByProjectIDContext(ctx context.Context, projectID string) (*domain.DatabaseInstance, error) {
+	row := s.db.QueryRowContext(ctx, findInstanceByProjectIDSQL, projectID)
 
 	inst, err := scanInstanceFrom(row)
 	if err == sql.ErrNoRows {

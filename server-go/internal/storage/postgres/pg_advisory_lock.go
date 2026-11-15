@@ -43,7 +43,7 @@ func (l *AdvisoryLock) Acquire(ctx context.Context) (storage.LeaderLease, bool, 
 	defer cancel()
 	conn, err := l.db.Conn(connCtx)
 	if err != nil {
-		return nil, false, fmt.Errorf("acquire conn: %w", err)
+		return nil, false, fmt.Errorf("%w: acquire conn: %v", storage.ErrPoolBusy, err)
 	}
 	var got bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, l.key).Scan(&got); err != nil {

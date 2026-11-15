@@ -9,7 +9,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 )
 
 // mysqlBackupWaitSweepInterval is how often MOCO's backup CronJobs are checked
@@ -35,7 +34,7 @@ func startMySQLBackupWaitSweep(lock storage.LeaderLock, mysql *provisioner.MySQL
 // run side by side, and no lock on a single process.
 func mysqlBackupWaitLock(cfg config.AppConfig, sqlStore storage.PlatformStore) storage.LeaderLock {
 	if cfg.IsCloud() && sqlStore != nil {
-		return pgstore.NewAdvisoryLock(sqlStore.DB(), mysqlBackupWaitLockID)
+		return standingLock(sqlStore, mysqlBackupWaitLockID)
 	}
 	return service.AlwaysLeader{}
 }

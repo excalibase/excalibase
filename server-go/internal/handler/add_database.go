@@ -53,6 +53,9 @@ func (h *ProvisioningHandler) AddDatabase(w http.ResponseWriter, r *http.Request
 }
 
 func writeAddDatabaseError(w http.ResponseWriter, projectID string, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, storage.ErrProjectHasDatabase):
 		httpError(w, storage.ErrProjectHasDatabase.Error(), http.StatusConflict)

@@ -151,6 +151,8 @@ type ProvisioningService struct {
 	// advisory-lock one so the claim holds across them.
 	deletionClaimer ProjectOperationClaimer
 	claimerOnce     sync.Once
+	// projectReadTimeout bounds the project read made under a lifecycle lock; zero uses the default.
+	projectReadTimeout time.Duration
 	// deletionObservers are told the moment a project is claimed for
 	// teardown, so in-process caches of "is this project still live" stop
 	// serving it without waiting for their own expiry. Optional.
