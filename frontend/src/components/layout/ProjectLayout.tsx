@@ -36,7 +36,7 @@ function ProjectLayoutInner() {
   );
 }
 
-function deriveSection(pathname: string): string | null {
+export function deriveSection(pathname: string): string | null {
   for (const section of PROJECT_NAV) {
     if (section.children) {
       if (section.children.some((c) => pathname.includes(`/${c.to.split('/')[0]}/`) || pathname.endsWith(`/${c.to}`))) {

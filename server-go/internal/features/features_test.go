@@ -47,8 +47,8 @@ func TestAll_NamesAreUniqueAndLowercase(t *testing.T) {
 		seen[feature] = true
 		for i, c := range feature {
 			letter := c >= 'a' && c <= 'z'
-			if !letter && (i == 0 || c < '0' || c > '9') {
-				t.Errorf("%s: feature names are a lowercase letter then letters or digits, as Studio reads them", feature)
+			if !letter && (i == 0 || (c != '_' && (c < '0' || c > '9'))) {
+				t.Errorf("%s: feature names are a lowercase letter then letters, digits or underscores, as Studio reads them", feature)
 			}
 		}
 	}

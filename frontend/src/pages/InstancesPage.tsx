@@ -8,6 +8,8 @@ import { Database, DatabaseZap, Loader2, Trash2, Eye, Sprout, Star, Crown } from
 import { useAuthStore } from '../stores/auth-store';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { engineIcon, engineLabel } from '../utils/engine';
+import { useStudioV2 } from '../hooks/useDeploymentMode';
+import { ProjectsTable } from './ProjectsTable';
 
 const ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
 
@@ -15,7 +17,13 @@ function getInstanceCountLabel(count: number): string {
   return `${count} instance${count === 1 ? '' : 's'}`;
 }
 
+// With studio_v2 on, the shared table replaces this page.
 export function InstancesPage() {
+  const { enabled } = useStudioV2();
+  return enabled ? <ProjectsTable /> : <LegacyInstancesPage />;
+}
+
+function LegacyInstancesPage() {
   const { data: instances = [], isLoading } = useInstances();
   const deprovision = useDeprovisionDatabase();
   const navigate = useNavigate();

@@ -3,8 +3,7 @@ import { Routes, Route } from 'react-router-dom';
 import { AuthLayout } from './components/layout/AuthLayout';
 import { AuthGuard } from './components/auth/AuthGuard';
 import { VaultGuard } from './components/auth/VaultGuard';
-import { PlatformLayout } from './components/layout/PlatformLayout';
-import { ProjectLayout } from './components/layout/ProjectLayout';
+import { PlatformLayoutSwitch, ProjectLayoutSwitch } from './components/layout/v2/LayoutSwitch';
 import { DatabaseRequired } from './components/DatabaseRequired';
 import { DatabaseRunning } from './components/DatabaseRunning';
 import { FeatureGate } from './components/FeatureGate';
@@ -69,6 +68,7 @@ const ContainerPipelinePage = lazy(() => import('./pages/ContainerPipelinePage')
 const ConnectAiToolPage = lazy(() => import('./pages/ConnectAiToolPage').then(m => ({ default: m.ConnectAiToolPage })));
 const SdkKeysPage = lazy(() => import('./pages/SdkKeysPage').then(m => ({ default: m.SdkKeysPage })));
 const AccessTokensPage = lazy(() => import('./pages/AccessTokensPage').then(m => ({ default: m.AccessTokensPage })));
+const UsagePage = lazy(() => import('./pages/UsagePage').then(m => ({ default: m.UsagePage })));
 const StoragePage = lazy(() => import('./pages/StoragePage').then(m => ({ default: m.StoragePage })));
 
 function PageLoader() {
@@ -101,7 +101,7 @@ export default function App() {
 
           {/* Platform pages */}
           <Route element={<AuthGuard />}>
-          <Route element={<PlatformLayout />}>
+          <Route element={<PlatformLayoutSwitch />}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/orgs" element={<OrgsPage />} />
             <Route path="/orgs/:orgId" element={<OrgDetailPage />} />
@@ -109,11 +109,12 @@ export default function App() {
             <Route path="/provision" element={<ProvisionPage />} />
             <Route path="/admin" element={<PlatformAdminPage />} />
             <Route path="/admin/host" element={<FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate>} />
+            <Route path="/usage" element={<UsagePage />} />
             <Route path="/account/tokens" element={<AccessTokensPage />} />
           </Route>
 
           {/* Project-scoped pages */}
-          <Route path="/project/:projectId" element={<ProjectLayout />}>
+          <Route path="/project/:projectId" element={<ProjectLayoutSwitch />}>
             <Route index element={<ProjectOverviewPage />} />
             <Route path="database/add" element={<AddDatabasePage />} />
             {/* Pages that work on the project's database: a project created

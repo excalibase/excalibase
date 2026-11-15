@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { serverErrorMessage } from '../utils/serverError';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Settings, Users, Trash2, UserPlus, Shield, ChevronRight, Database, Clock } from 'lucide-react';
 import { getOrg, listOrgMembers, inviteOrgMember, removeOrgMember, updateOrgMemberRole, updateOrg, deleteOrg, listPendingInvites, type Org, type OrgMember, type PendingInvite } from '../api/orgs';
 import { api } from '../api/client';
@@ -32,7 +32,12 @@ export function OrgDetailPage() {
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [projects, setProjects] = useState<DatabaseInstance[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'projects' | 'members' | 'settings'>('projects');
+  // The console navigation opens the members and settings tabs by ?tab=.
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const [tab, setTab] = useState<'projects' | 'members' | 'settings'>(
+    requestedTab === 'members' || requestedTab === 'settings' ? requestedTab : 'projects',
+  );
 
   // Invite state
   const [showInvite, setShowInvite] = useState(false);
