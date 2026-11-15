@@ -38,6 +38,9 @@ func TestHoldProject_BoundsTheReadMadeUnderTheLock(t *testing.T) {
 		if !storage.IsUnavailable(err) {
 			t.Fatalf("err = %v, want one that reads as the database being unavailable", err)
 		}
+		if !errors.Is(err, storage.ErrPoolBusy) {
+			t.Fatalf("err = %v, want ErrPoolBusy so the handlers answer 503 with Retry-After", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the read under the lock waited without a deadline")
 	}
