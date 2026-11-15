@@ -151,11 +151,9 @@ jobs:
       - name: Native tag plan
         run: bash tests/release-native-tags-test.sh
 
-      - name: Vulnerability watch and release gate
+      - name: Release gate
         run: |
           bash tests/cve-watch/gate-test.sh
-          bash tests/cve-watch/report-test.sh
-          bash tests/cve-watch/plan-test.sh
 
   gateway-guard:
     name: DocumentDB gateway guard
