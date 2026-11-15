@@ -1,3 +1,5 @@
+//go:build integration || live
+
 package postgres
 
 import "fmt"
