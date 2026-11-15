@@ -56,6 +56,9 @@ func newPGPlatformDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("pgstore.New (runs migrations): %v", err)
 	}
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store.DB()
 }

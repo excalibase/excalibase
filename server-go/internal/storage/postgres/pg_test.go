@@ -63,8 +63,8 @@ func testStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { store.Close() })
 	// Most tests seed projects for orgs they never create.
-	if _, err := store.DB().Exec(`ALTER TABLE database_instances DISABLE TRIGGER database_instances_require_org`); err != nil {
-		t.Fatalf("relax the org guard for tests: %v", err)
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		t.Fatal(err)
 	}
 	return store
 }
