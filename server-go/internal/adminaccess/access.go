@@ -46,7 +46,8 @@ type Verifier struct {
 	cfg        Config
 	minRefetch time.Duration
 
-	mu        sync.Mutex
+	fetchMu   sync.Mutex // one fetch at a time
+	mu        sync.Mutex // guards keys and fetchedAt only
 	keys      map[string]*rsa.PublicKey
 	fetchedAt time.Time
 }
@@ -90,51 +91,88 @@ func (v *Verifier) keyFor(token *jwt.Token) (any, error) {
 
 // lookup returns the named key. A key not in the cache triggers one refetch,
 // at most once per backoff, so a flood of made-up key ids cannot turn into a
-// flood of requests to Cloudflare.
+// flood of requests to Cloudflare. The lock guards the cache only: the fetch
+// itself runs outside it, so a slow Cloudflare never stalls a request the
+// cached keys can answer.
 func (v *Verifier) lookup(kid string) (*rsa.PublicKey, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	stale := time.Since(v.fetchedAt) > keyLifetime
-	if key, ok := v.keys[kid]; ok && !stale {
+	key, mustFetch, seenAt := v.cached(kid)
+	if key != nil {
 		return key, nil
 	}
-	if v.keys == nil || stale || time.Since(v.fetchedAt) >= v.minRefetch {
-		if err := v.refreshLocked(); err != nil {
-			if v.keys == nil {
+	if mustFetch {
+		if err := v.refresh(seenAt); err != nil {
+			if !v.hasKeys() {
 				return nil, fmt.Errorf("read the Access signing keys: %w", err)
 			}
 			log.Printf("WARN: refresh Access signing keys: %v (using the cached ones)", err)
 		}
-	}
-	if key, ok := v.keys[kid]; ok {
-		return key, nil
+		if key, _, _ = v.cached(kid); key != nil {
+			return key, nil
+		}
 	}
 	return nil, errors.New("assertion is signed by an unknown key")
 }
 
-func (v *Verifier) refreshLocked() error {
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+v.cfg.TeamDomain+certsPath, nil)
-	if err != nil {
-		return err
+// cached answers from the cache: the key when it is fresh, else whether a
+// fetch is due and the fetch time the caller saw.
+func (v *Verifier) cached(kid string) (key *rsa.PublicKey, mustFetch bool, seenAt time.Time) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	stale := time.Since(v.fetchedAt) > keyLifetime
+	if k, ok := v.keys[kid]; ok && !stale {
+		return k, false, v.fetchedAt
 	}
-	resp, err := v.cfg.HTTPClient.Do(req)
-	if err != nil {
-		v.fetchedAt = time.Now()
-		return err
+	due := v.keys == nil || stale || time.Since(v.fetchedAt) >= v.minRefetch
+	if k, ok := v.keys[kid]; ok && !due {
+		return k, false, v.fetchedAt
 	}
-	defer resp.Body.Close()
+	return nil, due, v.fetchedAt
+}
+
+func (v *Verifier) hasKeys() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.keys != nil
+}
+
+// refresh fetches the keys once for every caller that saw the same cache: a
+// caller that finds another already refreshed since it looked has nothing to do.
+func (v *Verifier) refresh(seenAt time.Time) error {
+	v.fetchMu.Lock()
+	defer v.fetchMu.Unlock()
+	v.mu.Lock()
+	refreshed := !v.fetchedAt.Equal(seenAt)
+	v.mu.Unlock()
+	if refreshed {
+		return nil
+	}
+	keys, err := v.fetchKeys()
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.fetchedAt = time.Now()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("keys endpoint answered %d", resp.StatusCode)
-	}
-	keys, err := parseKeys(io.LimitReader(resp.Body, maxCertsBody))
 	if err != nil {
 		return err
 	}
 	v.keys = keys
 	return nil
+}
+
+func (v *Verifier) fetchKeys() (map[string]*rsa.PublicKey, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+v.cfg.TeamDomain+certsPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := v.cfg.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("keys endpoint answered %d", resp.StatusCode)
+	}
+	return parseKeys(io.LimitReader(resp.Body, maxCertsBody))
 }
 
 type jwk struct {

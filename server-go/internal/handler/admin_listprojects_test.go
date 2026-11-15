@@ -133,7 +133,7 @@ func TestAdmin_ForceDropProject_NotFound(t *testing.T) {
 	h := NewAdminHandler(nil, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}, nil, nil, nil, "", nil)
 	r := chi.NewRouter()
 	r.Delete("/api/admin/projects/{projectId}", h.ForceDropProject)
-	req := httptest.NewRequest("DELETE", "/api/admin/projects/ghost", nil)
+	req := httptest.NewRequest("DELETE", "/api/admin/projects/ghost", strings.NewReader(revokeReasonBody))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -158,7 +158,7 @@ func TestAdmin_RevokeOrg_NoOrgStore(t *testing.T) {
 	h := NewAdminHandler(nil, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}, nil, nil, nil, "", nil)
 	r := chi.NewRouter()
 	r.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
-	req := httptest.NewRequest("DELETE", "/api/admin/orgs/org-1?cascade=true&reason=evicting+abusive+tenant", nil)
+	req := httptest.NewRequest("DELETE", "/api/admin/orgs/org-1?cascade=true", strings.NewReader(revokeReasonBody))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusServiceUnavailable {

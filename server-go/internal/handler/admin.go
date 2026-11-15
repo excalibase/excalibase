@@ -179,9 +179,13 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 		httpError(w, "project not found", http.StatusNotFound)
 		return
 	}
-	opts, err := decodeDeprovisionOptions(r)
+	opts, reason, err := decodeAdminDrop(r)
 	if err != nil {
 		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if reason == "" {
+		httpError(w, errAdminReasonRequired, http.StatusBadRequest)
 		return
 	}
 
@@ -217,7 +221,7 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 		Action:     "admin.force_drop_project",
 		Resource:   "project",
 		ResourceID: projectID,
-		Details:    fmt.Sprintf("org=%s tier=%s backups=%s", inst.OrgID, inst.Tier, backupDisposition(opts)),
+		Details:    fmt.Sprintf("org=%s tier=%s backups=%s reason=%q", inst.OrgID, inst.Tier, backupDisposition(opts), reason),
 	})
 	if async {
 		writeJSONStatus(w, http.StatusAccepted, map[string]string{"status": string(domain.StatusDeleting), "projectId": projectID})
@@ -235,9 +239,10 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "?cascade=true is required to confirm intent", http.StatusBadRequest)
 		return
 	}
-	reason := strings.TrimSpace(r.URL.Query().Get("reason"))
-	if reason == "" {
-		httpError(w, "a written reason is required to revoke an org", http.StatusBadRequest)
+	body, err := decodeAdminDropBody(r)
+	reason := cleanAdminReason(body.Reason)
+	if err != nil || reason == "" {
+		httpError(w, errAdminReasonRequired, http.StatusBadRequest)
 		return
 	}
 	orgID := chi.URLParam(r, "orgId")
@@ -284,7 +289,7 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 		Action:     "admin.revoke_org",
 		Resource:   "org",
 		ResourceID: orgID,
-		Details:    fmt.Sprintf("dropped=%d failed=%d slug=%s", dropped, len(failed), org.Slug),
+		Details:    fmt.Sprintf("dropped=%d failed=%d slug=%s reason=%q", dropped, len(failed), org.Slug, reason),
 	})
 	status := http.StatusOK
 	if len(failed) > 0 {
@@ -552,4 +557,46 @@ func (h *AdminHandler) auditFireAndForget(r *http.Request, e *domain.AuditEntry)
 
 func clientIP(r *http.Request) string {
 	return clientaddr.FromRequest(r)
+}
+
+const (
+	errAdminReasonRequired = "a written reason of 1 to 500 characters is required"
+	maxAdminReasonLength   = 500
+)
+
+// adminDropBody is what a destructive admin action carries: the written reason
+// every such action needs, and for a project drop the backup choice.
+type adminDropBody struct {
+	ConfirmDeleteBackups *bool  `json:"confirmDeleteBackups"`
+	Reason               string `json:"reason"`
+}
+
+func decodeAdminDropBody(r *http.Request) (adminDropBody, error) {
+	var body adminDropBody
+	if r.Body == nil {
+		return body, nil
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 4096)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		return adminDropBody{}, err
+	}
+	return body, nil
+}
+
+// decodeAdminDrop reads a project drop's options and its cleaned reason, which
+// is empty when missing or over the limit.
+func decodeAdminDrop(r *http.Request) (service.DeprovisionOptions, string, error) {
+	body, err := decodeAdminDropBody(r)
+	if err != nil {
+		return service.DeprovisionOptions{}, "", err
+	}
+	return service.DeprovisionOptions{DeleteBackups: body.ConfirmDeleteBackups}, cleanAdminReason(body.Reason), nil
+}
+
+// cleanAdminReason trims a reason and returns "" when it is empty or too long.
+func cleanAdminReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || len(reason) > maxAdminReasonLength {
+		return ""
+	}
+	return reason
 }

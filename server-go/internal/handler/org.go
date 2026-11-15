@@ -32,6 +32,7 @@ type OrgHandler struct {
 	// nodes checks a new plan's instances fit the platform; a plan change
 	// is refused while it is unset.
 	nodes NodePlacement
+	audit auditWriter
 }
 
 // SetNodePlacement wires the check a plan change must pass.
@@ -210,7 +211,7 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermUpdateOrg) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -285,7 +286,7 @@ func (h *OrgHandler) DeleteOrg(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermDeleteOrg) {
-		httpError(w, "only org owner can delete", http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, "only org owner can delete")
 		return
 	}
 
@@ -322,7 +323,7 @@ func (h *OrgHandler) InviteOrgMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -430,7 +431,7 @@ func (h *OrgHandler) UpdateOrgMemberRole(w http.ResponseWriter, r *http.Request)
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -464,7 +465,7 @@ func (h *OrgHandler) RemoveOrgMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -564,7 +565,7 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -610,7 +611,7 @@ func (h *OrgHandler) UpdateProjectMemberRole(w http.ResponseWriter, r *http.Requ
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -649,7 +650,7 @@ func (h *OrgHandler) RemoveProjectMember(w http.ResponseWriter, r *http.Request)
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -692,9 +693,11 @@ func (h *OrgHandler) ListPendingInvites(w http.ResponseWriter, r *http.Request) 
 
 // --- Helpers ---
 
+// isMemberOrPlatformAdmin is whether the caller belongs to the org. Only a
+// platform service principal skips the lookup; a human platform admin reads and
+// acts on another customer's org through the console, with a reason (EXC-757).
 func (h *OrgHandler) isMemberOrPlatformAdmin(r *http.Request, orgID, userID string) bool {
-	user := auth.GetUser(r.Context())
-	if user != nil && auth.HasPermission(user.Role, auth.PermManageUsers) {
+	if auth.IsPlatformServicePrincipal(auth.GetUser(r.Context()), auth.GetToken(r.Context())) {
 		return true
 	}
 	// A store that reports "no such member" as (nil, nil) rather than an error
@@ -704,9 +707,7 @@ func (h *OrgHandler) isMemberOrPlatformAdmin(r *http.Request, orgID, userID stri
 }
 
 func (h *OrgHandler) hasOrgPermission(r *http.Request, orgID, userID string, perm auth.OrgPermission) bool {
-	// Platform admins can do anything
-	user := auth.GetUser(r.Context())
-	if user != nil && auth.HasPermission(user.Role, auth.PermManageUsers) {
+	if auth.IsPlatformServicePrincipal(auth.GetUser(r.Context()), auth.GetToken(r.Context())) {
 		return true
 	}
 
@@ -715,4 +716,16 @@ func (h *OrgHandler) hasOrgPermission(r *http.Request, orgID, userID string, per
 		return false
 	}
 	return auth.HasOrgPermission(member.Role, perm)
+}
+
+// denyOrgAction answers a refused org action. Someone outside the org is told
+// it does not exist, whatever they tried, so the id confirms nothing; a member
+// who lacks the role is told so.
+func (h *OrgHandler) denyOrgAction(w http.ResponseWriter, r *http.Request, orgID, userID, message string) {
+	member, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
+	if err != nil || member == nil {
+		httpError(w, errOrgNotFound, http.StatusNotFound)
+		return
+	}
+	httpError(w, message, http.StatusForbidden)
 }

@@ -16,13 +16,19 @@ type Checker interface {
 // GateConfig says where the console lives and what proves a request came
 // through Access.
 type GateConfig struct {
-	// AdminHost is the console's hostname. Empty switches the gate off.
+	// Disabled switches the console off: every admin route but the
+	// service-account routes answers 404 on every host. A cloud install with no
+	// AdminHost runs this way, so it fails closed.
+	Disabled bool
+	// AdminHost is the console's hostname. Empty, with the console not
+	// Disabled, switches the gate off (a self-hosted install).
 	AdminHost string
 	// Verifier checks the Access assertion. Nil leaves the host as the only
 	// fence, which is what an install without Access has.
 	Verifier Checker
-	// IsInternal says whether the request came in on the in-cluster listener,
-	// which keeps its service address and never meets this gate.
+	// IsInternal says whether the request came in on the in-cluster listener.
+	// Its service-account routes keep their service address and skip this gate;
+	// everything else, the console included, is fenced like any other request.
 	IsInternal func(*http.Request) bool
 }
 
@@ -44,11 +50,20 @@ var otherServices = []string{"/functions/", "/storage/", "/internal/", "/metrics
 func Gate(cfg GateConfig) func(http.Handler) http.Handler {
 	adminHost := strings.ToLower(strings.TrimSpace(cfg.AdminHost))
 	return func(next http.Handler) http.Handler {
+		if cfg.Disabled {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if isAdminAPI(r.URL.Path) && !isServiceAccountRoute(r.URL.Path) {
+					http.NotFound(w, r)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		}
 		if adminHost == "" {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if cfg.IsInternal != nil && cfg.IsInternal(r) {
+			if cfg.IsInternal != nil && cfg.IsInternal(r) && isServiceAccountRoute(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -71,6 +86,12 @@ func Gate(cfg GateConfig) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// isServiceAccountRoute is the one admin route the bootstrap Job reaches over
+// the in-cluster listener; it has its own gates and never meets the console.
+func isServiceAccountRoute(path string) bool {
+	return strings.HasPrefix(path, "/api/admin/service-accounts/") || path == "/api/admin/service-accounts"
 }
 
 func isAdminAPI(path string) bool {

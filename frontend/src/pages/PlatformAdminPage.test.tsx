@@ -106,20 +106,35 @@ describe('PlatformAdminPage', () => {
     expect(await screen.findByText('0.00 / 0.00 cores')).toBeInTheDocument();
   });
 
-  test("a refused drop alerts the server's reason", async () => {
+  test('a drop needs a written reason and sends it', async () => {
+    vi.mocked(api.delete).mockResolvedValueOnce({ status: 200, data: { status: 'deprovisioned' } } as never);
+    renderPage('platform_admin');
+    await userEvent.click((await screen.findAllByRole('button', { name: /Drop/ }))[0]);
+    const dialog = screen.getByRole('dialog');
+    const confirmButton = within(dialog).getByRole('button', { name: 'Drop' });
+    expect(confirmButton).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText('Reason'), 'abandoned and holding a node');
+    await userEvent.click(confirmButton);
+    await waitFor(() =>
+      expect(api.delete).toHaveBeenCalledWith('/admin/projects/p1', { headers: { Prefer: 'respond-async' }, data: { reason: 'abandoned and holding a node' } }),
+    );
+  });
+
+  test("a refused drop shows the server's reason in the dialog", async () => {
     vi.mocked(api.delete).mockRejectedValueOnce(refusal('the project is still restoring'));
     renderPage('platform_admin');
     await userEvent.click((await screen.findAllByRole('button', { name: /Drop/ }))[0]);
-
-    await waitFor(() => expect(alert).toHaveBeenCalledWith('Drop failed: the project is still restoring'));
-    expect(api.delete).toHaveBeenCalledWith('/admin/projects/p1', { headers: { Prefer: 'respond-async' } });
+    const dialog = screen.getByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText('Reason'), 'abandoned and holding a node');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Drop' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('the project is still restoring');
   });
 
-  test('a drop or revoke that is not confirmed sends nothing', async () => {
-    confirm.mockReturnValue(false);
+  test('a drop that is cancelled sends nothing', async () => {
     renderPage('platform_admin');
     await userEvent.click((await screen.findAllByRole('button', { name: /Drop/ }))[0]);
-    await screen.findByText('acme');
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(api.delete).not.toHaveBeenCalled();
   });
 

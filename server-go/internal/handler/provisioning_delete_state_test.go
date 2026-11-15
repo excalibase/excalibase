@@ -180,7 +180,7 @@ func TestRevokeOrgKeepsOrgWhenAProjectTeardownFails(t *testing.T) {
 
 	router := chi.NewRouter()
 	router.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
-	req := httptest.NewRequest(http.MethodDelete, "/api/admin/orgs/org-9?cascade=true&reason=evicting+abusive+tenant", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/orgs/org-9?cascade=true", strings.NewReader(revokeReasonBody))
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -208,7 +208,7 @@ func TestRevokeOrgRefusesWhenProjectsCannotBeListed(t *testing.T) {
 
 	router := chi.NewRouter()
 	router.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
-	req := httptest.NewRequest(http.MethodDelete, "/api/admin/orgs/org-9?cascade=true&reason=evicting+abusive+tenant", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/orgs/org-9?cascade=true", strings.NewReader(revokeReasonBody))
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 

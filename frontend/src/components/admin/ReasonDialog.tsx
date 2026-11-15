@@ -14,9 +14,11 @@ interface ReasonDialogProps {
   readonly danger?: boolean;
   readonly onConfirm: (reason: string) => void;
   readonly onCancel: () => void;
+  // Extra fields the action needs besides the reason, such as a plan choice.
+  readonly children?: React.ReactNode;
 }
 
-export function ReasonDialog({ title, confirmLabel, description, busy, error, danger, onConfirm, onCancel }: ReasonDialogProps) {
+export function ReasonDialog({ title, confirmLabel, description, busy, error, danger, onConfirm, onCancel, children }: ReasonDialogProps) {
   const [reason, setReason] = useState('');
   const trimmed = reason.trim();
   return (
@@ -24,6 +26,7 @@ export function ReasonDialog({ title, confirmLabel, description, busy, error, da
       <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
         <h3 className="text-lg font-semibold">{title}</h3>
         {description && <p className="text-sm text-text-secondary">{description}</p>}
+        {children}
         <label className="block text-sm text-text-secondary">
           Reason
           <textarea

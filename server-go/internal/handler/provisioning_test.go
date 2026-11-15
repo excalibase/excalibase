@@ -160,9 +160,10 @@ func TestProvisionNoK8s(t *testing.T) {
 	body := `{"projectName":"test","orgId":"org","databaseType":"POSTGRESQL","postgresVersion":"17"}`
 	req := httptest.NewRequest("POST", testProvisionPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	// Authenticated platform_admin bypasses the create_project org check, so the
+	// A platform service principal skips the create_project org check, so the
 	// request reaches the provisioner and fails there (the path under test).
-	req = req.WithContext(auth.SetUser(req.Context(), &domain.User{ID: "op", Role: "platform_admin", Active: true}))
+	ctx := auth.SetUser(req.Context(), &domain.User{ID: "op", Role: "platform_admin", Active: true})
+	req = req.WithContext(auth.SetToken(ctx, &domain.AccessToken{Permissions: []string{"projects:create"}}))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

@@ -46,6 +46,8 @@ interface ConfigResponse {
   apiUrl?: string;
   // Where the operator console is also served (EXC-757); absent when it is not.
   adminHost?: string;
+  // False when the server has the console switched off (a cloud install with no admin host).
+  adminConsole?: boolean;
 }
 
 function useStudioConfig() {
@@ -139,6 +141,7 @@ export type AdminRouteRule = 'loading' | 'allowed' | 'refused';
 export function useAdminRouteRule(currentHost: string = globalThis.location?.hostname ?? ''): AdminRouteRule {
   const { data, isLoading } = useStudioConfig();
   if (isLoading) return 'loading';
+  if (data?.adminConsole === false) return 'refused';
   const adminHost = data?.adminHost?.trim().toLowerCase();
   if (!adminHost) return 'allowed';
   return currentHost.toLowerCase() === adminHost ? 'allowed' : 'refused';

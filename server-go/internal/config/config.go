@@ -756,7 +756,9 @@ func (c AppConfig) CheckPublicListener() error {
 	return nil
 }
 
-// CheckAdminHost refuses an admin-console fence that cannot work: a host that
+// CheckAdminHost refuses an admin-console fence that cannot work, and a cloud
+// install whose host is not behind Access. A cloud install with no ADMIN_HOST
+// boots with the console off (AdminConsoleDisabled). It refuses: a host that
 // is not a bare hostname, Access settings without a host to fence, or half of
 // the Access pair, which would silently leave the console behind the host
 // header alone.
@@ -766,6 +768,11 @@ func (c AppConfig) CheckAdminHost() error {
 			return fmt.Errorf("%s %q must be a bare hostname such as admin.example.com", name, value)
 		}
 	}
+	// A cloud install with a host must put it behind Access: a host alone is
+	// only a header an attacker can send straight to the origin.
+	if c.IsCloud() && c.AdminHost != "" && (c.AdminAccessTeamDomain == "" || c.AdminAccessAud == "") {
+		return errors.New("ADMIN_HOST on a cloud install needs ADMIN_ACCESS_TEAM_DOMAIN and ADMIN_ACCESS_AUD: the admin console must sit behind Cloudflare Access")
+	}
 	if (c.AdminAccessTeamDomain == "") != (c.AdminAccessAud == "") {
 		return errors.New("ADMIN_ACCESS_TEAM_DOMAIN and ADMIN_ACCESS_AUD must be set together")
 	}
@@ -773,6 +780,22 @@ func (c AppConfig) CheckAdminHost() error {
 		return errors.New("ADMIN_ACCESS_TEAM_DOMAIN needs ADMIN_HOST: there is no admin host to put behind Access")
 	}
 	return nil
+}
+
+// AdminConsoleDisabled is whether the operator console is off: a cloud install
+// with no ADMIN_HOST serves no /api/admin route at all, on any host, except the
+// service-account routes. Self-hosted keeps serving it.
+func (c AppConfig) AdminConsoleDisabled() bool {
+	return c.IsCloud() && c.AdminHost == ""
+}
+
+// AdminOrigin is the page origin of the admin console, derived from ADMIN_HOST,
+// or "" when none is set. The Studio session cookie is trusted from it.
+func (c AppConfig) AdminOrigin() string {
+	if c.AdminHost == "" {
+		return ""
+	}
+	return "https://" + c.AdminHost
 }
 
 // AdminAccessEnabled is whether the admin host demands a Cloudflare Access assertion.

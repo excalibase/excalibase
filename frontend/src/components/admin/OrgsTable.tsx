@@ -3,7 +3,7 @@ import { Loader2, ShieldAlert } from 'lucide-react';
 import { Button } from '../Button';
 import { serverErrorMessage } from '../../utils/serverError';
 import { useConsoleOrgs } from '../../hooks/useAdminConsole';
-import { useRevokeOrg } from '../../hooks/useAdmin';
+import { useRevokeOrg, useSetOrgTier } from '../../hooks/useAdmin';
 import { AccountStatusBadge } from './AccountStatusBadge';
 import { ReasonDialog } from './ReasonDialog';
 
@@ -12,7 +12,20 @@ export function OrgsTable({ canMutate }: { readonly canMutate: boolean }) {
   const [showSuspended, setShowSuspended] = useState(false);
   const { data, isLoading, error } = useConsoleOrgs({ includeSuspended: showSuspended, limit: 100 });
   const revoke = useRevokeOrg();
+  const setTier = useSetOrgTier();
+  const [planFor, setPlanFor] = useState<{ id: string; slug: string; tier: string } | null>(null);
+  const [chosenTier, setChosenTier] = useState('FREE');
   const [pending, setPending] = useState<{ id: string; slug: string; ownerEmail?: string; projects: number } | null>(null);
+
+  const confirmPlan = async (reason: string) => {
+    if (!planFor || !canMutate) return;
+    try {
+      await setTier.mutateAsync({ orgId: planFor.id, tier: chosenTier, reason });
+      setPlanFor(null);
+    } catch {
+      // the dialog stays open and shows setTier.error
+    }
+  };
 
   const confirmRevoke = async (reason: string) => {
     if (!pending || !canMutate) return;
@@ -75,7 +88,19 @@ export function OrgsTable({ canMutate }: { readonly canMutate: boolean }) {
                 <td className="px-4 py-3 text-text-secondary">
                   {org.cpuCores || org.memoryMb ? `${org.cpuCores.toFixed(2)} cores · ${Math.round(org.memoryMb)} MiB` : '—'}
                 </td>
-                <td className="px-4 py-3 text-right">
+                <td className="px-4 py-3 text-right space-x-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!canMutate || setTier.isPending}
+                    onClick={() => {
+                      setTier.reset();
+                      setChosenTier(org.tier.toUpperCase());
+                      setPlanFor({ id: org.id, slug: org.slug, tier: org.tier });
+                    }}
+                  >
+                    Change plan
+                  </Button>
                   <Button size="sm" variant="danger" disabled={!canMutate || revoke.isPending} onClick={() => { revoke.reset(); setPending({ id: org.id, slug: org.slug, ownerEmail: org.ownerEmail, projects: org.projectCount }); }}>
                     <ShieldAlert className="w-3.5 h-3.5 mr-1" />
                     Revoke
@@ -85,6 +110,32 @@ export function OrgsTable({ canMutate }: { readonly canMutate: boolean }) {
             ))}
           </tbody>
         </table>
+      )}
+      {planFor && (
+        <ReasonDialog
+          title={`Change plan for "${planFor.slug}"`}
+          description={`Currently ${planFor.tier.toUpperCase()}. A plan that needs more nodes than the platform has is refused.`}
+          confirmLabel="Change plan"
+          busy={setTier.isPending}
+          error={setTier.error ? serverErrorMessage(setTier.error, 'The plan change failed') : undefined}
+          onConfirm={confirmPlan}
+          onCancel={() => setPlanFor(null)}
+        >
+          <label className="block text-sm text-text-secondary">
+            Plan
+            <select
+              className="mt-1 w-full rounded-lg bg-bg-secondary border border-border-primary p-2 text-text-primary"
+              value={chosenTier}
+              onChange={(event) => setChosenTier(event.target.value)}
+            >
+              {['FREE', 'STANDARD', 'ENTERPRISE'].map((tier) => (
+                <option key={tier} value={tier}>
+                  {tier}
+                </option>
+              ))}
+            </select>
+          </label>
+        </ReasonDialog>
       )}
       {pending && (
         <ReasonDialog

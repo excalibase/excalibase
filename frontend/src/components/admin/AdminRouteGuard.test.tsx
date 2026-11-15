@@ -38,6 +38,12 @@ describe('AdminRouteGuard', () => {
     expect(screen.queryByTestId('console')).not.toBeInTheDocument();
   });
 
+  test('a server with the console switched off refuses the page on every host', async () => {
+    renderGuard({ deploymentMode: 'cloud', adminConsole: false }, 'app.excalibase.io');
+    expect(await screen.findByTestId('home')).toBeInTheDocument();
+    expect(screen.queryByTestId('console')).not.toBeInTheDocument();
+  });
+
   test('with no admin host configured the console shows wherever it is served', async () => {
     renderGuard({ deploymentMode: 'selfhosted' }, 'localhost');
     expect(await screen.findByTestId('console')).toBeInTheDocument();

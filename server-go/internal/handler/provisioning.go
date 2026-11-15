@@ -306,7 +306,7 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 	// Admin) in the TARGET org — so a Developer/Viewer in someone else's org
 	// can't spin up projects there. A user creating in their own freshly-made
 	// org is its Owner, so self-serve stays open. platform_admin bypasses.
-	if !auth.HasPermission(user.Role, auth.PermManageUsers) {
+	if !auth.IsPlatformServicePrincipal(user, auth.GetToken(r.Context())) {
 		if req.OrgID == "" || h.orgStore == nil {
 			httpError(w, "org is required to create a project", http.StatusBadRequest)
 			return

@@ -124,6 +124,9 @@ func runServer(cfg config.AppConfig) {
 	if err := cfg.CheckAdminHost(); err != nil {
 		log.Fatal(err)
 	}
+	if cfg.AdminConsoleDisabled() {
+		log.Println("WARN: ADMIN_HOST is not set: the admin console is off, every /api/admin route except service accounts answers 404")
+	}
 	if err := cfg.CheckDenoProvisioningURL(); err != nil {
 		log.Fatal(err)
 	}
@@ -1083,15 +1086,17 @@ type handlerDeps struct {
 	adminConsoleHandler *handler.AdminConsoleHandler
 	// adminAssertions checks Cloudflare Access assertions on the admin host; nil builds the real one from config.
 	adminAssertions adminaccess.Checker
-	authHandler     *handler.AuthHandler
-	oauthHandler    *handler.StudioOAuthHandler
-	ssoHandler      *handler.SSOProvidersHandler
-	svcAcctHandler  *handler.ServiceAccountHandler
-	orgHandler      *handler.OrgHandler
-	vaultHandler    *handler.VaultHandler
-	schemaHandler   *handler.SchemaHandler
-	realtimeHandler *handler.RealtimeHandler
-	fnHandler       *handler.FunctionHandler
+	// adminGateOverride replaces the gate built from config; tests that probe other layers use it.
+	adminGateOverride *adminaccess.GateConfig
+	authHandler       *handler.AuthHandler
+	oauthHandler      *handler.StudioOAuthHandler
+	ssoHandler        *handler.SSOProvidersHandler
+	svcAcctHandler    *handler.ServiceAccountHandler
+	orgHandler        *handler.OrgHandler
+	vaultHandler      *handler.VaultHandler
+	schemaHandler     *handler.SchemaHandler
+	realtimeHandler   *handler.RealtimeHandler
+	fnHandler         *handler.FunctionHandler
 	// tableImportHandler loads CSV, XLSX and Google Sheets into a table (EXC-368).
 	tableImportHandler *handler.TableImportHandler
 	// permissionHandler serves permissions, tracked functions and function
@@ -1641,6 +1646,7 @@ func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceSto
 	h.SetInstanceStore(instances)
 	h.SetNodePlacement(nodes)
 	h.SetPlanChangeHook(planChanged)
+	h.SetAudit(sqlStore)
 	return h
 }
 
@@ -2034,12 +2040,14 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 		APIURL string `json:"apiUrl"`
 		// AdminHost is where the operator console is also served (EXC-757).
 		AdminHost string `json:"adminHost,omitempty"`
+		// AdminConsole is false when the console is switched off, so Studio hides it.
+		AdminConsole bool `json:"adminConsole"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled, Sites: cfg.SitesAvailable(),
 			SiteGitBuilds: cfg.SiteGitBuildsOn(),
 			CustomDomains: customDomainsOn(cfg), SiteCustomDomains: cfg.SitesCustomDomainsAvailable(), Features: features.Snapshot(r.Context(), flags),
-			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/"), AdminHost: cfg.AdminHost}
+			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/"), AdminHost: cfg.AdminHost, AdminConsole: !cfg.AdminConsoleDisabled()}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
 			log.Printf("write /api/config: %v", err)
@@ -2071,7 +2079,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	// A project's public functions answer CORS from that project's own
 	// allowlist (the handler does it); the Studio list is for everything else.
 	r.Use(custommw.ExceptPathPrefix("/functions/v1/", custommw.ExceptPathPrefix("/storage/v1/", custommw.CORS(cfg.CORSOrigins))))
-	r.Use(custommw.RequireTrustedOriginForCookies(custommw.TrustedOrigins(cfg.StudioURL, cfg.CORSOrigins)))
+	r.Use(custommw.RequireTrustedOriginForCookies(custommw.TrustedOrigins(cfg.StudioURL, cfg.CORSOrigins, cfg.AdminOrigin())))
 	if pool, ok := sqlStore.(interface{ DB() *sql.DB }); ok {
 		// An exhausted platform pool answers 503 fast instead of hanging every request.
 		r.Use(custommw.PoolGuard(pool.DB().Stats, poolGuardWait))
@@ -2381,6 +2389,7 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 			r.Use(auth.RequireUnrestrictedCredentialForWrites)
 			r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
 			r.Group(func(r chi.Router) { d.adminConsoleHandler.Routes(r) })
+			r.Group(func(r chi.Router) { d.orgHandler.ConsoleRoutes(r) })
 			r.Route("/tiers", func(r chi.Router) {
 				r.Use(auth.RequirePermission(auth.PermViewAny))
 				d.tierHandler.Routes(r)

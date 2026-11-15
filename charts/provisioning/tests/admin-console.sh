@@ -53,4 +53,15 @@ if echo "$out" | grep -q 'name: provisioning-admin'; then
 fi
 echo "$out" | grep -q 'name: ADMIN_HOST' || { echo "ADMIN_HOST must still be passed" >&2; exit 1; }
 
+# Cloud with no admin host renders: the console is simply off. With a host it
+# must be behind Access, or the server would refuse to start.
+helm template t "$CHART" $BASE --set env.DEPLOYMENT_MODE=cloud >/dev/null \
+  || { echo "a cloud install with no admin console was refused" >&2; exit 1; }
+if helm template t "$CHART" $BASE --set env.DEPLOYMENT_MODE=cloud --set adminConsole.host=admin.example.test >/dev/null 2>&1; then
+  echo "rendered a cloud admin host that is not behind Access" >&2
+  exit 1
+fi
+helm template t "$CHART" $BASE --set env.DEPLOYMENT_MODE=cloud --set adminConsole.host=admin.example.test --set adminAccess.teamDomain=team.cloudflareaccess.com --set adminAccess.audience=aud-tag >/dev/null \
+  || { echo "a cloud install with the whole fence was refused" >&2; exit 1; }
+
 echo "admin console cases passed"

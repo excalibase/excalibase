@@ -96,7 +96,10 @@ func TestGate_TheAdminHostServesOnlyTheConsoleAndWhatItNeeds(t *testing.T) {
 	}
 }
 
-func TestGate_WithoutAnAccessConfigTheHostIsTheOnlyFence(t *testing.T) {
+// Only a self-hosted install reaches this: a cloud install refuses to boot
+// without the Access settings (config.CheckAdminHost), so the gate never runs
+// open there.
+func TestGate_SelfHostedWithoutAnAccessConfigHasTheHostAsItsFence(t *testing.T) {
 	f := newFixture(t)
 	h := gate(f, false)
 	if got := call(h, adminHost, "/api/admin/console/users", ""); got != http.StatusOK {
@@ -115,11 +118,42 @@ func TestGate_IsOffWithoutAnAdminHost(t *testing.T) {
 	}
 }
 
-func TestGate_AnInClusterCallerKeepsItsServiceAddress(t *testing.T) {
+// The in-cluster listener skips the gate for the service-account routes only,
+// which the bootstrap Job reaches by service address. The console still needs
+// its host and its Access assertion, whichever listener carried the request.
+func TestGate_TheInClusterListenerSkipsTheGateForServiceAccountRoutesOnly(t *testing.T) {
 	f := newFixture(t)
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	h := Gate(GateConfig{AdminHost: adminHost, Verifier: f.verifier, IsInternal: func(*http.Request) bool { return true }})(ok)
 	if got := call(h, "provisioning.svc:8080", "/api/admin/service-accounts/", ""); got != http.StatusOK {
-		t.Fatalf("got %d, want 200", got)
+		t.Fatalf("service accounts: got %d, want 200", got)
+	}
+	for _, path := range []string{"/api/admin/console/users", "/api/admin/projects", "/api/admin/orgs/o1", "/api/admin/console/orgs/o1/tier"} {
+		if got := call(h, "provisioning.svc:8080", path, ""); got != http.StatusNotFound {
+			t.Errorf("%s over the service address: got %d, want 404", path, got)
+		}
+		if got := call(h, adminHost, path, ""); got != http.StatusForbidden {
+			t.Errorf("%s on the admin host without an assertion, in-cluster listener: got %d, want 403", path, got)
+		}
+	}
+}
+
+// A cloud install with no admin host has no console: every admin route is
+// unmounted on every host, the service-account routes excepted.
+func TestGate_DisabledConsoleAnswers404EverywhereExceptServiceAccounts(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := Gate(GateConfig{Disabled: true})(ok)
+	for _, host := range []string{"app.example.test", "admin.example.test", ""} {
+		for _, path := range []string{"/api/admin/console/users", "/api/admin/projects", "/api/admin/orgs/o1", "/api/admin/tiers/free", "/api/admin"} {
+			if got := call(h, host, path, ""); got != http.StatusNotFound {
+				t.Errorf("host %q %s: got %d, want 404", host, path, got)
+			}
+		}
+		if got := call(h, host, "/api/admin/service-accounts/", ""); got != http.StatusOK {
+			t.Errorf("host %q service accounts: got %d, want 200", host, got)
+		}
+		if got := call(h, host, "/api/projects/p1", ""); got != http.StatusOK {
+			t.Errorf("host %q customer traffic: got %d, want 200", host, got)
+		}
 	}
 }

@@ -90,3 +90,12 @@ func TestAnEmptyTrustedOriginTrustsNothing(t *testing.T) {
 		t.Fatalf("got %d, want 403", w.Code)
 	}
 }
+
+// EXC-757: the admin console is served at its own host, so its page origin is
+// trusted for the session cookie, and an empty extra origin trusts nothing.
+func TestTrustedOriginsIncludeTheAdminOrigin(t *testing.T) {
+	got := TrustedOrigins("https://studio.example.test", nil, "https://admin.example.test", "")
+	if len(got) != 2 || got[1] != "https://admin.example.test" {
+		t.Fatalf("got %v", got)
+	}
+}

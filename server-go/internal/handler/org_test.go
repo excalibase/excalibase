@@ -266,8 +266,8 @@ func TestNonAdminCannotInvite(t *testing.T) {
 	// Bob (not a member) tries to invite — should fail
 	w2 := orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath,
 		`{"userId":"`+testBobID+`","role":"developer"}`, testBobID)
-	if w2.Code != http.StatusForbidden {
-		t.Errorf("non-member invite: got %d, want %d", w2.Code, http.StatusForbidden)
+	if w2.Code != http.StatusNotFound {
+		t.Errorf("non-member invite: got %d, want %d", w2.Code, http.StatusNotFound)
 	}
 }
 
@@ -278,10 +278,10 @@ func TestDeleteOrg_OwnerOnly(t *testing.T) {
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
 
-	// Bob can't delete
+	// Bob is no member, so the org does not exist for him
 	w2 := orgRequest(r, "DELETE", testOrgsSlash+org.ID, "", testBobID)
-	if w2.Code != http.StatusForbidden {
-		t.Errorf("non-owner delete: got %d, want %d", w2.Code, http.StatusForbidden)
+	if w2.Code != http.StatusNotFound {
+		t.Errorf("non-member delete: got %d, want %d", w2.Code, http.StatusNotFound)
 	}
 
 	// Alice can delete
@@ -336,42 +336,8 @@ func createOrgAs(t *testing.T, r chi.Router, slug, userID string) domain.Org {
 	return org
 }
 
-func TestUpdateOrg_InvalidTier(t *testing.T) {
-	r, store := setupOrgRouter(t)
-	addPlatformAdmin(t, store)
-	org := createOrgAs(t, r, "tier-org", testAliceID)
-
-	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"tier":"SUPER_PLAN"}`, testPlatformAdminID)
-	if w2.Code != http.StatusBadRequest {
-		t.Errorf("invalid tier: got %d, want %d. Body: %s", w2.Code, http.StatusBadRequest, w2.Body.String())
-	}
-}
-
 // orgPlanChanges counts the plan-change hook's runs across the org router tests.
 var orgPlanChanges atomic.Int64
-
-func TestUpdateOrg_PlatformAdminSetsTheTier(t *testing.T) {
-	r, store := setupOrgRouter(t)
-	addPlatformAdmin(t, store)
-	org := createOrgAs(t, r, "up-org", testAliceID)
-	before := orgPlanChanges.Load()
-	defer func() {
-		if orgPlanChanges.Load() != before+1 {
-			t.Errorf("the plan change ran the hook %d times, want once", orgPlanChanges.Load()-before)
-		}
-	}()
-
-	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"tier":"STANDARD"}`, testPlatformAdminID)
-	if w2.Code != http.StatusOK {
-		t.Errorf("valid tier upgrade: got %d, want %d. Body: %s", w2.Code, http.StatusOK, w2.Body.String())
-	}
-
-	var updated domain.Org
-	json.NewDecoder(w2.Body).Decode(&updated)
-	if updated.Tier != domain.Standard {
-		t.Errorf("tier: got %q, want STANDARD", updated.Tier)
-	}
-}
 
 // The plan decides a project's size and limit, so an org's own owner cannot
 // move it; only the platform can.
@@ -771,30 +737,25 @@ func TestAdminCannotDeleteOrg(t *testing.T) {
 	}
 }
 
-func TestPlatformAdminCanManageAnyOrg(t *testing.T) {
+// EXC-757: outside the console a human platform admin is a customer. They
+// neither see nor invite into an org they do not belong to.
+func TestPlatformAdminIsAnOutsiderToOtherCustomersOrgs(t *testing.T) {
 	r, store := setupOrgRouter(t)
-
-	// Create a platform_admin user
 	store.CreateUser(t.Context(), &domain.User{
 		ID: testPadminID, Username: testutil.FixtureToken("padmin"), Email: "padmin@t.com",
 		PasswordHash: testutil.FixturePasswordHash(), Role: "platform_admin", Active: true,
 	})
 
-	// Alice creates org
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"PAdmOrg","slug":"padm-org"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
 
-	// Platform admin can see it
-	w2 := orgRequest(r, "GET", testOrgsSlash+org.ID, "", testPadminID)
-	if w2.Code != http.StatusOK {
-		t.Errorf("platform admin view org: got %d, want %d", w2.Code, http.StatusOK)
+	if w2 := orgRequest(r, "GET", testOrgsSlash+org.ID, "", testPadminID); w2.Code != http.StatusNotFound {
+		t.Errorf("platform admin view of another customer's org: got %d, want %d", w2.Code, http.StatusNotFound)
 	}
-
-	// Platform admin can invite
-	w3 := orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testPadminID)
-	if w3.Code != http.StatusCreated {
-		t.Errorf("platform admin invite: got %d, want %d. Body: %s", w3.Code, http.StatusCreated, w3.Body.String())
+	invite := orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testPadminID)
+	if invite.Code != http.StatusNotFound {
+		t.Errorf("platform admin invite into another customer's org: got %d, want %d. Body: %s", invite.Code, http.StatusNotFound, invite.Body.String())
 	}
 }
 

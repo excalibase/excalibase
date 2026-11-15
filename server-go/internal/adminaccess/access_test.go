@@ -158,3 +158,43 @@ func TestVerifyFailsClosedWhenTheKeysCannotBeRead(t *testing.T) {
 		t.Fatal("an assertion was accepted without the keys that check it")
 	}
 }
+
+// A slow key fetch must not stall verification that the cached keys can
+// already answer: the lock is not held across the network call.
+func TestVerifyDoesNotHoldTheLockDuringAKeyFetch(t *testing.T) {
+	f := newFixture(t)
+	if err := f.verifier.Verify(f.token(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	f.verifier.minRefetch = 0
+
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	slow := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		<-release
+		w.Write(jwksBody(f.kid, &f.key.PublicKey))
+	}))
+	defer slow.Close()
+	defer close(release)
+	f.verifier.cfg.TeamDomain = slow.Listener.Addr().String()
+	f.verifier.cfg.HTTPClient = slow.Client()
+
+	unknown := f.token(t, func(_ jwt.MapClaims, h map[string]any) { h["kid"] = "kid-new" })
+	go func() { _ = f.verifier.Verify(unknown) }()
+	<-entered
+
+	done := make(chan error, 1)
+	go func() {
+		// signed for the original issuer; only the cached key lookup matters here
+		done <- f.verifier.Verify(f.token(t, func(c jwt.MapClaims, _ map[string]any) { c["iss"] = "https://" + f.verifier.cfg.TeamDomain }))
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("a cached key was refused during a fetch: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("verification of a cached key waited on another request's key fetch")
+	}
+}

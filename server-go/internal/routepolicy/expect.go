@@ -163,6 +163,11 @@ func expectSession(row Row, method string, p Principal) Expectation {
 	if p.PlatformAdmin && row.Param == ParamProject && row.Permission == "" && p.OrgRole == "" {
 		return Deny404
 	}
+	// Nor does it reach a tenant's org: outside the console a human platform
+	// admin is an outsider to every org they do not belong to.
+	if p.PlatformAdmin && row.Param == ParamOrg && row.Permission == "" && p.OrgRole == "" {
+		return Deny404
+	}
 	if row.Discloses == Secret && p.ReadOnly {
 		return Deny403
 	}
@@ -196,14 +201,10 @@ func expectTenant(row Row, p Principal) Expectation {
 	return Allow
 }
 
-// orgOutsiderExpectation is what a non-member sees on an org route. Reads hide
-// the org behind a 404; writes check the org permission first and answer 403,
-// which discloses nothing a member could not already see.
-func orgOutsiderExpectation(row Row) Expectation {
-	if row.MinRole == "" {
-		return Deny404
-	}
-	return Deny403
+// orgOutsiderExpectation is what a non-member sees on an org route: the org
+// does not exist, whether they read or try to write, so the id confirms nothing.
+func orgOutsiderExpectation(Row) Expectation {
+	return Deny404
 }
 
 // isWrite reports whether the method mutates, which is what a read-only

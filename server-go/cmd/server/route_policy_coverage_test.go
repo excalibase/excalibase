@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/adminaccess"
 	"github.com/excalibase/provisioning-poc/internal/s3keys"
 	"net/http"
 	"net/http/httptest"
@@ -150,6 +151,9 @@ func policyRouterWith(t *testing.T, shape func(*domain.DatabaseInstance)) (*poli
 
 	cfg := config.AppConfig{DeploymentMode: "cloud", AppHostingEnabled: true}
 	deps := policyDeps(t, instances, platform, functions)
+	// The matrix tests who each route admits, not the admin host's fence, which
+	// admin_host_wiring_test.go covers: leave the console reachable on any host.
+	deps.adminGateOverride = &adminaccess.GateConfig{}
 	router := buildRouter(cfg, platform, instances, deps)
 	principals := policyPrincipals(platform)
 	reseed := func() {

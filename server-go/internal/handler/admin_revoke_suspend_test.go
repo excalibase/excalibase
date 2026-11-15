@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,8 +45,10 @@ func revokeRig(t *testing.T, suspender OwnerSuspender) (*AdminHandler, *adminOrg
 	return h, orgStore, store, r
 }
 
-func revoke(r http.Handler, query string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest("DELETE", "/api/admin/orgs/org-9?cascade=true"+query, nil)
+const revokeReasonBody = `{"reason":"evicting abusive tenant"}`
+
+func revoke(r http.Handler, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("DELETE", "/api/admin/orgs/org-9?cascade=true", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
@@ -56,7 +59,7 @@ func revoke(r http.Handler, query string) *httptest.ResponseRecorder {
 func TestAdmin_RevokeOrg_SuspendsTheOwnerWithTheReason(t *testing.T) {
 	sus := &fakeOwnerSuspender{}
 	_, orgs, _, r := revokeRig(t, sus)
-	w := revoke(r, "&reason=proxy+abuse+on+every+project")
+	w := revoke(r, `{"reason":"proxy abuse on every project"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d body=%s", w.Code, w.Body.String())
 	}
@@ -74,7 +77,7 @@ func TestAdmin_RevokeOrg_SuspendsTheOwnerWithTheReason(t *testing.T) {
 func TestAdmin_RevokeOrg_RefusesWithoutAReason(t *testing.T) {
 	sus := &fakeOwnerSuspender{}
 	_, orgs, store, r := revokeRig(t, sus)
-	for _, q := range []string{"", "&reason=", "&reason=+++"} {
+	for _, q := range []string{``, `{}`, `{"reason":""}`, `{"reason":"   "}`, `{"reason":"` + strings.Repeat("x", 501) + `"}`} {
 		if w := revoke(r, q); w.Code != http.StatusBadRequest {
 			t.Errorf("query %q: got %d, want 400", q, w.Code)
 		}
@@ -99,7 +102,7 @@ func TestAdmin_RevokeOrg_DoesNothingWhenTheOwnerCannotBeSuspended(t *testing.T) 
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, orgs, store, r := revokeRig(t, &fakeOwnerSuspender{err: tc.err})
-			if w := revoke(r, "&reason=abuse+confirmed+by+logs"); w.Code != tc.want {
+			if w := revoke(r, `{"reason":"abuse confirmed by logs"}`); w.Code != tc.want {
 				t.Fatalf("got %d want %d", w.Code, tc.want)
 			}
 			if orgs.deleted {
@@ -114,7 +117,7 @@ func TestAdmin_RevokeOrg_DoesNothingWhenTheOwnerCannotBeSuspended(t *testing.T) 
 
 func TestAdmin_RevokeOrg_RefusesWhenNoSuspenderIsWired(t *testing.T) {
 	_, orgs, _, r := revokeRig(t, nil)
-	if w := revoke(r, "&reason=abuse+confirmed+by+logs"); w.Code != http.StatusServiceUnavailable {
+	if w := revoke(r, `{"reason":"abuse confirmed by logs"}`); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("got %d, want 503", w.Code)
 	}
 	if orgs.deleted {
@@ -173,7 +176,7 @@ func TestAdmin_RevokeOrg_ThenTheOwnersLoginIsRefused(t *testing.T) {
 
 	svc := adminconsole.NewSuspensionService(deactivatingStore{users}, noApps{}, &captureAudit{})
 	_, _, _, r := revokeRig(t, svc)
-	if w := revoke(r, "&reason=confirmed+abuse+across+projects"); w.Code != http.StatusOK {
+	if w := revoke(r, `{"reason":"confirmed abuse across projects"}`); w.Code != http.StatusOK {
 		t.Fatalf("revoke: %d %s", w.Code, w.Body.String())
 	}
 
@@ -184,4 +187,92 @@ func TestAdmin_RevokeOrg_ThenTheOwnersLoginIsRefused(t *testing.T) {
 	if strings.Contains(w.Body.String(), `"token"`) {
 		t.Error("a session was issued to a suspended owner")
 	}
+}
+
+// The reason is audited with the revoke, not only given to the suspension.
+func TestAdmin_RevokeOrg_AuditsTheReason(t *testing.T) {
+	audit := &syncAudit{}
+	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}
+	orgStore := &adminOrgStore{org: &domain.Org{ID: "org-9", Slug: "acme"}}
+	h := NewAdminHandler(newDockerProvSvc(t, store), store, orgStore, audit, nil, "", nil)
+	r := chi.NewRouter()
+	r.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
+	if w := revoke(r, `{"reason":"proxy abuse on every project"}`); w.Code != http.StatusOK {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+	if entry := audit.first(t); !strings.Contains(entry.Details, `reason="proxy abuse on every project"`) {
+		t.Fatalf("audit = %+v", entry)
+	}
+}
+
+// A project drop needs the same written reason, audited, within the same limit.
+func TestAdmin_ForceDropProject_RequiresAndAuditsAReason(t *testing.T) {
+	newRig := func() (*AdminHandler, *syncAudit, *inMemoryInstanceStore, chi.Router) {
+		store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+			"proj-x": {ProjectID: "proj-x", OrgID: "org-1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeDocker, Namespace: "ctr-x"},
+		}}
+		audit := &syncAudit{}
+		h := NewAdminHandler(newDockerProvSvc(t, store), store, nil, audit, nil, "", nil)
+		r := chi.NewRouter()
+		r.Delete("/api/admin/projects/{projectId}", h.ForceDropProject)
+		return h, audit, store, r
+	}
+	drop := func(r http.Handler, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/admin/projects/proj-x", strings.NewReader(body)))
+		return w
+	}
+	for _, body := range []string{``, `{}`, `{"reason":"  "}`, `{"reason":"` + strings.Repeat("x", 501) + `"}`, `{"confirmDeleteBackups":true}`} {
+		_, audit, store, r := newRig()
+		if w := drop(r, body); w.Code != http.StatusBadRequest {
+			t.Errorf("body %.40q: got %d, want 400", body, w.Code)
+		}
+		if got, _ := store.FindByProjectID("proj-x"); got == nil || audit.count() != 0 {
+			t.Errorf("body %.40q: a project was dropped or audited without a reason", body)
+		}
+	}
+	_, audit, _, r := newRig()
+	if w := drop(r, `{"reason":"abandoned and holding a node"}`); w.Code != http.StatusOK {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+	if entry := audit.first(t); !strings.Contains(entry.Details, `reason="abandoned and holding a node"`) {
+		t.Fatalf("audit = %+v", entry)
+	}
+}
+
+// syncAudit is an audit sink safe for the handler's fire-and-forget write.
+type syncAudit struct {
+	mu      sync.Mutex
+	entries []*domain.AuditEntry
+}
+
+func (a *syncAudit) LogAudit(_ context.Context, e *domain.AuditEntry) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.entries = append(a.entries, e)
+	return nil
+}
+
+// first waits for the first entry, which the handler writes in the background.
+func (a *syncAudit) first(t *testing.T) *domain.AuditEntry {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		if len(a.entries) > 0 {
+			e := a.entries[0]
+			a.mu.Unlock()
+			return e
+		}
+		a.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no audit entry was written")
+	return nil
+}
+
+func (a *syncAudit) count() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.entries)
 }

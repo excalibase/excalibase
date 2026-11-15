@@ -26,7 +26,10 @@ func buildAdminConsole(sqlStore storage.PlatformStore, runtime service.AppRuntim
 // adminGate is the admin host's fence. Access assertions are checked only when
 // the team and AUD are both configured; a test may supply its own checker.
 func adminGate(cfg config.AppConfig, d *handlerDeps) adminaccess.GateConfig {
-	gate := adminaccess.GateConfig{AdminHost: cfg.AdminHost, IsInternal: custommw.IsInternalListener}
+	if d.adminGateOverride != nil {
+		return *d.adminGateOverride
+	}
+	gate := adminaccess.GateConfig{AdminHost: cfg.AdminHost, Disabled: cfg.AdminConsoleDisabled(), IsInternal: custommw.IsInternalListener}
 	switch {
 	case d.adminAssertions != nil:
 		gate.Verifier = d.adminAssertions

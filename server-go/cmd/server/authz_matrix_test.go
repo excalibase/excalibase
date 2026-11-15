@@ -498,3 +498,35 @@ func (matrixConsole) Suspend(context.Context, adminconsole.Actor, string, string
 func (matrixConsole) Unsuspend(context.Context, adminconsole.Actor, string, string) (*adminconsole.Result, error) {
 	return &adminconsole.Result{}, nil
 }
+
+// EXC-757: outside /admin a human platform admin is a customer. Every
+// /api/orgs/{orgId}/... route, invite path included, answers 404 to a platform
+// admin who does not belong to that org, whatever the method.
+func TestForeignPlatformAdminGetsNothingFromOrgRoutes(t *testing.T) {
+	router, _, admins, _ := buildMatrixPlatform(t, config.AppConfig{DeploymentMode: "selfhosted"}, func(deps *handlerDeps, platform *fakePlatform) {
+		deps.orgHandler = handler.NewOrgHandler(platform, nil)
+	})
+	mux, ok := router.(*chi.Mux)
+	if !ok {
+		t.Fatal("buildRouter must return a *chi.Mux")
+	}
+	seen := 0
+	walk := func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if !strings.Contains(pattern, "/api/orgs/{orgId}") {
+			return nil
+		}
+		seen++
+		path := strings.ReplaceAll(pattern, "{orgId}", matrixOrgA)
+		path = concretePath(path)
+		if code := matrixRequest(router, method, path, admins[callerAdminSession]); code != http.StatusNotFound {
+			t.Errorf("%s %s: foreign platform admin got %d, want 404", method, pattern, code)
+		}
+		return nil
+	}
+	if err := chi.Walk(mux, walk); err != nil {
+		t.Fatal(err)
+	}
+	if seen < 8 {
+		t.Fatalf("walked only %d org routes; the router lost mounts", seen)
+	}
+}

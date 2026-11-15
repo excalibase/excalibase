@@ -1,13 +1,14 @@
 -- Admin console (EXC-757).
 
 -- abuse_suspensions was created by hand on prod on 2026-11-16; this makes the
--- schema it needs part of the migration history. The row says why an account
--- was suspended; users.active=false is what blocks it.
+-- schema it needs part of the migration history, with exactly prod's columns
+-- and nullability so a fresh install and prod converge. The row says why an
+-- account was suspended; users.active=false is what blocks it.
 CREATE TABLE IF NOT EXISTS abuse_suspensions (
-    user_id      TEXT PRIMARY KEY,
-    email        TEXT NOT NULL DEFAULT '',
-    reason       TEXT NOT NULL DEFAULT '',
-    suspended_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    user_id      TEXT NOT NULL PRIMARY KEY,
+    email        TEXT,
+    reason       TEXT,
+    suspended_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_abuse_suspensions_at ON abuse_suspensions(suspended_at);

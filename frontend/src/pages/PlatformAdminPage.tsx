@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../stores/auth-store';
 import { useAdminProjects, useClusterCapacity, useForceDropProject } from '../hooks/useAdmin';
@@ -7,6 +8,7 @@ import { AccountStatusBadge } from '../components/admin/AccountStatusBadge';
 import { NeedsAttention } from '../components/admin/NeedsAttention';
 import { OrgsTable } from '../components/admin/OrgsTable';
 import { ProjectDetailPanel } from '../components/admin/ProjectDetailPanel';
+import { ReasonDialog } from '../components/admin/ReasonDialog';
 import { UsersTable } from '../components/admin/UsersTable';
 import { TierConfigTable } from '../components/TierConfigTable';
 import { StorageBudgetCard } from '../components/StorageBudgetCard';
@@ -131,20 +133,15 @@ function ProjectsTable({ canMutate }: { readonly canMutate: boolean }) {
     setParams(next, { replace: true });
   };
 
-  const handleDrop = async (projectId: string, name: string) => {
-    if (!canMutate) return;
-    if (
-      !confirm(
-        `Force-drop project "${name}" (${projectId})?\n\nThis bypasses deletion_protection and cannot be undone. The action is logged to the audit table.`,
-      )
-    ) {
-      return;
-    }
+  const [dropping, setDropping] = useState<{ projectId: string; name: string } | null>(null);
+
+  const confirmDrop = async (reason: string) => {
+    if (!dropping || !canMutate) return;
     try {
-      await drop.mutateAsync(projectId);
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } }; message?: string };
-      alert(`Drop failed: ${serverErrorMessage(err, 'no reason given')}`);
+      await drop.mutateAsync({ projectId: dropping.projectId, reason });
+      setDropping(null);
+    } catch {
+      // the dialog stays open and shows drop.error
     }
   };
 
@@ -210,7 +207,7 @@ function ProjectsTable({ canMutate }: { readonly canMutate: boolean }) {
                     size="sm"
                     variant="danger"
                     disabled={!canMutate || drop.isPending}
-                    onClick={() => handleDrop(p.projectId, p.projectName)}
+                    onClick={() => { drop.reset(); setDropping({ projectId: p.projectId, name: p.projectName }); }}
                   >
                     <Trash2 className="w-3.5 h-3.5 mr-1" />
                     Drop
@@ -220,6 +217,18 @@ function ProjectsTable({ canMutate }: { readonly canMutate: boolean }) {
             ))}
           </tbody>
         </table>
+      )}
+      {dropping && (
+        <ReasonDialog
+          title={`Force-drop project "${dropping.name}"`}
+          description="Bypasses deletion protection and cannot be undone."
+          confirmLabel="Drop"
+          danger
+          busy={drop.isPending}
+          error={drop.error ? serverErrorMessage(drop.error, 'Drop failed') : undefined}
+          onConfirm={confirmDrop}
+          onCancel={() => setDropping(null)}
+        />
       )}
       {canMutate && openProject && <ProjectDetailPanel key={openProject} projectId={openProject} onClose={() => showProject(null)} />}
     </div>

@@ -45,6 +45,9 @@ spec:
               value: {{ .Values.service.publicPort | quote }}
             - name: TRUSTED_PROXY_CIDRS
               value: {{ required "trustedProxyCIDRs is required: the ingress controller's pod CIDR, the only peers whose X-Forwarded-For is believed" .Values.trustedProxyCIDRs | quote }}
+            {{- if and (eq (toString (default "" .Values.env.DEPLOYMENT_MODE)) "cloud") .Values.adminConsole.host (not (and .Values.adminAccess.teamDomain .Values.adminAccess.audience)) }}
+            {{- fail "a cloud install with adminConsole.host needs adminAccess.teamDomain and adminAccess.audience: the provisioning server refuses to start with an admin host that is not behind Access" }}
+            {{- end }}
             {{- if .Values.adminConsole.host }}
             - name: ADMIN_HOST
               value: {{ .Values.adminConsole.host | quote }}
