@@ -83,6 +83,10 @@ func visibleTo(ctx context.Context, inst *domain.DatabaseInstance) *domain.Datab
 		return inst
 	}
 	customer := *inst
+	customer.FailureReason = domain.ScrubClusterText(inst.FailureReason, inst.Namespace)
+	customer.FailureStep = domain.ScrubClusterText(inst.FailureStep, inst.Namespace)
+	customer.RollbackLog = domain.ScrubClusterText(inst.RollbackLog, inst.Namespace)
+	customer.DeletionError = domain.ScrubClusterText(inst.DeletionError, inst.Namespace)
 	customer.Host, customer.ReadOnlyHost, customer.Namespace = "", "", ""
 	customer.PoolerHost, customer.MetricsEndpoint = "", ""
 	return &customer

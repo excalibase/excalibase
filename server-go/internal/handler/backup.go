@@ -284,7 +284,7 @@ func (h *BackupHandler) startRestoreJob(w http.ResponseWriter, r *http.Request, 
 		h.writeStartError(w, inst, err)
 		return
 	}
-	writeJSON(w, job)
+	writeJSON(w, h.scrubbedJob(job, inst.Namespace))
 }
 
 // writeStartError answers a restore job the orchestrator refused to start.
@@ -322,7 +322,21 @@ func (h *BackupHandler) GetRestoreJob(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "restore job not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, job)
+	namespace := ""
+	if inst, instErr := h.svc.GetInstance(projectID); instErr == nil && inst != nil {
+		namespace = inst.Namespace
+	}
+	writeJSON(w, h.scrubbedJob(job, namespace))
+}
+
+// scrubbedJob is the restore job as a customer reads it: the cluster's names are out of its failure text.
+func (h *BackupHandler) scrubbedJob(job *domain.RestoreJob, namespace string) *domain.RestoreJob {
+	if job == nil {
+		return nil
+	}
+	scrubbed := *job
+	scrubbed.FailureReason = domain.ScrubClusterText(job.FailureReason, namespace)
+	return &scrubbed
 }
 
 // GetWalLag is a Docker-mode-only endpoint. K8s adapter doesn't

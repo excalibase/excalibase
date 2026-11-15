@@ -134,7 +134,7 @@ func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, project
 			body["projectId"] = inst.ProjectID
 			body["status"] = inst.Status
 			body["currentStep"] = inst.CurrentStep
-			body["failureReason"] = inst.FailureReason
+			body["failureReason"] = domain.ScrubClusterText(inst.FailureReason, inst.Namespace)
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

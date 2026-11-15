@@ -363,8 +363,8 @@ func TestMySQLCredentialsAreMySQLConnectionStrings(t *testing.T) {
 	}
 	password, _ := svc.OwnerPassword(inst.ProjectID)
 	if creds.Engine != "mysql" || creds.Username != "admin" || creds.Password != password || creds.SSLMode != "VERIFY_IDENTITY" ||
-		creds.ConnectionURL != domain.MySQLURL(inst.Host, "3306", "admin", password, "app") ||
-		creds.JDBCURL != domain.MySQLJDBCURL(inst.Host, "3306", "app") {
+		creds.ConnectionURL != hostPortPlaceholders.Replace(domain.MySQLURL(hostSentinel, portSentinel, "admin", password, "app")) ||
+		creds.JDBCURL != hostPortPlaceholders.Replace(domain.MySQLJDBCURL(hostSentinel, portSentinel, "app")) {
 		t.Errorf("credentials %+v", creds)
 	}
 }

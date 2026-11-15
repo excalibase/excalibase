@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/url"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1698,14 +1697,14 @@ func notServableErr(status string) error {
 // string a <password> template: a password is shown once, at creation and at a
 // reset, and never read back (EXC-759).
 func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
+	creds, err := s.storedCredentials(ctx, projectID, s.oneTimeCredentials(ctx))
+	if err != nil {
+		return nil, err
+	}
 	if s.oneTimeCredentials(ctx) {
-		creds, err := s.storedCredentials(ctx, projectID, true)
-		if err != nil {
-			return nil, err
-		}
 		return withoutPasswords(creds), nil
 	}
-	return s.storedCredentials(ctx, projectID, false)
+	return withoutClusterAddress(creds), nil
 }
 
 // OneTimeCredentials reports whether database passwords are shown once and
@@ -1725,6 +1724,8 @@ const (
 	hostSentinel     = "HOSTPLACEHOLDER"
 	portSentinel     = "PORTPLACEHOLDER"
 )
+
+var hostPortPlaceholders = strings.NewReplacer(hostSentinel, "<host>", portSentinel, "<port>")
 
 // storedCredentials reads the owner and reader passwords from the vault. It is
 // for the platform's own use; no route returns its result unredacted while
@@ -1755,15 +1756,13 @@ func (s *ProvisioningService) storedCredentials(ctx context.Context, projectID s
 	if err != nil {
 		return nil, err
 	}
-	inURL, urlHost, urlPort := password, inst.Host, ""
+	// The cluster's own address is never put in a string a customer gets.
+	inURL, urlHost, urlPort := password, hostSentinel, portSentinel
 	if template {
-		inURL, urlHost, urlPort = passwordSentinel, hostSentinel, portSentinel
+		inURL = passwordSentinel
 	}
 	if inst.DBType == domain.MySQL {
 		creds := mysqlCredentials(inst, password)
-		if urlPort == "" {
-			urlPort = strconv.Itoa(creds.Port)
-		}
 		creds.ConnectionURL = domain.MySQLURL(urlHost, urlPort, inst.Username, inURL, inst.DatabaseName)
 		creds.JDBCURL = domain.MySQLJDBCURL(urlHost, urlPort, inst.DatabaseName)
 		return withReader(creds, readerPassword), nil
@@ -1771,9 +1770,6 @@ func (s *ProvisioningService) storedCredentials(ctx context.Context, projectID s
 	port := 5432
 	if inst.Port != nil {
 		port = *inst.Port
-	}
-	if urlPort == "" {
-		urlPort = strconv.Itoa(port)
 	}
 
 	connURL := url.URL{
@@ -1797,17 +1793,24 @@ func (s *ProvisioningService) storedCredentials(ctx context.Context, projectID s
 	}, readerPassword), nil
 }
 
-// withoutPasswords is creds as a customer sees them: no password, no internal
-// address (the project's public endpoint is its own answer), and the
-// connection strings' placeholders written as <password>, <host> and <port>.
-func withoutPasswords(creds *domain.CredentialsResponse) *domain.CredentialsResponse {
+// withoutClusterAddress is creds as a customer sees them: no internal host
+// (the project's public endpoint is its own answer) and the connection
+// strings' placeholders written as <host> and <port>.
+func withoutClusterAddress(creds *domain.CredentialsResponse) *domain.CredentialsResponse {
 	redacted := *creds
-	placeholders := strings.NewReplacer(passwordSentinel, "<password>", hostSentinel, "<host>", portSentinel, "<port>")
-	redacted.ConnectionURL = placeholders.Replace(creds.ConnectionURL)
-	redacted.JDBCURL = placeholders.Replace(creds.JDBCURL)
+	redacted.ConnectionURL = hostPortPlaceholders.Replace(creds.ConnectionURL)
+	redacted.JDBCURL = hostPortPlaceholders.Replace(creds.JDBCURL)
 	redacted.Host, redacted.ReadOnlyHost = "", ""
-	redacted.Password, redacted.ReaderPassword = "", ""
 	return &redacted
+}
+
+// withoutPasswords is withoutClusterAddress with every password removed and
+// the connection strings' password written as <password>.
+func withoutPasswords(creds *domain.CredentialsResponse) *domain.CredentialsResponse {
+	redacted := withoutClusterAddress(creds)
+	redacted.ConnectionURL = strings.ReplaceAll(redacted.ConnectionURL, passwordSentinel, "<password>")
+	redacted.Password, redacted.ReaderPassword = "", ""
+	return redacted
 }
 
 // readerPassword is the filed SELECT-only login's password, or "" while its

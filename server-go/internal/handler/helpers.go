@@ -125,6 +125,8 @@ func safeError(err error) string {
 	if idx := strings.Index(msg, "\nHINT:"); idx >= 0 {
 		msg = msg[:idx]
 	}
+	// Scrub before truncating so a half-cut host cannot slip through; the raw error is in the log.
+	msg = domain.ScrubClusterText(msg)
 	if len(msg) > 200 {
 		msg = msg[:200]
 	}

@@ -32,6 +32,10 @@ func (memberOfOrg1) FindOrgsByUser(context.Context, string) ([]*domain.Org, erro
 
 // customerRouter serves one project as a plain member: the answers a customer sees.
 func customerRouter(t *testing.T, role string) chi.Router {
+	return customerRouterWithFlag(t, role, true)
+}
+
+func customerRouterWithFlag(t *testing.T, role string, oneTime bool) chi.Router {
 	t.Helper()
 	mock := k8s.NewMockClient()
 	mock.ExecOutput[internalNS+"/p1-postgres-1"] = "ALTER ROLE"
@@ -51,7 +55,9 @@ func customerRouter(t *testing.T, role string) chi.Router {
 	svc.SetVault(vault)
 	svc.SetOrgStore(orgs)
 	svc.SetCredentialVerifier(acceptingVerifier{})
-	svc.SetFeatures(features.NewStatic(features.OneTimeCredentials))
+	if oneTime {
+		svc.SetFeatures(features.NewStatic(features.OneTimeCredentials))
+	}
 	svc.SetBackgroundRunner(func(func()) {})
 	withBackupTarget(t, svc)
 	h := NewProvisioningHandler(svc, memberOfOrg1{orgs})

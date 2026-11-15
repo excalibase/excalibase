@@ -125,8 +125,21 @@ type createdProject struct {
 // shownOnce adds the owner password to a create answer of a project that
 // exists; a failed build has no database for it to open.
 func shownOnce(resp *domain.ProvisioningResponse, password string) any {
+	resp = scrubbedCreateAnswer(resp)
 	if resp == nil || password == "" || resp.Status == string(domain.StageFailed) {
 		return resp
 	}
 	return createdProject{ProvisioningResponse: resp, Password: password}
+}
+
+// scrubbedCreateAnswer is the create answer with the cluster's names taken out of its failure text.
+func scrubbedCreateAnswer(resp *domain.ProvisioningResponse) *domain.ProvisioningResponse {
+	if resp == nil {
+		return nil
+	}
+	scrubbed := *resp
+	scrubbed.FailureReason = domain.ScrubClusterText(resp.FailureReason, resp.Namespace)
+	scrubbed.FailureStep = domain.ScrubClusterText(resp.FailureStep, resp.Namespace)
+	scrubbed.RollbackLog = domain.ScrubClusterText(resp.RollbackLog, resp.Namespace)
+	return &scrubbed
 }
