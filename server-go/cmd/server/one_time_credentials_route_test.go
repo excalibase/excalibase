@@ -103,9 +103,10 @@ func TestAMemberWithoutAdminCannotGetTheStoredPasswordByAnyRoute(t *testing.T) {
 	}
 }
 
+// A platform admin is not a member of the project (#535), so the member who owns it is the one reading.
 func TestAnAdminReadingCredentialsGetsNoPassword(t *testing.T) {
-	router, _, admins := passwordRouter(t)
-	code, body := bodyOf(router, http.MethodGet, "/api/provision/proj-a/credentials", admins[callerAdminSession])
+	router, who, _ := passwordRouter(t)
+	code, body := bodyOf(router, http.MethodGet, "/api/provision/proj-a/credentials", who[callerOrgAdmin])
 	if code != http.StatusOK {
 		t.Fatalf("status %d: %s", code, body)
 	}

@@ -36,7 +36,14 @@ func fakeAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := &domain.User{ID: "test-admin", Username: "admin", Role: "platform_admin", Active: true}
 		ctx := auth.SetUser(r.Context(), user)
-		ctx = auth.SetToken(ctx, &domain.AccessToken{UserID: user.ID, Scopes: auth.ScopeSession})
+		token := &domain.AccessToken{UserID: user.ID, Scopes: auth.ScopeSession}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/secrets/") {
+			// A project's secret is read by a platform service principal, whose
+			// capability token is what skips the membership lookup; a human
+			// platform admin is a customer of every org but their own (EXC-757).
+			token = serviceVaultToken()
+		}
+		ctx = auth.SetToken(ctx, token)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -507,10 +514,10 @@ func TestVaultListSecrets_Populated(t *testing.T) {
 func TestVaultListSecrets_PrefixFilter(t *testing.T) {
 	r, v := setupVaultRouter(t)
 	v.Init(1, 1)
-	v.Put("projects/foo/x/credentials/admin", map[string]string{"k": "v"})
-	v.Put("projects/bar/y/credentials/admin", map[string]string{"k": "v"})
+	v.Put("platform/foo/x/credentials/admin", map[string]string{"k": "v"})
+	v.Put("platform/bar/y/credentials/admin", map[string]string{"k": "v"})
 
-	req := httptest.NewRequest("GET", "/api/vault/secrets-list?prefix=projects/foo", nil)
+	req := httptest.NewRequest("GET", "/api/vault/secrets-list?prefix=platform/foo", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -521,7 +528,7 @@ func TestVaultListSecrets_PrefixFilter(t *testing.T) {
 	}
 	json.NewDecoder(w.Body).Decode(&body)
 	for _, p := range body.Paths {
-		if !strings.HasPrefix(p, "projects/foo") {
+		if !strings.HasPrefix(p, "platform/foo") {
 			t.Errorf("prefix-filtered list leaked %q", p)
 		}
 	}
@@ -564,4 +571,9 @@ func TestVaultPutSecret_IfNoneMatchNeverReplaces(t *testing.T) {
 	if got, _ := v.Get("projects/app/auth/mfa"); got["key"] != "first" {
 		t.Fatalf("stored = %v", got)
 	}
+}
+
+// serviceVaultToken is a platform service principal's token for project secret reads.
+func serviceVaultToken() *domain.AccessToken {
+	return &domain.AccessToken{Scopes: auth.ScopeSession, Permissions: []string{"vault:read:projects/*"}}
 }

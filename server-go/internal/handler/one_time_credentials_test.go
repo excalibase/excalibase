@@ -38,7 +38,7 @@ func oneTimeProvisionRouter(t *testing.T, flagOn bool) chi.Router {
 	if flagOn {
 		svc.SetFeatures(features.NewStatic(features.OneTimeCredentials))
 	}
-	h := NewProvisioningHandler(svc, nil)
+	h := NewProvisioningHandler(svc, &owningOrgStore{})
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -204,4 +204,11 @@ func TestCreateRefusesAChosenPasswordWithNoDatabaseOrWithTheFlagOff(t *testing.T
 	if w := postProvision(oneTimeProvisionRouter(t, true), noDatabase, "respond-async"); w.Code != http.StatusBadRequest {
 		t.Errorf("no database: %d %s", w.Code, w.Body.String())
 	}
+}
+
+// owningOrgStore makes every caller the owner of the org they create in.
+type owningOrgStore struct{ adminOrgStore }
+
+func (*owningOrgStore) GetOrgMember(_ context.Context, orgID, userID string) (*domain.OrgMember, error) {
+	return &domain.OrgMember{OrgID: orgID, UserID: userID, Role: domain.OrgRoleOwner}, nil
 }

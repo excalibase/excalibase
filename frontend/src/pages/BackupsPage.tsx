@@ -14,14 +14,30 @@ import { formatBytes } from '../utils/formatBytes';
 
 type Tab = 'backups' | 'restore' | 'copy';
 
+const HIBERNATED_FAILURE = 'cannot backup a hibernated cluster';
+
+function isHibernatedFailure(backup: { error?: string }): boolean {
+  return (backup.error ?? '').includes(HIBERNATED_FAILURE);
+}
+
 export function BackupsPage() {
   const projectId = useRouteProjectId();
   const [tab, setTab] = useState<Tab>('backups');
 
   const { data: backupData, isLoading } = useListBackups(projectId);
   // MySQL restores within its backup window only (ADR 0041).
-  const mysql = isMySQLProject(useInstance(projectId).data);
-  const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
+  const instance = useInstance(projectId).data;
+  const mysql = isMySQLProject(instance);
+  const paused = instance?.status === 'PAUSED';
+  const allBackups = Array.isArray(backupData?.backups) ? backupData.backups : [];
+  // A paused database cannot be backed up, so the failures CNPG recorded for
+  // that reason are noise; any other failure is a real problem and stays.
+  const backups = paused ? allBackups.filter((b) => !(b.status === 'FAILED' && isHibernatedFailure(b))) : allBackups;
+  const newestCompleted = paused
+    ? backups.filter((b) => b.status === 'COMPLETED').sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]
+    : undefined;
+  // Call it the final backup only when it is the one the pause took.
+  const isPauseBackup = !!newestCompleted && newestCompleted.id === instance?.pauseBackupId;
   const triggerBackup = useTriggerBackup();
   // Copying into a new project ships dark (EXC-667).
   const { enabled: copyOn } = useFeatureEnabled('dbcopy');
@@ -44,6 +60,17 @@ export function BackupsPage() {
       {toast && (
         <div className={`px-4 py-2 rounded-lg text-sm font-medium border ${toast.ok ? 'bg-green-900/20 text-green-400 border-green-500/30' : 'bg-red-900/20 text-red-400 border-red-500/30'}`}>
           {toast.msg}
+        </div>
+      )}
+
+      {paused && (
+        <div data-testid="paused-backups" className="px-4 py-3 rounded-lg text-sm border border-border-primary bg-surface-card text-text-secondary">
+          Paused: nightly backups stop while paused
+          {newestCompleted
+            ? isPauseBackup
+              ? `; the pause took a final backup ${newestCompleted.id}`
+              : `; the latest completed backup is ${newestCompleted.id}`
+            : ''}
         </div>
       )}
 

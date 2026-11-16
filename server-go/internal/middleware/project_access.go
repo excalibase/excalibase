@@ -134,8 +134,8 @@ func ProjectAccessFromContext(ctx context.Context) *ProjectAccess {
 // ResolveProjectAccess binds projectID to the caller. It returns nil when the
 // project must not be visible to the caller: unknown project, project without
 // an org, caller not a member, or the caller's token is bound to a different
-// project. Platform admins (PermManageUsers) skip the membership lookup but
-// never escape a token binding.
+// project. Platform service principals skip the membership lookup; a human platform
+// admin does not. Neither escapes a token binding.
 //
 // A project in DELETING or RESTORING is deliberately still resolved: its
 // owner has to be able to read the stalled operation and retry the DELETE.
@@ -154,7 +154,11 @@ func resolveProjectAccess(ctx context.Context, user *domain.User, token *domain.
 	if user == nil || !auth.TokenBoundToProject(token, projectID) {
 		return nil, nil
 	}
-	if auth.HasPermission(user.Role, auth.PermManageUsers) {
+	// Only a platform service principal (a capability token, which the
+	// capability gate bounds to named routes) skips the membership lookup. A
+	// human platform admin is a customer like any other here: their own
+	// credentials never span other customers' projects (EXC-757).
+	if auth.HasPermission(user.Role, auth.PermManageUsers) && auth.IsCapabilityToken(token) {
 		return &ProjectAccess{PlatformAdmin: true, projectID: projectID}, nil
 	}
 	inst, err := findProject(ctx, instStore, projectID)
