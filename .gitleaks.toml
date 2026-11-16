@@ -20,3 +20,5 @@ paths = [
   '''server-go/internal/k8s/testdata/app_workload/.*\.yaml''',
   '''server-go/internal/config/sites_git_test\.go''',
 ]
+# A made-up password in test fixtures that EXC-759 replaced; it stays in history.
+regexes = ['''k8Xq2Lm9Zp4Rt7Vw''']
