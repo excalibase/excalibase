@@ -117,3 +117,16 @@ func TestSetOrgTier_ALostAuditWriteIsLoggedNotSwallowed(t *testing.T) {
 		t.Fatalf("the failed audit write was not logged: %q", logged.String())
 	}
 }
+
+func TestSetOrgTier_RefusesAnUnreadableBodyAndSurfacesStoreFailures(t *testing.T) {
+	if w, _ := consoleTier(t, &fakeNodes{nodes: 5}, consoleAdmin, "org-plan", `not json`); w.Code != http.StatusBadRequest {
+		t.Errorf("a malformed body: got %d, want 400", w.Code)
+	}
+	if w, _ := consoleTier(t, &fakeNodes{nodes: 5}, consoleAdmin, "org-plan", `{"tier":"ENTERPRISE","reason":"`+strings.Repeat("x", 501)+`"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("a reason over the limit: got %d, want 400", w.Code)
+	}
+	// No node check wired: the plan change is refused, not guessed at.
+	if w, _ := consoleTier(t, nil, consoleAdmin, "org-plan", `{"tier":"STANDARD","reason":"agreed upgrade"}`); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("without a node check: got %d, want 503", w.Code)
+	}
+}

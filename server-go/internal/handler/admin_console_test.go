@@ -57,6 +57,10 @@ func (f *fakeSuspender) Unsuspend(_ context.Context, _ adminconsole.Actor, userI
 }
 
 func consoleRouter(role string, console *fakeConsole, suspender *fakeSuspender) http.Handler {
+	return consoleRouterFor(role, console, suspender)
+}
+
+func consoleRouterFor(role string, console ConsoleReads, suspender ConsoleActions) http.Handler {
 	h := NewAdminConsoleHandler(console, suspender)
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {

@@ -99,3 +99,15 @@ func TestTrustedOriginsIncludeTheAdminOrigin(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestIsInternalListenerReflectsTheMark(t *testing.T) {
+	plain := httptest.NewRequest(http.MethodGet, "/", nil)
+	if IsInternalListener(plain) {
+		t.Fatal("an unmarked request is not internal")
+	}
+	var seen bool
+	MarkInternalListener(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { seen = IsInternalListener(r) })).ServeHTTP(httptest.NewRecorder(), plain)
+	if !seen {
+		t.Fatal("a request from the in-cluster listener is internal")
+	}
+}

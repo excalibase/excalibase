@@ -198,3 +198,49 @@ func TestVerifyDoesNotHoldTheLockDuringAKeyFetch(t *testing.T) {
 		t.Fatal("verification of a cached key waited on another request's key fetch")
 	}
 }
+
+// A keys endpoint that answers badly is an error, never an accepted assertion.
+func TestVerifyRefusesWhenTheKeysEndpointAnswersBadly(t *testing.T) {
+	for name, handler := range map[string]http.HandlerFunc{
+		"a server error": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) },
+		"not json":       func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("<html>")) },
+		"no keys":        func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(`{"keys":[]}`)) },
+		"only unusable entries": func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"keys":[{"kty":"EC","kid":"a"},{"kty":"RSA","kid":"b","n":"!!","e":"!!"},{"kty":"RSA","n":"AQAB","e":"AQAB"}]}`))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewTLSServer(handler)
+			defer server.Close()
+			f := newFixture(t)
+			verifier := NewVerifier(Config{TeamDomain: server.Listener.Addr().String(), Audience: testAud, HTTPClient: server.Client()})
+			token := f.token(t, func(c jwt.MapClaims, _ map[string]any) { c["iss"] = "https://" + server.Listener.Addr().String() })
+			if err := verifier.Verify(token); err == nil {
+				t.Fatal("an assertion was accepted although no key could be read")
+			}
+		})
+	}
+}
+
+// A refresh that fails after keys were cached keeps serving the cached keys.
+func TestVerifyKeepsTheCachedKeysWhenARefreshFails(t *testing.T) {
+	f := newFixture(t)
+	if err := f.verifier.Verify(f.token(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	f.verifier.minRefetch = 0
+	f.verifier.mu.Lock()
+	f.verifier.fetchedAt = time.Now().Add(-2 * keyLifetime)
+	f.verifier.mu.Unlock()
+	f.server.Close()
+	if err := f.verifier.Verify(f.token(t, nil)); err != nil {
+		t.Fatalf("a stale key was refused when the refresh failed: %v", err)
+	}
+}
+
+func TestVerifyRefusesAnAssertionWithoutAKeyId(t *testing.T) {
+	f := newFixture(t)
+	if err := f.verifier.Verify(f.token(t, func(_ jwt.MapClaims, h map[string]any) { delete(h, "kid") })); err == nil {
+		t.Fatal("an assertion naming no key was accepted")
+	}
+}
