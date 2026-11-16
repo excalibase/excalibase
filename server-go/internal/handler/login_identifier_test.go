@@ -22,7 +22,7 @@ func identifierLoginRouter(t *testing.T, limit int) (chi.Router, *domain.User, s
 	t.Helper()
 	us := newMockUserStore()
 	password := testutil.FixturePassword("erin-login")
-	hash, _ := auth.HashPassword(password)
+	hash := testutil.FixtureVerifiableHash(password)
 	now := time.Now()
 	user := &domain.User{
 		ID: "u-erin", Username: "erin-3fa9c1", Email: "Erin@Example.test", PasswordHash: hash,

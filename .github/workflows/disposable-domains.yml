@@ -1,0 +1,41 @@
+name: Refresh disposable email domains
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: server-go/go.mod
+      - name: Fetch the list
+        id: fetch
+        run: echo "result=$(scripts/refresh-disposable-domains.sh)" >> "$GITHUB_OUTPUT"
+      - name: Test against the new list
+        if: steps.fetch.outputs.result == 'changed'
+        working-directory: server-go
+        run: go test ./internal/abuse/
+      - name: Open a pull request
+        if: steps.fetch.outputs.result == 'changed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="chore/disposable-domains-$(date +%Y%m%d)"
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add server-go/internal/abuse/data/disposable_email_blocklist.conf
+          git commit -m "chore: refresh the disposable email domain list"
+          git push origin "$branch"
+          gh pr create --title "Refresh the disposable email domain list" \
+            --body "Weekly refresh of the vendored list (source and licence: server-go/internal/abuse/data/SOURCE.md)." \
+            || echo "::warning::branch $branch pushed; open the pull request by hand (the org may block Actions from creating them)"

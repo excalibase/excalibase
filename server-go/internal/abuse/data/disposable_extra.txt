@@ -1,0 +1,6 @@
+# Local additions to the vendored list: one domain per line (subdomains match too).
+# A trailing * is a label prefix: guerrillamail* matches any domain with a label starting guerrillamail.
+guerrillamail*
+yuexinmail.edu.kg
+nimbusmono.com
+tinkmail.me
