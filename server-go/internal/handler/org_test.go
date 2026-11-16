@@ -4,7 +4,9 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	pgtest "github.com/excalibase/provisioning-poc/internal/testutil/pgstore"
@@ -936,4 +939,64 @@ func TestDeleteOrg_RefusedWhileProjectsExist(t *testing.T) {
 	if got := orgRequest(r, "DELETE", testOrgsSlash+org.ID, "", testAliceID); got.Code != http.StatusOK {
 		t.Fatalf("delete once empty: got %d, want 200", got.Code)
 	}
+}
+
+// failingDeleteStore reports what the store said when the delete reached it.
+type failingDeleteStore struct {
+	*pgstore.Store
+	err error
+}
+
+func (s failingDeleteStore) DeleteOrg(context.Context, string) error { return s.err }
+
+func orgDeleteRouter(t *testing.T, deleteErr error, instances storage.InstanceStore) (chi.Router, string) {
+	t.Helper()
+	r, store, _ := setupOrgRouterWithInstances(t, true)
+	created := orgRequest(r, "POST", testOrgsPath, `{"name":"Gone","slug":"gone-org"}`, testAliceID)
+	var org domain.Org
+	json.NewDecoder(created.Body).Decode(&org)
+
+	handler := NewOrgHandler(failingDeleteStore{Store: store, err: deleteErr}, store)
+	handler.SetNodePlacement(&fakeNodes{nodes: 5})
+	if instances != nil {
+		handler.SetInstanceStore(instances)
+	}
+	router := chi.NewRouter()
+	router.Route(testOrgsPath, func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				user, _ := store.FindUserByID(req.Context(), req.Header.Get("X-Test-User"))
+				next.ServeHTTP(w, req.WithContext(auth.SetUser(req.Context(), user)))
+			})
+		})
+		r.Delete("/{orgId}", handler.DeleteOrg)
+	})
+	return router, org.ID
+}
+
+func TestDeleteOrg_StoreRefusalAndFailure(t *testing.T) {
+	t.Run("a project created after the check still stops the delete", func(t *testing.T) {
+		router, id := orgDeleteRouter(t, storage.ErrOrgHasProjects, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}})
+		if got := orgRequest(router, "DELETE", testOrgsSlash+id, "", testAliceID); got.Code != http.StatusConflict {
+			t.Fatalf("got %d, want 409", got.Code)
+		}
+	})
+	t.Run("a store failure is a 500", func(t *testing.T) {
+		router, id := orgDeleteRouter(t, errors.New("db down"), &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}})
+		if got := orgRequest(router, "DELETE", testOrgsSlash+id, "", testAliceID); got.Code != http.StatusInternalServerError {
+			t.Fatalf("got %d, want 500", got.Code)
+		}
+	})
+	t.Run("projects that cannot be listed block the delete", func(t *testing.T) {
+		router, id := orgDeleteRouter(t, nil, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}, findAllErr: errors.New("db down")})
+		if got := orgRequest(router, "DELETE", testOrgsSlash+id, "", testAliceID); got.Code != http.StatusConflict {
+			t.Fatalf("got %d, want 409", got.Code)
+		}
+	})
+	t.Run("without an instance store the store decides", func(t *testing.T) {
+		router, id := orgDeleteRouter(t, nil, nil)
+		if got := orgRequest(router, "DELETE", testOrgsSlash+id, "", testAliceID); got.Code != http.StatusOK {
+			t.Fatalf("got %d, want 200", got.Code)
+		}
+	})
 }

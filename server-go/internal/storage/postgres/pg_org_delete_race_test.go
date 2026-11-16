@@ -105,3 +105,18 @@ func TestDeletingAPaidPersonalOrgDoesNotIssueAnother(t *testing.T) {
 		t.Fatalf("sign-in after deleting a paid org = %v, %v; want no new org", created, err)
 	}
 }
+
+// A database that cannot be reached fails the delete and the create loudly,
+// never as a silent success.
+func TestOrgDeleteAndProjectCreateFailWhenTheDatabaseIsGone(t *testing.T) {
+	store, _ := setupOrgTest(t)
+	if err := store.DB().Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := store.DeleteOrg(context.Background(), "org-any"); err == nil {
+		t.Fatal("DeleteOrg succeeded with no database")
+	}
+	if err := store.Create(instanceRow("proj-nodb00001", "org-any")); err == nil {
+		t.Fatal("Create succeeded with no database")
+	}
+}
