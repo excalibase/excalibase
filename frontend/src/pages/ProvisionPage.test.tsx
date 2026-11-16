@@ -6,10 +6,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { AxiosError } from 'axios';
 import { ProvisionPage } from './ProvisionPage';
 import { api } from '../api/client';
-import { listMemberOrgs } from '../api/orgs';
+import { listMyOrgs } from '../api/orgs';
 
 vi.mock('../api/client', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
-vi.mock('../api/orgs', () => ({ listMemberOrgs: vi.fn() }));
+vi.mock('../api/orgs', () => ({ listMyOrgs: vi.fn() }));
 
 const navigate = vi.fn();
 vi.mock('react-router-dom', async () => {
@@ -34,7 +34,7 @@ const CATALOG = {
 };
 
 function renderPage(catalog: typeof CATALOG = CATALOG) {
-  vi.mocked(listMemberOrgs).mockResolvedValue([
+  vi.mocked(listMyOrgs).mockResolvedValue([
     { id: 'org-1', name: 'Acme', slug: 'acme', tier: 'FREE', ownerId: 'u1' },
   ]);
   vi.mocked(api.get).mockImplementation((url: string) => {
@@ -318,8 +318,8 @@ describe('ProvisionPage — organizations', () => {
 
   test('says so when the organizations cannot be loaded', async () => {
     renderPage();
-    vi.mocked(listMemberOrgs).mockReset();
-    vi.mocked(listMemberOrgs).mockRejectedValue(new Error('network down'));
+    vi.mocked(listMyOrgs).mockReset();
+    vi.mocked(listMyOrgs).mockRejectedValue(new Error('network down'));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>

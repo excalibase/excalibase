@@ -5,10 +5,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ProvisionPage } from './ProvisionPage';
 import { api } from '../api/client';
-import { listMemberOrgs, type Org } from '../api/orgs';
+import { listMyOrgs, type Org } from '../api/orgs';
 
 vi.mock('../api/client', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
-vi.mock('../api/orgs', () => ({ listMemberOrgs: vi.fn() }));
+vi.mock('../api/orgs', () => ({ listMyOrgs: vi.fn() }));
 
 const navigate = vi.fn();
 vi.mock('react-router-dom', async () => {
@@ -20,7 +20,7 @@ const CATALOG = { documentDbRef: 'v0.117-0', majors: [{ major: '16', available: 
 const ACME: Org = { id: 'org-1', name: 'Acme', slug: 'acme', tier: 'FREE', ownerId: 'u1' };
 
 function renderPage(orgs: Org[]) {
-  vi.mocked(listMemberOrgs).mockResolvedValue(orgs);
+  vi.mocked(listMyOrgs).mockResolvedValue(orgs);
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/postgres/catalog') return Promise.resolve({ data: CATALOG } as never);
     if (url === '/tiers') return Promise.resolve({ data: [] } as never);

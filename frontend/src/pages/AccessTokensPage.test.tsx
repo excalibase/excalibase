@@ -277,14 +277,13 @@ describe('scopeLabel', () => {
     expect(scopeLabel(scopes)).toBe(label);
   });
 
-  // EXC-761: staff see every project in the list but may only mint a token for
-  // one in an org they belong to.
+  // EXC-761: a token is minted only for a project in an org the caller belongs to.
   test('the project dropdown offers only projects in the caller\'s own orgs', async () => {
     mockGets();
     renderPage();
     const select = await screen.findByLabelText('Project');
     await waitFor(() => expect(within(select).getByText('storefront')).toBeInTheDocument());
     expect(within(select).queryByText('a customer project')).not.toBeInTheDocument();
-    expect(api.get).toHaveBeenCalledWith('/orgs', { params: { scope: 'member' } });
+    expect(api.get).toHaveBeenCalledWith('/orgs');
   });
 });
