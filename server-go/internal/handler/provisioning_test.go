@@ -290,8 +290,9 @@ func TestGetCredentialsForCDS(t *testing.T) {
 	}
 	json.NewDecoder(w.Body).Decode(&creds)
 
-	if creds.Host != "10.0.0.5" {
-		t.Errorf("host: got %s", creds.Host)
+	// The cluster's own address is no longer handed out (EXC-759).
+	if creds.Host != "" {
+		t.Errorf("host: got %s, want none", creds.Host)
 	}
 	if creds.Port != 5432 {
 		t.Errorf("port: got %d", creds.Port)

@@ -46,6 +46,10 @@ type ProvisioningRequest struct {
 	// one by one and never the namespace holding the project's apps. Set by
 	// the add-database path only; never read from a caller.
 	IntoExistingNamespace bool `json:"-"`
+	// OwnerPassword is the password the database owner is created with:
+	// the one the caller chose, or one the handler generated so that the
+	// create answer can show it once (EXC-759). Never serialised.
+	OwnerPassword string `json:"-"`
 }
 
 type BackupSettings struct {
@@ -88,12 +92,13 @@ type MaintenanceWindowConfig struct {
 }
 
 type ProvisioningResponse struct {
-	ProjectID     string            `json:"projectId"`
-	ProjectName   string            `json:"projectName,omitempty"`
-	Status        string            `json:"status"`
-	CurrentStage  ProvisioningStage `json:"currentStage"`
-	Namespace     string            `json:"namespace"`
-	Host          string            `json:"host,omitempty"`
+	ProjectID    string            `json:"projectId"`
+	ProjectName  string            `json:"projectName,omitempty"`
+	Status       string            `json:"status"`
+	CurrentStage ProvisioningStage `json:"currentStage"`
+	// Namespace and Host are cluster-internal and never in an answer.
+	Namespace     string            `json:"-"`
+	Host          string            `json:"-"`
 	Port          *int              `json:"port,omitempty"`
 	DatabaseName  string            `json:"databaseName,omitempty"`
 	FailureReason string            `json:"failureReason,omitempty"`
@@ -107,13 +112,15 @@ type ProvisioningResponse struct {
 // --- Credentials ---
 
 type CredentialsResponse struct {
-	ProjectID     string `json:"projectId"`
-	Host          string `json:"host"`
-	ReadOnlyHost  string `json:"readOnlyHost,omitempty"`
-	Port          int    `json:"port"`
-	DatabaseName  string `json:"databaseName"`
-	Username      string `json:"username"`
-	Password      string `json:"password"`
+	ProjectID    string `json:"projectId"`
+	Host         string `json:"host,omitempty"`
+	ReadOnlyHost string `json:"readOnlyHost,omitempty"`
+	Port         int    `json:"port"`
+	DatabaseName string `json:"databaseName"`
+	Username     string `json:"username"`
+	// Password is set only in the answer to a create or a reset, once; the
+	// credentials route never carries it (EXC-759).
+	Password      string `json:"password,omitempty"`
 	SSLMode       string `json:"sslMode"`
 	ConnectionURL string `json:"connectionUrl"`
 	// Engine is "mysql" for a MySQL project, absent for Postgres; JDBCURL is

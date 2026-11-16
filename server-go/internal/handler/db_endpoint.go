@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -90,7 +91,9 @@ type dbEndpointResponse struct {
 	Username          string                      `json:"username"`
 	ConnectionStrings dbEndpointConnectionStrings `json:"connectionStrings"`
 	CACertificate     string                      `json:"caCertificate"`
-	Internal          dbEndpointInternal          `json:"internal"`
+	// Internal is the cluster address, for platform admins only: an app hosted
+	// on the platform gets DATABASE_URL injected and needs no address (EXC-759).
+	Internal *dbEndpointInternal `json:"internal,omitempty"`
 	// mongoPort is the public port a MongoDB client dials and
 	// mongoAvailable whether the gateway behind it is serving right now —
 	// which it is not while the container is still starting, even though
@@ -127,7 +130,7 @@ func (h *ProvisioningHandler) GetDBEndpoint(w http.ResponseWriter, r *http.Reque
 		writeDBEndpointError(w, err)
 		return
 	}
-	writeJSON(w, dbEndpointResponseFor(view, callerMayChangeDBEndpoint(r)))
+	writeJSON(w, dbEndpointResponseFor(view, callerMayChangeDBEndpoint(r), callerSeesClusterAddress(r)))
 }
 
 // PutDBEndpoint serves PUT /api/projects/{projectId}/db-endpoint with body
@@ -152,7 +155,7 @@ func (h *ProvisioningHandler) PutDBEndpoint(w http.ResponseWriter, r *http.Reque
 		writeDBEndpointError(w, err)
 		return
 	}
-	writeJSON(w, dbEndpointResponseFor(view, callerMayChangeDBEndpoint(r)))
+	writeJSON(w, dbEndpointResponseFor(view, callerMayChangeDBEndpoint(r), callerSeesClusterAddress(r)))
 }
 
 // applyDBEndpoint writes whichever settings the body named, and reads the
@@ -230,8 +233,8 @@ func callerMayChangeDBEndpoint(r *http.Request) bool {
 	return access != nil && access.RoleAtLeast(domain.OrgRoleAdmin)
 }
 
-func dbEndpointResponseFor(view service.DBEndpointView, canChange bool) dbEndpointResponse {
-	return dbEndpointResponse{
+func dbEndpointResponseFor(view service.DBEndpointView, canChange, clusterAddress bool) dbEndpointResponse {
+	out := dbEndpointResponse{
 		// A single host's ports are the host's to publish, not a caller's.
 		CanChange:     canChange && !view.SingleHost,
 		ProjectID:     view.ProjectID,
@@ -248,20 +251,30 @@ func dbEndpointResponseFor(view service.DBEndpointView, canChange bool) dbEndpoi
 			AllowPlaintext:  view.Connection.AllowPlaintext,
 			MongoRequireTLS: view.Connection.MongoRequireTLS,
 		},
-		CACertificate: view.CACertificate,
-		Internal: dbEndpointInternal{
+		CACertificate:  view.CACertificate,
+		MongoPort:      view.MongoPort,
+		MongoAvailable: mongoAvailable(view),
+		SingleHost:     view.SingleHost,
+		Engine:         view.Engine,
+	}
+	if clusterAddress {
+		out.Internal = &dbEndpointInternal{
 			Host:                  view.Internal.Host,
 			Port:                  view.Internal.Port,
 			ConnectionString:      view.Internal.ConnectionString,
 			MongoHost:             view.Internal.MongoHost,
 			MongoPort:             view.Internal.MongoPort,
 			MongoConnectionString: view.Internal.MongoConnectionString,
-		},
-		MongoPort:      view.MongoPort,
-		MongoAvailable: mongoAvailable(view),
-		SingleHost:     view.SingleHost,
-		Engine:         view.Engine,
+		}
 	}
+	return out
+}
+
+// callerSeesClusterAddress is true for platform admins, whose console shows
+// where a project lives inside the cluster. A customer never sees it.
+func callerSeesClusterAddress(r *http.Request) bool {
+	user := auth.GetUser(r.Context())
+	return user != nil && auth.HasPermission(user.Role, auth.PermManageUsers)
 }
 
 // mongoAvailable is a pointer so "false" and "there is no Mongo endpoint" are

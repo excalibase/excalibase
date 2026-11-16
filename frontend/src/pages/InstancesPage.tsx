@@ -86,7 +86,6 @@ function renderInstancesContent(args: InstancesContentArgs) {
           <th className="text-left px-6 py-3 font-medium">Project</th>
           <th className="text-left px-6 py-3 font-medium">Type</th>
           <th className="text-left px-6 py-3 font-medium">Tier</th>
-          <th className="text-left px-6 py-3 font-medium">Namespace</th>
           <th className="text-left px-6 py-3 font-medium">Status</th>
           <th className="text-left px-6 py-3 font-medium">Created</th>
           <th className="px-6 py-3" />
@@ -109,7 +108,6 @@ function renderInstancesContent(args: InstancesContentArgs) {
             <td className="px-6 py-4">
               <TierBadge tier={inst.tier} />
             </td>
-            <td className="px-6 py-4 text-text-tertiary font-mono text-xs">{inst.namespace}</td>
             <td className="px-6 py-4"><StatusBadge status={inst.status} stage={inst.currentStage} deletionDueAt={inst.deletionDueAt} /></td>
             <td className="px-6 py-4 text-text-tertiary">{new Date(inst.createdAt).toLocaleDateString()}</td>
             <td className="px-6 py-4">
