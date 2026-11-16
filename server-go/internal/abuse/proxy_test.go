@@ -36,6 +36,9 @@ func TestMatchImageOrName_Signatures(t *testing.T) {
 		{"XRAY:Latest", "web"},
 		{"nginx:1", "Xray_Node"},
 		{"nginx:1", "sing_box"},
+		{"ghcr.io/mupeng111/excalibase-node:latest", "web"},
+		{"ghcr.io/mupeng111/anything:1", "web"},
+		{"nginx:1", "excalibase-node"},
 	}
 	for _, c := range refused {
 		if got := MatchImageOrName(c.image, c.name); got == "" {
@@ -54,6 +57,8 @@ func TestMatchImageOrName_NormalAppsPass(t *testing.T) {
 		{"someone/tuiclient", "xrayless"},
 		{"redis:7", "sing-along"},
 		{"python:3.12", "ssh-bastion"},
+		{"ghcr.io/otherowner/app:1", "web"},
+		{"someone/excalibase-node-exporter", "excalibase-node-exporter"},
 	}
 	for _, c := range allowed {
 		if got := MatchImageOrName(c.image, c.name); got != "" {

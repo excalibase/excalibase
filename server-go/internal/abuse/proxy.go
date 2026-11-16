@@ -21,7 +21,7 @@ var proxySignatures = [][]string{
 	{"hysteria"}, {"hysteria2"},
 	{"shadowsocks"},
 	{"edge", "ws", "cover"}, {"edgerelay2610"}, {"ws", "runtime"},
-	{"eooce"}, {"pxnode"}, {"nezha"}, {"nezhahq"}, {"gost"},
+	{"eooce"}, {"pxnode"}, {"nezha"}, {"ghcr", "io", "mupeng111"}, {"nezhahq"}, {"gost"},
 	{"naiveproxy"}, {"naive", "proxy"},
 	{"tuic"}, {"txthinking", "brook"},
 }
@@ -37,7 +37,7 @@ var ambiguousSignatures = []struct {
 
 // exactNames are matched against the whole app name or the whole last path
 // segment of the image repository, so brook-scheduler and ss-server-metrics pass.
-var exactNames = []string{"brook", "ss-server", "ss_server", "ssserver"}
+var exactNames = []string{"brook", "excalibase-node", "ss-server", "ss_server", "ssserver"}
 
 // proxyEnvNames are environment variable names a proxy node is configured by.
 // Argo Workflows and Argo CD read ARGO_* too, so only the tunnel's own are named.
