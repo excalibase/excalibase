@@ -2,9 +2,12 @@ package provisioner
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
@@ -116,5 +119,53 @@ func TestPostgreSQLConfigureBackup_LiveOnARunningClusterEvenIfSuspendedBefore(t 
 	}
 	if pauseScheduleSuspended(mock) {
 		t.Fatal("a running cluster's new schedule stayed suspended")
+	}
+}
+
+// failsAfterClient lets the first schedule write through and refuses the next.
+type failsAfterClient struct {
+	*k8s.MockClient
+	updates int
+}
+
+func (c *failsAfterClient) UpdateCRD(ctx context.Context, gvr schema.GroupVersionResource, ns string, obj *unstructured.Unstructured) error {
+	c.updates++
+	if c.updates > 1 {
+		return errors.New("forbidden")
+	}
+	return c.MockClient.UpdateCRD(ctx, gvr, ns, obj)
+}
+
+func TestPostgreSQLPause_ReportsWhenTheSuspendCannotBeUndone(t *testing.T) {
+	mock := k8s.NewMockClient()
+	seedPauseSchedule(t, mock)
+	prov := NewPostgreSQLProvisioner(&failsAfterClient{MockClient: mock}, "")
+
+	err := prov.Pause(context.Background(), pauseTestNS, pauseTestProject)
+	if err == nil || !strings.Contains(err.Error(), "restore nightly backup") {
+		t.Fatalf("err = %v, want the failed undo reported", err)
+	}
+}
+
+func TestPostgreSQLPause_FailsWhenTheScheduleCannotBeSuspended(t *testing.T) {
+	mock, prov := setupHibernationTest(t)
+	seedPauseSchedule(t, mock)
+	mock.UpdateCRDError = errors.New("forbidden")
+	if err := prov.Pause(context.Background(), pauseTestNS, pauseTestProject); err == nil {
+		t.Fatal("Pause went on after the suspend failed")
+	}
+}
+
+func TestPostgreSQLConfigureBackup_NeedsTheCluster(t *testing.T) {
+	_, prov := setupHibernationTest(t)
+	if err := prov.ConfigureBackup(context.Background(), pauseTestNS, "ghost", "0 3 * * *", 7); err == nil {
+		t.Fatal("a schedule was written without knowing whether the cluster is hibernated")
+	}
+}
+
+func TestPostgreSQLConfigureBackup_RejectsABadSchedule(t *testing.T) {
+	_, prov := setupHibernationTest(t)
+	if err := prov.ConfigureBackup(context.Background(), pauseTestNS, pauseTestProject, "not a cron", 7); err == nil {
+		t.Fatal("a malformed schedule was applied")
 	}
 }

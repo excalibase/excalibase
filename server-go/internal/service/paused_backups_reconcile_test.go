@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -159,4 +161,77 @@ func TestReconcilePausedBackups_RereadsTheProjectBeforeSuspending(t *testing.T) 
 	if h.scheduleSuspended() {
 		t.Fatal("a stale PAUSED row suspended the backups of a running project")
 	}
+}
+
+// listFailsClient fails the reads the reconcile makes of the cluster.
+type listFailsClient struct {
+	*k8s.MockClient
+	failList bool
+	failGet  bool
+}
+
+func (c *listFailsClient) ListCRDs(ctx context.Context, gvr schema.GroupVersionResource, ns string) ([]*unstructured.Unstructured, error) {
+	if c.failList {
+		return nil, errors.New("api unavailable")
+	}
+	return c.MockClient.ListCRDs(ctx, gvr, ns)
+}
+
+func (c *listFailsClient) GetCRD(ctx context.Context, gvr schema.GroupVersionResource, ns, name string) (*unstructured.Unstructured, error) {
+	if c.failGet {
+		return nil, errors.New("api unavailable")
+	}
+	return c.MockClient.GetCRD(ctx, gvr, ns, name)
+}
+
+func TestReconcilePausedBackups_ReportsAnUnreadableSchedule(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedSchedule(t, string(domain.StatusPaused))
+	h.svc.k8sClient = &listFailsClient{MockClient: h.kube, failList: true}
+
+	report := h.svc.ReconcilePausedBackups(context.Background())
+	if len(report.Failed) != 1 {
+		t.Fatalf("failed = %v, want the one project", report.Failed)
+	}
+	h.svc.logPausedBackups(report)
+}
+
+func TestReconcilePausedBackups_AnUnreadableClusterIsAFailureNotAGuess(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedSchedule(t, "ACTIVE")
+	if err := k8s.SetScheduledBackupSuspended(context.Background(), h.kube, rotNamespace, rotProject, true); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.k8sClient = &listFailsClient{MockClient: h.kube, failGet: true}
+
+	report := h.svc.ReconcilePausedBackups(context.Background())
+	if len(report.Failed) != 1 {
+		t.Fatalf("failed = %v, want the one project", report.Failed)
+	}
+	if !h.scheduleSuspended() {
+		t.Fatal("backups were turned on without knowing the cluster's state")
+	}
+}
+
+func TestReconcilePausedBackups_ReportsAFailedScheduleUpdate(t *testing.T) {
+	h := newRotationHarness(t)
+	h.seedSchedule(t, string(domain.StatusPaused))
+	h.kube.UpdateCRDError = errors.New("forbidden")
+
+	if report := h.svc.ReconcilePausedBackups(context.Background()); len(report.Failed) != 1 {
+		t.Fatalf("failed = %v, want the one project", report.Failed)
+	}
+}
+
+func TestReconcilePausedBackups_SkipsAProjectDeletedDuringThePass(t *testing.T) {
+	h := newRotationHarness(t)
+	gone := &domain.DatabaseInstance{ProjectID: "gone", Namespace: "ns-gone", DBType: domain.PostgreSQL}
+	if err := h.svc.reconcileBackupsOf(context.Background(), gone, &PausedBackupsReport{}); err != nil {
+		t.Fatalf("a vanished project is not an error: %v", err)
+	}
+}
+
+func TestLogPausedBackups_ReportsWhatItDid(t *testing.T) {
+	h := newRotationHarness(t)
+	h.svc.logPausedBackups(PausedBackupsReport{Suspended: 1, Resumed: 2, Cleared: 3, Failed: []error{errors.New("x")}})
 }

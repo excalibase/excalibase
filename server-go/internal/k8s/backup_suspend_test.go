@@ -126,3 +126,30 @@ func TestClusterHibernated(t *testing.T) {
 		t.Fatal("a missing cluster must be an error, not 'not hibernated'")
 	}
 }
+
+func TestScheduledBackupSuspended_ReportsSuspendAndAbsence(t *testing.T) {
+	mock := NewMockClient()
+	if on, err := ScheduledBackupSuspended(context.Background(), mock, suspendNS, suspendProject); err != nil || on {
+		t.Fatalf("no schedule: %v %v", on, err)
+	}
+	seedScheduledBackup(t, mock)
+	if err := SetScheduledBackupSuspended(context.Background(), mock, suspendNS, suspendProject, true); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := ScheduledBackupSuspended(context.Background(), mock, suspendNS, suspendProject); err != nil || !on {
+		t.Fatalf("suspended: %v %v", on, err)
+	}
+}
+
+func TestSetScheduledBackupSuspended_RetriesAConflictThenFails(t *testing.T) {
+	mock := NewMockClient()
+	seedScheduledBackup(t, mock)
+	mock.UpdateCRDConflicts = 2
+	if err := SetScheduledBackupSuspended(context.Background(), mock, suspendNS, suspendProject, true); err != nil {
+		t.Fatalf("a lost race must be retried: %v", err)
+	}
+	mock.UpdateCRDConflicts = 100
+	if err := SetScheduledBackupSuspended(context.Background(), mock, suspendNS, suspendProject, false); err == nil {
+		t.Fatal("a conflict that never clears must fail")
+	}
+}
