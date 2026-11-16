@@ -1694,7 +1694,7 @@ func newSchemaHandler(cfg config.AppConfig, vc vaultclient.VaultClient, instance
 
 func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore storage.PlatformStore,
 	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget, restarts handler.AppRestartReader,
-	internal *appregistry.Internal) *handler.AppHandler {
+	internal *appregistry.Internal, vault vaultclient.VaultClient) *handler.AppHandler {
 	plans := service.NewOrgPlanTiers(store, sqlStore)
 	h := handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
 		handler.NewProjectSourceLookup(store, plans), appPublicRoute(cfg))
@@ -1704,6 +1704,7 @@ func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore s
 	h.SetFeatures(cfg.Features())
 	h.SetRestarts(restarts)
 	h.SetInternalRegistry(internal)
+	h.SetSecretVault(vault)
 	h.SetProxyGuard(newProxyGuard(cfg, sqlStore))
 	return h
 }
@@ -1969,7 +1970,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:       realtimeHandler,
 		permissionHandler:     newPermissionHandler(cfg, sqlStore, store, a.projectDB),
 		advisorsHandler:       handler.NewAdvisorsHandler(advisors.NewService(a.projectDB, sqlStore.Permissions(), advisors.Options{})),
-		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
+		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry, vc),
 		registryToken:         newRegistryTokenHandler(internalRegistry, store),
 		internalRegistry:      internalRegistry,
 		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc), store, appRuntime),
@@ -2122,7 +2123,10 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 		w.Write([]byte("ok"))
 	})
 	r.Get("/api/config", serveConfig(cfg, d.features))
-	r.Get("/api/capacity", auth.RequireAuth(http.HandlerFunc(d.capDeps.serveCapacity)).ServeHTTP)
+	// Cluster CPU and memory, platform-wide tier counts and raw runtime errors
+	// are the operator's, not any signed-in customer's.
+	r.Get("/api/capacity", auth.RequireAuth(auth.RequirePermission(auth.PermViewAny)(
+		http.HandlerFunc(d.capDeps.serveCapacity))).ServeHTTP)
 
 	mountProvisioningRoutes(r, sqlStore, store, d)
 	mountSimpleAuthRoutes(r, sqlStore, store, d)
@@ -2623,15 +2627,15 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	// Browser-origin allowlist (EXC-23): it decides which web apps may call
 	// the project's data plane, so reads and writes carry the same Developer+
 	// gate as the other data-plane authoring surfaces.
-	// SDK api keys (EXC-10): any member sees prefixes; generating and
-	// revoking are Developer+. The browser never holds the credential auth
+	// SDK api keys (EXC-10): any member sees prefixes; a publishable key is
+	// Developer+, a secret (service-role) key is Admin. The browser never holds the credential auth
 	// is called with.
 	r.Route("/api/projects/{projectId}/sdk-keys", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
-		d.sdkKeysHandler.Routes(r)
+		d.sdkKeysHandler.Routes(r) // a secret (service-role) key is Admin-only, checked in Create
 	})
 	mountMetricsEndpoint(r, sqlStore, store, d)
 	mountProjectContainers(r, sqlStore, store, d)
@@ -2793,7 +2797,10 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			d.storageHandler.Routes(r)
 			r.With(features.Require(d.features, features.AppStorage)).Put("/buckets/{bucket}/access", d.storageHandler.UpdateBucketAccess)
 			if d.s3KeysHandler != nil {
-				r.With(features.Require(d.features, features.S3)).Group(d.s3KeysHandler.Routes)
+				// An S3 key is a credential: minting or revoking one is Admin
+				// work, as it is for every other project credential.
+				r.With(features.Require(d.features, features.S3),
+					handler.RequireCredentialPermission(handler.PermCreateAccessKey)).Group(d.s3KeysHandler.Routes)
 			}
 		})
 		mountAppStorage(r, sqlStore, store, d)

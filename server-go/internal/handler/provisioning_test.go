@@ -30,6 +30,14 @@ func setupTestRouter(t *testing.T) (chi.Router, *storage.FileSystemStore) {
 
 func setupTestRouterWithVault(t *testing.T, vault *fakeVault) (chi.Router, *storage.FileSystemStore) {
 	t.Helper()
+	// A platform admin, as the admin console is.
+	return setupTestRouterAs(t, vault, &domain.User{ID: testUser1, Role: "platform_admin", Active: true})
+}
+
+// setupTestRouterAs mounts the provision routes with user on every request; a
+// nil user mounts them with no caller at all.
+func setupTestRouterAs(t *testing.T, vault *fakeVault, user *domain.User) (chi.Router, *storage.FileSystemStore) {
+	t.Helper()
 	dir := t.TempDir()
 	store, err := storage.NewFileSystemStore(dir)
 	if err != nil {
@@ -53,12 +61,13 @@ func setupTestRouterWithVault(t *testing.T, vault *fakeVault) (chi.Router, *stor
 	r := chi.NewRouter()
 	// The caller is a platform admin who belongs to org1 only: the list is
 	// still theirs alone (EXC-757).
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			ctx := auth.SetUser(req.Context(), &domain.User{ID: testUser1, Role: "platform_admin", Active: true})
-			next.ServeHTTP(w, req.WithContext(ctx))
+	if user != nil {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				next.ServeHTTP(w, req.WithContext(auth.SetUser(req.Context(), user)))
+			})
 		})
-	})
+	}
 	r.Route("/api/provision", func(r chi.Router) {
 		r.Get("/", h.ListInstances)
 		r.Post("/", h.Provision)
@@ -328,5 +337,20 @@ func TestEstimateCost(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&est)
 	if est.MonthlyCostUSD != 49.99 {
 		t.Errorf("cost: got %f, want 49.99", est.MonthlyCostUSD)
+	}
+}
+
+// EXC-761: with no caller on the request the list answers 401, never every
+// tenant's projects.
+func TestListInstancesWithoutACallerIsRefused(t *testing.T) {
+	r, store := setupTestRouterAs(t, newFakeVault(), nil)
+	store.Create(&domain.DatabaseInstance{ProjectID: "proj-secret01", OrgID: "org-other", Status: "ACTIVE"})
+
+	w := doRequest(r, "GET", "/api/provision/", "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "proj-secret01") {
+		t.Fatalf("an anonymous list leaked a project: %s", w.Body.String())
 	}
 }

@@ -6,7 +6,7 @@ const FIRST_RENDER = 20_000;
 const PROJECT_ID = 'shop-mysql';
 const HOST = 'moco-shop-mysql-mysql-primary.org-1-shop-mysql.svc.cluster.local';
 
-async function json(page: Page, pattern: string, body: unknown) {
+async function json(page: Page, pattern: string | RegExp, body: unknown) {
   await page.route(pattern, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }),
   );
@@ -16,7 +16,7 @@ async function mockPlatform(page: Page, mysql: boolean) {
   await json(page, '**/api/config', { deploymentMode: 'cloud', features: { mysql } });
   await json(page, '**/api/postgres/catalog', { majors: [{ major: '17', available: true, documentDb: true }] });
   await json(page, '**/api/mysql/catalog', { defaultVersion: '8.4.10', versions: [{ version: '8.4.10' }, { version: '8.4.9' }] });
-  await json(page, '**/api/orgs', [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
+  await json(page, /\/api\/orgs(\?.*)?$/, [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
 }
 
 test.describe('MySQL projects', () => {

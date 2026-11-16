@@ -132,12 +132,12 @@ curl -s -X POST http://localhost:24005/api/vault/unseal \
 # use: SETUP_TOKEN, which Kubernetes requires (provisioning refuses to start
 # without it until an admin exists); only the docker provisioner started
 # without SETUP_TOKEN prints a generated one to its log ("First-admin setup token: ...")
-curl -s -X POST http://localhost:24005/api/auth/register \
+curl -s -X POST http://localhost:24005/api/auth/register -H "X-Return-Session-Token: true" \
   -H "Content-Type: application/json" \
   -d '{"username": "admin", "password": "<password>", "email": "admin@example.com", "setupToken": "<token from the server log>"}'
 
 # Login (returns bearer token)
-curl -s -X POST http://localhost:24005/api/auth/login \
+curl -s -X POST http://localhost:24005/api/auth/login -H "X-Return-Session-Token: true" \
   -H "Content-Type: application/json" \
   -d '{"username": "admin", "password": "<password>"}'
 # → {"token": "excali_..."}

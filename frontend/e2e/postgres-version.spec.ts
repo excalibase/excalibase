@@ -27,7 +27,7 @@ const CREDENTIALS = {
 
 const PROVISION_HOST = 'test-project-postgres-rw.org-1.svc.cluster.local';
 
-async function json(page: Page, pattern: string, body: unknown) {
+async function json(page: Page, pattern: string | RegExp, body: unknown) {
   await page.route(pattern, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }),
   );
@@ -57,7 +57,7 @@ test.describe('Postgres version picker', () => {
     await loginAs(page);
     await json(page, '**/api/postgres/catalog', CATALOG);
     // Every org carries its plan: the form shows it as the project's tier.
-    await json(page, '**/api/orgs', [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
+    await json(page, /\/api\/orgs(\?.*)?$/, [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
     await page.goto('/provision');
     await expect(page.getByTestId('pg-version-selector')).toBeVisible({ timeout: FIRST_RENDER });
   });
