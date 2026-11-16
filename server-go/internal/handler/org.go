@@ -281,6 +281,26 @@ func (h *OrgHandler) planFitsThePlatform(w http.ResponseWriter, r *http.Request,
 	return false
 }
 
+const errOrgHasProjects = "delete this organization's projects first"
+
+// orgHasProjects reports whether any project, in any state, still belongs to
+// the org. The store refuses the delete too; this gives the clear answer first.
+func (h *OrgHandler) orgHasProjects(orgID string) bool {
+	if h.instanceStore == nil {
+		return false
+	}
+	instances, err := h.instanceStore.FindAll()
+	if err != nil {
+		return true
+	}
+	for _, inst := range instances {
+		if inst.OrgID == orgID {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *OrgHandler) DeleteOrg(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	orgID := chi.URLParam(r, "orgId")
@@ -290,7 +310,16 @@ func (h *OrgHandler) DeleteOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.orgStore.DeleteOrg(r.Context(), orgID); err != nil {
+	if h.orgHasProjects(orgID) {
+		httpError(w, errOrgHasProjects, http.StatusConflict)
+		return
+	}
+	err := h.orgStore.DeleteOrg(r.Context(), orgID)
+	if errors.Is(err, storage.ErrOrgHasProjects) {
+		httpError(w, errOrgHasProjects, http.StatusConflict)
+		return
+	}
+	if err != nil {
 		httpError(w, "failed to delete org", http.StatusInternalServerError)
 		return
 	}

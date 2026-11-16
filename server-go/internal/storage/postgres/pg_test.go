@@ -62,6 +62,10 @@ func testStore(t *testing.T) *Store {
 		t.Fatalf("New postgres store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	// Most tests seed projects for orgs they never create.
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		t.Fatal(err)
+	}
 	return store
 }
 

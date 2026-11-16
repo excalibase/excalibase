@@ -45,6 +45,9 @@ func startPlatformPostgres(ctx context.Context, t *testing.T) *pgstore.Store {
 	if err != nil {
 		t.Fatalf("init store: %v", err)
 	}
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { store.Close() })
 	return store
 }
