@@ -69,7 +69,10 @@ func provisionRouterWithOrgs(t *testing.T, store storage.InstanceStore, mock *k8
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			// A platform service principal: it is the platform role on a capability
+			// token that skips the org-membership check (a human admin does not).
 			ctx := auth.SetUser(req.Context(), &domain.User{ID: "test-admin", Role: "platform_admin", Active: true})
+			ctx = auth.SetToken(ctx, &domain.AccessToken{Permissions: []string{"projects:create"}})
 			next.ServeHTTP(w, req.WithContext(ctx))
 		})
 	})
@@ -321,5 +324,31 @@ func TestRestoreThatLosesTheLastSlotAtSubmissionIsTheProjectLimit(t *testing.T) 
 	}
 	if len(jobs.jobs) != 0 {
 		t.Errorf("a refused restore filed jobs: %v", jobs.jobs)
+	}
+}
+
+// EXC-757: a human platform admin is a customer when creating a project. Only
+// an org they belong to (as owner or admin) takes it.
+func TestProvision_HumanPlatformAdminCannotCreateInAnotherCustomersOrg(t *testing.T) {
+	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}
+	orgs := fakestore.NewOrgs()
+	orgs.AddOrg("org-foreign", domain.Free)
+	orgs.AddMember("org-foreign", "someone-else", domain.OrgRoleOwner)
+	svc := service.NewProvisioningService(store, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(k8s.NewMockClient(), "")), k8s.NewMockClient())
+	svc.SetOrgStore(orgs)
+	h := NewProvisioningHandler(svc, orgs)
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			next.ServeHTTP(w, req.WithContext(auth.SetUser(req.Context(), &domain.User{ID: "boss", Role: "platform_admin", Active: true})))
+		})
+	})
+	r.Post(testProvisionPath, h.Provision)
+	w := doRequest(r, "POST", testProvisionPath, `{"projectName":"p-foreign","orgId":"org-foreign","databaseType":"POSTGRESQL","postgresVersion":"17"}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("got %d, want 403; body %s", w.Code, w.Body.String())
+	}
+	if got, _ := store.FindByProjectID("p-foreign"); got != nil {
+		t.Fatal("a project was created in another customer's org")
 	}
 }

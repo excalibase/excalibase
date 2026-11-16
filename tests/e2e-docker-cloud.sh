@@ -243,7 +243,7 @@ done
 
 # --- Step 11: Deprovision ---
 echo "11. Deprovision"
-R=$(curl -s -X DELETE "$API/api/admin/projects/$PROJECT_ID" -H "Authorization: Bearer $TOKEN")
+R=$(curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' "$API/api/admin/projects/$PROJECT_ID" -H "Authorization: Bearer $TOKEN")
 echo "$R" | grep -qi "deprovisioned" \
   && pass "deprovision started" \
   || fail "deprovision" "$R"
