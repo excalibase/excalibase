@@ -136,8 +136,10 @@ The 15% safety headroom is set via `CAPACITY_HEADROOM_PERCENT` env. Set to 0 if 
 The studio's **Platform Admin** page (`/admin`) has the buttons. CLI equivalent:
 
 ```bash
-# Bypasses deletion_protection. Audited.
-curl -X DELETE -H "Authorization: Bearer $PAT" \
+# Bypasses deletion_protection. Audited; a written reason (500 characters
+# at most) is required and goes into the audit entry.
+curl -X DELETE -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  -d '{"reason":"abandoned, holding a node"}' \
   https://<host>/api/admin/projects/proj-abc123
 ```
 
@@ -311,7 +313,10 @@ indefinitely and the only way to find them is
 ```bash
 # ?cascade=true is required — without it the call refuses to avoid
 # orphaning projects whose org row would still exist.
-curl -X DELETE -H "Authorization: Bearer $PAT" \
+# A written reason is required (JSON body, 500 characters at most) and is
+# audited. The org's owner is suspended too, so they cannot sign in again.
+curl -X DELETE -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  -d '{"reason":"proxy abuse across every project"}' \
   "https://<host>/api/admin/orgs/<orgId>?cascade=true"
 ```
 
@@ -569,7 +574,7 @@ curl -X POST -H "Authorization: Bearer $PAT" \
 Find rows waiting for a retry with
 `SELECT project_id, failure_reason FROM database_instances WHERE status = 'BACKUPS_PENDING_DELETE'`.
 `DELETE /api/admin/projects/{projectId}` (force drop) accepts the same
-`confirmDeleteBackups` body field. With `Prefer: respond-async` it answers
+`confirmDeleteBackups` body field, and requires a `reason`. With `Prefer: respond-async` it answers
 202 once the project is `DELETING` and tears it down in the background; the
 row is gone when it finishes, or stays `DELETING` with `deletion_step` and
 `deletion_error`. A teardown never depends on the request staying connected.
@@ -1102,6 +1107,18 @@ connection is being refused) and confirm the `platform-nats` Secret was
 seeded by the bootstrap Job.
 
 ## 6.6. Project database credential rotation
+
+**Passwords are shown once (`FEATURE_ONETIMECREDENTIALS`, on by default, EXC-759).** With the
+flag on, a database owner password is returned only by the call that sets it:
+`POST /api/provision` and `POST /api/provision/{id}/database` accept an
+optional `password` (16 to 128 characters; blank generates one) and return it
+once; `POST .../credentials/rotate` takes an optional `{"password": ...}` and
+returns the new one once. `GET .../credentials` carries no password at all (the
+owner's or the read-only login's) and its `connectionUrl` holds `<password>`.
+The engine, functions, backups, the watcher and app deploys read the vault
+directly and are not affected. A project created before the flag has no way to
+read its password back: reset it. The flag is on unless
+`FEATURE_ONETIMECREDENTIALS=false` is set, on Kubernetes and on a single host.
 
 `POST /api/provision/{id}/credentials/rotate` replaces the passwords of every
 platform role filed under `projects/{id}/credentials/` — `auth_admin`, then

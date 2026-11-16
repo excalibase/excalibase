@@ -291,6 +291,7 @@ func (s *ProvisioningService) RunRoleReconcile(ctx context.Context, leader Leade
 	if !ok {
 		return RoleReconcileReport{}
 	}
+	s.logPausedBackups(s.ReconcilePausedBackups(ctx))
 	report := s.ReconcileProjectRoles(ctx)
 	for _, failure := range report.Failed {
 		if errors.Is(failure, ErrProjectOperationRunning) {

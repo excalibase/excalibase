@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -433,6 +434,8 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, abuse.ErrProxyApp):
+		httpError(w, err.Error(), http.StatusForbidden)
 	case errors.Is(err, apphost.ErrInvalidImage), errors.Is(err, appregistry.ErrInternalImage):
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, imagedigest.ErrNotPublic):

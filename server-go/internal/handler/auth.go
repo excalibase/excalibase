@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/abuse"
+	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"log"
 	"net/http"
 	"strconv"
@@ -26,6 +28,7 @@ type AuthHandler struct {
 	orgStore      storage.OrgStore      // optional — joins an org through an invite token at registration
 	instanceStore storage.InstanceStore // optional — lets CreateToken bind a PAT to a project the caller can see
 	auditLog      auditWriter           // optional — records PAT rotations
+	signupGuard   *abuse.SignupGuard    // optional — EXC-755
 	inviteOnly    bool                  // when true, only an invite token (or the first admin) may register
 	setupTokens   storage.SetupTokenStore
 	// ceilings bound what a service token may mint or rotate for each
@@ -104,6 +107,9 @@ func (h *AuthHandler) SetAuditLog(auditLog auditWriter) { h.auditLog = auditLog 
 // keeps registration open for back-compat / self-hosted single-tenant use.
 func (h *AuthHandler) SetInviteOnly(v bool) { h.inviteOnly = v }
 
+// SetSignupGuard refuses throwaway mail and floods of sign-ups from one network (EXC-755); nil allows all.
+func (h *AuthHandler) SetSignupGuard(guard *abuse.SignupGuard) { h.signupGuard = guard }
+
 func (h *AuthHandler) SetOrgStore(orgStore storage.OrgStore) {
 	h.orgStore = orgStore
 }
@@ -149,9 +155,22 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	isFirstUser := len(domain.HumanUsers(allUsers)) == 0
 
+	if !isFirstUser {
+		if err := h.signupGuard.CheckEmail(r.Context(), req.Email); err != nil {
+			writeSignupRefusal(w, err)
+			return
+		}
+	}
+
 	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, req.Email, isFirstUser)
 	if status != 0 {
 		httpError(w, msg, status)
+		return
+	}
+	// The network's budget is spent only by a sign-up nothing has refused, and
+	// never by a live invite, which names the address it is for.
+	if !isFirstUser && inviteHash == "" && !h.signupGuard.AllowSignup(r.Context(), clientaddr.FromRequest(r)) {
+		writeSignupRefusal(w, abuse.ErrSignupRateLimited)
 		return
 	}
 	if !isFirstUser && !h.verifier.Available() {
@@ -347,11 +366,22 @@ func (h *AuthHandler) issueRegistrationToken(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]interface{}{
-		"token":     raw,
-		"expiresAt": expiry,
-		"user":      user,
-	})
+	writeJSON(w, sessionBody(r, raw, expiry, user))
+}
+
+// ReturnSessionTokenHeader opts a caller into receiving the session secret in
+// the JSON body, for a CLI or script that has no cookie jar. Browsers never
+// send it: the secret stays in the httpOnly cookie, out of reach of page script.
+const ReturnSessionTokenHeader = "X-Return-Session-Token"
+
+// sessionBody is the sign-in answer. The 12-hour session secret is in it only
+// when the caller asked for it (EXC-761).
+func sessionBody(r *http.Request, raw string, expiry time.Time, user *domain.User) map[string]interface{} {
+	body := map[string]interface{}{"expiresAt": expiry, "user": user}
+	if r.Header.Get(ReturnSessionTokenHeader) == "true" {
+		body["token"] = raw
+	}
+	return body
 }
 
 // sessionTokenTTL is how long the studio's auto-issued login PAT lives.
@@ -466,6 +496,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	h.loginGuard.Succeeded(addressKey)
 	h.accountSlowdown.Succeeded(guardKey)
+	// A suspended or revoked account holds no session: it would only meet 401s.
+	// The right password has proved who is asking, so saying why is no leak.
+	if !user.Active {
+		httpError(w, "this account is suspended", http.StatusForbidden)
+		return
+	}
 	if user.EmailVerifiedAt == nil {
 		writeEmailNotVerified(w)
 		return
@@ -476,15 +512,26 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "token creation failed", http.StatusInternalServerError)
 		return
 	}
+	h.recordLogin(r, user)
 
-	writeJSON(w, map[string]interface{}{
-		// Token is also returned in the body so SDK / curl callers can
-		// pin to header auth. Browser clients should rely on the cookie
-		// and ignore this field.
-		"token":     raw,
-		"expiresAt": expiry,
-		"user":      user,
-	})
+	writeJSON(w, sessionBody(r, raw, expiry, user))
+}
+
+// LoginRecorder is the optional store capability that remembers the last sign-in.
+type LoginRecorder interface {
+	RecordUserLogin(ctx context.Context, userID, ip string, at time.Time) error
+}
+
+// recordLogin stores when and from where the account signed in, for the admin
+// console. Best effort: a failed bookkeeping write never fails a sign-in.
+func (h *AuthHandler) recordLogin(r *http.Request, user *domain.User) {
+	recorder, ok := h.userStore.(LoginRecorder)
+	if !ok {
+		return
+	}
+	if err := recorder.RecordUserLogin(r.Context(), user.ID, clientIP(r), time.Now()); err != nil {
+		log.Printf("WARN: record sign-in for %s: %v", user.ID, err)
+	}
 }
 
 // findLoginUser resolves a sign-in identifier. One with "@" is an address,
@@ -637,6 +684,10 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// An admin-made account meets the same rules a sign-up does.
 	if !isValidEmail(req.Email) {
 		httpError(w, "invalid email format", http.StatusBadRequest)
+		return
+	}
+	if err := h.signupGuard.CheckEmail(r.Context(), req.Email); err != nil {
+		writeSignupRefusal(w, err)
 		return
 	}
 	if msg := isValidPassword(req.Password); msg != "" {

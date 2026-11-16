@@ -125,6 +125,9 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, acto
 	if err != nil || app.Status == apphost.StatusRunning {
 		return app, err
 	}
+	if err := s.refuseProxyOnResume(ctx, app, actor); err != nil {
+		return nil, err
+	}
 	namespace, err := s.namespaceFor(projectID)
 	if err != nil {
 		return nil, s.noWorkload(err)

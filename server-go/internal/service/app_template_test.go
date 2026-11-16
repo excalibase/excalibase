@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"strings"
 	"sync"
 	"testing"
@@ -92,9 +93,11 @@ type tplDeployer struct {
 	apps       *tplApps
 	failDeploy string
 	errDeploy  string
-	failDelete string
-	admitErr   error
-	admitted   []int
+	// refuseDeploy names the app whose deploy is refused as a proxy (EXC-755).
+	refuseDeploy string
+	failDelete   string
+	admitErr     error
+	admitted     []int
 }
 
 // QueueDeploy records a pending deploy; its run logs "deploy <name>", or "deploy <name> failed".
@@ -103,6 +106,9 @@ func (d *tplDeployer) QueueDeploy(ctx context.Context, projectID, appID, _ strin
 	d.log.add("queue %s", app.Name)
 	if app.Name == d.errDeploy {
 		return nil, nil, errors.New("the lease could not be taken")
+	}
+	if app.Name == d.refuseDeploy {
+		return nil, nil, &abuse.ProxyRefusal{Finding: abuse.Finding{Signature: "xray"}}
 	}
 	run := func() {
 		switch {
@@ -495,6 +501,20 @@ func TestDeployTemplate_ADeployThatCannotBeRecordedRollsBack(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 	if rig.log.count("delete ") != 2 || rig.log.count("deploy ") != 0 || rig.network.on {
+		t.Fatalf("events %v", rig.log.all())
+	}
+}
+
+// A template whose deploy is refused as a proxy node is removed again and answers the refusal itself.
+func TestDeployTemplate_AProxyRefusalRollsBackAndIsReportedAsOne(t *testing.T) {
+	rig := newTemplateRig(t)
+	rig.deployer.refuseDeploy = "redis"
+	_, err := rig.svc.Deploy(context.Background(), tplProject, "web-redis", "dev", adminConfirmed)
+	var refusal *abuse.ProxyRefusal
+	if !errors.Is(err, abuse.ErrProxyApp) || !errors.As(err, &refusal) {
+		t.Fatalf("got %v", err)
+	}
+	if rig.log.count("delete ") != 2 || rig.log.count("deploy ") != 0 {
 		t.Fatalf("events %v", rig.log.all())
 	}
 }

@@ -1,3 +1,5 @@
+//go:build integration
+
 package edgefn_test
 
 import (
@@ -6,12 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"testing"
-	"time"
 
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
@@ -37,10 +37,7 @@ func newPGPlatformDB(t *testing.T) *sql.DB {
 		postgres.WithDatabase("platform_test"),
 		postgres.WithUsername("platform"),
 		postgres.WithPassword("edgefn-itest"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Skipf("docker unavailable, skipping integration test: %v", err)
@@ -55,6 +52,9 @@ func newPGPlatformDB(t *testing.T) *sql.DB {
 	store, err := pgstore.New(dsn)
 	if err != nil {
 		t.Fatalf("pgstore.New (runs migrations): %v", err)
+	}
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store.DB()

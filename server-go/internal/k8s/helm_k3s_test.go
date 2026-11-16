@@ -175,7 +175,7 @@ func TestK3sHelmInstallWithOverrides(t *testing.T) {
 	}
 
 	ns := "helm-override"
-	client.CreateProjectNamespace(ctx, ns, "it-org")
+	createProjectNamespaceAndWait(ctx, t, client, ns)
 
 	// Install with custom values (2 replicas, custom name)
 	values := map[string]interface{}{

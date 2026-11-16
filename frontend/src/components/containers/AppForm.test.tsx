@@ -138,6 +138,7 @@ describe('AppForm', () => {
     await user.type(screen.getByTestId('app-image'), 'nginx:1.27');
 
     await user.click(screen.getByTestId('env-add'));
+    await user.selectOptions(screen.getByTestId('env-kind-0'), 'literal');
     await user.type(screen.getByTestId('env-name-0'), 'MODE');
     await user.type(screen.getByTestId('env-value-0'), 'production');
 
@@ -420,6 +421,7 @@ describe('AppForm examples', () => {
   test('a variable row shows an example name and value', async () => {
     const { user } = renderForm();
     await user.click(screen.getByTestId('env-add'));
+    await user.selectOptions(screen.getByTestId('env-kind-0'), 'literal');
     expect(screen.getByTestId('env-name-0')).toHaveAttribute('placeholder', 'API_BASE_URL');
     expect(screen.getByTestId('env-value-0')).toHaveAttribute('placeholder', 'https://api.example.com');
     expect(screen.getByText(

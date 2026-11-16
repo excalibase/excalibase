@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/abuse"
+	"github.com/excalibase/provisioning-poc/internal/adminaccess"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"net"
@@ -119,6 +121,12 @@ func runServer(cfg config.AppConfig) {
 	}
 	if err := cfg.CheckPublicListener(); err != nil {
 		log.Fatal(err)
+	}
+	if err := cfg.CheckAdminHost(); err != nil {
+		log.Fatal(err)
+	}
+	if cfg.AdminConsoleDisabled() {
+		log.Println("WARN: ADMIN_HOST is not set: the admin console is off, every /api/admin route except service accounts answers 404")
 	}
 	if err := cfg.CheckDenoProvisioningURL(); err != nil {
 		log.Fatal(err)
@@ -1087,15 +1095,21 @@ type handlerDeps struct {
 	// Kubernetes, which is where DocumentDB projects run.
 	documentsHandler *handler.DocumentBrowserHandler
 	adminHandler     *handler.AdminHandler
-	authHandler      *handler.AuthHandler
-	oauthHandler     *handler.StudioOAuthHandler
-	ssoHandler       *handler.SSOProvidersHandler
-	svcAcctHandler   *handler.ServiceAccountHandler
-	orgHandler       *handler.OrgHandler
-	vaultHandler     *handler.VaultHandler
-	schemaHandler    *handler.SchemaHandler
-	realtimeHandler  *handler.RealtimeHandler
-	fnHandler        *handler.FunctionHandler
+	// adminConsoleHandler is the platform admin's view of every account, org and project (EXC-757).
+	adminConsoleHandler *handler.AdminConsoleHandler
+	// adminAssertions checks Cloudflare Access assertions on the admin host; nil builds the real one from config.
+	adminAssertions adminaccess.Checker
+	// adminGateOverride replaces the gate built from config; tests that probe other layers use it.
+	adminGateOverride *adminaccess.GateConfig
+	authHandler       *handler.AuthHandler
+	oauthHandler      *handler.StudioOAuthHandler
+	ssoHandler        *handler.SSOProvidersHandler
+	svcAcctHandler    *handler.ServiceAccountHandler
+	orgHandler        *handler.OrgHandler
+	vaultHandler      *handler.VaultHandler
+	schemaHandler     *handler.SchemaHandler
+	realtimeHandler   *handler.RealtimeHandler
+	fnHandler         *handler.FunctionHandler
 	// tableImportHandler loads CSV, XLSX and Google Sheets into a table (EXC-368).
 	tableImportHandler *handler.TableImportHandler
 	// permissionHandler serves permissions, tracked functions and function
@@ -1645,6 +1659,7 @@ func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceSto
 	h.SetInstanceStore(instances)
 	h.SetNodePlacement(nodes)
 	h.SetPlanChangeHook(planChanged)
+	h.SetAudit(sqlStore)
 	return h
 }
 
@@ -1691,7 +1706,7 @@ func newSchemaHandler(cfg config.AppConfig, vc vaultclient.VaultClient, instance
 
 func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore storage.PlatformStore,
 	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget, restarts handler.AppRestartReader,
-	internal *appregistry.Internal) *handler.AppHandler {
+	internal *appregistry.Internal, vault vaultclient.VaultClient) *handler.AppHandler {
 	plans := service.NewOrgPlanTiers(store, sqlStore)
 	h := handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
 		handler.NewProjectSourceLookup(store, plans), appPublicRoute(cfg))
@@ -1701,6 +1716,24 @@ func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore s
 	h.SetFeatures(cfg.Features())
 	h.SetRestarts(restarts)
 	h.SetInternalRegistry(internal)
+	h.SetSecretVault(vault)
+	h.SetProxyGuard(newProxyGuard(cfg, sqlStore))
+	return h
+}
+
+// newProxyGuard refuses proxy and VPN nodes on every app path and records each refusal (EXC-755).
+func newProxyGuard(cfg config.AppConfig, audit abuse.AuditWriter) *abuse.AppGuard {
+	return abuse.NewAppGuard(cfg.Features(), audit)
+}
+
+// newSignupGuard refuses throwaway mail and floods of sign-ups from one network (EXC-755).
+func newSignupGuard(cfg config.AppConfig) *abuse.SignupGuard {
+	return abuse.NewSignupGuard(cfg.Features(), abuse.NewEmailPolicy(nil), cfg.SignupsPerHour)
+}
+
+func newAppSecretHandler(cfg config.AppConfig, sqlStore storage.PlatformStore, vc vaultclient.VaultClient) *handler.AppSecretHandler {
+	h := handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc)
+	h.SetProxyGuard(newProxyGuard(cfg, sqlStore))
 	return h
 }
 
@@ -1723,6 +1756,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
 		appRuntime, store, service.NewAppEnvResolver(vc, store), appRenderOptions(cfg))
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
+	appDeploySvc.SetProxyGuard(newProxyGuard(cfg, sqlStore))
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
 	appDeploySvc.SetNamespaceQuotaTiers(provSvc)
 	provSvc.SetProjectQuotaSync(appDeploySvc.SyncProjectQuota)
@@ -1811,6 +1845,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		promClient = handler.NewPromClient(cfg.PromURL)
 	}
 	adminHandler := handler.NewAdminHandler(provSvc, store, sqlStore, sqlStore, k8sClient, cfg.LokiURL, promClient)
+	adminHandler.SetProjectFacts(pgstore.NewAdminConsole(sqlStore.DB()).ProjectFacts)
 	tierHandler := handler.NewTierHandler(sqlStore)
 	tierHandler.SetNodePlacement(provSvc)
 	tierHandler.SetFeatures(cfg.Features())
@@ -1821,6 +1856,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	authHandler.SetAccountFailureCap(cfg.LoginAccountFailureCap)
 	authHandler.SetOrgStore(sqlStore)
 	authHandler.SetAuditLog(sqlStore)
+	authHandler.SetSignupGuard(newSignupGuard(cfg))
 	authHandler.SetInstanceStore(store)
 	authHandler.SetInviteOnly(cfg.RegistrationMode == "invite")
 	authHandler.SetSetupTokenStore(sqlStore)
@@ -1861,7 +1897,10 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler.SetPublicationName(name)
 	}
 	provHandler := handler.NewProvisioningHandler(provSvc, sqlStore)
+	provHandler.SetAuditLog(sqlStore)
 	provHandler.SetActivityStore(sqlStore)
+	suspendedOwners := pgstore.NewAdminConsole(sqlStore.DB()).OwnerSuspendedOrgs
+	provHandler.SetSuspendedOrgs(suspendedOwners)
 	provHandler.SetAuthHookDeny(cfg.ExtraDenyPrefixes())
 	wireProjectCors(sqlStore, provHandler)
 	wireProjectAuthSettings(sqlStore, provHandler)
@@ -1904,6 +1943,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		apps: appBuildArgs{internal: internalRegistry, registry: appRegistry, deploys: appDeploySvc,
 			apps: apphost.NewPostgresAppStore(sqlStore.DB()), limits: service.NewAppBuildLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc),
 			platformDB: sqlStore.DB()}})
+	adminConsole, suspensions := buildAdminConsole(sqlStore, appRuntime, appDeploySvc)
+	// Revoking an org suspends its owner through the same operation the console uses.
+	adminHandler.SetOwnerSuspender(suspensions)
 	return &handlerDeps{
 		appRegistry:           appRegistry,
 		siteBuilds:            builds,
@@ -1928,6 +1970,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		s3KeysHandler:         wireS3Keys(cfg, newS3Keys(sqlStore, store, vc, storageSvc), sqlStore, provSvc),
 		documentsHandler:      buildDocumentBrowser(k8sClient, a.dockerClient, vc, store),
 		adminHandler:          adminHandler,
+		adminConsoleHandler:   adminConsole,
 		authHandler:           authHandler,
 		oauthHandler:          buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
 		ssoHandler:            buildSSOProvidersHandler(cfg, vc, sqlStore),
@@ -1939,14 +1982,14 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:       realtimeHandler,
 		permissionHandler:     newPermissionHandler(cfg, sqlStore, store, a.projectDB),
 		advisorsHandler:       handler.NewAdvisorsHandler(advisors.NewService(a.projectDB, sqlStore.Permissions(), advisors.Options{})),
-		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry),
+		appHandler:            newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget, appDeploySvc, internalRegistry, vc),
 		registryToken:         newRegistryTokenHandler(internalRegistry, store),
 		internalRegistry:      internalRegistry,
 		internalRegistryH:     newInternalRegistryHandler(internalRegistry, vaultSecrets(vc), store, appRuntime),
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,
 		storageBudgetH:        handler.NewStorageBudgetHandler(a.budget),
-		appSecretHandler:      handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
+		appSecretHandler:      newAppSecretHandler(cfg, sqlStore, vc),
 		appDeploySvc:          appDeploySvc,
 		appDeployHandler:      newAppDeployHandler(appDeploySvc, cfg.Features(), cfg.DeployWait),
 		registryCredHandler:   newRegistryCredentialHandler(registryCreds),
@@ -2029,12 +2072,16 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 		Features map[string]bool `json:"features"`
 		// The public API base Studio's connect snippets point at (the SDK's url).
 		APIURL string `json:"apiUrl"`
+		// AdminHost is where the operator console is also served (EXC-757).
+		AdminHost string `json:"adminHost,omitempty"`
+		// AdminConsole is false when the console is switched off, so Studio hides it.
+		AdminConsole bool `json:"adminConsole"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled, Sites: cfg.SitesAvailable(),
 			SiteGitBuilds: cfg.SiteGitBuildsOn(),
 			CustomDomains: customDomainsOn(cfg), SiteCustomDomains: cfg.SitesCustomDomainsAvailable(), Features: features.Snapshot(r.Context(), flags),
-			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/")}
+			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/"), AdminHost: cfg.AdminHost, AdminConsole: !cfg.AdminConsoleDisabled()}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
 			log.Printf("write /api/config: %v", err)
@@ -2058,12 +2105,15 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	r.Use(custommw.RedactQueryParams(accessLogRedactedParams...))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	// The console's hostname and Cloudflare Access fence come before anything
+	// that would act on the request (EXC-757).
+	r.Use(adminaccess.Gate(adminGate(cfg, d)))
 	r.Use(metrics.Middleware)
 	r.Use(custommw.SecurityHeaders)
 	// A project's public functions answer CORS from that project's own
 	// allowlist (the handler does it); the Studio list is for everything else.
 	r.Use(custommw.ExceptPathPrefix("/functions/v1/", custommw.ExceptPathPrefix("/storage/v1/", custommw.CORS(cfg.CORSOrigins))))
-	r.Use(custommw.RequireTrustedOriginForCookies(custommw.TrustedOrigins(cfg.StudioURL, cfg.CORSOrigins)))
+	r.Use(custommw.RequireTrustedOriginForCookies(custommw.TrustedOrigins(cfg.StudioURL, cfg.CORSOrigins, cfg.AdminOrigin())))
 	if pool, ok := sqlStore.(interface{ DB() *sql.DB }); ok {
 		// An exhausted platform pool answers 503 fast instead of hanging every request.
 		r.Use(custommw.PoolGuard(pool.DB().Stats, poolGuardWait))
@@ -2085,7 +2135,10 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 		w.Write([]byte("ok"))
 	})
 	r.Get("/api/config", serveConfig(cfg, d.features))
-	r.Get("/api/capacity", auth.RequireAuth(http.HandlerFunc(d.capDeps.serveCapacity)).ServeHTTP)
+	// Cluster CPU and memory, platform-wide tier counts and raw runtime errors
+	// are the operator's, not any signed-in customer's.
+	r.Get("/api/capacity", auth.RequireAuth(auth.RequirePermission(auth.PermViewAny)(
+		http.HandlerFunc(d.capDeps.serveCapacity))).ServeHTTP)
 
 	mountProvisioningRoutes(r, sqlStore, store, d)
 	mountSimpleAuthRoutes(r, sqlStore, store, d)
@@ -2372,6 +2425,8 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireUnrestrictedCredentialForWrites)
 			r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
+			r.Group(func(r chi.Router) { d.adminConsoleHandler.Routes(r) })
+			r.Group(func(r chi.Router) { d.orgHandler.ConsoleRoutes(r) })
 			r.Route("/tiers", func(r chi.Router) {
 				r.Use(auth.RequirePermission(auth.PermViewAny))
 				d.tierHandler.Routes(r)
@@ -2584,15 +2639,15 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	// Browser-origin allowlist (EXC-23): it decides which web apps may call
 	// the project's data plane, so reads and writes carry the same Developer+
 	// gate as the other data-plane authoring surfaces.
-	// SDK api keys (EXC-10): any member sees prefixes; generating and
-	// revoking are Developer+. The browser never holds the credential auth
+	// SDK api keys (EXC-10): any member sees prefixes; a publishable key is
+	// Developer+, a secret (service-role) key is Admin. The browser never holds the credential auth
 	// is called with.
 	r.Route("/api/projects/{projectId}/sdk-keys", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
-		d.sdkKeysHandler.Routes(r)
+		d.sdkKeysHandler.Routes(r) // a secret (service-role) key is Admin-only, checked in Create
 	})
 	mountMetricsEndpoint(r, sqlStore, store, d)
 	mountProjectContainers(r, sqlStore, store, d)
@@ -2754,7 +2809,10 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			d.storageHandler.Routes(r)
 			r.With(features.Require(d.features, features.AppStorage)).Put("/buckets/{bucket}/access", d.storageHandler.UpdateBucketAccess)
 			if d.s3KeysHandler != nil {
-				r.With(features.Require(d.features, features.S3)).Group(d.s3KeysHandler.Routes)
+				// An S3 key is a credential: minting or revoking one is Admin
+				// work, as it is for every other project credential.
+				r.With(features.Require(d.features, features.S3),
+					handler.RequireCredentialPermission(handler.PermCreateAccessKey)).Group(d.s3KeysHandler.Routes)
 			}
 		})
 		mountAppStorage(r, sqlStore, store, d)

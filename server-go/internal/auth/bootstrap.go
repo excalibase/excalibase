@@ -54,7 +54,7 @@ func Bootstrap(ctx context.Context, userStore storage.UserStore) error {
 	log.Println("=== FIRST RUN ===")
 	log.Printf("  Username: admin")
 	log.Printf("  Password: %s", adminPass)
-	log.Println("  Login at POST /api/auth/login to get a token")
+	log.Println("  Login at POST /api/auth/login (send X-Return-Session-Token: true to get the token in the body)")
 	log.Println("=================")
 
 	return nil

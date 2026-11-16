@@ -26,3 +26,9 @@ func RequireInternalListener(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// IsInternalListener reports whether the request arrived on the in-cluster listener.
+func IsInternalListener(r *http.Request) bool {
+	internal, _ := r.Context().Value(internalListenerKey{}).(bool)
+	return internal
+}

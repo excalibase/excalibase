@@ -40,7 +40,8 @@ func readAddressCall(t *testing.T, h *DBReadAddressHandler, method, body string,
 		req = req.WithContext(custommw.WithProjectAccess(req.Context(), &custommw.ProjectAccess{Member: &domain.OrgMember{Role: role}}))
 	}
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	// A platform admin sees the whole answer; customers are in endpoint_internal_hidden_test.go.
+	r.ServeHTTP(w, asUser(req, "platform_admin"))
 	return w
 }
 

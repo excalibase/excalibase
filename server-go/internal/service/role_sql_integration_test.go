@@ -6,16 +6,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"io"
 	"net/url"
 	"testing"
-	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
 )
@@ -59,10 +58,7 @@ func startRolePostgresImage(t *testing.T, image string) *rolePostgres {
 		postgres.WithDatabase("app"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("p"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(45*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

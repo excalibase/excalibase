@@ -66,9 +66,13 @@ export interface NavSection {
   requires?: keyof NavCapabilities;
   // Works only on a PostgreSQL database; hidden for MySQL projects (ADR 0041).
   postgresOnly?: boolean;
+  // Shown only to platform staff; the server refuses everyone else (EXC-761).
+  platformOnly?: boolean;
 }
 
 export interface NavCapabilities {
+  // The caller is platform staff (admin or operator), the only roles the vault serves.
+  platformStaff?: boolean;
   appHosting: boolean;
   // MCP for coding tools ships dark (EXC-554).
   mcp: boolean;
@@ -158,7 +162,7 @@ export const PROJECT_NAV: NavSection[] = [
       { label: 'Migrations', icon: ArrowUpDown, to: 'operations/migrations', postgresOnly: true },
     ],
   },
-  { key: 'vault', label: 'Vault', icon: KeyRound, to: 'vault' },
+  { key: 'vault', label: 'Vault', icon: KeyRound, to: 'vault', platformOnly: true },
   { key: 'settings', label: 'Settings', icon: Settings, to: 'settings' },
 ];
 
@@ -187,7 +191,8 @@ export const visibleProjectNav = (capabilities: NavCapabilities): NavSection[] =
   PROJECT_NAV.filter(
     (section) =>
       (!section.requires || capabilities[section.requires]) &&
-      (!section.postgresOnly || capabilities.postgres !== false)
+      (!section.postgresOnly || capabilities.postgres !== false) &&
+      (!section.platformOnly || capabilities.platformStaff === true)
   );
 
 // Where a section with sub-pages opens: its first page the engine offers.

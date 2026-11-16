@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"strings"
 	"testing"
 	"time"
@@ -32,8 +33,7 @@ func startStatsPostgres(t *testing.T) *rolePostgres {
 	pg, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("postgres"), postgres.WithPassword("p"),
 		testcontainers.WithCmd(append([]string{"postgres"}, statsServerArgs...)...),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2).WithStartupTimeout(45*time.Second)),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

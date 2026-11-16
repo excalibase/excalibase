@@ -82,3 +82,13 @@ describe('platform navigation', () => {
     expect(labels(true, false)).toEqual(['Dashboard', 'Organizations', 'Projects', 'Provision', 'Access tokens', 'Platform Admin']);
   });
 });
+
+describe('vault nav entry (EXC-761)', () => {
+  const keys = (platformStaff: boolean) =>
+    visibleProjectNav({ appHosting: true, mcp: false, platformStaff }).map((section) => section.key);
+
+  test('is offered to platform staff only', () => {
+    expect(keys(true)).toContain('vault');
+    expect(keys(false)).not.toContain('vault');
+  });
+});

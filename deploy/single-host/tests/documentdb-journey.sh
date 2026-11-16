@@ -75,7 +75,7 @@ read -r dpg dmg _ <<< "$DENDPOINT"
 [ "${dpg:-0}" -ge 30000 ] && [ "${dpg:-0}" -le 30999 ] && [ "${dmg:-0}" -ge 30000 ] && [ "${dmg:-0}" -le 30999 ] && [ "$dpg" != "$dmg" ] \
   && ok "Postgres and Mongo hold ports in the tenant range ($dpg, $dmg)" || ko "host ports: $DENDPOINT"
 CRED=$(dapi "$DAPI/provision/$DPID/credentials")
-DUSER=$(echo "$CRED" | djson 'd["username"]'); DPASS=$(echo "$CRED" | djson 'd["password"]')
+DUSER=$(echo "$CRED" | djson 'd["username"]'); DPASS=$(vault_field "$DPID" admin password)
 out=$(mongo "$DPID" "$DUSER" "$DPASS" 'db.getSiblingDB("shop").items.insertOne({sku:"a1",qty:3}); print("count=" + db.getSiblingDB("shop").items.countDocuments({sku:"a1"}))')
 case "$out" in *count=1*) ok "mongosh inserts and finds over verified TLS" ;; *) ko "mongosh: ${out:0:400}" ;; esac
 
@@ -122,7 +122,7 @@ case "$js" in COMPLETED*) ok "restore job completed" ;; *) ko "restore job: ${js
 st=$(wait_status "$RPID" ACTIVE)
 # A restored project is a new project with credentials of its own.
 RCRED=$(dapi "$DAPI/provision/$RPID/credentials")
-out=$(mongo "$RPID" "$(echo "$RCRED" | djson 'd["username"]')" "$(echo "$RCRED" | djson 'd["password"]')" 'print("count=" + db.getSiblingDB("shop").items.countDocuments({}))')
+out=$(mongo "$RPID" "$(echo "$RCRED" | djson 'd["username"]')" "$(vault_field "$RPID" admin password)" 'print("count=" + db.getSiblingDB("shop").items.countDocuments({}))')
 case "$st$out" in ACTIVE*count=2*) ok "restored project serves Mongo through its own gateway" ;; *) ko "restored: $st ${out:0:300}" ;; esac
 read -r rpg rmg _ <<< "$(endpoint_of "$RPID")"
 case " $dpg $dmg " in *" $rpg "*|*" $rmg "*) ko "the copy took the source's ports ($rpg $rmg)" ;; *) [ "$rpg" != "$rmg" ] && ok "the copy holds ports of its own ($rpg, $rmg)" || ko "copy ports: $rpg $rmg" ;; esac
