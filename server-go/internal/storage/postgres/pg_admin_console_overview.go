@@ -27,6 +27,14 @@ const projectBriefSQL = `
 	LEFT JOIN abuse_suspensions s ON s.user_id = u.id
 	LEFT JOIN usage ON usage.project_id = di.project_id `
 
+// Each card's query is a constant, composed at compile time from the shared
+// select and its own filter and order.
+const (
+	failedProjectsSQL = projectBriefSQL + `WHERE di.status = 'FAILED' OR di.current_stage = 'FAILED' ORDER BY di.updated_at DESC NULLS LAST LIMIT $1`
+	topCPUSQL         = projectBriefSQL + `WHERE usage.cpu_usage_cores > 0 ORDER BY usage.cpu_usage_cores DESC LIMIT $1`
+	topMemorySQL      = projectBriefSQL + `WHERE usage.memory_usage_mb > 0 ORDER BY usage.memory_usage_mb DESC LIMIT $1`
+)
+
 func (a *AdminConsole) Overview(ctx context.Context, since time.Time) (*adminconsole.Overview, error) {
 	overview := &adminconsole.Overview{
 		NewlySuspended: []adminconsole.SuspendedBrief{}, SignupDomains: []adminconsole.DomainCount{},
@@ -40,14 +48,13 @@ func (a *AdminConsole) Overview(ctx context.Context, since time.Time) (*admincon
 	if overview.Signups24h, overview.SignupDomains, err = a.signups(ctx, since); err != nil {
 		return nil, err
 	}
-	if overview.FailedProjects, err = a.projectBriefs(ctx,
-		`WHERE di.status = 'FAILED' OR di.current_stage = 'FAILED' ORDER BY di.updated_at DESC NULLS LAST LIMIT $1`, overviewLimit); err != nil {
+	if overview.FailedProjects, err = a.projectBriefs(ctx, failedProjectsSQL, overviewLimit); err != nil {
 		return nil, fmt.Errorf("failed projects: %w", err)
 	}
-	if overview.TopCPU, err = a.projectBriefs(ctx, `WHERE usage.cpu_usage_cores > 0 ORDER BY usage.cpu_usage_cores DESC LIMIT $1`, topProjects); err != nil {
+	if overview.TopCPU, err = a.projectBriefs(ctx, topCPUSQL, topProjects); err != nil {
 		return nil, fmt.Errorf("top cpu: %w", err)
 	}
-	if overview.TopMemory, err = a.projectBriefs(ctx, `WHERE usage.memory_usage_mb > 0 ORDER BY usage.memory_usage_mb DESC LIMIT $1`, topProjects); err != nil {
+	if overview.TopMemory, err = a.projectBriefs(ctx, topMemorySQL, topProjects); err != nil {
 		return nil, fmt.Errorf("top memory: %w", err)
 	}
 	if overview.TopEgress, err = a.topEgress(ctx); err != nil {
@@ -56,8 +63,8 @@ func (a *AdminConsole) Overview(ctx context.Context, since time.Time) (*admincon
 	return overview, nil
 }
 
-func (a *AdminConsole) projectBriefs(ctx context.Context, clause string, limit int) ([]adminconsole.ProjectBrief, error) {
-	rows, err := a.db.QueryContext(ctx, projectBriefSQL+clause, limit)
+func (a *AdminConsole) projectBriefs(ctx context.Context, query string, limit int) ([]adminconsole.ProjectBrief, error) {
+	rows, err := a.db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -122,24 +129,7 @@ func (a *AdminConsole) signups(ctx context.Context, since time.Time) (int, []adm
 // topEgress ranks projects by the transmit rate of their containers' newest
 // sample. Only a single host records it; on a cluster the table is empty.
 func (a *AdminConsole) topEgress(ctx context.Context) ([]adminconsole.ProjectBrief, error) {
-	rows, err := a.db.QueryContext(ctx, `
-		WITH newest AS (
-			SELECT DISTINCT ON (container_name) container_name, project_id, network_tx_bytes_per_sec
-			FROM container_metrics
-			WHERE timestamp > NOW() - INTERVAL '`+metricsWindow+`' AND project_id <> ''
-			ORDER BY container_name, timestamp DESC
-		), egress AS (
-			SELECT project_id, SUM(network_tx_bytes_per_sec) AS tx FROM newest GROUP BY project_id
-		)
-		SELECT di.project_id, COALESCE(di.project_name, ''), di.org_id, COALESCE(u.email, ''), `+statusExpr+`,
-		       di.status, egress.tx
-		FROM egress
-		JOIN database_instances di ON di.project_id = egress.project_id
-		JOIN orgs o ON o.id = di.org_id
-		JOIN users u ON u.id = o.owner_id
-		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
-		WHERE egress.tx > 0
-		ORDER BY egress.tx DESC LIMIT $1`, topProjects)
+	rows, err := a.db.QueryContext(ctx, topEgressSQL, topProjects)
 	if err != nil {
 		return nil, fmt.Errorf("top egress: %w", err)
 	}
@@ -154,3 +144,23 @@ func (a *AdminConsole) topEgress(ctx context.Context) ([]adminconsole.ProjectBri
 	}
 	return out, rows.Err()
 }
+
+// topEgressSQL is composed at compile time from constant fragments.
+const topEgressSQL = `
+		WITH newest AS (
+			SELECT DISTINCT ON (container_name) container_name, project_id, network_tx_bytes_per_sec
+			FROM container_metrics
+			WHERE timestamp > NOW() - INTERVAL '` + metricsWindow + `' AND project_id <> ''
+			ORDER BY container_name, timestamp DESC
+		), egress AS (
+			SELECT project_id, SUM(network_tx_bytes_per_sec) AS tx FROM newest GROUP BY project_id
+		)
+		SELECT di.project_id, COALESCE(di.project_name, ''), di.org_id, COALESCE(u.email, ''), ` + statusExpr + `,
+		       di.status, egress.tx
+		FROM egress
+		JOIN database_instances di ON di.project_id = egress.project_id
+		JOIN orgs o ON o.id = di.org_id
+		JOIN users u ON u.id = o.owner_id
+		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
+		WHERE egress.tx > 0
+		ORDER BY egress.tx DESC LIMIT $1`

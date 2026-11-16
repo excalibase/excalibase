@@ -47,34 +47,7 @@ func escapeLike(input string) string {
 
 func (a *AdminConsole) ListUsers(ctx context.Context, q adminconsole.UserQuery) (adminconsole.Page[adminconsole.UserRow], error) {
 	page := adminconsole.Page[adminconsole.UserRow]{Items: []adminconsole.UserRow{}}
-	rows, err := a.db.QueryContext(ctx, `
-		WITH owned AS (
-			SELECT o.owner_id AS user_id, COUNT(DISTINCT o.id) AS orgs, COUNT(DISTINCT di.project_id) AS projects
-			FROM orgs o LEFT JOIN database_instances di ON di.org_id = o.id
-			GROUP BY o.owner_id
-		), running AS (
-			SELECT o.owner_id AS user_id, COUNT(*) AS apps
-			FROM apps ap
-			JOIN database_instances di ON di.project_id = ap.project_id
-			JOIN orgs o ON o.id = di.org_id
-			WHERE ap.status = $1
-			GROUP BY o.owner_id
-		)
-		SELECT u.id, u.email, u.username, u.role, `+statusExpr+`,
-		       u.email_verified_at IS NOT NULL, u.created_at, u.last_login_at, u.last_login_ip,
-		       COALESCE(s.reason, ''), s.suspended_at,
-		       COALESCE(owned.orgs, 0), COALESCE(owned.projects, 0), COALESCE(running.apps, 0),
-		       COUNT(*) OVER()
-		FROM users u
-		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
-		LEFT JOIN owned ON owned.user_id = u.id
-		LEFT JOIN running ON running.user_id = u.id
-		WHERE u.kind = 'human'
-		  AND ($2 OR s.user_id IS NULL)
-		  AND ($3 = '' OR lower(u.email) LIKE '%' || lower($3) || '%' ESCAPE '\'
-		       OR u.last_login_ip = $4 OR u.last_login_ip LIKE $3 || '%' ESCAPE '\')
-		ORDER BY u.created_at DESC NULLS LAST, u.id
-		LIMIT $5 OFFSET $6`,
+	rows, err := a.db.QueryContext(ctx, listUsersSQL,
 		apphost.StatusRunning, q.IncludeSuspended, escapeLike(q.Search), strings.TrimSpace(q.Search), q.Limit, q.Offset)
 	if err != nil {
 		return page, fmt.Errorf("query users: %w", err)
@@ -98,33 +71,7 @@ func (a *AdminConsole) ListUsers(ctx context.Context, q adminconsole.UserQuery) 
 
 func (a *AdminConsole) ListOrgs(ctx context.Context, q adminconsole.OrgQuery) (adminconsole.Page[adminconsole.OrgRow], error) {
 	page := adminconsole.Page[adminconsole.OrgRow]{Items: []adminconsole.OrgRow{}}
-	rows, err := a.db.QueryContext(ctx, `
-		WITH usage AS (`+latestMetricsSQL+`),
-		per_project AS (
-			SELECT di.org_id, COUNT(*) AS projects,
-			       COALESCE(SUM(usage.cpu_usage_cores), 0) AS cpu, COALESCE(SUM(usage.memory_usage_mb), 0) AS mem
-			FROM database_instances di LEFT JOIN usage ON usage.project_id = di.project_id
-			GROUP BY di.org_id
-		), per_app AS (
-			SELECT di.org_id, COUNT(*) AS running
-			FROM apps ap JOIN database_instances di ON di.project_id = ap.project_id
-			WHERE ap.status = $1 GROUP BY di.org_id
-		)
-		SELECT o.id, o.name, o.slug, o.tier, o.owner_id, COALESCE(u.email, ''), `+statusExpr+`,
-		       COALESCE(per_project.projects, 0), COALESCE(per_app.running, 0),
-		       COALESCE(per_project.cpu, 0), COALESCE(per_project.mem, 0),
-		       o.created_at, COUNT(*) OVER()
-		FROM orgs o
-		JOIN users u ON u.id = o.owner_id
-		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
-		LEFT JOIN per_project ON per_project.org_id = o.id
-		LEFT JOIN per_app ON per_app.org_id = o.id
-		WHERE ($2 OR s.user_id IS NULL)
-		  AND ($3 = '' OR lower(o.name) LIKE '%' || lower($3) || '%' ESCAPE '\'
-		       OR lower(o.slug) LIKE '%' || lower($3) || '%' ESCAPE '\'
-		       OR lower(u.email) LIKE '%' || lower($3) || '%' ESCAPE '\')
-		ORDER BY o.created_at DESC NULLS LAST, o.id
-		LIMIT $4 OFFSET $5`,
+	rows, err := a.db.QueryContext(ctx, listOrgsSQL,
 		apphost.StatusRunning, q.IncludeSuspended, escapeLike(q.Search), q.Limit, q.Offset)
 	if err != nil {
 		return page, fmt.Errorf("query orgs: %w", err)
@@ -149,3 +96,62 @@ func timePtr(value sql.NullTime) *time.Time {
 	}
 	return &value.Time
 }
+
+// listUsersSQL is composed at compile time from constant fragments.
+const listUsersSQL = `
+		WITH owned AS (
+			SELECT o.owner_id AS user_id, COUNT(DISTINCT o.id) AS orgs, COUNT(DISTINCT di.project_id) AS projects
+			FROM orgs o LEFT JOIN database_instances di ON di.org_id = o.id
+			GROUP BY o.owner_id
+		), running AS (
+			SELECT o.owner_id AS user_id, COUNT(*) AS apps
+			FROM apps ap
+			JOIN database_instances di ON di.project_id = ap.project_id
+			JOIN orgs o ON o.id = di.org_id
+			WHERE ap.status = $1
+			GROUP BY o.owner_id
+		)
+		SELECT u.id, u.email, u.username, u.role, ` + statusExpr + `,
+		       u.email_verified_at IS NOT NULL, u.created_at, u.last_login_at, u.last_login_ip,
+		       COALESCE(s.reason, ''), s.suspended_at,
+		       COALESCE(owned.orgs, 0), COALESCE(owned.projects, 0), COALESCE(running.apps, 0),
+		       COUNT(*) OVER()
+		FROM users u
+		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
+		LEFT JOIN owned ON owned.user_id = u.id
+		LEFT JOIN running ON running.user_id = u.id
+		WHERE u.kind = 'human'
+		  AND ($2 OR s.user_id IS NULL)
+		  AND ($3 = '' OR lower(u.email) LIKE '%' || lower($3) || '%' ESCAPE '\'
+		       OR u.last_login_ip = $4 OR u.last_login_ip LIKE $3 || '%' ESCAPE '\')
+		ORDER BY u.created_at DESC NULLS LAST, u.id
+		LIMIT $5 OFFSET $6`
+
+// listOrgsSQL is composed at compile time from constant fragments.
+const listOrgsSQL = `
+		WITH usage AS (` + latestMetricsSQL + `),
+		per_project AS (
+			SELECT di.org_id, COUNT(*) AS projects,
+			       COALESCE(SUM(usage.cpu_usage_cores), 0) AS cpu, COALESCE(SUM(usage.memory_usage_mb), 0) AS mem
+			FROM database_instances di LEFT JOIN usage ON usage.project_id = di.project_id
+			GROUP BY di.org_id
+		), per_app AS (
+			SELECT di.org_id, COUNT(*) AS running
+			FROM apps ap JOIN database_instances di ON di.project_id = ap.project_id
+			WHERE ap.status = $1 GROUP BY di.org_id
+		)
+		SELECT o.id, o.name, o.slug, o.tier, o.owner_id, COALESCE(u.email, ''), ` + statusExpr + `,
+		       COALESCE(per_project.projects, 0), COALESCE(per_app.running, 0),
+		       COALESCE(per_project.cpu, 0), COALESCE(per_project.mem, 0),
+		       o.created_at, COUNT(*) OVER()
+		FROM orgs o
+		JOIN users u ON u.id = o.owner_id
+		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
+		LEFT JOIN per_project ON per_project.org_id = o.id
+		LEFT JOIN per_app ON per_app.org_id = o.id
+		WHERE ($2 OR s.user_id IS NULL)
+		  AND ($3 = '' OR lower(o.name) LIKE '%' || lower($3) || '%' ESCAPE '\'
+		       OR lower(o.slug) LIKE '%' || lower($3) || '%' ESCAPE '\'
+		       OR lower(u.email) LIKE '%' || lower($3) || '%' ESCAPE '\')
+		ORDER BY o.created_at DESC NULLS LAST, o.id
+		LIMIT $4 OFFSET $5`

@@ -148,24 +148,10 @@ func expectSession(row Row, method string, p Principal) Expectation {
 	if row.Param == ParamProject && p.ForeignProject {
 		return Deny404
 	}
-	if isWrite(method) && p.ReadOnly {
+	if tokenRefused(row, method, p) {
 		return Deny403
 	}
-	if row.Unrestricted && p.Restricted {
-		return Deny403
-	}
-	if row.Unbound && p.IsBound() {
-		return Deny403
-	}
-	// Platform authority does not reach a tenant's project: a human platform
-	// admin meets the membership gate like any customer, and only a platform
-	// route naming a permission is theirs (EXC-757).
-	if p.PlatformAdmin && row.Param == ParamProject && row.Permission == "" && p.OrgRole == "" {
-		return Deny404
-	}
-	// Nor does it reach a tenant's org: outside the console a human platform
-	// admin is an outsider to every org they do not belong to.
-	if p.PlatformAdmin && row.Param == ParamOrg && row.Permission == "" && p.OrgRole == "" {
+	if platformAdminOutsider(row, p) {
 		return Deny404
 	}
 	if row.Discloses == Secret && p.ReadOnly {
@@ -178,6 +164,19 @@ func expectSession(row Row, method string, p Principal) Expectation {
 		return Deny403
 	}
 	return expectTenant(row, p)
+}
+
+// tokenRefused is whether the credential's own limits keep it off the route.
+func tokenRefused(row Row, method string, p Principal) bool {
+	return (isWrite(method) && p.ReadOnly) || (row.Unrestricted && p.Restricted) || (row.Unbound && p.IsBound())
+}
+
+// platformAdminOutsider: platform authority does not reach a tenant's project
+// or org. A human platform admin meets the membership gate like any customer,
+// and only a platform route naming a permission is theirs (EXC-757).
+func platformAdminOutsider(row Row, p Principal) bool {
+	tenantRoute := row.Param == ParamProject || row.Param == ParamOrg
+	return p.PlatformAdmin && tenantRoute && row.Permission == "" && p.OrgRole == ""
 }
 
 // expectTenant applies the org-role rung once the caller has cleared the

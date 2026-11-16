@@ -13,18 +13,7 @@ func (a *AdminConsole) ProjectCore(ctx context.Context, projectID string) (*admi
 	var core adminconsole.ProjectCore
 	var createdAt sql.NullTime
 	var postgresVersion, mysqlVersion string
-	err := a.db.QueryRowContext(ctx, `
-		WITH usage AS (`+latestMetricsSQL+`)
-		SELECT di.project_id, COALESCE(di.project_name, ''), di.org_id, o.name, o.slug, di.tier, COALESCE(di.namespace, ''),
-		       o.owner_id, COALESCE(u.email, ''), `+statusExpr+`, COALESCE(s.reason, ''),
-		       di.database_type, COALESCE(di.postgres_version, ''), COALESCE(di.mysql_version, ''), di.status, di.no_database,
-		       COALESCE(di.failure_reason, ''), COALESCE(usage.cpu_usage_cores, 0), COALESCE(usage.memory_usage_mb, 0), di.created_at
-		FROM database_instances di
-		JOIN orgs o ON o.id = di.org_id
-		JOIN users u ON u.id = o.owner_id
-		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
-		LEFT JOIN usage ON usage.project_id = di.project_id
-		WHERE di.project_id = $1`, projectID).Scan(
+	err := a.db.QueryRowContext(ctx, projectCoreSQL, projectID).Scan(
 		&core.ProjectID, &core.ProjectName, &core.OrgID, &core.OrgName, &core.OrgSlug, &core.Tier, &core.Namespace,
 		&core.OwnerID, &core.OwnerEmail, &core.OwnerStatus, &core.OwnerReason,
 		&core.DBType, &postgresVersion, &mysqlVersion, &core.DBStatus, &core.NoDatabase,
@@ -101,15 +90,7 @@ func (a *AdminConsole) ProjectAudit(ctx context.Context, projectID string, limit
 // ProjectFacts names every project's org and owner and gives its latest stored
 // usage, for the project list. One query for the whole list, never one per row.
 func (a *AdminConsole) ProjectFacts(ctx context.Context) (map[string]adminconsole.ProjectFact, error) {
-	rows, err := a.db.QueryContext(ctx, `
-		WITH usage AS (`+latestMetricsSQL+`)
-		SELECT di.project_id, o.name, COALESCE(u.email, ''), `+statusExpr+`,
-		       usage.project_id IS NOT NULL, COALESCE(usage.cpu_usage_cores, 0), COALESCE(usage.memory_usage_mb, 0)
-		FROM database_instances di
-		JOIN orgs o ON o.id = di.org_id
-		JOIN users u ON u.id = o.owner_id
-		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
-		LEFT JOIN usage ON usage.project_id = di.project_id`)
+	rows, err := a.db.QueryContext(ctx, projectFactsSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -125,3 +106,28 @@ func (a *AdminConsole) ProjectFacts(ctx context.Context) (map[string]adminconsol
 	}
 	return facts, rows.Err()
 }
+
+// projectCoreSQL is composed at compile time from constant fragments.
+const projectCoreSQL = `
+		WITH usage AS (` + latestMetricsSQL + `)
+		SELECT di.project_id, COALESCE(di.project_name, ''), di.org_id, o.name, o.slug, di.tier, COALESCE(di.namespace, ''),
+		       o.owner_id, COALESCE(u.email, ''), ` + statusExpr + `, COALESCE(s.reason, ''),
+		       di.database_type, COALESCE(di.postgres_version, ''), COALESCE(di.mysql_version, ''), di.status, di.no_database,
+		       COALESCE(di.failure_reason, ''), COALESCE(usage.cpu_usage_cores, 0), COALESCE(usage.memory_usage_mb, 0), di.created_at
+		FROM database_instances di
+		JOIN orgs o ON o.id = di.org_id
+		JOIN users u ON u.id = o.owner_id
+		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
+		LEFT JOIN usage ON usage.project_id = di.project_id
+		WHERE di.project_id = $1`
+
+// projectFactsSQL is composed at compile time from constant fragments.
+const projectFactsSQL = `
+		WITH usage AS (` + latestMetricsSQL + `)
+		SELECT di.project_id, o.name, COALESCE(u.email, ''), ` + statusExpr + `,
+		       usage.project_id IS NOT NULL, COALESCE(usage.cpu_usage_cores, 0), COALESCE(usage.memory_usage_mb, 0)
+		FROM database_instances di
+		JOIN orgs o ON o.id = di.org_id
+		JOIN users u ON u.id = o.owner_id
+		LEFT JOIN abuse_suspensions s ON s.user_id = u.id
+		LEFT JOIN usage ON usage.project_id = di.project_id`

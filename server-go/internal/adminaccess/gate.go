@@ -50,7 +50,8 @@ var otherServices = []string{"/functions/", "/storage/", "/internal/", "/metrics
 func Gate(cfg GateConfig) func(http.Handler) http.Handler {
 	adminHost := strings.ToLower(strings.TrimSpace(cfg.AdminHost))
 	return func(next http.Handler) http.Handler {
-		if cfg.Disabled {
+		switch {
+		case cfg.Disabled:
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if isAdminAPI(r.URL.Path) && !isServiceAccountRoute(r.URL.Path) {
 					http.NotFound(w, r)
@@ -58,34 +59,51 @@ func Gate(cfg GateConfig) func(http.Handler) http.Handler {
 				}
 				next.ServeHTTP(w, r)
 			})
-		}
-		if adminHost == "" {
+		case adminHost == "":
 			return next
 		}
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if cfg.IsInternal != nil && cfg.IsInternal(r) && isServiceAccountRoute(r.URL.Path) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			if hostOnly(r.Host) != adminHost {
-				if isAdminAPI(r.URL.Path) {
-					http.NotFound(w, r)
-					return
-				}
-				next.ServeHTTP(w, r)
-				return
-			}
-			if cfg.Verifier != nil && cfg.Verifier.Verify(r.Header.Get(AssertionHeader)) != nil {
-				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
-				return
-			}
-			if !servedOnAdminHost(r.URL.Path) {
-				http.NotFound(w, r)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
+		return &fence{cfg: cfg, adminHost: adminHost, next: next}
 	}
+}
+
+// fence is the gate for an install with an admin host.
+type fence struct {
+	cfg       GateConfig
+	adminHost string
+	next      http.Handler
+}
+
+func (f *fence) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case f.cfg.IsInternal != nil && f.cfg.IsInternal(r) && isServiceAccountRoute(r.URL.Path):
+		f.next.ServeHTTP(w, r)
+	case hostOnly(r.Host) != f.adminHost:
+		f.offAdminHost(w, r)
+	default:
+		f.onAdminHost(w, r)
+	}
+}
+
+// offAdminHost leaves customer traffic alone and makes the admin API look unmounted.
+func (f *fence) offAdminHost(w http.ResponseWriter, r *http.Request) {
+	if isAdminAPI(r.URL.Path) {
+		http.NotFound(w, r)
+		return
+	}
+	f.next.ServeHTTP(w, r)
+}
+
+// onAdminHost demands the Access assertion, then serves only the console's own surface.
+func (f *fence) onAdminHost(w http.ResponseWriter, r *http.Request) {
+	if f.cfg.Verifier != nil && f.cfg.Verifier.Verify(r.Header.Get(AssertionHeader)) != nil {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+	if !servedOnAdminHost(r.URL.Path) {
+		http.NotFound(w, r)
+		return
+	}
+	f.next.ServeHTTP(w, r)
 }
 
 // isServiceAccountRoute is the one admin route the bootstrap Job reaches over

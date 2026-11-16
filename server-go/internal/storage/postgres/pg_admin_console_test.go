@@ -110,23 +110,16 @@ func TestAdminConsoleSuspendHidesTheAccountUnlessAsked(t *testing.T) {
 		t.Fatal(err)
 	}
 	hidden, _ := console.ListUsers(ctx, adminconsole.UserQuery{Limit: 50})
-	for _, row := range hidden.Items {
-		if row.ID == "u-cust" {
-			t.Fatal("a suspended account must be hidden by default")
-		}
+	if _, listed := userRow(hidden, "u-cust"); listed {
+		t.Fatal("a suspended account must be hidden by default")
 	}
 	shown, _ := console.ListUsers(ctx, adminconsole.UserQuery{Limit: 50, IncludeSuspended: true})
-	found := false
-	for _, row := range shown.Items {
-		if row.ID == "u-cust" {
-			found = true
-			if row.Status != adminconsole.StatusSuspended || row.SuspendedReason != "proxy" {
-				t.Fatalf("row = %+v", row)
-			}
-		}
-	}
-	if !found {
+	row, listed := userRow(shown, "u-cust")
+	if !listed {
 		t.Fatal("includeSuspended must show the account")
+	}
+	if row.Status != adminconsole.StatusSuspended || row.SuspendedReason != "proxy" {
+		t.Fatalf("row = %+v", row)
 	}
 	user, _ := store(t, console).FindUserByID(ctx, "u-cust")
 	if user.Active {
@@ -257,4 +250,14 @@ func TestOwnerSuspendedOrgsNamesOrgsOfSuspendedOwners(t *testing.T) {
 func store(t *testing.T, console *AdminConsole) *Store {
 	t.Helper()
 	return &Store{db: console.db}
+}
+
+// userRow finds one account in a page of the console's users.
+func userRow(page adminconsole.Page[adminconsole.UserRow], id string) (adminconsole.UserRow, bool) {
+	for _, row := range page.Items {
+		if row.ID == id {
+			return row, true
+		}
+	}
+	return adminconsole.UserRow{}, false
 }
