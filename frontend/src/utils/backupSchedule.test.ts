@@ -18,7 +18,7 @@ describe('describeBackupSchedule', () => {
   });
 
   test('anything else never prints the raw cron', () => {
-    for (const cron of ['*/5 * * * *', '0 0 1 * *', 'garbage', '', undefined]) {
+    for (const cron of ['0 2 * * 1-5', '*/5 * * * *', '0 0 1 * *', 'garbage', '', undefined]) {
       expect(describeBackupSchedule(cron)).toBe('Scheduled backups');
     }
   });

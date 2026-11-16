@@ -68,12 +68,6 @@ describe('OneTimePasswordPanel', () => {
     expect(document.body.innerHTML).not.toContain(encodeURIComponent(PASSWORD));
   });
 
-  test('a project nobody can reach from the internet says so instead of printing an internal host', () => {
-    render(<Harness address={{ kind: 'none' }} />);
-    expect(screen.getByTestId('otp-host')).toHaveTextContent('Not reachable from the internet');
-    const csv = decodeURIComponent(screen.getByRole('link', { name: /download csv/i }).getAttribute('href')!);
-  });
-
   test('with no public endpoint the panel host says so and the CSV host cell is empty', () => {
     render(<Harness address={{ kind: 'none' }} />);
     expect(screen.getByTestId('otp-host')).toHaveTextContent('Not reachable from the internet');

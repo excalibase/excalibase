@@ -182,3 +182,26 @@ func TestResetRefusesAChosenPasswordWhileTheFlagIsOff(t *testing.T) {
 		t.Errorf("status %d, want 400", w.Code)
 	}
 }
+
+func TestResetAnswers400ForAnUnreadableBodyAnd409ForAnUnfinishedReset(t *testing.T) {
+	r, vault := rotateRouter(t, nil)
+	if w := rotatePost(r, `{"password":`); w.Code != http.StatusBadRequest {
+		t.Errorf("unreadable body: %d", w.Code)
+	}
+	vault.data["projects/rot-proj/credentials/pending/admin"] = map[string]string{"password": "left-by-an-interrupted-reset", "username": "owner"}
+	w := rotatePost(r, `{"password":"`+chosenPassword+`"}`)
+	if w.Code != http.StatusConflict || strings.Contains(w.Body.String(), chosenPassword) {
+		t.Errorf("unfinished reset: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreateRefusesAChosenPasswordWithNoDatabaseOrWithTheFlagOff(t *testing.T) {
+	withDatabase := strings.Replace(oneTimeBodyFmt, "%s", passwordMember, 1)
+	if w := postProvision(oneTimeProvisionRouter(t, false), withDatabase, "respond-async"); w.Code != http.StatusBadRequest {
+		t.Errorf("flag off: %d %s", w.Code, w.Body.String())
+	}
+	noDatabase := `{"projectName":"fresh","orgId":"org1","noDatabase":true` + passwordMember + `}`
+	if w := postProvision(oneTimeProvisionRouter(t, true), noDatabase, "respond-async"); w.Code != http.StatusBadRequest {
+		t.Errorf("no database: %d %s", w.Code, w.Body.String())
+	}
+}

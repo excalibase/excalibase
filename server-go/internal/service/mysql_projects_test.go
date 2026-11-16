@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"slices"
 	"strings"
 	"testing"
@@ -461,5 +462,31 @@ func TestMySQLVerifyConfig(t *testing.T) {
 	}
 	if _, err := mysqlVerifyConfig(inst, "admin", "pw", dsnOverrides{}, ""); !errors.Is(err, mysqltls.ErrNoServerCA) {
 		t.Errorf("no CA: %v", err)
+	}
+}
+
+func TestAMySQLOwnerIsCreatedWithTheChosenPasswordAndShownOnlyAsATemplate(t *testing.T) {
+	svc, store, _ := setupMySQLTest(t)
+	svc.SetFeatures(features.NewStatic(features.OneTimeCredentials, features.MySQL))
+	request := mysqlProvisionRequest("")
+	request.OwnerPassword = chosenOwnerPassword
+	resp, err := svc.Provision(context.Background(), request)
+	if err != nil || resp.Status != "ACTIVE" {
+		t.Fatalf("Provision: %v %+v", err, resp)
+	}
+	inst, err := store.FindByProjectID(resp.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := svc.OwnerPassword(inst.ProjectID); got != chosenOwnerPassword {
+		t.Errorf("the vault holds %q for the MySQL owner", got)
+	}
+	creds, err := svc.GetCredentials(context.Background(), inst.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.Password != "" || strings.Contains(creds.ConnectionURL, chosenOwnerPassword) ||
+		!strings.Contains(creds.ConnectionURL, "<password>@<host>:<port>") || !strings.Contains(creds.JDBCURL, "<host>:<port>") {
+		t.Errorf("credentials %+v", creds)
 	}
 }
