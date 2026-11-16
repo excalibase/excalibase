@@ -55,7 +55,8 @@ test.describe('MySQL projects', () => {
       databaseName: 'app', createdAt: '2026-10-11T00:00:00Z', updatedAt: '2026-10-11T00:00:00Z',
     });
     await page.goto(`/project/${PROJECT_ID}`);
-    await expect(page.getByTestId('service-database-mysql-endpoint')).toContainText(`${HOST}:3306`, { timeout: FIRST_RENDER });
+    await expect(page.getByTestId('service-database-mysql-endpoint')).toContainText('Not reachable from the internet', { timeout: FIRST_RENDER });
+    await expect(page.getByTestId('service-database-mysql-endpoint')).not.toContainText('svc.cluster.local');
     await expect(page.getByTestId('nav-settings')).toBeVisible();
     // ADR 0041 decision 9: the engine-aware pages are listed, the Postgres-only ones are not.
     await expect(page.getByTestId('nav-sql')).toBeVisible();

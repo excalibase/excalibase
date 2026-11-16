@@ -3,7 +3,7 @@ import { useCallback, useEffect } from 'react';
 import { api } from '../api/client';
 import { useSSE } from './useSSE';
 import { PROJECT_FOLLOW_MS, RESPOND_ASYNC, settleProject } from './projectFollow';
-import type { DatabaseInstance, DatabaseSettings, ProvisioningRequest, CredentialsResponse, BackupConfig, BackupInfo } from '../types';
+import type { DatabaseInstance, DatabaseSettings, ProvisioningRequest, CredentialsResponse, BackupConfig, BackupInfo, RotatedCredentials, WithPassword } from '../types';
 
 export const useInstances = () => {
   return useQuery({
@@ -70,6 +70,22 @@ export const useCredentials = (projectId: string) => {
   });
 };
 
+// Resets the owner password: the customer's own, or a generated one when
+// blank. The new password is in the answer this once; the hook keeps nothing.
+export const useResetPassword = (projectId: string) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (chosenPassword: string) => {
+      const url = `/provision/${projectId}/credentials/rotate`;
+      const response = chosenPassword
+        ? await api.post<RotatedCredentials>(url, { password: chosenPassword })
+        : await api.post<RotatedCredentials>(url);
+      return response.data;
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['credentials', projectId] }),
+  });
+};
+
 export const useProvisionDatabase = () => {
   const queryClient = useQueryClient();
 
@@ -77,7 +93,7 @@ export const useProvisionDatabase = () => {
     mutationFn: async (request: ProvisioningRequest) => {
       // A build outlasts one request: the answer comes once the project exists
       // (PROVISIONING) and the project page follows its status to ACTIVE or FAILED.
-      const response = await api.post<DatabaseInstance>('/provision', request, {
+      const response = await api.post<WithPassword<DatabaseInstance>>('/provision', request, {
         headers: { Prefer: 'respond-async' },
       });
       return response.data;
@@ -391,7 +407,7 @@ export const useAddDatabase = (projectId: string) => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (settings: DatabaseSettings) => {
-      const response = await api.post<DatabaseInstance>(`/provision/${projectId}/database`, settings, {
+      const response = await api.post<WithPassword<DatabaseInstance>>(`/provision/${projectId}/database`, settings, {
         headers: { Prefer: 'respond-async' },
       });
       return response.data;
