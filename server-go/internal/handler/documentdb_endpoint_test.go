@@ -38,7 +38,7 @@ func endpointBody(t *testing.T, view service.DBEndpointView) map[string]any {
 	router := chi.NewRouter()
 	router.Get("/api/projects/{projectId}/db-endpoint", h.GetDBEndpoint)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/projects/proj-abc1234567/db-endpoint", nil))
+	router.ServeHTTP(rec, asUser(httptest.NewRequest(http.MethodGet, "/api/projects/proj-abc1234567/db-endpoint", nil), "platform_admin"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}

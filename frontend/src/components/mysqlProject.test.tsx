@@ -9,6 +9,8 @@ import { PROJECT_NAV, mysqlUnavailableReason, sectionLanding, visibleNavItems, v
 import { engineLabel } from '../utils/engine';
 
 vi.mock('../api/client', () => ({ api: { get: vi.fn() } }));
+let hostsApps = false;
+vi.mock('../hooks/useHostsApps', () => ({ useHostsApps: () => hostsApps }));
 
 // ADR 0041: a MySQL project shows its status and endpoint, and the pages that
 // only work on Postgres are neither listed nor reachable.
@@ -48,7 +50,10 @@ function renderWithProject(ui: React.ReactElement, path = '/project/p-my') {
 }
 
 describe('MySQL projects in Studio', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hostsApps = false;
+  });
 
   test('the engine is named MySQL', () => {
     expect(engineLabel({ databaseType: 'MYSQL' })).toBe('MySQL');
@@ -129,12 +134,19 @@ describe('MySQL projects in Studio', () => {
     expect(screen.queryByText('rls page')).not.toBeInTheDocument();
   });
 
+  test('the overview tells a project that hosts apps they get DATABASE_URL, with no address', async () => {
+    hostsApps = true;
+    renderWithProject(<DatabaseServiceCard projectId="p-my" />);
+    expect(await screen.findByTestId('apps-database-url-note')).toHaveTextContent(/DATABASE_URL injected automatically/);
+    expect(screen.getByTestId('service-database-mysql-endpoint')).not.toHaveTextContent(/not reachable/i);
+    expect(document.body.textContent).not.toContain('svc.cluster.local');
+  });
+
   test('the overview shows the MySQL version and where to connect', async () => {
     renderWithProject(<DatabaseServiceCard projectId="p-my" />);
     expect(await screen.findByText('MySQL 8.4.10')).toBeInTheDocument();
-    expect(screen.getByTestId('service-database-mysql-endpoint')).toHaveTextContent(
-      'moco-p-my-mysql-primary.o-p-my.svc.cluster.local:3306'
-    );
+    expect(screen.getByTestId('service-database-mysql-endpoint')).toHaveTextContent(/not reachable from the internet/i);
+    expect(document.body.textContent).not.toContain('svc.cluster.local');
     expect(screen.getByTestId('service-database-mysql-endpoint')).toHaveTextContent(/TLS required/i);
     expect(screen.queryByText('Open database')).not.toBeInTheDocument();
     // No generated API serves a MySQL project yet.

@@ -60,6 +60,9 @@ ko() { echo "FAIL $*"; fail=$((fail+1)); }
 # when grep stops early and the engine's log writer gets SIGPIPE (Podman 4.9).
 logs_have() { local out; out=$($DOCKER logs "$1" 2>&1); grep -qF -- "$2" <<< "$out"; }
 c() { curl -sk --max-time 30 --resolve studio.localhost:$PORT:127.0.0.1 --resolve api.localhost:$PORT:127.0.0.1 --resolve files.localhost:$PORT:127.0.0.1 "$@"; }
+# vault_field <project> <role> <field>: a stored login read as the platform admin;
+# the credentials route no longer returns a password (EXC-759).
+vault_field() { c -H "Authorization: Bearer $T" "https://studio.localhost:$PORT/api/vault/secrets/projects/$1/credentials/$2" | python3 -c "import json,sys;print(json.load(sys.stdin).get(sys.argv[1],''))" "$3" 2>/dev/null; }
 # Apps leave per-project networks and disks; they go with the managed containers.
 wipe_managed() {
   $DOCKER rm -f "$SMOKE_DNS" "$SITE_FAKES" >/dev/null 2>&1

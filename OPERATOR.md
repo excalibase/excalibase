@@ -1108,6 +1108,18 @@ seeded by the bootstrap Job.
 
 ## 6.6. Project database credential rotation
 
+**Passwords are shown once (`FEATURE_ONETIMECREDENTIALS`, on by default, EXC-759).** With the
+flag on, a database owner password is returned only by the call that sets it:
+`POST /api/provision` and `POST /api/provision/{id}/database` accept an
+optional `password` (16 to 128 characters; blank generates one) and return it
+once; `POST .../credentials/rotate` takes an optional `{"password": ...}` and
+returns the new one once. `GET .../credentials` carries no password at all (the
+owner's or the read-only login's) and its `connectionUrl` holds `<password>`.
+The engine, functions, backups, the watcher and app deploys read the vault
+directly and are not affected. A project created before the flag has no way to
+read its password back: reset it. The flag is on unless
+`FEATURE_ONETIMECREDENTIALS=false` is set, on Kubernetes and on a single host.
+
 `POST /api/provision/{id}/credentials/rotate` replaces the passwords of every
 platform role filed under `projects/{id}/credentials/` — `auth_admin`, then
 `excalibase_app`, then `excalibase_scheduler`, then the project owner, which is

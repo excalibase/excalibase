@@ -1884,6 +1884,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler.SetPublicationName(name)
 	}
 	provHandler := handler.NewProvisioningHandler(provSvc, sqlStore)
+	provHandler.SetAuditLog(sqlStore)
 	provHandler.SetActivityStore(sqlStore)
 	suspendedOwners := pgstore.NewAdminConsole(sqlStore.DB()).OwnerSuspendedOrgs
 	provHandler.SetSuspendedOrgs(suspendedOwners)

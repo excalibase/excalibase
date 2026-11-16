@@ -17,7 +17,6 @@ const closed = {
   host: '',
   port: 0,
   requireTls: true,
-  internal: {},
   canChange: true,
 };
 const open = {

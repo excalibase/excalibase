@@ -135,7 +135,7 @@ func readAddressResponseFor(r *http.Request, view service.DBReadAddressView) dbR
 		Username:         view.Username, ReadOnlyLogin: view.ReadOnlyLogin,
 		CanChange: callerMayChangeDBEndpoint(r) && !view.SingleHost,
 	}
-	if view.Internal.Host != "" {
+	if view.Internal.Host != "" && callerSeesClusterAddress(r) {
 		out.Internal = &dbReadAddressInternal{Host: view.Internal.Host, Port: view.Internal.Port,
 			ConnectionString: view.Internal.ConnectionString}
 	}
