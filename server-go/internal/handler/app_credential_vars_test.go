@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -156,5 +157,53 @@ func TestRefusedUpdateRestoresAnExistingSecretAndRemovesAFreshOne(t *testing.T) 
 	fresh := apphost.AppSecretRef(appTestProject, "app-1", "NEW_SECRET")
 	if _, kept := vault.data[fresh.Path]; kept {
 		t.Fatal("a value stored for the refused write was left behind")
+	}
+}
+
+type failingGetVault struct{ *fakeVault }
+
+func (failingGetVault) Get(string) (map[string]string, error) { return nil, errors.New("vault down") }
+
+// A vault that cannot be read refuses the write: absence and failure differ.
+func TestCredentialVarRefusedWhenTheVaultCannotBeRead(t *testing.T) {
+	r, store := credentialVarsRouter(t, failingGetVault{newFakeVault()})
+	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/",
+		createBody(literal("STRIPE_API_KEY", credentialValue)))
+	if w.Code != http.StatusServiceUnavailable || len(store.apps) != 0 {
+		t.Fatalf("got %d with %d apps saved, want 503 and none", w.Code, len(store.apps))
+	}
+}
+
+type putFailsOnSecondVault struct {
+	*fakeVault
+	puts    int
+	deleted []string
+}
+
+func (v *putFailsOnSecondVault) Put(p string, d map[string]string) error {
+	v.puts++
+	if v.puts == 2 {
+		return errors.New("vault refused")
+	}
+	return v.fakeVault.Put(p, d)
+}
+
+func (v *putFailsOnSecondVault) Delete(p string) error {
+	v.deleted = append(v.deleted, p)
+	return errors.New("delete refused")
+}
+
+// A store that fails halfway undoes what it wrote, and an undo that itself
+// fails is logged, never fatal.
+func TestCredentialVarPartialStoreFailureIsUndone(t *testing.T) {
+	vault := &putFailsOnSecondVault{fakeVault: newFakeVault()}
+	r, store := credentialVarsRouter(t, vault)
+	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/",
+		createBody(literal("STRIPE_API_KEY", credentialValue), literal("DB_PASSWORD", "hunter2")))
+	if w.Code != http.StatusInternalServerError || len(store.apps) != 0 {
+		t.Fatalf("got %d with %d apps saved, want 500 and none", w.Code, len(store.apps))
+	}
+	if len(vault.deleted) != 2 {
+		t.Fatalf("undo must try both paths, tried %v", vault.deleted)
 	}
 }

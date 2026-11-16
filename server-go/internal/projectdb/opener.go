@@ -366,7 +366,7 @@ func (o *Opener) CachedPools() int {
 func (o *Opener) Evict(projectID string) {
 	o.mu.Lock()
 	var closing []*pool
-	for _, key := range []string{projectID, mysqlScriptKey(projectID), mysqlStatsKey(projectID), schedulerKey(projectID)} {
+	for _, key := range []string{projectID, mysqlScriptKey(projectID), mysqlStatsKey(projectID), schedulerKey(projectID), ownerKey(projectID)} {
 		if p, ok := o.pools[key]; ok {
 			closing = append(closing, p)
 			delete(o.pools, key)
