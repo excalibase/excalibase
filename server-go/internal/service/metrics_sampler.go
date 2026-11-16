@@ -42,6 +42,9 @@ func (s *MetricsService) SetHistory(history MetricsHistory, alerts *AlertingServ
 	s.alerts = alerts
 }
 
+// SetClusterSampler adds the cluster's own checks to every tick.
+func (s *MetricsService) SetClusterSampler(sampler LoopSampler) { s.cluster = sampler }
+
 // StartSampler samples every running database each interval on the leading replica.
 func (s *MetricsService) StartSampler(ctx context.Context, leader LeaderChecker, interval time.Duration) func() {
 	ctx, cancel := context.WithCancel(ctx)
@@ -80,6 +83,9 @@ func (s *MetricsService) SampleAll(ctx context.Context) {
 	}
 	if s.host != nil {
 		s.host.Sample(ctx)
+	}
+	if s.cluster != nil {
+		s.cluster.Sample(ctx)
 	}
 	instances, err := s.store.FindAll()
 	if err != nil {
