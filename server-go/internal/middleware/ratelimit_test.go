@@ -126,7 +126,9 @@ func (c *fakeClock) Advance(d time.Duration) {
 func TestRateLimit_RefillsOverTime(t *testing.T) {
 	// 10 burst per 100ms: one token every 10ms.
 	clock := &fakeClock{now: time.Unix(1_000, 0)}
-	h := rateLimitWithClock(constKey("k"), 10, 100*time.Millisecond, clock.Now)(okHandler())
+	limiter := newKeyLimiter(10, 100*time.Millisecond, clock.Now)
+	t.Cleanup(limiter.stop)
+	h := rateLimitWith(constKey("k"), limiter)(okHandler())
 	for i := 0; i < 10; i++ {
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
 	}
@@ -149,6 +151,17 @@ func TestRateLimit_RefillsOverTime(t *testing.T) {
 	if w.Code != 200 {
 		t.Errorf("after refill window, request should pass; got %d", w.Code)
 	}
+}
+
+func TestKeyLimiter_StopEndsItsCleanupLoop(t *testing.T) {
+	limiter := newKeyLimiter(1, time.Minute, time.Now)
+	limiter.stop()
+	select {
+	case <-limiter.state.stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the cleanup loop still runs after stop")
+	}
+	limiter.stop() // stopping twice is harmless
 }
 
 func TestPerIP_StripsPort(t *testing.T) {
