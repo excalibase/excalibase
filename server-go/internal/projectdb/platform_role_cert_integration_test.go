@@ -145,6 +145,7 @@ func startCertPostgres(t *testing.T) certPostgres {
 		t.Fatalf("start postgres: %v", err)
 	}
 	t.Cleanup(func() { _ = pg.Terminate(ctx) })
+	pgready.DumpLogsOnFailure(t, pg)
 	port, err := pg.MappedPort(ctx, "5432/tcp")
 	if err != nil {
 		t.Fatal(err)
