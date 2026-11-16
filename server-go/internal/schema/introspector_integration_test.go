@@ -16,6 +16,10 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// testPGHostPort locates the container the last setupPG started, for tests
+// that connect as another login.
+var testPGHostPort string
+
 func setupPG(t *testing.T) (*sql.DB, *sql.DB, func()) {
 	t.Helper()
 	ctx := context.Background()
@@ -84,6 +88,7 @@ func setupPG(t *testing.T) (*sql.DB, *sql.DB, func()) {
 	// Connect as excalibase_app (non-superuser)
 	host, _ := pgContainer.Host(ctx)
 	port, _ := pgContainer.MappedPort(ctx, "5432/tcp")
+	testPGHostPort = fmt.Sprintf("host=%s port=%s", host, port.Port())
 	appConnStr := fmt.Sprintf("host=%s port=%s user=excalibase_app password=apppass dbname=testdb sslmode=disable", host, port.Port())
 	appDB, err := sql.Open("postgres", appConnStr)
 	if err != nil {

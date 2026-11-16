@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
@@ -39,6 +40,11 @@ const (
 // setupSchemaRouter creates a chi router with SchemaHandler wired to a real
 // PostgreSQL via testcontainers, vault unsealed with credentials stored.
 func setupSchemaRouter(t *testing.T) chi.Router {
+	return setupSchemaRouterAs(t, domain.OrgRoleAdmin)
+}
+
+// setupSchemaRouterAs serves the schema routes to a caller holding role on the project.
+func setupSchemaRouterAs(t *testing.T, role string) chi.Router {
 	t.Helper()
 	ctx := context.Background()
 
@@ -76,7 +82,7 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 		GRANT ALL ON SCHEMA public TO excalibase_app;
 		ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO excalibase_app;
 		ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO excalibase_app;
-		CREATE ROLE app_owner LOGIN;
+		CREATE ROLE app_owner LOGIN PASSWORD 'ownerpass';
 		CREATE SCHEMA excalibase;
 		GRANT USAGE ON SCHEMA excalibase TO excalibase_app;
 	`+pgroles.CustomerRoleSQL("app_owner"))
@@ -132,10 +138,23 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 		t.Fatalf("vault put: %v", err)
 	}
 
+	// The owner's login, which runs role management (EXC-761).
+	err = v.Put("projects/test-proj/credentials/admin", map[string]string{
+		"host":     host,
+		"port":     port.Port(),
+		"username": "app_owner",
+		"password": "ownerpass",
+		"database": "testdb",
+	})
+	if err != nil {
+		t.Fatalf("vault put owner: %v", err)
+	}
+
 	// 3. Wire handler (testcontainers postgres has no SSL)
 	t.Setenv("SCHEMA_DB_SSLMODE", "disable")
 	h := schemaHandlerOver(t, v, "test-proj")
 	r := chi.NewRouter()
+	r.Use(callerWithProjectRole(role))
 	r.Route(testSchemaBase, h.Routes)
 	return r
 }
@@ -842,5 +861,59 @@ func TestSchemaHandler_DDLRunsUnderTheSessionTimeouts(t *testing.T) {
 	w := schemaRequest(r, "POST", "/api/schema/test-proj/query", `{"query":"SHOW lock_timeout"}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "5s") {
 		t.Fatalf("lock_timeout on the Studio pool: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// EXC-761: a LOGIN role, or any role with a password, is a database credential
+// above a Developer's rung. Nothing is created for a Developer; a role that
+// cannot log in stays theirs to make.
+func TestSchemaHandler_CreateRole_LoginNeedsAdmin(t *testing.T) {
+	r := setupSchemaRouterAs(t, domain.OrgRoleDeveloper)
+	pwd := testutil.FixturePassword("dev-login-role")
+
+	for name, body := range map[string]string{
+		"login":    `{"name":"dev_login","login":true}`,
+		"password": fmt.Sprintf(`{"name":"dev_pwd","password":%q,"login":false}`, pwd),
+	} {
+		if w := schemaRequest(r, "POST", testRolesPath, body); w.Code != http.StatusForbidden {
+			t.Errorf("%s: got %d %s, want 403", name, w.Code, w.Body.String())
+		}
+	}
+	w := schemaRequest(r, "GET", testRolesPath, "")
+	for _, refused := range []string{"dev_login", "dev_pwd"} {
+		if strings.Contains(w.Body.String(), refused) {
+			t.Errorf("role %s was created despite the refusal", refused)
+		}
+	}
+	if w := schemaRequest(r, "POST", testRolesPath, `{"name":"dev_group","login":false}`); w.Code != http.StatusCreated {
+		t.Errorf("a NOLOGIN role is a Developer's: got %d %s", w.Code, w.Body.String())
+	}
+}
+
+// EXC-761: the role functions are callable by the owner's login only. A
+// Developer's SQL runs as excalibase_app, so it cannot mint a LOGIN role, set a
+// role's password or drop a role by calling them, however the SQL reaches the
+// database.
+func TestSchemaHandler_CustomerSQLCannotCallTheRoleFunctions(t *testing.T) {
+	r := setupSchemaRouterAs(t, domain.OrgRoleDeveloper)
+	pwd := testutil.FixturePassword("sql-role")
+
+	for name, statement := range map[string]string{
+		"create": fmt.Sprintf(`SELECT excalibase.create_role('sneaky', %q, true)`, pwd),
+		"alter":  fmt.Sprintf(`SELECT excalibase.alter_role_password('sneaky', %q)`, pwd),
+		"drop":   `SELECT excalibase.drop_role('sneaky')`,
+	} {
+		for path, body := range map[string]string{
+			testSchemaBase + "/query": fmt.Sprintf(`{"query":%q}`, statement),
+			testSchemaBase + "/ddl":   fmt.Sprintf(`{"sql":%q}`, statement),
+		} {
+			w := schemaRequest(r, "POST", path, body)
+			if w.Code == http.StatusOK && !strings.Contains(w.Body.String(), "permission denied") {
+				t.Errorf("%s via %s was not refused: %d %s", name, path, w.Code, w.Body.String())
+			}
+		}
+	}
+	if w := schemaRequest(r, "GET", testRolesPath, ""); strings.Contains(w.Body.String(), "sneaky") {
+		t.Fatal("a role was created through SQL")
 	}
 }

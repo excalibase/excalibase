@@ -12,7 +12,7 @@ const INTERNAL = {
   connectionString: 'postgresql://excalibase_app@test-project-postgres-rw.org-1.svc.cluster.local:5432/app?sslmode=require',
 };
 
-async function json(page: Page, pattern: string, body: unknown) {
+async function json(page: Page, pattern: string | RegExp, body: unknown) {
   await page.route(pattern, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }),
   );

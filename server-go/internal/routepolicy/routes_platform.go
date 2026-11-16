@@ -69,7 +69,7 @@ var publicRows = []Row{
 var platformRows = []Row{
 	{Methods: anyVerb, Pattern: "/mcp", Auth: AuthHandlerSession, Owner: OwnerNone, Discloses: NoSecret,
 		Note: "MCP for coding tools (EXC-544): takes only a personal access token in the Authorization header; every tool is an in-process request through this table's own routes with that token, narrowed by read_only and project, so a secret read stays behind its own row"},
-	{Methods: get, Pattern: "/api/capacity", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret},
+	{Methods: get, Pattern: "/api/capacity", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole, Discloses: NoSecret, Note: "cluster CPU and memory, platform-wide tier counts and runtime errors; no tenant needs them (EXC-761)"},
 	{Methods: post, Pattern: "/api/email/verify/send", Auth: AuthSession, Owner: OwnerNone, Note: "mails only the caller's own verified-address flow, so a read-only token may not trigger a send"},
 	{Methods: get, Pattern: "/api/tiers/", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "tier specs feed the provision page's selector; editing lives under /api/admin/tiers"},
 	{Methods: get, Pattern: "/api/postgres/catalog", Auth: AuthSession, Owner: OwnerNone, Discloses: NoSecret, Note: "the supported PostgreSQL majors and their DocumentDB availability; the create-project form reads it instead of carrying its own copy"},

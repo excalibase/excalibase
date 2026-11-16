@@ -124,8 +124,8 @@ var projectRows = []Row{
 	{Methods: post, Pattern: "/api/projects/{projectId}/metrics-keys/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "mints a PAT holding only metrics:read, bound to this project; kept only as its SHA-256"},
 	{Methods: del, Pattern: "/api/projects/{projectId}/metrics-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "revokes only a metrics key bound to this project"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/sdk-keys/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, Discloses: NoSecret, Note: "prefixes and dates only; the key itself is shown once, at creation"},
-	{Methods: post, Pattern: "/api/projects/{projectId}/sdk-keys/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "relayed to auth with the control plane's own short key-admin token"},
-	{Methods: del, Pattern: "/api/projects/{projectId}/sdk-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: post, Pattern: "/api/projects/{projectId}/sdk-keys/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "a publishable key is Developer; a secret (service-role) key is refused below Admin by the handler; relayed to auth with the control plane's own short key-admin token"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/sdk-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "a publishable key is Developer; revoking a secret (service-role) key is refused below Admin by the handler"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/ai-activity/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Discloses: NoSecret, Note: "MCP calls of the project; the revoke id is a token hash, shown for the caller's own tokens, or every member's to an org owner or admin"},
 	{Methods: del, Pattern: "/api/projects/{projectId}/ai-activity/tokens/{tokenHash}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "only a token the project's feed shows; another member's needs org owner or admin, checked in the handler"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/end-users/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Discloses: NoSecret, Note: "end users' emails and roles, read from auth with a user-admin token naming the caller"},
@@ -180,8 +180,8 @@ var projectRows = []Row{
 	{Methods: put, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/access", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "decides what the project's app users may do in the bucket"},
 	// S3 access keys (EXC-630): ids, scopes and dates only; the secret is in the create answer alone.
 	{Methods: get, Pattern: "/api/projects/{projectId}/storage/s3-keys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "access key ids, scopes and dates; never a secret"},
-	{Methods: post, Pattern: "/api/projects/{projectId}/storage/s3-keys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "issues a credential for the project's buckets; the secret is answered once"},
-	{Methods: del, Pattern: "/api/projects/{projectId}/storage/s3-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: post, Pattern: "/api/projects/{projectId}/storage/s3-keys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "issues a credential for the project's buckets; the secret is answered once"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/storage/s3-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
 
 	// tus mounts every method on two patterns. HEAD reports an upload's
 	// offset (a read); everything else creates, appends to or terminates an

@@ -7,7 +7,7 @@ const PROJECT_ID = 'shop-mysql';
 const HOST = 'moco-shop-mysql-mysql-primary.org-1-shop-mysql.svc.cluster.local';
 const CA_PEM = '-----BEGIN CERTIFICATE-----\nMYSQLCA\n-----END CERTIFICATE-----\n';
 
-async function json(page: Page, pattern: string, body: unknown) {
+async function json(page: Page, pattern: string | RegExp, body: unknown) {
   await page.route(pattern, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }),
   );
@@ -16,7 +16,7 @@ async function json(page: Page, pattern: string, body: unknown) {
 async function mockMySQLProject(page: Page) {
   await loginAs(page);
   await json(page, '**/api/config', { deploymentMode: 'cloud', features: { mysql: true } });
-  await json(page, '**/api/orgs', [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
+  await json(page, /\/api\/orgs(\?.*)?$/, [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
   await json(page, `**/api/provision/${PROJECT_ID}`, {
     projectId: PROJECT_ID, orgId: 'org-1', databaseType: 'MYSQL', mysqlVersion: '8.4.10', tier: 'FREE',
     namespace: 'org-1-shop-mysql', status: 'ACTIVE', currentStage: 'COMPLETED', host: HOST, port: 3306,

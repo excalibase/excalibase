@@ -182,7 +182,7 @@ c -o /dev/null -w '%{http_code}' https://api.localhost:$PORT/actuator/health | g
 
 echo "== studio sign-in"
 PW=$($DOCKER logs excalibase-bootstrap 2>&1 | sed -n 's/.*password: //p' | tail -1)
-T=$(c -X POST https://studio.localhost:$PORT/api/auth/login -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$PW\"}" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("token",""))')
+T=$(c -X POST https://studio.localhost:$PORT/api/auth/login -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$PW\"}" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("token",""))')
 [ -n "$T" ] && ok "admin signs in through the edge" || ko "sign-in failed"
 if [ -n "${MANUAL_UNSEAL:-}" ]; then
   echo "== manual unseal: the admin initializes the vault"

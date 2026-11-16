@@ -366,11 +366,22 @@ func (h *AuthHandler) issueRegistrationToken(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]interface{}{
-		"token":     raw,
-		"expiresAt": expiry,
-		"user":      user,
-	})
+	writeJSON(w, sessionBody(r, raw, expiry, user))
+}
+
+// ReturnSessionTokenHeader opts a caller into receiving the session secret in
+// the JSON body, for a CLI or script that has no cookie jar. Browsers never
+// send it: the secret stays in the httpOnly cookie, out of reach of page script.
+const ReturnSessionTokenHeader = "X-Return-Session-Token"
+
+// sessionBody is the sign-in answer. The 12-hour session secret is in it only
+// when the caller asked for it (EXC-761).
+func sessionBody(r *http.Request, raw string, expiry time.Time, user *domain.User) map[string]interface{} {
+	body := map[string]interface{}{"expiresAt": expiry, "user": user}
+	if r.Header.Get(ReturnSessionTokenHeader) == "true" {
+		body["token"] = raw
+	}
+	return body
 }
 
 // sessionTokenTTL is how long the studio's auto-issued login PAT lives.
@@ -503,14 +514,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	h.recordLogin(r, user)
 
-	writeJSON(w, map[string]interface{}{
-		// Token is also returned in the body so SDK / curl callers can
-		// pin to header auth. Browser clients should rely on the cookie
-		// and ignore this field.
-		"token":     raw,
-		"expiresAt": expiry,
-		"user":      user,
-	})
+	writeJSON(w, sessionBody(r, raw, expiry, user))
 }
 
 // LoginRecorder is the optional store capability that remembers the last sign-in.
