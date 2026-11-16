@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -104,10 +105,23 @@ func TestRateLimit_EmptyKeyPassesThrough(t *testing.T) {
 }
 
 // fakeClock is a clock the test moves by hand, so no assertion depends on how long the runner took.
-type fakeClock struct{ now time.Time }
+// The limiter's cleanup goroutine reads it too, so access is locked.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
 
-func (c *fakeClock) Now() time.Time          { return c.now }
-func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
 
 func TestRateLimit_RefillsOverTime(t *testing.T) {
 	// 10 burst per 100ms: one token every 10ms.
