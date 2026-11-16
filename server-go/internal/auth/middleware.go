@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 type contextKey string
@@ -64,7 +65,13 @@ func ExtractAuth(lookup TokenLookup) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 			if raw := extractRawToken(r); raw != "" {
-				ctx = authenticate(ctx, lookup, HashToken(raw))
+				var err error
+				if ctx, err = authenticate(ctx, lookup, HashToken(raw)); err != nil {
+					// The database could not say whether the token is good.
+					// Answering 401 would tell a valid caller to rotate it.
+					writeUnavailable(w)
+					return
+				}
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -73,22 +80,44 @@ func ExtractAuth(lookup TokenLookup) func(http.Handler) http.Handler {
 
 // authenticate resolves a token hash to a user and returns the enriched
 // context. An expired token leaves a failure marker instead of a user.
-func authenticate(ctx context.Context, lookup TokenLookup, hash string) context.Context {
-	token, _ := lookup.FindByTokenHash(ctx, hash)
+// A lookup the database could not answer returns an error satisfying
+// storage.IsUnavailable; any other failure reads as "not authenticated".
+func authenticate(ctx context.Context, lookup TokenLookup, hash string) (context.Context, error) {
+	lookupCtx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
+	token, err := lookup.FindByTokenHash(lookupCtx, hash)
+	if storage.IsUnavailable(err) {
+		return ctx, err
+	}
 	if token == nil {
-		return ctx
+		return ctx, nil
 	}
 	now := time.Now()
 	if TokenExpiredAt(token, now) {
-		return context.WithValue(ctx, authFailureKey, ErrCodeTokenExpired)
+		return context.WithValue(ctx, authFailureKey, ErrCodeTokenExpired), nil
 	}
-	user, _ := lookup.FindUserByID(ctx, token.UserID)
+	user, err := lookup.FindUserByID(lookupCtx, token.UserID)
+	if storage.IsUnavailable(err) {
+		return ctx, err
+	}
 	if user == nil || !user.Active {
-		return ctx
+		return ctx, nil
 	}
 	recordLastUsed(ctx, lookup, token, now)
 	ctx = context.WithValue(ctx, userKey, user)
-	return context.WithValue(ctx, tokenKey, token)
+	return context.WithValue(ctx, tokenKey, token), nil
+}
+
+// lookupTimeout bounds the two lookups every authenticated request makes, so
+// a stuck pool costs a caller seconds, not the minutes a 401 used to take.
+const lookupTimeout = 5 * time.Second
+
+// writeUnavailable answers 503: the token was not judged.
+func writeUnavailable(w http.ResponseWriter) {
+	w.Header().Set(headerContentType, contentTypeJSON)
+	w.Header().Set("Retry-After", "5")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	json.NewEncoder(w).Encode(map[string]string{"error": "service temporarily unavailable", "code": ErrCodeUnavailable})
 }
 
 // recordLastUsed persists last_used at most once per throttle window per
@@ -98,8 +127,13 @@ func recordLastUsed(ctx context.Context, lookup TokenLookup, token *domain.Acces
 	if !ok || !lastUsedStale(token, now) {
 		return
 	}
-	_ = recorder.TouchTokenLastUsed(ctx, token.TokenHash, now)
+	// A bookkeeping write must not hold a request on a full pool.
+	touchCtx, cancel := context.WithTimeout(ctx, lastUsedTimeout)
+	defer cancel()
+	_ = recorder.TouchTokenLastUsed(touchCtx, token.TokenHash, now)
 }
+
+const lastUsedTimeout = time.Second
 
 // authFailure returns the machine-readable reason ExtractAuth refused the
 // presented token, or "" when no token was presented or it was unknown.

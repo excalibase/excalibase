@@ -243,6 +243,9 @@ func (h *BackupHandler) restoreInPlace(w http.ResponseWriter, r *http.Request, i
 	}
 	if err := h.svc.RestoreInPlace(r.Context(), inst.ProjectID, req); err != nil {
 		log.Printf("restore %s in place: %v", inst.ProjectID, err)
+		if writeIfPoolBusy(w, err) {
+			return
+		}
 		httpError(w, inPlaceFailureMessage(err), http.StatusConflict)
 		return
 	}

@@ -595,3 +595,35 @@ func TestEmailTokens_ResetThatCannotSaveThePasswordSaysTryAgain(t *testing.T) {
 		}
 	}
 }
+
+// A reset refused for load leaves its link usable: the password is hashed
+// before the link is spent.
+func TestEmailTokens_ResetRefusedForLoadKeepsTheLink(t *testing.T) {
+	store := pgtest.New(t)
+	sender := &capturingSender{}
+	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
+	h.SetSessionStore(store)
+	h.runInBackground = func(f func()) { f() }
+	user := &domain.User{ID: "user-busy", Username: testutil.FixturePassword("busy"), Email: "b@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	if err := store.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"b@example.com"}`)))
+	body := `{"token":"` + tokenFromURL(sender.message().HTMLBody) + `","newPassword":"Brand-new-pass9"}`
+
+	restore := auth.ConfigurePasswordGate(0, time.Millisecond)
+	w := httptest.NewRecorder()
+	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm", strings.NewReader(body)))
+	restore()
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("full gate: got %d %s, want 503 with Retry-After", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm", strings.NewReader(body)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("retry after the load: got %d %s, want 200", w.Code, w.Body.String())
+	}
+}

@@ -161,6 +161,9 @@ func (h *DBReadAddressHandler) record(r *http.Request, projectID string, enabled
 }
 
 func writeDBReadAddressError(w http.ResponseWriter, projectID string, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrReadAddressNoReplica),
 		errors.Is(err, service.ErrReadAddressNeedsPublicPort),
