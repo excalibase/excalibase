@@ -179,14 +179,14 @@ echo "$R" | jq -r '.deploymentMode' 2>/dev/null | grep -q selfhosted && pass "se
 echo "5. Register platform admin"
 ADMIN_PASS="E2eAdmin123!"
 REG_BODY=$(jq -n --arg p "$ADMIN_PASS" '{username:"admin", email:"admin@e2e.local", password:$p}')
-R=$(curl -s -X POST "$API/api/auth/register" -H 'Content-Type: application/json' -d "$REG_BODY")
+R=$(curl -s -X POST "$API/api/auth/register" -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' -d "$REG_BODY")
 TOKEN=$(echo "$R" | jq -r '.token' 2>/dev/null)
 ROLE=$(echo "$R" | jq -r '.user.role' 2>/dev/null)
 if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] && [ "$ROLE" = "platform_admin" ]; then
   pass "admin registered + auto-promoted to platform_admin"
 else
   # Admin already existed (re-run over same DATA_DIR) — fall back to login
-  TOKEN=$(curl -s -X POST "$API/api/auth/login" -H 'Content-Type: application/json' \
+  TOKEN=$(curl -s -X POST "$API/api/auth/login" -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' \
     -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" | jq -r '.token')
   [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] && pass "admin already existed; logged in" || fail "auth" "register=$R"
 fi
@@ -384,10 +384,10 @@ GOT=$(curl -s -X POST "$API/api/schema/$RESTORED_ID/query" \
 
 # --- Step 20: Deprovision both projects ---
 echo "20. Deprovision projects"
-R=$(curl -s -X DELETE "$API/api/admin/projects/$PROJECT_ID" \
+R=$(curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' "$API/api/admin/projects/$PROJECT_ID" \
   -H "Authorization: Bearer $TOKEN")
 echo "$R" | grep -qi "deleted\|deprovisioned\|success" && pass "deprovisioned source" || fail "deprovision" "$R"
-R=$(curl -s -X DELETE "$API/api/admin/projects/$RESTORED_ID" \
+R=$(curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' "$API/api/admin/projects/$RESTORED_ID" \
   -H "Authorization: Bearer $TOKEN")
 echo "$R" | grep -qi "deleted\|deprovisioned\|success" && pass "deprovisioned restored project" || fail "deprovision restored" "$R"
 

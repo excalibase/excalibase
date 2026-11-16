@@ -1,10 +1,16 @@
 import { SshTunnelNote } from './SshTunnelNote';
 import { CertificateAuthority, caFileName } from './CertificateAuthority';
-import { StringRow, internalTarget, labels, publicTarget, userinfo, type SectionProps, type Target } from './ConnectionParts';
+import { AppsConnectionNote } from './AppsConnectionNote';
+import { NOT_REACHABLE, StringRow, publicLabel, publicTarget, userinfo, type SectionProps, type Target } from './ConnectionParts';
+
+interface SnippetTarget {
+  readonly host: string;
+  readonly port: number | string;
+}
 
 // The Node example takes the password from the environment, so no secret is
 // ever part of a snippet someone pastes into code.
-function nodeExample(target: Target, username: string, database: string, caFile: string): string {
+function nodeExample(target: SnippetTarget, username: string, database: string, caFile: string): string {
   return `import { readFileSync } from 'node:fs';
 import mysql from 'mysql2/promise';
 
@@ -53,34 +59,28 @@ function Snippet({ testId, label, code }: { readonly testId: string; readonly la
 // MySQLSection shows the strings a MySQL client takes. Every login requires
 // TLS and the server certificate names every address shown here, so each
 // string verifies it against the project's CA.
-export function MySQLSection({ projectId, credentials, endpoint, shownPassword }: SectionProps) {
+export function MySQLSection({ projectId, credentials, endpoint, hostsApps }: SectionProps) {
   const caFile = caFileName(projectId);
-  const uri = (target: Target, password: string) =>
-    `mysql://${userinfo(credentials.username, password)}@${target.host}:${target.port}/${credentials.databaseName}?ssl-mode=VERIFY_IDENTITY&ssl-ca=${caFile}`;
-  const row = (target: Target) => ({ shown: uri(target, shownPassword), copied: uri(target, credentials.password) });
-  const internal = internalTarget(credentials, endpoint);
+  const uri = (target: Target) =>
+    `mysql://${userinfo(credentials.username)}@${target.host}:${target.port}/${credentials.databaseName}?ssl-mode=VERIFY_IDENTITY&ssl-ca=${caFile}`;
   const external = publicTarget(endpoint);
-  const label = labels(endpoint);
-  const jdbcUrl = credentials.jdbcUrl
-    ?? `jdbc:mysql://${internal.host}:${internal.port}/${credentials.databaseName}?sslMode=VERIFY_IDENTITY`;
+  const snippetTarget: SnippetTarget = external ?? { host: '<host>', port: '<port>' };
+  const jdbcUrl = `jdbc:mysql://${snippetTarget.host}:${snippetTarget.port}/${credentials.databaseName}?sslMode=VERIFY_IDENTITY`;
   return (
     <div className="space-y-2" data-testid="conn-mysql-section">
       <h5 className="text-sm font-medium text-text-primary">MySQL — TLS required</h5>
-      <StringRow testId="conn-mysql-internal" label={label.internal} {...row(internal)} />
+      {hostsApps && <AppsConnectionNote />}
       {external ? (
-        <StringRow testId="conn-mysql-public" label={label.external} {...row(external)} />
+        <StringRow testId="conn-mysql-public" label={publicLabel(endpoint)} value={uri(external)} />
       ) : (
-        <p className="text-xs text-text-tertiary" data-testid="conn-mysql-public-absent">
-          This project publishes no public port. Use the internal address, or ask an admin to open one under Public
-          database port.
-        </p>
+        !hostsApps && <p className="text-xs text-text-tertiary" data-testid="conn-mysql-public-absent">{NOT_REACHABLE}</p>
       )}
       {external && endpoint?.singleHost && <SshTunnelNote port={external.port} />}
-      <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />
-      {credentials.jdbcUrl && (
-        <StringRow testId="conn-mysql-jdbc" label="JDBC (Connector/J) — pass the username and password separately" shown={credentials.jdbcUrl} copied={credentials.jdbcUrl} />
+      {external && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}
+      {external && (
+        <StringRow testId="conn-mysql-jdbc" label="JDBC (Connector/J) — pass the username and password separately" value={jdbcUrl} />
       )}
-      <Snippet testId="conn-mysql-node" label="Node (mysql2)" code={nodeExample(internal, credentials.username, credentials.databaseName, caFile)} />
+      <Snippet testId="conn-mysql-node" label="Node (mysql2)" code={nodeExample(snippetTarget, credentials.username, credentials.databaseName, caFile)} />
       <Snippet testId="conn-mysql-connectorj" label="Java (Connector/J)" code={connectorJExample(jdbcUrl, credentials.username)} />
       <TrustStoreHint projectId={projectId} />
       <p className="text-xs text-text-tertiary" data-testid="conn-mysql-tls-note">

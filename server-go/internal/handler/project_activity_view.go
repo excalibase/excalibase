@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -21,6 +22,29 @@ type projectView struct {
 	// project now (EXC-426). The Studio shows the control only on true; the
 	// route's own Admin rule still decides.
 	CanAddDatabase bool `json:"canAddDatabase"`
+	// OwnerSuspended is set while the project's org owner is suspended, so the
+	// Studio shows "Suspended" instead of the database's own status (EXC-757).
+	OwnerSuspended bool `json:"ownerSuspended,omitempty"`
+}
+
+// SuspendedOrgsLookup names the orgs whose owner is suspended.
+type SuspendedOrgsLookup func(ctx context.Context) (map[string]bool, error)
+
+// SetSuspendedOrgs wires the suspended-owner lookup. Optional.
+func (h *ProvisioningHandler) SetSuspendedOrgs(lookup SuspendedOrgsLookup) { h.suspendedOrgs = lookup }
+
+// suspendedOrgSet reads the set once per response; a failure is logged and the
+// projects stay unmarked rather than failing the listing.
+func (h *ProvisioningHandler) suspendedOrgSet(ctx context.Context) map[string]bool {
+	if h.suspendedOrgs == nil {
+		return nil
+	}
+	orgs, err := h.suspendedOrgs(ctx)
+	if err != nil {
+		log.Printf("WARN: suspended owners lookup failed: %v", err)
+		return nil
+	}
+	return orgs
 }
 
 // SetActivityStore wires the last-seen lookup. Optional: without it the
@@ -29,29 +53,43 @@ func (h *ProvisioningHandler) SetActivityStore(s storage.ProjectActivityStore) {
 
 // projectResponse decorates one instance with its last-seen marker.
 func (h *ProvisioningHandler) projectResponse(ctx context.Context, inst *domain.DatabaseInstance) projectView {
-	if h.activity == nil {
-		return projectView{DatabaseInstance: inst}
+	inst = visibleTo(ctx, inst)
+	view := projectView{DatabaseInstance: inst}
+	if h.activity != nil {
+		activity, ok, err := h.activity.GetProjectActivity(ctx, inst.ProjectID)
+		if err != nil {
+			log.Printf("WARN: project activity lookup failed: %v", err)
+		}
+		view = withActivity(inst, activity, ok)
 	}
-	activity, ok, err := h.activity.GetProjectActivity(ctx, inst.ProjectID)
-	if err != nil {
-		log.Printf("WARN: project activity lookup failed: %v", err)
-	}
-	return withActivity(inst, activity, ok)
+	view.OwnerSuspended = h.suspendedOrgSet(ctx)[inst.OrgID]
+	return view
 }
 
 // projectListResponse decorates a list with one activity read, not one per row.
 func (h *ProvisioningHandler) projectListResponse(ctx context.Context, insts []*domain.DatabaseInstance) any {
-	if h.activity == nil {
+	visible := make([]*domain.DatabaseInstance, len(insts))
+	for i, inst := range insts {
+		visible[i] = visibleTo(ctx, inst)
+	}
+	insts = visible
+	if h.activity == nil && h.suspendedOrgs == nil {
 		return insts
 	}
-	byProject, err := h.activity.ListProjectActivity(ctx)
-	if err != nil {
-		log.Printf("WARN: project activity list failed: %v", err)
+	var byProject map[string]domain.ProjectActivity
+	if h.activity != nil {
+		var err error
+		if byProject, err = h.activity.ListProjectActivity(ctx); err != nil {
+			log.Printf("WARN: project activity list failed: %v", err)
+		}
 	}
+	suspended := h.suspendedOrgSet(ctx)
 	out := make([]projectView, 0, len(insts))
 	for _, inst := range insts {
 		activity, ok := byProject[inst.ProjectID]
-		out = append(out, withActivity(inst, activity, ok))
+		view := withActivity(inst, activity, ok)
+		view.OwnerSuspended = suspended[inst.OrgID]
+		out = append(out, view)
 	}
 	return out
 }
@@ -66,4 +104,21 @@ func withActivity(inst *domain.DatabaseInstance, activity domain.ProjectActivity
 		view.IdleWarnedAt = &domain.FlexTime{Time: *activity.IdleWarnedAt}
 	}
 	return view
+}
+
+// visibleTo is the project as the caller may see it. The cluster's internal
+// addresses and namespace are for platform admins and the console; a customer
+// reaches the database through its public endpoint (EXC-759).
+func visibleTo(ctx context.Context, inst *domain.DatabaseInstance) *domain.DatabaseInstance {
+	if user := auth.GetUser(ctx); user != nil && auth.HasPermission(user.Role, auth.PermManageUsers) {
+		return inst
+	}
+	customer := *inst
+	customer.FailureReason = domain.ScrubClusterText(inst.FailureReason, inst.Namespace)
+	customer.FailureStep = domain.ScrubClusterText(inst.FailureStep, inst.Namespace)
+	customer.RollbackLog = domain.ScrubClusterText(inst.RollbackLog, inst.Namespace)
+	customer.DeletionError = domain.ScrubClusterText(inst.DeletionError, inst.Namespace)
+	customer.Host, customer.ReadOnlyHost, customer.Namespace = "", "", ""
+	customer.PoolerHost, customer.MetricsEndpoint = "", ""
+	return &customer
 }

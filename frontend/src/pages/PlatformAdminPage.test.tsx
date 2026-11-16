@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -12,6 +12,11 @@ vi.mock('../api/client', () => ({ api: { get: vi.fn(), delete: vi.fn() } }));
 vi.mock('../components/TierConfigTable', () => ({ TierConfigTable: () => null }));
 vi.mock('../components/StorageBudgetCard', () => ({ StorageBudgetCard: () => null }));
 vi.mock('../components/SignInProviders', () => ({ SignInProviders: () => null }));
+vi.mock('../components/admin/NeedsAttention', () => ({ NeedsAttention: () => <div data-testid="needs-attention" /> }));
+vi.mock('../components/admin/UsersTable', () => ({ UsersTable: () => <div data-testid="users-table" /> }));
+vi.mock('../components/admin/ProjectDetailPanel', () => ({
+  ProjectDetailPanel: ({ projectId }: { projectId: string }) => <div data-testid="project-panel">{projectId}</div>,
+}));
 
 const capacity = {
   usableCpuMilli: 4000,
@@ -29,25 +34,27 @@ const projects = [
   { projectId: 'p1', projectName: 'shop', orgId: 'o1', status: 'RUNNING', tier: 'free', cpuCores: 0.25, memBytes: 256 * 1024 * 1024 },
   { projectId: 'p2', projectName: 'blog', orgId: 'o1', status: 'RUNNING', tier: 'standard' },
 ];
-const orgs = [{ id: 'o1', slug: 'acme', name: 'Acme' }];
+const orgs = [
+  { id: 'o1', slug: 'acme', name: 'Acme', tier: 'free', ownerId: 'u1', ownerEmail: 'owner@acme.test', ownerStatus: 'active', projectCount: 2, runningApps: 1, cpuCores: 0.5, memoryMb: 300 },
+];
 
 const refusal = (reason: string) => ({
   message: 'Request failed with status code 409',
   response: { status: 409, data: { error: reason } },
 });
 
-function renderPage(role: string, answers: { capacity?: unknown; projects?: unknown[] } = {}) {
+function renderPage(role: string, answers: { capacity?: unknown; projects?: unknown[] } = {}, path = '/admin') {
   useAuthStore.getState().setAuth({ id: 'u1', username: 'op', email: 'op@example.com', role } as never);
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/capacity') return Promise.resolve({ data: answers.capacity ?? capacity } as never);
     if (url === '/admin/projects') return Promise.resolve({ data: answers.projects ?? projects } as never);
-    if (url === '/orgs') return Promise.resolve({ data: orgs } as never);
+    if (url === '/admin/console/orgs') return Promise.resolve({ data: { items: orgs, total: orgs.length } } as never);
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/admin']}>
+      <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/admin" element={<PlatformAdminPage />} />
           <Route path="/" element={<div data-testid="home" />} />
@@ -87,6 +94,7 @@ describe('PlatformAdminPage', () => {
     expect(screen.getByText('256 MiB')).toBeInTheDocument();
     expect(screen.getAllByText('—')).toHaveLength(2);
     expect(await screen.findByText('acme')).toBeInTheDocument();
+    expect(screen.getByText('owner@acme.test')).toBeInTheDocument();
   });
 
   test('an empty cluster reads as zero use with no projects', async () => {
@@ -98,32 +106,35 @@ describe('PlatformAdminPage', () => {
     expect(await screen.findByText('0.00 / 0.00 cores')).toBeInTheDocument();
   });
 
-  test("a refused drop alerts the server's reason", async () => {
+  test('a drop needs a written reason and sends it', async () => {
+    vi.mocked(api.delete).mockResolvedValueOnce({ status: 200, data: { status: 'deprovisioned' } } as never);
+    renderPage('platform_admin');
+    await userEvent.click((await screen.findAllByRole('button', { name: /Drop/ }))[0]);
+    const dialog = screen.getByRole('dialog');
+    const confirmButton = within(dialog).getByRole('button', { name: 'Drop' });
+    expect(confirmButton).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText('Reason'), 'abandoned and holding a node');
+    await userEvent.click(confirmButton);
+    await waitFor(() =>
+      expect(api.delete).toHaveBeenCalledWith('/admin/projects/p1', { headers: { Prefer: 'respond-async' }, data: { reason: 'abandoned and holding a node' } }),
+    );
+  });
+
+  test("a refused drop shows the server's reason in the dialog", async () => {
     vi.mocked(api.delete).mockRejectedValueOnce(refusal('the project is still restoring'));
     renderPage('platform_admin');
     await userEvent.click((await screen.findAllByRole('button', { name: /Drop/ }))[0]);
-
-    await waitFor(() => expect(alert).toHaveBeenCalledWith('Drop failed: the project is still restoring'));
-    expect(api.delete).toHaveBeenCalledWith('/admin/projects/p1', { headers: { Prefer: 'respond-async' } });
+    const dialog = screen.getByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText('Reason'), 'abandoned and holding a node');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Drop' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('the project is still restoring');
   });
 
-  test("a refused revoke alerts the server's reason", async () => {
-    vi.mocked(api.delete).mockRejectedValueOnce(refusal('the org owns the platform'));
-    renderPage('platform_admin');
-    await screen.findByText('acme');
-    await userEvent.click(screen.getByRole('button', { name: /Revoke/ }));
-
-    await waitFor(() => expect(alert).toHaveBeenCalledWith('Revoke failed: the org owns the platform'));
-    expect(api.delete).toHaveBeenCalledWith('/admin/orgs/o1?cascade=true');
-    expect(alert.mock.calls[0][0]).not.toMatch(/status code/);
-  });
-
-  test('a drop or revoke that is not confirmed sends nothing', async () => {
-    confirm.mockReturnValue(false);
+  test('a drop that is cancelled sends nothing', async () => {
     renderPage('platform_admin');
     await userEvent.click((await screen.findAllByRole('button', { name: /Drop/ }))[0]);
-    await screen.findByText('acme');
-    await userEvent.click(screen.getByRole('button', { name: /Revoke/ }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(api.delete).not.toHaveBeenCalled();
   });
 
@@ -133,5 +144,46 @@ describe('PlatformAdminPage', () => {
     for (const button of screen.getAllByRole('button', { name: /Drop|Revoke/ })) {
       expect(button).toBeDisabled();
     }
+  });
+});
+
+describe('PlatformAdminPage console additions (EXC-757)', () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => useAuthStore.getState().clearAuth());
+
+  test('a platform admin gets needs-attention first and the users table', async () => {
+    renderPage('platform_admin');
+    expect(await screen.findByTestId('needs-attention')).toBeInTheDocument();
+    expect(screen.getByTestId('users-table')).toBeInTheDocument();
+  });
+
+  test('an operator is not offered customers\' accounts or the project opener', async () => {
+    renderPage('platform_operator');
+    await screen.findByText('shop');
+    expect(screen.queryByTestId('needs-attention')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('users-table')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Open/ })).not.toBeInTheDocument();
+  });
+
+  test('a project of a suspended owner reads Suspended and names its owner', async () => {
+    renderPage('platform_admin', {
+      projects: [{ projectId: 'p1', projectName: 'shop', orgId: 'o1', orgName: 'Acme', ownerEmail: 'bad@mailinator.test', ownerSuspended: true, status: 'ACTIVE', tier: 'free' }],
+    });
+    const row = (await screen.findByText('shop')).closest('tr') as HTMLElement;
+    expect(within(row).getByText('Suspended')).toBeInTheDocument();
+    expect(within(row).queryByText('Active')).not.toBeInTheDocument();
+    expect(within(row).getByText('bad@mailinator.test')).toBeInTheDocument();
+    expect(within(row).getByText('Acme')).toBeInTheDocument();
+  });
+
+  test('Open puts the project in the address and shows its panel', async () => {
+    renderPage('platform_admin');
+    await userEvent.click((await screen.findAllByRole('button', { name: /Open/ }))[0]);
+    expect(await screen.findByTestId('project-panel')).toHaveTextContent('p1');
+  });
+
+  test('a link from needs-attention opens the project it names', async () => {
+    renderPage('platform_admin', {}, '/admin?project=p2');
+    expect(await screen.findByTestId('project-panel')).toHaveTextContent('p2');
   });
 });

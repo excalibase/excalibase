@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -42,7 +43,7 @@ func TestGetCredentialsHandsOutTheVaultedOwnerPassword(t *testing.T) {
 	if creds.Password != "from-vault" {
 		t.Errorf("password = %q, want the vault's", creds.Password)
 	}
-	if creds.ConnectionURL != "postgresql://owner:from-vault@host.local:5432/mydb?sslmode=require" {
+	if creds.ConnectionURL != "postgresql://owner:from-vault@<host>:<port>/mydb?sslmode=require" {
 		t.Errorf("connectionUrl = %q", creds.ConnectionURL)
 	}
 }
@@ -93,7 +94,7 @@ func TestGetCredentialsConnectionURLEscapesThePassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	parsed, err := url.Parse(creds.ConnectionURL)
+	parsed, err := url.Parse(strings.Replace(creds.ConnectionURL, "<host>:<port>", "host.local:5432", 1))
 	if err != nil {
 		t.Fatalf("connectionUrl does not parse: %v", err)
 	}

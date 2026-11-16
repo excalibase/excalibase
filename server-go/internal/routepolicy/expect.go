@@ -148,13 +148,13 @@ func expectSession(row Row, method string, p Principal) Expectation {
 	if row.Param == ParamProject && p.ForeignProject {
 		return Deny404
 	}
-	if (isWrite(method) || row.Discloses == Secret) && p.ReadOnly {
+	if tokenRefused(row, method, p) {
 		return Deny403
 	}
-	if row.Unrestricted && p.Restricted {
-		return Deny403
+	if platformAdminOutsider(row, p) {
+		return Deny404
 	}
-	if row.Unbound && p.IsBound() {
+	if row.Discloses == Secret && p.ReadOnly {
 		return Deny403
 	}
 	if p.PlatformAdmin {
@@ -164,6 +164,19 @@ func expectSession(row Row, method string, p Principal) Expectation {
 		return Deny403
 	}
 	return expectTenant(row, p)
+}
+
+// tokenRefused is whether the credential's own limits keep it off the route.
+func tokenRefused(row Row, method string, p Principal) bool {
+	return (isWrite(method) && p.ReadOnly) || (row.Unrestricted && p.Restricted) || (row.Unbound && p.IsBound())
+}
+
+// platformAdminOutsider: platform authority does not reach a tenant's project
+// or org. A human platform admin meets the membership gate like any customer,
+// and only a platform route naming a permission is theirs (EXC-757).
+func platformAdminOutsider(row Row, p Principal) bool {
+	tenantRoute := row.Param == ParamProject || row.Param == ParamOrg
+	return p.PlatformAdmin && tenantRoute && row.Permission == "" && p.OrgRole == ""
 }
 
 // expectTenant applies the org-role rung once the caller has cleared the
@@ -187,14 +200,10 @@ func expectTenant(row Row, p Principal) Expectation {
 	return Allow
 }
 
-// orgOutsiderExpectation is what a non-member sees on an org route. Reads hide
-// the org behind a 404; writes check the org permission first and answer 403,
-// which discloses nothing a member could not already see.
-func orgOutsiderExpectation(row Row) Expectation {
-	if row.MinRole == "" {
-		return Deny404
-	}
-	return Deny403
+// orgOutsiderExpectation is what a non-member sees on an org route: the org
+// does not exist, whether they read or try to write, so the id confirms nothing.
+func orgOutsiderExpectation(Row) Expectation {
+	return Deny404
 }
 
 // isWrite reports whether the method mutates, which is what a read-only

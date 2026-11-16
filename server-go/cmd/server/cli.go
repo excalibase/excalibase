@@ -124,7 +124,7 @@ func resetPasswordCLI() {
 	fmt.Println("=== PASSWORD RESET ===")
 	fmt.Printf("  Username: %s\n", user.Username)
 	fmt.Printf("  Password: %s\n", newPassword)
-	fmt.Println("  Login at POST /api/auth/login to get a token")
+	fmt.Println("  Login at POST /api/auth/login (send X-Return-Session-Token: true to get the token in the body)")
 	fmt.Println("======================")
 	fmt.Println("\nStore this password securely. It will not be shown again.")
 }

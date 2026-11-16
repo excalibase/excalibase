@@ -49,6 +49,18 @@ func TestHashPasswordUsesArgon2id(t *testing.T) {
 	}
 }
 
+// The one test of the production cost: handler tests hash at a tiny cost on
+// purpose (testutil.FixtureVerifiableHash), so this pins what production uses.
+func TestHashPasswordUsesTheProductionCost(t *testing.T) {
+	hash, err := HashPassword(testutil.FixturePassword("prod-cost"))
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if !strings.HasPrefix(hash, "$argon2id$v=19$m=65536,t=3,p=4$") {
+		t.Errorf("production hashes are argon2id at 64 MiB, 3 passes, 4 threads; got %.40s", hash)
+	}
+}
+
 func TestHashPasswordUniquePerCall(t *testing.T) {
 	sharedPwd := testutil.FixturePassword("unique-salt")
 	h1, _ := HashPassword(sharedPwd)
@@ -434,11 +446,11 @@ func TestRBACAdminHasAllPermissions(t *testing.T) {
 
 func TestRBACOperatorPermissions(t *testing.T) {
 	allowed := []Permission{
-		PermProvision, PermDelete, PermViewInstances, PermViewCredentials,
+		PermProvision, PermViewInstances, PermViewCredentials,
 		PermManageBackups, PermApplyMigrations, PermManageSnapshots,
 		PermManageFunctions, PermViewAny,
 	}
-	denied := []Permission{PermRestore, PermManageSetup, PermManageUsers}
+	denied := []Permission{PermRestore, PermManageSetup, PermManageUsers, PermDelete}
 
 	for _, perm := range allowed {
 		if !HasPermission("platform_operator", perm) {

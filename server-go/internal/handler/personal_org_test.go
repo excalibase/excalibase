@@ -39,7 +39,7 @@ func verifiedLoginUser(t *testing.T, us *mockUserStore) (username, password stri
 	t.Helper()
 	username = testutil.FixtureToken("ada")
 	password = testutil.FixturePassword("ada-login")
-	hash, _ := auth.HashPassword(password)
+	hash := testutil.FixtureVerifiableHash(password)
 	now := time.Now()
 	us.users["u-ada"] = &domain.User{
 		ID: "u-ada", Username: username, PasswordHash: hash, Role: "user",

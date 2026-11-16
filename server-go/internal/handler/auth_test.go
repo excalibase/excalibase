@@ -283,7 +283,7 @@ func TestAuthLogin_Success(t *testing.T) {
 
 	aliceUser := testutil.FixtureToken("alice")
 	alicePwd := testutil.FixturePassword("alice-login")
-	hash, _ := auth.HashPassword(alicePwd)
+	hash := testutil.FixtureVerifiableHash(alicePwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID:              "u1",
@@ -295,15 +295,30 @@ func TestAuthLogin_Success(t *testing.T) {
 	}
 
 	r := setupAuthRouter(t, us, ts)
-	w := doRequest(r, "POST", routeLogin, fmt.Sprintf(`{"username":%q,"password":%q}`, aliceUser, alicePwd))
+	body := fmt.Sprintf(`{"username":%q,"password":%q}`, aliceUser, alicePwd)
+	w := doRequest(r, "POST", routeLogin, body)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("login: got %d, body: %s", w.Code, w.Body.String())
 	}
+	if !strings.Contains(w.Header().Get("Set-Cookie"), "HttpOnly") {
+		t.Errorf("the session belongs in an httpOnly cookie, got %q", w.Header().Get("Set-Cookie"))
+	}
 	var resp map[string]interface{}
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["token"] == nil || resp["token"] == "" {
-		t.Error("token should be present in response")
+	// EXC-761: script on the page must not be able to read the session secret.
+	if _, present := resp["token"]; present {
+		t.Errorf("the session secret must not be in the body unless asked for, got %v", resp)
+	}
+
+	req := httptest.NewRequest("POST", routeLogin, strings.NewReader(body))
+	req.Header.Set(ReturnSessionTokenHeader, "true")
+	opted := httptest.NewRecorder()
+	r.ServeHTTP(opted, req)
+	var optedResp map[string]interface{}
+	json.NewDecoder(opted.Body).Decode(&optedResp)
+	if optedResp["token"] == nil || optedResp["token"] == "" {
+		t.Error("a caller that opts in must receive the token")
 	}
 }
 
@@ -321,7 +336,7 @@ func TestAuthLogin_WrongPassword_Returns401(t *testing.T) {
 	ts := newMockTokenStore()
 
 	correctPwd := testutil.FixturePassword("bob-correct")
-	hash, _ := auth.HashPassword(correctPwd)
+	hash := testutil.FixtureVerifiableHash(correctPwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID: "u1", Username: "bob", PasswordHash: hash, Active: true, CreatedAt: &now,
@@ -349,7 +364,7 @@ func TestAuthLogin_TokenCreationFails_Returns500(t *testing.T) {
 
 	carolUser := testutil.FixtureToken("carol")
 	carolPwd := testutil.FixturePassword("carol-login")
-	hash, _ := auth.HashPassword(carolPwd)
+	hash := testutil.FixtureVerifiableHash(carolPwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID: "u1", Username: carolUser, PasswordHash: hash, Active: true, EmailVerifiedAt: &now, CreatedAt: &now,
@@ -585,7 +600,7 @@ func TestAuthRevokeToken(t *testing.T) {
 func TestAuthLogin_SetsSessionCookie(t *testing.T) {
 	us := newMockUserStore()
 	alicePwd2 := testutil.FixturePassword("alice-cookie")
-	hash, _ := auth.HashPassword(alicePwd2)
+	hash := testutil.FixtureVerifiableHash(alicePwd2)
 	now := time.Now()
 	aliceUser2 := testutil.FixtureToken("alice")
 	us.users["u1"] = &domain.User{

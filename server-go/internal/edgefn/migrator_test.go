@@ -7,13 +7,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"testing"
-	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func setupMigratorPG(t *testing.T) (*sql.DB, func()) {
@@ -26,10 +24,7 @@ func setupMigratorPG(t *testing.T) (*sql.DB, func()) {
 		postgres.WithDatabase("migrate_test"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
@@ -282,10 +277,7 @@ func setupMigratorPGWithVector(t *testing.T) (*sql.DB, func()) {
 		postgres.WithDatabase("migrate_test"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres+pgvector: %v", err)

@@ -182,7 +182,7 @@ export async function mockSchemaEndpoints(page: Page, projectId = 'test-project'
  * Registered after mockProject, so it wins for the project read.
  */
 export async function mockProjectRole(page: Page, role: string, projectId = 'test-project') {
-  await page.route('**/api/orgs', (route) =>
+  await page.route(/\/api\/orgs(\?.*)?$/, (route) =>
     route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify([{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1', role }]),
