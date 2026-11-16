@@ -13,6 +13,7 @@
 #   - jq, curl
 #
 # Run: bash tests/e2e-docker-cloud.sh
+# The admin drop at the end needs a console; see step 11.
 
 set -euo pipefail
 
@@ -242,15 +243,27 @@ for role in admin excalibase_app cdc_watcher auth_admin; do
 done
 
 # --- Step 11: Deprovision ---
+# A cloud-mode server serves /api/admin only on its admin host, behind
+# Cloudflare Access (EXC-757), and this script's server has neither. The drop
+# runs against a real console when the operator supplies one; otherwise it is
+# skipped and said so, and the trap above removes the tenant container.
+#   ADMIN_CONSOLE_URL=https://admin.<domain> CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=...
 echo "11. Deprovision"
-R=$(curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' "$API/api/admin/projects/$PROJECT_ID" -H "Authorization: Bearer $TOKEN")
-echo "$R" | grep -qi "deprovisioned" \
-  && pass "deprovision started" \
-  || fail "deprovision" "$R"
-sleep 5
-docker ps --format '{{.Names}}' | grep -qv "^$CONTAINER_NAME$" \
-  && pass "tenant container cleaned up" \
-  || fail "cleanup" "container still exists"
+if [ -n "${ADMIN_CONSOLE_URL:-}" ]; then
+  R=$(curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' \
+    -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID:?set CF_ACCESS_CLIENT_ID}" \
+    -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET:?set CF_ACCESS_CLIENT_SECRET}" \
+    "${ADMIN_CONSOLE_URL%/}/api/admin/projects/$PROJECT_ID" -H "Authorization: Bearer $TOKEN")
+  echo "$R" | grep -qi "deprovisioned" \
+    && pass "deprovision started" \
+    || fail "deprovision" "$R"
+  sleep 5
+  docker ps --format '{{.Names}}' | grep -qv "^$CONTAINER_NAME$" \
+    && pass "tenant container cleaned up" \
+    || fail "cleanup" "container still exists"
+else
+  echo "  - SKIPPED: the admin drop needs a console (set ADMIN_CONSOLE_URL, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET); the tenant container is removed on exit"
+fi
 
 echo ""
 echo "============================="
