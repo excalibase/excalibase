@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -70,7 +71,7 @@ func TestAdmin_DestructiveRoutesRBAC(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newAdminHForRBAC(t)
 			r := adminRouterAs(tc.role, h)
-			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(revokeReasonBody))
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
 			if tc.wantForbidden && w.Code != http.StatusForbidden {
@@ -99,7 +100,7 @@ func TestAdmin_ForceDropRefusesANarrowedCredential(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := adminRouterWith("platform_admin", tc.token, newAdminHForRBAC(t))
 			w := httptest.NewRecorder()
-			r.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/admin/projects/proj-x", nil))
+			r.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/admin/projects/proj-x", strings.NewReader(revokeReasonBody)))
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("got %d, want 403", w.Code)
 			}

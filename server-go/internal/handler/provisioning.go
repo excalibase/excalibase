@@ -41,6 +41,8 @@ type ProvisioningHandler struct {
 	instances storage.InstanceStore
 	// activity supplies lastSeenAt for GET / list; nil → field omitted.
 	activity storage.ProjectActivityStore
+	// suspendedOrgs names the orgs whose owner is suspended (EXC-757); nil → no marker.
+	suspendedOrgs SuspendedOrgsLookup
 	// corsStore backs /cors and the corsAllowedOrigins field on /info;
 	// nil → /cors returns 503 and /info reports no origins.
 	corsStore storage.ProjectCorsStore
@@ -258,19 +260,15 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// No caller is no list: a mount that lost its auth middleware must answer
-	// 401, never hand every tenant's projects to whoever asks (EXC-761).
+	// The list is the caller's own projects, whatever their platform role: a
+	// platform admin is a customer of every org but their own, and reaches
+	// other customers' projects through the admin console only (EXC-757). This
+	// route is mounted behind RequireAuth, so a missing user is a mis-mount.
 	if user == nil {
 		httpError(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	// Platform roles with PermViewAny see everything.
-	if auth.HasPermission(user.Role, auth.PermViewAny) {
-		writeJSON(w, h.projectListResponse(r.Context(), allInstances))
-		return
-	}
 
-	// Regular users see only instances belonging to their orgs
 	myOrgs, _ := h.orgStore.FindOrgsByUser(r.Context(), user.ID)
 	orgIDs := make(map[string]bool, len(myOrgs))
 	for _, org := range myOrgs {
@@ -308,7 +306,7 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 	// Admin) in the TARGET org — so a Developer/Viewer in someone else's org
 	// can't spin up projects there. A user creating in their own freshly-made
 	// org is its Owner, so self-serve stays open. platform_admin bypasses.
-	if !auth.HasPermission(user.Role, auth.PermManageUsers) {
+	if !auth.IsPlatformServicePrincipal(user, auth.GetToken(r.Context())) {
 		if req.OrgID == "" || h.orgStore == nil {
 			httpError(w, "org is required to create a project", http.StatusBadRequest)
 			return

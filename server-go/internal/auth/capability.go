@@ -191,6 +191,14 @@ func IsCapabilityToken(t *domain.AccessToken) bool {
 	return t != nil && len(t.Permissions) > 0
 }
 
+// IsPlatformServicePrincipal reports a platform service principal: a
+// platform-role account acting on a capability token, which the capability gate
+// bounds to named routes. A human platform admin is not one: outside /admin they
+// are a customer like any other (EXC-757).
+func IsPlatformServicePrincipal(user *domain.User, token *domain.AccessToken) bool {
+	return user != nil && HasPermission(user.Role, PermManageUsers) && IsCapabilityToken(token)
+}
+
 // Capabilities that administer the platform's own credentials (EXC-485). The
 // bootstrap service principal holds them; they are never delegated to a token
 // it mints, so a service token can never mint or unseal anything itself.

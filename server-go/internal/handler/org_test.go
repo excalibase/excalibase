@@ -4,7 +4,9 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	pgtest "github.com/excalibase/provisioning-poc/internal/testutil/pgstore"
@@ -266,8 +269,8 @@ func TestNonAdminCannotInvite(t *testing.T) {
 	// Bob (not a member) tries to invite — should fail
 	w2 := orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath,
 		`{"userId":"`+testBobID+`","role":"developer"}`, testBobID)
-	if w2.Code != http.StatusForbidden {
-		t.Errorf("non-member invite: got %d, want %d", w2.Code, http.StatusForbidden)
+	if w2.Code != http.StatusNotFound {
+		t.Errorf("non-member invite: got %d, want %d", w2.Code, http.StatusNotFound)
 	}
 }
 
@@ -278,10 +281,10 @@ func TestDeleteOrg_OwnerOnly(t *testing.T) {
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
 
-	// Bob can't delete
+	// Bob is no member, so the org does not exist for him
 	w2 := orgRequest(r, "DELETE", testOrgsSlash+org.ID, "", testBobID)
-	if w2.Code != http.StatusForbidden {
-		t.Errorf("non-owner delete: got %d, want %d", w2.Code, http.StatusForbidden)
+	if w2.Code != http.StatusNotFound {
+		t.Errorf("non-member delete: got %d, want %d", w2.Code, http.StatusNotFound)
 	}
 
 	// Alice can delete
@@ -336,42 +339,8 @@ func createOrgAs(t *testing.T, r chi.Router, slug, userID string) domain.Org {
 	return org
 }
 
-func TestUpdateOrg_InvalidTier(t *testing.T) {
-	r, store := setupOrgRouter(t)
-	addPlatformAdmin(t, store)
-	org := createOrgAs(t, r, "tier-org", testAliceID)
-
-	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"tier":"SUPER_PLAN"}`, testPlatformAdminID)
-	if w2.Code != http.StatusBadRequest {
-		t.Errorf("invalid tier: got %d, want %d. Body: %s", w2.Code, http.StatusBadRequest, w2.Body.String())
-	}
-}
-
 // orgPlanChanges counts the plan-change hook's runs across the org router tests.
 var orgPlanChanges atomic.Int64
-
-func TestUpdateOrg_PlatformAdminSetsTheTier(t *testing.T) {
-	r, store := setupOrgRouter(t)
-	addPlatformAdmin(t, store)
-	org := createOrgAs(t, r, "up-org", testAliceID)
-	before := orgPlanChanges.Load()
-	defer func() {
-		if orgPlanChanges.Load() != before+1 {
-			t.Errorf("the plan change ran the hook %d times, want once", orgPlanChanges.Load()-before)
-		}
-	}()
-
-	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"tier":"STANDARD"}`, testPlatformAdminID)
-	if w2.Code != http.StatusOK {
-		t.Errorf("valid tier upgrade: got %d, want %d. Body: %s", w2.Code, http.StatusOK, w2.Body.String())
-	}
-
-	var updated domain.Org
-	json.NewDecoder(w2.Body).Decode(&updated)
-	if updated.Tier != domain.Standard {
-		t.Errorf("tier: got %q, want STANDARD", updated.Tier)
-	}
-}
 
 // The plan decides a project's size and limit, so an org's own owner cannot
 // move it; only the platform can.
@@ -771,30 +740,25 @@ func TestAdminCannotDeleteOrg(t *testing.T) {
 	}
 }
 
-func TestPlatformAdminCanManageAnyOrg(t *testing.T) {
+// EXC-757: outside the console a human platform admin is a customer. They
+// neither see nor invite into an org they do not belong to.
+func TestPlatformAdminIsAnOutsiderToOtherCustomersOrgs(t *testing.T) {
 	r, store := setupOrgRouter(t)
-
-	// Create a platform_admin user
 	store.CreateUser(t.Context(), &domain.User{
 		ID: testPadminID, Username: testutil.FixtureToken("padmin"), Email: "padmin@t.com",
 		PasswordHash: testutil.FixturePasswordHash(), Role: "platform_admin", Active: true,
 	})
 
-	// Alice creates org
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"PAdmOrg","slug":"padm-org"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
 
-	// Platform admin can see it
-	w2 := orgRequest(r, "GET", testOrgsSlash+org.ID, "", testPadminID)
-	if w2.Code != http.StatusOK {
-		t.Errorf("platform admin view org: got %d, want %d", w2.Code, http.StatusOK)
+	if w2 := orgRequest(r, "GET", testOrgsSlash+org.ID, "", testPadminID); w2.Code != http.StatusNotFound {
+		t.Errorf("platform admin view of another customer's org: got %d, want %d", w2.Code, http.StatusNotFound)
 	}
-
-	// Platform admin can invite
-	w3 := orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testPadminID)
-	if w3.Code != http.StatusCreated {
-		t.Errorf("platform admin invite: got %d, want %d. Body: %s", w3.Code, http.StatusCreated, w3.Body.String())
+	invite := orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testPadminID)
+	if invite.Code != http.StatusNotFound {
+		t.Errorf("platform admin invite into another customer's org: got %d, want %d. Body: %s", invite.Code, http.StatusNotFound, invite.Body.String())
 	}
 }
 
@@ -916,28 +880,84 @@ func acceptInvite(t *testing.T, r chi.Router, invite *httptest.ResponseRecorder,
 	}
 }
 
-// EXC-761: platform staff can list every org, but a picker asks for its own
-// (?scope=member) and must never be offered a customer's.
-func TestListOrgs_MemberScopeIsTheCallersOwnOrgsEvenForStaff(t *testing.T) {
-	r, store := setupOrgRouter(t)
-	addPlatformAdmin(t, store)
+// Deleting an org must not leave its projects running with no owner to see them.
+func TestDeleteOrg_RefusedWhileProjectsExist(t *testing.T) {
+	r, store, instances := setupOrgRouterWithInstances(t, true)
 
-	orgRequest(r, "POST", testOrgsPath, `{"name":"Customer","slug":"customer-org"}`, testAliceID)
-	orgRequest(r, "POST", testOrgsPath, `{"name":"Staff","slug":"staff-org"}`, testPlatformAdminID)
+	w := orgRequest(r, "POST", testOrgsPath, `{"name":"Busy","slug":"busy-org"}`, testAliceID)
+	var org domain.Org
+	json.NewDecoder(w.Body).Decode(&org)
+	instances.insts["proj-busy0001"] = &domain.DatabaseInstance{ProjectID: "proj-busy0001", OrgID: org.ID}
 
-	slugs := func(path string) []string {
-		var orgs []domain.Org
-		json.NewDecoder(orgRequest(r, "GET", path, "", testPlatformAdminID).Body).Decode(&orgs)
-		out := make([]string, 0, len(orgs))
-		for _, org := range orgs {
-			out = append(out, org.Slug)
+	if got := orgRequest(r, "DELETE", testOrgsSlash+org.ID, "", testAliceID); got.Code != http.StatusConflict {
+		t.Fatalf("delete with a project: got %d, want 409. Body: %s", got.Code, got.Body.String())
+	}
+	if found, _ := store.FindOrgByID(t.Context(), org.ID); found == nil {
+		t.Fatal("the org must survive a refused delete")
+	}
+
+	delete(instances.insts, "proj-busy0001")
+	if got := orgRequest(r, "DELETE", testOrgsSlash+org.ID, "", testAliceID); got.Code != http.StatusOK {
+		t.Fatalf("delete once empty: got %d, want 200", got.Code)
+	}
+}
+
+// failingDeleteStore reports what the store said when the delete reached it.
+type failingDeleteStore struct {
+	*pgstore.Store
+	err error
+}
+
+func (s failingDeleteStore) DeleteOrg(context.Context, string) error { return s.err }
+
+func orgDeleteRouter(t *testing.T, deleteErr error, instances storage.InstanceStore) (chi.Router, string) {
+	t.Helper()
+	r, store, _ := setupOrgRouterWithInstances(t, true)
+	created := orgRequest(r, "POST", testOrgsPath, `{"name":"Gone","slug":"gone-org"}`, testAliceID)
+	var org domain.Org
+	json.NewDecoder(created.Body).Decode(&org)
+
+	handler := NewOrgHandler(failingDeleteStore{Store: store, err: deleteErr}, store)
+	handler.SetNodePlacement(&fakeNodes{nodes: 5})
+	if instances != nil {
+		handler.SetInstanceStore(instances)
+	}
+	router := chi.NewRouter()
+	router.Route(testOrgsPath, func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				user, _ := store.FindUserByID(req.Context(), req.Header.Get("X-Test-User"))
+				next.ServeHTTP(w, req.WithContext(auth.SetUser(req.Context(), user)))
+			})
+		})
+		r.Delete("/{orgId}", handler.DeleteOrg)
+	})
+	return router, org.ID
+}
+
+func TestDeleteOrg_StoreRefusalAndFailure(t *testing.T) {
+	t.Run("a project created after the check still stops the delete", func(t *testing.T) {
+		router, id := orgDeleteRouter(t, storage.ErrOrgHasProjects, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}})
+		if got := orgRequest(router, "DELETE", testOrgsSlash+id, "", testAliceID); got.Code != http.StatusConflict {
+			t.Fatalf("got %d, want 409", got.Code)
 		}
-		return out
-	}
-	if all := slugs(testOrgsPath); len(all) < 2 {
-		t.Fatalf("staff must still be able to list every org, got %v", all)
-	}
-	if own := slugs(testOrgsPath + "?scope=member"); len(own) != 1 || own[0] != "staff-org" {
-		t.Fatalf("scope=member listed %v, want only the staff account's own org", own)
-	}
+	})
+	t.Run("a store failure is a 500", func(t *testing.T) {
+		router, id := orgDeleteRouter(t, errors.New("db down"), &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}})
+		if got := orgRequest(router, "DELETE", testOrgsSlash+id, "", testAliceID); got.Code != http.StatusInternalServerError {
+			t.Fatalf("got %d, want 500", got.Code)
+		}
+	})
+	t.Run("projects that cannot be listed block the delete", func(t *testing.T) {
+		router, id := orgDeleteRouter(t, nil, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}, findAllErr: errors.New("db down")})
+		if got := orgRequest(router, "DELETE", testOrgsSlash+id, "", testAliceID); got.Code != http.StatusConflict {
+			t.Fatalf("got %d, want 409", got.Code)
+		}
+	})
+	t.Run("without an instance store the store decides", func(t *testing.T) {
+		router, id := orgDeleteRouter(t, nil, nil)
+		if got := orgRequest(router, "DELETE", testOrgsSlash+id, "", testAliceID); got.Code != http.StatusOK {
+			t.Fatalf("got %d, want 200", got.Code)
+		}
+	})
 }

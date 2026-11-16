@@ -70,6 +70,9 @@ func startPlatformDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pgstore.New (runs migrations): %w", err)
 	}
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		return nil, err
+	}
 	return store.DB(), nil
 }
 

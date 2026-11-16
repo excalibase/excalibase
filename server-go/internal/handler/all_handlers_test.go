@@ -646,12 +646,7 @@ func TestProvisioningHandlerRoutes(t *testing.T) {
 	h := NewProvisioningHandler(svc, &adminOrgStore{})
 
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			user := &domain.User{ID: "viewer-1", Role: "platform_viewer", Active: true}
-			next.ServeHTTP(w, req.WithContext(auth.SetUser(req.Context(), user)))
-		})
-	})
+	r.Use(signedInAs("u1", "user"))
 	r.Route(testProvisionPath, h.Routes)
 
 	// Verify routes are wired by hitting each one
