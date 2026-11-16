@@ -7,7 +7,7 @@ const PROJECT_ID = 'shop-mysql';
 const HOST = 'moco-shop-mysql-mysql-primary.org-1-shop-mysql.svc.cluster.local';
 const CA_PEM = '-----BEGIN CERTIFICATE-----\nMYSQLCA\n-----END CERTIFICATE-----\n';
 
-async function json(page: Page, pattern: string, body: unknown) {
+async function json(page: Page, pattern: string | RegExp, body: unknown) {
   await page.route(pattern, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }),
   );
@@ -16,7 +16,7 @@ async function json(page: Page, pattern: string, body: unknown) {
 async function mockMySQLProject(page: Page) {
   await loginAs(page);
   await json(page, '**/api/config', { deploymentMode: 'cloud', features: { mysql: true } });
-  await json(page, '**/api/orgs', [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
+  await json(page, /\/api\/orgs(\?.*)?$/, [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
   await json(page, `**/api/provision/${PROJECT_ID}`, {
     projectId: PROJECT_ID, orgId: 'org-1', databaseType: 'MYSQL', mysqlVersion: '8.4.10', tier: 'FREE',
     namespace: 'org-1-shop-mysql', status: 'ACTIVE', currentStage: 'COMPLETED', host: HOST, port: 3306,
@@ -96,17 +96,17 @@ test.describe('Studio on a MySQL project', () => {
   test('shows verifying mysql://, Node and Connector/J examples and the CA', async ({ page }) => {
     await mockMySQLProject(page);
     await json(page, `**/api/provision/${PROJECT_ID}/credentials`, {
-      projectId: PROJECT_ID, host: HOST, port: 3306, databaseName: 'shop', username: 'admin', password: 's3cret',
+      projectId: PROJECT_ID, host: HOST, port: 3306, databaseName: 'shop', username: 'admin',
       engine: 'mysql', jdbcUrl: `jdbc:mysql://${HOST}:3306/shop?sslMode=VERIFY_IDENTITY`,
     });
     await json(page, `**/api/projects/${PROJECT_ID}/db-endpoint`, {
-      projectId: PROJECT_ID, publicOffered: true, publicEnabled: false, available: false, host: '', port: 0,
+      projectId: PROJECT_ID, publicOffered: true, publicEnabled: true, available: true, host: 'shop.db.example.test', port: 33061,
       requireTls: true, database: 'shop', username: 'admin', connectionStrings: { requireTls: '', allowPlaintext: '' },
-      caCertificate: CA_PEM, internal: { host: HOST, port: 3306, connectionString: '' },
+      caCertificate: CA_PEM,
     });
     await page.goto(`/project/${PROJECT_ID}/settings`);
-    await expect(page.getByTestId('conn-mysql-internal')).toContainText(
-      `@${HOST}:3306/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=${PROJECT_ID}-ca.crt`,
+    await expect(page.getByTestId('conn-mysql-public')).toContainText(
+      `@shop.db.example.test:33061/shop?ssl-mode=VERIFY_IDENTITY&ssl-ca=${PROJECT_ID}-ca.crt`,
       { timeout: FIRST_RENDER },
     );
     await expect(page.getByTestId('conn-mysql-section').getByTestId('conn-ca-download')).toHaveAttribute(
@@ -117,6 +117,8 @@ test.describe('Studio on a MySQL project', () => {
     await expect(page.getByTestId('conn-mysql-node')).toContainText(`ssl: { ca: readFileSync('${PROJECT_ID}-ca.crt') }`);
     await expect(page.getByTestId('conn-mysql-node')).not.toContainText('rejectUnauthorized');
     await expect(page.getByTestId('conn-mysql-connectorj')).toContainText('DriverManager.getConnection(url, "admin"');
-    await expect(page.getByTestId('conn-mysql-node')).not.toContainText('s3cret');
+    await expect(page.getByTestId('conn-mysql-public')).toContainText(':<password>@');
+    await expect(page.getByTestId('conn-mysql-internal')).toHaveCount(0);
+    await expect(page.getByTestId('conn-mysql-section')).not.toContainText('svc.cluster.local');
   });
 });

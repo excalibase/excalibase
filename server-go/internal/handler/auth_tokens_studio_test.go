@@ -183,19 +183,18 @@ func TestRevokeToken_IsAudited(t *testing.T) {
 	}
 }
 
-func TestRevokeToken_PlatformAdminRevokingAnotherUsersTokenNamesTheActor(t *testing.T) {
+func TestRevokeToken_PlatformAdminCannotRevokeAnotherCustomersToken(t *testing.T) {
 	f := newTokenFixture(t)
 	f.us.users[tokenOtherUser].Role = "platform_admin"
 	admin := f.mint("admin-session", tokenOtherUser, auth.ScopeSession, nil)
 	victim := f.mint("leaked", tokenUser, scopesRead, nil)
 
 	w := doAuthRequest(f.r, "DELETE", routeAuthTokens+"/"+auth.HashToken(victim), admin, "")
-	if w.Code != http.StatusOK {
+	if w.Code != http.StatusForbidden {
 		t.Fatalf(statusFmt, w.Code, w.Body.String())
 	}
-	entries := auditOf(f, actionRevoke)
-	if len(entries) != 1 || entries[0].UserID != tokenUser || !strings.Contains(entries[0].Details, tokenOtherUser) {
-		t.Fatalf("the entry must belong to the owner and name the admin who revoked it: %+v", entries)
+	if got := auditOf(f, actionRevoke); len(got) != 0 {
+		t.Fatalf("a refused revoke wrote %d audit entries", len(got))
 	}
 }
 

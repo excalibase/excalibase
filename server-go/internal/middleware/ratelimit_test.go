@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -103,27 +104,64 @@ func TestRateLimit_EmptyKeyPassesThrough(t *testing.T) {
 	}
 }
 
+// fakeClock is a clock the test moves by hand, so no assertion depends on how long the runner took.
+// The limiter's cleanup goroutine reads it too, so access is locked.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
 func TestRateLimit_RefillsOverTime(t *testing.T) {
-	// 10 burst, 10 per 100ms (so refillRate = 100/sec → ~1 token every 10ms)
-	mw := RateLimit(constKey("k"), 10, 100*time.Millisecond)
-	h := mw(okHandler())
+	// 10 burst per 100ms: one token every 10ms.
+	clock := &fakeClock{now: time.Unix(1_000, 0)}
+	limiter := newKeyLimiter(10, 100*time.Millisecond, clock.Now)
+	t.Cleanup(limiter.stop)
+	h := rateLimitWith(constKey("k"), limiter)(okHandler())
 	for i := 0; i < 10; i++ {
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
 	}
-	// Bucket empty.
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429 when bucket empty, got %d", w.Code)
 	}
 
-	// Wait for >= 1 token to refill.
-	time.Sleep(20 * time.Millisecond)
+	clock.Advance(5 * time.Millisecond) // half a token: still refused
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("before a whole token has refilled the request should be refused; got %d", w.Code)
+	}
+
+	clock.Advance(10 * time.Millisecond) // a whole token by now
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
 	if w.Code != 200 {
 		t.Errorf("after refill window, request should pass; got %d", w.Code)
 	}
+}
+
+func TestKeyLimiter_StopEndsItsCleanupLoop(t *testing.T) {
+	limiter := newKeyLimiter(1, time.Minute, time.Now)
+	limiter.stop()
+	select {
+	case <-limiter.state.stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the cleanup loop still runs after stop")
+	}
+	limiter.stop() // stopping twice is harmless
 }
 
 func TestPerIP_StripsPort(t *testing.T) {

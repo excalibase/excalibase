@@ -252,6 +252,10 @@ if waits.get("condition") != "service_completed_successfully":
 if penv.get("FEATURE_SITEPREVIEWS") != "false":
     failures.append(f"FEATURE_SITEPREVIEWS={penv.get('FEATURE_SITEPREVIEWS')!r} by default, want false")
 
+# EXC-759: database passwords are shown once and never read back, on by default.
+if penv.get("FEATURE_ONETIMECREDENTIALS") != "true":
+    failures.append(f"FEATURE_ONETIMECREDENTIALS={penv.get('FEATURE_ONETIMECREDENTIALS')!r} by default, want true")
+
 # EXC-670: host monitoring is off by default and mounts no host file then; the
 # proxy and provisioning read the same platform containers, by exact name.
 if penv.get("FEATURE_HOSTMETRICS") != "false":

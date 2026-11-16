@@ -30,7 +30,6 @@ const closedEndpoint = {
   host: '',
   port: 0,
   requireTls: true,
-  internal: {},
   canChange: true,
 };
 

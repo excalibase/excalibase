@@ -99,7 +99,7 @@ func slowedLoginHandler(t *testing.T) (chi.Router, *AuthHandler, *recordingSleep
 	t.Helper()
 	us := newMockUserStore()
 	password := testutil.FixturePassword("carol-login")
-	hash, _ := auth.HashPassword(password)
+	hash := testutil.FixtureVerifiableHash(password)
 	now := time.Now()
 	us.users["u1"] = &domain.User{ID: "u1", Username: "carol@example.test", PasswordHash: hash,
 		Active: true, EmailVerifiedAt: &now, CreatedAt: &now}

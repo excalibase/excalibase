@@ -52,7 +52,7 @@ echo "$R" | jq -r '.keys[0].kty' | grep -q EC && pass "JWKS ES256" || fail "jwks
 
 # 4. Login (fresh admin with generated password)
 echo "4. Platform login (fresh admin)"
-TOKEN=$(curl -s http://localhost:24005/api/auth/login -H 'Content-Type: application/json' \
+TOKEN=$(curl -s http://localhost:24005/api/auth/login -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" | jq -r '.token')
 [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] && pass "admin login (fresh bootstrap)" || fail "login" "token=$TOKEN"
 
@@ -147,7 +147,7 @@ echo "$R" | jq -r '.deploymentMode' | grep -q cloud && cpass "cloud mode" || cfa
 
 # C2. Login
 echo "C2. Platform login"
-TOKEN=$(curl -s http://localhost:24005/api/auth/login -H 'Content-Type: application/json' \
+TOKEN=$(curl -s http://localhost:24005/api/auth/login -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" | jq -r '.token')
 [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] && cpass "admin login" || cfail "login" "token=$TOKEN"
 

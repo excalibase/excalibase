@@ -14,8 +14,14 @@ export interface AdminProject {
   dbType: string;
   createdAt: string | { time: string };
   deletionProtection: boolean;
+  // Absent, not zero, when no reading could be taken.
   cpuCores?: number;
   memBytes?: number;
+  // Who the project belongs to; a suspended owner reads "Suspended" (EXC-757).
+  orgName?: string;
+  ownerEmail?: string;
+  ownerStatus?: string;
+  ownerSuspended?: boolean;
 }
 
 // ClusterCapacity mirrors the JSON shape from /api/capacity. The "tiers"
@@ -57,6 +63,9 @@ export const useStorageBudget = () =>
     queryKey: ['admin', 'storage'],
     queryFn: async () => (await api.get<StorageBudget>('/admin/storage')).data,
     staleTime: 30_000,
+    // The server gives up after its own timeout; retrying would keep the card
+    // spinning for as long again before it said why.
+    retry: false,
   });
 
 export const useAdminProjects = () =>
@@ -78,8 +87,8 @@ export const useClusterCapacity = () =>
 export const useForceDropProject = (followMs = PROJECT_FOLLOW_MS) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (projectId: string) => {
-      const response = await api.delete<{ status?: string }>(`/admin/projects/${projectId}`, RESPOND_ASYNC);
+    mutationFn: async ({ projectId, reason }: { projectId: string; reason: string }) => {
+      const response = await api.delete<{ status?: string }>(`/admin/projects/${projectId}`, { ...RESPOND_ASYNC, data: { reason } });
       return settleProject(projectId, 'deletion', response, followMs);
     },
     onSuccess: () => {
@@ -93,11 +102,27 @@ export const useForceDropProject = (followMs = PROJECT_FOLLOW_MS) => {
 export const useRevokeOrg = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (orgId: string) => {
-      await api.delete(`/admin/orgs/${orgId}?cascade=true`);
+    mutationFn: async ({ orgId, reason }: { orgId: string; reason: string }) => {
+      await api.delete(`/admin/orgs/${orgId}`, { params: { cascade: true }, data: { reason } });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'projects'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'capacity'] });
+      qc.invalidateQueries({ queryKey: ['orgs'] });
+    },
+  });
+};
+
+// Setting an org's plan is a console action: the platform does not belong to
+// the org, so it names a reason and the change is audited (EXC-757).
+export const useSetOrgTier = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ orgId, tier, reason }: { orgId: string; tier: string; reason: string }) => {
+      await api.patch(`/admin/console/orgs/${orgId}/tier`, { tier, reason });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'console', 'orgs'] });
       qc.invalidateQueries({ queryKey: ['admin', 'capacity'] });
       qc.invalidateQueries({ queryKey: ['orgs'] });
     },

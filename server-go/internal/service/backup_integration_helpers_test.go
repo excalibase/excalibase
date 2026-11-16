@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"os/exec"
 	"strings"
 	"testing"
@@ -17,7 +18,6 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/testcontainers/testcontainers-go"
 	tclocalstack "github.com/testcontainers/testcontainers-go/modules/localstack"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -42,8 +42,7 @@ func startArchivingPostgres(ctx context.Context, t *testing.T, pgPwd string) (te
 				"POSTGRES_PASSWORD": pgPwd,
 			},
 			ExposedPorts: []string{"5432/tcp"},
-			WaitingFor: wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60 * time.Second),
+			WaitingFor:   pgready.Strategy(),
 		},
 		Started: true,
 	})

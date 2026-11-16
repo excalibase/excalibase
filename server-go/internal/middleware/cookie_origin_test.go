@@ -90,3 +90,24 @@ func TestAnEmptyTrustedOriginTrustsNothing(t *testing.T) {
 		t.Fatalf("got %d, want 403", w.Code)
 	}
 }
+
+// EXC-757: the admin console is served at its own host, so its page origin is
+// trusted for the session cookie, and an empty extra origin trusts nothing.
+func TestTrustedOriginsIncludeTheAdminOrigin(t *testing.T) {
+	got := TrustedOrigins("https://studio.example.test", nil, "https://admin.example.test", "")
+	if len(got) != 2 || got[1] != "https://admin.example.test" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestIsInternalListenerReflectsTheMark(t *testing.T) {
+	plain := httptest.NewRequest(http.MethodGet, "/", nil)
+	if IsInternalListener(plain) {
+		t.Fatal("an unmarked request is not internal")
+	}
+	var seen bool
+	MarkInternalListener(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { seen = IsInternalListener(r) })).ServeHTTP(httptest.NewRecorder(), plain)
+	if !seen {
+		t.Fatal("a request from the in-cluster listener is internal")
+	}
+}

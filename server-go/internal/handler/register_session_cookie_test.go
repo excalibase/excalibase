@@ -39,14 +39,13 @@ func TestRegister_FirstAdmin_SetsTheLoginSessionCookie(t *testing.T) {
 		t.Errorf("cookie expiry should be the %s session TTL, got %v", sessionTokenTTL, session.Expires)
 	}
 
-	var body struct {
-		Token string `json:"token"`
-	}
+	var body map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body.Token != session.Value {
-		t.Error("the cookie must carry the session token the response names, as login's does")
+	// EXC-761: the secret lives in the cookie, out of page script's reach.
+	if _, present := body["token"]; present {
+		t.Error("registration must not put the session secret in the body unless asked")
 	}
 	stored, ok := h.tokenStore.(*mockTokenStore).tokens[auth.HashToken(session.Value)]
 	if !ok || stored.Scopes != "session" {
