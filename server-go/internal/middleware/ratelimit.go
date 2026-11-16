@@ -74,10 +74,9 @@ type rateLimiter struct {
 	mu         sync.Mutex
 }
 
-func (b *rateLimiter) take() bool {
+func (b *rateLimiter) take(now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	now := time.Now()
 	elapsed := now.Sub(b.last).Seconds()
 	b.tokens += elapsed * b.refillRate
 	if b.tokens > b.capacity {
@@ -102,7 +101,12 @@ func (b *rateLimiter) take() bool {
 // Buckets are GC'd lazily when their key hasn't been touched for >= 10×
 // window — bounds memory under random-key scans (e.g. IP scans).
 func RateLimit(keyFn KeyFunc, burst int, window time.Duration) func(http.Handler) http.Handler {
-	limiter := NewKeyLimiter(burst, window)
+	return rateLimitWithClock(keyFn, burst, window, time.Now)
+}
+
+// rateLimitWithClock is RateLimit with the clock a test can move by hand.
+func rateLimitWithClock(keyFn KeyFunc, burst int, window time.Duration, now func() time.Time) func(http.Handler) http.Handler {
+	limiter := newKeyLimiter(burst, window, now)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := keyFn(r)
@@ -128,6 +132,10 @@ type KeyLimiter struct {
 
 // NewKeyLimiter allows `burst` per `window` per key.
 func NewKeyLimiter(burst int, window time.Duration) *KeyLimiter {
+	return newKeyLimiter(burst, window, time.Now)
+}
+
+func newKeyLimiter(burst int, window time.Duration, now func() time.Time) *KeyLimiter {
 	if burst < 1 {
 		burst = 1
 	}
@@ -139,6 +147,7 @@ func NewKeyLimiter(burst int, window time.Duration) *KeyLimiter {
 		burst:   burst,
 		rate:    float64(burst) / window.Seconds(),
 		gcAfter: window * 10,
+		now:     now,
 	}
 	go state.gcLoop(window * 5)
 	return &KeyLimiter{state: state}
@@ -146,7 +155,7 @@ func NewKeyLimiter(burst int, window time.Duration) *KeyLimiter {
 
 // Allow takes one token from key's bucket.
 func (l *KeyLimiter) Allow(key string) bool {
-	return l.state.bucketFor(key).take()
+	return l.state.bucketFor(key).take(l.state.now())
 }
 
 type rateState struct {
@@ -155,6 +164,7 @@ type rateState struct {
 	burst   int
 	rate    float64
 	gcAfter time.Duration
+	now     func() time.Time
 }
 
 func (s *rateState) bucketFor(key string) *rateLimiter {
@@ -167,7 +177,7 @@ func (s *rateState) bucketFor(key string) *rateLimiter {
 		tokens:     float64(s.burst),
 		capacity:   float64(s.burst),
 		refillRate: s.rate,
-		last:       time.Now(),
+		last:       s.now(),
 	}
 	s.buckets[key] = b
 	return b
@@ -179,7 +189,8 @@ func (s *rateState) bucketFor(key string) *rateLimiter {
 func (s *rateState) gcLoop(interval time.Duration) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
-	for now := range tick.C {
+	for range tick.C {
+		now := s.now()
 		s.mu.Lock()
 		for k, b := range s.buckets {
 			b.mu.Lock()
