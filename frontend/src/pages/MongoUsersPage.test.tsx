@@ -7,6 +7,7 @@ import { MongoUsersPage } from './MongoUsersPage';
 import { SubNav } from '../components/layout/SubNav';
 import { api } from '../api/client';
 
+vi.mock('../hooks/useHostsApps', () => ({ useHostsApps: () => true }));
 vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
 }));
@@ -25,7 +26,6 @@ function mockServer(documentDb = true) {
     }
     if (url === '/projects/proj-doc/db-endpoint') {
       return reply({
-        internal: { host: 'proj-doc-postgres-rw.ns.svc', port: 5432, mongoHost: 'proj-doc-documentdb.ns.svc', mongoPort: 10260 },
         publicEnabled: false,
       });
     }
@@ -70,7 +70,7 @@ describe('MongoUsersPage', () => {
     expect(await screen.findByText('3–63 lowercase letters, digits and underscores, starting with a letter.')).toBeInTheDocument();
   });
 
-  test('a new user is shown once with a connection string', async () => {
+  test('a new user on a project with no public port is shown once with no connection string', async () => {
     mockServer();
     const u = userEvent.setup();
     vi.mocked(api.post).mockResolvedValue({
@@ -88,9 +88,8 @@ describe('MongoUsersPage', () => {
     );
     const shown = await screen.findByTestId('new-mongo-user');
     expect(shown).toHaveTextContent('pw-shown-once');
-    expect(shown).toHaveTextContent(
-      'mongodb://writer:pw-shown-once@proj-doc-documentdb.ns.svc:10260/?tls=true&authMechanism=SCRAM-SHA-256&directConnection=true',
-    );
+    expect(shown).not.toHaveTextContent('mongodb://');
+    expect(shown).not.toHaveTextContent('.svc');
     await u.click(within(shown).getByRole('button', { name: /i have saved it/i }));
     expect(screen.queryByText(/pw-shown-once/)).not.toBeInTheDocument();
   });
@@ -205,7 +204,6 @@ describe('MongoUsersPage failures and the public address', () => {
               requireTls: true,
               mongoPort: 30002,
               mongoAvailable: true,
-              internal: { host: 'proj-doc-postgres-rw.ns.svc', port: 5432, mongoHost: 'proj-doc-documentdb.ns.svc', mongoPort: 10260 },
             },
           } as never)
         : base(url),
@@ -239,7 +237,6 @@ describe('MongoUsersPage failures and the public address', () => {
               requireTls: false,
               mongoPort: 30002,
               mongoAvailable: true,
-              internal: { host: 'proj-doc-postgres-rw.ns.svc', port: 5432, mongoHost: 'proj-doc-documentdb.ns.svc', mongoPort: 10260 },
             },
           } as never)
         : base(url),

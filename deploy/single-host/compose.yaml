@@ -320,6 +320,8 @@ services:
       # Security guards (EXC-755): on unless set to false.
       FEATURE_PROXYBLOCK: ${FEATURE_PROXYBLOCK:-true}
       FEATURE_SIGNUPGUARD: ${FEATURE_SIGNUPGUARD:-true}
+      # Database passwords are shown once and never read back (EXC-759); on by default.
+      FEATURE_ONETIMECREDENTIALS: ${FEATURE_ONETIMECREDENTIALS:-true}
       HOST_METRICS_CONTAINERS: *platform_containers
       HOST_METRICS_NET_DEV: /host/proc-net-dev
       # Stored project log search in the bundled Loki (EXC-672; init.sh --host-logs).

@@ -30,7 +30,7 @@ async function mockProject(page: Page, allowList: boolean) {
   await json(page, `**/api/projects/${PROJECT_ID}/db-endpoint`, {
     projectId: PROJECT_ID, publicOffered: true, publicEnabled: false, available: false, host: '', port: 0,
     requireTls: true, database: 'app', username: 'excalibase_app',
-    connectionStrings: { requireTls: '', allowPlaintext: '' }, caCertificate: '', internal: INTERNAL, canChange: true,
+    connectionStrings: { requireTls: '', allowPlaintext: '' }, caCertificate: '', canChange: true,
   });
 }
 

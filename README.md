@@ -237,8 +237,8 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 | DELETE | `/api/provision/{id}` | Yes | Delete instance (purges vault paths under `projects/{id}/`). Optional body `{"confirmDeleteBackups": true}` also deletes the project's backup objects in R2/S3 after the instance is gone; absent/false keeps them |
 | POST | `/api/provision/{id}/backups/purge` | Yes | Retry the backup deletion for a project left in `BACKUPS_PENDING_DELETE` (same Admin role as DELETE; 409 for a live project) |
 | PATCH | `/api/provision/{id}/deletion-protection` | Yes | Toggle deletion protection |
-| GET | `/api/provision/{id}/credentials` | Yes | Connection details |
-| POST | `/api/provision/{id}/credentials/rotate` | Yes | Rotate credentials |
+| GET | `/api/provision/{id}/credentials` | Yes | Connection details, no password (shown once at create and reset) |
+| POST | `/api/provision/{id}/credentials/rotate` | Yes | Reset the password; the new one is shown once |
 | GET | `/api/provision/{id}/logs` | Yes | Database logs; with `FEATURE_LOGRETENTION`, no further back than the plan keeps them, and `retentionHours` says how long |
 | GET | `/api/provision/{id}/maintenance-window` | Yes | Get maintenance window |
 | PUT | `/api/provision/{id}/maintenance-window` | Yes | Set maintenance window |

@@ -35,6 +35,19 @@ func TestLoad_AbuseGuardsAreOnUnlessSwitchedOff(t *testing.T) {
 	}
 }
 
+// EXC-759: showing a password once is a security fix, so it is on unless switched off.
+func TestLoad_OneTimeCredentialsAreOnUnlessSwitchedOff(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	t.Setenv("FEATURE_ONETIMECREDENTIALS", "")
+	if !Load().Features().Enabled(context.Background(), features.OneTimeCredentials) {
+		t.Error("one-time credentials are off with nothing set")
+	}
+	t.Setenv("FEATURE_ONETIMECREDENTIALS", "false")
+	if Load().Features().Enabled(context.Background(), features.OneTimeCredentials) {
+		t.Error("FEATURE_ONETIMECREDENTIALS=false did not switch them off")
+	}
+}
+
 func TestLoad_EachDarkFeatureIsTurnedOnByItsOwnVariable(t *testing.T) {
 	t.Setenv("CORS_ORIGINS", "https://app.test")
 	for feature, env := range featureEnv {
@@ -56,7 +69,7 @@ func TestLoad_EachDarkFeatureIsTurnedOnByItsOwnVariable(t *testing.T) {
 				}
 			}
 			t.Setenv(env, "yes")
-			if Load().Features().Enabled(context.Background(), feature) {
+			if !defaultOn[feature] && Load().Features().Enabled(context.Background(), feature) {
 				t.Errorf("%s=yes: only the exact value \"true\" turns a dark feature on", env)
 			}
 		})

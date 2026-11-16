@@ -64,7 +64,7 @@ export function DatabaseInstanceCard({ instance }: DatabaseInstanceCardProps) {
               {instance.projectId}
             </h3>
             <p className="text-sm text-text-secondary">
-              {engineLabel(instance)} · {instance.tier} · {instance.namespace}
+              {engineLabel(instance)} · {instance.tier}
             </p>
           </div>
         </div>
@@ -140,20 +140,8 @@ export function DatabaseInstanceCard({ instance }: DatabaseInstanceCardProps) {
                 {/* Instance Details */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <p className="text-sm text-text-tertiary">Organization</p>
-                    <p className="text-text-primary font-medium">{instance.orgId}</p>
-                  </div>
-                  <div>
                     <p className="text-sm text-text-tertiary">Database Name</p>
                     <p className="text-text-primary font-medium">{instance.databaseName}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-text-tertiary">Host</p>
-                    <p className="text-text-primary font-medium">{instance.host}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-text-tertiary">Port</p>
-                    <p className="text-text-primary font-medium">{instance.port}</p>
                   </div>
                   <div>
                     <p className="text-sm text-text-tertiary">Created</p>

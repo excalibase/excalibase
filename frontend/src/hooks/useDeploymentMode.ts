@@ -29,7 +29,8 @@ export type Feature =
   | 'dbcopy'
   | 'majorupgrade'
   | 'appgitbuilds'
-  | 's3';
+  | 's3'
+  | 'onetimecredentials';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
