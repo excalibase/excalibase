@@ -39,6 +39,10 @@ func TestMatchImageOrName_Signatures(t *testing.T) {
 		{"ghcr.io/mupeng111/excalibase-node:latest", "web"},
 		{"ghcr.io/mupeng111/anything:1", "web"},
 		{"nginx:1", "excalibase-node"},
+		{"nginx:1", "excalibase_node"},
+		{"ghcr.io:443/mupeng111/x:1", "web"},
+		{"mupeng111/x:1", "web"},
+		{"quay.io/acme/excalibase-node:1", "web"},
 	}
 	for _, c := range refused {
 		if got := MatchImageOrName(c.image, c.name); got == "" {
@@ -58,6 +62,8 @@ func TestMatchImageOrName_NormalAppsPass(t *testing.T) {
 		{"redis:7", "sing-along"},
 		{"python:3.12", "ssh-bastion"},
 		{"ghcr.io/otherowner/app:1", "web"},
+		{"ghcr.io/mupeng1110/x:1", "web"},
+		{"ghcr.io/mupeng11/x:1", "web"},
 		{"someone/excalibase-node-exporter", "excalibase-node-exporter"},
 	}
 	for _, c := range allowed {
