@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/go-chi/chi/v5"
@@ -23,6 +24,8 @@ const errReadApp = "could not read the app"
 type AppSecretHandler struct {
 	store apphost.Store
 	vault vaultclient.VaultClient
+	// proxyGuard refuses proxy and VPN nodes (EXC-755); nil allows every app.
+	proxyGuard *abuse.AppGuard
 }
 
 func NewAppSecretHandler(store apphost.Store, vault vaultclient.VaultClient) *AppSecretHandler {
@@ -66,6 +69,9 @@ func (h *AppSecretHandler) Set(w http.ResponseWriter, r *http.Request) {
 	ref := app.SetSecretVar(name)
 	if err := app.Validate(); err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if refuseProxy(w, r, h.proxyGuard, app, "secret") {
 		return
 	}
 	if err := h.vault.Put(ref.Path, map[string]string{ref.Key: value}); err != nil {
