@@ -5,10 +5,13 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/pgstore"
 )
@@ -38,10 +41,16 @@ func TestRevokeOrgThenSignInCreatesNoOrg(t *testing.T) {
 	}
 
 	h := NewAdminHandler(nil, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}, store, &captureAudit{}, nil, "", nil)
+	// Revoking suspends the owner through the console's own operation (EXC-757).
+	h.SetOwnerSuspender(adminconsole.NewSuspensionService(postgres.NewAdminConsole(store.DB()), noApps{}, &captureAudit{}))
 	w := httptest.NewRecorder()
-	adminRouterAs("platform_admin", h).ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/admin/orgs/"+orgs[0].ID+"?cascade=true", nil))
+	revokeRequest := httptest.NewRequest(http.MethodDelete, "/api/admin/orgs/"+orgs[0].ID+"?cascade=true", strings.NewReader(revokeReasonBody))
+	adminRouterAs("platform_admin", h).ServeHTTP(w, revokeRequest)
 	if w.Code != http.StatusOK {
 		t.Fatalf("revoke: %d %s", w.Code, w.Body.String())
+	}
+	if revoked, _ := store.FindUserByID(ctx, owner.ID); revoked == nil || revoked.Active {
+		t.Fatal("revoking the org must also suspend its owner")
 	}
 
 	if err := auth.EnsurePersonalOrg(ctx, store, owner); err != nil {
