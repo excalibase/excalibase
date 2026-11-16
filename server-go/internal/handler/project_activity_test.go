@@ -85,7 +85,7 @@ func setupActivityRouter(t *testing.T) (*chi.Mux, *storage.FileSystemStore, *act
 	activity := newActivityStoreForHandler()
 	recorder := service.NewActivityRecorder(service.ActivityRecorderConfig{Store: activity, Window: 5 * time.Minute})
 
-	h := NewProvisioningHandler(provSvc, &adminOrgStore{})
+	h := NewProvisioningHandler(provSvc, &adminOrgStore{member: []*domain.Org{{ID: "o"}}})
 	h.SetActivityStore(activity)
 
 	r := chi.NewRouter()

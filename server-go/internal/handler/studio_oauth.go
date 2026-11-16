@@ -125,6 +125,7 @@ func (h *StudioOAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, "failed")
 		return
 	}
+	h.auth.recordLogin(r, user)
 	next := h.studioURL + "/oauth/complete"
 	if len(outcome) > 0 {
 		next += "?" + outcome.Encode()

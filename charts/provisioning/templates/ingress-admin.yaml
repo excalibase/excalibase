@@ -1,0 +1,40 @@
+{{- if and .Values.adminConsole.host .Values.adminConsole.ingress.enabled }}
+# The operator console's own host (EXC-757): the Studio at /, the API at /api.
+# Admin routes answer on this host only, and the origin checks the Cloudflare
+# Access assertion when adminAccess is set.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: provisioning-admin
+  namespace: {{ .Values.namespace }}
+  {{- with .Values.adminConsole.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.adminConsole.ingress.className }}
+  {{- if .Values.adminConsole.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.adminConsole.host }}
+      secretName: {{ .Values.adminConsole.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.adminConsole.host }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: provisioning
+                port:
+                  number: {{ .Values.service.publicPort }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.adminConsole.ingress.studioService.name }}
+                port:
+                  number: {{ .Values.adminConsole.ingress.studioService.port }}
+{{- end }}

@@ -78,7 +78,7 @@ PROJECT_ID=$(echo "$R" | jq -r '.projectId')
 if [[ "$PROJECT_ID" == proj-* ]]; then
   pass "valid request accepted (ref=$PROJECT_ID)"
   # Clean up
-  curl -s -X DELETE "http://localhost:24005/api/admin/projects/$PROJECT_ID" \
+  curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' "http://localhost:24005/api/admin/projects/$PROJECT_ID" \
     -H "Authorization: Bearer $TOKEN" > /dev/null
 else
   fail "valid pg 17 rejected" "$R"

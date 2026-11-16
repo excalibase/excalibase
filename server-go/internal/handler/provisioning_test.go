@@ -48,9 +48,17 @@ func setupTestRouterWithVault(t *testing.T, vault *fakeVault) (chi.Router, *stor
 	// when the org store is missing rather than dumping every tenant's
 	// instances. The fake returns no orgs, which is fine for these tests —
 	// they exercise the no-user (unscoped) and platform-admin branches.
-	h := NewProvisioningHandler(svc, &adminOrgStore{})
+	h := NewProvisioningHandler(svc, &adminOrgStore{member: []*domain.Org{{ID: "org1"}}})
 
 	r := chi.NewRouter()
+	// The caller is a platform admin who belongs to org1 only: the list is
+	// still theirs alone (EXC-757).
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ctx := auth.SetUser(req.Context(), &domain.User{ID: testUser1, Role: "platform_admin", Active: true})
+			next.ServeHTTP(w, req.WithContext(ctx))
+		})
+	})
 	r.Route("/api/provision", func(r chi.Router) {
 		r.Get("/", h.ListInstances)
 		r.Post("/", h.Provision)
@@ -152,9 +160,10 @@ func TestProvisionNoK8s(t *testing.T) {
 	body := `{"projectName":"test","orgId":"org","databaseType":"POSTGRESQL","postgresVersion":"17"}`
 	req := httptest.NewRequest("POST", testProvisionPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	// Authenticated platform_admin bypasses the create_project org check, so the
+	// A platform service principal skips the create_project org check, so the
 	// request reaches the provisioner and fails there (the path under test).
-	req = req.WithContext(auth.SetUser(req.Context(), &domain.User{ID: "op", Role: "platform_admin", Active: true}))
+	ctx := auth.SetUser(req.Context(), &domain.User{ID: "op", Role: "platform_admin", Active: true})
+	req = req.WithContext(auth.SetToken(ctx, &domain.AccessToken{Permissions: []string{"projects:create"}}))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -164,12 +173,12 @@ func TestProvisionNoK8s(t *testing.T) {
 	}
 }
 
-func TestListInstancesReturnsAll(t *testing.T) {
+func TestListInstancesIsTheCallersOrgsEvenForAPlatformAdmin(t *testing.T) {
 	r, store := setupTestRouter(t)
 
-	store.Create(&domain.DatabaseInstance{ProjectID: "a", OwnerID: testUser1, Status: "ACTIVE"})
-	store.Create(&domain.DatabaseInstance{ProjectID: "b", OwnerID: testUser1, Status: "ACTIVE"})
-	store.Create(&domain.DatabaseInstance{ProjectID: "c", OwnerID: "user-2", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "a", OrgID: "org1", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "b", OrgID: "org1", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "c", OrgID: "customer-org", Status: "ACTIVE"})
 
 	req := httptest.NewRequest("GET", testProvisionPrefix, nil)
 	w := httptest.NewRecorder()
@@ -178,12 +187,30 @@ func TestListInstancesReturnsAll(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf(testWant200Fmt, w.Code)
 	}
-
 	var result []*domain.DatabaseInstance
 	json.NewDecoder(w.Body).Decode(&result)
-	// Without auth context and nil orgStore, returns all instances
-	if len(result) != 3 {
-		t.Fatalf("expected 3 instances, got %d", len(result))
+	if len(result) != 2 {
+		t.Fatalf("expected the 2 projects of the admin's own org, got %d", len(result))
+	}
+	for _, inst := range result {
+		if inst.OrgID != "org1" {
+			t.Fatalf("another customer's project leaked: %+v", inst)
+		}
+	}
+}
+
+func TestListInstancesWithoutAUserIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := storage.NewFileSystemStore(dir)
+	svc := service.NewProvisioningService(store, provisioner.NewFactory(), nil)
+	withBackupTarget(t, svc)
+	h := NewProvisioningHandler(svc, &adminOrgStore{})
+	r := chi.NewRouter()
+	r.Get("/api/provision/", h.ListInstances)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", testProvisionPrefix, nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", w.Code)
 	}
 }
 

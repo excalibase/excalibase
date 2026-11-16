@@ -646,6 +646,7 @@ func TestProvisioningHandlerRoutes(t *testing.T) {
 	h := NewProvisioningHandler(svc, &adminOrgStore{})
 
 	r := chi.NewRouter()
+	r.Use(signedInAs("u1", "user"))
 	r.Route(testProvisionPath, h.Routes)
 
 	// Verify routes are wired by hitting each one

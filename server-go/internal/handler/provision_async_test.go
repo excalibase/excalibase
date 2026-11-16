@@ -34,7 +34,9 @@ func asyncProvisionRouter(t *testing.T, store *inMemoryInstanceStore) (chi.Route
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			next.ServeHTTP(w, req.WithContext(auth.SetUser(req.Context(), &domain.User{ID: "test-admin", Role: "platform_admin", Active: true})))
+			ctx := auth.SetUser(req.Context(), &domain.User{ID: "test-admin", Role: "platform_admin", Active: true})
+			ctx = auth.SetToken(ctx, &domain.AccessToken{Permissions: []string{"projects:create"}})
+			next.ServeHTTP(w, req.WithContext(ctx))
 		})
 	})
 	r.Post(testProvisionPath, h.Provision)

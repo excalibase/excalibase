@@ -96,6 +96,13 @@ var platformRows = []Row{
 	{Methods: post, Pattern: "/api/auth/tokens/{tokenHash}/rotate", Bootstrap: true, Auth: AuthSession, Owner: OwnerTokenSubject},
 
 	{Methods: get, Pattern: "/api/admin/projects", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole, Discloses: NoSecret},
+	{Methods: get, Pattern: "/api/admin/console/overview", Auth: AuthSession, Permission: permManageOrgs, Owner: OwnerPlatformRole, Unrestricted: true, Discloses: NoSecret, Note: "admin console: sign-up domains, suspended and failed accounts across every tenant; platform_admin only"},
+	{Methods: get, Pattern: "/api/admin/console/users", Auth: AuthSession, Permission: permManageOrgs, Owner: OwnerPlatformRole, Unrestricted: true, Discloses: NoSecret, Note: "admin console: every account's email and last sign-in address; platform_admin only, no credential or hash is ever returned"},
+	{Methods: patch, Pattern: "/api/admin/console/orgs/{orgId}/tier", Auth: AuthSession, Permission: permManageOrgs, Owner: OwnerPlatformRole, Unrestricted: true, Note: "session only; a written reason is required and audited"},
+	{Methods: get, Pattern: "/api/admin/console/orgs", Auth: AuthSession, Permission: permManageOrgs, Owner: OwnerPlatformRole, Unrestricted: true, Discloses: NoSecret},
+	{Methods: get, Pattern: "/api/admin/console/projects/{projectId}", Auth: AuthSession, Permission: permManageOrgs, Owner: OwnerPlatformRole, Unrestricted: true, Discloses: NoSecret, Note: "admin console: owner, database, apps and their running state; no connection string or secret"},
+	{Methods: post, Pattern: "/api/admin/console/users/{userId}/suspend", Auth: AuthSession, Permission: permManageOrgs, Owner: OwnerPlatformRole, Unrestricted: true, Note: "blocks the account, stops its apps, audited; refuses platform accounts and the caller's own"},
+	{Methods: post, Pattern: "/api/admin/console/users/{userId}/unsuspend", Auth: AuthSession, Permission: permManageOrgs, Owner: OwnerPlatformRole, Unrestricted: true, Note: "reactivates the account and resumes what the suspension stopped, audited"},
 	{Methods: get, Pattern: "/api/admin/logs", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole, Discloses: NoSecret},
 	{Methods: del, Pattern: "/api/admin/projects/{projectId}", Auth: AuthSession, Permission: permDelete, Owner: OwnerPlatformRole, Unrestricted: true, Note: "cross-tenant force drop; a non-admin is refused before the project id is looked at, and a narrowed PAT may not destroy a tenant it was never scoped to"},
 	{Methods: del, Pattern: "/api/admin/orgs/{orgId}", Auth: AuthSession, Permission: permManageOrgs, Owner: OwnerPlatformRole, Unrestricted: true},
