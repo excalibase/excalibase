@@ -62,11 +62,11 @@ func getVaultSecret(t *testing.T, h *VaultHandler, path string) *httptest.Respon
 	r := chi.NewRouter()
 	r.Get("/api/vault/secrets/*", h.GetSecret)
 	req := httptest.NewRequest(http.MethodGet, "/api/vault/secrets/"+path, nil)
-	// Production mounts this behind RequireAuth; a platform admin reaches
-	// every tenant, which leaves the servable-project gate as the only thing
-	// these cases turn on.
+	// Production mounts this behind RequireAuth; a platform service principal
+	// reaches every tenant, which leaves the servable-project gate as the only
+	// thing these cases turn on.
 	ctx := auth.SetUser(req.Context(), &domain.User{ID: "op", Role: "platform_admin", Active: true})
-	ctx = auth.SetToken(ctx, &domain.AccessToken{Scopes: auth.ScopeSession})
+	ctx = auth.SetToken(ctx, serviceVaultToken())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req.WithContext(ctx))
 	return w

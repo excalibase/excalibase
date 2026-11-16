@@ -32,6 +32,9 @@ func metricsEndpointRouter(t *testing.T, on ...features.Feature) (http.Handler, 
 		{ProjectID: matrixProjectB, Family: "graphql", Requests: 9},
 	}}
 	router, _, admins, _ := buildMatrixPlatform(t, config.AppConfig{DeploymentMode: "selfhosted"}, func(deps *handlerDeps, platform *fakePlatform) {
+		// The key is minted as a member: a platform admin is a customer of
+		// every org but their own (EXC-757).
+		platform.AddMember(matrixOrgA, matrixAdminID, domain.OrgRoleOwner)
 		deps.features = features.NewStatic(on...)
 		deps.metricsKeysHandler = handler.NewMetricsKeysHandler(platform.Tokens, nil)
 		deps.metricsEndpointHandler = handler.NewMetricsEndpointHandler(totals)
@@ -162,6 +165,7 @@ func TestMetricsEndpoint_FlagOffIsNotMounted(t *testing.T) {
 // The scrape budget is per key holder and project, separate from Studio's.
 func TestMetricsEndpoint_IsRateLimited(t *testing.T) {
 	router, _, admins, _ := buildMatrixPlatform(t, config.AppConfig{DeploymentMode: "selfhosted"}, func(deps *handlerDeps, platform *fakePlatform) {
+		platform.AddMember(matrixOrgA, matrixAdminID, domain.OrgRoleOwner)
 		deps.features = features.NewStatic(features.MetricsEndpoint)
 		deps.metricsKeysHandler = handler.NewMetricsKeysHandler(platform.Tokens, nil)
 		deps.metricsEndpointHandler = handler.NewMetricsEndpointHandler(storedTotals{})

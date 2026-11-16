@@ -251,7 +251,7 @@ func TestDeployTokenStandingMatchesWhatTheDeployRouteEnforces(t *testing.T) {
 		{"demoted to viewer", "user", domain.OrgRoleViewer, true, false},
 		{"removed from the org", "user", "", true, false},
 		{"deactivated developer", "user", domain.OrgRoleDeveloper, false, false},
-		{"platform admin outside the org", "platform_admin", "", true, true},
+		{"platform admin outside the org", "platform_admin", "", true, false},
 	} {
 		t.Run(creator.name, func(t *testing.T) {
 			tokens, users := gateFixtures()

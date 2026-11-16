@@ -136,8 +136,10 @@ The 15% safety headroom is set via `CAPACITY_HEADROOM_PERCENT` env. Set to 0 if 
 The studio's **Platform Admin** page (`/admin`) has the buttons. CLI equivalent:
 
 ```bash
-# Bypasses deletion_protection. Audited.
-curl -X DELETE -H "Authorization: Bearer $PAT" \
+# Bypasses deletion_protection. Audited; a written reason (500 characters
+# at most) is required and goes into the audit entry.
+curl -X DELETE -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  -d '{"reason":"abandoned, holding a node"}' \
   https://<host>/api/admin/projects/proj-abc123
 ```
 
@@ -311,7 +313,10 @@ indefinitely and the only way to find them is
 ```bash
 # ?cascade=true is required — without it the call refuses to avoid
 # orphaning projects whose org row would still exist.
-curl -X DELETE -H "Authorization: Bearer $PAT" \
+# A written reason is required (JSON body, 500 characters at most) and is
+# audited. The org's owner is suspended too, so they cannot sign in again.
+curl -X DELETE -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  -d '{"reason":"proxy abuse across every project"}' \
   "https://<host>/api/admin/orgs/<orgId>?cascade=true"
 ```
 
@@ -569,7 +574,7 @@ curl -X POST -H "Authorization: Bearer $PAT" \
 Find rows waiting for a retry with
 `SELECT project_id, failure_reason FROM database_instances WHERE status = 'BACKUPS_PENDING_DELETE'`.
 `DELETE /api/admin/projects/{projectId}` (force drop) accepts the same
-`confirmDeleteBackups` body field. With `Prefer: respond-async` it answers
+`confirmDeleteBackups` body field, and requires a `reason`. With `Prefer: respond-async` it answers
 202 once the project is `DELETING` and tears it down in the background; the
 row is gone when it finishes, or stays `DELETING` with `deletion_step` and
 `deletion_error`. A teardown never depends on the request staying connected.
