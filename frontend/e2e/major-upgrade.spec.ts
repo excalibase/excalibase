@@ -20,7 +20,7 @@ function upgradeInfo(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function json(page: Page, pattern: string, body: unknown, status = 200) {
+async function json(page: Page, pattern: string | RegExp, body: unknown, status = 200) {
   await page.route(pattern, (route) =>
     route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) }),
   );

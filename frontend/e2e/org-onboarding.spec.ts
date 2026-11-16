@@ -7,7 +7,7 @@ const FIRST_RENDER = 20_000;
 const CATALOG = { documentDbRef: 'v0.117-0', majors: [{ major: '17', available: true, documentDb: true }] };
 const NEW_ORG = { id: 'org-new', name: 'Ada Labs', slug: 'ada-labs', tier: 'FREE', ownerId: '1' };
 
-async function json(page: Page, pattern: string, body: unknown) {
+async function json(page: Page, pattern: string | RegExp, body: unknown) {
   await page.route(pattern, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }),
   );

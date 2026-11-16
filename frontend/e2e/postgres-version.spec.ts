@@ -35,7 +35,7 @@ const INTERNAL = {
 // The gateway's own Service: the Postgres host does not serve the Mongo port.
 const MONGO_INTERNAL_HOST = 'test-project-documentdb.org-1.svc.cluster.local';
 
-async function json(page: Page, pattern: string, body: unknown) {
+async function json(page: Page, pattern: string | RegExp, body: unknown) {
   await page.route(pattern, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }),
   );
