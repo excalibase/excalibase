@@ -13,14 +13,12 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"testing"
-	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
-	"github.com/testcontainers/testcontainers-go"
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // New spins up a postgres:16-alpine container, runs all migrations via
@@ -39,10 +37,7 @@ func New(t *testing.T) *postgres.Store {
 		pgmod.WithDatabase("platform_test"),
 		pgmod.WithUsername("platform"),
 		pgmod.WithPassword(containerPwd),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)

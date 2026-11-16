@@ -8,11 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
@@ -21,9 +21,7 @@ import (
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 const (
@@ -56,10 +54,7 @@ func setupSchemaRouterAs(t *testing.T, role string) chi.Router {
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("superuser"),
 		postgres.WithPassword("superpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
