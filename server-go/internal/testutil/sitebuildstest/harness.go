@@ -78,7 +78,14 @@ func startPlatformDB() (*postgres.Store, error) {
 	}
 	dsn := url.URL{Scheme: "postgres", User: url.UserPassword("platform", password),
 		Host: fmt.Sprintf("%s:%s", host, port.Port()), Path: "platform_test", RawQuery: "sslmode=disable"}
-	return postgres.New(dsn.String())
+	store, err := postgres.New(dsn.String())
+	if err != nil {
+		return nil, err
+	}
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 var nextIDs atomic.Int64
