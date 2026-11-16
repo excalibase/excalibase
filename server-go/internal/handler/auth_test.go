@@ -283,7 +283,7 @@ func TestAuthLogin_Success(t *testing.T) {
 
 	aliceUser := testutil.FixtureToken("alice")
 	alicePwd := testutil.FixturePassword("alice-login")
-	hash, _ := auth.HashPassword(alicePwd)
+	hash := testutil.FixtureVerifiableHash(alicePwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID:              "u1",
@@ -321,7 +321,7 @@ func TestAuthLogin_WrongPassword_Returns401(t *testing.T) {
 	ts := newMockTokenStore()
 
 	correctPwd := testutil.FixturePassword("bob-correct")
-	hash, _ := auth.HashPassword(correctPwd)
+	hash := testutil.FixtureVerifiableHash(correctPwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID: "u1", Username: "bob", PasswordHash: hash, Active: true, CreatedAt: &now,
@@ -349,7 +349,7 @@ func TestAuthLogin_TokenCreationFails_Returns500(t *testing.T) {
 
 	carolUser := testutil.FixtureToken("carol")
 	carolPwd := testutil.FixturePassword("carol-login")
-	hash, _ := auth.HashPassword(carolPwd)
+	hash := testutil.FixtureVerifiableHash(carolPwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID: "u1", Username: carolUser, PasswordHash: hash, Active: true, EmailVerifiedAt: &now, CreatedAt: &now,
@@ -585,7 +585,7 @@ func TestAuthRevokeToken(t *testing.T) {
 func TestAuthLogin_SetsSessionCookie(t *testing.T) {
 	us := newMockUserStore()
 	alicePwd2 := testutil.FixturePassword("alice-cookie")
-	hash, _ := auth.HashPassword(alicePwd2)
+	hash := testutil.FixtureVerifiableHash(alicePwd2)
 	now := time.Now()
 	aliceUser2 := testutil.FixtureToken("alice")
 	us.users["u1"] = &domain.User{

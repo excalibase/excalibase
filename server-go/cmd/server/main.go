@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/adminaccess"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
@@ -1703,6 +1704,23 @@ func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore s
 	h.SetFeatures(cfg.Features())
 	h.SetRestarts(restarts)
 	h.SetInternalRegistry(internal)
+	h.SetProxyGuard(newProxyGuard(cfg, sqlStore))
+	return h
+}
+
+// newProxyGuard refuses proxy and VPN nodes on every app path and records each refusal (EXC-755).
+func newProxyGuard(cfg config.AppConfig, audit abuse.AuditWriter) *abuse.AppGuard {
+	return abuse.NewAppGuard(cfg.Features(), audit)
+}
+
+// newSignupGuard refuses throwaway mail and floods of sign-ups from one network (EXC-755).
+func newSignupGuard(cfg config.AppConfig) *abuse.SignupGuard {
+	return abuse.NewSignupGuard(cfg.Features(), abuse.NewEmailPolicy(nil), cfg.SignupsPerHour)
+}
+
+func newAppSecretHandler(cfg config.AppConfig, sqlStore storage.PlatformStore, vc vaultclient.VaultClient) *handler.AppSecretHandler {
+	h := handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc)
+	h.SetProxyGuard(newProxyGuard(cfg, sqlStore))
 	return h
 }
 
@@ -1725,6 +1743,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
 		appRuntime, store, service.NewAppEnvResolver(vc, store), appRenderOptions(cfg))
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
+	appDeploySvc.SetProxyGuard(newProxyGuard(cfg, sqlStore))
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
 	appDeploySvc.SetNamespaceQuotaTiers(provSvc)
 	provSvc.SetProjectQuotaSync(appDeploySvc.SyncProjectQuota)
@@ -1824,6 +1843,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	authHandler.SetAccountFailureCap(cfg.LoginAccountFailureCap)
 	authHandler.SetOrgStore(sqlStore)
 	authHandler.SetAuditLog(sqlStore)
+	authHandler.SetSignupGuard(newSignupGuard(cfg))
 	authHandler.SetInstanceStore(store)
 	authHandler.SetInviteOnly(cfg.RegistrationMode == "invite")
 	authHandler.SetSetupTokenStore(sqlStore)
@@ -1956,7 +1976,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		siteHandler:           newSiteHandler(sitesSvc, sqlStore, store),
 		siteDeployTokens:      sitesSvc,
 		storageBudgetH:        handler.NewStorageBudgetHandler(a.budget),
-		appSecretHandler:      handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
+		appSecretHandler:      newAppSecretHandler(cfg, sqlStore, vc),
 		appDeploySvc:          appDeploySvc,
 		appDeployHandler:      newAppDeployHandler(appDeploySvc, cfg.Features(), cfg.DeployWait),
 		registryCredHandler:   newRegistryCredentialHandler(registryCreds),

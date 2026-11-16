@@ -174,6 +174,9 @@ var darkWork = map[features.Feature]string{
 	// Off, rotation leaves sessions alone, credentials carry no reader and the
 	// read address names the owner (internal/service).
 	features.DBReadRole: "TestRotationLeavesSessionsAloneWhileTheFlagIsOff",
+	// On unless switched off: off, an app and a sign-up are not checked (internal/handler).
+	features.ProxyBlock:  "TestAppCreate_AllowsANormalAppAndAnOffFlag",
+	features.SignupGuard: "TestRegister_OffFlagAcceptsADisposableAddress",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

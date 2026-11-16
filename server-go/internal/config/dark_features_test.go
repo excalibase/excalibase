@@ -21,6 +21,20 @@ func TestLoad_DarkFeaturesDefaultOff(t *testing.T) {
 	}
 }
 
+// EXC-755: the abuse guards are security fixes, so they are on until an install says "false".
+func TestLoad_AbuseGuardsAreOnUnlessSwitchedOff(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	for _, feature := range []features.Feature{features.ProxyBlock, features.SignupGuard} {
+		env := featureEnv[feature]
+		for value, want := range map[string]bool{"": true, "true": true, "yes": true, "false": false} {
+			t.Setenv(env, value)
+			if got := Load().Features().Enabled(context.Background(), feature); got != want {
+				t.Errorf("%s=%q: enabled=%v, want %v", env, value, got, want)
+			}
+		}
+	}
+}
+
 // EXC-759: showing a password once is a security fix, so it is on unless switched off.
 func TestLoad_OneTimeCredentialsAreOnUnlessSwitchedOff(t *testing.T) {
 	t.Setenv("CORS_ORIGINS", "https://app.test")
@@ -40,6 +54,9 @@ func TestLoad_EachDarkFeatureIsTurnedOnByItsOwnVariable(t *testing.T) {
 		t.Run(string(feature), func(t *testing.T) {
 			for _, other := range featureEnv {
 				t.Setenv(other, "")
+			}
+			if defaultOn[feature] {
+				t.Skip("on without its variable; covered by TestLoad_AbuseGuardsAreOnUnlessSwitchedOff")
 			}
 			t.Setenv(env, "true")
 			if feature == features.HostMetrics || feature == features.HostLogs {
@@ -175,5 +192,16 @@ func TestDarkFeatures_HostLogsIsOnOnlyOnASingleHost(t *testing.T) {
 func TestDarkFeatures_SingleHostBuildsVariable(t *testing.T) {
 	if got := featureEnv[features.SingleHostBuilds]; got != "FEATURE_SINGLEHOSTBUILDS" {
 		t.Errorf("single-host builds variable = %q", got)
+	}
+}
+
+func TestLoad_SignupsPerHour(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	if got := Load().SignupsPerHour; got != 10 {
+		t.Errorf("default = %d, want 10", got)
+	}
+	t.Setenv("SIGNUPS_PER_NETWORK_PER_HOUR", "3")
+	if got := Load().SignupsPerHour; got != 3 {
+		t.Errorf("SIGNUPS_PER_NETWORK_PER_HOUR=3: %d", got)
 	}
 }

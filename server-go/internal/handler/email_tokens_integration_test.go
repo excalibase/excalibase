@@ -121,7 +121,7 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 	h.SetSessionStore(store)
 
 	// Seed a user with a known password.
-	origHash, _ := auth.HashPassword(testutil.FixturePassword("old"))
+	origHash := testutil.FixtureVerifiableHash(testutil.FixturePassword("old"))
 	user := &domain.User{ID: "user-reset", Username: testutil.FixturePassword("ruser"), Email: "r@example.com", PasswordHash: origHash, Role: "user", Active: true}
 	if err := store.CreateUser(context.Background(), user); err != nil {
 		t.Fatalf("CreateUser: %v", err)

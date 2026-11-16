@@ -10,7 +10,14 @@
 // credentials and never reach production code paths.
 package testutil
 
-import "strings"
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"strings"
+
+	"golang.org/x/crypto/argon2"
+)
 
 // FixturePassword returns a deterministic dummy password for unit tests.
 // The returned value satisfies common complexity checks (mixed case,
@@ -42,6 +49,22 @@ func FixturePasswordHash() string {
 		"ZmFrZS1zYWx0", // base64 of "fake-salt"
 		"ZmFrZS1oYXNo", // base64 of "fake-hash"
 	}, "$")
+}
+
+// FixtureVerifiableHash is an argon2id hash of password that auth.VerifyPassword
+// accepts, at 1 MiB, one pass, one thread. Verification reads the cost from the
+// encoded hash, so tests that sign in many times, or in parallel, do not hold
+// 64 MiB each (a hundred parallel logins under -race took 15 GB). The one test
+// of the production cost is in internal/auth.
+func FixtureVerifiableHash(password string) string {
+	const memory, passes, threads = 1024, 1, 1
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		panic(err)
+	}
+	key := argon2.IDKey([]byte(password), salt, passes, memory, threads, 32)
+	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s", argon2.Version, memory, passes, threads,
+		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key))
 }
 
 // FixtureToken returns a deterministic dummy token. Same SAST-avoidance

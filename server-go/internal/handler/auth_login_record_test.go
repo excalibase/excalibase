@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
@@ -33,7 +32,7 @@ func TestAuthLogin_RecordsWhenAndFromWhereTheAccountSignedIn(t *testing.T) {
 	users := &loginRecordingStore{mockUserStore: newMockUserStore(), logins: map[string]string{}}
 	username := testutil.FixtureToken("carol")
 	password := testutil.FixturePassword("carol-login")
-	hash, _ := auth.HashPassword(password)
+	hash := testutil.FixtureVerifiableHash(password)
 	now := time.Now()
 	users.users["u9"] = &domain.User{ID: "u9", Username: username, PasswordHash: hash, Active: true, EmailVerifiedAt: &now, CreatedAt: &now}
 
