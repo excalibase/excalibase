@@ -15,7 +15,6 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
-	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
@@ -164,7 +163,7 @@ func TestAdmin_RevokeOrg_ThenTheOwnersLoginIsRefused(t *testing.T) {
 	users := newMockUserStore()
 	owner := testutil.FixtureToken("owner")
 	password := testutil.FixturePassword("owner-login")
-	hash, _ := auth.HashPassword(password)
+	hash := testutil.FixtureVerifiableHash(password)
 	now := time.Now()
 	users.users["owner-1"] = &domain.User{ID: "owner-1", Username: owner, Email: "owner@acme.test", Role: "user", PasswordHash: hash, Active: true, EmailVerifiedAt: &now, CreatedAt: &now}
 	login := setupAuthRouter(t, users, newMockTokenStore())

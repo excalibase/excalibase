@@ -13,11 +13,30 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// guardedLoginRouter signs one account in with a tiny-cost hash, so many parallel
+// sign-ins do not each hold 64 MiB. The password-gate tests, which need a hash
+// slow enough to shed load, use guardedLoginRouterAtProductionCost.
 func guardedLoginRouter(t *testing.T, limit int) (chi.Router, string, string) {
+	t.Helper()
+	return guardedLoginRouterWith(t, limit, testutil.FixtureVerifiableHash)
+}
+
+func guardedLoginRouterAtProductionCost(t *testing.T, limit int) (chi.Router, string, string) {
+	t.Helper()
+	return guardedLoginRouterWith(t, limit, func(password string) string {
+		hash, err := auth.HashPassword(password)
+		if err != nil {
+			t.Fatalf("hash the fixture password: %v", err)
+		}
+		return hash
+	})
+}
+
+func guardedLoginRouterWith(t *testing.T, limit int, hashOf func(string) string) (chi.Router, string, string) {
 	t.Helper()
 	us := newMockUserStore()
 	password := testutil.FixturePassword("carol-login")
-	hash, _ := auth.HashPassword(password)
+	hash := hashOf(password)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID: "u1", Username: "carol@example.test", PasswordHash: hash,

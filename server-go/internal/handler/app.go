@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -60,6 +61,8 @@ type AppHandler struct {
 	restarts AppRestartReader
 	// internal is the platform's registry, which only its git builds deploy from (EXC-540).
 	internal *appregistry.Internal
+	// proxyGuard refuses proxy and VPN nodes (EXC-755); nil allows every app.
+	proxyGuard *abuse.AppGuard
 }
 
 // SetInternalRegistry refuses an image a caller names on the platform's own registry.
@@ -326,6 +329,9 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if refuseProxy(w, r, h.proxyGuard, app, "create") {
+		return
+	}
 	if !h.diskWithinPlan(w, r, app.ProjectID, app.Disk) {
 		return
 	}
@@ -418,6 +424,9 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 	existing.Tier = tier
 	if err := existing.Validate(); err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if refuseProxy(w, r, h.proxyGuard, existing, "update") {
 		return
 	}
 	if attaching && !h.diskWithinPlan(w, r, projectID, existing.Disk) {

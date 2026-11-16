@@ -42,13 +42,25 @@ var featureEnv = map[features.Feature]string{
 	features.LogDeletion:      "FEATURE_LOGDELETION",
 	features.S3:               "FEATURE_S3",
 	features.SitePreviews:     "FEATURE_SITEPREVIEWS",
+	features.ProxyBlock:       "FEATURE_PROXYBLOCK",
+	features.SignupGuard:      "FEATURE_SIGNUPGUARD",
 }
 
-// loadDarkFeatures reads once at startup; only the exact value "true" turns one on.
+// defaultOn are the features that are on until their variable says "false":
+// security fixes that must hold on every install without anyone setting
+// anything (EXC-755).
+var defaultOn = map[features.Feature]bool{
+	features.ProxyBlock:  true,
+	features.SignupGuard: true,
+}
+
+// loadDarkFeatures reads once at startup; only the exact value "true" turns a
+// dark feature on, and only the exact value "false" turns a default-on one off.
 func loadDarkFeatures() []features.Feature {
 	var on []features.Feature
 	for _, feature := range features.All() {
-		if os.Getenv(featureEnv[feature]) == "true" {
+		value := os.Getenv(featureEnv[feature])
+		if value == "true" || (defaultOn[feature] && value != "false") {
 			on = append(on, feature)
 		}
 	}

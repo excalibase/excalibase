@@ -86,7 +86,7 @@ func TestEveryPasswordPathRefusesWhenTheGateIsFull(t *testing.T) {
 // A refusal for load must not read as a wrong password, or it would burn the
 // account's failed-attempt budget during a flood.
 func TestBusyGateDoesNotCountAgainstTheAccount(t *testing.T) {
-	r, user, password := guardedLoginRouter(t, 2)
+	r, user, password := guardedLoginRouterAtProductionCost(t, 2)
 	restore := auth.ConfigurePasswordGate(0, time.Millisecond)
 	for i := 0; i < 5; i++ {
 		if w := doRequest(r, "POST", routeLogin, loginBody(user, password)); w.Code != http.StatusServiceUnavailable {
@@ -104,7 +104,7 @@ func TestBusyGateDoesNotCountAgainstTheAccount(t *testing.T) {
 // reply is a verdict (401) or a fast refusal (503), and the burst finishes
 // within a few waits rather than one hash per request in series.
 func TestSignInFloodIsBoundedAndNeverHangs(t *testing.T) {
-	r, user, _ := guardedLoginRouter(t, 1000)
+	r, user, _ := guardedLoginRouterAtProductionCost(t, 1000)
 	restore := auth.ConfigurePasswordGate(2, 50*time.Millisecond)
 	defer restore()
 
