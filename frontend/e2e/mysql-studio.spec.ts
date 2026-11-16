@@ -16,7 +16,7 @@ async function json(page: Page, pattern: string, body: unknown) {
 async function mockMySQLProject(page: Page) {
   await loginAs(page);
   await json(page, '**/api/config', { deploymentMode: 'cloud', features: { mysql: true } });
-  await json(page, '**/api/orgs', [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
+  await json(page, /\/api\/orgs(\?.*)?$/, [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
   await json(page, `**/api/provision/${PROJECT_ID}`, {
     projectId: PROJECT_ID, orgId: 'org-1', databaseType: 'MYSQL', mysqlVersion: '8.4.10', tier: 'FREE',
     namespace: 'org-1-shop-mysql', status: 'ACTIVE', currentStage: 'COMPLETED', host: HOST, port: 3306,

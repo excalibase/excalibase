@@ -364,10 +364,15 @@ func TestIntegration_Roles(t *testing.T) {
 		assertExpectedRolesPresent(t, roles)
 	})
 
-	// Studio runs as excalibase_app, which has no CREATEROLE on any major.
-	t.Run("create and drop role as the platform app role", func(t *testing.T) {
+	// Studio's role management runs as the project owner; excalibase_app, which
+	// runs customer SQL, may not call the role functions at all (EXC-761).
+	t.Run("create and drop role as the owner, never as the platform app role", func(t *testing.T) {
+		ownerDB := connectAsOwner(t)
 		pwd := testutil.FixturePassword("schema-role")
-		if err := introspector.CreateRole(ctx, appDB, CreateRoleRequest{
+		if err := introspector.CreateRole(ctx, appDB, CreateRoleRequest{Name: "by_app", Password: &pwd, Login: true}); err == nil {
+			t.Fatal("the app role created a LOGIN role")
+		}
+		if err := introspector.CreateRole(ctx, ownerDB, CreateRoleRequest{
 			Name: "test_role", Password: &pwd, Login: true,
 		}); err != nil {
 			t.Fatalf("CreateRole: %v", err)
@@ -378,7 +383,7 @@ func TestIntegration_Roles(t *testing.T) {
 			t.Fatalf("stored password %q (%v)", stored, err)
 		}
 
-		if err := introspector.DropRole(ctx, appDB, "test_role"); err != nil {
+		if err := introspector.DropRole(ctx, ownerDB, "test_role"); err != nil {
 			t.Fatalf("DropRole: %v", err)
 		}
 		assertRoleAbsent(t, introspector, superDB, ctx, "test_role")
@@ -397,7 +402,7 @@ func assertOnlyOwnedRolesDrop(t *testing.T, introspector *Introspector, superDB,
 		t.Fatalf("setup: %v", err)
 	}
 	for _, name := range []string{"mongo_reader", "someone_else", testOwner} {
-		if err := introspector.DropRole(ctx, appDB, name); err == nil {
+		if err := introspector.DropRole(ctx, connectAsOwner(t), name); err == nil {
 			t.Errorf("dropped %s", name)
 		}
 	}

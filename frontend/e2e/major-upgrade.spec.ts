@@ -30,7 +30,7 @@ async function mockProject(page: Page, majorupgrade: boolean) {
   await json(page, '**/api/config', { deploymentMode: 'cloud', features: { majorupgrade } });
   await mockInstances(page, PROJECT_ID);
   await mockSchemaEndpoints(page, PROJECT_ID);
-  await json(page, '**/api/orgs', [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1', role: 'admin' }]);
+  await json(page, /\/api\/orgs(\?.*)?$/, [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1', role: 'admin' }]);
   await json(page, `**/api/provision/${PROJECT_ID}`, {
     projectId: PROJECT_ID, projectName: 'shop', orgId: 'org-1', databaseType: 'POSTGRESQL', tier: 'FREE',
     namespace: 'org-1-test-project', status: 'ACTIVE', currentStage: 'COMPLETED', host: 'localhost', port: 5432,

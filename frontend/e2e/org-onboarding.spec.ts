@@ -23,7 +23,7 @@ test.describe('Create project with no organization', () => {
     await json(page, '**/api/tiers', []);
     await json(page, '**/api/provision', []);
     let created = false;
-    await page.route('**/api/orgs', (route) => {
+    await page.route(/\/api\/orgs(\?.*)?$/, (route) => {
       if (route.request().method() === 'POST') {
         created = true;
         return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(NEW_ORG) });
