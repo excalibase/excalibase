@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
@@ -19,6 +20,9 @@ func TestWait_ReadyMeansTheRealServerAcceptsTCP(t *testing.T) {
 		Reader:            strings.NewReader("#!/bin/sh\nsleep 10\n"),
 		ContainerFilePath: "/docker-entrypoint-initdb.d/slow.sh",
 		FileMode:          0o755,
+	}
+	if err := imagepull.EnsureLocal(ctx, "postgres:17-alpine"); err != nil {
+		t.Fatal(err)
 	}
 	pg, err := postgres.Run(ctx, "postgres:17-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("postgres"), postgres.WithPassword("pw"),
