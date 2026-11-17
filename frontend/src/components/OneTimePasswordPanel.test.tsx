@@ -68,11 +68,52 @@ describe('OneTimePasswordPanel', () => {
     expect(document.body.innerHTML).not.toContain(encodeURIComponent(PASSWORD));
   });
 
-  test('with no public endpoint the panel host says so and the CSV host cell is empty', () => {
+  test('with no public endpoint the panel host says so', () => {
     render(<Harness address={{ kind: 'none' }} />);
     expect(screen.getByTestId('otp-host')).toHaveTextContent('Not reachable from the internet');
     const csv = decodeURIComponent(screen.getByRole('link', { name: /download csv/i }).getAttribute('href')!);
-    expect(csv.split('\n')[1].startsWith('"","",')).toBe(true);
-    expect(csv).not.toContain('not reachable');
+    expect(csv.split('\n')[1].startsWith('"Not reachable from the internet","",')).toBe(true);
+  });
+
+  test('with no public endpoint it says where the host and port are found later', () => {
+    render(<Harness address={{ kind: 'none' }} />);
+    expect(screen.getByTestId('otp-address-hint')).toHaveTextContent(/public access/i);
+    expect(screen.getByTestId('otp-address-hint')).toHaveTextContent(/Connection Credentials/);
+  });
+
+  test('with a public endpoint there is no address hint', () => {
+    render(<Harness address={PUBLIC} />);
+    expect(screen.queryByTestId('otp-address-hint')).not.toBeInTheDocument();
+  });
+
+  test('a login still being created shows a reason, not a dash', () => {
+    render(
+      <OneTimePasswordPanel
+        projectId="p-1" password={PASSWORD} address={PUBLIC} database="" user="" pending
+        sslmode="require" onDone={() => undefined}
+      />,
+    );
+    expect(screen.getByTestId('otp-user')).toHaveTextContent(/ready/i);
+    expect(screen.getByTestId('otp-database')).toHaveTextContent(/ready/i);
+    expect(screen.getByTestId('otp-user')).not.toHaveTextContent('—');
+  });
+
+  test('Download CSV is disabled while the login is pending, and the password stays usable', () => {
+    render(
+      <OneTimePasswordPanel
+        projectId="p-1" password={PASSWORD} address={PUBLIC} database="" user="" pending
+        sslmode="require" onDone={() => undefined}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /download csv/i })).toBeDisabled();
+    expect(screen.queryByRole('link', { name: /download csv/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^copy/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /i've saved it/i })).toBeEnabled();
+  });
+
+  test('the CSV host cell says what the dialog says when there is no public endpoint', () => {
+    render(<Harness address={{ kind: 'none' }} />);
+    const csv = decodeURIComponent(screen.getByRole('link', { name: /download csv/i }).getAttribute('href')!);
+    expect(csv.split('\n')[1].startsWith('"Not reachable from the internet","",')).toBe(true);
   });
 });
