@@ -13,6 +13,8 @@ interface OneTimePasswordPanelProps {
   // True while the database is still being built: its login name and
   // database are not known yet, and will fill in.
   readonly pending?: boolean;
+  // True once waiting has stopped without them: they are on the project's page.
+  readonly gaveUp?: boolean;
   readonly onDone: () => void;
 }
 
@@ -22,11 +24,13 @@ interface Shown {
 }
 
 function shownAddress(address: ConnectAddress): Shown {
-  if (address.kind === 'none') return { host: '', port: '' };
+  if (address.kind === 'none') return { host: NOT_REACHABLE_TEXT, port: '' };
   return { host: address.host, port: String(address.port) };
 }
 
+const NOT_REACHABLE_TEXT = 'Not reachable from the internet';
 const NOT_READY = 'Shown when the database is ready';
+const COULD_NOT_LOAD = 'Couldn\u2019t load the login name \u2014 see the project\u2019s Connection Credentials';
 
 function Field({ testId, label, value }: { readonly testId: string; readonly label: string; readonly value: string }) {
   return (
@@ -41,9 +45,10 @@ function Field({ testId, label, value }: { readonly testId: string; readonly lab
 
 // Holds the password in this component's props only, so dismissing it drops
 // the last copy the page has. Nothing here writes it to storage or the URL.
-export function OneTimePasswordPanel({ projectId, password, address, database, user, sslmode, pending = false, onDone }: OneTimePasswordPanelProps) {
+export function OneTimePasswordPanel({ projectId, password, address, database, user, sslmode, pending = false, gaveUp = false, onDone }: OneTimePasswordPanelProps) {
   const [copied, setCopied] = useState(false);
   const shown = shownAddress(address);
+  const missingText = gaveUp ? COULD_NOT_LOAD : NOT_READY;
   const csv = credentialsCsv({ host: shown.host, port: shown.port, database, user, password, sslmode });
   const href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;
 
@@ -58,10 +63,10 @@ export function OneTimePasswordPanel({ projectId, password, address, database, u
         <p className="text-sm text-text-secondary mt-1">Copy it now. It will not be shown again.</p>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <Field testId="otp-host" label="Host" value={address.kind === 'none' ? 'Not reachable from the internet' : shown.host} />
+        <Field testId="otp-host" label="Host" value={shown.host} />
         <Field testId="otp-port" label="Port" value={shown.port} />
-        <Field testId="otp-database" label="Database" value={database || (pending ? NOT_READY : '')} />
-        <Field testId="otp-user" label="User" value={user || (pending ? NOT_READY : '')} />
+        <Field testId="otp-database" label="Database" value={database || (pending ? missingText : '')} />
+        <Field testId="otp-user" label="User" value={user || (pending ? missingText : '')} />
         <Field testId="otp-sslmode" label="SSL mode" value={sslmode} />
       </div>
       {address.kind === 'none' && (
@@ -89,7 +94,9 @@ export function OneTimePasswordPanel({ projectId, password, address, database, u
             >
               <Download className="w-4 h-4" /> Download CSV
             </button>
-            <span className="text-xs text-text-tertiary" data-testid="otp-csv-reason">Available when the database is ready</span>
+            <span className="text-xs text-text-tertiary" data-testid="otp-csv-reason">
+              {gaveUp ? 'Unavailable: see Connection Credentials on the project page' : 'Available when the database is ready'}
+            </span>
           </span>
         ) : (
           <a

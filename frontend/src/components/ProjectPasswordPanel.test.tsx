@@ -57,4 +57,14 @@ describe('ProjectPasswordPanel', () => {
     expect(csv).toContain('"app","app","not-a-real-password"');
     expect(screen.queryByTestId('otp-csv-reason')).not.toBeInTheDocument();
   }, 15000);
+
+  test('when the login cannot be loaded it says where to find it and keeps the CSV disabled', async () => {
+    answerGets(() => Promise.reject({ response: { status: 403 } }));
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId('otp-user')).toHaveTextContent(/Couldn.t load the login name/));
+    expect(screen.getByTestId('otp-user')).toHaveTextContent(/Connection Credentials/);
+    expect(screen.getByRole('button', { name: /download csv/i })).toBeDisabled();
+    expect(screen.getByTestId('otp-csv-reason')).toHaveTextContent(/Connection Credentials/);
+    expect(screen.getByTestId('otp-password')).toHaveTextContent('not-a-real-password');
+  });
 });

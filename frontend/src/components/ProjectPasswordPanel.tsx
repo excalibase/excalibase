@@ -1,4 +1,5 @@
-import { useCredentials } from '../hooks/useProvisioning';
+import { useInstance } from '../hooks/useProvisioning';
+import { useCredentialsWhenReady } from '../hooks/useCredentialsWhenReady';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import { connectAddress } from './ConnectionParts';
 import { OneTimePasswordPanel } from './OneTimePasswordPanel';
@@ -14,7 +15,8 @@ interface ProjectPasswordPanelProps {
 // answered while still building has none yet, so they are asked for until they
 // come.
 export function ProjectPasswordPanel({ projectId, password, onDone }: ProjectPasswordPanelProps) {
-  const { data: credentials } = useCredentials(projectId, { untilReady: true });
+  const { data: instance } = useInstance(projectId);
+  const { credentials, gaveUp } = useCredentialsWhenReady(projectId, instance?.status);
   const { data: endpoint } = useProjectEndpoint(projectId);
   return (
     <OneTimePasswordPanel
@@ -25,6 +27,7 @@ export function ProjectPasswordPanel({ projectId, password, onDone }: ProjectPas
       user={credentials?.username ?? ''}
       sslmode={credentials?.sslMode ?? 'require'}
       pending={!credentials}
+      gaveUp={gaveUp}
       onDone={onDone}
     />
   );

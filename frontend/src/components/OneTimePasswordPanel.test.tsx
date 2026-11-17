@@ -68,12 +68,11 @@ describe('OneTimePasswordPanel', () => {
     expect(document.body.innerHTML).not.toContain(encodeURIComponent(PASSWORD));
   });
 
-  test('with no public endpoint the panel host says so and the CSV host cell is empty', () => {
+  test('with no public endpoint the panel host says so', () => {
     render(<Harness address={{ kind: 'none' }} />);
     expect(screen.getByTestId('otp-host')).toHaveTextContent('Not reachable from the internet');
     const csv = decodeURIComponent(screen.getByRole('link', { name: /download csv/i }).getAttribute('href')!);
-    expect(csv.split('\n')[1].startsWith('"","",')).toBe(true);
-    expect(csv).not.toContain('not reachable');
+    expect(csv.split('\n')[1].startsWith('"Not reachable from the internet","",')).toBe(true);
   });
 
   test('with no public endpoint it says where the host and port are found later', () => {
@@ -110,5 +109,11 @@ describe('OneTimePasswordPanel', () => {
     expect(screen.queryByRole('link', { name: /download csv/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^copy/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /i've saved it/i })).toBeEnabled();
+  });
+
+  test('the CSV host cell says what the dialog says when there is no public endpoint', () => {
+    render(<Harness address={{ kind: 'none' }} />);
+    const csv = decodeURIComponent(screen.getByRole('link', { name: /download csv/i }).getAttribute('href')!);
+    expect(csv.split('\n')[1].startsWith('"Not reachable from the internet","",')).toBe(true);
   });
 });
