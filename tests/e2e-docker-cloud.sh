@@ -13,7 +13,6 @@
 #   - jq, curl
 #
 # Run: bash tests/e2e-docker-cloud.sh
-# The admin drop at the end is skipped: this server has no admin console; see step 11.
 
 set -euo pipefail
 
@@ -243,13 +242,27 @@ for role in admin excalibase_app cdc_watcher auth_admin; do
 done
 
 # --- Step 11: Deprovision ---
-# This script's server runs in cloud mode without ADMIN_HOST, so its admin
-# console is off (EXC-757) and /api/admin answers 404 by design. The admin drop
-# is skipped, and said so; the exit trap removes the tenant container and its
-# volumes. Neither this server's admin token nor any service token is sent to
-# another deployment's console.
+# The owner's own delete (Admin role or higher), not the operator console: this
+# server runs cloud mode without ADMIN_HOST, so /api/admin answers 404 by design
+# (EXC-757). A new project is deletion-protected, so the owner turns that off
+# first. The delete stops the tenant (a grace period holds the rest), so the
+# container must be gone from the running list.
 echo "11. Deprovision"
-echo "  - SKIPPED: the admin drop needs a console, and this server has none (cloud mode, no ADMIN_HOST)"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/provision/$PROJECT_ID/deletion-protection" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"enabled":false}')
+[ "$CODE" = "200" ] && pass "deletion protection turned off" || fail "deletion protection" "HTTP $CODE"
+CODE=$(curl -s -o "$DATA_DIR/delete.out" -w '%{http_code}' -X DELETE "$API/api/provision/$PROJECT_ID/" \
+  -H "Authorization: Bearer $TOKEN")
+case $CODE in
+  200|202) pass "owner delete accepted (HTTP $CODE)" ;;
+  *) fail "deprovision" "HTTP $CODE $(cat "$DATA_DIR/delete.out")" ;;
+esac
+GONE=no
+for _ in $(seq 1 30); do
+  if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then GONE=yes; break; fi
+  sleep 2
+done
+[ "$GONE" = yes ] && pass "tenant container no longer running" || fail "cleanup" "$CONTAINER_NAME still running 60s after the delete"
 
 echo ""
 echo "============================="
