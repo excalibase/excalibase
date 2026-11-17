@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"context"
 	"encoding/json"
 	"net/http"
@@ -106,6 +108,10 @@ func rotateRouterWithFlag(t *testing.T, audit *recordingAudit, flagOn bool) (chi
 	t.Helper()
 	mock := k8s.NewMockClient()
 	mock.ExecOutput["org1-rot-proj/rot-proj-postgres-1"] = "ALTER ROLE"
+	mock.Secrets["org1-rot-proj/rot-proj-postgres-app"] = map[string][]byte{"username": []byte("owner"), "password": []byte("generated-at-create")}
+	mock.CRDs["org1-rot-proj/rot-proj-postgres"] = &unstructured.Unstructured{Object: map[string]any{
+		"status": map[string]any{"currentPrimary": "rot-proj-postgres-1"},
+	}}
 	port := 5432
 	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{oneTimeRotProject: {
 		ProjectID: oneTimeRotProject, OrgID: "org1", Namespace: "org1-rot-proj", DBType: domain.PostgreSQL, Status: "ACTIVE",

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -80,6 +82,11 @@ func newRotationHarness(t *testing.T) *rotationHarness {
 		events:   &fakePolicyPublisher{},
 	}
 	h.kube.ExecOutput[rotPod] = "ALTER ROLE"
+	h.seedOwnerSecret(rotOwner, testutil.FixturePassword(rotOwner))
+	h.kube.CRDs[rotNamespace+"/"+rotProject+"-postgres"] = &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": rotProject + "-postgres", "namespace": rotNamespace},
+		"status":   map[string]any{"currentPrimary": rotProject + "-postgres-1"},
+	}}
 	for path, username := range map[string]string{
 		rotAdminCurrent: rotOwner,
 		rotAuthCurrent:  roleAuthAdmin,

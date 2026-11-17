@@ -255,6 +255,11 @@ func (s *ProvisioningService) rotateRoleCredential(ctx context.Context, inst *do
 	if err := s.applyAndVerify(ctx, inst, target, password, pendingPath); err != nil {
 		return err
 	}
+	if target.role == roleAdmin {
+		if err := s.syncClusterOwnerSecret(ctx, inst, target.username, password); err != nil {
+			return err
+		}
+	}
 	return s.promoteCredential(ctx, inst, target, password, pendingPath)
 }
 
@@ -376,7 +381,11 @@ func (s *ProvisioningService) alterRolePassword(ctx context.Context, inst *domai
 	case inst.DeploymentMode == domain.ModeDocker && s.dockerClient != nil:
 		_, err = s.dockerClient.ExecInContainerStdin(ctx, inst.Namespace, psql, sqlText)
 	case s.k8sClient != nil:
-		_, err = s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, inst.ProjectID+primaryPodSuffix, "postgres", psql, sqlText)
+		var primary string
+		if primary, err = clusterPrimary(ctx, s.k8sClient, inst); err != nil {
+			return err
+		}
+		_, err = s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, primary, "postgres", psql, sqlText)
 	default:
 		return ErrCredentialRotationUnavailable
 	}
