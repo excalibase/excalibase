@@ -10,6 +10,9 @@ interface OneTimePasswordPanelProps {
   readonly database: string;
   readonly user: string;
   readonly sslmode: string;
+  // True while the database is still being built: its login name and
+  // database are not known yet, and will fill in.
+  readonly pending?: boolean;
   readonly onDone: () => void;
 }
 
@@ -22,6 +25,8 @@ function shownAddress(address: ConnectAddress): Shown {
   if (address.kind === 'none') return { host: '', port: '' };
   return { host: address.host, port: String(address.port) };
 }
+
+const NOT_READY = 'Shown when the database is ready';
 
 function Field({ testId, label, value }: { readonly testId: string; readonly label: string; readonly value: string }) {
   return (
@@ -36,7 +41,7 @@ function Field({ testId, label, value }: { readonly testId: string; readonly lab
 
 // Holds the password in this component's props only, so dismissing it drops
 // the last copy the page has. Nothing here writes it to storage or the URL.
-export function OneTimePasswordPanel({ projectId, password, address, database, user, sslmode, onDone }: OneTimePasswordPanelProps) {
+export function OneTimePasswordPanel({ projectId, password, address, database, user, sslmode, pending = false, onDone }: OneTimePasswordPanelProps) {
   const [copied, setCopied] = useState(false);
   const shown = shownAddress(address);
   const csv = credentialsCsv({ host: shown.host, port: shown.port, database, user, password, sslmode });
@@ -55,10 +60,15 @@ export function OneTimePasswordPanel({ projectId, password, address, database, u
       <div className="grid grid-cols-2 gap-3">
         <Field testId="otp-host" label="Host" value={address.kind === 'none' ? 'Not reachable from the internet' : shown.host} />
         <Field testId="otp-port" label="Port" value={shown.port} />
-        <Field testId="otp-database" label="Database" value={database} />
-        <Field testId="otp-user" label="User" value={user} />
+        <Field testId="otp-database" label="Database" value={database || (pending ? NOT_READY : '')} />
+        <Field testId="otp-user" label="User" value={user || (pending ? NOT_READY : '')} />
         <Field testId="otp-sslmode" label="SSL mode" value={sslmode} />
       </div>
+      {address.kind === 'none' && (
+        <p className="text-xs text-text-tertiary" data-testid="otp-address-hint">
+          The host and port appear under Connection Credentials on the project&apos;s page once public access is turned on.
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <code data-testid="otp-password" className="flex-1 bg-bg-tertiary border border-border-primary rounded px-3 py-2 text-sm font-mono text-text-primary break-all">
           {password}

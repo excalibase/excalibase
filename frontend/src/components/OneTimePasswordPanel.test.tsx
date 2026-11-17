@@ -75,4 +75,27 @@ describe('OneTimePasswordPanel', () => {
     expect(csv.split('\n')[1].startsWith('"","",')).toBe(true);
     expect(csv).not.toContain('not reachable');
   });
+
+  test('with no public endpoint it says where the host and port are found later', () => {
+    render(<Harness address={{ kind: 'none' }} />);
+    expect(screen.getByTestId('otp-address-hint')).toHaveTextContent(/public access/i);
+    expect(screen.getByTestId('otp-address-hint')).toHaveTextContent(/Connection Credentials/);
+  });
+
+  test('with a public endpoint there is no address hint', () => {
+    render(<Harness address={PUBLIC} />);
+    expect(screen.queryByTestId('otp-address-hint')).not.toBeInTheDocument();
+  });
+
+  test('a login still being created shows a reason, not a dash', () => {
+    render(
+      <OneTimePasswordPanel
+        projectId="p-1" password={PASSWORD} address={PUBLIC} database="" user="" pending
+        sslmode="require" onDone={() => undefined}
+      />,
+    );
+    expect(screen.getByTestId('otp-user')).toHaveTextContent(/ready/i);
+    expect(screen.getByTestId('otp-database')).toHaveTextContent(/ready/i);
+    expect(screen.getByTestId('otp-user')).not.toHaveTextContent('—');
+  });
 });

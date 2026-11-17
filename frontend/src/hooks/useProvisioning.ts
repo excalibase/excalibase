@@ -59,7 +59,9 @@ export const useInstanceSSE = (projectId: string) => {
   );
 };
 
-export const useCredentials = (projectId: string) => {
+// With untilReady the query keeps asking while there is no answer: a project
+// still being built has no login to report yet.
+export const useCredentials = (projectId: string, options: { readonly untilReady?: boolean } = {}) => {
   return useQuery({
     queryKey: ['credentials', projectId],
     queryFn: async () => {
@@ -67,6 +69,7 @@ export const useCredentials = (projectId: string) => {
       return response.data;
     },
     enabled: !!projectId,
+    refetchInterval: options.untilReady ? (query) => (query.state.data ? false : 3000) : false,
   });
 };
 

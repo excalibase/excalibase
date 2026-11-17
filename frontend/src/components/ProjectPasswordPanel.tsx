@@ -10,9 +10,11 @@ interface ProjectPasswordPanelProps {
 }
 
 // The one-time panel for a project: the connection details around the
-// password come from the project's own, password-free, credentials.
+// password come from the project's own, password-free, credentials. A project
+// answered while still building has none yet, so they are asked for until they
+// come.
 export function ProjectPasswordPanel({ projectId, password, onDone }: ProjectPasswordPanelProps) {
-  const { data: credentials } = useCredentials(projectId);
+  const { data: credentials } = useCredentials(projectId, { untilReady: true });
   const { data: endpoint } = useProjectEndpoint(projectId);
   return (
     <OneTimePasswordPanel
@@ -22,6 +24,7 @@ export function ProjectPasswordPanel({ projectId, password, onDone }: ProjectPas
       database={credentials?.databaseName ?? ''}
       user={credentials?.username ?? ''}
       sslmode={credentials?.sslMode ?? 'require'}
+      pending={!credentials}
       onDone={onDone}
     />
   );
