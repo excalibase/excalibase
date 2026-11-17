@@ -92,6 +92,7 @@ func TestEmailPolicy_RefusesListedDomainsWithoutAskingDNS(t *testing.T) {
 		"a@yuexinmail.edu.kg", "a@nimbusmono.com", "a@tinkmail.me",
 		"a@FLDUBAI.COM", "a@box.fldubai.com", "a@deep.sub.tanpony.com", "a@fldubai.com.",
 		"a@guerrillamail-new-domain.org",
+		"x@euploading.com", "x@sub.euploading.com", "x@EUPLOADING.COM",
 	} {
 		err := policy.Check(context.Background(), address)
 		if !errors.Is(err, ErrEmailRefused) || statusOf(err) != http.StatusBadRequest {
@@ -106,7 +107,7 @@ func TestEmailPolicy_RefusesListedDomainsWithoutAskingDNS(t *testing.T) {
 func TestEmailPolicy_DoesNotMatchLookalikesOfListedDomains(t *testing.T) {
 	policy := NewEmailPolicy(newDNS())
 	// notfldubai.com is a different domain; only subdomains of a listed one match.
-	for _, address := range []string{"a@notfldubai.com"} {
+	for _, address := range []string{"a@notfldubai.com", "x@euploading.co", "x@euploading.com.au", "x@neweuploading.com"} {
 		err := policy.Check(context.Background(), address)
 		if errors.Is(err, ErrEmailRefused) && err.(*EmailRefusal).Kind == KindDisposable {
 			t.Errorf("%s matched the disposable list", address)

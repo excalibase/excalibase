@@ -2,5 +2,6 @@
 # A trailing * is a label prefix: guerrillamail* matches any domain with a label starting guerrillamail.
 guerrillamail*
 yuexinmail.edu.kg
+euploading.com
 nimbusmono.com
 tinkmail.me

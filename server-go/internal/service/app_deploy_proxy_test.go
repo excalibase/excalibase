@@ -173,3 +173,27 @@ func TestResumeApp_AllowsANormalApp(t *testing.T) {
 		t.Fatalf("normal app: %v", err)
 	}
 }
+
+// The node disguised as "field-notes" (EXC-755): nothing in its image says proxy, only its variables.
+func TestDeploy_RefusesTheDisguisedFieldNotesNodeBeforeAnythingRuns(t *testing.T) {
+	app := sampleDeployApp()
+	app.Name = "field-notes"
+	app.Image = "tkexcali02/field-notes@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	app.Port = 3000
+	app.Env = proxyEnv("STREAM_PATH", "NODE_HOST", "NODE_LABEL", "TRANSPORT", "PORT", "NODE_UUID", "SUB_TOKEN")
+	svc, deploys, kube := newDeployTestService(t, app)
+	audit := &proxyAudit{}
+	svc.SetProxyGuard(proxyGuardOn(audit))
+	resolver := &stubResolver{digest: resolvedDigest}
+	svc.SetImageResolver(resolver)
+
+	if _, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1"); !errors.Is(err, abuse.ErrProxyApp) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(deploys.deploys) != 0 || countCalls(kube, "ApplyAppWorkload") != 0 || len(resolver.asked) != 0 {
+		t.Errorf("a refused deploy was stored, pulled or applied: %v", kube.Calls)
+	}
+	if len(audit.entries) != 1 {
+		t.Errorf("audit entries = %d, want 1", len(audit.entries))
+	}
+}
