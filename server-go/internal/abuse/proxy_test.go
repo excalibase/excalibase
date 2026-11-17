@@ -163,3 +163,46 @@ func TestFindProxy_ByEnvNeedsTwoKeys(t *testing.T) {
 		t.Fatalf("image signature allowed: %+v", f)
 	}
 }
+
+// The node that was disguised as "field-notes" (EXC-755) was named only by its environment.
+func TestFindProxy_CatchesTheDisguisedFieldNotesNode(t *testing.T) {
+	names := []string{"STREAM_PATH", "NODE_HOST", "NODE_LABEL", "TRANSPORT", "PORT", "NODE_UUID", "SUB_TOKEN"}
+	if f := FindProxy("tkexcali02/field-notes@sha256:0123", "field-notes", names); f == nil || len(f.EnvKeys) < 2 {
+		t.Fatalf("disguised node allowed: %+v", f)
+	}
+}
+
+func TestFindProxy_MoreProxyEnvironments(t *testing.T) {
+	for _, keys := range [][]string{
+		{"SUB_TOKEN", "SUB_PATH"},
+		{"UUID", "SUB_PATH"},
+		{"VLESS_UUID", "WS_PATH"},
+		{"TRANSPORT", "UUID"},
+		{"transport", "node_uuid"},
+		{"ARGO_PORT", "ARGO_AUTH"},
+		{"NEZHA_SERVER", "NEZHA_KEY"},
+	} {
+		if f := FindProxy("node:22", "api", keys); f == nil {
+			t.Errorf("%v allowed", keys)
+		}
+	}
+}
+
+func TestFindProxy_CommonAppEnvironmentsPass(t *testing.T) {
+	for label, keys := range map[string][]string{
+		"nextjs":     {"NODE_ENV", "PORT", "NEXT_PUBLIC_API_URL", "NEXTAUTH_SECRET", "NEXTAUTH_URL", "DATABASE_URL"},
+		"rails":      {"RAILS_ENV", "SECRET_KEY_BASE", "RAILS_LOG_TO_STDOUT", "DATABASE_URL", "PORT", "RAILS_SERVE_STATIC_FILES"},
+		"django":     {"DJANGO_SETTINGS_MODULE", "SECRET_KEY", "ALLOWED_HOSTS", "DATABASE_URL", "DEBUG", "PORT"},
+		"node api":   {"NODE_ENV", "PORT", "SESSION_SECRET", "DATABASE_URL", "JWT_SECRET"},
+		"uuid alone": {"UUID", "PORT", "NODE_ENV"},
+		"port+env":   {"PORT", "NODE_ENV"},
+		"transport":  {"TRANSPORT", "PORT", "SMTP_HOST"},
+		"sub":        {"SUB_TOKEN", "DATABASE_URL"},
+		"node host":  {"NODE_HOST", "NODE_LABEL", "PORT"},
+		"argo wf":    {"ARGO_SERVER", "ARGO_TOKEN", "ARGO_NAMESPACE"},
+	} {
+		if f := FindProxy("ghcr.io/acme/web:1", "web", keys); f != nil {
+			t.Errorf("%s refused: %s", label, f.Reason())
+		}
+	}
+}
