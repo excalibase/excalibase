@@ -55,8 +55,17 @@ jobs:
       CLUSTER: excalibase
       NS: excalibase-platform
       IMAGE: excalibase/provisioning:ci
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Anonymous pulls hit Docker Hub's rate limit; fork PRs have no secret and
+      # pull anonymously.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build provisioning image
         run: docker build -t "$IMAGE" -f server-go/Dockerfile server-go

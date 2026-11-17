@@ -21,7 +21,7 @@ var proxySignatures = [][]string{
 	{"hysteria"}, {"hysteria2"},
 	{"shadowsocks"},
 	{"edge", "ws", "cover"}, {"edgerelay2610"}, {"ws", "runtime"},
-	{"eooce"}, {"pxnode"}, {"nezha"}, {"mupeng111"}, {"nezhahq"}, {"gost"},
+	{"eooce"}, {"pxnode"}, {"nezha"}, {"mupeng111"}, {"wolftiger072", "max"}, {"nezhahq"}, {"gost"},
 	{"naiveproxy"}, {"naive", "proxy"},
 	{"tuic"}, {"txthinking", "brook"},
 }
