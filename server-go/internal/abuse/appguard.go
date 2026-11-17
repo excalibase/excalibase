@@ -21,9 +21,10 @@ var ErrProxyApp = errors.New("this app looks like a proxy or VPN node")
 // ProxyRefusal is the refusal with what matched, for the caller's message.
 type ProxyRefusal struct{ Finding Finding }
 
+// Error stays generic on purpose: naming the signature or variables would teach
+// how to get past the rule. Finding.Reason goes to the audit entry only.
 func (e *ProxyRefusal) Error() string {
-	return ErrProxyApp.Error() + " (" + e.Finding.Reason() + "). Running proxies, VPNs or traffic relays is not allowed; " +
-		"if this is a mistake, contact support"
+	return ErrProxyApp.Error() + ". Running proxies, VPNs or traffic relays is not allowed; if this is a mistake, contact support"
 }
 
 func (e *ProxyRefusal) Unwrap() error { return ErrProxyApp }

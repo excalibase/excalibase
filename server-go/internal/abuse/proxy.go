@@ -21,7 +21,7 @@ var proxySignatures = [][]string{
 	{"hysteria"}, {"hysteria2"},
 	{"shadowsocks"},
 	{"edge", "ws", "cover"}, {"edgerelay2610"}, {"ws", "runtime"},
-	{"eooce"}, {"pxnode"}, {"nezha"}, {"mupeng111"}, {"nezhahq"}, {"gost"},
+	{"eooce"}, {"pxnode"}, {"nezha"}, {"mupeng111"}, {"wolftiger072", "max"}, {"nezhahq"}, {"gost"},
 	{"naiveproxy"}, {"naive", "proxy"},
 	{"tuic"}, {"txthinking", "brook"},
 }
@@ -43,8 +43,13 @@ var exactNames = []string{"brook", "excalibase-node", "excalibase_node", "ss-ser
 // Argo Workflows and Argo CD read ARGO_* too, so only the tunnel's own are named.
 var proxyEnvNames = map[string]bool{
 	"UUID": true, "NODE_UUID": true, "WS_PATH": true, "WSPATH": true, "STREAM_PATH": true,
-	"ARGO_AUTH": true, "ARGO_DOMAIN": true,
+	"ARGO_AUTH": true, "ARGO_DOMAIN": true, "ARGO_PORT": true,
+	"SUB_TOKEN": true, "SUB_PATH": true,
 }
+
+// uuidEnvNames name the node identity of a proxy. TRANSPORT alone is an
+// ordinary word (mail, queues), so it counts only beside one of these.
+var uuidEnvNames = map[string]bool{"UUID": true, "NODE_UUID": true}
 
 var proxyEnvPrefixes = []string{"VLESS_", "VMESS_", "XRAY_", "NEZHA_", "TROJAN_"}
 
@@ -153,20 +158,37 @@ func MatchImageOrName(image, name string) string {
 	return ""
 }
 
+func hasProxyPrefix(upper string) bool {
+	for _, prefix := range proxyEnvPrefixes {
+		if strings.HasPrefix(upper, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // ProxyEnvKeys returns the distinct proxy-shaped names among keys, upper-cased and sorted.
 func ProxyEnvKeys(keys []string) []string {
 	seen := map[string]bool{}
+	hasUUID := false
 	for _, key := range keys {
 		upper := strings.ToUpper(strings.TrimSpace(key))
+		if uuidEnvNames[upper] || (hasProxyPrefix(upper) && strings.HasSuffix(upper, "_UUID")) {
+			hasUUID = true
+		}
+	}
+	for _, key := range keys {
+		upper := strings.ToUpper(strings.TrimSpace(key))
+		if upper == "TRANSPORT" && hasUUID {
+			seen[upper] = true
+			continue
+		}
 		if proxyEnvNames[upper] {
 			seen[upper] = true
 			continue
 		}
-		for _, prefix := range proxyEnvPrefixes {
-			if strings.HasPrefix(upper, prefix) {
-				seen[upper] = true
-				break
-			}
+		if hasProxyPrefix(upper) {
+			seen[upper] = true
 		}
 	}
 	found := make([]string, 0, len(seen))

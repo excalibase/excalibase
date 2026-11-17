@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"context"
 	"encoding/json"
 	"net/http"
@@ -39,6 +41,10 @@ func customerRouterWithFlag(t *testing.T, role string, oneTime bool) chi.Router 
 	t.Helper()
 	mock := k8s.NewMockClient()
 	mock.ExecOutput[internalNS+"/p1-postgres-1"] = "ALTER ROLE"
+	mock.Secrets["org1-p1/p1-postgres-app"] = map[string][]byte{"username": []byte("owner"), "password": []byte("generated-at-create")}
+	mock.CRDs["org1-p1/p1-postgres"] = &unstructured.Unstructured{Object: map[string]any{
+		"status": map[string]any{"currentPrimary": "p1-postgres-1"},
+	}}
 	port := 5432
 	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{"p1": {
 		ProjectID: "p1", OrgID: "org1", Namespace: internalNS, DBType: domain.PostgreSQL, Status: "ACTIVE",

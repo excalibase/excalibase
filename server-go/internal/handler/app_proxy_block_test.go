@@ -167,3 +167,29 @@ func TestTemplateDeploy_AProxyRefusalIsA403(t *testing.T) {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestAppCreate_RefusesTheDisguisedFieldNotesNodeAndKeepsTheMessageGeneric(t *testing.T) {
+	r, store, _ := proxyGuardRouter(t, true)
+	body := validAppBody()
+	body["name"] = "field-notes"
+	body["image"] = "tkexcali02/field-notes@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	env := []map[string]any{}
+	for _, name := range []string{"STREAM_PATH", "NODE_HOST", "NODE_LABEL", "TRANSPORT", "PORT", "NODE_UUID", "SUB_TOKEN"} {
+		env = append(env, envLiteral(name))
+	}
+	body["env"] = env
+
+	w := doAppRequest(t, r, http.MethodPost, proxyAppsPath, body)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403: %s", w.Code, w.Body.String())
+	}
+	for _, leak := range []string{"NODE_UUID", "STREAM_PATH", "SUB_TOKEN"} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Errorf("the refusal names %s: %s", leak, w.Body.String())
+		}
+	}
+	if apps, _ := store.List(appTestProject); len(apps) != 0 {
+		t.Errorf("a refused app was stored")
+	}
+}

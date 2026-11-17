@@ -1078,6 +1078,9 @@ func (s *ProvisioningService) applyChosenOwnerPassword(ctx context.Context, inst
 			return pc.Fail(fmt.Errorf("set the owner password: %w", err))
 		}
 	}
+	if err := s.syncClusterOwnerSecret(ctx, inst, inst.Username, req.OwnerPassword); err != nil {
+		return pc.Fail(err)
+	}
 	inst.Password = req.OwnerPassword
 	return nil
 }
