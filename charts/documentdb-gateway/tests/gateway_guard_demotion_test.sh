@@ -44,6 +44,16 @@ start_db() {
 }
 restarts() { docker inspect "$NAME-gw" --format '{{.RestartCount}}'; }
 gateway_log() { docker logs "$NAME-gw" 2>&1; }
+# Docker counts a restart only once it has restarted the container, after the
+# client connection has already ended; wait for the count, up to $2 seconds.
+await_restarts() {
+  local deadline=$((SECONDS + $2))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    [ "$(restarts)" -ge "$1" ] && return 0
+    sleep 0.2
+  done
+  return 1
+}
 # Waits until the gateway's log shows $1 at least $2 times, up to $3 seconds.
 await_log() {
   local deadline=$((SECONDS + $3))
@@ -106,6 +116,7 @@ connect_client
 docker stop -t 30 "$NAME-db" >/dev/null
 check 'an outage past the limit ends the client connection' ended "$(await_client_end 40)"
 check 'the guard says why' 1 "$(gateway_log | grep -c 'not answered for 15s')"
+await_restarts 2 30
 check 'the gateway restarted' 2 "$(restarts)"
 sleep 20
 check 'and waits for Postgres, not looping' 2 "$(restarts)"

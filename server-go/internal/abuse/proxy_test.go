@@ -43,6 +43,12 @@ func TestMatchImageOrName_Signatures(t *testing.T) {
 		{"ghcr.io:443/mupeng111/x:1", "web"},
 		{"mupeng111/x:1", "web"},
 		{"quay.io/acme/excalibase-node:1", "web"},
+		{"ghcr.io/wolftiger072-max/excalibase-xray@sha256:ccb7a1f0e2d34c5b6a7988c0d1e2f3a4b5c6d7e8f90123456789abcdef012345", "web"},
+		{"ghcr.io/wolftiger072-max/excalibase-xray:latest", "web"},
+		{"wolftiger072-max/excalibase-xray:latest", "web"},
+		{"docker.io/wolftiger072-max/excalibase-xray:1", "web"},
+		{"ghcr.io/wolftiger072-max/hello:1", "web"},
+		{"ghcr.io:443/wolftiger072-max/x:1", "web"},
 	}
 	for _, c := range refused {
 		if got := MatchImageOrName(c.image, c.name); got == "" {
@@ -65,6 +71,9 @@ func TestMatchImageOrName_NormalAppsPass(t *testing.T) {
 		{"ghcr.io/mupeng1110/x:1", "web"},
 		{"ghcr.io/mupeng11/x:1", "web"},
 		{"someone/excalibase-node-exporter", "excalibase-node-exporter"},
+		{"ghcr.io/wolftiger072/x:1", "web"},
+		{"ghcr.io/wolftiger072-maxi/x:1", "web"},
+		{"ghcr.io/other/wolftiger-app", "web"},
 	}
 	for _, c := range allowed {
 		if got := MatchImageOrName(c.image, c.name); got != "" {
@@ -152,5 +161,48 @@ func TestFindProxy_ByEnvNeedsTwoKeys(t *testing.T) {
 	f = FindProxy("xray:1", "api", nil)
 	if f == nil || f.Signature == "" {
 		t.Fatalf("image signature allowed: %+v", f)
+	}
+}
+
+// The node that was disguised as "field-notes" (EXC-755) was named only by its environment.
+func TestFindProxy_CatchesTheDisguisedFieldNotesNode(t *testing.T) {
+	names := []string{"STREAM_PATH", "NODE_HOST", "NODE_LABEL", "TRANSPORT", "PORT", "NODE_UUID", "SUB_TOKEN"}
+	if f := FindProxy("tkexcali02/field-notes@sha256:0123", "field-notes", names); f == nil || len(f.EnvKeys) < 2 {
+		t.Fatalf("disguised node allowed: %+v", f)
+	}
+}
+
+func TestFindProxy_MoreProxyEnvironments(t *testing.T) {
+	for _, keys := range [][]string{
+		{"SUB_TOKEN", "SUB_PATH"},
+		{"UUID", "SUB_PATH"},
+		{"VLESS_UUID", "WS_PATH"},
+		{"TRANSPORT", "UUID"},
+		{"transport", "node_uuid"},
+		{"ARGO_PORT", "ARGO_AUTH"},
+		{"NEZHA_SERVER", "NEZHA_KEY"},
+	} {
+		if f := FindProxy("node:22", "api", keys); f == nil {
+			t.Errorf("%v allowed", keys)
+		}
+	}
+}
+
+func TestFindProxy_CommonAppEnvironmentsPass(t *testing.T) {
+	for label, keys := range map[string][]string{
+		"nextjs":     {"NODE_ENV", "PORT", "NEXT_PUBLIC_API_URL", "NEXTAUTH_SECRET", "NEXTAUTH_URL", "DATABASE_URL"},
+		"rails":      {"RAILS_ENV", "SECRET_KEY_BASE", "RAILS_LOG_TO_STDOUT", "DATABASE_URL", "PORT", "RAILS_SERVE_STATIC_FILES"},
+		"django":     {"DJANGO_SETTINGS_MODULE", "SECRET_KEY", "ALLOWED_HOSTS", "DATABASE_URL", "DEBUG", "PORT"},
+		"node api":   {"NODE_ENV", "PORT", "SESSION_SECRET", "DATABASE_URL", "JWT_SECRET"},
+		"uuid alone": {"UUID", "PORT", "NODE_ENV"},
+		"port+env":   {"PORT", "NODE_ENV"},
+		"transport":  {"TRANSPORT", "PORT", "SMTP_HOST"},
+		"sub":        {"SUB_TOKEN", "DATABASE_URL"},
+		"node host":  {"NODE_HOST", "NODE_LABEL", "PORT"},
+		"argo wf":    {"ARGO_SERVER", "ARGO_TOKEN", "ARGO_NAMESPACE"},
+	} {
+		if f := FindProxy("ghcr.io/acme/web:1", "web", keys); f != nil {
+			t.Errorf("%s refused: %s", label, f.Reason())
+		}
 	}
 }

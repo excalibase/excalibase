@@ -93,3 +93,23 @@ func TestAppGuard_StillRefusesWhenTheAuditWriteFails(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A refusal that names the signature or the variables teaches how to get past it;
+// the specifics go to the audit entry only.
+func TestAppGuard_RefusalMessageStaysGeneric(t *testing.T) {
+	guard := NewAppGuard(features.NewStatic(features.ProxyBlock), &recordedAudit{})
+	for _, subject := range []AppSubject{
+		proxyApp,
+		{ProjectID: "p1", Name: "field-notes", Image: "tkexcali02/field-notes", EnvNames: []string{"NODE_UUID", "STREAM_PATH"}, Surface: "deploy"},
+	} {
+		err := guard.Check(context.Background(), subject)
+		if !errors.Is(err, ErrProxyApp) {
+			t.Fatalf("err = %v", err)
+		}
+		for _, leak := range []string{"xray", "NODE_UUID", "STREAM_PATH", "signature", "environment"} {
+			if strings.Contains(err.Error(), leak) {
+				t.Errorf("message %q leaks %q", err, leak)
+			}
+		}
+	}
+}
