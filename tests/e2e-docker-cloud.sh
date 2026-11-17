@@ -36,8 +36,8 @@ cleanup() {
   echo "--- Cleanup ---"
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null && wait "$SERVER_PID" 2>/dev/null || true
   [ -n "$DENO_PID" ] && kill "$DENO_PID" 2>/dev/null && wait "$DENO_PID" 2>/dev/null || true
-  docker rm -f "$PLATFORM_DB_CONTAINER" >/dev/null 2>&1 || true
-  docker ps -a --filter "label=excalibase.managed=true" --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null || true
+  docker rm -fv "$PLATFORM_DB_CONTAINER" >/dev/null 2>&1 || true
+  docker ps -a --filter "label=excalibase.managed=true" --format '{{.Names}}' | xargs -r docker rm -fv 2>/dev/null || true
   rm -rf "$DATA_DIR"
   echo "Cleanup done."
 }
@@ -242,15 +242,27 @@ for role in admin excalibase_app cdc_watcher auth_admin; do
 done
 
 # --- Step 11: Deprovision ---
+# The owner's own delete (Admin role or higher), not the operator console: this
+# server runs cloud mode without ADMIN_HOST, so /api/admin answers 404 by design
+# (EXC-757). A new project is deletion-protected, so the owner turns that off
+# first. The delete stops the tenant (a grace period holds the rest), so the
+# container must be gone from the running list.
 echo "11. Deprovision"
-R=$(curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' "$API/api/admin/projects/$PROJECT_ID" -H "Authorization: Bearer $TOKEN")
-echo "$R" | grep -qi "deprovisioned" \
-  && pass "deprovision started" \
-  || fail "deprovision" "$R"
-sleep 5
-docker ps --format '{{.Names}}' | grep -qv "^$CONTAINER_NAME$" \
-  && pass "tenant container cleaned up" \
-  || fail "cleanup" "container still exists"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/provision/$PROJECT_ID/deletion-protection" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"enabled":false}')
+[ "$CODE" = "200" ] && pass "deletion protection turned off" || fail "deletion protection" "HTTP $CODE"
+CODE=$(curl -s -o "$DATA_DIR/delete.out" -w '%{http_code}' -X DELETE "$API/api/provision/$PROJECT_ID/" \
+  -H "Authorization: Bearer $TOKEN")
+case $CODE in
+  200|202) pass "owner delete accepted (HTTP $CODE)" ;;
+  *) fail "deprovision" "HTTP $CODE $(cat "$DATA_DIR/delete.out")" ;;
+esac
+GONE=no
+for _ in $(seq 1 30); do
+  if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then GONE=yes; break; fi
+  sleep 2
+done
+[ "$GONE" = yes ] && pass "tenant container no longer running" || fail "cleanup" "$CONTAINER_NAME still running 60s after the delete"
 
 echo ""
 echo "============================="
