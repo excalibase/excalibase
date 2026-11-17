@@ -74,6 +74,9 @@ type PauseService struct {
 	endpoints PublicEndpointReconciler
 	// runInBackground starts a StartPause or StartResume run; nil uses a goroutine.
 	runInBackground func(func())
+	// podSlots reads the cluster's pod slots so a resume that would leave the
+	// database pods Pending is refused (EXC-747); nil on a single host.
+	podSlots PodSlotReader
 
 	mu sync.Mutex
 }
@@ -605,6 +608,9 @@ func (s *PauseService) admitResume(ctx context.Context, projectID string) (func(
 	}
 	resumable, err := s.resumable(ctx, pauser, inst)
 	if err != nil || !resumable {
+		return nil, err
+	}
+	if err := s.requirePodSlotsToResume(ctx, inst); err != nil {
 		return nil, err
 	}
 

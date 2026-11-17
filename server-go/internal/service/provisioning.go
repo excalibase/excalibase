@@ -1908,6 +1908,9 @@ func (s *ProvisioningService) checkClusterCapacity(tier config.TierConfig) error
 	// Stamp the configured headroom % so FreeCPUMilli / FreeMemBytes
 	// account for our extra safety buffer on top of kubelet's Allocatable.
 	cap.HeadroomPercent = s.capacityHeadroomPercent
+	if err := requirePodSlots(cap, int64(max(tier.Instances, 1)+projectSidecarPods), "provision tier "+tier.CPUString()); err != nil {
+		return err
+	}
 	// Allocatable=0 means we couldn't read node status (mock or stale API
 	// cache). Treat as "capacity unknown" rather than blocking every
 	// provision — the WAITING_FOR_READY timeout still catches real OOMs.
