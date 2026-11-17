@@ -43,4 +43,18 @@ describe('ProjectPasswordPanel', () => {
     await waitFor(() => expect(screen.getByTestId('otp-user')).toHaveTextContent(/^app$/), { timeout: 8000 });
     expect(screen.getByTestId('otp-database')).toHaveTextContent(/^app$/);
   }, 15000);
+
+  test('the CSV download is disabled until the login is known, then enabled', async () => {
+    let calls = 0;
+    answerGets(() => (++calls < 2 ? Promise.reject(new Error('not ready')) : Promise.resolve({ data: CREDENTIALS })));
+    renderPanel();
+    const waiting = await screen.findByRole('button', { name: /download csv/i });
+    expect(waiting).toBeDisabled();
+    expect(screen.getByTestId('otp-csv-reason')).toHaveTextContent('Available when the database is ready');
+    expect(screen.getByTestId('otp-password')).toHaveTextContent('not-a-real-password');
+    const link = await screen.findByRole('link', { name: /download csv/i }, { timeout: 8000 });
+    const csv = decodeURIComponent(link.getAttribute('href')!);
+    expect(csv).toContain('"app","app","not-a-real-password"');
+    expect(screen.queryByTestId('otp-csv-reason')).not.toBeInTheDocument();
+  }, 15000);
 });

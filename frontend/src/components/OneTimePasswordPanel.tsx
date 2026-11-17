@@ -81,12 +81,24 @@ export function OneTimePasswordPanel({ projectId, password, address, database, u
         </button>
       </div>
       <div className="flex flex-wrap gap-3">
-        <a
-          href={href} download={credentialsCsvFileName(projectId)}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded border border-border-primary text-sm text-text-secondary hover:text-text-primary"
-        >
-          <Download className="w-4 h-4" /> Download CSV
-        </a>
+        {pending && !(database && user) ? (
+          <span className="inline-flex items-center gap-2">
+            <button
+              type="button" disabled
+              className="inline-flex items-center gap-2 px-3 py-2 rounded border border-border-primary text-sm text-text-tertiary opacity-60 cursor-not-allowed"
+            >
+              <Download className="w-4 h-4" /> Download CSV
+            </button>
+            <span className="text-xs text-text-tertiary" data-testid="otp-csv-reason">Available when the database is ready</span>
+          </span>
+        ) : (
+          <a
+            href={href} download={credentialsCsvFileName(projectId)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded border border-border-primary text-sm text-text-secondary hover:text-text-primary"
+          >
+            <Download className="w-4 h-4" /> Download CSV
+          </a>
+        )}
         <button
           type="button" onClick={onDone}
           className="px-4 py-2 rounded bg-accent-primary text-white text-sm font-medium"

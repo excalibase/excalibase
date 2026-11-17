@@ -98,4 +98,17 @@ describe('OneTimePasswordPanel', () => {
     expect(screen.getByTestId('otp-database')).toHaveTextContent(/ready/i);
     expect(screen.getByTestId('otp-user')).not.toHaveTextContent('—');
   });
+
+  test('Download CSV is disabled while the login is pending, and the password stays usable', () => {
+    render(
+      <OneTimePasswordPanel
+        projectId="p-1" password={PASSWORD} address={PUBLIC} database="" user="" pending
+        sslmode="require" onDone={() => undefined}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /download csv/i })).toBeDisabled();
+    expect(screen.queryByRole('link', { name: /download csv/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^copy/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /i've saved it/i })).toBeEnabled();
+  });
 });
