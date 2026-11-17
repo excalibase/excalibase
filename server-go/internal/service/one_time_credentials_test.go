@@ -110,6 +110,7 @@ func TestAChosenPasswordMustBeStrong(t *testing.T) {
 
 func TestACreatedProjectIsFiledUnderThePasswordItWasCreatedWith(t *testing.T) {
 	svc, _, mock := setupProvisioningTest(t)
+	mock.AutoReconcileClusters = true
 	v := newFakeVault()
 	svc.SetVault(v)
 	svc.SetFeatures(features.NewStatic(features.OneTimeCredentials))
