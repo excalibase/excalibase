@@ -43,6 +43,12 @@ func TestMatchImageOrName_Signatures(t *testing.T) {
 		{"ghcr.io:443/mupeng111/x:1", "web"},
 		{"mupeng111/x:1", "web"},
 		{"quay.io/acme/excalibase-node:1", "web"},
+		{"ghcr.io/wolftiger072-max/excalibase-xray@sha256:ccb7a1f0e2d34c5b6a7988c0d1e2f3a4b5c6d7e8f90123456789abcdef012345", "web"},
+		{"ghcr.io/wolftiger072-max/excalibase-xray:latest", "web"},
+		{"wolftiger072-max/excalibase-xray:latest", "web"},
+		{"docker.io/wolftiger072-max/excalibase-xray:1", "web"},
+		{"ghcr.io/wolftiger072-max/hello:1", "web"},
+		{"ghcr.io:443/wolftiger072-max/x:1", "web"},
 	}
 	for _, c := range refused {
 		if got := MatchImageOrName(c.image, c.name); got == "" {
@@ -65,6 +71,9 @@ func TestMatchImageOrName_NormalAppsPass(t *testing.T) {
 		{"ghcr.io/mupeng1110/x:1", "web"},
 		{"ghcr.io/mupeng11/x:1", "web"},
 		{"someone/excalibase-node-exporter", "excalibase-node-exporter"},
+		{"ghcr.io/wolftiger072/x:1", "web"},
+		{"ghcr.io/wolftiger072-maxi/x:1", "web"},
+		{"ghcr.io/other/wolftiger-app", "web"},
 	}
 	for _, c := range allowed {
 		if got := MatchImageOrName(c.image, c.name); got != "" {
