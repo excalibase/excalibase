@@ -434,7 +434,7 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		return
 	}
 	switch {
-	case errors.Is(err, abuse.ErrProxyApp):
+	case errors.Is(err, abuse.ErrProxyApp), errors.Is(err, abuse.ErrBlockedRegistry):
 		httpError(w, err.Error(), http.StatusForbidden)
 	case errors.Is(err, apphost.ErrInvalidImage), errors.Is(err, appregistry.ErrInternalImage):
 		httpError(w, err.Error(), http.StatusBadRequest)

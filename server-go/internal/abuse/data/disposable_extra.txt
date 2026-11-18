@@ -5,3 +5,5 @@ yuexinmail.edu.kg
 euploading.com
 nimbusmono.com
 tinkmail.me
+# grokbot.com has no MX record of its own; its mail. host was used for throwaway sign-ups (Nov 2026).
+grokbot.com

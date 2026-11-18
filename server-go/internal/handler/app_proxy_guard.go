@@ -26,7 +26,7 @@ func refuseProxy(w http.ResponseWriter, r *http.Request, guard *abuse.AppGuard, 
 	if err == nil {
 		return false
 	}
-	if !errors.Is(err, abuse.ErrProxyApp) {
+	if !errors.Is(err, abuse.ErrProxyApp) && !errors.Is(err, abuse.ErrBlockedRegistry) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return true
 	}
