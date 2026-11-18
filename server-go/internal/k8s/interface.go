@@ -161,6 +161,7 @@ type KubeClient interface {
 	AppRestarts(ctx context.Context, namespace, appID string) (AppRestarts, error)
 	RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error)
 	PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error)
+	PausedAppImages(ctx context.Context, namespace, appID, appName string) ([]string, error)
 	SyncAppDomains(ctx context.Context, namespace string, app *apphost.App, hosts []string, opts AppDomainOptions) error
 	AppDomainCertificate(ctx context.Context, namespace, appName, host string) (CertificateState, error)
 	AttachIssuedAppHostCertificates(ctx context.Context) error
