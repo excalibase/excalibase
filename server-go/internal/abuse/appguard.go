@@ -44,7 +44,7 @@ type AppSubject struct {
 	Surface string
 }
 
-// AppGuard refuses proxy apps while features.ProxyBlock is on.
+// AppGuard refuses proxy apps while features.ProxyBlock is on, and images from blocked registries always.
 type AppGuard struct {
 	flags features.Flags
 	audit AuditWriter
@@ -57,7 +57,14 @@ func NewAppGuard(flags features.Flags, audit AuditWriter) *AppGuard {
 
 // Check returns a *ProxyRefusal for a proxy app and nil otherwise. A nil guard allows everything.
 func (g *AppGuard) Check(ctx context.Context, subject AppSubject) error {
-	if g == nil || !features.Enabled(ctx, g.flags, features.ProxyBlock) {
+	if g == nil {
+		return nil
+	}
+	if BlockedRegistry(subject.Image) {
+		g.recordRegistry(ctx, subject)
+		return &RegistryRefusal{Host: imageRegistryHost(subject.Image)}
+	}
+	if !features.Enabled(ctx, g.flags, features.ProxyBlock) {
 		return nil
 	}
 	finding := FindProxy(subject.Image, subject.Name, subject.EnvNames)
@@ -80,5 +87,20 @@ func (g *AppGuard) record(ctx context.Context, subject AppSubject, finding Findi
 	}
 	if err := g.audit.LogAudit(ctx, entry); err != nil {
 		log.Printf("ERROR: audit of a refused proxy app in project %s: %v", subject.ProjectID, err)
+	}
+}
+
+func (g *AppGuard) recordRegistry(ctx context.Context, subject AppSubject) {
+	if g.audit == nil {
+		return
+	}
+	now := time.Now().UTC()
+	details := fmt.Sprintf("surface=%s name=%q image=%q", subject.Surface, subject.Name, subject.Image)
+	entry := &domain.AuditEntry{
+		UserID: subject.Actor, Action: AuditActionRegistryRefused, Resource: "app", ResourceID: subject.AppID,
+		ProjectID: subject.ProjectID, Details: details, Timestamp: &now,
+	}
+	if err := g.audit.LogAudit(ctx, entry); err != nil {
+		log.Printf("ERROR: audit of a refused registry in project %s: %v", subject.ProjectID, err)
 	}
 }
