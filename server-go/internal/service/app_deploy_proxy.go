@@ -2,11 +2,16 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 )
+
+// errPausedImageUnreadable refuses a resume whose paused workload names no usable image.
+var errPausedImageUnreadable = errors.New("the paused workload names no image to check, so it was not resumed")
 
 // SetProxyGuard refuses a deploy of a proxy or VPN node (EXC-755); nil allows all.
 func (s *AppDeployService) SetProxyGuard(guard *abuse.AppGuard) { s.proxyGuard = guard }
@@ -32,9 +37,11 @@ func appSubject(app *apphost.App, image string, env []apphost.EnvVar, actor, sur
 }
 
 // refuseProxyOnResume checks what a resume would bring back: the app as it is
-// now and the config of the deploy that last ran, which the paused workload
-// still carries. The app is left stopped when either is a proxy node.
-func (s *AppDeployService) refuseProxyOnResume(ctx context.Context, app *apphost.App, actor string) error {
+// now, the config of the deploy that last ran, and the images the paused
+// workload itself holds, which are what actually run. The last is read from the
+// runtime and a resume that cannot read it is refused, never allowed. The app
+// is left stopped when any of them is refused.
+func (s *AppDeployService) refuseProxyOnResume(ctx context.Context, namespace string, app *apphost.App, actor string) error {
 	if s.proxyGuard == nil {
 		return nil
 	}
@@ -45,8 +52,29 @@ func (s *AppDeployService) refuseProxyOnResume(ctx context.Context, app *apphost
 	if err != nil {
 		return fmt.Errorf("look up the last deploy: %w", err)
 	}
-	if last == nil {
-		return nil
+	if last != nil {
+		if err := s.proxyGuard.Check(ctx, appSubject(app, last.Config.Image, last.Config.Env, actor, "resume")); err != nil {
+			return err
+		}
 	}
-	return s.proxyGuard.Check(ctx, appSubject(app, last.Config.Image, last.Config.Env, actor, "resume"))
+	return s.refusePausedImages(ctx, namespace, app, actor)
+}
+
+func (s *AppDeployService) refusePausedImages(ctx context.Context, namespace string, app *apphost.App, actor string) error {
+	images, err := s.runtime.PausedAppImages(ctx, namespace, app.ID, app.Name)
+	if err != nil {
+		return fmt.Errorf("read the images the paused workload would run: %w", err)
+	}
+	if len(images) == 0 {
+		return errPausedImageUnreadable
+	}
+	for _, image := range images {
+		if strings.TrimSpace(image) == "" {
+			return errPausedImageUnreadable
+		}
+		if err := s.proxyGuard.Check(ctx, appSubject(app, image, app.Env, actor, "resume")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
