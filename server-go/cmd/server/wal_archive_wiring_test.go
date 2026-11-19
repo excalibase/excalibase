@@ -133,3 +133,8 @@ func TestNewHostWALSweep_BuildsWithAndWithoutAlerts(t *testing.T) {
 		}
 	}
 }
+
+// With no scheduler there is nothing to hand out, and nothing may be touched.
+func TestWireBackupScheduler_NilSchedulerTouchesNothing(t *testing.T) {
+	wireBackupScheduler(nil, nil, nil)
+}

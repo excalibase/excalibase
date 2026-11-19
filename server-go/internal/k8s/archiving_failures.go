@@ -26,21 +26,34 @@ func ArchivingFailures(clusters []*unstructured.Unstructured) []ArchivingFailure
 		if cluster == nil || cluster.GetAnnotations()["cnpg.io/hibernation"] == "on" {
 			continue
 		}
-		conditions, _, _ := unstructured.NestedSlice(cluster.Object, "status", "conditions")
-		for _, entry := range conditions {
-			condition, ok := entry.(map[string]interface{})
-			if !ok || condition["type"] != "ContinuousArchiving" || condition["status"] != "False" {
-				continue
-			}
-			failure := ArchivingFailure{Namespace: cluster.GetNamespace(), Cluster: cluster.GetName()}
-			failure.Message, _ = condition["message"].(string)
-			if stamp, _ := condition["lastTransitionTime"].(string); stamp != "" {
-				if parsed, err := time.Parse(time.RFC3339, stamp); err == nil {
-					failure.Since = parsed
-				}
-			}
+		if failure, failing := archivingFailureOf(cluster); failing {
 			failures = append(failures, failure)
 		}
 	}
 	return failures
+}
+
+func archivingFailureOf(cluster *unstructured.Unstructured) (ArchivingFailure, bool) {
+	conditions, _, _ := unstructured.NestedSlice(cluster.Object, "status", "conditions")
+	for _, entry := range conditions {
+		condition, ok := entry.(map[string]interface{})
+		if !ok || condition["type"] != "ContinuousArchiving" || condition["status"] != "False" {
+			continue
+		}
+		failure := ArchivingFailure{Namespace: cluster.GetNamespace(), Cluster: cluster.GetName()}
+		failure.Message, _ = condition["message"].(string)
+		failure.Since = conditionTime(condition)
+		return failure, true
+	}
+	return ArchivingFailure{}, false
+}
+
+// conditionTime is when the condition last changed, zero when it cannot be read.
+func conditionTime(condition map[string]interface{}) time.Time {
+	stamp, _ := condition["lastTransitionTime"].(string)
+	parsed, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }

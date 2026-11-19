@@ -259,11 +259,7 @@ func runServer(cfg config.AppConfig) {
 
 	scheduler, schedulerStop := startBackupScheduler(cfg, sqlStore, deps.backupHandler)
 	defer schedulerStop()
-	if scheduler != nil {
-		deps.backupHandler.SetScheduler(scheduler)
-		// A single host's Postgres projects run their plan's schedule from create (EXC-593).
-		provSvc.SetBackupSchedules(scheduler)
-	}
+	wireBackupScheduler(deps.backupHandler, provSvc, scheduler)
 
 	fnSchedHandles := startFunctionScheduler(cfg, sqlStore, fnHandler, projectDB)
 	defer fnSchedHandles.Stop()
@@ -861,6 +857,17 @@ const (
 // In single-process self-hosted deployments the leader lock is a
 // no-op; cloud uses a Postgres advisory lock so multi-replica
 // platforms only fire once per tick.
+// wireBackupScheduler hands the scheduler, when there is one, to the backup
+// handler and to the projects that run a schedule from create.
+func wireBackupScheduler(backupHandler *handler.BackupHandler, provSvc *service.ProvisioningService, scheduler *service.BackupScheduler) {
+	if scheduler == nil {
+		return
+	}
+	backupHandler.SetScheduler(scheduler)
+	// A single host's Postgres projects run their plan's schedule from create (EXC-593).
+	provSvc.SetBackupSchedules(scheduler)
+}
+
 func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, backupHandler *handler.BackupHandler) (*service.BackupScheduler, func()) {
 	if backupHandler == nil || sqlStore == nil {
 		return nil, func() {
