@@ -46,7 +46,7 @@ type KubeClient interface {
 	// otherwise an error wrapping ErrVolumeExpansionUnsupported, or the
 	// lookup's own error.
 	ClusterVolumesExpandable(ctx context.Context, namespace, clusterName string) error
-	GetPods(ctx context.Context, namespace string, labelSelector string) ([]corev1.Pod, error)
+	GetPods(ctx context.Context, namespace, labelSelector string) ([]corev1.Pod, error)
 	IsPodReady(ctx context.Context, namespace, name string) (bool, error)
 	// PodLogTail is the last lines of one container's log.
 	PodLogTail(ctx context.Context, namespace, pod, container string, lines int64) (string, error)
@@ -161,6 +161,7 @@ type KubeClient interface {
 	AppRestarts(ctx context.Context, namespace, appID string) (AppRestarts, error)
 	RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error)
 	PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error)
+	PausedAppImages(ctx context.Context, namespace, appID, appName string) ([]string, error)
 	SyncAppDomains(ctx context.Context, namespace string, app *apphost.App, hosts []string, opts AppDomainOptions) error
 	AppDomainCertificate(ctx context.Context, namespace, appName, host string) (CertificateState, error)
 	AttachIssuedAppHostCertificates(ctx context.Context) error

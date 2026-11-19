@@ -1,9 +1,15 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/abuse"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/service"
 )
 
 const blockedRegistryMessage = "images from ttl.sh are not allowed; push to a registry such as Docker Hub or GHCR"
@@ -45,5 +51,35 @@ func TestAppUpdate_RefusesAnImageFromABlockedRegistry(t *testing.T) {
 		if ok := doAppRequestWithVersion(t, r, http.MethodPatch, proxyAppsPath+id, map[string]any{"image": image}, decodeApp(t, doAppRequest(t, r, http.MethodGet, proxyAppsPath+id, nil)).Version); ok.Code != http.StatusOK {
 			t.Errorf("%s: %d %s", image, ok.Code, ok.Body.String())
 		}
+	}
+}
+
+func TestTemplateDeploy_ARegistryRefusalNamesTheHostItRefused(t *testing.T) {
+	failed := &service.TemplateFailedError{Step: "could not deploy app", Cause: &abuse.RegistryRefusal{Host: "eu.ttl.sh"}, ServerFault: true}
+	w := httptest.NewRecorder()
+	writeTemplateError(w, failed)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "images from eu.ttl.sh are not allowed") {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAppCreate_RefusesAnImageFromASubdomainOfABlockedRegistry(t *testing.T) {
+	r, store, _ := proxyGuardRouter(t, false)
+	body := validAppBody()
+	body["image"] = "eu.ttl.sh/abc:1h"
+	w := doAppRequest(t, r, http.MethodPost, proxyAppsPath, body)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "images from eu.ttl.sh are not allowed") {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if apps, _ := store.List(appTestProject); len(apps) != 0 {
+		t.Error("a refused app was stored")
+	}
+}
+
+func TestAppResume_AnUnreadablePausedImageIsA409ThatSaysToRedeploy(t *testing.T) {
+	w := httptest.NewRecorder()
+	(&AppDeployHandler{}).writeError(w, fmt.Errorf("resume: %w", k8s.ErrAppImageUnreadable))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "redeploy the app") {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
 }
