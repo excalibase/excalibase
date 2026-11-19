@@ -307,3 +307,38 @@ func TestAdminAlertMail_AFailedAlertReadStillMailsEveryQueuedAlert(t *testing.T)
 		t.Fatalf("digest = %q, want every queued alert", body)
 	}
 }
+
+// EXC-784 review: the read of the open alerts has its own deadline. A hung pool (the EXC-746 shape) must
+// not park the timer goroutine, and the mail still goes out, with every queued alert, in a deadline of its own.
+func TestAdminAlertMail_AHungAlertReadIsCutOffAndTheMailStillGoesOut(t *testing.T) {
+	sender := &captureSender{}
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	var flush []func()
+	hung := func(ctx context.Context) (map[string]bool, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	mailer := NewAdminAlertMail(AdminAlertMailConfig{Admins: fakeAdmins{emails: []string{"a@x.io"}}, Sender: sender,
+		Now: func() time.Time { return now }, OpenAlerts: hung, Timeout: 20 * time.Millisecond,
+		Schedule: func(_ time.Duration, f func()) { flush = append(flush, f) }})
+	ctx := context.Background()
+	mailer.Notify(ctx, raisedMetric("backup.renewal:p1", "p1 failed"))
+	now = now.Add(10 * time.Minute)
+	mailer.Notify(ctx, raisedMetric("backup.renewal:p2", "p2 failed"))
+	mailer.Notify(ctx, raisedMetric("backup.renewal:p3", "p3 failed"))
+	now = now.Add(50 * time.Minute)
+
+	done := make(chan struct{})
+	go func() { flush[0](); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a hung read of the open alerts parked the flush")
+	}
+	if len(sender.sent) != 2 {
+		t.Fatalf("sent %d mails, want the digest to go out", len(sender.sent))
+	}
+	if body := sender.sent[1].TextBody; !strings.Contains(body, "p2 failed") || !strings.Contains(body, "p3 failed") {
+		t.Fatalf("digest = %q, want every queued alert", body)
+	}
+}

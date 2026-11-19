@@ -57,6 +57,9 @@ type AdminAlertMailConfig struct {
 	// goes out is left out. Nil keeps every queued alert, and so does a failed
 	// read: the queue is already cleared, so dropping on an error would lose them.
 	OpenAlerts func(ctx context.Context) (map[string]bool, error)
+	// Timeout bounds, separately, the read of the open alerts and the sending of
+	// the mail; adminMailTimeout when zero.
+	Timeout time.Duration
 }
 
 // mailCooldown is how long a kind of alert is quiet after its mail: a figure
@@ -154,7 +157,7 @@ func (m *AdminAlertMail) flush(ctx context.Context, kind string) {
 	m.mu.Lock()
 	m.last[kind] = m.config.Now()
 	m.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, adminMailTimeout)
+	ctx, cancel := context.WithTimeout(ctx, m.timeout())
 	defer cancel()
 	recipients, err := m.config.Admins.PlatformAdminEmails(ctx)
 	if err != nil {
@@ -180,13 +183,23 @@ func (m *AdminAlertMail) flush(ctx context.Context, kind string) {
 	}
 }
 
+// timeout bounds the read of the open alerts and, on a deadline of its own, the sending.
+func (m *AdminAlertMail) timeout() time.Duration {
+	if m.config.Timeout > 0 {
+		return m.config.Timeout
+	}
+	return adminMailTimeout
+}
+
 // stillOpen keeps the queued alerts that have not resolved while they waited,
 // and all of them when that cannot be read.
 func (m *AdminAlertMail) stillOpen(ctx context.Context, queued []domain.Alert) []domain.Alert {
 	if m.config.OpenAlerts == nil {
 		return queued
 	}
-	open, err := m.config.OpenAlerts(ctx)
+	readCtx, cancel := context.WithTimeout(ctx, m.timeout())
+	defer cancel()
+	open, err := m.config.OpenAlerts(readCtx)
 	if err != nil {
 		log.Printf("admin alert mail: read open alerts, mailing every queued alert: %v", err)
 		return queued
