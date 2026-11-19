@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -122,15 +123,43 @@ func TestTrackKeepsProjectsApart(t *testing.T) {
 	}
 }
 
-func TestAlertingServiceIsOpenIsAboutPlatformAlertsOnly(t *testing.T) {
+func TestAlertingServiceOpenPlatformMetricsIsAboutPlatformAlertsOnly(t *testing.T) {
 	alerts := NewAlertingService(t.TempDir())
 	alerts.Track("", "wal.archiving:ns/p1", true, func() domain.Alert { return domain.Alert{ID: "a1", Severity: "CRITICAL"} })
 	alerts.Track("proj", "cpu", true, func() domain.Alert { return domain.Alert{ID: "a2", Severity: "WARNING"} })
-	if !alerts.IsOpen("wal.archiving:ns/p1") || alerts.IsOpen("cpu") || alerts.IsOpen("nothing") {
-		t.Fatal("IsOpen is not about the open platform alerts")
+	open, err := alerts.OpenPlatformMetrics(context.Background())
+	if err != nil || !open["wal.archiving:ns/p1"] || open["cpu"] || len(open) != 1 {
+		t.Fatalf("open = %v, err %v", open, err)
 	}
 	alerts.Track("", "wal.archiving:ns/p1", false, nil)
-	if alerts.IsOpen("wal.archiving:ns/p1") {
-		t.Fatal("a resolved alert is still open")
+	if open, _ := alerts.OpenPlatformMetrics(context.Background()); len(open) != 0 {
+		t.Fatalf("a resolved alert is still open: %v", open)
 	}
 }
+
+// The table's rows are read through the store, resolved and project alerts left out.
+func TestAlertingServiceOpenPlatformMetricsReadsTheStore(t *testing.T) {
+	alerts := NewAlertingService(t.TempDir())
+	alerts.SetStore(rowsStore{rows: []domain.Alert{
+		{Metric: "wal.archiving:ns/p1"}, {Metric: "wal.archiving:ns/p2", Resolved: true}, {Metric: "cpu", ProjectID: "proj"},
+	}})
+	open, err := alerts.OpenPlatformMetrics(context.Background())
+	if err != nil || len(open) != 1 || !open["wal.archiving:ns/p1"] {
+		t.Fatalf("open = %v, err %v", open, err)
+	}
+}
+
+func TestAlertingServiceOpenPlatformMetricsSurfacesAFailedRead(t *testing.T) {
+	alerts := NewAlertingService(t.TempDir())
+	alerts.SetStore(readFailingStore{})
+	if _, err := alerts.OpenPlatformMetrics(context.Background()); err == nil {
+		t.Fatal("a failed read was reported as an empty set")
+	}
+}
+
+type rowsStore struct {
+	readFailingStore
+	rows []domain.Alert
+}
+
+func (r rowsStore) GetActiveAlerts(context.Context) ([]domain.Alert, error) { return r.rows, nil }

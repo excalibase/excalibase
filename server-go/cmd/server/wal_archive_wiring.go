@@ -50,7 +50,7 @@ func adminAlertNotifier(cfg config.AppConfig, sqlStore storage.PlatformStore, ma
 		Admins: service.PlatformAdminEmails{Users: users}, Sender: mail,
 		From: cfg.EmailFromAddress, FromName: cfg.EmailFromName, DashboardURL: cfg.StudioURL, Batch: alertMailBatch}
 	if alerts != nil {
-		config.StillOpen = alerts.IsOpen
+		config.OpenAlerts = alerts.OpenPlatformMetrics
 	}
 	return service.NewAdminAlertMail(config)
 }
