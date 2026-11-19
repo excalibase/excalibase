@@ -454,7 +454,7 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		httpError(w, errNotFound, http.StatusNotFound)
 	case errors.Is(err, apphost.ErrAppStatusConflict), errors.Is(err, apphost.ErrAppBusy),
 		errors.Is(err, storage.ErrProjectBusy),
-		errors.Is(err, k8s.ErrAppNotDeployed), errors.Is(err, k8s.ErrAppNotPaused):
+		errors.Is(err, k8s.ErrAppNotDeployed), errors.Is(err, k8s.ErrAppNotPaused), errors.Is(err, k8s.ErrAppImageUnreadable):
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, k8s.ErrAppPodsRemain):
 		httpError(w, err.Error()+"; retry to finish", http.StatusGatewayTimeout)

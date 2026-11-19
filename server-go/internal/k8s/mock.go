@@ -223,6 +223,7 @@ type MockClient struct {
 	// PausedReplicas answers PausedAppReplicas for any app.
 	PausedReplicas    int
 	PausedReplicasErr error
+	PausedImagesStub
 	// ResumedTier records the plan size each resume ran at, keyed "namespace/appID".
 	ResumedTier map[string]domain.TierType
 

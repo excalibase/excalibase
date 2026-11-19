@@ -131,13 +131,14 @@ func writeTemplateError(w http.ResponseWriter, err error) {
 	}
 	var refused *service.TemplateRefusedError
 	var proxy *abuse.ProxyRefusal
+	var registry *abuse.RegistryRefusal
 	var failed *service.TemplateFailedError
 	var incomplete *service.TemplateRollbackError
 	switch {
 	case errors.As(err, &proxy):
 		httpError(w, proxy.Error(), http.StatusForbidden)
-	case errors.Is(err, abuse.ErrBlockedRegistry):
-		httpError(w, abuse.ErrBlockedRegistry.Error(), http.StatusForbidden)
+	case errors.As(err, &registry):
+		httpError(w, registry.Error(), http.StatusForbidden)
 	case errors.Is(err, service.ErrTemplateNotFound):
 		httpError(w, "template not found", http.StatusNotFound)
 	case errors.Is(err, service.ErrTemplateProjectNotFound):
