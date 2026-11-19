@@ -40,7 +40,8 @@ func imageRegistryHost(image string) string {
 	return strings.TrimSuffix(host, ".")
 }
 
-// BlockedRegistry reports whether the image is hosted by a blocked registry.
+// BlockedRegistry reports whether the image is hosted by a blocked registry or a subdomain of one,
+// the same rule the build egress proxy applies.
 func BlockedRegistry(image string) bool {
-	return registryblock.IsHost(imageRegistryHost(image))
+	return registryblock.IsHostOrSubdomain(imageRegistryHost(image))
 }

@@ -84,15 +84,9 @@ func (c *Client) ResumeAppWorkload(ctx context.Context, namespace, appID, appNam
 
 // PausedAppReplicas reads the replica count a resume would restore, so it can be admitted first.
 func (c *Client) PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error) {
-	if _, err := c.appDeploymentNames(ctx, namespace, appID); err != nil {
-		return 0, err
-	}
-	dep, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, AppObjectName(appName), metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return 0, ErrAppNotDeployed
-	}
+	dep, err := c.pausedDeployment(ctx, namespace, appID, appName)
 	if err != nil {
-		return 0, fmt.Errorf("read app deployment: %w", err)
+		return 0, err
 	}
 	replicas, err := pausedReplicas(dep)
 	return int(replicas), err

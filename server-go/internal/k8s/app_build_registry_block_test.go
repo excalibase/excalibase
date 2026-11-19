@@ -27,3 +27,20 @@ func TestAppBuildPod_PinsEveryBlockedRegistryToLoopback(t *testing.T) {
 		}
 	}
 }
+
+// ExtraBlockedHosts is how the live build test pins a name that never resolves, to prove the pod's hosts file is honoured.
+func TestAppBuildPod_PinsTheExtraBlockedHostsToo(t *testing.T) {
+	options := testAppBuildOptions()
+	options.ExtraBlockedHosts = []string{"blocked.invalid"}
+
+	pod := renderAppBuildPod(options, testAppRunSpec(appbuilds.BuilderDockerfile))
+
+	for _, alias := range pod.HostAliases {
+		if !slices.Contains(alias.Hostnames, "blocked.invalid") || !slices.Contains(alias.Hostnames, "ttl.sh") {
+			t.Errorf("alias %s pins %v, want the shared list and the extra host", alias.IP, alias.Hostnames)
+		}
+	}
+	if len(pod.HostAliases) != 2 {
+		t.Errorf("aliases = %v", pod.HostAliases)
+	}
+}

@@ -2,16 +2,16 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
 // errPausedImageUnreadable refuses a resume whose paused workload names no usable image.
-var errPausedImageUnreadable = errors.New("the paused workload names no image to check, so it was not resumed")
+var errPausedImageUnreadable = k8s.ErrAppImageUnreadable
 
 // SetProxyGuard refuses a deploy of a proxy or VPN node (EXC-755); nil allows all.
 func (s *AppDeployService) SetProxyGuard(guard *abuse.AppGuard) { s.proxyGuard = guard }

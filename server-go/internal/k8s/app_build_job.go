@@ -83,6 +83,9 @@ type AppBuildOptions struct {
 	// Platform is the nodes' os/arch; the lifecycle reads one image from the layout, not an index.
 	Platform       string
 	ExtraDenyCIDRs []string
+	// ExtraBlockedHosts are pinned beside the shared blocked registries. Production leaves it empty;
+	// the live build test uses it to prove the pod's hosts file is honoured.
+	ExtraBlockedHosts []string
 }
 
 const defaultAppBuildPlatform = "linux/amd64"
@@ -130,15 +133,15 @@ func renderAppBuildPod(options AppBuildOptions, spec appbuilds.RunSpec) corev1.P
 		inits = append(inits, buildpacksContainers(options, spec)...)
 	}
 	pod := buildPodSpec(options.RuntimeClass, options.PriorityClass, inits, appCollectContainer(options, spec), appBuildVolumes(spec))
-	pod.HostAliases = blockedRegistryAliases()
+	pod.HostAliases = blockedRegistryAliases(options.ExtraBlockedHosts)
 	return pod
 }
 
 // blockedRegistryAliases pins each blocked registry host to loopback in the pod's hosts file. The
 // build NetworkPolicy matches addresses, not names, so this is what makes a FROM of such a registry
 // fail to resolve. It covers the registry's own name; a stricter fence by name needs the CNI (EXC-777).
-func blockedRegistryAliases() []corev1.HostAlias {
-	hosts := registryblock.Hosts()
+func blockedRegistryAliases(extra []string) []corev1.HostAlias {
+	hosts := append(registryblock.Hosts(), extra...)
 	return []corev1.HostAlias{{IP: "127.0.0.1", Hostnames: hosts}, {IP: "::1", Hostnames: hosts}}
 }
 

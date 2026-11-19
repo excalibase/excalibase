@@ -3,6 +3,8 @@ package dockerapps
 import (
 	"context"
 	"fmt"
+
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
 // PausedAppImages reads the image of each stopped container a resume would
@@ -19,7 +21,7 @@ func (r *Runtime) PausedAppImages(ctx context.Context, _, appID, appName string)
 			return nil, fmt.Errorf("read %s: %w", summary.ID, err)
 		}
 		if inspect.Config == nil {
-			return nil, fmt.Errorf("read %s: the engine answered no configuration", summary.ID)
+			return nil, fmt.Errorf("read %s: the engine answered no configuration: %w", summary.ID, k8s.ErrAppImageUnreadable)
 		}
 		images = append(images, inspect.Config.Image)
 	}
