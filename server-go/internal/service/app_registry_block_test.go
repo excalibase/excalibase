@@ -91,7 +91,7 @@ func TestRedeploy_RefusesABlockedRegistryInTheDeployBeingRolledBackTo(t *testing
 	}
 }
 
-func resumeMustStayStopped(t *testing.T, f *lifecycleFixture, err error, want error) {
+func resumeMustStayStopped(t *testing.T, f *lifecycleFixture, err, want error) {
 	t.Helper()
 	if !errors.Is(err, want) {
 		t.Fatalf("err = %v, want %v", err, want)

@@ -46,7 +46,7 @@ type KubeClient interface {
 	// otherwise an error wrapping ErrVolumeExpansionUnsupported, or the
 	// lookup's own error.
 	ClusterVolumesExpandable(ctx context.Context, namespace, clusterName string) error
-	GetPods(ctx context.Context, namespace string, labelSelector string) ([]corev1.Pod, error)
+	GetPods(ctx context.Context, namespace, labelSelector string) ([]corev1.Pod, error)
 	IsPodReady(ctx context.Context, namespace, name string) (bool, error)
 	// PodLogTail is the last lines of one container's log.
 	PodLogTail(ctx context.Context, namespace, pod, container string, lines int64) (string, error)

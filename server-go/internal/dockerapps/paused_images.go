@@ -7,7 +7,7 @@ import (
 
 // PausedAppImages reads the image of each stopped container a resume would
 // start, as the engine holds it, not as the app's record says.
-func (r *Runtime) PausedAppImages(ctx context.Context, _ string, appID, appName string) ([]string, error) {
+func (r *Runtime) PausedAppImages(ctx context.Context, _, appID, appName string) ([]string, error) {
 	_, newest, err := r.newestDeploy(ctx, appID, appName)
 	if err != nil {
 		return nil, err
