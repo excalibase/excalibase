@@ -20,6 +20,8 @@ const (
 	walMonitorMetricPrefix = "wal.monitor:"
 	// walMonitorProject names the one failure the monitor raises about itself.
 	walMonitorProject = "clusters"
+	// walListTimeout bounds one namespace's cluster list.
+	walListTimeout = 10 * time.Second
 )
 
 // ClusterLister reads custom resources; a Kubernetes client has it.
@@ -31,7 +33,8 @@ type ClusterLister interface {
 type ClusterNamespaces func(ctx context.Context) ([]string, error)
 
 // ProjectNamespaces lists the namespaces of the Kubernetes Postgres projects in
-// store. Provisioning may read clusters in a project's namespace and nowhere
+// store that have a cluster to read: not one being built, failed or torn down,
+// whose namespace may be gone and whose list would be refused. Provisioning may read clusters in a project's namespace and nowhere
 // else, so the monitor asks per namespace and never across all of them.
 func ProjectNamespaces(store storage.InstanceStore) ClusterNamespaces {
 	return func(context.Context) ([]string, error) {
@@ -42,8 +45,7 @@ func ProjectNamespaces(store storage.InstanceStore) ClusterNamespaces {
 		seen := map[string]bool{}
 		var namespaces []string
 		for _, inst := range instances {
-			if inst != nil && inst.DeploymentMode != domain.ModeDocker && inst.DBType == domain.PostgreSQL && !inst.NoDatabase &&
-				inst.Namespace != "" && !seen[inst.Namespace] {
+			if hasCluster(inst) && inst.DeploymentMode != domain.ModeDocker && !seen[inst.Namespace] {
 				seen[inst.Namespace] = true
 				namespaces = append(namespaces, inst.Namespace)
 			}
@@ -69,12 +71,14 @@ type WALArchiveMonitor struct {
 	now        func() time.Time
 	notifier   AlertNotifier
 	self       *failureAlerts
+	// listTimeout bounds each namespace's list, so a slow API server cannot stall the tick.
+	listTimeout time.Duration
 	// firstSeen ages a condition whose own time cannot be read.
 	firstSeen map[string]time.Time
 }
 
 func NewWALArchiveMonitor(clusters ClusterLister, namespaces ClusterNamespaces, alerts *AlertingService, after time.Duration, now func() time.Time) *WALArchiveMonitor {
-	m := &WALArchiveMonitor{clusters: clusters, namespaces: namespaces, alerts: alerts, after: after, now: now, firstSeen: map[string]time.Time{}}
+	m := &WALArchiveMonitor{clusters: clusters, namespaces: namespaces, alerts: alerts, after: after, now: now, firstSeen: map[string]time.Time{}, listTimeout: walListTimeout}
 	m.self = newFailureAlerts(alerts, nil, after, walMonitorMetricPrefix, describeMonitorFailure)
 	return m
 }
@@ -104,7 +108,7 @@ func (m *WALArchiveMonitor) Sample(ctx context.Context) {
 	unreadable := map[string]bool{}
 	var firstFailure error
 	for _, namespace := range namespaces {
-		listed, err := m.clusters.ListCRDs(ctx, k8s.CNPGClusterGVR, namespace)
+		listed, err := m.list(ctx, namespace)
 		if err != nil {
 			log.Printf("ERROR: wal archive monitor: list clusters in %s: %v", namespace, err)
 			unreadable[namespace] = true
@@ -131,6 +135,12 @@ func (m *WALArchiveMonitor) Sample(ctx context.Context) {
 		m.notify(ctx, change)
 	}
 	m.resolveRecovered(ctx, failing, unreadable)
+}
+
+func (m *WALArchiveMonitor) list(ctx context.Context, namespace string) ([]*unstructured.Unstructured, error) {
+	ctx, cancel := context.WithTimeout(ctx, m.listTimeout)
+	defer cancel()
+	return m.clusters.ListCRDs(ctx, k8s.CNPGClusterGVR, namespace)
 }
 
 func (m *WALArchiveMonitor) isOpen(metric string) bool {

@@ -282,3 +282,68 @@ func TestProjectNamespaces_OnlyKubernetesPostgresProjectsOncePerNamespace(t *tes
 		t.Fatal("a failing project list was not reported")
 	}
 }
+
+// EXC-784 review: a project being deleted, built or failed may have no namespace to read, and listing it
+// is a 403 that would raise the monitor's own alert for ever.
+func TestProjectNamespaces_SkipsProjectsWhoseNamespaceMayBeGone(t *testing.T) {
+	store, err := storage.NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, status := range map[string]string{"live": "ACTIVE", "paused": string(domain.StatusPaused), "building": "PROVISIONING",
+		"failed": string(domain.StageFailed), "deleting": "DELETING", "purging": "BACKUPS_PENDING_DELETE"} {
+		_ = store.Create(&domain.DatabaseInstance{ProjectID: id, OrgID: "org", Namespace: "ns-" + id, DBType: domain.PostgreSQL,
+			DeploymentMode: domain.ModeK8s, Status: status})
+	}
+	got, _ := ProjectNamespaces(store)(context.Background())
+	sort.Strings(got)
+	if strings.Join(got, ",") != "ns-live,ns-paused" {
+		t.Fatalf("namespaces = %v, want only the two with a cluster", got)
+	}
+}
+
+// A project that moves to BACKUPS_PENDING_DELETE leaves the list: its old alert closes, and no monitor alert opens.
+func TestWALArchiveMonitor_AProjectBeingDeletedClosesItsAlertAndRaisesNoMonitorAlert(t *testing.T) {
+	store, _ := storage.NewFileSystemStore(t.TempDir())
+	inst := &domain.DatabaseInstance{ProjectID: "p1", OrgID: "org", Namespace: "ns-p1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeK8s, Status: "ACTIVE"}
+	_ = store.Create(inst)
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	l := lister(archivingCluster("p1", "False", now.Add(-time.Hour), false))
+	alerts := NewAlertingService(t.TempDir())
+	monitor := NewWALArchiveMonitor(l, ProjectNamespaces(store), alerts, 30*time.Minute, func() time.Time { return now })
+	monitor.Sample(context.Background())
+	if len(alerts.GetActiveAlerts()) != 1 {
+		t.Fatal("setup: no alert raised")
+	}
+
+	inst.Status = "BACKUPS_PENDING_DELETE"
+	_ = store.Update(inst)
+	l.errs["ns-p1"] = clusterListForbidden() // the namespace is going away
+	now = now.Add(time.Hour)
+	monitor.Sample(context.Background())
+	if got := alerts.GetActiveAlerts(); len(got) != 0 {
+		t.Fatalf("open = %v, want none", openMetrics(alerts))
+	}
+}
+
+// A slow API server cannot stall the metrics tick: each list is bounded.
+func TestWALArchiveMonitor_ASlowListIsCutOffAndCounted(t *testing.T) {
+	now := time.Now()
+	alerts := NewAlertingService(t.TempDir())
+	monitor := NewWALArchiveMonitor(hangingLister{}, func(context.Context) ([]string, error) { return []string{"ns-a"}, nil }, alerts, 30*time.Minute, func() time.Time { return now })
+	monitor.listTimeout = 20 * time.Millisecond
+	done := make(chan struct{})
+	go func() { monitor.Sample(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a list that never answers stalled the sample")
+	}
+}
+
+type hangingLister struct{}
+
+func (hangingLister) ListCRDs(ctx context.Context, _ schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}

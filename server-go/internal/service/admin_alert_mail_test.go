@@ -71,17 +71,20 @@ func TestAdminAlertMail_IgnoresAResolveAndSurvivesAFailingLookup(t *testing.T) {
 	}
 }
 
-// A kind of alert that keeps flapping is one mail an hour, not one a minute; another kind is not held back by it.
-func TestAdminAlertMail_AtMostOneMailPerKindPerHour(t *testing.T) {
+// A kind of alert that raises again inside the hour waits for the next mail: one mail an hour per kind,
+// and nothing raised is lost. Another kind is not held back by it.
+func TestAdminAlertMail_ARaiseInsideTheHourWaitsForTheNextMail(t *testing.T) {
 	sender := &captureSender{}
 	now := time.Now()
+	var delays []time.Duration
+	var flush []func()
 	mailer := NewAdminAlertMail(AdminAlertMailConfig{Admins: fakeAdmins{emails: []string{"a@x.io"}}, Sender: sender,
-		Now: func() time.Time { return now }})
+		Now: func() time.Time { return now }, Schedule: func(after time.Duration, f func()) { delays = append(delays, after); flush = append(flush, f) }})
 	mailer.Notify(context.Background(), raised("first"))
 	now = now.Add(5 * time.Minute)
 	mailer.Notify(context.Background(), raised("flapped back"))
-	if len(sender.sent) != 1 {
-		t.Fatalf("sent %d mails inside the hour, want 1", len(sender.sent))
+	if len(sender.sent) != 1 || len(flush) != 1 || delays[0] != 55*time.Minute {
+		t.Fatalf("sent %d, scheduled %v; want 1 mail now and the next in 55m", len(sender.sent), delays)
 	}
 	other := raised("a pod is pending")
 	other.Raised.Metric = "cluster.pending"
@@ -89,10 +92,10 @@ func TestAdminAlertMail_AtMostOneMailPerKindPerHour(t *testing.T) {
 	if len(sender.sent) != 2 {
 		t.Fatalf("a different kind was held back: %d mails", len(sender.sent))
 	}
-	now = now.Add(time.Hour)
-	mailer.Notify(context.Background(), raised("still there an hour later"))
-	if len(sender.sent) != 3 {
-		t.Fatalf("no mail after the cooldown: %d", len(sender.sent))
+	now = now.Add(55 * time.Minute)
+	flush[0]()
+	if len(sender.sent) != 3 || !strings.Contains(sender.sent[2].TextBody, "flapped back") {
+		t.Fatalf("the queued raise was not mailed: %d mails", len(sender.sent))
 	}
 }
 
@@ -133,14 +136,43 @@ func TestAdminAlertMail_OneMailPerPrefixListsEveryAffectedProject(t *testing.T) 
 		t.Fatalf("no mail listed all three projects (subject %q)", renewal)
 	}
 
-	flush = nil
-	mailer.Notify(ctx, raisedMetric("backup.renewal:p4", "credential of p4 could not be renewed"))
-	if len(flush) != 0 {
-		t.Fatal("a second renewal mail was scheduled within the hour")
+}
+
+// EXC-784 review: p2 raised twenty minutes after p1 is not lost to the hourly limit. It goes out in the
+// next mail of its kind, which is held until the hour is up.
+func TestAdminAlertMail_ALaterProjectIsInTheNextMailOfItsKind(t *testing.T) {
+	sender := &captureSender{}
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	var delays []time.Duration
+	var flush []func()
+	mailer := NewAdminAlertMail(AdminAlertMailConfig{Admins: fakeAdmins{emails: []string{"a@x.io"}}, Sender: sender,
+		Now: func() time.Time { return now }, Batch: time.Minute,
+		Schedule: func(after time.Duration, f func()) { delays = append(delays, after); flush = append(flush, f) }})
+	ctx := context.Background()
+
+	mailer.Notify(ctx, raisedMetric("backup.renewal:p1", "credential of p1 could not be renewed"))
+	now = now.Add(time.Minute)
+	flush[0]()
+	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].TextBody, "p1") {
+		t.Fatalf("first mail: %+v", sender.sent)
 	}
-	now = now.Add(time.Hour + time.Minute)
-	mailer.Notify(ctx, raisedMetric("backup.renewal:p4", "credential of p4 could not be renewed"))
-	if len(flush) != 1 {
-		t.Fatal("no mail scheduled once the hour had passed")
+
+	now = now.Add(19 * time.Minute)
+	mailer.Notify(ctx, raisedMetric("backup.renewal:p2", "credential of p2 could not be renewed"))
+	if len(sender.sent) != 1 || len(flush) != 2 || delays[1] != 41*time.Minute {
+		t.Fatalf("sent %d, delays %v; want p2 held 41 minutes to the end of the hour", len(sender.sent), delays)
+	}
+	mailer.Notify(ctx, raisedMetric("backup.renewal:p3", "credential of p3 could not be renewed"))
+	if len(flush) != 2 {
+		t.Fatal("a third raise scheduled a second digest")
+	}
+	now = now.Add(41 * time.Minute)
+	flush[1]()
+	if len(sender.sent) != 2 {
+		t.Fatalf("sent %d mails, want 2", len(sender.sent))
+	}
+	next := sender.sent[1].TextBody
+	if !strings.Contains(next, "p2") || !strings.Contains(next, "p3") || strings.Contains(next, "p1") {
+		t.Fatalf("next mail = %q, want p2 and p3 only", next)
 	}
 }

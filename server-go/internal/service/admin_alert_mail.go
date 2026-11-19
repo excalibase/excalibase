@@ -61,14 +61,17 @@ const mailCooldown = time.Hour
 // AdminAlertMail emails every platform admin when a platform alert is raised,
 // through the platform's own mailer. A resolve is not mailed. Alerts of one
 // kind (the part of the metric before ":", so one per project of a kind) raised
-// within Batch go out as one mail listing them, and a kind is mailed at most
+// close together go out as one mail listing them, and a kind is mailed at most
 // once per mailCooldown: one root cause hitting every project (EXC-773) is one
-// mail, while each project keeps its own alert row.
+// mail, while each project keeps its own alert row. A raise inside the cooldown
+// is not dropped: it waits for the next mail of its kind, sent when the hour is
+// up. Mail still queued when the process exits is lost; the alert rows remain.
 type AdminAlertMail struct {
-	config  AdminAlertMailConfig
-	mu      sync.Mutex
-	last    map[string]time.Time
-	pending map[string][]domain.Alert
+	config    AdminAlertMailConfig
+	mu        sync.Mutex
+	last      map[string]time.Time
+	pending   map[string][]domain.Alert
+	scheduled map[string]bool
 }
 
 func NewAdminAlertMail(config AdminAlertMailConfig) *AdminAlertMail {
@@ -78,7 +81,7 @@ func NewAdminAlertMail(config AdminAlertMailConfig) *AdminAlertMail {
 	if config.Schedule == nil {
 		config.Schedule = func(after time.Duration, flush func()) { time.AfterFunc(after, flush) }
 	}
-	return &AdminAlertMail{config: config, last: map[string]time.Time{}, pending: map[string][]domain.Alert{}}
+	return &AdminAlertMail{config: config, last: map[string]time.Time{}, pending: map[string][]domain.Alert{}, scheduled: map[string]bool{}}
 }
 
 // alertKind groups the per-project metrics of one alert ("backup.renewal:p1" and "backup.renewal:p2").
@@ -87,42 +90,58 @@ func alertKind(metric string) string {
 	return kind
 }
 
-// admit queues the alert for its kind's mail and reports whether this one opens
-// a new mail; an alert of a kind mailed within the cooldown is dropped (its row stays).
-func (m *AdminAlertMail) admit(alert domain.Alert) (opens bool) {
+// queue adds the alert to its kind's next mail, replacing an earlier raise of
+// the same metric, and reports how long to wait before that mail goes out;
+// ok is false when a mail for the kind is already scheduled.
+func (m *AdminAlertMail) queue(alert domain.Alert) (wait time.Duration, ok bool) {
 	kind := alertKind(alert.Metric)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if queued := m.pending[kind]; len(queued) > 0 {
-		m.pending[kind] = append(queued, alert)
-		return false
+	queued := m.pending[kind]
+	replaced := false
+	for i := range queued {
+		if queued[i].Metric == alert.Metric {
+			queued[i], replaced = alert, true
+		}
 	}
-	now := m.config.Now()
-	if sent, ok := m.last[kind]; ok && now.Sub(sent) < mailCooldown {
-		return false
+	if !replaced {
+		queued = append(queued, alert)
 	}
-	m.last[kind] = now
-	m.pending[kind] = []domain.Alert{alert}
-	return true
+	m.pending[kind] = queued
+	if m.scheduled[kind] {
+		return 0, false
+	}
+	m.scheduled[kind] = true
+	wait = m.config.Batch
+	if sent, was := m.last[kind]; was {
+		wait = max(wait, mailCooldown-m.config.Now().Sub(sent))
+	}
+	return wait, true
 }
 
 // Notify queues a raise for mail; failures are logged, never retried: the alert stays in the table.
 func (m *AdminAlertMail) Notify(ctx context.Context, change AlertChange) {
-	if change.Raised == nil || m.config.Sender == nil || m.config.Admins == nil || !m.admit(*change.Raised) {
+	if change.Raised == nil || m.config.Sender == nil || m.config.Admins == nil {
+		return
+	}
+	wait, ok := m.queue(*change.Raised)
+	if !ok {
 		return
 	}
 	kind := alertKind(change.Raised.Metric)
-	if m.config.Batch <= 0 {
+	if wait <= 0 {
 		m.flush(ctx, kind)
 		return
 	}
-	m.config.Schedule(m.config.Batch, func() { m.flush(context.Background(), kind) })
+	m.config.Schedule(wait, func() { m.flush(context.Background(), kind) })
 }
 
 func (m *AdminAlertMail) flush(ctx context.Context, kind string) {
 	m.mu.Lock()
 	alerts := m.pending[kind]
 	delete(m.pending, kind)
+	delete(m.scheduled, kind)
+	m.last[kind] = m.config.Now()
 	m.mu.Unlock()
 	if len(alerts) == 0 {
 		return
