@@ -180,6 +180,11 @@ func (s *AlertingService) Track(projectID, metric string, breached bool, newAler
 	return AlertChange{}
 }
 
+// IsOpen reports whether the platform alert (no project) of metric is raised.
+func (s *AlertingService) IsOpen(metric string) bool {
+	return findAlert(s.GetActiveAlertsForProject(""), metric) != nil
+}
+
 func findAlert(alerts []domain.Alert, metric string) *domain.Alert {
 	for i := range alerts {
 		if alerts[i].Metric == metric {

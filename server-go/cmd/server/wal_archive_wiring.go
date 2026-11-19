@@ -41,14 +41,18 @@ const alertMailBatch = 30 * time.Second
 
 // adminAlertNotifier mails the platform admins when an alert is raised, or is
 // nil when there is no mailer or user table to find them in.
-func adminAlertNotifier(cfg config.AppConfig, sqlStore storage.PlatformStore, mail email.Sender) service.AlertNotifier {
+func adminAlertNotifier(cfg config.AppConfig, sqlStore storage.PlatformStore, mail email.Sender, alerts *service.AlertingService) service.AlertNotifier {
 	users, ok := sqlStore.(storage.UserStore)
 	if !ok || !email.Configured(mail) {
 		return nil
 	}
-	return service.NewAdminAlertMail(service.AdminAlertMailConfig{
+	config := service.AdminAlertMailConfig{
 		Admins: service.PlatformAdminEmails{Users: users}, Sender: mail,
-		From: cfg.EmailFromAddress, FromName: cfg.EmailFromName, DashboardURL: cfg.StudioURL, Batch: alertMailBatch})
+		From: cfg.EmailFromAddress, FromName: cfg.EmailFromName, DashboardURL: cfg.StudioURL, Batch: alertMailBatch}
+	if alerts != nil {
+		config.StillOpen = alerts.IsOpen
+	}
+	return service.NewAdminAlertMail(config)
 }
 
 // hostWALAlertsOf is the single-host sweep's alert wiring: on while the
@@ -57,7 +61,7 @@ func hostWALAlertsOf(cfg config.AppConfig, sqlStore storage.PlatformStore, alert
 	return hostWALAlerts{
 		on:       alerts != nil && features.Enabled(context.Background(), cfg.Features(), features.WALArchiveAlert),
 		alerts:   alerts,
-		notifier: adminAlertNotifier(cfg, sqlStore, mail),
+		notifier: adminAlertNotifier(cfg, sqlStore, mail, alerts),
 		after:    cfg.WALArchiveAlertAfter,
 	}
 }

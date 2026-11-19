@@ -491,7 +491,7 @@ func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.Platfor
 	renewer := service.NewBackupCredentialRenewer(service.BackupCredentialRenewerConfig{
 		Instances: store, Kube: k8sClient, Storage: provSvc, Issuer: issuer,
 	})
-	wireRenewalAlerts(cfg, renewer, alerts, adminAlertNotifier(cfg, sqlStore, mail))
+	wireRenewalAlerts(cfg, renewer, alerts, adminAlertNotifier(cfg, sqlStore, mail, alerts))
 	log.Printf("Backup credential renewal started (every %s; credentials live %s, renewed at half-life)",
 		cfg.BackupCredentialsRenewInterval, cfg.BackupCredentialsTTL)
 	return renewer.Start(context.Background(), service.NewLeadership(lock), cfg.BackupCredentialsRenewInterval)
@@ -640,7 +640,7 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 		return
 	}
 	metrics.SetHistory(table, alerts)
-	notifier := adminAlertNotifier(cfg, sqlStore, mail)
+	notifier := adminAlertNotifier(cfg, sqlStore, mail, alerts)
 	var checks service.SamplerGroup
 	if source, ok := k8sClient.(service.PodPressureSource); ok {
 		monitor := service.NewPodPressureMonitor(source, alerts, time.Now)

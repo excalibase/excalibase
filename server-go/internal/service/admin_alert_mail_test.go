@@ -176,3 +176,93 @@ func TestAdminAlertMail_ALaterProjectIsInTheNextMailOfItsKind(t *testing.T) {
 		t.Fatalf("next mail = %q, want p2 and p3 only", next)
 	}
 }
+
+type digestHarness struct {
+	sender *captureSender
+	now    *time.Time
+	flush  *[]func()
+	mailer *AdminAlertMail
+}
+
+// digestMailer is a mailer whose first mail has gone out, so what follows waits for the digest.
+func digestMailer(t *testing.T, open func(metric string) bool) digestHarness {
+	t.Helper()
+	sender := &captureSender{}
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	var flush []func()
+	mailer := NewAdminAlertMail(AdminAlertMailConfig{Admins: fakeAdmins{emails: []string{"a@x.io"}}, Sender: sender,
+		Now: func() time.Time { return now }, StillOpen: open,
+		Schedule: func(_ time.Duration, f func()) { flush = append(flush, f) }})
+	mailer.Notify(context.Background(), raisedMetric("backup.renewal:p1", "credential of p1 could not be renewed"))
+	if len(sender.sent) != 1 {
+		t.Fatalf("setup: first mail not sent (%d)", len(sender.sent))
+	}
+	return digestHarness{sender, &now, &flush, mailer}
+}
+
+// Mutant: the replace of an earlier raise of the same metric. The same project raised twice in the
+// cooldown is one line in the digest, with its latest message.
+func TestAdminAlertMail_TheSameMetricRaisedTwiceIsListedOnce(t *testing.T) {
+	h := digestMailer(t, nil)
+	ctx := context.Background()
+	*h.now = h.now.Add(10 * time.Minute)
+	h.mailer.Notify(ctx, raisedMetric("backup.renewal:p2", "p2 failed at first"))
+	h.mailer.Notify(ctx, raisedMetric("backup.renewal:p2", "p2 failed again"))
+	h.mailer.Notify(ctx, raisedMetric("backup.renewal:p3", "p3 failed"))
+	*h.now = h.now.Add(50 * time.Minute)
+	(*h.flush)[0]()
+
+	if len(h.sender.sent) != 2 {
+		t.Fatalf("sent %d mails, want 2", len(h.sender.sent))
+	}
+	body := h.sender.sent[1].TextBody
+	if strings.Count(body, "p2 failed") != 1 || !strings.Contains(body, "p2 failed again") || !strings.Contains(body, "p3 failed") {
+		t.Fatalf("digest = %q, want p2 once with its latest message, and p3", body)
+	}
+	if !strings.Contains(h.sender.sent[1].Subject, "2 backup.renewal alerts") {
+		t.Fatalf("subject = %q, want a count of 2", h.sender.sent[1].Subject)
+	}
+}
+
+// A digest held for up to an hour must not report a problem that has gone.
+func TestAdminAlertMail_ADelayedDigestDropsWhatHasResolved(t *testing.T) {
+	open := map[string]bool{"backup.renewal:p1": true, "backup.renewal:p2": true, "backup.renewal:p3": true}
+	h := digestMailer(t, func(metric string) bool { return open[metric] })
+	ctx := context.Background()
+	*h.now = h.now.Add(10 * time.Minute)
+	h.mailer.Notify(ctx, raisedMetric("backup.renewal:p2", "p2 failed"))
+	h.mailer.Notify(ctx, raisedMetric("backup.renewal:p3", "p3 failed"))
+	open["backup.renewal:p2"] = false
+	*h.now = h.now.Add(50 * time.Minute)
+	(*h.flush)[0]()
+
+	if len(h.sender.sent) != 2 {
+		t.Fatalf("sent %d mails, want 2", len(h.sender.sent))
+	}
+	body := h.sender.sent[1].TextBody
+	if strings.Contains(body, "p2") || !strings.Contains(body, "p3 failed") {
+		t.Fatalf("digest = %q, want only the alert that is still open", body)
+	}
+	if h.sender.sent[1].Subject != "[high] p3 failed" {
+		t.Fatalf("subject = %q, want the single remaining alert's own message", h.sender.sent[1].Subject)
+	}
+}
+
+// When everything queued has resolved there is nothing to say: no mail, and the hour is not spent on it.
+func TestAdminAlertMail_ADigestOfOnlyResolvedAlertsSendsNothing(t *testing.T) {
+	open := map[string]bool{"backup.renewal:p1": true, "backup.renewal:p2": true}
+	h := digestMailer(t, func(metric string) bool { return open[metric] })
+	*h.now = h.now.Add(10 * time.Minute)
+	h.mailer.Notify(context.Background(), raisedMetric("backup.renewal:p2", "p2 failed"))
+	open["backup.renewal:p2"] = false
+	*h.now = h.now.Add(50 * time.Minute)
+	(*h.flush)[0]()
+	if len(h.sender.sent) != 1 {
+		t.Fatalf("sent %d mails, want only the first", len(h.sender.sent))
+	}
+	open["backup.renewal:p4"] = true
+	h.mailer.Notify(context.Background(), raisedMetric("backup.renewal:p4", "p4 failed"))
+	if len(h.sender.sent) != 2 || !strings.Contains(h.sender.sent[1].TextBody, "p4 failed") {
+		t.Fatalf("a raise after an empty digest, with the hour up, was not mailed at once (%d mails)", len(h.sender.sent))
+	}
+}

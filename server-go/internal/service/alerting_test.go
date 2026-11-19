@@ -121,3 +121,16 @@ func TestTrackKeepsProjectsApart(t *testing.T) {
 		t.Errorf("another project's alert is its own: %+v", change)
 	}
 }
+
+func TestAlertingServiceIsOpenIsAboutPlatformAlertsOnly(t *testing.T) {
+	alerts := NewAlertingService(t.TempDir())
+	alerts.Track("", "wal.archiving:ns/p1", true, func() domain.Alert { return domain.Alert{ID: "a1", Severity: "CRITICAL"} })
+	alerts.Track("proj", "cpu", true, func() domain.Alert { return domain.Alert{ID: "a2", Severity: "WARNING"} })
+	if !alerts.IsOpen("wal.archiving:ns/p1") || alerts.IsOpen("cpu") || alerts.IsOpen("nothing") {
+		t.Fatal("IsOpen is not about the open platform alerts")
+	}
+	alerts.Track("", "wal.archiving:ns/p1", false, nil)
+	if alerts.IsOpen("wal.archiving:ns/p1") {
+		t.Fatal("a resolved alert is still open")
+	}
+}

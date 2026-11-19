@@ -52,6 +52,10 @@ type AdminAlertMailConfig struct {
 	// mails each at once. Schedule runs the flush after it; time.AfterFunc when nil.
 	Batch    time.Duration
 	Schedule func(after time.Duration, flush func())
+	// StillOpen reports whether the platform alert of metric is still raised.
+	// A queued alert that has resolved by the time its mail goes out is left
+	// out; nil keeps every queued alert.
+	StillOpen func(metric string) bool
 }
 
 // mailCooldown is how long a kind of alert is quiet after its mail: a figure
@@ -138,14 +142,17 @@ func (m *AdminAlertMail) Notify(ctx context.Context, change AlertChange) {
 
 func (m *AdminAlertMail) flush(ctx context.Context, kind string) {
 	m.mu.Lock()
-	alerts := m.pending[kind]
+	queued := m.pending[kind]
 	delete(m.pending, kind)
 	delete(m.scheduled, kind)
-	m.last[kind] = m.config.Now()
 	m.mu.Unlock()
+	alerts := m.stillOpen(queued)
 	if len(alerts) == 0 {
 		return
 	}
+	m.mu.Lock()
+	m.last[kind] = m.config.Now()
+	m.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, adminMailTimeout)
 	defer cancel()
 	recipients, err := m.config.Admins.PlatformAdminEmails(ctx)
@@ -170,6 +177,20 @@ func (m *AdminAlertMail) flush(ctx context.Context, kind string) {
 			log.Printf("admin alert mail: send: %v", err)
 		}
 	}
+}
+
+// stillOpen keeps the queued alerts that have not resolved while they waited.
+func (m *AdminAlertMail) stillOpen(queued []domain.Alert) []domain.Alert {
+	if m.config.StillOpen == nil {
+		return queued
+	}
+	var open []domain.Alert
+	for _, alert := range queued {
+		if m.config.StillOpen(alert.Metric) {
+			open = append(open, alert)
+		}
+	}
+	return open
 }
 
 // alertMailText is the one alert's own message, or a count and every message for several.
