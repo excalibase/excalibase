@@ -81,7 +81,7 @@ func TestDockerPostgresWithoutBackupsDoesNotArchive(t *testing.T) {
 func TestDockerPostgresSetsEachArchiveSettingOutsideATransaction(t *testing.T) {
 	docker := newMockDocker()
 	docker.containers["c1"] = "running"
-	if err := NewDockerPostgreSQLProvisioner(docker).ConfigureArchive(context.Background(), "c1", "cp %p /x/%f", "postgres"); err != nil {
+	if err := NewDockerPostgreSQLProvisioner(docker).ConfigureArchive(context.Background(), "c1", "cp %p /x/%f", "postgres", "5min"); err != nil {
 		t.Fatal(err)
 	}
 	for _, cmd := range docker.execLog {
@@ -107,7 +107,7 @@ func TestDockerPostgresArchiveStopsAtTheFirstFailure(t *testing.T) {
 		docker.failOn = step
 		p := NewDockerPostgreSQLProvisioner(docker)
 		p.SetStartPoller(NewPoller(time.Millisecond, time.Millisecond))
-		if err := p.EnableWALArchive(context.Background(), "c1", PostgresImageOwner); err == nil {
+		if err := p.EnableWALArchive(context.Background(), "c1", PostgresImageOwner, ""); err == nil {
 			t.Errorf("%s failure swallowed", step)
 		}
 	}

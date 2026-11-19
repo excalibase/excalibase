@@ -141,3 +141,18 @@ func TestTiersCarryTheirSiteLimits(t *testing.T) {
 		}
 	}
 }
+
+// EXC-784: an idle Free database writes a 16 MB segment every five minutes (4.6 GB a day)
+// that fills a 5Gi disk in days once uploads fail; Free ships hourly instead. Other plans
+// keep the operator's default, so they name none.
+func TestBuiltInTiers_OnlyFreeShipsWALHourly(t *testing.T) {
+	for tier, want := range map[domain.TierType]string{domain.Free: "1h", domain.Standard: "", domain.Enterprise: ""} {
+		tc, err := GetTierConfig(tier)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.ArchiveTimeout != want {
+			t.Errorf("%s archive timeout = %q, want %q", tier, tc.ArchiveTimeout, want)
+		}
+	}
+}

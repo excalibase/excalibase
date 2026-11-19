@@ -228,6 +228,10 @@ type AppConfig struct {
 	ProjectDBStatementTimeout time.Duration
 	ProjectDBLockTimeout      time.Duration
 
+	// WALArchiveAlertAfter is how long a database's WAL archiving may fail
+	// before the platform raises an alert (EXC-784).
+	WALArchiveAlertAfter time.Duration
+
 	// AutoMigrate applies a bundle's declared schema to the project database
 	// at deploy time. EXCALIBASE_AUTO_MIGRATE=false defers it to an explicit
 	// POST /api/projects/{projectId}/schema/apply.
@@ -560,6 +564,7 @@ func load() AppConfig {
 		DockerTLSVerify:                envOr("DOCKER_TLS_VERIFY", "") != "",
 		RestoreReadyTimeout:            envDuration("EXCALIBASE_RESTORE_READY_TIMEOUT", defaultRestoreReadyTimeout),
 		PauseTimeout:                   envDuration("EXCALIBASE_PAUSE_TIMEOUT", defaultPauseTimeout),
+		WALArchiveAlertAfter:           envDuration("EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER", defaultWALArchiveAlertAfter),
 		DeployWait:                     envDuration("EXCALIBASE_DEPLOY_WAIT", defaultDeployWait),
 		PlatformDBMaxConns:             envPlatformDBMaxConns(),
 		SchedulerEnabled:               envBool("EXCALIBASE_SCHEDULER_ENABLED", true),
@@ -859,6 +864,10 @@ const (
 // defaultRestoreReadyTimeout bounds the wait for a recovered database to be
 // observed ready. Restores replay WAL, so the budget is generous.
 const defaultRestoreReadyTimeout = 15 * time.Minute
+
+// defaultWALArchiveAlertAfter is long enough that a restart or a brief store
+// outage clears first, and short next to the hours a credential or a disk lasts.
+const defaultWALArchiveAlertAfter = 30 * time.Minute
 
 // defaultPauseTimeout bounds each observed wait inside a pause. Stopping a
 // busy database takes minutes: the pre-pause backup has to finish and

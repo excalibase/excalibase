@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/features"
 )
@@ -203,5 +204,35 @@ func TestLoad_SignupsPerHour(t *testing.T) {
 	t.Setenv("SIGNUPS_PER_NETWORK_PER_HOUR", "3")
 	if got := Load().SignupsPerHour; got != 3 {
 		t.Errorf("SIGNUPS_PER_NETWORK_PER_HOUR=3: %d", got)
+	}
+}
+
+// EXC-784: the archive alert and Free's hourly upload are safety fixes, so they are on unless switched off.
+func TestLoad_WALGuardsAreOnUnlessSwitchedOff(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	for feature, env := range map[features.Feature]string{
+		features.WALArchiveAlert: "FEATURE_WALARCHIVEALERT",
+		features.FreeWALUpload:   "FEATURE_FREEWALUPLOAD",
+	} {
+		t.Setenv(env, "")
+		if !Load().Features().Enabled(context.Background(), feature) {
+			t.Errorf("%s is off with nothing set", feature)
+		}
+		t.Setenv(env, "false")
+		if Load().Features().Enabled(context.Background(), feature) {
+			t.Errorf("%s=false did not switch it off", env)
+		}
+	}
+}
+
+func TestLoad_WALArchiveAlertThreshold(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	t.Setenv("EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER", "")
+	if got := Load().WALArchiveAlertAfter; got != 30*time.Minute {
+		t.Errorf("default = %v, want 30m", got)
+	}
+	t.Setenv("EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER", "45m")
+	if got := Load().WALArchiveAlertAfter; got != 45*time.Minute {
+		t.Errorf("configured = %v, want 45m", got)
 	}
 }

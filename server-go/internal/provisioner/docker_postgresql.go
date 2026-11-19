@@ -197,7 +197,7 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 
 	// Stage: Credential generation
 	cb(domain.StageCredentialGeneration)
-	if err := p.enableArchive(ctx, req, containerID, dbName, PostgresImageOwner, postgresReadyTimeout); err != nil {
+	if err := p.enableArchive(ctx, req, containerID, dbName, PostgresImageOwner, postgresReadyTimeout, tier); err != nil {
 		return nil, err
 	}
 

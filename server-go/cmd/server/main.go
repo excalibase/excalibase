@@ -259,11 +259,7 @@ func runServer(cfg config.AppConfig) {
 
 	scheduler, schedulerStop := startBackupScheduler(cfg, sqlStore, deps.backupHandler)
 	defer schedulerStop()
-	if scheduler != nil {
-		deps.backupHandler.SetScheduler(scheduler)
-		// A single host's Postgres projects run their plan's schedule from create (EXC-593).
-		provSvc.SetBackupSchedules(scheduler)
-	}
+	wireBackupScheduler(deps.backupHandler, provSvc, scheduler)
 
 	fnSchedHandles := startFunctionScheduler(cfg, sqlStore, fnHandler, projectDB)
 	defer fnSchedHandles.Stop()
@@ -334,7 +330,7 @@ func runServer(cfg config.AppConfig) {
 	defer stopImageWatcher()
 	stopRegistrySweep := startRegistrySweeper(cfg, sqlStore, deps.appRegistry)
 	defer stopRegistrySweep()
-	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
+	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc, deps.alerts, deps.emailSender)
 	defer stopCredentialRenewal()
 	stopRoleReconcile := startPlatformRoleReconcile(cfg, sqlStore, provSvc)
 	defer stopRoleReconcile()
@@ -481,7 +477,7 @@ func buildBackupCredentialIssuer(cfg config.AppConfig) *service.BackupCredential
 
 // startBackupCredentialRenewer keeps every archiving project's temporary
 // credential ahead of its expiry; one replica renews at a time.
-func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, k8sClient k8s.KubeClient, provSvc *service.ProvisioningService) func() {
+func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, k8sClient k8s.KubeClient, provSvc *service.ProvisioningService, alerts *service.AlertingService, mail email.Sender) func() {
 	issuer := provSvc.BackupCredentials()
 	if issuer == nil || k8sClient == nil || cfg.ProvisionerMode == "docker" {
 		return func() {
@@ -495,6 +491,7 @@ func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.Platfor
 	renewer := service.NewBackupCredentialRenewer(service.BackupCredentialRenewerConfig{
 		Instances: store, Kube: k8sClient, Storage: provSvc, Issuer: issuer,
 	})
+	wireRenewalAlerts(cfg, renewer, alerts, adminAlertNotifier(cfg, sqlStore, mail))
 	log.Printf("Backup credential renewal started (every %s; credentials live %s, renewed at half-life)",
 		cfg.BackupCredentialsRenewInterval, cfg.BackupCredentialsTTL)
 	return renewer.Start(context.Background(), service.NewLeadership(lock), cfg.BackupCredentialsRenewInterval)
@@ -643,14 +640,20 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 		return
 	}
 	metrics.SetHistory(table, alerts)
+	notifier := adminAlertNotifier(cfg, sqlStore, mail)
+	var checks service.SamplerGroup
 	if source, ok := k8sClient.(service.PodPressureSource); ok {
 		monitor := service.NewPodPressureMonitor(source, alerts, time.Now)
-		if users, ok := sqlStore.(storage.UserStore); ok && email.Configured(mail) {
-			monitor.SetNotifier(service.NewAdminAlertMail(service.AdminAlertMailConfig{
-				Admins: service.PlatformAdminEmails{Users: users}, Sender: mail,
-				From: cfg.EmailFromAddress, FromName: cfg.EmailFromName, DashboardURL: cfg.StudioURL}))
+		if notifier != nil {
+			monitor.SetNotifier(notifier)
 		}
-		metrics.SetClusterSampler(monitor)
+		checks = append(checks, monitor)
+	}
+	if archive := walArchiveSampler(cfg, k8sClient, sqlStore, alerts, notifier); archive != nil {
+		checks = append(checks, archive)
+	}
+	if len(checks) > 0 {
+		metrics.SetClusterSampler(checks)
 	}
 	if sampler != nil {
 		metrics.SetRequestSampler(sampler)
@@ -847,6 +850,17 @@ const (
 	idlePauseLockID       int64 = 0x6168_0acb_1d1e_9a05
 	storageReapLockID     int64 = 0x6168_0acb_7c41_35d3
 )
+
+// wireBackupScheduler hands the scheduler, when there is one, to the backup
+// handler and to the projects that run a schedule from create.
+func wireBackupScheduler(backupHandler *handler.BackupHandler, provSvc *service.ProvisioningService, scheduler *service.BackupScheduler) {
+	if scheduler == nil {
+		return
+	}
+	backupHandler.SetScheduler(scheduler)
+	// A single host's Postgres projects run their plan's schedule from create (EXC-593).
+	provSvc.SetBackupSchedules(scheduler)
+}
 
 // startBackupScheduler launches the cron runtime and replays the
 // persistent schedule. Returns the scheduler (so the handler can be
@@ -1188,6 +1202,8 @@ type handlerDeps struct {
 	activity func(http.Handler) http.Handler
 	// emailSender is shared with post-construction wiring (idle-pause warnings).
 	emailSender email.Sender
+	// alerts is the platform alert table the renewal and archive checks raise into.
+	alerts *service.AlertingService
 	// storageSvc is nil when R2 is not configured; the reaper is started
 	// from it after the handlers are built.
 	storageSvc *storagesvc.Service
@@ -1782,7 +1798,6 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		log.Fatalf("restore verification: %v", err)
 	}
 	startHostMySQLBackups(hostMySQLBackups, store)
-	startHostPostgresWAL(backupSvc.DockerPostgres(), store)
 	startMySQLBinlogShipping(cfg.Features(), mysqlBinlogShipLock(cfg, sqlStore), mysqlBackups, hostMySQLBackups, store)
 	startMySQLBackupWaitSweep(mysqlBackupWaitLock(cfg, sqlStore), provSvc.MySQLProvisioner(), store)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
@@ -1804,6 +1819,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		go shipper.Run(context.Background())
 	}
 	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc, emailSender)
+	startHostPostgresWAL(backupSvc.DockerPostgres(), store, hostWALAlertsOf(cfg, sqlStore, alertSvc, emailSender))
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 	logDrainSvc := newLogDrainService(cfg, sqlStore, vc, provSvc)
 
@@ -2029,6 +2045,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		features:               cfg.Features(),
 		activity:               custommw.ProjectActivity(activityRecorder),
 		emailSender:            emailSender,
+		alerts:                 alertSvc,
 		storageSvc:             storageSvc,
 		// EXC-11: server-to-server mail relay for excalibase-auth. Its
 		// authorization is the capability gate, wired at the mount below.
