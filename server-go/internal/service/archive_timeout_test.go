@@ -110,29 +110,78 @@ func TestReconcileArchiveTimeouts_LeavesACorrectClusterAlone(t *testing.T) {
 	}
 }
 
-func TestReconcileArchiveTimeouts_GuardOffChangesNothing(t *testing.T) {
+// EXC-784 review: the off switch switches off. With the guard off the setting is removed from existing
+// clusters, so the operator's own interval returns without anyone running a step.
+func TestReconcileArchiveTimeouts_GuardOffRemovesTheSetting(t *testing.T) {
 	h := archiveReconciler(t, features.NewStatic())
-	h.seedClusterWithArchiveTimeout("")
-	if report := h.svc.ReconcileArchiveTimeouts(context.Background()); report.Updated != 0 {
+	h.seedClusterWithArchiveTimeout("1h")
+	report := h.svc.ReconcileArchiveTimeouts(context.Background())
+	if report.Updated != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if _, found := h.clusterArchiveTimeout(); found {
-		t.Fatal("archive_timeout was set with the guard off")
+	if got, found := h.clusterArchiveTimeout(); found {
+		t.Fatalf("archive_timeout = %q with the guard off, want it removed", got)
 	}
 }
 
-func TestReconcileArchiveTimeouts_NonFreeProjectKeepsItsInterval(t *testing.T) {
+// Mutant: the early return for a plan with no interval. A project that moved to another plan with
+// Free's setting still on its cluster is brought back to the operator's interval.
+func TestReconcileArchiveTimeouts_NonFreeClusterLosesALeftoverSetting(t *testing.T) {
 	h := archiveReconciler(t, features.NewStatic(features.FreeWALUpload))
 	inst, _ := h.store.FindByProjectID(rotProject)
 	inst.Tier = domain.Standard
 	if err := h.store.Update(inst); err != nil {
 		t.Fatal(err)
 	}
+	h.seedClusterWithArchiveTimeout("1h")
+	if report := h.svc.ReconcileArchiveTimeouts(context.Background()); report.Updated != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	if got, found := h.clusterArchiveTimeout(); found {
+		t.Fatalf("archive_timeout = %q on a Standard cluster, want it removed", got)
+	}
+}
+
+// A project still being built, or one that failed, has no cluster to read: no ERROR every pass.
+func TestReconcileArchiveTimeouts_SkipsProjectsWithNoClusterYet(t *testing.T) {
+	for _, status := range []string{"PROVISIONING", string(domain.StageFailed)} {
+		h := archiveReconciler(t, features.NewStatic(features.FreeWALUpload))
+		inst, _ := h.store.FindByProjectID(rotProject)
+		inst.Status = status
+		_ = h.store.Update(inst)
+		delete(h.kube.CRDs, rotNamespace+"/"+rotProject+"-postgres")
+		if report := h.svc.ReconcileArchiveTimeouts(context.Background()); len(report.Failed) != 0 || report.Updated != 0 {
+			t.Errorf("%s: report = %+v", status, report)
+		}
+	}
+}
+
+func TestReconcileArchiveTimeouts_ReachesADocumentDBProject(t *testing.T) {
+	h := archiveReconciler(t, features.NewStatic(features.FreeWALUpload))
+	inst, _ := h.store.FindByProjectID(rotProject)
+	inst.DocumentDB = true
+	_ = h.store.Update(inst)
 	h.seedClusterWithArchiveTimeout("")
-	if report := h.svc.ReconcileArchiveTimeouts(context.Background()); report.Updated != 0 {
+	if report := h.svc.ReconcileArchiveTimeouts(context.Background()); report.Updated != 1 {
 		t.Fatalf("report = %+v", report)
 	}
 }
+
+func TestSamplerGroup_RunsEverySamplerInOrder(t *testing.T) {
+	var order []string
+	group := SamplerGroup{orderedSampler{"a", &order}, orderedSampler{"b", &order}}
+	group.Sample(context.Background())
+	if strings.Join(order, "") != "ab" {
+		t.Fatalf("ran %v", order)
+	}
+}
+
+type orderedSampler struct {
+	name string
+	log  *[]string
+}
+
+func (o orderedSampler) Sample(context.Context) { *o.log = append(*o.log, o.name) }
 
 // A paused project's cluster is hibernated; the setting still lands so the resume ships hourly.
 func TestReconcileArchiveTimeouts_ReachesAPausedProject(t *testing.T) {

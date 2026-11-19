@@ -36,7 +36,11 @@ func (f *failureAlerts) track(ctx context.Context, now time.Time, failures map[s
 			since = now
 			f.failingSince[project] = now
 		}
-		change := f.alerts.Track("", f.prefix+project, now.Sub(since) >= f.after, func() domain.Alert {
+		// An alert that is already open stays open on any failure: after a restart
+		// or a leader change the clock above starts again, and that must not
+		// close it. Only a success or a project that is gone does.
+		breached := f.isOpen(f.prefix+project) || now.Sub(since) >= f.after
+		change := f.alerts.Track("", f.prefix+project, breached, func() domain.Alert {
 			return domain.Alert{
 				ID: fmt.Sprintf("%s%s-%d", f.prefix, project, now.UnixNano()), Severity: "CRITICAL",
 				Message: f.describe(project, now.Sub(since).Round(time.Minute), cause), Timestamp: &domain.FlexTime{Time: now},
@@ -49,6 +53,15 @@ func (f *failureAlerts) track(ctx context.Context, now time.Time, failures map[s
 		f.notify(ctx, f.alerts.Track("", f.prefix+project, false, nil))
 	}
 	f.resolveGone(ctx, failures, healthy)
+}
+
+func (f *failureAlerts) isOpen(metric string) bool {
+	for _, open := range f.alerts.GetActiveAlerts() {
+		if open.ProjectID == "" && open.Metric == metric {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveGone closes the alert of a project the pass no longer visits (deleted,

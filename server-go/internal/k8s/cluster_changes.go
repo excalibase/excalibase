@@ -41,7 +41,8 @@ func tierPlatformParameters(tier config.TierConfig) map[string]interface{} {
 const archiveTimeoutParameter = "archive_timeout"
 
 // WithArchiveTimeout is a copy of the cluster with archive_timeout set to
-// want, and whether that differs from what the cluster has.
+// want, or removed when want is empty so the operator's own interval applies,
+// and whether that differs from what the cluster has.
 func WithArchiveTimeout(cluster *unstructured.Unstructured, want string) (*unstructured.Unstructured, bool) {
 	changed := cluster.DeepCopy()
 	spec, _, _ := unstructured.NestedMap(changed.Object, "spec")
@@ -49,10 +50,15 @@ func WithArchiveTimeout(cluster *unstructured.Unstructured, want string) (*unstr
 		spec = map[string]interface{}{}
 	}
 	params := postgresParameters(spec)
-	if current, _ := params[archiveTimeoutParameter].(string); current == want {
+	current, present := params[archiveTimeoutParameter].(string)
+	if current == want && (present || want == "") {
 		return cluster, false
 	}
-	params[archiveTimeoutParameter] = want
+	if want == "" {
+		delete(params, archiveTimeoutParameter)
+	} else {
+		params[archiveTimeoutParameter] = want
+	}
 	setPostgresParameters(spec, params)
 	_ = unstructured.SetNestedMap(changed.Object, spec, "spec")
 	return changed, true

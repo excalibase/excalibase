@@ -65,3 +65,33 @@ func TestWithArchiveTimeout_ChangesOnlyWhatDiffers(t *testing.T) {
 		t.Fatal("a cluster already at 1h was reported as different")
 	}
 }
+
+// EXC-784 review: switching the guard off removes the setting, so the operator's interval returns.
+func TestWithArchiveTimeout_EmptyRemovesTheSetting(t *testing.T) {
+	opts := clusterOpts("p", "ns")
+	opts.Tier.ArchiveTimeout = "1h"
+	cluster := BuildPostgreSQLCluster(opts)
+	changed, differs := WithArchiveTimeout(cluster, "")
+	if !differs {
+		t.Fatal("a cluster carrying the setting was reported as already right")
+	}
+	if got, found := archiveTimeoutOf(changed); found {
+		t.Fatalf("archive_timeout = %q, want it removed", got)
+	}
+	if _, found := archiveTimeoutOf(cluster); !found {
+		t.Fatal("the input cluster was mutated")
+	}
+	if _, differs := WithArchiveTimeout(changed, ""); differs {
+		t.Fatal("a cluster without the setting was reported as different")
+	}
+}
+
+// DocumentDB clusters archive through the same plugin and are built by the same function.
+func TestBuildPostgreSQLCluster_DocumentDBCarriesThePlansArchiveTimeout(t *testing.T) {
+	opts := clusterOpts("p", "ns")
+	opts.DocumentDB = true
+	opts.Tier.ArchiveTimeout = "1h"
+	if got, _ := archiveTimeoutOf(BuildPostgreSQLCluster(opts)); got != "1h" {
+		t.Fatalf("archive_timeout = %q, want 1h", got)
+	}
+}

@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,43 +48,83 @@ type AdminAlertMailConfig struct {
 	DashboardURL string
 	// Now is the clock; time.Now when nil.
 	Now func() time.Time
+	// Batch is how long raises of one kind are collected into one mail; zero
+	// mails each at once. Schedule runs the flush after it; time.AfterFunc when nil.
+	Batch    time.Duration
+	Schedule func(after time.Duration, flush func())
 }
 
-// mailCooldown is how long a metric is quiet after its mail: a figure that
-// flaps is one mail an hour, not one a minute.
+// mailCooldown is how long a kind of alert is quiet after its mail: a figure
+// that flaps is one mail an hour, not one a minute.
 const mailCooldown = time.Hour
 
 // AdminAlertMail emails every platform admin when a platform alert is raised,
-// through the platform's own mailer. A resolve is not mailed, and a metric is
-// mailed at most once per mailCooldown.
+// through the platform's own mailer. A resolve is not mailed. Alerts of one
+// kind (the part of the metric before ":", so one per project of a kind) raised
+// within Batch go out as one mail listing them, and a kind is mailed at most
+// once per mailCooldown: one root cause hitting every project (EXC-773) is one
+// mail, while each project keeps its own alert row.
 type AdminAlertMail struct {
-	config AdminAlertMailConfig
-	mu     sync.Mutex
-	last   map[string]time.Time
+	config  AdminAlertMailConfig
+	mu      sync.Mutex
+	last    map[string]time.Time
+	pending map[string][]domain.Alert
 }
 
 func NewAdminAlertMail(config AdminAlertMailConfig) *AdminAlertMail {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &AdminAlertMail{config: config, last: map[string]time.Time{}}
+	if config.Schedule == nil {
+		config.Schedule = func(after time.Duration, flush func()) { time.AfterFunc(after, flush) }
+	}
+	return &AdminAlertMail{config: config, last: map[string]time.Time{}, pending: map[string][]domain.Alert{}}
 }
 
-// due records the mail and reports true unless the metric was mailed within the cooldown.
-func (m *AdminAlertMail) due(metric string) bool {
+// alertKind groups the per-project metrics of one alert ("backup.renewal:p1" and "backup.renewal:p2").
+func alertKind(metric string) string {
+	kind, _, _ := strings.Cut(metric, ":")
+	return kind
+}
+
+// admit queues the alert for its kind's mail and reports whether this one opens
+// a new mail; an alert of a kind mailed within the cooldown is dropped (its row stays).
+func (m *AdminAlertMail) admit(alert domain.Alert) (opens bool) {
+	kind := alertKind(alert.Metric)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	now := m.config.Now()
-	if sent, ok := m.last[metric]; ok && now.Sub(sent) < mailCooldown {
+	if queued := m.pending[kind]; len(queued) > 0 {
+		m.pending[kind] = append(queued, alert)
 		return false
 	}
-	m.last[metric] = now
+	now := m.config.Now()
+	if sent, ok := m.last[kind]; ok && now.Sub(sent) < mailCooldown {
+		return false
+	}
+	m.last[kind] = now
+	m.pending[kind] = []domain.Alert{alert}
 	return true
 }
 
-// Notify mails a raise; failures are logged, never retried: the alert stays in the table.
+// Notify queues a raise for mail; failures are logged, never retried: the alert stays in the table.
 func (m *AdminAlertMail) Notify(ctx context.Context, change AlertChange) {
-	if change.Raised == nil || m.config.Sender == nil || m.config.Admins == nil || !m.due(change.Raised.Metric) {
+	if change.Raised == nil || m.config.Sender == nil || m.config.Admins == nil || !m.admit(*change.Raised) {
+		return
+	}
+	kind := alertKind(change.Raised.Metric)
+	if m.config.Batch <= 0 {
+		m.flush(ctx, kind)
+		return
+	}
+	m.config.Schedule(m.config.Batch, func() { m.flush(context.Background(), kind) })
+}
+
+func (m *AdminAlertMail) flush(ctx context.Context, kind string) {
+	m.mu.Lock()
+	alerts := m.pending[kind]
+	delete(m.pending, kind)
+	m.mu.Unlock()
+	if len(alerts) == 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, adminMailTimeout)
@@ -92,8 +134,9 @@ func (m *AdminAlertMail) Notify(ctx context.Context, change AlertChange) {
 		log.Printf("admin alert mail: list admins: %v", err)
 		return
 	}
+	title, body := alertMailText(kind, alerts)
 	message, err := email.BuildAlertEmail(email.AlertData{
-		Title: change.Raised.Message, Severity: "high", Body: change.Raised.Message,
+		Title: title, Severity: "high", Body: body,
 		DashboardURL: m.config.DashboardURL, ProductName: m.config.ProductName,
 	})
 	if err != nil {
@@ -108,4 +151,16 @@ func (m *AdminAlertMail) Notify(ctx context.Context, change AlertChange) {
 			log.Printf("admin alert mail: send: %v", err)
 		}
 	}
+}
+
+// alertMailText is the one alert's own message, or a count and every message for several.
+func alertMailText(kind string, alerts []domain.Alert) (title, body string) {
+	if len(alerts) == 1 {
+		return alerts[0].Message, alerts[0].Message
+	}
+	lines := make([]string, len(alerts))
+	for i, alert := range alerts {
+		lines[i] = alert.Message
+	}
+	return fmt.Sprintf("%d %s alerts", len(alerts), kind), strings.Join(lines, "\n")
 }

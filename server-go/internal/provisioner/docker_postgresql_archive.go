@@ -42,7 +42,7 @@ func (p *DockerPostgreSQLProvisioner) enableArchive(ctx context.Context, req dom
 	if req.Backup == nil || !req.Backup.Enabled {
 		return nil
 	}
-	if err := p.EnableWALArchive(ctx, containerID, owner, tier.ArchiveTimeout); err != nil {
+	if err := p.EnableWALArchive(ctx, containerID, owner, ArchiveTimeoutOf(tier)); err != nil {
 		return fmt.Errorf("enable WAL archiving: %w", err)
 	}
 	if err := p.waitForPostgresReady(ctx, containerID, dbName, timeout); err != nil {

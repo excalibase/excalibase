@@ -649,7 +649,7 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 		}
 		checks = append(checks, monitor)
 	}
-	if archive := walArchiveSampler(cfg, k8sClient, alerts, notifier); archive != nil {
+	if archive := walArchiveSampler(cfg, k8sClient, sqlStore, alerts, notifier); archive != nil {
 		checks = append(checks, archive)
 	}
 	if len(checks) > 0 {
@@ -851,12 +851,6 @@ const (
 	storageReapLockID     int64 = 0x6168_0acb_7c41_35d3
 )
 
-// startBackupScheduler launches the cron runtime and replays the
-// persistent schedule. Returns the scheduler (so the handler can be
-// wired post-construction) and a stop function for graceful shutdown.
-// In single-process self-hosted deployments the leader lock is a
-// no-op; cloud uses a Postgres advisory lock so multi-replica
-// platforms only fire once per tick.
 // wireBackupScheduler hands the scheduler, when there is one, to the backup
 // handler and to the projects that run a schedule from create.
 func wireBackupScheduler(backupHandler *handler.BackupHandler, provSvc *service.ProvisioningService, scheduler *service.BackupScheduler) {
@@ -868,6 +862,12 @@ func wireBackupScheduler(backupHandler *handler.BackupHandler, provSvc *service.
 	provSvc.SetBackupSchedules(scheduler)
 }
 
+// startBackupScheduler launches the cron runtime and replays the
+// persistent schedule. Returns the scheduler (so the handler can be
+// wired post-construction) and a stop function for graceful shutdown.
+// In single-process self-hosted deployments the leader lock is a
+// no-op; cloud uses a Postgres advisory lock so multi-replica
+// platforms only fire once per tick.
 func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, backupHandler *handler.BackupHandler) (*service.BackupScheduler, func()) {
 	if backupHandler == nil || sqlStore == nil {
 		return nil, func() {

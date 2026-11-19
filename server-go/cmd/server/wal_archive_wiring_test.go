@@ -8,10 +8,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/email"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 )
 
 func failingArchiveCluster(since time.Time) *unstructured.Unstructured {
@@ -28,8 +30,10 @@ func archiveWiringRun(t *testing.T, cfg config.AppConfig) []string {
 	t.Helper()
 	kube := k8s.NewMockClient()
 	kube.CRDs["ns-p1/p1-postgres"] = failingArchiveCluster(time.Now().Add(-2 * time.Hour))
+	instances := fakestore.NewInstances()
+	_ = instances.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "org", Namespace: "ns-p1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeK8s, Status: "ACTIVE"})
 	alerts := service.NewAlertingService(t.TempDir())
-	if sampler := walArchiveSampler(cfg, kube, alerts, nil); sampler != nil {
+	if sampler := walArchiveSampler(cfg, kube, instances, alerts, nil); sampler != nil {
 		sampler.Sample(context.Background())
 	}
 	var metrics []string

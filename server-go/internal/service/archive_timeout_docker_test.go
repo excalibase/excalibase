@@ -28,8 +28,10 @@ func (d *archiveDocker) ExecInContainerStdin(_ context.Context, id string, _ []s
 	if strings.HasPrefix(stdin, "SHOW") {
 		return d.current[id] + "\n", nil
 	}
-	if strings.Contains(stdin, "SET archive_timeout = '1h'") {
-		d.current[id] = "1h"
+	for _, value := range []string{"1h", "5min"} {
+		if strings.Contains(stdin, "SET archive_timeout = '"+value+"'") {
+			d.current[id] = value
+		}
 	}
 	return "", nil
 }
@@ -80,26 +82,38 @@ func TestReconcileArchiveTimeouts_SingleHostFreeMovesToHourlyWithoutARestart(t *
 	}
 }
 
-func TestReconcileArchiveTimeouts_SingleHostLeavesOtherPlansPausedProjectsAndTheGuardOffAlone(t *testing.T) {
+func TestReconcileArchiveTimeouts_SingleHostLeavesPausedNoBackupAndCorrectProjectsAlone(t *testing.T) {
+	noBackups := hostArchivedProject("p", domain.Free, "ACTIVE")
+	noBackups.BackupEnabled = nil
 	cases := map[string]struct {
 		flags   features.Flags
 		project *domain.DatabaseInstance
 	}{
-		"standard plan": {features.NewStatic(features.FreeWALUpload), hostArchivedProject("p", domain.Standard, "ACTIVE")},
-		"paused":        {features.NewStatic(features.FreeWALUpload), hostArchivedProject("p", domain.Free, string(domain.StatusPaused))},
-		"guard off":     {features.NewStatic(), hostArchivedProject("p", domain.Free, "ACTIVE")},
-		"no backups": {features.NewStatic(features.FreeWALUpload), func() *domain.DatabaseInstance {
-			p := hostArchivedProject("p", domain.Free, "ACTIVE")
-			p.BackupEnabled = nil
-			return p
-		}()},
+		"standard plan already on the default": {features.NewStatic(features.FreeWALUpload), hostArchivedProject("p", domain.Standard, "ACTIVE")},
+		"paused":                               {features.NewStatic(features.FreeWALUpload), hostArchivedProject("p", domain.Free, string(domain.StatusPaused))},
+		"guard off, already on the default":    {features.NewStatic(), hostArchivedProject("p", domain.Free, "ACTIVE")},
+		"no backups":                           {features.NewStatic(features.FreeWALUpload), noBackups},
 	}
 	for name, tc := range cases {
 		docker := &archiveDocker{current: map[string]string{"ctr-p": "5min"}}
 		svc := hostArchiveSvc(t, tc.flags, docker, tc.project)
-		if report := svc.ReconcileArchiveTimeouts(context.Background()); report.Updated != 0 || len(docker.sent) != 0 {
-			t.Errorf("%s: report %+v, sent %v", name, report, docker.sent)
+		if report := svc.ReconcileArchiveTimeouts(context.Background()); report.Updated != 0 || docker.alters() != 0 {
+			t.Errorf("%s: report %+v, alters %d", name, report, docker.alters())
 		}
+	}
+}
+
+// EXC-784 review: with the guard off a Free container goes back to five minutes. RESET would leave
+// archive_timeout at Postgres' own 0, which never closes a quiet segment, so the default is set explicitly.
+func TestReconcileArchiveTimeouts_SingleHostGuardOffBringsBackTheFiveMinuteDefault(t *testing.T) {
+	docker := &archiveDocker{current: map[string]string{"ctr-free": "1h"}}
+	svc := hostArchiveSvc(t, features.NewStatic(), docker, hostArchivedProject("free", domain.Free, "ACTIVE"))
+	report := svc.ReconcileArchiveTimeouts(context.Background())
+	if report.Updated != 1 || docker.alters() != 1 {
+		t.Fatalf("report = %+v, alters %d", report, docker.alters())
+	}
+	if !strings.Contains(strings.Join(docker.sent, "\n"), "SET archive_timeout = '5min'") {
+		t.Fatalf("sent %v", docker.sent)
 	}
 }
 

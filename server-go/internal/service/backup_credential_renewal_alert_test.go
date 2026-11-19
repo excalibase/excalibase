@@ -125,3 +125,24 @@ type failingListStore struct{ storage.InstanceStore }
 func (failingListStore) FindAll() ([]*domain.DatabaseInstance, error) {
 	return nil, errors.New("db down")
 }
+
+// EXC-784 review: a restart or leader change forgets when a failure began. The alert that is open must
+// not be resolved by a failure below the threshold on the new tracker.
+func TestRenewalAlert_ARestartDoesNotCloseAnOpenAlert(t *testing.T) {
+	lab, alerts, _ := renewalAlertLab(t)
+	lab.project(t, "broken", "ACTIVE", time.Time{})
+	ctx := context.Background()
+	lab.renewer.RenewDue(ctx)
+	lab.now = lab.now.Add(31 * time.Minute)
+	lab.renewer.RenewDue(ctx)
+	if len(alerts.GetActiveAlerts()) != 1 {
+		t.Fatal("setup: no alert raised")
+	}
+
+	restarted := NewBackupCredentialRenewer(lab.renewer.cfg)
+	restarted.SetAlerts(alerts, nil, 30*time.Minute)
+	restarted.RenewDue(ctx)
+	if len(alerts.GetActiveAlerts()) != 1 {
+		t.Fatal("a failing project's open alert was resolved after a restart")
+	}
+}
