@@ -9,6 +9,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
 // blockedImage is a made-up reference; nothing ever pulls it.
@@ -158,7 +159,7 @@ func TestResumeApp_RefusesWhenThePausedImageCannotBeRead(t *testing.T) {
 
 			_, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev")
 
-			if err == nil || slices.Contains(f.kube.Calls, "ResumeAppWorkload:"+f.key()) || f.status() != apphost.StatusStopped {
+			if (err == nil || label != "read fails" && !errors.Is(err, k8s.ErrAppImageUnreadable)) || slices.Contains(f.kube.Calls, "ResumeAppWorkload:"+f.key()) || f.status() != apphost.StatusStopped {
 				t.Fatalf("err = %v, status = %q; want a refusal and the app left stopped", err, f.status())
 			}
 		})
@@ -173,4 +174,28 @@ func TestResumeApp_AllowsAnOrdinaryPausedImage(t *testing.T) {
 	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev"); err != nil {
 		t.Fatalf("ordinary images refused: %v", err)
 	}
+}
+
+func TestDeploy_RefusesASubdomainOfABlockedRegistry(t *testing.T) {
+	app := sampleDeployApp()
+	app.Image = "eu.ttl.sh/test:1h"
+	svc, _, kube := newDeployTestService(t, app)
+	svc.SetProxyGuard(registryGuard(&proxyAudit{}))
+
+	_, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+
+	var refusal *abuse.RegistryRefusal
+	if !errors.As(err, &refusal) || refusal.Host != "eu.ttl.sh" || countCalls(kube, "ApplyAppWorkload") != 0 {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestResumeApp_RefusesASubdomainOfABlockedRegistryInThePausedWorkload(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusStopped)
+	f.svc.SetProxyGuard(registryGuard(&proxyAudit{}))
+	f.kube.PausedImages = []string{"eu.ttl.sh/test:1h"}
+
+	_, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev")
+
+	resumeMustStayStopped(t, f, err, abuse.ErrBlockedRegistry)
 }

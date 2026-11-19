@@ -80,7 +80,7 @@ func TestPausedAppImages_ADeploymentNamingNoImageFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if images, err := c.PausedAppImages(context.Background(), testNamespace, app.ID, app.Name); err == nil {
+	if images, err := c.PausedAppImages(context.Background(), testNamespace, app.ID, app.Name); !errors.Is(err, ErrAppImageUnreadable) {
 		t.Fatalf("images = %v, want an error: an unreadable image cannot be cleared", images)
 	}
 }
@@ -96,5 +96,27 @@ func TestPausedAppImages_AnUnreadableDeploymentFails(t *testing.T) {
 	_, err := c.PausedAppImages(context.Background(), testNamespace, app.ID, app.Name)
 	if err == nil || errors.Is(err, ErrAppNotDeployed) {
 		t.Fatalf("err = %v, want the read failure", err)
+	}
+}
+
+func TestPausedAppImages_ABlankImageIsUnreadable(t *testing.T) {
+	for _, blank := range []string{"", "  "} {
+		c, _ := newLifecycleFakeClient()
+		app := fullApp()
+		deployedApp(t, c, app)
+		if err := c.PauseAppWorkload(context.Background(), testNamespace, app.ID); err != nil {
+			t.Fatal(err)
+		}
+		dep := readDeployment(t, c, app)
+		dep.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "init", Image: blank}}
+		if _, err := c.clientset.AppsV1().Deployments(testNamespace).Update(context.Background(), dep, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+
+		images, err := c.PausedAppImages(context.Background(), testNamespace, app.ID, app.Name)
+
+		if !errors.Is(err, ErrAppImageUnreadable) || len(images) != 0 {
+			t.Errorf("blank %q: images = %v, err = %v; want ErrAppImageUnreadable", blank, images, err)
+		}
 	}
 }

@@ -14,6 +14,7 @@ func TestBlockedRegistry_MatchesTheRegistryHostOnly(t *testing.T) {
 		"ttl.sh/foo:1h", "ttl.sh/foo", "TTL.SH/Foo:1h", "ttl.sh:443/foo:1h", "ttl.sh./foo",
 		"ttl.sh/a/b/c:2h", "ttl.sh/foo@sha256:" + strings.Repeat("a", 64), "ttl.sh/foo:1h@sha256:" + strings.Repeat("b", 64),
 		"  ttl.sh/foo:1h ",
+		"eu.ttl.sh/x:1h", "x.ttl.sh/foo", "a.b.TTL.SH:443/foo:1h", "eu.ttl.sh./foo",
 	}
 	for _, image := range blocked {
 		if !BlockedRegistry(image) {
@@ -23,7 +24,7 @@ func TestBlockedRegistry_MatchesTheRegistryHostOnly(t *testing.T) {
 	allowed := []string{
 		"nginx", "nginx:1.27", "library/nginx", "ghcr.io/acme/app:1", "docker.io/library/nginx", "docker.io/acme/app@sha256:" + strings.Repeat("c", 64),
 		"registry.example.com:5000/x", "localhost:5000/x", "docker.io/ttl.sh-fan/foo", "ghcr.io/x/ttl.sh", "ghcr.io/x/ttl.sh:1h",
-		"ttl.sh-fan/foo", "notttl.sh/foo", "ttl.sh.example.com/foo", "x.ttl.sh/foo", "ttl/sh", "",
+		"ttl.sh-fan/foo", "notttl.sh/foo", "ttl.sh.example.com/foo", "ttl.shop.example/foo:1", "ttl/sh", "",
 	}
 	for _, image := range allowed {
 		if BlockedRegistry(image) {

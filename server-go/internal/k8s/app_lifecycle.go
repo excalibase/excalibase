@@ -26,6 +26,8 @@ var (
 	ErrAppNotDeployed = errors.New("the app has no workload in the cluster")
 	ErrAppNotPaused   = errors.New("the app is not paused")
 	ErrAppPodsRemain  = errors.New("the app's workload is still running")
+	// ErrAppImageUnreadable is a paused workload whose image cannot be read, so it cannot be checked.
+	ErrAppImageUnreadable = errors.New("the paused workload's image cannot be read, so it was not resumed; redeploy the app to bring it back")
 )
 
 // appOwnedSelector matches everything the platform rendered for one app, whatever it was named at the time.

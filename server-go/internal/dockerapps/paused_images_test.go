@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
@@ -32,5 +33,55 @@ func TestPausedAppImagesOfAnAppNeverDeployed(t *testing.T) {
 	h := newHarness(t, nil)
 	if _, err := h.rt.PausedAppImages(context.Background(), testDB, "nope", "web"); !errors.Is(err, k8s.ErrAppNotDeployed) {
 		t.Fatalf("err = %v, want ErrAppNotDeployed", err)
+	}
+}
+
+// faultyInspect answers ContainerInspect with what the test sets, and everything else as the engine would.
+type faultyInspect struct {
+	Engine
+	err   error
+	strip bool
+}
+
+func (f *faultyInspect) ContainerInspect(ctx context.Context, id string) (container.InspectResponse, error) {
+	if f.err != nil {
+		return container.InspectResponse{}, f.err
+	}
+	response, err := f.Engine.ContainerInspect(ctx, id)
+	if f.strip {
+		response.Config = nil
+	}
+	return response, err
+}
+
+func pausedHarness(t *testing.T) *harness {
+	t.Helper()
+	h := newHarness(t, nil)
+	h.rollout(freeApp(), "dep-1")
+	if err := h.rt.PauseAppWorkload(context.Background(), testDB, "app-01"); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func TestPausedAppImagesFailsClosedWhenTheEngineCannotInspectAContainer(t *testing.T) {
+	h := pausedHarness(t)
+	h.rt.engine = &faultyInspect{Engine: h.rt.engine, err: errors.New("engine unreachable")}
+
+	images, err := h.rt.PausedAppImages(context.Background(), testDB, "app-01", "web")
+
+	if err == nil || len(images) != 0 {
+		t.Fatalf("images = %v, err = %v; want an error and no images", images, err)
+	}
+}
+
+func TestPausedAppImagesFailsClosedWhenTheEngineAnswersNoConfiguration(t *testing.T) {
+	h := pausedHarness(t)
+	h.rt.engine = &faultyInspect{Engine: h.rt.engine, strip: true}
+
+	images, err := h.rt.PausedAppImages(context.Background(), testDB, "app-01", "web")
+
+	if !errors.Is(err, k8s.ErrAppImageUnreadable) || len(images) != 0 {
+		t.Fatalf("images = %v, err = %v; want ErrAppImageUnreadable", images, err)
 	}
 }
