@@ -326,18 +326,27 @@ func TestWALArchiveMonitor_AProjectBeingDeletedClosesItsAlertAndRaisesNoMonitorA
 	}
 }
 
-// A slow API server cannot stall the metrics tick: each list is bounded.
+// A slow API server cannot stall the metrics tick: each list is bounded, and a bounded-out list counts
+// as a read failure, so it can raise the monitor's own alert.
 func TestWALArchiveMonitor_ASlowListIsCutOffAndCounted(t *testing.T) {
-	now := time.Now()
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	alerts := NewAlertingService(t.TempDir())
 	monitor := NewWALArchiveMonitor(hangingLister{}, func(context.Context) ([]string, error) { return []string{"ns-a"}, nil }, alerts, 30*time.Minute, func() time.Time { return now })
-	monitor.listTimeout = 20 * time.Millisecond
-	done := make(chan struct{})
-	go func() { monitor.Sample(context.Background()); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("a list that never answers stalled the sample")
+	monitor.listTimeout = time.Millisecond
+	sample := func() {
+		done := make(chan struct{})
+		go func() { monitor.Sample(context.Background()); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("a list that never answers stalled the sample")
+		}
+	}
+	sample()
+	now = now.Add(time.Hour)
+	sample()
+	if got := openMetrics(alerts); len(got) != 1 || got[0] != "wal.monitor:clusters" {
+		t.Fatalf("open = %v, want the monitor's own alert", got)
 	}
 }
 

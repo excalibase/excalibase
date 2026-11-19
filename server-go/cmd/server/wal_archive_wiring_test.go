@@ -95,7 +95,7 @@ func TestRenewalAlertsFollowTheGuard(t *testing.T) {
 }
 
 func TestAdminAlertNotifier_NilWithoutAMailerOrUserTable(t *testing.T) {
-	if adminAlertNotifier(config.AppConfig{}, nil, nil) != nil {
+	if adminAlertNotifier(config.AppConfig{}, nil, nil, nil) != nil {
 		t.Error("a notifier was built with nothing to mail through")
 	}
 }
@@ -120,11 +120,17 @@ type stubMailer struct{}
 
 func (stubMailer) Send(context.Context, email.Message) (string, error) { return "id", nil }
 
+func TestAdminAlertNotifier_BuiltWithoutAnAlertTableToo(t *testing.T) {
+	if adminAlertNotifier(config.AppConfig{}, &tablePlatformStore{}, stubMailer{}, nil) == nil {
+		t.Error("no notifier when only the alert table is missing")
+	}
+}
+
 func TestAdminAlertNotifier_BuiltWhenAMailerAndUserTableExist(t *testing.T) {
-	if adminAlertNotifier(config.AppConfig{}, &tablePlatformStore{}, stubMailer{}) == nil {
+	if adminAlertNotifier(config.AppConfig{}, &tablePlatformStore{}, stubMailer{}, service.NewAlertingService(t.TempDir())) == nil {
 		t.Error("no notifier with a mailer and a user table")
 	}
-	if adminAlertNotifier(config.AppConfig{}, &tablePlatformStore{}, nil) != nil {
+	if adminAlertNotifier(config.AppConfig{}, &tablePlatformStore{}, nil, nil) != nil {
 		t.Error("a notifier was built without a mailer")
 	}
 }

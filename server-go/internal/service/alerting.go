@@ -180,6 +180,34 @@ func (s *AlertingService) Track(projectID, metric string, breached bool, newAler
 	return AlertChange{}
 }
 
+// OpenPlatformMetrics is the set of metrics of the raised platform alerts (those
+// with no project), read once. A failed read of the table is an error, not an
+// empty set: GetActiveAlerts logs and answers empty, which a caller deciding
+// what to drop must not mistake for "nothing is open".
+func (s *AlertingService) OpenPlatformMetrics(ctx context.Context) (map[string]bool, error) {
+	open := map[string]bool{}
+	if s.store != nil {
+		alerts, err := s.store.GetActiveAlerts(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read active alerts: %w", err)
+		}
+		for _, alert := range alerts {
+			if alert.ProjectID == "" && !alert.Resolved {
+				open[alert.Metric] = true
+			}
+		}
+		return open, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, alert := range s.active {
+		if alert.ProjectID == "" && !alert.Resolved {
+			open[alert.Metric] = true
+		}
+	}
+	return open, nil
+}
+
 func findAlert(alerts []domain.Alert, metric string) *domain.Alert {
 	for i := range alerts {
 		if alerts[i].Metric == metric {
