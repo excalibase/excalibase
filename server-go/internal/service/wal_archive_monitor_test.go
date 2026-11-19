@@ -54,7 +54,7 @@ func archivingCluster(name, status string, since time.Time, hibernated bool) *un
 	return cluster
 }
 
-func forbidden() error {
+func clusterListForbidden() error {
 	return apierrors.NewForbidden(schema.GroupResource{Group: "postgresql.cnpg.io", Resource: "clusters"}, "", errors.New("cannot list"))
 }
 
@@ -168,7 +168,7 @@ func TestWALArchiveMonitor_ListsEachProjectNamespaceNeverAllNamespaces(t *testin
 func TestWALArchiveMonitor_ForbiddenReadRaisesItsOwnAlertAfterTheThreshold(t *testing.T) {
 	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 	l := lister()
-	l.errs["ns-a"] = forbidden()
+	l.errs["ns-a"] = clusterListForbidden()
 	monitor, alerts, notifier := newWALMonitor(t, l, []string{"ns-a"}, &now)
 	var logged bytes.Buffer
 	log.SetOutput(&logged)
@@ -209,7 +209,7 @@ func TestWALArchiveMonitor_AnUnreadableNamespaceKeepsItsAlertsAndSparesTheRest(t
 		t.Fatal("setup: two alerts expected")
 	}
 
-	l.errs["ns-a"] = forbidden()
+	l.errs["ns-a"] = clusterListForbidden()
 	l.byNamespace["ns-b"] = []*unstructured.Unstructured{archivingCluster("b", "True", now, false)}
 	monitor.Sample(context.Background())
 	got := openMetrics(alerts)
