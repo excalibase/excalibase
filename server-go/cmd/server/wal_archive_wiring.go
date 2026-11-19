@@ -47,3 +47,14 @@ func adminAlertNotifier(cfg config.AppConfig, sqlStore storage.PlatformStore, ma
 		Admins: service.PlatformAdminEmails{Users: users}, Sender: mail,
 		From: cfg.EmailFromAddress, FromName: cfg.EmailFromName, DashboardURL: cfg.StudioURL})
 }
+
+// hostWALAlertsOf is the single-host sweep's alert wiring: on while the
+// WALArchiveAlert guard is on.
+func hostWALAlertsOf(cfg config.AppConfig, sqlStore storage.PlatformStore, alerts *service.AlertingService, mail email.Sender) hostWALAlerts {
+	return hostWALAlerts{
+		on:       alerts != nil && features.Enabled(context.Background(), cfg.Features(), features.WALArchiveAlert),
+		alerts:   alerts,
+		notifier: adminAlertNotifier(cfg, sqlStore, mail),
+		after:    cfg.WALArchiveAlertAfter,
+	}
+}

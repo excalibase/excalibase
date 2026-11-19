@@ -11,63 +11,76 @@ import (
 
 const renewalMetricPrefix = "backup.renewal:"
 
-// trackAlerts raises the alert of a project whose renewal has failed since
-// alertAfter ago and resolves the one of a project that renewed, or had nothing
-// to renew, this pass. A pass that could not even list the projects changes
-// nothing.
-func (r *BackupCredentialRenewer) trackAlerts(ctx context.Context, report RenewalReport) {
-	if r.alerts == nil || !report.listed {
-		return
-	}
-	now := r.cfg.Now()
-	for project, cause := range report.failures {
-		since, failing := r.failingSince[project]
+// failureAlerts raises a platform alert per project whose work has failed on
+// every pass for after, and resolves it once a pass succeeds or the project is
+// no longer visited (EXC-784). The failure time lives in memory: a restart
+// starts the clock again.
+type failureAlerts struct {
+	alerts       *AlertingService
+	notifier     AlertNotifier
+	after        time.Duration
+	prefix       string
+	describe     func(project string, failing time.Duration, cause error) string
+	failingSince map[string]time.Time
+}
+
+func newFailureAlerts(alerts *AlertingService, notifier AlertNotifier, after time.Duration, prefix string, describe func(string, time.Duration, error) string) *failureAlerts {
+	return &failureAlerts{alerts: alerts, notifier: notifier, after: after, prefix: prefix, describe: describe, failingSince: map[string]time.Time{}}
+}
+
+// track takes one pass: the projects that failed with their cause, and those that worked.
+func (f *failureAlerts) track(ctx context.Context, now time.Time, failures map[string]error, healthy []string) {
+	for project, cause := range failures {
+		since, failing := f.failingSince[project]
 		if !failing {
 			since = now
-			r.failingSince[project] = now
+			f.failingSince[project] = now
 		}
-		change := r.alerts.Track("", renewalMetricPrefix+project, now.Sub(since) >= r.alertAfter, func() domain.Alert {
+		change := f.alerts.Track("", f.prefix+project, now.Sub(since) >= f.after, func() domain.Alert {
 			return domain.Alert{
-				ID: fmt.Sprintf("backup.renewal-%s-%d", project, now.UnixNano()), Severity: "CRITICAL",
-				Message: fmt.Sprintf("The backup credential of project %s could not be renewed for %s: %v. Its WAL archiving stops when the current credential expires",
-					project, now.Sub(since).Round(time.Minute), cause),
-				Timestamp: &domain.FlexTime{Time: now},
+				ID: fmt.Sprintf("%s%s-%d", f.prefix, project, now.UnixNano()), Severity: "CRITICAL",
+				Message: f.describe(project, now.Sub(since).Round(time.Minute), cause), Timestamp: &domain.FlexTime{Time: now},
 			}
 		})
-		r.notify(ctx, change)
+		f.notify(ctx, change)
 	}
-	for _, project := range report.healthy {
-		delete(r.failingSince, project)
-		r.notify(ctx, r.alerts.Track("", renewalMetricPrefix+project, false, nil))
+	for _, project := range healthy {
+		delete(f.failingSince, project)
+		f.notify(ctx, f.alerts.Track("", f.prefix+project, false, nil))
 	}
-	r.resolveGone(ctx, report)
+	f.resolveGone(ctx, failures, healthy)
 }
 
-// resolveGone closes the alert of a project that no longer archives (deleted,
-// backups off), which the pass no longer visits.
-func (r *BackupCredentialRenewer) resolveGone(ctx context.Context, report RenewalReport) {
+// resolveGone closes the alert of a project the pass no longer visits (deleted,
+// backups off, paused).
+func (f *failureAlerts) resolveGone(ctx context.Context, failures map[string]error, healthy []string) {
 	seen := map[string]bool{}
-	for project := range report.failures {
+	for project := range failures {
 		seen[project] = true
 	}
-	for _, project := range report.healthy {
+	for _, project := range healthy {
 		seen[project] = true
 	}
-	for project := range r.failingSince {
+	for project := range f.failingSince {
 		if !seen[project] {
-			delete(r.failingSince, project)
+			delete(f.failingSince, project)
 		}
 	}
-	for _, open := range r.alerts.GetActiveAlerts() {
-		project, ours := strings.CutPrefix(open.Metric, renewalMetricPrefix)
+	for _, open := range f.alerts.GetActiveAlerts() {
+		project, ours := strings.CutPrefix(open.Metric, f.prefix)
 		if open.ProjectID == "" && ours && !seen[project] {
-			r.notify(ctx, r.alerts.Track("", open.Metric, false, nil))
+			f.notify(ctx, f.alerts.Track("", open.Metric, false, nil))
 		}
 	}
 }
 
-func (r *BackupCredentialRenewer) notify(ctx context.Context, change AlertChange) {
-	if r.notifier != nil && (change.Raised != nil || change.Resolved != nil) {
-		r.notifier.Notify(ctx, change)
+func (f *failureAlerts) notify(ctx context.Context, change AlertChange) {
+	if f.notifier != nil && (change.Raised != nil || change.Resolved != nil) {
+		f.notifier.Notify(ctx, change)
 	}
+}
+
+func describeRenewalFailure(project string, failing time.Duration, cause error) string {
+	return fmt.Sprintf("The backup credential of project %s could not be renewed for %s: %v. Its WAL archiving stops when the current credential expires",
+		project, failing, cause)
 }

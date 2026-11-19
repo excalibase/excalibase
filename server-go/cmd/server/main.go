@@ -1791,7 +1791,6 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		log.Fatalf("restore verification: %v", err)
 	}
 	startHostMySQLBackups(hostMySQLBackups, store)
-	startHostPostgresWAL(backupSvc.DockerPostgres(), store)
 	startMySQLBinlogShipping(cfg.Features(), mysqlBinlogShipLock(cfg, sqlStore), mysqlBackups, hostMySQLBackups, store)
 	startMySQLBackupWaitSweep(mysqlBackupWaitLock(cfg, sqlStore), provSvc.MySQLProvisioner(), store)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
@@ -1813,6 +1812,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		go shipper.Run(context.Background())
 	}
 	wireMetricsHistory(cfg, sqlStore, k8sClient, metricsSvc, alertSvc, requestMetricsSvc, emailSender)
+	startHostPostgresWAL(backupSvc.DockerPostgres(), store, hostWALAlertsOf(cfg, sqlStore, alertSvc, emailSender))
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 	logDrainSvc := newLogDrainService(cfg, sqlStore, vc, provSvc)
 

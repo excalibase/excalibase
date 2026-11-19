@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 )
 
 // ArchiveTimeoutReport is what one pass over the Postgres projects did.
@@ -23,10 +24,16 @@ type ArchiveTimeoutReport struct {
 // render it; this reaches the clusters made before. The setting reloads without
 // a restart. A paused project is included: its cluster is hibernated, and the
 // resume then ships hourly. Plans that name no interval are left alone, and a
-// project that moved off Free had it removed by the plan change.
+// project that moved off Free had it removed by the plan change. On a single
+// host the same pass reads each running container's setting and reloads it;
+// a restored or upgraded project, which comes back on the default, is reached
+// the same way.
 func (s *ProvisioningService) ReconcileArchiveTimeouts(ctx context.Context) ArchiveTimeoutReport {
 	var report ArchiveTimeoutReport
-	if s.k8sClient == nil || s.dockerClient != nil {
+	if s.dockerClient != nil {
+		return s.reconcileHostArchiveTimeouts(ctx)
+	}
+	if s.k8sClient == nil {
 		return report
 	}
 	instances, err := s.store.FindAll()
@@ -85,4 +92,33 @@ func logArchiveTimeouts(report ArchiveTimeoutReport) {
 	if report.Updated > 0 {
 		log.Printf("archive timeout reconcile: %d cluster(s) moved to their plan's WAL upload interval", report.Updated)
 	}
+}
+
+// reconcileHostArchiveTimeouts is the pass on a single host: each running
+// Postgres project with backups has its container moved to its plan's
+// interval. A paused project's container is down and is reached after resume.
+func (s *ProvisioningService) reconcileHostArchiveTimeouts(ctx context.Context) ArchiveTimeoutReport {
+	var report ArchiveTimeoutReport
+	instances, err := s.store.FindAll()
+	if err != nil {
+		report.Failed = append(report.Failed, fmt.Errorf("list projects: %w", err))
+		return report
+	}
+	postgres := provisioner.NewDockerPostgreSQLProvisioner(s.dockerClient)
+	for _, inst := range instances {
+		if inst == nil || !hostPostgresArchived(inst) {
+			continue
+		}
+		plan, err := s.tierConfig(ctx, inst.Tier)
+		if err == nil && plan.ArchiveTimeout != "" {
+			var changed bool
+			if changed, err = postgres.SetArchiveTimeout(ctx, inst.Namespace, plan.ArchiveTimeout); changed {
+				report.Updated++
+			}
+		}
+		if err != nil {
+			report.Failed = append(report.Failed, fmt.Errorf("project %s: %w", inst.ProjectID, err))
+		}
+	}
+	return report
 }

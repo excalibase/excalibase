@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
@@ -22,16 +24,25 @@ const walArchiveCommand = "cp %p " + WALArchiveDir + "/%f.part && mv " + WALArch
 // quiet project's last writes still reach the store.
 const walArchiveTimeout = "5min"
 
+// ArchiveTimeoutOf is the archive_timeout a project on tier runs: the plan's,
+// or the five minutes a plan that names none keeps (EXC-784).
+func ArchiveTimeoutOf(tier config.TierConfig) string {
+	if tier.ArchiveTimeout != "" {
+		return tier.ArchiveTimeout
+	}
+	return walArchiveTimeout
+}
+
 // PostgresImageOwner is the official postgres image's postgres user.
 var PostgresImageOwner = FileOwner{UID: 999, GID: 999}
 
 // enableArchive turns WAL archiving on for a project that has backups; one
 // that must have them and cannot archive is not handed out.
-func (p *DockerPostgreSQLProvisioner) enableArchive(ctx context.Context, req domain.ProvisioningRequest, containerID, dbName string, owner FileOwner, timeout time.Duration) error {
+func (p *DockerPostgreSQLProvisioner) enableArchive(ctx context.Context, req domain.ProvisioningRequest, containerID, dbName string, owner FileOwner, timeout time.Duration, tier config.TierConfig) error {
 	if req.Backup == nil || !req.Backup.Enabled {
 		return nil
 	}
-	if err := p.EnableWALArchive(ctx, containerID, owner); err != nil {
+	if err := p.EnableWALArchive(ctx, containerID, owner, tier.ArchiveTimeout); err != nil {
 		return fmt.Errorf("enable WAL archiving: %w", err)
 	}
 	if err := p.waitForPostgresReady(ctx, containerID, dbName, timeout); err != nil {
@@ -41,9 +52,10 @@ func (p *DockerPostgreSQLProvisioner) enableArchive(ctx context.Context, req dom
 }
 
 // EnableWALArchive gives the container an archive directory its server
-// (owner) writes, and archives every closed segment into it. It restarts the
-// container; the caller waits for postgres again.
-func (p *DockerPostgreSQLProvisioner) EnableWALArchive(ctx context.Context, containerID string, owner FileOwner) error {
+// (owner) writes, and archives every closed segment into it, closing a quiet
+// one after archiveTimeout ("" keeps five minutes). It restarts the container;
+// the caller waits for postgres again.
+func (p *DockerPostgreSQLProvisioner) EnableWALArchive(ctx context.Context, containerID string, owner FileOwner, archiveTimeout string) error {
 	directory, err := archiveDirTar(owner)
 	if err != nil {
 		return err
@@ -51,7 +63,7 @@ func (p *DockerPostgreSQLProvisioner) EnableWALArchive(ctx context.Context, cont
 	if err := p.docker.CopyToContainer(ctx, containerID, "/", bytes.NewReader(directory)); err != nil {
 		return fmt.Errorf("create %s: %w", WALArchiveDir, err)
 	}
-	return p.ConfigureArchive(ctx, containerID, walArchiveCommand, defaultPostgresSuperuser)
+	return p.ConfigureArchive(ctx, containerID, walArchiveCommand, defaultPostgresSuperuser, archiveTimeout)
 }
 
 func archiveDirTar(owner FileOwner) ([]byte, error) {
@@ -71,7 +83,10 @@ func archiveDirTar(owner FileOwner) ([]byte, error) {
 // postgres container. Must be called *after* the container is up and
 // pg is query-ready. The container is restarted at the end because
 // `archive_mode` is changed only on (re)start, not on reload.
-func (p *DockerPostgreSQLProvisioner) ConfigureArchive(ctx context.Context, containerID, archiveCommand, superuser string) error {
+func (p *DockerPostgreSQLProvisioner) ConfigureArchive(ctx context.Context, containerID, archiveCommand, superuser, archiveTimeout string) error {
+	if archiveTimeout == "" {
+		archiveTimeout = walArchiveTimeout
+	}
 	// ALTER SYSTEM refuses a transaction block, and psql runs a single -c
 	// string as one: each setting gets a -c of its own.
 	cmd := []string{"psql", "-U", superuser, "-v", "ON_ERROR_STOP=1"}
@@ -80,7 +95,7 @@ func (p *DockerPostgreSQLProvisioner) ConfigureArchive(ctx context.Context, cont
 		"wal_level = 'logical'",
 		"archive_mode = 'on'",
 		"archive_command = " + quoteSQLString(archiveCommand),
-		"archive_timeout = " + quoteSQLString(walArchiveTimeout),
+		"archive_timeout = " + quoteSQLString(archiveTimeout),
 	} {
 		cmd = append(cmd, "-c", "ALTER SYSTEM SET "+setting)
 	}
@@ -118,4 +133,23 @@ func quoteSQLString(s string) string {
 	}
 	out = append(out, '\'')
 	return string(out)
+}
+
+// SetArchiveTimeout moves a running project's archive_timeout to want, and
+// reports whether it had to. The setting reloads, so the container is not
+// restarted (EXC-784).
+func (p *DockerPostgreSQLProvisioner) SetArchiveTimeout(ctx context.Context, containerID, want string) (bool, error) {
+	psql := []string{"psql", "-X", "-q", "-tA", "-v", "ON_ERROR_STOP=1", "-U", defaultPostgresSuperuser, "-d", "postgres", "-f", "-"}
+	current, err := p.docker.ExecInContainerStdin(ctx, containerID, psql, "SHOW archive_timeout;")
+	if err != nil {
+		return false, fmt.Errorf("read archive_timeout: %w", err)
+	}
+	if strings.TrimSpace(current) == want {
+		return false, nil
+	}
+	apply := "ALTER SYSTEM SET archive_timeout = " + quoteSQLString(want) + ";\nSELECT pg_reload_conf();\n"
+	if _, err := p.docker.ExecInContainerStdin(ctx, containerID, psql, apply); err != nil {
+		return false, fmt.Errorf("set archive_timeout: %w", err)
+	}
+	return true, nil
 }

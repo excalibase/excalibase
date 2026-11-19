@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/email"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -92,5 +93,43 @@ func TestRenewalAlertsFollowTheGuard(t *testing.T) {
 func TestAdminAlertNotifier_NilWithoutAMailerOrUserTable(t *testing.T) {
 	if adminAlertNotifier(config.AppConfig{}, nil, nil) != nil {
 		t.Error("a notifier was built with nothing to mail through")
+	}
+}
+
+// The single-host sweep alerts under the same guard and threshold as the cluster check.
+func TestHostWALAlertsFollowTheGuard(t *testing.T) {
+	alerts := service.NewAlertingService(t.TempDir())
+	on := config.AppConfig{DarkFeatures: []features.Feature{features.WALArchiveAlert}, WALArchiveAlertAfter: 45 * time.Minute}
+	got := hostWALAlertsOf(on, nil, alerts, nil)
+	if !got.on || got.after != 45*time.Minute || got.alerts != alerts {
+		t.Errorf("guard on: %+v", got)
+	}
+	if hostWALAlertsOf(config.AppConfig{}, nil, alerts, nil).on {
+		t.Error("guard off: alerts wired")
+	}
+	if hostWALAlertsOf(on, nil, nil, nil).on {
+		t.Error("no alert service: alerts wired")
+	}
+}
+
+type stubMailer struct{}
+
+func (stubMailer) Send(context.Context, email.Message) (string, error) { return "id", nil }
+
+func TestAdminAlertNotifier_BuiltWhenAMailerAndUserTableExist(t *testing.T) {
+	if adminAlertNotifier(config.AppConfig{}, &tablePlatformStore{}, stubMailer{}) == nil {
+		t.Error("no notifier with a mailer and a user table")
+	}
+	if adminAlertNotifier(config.AppConfig{}, &tablePlatformStore{}, nil) != nil {
+		t.Error("a notifier was built without a mailer")
+	}
+}
+
+func TestNewHostWALSweep_BuildsWithAndWithoutAlerts(t *testing.T) {
+	alerts := service.NewAlertingService(t.TempDir())
+	for _, wired := range []hostWALAlerts{{}, {on: true, alerts: alerts, after: time.Minute}} {
+		if newHostWALSweep(nil, nil, wired) == nil {
+			t.Errorf("no sweep for %+v", wired)
+		}
 	}
 }

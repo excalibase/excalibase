@@ -34,12 +34,9 @@ type BackupCredentialRenewerConfig struct {
 // outage shorter than half the lifetime costs nothing.
 type BackupCredentialRenewer struct {
 	cfg BackupCredentialRenewerConfig
-	// alerts, notifier and alertAfter raise a platform alert for a project whose
-	// renewal keeps failing (EXC-784); unset, failures are only logged and counted.
-	alerts       *AlertingService
-	notifier     AlertNotifier
-	alertAfter   time.Duration
-	failingSince map[string]time.Time
+	// alerts raises a platform alert for a project whose renewal keeps failing
+	// (EXC-784); unset, failures are only logged and counted.
+	alerts *failureAlerts
 }
 
 // RenewalReport is what one pass did.
@@ -58,20 +55,24 @@ func NewBackupCredentialRenewer(cfg BackupCredentialRenewerConfig) *BackupCreden
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &BackupCredentialRenewer{cfg: cfg, failingSince: map[string]time.Time{}}
+	return &BackupCredentialRenewer{cfg: cfg}
 }
 
 // SetAlerts raises a platform alert, mailed through notifier when it is set,
 // for a project whose renewal has failed on every pass for after.
 func (r *BackupCredentialRenewer) SetAlerts(alerts *AlertingService, notifier AlertNotifier, after time.Duration) {
-	r.alerts, r.notifier, r.alertAfter = alerts, notifier, after
+	r.alerts = newFailureAlerts(alerts, notifier, after, renewalMetricPrefix, describeRenewalFailure)
 }
 
 // RenewDue replaces every archiving project's credential that has less than
 // half its lifetime left.
 func (r *BackupCredentialRenewer) RenewDue(ctx context.Context) RenewalReport {
 	report := RenewalReport{failures: map[string]error{}}
-	defer func() { r.trackAlerts(ctx, report) }()
+	defer func() {
+		if r.alerts != nil && report.listed {
+			r.alerts.track(ctx, r.cfg.Now(), report.failures, report.healthy)
+		}
+	}()
 	metrics.ResetBackupCredentialsExpiry()
 	instances, err := r.cfg.Instances.FindAll()
 	if err != nil {
