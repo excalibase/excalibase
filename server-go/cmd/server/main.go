@@ -334,7 +334,7 @@ func runServer(cfg config.AppConfig) {
 	defer stopImageWatcher()
 	stopRegistrySweep := startRegistrySweeper(cfg, sqlStore, deps.appRegistry)
 	defer stopRegistrySweep()
-	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
+	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc, deps.alerts, deps.emailSender)
 	defer stopCredentialRenewal()
 	stopRoleReconcile := startPlatformRoleReconcile(cfg, sqlStore, provSvc)
 	defer stopRoleReconcile()
@@ -481,7 +481,7 @@ func buildBackupCredentialIssuer(cfg config.AppConfig) *service.BackupCredential
 
 // startBackupCredentialRenewer keeps every archiving project's temporary
 // credential ahead of its expiry; one replica renews at a time.
-func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, k8sClient k8s.KubeClient, provSvc *service.ProvisioningService) func() {
+func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, k8sClient k8s.KubeClient, provSvc *service.ProvisioningService, alerts *service.AlertingService, mail email.Sender) func() {
 	issuer := provSvc.BackupCredentials()
 	if issuer == nil || k8sClient == nil || cfg.ProvisionerMode == "docker" {
 		return func() {
@@ -495,6 +495,7 @@ func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.Platfor
 	renewer := service.NewBackupCredentialRenewer(service.BackupCredentialRenewerConfig{
 		Instances: store, Kube: k8sClient, Storage: provSvc, Issuer: issuer,
 	})
+	wireRenewalAlerts(cfg, renewer, alerts, adminAlertNotifier(cfg, sqlStore, mail))
 	log.Printf("Backup credential renewal started (every %s; credentials live %s, renewed at half-life)",
 		cfg.BackupCredentialsRenewInterval, cfg.BackupCredentialsTTL)
 	return renewer.Start(context.Background(), service.NewLeadership(lock), cfg.BackupCredentialsRenewInterval)
@@ -643,14 +644,20 @@ func wireMetricsHistory(cfg config.AppConfig, sqlStore storage.PlatformStore, k8
 		return
 	}
 	metrics.SetHistory(table, alerts)
+	notifier := adminAlertNotifier(cfg, sqlStore, mail)
+	var checks service.SamplerGroup
 	if source, ok := k8sClient.(service.PodPressureSource); ok {
 		monitor := service.NewPodPressureMonitor(source, alerts, time.Now)
-		if users, ok := sqlStore.(storage.UserStore); ok && email.Configured(mail) {
-			monitor.SetNotifier(service.NewAdminAlertMail(service.AdminAlertMailConfig{
-				Admins: service.PlatformAdminEmails{Users: users}, Sender: mail,
-				From: cfg.EmailFromAddress, FromName: cfg.EmailFromName, DashboardURL: cfg.StudioURL}))
+		if notifier != nil {
+			monitor.SetNotifier(notifier)
 		}
-		metrics.SetClusterSampler(monitor)
+		checks = append(checks, monitor)
+	}
+	if archive := walArchiveSampler(cfg, k8sClient, alerts, notifier); archive != nil {
+		checks = append(checks, archive)
+	}
+	if len(checks) > 0 {
+		metrics.SetClusterSampler(checks)
 	}
 	if sampler != nil {
 		metrics.SetRequestSampler(sampler)
@@ -1188,6 +1195,8 @@ type handlerDeps struct {
 	activity func(http.Handler) http.Handler
 	// emailSender is shared with post-construction wiring (idle-pause warnings).
 	emailSender email.Sender
+	// alerts is the platform alert table the renewal and archive checks raise into.
+	alerts *service.AlertingService
 	// storageSvc is nil when R2 is not configured; the reaper is started
 	// from it after the handlers are built.
 	storageSvc *storagesvc.Service
@@ -2029,6 +2038,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		features:               cfg.Features(),
 		activity:               custommw.ProjectActivity(activityRecorder),
 		emailSender:            emailSender,
+		alerts:                 alertSvc,
 		storageSvc:             storageSvc,
 		// EXC-11: server-to-server mail relay for excalibase-auth. Its
 		// authorization is the capability gate, wired at the mount below.

@@ -1106,6 +1106,14 @@ Secret. If it still fails, check provisioning's log for
 connection is being refused) and confirm the `platform-nats` Secret was
 seeded by the bootstrap Job.
 
+## 6.5b. WAL archive guards (EXC-784)
+
+Two guards, both **on unless switched off** (`FEATURE_WALARCHIVEALERT=false`, `FEATURE_FREEWALUPLOAD=false`), on Kubernetes only.
+
+**Archive alerts.** A database whose CloudNativePG `ContinuousArchiving` condition has been False for `EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER` (default `30m`) raises a platform alert, metric `wal.archiving:<namespace>/<cluster>`, severity CRITICAL. A project whose backup credential renewal fails on every pass for the same time raises `backup.renewal:<project>`. Both go through the same path as the pod-pressure alerts (EXC-747): the platform alerts table (the admin alerts list) and an email to every verified platform admin when a mailer is configured, at most one mail per alert an hour. They resolve by themselves. A paused (hibernated) cluster never alerts: nothing runs and its last backup stays valid.
+
+**Free uploads hourly.** Free databases get `archive_timeout = 1h`; Standard and Enterprise keep the operator's 5 minutes. An idle database otherwise writes a 16 MB segment every 5 minutes (about 4.6 GB a day) that fills a 5Gi disk within days if uploads fail. The cost: if a Free database's disk is destroyed, up to an hour of writes can be lost. New Free clusters get the setting at creation; existing ones get it on the next platform reconcile pass (at startup and every 10 minutes, no restart: `archive_timeout` reloads). A project moved to another plan loses it with the plan change. To undo, set `FEATURE_FREEWALUPLOAD=false` and remove `archive_timeout` from the cluster's `spec.postgresql.parameters`.
+
 ## 6.6. Project database credential rotation
 
 **Passwords are shown once (`FEATURE_ONETIMECREDENTIALS`, on by default, EXC-759).** With the

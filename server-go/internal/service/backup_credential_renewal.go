@@ -34,12 +34,23 @@ type BackupCredentialRenewerConfig struct {
 // outage shorter than half the lifetime costs nothing.
 type BackupCredentialRenewer struct {
 	cfg BackupCredentialRenewerConfig
+	// alerts, notifier and alertAfter raise a platform alert for a project whose
+	// renewal keeps failing (EXC-784); unset, failures are only logged and counted.
+	alerts       *AlertingService
+	notifier     AlertNotifier
+	alertAfter   time.Duration
+	failingSince map[string]time.Time
 }
 
 // RenewalReport is what one pass did.
 type RenewalReport struct {
 	Renewed int
 	Failed  []error
+	// failures and healthy name the projects a pass could and could not renew,
+	// for the alert; a failed project listing names none.
+	failures map[string]error
+	healthy  []string
+	listed   bool
 }
 
 // NewBackupCredentialRenewer builds a renewer.
@@ -47,19 +58,27 @@ func NewBackupCredentialRenewer(cfg BackupCredentialRenewerConfig) *BackupCreden
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &BackupCredentialRenewer{cfg: cfg}
+	return &BackupCredentialRenewer{cfg: cfg, failingSince: map[string]time.Time{}}
+}
+
+// SetAlerts raises a platform alert, mailed through notifier when it is set,
+// for a project whose renewal has failed on every pass for after.
+func (r *BackupCredentialRenewer) SetAlerts(alerts *AlertingService, notifier AlertNotifier, after time.Duration) {
+	r.alerts, r.notifier, r.alertAfter = alerts, notifier, after
 }
 
 // RenewDue replaces every archiving project's credential that has less than
 // half its lifetime left.
 func (r *BackupCredentialRenewer) RenewDue(ctx context.Context) RenewalReport {
-	var report RenewalReport
+	report := RenewalReport{failures: map[string]error{}}
+	defer func() { r.trackAlerts(ctx, report) }()
 	metrics.ResetBackupCredentialsExpiry()
 	instances, err := r.cfg.Instances.FindAll()
 	if err != nil {
 		report.Failed = append(report.Failed, fmt.Errorf("list projects: %w", err))
 		return report
 	}
+	report.listed = true
 	for _, inst := range instances {
 		if !archivesToObjectStore(inst) {
 			continue
@@ -69,9 +88,11 @@ func (r *BackupCredentialRenewer) RenewDue(ctx context.Context) RenewalReport {
 		cancel()
 		if err != nil {
 			report.Failed = append(report.Failed, fmt.Errorf("project %s: %w", inst.ProjectID, err))
+			report.failures[inst.ProjectID] = err
 			metrics.CountBackupCredentialRenewal(false)
 			continue
 		}
+		report.healthy = append(report.healthy, inst.ProjectID)
 		if renewed {
 			report.Renewed++
 			metrics.CountBackupCredentialRenewal(true)

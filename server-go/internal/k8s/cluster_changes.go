@@ -29,7 +29,33 @@ func tierPlatformParameters(tier config.TierConfig) map[string]interface{} {
 	if walCap, err := tier.SlotWALKeepSize(); err == nil {
 		params["max_slot_wal_keep_size"] = walCap
 	}
+	if tier.ArchiveTimeout != "" {
+		params[archiveTimeoutParameter] = tier.ArchiveTimeout
+	}
 	return params
+}
+
+// archiveTimeoutParameter is the Postgres setting that closes and ships a WAL
+// segment that has writes. The operator defaults it to five minutes; it
+// reloads without a restart.
+const archiveTimeoutParameter = "archive_timeout"
+
+// WithArchiveTimeout is a copy of the cluster with archive_timeout set to
+// want, and whether that differs from what the cluster has.
+func WithArchiveTimeout(cluster *unstructured.Unstructured, want string) (*unstructured.Unstructured, bool) {
+	changed := cluster.DeepCopy()
+	spec, _, _ := unstructured.NestedMap(changed.Object, "spec")
+	if spec == nil {
+		spec = map[string]interface{}{}
+	}
+	params := postgresParameters(spec)
+	if current, _ := params[archiveTimeoutParameter].(string); current == want {
+		return cluster, false
+	}
+	params[archiveTimeoutParameter] = want
+	setPostgresParameters(spec, params)
+	_ = unstructured.SetNestedMap(changed.Object, spec, "spec")
+	return changed, true
 }
 
 // ClusterStorageSize is the volume size a CNPG Cluster asks for.
@@ -66,6 +92,8 @@ func WithTier(cluster *unstructured.Unstructured, tier config.TierConfig, disk s
 	applyTierSizing(spec, tier, storageClass)
 	_ = unstructured.SetNestedField(spec, disk, "storage", "size")
 	params := postgresParameters(spec)
+	// The plan owns the upload interval: one that names none gets the operator's, not the last plan's.
+	delete(params, archiveTimeoutParameter)
 	maps.Copy(params, tierPlatformParameters(tier))
 	setPostgresParameters(spec, params)
 	_ = unstructured.SetNestedMap(changed.Object, spec, "spec")

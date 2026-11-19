@@ -177,6 +177,9 @@ var darkWork = map[features.Feature]string{
 	// On unless switched off: off, an app and a sign-up are not checked (internal/handler).
 	features.ProxyBlock:  "TestAppCreate_AllowsANormalAppAndAnOffFlag",
 	features.SignupGuard: "TestRegister_OffFlagAcceptsADisposableAddress",
+	// On unless switched off: off, no archive alert is raised and Free keeps the operator's interval.
+	features.WALArchiveAlert: "TestWALArchiveSampler_OffWhenTheGuardIsOff",
+	features.FreeWALUpload:   "TestTierConfig_GuardOffLeavesTheOperatorsInterval",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

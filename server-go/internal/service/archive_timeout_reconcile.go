@@ -1,0 +1,88 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
+)
+
+// ArchiveTimeoutReport is what one pass over the Postgres projects did.
+type ArchiveTimeoutReport struct {
+	// Updated counts clusters the pass moved to their plan's upload interval.
+	Updated int
+	Failed  []error
+}
+
+// ReconcileArchiveTimeouts gives every existing Postgres cluster the WAL upload
+// interval its plan names (EXC-784). A new cluster and a plan change already
+// render it; this reaches the clusters made before. The setting reloads without
+// a restart. A paused project is included: its cluster is hibernated, and the
+// resume then ships hourly. Plans that name no interval are left alone, and a
+// project that moved off Free had it removed by the plan change.
+func (s *ProvisioningService) ReconcileArchiveTimeouts(ctx context.Context) ArchiveTimeoutReport {
+	var report ArchiveTimeoutReport
+	if s.k8sClient == nil || s.dockerClient != nil {
+		return report
+	}
+	instances, err := s.store.FindAll()
+	if err != nil {
+		report.Failed = append(report.Failed, fmt.Errorf("list projects: %w", err))
+		return report
+	}
+	for _, inst := range instances {
+		if inst == nil || inst.DBType != domain.PostgreSQL || inst.NoDatabase || inst.Namespace == "" || domain.IsDeletionStatus(inst.Status) {
+			continue
+		}
+		updated, err := s.reconcileArchiveTimeoutOf(ctx, inst)
+		if err != nil {
+			report.Failed = append(report.Failed, fmt.Errorf("project %s: %w", inst.ProjectID, err))
+		}
+		if updated {
+			report.Updated++
+		}
+	}
+	return report
+}
+
+func (s *ProvisioningService) reconcileArchiveTimeoutOf(ctx context.Context, inst *domain.DatabaseInstance) (bool, error) {
+	plan, err := s.tierConfig(ctx, inst.Tier)
+	if err != nil {
+		return false, err
+	}
+	if plan.ArchiveTimeout == "" {
+		return false, nil
+	}
+	name := inst.ProjectID + postgresClusterSuffix
+	for attempt := 0; attempt < clusterUpdateAttempts; attempt++ {
+		cluster, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, name)
+		if err != nil {
+			return false, fmt.Errorf("read cluster %s: %w", name, err)
+		}
+		changed, differs := k8s.WithArchiveTimeout(cluster, plan.ArchiveTimeout)
+		if !differs {
+			return false, nil
+		}
+		err = s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, changed)
+		if err == nil {
+			return true, nil
+		}
+		if !apierrors.IsConflict(err) {
+			return false, fmt.Errorf("update cluster %s: %w", name, err)
+		}
+	}
+	return false, fmt.Errorf("update cluster %s: still conflicting after %d attempts", name, clusterUpdateAttempts)
+}
+
+func logArchiveTimeouts(report ArchiveTimeoutReport) {
+	for _, failure := range report.Failed {
+		log.Printf("ERROR: archive timeout reconcile: %v", failure)
+	}
+	if report.Updated > 0 {
+		log.Printf("archive timeout reconcile: %d cluster(s) moved to their plan's WAL upload interval", report.Updated)
+	}
+}

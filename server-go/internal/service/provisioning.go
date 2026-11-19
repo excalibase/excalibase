@@ -229,6 +229,28 @@ var ErrTierConfigUnavailable = errors.New("the tier's configuration could not be
 // edits take effect without a redeploy. The store is seeded with every tier
 // and nothing deletes a row, so a missing row is a broken table, not a default.
 func (s *ProvisioningService) tierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
+	tc, err := s.storedTierConfig(ctx, tier)
+	if err != nil {
+		return config.TierConfig{}, err
+	}
+	return s.withArchiveTimeoutGuard(ctx, tier, tc), nil
+}
+
+// withArchiveTimeoutGuard gives the tier its built-in upload interval, which
+// the tier_configs table has no column for, while FreeWALUpload is on, and
+// none while it is off (EXC-784).
+func (s *ProvisioningService) withArchiveTimeoutGuard(ctx context.Context, tier domain.TierType, tc config.TierConfig) config.TierConfig {
+	tc.ArchiveTimeout = ""
+	if !features.Enabled(ctx, s.flags, features.FreeWALUpload) {
+		return tc
+	}
+	if builtin, err := config.GetTierConfig(tier); err == nil {
+		tc.ArchiveTimeout = builtin.ArchiveTimeout
+	}
+	return tc
+}
+
+func (s *ProvisioningService) storedTierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
 	if s.tierStore == nil {
 		return config.GetTierConfig(tier)
 	}
