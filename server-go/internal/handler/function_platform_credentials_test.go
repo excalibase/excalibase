@@ -18,7 +18,7 @@ const platformPAT = "excb_0123456789abcdef0123456789abcdef"
 
 func TestPublicInvoke_StripsPlatformCookiesAndKeepsTheCustomersOwn(t *testing.T) {
 	r, seen, sign := newMarkerTestRouter(t)
-	cookie := auth.SessionCookieName + "=" + platformPAT + "; theme=dark; " + oauthStateCookie + "=s1; cart=42"
+	cookie := auth.SessionCookieName + "=" + platformPAT + "; theme=dark; " + auth.CookieName(oauthStateCookie) + "=s1; " + auth.LegacySessionCookieName + "=old; cart=42"
 
 	for _, call := range []struct{ fn, token string }{{"open", ""}, {"secure", sign(nil)}} {
 		invokeMarker(r, call.fn, call.token, map[string]string{"Cookie": cookie})
