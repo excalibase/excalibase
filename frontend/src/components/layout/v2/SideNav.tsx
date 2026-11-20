@@ -21,7 +21,10 @@ function Item({ item }: { readonly item: ShellNavItem }) {
   const tabbed = item.to.includes('?');
   return (
     <NavLink to={item.to} end={item.to === '/'}
-      className={({ isActive }) => cn(LINK, (tabbed ? `${location.pathname}${location.search}` === item.to : isActive) ? 'bg-purple-500/10 text-purple-400' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary')}>
+      className={({ isActive }) => {
+        const current = tabbed ? `${location.pathname}${location.search}` === item.to : isActive;
+        return cn(LINK, current ? 'bg-purple-500/10 text-purple-400' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary');
+      }}>
       <Icon className="w-[18px] h-[18px]" aria-hidden="true" /> {item.label}
     </NavLink>
   );
