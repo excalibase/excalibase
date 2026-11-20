@@ -117,6 +117,14 @@ export interface ListQuery {
   includeSuspended?: boolean;
   limit?: number;
   offset?: number;
+  // One of the columns the server allows, and its direction.
+  sort?: string;
+  order?: 'asc' | 'desc';
+  // Users: status and role. Orgs: plan (tier) and owner status.
+  status?: string;
+  role?: string;
+  tier?: string;
+  ownerStatus?: string;
 }
 
 const params = (query: ListQuery) => ({
@@ -124,6 +132,12 @@ const params = (query: ListQuery) => ({
   includeSuspended: query.includeSuspended ? 'true' : undefined,
   limit: query.limit,
   offset: query.offset,
+  sort: query.sort || undefined,
+  order: query.sort ? query.order : undefined,
+  status: query.status || undefined,
+  role: query.role || undefined,
+  tier: query.tier || undefined,
+  ownerStatus: query.ownerStatus || undefined,
 });
 
 export const getOverview = async () => (await api.get<Overview>('/admin/console/overview')).data;

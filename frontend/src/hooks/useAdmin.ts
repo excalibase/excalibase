@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { PROJECT_FOLLOW_MS, RESPOND_ASYNC, settleProject } from './projectFollow';
 
@@ -19,6 +19,7 @@ export interface AdminProject {
   memBytes?: number;
   // Who the project belongs to; a suspended owner reads "Suspended" (EXC-757).
   orgName?: string;
+  ownerId?: string;
   ownerEmail?: string;
   ownerStatus?: string;
   ownerSuspended?: boolean;
@@ -66,6 +67,33 @@ export const useStorageBudget = () =>
     // The server gives up after its own timeout; retrying would keep the card
     // spinning for as long again before it said why.
     retry: false,
+  });
+
+// A page of the cross-org project list. Sort and filter words are the server's
+// own; the server refuses any it does not offer.
+export interface AdminProjectQuery {
+  limit: number;
+  offset: number;
+  q?: string;
+  sort?: string;
+  order?: string;
+  status?: string;
+  plan?: string;
+  owner?: string;
+  flag?: string;
+}
+
+export interface AdminProjectPage {
+  items: AdminProject[];
+  total: number;
+}
+
+export const useAdminProjectsPage = (query: AdminProjectQuery) =>
+  useQuery({
+    queryKey: ['admin', 'projects', 'page', query],
+    queryFn: async () => (await api.get<AdminProjectPage>('/admin/projects', { params: query })).data,
+    placeholderData: keepPreviousData,
+    staleTime: 10_000,
   });
 
 export const useAdminProjects = () =>
