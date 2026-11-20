@@ -11,11 +11,15 @@ on:
         description: "Release version without the v prefix, e.g. 1.0.0 or 1.2.0-rc.1"
         required: true
       source_tag:
-        description: "Tag to promote from, e.g. main-c2565093 (default: main)"
+        description: "Tag to promote from, e.g. main-c2565093 or, for a patch, release-1.7-c2565093 (default: main)"
         default: main
       services:
         description: "Images to release"
         default: "provisioning,excalibase-graphql,excalibase-auth,studio"
+      move_major_latest:
+        description: "Also move the major tag (1) and latest. Set false when patching an older minor than the newest release"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -26,6 +30,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: ./.github/actions/install-trivy
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
@@ -42,6 +48,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           SOURCE_TAG: ${{ inputs.source_tag }}
           SERVICES: ${{ inputs.services }}
+          MOVE_MAJOR_LATEST: ${{ inputs.move_major_latest }}
         run: |
           set -eu
           semver='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
@@ -57,16 +64,13 @@ jobs:
             echo "::error::services must be a comma-separated list of image names"
             exit 1
           fi
-          major="${VERSION%%.*}"
-          rest="${VERSION#*.}"
-          minor="${rest%%.*}"
+          tags=$(bash scripts/release-tags.sh "$VERSION" "$MOVE_MAJOR_LATEST")
           if printf '%s' "$VERSION" | grep -q -- '-'; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "tags=$VERSION" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "tags=$VERSION $major.$minor $major latest" >> "$GITHUB_OUTPUT"
           fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
       # Every check runs before any tag moves, so a refusal never leaves a
       # half-released version. The native engine image is promoted from the same
@@ -79,6 +83,7 @@ jobs:
           SOURCE_TAG: ${{ inputs.source_tag }}
           SERVICES: ${{ inputs.services }}
           TAGS: ${{ steps.plan.outputs.tags }}
+          MOVE_MAJOR_LATEST: ${{ inputs.move_major_latest }}
         run: |
           set -eu
           services=$(printf '%s' "$SERVICES" | tr ',' ' ')
@@ -104,7 +109,7 @@ jobs:
               status=0; native=$(bash scripts/inspect-digest.sh "$repository:$SOURCE_TAG-native") || status=$?
               case "$status" in
                 0)
-                  native_tags=$(bash scripts/release-native-tags.sh "$VERSION")
+                  native_tags=$(bash scripts/release-native-tags.sh "$VERSION" "$MOVE_MAJOR_LATEST")
                   first=${native_tags%% *}
                   status=0; bash scripts/inspect-digest.sh "$repository:$first" >/dev/null || status=$?
                   case "$status" in
@@ -122,6 +127,22 @@ jobs:
               esac
             fi
           done
+
+          # Phase 1b: refuse a fixable CRITICAL unless security/release-waivers.json
+          # waives it with a reason, an approver and an unexpired date (EXC-744).
+          reports=()
+          index=0
+          while read -r repository digest tags; do
+            index=$((index + 1))
+            report="$RUNNER_TEMP/trivy-$index.json"
+            # From RUNNER_TEMP with an empty ignore file, so a trivy.yaml or .trivyignore in the
+            # checkout cannot skip the waiver rules.
+            (cd "$RUNNER_TEMP" && trivy image --quiet --image-src remote --ignorefile /dev/null \
+              --scanners vuln --severity CRITICAL --ignore-unfixed \
+              --format json --output "$report" "$repository@$digest")
+            reports+=("$report")
+          done < "$plan"
+          bash scripts/cve-watch/gate.sh --waivers security/release-waivers.json "${reports[@]}"
 
           # Phase 2: create.
           summary=""

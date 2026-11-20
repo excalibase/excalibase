@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"log"
 	"strconv"
 	"sync"
@@ -72,6 +73,8 @@ type AppDeployService struct {
 	domainSync func(ctx context.Context, namespace string, app *apphost.App) error
 	// async lets tests run the rollout wait inline instead of in a goroutine.
 	async func(func())
+	// proxyGuard refuses proxy and VPN nodes (EXC-755); nil allows every app.
+	proxyGuard *abuse.AppGuard
 
 	mu     sync.Mutex
 	active map[string]*activeRollout // keyed by app id
@@ -319,6 +322,9 @@ type plannedDeploy struct {
 
 // record creates the deploy's pending record; nothing reaches the cluster yet.
 func (s *AppDeployService) record(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, meta deployMeta) (*plannedDeploy, error) {
+	if err := s.refuseProxy(ctx, app, cfg, meta.origin.Actor); err != nil {
+		return nil, err
+	}
 	tierType, tier, err := s.planTier(ctx, app.ProjectID, cfg.Replicas)
 	if err != nil {
 		return nil, err

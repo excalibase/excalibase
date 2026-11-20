@@ -42,11 +42,11 @@ export function ProjectCrumb() {
   );
 }
 
+// Shared variables has no page yet, so it has no tab; Backups and the rest stay in the rail.
 const TABS = [
   { label: 'Services', to: '' },
-  { label: 'Metrics', to: 'monitoring/metrics' },
-  { label: 'Logs', to: 'monitoring/logs' },
-  { label: 'Backups', to: 'operations/backups' },
+  { label: 'Usage', to: 'monitoring/metrics' },
+  { label: 'Activity', to: 'monitoring/logs' },
   { label: 'Settings', to: 'settings' },
 ];
 

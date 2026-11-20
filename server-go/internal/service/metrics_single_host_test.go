@@ -130,3 +130,14 @@ func TestSampleAllTakesTheHostSampleFirst(t *testing.T) {
 		t.Errorf("host %d, databases %v, rows %d", host.calls, singleHost.asked, len(history.rows))
 	}
 }
+
+func TestSampleAllRunsTheClusterChecksEveryTick(t *testing.T) {
+	svc, _ := singleHostMetrics(t, SingleHostFigures{Running: true}, nil)
+	svc.SetHistory(&fakeMetricsHistory{}, nil)
+	cluster := &countingSampler{}
+	svc.SetClusterSampler(cluster)
+	svc.SampleAll(context.Background())
+	if cluster.calls != 1 {
+		t.Fatalf("cluster checks ran %d times", cluster.calls)
+	}
+}

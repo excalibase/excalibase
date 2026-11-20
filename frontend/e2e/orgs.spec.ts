@@ -16,7 +16,7 @@ const mockPendingInvites = [
 ];
 
 async function mockOrgEndpoints(page: import('@playwright/test').Page) {
-  await page.route('**/api/orgs', (route) => {
+  await page.route(/\/api\/orgs(\?.*)?$/, (route) => {
     if (route.request().method() === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockOrgs) });
     }
@@ -88,7 +88,7 @@ test.describe('Organizations', () => {
   });
 
   test('empty state shows create button', async ({ page }) => {
-    await page.route('**/api/orgs', (route) => {
+    await page.route(/\/api\/orgs(\?.*)?$/, (route) => {
       if (route.request().method() === 'GET') {
         return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
       }
@@ -266,7 +266,7 @@ test.describe('Permission-based UI', () => {
       { orgId: 'org-1', userId: '2', role: 'developer', email: 'bob@test.com', username: 'bob' },
     ];
 
-    await page.route('**/api/orgs', (route) => {
+    await page.route(/\/api\/orgs(\?.*)?$/, (route) => {
       if (route.request().method() === 'GET') {
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ id: 'org-1', name: 'SomeOrg', slug: 'some', tier: 'FREE', ownerId: '1' }]) });
       }
@@ -301,7 +301,7 @@ test.describe('Permission-based UI', () => {
 test.describe('Org navigation', () => {
   test('click org in list navigates to detail', async ({ page }) => {
     await loginAs(page);
-    await page.route('**/api/orgs', (route) => {
+    await page.route(/\/api\/orgs(\?.*)?$/, (route) => {
       if (route.request().method() === 'GET') {
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ id: 'org-nav', name: 'NavOrg', slug: 'nav-org', tier: 'FREE', ownerId: '1' }]) });
       }

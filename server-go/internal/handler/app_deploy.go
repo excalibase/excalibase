@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/abuse"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/appregistry"
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -433,6 +434,8 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, abuse.ErrProxyApp), errors.Is(err, abuse.ErrBlockedRegistry):
+		httpError(w, err.Error(), http.StatusForbidden)
 	case errors.Is(err, apphost.ErrInvalidImage), errors.Is(err, appregistry.ErrInternalImage):
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, imagedigest.ErrNotPublic):
@@ -451,7 +454,7 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		httpError(w, errNotFound, http.StatusNotFound)
 	case errors.Is(err, apphost.ErrAppStatusConflict), errors.Is(err, apphost.ErrAppBusy),
 		errors.Is(err, storage.ErrProjectBusy),
-		errors.Is(err, k8s.ErrAppNotDeployed), errors.Is(err, k8s.ErrAppNotPaused):
+		errors.Is(err, k8s.ErrAppNotDeployed), errors.Is(err, k8s.ErrAppNotPaused), errors.Is(err, k8s.ErrAppImageUnreadable):
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, k8s.ErrAppPodsRemain):
 		httpError(w, err.Error()+"; retry to finish", http.StatusGatewayTimeout)
@@ -467,6 +470,8 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		httpError(w, service.ErrOrgTierUnresolved.Error(), http.StatusInternalServerError)
 	case errors.Is(err, service.ErrAppCapacity):
 		httpError(w, service.ErrAppCapacity.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, service.ErrNoPodSlots):
+		httpError(w, service.ErrNoPodSlots.Error(), http.StatusServiceUnavailable)
 	case errors.Is(err, service.ErrAppNoSandboxNode):
 		httpError(w, service.ErrAppNoSandboxNode.Error(), http.StatusServiceUnavailable)
 	default:

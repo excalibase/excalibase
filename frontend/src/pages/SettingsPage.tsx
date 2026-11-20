@@ -20,6 +20,7 @@ import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { serverErrorMessage } from '../utils/serverError';
 import { engineLabel, isMySQLProject } from '../utils/engine';
+import { describeBackupSchedule } from '../utils/backupSchedule';
 import { projectOperationMessage } from '../hooks/projectFollow';
 
 interface RollbackResult {
@@ -36,9 +37,6 @@ function projectInfo(project: DatabaseInstance) {
     isMySQLProject(project)
       ? { icon: Database, label: 'MySQL Version', value: project.mysqlVersion || '-' }
       : { icon: Database, label: 'PostgreSQL Version', value: project.postgresVersion || '-' },
-    { icon: Server, label: 'Namespace', value: project.namespace },
-    { icon: Server, label: 'Host', value: project.host || '-' },
-    { icon: Server, label: 'Port', value: project.port || '-' },
     { icon: Database, label: 'Database Name', value: project.databaseName || '-' },
     { icon: Clock, label: 'Created', value: project.createdAt ? new Date(project.createdAt).toLocaleString() : '-' },
     { icon: Clock, label: 'Updated', value: project.updatedAt ? new Date(project.updatedAt).toLocaleString() : '-' },
@@ -164,7 +162,7 @@ export function SettingsPage() {
           </div>
           <div>
             <span className="text-text-tertiary block text-xs">Schedule</span>
-            <span className="text-text-primary font-mono text-xs">{project.backupSchedule || '-'}</span>
+            <span className="text-text-primary text-xs">{project.backupSchedule ? describeBackupSchedule(project.backupSchedule) : '-'}</span>
           </div>
           <div>
             <span className="text-text-tertiary block text-xs">Retention</span>

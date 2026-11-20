@@ -224,3 +224,49 @@ func TestEnsurePersonalOrgReportsATakenSlug(t *testing.T) {
 		t.Fatalf("got %v, want ErrOrgSlugTaken", err)
 	}
 }
+
+// The free allowance follows the account: deleting the org does not give a
+// sign-in a new personal org, nor a manual create a new free one.
+func TestDeletingTheOrgDoesNotResetTheFreeAllowance(t *testing.T) {
+	store, userID := setupOrgTest(t)
+	ctx := context.Background()
+
+	if created, err := store.EnsurePersonalOrg(ctx, ownedOrg("personal", "alice", userID, domain.Free)); err != nil || !created {
+		t.Fatalf("first personal org = %v, %v", created, err)
+	}
+	if err := store.DeleteOrg(ctx, "personal"); err != nil {
+		t.Fatalf("DeleteOrg: %v", err)
+	}
+
+	created, err := store.EnsurePersonalOrg(ctx, ownedOrg("personal-2", "alice-2", userID, domain.Free))
+	if err != nil || created {
+		t.Fatalf("sign-in after delete = %v, %v; want no new org", created, err)
+	}
+	err = store.CreateOrgWithOwner(ctx, ownedOrg("again", "again", userID, domain.Free), 1)
+	if !errors.Is(err, storage.ErrFreeOrgLimitReached) {
+		t.Fatalf("free org after delete = %v, want ErrFreeOrgLimitReached", err)
+	}
+}
+
+// An org whose projects still exist cannot be deleted, so none is orphaned.
+func TestDeleteOrgRefusesWhileProjectsExist(t *testing.T) {
+	store, userID := setupOrgTest(t)
+	ctx := context.Background()
+	if err := store.CreateOrgWithOwner(ctx, ownedOrg("org-busy", "org-busy", userID, domain.Free), 1); err != nil {
+		t.Fatalf("CreateOrgWithOwner: %v", err)
+	}
+	if err := store.Create(instanceRow("proj-busy0001", "org-busy")); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+
+	err := store.DeleteOrg(ctx, "org-busy")
+	if !errors.Is(err, storage.ErrOrgHasProjects) {
+		t.Fatalf("DeleteOrg = %v, want ErrOrgHasProjects", err)
+	}
+	if org, _ := store.FindOrgByID(ctx, "org-busy"); org == nil {
+		t.Fatal("the org must survive a refused delete")
+	}
+	if inst, _ := store.FindByProjectID("proj-busy0001"); inst == nil {
+		t.Fatal("the project row must survive")
+	}
+}

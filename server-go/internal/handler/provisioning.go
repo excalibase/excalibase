@@ -41,6 +41,8 @@ type ProvisioningHandler struct {
 	instances storage.InstanceStore
 	// activity supplies lastSeenAt for GET / list; nil → field omitted.
 	activity storage.ProjectActivityStore
+	// suspendedOrgs names the orgs whose owner is suspended (EXC-757); nil → no marker.
+	suspendedOrgs SuspendedOrgsLookup
 	// corsStore backs /cors and the corsAllowedOrigins field on /info;
 	// nil → /cors returns 503 and /info reports no origins.
 	corsStore storage.ProjectCorsStore
@@ -56,6 +58,8 @@ type ProvisioningHandler struct {
 	authOAuth AuthOAuthDeps
 	// authHookDeny is the install's own node and load-balancer ranges, which a hook URL may not name.
 	authHookDeny []netip.Prefix
+	// audit records password resets; nil → unrecorded.
+	audit auditWriter
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {
@@ -116,6 +120,10 @@ func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, project
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if errors.Is(err, service.ErrNoPodSlots) {
+		httpError(w, service.ErrNoPodSlots.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	status := http.StatusInternalServerError
 	// A busy project, an unsettled one, and a status that moved under the
 	// operation are all "come back in a moment", not server faults.
@@ -129,10 +137,11 @@ func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, project
 	body := map[string]interface{}{"error": safeError(err), "status": status}
 	if h.instances != nil {
 		if inst, _ := h.instances.FindByProjectID(projectID); inst != nil {
+			body["error"] = safeErrorIn(err, inst.Namespace)
 			body["projectId"] = inst.ProjectID
 			body["status"] = inst.Status
 			body["currentStep"] = inst.CurrentStep
-			body["failureReason"] = inst.FailureReason
+			body["failureReason"] = domain.ScrubClusterText(inst.FailureReason, inst.Namespace)
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -258,16 +267,15 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Platform admins (PermViewAny) see everything. An unauthenticated request
-	// that reached this far also sees the unscoped list — but in practice this
-	// route is mounted behind RequireAuth, so user is non-nil; the nil-guard is
-	// retained only as defense against a misconfigured mount.
-	if user == nil || auth.HasPermission(user.Role, auth.PermViewAny) {
-		writeJSON(w, h.projectListResponse(r.Context(), allInstances))
+	// The list is the caller's own projects, whatever their platform role: a
+	// platform admin is a customer of every org but their own, and reaches
+	// other customers' projects through the admin console only (EXC-757). This
+	// route is mounted behind RequireAuth, so a missing user is a mis-mount.
+	if user == nil {
+		httpError(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
-	// Regular users see only instances belonging to their orgs
 	myOrgs, _ := h.orgStore.FindOrgsByUser(r.Context(), user.ID)
 	orgIDs := make(map[string]bool, len(myOrgs))
 	for _, org := range myOrgs {
@@ -305,7 +313,7 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 	// Admin) in the TARGET org — so a Developer/Viewer in someone else's org
 	// can't spin up projects there. A user creating in their own freshly-made
 	// org is its Owner, so self-serve stays open. platform_admin bypasses.
-	if !auth.HasPermission(user.Role, auth.PermManageUsers) {
+	if !auth.IsPlatformServicePrincipal(user, auth.GetToken(r.Context())) {
 		if req.OrgID == "" || h.orgStore == nil {
 			httpError(w, "org is required to create a project", http.StatusBadRequest)
 			return
@@ -316,7 +324,7 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	if !h.confirmStatedTier(w, r, req.OrgID, statedTier) {
+	if !h.confirmStatedTier(w, r, req.OrgID, statedTier) || !h.settleOwnerPassword(w, r, &req) {
 		return
 	}
 
@@ -335,10 +343,10 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if async && resp.Status == domain.StatusProvisioning {
-		writeJSONStatus(w, http.StatusAccepted, resp)
+		writeJSONStatus(w, http.StatusAccepted, shownOnce(resp, req.OwnerPassword))
 		return
 	}
-	writeJSON(w, resp)
+	writeJSON(w, shownOnce(resp, req.OwnerPassword))
 }
 
 func prefersRespondAsync(r *http.Request) bool {
@@ -666,7 +674,26 @@ func logsResponse(page service.LogPage) map[string]any {
 
 func (h *ProvisioningHandler) RotateCredentials(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
-	creds, err := h.svc.RotateCredentials(r.Context(), projectID)
+	var body struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPasswordBodyBytes)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
+		return
+	}
+	if body.Password != "" && !h.svc.OneTimeCredentials(r.Context()) {
+		httpError(w, "a database password cannot be chosen here", http.StatusBadRequest)
+		return
+	}
+	creds, err := h.svc.RotateCredentialsTo(r.Context(), projectID, body.Password)
+	if errors.Is(err, service.ErrWeakDatabasePassword) {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, service.ErrResetUnfinished) {
+		httpError(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		if writeIfPoolBusy(w, err) {
 			return
@@ -674,6 +701,7 @@ func (h *ProvisioningHandler) RotateCredentials(w http.ResponseWriter, r *http.R
 		httpError(w, safeError(err), unsettledOr(err, http.StatusInternalServerError))
 		return
 	}
+	h.auditPasswordReset(r, projectID, body.Password != "")
 	writeJSON(w, creds)
 }
 

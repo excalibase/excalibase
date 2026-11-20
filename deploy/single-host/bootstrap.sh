@@ -167,7 +167,7 @@ fi
 # when it presents the one-time setup token — provisioning was started with
 # the same SETUP_TOKEN value (compose.yaml requires both share it).
 [ -n "${SETUP_TOKEN:-}" ] || { echo "ERROR: SETUP_TOKEN is empty — cannot register the initial platform admin" >&2; exit 1; }
-REG=$(curl -sS -X POST "$PROV_URL/api/auth/register" \
+REG=$(curl -sS -X POST "$PROV_URL/api/auth/register" -H "X-Return-Session-Token: true" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$ADMIN_USERNAME\",\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\",\"setupToken\":\"$SETUP_TOKEN\"}")
 if echo "$REG" | jq -e '.token // .id // .user' >/dev/null 2>&1; then
@@ -177,7 +177,7 @@ else
   echo "  admin already exists — reusing it"
 fi
 
-SESSION=$(curl -sS -X POST "$PROV_URL/api/auth/login" \
+SESSION=$(curl -sS -X POST "$PROV_URL/api/auth/login" -H "X-Return-Session-Token: true" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$ADMIN_USERNAME\",\"password\":\"$ADMIN_PASSWORD\"}" | jq -r '.token')
 if [ -z "$SESSION" ] || [ "$SESSION" = "null" ]; then

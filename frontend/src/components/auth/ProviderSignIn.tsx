@@ -13,6 +13,9 @@ const refusals: Record<string, string> = {
   invite_only: 'Sign-up here needs an invite. Use the link from your invite.',
   invite_invalid: 'That invite is invalid, expired, or was issued to a different email address.',
   unavailable: 'That sign-in provider is not available.',
+  email_not_allowed: 'Temporary or disposable email addresses are not accepted. Use a permanent address.',
+  email_try_again: 'We could not check that email domain right now. Please try again in a minute.',
+  signup_rate_limited: 'Too many sign-ups from your network. Please try again later.',
   busy: 'Sign-in is busy right now. Please try again in a few seconds.',
   failed: 'Sign-in failed. Please try again.',
 };

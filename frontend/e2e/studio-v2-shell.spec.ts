@@ -45,7 +45,7 @@ test.describe('Studio v2 shell', () => {
     await page.goto('/');
     await expect(page.getByTestId('studio-shell')).toBeVisible();
     const nav = page.getByRole('navigation', { name: 'Main' });
-    for (const name of ['Home', 'Projects', 'Usage & credits', 'Access tokens', 'Members & roles', 'Organization settings', 'Docs']) {
+    for (const name of ['Home', 'Projects', 'Usage & credits', 'Access keys', 'Access (IAM)', 'Organization settings', 'Docs']) {
       await expect(nav.getByRole('link', { name })).toBeVisible();
     }
     const org = page.getByRole('button', { name: /organization: acme/i });
@@ -75,7 +75,7 @@ test.describe('Studio v2 shell', () => {
     await page.goto('/');
     await page.getByRole('button', { name: 'Search' }).click();
     const dialog = page.getByRole('dialog', { name: 'Search' });
-    await dialog.getByRole('combobox').fill('access tokens');
+    await dialog.getByRole('combobox').fill('access keys');
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/\/account\/tokens$/);
     await expect(dialog).toBeHidden();
