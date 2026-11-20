@@ -72,3 +72,25 @@ func TestEXC684ToolsDoNotReachAnotherOrgsProject(t *testing.T) {
 		}
 	}
 }
+
+// Read tools reach the same project routes, so another org's project reads as absent too.
+func TestEXC684ReadToolsDoNotReachAnotherOrgsProject(t *testing.T) {
+	server, _ := mcpServer(t)
+	dev, err := mcpConnect(t, server.URL+"/mcp", mcpDevPAT)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	for name, args := range map[string]map[string]any{
+		"get_metrics":           {"project_id": matrixProjectB, "container_range": "1h"},
+		"list_function_secrets": {"project_id": matrixProjectB},
+		"list_storage_buckets":  {"project_id": matrixProjectB},
+		"list_storage_objects":  {"project_id": matrixProjectB, "bucket": "avatars"},
+		"list_app_domains":      {"project_id": matrixProjectB, "app_id": "web"},
+	} {
+		res := mcpCall(t, dev, name, args)
+		text := mcpText(res)
+		if !res.IsError || !(strings.Contains(text, "404") || strings.Contains(text, "not found")) {
+			t.Errorf("%s against another org's project = %s", name, text)
+		}
+	}
+}
