@@ -35,7 +35,11 @@ for spec in sys.argv[1:]:
     finally: s.close()
     print(name,r,flush=True)'
 
-docker run -d --privileged --name "$M" -v /var/lib/docker -e DOCKER_TLS_CERTDIR= "$DIND" >/dev/null
+# CI sets DIND_DOCKER_CONFIG to the runner's Docker Hub login so pulls inside the machine are
+# authenticated (EXC-752): mounted read-only at run time, never copied into a layer or printed.
+set --
+[ -z "${DIND_DOCKER_CONFIG:-}" ] || [ ! -f "$DIND_DOCKER_CONFIG" ] || set -- -v "$DIND_DOCKER_CONFIG:/root/.docker/config.json:ro"
+docker run -d --privileged --name "$M" -v /var/lib/docker -e DOCKER_TLS_CERTDIR= "$@" "$DIND" >/dev/null
 tries=0
 until d version >/dev/null 2>&1; do tries=$((tries + 1)); [ "$tries" -lt 120 ] || { ko "no daemon"; exit 1; }; sleep 1; done
 docker image inspect "$IMG" >/dev/null 2>&1 || docker pull -q "$IMG" >/dev/null

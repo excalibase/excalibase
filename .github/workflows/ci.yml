@@ -235,8 +235,23 @@ jobs:
     runs-on: ubuntu-24.04
     # Four fresh installs, each walking realtime too (EXC-612).
     timeout-minutes: 145
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Anonymous pulls hit Docker Hub's rate limit (EXC-752); fork PRs have no
+      # secret and pull anonymously. The login also lands in ~/.docker/config.json,
+      # which the Docker-in-Docker machines below mount read-only so their own
+      # pulls are authenticated too (nothing is written into an image layer).
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Hand the login to the Docker-in-Docker machines
+        if: env.DOCKERHUB_USERNAME != ''
+        run: echo "DIND_DOCKER_CONFIG=$HOME/.docker/config.json" >> "$GITHUB_ENV"
       - name: Build provisioning and Studio from this checkout
         run: |
           docker build -q -t docker.io/excalibase/provisioning:ci server-go
