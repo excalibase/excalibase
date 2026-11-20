@@ -80,11 +80,7 @@ tenant_waits_for_firewall() {
 }
 
 echo "== a machine with the bundle's proxy and firewall"
-# CI sets DIND_DOCKER_CONFIG to the runner's Docker Hub login so pulls inside the machine are
-# authenticated (EXC-752): mounted read-only at run time, never copied into a layer or printed.
-set --
-[ -z "${DIND_DOCKER_CONFIG:-}" ] || [ ! -f "$DIND_DOCKER_CONFIG" ] || set -- -v "$DIND_DOCKER_CONFIG:/root/.docker/config.json:ro"
-docker run -d --privileged --name "$MACHINE" -v /var/lib/docker -e DOCKER_TLS_CERTDIR= "$@" "$DIND" >/dev/null
+docker run -d --privileged --name "$MACHINE" -v /var/lib/docker -e DOCKER_TLS_CERTDIR= "$DIND" >/dev/null
 daemon_up
 docker image inspect "$TENANT_IMAGE" >/dev/null 2>&1 || docker pull -q "$TENANT_IMAGE" >/dev/null
 docker save "$IMAGE" "$TENANT_IMAGE" | docker exec -i "$MACHINE" docker load >/dev/null
