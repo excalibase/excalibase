@@ -185,3 +185,16 @@ func TestAll_DeclaresTemplateCatalog(t *testing.T) {
 		t.Error("templatecatalog cannot be switched on")
 	}
 }
+
+func TestFunctionInvokeIsDeclaredAndOffByDefault(t *testing.T) {
+	declared := false
+	for _, feature := range All() {
+		declared = declared || feature == FunctionInvoke
+	}
+	if !declared || FunctionInvoke != "functioninvoke" {
+		t.Fatalf("FunctionInvoke = %q, declared %v", FunctionInvoke, declared)
+	}
+	if NewStatic().Enabled(context.Background(), FunctionInvoke) {
+		t.Fatal("FunctionInvoke is on by default")
+	}
+}
