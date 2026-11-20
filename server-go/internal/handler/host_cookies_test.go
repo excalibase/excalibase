@@ -13,6 +13,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
 
+const (
+	hostSessionName   = "__Host-excali_session"
+	legacySessionName = "excali_session"
+	callbackPath      = "/api/auth/oauth/github/callback?code=c&state=st4te"
+)
+
 func setCookies(w *httptest.ResponseRecorder) map[string][]*http.Cookie {
 	byName := map[string][]*http.Cookie{}
 	for _, c := range w.Result().Cookies() {
@@ -30,7 +36,7 @@ func requireHostAttributes(t *testing.T, c *http.Cookie) {
 
 func requireLegacyCleared(t *testing.T, cookies map[string][]*http.Cookie) {
 	t.Helper()
-	legacy := cookies["excali_session"]
+	legacy := cookies[legacySessionName]
 	if len(legacy) != 1 || legacy[0].Value != "" || legacy[0].MaxAge >= 0 || legacy[0].Path != "/" {
 		t.Fatalf("the unprefixed session cookie was not cleared: %+v", legacy)
 	}
@@ -49,7 +55,7 @@ func TestLoginSetsAHostSessionAndClearsTheLegacyCookie(t *testing.T) {
 		t.Fatalf("login: %d %s", w.Code, w.Body.String())
 	}
 	cookies := setCookies(w)
-	session := cookies["__Host-excali_session"]
+	session := cookies[hostSessionName]
 	if len(session) != 1 || session[0].Value == "" {
 		t.Fatalf("no __Host- session: %v", cookies)
 	}
@@ -60,7 +66,7 @@ func TestLoginSetsAHostSessionAndClearsTheLegacyCookie(t *testing.T) {
 func TestLogoutClearsBothSessionCookies(t *testing.T) {
 	w := doRequest(setupAuthRouter(t, newMockUserStore(), newMockTokenStore()), "POST", "/api/auth/logout", "")
 	cookies := setCookies(w)
-	host := cookies["__Host-excali_session"]
+	host := cookies[hostSessionName]
 	if len(host) != 1 || host[0].Value != "" || host[0].MaxAge >= 0 {
 		t.Fatalf("the __Host- session was not cleared: %+v", host)
 	}
@@ -87,13 +93,14 @@ func TestOAuthPlantedStateCookieCannotCompleteTheFlow(t *testing.T) {
 			{Name: "__Host-excali_oauth_state", Value: "st4te"},
 		},
 	} {
-		req := httptest.NewRequest("GET", "/api/auth/oauth/github/callback?code=c&state=st4te", nil)
+		req := httptest.NewRequest("GET", callbackPath, nil)
 		for _, c := range cookies {
 			req.AddCookie(c)
 		}
 		w := httptest.NewRecorder()
 		h.router.ServeHTTP(w, req)
-		if got := redirectedTo(t, w).Query().Get("oauth_error"); got == "" {
+		refusal := redirectedTo(t, w).Query().Get("oauth_error")
+		if refusal == "" {
 			t.Errorf("%s: the flow completed", name)
 		}
 		if sessionCookie(w) != nil {
@@ -112,10 +119,10 @@ func TestInsecureCookiesDropThePrefixAndSecureForHTTPInstalls(t *testing.T) {
 	w := httptest.NewRecorder()
 	writeSessionCookie(w, "raw", time.Now().Add(time.Hour))
 	cookies := setCookies(w)
-	if got := cookies["excali_session"]; len(got) != 1 || got[0].Secure || got[0].Value != "raw" || !got[0].HttpOnly {
+	if got := cookies[legacySessionName]; len(got) != 1 || got[0].Secure || got[0].Value != "raw" || !got[0].HttpOnly {
 		t.Fatalf("insecure session cookie: %+v", got)
 	}
-	if len(cookies["__Host-excali_session"]) != 0 {
+	if len(cookies[hostSessionName]) != 0 {
 		t.Fatal("the prefixed name must not be set in insecure mode")
 	}
 }

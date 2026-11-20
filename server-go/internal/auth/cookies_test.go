@@ -10,6 +10,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+const plantedName = "excali_session"
+
 // ownersLookup maps raw tokens to the user that owns them.
 type ownersLookup struct{ byRaw map[string]string }
 
@@ -45,18 +47,18 @@ func signedInAs(t *testing.T, cookies ...*http.Cookie) string {
 }
 
 func TestSessionCookie_PlantedUnprefixedCookieNeverWins(t *testing.T) {
-	planted := &http.Cookie{Name: "excali_session", Value: "planted-token"}
-	real := &http.Cookie{Name: SessionCookieName, Value: "victim-token"}
-	if got := signedInAs(t, planted, real); got != "victim" {
+	planted := &http.Cookie{Name: plantedName, Value: "planted-token"}
+	hostSession := &http.Cookie{Name: SessionCookieName, Value: "victim-token"}
+	if got := signedInAs(t, planted, hostSession); got != "victim" {
 		t.Fatalf("signed in as %q, want the __Host- session's owner", got)
 	}
-	if got := signedInAs(t, real, planted); got != "victim" {
+	if got := signedInAs(t, hostSession, planted); got != "victim" {
 		t.Fatalf("order must not matter, signed in as %q", got)
 	}
 }
 
 func TestSessionCookie_OnlyAPlantedCookieAuthenticatesNobody(t *testing.T) {
-	for _, name := range []string{"excali_session", "Excali_Session", " excali_session", "_Host-excali_session"} {
+	for _, name := range []string{plantedName, "Excali_Session", " excali_session", "_Host-excali_session"} {
 		if got := signedInAs(t, &http.Cookie{Name: name, Value: "planted-token"}); got != "" {
 			t.Errorf("cookie %q signed in as %q", name, got)
 		}
@@ -77,7 +79,7 @@ func TestSessionCookie_DuplicatesAreRefused(t *testing.T) {
 func TestSessionCookie_InsecureOptInReadsTheUnprefixedName(t *testing.T) {
 	UseInsecureCookies(true)
 	t.Cleanup(func() { UseInsecureCookies(false) })
-	if got := signedInAs(t, &http.Cookie{Name: "excali_session", Value: "victim-token"}); got != "victim" {
+	if got := signedInAs(t, &http.Cookie{Name: plantedName, Value: "victim-token"}); got != "victim" {
 		t.Fatalf("http installs sign in with the plain name, got %q", got)
 	}
 	if got := signedInAs(t, &http.Cookie{Name: SessionCookieName, Value: "victim-token"}); got != "" {
