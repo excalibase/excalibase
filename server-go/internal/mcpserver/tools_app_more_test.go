@@ -422,3 +422,12 @@ func TestSetAppSecretDescriptionIsHonestAboutWhatItGuards(t *testing.T) {
 		}
 	}
 }
+
+func TestAppBuildRefusalsSpeakOfAppsNotSites(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusServiceUnavailable} {
+		err := appBuildFailure(&RouteError{Status: status, Message: "git builds need a gVisor node"})
+		if strings.Contains(strings.ToLower(err.Error()), "site") {
+			t.Errorf("status %d: an app tool answers in site words: %v", status, err)
+		}
+	}
+}

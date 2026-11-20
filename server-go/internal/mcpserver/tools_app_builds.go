@@ -14,6 +14,19 @@ import (
 var errAppSignInFirst = errors.New("the user has to sign in with GitHub first, so the platform sees which repositories they may read; " +
 	"that sign-in starts in Studio and never through MCP, because it is bound to the browser that starts it. Ask them to do it, then call connect_app_repo again")
 
+// appBuildFailure says plainly when the install offers no git builds for apps.
+func appBuildFailure(err error) error {
+	var routeErr *RouteError
+	switch {
+	case isStatus(err, http.StatusServiceUnavailable) && errors.As(err, &routeErr) && routeErr.Message != "":
+		return errors.New(routeErr.Message + ". Build the image yourself and deploy it with deploy_app")
+	case isStatus(err, http.StatusNotFound):
+		return errors.New("not found: the app or build does not exist, or git builds are not available on this install. " +
+			"Build the image yourself and deploy it with deploy_app, or get_ci_snippet for CI")
+	}
+	return err
+}
+
 type connectAppRepoArgs struct {
 	appArgs
 	Repository     string            `json:"repository" jsonschema:"the GitHub repository as owner/name"`
@@ -92,7 +105,7 @@ func connectAppRepo(ctx context.Context, c *call, in connectAppRepoArgs) (any, e
 			Connection *appConnectionAnswer `json:"connection"`
 		}
 		if err := c.get(ctx, path+"/git", nil, &current); err != nil {
-			return nil, siteBuildFailure(err)
+			return nil, appBuildFailure(err)
 		}
 		if connection := current.Connection; connection != nil && strings.EqualFold(connection.Repository, in.Repository) {
 			if buildArgs == nil {
@@ -115,7 +128,7 @@ func connectAppRepo(ctx context.Context, c *call, in connectAppRepoArgs) (any, e
 		return nil, errAppSignInFirst
 	}
 	if err != nil {
-		return nil, siteBuildFailure(err)
+		return nil, appBuildFailure(err)
 	}
 	out := map[string]any{"next": "each push to the branch now builds and deploys the app; follow a build with list_app_builds"}
 	if result.Connection != nil {
@@ -152,7 +165,7 @@ func disconnectAppRepo(ctx context.Context, c *call, in appArgs) (any, error) {
 		return nil, err
 	}
 	if err := c.send(ctx, http.MethodDelete, path+"/git", nil, nil, nil); err != nil {
-		return nil, siteBuildFailure(err)
+		return nil, appBuildFailure(err)
 	}
 	return map[string]any{"disconnected": in.AppID, "next": "connect_app_repo connects a repository again"}, nil
 }
@@ -164,7 +177,7 @@ func rebuildApp(ctx context.Context, c *call, in appArgs) (any, error) {
 	}
 	var build buildView
 	if err := c.send(ctx, http.MethodPost, path+"/builds", nil, nil, &build); err != nil {
-		return nil, siteBuildFailure(err)
+		return nil, appBuildFailure(err)
 	}
 	return map[string]any{"build": build, "next": "follow it with list_app_builds"}, nil
 }
@@ -181,13 +194,13 @@ func listAppBuilds(ctx context.Context, c *call, in listAppBuildsArgs) (any, err
 		}
 		var build buildLogView
 		if err := c.get(ctx, path+"/builds/"+buildID, nil, &build); err != nil {
-			return nil, siteBuildFailure(err)
+			return nil, appBuildFailure(err)
 		}
 		return map[string]any{"build": build}, nil
 	}
 	builds := []buildView{}
 	if err := c.get(ctx, path+"/builds", nil, &builds); err != nil {
-		return nil, siteBuildFailure(err)
+		return nil, appBuildFailure(err)
 	}
 	return map[string]any{"builds": builds}, nil
 }

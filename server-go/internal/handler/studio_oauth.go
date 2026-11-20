@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/studiooauth"
@@ -107,7 +109,7 @@ func (h *StudioOAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, finishRefusal(err))
 		return
 	}
-	user, created, err := h.accountFor(r.Context(), identity, inviteHash)
+	user, created, err := h.accountFor(withClientAddr(r.Context(), clientaddr.FromRequest(r)), identity, inviteHash)
 	if err != nil {
 		h.refuse(w, r, accountRefusal(err))
 		return
@@ -123,6 +125,7 @@ func (h *StudioOAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, "failed")
 		return
 	}
+	h.auth.recordLogin(r, user)
 	next := h.studioURL + "/oauth/complete"
 	if len(outcome) > 0 {
 		next += "?" + outcome.Encode()
@@ -175,11 +178,21 @@ func accountRefusal(err error) string {
 	if errors.As(err, &refusal) {
 		return string(refusal)
 	}
+	if errors.Is(err, auth.ErrBusy) {
+		return refusalBusy
+	}
 	log.Printf("ERROR: studio sign-in account: %v", err)
 	return "failed"
 }
 
+// refusalBusy is the sign-in the password gate turned away for load; the
+// response says when to try again.
+const refusalBusy = "busy"
+
 func (h *StudioOAuthHandler) refuse(w http.ResponseWriter, r *http.Request, reason string) {
+	if reason == refusalBusy {
+		w.Header().Set(headerRetryAfter, strconv.Itoa(passwordBusyRetrySeconds))
+	}
 	http.Redirect(w, r, h.studioURL+"/login?"+url.Values{"oauth_error": {reason}}.Encode(), http.StatusFound)
 }
 
@@ -281,7 +294,7 @@ func (h *StudioOAuthHandler) createFromIdentity(ctx context.Context, identity st
 	if inviteHash == "" {
 		return user, false, nil
 	}
-	if status, _ := h.auth.joinInvitedOrg(ctx, inviteHash, user); status != 0 {
+	if _, status, _ := h.auth.joinInvitedOrg(ctx, inviteHash, user); status != 0 {
 		return nil, false, signInRefusal("invite_invalid")
 	}
 	return user, true, nil
@@ -296,11 +309,14 @@ func (h *StudioOAuthHandler) checkSignUp(ctx context.Context, address, inviteHas
 	if len(domain.HumanUsers(users)) == 0 {
 		return signInRefusal("setup_required")
 	}
+	if err := h.auth.checkOAuthEmail(ctx, address); err != nil {
+		return err
+	}
 	if inviteHash == "" {
 		if h.auth.inviteOnly {
 			return signInRefusal("invite_only")
 		}
-		return nil
+		return h.auth.spendOAuthSignup(ctx)
 	}
 	if h.auth.orgStore == nil {
 		return signInRefusal("invite_invalid")

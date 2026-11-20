@@ -465,10 +465,11 @@ describe('ContainerDetailPage', () => {
     expect(await screen.findByTestId('app-domains')).toBeInTheDocument();
   });
 
-  test('variables are masked and never show a value or a secret location', async () => {
+  // EXC-761: a plain value is not a secret, so it is shown, never masked as one;
+  // a secret's location is never shown.
+  test('plain values are shown as plain, secrets and their location stay hidden', async () => {
     renderPage({ deploys: [] });
-    expect(await screen.findByTestId('env-view-MODE')).toBeInTheDocument();
-    expect(screen.queryByText('production-literal-value')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('env-view-MODE')).toHaveTextContent('production-literal-value');
     expect(screen.queryByText(/stripe/)).not.toBeInTheDocument();
     expect(screen.getByTestId('env-view-DATABASE_URL')).toHaveTextContent(/database appdb/i);
     expect(screen.getByTestId('env-view-API_KEY')).toHaveTextContent(/secret/i);

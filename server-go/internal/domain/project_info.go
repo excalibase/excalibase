@@ -37,6 +37,8 @@ type ProjectInfo struct {
 	// MFAEnabled is sent, as true, only while the authmfa flag is on and the
 	// project switched MFA on; the key is in the vault, never here.
 	MFAEnabled *bool `json:"mfaEnabled,omitempty"`
+	// MFAKeyFingerprint is the SHA-256 of that key, sent with MFAEnabled.
+	MFAKeyFingerprint string `json:"mfaKeyFingerprint,omitempty"`
 	// AuthHooks is sent only while the authhooks flag is on, then always
 	// (possibly {}); nil keeps the key off the wire.
 	AuthHooks *AuthHooksInfo `json:"authHooks,omitempty"`

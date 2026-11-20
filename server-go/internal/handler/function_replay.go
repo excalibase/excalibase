@@ -37,6 +37,14 @@ func (h *FunctionHandler) ReplayDeploys(ctx context.Context, projectID string) (
 	if err != nil {
 		return nil, err
 	}
+	if h.k8sClient != nil {
+		// The code goes into the runtime the cluster has: bring it under the sandbox class first.
+		if namespace := h.namespaceFor(projectID); namespace != "" {
+			if err := h.ensureRuntime(ctx, projectID, namespace, h.runtimeWait.coldStart); err != nil {
+				return nil, err
+			}
+		}
+	}
 	shared := h.sharedFilesFor(projectID)
 	allowedHosts := h.workerEgressHosts(projectID)
 	out := make([]edgefn.DeployRequest, 0, len(list))

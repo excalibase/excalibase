@@ -30,7 +30,7 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermManageOrgs: true,
 	},
 	"platform_operator": {
-		PermProvision: true, PermDelete: true, PermViewInstances: true,
+		PermProvision: true, PermViewInstances: true,
 		PermViewCredentials: true, PermManageBackups: true,
 		PermApplyMigrations: true, PermManageSnapshots: true,
 		PermManageFunctions: true, PermViewAny: true,

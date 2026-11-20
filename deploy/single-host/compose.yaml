@@ -317,6 +317,11 @@ services:
       FEATURE_HOSTMETRICS: ${FEATURE_HOSTMETRICS:-false}
       # A preview per branch or pull request of a git-connected site (EXC-660); needs site git builds.
       FEATURE_SITEPREVIEWS: ${FEATURE_SITEPREVIEWS:-false}
+      # Security guards (EXC-755): on unless set to false.
+      FEATURE_PROXYBLOCK: ${FEATURE_PROXYBLOCK:-true}
+      FEATURE_SIGNUPGUARD: ${FEATURE_SIGNUPGUARD:-true}
+      # Database passwords are shown once and never read back (EXC-759); on by default.
+      FEATURE_ONETIMECREDENTIALS: ${FEATURE_ONETIMECREDENTIALS:-true}
       # MCP invoke_function, off until chosen. Not a safeguard: deployed function code can already read the project's function secrets; this only removes one way of running it (EXC-684).
       FEATURE_FUNCTIONINVOKE: ${FEATURE_FUNCTIONINVOKE:-false}
       HOST_METRICS_CONTAINERS: *platform_containers

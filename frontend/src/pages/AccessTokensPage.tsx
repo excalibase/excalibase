@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { listMyOrgs } from '../api/orgs';
 import { AlertTriangle, Check, Copy, KeyRound, Loader2 } from 'lucide-react';
 import { Button } from '../components/Button';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
@@ -73,6 +75,10 @@ function CreateTokenForm({ onCreated, onError }: {
 }) {
   const createToken = useCreateAccessToken();
   const projects = useInstances();
+  // A token is made for the caller's own projects. Platform staff see every
+  // project in the list, but only offer the ones in orgs they belong to.
+  const memberOrgs = useQuery({ queryKey: ['member-orgs'], queryFn: listMyOrgs, staleTime: 60_000 });
+  const offered = (projects.data ?? []).filter((p) => memberOrgs.data?.some((org) => org.id === p.orgId));
   const [name, setName] = useState('');
   const [access, setAccess] = useState<TokenAccess>('read');
   const [projectId, setProjectId] = useState('');
@@ -116,7 +122,7 @@ function CreateTokenForm({ onCreated, onError }: {
           <label htmlFor="token-project" className="block text-sm text-text-secondary mb-1">Project</label>
           <select id="token-project" value={projectId} onChange={(e) => setProjectId(e.target.value)} className={FIELD}>
             <option value="">All your projects</option>
-            {(projects.data ?? []).map((p) => (
+            {offered.map((p) => (
               <option key={p.projectId} value={p.projectId}>{p.projectName || p.projectId}</option>
             ))}
           </select>

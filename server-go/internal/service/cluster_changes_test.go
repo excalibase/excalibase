@@ -638,3 +638,17 @@ func TestClusterSettingsReportUnknownUsageAsAbsent(t *testing.T) {
 		t.Errorf("used = %d, want unknown", *got.StorageUsedBytes)
 	}
 }
+
+// A plan that adds an instance needs a pod slot on a node that does not already run one.
+func TestApplyOrgTierIsRefusedWhenNoNodeHasAPodSlotForANewInstance(t *testing.T) {
+	svc, _, mock := setupClusterChangeTest(t)
+	seedCluster(t, mock, config.TierConfig{Instances: 1, StorageSize: "2Gi", Memory: "256Mi", CPU: "0.25"}, nil)
+	mock.Capacity = threeNodes()
+	for i := range mock.Capacity.Nodes {
+		mock.Capacity.Nodes[i].Name = fmt.Sprintf("n%d", i+1)
+		mock.Capacity.Nodes[i].AllocatablePods, mock.Capacity.Nodes[i].Pods = 110, 110
+	}
+	if err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Free); !errors.Is(err, ErrPlanDoesNotFit) {
+		t.Fatalf("err = %v, want ErrPlanDoesNotFit", err)
+	}
+}

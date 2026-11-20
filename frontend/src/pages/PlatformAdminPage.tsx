@@ -1,15 +1,19 @@
 import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../stores/auth-store';
-import { useQuery } from '@tanstack/react-query';
-import { useAdminProjects, useClusterCapacity, useForceDropProject, useRevokeOrg } from '../hooks/useAdmin';
-import { listMyOrgs } from '../api/orgs';
+import { useAdminProjects, useClusterCapacity, useForceDropProject } from '../hooks/useAdmin';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/shared/StatusBadge';
+import { AccountStatusBadge } from '../components/admin/AccountStatusBadge';
+import { NeedsAttention } from '../components/admin/NeedsAttention';
+import { OrgsTable } from '../components/admin/OrgsTable';
+import { ProjectDetailPanel } from '../components/admin/ProjectDetailPanel';
+import { ReasonDialog } from '../components/admin/ReasonDialog';
+import { UsersTable } from '../components/admin/UsersTable';
 import { TierConfigTable } from '../components/TierConfigTable';
 import { StorageBudgetCard } from '../components/StorageBudgetCard';
 import { SignInProviders } from '../components/SignInProviders';
-import { Loader2, Trash2, ShieldAlert, Cpu, MemoryStick } from 'lucide-react';
+import { Loader2, Trash2, Cpu, MemoryStick, Eye } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
 
 // PlatformAdminPage is the operator dashboard. Surfaces cluster capacity,
@@ -27,10 +31,12 @@ export function PlatformAdminPage() {
   const canMutate = user.role === 'platform_admin';
   return (
     <div className="max-w-7xl mx-auto space-y-6">
+      {canMutate && <NeedsAttention />}
       <CapacityWidget />
       <StorageBudgetCard />
       <TierConfigTable canMutate={canMutate} />
       <ProjectsTable canMutate={canMutate} />
+      {canMutate && <UsersTable />}
       <OrgsTable canMutate={canMutate} />
       {canMutate && <SignInProviders />}
     </div>
@@ -118,21 +124,24 @@ function CapacityBar({ icon, label, used, pct }: { readonly icon: React.ReactNod
 function ProjectsTable({ canMutate }: { readonly canMutate: boolean }) {
   const { data: projects = [], isLoading } = useAdminProjects();
   const drop = useForceDropProject();
+  const [params, setParams] = useSearchParams();
+  const openProject = params.get('project');
+  const showProject = (projectId: string | null) => {
+    const next = new URLSearchParams(params);
+    if (projectId) next.set('project', projectId);
+    else next.delete('project');
+    setParams(next, { replace: true });
+  };
 
-  const handleDrop = async (projectId: string, name: string) => {
-    if (!canMutate) return;
-    if (
-      !confirm(
-        `Force-drop project "${name}" (${projectId})?\n\nThis bypasses deletion_protection and cannot be undone. The action is logged to the audit table.`,
-      )
-    ) {
-      return;
-    }
+  const [dropping, setDropping] = useState<{ projectId: string; name: string } | null>(null);
+
+  const confirmDrop = async (reason: string) => {
+    if (!dropping || !canMutate) return;
     try {
-      await drop.mutateAsync(projectId);
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } }; message?: string };
-      alert(`Drop failed: ${serverErrorMessage(err, 'no reason given')}`);
+      await drop.mutateAsync({ projectId: dropping.projectId, reason });
+      setDropping(null);
+    } catch {
+      // the dialog stays open and shows drop.error
     }
   };
 
@@ -158,7 +167,7 @@ function ProjectsTable({ canMutate }: { readonly canMutate: boolean }) {
           <thead>
             <tr className="text-text-tertiary border-b border-border-primary bg-bg-secondary">
               <th className="text-left px-6 py-3 font-medium">Project</th>
-              <th className="text-left px-6 py-3 font-medium">Org</th>
+              <th className="text-left px-6 py-3 font-medium">Org and owner</th>
               <th className="text-left px-6 py-3 font-medium">Tier</th>
               <th className="text-left px-6 py-3 font-medium">Status</th>
               <th className="text-right px-6 py-3 font-medium">CPU</th>
@@ -173,23 +182,32 @@ function ProjectsTable({ canMutate }: { readonly canMutate: boolean }) {
                   <div className="font-medium">{p.projectName}</div>
                   <div className="text-xs text-text-tertiary font-mono">{p.projectId}</div>
                 </td>
-                <td className="px-6 py-3 text-text-secondary">{p.orgId}</td>
+                <td className="px-6 py-3 text-text-secondary">
+                  <div>{p.orgName || p.orgId}</div>
+                  {p.ownerEmail && <div className="text-xs text-text-tertiary">{p.ownerEmail}</div>}
+                </td>
                 <td className="px-6 py-3 text-text-secondary uppercase text-xs">{p.tier}</td>
                 <td className="px-6 py-3">
-                  <StatusBadge status={p.status} />
+                  {p.ownerSuspended ? <AccountStatusBadge status="suspended" /> : <StatusBadge status={p.status} />}
                 </td>
                 <td className="px-6 py-3 text-right text-text-secondary">
-                  {p.cpuCores == null ? '—' : `${p.cpuCores.toFixed(2)}`}
+                  {p.cpuCores == null ? '—' : p.cpuCores.toFixed(2)}
                 </td>
                 <td className="px-6 py-3 text-right text-text-secondary">
                   {p.memBytes == null ? '—' : `${(p.memBytes / 1024 / 1024).toFixed(0)} MiB`}
                 </td>
-                <td className="px-6 py-3 text-right">
+                <td className="px-6 py-3 text-right space-x-2">
+                  {canMutate && (
+                    <Button size="sm" variant="secondary" onClick={() => showProject(p.projectId)}>
+                      <Eye className="w-3.5 h-3.5 mr-1" />
+                      Open
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="danger"
                     disabled={!canMutate || drop.isPending}
-                    onClick={() => handleDrop(p.projectId, p.projectName)}
+                    onClick={() => { drop.reset(); setDropping({ projectId: p.projectId, name: p.projectName }); }}
                   >
                     <Trash2 className="w-3.5 h-3.5 mr-1" />
                     Drop
@@ -200,89 +218,19 @@ function ProjectsTable({ canMutate }: { readonly canMutate: boolean }) {
           </tbody>
         </table>
       )}
-    </div>
-  );
-}
-
-function OrgsTable({ canMutate }: { readonly canMutate: boolean }) {
-  const { data: orgs = [], isLoading } = useQuery({
-    queryKey: ['orgs', 'all'],
-    queryFn: () => listMyOrgs(),
-    staleTime: 30_000,
-  });
-  const { data: projects = [] } = useAdminProjects();
-  const revoke = useRevokeOrg();
-  const [busyOrgId, setBusyOrgId] = useState<string | null>(null);
-
-  const handleRevoke = async (orgId: string, slug: string) => {
-    if (!canMutate) return;
-    const projectsForOrg = projects.filter((p) => p.orgId === orgId).length;
-    if (
-      !confirm(
-        `Revoke org "${slug}"?\n\nThis cascade-drops ${projectsForOrg} project(s) and deletes the org row. Audited and not reversible.`,
-      )
-    ) {
-      return;
-    }
-    setBusyOrgId(orgId);
-    try {
-      await revoke.mutateAsync(orgId);
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } }; message?: string };
-      alert(`Revoke failed: ${serverErrorMessage(err, 'no reason given')}`);
-    } finally {
-      setBusyOrgId(null);
-    }
-  };
-
-  return (
-    <div className="bg-surface-card border border-border-primary rounded-xl overflow-hidden">
-      <div className="px-6 py-4 border-b border-border-primary flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold">Orgs</h2>
-          <p className="text-xs text-text-tertiary mt-0.5">Revoking cascades through every project in the org.</p>
-        </div>
-        <span className="text-sm text-text-secondary">{orgs.length}</span>
-      </div>
-      {isLoading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-5 h-5 animate-spin text-accent-primary" />
-        </div>
-      ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-text-tertiary border-b border-border-primary bg-bg-secondary">
-              <th className="text-left px-6 py-3 font-medium">Slug</th>
-              <th className="text-left px-6 py-3 font-medium">Name</th>
-              <th className="text-right px-6 py-3 font-medium">Projects</th>
-              <th className="px-6 py-3" />
-            </tr>
-          </thead>
-          <tbody>
-            {(orgs as Array<{ id: string; slug: string; name: string }>).map((o) => {
-              const count = projects.filter((p) => p.orgId === o.id).length;
-              return (
-                <tr key={o.id} className="border-b border-border-primary last:border-b-0 hover:bg-bg-hover">
-                  <td className="px-6 py-3 font-mono text-xs">{o.slug}</td>
-                  <td className="px-6 py-3">{o.name}</td>
-                  <td className="px-6 py-3 text-right text-text-secondary">{count}</td>
-                  <td className="px-6 py-3 text-right">
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      disabled={!canMutate || busyOrgId === o.id}
-                      onClick={() => handleRevoke(o.id, o.slug)}
-                    >
-                      <ShieldAlert className="w-3.5 h-3.5 mr-1" />
-                      Revoke
-                    </Button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      {dropping && (
+        <ReasonDialog
+          title={`Force-drop project "${dropping.name}"`}
+          description="Bypasses deletion protection and cannot be undone."
+          confirmLabel="Drop"
+          danger
+          busy={drop.isPending}
+          error={drop.error ? serverErrorMessage(drop.error, 'Drop failed') : undefined}
+          onConfirm={confirmDrop}
+          onCancel={() => setDropping(null)}
+        />
       )}
+      {canMutate && openProject && <ProjectDetailPanel key={openProject} projectId={openProject} onClose={() => showProject(null)} />}
     </div>
   );
 }

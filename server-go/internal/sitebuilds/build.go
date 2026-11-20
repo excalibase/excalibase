@@ -242,12 +242,12 @@ func failureMessage(status RunStatus, limits Limits, settings Settings) string {
 	case FailBuild:
 		return fmt.Sprintf("the build command failed (exit %d); see the log", status.ExitCode)
 	case FailNoOutput:
-		if settings.Framework == FrameworkNextjs {
-			return "the Next.js build wrote no server bundle or assets; see the log"
+		if settings.Framework != "" {
+			return "the " + frameworkLabel(settings.Framework) + " build wrote no server bundle or assets; see the log"
 		}
 		return fmt.Sprintf("the build finished but wrote no %q directory; check the output directory", settings.OutputDir)
 	case FailFramework:
-		return "this Next.js app cannot run as a server-rendered site (the log says why, for example Node.js middleware); " +
+		return "this " + frameworkLabel(settings.Framework) + " app cannot run as a server-rendered site (the log says why, for example Node.js middleware); " +
 			"deploy it as an app container instead"
 	case FailImage:
 		return "the Node image for this build could not be pulled: " + status.Detail
@@ -261,4 +261,18 @@ func minutes(seconds int) string {
 		return fmt.Sprintf("%d minutes", seconds/60)
 	}
 	return fmt.Sprintf("%d seconds", seconds)
+}
+
+// frameworkLabel is a preset's name as a person writes it.
+func frameworkLabel(framework string) string {
+	switch framework {
+	case FrameworkNuxt:
+		return "Nuxt"
+	case FrameworkSvelteKit:
+		return "SvelteKit"
+	case FrameworkAstro:
+		return "Astro"
+	default:
+		return "Next.js"
+	}
 }

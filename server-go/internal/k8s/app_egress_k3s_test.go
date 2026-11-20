@@ -12,6 +12,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -146,10 +147,15 @@ func newEgressLab(t *testing.T, start func(*egressLab, *testing.T), extraClients
 
 func (lab *egressLab) startCluster(t *testing.T) {
 	t.Helper()
+	lab.startClusterWith(t)
+}
+
+func (lab *egressLab) startClusterWith(t *testing.T, extra ...testcontainers.ContainerCustomizer) {
+	t.Helper()
 	if err := imagepull.EnsureLocal(lab.ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
 		t.Fatal(err)
 	}
-	container, err := k3s.Run(lab.ctx, "rancher/k3s:v1.31.6-k3s1")
+	container, err := k3s.Run(lab.ctx, "rancher/k3s:v1.31.6-k3s1", extra...)
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)
 	}

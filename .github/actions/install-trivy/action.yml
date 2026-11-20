@@ -1,0 +1,23 @@
+name: Install Trivy
+description: Pinned Trivy 0.75.0 (checksum-verified) plus the per-day vulnerability database cache.
+runs:
+  using: composite
+  steps:
+    - name: Install Trivy 0.75.0
+      shell: bash
+      run: |
+        if ! command -v trivy >/dev/null || ! trivy --version | grep -q 'Version: 0.75.0'; then
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tgz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_Linux-64bit.tar.gz
+          echo "c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f  $RUNNER_TEMP/trivy.tgz" | sha256sum -c -
+          sudo tar -xzf "$RUNNER_TEMP/trivy.tgz" -C /usr/local/bin trivy
+        fi
+        echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
+    # The vulnerability databases change daily; one download per day per repo.
+    - name: Cache the Trivy databases
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.cache/trivy
+        key: trivy-db-${{ env.day }}
+        restore-keys: trivy-db-

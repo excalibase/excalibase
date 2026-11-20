@@ -90,7 +90,7 @@ var namedLifecycleCauses = []error{
 }
 
 // fixedLifecycleCauses are answered in their sentinel's words only.
-var fixedLifecycleCauses = []error{ErrOrgTierUnresolved, ErrAppCapacity, ErrAppNoSandboxNode}
+var fixedLifecycleCauses = []error{ErrOrgTierUnresolved, ErrAppCapacity, ErrNoPodSlots, ErrAppNoSandboxNode}
 
 func lifecycleFailureReason(op ProjectOperation, err error) string {
 	for _, cause := range namedLifecycleCauses {

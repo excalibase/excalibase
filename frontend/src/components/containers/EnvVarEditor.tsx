@@ -1,6 +1,6 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { DATABASE_VARIABLES, MYSQL_DATABASE_VARIABLES, type VarKind } from '../../api/apps';
-import { emptyEnvRow, needsSecretValue, type EnvRow } from './appFormModel';
+import { emptyEnvRow, looksSecret, needsSecretValue, type EnvRow } from './appFormModel';
 import { cn } from '../../utils/cn';
 
 export const inputClass =
@@ -126,7 +126,10 @@ export function EnvVarEditor({ rows, errors, databaseName, mysql, onChange }: En
               aria-label={`Name of variable ${index + 1}`}
               placeholder="API_BASE_URL"
               value={row.name}
-              onChange={(e) => updateRow(index, { name: e.target.value })}
+              onChange={(e) =>
+                updateRow(index, looksSecret(e.target.value) && row.kind === 'literal'
+                  ? { name: e.target.value, kind: 'secret' }
+                  : { name: e.target.value })}
               className={cn(inputClass, 'font-mono max-w-[12rem]')}
               data-testid={`env-name-${index}`}
             />
@@ -137,7 +140,9 @@ export function EnvVarEditor({ rows, errors, databaseName, mysql, onChange }: En
               className={cn(inputClass, 'max-w-[11rem]')}
               data-testid={`env-kind-${index}`}
             >
-              <option value="literal">Value</option>
+              <option value="literal" disabled={looksSecret(row.name)}>
+                Plain value (visible to Developers)
+              </option>
               <option value="reference" disabled={!databaseName}>
                 Database connection
               </option>

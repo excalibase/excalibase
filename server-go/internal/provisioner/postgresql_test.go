@@ -195,6 +195,7 @@ func TestPostgreSQLGetStatus(t *testing.T) {
 
 func TestPostgreSQLConfigureBackup(t *testing.T) {
 	mock := k8s.NewMockClient()
+	mock.CRDs["ns/bk-test-postgres"] = newHibernationTestCluster(1)
 	prov := NewPostgreSQLProvisioner(mock, "")
 
 	err := prov.ConfigureBackup(context.Background(), "ns", testBKTest, "0 3 * * *", 14)

@@ -8,12 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/service"
-	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
-	"github.com/go-chi/chi/v5"
 )
 
 // fakeNodes is a platform with a fixed number of usable nodes.
@@ -62,18 +59,7 @@ func TestProjectCreationRefusalsForNodePlacement(t *testing.T) {
 
 func patchOrgTierWith(t *testing.T, nodes *fakeNodes, tier string) *httptest.ResponseRecorder {
 	t.Helper()
-	orgs := fakestore.NewOrgs()
-	orgs.AddOrg("org-plan", domain.Free)
-	h := NewOrgHandler(orgs, nil)
-	if nodes != nil {
-		h.SetNodePlacement(nodes)
-	}
-	r := chi.NewRouter()
-	r.Patch("/orgs/{orgId}", h.UpdateOrg)
-	req := httptest.NewRequest("PATCH", "/orgs/org-plan", strings.NewReader(`{"tier":"`+tier+`"}`))
-	req = req.WithContext(auth.SetUser(req.Context(), &domain.User{ID: "admin-1", Role: "platform_admin", Active: true}))
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	w, _ := consoleTier(t, nodes, consoleAdmin, "org-plan", `{"tier":"`+tier+`","reason":"plan agreed with the customer"}`)
 	return w
 }
 

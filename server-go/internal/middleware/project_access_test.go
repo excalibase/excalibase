@@ -107,7 +107,8 @@ func TestRequireProjectAccess_Matrix(t *testing.T) {
 		{"read scope may GET", http.MethodGet, testProject, memberUser(memberID), &domain.AccessToken{Scopes: auth.ScopeRead}, http.StatusOK},
 		{"read scope may not POST", http.MethodPost, testProject, memberUser(memberID), &domain.AccessToken{Scopes: auth.ScopeRead}, http.StatusForbidden},
 		{"write scope may POST", http.MethodPost, testProject, memberUser(memberID), &domain.AccessToken{Scopes: auth.ScopeWrite}, http.StatusOK},
-		{"platform admin bypasses membership", http.MethodGet, "ghost", &domain.User{ID: "op", Role: testPlatformRole}, nil, http.StatusOK},
+		{"a human platform admin outside the org is a customer", http.MethodGet, testProject, &domain.User{ID: "op", Role: testPlatformRole}, nil, http.StatusNotFound},
+		{"a platform service principal bypasses membership", http.MethodGet, "ghost", &domain.User{ID: "op", Role: testPlatformRole}, &domain.AccessToken{Permissions: []string{"projects:info:read"}}, http.StatusOK},
 		{"platform admin still bound by token project", http.MethodGet, testProject, &domain.User{ID: "op", Role: testPlatformRole}, &domain.AccessToken{ProjectID: testOtherProject}, http.StatusNotFound},
 	}
 	for _, tc := range cases {
@@ -141,10 +142,18 @@ func TestRequireProjectAccess_FailsClosed(t *testing.T) {
 	})
 	t.Run("membership lookup error", func(t *testing.T) {
 		inst, orgs := storesWithMember(memberID, domain.OrgRoleOwner)
-		orgs.Err = context.DeadlineExceeded
+		orgs.Err = errBoom{}
 		r := projectRequest(http.MethodGet, testProject, memberUser(memberID), nil)
 		if code := serve(t, RequireProjectAccess(inst, orgs), r); code != http.StatusNotFound {
 			t.Errorf("got %d want 404", code)
+		}
+	})
+	t.Run("membership lookup timeout is an outage, not a missing project", func(t *testing.T) {
+		inst, orgs := storesWithMember(memberID, domain.OrgRoleOwner)
+		orgs.Err = context.DeadlineExceeded
+		r := projectRequest(http.MethodGet, testProject, memberUser(memberID), nil)
+		if code := serve(t, RequireProjectAccess(inst, orgs), r); code != http.StatusServiceUnavailable {
+			t.Errorf("got %d want 503", code)
 		}
 	})
 }
@@ -188,7 +197,7 @@ func TestRequireProjectRole_Visibility(t *testing.T) {
 	}{
 		{"unauthenticated", nil, http.StatusUnauthorized},
 		{"non-member gets 404", memberUser("stranger"), http.StatusNotFound},
-		{"platform admin bypasses", &domain.User{ID: "op", Role: testPlatformRole}, http.StatusOK},
+		{"a human platform admin outside the org is a customer", &domain.User{ID: "op", Role: testPlatformRole}, http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
