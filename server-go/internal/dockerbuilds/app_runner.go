@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strings"
+	"sync/atomic"
 
 	"github.com/containerd/errdefs"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -60,6 +62,8 @@ func (o AppOptions) platform() string {
 type AppRunner struct {
 	*Runner
 	app AppOptions
+	// gvisor is what Verify found: the configured runtime is runsc itself, not only named so.
+	gvisor atomic.Bool
 }
 
 var _ appbuilds.Cluster = (*AppRunner)(nil)
@@ -74,9 +78,29 @@ func NewAppRunner(runner *Runner, opts AppOptions) (*AppRunner, error) {
 	return &AppRunner{Runner: runner, app: opts}, nil
 }
 
-// Supports names why this host cannot run builder: Dockerfile builds only on Docker under a sandbox runtime.
+// Verify is the Runner's check, then reads whether the sandbox runtime is gVisor: BuildKit keeps privilege
+// escalation, which is safe only there, so a runtime named runsc that is really runc must not pass.
+func (a *AppRunner) Verify(ctx context.Context) error {
+	if err := a.Runner.Verify(ctx); err != nil {
+		return err
+	}
+	a.gvisor.Store(false)
+	name := a.Runner.opts.SandboxRuntime
+	if name == "" {
+		return nil
+	}
+	info, err := a.engine.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("read the engine's runtimes: %w", err)
+	}
+	runtime, ok := info.Runtimes[name]
+	a.gvisor.Store(ok && path.Base(runtime.Path) == "runsc")
+	return nil
+}
+
+// Supports names why this host cannot run builder: Dockerfile builds only on Docker under gVisor, which Verify must have found.
 func (a *AppRunner) Supports(builder appbuilds.Builder) error {
-	if builder == appbuilds.BuilderDockerfile && (a.Runner.opts.SandboxRuntime == "" || a.Runner.opts.Isolate) {
+	if builder == appbuilds.BuilderDockerfile && (a.Runner.opts.SandboxRuntime == "" || a.Runner.opts.Isolate || !a.gvisor.Load()) {
 		return ErrDockerfileBuildsNeedGVisor
 	}
 	return nil
@@ -167,7 +191,8 @@ func (a *AppRunner) Collect(ctx context.Context, buildID string, w io.Writer, li
 	return a.collectFrom(ctx, buildID, k8s.AppBuildArchivePath, w, limit)
 }
 
-// Remove deletes the build's containers, work volume and network, whichever builder made them.
+// Remove deletes the build's containers, work volume and network, whichever builder made them. It is required on
+// every end state (ready and collected, failed, timed out, abandoned): the containers hold the build secrets.
 func (a *AppRunner) Remove(ctx context.Context, buildID string) error {
 	return a.removeBox(ctx, buildID, allAppSteps)
 }

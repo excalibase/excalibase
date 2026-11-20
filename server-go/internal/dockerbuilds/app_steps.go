@@ -32,6 +32,11 @@ func init() {
 	}
 }
 
+// The build-visible secrets are variables of the step's container until it is removed: they sit in the engine's
+// container config (readable by whoever can inspect it) and in the step's /proc environment even after the
+// entry script unsets them. Remove must therefore run on every end state of a build; the wiring slice moves the
+// delivery to stdin or a tmpfs the engine never records.
+
 // appStep is one step of an app build in the box: the app build pod's step, with the sandbox's hardening.
 func (a *AppRunner) appStep(sandbox box, spec appbuilds.RunSpec, name, proxy string) stepContainer {
 	heavy := name == stepBuildKit || name == stepPacks
@@ -71,7 +76,7 @@ func blockedRegistryHosts() []string {
 	blocked := registryblock.Hosts()
 	hosts := make([]string, 0, len(blocked))
 	for _, host := range blocked {
-		hosts = append(hosts, host+":127.0.0.1")
+		hosts = append(hosts, host+":127.0.0.1", host+":::1")
 	}
 	return hosts
 }
@@ -193,11 +198,21 @@ func proxyBuildArgs(proxy string) []string {
 	return args
 }
 
-// withoutProxyArgs drops declared build arguments that name a proxy: the sidecar is the only way out.
+// proxyArgNames are the lower-cased names a declared build argument may not take: the sidecar is the only way out.
+var proxyArgNames = []string{"all_proxy", "ftp_proxy", "no_proxy"}
+
+func namesAProxy(name string) bool {
+	lower := strings.ToLower(name)
+	return slices.Contains(proxyArgNames, lower) || slices.ContainsFunc(proxyVariables, func(variable string) bool {
+		return strings.ToLower(variable) == lower
+	})
+}
+
+// withoutProxyArgs drops declared build arguments that name a proxy, whatever their case.
 func withoutProxyArgs(args map[string]string) map[string]string {
 	kept := make(map[string]string, len(args))
 	for name, value := range args {
-		if !slices.Contains(proxyVariables, name) && !strings.EqualFold(name, "no_proxy") {
+		if !namesAProxy(name) {
 			kept[name] = value
 		}
 	}

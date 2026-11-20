@@ -1,9 +1,11 @@
 package dockerbuilds
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
+	"github.com/docker/docker/api/types/mount"
 	"slices"
 	"strings"
 	"testing"
@@ -327,9 +329,147 @@ func TestEveryAppStepPinsTheBlockedRegistriesToLoopback(t *testing.T) {
 			if created == nil {
 				t.Fatalf("%s: no %s step", builder, name)
 			}
-			if !slices.Contains(created.host.ExtraHosts, "ttl.sh:127.0.0.1") {
-				t.Errorf("%s step %s hosts %v: ttl.sh is not pinned to loopback", builder, name, created.host.ExtraHosts)
+			for _, pin := range []string{"ttl.sh:127.0.0.1", "ttl.sh:::1"} {
+				if !slices.Contains(created.host.ExtraHosts, pin) {
+					t.Errorf("%s step %s hosts %v: no %s", builder, name, created.host.ExtraHosts, pin)
+				}
 			}
 		}
+	}
+}
+
+func TestADockerfileBuildNeedsARuntimeThatIsRunscNotJustNamedSo(t *testing.T) {
+	for name, tc := range map[string]struct {
+		runtime string
+		paths   map[string]string
+		allowed bool
+	}{
+		"runc":               {"runc", nil, false},
+		"crun":               {"crun", nil, false},
+		"runsc by name only": {"runsc", map[string]string{"runsc": "/usr/bin/runc"}, false},
+		"runsc lookalike":    {"runsc", map[string]string{"runsc": "/opt/notrunsc"}, false},
+		"real runsc":         {"runsc", map[string]string{"runsc": "/usr/local/bin/runsc"}, true},
+		"renamed runsc":      {"gvisor", map[string]string{"gvisor": "/opt/gvisor/bin/runsc"}, true},
+	} {
+		engine := newFakeEngine()
+		engine.runtimes = append(engine.runtimes, tc.runtime)
+		engine.runtimePaths = tc.paths
+		app := newTestAppRunner(t, engine, tc.runtime, false)
+		if err := app.Verify(context.Background()); err != nil {
+			t.Fatalf("%s: Verify: %v", name, err)
+		}
+		err := app.Start(context.Background(), testAppSpec(appbuilds.BuilderDockerfile))
+		if tc.allowed != (err == nil) || (!tc.allowed && !errors.Is(err, ErrDockerfileBuildsNeedGVisor)) {
+			t.Errorf("%s: Start answered %v", name, err)
+		}
+		if tc.allowed != (app.Supports(appbuilds.BuilderDockerfile) == nil) {
+			t.Errorf("%s: Supports disagrees with Start", name)
+		}
+	}
+}
+
+func TestADockerfileBuildIsRefusedUntilVerifyFoundRunsc(t *testing.T) {
+	engine := newFakeEngine()
+	engine.runtimePaths = map[string]string{"runsc": "/usr/local/bin/runsc"}
+	app := newTestAppRunner(t, engine, "runsc", false)
+	if !errors.Is(app.Supports(appbuilds.BuilderDockerfile), ErrDockerfileBuildsNeedGVisor) {
+		t.Fatal("Supports allowed a Dockerfile build before Verify")
+	}
+}
+
+func TestVerifyFailsForAMissingRuntime(t *testing.T) {
+	engine := newFakeEngine()
+	engine.runtimes = []string{"runc"}
+	app := newTestAppRunner(t, engine, "runsc", false)
+	if err := app.Verify(context.Background()); err == nil {
+		t.Fatal("Verify passed with no runsc runtime")
+	}
+}
+
+// Every step of both builders, the sidecar and the disk watcher included, gets no host namespace, device or mount.
+func TestNoAppStepGetsPrivilegeHostNamespacesDevicesOrMounts(t *testing.T) {
+	for _, builder := range []appbuilds.Builder{appbuilds.BuilderDockerfile, appbuilds.BuilderBuildpacks} {
+		engine := newFakeEngine()
+		engine.runtimePaths = map[string]string{"runsc": "/usr/local/bin/runsc"}
+		app := newTestAppRunner(t, engine, "runsc", false)
+		startApp(t, app, builder)
+		names := append([]string{"egress", "watch"}, planFor(builder).chain...)
+		for _, name := range names {
+			c := engine.get(step(name))
+			if c == nil {
+				t.Fatalf("%s: no %s step", builder, name)
+			}
+			host := c.host
+			where := string(builder) + "/" + name
+			switch {
+			case host.Privileged:
+				t.Errorf("%s is privileged", where)
+			case host.PidMode != "" || host.IpcMode != "" || host.UTSMode != "" || host.UsernsMode != "" || host.CgroupnsMode != "":
+				t.Errorf("%s shares a namespace: pid %q ipc %q uts %q userns %q cgroupns %q", where, host.PidMode, host.IpcMode, host.UTSMode, host.UsernsMode, host.CgroupnsMode)
+			case len(host.Binds) != 0 || len(host.Devices) != 0 || len(host.Resources.DeviceCgroupRules) != 0 || len(host.DeviceRequests) != 0:
+				t.Errorf("%s has binds %v or devices %v", where, host.Binds, host.Devices)
+			case string(host.NetworkMode) == "host" || strings.HasPrefix(string(host.NetworkMode), "container:"):
+				t.Errorf("%s joins network %q", where, host.NetworkMode)
+			}
+			for _, option := range host.SecurityOpt {
+				if strings.Contains(option, "unconfined") {
+					t.Errorf("%s has %s", where, option)
+				}
+			}
+			for _, m := range host.Mounts {
+				if m.Type != mount.TypeVolume || m.Target != workDir || m.Source != app.workVolume(testBuild) {
+					t.Errorf("%s mounts %+v, beyond the work volume", where, m)
+				}
+			}
+		}
+	}
+}
+
+func TestTheBuildpacksStepKeepsItsPlatformEnvOnANoExecTmpfs(t *testing.T) {
+	engine := newFakeEngine()
+	app := newTestAppRunner(t, engine, "runsc", false)
+	startApp(t, app, appbuilds.BuilderBuildpacks)
+	options, ok := engine.get(step("buildpacks")).host.Tmpfs[appPlatformEnv]
+	if !ok || !strings.Contains(options, "noexec") || !strings.Contains(options, "nosuid") || !strings.Contains(options, "nodev") {
+		t.Fatalf("platform env tmpfs %q (present %v)", options, ok)
+	}
+	if _, leaked := engine.get(step("analyze")).host.Tmpfs[appPlatformEnv]; leaked {
+		t.Fatal("a step that does not run the app's code has its secrets")
+	}
+}
+
+func TestCollectRefusesAFirstEntryThatIsNotARegularFile(t *testing.T) {
+	for name, kind := range map[string]byte{"symlink": tar.TypeSymlink, "directory": tar.TypeDir} {
+		engine := newFakeEngine()
+		engine.tarType = kind
+		app := newTestAppRunner(t, engine, "runsc", false)
+		startApp(t, app, appbuilds.BuilderDockerfile)
+		engine.get(step("collect")).files["/work/collect/image.tar"] = []byte("oci-archive")
+		var out bytes.Buffer
+		if err := app.Collect(context.Background(), testBuild, &out, 1<<20); err == nil || out.Len() != 0 {
+			t.Errorf("%s: collect answered %v after writing %d bytes", name, err, out.Len())
+		}
+	}
+}
+
+// Read a byte at a time, the capped writer alone would pass bytes on before it overflowed: the header's size must refuse first.
+func TestCollectRefusesADeclaredSizePastTheLimitBeforeWritingAnything(t *testing.T) {
+	engine := newFakeEngine()
+	engine.oneByte = true
+	app := newTestAppRunner(t, engine, "runsc", false)
+	startApp(t, app, appbuilds.BuilderDockerfile)
+	engine.get(step("collect")).files["/work/collect/image.tar"] = []byte("oci-archive")
+	var out bytes.Buffer
+	if err := app.Collect(context.Background(), testBuild, &out, 8); !errors.Is(err, sitebuilds.ErrOutputTooLarge) || out.Len() != 0 {
+		t.Fatalf("collect: %v after writing %q", err, out.String())
+	}
+}
+
+func TestDeclaredBuildArgumentsNamingAProxyAreDroppedWhateverTheirCase(t *testing.T) {
+	declared := map[string]string{"NODE_ENV": "production", "Http_Proxy": "x", "HTTPS_PROXY": "x", "all_proxy": "x", "ALL_PROXY": "x",
+		"ftp_proxy": "x", "FTP_PROXY": "x", "no_proxy": "x", "NO_PROXY": "x", "npm_config_proxy": "x", "YARN_HTTPS_PROXY": "x"}
+	kept := withoutProxyArgs(declared)
+	if len(kept) != 1 || kept["NODE_ENV"] != "production" {
+		t.Fatalf("kept %v", kept)
 	}
 }
