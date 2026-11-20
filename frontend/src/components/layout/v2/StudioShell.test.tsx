@@ -58,7 +58,7 @@ describe('StudioShell', () => {
   test('left nav lists the console destinations', async () => {
     renderShell();
     const nav = await screen.findByRole('navigation', { name: 'Main' });
-    for (const name of ['Home', 'Projects', 'Usage & credits', 'Access tokens', 'Members & roles', 'Organization settings', 'Docs']) {
+    for (const name of ['Home', 'Projects', 'Usage & credits', 'Access keys', 'Access (IAM)', 'Organization settings', 'Docs']) {
       expect(within(nav).getByRole('link', { name })).toBeInTheDocument();
     }
   });
@@ -108,7 +108,7 @@ describe('StudioShell', () => {
     renderShell();
     await userEvent.click(await screen.findByRole('button', { name: /search/i }));
     const dialog = await screen.findByRole('dialog', { name: /search/i });
-    await userEvent.type(within(dialog).getByRole('combobox'), 'tokens');
+    await userEvent.type(within(dialog).getByRole('combobox'), 'access keys');
     await userEvent.keyboard('{Enter}');
     expect(screen.getByTestId('where')).toHaveTextContent('/account/tokens');
     await userEvent.keyboard('{Control>}k{/Control}');
@@ -117,10 +117,25 @@ describe('StudioShell', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  test('the top bar has help and notifications that lead to real pages', async () => {
+    renderShell();
+    expect(await screen.findByRole('link', { name: /help and docs/i })).toHaveAttribute('href', expect.stringContaining('/docs'));
+    await userEvent.click(screen.getByRole('button', { name: /notifications/i }));
+    expect(screen.getAllByRole('link', { name: /usage & credits/i })).toHaveLength(2);
+  });
+
+  test('the palette finds docs links', async () => {
+    renderShell();
+    await userEvent.click(await screen.findByRole('button', { name: /search/i }));
+    const dialog = await screen.findByRole('dialog', { name: /search/i });
+    await userEvent.type(within(dialog).getByRole('combobox'), 'documentation');
+    expect(within(dialog).getByText('Documentation')).toBeInTheDocument();
+  });
+
   test('the account menu signs out', async () => {
     renderShell();
     await userEvent.click(await screen.findByRole('button', { name: /account menu/i }));
     expect(screen.getByRole('menuitem', { name: /sign out/i })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /access tokens/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /access keys/i })).toBeInTheDocument();
   });
 });

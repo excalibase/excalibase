@@ -1,10 +1,10 @@
 import { useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Command } from 'cmdk';
-import { Database, Compass } from 'lucide-react';
+import { BookOpen, Database, Compass } from 'lucide-react';
 import { useMyProjects, useCurrentOrg } from '../../../hooks/useMemberOrgs';
 import { PROJECT_NAV } from '../navigation';
-import { shellNav } from './navV2';
+import { DOCS_LINKS, shellNav } from './navV2';
 
 const ITEM = 'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-text-secondary cursor-pointer data-[selected=true]:bg-purple-500/10 data-[selected=true]:text-purple-400';
 const GROUP = '[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-text-tertiary';
@@ -34,7 +34,7 @@ export function CommandPalette({ open, onOpenChange }: { readonly open: boolean;
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        onOpenChange(!open);
+        onOpenChange(true);
       } else if (e.key === 'Escape' && open) {
         onOpenChange(false);
       }
@@ -59,7 +59,7 @@ export function CommandPalette({ open, onOpenChange }: { readonly open: boolean;
   return (
     <>
       <button type="button" aria-label="Close search" tabIndex={-1} onClick={() => onOpenChange(false)} className="fixed inset-0 z-[60] cursor-default border-0 bg-black/50 p-0" />
-      <div role="dialog" aria-modal="true" aria-label="Search" className="fixed left-1/2 top-[18vh] z-[61] w-full max-w-lg -translate-x-1/2 overflow-hidden rounded-xl border border-border-primary bg-surface-card shadow-2xl">
+      <div role="dialog" aria-modal="true" aria-label="Search" className="fixed left-1/2 top-[18vh] z-[61] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 overflow-hidden rounded-xl border border-border-primary bg-surface-card shadow-2xl">
         <Command label="Search">
       <Command.Input autoFocus placeholder="Search projects, pages and settings" className="w-full border-b border-border-primary bg-transparent px-4 py-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary" />
       <Command.List className="max-h-80 overflow-y-auto p-2">
@@ -79,6 +79,13 @@ export function CommandPalette({ open, onOpenChange }: { readonly open: boolean;
           {destinations.map((d) => (
             <Command.Item key={d.key} value={`go ${d.label}`} onSelect={() => go(d.to, d.external)} className={ITEM}>
               <Compass className="w-4 h-4" aria-hidden="true" /> {d.label}
+            </Command.Item>
+          ))}
+        </Command.Group>
+        <Command.Group heading="Docs" className={GROUP}>
+          {DOCS_LINKS.map((d) => (
+            <Command.Item key={d.key} value={`docs ${d.label}`} onSelect={() => go(d.to, true)} className={ITEM}>
+              <BookOpen className="w-4 h-4" aria-hidden="true" /> {d.label}
             </Command.Item>
           ))}
         </Command.Group>
