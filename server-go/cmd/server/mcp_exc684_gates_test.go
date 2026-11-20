@@ -26,9 +26,13 @@ func exc684WriteToolCalls() map[string]map[string]any {
 		"verify_app_domain": with(map[string]any{"domain_id": "dom1"}),
 		"remove_app_domain": with(map[string]any{"domain_id": "dom1"}),
 		// Every optional field is given, so the tool does not read the current connection (a viewer may) before it writes.
-		"connect_app_repo":    with(map[string]any{"repository": "owner/name", "root_dir": ".", "dockerfile_path": ".", "build_args": map[string]string{}}),
-		"disconnect_app_repo": with(nil),
-		"rebuild_app":         with(nil),
+		"connect_app_repo":       with(map[string]any{"repository": "owner/name", "root_dir": ".", "dockerfile_path": ".", "build_args": map[string]string{}}),
+		"disconnect_app_repo":    with(nil),
+		"invoke_function":        {"project_id": matrixProjectA, "function_id": "x"},
+		"delete_function_secret": {"project_id": matrixProjectA, "key": "API_KEY"},
+		"create_storage_bucket":  {"project_id": matrixProjectA, "name": "avatars"},
+		"set_bucket_access":      {"project_id": matrixProjectA, "bucket": "avatars", "access": map[string]any{"user": map[string]any{"read": "own"}}},
+		"rebuild_app":            with(nil),
 	}
 }
 
