@@ -6,6 +6,8 @@ export interface AdminTab {
   label: string;
 }
 
+const ARROW_STEPS: Record<string, number> = { ArrowRight: 1, ArrowLeft: -1 };
+
 interface AdminTabsProps {
   readonly tabs: readonly AdminTab[];
   readonly active: string;
@@ -17,8 +19,8 @@ interface AdminTabsProps {
 export function AdminTabs({ tabs, active, onChange }: AdminTabsProps) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
   const move = (event: KeyboardEvent, index: number) => {
-    const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-    if (step === 0) return;
+    const step = ARROW_STEPS[event.key];
+    if (step === undefined) return;
     event.preventDefault();
     const next = tabs[(index + step + tabs.length) % tabs.length];
     onChange(next.id);

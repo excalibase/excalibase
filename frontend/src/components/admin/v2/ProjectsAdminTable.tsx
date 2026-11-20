@@ -52,6 +52,29 @@ export function projectColumns(): Column<AdminProject>[] {
   ];
 }
 
+// The render props live outside the component so they are not rebuilt as new components on every render.
+type SelectionAction = (selected: AdminProject[], clear: () => void) => void;
+
+function projectBulkActions(suspendOwners: SelectionAction, deleteProjects: SelectionAction) {
+  return (selected: AdminProject[], clear: () => void) => (
+    <>
+      <Button size="sm" variant="danger" onClick={() => suspendOwners(selected, clear)}>Suspend owners…</Button>
+      <Button size="sm" variant="danger" onClick={() => deleteProjects(selected, clear)}>Delete…</Button>
+    </>
+  );
+}
+
+function projectRowActions(canMutate: boolean, dropping: boolean, on: { open: (p: AdminProject) => void; drop: (p: AdminProject) => void }) {
+  return (p: AdminProject) => (
+    <span className="inline-flex gap-2">
+      {canMutate && <Button size="sm" variant="secondary" onClick={() => on.open(p)}><Eye className="w-3.5 h-3.5 mr-1" aria-hidden="true" />Open</Button>}
+      <Button size="sm" variant="danger" disabled={!canMutate || dropping} onClick={() => on.drop(p)}>
+        <Trash2 className="w-3.5 h-3.5 mr-1" aria-hidden="true" />Drop
+      </Button>
+    </span>
+  );
+}
+
 // Every project on the platform, paged, searched and sorted on the server.
 export function ProjectsAdminTable({ canMutate }: { readonly canMutate: boolean }) {
   const list = useServerList(PROJECT_SORTS);
@@ -133,20 +156,11 @@ export function ProjectsAdminTable({ canMutate }: { readonly canMutate: boolean 
         paging={list.paging(data?.total ?? 0)}
         storageKey="admin-projects"
         selectable={canMutate}
-        bulkActions={(selected, clear) => (
-          <>
-            <Button size="sm" variant="danger" onClick={() => offerSuspendOwners(selected, clear)}>Suspend owners…</Button>
-            <Button size="sm" variant="danger" onClick={() => offerDrop(selected, clear)}>Delete…</Button>
-          </>
-        )}
-        rowActions={(p) => (
-          <span className="inline-flex gap-2">
-            {canMutate && <Button size="sm" variant="secondary" onClick={() => showProject(p.projectId)}><Eye className="w-3.5 h-3.5 mr-1" aria-hidden="true" />Open</Button>}
-            <Button size="sm" variant="danger" disabled={!canMutate || drop.isPending} onClick={() => { drop.reset(); setDropping(p); }}>
-              <Trash2 className="w-3.5 h-3.5 mr-1" aria-hidden="true" />Drop
-            </Button>
-          </span>
-        )}
+        bulkActions={projectBulkActions(offerSuspendOwners, offerDrop)}
+        rowActions={projectRowActions(canMutate, drop.isPending, {
+          open: (p) => showProject(p.projectId),
+          drop: (p) => { drop.reset(); setDropping(p); },
+        })}
         emptyState="No projects provisioned."
       />
       {dropping && (

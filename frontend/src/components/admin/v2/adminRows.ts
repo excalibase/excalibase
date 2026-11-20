@@ -31,14 +31,15 @@ export interface BulkResult<T> {
 // failure on one item never stops the others.
 export async function runBulk<T>(items: readonly T[], act: (item: T) => Promise<unknown>): Promise<BulkResult<T>> {
   const result: BulkResult<T> = { done: 0, failed: [] };
-  for (const item of items) {
+  const attempt = async (item: T) => {
     try {
       await act(item);
       result.done += 1;
     } catch (error) {
       result.failed.push({ item, message: serverErrorMessage(error, 'The request failed') });
     }
-  }
+  };
+  await items.reduce((previous, item) => previous.then(() => attempt(item)), Promise.resolve());
   return result;
 }
 

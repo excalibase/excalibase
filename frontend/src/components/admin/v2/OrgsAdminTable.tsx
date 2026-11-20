@@ -49,6 +49,24 @@ export function orgColumns(): Column<ConsoleOrg>[] {
   ];
 }
 
+// The render props live outside the component so they are not rebuilt as new components on every render.
+function orgBulkActions(offer: (selected: ConsoleOrg[], clear: () => void) => void) {
+  return (selected: ConsoleOrg[], clear: () => void) => (
+    <Button size="sm" variant="danger" onClick={() => offer(selected, clear)}>Revoke…</Button>
+  );
+}
+
+function orgRowActions(canMutate: boolean, on: { changePlan: (org: ConsoleOrg) => void; revoke: (org: ConsoleOrg) => void }) {
+  return (org: ConsoleOrg) => (
+    <span className="inline-flex gap-2">
+      <Button size="sm" variant="secondary" disabled={!canMutate} onClick={() => on.changePlan(org)}>Change plan</Button>
+      <Button size="sm" variant="danger" disabled={!canMutate} onClick={() => on.revoke(org)}>
+        <ShieldAlert className="w-3.5 h-3.5 mr-1" aria-hidden="true" />Revoke
+      </Button>
+    </span>
+  );
+}
+
 const revokeOrg = (org: ConsoleOrg, reason: string) =>
   api.delete(`/admin/orgs/${org.id}`, { params: { cascade: true }, data: { reason } });
 
@@ -121,16 +139,11 @@ export function OrgsAdminTable({ canMutate }: { readonly canMutate: boolean }) {
         paging={list.paging(data?.total ?? 0)}
         storageKey="admin-orgs"
         selectable={canMutate}
-        bulkActions={(selected, clear) => <Button size="sm" variant="danger" onClick={() => offerBulkRevoke(selected, clear)}>Revoke…</Button>}
-        rowActions={(org) => (
-          <span className="inline-flex gap-2">
-            <Button size="sm" variant="secondary" disabled={!canMutate}
-              onClick={() => { setTier.reset(); setChosenTier(org.tier.toUpperCase()); setPlanFor(org); }}>Change plan</Button>
-            <Button size="sm" variant="danger" disabled={!canMutate} onClick={() => { revoke.reset(); setRevoking(org); }}>
-              <ShieldAlert className="w-3.5 h-3.5 mr-1" aria-hidden="true" />Revoke
-            </Button>
-          </span>
-        )}
+        bulkActions={orgBulkActions(offerBulkRevoke)}
+        rowActions={orgRowActions(canMutate, {
+          changePlan: (org) => { setTier.reset(); setChosenTier(org.tier.toUpperCase()); setPlanFor(org); },
+          revoke: (org) => { revoke.reset(); setRevoking(org); },
+        })}
         emptyState="No organizations yet."
       />
       {planFor && (
@@ -144,7 +157,7 @@ export function OrgsAdminTable({ canMutate }: { readonly canMutate: boolean }) {
           onCancel={() => setPlanFor(null)}
         >
           <label className="block text-sm text-text-secondary">
-            Plan
+            <span>Plan</span>
             <select className="mt-1 w-full rounded-lg bg-bg-secondary border border-border-primary p-2 text-text-primary" value={chosenTier} onChange={(event) => setChosenTier(event.target.value)}>
               {PLANS.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
             </select>

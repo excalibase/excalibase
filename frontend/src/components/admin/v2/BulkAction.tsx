@@ -57,7 +57,7 @@ export function BulkDialog<T>({ request, onFinished, onCancel }: BulkDialogProps
 export function BulkOutcomeNotice({ outcome, onDismiss }: { readonly outcome: BulkOutcome; readonly onDismiss: () => void }) {
   const failed = outcome.failures.length > 0;
   return (
-    <div role="status" className={`rounded-lg border border-border-primary px-3 py-2 text-sm flex items-start justify-between gap-3 ${failed ? 'text-amber-400' : 'text-green-400'}`}>
+    <output className={`rounded-lg border border-border-primary px-3 py-2 text-sm flex items-start justify-between gap-3 ${failed ? 'text-amber-400' : 'text-green-400'}`}>
       <div>
         <p>{outcome.summary}</p>
         {outcome.failures.length > 0 && (
@@ -67,6 +67,6 @@ export function BulkOutcomeNotice({ outcome, onDismiss }: { readonly outcome: Bu
         )}
       </div>
       <button type="button" className="text-text-tertiary hover:text-text-primary" onClick={onDismiss}>Dismiss</button>
-    </div>
+    </output>
   );
 }

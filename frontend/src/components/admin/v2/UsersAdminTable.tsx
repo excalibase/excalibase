@@ -63,6 +63,7 @@ export function userColumns(): Column<ConsoleUser>[] {
   ];
 }
 
+type UserAction = 'suspend' | 'unsuspend';
 type Pending = { user: ConsoleUser; action: 'suspend' | 'unsuspend' } | null;
 
 // Every account on the platform, paged and searched on the server.
@@ -97,7 +98,7 @@ export function UsersAdminTable() {
     }
   };
 
-  const offerBulk = (action: 'suspend' | 'unsuspend', selected: ConsoleUser[], clear: () => void) => {
+  const offerBulk = (action: UserAction, selected: ConsoleUser[], clear: () => void) => {
     const items = suspendableUsers(selected).filter((user) => (action === 'suspend' ? user.status !== 'suspended' : user.status === 'suspended'));
     if (items.length === 0) return;
     const word = action === 'suspend' ? 'Suspend' : 'Unsuspend';
@@ -128,19 +129,8 @@ export function UsersAdminTable() {
         paging={list.paging(data?.total ?? 0)}
         storageKey="admin-users"
         selectable
-        bulkActions={(selected, clear) => (
-          <>
-            <Button size="sm" variant="danger" onClick={() => offerBulk('suspend', selected, clear)}>Suspend…</Button>
-            <Button size="sm" variant="secondary" onClick={() => offerBulk('unsuspend', selected, clear)}>Unsuspend…</Button>
-          </>
-        )}
-        rowActions={(user) =>
-          user.role.startsWith('platform_') ? null : (
-            <Button size="sm" variant={user.status === 'suspended' ? 'secondary' : 'danger'}
-              onClick={() => { mutation.reset(); setPending({ user, action: user.status === 'suspended' ? 'unsuspend' : 'suspend' }); }}>
-              {user.status === 'suspended' ? 'Unsuspend' : 'Suspend'}
-            </Button>
-          )}
+        bulkActions={userBulkActions(offerBulk)}
+        rowActions={userRowActions((user, action) => { mutation.reset(); setPending({ user, action }); })}
         emptyState="No users yet."
       />
       {pending && (
@@ -160,15 +150,37 @@ export function UsersAdminTable() {
   );
 }
 
+// The render props live outside the component so they are not rebuilt as new components on every render.
+function userBulkActions(offer: (action: UserAction, selected: ConsoleUser[], clear: () => void) => void) {
+  return (selected: ConsoleUser[], clear: () => void) => (
+    <>
+      <Button size="sm" variant="danger" onClick={() => offer('suspend', selected, clear)}>Suspend…</Button>
+      <Button size="sm" variant="secondary" onClick={() => offer('unsuspend', selected, clear)}>Unsuspend…</Button>
+    </>
+  );
+}
+
+function userRowActions(act: (user: ConsoleUser, action: UserAction) => void) {
+  return (user: ConsoleUser) => {
+    if (user.role.startsWith('platform_')) return null;
+    const suspended = user.status === 'suspended';
+    return (
+      <Button size="sm" variant={suspended ? 'secondary' : 'danger'} onClick={() => act(user, suspended ? 'unsuspend' : 'suspend')}>
+        {suspended ? 'Unsuspend' : 'Suspend'}
+      </Button>
+    );
+  };
+}
+
 function ResultNotice({ result, onDismiss }: { readonly result: SuspendResult; readonly onDismiss: () => void }) {
   const failed = result.appsFailed ?? [];
   return (
-    <div role="status" className={`flex justify-between rounded-lg border border-border-primary px-3 py-2 text-sm ${failed.length ? 'text-amber-400' : 'text-green-400'}`}>
+    <output className={`flex justify-between rounded-lg border border-border-primary px-3 py-2 text-sm ${failed.length ? 'text-amber-400' : 'text-green-400'}`}>
       <span>
         Account is now {result.status}; {(result.appsStopped ?? []).length} app(s) stopped, {(result.appsRestored ?? []).length} restored.
         {failed.map((app) => ` ${app.appName}: ${app.reason}.`)}
       </span>
       <button type="button" className="text-text-tertiary" onClick={onDismiss}>Dismiss</button>
-    </div>
+    </output>
   );
 }
