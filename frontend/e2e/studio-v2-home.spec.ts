@@ -67,7 +67,7 @@ test.describe('Studio v2 Home', () => {
     await expect(health).toContainText('Running');
     const security = page.getByRole('region', { name: 'Security' });
     await expect(security.getByText('Databases open to the internet').locator('xpath=following-sibling::span')).toHaveText('1');
-    await expect(security.getByText('Tokens with access to every project').locator('xpath=following-sibling::span')).toHaveText('1');
+    await expect(security.getByText('Keys with access to every project').locator('xpath=following-sibling::span')).toHaveText('1');
     await expect(page.getByRole('region', { name: 'Credits & usage' }).getByRole('link', { name: /usage details/i })).toHaveAttribute('href', '/usage');
     await expect(page.getByRole('region', { name: 'Build something' }).getByRole('link', { name: /container image/ })).toBeVisible();
   });
@@ -95,7 +95,7 @@ test.describe('Studio v2 Home', () => {
     await mockConsole(page, SEED);
     await page.goto('/account/tokens');
     await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Home' }).click();
-    await expect(page.getByRole('region', { name: 'Recently visited' }).getByRole('link', { name: /Access tokens/ })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Recently visited' }).getByRole('link', { name: /Access keys/ })).toBeVisible();
   });
 
   test('widgets can be hidden', async ({ page }) => {

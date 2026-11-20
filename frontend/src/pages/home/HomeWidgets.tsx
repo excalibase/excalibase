@@ -80,16 +80,16 @@ function Row({ label, value, warn, to }: { readonly label: string; readonly valu
   return to ? <Link to={to} className={cn(row, 'text-text-primary hover:underline')}>{content}</Link> : <div className={cn(row, 'text-text-primary')}>{content}</div>;
 }
 
-export function SecurityWidget({ summary, openUnchecked, tokensKnown }: { readonly summary: Omit<SecuritySummary, 'openDatabases'> & { openDatabases: number | null }; readonly openUnchecked: number; readonly tokensKnown: boolean }) {
-  const tokenValue = (n: number) => (tokensKnown ? n : '—');
+export function SecurityWidget({ summary, openUnchecked, keysKnown }: { readonly summary: Omit<SecuritySummary, 'openDatabases'> & { openDatabases: number | null }; readonly openUnchecked: number; readonly keysKnown: boolean }) {
+  const tokenValue = (n: number) => (keysKnown ? n : '—');
   return (
     <Widget title="Security">
       <div>
         {summary.openDatabases !== null && (
           <Row label="Databases open to the internet" value={summary.openDatabases} warn={summary.openDatabases > 0} />
         )}
-        <Row label="Tokens with access to every project" value={tokenValue(summary.allProjectTokens)} warn={tokensKnown && summary.allProjectTokens > 0} to="/account/tokens" />
-        <Row label="Tokens expiring in 60 days" value={tokenValue(summary.expiringTokens)} to="/account/tokens" />
+        <Row label="Keys with access to every project" value={tokenValue(summary.allProjectTokens)} warn={keysKnown && summary.allProjectTokens > 0} to="/account/tokens" />
+        <Row label="Keys expiring in 60 days" value={tokenValue(summary.expiringTokens)} to="/account/tokens" />
       </div>
       {openUnchecked > 0 && <p className="text-text-secondary">{openUnchecked} database{openUnchecked === 1 ? '' : 's'} could not be checked.</p>}
     </Widget>

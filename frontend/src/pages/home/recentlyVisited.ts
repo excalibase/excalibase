@@ -30,7 +30,7 @@ export interface Visit { to: string; title: string; kind: string }
 const PAGES: Record<string, Visit> = {
   '/instances': { to: '/instances', title: 'Projects', kind: 'Console' },
   '/usage': { to: '/usage', title: 'Usage & credits', kind: 'Account' },
-  '/account/tokens': { to: '/account/tokens', title: 'Access tokens', kind: 'Account' },
+  '/account/tokens': { to: '/account/tokens', title: 'Access keys', kind: 'Account' },
   '/orgs': { to: '/orgs', title: 'Organizations', kind: 'Account' },
 };
 

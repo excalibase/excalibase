@@ -116,7 +116,7 @@ export function HomePage() {
           <SecurityWidget
             summary={{ ...securitySummary({ tokens: tokenList, openDatabases: 0, now }), openDatabases: openDatabases.open }}
             openUnchecked={openDatabases.unchecked}
-            tokensKnown={!tokens.isError && !tokens.isLoading}
+            keysKnown={!tokens.isError && !tokens.isLoading}
           />
         )}
         {shown('build') && <BuildWidget links={build.links} hint={build.hint} />}

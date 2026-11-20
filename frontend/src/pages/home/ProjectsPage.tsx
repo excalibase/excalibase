@@ -55,18 +55,16 @@ function columns(now: Date): Column<ProjectRow>[] {
       id: 'used', header: 'Last used', sortValue: (row) => row.lastUsed,
       cell: (row) => <span className="text-text-secondary">{row.lastUsed === null ? '—' : relativeTime(row.lastUsed, now)}</span>,
     },
-    {
-      id: 'action', header: 'Actions', locked: true,
-      cell: (row) => {
-        const action = rowAction(row.project, row.status);
-        return action.resumeProjectId ? (
-          <ResumeButton projectId={action.resumeProjectId} name={nameOf(row)} className={ACTION} />
-        ) : (
-          <Link to={action.to ?? '/'} aria-label={`${action.label} ${nameOf(row)}`} className={ACTION}>{action.label}</Link>
-        );
-      },
-    },
   ];
+}
+
+function RowAction({ row }: { readonly row: ProjectRow }) {
+  const action = rowAction(row.project, row.status);
+  return action.resumeProjectId ? (
+    <ResumeButton projectId={action.resumeProjectId} name={nameOf(row)} className={ACTION} />
+  ) : (
+    <Link to={action.to ?? '/'} aria-label={`${action.label} ${nameOf(row)}`} className={ACTION}>{action.label}</Link>
+  );
 }
 
 const STATUS_OPTIONS = [
@@ -116,6 +114,7 @@ export function ProjectsPage() {
         error={error}
         onRetry={refetch}
         filters={FILTERS}
+        rowActions={(row) => <RowAction row={row} />}
         paging={{ mode: 'client', pageSize: 10 }}
         storageKey="projects-v2"
         emptyState={

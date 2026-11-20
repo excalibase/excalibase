@@ -52,7 +52,7 @@ describe('describeVisit', () => {
   });
 
   test('names the account pages', () => {
-    expect(describeVisit('/account/tokens', projects)).toEqual({ to: '/account/tokens', title: 'Access tokens', kind: 'Account' });
+    expect(describeVisit('/account/tokens', projects)).toEqual({ to: '/account/tokens', title: 'Access keys', kind: 'Account' });
     expect(describeVisit('/usage', projects)?.title).toBe('Usage & credits');
     expect(describeVisit('/instances', projects)?.title).toBe('Projects');
     expect(describeVisit('/something-unknown', projects)).toBeNull();

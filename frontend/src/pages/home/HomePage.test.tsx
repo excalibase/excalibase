@@ -44,7 +44,7 @@ describe('Home', () => {
     expect(screen.queryByRole('region', { name: 'Needs your attention' })).not.toBeInTheDocument();
   });
 
-  test('tokens appear in the attention bar and the security widget', async () => {
+  test('keys appear in the attention bar and the security widget', async () => {
     mountWith({
       projects: [project('p1')],
       tokens: [{ id: 't1', name: 'old-ci', expiresAt: iso(-3) }, { id: 't2', name: 'soon', expiresAt: iso(30), projectId: 'p1' }],
@@ -53,8 +53,8 @@ describe('Home', () => {
     expect(bar).toHaveTextContent('old-ci');
     expect(within(bar).getByRole('link', { name: 'Revoke old-ci' })).toHaveAttribute('href', '/account/tokens');
     const security = within(screen.getByRole('region', { name: 'Security' }));
-    await waitFor(() => expect(security.getByText('Tokens expiring in 60 days').nextSibling).toHaveTextContent('1'));
-    expect(security.getByText('Tokens with access to every project').nextSibling).toHaveTextContent('0');
+    await waitFor(() => expect(security.getByText('Keys expiring in 60 days').nextSibling).toHaveTextContent('1'));
+    expect(security.getByText('Keys with access to every project').nextSibling).toHaveTextContent('0');
   });
 
   test('counts databases open to the internet, and says when some could not be checked', async () => {
@@ -93,7 +93,7 @@ describe('Home', () => {
     await waitFor(() => expect(recent.getAllByRole('listitem')).toHaveLength(2));
     const items = recent.getAllByRole('listitem');
     expect(items[0]).toHaveTextContent('Reading list › Tables');
-    expect(items[1]).toHaveTextContent('Access tokens');
+    expect(items[1]).toHaveTextContent('Access keys');
     expect(recent.queryByText(/gone/)).not.toBeInTheDocument();
   });
 

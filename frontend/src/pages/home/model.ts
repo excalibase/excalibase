@@ -63,7 +63,7 @@ function tokenItem(token: TokenInfo, kind: 'token-expired' | 'token-expiring', e
   return {
     id: `${kind}:${token.id}`,
     kind,
-    before: 'Token ',
+    before: 'Key ',
     subject: token.name,
     after: kind === 'token-expired' ? ` expired on ${formatDate(expiry)}.${reach}` : ` expires on ${formatDate(expiry)}.${reach}`,
     actions: [{ label: kind === 'token-expired' ? 'Revoke' : 'Review', to: '/account/tokens' }],
