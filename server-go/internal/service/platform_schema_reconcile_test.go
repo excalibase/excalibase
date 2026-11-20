@@ -68,7 +68,10 @@ func TestReconcileProjectRoles_BringsAnOlderProjectUpToDate(t *testing.T) {
 	if !strings.Contains(h.kube.ExecCommands[0], "server_version_num") {
 		t.Fatalf("first exec is not the version probe: %q", h.kube.ExecCommands[0])
 	}
-	sqlText := h.kube.ExecCommands[1]
+	if len(h.kube.ExecStdin) != 1 {
+		t.Fatalf("scripts on stdin = %d, want the registration SQL", len(h.kube.ExecStdin))
+	}
+	sqlText := h.kube.ExecStdin[0]
 	for _, part := range []string{"excalibase_reserved_rebuild", "CREATE SCHEMA IF NOT EXISTS excalibase", "excalibase_scheduler_role", "excalibase.create_role", "excalibase_share_created_schema", "ALTER ROLE %I WITH LOGIN PASSWORD"} {
 		if !strings.Contains(sqlText, part) {
 			t.Errorf("reconcile SQL lacks %q", part)
@@ -130,7 +133,7 @@ func TestReconcileProjectRoles_RevokesAuthFromAProjectWhoseAppRoleStillReadsIt(t
 		!strings.Contains(h.kube.ExecCommands[3], "has_schema_privilege") {
 		t.Fatalf("exec calls = %q, want the auth probe, the version probe, the registration SQL and the probe again", h.kube.ExecCommands)
 	}
-	if !strings.Contains(h.kube.ExecCommands[2], `REVOKE ALL ON SCHEMA auth FROM "excalibase_app", PUBLIC`) {
+	if len(h.kube.ExecStdin) != 1 || !strings.Contains(h.kube.ExecStdin[0], `REVOKE ALL ON SCHEMA auth FROM "excalibase_app", PUBLIC`) {
 		t.Fatal("the registration SQL that ran does not revoke auth")
 	}
 	if got := h.vault.data[rotSchedulerCurrent]["password"]; got != "Filed-1" {
@@ -302,7 +305,7 @@ func TestReconcileProjectRoles_SingleHostFilesAPasswordLogin(t *testing.T) {
 	if report := h.svc.ReconcileProjectRoles(context.Background()); report.Reconciled != 1 || len(report.Failed) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(docker.execs) != 3 || !strings.Contains(strings.Join(docker.execs[1], " "), "excalibase_scheduler_role") {
+	if len(docker.execs) != 3 || !strings.Contains(docker.stdins[1], "excalibase_scheduler_role") {
 		t.Fatalf("container execs = %d", len(docker.execs))
 	}
 	if !strings.Contains(strings.Join(docker.execs[0], " "), "server_version_num") {
@@ -351,7 +354,7 @@ func TestReconcileProjectRoles_RegeneratesAnEmptyFiledPassword(t *testing.T) {
 	if report := h.svc.ReconcileProjectRoles(context.Background()); report.Reconciled != 1 {
 		t.Fatalf("report = %+v", report)
 	}
-	if !strings.Contains(h.kube.ExecCommands[1], "CREATE ROLE") {
+	if len(h.kube.ExecStdin) != 1 || !strings.Contains(h.kube.ExecStdin[0], "CREATE ROLE") {
 		t.Fatal("the registration SQL did not run")
 	}
 }

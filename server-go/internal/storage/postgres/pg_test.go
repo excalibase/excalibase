@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"strings"
 	"testing"
 	"time"
@@ -13,9 +15,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 const (
@@ -34,14 +34,14 @@ func testStore(t *testing.T) *Store {
 	ctx := context.Background()
 
 	containerPwd := testutil.FixturePassword("pg-container")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgContainer, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("platform_test"),
 		postgres.WithUsername("platform"),
 		postgres.WithPassword(containerPwd),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)
@@ -58,6 +58,10 @@ func testStore(t *testing.T) *Store {
 		t.Fatalf("New postgres store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	// Most tests seed projects for orgs they never create.
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		t.Fatal(err)
+	}
 	return store
 }
 

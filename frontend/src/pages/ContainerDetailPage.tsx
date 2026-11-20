@@ -27,6 +27,8 @@ import { useCustomDomainsEnabled, useFeatureEnabled } from '../hooks/useDeployme
 import { LifecycleActions } from '../components/containers/LifecycleActions';
 import { AppLogs } from '../components/containers/AppLogs';
 import { AppDiskCard } from '../components/containers/AppDiskCard';
+import { AppGitBuilds } from '../components/containers/AppGitBuilds';
+import { useProjectRole } from '../hooks/useProjectRole';
 import {
   ContainersHeader,
   HostingGate,
@@ -91,7 +93,8 @@ function describeVar(v: EnvVar): string {
     return `Linked to database ${v.reference.sourceName} (${v.reference.variable})`;
   }
   if (v.kind === 'secret') return `${MASK} secret, set`;
-  return MASK;
+  // A plain value is not a secret: show it, or say it is hidden from this role.
+  return v.value ?? 'Hidden for your role';
 }
 
 // The Service is named after the app, so the project's apps use these (EXC-524, EXC-525).
@@ -161,6 +164,7 @@ function Detail({
   const [lifecycleError, setLifecycleError] = useState<unknown>(null);
   const customDomains = useCustomDomainsEnabled();
   const { enabled: pipeline } = useFeatureEnabled('pipeline');
+  const { canDevelop } = useProjectRole(projectId);
 
   if (isLoading) return <Spinner />;
   if (error || !app) {
@@ -270,6 +274,7 @@ function Detail({
           <AppDomains projectId={projectId} appId={appId} />
         </div>
       )}
+      <AppGitBuilds projectId={projectId} appId={appId} canDevelop={canDevelop} />
       <section className="space-y-2">
         <h4 className="text-sm font-semibold text-text-primary">Deployments</h4>
         <div className="bg-surface-card border border-border-primary rounded-lg">

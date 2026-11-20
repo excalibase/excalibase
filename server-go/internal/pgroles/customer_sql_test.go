@@ -13,7 +13,9 @@ func TestCustomerRoleSQLDefinesThreeLockedDownFunctions(t *testing.T) {
 			"DROP ROUTINE IF EXISTS " + signature + ";\nCREATE FUNCTION " + strings.SplitN(signature, "(", 2)[0] + "(role_name text",
 			"ALTER FUNCTION " + signature + " OWNER TO CURRENT_USER",
 			"REVOKE ALL ON FUNCTION " + signature + " FROM PUBLIC",
-			"GRANT EXECUTE ON FUNCTION " + signature + " TO %I, %I",
+			// The owner's login runs these; the app role, which runs customer SQL, does not.
+			"GRANT EXECUTE ON FUNCTION " + signature + " TO %I'",
+			"REVOKE EXECUTE ON FUNCTION " + signature + " FROM %I'",
 		} {
 			if !strings.Contains(sql, want) {
 				t.Errorf("missing %q", want)
@@ -69,7 +71,8 @@ func TestCustomerRoleSQLNeverCallsOutOfPgCatalog(t *testing.T) {
 		trimmed := strings.TrimSpace(line)
 		if strings.Contains(trimmed, "excalibase.") && !strings.HasPrefix(trimmed, "CREATE FUNCTION") && !strings.HasPrefix(trimmed, "DROP ROUTINE") &&
 			!strings.HasPrefix(trimmed, "ALTER FUNCTION") && !strings.HasPrefix(trimmed, "REVOKE ALL ON FUNCTION") &&
-			!strings.HasPrefix(trimmed, "EXECUTE format('GRANT EXECUTE ON FUNCTION") {
+			!strings.HasPrefix(trimmed, "EXECUTE format('GRANT EXECUTE ON FUNCTION") &&
+			!strings.HasPrefix(trimmed, "EXECUTE format('REVOKE EXECUTE ON FUNCTION") {
 			t.Errorf("a function body refers to the excalibase schema: %s", trimmed)
 		}
 	}
@@ -92,5 +95,31 @@ func TestSquatGuardCoversEveryReservedName(t *testing.T) {
 	}
 	if !strings.Contains(sql, "admin_option") || !strings.Contains(sql, "NOT u.rolsuper") {
 		t.Fatalf("the guard does not look for a non-superuser administering a platform role:\n%s", sql)
+	}
+}
+
+// OTHERS leaves out query_canceled, and the context it would drop quotes the
+// verifier of a password the customer chose.
+func TestCustomerRoleHandlersAlsoCatchACancelledStatement(t *testing.T) {
+	sql := CustomerRoleSQL("owner")
+	if got := strings.Count(sql, "EXCEPTION WHEN OTHERS OR query_canceled THEN"); got != 2 {
+		t.Errorf("handlers that catch a cancelled statement = %d, want create_role and alter_role_password", got)
+	}
+	if strings.Contains(sql, "EXCEPTION WHEN OTHERS THEN") {
+		t.Error("a role handler lets a cancelled statement keep its context")
+	}
+}
+
+// EXC-761: no grant of these functions names the app role, and the install
+// revokes any an older registration left, so customer SQL cannot mint a role.
+func TestCustomerRoleSQLNeverGrantsTheRoleFunctionsToTheAppRole(t *testing.T) {
+	sql := CustomerRoleSQL("app")
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.Contains(line, "GRANT EXECUTE ON FUNCTION") && strings.Contains(line, "excalibase_app") {
+			t.Errorf("the app role is granted a role function: %s", line)
+		}
+	}
+	if got := strings.Count(sql, "REVOKE EXECUTE ON FUNCTION"); got != 3 {
+		t.Errorf("the install revokes %d role functions from the app role, want 3", got)
 	}
 }

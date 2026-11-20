@@ -12,7 +12,7 @@ import (
 // function a customer created in public.
 func TestSuperuserScriptsPinTheirSearchPath(t *testing.T) {
 	spec := projectRoleSpec{databaseName: "app", adminUsername: "owner_x", resetPasswords: true}
-	if sql := projectRoleSQL(spec, projectRoleCredentials{authPassword: "a", appPassword: "b", watcherPassword: "c"}, "pub"); !strings.HasPrefix(sql, pgroles.PinnedSearchPath) {
+	if sql := mustProjectRoleSQL(t, spec, projectRoleCredentials{authPassword: "a", appPassword: "b", watcherPassword: "c"}, "pub"); !strings.HasPrefix(sql, pgroles.PinnedSearchPath) {
 		t.Error("the registration script does not pin its search_path")
 	}
 	argv := documentDBPsql("postgres", dropAllMongoUsersSQL())

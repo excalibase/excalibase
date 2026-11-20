@@ -28,10 +28,12 @@ type RunSpec struct {
 	// InstallCommand and BuildCommand are empty for the defaults the lockfile picks.
 	InstallCommand string
 	BuildCommand   string
-	CPUMillis      int
-	Memory         string
-	Disk           string
-	Timeout        time.Duration
+	// Framework names the server-rendered preset, or is empty for a static folder.
+	Framework string
+	CPUMillis int
+	Memory    string
+	Disk      string
+	Timeout   time.Duration
 	// Env holds the site's declared variables and the project secrets marked build-visible, nothing else.
 	Env map[string]string
 	// LargestPlan is the biggest build any plan runs now; the cluster's quota backstop is sized by it.
@@ -69,8 +71,10 @@ const (
 	FailInstall     FailureKind = "install"
 	FailBuild       FailureKind = "build"
 	FailNoOutput    FailureKind = "no-output"
-	FailImage       FailureKind = "image"
-	FailPlatform    FailureKind = "platform"
+	// FailFramework is a build the framework preset refused as a server-rendered site (EXC-661).
+	FailFramework FailureKind = "framework"
+	FailImage     FailureKind = "image"
+	FailPlatform  FailureKind = "platform"
 	// FailRateLimited is a push past the project's deploys per hour, never started.
 	FailRateLimited FailureKind = "rate-limit"
 	// FailDeploy is output the deploy path refused or could not publish.

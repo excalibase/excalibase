@@ -47,7 +47,7 @@ func readerRoleSuite(t *testing.T, image string) {
 		creds: projectRoleCredentials{authPassword: "Auth-Password-1", appPassword: customerAppPassword,
 			watcherPassword: "Watcher-Password-1", readerPassword: readerPassword},
 	}
-	if err := runSuperuserRoleSQL(context.Background(), pg.execer(), "app", reservedSchemaFirstSQL(), projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub")); err != nil {
+	if err := runSuperuserRoleSQL(context.Background(), pg.execer(), "app", reservedSchemaFirstSQL(), mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub")); err != nil {
 		t.Fatalf("registration: %v", err)
 	}
 	c.owner = pg.connect(t, customerOwner, customerOwnerPassword)
@@ -237,7 +237,7 @@ func (c *readerCase) reachesNoPlatformSchema(t *testing.T) {
 func (c *readerCase) reRegistrationKeepsIt(t *testing.T) {
 	restore := c.spec
 	restore.resetPasswords = true
-	if err := runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app", reservedSchemaFirstSQL(), projectRoleSQL(restore, c.creds, "cdc_watcher_pub")); err != nil {
+	if err := runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app", reservedSchemaFirstSQL(), mustProjectRoleSQL(t, restore, c.creds, "cdc_watcher_pub")); err != nil {
 		t.Fatalf("re-registration: %v", err)
 	}
 	c.pg.assertLogin(t, roleReader, readerPassword)
@@ -251,7 +251,7 @@ func (c *readerCase) unfiledReaderIsLocked(t *testing.T) {
 	withoutReader.readerPassword = ""
 	restore := c.spec
 	restore.resetPasswords = true
-	if err := runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app", reservedSchemaFirstSQL(), projectRoleSQL(restore, withoutReader, "cdc_watcher_pub")); err != nil {
+	if err := runSuperuserRoleSQL(context.Background(), c.pg.execer(), "app", reservedSchemaFirstSQL(), mustProjectRoleSQL(t, restore, withoutReader, "cdc_watcher_pub")); err != nil {
 		t.Fatalf("registration without a reader: %v", err)
 	}
 	fresh := c.pg.connect(t, roleReader, readerPassword)

@@ -14,6 +14,9 @@ import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import type { DatabaseSettings } from '../types';
 import { DOCUMENTDB_LABEL } from '../utils/engine';
 import { serverErrorMessage } from '../utils/serverError';
+import { passwordProblem } from '../utils/databasePassword';
+import { DatabasePasswordField } from '../components/DatabasePasswordField';
+import { ProjectPasswordPanel } from '../components/ProjectPasswordPanel';
 
 type DeployMode = 'k8s' | 'docker';
 
@@ -111,6 +114,10 @@ export function ProvisionPage() {
   const [mysqlVersion, setMysqlVersion] = useState('');
   const { enabled: mysqlOn } = useFeatureEnabled('mysql');
   const mysqlCatalog = useMySQLCatalog(mysqlOn);
+  const { enabled: choosePasswordOn } = useFeatureEnabled('onetimecredentials');
+  const [password, setPassword] = useState('');
+  // The one-time password, held here only until the customer has saved it.
+  const [issued, setIssued] = useState<{ projectId: string; password: string } | null>(null);
 
   const catalog = usePostgresCatalog();
   // Where no major offers DocumentDB (the installation does not run it), the
@@ -145,10 +152,13 @@ export function ProvisionPage() {
   const isMySQL = engine === 'MYSQL';
   const withoutDatabase = engine === 'NONE';
   const chosenVersion = isMySQL ? mysqlVersion : postgresVersion;
+  const typedPassword = choosePasswordOn && !withoutDatabase ? password : '';
+  const passwordError = attempted ? passwordProblem(typedPassword) ?? undefined : undefined;
+  const chosenPassword = typedPassword ? { password: typedPassword } : {};
   const databaseSettings = (): DatabaseSettings =>
     isMySQL
-      ? { databaseType: DatabaseType.MYSQL, mysqlVersion }
-      : { databaseType: DatabaseType.POSTGRESQL, postgresVersion, documentDb: isDocumentDbEngine || documentDb };
+      ? { databaseType: DatabaseType.MYSQL, mysqlVersion, ...chosenPassword }
+      : { databaseType: DatabaseType.POSTGRESQL, postgresVersion, documentDb: isDocumentDbEngine || documentDb, ...chosenPassword };
 
   // The organisation's plan decides the project's tier; the form only shows it.
   const { data: tierConfigs } = useTiers();
@@ -178,9 +188,9 @@ export function ProvisionPage() {
     e.preventDefault();
     setAttempted(true);
     const missing = validateFields({ projectName, orgId, postgresVersion: chosenVersion, needsVersion: !withoutDatabase, engineLabel: isMySQL ? 'MySQL' : 'PostgreSQL' });
-    if (Object.keys(missing).length > 0) return;
+    if (Object.keys(missing).length > 0 || passwordProblem(typedPassword)) return;
     const name = projectName.trim();
-    let result: { projectId: string };
+    let result: { projectId: string; password?: string };
     try {
       result = await provision.mutateAsync(
       withoutDatabase
@@ -190,8 +200,30 @@ export function ProvisionPage() {
     } catch {
       return; // shown below the form from provision.error
     }
+    provision.reset();
+    setPassword('');
+    if (result.password) {
+      setIssued({ projectId: result.projectId, password: result.password });
+      return;
+    }
     navigate(`/project/${result.projectId}`);
   };
+
+  if (issued) {
+    return (
+      <div className="max-w-3xl mx-auto space-y-4" data-testid="provision-page">
+        <ProjectPasswordPanel
+          projectId={issued.projectId}
+          password={issued.password}
+          onDone={() => {
+            const { projectId } = issued;
+            setIssued(null);
+            navigate(`/project/${projectId}`);
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-3xl mx-auto space-y-8" data-testid="provision-page">
@@ -329,6 +361,11 @@ export function ProvisionPage() {
             )}
             {fieldErrors.postgresVersion && (
               <p data-testid="version-error" className="text-sm text-color-error">{fieldErrors.postgresVersion}</p>
+            )}
+            {choosePasswordOn && !withoutDatabase && (
+              <div className="bg-surface-card border border-border-primary rounded-xl p-6">
+                <DatabasePasswordField id="provision-database-password" label="Database password (optional)" value={password} onChange={setPassword} error={passwordError} />
+              </div>
             )}
 
             <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">

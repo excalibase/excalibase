@@ -6,12 +6,14 @@ import (
 )
 
 func TestSuperuserPsqlCommandPinsTheSession(t *testing.T) {
-	cmd := superuserPsqlCommand("app", 150000, "SELECT 1;", "SELECT 2;")
+	cmd := superuserPsqlCommand("app", 150000)
 	joined := strings.Join(cmd, "\x00")
 	for _, want := range []string{"-X", "ON_ERROR_STOP=1", "VERBOSITY=verbose", "-c role=none", "-c default_transaction_read_only=off",
 		"-c statement_timeout=0", "-c lock_timeout=", "-c plpgsql.extra_errors=none", "-c exit_on_error=off",
 		"-c local_preload_libraries=", "-c session_preload_libraries=",
-		"-c password_encryption=scram-sha-256", "-c default_tablespace=", "-c temp_tablespaces="} {
+		"-c password_encryption=scram-sha-256", "-c default_tablespace=", "-c temp_tablespaces=",
+		"-c log_statement=none", "-c log_min_error_statement=panic", "-c log_min_duration_statement=-1",
+		"-c log_min_duration_sample=-1", "-c log_transaction_sample_rate=0", "-c log_error_verbosity=terse", "-c pgaudit.log=none"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("command lacks %q: %q", want, cmd)
 		}
@@ -24,14 +26,39 @@ func TestSuperuserPsqlCommandPinsTheSession(t *testing.T) {
 	if strings.Contains(joined, "-c transaction_timeout") {
 		t.Error("Postgres 15 refuses a connection that names transaction_timeout")
 	}
-	scripts := 0
-	for i, arg := range cmd {
-		if arg == "-c" && strings.Contains(cmd[i+1], "current_user <> session_user") {
-			scripts++
+}
+
+// Exec arguments land in the exec URL, which the API server audits, so the
+// script travels on stdin, each one its own guarded transaction.
+func TestSuperuserScriptKeepsEachScriptItsOwnGuardedTransaction(t *testing.T) {
+	if joined := strings.Join(superuserPsqlCommand("app", 150000), "\x00"); !strings.HasSuffix(joined, "-f\x00-") || strings.Contains(joined, "\x00-c\x00") {
+		t.Fatalf("the command does not read its script from stdin: %q", joined)
+	}
+	input := superuserScript("SELECT 1;", "SELECT 2;")
+	first := strings.Index(input, "SELECT 1;")
+	second := strings.Index(input, "SELECT 2;")
+	if first < 0 || second < first {
+		t.Fatalf("the scripts are not in order: %s", input)
+	}
+	for name, part := range map[string]string{"first": input[:second], "second": input[first+len("SELECT 1;"):]} {
+		if !strings.Contains(part, "BEGIN;") || !strings.Contains(part, "COMMIT;") {
+			t.Errorf("%s script is not its own transaction", name)
 		}
 	}
-	if scripts != 2 {
-		t.Fatalf("guarded scripts = %d, want each as its own transaction", scripts)
+	if strings.Count(input, "current_user <> session_user") != 2 {
+		t.Error("each script must start with the session guard")
+	}
+	if strings.Count(input, "BEGIN;\n") != 2 || strings.Count(input, "\nCOMMIT;\n") != 2 {
+		t.Errorf("want two transactions: %s", input)
+	}
+}
+
+// Only role SQL names verifiers; a probe's failure stays in the operator's log.
+func TestOnlyRoleSQLSilencesTheServerLog(t *testing.T) {
+	for name, cmd := range map[string][]string{"version probe": serverVersionProbeCommand("app"), "terminate": terminateNonServiceBackendsCommand("app")} {
+		if strings.Contains(strings.Join(cmd, " "), "log_statement") {
+			t.Errorf("the %s silences the server log", name)
+		}
 	}
 }
 

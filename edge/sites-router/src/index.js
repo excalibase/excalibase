@@ -83,6 +83,9 @@ export default {
     if (entry.paused) {
       return pausedPage();
     }
+    if (entry.limits && readsPrerenderedCache(request)) {
+      return notFound(env.ABUSE_URL);
+    }
     let response;
     try {
       response = await siteWorker(env, entry).fetch(forwardable(request));
@@ -96,6 +99,25 @@ export default {
     return withSiteHeaders(response, hostname, previewLabel(hostname, baseDomain) !== null, entry.limits !== undefined);
   },
 };
+
+// OpenNext ships its pre-rendered pages as assets under this prefix; the site's own code reads them through
+// the ASSETS binding, and no visitor should (EXC-661). Cloudflare reserves /cdn-cgi/ but that is not
+// verified for a dispatch namespace, so the router refuses the prefix itself, in any spelling.
+const PRERENDERED_CACHE = "/cdn-cgi/_next_cache";
+
+function readsPrerenderedCache(request) {
+  let path = new URL(request.url).pathname;
+  for (let round = 0; round < 3; round++) {
+    try {
+      const decoded = decodeURIComponent(path);
+      if (decoded === path) break;
+      path = decoded;
+    } catch {
+      break;
+    }
+  }
+  return path.toLowerCase().replace(/\/{2,}/g, "/").startsWith(PRERENDERED_CACHE);
+}
 
 // siteWorker is the site's user Worker; a server site runs under its plan's limits,
 // and its outbound fetches carry the site's identity to the outbound Worker.

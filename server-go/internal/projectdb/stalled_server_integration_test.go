@@ -5,6 +5,8 @@ package projectdb
 import (
 	"context"
 	"database/sql"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"net"
 	"strconv"
 	"sync"
@@ -12,9 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
@@ -173,10 +173,12 @@ func failsFastThenReconnects(t *testing.T, proxy *stallingProxy, db *sql.DB, fai
 func startPlainPostgres(t *testing.T) (host, port string) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("excalibase_app"), postgres.WithPassword("app-pw"),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2).WithStartupTimeout(2*time.Minute)))
+		pgready.Wait())
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
 	}

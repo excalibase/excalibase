@@ -8,14 +8,13 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"net/url"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/testcontainers/testcontainers-go"
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/cfworkers"
 	"github.com/excalibase/provisioning-poc/internal/storage/postgres"
@@ -41,12 +40,14 @@ func platformDB(t *testing.T) *postgres.Store {
 func startPlatformDB() (*postgres.Store, error) {
 	ctx := context.Background()
 	password := testutil.FixturePassword("sites-itest")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		return nil, err
+	}
 	container, err := pgmod.Run(ctx, "postgres:16-alpine",
 		pgmod.WithDatabase("platform_test"),
 		pgmod.WithUsername("platform"),
 		pgmod.WithPassword(password),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2).WithStartupTimeout(60*time.Second)),
+		pgready.Wait(),
 	)
 	if err != nil {
 		return nil, err
@@ -61,7 +62,14 @@ func startPlatformDB() (*postgres.Store, error) {
 	}
 	dsn := url.URL{Scheme: "postgres", User: url.UserPassword("platform", password),
 		Host: fmt.Sprintf("%s:%s", host, port.Port()), Path: "platform_test", RawQuery: "sslmode=disable"}
-	return postgres.New(dsn.String())
+	store, err := postgres.New(dsn.String())
+	if err != nil {
+		return nil, err
+	}
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 // acceptingPublisher is a CDN that already holds every file.

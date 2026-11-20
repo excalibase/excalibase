@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -21,6 +22,8 @@ var (
 	// ErrInPlaceNoBackups refuses an in-place restore of a project with
 	// backups off: there is nothing to restore from.
 	ErrInPlaceNoBackups = errors.New("this project has no backups to restore from")
+	// ErrDatabaseNotReplaced is a replace that stopped before it changed anything.
+	ErrDatabaseNotReplaced = errors.New("the database was not replaced")
 	// ErrInPlaceRestoreNotConfigured is a platform wired without in-place restores.
 	ErrInPlaceRestoreNotConfigured = errors.New("restore: in-place restore is not configured")
 )
@@ -53,6 +56,12 @@ type InPlaceCluster interface {
 	// target under the same name, certificates and credentials, returning
 	// once it is up.
 	ReplaceDatabase(ctx context.Context, inst *domain.DatabaseInstance, target map[string]interface{}) error
+}
+
+// HostFirewallWaiter is a cluster whose database starts only behind a host
+// firewall: a rollback waits for it rather than fail while it is down.
+type HostFirewallWaiter interface {
+	WaitHostFirewall(ctx context.Context) error
 }
 
 // InPlaceProjects is what an in-place restore needs from the project.
@@ -124,7 +133,21 @@ func (r *InPlaceRestore) Restore(ctx context.Context, cluster InPlaceCluster, pr
 		return r.setStatus(inst.ProjectID, domain.StatusActive, "", "")
 	}
 	log.Printf("in-place restore %s: %v", projectID, cause)
+	if rollback != nil && errors.Is(cause, ErrDatabaseNotReplaced) {
+		return r.resumeUnchanged(ctx, inst, cause)
+	}
 	return r.rollBack(ctx, cluster, inst, rollback, cause)
+}
+
+// resumeUnchanged returns a project whose database was never replaced to service.
+func (r *InPlaceRestore) resumeUnchanged(ctx context.Context, inst *domain.DatabaseInstance, cause error) error {
+	if err := r.projects.RestartReplication(ctx, inst); err != nil {
+		log.Printf("in-place restore %s: restart replication: %v", inst.ProjectID, err)
+	}
+	if err := r.setStatus(inst.ProjectID, domain.StatusActive, "", ""); err != nil {
+		return err
+	}
+	return &InPlaceRestoreError{Public: "the restore could not start, so nothing was changed; try again", Cause: cause}
 }
 
 // safetyPoint is the backup a failed replace is rolled back to. A project
@@ -188,12 +211,30 @@ func (r *InPlaceRestore) replace(ctx context.Context, cluster InPlaceCluster, in
 func (r *InPlaceRestore) rollBack(ctx context.Context, cluster InPlaceCluster, inst *domain.DatabaseInstance, safety *safetyBackup, cause error) error {
 	if safety == nil {
 		reason := "the restore did not complete; restore again from Backups"
+		// The backup an earlier failure named is still the way back.
+		if inst.CurrentStep == domain.RestoreStepRestoreStopped && inst.FailureReason != "" {
+			reason = inst.FailureReason
+		}
 		if err := r.setStatus(inst.ProjectID, domain.StatusRestoring, domain.RestoreStepRestoreStopped, reason); err != nil {
 			log.Printf("in-place restore %s: record failure: %v", inst.ProjectID, err)
 		}
 		return &InPlaceRestoreError{Public: reason, Cause: cause}
 	}
 	ReportRestoreProgress(ctx, domain.RestoreStepRollingBack)
+	if errors.Is(cause, provisioner.ErrHostFirewallDown) {
+		// Whoever asked may be long gone; the project should not stay down for that.
+		ctx = context.WithoutCancel(ctx)
+		if waiter, ok := cluster.(HostFirewallWaiter); ok {
+			if err := waiter.WaitHostFirewall(ctx); err != nil {
+				reason := fmt.Sprintf("the restore did not complete and the host firewall is still not healthy, so the database could not be put back; "+
+					"once it is healthy, restore backup %s into this project", safety.id)
+				if statusErr := r.setStatus(inst.ProjectID, domain.StatusRestoring, domain.RestoreStepRestoreStopped, reason); statusErr != nil {
+					log.Printf("in-place restore %s: record failure: %v", inst.ProjectID, statusErr)
+				}
+				return &InPlaceRestoreError{Public: reason, Cause: errors.Join(cause, err)}
+			}
+		}
+	}
 	if err := r.replace(ctx, cluster, inst, safety.target); err != nil {
 		reason := fmt.Sprintf("the restore did not complete and the database could not be put back automatically; "+
 			"its data from just before the restore is in backup %s — restore that backup into this project", safety.id)

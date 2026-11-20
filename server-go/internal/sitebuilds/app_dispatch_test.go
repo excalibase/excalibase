@@ -3,6 +3,7 @@ package sitebuilds
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -115,6 +116,23 @@ func TestAppBuild_PublishFailuresKeepTheirKind(t *testing.T) {
 		if done.Status != StatusFailed || done.FailureKind != tc.wantKind || strings.Contains(done.FailureReason, "10.0.0.1") {
 			t.Errorf("%v: %+v", tc.err, done)
 		}
+	}
+}
+
+// A spool with no room is the platform's moment, not the build's fault: the finished build goes back to the queue.
+func TestAppBuild_AFullSpoolRequeuesTheBuildInsteadOfFailingIt(t *testing.T) {
+	bed := newTestBed(true)
+	bed.publisher.err = fmt.Errorf("%w: 1 byte free", ErrTryLater)
+	queued := queueApp(t, bed, AppSettings{Builder: AppBuilderBuildpacks})
+	bed.runAll()
+	waiting := bed.store.build(queued.ID)
+	if waiting.Status != StatusQueued || waiting.FailureKind != "" || waiting.FailureReason != "" || waiting.FinishedAt != nil {
+		t.Fatalf("a full spool left the build %+v", waiting)
+	}
+	bed.publisher.err = nil
+	bed.runAll()
+	if done := bed.store.build(queued.ID); done.Status != StatusSucceeded || done.DeployID == "" {
+		t.Errorf("once there was room: %+v", done)
 	}
 }
 

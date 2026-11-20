@@ -13,18 +13,20 @@ import (
 // customer trigger runs as it, and it holds nothing but DML on those tables.
 const roleScheduler = "excalibase_scheduler"
 
-// BuildSchedulerRoleSQL creates excalibase_scheduler if absent and the
+// BuildSchedulerRoleSQL creates excalibase_scheduler, from the SCRAM verifier
+// of its password, if absent and the
 // scheduler tables, owned by the superuser that runs it, and grants the role
 // DML on them and nothing else. Its search_path never reaches a schema a
 // customer can create in. Run after BuildProjectRoleSQL, which leaves the
 // schema the superuser's alone.
-func BuildSchedulerRoleSQL(schedulerPass, dbName string) string {
+func BuildSchedulerRoleSQL(schedulerVerifier, dbName string) string {
 	role := schema.QuoteIdent(roleScheduler)
 	return fmt.Sprintf(`
 DO $excalibase_scheduler_role$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'excalibase_scheduler') THEN
     EXECUTE format('CREATE ROLE %s WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %%L', %s);
   END IF;
+  `+raiseWithoutContext+`
 END $excalibase_scheduler_role$;
 ALTER ROLE %s IN DATABASE %s SET search_path = pg_catalog, pg_temp;
 %s
@@ -34,7 +36,7 @@ REVOKE ALL ON excalibase.excalibase_scheduled_functions, excalibase.excalibase_c
 GRANT USAGE ON SCHEMA excalibase TO %s;
 GRANT SELECT, INSERT, UPDATE, DELETE ON excalibase.excalibase_scheduled_functions, excalibase.excalibase_cron_jobs TO %s;
 `,
-		role, sqlTextLiteral(schedulerPass),
+		role, sqlTextLiteral(schedulerVerifier),
 		role, schema.QuoteIdent(dbName),
 		platformdb.SchedulerTablesSQL,
 		role, role,

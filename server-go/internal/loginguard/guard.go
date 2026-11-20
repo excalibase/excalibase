@@ -62,6 +62,16 @@ func (g *Guard) Succeeded(identity string) {
 	delete(g.entries, normalise(identity))
 }
 
+// Refund gives back an attempt whose password was never checked (the check
+// was refused for load), so a flood cannot lock an account by crowding it out.
+func (g *Guard) Refund(identity string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if e, ok := g.entries[normalise(identity)]; ok && e.attempts > 0 {
+		e.attempts--
+	}
+}
+
 func (g *Guard) sweep(now time.Time) {
 	if now.Sub(g.lastSweep) < g.window {
 		return

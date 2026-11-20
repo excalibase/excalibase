@@ -53,7 +53,7 @@ func newPlatformSchemaCaseOn(t *testing.T, pg *rolePostgres) *platformSchemaCase
 // startup reconcile all do, then logs every platform role in.
 func (c *platformSchemaCase) register(t *testing.T) {
 	t.Helper()
-	c.pg.psql(t, projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub"))
+	c.pg.psql(t, mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"))
 	c.app = c.pg.connect(t, roleApp, customerAppPassword)
 	c.scheduler = c.pg.connect(t, roleScheduler, platformSchedulerPassword)
 	c.authAdmin = c.pg.connect(t, roleAuthAdmin, platformAuthPassword)
@@ -121,8 +121,8 @@ func TestPlatformSchema_CustomerSQLKeepsItsOwnWork(t *testing.T) {
 	mustExec(t, c.app, `CREATE SCHEMA billing`)
 	mustExec(t, c.app, `CREATE FUNCTION public.touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`)
 	mustExec(t, c.app, `CREATE TRIGGER notes_touch BEFORE UPDATE ON public.notes FOR EACH ROW EXECUTE FUNCTION public.touch()`)
-	// Studio and realtime still call the platform's guarded functions.
-	mustExec(t, c.app, `SELECT excalibase.create_role('studio_reader', 'Reader-1', true, '{}')`)
+	// Studio and realtime still call the platform's guarded functions; role management runs as the owner (EXC-761).
+	mustExec(t, c.owner(t), `SELECT excalibase.create_role('studio_reader', 'Reader-1', true, '{}')`)
 	mustExec(t, c.app, `SELECT excalibase.set_realtime_table('public', 'notes', true)`)
 	mustExec(t, c.app, `SELECT excalibase.set_realtime_table('public', 'notes', false)`)
 	mustFailArgs(t, c.app, `SELECT excalibase.set_realtime_table('excalibase', 'excalibase_cron_jobs', true)`, nil, "cannot be published")

@@ -105,11 +105,29 @@ const (
 	// database URL and return them through its error text or logs. The flag only
 	// removes one convenient way of running such code from the agent (EXC-684).
 	FunctionInvoke Feature = "functioninvoke"
+	// ProxyBlock refuses an app that is a proxy or VPN node at create, update
+	// and deploy (EXC-755). Unlike the features above it is on unless switched off.
+	ProxyBlock Feature = "proxyblock"
+	// SignupGuard refuses disposable and throwaway mail at account creation and
+	// limits sign-ups per network (EXC-755). On unless switched off.
+	SignupGuard Feature = "signupguard"
+	// OneTimeCredentials shows a database password once, at creation and at a
+	// reset, and never returns it again: the credentials route carries no
+	// password and the connection string a template (EXC-759).
+	OneTimeCredentials Feature = "onetimecredentials"
+	// WALArchiveAlert raises a platform alert, mailed to the platform admins,
+	// when a database's WAL archiving has been failing too long or a project's
+	// backup credential cannot be renewed (EXC-784). On unless switched off.
+	WALArchiveAlert Feature = "walarchivealert"
+	// FreeWALUpload makes a Free database ship its WAL hourly even when idle,
+	// where other plans keep the operator's five minutes (EXC-784). On unless
+	// switched off.
+	FreeWALUpload Feature = "freewalupload"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, FunctionInvoke}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke}
 }
 
 type Flags interface {

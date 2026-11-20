@@ -442,8 +442,12 @@ func TestDispatcher_ShutdownRequeuesRunningBuilds(t *testing.T) {
 		close(done)
 	}()
 	deadline := time.Now().Add(5 * time.Second)
-	for h.Build(first.ID).Status != sitebuilds.StatusRunning && time.Now().Before(deadline) {
+	// RUNNING is claimed before the job starts; wait for the job itself.
+	for len(h.Runner.Specs()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
+	}
+	if len(h.Runner.Specs()) == 0 {
+		t.Fatal("the build's job never started")
 	}
 	cancel()
 	select {

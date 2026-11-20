@@ -129,8 +129,8 @@ func (s *PerformanceService) readStatements(ctx context.Context, inst *domain.Da
 	if err != nil {
 		return nil, err
 	}
-	exec := func(ctx context.Context, cmd []string) (string, error) {
-		return s.k8sClient.ExecInPod(ctx, inst.Namespace, primary, "postgres", cmd)
+	exec := func(ctx context.Context, cmd []string, stdin string) (string, error) {
+		return s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, primary, "postgres", cmd, stdin)
 	}
 	return readPostgresStatements(ctx, exec, inst, sortByTotal, limit)
 }

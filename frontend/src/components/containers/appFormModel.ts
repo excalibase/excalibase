@@ -60,10 +60,17 @@ export const MAX_SECRET_BYTES = 8 * 1024;
 
 let nextRowId = 0;
 
+// Names that hold credentials. A plain value is visible to every Developer on
+// the project and stored in the app's definition, so these are always Secrets.
+const SECRET_LIKE_NAME = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)/i;
+export const looksSecret = (name: string) => SECRET_LIKE_NAME.test(name);
+
+// A new row is a Secret: owners paste API keys here, and a plain value is the
+// opt-in, not the default.
 export const emptyEnvRow = (): EnvRow => ({
   id: nextRowId++,
   name: '',
-  kind: 'literal',
+  kind: 'secret',
   value: '',
   variable: 'DATABASE_URL',
   secretValue: '',
@@ -191,6 +198,8 @@ function envRowError(row: EnvRow, seen: Set<string>, databaseName?: string): str
   if (row.kind === 'reference' && !databaseName)
     return 'This project has no database to connect to yet.';
   if (row.kind === 'secret') return secretError(row);
+  if (row.kind === 'literal' && looksSecret(row.name))
+    return `${row.name} looks like a credential: make it a Secret, not a plain value.`;
   return undefined;
 }
 

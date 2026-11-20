@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/netip"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -45,6 +46,9 @@ type authHookUpdate struct {
 	URL     string `json:"url"`
 }
 
+// SetAuthHookDeny refuses hook URLs that name one of the install's own addresses.
+func (h *ProvisioningHandler) SetAuthHookDeny(deny []netip.Prefix) { h.authHookDeny = deny }
+
 func (h *ProvisioningHandler) authHooksOn(ctx context.Context) bool {
 	return features.Enabled(ctx, h.authOAuth.Flags, features.AuthHooks)
 }
@@ -77,7 +81,7 @@ func (h *ProvisioningHandler) PutAuthHook(w http.ResponseWriter, r *http.Request
 		httpError(w, "unknown auth hook", http.StatusNotFound)
 		return
 	}
-	next, ok := decodeAuthHookUpdate(w, r, hook)
+	next, ok := decodeAuthHookUpdate(w, r, hook, h.authHookDeny)
 	if !ok {
 		return
 	}
@@ -98,7 +102,7 @@ func (h *ProvisioningHandler) PutAuthHook(w http.ResponseWriter, r *http.Request
 
 // decodeAuthHookUpdate validates the body. The 409 for a missing secret is the
 // store's, so the check cannot race a removal.
-func decodeAuthHookUpdate(w http.ResponseWriter, r *http.Request, hook string) (domain.ProjectAuthHook, bool) {
+func decodeAuthHookUpdate(w http.ResponseWriter, r *http.Request, hook string, deny []netip.Prefix) (domain.ProjectAuthHook, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
 	var body authHookUpdate
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -113,7 +117,7 @@ func decodeAuthHookUpdate(w http.ResponseWriter, r *http.Request, hook string) (
 		}
 		return next, true
 	}
-	normalized, err := domain.ValidateAuthHookURL(body.URL)
+	normalized, err := domain.ValidateAuthHookURLWithDeny(body.URL, deny)
 	if err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return domain.ProjectAuthHook{}, false

@@ -30,6 +30,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/buildegress"
 	"github.com/excalibase/provisioning-poc/internal/dockerapps"
+	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 )
 
@@ -58,7 +59,7 @@ const (
 	// managedPrefix is what the engine proxy requires of every name it creates.
 	managedPrefix = "excalibase-"
 	// egressNetworkName is the one network with a route out, shared by every build's sidecar.
-	egressNetworkName = "build-egress"
+	egressNetworkName = engineproxy.BuildEgressNetwork
 	// gatewayModeIPv4 is Docker's bridge option; "isolated" gives an internal network no address on the host.
 	gatewayModeIPv4 = "com.docker.network.bridge.gateway_mode_ipv4"
 	// defaultDiskCheckEvery paces the disk watcher; a build may overshoot its disk by this much writing.
@@ -190,7 +191,7 @@ func (r *Runner) checkHostIsolation(ctx context.Context) (isolation, error) {
 	_, err := r.engine.NetworkCreate(ctx, name, options)
 	if found.gateway && dockerapps.GatewayModeRefused(err) {
 		log.Printf("site builds: the engine refused an isolated gateway (%v); build networks are made without it", err)
-		found.gateway, options.Options = false, nil
+		found.gateway, options.Options = false, dockerapps.FencedBridgeOptions(name)
 		_, err = r.engine.NetworkCreate(ctx, name, options)
 	}
 	if err != nil {
@@ -211,6 +212,8 @@ func (r *Runner) checkHostIsolation(ctx context.Context) (isolation, error) {
 			found.isolated = false
 		}
 	}
+	// An engine that ignored the option (Docker 26) gave it an address anyway: name the bridges for the firewall.
+	found.gateway = found.gateway && found.isolated
 	return found, nil
 }
 
@@ -223,13 +226,16 @@ func (r *Runner) HostIsolated() bool {
 }
 
 // buildNetworkOptions: internal, and with no address on the host where Verify found the engine takes that.
-func (r *Runner) buildNetworkOptions(labels map[string]string) network.CreateOptions {
+func (r *Runner) buildNetworkOptions(name string, labels map[string]string) network.CreateOptions {
 	options := network.CreateOptions{Driver: "bridge", Internal: true, Labels: labels}
 	r.mu.Lock()
 	gateway := r.gateway
 	r.mu.Unlock()
-	if gateway {
+	switch {
+	case gateway:
 		options.Options = dockerapps.IsolatedGatewayOptions()
+	case !r.opts.Isolate:
+		options.Options = dockerapps.FencedBridgeOptions(name)
 	}
 	return options
 }

@@ -17,7 +17,7 @@ const STEP_LABEL: Record<MajorUpgradeStep, string> = {
   UPGRADE_STARTING: 'Starting the database',
   UPGRADE_FINISHING: 'Finishing (statistics, extensions, new backup)',
   UPGRADE_ROLLING_BACK: 'Rolling back',
-  UPGRADE_WAITING: 'Still converting; checked again every few minutes',
+  UPGRADE_WAITING: 'Waiting; checked again every few minutes',
 };
 
 const engineName = (engine: string) => (engine.toUpperCase() === 'MYSQL' ? 'MySQL' : 'PostgreSQL');
@@ -32,8 +32,27 @@ function startRefusal(error: unknown) {
   };
 }
 
+// A run left open is not working on anything: it waits on what stopped it, and the server says what.
+function RunWaiting({ run }: { readonly run: MajorUpgradeRun }) {
+  const backup = run.safetyBackupId;
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 mb-3 text-sm text-amber-400" data-testid="major-upgrade-waiting">
+      <p>{run.error || `The upgrade to ${engineName(run.engine)} ${run.toVersion} is waiting; it is checked again every few minutes.`}</p>
+      {backup && !run.error?.includes(backup) && (
+        <p className="text-xs mt-1">
+          To leave it instead: restore backup <span className="font-mono">{backup}</span>, taken before the upgrade, into
+          a new project, then delete this one.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function RunOutcome({ run }: { readonly run: MajorUpgradeRun }) {
   const engine = engineName(run.engine);
+  if (run.status === 'RUNNING' && run.step === 'UPGRADE_WAITING') {
+    return <RunWaiting run={run} />;
+  }
   if (run.status === 'RUNNING') {
     return (
       <div className="flex items-center gap-2 text-sm text-blue-400 mb-3" data-testid="major-upgrade-running">

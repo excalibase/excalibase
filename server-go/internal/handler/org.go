@@ -1,12 +1,12 @@
 package handler
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -32,6 +32,7 @@ type OrgHandler struct {
 	// nodes checks a new plan's instances fit the platform; a plan change
 	// is refused while it is unset.
 	nodes NodePlacement
+	audit auditWriter
 }
 
 // SetNodePlacement wires the check a plan change must pass.
@@ -173,15 +174,9 @@ func (h *OrgHandler) ListMyOrgs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var orgs []*domain.Org
-	var err error
-
-	// Platform admins see all orgs
-	if auth.HasPermission(user.Role, auth.PermViewAny) {
-		orgs, err = h.orgStore.FindAllOrgs(r.Context())
-	} else {
-		orgs, err = h.orgStore.FindOrgsByUser(r.Context(), user.ID)
-	}
+	// A platform admin lists the orgs they belong to like anyone else; every
+	// customer org is reached through the admin console (EXC-757).
+	orgs, err := h.orgStore.FindOrgsByUser(r.Context(), user.ID)
 
 	if err != nil {
 		httpError(w, "failed to list orgs", http.StatusInternalServerError)
@@ -216,7 +211,7 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermUpdateOrg) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -286,16 +281,45 @@ func (h *OrgHandler) planFitsThePlatform(w http.ResponseWriter, r *http.Request,
 	return false
 }
 
+const errOrgHasProjects = "delete this organization's projects first"
+
+// orgHasProjects reports whether any project, in any state, still belongs to
+// the org. The store refuses the delete too; this gives the clear answer first.
+func (h *OrgHandler) orgHasProjects(orgID string) bool {
+	if h.instanceStore == nil {
+		return false
+	}
+	instances, err := h.instanceStore.FindAll()
+	if err != nil {
+		return true
+	}
+	for _, inst := range instances {
+		if inst.OrgID == orgID {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *OrgHandler) DeleteOrg(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermDeleteOrg) {
-		httpError(w, "only org owner can delete", http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, "only org owner can delete")
 		return
 	}
 
-	if err := h.orgStore.DeleteOrg(r.Context(), orgID); err != nil {
+	if h.orgHasProjects(orgID) {
+		httpError(w, errOrgHasProjects, http.StatusConflict)
+		return
+	}
+	err := h.orgStore.DeleteOrg(r.Context(), orgID)
+	if errors.Is(err, storage.ErrOrgHasProjects) {
+		httpError(w, errOrgHasProjects, http.StatusConflict)
+		return
+	}
+	if err != nil {
 		httpError(w, "failed to delete org", http.StatusInternalServerError)
 		return
 	}
@@ -328,7 +352,7 @@ func (h *OrgHandler) InviteOrgMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -357,15 +381,15 @@ func (h *OrgHandler) InviteOrgMember(w http.ResponseWriter, r *http.Request) {
 	h.resolveAndAddMember(w, r, orgID, req.UserID, req.Email, req.Role)
 }
 
-// resolveInvitee finds the user an invite names, by id or by email.
-func (h *OrgHandler) resolveInvitee(ctx context.Context, userID, email string) (*domain.User, error) {
-	if userID != "" {
-		return h.userStore.FindUserByID(ctx, userID)
+const errInvalidProjectRole = "invalid role: must be admin, editor, or viewer"
+
+// isValidProjectRole checks the role names a project member may hold.
+func isValidProjectRole(role string) bool {
+	switch role {
+	case domain.ProjectRoleAdmin, domain.ProjectRoleEditor, domain.ProjectRoleViewer:
+		return true
 	}
-	if email == "" {
-		return nil, nil
-	}
-	return h.userStore.FindUserByEmail(ctx, email)
+	return false
 }
 
 // isValidOrgRole checks if the role is one of the allowed org-level roles.
@@ -377,48 +401,58 @@ func isValidOrgRole(role string) bool {
 	return false
 }
 
-// resolveAndAddMember looks up the user by email if needed, then either adds
-// them as a member directly (user exists) or creates a pending invite.
+// resolveAndAddMember files a pending invite and nothing else: nobody joins an
+// org without accepting with their own verified address. An address is never
+// looked up, and a user id only supplies that user's address, so the answer is
+// the same whether or not they have an account or are already a member.
 func (h *OrgHandler) resolveAndAddMember(w http.ResponseWriter, r *http.Request, orgID, userID, email, role string) {
-	if userID == "" && !isEmailAddress(email) {
+	if userID != "" {
+		var ok bool
+		if email, ok = h.inviteeAddress(w, r, userID); !ok {
+			return
+		}
+	}
+	if isServiceAccountAddress(email) {
+		httpError(w, errServiceAccountMember, http.StatusBadRequest)
+		return
+	}
+	if !isEmailAddress(email) {
 		httpError(w, "enter a valid e-mail address, like name@example.com", http.StatusBadRequest)
 		return
 	}
-	if h.userStore != nil {
-		if u, _ := h.resolveInvitee(r.Context(), userID, email); u != nil {
-			if u.IsService() {
-				// A service principal is platform-scoped: it authenticates
-				// with a capability token, never through an org membership.
-				httpError(w, "service accounts cannot be organization members", http.StatusBadRequest)
-				return
-			}
-			userID = u.ID
-		}
-	}
-
-	if userID != "" {
-		// The store answers "not a member" with sql.ErrNoRows.
-		existing, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			log.Printf("invite to %s: look up membership: %v", orgID, err)
-			httpError(w, errAddMemberFailed, http.StatusInternalServerError)
-			return
-		}
-		if existing != nil {
-			httpError(w, "that person is already a member of this organization; change their role in the list instead", http.StatusConflict)
-			return
-		}
-		if err := h.orgStore.AddOrgMember(r.Context(), &domain.OrgMember{
-			OrgID: orgID, UserID: userID, Role: role,
-		}); err != nil {
-			httpError(w, errAddMemberFailed, http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-		writeJSON(w, map[string]string{"status": "invited"})
-		return
-	}
 	h.createInviteLink(w, r, orgID, email, role)
+}
+
+const errServiceAccountMember = "service accounts cannot be organization members"
+
+// isServiceAccountAddress spots the internal service-account domain by its
+// spelling, with no lookup: a service principal is platform-scoped and
+// authenticates with a capability token, never through an org membership.
+func isServiceAccountAddress(email string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(email)), serviceAccountEmail)
+}
+
+// inviteeAddress is the address of the user an invite names by id.
+func (h *OrgHandler) inviteeAddress(w http.ResponseWriter, r *http.Request, userID string) (string, bool) {
+	if h.userStore == nil {
+		httpError(w, errAddMemberFailed, http.StatusInternalServerError)
+		return "", false
+	}
+	user, err := h.userStore.FindUserByID(r.Context(), userID)
+	if err != nil {
+		log.Printf("invite: look up user: %v", err)
+		httpError(w, errAddMemberFailed, http.StatusInternalServerError)
+		return "", false
+	}
+	if user == nil {
+		httpError(w, "user not found", http.StatusNotFound)
+		return "", false
+	}
+	if user.IsService() {
+		httpError(w, errServiceAccountMember, http.StatusBadRequest)
+		return "", false
+	}
+	return user.Email, true
 }
 
 func (h *OrgHandler) UpdateOrgMemberRole(w http.ResponseWriter, r *http.Request) {
@@ -426,7 +460,7 @@ func (h *OrgHandler) UpdateOrgMemberRole(w http.ResponseWriter, r *http.Request)
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -460,7 +494,7 @@ func (h *OrgHandler) RemoveOrgMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -560,7 +594,7 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -582,12 +616,8 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate project role
-	validProjectRoles := map[string]bool{
-		domain.ProjectRoleAdmin: true, domain.ProjectRoleEditor: true, domain.ProjectRoleViewer: true,
-	}
-	if !validProjectRoles[req.Role] {
-		httpError(w, "invalid role: must be admin, editor, or viewer", http.StatusBadRequest)
+	if !isValidProjectRole(req.Role) {
+		httpError(w, errInvalidProjectRole, http.StatusBadRequest)
 		return
 	}
 
@@ -610,7 +640,7 @@ func (h *OrgHandler) UpdateProjectMemberRole(w http.ResponseWriter, r *http.Requ
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -631,6 +661,11 @@ func (h *OrgHandler) UpdateProjectMemberRole(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	if !isValidProjectRole(req.Role) {
+		httpError(w, errInvalidProjectRole, http.StatusBadRequest)
+		return
+	}
+
 	userID := chi.URLParam(r, "userId")
 	if err := h.orgStore.UpdateProjectMemberRole(r.Context(), projectID, userID, req.Role); err != nil {
 		httpError(w, "failed to update role", http.StatusInternalServerError)
@@ -644,7 +679,7 @@ func (h *OrgHandler) RemoveProjectMember(w http.ResponseWriter, r *http.Request)
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		h.denyOrgAction(w, r, orgID, user.ID, errInsufficientPerms)
 		return
 	}
 
@@ -687,9 +722,11 @@ func (h *OrgHandler) ListPendingInvites(w http.ResponseWriter, r *http.Request) 
 
 // --- Helpers ---
 
+// isMemberOrPlatformAdmin is whether the caller belongs to the org. Only a
+// platform service principal skips the lookup; a human platform admin reads and
+// acts on another customer's org through the console, with a reason (EXC-757).
 func (h *OrgHandler) isMemberOrPlatformAdmin(r *http.Request, orgID, userID string) bool {
-	user := auth.GetUser(r.Context())
-	if user != nil && auth.HasPermission(user.Role, auth.PermManageUsers) {
+	if auth.IsPlatformServicePrincipal(auth.GetUser(r.Context()), auth.GetToken(r.Context())) {
 		return true
 	}
 	// A store that reports "no such member" as (nil, nil) rather than an error
@@ -699,9 +736,7 @@ func (h *OrgHandler) isMemberOrPlatformAdmin(r *http.Request, orgID, userID stri
 }
 
 func (h *OrgHandler) hasOrgPermission(r *http.Request, orgID, userID string, perm auth.OrgPermission) bool {
-	// Platform admins can do anything
-	user := auth.GetUser(r.Context())
-	if user != nil && auth.HasPermission(user.Role, auth.PermManageUsers) {
+	if auth.IsPlatformServicePrincipal(auth.GetUser(r.Context()), auth.GetToken(r.Context())) {
 		return true
 	}
 
@@ -710,4 +745,16 @@ func (h *OrgHandler) hasOrgPermission(r *http.Request, orgID, userID string, per
 		return false
 	}
 	return auth.HasOrgPermission(member.Role, perm)
+}
+
+// denyOrgAction answers a refused org action. Someone outside the org is told
+// it does not exist, whatever they tried, so the id confirms nothing; a member
+// who lacks the role is told so.
+func (h *OrgHandler) denyOrgAction(w http.ResponseWriter, r *http.Request, orgID, userID, message string) {
+	member, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
+	if err != nil || member == nil {
+		httpError(w, errOrgNotFound, http.StatusNotFound)
+		return
+	}
+	httpError(w, message, http.StatusForbidden)
 }

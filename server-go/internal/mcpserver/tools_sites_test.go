@@ -75,6 +75,16 @@ func sitesRouteCases() []routeCase {
 			},
 		},
 		{
+			name: "create_site as a server site", tool: "create_site", args: map[string]any{"project_id": testProjectA, "name": "shop", "kind": "server"},
+			setup:  func(f *fakeRoutes) { f.on(http.MethodPost, projectsA+"/sites/", 201, storedSite) },
+			expect: []string{"POST " + projectsA + "/sites/"},
+			check: func(t *testing.T, calls []recordedCall, _ map[string]any) {
+				if calls[0].Body != `{"kind":"server","name":"shop"}` {
+					t.Errorf("body %s", calls[0].Body)
+				}
+			},
+		},
+		{
 			name: "list_sites", tool: "list_sites", args: map[string]any{"project_id": testProjectA},
 			setup:  func(f *fakeRoutes) { f.on(http.MethodGet, projectsA+"/sites/", 200, "["+storedSite+"]") },
 			expect: []string{"GET " + projectsA + "/sites/"},

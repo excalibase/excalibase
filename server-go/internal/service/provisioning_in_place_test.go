@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
@@ -50,9 +51,11 @@ func TestReapplyCredentialsSetsTheFiledPasswordsBack(t *testing.T) {
 	}
 	sql := h.kube.ExecStdin[0]
 	for _, want := range []string{rotOwner, roleAuthAdmin, roleApp} {
-		if !strings.Contains(sql, hexOf(want)) || !strings.Contains(sql, hexOf(testutil.FixturePassword(want))) {
-			t.Errorf("the %s password on file must be set back", want)
-		}
+		assertSetsVerifierOf(t, sql, want, testutil.FixturePassword(want))
+		assertNoPassword(t, "the batch", sql, map[string]string{want: testutil.FixturePassword(want)})
+	}
+	if !strings.Contains(sql, pgroles.QuietSessionSQL()) {
+		t.Error("the batch must silence statement logging before it names a verifier")
 	}
 	if !strings.Contains(h.kube.Calls[len(h.kube.Calls)-1], rotPod) {
 		t.Errorf("run on the primary: %v", h.kube.Calls)
@@ -156,8 +159,6 @@ func TestReapplyCredentialsOnASingleHostRunsInTheProjectsContainer(t *testing.T)
 		t.Fatalf("container batches %d, cluster batches %d", len(engine.stdin), len(h.kube.ExecStdin))
 	}
 	for _, want := range []string{rotOwner, roleAuthAdmin, roleApp} {
-		if !strings.Contains(engine.stdin[0], hexOf(testutil.FixturePassword(want))) {
-			t.Errorf("the %s password on file must be set back", want)
-		}
+		assertSetsVerifierOf(t, engine.stdin[0], want, testutil.FixturePassword(want))
 	}
 }

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,24 @@ const uniqueViolation = "23505"
 // conflict, never an overwrite: the row belongs to whoever registered it and
 // repointing it would move a live tenant's database to another org.
 func (s *Store) Create(inst *domain.DatabaseInstance) error {
-	return insertInstance(s.db, inst)
+	if inst.OrgID == "" {
+		return insertInstance(s.db, inst)
+	}
+	// Under the lock an org delete takes, so a project cannot land in an org
+	// that is being deleted (EXC-760).
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin project create: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		orgProjectLimitLockSpace, inst.OrgID); err != nil {
+		return fmt.Errorf("lock org project slots: %w", err)
+	}
+	if err := insertInstance(tx, inst); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // insertInstance writes the row through the given executor, so the same INSERT
@@ -102,6 +120,29 @@ func (s *Store) UpdateIfStatus(inst *domain.DatabaseInstance, expected string) e
 			storage.ErrProjectStatusChanged, inst.ProjectID)
 	}
 	return s.update(inst, expected)
+}
+
+// RecordRollbackRetry writes what a rollback retry found. See
+// storage.InstanceStore.
+func (s *Store) RecordRollbackRetry(projectID, rollbackLog, failureReason, expected string) error {
+	if expected == "" {
+		return fmt.Errorf("%w: no expected status given for %s", storage.ErrProjectStatusChanged, projectID)
+	}
+	res, err := s.db.Exec(`
+		UPDATE database_instances SET rollback_log = $2, failure_reason = $3, updated_at = now()
+		WHERE project_id = $1 AND status = $4 AND status <> ALL($5)`,
+		projectID, rollbackLog, failureReason, expected, pq.Array(deletionStatuses))
+	if err != nil {
+		return fmt.Errorf("record rollback retry: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return s.explainRefusedUpdate(projectID, expected)
+	}
+	return nil
 }
 
 // UpdateParametersIfStatus rewrites the recorded tenant parameters. See
@@ -499,7 +540,13 @@ const (
 )
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
-	row := s.db.QueryRow(findInstanceByProjectIDSQL, projectID)
+	return s.FindByProjectIDContext(context.Background(), projectID)
+}
+
+// FindByProjectIDContext is FindByProjectID that gives up when ctx ends, so a
+// caller on the request path never waits on a full pool without a deadline.
+func (s *Store) FindByProjectIDContext(ctx context.Context, projectID string) (*domain.DatabaseInstance, error) {
+	row := s.db.QueryRowContext(ctx, findInstanceByProjectIDSQL, projectID)
 
 	inst, err := scanInstanceFrom(row)
 	if err == sql.ErrNoRows {

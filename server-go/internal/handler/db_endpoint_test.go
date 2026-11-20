@@ -62,7 +62,8 @@ func dbEndpointCall(t *testing.T, api DBEndpointAPI, method, body string) *httpt
 	}
 	req := httptest.NewRequest(method, "/api/projects/proj-abc/db-endpoint/", reader)
 	w := httptest.NewRecorder()
-	dbEndpointRouter(api).ServeHTTP(w, req)
+	// The full shape is what a platform admin sees; customers are tested in endpoint_internal_hidden_test.go.
+	dbEndpointRouter(api).ServeHTTP(w, asUser(req, "platform_admin"))
 	return w
 }
 

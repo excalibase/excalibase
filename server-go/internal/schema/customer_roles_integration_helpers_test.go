@@ -21,11 +21,23 @@ func installCustomerRoleFunctions(t *testing.T, superDB *sql.DB) {
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'excalibase_app') THEN CREATE ROLE excalibase_app LOGIN PASSWORD 'apppass'; END IF;
 END $$;
-CREATE ROLE ` + testOwner + ` LOGIN;
+CREATE ROLE ` + testOwner + ` LOGIN PASSWORD 'ownerpass';
 CREATE SCHEMA IF NOT EXISTS excalibase;
 GRANT USAGE ON SCHEMA excalibase TO excalibase_app;
 `
 	if _, err := superDB.ExecContext(context.Background(), setup+pgroles.CustomerRoleSQL(testOwner)); err != nil {
 		t.Fatalf("install customer role functions: %v", err)
 	}
+}
+
+// connectAsOwner opens the project owner's login, the one that runs role
+// management: the app role, which runs customer SQL, may not (EXC-761).
+func connectAsOwner(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("postgres", testPGHostPort+" user="+testOwner+" password=ownerpass dbname=testdb sslmode=disable")
+	if err != nil {
+		t.Fatalf("connect as the owner: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
 }

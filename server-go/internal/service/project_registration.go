@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -171,14 +172,27 @@ func (s *ProvisioningService) RegisterProject(ctx context.Context, inst *domain.
 	if err := s.persistProjectRow(ctx, inst, opts); err != nil {
 		return rollbackIfOwned(ctx, pc, owned, fmt.Errorf("persist project row: %w", err))
 	}
-	if err := s.markDatabaseAdded(inst, opts); err != nil {
-		return rollbackIfOwned(ctx, pc, owned, err)
-	}
 	if err := s.scheduleBackups(ctx, inst, pc); err != nil {
 		return rollbackIfOwned(ctx, pc, owned, err)
 	}
-	s.announceProject(ctx, inst)
+	// Last of anything that can fail: nothing sets the flag back, so a failure
+	// after it would leave a project that says it has a database it does not.
+	if err := s.markDatabaseAdded(inst, opts); err != nil {
+		return rollbackIfOwned(ctx, pc, owned, err)
+	}
+	s.announceRegisteredProject(ctx, inst)
 	return nil
+}
+
+// announceRegisteredProject tells the rest of the platform. The project is
+// registered by now, so a panic here must not roll it back.
+func (s *ProvisioningService) announceRegisteredProject(ctx context.Context, inst *domain.DatabaseInstance) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ERROR: announce project %s panicked: %v\n%s", inst.ProjectID, r, debug.Stack())
+		}
+	}()
+	s.announceProject(ctx, inst)
 }
 
 // persistProjectRow writes the registered project. Creating is the default so
@@ -202,8 +216,8 @@ func (s *ProvisioningService) persistProjectRow(ctx context.Context, inst *domai
 }
 
 // markDatabaseAdded records that a project created without a database now
-// has one. It runs after the row is ACTIVE, so the database routes open only
-// once there is a registered database behind them.
+// has one. It runs after everything else registration does, so the database
+// routes open only once there is a registered database behind them.
 func (s *ProvisioningService) markDatabaseAdded(inst *domain.DatabaseInstance, opts RegistrationOptions) error {
 	if !opts.AddingDatabase {
 		return nil
@@ -432,8 +446,11 @@ func (s *ProvisioningService) fileOwnerCredential(spec projectRoleSpec, pc *prov
 // execProjectRoleSQL runs the role SQL in the project's database.
 func (s *ProvisioningService) execProjectRoleSQL(ctx context.Context, spec projectRoleSpec, creds projectRoleCredentials) error {
 	exec := s.roleSQLExecer(spec.namespace, spec.projectID+primaryPodSuffix)
-	return runSuperuserRoleSQL(ctx, exec, spec.databaseName,
-		reservedSchemaFirstSQL(), projectRoleSQL(spec, creds, s.publicationName))
+	roleSQL, err := projectRoleSQL(spec, creds, s.publicationName)
+	if err != nil {
+		return err
+	}
+	return runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL)
 }
 
 // projectRoleSQL pins the search_path and refuses platform role names a
@@ -441,21 +458,57 @@ func (s *ProvisioningService) execProjectRoleSQL(ctx context.Context, spec proje
 // own role management and access to what the platform role creates, then the password reset when the cluster
 // arrived with roles already in it. Roles the owner created are left as the
 // backup had them.
-func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicationName string) string {
+func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicationName string) (string, error) {
+	verifiers, err := creds.verifiers()
+	if err != nil {
+		return "", err
+	}
 	roleSQL := pgroles.PinnedSearchPath + pgroles.SquatGuardSQL() +
-		BuildProjectRoleSQL(creds.authPassword, creds.appPassword, creds.watcherPassword, spec.databaseName, publicationName) +
-		BuildSchedulerRoleSQL(creds.schedulerPassword, spec.databaseName) +
+		BuildProjectRoleSQL(verifiers.auth, verifiers.app, verifiers.watcher, spec.databaseName, publicationName) +
+		BuildSchedulerRoleSQL(verifiers.scheduler, spec.databaseName) +
 		realtimeIdentitySQL(publicationName) +
 		pgroles.CustomerRoleSQL(spec.adminUsername) +
 		pgroles.OwnerAccessSQL(spec.adminUsername) +
-		readerSQL(spec.adminUsername, creds.readerPassword)
+		readerSQL(spec.adminUsername, verifiers.reader)
 	if spec.resetPasswords {
-		roleSQL += BuildProjectRoleResetSQL(resetTargets(spec, creds))
+		targets, err := roleVerifiers(resetTargets(spec, creds))
+		if err != nil {
+			return "", err
+		}
+		roleSQL += BuildProjectRoleResetSQL(targets)
 	}
 	if spec.restored {
 		roleSQL += endUserSessionsRevokeSQL
 	}
-	return roleSQL
+	return roleSQL, nil
+}
+
+// projectRoleVerifiers are the platform roles' passwords as SCRAM verifiers.
+type projectRoleVerifiers struct {
+	auth, app, watcher, scheduler, reader string
+}
+
+// verifiers hashes the credentials. A role with no password has no verifier:
+// an empty reader password means the project has no reader.
+func (c projectRoleCredentials) verifiers() (projectRoleVerifiers, error) {
+	var verifiers projectRoleVerifiers
+	for _, role := range []struct {
+		password string
+		verifier *string
+	}{
+		{c.authPassword, &verifiers.auth}, {c.appPassword, &verifiers.app}, {c.watcherPassword, &verifiers.watcher},
+		{c.schedulerPassword, &verifiers.scheduler}, {c.readerPassword, &verifiers.reader},
+	} {
+		if role.password == "" {
+			continue
+		}
+		verifier, err := newScramVerifier(role.password)
+		if err != nil {
+			return projectRoleVerifiers{}, fmt.Errorf("hash a platform role's password: %w", err)
+		}
+		*role.verifier = verifier
+	}
+	return verifiers, nil
 }
 
 // resetTargets lists the roles whose password must be forced to the value the
@@ -478,11 +531,11 @@ func resetTargets(spec projectRoleSpec, creds projectRoleCredentials) []RolePass
 
 // readerSQL creates the SELECT-only login when the project has one, and
 // otherwise locks one a restored copy brought.
-func readerSQL(owner, password string) string {
-	if password == "" {
+func readerSQL(owner, verifier string) string {
+	if verifier == "" {
 		return pgroles.ReaderLockSQL()
 	}
-	return pgroles.ReaderRoleSQL(owner, password)
+	return pgroles.ReaderRoleSQL(owner, verifier)
 }
 
 // assertNoStoredCredentials refuses to register a project whose vault prefix

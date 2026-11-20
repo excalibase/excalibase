@@ -4,13 +4,13 @@ package service
 
 import (
 	"context"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"os/exec"
 	"testing"
 	"time"
 
-	"github.com/testcontainers/testcontainers-go"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
@@ -29,10 +29,12 @@ func TestCopyNow_HasWhatWasWrittenAfterTheLastBackup(t *testing.T) {
 	defer cancel()
 
 	pgPwd := testutil.FixturePassword("pg-copy-now-int")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("app"), tcpg.WithUsername("postgres"), tcpg.WithPassword(pgPwd),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2).WithStartupTimeout(60*time.Second)),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start source postgres: %v", err)

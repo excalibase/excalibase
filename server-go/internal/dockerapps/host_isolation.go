@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"slices"
 	"strings"
 
 	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+
+	"github.com/excalibase/provisioning-poc/internal/engineproxy"
 )
 
 // An internal bridge still has an address on the host, and every host service
@@ -27,6 +30,15 @@ const (
 // Site builds (EXC-671) make their networks with them too.
 func IsolatedGatewayOptions() map[string]string {
 	return map[string]string{gatewayModeIPv4: gatewayIsolated, gatewayModeIPv6: gatewayIsolated}
+}
+
+// bridgeNameOption gives a bridge its interface name on the host.
+const bridgeNameOption = "com.docker.network.bridge.name"
+
+// FencedBridgeOptions name a Docker bridge with a route or a host address under the host
+// firewall's wildcard, whose rule is in place before the engine makes it (EXC-687).
+func FencedBridgeOptions(network string) map[string]string {
+	return map[string]string{bridgeNameOption: engineproxy.ProjectBridgeName(network)}
 }
 
 // GatewayModeRefused is Docker 27's 400: it knows the option but not the isolated mode.
@@ -78,6 +90,10 @@ func (r *Runtime) makeCheckNetwork(ctx context.Context, name string) error {
 		Driver: "bridge", Internal: true, Labels: map[string]string{labelManaged: "true", labelComponent: componentDiskTool},
 	}
 	if r.opts.Isolate {
+		// Before anything is made: no firewall sees what pasta sends as this user's own connections.
+		if err := r.refuseUnguardedEgress(ctx); err != nil {
+			return err
+		}
 		if _, err := r.engine.NetworkCreate(ctx, name, plain); err != nil {
 			return err
 		}
@@ -93,10 +109,11 @@ func (r *Runtime) makeCheckNetwork(ctx context.Context, name string) error {
 	_, err := r.engine.NetworkCreate(ctx, name, isolated)
 	// Docker 27 knows the option but not the mode; any other refusal fails the start.
 	if GatewayModeRefused(err) {
+		plain.Options = FencedBridgeOptions(name)
 		if _, plainErr := r.engine.NetworkCreate(ctx, name, plain); plainErr != nil {
 			return plainErr
 		}
-		r.setHostIsolation(hostIsolation{why: fmt.Sprintf("the engine refused an isolated gateway (%v): "+
+		r.setHostIsolation(hostIsolation{isolated: r.opts.HostFirewall, why: fmt.Sprintf("the engine refused an isolated gateway (%v): "+
 			"apps can reach host services listening on every address; upgrade to Docker 28 or later, or %s", err, hostFirewall)})
 		return nil
 	}
@@ -108,14 +125,14 @@ func (r *Runtime) makeCheckNetwork(ctx context.Context, name string) error {
 		return fmt.Errorf("read the check network: %w", err)
 	}
 	if hasHostAddress(inspect) {
-		r.setHostIsolation(hostIsolation{why: "the engine gave an isolated network an address on the host anyway: " +
+		r.setHostIsolation(hostIsolation{isolated: r.opts.HostFirewall, why: "the engine gave an isolated network an address on the host anyway: " +
 			"apps can reach host services listening on every address; upgrade to Docker 28 or later, or " + hostFirewall})
 		return nil
 	}
-	found := hostIsolation{gateway: true, isolated: !r.opts.Egress}
-	if r.opts.Egress {
-		found.why = "APP_EGRESS=internet gives project networks a gateway on the host: apps can reach host services " +
-			"listening on every address unless you " + hostFirewall
+	found := hostIsolation{gateway: true, isolated: !r.opts.Egress || r.opts.HostFirewall}
+	if !found.isolated {
+		found.why = "APP_EGRESS=internet with the host firewall off (HOST_FIREWALL=off): apps and their databases can reach cloud " +
+			"metadata, private ranges and the host's services unless you guard the bridges " + engineproxy.ProjectBridgePrefix + "+ yourself"
 	}
 	r.setHostIsolation(found)
 	return nil
@@ -133,10 +150,29 @@ func (r *Runtime) podmanIsolation(ctx context.Context) (hostIsolation, error) {
 			"services listening on every address unless you " + hostFirewall}, nil
 	}
 	if r.opts.Egress {
-		return hostIsolation{why: "APP_EGRESS=internet on rootless Podman: apps reach the host's services listening on its " +
-			"own addresses through host.containers.internal (169.254.1.2); bind them to 127.0.0.1, or keep APP_EGRESS=none"}, nil
+		return hostIsolation{why: unguardedEgress}, nil
 	}
 	return hostIsolation{isolated: true}, nil
+}
+
+// unguardedEgress says what rootless Podman's egress leaves open and what it keeps closed.
+const unguardedEgress = "APP_EGRESS=internet on rootless Podman: an app's traffic leaves through pasta as this user's own " +
+	"connections, which no firewall of ours can see, so it reaches the LAN, cloud metadata, and the host's services on " +
+	"host.containers.internal unless they listen on 127.0.0.1 alone. Other projects' bridges stay closed (netavark's isolate)"
+
+// refuseUnguardedEgress: rootless Podman's egress takes an explicit yes. Rootful is not supported and stops at the proxy.
+func (r *Runtime) refuseUnguardedEgress(ctx context.Context) error {
+	if !r.opts.Egress || r.opts.AcceptUnguardedEgress {
+		return nil
+	}
+	info, err := r.engine.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("read whether Podman runs rootless: %w", err)
+	}
+	if !slices.Contains(info.SecurityOptions, "name=rootless") {
+		return nil
+	}
+	return errors.New(unguardedEgress + ". Keep APP_EGRESS=none, use Docker, or set APP_EGRESS_UNGUARDED=accept to run it this way knowingly")
 }
 
 func hasHostAddress(inspect network.Inspect) bool {
@@ -154,7 +190,10 @@ func (r *Runtime) olderNetwork(inspect network.Inspect) bool {
 	if inspect.Internal == r.opts.Egress {
 		return true
 	}
-	return r.isolatedGateway() && (inspect.Options[gatewayModeIPv4] != gatewayIsolated || inspect.Options[gatewayModeIPv6] != gatewayIsolated)
+	if r.isolatedGateway() {
+		return inspect.Options[gatewayModeIPv4] != gatewayIsolated || inspect.Options[gatewayModeIPv6] != gatewayIsolated
+	}
+	return !r.opts.Isolate && inspect.Options[bridgeNameOption] != engineproxy.ProjectBridgeName(inspect.Name)
 }
 
 // remakeProjectNetwork replaces an older project network: an engine cannot change a
@@ -165,16 +204,17 @@ func (r *Runtime) remakeProjectNetwork(ctx context.Context, project, database st
 	if err != nil {
 		return network.Inspect{}, err
 	}
-	members := r.memberRefs(older, append([]string{database}, apps...)...)
+	endpoints := appEndpoints(apps)
+	members := r.memberRefs(older, append([]string{database}, slices.Collect(maps.Keys(endpoints))...)...)
 	for _, member := range members {
 		if err := r.engine.NetworkDisconnect(ctx, older.Name, member, true); err != nil && !notMember(err) {
 			return network.Inspect{}, errors.Join(fmt.Errorf("take %s off the older project network: %w", member, err),
-				r.restoreMembers(ctx, older, members))
+				r.restoreMembers(ctx, older, members, endpoints))
 		}
 	}
 	if err := r.engine.NetworkRemove(ctx, older.Name); err != nil && !errdefs.IsNotFound(err) {
 		return network.Inspect{}, errors.Join(fmt.Errorf("remove the older project network: %w", err),
-			r.restoreMembers(ctx, older, members))
+			r.restoreMembers(ctx, older, members, endpoints))
 	}
 	// From here a failed pass leaves no network: the next one makes it and puts everyone back.
 	if _, err := r.engine.NetworkCreate(ctx, older.Name, r.networkOptions(project)); err != nil && !errdefs.IsConflict(err) {
@@ -186,10 +226,10 @@ func (r *Runtime) remakeProjectNetwork(ctx context.Context, project, database st
 
 // restoreMembers puts members back on the older network when it could not be removed,
 // so a failed remake leaves the project as it was rather than offline.
-func (r *Runtime) restoreMembers(ctx context.Context, older network.Inspect, members []string) error {
+func (r *Runtime) restoreMembers(ctx context.Context, older network.Inspect, members []string, endpoints map[string]*network.EndpointSettings) error {
 	var errs []error
 	for _, member := range members {
-		var settings *network.EndpointSettings
+		settings := endpoints[member]
 		if member == r.opts.EdgeContainer {
 			settings = &network.EndpointSettings{Aliases: slices.Clone(r.opts.EdgeAliases)}
 		}
@@ -224,17 +264,26 @@ func (r *Runtime) memberRefs(inspect network.Inspect, extra ...string) []string 
 
 // projectApps are the project's app containers, stopped ones too: a stopped container
 // is not listed among a network's members.
-func (r *Runtime) projectApps(ctx context.Context, project string) ([]string, error) {
+func (r *Runtime) projectApps(ctx context.Context, project string) ([]container.Summary, error) {
 	list, err := r.engine.ContainerList(ctx, container.ListOptions{All: true,
 		Filters: labelFilter(labelComponent, componentApp, labelProject, project)})
 	if err != nil {
 		return nil, fmt.Errorf("list the project's apps: %w", err)
 	}
-	ids := make([]string, 0, len(list))
-	for _, summary := range list {
-		ids = append(ids, summary.ID)
+	return list, nil
+}
+
+// appEndpoints are the settings each app joins its project's network under, by id: its one
+// service name, which the project's other apps reach it by.
+func appEndpoints(apps []container.Summary) map[string]*network.EndpointSettings {
+	endpoints := make(map[string]*network.EndpointSettings, len(apps))
+	for _, app := range apps {
+		endpoints[app.ID] = nil
+		if name := app.Labels[labelAppName]; name != "" {
+			endpoints[app.ID] = &network.EndpointSettings{Aliases: []string{name + "." + engineproxy.AppServiceDomain}}
+		}
 	}
-	return ids, nil
+	return endpoints
 }
 
 // rejoinApps puts back any of the project's apps that are off its network: after a
@@ -244,9 +293,9 @@ func (r *Runtime) rejoinApps(ctx context.Context, project string, inspect networ
 	if err != nil {
 		return err
 	}
-	for _, app := range apps {
-		if err := r.join(ctx, inspect, app); err != nil && !errdefs.IsNotFound(err) {
-			return fmt.Errorf("put app container %s back on the project's network: %w", app, err)
+	for id, settings := range appEndpoints(apps) {
+		if err := r.joinAs(ctx, inspect, id, settings); err != nil && !errdefs.IsNotFound(err) {
+			return fmt.Errorf("put app container %s back on the project's network: %w", id, err)
 		}
 	}
 	return nil

@@ -90,6 +90,19 @@ func (s *Instances) RecordRestoreInterrupted(projectID, step, reason string) err
 }
 
 // UpdateIfStatus persists only while the row still holds expected.
+func (s *Instances) RecordRollbackRetry(projectID, rollbackLog, failureReason, expected string) error {
+	stored, ok := s.Items[projectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	updated, err := storage.ApplyRollbackRetry(stored, rollbackLog, failureReason, expected)
+	if err != nil {
+		return err
+	}
+	s.Items[projectID] = updated
+	return nil
+}
+
 func (s *Instances) UpdateIfStatus(inst *domain.DatabaseInstance, expected string) error {
 	existing, ok := s.Items[inst.ProjectID]
 	if !ok {
@@ -284,7 +297,8 @@ func (s *Orgs) ListProjectMembers(context.Context, string) ([]*domain.ProjectMem
 func (s *Orgs) GetProjectMember(context.Context, string, string) (*domain.ProjectMember, error) {
 	return nil, nil
 }
-func (s *Orgs) CreatePendingInvite(context.Context, *domain.PendingInvite) error { return nil }
+func (s *Orgs) CreatePendingInvite(context.Context, *domain.PendingInvite) error  { return nil }
+func (s *Orgs) RestorePendingInvite(context.Context, *domain.PendingInvite) error { return nil }
 func (s *Orgs) FindPendingInviteByToken(context.Context, string, time.Time) (*domain.PendingInvite, error) {
 	return nil, storage.ErrInviteInvalid
 }

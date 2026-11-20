@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"maps"
 	"slices"
 	"strings"
@@ -77,6 +78,8 @@ type MockClient struct {
 	WildcardExecOutput string
 	// ExecAnswer, when set, answers every ExecInPod by its argv instead.
 	ExecAnswer func(cmd []string) (string, error)
+	// ExecAnswerStdin answers a command given stdin by what it was fed; it is asked first.
+	ExecAnswerStdin func(stdin string) (string, error)
 	// ExecAnswerInPod answers by pod as well as command; it is asked before ExecAnswer.
 	ExecAnswerInPod func(pod string, cmd []string) (string, error)
 
@@ -220,6 +223,7 @@ type MockClient struct {
 	// PausedReplicas answers PausedAppReplicas for any app.
 	PausedReplicas    int
 	PausedReplicasErr error
+	PausedImagesStub
 	// ResumedTier records the plan size each resume ran at, keyed "namespace/appID".
 	ResumedTier map[string]domain.TierType
 
@@ -700,7 +704,12 @@ func (m *MockClient) ExecInPod(ctx context.Context, namespace, pod, container st
 // the real client: argv becomes URL query parameters the API server audits,
 // stdin stays in the request body.
 func (m *MockClient) ExecInPodStdin(ctx context.Context, namespace, pod, container string, cmd []string, stdin string) (string, error) {
-	return m.exec(namespace, pod, cmd, stdin)
+	out, err := m.exec(namespace, pod, cmd, stdin)
+	// A role script that ran prints its end marker, whatever else it was told to say.
+	if err == nil && strings.Contains(stdin, pgroles.RoleSQLDoneMarker) {
+		out += pgroles.RoleSQLDoneMarker + "\n"
+	}
+	return out, err
 }
 
 func (m *MockClient) exec(namespace, pod string, cmd []string, stdin string) (string, error) {
@@ -714,6 +723,9 @@ func (m *MockClient) exec(namespace, pod string, cmd []string, stdin string) (st
 	key := namespace + "/" + pod
 	if err, ok := m.ExecError[key]; ok && err != nil {
 		return "", err
+	}
+	if m.ExecAnswerStdin != nil && stdin != "" {
+		return m.ExecAnswerStdin(stdin)
 	}
 	if m.ExecAnswerInPod != nil {
 		return m.ExecAnswerInPod(pod, cmd)
@@ -806,7 +818,7 @@ func (m *MockClient) ListCRDs(ctx context.Context, gvr schema.GroupVersionResour
 	}
 	var listed []*unstructured.Unstructured
 	for key, obj := range m.CRDs {
-		if strings.HasPrefix(key, namespace+"/") && strings.ToLower(obj.GetKind())+"s" == gvr.Resource {
+		if (namespace == "" || strings.HasPrefix(key, namespace+"/")) && strings.ToLower(obj.GetKind())+"s" == gvr.Resource {
 			listed = append(listed, obj)
 		}
 	}

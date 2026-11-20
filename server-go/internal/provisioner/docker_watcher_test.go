@@ -170,7 +170,7 @@ func TestArchivingKeepsLogicalDecoding(t *testing.T) {
 	docker := newMockDocker()
 	docker.containers["c1"] = "running"
 	p := NewDockerPostgreSQLProvisioner(docker)
-	if err := p.ConfigureArchive(context.Background(), "c1", "true", "postgres"); err != nil {
+	if err := p.ConfigureArchive(context.Background(), "c1", "true", "postgres", ""); err != nil {
 		t.Fatal(err)
 	}
 	joined := fmt.Sprint(docker.execLog)

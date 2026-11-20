@@ -120,19 +120,21 @@ func (s *AppDeployService) admit(ctx context.Context, namespace string, deploy *
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
 	needCPU, needMem, perCPU, perMem := rolloutNeed(live, replicas, podCPU, podMem)
-	reservedCPU, reservedMem, err := s.reservedByOtherRollouts(deploy, placement)
+	needPods := int64(max(live.Count, replicas+rolloutSurge(live)) - live.Count)
+	reserved, err := s.reservedByOtherRollouts(deploy, placement)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
-	return s.clusterHolds(ctx, placement, podNeed{cpu: needCPU, mem: needMem, perCPU: perCPU, perMem: perMem},
-		reservedCPU, reservedMem, "app "+deploy.AppID)
+	return s.clusterHolds(ctx, placement, podNeed{cpu: needCPU, mem: needMem, perCPU: perCPU, perMem: perMem, pods: needPods},
+		reserved, "app "+deploy.AppID)
 }
 
-type podNeed struct{ cpu, mem, perCPU, perMem int64 }
+type podNeed struct{ cpu, mem, perCPU, perMem, pods int64 }
 
 // clusterHolds is the room check every admission ends in; anything the cluster cannot answer refuses.
 func (s *AppDeployService) clusterHolds(ctx context.Context, placement k8s.RuntimePlacement, need podNeed,
-	reservedCPU, reservedMem int64, who string) error {
+	reserved reservation, who string) error {
+	reservedCPU, reservedMem := reserved.cpuMilli, reserved.memBytes
 	capacity, err := s.runtime.GetClusterCapacity(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
@@ -144,6 +146,9 @@ func (s *AppDeployService) clusterHolds(ctx context.Context, placement k8s.Runti
 		return fmt.Errorf("%w (runtime class %q)", ErrAppNoSandboxNode, s.render.RuntimeClass)
 	}
 	capacity.HeadroomPercent = s.headroomPercent
+	if err := requirePodSlots(capacity, need.pods+reserved.pods, who); err != nil {
+		return err
+	}
 	if capacity.FreeCPUMilli()-reservedCPU < need.cpu || capacity.FreeMemBytes()-reservedMem < need.mem ||
 		!anyNodeFits(capacity, placement.NodeSelector, need.perCPU, need.perMem) {
 		log.Printf("INFO: %s refused: need %dm/%d (one pod %dm/%d) free %dm/%d reserved %dm/%d headroom %d%%",
@@ -180,22 +185,26 @@ func (s *AppDeployService) AdmitNewApps(ctx context.Context, projectID string, r
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
-	reservedCPU, reservedMem, err := s.reservedByOtherRollouts(&apphost.Deploy{}, placement)
+	reserved, err := s.reservedByOtherRollouts(&apphost.Deploy{}, placement)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
-	need := podNeed{cpu: int64(total) * podCPU, mem: int64(total) * podMem, perCPU: podCPU, perMem: podMem}
-	return s.clusterHolds(ctx, placement, need, reservedCPU, reservedMem, "new apps of project "+projectID)
+	need := podNeed{cpu: int64(total) * podCPU, mem: int64(total) * podMem, perCPU: podCPU, perMem: podMem, pods: int64(total)}
+	return s.clusterHolds(ctx, placement, need, reserved, "new apps of project "+projectID)
 }
 
 func rolloutNeed(live k8s.AppPods, replicas int, podCPU, podMem int64) (needCPU, needMem, perCPU, perMem int64) {
-	surge := 0
-	if live.Count > 0 {
-		surge = 1
-	}
-	peak := int64(max(live.Count, replicas+surge))
+	peak := int64(max(live.Count, replicas+rolloutSurge(live)))
 	perCPU, perMem = max(podCPU, live.MaxCPUMilli), max(podMem, live.MaxMemBytes)
 	return max(peak*perCPU-live.CPUMilli, 0), max(peak*perMem-live.MemBytes, 0), podCPU, podMem
+}
+
+// rolloutSurge is the one pod a rolling update runs over the replica count.
+func rolloutSurge(live k8s.AppPods) int {
+	if live.Count > 0 {
+		return 1
+	}
+	return 0
 }
 
 func anyNodeMatches(capacity k8s.ClusterCapacity, selector map[string]string) bool {
@@ -209,7 +218,7 @@ func anyNodeMatches(capacity k8s.ClusterCapacity, selector map[string]string) bo
 
 func anyNodeFits(capacity k8s.ClusterCapacity, selector map[string]string, cpu, mem int64) bool {
 	for _, node := range capacity.Nodes {
-		if node.Matches(selector) && node.Fits(cpu, mem, capacity.HeadroomPercent) {
+		if node.Matches(selector) && node.Fits(cpu, mem, capacity.HeadroomPercent) && node.HasPodSlots(1) {
 			return true
 		}
 	}
@@ -218,10 +227,11 @@ func anyNodeFits(capacity k8s.ClusterCapacity, selector map[string]string, cpu, 
 
 // reservedByOtherRollouts charges every other app's unfinished deploy its full
 // size, so two deploys admitted together cannot both count the same room.
-func (s *AppDeployService) reservedByOtherRollouts(self *apphost.Deploy, placement k8s.RuntimePlacement) (cpuMilli, memBytes int64, err error) {
+func (s *AppDeployService) reservedByOtherRollouts(self *apphost.Deploy, placement k8s.RuntimePlacement) (reservation, error) {
+	var total reservation
 	unfinished, err := s.deploys.ListUnfinished()
 	if err != nil {
-		return 0, 0, fmt.Errorf("list unfinished deploys: %w", err)
+		return reservation{}, fmt.Errorf("list unfinished deploys: %w", err)
 	}
 	for _, other := range unfinished {
 		if other.ID == self.ID || other.AppID == self.AppID || other.Spec.Replicas == 0 {
@@ -229,14 +239,19 @@ func (s *AppDeployService) reservedByOtherRollouts(self *apphost.Deploy, placeme
 		}
 		cpu, mem, err := requestFootprint(other.Spec.Resources.CPURequest, other.Spec.Resources.MemoryRequest, placement)
 		if err != nil {
-			return 0, 0, fmt.Errorf("deploy %s: %w", other.ID, err)
+			return reservation{}, fmt.Errorf("deploy %s: %w", other.ID, err)
 		}
 		pods := int64(other.Spec.Replicas + 1)
-		cpuMilli += pods * cpu
-		memBytes += pods * mem
+		total.cpuMilli += pods * cpu
+		total.memBytes += pods * mem
+		total.pods += pods
 	}
-	return cpuMilli, memBytes, nil
+	return total, nil
 }
+
+// reservation is what the deploys still rolling out will take: their pods, and
+// the room those pods ask for.
+type reservation struct{ cpuMilli, memBytes, pods int64 }
 
 // requestFootprint is one pod as the scheduler charges it: its requests plus the sandbox's overhead.
 func requestFootprint(cpuRequest, memRequest string, placement k8s.RuntimePlacement) (cpuMilli, memBytes int64, err error) {

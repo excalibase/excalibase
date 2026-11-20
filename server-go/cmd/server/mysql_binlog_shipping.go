@@ -9,7 +9,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 )
 
 // mysqlBinlogShipInterval is how often MySQL binlogs are shipped between
@@ -45,7 +44,7 @@ func startMySQLBinlogShipping(flags features.Flags, lock storage.LeaderLock, kub
 // run side by side, and no lock on a single process.
 func mysqlBinlogShipLock(cfg config.AppConfig, sqlStore storage.PlatformStore) storage.LeaderLock {
 	if cfg.IsCloud() && sqlStore != nil {
-		return pgstore.NewAdvisoryLock(sqlStore.DB(), mysqlBinlogShipLockID)
+		return standingLock(sqlStore, mysqlBinlogShipLockID)
 	}
 	return service.AlwaysLeader{}
 }

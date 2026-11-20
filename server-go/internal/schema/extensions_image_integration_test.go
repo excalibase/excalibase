@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"os"
 	"path/filepath"
 	"sort"
@@ -147,6 +148,9 @@ func startImageForMajor(ctx context.Context, t *testing.T, entry config.Postgres
 		fromDockerfile = testcontainers.FromDockerfile{}
 	}
 
+	if err := imagepull.EnsureLocal(ctx, prebuilt); err != nil {
+		t.Fatal(err)
+	}
 	container, err := postgres.Run(ctx, prebuilt,
 		testcontainers.CustomizeRequest(testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{

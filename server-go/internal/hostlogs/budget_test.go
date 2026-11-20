@@ -273,16 +273,16 @@ func TestBudgetRefundsAnUnstoredBatch(t *testing.T) {
 
 // A paused disk: what was read is not charged, and the follow does not reopen.
 func TestShipStreamWhilePausedChargesNothing(t *testing.T) {
-	clock := now
+	clock := newTestClock(now)
 	disk := &fakeDisk{free: 50 * gib, total: 100 * gib}
 	engine := &fakeEngine{logs: map[string][]enginestats.LogLine{"db-a": {line(1, "12345678")}}}
 	shipper := newTestShipper(engine, &fakeCursors{}, &fakePusher{}, features.NewStatic())
-	shipper.deps.Disk = newTestGuard(disk, &clock)
+	shipper.deps.Disk = newTestGuard(disk, clock)
 	target := Target{ID: "db-a", Labels: Labels{ProjectID: "proj-a", Component: "database", Container: "c"}, Retention: time.Hour, DailyBytes: 10}
 	b := newBatch(target, 0, 0)
 	shipper.add(context.Background(), b, line(1, "12345678"))
-	disk.free = gib / 2
-	clock = clock.Add(diskCheckEvery)
+	disk.setFree(gib / 2)
+	clock.advance(diskCheckEvery)
 	if err := shipper.flush(context.Background(), b); !errors.Is(err, errDiskLow) {
 		t.Fatalf("flush = %v", err)
 	}

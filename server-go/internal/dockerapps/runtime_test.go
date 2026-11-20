@@ -116,7 +116,7 @@ func TestApplyRunsTheAppOnItsProjectNetworkUnderTheSandbox(t *testing.T) {
 	h.deploy(freeApp(), "dep-1")
 
 	net := h.engine.networks[testNet]
-	if net == nil || !net.options.Internal || net.options.Labels[labelManaged] != "true" || len(net.options.Options) != 0 {
+	if net == nil || !net.options.Internal || net.options.Labels[labelManaged] != "true" {
 		t.Fatalf("project network %+v", net)
 	}
 	if !slices.Contains(net.members, testDB) || !slices.Contains(net.members, "edge01") {
@@ -246,7 +246,7 @@ func TestInternalServiceHasNoRouteAndTheEdgeStaysOff(t *testing.T) {
 func TestEgressNetworksAreIsolatedOnPodmanOnly(t *testing.T) {
 	docker := newHarness(t, func(o *Options) { o.Egress = true })
 	docker.deploy(freeApp(), "dep-1")
-	if net := docker.engine.networks[testNet]; net.options.Internal || len(net.options.Options) != 0 {
+	if net := docker.engine.networks[testNet]; net.options.Internal || net.options.Options["isolate"] != "" {
 		t.Fatalf("docker egress network %+v", net.options)
 	}
 	podman := newHarness(t, func(o *Options) { o.Egress, o.Isolate = true, true })

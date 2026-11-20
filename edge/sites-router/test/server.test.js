@@ -39,6 +39,41 @@ function fakeEnv({ entry = serverEntry(), site, overrides = {} } = {}) {
 
 const get = (env, path = "/") => router.fetch(new Request(`https://ssr.${BASE}${path}`), env);
 
+// OpenNext's pre-rendered pages are assets under /cdn-cgi/_next_cache, read by the site's own code through the ASSETS
+// binding. Only Cloudflare's reserved /cdn-cgi/ path kept them private; the router no longer relies on that alone.
+describe("a server site's pre-rendered cache", () => {
+  const hidden = [
+    "/cdn-cgi/_next_cache/BUILD/index.cache",
+    "/CDN-CGI/_NEXT_CACHE/BUILD/index.cache",
+    "/cdn-cgi/_next_cache",
+    "/cdn-cgi/%5Fnext_cache/BUILD/index.cache",
+    "/cdn-cgi/_next_cache%2FBUILD/index.cache",
+    "/a/../cdn-cgi/_next_cache/BUILD/index.cache",
+  ];
+  for (const path of hidden) {
+    it(`answers ${path} as not found without calling the site`, async () => {
+      const { env, calls } = fakeEnv();
+      const response = await get(env, path);
+      expect(response.status).toBe(404);
+      expect(calls.get).toEqual([]);
+    });
+  }
+
+  it("leaves every other path to the site", async () => {
+    const { env, calls } = fakeEnv();
+    for (const path of ["/", "/cdn-cgi-notes", "/docs/_next_cache", "/_next/static/chunk.js"]) {
+      expect((await get(env, path)).status).toBe(200);
+    }
+    expect(calls.fetch).toHaveLength(4);
+  });
+
+  it("does not touch a static site", async () => {
+    const { env, calls } = fakeEnv({ entry: SCRIPT });
+    expect((await get(env, "/cdn-cgi/_next_cache/x")).status).toBe(200);
+    expect(calls.fetch).toHaveLength(1);
+  });
+});
+
 describe("a server site's entry", () => {
   it("passes the plan's limits and the site's identity on the call", async () => {
     const { env, calls } = fakeEnv();

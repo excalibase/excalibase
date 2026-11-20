@@ -181,7 +181,7 @@ func (r *Runner) stepContainer(site box, spec sitebuilds.RunSpec, step, proxy st
 	case stepCollect:
 		token := readyToken()
 		config.Labels = withLabel(config.Labels, labelReady, token)
-		config.Env = []string{"ROOT_DIR=" + spec.RootDir, "OUTPUT_DIR=" + spec.OutputDir, "READY_TOKEN=" + token}
+		config.Env = []string{"ROOT_DIR=" + spec.RootDir, "OUTPUT_DIR=" + spec.OutputDir, "FRAMEWORK=" + spec.Framework, "READY_TOKEN=" + token}
 	}
 	if step != stepPrepare {
 		config.Cmd = site.deadlined("bash", "-c", r.scripts[step])

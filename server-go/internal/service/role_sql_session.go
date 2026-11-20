@@ -71,16 +71,24 @@ END
 $excalibase_session$;
 `
 
-// superuserPsqlCommand is psql as postgres in dbName with the session pinned.
-// Each script is its own -c, so its own transaction, and the first failure
-// stops the rest. serverVersionNum is the server_version_num the probe read,
-// or 0 when it is unknown.
-func superuserPsqlCommand(dbName string, serverVersionNum int, scripts ...string) []string {
-	cmd := []string{"psql", "-X", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose", "-U", "postgres", "-d", superuserConninfo(dbName, serverVersionNum)}
+// superuserPsqlCommand is psql as postgres in dbName with the session pinned and
+// kept out of the server log, since role SQL names SCRAM verifiers. It reads its
+// script from stdin: an exec argument lands in the exec URL, which the API
+// server audits. serverVersionNum is the server_version_num the probe
+// read, or 0 when it is unknown.
+func superuserPsqlCommand(dbName string, serverVersionNum int) []string {
+	return []string{"psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose", "-U", "postgres", "-d", conninfoWith(dbName, serverVersionNum, pgroles.QuietSessionOptions()), "-f", "-"}
+}
+
+// superuserScript is what superuserPsqlCommand reads. Each script is its own
+// transaction, and the first failure stops the rest.
+func superuserScript(scripts ...string) string {
+	var input strings.Builder
 	for _, script := range scripts {
-		cmd = append(cmd, "-c", sessionGuardSQL+script)
+		input.WriteString("BEGIN;\n" + sessionGuardSQL + script + "\nCOMMIT;\n")
 	}
-	return cmd
+	input.WriteString("SELECT '" + pgroles.RoleSQLDoneMarker + "';\n")
+	return input.String()
 }
 
 // serverVersionProbeCommand reads server_version_num with the connect-safe
@@ -90,10 +98,14 @@ func serverVersionProbeCommand(dbName string) []string {
 	return []string{"psql", "-X", "-tA", "-U", "postgres", "-d", superuserConninfo(dbName, 0), "-c", "SHOW server_version_num"}
 }
 
+// roleFunctionProbeList is the role-management functions as a SQL array body.
+const roleFunctionProbeList = "'" + pgroles.CreateRoleSignature + "', '" + pgroles.AlterRolePasswordSignature + "', '" + pgroles.DropRoleSignature + "'"
+
 // authAccessProbeSQL answers t while excalibase_app can still reach anything
 // in the auth schema — the schema, a relation in it, membership of auth_admin,
-// or a default privilege that would hand it the next table — and f once it
-// cannot (EXC-628). The privilege functions count grants to PUBLIC.
+// or a default privilege that would hand it the next table — or can still run
+// a role-management function, which only the owner's login may (EXC-761); and f
+// once it cannot (EXC-628). The privilege functions count grants to PUBLIC.
 const authAccessProbeSQL = `SELECT CASE WHEN to_regnamespace('auth') IS NULL OR to_regrole('excalibase_app') IS NULL THEN false
 ELSE pg_catalog.has_schema_privilege('excalibase_app', 'auth', 'USAGE')
   OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c
@@ -102,6 +114,9 @@ ELSE pg_catalog.has_schema_privilege('excalibase_app', 'auth', 'USAGE')
   OR (to_regrole('auth_admin') IS NOT NULL AND pg_catalog.pg_has_role('excalibase_app', 'auth_admin', 'MEMBER'))
   OR EXISTS (SELECT 1 FROM pg_catalog.pg_default_acl d, pg_catalog.aclexplode(d.defaclacl) a
     WHERE d.defaclnamespace = to_regnamespace('auth') AND a.grantee = to_regrole('excalibase_app'))
+  OR EXISTS (SELECT 1 FROM unnest(ARRAY[` + roleFunctionProbeList + `]) AS f(signature)
+    WHERE to_regprocedure(f.signature) IS NOT NULL
+      AND pg_catalog.has_function_privilege('excalibase_app', to_regprocedure(f.signature), 'EXECUTE'))
 END`
 
 // authAccessProbeCommand runs the probe as the superuser with the connect-safe
@@ -111,8 +126,12 @@ func authAccessProbeCommand(dbName string) []string {
 }
 
 func superuserConninfo(dbName string, serverVersionNum int) string {
-	options := make([]string, 0, len(pinnedSessionOptions)+1)
-	for _, option := range pinnedSessionOptions {
+	return conninfoWith(dbName, serverVersionNum, nil)
+}
+
+func conninfoWith(dbName string, serverVersionNum int, extra []string) string {
+	options := make([]string, 0, len(pinnedSessionOptions)+len(extra)+2)
+	for _, option := range append(append([]string{}, pinnedSessionOptions...), extra...) {
 		options = append(options, "-c "+option)
 	}
 	if serverVersionNum >= scramIterationsMinVersion {

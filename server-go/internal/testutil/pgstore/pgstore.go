@@ -12,14 +12,13 @@ package pgstore
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"testing"
-	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
-	"github.com/testcontainers/testcontainers-go"
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // New spins up a postgres:16-alpine container, runs all migrations via
@@ -31,14 +30,14 @@ func New(t *testing.T) *postgres.Store {
 	ctx := context.Background()
 
 	containerPwd := testutil.FixturePassword("pg-container")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgContainer, err := pgmod.Run(ctx, "postgres:16-alpine",
 		pgmod.WithDatabase("platform_test"),
 		pgmod.WithUsername("platform"),
 		pgmod.WithPassword(containerPwd),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)
@@ -55,5 +54,9 @@ func New(t *testing.T) *postgres.Store {
 		t.Fatalf("New postgres store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	// Most tests seed projects for orgs they never create.
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		t.Fatal(err)
+	}
 	return store
 }

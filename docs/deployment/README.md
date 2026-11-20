@@ -58,7 +58,7 @@ These apply to every matrix. Matrix-specific pages cover the rest.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `DEPLOYMENT_MODE` | no | `selfhosted` | `selfhosted` or `cloud` |
+| `DEPLOYMENT_MODE` | no | `selfhosted` | `selfhosted` or `cloud`. Cloud serves no admin console unless `ADMIN_HOST` is set; with it, `ADMIN_ACCESS_TEAM_DOMAIN` and `ADMIN_ACCESS_AUD` are required or it refuses to start |
 | `PORT` | no | `24005` | Internal listener for in-cluster callers; X-Forwarded-For is ignored |
 | `PUBLIC_PORT` | **yes** | — | Listener only the edge reaches; must differ from `PORT`. The server refuses to start without it. |
 | `TRUSTED_PROXY_CIDRS` | **yes** | — | The edge's addresses; the public listener believes X-Forwarded-For only from them. |

@@ -1,6 +1,7 @@
 import { apiErrorMessage } from '../../api/apps';
 import { useBuildSecrets, useSetBuildSecrets } from '../../api/siteBuilds';
 import { Spinner } from '../containers/ContainerBits';
+import { SecretChecklist } from './SecretChecklist';
 import { useFeatureEnabled } from '../../hooks/useDeploymentMode';
 
 // Project secrets stay out of builds unless marked here; a marked one ends up in public files.
@@ -34,27 +35,13 @@ export function SiteBuildSecrets({ projectId }: { readonly projectId: string }) 
           written into an image layer is readable by anyone who can pull the image.
         </p>
       )}
-      <ul className="space-y-1">
-        {secrets.map((secret) => (
-          <li key={secret.name}>
-            <label className="flex items-center gap-2 text-sm text-text-primary">
-              <input
-                type="checkbox"
-                checked={secret.buildVisible}
-                disabled={update.isPending}
-                onChange={(event) => toggle(secret.name, event.target.checked)}
-                data-testid={`build-secret-${secret.name}`}
-              />
-              <code>{secret.name}</code>
-            </label>
-          </li>
-        ))}
-      </ul>
-      {update.error && (
-        <p role="alert" className="text-xs text-red-400">
-          {apiErrorMessage(update.error, 'The change could not be saved')}
-        </p>
-      )}
+      <SecretChecklist
+        rows={secrets.map((secret) => ({ name: secret.name, checked: secret.buildVisible }))}
+        pending={update.isPending}
+        error={update.error}
+        testIdPrefix="build-secret"
+        onToggle={toggle}
+      />
     </div>
   );
 }

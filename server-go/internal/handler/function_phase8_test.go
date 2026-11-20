@@ -23,32 +23,31 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func setupCronPG(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	c, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("fn_cron_test"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

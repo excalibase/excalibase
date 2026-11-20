@@ -3,6 +3,7 @@ package sites
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -204,4 +205,76 @@ func (s *PostgresStore) execOne(ctx context.Context, what, query string, args ..
 		return ErrSiteNotFound
 	}
 	return nil
+}
+
+func (s *PostgresStore) RuntimeVars(ctx context.Context, projectID, id string) (map[string]string, error) {
+	var raw []byte
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(v.vars, '{}'::jsonb) FROM sites s LEFT JOIN site_runtime_vars v ON v.site_id = s.id
+		WHERE s.project_id = $1 AND s.id = $2`, projectID, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrSiteNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read runtime variables: %w", err)
+	}
+	vars := map[string]string{}
+	if err := json.Unmarshal(raw, &vars); err != nil {
+		return nil, fmt.Errorf("decode runtime variables: %w", err)
+	}
+	return vars, nil
+}
+
+func (s *PostgresStore) SetRuntimeVars(ctx context.Context, projectID, id string, vars map[string]string) error {
+	encoded, err := json.Marshal(vars)
+	if err != nil {
+		return fmt.Errorf("encode runtime variables: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `INSERT INTO site_runtime_vars (site_id, vars, updated_at)
+		SELECT id, $3::jsonb, NOW() FROM sites WHERE project_id = $1 AND id = $2
+		ON CONFLICT (site_id) DO UPDATE SET vars = EXCLUDED.vars, updated_at = NOW()`, projectID, id, encoded)
+	if err != nil {
+		return fmt.Errorf("save runtime variables: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return ErrSiteNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) ServerVisibleSecrets(ctx context.Context, projectID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM site_server_visible_secrets WHERE project_id = $1 ORDER BY name`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("read the server-visible secrets: %w", err)
+	}
+	defer rows.Close()
+	names := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+func (s *PostgresStore) SetServerVisibleSecrets(ctx context.Context, projectID string, names []string, actor string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin server-visibility update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// A nil slice is SQL NULL and would match nothing: an empty set must hide every secret.
+	kept := append([]string{}, names...)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM site_server_visible_secrets WHERE project_id = $1 AND NOT (name = ANY($2))`,
+		projectID, pq.Array(kept)); err != nil {
+		return fmt.Errorf("hide secrets from server sites: %w", err)
+	}
+	for _, name := range names {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO site_server_visible_secrets (project_id, name, marked_by) VALUES ($1, $2, $3)
+			ON CONFLICT DO NOTHING`, projectID, name, actor); err != nil {
+			return fmt.Errorf("show a secret to server sites: %w", err)
+		}
+	}
+	return tx.Commit()
 }

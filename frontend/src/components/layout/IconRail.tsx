@@ -6,6 +6,7 @@ import { cn } from '../../utils/cn';
 import { useInstance } from '../../hooks/useProvisioning';
 import { isMySQLProject } from '../../utils/engine';
 import { PanelLeftDashed } from 'lucide-react';
+import { useAuthStore } from '../../stores/auth-store';
 
 type SidebarMode = 'expanded' | 'collapsed' | 'expandable';
 
@@ -26,7 +27,8 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
   const { enabled: sites } = useSitesEnabled();
   const { data: project } = useInstance(projectId ?? '');
   const postgres = !isMySQLProject(project);
-  const sections = visibleProjectNav({ appHosting, mcp, sites, postgres });
+  const platformStaff = useAuthStore((s) => s.user?.role === 'platform_admin' || s.user?.role === 'platform_operator');
+  const sections = visibleProjectNav({ appHosting, mcp, sites, postgres, platformStaff });
 
   const [mode, setMode] = useState<SidebarMode>(() => {
     return (localStorage.getItem(STORAGE_KEY) as SidebarMode) ?? 'expandable';

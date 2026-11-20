@@ -144,9 +144,13 @@ func (s *MajorUpgradeService) RecoverInterrupted(ctx context.Context) {
 // project as read after the claim; the listed copy may be out of date.
 // Whether the run is stale is the claim's call, on the database's clock.
 func (s *MajorUpgradeService) recoverOne(ctx context.Context, listed domain.MajorUpgrade) {
+	// Read before the lease: the deletion sweep gives up on a project it finds held.
+	if inst, err := s.cfg.Instances.FindByProjectID(listed.ProjectID); err == nil && inst != nil && admitRecovery(inst.Status) != nil {
+		return
+	}
 	_, release, err := s.cfg.Projects.HoldForMajorUpgrade(ctx, listed.ProjectID, admitRecovery)
 	if err != nil {
-		if !errors.Is(err, ErrProjectOperationRunning) {
+		if !errors.Is(err, ErrProjectOperationRunning) && !errors.Is(err, errRecoveryNotOwed) {
 			log.Printf("major upgrade recovery %s: %v", listed.ProjectID, err)
 		}
 		return
@@ -294,9 +298,11 @@ func runLostBy(ctx context.Context) error {
 }
 
 // admitRecovery lets recovery take any project not being torn down.
+var errRecoveryNotOwed = errors.New("recovery is not owed")
+
 func admitRecovery(status string) error {
 	if domain.IsDeletionStatus(status) || status == string(domain.StatusPendingDeletion) {
-		return fmt.Errorf("project is %s", status)
+		return fmt.Errorf("%w: project is %s", errRecoveryNotOwed, status)
 	}
 	return nil
 }
@@ -328,7 +334,7 @@ func isLeader(ctx context.Context, leader LeaderChecker) bool {
 	}
 	ok, err := leader.IsLeader(ctx)
 	if err != nil {
-		log.Printf("major upgrade recovery: leadership: %v", err)
+		log.Printf("leadership check: %v", err)
 	}
 	return ok && err == nil
 }

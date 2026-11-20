@@ -307,7 +307,7 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 
 	restored, err := a.runRestore(ctx, pc, inst, req, target)
 	if err != nil {
-		return nil, failRestore(ctx, pc, newProject, err)
+		return nil, failRestore(ctx, pc, a.instances, failedRestoreRecord(inst, req, target.project, target.namespace), err)
 	}
 	return &domain.ProvisioningResponse{
 		ProjectID:    restored.ProjectID,
@@ -487,7 +487,7 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisi
 	}
 	// Deleting the namespace removes the object-store secret with it, so the
 	// secret needs no compensation of its own.
-	pc.RegisterCleanup("delete restore namespace", func(ctx context.Context) error {
+	pc.RegisterCleanup(restoreNamespaceCleanup(newNamespace), func(ctx context.Context) error {
 		return a.k8sClient.DeleteNamespace(ctx, newNamespace)
 	})
 	if err := a.writeCredentials(ctx, newNamespace, k8s.RecoverySourceCredentialsSecretName, target.sourceCreds); err != nil {
@@ -512,7 +512,7 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisi
 	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, newNamespace, target.cluster); err != nil {
 		return fmt.Errorf("apply restore CRD: %w", err)
 	}
-	pc.RegisterCleanup("delete restore cluster", func(ctx context.Context) error {
+	pc.RegisterCleanup(restoreClusterCleanup(newNamespace), func(ctx context.Context) error {
 		return a.k8sClient.DeleteCRD(ctx, k8s.CNPGClusterGVR, newNamespace, clusterName)
 	})
 	return nil

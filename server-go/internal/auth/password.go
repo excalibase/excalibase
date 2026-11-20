@@ -20,7 +20,18 @@ const (
 )
 
 // HashPassword hashes a password using argon2id.
+// It waits for a slot in the shared password gate and returns ErrBusy when
+// none frees up in time.
 func HashPassword(password string) (string, error) {
+	var hash string
+	var err error
+	if gateErr := currentGate().run(func() { hash, err = hashArgon2id(password) }); gateErr != nil {
+		return "", gateErr
+	}
+	return hash, err
+}
+
+func hashArgon2id(password string) (string, error) {
 	salt := make([]byte, argon2SaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate salt: %w", err)
@@ -36,12 +47,27 @@ func HashPassword(password string) (string, error) {
 	), nil
 }
 
-// CheckPassword verifies a password against an argon2id hash.
-func CheckPassword(password, hash string) bool {
+// VerifyPassword checks a password against an argon2id hash inside the shared
+// password gate. client is the caller's address (IPv6 grouped by /64): one
+// client may hold only a share of the gate, whether or not the account exists.
+// It returns ErrBusy when no slot frees up in time; a hash that is empty or
+// not argon2id costs nothing and is simply false.
+func VerifyPassword(password, hash, client string) (bool, error) {
 	if hash == "" || !strings.HasPrefix(hash, "$argon2id$") {
-		return false
+		return false, nil
 	}
-	return checkArgon2id(password, hash)
+	var ok bool
+	if err := currentGate().runFor(client, func() { ok = checkArgon2id(password, hash) }); err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
+// CheckPassword is VerifyPassword for callers that cannot act on a refusal: a
+// busy gate reads as a mismatch. Request handlers use VerifyPassword.
+func CheckPassword(password, hash string) bool {
+	ok, _ := VerifyPassword(password, hash, "")
+	return ok
 }
 
 func checkArgon2id(password, encoded string) bool {

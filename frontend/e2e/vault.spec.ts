@@ -19,10 +19,12 @@ function mockVaultEndpoints(page: import('@playwright/test').Page) {
     const url = new URL(route.request().url());
     const prefix = url.searchParams.get('prefix') || '';
     const allPaths = [
-      'projects/duc-corp/app-a/credentials/admin',
-      'projects/duc-corp/app-a/credentials/auth_admin',
-      'projects/duc-corp/app-a/credentials/excalibase_app',
-      'projects/org-b/app-b/credentials/admin',
+      'projects/test-project/app-a/credentials/admin',
+      'projects/test-project/app-a/credentials/auth_admin',
+      'projects/test-project/app-a/credentials/excalibase_app',
+      'projects/test-project/app-b/credentials/admin',
+      // Other tenants and platform paths: the page must never list these (EXC-761).
+      'projects/other-tenant/app-c/credentials/admin',
       'backup/s3',
     ];
     const filtered = prefix ? allPaths.filter((p) => p.startsWith(prefix)) : allPaths;
@@ -71,14 +73,15 @@ test.describe('Vault Page', () => {
     await page.goto('/project/test-project/vault');
     await expect(page.getByTestId('vault-page')).toBeVisible();
     await expect(page.getByTestId('vault-secrets-list')).toBeVisible();
-    // Should show 5 secrets (pki/* filtered out)
+    // Only this project's 4 secrets: other tenants and platform paths are not requested
     const rows = page.locator('[data-testid^="vault-secret-row-"]');
-    await expect(rows).toHaveCount(5);
+    await expect(rows).toHaveCount(4);
+    await expect(page.getByText('other-tenant')).toHaveCount(0);
   });
 
   test('search filters secrets', async ({ page }) => {
     await page.goto('/project/test-project/vault');
-    await page.getByTestId('vault-search').fill('org-b');
+    await page.getByTestId('vault-search').fill('app-b');
     const rows = page.locator('[data-testid^="vault-secret-row-"]');
     await expect(rows).toHaveCount(1);
   });

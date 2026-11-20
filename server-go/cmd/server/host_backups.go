@@ -71,11 +71,11 @@ const hostPostgresWALInterval = time.Minute
 
 // startHostPostgresWAL ships a single host's Postgres WAL as it closes
 // (EXC-593); nil where the host has no Postgres backups.
-func startHostPostgresWAL(adapter *service.DockerBackupAdapter, store storage.InstanceStore) {
+func startHostPostgresWAL(adapter *service.DockerBackupAdapter, store storage.InstanceStore, alerts hostWALAlerts) {
 	if adapter == nil {
 		return
 	}
-	go service.NewHostPostgresWALSweep(adapter, store).Run(context.Background(), hostPostgresWALInterval)
+	go newHostWALSweep(adapter, store, alerts).Run(context.Background(), hostPostgresWALInterval)
 	log.Printf("Single-host Postgres WAL: shipped every %s", hostPostgresWALInterval)
 }
 
@@ -88,4 +88,22 @@ func singleHostPorts(cfg config.AppConfig, sqlStore storage.PlatformStore) (*ser
 		return nil, errors.New("the platform store holds no port allocator, so projects could not keep their host port")
 	}
 	return service.NewHostPortAllocator(endpoints, cfg.DBEndpointPorts, cfg.DBEndpointPortQuarantine), nil
+}
+
+// hostWALAlerts is what the single-host WAL sweep raises alerts with (EXC-784);
+// on is false while the WALArchiveAlert guard is off.
+type hostWALAlerts struct {
+	on       bool
+	alerts   *service.AlertingService
+	notifier service.AlertNotifier
+	after    time.Duration
+}
+
+// newHostWALSweep is the sweep, alerting when its guard is on.
+func newHostWALSweep(adapter *service.DockerBackupAdapter, store storage.InstanceStore, alerts hostWALAlerts) *service.HostPostgresWALSweep {
+	sweep := service.NewHostPostgresWALSweep(adapter, store)
+	if alerts.on {
+		sweep.SetAlerts(alerts.alerts, alerts.notifier, alerts.after, time.Now)
+	}
+	return sweep
 }

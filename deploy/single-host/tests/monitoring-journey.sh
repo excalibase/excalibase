@@ -39,11 +39,12 @@ case "$LG" in *'"logs":"'*"database system is ready"*) ok "the database's log is
 st=$(c -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $T" -H 'Content-Type: application/json' "https://studio.localhost:$PORT/api/admin/monitoring/alert-settings" \
   -d '{"enabled":true,"cpuPercent":90,"memoryPercent":90,"diskPercent":99,"temperatureCelsius":95,"windowMinutes":5,"downMinutes":0,"emails":[]}')
 [ "$st" = 200 ] && ok "alert rules saved" || ko "alert rules: $st"
-$DOCKER stop "$TC" >/dev/null 2>&1
+# Through the proxy, as the platform stops it: the proxy restarts a tenant stopped any other way (EXC-683).
+$DOCKER exec excalibase-engine-proxy wget -qO- --post-data '' "http://127.0.0.1:2375/containers/$TC/stop" >/dev/null 2>&1
 A=
 for i in $(seq 40); do A=$(api /alerts/project/$PID); case "$A" in *"container.down:$TC"*) break ;; esac; sleep 5; done
 case "$A" in *"container.down:$TC"*) ok "a stopped database raises its project's alert" ;; *) ko "no down alert: ${A:0:400}" ;; esac
-$DOCKER start "$TC" >/dev/null 2>&1
+$DOCKER exec excalibase-engine-proxy wget -qO- --post-data '' "http://127.0.0.1:2375/containers/$TC/start" >/dev/null 2>&1
 for i in $(seq 40); do A=$(api /alerts/project/$PID); case "$A" in *"container.down:$TC"*) sleep 5 ;; *) break ;; esac; done
 case "$A" in *"container.down:$TC"*) ko "the alert stayed open after the restart" ;; *) ok "the restart resolves the alert" ;; esac
 for i in $(seq 30); do api /provision/$PID/metrics/current | grep -q '"metricsAvailable":true' && break; sleep 5; done

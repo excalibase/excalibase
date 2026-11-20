@@ -15,7 +15,7 @@
 #   - AIO deployed in excalibase-platform ns (provisioning, auth, graphql,
 #     watcher, floci, NATS, platform-db)
 #   - port-forwards open: 24005 (provisioning), 24000 (auth), 10000 (graphql),
-#     4566 (floci/S3)
+#     8081 (graphql management: health and metrics), 4566 (floci/S3)
 #   - aws CLI on PATH for floci bucket ops
 #   - jq, curl
 
@@ -24,6 +24,7 @@ set -uo pipefail
 API_PROV="${API_PROV:-http://localhost:24005}"
 API_AUTH="${API_AUTH:-http://localhost:24000}"
 API_GQL="${API_GQL:-http://localhost:10000}"
+API_GQL_MGMT="${API_GQL_MGMT:-http://localhost:8081}"
 API_S3="${API_S3:-http://localhost:4566}"
 
 PASS=0
@@ -45,7 +46,7 @@ section(){ echo ""; cyan "=== $* ==="; }
 ADMIN_PASS=${ADMIN_PASSWORD:-$( [ -n "${ADMIN_PASSWORD_FILE:-}" ] && cat "$ADMIN_PASSWORD_FILE" )}
 if [ -z "$ADMIN_PASS" ]; then red "set ADMIN_PASSWORD or ADMIN_PASSWORD_FILE to the platform admin's password"; exit 1; fi
 
-BOOT_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H 'Content-Type: application/json' \
+BOOT_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}")
 ADMIN_PAT=$(echo "$BOOT_LOGIN" | jq -r '.token' 2>/dev/null)
 [ -z "$ADMIN_PAT" ] || [ "$ADMIN_PAT" = "null" ] && { red "Initial admin login failed: $BOOT_LOGIN"; exit 1; }
@@ -57,16 +58,16 @@ for s in "$API_PROV/healthz:provisioning" "$API_AUTH/.well-known/jwks.json:auth"
   url="${s%:*}"; name="${s##*:}"
   curl -sf "$url" > /dev/null 2>&1 && pass "$name reachable" || fail "$name" "unreachable"
 done
-# Unauthenticated reachability uses the exempted health endpoint — introspection
+# Unauthenticated reachability uses the health endpoint on the management port — introspection
 # now requires a JWT (fail-closed auth); F16 covers authenticated introspection.
-curl -sf "$API_GQL/actuator/health" | grep -q '"status":"UP"' \
+curl -sf "$API_GQL_MGMT/actuator/health" | grep -q '"status":"UP"' \
    && pass "graphql reachable" || fail "graphql" "health not UP"
 
 ###############################################################################
 section "F2. Cookie auth, scope, expiry, security headers"
 COOKIE_JAR=$(mktemp); trap "rm -f $COOKIE_JAR" EXIT
 
-LOGIN_RESP=$(curl -s -i -c "$COOKIE_JAR" -X POST "$API_PROV/api/auth/login" \
+LOGIN_RESP=$(curl -s -i -c "$COOKIE_JAR" -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}")
 
@@ -108,7 +109,7 @@ EXISTING=$(curl -sf -H "$PAT_HDR" "$API_PROV/api/provision/" 2>/dev/null | jq -r
 for pid in $EXISTING; do
   [ -z "$pid" ] || [ "$pid" = "null" ] && continue
   echo "    cleaning leftover $pid"
-  curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/admin/projects/$pid" > /dev/null 2>&1
+  curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' -H "$PAT_HDR" "$API_PROV/api/admin/projects/$pid" > /dev/null 2>&1
 done
 sleep 2
 
@@ -196,7 +197,7 @@ if [ -z "${SKIP_PROVISIONED:-}" ]; then
   curl -sf -X POST -H "$PAT_HDR" -H 'Content-Type: application/json' \
     -d '{"username":"alice","email":"alice@e2e.test","password":"AliceP@ss123","role":"user"}' \
     "$API_PROV/api/auth/users" > /dev/null 2>&1 || true
-  ALICE_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H 'Content-Type: application/json' \
+  ALICE_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' \
     -d '{"username":"alice","password":"AliceP@ss123"}' 2>/dev/null)
   ALICE_PAT=$(echo "$ALICE_LOGIN" | jq -r '.token' 2>/dev/null)
   if [ -n "$ALICE_PAT" ] && [ "$ALICE_PAT" != "null" ]; then
@@ -382,7 +383,7 @@ if [ -z "${SKIP_PROVISIONED:-}" ]; then
       else
         skip "cross-project replay" "couldn't reg in $PROJECT2_ID"
       fi
-      curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/admin/projects/$PROJECT2_ID" > /dev/null 2>&1
+      curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' -H "$PAT_HDR" "$API_PROV/api/admin/projects/$PROJECT2_ID" > /dev/null 2>&1
     else
       skip "cross-project replay" "couldn't provision proj2: $PROV2"
     fi
@@ -459,7 +460,7 @@ curl -s --get --data-urlencode 'query={namespace=\"excalibase-platform\",app=\"g
 
   ###############################################################################
   section "F21. Deprovision — vault prefix purge"
-  curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/admin/projects/$PROJECT_ID" > /dev/null
+  curl -s -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' -H "$PAT_HDR" "$API_PROV/api/admin/projects/$PROJECT_ID" > /dev/null
   sleep 3
   VLIST_AFTER=$(curl -sf -H "$PAT_HDR" "$API_PROV/api/vault/secrets-list?prefix=projects/$PROJECT_ID/" 2>/dev/null)
   PATHS_LEFT=$(echo "$VLIST_AFTER" | jq '.paths | length' 2>/dev/null || echo "?")
@@ -557,7 +558,7 @@ if [ -n "$EMAIL_E2E" ]; then
   TEST_PASS="EmailTest@Pass123"
 
   # Register a new platform user with the sandbox-allowed email.
-  REG_RESP=$(curl -s -X POST "$API_PROV/api/auth/register" \
+  REG_RESP=$(curl -s -X POST "$API_PROV/api/auth/register" -H "X-Return-Session-Token: true" \
     -H 'Content-Type: application/json' \
     -d "{\"username\":\"$TEST_USER\",\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASS\"}")
   if echo "$REG_RESP" | jq -e '.token // .access_token' > /dev/null 2>&1; then
@@ -629,7 +630,7 @@ fi
 section "F22. Rate limiting (runs last)"
 HITS_429=0
 for i in $(seq 1 60); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_PROV/api/auth/login" \
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_PROV/api/auth/login" -H "X-Return-Session-Token: true" \
     -H 'Content-Type: application/json' \
     -d '{"username":"nope","password":"wrong"}')
   [ "$code" = "429" ] && HITS_429=$((HITS_429+1))

@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -146,6 +147,9 @@ func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) 
 
 func startLocalStackS3(ctx context.Context, t *testing.T, bucket string) (*s3.Client, string) {
 	t.Helper()
+	if err := imagepull.EnsureLocal(ctx, "localstack/localstack:3.7"); err != nil {
+		t.Fatal(err)
+	}
 	lsC, err := tclocalstack.Run(ctx, "localstack/localstack:3.7",
 		testcontainers.WithEnv(map[string]string{"SERVICES": "s3"}))
 	if err != nil {
