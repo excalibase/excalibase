@@ -125,6 +125,31 @@ jobs:
                   ;;
                 *) echo "::error::could not check $repository:$SOURCE_TAG-native"; exit 1 ;;
               esac
+
+              # The one-database engine images (EXC-799) are promoted the same way, each from the same commit's
+              # <source_tag>-<variant>. A source tag from before they existed has none: that genuine not-found
+              # is skipped with a notice and the all-in-one tags above stay required. Any other error fails.
+              for variant in postgres mysql postgres-native mysql-native; do
+                status=0; slim=$(bash scripts/inspect-digest.sh "$repository:$SOURCE_TAG-$variant") || status=$?
+                case "$status" in
+                  0)
+                    slim_tags=$(bash scripts/release-slim-tags.sh "$VERSION" "$variant" "$MOVE_MAJOR_LATEST")
+                    first=${slim_tags%% *}
+                    status=0; bash scripts/inspect-digest.sh "$repository:$first" >/dev/null || status=$?
+                    case "$status" in
+                      0) echo "::error::$repository:$first already exists; cut a new version instead"; exit 1 ;;
+                      3) ;;
+                      *) echo "::error::could not check $repository:$first"; exit 1 ;;
+                    esac
+                    echo "$repository $slim $slim_tags" >> "$plan"
+                    ;;
+                  3)
+                    echo "::notice::$repository:$SOURCE_TAG-$variant does not exist (engine build without this image); $variant not released for $VERSION"
+                    echo "Image $variant: skipped, $repository:$SOURCE_TAG-$variant does not exist" >> "$GITHUB_STEP_SUMMARY"
+                    ;;
+                  *) echo "::error::could not check $repository:$SOURCE_TAG-$variant"; exit 1 ;;
+                esac
+              done
             fi
           done
 

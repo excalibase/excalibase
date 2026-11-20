@@ -36,8 +36,10 @@ Rules that keep this safe:
    `main`: `.github/workflows/ci.yml`, `.github/workflows/cd.yml`,
    `.github/workflows/release.yml`, `scripts/guard-release-tag.sh`,
    `scripts/release-tags.sh`, `scripts/release-native-tags.sh`,
+   `scripts/release-slim-tags.sh`,
    `tests/cd-plan-test.sh`, `tests/cd-guard-test.sh`,
-   `tests/release-tags-test.sh` and `tests/release-native-tags-test.sh`.
+   `tests/release-tags-test.sh`, `tests/release-native-tags-test.sh` and
+   `tests/release-slim-tags-test.sh`.
    Check that CI is green on that PR before cherry-picking. Once per branch.
 3. **Cherry-pick** the fixes, merged to `main` first, as pull requests into
    `release/1.7` (CI runs on them). Bump the single-host bundle tag on the

@@ -158,6 +158,7 @@ jobs:
       - name: Native tag plan
         run: |
           bash tests/release-native-tags-test.sh
+          bash tests/release-slim-tags-test.sh
           bash tests/release-tags-test.sh
 
       - name: CD tag plan
