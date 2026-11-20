@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -12,12 +13,12 @@ import (
 // list on purpose: the endpoint is built for coding, and every addition is a
 // decision about what an AI tool may do with a person's credential.
 var offeredTools = []string{
-	"add_cors_origin", "add_site_domain", "apply_migration", "check_site_domain", "connect_site_repo", "create_app", "create_publishable_key", "create_site", "delete_app", "delete_function",
-	"delete_site", "deploy_app", "deploy_function", "deploy_site", "describe_table", "disconnect_site_repo", "execute_sql", "generate_typescript_types", "get_auth_settings", "get_ci_snippet",
+	"add_app_domain", "add_cors_origin", "add_site_domain", "apply_migration", "check_site_domain", "connect_site_repo", "create_app", "create_publishable_key", "create_storage_bucket", "create_site", "delete_app", "delete_function", "delete_function_secret",
+	"delete_site", "deploy_app", "deploy_function", "deploy_site", "describe_table", "disconnect_app_repo", "disconnect_site_repo", "execute_sql", "generate_typescript_types", "get_auth_settings", "get_ci_snippet",
 	"get_database_info", "get_db_endpoint", "get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_metrics", "get_project_info",
-	"list_alerts", "list_apps", "list_cors_origins", "list_functions", "list_migrations", "list_permissions", "list_projects",
-	"list_site_build_secrets", "list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_tables", "rebuild_site", "remove_cors_origin", "remove_site_domain", "rollback_site", "set_db_function_permission", "set_function_outbound_hosts",
-	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "test_auth_flow", "track_db_function", "update_app",
+	"list_alerts", "list_app_domains", "list_apps", "list_cors_origins", "list_function_secrets", "list_functions", "list_migrations", "list_permissions", "list_projects",
+	"list_site_build_secrets", "list_site_builds", "list_site_deploys", "list_site_domains", "list_sites", "list_templates", "list_storage_buckets", "list_storage_objects", "list_tables", "rebuild_site", "redeploy_app", "remove_app_domain", "remove_cors_origin", "remove_site_domain", "revoke_publishable_key", "rollback_site", "set_app_secret", "set_db_function_permission", "set_function_outbound_hosts",
+	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "test_auth_flow", "track_db_function", "update_app", "verify_app_domain",
 }
 
 // allowedRoutes is every route a tool may call. Anything else is refused by
@@ -33,6 +34,10 @@ var allowedRoutes = []*regexp.Regexp{
 	// Publishable SDK keys only: they ship inside client apps and grant what
 	// the anon role grants. Secret keys and personal access tokens stay out.
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/sdk-keys/$`),
+	// Revoking a publishable key; the tool lists first and refuses any other type.
+	regexp.MustCompile(`^DELETE /api/projects/[^/]+/sdk-keys/[0-9]+$`),
+	// The built-in templates and what each costs this plan; deploying one hands back generated credentials once, so it stays in Studio.
+	regexp.MustCompile(`^GET /api/projects/[^/]+/app-templates/$`),
 	regexp.MustCompile(`^GET /api/schema/[^/]+/(tables|relationships)(\?.*)?$`),
 	regexp.MustCompile(`^GET /api/schema/[^/]+/tables/[^/]+/(columns|indexes|checks)(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/schema/[^/]+/query(\?.*)?$`),
@@ -46,6 +51,8 @@ var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^GET /api/provision/[^/]+/advisors$`),
 	// Monitoring reads (EXC-633/656): request charts, CPU and memory, the project's alerts, the database's size and plan.
 	regexp.MustCompile(`^GET /api/provision/[^/]+/(requests(\?.*)?|metrics/current|metrics/history(\?.*)?|cluster)$`),
+	// The project's own containers on a single host (EXC-670).
+	regexp.MustCompile(`^GET /api/projects/[^/]+/containers/metrics(\?.*)?$`),
 	regexp.MustCompile(`^GET /api/alerts/project/[^/]+/$`),
 	// How end users may sign in, read only; every write, and the provider secrets, stay in Studio (ADR 0037).
 	regexp.MustCompile(`^GET /api/projects/[^/]+/(auth-settings|auth-providers)/$`),
@@ -61,10 +68,27 @@ var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^POST /api/provision/[^/]+/tracked-functions/$`),
 	regexp.MustCompile(`^DELETE /api/provision/[^/]+/tracked-functions/[^/]+$`),
 	regexp.MustCompile(`^(PUT|DELETE) /api/provision/[^/]+/function-permissions/[^/]+/roles/[^/]+$`),
-	regexp.MustCompile(`^POST /api/projects/[^/]+/functions/secrets$`),
+	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/functions/secrets$`),
+	// Secret names and removal; a value is written and never read.
+	regexp.MustCompile(`^DELETE /api/projects/[^/]+/functions/secrets/[^/]+$`),
+	// A test run of one function, with no sign-in of its own; the answer is the function's.
+	regexp.MustCompile(`^POST /api/projects/[^/]+/functions/[^/]+/invoke$`),
+	// Whether the runtime is up, read after a secret is deleted (the redeploy that follows is not reported).
+	regexp.MustCompile(`^GET /api/projects/[^/]+/functions/runtime/status$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/functions/[^/]+/logs(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/apps/$`),
 	regexp.MustCompile(`^(PATCH|DELETE) /api/projects/[^/]+/apps/[^/]+/$`),
+	// A secret variable's value is written to the vault and never read back; no route returns one.
+	regexp.MustCompile(`^PUT /api/projects/[^/]+/apps/[^/]+/secrets/[^/]+$`),
+	regexp.MustCompile(`^POST /api/projects/[^/]+/apps/[^/]+/deploys/[^/]+/redeploy$`),
+	// Custom domains of an app: the user adds the CNAME, the platform checks it.
+	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/apps/[^/]+/domains/$`),
+	regexp.MustCompile(`^POST /api/projects/[^/]+/apps/[^/]+/domains/[^/]+/verify$`),
+	regexp.MustCompile(`^DELETE /api/projects/[^/]+/apps/[^/]+/domains/[^/]+$`),
+	// Git builds of apps (EXC-547, appgitbuilds): connect, rebuild and read builds; the GitHub sign-in happens in Studio only.
+	regexp.MustCompile(`^(GET|PUT|DELETE) /api/projects/[^/]+/apps/[^/]+/git$`),
+	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/builds(/[^/]+)?$`),
+	regexp.MustCompile(`^POST /api/projects/[^/]+/apps/[^/]+/builds$`),
 	// Names of the registries with a saved login; never a username or password.
 	regexp.MustCompile(`^GET /api/projects/[^/]+/registry-credentials/$`),
 	// Whether the project's apps may reach each other (the route asks for admin to change it).
@@ -98,6 +122,10 @@ var allowedRoutes = []*regexp.Regexp{
 	// mint, which ADR 0037 keeps in Studio.
 	regexp.MustCompile(`^GET /api/projects/[^/]+/storage/s3-keys$`),
 	regexp.MustCompile(`^DELETE /api/projects/[^/]+/storage/s3-keys/[^/]+$`),
+	// Buckets: read, create and set who may use them; objects are listed, never read or written (upload and download stay out).
+	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/storage/buckets$`),
+	regexp.MustCompile(`^GET /api/projects/[^/]+/storage/buckets/[^/]+/objects(\?.*)?$`),
+	regexp.MustCompile(`^PUT /api/projects/[^/]+/storage/buckets/[^/]+/access$`),
 	// Previews (EXC-660): list, mode and removal; the Admin's opt-ins stay in Studio.
 	regexp.MustCompile(`^GET /api/projects/[^/]+/sites/[^/]+/previews$`),
 	regexp.MustCompile(`^PUT /api/projects/[^/]+/sites/[^/]+/previews/mode$`),
@@ -140,12 +168,21 @@ var neverReached = []*regexp.Regexp{
 	// The database port and its read address are opened by an Admin in Studio.
 	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/db-endpoint/?(\?.*)?$`),
 	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/db-read-address`),
-	// Storage: S3 keys are minted in Studio; buckets and objects are not an MCP surface.
-	regexp.MustCompile(`^(PUT|POST|PATCH) .*/storage`),
+	// Storage: S3 keys are minted in Studio; objects are neither read, written nor deleted here, and a bucket is not dropped.
+	regexp.MustCompile(`^POST .*/storage/s3-keys`),
+	regexp.MustCompile(`/storage/(tus|v1)`),
+	regexp.MustCompile(`/(upload-url|confirm-upload|download-url)`),
+	regexp.MustCompile(`/objects/.`),
+	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/objects`),
+	regexp.MustCompile(`^DELETE .*/storage/buckets`),
+	regexp.MustCompile(`^(PUT|PATCH) .*/storage/buckets/[^/]+/?$`),
 	regexp.MustCompile(`/storage(\?.*)?$`),
-	regexp.MustCompile(`/storage/(buckets|objects|v1)`),
-	regexp.MustCompile(`/apps/[^/]+/secrets`),
+	// An app's secret is set by name and never read: every other secret route stays out.
+	regexp.MustCompile(`^(GET|POST|PATCH|DELETE) .*/apps/[^/]+/secrets`),
+	regexp.MustCompile(`^PUT .*/apps/[^/]+/secrets/?(\?.*)?$`),
 	// One-way database changes.
+	// A template's deploy answers with credentials it generated, readable once: they stay out of a conversation.
+	regexp.MustCompile(`/app-templates/[^/]+/deploy`),
 	regexp.MustCompile(`/upgrade`),
 	regexp.MustCompile(`/major-upgrade`),
 	regexp.MustCompile(`/parameters`),
@@ -165,8 +202,18 @@ func TestNeverReachedCatchesTheSurfaceItNames(t *testing.T) {
 		"PUT /api/projects/p/db-endpoint/",
 		"PUT /api/projects/p/db-read-address/",
 		"POST /api/projects/p/storage/s3-keys",
-		"GET /api/projects/p/storage/buckets",
-		"PUT /api/projects/p/apps/a/secrets/NAME",
+		"DELETE /api/projects/p/storage/buckets/b",
+		"PUT /api/projects/p/storage/buckets/b",
+		"PATCH /api/projects/p/storage/buckets/b",
+		"POST /api/projects/p/storage/buckets/b/upload-url",
+		"GET /api/projects/p/storage/buckets/b/objects/a.png",
+		"DELETE /api/projects/p/storage/buckets/b/objects/a.png",
+		"GET /api/projects/p/storage/buckets/b/download-url/a.png",
+		"POST /api/projects/p/storage/tus",
+		"GET /api/projects/p/apps/a/secrets/NAME",
+		"DELETE /api/projects/p/apps/a/secrets/NAME",
+		"PUT /api/projects/p/apps/a/secrets",
+		"POST /api/projects/p/app-templates/valkey/deploy",
 		"POST /api/provision/p/major-upgrade",
 		"PUT /api/provision/p/parameters",
 		"POST /api/provision/p/upgrade",
@@ -182,6 +229,13 @@ func TestNeverReachedCatchesTheSurfaceItNames(t *testing.T) {
 		"GET /api/projects/p/db-endpoint/",
 		"GET /api/projects/p/db-read-address/",
 		"PUT /api/projects/p/db-endpoint/allowed-sources/",
+		"PUT /api/projects/p/apps/a/secrets/NAME",
+		"GET /api/projects/p/storage/buckets",
+		"POST /api/projects/p/storage/buckets",
+		"GET /api/projects/p/storage/buckets/b/objects?limit=5",
+		"PUT /api/projects/p/storage/buckets/b/access",
+		"GET /api/projects/p/functions/secrets",
+		"DELETE /api/projects/p/functions/secrets/K",
 		"GET /api/projects/p/storage/s3-keys",
 		"DELETE /api/projects/p/storage/s3-keys/k",
 	} {
@@ -237,8 +291,9 @@ func TestToolCatalogueIsExactlyTheCodingSurface(t *testing.T) {
 		got = append(got, tool.Name)
 	}
 	sort.Strings(got)
-	if strings.Join(got, ",") != strings.Join(offeredTools, ",") {
-		t.Fatalf("tools:\n%v\nwant:\n%v", got, offeredTools)
+	want := slices.Sorted(slices.Values(offeredTools))
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("tools:\n%v\nwant:\n%v", got, want)
 	}
 	forbidden := regexp.MustCompile(`project_(create|delete)|create_project|delete_project|member|role_grant|tier|sso|sign_in|backup|restore|purge|credential|rotate|token|pause|resume`)
 	for _, name := range got {

@@ -48,6 +48,7 @@ var featureEnv = map[features.Feature]string{
 	features.WALArchiveAlert:    "FEATURE_WALARCHIVEALERT",
 	features.FreeWALUpload:      "FEATURE_FREEWALUPLOAD",
 	features.AppRuntimeLogin:    "FEATURE_APPRUNTIMELOGIN",
+	features.FunctionInvoke:     "FEATURE_FUNCTIONINVOKE",
 }
 
 // defaultOn are the features that are on until their variable says "false":
