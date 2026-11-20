@@ -22,7 +22,9 @@ func TestRoleFunctions_ReregistrationRevokesAnOlderProjectsAppGrants(t *testing.
 	mustExec(t, c.admin, `GRANT EXECUTE ON FUNCTION excalibase.create_role(text, text, boolean, text[]) TO excalibase_app;
 		GRANT EXECUTE ON FUNCTION excalibase.alter_role_password(text, text) TO excalibase_app;
 		GRANT EXECUTE ON FUNCTION excalibase.drop_role(text) TO excalibase_app`)
-	mustExec(t, c.app, `SELECT excalibase.create_role('sneaky', 'pw', true)`)
+	// Even with the grant back, the function refuses a session that is not the owner's (EXC-765).
+	mustFail(t, c.app, `SELECT excalibase.create_role('sneaky', 'pw', true)`, "only the project owner")
+	mustExec(t, c.owner(t), `SELECT excalibase.create_role('sneaky', 'pw', true)`)
 	ctx := context.Background()
 	if pending, err := appReachesAuth(ctx, c.pg.execer(), "app"); err != nil || !pending {
 		t.Fatalf("probe on the old grants = %v, %v; want pending", pending, err)

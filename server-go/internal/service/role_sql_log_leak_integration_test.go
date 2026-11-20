@@ -323,7 +323,8 @@ func TestCustomerRoleFunctionsTimingOutNameNothing(t *testing.T) {
 	c := newPlatformSchemaCaseOn(t, pg)
 	c.register(t)
 	ctx := context.Background()
-	conn, err := c.admin.Conn(ctx)
+	// The functions are the owner's to call: they refuse any other session (EXC-765).
+	conn, err := c.owner(t).Conn(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
