@@ -1,10 +1,13 @@
 name: CI
 
+# release/** runs the same suites as main: a patch is cut on release/<major>.<minor>
+# and CD (cd.yml) builds and publishes release-<major>.<minor>-<sha> from the
+# commit this run passes on.
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "release/**"]
   pull_request:
-    branches: [main]
+    branches: [main, "release/**"]
 
 permissions:
   contents: read
@@ -150,6 +153,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Native tag plan
         run: bash tests/release-native-tags-test.sh
+
+      - name: CD tag plan
+        run: bash tests/cd-plan-test.sh
 
       - name: Release gate
         run: |
@@ -564,7 +570,10 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [changes, go-integration-shard]
     # !cancelled(): a failed shard must fail this check, not skip it.
-    if: ${{ !cancelled() && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true') }}
+    # A push to a release branch is not scanned: its commits are cherry-picks of
+    # main commits already scanned there, and the plan has one analysed branch.
+    # Pull requests into it are scanned.
+    if: ${{ !cancelled() && !startsWith(github.ref, 'refs/heads/release/') && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true') }}
     defaults:
       run:
         working-directory: server-go

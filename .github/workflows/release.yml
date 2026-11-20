@@ -11,7 +11,7 @@ on:
         description: "Release version without the v prefix, e.g. 1.0.0 or 1.2.0-rc.1"
         required: true
       source_tag:
-        description: "Tag to promote from, e.g. main-c2565093 (default: main)"
+        description: "Tag to promote from, e.g. main-c2565093 or, for a patch, release-1.7-c2565093 (default: main)"
         default: main
       services:
         description: "Images to release"
