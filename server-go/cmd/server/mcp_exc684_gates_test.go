@@ -32,6 +32,7 @@ func exc684WriteToolCalls() map[string]map[string]any {
 		"delete_function_secret": {"project_id": matrixProjectA, "key": "API_KEY"},
 		"create_storage_bucket":  {"project_id": matrixProjectA, "name": "avatars"},
 		"set_bucket_access":      {"project_id": matrixProjectA, "bucket": "avatars", "access": map[string]any{"user": map[string]any{"read": "own"}}},
+		"revoke_publishable_key": {"project_id": matrixProjectA, "key_id": 7},
 		"rebuild_app":            with(nil),
 	}
 }
@@ -43,8 +44,9 @@ func TestEXC684WriteToolsRefuseAViewer(t *testing.T) {
 		t.Fatalf("connect viewer: %v", err)
 	}
 	for name, args := range exc684WriteToolCalls() {
-		if name == "set_app_secret" {
-			// It reads the app first, which this harness's offline database cannot answer; the PUT's Developer gate is in the authz matrix.
+		if name == "set_app_secret" || name == "revoke_publishable_key" {
+			// Each reads first (the app; the key list), which this harness's offline stores cannot answer.
+			// The write's Developer gate is pinned by the route policy and authz matrix tests.
 			continue
 		}
 		res := mcpCall(t, viewer, name, args)
@@ -85,6 +87,7 @@ func TestEXC684ReadToolsDoNotReachAnotherOrgsProject(t *testing.T) {
 		"list_function_secrets": {"project_id": matrixProjectB},
 		"list_storage_buckets":  {"project_id": matrixProjectB},
 		"list_storage_objects":  {"project_id": matrixProjectB, "bucket": "avatars"},
+		"list_templates":        {"project_id": matrixProjectB},
 		"list_app_domains":      {"project_id": matrixProjectB, "app_id": "web"},
 	} {
 		res := mcpCall(t, dev, name, args)
