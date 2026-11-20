@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -46,6 +47,12 @@ const (
 
 // mysqlDatabaseName is a plain identifier, so it is safe to quote into SQL.
 var mysqlDatabaseName = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,63}$`)
+
+// mysqlReservedDatabases are the databases a MySQL server and the platform
+// keep for themselves: a project may not take their names.
+var mysqlReservedDatabases = []string{
+	MySQLAuthDatabase, MySQLPlatformDatabase, "mysql", "sys", "information_schema", "performance_schema",
+}
 
 // MySQLProvisioner provisions MySQL projects through MOCO.
 type MySQLProvisioner struct {
@@ -103,6 +110,9 @@ func validateMySQLRequest(req domain.ProvisioningRequest) (database, image strin
 	}
 	if !mysqlDatabaseName.MatchString(database) {
 		return "", "", fmt.Errorf("database name %q must be lowercase letters, digits and underscores", database)
+	}
+	if slices.Contains(mysqlReservedDatabases, database) || strings.HasPrefix(database, MySQLPlatformDatabase+"_") {
+		return "", "", fmt.Errorf("database name %q is reserved", database)
 	}
 	return database, image, nil
 }

@@ -103,7 +103,7 @@ func mysqlCredentialRecord(inst *domain.DatabaseInstance, role, password, server
 	if own, ok := mysqlRoleDatabase[role]; ok {
 		database = own
 	}
-	return map[string]string{
+	record := map[string]string{
 		domain.CredentialEngineKey:   domain.CredentialEngineMySQL,
 		domain.CredentialTLSKey:      domain.CredentialTLSRequired,
 		"host":                       inst.Host,
@@ -113,6 +113,10 @@ func mysqlCredentialRecord(inst *domain.DatabaseInstance, role, password, server
 		"password":                   password,
 		domain.CredentialServerCAKey: serverCA,
 	}
+	if role == roleAdmin {
+		record[mysqlGrantsKey] = mysqlGrantsEscaped
+	}
+	return record
 }
 
 // mysqlCredentials is the owner's login with its MySQL connection strings.
@@ -217,7 +221,11 @@ func (s *ProvisioningService) reapplyMySQLCredentials(ctx context.Context, inst 
 	if err != nil {
 		return err
 	}
-	return mysql.SetUserPasswords(ctx, inst.Namespace, inst.ProjectID, passwords)
+	if err := mysql.SetUserPasswords(ctx, inst.Namespace, inst.ProjectID, passwords); err != nil {
+		return err
+	}
+	// The backup's grants may predate escaping: the next reconcile sets them again.
+	return s.clearMySQLGrantsMark(inst.ProjectID)
 }
 
 // ownerPasswordOrNew is the password the customer's create request carried, or a new one.

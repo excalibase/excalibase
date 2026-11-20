@@ -3,6 +3,8 @@ package provisioner
 import (
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 // ADR 0041 decision 5: the platform's own users, never MOCO's, each with
@@ -107,5 +109,53 @@ func TestMySQLRuntimeLoginIsLockedWithoutAPassword(t *testing.T) {
 	}
 	if strings.Contains(sql, "CREATE USER IF NOT EXISTS 'excalibase_runtime'") {
 		t.Error("a runtime login was created without a password")
+	}
+}
+
+// EXC-765 review: a database grant names a pattern, where _ and % match other
+// names, so "aut_" would reach "auth". The name is escaped in every grant, and
+// grants an earlier run made with the pattern are revoked first.
+func TestMySQLGrantsEscapeWildcardsInTheDatabaseName(t *testing.T) {
+	sql := MySQLPlatformUsersSQL("aut_", MySQLPasswords{Admin: "a", App: "b", AuthAdmin: "c", Watcher: "d", Reader: "e", Runtime: "f"})
+	if !strings.Contains(sql, "CREATE DATABASE IF NOT EXISTS `auth`;") {
+		t.Error("the auth database is created under its own name")
+	}
+	for _, user := range []string{"admin", "excalibase_app", "cdc_watcher", "excalibase_reader", "excalibase_runtime"} {
+		revoke := "REVOKE IF EXISTS ALL PRIVILEGES ON `aut_`.* FROM '" + user + "'@'%' IGNORE UNKNOWN USER;"
+		if !strings.Contains(sql, revoke) {
+			t.Errorf("missing %s", revoke)
+		}
+	}
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.HasPrefix(line, "GRANT") && strings.Contains(line, "`aut_`") {
+			t.Errorf("a grant names the database as a pattern: %s", line)
+		}
+	}
+	for _, want := range []string{
+		"GRANT ALL PRIVILEGES ON `aut\\_`.* TO 'admin'@'%';",
+		"GRANT ALL PRIVILEGES ON `aut\\_`.* TO 'excalibase_runtime'@'%';",
+		"GRANT SELECT ON `aut\\_`.* TO 'cdc_watcher'@'%';",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	// The revokes come before the grants, or they would take the new ones back.
+	if strings.Index(sql, "REVOKE IF EXISTS ALL PRIVILEGES ON `aut_`") > strings.Index(sql, "GRANT ALL PRIVILEGES ON `aut\\_`") {
+		t.Error("the pattern revokes run after the escaped grants")
+	}
+	if plain := MySQLPlatformUsersSQL("shop", MySQLPasswords{Admin: "a", App: "b", AuthAdmin: "c", Watcher: "d"}); strings.Contains(plain, "ON `shop`.* FROM") {
+		t.Error("a name with no wildcard needs no revoke")
+	}
+}
+
+func TestMySQLReservedDatabaseNamesAreRefused(t *testing.T) {
+	for _, name := range []string{"auth", "excalibase", "mysql", "sys", "information_schema", "performance_schema", "excalibase_x"} {
+		if _, _, err := validateMySQLRequest(domain.ProvisioningRequest{DatabaseName: name}); err == nil {
+			t.Errorf("%q was accepted as a project database", name)
+		}
+	}
+	if _, _, err := validateMySQLRequest(domain.ProvisioningRequest{DatabaseName: "aut_"}); err != nil {
+		t.Errorf("a name with an underscore is fine once escaped: %v", err)
 	}
 }

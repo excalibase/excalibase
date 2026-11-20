@@ -101,7 +101,8 @@ func (r *AppEnvResolver) databaseLogin(projectID, databaseName string) (database
 		return databaseLogin{}, errNoVault
 	}
 	role := roleAdmin
-	if features.Enabled(context.Background(), r.flags, features.AppRuntimeLogin) {
+	// Fail closed: a resolver nobody gave the switches still keeps the owner's login from apps.
+	if r.flags == nil || features.Enabled(context.Background(), r.flags, features.AppRuntimeLogin) {
 		role = roleRuntime
 	}
 	record, err := r.vault.Get(vaultCredentialPath(projectID, role))

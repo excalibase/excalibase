@@ -73,8 +73,8 @@ func (s *ProvisioningService) ReconcileProjectRoles(ctx context.Context) RoleRec
 func (s *ProvisioningService) reconcileMySQLRuntimeInto(ctx context.Context, inst *domain.DatabaseInstance, report *RoleReconcileReport) {
 	projectCtx, cancel := context.WithTimeout(ctx, reconcileTimeout)
 	defer cancel()
-	unfiled, err := s.missingRuntimeLogin(projectCtx, inst.ProjectID)
-	if err == nil && unfiled {
+	pending, err := s.mysqlGrantsPending(projectCtx, inst)
+	if err == nil && pending {
 		if err = s.reconcileMySQLRuntime(projectCtx, inst.ProjectID); err == nil {
 			report.Reconciled++
 		}

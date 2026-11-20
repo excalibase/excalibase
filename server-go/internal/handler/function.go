@@ -541,7 +541,8 @@ func (h *FunctionHandler) injectedDBTarget(projectID string) (dbTarget, bool) {
 		return dbTarget{}, false
 	}
 	role := "admin"
-	if features.Enabled(context.Background(), h.flags, features.AppRuntimeLogin) {
+	// Fail closed: a handler nobody gave the switches still keeps the owner's login from functions.
+	if h.flags == nil || features.Enabled(context.Background(), h.flags, features.AppRuntimeLogin) {
 		role = pgroles.RuntimeRole
 	}
 	path := fmt.Sprintf("projects/%s/credentials/%s", projectID, role)

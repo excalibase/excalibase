@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/pkg/kmsseal"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
@@ -142,7 +143,8 @@ func projectIDForSecretPrefix(prefix string) string {
 // are not the database's.
 func isDatabaseLogin(path, projectID string) bool {
 	switch strings.TrimPrefix(path, "projects/"+projectID+"/credentials/") {
-	case "admin", "auth_admin", "excalibase_app", "cdc_watcher", "excalibase_scheduler":
+	case "admin", "auth_admin", "excalibase_app", "cdc_watcher", "excalibase_scheduler",
+		pgroles.RuntimeRole, pgroles.ReaderRole:
 		return true
 	}
 	return false

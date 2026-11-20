@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
@@ -182,5 +183,47 @@ func TestReconcileProjectRoles_CreatesTheRuntimeUserOfAnOlderMySQLProject(t *tes
 	again := svc.ReconcileProjectRoles(context.Background())
 	if again.Reconciled != 0 || len(again.Failed) != 0 || len(mock.ExecStdin) != before+1 {
 		t.Fatalf("second pass %+v ran %d more scripts", again, len(mock.ExecStdin)-before-1)
+	}
+}
+
+// EXC-765 review: a project whose database name holds _ or % was granted a
+// pattern; its platform users are set again once, with escaped grants.
+func TestReconcileProjectRoles_ReissuesEscapedGrantsOfAWildcardNamedMySQLProject(t *testing.T) {
+	svc, store, mock := setupMySQLTest(t)
+	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "shop", OrgID: "org1", DBType: domain.MySQL, DatabaseName: "aut_"})
+	if err != nil || resp.Status != "ACTIVE" {
+		t.Fatalf("Provision: %v %+v", err, resp)
+	}
+	inst, _ := store.FindByProjectID(resp.ProjectID)
+	owner, _ := svc.vault.Get(vaultCredentialPath(inst.ProjectID, roleAdmin))
+	if owner[mysqlGrantsKey] != mysqlGrantsEscaped {
+		t.Fatal("a project made now is not marked as granted escaped")
+	}
+	before := len(mock.ExecStdin)
+	if report := svc.ReconcileProjectRoles(context.Background()); report.Reconciled != 0 || len(mock.ExecStdin) != before {
+		t.Fatalf("a project granted escaped was reconciled: %+v", report)
+	}
+
+	// A project made before the fix has no mark.
+	delete(owner, mysqlGrantsKey)
+	if err := svc.vault.Put(vaultCredentialPath(inst.ProjectID, roleAdmin), owner); err != nil {
+		t.Fatal(err)
+	}
+	report := svc.ReconcileProjectRoles(context.Background())
+	if report.Reconciled != 1 || len(report.Failed) != 0 {
+		t.Fatalf("report = %+v", report)
+	}
+	statements := strings.Join(mock.ExecStdin[before:], "\n")
+	for _, want := range []string{"REVOKE IF EXISTS ALL PRIVILEGES ON `aut_`.* FROM 'admin'@'%'", "GRANT ALL PRIVILEGES ON `aut\\_`.* TO 'admin'@'%'"} {
+		if !strings.Contains(statements, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if again, _ := svc.vault.Get(vaultCredentialPath(inst.ProjectID, roleAdmin)); again[mysqlGrantsKey] != mysqlGrantsEscaped || again["password"] != owner["password"] {
+		t.Errorf("owner record after = %v", again)
+	}
+	if second := svc.ReconcileProjectRoles(context.Background()); second.Reconciled != 0 {
+		t.Fatalf("second pass = %+v", second)
 	}
 }

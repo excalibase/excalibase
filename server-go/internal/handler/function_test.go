@@ -1424,7 +1424,23 @@ func TestAppRuntimeLogin_OffKeepsTheFunctionsOwnerLogin(t *testing.T) {
 		&inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{"proj_p1": {ProjectID: "proj_p1", OrgID: "default"}}},
 		nil, testAPIBase)
 	h.SetVault(v)
+	h.SetFeatures(features.NewStatic())
 	if url := h.builtinEnv(context.Background(), "proj_p1")["EXCALIBASE_DB_URL"]; !strings.Contains(url, "owner:owner-pass@") {
 		t.Fatalf("EXCALIBASE_DB_URL = %q, want the owner's login while the feature is off", url)
+	}
+}
+
+// A handler nobody wired the switches into keeps the owner's login from functions.
+func TestFunctionHandler_BuiltinEnv_UnwiredFlagsFailClosed(t *testing.T) {
+	v := newFakeVault()
+	v.data["projects/proj_p1/credentials/admin"] = map[string]string{
+		"host": "db.svc", "port": "5432", "database": "app", "username": "owner", "password": "owner-pass",
+	}
+	h := NewFunctionHandler(edgefn.NewFunctionStore(t.TempDir()), edgefn.NewSecretsStore(v), nil,
+		&inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{"proj_p1": {ProjectID: "proj_p1", OrgID: "default"}}},
+		nil, testAPIBase)
+	h.SetVault(v)
+	if url, ok := h.builtinEnv(context.Background(), "proj_p1")["EXCALIBASE_DB_URL"]; ok {
+		t.Fatalf("an unwired handler gave a function %q", url)
 	}
 }

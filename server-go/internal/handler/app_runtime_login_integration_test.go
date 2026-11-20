@@ -234,3 +234,39 @@ func TestFunctionDBURL_IsTheRuntimeLoginAndCannotMintALogin(t *testing.T) {
 		}
 	}
 }
+
+// EXC-765 review: code the runtime login plants (a trigger, a function, a
+// default) runs as whichever session fires it. When the owner's session fires
+// it, the role functions must still refuse, whichever way they are reached.
+func TestRuntimeLogin_PlantedCodeCannotMintARoleThroughTheOwnersSession(t *testing.T) {
+	for _, image := range []string{"postgres:16-alpine", "postgres:15-alpine"} {
+		t.Run(image, func(t *testing.T) {
+			p := startRuntimeProject(t, image)
+			for _, statement := range []string{
+				`CREATE FUNCTION public.mint() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM excalibase.create_role('trig_made', 'x', true); RETURN NEW; END $$`,
+				`CREATE TRIGGER mint BEFORE INSERT ON public.legacy_orders FOR EACH ROW EXECUTE FUNCTION public.mint()`,
+				`CREATE FUNCTION public.mint_now() RETURNS int LANGUAGE plpgsql AS $$ BEGIN PERFORM excalibase.create_role('func_made', 'x', true); RETURN 1; END $$`,
+				`CREATE FUNCTION public.mint_sql() RETURNS int LANGUAGE sql AS $$ SELECT 1 FROM (SELECT excalibase.create_role('sql_made', 'x', true)) s $$`,
+			} {
+				mustExecE2E(t, p.runtime, statement)
+			}
+			mustExecE2E(t, p.super, `GRANT EXECUTE ON FUNCTION public.mint_now(), public.mint_sql() TO PUBLIC`)
+			for _, fired := range []string{
+				`INSERT INTO public.legacy_orders (item) VALUES ('fires the trigger')`,
+				`SELECT public.mint_now()`,
+				`SELECT public.mint_sql()`,
+				`DO $$ BEGIN PERFORM excalibase.create_role('do_made', 'x', true); END $$`,
+			} {
+				if _, err := p.owner.Exec(fired); err == nil {
+					t.Errorf("the owner's session ran %s without the role function refusing", fired)
+				}
+			}
+			var minted int
+			if err := p.super.QueryRow(`SELECT count(*) FROM pg_roles WHERE rolname IN ('trig_made', 'func_made', 'sql_made', 'do_made')`).Scan(&minted); err != nil || minted != 0 {
+				t.Fatalf("planted code minted %d role(s): %v", minted, err)
+			}
+			// What the owner types itself still works.
+			mustExecE2E(t, p.owner, `SELECT excalibase.create_role('typed_by_owner', 'x', false)`)
+		})
+	}
+}

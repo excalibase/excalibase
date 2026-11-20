@@ -121,3 +121,52 @@ func runtimeHoldsNoGlobalGrant(ctx context.Context, t *testing.T, runtime *sql.D
 		}
 	}
 }
+
+// EXC-765 review: a database named "aut_" must not reach "auth" through the
+// pattern a plain grant makes of its name, including a grant an earlier run left.
+func TestDockerMySQLWildcardDatabaseNameDoesNotReachAuth(t *testing.T) {
+	docker := requireDocker(t)
+	defer docker.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	projectID := fmt.Sprintf("it-mywc-%d", time.Now().UnixNano()%1_000_000)
+	p := NewDockerMySQLProvisioner(docker)
+	req := domain.ProvisioningRequest{ProjectName: projectID, DBType: domain.MySQL, DatabaseName: "aut_"}
+	result, err := p.Provision(ctx, req, config.TierConfig{Memory: "1Gi", CPU: "1", Instances: 1}, func(domain.ProvisioningStage) {})
+	t.Cleanup(func() { _ = p.Deprovision(context.Background(), MySQLContainerName(projectID), projectID) })
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	passwords := MySQLPasswords{Admin: "Adm1n-" + projectID, App: "app-" + projectID, AuthAdmin: "auth-" + projectID,
+		Watcher: "cdc-" + projectID, Runtime: "rt-" + projectID}
+	if err := p.EnsurePlatformUsers(ctx, result.Namespace, projectID, "aut_", passwords); err != nil {
+		t.Fatalf("EnsurePlatformUsers: %v", err)
+	}
+	if _, err := p.run(ctx, result.Namespace, "CREATE TABLE auth.users (id INT, hash TEXT); INSERT INTO auth.users VALUES (1, 'secret-hash');"); err != nil {
+		t.Fatalf("seed auth.users: %v", err)
+	}
+	// What an earlier run granted: the name as a pattern.
+	if _, err := p.run(ctx, result.Namespace, "GRANT ALL PRIVILEGES ON `aut_`.* TO 'admin'@'%', 'excalibase_runtime'@'%';"); err != nil {
+		t.Fatalf("legacy grant: %v", err)
+	}
+	verified := hostTLS(ctx, t, p, result.Namespace, "localhost")
+	probe := mysqlAs(ctx, t, docker, result.Namespace, mysqlLogin{MySQLUserAdmin, passwords.Admin, "aut_"}, verified)
+	if _, err := probe.ExecContext(ctx, "SELECT hash FROM auth.users"); err != nil {
+		t.Fatalf("precondition: the pattern grant does not reach auth, so this proves nothing: %v", err)
+	}
+	probe.Close()
+
+	if err := p.EnsurePlatformUsers(ctx, result.Namespace, projectID, "aut_", passwords); err != nil {
+		t.Fatalf("EnsurePlatformUsers again: %v", err)
+	}
+	for user, password := range map[string]string{MySQLUserAdmin: passwords.Admin, MySQLUserRuntime: passwords.Runtime} {
+		db := mysqlAs(ctx, t, docker, result.Namespace, mysqlLogin{user, password, "aut_"}, verified)
+		if _, err := db.ExecContext(ctx, "SELECT hash FROM auth.users"); err == nil {
+			t.Errorf("%s still reads auth.users through the database name", user)
+		}
+		mustExec(ctx, t, db, "CREATE TABLE IF NOT EXISTS own_table (id INT)")
+		mustExec(ctx, t, db, "INSERT INTO own_table VALUES (1)")
+		db.Close()
+	}
+}

@@ -48,7 +48,6 @@ DECLARE
   owner_role CONSTANT text := {{OWNER}};
   platform_role CONSTANT text := {{APP}};
   reader_role CONSTANT text := {{READER}};
-  table_privileges CONSTANT text := 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE';
   parent text;
 BEGIN
   IF to_regrole(runtime_role) IS NULL THEN
@@ -64,8 +63,12 @@ BEGIN
       EXECUTE format('GRANT %I TO %I', parent, runtime_role);
     END IF;
   END LOOP;
-  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I GRANT ' || table_privileges || ' ON TABLES TO %I, %I', runtime_role, owner_role, platform_role);
-  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I GRANT ALL ON SEQUENCES TO %I, %I', runtime_role, owner_role, platform_role);
+  -- The owner's session runs what a table's triggers and defaults call, so it
+  -- only reads what the app made; excalibase_app, which cannot manage roles, writes it.
+  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I GRANT SELECT ON TABLES TO %I', runtime_role, owner_role);
+  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO %I', runtime_role, platform_role);
+  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I GRANT ALL ON SEQUENCES TO %I', runtime_role, platform_role);
+  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM %I', runtime_role, owner_role);
   IF to_regrole(reader_role) IS NOT NULL THEN
     EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I GRANT SELECT ON TABLES TO %I', runtime_role, reader_role);
     EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I GRANT SELECT ON SEQUENCES TO %I', runtime_role, reader_role);

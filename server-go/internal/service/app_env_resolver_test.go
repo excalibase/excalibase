@@ -284,3 +284,13 @@ func TestAppRuntimeLogin_OffKeepsTheOwnerLogin(t *testing.T) {
 		t.Fatalf("PGUSER = %q, %v; want the owner's login while the feature is off", got, err)
 	}
 }
+
+// A resolver nobody wired the switches into keeps the owner's login from apps.
+func TestAppEnvResolver_UnwiredFlagsFailClosed(t *testing.T) {
+	resolver, _, _ := resolverFixture()
+	resolver.SetFeatures(nil)
+	got, err := resolver.ResolveReference(resolverProject, databaseRef("PGUSER"))
+	if err != nil || got != roleRuntime {
+		t.Fatalf("PGUSER = %q, %v; want the runtime login", got, err)
+	}
+}
