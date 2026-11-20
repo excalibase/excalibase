@@ -100,9 +100,6 @@ const (
 	// SitePreviews is a preview per branch or pull request of a site connected
 	// to git, at its own unguessable hostname, removed with its branch or PR (EXC-660).
 	SitePreviews Feature = "sitepreviews"
-	// StudioV2 is the cloud-console layout of Studio: new top bar, navigation
-	// and shared tables. Frontend only; the server just reports it (EXC-762).
-	StudioV2 Feature = "studio_v2"
 	// ProxyBlock refuses an app that is a proxy or VPN node at create, update
 	// and deploy (EXC-755). Unlike the features above it is on unless switched off.
 	ProxyBlock Feature = "proxyblock"
@@ -121,6 +118,9 @@ const (
 	// where other plans keep the operator's five minutes (EXC-784). On unless
 	// switched off.
 	FreeWALUpload Feature = "freewalupload"
+	// StudioV2 is the cloud-console layout of Studio: new top bar, navigation
+	// and shared tables. Frontend only; the server just reports it (EXC-762).
+	StudioV2 Feature = "studio_v2"
 )
 
 // All is every declared feature; Studio is told the state of each.

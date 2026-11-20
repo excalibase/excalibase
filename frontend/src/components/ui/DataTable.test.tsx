@@ -166,4 +166,30 @@ describe('DataTable', () => {
     getItem.mockRestore();
     setItem.mockRestore();
   });
+
+  test('server mode reports sort, search and filters and leaves the rows as given', async () => {
+    const onSortChange = vi.fn();
+    const onSearchChange = vi.fn();
+    const onFilterChange = vi.fn();
+    render(
+      <DataTable label="Projects" columns={COLUMNS} rows={makeRows(3).reverse()} getRowId={(r) => r.id} filters={[PLAN_FILTER]}
+        paging={{ mode: 'server', total: 90, page: 1, pageSize: 25, onPageChange: vi.fn(), onSortChange, onSearchChange, onFilterChange }} />,
+    );
+    await userEvent.click(within(screen.getByRole('columnheader', { name: /name/i })).getByRole('button'));
+    expect(onSortChange).toHaveBeenLastCalledWith({ columnId: 'name', direction: 'asc' });
+    await userEvent.type(screen.getByRole('searchbox', { name: /filter projects/i }), 'ab');
+    expect(onSearchChange).toHaveBeenLastCalledWith('ab');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Plan' }), 'FREE');
+    expect(onFilterChange).toHaveBeenLastCalledWith({ plan: 'FREE' });
+    expect(names()).toEqual(['proj-03', 'proj-02', 'proj-01']);
+  });
+
+  test('row actions render in an Actions column for each row', async () => {
+    const onOpen = vi.fn();
+    render(<DataTable label="Projects" columns={COLUMNS} rows={makeRows(2)} getRowId={(r) => r.id}
+      rowActions={(row) => <button type="button" onClick={() => onOpen(row.id)}>Open {row.name}</button>} />);
+    expect(screen.getByRole('columnheader', { name: /actions/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Open proj-02' }));
+    expect(onOpen).toHaveBeenCalledWith('r2');
+  });
 });
