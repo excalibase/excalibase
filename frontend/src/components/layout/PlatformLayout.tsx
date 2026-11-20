@@ -3,7 +3,7 @@ import { Sun, Moon, LogOut } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { useDarkMode } from '../../hooks/useDarkMode';
 import { useAuthStore } from '../../stores/auth-store';
-import { useDeploymentMode, useFeatures, isSelfHosted } from '../../hooks/useDeploymentMode';
+import { useAdminRouteRule, useDeploymentMode, useFeatures, isSelfHosted } from '../../hooks/useDeploymentMode';
 import { visiblePlatformNav } from './navigation';
 
 const PLATFORM_ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
@@ -14,7 +14,9 @@ export function PlatformLayout() {
   const mode = useDeploymentMode();
   const features = useFeatures();
 
-  const isAdmin = user ? PLATFORM_ADMIN_ROLES.has(user.role) : false;
+  // The console's link shows only where its page is served (EXC-757).
+  const adminHere = useAdminRouteRule() === 'allowed';
+  const isAdmin = user ? PLATFORM_ADMIN_ROLES.has(user.role) && adminHere : false;
   const NAV = visiblePlatformNav({ isAdmin, selfHosted: isSelfHosted(mode), features });
 
   return (

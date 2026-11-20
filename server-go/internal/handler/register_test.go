@@ -61,6 +61,7 @@ func TestRegister_Success(t *testing.T) {
 		testutil.FixturePassword("alice-reg"), setupToken)
 	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
 	req.Header.Set(sharedContentType, sharedMIMEJSON)
+	req.Header.Set(ReturnSessionTokenHeader, "true")
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusCreated {

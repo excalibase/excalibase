@@ -23,7 +23,7 @@ mwait() {
 mysql_on() {
   local cred user pass database image port where
   cred=$(mapi "$MAPI/provision/$1/credentials")
-  user=$(echo "$cred" | mjson 'd["username"]'); pass=$(echo "$cred" | mjson 'd["password"]')
+  user=$(echo "$cred" | mjson 'd["username"]'); pass=$(vault_field "$1" admin password)
   database=$(echo "$cred" | mjson 'd["databaseName"]')
   image=$($DOCKER inspect "excalibase-$1-mysql" --format '{{.Config.Image}}')
   if [ "$2" = host ]; then
@@ -83,6 +83,7 @@ same_port() {
   [ "$now" = "$MPORT" ] && ok "port $MPORT kept after $1" || ko "port moved from $MPORT to '$now' after $1"
 }
 CR=$(mapi "$MAPI/provision/$MPID/credentials")
+case "$CR" in *'"password"'*|*readerPassword*) ko "the credentials route returns a password" ;; *) ok "the credentials route returns no password" ;; esac
 [ "$(echo "$CR" | mjson 'd.get("engine")')" = mysql ] && ok "credentials carry the mysql engine" || ko "credentials: $(echo "$CR" | mjson 'd.get("engine")')"
 
 echo "== mysql clients"

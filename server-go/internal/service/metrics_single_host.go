@@ -136,3 +136,12 @@ func metricsUnavailable(metrics *domain.DatabaseMetrics, reason string) *domain.
 func (s *MetricsService) singleHostSampled(inst *domain.DatabaseInstance) bool {
 	return s.singleHost != nil && inst.DeploymentMode == domain.ModeDocker
 }
+
+// SamplerGroup runs several samplers on one tick, in order.
+type SamplerGroup []LoopSampler
+
+func (g SamplerGroup) Sample(ctx context.Context) {
+	for _, sampler := range g {
+		sampler.Sample(ctx)
+	}
+}

@@ -60,7 +60,7 @@ func TestMetricsHistoryIsKeptInThePlatformDBOnKubernetes(t *testing.T) {
 	metrics := service.NewMetricsService(fakestore.NewInstances(), k8s.NewMockClient(), t.TempDir())
 	alerts := service.NewAlertingService(t.TempDir())
 
-	wireMetricsHistory(config.AppConfig{}, table, k8s.NewMockClient(), metrics, alerts, nil)
+	wireMetricsHistory(config.AppConfig{}, table, k8s.NewMockClient(), metrics, alerts, nil, nil)
 
 	history, err := metrics.GetMetricsHistory(context.Background(), "p1", 10)
 	if err != nil || history.TotalPoints != 1 {
@@ -77,7 +77,7 @@ func TestASingleHostKeepsAlertsInThePlatformDBAndSamplesNothing(t *testing.T) {
 	metrics := service.NewMetricsService(fakestore.NewInstances(), nil, t.TempDir())
 	alerts := service.NewAlertingService(t.TempDir())
 
-	wireMetricsHistory(config.AppConfig{ProvisionerMode: "docker"}, table, nil, metrics, alerts, nil)
+	wireMetricsHistory(config.AppConfig{ProvisionerMode: "docker"}, table, nil, metrics, alerts, nil, nil)
 
 	if history, _ := metrics.GetMetricsHistory(context.Background(), "p1", 10); history.TotalPoints != 0 {
 		t.Fatalf("history = %+v, want the file's (none)", history)
@@ -93,7 +93,7 @@ func TestMetricsHistoryWiringNeedsTheTables(t *testing.T) {
 	metrics := service.NewMetricsService(fakestore.NewInstances(), k8s.NewMockClient(), t.TempDir())
 	alerts := service.NewAlertingService(t.TempDir())
 	var bare storage.PlatformStore
-	wireMetricsHistory(config.AppConfig{}, bare, k8s.NewMockClient(), metrics, alerts, nil)
+	wireMetricsHistory(config.AppConfig{}, bare, k8s.NewMockClient(), metrics, alerts, nil, nil)
 	alerts.AddAlert(domain.Alert{ID: "a1", ProjectID: "p1"})
 	if got := alerts.GetActiveAlerts(); len(got) != 1 {
 		t.Fatalf("active = %+v, want the alert kept in memory", got)
@@ -120,7 +120,7 @@ func TestASingleHostWithRequestChartsSamplesIntoThePlatformDB(t *testing.T) {
 	cfg := config.AppConfig{ProvisionerMode: "docker", DarkFeatures: []features.Feature{features.RequestMetrics},
 		RequestMetricsTargets: []string{"graphql-metrics:9464"}}
 
-	wireMetricsHistory(cfg, table, nil, metrics, alerts, requests)
+	wireMetricsHistory(cfg, table, nil, metrics, alerts, requests, nil)
 
 	if history, _ := metrics.GetMetricsHistory(context.Background(), "p1", 10); history.TotalPoints != 1 {
 		t.Fatalf("history = %+v, want the table's sample", history)
@@ -135,7 +135,7 @@ func TestASingleHostWithRequestChartsButNoTargetsSamplesNothing(t *testing.T) {
 	requests := service.NewRequestMetricsService(nil, nil, fakestore.NewInstances())
 	cfg := config.AppConfig{ProvisionerMode: "docker", DarkFeatures: []features.Feature{features.RequestMetrics}}
 
-	wireMetricsHistory(cfg, table, nil, metrics, alerts, requests)
+	wireMetricsHistory(cfg, table, nil, metrics, alerts, requests, nil)
 
 	if history, _ := metrics.GetMetricsHistory(context.Background(), "p1", 10); history.TotalPoints != 0 {
 		t.Fatalf("history = %+v, want none", history)

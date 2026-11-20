@@ -21,7 +21,24 @@ const uniqueViolation = "23505"
 // conflict, never an overwrite: the row belongs to whoever registered it and
 // repointing it would move a live tenant's database to another org.
 func (s *Store) Create(inst *domain.DatabaseInstance) error {
-	return insertInstance(s.db, inst)
+	if inst.OrgID == "" {
+		return insertInstance(s.db, inst)
+	}
+	// Under the lock an org delete takes, so a project cannot land in an org
+	// that is being deleted (EXC-760).
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin project create: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		orgProjectLimitLockSpace, inst.OrgID); err != nil {
+		return fmt.Errorf("lock org project slots: %w", err)
+	}
+	if err := insertInstance(tx, inst); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // insertInstance writes the row through the given executor, so the same INSERT

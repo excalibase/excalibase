@@ -22,6 +22,8 @@ import (
 type adminOrgStore struct {
 	org     *domain.Org
 	deleted bool
+	// member is what the caller belongs to; FindOrgsByUser answers it for anyone.
+	member []*domain.Org
 }
 
 func (a *adminOrgStore) CreateOrg(context.Context, *domain.Org) error { return nil }
@@ -39,7 +41,7 @@ func (a *adminOrgStore) FindOrgByID(_ context.Context, id string) (*domain.Org, 
 }
 func (a *adminOrgStore) FindOrgBySlug(context.Context, string) (*domain.Org, error) { return nil, nil }
 func (a *adminOrgStore) FindOrgsByUser(context.Context, string) ([]*domain.Org, error) {
-	return nil, nil
+	return a.member, nil
 }
 func (a *adminOrgStore) FindAllOrgs(context.Context) ([]*domain.Org, error) { return nil, nil }
 func (a *adminOrgStore) UpdateOrg(context.Context, *domain.Org) error       { return nil }
@@ -151,7 +153,7 @@ func TestAdmin_ForceDropProject_HappyPath(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Delete("/api/admin/projects/{projectId}", h.ForceDropProject)
-	req := httptest.NewRequest("DELETE", "/api/admin/projects/proj-x", nil)
+	req := httptest.NewRequest("DELETE", "/api/admin/projects/proj-x", strings.NewReader(revokeReasonBody))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -177,7 +179,7 @@ func TestAdmin_ForceDropProject_PreferRespondAsyncAnswers202ThenDeletes(t *testi
 
 	r := chi.NewRouter()
 	r.Delete("/api/admin/projects/{projectId}", h.ForceDropProject)
-	req := httptest.NewRequest("DELETE", "/api/admin/projects/proj-x", nil)
+	req := httptest.NewRequest("DELETE", "/api/admin/projects/proj-x", strings.NewReader(revokeReasonBody))
 	req.Header.Set("Prefer", "respond-async")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -203,7 +205,7 @@ func TestAdmin_ForceDropProject_ClearsDeletionProtection(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Delete("/api/admin/projects/{projectId}", h.ForceDropProject)
-	req := httptest.NewRequest("DELETE", "/api/admin/projects/proj-p", nil)
+	req := httptest.NewRequest("DELETE", "/api/admin/projects/proj-p", strings.NewReader(revokeReasonBody))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -223,7 +225,7 @@ func TestAdmin_RevokeOrg_HappyPath(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
-	req := httptest.NewRequest("DELETE", "/api/admin/orgs/org-9?cascade=true", nil)
+	req := httptest.NewRequest("DELETE", "/api/admin/orgs/org-9?cascade=true", strings.NewReader(revokeReasonBody))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -249,7 +251,7 @@ func TestAdmin_RevokeOrg_NotFound(t *testing.T) {
 	h := NewAdminHandler(provSvc, store, &adminOrgStore{}, &captureAudit{}, nil, "", nil)
 	r := chi.NewRouter()
 	r.Delete("/api/admin/orgs/{orgId}", h.RevokeOrg)
-	req := httptest.NewRequest("DELETE", "/api/admin/orgs/ghost?cascade=true", nil)
+	req := httptest.NewRequest("DELETE", "/api/admin/orgs/ghost?cascade=true", strings.NewReader(revokeReasonBody))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -270,7 +272,7 @@ func TestAdmin_ForceDropProject_ConfirmDeleteBackups(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Delete("/api/admin/projects/{projectId}", h.ForceDropProject)
-	req := httptest.NewRequest("DELETE", "/api/admin/projects/proj-b", strings.NewReader(`{"confirmDeleteBackups":true}`))
+	req := httptest.NewRequest("DELETE", "/api/admin/projects/proj-b", strings.NewReader(`{"confirmDeleteBackups":true,"reason":"abandoned tenant"}`))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

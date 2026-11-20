@@ -417,9 +417,7 @@ func issuedTokenResponse(raw string, token *domain.AccessToken) map[string]inter
 }
 
 func (h *AuthHandler) RevokeToken(w http.ResponseWriter, r *http.Request) {
-	// Platform admins (PermManageUsers) may revoke any token — supports
-	// incident response.
-	tok, ok := h.tokenForCaller(w, r, true)
+	tok, ok := h.tokenForCaller(w, r)
 	if !ok {
 		return
 	}
@@ -447,7 +445,7 @@ func (h *AuthHandler) RevokeToken(w http.ResponseWriter, r *http.Request) {
 // rotate: handing an admin another user's fresh secret would be a
 // credential grant, which revoke-then-reissue already covers explicitly.
 func (h *AuthHandler) RotateToken(w http.ResponseWriter, r *http.Request) {
-	tok, ok := h.tokenForCaller(w, r, false)
+	tok, ok := h.tokenForCaller(w, r)
 	if !ok {
 		return
 	}
@@ -498,7 +496,7 @@ func (h *AuthHandler) RotateToken(w http.ResponseWriter, r *http.Request) {
 
 // tokenForCaller resolves {tokenHash} and enforces ownership. It writes the
 // error response itself and returns ok=false when the caller may not act.
-func (h *AuthHandler) tokenForCaller(w http.ResponseWriter, r *http.Request, allowAdmin bool) (*domain.AccessToken, bool) {
+func (h *AuthHandler) tokenForCaller(w http.ResponseWriter, r *http.Request) (*domain.AccessToken, bool) {
 	caller := auth.GetUser(r.Context())
 	if caller == nil {
 		httpError(w, errNotAuthenticated, http.StatusUnauthorized)
@@ -520,7 +518,9 @@ func (h *AuthHandler) tokenForCaller(w http.ResponseWriter, r *http.Request, all
 		}
 		return tok, true
 	}
-	admin := (allowAdmin || h.ownedByService(r.Context(), tok)) && auth.HasPermission(caller.Role, auth.PermManageUsers)
+	// Only a service principal's token is an admin's to touch. Another
+	// customer's token is revoked through the console, with a reason (EXC-757).
+	admin := h.ownedByService(r.Context(), tok) && auth.HasPermission(caller.Role, auth.PermManageUsers)
 	if !owner && !admin {
 		httpError(w, "forbidden", http.StatusForbidden)
 		return nil, false

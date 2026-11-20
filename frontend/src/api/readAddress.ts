@@ -21,6 +21,7 @@ export interface ReadAddress {
   // Why there is no read address; absent when there is one.
   reason?: ReadAddressReason;
   singleHost?: boolean;
+  // Present only for a platform admin; Studio never reads it (EXC-759).
   internal?: ReadAddressInternal;
   publicOffered: boolean;
   // The primary public port, which the read port needs open.

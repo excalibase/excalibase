@@ -169,11 +169,19 @@ var darkWork = map[features.Feature]string{
 	features.SingleHostBuilds: "TestSiteBuildMode",
 	features.AppGitBuilds:     "TestAppBuilds_NothingWiredWhileTheFlagIsOff",
 	features.LogDeletion:      "TestLogDeletionStartsOnlyWithItsFeature",
+	// Off, credentials keep their old shape (internal/service, internal/handler).
+	features.OneTimeCredentials: "TestCredentialsStillCarryThePasswordWhileOneTimeIsOff",
 	// Off, rotation leaves sessions alone, credentials carry no reader and the
 	// read address names the owner (internal/service).
 	features.DBReadRole: "TestRotationLeavesSessionsAloneWhileTheFlagIsOff",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
+	// On unless switched off: off, an app and a sign-up are not checked (internal/handler).
+	features.ProxyBlock:  "TestAppCreate_AllowsANormalAppAndAnOffFlag",
+	features.SignupGuard: "TestRegister_OffFlagAcceptsADisposableAddress",
+	// On unless switched off: off, no archive alert is raised and Free keeps the operator's interval.
+	features.WALArchiveAlert: "TestWALArchiveSampler_OffWhenTheGuardIsOff",
+	features.FreeWALUpload:   "TestTierConfig_GuardOffLeavesTheOperatorsInterval",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

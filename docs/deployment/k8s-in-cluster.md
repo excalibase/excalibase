@@ -109,6 +109,15 @@ For cloud mode, add:
 env:
   DEPLOYMENT_MODE: "cloud"
 
+# Without adminConsole.host a cloud install has no admin console (every
+# /api/admin route answers 404). With a host it must be behind Cloudflare Access,
+# or the server refuses to start (see adminConsole and adminAccess in values.yaml).
+adminConsole:
+  host: admin.example.com
+adminAccess:
+  teamDomain: yourteam.cloudflareaccess.com
+  audience: "<the Access application's AUD tag>"
+
 platformDB:
   enabled: true
   existingSecret: platform-db-credentials

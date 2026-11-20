@@ -46,7 +46,7 @@ type KubeClient interface {
 	// otherwise an error wrapping ErrVolumeExpansionUnsupported, or the
 	// lookup's own error.
 	ClusterVolumesExpandable(ctx context.Context, namespace, clusterName string) error
-	GetPods(ctx context.Context, namespace string, labelSelector string) ([]corev1.Pod, error)
+	GetPods(ctx context.Context, namespace, labelSelector string) ([]corev1.Pod, error)
 	IsPodReady(ctx context.Context, namespace, name string) (bool, error)
 	// PodLogTail is the last lines of one container's log.
 	PodLogTail(ctx context.Context, namespace, pod, container string, lines int64) (string, error)
@@ -161,6 +161,7 @@ type KubeClient interface {
 	AppRestarts(ctx context.Context, namespace, appID string) (AppRestarts, error)
 	RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error)
 	PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error)
+	PausedAppImages(ctx context.Context, namespace, appID, appName string) ([]string, error)
 	SyncAppDomains(ctx context.Context, namespace string, app *apphost.App, hosts []string, opts AppDomainOptions) error
 	AppDomainCertificate(ctx context.Context, namespace, appName, host string) (CertificateState, error)
 	AttachIssuedAppHostCertificates(ctx context.Context) error
@@ -190,6 +191,10 @@ type ClusterCapacity struct {
 	RequestedCPUMilli   int64 // sum of pod CPU requests in flight (milli)
 	RequestedMemBytes   int64 // sum of pod memory requests in flight (bytes)
 	HeadroomPercent     int   // % of allocatable held back as a safety buffer (0-100)
+	// AllocatablePods is the sum of the nodes' kubelet pod limits (max-pods), and
+	// Pods the pods that hold a slot on them; 0 allocatable means not reported.
+	AllocatablePods int64
+	Pods            int64
 	// Nodes is the same accounting per schedulable node: a pod must fit on one.
 	Nodes []NodeCapacity
 }
@@ -202,6 +207,11 @@ type NodeCapacity struct {
 	AllocatableMemBytes int64
 	RequestedCPUMilli   int64
 	RequestedMemBytes   int64
+	// AllocatablePods is the kubelet's pod limit (max-pods) and Pods the pods
+	// holding a slot on the node. A full node leaves new pods Pending with
+	// "Too many pods" however much CPU and memory is free (EXC-747).
+	AllocatablePods int64
+	Pods            int64
 	// Tainted is a NoSchedule/NoExecute taint: a pod without a matching
 	// toleration (a database instance) cannot land there.
 	Tainted bool
@@ -216,6 +226,12 @@ func (n NodeCapacity) Fits(cpuMilli, memBytes int64, headroomPercent int) bool {
 		HeadroomPercent: headroomPercent,
 	}
 	return node.FreeCPUMilli() >= cpuMilli && node.FreeMemBytes() >= memBytes
+}
+
+// HasPodSlots reports whether the node can take count more pods. A node that
+// reports no pod limit is not taken for a full one.
+func (n NodeCapacity) HasPodSlots(count int64) bool {
+	return n.AllocatablePods == 0 || n.AllocatablePods-n.Pods >= count
 }
 
 // Matches reports whether the node carries every label of a node selector.
@@ -268,6 +284,12 @@ func (c ClusterCapacity) UsableMemBytes() int64 {
 func (c ClusterCapacity) FreeCPUMilli() int64 {
 	return c.UsableCPUMilli() - c.RequestedCPUMilli
 }
+
+// PodSlotsKnown reports whether the nodes reported their pod limit.
+func (c ClusterCapacity) PodSlotsKnown() bool { return c.AllocatablePods > 0 }
+
+// FreePods is the pod slots left across the nodes.
+func (c ClusterCapacity) FreePods() int64 { return c.AllocatablePods - c.Pods }
 
 // FreeMemBytes is usable memory - requested.
 func (c ClusterCapacity) FreeMemBytes() int64 {

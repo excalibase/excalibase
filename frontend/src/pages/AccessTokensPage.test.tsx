@@ -29,14 +29,16 @@ const listed = [
 ];
 
 const projects = [
-  { projectId: 'proj-1', projectName: 'storefront' },
-  { projectId: 'proj-2', projectName: 'analytics' },
+  { projectId: 'proj-1', projectName: 'storefront', orgId: 'org-mine' },
+  { projectId: 'proj-2', projectName: 'analytics', orgId: 'org-mine' },
+  { projectId: 'proj-other', projectName: 'a customer project', orgId: 'org-customer' },
 ];
 
 function mockGets(tokens: unknown = listed) {
   vi.mocked(api.get).mockImplementation(async (url: string) => {
     if (url === TOKENS_PATH) return { data: tokens } as never;
     if (url === PROJECTS_PATH) return { data: projects } as never;
+    if (url === '/orgs') return { data: [{ id: 'org-mine', name: 'Mine', slug: 'mine', tier: 'FREE', ownerId: 'u' }] } as never;
     throw new Error(`unexpected GET ${url}`);
   });
 }
@@ -273,5 +275,15 @@ describe('scopeLabel', () => {
     ['', 'Full access (legacy)'],
   ])('%j reads as %s', (scopes, label) => {
     expect(scopeLabel(scopes)).toBe(label);
+  });
+
+  // EXC-761: a token is minted only for a project in an org the caller belongs to.
+  test('the project dropdown offers only projects in the caller\'s own orgs', async () => {
+    mockGets();
+    renderPage();
+    const select = await screen.findByLabelText('Project');
+    await waitFor(() => expect(within(select).getByText('storefront')).toBeInTheDocument());
+    expect(within(select).queryByText('a customer project')).not.toBeInTheDocument();
+    expect(api.get).toHaveBeenCalledWith('/orgs');
   });
 });

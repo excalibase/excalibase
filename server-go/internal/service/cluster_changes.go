@@ -366,7 +366,9 @@ func (s *ProvisioningService) requireRoomForPlan(ctx context.Context, inst *doma
 			needCPU, needMemory = max(0, wantCPU-hasCPU), max(0, wantMemory-hasMemory)
 		}
 		fits := needCPU == 0 && needMemory == 0 && hosts[node.Name]
-		if !node.Tainted && (fits || node.Fits(needCPU, needMemory, s.capacityHeadroomPercent)) {
+		// A node already running an instance needs no new slot; any other needs one.
+		slot := hosts[node.Name] || node.HasPodSlots(1)
+		if !node.Tainted && slot && (fits || node.Fits(needCPU, needMemory, s.capacityHeadroomPercent)) {
 			roomy++
 		}
 	}

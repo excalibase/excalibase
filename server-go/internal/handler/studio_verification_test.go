@@ -147,7 +147,7 @@ func TestAVerifiedAccountSignsIn(t *testing.T) {
 	now := time.Now()
 	h.userNamed("gus").EmailVerifiedAt = &now
 
-	if status, resp := h.login("gus"); status != http.StatusOK || resp["token"] == nil {
+	if status, resp := h.login("gus"); status != http.StatusOK || resp["expiresAt"] == nil {
 		t.Fatalf("login: %d %v", status, resp)
 	}
 }
