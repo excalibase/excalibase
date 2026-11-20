@@ -152,10 +152,14 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Native tag plan
-        run: bash tests/release-native-tags-test.sh
+        run: |
+          bash tests/release-native-tags-test.sh
+          bash tests/release-tags-test.sh
 
       - name: CD tag plan
-        run: bash tests/cd-plan-test.sh
+        run: |
+          bash tests/cd-plan-test.sh
+          bash tests/cd-guard-test.sh
 
       - name: Release gate
         run: |
@@ -570,10 +574,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [changes, go-integration-shard]
     # !cancelled(): a failed shard must fail this check, not skip it.
-    # A push to a release branch is not scanned: its commits are cherry-picks of
-    # main commits already scanned there, and the plan has one analysed branch.
-    # Pull requests into it are scanned.
-    if: ${{ !cancelled() && !startsWith(github.ref, 'refs/heads/release/') && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true') }}
+    if: ${{ !cancelled() && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true') }}
     defaults:
       run:
         working-directory: server-go
@@ -723,7 +724,11 @@ jobs:
     # !cancelled(): a skipped upstream job (e.g. go-integration on a deno-only
     # PR) must not skip the scan; the coverage downloads below tolerate a
     # missing artifact.
-    if: ${{ !cancelled() && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true') }}
+    # A push to a release branch is not scanned: its commits are cherry-picks of
+    # main commits already scanned there, and the plan has one analysed branch.
+    # The coverage gate (go-integration) still runs. Pull requests into a
+    # release branch are scanned.
+    if: ${{ !cancelled() && !startsWith(github.ref, 'refs/heads/release/') && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

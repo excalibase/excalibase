@@ -15,6 +15,9 @@ on:
     types: [completed]
     branches: [main, "release/**"]
 
+permissions:
+  contents: read
+
 env:
   DOCKER_IMAGE: excalibase/provisioning
 
@@ -32,28 +35,39 @@ jobs:
       sha: ${{ steps.plan.outputs.sha }}
       prefix: ${{ steps.plan.outputs.prefix }}
       short: ${{ steps.plan.outputs.short }}
+      floating: ${{ steps.plan.outputs.floating }}
     steps:
       - name: Work out the commit and its tags
         id: plan
         env:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::head_sha is not a commit"; exit 1; }
           short=$(printf '%s' "$SHA" | cut -c1-7)
           if [ "$BRANCH" = main ]; then
             prefix=main
-          elif printf '%s' "$BRANCH" | grep -Eq '^release/[0-9]+\.[0-9]+$'; then
+          elif printf '%s' "$BRANCH" | grep -Eq '^release/(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
             prefix="release-${BRANCH#release/}"
           else
             echo "::error::$BRANCH is not main or release/<major>.<minor>; nothing to publish"
             exit 1
           fi
+          # The floating tag (main, release-1.7) moves only while this commit is
+          # still the branch tip, so an older run that finishes late cannot move
+          # it backwards. The <prefix>-<sha7> tag is always published.
+          tip=$(gh api "repos/$REPO/git/ref/heads/$BRANCH" --jq .object.sha)
+          printf '%s' "$tip" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::could not read the tip of $BRANCH"; exit 1; }
+          floating=false
+          if [ "$tip" = "$SHA" ]; then floating=true; else echo "::notice::$SHA is no longer the tip of $BRANCH; $prefix is not moved"; fi
           {
             echo "sha=$SHA"
             echo "prefix=$prefix"
             echo "short=$short"
+            echo "floating=$floating"
           } >> "$GITHUB_OUTPUT"
 
   docker:
@@ -76,6 +90,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # A release-<x.y>-<sha7> tag is written once (see scripts/guard-release-tag.sh).
+      - name: Refuse to overwrite an existing release tag
+        env:
+          PREFIX: ${{ needs.plan.outputs.prefix }}
+          SHORT: ${{ needs.plan.outputs.short }}
+        run: bash scripts/guard-release-tag.sh excalibase/provisioning "$PREFIX-$SHORT"
+
       # Built into the local daemon and scanned before anything is pushed
       # (EXC-642); the push below is served from this build's cache.
       - name: Build the candidate image
@@ -86,8 +107,8 @@ jobs:
           load: true
           push: false
           tags: provisioning-candidate:${{ needs.plan.outputs.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-provisioning
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-provisioning
 
       - name: Trivy
         uses: ./.github/actions/trivy
@@ -102,13 +123,13 @@ jobs:
           file: server-go/Dockerfile
           push: true
           tags: |
-            ${{ env.DOCKER_IMAGE }}:${{ needs.plan.outputs.prefix }}
-            ${{ env.DOCKER_IMAGE }}:${{ needs.plan.outputs.prefix }}-${{ needs.plan.outputs.short }}
+            ${{ needs.plan.outputs.floating == 'true' && format('{0}:{1}', 'excalibase/provisioning', needs.plan.outputs.prefix) || '' }}
+            excalibase/provisioning:${{ needs.plan.outputs.prefix }}-${{ needs.plan.outputs.short }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.plan.outputs.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-provisioning
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-provisioning
 
   studio:
     name: Build & Push Studio Image
@@ -130,6 +151,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # A release-<x.y>-<sha7> tag is written once (see scripts/guard-release-tag.sh).
+      - name: Refuse to overwrite an existing release tag
+        env:
+          PREFIX: ${{ needs.plan.outputs.prefix }}
+          SHORT: ${{ needs.plan.outputs.short }}
+        run: bash scripts/guard-release-tag.sh excalibase/studio "$PREFIX-$SHORT"
+
       # Built into the local daemon and scanned before anything is pushed
       # (EXC-642); the push below is served from this build's cache.
       - name: Build the candidate image
@@ -140,8 +168,8 @@ jobs:
           load: true
           push: false
           tags: studio-candidate:${{ needs.plan.outputs.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-studio
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-studio
 
       - name: Trivy
         uses: ./.github/actions/trivy
@@ -156,13 +184,13 @@ jobs:
           file: frontend/Dockerfile
           push: true
           tags: |
-            excalibase/studio:${{ needs.plan.outputs.prefix }}
+            ${{ needs.plan.outputs.floating == 'true' && format('{0}:{1}', 'excalibase/studio', needs.plan.outputs.prefix) || '' }}
             excalibase/studio:${{ needs.plan.outputs.prefix }}-${{ needs.plan.outputs.short }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.plan.outputs.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-studio
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-studio
 
   deno-runtime:
     name: Build & Push Deno Runtime Image
@@ -184,6 +212,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # A release-<x.y>-<sha7> tag is written once (see scripts/guard-release-tag.sh).
+      - name: Refuse to overwrite an existing release tag
+        env:
+          PREFIX: ${{ needs.plan.outputs.prefix }}
+          SHORT: ${{ needs.plan.outputs.short }}
+        run: bash scripts/guard-release-tag.sh excalibase/deno-runtime "$PREFIX-$SHORT"
+
       # Built into the local daemon and scanned before anything is pushed
       # (EXC-642); the push below is served from this build's cache.
       - name: Build the candidate image
@@ -194,8 +229,8 @@ jobs:
           load: true
           push: false
           tags: deno-runtime-candidate:${{ needs.plan.outputs.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-deno-runtime
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-deno-runtime
 
       - name: Trivy
         uses: ./.github/actions/trivy
@@ -212,10 +247,10 @@ jobs:
           file: deno-server/Dockerfile
           push: true
           tags: |
-            excalibase/deno-runtime:${{ needs.plan.outputs.prefix }}
+            ${{ needs.plan.outputs.floating == 'true' && format('{0}:{1}', 'excalibase/deno-runtime', needs.plan.outputs.prefix) || '' }}
             excalibase/deno-runtime:${{ needs.plan.outputs.prefix }}-${{ needs.plan.outputs.short }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.plan.outputs.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-deno-runtime
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-deno-runtime

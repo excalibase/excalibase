@@ -21,22 +21,38 @@ for line in block.splitlines():
 print("\n".join(lines))
 PY
 
-plan() { : > "$out"; BRANCH=$1 SHA=$2 GITHUB_OUTPUT=$out bash "$step" >/dev/null 2>&1; }
+# gh is stubbed: STUB_TIP is the branch tip the API would report; "fail" is an API error.
+shim=$(mktemp -d); trap 'rm -f "$step" "$out"; rm -rf "$shim"' EXIT
+cat > "$shim/gh" <<'GH'
+#!/bin/sh
+[ "$STUB_TIP" = fail ] && exit 1
+echo "$STUB_TIP"
+GH
+chmod +x "$shim/gh"
 SHA=0123456789abcdef0123456789abcdef01234567
+OLD=89abcdef0123456789abcdef0123456789abcdef
+plan() { : > "$out"; PATH="$shim:$PATH" REPO=o/r GH_TOKEN=x STUB_TIP=${3:-$SHA} BRANCH=$1 SHA=$2 GITHUB_OUTPUT=$out bash "$step" >/dev/null 2>&1; }
 
 expect() {
-  local want=$1 branch=$2
-  if plan "$branch" "$SHA"; then got=$(tr '\n' ' ' < "$out"); else got=refused; fi
+  local want=$1 branch=$2 tip=${3:-$SHA}
+  if plan "$branch" "$SHA" "$tip"; then got=$(tr '\n' ' ' < "$out"); else got=refused; fi
   if [ "$got" != "$want" ]; then echo "FAIL $branch: want '$want' got '$got'"; fail=1; fi
 }
 
-expect "sha=$SHA prefix=main short=0123456 " main
-expect "sha=$SHA prefix=release-1.7 short=0123456 " release/1.7
-expect "sha=$SHA prefix=release-12.30 short=0123456 " release/12.30
-for branch in develop latest release/1 release/1.7.1 release/1.7/x release/../main 'release/1.7;id' feature/x v1.7.0 ""; do
+expect "sha=$SHA prefix=main short=0123456 floating=true " main
+expect "sha=$SHA prefix=release-1.7 short=0123456 floating=true " release/1.7
+expect "sha=$SHA prefix=release-12.30 short=0123456 floating=true " release/12.30
+for branch in develop latest release/1 release/01.07 release/1.07 release/1.7.1 release/1.7/x release/../main 'release/1.7;id' feature/x v1.7.0 ""; do
   expect refused "$branch"
 done
+# an older run finishing late does not move the floating tag, but keeps its own sha tag
+expect "sha=$SHA prefix=release-1.7 short=0123456 floating=false " release/1.7 "$OLD"
+expect "sha=$SHA prefix=main short=0123456 floating=false " main "$OLD"
+expect refused release/1.7 fail
 if plan main notasha; then echo "FAIL a non-commit sha was accepted"; fail=1; fi
-grep -q 'latest' <(grep -v '^ *#' "$cd" | grep -E 'tags:|prefix') && { echo "FAIL cd.yml publishes latest"; fail=1; }
+tag_blocks=$(awk '/^ *tags: \|/ {on=1; next} on && /^ *[a-z-]+:/ {on=0} on {print}' "$cd")
+[ -n "$tag_blocks" ] || { echo "FAIL found no tags: blocks in cd.yml"; fail=1; }
+printf '%s' "$tag_blocks" | grep -Eq 'latest|[0-9]+\.[0-9]+\.[0-9]+' && { echo "FAIL cd.yml publishes latest or a version"; fail=1; }
+[ "$(grep -c 'run: bash scripts/guard-release-tag.sh' "$cd")" -eq 3 ] || { echo "FAIL every image job must run the release tag guard"; fail=1; }
 [ "$fail" -eq 0 ] && echo "cd plan tests passed"
 exit "$fail"

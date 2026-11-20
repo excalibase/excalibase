@@ -16,6 +16,10 @@ on:
       services:
         description: "Images to release"
         default: "provisioning,excalibase-graphql,excalibase-auth,studio"
+      move_major_latest:
+        description: "Also move the major tag (1) and latest. Set false when patching an older minor than the newest release"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -44,6 +48,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           SOURCE_TAG: ${{ inputs.source_tag }}
           SERVICES: ${{ inputs.services }}
+          MOVE_MAJOR_LATEST: ${{ inputs.move_major_latest }}
         run: |
           set -eu
           semver='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
@@ -59,16 +64,13 @@ jobs:
             echo "::error::services must be a comma-separated list of image names"
             exit 1
           fi
-          major="${VERSION%%.*}"
-          rest="${VERSION#*.}"
-          minor="${rest%%.*}"
+          tags=$(bash scripts/release-tags.sh "$VERSION" "$MOVE_MAJOR_LATEST")
           if printf '%s' "$VERSION" | grep -q -- '-'; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "tags=$VERSION" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "tags=$VERSION $major.$minor $major latest" >> "$GITHUB_OUTPUT"
           fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
       # Every check runs before any tag moves, so a refusal never leaves a
       # half-released version. The native engine image is promoted from the same
@@ -81,6 +83,7 @@ jobs:
           SOURCE_TAG: ${{ inputs.source_tag }}
           SERVICES: ${{ inputs.services }}
           TAGS: ${{ steps.plan.outputs.tags }}
+          MOVE_MAJOR_LATEST: ${{ inputs.move_major_latest }}
         run: |
           set -eu
           services=$(printf '%s' "$SERVICES" | tr ',' ' ')
@@ -106,7 +109,7 @@ jobs:
               status=0; native=$(bash scripts/inspect-digest.sh "$repository:$SOURCE_TAG-native") || status=$?
               case "$status" in
                 0)
-                  native_tags=$(bash scripts/release-native-tags.sh "$VERSION")
+                  native_tags=$(bash scripts/release-native-tags.sh "$VERSION" "$MOVE_MAJOR_LATEST")
                   first=${native_tags%% *}
                   status=0; bash scripts/inspect-digest.sh "$repository:$first" >/dev/null || status=$?
                   case "$status" in
