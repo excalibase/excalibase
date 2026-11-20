@@ -34,7 +34,7 @@ export function CommandPalette({ open, onOpenChange }: { readonly open: boolean;
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        onOpenChange(!open);
+        onOpenChange(true);
       } else if (e.key === 'Escape' && open) {
         onOpenChange(false);
       }
