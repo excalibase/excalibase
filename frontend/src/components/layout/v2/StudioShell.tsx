@@ -4,10 +4,12 @@ import { TopBar } from './TopBar';
 import { OrgSwitcher } from './OrgSwitcher';
 import { SideNav } from './SideNav';
 import { CommandPalette } from './CommandPalette';
+import { useRecordVisits } from '../../../pages/home/useRecordVisits';
 
 // The console layout behind the studio_v2 flag: top bar, left navigation, page.
 export function StudioShell() {
   const [searching, setSearching] = useState(false);
+  useRecordVisits();
   return (
     <div data-testid="studio-shell" className="flex h-screen flex-col overflow-hidden bg-bg-primary">
       <TopBar left={<OrgSwitcher />} onSearch={() => setSearching(true)} />

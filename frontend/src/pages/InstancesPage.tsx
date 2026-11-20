@@ -9,7 +9,7 @@ import { useAuthStore } from '../stores/auth-store';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { engineIcon, engineLabel } from '../utils/engine';
 import { useStudioV2 } from '../hooks/useDeploymentMode';
-import { ProjectsTable } from './ProjectsTable';
+import { ProjectsPage } from './home/ProjectsPage';
 
 const ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
 
@@ -20,7 +20,7 @@ function getInstanceCountLabel(count: number): string {
 // With studio_v2 on, the shared table replaces this page.
 export function InstancesPage() {
   const { enabled } = useStudioV2();
-  return enabled ? <ProjectsTable /> : <LegacyInstancesPage />;
+  return enabled ? <ProjectsPage /> : <LegacyInstancesPage />;
 }
 
 function LegacyInstancesPage() {
