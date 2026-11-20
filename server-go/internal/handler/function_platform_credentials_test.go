@@ -96,3 +96,15 @@ func TestRuntimeHeaders_StripPlatformCredentialsOnEveryAuthMode(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicInvoke_StripsEveryPrefixedStudioCookie(t *testing.T) {
+	r, seen, _ := newMarkerTestRouter(t)
+	cookie := auth.CookieName(oauthStateCookie) + "=s1; " + auth.CookieName(siteGitBrowserCookie) + "=k1; " +
+		siteGitBrowserCookie + "=k0; cart=42"
+
+	invokeMarker(r, "open", "", map[string]string{"Cookie": cookie})
+
+	if got := (*seen)["Cookie"]; got != "cart=42" {
+		t.Fatalf("customer cookies = %q, want only cart=42", got)
+	}
+}
