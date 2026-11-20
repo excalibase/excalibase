@@ -56,7 +56,7 @@ function Notifications() {
       </button>
       {open && (
         <div className="absolute right-0 top-full z-30 mt-1 w-64 rounded-xl border border-border-primary bg-surface-card p-4 text-sm text-text-secondary shadow-lg">
-          <p role="status">You have no notifications.</p>
+          <output className="block">You have no notifications.</output>
           <Link to="/usage" onClick={() => setOpen(false)} className="mt-2 inline-block text-purple-400 hover:underline">Usage &amp; credits</Link>
         </div>
       )}

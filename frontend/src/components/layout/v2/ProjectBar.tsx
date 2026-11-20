@@ -56,6 +56,10 @@ export function activeTab(pathname: string, projectId: string): string | undefin
   return TABS.find((t) => (t.to === '' ? rest === '' : rest === t.to || rest.startsWith(`${t.to}/`)))?.to;
 }
 
+function tabPath(projectId: string, to: string): string {
+  return to ? `/project/${projectId}/${to}` : `/project/${projectId}`;
+}
+
 export function ProjectTabs() {
   const projectId = useRouteProjectId();
   const { pathname } = useLocation();
@@ -63,7 +67,7 @@ export function ProjectTabs() {
   return (
     <nav aria-label="Project" className="flex flex-wrap gap-1 border-b border-border-primary bg-surface-card px-4">
       {TABS.map((tab) => (
-        <Link key={tab.label} to={`/project/${projectId}${tab.to ? `/${tab.to}` : ''}`} aria-current={active === tab.to ? 'page' : undefined}
+        <Link key={tab.label} to={tabPath(projectId, tab.to)} aria-current={active === tab.to ? 'page' : undefined}
           className={cn('border-b-2 px-3 py-3 text-sm', active === tab.to ? 'border-purple-500 text-text-primary' : 'border-transparent text-text-secondary hover:text-text-primary')}>
           {tab.label}
         </Link>
