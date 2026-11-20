@@ -109,3 +109,51 @@ func TestPendingInviteTokenIsRequired(t *testing.T) {
 		t.Errorf("token_hash must be required, is_nullable=%s", nullable)
 	}
 }
+
+func TestRestorePendingInviteBringsBackASpentInvite(t *testing.T) {
+	store, inviter := setupOrgTest(t)
+	ctx := context.Background()
+	store.CreateOrg(ctx, &domain.Org{ID: testOrgInv, Name: "Invites", Slug: "invites", Tier: domain.Free, OwnerID: inviter})
+	addInvitee(t, store, "invitee-1")
+	seedAcceptableInvite(t, store, inviter, "hash-r", time.Now().Add(time.Hour))
+	spent, err := store.AcceptPendingInvite(ctx, "hash-r", "invitee-1", time.Now())
+	if err != nil {
+		t.Fatalf("AcceptPendingInvite: %v", err)
+	}
+	spent.TokenHash = "hash-r"
+	if err := store.RestorePendingInvite(ctx, spent); err != nil {
+		t.Fatalf("RestorePendingInvite: %v", err)
+	}
+	if _, err := store.FindPendingInviteByToken(ctx, "hash-r", time.Now()); err != nil {
+		t.Fatalf("the restored invite is not live: %v", err)
+	}
+}
+
+// An admin who invited the address again while the sign-up was in flight keeps their invite.
+func TestRestorePendingInviteNeverOverwritesANewerInvite(t *testing.T) {
+	store, inviter := setupOrgTest(t)
+	ctx := context.Background()
+	store.CreateOrg(ctx, &domain.Org{ID: testOrgInv, Name: "Invites", Slug: "invites", Tier: domain.Free, OwnerID: inviter})
+	addInvitee(t, store, "invitee-1")
+	seedAcceptableInvite(t, store, inviter, "hash-old", time.Now().Add(time.Hour))
+	spent, err := store.AcceptPendingInvite(ctx, "hash-old", "invitee-1", time.Now())
+	if err != nil {
+		t.Fatalf("AcceptPendingInvite: %v", err)
+	}
+	spent.TokenHash = "hash-old"
+	expires := domain.FlexTime{Time: time.Now().Add(2 * time.Hour)}
+	if err := store.CreatePendingInvite(ctx, &domain.PendingInvite{OrgID: spent.OrgID, Email: spent.Email, Role: "admin",
+		InvitedBy: inviter, TokenHash: "hash-new", ExpiresAt: &expires}); err != nil {
+		t.Fatalf("newer invite: %v", err)
+	}
+	if err := store.RestorePendingInvite(ctx, spent); err != nil {
+		t.Fatalf("RestorePendingInvite: %v", err)
+	}
+	if _, err := store.FindPendingInviteByToken(ctx, "hash-old", time.Now()); !errors.Is(err, storage.ErrInviteInvalid) {
+		t.Errorf("the restore replaced the newer invite: %v", err)
+	}
+	got, err := store.FindPendingInviteByToken(ctx, "hash-new", time.Now())
+	if err != nil || got.Role != "admin" {
+		t.Fatalf("the newer invite was lost: %+v, %v", got, err)
+	}
+}

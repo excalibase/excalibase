@@ -116,6 +116,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			ctx := auth.SetUser(req.Context(), &domain.User{ID: "test-admin", Role: "platform_admin", Active: true})
+			ctx = auth.SetToken(ctx, &domain.AccessToken{Scopes: auth.ScopeSession})
 			next.ServeHTTP(w, req.WithContext(ctx))
 		})
 	})
@@ -645,6 +646,7 @@ func TestProvisioningHandlerRoutes(t *testing.T) {
 	h := NewProvisioningHandler(svc, &adminOrgStore{})
 
 	r := chi.NewRouter()
+	r.Use(signedInAs("u1", "user"))
 	r.Route(testProvisionPath, h.Routes)
 
 	// Verify routes are wired by hitting each one

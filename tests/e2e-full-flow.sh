@@ -39,7 +39,7 @@ echo "$R" | jq -r '.keys[0].kty' | grep -q EC && pass "JWKS ES256" || fail "jwks
 
 # TEST 4: Login
 echo "4. Platform login"
-TOKEN=$(curl -s http://localhost:24005/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin123"}' | jq -r '.token')
+TOKEN=$(curl -s http://localhost:24005/api/auth/login -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin123"}' | jq -r '.token')
 [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] && pass "admin login" || fail "login" "token=$TOKEN"
 
 # TEST 5: Provision

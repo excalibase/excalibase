@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { emptyEnvRow, initialValues, toAppSubmission, validateAppForm } from './appFormModel';
+import { emptyEnvRow, initialValues, looksSecret, toAppSubmission, validateAppForm } from './appFormModel';
 
 const base = { ...initialValues(), name: 'web', image: 'nginx:1.27' };
 
@@ -103,5 +103,18 @@ describe('environment set limits', () => {
     expect(errors[8]).toMatch(/64 KB/);
     expect(errors[8]).toMatch(/secrets and references do not count/);
     expect(errors[7]).toBeUndefined();
+  });
+});
+
+describe('credential-looking names (EXC-761)', () => {
+  test.each(['API_KEY', 'github_token', 'CLIENT_SECRET', 'DB_PASSWORD', 'PASSWD'])('%s is a secret name', (name) => {
+    expect(looksSecret(name)).toBe(true);
+  });
+  test('a plain value under such a name is a form error', () => {
+    const values = { ...initialValues(), env: [{ ...emptyEnvRow(), name: 'STRIPE_KEY', kind: 'literal' as const, value: 'sk_live' }] };
+    expect(validateAppForm(values, 3).env?.[0]).toMatch(/Secret/);
+  });
+  test('a new row is a Secret by default', () => {
+    expect(emptyEnvRow().kind).toBe('secret');
   });
 });

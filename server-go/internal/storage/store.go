@@ -454,6 +454,10 @@ type StudioIdentityStore interface {
 // ErrUserNotFound is returned when an operation names a user that does not exist.
 var ErrUserNotFound = errors.New("user not found")
 
+// ErrOrgHasProjects is returned when an org is deleted while projects still
+// belong to it.
+var ErrOrgHasProjects = errors.New("organization still has projects")
+
 // ErrOrgMemberNotFound is returned when a membership change names someone who
 // is not a member of the organization.
 var ErrOrgMemberNotFound = errors.New("not a member of this organization")
@@ -521,11 +525,12 @@ type OrgStore interface {
 	CreateOrg(ctx context.Context, org *domain.Org) error
 	// CreateOrgWithOwner writes the org and its creator's owner membership in
 	// one transaction. A free org is refused with ErrFreeOrgLimitReached once
-	// org.OwnerID created maxFreeOrgs free orgs (zero or less: no cap); a taken
+	// org.OwnerID ever created maxFreeOrgs free orgs, deleted ones included
+	// (zero or less: no cap); a taken
 	// slug is ErrOrgSlugTaken.
 	CreateOrgWithOwner(ctx context.Context, org *domain.Org, maxFreeOrgs int) error
 	// EnsurePersonalOrg creates org, owned by org.OwnerID, only when that
-	// account created no org yet, and reports whether it did. Concurrent calls
+	// account never created an org (a deleted one counts), and reports whether it did. Concurrent calls
 	// for one account create one org.
 	EnsurePersonalOrg(ctx context.Context, org *domain.Org) (bool, error)
 	FindOrgByID(ctx context.Context, id string) (*domain.Org, error)
@@ -533,6 +538,8 @@ type OrgStore interface {
 	FindOrgsByUser(ctx context.Context, userID string) ([]*domain.Org, error)
 	FindAllOrgs(ctx context.Context) ([]*domain.Org, error)
 	UpdateOrg(ctx context.Context, org *domain.Org) error
+	// DeleteOrg removes the org, or returns ErrOrgHasProjects while any
+	// project still belongs to it.
 	DeleteOrg(ctx context.Context, id string) error
 
 	AddOrgMember(ctx context.Context, m *domain.OrgMember) error
@@ -548,6 +555,9 @@ type OrgStore interface {
 	GetProjectMember(ctx context.Context, projectID, userID string) (*domain.ProjectMember, error)
 
 	CreatePendingInvite(ctx context.Context, invite *domain.PendingInvite) error
+	// RestorePendingInvite files an invite that was spent by a sign-up that was
+	// then rolled back, unless the address has been invited again since.
+	RestorePendingInvite(ctx context.Context, invite *domain.PendingInvite) error
 	// FindPendingInviteByToken returns the live invite a token hash names, or
 	// ErrInviteInvalid when there is none or it has expired.
 	FindPendingInviteByToken(ctx context.Context, tokenHash string, now time.Time) (*domain.PendingInvite, error)

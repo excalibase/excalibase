@@ -93,7 +93,8 @@ function describeVar(v: EnvVar): string {
     return `Linked to database ${v.reference.sourceName} (${v.reference.variable})`;
   }
   if (v.kind === 'secret') return `${MASK} secret, set`;
-  return MASK;
+  // A plain value is not a secret: show it, or say it is hidden from this role.
+  return v.value ?? 'Hidden for your role';
 }
 
 // The Service is named after the app, so the project's apps use these (EXC-524, EXC-525).

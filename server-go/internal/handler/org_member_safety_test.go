@@ -21,10 +21,7 @@ func orgWithBob(t *testing.T) (chi.Router, domain.Org, *inMemoryInstanceStore) {
 	}
 	var org domain.Org
 	_ = json.NewDecoder(w.Body).Decode(&org)
-	if w := orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath,
-		`{"userId":"`+testBobID+`","role":"developer"}`, testAliceID); w.Code != http.StatusCreated {
-		t.Fatalf("add bob: %d %s", w.Code, w.Body.String())
-	}
+	joinOrg(t, r, org.ID, testBobID, "developer", testAliceID)
 	instances.Create(&domain.DatabaseInstance{ProjectID: "my-proj", OrgID: org.ID})
 	return r, org, instances
 }

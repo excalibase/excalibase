@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 )
 
@@ -16,7 +17,10 @@ const (
 )
 
 // internalSuffixes are names that never denote a target outside the platform.
-var internalSuffixes = []string{".localhost", ".internal", ".local", ".localdomain", ".home.arpa"}
+var internalSuffixes = []string{".localhost", ".internal", ".local", ".localdomain", ".home.arpa", ".svc"}
+
+// internalNames are whole names that resolve inside a cluster: the API server's alias.
+var internalNames = []string{"kubernetes.default"}
 
 // ValidateHostSyntax accepts exactly one hostname (at least two labels) or one
 // IP literal, optionally bracketed. Zone ids, ports, paths, multi-host lists
@@ -31,6 +35,9 @@ func ValidateHostSyntax(host string) error {
 	name := canonicalName(host)
 	if name == "" || len(name) > maxHostnameLen || !strings.Contains(name, ".") {
 		return fmt.Errorf("%w: %q", ErrInvalidHost, host)
+	}
+	if slices.Contains(internalNames, name) {
+		return fmt.Errorf("%w: %q resolves inside the platform network", ErrInvalidHost, host)
 	}
 	for _, suffix := range internalSuffixes {
 		if strings.HasSuffix(name, suffix) {

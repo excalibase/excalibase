@@ -27,7 +27,7 @@ jobs:
         run: |
           [[ "$SDK_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sdk_commit must be a full commit sha"; exit 1; }
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: excalibase/excalibase-sdk-js
           ref: ${{ inputs.sdk_commit }}
@@ -42,16 +42,16 @@ jobs:
         run: |
           git merge-base --is-ancestor "$SDK_COMMIT" origin/main || { echo "::error::$SDK_COMMIT is not on excalibase-sdk-js main"; exit 1; }
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Docker Hub login
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # The Trivy gate lives in this repository; the workspace is the SDK's.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: .platform
           persist-credentials: false
@@ -59,7 +59,7 @@ jobs:
       # The Dockerfile runs the example's unit tests before it builds. Built
       # into the local daemon and scanned before anything is pushed (EXC-642).
       - name: Build the candidate image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: examples/storefront
           load: true
@@ -74,7 +74,7 @@ jobs:
 
       - name: Build and push
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: examples/storefront
           push: true

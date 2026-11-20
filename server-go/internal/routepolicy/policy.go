@@ -147,9 +147,18 @@ type Row struct {
 	// Unrestricted marks a route that refuses any narrowed PAT — a
 	// scope-limited or project-bound credential is not enough.
 	Unrestricted bool
+	// Unbound marks a route that refuses a project-bound PAT but accepts an
+	// unbound one with write scope (project creation: Studio makes such tokens
+	// for automation). Read-only tokens are refused by the write gate already.
+	Unbound bool
 	// Capability is the capability a platform service token may call this
 	// route with, or "" when no capability token may reach it.
 	Capability string
+	// Bootstrap marks a route the platform-bootstrap Job's capability token
+	// (svc-bootstrap) calls: it creates service principals, mints and rotates
+	// their tokens and initialises the vault. Other capability tokens are
+	// refused here; the handler binds the token to the principals it manages.
+	Bootstrap bool
 	// ServiceOnly marks a route that ONLY a capability token may call, so a
 	// studio session or an ordinary PAT is refused.
 	ServiceOnly bool

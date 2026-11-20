@@ -113,8 +113,8 @@ func TestDeletingProjectAllowsTheDataPlaneInfoRead(t *testing.T) {
 	}
 }
 
-// A platform admin's access carries no membership row, so the gate looks the
-// project up itself rather than waving the request through.
+// A platform service principal's access carries no membership row, so the gate
+// looks the project up itself rather than waving the request through.
 func TestDeletingProjectRefusesPlatformAdminWrites(t *testing.T) {
 	instances := fakestore.NewInstances()
 	instances.Create(&domain.DatabaseInstance{
@@ -131,6 +131,7 @@ func TestDeletingProjectRefusesPlatformAdminWrites(t *testing.T) {
 	})
 
 	admin := &domain.User{ID: "admin-1", Role: testPlatformRole}
+	service := &domain.AccessToken{Permissions: []string{"projects:info:read"}}
 	cases := []struct {
 		method, path string
 		want         int
@@ -140,7 +141,7 @@ func TestDeletingProjectRefusesPlatformAdminWrites(t *testing.T) {
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
-		req = req.WithContext(projectRequest(tc.method, testProject, admin, nil).Context())
+		req = req.WithContext(projectRequest(tc.method, testProject, admin, service).Context())
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 		if w.Code != tc.want {

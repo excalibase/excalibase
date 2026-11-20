@@ -17,7 +17,7 @@ type connectSiteRepoArgs struct {
 	InstallCommand string            `json:"install_command,omitempty" jsonschema:"left out, the lockfile decides: npm ci, pnpm install --frozen-lockfile or yarn install"`
 	BuildCommand   string            `json:"build_command,omitempty" jsonschema:"npm run build when left out"`
 	OutputDir      string            `json:"output_dir,omitempty" jsonschema:"where the build writes its files, relative to root_dir: dist (Vite), build, out (Next export); dist when left out"`
-	Framework      string            `json:"framework,omitempty" jsonschema:"nextjs for a server-rendered site (create_site with kind server, only on installs that offer them; elsewhere not found); it knows its own output, so output_dir is ignored. Left out builds static files"`
+	Framework      string            `json:"framework,omitempty" jsonschema:"nextjs, nuxt, sveltekit or astro for a server-rendered site (create_site with kind server, only on installs that offer them; elsewhere not found); it knows its own output, so output_dir is ignored. Left out builds static files"`
 	NodeVersion    string            `json:"node_version,omitempty" jsonschema:"the Node major: 20, 22 or 24; 22 when left out"`
 	BuildEnv       map[string]string `json:"build_env,omitempty" jsonschema:"plain build variables such as VITE_API_URL; they end up in the built files, so never put a secret here. Left out keeps the current ones"`
 }

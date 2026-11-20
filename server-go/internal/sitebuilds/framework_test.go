@@ -55,6 +55,17 @@ func TestFailureMessage_FrameworkRefusalPointsToAContainer(t *testing.T) {
 	}
 }
 
+func TestFailureMessage_NamesTheFrameworkOfThePreset(t *testing.T) {
+	for framework, label := range map[string]string{FrameworkNuxt: "Nuxt", FrameworkSvelteKit: "SvelteKit", FrameworkAstro: "Astro"} {
+		refused := failureMessage(RunStatus{Failure: FailFramework, ExitCode: 13}, Limits{}, Settings{Framework: framework})
+		missing := failureMessage(RunStatus{Failure: FailNoOutput}, Limits{}, Settings{Framework: framework})
+		if !strings.Contains(refused, label) || !strings.Contains(refused, "app container") || !strings.Contains(missing, label) ||
+			strings.Contains(missing, "output directory") || strings.Contains(refused, "Next.js") {
+			t.Errorf("%s: refused %q, missing %q", framework, refused, missing)
+		}
+	}
+}
+
 func TestBuild_NextjsFrameworkReachesTheRunner(t *testing.T) {
 	bed := newTestBed(false)
 	bed.service.sites = fakeSites{kind: sites.KindServer}

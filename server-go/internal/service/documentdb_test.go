@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -360,6 +362,9 @@ func TestRotationNeedsNoDocumentDBSpecialCase(t *testing.T) {
 	kube := k8s.NewMockClient()
 	svc := NewProvisioningService(documentDBStore(t), provisioner.NewFactory(), kube)
 	inst := documentDBProject()
+	kube.CRDs[inst.Namespace+"/"+inst.ProjectID+"-postgres"] = &unstructured.Unstructured{Object: map[string]any{
+		"status": map[string]any{"currentPrimary": inst.ProjectID + "-postgres-1"},
+	}}
 
 	if err := svc.alterRolePassword(context.Background(), inst, inst.Username, "new-secret"); err != nil {
 		t.Fatalf("alterRolePassword: %v", err)

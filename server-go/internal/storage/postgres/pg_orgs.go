@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -81,9 +82,38 @@ func (s *Store) UpdateOrg(ctx context.Context, org *domain.Org) error {
 	return err
 }
 
+// DeleteOrg: see storage.OrgStore. A deleted free org is recorded on its
+// owner, so the free allowance is not handed back.
 func (s *Store) DeleteOrg(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM orgs WHERE id = $1`, id)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin org delete: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// The lock project creation takes: a create that began first finishes, and
+	// one that begins after sees the org gone.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		orgProjectLimitLockSpace, id); err != nil {
+		return fmt.Errorf("lock org project slots: %w", err)
+	}
+	var ownerID, tier string
+	err = tx.QueryRowContext(ctx, `DELETE FROM orgs WHERE id = $1 RETURNING owner_id, tier`, id).Scan(&ownerID, &tier)
+	var pqErr *pq.Error
+	switch {
+	case errors.As(err, &pqErr) && string(pqErr.Code) == foreignKeyViolation:
+		return storage.ErrOrgHasProjects
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return err
+	}
+	if strings.EqualFold(tier, string(domain.Free)) {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE users SET free_orgs_deleted = free_orgs_deleted + 1 WHERE id = $1`, ownerID); err != nil {
+			return fmt.Errorf("record deleted free org: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // --- Org Members ---
@@ -280,6 +310,20 @@ func (s *Store) GetProjectMember(ctx context.Context, projectID, userID string) 
 }
 
 // --- Pending Invites ---
+
+// RestorePendingInvite files a spent invite again, but never over one that
+// exists for the address: an admin's newer invite wins.
+func (s *Store) RestorePendingInvite(ctx context.Context, invite *domain.PendingInvite) error {
+	if invite.TokenHash == "" || invite.ExpiresAt == nil {
+		return errors.New("pending invite needs a token hash and an expiry")
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO pending_invites (org_id, email, role, invited_by, token_hash, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (org_id, lower(email)) DO NOTHING`,
+		invite.OrgID, invite.Email, invite.Role, invite.InvitedBy, invite.TokenHash, invite.ExpiresAt.Time)
+	return err
+}
 
 // CreatePendingInvite files the invite, replacing any earlier one for the same
 // address in the org, in any case: re-inviting issues a new link and the old one stops working.

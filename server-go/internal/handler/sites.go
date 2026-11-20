@@ -43,6 +43,8 @@ func (h *SiteHandler) Routes(r chi.Router, developer func(http.Handler) http.Han
 	r.Get("/", h.available(h.list))
 	r.With(developer).Post("/", h.available(h.create))
 	r.Get("/limits", h.available(h.limits))
+	r.With(developer).Get("/server-secrets", h.available(h.listServerSecrets))
+	r.With(developer).Put("/server-secrets", h.available(h.setServerSecrets))
 	r.Route("/{siteId}", func(r chi.Router) {
 		r.Get("/", h.available(h.get))
 		r.With(developer).Patch("/", h.available(h.update))
@@ -54,6 +56,8 @@ func (h *SiteHandler) Routes(r chi.Router, developer func(http.Handler) http.Han
 		r.With(developer).Get("/tokens", h.available(h.listTokens))
 		r.With(developer).Post("/tokens", h.available(h.createToken))
 		r.With(developer).Delete("/tokens/{tokenId}", h.available(h.revokeToken))
+		r.With(developer).Get("/env", h.available(h.getEnv))
+		r.With(developer).Put("/env", h.available(h.putEnv))
 		h.domainRoutes(r, developer)
 	})
 }
@@ -220,6 +224,9 @@ func sitePathID(w http.ResponseWriter, r *http.Request, param string) (string, b
 
 // writeSiteError maps the service's refusals; anything else is logged and answered without detail.
 func writeSiteError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	var archiveErr *sites.ArchiveError
 	var inputErr *sites.InputError
 	var publishErr *sites.PublishError

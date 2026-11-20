@@ -12,6 +12,9 @@ import { apiErrorMessage } from '../api/apps';
 import { DOCUMENTDB_LABEL } from '../utils/engine';
 import { Button } from '../components/Button';
 import { secondaryButton } from '../components/containers/ContainerBits';
+import { passwordProblem } from '../utils/databasePassword';
+import { DatabasePasswordField } from '../components/DatabasePasswordField';
+import { ProjectPasswordPanel } from '../components/ProjectPasswordPanel';
 
 type Engine = 'POSTGRESQL' | 'DOCUMENTDB' | 'MYSQL';
 
@@ -45,6 +48,11 @@ export function AddDatabasePage() {
   const [postgresVersion, setPostgresVersion] = useState('');
   const [documentDb, setDocumentDb] = useState(false);
   const [failure, setFailure] = useState('');
+  const { enabled: choosePasswordOn } = useFeatureEnabled('onetimecredentials');
+  const [password, setPassword] = useState('');
+  const [attempted, setAttempted] = useState(false);
+  // The one-time password, held here only until the customer has saved it.
+  const [issuedPassword, setIssuedPassword] = useState<string | null>(null);
   const documentDbOnly = engine === 'DOCUMENTDB';
 
   const chooseEngine = (next: Engine) => {
@@ -85,21 +93,47 @@ export function AddDatabasePage() {
 
   const isMySQL = engine === 'MYSQL';
   const chosenVersion = isMySQL ? mysqlVersion : postgresVersion;
+  const typedPassword = choosePasswordOn ? password : '';
+  const passwordError = attempted ? passwordProblem(typedPassword) ?? undefined : undefined;
+  const chosenPassword = typedPassword ? { password: typedPassword } : {};
   const databaseSettings = (): DatabaseSettings =>
     isMySQL
-      ? { databaseType: 'MYSQL', mysqlVersion }
-      : { databaseType: 'POSTGRESQL', postgresVersion, documentDb: documentDbOnly || documentDb };
+      ? { databaseType: 'MYSQL', mysqlVersion, ...chosenPassword }
+      : { databaseType: 'POSTGRESQL', postgresVersion, documentDb: documentDbOnly || documentDb, ...chosenPassword };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFailure('');
+    setAttempted(true);
+    if (passwordProblem(typedPassword)) return;
     const result = await addDatabase.mutateAsync(databaseSettings());
+    addDatabase.reset();
+    setPassword('');
     if (result.noDatabase && result.status !== 'PROVISIONING') {
       setFailure(result.failureReason || 'The database could not be created.');
       return;
     }
+    if (result.password) {
+      setIssuedPassword(result.password);
+      return;
+    }
     navigate(`/project/${projectId}`);
   };
+
+  if (issuedPassword) {
+    return (
+      <div className="max-w-3xl mx-auto" data-testid="add-database-page">
+        <ProjectPasswordPanel
+          projectId={projectId}
+          password={issuedPassword}
+          onDone={() => {
+            setIssuedPassword(null);
+            navigate(`/project/${projectId}`);
+          }}
+        />
+      </div>
+    );
+  }
 
   const errorText = failure || (addDatabase.error ? apiErrorMessage(addDatabase.error, 'Could not add the database') : '');
 
@@ -143,6 +177,9 @@ export function AddDatabasePage() {
           onDocumentDbChange={setDocumentDb}
           documentDbOnly={documentDbOnly}
         />
+      )}
+      {choosePasswordOn && (
+        <DatabasePasswordField id="add-database-password" label="Database password (optional)" value={password} onChange={setPassword} error={passwordError} />
       )}
       {errorText && (
         <p role="alert" className="text-sm text-red-400 break-words">

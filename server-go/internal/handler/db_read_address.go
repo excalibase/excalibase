@@ -135,7 +135,7 @@ func readAddressResponseFor(r *http.Request, view service.DBReadAddressView) dbR
 		Username:         view.Username, ReadOnlyLogin: view.ReadOnlyLogin,
 		CanChange: callerMayChangeDBEndpoint(r) && !view.SingleHost,
 	}
-	if view.Internal.Host != "" {
+	if view.Internal.Host != "" && callerSeesClusterAddress(r) {
 		out.Internal = &dbReadAddressInternal{Host: view.Internal.Host, Port: view.Internal.Port,
 			ConnectionString: view.Internal.ConnectionString}
 	}
@@ -161,6 +161,9 @@ func (h *DBReadAddressHandler) record(r *http.Request, projectID string, enabled
 }
 
 func writeDBReadAddressError(w http.ResponseWriter, projectID string, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrReadAddressNoReplica),
 		errors.Is(err, service.ErrReadAddressNeedsPublicPort),

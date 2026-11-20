@@ -2,6 +2,7 @@ package routepolicy
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 )
@@ -42,6 +43,8 @@ type Principal struct {
 	// ForeignProject is a PAT bound to a project other than the one in the
 	// path, which may never leave its binding.
 	ForeignProject bool
+	// BoundSameProject is a PAT bound to the project the path names.
+	BoundSameProject bool
 	// Capabilities is the permission list of a platform service token. A
 	// non-empty list makes this a capability token, which is default-deny.
 	Capabilities []string
@@ -52,6 +55,9 @@ type Principal struct {
 	// like a deploy token; past its gate it is its creator, read-only.
 	MetricsKey bool
 }
+
+// IsBound reports whether the principal holds a project-bound PAT, whichever project.
+func (p Principal) IsBound() bool { return p.ForeignProject || p.BoundSameProject }
 
 // IsCapabilityToken reports whether the principal authenticates with a
 // service capability token rather than a session or human PAT.
@@ -65,7 +71,7 @@ func Expect(row Row, method string, p Principal) Expectation {
 		return Unasserted
 	}
 	if p.IsCapabilityToken() {
-		return expectCapabilityToken(row)
+		return expectCapabilityToken(row, p)
 	}
 	if p.SiteDeployToken && !row.SiteDeployToken {
 		return Deny403
@@ -99,11 +105,30 @@ func Expect(row Row, method string, p Principal) Expectation {
 // principal's platform role would otherwise permit. The allow direction needs
 // the concrete selector of the request (a vault secret path, say), so it is
 // left to the service-token contract test rather than asserted from a pattern.
-func expectCapabilityToken(row Row) Expectation {
+func expectCapabilityToken(row Row, p Principal) Expectation {
+	if row.Bootstrap {
+		// The capability gate admits the bootstrap token; every other
+		// capability token is default-denied here.
+		if p.isBootstrap() {
+			return Allow
+		}
+		return Deny403
+	}
 	if row.Capability == "" {
 		return Deny403
 	}
 	return Unasserted
+}
+
+// isBootstrap reports whether the principal holds a
+// service-tokens:manage permission, which only svc-bootstrap carries.
+func (p Principal) isBootstrap() bool {
+	for _, capability := range p.Capabilities {
+		if strings.HasPrefix(capability, "service-tokens:manage:") {
+			return true
+		}
+	}
+	return false
 }
 
 // expectSession applies the gates a session or human PAT meets, in the order
@@ -123,10 +148,13 @@ func expectSession(row Row, method string, p Principal) Expectation {
 	if row.Param == ParamProject && p.ForeignProject {
 		return Deny404
 	}
-	if (isWrite(method) || row.Discloses == Secret) && p.ReadOnly {
+	if tokenRefused(row, method, p) {
 		return Deny403
 	}
-	if row.Unrestricted && p.Restricted {
+	if platformAdminOutsider(row, p) {
+		return Deny404
+	}
+	if row.Discloses == Secret && p.ReadOnly {
 		return Deny403
 	}
 	if p.PlatformAdmin {
@@ -136,6 +164,19 @@ func expectSession(row Row, method string, p Principal) Expectation {
 		return Deny403
 	}
 	return expectTenant(row, p)
+}
+
+// tokenRefused is whether the credential's own limits keep it off the route.
+func tokenRefused(row Row, method string, p Principal) bool {
+	return (isWrite(method) && p.ReadOnly) || (row.Unrestricted && p.Restricted) || (row.Unbound && p.IsBound())
+}
+
+// platformAdminOutsider: platform authority does not reach a tenant's project
+// or org. A human platform admin meets the membership gate like any customer,
+// and only a platform route naming a permission is theirs (EXC-757).
+func platformAdminOutsider(row Row, p Principal) bool {
+	tenantRoute := row.Param == ParamProject || row.Param == ParamOrg
+	return p.PlatformAdmin && tenantRoute && row.Permission == "" && p.OrgRole == ""
 }
 
 // expectTenant applies the org-role rung once the caller has cleared the
@@ -159,14 +200,10 @@ func expectTenant(row Row, p Principal) Expectation {
 	return Allow
 }
 
-// orgOutsiderExpectation is what a non-member sees on an org route. Reads hide
-// the org behind a 404; writes check the org permission first and answer 403,
-// which discloses nothing a member could not already see.
-func orgOutsiderExpectation(row Row) Expectation {
-	if row.MinRole == "" {
-		return Deny404
-	}
-	return Deny403
+// orgOutsiderExpectation is what a non-member sees on an org route: the org
+// does not exist, whether they read or try to write, so the id confirms nothing.
+func orgOutsiderExpectation(Row) Expectation {
+	return Deny404
 }
 
 // isWrite reports whether the method mutates, which is what a read-only

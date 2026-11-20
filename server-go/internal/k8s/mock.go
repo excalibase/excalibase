@@ -223,6 +223,7 @@ type MockClient struct {
 	// PausedReplicas answers PausedAppReplicas for any app.
 	PausedReplicas    int
 	PausedReplicasErr error
+	PausedImagesStub
 	// ResumedTier records the plan size each resume ran at, keyed "namespace/appID".
 	ResumedTier map[string]domain.TierType
 
@@ -817,7 +818,7 @@ func (m *MockClient) ListCRDs(ctx context.Context, gvr schema.GroupVersionResour
 	}
 	var listed []*unstructured.Unstructured
 	for key, obj := range m.CRDs {
-		if strings.HasPrefix(key, namespace+"/") && strings.ToLower(obj.GetKind())+"s" == gvr.Resource {
+		if (namespace == "" || strings.HasPrefix(key, namespace+"/")) && strings.ToLower(obj.GetKind())+"s" == gvr.Resource {
 			listed = append(listed, obj)
 		}
 	}

@@ -103,25 +103,37 @@ func TestAlertHistoryShowsOnlyTheCallersProjects(t *testing.T) {
 	}
 }
 
-func TestPlatformOperatorSeesEveryProjectsAlerts(t *testing.T) {
+// EXC-757: a human platform role is a customer outside /admin. It reads the
+// platform-wide alerts and nothing of another customer's projects.
+func TestAHumanPlatformRoleSeesNoOtherCustomersAlerts(t *testing.T) {
 	h := alertScopeHandler(t)
 	user := &domain.User{ID: "op", Role: "platform_operator", Active: true}
 
 	_, alerts := alertRequest(t, h.GetActive, user, &domain.AccessToken{})
-	if len(alerts) != 4 {
-		t.Fatalf("PermViewAny saw %v, want every alert the platform holds", alertProjectIDs(alerts))
+	if got := alertProjectIDs(alerts); len(got) != 1 || got[0] != "" {
+		t.Fatalf("a platform operator saw %v, want only the platform-wide alert", got)
 	}
 }
 
-// A platform operator holding a project-bound PAT is still bound by it: the
-// credential is narrowed even though the role is not.
+// A platform service principal (capability token) still reads every project's alerts.
+func TestAPlatformServicePrincipalSeesEveryProjectsAlerts(t *testing.T) {
+	h := alertScopeHandler(t)
+	user := &domain.User{ID: "svc", Role: "platform_admin", Active: true}
+
+	_, alerts := alertRequest(t, h.GetActive, user, &domain.AccessToken{Permissions: []string{"alerts:read"}})
+	if len(alerts) != 3 {
+		t.Fatalf("a service principal saw %v, want every project's alerts", alertProjectIDs(alerts))
+	}
+}
+
+// A member holding a project-bound PAT is still bound by it: the credential is
+// narrowed even though the membership is not.
 func TestABoundTokenNeverWidensToOtherProjectsAlerts(t *testing.T) {
 	h := alertScopeHandler(t)
-	user := &domain.User{ID: "op", Role: "platform_operator", Active: true}
+	user := &domain.User{ID: alertMemberA, Role: "user", Active: true}
 
 	_, alerts := alertRequest(t, h.GetActive, user, &domain.AccessToken{ProjectID: alertProjectB})
-	got := alertProjectIDs(alerts)
-	if len(got) != 2 || got[0] != alertProjectB || got[1] != alertProjectB {
+	if got := alertProjectIDs(alerts); len(got) != 0 {
 		t.Fatalf("a token bound to project B saw %v", got)
 	}
 }

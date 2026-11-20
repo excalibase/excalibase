@@ -134,6 +134,22 @@ func TestProvision_RefusesWhenClusterFull(t *testing.T) {
 	}
 }
 
+// A node at its pod limit leaves a new project's pods Pending with "Too many
+// pods" while CPU and memory are free (EXC-747): refuse it up front, and say why.
+func TestProvision_RefusesWhenNoPodSlotsAreFree(t *testing.T) {
+	svc, _, mock := setupProvisioningTest(t)
+	mock.Capacity = k8s.ClusterCapacity{
+		AllocatableCPUMilli: 24000, AllocatableMemBytes: 64 * 1024 * 1024 * 1024,
+		AllocatablePods: 110, Pods: 109, // the project needs a database pod and two sidecars
+	}
+	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		PostgresVersion: "17", ProjectName: "no-slots", OrgID: "org1", DBType: domain.PostgreSQL,
+	})
+	if !errors.Is(err, ErrNoPodSlots) {
+		t.Fatalf("err = %v, want ErrNoPodSlots", err)
+	}
+}
+
 // TestProvision_AcceptsWhenClusterHasRoom confirms a healthy cluster passes
 // the capacity check and proceeds to actual provisioning.
 func TestProvision_AcceptsWhenClusterHasRoom(t *testing.T) {

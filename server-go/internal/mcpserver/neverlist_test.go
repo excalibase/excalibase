@@ -304,3 +304,17 @@ func matchesAny(patterns []*regexp.Regexp, value string) bool {
 	}
 	return false
 }
+
+// No tool may reach the credentials routes: a database password is shown to a
+// person once, at creation or a reset, and never to a coding tool (EXC-759).
+func TestNoAllowedRouteReachesDatabaseCredentials(t *testing.T) {
+	for _, path := range []string{"/api/provision/p/credentials", "/api/provision/p/credentials/rotate", "/api/vault/secrets/projects/p/credentials/admin"} {
+		for _, method := range []string{"GET", "POST", "PUT"} {
+			for _, allowed := range allowedRoutes {
+				if allowed.MatchString(method + " " + path) {
+					t.Errorf("%s %s is allowed by %s", method, path, allowed)
+				}
+			}
+		}
+	}
+}

@@ -52,6 +52,9 @@ func (h *FunctionHandler) SetRuntimeEdge(edge k8s.EdgePeer) {
 
 // SetRuntimeCiliumFQDN fences each project's runtime with a CiliumNetworkPolicy
 // that admits its allowlist by host name (EXC-558).
+// SetRuntimeClass names the sandbox RuntimeClass each project's function runtime runs under.
+func (h *FunctionHandler) SetRuntimeClass(class string) { h.runtimeClass = class }
+
 func (h *FunctionHandler) SetRuntimeCiliumFQDN(on bool) {
 	h.runtimeCiliumFQDN = on
 }
@@ -203,6 +206,7 @@ func (h *FunctionHandler) denoRuntimeSpecFor(projectID string) k8s.DenoRuntimeSp
 		Edge:            h.runtimeEdge,
 		CiliumFQDN:      h.runtimeCiliumFQDN,
 		ProvisioningURL: h.runtimeProvisioningURL,
+		RuntimeClass:    h.runtimeClass,
 	}
 }
 

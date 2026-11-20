@@ -114,8 +114,8 @@ describe('project lifecycle follows the project', () => {
     vi.mocked(api.delete).mockResolvedValueOnce({ status: 202, data: { projectId: 'p1', status: 'DELETING' } } as never);
     vi.mocked(api.get).mockRejectedValueOnce({ response: { status: 404 } });
     const { result } = renderHook(() => useForceDropProject(1), { wrapper: wrapper() });
-    result.current.mutate('p1');
+    result.current.mutate({ projectId: 'p1', reason: 'abandoned and holding a node' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(api.delete).toHaveBeenCalledWith('/admin/projects/p1', RESPOND_ASYNC);
+    expect(api.delete).toHaveBeenCalledWith('/admin/projects/p1', { ...RESPOND_ASYNC, data: { reason: 'abandoned and holding a node' } });
   });
 });

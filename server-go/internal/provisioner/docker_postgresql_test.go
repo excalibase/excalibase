@@ -18,6 +18,9 @@ type mockDockerClient struct {
 	containers map[string]string // containerID → status
 	failOn     string
 	execLog    [][]string // every Exec invocation's cmd captured here
+	stdinLog   []string   // the stdin of every ExecInContainerStdin
+	stdinOut   string     // what ExecInContainerStdin answers
+	stdinErr   error      // what ExecInContainerStdin fails with
 	stops      int        // counter for StopContainer calls
 	starts     int        // counter for StartContainer calls
 	copyCalls  int        // counter for CopyToContainer calls
@@ -143,9 +146,13 @@ func (m *mockDockerClient) ContainerState(ctx context.Context, containerID strin
 	return ContainerState{Found: status != containerNotFound, Running: status == containerRunning}, err
 }
 
-func (m *mockDockerClient) ExecInContainerStdin(_ context.Context, _ string, cmd []string, _ string) (string, error) {
+func (m *mockDockerClient) ExecInContainerStdin(_ context.Context, _ string, cmd []string, stdin string) (string, error) {
 	m.execLog = append(m.execLog, cmd)
-	return "", nil
+	m.stdinLog = append(m.stdinLog, stdin)
+	if m.stdinErr != nil {
+		return "", m.stdinErr
+	}
+	return m.stdinOut, nil
 }
 
 func TestDockerProvisioner_SupportedType(t *testing.T) {
@@ -323,7 +330,7 @@ func TestDockerProvisioner_ConfigureArchive_RunsAlterSystemThenRestarts(t *testi
 	docker.containers["container-pg"] = "running"
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	if err := p.ConfigureArchive(context.Background(), "container-pg", "wal-g wal-push %p", "postgres"); err != nil {
+	if err := p.ConfigureArchive(context.Background(), "container-pg", "wal-g wal-push %p", "postgres", ""); err != nil {
 		t.Fatalf("ConfigureArchive: %v", err)
 	}
 
@@ -367,7 +374,7 @@ func TestDockerProvisioner_ConfigureArchive_RestartsLast(t *testing.T) {
 	docker.containers["c1"] = "running"
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	if err := p.ConfigureArchive(context.Background(), "c1", "cp %p /walarchive/%f", "postgres"); err != nil {
+	if err := p.ConfigureArchive(context.Background(), "c1", "cp %p /walarchive/%f", "postgres", ""); err != nil {
 		t.Fatalf("ConfigureArchive: %v", err)
 	}
 	// Expect events in this order: 3+ Execs, then Stop, then Start.

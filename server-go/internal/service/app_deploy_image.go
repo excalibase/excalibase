@@ -37,6 +37,10 @@ func (s *AppDeployService) DeployImage(ctx context.Context, projectID, appID, im
 	if err != nil {
 		return nil, err
 	}
+	// Before the registry is asked about an image that would be refused anyway.
+	if err := s.proxyGuard.Check(ctx, appSubject(app, image, app.Env, origin.Actor, "deploy")); err != nil {
+		return nil, err
+	}
 	if s.internal.Names(image) {
 		normalized, digest, err := s.internalDigest(app, image, origin)
 		if err != nil {

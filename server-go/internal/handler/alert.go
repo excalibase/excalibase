@@ -140,7 +140,9 @@ func (h *AlertHandler) canSeeProject(ctx context.Context, user *domain.User, tok
 	if !auth.TokenBoundToProject(token, projectID) {
 		return false
 	}
-	if auth.HasPermission(user.Role, auth.PermViewAny) {
+	// Another customer's alerts are not a platform role's to read; only a
+	// platform service principal reads across projects (EXC-757).
+	if auth.IsPlatformServicePrincipal(user, token) {
 		return true
 	}
 	return custommw.ResolveProjectAccess(ctx, user, token, projectID, h.instances, h.orgs) != nil

@@ -83,6 +83,10 @@ func (h *SDKKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "name must be "+strconv.Itoa(maxSDKKeyNameLength)+" characters or fewer", http.StatusBadRequest)
 		return
 	}
+	if req.KeyType == "secret" && !callerMay(r, PermCreateServiceKey) {
+		httpError(w, errCredentialAdminOnly, http.StatusForbidden)
+		return
+	}
 	projectID, orgSlug, ok := h.resolve(w, r)
 	if !ok {
 		return
@@ -111,12 +115,36 @@ func (h *SDKKeysHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.mayRevoke(w, r, orgSlug, projectID, keyID) {
+		return
+	}
 	if err := h.keys.Revoke(r.Context(), orgSlug, projectID, keyID); err != nil {
 		writeSDKKeyError(w, err)
 		return
 	}
 	h.record(r, auditActionSDKKeyRevoke, projectID, map[string]any{"keyId": keyID})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// mayRevoke refuses a caller below Admin who revokes a service-role key, the
+// same rung that makes one. A key whose type cannot be read is not revoked on
+// the caller's word.
+func (h *SDKKeysHandler) mayRevoke(w http.ResponseWriter, r *http.Request, orgSlug, projectID string, keyID int64) bool {
+	if callerMay(r, PermCreateServiceKey) {
+		return true
+	}
+	keys, err := h.keys.List(r.Context(), orgSlug, projectID)
+	if err != nil {
+		writeSDKKeyError(w, err)
+		return false
+	}
+	for _, key := range keys {
+		if key.ID == keyID && key.KeyType == "secret" {
+			httpError(w, errCredentialAdminOnly, http.StatusForbidden)
+			return false
+		}
+	}
+	return true
 }
 
 // resolve names the project and its organisation's slug, which auth routes by.
