@@ -8,6 +8,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 )
 
@@ -16,6 +17,7 @@ const (
 	resolverDatabase = "appdb"
 	resolverHost     = "proj-res1-postgres-rw.org1-proj-res1.svc.cluster.local"
 	ownerPassword    = "p@ss/w:rd?#1"
+	runtimePassword  = "rt/p@ss:w?rd#2"
 )
 
 func resolverFixture() (*AppEnvResolver, *fakeVault, *fakestore.Instances) {
@@ -23,6 +25,10 @@ func resolverFixture() (*AppEnvResolver, *fakeVault, *fakestore.Instances) {
 	vault.data[vaultCredentialPath(resolverProject, roleAdmin)] = map[string]string{
 		"host": resolverHost, "port": "5432", "database": resolverDatabase,
 		"username": "owner_user", "password": ownerPassword,
+	}
+	vault.data[vaultCredentialPath(resolverProject, roleRuntime)] = map[string]string{
+		"host": resolverHost, "port": "5432", "database": resolverDatabase,
+		"username": roleRuntime, "password": runtimePassword,
 	}
 	vault.data[vaultCredentialPath(resolverProject, roleApp)] = map[string]string{
 		"host": resolverHost, "port": "5432", "database": resolverDatabase,
@@ -33,7 +39,9 @@ func resolverFixture() (*AppEnvResolver, *fakeVault, *fakestore.Instances) {
 		ProjectID: resolverProject, Status: string(domain.StatusActive), DatabaseName: resolverDatabase,
 		SSLMode: "require", Namespace: "org1-proj-res1",
 	}
-	return NewAppEnvResolver(vault, instances), vault, instances
+	resolver := NewAppEnvResolver(vault, instances)
+	resolver.SetFeatures(features.NewStatic(features.AppRuntimeLogin))
+	return resolver, vault, instances
 }
 
 func databaseRef(variable string) apphost.ResolvedReference {
@@ -44,7 +52,7 @@ func databaseRef(variable string) apphost.ResolvedReference {
 	}
 }
 
-func TestAppEnvResolver_DatabaseURLIsTheOwnerLoginInCluster(t *testing.T) {
+func TestAppEnvResolver_DatabaseURLIsTheRuntimeLoginInCluster(t *testing.T) {
 	resolver, _, _ := resolverFixture()
 	got, err := resolver.ResolveReference(resolverProject, databaseRef("DATABASE_URL"))
 	if err != nil {
@@ -57,8 +65,8 @@ func TestAppEnvResolver_DatabaseURLIsTheOwnerLoginInCluster(t *testing.T) {
 	password, _ := parsed.User.Password()
 	checks := map[string][2]string{
 		"scheme":   {parsed.Scheme, "postgresql"},
-		"user":     {parsed.User.Username(), "owner_user"},
-		"password": {password, ownerPassword},
+		"user":     {parsed.User.Username(), roleRuntime},
+		"password": {password, runtimePassword},
 		"host":     {parsed.Host, resolverHost + ":5432"},
 		"database": {parsed.Path, "/" + resolverDatabase},
 		"sslmode":  {parsed.Query().Get("sslmode"), "require"},
@@ -68,8 +76,10 @@ func TestAppEnvResolver_DatabaseURLIsTheOwnerLoginInCluster(t *testing.T) {
 			t.Errorf("%s = %q, want %q", what, pair[0], pair[1])
 		}
 	}
-	if strings.Contains(got, "excalibase_app") {
-		t.Errorf("an app must get the owner's login, not the platform's: %s", got)
+	for _, withheld := range []string{"excalibase_app", "owner_user", ownerPassword, "platform-only"} {
+		if strings.Contains(got, withheld) {
+			t.Errorf("an app must get the runtime login, not %q: %s", withheld, got)
+		}
 	}
 }
 
@@ -77,7 +87,7 @@ func TestAppEnvResolver_SingleDatabaseVariables(t *testing.T) {
 	resolver, _, _ := resolverFixture()
 	want := map[string]string{
 		"PGHOST": resolverHost, "PGPORT": "5432", "PGDATABASE": resolverDatabase,
-		"PGUSER": "owner_user", "PGPASSWORD": ownerPassword,
+		"PGUSER": roleRuntime, "PGPASSWORD": runtimePassword,
 	}
 	for variable, value := range want {
 		got, err := resolver.ResolveReference(resolverProject, databaseRef(variable))
@@ -117,10 +127,10 @@ func TestAppEnvResolver_ReferenceRefusals(t *testing.T) {
 			i.Items[resolverProject].SSLMode = ""
 		}, "TLS"},
 		"login missing from the vault": {func(v *fakeVault, _ *fakestore.Instances, _ *apphost.ResolvedReference) {
-			delete(v.data, vaultCredentialPath(resolverProject, roleAdmin))
+			delete(v.data, vaultCredentialPath(resolverProject, roleRuntime))
 		}, "database login"},
 		"login without a password": {func(v *fakeVault, _ *fakestore.Instances, _ *apphost.ResolvedReference) {
-			v.data[vaultCredentialPath(resolverProject, roleAdmin)]["password"] = ""
+			v.data[vaultCredentialPath(resolverProject, roleRuntime)]["password"] = ""
 		}, "password"},
 	}
 	for name, tc := range cases {
@@ -135,7 +145,7 @@ func TestAppEnvResolver_ReferenceRefusals(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error %q must mention %q", err, tc.want)
 			}
-			if strings.Contains(err.Error(), ownerPassword) {
+			if strings.Contains(err.Error(), runtimePassword) || strings.Contains(err.Error(), ownerPassword) {
 				t.Errorf("the refusal leaked the password: %v", err)
 			}
 		})
@@ -197,24 +207,24 @@ func TestAppEnvResolver_NoVaultRefusesInsteadOfPanicking(t *testing.T) {
 }
 
 // ADR 0041: a container linked to a MySQL project's database gets MySQL
-// variables and a mysql:// DATABASE_URL, from the owner's login, and the CA
+// variables and a mysql:// DATABASE_URL, from the runtime login, and the CA
 // its client verifies the server with (EXC-589).
 func TestAppEnvResolver_MySQLVariables(t *testing.T) {
 	resolver, vault, instances := resolverFixture()
-	vault.data[vaultCredentialPath(resolverProject, roleAdmin)] = map[string]string{
+	vault.data[vaultCredentialPath(resolverProject, roleRuntime)] = map[string]string{
 		"engine": "mysql", "tls": "required", "host": "moco-p-mysql-primary", "port": "3306",
-		"database": resolverDatabase, "username": "admin", "password": ownerPassword, "sslrootcert": "CA-PEM",
+		"database": resolverDatabase, "username": roleRuntime, "password": runtimePassword, "sslrootcert": "CA-PEM",
 	}
 	instances.Items[resolverProject].DBType = domain.MySQL
 	instances.Items[resolverProject].SSLMode = domain.MySQLSSLMode
 	want := map[string]string{
 		"MYSQL_SSL_CA":   "CA-PEM",
-		"DATABASE_URL":   domain.MySQLURL("moco-p-mysql-primary", "3306", "admin", ownerPassword, resolverDatabase),
+		"DATABASE_URL":   domain.MySQLURL("moco-p-mysql-primary", "3306", roleRuntime, runtimePassword, resolverDatabase),
 		"MYSQL_HOST":     "moco-p-mysql-primary",
 		"MYSQL_PORT":     "3306",
 		"MYSQL_DATABASE": resolverDatabase,
-		"MYSQL_USER":     "admin",
-		"MYSQL_PASSWORD": ownerPassword,
+		"MYSQL_USER":     roleRuntime,
+		"MYSQL_PASSWORD": runtimePassword,
 	}
 	for variable, value := range want {
 		got, err := resolver.ResolveReference(resolverProject, databaseRef(variable))
@@ -233,9 +243,9 @@ func TestAppEnvResolver_MySQLVariables(t *testing.T) {
 // A MySQL login filed without its CA hands a container no CA rather than an empty one.
 func TestAppEnvResolver_MySQLWithoutCARefusesTheCA(t *testing.T) {
 	resolver, vault, instances := resolverFixture()
-	vault.data[vaultCredentialPath(resolverProject, roleAdmin)] = map[string]string{
+	vault.data[vaultCredentialPath(resolverProject, roleRuntime)] = map[string]string{
 		"engine": "mysql", "host": "moco-p-mysql-primary", "port": "3306",
-		"database": resolverDatabase, "username": "admin", "password": ownerPassword,
+		"database": resolverDatabase, "username": roleRuntime, "password": runtimePassword,
 	}
 	instances.Items[resolverProject].DBType = domain.MySQL
 	instances.Items[resolverProject].SSLMode = domain.MySQLSSLMode
@@ -248,5 +258,29 @@ func TestAppEnvResolver_PostgresRefusesMySQLVariables(t *testing.T) {
 	resolver, _, _ := resolverFixture()
 	if _, err := resolver.ResolveReference(resolverProject, databaseRef("MYSQL_HOST")); err == nil {
 		t.Error("a Postgres database answered MYSQL_HOST")
+	}
+}
+
+// EXC-765: a project with no runtime login filed yet is told to deploy again;
+// the owner's login is never the fallback.
+func TestAppEnvResolver_NoRuntimeLoginIsNeverAnOwnerFallback(t *testing.T) {
+	resolver, vault, _ := resolverFixture()
+	delete(vault.data, vaultCredentialPath(resolverProject, roleRuntime))
+	for _, variable := range []string{"DATABASE_URL", "PGUSER", "PGPASSWORD"} {
+		got, err := resolver.ResolveReference(resolverProject, databaseRef(variable))
+		if err == nil || strings.Contains(got, "owner_user") || strings.Contains(got, ownerPassword) {
+			t.Errorf("%s = %q, %v: the owner's login stood in for the runtime login", variable, got, err)
+		}
+	}
+}
+
+// EXC-765: off, an app keeps getting the owner's login, so an install that
+// switches the runtime login off sees no change.
+func TestAppRuntimeLogin_OffKeepsTheOwnerLogin(t *testing.T) {
+	resolver, _, _ := resolverFixture()
+	resolver.SetFeatures(features.NewStatic())
+	got, err := resolver.ResolveReference(resolverProject, databaseRef("PGUSER"))
+	if err != nil || got != "owner_user" {
+		t.Fatalf("PGUSER = %q, %v; want the owner's login while the feature is off", got, err)
 	}
 }

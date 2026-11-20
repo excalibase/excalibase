@@ -45,6 +45,9 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 	if features.Enabled(ctx, s.flags, features.DBReadRole) {
 		passwords.Reader = generatePassword(32)
 	}
+	if features.Enabled(ctx, s.flags, features.AppRuntimeLogin) {
+		passwords.Runtime = generatePassword(32)
+	}
 	pc.SetStep("create the platform users")
 	if err := mysql.EnsurePlatformUsers(ctx, inst.Namespace, inst.ProjectID, inst.DatabaseName, passwords); err != nil {
 		return pc.Fail(err)
@@ -64,7 +67,7 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 	inst.Username = roleAdmin
 	for role, password := range map[string]string{
 		roleAdmin: passwords.Admin, roleApp: passwords.App, roleAuthAdmin: passwords.AuthAdmin, roleWatcher: passwords.Watcher,
-		roleReader: passwords.Reader,
+		roleReader: passwords.Reader, roleRuntime: passwords.Runtime,
 	} {
 		if password == "" {
 			continue
@@ -178,7 +181,7 @@ func (s *ProvisioningService) reapplyMySQLCredentials(ctx context.Context, inst 
 		return err
 	}
 	passwords := map[string]string{}
-	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher, roleReader} {
+	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher, roleReader, roleRuntime} {
 		path := vaultCredentialPath(inst.ProjectID, role)
 		if !filed[path] {
 			continue

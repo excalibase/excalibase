@@ -19,6 +19,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
@@ -380,14 +381,19 @@ func TestFunctionHandler_Secrets_RejectsReservedKey(t *testing.T) {
 func TestFunctionHandler_BuiltinEnv_WiresDBURLFromVault(t *testing.T) {
 	store := edgefn.NewFunctionStore(t.TempDir())
 	v := newFakeVault()
-	// A function is the customer's code: it gets the customer's own role.
-	// excalibase_app logs in by certificate only and is never handed out.
-	v.data["projects/proj_p1/credentials/admin"] = map[string]string{
+	// A function is the customer's code: it gets the project's runtime login,
+	// never the owner's (it can create logins) and never excalibase_app, which
+	// logs in by certificate only (EXC-765).
+	v.data["projects/proj_p1/credentials/excalibase_runtime"] = map[string]string{
 		"host":     "proj_p1-postgres-rw.default-proj_p1.svc.cluster.local",
 		"port":     "5432",
 		"database": "app",
-		"username": "app",
+		"username": "excalibase_runtime",
 		"password": "p4ssw0rd",
+	}
+	v.data["projects/proj_p1/credentials/admin"] = map[string]string{
+		"host": "proj_p1-postgres-rw.default-proj_p1.svc.cluster.local", "port": "5432",
+		"database": "app", "username": "app", "password": "owner-only",
 	}
 	v.data["projects/proj_p1/credentials/excalibase_app"] = map[string]string{
 		"host": "proj_p1-postgres-rw.default-proj_p1.svc.cluster.local", "port": "5432",
@@ -402,6 +408,7 @@ func TestFunctionHandler_BuiltinEnv_WiresDBURLFromVault(t *testing.T) {
 	}}
 	h := NewFunctionHandler(store, secrets, client, instStore, nil, testAPIBase)
 	h.SetVault(v)
+	h.SetFeatures(features.NewStatic(features.AppRuntimeLogin))
 
 	r := chi.NewRouter()
 	r.Route(testFunctionsRoute, func(r chi.Router) {
@@ -426,7 +433,7 @@ func TestFunctionHandler_BuiltinEnv_WiresDBURLFromVault(t *testing.T) {
 		t.Fatalf("deploy not recorded in mock runtime")
 	}
 	got := deploy.Secrets["EXCALIBASE_DB_URL"]
-	want := "postgres://app:p4ssw0rd@proj_p1-postgres-rw.default-proj_p1.svc.cluster.local:5432/app?sslmode=require"
+	want := "postgres://excalibase_runtime:p4ssw0rd@proj_p1-postgres-rw.default-proj_p1.svc.cluster.local:5432/app?sslmode=require"
 	if got != want {
 		t.Errorf("EXCALIBASE_DB_URL:\n got:  %q\n want: %q", got, want)
 	}
@@ -1371,20 +1378,53 @@ func TestFunctionHandler_PublicInvoke_RuntimeFailureDoesNotLeak(t *testing.T) {
 // server, and the CA to verify it with (EXC-589).
 func TestFunctionHandler_BuiltinEnv_MySQLURL(t *testing.T) {
 	v := newFakeVault()
-	v.data["projects/proj_my/credentials/admin"] = map[string]string{
+	v.data["projects/proj_my/credentials/excalibase_runtime"] = map[string]string{
 		"engine": "mysql", "tls": "required", "host": "moco-proj_my-mysql-primary.org-proj_my.svc.cluster.local",
-		"port": "3306", "database": "app", "username": "admin", "password": "p4ss/w0rd", "sslrootcert": "CA-PEM",
+		"port": "3306", "database": "app", "username": "excalibase_runtime", "password": "p4ss/w0rd", "sslrootcert": "CA-PEM",
 	}
 	h := NewFunctionHandler(edgefn.NewFunctionStore(t.TempDir()), edgefn.NewSecretsStore(v), nil,
 		&inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{"proj_my": {ProjectID: "proj_my", OrgID: "default"}}},
 		nil, testAPIBase)
 	h.SetVault(v)
+	h.SetFeatures(features.NewStatic(features.AppRuntimeLogin))
 	env := h.builtinEnv(context.Background(), "proj_my")
-	want := "mysql://admin:p4ss%2Fw0rd@moco-proj_my-mysql-primary.org-proj_my.svc.cluster.local:3306/app?ssl-mode=VERIFY_IDENTITY"
+	want := "mysql://excalibase_runtime:p4ss%2Fw0rd@moco-proj_my-mysql-primary.org-proj_my.svc.cluster.local:3306/app?ssl-mode=VERIFY_IDENTITY"
 	if got := env["EXCALIBASE_DB_URL"]; got != want {
 		t.Errorf("EXCALIBASE_DB_URL\n got:  %q\n want: %q", got, want)
 	}
 	if env["EXCALIBASE_DB_CA_CERT"] != "CA-PEM" {
 		t.Errorf("EXCALIBASE_DB_CA_CERT = %q", env["EXCALIBASE_DB_CA_CERT"])
+	}
+}
+
+// EXC-765: a function never gets the owner's login while the runtime login is
+// on, and a project with none filed yet gets no URL rather than the owner's.
+func TestFunctionHandler_BuiltinEnv_NeverFallsBackToTheOwnerLogin(t *testing.T) {
+	v := newFakeVault()
+	v.data["projects/proj_p1/credentials/admin"] = map[string]string{
+		"host": "db.svc", "port": "5432", "database": "app", "username": "owner", "password": "owner-pass",
+	}
+	h := NewFunctionHandler(edgefn.NewFunctionStore(t.TempDir()), edgefn.NewSecretsStore(v), nil,
+		&inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{"proj_p1": {ProjectID: "proj_p1", OrgID: "default"}}},
+		nil, testAPIBase)
+	h.SetVault(v)
+	h.SetFeatures(features.NewStatic(features.AppRuntimeLogin))
+	if url, ok := h.builtinEnv(context.Background(), "proj_p1")["EXCALIBASE_DB_URL"]; ok {
+		t.Fatalf("the owner's login stood in for the runtime login: %q", url)
+	}
+}
+
+// EXC-765: off, a function keeps the owner's login.
+func TestAppRuntimeLogin_OffKeepsTheFunctionsOwnerLogin(t *testing.T) {
+	v := newFakeVault()
+	v.data["projects/proj_p1/credentials/admin"] = map[string]string{
+		"host": "db.svc", "port": "5432", "database": "app", "username": "owner", "password": "owner-pass",
+	}
+	h := NewFunctionHandler(edgefn.NewFunctionStore(t.TempDir()), edgefn.NewSecretsStore(v), nil,
+		&inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{"proj_p1": {ProjectID: "proj_p1", OrgID: "default"}}},
+		nil, testAPIBase)
+	h.SetVault(v)
+	if url := h.builtinEnv(context.Background(), "proj_p1")["EXCALIBASE_DB_URL"]; !strings.Contains(url, "owner:owner-pass@") {
+		t.Fatalf("EXCALIBASE_DB_URL = %q, want the owner's login while the feature is off", url)
 	}
 }

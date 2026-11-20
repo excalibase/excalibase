@@ -192,7 +192,7 @@ WHERE a.datname = current_database()
 func serviceRoleArray() string {
 	spared := make([]string, 0)
 	for _, role := range pgroles.ReservedNames() {
-		if role == roleApp {
+		if role == roleApp || role == roleRuntime {
 			continue
 		}
 		spared = append(spared, role)

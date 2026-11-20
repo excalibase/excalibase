@@ -76,7 +76,7 @@ type credentialRotationTarget struct {
 // the project and returns the owner credential.
 //
 // Roles are rotated one at a time, in a fixed order: auth_admin, then
-// excalibase_app, then excalibase_scheduler, then excalibase_reader, then the owner. The owner is last because it is the value
+// excalibase_app, then excalibase_scheduler, then excalibase_reader, then excalibase_runtime, then the owner. The owner is last because it is the value
 // the caller is handed — a caller is only told a rotation succeeded once every
 // role behind it has been replaced and proved. cdc_watcher is deliberately not rotated: its password is baked
 // into the deployed watcher workload's configuration, so changing it without
@@ -194,7 +194,7 @@ func (s *ProvisioningService) authenticatesByCertificate(projectID, role string)
 // does not have would fail the whole rotation.
 func rotationTargets(inst *domain.DatabaseInstance, filed map[string]bool) []credentialRotationTarget {
 	targets := make([]credentialRotationTarget, 0, 4)
-	for _, role := range []string{roleAuthAdmin, roleApp, roleScheduler, roleReader} {
+	for _, role := range []string{roleAuthAdmin, roleApp, roleScheduler, roleReader, roleRuntime} {
 		if filed[vaultCredentialPath(inst.ProjectID, role)] {
 			targets = append(targets, credentialRotationTarget{role: role, username: role})
 		}

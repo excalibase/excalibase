@@ -145,6 +145,9 @@ DECLARE
   target text := role_name;
   parent text;
 BEGIN
+  IF session_user <> owner_role THEN
+    RAISE EXCEPTION 'only the project owner manages roles' USING ERRCODE = 'insufficient_privilege';
+  END IF;
   {{NAME_GUARD}}
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target) THEN
     RAISE EXCEPTION 'role "%" already exists', target USING ERRCODE = 'duplicate_object';
@@ -188,6 +191,9 @@ DECLARE
   {{DECLARE}}
   target text := role_name;
 BEGIN
+  IF session_user <> owner_role THEN
+    RAISE EXCEPTION 'only the project owner manages roles' USING ERRCODE = 'insufficient_privilege';
+  END IF;
   {{CUSTOMER_GUARD_TARGET}}
   BEGIN
     EXECUTE format('ALTER ROLE %I PASSWORD %L', target, role_password);
@@ -210,6 +216,9 @@ DECLARE
   {{DECLARE}}
   target text := role_name;
 BEGIN
+  IF session_user <> owner_role THEN
+    RAISE EXCEPTION 'only the project owner manages roles' USING ERRCODE = 'insufficient_privilege';
+  END IF;
   {{CUSTOMER_GUARD_TARGET}}
   EXECUTE format('DROP ROLE %I', target);
 END

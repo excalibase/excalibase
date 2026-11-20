@@ -39,11 +39,17 @@ const (
 // excalibase_app, excalibase_scheduler and auth_admin logins.
 func startProjectPG(t *testing.T) (*sql.DB, map[string]map[string]string) {
 	t.Helper()
+	return startProjectPGImage(t, "postgres:16-alpine")
+}
+
+// startProjectPGImage is startProjectPG on the given Postgres image.
+func startProjectPGImage(t *testing.T, image string) (*sql.DB, map[string]map[string]string) {
+	t.Helper()
 	ctx := context.Background()
-	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+	if err := imagepull.EnsureLocal(ctx, image); err != nil {
 		t.Fatal(err)
 	}
-	container, err := postgres.Run(ctx, "postgres:16-alpine",
+	container, err := postgres.Run(ctx, image,
 		postgres.WithDatabase("tenant"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),

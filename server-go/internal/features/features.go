@@ -118,11 +118,15 @@ const (
 	// where other plans keep the operator's five minutes (EXC-784). On unless
 	// switched off.
 	FreeWALUpload Feature = "freewalupload"
+	// AppRuntimeLogin hands a project's apps and functions a login of their
+	// own instead of the database owner's, which can create and change logins
+	// on Postgres 16 and later (EXC-765). On unless switched off.
+	AppRuntimeLogin Feature = "appruntimelogin"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, AppRuntimeLogin}
 }
 
 type Flags interface {

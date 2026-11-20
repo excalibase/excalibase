@@ -60,3 +60,46 @@ func TestMySQLAlterUserSQL(t *testing.T) {
 		t.Errorf("got %s", got)
 	}
 }
+
+// EXC-765: the logins customer code can hold (the owner's and the runtime
+// login) are granted the project database and nothing global, so none can
+// create a user, grant a privilege onward or change the server.
+func TestMySQLCustomerFacingUsersHoldNoGlobalPrivilege(t *testing.T) {
+	sql := MySQLPlatformUsersSQL("app", MySQLPasswords{
+		Admin: "a1", App: "b2", AuthAdmin: "c3", Watcher: "d4", Reader: "e5", Runtime: "f6",
+	})
+	for _, want := range []string{
+		"CREATE USER IF NOT EXISTS 'excalibase_runtime'@'%' IDENTIFIED BY 'f6' REQUIRE SSL;",
+		"ALTER USER 'excalibase_runtime'@'%' ACCOUNT UNLOCK;",
+		"GRANT ALL PRIVILEGES ON `app`.* TO 'excalibase_runtime'@'%';",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	for _, line := range strings.Split(sql, "\n") {
+		if !strings.HasPrefix(line, "GRANT") {
+			continue
+		}
+		for _, user := range []string{"'admin'", "'excalibase_app'", "'excalibase_runtime'"} {
+			if !strings.Contains(line, "TO "+user) {
+				continue
+			}
+			for _, forbidden := range []string{"GRANT OPTION", "CREATE USER", "SUPER", "*.*", "ROLE_ADMIN", "SYSTEM_VARIABLES_ADMIN"} {
+				if strings.Contains(line, forbidden) {
+					t.Errorf("%s holds %s: %s", user, forbidden, line)
+				}
+			}
+		}
+	}
+}
+
+func TestMySQLRuntimeLoginIsLockedWithoutAPassword(t *testing.T) {
+	sql := MySQLPlatformUsersSQL("app", MySQLPasswords{Admin: "a1", App: "b2", AuthAdmin: "c3", Watcher: "d4"})
+	if !strings.Contains(sql, "ALTER USER IF EXISTS 'excalibase_runtime'@'%' ACCOUNT LOCK;") {
+		t.Error("a runtime login a restored copy brought is left open")
+	}
+	if strings.Contains(sql, "CREATE USER IF NOT EXISTS 'excalibase_runtime'") {
+		t.Error("a runtime login was created without a password")
+	}
+}

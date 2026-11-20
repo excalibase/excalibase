@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -10,18 +11,26 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
 )
 
 // AppEnvResolver reads, at deploy time, the values an app's variables point
-// at. A database reference resolves to the project's own login — the one its
-// connection strings show — never the platform's excalibase_app role.
+// at. A database reference resolves to the project's runtime login, never the
+// platform's excalibase_app role and, while the runtime login is on, never the
+// owner's: that login can create and change logins on Postgres 16 and later
+// (EXC-765).
 type AppEnvResolver struct {
 	vault     vaultclient.VaultClient
 	instances storage.InstanceStore
+	flags     features.Flags
 }
+
+// SetFeatures gives the resolver the dark-feature switches it consults.
+func (r *AppEnvResolver) SetFeatures(flags features.Flags) { r.flags = flags }
 
 var _ k8s.Resolver = (*AppEnvResolver)(nil)
 
@@ -91,9 +100,17 @@ func (r *AppEnvResolver) databaseLogin(projectID, databaseName string) (database
 	if r.vault == nil {
 		return databaseLogin{}, errNoVault
 	}
-	record, err := r.vault.Get(vaultCredentialPath(projectID, roleAdmin))
+	role := roleAdmin
+	if features.Enabled(context.Background(), r.flags, features.AppRuntimeLogin) {
+		role = roleRuntime
+	}
+	record, err := r.vault.Get(vaultCredentialPath(projectID, role))
+	if errors.Is(err, vault.ErrNotFound) && role == roleRuntime {
+		log.Printf("app env: project %s has no runtime login filed yet", projectID)
+		return databaseLogin{}, errors.New("the project's database login for apps is still being created; deploy again in a few minutes")
+	}
 	if err != nil {
-		log.Printf("app env: read owner login for %s: %v", projectID, err)
+		log.Printf("app env: read %s login for %s: %v", role, projectID, err)
 		return databaseLogin{}, errors.New("could not read the project's database login")
 	}
 	login := databaseLogin{

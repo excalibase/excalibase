@@ -25,7 +25,7 @@ var projectStatementRoleFilter = buildProjectStatementRoleFilter()
 func buildProjectStatementRoleFilter() string {
 	names := make([]string, 0, len(pgroles.ReservedNames()))
 	for _, name := range pgroles.ReservedNames() {
-		if name != roleApp {
+		if name != roleApp && name != roleRuntime {
 			names = append(names, sqlQuote(name))
 		}
 	}
@@ -33,7 +33,7 @@ func buildProjectStatementRoleFilter() string {
 	for _, prefix := range pgroles.ReservedPrefixes() {
 		prefixes = append(prefixes, sqlQuote(prefix))
 	}
-	return "NOT r.rolsuper AND NOT r.rolreplication AND (r.rolname = " + sqlQuote(roleApp) + " OR NOT (" +
+	return "NOT r.rolsuper AND NOT r.rolreplication AND (r.rolname IN (" + sqlQuote(roleApp) + ", " + sqlQuote(roleRuntime) + ") OR NOT (" +
 		"lower(r.rolname) = ANY (ARRAY[" + strings.Join(names, ", ") + "]::text[])" +
 		" OR EXISTS (SELECT 1 FROM unnest(ARRAY[" + strings.Join(prefixes, ", ") + "]::text[]) AS p(prefix)" +
 		" WHERE starts_with(lower(r.rolname), p.prefix))))"
