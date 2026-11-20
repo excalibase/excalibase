@@ -11,6 +11,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/appbuilds"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/registryblock"
 )
 
 const (
@@ -41,6 +42,7 @@ func (a *AppRunner) appStep(sandbox box, spec appbuilds.RunSpec, name, proxy str
 		size.cpuMillis, memory, pids = int64(spec.CPUMillis), limit.Value(), buildPids
 	}
 	planned := a.boxStep(sandbox, a.appImage(name), size.cpuMillis, memory, pids, planFor(spec.Builder).online[name])
+	planned.host.ExtraHosts = blockedRegistryHosts()
 	if heavy {
 		planned.host.CPUShares = buildShares
 	}
@@ -61,6 +63,17 @@ func (a *AppRunner) appStep(sandbox box, spec appbuilds.RunSpec, name, proxy str
 		a.lifecycleStep(sandbox, spec, name, proxy, planned)
 	}
 	return planned
+}
+
+// blockedRegistryHosts pins each blocked registry to loopback in the step's hosts file, as the app build pod does,
+// so a FROM of such a registry fails to resolve even before the egress sidecar refuses it.
+func blockedRegistryHosts() []string {
+	blocked := registryblock.Hosts()
+	hosts := make([]string, 0, len(blocked))
+	for _, host := range blocked {
+		hosts = append(hosts, host+":127.0.0.1")
+	}
+	return hosts
 }
 
 func (a *AppRunner) appImage(name string) string {

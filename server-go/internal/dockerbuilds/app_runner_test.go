@@ -315,3 +315,21 @@ func TestAnAppBuildsLogsAndRemoveCoverEveryStep(t *testing.T) {
 		t.Fatalf("left behind: %d containers, %v volumes, %v networks", len(engine.containers), engine.volumes, engine.networks)
 	}
 }
+
+// A blocked registry (ttl.sh) must fail to resolve inside every app step, as the app build pod pins it to loopback.
+func TestEveryAppStepPinsTheBlockedRegistriesToLoopback(t *testing.T) {
+	for _, builder := range []appbuilds.Builder{appbuilds.BuilderDockerfile, appbuilds.BuilderBuildpacks} {
+		engine := newFakeEngine()
+		app := newTestAppRunner(t, engine, "runsc", false)
+		startApp(t, app, builder)
+		for _, name := range planFor(builder).chain {
+			created := engine.get(step(name))
+			if created == nil {
+				t.Fatalf("%s: no %s step", builder, name)
+			}
+			if !slices.Contains(created.host.ExtraHosts, "ttl.sh:127.0.0.1") {
+				t.Errorf("%s step %s hosts %v: ttl.sh is not pinned to loopback", builder, name, created.host.ExtraHosts)
+			}
+		}
+	}
+}
