@@ -106,16 +106,12 @@ func TestSchemaMount_MemberPassesThrough(t *testing.T) {
 	}
 }
 
-func TestSchemaMount_PlatformAdminBypasses(t *testing.T) {
+func TestSchemaMount_HumanPlatformAdminOutsideTheOrgIsRefused(t *testing.T) {
 	inst := &domain.DatabaseInstance{ProjectID: "proj-any", OrgID: "org-any"}
 	admin := &domain.User{ID: "u-admin", Role: "platform_admin"}
 	reached := false
-	// No membership row: admin must still pass via the platform bypass.
 	router := schemaMount(inst, nil, &reached)
-	if code := do(t, router, "GET", "/api/schema/proj-any/tables", admin); code != http.StatusOK {
-		t.Errorf("platform_admin: got %d, want 200 (support/incident bypass must survive)", code)
-	}
-	if !reached {
-		t.Error("platform_admin did not reach the guarded handler")
+	if code := do(t, router, "GET", "/api/schema/proj-any/tables", admin); code != http.StatusNotFound || reached {
+		t.Errorf("platform_admin without membership: got %d reached=%v, want 404 (EXC-757)", code, reached)
 	}
 }

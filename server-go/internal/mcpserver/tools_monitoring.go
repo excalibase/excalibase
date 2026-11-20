@@ -33,11 +33,12 @@ func monitoringTools() []entry {
 		tool("get_database_info", "The project database's disk (size, limit, used), plan, CPU, memory and tunable settings; use it when a disk fills up. No secrets. "+
 			"Postgres on Kubernetes only: a MySQL project, or a database on a single host, is refused.", readTool, getDatabaseInfo),
 		tool("get_db_endpoint", "Where to connect to the project's database from outside: host, port, TLS and CA certificate, and connection strings that carry no password. "+
+			"There is no internal address: an app hosted on Excalibase gets DATABASE_URL injected (declare it with database_env in create_app or update_app). "+
 			"Needs Developer. Opening or closing the public port is an Admin's choice in Studio.", readTool, getDBEndpoint),
 		tool("get_auth_settings", "How the project's end users may sign in: email verification and site URL always; redirect URLs and who may sign up only while a sign-in flag "+
 			"(OAuth, email code or guest) is on; email codes and guest sign-in while their features are on; and the OAuth providers with their callback URLs while OAuth is on. "+
 			"mfaEnabled says whether end-user MFA is on (its key is never shown). Client secrets are never shown. Read-only; needs Developer.", readTool, getAuthSettings),
-		dark(features.DBReadAddress, tool("get_db_read_address", "The database's read-only address to its replicas, internal and public, and whether it is on. Needs Developer. Read-only.",
+		dark(features.DBReadAddress, tool("get_db_read_address", "The database's read-only public address to its replicas, and whether it is on. Needs Developer. Read-only.",
 			readTool, getDBReadAddress)),
 	}
 }
@@ -68,43 +69,28 @@ type endpointStringsView struct {
 	MongoRequireTLS string `json:"mongoRequireTls,omitempty"`
 }
 
-type internalEndpointView struct {
-	Host             string `json:"host"`
-	Port             int    `json:"port"`
-	ConnectionString string `json:"connectionString"`
-	MongoHost        string `json:"mongoHost,omitempty"`
-	MongoPort        int    `json:"mongoPort,omitempty"`
-	MongoConnection  string `json:"mongoConnectionString,omitempty"`
-}
-
 type endpointView struct {
-	PublicOffered     bool                 `json:"publicOffered"`
-	PublicEnabled     bool                 `json:"publicEnabled"`
-	Available         bool                 `json:"available"`
-	Host              string               `json:"host"`
-	Port              int                  `json:"port"`
-	RequireTLS        bool                 `json:"requireTls"`
-	Database          string               `json:"database"`
-	Username          string               `json:"username"`
-	ConnectionStrings endpointStringsView  `json:"connectionStrings"`
-	CACertificate     string               `json:"caCertificate"`
-	Internal          internalEndpointView `json:"internal"`
-	MongoPort         int                  `json:"mongoPort,omitempty"`
-	MongoAvailable    *bool                `json:"mongoAvailable,omitempty"`
-	SingleHost        bool                 `json:"singleHost,omitempty"`
-	Engine            string               `json:"engine,omitempty"`
+	PublicOffered     bool                `json:"publicOffered"`
+	PublicEnabled     bool                `json:"publicEnabled"`
+	Available         bool                `json:"available"`
+	Host              string              `json:"host"`
+	Port              int                 `json:"port"`
+	RequireTLS        bool                `json:"requireTls"`
+	Database          string              `json:"database"`
+	Username          string              `json:"username"`
+	ConnectionStrings endpointStringsView `json:"connectionStrings"`
+	CACertificate     string              `json:"caCertificate"`
+	MongoPort         int                 `json:"mongoPort,omitempty"`
+	MongoAvailable    *bool               `json:"mongoAvailable,omitempty"`
+	SingleHost        bool                `json:"singleHost,omitempty"`
+	Engine            string              `json:"engine,omitempty"`
 }
 
 type readAddressView struct {
-	Engine     string `json:"engine,omitempty"`
-	Replicas   int    `json:"replicas"`
-	Reason     string `json:"reason,omitempty"`
-	SingleHost bool   `json:"singleHost,omitempty"`
-	Internal   *struct {
-		Host             string `json:"host"`
-		Port             int    `json:"port"`
-		ConnectionString string `json:"connectionString"`
-	} `json:"internal,omitempty"`
+	Engine           string `json:"engine,omitempty"`
+	Replicas         int    `json:"replicas"`
+	Reason           string `json:"reason,omitempty"`
+	SingleHost       bool   `json:"singleHost,omitempty"`
 	PublicOffered    bool   `json:"publicOffered"`
 	PublicOpen       bool   `json:"publicOpen"`
 	Enabled          bool   `json:"enabled"`

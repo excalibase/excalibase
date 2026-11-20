@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/excalibase/provisioning-poc/internal/adminconsole"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -134,6 +135,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 	provSvc := service.NewProvisioningService(instances, provisioner.NewFactory(), mock)
 	return &handlerDeps{
 		provHandler:           handler.NewProvisioningHandler(provSvc, nil),
+		adminConsoleHandler:   handler.NewAdminConsoleHandler(matrixConsole{}, matrixConsole{}),
 		metricsHandler:        handler.NewMetricsHandler(service.NewMetricsService(instances, mock, dir)),
 		backupHandler:         handler.NewBackupHandler(service.NewBackupService(instances, mock, dir, nil)),
 		perfHandler:           handler.NewPerformanceHandler(service.NewPerformanceService(instances, mock)),
@@ -398,10 +400,17 @@ var permissionRoutes = []permissionRoute{
 	{group: "tier config update", method: http.MethodPut, path: "/api/admin/tiers/STANDARD", unrestrictedOnly: true},
 	{group: "operator install", method: http.MethodPost, path: "/api/setup/install/postgres", unrestrictedOnly: true},
 	{group: "admin force drop", method: http.MethodDelete, path: "/api/admin/projects/proj-a", unrestrictedOnly: true},
+	{group: "admin console users", method: http.MethodGet, path: "/api/admin/console/users", unrestrictedOnly: true},
+	{group: "admin console suspend", method: http.MethodPost, path: "/api/admin/console/users/u-1/suspend", unrestrictedOnly: true},
 }
 
 // refusedBy reports whether the caller must be refused on the route.
 func refusedBy(caller string, route permissionRoute) bool {
+	// An unrestricted-only route refuses a narrowed token whatever the method:
+	// the admin console's reads are cross-tenant personal data.
+	if route.unrestrictedOnly && (caller == callerAdminReadOnly || caller == callerAdminWrite) {
+		return true
+	}
 	if !isMutating(route.method) {
 		return false
 	}
@@ -464,4 +473,60 @@ func matrixLogDrains(instances *fakestore.Instances) *service.LogDrainService {
 			}
 			return inst, nil
 		}})
+}
+
+// matrixConsole answers the admin console from nothing: the matrix asserts
+// who is let through, so a request past the gates must reach a handler that
+// answers instead of panicking on a missing store.
+type matrixConsole struct{}
+
+func (matrixConsole) Users(context.Context, adminconsole.UserQuery) (adminconsole.Page[adminconsole.UserRow], error) {
+	return adminconsole.Page[adminconsole.UserRow]{Items: []adminconsole.UserRow{}}, nil
+}
+func (matrixConsole) Orgs(context.Context, adminconsole.OrgQuery) (adminconsole.Page[adminconsole.OrgRow], error) {
+	return adminconsole.Page[adminconsole.OrgRow]{Items: []adminconsole.OrgRow{}}, nil
+}
+func (matrixConsole) Overview(context.Context) (*adminconsole.Overview, error) {
+	return &adminconsole.Overview{}, nil
+}
+func (matrixConsole) Project(context.Context, adminconsole.Actor, string, string) (*adminconsole.ProjectDetail, error) {
+	return nil, adminconsole.ErrProjectNotFound
+}
+func (matrixConsole) Suspend(context.Context, adminconsole.Actor, string, string) (*adminconsole.Result, error) {
+	return &adminconsole.Result{}, nil
+}
+func (matrixConsole) Unsuspend(context.Context, adminconsole.Actor, string, string) (*adminconsole.Result, error) {
+	return &adminconsole.Result{}, nil
+}
+
+// EXC-757: outside /admin a human platform admin is a customer. Every
+// /api/orgs/{orgId}/... route, invite path included, answers 404 to a platform
+// admin who does not belong to that org, whatever the method.
+func TestForeignPlatformAdminGetsNothingFromOrgRoutes(t *testing.T) {
+	router, _, admins, _ := buildMatrixPlatform(t, config.AppConfig{DeploymentMode: "selfhosted"}, func(deps *handlerDeps, platform *fakePlatform) {
+		deps.orgHandler = handler.NewOrgHandler(platform, nil)
+	})
+	mux, ok := router.(*chi.Mux)
+	if !ok {
+		t.Fatal("buildRouter must return a *chi.Mux")
+	}
+	seen := 0
+	walk := func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if !strings.Contains(pattern, "/api/orgs/{orgId}") {
+			return nil
+		}
+		seen++
+		path := strings.ReplaceAll(pattern, "{orgId}", matrixOrgA)
+		path = concretePath(path)
+		if code := matrixRequest(router, method, path, admins[callerAdminSession]); code != http.StatusNotFound {
+			t.Errorf("%s %s: foreign platform admin got %d, want 404", method, pattern, code)
+		}
+		return nil
+	}
+	if err := chi.Walk(mux, walk); err != nil {
+		t.Fatal(err)
+	}
+	if seen < 8 {
+		t.Fatalf("walked only %d org routes; the router lost mounts", seen)
+	}
 }

@@ -30,13 +30,14 @@ rot_sessions() {
 }
 
 rotation_journey() {
-  local pid=$1 engine=$2 container=$3 cred user owner_password db rp out held sleep_sql
+  local pid=$1 engine=$2 container=$3 cred user owner_password db rp out held sleep_sql rotated code new_password
   echo "== read-only login and rotation ($engine)"
   cred=$(rot_api "https://studio.localhost:$PORT/api/provision/$pid/credentials")
-  user=$(echo "$cred" | rot_json 'd["username"]'); owner_password=$(echo "$cred" | rot_json 'd["password"]')
-  db=$(echo "$cred" | rot_json 'd["databaseName"]'); rp=$(echo "$cred" | rot_json 'd.get("readerPassword","")')
+  user=$(echo "$cred" | rot_json 'd["username"]'); owner_password=$(vault_field "$pid" admin password)
+  db=$(echo "$cred" | rot_json 'd["databaseName"]'); rp=$(vault_field "$pid" excalibase_reader password)
   [ "$(echo "$cred" | rot_json 'd.get("readerUsername","")')" = excalibase_reader ] && [ -n "$rp" ] \
-    && ok "$engine credentials carry the read-only login" || ko "$engine credentials: no read-only login"
+    && ok "$engine credentials name the read-only login" || ko "$engine credentials: no read-only login"
+  case "$cred" in *'"password"'*|*readerPassword*) ko "$engine credentials route returns a password" ;; *) ok "$engine credentials route returns no password" ;; esac
 
   rot_sql "$engine" "$container" "$user" "$owner_password" "$db" "CREATE TABLE rot_notes (id int); INSERT INTO rot_notes VALUES (1);" >/dev/null
   out=$(rot_sql "$engine" "$container" excalibase_reader "$rp" "$db" "SELECT COUNT(*) FROM rot_notes")
@@ -56,12 +57,14 @@ rotation_journey() {
   fi
   for i in $(seq 30); do held=$(rot_sessions "$engine" "$container" "$user"); [ "${held:-0}" -ge 1 ] && break; sleep 1; done
   [ "${held:-0}" -ge 1 ] && ok "$engine owner session held open" || ko "$engine no held owner session"
-  code=$(rot_api -o /dev/null -w '%{http_code}' -X POST "https://studio.localhost:$PORT/api/provision/$pid/credentials/rotate")
+  rotated=$(rot_api -w ' %{http_code}' -X POST "https://studio.localhost:$PORT/api/provision/$pid/credentials/rotate")
+  code=${rotated##* }; rotated=${rotated% *}
   [ "$code" = 200 ] && ok "$engine passwords rotated" || ko "$engine rotate answered $code"
+  new_password=$(echo "$rotated" | rot_json 'd.get("password","")')
+  [ -n "$new_password" ] && ok "$engine rotate shows the new password once" || ko "$engine rotate showed no password"
   held=$(rot_sessions "$engine" "$container" "$user")
   [ "$held" = 0 ] && ok "$engine rotation ended the session the old password opened" || ko "$engine sessions left after rotation: $held"
-  cred=$(rot_api "https://studio.localhost:$PORT/api/provision/$pid/credentials")
-  out=$(rot_sql "$engine" "$container" "$user" "$(echo "$cred" | rot_json 'd["password"]')" "$db" "SELECT COUNT(*) FROM rot_notes")
+  out=$(rot_sql "$engine" "$container" "$user" "$new_password" "$db" "SELECT COUNT(*) FROM rot_notes")
   [ "$out" = 1 ] && ok "$engine new owner password opens the database" || ko "$engine after rotation: ${out:0:200}"
   out=$(rot_sql "$engine" "$container" "$user" "$owner_password" "$db" "SELECT 1")
   [ "$out" != 1 ] && ok "$engine old owner password is refused" || ko "$engine old password still opens the database"

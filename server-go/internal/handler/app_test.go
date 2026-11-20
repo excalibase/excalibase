@@ -208,12 +208,19 @@ func setupAppRouterWithSources(t *testing.T, sources *fakeSources) (chi.Router, 
 }
 
 func setupAppRouterWithFlags(t *testing.T, sources *fakeSources, flags features.Flags) (chi.Router, *fakeAppStore, *fakeSources) {
+	return setupAppRouterAsRole(t, sources, flags, domain.OrgRoleDeveloper)
+}
+
+// setupAppRouterAsRole mounts the app routes under a caller holding role on
+// the project, the way RequireProjectAccess resolves one in production.
+func setupAppRouterAsRole(t *testing.T, sources *fakeSources, flags features.Flags, role string) (chi.Router, *fakeAppStore, *fakeSources) {
 	t.Helper()
 	store := newFakeAppStore()
 	h := NewAppHandler(store, sources, testAppRoute)
 	h.SetFeatures(flags)
 	h.SetAppLimits(fakeAppLimits{limit: testAppLimit})
 	r := chi.NewRouter()
+	r.Use(callerWithProjectRole(role))
 	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })
 	return r, store, sources
 }

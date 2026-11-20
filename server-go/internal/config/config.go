@@ -65,9 +65,17 @@ type AppConfig struct {
 	DeploymentMode              string // "selfhosted" (default) or "cloud"
 	PublicBaseURL               string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
 	MCPDataPlaneURL             string // where test_api_request reaches the data plane; empty turns it off
-	StudioURL                   string // Studio origin that emailed verification and reset links open
-	AuthInternalURL             string // excalibase-auth inside the platform network; SDK key management calls it
-	RegistrationMode            string // "open" (default) or "invite" — invite closes open studio signup
+	// AdminHost is the hostname the operator console is served at (EXC-757):
+	// /api/admin answers there and nowhere else. When the Access team and AUD
+	// are set too, every request on that host must carry a valid Cloudflare
+	// Access assertion, so a forged Host header sent straight to the origin
+	// gets nothing.
+	AdminHost             string
+	AdminAccessTeamDomain string
+	AdminAccessAud        string
+	StudioURL             string // Studio origin that emailed verification and reset links open
+	AuthInternalURL       string // excalibase-auth inside the platform network; SDK key management calls it
+	RegistrationMode      string // "open" (default) or "invite" — invite closes open studio signup
 	// PublicPort serves the edge only; Port serves in-cluster callers and
 	// never believes X-Forwarded-For.
 	PublicPort string
@@ -220,6 +228,10 @@ type AppConfig struct {
 	ProjectDBStatementTimeout time.Duration
 	ProjectDBLockTimeout      time.Duration
 
+	// WALArchiveAlertAfter is how long a database's WAL archiving may fail
+	// before the platform raises an alert (EXC-784).
+	WALArchiveAlertAfter time.Duration
+
 	// AutoMigrate applies a bundle's declared schema to the project database
 	// at deploy time. EXCALIBASE_AUTO_MIGRATE=false defers it to an explicit
 	// POST /api/projects/{projectId}/schema/apply.
@@ -335,6 +347,8 @@ type AppConfig struct {
 	// DarkFeatures are the features shipped dark that this install turned on
 	// (EXC-554); feature code asks Features(), never this list.
 	DarkFeatures []features.Feature
+	// SignupsPerHour is how many accounts one network (a /24, or an IPv6 /64) may open per hour (EXC-755).
+	SignupsPerHour int
 	// LogRetention is how long Loki keeps each plan's project logs (EXC-659).
 	LogRetention LogRetention
 	// AppRuntimeClass names the sandbox RuntimeClass every app pod runs under.
@@ -515,6 +529,9 @@ func load() AppConfig {
 		DeploymentMode:                 deploymentMode,
 		PublicBaseURL:                  envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
 		MCPDataPlaneURL:                mcpDataPlaneURL(),
+		AdminHost:                      strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_HOST"))),
+		AdminAccessTeamDomain:          strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_ACCESS_TEAM_DOMAIN"))),
+		AdminAccessAud:                 strings.TrimSpace(os.Getenv("ADMIN_ACCESS_AUD")),
 		StudioURL:                      strings.TrimRight(strings.TrimSpace(os.Getenv("STUDIO_URL")), "/"),
 		AuthInternalURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_INTERNAL_URL")), "/"),
 		KubeconfigPath:                 envOr("KUBECONFIG_PATH", ""),
@@ -547,6 +564,7 @@ func load() AppConfig {
 		DockerTLSVerify:                envOr("DOCKER_TLS_VERIFY", "") != "",
 		RestoreReadyTimeout:            envDuration("EXCALIBASE_RESTORE_READY_TIMEOUT", defaultRestoreReadyTimeout),
 		PauseTimeout:                   envDuration("EXCALIBASE_PAUSE_TIMEOUT", defaultPauseTimeout),
+		WALArchiveAlertAfter:           envDuration("EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER", defaultWALArchiveAlertAfter),
 		DeployWait:                     envDuration("EXCALIBASE_DEPLOY_WAIT", defaultDeployWait),
 		PlatformDBMaxConns:             envPlatformDBMaxConns(),
 		SchedulerEnabled:               envBool("EXCALIBASE_SCHEDULER_ENABLED", true),
@@ -599,6 +617,7 @@ func load() AppConfig {
 		SitesEnabled:                   os.Getenv("SITES_ENABLED") == "true",
 		Sites:                          loadSites(),
 		DarkFeatures:                   loadDarkFeatures(),
+		SignupsPerHour:                 envInt("SIGNUPS_PER_NETWORK_PER_HOUR", 10),
 		LogRetention:                   loadLogRetention(),
 		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
 		MySQLEnabled:                   os.Getenv("MYSQL_ENABLED") == "true",
@@ -745,6 +764,53 @@ func (c AppConfig) CheckPublicListener() error {
 	return nil
 }
 
+// CheckAdminHost refuses an admin-console fence that cannot work, and a cloud
+// install whose host is not behind Access. A cloud install with no ADMIN_HOST
+// boots with the console off (AdminConsoleDisabled). It refuses: a host that
+// is not a bare hostname, Access settings without a host to fence, or half of
+// the Access pair, which would silently leave the console behind the host
+// header alone.
+func (c AppConfig) CheckAdminHost() error {
+	for name, value := range map[string]string{"ADMIN_HOST": c.AdminHost, "ADMIN_ACCESS_TEAM_DOMAIN": c.AdminAccessTeamDomain} {
+		if strings.ContainsAny(value, "/@ ") || strings.Contains(value, "://") {
+			return fmt.Errorf("%s %q must be a bare hostname such as admin.example.com", name, value)
+		}
+	}
+	// A cloud install with a host must put it behind Access: a host alone is
+	// only a header an attacker can send straight to the origin.
+	if c.IsCloud() && c.AdminHost != "" && (c.AdminAccessTeamDomain == "" || c.AdminAccessAud == "") {
+		return errors.New("ADMIN_HOST on a cloud install needs ADMIN_ACCESS_TEAM_DOMAIN and ADMIN_ACCESS_AUD: the admin console must sit behind Cloudflare Access")
+	}
+	if (c.AdminAccessTeamDomain == "") != (c.AdminAccessAud == "") {
+		return errors.New("ADMIN_ACCESS_TEAM_DOMAIN and ADMIN_ACCESS_AUD must be set together")
+	}
+	if c.AdminAccessTeamDomain != "" && c.AdminHost == "" {
+		return errors.New("ADMIN_ACCESS_TEAM_DOMAIN needs ADMIN_HOST: there is no admin host to put behind Access")
+	}
+	return nil
+}
+
+// AdminConsoleDisabled is whether the operator console is off: a cloud install
+// with no ADMIN_HOST serves no /api/admin route at all, on any host, except the
+// service-account routes. Self-hosted keeps serving it.
+func (c AppConfig) AdminConsoleDisabled() bool {
+	return c.IsCloud() && c.AdminHost == ""
+}
+
+// AdminOrigin is the page origin of the admin console, derived from ADMIN_HOST,
+// or "" when none is set. The Studio session cookie is trusted from it.
+func (c AppConfig) AdminOrigin() string {
+	if c.AdminHost == "" {
+		return ""
+	}
+	return "https://" + c.AdminHost
+}
+
+// AdminAccessEnabled is whether the admin host demands a Cloudflare Access assertion.
+func (c AppConfig) AdminAccessEnabled() bool {
+	return c.AdminHost != "" && c.AdminAccessTeamDomain != "" && c.AdminAccessAud != ""
+}
+
 // CheckDenoProvisioningURL refuses a k8s install that runs functions without
 // naming where its per-project runtimes reach provisioning: ctx.storage would
 // fail in every project, and no address is guessed in its place.
@@ -798,6 +864,10 @@ const (
 // defaultRestoreReadyTimeout bounds the wait for a recovered database to be
 // observed ready. Restores replay WAL, so the budget is generous.
 const defaultRestoreReadyTimeout = 15 * time.Minute
+
+// defaultWALArchiveAlertAfter is long enough that a restart or a brief store
+// outage clears first, and short next to the hours a credential or a disk lasts.
+const defaultWALArchiveAlertAfter = 30 * time.Minute
 
 // defaultPauseTimeout bounds each observed wait inside a pause. Stopping a
 // busy database takes minutes: the pre-pause backup has to finish and

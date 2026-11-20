@@ -1,6 +1,7 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { VaultPage } from './VaultPage';
 import { api } from '../api/client';
 import { toast } from '../utils/toast';
@@ -13,7 +14,7 @@ const PATHS = ['projects/alpha/db', 'projects/beta/db', 'pki/root'];
 function stubVault({ sealed = false } = {}) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/vault/status') return Promise.resolve({ data: { sealed } } as never);
-    if (url === '/vault/secrets-list') return Promise.resolve({ data: { paths: PATHS } } as never);
+    if (url.startsWith('/vault/secrets-list')) return Promise.resolve({ data: { paths: PATHS } } as never);
     if (url === '/vault/secrets/projects/alpha/db') {
       return Promise.resolve({ data: { username: 'alpha_user', password: 'hunter2' } } as never);
     }
@@ -25,7 +26,11 @@ function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <VaultPage />
+      <MemoryRouter initialEntries={['/project/alpha/vault']}>
+        <Routes>
+          <Route path="/project/:projectId/vault" element={<VaultPage />} />
+        </Routes>
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -125,5 +130,24 @@ describe('VaultPage', () => {
     expect(api.delete).toHaveBeenCalledTimes(1);
     await act(async () => finish());
     await waitFor(() => expect(screen.queryByTestId('confirm-modal')).not.toBeInTheDocument());
+  });
+
+  // EXC-761: the page lists one project's secrets, never the whole platform's.
+  test('asks only for the open project\'s secrets', async () => {
+    renderPage();
+    await screen.findByText('projects/alpha/db');
+    expect(api.get).toHaveBeenCalledWith('/vault/secrets-list?prefix=projects%2Falpha%2F');
+    expect(api.get).not.toHaveBeenCalledWith('/vault/secrets-list');
+  });
+
+  // EXC-761: a refusal is not an empty vault.
+  test('shows a refusal as an error, not as "No secrets found"', async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === '/vault/status') return Promise.resolve({ data: { sealed: false } } as never);
+      return Promise.reject({ response: { status: 403, data: { error: 'insufficient permissions' } } });
+    });
+    renderPage();
+    expect(await screen.findByTestId('vault-error')).toBeInTheDocument();
+    expect(screen.queryByText('No secrets found.')).not.toBeInTheDocument();
   });
 });

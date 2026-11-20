@@ -136,8 +136,10 @@ The 15% safety headroom is set via `CAPACITY_HEADROOM_PERCENT` env. Set to 0 if 
 The studio's **Platform Admin** page (`/admin`) has the buttons. CLI equivalent:
 
 ```bash
-# Bypasses deletion_protection. Audited.
-curl -X DELETE -H "Authorization: Bearer $PAT" \
+# Bypasses deletion_protection. Audited; a written reason (500 characters
+# at most) is required and goes into the audit entry.
+curl -X DELETE -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  -d '{"reason":"abandoned, holding a node"}' \
   https://<host>/api/admin/projects/proj-abc123
 ```
 
@@ -311,7 +313,10 @@ indefinitely and the only way to find them is
 ```bash
 # ?cascade=true is required — without it the call refuses to avoid
 # orphaning projects whose org row would still exist.
-curl -X DELETE -H "Authorization: Bearer $PAT" \
+# A written reason is required (JSON body, 500 characters at most) and is
+# audited. The org's owner is suspended too, so they cannot sign in again.
+curl -X DELETE -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  -d '{"reason":"proxy abuse across every project"}' \
   "https://<host>/api/admin/orgs/<orgId>?cascade=true"
 ```
 
@@ -569,7 +574,7 @@ curl -X POST -H "Authorization: Bearer $PAT" \
 Find rows waiting for a retry with
 `SELECT project_id, failure_reason FROM database_instances WHERE status = 'BACKUPS_PENDING_DELETE'`.
 `DELETE /api/admin/projects/{projectId}` (force drop) accepts the same
-`confirmDeleteBackups` body field. With `Prefer: respond-async` it answers
+`confirmDeleteBackups` body field, and requires a `reason`. With `Prefer: respond-async` it answers
 202 once the project is `DELETING` and tears it down in the background; the
 row is gone when it finishes, or stays `DELETING` with `deletion_step` and
 `deletion_error`. A teardown never depends on the request staying connected.
@@ -1101,7 +1106,27 @@ Secret. If it still fails, check provisioning's log for
 connection is being refused) and confirm the `platform-nats` Secret was
 seeded by the bootstrap Job.
 
+## 6.5b. WAL archive guards (EXC-784)
+
+Two guards, both **on unless switched off** (`FEATURE_WALARCHIVEALERT=false`, `FEATURE_FREEWALUPLOAD=false`), on Kubernetes and on a single host.
+
+**Archive alerts.** A database whose CloudNativePG `ContinuousArchiving` condition has been False for `EXCALIBASE_WAL_ARCHIVE_ALERT_AFTER` (default `30m`) raises a platform alert, metric `wal.archiving:<namespace>/<cluster>`, severity CRITICAL. A project whose backup credential renewal fails on every pass for the same time raises `backup.renewal:<project>`. Both go through the same path as the pod-pressure alerts (EXC-747): the platform alerts table (the admin alerts list) and an email to every verified platform admin when a mailer is configured: one mail per kind of alert (`backup.renewal`, `wal.archiving`, `wal.shipping`, `wal.monitor`) per hour, listing every affected project, so one shared cause is one mail while each project keeps its own alert row. Alerts of a kind raised close together are batched for 30 seconds; one raised inside the hour after a mail waits for the next mail of its kind, sent when the hour is up, so none is dropped, and an alert that has resolved by the time that mail goes out is left out of it (read once per mail; if the alerts table cannot be read at that moment, every queued alert is listed). Mail still queued when the process exits (inside that window, or waiting out the hour) is lost; the alert rows remain, and the alerts list is the source of truth. They resolve by themselves. A paused (hibernated) cluster never alerts: nothing runs and its last backup stays valid. On a single host, closed WAL waits in the project's container until the one-minute sweep ships it, so a store that refuses uploads fills that container's disk; a project whose shipping fails on every pass for the same time raises `wal.shipping:<project>` (paused projects are not swept and never alert).
+
+**Free uploads hourly.** Free databases get `archive_timeout = 1h`; Standard and Enterprise keep the operator's 5 minutes. An idle database otherwise writes a 16 MB segment every 5 minutes (about 4.6 GB a day) that fills a 5Gi disk within days if uploads fail. The cost: if a Free database's disk is destroyed, up to an hour of writes can be lost. New Free clusters get the setting at creation; existing ones get it on the next platform reconcile pass (at startup and every 10 minutes, no restart: `archive_timeout` reloads). On a single host the bootstrap organization is on Free, so every project there gets it unless `FEATURE_FREEWALUPLOAD=false`; a new Free container is started with it, and the same reconcile pass reads each running Free container's `archive_timeout` and reloads it when it differs (no restart); a restored or major-upgraded project, which comes back on 5 minutes, and a paused project after it resumes are corrected by that pass too. A project moved to another plan loses it with the plan change (Kubernetes). To undo, set `FEATURE_FREEWALUPLOAD=false`: the same reconcile pass then removes `archive_timeout` from every Kubernetes cluster (the operator's 5 minutes returns) and sets single-host containers back to `5min` explicitly (a `RESET` would leave Postgres' own 0, which never closes a quiet segment). No manual step. The reconcile skips projects still being provisioned or failed, which have no cluster yet.
+
 ## 6.6. Project database credential rotation
+
+**Passwords are shown once (`FEATURE_ONETIMECREDENTIALS`, on by default, EXC-759).** With the
+flag on, a database owner password is returned only by the call that sets it:
+`POST /api/provision` and `POST /api/provision/{id}/database` accept an
+optional `password` (16 to 128 characters; blank generates one) and return it
+once; `POST .../credentials/rotate` takes an optional `{"password": ...}` and
+returns the new one once. `GET .../credentials` carries no password at all (the
+owner's or the read-only login's) and its `connectionUrl` holds `<password>`.
+The engine, functions, backups, the watcher and app deploys read the vault
+directly and are not affected. A project created before the flag has no way to
+read its password back: reset it. The flag is on unless
+`FEATURE_ONETIMECREDENTIALS=false` is set, on Kubernetes and on a single host.
 
 `POST /api/provision/{id}/credentials/rotate` replaces the passwords of every
 platform role filed under `projects/{id}/credentials/` — `auth_admin`, then

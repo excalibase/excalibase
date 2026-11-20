@@ -36,6 +36,8 @@ type MetricsService struct {
 	// singleHost and host sample a Docker or Podman host (EXC-670); nil elsewhere.
 	singleHost SingleHostDatabases
 	host       LoopSampler
+	// cluster checks the Kubernetes cluster itself (pod slots, stuck pods); nil elsewhere.
+	cluster LoopSampler
 }
 
 func NewMetricsService(store storage.InstanceStore, client k8s.KubeClient, storagePath string) *MetricsService {

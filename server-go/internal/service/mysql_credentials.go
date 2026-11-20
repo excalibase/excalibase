@@ -39,7 +39,7 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 		return pc.Fail(err)
 	}
 	passwords := provisioner.MySQLPasswords{
-		Admin: generatePassword(32), App: generatePassword(32),
+		Admin: ownerPasswordOrNew(inst.Password), App: generatePassword(32),
 		AuthAdmin: generatePassword(32), Watcher: generatePassword(32),
 	}
 	if features.Enabled(ctx, s.flags, features.DBReadRole) {
@@ -200,4 +200,12 @@ func (s *ProvisioningService) reapplyMySQLCredentials(ctx context.Context, inst 
 		return err
 	}
 	return mysql.SetUserPasswords(ctx, inst.Namespace, inst.ProjectID, passwords)
+}
+
+// ownerPasswordOrNew is the password the customer's create request carried, or a new one.
+func ownerPasswordOrNew(chosen string) string {
+	if chosen != "" {
+		return chosen
+	}
+	return generatePassword(32)
 }

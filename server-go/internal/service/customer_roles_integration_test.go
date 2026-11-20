@@ -70,7 +70,7 @@ func customerRoleSuite(t *testing.T, image string, createRole bool) {
 	t.Run("function re-passwords and drops only roles the owner created", c.functionManagesOnlyOwnedRoles)
 	t.Run("names are quoted, passwords are data", c.namesAreQuoted)
 	t.Run("a pre-hashed password is stored as given", c.preHashedPassword)
-	t.Run("only the owner and the platform app role may call the functions", c.onlyOwnerAndAppMayCall)
+	t.Run("only the owner may call the functions", c.onlyOwnerMayCall)
 	if createRole {
 		t.Run("owner creates, re-passwords and drops its own roles in SQL", c.ownerManagesRolesInSQL)
 		t.Run("owner cannot grant any predefined role", c.ownerCannotGrantPredefinedRoles)
@@ -208,12 +208,17 @@ func (c *customerRoleCase) preHashedPassword(t *testing.T) {
 	c.pg.assertLogin(t, "cust_hashed", "Unicode-\u00e9\u00df-\u30d1\u30b9")
 }
 
-func (c *customerRoleCase) onlyOwnerAndAppMayCall(t *testing.T) {
+func (c *customerRoleCase) onlyOwnerMayCall(t *testing.T) {
 	reader := c.pg.connect(t, "cust_reader", "Cust-Pass-1")
 	mustFail(t, reader, "SELECT excalibase.create_role('by_reader', 'P-1')", "permission denied")
 	mustFail(t, c.pg.connect(t, mongoWriter, "Mongo-Pass-1"), "SELECT excalibase.drop_role('cust_reader')", "permission denied")
+	// Customer SQL runs as the app role, which must not mint a role (EXC-761);
+	// Studio's role management runs as the owner's login.
 	app := c.pg.connect(t, roleApp, customerAppPassword)
-	mustExec(t, app, "SELECT excalibase.create_role('studio_made', 'Studio-1')")
+	mustFail(t, app, "SELECT excalibase.create_role('by_app', 'Studio-1')", "permission denied")
+	mustFail(t, app, "SELECT excalibase.alter_role_password('cust_reader', 'Studio-1')", "permission denied")
+	mustFail(t, app, "SELECT excalibase.drop_role('cust_reader')", "permission denied")
+	mustExec(t, c.owner, "SELECT excalibase.create_role('studio_made', 'Studio-1')")
 	if !scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
 		JOIN pg_roles o ON o.oid = m.member WHERE r.rolname = 'studio_made' AND o.rolname = $1 AND m.admin_option)`, customerOwner) {
 		t.Fatal("a role Studio created is not the owner's to manage")

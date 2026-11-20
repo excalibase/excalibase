@@ -139,7 +139,7 @@ export function OrgDetailPage() {
   };
 
   const handleDeleteOrg = () => {
-    if (!orgId || !confirm('Delete this organization? This cannot be undone.')) return;
+    if (!orgId || !confirm('Delete this organization? This cannot be undone, and your account will not get a new free organization afterwards.')) return;
     return attempt(async () => {
       await deleteOrg(orgId);
       navigate('/orgs');

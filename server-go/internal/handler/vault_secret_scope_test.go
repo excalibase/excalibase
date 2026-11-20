@@ -127,13 +127,22 @@ func TestVaultSecretReadAllowsAnOperatorWhoIsAMemberOfTheProjectsOrg(t *testing.
 	}
 }
 
-// platform_admin keeps the platform-wide bypass it holds on every other
-// project-bound route. It is the one operator exception, and it is audited.
-func TestVaultSecretReadAllowsAPlatformAdmin(t *testing.T) {
+// A platform service principal reads any tenant's secret; its capability
+// token is what skips the membership lookup, and the read is audited.
+func TestVaultSecretReadAllowsAPlatformServicePrincipal(t *testing.T) {
 	h := vaultScopeHandler(t)
 
-	if code, body := vaultGet(t, h, vaultSecretURL, adminUser(), sessionToken()); code != http.StatusOK {
+	if code, body := vaultGet(t, h, vaultSecretURL, adminUser(), serviceVaultToken()); code != http.StatusOK {
 		t.Fatalf("got %d (%s), want 200", code, body)
+	}
+}
+
+// A human platform admin is a customer of every org but their own (EXC-757).
+func TestVaultSecretReadRefusesAHumanPlatformAdminOutsideTheOrg(t *testing.T) {
+	h := vaultScopeHandler(t)
+
+	if code, body := vaultGet(t, h, vaultSecretURL, adminUser(), sessionToken()); code != http.StatusNotFound {
+		t.Fatalf("got %d (%s), want 404", code, body)
 	}
 }
 
@@ -231,7 +240,7 @@ func TestVaultSecretReadIsAudited(t *testing.T) {
 	h := vaultScopeHandler(t)
 	logged := captureLog(t)
 
-	if code, body := vaultGet(t, h, vaultSecretURL, adminUser(), sessionToken()); code != http.StatusOK {
+	if code, body := vaultGet(t, h, vaultSecretURL, adminUser(), serviceVaultToken()); code != http.StatusOK {
 		t.Fatalf("got %d (%s)", code, body)
 	}
 	assertAudited(t, logged, "vault.secret.read", "admin", vaultProjectA, vaultSecretPath)
