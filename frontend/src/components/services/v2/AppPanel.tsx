@@ -20,13 +20,16 @@ import { tabsFor } from './panelState';
 
 const POLL_MS = 2000;
 
-interface AppTabProps {
+interface AppProps {
   readonly projectId: string;
   readonly app: App;
+}
+
+interface DeploysProps extends AppProps {
   readonly deploys: readonly Deploy[];
 }
 
-function Overview({ projectId, app, deploys }: AppTabProps) {
+function Overview({ projectId, app, deploys }: DeploysProps) {
   const deployApp = useDeployApp(projectId, app.id);
   const [lifecycleError, setLifecycleError] = useState<unknown>(null);
   const customDomains = useCustomDomainsEnabled();
@@ -66,7 +69,7 @@ function Overview({ projectId, app, deploys }: AppTabProps) {
   );
 }
 
-function Deploys({ projectId, app, deploys }: AppTabProps) {
+function Deploys({ projectId, app, deploys }: DeploysProps) {
   const redeploy = useRedeployApp(projectId, app.id);
   const { canDevelop } = useProjectRole(projectId);
   return (
@@ -82,7 +85,7 @@ function Deploys({ projectId, app, deploys }: AppTabProps) {
   );
 }
 
-function VariablesTab({ projectId, app }: AppTabProps) {
+function VariablesTab({ projectId, app }: AppProps) {
   return (
     <div className="space-y-3">
       <Variables env={app.env} />
@@ -93,7 +96,7 @@ function VariablesTab({ projectId, app }: AppTabProps) {
   );
 }
 
-function MetricsTab({ projectId }: AppTabProps) {
+function MetricsTab({ projectId }: Pick<AppProps, 'projectId'>) {
   const { enabled } = useFeatureEnabled('hostmetrics');
   if (enabled) return <ProjectContainersSection projectId={projectId} />;
   return (
@@ -104,7 +107,7 @@ function MetricsTab({ projectId }: AppTabProps) {
   );
 }
 
-function SettingsTab({ projectId, app }: AppTabProps) {
+function SettingsTab({ projectId, app }: AppProps) {
   const customDomains = useCustomDomainsEnabled();
   return (
     <div className="space-y-6">
@@ -118,20 +121,20 @@ function SettingsTab({ projectId, app }: AppTabProps) {
   );
 }
 
-function TabBody(props: AppTabProps & { readonly tab: string }) {
-  switch (props.tab) {
+function TabBody({ tab, projectId, app, deploys }: DeploysProps & { readonly tab: string }) {
+  switch (tab) {
     case 'deploys':
-      return <Deploys {...props} />;
+      return <Deploys projectId={projectId} app={app} deploys={deploys} />;
     case 'variables':
-      return <VariablesTab {...props} />;
+      return <VariablesTab projectId={projectId} app={app} />;
     case 'metrics':
-      return <MetricsTab {...props} />;
+      return <MetricsTab projectId={projectId} />;
     case 'logs':
-      return <AppLogs projectId={props.projectId} appId={props.app.id} />;
+      return <AppLogs projectId={projectId} appId={app.id} />;
     case 'settings':
-      return <SettingsTab {...props} />;
+      return <SettingsTab projectId={projectId} app={app} />;
     default:
-      return <Overview {...props} />;
+      return <Overview projectId={projectId} app={app} deploys={deploys} />;
   }
 }
 

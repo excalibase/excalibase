@@ -111,7 +111,8 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
   const failure = pause.error ?? resume.error;
   const settled = paused || project.status === 'ACTIVE';
   const run = () => (paused ? resume.mutate(project.projectId) : pause.mutate({ projectId: project.projectId }));
-  const Icon = busy ? Loader2 : paused ? PlayCircle : PauseCircle;
+  const idleIcon = paused ? PlayCircle : PauseCircle;
+  const Icon = busy ? Loader2 : idleIcon;
   return (
     <section aria-labelledby="db-pause" className={card}>
       <h3 id="db-pause" className="text-sm font-semibold text-text-primary">{paused ? 'Resume this database' : 'Pause this database'}</h3>
@@ -127,7 +128,7 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
         </div>
       )}
       {failure != null && <p role="alert" className="break-words text-xs text-red-400">{projectOperationMessage(failure, 'The database could not be changed')}</p>}
-      {busy && <p role="status" className="text-xs text-text-secondary">{paused ? 'Resuming: starting the database.' : 'Pausing: taking a backup, then stopping the database.'} This can take a few minutes.</p>}
+      {busy && <output className="block text-xs text-text-secondary">{paused ? 'Resuming: starting the database.' : 'Pausing: taking a backup, then stopping the database.'} This can take a few minutes.</output>}
       <button
         type="button"
         onClick={run}

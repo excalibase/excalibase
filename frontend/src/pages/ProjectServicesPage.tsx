@@ -40,7 +40,7 @@ export function ProjectServicesPage() {
         <AddServiceMenu projectId={projectId} services={services} />
       </div>
       {services.error != null && <p role="alert" className="text-sm text-red-400">{apiErrorMessage(services.error, 'Some services could not be loaded')}</p>}
-      {gone && <p role="status" className="rounded-lg border border-border-primary bg-surface-card px-4 py-3 text-sm text-text-secondary">That service is not in this project, so there is nothing to open.</p>}
+      {gone && <output className="block rounded-lg border border-border-primary bg-surface-card px-4 py-3 text-sm text-text-secondary">That service is not in this project, so there is nothing to open.</output>}
       <div className="grid gap-6 lg:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]">
         <ServiceList projectId={projectId} services={services} selected={open} to={(next) => to(next)} />
         {open && (

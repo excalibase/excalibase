@@ -15,11 +15,9 @@ import { siteCardStatus } from './cardStatus';
 import { PanelFrame } from './PanelFrame';
 import { tabsFor } from './panelState';
 
-interface SiteTabProps {
+interface SiteProps {
   readonly projectId: string;
   readonly site: Site;
-  readonly deploys: readonly SiteDeploy[];
-  readonly onDeleted: () => void;
 }
 
 const Section = ({ title, children }: { readonly title: string; readonly children: React.ReactNode }) => (
@@ -29,7 +27,7 @@ const Section = ({ title, children }: { readonly title: string; readonly childre
   </section>
 );
 
-function Overview({ projectId, site }: SiteTabProps) {
+function Overview({ projectId, site }: SiteProps) {
   const deploy = useDeploySite(projectId, site.id);
   const { canDevelop } = useProjectRole(projectId);
   return (
@@ -47,7 +45,7 @@ function Overview({ projectId, site }: SiteTabProps) {
   );
 }
 
-function Deploys({ projectId, site, deploys }: SiteTabProps) {
+function Deploys({ projectId, site, deploys }: SiteProps & { readonly deploys: readonly SiteDeploy[] }) {
   const rollback = useRollbackSite(projectId, site.id);
   const { canDevelop, canAdmin } = useProjectRole(projectId);
   return (
@@ -75,7 +73,7 @@ function Deploys({ projectId, site, deploys }: SiteTabProps) {
   );
 }
 
-function Variables({ projectId, site }: SiteTabProps) {
+function Variables({ projectId, site }: SiteProps) {
   const { enabled: serverSitesOn } = useFeatureEnabled('sitesserver');
   const { canDevelop } = useProjectRole(projectId);
   if (site.kind === 'server' && serverSitesOn && canDevelop) return <SiteServerEnv projectId={projectId} siteId={site.id} />;
@@ -86,7 +84,7 @@ function Variables({ projectId, site }: SiteTabProps) {
   );
 }
 
-function SettingsTab({ projectId, site, onDeleted }: SiteTabProps) {
+function SettingsTab({ projectId, site, onDeleted }: SiteProps & { readonly onDeleted: () => void }) {
   const { canDevelop } = useProjectRole(projectId);
   return (
     <div className="space-y-6">
@@ -102,16 +100,22 @@ function SettingsTab({ projectId, site, onDeleted }: SiteTabProps) {
   );
 }
 
-function TabBody(props: SiteTabProps & { readonly tab: string }) {
-  switch (props.tab) {
+interface TabBodyProps extends SiteProps {
+  readonly tab: string;
+  readonly deploys: readonly SiteDeploy[];
+  readonly onDeleted: () => void;
+}
+
+function TabBody({ tab, projectId, site, deploys, onDeleted }: TabBodyProps) {
+  switch (tab) {
     case 'deploys':
-      return <Deploys {...props} />;
+      return <Deploys projectId={projectId} site={site} deploys={deploys} />;
     case 'variables':
-      return <Variables {...props} />;
+      return <Variables projectId={projectId} site={site} />;
     case 'settings':
-      return <SettingsTab {...props} />;
+      return <SettingsTab projectId={projectId} site={site} onDeleted={onDeleted} />;
     default:
-      return <Overview {...props} />;
+      return <Overview projectId={projectId} site={site} />;
   }
 }
 

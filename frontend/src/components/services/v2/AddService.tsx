@@ -21,8 +21,10 @@ export function addServiceOptions(projectId: string, services: ProjectServices):
   }
   if (services.appHosting) options.push({ label: 'App', detail: 'Run a container image on a public URL', to: `${base}/containers/new`, icon: Box });
   if (services.sitesOn) options.push({ label: 'Site', detail: 'Host a built frontend', to: `${base}/sites/new`, icon: Globe });
-  options.push({ label: 'Function', detail: 'Server-side code that runs on request', to: `${base}/edge-functions`, icon: Zap });
-  options.push({ label: 'Storage', detail: 'Buckets for files', to: `${base}/storage`, icon: FolderOpen });
+  options.push(
+    { label: 'Function', detail: 'Server-side code that runs on request', to: `${base}/edge-functions`, icon: Zap },
+    { label: 'Storage', detail: 'Buckets for files', to: `${base}/storage`, icon: FolderOpen },
+  );
   return options;
 }
 

@@ -127,8 +127,8 @@ export function ServiceList({ projectId, services, selected, to }: ServiceListPr
 
 export function ServicesLoading() {
   return (
-    <div className="flex justify-center py-10" role="status" aria-label="Loading services">
+    <output className="flex justify-center py-10" aria-label="Loading services">
       <Loader2 className="h-6 w-6 animate-spin text-text-tertiary" />
-    </div>
+    </output>
   );
 }
