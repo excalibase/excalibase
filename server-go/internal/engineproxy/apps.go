@@ -470,6 +470,9 @@ func (h *Handler) checkAppRejoin(r *http.Request, network string, body []byte) (
 	if found.Config.Labels[h.policy.ManagedLabel] != "true" || aliases[0] != want {
 		return true, refuse("%s may rejoin only its own network under its own service name", name)
 	}
+	if network == h.policy.NetworkPrefix+BuildEgressNetwork {
+		return true, refuse("network %q is the builds' proxy's alone", network)
+	}
 	own, err := h.onItsOwnNetwork(r.Context(), found, network)
 	if err != nil {
 		return true, err
@@ -483,12 +486,13 @@ func (h *Handler) checkAppRejoin(r *http.Request, network string, body []byte) (
 // onItsOwnNetwork reports whether an app's network is the one named. Docker reports the mode
 // an app was created with, its network's name. Podman's Docker-compatible API reports "bridge"
 // for any network, and an app a remake took off its network lists none; there the app's network
-// is the managed one that carries the app's own project.
+// is the managed one that carries the app's own project. Behind the host firewall (Docker) an app
+// is on a bridge it was created on, so that mode names nothing and is not matched this way.
 func (h *Handler) onItsOwnNetwork(ctx context.Context, app guardedContainer, network string) (bool, error) {
 	if app.Host.NetworkMode == network {
 		return true, nil
 	}
-	if app.Host.NetworkMode != engineDefaultMode {
+	if app.Host.NetworkMode != engineDefaultMode || h.policy.FenceProjectBridges {
 		return false, nil
 	}
 	project := app.Config.Labels[projectLabel]

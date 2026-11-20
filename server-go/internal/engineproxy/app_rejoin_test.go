@@ -98,10 +98,34 @@ func TestAnAppIsRefusedEveryOtherRejoin(t *testing.T) {
 	}
 }
 
-func TestAPodmanAppWithoutAProjectIsNotPutOnAProjectsNetwork(t *testing.T) {
+func TestAPodmanAppWithoutAProjectIsNotPutOnAProjectWithoutOne(t *testing.T) {
 	engine, handler := rejoinRig(t, "bridge")
 	delete(engine.containers["app"].labels, projectLabel)
+	if err := connect(t, handler, "excalibase-proj-nolabel", member("app", podmanEndpoint(webService))); err == nil {
+		t.Fatal("two empty projects matched")
+	}
+}
+
+// The builds' egress network is the build proxy's alone, however the engine reports the app.
+func TestNoAppRejoinsTheBuildsEgressNetwork(t *testing.T) {
+	egress := "excalibase-proj-" + BuildEgressNetwork
+	for label, mode := range map[string]string{"Podman": "bridge", "Docker": egress} {
+		for _, fenced := range []bool{false, true} {
+			engine, handler := rejoinRig(t, mode)
+			engine.networks[egress] = map[string]any{"Driver": "bridge", "Labels": map[string]string{ManagedLabel: "true", projectLabel: rejoinProject}}
+			handler.policy.FenceProjectBridges = fenced
+			if err := connect(t, handler, egress, member("app", podmanEndpoint(webService))); err == nil {
+				t.Errorf("%s (fenced=%v): admitted", label, fenced)
+			}
+		}
+	}
+}
+
+// Behind the host firewall (Docker) an app on the default bridge is not matched by project label.
+func TestTheProjectLabelFallbackIsForAnEngineWithoutTheFence(t *testing.T) {
+	_, handler := rejoinRig(t, "bridge")
+	handler.policy.FenceProjectBridges = true
 	if err := connect(t, handler, egressNet, member("app", podmanEndpoint(webService))); err == nil {
-		t.Fatal("admitted")
+		t.Fatal("admitted under the fence")
 	}
 }
