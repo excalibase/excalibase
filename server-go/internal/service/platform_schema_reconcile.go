@@ -160,22 +160,11 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	if err != nil {
 		return err
 	}
-	// A login minted here may already exist from a pass that stopped before
-	// filing it, with a password nothing recorded: set it to the one filed next.
-	var minted []RolePassword
-	if mintScheduler {
-		minted = append(minted, RolePassword{Role: roleScheduler, Password: creds.schedulerPassword})
+	mintedSQL, err := mintedLoginsResetSQL(creds, mintScheduler, mintRuntime)
+	if err != nil {
+		return err
 	}
-	if mintRuntime {
-		minted = append(minted, RolePassword{Role: roleRuntime, Password: creds.runtimePassword})
-	}
-	if len(minted) > 0 {
-		verifiers, err := roleVerifiers(minted)
-		if err != nil {
-			return err
-		}
-		roleSQL += BuildProjectRoleResetSQL(verifiers)
-	}
+	roleSQL += mintedSQL
 	exec := s.roleSQLExecer(spec.namespace, spec.projectID+primaryPodSuffix)
 	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL); err != nil {
 		return fmt.Errorf("re-run registration SQL: %w", err)
@@ -200,6 +189,27 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 		return nil
 	}
 	return s.fileSchedulerCredential(ctx, spec, creds.schedulerPassword)
+}
+
+// mintedLoginsResetSQL sets the logins minted in this pass to the passwords
+// filed next. A login may already exist from a pass that stopped before filing
+// it, with a password nothing recorded.
+func mintedLoginsResetSQL(creds projectRoleCredentials, mintScheduler, mintRuntime bool) (string, error) {
+	var minted []RolePassword
+	if mintScheduler {
+		minted = append(minted, RolePassword{Role: roleScheduler, Password: creds.schedulerPassword})
+	}
+	if mintRuntime {
+		minted = append(minted, RolePassword{Role: roleRuntime, Password: creds.runtimePassword})
+	}
+	if len(minted) == 0 {
+		return "", nil
+	}
+	verifiers, err := roleVerifiers(minted)
+	if err != nil {
+		return "", err
+	}
+	return BuildProjectRoleResetSQL(verifiers), nil
 }
 
 // mintsRuntimeLogin gives a project that has no runtime login a password for

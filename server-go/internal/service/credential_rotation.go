@@ -117,27 +117,7 @@ func (s *ProvisioningService) RotateCredentialsTo(ctx context.Context, projectID
 	if err != nil {
 		return nil, err
 	}
-	var rotated []string
-	var rotateErr error
-	for _, target := range rotationTargets(inst, filed) {
-		target.serverCA = serverCA
-		if target.role == roleAdmin {
-			target.password = ownerPassword
-		}
-		authenticatesByCertificate, err := s.authenticatesByCertificate(projectID, target.role)
-		if err != nil {
-			rotateErr = err
-			break
-		}
-		if authenticatesByCertificate {
-			continue
-		}
-		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
-			rotateErr = fmt.Errorf("rotate %s credential: %w", target.role, err)
-			break
-		}
-		rotated = append(rotated, target.username)
-	}
+	rotated, rotateErr := s.rotateTargets(ctx, inst, filed, serverCA, ownerPassword)
 	// Only once every password has changed, so a copy that cannot end its
 	// sessions never holds a role back on its old password; a later role
 	// failing still ends the sessions of those already rotated.
@@ -145,6 +125,32 @@ func (s *ProvisioningService) RotateCredentialsTo(ctx context.Context, projectID
 		return nil, err
 	}
 	return s.rotationAnswer(ctx, projectID)
+}
+
+// rotateTargets replaces each role's password in order and stops at the first
+// failure, returning the names of the roles it did change.
+func (s *ProvisioningService) rotateTargets(ctx context.Context, inst *domain.DatabaseInstance, filed map[string]bool,
+	serverCA, ownerPassword string) ([]string, error) {
+
+	var rotated []string
+	for _, target := range rotationTargets(inst, filed) {
+		target.serverCA = serverCA
+		if target.role == roleAdmin {
+			target.password = ownerPassword
+		}
+		authenticatesByCertificate, err := s.authenticatesByCertificate(inst.ProjectID, target.role)
+		if err != nil {
+			return rotated, err
+		}
+		if authenticatesByCertificate {
+			continue
+		}
+		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
+			return rotated, fmt.Errorf("rotate %s credential: %w", target.role, err)
+		}
+		rotated = append(rotated, target.username)
+	}
+	return rotated, nil
 }
 
 // rotationAnswer is what the caller of a rotation is told: the credentials,

@@ -42,6 +42,27 @@ func TestDockerMySQLRuntimeLoginCannotManageUsers(t *testing.T) {
 
 	runtime := mysqlAs(ctx, t, docker, result.Namespace, mysqlLogin{MySQLUserRuntime, passwords.Runtime, "shop"}, verified)
 	defer runtime.Close()
+	runtimeWorksItsOwnTables(ctx, t, runtime)
+
+	admin := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, verified)
+	defer admin.Close()
+	loginsAreRefusedUserManagement(ctx, t, map[string]*sql.DB{"runtime": runtime, "owner": admin})
+	runtimeHoldsNoGlobalGrant(ctx, t, runtime)
+
+	// Without a runtime password, a runtime login the database holds is locked.
+	passwords.Runtime = ""
+	if err := p.EnsurePlatformUsers(ctx, result.Namespace, projectID, "shop", passwords); err != nil {
+		t.Fatalf("EnsurePlatformUsers without a runtime login: %v", err)
+	}
+	locked := mysqlAs(ctx, t, docker, result.Namespace, mysqlLogin{MySQLUserRuntime, "rt-" + projectID, "shop"}, verified)
+	defer locked.Close()
+	if err := locked.PingContext(ctx); err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("a locked runtime login signed in: %v", err)
+	}
+}
+
+func runtimeWorksItsOwnTables(ctx context.Context, t *testing.T, runtime *sql.DB) {
+	t.Helper()
 	for _, allowed := range []string{
 		"CREATE TABLE notes (id INT PRIMARY KEY, body TEXT)",
 		"INSERT INTO notes VALUES (1, 'hello')",
@@ -55,9 +76,12 @@ func TestDockerMySQLRuntimeLoginCannotManageUsers(t *testing.T) {
 	if err := runtime.QueryRowContext(ctx, "SELECT body FROM notes WHERE id = 1").Scan(&body); err != nil || body != "again" {
 		t.Fatalf("the runtime login read %q: %v", body, err)
 	}
+}
 
-	admin := mysqlFromHost(ctx, t, docker, result.Namespace, passwords.Admin, verified)
-	defer admin.Close()
+// loginsAreRefusedUserManagement runs what would mint or change a login, or
+// reach the platform's databases, as each login.
+func loginsAreRefusedUserManagement(ctx context.Context, t *testing.T, logins map[string]*sql.DB) {
+	t.Helper()
 	for _, refused := range []string{
 		"CREATE USER 'planted'@'%' IDENTIFIED BY 'x'",
 		"ALTER USER 'excalibase_app'@'%' IDENTIFIED BY 'x'",
@@ -67,19 +91,22 @@ func TestDockerMySQLRuntimeLoginCannotManageUsers(t *testing.T) {
 		"SELECT COUNT(*) FROM auth.users",
 		"CREATE TABLE excalibase.planted (id INT)",
 	} {
-		for who, db := range map[string]*sql.DB{"runtime": runtime, "owner": admin} {
+		for who, db := range logins {
 			if _, err := db.ExecContext(ctx, refused); err == nil {
 				t.Errorf("the %s login ran %s", who, refused)
 			}
 		}
 	}
+}
 
-	var grants strings.Builder
+func runtimeHoldsNoGlobalGrant(ctx context.Context, t *testing.T, runtime *sql.DB) {
+	t.Helper()
 	rows, err := runtime.QueryContext(ctx, "SHOW GRANTS")
 	if err != nil {
 		t.Fatalf("SHOW GRANTS: %v", err)
 	}
 	defer rows.Close()
+	var grants strings.Builder
 	for rows.Next() {
 		var line string
 		if err := rows.Scan(&line); err != nil {
@@ -87,20 +114,10 @@ func TestDockerMySQLRuntimeLoginCannotManageUsers(t *testing.T) {
 		}
 		grants.WriteString(line + "\n")
 	}
+	held := strings.ReplaceAll(grants.String(), "GRANT USAGE ON *.*", "")
 	for _, forbidden := range []string{"GRANT OPTION", "CREATE USER", "SUPER", "ON *.*"} {
-		if strings.Contains(strings.ReplaceAll(grants.String(), "GRANT USAGE ON *.*", ""), forbidden) {
+		if strings.Contains(held, forbidden) {
 			t.Errorf("the runtime login holds %s:\n%s", forbidden, grants.String())
 		}
-	}
-
-	// Without a runtime password, a runtime login the database holds is locked.
-	passwords.Runtime = ""
-	if err := p.EnsurePlatformUsers(ctx, result.Namespace, projectID, "shop", passwords); err != nil {
-		t.Fatalf("EnsurePlatformUsers without a runtime login: %v", err)
-	}
-	locked := mysqlAs(ctx, t, docker, result.Namespace, mysqlLogin{MySQLUserRuntime, "rt-" + projectID, "shop"}, verified)
-	defer locked.Close()
-	if err := locked.PingContext(ctx); err == nil || !strings.Contains(err.Error(), "locked") {
-		t.Fatalf("a locked runtime login signed in: %v", err)
 	}
 }

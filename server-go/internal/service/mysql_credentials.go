@@ -38,16 +38,7 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 	if err != nil {
 		return pc.Fail(err)
 	}
-	passwords := provisioner.MySQLPasswords{
-		Admin: ownerPasswordOrNew(inst.Password), App: generatePassword(32),
-		AuthAdmin: generatePassword(32), Watcher: generatePassword(32),
-	}
-	if features.Enabled(ctx, s.flags, features.DBReadRole) {
-		passwords.Reader = generatePassword(32)
-	}
-	if features.Enabled(ctx, s.flags, features.AppRuntimeLogin) {
-		passwords.Runtime = generatePassword(32)
-	}
+	passwords := s.newMySQLPasswords(ctx, inst)
 	pc.SetStep("create the platform users")
 	if err := mysql.EnsurePlatformUsers(ctx, inst.Namespace, inst.ProjectID, inst.DatabaseName, passwords); err != nil {
 		return pc.Fail(err)
@@ -65,6 +56,31 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 		}
 	}
 	inst.Username = roleAdmin
+	if err := s.fileMySQLLogins(inst, passwords, serverCA, pc); err != nil {
+		return pc.Fail(err)
+	}
+	log.Printf("Created MySQL platform users for %s and stored them in vault", inst.ProjectID)
+	return nil
+}
+
+// newMySQLPasswords mints the platform users' passwords: the reader and the
+// runtime login only while their features are on.
+func (s *ProvisioningService) newMySQLPasswords(ctx context.Context, inst *domain.DatabaseInstance) provisioner.MySQLPasswords {
+	passwords := provisioner.MySQLPasswords{
+		Admin: ownerPasswordOrNew(inst.Password), App: generatePassword(32),
+		AuthAdmin: generatePassword(32), Watcher: generatePassword(32),
+	}
+	if features.Enabled(ctx, s.flags, features.DBReadRole) {
+		passwords.Reader = generatePassword(32)
+	}
+	if features.Enabled(ctx, s.flags, features.AppRuntimeLogin) {
+		passwords.Runtime = generatePassword(32)
+	}
+	return passwords
+}
+
+// fileMySQLLogins files each created user's login in vault.
+func (s *ProvisioningService) fileMySQLLogins(inst *domain.DatabaseInstance, passwords provisioner.MySQLPasswords, serverCA string, pc *provisioner.ProvisionContext) error {
 	for role, password := range map[string]string{
 		roleAdmin: passwords.Admin, roleApp: passwords.App, roleAuthAdmin: passwords.AuthAdmin, roleWatcher: passwords.Watcher,
 		roleReader: passwords.Reader, roleRuntime: passwords.Runtime,
@@ -74,10 +90,9 @@ func (s *ProvisioningService) setupMySQLCredentials(ctx context.Context, inst *d
 		}
 		pc.SetStep("store " + role + " credentials")
 		if err := s.putCredentialRecord(inst.ProjectID, role, mysqlCredentialRecord(inst, role, password, serverCA), pc); err != nil {
-			return pc.Fail(err)
+			return err
 		}
 	}
-	log.Printf("Created MySQL platform users for %s and stored them in vault", inst.ProjectID)
 	return nil
 }
 

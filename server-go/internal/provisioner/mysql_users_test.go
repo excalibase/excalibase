@@ -77,21 +77,27 @@ func TestMySQLCustomerFacingUsersHoldNoGlobalPrivilege(t *testing.T) {
 			t.Errorf("missing %s", want)
 		}
 	}
-	for _, line := range strings.Split(sql, "\n") {
-		if !strings.HasPrefix(line, "GRANT") {
-			continue
-		}
-		for _, user := range []string{"'admin'", "'excalibase_app'", "'excalibase_runtime'"} {
-			if !strings.Contains(line, "TO "+user) {
-				continue
-			}
-			for _, forbidden := range []string{"GRANT OPTION", "CREATE USER", "SUPER", "*.*", "ROLE_ADMIN", "SYSTEM_VARIABLES_ADMIN"} {
-				if strings.Contains(line, forbidden) {
-					t.Errorf("%s holds %s: %s", user, forbidden, line)
-				}
+	for _, line := range customerFacingGrants(sql) {
+		for _, forbidden := range []string{"GRANT OPTION", "CREATE USER", "SUPER", "*.*", "ROLE_ADMIN", "SYSTEM_VARIABLES_ADMIN"} {
+			if strings.Contains(line, forbidden) {
+				t.Errorf("a login customer code can hold has %s: %s", forbidden, line)
 			}
 		}
 	}
+}
+
+// customerFacingGrants are the GRANT lines of the owner's, the platform app's
+// and the runtime login.
+func customerFacingGrants(sql string) []string {
+	var grants []string
+	for _, line := range strings.Split(sql, "\n") {
+		for _, user := range []string{"'admin'", "'excalibase_app'", "'excalibase_runtime'"} {
+			if strings.HasPrefix(line, "GRANT") && strings.Contains(line, "TO "+user) {
+				grants = append(grants, line)
+			}
+		}
+	}
+	return grants
 }
 
 func TestMySQLRuntimeLoginIsLockedWithoutAPassword(t *testing.T) {
