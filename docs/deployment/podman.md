@@ -117,6 +117,47 @@ they share the host's kernel. Run only code you trust, or use Docker with
 gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
 `--ignore-cgroups` for apps: provisioning cannot tell, and the limits would be gone.
 
+- **One user range per app (`APP_USERNS`, EXC-682).** Without a sandbox, every app
+  would otherwise run as the same host user range, so an app that escapes its
+  container could read and write the volumes of every other app. `APP_USERNS`
+  chooses how that is handled:
+
+  | Value | What happens | What it protects |
+  |---|---|---|
+  | `shared` | All apps use one user range, as before. | Nothing between apps: an escape owns every app's files. |
+  | `per-app` | Each app gets its own fixed range of 65536 ids from your user's `/etc/subuid` and `/etc/subgid`. The range is written to the app's record on first deploy and never changes, so redeploys, restarts and platform upgrades keep owning the same files. | An app that escapes still owns nothing of another app's volume: those files belong to ids it does not have. |
+  | `auto` (default) | `per-app` when the pool has room for at least one range, else `shared` with one warning at startup naming the fix. | As above where it can be. |
+
+  `per-app` refuses to start (it does not quietly fall back) when the pool is
+  too small. It protects the apps' **files**, not the host kernel: apps still
+  share it, so gVisor (Docker or Kubernetes) is the stronger separation for
+  code you do not trust. It changes nothing for Docker or for apps under a
+  sandbox, which are separated already.
+
+  Making room is a one-time step as root, because only root edits those files.
+  The pool must hold 65536 ids for the shared range plus 65536 per app, so the
+  most apps a host can run is its pool divided by 65536, minus one:
+
+  ```bash
+  sudo ./init.sh --grow-subids <your user> --max-apps 100   # default 100: 6,619,136 ids
+  podman system migrate        # as that user; restarts that user's containers
+  podman compose up -d         # restart the platform
+  ```
+
+  `--grow-subids` only adds a line to each file: it never shrinks, rewrites or
+  removes an entry, and running it again changes nothing. Past the pool, a
+  new app fails to deploy under `per-app` (the error says how many ranges the
+  pool holds), and under `auto` it runs `shared` with a warning in the log.
+  Each range maps the image's layers again (Podman copies them once per range),
+  so a per-app app's first start is slower and holds a copy of its image on disk.
+
+  An app that already runs keeps its files owned by the shared user, so it
+  **stays shared**: turning `per-app` on never changes an existing app (it
+  would have to chown its volume into the new range, and a redeploy that
+  half-did that would lock the app out of its own data). New apps get ranges.
+  To move an existing app, delete and recreate it. A range is kept while any
+  container or volume of its app exists, and is reused only after both are gone.
+
 - With `APP_EGRESS=internet` each project network is created with netavark's
   `isolate` option, so a project's bridge cannot reach another's; without
   egress the networks are internal and have no route anywhere.

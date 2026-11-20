@@ -461,6 +461,8 @@ services:
       APP_DOMAIN: ${APP_DOMAIN:-apps.${EXCALIBASE_DOMAIN:?run ./init.sh first}}
       # gVisor's runsc, or "none" to run apps without a sandbox (the operator's choice).
       APP_SANDBOX_RUNTIME: ${APP_SANDBOX_RUNTIME:-runsc}
+      # Apps run without a sandbox on rootless Podman: auto, per-app or shared user ranges (EXC-682).
+      APP_USERNS: ${APP_USERNS:-auto}
       # "internet" lets apps call out; by default they reach only their project.
       APP_EGRESS: ${APP_EGRESS:-none}
       # Rootless Podman's egress reaches the LAN and metadata, unguardable: accept takes that knowingly.

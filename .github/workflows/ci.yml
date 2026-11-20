@@ -138,7 +138,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Hardening, init, preflight and bootstrap
         run: |
-          for t in single-host edge-listener init-env preflight bootstrap host-firewall; do
+          for t in single-host edge-listener init-env subids preflight bootstrap host-firewall; do
             sh deploy/single-host/tests/$t.sh
           done
       - name: Host firewall gates provisioning and the edge (real Compose)
