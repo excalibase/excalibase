@@ -155,11 +155,22 @@ func getMetrics(ctx context.Context, c *call, in metricsArgs) (any, error) {
 	if in.ContainerRange != "" && !slices.Contains(containerRanges, in.ContainerRange) {
 		return nil, fmt.Errorf("container_range must be one of %s", strings.Join(containerRanges, ", "))
 	}
+	out := map[string]any{}
 	var current domain.DatabaseMetrics
 	if err := c.get(ctx, provisionAPI+projectID+"/metrics/current", nil, &current); err != nil {
-		return nil, err
+		if !noDatabase(err) || !features.Enabled(ctx, c.settings.Features, features.HostMetrics) {
+			return nil, err
+		}
+		// An app-only project has no database; its containers are still worth showing.
+		out["databaseNote"] = "this project has no database, so there are no database metrics"
+		addContainerMetrics(ctx, c, projectID, in.ContainerRange, out)
+		if _, shown := out["containers"]; !shown {
+			// Nothing to show either (an absent project reads the same): keep the route's refusal.
+			return nil, err
+		}
+		return out, nil
 	}
-	out := map[string]any{"current": current}
+	out["current"] = current
 	if in.History > 0 {
 		var history domain.MetricsHistory
 		query := url.Values{"limit": {strconv.Itoa(in.History)}}
@@ -170,6 +181,11 @@ func getMetrics(ctx context.Context, c *call, in metricsArgs) (any, error) {
 	}
 	addContainerMetrics(ctx, c, projectID, in.ContainerRange, out)
 	return out, nil
+}
+
+// noDatabase reads the refusal RequireProjectDatabase gives a project without one.
+func noDatabase(err error) bool {
+	return isStatus(err, http.StatusConflict) || isStatus(err, http.StatusNotFound)
 }
 
 var containerRanges = []string{"1h", "6h", "24h", "7d", "30d"}

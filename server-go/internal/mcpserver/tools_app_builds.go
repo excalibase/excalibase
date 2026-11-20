@@ -34,7 +34,7 @@ type connectAppRepoArgs struct {
 	Builder        string            `json:"builder,omitempty" jsonschema:"auto (default: a Dockerfile if the repository has one, else buildpacks), dockerfile or buildpacks"`
 	RootDir        string            `json:"root_dir,omitempty" jsonschema:"the build context inside the repository, for a monorepo; left out keeps the current one for the same repository (the repository root otherwise); \".\" clears it"`
 	DockerfilePath string            `json:"dockerfile_path,omitempty" jsonschema:"the Dockerfile, relative to root_dir; left out keeps the current one for the same repository (Dockerfile otherwise); \".\" clears it"`
-	BuildArgs      map[string]string `json:"build_args,omitempty" jsonschema:"plain build arguments; they end up in the image's history, so never put a secret here. Left out keeps the current ones for the same repository; {} clears them"`
+	BuildArgs      map[string]string `json:"build_args,omitempty" jsonschema:"plain build arguments; they end up in the image's history and can appear in build logs, so never put a secret here. Left out keeps the current ones for the same repository; {} clears them"`
 }
 
 type listAppBuildsArgs struct {
@@ -47,9 +47,10 @@ func appGitTools() []entry {
 	return []entry{
 		dark(features.AppGitBuilds, tool("connect_app_repo", "Connect a GitHub repository and branch to a container app, so every push to that branch builds an image in a sandbox and deploys it; "+
 			"the first build starts at once. The user must have signed in with GitHub and installed the platform's GitHub App; if not, this says what to ask them. "+
-			"Build arguments are plain values in the image's history: never pass secrets (set_app_secret is for those).", writeTool, connectAppRepo)),
-		dark(features.AppGitBuilds, tool("disconnect_app_repo", "Stop building a container app from git: pushes no longer build it and its queued builds are cancelled. "+
-			"Needs Developer. The app keeps running its last deploy.", writeTool, disconnectAppRepo)),
+			"Build arguments are plain values in the image's history and can appear in build logs: never pass secrets (set_app_secret is for those).", writeTool, connectAppRepo)),
+		// Not dark: the route stays open with the flag off so a connection can always be removed.
+		tool("disconnect_app_repo", "Stop building a container app from git: pushes no longer build it and its queued builds are cancelled. "+
+			"Needs Developer. The app keeps running its last deploy.", writeTool, disconnectAppRepo),
 		dark(features.AppGitBuilds, tool("rebuild_app", "Queue a build of the connected branch's latest commit now, without a push. Needs Developer; it counts toward the plan's app builds per hour. "+
 			"Follow it with list_app_builds.", writeTool, rebuildApp)),
 		dark(features.AppGitBuilds, tool("list_app_builds", "A container app's git builds, newest first, with their status and why one failed. "+
@@ -124,6 +125,7 @@ func connectAppRepo(ctx context.Context, c *call, in connectAppRepoArgs) (any, e
 		BuildError string               `json:"buildError"`
 	}
 	err = c.send(ctx, http.MethodPut, path+"/git", nil, body, &result)
+	// The route offers no stable code for this refusal, so its wording is what tells it apart from a role refusal.
 	if isStatus(err, http.StatusForbidden) && strings.Contains(err.Error(), "sign in to GitHub") {
 		return nil, errAppSignInFirst
 	}

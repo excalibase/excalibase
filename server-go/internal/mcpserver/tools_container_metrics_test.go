@@ -115,3 +115,57 @@ func TestGetMetricsKeepsTheDatabaseAnswerWhenContainersAreNotReported(t *testing
 		t.Fatalf("out = %v", out)
 	}
 }
+
+// An app-only project has no database: its database metrics answer 409 or 404, and the containers still show.
+func TestGetMetricsOfAnAppOnlyProjectStillShowsItsContainers(t *testing.T) {
+	for _, status := range []int{http.StatusConflict, http.StatusNotFound} {
+		router := chi.NewRouter()
+		router.Get("/api/provision/{projectId}/metrics/current", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, `{"error":"this project has no database"}`, status)
+		})
+		router.Get("/api/projects/{projectId}/containers/metrics", handler.NewHostMonitoringHandler(&fakeContainerReads{}, nil, nil).ProjectContainers)
+		settings := testSettings
+		settings.Features = features.NewStatic(features.HostMetrics)
+		cs := sessionWith(t, router, &recordingAudit{}, writeCaller(), settings)
+		res := callTool(t, cs, "get_metrics", map[string]any{"project_id": testProjectA})
+		if res.IsError {
+			t.Fatalf("status %d: an app-only project got an error: %s", status, resultText(res))
+		}
+		out := structured(t, res)
+		if containers, _ := out["containers"].([]any); len(containers) != 1 {
+			t.Errorf("status %d: containers = %v", status, out["containers"])
+		}
+		if note, _ := out["databaseNote"].(string); !strings.Contains(note, "no database") {
+			t.Errorf("status %d: databaseNote = %v", status, out["databaseNote"])
+		}
+		if _, ok := out["current"]; ok {
+			t.Errorf("status %d: database metrics shown for a project without one", status)
+		}
+	}
+}
+
+// With the host metrics flag off a missing database is still the route's refusal.
+func TestGetMetricsWithoutADatabaseKeepsTheRefusalWhenContainersAreOff(t *testing.T) {
+	router := chi.NewRouter()
+	router.Get("/api/provision/{projectId}/metrics/current", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"this project has no database"}`, http.StatusConflict)
+	})
+	cs := sessionWith(t, router, &recordingAudit{}, writeCaller(), testSettings)
+	if res := callTool(t, cs, "get_metrics", map[string]any{"project_id": testProjectA}); !res.IsError {
+		t.Fatal("no database and no container metrics must stay an error")
+	}
+}
+
+// A project that is absent answers 404 on both routes: that stays an error, not a note.
+func TestGetMetricsOfAnAbsentProjectStaysAnError(t *testing.T) {
+	router := chi.NewRouter()
+	absent := func(w http.ResponseWriter, _ *http.Request) { http.NotFound(w, nil) }
+	router.Get("/api/provision/{projectId}/metrics/current", absent)
+	router.Get("/api/projects/{projectId}/containers/metrics", absent)
+	settings := testSettings
+	settings.Features = features.NewStatic(features.HostMetrics)
+	cs := sessionWith(t, router, &recordingAudit{}, writeCaller(), settings)
+	if res := callTool(t, cs, "get_metrics", map[string]any{"project_id": testProjectA}); !res.IsError {
+		t.Fatal("an absent project must stay an error")
+	}
+}

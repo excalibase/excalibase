@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -478,5 +479,12 @@ func TestAppBuildRefusalsSpeakOfAppsNotSites(t *testing.T) {
 		if strings.Contains(strings.ToLower(err.Error()), "site") {
 			t.Errorf("status %d: an app tool answers in site words: %v", status, err)
 		}
+	}
+}
+
+// The API leaves the disconnect open with appgitbuilds off so a connection can always be removed; the tool matches.
+func TestDisconnectAppRepoIsOfferedWithGitBuildsOff(t *testing.T) {
+	if !slices.Contains(listedTools(t, testSettings), "disconnect_app_repo") {
+		t.Fatal("disconnect_app_repo is hidden while appgitbuilds is off, unlike its route")
 	}
 }

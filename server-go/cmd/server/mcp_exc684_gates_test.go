@@ -1,8 +1,19 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/handler"
+	"github.com/excalibase/provisioning-poc/internal/sdkkeys"
+	"github.com/excalibase/provisioning-poc/internal/service"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 )
 
 // EXC-684: every write tool added for the gap-epic features meets the same
@@ -37,22 +48,95 @@ func exc684WriteToolCalls() map[string]map[string]any {
 	}
 }
 
+// appReads stands in for the app store the harness leaves offline: only the read the tools make first.
+type appReads struct {
+	apphost.Store
+}
+
+func (appReads) Get(projectID, id string) (*apphost.App, error) {
+	return &apphost.App{ID: id, ProjectID: projectID, Name: id, Image: "nginx:1"}, nil
+}
+
+// keyManager stands in for excalibase-auth's key admin and records what is revoked.
+type keyManager struct{ revoked []int64 }
+
+func (*keyManager) List(context.Context, string, string) ([]sdkkeys.Key, error) {
+	return []sdkkeys.Key{
+		{ID: 7, KeyPrefix: "esk_pub_ab12", KeyType: "publishable", Name: "web"},
+		{ID: 8, KeyPrefix: "esk_sec_cd34", KeyType: "secret", Name: "server"},
+	}, nil
+}
+
+func (*keyManager) Create(context.Context, string, string, sdkkeys.CreateRequest) (*sdkkeys.CreatedKey, error) {
+	return nil, errors.New("not used")
+}
+
+func (k *keyManager) Revoke(_ context.Context, _, _ string, id int64) error {
+	k.revoked = append(k.revoked, id)
+	return nil
+}
+
+func exc684Server(t *testing.T) (*httptest.Server, *keyManager) {
+	t.Helper()
+	keys := &keyManager{}
+	server, _ := mcpServerTweaked(t, features.NewStatic(features.All()...), func(deps *handlerDeps, instances *fakestore.Instances, orgs *fakestore.Orgs) {
+		orgs.AddOrg(matrixOrgA, domain.Free)
+		deps.appHandler = handler.NewAppHandler(appReads{}, handler.NewProjectSourceLookup(instances, service.NewOrgPlanTiers(instances, orgs)), apphost.Route{})
+		deps.sdkKeysHandler = handler.NewSDKKeysHandler(keys, instances, orgs, nil)
+	})
+	return server, keys
+}
+
 func TestEXC684WriteToolsRefuseAViewer(t *testing.T) {
-	server, _ := mcpServer(t)
+	server, keys := exc684Server(t)
 	viewer, err := mcpConnect(t, server.URL+"/mcp", mcpViewPAT)
 	if err != nil {
 		t.Fatalf("connect viewer: %v", err)
 	}
 	for name, args := range exc684WriteToolCalls() {
-		if name == "set_app_secret" || name == "revoke_publishable_key" {
-			// Each reads first (the app; the key list), which this harness's offline stores cannot answer.
-			// The write's Developer gate is pinned by the route policy and authz matrix tests.
-			continue
-		}
 		res := mcpCall(t, viewer, name, args)
 		if !res.IsError || !strings.Contains(mcpText(res), "insufficient project role") {
 			t.Errorf("%s as a viewer = %s", name, mcpText(res))
 		}
+	}
+	if len(keys.revoked) != 0 {
+		t.Errorf("a viewer revoked keys %v", keys.revoked)
+	}
+}
+
+// Tools that only read are still refused when their route is Developer's: secret names and build logs.
+func TestEXC684DeveloperOnlyReadsRefuseAViewer(t *testing.T) {
+	server, _ := exc684Server(t)
+	viewer, err := mcpConnect(t, server.URL+"/mcp", mcpViewPAT)
+	if err != nil {
+		t.Fatalf("connect viewer: %v", err)
+	}
+	for name, args := range map[string]map[string]any{
+		"list_function_secrets": {"project_id": matrixProjectA},
+		"list_app_builds":       {"project_id": matrixProjectA, "app_id": "web", "build_id": "b1"},
+	} {
+		res := mcpCall(t, viewer, name, args)
+		if !res.IsError || !strings.Contains(mcpText(res), "insufficient project role") {
+			t.Errorf("%s as a viewer = %s", name, mcpText(res))
+		}
+	}
+}
+
+// A developer revokes a publishable key and only that; a secret key is left for Studio.
+func TestEXC684DeveloperRevokesOnlyAPublishableKey(t *testing.T) {
+	server, keys := exc684Server(t)
+	dev, err := mcpConnect(t, server.URL+"/mcp", mcpDevPAT)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if res := mcpCall(t, dev, "revoke_publishable_key", map[string]any{"project_id": matrixProjectA, "key_id": 8}); !res.IsError {
+		t.Fatalf("a secret key was revoked: %s", mcpText(res))
+	}
+	if res := mcpCall(t, dev, "revoke_publishable_key", map[string]any{"project_id": matrixProjectA, "key_id": 7}); res.IsError {
+		t.Fatalf("a developer could not revoke a publishable key: %s", mcpText(res))
+	}
+	if len(keys.revoked) != 1 || keys.revoked[0] != 7 {
+		t.Errorf("revoked = %v, want [7]", keys.revoked)
 	}
 }
 

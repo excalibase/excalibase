@@ -26,7 +26,6 @@ var darkTools = map[string]features.Feature{
 	"invoke_function":        features.FunctionInvoke,
 	"set_bucket_access":      features.AppStorage,
 	"connect_app_repo":       features.AppGitBuilds,
-	"disconnect_app_repo":    features.AppGitBuilds,
 	"rebuild_app":            features.AppGitBuilds,
 	"list_app_builds":        features.AppGitBuilds,
 }
