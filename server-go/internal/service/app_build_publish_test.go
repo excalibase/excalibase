@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -338,4 +341,96 @@ func TestPublish_ConcurrentPublishesReserveTheSpool(t *testing.T) {
 	if _, err := publisher.Publish(context.Background(), result); err != nil {
 		t.Fatalf("the reservation outlived its publish: %v", err)
 	}
+}
+
+// A spool whose whole volume cannot hold the plan's image and the margin can never publish, however empty it gets.
+func TestCheckCapacity_RefusesASpoolThatCanNeverFit(t *testing.T) {
+	publisher, _, _, _ := publishFixture(t, fakeCollector{archive: appregistrytest.Archive(t)})
+	const image = int64(5 << 30)
+	asked := ""
+	publisher.capacity = func(dir string) (int64, error) {
+		asked = dir
+		return image + spoolMargin - 1, nil
+	}
+	if err := publisher.CheckCapacity(image); !errors.Is(err, ErrSpoolTooSmall) {
+		t.Fatalf("a spool one byte short: %v", err)
+	}
+	if asked != publisher.spoolDir {
+		t.Errorf("asked about %q, not the spool", asked)
+	}
+	publisher.capacity = func(string) (int64, error) { return image + spoolMargin, nil }
+	if err := publisher.CheckCapacity(image); err != nil {
+		t.Fatalf("exactly enough: %v", err)
+	}
+	publisher.capacity = func(string) (int64, error) { return 0, errors.New("statfs: gone") }
+	if err := publisher.CheckCapacity(image); err == nil || errors.Is(err, ErrSpoolTooSmall) {
+		t.Fatalf("a capacity that cannot be read: %v", err)
+	}
+}
+
+func TestSpoolCapacity_ReadsTheFilesystem(t *testing.T) {
+	dir := t.TempDir()
+	capacity, err := spoolCapacity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	free, err := spoolFree(dir)
+	if err != nil || capacity < free {
+		t.Fatalf("capacity %d below free %d: %v", capacity, free, err)
+	}
+	if _, err := spoolCapacity(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Error("a spool that does not exist")
+	}
+}
+
+// The disk filling up mid-collect is the spool's room again, whichever call hits it, never the build's fault; the reservation comes back.
+func TestPublish_RunningOutOfDiskIsASpoolWithNoRoom(t *testing.T) {
+	for _, full := range []error{syscall.ENOSPC, syscall.EDQUOT} {
+		publisher, pusher, _, _ := publishFixture(t, fakeCollector{archive: appregistrytest.Archive(t)})
+		publisher.readLayout = func(io.Reader, string, int64) (*appregistry.Layout, error) {
+			return nil, fmt.Errorf("write a blob: %w", full)
+		}
+		_, err := publisher.Publish(context.Background(), buildResult())
+		if !errors.Is(err, ErrSpoolFull) || errors.Is(err, appregistry.ErrBadArchive) || pusher.pushed != 0 {
+			t.Fatalf("%v: %v, pushed %d", full, err, pusher.pushed)
+		}
+		if publisher.reserved != 0 {
+			t.Errorf("%v: %d bytes stayed reserved", full, publisher.reserved)
+		}
+	}
+}
+
+// Set APP_SPOOL_TMPFS to a tmpfs too small for the image to run this against a real full disk.
+func TestPublish_ARealFullDiskIsASpoolWithNoRoom(t *testing.T) {
+	spool := os.Getenv("APP_SPOOL_TMPFS")
+	if spool == "" {
+		t.Skip("APP_SPOOL_TMPFS names no small tmpfs")
+	}
+	publisher, pusher, _, _ := publishFixture(t, fakeCollector{archive: bigLayoutArchive(t, 4<<20)})
+	publisher.spoolDir = spool
+	publisher.free = func(string) (int64, error) { return 1 << 40, nil }
+	result := buildResult()
+	result.MaxImage = 8 << 20
+	_, err := publisher.Publish(context.Background(), result)
+	if !errors.Is(err, ErrSpoolFull) || errors.Is(err, appregistry.ErrBadArchive) || pusher.pushed != 0 {
+		t.Fatalf("%v, pushed %d", err, pusher.pushed)
+	}
+}
+
+func bigLayoutArchive(t *testing.T, size int) []byte {
+	t.Helper()
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	blob := make([]byte, size)
+	sum := sha256.Sum256(blob)
+	if err := tw.WriteHeader(&tar.Header{Name: "blobs/sha256/" + hex.EncodeToString(sum[:]), Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(size)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(blob); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return archive.Bytes()
 }

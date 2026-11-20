@@ -32,6 +32,7 @@ type createSiteArgs struct {
 	projectArg
 	Name        string `json:"name" jsonschema:"the site's name, its hostname's first label: 3 to 63 lowercase letters, digits or hyphens"`
 	SPAFallback *bool  `json:"spa_fallback,omitempty" jsonschema:"true answers unknown paths with /index.html (single-page apps); false answers the nearest 404.html. true when left out"`
+	Kind        string `json:"kind,omitempty" jsonschema:"static (default) or server for a server-rendered Next.js site built from git (connect_site_repo with framework nextjs). Server sites exist only on installs that offer them; elsewhere that answer is not found and a server-rendered app is a container (create_app)"`
 }
 
 type deploySiteArgs struct {
@@ -49,7 +50,7 @@ func siteTools() []entry {
 	return []entry{
 		tool("list_sites", "List the project's sites (static frontends served from the CDN) with their URL and live deploy.", readTool, listSites),
 		tool("create_site", "Create a site: a hostname that serves a frontend's built files (Vite, Astro static, Next export, SvelteKit static, plain HTML) from the CDN. "+
-			"Its origin is added to the project's CORS allowlist on the first deploy. A server-rendered app (Next.js SSR, Nuxt, Remix) is a container instead: create_app.", writeTool, createSite),
+			"Its origin is added to the project's CORS allowlist on the first deploy. A server-rendered Next.js site is kind server where the install offers it; other server-rendered apps (Nuxt, Remix, SvelteKit) are containers: create_app.", writeTool, createSite),
 		tool("deploy_site", "Deploy built files to a site and make them live. Build first, then pack the output folder as a base64 gzipped tar: "+
 			"`tar czf - -C dist . | base64`, at most 1 MiB before encoding. A bigger build deploys from CI or a shell: get_ci_snippet with kind site. "+
 			"The archive is checked like any upload (paths, file count and sizes) before anything is published.", writeTool, deploySite),
@@ -100,6 +101,9 @@ func createSite(ctx context.Context, c *call, in createSiteArgs) (any, error) {
 		return nil, err
 	}
 	body := map[string]any{"name": in.Name}
+	if in.Kind != "" {
+		body["kind"] = in.Kind
+	}
 	if in.SPAFallback != nil {
 		body["spaFallback"] = *in.SPAFallback
 	}

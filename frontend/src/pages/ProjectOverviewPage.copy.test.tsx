@@ -28,7 +28,7 @@ function renderPage({ dbcopy, visible }: { dbcopy: boolean; visible: Record<stri
     if (url === '/config') return answer({ deploymentMode: 'cloud', appHosting: false, sites: true, features: { dbcopy } });
     if (url === '/provision/copy-1') return answer(copy);
     if (url === '/provision') return answer([copy, ...visible]);
-    if (url === '/projects/copy-1/db-endpoint') return answer({ publicEnabled: false, available: false, host: '', port: 0, internal: {} });
+    if (url === '/projects/copy-1/db-endpoint') return answer({ publicEnabled: false, available: false, host: '', port: 0 });
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

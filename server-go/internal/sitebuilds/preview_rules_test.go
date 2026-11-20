@@ -47,7 +47,7 @@ func TestNarrowKeepsOnlyWhatIsStillGranted(t *testing.T) {
 }
 
 func TestPublicFailureNeverCarriesDetail(t *testing.T) {
-	for _, kind := range []FailureKind{FailInstall, FailBuild, FailTimeout, FailOutOfMemory, FailDisk, FailNoOutput, FailRootDir, FailImage, FailPlatform, FailDeploy} {
+	for _, kind := range []FailureKind{FailInstall, FailBuild, FailTimeout, FailOutOfMemory, FailDisk, FailNoOutput, FailRootDir, FailFramework, FailImage, FailPlatform, FailDeploy} {
 		message := publicFailure(kind)
 		if message == "" || !strings.Contains(message, "Studio") {
 			t.Errorf("%s: %q", kind, message)

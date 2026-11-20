@@ -14,7 +14,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 )
 
 const (
@@ -81,7 +80,7 @@ func startAppDomainSweeper(cfg config.AppConfig, sqlStore storage.PlatformStore,
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() && sqlStore != nil {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), appDomainSweepLockID)
+		lock = standingLock(sqlStore, appDomainSweepLockID)
 	}
 	return domains.StartSweeper(context.Background(), service.NewLeadership(lock), appDomainSweepInterval)
 }

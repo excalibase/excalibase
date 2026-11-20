@@ -38,12 +38,15 @@ export interface PostgresSettings {
   // Asks for an image carrying the DocumentDB extension. Create-time only —
   // the image a cluster runs is fixed when it is provisioned.
   documentDb?: boolean;
+  // The owner password the customer chose; absent asks for a generated one.
+  password?: string;
 }
 
 // A MySQL project (ADR 0041) names a version from the MySQL catalogue.
 export interface MySQLSettings {
   databaseType: typeof DatabaseType.MYSQL;
   mysqlVersion: string;
+  password?: string;
 }
 
 export type DatabaseSettings = PostgresSettings | MySQLSettings;
@@ -74,8 +77,9 @@ export interface DatabaseInstance {
   // Whether this caller may add a database now. Decided by the server
   // (Admin and up, on a running project without one).
   canAddDatabase?: boolean;
-  namespace: string;
-  host: string;
+  // Platform admins only; a customer's project answer carries neither (EXC-759).
+  namespace?: string;
+  host?: string;
   port: number;
   databaseName: string;
   username: string;
@@ -108,6 +112,8 @@ export interface DatabaseInstance {
   deploymentMode?: 'k8s' | 'docker';
   lastActiveAt?: string;
   pauseReason?: 'idle_7d' | 'manual' | 'tier_limit' | '';
+  // The backup the pause took, while the server still records it.
+  pauseBackupId?: string;
   // Last successful project-scoped call seen by the platform (project_activity); absent when never seen.
   lastSeenAt?: string;
   // Set while an idle-pause warning is outstanding (cleared by fresh activity).
@@ -116,12 +122,11 @@ export interface DatabaseInstance {
 
 export interface CredentialsResponse {
   projectId: string;
-  host: string;
+  host?: string;
   readOnlyHost?: string;
   port: number;
   databaseName: string;
   username: string;
-  password: string;
   sslMode?: string;
   // The control plane serves this as `connectionUrl`; `connectionString` was
   // never a field it sent.
@@ -132,8 +137,13 @@ export interface CredentialsResponse {
   jdbcUrl?: string;
   // The SELECT-only login the read address names (EXC-675), when the project has one.
   readerUsername?: string;
-  readerPassword?: string;
 }
+
+// A database password is in exactly two answers, shown once: creating (or
+// adding) a database, and resetting the password. It is never stored here.
+export type WithPassword<T> = T & { readonly password?: string };
+
+export type RotatedCredentials = CredentialsResponse & { readonly password: string };
 
 export interface BackupConfig {
   schedule: string;
@@ -146,6 +156,8 @@ export interface BackupInfo {
   sizeBytes?: number;
   status: string;
   type?: string;
+  // Why a failed backup failed, as the engine reported it.
+  error?: string;
 }
 
 export interface PodMetrics {

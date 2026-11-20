@@ -57,11 +57,15 @@ type Options struct {
 	SandboxRuntime string
 	// Egress gives project networks a gateway; Isolate (Podman) keeps such a bridge off the others.
 	Egress, Isolate bool
-	ProbeBinary     []byte
-	ToolsImage      string
-	Route           apphost.Route
-	ReservedHosts   []string
-	Projects        ProjectScopes
+	// HostFirewall: the bundle's firewall guards bridges named under its wildcard (EXC-687).
+	HostFirewall bool
+	// AcceptUnguardedEgress is the operator's yes to egress where no firewall can guard it: rootless Podman.
+	AcceptUnguardedEgress bool
+	ProbeBinary           []byte
+	ToolsImage            string
+	Route                 apphost.Route
+	ReservedHosts         []string
+	Projects              ProjectScopes
 	// MinReady is how long a container must stay ready to count (DefaultMinReady in production).
 	// PollInterval and CrashRestarts tune the rollout watch; zero takes the defaults.
 	PollInterval, MinReady time.Duration

@@ -91,7 +91,11 @@ func (s *ProvisioningService) ReapplyCredentials(ctx context.Context, inst *doma
 	if err != nil || len(roles) == 0 {
 		return err
 	}
-	statement := pgroles.PinnedSearchPath + BuildProjectRoleResetSQL(roles) + "\n"
+	verifiers, err := roleVerifiers(roles)
+	if err != nil {
+		return err
+	}
+	statement := pgroles.PinnedSearchPath + pgroles.QuietSessionSQL() + BuildProjectRoleResetSQL(verifiers) + "\n"
 	psql := []string{"psql", "-U", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}
 	switch {
 	case inst.DeploymentMode == domain.ModeDocker && s.dockerClient != nil:
@@ -106,7 +110,7 @@ func (s *ProvisioningService) ReapplyCredentials(ctx context.Context, inst *doma
 		for _, role := range roles {
 			message = redactSecret(message, role.Password)
 		}
-		return errors.New("set the filed passwords back: " + message)
+		return withoutVerifiers(errors.New("set the filed passwords back: " + message))
 	}
 	return nil
 }

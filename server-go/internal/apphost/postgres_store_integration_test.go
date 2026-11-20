@@ -7,15 +7,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -46,14 +45,14 @@ func newPGAppStore(t *testing.T) *apphost.PostgresAppStore {
 
 func startPlatformDB() (*sql.DB, error) {
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		return nil, err
+	}
 	c, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("platform_test"),
 		postgres.WithUsername("platform"),
 		postgres.WithPassword("apphost-itest"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		return nil, err
@@ -65,6 +64,9 @@ func startPlatformDB() (*sql.DB, error) {
 	store, err := pgstore.New(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("pgstore.New (runs migrations): %w", err)
+	}
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		return nil, err
 	}
 	return store.DB(), nil
 }

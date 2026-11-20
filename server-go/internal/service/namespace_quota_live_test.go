@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"testing"
 	"time"
 
@@ -27,6 +28,9 @@ const quotaLiveProject, quotaLiveNamespace = "proj-quota", "org1-proj-quota"
 // Run with: go test ./internal/service/ -tags=live -run TestLiveNamespaceQuotaFollowsTheOrgsPlan -v -count=1
 func TestLiveNamespaceQuotaFollowsTheOrgsPlan(t *testing.T) {
 	lab := &appLiveLab{ctx: context.Background(), instances: fakestore.NewInstances()}
+	if err := imagepull.EnsureLocal(lab.ctx, appLiveK3s); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(lab.ctx, appLiveK3s)
 	testcontainers.CleanupContainer(t, container)
 	if err != nil {

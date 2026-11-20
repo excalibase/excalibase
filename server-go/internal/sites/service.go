@@ -65,6 +65,10 @@ type Options struct {
 	// Outbound reads which outbound Worker the router's binding names; server
 	// code is published only while it names OutboundWorker. nil offers no server sites.
 	Outbound OutboundReader
+	// APIBaseURL is the public API host server sites reach their project through (EXCALIBASE_URL).
+	APIBaseURL string
+	// Secrets reads the project's secrets, the ones marked server-visible reach server code; nil offers none.
+	Secrets SecretReader
 	// Previews keeps branch and pull request previews (EXC-660); nil means previews are not offered.
 	Previews PreviewStore
 	// PreviewsDark refuses new previews (the flag is off) while the held ones are still removed

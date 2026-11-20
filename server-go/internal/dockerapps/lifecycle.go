@@ -38,7 +38,8 @@ func (r *Runtime) PauseAppWorkload(ctx context.Context, namespace string, appID 
 	}); err != nil {
 		return err
 	}
-	for _, summary := range where(list, isUp) {
+	// Every one, a replica that just crashed too: its stop is what tells the engine proxy not to bring it back.
+	for _, summary := range list {
 		if err := r.stop(ctx, summary.ID); err != nil {
 			return err
 		}
@@ -307,7 +308,8 @@ func (r *Runtime) WithdrawProjectWorkloads(ctx context.Context, namespace string
 	if err != nil {
 		return err
 	}
-	for _, summary := range where(list, isUp) {
+	// Every one, as a pause does: a replica that just crashed would otherwise come back.
+	for _, summary := range list {
 		if err := r.stop(ctx, summary.ID); err != nil {
 			return err
 		}

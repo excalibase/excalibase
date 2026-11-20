@@ -11,10 +11,10 @@ vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
-function renderPage() {
+function renderPage(features: Record<string, boolean> = {}) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/config')
-      return Promise.resolve({ data: { deploymentMode: 'cloud', sites: true } } as never);
+      return Promise.resolve({ data: { deploymentMode: 'cloud', sites: true, features } } as never);
     if (url === '/projects/proj-1/sites/') return Promise.resolve({ data: [] } as never);
     const role = developerRole(url);
     if (role) return role;
@@ -88,5 +88,31 @@ describe('SiteFormPage', () => {
       name: 'shop',
       spaFallback: false,
     });
+  });
+
+  test('offers no kind while server sites are dark, and sends none', async () => {
+    renderPage();
+    await screen.findByTestId('site-name');
+    expect(screen.queryByTestId('site-kind-server')).not.toBeInTheDocument();
+  });
+
+  test('creates a server-rendered site when the server offers them', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: siteFixture() } as never);
+    renderPage({ sitesserver: true });
+    await user.type(await screen.findByTestId('site-name'), 'shop');
+    expect(screen.getByTestId('site-kind-static')).toBeChecked();
+    await user.click(screen.getByTestId('site-kind-server'));
+    // Unknown paths are the framework's to answer, so the single-page switch is gone.
+    expect(screen.queryByTestId('site-spa-fallback')).not.toBeInTheDocument();
+    expect(screen.getByTestId('site-kind-hint')).toHaveTextContent(/Next\.js/);
+    await user.click(screen.getByTestId('site-create'));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/projects/proj-1/sites/', {
+        name: 'shop',
+        kind: 'server',
+        spaFallback: false,
+      }),
+    );
   });
 });

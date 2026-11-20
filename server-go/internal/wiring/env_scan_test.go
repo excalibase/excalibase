@@ -34,6 +34,7 @@ var envReadAllowList = map[string]string{
 	"internal/k8s/client.go":                "KUBECONFIG discovery",
 	"internal/k8s/deno_runtime.go":          "POD_NAMESPACE, the pod's own identity",
 	"internal/provisioner/docker_client.go": "DOCKER_HOST discovery",
+	"internal/imagepull/imagepull.go":       "finding the engine testcontainers will use, in EnsureLocal; production calls only Drain",
 
 	// Operator tunables and one-off CLI subcommands in the entrypoint. None
 	// of them selects a provider or enables a subsystem; the switches that

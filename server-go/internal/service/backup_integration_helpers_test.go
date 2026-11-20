@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"os/exec"
 	"strings"
 	"testing"
@@ -16,7 +18,6 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/testcontainers/testcontainers-go"
 	tclocalstack "github.com/testcontainers/testcontainers-go/modules/localstack"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -29,6 +30,9 @@ import (
 // Extracted so the PITR tests share one setup path with low cognitive load.
 func startArchivingPostgres(ctx context.Context, t *testing.T, pgPwd string) (testcontainers.Container, string) {
 	t.Helper()
+	if err := imagepull.EnsureLocal(ctx, "postgres:17"); err != nil {
+		t.Fatal(err)
+	}
 	pgC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: "postgres:17",
@@ -38,8 +42,7 @@ func startArchivingPostgres(ctx context.Context, t *testing.T, pgPwd string) (te
 				"POSTGRES_PASSWORD": pgPwd,
 			},
 			ExposedPorts: []string{"5432/tcp"},
-			WaitingFor: wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60 * time.Second),
+			WaitingFor:   pgready.Strategy(),
 		},
 		Started: true,
 	})
@@ -87,6 +90,9 @@ func restartPostgres(ctx context.Context, t *testing.T, pgC testcontainers.Conta
 // pointed at it, and creates the named bucket. Returns the ready uploader.
 func newLocalStackUploader(ctx context.Context, t *testing.T, bucket string) *AWSS3Uploader {
 	t.Helper()
+	if err := imagepull.EnsureLocal(ctx, "localstack/localstack:3.7"); err != nil {
+		t.Fatal(err)
+	}
 	lsC, err := tclocalstack.Run(ctx, "localstack/localstack:3.7",
 		testcontainers.WithEnv(map[string]string{"SERVICES": "s3"}))
 	if err != nil {

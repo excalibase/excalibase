@@ -252,6 +252,10 @@ if waits.get("condition") != "service_completed_successfully":
 if penv.get("FEATURE_SITEPREVIEWS") != "false":
     failures.append(f"FEATURE_SITEPREVIEWS={penv.get('FEATURE_SITEPREVIEWS')!r} by default, want false")
 
+# EXC-759: database passwords are shown once and never read back, on by default.
+if penv.get("FEATURE_ONETIMECREDENTIALS") != "true":
+    failures.append(f"FEATURE_ONETIMECREDENTIALS={penv.get('FEATURE_ONETIMECREDENTIALS')!r} by default, want true")
+
 # EXC-684: MCP invoke_function is off by default.
 if penv.get("FEATURE_FUNCTIONINVOKE") != "false":
     failures.append(f"FEATURE_FUNCTIONINVOKE={penv.get('FEATURE_FUNCTIONINVOKE')!r} by default, want false")

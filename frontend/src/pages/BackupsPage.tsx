@@ -1,3 +1,4 @@
+import { describeBackupSchedule } from '../utils/backupSchedule';
 import { useState } from 'react';
 import { useInstance, useListBackups, useTriggerBackup } from '../hooks/useProvisioning';
 import { isMySQLProject } from '../utils/engine';
@@ -13,14 +14,30 @@ import { formatBytes } from '../utils/formatBytes';
 
 type Tab = 'backups' | 'restore' | 'copy';
 
+const HIBERNATED_FAILURE = 'cannot backup a hibernated cluster';
+
+function isHibernatedFailure(backup: { error?: string }): boolean {
+  return (backup.error ?? '').includes(HIBERNATED_FAILURE);
+}
+
 export function BackupsPage() {
   const projectId = useRouteProjectId();
   const [tab, setTab] = useState<Tab>('backups');
 
   const { data: backupData, isLoading } = useListBackups(projectId);
   // MySQL restores within its backup window only (ADR 0041).
-  const mysql = isMySQLProject(useInstance(projectId).data);
-  const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
+  const instance = useInstance(projectId).data;
+  const mysql = isMySQLProject(instance);
+  const paused = instance?.status === 'PAUSED';
+  const allBackups = Array.isArray(backupData?.backups) ? backupData.backups : [];
+  // A paused database cannot be backed up, so the failures CNPG recorded for
+  // that reason are noise; any other failure is a real problem and stays.
+  const backups = paused ? allBackups.filter((b) => !(b.status === 'FAILED' && isHibernatedFailure(b))) : allBackups;
+  const newestCompleted = paused
+    ? backups.filter((b) => b.status === 'COMPLETED').sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]
+    : undefined;
+  // Call it the final backup only when it is the one the pause took.
+  const isPauseBackup = !!newestCompleted && newestCompleted.id === instance?.pauseBackupId;
   const triggerBackup = useTriggerBackup();
   // Copying into a new project ships dark (EXC-667).
   const { enabled: copyOn } = useFeatureEnabled('dbcopy');
@@ -46,6 +63,17 @@ export function BackupsPage() {
         </div>
       )}
 
+      {paused && (
+        <div data-testid="paused-backups" className="px-4 py-3 rounded-lg text-sm border border-border-primary bg-surface-card text-text-secondary">
+          Paused: nightly backups stop while paused
+          {newestCompleted
+            ? isPauseBackup
+              ? `; the pause took a final backup ${newestCompleted.id}`
+              : `; the latest completed backup is ${newestCompleted.id}`
+            : ''}
+        </div>
+      )}
+
       {backupData && (
         <div className="grid grid-cols-3 gap-4">
           <div className="bg-surface-card border border-border-primary rounded-xl p-4">
@@ -56,7 +84,7 @@ export function BackupsPage() {
           </div>
           <div className="bg-surface-card border border-border-primary rounded-xl p-4">
             <p className="text-xs text-text-tertiary mb-1">Schedule</p>
-            <p className="text-sm font-medium text-text-primary font-mono">{backupData.schedule ?? '—'}</p>
+            <p className="text-sm font-medium text-text-primary">{describeBackupSchedule(backupData.schedule)}</p>
           </div>
           <div className="bg-surface-card border border-border-primary rounded-xl p-4">
             <p className="text-xs text-text-tertiary mb-1">Retention</p>

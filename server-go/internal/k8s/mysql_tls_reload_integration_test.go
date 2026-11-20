@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"io"
 	"math/big"
 	"slices"
@@ -35,6 +36,9 @@ func TestIntegration_MySQLReloadsARenewedCertificate(t *testing.T) {
 		flags = append(flags, "--"+key+"="+value)
 	}
 	slices.Sort(flags)
+	if err := imagepull.EnsureLocal(ctx, "mysql:8.4"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "mysql:8.4",

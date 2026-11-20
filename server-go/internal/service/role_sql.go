@@ -14,6 +14,30 @@ type RolePassword struct {
 	Password string
 }
 
+// RoleVerifier pairs a database role with the SCRAM verifier of its password.
+// Role SQL only ever carries this: Postgres logs a failed statement in full and
+// a project's Viewer reads that log, and a verifier cannot sign in.
+type RoleVerifier struct {
+	Role     string
+	Verifier string
+}
+
+// roleVerifiers hashes each password; an entry missing either field is dropped.
+func roleVerifiers(roles []RolePassword) ([]RoleVerifier, error) {
+	verifiers := make([]RoleVerifier, 0, len(roles))
+	for _, role := range roles {
+		if role.Role == "" || role.Password == "" {
+			continue
+		}
+		verifier, err := newScramVerifier(role.Password)
+		if err != nil {
+			return nil, fmt.Errorf("hash the password of %s: %w", role.Role, err)
+		}
+		verifiers = append(verifiers, RoleVerifier{Role: role.Role, Verifier: verifier})
+	}
+	return verifiers, nil
+}
+
 // BuildProjectRoleResetSQL emits one ALTER ROLE per entry. A cluster restored
 // from a backup already carries the source project's roles — with the source's
 // passwords — so BuildProjectRoleSQL's CREATE-if-absent blocks are no-ops
@@ -22,14 +46,14 @@ type RolePassword struct {
 // and "what the database accepts" the same thing again.
 //
 // Pure, like BuildProjectRoleSQL: deterministic by input, no side effects.
-func BuildProjectRoleResetSQL(roles []RolePassword) string {
+func BuildProjectRoleResetSQL(roles []RoleVerifier) string {
 	var b strings.Builder
 	for _, r := range roles {
-		if r.Role == "" || r.Password == "" {
+		if r.Role == "" || r.Verifier == "" {
 			continue
 		}
 		b.WriteString("\n")
-		b.WriteString(alterRolePasswordSQL(r.Role, r.Password))
+		b.WriteString(alterRolePasswordSQL(r.Role, r.Verifier))
 	}
 	return b.String()
 }
@@ -41,11 +65,17 @@ func sqlTextLiteral(s string) string {
 	return "convert_from(decode('" + hex.EncodeToString([]byte(s)) + "', 'hex'), 'UTF8')"
 }
 
-// alterRolePasswordSQL sets a role's password with the quoting done by
-// Postgres' format(), never by string interpolation.
-func alterRolePasswordSQL(role, password string) string {
-	return fmt.Sprintf("DO $$ BEGIN EXECUTE format('ALTER ROLE %%I WITH LOGIN PASSWORD %%L', %s, %s); END $$;",
-		sqlTextLiteral(role), sqlTextLiteral(password))
+// raiseWithoutContext ends a block that names a verifier. An error raised by
+// EXECUTE quotes the statement in its CONTEXT, which reaches the client and,
+// from there, the project's failure reason. OTHERS leaves out query_canceled,
+// which is how a tier's statement_timeout arrives.
+const raiseWithoutContext = "EXCEPTION WHEN OTHERS OR query_canceled THEN RAISE EXCEPTION USING ERRCODE = SQLSTATE, MESSAGE = SQLERRM;"
+
+// alterRolePasswordSQL sets a role's password from its verifier, with the
+// quoting done by Postgres' format(), never by string interpolation.
+func alterRolePasswordSQL(role, verifier string) string {
+	return fmt.Sprintf("DO $$ BEGIN EXECUTE format('ALTER ROLE %%I WITH LOGIN PASSWORD %%L', %s, %s); %s END $$;",
+		sqlTextLiteral(role), sqlTextLiteral(verifier), raiseWithoutContext)
 }
 
 // reservedSchemaRebuildSQL drops the excalibase schema when anything in it, or
@@ -234,7 +264,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE %[2]s IN SCHEMA auth REVOKE ALL ON SEQUENCES F
 //
 // The function is pure (no side effects, deterministic by input) so unit
 // tests can assert on the produced statement set without a live DB.
-func BuildProjectRoleSQL(authPass, appPass, watcherPass, dbName, publicationName string) string {
+//
+// The three credentials are SCRAM verifiers. Postgres stores a verifier as it
+// is; anything else it would hash, so a password here still works and leaks.
+func BuildProjectRoleSQL(authVerifier, appVerifier, watcherVerifier, dbName, publicationName string) string {
 	if publicationName == "" {
 		publicationName = "cdc_watcher_pub"
 	}
@@ -243,9 +276,9 @@ func BuildProjectRoleSQL(authPass, appPass, watcherPass, dbName, publicationName
 	watcherRole := schema.QuoteIdent("cdc_watcher")
 	pubIdent := schema.QuoteIdent(publicationName)
 	pubName := sqlTextLiteral(publicationName)
-	safeAuthPass := sqlTextLiteral(authPass)
-	safeAppPass := sqlTextLiteral(appPass)
-	safeWatcherPass := sqlTextLiteral(watcherPass)
+	safeAuthVerifier := sqlTextLiteral(authVerifier)
+	safeAppVerifier := sqlTextLiteral(appVerifier)
+	safeWatcherVerifier := sqlTextLiteral(watcherVerifier)
 	dbIdent := schema.QuoteIdent(dbName)
 
 	return reservedSchemaRebuildSQL + fmt.Sprintf(`
@@ -255,6 +288,7 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'auth_admin') THEN
     EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s);
   END IF;
+  `+raiseWithoutContext+`
 END $$;
 GRANT CREATE ON DATABASE %s TO %s;
 GRANT ALL ON SCHEMA auth TO %s;
@@ -264,6 +298,7 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'excalibase_app') THEN
     EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s);
   END IF;
+  `+raiseWithoutContext+`
 END $$;
 -- CREATE on the database lets a migration create a schema (EXC-599).
 GRANT CREATE ON DATABASE %s TO %s;
@@ -284,6 +319,7 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'cdc_watcher') THEN
     EXECUTE format('CREATE ROLE %s WITH LOGIN REPLICATION PASSWORD %%L', %s);
   END IF;
+  `+raiseWithoutContext+`
 END $$;
 
 -- The watcher keeps its slot owner registry in a schema of its own, found
@@ -350,15 +386,15 @@ $fn$;
 REVOKE ALL ON FUNCTION excalibase.set_realtime_table(text, text, boolean) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION excalibase.set_realtime_table(text, text, boolean) TO %s;
 `,
-		authRole, safeAuthPass, // auth_admin DO block
+		authRole, safeAuthVerifier, // auth_admin DO block
 		dbIdent, authRole, // GRANT CREATE ON DATABASE
 		authRole, authRole, // GRANT auth schema
-		appRole, safeAppPass, // excalibase_app DO block
+		appRole, safeAppVerifier, // excalibase_app DO block
 		dbIdent, appRole, // GRANT CREATE ON DATABASE
 		appRole, appRole, appRole, appRole, appRole, // GRANT public
 		authSchemaRevokeSQL(appRole, authRole), // nothing in auth (EXC-628)
 		reservedSchemaLockdownSQL(roleApp),     // reserved excalibase schema: USAGE only
-		watcherRole, safeWatcherPass,           // cdc_watcher DO block
+		watcherRole, safeWatcherVerifier,       // cdc_watcher DO block
 		watcherRole, watcherRole, dbIdent, // cdc_watcher registry schema + search_path
 		pubName, pubName, // pubname check + CREATE PUBLICATION
 		pubIdent,                             // ALTER PUBLICATION ... OWNER TO

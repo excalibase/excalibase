@@ -50,7 +50,7 @@ type startFenceLab struct {
 
 func proveStartFence(t *testing.T, egress bool) {
 	rig := newRealRigWith(t, func(options *Options) {
-		options.Egress = egress
+		options.Egress, options.AcceptUnguardedEgress = egress, egress
 		options.SandboxRuntime = os.Getenv("START_FENCE_SANDBOX_RUNTIME")
 	}, "httpd", "-f", "-p", fenceDBPort)
 	// As the wiring does: Podman keeps a project bridge with a gateway off the others.

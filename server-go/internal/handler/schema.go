@@ -28,6 +28,9 @@ const (
 // platform's statement and lock timeouts (projectdb.Opener).
 type projectPools interface {
 	Open(ctx context.Context, projectID string) (*sql.DB, error)
+	// OpenOwner is the owner's login, the only one that may run the
+	// role-management functions.
+	OpenOwner(ctx context.Context, projectID string) (*sql.DB, error)
 	// OpenMySQL is a MySQL project's pool; a script pool takes several
 	// statements per request (EXC-619).
 	OpenMySQL(ctx context.Context, projectID string, script bool) (*sql.DB, error)
@@ -475,6 +478,13 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 		return nil, fmt.Errorf("invalid project id")
 	}
 	return h.pools.Open(context.Background(), projectId)
+}
+
+func (h *SchemaHandler) getOwnerDB(projectId string) (*sql.DB, error) {
+	if !isValidID(projectId) {
+		return nil, fmt.Errorf("invalid project id")
+	}
+	return h.pools.OpenOwner(context.Background(), projectId)
 }
 
 func (h *SchemaHandler) handleDBError(w http.ResponseWriter, err error) {

@@ -15,6 +15,7 @@ func testPolicy() Policy {
 		VolumePrefix:    "excalibase-proj-",
 		Runtimes:        []string{"runsc"},
 		ContainerPrefix: "excalibase-",
+		StatsContainers: []string{"excalibase-host-firewall"},
 	}
 }
 

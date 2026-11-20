@@ -26,6 +26,18 @@ const (
 	maxBranchLength    = 255
 )
 
+// FrameworkNextjs builds a server-rendered Next.js site with OpenNext (EXC-661). A site with no
+// framework builds a static folder.
+const FrameworkNextjs = "nextjs"
+
+// Nuxt, SvelteKit and Astro build to a Cloudflare worker with their own adapter (EXC-661); the repository
+// must already be set up for it (SvelteKit and Astro: the Cloudflare adapter), the build edits nothing.
+const (
+	FrameworkNuxt      = "nuxt"
+	FrameworkSvelteKit = "sveltekit"
+	FrameworkAstro     = "astro"
+)
+
 // NodeVersions are the Node majors a build may run on; each is an image tag.
 var NodeVersions = []string{"20", "22", "24"}
 
@@ -35,19 +47,21 @@ var (
 	reservedEnv = map[string]bool{
 		"HOME": true, "PATH": true, "CI": true, "npm_config_cache": true, "COREPACK_HOME": true,
 		"COREPACK_ENABLE_DOWNLOAD_PROMPT": true, "ROOT_DIR": true, "OUTPUT_DIR": true, "INSTALL_COMMAND": true,
-		"BUILD_COMMAND": true, "NEXT_TELEMETRY_DISABLED": true, "ASTRO_TELEMETRY_DISABLED": true,
+		"BUILD_COMMAND": true, "FRAMEWORK": true, "NEXT_TELEMETRY_DISABLED": true, "ASTRO_TELEMETRY_DISABLED": true,
 	}
 )
 
 // Settings are how a site's repository is built.
 type Settings struct {
-	Branch         string            `json:"branch"`
-	RootDir        string            `json:"rootDir"`
-	InstallCommand string            `json:"installCommand"`
-	BuildCommand   string            `json:"buildCommand"`
-	OutputDir      string            `json:"outputDir"`
-	NodeVersion    string            `json:"nodeVersion"`
-	Env            map[string]string `json:"env"`
+	Branch         string `json:"branch"`
+	RootDir        string `json:"rootDir"`
+	InstallCommand string `json:"installCommand"`
+	BuildCommand   string `json:"buildCommand"`
+	OutputDir      string `json:"outputDir"`
+	NodeVersion    string `json:"nodeVersion"`
+	// Framework picks a server-rendered build preset; empty builds the output folder as static files.
+	Framework string            `json:"framework,omitempty"`
+	Env       map[string]string `json:"env"`
 }
 
 // Normalise trims and checks the settings, answering an InputError for anything refused.
@@ -61,11 +75,18 @@ func (s Settings) Normalise() (Settings, error) {
 	} else {
 		out.NodeVersion = strings.TrimSpace(s.NodeVersion)
 	}
+	out.Framework = strings.TrimSpace(s.Framework)
 	var err error
 	if out.RootDir, err = cleanRelative("root directory", s.RootDir, true); err != nil {
 		return Settings{}, err
 	}
-	if out.OutputDir, err = cleanRelative("output directory", s.OutputDir, false); err != nil {
+	if err := validFramework(out.Framework); err != nil {
+		return Settings{}, &InputError{Reason: err.Error()}
+	}
+	if out.Framework != "" {
+		// The preset knows where its output is.
+		out.OutputDir = ""
+	} else if out.OutputDir, err = cleanRelative("output directory", s.OutputDir, false); err != nil {
 		return Settings{}, err
 	}
 	checks := []error{validBranch(out.Branch), validNode(out.NodeVersion),
@@ -119,6 +140,15 @@ func validBranch(branch string) error {
 	return nil
 }
 
+func validFramework(framework string) error {
+	switch framework {
+	case "", FrameworkNextjs, FrameworkNuxt, FrameworkSvelteKit, FrameworkAstro:
+		return nil
+	}
+	return fmt.Errorf("the framework %q is not built from git yet; deploy it as an app container instead, "+
+		"or build it in your own CI and upload the output", framework)
+}
+
 func validNode(version string) error {
 	for _, known := range NodeVersions {
 		if version == known {
@@ -156,7 +186,7 @@ func validVariables(what string, values map[string]string, reserved func(string)
 	for _, name := range names {
 		value := values[name]
 		if !envNamePattern.MatchString(name) {
-			return fmt.Errorf("%s %q: a name is letters, digits and '_', not starting with a digit", what, name)
+			return fmt.Errorf("a %s name is letters, digits and '_', not starting with a digit, at most 128 characters", what)
 		}
 		if reserved != nil {
 			if err := reserved(name); err != nil {

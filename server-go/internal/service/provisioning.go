@@ -10,7 +10,8 @@ import (
 	"maps"
 	"net"
 	"net/url"
-	"strconv"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +44,11 @@ type ProvisioningService struct {
 	queryStats bool
 	// runInBackground starts an accepted project build; nil runs it on its own goroutine.
 	runInBackground func(func())
+	// buildTimeout overrides defaultBuildTimeout; zero keeps the default.
+	buildTimeout time.Duration
+	// imagePullTimeout overrides defaultImagePullTimeout; zero keeps the default.
+	imagePullTimeout time.Duration
+	rollbackRetries  rollbackRetrySchedule
 	// storageBudget holds every database volume to the platform's share of its storage.
 	storageBudget *storagebudget.Budget
 	store         storage.InstanceStore
@@ -145,6 +151,8 @@ type ProvisioningService struct {
 	// advisory-lock one so the claim holds across them.
 	deletionClaimer ProjectOperationClaimer
 	claimerOnce     sync.Once
+	// projectReadTimeout bounds the project read made under a lifecycle lock; zero uses the default.
+	projectReadTimeout time.Duration
 	// deletionObservers are told the moment a project is claimed for
 	// teardown, so in-process caches of "is this project still live" stop
 	// serving it without waiting for their own expiry. Optional.
@@ -221,6 +229,28 @@ var ErrTierConfigUnavailable = errors.New("the tier's configuration could not be
 // edits take effect without a redeploy. The store is seeded with every tier
 // and nothing deletes a row, so a missing row is a broken table, not a default.
 func (s *ProvisioningService) tierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
+	tc, err := s.storedTierConfig(ctx, tier)
+	if err != nil {
+		return config.TierConfig{}, err
+	}
+	return s.withArchiveTimeoutGuard(ctx, tier, tc), nil
+}
+
+// withArchiveTimeoutGuard gives the tier its built-in upload interval, which
+// the tier_configs table has no column for, while FreeWALUpload is on, and
+// none while it is off (EXC-784).
+func (s *ProvisioningService) withArchiveTimeoutGuard(ctx context.Context, tier domain.TierType, tc config.TierConfig) config.TierConfig {
+	tc.ArchiveTimeout = ""
+	if !features.Enabled(ctx, s.flags, features.FreeWALUpload) {
+		return tc
+	}
+	if builtin, err := config.GetTierConfig(tier); err == nil {
+		tc.ArchiveTimeout = builtin.ArchiveTimeout
+	}
+	return tc
+}
+
+func (s *ProvisioningService) storedTierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
 	if s.tierStore == nil {
 		return config.GetTierConfig(tier)
 	}
@@ -414,7 +444,10 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	if err != nil {
 		return nil, err
 	}
-	return admitted.build(ctx)
+	// The caller waits for the answer but does not own the build: a closed
+	// connection must not cancel it half-way and leave a FAILED project
+	// holding the organisation's slot.
+	return admitted.build(context.WithoutCancel(ctx))
 }
 
 // ProvisionInBackground admits the project as Provision does and answers as
@@ -439,13 +472,22 @@ func (s *ProvisioningService) ProvisionInBackground(ctx context.Context, req dom
 	return accepted, nil
 }
 
-// startInBackground runs an accepted build detached from its request.
+// startInBackground runs an accepted build detached from its request. Nothing
+// is left to catch a panic there, and it would take the whole control plane.
 func (s *ProvisioningService) startInBackground(f func()) {
+	guarded := func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("ERROR: background work panicked: %v\n%s", r, debug.Stack())
+			}
+		}()
+		f()
+	}
 	if s.runInBackground != nil {
-		s.runInBackground(f)
+		s.runInBackground(guarded)
 		return
 	}
-	go f()
+	go guarded()
 }
 
 // SetBackgroundRunner replaces how accepted builds are started (tests).
@@ -514,9 +556,23 @@ type provisionFailureHandler func(ctx context.Context, inst *domain.DatabaseInst
 // buildDatabase runs the provisioning pipeline for a project whose row is
 // already written: the cluster, then registration. It is the one path a
 // database comes into being by, whether with its project or added later.
-func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admittedProject) (*domain.ProvisioningResponse, error) {
+func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admittedProject) (resp *domain.ProvisioningResponse, err error) {
 	start, inst, req, prov := admitted.start, admitted.inst, admitted.req, admitted.prov
-	tier, fail, opts := admitted.tier, admitted.fail, admitted.opts
+	tier, opts := admitted.tier, admitted.opts
+	// Before the clock: a first pull takes as long as the network does.
+	if err := s.prepareBuildImages(ctx, prov, req); err != nil {
+		metrics.ObserveProvision(start, err)
+		pulling := provisioner.NewProvisionContext(nil, nil)
+		pulling.SetStage(domain.StageContainerCreation)
+		pulling.SetStep("pull image")
+		return admitted.fail(ctx, inst, req, pulling.Fail(err), pulling), nil
+	}
+	// Nothing below the provisioner has a timeout of its own: an exec whose
+	// commit waits on dead standbys would hold the row PROVISIONING for good.
+	limit := s.buildLimit()
+	deadline := fmt.Errorf("the database build did not finish within %s", limit)
+	ctx, stopClock := context.WithTimeoutCause(ctx, limit, deadline)
+	defer stopClock()
 	// A teardown that claims the project mid-build owns it from that moment.
 	// The pipeline must stop rather than keep creating resources the
 	// teardown has already looked for and not found: it cancels the
@@ -546,13 +602,32 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admit
 			persist()
 		},
 	)
+	// The handler's cleanups detach for themselves, so the finished ctx is fine.
+	fail := func(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest,
+		failure error, pc *provisioner.ProvisionContext) *domain.ProvisioningResponse {
+		if errors.Is(context.Cause(ctx), deadline) {
+			failure = pc.Fail(deadline)
+		}
+		return admitted.fail(ctx, inst, req, failure, pc)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ERROR: database build of %s panicked: %v\n%s", inst.ProjectID, r, debug.Stack())
+			metrics.ObserveProvision(start, errBuildPanicked)
+			resp, err = fail(ctx, inst, req, errBuildPanicked, pc), nil
+		}
+	}()
 
 	var result *provisioner.ProvisioningResult
 	var provErr error
 	if rbProv, ok := prov.(provisioner.RollbackAware); ok {
 		result, provErr = rbProv.ProvisionWithRollback(ctx, req, tier, pc)
 	} else {
-		// Legacy path — no rollback support.
+		// No rollback of its own: what it started is removed the way a delete
+		// removes it, under the namespace the row holds by then.
+		pc.RegisterCleanup(removeFailedBuildCleanup(inst.ProjectID), func(cleanupCtx context.Context) error {
+			return prov.Deprovision(cleanupCtx, inst.Namespace, inst.ProjectID)
+		})
 		result, provErr = prov.Provision(ctx, req, tier, pc.SetStage)
 	}
 	// A cancelled context outranks whatever the provisioner reported: the
@@ -560,16 +635,55 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, admitted *admit
 	// registered. The failure handler runs the compensations.
 	if cause := context.Cause(ctx); cause != nil && isProjectGone(cause) {
 		metrics.ObserveProvision(start, cause)
-		return fail(context.WithoutCancel(ctx), inst, req, cause, pc), nil
+		return fail(ctx, inst, req, cause, pc), nil
 	}
 	if provErr != nil {
 		metrics.ObserveProvision(start, provErr)
-		return fail(context.WithoutCancel(ctx), inst, req, provErr, pc), nil
+		return fail(ctx, inst, req, provErr, pc), nil
 	}
 
-	resp, ferr := s.finalizeProvisioning(ctx, inst, req, result, pc, fail, opts)
-	metrics.ObserveProvision(start, ferr)
-	return resp, ferr
+	resp, err = s.finalizeProvisioning(ctx, inst, req, result, pc, fail, opts)
+	metrics.ObserveProvision(start, err)
+	return resp, err
+}
+
+// defaultBuildTimeout bounds one database build. It sits above the longest pod
+// wait (11 minutes on a paid tier) and below storage.StaleBuildAfter, so a hung
+// build ends itself before a delete may take its row for abandoned. An image pull
+// runs ahead of this clock and can outlast that rule; a delete that takes the row
+// then stops the build at its next stage.
+const defaultBuildTimeout = 20 * time.Minute
+
+// defaultImagePullTimeout bounds fetching a build's images, which runs ahead of
+// the build's own clock.
+const defaultImagePullTimeout = time.Hour
+
+func (s *ProvisioningService) prepareBuildImages(ctx context.Context, prov provisioner.DatabaseProvisioner, req domain.ProvisioningRequest) error {
+	preparer, ok := prov.(provisioner.ImagePreparer)
+	if !ok {
+		return nil
+	}
+	limit := s.imagePullTimeout
+	if limit <= 0 {
+		limit = defaultImagePullTimeout
+	}
+	pullCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	if err := preparer.PrepareImages(pullCtx, req); err != nil {
+		return fmt.Errorf("pull the database's images: %w", err)
+	}
+	return nil
+}
+
+// errBuildPanicked is what a project records when its build panicked; the panic
+// itself goes to the log only.
+var errBuildPanicked = errors.New("the database build stopped on an internal error")
+
+func (s *ProvisioningService) buildLimit() time.Duration {
+	if s.buildTimeout > 0 {
+		return s.buildTimeout
+	}
+	return defaultBuildTimeout
 }
 
 // prepareProvisioning validates the request and creates the initial instance record.
@@ -904,13 +1018,17 @@ func (s *ProvisioningService) recordProvisionFailure(
 	log.Printf("Provisioning failed for %s at stage %s (%s): %v — running %d cleanup(s)",
 		req.ProjectName, inst.FailureStage, inst.FailureStep, inst.FailureReason, pc.CleanupCount())
 
-	results := pc.Rollback(ctx)
+	results := provisioner.ScopeCleanupResults(pc.Rollback(ctx), inst.FailureReason)
 	if logJSON, jerr := json.Marshal(results); jerr == nil {
 		inst.RollbackLog = string(logJSON)
 	} else {
 		log.Printf("WARN: marshal rollback log: %v", jerr)
 	}
-
+	for _, result := range results {
+		if !result.OK {
+			log.Printf("ERROR: rollback of %s: %s failed: %s", req.ProjectName, result.Name, result.Error)
+		}
+	}
 }
 
 // saveProvisionFailure persists the failed row and answers with it.
@@ -943,6 +1061,9 @@ func (s *ProvisioningService) saveProvisionFailure(inst *domain.DatabaseInstance
 func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest,
 	result *provisioner.ProvisioningResult, pc *provisioner.ProvisionContext, fail provisionFailureHandler, opts RegistrationOptions) (*domain.ProvisioningResponse, error) {
 	applyProvisioningResult(inst, req, result)
+	if err := s.applyChosenOwnerPassword(ctx, inst, req, pc); err != nil {
+		return fail(ctx, inst, req, err, pc), nil
+	}
 
 	opts.Context = pc
 	opts.RowAlreadyCreated = true
@@ -961,6 +1082,29 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 		DatabaseName: inst.DatabaseName,
 		CreatedAt:    inst.CreatedAt,
 	}, nil
+}
+
+// applyChosenOwnerPassword gives the owner the password the create request
+// carries (EXC-759): the one the customer chose, or the one generated so it
+// could be shown once. A MySQL owner is created with it by registration; a
+// Postgres owner is told it now, before registration files it in the vault.
+func (s *ProvisioningService) applyChosenOwnerPassword(ctx context.Context, inst *domain.DatabaseInstance,
+	req domain.ProvisioningRequest, pc *provisioner.ProvisionContext) error {
+	if req.OwnerPassword == "" {
+		return nil
+	}
+	if req.DBType != domain.MySQL {
+		pc.SetStage(domain.StageRoleCreation)
+		pc.SetStep("set the owner password")
+		if err := s.alterRolePassword(ctx, inst, inst.Username, req.OwnerPassword); err != nil {
+			return pc.Fail(fmt.Errorf("set the owner password: %w", err))
+		}
+	}
+	if err := s.syncClusterOwnerSecret(ctx, inst, inst.Username, req.OwnerPassword); err != nil {
+		return pc.Fail(err)
+	}
+	inst.Password = req.OwnerPassword
+	return nil
 }
 
 // applyProvisioningResult copies the provisioner's output onto the instance.
@@ -1573,7 +1717,46 @@ func notServableErr(status string) error {
 	return ErrProjectDeleting
 }
 
+// GetCredentials is the connection details of a project's database. With
+// OneTimeCredentials on it carries no password at all and its connection
+// string a <password> template: a password is shown once, at creation and at a
+// reset, and never read back (EXC-759).
 func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
+	creds, err := s.storedCredentials(ctx, projectID, s.oneTimeCredentials(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if s.oneTimeCredentials(ctx) {
+		return withoutPasswords(creds), nil
+	}
+	return withoutClusterAddress(creds), nil
+}
+
+// OneTimeCredentials reports whether database passwords are shown once and
+// never read back (EXC-759).
+func (s *ProvisioningService) OneTimeCredentials(ctx context.Context) bool {
+	return s.oneTimeCredentials(ctx)
+}
+
+func (s *ProvisioningService) oneTimeCredentials(ctx context.Context) bool {
+	return features.Enabled(ctx, s.flags, features.OneTimeCredentials)
+}
+
+// passwordSentinel stands where a connection string's password goes while the
+// string is built as a template.
+const (
+	passwordSentinel = "PASSWORDPLACEHOLDER"
+	hostSentinel     = "HOSTPLACEHOLDER"
+	portSentinel     = "PORTPLACEHOLDER"
+)
+
+var hostPortPlaceholders = strings.NewReplacer(hostSentinel, "<host>", portSentinel, "<port>")
+
+// storedCredentials reads the owner and reader passwords from the vault. It is
+// for the platform's own use; no route returns its result unredacted while
+// OneTimeCredentials is on. With template, the connection strings carry
+// <password> where the password goes.
+func (s *ProvisioningService) storedCredentials(ctx context.Context, projectID string, template bool) (*domain.CredentialsResponse, error) {
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return nil, err
@@ -1598,8 +1781,16 @@ func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID stri
 	if err != nil {
 		return nil, err
 	}
+	// The cluster's own address is never put in a string a customer gets.
+	inURL, urlHost, urlPort := password, hostSentinel, portSentinel
+	if template {
+		inURL = passwordSentinel
+	}
 	if inst.DBType == domain.MySQL {
-		return withReader(mysqlCredentials(inst, password), readerPassword), nil
+		creds := mysqlCredentials(inst, password)
+		creds.ConnectionURL = domain.MySQLURL(urlHost, urlPort, inst.Username, inURL, inst.DatabaseName)
+		creds.JDBCURL = domain.MySQLJDBCURL(urlHost, urlPort, inst.DatabaseName)
+		return withReader(creds, readerPassword), nil
 	}
 	port := 5432
 	if inst.Port != nil {
@@ -1608,8 +1799,8 @@ func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID stri
 
 	connURL := url.URL{
 		Scheme:   "postgresql",
-		User:     url.UserPassword(inst.Username, password),
-		Host:     net.JoinHostPort(inst.Host, strconv.Itoa(port)),
+		User:     url.UserPassword(inst.Username, inURL),
+		Host:     net.JoinHostPort(urlHost, urlPort),
 		Path:     "/" + inst.DatabaseName,
 		RawQuery: url.Values{"sslmode": {inst.SSLMode}}.Encode(),
 	}
@@ -1625,6 +1816,26 @@ func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID stri
 		SSLMode:       inst.SSLMode,
 		ConnectionURL: connURL.String(),
 	}, readerPassword), nil
+}
+
+// withoutClusterAddress is creds as a customer sees them: no internal host
+// (the project's public endpoint is its own answer) and the connection
+// strings' placeholders written as <host> and <port>.
+func withoutClusterAddress(creds *domain.CredentialsResponse) *domain.CredentialsResponse {
+	redacted := *creds
+	redacted.ConnectionURL = hostPortPlaceholders.Replace(creds.ConnectionURL)
+	redacted.JDBCURL = hostPortPlaceholders.Replace(creds.JDBCURL)
+	redacted.Host, redacted.ReadOnlyHost = "", ""
+	return &redacted
+}
+
+// withoutPasswords is withoutClusterAddress with every password removed and
+// the connection strings' password written as <password>.
+func withoutPasswords(creds *domain.CredentialsResponse) *domain.CredentialsResponse {
+	redacted := withoutClusterAddress(creds)
+	redacted.ConnectionURL = strings.ReplaceAll(redacted.ConnectionURL, passwordSentinel, "<password>")
+	redacted.Password, redacted.ReaderPassword = "", ""
+	return redacted
 }
 
 // readerPassword is the filed SELECT-only login's password, or "" while its
@@ -1722,6 +1933,9 @@ func (s *ProvisioningService) checkClusterCapacity(tier config.TierConfig) error
 	// Stamp the configured headroom % so FreeCPUMilli / FreeMemBytes
 	// account for our extra safety buffer on top of kubelet's Allocatable.
 	cap.HeadroomPercent = s.capacityHeadroomPercent
+	if err := requirePodSlots(cap, int64(max(tier.Instances, 1)+projectSidecarPods), "provision tier "+tier.CPUString()); err != nil {
+		return err
+	}
 	// Allocatable=0 means we couldn't read node status (mock or stale API
 	// cache). Treat as "capacity unknown" rather than blocking every
 	// provision — the WAITING_FOR_READY timeout still catches real OOMs.

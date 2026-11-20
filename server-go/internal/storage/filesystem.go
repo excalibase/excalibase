@@ -164,6 +164,21 @@ func (s *FileSystemStore) RecordRestoreInterrupted(projectID, step, reason strin
 	return s.write(marked)
 }
 
+// RecordRollbackRetry writes what a rollback retry found. See InstanceStore.
+func (s *FileSystemStore) RecordRollbackRetry(projectID, rollbackLog, failureReason, expected string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored, ok := s.cache[projectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	updated, err := ApplyRollbackRetry(stored, rollbackLog, failureReason, expected)
+	if err != nil {
+		return err
+	}
+	return s.write(updated)
+}
+
 // UpdateIfStatus persists only while the row still holds expected. See
 // InstanceStore.
 func (s *FileSystemStore) UpdateIfStatus(instance *domain.DatabaseInstance, expected string) error {

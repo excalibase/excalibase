@@ -448,3 +448,46 @@ func TestCredentialsRotated_EvictsThePool(t *testing.T) {
 		t.Errorf("cached pools after a rotation: got %d, want 0", got)
 	}
 }
+
+func ownerCreds() map[string]map[string]string {
+	creds := appCreds()
+	creds["projects/proj_a/credentials/admin"] = map[string]string{
+		"host": "db.internal", "port": "5432",
+		"username": "owner", "password": "opw", "database": "proj_a",
+		"sslcert": "CERT-PEM", "sslkey": "KEY-PEM", "sslrootcert": "CA-PEM",
+	}
+	return creds
+}
+
+// Role management logs in as the owner on a pool of its own; customer SQL
+// never gets it (EXC-761).
+func TestOpenOwner_IsItsOwnPoolAndIsEvictedWithTheProject(t *testing.T) {
+	store := testStore(t, &domain.DatabaseInstance{ProjectID: "proj_a", Status: "ACTIVE"})
+	o := NewOpener(store, fakeVault{data: ownerCreds()}, Overrides{}, PoolLimits{})
+	defer o.Close()
+
+	app, err := o.Open(context.Background(), "proj_a")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	owner, err := o.OpenOwner(context.Background(), "proj_a")
+	if err != nil {
+		t.Fatalf("open owner: %v", err)
+	}
+	if app == owner {
+		t.Fatal("the owner shares the pool customer SQL runs on")
+	}
+	o.ProjectDeleting("proj_a")
+	if got := o.CachedPools(); got != 0 {
+		t.Errorf("cached pools after teardown: got %d, want 0", got)
+	}
+}
+
+func TestOpenOwner_RefusesNotServableProject(t *testing.T) {
+	store := testStore(t, &domain.DatabaseInstance{ProjectID: "proj_a", Status: "DELETING"})
+	o := NewOpener(store, fakeVault{data: ownerCreds()}, Overrides{}, PoolLimits{})
+	defer o.Close()
+	if _, err := o.OpenOwner(context.Background(), "proj_a"); err == nil {
+		t.Fatal("opened the owner pool of a project under teardown")
+	}
+}

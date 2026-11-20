@@ -74,6 +74,9 @@ type PauseService struct {
 	endpoints PublicEndpointReconciler
 	// runInBackground starts a StartPause or StartResume run; nil uses a goroutine.
 	runInBackground func(func())
+	// podSlots reads the cluster's pod slots so a resume that would leave the
+	// database pods Pending is refused (EXC-747); nil on a single host.
+	podSlots PodSlotReader
 
 	mu sync.Mutex
 }
@@ -354,6 +357,22 @@ func (s *PauseService) runPause(ctx context.Context, pauser provisioner.Pauser, 
 	if err := s.awaitPrePauseBackup(ctx, inst); err != nil {
 		return pauseStepBackup, err
 	}
+	return s.stopServing(ctx, pauser, inst)
+}
+
+// StopOpenUpgrade stops a project whose major upgrade is left open, for its
+// deletion grace period. The run took its backup, and the database may not be up
+// to take another. The caller holds the project's lease and keeps its status.
+func (s *PauseService) StopOpenUpgrade(ctx context.Context, inst *domain.DatabaseInstance) error {
+	pauser, ok := s.pauserFor(inst)
+	if !ok {
+		return ErrPauseUnsupported
+	}
+	_, err := s.stopServing(ctx, pauser, inst)
+	return err
+}
+
+func (s *PauseService) stopServing(ctx context.Context, pauser provisioner.Pauser, inst *domain.DatabaseInstance) (string, error) {
 	if err := pauser.StopReplication(ctx, inst.Namespace, inst.ProjectID); err != nil {
 		return pauseStepStopReplication, err
 	}
@@ -589,6 +608,9 @@ func (s *PauseService) admitResume(ctx context.Context, projectID string) (func(
 	}
 	resumable, err := s.resumable(ctx, pauser, inst)
 	if err != nil || !resumable {
+		return nil, err
+	}
+	if err := s.requirePodSlotsToResume(ctx, inst); err != nil {
 		return nil, err
 	}
 

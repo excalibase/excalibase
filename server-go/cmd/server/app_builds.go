@@ -97,7 +97,7 @@ func appBuildOptions(cfg config.AppConfig) k8s.AppBuildOptions {
 		Slots: cfg.SiteGit.BuildSlots, PrepareImage: cfg.SiteGit.PrepareImage,
 		ToolImage:     sitebuilds.NodeImage(cfg.SiteGit.NodeImage, sitebuilds.DefaultNodeVersion),
 		BuildKitImage: cfg.AppBuild.BuildKitImage, BuilderImage: cfg.AppBuild.BuilderImage, RunImage: cfg.AppBuild.RunImage,
-		CraneImage: cfg.AppBuild.CraneImage, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs,
+		CraneImage: cfg.AppBuild.CraneImage, ExtraDenyCIDRs: cfg.BuildEgressExtraDenyCIDRs,
 	}
 }
 

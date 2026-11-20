@@ -111,7 +111,7 @@ func (r *buildRig) assertStartupIsolation(startup string) {
 		if r.runner.HostIsolated() || !strings.Contains(startup, "refused an isolated gateway") {
 			r.t.Fatalf("Docker %d: isolated=%v, startup log %q", r.engineMajor, r.runner.HostIsolated(), startup)
 		}
-		if options := r.runner.buildNetworkOptions(nil).Options; len(options) != 0 {
+		if options := r.runner.buildNetworkOptions("excalibase-net-build-check", nil).Options; options["com.docker.network.bridge.gateway_mode_ipv4"] != "" {
 			r.t.Fatalf("Docker %d: build networks still sent %v", r.engineMajor, options)
 		}
 	}

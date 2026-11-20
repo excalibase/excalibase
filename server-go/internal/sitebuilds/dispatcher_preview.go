@@ -101,6 +101,8 @@ func publicFailure(kind FailureKind) string {
 		return "The build command failed; see the build log in Studio"
 	case FailTimeout, FailOutOfMemory, FailDisk:
 		return "The build ran past its plan's limits; see Studio"
+	case FailFramework:
+		return "The app cannot run as a server-rendered site; see Studio"
 	case FailNoOutput, FailRootDir:
 		return "The build settings do not match the repository; see Studio"
 	}

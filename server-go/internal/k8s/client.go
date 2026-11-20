@@ -208,7 +208,7 @@ func (c *Client) ensureNamespaceQuota(ctx context.Context, namespace string) err
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create namespace quota: %w", err)
 	}
-	return nil
+	return c.ensureNamespaceLimitRange(ctx, namespace)
 }
 
 const (
@@ -564,7 +564,12 @@ func (c *Client) StreamExecInPod(ctx context.Context, namespace, pod, container 
 		return err
 	}
 	stderr := &cappedBuffer{limit: 4096}
-	if err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: stderr}); err != nil {
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: stderr})
+	if ctx.Err() != nil {
+		// The stream's copies may still be writing: the buffer is not ours yet.
+		return fmt.Errorf("exec: %w", ctx.Err())
+	}
+	if err != nil {
 		return fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
 	}
 	return nil
@@ -598,7 +603,7 @@ func (c *Client) executor(namespace, pod, container string, cmd []string, stdin 
 	for _, arg := range cmd {
 		req = req.Param("command", arg)
 	}
-	exec, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
+	exec, err := newCancellableExecutor(c.restConfig, req.URL())
 	if err != nil {
 		return nil, fmt.Errorf("create executor: %w", err)
 	}
@@ -620,6 +625,10 @@ func (c *Client) exec(ctx context.Context, namespace, pod, container string, cmd
 		opts.Stdin = strings.NewReader(stdin)
 	}
 	err = exec.StreamWithContext(ctx, opts)
+	if ctx.Err() != nil {
+		// The stream's copies may still be writing: the buffers are not ours yet.
+		return "", fmt.Errorf("exec: %w", ctx.Err())
+	}
 	if err != nil {
 		return "", fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
 	}
@@ -824,10 +833,12 @@ func (c *Client) accumulateNodeCapacity(ctx context.Context, cap *ClusterCapacit
 			Name: n.Name, Labels: n.Labels,
 			AllocatableCPUMilli: n.Status.Allocatable.Cpu().MilliValue(),
 			AllocatableMemBytes: n.Status.Allocatable.Memory().Value(),
+			AllocatablePods:     n.Status.Allocatable.Pods().Value(),
 			Tainted:             repelsUntoleratedPods(n.Spec.Taints),
 		}
 		cap.AllocatableCPUMilli += node.AllocatableCPUMilli
 		cap.AllocatableMemBytes += node.AllocatableMemBytes
+		cap.AllocatablePods += node.AllocatablePods
 		cap.Nodes = append(cap.Nodes, node)
 	}
 	return nil
@@ -877,6 +888,8 @@ func addPodRequest(capacity *ClusterCapacity, byNode map[string]int, p *corev1.P
 	capacity.RequestedCPUMilli += cpu
 	capacity.RequestedMemBytes += mem
 	if i, ok := byNode[p.Spec.NodeName]; ok {
+		capacity.Pods++
+		capacity.Nodes[i].Pods++
 		capacity.Nodes[i].RequestedCPUMilli += cpu
 		capacity.Nodes[i].RequestedMemBytes += mem
 	}

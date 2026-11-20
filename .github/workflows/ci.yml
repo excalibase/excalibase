@@ -13,7 +13,7 @@ permissions:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
@@ -21,15 +21,17 @@ jobs:
       ci: ${{ steps.filter.outputs.ci }}
       hosting: ${{ steps.filter.outputs.hosting }}
       mysqlbackup: ${{ steps.filter.outputs.mysqlbackup }}
+      failedprovisioning: ${{ steps.filter.outputs.failedprovisioning }}
       singlehost: ${{ steps.filter.outputs.singlehost }}
       singlehostboot: ${{ steps.filter.outputs.singlehostboot }}
+      gatewayguard: ${{ steps.filter.outputs.gatewayguard }}
       sitesrouter: ${{ steps.filter.outputs.sitesrouter }}
       sitesoutbound: ${{ steps.filter.outputs.sitesoutbound }}
       sitebuilds: ${{ steps.filter.outputs.sitebuilds }}
       appbuilds: ${{ steps.filter.outputs.appbuilds }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
         with:
           filters: |
@@ -44,8 +46,14 @@ jobs:
               - 'server-go/internal/k8s/deno_fence.ts'
             ci:
               - '.github/workflows/**'
+              - 'scripts/cve-watch/**'
+              - 'tests/cve-watch/**'
+              - 'security/**'
             singlehost:
               - 'deploy/single-host/**'
+            gatewayguard:
+              - 'charts/documentdb-gateway/**'
+              - 'server-go/internal/config/postgres_catalog.yaml'
             singlehostboot:
               - 'deploy/single-host/**'
               - 'server-go/Dockerfile'
@@ -56,6 +64,7 @@ jobs:
               - 'server-go/internal/hostlogs/**'
               - 'server-go/internal/enginestats/**'
               - 'server-go/internal/dockerbuilds/**'
+              - 'server-go/internal/imagepull/**'
               - 'server-go/internal/buildegress/**'
               - 'server-go/cmd/build-egress/**'
               - 'server-go/cmd/server/site_builds.go'
@@ -100,14 +109,26 @@ jobs:
               - 'server-go/internal/service/app_deploy*'
             mysqlbackup:
               - 'server-go/internal/k8s/moco_*'
+              - 'server-go/internal/k8s/mysql_tls*'
+              - 'server-go/internal/k8s/client.go'
+              - 'server-go/internal/k8s/app_egress_k3s_test.go'
+            failedprovisioning:
+              - 'server-go/internal/service/provisioning_rollback_retry.go'
+              - 'server-go/internal/service/provisioning_database.go'
+              - 'server-go/internal/service/restore_completion.go'
+              - 'server-go/internal/service/deletion_grace.go'
+              - 'server-go/internal/service/project_registration.go'
+              - 'server-go/internal/service/provisioning_failure_live_test.go'
+              - 'server-go/internal/provisioner/context.go'
+              - 'server-go/internal/k8s/exec_transport.go'
 
   single-host:
     name: Single-host bundle
     needs: changes
     if: needs.changes.outputs.singlehost == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Hardening, init, preflight and bootstrap
         run: |
           for t in single-host edge-listener init-env preflight bootstrap host-firewall; do
@@ -120,17 +141,50 @@ jobs:
       - name: API upload size on the edge (real Caddy and Studio nginx)
         run: sh deploy/single-host/tests/api-upload-edge.sh docker
 
+  release-tags:
+    name: Release tag plan
+    needs: changes
+    if: needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Native tag plan
+        run: bash tests/release-native-tags-test.sh
+
+      - name: Release gate
+        run: |
+          bash tests/cve-watch/gate-test.sh
+          bash tests/cve-watch/workflow-test.sh
+
+  gateway-guard:
+    name: DocumentDB gateway guard
+    needs: changes
+    if: needs.changes.outputs.gatewayguard == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Guard logic
+        run: bash charts/documentdb-gateway/tests/gateway_guard_test.sh
+      - name: Build the image
+        run: docker build -q -t documentdb-gateway-guard charts/documentdb-gateway
+      - name: Guard in the image, with real Postgres
+        run: bash charts/documentdb-gateway/tests/gateway_guard_demotion_test.sh documentdb-gateway-guard
+      - name: Trivy (image)
+        uses: ./.github/actions/trivy
+        with:
+          image: documentdb-gateway-guard
+
   sites-router:
     name: Sites router Worker
     needs: changes
     if: needs.changes.outputs.sitesrouter == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: edge/sites-router
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: 'npm'
@@ -144,13 +198,13 @@ jobs:
     name: Sites outbound Worker
     needs: changes
     if: needs.changes.outputs.sitesoutbound == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: edge/sites-outbound
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: 'npm'
@@ -164,19 +218,27 @@ jobs:
     name: Single-host boot (Docker)
     needs: changes
     if: needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Four fresh installs, each walking realtime too (EXC-612).
     timeout-minutes: 145
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Build provisioning and Studio from this checkout
         run: |
           docker build -q -t docker.io/excalibase/provisioning:ci server-go
           docker build -q -t docker.io/excalibase/studio:ci frontend
+      - name: Tenants wait for the host firewall across real reboots (Docker in Docker)
+        run: sh deploy/single-host/tests/reboot-order.sh
+      - name: Project bridges are fenced from an app's first instruction (Docker in Docker)
+        run: |
+          for version in 27 28 29; do
+            DIND_IMAGE=docker.io/library/docker:$version-dind sh deploy/single-host/tests/project-bridge-fence.sh
+          done
       - name: Fresh install, project, GraphQL/REST, backups by default (WAL archive, point-in-time and in-place restore, purge), files
         env:
           PLATFORM_TAG: ci
           PG_BACKUPS: "1"
+          MAJOR_UPGRADE: "1"
         run: bash deploy/single-host/tests/boot-smoke.sh docker
       - name: Fresh install with manual vault unseal (init, restart, CLI unseal), host monitoring, stored log search, log drains, request charts and slow queries
         env:
@@ -214,15 +276,15 @@ jobs:
 
   go-lint:
     name: Go Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
       run:
         working-directory: server-go
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'
           cache-dependency-path: |
@@ -243,15 +305,15 @@ jobs:
 
   go-test:
     name: Go Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
       run:
         working-directory: server-go
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'
           cache-dependency-path: server-go/go.sum
@@ -264,33 +326,33 @@ jobs:
 
   frontend-lint:
     name: Frontend Type Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npx tsc --noEmit
+      - run: npx tsc -b --noEmit
 
   frontend-test:
     name: Frontend Unit (vitest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, frontend-lint]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: 'npm'
@@ -303,7 +365,7 @@ jobs:
       # TypeScript (sonar.javascript.lcov.reportPaths), and without it every
       # changed .ts/.tsx line counts as uncovered against the new-code gate.
       - run: npm run test:coverage
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: frontend-coverage
@@ -311,15 +373,15 @@ jobs:
 
   frontend-e2e:
     name: Studio E2E (Playwright)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, frontend-lint]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: 'npm'
@@ -331,7 +393,7 @@ jobs:
       - run: npx playwright test
         env:
           CI: '1'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: playwright-report
@@ -340,12 +402,12 @@ jobs:
 
   deno-test:
     name: Deno Unit (deno-server + vendored lib)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: 'npm'
@@ -395,18 +457,18 @@ jobs:
       # as a project runtime has none by default (EXC-518).
       - name: Runtime image runs functions offline
         run: sh deno-server/scripts/image-offline-test.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deno-coverage
           path: deno-server/coverage/lcov.info
 
   defend:
     name: Defend (secrets + vulns + audit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # gitleaks scans the full commit history, not just the tip.
           fetch-depth: 0
@@ -419,7 +481,7 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz -C /tmp gitleaks
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks detect --source . --no-banner --redact
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
         with:
           go-version: '1.26.10'
@@ -434,7 +496,7 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           cd server-go && "$(go env GOPATH)/bin/govulncheck" ./...
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         if: needs.changes.outputs.frontend == 'true'
         with:
           node-version: '20'
@@ -448,11 +510,11 @@ jobs:
 
   go-integration-shard:
     name: Go Integration shard ${{ matrix.shard }}/4
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # Integration tests need a Docker daemon (testcontainers spins up
     # Postgres, NATS, LocalStack, and one-off postgres containers for
-    # restore E2Es). ubuntu-latest has Docker available out of the box.
+    # restore E2Es). ubuntu-24.04 has Docker available out of the box.
     # Gated on backend changes — skipped on frontend-only PRs to keep
     # CI cost down.
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
@@ -460,12 +522,22 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     defaults:
       run:
         working-directory: server-go
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Anonymous pulls hit Docker Hub's rate limit; fork PRs have no secret and
+      # pull anonymously.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'
           cache-dependency-path: server-go/go.sum
@@ -479,7 +551,7 @@ jobs:
           go test -tags=integration ./internal/... ./pkg/... -race -cover
           -coverprofile=coverage-${{ matrix.shard }}.out -timeout 12m
           -run "$(scripts/integration-shard.sh ${{ matrix.shard }} 4)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: go-coverage-shard-${{ matrix.shard }}
@@ -489,7 +561,7 @@ jobs:
     # The required check: passes only when every shard passed, and gates the
     # coverage of the shards together.
     name: Go Integration (testcontainers)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-integration-shard]
     # !cancelled(): a failed shard must fail this check, not skip it.
     if: ${{ !cancelled() && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true') }}
@@ -500,12 +572,12 @@ jobs:
       - name: Every shard passed
         if: needs.go-integration-shard.result != 'success'
         run: echo "integration shards ${{ needs.go-integration-shard.result }}" && exit 1
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'
           cache-dependency-path: server-go/go.sum
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: go-coverage-shard-*
           merge-multiple: true
@@ -520,7 +592,7 @@ jobs:
             echo "Coverage ${total}% is below 70% threshold"
             exit 1
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: go-coverage
@@ -528,7 +600,7 @@ jobs:
 
   live-cluster:
     name: Live cluster tests (hosting)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # Real k3s clusters (gVisor, deploy rollouts, Cilium egress); only when hosting code changes.
     if: needs.changes.outputs.hosting == 'true'
@@ -536,8 +608,8 @@ jobs:
       run:
         working-directory: server-go
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'
           cache-dependency-path: server-go/go.sum
@@ -546,7 +618,7 @@ jobs:
 
   live-start-fence:
     name: Live cluster tests (start fence)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # EXC-622: workloads start the real way with a probe at t=0; nothing fenced may answer.
     if: needs.changes.outputs.hosting == 'true'
@@ -554,8 +626,8 @@ jobs:
       run:
         working-directory: server-go
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'
           cache-dependency-path: server-go/go.sum
@@ -564,7 +636,7 @@ jobs:
 
   live-mysql-backup:
     name: Live cluster tests (MySQL backup)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # EXC-586: MOCO's real backup Job under the project policies, on kube-router and on production Cilium.
     if: needs.changes.outputs.mysqlbackup == 'true'
@@ -572,17 +644,35 @@ jobs:
       run:
         working-directory: server-go
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'
           cache-dependency-path: server-go/go.sum
       - name: Run MySQL backup egress probes
         run: go test -tags=live ./internal/k8s/ -run 'TestK3s.*MySQLBackup' -v -timeout 40m
 
+  live-failed-provisioning:
+    name: Live failed provisioning
+    runs-on: ubuntu-24.04
+    needs: [changes, go-lint]
+    # EXC-534: seals, dropped requests and failed rollbacks on real k3s, CloudNativePG and vault; about 15 minutes.
+    if: needs.changes.outputs.failedprovisioning == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: server-go/go.sum
+      - name: Run failed provisioning scenarios
+        run: go test -tags=live ./internal/service/ -run 'TestLiveFailedProvisioning' -v -count=1 -timeout 45m
+
   live-site-builds:
     name: Live site builds (gVisor)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # A real Vite build through the site build Job under gVisor (EXC-354); its own job so the hosting suite keeps its time.
     if: needs.changes.outputs.sitebuilds == 'true'
@@ -590,8 +680,8 @@ jobs:
       run:
         working-directory: server-go
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'
           cache-dependency-path: server-go/go.sum
@@ -600,7 +690,7 @@ jobs:
 
   live-app-builds:
     name: Live app builds (gVisor)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, go-lint]
     # Dockerfile (rootless BuildKit) and Buildpacks image builds through the app build Job under gVisor (EXC-547).
     if: needs.changes.outputs.appbuilds == 'true'
@@ -608,8 +698,8 @@ jobs:
       run:
         working-directory: server-go
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.10'
       - name: Run the app build Job under gVisor
@@ -617,7 +707,7 @@ jobs:
 
   sonarcloud:
     name: SonarCloud Scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # frontend-test produces the TypeScript lcov, so the scan has to wait for
     # it too; !cancelled() below still lets the scan run when it is skipped.
     needs: [changes, go-integration, deno-test, frontend-test]
@@ -626,21 +716,21 @@ jobs:
     # missing artifact.
     if: ${{ !cancelled() && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # SonarCloud needs full history for accurate blame/new-code analysis.
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: go-coverage
           path: server-go
         continue-on-error: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: deno-coverage
           path: deno-server/coverage
         continue-on-error: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: frontend-coverage
           path: frontend/coverage
@@ -648,7 +738,7 @@ jobs:
       # SonarSource/sonarqube-scan-action v6 wraps sonar-scanner-cli 8.x —
       # the same engine SonarCloud runs, so local/CI scans match cloud
       # results. Local validation: ./scripts/sonar-local.sh
-      - uses: SonarSource/sonarqube-scan-action@v6
+      - uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io

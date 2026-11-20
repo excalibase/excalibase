@@ -3,7 +3,7 @@ name: E2E (k3d smoke)
 # Scoped control-plane smoke on a real Kubernetes cluster. We use k3d (k3s in
 # Docker), NOT minikube: minikube's docker driver aborts on hosted runners
 # (exit 29 "docker only supported on Linux with ...") whereas k3d's k3s-in-a-
-# container works reliably on ubuntu-latest.
+# container works reliably on ubuntu-24.04.
 #
 # Scope (deliberately narrow — reliability over ambition):
 #   * bring up the provisioning service + its Postgres platform store, using
@@ -48,15 +48,24 @@ jobs:
     # Hosted 2-core/7GB runner. Safe for this scoped smoke (one Postgres + the
     # provisioning pod, no CNPG/ingress/cert-manager). If the scope ever grows
     # to the full multi-tenant stack, move this to a self-hosted label instead.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       K3D_VERSION: v5.7.4
       CLUSTER: excalibase
       NS: excalibase-platform
       IMAGE: excalibase/provisioning:ci
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Anonymous pulls hit Docker Hub's rate limit; fork PRs have no secret and
+      # pull anonymously.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build provisioning image
         run: docker build -t "$IMAGE" -f server-go/Dockerfile server-go
@@ -150,6 +159,9 @@ jobs:
 
       - name: Chart lets provisioning check a volume can grow
         run: sh charts/provisioning/tests/disk-resize-rbac.sh
+
+      - name: Chart lets provisioning read the sandbox RuntimeClass
+        run: sh charts/provisioning/tests/runtimeclass-rbac.sh
 
       - name: Chart requires the first-admin setup token
         run: sh charts/provisioning/tests/setup-token.sh

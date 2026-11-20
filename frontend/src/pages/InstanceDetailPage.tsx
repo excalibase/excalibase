@@ -13,6 +13,9 @@ import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletio
 import { ArrowLeft, Cpu, Database, HardDrive, Users, Loader2, Trash2, RefreshCw, Archive, FileText } from 'lucide-react';
 import { formatBytes } from '../utils/formatBytes';
 import { engineLabel } from '../utils/engine';
+import { describeBackupSchedule } from '../utils/backupSchedule';
+import { useProjectEndpoint } from '../api/projectEndpoint';
+import { NOT_REACHABLE, publicTarget } from '../components/ConnectionParts';
 
 type Tab = 'overview' | 'credentials' | 'backups' | 'logs';
 
@@ -32,6 +35,7 @@ export function InstanceDetailPage() {
   const [tab, setTab] = useState<Tab>('overview');
 
   const { data: instance, isLoading } = useInstance(projectId!);
+  const { data: endpoint } = useProjectEndpoint(projectId);
   const { data: metrics } = useCurrentMetrics(projectId!);
   const { data: backupData, refetch: refetchBackups } = useListBackups(projectId!);
   const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
@@ -49,6 +53,9 @@ export function InstanceDetailPage() {
       }
     }
   };
+
+  const external = publicTarget(endpoint);
+  const publicAddress = external ? `${external.host}:${external.port}` : null;
 
   if (isLoading || !instance) {
     return (
@@ -75,7 +82,7 @@ export function InstanceDetailPage() {
               <StatusBadge status={instance.status} stage={instance.currentStage} deletionDueAt={instance.deletionDueAt} />
             </div>
             <p className="text-sm text-text-tertiary mt-0.5">
-              {engineLabel(instance)} · {instance.tier} · {instance.namespace}
+              {engineLabel(instance)} · {instance.tier}
             </p>
           </div>
         </div>
@@ -134,14 +141,11 @@ export function InstanceDetailPage() {
           {tab === 'overview' && (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-6 text-sm">
               {[
-                ['Organization',  instance.orgId],
-                ['Host',          instance.host ?? '—'],
-                ['Port',          instance.port ?? '—'],
+                ['Connection',    publicAddress ?? NOT_REACHABLE],
                 ['Database Name', instance.databaseName ?? '—'],
-                ['Backup',        instance.backupEnabled ? `Enabled · ${instance.backupSchedule}` : 'Disabled'],
+                ['Backup',        instance.backupEnabled ? describeBackupSchedule(instance.backupSchedule) : 'Disabled'],
                 ['Created',       new Date(instance.createdAt).toLocaleString()],
                 ['Updated',       new Date(instance.updatedAt).toLocaleString()],
-                ['Metrics',       instance.metricsEndpoint ?? '—'],
               ].map(([label, value]) => (
                 <div key={label as string}>
                   <p className="text-text-tertiary mb-1">{label}</p>

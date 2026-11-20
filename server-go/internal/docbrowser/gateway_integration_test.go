@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"os"
 	"strings"
 	"testing"
@@ -42,6 +43,9 @@ func startGateway(ctx context.Context, t *testing.T) testcontainers.Container {
 	t.Helper()
 	if os.Getenv(protocolTestsEnv) == "" {
 		t.Skipf("pulls %s; run it with %s=1", documentDBImage, protocolTestsEnv)
+	}
+	if err := imagepull.EnsureLocal(ctx, documentDBImage); err != nil {
+		t.Fatal(err)
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

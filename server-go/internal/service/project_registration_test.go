@@ -127,11 +127,10 @@ func TestRegisterProjectResetsRolePasswordsToTheVaultValues(t *testing.T) {
 		t.Fatalf("RegisterProject: %v", err)
 	}
 
-	sql := strings.Join(h.kube.ExecCommands, "\n")
+	sql := strings.Join(h.kube.ExecStdin, "\n")
 	appCreds, _ := h.vault.Get(vaultCredentialPath(testRegProject, "excalibase_app"))
-	if !strings.Contains(sql, alterRolePasswordSQL("excalibase_app", appCreds["password"])) {
-		t.Fatalf("restored cluster must have its inherited role passwords reset to the vault value; sql=%s", sql)
-	}
+	assertSetsVerifierOf(t, sql, "excalibase_app", appCreds["password"])
+	assertNoPassword(t, "the role SQL", sql+strings.Join(h.kube.ExecCommands, "\n"), map[string]string{"excalibase_app": appCreds["password"]})
 	if !strings.Contains(sql, "ALTER ROLE %I WITH LOGIN PASSWORD %L', "+sqlTextLiteral("app")+",") {
 		t.Error("ResetAdminPassword must reset the admin role too")
 	}
@@ -145,7 +144,10 @@ func TestRegisterProjectKeepsRolePasswordsOnAFreshCluster(t *testing.T) {
 	if err := h.svc.RegisterProject(context.Background(), inst, RegistrationOptions{}); err != nil {
 		t.Fatalf("RegisterProject: %v", err)
 	}
-	if strings.Contains(strings.Join(h.kube.ExecCommands, "\n"), "ALTER ROLE %I WITH LOGIN PASSWORD") {
+	if !strings.Contains(strings.Join(h.kube.ExecStdin, "\n"), "CREATE ROLE") {
+		t.Fatal("the registration SQL did not run")
+	}
+	if strings.Contains(strings.Join(h.kube.ExecStdin, "\n"), "ALTER ROLE %I WITH LOGIN PASSWORD") {
 		t.Error("a freshly created cluster must not get password-reset statements")
 	}
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"k8s.io/apimachinery/pkg/api/resource"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -31,5 +32,37 @@ func TestGetAppTierConfigRefusesUnknownTier(t *testing.T) {
 		if _, err := GetAppTierConfig(tier); err == nil {
 			t.Errorf("tier %q must be refused", tier)
 		}
+	}
+}
+
+// Every app has a disk ceiling that scales with the tier, never one number for all.
+func TestAppTiersCarryAnEphemeralStorageEnvelope(t *testing.T) {
+	var previous resource.Quantity
+	for _, tier := range []domain.TierType{domain.Free, domain.Standard, domain.Enterprise} {
+		tc, err := GetAppTierConfig(tier)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, limit := resource.MustParse(tc.EphemeralStorageRequest), resource.MustParse(tc.EphemeralStorageLimit)
+		if limit.Cmp(request) < 0 {
+			t.Errorf("%s: limit %s below request %s", tier, tc.EphemeralStorageLimit, tc.EphemeralStorageRequest)
+		}
+		if previous.Cmp(limit) >= 0 {
+			t.Errorf("%s: ephemeral limit %s must exceed the smaller tier's %s", tier, limit.String(), previous.String())
+		}
+		previous = limit
+	}
+}
+
+func TestLargestAppEphemeralStorageLimitIsTheTopTiers(t *testing.T) {
+	largest := LargestAppEphemeralStorageLimit()
+	for _, tier := range []domain.TierType{domain.Free, domain.Standard, domain.Enterprise} {
+		tc, _ := GetAppTierConfig(tier)
+		if limit := resource.MustParse(tc.EphemeralStorageLimit); limit.Cmp(largest) > 0 {
+			t.Errorf("%s limit %s exceeds the reported largest %s", tier, limit.String(), largest.String())
+		}
+	}
+	if enterprise, _ := GetAppTierConfig(domain.Enterprise); largest.Cmp(resource.MustParse(enterprise.EphemeralStorageLimit)) != 0 {
+		t.Errorf("largest %s, want the enterprise tier's %s", largest.String(), enterprise.EphemeralStorageLimit)
 	}
 }

@@ -5,6 +5,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"io"
 	"os/exec"
 	"strings"
@@ -17,7 +19,6 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tclocalstack "github.com/testcontainers/testcontainers-go/modules/localstack"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -39,14 +40,14 @@ func TestDockerBackupAdapter_IntegrationE2E(t *testing.T) {
 
 	// --- Postgres container -------------------------------------------------
 	pgPwd := testutil.FixturePassword("pg-bk-int")
+	if err := imagepull.EnsureLocal(ctx, "postgres:16-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("app"),
 		tcpg.WithUsername("postgres"),
 		tcpg.WithPassword(pgPwd),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
@@ -62,6 +63,9 @@ func TestDockerBackupAdapter_IntegrationE2E(t *testing.T) {
 	}
 
 	// --- LocalStack S3 ------------------------------------------------------
+	if err := imagepull.EnsureLocal(ctx, "localstack/localstack:3.7"); err != nil {
+		t.Fatal(err)
+	}
 	lsC, err := tclocalstack.Run(ctx, "localstack/localstack:3.7",
 		testcontainers.WithEnv(map[string]string{"SERVICES": "s3"}),
 	)

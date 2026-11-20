@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -17,6 +18,9 @@ type mockDockerClient struct {
 	containers map[string]string // containerID → status
 	failOn     string
 	execLog    [][]string // every Exec invocation's cmd captured here
+	stdinLog   []string   // the stdin of every ExecInContainerStdin
+	stdinOut   string     // what ExecInContainerStdin answers
+	stdinErr   error      // what ExecInContainerStdin fails with
 	stops      int        // counter for StopContainer calls
 	starts     int        // counter for StartContainer calls
 	copyCalls  int        // counter for CopyToContainer calls
@@ -142,9 +146,13 @@ func (m *mockDockerClient) ContainerState(ctx context.Context, containerID strin
 	return ContainerState{Found: status != containerNotFound, Running: status == containerRunning}, err
 }
 
-func (m *mockDockerClient) ExecInContainerStdin(_ context.Context, _ string, cmd []string, _ string) (string, error) {
+func (m *mockDockerClient) ExecInContainerStdin(_ context.Context, _ string, cmd []string, stdin string) (string, error) {
 	m.execLog = append(m.execLog, cmd)
-	return "", nil
+	m.stdinLog = append(m.stdinLog, stdin)
+	if m.stdinErr != nil {
+		return "", m.stdinErr
+	}
+	return m.stdinOut, nil
 }
 
 func TestDockerProvisioner_SupportedType(t *testing.T) {
@@ -322,7 +330,7 @@ func TestDockerProvisioner_ConfigureArchive_RunsAlterSystemThenRestarts(t *testi
 	docker.containers["container-pg"] = "running"
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	if err := p.ConfigureArchive(context.Background(), "container-pg", "wal-g wal-push %p", "postgres"); err != nil {
+	if err := p.ConfigureArchive(context.Background(), "container-pg", "wal-g wal-push %p", "postgres", ""); err != nil {
 		t.Fatalf("ConfigureArchive: %v", err)
 	}
 
@@ -366,7 +374,7 @@ func TestDockerProvisioner_ConfigureArchive_RestartsLast(t *testing.T) {
 	docker.containers["c1"] = "running"
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	if err := p.ConfigureArchive(context.Background(), "c1", "cp %p /walarchive/%f", "postgres"); err != nil {
+	if err := p.ConfigureArchive(context.Background(), "c1", "cp %p /walarchive/%f", "postgres", ""); err != nil {
 		t.Fatalf("ConfigureArchive: %v", err)
 	}
 	// Expect events in this order: 3+ Execs, then Stop, then Start.
@@ -484,3 +492,53 @@ func TestDockerProvisioner_RefusesATierWithoutASizeBeforeAnyContainer(t *testing
 		t.Fatalf("containers created: %v", docker.containers)
 	}
 }
+
+// listingDocker is an engine that can name its managed containers.
+type listingDocker struct {
+	*mockDockerClient
+	listErr error
+}
+
+func (d *listingDocker) ManagedContainerNames(context.Context) ([]string, error) {
+	if d.listErr != nil {
+		return nil, d.listErr
+	}
+	names := make([]string, 0, len(d.containers))
+	for name := range d.containers {
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+// An upgrade's old container holds a whole copy of the data and a dump of every
+// password hash, and the run naming it goes with the project's row.
+func TestDeprovisionRemovesTheContainersAnUpgradeKept(t *testing.T) {
+	docker := &listingDocker{mockDockerClient: newMockDocker()}
+	kept := PreUpgradeContainerName("p1", "mu-1")
+	alsoKept := PreUpgradeContainerName("p1", "mu-2")
+	other := PreUpgradeContainerName("p10", "mu-3")
+	for _, name := range []string{kept, alsoKept, other, DatabaseContainerName("p1")} {
+		docker.containers[name] = "stopped"
+	}
+	if err := NewDockerPostgreSQLProvisioner(docker).Deprovision(context.Background(), DatabaseContainerName("p1"), "p1"); err != nil {
+		t.Fatalf("Deprovision: %v", err)
+	}
+	for _, gone := range []string{kept, alsoKept, DatabaseContainerName("p1")} {
+		if _, there := docker.containers[gone]; there {
+			t.Errorf("%s left behind", gone)
+		}
+	}
+	if _, there := docker.containers[other]; !there {
+		t.Errorf("removed another project's %s", other)
+	}
+}
+
+// Going on would drop the row, and with it the last record that the copy exists.
+func TestDeprovisionFailsWhenItCannotLookForThem(t *testing.T) {
+	docker := &listingDocker{mockDockerClient: newMockDocker(), listErr: errors.New("engine unreachable")}
+	if err := NewDockerPostgreSQLProvisioner(docker).Deprovision(context.Background(), DatabaseContainerName("p1"), "p1"); err == nil {
+		t.Fatal("teardown reported done without looking")
+	}
+}
+
+var _ ManagedContainerLister = (*RealDockerClient)(nil)

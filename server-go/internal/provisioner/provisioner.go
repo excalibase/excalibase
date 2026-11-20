@@ -20,6 +20,13 @@ type DatabaseProvisioner interface {
 	SupportedType() domain.DatabaseType
 }
 
+// ImagePreparer is implemented by a provisioner that fetches images itself. The
+// fetch runs ahead of the build, whose deadline it must not eat into: a first
+// pull takes as long as the network does.
+type ImagePreparer interface {
+	PrepareImages(ctx context.Context, req domain.ProvisioningRequest) error
+}
+
 // Pauser is the optional interface a provisioner implements when it
 // supports stop-without-deprovision. K8s/CNPG hibernates the cluster
 // (cnpg.io/hibernation annotation); Docker stops the container. Both paths preserve

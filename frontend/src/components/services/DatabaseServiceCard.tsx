@@ -8,6 +8,9 @@ import { engineLabel, isMySQLProject } from '../../utils/engine';
 import { databaseServiceStatus } from './serviceStatus';
 import type { DatabaseInstance } from '../../types';
 import { AccessNote, ServiceCard } from './ServiceCard';
+import { useHostsApps } from '../../hooks/useHostsApps';
+import { NOT_REACHABLE, publicTarget } from '../ConnectionParts';
+import { AppsConnectionNote } from '../AppsConnectionNote';
 
 function DatabaseAccess({ projectId }: { readonly projectId: string }) {
   const { data: endpoint } = useProjectEndpoint(projectId);
@@ -72,16 +75,30 @@ function projectVersion(project: DatabaseInstance): string {
   return version ? ` ${version}` : '';
 }
 
-// Where a MySQL project's database answers inside the platform (ADR 0041).
-// Every connection must use TLS; the server refuses one without it.
+// Where a MySQL project's database answers (ADR 0041). Every connection must
+// use TLS; the server refuses one without it. Apps hosted beside the database
+// get DATABASE_URL injected, so no address is shown for them.
 function MySQLEndpoint({ project }: { readonly project: DatabaseInstance }) {
+  const { data: endpoint } = useProjectEndpoint(project.projectId);
+  const hostsApps = useHostsApps(project.projectId);
+  const external = publicTarget(endpoint);
   return (
     <AccessNote testId="service-database-mysql-endpoint">
-      Reachable inside this project at{' '}
-      <code className="font-mono">
-        {project.host}:{project.port}
-      </code>
-      , database <code className="font-mono">{project.databaseName}</code>. TLS required.
+      {external ? (
+        <>
+          Reachable at{' '}
+          <code className="font-mono">
+            {external.host}:{external.port}
+          </code>
+          , database <code className="font-mono">{project.databaseName}</code>. TLS required.
+        </>
+      ) : hostsApps ? (
+        <>
+          <AppsConnectionNote /> TLS required.
+        </>
+      ) : (
+        <>{NOT_REACHABLE} TLS required.</>
+      )}
     </AccessNote>
   );
 }

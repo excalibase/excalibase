@@ -88,6 +88,9 @@ func (h *MajorUpgradeHandler) record(r *http.Request, run *domain.MajorUpgrade) 
 // writeMajorUpgradeError answers a refusal with its fixed sentence and a
 // platform failure with nothing but that it failed.
 func writeMajorUpgradeError(w http.ResponseWriter, projectID string, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	var blocked *service.MajorUpgradeBlockedError
 	switch {
 	case errors.As(err, &blocked):

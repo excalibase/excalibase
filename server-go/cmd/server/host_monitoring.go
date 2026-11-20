@@ -71,7 +71,7 @@ func wireHostMonitoring(d hostMonitoringDeps) *handler.HostMonitoringHandler {
 		mail = d.mail
 	}
 	notifier := hostmonitor.NewNotifier(hostmonitor.NotifierDeps{Mail: mail, From: d.cfg.EmailFromAddress, FromName: d.cfg.EmailFromName,
-		Vault: d.vault, Client: hostmonitor.GuardedClient(denyPrefixes(d.cfg.AppEgressExtraDenyCIDRs)), StudioURL: d.cfg.StudioURL})
+		Vault: d.vault, Client: hostmonitor.GuardedClient(alertWebhookDenyList(d.cfg)), StudioURL: d.cfg.StudioURL})
 	monitor := hostmonitor.New(hostmonitor.Deps{
 		Engine: engine, Store: tables, Instances: d.instances, Alerts: d.alerts, Notifier: hostmonitor.NewQueue(notifier),
 		Paths: hostmetrics.DefaultPaths(d.cfg.HostMetrics.NetDev), Platform: d.cfg.HostMetrics.Containers,
@@ -118,6 +118,11 @@ func mountProjectContainers(r *chi.Mux, sqlStore storage.OrgStore, store storage
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Get("/metrics", d.hostMonitoringHandler.ProjectContainers)
 	})
+}
+
+// alertWebhookDenyList: the webhook is the platform calling out, so the builds' list never applies to it.
+func alertWebhookDenyList(cfg config.AppConfig) []netip.Prefix {
+	return denyPrefixes(cfg.AppEgressExtraDenyCIDRs)
 }
 
 // denyPrefixes are the install's own ranges, which config has already validated.

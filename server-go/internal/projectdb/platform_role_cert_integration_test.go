@@ -11,6 +11,8 @@ import (
 	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/pem"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"math/big"
 	"net/url"
 	"strings"
@@ -20,7 +22,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -126,6 +127,9 @@ func startCertPostgres(t *testing.T) certPostgres {
 	file := func(name string, content []byte, mode int64) testcontainers.ContainerFile {
 		return testcontainers.ContainerFile{Reader: strings.NewReader(string(content)), ContainerFilePath: name, FileMode: mode}
 	}
+	if err := imagepull.EnsureLocal(ctx, "postgres:17-alpine"); err != nil {
+		t.Fatal(err)
+	}
 	pg, err := postgres.Run(ctx, "postgres:17-alpine",
 		postgres.WithDatabase("app"), postgres.WithUsername("postgres"), postgres.WithPassword("super-pw"),
 		testcontainers.WithFiles(
@@ -135,13 +139,13 @@ func startCertPostgres(t *testing.T) certPostgres {
 			file("/tls/pg_hba.conf", []byte(renderedHBA(t)), 0o644),
 			file("/docker-entrypoint-initdb.d/tls.sh", []byte(initScript), 0o755),
 		),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2).WithStartupTimeout(60*time.Second)),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
 	}
 	t.Cleanup(func() { _ = pg.Terminate(ctx) })
+	pgready.DumpLogsOnFailure(t, pg)
 	port, err := pg.MappedPort(ctx, "5432/tcp")
 	if err != nil {
 		t.Fatal(err)

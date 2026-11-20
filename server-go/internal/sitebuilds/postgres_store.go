@@ -18,19 +18,19 @@ import (
 // these columns in this order.
 const (
 	getConnectionSQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
-		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		root_dir, install_command, build_command, output_dir, node_version, build_framework, build_env, connected_by, COALESCE(inactive_reason, ''),
 		created_at, updated_at, preview_settings
 		FROM site_git_connections WHERE site_id = $1 AND project_id = $2`
 	connectionsForPushSQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
-		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		root_dir, install_command, build_command, output_dir, node_version, build_framework, build_env, connected_by, COALESCE(inactive_reason, ''),
 		created_at, updated_at, preview_settings
 		FROM site_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3 AND branch = $4`
 	connectionsForRepositorySQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
-		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		root_dir, install_command, build_command, output_dir, node_version, build_framework, build_env, connected_by, COALESCE(inactive_reason, ''),
 		created_at, updated_at, preview_settings
 		FROM site_git_connections WHERE provider = $1 AND installation_id = $2 AND repository_id = $3`
 	connectionsForInstallationSQL = `SELECT site_id, project_id, provider, installation_id, repository_id, repository, branch,
-		root_dir, install_command, build_command, output_dir, node_version, build_env, connected_by, COALESCE(inactive_reason, ''),
+		root_dir, install_command, build_command, output_dir, node_version, build_framework, build_env, connected_by, COALESCE(inactive_reason, ''),
 		created_at, updated_at, preview_settings
 		FROM site_git_connections WHERE provider = $1 AND installation_id = $2
 		AND (cardinality($3::bigint[]) = 0 OR repository_id = ANY($3))`
@@ -60,7 +60,7 @@ func scanConnection(row scanner) (*Connection, error) {
 	settings := &connection.Settings
 	err := row.Scan(&connection.SiteID, &connection.ProjectID, &connection.Provider, &connection.InstallationID, &connection.RepositoryID,
 		&connection.Repository, &settings.Branch, &settings.RootDir, &settings.InstallCommand, &settings.BuildCommand, &settings.OutputDir,
-		&settings.NodeVersion, &env, &connection.ConnectedBy, &connection.InactiveReason, &connection.CreatedAt, &connection.UpdatedAt, &previews)
+		&settings.NodeVersion, &settings.Framework, &env, &connection.ConnectedBy, &connection.InactiveReason, &connection.CreatedAt, &connection.UpdatedAt, &previews)
 	if err != nil {
 		return nil, err
 	}
@@ -82,16 +82,16 @@ func (s *PostgresStore) SaveConnection(ctx context.Context, connection *Connecti
 	settings := connection.Settings
 	result, err := s.db.ExecContext(ctx, `INSERT INTO site_git_connections
 		(site_id, project_id, provider, installation_id, repository_id, repository, branch, root_dir, install_command,
-		 build_command, output_dir, node_version, build_env, connected_by, created_at, updated_at)
-		SELECT id, project_id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW() FROM sites WHERE id = $1 AND project_id = $2
+		 build_command, output_dir, node_version, build_framework, build_env, connected_by, created_at, updated_at)
+		SELECT id, project_id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW() FROM sites WHERE id = $1 AND project_id = $2
 		ON CONFLICT (site_id) DO UPDATE SET provider = EXCLUDED.provider, installation_id = EXCLUDED.installation_id,
 		  repository_id = EXCLUDED.repository_id, repository = EXCLUDED.repository, branch = EXCLUDED.branch,
 		  root_dir = EXCLUDED.root_dir, install_command = EXCLUDED.install_command, build_command = EXCLUDED.build_command,
-		  output_dir = EXCLUDED.output_dir, node_version = EXCLUDED.node_version, build_env = EXCLUDED.build_env,
+		  output_dir = EXCLUDED.output_dir, node_version = EXCLUDED.node_version, build_framework = EXCLUDED.build_framework, build_env = EXCLUDED.build_env,
 		  connected_by = EXCLUDED.connected_by, inactive_reason = NULL, updated_at = NOW()`,
 		connection.SiteID, connection.ProjectID, connection.Provider, connection.InstallationID, connection.RepositoryID,
 		connection.Repository, settings.Branch, settings.RootDir, settings.InstallCommand, settings.BuildCommand,
-		settings.OutputDir, settings.NodeVersion, env, connection.ConnectedBy)
+		settings.OutputDir, settings.NodeVersion, settings.Framework, env, connection.ConnectedBy)
 	if err != nil {
 		return fmt.Errorf("save the site's repository: %w", err)
 	}

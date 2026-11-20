@@ -4,6 +4,7 @@ package k8s
 
 import (
 	"context"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,9 @@ func TestK3sDocumentDBServiceFollowsThePrimary(t *testing.T) {
 func startGatewayLab(t *testing.T) *gatewayLab {
 	t.Helper()
 	ctx := context.Background()
+	if err := imagepull.EnsureLocal(ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1")
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)

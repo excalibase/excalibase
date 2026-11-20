@@ -47,6 +47,9 @@ type AppImageDeployer interface {
 // ErrSpoolFull refuses a publish while the spool lacks room for the plan's largest image and a margin.
 var ErrSpoolFull = errors.New("the platform has no room to take in a built image right now; try the build again later")
 
+// ErrSpoolTooSmall refuses a build whose plan allows an image the spool's whole volume could not take in.
+var ErrSpoolTooSmall = errors.New("this install's build spool is too small for the images your plan allows, so nothing was built; the operator has to enlarge it")
+
 // spoolMargin is kept free beyond the image, for the layout's own files and other publishes in flight.
 const spoolMargin = 512 << 20
 
@@ -67,6 +70,10 @@ type AppBuildPublisher struct {
 	now       func() time.Time
 	// free answers the bytes free on the spool's filesystem.
 	free func(dir string) (int64, error)
+	// capacity answers the bytes the spool's filesystem could ever hold.
+	capacity func(dir string) (int64, error)
+	// readLayout reads the image archive onto the spool.
+	readLayout func(r io.Reader, dir string, limit int64) (*appregistry.Layout, error)
 	// mu guards reserved: the MaxImage of every publish spooling on this pod, which free does not see yet.
 	mu       sync.Mutex
 	reserved int64
@@ -82,7 +89,7 @@ type AppBuildResult struct {
 
 // NewAppBuildPublisher spools archives under spoolDir (provisioning's own disk); each is removed after its push.
 func NewAppBuildPublisher(internal *appregistry.Internal, collector AppImageCollector, pusher ImagePusher, room RegistryRoom, lock ProjectLocker, deployer AppImageDeployer, spoolDir string) *AppBuildPublisher {
-	return &AppBuildPublisher{internal: internal, collector: collector, pusher: pusher, room: room, lock: lock, deployer: deployer, spoolDir: spoolDir, now: time.Now, free: spoolFree}
+	return &AppBuildPublisher{internal: internal, collector: collector, pusher: pusher, room: room, lock: lock, deployer: deployer, spoolDir: spoolDir, now: time.Now, free: spoolFree, capacity: spoolCapacity, readLayout: appregistry.ReadLayout}
 }
 
 // Publish collects, checks and pushes the build's image, then deploys it as a git build.
@@ -100,12 +107,12 @@ func (p *AppBuildPublisher) Publish(ctx context.Context, result AppBuildResult) 
 	defer p.release(result.MaxImage)
 	dir, err := os.MkdirTemp(p.spoolDir, "app-image-")
 	if err != nil {
-		return nil, fmt.Errorf("spool the build's image: %w", err)
+		return nil, spoolError(fmt.Errorf("spool the build's image: %w", err))
 	}
 	defer os.RemoveAll(dir)
 	layout, err := p.collect(ctx, result, dir)
 	if err != nil {
-		return nil, err
+		return nil, spoolError(err)
 	}
 	return p.pushAndDeploy(ctx, result, repository, layout)
 }
@@ -157,7 +164,7 @@ func (p *AppBuildPublisher) collect(ctx context.Context, result AppBuildResult, 
 		collected <- err
 	}()
 	stream := &streamErr{r: reader}
-	layout, readErr := appregistry.ReadLayout(stream, dir, result.MaxImage)
+	layout, readErr := p.readLayout(stream, dir, result.MaxImage)
 	if readErr == nil {
 		// The tar's end padding follows its last entry.
 		_, readErr = io.Copy(io.Discard, stream)
@@ -222,4 +229,33 @@ func spoolFree(dir string) (int64, error) {
 		return 0, err
 	}
 	return int64(stat.Bavail) * int64(stat.Bsize), nil
+}
+
+// CheckCapacity refuses an image the spool's whole volume could not take in, however empty it got.
+func (p *AppBuildPublisher) CheckCapacity(maxImage int64) error {
+	capacity, err := p.capacity(p.spoolDir)
+	if err != nil {
+		return fmt.Errorf("read the spool's capacity: %w", err)
+	}
+	if needed := maxImage + spoolMargin; capacity < needed {
+		return fmt.Errorf("%w (%d bytes on the volume, %d needed)", ErrSpoolTooSmall, capacity, needed)
+	}
+	return nil
+}
+
+// spoolError names a disk that filled up despite the reservation: room that may come back, not a fault of the build.
+func spoolError(err error) error {
+	if errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT) {
+		return fmt.Errorf("%w: %v", ErrSpoolFull, err)
+	}
+	return err
+}
+
+// spoolCapacity is what the filesystem could hold for this process: used bytes plus those it may still use.
+func spoolCapacity(dir string) (int64, error) {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(dir, &stat); err != nil {
+		return 0, err
+	}
+	return int64(stat.Blocks-stat.Bfree+stat.Bavail) * int64(stat.Bsize), nil
 }

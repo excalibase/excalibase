@@ -7,12 +7,14 @@ package k8s
 
 import (
 	"context"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -31,6 +33,9 @@ func TestK3sNamespaceAndSecret(t *testing.T) {
 
 	// Start k3s in Docker
 	t.Log("Starting k3s container...")
+	if err := imagepull.EnsureLocal(ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1")
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)
@@ -126,6 +131,9 @@ func TestK3sWithCNPGOperator(t *testing.T) {
 	ctx := context.Background()
 
 	t.Log("Starting k3s container...")
+	if err := imagepull.EnsureLocal(ctx, "rancher/k3s:v1.31.6-k3s1"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1")
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)
@@ -159,7 +167,7 @@ func TestK3sWithCNPGOperator(t *testing.T) {
 	// Create PostgreSQL cluster CRD
 	t.Log("Creating PostgreSQL cluster CRD...")
 	ns := "integ-test"
-	client.CreateProjectNamespace(ctx, ns, "it-org")
+	createProjectNamespaceAndWait(ctx, t, client, ns)
 
 	cluster := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
 		ProjectID: "k3s-db",
@@ -184,6 +192,28 @@ func TestK3sWithCNPGOperator(t *testing.T) {
 	client.DeleteCRD(ctx, CNPGClusterGVR, ns, testK3SDBPostgres)
 	client.DeleteNamespace(ctx, ns)
 	t.Log("k3s+CNPG test completed")
+}
+
+// createProjectNamespaceAndWait creates the tenant namespace, failing the test
+// with the real cause if it cannot, and returns only once the API serves it.
+// The old tests swallowed CreateProjectNamespace's error and went straight to
+// ApplyCRD, which then died with a misleading "namespace not found".
+func createProjectNamespaceAndWait(ctx context.Context, t *testing.T, client *Client, ns string) {
+	t.Helper()
+	if err := client.CreateProjectNamespace(ctx, ns, "it-org"); err != nil {
+		t.Fatalf("CreateProjectNamespace %s: %v", ns, err)
+	}
+	deadline := time.Now().Add(time.Minute)
+	for {
+		_, err := client.clientset.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("namespace %s not visible after create: %v", ns, err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // waitForCNPGOperator polls until all pods in cnpg-system are Running+Ready.

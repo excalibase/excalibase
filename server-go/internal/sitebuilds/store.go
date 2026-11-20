@@ -67,6 +67,9 @@ type Store interface {
 	DeliveryQueued(ctx context.Context, target Target, deliveryID string) (bool, error)
 	// RequeueBuild hands a build this holder is running back to the queue, or cancels it when a newer one waits.
 	RequeueBuild(ctx context.Context, buildID, holder string) error
+	// RetryBuildLater sends a build this holder is running to the back of the queue for delay, counting the requeue,
+	// or cancels it when a newer one waits; ErrLeaseLost when the holder no longer runs it.
+	RetryBuildLater(ctx context.Context, buildID, holder string, delay time.Duration, reason string) error
 	ReplaceGrants(ctx context.Context, userID, provider string, access []gitprovider.Access, verifiedAt time.Time) error
 	// Grants answers what the user's sign-in since then showed them.
 	Grants(ctx context.Context, userID, provider string, since time.Time) ([]gitprovider.Access, error)

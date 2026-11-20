@@ -644,3 +644,5 @@ func TestFnE2E_ListAndDelete(t *testing.T) {
 		t.Error("invoking deleted function should not return 200")
 	}
 }
+
+func (_ *e2eInstanceStore) RecordRollbackRetry(string, string, string, string) error { return nil }

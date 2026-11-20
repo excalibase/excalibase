@@ -32,6 +32,10 @@ func TestValidateHostSyntax_Rejected(t *testing.T) {
 		{"too long label", strings.Repeat("a", 64) + ".example.com"},
 		{"too long name", strings.Repeat("a.", 130) + "com"},
 		{"underscore label", "my_db.example.com"},
+		{"short service name", "api.default.svc"},
+		{"service name", "svc.svc"},
+		{"api server alias", "kubernetes.default"},
+		{"api server alias, any case", "Kubernetes.Default."},
 	}
 	for _, tc := range rejected {
 		t.Run(tc.name, func(t *testing.T) {

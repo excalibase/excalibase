@@ -5,6 +5,7 @@ package projectdb
 import (
 	"context"
 	"database/sql"
+	"github.com/excalibase/provisioning-poc/internal/imagepull"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,9 @@ func startProvisionedMySQL(t *testing.T) mysqlServer {
 	ctx := context.Background()
 	ca := testca.New(t, "proj_my MySQL CA")
 	server := ca.Issue(t, "localhost")
+	if err := imagepull.EnsureLocal(ctx, "mysql:8.4"); err != nil {
+		t.Fatal(err)
+	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "mysql:8.4",

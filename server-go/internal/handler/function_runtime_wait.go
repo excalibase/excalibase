@@ -97,6 +97,8 @@ func (h *FunctionHandler) runtimeRestarting(ctx context.Context, projectID strin
 // The detail, with the runtime's address, goes to the log only.
 func writeRuntimeFailure(w http.ResponseWriter, action string, err error) bool {
 	switch {
+	case errors.Is(err, ErrSandboxUnavailable):
+		httpError(w, msgSandboxUnavailable, http.StatusServiceUnavailable)
 	case errors.Is(err, ErrProjectDeleting):
 		httpError(w, "project is being deleted", http.StatusConflict)
 	case errors.Is(err, ErrProjectRestoring):

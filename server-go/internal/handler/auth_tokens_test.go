@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -347,7 +348,10 @@ func TestRegister_AutoLoginTokenIsBoundedSession(t *testing.T) {
 	r.Post("/api/auth/register", h.Register)
 
 	body := `{"username":"alice","email":"alice@test.com","password":"` + testutil.FixturePassword("alice-reg") + `","setupToken":"` + setupToken + `"}`
-	w := doRequest(r, "POST", "/api/auth/register", body)
+	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body))
+	req.Header.Set(ReturnSessionTokenHeader, "true")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf(statusFmt, w.Code, w.Body.String())
 	}

@@ -115,9 +115,16 @@ func (s *ProvisioningService) reconcileProject(ctx context.Context, projectID st
 	if err != nil {
 		return err
 	}
-	roleSQL := projectRoleSQL(spec, creds, s.publicationName)
+	roleSQL, err := projectRoleSQL(spec, creds, s.publicationName)
+	if err != nil {
+		return err
+	}
 	if mintScheduler {
-		roleSQL += BuildProjectRoleResetSQL([]RolePassword{{Role: roleScheduler, Password: creds.schedulerPassword}})
+		scheduler, err := roleVerifiers([]RolePassword{{Role: roleScheduler, Password: creds.schedulerPassword}})
+		if err != nil {
+			return err
+		}
+		roleSQL += BuildProjectRoleResetSQL(scheduler)
 	}
 	exec := s.roleSQLExecer(spec.namespace, spec.projectID+primaryPodSuffix)
 	if err := runSuperuserRoleSQL(ctx, exec, spec.databaseName, reservedSchemaFirstSQL(), roleSQL); err != nil {
@@ -284,6 +291,8 @@ func (s *ProvisioningService) RunRoleReconcile(ctx context.Context, leader Leade
 	if !ok {
 		return RoleReconcileReport{}
 	}
+	s.logPausedBackups(s.ReconcilePausedBackups(ctx))
+	logArchiveTimeouts(s.ReconcileArchiveTimeouts(ctx))
 	report := s.ReconcileProjectRoles(ctx)
 	for _, failure := range report.Failed {
 		if errors.Is(failure, ErrProjectOperationRunning) {

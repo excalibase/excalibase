@@ -156,7 +156,7 @@ func queryStatsPsql(dbName string, serverVersionNum int, script string) []string
 func runStatsScript(ctx context.Context, exec roleSQLExecer, inst *domain.DatabaseInstance, script string) (string, error) {
 	database := statsTargetOf(inst).connectTo
 	version := probeServerVersionNum(ctx, exec, database)
-	out, err := exec(ctx, queryStatsPsql(database, version, script))
+	out, err := exec(ctx, queryStatsPsql(database, version, script), "")
 	if err != nil {
 		return "", fmt.Errorf("read query statistics of %s: %w", inst.ProjectID, err)
 	}

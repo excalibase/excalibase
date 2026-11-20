@@ -59,7 +59,7 @@ func customerRoleSuite(t *testing.T, image string, createRole bool) {
 		creds:      projectRoleCredentials{authPassword: "Auth-Password-1", appPassword: customerAppPassword, watcherPassword: "Watcher-Password-1"},
 		createRole: createRole,
 	}
-	pg.psql(t, projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub"))
+	pg.psql(t, mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub"))
 	c.owner = pg.connect(t, customerOwner, customerOwnerPassword)
 	c.admin = pg.connect(t, "postgres", "p")
 
@@ -70,7 +70,7 @@ func customerRoleSuite(t *testing.T, image string, createRole bool) {
 	t.Run("function re-passwords and drops only roles the owner created", c.functionManagesOnlyOwnedRoles)
 	t.Run("names are quoted, passwords are data", c.namesAreQuoted)
 	t.Run("a pre-hashed password is stored as given", c.preHashedPassword)
-	t.Run("only the owner and the platform app role may call the functions", c.onlyOwnerAndAppMayCall)
+	t.Run("only the owner may call the functions", c.onlyOwnerMayCall)
 	if createRole {
 		t.Run("owner creates, re-passwords and drops its own roles in SQL", c.ownerManagesRolesInSQL)
 		t.Run("owner cannot grant any predefined role", c.ownerCannotGrantPredefinedRoles)
@@ -105,7 +105,7 @@ CREATE FUNCTION public.format(text, text) RETURNS text LANGUAGE plpgsql AS $$
 BEGIN EXECUTE 'ALTER ROLE `+customerOwner+` SUPERUSER'; RETURN pg_catalog.format($1, $2); END $$;`)
 	restore := c.spec
 	restore.resetPasswords = true
-	c.pg.psql(t, projectRoleSQL(restore, c.creds, "cdc_watcher_pub"))
+	c.pg.psql(t, mustProjectRoleSQL(t, restore, c.creds, "cdc_watcher_pub"))
 	c.pg.psql(t, dropAllMongoUsersSQL())
 	if scanBool(t, c.admin, "SELECT rolsuper FROM pg_roles WHERE rolname = $1", customerOwner) {
 		t.Fatal("registration ran the owner's function as the superuser")
@@ -117,7 +117,7 @@ BEGIN EXECUTE 'ALTER ROLE `+customerOwner+` SUPERUSER'; RETURN pg_catalog.format
 func (c *customerRoleCase) registrationRefusesASquattedRole(t *testing.T) {
 	mustExec(t, c.admin, "DROP ROLE "+config.DocumentDBBrowserLogin)
 	mustExec(t, c.owner, "CREATE ROLE "+config.DocumentDBBrowserLogin+" LOGIN PASSWORD 'Squat-1'")
-	if err := c.pg.psqlErr(projectRoleSQL(c.spec, c.creds, "cdc_watcher_pub")); err == nil {
+	if err := c.pg.psqlErr(mustProjectRoleSQL(t, c.spec, c.creds, "cdc_watcher_pub")); err == nil {
 		t.Fatal("registration adopted a platform role the owner created")
 	}
 	mustExec(t, c.owner, "DROP ROLE "+config.DocumentDBBrowserLogin)
@@ -208,12 +208,17 @@ func (c *customerRoleCase) preHashedPassword(t *testing.T) {
 	c.pg.assertLogin(t, "cust_hashed", "Unicode-\u00e9\u00df-\u30d1\u30b9")
 }
 
-func (c *customerRoleCase) onlyOwnerAndAppMayCall(t *testing.T) {
+func (c *customerRoleCase) onlyOwnerMayCall(t *testing.T) {
 	reader := c.pg.connect(t, "cust_reader", "Cust-Pass-1")
 	mustFail(t, reader, "SELECT excalibase.create_role('by_reader', 'P-1')", "permission denied")
 	mustFail(t, c.pg.connect(t, mongoWriter, "Mongo-Pass-1"), "SELECT excalibase.drop_role('cust_reader')", "permission denied")
+	// Customer SQL runs as the app role, which must not mint a role (EXC-761);
+	// Studio's role management runs as the owner's login.
 	app := c.pg.connect(t, roleApp, customerAppPassword)
-	mustExec(t, app, "SELECT excalibase.create_role('studio_made', 'Studio-1')")
+	mustFail(t, app, "SELECT excalibase.create_role('by_app', 'Studio-1')", "permission denied")
+	mustFail(t, app, "SELECT excalibase.alter_role_password('cust_reader', 'Studio-1')", "permission denied")
+	mustFail(t, app, "SELECT excalibase.drop_role('cust_reader')", "permission denied")
+	mustExec(t, c.owner, "SELECT excalibase.create_role('studio_made', 'Studio-1')")
 	if !scanBool(t, c.admin, `SELECT EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
 		JOIN pg_roles o ON o.oid = m.member WHERE r.rolname = 'studio_made' AND o.rolname = $1 AND m.admin_option)`, customerOwner) {
 		t.Fatal("a role Studio created is not the owner's to manage")
@@ -233,7 +238,7 @@ func (c *customerRoleCase) restoreLogicKeepsCustomerRoles(t *testing.T) {
 	}
 	restore := c.spec
 	restore.resetPasswords = true
-	c.pg.psql(t, projectRoleSQL(restore, c.creds, "cdc_watcher_pub"))
+	c.pg.psql(t, mustProjectRoleSQL(t, restore, c.creds, "cdc_watcher_pub"))
 	c.pg.assertLogin(t, "cust_reader", "Cust-Pass-1")
 	mustExec(t, c.owner, "SELECT excalibase.alter_role_password('cust_reader', 'Cust-Pass-2')")
 	c.pg.assertLogin(t, "cust_reader", "Cust-Pass-2")
