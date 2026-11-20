@@ -40,194 +40,243 @@ func appBuild() sitebuilds.Build {
 	}
 }
 
+var appGitOn = []features.Feature{features.AppGitBuilds}
+
 func appMoreRouteCases() []routeCase {
-	gitOn := []features.Feature{features.AppGitBuilds}
 	return []routeCase{
-		{
-			name: "set_app_secret", tool: "set_app_secret", args: map[string]any{"project_id": testProjectA, "app_id": "web", "name": "API_KEY", "value": "s3cr3t-value"},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","env":[{"name":"LOG_LEVEL","kind":"literal","value":"info"}]}`)
-				f.on(http.MethodPut, projectsA+"/apps/web/secrets/API_KEY", 200, `{"name":"API_KEY","set":true}`)
-			},
-			expect: []string{"GET " + projectsA + "/apps/web/", "PUT " + projectsA + "/apps/web/secrets/API_KEY"},
-			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
-				if calls[1].Body != `{"value":"s3cr3t-value"}` {
-					t.Errorf("body = %s", calls[1].Body)
-				}
-				if out["name"] != "API_KEY" || out["set"] != true || out["replaced"] != false || strings.Contains(realJSON(out, nil), "s3cr3t") {
-					t.Errorf("out = %v", out)
-				}
-			},
+		routeSetAppSecret(),
+		routeRedeployApp(),
+		routeListAppDomains(),
+		routeAddAppDomain(),
+		routeVerifyAppDomain(),
+		routeRemoveAppDomain(),
+		routeConnectAppRepo(),
+		routeConnectAppRepoKeepsTheCurrentSettings(),
+		routeDisconnectAppRepo(),
+		routeRebuildApp(),
+		routeListAppBuilds(),
+		routeListAppBuildsOne(),
+	}
+}
+
+func routeSetAppSecret() routeCase {
+	return routeCase{
+		name: "set_app_secret", tool: "set_app_secret", args: map[string]any{"project_id": testProjectA, "app_id": "web", "name": "API_KEY", "value": "s3cr3t-value"},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","env":[{"name":"LOG_LEVEL","kind":"literal","value":"info"}]}`)
+			f.on(http.MethodPut, projectsA+"/apps/web/secrets/API_KEY", 200, `{"name":"API_KEY","set":true}`)
 		},
-		{
-			name: "redeploy_app", tool: "redeploy_app", args: map[string]any{"project_id": testProjectA, "app_id": "web", "deploy_id": "d1"},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodPost, projectsA+"/apps/web/deploys/d1/redeploy", 202, realJSON(redeployedDeploy(), plantedFields))
-			},
-			expect: []string{"POST " + projectsA + "/apps/web/deploys/d1/redeploy"},
-			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
-				deploy, _ := out["deploy"].(map[string]any)
-				if deploy["id"] != "d2" || deploy["redeployOf"] != "d1" || deploy["status"] != "pending" || deploy["url"] != "https://web.example.test" {
-					t.Fatalf("deploy = %v", deploy)
-				}
-				for _, hidden := range []string{"plantedSecret", "nested", "spec", "createdBy"} {
-					if _, ok := deploy[hidden]; ok {
-						t.Errorf("deploy carries %s: %v", hidden, deploy)
-					}
-				}
-			},
+		expect: []string{"GET " + projectsA + "/apps/web/", "PUT " + projectsA + "/apps/web/secrets/API_KEY"},
+		check: func(t *testing.T, calls []recordedCall, out map[string]any) {
+			if calls[1].Body != `{"value":"s3cr3t-value"}` {
+				t.Errorf("body = %s", calls[1].Body)
+			}
+			if out["name"] != "API_KEY" || out["set"] != true || out["replaced"] != false || strings.Contains(realJSON(out, nil), "s3cr3t") {
+				t.Errorf("out = %v", out)
+			}
 		},
-		{
-			name: "list_app_domains", tool: "list_app_domains", args: map[string]any{"project_id": testProjectA, "app_id": "web"},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodGet, projectsA+"/apps/web/domains/", 200, "["+realJSON(appDomain(), plantedFields)+"]")
-			},
-			expect: []string{"GET " + projectsA + "/apps/web/domains/"},
-			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
-				domains, _ := out["domains"].([]any)
-				if len(domains) != 1 {
-					t.Fatalf("out = %v", out)
-				}
-				domain, _ := domains[0].(map[string]any)
-				if domain["hostname"] != "www.example.com" || domain["cnameTarget"] != "web-proj-a.apps.example.test" || domain["status"] != "pending" {
-					t.Errorf("domain = %v", domain)
-				}
-				for _, hidden := range []string{"plantedSecret", "nested", "projectId", "consecutiveFailures"} {
-					if _, ok := domain[hidden]; ok {
-						t.Errorf("domain carries %s", hidden)
-					}
-				}
-			},
+	}
+}
+
+func routeRedeployApp() routeCase {
+	return routeCase{
+		name: "redeploy_app", tool: "redeploy_app", args: map[string]any{"project_id": testProjectA, "app_id": "web", "deploy_id": "d1"},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodPost, projectsA+"/apps/web/deploys/d1/redeploy", 202, realJSON(redeployedDeploy(), plantedFields))
 		},
-		{
-			name: "add_app_domain", tool: "add_app_domain", args: map[string]any{"project_id": testProjectA, "app_id": "web", "hostname": "www.example.com"},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodPost, projectsA+"/apps/web/domains/", 201, realJSON(appDomain(), plantedFields))
-			},
-			expect: []string{"POST " + projectsA + "/apps/web/domains/"},
-			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
-				if calls[0].Body != `{"hostname":"www.example.com"}` {
-					t.Errorf("body = %s", calls[0].Body)
+		expect: []string{"POST " + projectsA + "/apps/web/deploys/d1/redeploy"},
+		check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+			deploy, _ := out["deploy"].(map[string]any)
+			if deploy["id"] != "d2" || deploy["redeployOf"] != "d1" || deploy["status"] != "pending" || deploy["url"] != "https://web.example.test" {
+				t.Fatalf("deploy = %v", deploy)
+			}
+			for _, hidden := range []string{"plantedSecret", "nested", "spec", "createdBy"} {
+				if _, ok := deploy[hidden]; ok {
+					t.Errorf("deploy carries %s: %v", hidden, deploy)
 				}
-				next, _ := out["next"].(string)
-				for _, want := range []string{"CNAME", "www.example.com", "web-proj-a.apps.example.test", "verify_app_domain", "dom1"} {
-					if !strings.Contains(next, want) {
-						t.Errorf("next lacks %q: %s", want, next)
-					}
-				}
-			},
+			}
 		},
-		{
-			name: "verify_app_domain", tool: "verify_app_domain", args: map[string]any{"project_id": testProjectA, "app_id": "web", "domain_id": "dom1"},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodPost, projectsA+"/apps/web/domains/dom1/verify", 200, realJSON(appDomain(), plantedFields))
-			},
-			expect: []string{"POST " + projectsA + "/apps/web/domains/dom1/verify"},
+	}
+}
+
+func routeListAppDomains() routeCase {
+	return routeCase{
+		name: "list_app_domains", tool: "list_app_domains", args: map[string]any{"project_id": testProjectA, "app_id": "web"},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodGet, projectsA+"/apps/web/domains/", 200, "["+realJSON(appDomain(), plantedFields)+"]")
 		},
-		{
-			name: "remove_app_domain", tool: "remove_app_domain", args: map[string]any{"project_id": testProjectA, "app_id": "web", "domain_id": "dom1"},
-			setup:  func(f *fakeRoutes) { f.on(http.MethodDelete, projectsA+"/apps/web/domains/dom1", 204, ``) },
-			expect: []string{"DELETE " + projectsA + "/apps/web/domains/dom1"},
+		expect: []string{"GET " + projectsA + "/apps/web/domains/"},
+		check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+			domains, _ := out["domains"].([]any)
+			if len(domains) != 1 {
+				t.Fatalf("out = %v", out)
+			}
+			domain, _ := domains[0].(map[string]any)
+			if domain["hostname"] != "www.example.com" || domain["cnameTarget"] != "web-proj-a.apps.example.test" || domain["status"] != "pending" {
+				t.Errorf("domain = %v", domain)
+			}
+			for _, hidden := range []string{"plantedSecret", "nested", "projectId", "consecutiveFailures"} {
+				if _, ok := domain[hidden]; ok {
+					t.Errorf("domain carries %s", hidden)
+				}
+			}
 		},
-		{
-			name: "connect_app_repo", tool: "connect_app_repo", features: gitOn,
-			args: map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web", "builder": "dockerfile", "root_dir": "apps/web", "dockerfile_path": "Dockerfile.prod", "build_args": map[string]any{"NODE_ENV": "production"}},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodPut, projectsA+"/apps/web/git", 200, realJSON(sitebuilds.AppConnectResult{
-					Connection: &sitebuilds.AppConnection{AppID: "web", GitSource: sitebuilds.GitSource{Repository: "acme/web", InstallationID: 77, ConnectedBy: "user-1"},
-						Settings: sitebuilds.AppSettings{Branch: "main", Builder: "dockerfile", BuildArgs: map[string]string{"NODE_ENV": "production"}}},
-					Build: ptr(appBuild()),
-				}, plantedFields))
-			},
-			expect: []string{"PUT " + projectsA + "/apps/web/git"},
-			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
-				for _, want := range []string{`"repository":"acme/web"`, `"builder":"dockerfile"`, `"NODE_ENV":"production"`} {
-					if !strings.Contains(calls[0].Body, want) {
-						t.Errorf("body %s lacks %s", calls[0].Body, want)
-					}
-				}
-				connection, _ := out["connection"].(map[string]any)
-				build, _ := out["build"].(map[string]any)
-				if connection["repository"] != "acme/web" || connection["branch"] != "main" || build["id"] != "ab1" {
-					t.Fatalf("out = %v", out)
-				}
-				if text := realJSON(out, nil); strings.Contains(text, "installationId") || strings.Contains(text, "plantedSecret") || strings.Contains(text, "connectedBy") {
-					t.Errorf("out carries a field no view names: %s", text)
-				}
-			},
+	}
+}
+
+func routeAddAppDomain() routeCase {
+	return routeCase{
+		name: "add_app_domain", tool: "add_app_domain", args: map[string]any{"project_id": testProjectA, "app_id": "web", "hostname": "www.example.com"},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodPost, projectsA+"/apps/web/domains/", 201, realJSON(appDomain(), plantedFields))
 		},
-		{
-			name: "connect_app_repo keeps the current settings", tool: "connect_app_repo", features: gitOn,
-			args: map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web"},
-			setup: func(f *fakeRoutes) {
-				current := `{"repository":"acme/web","settings":{"rootDir":"apps/web","dockerfilePath":"Dockerfile.prod","buildArgs":{"KEPT":"arg-value-4711"}}}`
-				f.on(http.MethodGet, projectsA+"/apps/web/git", 200, `{"connected":true,"connection":`+current+`}`)
-				f.on(http.MethodPut, projectsA+"/apps/web/git", 200, `{"connection":`+current+`}`)
-			},
-			expect: []string{"GET " + projectsA + "/apps/web/git", "PUT " + projectsA + "/apps/web/git"},
-			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
-				for _, want := range []string{`"KEPT":"arg-value-4711"`, `"rootDir":"apps/web"`, `"dockerfilePath":"Dockerfile.prod"`} {
-					if !strings.Contains(calls[1].Body, want) {
-						t.Errorf("not kept, body lacks %s: %s", want, calls[1].Body)
-					}
+		expect: []string{"POST " + projectsA + "/apps/web/domains/"},
+		check: func(t *testing.T, calls []recordedCall, out map[string]any) {
+			if calls[0].Body != `{"hostname":"www.example.com"}` {
+				t.Errorf("body = %s", calls[0].Body)
+			}
+			next, _ := out["next"].(string)
+			for _, want := range []string{"CNAME", "www.example.com", "web-proj-a.apps.example.test", "verify_app_domain", "dom1"} {
+				if !strings.Contains(next, want) {
+					t.Errorf("next lacks %q: %s", want, next)
 				}
-				connection, _ := out["connection"].(map[string]any)
-				if strings.Contains(realJSON(connection, nil), "arg-value-4711") || connection["rootDir"] != "apps/web" {
-					t.Errorf("connection = %v", connection)
-				}
-				if names, _ := connection["buildArgNames"].([]any); len(names) != 1 || names[0] != "KEPT" {
-					t.Errorf("buildArgNames = %v", names)
-				}
-			},
+			}
 		},
-		{
-			name: "disconnect_app_repo", tool: "disconnect_app_repo", features: gitOn, args: map[string]any{"project_id": testProjectA, "app_id": "web"},
-			setup:  func(f *fakeRoutes) { f.on(http.MethodDelete, projectsA+"/apps/web/git", 204, ``) },
-			expect: []string{"DELETE " + projectsA + "/apps/web/git"},
+	}
+}
+
+func routeVerifyAppDomain() routeCase {
+	return routeCase{
+		name: "verify_app_domain", tool: "verify_app_domain", args: map[string]any{"project_id": testProjectA, "app_id": "web", "domain_id": "dom1"},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodPost, projectsA+"/apps/web/domains/dom1/verify", 200, realJSON(appDomain(), plantedFields))
 		},
-		{
-			name: "rebuild_app", tool: "rebuild_app", features: gitOn, args: map[string]any{"project_id": testProjectA, "app_id": "web"},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodPost, projectsA+"/apps/web/builds", 202, realJSON(appBuild(), plantedFields))
-			},
-			expect: []string{"POST " + projectsA + "/apps/web/builds"},
-			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
-				build, _ := out["build"].(map[string]any)
-				if build["id"] != "ab1" || build["status"] != "QUEUED" {
-					t.Fatalf("build = %v", build)
-				}
-				if text := realJSON(out, nil); strings.Contains(text, "plantedSecret") || strings.Contains(text, "TOKEN") {
-					t.Errorf("build carries a field no view names: %s", text)
-				}
-			},
+		expect: []string{"POST " + projectsA + "/apps/web/domains/dom1/verify"},
+	}
+}
+
+func routeRemoveAppDomain() routeCase {
+	return routeCase{
+		name: "remove_app_domain", tool: "remove_app_domain", args: map[string]any{"project_id": testProjectA, "app_id": "web", "domain_id": "dom1"},
+		setup:  func(f *fakeRoutes) { f.on(http.MethodDelete, projectsA+"/apps/web/domains/dom1", 204, ``) },
+		expect: []string{"DELETE " + projectsA + "/apps/web/domains/dom1"},
+	}
+}
+
+func routeConnectAppRepo() routeCase {
+	return routeCase{
+		name: "connect_app_repo", tool: "connect_app_repo", features: appGitOn,
+		args: map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web", "builder": "dockerfile", "root_dir": "apps/web", "dockerfile_path": "Dockerfile.prod", "build_args": map[string]any{"NODE_ENV": "production"}},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodPut, projectsA+"/apps/web/git", 200, realJSON(sitebuilds.AppConnectResult{
+				Connection: &sitebuilds.AppConnection{AppID: "web", GitSource: sitebuilds.GitSource{Repository: "acme/web", InstallationID: 77, ConnectedBy: "user-1"},
+					Settings: sitebuilds.AppSettings{Branch: "main", Builder: "dockerfile", BuildArgs: map[string]string{"NODE_ENV": "production"}}},
+				Build: ptr(appBuild()),
+			}, plantedFields))
 		},
-		{
-			name: "list_app_builds", tool: "list_app_builds", features: gitOn, args: map[string]any{"project_id": testProjectA, "app_id": "web"},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodGet, projectsA+"/apps/web/builds", 200, "["+realJSON(appBuild(), plantedFields)+"]")
-			},
-			expect: []string{"GET " + projectsA + "/apps/web/builds"},
-			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
-				builds, _ := out["builds"].([]any)
-				if len(builds) != 1 || strings.Contains(realJSON(out, nil), "plantedSecret") {
-					t.Errorf("out = %v", out)
+		expect: []string{"PUT " + projectsA + "/apps/web/git"},
+		check: func(t *testing.T, calls []recordedCall, out map[string]any) {
+			for _, want := range []string{`"repository":"acme/web"`, `"builder":"dockerfile"`, `"NODE_ENV":"production"`} {
+				if !strings.Contains(calls[0].Body, want) {
+					t.Errorf("body %s lacks %s", calls[0].Body, want)
 				}
-			},
+			}
+			connection, _ := out["connection"].(map[string]any)
+			build, _ := out["build"].(map[string]any)
+			if connection["repository"] != "acme/web" || connection["branch"] != "main" || build["id"] != "ab1" {
+				t.Fatalf("out = %v", out)
+			}
+			if text := realJSON(out, nil); strings.Contains(text, "installationId") || strings.Contains(text, "plantedSecret") || strings.Contains(text, "connectedBy") {
+				t.Errorf("out carries a field no view names: %s", text)
+			}
 		},
-		{
-			name: "list_app_builds one", tool: "list_app_builds", features: gitOn, args: map[string]any{"project_id": testProjectA, "app_id": "web", "build_id": "ab1"},
-			setup: func(f *fakeRoutes) {
-				withLog := appBuild()
-				withLog.Log = "== docker build =="
-				f.on(http.MethodGet, projectsA+"/apps/web/builds/ab1", 200, realJSON(withLog, plantedFields))
-			},
-			expect: []string{"GET " + projectsA + "/apps/web/builds/ab1"},
-			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
-				build, _ := out["build"].(map[string]any)
-				if build["log"] != "== docker build ==" || strings.Contains(realJSON(out, nil), "plantedSecret") {
-					t.Errorf("out = %v", out)
+	}
+}
+
+func routeConnectAppRepoKeepsTheCurrentSettings() routeCase {
+	return routeCase{
+		name: "connect_app_repo keeps the current settings", tool: "connect_app_repo", features: appGitOn,
+		args: map[string]any{"project_id": testProjectA, "app_id": "web", "repository": "acme/web"},
+		setup: func(f *fakeRoutes) {
+			current := `{"repository":"acme/web","settings":{"rootDir":"apps/web","dockerfilePath":"Dockerfile.prod","buildArgs":{"KEPT":"arg-value-4711"}}}`
+			f.on(http.MethodGet, projectsA+"/apps/web/git", 200, `{"connected":true,"connection":`+current+`}`)
+			f.on(http.MethodPut, projectsA+"/apps/web/git", 200, `{"connection":`+current+`}`)
+		},
+		expect: []string{"GET " + projectsA + "/apps/web/git", "PUT " + projectsA + "/apps/web/git"},
+		check: func(t *testing.T, calls []recordedCall, out map[string]any) {
+			for _, want := range []string{`"KEPT":"arg-value-4711"`, `"rootDir":"apps/web"`, `"dockerfilePath":"Dockerfile.prod"`} {
+				if !strings.Contains(calls[1].Body, want) {
+					t.Errorf("not kept, body lacks %s: %s", want, calls[1].Body)
 				}
-			},
+			}
+			connection, _ := out["connection"].(map[string]any)
+			if strings.Contains(realJSON(connection, nil), "arg-value-4711") || connection["rootDir"] != "apps/web" {
+				t.Errorf("connection = %v", connection)
+			}
+			if names, _ := connection["buildArgNames"].([]any); len(names) != 1 || names[0] != "KEPT" {
+				t.Errorf("buildArgNames = %v", names)
+			}
+		},
+	}
+}
+
+func routeDisconnectAppRepo() routeCase {
+	return routeCase{
+		name: "disconnect_app_repo", tool: "disconnect_app_repo", features: appGitOn, args: map[string]any{"project_id": testProjectA, "app_id": "web"},
+		setup:  func(f *fakeRoutes) { f.on(http.MethodDelete, projectsA+"/apps/web/git", 204, ``) },
+		expect: []string{"DELETE " + projectsA + "/apps/web/git"},
+	}
+}
+
+func routeRebuildApp() routeCase {
+	return routeCase{
+		name: "rebuild_app", tool: "rebuild_app", features: appGitOn, args: map[string]any{"project_id": testProjectA, "app_id": "web"},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodPost, projectsA+"/apps/web/builds", 202, realJSON(appBuild(), plantedFields))
+		},
+		expect: []string{"POST " + projectsA + "/apps/web/builds"},
+		check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+			build, _ := out["build"].(map[string]any)
+			if build["id"] != "ab1" || build["status"] != "QUEUED" {
+				t.Fatalf("build = %v", build)
+			}
+			if text := realJSON(out, nil); strings.Contains(text, "plantedSecret") || strings.Contains(text, "TOKEN") {
+				t.Errorf("build carries a field no view names: %s", text)
+			}
+		},
+	}
+}
+
+func routeListAppBuilds() routeCase {
+	return routeCase{
+		name: "list_app_builds", tool: "list_app_builds", features: appGitOn, args: map[string]any{"project_id": testProjectA, "app_id": "web"},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodGet, projectsA+"/apps/web/builds", 200, "["+realJSON(appBuild(), plantedFields)+"]")
+		},
+		expect: []string{"GET " + projectsA + "/apps/web/builds"},
+		check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+			builds, _ := out["builds"].([]any)
+			if len(builds) != 1 || strings.Contains(realJSON(out, nil), "plantedSecret") {
+				t.Errorf("out = %v", out)
+			}
+		},
+	}
+}
+
+func routeListAppBuildsOne() routeCase {
+	return routeCase{
+		name: "list_app_builds one", tool: "list_app_builds", features: appGitOn, args: map[string]any{"project_id": testProjectA, "app_id": "web", "build_id": "ab1"},
+		setup: func(f *fakeRoutes) {
+			withLog := appBuild()
+			withLog.Log = "== docker build =="
+			f.on(http.MethodGet, projectsA+"/apps/web/builds/ab1", 200, realJSON(withLog, plantedFields))
+		},
+		expect: []string{"GET " + projectsA + "/apps/web/builds/ab1"},
+		check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+			build, _ := out["build"].(map[string]any)
+			if build["log"] != "== docker build ==" || strings.Contains(realJSON(out, nil), "plantedSecret") {
+				t.Errorf("out = %v", out)
+			}
 		},
 	}
 }
