@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"slices"
 	"strings"
@@ -393,34 +394,38 @@ func TestNoAppStepGetsPrivilegeHostNamespacesDevicesOrMounts(t *testing.T) {
 		engine.runtimePaths = map[string]string{"runsc": "/usr/local/bin/runsc"}
 		app := newTestAppRunner(t, engine, "runsc", false)
 		startApp(t, app, builder)
-		names := append([]string{"egress", "watch"}, planFor(builder).chain...)
-		for _, name := range names {
+		for _, name := range append([]string{"egress", "watch"}, planFor(builder).chain...) {
 			c := engine.get(step(name))
 			if c == nil {
 				t.Fatalf("%s: no %s step", builder, name)
 			}
-			host := c.host
-			where := string(builder) + "/" + name
-			switch {
-			case host.Privileged:
-				t.Errorf("%s is privileged", where)
-			case host.PidMode != "" || host.IpcMode != "" || host.UTSMode != "" || host.UsernsMode != "" || host.CgroupnsMode != "":
-				t.Errorf("%s shares a namespace: pid %q ipc %q uts %q userns %q cgroupns %q", where, host.PidMode, host.IpcMode, host.UTSMode, host.UsernsMode, host.CgroupnsMode)
-			case len(host.Binds) != 0 || len(host.Devices) != 0 || len(host.Resources.DeviceCgroupRules) != 0 || len(host.DeviceRequests) != 0:
-				t.Errorf("%s has binds %v or devices %v", where, host.Binds, host.Devices)
-			case string(host.NetworkMode) == "host" || strings.HasPrefix(string(host.NetworkMode), "container:"):
-				t.Errorf("%s joins network %q", where, host.NetworkMode)
-			}
-			for _, option := range host.SecurityOpt {
-				if strings.Contains(option, "unconfined") {
-					t.Errorf("%s has %s", where, option)
-				}
-			}
-			for _, m := range host.Mounts {
-				if m.Type != mount.TypeVolume || m.Target != workDir || m.Source != app.workVolume(testBuild) {
-					t.Errorf("%s mounts %+v, beyond the work volume", where, m)
-				}
-			}
+			assertNoHostAccess(t, string(builder)+"/"+name, c.host, app.workVolume(testBuild))
+		}
+	}
+}
+
+func assertNoHostAccess(t *testing.T, where string, host container.HostConfig, volume string) {
+	t.Helper()
+	if host.Privileged {
+		t.Errorf("%s is privileged", where)
+	}
+	if host.PidMode != "" || host.IpcMode != "" || host.UTSMode != "" || host.UsernsMode != "" || host.CgroupnsMode != "" {
+		t.Errorf("%s shares a namespace: pid %q ipc %q uts %q userns %q cgroupns %q", where, host.PidMode, host.IpcMode, host.UTSMode, host.UsernsMode, host.CgroupnsMode)
+	}
+	if len(host.Binds) != 0 || len(host.Devices) != 0 || len(host.Resources.DeviceCgroupRules) != 0 || len(host.DeviceRequests) != 0 {
+		t.Errorf("%s has binds %v or devices %v", where, host.Binds, host.Devices)
+	}
+	if string(host.NetworkMode) == "host" || strings.HasPrefix(string(host.NetworkMode), "container:") {
+		t.Errorf("%s joins network %q", where, host.NetworkMode)
+	}
+	for _, option := range host.SecurityOpt {
+		if strings.Contains(option, "unconfined") {
+			t.Errorf("%s has %s", where, option)
+		}
+	}
+	for _, m := range host.Mounts {
+		if m.Type != mount.TypeVolume || m.Target != workDir || m.Source != volume {
+			t.Errorf("%s mounts %+v, beyond the work volume", where, m)
 		}
 	}
 }
