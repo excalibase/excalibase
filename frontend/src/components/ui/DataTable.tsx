@@ -311,7 +311,7 @@ function Pager(p: PagerProps) {
       <span aria-live="polite">{p.range.from}–{p.range.to} of {p.total}</span>
       {p.sizeChangeable && (
         <label htmlFor={sizeId} className="flex items-center gap-1">
-          Rows per page
+          <span>Rows per page</span>
           <select id={sizeId} value={p.pageSize} onChange={(e) => p.onSize(Number(e.target.value))} className={cn(FIELD, 'px-1 py-0.5')}>
             {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
