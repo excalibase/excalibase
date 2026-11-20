@@ -41,42 +41,66 @@ func TestParseIDMapsReadsTheContiguousPoolOfBothMaps(t *testing.T) {
 	}
 }
 
-func TestPlanUsernsPicksTheModeFromTheSettingAndTheHost(t *testing.T) {
-	big, small := idPool{uidEnd: 65536*4 + 1, gidEnd: 65536*4 + 1}, idPool{uidEnd: 65537, gidEnd: 65537}
-	host := hostKind{rootlessPodman: true}
+const fixHint = "init.sh"
+
+type planCase struct {
+	name, setting string
+	host          hostKind
+	pool          idPool
+}
+
+var (
+	bigPool   = idPool{uidEnd: 65536*4 + 1, gidEnd: 65536*4 + 1}
+	smallPool = idPool{uidEnd: 65537, gidEnd: 65537}
+	podmanBox = hostKind{rootlessPodman: true}
+)
+
+func planFor(c planCase) (usernsPlan, error) {
+	return planUserns(c.setting, c.host, c.pool, defaultUsernsFirstBase, defaultUsernsRangeSize)
+}
+
+func TestPlanUsernsGivesRangesOnlyWhereTheyApply(t *testing.T) {
 	cases := []struct {
-		name, setting string
-		host          hostKind
-		pool          idPool
-		perApp        bool
-		slots         int
-		err, notice   string
+		planCase
+		perApp bool
+		slots  int
+		notice string
 	}{
-		{name: "shared stays shared", setting: UsernsShared, host: host, pool: big},
-		{name: "auto with room", setting: UsernsAuto, host: host, pool: big, perApp: true, slots: 3},
-		{name: "per-app with room", setting: UsernsPerApp, host: host, pool: big, perApp: true, slots: 3},
-		{name: "auto without room falls back and says how", setting: UsernsAuto, host: host, pool: small, notice: "init.sh"},
-		{name: "per-app without room refuses", setting: UsernsPerApp, host: host, pool: small, err: "init.sh"},
-		{name: "auto on docker stays shared quietly", setting: UsernsAuto, host: hostKind{}, pool: big},
-		{name: "per-app on docker refuses", setting: UsernsPerApp, host: hostKind{}, pool: big, err: "rootless Podman"},
-		{name: "auto under a sandbox stays shared quietly", setting: UsernsAuto, host: hostKind{rootlessPodman: true, sandboxed: true}, pool: big},
-		{name: "per-app under a sandbox refuses", setting: UsernsPerApp, host: hostKind{rootlessPodman: true, sandboxed: true}, pool: big, err: "without a sandbox"},
-		{name: "unset is shared", setting: "", host: host, pool: big},
+		{planCase: planCase{"shared stays shared", UsernsShared, podmanBox, bigPool}},
+		{planCase: planCase{"auto with room", UsernsAuto, podmanBox, bigPool}, perApp: true, slots: 3},
+		{planCase: planCase{"per-app with room", UsernsPerApp, podmanBox, bigPool}, perApp: true, slots: 3},
+		{planCase: planCase{"auto without room falls back and says how", UsernsAuto, podmanBox, smallPool}, notice: fixHint},
+		{planCase: planCase{"auto on docker stays shared quietly", UsernsAuto, hostKind{}, bigPool}},
+		{planCase: planCase{"auto under a sandbox stays shared quietly", UsernsAuto, hostKind{rootlessPodman: true, sandboxed: true}, bigPool}},
+		{planCase: planCase{"unset is shared", "", podmanBox, bigPool}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			plan, err := planUserns(c.setting, c.host, c.pool, defaultUsernsFirstBase, defaultUsernsRangeSize)
-			if c.err != "" {
-				if err == nil || !strings.Contains(err.Error(), c.err) {
-					t.Fatalf("err = %v, want it to mention %q", err, c.err)
-				}
-				return
-			}
+			plan, err := planFor(c.planCase)
 			if err != nil || plan.perApp != c.perApp || plan.slots != c.slots {
 				t.Fatalf("plan %+v, err %v; want perApp %v slots %d", plan, err, c.perApp, c.slots)
 			}
 			if (c.notice == "") != (plan.notice == "") || !strings.Contains(plan.notice, c.notice) {
 				t.Fatalf("notice %q, want one mentioning %q", plan.notice, c.notice)
+			}
+		})
+	}
+}
+
+func TestPlanUsernsRefusesPerAppWhereItCannotApply(t *testing.T) {
+	cases := []struct {
+		planCase
+		mention string
+	}{
+		{planCase{"without room", UsernsPerApp, podmanBox, smallPool}, fixHint},
+		{planCase{"on docker", UsernsPerApp, hostKind{}, bigPool}, "rootless Podman"},
+		{planCase{"under a sandbox", UsernsPerApp, hostKind{rootlessPodman: true, sandboxed: true}, bigPool}, "without a sandbox"},
+		{planCase{"misspelt", "per_app", podmanBox, bigPool}, "APP_USERNS"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := planFor(c.planCase); err == nil || !strings.Contains(err.Error(), c.mention) {
+				t.Fatalf("err = %v, want it to mention %q", err, c.mention)
 			}
 		})
 	}
@@ -300,42 +324,51 @@ func TestConcurrentFirstDeploysGetDistinctRanges(t *testing.T) {
 	}
 }
 
+// restartedWith is the platform started again with another APP_USERNS, the engine as it was.
+func (h *harness) restartedWith(setting string) {
+	h.t.Helper()
+	h.rt.opts.Userns = setting
+	again, err := New(h.engine, h.rt.opts)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := again.VerifyEngine(context.Background()); err != nil {
+		h.t.Fatal(err)
+	}
+	h.rt = again
+}
+
+func (h *harness) requireRange(appID string, wantRange bool) {
+	h.t.Helper()
+	if got := h.rangeOf(appID); (got != "") != wantRange {
+		h.t.Fatalf("app %s runs in range %q, want a range: %v", appID, got, wantRange)
+	}
+}
+
 func TestAnAppThatAlreadyRunsSharedStaysSharedWhenPerAppIsTurnedOn(t *testing.T) {
 	h := unsandboxedPodman(t, UsernsShared, 4)
 	app := appNamed("app-a")
 	h.createDisk(app)
 	h.deploy(app, "dep-1")
-	if got := h.rangeOf("app-a"); got != "" {
-		t.Fatalf("shared mode set a range: %q", got)
-	}
+	h.requireRange("app-a", false)
 
-	h.rt.opts.Userns = UsernsPerApp
-	again, err := New(h.engine, h.rt.opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := again.VerifyEngine(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	h.rt = again
+	h.restartedWith(UsernsPerApp)
 	h.deploy(app, "dep-2")
-	if got := h.rangeOf("app-a"); got != "" {
-		t.Fatalf("a redeploy moved a shared app into %q, whose files it owns no part of", got)
-	}
-	// An app from before this release has no record of a decision, only its volume.
-	delete(h.engine.volumes["excalibase-vol-app-disk-app-a"], labelUserns)
-	old := appNamed("app-old")
-	h.engine.volumes["excalibase-vol-app-disk-app-old"] = map[string]string{labelManaged: "true", labelProject: testProject, labelApp: "app-old"}
-	h.deploy(old, "dep-1")
-	if got := h.rangeOf("app-old"); got != "" {
-		t.Fatalf("an app whose volume predates ranges was given %q", got)
-	}
+	h.requireRange("app-a", false)
 	fresh := appNamed("app-new")
 	h.createDisk(fresh)
 	h.deploy(fresh, "dep-1")
-	if got := h.rangeOf("app-new"); got == "" {
-		t.Fatal("a new app did not get a range of its own")
-	}
+	h.requireRange("app-new", true)
+}
+
+// An app from before this release has no record of a decision, only its volume.
+func TestAnAppWhoseVolumePredatesRangesStaysShared(t *testing.T) {
+	h := unsandboxedPodman(t, UsernsPerApp, 4)
+	_ = h.rt.VerifyEngine(context.Background())
+	old := appNamed("app-old")
+	h.engine.volumes["excalibase-vol-app-disk-app-old"] = map[string]string{labelManaged: "true", labelProject: testProject, labelApp: "app-old"}
+	h.deploy(old, "dep-1")
+	h.requireRange("app-old", false)
 }
 
 func TestSharedAndSandboxedAppsCarryNoRange(t *testing.T) {
