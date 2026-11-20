@@ -2,6 +2,7 @@ package dockerapps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -361,14 +362,38 @@ func TestAnAppThatAlreadyRunsSharedStaysSharedWhenPerAppIsTurnedOn(t *testing.T)
 	h.requireRange("app-new", true)
 }
 
-// An app from before this release has no record of a decision, only its volume.
+// An app from before this release has no record of a decision, only what it runs: each signal alone keeps it shared.
 func TestAnAppWhoseVolumePredatesRangesStaysShared(t *testing.T) {
 	h := unsandboxedPodman(t, UsernsPerApp, 4)
 	_ = h.rt.VerifyEngine(context.Background())
-	old := appNamed("app-old")
 	h.engine.volumes["excalibase-vol-app-disk-app-old"] = map[string]string{labelManaged: "true", labelProject: testProject, labelApp: "app-old"}
-	h.deploy(old, "dep-1")
-	h.requireRange("app-old", false)
+	got, err := h.rt.appUserns(context.Background(), testProject, "app-old")
+	if err != nil || got != nil {
+		t.Fatalf("range %+v (%v) for an app with an unranged volume", got, err)
+	}
+}
+
+func TestAnAppWhoseContainerPredatesRangesStaysShared(t *testing.T) {
+	h := unsandboxedPodman(t, UsernsPerApp, 4)
+	_ = h.rt.VerifyEngine(context.Background())
+	h.engine.addContainer("old01", "excalibase-app-old", map[string]string{
+		labelManaged: "true", labelComponent: componentApp, labelProject: testProject, labelApp: "app-old"})
+	got, err := h.rt.appUserns(context.Background(), testProject, "app-old")
+	if err != nil || got != nil {
+		t.Fatalf("range %+v (%v) for an app with an unranged container", got, err)
+	}
+}
+
+func TestAnAppWithADeployRecordedStaysShared(t *testing.T) {
+	h := unsandboxedPodman(t, UsernsPerApp, 4)
+	_ = h.rt.VerifyEngine(context.Background())
+	if err := h.rt.updateRecord(testProject, "app-old", func(r *appRecord) error { r.Deploy = "dep-0"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.rt.appUserns(context.Background(), testProject, "app-old")
+	if err != nil || got != nil {
+		t.Fatalf("range %+v (%v) for an app with a deploy", got, err)
+	}
 }
 
 func TestSharedAndSandboxedAppsCarryNoRange(t *testing.T) {
@@ -416,8 +441,8 @@ func TestVerifyEnginePerAppRefusesAPoolTooSmall(t *testing.T) {
 	}
 }
 
-func TestAnAppBeyondThePoolFailsInPerAppAndFallsBackInAuto(t *testing.T) {
-	for setting, wantErr := range map[string]bool{UsernsPerApp: true, UsernsAuto: false} {
+func TestAnAppBeyondThePoolIsRefusedInAutoAsInPerApp(t *testing.T) {
+	for _, setting := range []string{UsernsPerApp, UsernsAuto} {
 		t.Run(setting, func(t *testing.T) {
 			h := unsandboxedPodman(t, setting, 1)
 			if err := h.rt.VerifyEngine(context.Background()); err != nil {
@@ -425,13 +450,11 @@ func TestAnAppBeyondThePoolFailsInPerAppAndFallsBackInAuto(t *testing.T) {
 			}
 			h.createDisk(appNamed("app-a"))
 			err := h.rt.CreateAppDisk(context.Background(), testDB, appNamed("app-b"), "", diskJobs)
-			if (err != nil) != wantErr {
-				t.Fatalf("err = %v, want an error: %v", err, wantErr)
+			if !errors.Is(err, ErrUsernsPoolFull) || !strings.Contains(err.Error(), fixHint) {
+				t.Fatalf("err = %v, want the full pool named with how to grow it", err)
 			}
-			if !wantErr {
-				if got := h.engine.volumes["excalibase-vol-app-disk-app-b"][labelUserns]; got != "" {
-					t.Fatalf("the app past the pool got range %q", got)
-				}
+			if _, made := h.engine.volumes["excalibase-vol-app-disk-app-b"]; made {
+				t.Fatal("a disk was made for an app that cannot be placed")
 			}
 		})
 	}

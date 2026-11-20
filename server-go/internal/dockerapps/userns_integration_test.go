@@ -68,11 +68,11 @@ func perAppRig(t *testing.T) *realRig {
 	return rig
 }
 
-// secretApp writes a file only its owner reads into its own disk, then serves.
+// secretApp writes a file into its own disk with the default umask, as an ordinary app does, then serves.
 func secretApp(id, secret string) *apphost.App {
 	app := itApp(secret)
 	app.ID, app.Name = id, id
-	app.Args = []string{"sh", "-c", "echo " + secret + " > /data/secret && chmod 600 /data/secret && mkdir -p /www && echo ok > /www/index.html && exec httpd -f -p 8080 -h /www"}
+	app.Args = []string{"sh", "-c", "echo " + secret + " > /data/secret && mkdir -p /www && echo ok > /www/index.html && exec httpd -f -p 8080 -h /www"}
 	return app
 }
 
@@ -112,9 +112,18 @@ func (r *realRig) assigned(appID string) usernsRange {
 // process that escaped its container would meet another app's disk. It goes to the engine
 // directly: the proxy exists to stop an app doing this, the range is what stops an escape.
 func (r *realRig) readsAs(who usernsRange, volumeName string) error {
+	return r.runsAs(who, volumeName, "cat", "/disk/secret")
+}
+
+// writesAs appends to the app's file as root of another range.
+func (r *realRig) writesAs(who usernsRange, volumeName string) error {
+	return r.runsAs(who, volumeName, "sh", "-c", "echo tampered >> /disk/secret")
+}
+
+func (r *realRig) runsAs(who usernsRange, volumeName string, command ...string) error {
 	r.t.Helper()
 	ctx := context.Background()
-	created, err := r.direct.ContainerCreate(ctx, &container.Config{Image: itBusybox, Cmd: []string{"cat", "/disk/secret"}},
+	created, err := r.direct.ContainerCreate(ctx, &container.Config{Image: itBusybox, Cmd: command},
 		&container.HostConfig{UsernsMode: who.mode(), NetworkMode: "none",
 			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volumeName, Target: "/disk"}}}, nil, nil, "")
 	if err != nil {
@@ -160,12 +169,14 @@ func TestRealPodmanPerAppUserRanges(t *testing.T) {
 		t.Fatalf("B's file belongs to id %d, want %d", got, rangeB.Base)
 	}
 
-	// An escape from A, standing in A's range, cannot read B's file; B's own range can (so the check can fail).
-	if err := rig.readsAs(rangeB, rig.rt.diskVolume(b.ID, 0)); err != nil {
-		t.Fatalf("B cannot read its own disk: %v", err)
+	// An escape from A, standing in A's range, cannot change B's file; B's own range can (so the
+	// check can fail). Reading is not claimed: a file the app made with the default umask is world-readable
+	// once the path is reachable, and on the host the volume sits under the platform user's 0700 storage.
+	if err := rig.writesAs(rangeB, rig.rt.diskVolume(b.ID, 0)); err != nil {
+		t.Fatalf("B cannot write its own disk: %v", err)
 	}
-	if err := rig.readsAs(rangeA, rig.rt.diskVolume(b.ID, 0)); err == nil {
-		t.Fatal("A's range read B's secret")
+	if err := rig.writesAs(rangeA, rig.rt.diskVolume(b.ID, 0)); err == nil {
+		t.Fatal("A's range wrote to B's file")
 	}
 	if err := rig.readsAs(rangeA, rig.rt.diskVolume(a.ID, 0)); err != nil {
 		t.Fatalf("A cannot read its own disk: %v", err)
@@ -213,8 +224,8 @@ func TestRealPodmanPerAppUserRanges(t *testing.T) {
 	if got := rig.assigned(c.ID); got != rangeA {
 		t.Fatalf("A's freed range %+v was not the next app's: %+v", rangeA, got)
 	}
-	if err := rig.readsAs(rangeB, rig.rt.diskVolume(c.ID, 0)); err == nil {
-		t.Fatal("B read C's secret")
+	if err := rig.writesAs(rangeB, rig.rt.diskVolume(c.ID, 0)); err == nil {
+		t.Fatal("B wrote to C's file")
 	}
 	for _, id := range []string{b.ID, c.ID} {
 		if err := rig.rt.DeleteAppWorkload(ctx, rig.db, id, time.Minute); err != nil {

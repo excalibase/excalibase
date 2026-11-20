@@ -51,6 +51,26 @@ rm -f "$SUBID_DIR/subuid"
 grow --max-apps 1 >/dev/null || fail "a missing file"
 [ "$(cat "$SUBID_DIR/subuid")" = "$me:100000:131072" ] || fail "missing file: $(cat "$SUBID_DIR/subuid")"
 
+# Big ids stay whole numbers: mawk prints 1e+09 for a plain print of a large sum.
+printf 'big:3000000000:65536\n' >"$SUBID_DIR/subgid"
+grow --max-apps 1 >/dev/null || fail "ids past 2^31"
+[ "$(tail -n1 "$SUBID_DIR/subgid")" = "$me:3000065536:131072" ] || fail "big ids: $(tail -n1 "$SUBID_DIR/subgid")"
+printf 'big:100000:65536\n' >"$SUBID_DIR/subgid"
+
+# Two runs at once take turns on /etc/subuid.lock: a held lock holds the run, and nothing is added meanwhile.
+cp "$SUBID_DIR/subuid" "$WORK/locked"
+rm -f "$SUBID_DIR/subuid" "$WORK/started"
+touch "$SUBID_DIR/subuid"
+( exec 8>"$SUBID_DIR/subuid.lock"; flock 8; : >"$WORK/started"; sleep 3 ) &
+holder=$!
+while [ ! -e "$WORK/started" ]; do sleep 0.1; done
+begin=$(date +%s)
+grow --max-apps 1 >/dev/null || fail "a run behind a held lock"
+[ $(($(date +%s) - begin)) -ge 2 ] || fail "the run did not wait for the lock"
+wait "$holder"
+[ "$(grep -c "^$me:" "$SUBID_DIR/subuid")" = 1 ] || fail "a locked run wrote twice"
+cp "$WORK/locked" "$SUBID_DIR/subuid"
+
 # Refusals write nothing.
 cp "$SUBID_DIR/subgid" "$WORK/gid"
 for bad in "--max-apps 0" "--max-apps x" "--max-apps 100000000"; do

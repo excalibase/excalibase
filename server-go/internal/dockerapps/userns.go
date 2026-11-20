@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
@@ -364,12 +363,10 @@ func (r *Runtime) decideUserns(ctx context.Context, project, appID string, recor
 	if ok {
 		return &appUserns{Mode: UsernsPerApp, Range: &free}, nil
 	}
-	full := fmt.Errorf("%w: the platform user's /etc/subuid holds %d ranges and all are in use; %s", ErrUsernsPoolFull, r.userns.slots, growSubidsHint)
-	if r.opts.Userns == UsernsPerApp {
-		return nil, full
-	}
-	log.Printf("WARN: APP_USERNS=auto: app %s of project %s shares the common user range: %v", appID, project, full)
-	return nil, nil
+	// Startup chose ranges, in auto as in per-app: an app past the pool is refused, never quietly
+	// run in the shared range, where any shared app reaches the ranged apps' files.
+	return nil, fmt.Errorf("%w: the platform user's /etc/subuid holds %d ranges and all are in use, so app %s of project %s cannot be deployed; %s",
+		ErrUsernsPoolFull, r.userns.slots, appID, project, growSubidsHint)
 }
 
 // hasUnrangedFootprint: the app already has a deploy, a container or a disk

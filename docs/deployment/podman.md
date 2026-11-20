@@ -125,11 +125,14 @@ gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
   | Value | What happens | What it protects |
   |---|---|---|
   | `shared` | All apps use one user range, as before. | Nothing between apps: an escape owns every app's files. |
-  | `per-app` | Each app gets its own fixed range of 65536 ids from your user's `/etc/subuid` and `/etc/subgid`. The range is written to the app's record on first deploy and never changes, so redeploys, restarts and platform upgrades keep owning the same files. | An app that escapes still owns nothing of another app's volume: those files belong to ids it does not have. |
+  | `per-app` | Each app gets its own fixed range of 65536 ids from your user's `/etc/subuid` and `/etc/subgid`. The range is written to the app's record on first deploy and never changes, so redeploys, restarts and platform upgrades keep owning the same files. | An app that escapes cannot change or delete another app's files: they belong to ids it does not have. Whether it can read them is up to the file modes (an ordinary file is world-readable), and on the host the volumes sit under your user's `0700` storage directory, which an id outside it cannot enter. |
   | `auto` (default) | `per-app` when the pool has room for at least one range, else `shared` with one warning at startup naming the fix. | As above where it can be. |
 
   `per-app` refuses to start (it does not quietly fall back) when the pool is
-  too small. It protects the apps' **files**, not the host kernel: apps still
+  too small. Once it is on, a new app past the pool is refused as well, in `auto` too:
+  an app quietly run in the shared range could reach every ranged app's files.
+  **Any app still on `shared` (every app that existed before you turned this on) can reach
+  the files of the per-app apps:** the shared range is the platform user's own. It protects the apps' **files**, not the host kernel: apps still
   share it, so gVisor (Docker or Kubernetes) is the stronger separation for
   code you do not trust. It changes nothing for Docker or for apps under a
   sandbox, which are separated already.
@@ -146,8 +149,7 @@ gVisor (or Kubernetes) for code you do not. Do not configure `runsc` with
 
   `--grow-subids` only adds a line to each file: it never shrinks, rewrites or
   removes an entry, and running it again changes nothing. Past the pool, a
-  new app fails to deploy under `per-app` (the error says how many ranges the
-  pool holds), and under `auto` it runs `shared` with a warning in the log.
+  new app fails to deploy (the error says how many ranges the pool holds).
   Each range maps the image's layers again (Podman copies them once per range),
   so a per-app app's first start is slower and holds a copy of its image on disk.
 

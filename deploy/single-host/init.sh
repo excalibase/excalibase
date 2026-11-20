@@ -48,7 +48,8 @@
 # --grow-subids USER [--max-apps N]: run this as root, once, on a host with rootless Podman. It
 # adds to /etc/subuid and /etc/subgid for USER (the platform's unprivileged user) so the pool
 # holds 65536 ids for the shared range and 65536 per app, N apps (default 100). It only ever adds
-# a line: an entry is never shrunk, rewritten or removed, and a rerun adds nothing it already has.
+# a line (under /etc/subuid.lock, so two runs cannot hand out the same ids): an entry is never shrunk, rewritten
+# or removed, and a rerun adds nothing it already has.
 # Then, as USER, run `podman system migrate` (it restarts that user's containers) and restart
 # the platform. It writes no .env.
 # A public domain gets Let's Encrypt certificates for the admin address;
@@ -145,8 +146,8 @@ grow_subid_file() {
   have=0
   next=100000
   if [ -e "$file" ]; then
-    have=$(awk -F: -v u="$user" -v n="$uid" '$1 == u || $1 == n {sum += $3} END {print sum + 0}' "$file")
-    next=$(awk -F: -v m=100000 'NF >= 3 && $2 + $3 > m {m = $2 + $3} END {print m}' "$file")
+    have=$(awk -F: -v u="$user" -v n="$uid" '$1 == u || $1 == n {sum += $3} END {printf "%.0f", sum}' "$file")
+    next=$(awk -F: -v m=100000 'NF >= 3 && $2 + $3 > m {m = $2 + $3} END {printf "%.0f", m}' "$file")
   fi
   if [ "$have" -ge "$needed" ]; then
     echo "init.sh: $file already gives $user $have ids (needs $needed); left as it is"
@@ -178,6 +179,10 @@ if [ -n "$grow_user" ]; then
   [ "$user_id" != 0 ] || { echo "init.sh: the platform user is not root: rootful Podman is not supported" >&2; exit 2; }
   needed=$((65536 * (max_apps + 1)))
   [ "$needed" -le 4000000000 ] || { echo "init.sh: --max-apps $max_apps needs more ids than a host has" >&2; exit 2; }
+  # One run at a time: two reading the same end of the file would hand out the same ids twice.
+  command -v flock >/dev/null 2>&1 || { echo "init.sh: --grow-subids needs flock (util-linux)" >&2; exit 1; }
+  exec 9>>"$subid_dir/subuid.lock"
+  flock -w 60 9 || { echo "init.sh: $subid_dir/subuid.lock is held by another run" >&2; exit 1; }
   grow_subid_file "$subid_dir/subuid" "$grow_user" "$user_id" "$needed"
   grow_subid_file "$subid_dir/subgid" "$grow_user" "$user_id" "$needed"
   echo "init.sh: now, as $grow_user: podman system migrate (it restarts that user's containers), then restart the platform"
