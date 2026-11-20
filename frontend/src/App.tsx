@@ -8,6 +8,7 @@ import { ProjectLayout } from './components/layout/ProjectLayout';
 import { DatabaseRequired } from './components/DatabaseRequired';
 import { DatabaseRunning } from './components/DatabaseRunning';
 import { FeatureGate } from './components/FeatureGate';
+import { AdminRouteGuard } from './components/admin/AdminRouteGuard';
 
 // Lazy-loaded pages
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
@@ -107,7 +108,7 @@ export default function App() {
             <Route path="/orgs/:orgId" element={<OrgDetailPage />} />
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/provision" element={<ProvisionPage />} />
-            <Route path="/admin" element={<PlatformAdminPage />} />
+            <Route path="/admin" element={<AdminRouteGuard><PlatformAdminPage /></AdminRouteGuard>} />
             <Route path="/admin/host" element={<FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate>} />
             <Route path="/account/tokens" element={<AccessTokensPage />} />
           </Route>

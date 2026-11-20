@@ -7,14 +7,16 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"testing"
-	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+// testPGHostPort locates the container the last setupPG started, for tests
+// that connect as another login.
+var testPGHostPort string
 
 func setupPG(t *testing.T) (*sql.DB, *sql.DB, func()) {
 	t.Helper()
@@ -27,10 +29,7 @@ func setupPG(t *testing.T) (*sql.DB, *sql.DB, func()) {
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("superuser"),
 		postgres.WithPassword("superpass"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
-		),
+		pgready.Wait(),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
@@ -84,6 +83,7 @@ func setupPG(t *testing.T) (*sql.DB, *sql.DB, func()) {
 	// Connect as excalibase_app (non-superuser)
 	host, _ := pgContainer.Host(ctx)
 	port, _ := pgContainer.MappedPort(ctx, "5432/tcp")
+	testPGHostPort = fmt.Sprintf("host=%s port=%s", host, port.Port())
 	appConnStr := fmt.Sprintf("host=%s port=%s user=excalibase_app password=apppass dbname=testdb sslmode=disable", host, port.Port())
 	appDB, err := sql.Open("postgres", appConnStr)
 	if err != nil {

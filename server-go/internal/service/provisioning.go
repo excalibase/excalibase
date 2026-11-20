@@ -11,7 +11,7 @@ import (
 	"net"
 	"net/url"
 	"runtime/debug"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -151,6 +151,8 @@ type ProvisioningService struct {
 	// advisory-lock one so the claim holds across them.
 	deletionClaimer ProjectOperationClaimer
 	claimerOnce     sync.Once
+	// projectReadTimeout bounds the project read made under a lifecycle lock; zero uses the default.
+	projectReadTimeout time.Duration
 	// deletionObservers are told the moment a project is claimed for
 	// teardown, so in-process caches of "is this project still live" stop
 	// serving it without waiting for their own expiry. Optional.
@@ -227,6 +229,28 @@ var ErrTierConfigUnavailable = errors.New("the tier's configuration could not be
 // edits take effect without a redeploy. The store is seeded with every tier
 // and nothing deletes a row, so a missing row is a broken table, not a default.
 func (s *ProvisioningService) tierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
+	tc, err := s.storedTierConfig(ctx, tier)
+	if err != nil {
+		return config.TierConfig{}, err
+	}
+	return s.withArchiveTimeoutGuard(ctx, tier, tc), nil
+}
+
+// withArchiveTimeoutGuard gives the tier its built-in upload interval, which
+// the tier_configs table has no column for, while FreeWALUpload is on, and
+// none while it is off (EXC-784).
+func (s *ProvisioningService) withArchiveTimeoutGuard(ctx context.Context, tier domain.TierType, tc config.TierConfig) config.TierConfig {
+	tc.ArchiveTimeout = ""
+	if !features.Enabled(ctx, s.flags, features.FreeWALUpload) {
+		return tc
+	}
+	if builtin, err := config.GetTierConfig(tier); err == nil {
+		tc.ArchiveTimeout = builtin.ArchiveTimeout
+	}
+	return tc
+}
+
+func (s *ProvisioningService) storedTierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
 	if s.tierStore == nil {
 		return config.GetTierConfig(tier)
 	}
@@ -1037,6 +1061,9 @@ func (s *ProvisioningService) saveProvisionFailure(inst *domain.DatabaseInstance
 func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest,
 	result *provisioner.ProvisioningResult, pc *provisioner.ProvisionContext, fail provisionFailureHandler, opts RegistrationOptions) (*domain.ProvisioningResponse, error) {
 	applyProvisioningResult(inst, req, result)
+	if err := s.applyChosenOwnerPassword(ctx, inst, req, pc); err != nil {
+		return fail(ctx, inst, req, err, pc), nil
+	}
 
 	opts.Context = pc
 	opts.RowAlreadyCreated = true
@@ -1055,6 +1082,29 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 		DatabaseName: inst.DatabaseName,
 		CreatedAt:    inst.CreatedAt,
 	}, nil
+}
+
+// applyChosenOwnerPassword gives the owner the password the create request
+// carries (EXC-759): the one the customer chose, or the one generated so it
+// could be shown once. A MySQL owner is created with it by registration; a
+// Postgres owner is told it now, before registration files it in the vault.
+func (s *ProvisioningService) applyChosenOwnerPassword(ctx context.Context, inst *domain.DatabaseInstance,
+	req domain.ProvisioningRequest, pc *provisioner.ProvisionContext) error {
+	if req.OwnerPassword == "" {
+		return nil
+	}
+	if req.DBType != domain.MySQL {
+		pc.SetStage(domain.StageRoleCreation)
+		pc.SetStep("set the owner password")
+		if err := s.alterRolePassword(ctx, inst, inst.Username, req.OwnerPassword); err != nil {
+			return pc.Fail(fmt.Errorf("set the owner password: %w", err))
+		}
+	}
+	if err := s.syncClusterOwnerSecret(ctx, inst, inst.Username, req.OwnerPassword); err != nil {
+		return pc.Fail(err)
+	}
+	inst.Password = req.OwnerPassword
+	return nil
 }
 
 // applyProvisioningResult copies the provisioner's output onto the instance.
@@ -1667,7 +1717,46 @@ func notServableErr(status string) error {
 	return ErrProjectDeleting
 }
 
+// GetCredentials is the connection details of a project's database. With
+// OneTimeCredentials on it carries no password at all and its connection
+// string a <password> template: a password is shown once, at creation and at a
+// reset, and never read back (EXC-759).
 func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
+	creds, err := s.storedCredentials(ctx, projectID, s.oneTimeCredentials(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if s.oneTimeCredentials(ctx) {
+		return withoutPasswords(creds), nil
+	}
+	return withoutClusterAddress(creds), nil
+}
+
+// OneTimeCredentials reports whether database passwords are shown once and
+// never read back (EXC-759).
+func (s *ProvisioningService) OneTimeCredentials(ctx context.Context) bool {
+	return s.oneTimeCredentials(ctx)
+}
+
+func (s *ProvisioningService) oneTimeCredentials(ctx context.Context) bool {
+	return features.Enabled(ctx, s.flags, features.OneTimeCredentials)
+}
+
+// passwordSentinel stands where a connection string's password goes while the
+// string is built as a template.
+const (
+	passwordSentinel = "PASSWORDPLACEHOLDER"
+	hostSentinel     = "HOSTPLACEHOLDER"
+	portSentinel     = "PORTPLACEHOLDER"
+)
+
+var hostPortPlaceholders = strings.NewReplacer(hostSentinel, "<host>", portSentinel, "<port>")
+
+// storedCredentials reads the owner and reader passwords from the vault. It is
+// for the platform's own use; no route returns its result unredacted while
+// OneTimeCredentials is on. With template, the connection strings carry
+// <password> where the password goes.
+func (s *ProvisioningService) storedCredentials(ctx context.Context, projectID string, template bool) (*domain.CredentialsResponse, error) {
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return nil, err
@@ -1692,8 +1781,16 @@ func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID stri
 	if err != nil {
 		return nil, err
 	}
+	// The cluster's own address is never put in a string a customer gets.
+	inURL, urlHost, urlPort := password, hostSentinel, portSentinel
+	if template {
+		inURL = passwordSentinel
+	}
 	if inst.DBType == domain.MySQL {
-		return withReader(mysqlCredentials(inst, password), readerPassword), nil
+		creds := mysqlCredentials(inst, password)
+		creds.ConnectionURL = domain.MySQLURL(urlHost, urlPort, inst.Username, inURL, inst.DatabaseName)
+		creds.JDBCURL = domain.MySQLJDBCURL(urlHost, urlPort, inst.DatabaseName)
+		return withReader(creds, readerPassword), nil
 	}
 	port := 5432
 	if inst.Port != nil {
@@ -1702,8 +1799,8 @@ func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID stri
 
 	connURL := url.URL{
 		Scheme:   "postgresql",
-		User:     url.UserPassword(inst.Username, password),
-		Host:     net.JoinHostPort(inst.Host, strconv.Itoa(port)),
+		User:     url.UserPassword(inst.Username, inURL),
+		Host:     net.JoinHostPort(urlHost, urlPort),
 		Path:     "/" + inst.DatabaseName,
 		RawQuery: url.Values{"sslmode": {inst.SSLMode}}.Encode(),
 	}
@@ -1719,6 +1816,26 @@ func (s *ProvisioningService) GetCredentials(ctx context.Context, projectID stri
 		SSLMode:       inst.SSLMode,
 		ConnectionURL: connURL.String(),
 	}, readerPassword), nil
+}
+
+// withoutClusterAddress is creds as a customer sees them: no internal host
+// (the project's public endpoint is its own answer) and the connection
+// strings' placeholders written as <host> and <port>.
+func withoutClusterAddress(creds *domain.CredentialsResponse) *domain.CredentialsResponse {
+	redacted := *creds
+	redacted.ConnectionURL = hostPortPlaceholders.Replace(creds.ConnectionURL)
+	redacted.JDBCURL = hostPortPlaceholders.Replace(creds.JDBCURL)
+	redacted.Host, redacted.ReadOnlyHost = "", ""
+	return &redacted
+}
+
+// withoutPasswords is withoutClusterAddress with every password removed and
+// the connection strings' password written as <password>.
+func withoutPasswords(creds *domain.CredentialsResponse) *domain.CredentialsResponse {
+	redacted := withoutClusterAddress(creds)
+	redacted.ConnectionURL = strings.ReplaceAll(redacted.ConnectionURL, passwordSentinel, "<password>")
+	redacted.Password, redacted.ReaderPassword = "", ""
+	return redacted
 }
 
 // readerPassword is the filed SELECT-only login's password, or "" while its
@@ -1816,6 +1933,9 @@ func (s *ProvisioningService) checkClusterCapacity(tier config.TierConfig) error
 	// Stamp the configured headroom % so FreeCPUMilli / FreeMemBytes
 	// account for our extra safety buffer on top of kubelet's Allocatable.
 	cap.HeadroomPercent = s.capacityHeadroomPercent
+	if err := requirePodSlots(cap, int64(max(tier.Instances, 1)+projectSidecarPods), "provision tier "+tier.CPUString()); err != nil {
+		return err
+	}
 	// Allocatable=0 means we couldn't read node status (mock or stale API
 	// cache). Treat as "capacity unknown" rather than blocking every
 	// provision — the WAITING_FOR_READY timeout still catches real OOMs.

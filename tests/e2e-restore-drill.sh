@@ -34,7 +34,7 @@ cleanup() {
   # Both projects are real platform projects (EXC-366): the restored one is
   # registered exactly like a provisioned one, so both deprovision via the API.
   for p in "$PROJ_A" "$PROJ_B"; do
-    [ -n "$p" ] && curl -sf -X DELETE -H "$AUTH" "$API/api/admin/projects/$p" > /dev/null 2>&1 && echo "  deprovisioned $p (api)" || true
+    [ -n "$p" ] && curl -sf -X DELETE -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}' -H "$AUTH" "$API/api/admin/projects/$p" > /dev/null 2>&1 && echo "  deprovisioned $p (api)" || true
   done
 }
 
@@ -66,7 +66,7 @@ section "auth"
 # The chart stores no admin password (EXC-485): the caller supplies it.
 ADMIN_PASS=${ADMIN_PASSWORD:-$( [ -n "${ADMIN_PASSWORD_FILE:-}" ] && cat "$ADMIN_PASSWORD_FILE" )}
 [ -z "$ADMIN_PASS" ] && { fail "admin password" "set ADMIN_PASSWORD or ADMIN_PASSWORD_FILE"; exit 1; }
-TOKEN=$(curl -sf -X POST "$API/api/auth/login" -H 'Content-Type: application/json' \
+TOKEN=$(curl -sf -X POST "$API/api/auth/login" -H "X-Return-Session-Token: true" -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" | jq -r .token)
 [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ] && { fail "login" "no token"; exit 1; }
 AUTH="Authorization: Bearer $TOKEN"

@@ -93,6 +93,8 @@ type ServerDeploy struct {
 	ServerConfig
 	Modules   int   `json:"modules"`
 	CodeBytes int64 `json:"codeBytes"`
+	// RuntimeVars are the site's variables as this deploy was made; a rollback publishes them again.
+	RuntimeVars map[string]string `json:"runtimeVars,omitempty"`
 }
 
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)

@@ -139,6 +139,9 @@ func domainPath(w http.ResponseWriter, r *http.Request) (string, string, string,
 }
 
 func writeDomainError(w http.ResponseWriter, err error) {
+	if writeIfPoolBusy(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, apphost.ErrInvalidDomain):
 		httpError(w, err.Error(), http.StatusBadRequest)

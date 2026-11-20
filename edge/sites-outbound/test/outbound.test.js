@@ -36,6 +36,7 @@ describe("the project's own API", () => {
     `https://${API}/${PROJECT}/api/v1/todos?limit=5`,
     `https://${API}/${PROJECT}/graphql/`,
     `https://${API}/auth/${PROJECT}/${PROJECT}/token`,
+    `https://${API}/auth/acme/${PROJECT}/token`,
     `https://${API}/functions/v1/${PROJECT}/hello`,
     `https://${API}/storage/v1/${PROJECT}/buckets/files/objects`,
   ])("is reached: %s", async (url) => {
@@ -58,6 +59,9 @@ describe("the project's own API", () => {
   it.each([
     `https://${API}/proj-other/graphql`,
     `https://${API}/auth/proj-other/x/token`,
+    `https://${API}/auth/${PROJECT}/proj-other/token`,
+    `https://${API}/auth/acme/proj-other/token`,
+    `https://${API}/auth/acme`,
     `https://${API}/functions/v1/proj-other/hello`,
     `https://${API}/storage/v1/proj-other/buckets`,
     `https://${API}/api/sites/github/webhook`,

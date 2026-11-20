@@ -30,6 +30,14 @@ const (
 // framework builds a static folder.
 const FrameworkNextjs = "nextjs"
 
+// Nuxt, SvelteKit and Astro build to a Cloudflare worker with their own adapter (EXC-661); the repository
+// must already be set up for it (SvelteKit and Astro: the Cloudflare adapter), the build edits nothing.
+const (
+	FrameworkNuxt      = "nuxt"
+	FrameworkSvelteKit = "sveltekit"
+	FrameworkAstro     = "astro"
+)
+
 // NodeVersions are the Node majors a build may run on; each is an image tag.
 var NodeVersions = []string{"20", "22", "24"}
 
@@ -133,7 +141,8 @@ func validBranch(branch string) error {
 }
 
 func validFramework(framework string) error {
-	if framework == "" || framework == FrameworkNextjs {
+	switch framework {
+	case "", FrameworkNextjs, FrameworkNuxt, FrameworkSvelteKit, FrameworkAstro:
 		return nil
 	}
 	return fmt.Errorf("the framework %q is not built from git yet; deploy it as an app container instead, "+

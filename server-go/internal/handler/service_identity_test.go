@@ -603,42 +603,6 @@ func TestOwnedByServiceWithoutAUserStore(t *testing.T) {
 	}
 }
 
-// TestResolveInviteeByIdEmailOrNeither pins the lookup order an org invite
-// uses: an explicit userId wins, an email is the fallback, and naming neither
-// resolves to nobody rather than to an arbitrary account.
-func TestResolveInviteeByIdEmailOrNeither(t *testing.T) {
-	us := newMockUserStore()
-	byID := &domain.User{ID: "u-id", Username: "by-id", Email: "id@test.local", Kind: domain.UserKindHuman}
-	byEmail := &domain.User{ID: "u-email", Username: "by-email", Email: "email@test.local", Kind: domain.UserKindHuman}
-	us.users[byID.ID], us.users[byEmail.ID] = byID, byEmail
-	h := &OrgHandler{userStore: us}
-
-	cases := []struct {
-		name, userID, email, want string
-	}{
-		{name: "by id", userID: byID.ID, want: byID.ID},
-		{name: "id wins over email", userID: byID.ID, email: byEmail.Email, want: byID.ID},
-		{name: "by email", email: byEmail.Email, want: byEmail.ID},
-		{name: "neither", want: ""},
-		{name: "unknown email", email: "nobody@test.local", want: ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			user, err := h.resolveInvitee(t.Context(), tc.userID, tc.email)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			got := ""
-			if user != nil {
-				got = user.ID
-			}
-			if got != tc.want {
-				t.Fatalf("resolved %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 // TestServiceAccountAuditSinkIsOptional pins the constructor's contract: a
 // platform running without an audit sink still manages service principals
 // rather than failing on the write path.

@@ -10,7 +10,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 )
 
 // singleHostGateways reads a single host's DocumentDB gateway CA for the
@@ -43,7 +42,7 @@ func startDocumentDBGatewayWatch(cfg config.AppConfig, sqlStore storage.Platform
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() && sqlStore != nil && sqlStore.DB() != nil {
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), documentDBGatewayWatchLockID)
+		lock = standingLock(sqlStore, documentDBGatewayWatchLockID)
 	}
 	log.Printf("DocumentDB gateway watch started (every %s)", documentDBGatewayWatchInterval)
 	return provSvc.StartDocumentDBGatewayWatch(context.Background(), service.NewLeadership(lock), documentDBGatewayWatchInterval)

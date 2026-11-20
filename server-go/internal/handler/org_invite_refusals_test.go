@@ -45,49 +45,101 @@ func (s *memberOrgStore) CreatePendingInvite(context.Context, *domain.PendingInv
 type emailUserStore struct {
 	storage.UserStore
 	byEmail map[string]*domain.User
+	byID    map[string]*domain.User
+}
+
+func (s *emailUserStore) FindUserByID(_ context.Context, id string) (*domain.User, error) {
+	return s.byID[id], nil
 }
 
 func (s *emailUserStore) FindUserByEmail(_ context.Context, email string) (*domain.User, error) {
 	return s.byEmail[email], nil
 }
 
-// EXC-555: inviting someone already in the org answered 500 "failed to add
-// member", and a malformed address got an invite link nobody could use.
-func TestInviteRefusalsSayWhy(t *testing.T) {
+// EXC-728: an invited address is never looked up, so an existing member, an
+// existing account and a stranger all get the same pending invite and nobody is
+// added without accepting it.
+func TestInviteByAddressAlwaysFilesAPendingInvite(t *testing.T) {
 	users := &emailUserStore{byEmail: map[string]*domain.User{"ann@x.test": {ID: "u-ann", Role: "user"}}}
+	cases := map[string]struct {
+		orgs  *memberOrgStore
+		email string
+	}{
+		"already a member":    {&memberOrgStore{existing: map[string]bool{"u-ann": true}}, "ann@x.test"},
+		"has an account":      {&memberOrgStore{}, "ann@x.test"},
+		"no account":          {&memberOrgStore{}, "new@x.test"},
+		"membership look-ups": {&memberOrgStore{lookup: fmt.Errorf("org member not found: %w", sql.ErrConnDone)}, "ann@x.test"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			NewOrgHandler(tc.orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "", tc.email, "viewer")
+			if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"status":"pending"`) {
+				t.Fatalf("got %d %s, want 201 pending", w.Code, w.Body.String())
+			}
+			if tc.orgs.invites != 1 || len(tc.orgs.added) != 0 {
+				t.Errorf("invites %d, added %v: want one pending invite and nobody added", tc.orgs.invites, tc.orgs.added)
+			}
+		})
+	}
+}
 
-	t.Run("already a member", func(t *testing.T) {
-		orgs := &memberOrgStore{existing: map[string]bool{"u-ann": true}}
-		w := httptest.NewRecorder()
-		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "", "ann@x.test", "viewer")
-		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "already a member") {
-			t.Fatalf("got %d %s, want 409 naming the membership", w.Code, w.Body.String())
-		}
-		if len(orgs.added) != 0 {
-			t.Errorf("an existing member must not be re-added")
+// EXC-728: a user id is no way round consent. It files a pending invite for that
+// user's own address, which they accept themselves; nobody is added directly.
+func TestInviteByUserIdFilesAPendingInvite(t *testing.T) {
+	users := &emailUserStore{byID: map[string]*domain.User{
+		"u-ann": {ID: "u-ann", Email: "ann@x.test", Role: "user"},
+		"u-svc": {ID: "u-svc", Email: "svc@svc.excalibase.internal", Kind: domain.UserKindService},
+	}}
+
+	t.Run("an existing member or not, the answer is a pending invite", func(t *testing.T) {
+		for _, member := range []bool{true, false} {
+			orgs := &memberOrgStore{existing: map[string]bool{"u-ann": member}}
+			w := httptest.NewRecorder()
+			NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-ann", "", "viewer")
+			if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"status":"pending"`) {
+				t.Fatalf("member=%v: got %d %s, want 201 pending", member, w.Code, w.Body.String())
+			}
+			if orgs.invites != 1 || len(orgs.added) != 0 {
+				t.Errorf("member=%v: invites %d, added %v", member, orgs.invites, orgs.added)
+			}
 		}
 	})
 
-	t.Run("someone not yet a member is added", func(t *testing.T) {
+	t.Run("an unknown id is not found", func(t *testing.T) {
 		orgs := &memberOrgStore{}
 		w := httptest.NewRecorder()
-		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "", "ann@x.test", "viewer")
-		if w.Code != http.StatusCreated || len(orgs.added) != 1 {
-			t.Fatalf("got %d %s (added %v), want 201 and one new member", w.Code, w.Body.String(), orgs.added)
+		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-nobody", "", "viewer")
+		if w.Code != http.StatusNotFound || orgs.invites != 0 {
+			t.Fatalf("got %d with %d invites, want 404 and none", w.Code, orgs.invites)
 		}
 	})
 
-	t.Run("a membership lookup that fails is not taken for no membership", func(t *testing.T) {
-		orgs := &memberOrgStore{lookup: fmt.Errorf("org member not found: %w", sql.ErrConnDone)}
+	t.Run("a service account is refused", func(t *testing.T) {
+		orgs := &memberOrgStore{}
 		w := httptest.NewRecorder()
-		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "", "ann@x.test", "viewer")
-		if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "connection") {
-			t.Fatalf("got %d %s, want a plain 500", w.Code, w.Body.String())
-		}
-		if len(orgs.added) != 0 {
-			t.Errorf("nobody may be added when membership is unknown")
+		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "u-svc", "", "viewer")
+		if w.Code != http.StatusBadRequest || orgs.invites != 0 {
+			t.Fatalf("got %d with %d invites, want 400 and none", w.Code, orgs.invites)
 		}
 	})
+}
+
+// The internal service-account domain is refused by its spelling, with no lookup.
+func TestInviteByAddressRefusesTheServiceAccountDomain(t *testing.T) {
+	orgs := &memberOrgStore{}
+	for _, email := range []string{"svc-graphql@svc.excalibase.internal", "Anything@SVC.Excalibase.Internal"} {
+		w := httptest.NewRecorder()
+		NewOrgHandler(orgs, &emailUserStore{}).resolveAndAddMember(w, inviteRequest(), "org1", "", email, "viewer")
+		if w.Code != http.StatusBadRequest || orgs.invites != 0 {
+			t.Fatalf("%s: got %d with %d invites, want 400 and none", email, w.Code, orgs.invites)
+		}
+	}
+}
+
+// EXC-555: a malformed address got an invite link nobody could use.
+func TestInviteRefusalsSayWhy(t *testing.T) {
+	users := &emailUserStore{byEmail: map[string]*domain.User{}}
 
 	t.Run("not an e-mail address", func(t *testing.T) {
 		orgs := &memberOrgStore{}

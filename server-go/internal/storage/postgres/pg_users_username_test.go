@@ -56,7 +56,7 @@ func TestAUsernameDifferingOnlyByCaseIsRefused(t *testing.T) {
 func TestUsernameFoldMigrationRefusesExistingCaseDuplicates(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	if err := store.m.Migrate(migrationBeforeUsernameFold); err != nil {
+	if err := store.migrateTo(migrationBeforeUsernameFold); err != nil {
 		t.Fatalf("migrate down to %d: %v", migrationBeforeUsernameFold, err)
 	}
 	for _, u := range []*domain.User{userNamed("a", "Alice"), userNamed("b", "alice")} {
@@ -64,7 +64,7 @@ func TestUsernameFoldMigrationRefusesExistingCaseDuplicates(t *testing.T) {
 			t.Fatalf("seed %s: %v", u.ID, err)
 		}
 	}
-	err := store.m.Migrate(migrationUsernameFold)
+	err := store.migrateTo(migrationUsernameFold)
 	if err == nil {
 		t.Fatal("the migration indexed lower(username) over two accounts sharing a name")
 	}
@@ -76,7 +76,7 @@ func TestUsernameFoldMigrationRefusesExistingCaseDuplicates(t *testing.T) {
 func TestUsernameFoldMigrationDownAllowsCaseVariantsAgain(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	if err := store.m.Migrate(migrationBeforeUsernameFold); err != nil {
+	if err := store.migrateTo(migrationBeforeUsernameFold); err != nil {
 		t.Fatalf("migrate down to %d: %v", migrationBeforeUsernameFold, err)
 	}
 	if err := store.CreateUser(ctx, userNamed("a", "Alice")); err != nil {

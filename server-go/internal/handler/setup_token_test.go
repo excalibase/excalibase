@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -141,6 +143,8 @@ func TestRegister_SecondAttempt_SameToken_NotAdmin(t *testing.T) {
 // must let exactly one of them become platform_admin.
 func TestRegister_ConcurrentFirstRegistrations_ExactlyOneAdmin(t *testing.T) {
 	h, raw := firstAdminHandler(t)
+	// One slot so the racers really hit "busy" and must retry (EXC-734).
+	t.Cleanup(auth.ConfigurePasswordGate(1, time.Millisecond))
 
 	var wg sync.WaitGroup
 	codes := make([]int, 2)
@@ -149,8 +153,9 @@ func TestRegister_ConcurrentFirstRegistrations_ExactlyOneAdmin(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			w := postRegisterWithToken(h, names[i], names[i]+"@x.test", raw)
-			codes[i] = w.Code
+			codes[i] = answeredAfterBusy(t, func() *httptest.ResponseRecorder {
+				return postRegisterWithToken(h, names[i], names[i]+"@x.test", raw)
+			}).Code
 		}(i)
 	}
 	wg.Wait()
@@ -242,5 +247,23 @@ func TestRegister_FirstAdmin_PastedTokenWithWhitespace_CreatesAdmin(t *testing.T
 	w := postRegisterWithToken(h, "founder", "founder@x.test", "  "+raw+"\n")
 	if w.Code != http.StatusCreated {
 		t.Fatalf("register with padded setup token: got %d, want %d: %s", w.Code, http.StatusCreated, w.Body.String())
+	}
+}
+
+// A registration refused for load creates no account and leaves the setup
+// token unspent, so the same request succeeds once the load has passed.
+func TestRegister_BusyRefusalSpendsNothing(t *testing.T) {
+	h, raw := firstAdminHandler(t)
+	restore := auth.ConfigurePasswordGate(0, time.Millisecond)
+	w := postRegisterWithToken(h, "founder", "founder@x.test", raw)
+	restore()
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("full gate: got %d, want 503", w.Code)
+	}
+	if n := len(h.userStore.(*mockUserStore).users); n != 0 {
+		t.Fatalf("a refused registration left %d users", n)
+	}
+	if w := postRegisterWithToken(h, "founder", "founder@x.test", raw); w.Code != http.StatusCreated {
+		t.Fatalf("retry with the same token: got %d %s, want 201", w.Code, w.Body.String())
 	}
 }

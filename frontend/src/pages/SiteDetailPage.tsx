@@ -19,7 +19,9 @@ import { SiteUpload } from '../components/sites/SiteUpload';
 import { SiteCiSnippet } from '../components/sites/SiteCiSnippet';
 import { SiteDeployTokens } from '../components/sites/SiteDeployTokens';
 import { SiteDomains } from '../components/sites/SiteDomains';
+import { SiteServerEnv } from '../components/sites/SiteServerEnv';
 import { SiteGitBuilds } from '../components/sites/SiteGitBuilds';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { useProjectRole } from '../hooks/useProjectRole';
 
 // What a caller who may not change the site sees of its routing.
@@ -119,6 +121,7 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
   const deploy = useDeploySite(projectId, siteId);
   const rollback = useRollbackSite(projectId, siteId);
   const { canDevelop, canAdmin } = useProjectRole(projectId);
+  const { enabled: serverSitesOn } = useFeatureEnabled('sitesserver');
 
   if (error) {
     return (
@@ -183,6 +186,12 @@ function Detail({ projectId, siteId }: { readonly projectId: string; readonly si
         canAdmin={canAdmin}
         serverSite={site.kind === 'server'}
       />
+      {site.kind === 'server' && serverSitesOn && canDevelop && (
+        <section className="space-y-2 mb-6">
+          <h4 className="text-sm font-semibold text-text-primary">Environment</h4>
+          <SiteServerEnv projectId={projectId} siteId={siteId} />
+        </section>
+      )}
       <section className="space-y-2 mb-6">
         <h4 className="text-sm font-semibold text-text-primary">Custom domains</h4>
         <SiteDomains projectId={projectId} siteId={siteId} canDevelop={canDevelop} />

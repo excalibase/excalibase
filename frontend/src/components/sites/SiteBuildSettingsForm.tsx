@@ -181,7 +181,7 @@ export function SiteBuildSettingsForm({
       {serverSite ? (
         <Field
           label="Framework"
-          hint="Built for the edge with OpenNext. Other frameworks deploy as an app container."
+          hint="Built for the edge. Nuxt works as is; SvelteKit and Astro need their Cloudflare adapter set up in the repository. Anything else deploys as an app container."
         >
           <select
             className={inputClass}
@@ -190,6 +190,9 @@ export function SiteBuildSettingsForm({
             data-testid="build-framework"
           >
             <option value="nextjs">Next.js</option>
+            <option value="nuxt">Nuxt</option>
+            <option value="sveltekit">SvelteKit</option>
+            <option value="astro">Astro</option>
           </select>
         </Field>
       ) : (

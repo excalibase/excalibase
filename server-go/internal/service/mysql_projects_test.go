@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"slices"
 	"strings"
 	"testing"
@@ -363,8 +364,8 @@ func TestMySQLCredentialsAreMySQLConnectionStrings(t *testing.T) {
 	}
 	password, _ := svc.OwnerPassword(inst.ProjectID)
 	if creds.Engine != "mysql" || creds.Username != "admin" || creds.Password != password || creds.SSLMode != "VERIFY_IDENTITY" ||
-		creds.ConnectionURL != domain.MySQLURL(inst.Host, "3306", "admin", password, "app") ||
-		creds.JDBCURL != domain.MySQLJDBCURL(inst.Host, "3306", "app") {
+		creds.ConnectionURL != hostPortPlaceholders.Replace(domain.MySQLURL(hostSentinel, portSentinel, "admin", password, "app")) ||
+		creds.JDBCURL != hostPortPlaceholders.Replace(domain.MySQLJDBCURL(hostSentinel, portSentinel, "app")) {
 		t.Errorf("credentials %+v", creds)
 	}
 }
@@ -461,5 +462,31 @@ func TestMySQLVerifyConfig(t *testing.T) {
 	}
 	if _, err := mysqlVerifyConfig(inst, "admin", "pw", dsnOverrides{}, ""); !errors.Is(err, mysqltls.ErrNoServerCA) {
 		t.Errorf("no CA: %v", err)
+	}
+}
+
+func TestAMySQLOwnerIsCreatedWithTheChosenPasswordAndShownOnlyAsATemplate(t *testing.T) {
+	svc, store, _ := setupMySQLTest(t)
+	svc.SetFeatures(features.NewStatic(features.OneTimeCredentials, features.MySQL))
+	request := mysqlProvisionRequest("")
+	request.OwnerPassword = chosenOwnerPassword
+	resp, err := svc.Provision(context.Background(), request)
+	if err != nil || resp.Status != "ACTIVE" {
+		t.Fatalf("Provision: %v %+v", err, resp)
+	}
+	inst, err := store.FindByProjectID(resp.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := svc.OwnerPassword(inst.ProjectID); got != chosenOwnerPassword {
+		t.Errorf("the vault holds %q for the MySQL owner", got)
+	}
+	creds, err := svc.GetCredentials(context.Background(), inst.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.Password != "" || strings.Contains(creds.ConnectionURL, chosenOwnerPassword) ||
+		!strings.Contains(creds.ConnectionURL, "<password>@<host>:<port>") || !strings.Contains(creds.JDBCURL, "<host>:<port>") {
+		t.Errorf("credentials %+v", creds)
 	}
 }

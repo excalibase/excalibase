@@ -246,6 +246,7 @@ func appResourceRequirements(tier config.AppTierConfig) (corev1.ResourceRequirem
 	for field, value := range map[string]string{
 		"cpu request": tier.CPURequest, "cpu limit": tier.CPULimit,
 		"memory request": tier.MemoryRequest, "memory limit": tier.MemoryLimit,
+		"ephemeral storage request": tier.EphemeralStorageRequest, "ephemeral storage limit": tier.EphemeralStorageLimit,
 	} {
 		quantity, err := resource.ParseQuantity(value)
 		if err != nil {
@@ -255,12 +256,14 @@ func appResourceRequirements(tier config.AppTierConfig) (corev1.ResourceRequirem
 	}
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    parsed["cpu request"],
-			corev1.ResourceMemory: parsed["memory request"],
+			corev1.ResourceCPU:              parsed["cpu request"],
+			corev1.ResourceMemory:           parsed["memory request"],
+			corev1.ResourceEphemeralStorage: parsed["ephemeral storage request"],
 		},
 		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    parsed["cpu limit"],
-			corev1.ResourceMemory: parsed["memory limit"],
+			corev1.ResourceCPU:              parsed["cpu limit"],
+			corev1.ResourceMemory:           parsed["memory limit"],
+			corev1.ResourceEphemeralStorage: parsed["ephemeral storage limit"],
 		},
 	}, nil
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/excalibase/provisioning-poc/internal/imagepull"
+	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,11 +17,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
-	"github.com/testcontainers/testcontainers-go"
-	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/features"
@@ -31,6 +27,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/githubfake"
 	"github.com/excalibase/provisioning-poc/internal/testutil/sitestest"
+	"github.com/google/uuid"
+	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 const (
@@ -63,8 +61,7 @@ func startPlatformDB() (*postgres.Store, error) {
 		return nil, err
 	}
 	container, err := pgmod.Run(ctx, "postgres:16-alpine", pgmod.WithDatabase("platform_test"), pgmod.WithUsername("platform"),
-		pgmod.WithPassword(password), testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2).WithStartupTimeout(60*time.Second)))
+		pgmod.WithPassword(password), pgready.Wait())
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +75,14 @@ func startPlatformDB() (*postgres.Store, error) {
 	}
 	dsn := url.URL{Scheme: "postgres", User: url.UserPassword("platform", password),
 		Host: fmt.Sprintf("%s:%s", host, port.Port()), Path: "platform_test", RawQuery: "sslmode=disable"}
-	return postgres.New(dsn.String())
+	store, err := postgres.New(dsn.String())
+	if err != nil {
+		return nil, err
+	}
+	if err := store.RelaxOrgGuardForTests(); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 var nextIDs atomic.Int64

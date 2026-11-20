@@ -37,18 +37,37 @@ var featureEnv = map[features.Feature]string{
 	features.TemplateCatalog: "FEATURE_TEMPLATECATALOG",
 	features.HostLogs:        "FEATURE_HOSTLOGS",
 	// Single-host only (the compose file); Kubernetes builds do not read it.
-	features.SingleHostBuilds: "FEATURE_SINGLEHOSTBUILDS",
-	features.AppGitBuilds:     "FEATURE_APPGITBUILDS",
-	features.LogDeletion:      "FEATURE_LOGDELETION",
-	features.S3:               "FEATURE_S3",
-	features.SitePreviews:     "FEATURE_SITEPREVIEWS",
+	features.SingleHostBuilds:   "FEATURE_SINGLEHOSTBUILDS",
+	features.AppGitBuilds:       "FEATURE_APPGITBUILDS",
+	features.LogDeletion:        "FEATURE_LOGDELETION",
+	features.S3:                 "FEATURE_S3",
+	features.SitePreviews:       "FEATURE_SITEPREVIEWS",
+	features.ProxyBlock:         "FEATURE_PROXYBLOCK",
+	features.SignupGuard:        "FEATURE_SIGNUPGUARD",
+	features.OneTimeCredentials: "FEATURE_ONETIMECREDENTIALS",
+	features.WALArchiveAlert:    "FEATURE_WALARCHIVEALERT",
+	features.FreeWALUpload:      "FEATURE_FREEWALUPLOAD",
 }
 
-// loadDarkFeatures reads once at startup; only the exact value "true" turns one on.
+// defaultOn are the features that are on until their variable says "false":
+// security fixes that must hold on every install without anyone setting
+// anything (EXC-755, EXC-759) and the WAL guards that keep a failed upload from filling
+// a disk unseen (EXC-784).
+var defaultOn = map[features.Feature]bool{
+	features.ProxyBlock:         true,
+	features.SignupGuard:        true,
+	features.OneTimeCredentials: true,
+	features.WALArchiveAlert:    true,
+	features.FreeWALUpload:      true,
+}
+
+// loadDarkFeatures reads once at startup; only the exact value "true" turns a
+// dark feature on, and only the exact value "false" turns a default-on one off.
 func loadDarkFeatures() []features.Feature {
 	var on []features.Feature
 	for _, feature := range features.All() {
-		if os.Getenv(featureEnv[feature]) == "true" {
+		value := os.Getenv(featureEnv[feature])
+		if value == "true" || (defaultOn[feature] && value != "false") {
 			on = append(on, feature)
 		}
 	}

@@ -221,9 +221,14 @@ DO $excalibase_grants$
 DECLARE
   owner_role CONSTANT text := {{OWNER}};
 BEGIN
-  EXECUTE format('GRANT EXECUTE ON FUNCTION {{CREATE}} TO %I, %I', owner_role, {{APP_ROLE}});
-  EXECUTE format('GRANT EXECUTE ON FUNCTION {{ALTER}} TO %I, %I', owner_role, {{APP_ROLE}});
-  EXECUTE format('GRANT EXECUTE ON FUNCTION {{DROP}} TO %I, %I', owner_role, {{APP_ROLE}});
+  -- Only the owner's login runs these: excalibase_app runs customer SQL, and a
+  -- role it could create would be a credential above the caller's (EXC-761).
+  EXECUTE format('GRANT EXECUTE ON FUNCTION {{CREATE}} TO %I', owner_role);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION {{ALTER}} TO %I', owner_role);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION {{DROP}} TO %I', owner_role);
+  EXECUTE format('REVOKE EXECUTE ON FUNCTION {{CREATE}} FROM %I', {{APP_ROLE}});
+  EXECUTE format('REVOKE EXECUTE ON FUNCTION {{ALTER}} FROM %I', {{APP_ROLE}});
+  EXECUTE format('REVOKE EXECUTE ON FUNCTION {{DROP}} FROM %I', {{APP_ROLE}});
 END
 $excalibase_grants$;
 `

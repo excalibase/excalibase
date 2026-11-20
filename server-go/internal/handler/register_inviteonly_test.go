@@ -27,6 +27,7 @@ type inviteOrgStore struct {
 	acceptErr error
 	createErr error
 	created   []*domain.PendingInvite
+	restored  []*domain.PendingInvite
 }
 
 func (s *inviteOrgStore) CreatePendingInvite(_ context.Context, inv *domain.PendingInvite) error {
@@ -34,6 +35,11 @@ func (s *inviteOrgStore) CreatePendingInvite(_ context.Context, inv *domain.Pend
 		return s.createErr
 	}
 	s.created = append(s.created, inv)
+	return nil
+}
+
+func (s *inviteOrgStore) RestorePendingInvite(_ context.Context, inv *domain.PendingInvite) error {
+	s.restored = append(s.restored, inv)
 	return nil
 }
 
@@ -45,7 +51,8 @@ func (s *inviteOrgStore) FindPendingInviteByToken(_ context.Context, hash string
 	if address == "" {
 		address = "bob@company.test"
 	}
-	return &domain.PendingInvite{ID: 1, OrgID: "org1", Role: "developer", Email: address}, nil
+	expires := domain.FlexTime{Time: time.Now().Add(time.Hour)}
+	return &domain.PendingInvite{ID: 1, OrgID: "org1", Role: "developer", Email: address, ExpiresAt: &expires}, nil
 }
 
 func (s *inviteOrgStore) AcceptPendingInvite(ctx context.Context, hash, userID string, now time.Time) (*domain.PendingInvite, error) {

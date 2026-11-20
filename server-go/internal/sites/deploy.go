@@ -76,7 +76,11 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 	if err := s.ensureOrigin(ctx, site); err != nil {
 		return nil, err
 	}
-	deploy := s.newDeploy(site, bundle, request)
+	vars, err := s.deployRuntimeVars(ctx, site)
+	if err != nil {
+		return nil, err
+	}
+	deploy := s.newDeploy(site, bundle, request, vars)
 	if token := DeployTokenFrom(ctx); token != nil {
 		deploy.DeployTokenID, deploy.DeployTokenName = token.ID, token.Name
 	}
@@ -237,14 +241,14 @@ func (s *Service) ensureOrigin(ctx context.Context, site *Site) error {
 	return s.store.MarkCorsClaimed(ctx, site.ProjectID, site.ID)
 }
 
-func (s *Service) newDeploy(site *Site, bundle *Bundle, request DeployRequest) *Deploy {
+func (s *Service) newDeploy(site *Site, bundle *Bundle, request DeployRequest, vars map[string]string) *Deploy {
 	deploy := &Deploy{
 		ID: uuid.NewString(), SiteID: site.ID, ProjectID: site.ProjectID, Status: DeployPending, Kind: site.Kind,
 		Manifest: bundle.Manifest(), FileCount: len(bundle.Files), TotalBytes: bundle.TotalBytes,
 		SPAFallback: site.SPAFallback, Label: request.Label, CreatedBy: request.Actor, CreatedAt: s.now().UTC(),
 	}
 	if bundle.Server != nil {
-		deploy.Server = &ServerDeploy{ServerConfig: *bundle.Server, Modules: len(bundle.Modules), CodeBytes: bundle.CodeBytes}
+		deploy.Server = &ServerDeploy{ServerConfig: *bundle.Server, Modules: len(bundle.Modules), CodeBytes: bundle.CodeBytes, RuntimeVars: vars}
 	}
 	return deploy
 }
@@ -339,6 +343,13 @@ func (s *Service) publish(ctx context.Context, site *Site, rel release) error {
 	if err != nil {
 		return err
 	}
+	if rel.deploy.Kind == KindServer {
+		secrets, err := s.secretBindings(ctx, site.ProjectID)
+		if err != nil {
+			return publishFailure(site, stepPublish, err)
+		}
+		version.Bindings = withSecrets(s.runtimeBindings(rel.deploy), secrets)
+	}
 	if err := s.publisher.PutScript(ctx, script, version); err != nil {
 		return publishFailure(site, stepPublish, err)
 	}
@@ -413,4 +424,12 @@ func bundleAssets(bundle *Bundle) func([]string) ([]cfworkers.Asset, error) {
 		}
 		return assets, nil
 	}
+}
+
+// deployRuntimeVars is the variables a new deploy of the site is published with; a static site has none.
+func (s *Service) deployRuntimeVars(ctx context.Context, site *Site) (map[string]string, error) {
+	if site.Kind != KindServer {
+		return nil, nil
+	}
+	return s.store.RuntimeVars(ctx, site.ProjectID, site.ID)
 }

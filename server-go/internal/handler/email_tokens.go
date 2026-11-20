@@ -391,6 +391,16 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 		httpError(w, "password reset is unavailable", http.StatusInternalServerError)
 		return
 	}
+	// Hashed before the link is spent: a refusal for load leaves it usable.
+	hashed, err := auth.HashPassword(body.NewPassword)
+	if err != nil {
+		if errors.Is(err, auth.ErrBusy) {
+			writePasswordBusy(w, err)
+			return
+		}
+		resetFailure(w, "hash password", err)
+		return
+	}
 	claimed, err := h.claimReset(r.Context(), hash)
 	if err != nil {
 		resetFailure(w, "consume token", err)
@@ -398,11 +408,6 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 	}
 	if !claimed {
 		httpError(w, "token already used", http.StatusBadRequest)
-		return
-	}
-	hashed, err := auth.HashPassword(body.NewPassword)
-	if err != nil {
-		resetFailure(w, "hash password", err)
 		return
 	}
 	if err := h.store.UpdateUserPassword(r.Context(), user.Username, hashed); err != nil {
