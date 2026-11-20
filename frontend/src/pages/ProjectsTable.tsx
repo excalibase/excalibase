@@ -33,7 +33,7 @@ const COLUMNS: Column<DatabaseInstance>[] = [
 ];
 
 function optionsOf(projects: readonly DatabaseInstance[], pick: (p: DatabaseInstance) => string, label: (value: string) => string) {
-  return [...new Set(projects.map(pick))].sort().map((value) => ({ value, label: label(value) }));
+  return [...new Set(projects.map(pick))].sort((a, b) => a.localeCompare(b)).map((value) => ({ value, label: label(value) }));
 }
 
 function filtersFor(projects: readonly DatabaseInstance[]): FilterDef<DatabaseInstance>[] {

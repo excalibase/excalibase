@@ -59,7 +59,7 @@ export function CommandPalette({ open, onOpenChange }: { readonly open: boolean;
   return (
     <>
       <button type="button" aria-label="Close search" tabIndex={-1} onClick={() => onOpenChange(false)} className="fixed inset-0 z-[60] cursor-default border-0 bg-black/50 p-0" />
-      <div role="dialog" aria-modal="true" aria-label="Search" className="fixed left-1/2 top-[18vh] z-[61] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 overflow-hidden rounded-xl border border-border-primary bg-surface-card shadow-2xl">
+      <dialog open aria-modal="true" aria-label="Search" className="m-0 p-0 text-text-primary fixed left-1/2 top-[18vh] z-[61] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 overflow-hidden rounded-xl border border-border-primary bg-surface-card shadow-2xl">
         <Command label="Search">
       <Command.Input autoFocus placeholder="Search projects, pages and settings" className="w-full border-b border-border-primary bg-transparent px-4 py-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary" />
       <Command.List className="max-h-80 overflow-y-auto p-2">
@@ -100,7 +100,7 @@ export function CommandPalette({ open, onOpenChange }: { readonly open: boolean;
         )}
       </Command.List>
         </Command>
-      </div>
+      </dialog>
     </>
   );
 }
