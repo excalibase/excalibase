@@ -25,11 +25,25 @@ export interface FilterDef<T> {
   matches: (row: T, value: string) => boolean;
 }
 
+// Client: the table searches, filters, sorts and pages the rows it is given.
+// Server: `rows` is already the current page; the table only reports what the user asked for.
 export type Paging =
   | { mode: 'client'; pageSize?: number }
-  | { mode: 'server'; total: number; page: number; pageSize: number; onPageChange: (page: number) => void };
+  | {
+      mode: 'server';
+      total: number;
+      page: number;
+      pageSize: number;
+      onPageChange: (page: number) => void;
+      onSortChange?: (sort: SortState | null) => void;
+      onSearchChange?: (text: string) => void;
+      // Active filters by filter id; a cleared filter is absent.
+      onFilterChange?: (active: Record<string, string>) => void;
+    };
 
-interface DataTableProps<T> {
+export type { SortState };
+
+export interface DataTableProps<T> {
   readonly label: string;
   readonly columns: readonly Column<T>[];
   readonly rows: readonly T[];
@@ -45,13 +59,15 @@ interface DataTableProps<T> {
   // Remembers the column choice in this browser.
   readonly storageKey?: string;
   readonly toolbarActions?: ReactNode;
+  // Adds a trailing Actions column; keep it to buttons and links.
+  readonly rowActions?: (row: T) => ReactNode;
 }
 
 const PAGE_SIZES = [10, 25, 50, 100];
 const FIELD = 'bg-bg-secondary border border-border-primary rounded-lg text-sm text-text-primary';
 
 export function DataTable<T>(props: DataTableProps<T>) {
-  const { label, columns, rows, getRowId, isLoading, error, onRetry, emptyState, filters = [], paging, selectable, bulkActions, storageKey, toolbarActions } = props;
+  const { label, columns, rows, getRowId, isLoading, error, onRetry, emptyState, filters = [], paging, selectable, bulkActions, storageKey, toolbarActions, rowActions } = props;
   const [text, setText] = useState('');
   const [active, setActive] = useState<Record<string, string>>({});
   const [sort, setSort] = useState<SortState | null>(null);
@@ -75,30 +91,42 @@ export function DataTable<T>(props: DataTableProps<T>) {
   const filtering = text !== '' || Object.keys(active).length > 0;
 
   const changeFilter = (next: () => void) => { next(); setPage(1); selection.clear(); };
+  const changeText = (value: string) => { changeFilter(() => setText(value)); if (server) paging.onSearchChange?.(value); };
+  const changeActive = (id: string, value: string) => {
+    changeFilter(() => setActive((prev) => withValue(prev, id, value)));
+    if (server) paging.onFilterChange?.(withValue(active, id, value));
+  };
+  const clearAll = () => {
+    changeFilter(() => { setText(''); setActive({}); });
+    if (server) { paging.onSearchChange?.(''); paging.onFilterChange?.({}); }
+  };
   const toggleColumn = (id: string) => {
     const next = hidden.includes(id) ? hidden.filter((h) => h !== id) : [...hidden, id];
     setHidden(next);
     saveHiddenColumns(storageKey, next);
   };
-  const toggleSort = (id: string) =>
-    setSort((prev) => (prev?.columnId !== id ? { columnId: id, direction: 'asc' } : { columnId: id, direction: prev.direction === 'asc' ? 'desc' : 'asc' }));
+  const toggleSort = (id: string) => {
+    const next: SortState = sort?.columnId !== id ? { columnId: id, direction: 'asc' } : { columnId: id, direction: sort.direction === 'asc' ? 'desc' : 'asc' };
+    setSort(next);
+    if (server) paging.onSortChange?.(next);
+  };
 
   if (error) return <ErrorPanel label={label} error={error} onRetry={onRetry} />;
 
   return (
     <section aria-label={label} className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <FilterInput label={label} value={text} onChange={(value) => changeFilter(() => setText(value))} />
+        <FilterInput label={label} value={text} onChange={changeText} />
         {filters.map((filter) => (
           <FilterSelect key={filter.id} filter={filter} value={active[filter.id] ?? ''}
-            onChange={(value) => changeFilter(() => setActive((prev) => withValue(prev, filter.id, value)))} />
+            onChange={(value) => changeActive(filter.id, value)} />
         ))}
         <div className="ml-auto flex items-center gap-2">
           {toolbarActions}
           <ColumnChooser columns={columns} hidden={hidden} onToggle={toggleColumn} />
         </div>
       </div>
-      <ActiveChips filters={filters} active={active} onRemove={(id) => changeFilter(() => setActive((prev) => withValue(prev, id, '')))} />
+      <ActiveChips filters={filters} active={active} onRemove={(id) => changeActive(id, '')} />
       {selectable && selection.count > 0 && (
         <div className="flex items-center gap-3 rounded-lg border border-purple-500/30 bg-purple-500/10 px-3 py-2 text-sm">
           <span>{selection.count} selected</span>
@@ -114,7 +142,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
         ) : (
           <Body label={label} visible={visible} shown={shown} getRowId={getRowId} selectable={selectable} selection={selection}
             sort={sort} onSort={toggleSort} empty={total === 0} filtering={filtering} emptyState={emptyState}
-            onClear={() => changeFilter(() => { setText(''); setActive({}); })} />
+            onClear={clearAll} rowActions={rowActions} />
         )}
       </div>
       {!isLoading && total > 0 && (
@@ -198,6 +226,7 @@ interface BodyProps<T> {
   readonly label: string; readonly visible: readonly Column<T>[]; readonly shown: readonly T[]; readonly getRowId: (row: T) => string;
   readonly selectable?: boolean; readonly selection: ReturnType<typeof useRowSelection<T>>; readonly sort: SortState | null;
   readonly onSort: (id: string) => void; readonly empty: boolean; readonly filtering: boolean; readonly emptyState?: ReactNode; readonly onClear: () => void;
+  readonly rowActions?: (row: T) => ReactNode;
 }
 
 function Body<T>(p: BodyProps<T>) {
@@ -224,6 +253,7 @@ function Body<T>(p: BodyProps<T>) {
             </th>
           )}
           {p.visible.map((c) => <HeaderCell key={c.id} column={c} sort={p.sort} onSort={p.onSort} />)}
+          {p.rowActions && <th scope="col" className="text-right px-4 py-3 font-medium">Actions</th>}
         </tr>
       </thead>
       <tbody>
@@ -237,6 +267,7 @@ function Body<T>(p: BodyProps<T>) {
                 </td>
               )}
               {p.visible.map((c) => <td key={c.id} className="px-4 py-3">{c.cell(row)}</td>)}
+              {p.rowActions && <td className="px-4 py-3 text-right">{p.rowActions(row)}</td>}
             </tr>
           );
         })}
