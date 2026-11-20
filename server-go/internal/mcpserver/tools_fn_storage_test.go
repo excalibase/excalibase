@@ -24,133 +24,162 @@ func photosBucket() storagesvc.Bucket {
 	}
 }
 
+var appStorageOn = []features.Feature{features.AppStorage}
+
 func fnStorageRouteCases() []routeCase {
-	appStorage := []features.Feature{features.AppStorage}
 	return []routeCase{
-		{
-			name: "invoke_function", tool: "invoke_function", features: []features.Feature{features.FunctionInvoke}, args: map[string]any{"project_id": testProjectA, "function_id": "hello", "body": map[string]any{"args": map[string]any{"name": "Ada"}}},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodPost, projectsA+"/functions/hello/invoke", 200, `{"data":"hi Ada"}`)
-			},
-			expect: []string{"POST " + projectsA + "/functions/hello/invoke"},
-			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
-				if calls[0].Body != `{"args":{"name":"Ada"}}` {
-					t.Errorf("body = %s", calls[0].Body)
-				}
-				if out["status"] != float64(200) || out["body"] != `{"data":"hi Ada"}` {
-					t.Errorf("out = %v", out)
-				}
-			},
+		routeInvokeFunction(),
+		routeListFunctionSecrets(),
+		routeDeleteFunctionSecret(),
+		routeListStorageBuckets(),
+		routeListStorageObjects(),
+		routeCreateStorageBucket(),
+		routeSetBucketAccess(),
+	}
+}
+
+func routeInvokeFunction() routeCase {
+	return routeCase{
+		name: "invoke_function", tool: "invoke_function", features: []features.Feature{features.FunctionInvoke}, args: map[string]any{"project_id": testProjectA, "function_id": "hello", "body": map[string]any{"args": map[string]any{"name": "Ada"}}},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodPost, projectsA+"/functions/hello/invoke", 200, `{"data":"hi Ada"}`)
 		},
-		{
-			name: "list_function_secrets", tool: "list_function_secrets", args: map[string]any{"project_id": testProjectA},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodGet, projectsA+"/functions/secrets", 200, `[{"key":"STRIPE_KEY"},{"key":"RESEND_KEY"}]`)
-			},
-			expect: []string{"GET " + projectsA + "/functions/secrets"},
-			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
-				names, _ := out["names"].([]any)
-				if len(names) != 2 || names[0] != "STRIPE_KEY" {
-					t.Errorf("out = %v", out)
-				}
-			},
+		expect: []string{"POST " + projectsA + "/functions/hello/invoke"},
+		check: func(t *testing.T, calls []recordedCall, out map[string]any) {
+			if calls[0].Body != `{"args":{"name":"Ada"}}` {
+				t.Errorf("body = %s", calls[0].Body)
+			}
+			if out["status"] != float64(200) || out["body"] != `{"data":"hi Ada"}` {
+				t.Errorf("out = %v", out)
+			}
 		},
-		{
-			name: "delete_function_secret", tool: "delete_function_secret", args: map[string]any{"project_id": testProjectA, "key": "STRIPE_KEY"},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodDelete, projectsA+"/functions/secrets/STRIPE_KEY", 200, `{"status":"deleted","key":"STRIPE_KEY"}`)
-				f.on(http.MethodGet, projectsA+"/functions/runtime/status", 200, `{"status":"healthy","healthy":true}`)
-			},
-			expect: []string{"DELETE " + projectsA + "/functions/secrets/STRIPE_KEY", "GET " + projectsA + "/functions/runtime/status"},
-			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
-				if out["deleted"] != "STRIPE_KEY" || out["warning"] != nil {
-					t.Errorf("out = %v", out)
-				}
-			},
+	}
+}
+
+func routeListFunctionSecrets() routeCase {
+	return routeCase{
+		name: "list_function_secrets", tool: "list_function_secrets", args: map[string]any{"project_id": testProjectA},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodGet, projectsA+"/functions/secrets", 200, `[{"key":"STRIPE_KEY"},{"key":"RESEND_KEY"}]`)
 		},
-		{
-			name: "list_storage_buckets", tool: "list_storage_buckets", args: map[string]any{"project_id": testProjectA},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodGet, projectsA+"/storage/buckets", 200, "["+realJSON(photosBucket(), plantedFields)+"]")
-			},
-			expect: []string{"GET " + projectsA + "/storage/buckets"},
-			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
-				buckets, _ := out["buckets"].([]any)
-				if len(buckets) != 1 {
-					t.Fatalf("out = %v", out)
-				}
-				bucket, _ := buckets[0].(map[string]any)
-				if bucket["name"] != "photos" || bucket["public"] != false || bucket["fileSizeLimit"] != float64(1048576) {
-					t.Errorf("bucket = %v", bucket)
-				}
-				for _, hidden := range []string{"plantedSecret", "nested", "id", "projectId"} {
-					if _, ok := bucket[hidden]; ok {
-						t.Errorf("bucket carries %s", hidden)
-					}
-				}
-			},
+		expect: []string{"GET " + projectsA + "/functions/secrets"},
+		check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+			names, _ := out["names"].([]any)
+			if len(names) != 2 || names[0] != "STRIPE_KEY" {
+				t.Errorf("out = %v", out)
+			}
 		},
-		{
-			name: "list_storage_objects", tool: "list_storage_objects", args: map[string]any{"project_id": testProjectA, "bucket": "photos", "prefix": "avatars/", "limit": 20},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodGet, projectsA+"/storage/buckets/photos/objects", 200, realJSON(storagesvc.ListObjectsResponse{
-					Objects:    []storagesvc.Object{{ID: "o1", BucketID: "bkt_1", Key: "avatars/a.png", Size: 12, MimeType: "image/png", ETag: "e", OwnerID: "user-9", CreatedAt: storageNow, UpdatedAt: storageNow}},
-					NextCursor: "c2",
-				}, plantedFields))
-			},
-			expect: []string{"GET " + projectsA + "/storage/buckets/photos/objects?limit=20&prefix=avatars%2F"},
-			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
-				objects, _ := out["objects"].([]any)
-				if len(objects) != 1 || out["nextCursor"] != "c2" {
-					t.Fatalf("out = %v", out)
-				}
-				object, _ := objects[0].(map[string]any)
-				if object["key"] != "avatars/a.png" || object["size"] != float64(12) {
-					t.Errorf("object = %v", object)
-				}
-				for _, hidden := range []string{"plantedSecret", "nested", "ownerId", "id", "bucketId", "etag"} {
-					if _, ok := object[hidden]; ok {
-						t.Errorf("object carries %s", hidden)
-					}
-				}
-				if _, ok := out["plantedSecret"]; ok {
-					t.Error("the page carries a field no view names")
-				}
-			},
+	}
+}
+
+func routeDeleteFunctionSecret() routeCase {
+	return routeCase{
+		name: "delete_function_secret", tool: "delete_function_secret", args: map[string]any{"project_id": testProjectA, "key": "STRIPE_KEY"},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodDelete, projectsA+"/functions/secrets/STRIPE_KEY", 200, `{"status":"deleted","key":"STRIPE_KEY"}`)
+			f.on(http.MethodGet, projectsA+"/functions/runtime/status", 200, `{"status":"healthy","healthy":true}`)
 		},
-		{
-			name: "create_storage_bucket", tool: "create_storage_bucket",
-			args: map[string]any{"project_id": testProjectA, "name": "photos", "file_size_limit": 1048576, "allowed_mime_types": []any{"image/png"}},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodPost, projectsA+"/storage/buckets", 201, realJSON(photosBucket(), plantedFields))
-			},
-			expect: []string{"POST " + projectsA + "/storage/buckets"},
-			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
-				if calls[0].Body != `{"allowedMimeTypes":["image/png"],"fileSizeLimit":1048576,"name":"photos"}` {
-					t.Errorf("body = %s", calls[0].Body)
-				}
-				bucket, _ := out["bucket"].(map[string]any)
-				if bucket["name"] != "photos" || strings.Contains(realJSON(out, nil), "plantedSecret") {
-					t.Errorf("out = %v", out)
-				}
-			},
+		expect: []string{"DELETE " + projectsA + "/functions/secrets/STRIPE_KEY", "GET " + projectsA + "/functions/runtime/status"},
+		check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+			if out["deleted"] != "STRIPE_KEY" || out["warning"] != nil {
+				t.Errorf("out = %v", out)
+			}
 		},
-		{
-			name: "set_bucket_access", tool: "set_bucket_access", features: appStorage,
-			args: map[string]any{"project_id": testProjectA, "bucket": "photos", "access": map[string]any{"user": map[string]any{"read": "own", "write": "own"}}},
-			setup: func(f *fakeRoutes) {
-				f.on(http.MethodPut, projectsA+"/storage/buckets/photos/access", 200, realJSON(photosBucket(), plantedFields))
-			},
-			expect: []string{"PUT " + projectsA + "/storage/buckets/photos/access"},
-			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
-				if calls[0].Body != `{"access":{"user":{"read":"own","write":"own"}}}` {
-					t.Errorf("body = %s", calls[0].Body)
+	}
+}
+
+func routeListStorageBuckets() routeCase {
+	return routeCase{
+		name: "list_storage_buckets", tool: "list_storage_buckets", args: map[string]any{"project_id": testProjectA},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodGet, projectsA+"/storage/buckets", 200, "["+realJSON(photosBucket(), plantedFields)+"]")
+		},
+		expect: []string{"GET " + projectsA + "/storage/buckets"},
+		check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+			buckets, _ := out["buckets"].([]any)
+			if len(buckets) != 1 {
+				t.Fatalf("out = %v", out)
+			}
+			bucket, _ := buckets[0].(map[string]any)
+			if bucket["name"] != "photos" || bucket["public"] != false || bucket["fileSizeLimit"] != float64(1048576) {
+				t.Errorf("bucket = %v", bucket)
+			}
+			for _, hidden := range []string{"plantedSecret", "nested", "id", "projectId"} {
+				if _, ok := bucket[hidden]; ok {
+					t.Errorf("bucket carries %s", hidden)
 				}
-				bucket, _ := out["bucket"].(map[string]any)
-				if access, _ := bucket["access"].(map[string]any); access["user"] == nil || strings.Contains(realJSON(out, nil), "plantedSecret") {
-					t.Errorf("out = %v", out)
+			}
+		},
+	}
+}
+
+func routeListStorageObjects() routeCase {
+	return routeCase{
+		name: "list_storage_objects", tool: "list_storage_objects", args: map[string]any{"project_id": testProjectA, "bucket": "photos", "prefix": "avatars/", "limit": 20},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodGet, projectsA+"/storage/buckets/photos/objects", 200, realJSON(storagesvc.ListObjectsResponse{
+				Objects:    []storagesvc.Object{{ID: "o1", BucketID: "bkt_1", Key: "avatars/a.png", Size: 12, MimeType: "image/png", ETag: "e", OwnerID: "user-9", CreatedAt: storageNow, UpdatedAt: storageNow}},
+				NextCursor: "c2",
+			}, plantedFields))
+		},
+		expect: []string{"GET " + projectsA + "/storage/buckets/photos/objects?limit=20&prefix=avatars%2F"},
+		check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+			objects, _ := out["objects"].([]any)
+			if len(objects) != 1 || out["nextCursor"] != "c2" {
+				t.Fatalf("out = %v", out)
+			}
+			object, _ := objects[0].(map[string]any)
+			if object["key"] != "avatars/a.png" || object["size"] != float64(12) {
+				t.Errorf("object = %v", object)
+			}
+			for _, hidden := range []string{"plantedSecret", "nested", "ownerId", "id", "bucketId", "etag"} {
+				if _, ok := object[hidden]; ok {
+					t.Errorf("object carries %s", hidden)
 				}
-			},
+			}
+			if _, ok := out["plantedSecret"]; ok {
+				t.Error("the page carries a field no view names")
+			}
+		},
+	}
+}
+
+func routeCreateStorageBucket() routeCase {
+	return routeCase{
+		name: "create_storage_bucket", tool: "create_storage_bucket",
+		args: map[string]any{"project_id": testProjectA, "name": "photos", "file_size_limit": 1048576, "allowed_mime_types": []any{"image/png"}},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodPost, projectsA+"/storage/buckets", 201, realJSON(photosBucket(), plantedFields))
+		},
+		expect: []string{"POST " + projectsA + "/storage/buckets"},
+		check: func(t *testing.T, calls []recordedCall, out map[string]any) {
+			if calls[0].Body != `{"allowedMimeTypes":["image/png"],"fileSizeLimit":1048576,"name":"photos"}` {
+				t.Errorf("body = %s", calls[0].Body)
+			}
+			bucket, _ := out["bucket"].(map[string]any)
+			if bucket["name"] != "photos" || strings.Contains(realJSON(out, nil), "plantedSecret") {
+				t.Errorf("out = %v", out)
+			}
+		},
+	}
+}
+
+func routeSetBucketAccess() routeCase {
+	return routeCase{
+		name: "set_bucket_access", tool: "set_bucket_access", features: appStorageOn,
+		args: map[string]any{"project_id": testProjectA, "bucket": "photos", "access": map[string]any{"user": map[string]any{"read": "own", "write": "own"}}},
+		setup: func(f *fakeRoutes) {
+			f.on(http.MethodPut, projectsA+"/storage/buckets/photos/access", 200, realJSON(photosBucket(), plantedFields))
+		},
+		expect: []string{"PUT " + projectsA + "/storage/buckets/photos/access"},
+		check: func(t *testing.T, calls []recordedCall, out map[string]any) {
+			if calls[0].Body != `{"access":{"user":{"read":"own","write":"own"}}}` {
+				t.Errorf("body = %s", calls[0].Body)
+			}
+			bucket, _ := out["bucket"].(map[string]any)
+			if access, _ := bucket["access"].(map[string]any); access["user"] == nil || strings.Contains(realJSON(out, nil), "plantedSecret") {
+				t.Errorf("out = %v", out)
+			}
 		},
 	}
 }
