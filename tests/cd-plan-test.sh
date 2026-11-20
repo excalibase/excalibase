@@ -48,7 +48,10 @@ done
 # an older run finishing late does not move the floating tag, but keeps its own sha tag
 expect "sha=$SHA prefix=release-1.7 short=0123456 floating=false " release/1.7 "$OLD"
 expect "sha=$SHA prefix=main short=0123456 floating=false " main "$OLD"
-expect refused release/1.7 fail
+# a GitHub API error must not stop the sha-tagged image: warn, publish it, leave the floating tag alone
+expect "sha=$SHA prefix=release-1.7 short=0123456 floating=false " release/1.7 fail
+expect "sha=$SHA prefix=main short=0123456 floating=false " main fail
+expect "sha=$SHA prefix=main short=0123456 floating=false " main garbage
 if plan main notasha; then echo "FAIL a non-commit sha was accepted"; fail=1; fi
 tag_blocks=$(awk '/^ *tags: \|/ {on=1; next} on && /^ *[a-z-]+:/ {on=0} on {print}' "$cd")
 [ -n "$tag_blocks" ] || { echo "FAIL found no tags: blocks in cd.yml"; fail=1; }

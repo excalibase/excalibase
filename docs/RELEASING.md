@@ -14,6 +14,8 @@ touches a `main` tag.
 
 Rules that keep this safe:
 
+- To retry a failed CD run use **Re-run failed jobs**, not Re-run all jobs: the
+  guard below refuses images that were already pushed.
 - `release-<major>.<minor>-<sha7>` is written once. CD refuses to push over an
   existing one (`scripts/guard-release-tag.sh`), so a re-run cannot replace a
   tested image with an untested digest. `main-<sha7>` is not guarded and can be
@@ -23,17 +25,20 @@ Rules that keep this safe:
 
 ## Patch release (for example 1.7.1)
 
-1. **Bring CI and CD to the branch.** A push runs the `ci.yml` of the branch
-   it lands on, so a `release/*` branch cut before #549, or from a tag older
-   than it, gets no CI and no CD until it carries the new `.github/workflows/ci.yml`
-   and `tests/cd-plan-test.sh` (plus `tests/cd-guard-test.sh`,
-   `scripts/guard-release-tag.sh`, `scripts/release-tags.sh` and the updated
-   `scripts/release-native-tags.sh`). Copy them from `main` as the first commit
-   on the branch. Do this once per existing release branch.
-2. **Cut the branch** once per minor, from the last release tag, in each repo
+1. **Cut the branch** once per minor, from the last release tag, in each repo
    that needs a fix: `git switch -c release/1.7 v1.7.0 && git push origin release/1.7`.
    The name must be `release/<major>.<minor>` without leading zeros; any other
    `release/*` name is refused by CD.
+2. **Bring CI and CD to the branch**, through a pull request into it (the
+   `release/**` ruleset requires one). A push runs the `ci.yml` of the branch it
+   lands on, so a `release/*` branch cut before #549, or from a tag older than
+   it, gets no CI and no CD until it carries the new files. Copy these from
+   `main`: `.github/workflows/ci.yml`, `.github/workflows/cd.yml`,
+   `.github/workflows/release.yml`, `scripts/guard-release-tag.sh`,
+   `scripts/release-tags.sh`, `scripts/release-native-tags.sh`,
+   `tests/cd-plan-test.sh`, `tests/cd-guard-test.sh`,
+   `tests/release-tags-test.sh` and `tests/release-native-tags-test.sh`.
+   Check that CI is green on that PR before cherry-picking. Once per branch.
 3. **Cherry-pick** the fixes, merged to `main` first, as pull requests into
    `release/1.7` (CI runs on them). Bump the single-host bundle tag on the
    branch if the bundle changed.
@@ -43,15 +48,19 @@ Rules that keep this safe:
    distance ahead. Images owned by other repos (engine, auth, watcher) are
    built by their own CD; see the note at the end.
 5. **Gate it.** In `excalibase-service`, dispatch *AIO E2E (k3d)* **from the
-   matching `release-chart-1.7.x` branch**, not from `main`: the run installs the
-   chart of the ref it is dispatched from, and the gate must test the chart that
-   ships. That branch needs the dispatch inputs from excalibase-service#214 (cherry-pick
-   `aio-e2e.yml` and `aio-e2e/lib/resolve-images.*` onto it first). Set
+   matching `release-chart-<x.y.z>` branch** (for example `release-chart-1.7.1`),
+   not from `main`: the run installs the chart of the ref it is dispatched from,
+   and the gate must test the chart that ships. Cut it from the previous
+   chart branch or release tag (`git switch -c release-chart-1.7.1 release-chart-1.7.0`),
+   apply the chart change, and bring the dispatch inputs from
+   excalibase-service#214 onto it (`aio-e2e.yml` and `aio-e2e/lib/resolve-images.*`). Set
    `tag=release-1.7-<sha7>`, and per-image overrides (`provisioning`, `studio`,
    `graphql`, `auth`, `watcher`, `deno`) for any image not built from the
    branch, for example `graphql=excalibase/excalibase-graphql:1.7.0@sha256:...`.
    No throwaway branch is needed. Wait for green.
-6. **Retag.** Dispatch *Release* from `release/1.7` with `version=1.7.1`,
+6. **Retag.** Dispatch *Release* **from `main`** (it only retags by `source_tag`,
+   so the branch's own `release.yml`, which may predate `move_major_latest`, is
+   never used) with `version=1.7.1`,
    `source_tag=release-1.7-<sha7>` and
    `services=provisioning,studio,deno-runtime` (the images built from the
    branch). It resolves the tested digest, scans it, and adds `1.7.1`, `1.7`,
@@ -60,7 +69,7 @@ Rules that keep this safe:
    and `latest` stay on 1.8.
 7. **Retag the images that were not patched.** The chart bump below rewrites
    every excalibase image to `:1.7.1`, so each of the six needs that tag, patched
-   or not. Dispatch *Release* a second time from `release/1.7` with
+   or not. Dispatch *Release* a second time, also from `main`, with
    `version=1.7.1`, `source_tag=<previous release, 1.7.0>`,
    `services=excalibase-graphql,excalibase-auth,excalibase-watcher-go`
    (whichever were not rebuilt) and the same `move_major_latest`. Use the

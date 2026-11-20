@@ -51,6 +51,10 @@ jobs:
               - '.github/workflows/**'
               - 'scripts/cve-watch/**'
               - 'tests/cve-watch/**'
+              - 'scripts/guard-release-tag.sh'
+              - 'scripts/release-*.sh'
+              - 'tests/cd-*.sh'
+              - 'tests/release-*.sh'
               - 'security/**'
             singlehost:
               - 'deploy/single-host/**'
