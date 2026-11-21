@@ -54,7 +54,7 @@
     "@vitest/coverage-v8": "^4.1.5",
     "autoprefixer": "^10.4.20",
     "globals": "^16.5.0",
-    "jsdom": "^29.1.1",
+    "jsdom": "^31.0.0",
     "oxlint": "^1.68.0",
     "postcss": "^8.4.49",
     "prettier": "^3.8.3",
