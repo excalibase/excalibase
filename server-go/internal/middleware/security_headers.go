@@ -2,6 +2,23 @@ package middleware
 
 import "net/http"
 
+// ContentSecurityPolicy is the platform's page policy.
+const ContentSecurityPolicy = "default-src 'self'; " +
+	"script-src 'self'; " +
+	"style-src 'self' 'unsafe-inline'; " + // CodeMirror/Monaco inject inline styles
+	"img-src 'self' data:; " +
+	"font-src 'self' data:; " +
+	"connect-src 'self'; " +
+	"frame-ancestors 'none'; " +
+	"base-uri 'self'; " +
+	"form-action 'self'"
+
+// FunctionContentSecurityPolicy is what every edge-function answer carries: the
+// page policy plus a sandbox without allow-same-origin, so HTML a function
+// serves runs in an opaque origin and cannot reach cookies or storage of the
+// shared API origin.
+const FunctionContentSecurityPolicy = ContentSecurityPolicy + "; sandbox allow-scripts allow-forms"
+
 // SecurityHeaders sets standard security response headers on all responses.
 //
 // CSP: `default-src 'self'` blocks any cross-origin script/style/image. The
@@ -18,16 +35,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; "+
-				"script-src 'self'; "+
-				"style-src 'self' 'unsafe-inline'; "+ // CodeMirror/Monaco inject inline styles
-				"img-src 'self' data:; "+
-				"font-src 'self' data:; "+
-				"connect-src 'self'; "+
-				"frame-ancestors 'none'; "+
-				"base-uri 'self'; "+
-				"form-action 'self'")
+		w.Header().Set("Content-Security-Policy", ContentSecurityPolicy)
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 		next.ServeHTTP(w, r)
