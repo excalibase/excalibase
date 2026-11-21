@@ -11,6 +11,8 @@ export interface BulkRequest<T> {
   danger?: boolean;
   items: T[];
   act: (item: T, reason: string) => Promise<unknown>;
+  // Reads an answer the action got: text when it only partly did what was asked.
+  partialOf?: (answer: unknown) => string | undefined;
   label: (item: T) => string;
   // "Suspended 3 of 4 accounts" is "<done> of <total> <noun>" after the verb.
   verb: string;
@@ -33,12 +35,12 @@ export function BulkDialog<T>({ request, onFinished, onCancel }: BulkDialogProps
   const [busy, setBusy] = useState(false);
   const run = async (reason: string) => {
     setBusy(true);
-    const result: BulkResult<T> = await runBulk(request.items, (item) => request.act(item, reason));
+    const result: BulkResult<T> = await runBulk(request.items, (item) => request.act(item, reason), request.partialOf);
     setBusy(false);
     request.onSettled();
     onFinished({
-      summary: `${request.verb} ${result.done} of ${request.items.length} ${request.noun}.`,
-      failures: result.failed.map((failure) => `${request.label(failure.item)}: ${failure.message}`),
+      summary: `${request.verb} ${result.done} of ${request.items.length} ${request.noun}${result.partial.length ? `, ${result.partial.length} only partly` : ''}.`,
+      failures: [...result.failed, ...result.partial].map((failure) => `${request.label(failure.item)}: ${failure.message}`),
     });
   };
   return (

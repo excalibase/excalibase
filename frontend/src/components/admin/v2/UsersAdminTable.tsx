@@ -8,7 +8,7 @@ import { suspendUser, unsuspendUser, type ConsoleUser, type SuspendResult } from
 import { AccountStatusBadge } from '../AccountStatusBadge';
 import { ReasonDialog } from '../ReasonDialog';
 import { BulkDialog, BulkOutcomeNotice, type BulkOutcome, type BulkRequest } from './BulkAction';
-import { refreshAdmin, suspendableUsers } from './adminRows';
+import { appsFailedNote, refreshAdmin, skippedNote, suspendableUsers } from './adminRows';
 import { USER_SORTS } from './listQuery';
 import { useServerList } from './useServerList';
 
@@ -99,12 +99,19 @@ export function UsersAdminTable() {
   };
 
   const offerBulk = (action: UserAction, selected: ConsoleUser[], clear: () => void) => {
-    const items = suspendableUsers(selected).filter((user) => (action === 'suspend' ? user.status !== 'suspended' : user.status === 'suspended'));
+    const staff = selected.filter((user) => !suspendableUsers([user]).length);
+    const already = suspendableUsers(selected).filter((user) => (action === 'suspend' ? user.status === 'suspended' : user.status !== 'suspended'));
+    const items = suspendableUsers(selected).filter((user) => !already.includes(user));
     if (items.length === 0) return;
+    const skipped = [
+      ...staff.map((user) => ({ name: user.email, why: 'platform staff' })),
+      ...already.map((user) => ({ name: user.email, why: action === 'suspend' ? 'already suspended' : 'not suspended' })),
+    ];
     const word = action === 'suspend' ? 'Suspend' : 'Unsuspend';
     setBulk({
       title: `${word} ${items.length} account${items.length === 1 ? '' : 's'}`,
-      description: action === 'suspend' ? 'The accounts are blocked at once and their apps are scaled to zero.' : 'The accounts are reactivated and the apps the suspension stopped are resumed.',
+      description: (action === 'suspend' ? 'The accounts are blocked at once and their apps are scaled to zero.' : 'The accounts are reactivated and the apps the suspension stopped are resumed.') + skippedNote(skipped),
+      partialOf: appsFailedNote,
       confirmLabel: word, danger: action === 'suspend', items,
       act: (user, reason) => (action === 'suspend' ? suspendUser : unsuspendUser)(user.id, reason),
       label: (user) => user.email, verb: action === 'suspend' ? 'Suspended' : 'Unsuspended', noun: 'accounts',

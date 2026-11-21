@@ -45,7 +45,20 @@ func escapeLike(input string) string {
 	return replacer.Replace(strings.TrimSpace(input))
 }
 
+// ListUsers pages the accounts. A page past the end has no rows to carry the
+// count, so the total is read from the first row of the same filter.
 func (a *AdminConsole) ListUsers(ctx context.Context, q adminconsole.UserQuery) (adminconsole.Page[adminconsole.UserRow], error) {
+	page, err := a.listUsers(ctx, q)
+	if err == nil && len(page.Items) == 0 && q.Offset > 0 {
+		q.Limit, q.Offset = 1, 0
+		first, firstErr := a.listUsers(ctx, q)
+		page.Total = first.Total
+		err = firstErr
+	}
+	return page, err
+}
+
+func (a *AdminConsole) listUsers(ctx context.Context, q adminconsole.UserQuery) (adminconsole.Page[adminconsole.UserRow], error) {
 	page := adminconsole.Page[adminconsole.UserRow]{Items: []adminconsole.UserRow{}}
 	query, ok := listUsersSQL[sortKey{q.Sort, q.Desc}]
 	if !ok {
@@ -73,7 +86,19 @@ func (a *AdminConsole) ListUsers(ctx context.Context, q adminconsole.UserQuery) 
 	return page, rows.Err()
 }
 
+// ListOrgs pages the organizations, with the same total past the end as ListUsers.
 func (a *AdminConsole) ListOrgs(ctx context.Context, q adminconsole.OrgQuery) (adminconsole.Page[adminconsole.OrgRow], error) {
+	page, err := a.listOrgs(ctx, q)
+	if err == nil && len(page.Items) == 0 && q.Offset > 0 {
+		q.Limit, q.Offset = 1, 0
+		first, firstErr := a.listOrgs(ctx, q)
+		page.Total = first.Total
+		err = firstErr
+	}
+	return page, err
+}
+
+func (a *AdminConsole) listOrgs(ctx context.Context, q adminconsole.OrgQuery) (adminconsole.Page[adminconsole.OrgRow], error) {
 	page := adminconsole.Page[adminconsole.OrgRow]{Items: []adminconsole.OrgRow{}}
 	query, ok := listOrgsSQL[sortKey{q.Sort, q.Desc}]
 	if !ok {
@@ -205,5 +230,5 @@ const listOrgsBase = `
 		  AND ($3 = '' OR lower(o.name) LIKE '%' || lower($3) || '%' ESCAPE '\'
 		       OR lower(o.slug) LIKE '%' || lower($3) || '%' ESCAPE '\'
 		       OR lower(u.email) LIKE '%' || lower($3) || '%' ESCAPE '\')
-		  AND ($6 = '' OR o.tier = $6)
+		  AND ($6 = '' OR upper(o.tier) = $6)
 		  AND ($7 = '' OR ` + statusExpr + ` = $7)`

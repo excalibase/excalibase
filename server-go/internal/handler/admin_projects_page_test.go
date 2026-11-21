@@ -231,3 +231,27 @@ func TestListAllProjects_PagedReadIsStillGatedByThePlatformRole(t *testing.T) {
 		}
 	}
 }
+
+func TestListAllProjects_RejectsAStatusOrPlanOutsideTheAllowList(t *testing.T) {
+	h := pagedAdmin(3)
+	for _, query := range []string{"?limit=5&status=bogus", "?limit=5&plan=PLATINUM", "?limit=5&status=ACTIVE%27%20OR%201%3D1"} {
+		if w, _ := getProjects(t, h, query); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: want 400, got %d", query, w.Code)
+		}
+	}
+	if w, page := getProjects(t, h, "?limit=5&plan=standard"); w.Code != http.StatusOK || page.Total != 1 {
+		t.Errorf("a plan is matched whatever its case: %d total=%d", w.Code, page.Total)
+	}
+}
+
+func TestListAllProjects_AMalformedQueryOnTheUnpagedPathIsIgnored(t *testing.T) {
+	w := httptest.NewRecorder()
+	pagedAdmin(3).ListAllProjects(w, httptest.NewRequest("GET", "/api/admin/projects?x=%zz", nil))
+	var legacy []map[string]interface{}
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &legacy) != nil || len(legacy) != 3 {
+		t.Fatalf("want the bare array, got %d %s", w.Code, w.Body.String())
+	}
+	if w2, _ := getProjects(t, pagedAdmin(3), "?limit=5&x=%zz"); w2.Code != http.StatusBadRequest {
+		t.Fatalf("a malformed paged query is still refused, got %d", w2.Code)
+	}
+}

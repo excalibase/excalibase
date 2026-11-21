@@ -142,3 +142,44 @@ func TestAdminConsoleOrgsSortAndFilter(t *testing.T) {
 		t.Fatal("an unknown org sort must be refused")
 	}
 }
+
+func TestAdminConsoleOrgPlanFilterIgnoresTheCaseOfTheStoredTier(t *testing.T) {
+	store, console := consoleFixture(t)
+	if _, err := store.db.ExecContext(context.Background(), `UPDATE orgs SET tier = 'standard' WHERE id = 'o-other'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := orgIDs(t, console, adminconsole.OrgQuery{Tier: "STANDARD"}); !reflect.DeepEqual(got, []string{"o-other"}) {
+		t.Fatalf("a lowercase stored tier must match the plan filter: %v", got)
+	}
+}
+
+func TestAdminConsoleSearchTreatsPercentAndUnderscoreAsText(t *testing.T) {
+	store, console := consoleFixture(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `UPDATE orgs SET name = '100% Real_Co' WHERE id = 'o-cust'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE users SET email = 'a_b@example.test' WHERE id = 'u-other'`); err != nil {
+		t.Fatal(err)
+	}
+	for search, want := range map[string][]string{"%": {"o-cust"}, "100%": {"o-cust"}, "l_c": {"o-cust"}, "r_a": {}, "othe_": {}} {
+		if got, _ := orgIDs(t, console, adminconsole.OrgQuery{Search: search}); !reflect.DeepEqual(got, want) {
+			t.Errorf("org search %q: got %v, want %v", search, got, want)
+		}
+	}
+	for search, want := range map[string][]string{"a_b": {"u-other"}, "a%b": {}, "_": {"u-other"}} {
+		if got, _ := userIDs(t, console, adminconsole.UserQuery{Search: search}); !reflect.DeepEqual(got, want) {
+			t.Errorf("user search %q: got %v, want %v", search, got, want)
+		}
+	}
+}
+
+func TestAdminConsolePastTheEndStillReportsTheTotal(t *testing.T) {
+	_, console := consoleFixture(t)
+	if got, total := userIDs(t, console, adminconsole.UserQuery{Limit: 1, Offset: 50}); len(got) != 0 || total != 3 {
+		t.Errorf("users: %v total=%d", got, total)
+	}
+	if got, total := orgIDs(t, console, adminconsole.OrgQuery{Limit: 1, Offset: 50}); len(got) != 0 || total != 2 {
+		t.Errorf("orgs: %v total=%d", got, total)
+	}
+}

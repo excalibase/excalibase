@@ -5,8 +5,7 @@ import { DataTable, type Column, type FilterDef } from '../../ui/DataTable';
 import { Button } from '../../Button';
 import { serverErrorMessage } from '../../../utils/serverError';
 import { useConsoleOrgs } from '../../../hooks/useAdminConsole';
-import { api } from '../../../api/client';
-import { useRevokeOrg, useSetOrgTier } from '../../../hooks/useAdmin';
+import { revokeOrgCascade, useRevokeOrg, useSetOrgTier } from '../../../hooks/useAdmin';
 import type { ConsoleOrg } from '../../../api/adminConsole';
 import { AccountStatusBadge } from '../AccountStatusBadge';
 import { ReasonDialog } from '../ReasonDialog';
@@ -67,9 +66,6 @@ function orgRowActions(canMutate: boolean, on: { changePlan: (org: ConsoleOrg) =
   );
 }
 
-const revokeOrg = (org: ConsoleOrg, reason: string) =>
-  api.delete(`/admin/orgs/${org.id}`, { params: { cascade: true }, data: { reason } });
-
 // Every organization, paged and searched on the server.
 export function OrgsAdminTable({ canMutate }: { readonly canMutate: boolean }) {
   const list = useServerList(ORG_SORTS);
@@ -117,7 +113,7 @@ export function OrgsAdminTable({ canMutate }: { readonly canMutate: boolean }) {
     setBulk({
       title: `Revoke ${items.length} organization${items.length === 1 ? '' : 's'}`,
       description: `Drops ${projects} project(s), deletes the organizations and suspends their owners so they cannot sign in again. Not reversible.`,
-      confirmLabel: 'Revoke', danger: true, items, act: (org, reason) => revokeOrg(org, reason),
+      confirmLabel: 'Revoke', danger: true, items, act: (org, reason) => revokeOrgCascade(org.id, reason),
       label: (org) => org.slug, verb: 'Revoked', noun: 'organizations',
       onSettled: () => { clear(); refreshAdmin(client); },
     });

@@ -14,7 +14,7 @@ import { AccountStatusBadge } from '../AccountStatusBadge';
 import { ProjectDetailPanel } from '../ProjectDetailPanel';
 import { ReasonDialog } from '../ReasonDialog';
 import { BulkDialog, BulkOutcomeNotice, type BulkOutcome, type BulkRequest } from './BulkAction';
-import { createdOn, distinctOwners, formatCpu, formatMemory, refreshAdmin } from './adminRows';
+import { appsFailedNote, createdOn, distinctOwners, formatCpu, formatMemory, refreshAdmin, skippedNote } from './adminRows';
 import { PROJECT_SORTS } from './listQuery';
 import { useServerList } from './useServerList';
 
@@ -118,9 +118,11 @@ export function ProjectsAdminTable({ canMutate }: { readonly canMutate: boolean 
   const offerSuspendOwners = (selected: AdminProject[], clear: () => void) => {
     const owners = distinctOwners(selected);
     if (owners.length === 0) return;
+    const ownerless = selected.filter((project) => !project.ownerId).map((project) => ({ name: project.projectName || project.projectId, why: 'no owner' }));
     setBulk({
       title: `Suspend ${owners.length} owner${owners.length === 1 ? '' : 's'}`,
-      description: `Blocks the ${owners.length === 1 ? 'account' : 'accounts'} that own the selected projects and scales their apps to zero.`,
+      description: `Blocks the ${owners.length === 1 ? 'account' : 'accounts'} that own the selected projects and scales their apps to zero.${skippedNote(ownerless)}`,
+      partialOf: appsFailedNote,
       confirmLabel: 'Suspend', danger: true,
       items: owners.map((ownerId) => selected.find((p) => p.ownerId === ownerId)!),
       act: (project, reason) => suspendUser(project.ownerId!, reason),

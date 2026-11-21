@@ -177,6 +177,28 @@ describe('UsersAdminTable', () => {
     expect(api.post).toHaveBeenCalledWith('/admin/console/users/u-1/suspend', { reason: 'throwaway sign-ups' });
   });
 
+  test('the bulk dialog names the accounts it leaves out and why', async () => {
+    renderWith(<UsersAdminTable />);
+    await screen.findByText('dev1@acme.test');
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select all rows on this page' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Suspend…' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('dev3@acme.test (platform staff)');
+    expect(dialog).toHaveTextContent('dev2@acme.test (already suspended)');
+  });
+
+  test('a bulk suspend whose apps did not all stop reports the account as partly done, naming the apps', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { userId: 'u-1', status: 'suspended', appsStopped: [], appsRestored: [], appsFailed: [{ appName: 'proxy', reason: 'cluster busy' }] } } as never);
+    renderWith(<UsersAdminTable />);
+    await screen.findByText('dev1@acme.test');
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select all rows on this page' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Suspend…' }));
+    const dialog = screen.getByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText('Reason'), 'confirmed abuse ring');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Suspend' }));
+    expect(await screen.findByText(/dev1@acme.test: .*proxy.*cluster busy/)).toBeInTheDocument();
+  });
+
   test('one account is suspended from its row with a reason', async () => {
     vi.mocked(api.post).mockResolvedValue({ data: { userId: 'u-1', status: 'suspended', appsStopped: [], appsRestored: [], appsFailed: [] } } as never);
     renderWith(<UsersAdminTable />);
@@ -214,6 +236,30 @@ describe('OrgsAdminTable', () => {
     await userEvent.type(within(dialog).getByLabelText('Reason'), 'confirmed abuse ring');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Revoke' }));
     await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/admin/orgs/o1', { params: { cascade: true }, data: { reason: 'confirmed abuse ring' } }));
+  });
+
+  test('a revoke answered 207 with failed projects is shown as failed, with the projects named', async () => {
+    vi.mocked(api.delete).mockResolvedValue({ status: 207, data: { orgId: 'o1', dropped: 1, failed: ['p-9'] } } as never);
+    renderWith(<OrgsAdminTable canMutate />);
+    const row = (await screen.findByText('Acme')).closest('tr')!;
+    await userEvent.click(within(row).getByRole('button', { name: /Revoke/ }));
+    const dialog = screen.getByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText('Reason'), 'confirmed abuse ring');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Revoke' }));
+    expect(await within(screen.getByRole('dialog')).findByText(/p-9/)).toBeInTheDocument();
+  });
+
+  test('a bulk revoke with a 207 counts that org as failed', async () => {
+    vi.mocked(api.delete).mockImplementation(((url: string) => Promise.resolve(url.endsWith('/o2')
+      ? { status: 207, data: { failed: ['p-9'] } } : { status: 200, data: { failed: [] } })) as never);
+    renderWith(<OrgsAdminTable canMutate />);
+    await screen.findByText('Acme');
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select all rows on this page' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke…' }));
+    await userEvent.type(screen.getByLabelText('Reason'), 'confirmed abuse ring');
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Revoke' }));
+    expect(await screen.findByText('Revoked 1 of 2 organizations.')).toBeInTheDocument();
+    expect(screen.getByText(/beta: .*p-9/)).toBeInTheDocument();
   });
 
   test('bulk revoke goes through a reason too', async () => {

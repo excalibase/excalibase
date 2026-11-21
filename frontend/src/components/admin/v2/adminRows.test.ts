@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
+import { revokeOrgCascade } from '../../../hooks/useAdmin';
 import { createdOn, distinctOwners, formatCpu, formatMemory, runBulk, suspendableUsers } from './adminRows';
 
 describe('row formatting', () => {
@@ -34,7 +35,7 @@ describe('runBulk', () => {
     const order: string[] = [];
     const result = await runBulk(['a', 'b', 'c'], async (item) => { order.push(item); });
     expect(order).toEqual(['a', 'b', 'c']);
-    expect(result).toEqual({ done: 3, failed: [] });
+    expect(result).toEqual({ done: 3, failed: [], partial: [] });
   });
 
   test('one failure is reported with its reason and the rest still run', async () => {
@@ -45,5 +46,27 @@ describe('runBulk', () => {
     expect(act).toHaveBeenCalledTimes(3);
     expect(result.done).toBe(2);
     expect(result.failed).toEqual([{ item: 'b', message: 'protected account' }]);
+  });
+});
+
+describe('runBulk with partly done items', () => {
+  test('an item the action answers as partly failed is listed, not counted as clean', async () => {
+    const result = await runBulk(['a', 'b'], async (item) => ({ item }), (answer) => (answer.item === 'b' ? 'proxy: cluster busy' : undefined));
+    expect(result.done).toBe(2);
+    expect(result.partial).toEqual([{ item: 'b', message: 'proxy: cluster busy' }]);
+  });
+});
+
+describe('revokeOrgCascade', () => {
+  test('a 207 that lists failed projects is a failure naming them', async () => {
+    const { api } = await import('../../../api/client');
+    vi.spyOn(api, 'delete').mockResolvedValue({ status: 207, data: { orgId: 'o1', dropped: 1, failed: ['p-2', 'p-3'] } });
+    await expect(revokeOrgCascade('o1', 'abuse')).rejects.toThrow(/p-2, p-3/);
+  });
+
+  test('a clean answer is a success', async () => {
+    const { api } = await import('../../../api/client');
+    vi.spyOn(api, 'delete').mockResolvedValue({ status: 200, data: { orgId: 'o1', dropped: 2, failed: [] } });
+    await expect(revokeOrgCascade('o1', 'abuse')).resolves.toBeUndefined();
   });
 });

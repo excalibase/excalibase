@@ -30,6 +30,18 @@ var projectSorts = map[string]func(a, b projectEntry) int{
 	"created": func(a, b projectEntry) int { return a.created().Compare(b.created()) },
 }
 
+// projectStatuses and projectPlans are the values the list may be filtered by.
+var projectStatuses = map[string]bool{
+	string(domain.StatusActive): true, string(domain.StatusPaused): true, string(domain.StatusPausing): true,
+	string(domain.StatusResuming): true, string(domain.StageFailed): true, domain.StatusProvisioning: true,
+	string(domain.StatusDeleting): true, string(domain.StatusBackupsPendingDelete): true,
+	string(domain.StatusRestoring): true, string(domain.StatusPendingDeletion): true, string(domain.StatusUpgrading): true,
+}
+
+var projectPlans = map[string]bool{
+	string(domain.Free): true, string(domain.Standard): true, string(domain.Enterprise): true,
+}
+
 type projectEntry struct {
 	inst *domain.DatabaseInstance
 	fact adminconsole.ProjectFact
@@ -62,13 +74,14 @@ var errBadProjectQuery = errors.New("invalid project list query")
 // only when `limit` is present, so a caller that sends none still gets the
 // whole list as a bare array.
 func parseProjectQuery(rawQuery string) (q projectQuery, paged bool, err error) {
-	// Query() would silently drop a parameter it cannot parse; a malformed one is refused.
-	values, err := url.ParseQuery(rawQuery)
-	if err != nil {
-		return q, true, errBadProjectQuery
-	}
+	// Query() would silently drop a parameter it cannot parse; on the paged path a
+	// malformed one is refused, on the unpaged path it is ignored as it always was.
+	values, parseErr := url.ParseQuery(rawQuery)
 	if !values.Has("limit") {
 		return q, false, nil
+	}
+	if parseErr != nil {
+		return q, true, errBadProjectQuery
 	}
 	if q.limit, err = positiveInt(values.Get("limit")); err != nil {
 		return q, true, err
@@ -97,8 +110,11 @@ func parseProjectQuery(rawQuery string) (q projectQuery, paged bool, err error) 
 		return q, true, errBadProjectQuery
 	}
 	q.search = strings.ToLower(strings.TrimSpace(values.Get("q")))
-	q.status, q.plan = values.Get("status"), values.Get("plan")
+	q.status, q.plan = values.Get("status"), strings.ToUpper(values.Get("plan"))
 	q.owner, q.flag = values.Get("owner"), values.Get("flag")
+	if !projectStatuses[q.status] && q.status != "" || !projectPlans[q.plan] && q.plan != "" {
+		return q, true, errBadProjectQuery
+	}
 	if (q.owner != "" && q.owner != "active" && q.owner != "suspended") || (q.flag != "" && q.flag != "protected") {
 		return q, true, errBadProjectQuery
 	}
@@ -117,7 +133,7 @@ func (q projectQuery) matches(e projectEntry) bool {
 	if q.status != "" && string(e.inst.Status) != q.status {
 		return false
 	}
-	if q.plan != "" && string(e.inst.Tier) != q.plan {
+	if q.plan != "" && strings.ToUpper(string(e.inst.Tier)) != q.plan {
 		return false
 	}
 	if q.owner != "" && (e.fact.OwnerStatus == adminconsole.StatusSuspended) != (q.owner == "suspended") {
