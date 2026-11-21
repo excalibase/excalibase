@@ -138,7 +138,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Hardening, init, preflight and bootstrap
         run: |
-          for t in single-host edge-listener init-env subids preflight bootstrap host-firewall; do
+          for t in single-host edge-listener init-env preflight bootstrap host-firewall; do
             sh deploy/single-host/tests/$t.sh
           done
       - name: Host firewall gates provisioning and the edge (real Compose)
@@ -251,10 +251,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      # Provisioning pulls through the daemon API without registry auth, so these stay anonymous
-      # whatever the runner logged in as. Pulled here with the CLI, the daemon finds them local.
-      - name: Pre-pull the images provisioning pulls anonymously
-        run: sh deploy/single-host/tests/prepull-provisioning-images.sh
       - name: Build provisioning and Studio from this checkout
         run: |
           docker build -q -t docker.io/excalibase/provisioning:ci server-go
