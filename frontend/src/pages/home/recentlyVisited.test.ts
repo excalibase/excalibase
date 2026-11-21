@@ -34,7 +34,7 @@ describe('visits belong to the person signed in', () => {
     useAuthStore.setState({ user: null, isAuthenticated: false });
     recordVisit('/orgs');
     expect(loadVisits()).toEqual([]);
-    expect(localStorage.length).toBe(0);
+    expect(localStorage).toHaveLength(0);
   });
 
   test('clearVisits removes every list', () => {
