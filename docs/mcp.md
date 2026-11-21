@@ -56,7 +56,7 @@ A token is random and kept in the platform's memory as a hash. It is bound to th
 the personal access token of the connection), the tool and the exact target (project and object id),
 works once, and expires after five minutes. A token presented for another target, tool or project, or a
 second time, or after it expired, is refused and is spent; one presented by another caller is refused and
-left alone for its owner. A restart of the platform drops every token: ask again. The audit entry of the
+left alone for its owner. Each user may hold 30 waiting tokens (10,000 in all); expired ones are dropped on every new request. A restart of the platform drops every token: ask again. The audit entry of the
 first call says `confirmation: requested`, the second `confirmed`; Studio's AI activity shows the first
 as "Waiting for confirmation".
 

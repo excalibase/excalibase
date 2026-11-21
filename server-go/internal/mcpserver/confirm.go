@@ -19,8 +19,10 @@ const (
 	confirmTTL = 5 * time.Minute
 	// maxPendingConfirmations bounds the store; expired tokens are given up first.
 	maxPendingConfirmations = 10000
-	confirmPrefix           = "mcpc_"
-	confirmBytes            = 32
+	// maxPendingPerUser keeps one account from using up the store for everyone.
+	maxPendingPerUser = 30
+	confirmPrefix     = "mcpc_"
+	confirmBytes      = 32
 )
 
 // confirmTarget is exactly what a token destroys: the project and the one
@@ -67,8 +69,9 @@ func (s *confirmations) issue(caller Caller, tool string, target confirmTarget) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	if len(s.pending) >= maxPendingConfirmations {
-		s.dropExpired(now)
+	held := s.dropExpired(now, caller.User.ID)
+	if held >= maxPendingPerUser {
+		return "", time.Time{}, errors.New("you have too many confirmations waiting: use one or wait a few minutes")
 	}
 	if len(s.pending) >= maxPendingConfirmations {
 		return "", time.Time{}, errors.New("too many confirmations are waiting: try again in a few minutes")
@@ -80,12 +83,18 @@ func (s *confirmations) issue(caller Caller, tool string, target confirmTarget) 
 	return token, expires, nil
 }
 
-func (s *confirmations) dropExpired(now time.Time) {
-	for key, held := range s.pending {
-		if !now.Before(held.expires) {
+// dropExpired gives up every expired token and says how many live ones the user holds.
+func (s *confirmations) dropExpired(now time.Time, user string) int {
+	held := 0
+	for key, token := range s.pending {
+		switch {
+		case !now.Before(token.expires):
 			delete(s.pending, key)
+		case token.user == user:
+			held++
 		}
 	}
+	return held
 }
 
 // redeem spends a token. A token that is found is spent whatever follows, so a
@@ -164,7 +173,8 @@ func (c *call) guard(ctx context.Context, d destruction) (map[string]any, error)
 		"confirmationToken":    token,
 		"expiresInSeconds":     int(confirmTTL.Seconds()),
 		"next": "Nothing was deleted. Tell the user what would be deleted and ask whether to go ahead. Only if they say yes, call " + d.tool +
-			" again with the same arguments and confirmation_token set to this token. It works once, for this target only.",
+			" again with the same arguments and confirmation_token set to this token. It works once, for this target only. " +
+			"The call that deletes is still checked against the caller's project role (the one this tool's description names), so it is refused if that role may not delete this.",
 	}, nil
 }
 

@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -160,18 +161,69 @@ func TestConfirmationsRedeemOnceUnderRace(t *testing.T) {
 	}
 }
 
-func TestConfirmationsAreBounded(t *testing.T) {
+func callerNumber(n int) Caller {
+	id := "user-" + strconv.Itoa(n)
+	return Caller{User: userNamed(id), Token: tokenNamed("hash-" + id)}
+}
+
+func TestConfirmationsAreBoundedInTotal(t *testing.T) {
 	store, clock := newTestConfirmations()
 	for i := 0; i < maxPendingConfirmations; i++ {
+		if _, _, err := store.issue(callerNumber(i), "delete_app", target); err != nil {
+			t.Fatalf("issue %d: %v", i, err)
+		}
+	}
+	if _, _, err := store.issue(callerNumber(maxPendingConfirmations), "delete_app", target); err == nil {
+		t.Fatal("the store grew past its bound")
+	}
+	clock.now = clock.now.Add(confirmTTL + time.Second)
+	if _, _, err := store.issue(callerNumber(maxPendingConfirmations), "delete_app", target); err != nil {
+		t.Fatalf("expired tokens were not given up: %v", err)
+	}
+}
+
+// One account asking again and again must not use up what other users may hold.
+func TestOneUserAtTheirCapDoesNotBlockAnother(t *testing.T) {
+	store, _ := newTestConfirmations()
+	for i := 0; i < maxPendingPerUser; i++ {
 		if _, _, err := store.issue(userOne, "delete_app", target); err != nil {
 			t.Fatalf("issue %d: %v", i, err)
 		}
 	}
 	if _, _, err := store.issue(userOne, "delete_app", target); err == nil {
-		t.Fatal("the store grew past its bound")
+		t.Fatal("a user went past their cap")
+	}
+	if _, _, err := store.issue(userTwo, "delete_app", target); err != nil {
+		t.Fatalf("one user at their cap blocked another: %v", err)
+	}
+}
+
+func TestAUserAtTheirCapAsksAgainOnceTheirTokensExpire(t *testing.T) {
+	store, clock := newTestConfirmations()
+	for i := 0; i < maxPendingPerUser; i++ {
+		if _, _, err := store.issue(userOne, "delete_app", target); err != nil {
+			t.Fatal(err)
+		}
 	}
 	clock.now = clock.now.Add(confirmTTL + time.Second)
 	if _, _, err := store.issue(userOne, "delete_app", target); err != nil {
-		t.Fatalf("expired tokens were not given up: %v", err)
+		t.Fatalf("expired tokens still count against the user: %v", err)
+	}
+}
+
+// Expired tokens go on every issue, not only when the store is full.
+func TestExpiredTokensAreDroppedOnEveryIssue(t *testing.T) {
+	store, clock := newTestConfirmations()
+	for i := 0; i < 5; i++ {
+		if _, _, err := store.issue(userOne, "delete_app", target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock.now = clock.now.Add(confirmTTL + time.Second)
+	if _, _, err := store.issue(userTwo, "delete_app", target); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(store.pending); got != 1 {
+		t.Fatalf("%d tokens held, want only the new one", got)
 	}
 }

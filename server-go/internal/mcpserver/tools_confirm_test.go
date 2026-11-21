@@ -140,6 +140,19 @@ func (h *harness) connect(caller Caller) *mcp.ClientSession {
 	return cs
 }
 
+// mirrorProject answers every route of one project the same for another.
+func (h *harness) mirrorProject(from, to string) {
+	h.routes.mu.Lock()
+	defer h.routes.mu.Unlock()
+	for key, reply := range h.routes.replies {
+		if mirrored := strings.ReplaceAll(key, "/"+from+"/", "/"+to+"/"); mirrored != key {
+			h.routes.replies[mirrored] = reply
+		} else if mirrored = strings.ReplaceAll(key, "/"+from, "/"+to); mirrored != key {
+			h.routes.replies[mirrored] = reply
+		}
+	}
+}
+
 func (h *harness) deleteCount(call string) int {
 	n := 0
 	for _, made := range h.routes.calls {
@@ -186,6 +199,9 @@ func TestFirstCallDeletesNothingAndAsksForConfirmation(t *testing.T) {
 				t.Fatal("the first call deleted something")
 			}
 			assertAsksForConfirmation(t, out, c.named)
+			if next, _ := out["next"].(string); !strings.Contains(next, "role") {
+				t.Errorf("next does not say the deleting call is still checked against the caller's role: %q", next)
+			}
 		})
 	}
 }
@@ -305,6 +321,26 @@ func TestATokenForAnotherProjectIsRefused(t *testing.T) {
 	}
 	if h.anyDelete() {
 		t.Fatal("deleted in another project")
+	}
+}
+
+// The same ids exist in every project (function ids, secret names), so the project is part of what a token is for.
+func TestATokenForAnotherProjectIsRefusedOnEveryTool(t *testing.T) {
+	for _, c := range destructiveCases() {
+		t.Run(c.tool, func(t *testing.T) {
+			h := newHarness(t, c, features.MCPConfirm)
+			h.mirrorProject(testProjectA, "proj-b")
+			cs := h.connect(writeCaller())
+			token := requestToken(t, cs, c.tool, c.args)
+			args := withToken(c.args, token)
+			args["project_id"] = "proj-b"
+			if res := callTool(t, cs, c.tool, args); !res.IsError {
+				t.Fatal("a token for one project confirmed the same object in another")
+			}
+			if h.anyDelete() {
+				t.Fatal("deleted on a token for another project")
+			}
+		})
 	}
 }
 
