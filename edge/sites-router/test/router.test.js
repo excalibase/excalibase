@@ -220,6 +220,18 @@ describe("response headers", () => {
     const response = await router.fetch(new Request(`https://shop.${BASE}/`), env);
     expect(response.headers.getSetCookie()).toEqual(["a=1; Path=/", `d=4; Domain=shop.${BASE}`]);
   });
+
+  it("reads a Domain attribute however it is written", async () => {
+    const headers = new Headers();
+    headers.append("set-cookie", `a=1; DOMAIN=${BASE.toUpperCase()}`);
+    headers.append("set-cookie", `b=2; Path=/;Domain = ${BASE}`);
+    headers.append("set-cookie", "c=3; Domain=");
+    headers.append("set-cookie", `d=4; Domain=shop.${BASE}.`);
+    headers.append("set-cookie", `e=5; Domain=SHOP.${BASE}`);
+    const { env } = fakeEnv({ site: async () => new Response("ok", { headers }) });
+    const response = await router.fetch(new Request(`https://shop.${BASE}/`), env);
+    expect(response.headers.getSetCookie()).toEqual([`e=5; Domain=SHOP.${BASE}`]);
+  });
 });
 
 describe("the default 404 page", () => {

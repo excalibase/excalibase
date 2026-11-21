@@ -244,6 +244,8 @@ export function siteHeaders(source, hostname, ranCode, preview = false) {
 // cookieStaysOnHost refuses a Domain attribute naming anything but the site's
 // own host: until the user-content domain is on the Public Suffix List, a
 // Domain=<base domain> cookie would reach every other site.
+// This covers Set-Cookie only; a script's document.cookie is out of its reach, so
+// the Public Suffix List entry is what closes it (check-psl.sh confirms it).
 function cookieStaysOnHost(cookie, hostname) {
   for (const attribute of cookie.split(";").slice(1)) {
     const [name, ...rest] = attribute.split("=");
