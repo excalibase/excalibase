@@ -110,7 +110,7 @@ export default function App() {
             <Route path="/provision" element={<ProvisionPage />} />
             <Route path="/admin" element={<AdminRouteGuard><PlatformAdminPage /></AdminRouteGuard>} />
             <Route path="/admin/host" element={<FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate>} />
-            <Route path="/usage" element={<UsagePage />} />
+            <Route path="/usage" element={<FeatureGate feature="studio_v2"><UsagePage /></FeatureGate>} />
             <Route path="/account/tokens" element={<AccessTokensPage />} />
           </Route>
 

@@ -61,9 +61,9 @@ test.describe.serial('a new user, from sign-up to a deployed app', () => {
   let page: Page;
   test.beforeAll(async ({ browser }) => {
     const context = await browser.newContext();
-    // A local stack on plain http: the session cookie is Secure, so the browser
-    // would drop it. STUDIO_LIVE_PLAIN_HTTP_VIA (e.g. http://127.0.0.1:8080) is
-    // where the edge listens; auth calls go there and the cookie keeps working.
+    // A local stack on plain http: run it with STUDIO_INSECURE_COOKIES=true, or the
+    // __Host- session cookie (Secure) is dropped. STUDIO_LIVE_PLAIN_HTTP_VIA
+    // (e.g. http://127.0.0.1:8080) is where the edge listens; auth calls go there.
     const via = process.env.STUDIO_LIVE_PLAIN_HTTP_VIA;
     if (via) {
       await context.route('**/api/auth/**', async (route) => {
@@ -72,9 +72,7 @@ test.describe.serial('a new user, from sign-up to a deployed app', () => {
           url: `${via}${original.pathname}${original.search}`,
           headers: { ...route.request().headers(), host: original.host },
         });
-        const headers = { ...response.headers() };
-        if (headers['set-cookie']) headers['set-cookie'] = headers['set-cookie'].replace(/;\s*Secure/gi, '');
-        await route.fulfill({ response, headers });
+        await route.fulfill({ response });
       });
     }
     page = await context.newPage();

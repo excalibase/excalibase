@@ -145,6 +145,24 @@ describe('DataTable', () => {
     expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
   });
 
+  test('the selection is cleared when the page, the sort or the page size changes', async () => {
+    render(
+      <DataTable label="Projects" columns={COLUMNS} rows={makeRows(60)} getRowId={(r) => r.id} selectable
+        bulkActions={(selected) => <button type="button">Pause {selected.length}</button>} />,
+    );
+    const pick = () => userEvent.click(screen.getAllByRole('checkbox', { name: /^Select proj-/ })[0]);
+    await pick();
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /next page/i }));
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    await pick();
+    await userEvent.click(within(screen.getByRole('columnheader', { name: /size/i })).getByRole('button'));
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    await pick();
+    await userEvent.selectOptions(screen.getByLabelText(/rows per page/i), '50');
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+  });
+
   test('the column chooser hides a column and remembers it', async () => {
     const { unmount } = render(<DataTable label="Projects" columns={COLUMNS} rows={makeRows(2)} getRowId={(r) => r.id} storageKey="projects" />);
     await userEvent.click(screen.getByRole('button', { name: /columns/i }));

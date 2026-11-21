@@ -108,6 +108,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
   const toggleSort = (id: string) => {
     const next: SortState = sort?.columnId !== id ? { columnId: id, direction: 'asc' } : { columnId: id, direction: sort.direction === 'asc' ? 'desc' : 'asc' };
     setSort(next);
+    selection.clear();
     if (server) paging.onSortChange?.(next);
   };
 
@@ -148,8 +149,8 @@ export function DataTable<T>(props: DataTableProps<T>) {
       {!isLoading && total > 0 && (
         <Pager range={pageRange(current, pageSize, total)} total={total} page={current} pageSize={pageSize}
           hasNext={current * pageSize < total} sizeChangeable={!server}
-          onPage={(next) => (server ? paging.onPageChange(next) : setPage(next))}
-          onSize={(size) => { setClientSize(size); setPage(1); }} />
+          onPage={(next) => { selection.clear(); if (server) paging.onPageChange(next); else setPage(next); }}
+          onSize={(size) => { setClientSize(size); setPage(1); selection.clear(); }} />
       )}
     </section>
   );

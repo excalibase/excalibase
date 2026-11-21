@@ -350,6 +350,7 @@ Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
 | `APP_HOSTING_ENABLED` | `false` (`true` with `--apps`) | Containers on this host |
 | `APP_DOMAIN` | `apps.<domain>` | Parent of every app hostname |
 | `APP_SANDBOX_RUNTIME` | `runsc` | `none` runs apps without gVisor |
+| `APP_USERNS` | `auto` | Rootless Podman without a sandbox only: `per-app` gives each app its own user range, `shared` one for all; Docker and gVisor are unchanged, and `per-app` there refuses to start ([podman.md](podman.md#apps-containers)) |
 | `APP_EGRESS` | `none` | `internet` lets apps call out |
 | `APP_DOMAIN_RESOLVER` | the host's | `host:port` of the DNS server custom domains' CNAMEs are checked against |
 
@@ -635,6 +636,7 @@ the code.
 | `.env` | Default | Meaning |
 |---|---|---|
 | `FEATURE_FUNCTIONINVOKE` | unset (off) | the MCP `invoke_function` tool |
+| `FEATURE_STUDIO_V2` | unset (off) | the cloud-console layout of Studio: new top bar, side navigation, command palette (⌘K) and shared table |
 
 ## Refusals you may see
 
