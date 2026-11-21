@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { BareDomainWarning, SubdomainOnlyNotice } from '../domains/DomainHints';
 import { Globe } from 'lucide-react';
 import { apiErrorMessage } from '../../api/apps';
 import {
@@ -114,11 +115,14 @@ export function AppDomains({
   const verify = useVerifyAppDomain(projectId, appId);
   const remove = useRemoveAppDomain(projectId, appId);
   const [hostname, setHostname] = useState('');
+  // Checked only once the field is left or submitted, so a name half typed never warns.
+  const [checkedHost, setCheckedHost] = useState('');
   const busy = add.isPending || verify.isPending || remove.isPending;
   const error = add.error ?? verify.error ?? remove.error;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    setCheckedHost(hostname);
     add.mutate(hostname.trim(), { onSuccess: () => setHostname('') });
   };
 
@@ -140,12 +144,17 @@ export function AppDomains({
           ))}
         </ul>
       )}
+      <SubdomainOnlyNotice testId="domain-subdomain-only" />
       <form onSubmit={submit} className="flex gap-2">
         <input
           aria-label="Domain"
           placeholder="shop.example.com"
           value={hostname}
-          onChange={(e) => setHostname(e.target.value)}
+          onChange={(event) => {
+            setHostname(event.target.value);
+            setCheckedHost('');
+          }}
+          onBlur={() => setCheckedHost(hostname)}
           className={inputClass}
           data-testid="domain-input"
         />
@@ -158,9 +167,14 @@ export function AppDomains({
           Add
         </button>
       </form>
-      <p className="text-xs text-text-tertiary">
-        A subdomain such as shop.example.com, not a bare domain like example.com.
-      </p>
+      <BareDomainWarning
+        hostname={checkedHost}
+        onUse={(suggested) => {
+          setHostname(suggested);
+          setCheckedHost('');
+        }}
+        testId="domain-bare-warning"
+      />
       {error && (
         <div role="alert" className="text-sm text-red-400">
           {apiErrorMessage(error, 'The domain could not be changed')}

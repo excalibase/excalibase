@@ -120,6 +120,39 @@ describe('SiteDomains', () => {
     );
   });
 
+  test('says up front that only a subdomain can be added, not a bare domain', async () => {
+    renderDomains({ domains: [] });
+    const notice = await screen.findByTestId('site-domain-subdomain-only');
+    expect(notice).toHaveTextContent(/only a subdomain/i);
+    expect(notice).toHaveTextContent('www.example.com');
+    expect(notice).toHaveTextContent(/bare domain/i);
+  });
+
+  test('warns while a bare domain is typed and offers its www form', async () => {
+    const user = userEvent.setup();
+    renderDomains({ domains: [] });
+    const input = await screen.findByTestId('site-domain-input');
+    await user.type(input, 'https://Example.com/');
+    await user.tab();
+    const warning = await screen.findByTestId('site-domain-bare-warning');
+    expect(warning).toHaveTextContent(/example\.com is a bare domain/i);
+    expect(warning).toHaveTextContent(/redirect/i);
+    await user.click(screen.getByRole('button', { name: 'Use www.example.com' }));
+    expect(input).toHaveValue('www.example.com');
+    expect(screen.queryByTestId('site-domain-bare-warning')).not.toBeInTheDocument();
+  });
+
+  test('a subdomain, or one still being typed, shows no bare-domain warning', async () => {
+    const user = userEvent.setup();
+    renderDomains({ domains: [] });
+    const input = await screen.findByTestId('site-domain-input');
+    await user.type(input, 'shop.ex');
+    expect(screen.queryByTestId('site-domain-bare-warning')).not.toBeInTheDocument();
+    await user.type(input, 'ample.co.uk');
+    await user.tab();
+    expect(screen.queryByTestId('site-domain-bare-warning')).not.toBeInTheDocument();
+  });
+
   test('shows why a domain was refused', async () => {
     const user = userEvent.setup();
     vi.mocked(api.post).mockRejectedValue({
