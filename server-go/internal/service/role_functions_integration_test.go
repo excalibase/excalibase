@@ -48,37 +48,41 @@ func TestRoleFunctions_ReregistrationRevokesAnOlderProjectsAppGrants(t *testing.
 // login's memberships as they were made there, with SET. The reconcile's probe
 // finds them and the registration SQL, run again, takes SET away.
 func TestRuntimeLogin_ProbeFindsAMembershipThatCanSetRole(t *testing.T) {
-	for _, image := range []string{"postgres:16", "postgres:15"} {
-		t.Run(image, func(t *testing.T) {
-			c := newPlatformSchemaCaseOn(t, startRolePostgresImage(t, image))
-			c.register(t)
-			verifier, err := newScramVerifier("Runtime-Password-1")
-			if err != nil {
-				t.Fatal(err)
-			}
-			runtimeSQL := pgroles.RuntimeRoleSQL(customerOwner, verifier)
-			mustExec(t, c.admin, runtimeSQL)
-			ctx := context.Background()
-			if reaches, err := appReachesAuth(ctx, c.pg.execer(), "app"); err != nil || reaches {
-				t.Fatalf("probe on a fresh runtime login = %v, %v; want not pending", reaches, err)
-			}
-			if image == "postgres:15" {
-				return
-			}
-			mustExec(t, c.admin, `GRANT excalibase_app TO excalibase_runtime WITH SET TRUE`)
-			if reaches, err := appReachesAuth(ctx, c.pg.execer(), "app"); err != nil || !reaches {
-				t.Fatalf("probe on a membership with SET = %v, %v; want pending", reaches, err)
-			}
-			mustExec(t, c.admin, runtimeSQL)
-			if reaches, err := appReachesAuth(ctx, c.pg.execer(), "app"); err != nil || reaches {
-				t.Fatalf("probe after the SQL ran again = %v, %v; want not pending", reaches, err)
-			}
-			// Locked, the login is no longer a path to anything.
-			mustExec(t, c.admin, `GRANT excalibase_app TO excalibase_runtime WITH SET TRUE`)
-			mustExec(t, c.admin, pgroles.RuntimeLockSQL())
-			if reaches, err := appReachesAuth(ctx, c.pg.execer(), "app"); err != nil || reaches {
-				t.Fatalf("probe on a locked login = %v, %v; want not pending", reaches, err)
-			}
-		})
+	t.Run("postgres:16", func(t *testing.T) {
+		c, runtimeSQL := runtimeProbeCase(t, "postgres:16")
+		mustExec(t, c.admin, `GRANT excalibase_app TO excalibase_runtime WITH SET TRUE`)
+		expectProbe(t, c, true, "a membership with SET")
+		mustExec(t, c.admin, runtimeSQL)
+		expectProbe(t, c, false, "after the SQL ran again")
+		// Locked, the login is no longer a path to anything.
+		mustExec(t, c.admin, `GRANT excalibase_app TO excalibase_runtime WITH SET TRUE`)
+		mustExec(t, c.admin, pgroles.RuntimeLockSQL())
+		expectProbe(t, c, false, "a locked login")
+	})
+	t.Run("postgres:15", func(t *testing.T) {
+		runtimeProbeCase(t, "postgres:15")
+	})
+}
+
+// runtimeProbeCase registers a project on the image, creates the runtime login
+// and checks the probe reports nothing pending for it.
+func runtimeProbeCase(t *testing.T, image string) (*platformSchemaCase, string) {
+	t.Helper()
+	c := newPlatformSchemaCaseOn(t, startRolePostgresImage(t, image))
+	c.register(t)
+	verifier, err := newScramVerifier("Runtime-Password-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeSQL := pgroles.RuntimeRoleSQL(customerOwner, verifier)
+	mustExec(t, c.admin, runtimeSQL)
+	expectProbe(t, c, false, "a fresh runtime login")
+	return c, runtimeSQL
+}
+
+func expectProbe(t *testing.T, c *platformSchemaCase, want bool, when string) {
+	t.Helper()
+	if got, err := appReachesAuth(context.Background(), c.pg.execer(), "app"); err != nil || got != want {
+		t.Fatalf("probe on %s = %v, %v; want %v", when, got, err, want)
 	}
 }
