@@ -44,12 +44,19 @@ func TestIntegration_CreateRoleStoresAHostilePasswordVerbatim(t *testing.T) {
 	t.Cleanup(func() { _ = superDB.Close() })
 	superDB.SetMaxOpenConns(1)
 	installCustomerRoleFunctions(t, superDB)
-	if _, err := superDB.ExecContext(ctx, "SET standard_conforming_strings = off"); err != nil {
+	// Role management runs as the owner's login: the functions refuse any other session (EXC-765).
+	ownerDB, err := sql.Open("postgres", dsn(testOwner, "ownerpass"))
+	if err != nil {
+		t.Fatalf("connect as the owner: %v", err)
+	}
+	t.Cleanup(func() { _ = ownerDB.Close() })
+	ownerDB.SetMaxOpenConns(1)
+	if _, err := ownerDB.ExecContext(ctx, "SET standard_conforming_strings = off"); err != nil {
 		t.Fatalf("set standard_conforming_strings: %v", err)
 	}
 
 	password := `\'; CREATE ROLE pwned SUPERUSER; -- $$ '' \\`
-	if err := NewIntrospector().CreateRole(ctx, superDB, CreateRoleRequest{
+	if err := NewIntrospector().CreateRole(ctx, ownerDB, CreateRoleRequest{
 		Name: "hostile_pw", Password: &password, Login: true,
 	}); err != nil {
 		t.Fatalf("CreateRole: %v", err)

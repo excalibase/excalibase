@@ -14,6 +14,9 @@ const (
 	MySQLUserWatcher   = "cdc_watcher"
 	// MySQLUserReader is the SELECT-only login the read address names (EXC-675).
 	MySQLUserReader = "excalibase_reader"
+	// MySQLUserRuntime is the login apps and functions connect with (EXC-765):
+	// all privileges in the project database, and nothing global.
+	MySQLUserRuntime = "excalibase_runtime"
 	// MySQLAuthDatabase and MySQLPlatformDatabase stand in for Postgres's
 	// auth and excalibase schemas: MySQL has no schemas inside a database.
 	MySQLAuthDatabase     = "auth"
@@ -54,18 +57,20 @@ func mysqlIfAuthTable(table, statement string) string {
 const MySQLQueryStatsGrantSQL = "GRANT SELECT (`SCHEMA_NAME`, `DIGEST_TEXT`, `COUNT_STAR`, `SUM_TIMER_WAIT`, `SUM_ROWS_SENT`, `SUM_ROWS_AFFECTED`), DROP ON `performance_schema`.`events_statements_summary_by_digest` TO '" + MySQLUserApp + "'@'%';"
 
 // MySQLPasswords are the passwords the platform users are created with. An
-// empty Reader leaves any reader the database holds locked.
+// empty Reader or Runtime leaves any such login the database holds locked.
 type MySQLPasswords struct {
-	Admin, App, AuthAdmin, Watcher, Reader string
+	Admin, App, AuthAdmin, Watcher, Reader, Runtime string
 }
 
 // MySQLPlatformUsersSQL creates the auth and platform databases and the
 // platform users with their grants. Users that exist (a restored cluster) get
 // the given passwords, so vault stays the record of what opens the database.
 func MySQLPlatformUsersSQL(projectDatabase string, passwords MySQLPasswords) string {
-	project, auth, platform := mysqlIdent(projectDatabase), mysqlIdent(MySQLAuthDatabase), mysqlIdent(MySQLPlatformDatabase)
+	// Grants name a database as a pattern, where _ and % match other names:
+	// a project database "aut_" would reach "auth". They are escaped there only.
+	project, auth, platform := mysqlGrantIdent(projectDatabase), mysqlGrantIdent(MySQLAuthDatabase), mysqlGrantIdent(MySQLPlatformDatabase)
 	var sql strings.Builder
-	fmt.Fprintf(&sql, "CREATE DATABASE IF NOT EXISTS %s;\nCREATE DATABASE IF NOT EXISTS %s;\n", auth, platform)
+	fmt.Fprintf(&sql, "CREATE DATABASE IF NOT EXISTS %s;\nCREATE DATABASE IF NOT EXISTS %s;\n", mysqlIdent(MySQLAuthDatabase), mysqlIdent(MySQLPlatformDatabase))
 	for _, user := range []struct{ name, password string }{
 		{MySQLUserAdmin, passwords.Admin}, {MySQLUserApp, passwords.App},
 		{MySQLUserAuthAdmin, passwords.AuthAdmin}, {MySQLUserWatcher, passwords.Watcher},
@@ -73,6 +78,7 @@ func MySQLPlatformUsersSQL(projectDatabase string, passwords MySQLPasswords) str
 		fmt.Fprintf(&sql, "CREATE USER IF NOT EXISTS %s IDENTIFIED BY %s REQUIRE SSL;\n%s\n",
 			mysqlAccount(user.name), mysqlString(user.password), MySQLAlterUserSQL(user.name, user.password))
 	}
+	sql.WriteString(mysqlWildcardRevokeSQL(projectDatabase))
 	const all = "ALL PRIVILEGES"
 	for _, grant := range []string{
 		grantOn(all, project, MySQLUserAdmin),
@@ -86,6 +92,42 @@ func MySQLPlatformUsersSQL(projectDatabase string, passwords MySQLPasswords) str
 	}
 	sql.WriteString(MySQLAppAuthRevokeSQL + "\n")
 	sql.WriteString(mysqlReaderSQL(project, passwords.Reader))
+	sql.WriteString(mysqlRuntimeSQL(project, passwords.Runtime))
+	return sql.String()
+}
+
+// mysqlRuntimeSQL creates the apps' login with every privilege in the project
+// database and none outside it: no CREATE USER, no GRANT OPTION, no SUPER, so
+// code holding it cannot create or change another login. Without a password,
+// one a restored copy brought is locked.
+func mysqlRuntimeSQL(quotedProject, password string) string {
+	runtime := mysqlAccount(MySQLUserRuntime)
+	if password == "" {
+		return "ALTER USER IF EXISTS " + runtime + " ACCOUNT LOCK;\n"
+	}
+	return fmt.Sprintf("CREATE USER IF NOT EXISTS %s IDENTIFIED BY %s REQUIRE SSL;\n%s\nALTER USER %s ACCOUNT UNLOCK;\nGRANT %s;\n",
+		runtime, mysqlString(password), MySQLAlterUserSQL(MySQLUserRuntime, password), runtime,
+		grantOn("ALL PRIVILEGES", quotedProject, MySQLUserRuntime))
+}
+
+// mysqlGrantIdent quotes a database name for a GRANT, where _ and % are
+// wildcards unless escaped.
+func mysqlGrantIdent(name string) string {
+	escaped := strings.NewReplacer("_", `\_`, "%", `\%`).Replace(name)
+	return mysqlIdent(escaped)
+}
+
+// mysqlWildcardRevokeSQL takes back the grants an earlier run made with the
+// database's name as a pattern. Revoking by the same text removes exactly
+// those entries, and the escaped grants that follow replace them.
+func mysqlWildcardRevokeSQL(projectDatabase string) string {
+	if !strings.ContainsAny(projectDatabase, "_%") {
+		return ""
+	}
+	var sql strings.Builder
+	for _, user := range []string{MySQLUserAdmin, MySQLUserApp, MySQLUserWatcher, MySQLUserReader, MySQLUserRuntime} {
+		fmt.Fprintf(&sql, "REVOKE IF EXISTS ALL PRIVILEGES ON %s.* FROM %s IGNORE UNKNOWN USER;\n", mysqlIdent(projectDatabase), mysqlAccount(user))
+	}
 	return sql.String()
 }
 

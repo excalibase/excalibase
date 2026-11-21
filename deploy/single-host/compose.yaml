@@ -286,6 +286,8 @@ services:
       # Accounts by invitation; the first admin registers with the setup token.
       REGISTRATION_MODE: ${REGISTRATION_MODE:-invite}
       STUDIO_URL: https://studio.${EXCALIBASE_DOMAIN:?run ./init.sh first}
+      # Insecure: only for a plain-http install; never with an https STUDIO_URL (the server refuses it).
+      STUDIO_INSECURE_COOKIES: ${STUDIO_INSECURE_COOKIES:-false}
       # Studio's SDK key routes relay here with a key-admin token provisioning signs.
       AUTH_INTERNAL_URL: http://auth:24000
       # Features that ship dark (EXC-554): off unless the env file says "true".

@@ -22,8 +22,10 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/go-chi/chi/v5"
@@ -118,7 +120,13 @@ type FunctionHandler struct {
 	// construction to fail closed; see SetAudienceRequirement.
 	requireAud bool
 	audPrefix  string
+
+	// flags are the dark-feature switches the handler consults.
+	flags features.Flags
 }
+
+// SetFeatures gives the handler the dark-feature switches it consults.
+func (h *FunctionHandler) SetFeatures(flags features.Flags) { h.flags = flags }
 
 // SetExpectedJWTIssuer configures the iss claim the function handler will
 // require on inbound JWTs. Empty (default) disables the check.
@@ -488,11 +496,14 @@ func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) (str
 //   - URL          — function's public invoke base (for calling sibling fns)
 //   - PROJECT_ID   — the opaque project ref
 //   - ORG_SLUG     — the owning org's slug, omitted if not resolvable
-//   - DB_URL       — postgres DSN for the project's database as the customer's
-//     own role, from vault at projects/{projectId}/credentials/admin. The
-//     platform's roles log in by certificate only and are never handed to
-//     customer code (EXC-410).
-//     Absent if vault is sealed or the role doesn't exist.
+//   - DB_URL       — postgres DSN for the project's database as its runtime
+//     login (excalibase_runtime), from vault at
+//     projects/{projectId}/credentials/excalibase_runtime. It cannot create or
+//     change logins, which the owner's login can on Postgres 16 and later; the
+//     owner's login is handed out only while that login is switched off
+//     (EXC-765). The platform's roles log in by certificate only and are never
+//     handed to customer code (EXC-410).
+//     Absent if vault is sealed or the login isn't filed.
 //   - DB_CA_CERT   — a MySQL project's server CA (PEM), which a client of
 //     DB_URL (ssl-mode=VERIFY_IDENTITY) verifies the server with.
 //
@@ -520,15 +531,26 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[
 	return env
 }
 
-// injectedDBTarget is the owner login EXCALIBASE_DB_URL is built from, when a
-// function gets one: secrets are wired and vault holds a complete login.
+// injectedDBTarget is the login EXCALIBASE_DB_URL is built from, when a
+// function gets one: secrets are wired and vault holds a complete login. It is
+// the project's runtime login, which cannot create or change logins; the
+// owner's login only while the runtime login is switched off (EXC-765). A
+// project with no runtime login filed gets no URL, never the owner's.
 func (h *FunctionHandler) injectedDBTarget(projectID string) (dbTarget, bool) {
 	if h.secrets == nil || h.vault == nil {
 		return dbTarget{}, false
 	}
-	path := fmt.Sprintf("projects/%s/credentials/admin", projectID)
+	role := "admin"
+	// Fail closed: a handler nobody gave the switches still keeps the owner's login from functions.
+	if h.flags == nil || features.Enabled(context.Background(), h.flags, features.AppRuntimeLogin) {
+		role = pgroles.RuntimeRole
+	}
+	path := fmt.Sprintf("projects/%s/credentials/%s", projectID, role)
 	creds, err := h.vault.Get(path)
 	if err != nil || creds == nil {
+		if role != "admin" {
+			log.Printf("WARN: functions of %s get no database URL: no runtime login is filed yet", projectID)
+		}
 		return dbTarget{}, false
 	}
 	target := dbTarget{
@@ -1299,6 +1321,9 @@ const (
 // Deno runtime via the RuntimeClient. The runtime's response is written back
 // to w with status, headers, and body intact.
 func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Request, fn *edgefn.Function, auth callerAuth) {
+	if refuseServiceWorkerScript(w, r) {
+		return
+	}
 	// Refuse oversized requests upfront via Content-Length before reading
 	// the body into memory. Protects against naive DoS via giant POSTs.
 	if cl := r.Header.Get("Content-Length"); cl != "" {
@@ -1344,29 +1369,7 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	writeRuntimeResponse(w, resp)
-}
-
-// writeRuntimeResponse forwards a runtime InvokeResponse back to the caller
-// with the handler's original status, headers, and body.
-func writeRuntimeResponse(w http.ResponseWriter, resp *edgefn.InvokeResponse) {
-	for k, v := range resp.Headers {
-		// Drop hop-by-hop headers.
-		lk := strings.ToLower(k)
-		if lk == "transfer-encoding" || lk == "connection" || lk == "content-length" {
-			continue
-		}
-		w.Header().Set(k, v)
-	}
-	// Set last so the function cannot clear it: Studio tells a function's own
-	// 401 from its session ending by this mark.
-	w.Header().Set(custommw.FunctionResponseHeader, "1")
-	status := resp.Status
-	if status == 0 {
-		status = 200
-	}
-	w.WriteHeader(status)
-	_, _ = io.WriteString(w, resp.Body)
+	writeRuntimeResponse(w, fn.ProjectID, resp)
 }
 
 // --- Secrets ---

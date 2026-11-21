@@ -23,7 +23,7 @@ import (
 const mysqlCertificateWarning = 14 * 24 * time.Hour
 
 // mysqlTLSRoles are the logins whose records carry the server CA.
-var mysqlTLSRoles = []string{roleAdmin, roleApp, roleAuthAdmin, roleWatcher}
+var mysqlTLSRoles = []string{roleAdmin, roleApp, roleAuthAdmin, roleWatcher, roleRuntime}
 
 // MaintainMySQLTLS refiles a changed server CA and reloads the certificate of
 // every running MySQL project. Renewed counts projects whose records changed.

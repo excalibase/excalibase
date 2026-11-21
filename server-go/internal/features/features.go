@@ -110,11 +110,15 @@ const (
 	// reset, and never returns it again: the credentials route carries no
 	// password and the connection string a template (EXC-759).
 	OneTimeCredentials Feature = "onetimecredentials"
+	// AppRuntimeLogin hands a project's apps and functions a login of their
+	// own instead of the database owner's, which can create and change logins
+	// on Postgres 16 and later (EXC-765). Off unless FEATURE_APPRUNTIMELOGIN=true.
+	AppRuntimeLogin Feature = "appruntimelogin"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, AppRuntimeLogin}
 }
 
 type Flags interface {

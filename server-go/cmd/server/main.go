@@ -119,6 +119,14 @@ func runServer(cfg config.AppConfig) {
 	if err := cfg.CheckStudioURL(); err != nil {
 		log.Fatal(err)
 	}
+	warnings, err := cfg.CheckCookieIsolation()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, warning := range warnings {
+		log.Printf("WARN: %s", warning)
+	}
+	auth.UseInsecureCookies(cfg.InsecureCookies)
 	if err := cfg.CheckPublicListener(); err != nil {
 		log.Fatal(err)
 	}
@@ -1274,6 +1282,7 @@ func buildFunctionHandler(
 		fnHandler.SetRuntimeClass(cfg.AppRuntimeClass)
 	}
 	fnHandler.SetVault(vc)
+	fnHandler.SetFeatures(cfg.Features())
 	// Without this resolver a deploy stores the declared schema and never
 	// applies it, and schema/apply answers 503 — the platform's own way of
 	// opening a project database is the one wired here.
@@ -1752,9 +1761,11 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
 	metricsSvc.SetTierLimits(provSvc.TierConfig)
 	appRuntime := appRuntimeFor(k8sClient, a.singleHostApps)
+	appEnv := service.NewAppEnvResolver(vc, store)
+	appEnv.SetFeatures(cfg.Features())
 	appDeploySvc := service.NewAppDeployService(
 		apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
-		appRuntime, store, service.NewAppEnvResolver(vc, store), appRenderOptions(cfg))
+		appRuntime, store, appEnv, appRenderOptions(cfg))
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
 	appDeploySvc.SetProxyGuard(newProxyGuard(cfg, sqlStore))
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))

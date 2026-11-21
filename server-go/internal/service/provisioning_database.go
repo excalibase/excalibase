@@ -417,7 +417,7 @@ func requireBuilding(projectID, status string) error {
 
 // databaseLoginRoles are the logins filed for a database. They are named because
 // the credential prefix also holds secrets that aren't the database's (jwt_keys).
-var databaseLoginRoles = []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher, roleScheduler, roleReader, docBrowserCredential}
+var databaseLoginRoles = []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher, roleScheduler, roleReader, roleRuntime, docBrowserCredential}
 
 // deleteDatabaseCredentials removes the database logins filed for a project,
 // and nothing else it keeps in the vault.

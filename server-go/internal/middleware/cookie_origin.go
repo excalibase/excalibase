@@ -54,8 +54,7 @@ func cookieAuthenticatedWrite(r *http.Request) bool {
 	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		return false
 	}
-	c, err := r.Cookie(auth.SessionCookieName)
-	return err == nil && c.Value != ""
+	return auth.HasCookie(r, auth.LegacySessionCookieName)
 }
 
 // requestOrigin is the Origin header, or the origin of the Referer when a

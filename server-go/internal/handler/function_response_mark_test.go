@@ -13,7 +13,7 @@ import (
 // 401 from its session ending; the function cannot remove the mark.
 func TestWriteRuntimeResponseMarksTheFunctionsAnswer(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeRuntimeResponse(rec, &edgefn.InvokeResponse{
+	writeRuntimeResponse(rec, testFnProject, &edgefn.InvokeResponse{
 		Status:  http.StatusUnauthorized,
 		Headers: map[string]string{custommw.FunctionResponseHeader: "0"},
 		Body:    "nope",

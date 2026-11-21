@@ -45,6 +45,7 @@ var featureEnv = map[features.Feature]string{
 	features.ProxyBlock:         "FEATURE_PROXYBLOCK",
 	features.SignupGuard:        "FEATURE_SIGNUPGUARD",
 	features.OneTimeCredentials: "FEATURE_ONETIMECREDENTIALS",
+	features.AppRuntimeLogin:    "FEATURE_APPRUNTIMELOGIN",
 }
 
 // defaultOn are the features that are on until their variable says "false":

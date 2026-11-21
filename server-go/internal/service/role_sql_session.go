@@ -106,7 +106,12 @@ const roleFunctionProbeList = "'" + pgroles.CreateRoleSignature + "', '" + pgrol
 // or a default privilege that would hand it the next table — or can still run
 // a role-management function, which only the owner's login may (EXC-761); and f
 // once it cannot (EXC-628). The privilege functions count grants to PUBLIC.
-const authAccessProbeSQL = `SELECT CASE WHEN to_regnamespace('auth') IS NULL OR to_regrole('excalibase_app') IS NULL THEN false
+//
+// It also answers t while the runtime login may SET ROLE to the owner or
+// excalibase_app, the roles it belongs to (a customer role it was given is its owner's business): a project upgraded from Postgres 15 keeps the memberships made there, which
+// carry SET (EXC-765). set_option is read through to_jsonb because the column
+// only exists from Postgres 16.
+const authAccessProbeSQL = `SELECT COALESCE((CASE WHEN to_regnamespace('auth') IS NULL OR to_regrole('excalibase_app') IS NULL THEN false
 ELSE pg_catalog.has_schema_privilege('excalibase_app', 'auth', 'USAGE')
   OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c
     WHERE c.relnamespace = to_regnamespace('auth') AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
@@ -117,7 +122,12 @@ ELSE pg_catalog.has_schema_privilege('excalibase_app', 'auth', 'USAGE')
   OR EXISTS (SELECT 1 FROM unnest(ARRAY[` + roleFunctionProbeList + `]) AS f(signature)
     WHERE to_regprocedure(f.signature) IS NOT NULL
       AND pg_catalog.has_function_privilege('excalibase_app', to_regprocedure(f.signature), 'EXECUTE'))
-END`
+END), false)
+  OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+    WHERE m.member = to_regrole('excalibase_runtime')
+      AND (m.roleid = to_regrole('excalibase_app')
+        OR m.roleid = (SELECT d.datdba FROM pg_catalog.pg_database d WHERE d.datname = current_database()))
+      AND (SELECT r.rolcanlogin FROM pg_catalog.pg_roles r WHERE r.oid = m.member) AND coalesce((to_jsonb(m) ->> 'set_option')::boolean, false))`
 
 // authAccessProbeCommand runs the probe as the superuser with the connect-safe
 // options, so an owner's database settings cannot change its answer.
@@ -192,7 +202,7 @@ WHERE a.datname = current_database()
 func serviceRoleArray() string {
 	spared := make([]string, 0)
 	for _, role := range pgroles.ReservedNames() {
-		if role == roleApp {
+		if role == roleApp || role == roleRuntime {
 			continue
 		}
 		spared = append(spared, role)

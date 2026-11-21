@@ -177,6 +177,8 @@ var darkWork = map[features.Feature]string{
 	// On unless switched off: off, an app and a sign-up are not checked (internal/handler).
 	features.ProxyBlock:  "TestAppCreate_AllowsANormalAppAndAnOffFlag",
 	features.SignupGuard: "TestRegister_OffFlagAcceptsADisposableAddress",
+	// Off by default: on, apps and functions get their own login (internal/service).
+	features.AppRuntimeLogin: "TestAppRuntimeLogin_OffKeepsTheOwnerLogin",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

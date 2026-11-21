@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
+# Studio page headers (EXC-809) are checked here too, through the same edge.
 # /api upload size (EXC-621): the real Caddyfile in the compose file's Caddy
 # image in front of the real Studio nginx.conf, with a stand-in for
 # provisioning. Like Kubernetes, /api takes 10 MiB, enforced at the edge; Studio's
@@ -72,6 +73,18 @@ UPLOAD=/api/projects/p1/apps/a1/deploy
 expect "a 2 MiB upload reaches provisioning" "provisioning 200" $UPLOAD 2
 expect "a 9 MiB upload reaches provisioning" "provisioning 200" $UPLOAD 9
 expect "an 11 MiB upload is refused" " 413" $UPLOAD 11
+
+# header <name>: that response header of GET / on Studio, through the edge (EXC-809).
+PAGE_HEADERS=$(curl -sk --max-time 30 -D - -o /dev/null --resolve "studio.example.test:$PORT:127.0.0.1" "https://studio.example.test:$PORT/")
+has_header() {
+  if printf '%s' "$PAGE_HEADERS" | tr -d '\r' | grep -qiF "$1"; then echo "   PASS Studio's page carries $1"
+  else echo "   FAIL Studio's page lacks $1"; FAILURES=$((FAILURES + 1)); fi
+}
+has_header "content-security-policy: default-src 'self'; script-src 'self'"
+has_header "frame-ancestors 'none'"
+has_header "x-frame-options: DENY"
+has_header "x-content-type-options: nosniff"
+has_header "referrer-policy: strict-origin-when-cross-origin"
 
 PORT=$FENCED_PORT
 expect "an upload from outside the Studio allowlist is refused" " 403" $UPLOAD 2
