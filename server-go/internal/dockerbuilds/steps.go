@@ -50,9 +50,6 @@ const (
 	egressGraceSeconds = 60
 )
 
-// chain is the order the steps run in, each once the one before exits 0.
-var chain = []string{stepPrepare, stepClone, stepBuild, stepCollect}
-
 // stepLogs caps each container's log, so a build printing without end cannot fill the host's disk.
 var stepLogs = container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "2"}}
 
@@ -111,7 +108,7 @@ func (r *Runner) Start(ctx context.Context, spec sitebuilds.RunSpec) error {
 	if err != nil {
 		return err
 	}
-	for _, step := range chain {
+	for _, step := range sitePlan.chain {
 		if err := r.create(ctx, spec.BuildID, step, r.stepContainer(site, spec, step, proxy)); err != nil {
 			return err
 		}

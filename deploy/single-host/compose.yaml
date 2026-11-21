@@ -286,6 +286,8 @@ services:
       # Accounts by invitation; the first admin registers with the setup token.
       REGISTRATION_MODE: ${REGISTRATION_MODE:-invite}
       STUDIO_URL: https://studio.${EXCALIBASE_DOMAIN:?run ./init.sh first}
+      # Insecure: only for a plain-http install; never with an https STUDIO_URL (the server refuses it).
+      STUDIO_INSECURE_COOKIES: ${STUDIO_INSECURE_COOKIES:-false}
       # Studio's SDK key routes relay here with a key-admin token provisioning signs.
       AUTH_INTERNAL_URL: http://auth:24000
       # Features that ship dark (EXC-554): off unless the env file says "true".
@@ -465,6 +467,8 @@ services:
       APP_DOMAIN: ${APP_DOMAIN:-apps.${EXCALIBASE_DOMAIN:?run ./init.sh first}}
       # gVisor's runsc, or "none" to run apps without a sandbox (the operator's choice).
       APP_SANDBOX_RUNTIME: ${APP_SANDBOX_RUNTIME:-runsc}
+      # Apps run without a sandbox on rootless Podman: auto, per-app or shared user ranges (EXC-682).
+      APP_USERNS: ${APP_USERNS:-auto}
       # "internet" lets apps call out; by default they reach only their project.
       APP_EGRESS: ${APP_EGRESS:-none}
       # Rootless Podman's egress reaches the LAN and metadata, unguardable: accept takes that knowingly.

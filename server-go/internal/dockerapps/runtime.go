@@ -61,11 +61,16 @@ type Options struct {
 	HostFirewall bool
 	// AcceptUnguardedEgress is the operator's yes to egress where no firewall can guard it: rootless Podman.
 	AcceptUnguardedEgress bool
-	ProbeBinary           []byte
-	ToolsImage            string
-	Route                 apphost.Route
-	ReservedHosts         []string
-	Projects              ProjectScopes
+	// Userns is APP_USERNS: auto, per-app or shared (empty is shared). Per-app applies to
+	// unsandboxed apps on rootless Podman only. UsernsRangeSize and UsernsFirstBase set the
+	// ranges (zero: 65536 ids each, after the shared 65536); only tests change them.
+	Userns                           string
+	UsernsRangeSize, UsernsFirstBase uint32
+	ProbeBinary                      []byte
+	ToolsImage                       string
+	Route                            apphost.Route
+	ReservedHosts                    []string
+	Projects                         ProjectScopes
 	// MinReady is how long a container must stay ready to count (DefaultMinReady in production).
 	// PollInterval and CrashRestarts tune the rollout watch; zero takes the defaults.
 	PollInterval, MinReady time.Duration
@@ -83,6 +88,9 @@ type Runtime struct {
 	// isolation is what VerifyEngine found about project networks and the host (EXC-676).
 	isolationMu sync.Mutex
 	isolation   hostIsolation
+	// usernsMu serialises deciding apps' user ranges, and guards what startup decided (userns).
+	usernsMu sync.Mutex
+	userns   usernsPlan
 }
 
 func New(engine Engine, opts Options) (*Runtime, error) {
@@ -155,10 +163,13 @@ func (r *Runtime) VerifyEngine(ctx context.Context) error {
 		return fmt.Errorf("the engine has no %q runtime (it has %s): install gVisor, or set APP_SANDBOX_RUNTIME=none to run apps without a sandbox",
 			r.opts.SandboxRuntime, strings.Join(names, ", "))
 	}
-	if _, err := r.runTool(ctx, k8s.DiskJobOptions{Timeout: toolCheckTimeout}, nil, []string{"true"}); err != nil {
+	if _, err := r.runTool(ctx, k8s.DiskJobOptions{Timeout: toolCheckTimeout}, nil, nil, []string{"true"}); err != nil {
 		return fmt.Errorf("the disk tools image %s does not run here (APP_DISK_TOOLS_IMAGE): %w", r.opts.ToolsImage, err)
 	}
-	return r.verifyNames(ctx)
+	if err := r.verifyNames(ctx); err != nil {
+		return err
+	}
+	return r.verifyUserns(ctx)
 }
 
 // verifyNames: apps reach their database by its container name through the

@@ -145,7 +145,11 @@ func TestAppBuildPod_BuildpacksKeepTheAppsCodeInItsOwnStep(t *testing.T) {
 		t.Errorf("the checkout is opened by its owner, the pod user, with no capability: %v %v", share.Command, share.SecurityContext.RunAsUser)
 	}
 	scripts := map[string]string{}
-	for _, phase := range append([]string{appBuildRunImage}, appBuildPhases...) {
+	phases := []string{appBuildRunImage}
+	for _, phase := range AppBuildpackPhases(testAppBuildOptions().RunImage) {
+		phases = append(phases, phase.Name)
+	}
+	for _, phase := range phases {
 		container := containerNamed(t, pod.InitContainers, phase)
 		security := container.SecurityContext
 		scripts[phase] = strings.Join(container.Command, " ")

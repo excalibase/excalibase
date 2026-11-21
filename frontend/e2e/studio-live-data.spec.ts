@@ -49,9 +49,9 @@ test.describe('Studio against real data plane', () => {
 
   test.beforeEach(async ({ context }) => {
     // Studio authenticates only with the session cookie, so the PAT goes in
-    // as that cookie. The API must list the Studio dev origin in CORS_ORIGINS
+    // as that cookie (__Host- needs Secure, which browsers allow on http://localhost only). The API must list the Studio dev origin in CORS_ORIGINS
     // for the browser to send it cross-origin.
-    await context.addCookies([{ name: 'excali_session', value: PAT, url: API_BASE }]);
+    await context.addCookies([{ name: '__Host-excali_session', value: PAT, url: API_BASE, secure: true }]);
     await context.addInitScript(() => {
       localStorage.setItem('auth_user', JSON.stringify({ id: 'e2e', username: 'e2e', email: 'e2e@test', role: 'platform_admin' }));
       localStorage.setItem('theme', 'dark');

@@ -7,8 +7,8 @@ import { useRouteProjectId } from './useRouteProjectId';
 import type { DatabaseInstance } from '../types';
 
 // GET /orgs answers a platform admin with EVERY org, and marks only the orgs they
-// belong to with a role. An org the caller is not a member of is never offered
-// here: it is kept when the listing gives a role, or when the caller owns it.
+// belong to with a role. An org is kept when the listing gives a role or the
+// caller owns it; every other org is left out.
 export function memberOrgsOf(orgs: readonly Org[], userId: string | undefined): Org[] {
   if (!userId) return [];
   return orgs.filter((org) => Boolean(org.role) || org.ownerId === userId);
