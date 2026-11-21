@@ -67,10 +67,15 @@ func (h *AdminConsoleHandler) Overview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminConsoleHandler) Users(w http.ResponseWriter, r *http.Request) {
+	list, ok := parseConsoleList(w, r)
+	if !ok {
+		return
+	}
 	query := r.URL.Query()
 	page, err := h.reads.Users(r.Context(), adminconsole.UserQuery{
-		Search: query.Get("q"), IncludeSuspended: query.Get("includeSuspended") == "true",
-		Limit: intParam(query.Get("limit")), Offset: intParam(query.Get("offset")),
+		Search: list.search, IncludeSuspended: query.Get("includeSuspended") == "true",
+		Sort: list.sort, Desc: list.desc, Status: query.Get("status"), Role: query.Get("role"),
+		Limit: list.limit, Offset: list.offset,
 	})
 	if err != nil {
 		consoleFailure(w, "users", err)
@@ -80,16 +85,71 @@ func (h *AdminConsoleHandler) Users(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminConsoleHandler) Orgs(w http.ResponseWriter, r *http.Request) {
+	list, ok := parseConsoleList(w, r)
+	if !ok {
+		return
+	}
 	query := r.URL.Query()
 	page, err := h.reads.Orgs(r.Context(), adminconsole.OrgQuery{
-		Search: query.Get("q"), IncludeSuspended: query.Get("includeSuspended") == "true",
-		Limit: intParam(query.Get("limit")), Offset: intParam(query.Get("offset")),
+		Search: list.search, IncludeSuspended: query.Get("includeSuspended") == "true",
+		Sort: list.sort, Desc: list.desc, Tier: query.Get("tier"), OwnerStatus: query.Get("ownerStatus"),
+		Limit: list.limit, Offset: list.offset,
 	})
 	if err != nil {
 		consoleFailure(w, "orgs", err)
 		return
 	}
 	writeJSON(w, page)
+}
+
+// consoleList is the part of a list request every console table shares.
+type consoleList struct {
+	search, sort  string
+	desc          bool
+	limit, offset int
+}
+
+// parseConsoleList reads search, paging and sort; a number or an order it cannot
+// read is a 400, not a silent default.
+func parseConsoleList(w http.ResponseWriter, r *http.Request) (consoleList, bool) {
+	query := r.URL.Query()
+	list := consoleList{search: query.Get("q"), sort: query.Get("sort")}
+	var err error
+	if list.limit, err = optionalInt(query.Get("limit")); err == nil {
+		list.offset, err = optionalInt(query.Get("offset"))
+	}
+	if err == nil {
+		list.desc, err = sortDescending(query.Get("order"))
+	}
+	if err != nil {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return list, false
+	}
+	return list, true
+}
+
+// optionalInt reads a number that may be left out; "" is zero, which the
+// console reads as "the default".
+func optionalInt(value string) (int, error) {
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0, errors.New("limit and offset must be numbers, zero or more")
+	}
+	return parsed, nil
+}
+
+// sortDescending reads the order; a named sort is ascending unless asked otherwise.
+func sortDescending(order string) (bool, error) {
+	switch order {
+	case "":
+		return false, nil
+	case "asc", "desc":
+		return order == "desc", nil
+	}
+	return false, errors.New("order must be asc or desc")
 }
 
 func (h *AdminConsoleHandler) Project(w http.ResponseWriter, r *http.Request) {
@@ -158,21 +218,13 @@ func consoleActor(r *http.Request) adminconsole.Actor {
 	return actor
 }
 
-func intParam(value string) int {
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0
-	}
-	return parsed
-}
-
 // consoleFailure answers a refusal in the admin's words and anything else as a
 // bare 500: the detail of a database error stays in the log.
 func consoleFailure(w http.ResponseWriter, what string, err error) {
 	switch {
 	case errors.Is(err, adminconsole.ErrUserNotFound), errors.Is(err, adminconsole.ErrProjectNotFound):
 		httpError(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, adminconsole.ErrReasonRequired), errors.Is(err, adminconsole.ErrReasonTooLong):
+	case errors.Is(err, adminconsole.ErrReasonRequired), errors.Is(err, adminconsole.ErrReasonTooLong), errors.Is(err, adminconsole.ErrInvalidQuery):
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, adminconsole.ErrProtectedAccount):
 		httpError(w, err.Error(), http.StatusConflict)

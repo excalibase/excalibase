@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { PROJECT_FOLLOW_MS, RESPOND_ASYNC, settleProject } from './projectFollow';
 
@@ -19,6 +19,7 @@ export interface AdminProject {
   memBytes?: number;
   // Who the project belongs to; a suspended owner reads "Suspended" (EXC-757).
   orgName?: string;
+  ownerId?: string;
   ownerEmail?: string;
   ownerStatus?: string;
   ownerSuspended?: boolean;
@@ -68,6 +69,33 @@ export const useStorageBudget = () =>
     retry: false,
   });
 
+// A page of the cross-org project list. Sort and filter words are the server's
+// own; the server refuses any it does not offer.
+export interface AdminProjectQuery {
+  limit: number;
+  offset: number;
+  q?: string;
+  sort?: string;
+  order?: string;
+  status?: string;
+  plan?: string;
+  owner?: string;
+  flag?: string;
+}
+
+export interface AdminProjectPage {
+  items: AdminProject[];
+  total: number;
+}
+
+export const useAdminProjectsPage = (query: AdminProjectQuery) =>
+  useQuery({
+    queryKey: ['admin', 'projects', 'page', query],
+    queryFn: async () => (await api.get<AdminProjectPage>('/admin/projects', { params: query })).data,
+    placeholderData: keepPreviousData,
+    staleTime: 10_000,
+  });
+
 export const useAdminProjects = () =>
   useQuery({
     queryKey: ['admin', 'projects'],
@@ -99,13 +127,24 @@ export const useForceDropProject = (followMs = PROJECT_FOLLOW_MS) => {
   });
 };
 
+// RevokeOrg answers 207 when some projects could not be dropped: the org is
+// kept and the owner already blocked. Axios counts 207 as success, so the body is read.
+export async function revokeOrgCascade(orgId: string, reason: string): Promise<void> {
+  const response = await api.delete<{ failed?: string[] }>(`/admin/orgs/${orgId}`, { params: { cascade: true }, data: { reason } });
+  const failed = response.data?.failed ?? [];
+  if (failed.length > 0) {
+    throw new Error(`${failed.length} project${failed.length === 1 ? '' : 's'} could not be dropped (${failed.join(', ')}). The organization was kept and its owner is already suspended; try again.`);
+  }
+}
+
 export const useRevokeOrg = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ orgId, reason }: { orgId: string; reason: string }) => {
-      await api.delete(`/admin/orgs/${orgId}`, { params: { cascade: true }, data: { reason } });
+      await revokeOrgCascade(orgId, reason);
     },
-    onSuccess: () => {
+    // A partial revoke still dropped some projects, so the lists are read again either way.
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'projects'] });
       qc.invalidateQueries({ queryKey: ['admin', 'capacity'] });
       qc.invalidateQueries({ queryKey: ['orgs'] });

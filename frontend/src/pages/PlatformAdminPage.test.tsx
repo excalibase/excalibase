@@ -43,9 +43,10 @@ const refusal = (reason: string) => ({
   response: { status: 409, data: { error: reason } },
 });
 
-function renderPage(role: string, answers: { capacity?: unknown; projects?: unknown[] } = {}, path = '/admin') {
+function renderPage(role: string, answers: { capacity?: unknown; projects?: unknown[]; v2?: boolean } = {}, path = '/admin') {
   useAuthStore.getState().setAuth({ id: 'u1', username: 'op', email: 'op@example.com', role } as never);
   vi.mocked(api.get).mockImplementation((url: string) => {
+    if (url === '/config' && answers.v2 !== undefined) return Promise.resolve({ data: { deploymentMode: 'cloud', features: { studio_v2: answers.v2 } } } as never);
     if (url === '/capacity') return Promise.resolve({ data: answers.capacity ?? capacity } as never);
     if (url === '/admin/projects') return Promise.resolve({ data: answers.projects ?? projects } as never);
     if (url === '/admin/console/orgs') return Promise.resolve({ data: { items: orgs, total: orgs.length } } as never);
@@ -95,6 +96,19 @@ describe('PlatformAdminPage', () => {
     expect(screen.getAllByText('—')).toHaveLength(2);
     expect(await screen.findByText('acme')).toBeInTheDocument();
     expect(screen.getByText('owner@acme.test')).toBeInTheDocument();
+  });
+
+  test('with the studio_v2 flag off the console keeps the old single-page layout', async () => {
+    renderPage('platform_admin', { v2: false });
+    expect(await screen.findByTestId('needs-attention')).toBeInTheDocument();
+    expect(await screen.findByText('shop')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-console-v2')).not.toBeInTheDocument();
+  });
+
+  test('with the flag on the console is the tabbed layout', async () => {
+    renderPage('platform_admin', { v2: true });
+    expect(await screen.findByTestId('admin-console-v2')).toBeInTheDocument();
+    expect(screen.getAllByRole('tab').length).toBeGreaterThan(1);
   });
 
   test('an empty cluster reads as zero use with no projects', async () => {

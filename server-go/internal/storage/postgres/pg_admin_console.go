@@ -45,10 +45,27 @@ func escapeLike(input string) string {
 	return replacer.Replace(strings.TrimSpace(input))
 }
 
+// ListUsers pages the accounts. A page past the end has no rows to carry the
+// count, so the total is read from the first row of the same filter.
 func (a *AdminConsole) ListUsers(ctx context.Context, q adminconsole.UserQuery) (adminconsole.Page[adminconsole.UserRow], error) {
+	page, err := a.listUsers(ctx, q)
+	if err == nil && len(page.Items) == 0 && q.Offset > 0 {
+		q.Limit, q.Offset = 1, 0
+		first, firstErr := a.listUsers(ctx, q)
+		page.Total = first.Total
+		err = firstErr
+	}
+	return page, err
+}
+
+func (a *AdminConsole) listUsers(ctx context.Context, q adminconsole.UserQuery) (adminconsole.Page[adminconsole.UserRow], error) {
 	page := adminconsole.Page[adminconsole.UserRow]{Items: []adminconsole.UserRow{}}
-	rows, err := a.db.QueryContext(ctx, listUsersSQL,
-		apphost.StatusRunning, q.IncludeSuspended, escapeLike(q.Search), strings.TrimSpace(q.Search), q.Limit, q.Offset)
+	query, ok := listUsersSQL[sortKey{q.Sort, q.Desc}]
+	if !ok {
+		return page, fmt.Errorf("list users: unknown sort %q", q.Sort)
+	}
+	rows, err := a.db.QueryContext(ctx, query,
+		apphost.StatusRunning, q.IncludeSuspended, escapeLike(q.Search), strings.TrimSpace(q.Search), q.Limit, q.Offset, q.Status, q.Role)
 	if err != nil {
 		return page, fmt.Errorf("query users: %w", err)
 	}
@@ -69,10 +86,26 @@ func (a *AdminConsole) ListUsers(ctx context.Context, q adminconsole.UserQuery) 
 	return page, rows.Err()
 }
 
+// ListOrgs pages the organizations, with the same total past the end as ListUsers.
 func (a *AdminConsole) ListOrgs(ctx context.Context, q adminconsole.OrgQuery) (adminconsole.Page[adminconsole.OrgRow], error) {
+	page, err := a.listOrgs(ctx, q)
+	if err == nil && len(page.Items) == 0 && q.Offset > 0 {
+		q.Limit, q.Offset = 1, 0
+		first, firstErr := a.listOrgs(ctx, q)
+		page.Total = first.Total
+		err = firstErr
+	}
+	return page, err
+}
+
+func (a *AdminConsole) listOrgs(ctx context.Context, q adminconsole.OrgQuery) (adminconsole.Page[adminconsole.OrgRow], error) {
 	page := adminconsole.Page[adminconsole.OrgRow]{Items: []adminconsole.OrgRow{}}
-	rows, err := a.db.QueryContext(ctx, listOrgsSQL,
-		apphost.StatusRunning, q.IncludeSuspended, escapeLike(q.Search), q.Limit, q.Offset)
+	query, ok := listOrgsSQL[sortKey{q.Sort, q.Desc}]
+	if !ok {
+		return page, fmt.Errorf("list orgs: unknown sort %q", q.Sort)
+	}
+	rows, err := a.db.QueryContext(ctx, query,
+		apphost.StatusRunning, q.IncludeSuspended, escapeLike(q.Search), q.Limit, q.Offset, q.Tier, q.OwnerStatus)
 	if err != nil {
 		return page, fmt.Errorf("query orgs: %w", err)
 	}
@@ -97,8 +130,52 @@ func timePtr(value sql.NullTime) *time.Time {
 	return &value.Time
 }
 
-// listUsersSQL is composed at compile time from constant fragments.
-const listUsersSQL = `
+// sortKey names one ordering of a list. A request's sort is only ever looked up
+// in the maps below, which hold the finished statements.
+type sortKey struct {
+	name string
+	desc bool
+}
+
+// orderedQueries builds one statement per allowed ordering from constant
+// fragments at start-up. The default ("") is newest first whatever the direction.
+func orderedQueries(base string, orders map[string]string, tail string) map[sortKey]string {
+	queries := map[sortKey]string{}
+	for name, column := range orders {
+		queries[sortKey{name, false}] = base + " ORDER BY " + column + " ASC NULLS LAST, " + tail
+		queries[sortKey{name, true}] = base + " ORDER BY " + column + " DESC NULLS LAST, " + tail
+	}
+	queries[sortKey{"", false}] = queries[sortKey{"created", true}]
+	queries[sortKey{"", true}] = queries[sortKey{"created", true}]
+	return queries
+}
+
+// userOrders and orgOrders are the columns each table may be sorted by.
+var userOrders = map[string]string{
+	"created":   "u.created_at",
+	"email":     "lower(u.email)",
+	"lastLogin": "u.last_login_at",
+	"orgs":      "COALESCE(owned.orgs, 0)",
+	"projects":  "COALESCE(owned.projects, 0)",
+	"apps":      "COALESCE(running.apps, 0)",
+}
+
+var orgOrders = map[string]string{
+	"created":  "o.created_at",
+	"name":     "lower(o.name)",
+	"owner":    "lower(u.email)",
+	"plan":     "o.tier",
+	"projects": "COALESCE(per_project.projects, 0)",
+	"apps":     "COALESCE(per_app.running, 0)",
+}
+
+var (
+	listUsersSQL = orderedQueries(listUsersBase, userOrders, "u.id LIMIT $5 OFFSET $6")
+	listOrgsSQL  = orderedQueries(listOrgsBase, orgOrders, "o.id LIMIT $4 OFFSET $5")
+)
+
+// listUsersBase is composed at compile time from constant fragments.
+const listUsersBase = `
 		WITH owned AS (
 			SELECT o.owner_id AS user_id, COUNT(DISTINCT o.id) AS orgs, COUNT(DISTINCT di.project_id) AS projects
 			FROM orgs o LEFT JOIN database_instances di ON di.org_id = o.id
@@ -124,11 +201,11 @@ const listUsersSQL = `
 		  AND ($2 OR s.user_id IS NULL)
 		  AND ($3 = '' OR lower(u.email) LIKE '%' || lower($3) || '%' ESCAPE '\'
 		       OR u.last_login_ip = $4 OR u.last_login_ip LIKE $3 || '%' ESCAPE '\')
-		ORDER BY u.created_at DESC NULLS LAST, u.id
-		LIMIT $5 OFFSET $6`
+		  AND ($7 = '' OR ` + statusExpr + ` = $7)
+		  AND ($8 = '' OR u.role = $8)`
 
-// listOrgsSQL is composed at compile time from constant fragments.
-const listOrgsSQL = `
+// listOrgsBase is composed at compile time from constant fragments.
+const listOrgsBase = `
 		WITH usage AS (` + latestMetricsSQL + `),
 		per_project AS (
 			SELECT di.org_id, COUNT(*) AS projects,
@@ -153,5 +230,5 @@ const listOrgsSQL = `
 		  AND ($3 = '' OR lower(o.name) LIKE '%' || lower($3) || '%' ESCAPE '\'
 		       OR lower(o.slug) LIKE '%' || lower($3) || '%' ESCAPE '\'
 		       OR lower(u.email) LIKE '%' || lower($3) || '%' ESCAPE '\')
-		ORDER BY o.created_at DESC NULLS LAST, o.id
-		LIMIT $4 OFFSET $5`
+		  AND ($6 = '' OR upper(o.tier) = $6)
+		  AND ($7 = '' OR ` + statusExpr + ` = $7)`

@@ -44,16 +44,28 @@ type OrgRow struct {
 type UserQuery struct {
 	Search           string
 	IncludeSuspended bool
-	Limit            int
-	Offset           int
+	// Sort is one of UserSorts ("" keeps newest first); Desc applies to a named sort.
+	Sort string
+	Desc bool
+	// Status (active, suspended, disabled) and Role narrow the list; "" means any.
+	Status string
+	Role   string
+	Limit  int
+	Offset int
 }
 
 // OrgQuery filters the orgs table.
 type OrgQuery struct {
 	Search           string
 	IncludeSuspended bool
-	Limit            int
-	Offset           int
+	// Sort is one of OrgSorts ("" keeps newest first); Desc applies to a named sort.
+	Sort string
+	Desc bool
+	// Tier (FREE, STANDARD, ENTERPRISE) and OwnerStatus narrow the list; "" means any.
+	Tier        string
+	OwnerStatus string
+	Limit       int
+	Offset      int
 }
 
 // Page is one page of rows and the total the filter matches.
@@ -176,6 +188,7 @@ type ProjectDetail struct {
 // is and how much it uses now. Usage is absent without a live sample.
 type ProjectFact struct {
 	OrgName     string
+	OwnerID     string
 	OwnerEmail  string
 	OwnerStatus string
 	HasUsage    bool

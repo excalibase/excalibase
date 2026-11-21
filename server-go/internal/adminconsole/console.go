@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -21,6 +23,24 @@ const (
 )
 
 var ErrProjectNotFound = errors.New("project not found")
+
+// ErrInvalidQuery is a list request that asks for a sort or filter the console does not offer.
+var ErrInvalidQuery = errors.New("that sort or filter is not available")
+
+// The columns a list may be sorted by and the values its filters take. A
+// request's words are only ever checked against these, never put in a query.
+var (
+	UserSorts   = []string{"created", "email", "lastLogin", "orgs", "projects", "apps"}
+	OrgSorts    = []string{"created", "name", "owner", "plan", "projects", "apps"}
+	userRoles   = []string{"user", "platform_admin", "platform_operator", "platform_viewer"}
+	accountStat = []string{StatusActive, StatusSuspended, StatusDisabled}
+	orgTiers    = []string{"FREE", "STANDARD", "ENTERPRISE"}
+)
+
+// oneOf reports whether value is empty (no filter) or one of the allowed ones.
+func oneOf(value string, allowed []string) bool {
+	return value == "" || slices.Contains(allowed, value)
+}
 
 // Reader is every query the console's tables and cards are built from.
 type Reader interface {
@@ -82,6 +102,10 @@ func clampPage(limit, offset int) (int, int) {
 
 // Users lists accounts, suspended ones only when asked for.
 func (c *Console) Users(ctx context.Context, query UserQuery) (Page[UserRow], error) {
+	if !oneOf(query.Sort, UserSorts) || !oneOf(query.Status, accountStat) || !oneOf(query.Role, userRoles) {
+		return Page[UserRow]{}, ErrInvalidQuery
+	}
+	query.IncludeSuspended = query.IncludeSuspended || query.Status == StatusSuspended
 	query.Limit, query.Offset = clampPage(query.Limit, query.Offset)
 	page, err := c.reader.ListUsers(ctx, query)
 	if err != nil {
@@ -98,6 +122,11 @@ func (c *Console) Users(ctx context.Context, query UserQuery) (Page[UserRow], er
 
 // Orgs lists orgs with their owner's status and what they run.
 func (c *Console) Orgs(ctx context.Context, query OrgQuery) (Page[OrgRow], error) {
+	query.Tier = strings.ToUpper(query.Tier)
+	if !oneOf(query.Sort, OrgSorts) || !oneOf(query.OwnerStatus, accountStat) || !oneOf(query.Tier, orgTiers) {
+		return Page[OrgRow]{}, ErrInvalidQuery
+	}
+	query.IncludeSuspended = query.IncludeSuspended || query.OwnerStatus == StatusSuspended
 	query.Limit, query.Offset = clampPage(query.Limit, query.Offset)
 	page, err := c.reader.ListOrgs(ctx, query)
 	if err != nil {

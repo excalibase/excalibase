@@ -99,7 +99,7 @@ func (a *AdminConsole) ProjectFacts(ctx context.Context) (map[string]adminconsol
 	for rows.Next() {
 		var projectID string
 		var fact adminconsole.ProjectFact
-		if err := rows.Scan(&projectID, &fact.OrgName, &fact.OwnerEmail, &fact.OwnerStatus, &fact.HasUsage, &fact.CPUCores, &fact.MemoryMB); err != nil {
+		if err := rows.Scan(&projectID, &fact.OrgName, &fact.OwnerID, &fact.OwnerEmail, &fact.OwnerStatus, &fact.HasUsage, &fact.CPUCores, &fact.MemoryMB); err != nil {
 			return nil, err
 		}
 		facts[projectID] = fact
@@ -124,7 +124,7 @@ const projectCoreSQL = `
 // projectFactsSQL is composed at compile time from constant fragments.
 const projectFactsSQL = `
 		WITH usage AS (` + latestMetricsSQL + `)
-		SELECT di.project_id, o.name, COALESCE(u.email, ''), ` + statusExpr + `,
+		SELECT di.project_id, o.name, o.owner_id, COALESCE(u.email, ''), ` + statusExpr + `,
 		       usage.project_id IS NOT NULL, COALESCE(usage.cpu_usage_cores, 0), COALESCE(usage.memory_usage_mb, 0)
 		FROM database_instances di
 		JOIN orgs o ON o.id = di.org_id
