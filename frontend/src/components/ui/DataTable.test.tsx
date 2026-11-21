@@ -145,6 +145,23 @@ describe('DataTable', () => {
     expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
   });
 
+  test('a refetch that drops a selected row keeps the count equal to what bulkActions receives', async () => {
+    const paging = { mode: 'server' as const, total: 3, page: 1, pageSize: 25, onPageChange: vi.fn() };
+    const table = (rows: Row[]) => (
+      <DataTable label="Projects" columns={COLUMNS} rows={rows} getRowId={(r) => r.id} selectable paging={paging}
+        bulkActions={(selected) => <button type="button">Pause {selected.length}</button>} />
+    );
+    const { rerender } = render(table(makeRows(3)));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select proj-01' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select proj-02' }));
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    rerender(table(makeRows(3).slice(1)));
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause 1' })).toBeInTheDocument();
+    rerender(table(makeRows(3)));
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+  });
+
   test('the selection is cleared when the page, the sort or the page size changes', async () => {
     render(
       <DataTable label="Projects" columns={COLUMNS} rows={makeRows(60)} getRowId={(r) => r.id} selectable

@@ -110,16 +110,45 @@ func (h *AdminHandler) ListAllProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	facts := map[string]adminconsole.ProjectFact{}
-	if h.facts != nil {
-		if found, err := h.facts(r.Context()); err != nil {
-			log.Printf("WARN: project facts lookup failed: %v", err)
-		} else {
-			facts = found
-		}
+	facts := h.projectFacts(r.Context())
+	query, paged, err := parseProjectQuery(r.URL.RawQuery)
+	if err != nil {
+		writeBadProjectQuery(w)
+		return
 	}
-	out := make([]map[string]interface{}, 0, len(instances))
+	entries := make([]projectEntry, 0, len(instances))
 	for _, inst := range instances {
+		entries = append(entries, projectEntry{inst: inst, fact: facts[inst.ProjectID]})
+	}
+	if !paged {
+		writeJSON(w, h.projectRows(r.Context(), entries))
+		return
+	}
+	shown, total := query.page(entries)
+	writeJSON(w, map[string]interface{}{
+		"items": h.projectRows(r.Context(), shown), "total": total, "limit": query.limit, "offset": query.offset,
+	})
+}
+
+// projectFacts names each project's org and owner; without them the list still answers.
+func (h *AdminHandler) projectFacts(ctx context.Context) map[string]adminconsole.ProjectFact {
+	if h.facts == nil {
+		return map[string]adminconsole.ProjectFact{}
+	}
+	found, err := h.facts(ctx)
+	if err != nil {
+		log.Printf("WARN: project facts lookup failed: %v", err)
+		return map[string]adminconsole.ProjectFact{}
+	}
+	return found
+}
+
+// projectRows is the JSON of the given projects. Usage is read here, so a paged
+// list asks Prometheus about the rows it shows and no others.
+func (h *AdminHandler) projectRows(ctx context.Context, entries []projectEntry) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(entries))
+	for _, entry := range entries {
+		inst, fact := entry.inst, entry.fact
 		row := map[string]interface{}{
 			"projectId":          inst.ProjectID,
 			"projectName":        inst.ProjectName,
@@ -130,16 +159,16 @@ func (h *AdminHandler) ListAllProjects(w http.ResponseWriter, r *http.Request) {
 			"dbType":             inst.DBType,
 			"createdAt":          inst.CreatedAt,
 			"deletionProtection": inst.DeletionProtection != nil && *inst.DeletionProtection,
+			"orgName":            fact.OrgName,
+			"ownerId":            fact.OwnerID,
+			"ownerEmail":         fact.OwnerEmail,
+			"ownerStatus":        fact.OwnerStatus,
+			"ownerSuspended":     fact.OwnerStatus == adminconsole.StatusSuspended,
 		}
-		fact := facts[inst.ProjectID]
-		row["orgName"] = fact.OrgName
-		row["ownerEmail"] = fact.OwnerEmail
-		row["ownerStatus"] = fact.OwnerStatus
-		row["ownerSuspended"] = fact.OwnerStatus == adminconsole.StatusSuspended
-		h.addUsage(r.Context(), row, inst, fact)
+		h.addUsage(ctx, row, inst, fact)
 		out = append(out, row)
 	}
-	writeJSON(w, out)
+	return out
 }
 
 // addUsage puts the project's CPU and memory on the row. A reading that could

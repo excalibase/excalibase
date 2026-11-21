@@ -10,6 +10,8 @@ import { OrgsTable } from '../components/admin/OrgsTable';
 import { ProjectDetailPanel } from '../components/admin/ProjectDetailPanel';
 import { ReasonDialog } from '../components/admin/ReasonDialog';
 import { UsersTable } from '../components/admin/UsersTable';
+import { AdminConsoleV2 } from '../components/admin/v2/AdminConsoleV2';
+import { useStudioV2 } from '../hooks/useDeploymentMode';
 import { TierConfigTable } from '../components/TierConfigTable';
 import { StorageBudgetCard } from '../components/StorageBudgetCard';
 import { SignInProviders } from '../components/SignInProviders';
@@ -29,6 +31,28 @@ export function PlatformAdminPage() {
     return <Navigate to="/" replace />;
   }
   const canMutate = user.role === 'platform_admin';
+  return <AdminPageBody canMutate={canMutate} />;
+}
+
+// The studio_v2 flag picks the console's layout: tabs of server-paged tables,
+// or the single page of the current layout. Until the server answers the flag counts as off.
+function AdminPageBody({ canMutate }: { readonly canMutate: boolean }) {
+  const { enabled } = useStudioV2();
+  if (enabled) {
+    return (
+      <AdminConsoleV2
+        canMutate={canMutate}
+        platform={(
+          <>
+            <CapacityWidget />
+            <StorageBudgetCard />
+            <TierConfigTable canMutate={canMutate} />
+            {canMutate && <SignInProviders />}
+          </>
+        )}
+      />
+    );
+  }
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       {canMutate && <NeedsAttention />}

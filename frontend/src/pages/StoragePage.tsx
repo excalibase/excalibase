@@ -18,9 +18,10 @@ import { BucketAccessPanel } from '../components/storage/BucketAccessPanel';
 import { S3AccessPanel } from '../components/storage/S3AccessPanel';
 import type { BucketAccess } from '../hooks/useStorage';
 
-export function StoragePage() {
+// initialBucket opens that bucket first; the project view uses it to land on the card that was chosen.
+export function StoragePage({ initialBucket }: { readonly initialBucket?: string } = {}) {
   const { projectId } = useParams<{ projectId: string }>();
-  const [selectedBucket, setSelectedBucket] = useState<string | null>(null);
+  const [selectedBucket, setSelectedBucket] = useState<string | null>(initialBucket ?? null);
   const [showCreate, setShowCreate] = useState(false);
   const [showS3, setShowS3] = useState(false);
   const { enabled: s3 } = useFeatureEnabled('s3');
