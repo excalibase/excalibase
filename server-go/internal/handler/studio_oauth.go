@@ -27,8 +27,6 @@ import (
 // top-level navigation, which a Strict cookie would not survive.
 const oauthStateCookie = "excali_oauth_state"
 
-const oauthCookiePath = "/api/auth/oauth"
-
 type studioSignIn interface {
 	Configured() []string
 	Start(ctx context.Context, provider, inviteHash string) (string, string, error)
@@ -82,27 +80,18 @@ func (h *StudioOAuthHandler) Start(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, "unavailable")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: oauthStateCookie, Value: state, Path: oauthCookiePath, MaxAge: 600,
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, auth.NewCookie(oauthStateCookie, state, 600, http.SameSiteLaxMode))
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
 func (h *StudioOAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name: oauthStateCookie, Value: "", Path: oauthCookiePath, MaxAge: -1,
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, auth.NewCookie(oauthStateCookie, "", -1, http.SameSiteLaxMode))
 	query := r.URL.Query()
 	if query.Get("error") != "" {
 		h.refuse(w, r, "cancelled")
 		return
 	}
-	var browserState string
-	if cookie, err := r.Cookie(oauthStateCookie); err == nil {
-		browserState = cookie.Value
-	}
+	browserState, _ := auth.ReadCookie(r, oauthStateCookie)
 	provider := chi.URLParam(r, "provider")
 	identity, inviteHash, err := h.signIn.Finish(r.Context(), provider, query.Get("state"), browserState, query.Get("code"))
 	if err != nil {

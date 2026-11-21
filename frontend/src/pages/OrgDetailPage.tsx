@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { serverErrorMessage } from '../utils/serverError';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Settings, Users, Trash2, UserPlus, Shield, ChevronRight, Database, Clock } from 'lucide-react';
 import { getOrg, listOrgMembers, inviteOrgMember, removeOrgMember, updateOrgMemberRole, updateOrg, deleteOrg, listPendingInvites, type Org, type OrgMember, type PendingInvite } from '../api/orgs';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
 import { InviteLinkNotice } from '../components/InviteLinkNotice';
 import { useAuthStore } from '../stores/auth-store';
+import { useStudioV2 } from '../hooks/useDeploymentMode';
 
 interface DatabaseInstance {
   projectId: string;
@@ -32,7 +33,15 @@ export function OrgDetailPage() {
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [projects, setProjects] = useState<DatabaseInstance[]>([]);
   const [loading, setLoading] = useState(true);
+  // The console navigation opens the members and settings tabs by ?tab=.
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  // Only with studio_v2 on; with it off the page opens on its projects as before.
+  const { enabled: studioV2 } = useStudioV2();
   const [tab, setTab] = useState<'projects' | 'members' | 'settings'>('projects');
+  useEffect(() => {
+    if (studioV2 && (requestedTab === 'members' || requestedTab === 'settings')) setTab(requestedTab);
+  }, [studioV2, requestedTab]);
 
   // Invite state
   const [showInvite, setShowInvite] = useState(false);

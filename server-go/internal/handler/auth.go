@@ -613,31 +613,20 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// writeSessionCookie sets the session PAT as an httpOnly cookie. The cookie
-// is the studio's auth path; XSS in the React app cannot read it.
+// writeSessionCookie sets the session PAT as an httpOnly __Host- cookie. The
+// cookie is the studio's auth path; XSS in the React app cannot read it. The
+// unprefixed cookie an earlier release set is cleared alongside.
 func writeSessionCookie(w http.ResponseWriter, raw string, expiry time.Time) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    raw,
-		Path:     "/",
-		Expires:  expiry,
-		HttpOnly: true,
-		Secure:   true, // requires HTTPS in production; browsers ignore Secure on http://localhost during dev
-		SameSite: http.SameSiteStrictMode,
-	})
+	cookie := auth.NewCookie(auth.LegacySessionCookieName, raw, 0, http.SameSiteStrictMode)
+	cookie.Expires = expiry
+	http.SetCookie(w, cookie)
+	auth.ClearLegacyCookie(w, auth.LegacySessionCookieName)
 }
 
 // clearSessionCookie tells the browser to drop the cookie immediately.
 func clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
+	http.SetCookie(w, auth.NewCookie(auth.LegacySessionCookieName, "", -1, http.SameSiteStrictMode))
+	auth.ClearLegacyCookie(w, auth.LegacySessionCookieName)
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {

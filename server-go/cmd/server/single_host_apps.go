@@ -91,7 +91,7 @@ func buildSingleHostAppRuntime(ctx context.Context, cfg config.AppConfig, docker
 		NetworkPrefix: apps.NetworkPrefix, VolumePrefix: apps.VolumePrefix,
 		EdgeContainer: apps.EdgeContainer, EdgeTLSAddress: apps.EdgeTLSAddress, RoutesDir: apps.EdgeRoutesDir,
 		EdgeIssuesLocally: apps.EdgeIssuesLocally(), EdgeAliases: apps.EdgeAliases, EdgeCA: edgeCA(apps),
-		SandboxRuntime: apps.SandboxRuntime, Egress: apps.Egress, Isolate: podman,
+		SandboxRuntime: apps.SandboxRuntime, Egress: apps.Egress, Isolate: podman, Userns: apps.Userns,
 		HostFirewall:          appsWaitForHostFirewall(),
 		AcceptUnguardedEgress: apps.AcceptUnguardedEgress,
 		ProbeBinary:           probe, ToolsImage: cfg.AppDiskToolsImage,
@@ -106,6 +106,9 @@ func buildSingleHostAppRuntime(ctx context.Context, cfg config.AppConfig, docker
 	}
 	if apps.SandboxRuntime == "" {
 		log.Printf("WARN: APP_SANDBOX_RUNTIME=none: apps run without a sandbox, sharing the host's kernel directly")
+	}
+	if notice := runtime.UsernsNotice(); notice != "" {
+		log.Printf("WARN: %s", notice)
 	}
 	if isolated, why := runtime.HostIsolation(); !isolated {
 		log.Printf("WARN: app networks: %s", why)

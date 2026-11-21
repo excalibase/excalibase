@@ -5,7 +5,7 @@ import { mockVaultGuardReady, mockInstances } from './helpers';
  * Verifies the new session-cookie auth flow against the studio:
  *
  *   1. Login is a server-side cookie issuer. The studio receives the
- *      `excali_session` Set-Cookie header on the login response and keeps
+ *      `__Host-excali_session` Set-Cookie header on the login response and keeps
  *      no copy of the token anywhere a script can read.
  *   2. Subsequent API calls go out with `withCredentials: true` so the
  *      cookie is auto-attached.
@@ -29,7 +29,7 @@ async function mockLogin(page: Page): Promise<{ logoutCalls: number; loginBodies
         // valid in headlesss test contexts (cross-origin to localhost can
         // strip), so emit Lax for the test fixture; the JS-side behaviour
         // we care about (withCredentials, axios cookie attach) is the same.
-        'Set-Cookie': 'excali_session=cookie-pat-abc; Path=/; HttpOnly; SameSite=Lax',
+        'Set-Cookie': '__Host-excali_session=cookie-pat-abc; Path=/; HttpOnly; Secure; SameSite=Lax',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -45,7 +45,7 @@ async function mockLogin(page: Page): Promise<{ logoutCalls: number; loginBodies
       status: 200,
       headers: {
         // Mirrors what the Go handler does — Max-Age<0 wipes the cookie.
-        'Set-Cookie': 'excali_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0',
+        'Set-Cookie': '__Host-excali_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ status: 'ok' }),

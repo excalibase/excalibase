@@ -279,7 +279,7 @@ func specFromContainer(inspect container.InspectResponse) (containerSpec, int, e
 		Port: int(numbers[labelPort]), Probe: probe,
 		NanoCPUs: inspect.HostConfig.NanoCPUs, MemoryBytes: inspect.HostConfig.Memory,
 		CPURequestMilli: numbers[labelCPURequest], MemoryRequest: numbers[labelMemoryRequest],
-		DiskClaim: labels[labelDisk], DiskMountPath: labels[labelDiskMount],
+		DiskClaim: labels[labelDisk], DiskMountPath: labels[labelDiskMount], Userns: usernsOf(labels),
 	}, int(numbers[labelReplica]), nil
 }
 

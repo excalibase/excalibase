@@ -48,6 +48,7 @@ var featureEnv = map[features.Feature]string{
 	features.WALArchiveAlert:    "FEATURE_WALARCHIVEALERT",
 	features.FreeWALUpload:      "FEATURE_FREEWALUPLOAD",
 	features.AppRuntimeLogin:    "FEATURE_APPRUNTIMELOGIN",
+	features.StudioV2:           "FEATURE_STUDIO_V2",
 	features.FunctionInvoke:     "FEATURE_FUNCTIONINVOKE",
 }
 

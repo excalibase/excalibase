@@ -31,7 +31,18 @@ func failed(kind sitebuilds.FailureKind, code int, detail string) sitebuilds.Run
 
 // Status reads the steps and starts the next one once the one before it has exited 0.
 func (r *Runner) Status(ctx context.Context, buildID string) (sitebuilds.RunStatus, error) {
-	current, err := r.inspectSteps(ctx, buildID)
+	return buildRun{Runner: r, id: buildID, plan: sitePlan}.statusOf(ctx)
+}
+
+// buildRun is one build and the steps its kind runs.
+type buildRun struct {
+	*Runner
+	id   string
+	plan stepPlan
+}
+
+func (b buildRun) statusOf(ctx context.Context) (sitebuilds.RunStatus, error) {
+	current, err := b.inspectSteps(ctx)
 	if err != nil {
 		return sitebuilds.RunStatus{}, err
 	}
@@ -39,8 +50,8 @@ func (r *Runner) Status(ctx context.Context, buildID string) (sitebuilds.RunStat
 		return failed(sitebuilds.FailPlatform, 0, "the build's containers are gone from the host"), nil
 	}
 	cloneDone := current[stepClone].State.Status == "exited"
-	for _, step := range chain {
-		if status, decided := r.stepOutcome(ctx, buildID, step, current[step], cloneDone); decided {
+	for _, step := range b.plan.chain {
+		if status, decided := b.stepOutcome(ctx, step, current[step], cloneDone); decided {
 			return status, nil
 		}
 	}
@@ -48,54 +59,54 @@ func (r *Runner) Status(ctx context.Context, buildID string) (sitebuilds.RunStat
 }
 
 // stepOutcome decides the build from one step; not decided means it exited 0 and the next step decides.
-func (r *Runner) stepOutcome(ctx context.Context, buildID, step string, inspect *container.InspectResponse, cloneDone bool) (sitebuilds.RunStatus, bool) {
+func (b buildRun) stepOutcome(ctx context.Context, step string, inspect *container.InspectResponse, cloneDone bool) (sitebuilds.RunStatus, bool) {
 	state := inspect.State
-	if killed(step, state) {
-		r.stopAll(ctx, buildID)
-		if !state.OOMKilled && r.pastDeadline(inspect) {
+	if b.killed(step, state) {
+		b.stopAll(ctx)
+		if !state.OOMKilled && b.pastDeadline(inspect) {
 			return failed(sitebuilds.FailTimeout, 0, "the build ran past its time limit"), true
 		}
 		return failed(sitebuilds.FailOutOfMemory, 0, fmt.Sprintf("the %s step ran out of memory", step)), true
 	}
 	if state.Status == "exited" || state.Status == "dead" {
 		if code := state.ExitCode; code != 0 {
-			return failed(k8s.SiteBuildFailureKind(step, int32(code)), code, fmt.Sprintf("the %s step exited %d", step, code)), true
+			return failed(b.plan.failureKind(step, int32(code)), code, fmt.Sprintf("the %s step exited %d", step, code)), true
 		}
 		return sitebuilds.RunStatus{Phase: sitebuilds.RunReady}, step == stepCollect
 	}
 	if state.Status == "created" {
-		return r.startStep(ctx, buildID, step, inspect, cloneDone), true
+		return b.startStep(ctx, step, inspect, cloneDone), true
 	}
 	// Only a running collect step's mark counts: build code can leave one on the shared volume.
-	if step == stepCollect && r.packed(ctx, buildID, inspect.Config.Labels[labelReady]) {
+	if step == stepCollect && b.packed(ctx, inspect.Config.Labels[labelReady]) {
 		return sitebuilds.RunStatus{Phase: sitebuilds.RunReady}, true
 	}
-	if r.pastDeadline(inspect) {
-		r.stopAll(ctx, buildID)
+	if b.pastDeadline(inspect) {
+		b.stopAll(ctx)
 		return failed(sitebuilds.FailTimeout, 0, "the build ran past its time limit"), true
 	}
-	return r.whileRunning(ctx, buildID, step, inspect, cloneDone), true
+	return b.whileRunning(ctx, step, inspect, cloneDone), true
 }
 
 // startStep starts a created step unless the build is already past its deadline.
-func (r *Runner) startStep(ctx context.Context, buildID, step string, inspect *container.InspectResponse, cloneDone bool) sitebuilds.RunStatus {
-	if r.pastDeadline(inspect) {
-		r.stopAll(ctx, buildID)
+func (b buildRun) startStep(ctx context.Context, step string, inspect *container.InspectResponse, cloneDone bool) sitebuilds.RunStatus {
+	if b.pastDeadline(inspect) {
+		b.stopAll(ctx)
 		return failed(sitebuilds.FailTimeout, 0, "the build ran past its time limit")
 	}
-	if err := r.start(ctx, buildID, step); err != nil {
-		log.Printf("site build %s: %v", buildID, err)
-		r.stopAll(ctx, buildID)
+	if err := b.start(ctx, b.id, step); err != nil {
+		log.Printf("build %s: %v", b.id, err)
+		b.stopAll(ctx)
 		return failed(sitebuilds.FailPlatform, 0, fmt.Sprintf("the %s step could not start", step))
 	}
 	return sitebuilds.RunStatus{Phase: sitebuilds.RunRunning, CloneDone: cloneDone}
 }
 
 // inspectSteps answers nil when any step is gone.
-func (r *Runner) inspectSteps(ctx context.Context, buildID string) (steps, error) {
+func (b buildRun) inspectSteps(ctx context.Context) (steps, error) {
 	current := steps{}
-	for _, step := range chain {
-		inspect, err := r.engine.ContainerInspect(ctx, containerName(buildID, step))
+	for _, step := range b.plan.chain {
+		inspect, err := b.engine.ContainerInspect(ctx, containerName(b.id, step))
 		if errdefs.IsNotFound(err) {
 			return nil, nil
 		}
@@ -116,20 +127,20 @@ func (r *Runner) pastDeadline(inspect *container.InspectResponse) bool {
 	return err != nil || r.opts.Now().Unix() > deadline
 }
 
-// killed: the engine saw the memory limit hit, or the build step was SIGKILLed.
-func killed(step string, state *container.State) bool {
-	return state.OOMKilled || (step == stepBuild && state.Status == "exited" && state.ExitCode == exitKilled)
+// killed: the engine saw the memory limit hit, or a step sized by the plan was SIGKILLed.
+func (b buildRun) killed(step string, state *container.State) bool {
+	return state.OOMKilled || (b.plan.limited[step] && state.Status == "exited" && state.ExitCode == exitKilled)
 }
 
 // whileRunning watches the disk watcher, and the sidecar the clone and build steps reach the internet through.
-func (r *Runner) whileRunning(ctx context.Context, buildID, step string, inspect *container.InspectResponse, cloneDone bool) sitebuilds.RunStatus {
-	if verdict, stopped := r.diskVerdict(ctx, buildID, inspect.Config.Labels[labelDisk]); stopped {
-		r.stopAll(ctx, buildID)
+func (b buildRun) whileRunning(ctx context.Context, step string, inspect *container.InspectResponse, cloneDone bool) sitebuilds.RunStatus {
+	if verdict, stopped := b.diskVerdict(ctx, inspect.Config.Labels[labelDisk]); stopped {
+		b.stopAll(ctx)
 		return verdict
 	}
-	if step == stepClone || step == stepBuild {
-		if !r.alive(ctx, buildID, stepEgress) {
-			r.stopAll(ctx, buildID)
+	if b.plan.online[step] {
+		if !b.alive(ctx, stepEgress) {
+			b.stopAll(ctx)
 			return failed(sitebuilds.FailPlatform, 0, "the build's network proxy stopped")
 		}
 	}
@@ -137,8 +148,8 @@ func (r *Runner) whileRunning(ctx context.Context, buildID, step string, inspect
 }
 
 // diskVerdict reads the disk watcher's exit; one still running, or done at its lifetime, is no verdict.
-func (r *Runner) diskVerdict(ctx context.Context, buildID, disk string) (sitebuilds.RunStatus, bool) {
-	watch, err := r.engine.ContainerInspect(ctx, containerName(buildID, stepWatch))
+func (b buildRun) diskVerdict(ctx context.Context, disk string) (sitebuilds.RunStatus, bool) {
+	watch, err := b.engine.ContainerInspect(ctx, containerName(b.id, stepWatch))
 	if err != nil || watch.ContainerJSONBase == nil || watch.State == nil || watch.State.Running {
 		return sitebuilds.RunStatus{}, false
 	}
@@ -154,8 +165,8 @@ func (r *Runner) diskVerdict(ctx context.Context, buildID, disk string) (sitebui
 }
 
 // alive: a container the engine shows running; one it cannot answer for is given the benefit of the doubt.
-func (r *Runner) alive(ctx context.Context, buildID, name string) bool {
-	inspect, err := r.engine.ContainerInspect(ctx, containerName(buildID, name))
+func (b buildRun) alive(ctx context.Context, name string) bool {
+	inspect, err := b.engine.ContainerInspect(ctx, containerName(b.id, name))
 	if err != nil {
 		return true
 	}
@@ -164,11 +175,11 @@ func (r *Runner) alive(ctx context.Context, buildID, name string) bool {
 
 // packed is collect's ready mark: the output is packed and waiting.
 // packed: the collect step wrote its own token into the ready mark.
-func (r *Runner) packed(ctx context.Context, buildID, token string) bool {
+func (b buildRun) packed(ctx context.Context, token string) bool {
 	if token == "" {
 		return false
 	}
-	stream, _, err := r.engine.CopyFromContainer(ctx, containerName(buildID, stepCollect), k8s.SiteBuildReadyPath)
+	stream, _, err := b.engine.CopyFromContainer(ctx, containerName(b.id, stepCollect), k8s.SiteBuildReadyPath)
 	if err != nil {
 		return false
 	}
@@ -182,13 +193,13 @@ func (r *Runner) packed(ctx context.Context, buildID, token string) bool {
 }
 
 // stopAll stops every step, the sidecar and the watcher; Remove deletes them after.
-func (r *Runner) stopAll(ctx context.Context, buildID string) {
-	r.stopBox(ctx, buildID, chain)
+func (b buildRun) stopAll(ctx context.Context) {
+	b.stopBox(ctx, b.id, b.plan.chain)
 }
 
 // Remove deletes the build's containers, work volume and network; a build already gone is not an error.
 func (r *Runner) Remove(ctx context.Context, buildID string) error {
-	return r.removeBox(ctx, buildID, chain)
+	return r.removeBox(ctx, buildID, sitePlan.chain)
 }
 
 // ForgetCloneCredential has nothing to delete: the dispatcher revokes the clone token at the git host once
