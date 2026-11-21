@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { API_BASE } from './base';
+import { clearVisits } from '../utils/visitStorage';
 
 // The httpOnly `__Host-excali_session` cookie set on /api/auth/login is Studio's only
 // credential; no script can read it. withCredentials lets the browser send it
@@ -22,6 +23,7 @@ api.interceptors.response.use(
     const fromFunction = error.response?.headers?.['x-excalibase-function-response'] === '1';
     if (error.response?.status === 401 && !fromFunction) {
       localStorage.removeItem('auth_user');
+      clearVisits();
       // /setup signs a sealed vault's admin in itself (EXC-579); /login would
       // bounce straight back there while the vault is sealed.
       const signsInItself = ['/login', '/setup'].includes(globalThis.location.pathname);

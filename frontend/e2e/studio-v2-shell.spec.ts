@@ -93,7 +93,7 @@ test.describe('Studio v2 shell', () => {
     await page.getByRole('searchbox', { name: /filter projects/i }).fill('reading');
     await expect(page.getByRole('row')).toHaveCount(2);
     await page.getByRole('searchbox', { name: /filter projects/i }).fill('');
-    await page.getByRole('combobox', { name: 'Status' }).selectOption('paused');
+    await page.getByRole('combobox', { name: 'Plan' }).selectOption('STANDARD');
     await expect(page.getByRole('row')).toHaveCount(2);
     await expect(page.getByRole('link', { name: /mcp-test/ })).toBeVisible();
   });

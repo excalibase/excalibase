@@ -71,6 +71,17 @@ describe('Home', () => {
     await waitFor(() => expect(security.getByText('Databases open to the internet').nextSibling).toHaveTextContent('1'));
   });
 
+  test('when a database could not be checked the open count is not claimed', async () => {
+    mountWith({
+      projects: [project('open'), project('unreadable')],
+      allowed: { open: { access: 'any', sources: [], publicEnabled: true } },
+      failAllowed: ['unreadable'],
+    }, <HomePage />);
+    const security = within(await screen.findByRole('region', { name: 'Security' }));
+    await waitFor(() => expect(security.getByText(/1 database could not be checked/)).toBeInTheDocument());
+    expect(security.getByText('Databases open to the internet').nextSibling).toHaveTextContent('—');
+  });
+
   test('the security row is left out when the platform does not report allow-lists', async () => {
     mountWith({ projects: [project('p1')], features: { dballowlist: false } }, <HomePage />);
     const security = within(await screen.findByRole('region', { name: 'Security' }));

@@ -1,10 +1,49 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { loadVisits, recordVisit, describeVisit, MAX_VISITS } from './recentlyVisited';
+import { clearVisits } from '../../utils/visitStorage';
+import { useAuthStore } from '../../stores/auth-store';
 import type { DatabaseInstance } from '../../types';
 
 const projects = [{ projectId: 'p1', projectName: 'Reading list', databaseType: 'POSTGRESQL' }] as DatabaseInstance[];
 
-beforeEach(() => localStorage.clear());
+const signIn = (id: string) => useAuthStore.setState({ user: { id, username: id, email: `${id}@example.test`, role: 'user' }, isAuthenticated: true });
+
+beforeEach(() => {
+  localStorage.clear();
+  signIn('u1');
+});
+
+describe('visits belong to the person signed in', () => {
+  test('another person on the same browser does not see them, and their list is dropped', () => {
+    recordVisit('/account/tokens');
+    signIn('u2');
+    expect(loadVisits()).toEqual([]);
+    recordVisit('/orgs');
+    expect(loadVisits()).toEqual(['/orgs']);
+    expect(Object.keys(localStorage).filter((key) => key.startsWith('studio.recentlyVisited'))).toEqual(['studio.recentlyVisited.u2']);
+  });
+
+  test('the list kept before visits were stored per person is never shown and is removed', () => {
+    localStorage.setItem('studio.recentlyVisited', JSON.stringify(['/account/tokens']));
+    expect(loadVisits()).toEqual([]);
+    recordVisit('/orgs');
+    expect(localStorage.getItem('studio.recentlyVisited')).toBeNull();
+  });
+
+  test('with nobody signed in nothing is read or kept', () => {
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+    recordVisit('/orgs');
+    expect(loadVisits()).toEqual([]);
+    expect(localStorage.length).toBe(0);
+  });
+
+  test('clearVisits removes every list', () => {
+    recordVisit('/orgs');
+    localStorage.setItem('studio.recentlyVisited.u9', '[]');
+    clearVisits();
+    expect(Object.keys(localStorage).filter((key) => key.startsWith('studio.recentlyVisited'))).toEqual([]);
+  });
+});
 
 describe('recording visits', () => {
   test('keeps the newest first and drops a repeat', () => {
@@ -32,9 +71,9 @@ describe('recording visits', () => {
   });
 
   test('a damaged value is read as empty', () => {
-    localStorage.setItem('studio.recentlyVisited', '{"not":"a list"}');
+    localStorage.setItem('studio.recentlyVisited.u1', '{"not":"a list"}');
     expect(loadVisits()).toEqual([]);
-    localStorage.setItem('studio.recentlyVisited', '[1,"/project/p1"]');
+    localStorage.setItem('studio.recentlyVisited.u1', '[1,"/project/p1"]');
     expect(loadVisits()).toEqual(['/project/p1']);
   });
 });

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { DataTable, type Column, type FilterDef } from '../../components/ui/DataTable';
 import { ProjectNameCell } from '../../components/shared/ProjectNameCell';
-import { useCurrentOrg, useMyProjects } from '../../hooks/useMemberOrgs';
+import { planLabel, useCurrentOrg, useMyProjects } from '../../hooks/useMemberOrgs';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { cn } from '../../utils/cn';
 import { containsLabel, lastUsedAt, projectStatus, relativeTime, rowAction, servicesOf, type ProjectServices, type ProjectStatus, type Tone } from './model';
@@ -46,6 +46,7 @@ function columns(now: Date): Column<ProjectRow>[] {
       ),
     },
     { id: 'contains', header: 'Contains', sortValue: (row) => row.contains, cell: (row) => row.contains },
+    { id: 'plan', header: 'Plan', sortValue: (row) => row.project.tier, cell: (row) => planLabel(row.project.tier) },
     {
       id: 'status', header: 'Status', sortValue: (row) => row.status.label,
       cell: (row) => <span className={cn('font-medium', TONE[row.status.tone])}>{row.status.label}</span>,
@@ -72,8 +73,11 @@ const STATUS_OPTIONS = [
   { value: 'working', label: 'Changing' }, { value: 'failed', label: 'Failed' }, { value: 'deleting', label: 'Being deleted' },
 ];
 
+const PLAN_OPTIONS = ['FREE', 'STANDARD', 'ENTERPRISE'].map((value) => ({ value, label: planLabel(value) }));
+
 const FILTERS: FilterDef<ProjectRow>[] = [
   { id: 'status', label: 'Status', options: STATUS_OPTIONS, matches: (row, value) => row.status.key === value },
+  { id: 'plan', label: 'Plan', options: PLAN_OPTIONS, matches: (row, value) => row.project.tier === value },
   {
     id: 'contains', label: 'Contains',
     options: [{ value: 'database', label: 'Database' }, { value: 'app', label: 'Apps' }, { value: 'site', label: 'Sites' }, { value: 'none', label: 'Nothing yet' }],

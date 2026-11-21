@@ -26,6 +26,7 @@ export interface Backend {
   features?: Record<string, boolean>;
   config?: Record<string, unknown>;
   failApps?: string[];
+  failAllowed?: string[];
   // A request that never answers, to see a page while it loads.
   hangProjects?: boolean;
 }
@@ -45,6 +46,7 @@ export function mountWith(backend: Backend, ui: ReactElement, route = '/') {
     if (scoped?.[2] === 'apps' && backend.failApps?.includes(scoped[1])) return Promise.reject(Object.assign(new Error('boom'), { response: { status: 500 } }));
     if (scoped?.[2] === 'apps') return reply(backend.apps?.[scoped[1]] ?? []);
     if (scoped?.[2] === 'sites') return reply(backend.sites?.[scoped[1]] ?? []);
+    if (scoped?.[2] === 'db-endpoint/allowed-sources' && backend.failAllowed?.includes(scoped[1])) return Promise.reject(Object.assign(new Error('boom'), { response: { status: 500 } }));
     if (scoped?.[2] === 'db-endpoint/allowed-sources') return reply(backend.allowed?.[scoped[1]] ?? { access: 'listed', sources: [], publicEnabled: false });
     return reply([]);
   }) as never);

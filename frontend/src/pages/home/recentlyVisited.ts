@@ -1,15 +1,23 @@
+import { useAuthStore } from '../../stores/auth-store';
+import { pruneVisits, visitsKey } from '../../utils/visitStorage';
 import type { DatabaseInstance } from '../../types';
 
-export const RECENTLY_VISITED_KEY = 'studio.recentlyVisited';
-const KEY = RECENTLY_VISITED_KEY;
 export const MAX_VISITS = 10;
 
 const IGNORED = new Set(['/', '/login', '/register', '/provision']);
 
 // Browser storage can be missing or throw (private window, blocked site data): the list then stays empty.
+// With nobody signed in nothing is read or kept.
+const keyOfPersonSignedIn = (): string | null => {
+  const id = useAuthStore.getState().user?.id;
+  return id ? visitsKey(id) : null;
+};
+
 export function loadVisits(): string[] {
+  const key = keyOfPersonSignedIn();
+  if (!key) return [];
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(KEY) ?? '[]');
+    const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
     return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === 'string') : [];
   } catch {
     return [];
@@ -17,10 +25,12 @@ export function loadVisits(): string[] {
 }
 
 export function recordVisit(path: string): void {
-  if (IGNORED.has(path)) return;
+  const key = keyOfPersonSignedIn();
+  if (!key || IGNORED.has(path)) return;
+  pruneVisits(key);
   const next = [path, ...loadVisits().filter((p) => p !== path)].slice(0, MAX_VISITS);
   try {
-    localStorage.setItem(KEY, JSON.stringify(next));
+    localStorage.setItem(key, JSON.stringify(next));
   } catch {
     // Nothing is remembered in this browser.
   }

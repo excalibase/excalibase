@@ -89,12 +89,14 @@ interface SecurityProps {
 }
 
 export function SecurityWidget({ summary, openUnchecked, keysKnown, openLoading }: SecurityProps) {
+  // A count that skipped databases it could not check would understate the risk, so none is shown.
+  const openKnown = !openLoading && openUnchecked === 0;
   const tokenValue = (n: number) => (keysKnown ? n : '—');
   return (
     <Widget title="Security">
       <div>
         {summary.openDatabases !== null && (
-          <Row label="Databases open to the internet" value={openLoading ? '—' : summary.openDatabases} warn={!openLoading && summary.openDatabases > 0} />
+          <Row label="Databases open to the internet" value={openKnown ? summary.openDatabases : '—'} warn={openKnown && summary.openDatabases > 0} />
         )}
         <Row label="Keys with access to every project" value={tokenValue(summary.allProjectTokens)} warn={keysKnown && summary.allProjectTokens > 0} to="/account/tokens" />
         <Row label="Keys expiring in 60 days" value={tokenValue(summary.expiringTokens)} to="/account/tokens" />

@@ -123,4 +123,14 @@ describe('Projects page', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(screen.queryByText(/0 projects/)).not.toBeInTheDocument();
   });
+
+  test('shows each project\'s plan and filters by it', async () => {
+    mountWith({ projects: [project('alpha'), project('beta', { tier: 'STANDARD' })] }, <ProjectsPage />);
+    await screen.findByText('1–2 of 2');
+    expect(screen.getByRole('columnheader', { name: /plan/i })).toBeInTheDocument();
+    expect(within(rowsOf().find((r) => r.textContent?.includes('beta'))!).getByText('Standard')).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Plan' }), 'STANDARD');
+    expect(rowsOf()).toHaveLength(1);
+    expect(within(rowsOf()[0]).getByText('beta')).toBeInTheDocument();
+  });
 });

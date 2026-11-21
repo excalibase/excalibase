@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../api/client';
-import { RECENTLY_VISITED_KEY } from '../pages/home/recentlyVisited';
+import { clearVisits } from '../utils/visitStorage';
 
 export interface AuthUser {
   id: string;
@@ -59,7 +59,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   clearAuth: () => {
     localStorage.removeItem(USER_KEY);
-    localStorage.removeItem(RECENTLY_VISITED_KEY);
+    clearVisits();
     set({ user: null, isAuthenticated: false });
   },
 
@@ -73,7 +73,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Ignored — local logout still proceeds.
     }
     localStorage.removeItem(USER_KEY);
-    localStorage.removeItem(RECENTLY_VISITED_KEY);
+    clearVisits();
     set({ user: null, isAuthenticated: false });
   },
 }));
