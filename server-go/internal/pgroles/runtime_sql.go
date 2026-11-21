@@ -63,8 +63,10 @@ BEGIN
       EXECUTE format('GRANT %I TO %I', parent, runtime_role);
     END IF;
   END LOOP;
-  -- The owner's session runs what a table's triggers and defaults call, so it
-  -- only reads what the app made; excalibase_app, which cannot manage roles, writes it.
+  -- The owner gets SELECT only on what the app makes, so its session does not fire
+  -- the app's triggers on a write. A read can still run planted views, policies,
+  -- rules, defaults and inlined SQL functions: the owner login must not touch
+  -- app-created objects at all. excalibase_app, which cannot manage roles, writes them.
   EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I GRANT SELECT ON TABLES TO %I', runtime_role, owner_role);
   EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO %I', runtime_role, platform_role);
   EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I GRANT ALL ON SEQUENCES TO %I', runtime_role, platform_role);

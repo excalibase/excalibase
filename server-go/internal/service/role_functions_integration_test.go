@@ -50,6 +50,13 @@ func TestRoleFunctions_ReregistrationRevokesAnOlderProjectsAppGrants(t *testing.
 func TestRuntimeLogin_ProbeFindsAMembershipThatCanSetRole(t *testing.T) {
 	t.Run("postgres:16", func(t *testing.T) {
 		c, runtimeSQL := runtimeProbeCase(t, "postgres:16")
+		// A role the owner's customers gave it is not what the check is about.
+		mustExec(t, c.admin, `GRANT other_role TO excalibase_runtime WITH SET TRUE`)
+		expectProbe(t, c, false, "a customer role it can SET")
+		mustExec(t, c.admin, `GRANT `+customerOwner+` TO excalibase_runtime WITH SET TRUE`)
+		expectProbe(t, c, true, "the owner it can SET")
+		mustExec(t, c.admin, runtimeSQL)
+		expectProbe(t, c, false, "after the SQL ran again")
 		mustExec(t, c.admin, `GRANT excalibase_app TO excalibase_runtime WITH SET TRUE`)
 		expectProbe(t, c, true, "a membership with SET")
 		mustExec(t, c.admin, runtimeSQL)

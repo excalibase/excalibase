@@ -320,8 +320,14 @@ func (s *ProvisioningService) recordedCredentialStillOpensTheDatabase(ctx contex
 func (s *ProvisioningService) promoteCredential(ctx context.Context, inst *domain.DatabaseInstance,
 	target credentialRotationTarget, password, pendingPath string) error {
 
-	if err := s.vault.Put(vaultCredentialPath(inst.ProjectID, target.role),
-		roleCredentialRecord(inst, target.username, password, target.serverCA)); err != nil {
+	record := roleCredentialRecord(inst, target.username, password, target.serverCA)
+	// A rotation does not set the database's grants, so it keeps what the record said of them.
+	if current, err := s.vault.Get(vaultCredentialPath(inst.ProjectID, target.role)); err == nil {
+		if grants, ok := current[mysqlGrantsKey]; ok {
+			record[mysqlGrantsKey] = grants
+		}
+	}
+	if err := s.vault.Put(vaultCredentialPath(inst.ProjectID, target.role), record); err != nil {
 		return fmt.Errorf("promote credential: %w", err)
 	}
 	if err := s.vault.Delete(pendingPath); err != nil {

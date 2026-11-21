@@ -89,7 +89,12 @@ func (s *ProvisioningService) fileMySQLLogins(inst *domain.DatabaseInstance, pas
 			continue
 		}
 		pc.SetStep("store " + role + " credentials")
-		if err := s.putCredentialRecord(inst.ProjectID, role, mysqlCredentialRecord(inst, role, password, serverCA), pc); err != nil {
+		record := mysqlCredentialRecord(inst, role, password, serverCA)
+		if role == roleAdmin {
+			// Created now, so its grants are escaped from the start.
+			record[mysqlGrantsKey] = mysqlGrantsEscaped
+		}
+		if err := s.putCredentialRecord(inst.ProjectID, role, record, pc); err != nil {
 			return err
 		}
 	}
@@ -103,7 +108,7 @@ func mysqlCredentialRecord(inst *domain.DatabaseInstance, role, password, server
 	if own, ok := mysqlRoleDatabase[role]; ok {
 		database = own
 	}
-	record := map[string]string{
+	return map[string]string{
 		domain.CredentialEngineKey:   domain.CredentialEngineMySQL,
 		domain.CredentialTLSKey:      domain.CredentialTLSRequired,
 		"host":                       inst.Host,
@@ -113,10 +118,6 @@ func mysqlCredentialRecord(inst *domain.DatabaseInstance, role, password, server
 		"password":                   password,
 		domain.CredentialServerCAKey: serverCA,
 	}
-	if role == roleAdmin {
-		record[mysqlGrantsKey] = mysqlGrantsEscaped
-	}
-	return record
 }
 
 // mysqlCredentials is the owner's login with its MySQL connection strings.

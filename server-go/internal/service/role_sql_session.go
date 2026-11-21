@@ -107,8 +107,8 @@ const roleFunctionProbeList = "'" + pgroles.CreateRoleSignature + "', '" + pgrol
 // a role-management function, which only the owner's login may (EXC-761); and f
 // once it cannot (EXC-628). The privilege functions count grants to PUBLIC.
 //
-// It also answers t while the runtime login may SET ROLE to a role it belongs
-// to: a project upgraded from Postgres 15 keeps the memberships made there, which
+// It also answers t while the runtime login may SET ROLE to the owner or
+// excalibase_app, the roles it belongs to (a customer role it was given is its owner's business): a project upgraded from Postgres 15 keeps the memberships made there, which
 // carry SET (EXC-765). set_option is read through to_jsonb because the column
 // only exists from Postgres 16.
 const authAccessProbeSQL = `SELECT COALESCE((CASE WHEN to_regnamespace('auth') IS NULL OR to_regrole('excalibase_app') IS NULL THEN false
@@ -125,6 +125,8 @@ ELSE pg_catalog.has_schema_privilege('excalibase_app', 'auth', 'USAGE')
 END), false)
   OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
     WHERE m.member = to_regrole('excalibase_runtime')
+      AND (m.roleid = to_regrole('excalibase_app')
+        OR m.roleid = (SELECT d.datdba FROM pg_catalog.pg_database d WHERE d.datname = current_database()))
       AND (SELECT r.rolcanlogin FROM pg_catalog.pg_roles r WHERE r.oid = m.member) AND coalesce((to_jsonb(m) ->> 'set_option')::boolean, false))`
 
 // authAccessProbeCommand runs the probe as the superuser with the connect-safe

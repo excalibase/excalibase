@@ -227,3 +227,43 @@ func TestReconcileProjectRoles_ReissuesEscapedGrantsOfAWildcardNamedMySQLProject
 		t.Fatalf("second pass = %+v", second)
 	}
 }
+
+// A rotation does not set the database's grants, so it neither adds nor removes
+// the mark: one made before the fix stays unmarked until the reconcile runs.
+func TestRotatingMySQLCredentialsKeepsTheGrantsMarkAsItWas(t *testing.T) {
+	svc, store, _ := setupMySQLTest(t)
+	svc.SetCredentialVerifier(&fakeRoleVerifier{})
+	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "shop", OrgID: "org1", DBType: domain.MySQL, DatabaseName: "aut_"})
+	if err != nil || resp.Status != "ACTIVE" {
+		t.Fatalf("Provision: %v %+v", err, resp)
+	}
+	inst, _ := store.FindByProjectID(resp.ProjectID)
+	path := vaultCredentialPath(inst.ProjectID, roleAdmin)
+	owner, _ := svc.vault.Get(path)
+
+	// Marked at creation: a rotation keeps it.
+	if _, err := svc.RotateCredentials(context.Background(), inst.ProjectID); err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+	if rotated, _ := svc.vault.Get(path); rotated[mysqlGrantsKey] != mysqlGrantsEscaped {
+		t.Fatalf("a rotation dropped the mark: %v", rotated)
+	}
+
+	// Made before the fix, so unmarked: a rotation must not mark it.
+	unmarked, _ := svc.vault.Get(path)
+	delete(unmarked, mysqlGrantsKey)
+	if err := svc.vault.Put(path, unmarked); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.RotateCredentials(context.Background(), inst.ProjectID); err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+	after, _ := svc.vault.Get(path)
+	if _, marked := after[mysqlGrantsKey]; marked || after["password"] == owner["password"] {
+		t.Fatalf("a rotation marked the grants as escaped, or did not rotate: %v", after)
+	}
+	if pending, err := svc.mysqlGrantsPending(context.Background(), inst); err != nil || !pending {
+		t.Fatalf("the reconcile no longer sees the grants as pending: %v %v", pending, err)
+	}
+}
