@@ -8,7 +8,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { cn } from '../../utils/cn';
 import { containsLabel, lastUsedAt, projectStatus, relativeTime, rowAction, servicesOf, type ProjectServices, type ProjectStatus, type Tone } from './model';
 import { ResumeButton } from './ResumeButton';
-import { useProjectServices } from './useHomeData';
+import { useProjectServices, type LoadedServices } from './useHomeData';
 import type { DatabaseInstance } from '../../types';
 
 interface ProjectRow {
@@ -86,6 +86,10 @@ const FILTERS: FilterDef<ProjectRow>[] = [
   },
 ];
 
+function failedLists(loaded: LoadedServices | undefined): ('apps' | 'sites')[] {
+  return [...(loaded?.appsFailed ? ['apps' as const] : []), ...(loaded?.sitesFailed ? ['sites' as const] : [])];
+}
+
 const renderRowAction = (row: ProjectRow) => <RowAction row={row} />;
 
 // The Projects page of the console layout (studio_v2): the projects of the org in the top bar.
@@ -95,14 +99,16 @@ export function ProjectsPage() {
   const { data, isLoading, error, refetch } = useMyProjects();
   const projects = useMemo(() => (org ? data.filter((p) => p.orgId === org.id) : data), [org, data]);
   const { byProject } = useProjectServices(projects);
-  const rows = buildRows(projects, (id) => servicesOf(byProject.get(id)?.apps, byProject.get(id)?.sites));
+  const rows = buildRows(projects, (id) => servicesOf(byProject.get(id)?.apps, byProject.get(id)?.sites, failedLists(byProject.get(id))));
   const tableColumns = useMemo(() => columns(new Date()), []);
 
   return (
     <div className="mx-auto max-w-7xl space-y-4" data-testid="projects-page">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold text-text-primary">Projects</h1>
-        <span className="text-sm text-text-secondary">{org ? `${org.name} · ` : ''}{projects.length} project{projects.length === 1 ? '' : 's'}</span>
+        {!isLoading && !error && (
+          <span className="text-sm text-text-secondary">{org ? `${org.name} · ` : ''}{projects.length} project{projects.length === 1 ? '' : 's'}</span>
+        )}
         <Link to="/provision" className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-purple-600 px-3 min-h-9 text-sm font-medium text-white hover:bg-purple-500">
           <Plus className="h-4 w-4" aria-hidden="true" /> New project
         </Link>

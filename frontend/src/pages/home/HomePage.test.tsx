@@ -3,6 +3,7 @@ import { screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HomePage } from './HomePage';
 import { recordVisit } from './recentlyVisited';
+import { api } from '../../api/client';
 import { mountWith, project } from '../../test/homeFixtures';
 
 vi.mock('../../api/client', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }));
@@ -119,5 +120,39 @@ describe('Home', () => {
     mountWith({ projects: [], failProjects: true }, <HomePage />);
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not load your projects/i);
     expect(screen.queryByRole('region', { name: 'Health' })).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/security/i);
+    expect(screen.queryByText(/create a project first/i)).not.toBeInTheDocument();
+    const security = within(screen.getByRole('region', { name: 'Security' }));
+    expect(security.getByText('Databases open to the internet').nextSibling).toHaveTextContent('—');
+  });
+
+  test('while projects load there is no "create a project first" hint, no health figures and no security guess', async () => {
+    mountWith({ projects: [], hangProjects: true }, <HomePage />);
+    const build = within(await screen.findByRole('region', { name: 'Build something' }));
+    expect(build.getByRole('link', { name: /Create a Postgres database/ })).toBeInTheDocument();
+    expect(screen.queryByText(/create a project first/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Health' })).not.toBeInTheDocument();
+    const security = within(screen.getByRole('region', { name: 'Security' }));
+    expect((await security.findByText('Databases open to the internet')).nextSibling).toHaveTextContent('—');
+  });
+
+  test('with no projects at all the hint is shown once loading is over', async () => {
+    mountWith({ projects: [] }, <HomePage />);
+    expect(await screen.findByText(/create a project first/i)).toBeInTheDocument();
+  });
+
+  test('a project of an organization the person is not in is ignored', async () => {
+    mountWith({ projects: [project('p1'), project('foreign', { orgId: 'org-other', status: 'PAUSED' })] }, <HomePage />);
+    const health = within(await screen.findByRole('region', { name: 'Health' }));
+    expect(health.getByText('Running').nextSibling).toHaveTextContent('1');
+    expect(health.getByText('Paused').nextSibling).toHaveTextContent('0');
+    expect(screen.queryByRole('region', { name: 'Needs your attention' })).not.toBeInTheDocument();
+  });
+
+  test('Resume announces that it is working', async () => {
+    mountWith({ projects: [project('p2', { projectName: 'mcp-test', status: 'PAUSED' })] }, <HomePage />);
+    vi.mocked(api.post).mockImplementation((() => new Promise(() => {})) as never);
+    await userEvent.click(await screen.findByRole('button', { name: 'Resume mcp-test' }));
+    expect(await screen.findByRole('status')).toHaveTextContent(/resuming mcp-test/i);
   });
 });

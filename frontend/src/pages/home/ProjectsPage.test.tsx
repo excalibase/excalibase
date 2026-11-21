@@ -98,4 +98,29 @@ describe('Projects page', () => {
     await screen.findByText('1–1 of 1');
     expect(document.body.textContent).not.toMatch(/pod|namespace|kubernetes|k8s/i);
   });
+
+  test('with app hosting and sites off a project counts none of them instead of waiting for them', async () => {
+    mountWith({ projects: [project('alpha')], config: { appHosting: false, sites: false } }, <ProjectsPage />);
+    await screen.findByText('1–1 of 1');
+    await waitFor(() => expect(within(rowsOf()[0]).getByText('Postgres')).toBeInTheDocument());
+    expect(screen.queryByText('…')).not.toBeInTheDocument();
+  });
+
+  test('an apps list that could not be read says so, distinct from none', async () => {
+    mountWith({ projects: [project('alpha')], failApps: ['alpha'] }, <ProjectsPage />);
+    await screen.findByText('1–1 of 1');
+    await waitFor(() => expect(within(rowsOf()[0]).getByText(/apps unavailable/)).toBeInTheDocument());
+  });
+
+  test('while loading there is a busy status and no "0 projects" count', async () => {
+    mountWith({ projects: [], hangProjects: true }, <ProjectsPage />);
+    expect(await screen.findByRole('status')).toHaveTextContent(/loading/i);
+    expect(screen.queryByText(/0 projects/)).not.toBeInTheDocument();
+  });
+
+  test('after a failed load there is no "0 projects" count either', async () => {
+    mountWith({ projects: [], failProjects: true }, <ProjectsPage />);
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.queryByText(/0 projects/)).not.toBeInTheDocument();
+  });
 });

@@ -81,8 +81,14 @@ describe('securitySummary', () => {
 
 describe('Projects list helpers', () => {
   test('services are read from loaded lists; unknown stays unknown', () => {
-    expect(servicesOf(undefined, undefined)).toEqual({ apps: null, sites: null });
-    expect(servicesOf([{}, {}], [])).toEqual({ apps: 2, sites: 0 });
+    expect(servicesOf(undefined, undefined)).toEqual({ apps: null, sites: null, failed: [] });
+    expect(servicesOf([{}, {}], [])).toEqual({ apps: 2, sites: 0, failed: [] });
+    expect(servicesOf(undefined, [], ['apps'])).toEqual({ apps: null, sites: 0, failed: ['apps'] });
+  });
+
+  test('a list that failed is named, not read as none or as loading', () => {
+    expect(containsLabel(project('a', { postgresVersion: '16' }), servicesOf(undefined, [], ['apps']))).toBe('Postgres 16 + apps unavailable');
+    expect(containsLabel(project('a', { noDatabase: true }), servicesOf(undefined, [], ['apps']))).toBe('apps unavailable');
   });
 
   test('contains names the database and counts the apps and sites', () => {

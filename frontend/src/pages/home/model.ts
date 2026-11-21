@@ -143,10 +143,11 @@ export function securitySummary(input: { tokens: readonly TokenInfo[]; openDatab
 // The Projects list.
 
 // null: not loaded (yet) or not readable, which is not the same as none.
-export interface ProjectServices { apps: number | null; sites: number | null }
+// `failed` names a list that could not be read, which is not the same as none.
+export interface ProjectServices { apps: number | null; sites: number | null; failed?: readonly ('apps' | 'sites')[] }
 
-export function servicesOf(apps: readonly unknown[] | undefined, sites: readonly unknown[] | undefined): ProjectServices {
-  return { apps: apps ? apps.length : null, sites: sites ? sites.length : null };
+export function servicesOf(apps: readonly unknown[] | undefined, sites: readonly unknown[] | undefined, failed: readonly ('apps' | 'sites')[] = []): ProjectServices {
+  return { apps: apps ? apps.length : null, sites: sites ? sites.length : null, failed };
 }
 
 function databaseLabel(project: DatabaseInstance): string | null {
@@ -165,6 +166,7 @@ export function containsLabel(project: DatabaseInstance, services: ProjectServic
   if (database) parts.push(database);
   if (services.apps) parts.push(count(services.apps, 'app'));
   if (services.sites) parts.push(count(services.sites, 'site'));
+  for (const list of services.failed ?? []) parts.push(`${list} unavailable`);
   if (parts.length > 0) return parts.join(' + ');
   return services.apps === null || services.sites === null ? '…' : 'Empty project';
 }

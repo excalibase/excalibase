@@ -1,6 +1,7 @@
 import type { DatabaseInstance } from '../../types';
 
-const KEY = 'studio.recentlyVisited';
+export const RECENTLY_VISITED_KEY = 'studio.recentlyVisited';
+const KEY = RECENTLY_VISITED_KEY;
 export const MAX_VISITS = 10;
 
 const IGNORED = new Set(['/', '/login', '/register', '/provision']);

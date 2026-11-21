@@ -28,14 +28,16 @@ export interface AllowedSourcesChange {
 const path = (projectId: string) => `/projects/${projectId}/db-endpoint/allowed-sources`;
 const key = (projectId: string) => ['allowed-sources', projectId];
 
-export const useAllowedSources = (projectId: string, enabled: boolean) =>
-  useQuery({
-    queryKey: key(projectId),
-    queryFn: async () => (await api.get<AllowedSources>(path(projectId))).data,
-    enabled,
-    retry: false,
-    staleTime: 30_000,
-  });
+// The query's options, shared by the hook and by callers that read many projects at once.
+export const allowedSourcesQuery = (projectId: string, enabled: boolean) => ({
+  queryKey: key(projectId),
+  queryFn: async () => (await api.get<AllowedSources>(path(projectId))).data,
+  enabled,
+  retry: false,
+  staleTime: 30_000,
+});
+
+export const useAllowedSources = (projectId: string, enabled: boolean) => useQuery(allowedSourcesQuery(projectId, enabled));
 
 export const useSetAllowedSources = (projectId: string) => {
   const queryClient = useQueryClient();

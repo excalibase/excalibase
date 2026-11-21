@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useIsAdminHost, useStudioV2 } from '../hooks/useDeploymentMode';
 import { useInstances } from '../hooks/useProvisioning';
@@ -8,17 +9,21 @@ import { Database, DatabaseZap, CheckCircle, Loader2, XCircle } from 'lucide-rea
 import { Button } from '../components/Button';
 import { engineIcon, engineLabel } from '../utils/engine';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { HomePage } from './home/HomePage';
+import { LayoutLoading } from '../components/layout/v2/LayoutLoading';
+
+const HomePage = lazy(() => import('./home/HomePage').then((m) => ({ default: m.HomePage })));
 
 // With studio_v2 on, Home replaces this page.
 export function DashboardPage() {
   const { enabled } = useStudioV2();
-  return enabled ? <HomePage /> : <LegacyDashboardPage />;
+  const onAdminHost = useIsAdminHost();
+  // The operator console's host has no customer Home, with the flag on or off.
+  if (onAdminHost) return <Navigate to="/admin" replace />;
+  return enabled ? <Suspense fallback={<LayoutLoading />}><HomePage /></Suspense> : <LegacyDashboardPage />;
 }
 
 function LegacyDashboardPage() {
   useDocumentTitle('Projects');
-  const onAdminHost = useIsAdminHost();
   const { data: instances = [], isLoading } = useInstances();
   const navigate = useNavigate();
 
@@ -29,7 +34,6 @@ function LegacyDashboardPage() {
   const provisioning = instances.filter((i) => i.status === 'PROVISIONING').length;
   const failed      = instances.filter((i) => i.status === 'FAILED' || i.currentStage === 'FAILED').length;
 
-  if (onAdminHost) return <Navigate to="/admin" replace />;
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
       {/* Stat cards */}

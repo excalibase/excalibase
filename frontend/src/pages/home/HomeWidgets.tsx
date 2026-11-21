@@ -80,13 +80,21 @@ function Row({ label, value, warn, to }: { readonly label: string; readonly valu
   return to ? <Link to={to} className={cn(row, 'text-text-primary hover:underline')}>{content}</Link> : <div className={cn(row, 'text-text-primary')}>{content}</div>;
 }
 
-export function SecurityWidget({ summary, openUnchecked, keysKnown }: { readonly summary: Omit<SecuritySummary, 'openDatabases'> & { openDatabases: number | null }; readonly openUnchecked: number; readonly keysKnown: boolean }) {
+interface SecurityProps {
+  readonly summary: Omit<SecuritySummary, 'openDatabases'> & { openDatabases: number | null };
+  readonly openUnchecked: number;
+  readonly keysKnown: boolean;
+  // The projects or their allow-lists are still loading, or could not be read: no count is claimed.
+  readonly openLoading: boolean;
+}
+
+export function SecurityWidget({ summary, openUnchecked, keysKnown, openLoading }: SecurityProps) {
   const tokenValue = (n: number) => (keysKnown ? n : '—');
   return (
     <Widget title="Security">
       <div>
         {summary.openDatabases !== null && (
-          <Row label="Databases open to the internet" value={summary.openDatabases} warn={summary.openDatabases > 0} />
+          <Row label="Databases open to the internet" value={openLoading ? '—' : summary.openDatabases} warn={!openLoading && summary.openDatabases > 0} />
         )}
         <Row label="Keys with access to every project" value={tokenValue(summary.allProjectTokens)} warn={keysKnown && summary.allProjectTokens > 0} to="/account/tokens" />
         <Row label="Keys expiring in 60 days" value={tokenValue(summary.expiringTokens)} to="/account/tokens" />

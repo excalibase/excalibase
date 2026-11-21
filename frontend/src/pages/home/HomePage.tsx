@@ -32,12 +32,14 @@ function recentVisits(projects: readonly DatabaseInstance[] | undefined): Visit[
     .slice(0, VISIBLE_VISITS);
 }
 
-function useBuildLinks(projects: readonly DatabaseInstance[]): { links: BuildLink[]; hint?: string } {
+// `ready` is false while the projects load or failed to load: with no answer there is no "no projects" to advise on.
+function useBuildLinks(projects: readonly DatabaseInstance[], ready: boolean): { links: BuildLink[]; hint?: string } {
   const apps = useAppHostingEnabled().enabled;
   const sites = useSitesEnabled().enabled;
   const mcp = useFeatureEnabled('mcp').enabled;
   const target = projects.find((p) => p.status === 'ACTIVE');
   const links: BuildLink[] = [{ to: '/provision', label: 'Create a Postgres database' }];
+  if (!ready) return { links };
   if (!target) return { links, hint: 'Create a project first, then add apps, sites and AI tools to it.' };
   const base = `/project/${target.projectId}`;
   if (apps) links.push({ to: `${base}/containers/new`, label: 'Deploy an app from a container image' });
@@ -69,7 +71,8 @@ export function HomePage() {
   const tokens = useAccessTokens();
   const { byProject } = useProjectServices(projects);
   const openDatabases = useOpenDatabases(projects);
-  const build = useBuildLinks(projects);
+  const projectsReady = !isLoading && !error;
+  const build = useBuildLinks(projects, projectsReady);
   const { hidden, toggle } = useHiddenWidgets();
   const [customizing, setCustomizing] = useState(false);
   const now = new Date();
@@ -102,7 +105,7 @@ export function HomePage() {
 
       {Boolean(error) && (
         <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
-          Could not load your projects, so Health and the alerts above may be incomplete.
+          Could not load your projects, so Health, Security and the alerts above may be incomplete.
         </p>
       )}
 
@@ -115,6 +118,7 @@ export function HomePage() {
         {shown('security') && (
           <SecurityWidget
             summary={{ ...securitySummary({ tokens: tokenList, openDatabases: 0, now }), openDatabases: openDatabases.open }}
+            openLoading={!projectsReady || openDatabases.isLoading}
             openUnchecked={openDatabases.unchecked}
             keysKnown={!tokens.isError && !tokens.isLoading}
           />

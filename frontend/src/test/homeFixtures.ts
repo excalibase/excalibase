@@ -24,6 +24,10 @@ export interface Backend {
   sites?: Record<string, unknown[]>;
   allowed?: Record<string, unknown>;
   features?: Record<string, boolean>;
+  config?: Record<string, unknown>;
+  failApps?: string[];
+  // A request that never answers, to see a page while it loads.
+  hangProjects?: boolean;
 }
 
 // Answers the Studio's GETs from `backend`; anything else is an empty list.
@@ -32,11 +36,13 @@ export function mountWith(backend: Backend, ui: ReactElement, route = '/') {
   useOrgSelection.setState({ orgId: null });
   vi.mocked(api.get).mockImplementation(((url: string) => {
     const reply = (data: unknown) => Promise.resolve({ data });
-    if (url === '/config') return reply({ deploymentMode: 'cloud', appHosting: true, sites: true, features: { studio_v2: true, dballowlist: true, mcp: true, ...backend.features } });
+    if (url === '/config') return reply({ deploymentMode: 'cloud', appHosting: true, sites: true, ...backend.config, features: { studio_v2: true, dballowlist: true, mcp: true, ...backend.features } });
     if (url === '/orgs') return reply(ORGS);
+    if (url === '/provision' && backend.hangProjects) return new Promise(() => {});
     if (url === '/provision') return backend.failProjects ? Promise.reject(Object.assign(new Error('forbidden'), { response: { status: 403 } })) : reply(backend.projects);
     if (url === '/auth/tokens') return reply(backend.tokens ?? []);
     const scoped = /^\/projects\/([^/]+)\/(.*?)\/?$/.exec(url);
+    if (scoped?.[2] === 'apps' && backend.failApps?.includes(scoped[1])) return Promise.reject(Object.assign(new Error('boom'), { response: { status: 500 } }));
     if (scoped?.[2] === 'apps') return reply(backend.apps?.[scoped[1]] ?? []);
     if (scoped?.[2] === 'sites') return reply(backend.sites?.[scoped[1]] ?? []);
     if (scoped?.[2] === 'db-endpoint/allowed-sources') return reply(backend.allowed?.[scoped[1]] ?? { access: 'listed', sources: [], publicEnabled: false });
