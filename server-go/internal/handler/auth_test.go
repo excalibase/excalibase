@@ -741,3 +741,24 @@ func TestAuthLogout_FailedRevokeIsA5xxButStillClearsCookie(t *testing.T) {
 		t.Errorf("the session cookie must still be cleared, got %+v", clearing)
 	}
 }
+
+func TestWritePasswordBusy_OtherErrorsAreAGenericInternalError(t *testing.T) {
+	w := httptest.NewRecorder()
+	writePasswordBusy(w, errors.New("argon2 exploded"))
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), msgInternalError) || strings.Contains(w.Body.String(), "argon2") {
+		t.Errorf("got %d %s, want a generic 500", w.Code, w.Body.String())
+	}
+}
+
+func TestRegister_UserLookupFailureIsAGenericInternalError(t *testing.T) {
+	us := newMockUserStore()
+	us.failList = true
+	h := NewAuthHandler(us, newMockTokenStore())
+	r := chi.NewRouter()
+	r.Post("/api/auth/register", h.Register)
+	body := `{"username":"alice","email":"alice@example.test","password":"Correct-Horse-9-battery"}`
+	w := doAuthRequest(r, "POST", "/api/auth/register", "", body)
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "db error") {
+		t.Errorf("got %d %s, want a generic 500", w.Code, w.Body.String())
+	}
+}
