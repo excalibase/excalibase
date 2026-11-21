@@ -144,9 +144,10 @@ describe('ProjectServicesPage', () => {
   test('switching from one bucket card to another shows the second bucket', async () => {
     stub({ buckets: [{ id: 'b1', name: 'avatars', public: false }, { id: 'b2', name: 'photos', public: false }] });
     renderAt('/project/p1?service=storage%3Aavatars');
-    expect(await screen.findByRole('heading', { name: 'avatars' })).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'avatars panel' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('link', { name: /photos/ }));
-    expect(await screen.findByRole('heading', { name: 'photos' })).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'photos panel' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'avatars panel' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'avatars' })).not.toBeInTheDocument();
   });
 
