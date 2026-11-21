@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { OrgDetailPage } from './OrgDetailPage';
 import { api } from '../api/client';
 import { useAuthStore } from '../stores/auth-store';
@@ -21,9 +22,10 @@ const projects = [
   { projectId: 'p-other', orgId: 'o2', status: 'READY', tier: 'FREE' },
 ];
 
-function mockReads() {
+function mockReads(features: Record<string, boolean> = {}) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     const bodies: Record<string, unknown> = {
+      '/config': { deploymentMode: 'cloud', features },
       '/orgs/o1': org,
       '/orgs/o1/members': members,
       '/orgs/o1/invites': invites,
@@ -34,16 +36,19 @@ function mockReads() {
   });
 }
 
-function renderPage() {
+function renderPage(path = '/orgs/o1') {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter initialEntries={['/orgs/o1']}>
+    <QueryClientProvider client={client}>
+    <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/orgs/:orgId" element={<OrgDetailPage />} />
         <Route path="/orgs" element={<div data-testid="orgs-list">ORGS</div>} />
         <Route path="/provision" element={<div data-testid="provision">PROVISION</div>} />
         <Route path="/project/:projectId" element={<div data-testid="project">PROJECT</div>} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -225,5 +230,24 @@ describe('OrgDetailPage — refusals say why', () => {
     fireEvent.click(send);
     finish({ data: { status: 'invited' } });
     await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+  });
+
+  describe('?tab= is honoured only with studio_v2 on', () => {
+    beforeEach(() => {
+      useAuthStore.setState({ user: { id: 'u-owner', username: 'owner', email: 'owner@x.test', role: 'user' }, isAuthenticated: true });
+    });
+
+    test('flag on: ?tab=members opens the members tab', async () => {
+      mockReads({ studio_v2: true });
+      renderPage('/orgs/o1?tab=members');
+      expect(await screen.findByText('waiting@x.test')).toBeInTheDocument();
+    });
+
+    test('flag off: ?tab=members is ignored and the projects tab opens', async () => {
+      mockReads({ studio_v2: false });
+      renderPage('/orgs/o1?tab=members');
+      expect(await screen.findByText('p-mine')).toBeInTheDocument();
+      expect(screen.queryByText('waiting@x.test')).not.toBeInTheDocument();
+    });
   });
 });

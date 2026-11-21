@@ -182,6 +182,8 @@ var darkWork = map[features.Feature]string{
 	// On unless switched off: off, no archive alert is raised and Free keeps the operator's interval.
 	features.WALArchiveAlert: "TestWALArchiveSampler_OffWhenTheGuardIsOff",
 	features.FreeWALUpload:   "TestTierConfig_GuardOffLeavesTheOperatorsInterval",
+	// Studio's layout only: the server reports it through /api/config.
+	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }
 
 func TestDarkRoutes_EveryFeatureIsWired(t *testing.T) {

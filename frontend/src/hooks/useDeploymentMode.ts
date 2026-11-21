@@ -30,7 +30,9 @@ export type Feature =
   | 'majorupgrade'
   | 'appgitbuilds'
   | 's3'
-  | 'onetimecredentials';
+  | 'onetimecredentials'
+  // The cloud-console layout of Studio (EXC-762); off until the owner turns it on.
+  | 'studio_v2';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
@@ -103,6 +105,12 @@ export function useCustomDomainsEnabled(): boolean {
 export function useFeatureEnabled(feature: Feature): { enabled: boolean; isLoading: boolean } {
   const { data, isLoading } = useStudioConfig();
   return { enabled: data?.features?.[feature] === true, isLoading };
+}
+
+// The new Studio layout: off while the server has not answered, so a signed-in
+// page never flashes the new shell before the flag is known.
+export function useStudioV2(): { enabled: boolean; isLoading: boolean } {
+  return useFeatureEnabled('studio_v2');
 }
 
 // Every feature the server reports on; empty until it answers.

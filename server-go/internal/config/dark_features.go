@@ -47,6 +47,7 @@ var featureEnv = map[features.Feature]string{
 	features.OneTimeCredentials: "FEATURE_ONETIMECREDENTIALS",
 	features.WALArchiveAlert:    "FEATURE_WALARCHIVEALERT",
 	features.FreeWALUpload:      "FEATURE_FREEWALUPLOAD",
+	features.StudioV2:           "FEATURE_STUDIO_V2",
 	features.FunctionInvoke:     "FEATURE_FUNCTIONINVOKE",
 }
 
