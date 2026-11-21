@@ -235,8 +235,25 @@ jobs:
     runs-on: ubuntu-24.04
     # Four fresh installs, each walking realtime too (EXC-612).
     timeout-minutes: 145
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Anonymous pulls hit Docker Hub's rate limit (EXC-752); fork PRs have no secret and
+      # pull anonymously. The login covers what the docker CLI pulls on the host: the dind
+      # images, `docker build` base images and the compose pulls. The Docker-in-Docker machines
+      # pull nothing themselves (their images are loaded from the host), so no credential
+      # goes into them.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # Provisioning pulls through the daemon API without registry auth, so these stay anonymous
+      # whatever the runner logged in as. Pulled here with the CLI, the daemon finds them local.
+      - name: Pre-pull the images provisioning pulls anonymously
+        run: sh deploy/single-host/tests/prepull-provisioning-images.sh
       - name: Build provisioning and Studio from this checkout
         run: |
           docker build -q -t docker.io/excalibase/provisioning:ci server-go
