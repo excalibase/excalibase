@@ -198,7 +198,12 @@ for sql in "SELECT count(*) FROM auth.users" "CREATE TABLE excalibase.planted (i
   case "$out" in *"permission denied"*) ok "refused: $sql" ;; *) ko "allowed: $sql -> ${out:0:200}" ;; esac
 done
 out=$(as_app "CREATE FUNCTION public.app_steal() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN RETURN NEW; END \$\$; CREATE TRIGGER app_steal BEFORE INSERT ON notes FOR EACH ROW EXECUTE FUNCTION public.app_steal()")
-case "$out" in *"permission denied"*|*"must be owner"*) ok "the app cannot attach a trigger to a migrated table" ;; *) ko "trigger: ${out:0:300}" ;; esac
+# EXC-765: the app login is a member of the role that owns Studio-made tables, so
+# DDL on customer tables is allowed (that is what an app migration needs). What it
+# must not do is reach the platform's schemas, checked above.
+case "$out" in "") ok "the app may attach a trigger to a customer table it can alter (EXC-765)" ;; *) ko "trigger: ${out:0:300}" ;; esac
+out=$(as_app "DROP TRIGGER app_steal ON notes; DROP FUNCTION public.app_steal()")
+[ -z "$out" ] && ok "the app removed its trigger" || ko "drop trigger: ${out:0:300}"
 # The password is matched from a 0600 file, never passed as an argument.
 ( umask 077; sed 's/^DATABASE_URL=//' "$W/app-db.env" | python3 -c 'import sys,urllib.parse as u;print(u.urlparse(sys.stdin.read().strip()).password or "")' > "$W/app-db.secret" )
 leak=0
