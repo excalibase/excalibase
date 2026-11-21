@@ -7,6 +7,7 @@ import { PlatformLayoutSwitch, ProjectLayoutSwitch } from './components/layout/v
 import { DatabaseRequired } from './components/DatabaseRequired';
 import { DatabaseRunning } from './components/DatabaseRunning';
 import { FeatureGate } from './components/FeatureGate';
+import { ProjectIndex } from './components/layout/v2/ProjectIndex';
 import { AdminRouteGuard } from './components/admin/AdminRouteGuard';
 
 // Lazy-loaded pages
@@ -20,7 +21,6 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ de
 const OrgsPage = lazy(() => import('./pages/OrgsPage').then(m => ({ default: m.OrgsPage })));
 const OrgDetailPage = lazy(() => import('./pages/OrgDetailPage').then(m => ({ default: m.OrgDetailPage })));
 const InstancesPage = lazy(() => import('./pages/InstancesPage').then(m => ({ default: m.InstancesPage })));
-const ProjectOverviewPage = lazy(() => import('./pages/ProjectOverviewPage').then(m => ({ default: m.ProjectOverviewPage })));
 const AddDatabasePage = lazy(() => import('./pages/AddDatabasePage').then(m => ({ default: m.AddDatabasePage })));
 const InstanceDetailPage = lazy(() => import('./pages/InstanceDetailPage').then(m => ({ default: m.InstanceDetailPage })));
 const ProvisionPage = lazy(() => import('./pages/ProvisionPage').then(m => ({ default: m.ProvisionPage })));
@@ -116,7 +116,7 @@ export default function App() {
 
           {/* Project-scoped pages */}
           <Route path="/project/:projectId" element={<ProjectLayoutSwitch />}>
-            <Route index element={<ProjectOverviewPage />} />
+            <Route index element={<ProjectIndex />} />
             <Route path="database/add" element={<AddDatabasePage />} />
             {/* Pages that work on the project's database: a project created
                 without one gets a notice instead (EXC-426). */}

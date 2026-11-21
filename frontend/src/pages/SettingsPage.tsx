@@ -285,7 +285,7 @@ interface DangerZoneProps {
 }
 
 // Deletion protection, deletion and its 7-day grace.
-function DangerZone({ project, protectedFromDeletion, onDelete, deleting, deleteError }: DangerZoneProps) {
+export function DangerZone({ project, protectedFromDeletion, onDelete, deleting, deleteError }: DangerZoneProps) {
   const setProtection = useSetDeletionProtection();
   const cancelDeletion = useCancelDeletion();
   return (

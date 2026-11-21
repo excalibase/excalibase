@@ -41,7 +41,7 @@ import {
 const DEFAULT_POLL_MS = 2000;
 const MASK = '••••••••';
 
-function CurrentDeploy({ deploy }: { readonly deploy?: Deploy }) {
+export function CurrentDeploy({ deploy }: { readonly deploy?: Deploy }) {
   if (!deploy) return null;
   const status = DEPLOY_STATUS[deploy.status];
   return (
@@ -72,7 +72,7 @@ function CurrentDeploy({ deploy }: { readonly deploy?: Deploy }) {
   );
 }
 
-function DiskStopBanner({ reason }: { readonly reason?: string }) {
+export function DiskStopBanner({ reason }: { readonly reason?: string }) {
   if (!reason) return null;
   return (
     <div
@@ -103,7 +103,7 @@ function internalAddresses(app: App): string {
   return (app.internal ? tcp : [`http://${app.name}`, ...tcp]).join(', ');
 }
 
-function Settings({ app }: { readonly app: App }) {
+export function Settings({ app }: { readonly app: App }) {
   const size = describeTier(app.tier);
   const rows: Array<[string, string]> = [
     ['Port', app.internal ? 'None (internal service, no public URL)' : String(app.port)],
@@ -130,7 +130,7 @@ function Settings({ app }: { readonly app: App }) {
   );
 }
 
-function Variables({ env }: { readonly env: EnvVar[] }) {
+export function Variables({ env }: { readonly env: EnvVar[] }) {
   if (env.length === 0) return <p className="text-sm text-text-tertiary">No variables.</p>;
   return (
     <ul className="bg-surface-card border border-border-primary rounded-lg divide-y divide-border-primary">
@@ -319,7 +319,7 @@ export function ContainerDetailPage({
 
 // A container the runtime restarted still reads ACTIVE; this says why it is
 // not running smoothly (EXC-651).
-function RestartsBanner({ app }: { readonly app: App }) {
+export function RestartsBanner({ app }: { readonly app: App }) {
   const restarts = restartSummary(app);
   if (!restarts) return null;
   return (

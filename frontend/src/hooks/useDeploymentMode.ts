@@ -113,6 +113,14 @@ export function useStudioV2(): { enabled: boolean; isLoading: boolean } {
   return useFeatureEnabled('studio_v2');
 }
 
+// The flag for a page that waits for it: loading only until the first answer or
+// failure. A failed /config is retried each time a page mounts, and that retry
+// must not put a spinner over a page whose layout already settled on "off".
+export function useStudioV2Settling(): { enabled: boolean; loading: boolean } {
+  const { data, isLoading, errorUpdateCount } = useStudioConfig();
+  return { enabled: data?.features?.studio_v2 === true, loading: isLoading && errorUpdateCount === 0 };
+}
+
 // Every feature the server reports on; empty until it answers.
 export function useFeatures(): Partial<Record<Feature, boolean>> {
   const { data } = useStudioConfig();
