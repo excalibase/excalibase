@@ -1,29 +1,92 @@
 name: Continuous Deployment
 
-# Build & push the provisioning + studio images after CI passes on main.
-# Trunk only: every commit gets main-<sha>. Release tags — 1.0.0, 1.0, 1,
-# latest — are applied by release.yml, which retags a digest a green nightly
-# installed. Building on a version tag would produce different bits from the
-# ones that were tested, so this never runs on tags.
+# Build & push the provisioning, studio and deno-runtime images after CI passes
+# on main or on a release branch.
+# Trunk: every main commit gets main-<sha>. Release branch release/1.7: every
+# commit gets release-1.7-<sha> (plus a floating release-1.7), so a patch is
+# built, scanned and AIO-tested as itself instead of borrowing a main image.
+# Neither ever gets 1.0.0, 1.0, 1 or latest: release.yml applies those by
+# retagging a digest a green AIO run installed (pass the release-1.7-<sha> tag as
+# its source_tag). Building on a version tag would produce different bits from
+# the ones that were tested, so this never runs on tags.
 on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches: [main]
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
 
 env:
   DOCKER_IMAGE: excalibase/provisioning
 
 jobs:
+  # workflow_run runs the workflow file from the default branch with the default
+  # branch checked out, so the commit and its tags come from the CI run that
+  # triggered this, never from github.ref. A pull request from a fork whose
+  # branch is called main reports head_branch=main too: only a push to this
+  # repository is built, since the job holds the registry credentials.
+  plan:
+    name: Plan image tags
+    runs-on: ubuntu-24.04
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository }}
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      prefix: ${{ steps.plan.outputs.prefix }}
+      short: ${{ steps.plan.outputs.short }}
+      floating: ${{ steps.plan.outputs.floating }}
+    steps:
+      - name: Work out the commit and its tags
+        id: plan
+        env:
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::head_sha is not a commit"; exit 1; }
+          short=$(printf '%s' "$SHA" | cut -c1-7)
+          if [ "$BRANCH" = main ]; then
+            prefix=main
+          elif printf '%s' "$BRANCH" | grep -Eq '^release/(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            prefix="release-${BRANCH#release/}"
+          else
+            echo "::error::$BRANCH is not main or release/<major>.<minor>; nothing to publish"
+            exit 1
+          fi
+          # The floating tag (main, release-1.7) moves only while this commit is
+          # still the branch tip, so an older run that finishes late cannot move
+          # it backwards. The <prefix>-<sha7> tag is always published.
+          # If GitHub cannot say what the tip is, the image is still published
+          # under its own tag and only the floating tag is left where it was.
+          floating=false
+          tip=$(gh api "repos/$REPO/git/ref/heads/$BRANCH" --jq .object.sha) || tip=""
+          if ! printf '%s' "$tip" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::warning::could not read the tip of $BRANCH; $prefix is not moved"
+          elif [ "$tip" = "$SHA" ]; then
+            floating=true
+          else
+            echo "::notice::$SHA is no longer the tip of $BRANCH; $prefix is not moved"
+          fi
+          {
+            echo "sha=$SHA"
+            echo "prefix=$prefix"
+            echo "short=$short"
+            echo "floating=$floating"
+          } >> "$GITHUB_OUTPUT"
+
   docker:
     name: Build & Push Docker Image
     runs-on: ubuntu-24.04
-    # On workflow_run, only when CI succeeded. On tag push, always.
-    if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
+    needs: plan
 
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -34,14 +97,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
-        with:
-          images: ${{ env.DOCKER_IMAGE }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-
+      # A release-<x.y>-<sha7> tag is written once (see scripts/guard-release-tag.sh).
+      - name: Refuse to overwrite an existing release tag
+        env:
+          PREFIX: ${{ needs.plan.outputs.prefix }}
+          SHORT: ${{ needs.plan.outputs.short }}
+        run: bash scripts/guard-release-tag.sh excalibase/provisioning "$PREFIX-$SHORT"
 
       # Built into the local daemon and scanned before anything is pushed
       # (EXC-642); the push below is served from this build's cache.
@@ -52,14 +113,14 @@ jobs:
           file: server-go/Dockerfile
           load: true
           push: false
-          tags: provisioning-candidate:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: provisioning-candidate:${{ needs.plan.outputs.sha }}
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-provisioning
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-provisioning
 
       - name: Trivy
         uses: ./.github/actions/trivy
         with:
-          image: provisioning-candidate:${{ github.sha }}
+          image: provisioning-candidate:${{ needs.plan.outputs.sha }}
 
       - name: Build and push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -68,20 +129,25 @@ jobs:
           context: server-go
           file: server-go/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: |
+            ${{ needs.plan.outputs.floating == 'true' && format('{0}:{1}', 'excalibase/provisioning', needs.plan.outputs.prefix) || '' }}
+            excalibase/provisioning:${{ needs.plan.outputs.prefix }}-${{ needs.plan.outputs.short }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.plan.outputs.sha }}
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-provisioning
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-provisioning
 
   studio:
     name: Build & Push Studio Image
     runs-on: ubuntu-24.04
-    # Same gate as provisioning: after CI on main, or on any version tag.
-    if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
+    needs: plan
 
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -92,14 +158,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
-        with:
-          images: excalibase/studio
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-
+      # A release-<x.y>-<sha7> tag is written once (see scripts/guard-release-tag.sh).
+      - name: Refuse to overwrite an existing release tag
+        env:
+          PREFIX: ${{ needs.plan.outputs.prefix }}
+          SHORT: ${{ needs.plan.outputs.short }}
+        run: bash scripts/guard-release-tag.sh excalibase/studio "$PREFIX-$SHORT"
 
       # Built into the local daemon and scanned before anything is pushed
       # (EXC-642); the push below is served from this build's cache.
@@ -110,14 +174,14 @@ jobs:
           file: frontend/Dockerfile
           load: true
           push: false
-          tags: studio-candidate:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: studio-candidate:${{ needs.plan.outputs.sha }}
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-studio
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-studio
 
       - name: Trivy
         uses: ./.github/actions/trivy
         with:
-          image: studio-candidate:${{ github.sha }}
+          image: studio-candidate:${{ needs.plan.outputs.sha }}
 
       - name: Build and push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -126,20 +190,25 @@ jobs:
           context: frontend
           file: frontend/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: |
+            ${{ needs.plan.outputs.floating == 'true' && format('{0}:{1}', 'excalibase/studio', needs.plan.outputs.prefix) || '' }}
+            excalibase/studio:${{ needs.plan.outputs.prefix }}-${{ needs.plan.outputs.short }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.plan.outputs.sha }}
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-studio
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-studio
 
   deno-runtime:
     name: Build & Push Deno Runtime Image
     runs-on: ubuntu-24.04
-    # Same gate as provisioning: after CI on main, or on any version tag.
-    if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
+    needs: plan
 
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -150,14 +219,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
-        with:
-          images: excalibase/deno-runtime
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-
+      # A release-<x.y>-<sha7> tag is written once (see scripts/guard-release-tag.sh).
+      - name: Refuse to overwrite an existing release tag
+        env:
+          PREFIX: ${{ needs.plan.outputs.prefix }}
+          SHORT: ${{ needs.plan.outputs.short }}
+        run: bash scripts/guard-release-tag.sh excalibase/deno-runtime "$PREFIX-$SHORT"
 
       # Built into the local daemon and scanned before anything is pushed
       # (EXC-642); the push below is served from this build's cache.
@@ -168,14 +235,14 @@ jobs:
           file: deno-server/Dockerfile
           load: true
           push: false
-          tags: deno-runtime-candidate:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: deno-runtime-candidate:${{ needs.plan.outputs.sha }}
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-deno-runtime
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-deno-runtime
 
       - name: Trivy
         uses: ./.github/actions/trivy
         with:
-          image: deno-runtime-candidate:${{ github.sha }}
+          image: deno-runtime-candidate:${{ needs.plan.outputs.sha }}
 
       - name: Build and push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -186,7 +253,11 @@ jobs:
           context: deno-server
           file: deno-server/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: |
+            ${{ needs.plan.outputs.floating == 'true' && format('{0}:{1}', 'excalibase/deno-runtime', needs.plan.outputs.prefix) || '' }}
+            excalibase/deno-runtime:${{ needs.plan.outputs.prefix }}-${{ needs.plan.outputs.short }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.plan.outputs.sha }}
+          cache-from: type=gha,scope=${{ needs.plan.outputs.prefix }}-deno-runtime
+          cache-to: type=gha,mode=max,scope=${{ needs.plan.outputs.prefix }}-deno-runtime
