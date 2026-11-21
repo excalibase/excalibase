@@ -74,6 +74,11 @@ function Deploys({ projectId, app, deploys }: DeploysProps) {
   const { canDevelop } = useProjectRole(projectId);
   return (
     <div className="space-y-6">
+      {redeploy.error != null && (
+        <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          {apiErrorMessage(redeploy.error, 'The redeploy could not be started')}
+        </div>
+      )}
       <AppGitBuilds projectId={projectId} appId={app.id} canDevelop={canDevelop} />
       <section className="space-y-2">
         <h3 className="text-sm font-semibold text-text-primary">Deployments</h3>

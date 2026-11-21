@@ -1,3 +1,4 @@
+import { useEffect, useRef, type KeyboardEvent } from 'react';
 import { X } from 'lucide-react';
 import { ToneBadge } from '../../containers/ContainerBits';
 import type { CardStatus } from './cardStatus';
@@ -21,8 +22,21 @@ interface PanelFrameProps {
 // The side panel's header (name, status, close) and its tabs. A service with
 // no tabs shows its one view under the header.
 export function PanelFrame({ title, subtitle, status, onClose, tabsLabel = title, tabs = [], tab = '', onTab, idPrefix, children }: PanelFrameProps) {
+  const panel = useRef<HTMLElement>(null);
+  // Opening a panel moves focus into it, and brings it into view when it is
+  // stacked under the cards on a phone.
+  useEffect(() => {
+    panel.current?.focus({ preventScroll: true });
+    panel.current?.scrollIntoView?.({ block: 'nearest' });
+  }, []);
+  // Escape closes the panel only when it came from inside it: not from a dialog
+  // opened over it, which handles its own.
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    if (event.target instanceof Node && event.currentTarget.contains(event.target)) onClose();
+  };
   return (
-    <section aria-label={`${title} panel`} className="min-w-0 rounded-xl border border-border-primary bg-surface-card p-5" data-testid="service-panel">
+    <section ref={panel} tabIndex={-1} onKeyDown={onKeyDown} aria-label={`${title} panel`} className="min-w-0 rounded-xl outline-none border border-border-primary bg-surface-card p-5" data-testid="service-panel">
       <header className="mb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="truncate text-lg font-semibold text-text-primary">{title}</h2>

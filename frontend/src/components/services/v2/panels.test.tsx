@@ -70,7 +70,16 @@ describe('database panel', () => {
   test('pausing asks the server to pause this project', async () => {
     renderPanel({ kind: 'database' }, 'overview');
     await userEvent.click(await screen.findByRole('button', { name: 'Pause database' }));
+    expect(api.post).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByRole('button', { name: 'Yes, pause' }));
     expect(api.post).toHaveBeenCalledWith('/provision/p1/pause', { reason: 'manual' }, expect.anything());
+  });
+
+  test('pause can be cancelled without a request', async () => {
+    renderPanel({ kind: 'database' }, 'overview');
+    await userEvent.click(await screen.findByRole('button', { name: 'Pause database' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    expect(api.post).not.toHaveBeenCalled();
   });
 
   test('a viewer sees the pause control disabled and is told to ask an admin', async () => {
@@ -116,7 +125,31 @@ describe('database panel', () => {
   });
 });
 
+describe('panel frame', () => {
+  test('moves focus to the panel when it opens and closes on Escape', async () => {
+    const { onClose } = renderPanel({ kind: 'database' }, 'overview');
+    const panel = screen.getByRole('region', { name: 'Database panel' });
+    expect(panel).toHaveFocus();
+    await userEvent.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('app panel', () => {
+  test('a failed redeploy shows its error in the Deploys tab', async () => {
+    vi.mocked(api.get).mockImplementation(((url: string) => (url.includes('/apps/api/deploys')
+      ? Promise.resolve({ data: [
+        { id: 'd2', appId: 'api', revision: 2, image: 'x', status: 'succeeded', createdBy: '1', createdAt: '2026-10-02T00:00:00Z' },
+        { id: 'd1', appId: 'api', revision: 1, image: 'x', status: 'succeeded', createdBy: '1', createdAt: '2026-10-01T00:00:00Z' },
+      ] })
+      : route(url))) as never);
+    vi.mocked(api.post).mockRejectedValue(Object.assign(new Error('x'), { response: { status: 409, data: { error: 'Rollout already running' } } }));
+    renderPanel({ kind: 'app', id: 'api' }, 'deploys');
+    await userEvent.click(await screen.findByTestId('redeploy-d1'));
+    await userEvent.click(await screen.findByTestId('redeploy-confirm-d1'));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/redeploy|rollout already running/i);
+  });
+
   test.each(tabsFor('app').map((t) => t.key))('the %s tab renders', async (tab) => {
     renderPanel({ kind: 'app', id: 'api' }, tab);
     expect(await screen.findByRole('tab', { name: new RegExp(tab, 'i'), selected: true })).toBeInTheDocument();
@@ -168,16 +201,10 @@ describe('site panel', () => {
   });
 });
 
-describe('storage and functions panels', () => {
+describe('storage panel', () => {
   test('a bucket opens the storage view with no tabs', async () => {
     renderPanel({ kind: 'storage', id: 'avatars' }, '');
     expect(await screen.findByRole('heading', { name: 'avatars' })).toBeInTheDocument();
-    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-  });
-
-  test('functions open the functions view with no tabs', async () => {
-    renderPanel({ kind: 'functions' }, '');
-    expect(await screen.findByRole('heading', { name: 'Functions' })).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
   });
 

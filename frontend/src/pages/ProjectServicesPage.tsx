@@ -4,7 +4,7 @@ import { apiErrorMessage } from '../api/apps';
 import { AddServiceMenu, EmptyServices } from '../components/services/v2/AddService';
 import { ServicePanel } from '../components/services/v2/ServicePanel';
 import { ServiceList, ServicesLoading } from '../components/services/v2/ServiceList';
-import { panelSearch, parsePanelState, type ServiceRef } from '../components/services/v2/panelState';
+import { panelSearch, parsePanelState, serviceKey, type ServiceRef } from '../components/services/v2/panelState';
 import { hasService, isEmptyProject, useProjectServices } from '../components/services/v2/useProjectServices';
 
 // The project's Services tab (studio_v2): a card per service on the left, the
@@ -28,6 +28,8 @@ export function ProjectServicesPage() {
     return <p role="alert" className="py-16 text-center text-sm text-red-400">{apiErrorMessage(services.error, 'Could not load the project')}</p>;
   }
   if (services.loading && !services.project) return <ServicesLoading />;
+
+  const failed = services.error != null;
   if (isEmptyProject(services)) return <EmptyServices projectId={projectId} services={services} />;
 
   return (
@@ -39,12 +41,13 @@ export function ProjectServicesPage() {
         </div>
         <AddServiceMenu projectId={projectId} services={services} />
       </div>
-      {services.error != null && <p role="alert" className="text-sm text-red-400">{apiErrorMessage(services.error, 'Some services could not be loaded')}</p>}
+      {failed && <p role="alert" className="text-sm text-red-400">{apiErrorMessage(services.error, 'Some services could not be loaded')}</p>}
       {gone && <output className="block rounded-lg border border-border-primary bg-surface-card px-4 py-3 text-sm text-text-secondary">That service is not in this project, so there is nothing to open.</output>}
       <div className="grid gap-6 lg:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]">
         <ServiceList projectId={projectId} services={services} selected={open} to={(next) => to(next)} />
         {open && (
           <ServicePanel
+            key={serviceKey(open)}
             projectId={projectId}
             service={open}
             tab={tab}

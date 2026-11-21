@@ -3,7 +3,6 @@ import { useInstance } from '../../../hooks/useProvisioning';
 import { useApps, type App } from '../../../api/apps';
 import { useSites, type Site } from '../../../api/sites';
 import { useBuckets, type Bucket } from '../../../hooks/useStorage';
-import { useEdgeFunctions } from '../../../hooks/useEdgeFunctions';
 import type { DatabaseInstance } from '../../../types';
 import type { ServiceRef } from './panelState';
 
@@ -15,7 +14,6 @@ export interface ProjectServices {
   readonly apps: readonly App[];
   readonly sites: readonly Site[];
   readonly buckets: readonly Bucket[];
-  readonly functionCount: number;
   readonly appHosting: boolean;
   readonly sitesOn: boolean;
   readonly loading: boolean;
@@ -23,8 +21,9 @@ export interface ProjectServices {
 }
 
 // Everything a project holds, from the same hooks the single-service pages use.
-// A service the install does not offer is never asked for. Storage and
-// functions are optional: a project that cannot read them simply has none to show.
+// A service the install does not offer is never asked for. Edge Functions are
+// not part of this view, as in the navigation. A request that failed is reported
+// in `error`, never read as "none".
 export function useProjectServices(projectId: string): ProjectServices {
   const { enabled: appHosting, isLoading: hostingLoading } = useAppHostingEnabled();
   const { enabled: sitesOn, isLoading: sitesConfigLoading } = useSitesEnabled();
@@ -32,7 +31,6 @@ export function useProjectServices(projectId: string): ProjectServices {
   const apps = useApps(projectId, appHosting);
   const sites = useSites(sitesOn ? projectId : '');
   const buckets = useBuckets(projectId);
-  const functions = useEdgeFunctions(projectId);
   const project = instance.data;
 
   return {
@@ -41,11 +39,10 @@ export function useProjectServices(projectId: string): ProjectServices {
     apps: appHosting ? (apps.data ?? []) : [],
     sites: sitesOn ? (sites.data ?? []) : [],
     buckets: Array.isArray(buckets.data) ? buckets.data : [],
-    functionCount: Array.isArray(functions.data) ? functions.data.length : 0,
     appHosting,
     sitesOn,
-    loading: hostingLoading || sitesConfigLoading || instance.isLoading || apps.isLoading || sites.isLoading || buckets.isLoading || functions.isLoading,
-    error: instance.error ?? apps.error ?? sites.error,
+    loading: hostingLoading || sitesConfigLoading || instance.isLoading || apps.isLoading || sites.isLoading || buckets.isLoading,
+    error: instance.error ?? apps.error ?? sites.error ?? buckets.error,
   };
 }
 
@@ -61,15 +58,15 @@ export function hasService(services: ProjectServices, ref: ServiceRef): boolean 
     case 'storage':
       return services.buckets.some((bucket) => bucket.name === ref.id);
     case 'functions':
-      return services.functionCount > 0;
+      return false;
   }
 }
 
 export const isEmptyProject = (services: ProjectServices): boolean =>
   !services.loading &&
+  services.error == null &&
   services.project !== undefined &&
   services.database === undefined &&
   services.apps.length === 0 &&
   services.sites.length === 0 &&
-  services.buckets.length === 0 &&
-  services.functionCount === 0;
+  services.buckets.length === 0;

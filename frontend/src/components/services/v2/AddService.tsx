@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Box, Database, FolderOpen, Globe, Zap, type LucideIcon } from 'lucide-react';
+import { Box, Database, FolderOpen, Globe, type LucideIcon } from 'lucide-react';
 import { secondaryButton } from '../../containers/ContainerBits';
 import type { ProjectServices } from './useProjectServices';
 
@@ -21,10 +21,7 @@ export function addServiceOptions(projectId: string, services: ProjectServices):
   }
   if (services.appHosting) options.push({ label: 'App', detail: 'Run a container image on a public URL', to: `${base}/containers/new`, icon: Box });
   if (services.sitesOn) options.push({ label: 'Site', detail: 'Host a built frontend', to: `${base}/sites/new`, icon: Globe });
-  options.push(
-    { label: 'Function', detail: 'Server-side code that runs on request', to: `${base}/edge-functions`, icon: Zap },
-    { label: 'Storage', detail: 'Buckets for files', to: `${base}/storage`, icon: FolderOpen },
-  );
+  options.push({ label: 'Storage', detail: 'Buckets for files', to: `${base}/storage`, icon: FolderOpen });
   return options;
 }
 
@@ -75,7 +72,7 @@ export function EmptyServices({ projectId, services }: { readonly projectId: str
     <section data-testid="services-empty" className="mx-auto max-w-2xl space-y-5 py-10 text-center">
       <h2 className="text-lg font-semibold text-text-primary">Add your first service</h2>
       <p className="text-sm text-text-secondary">
-        A project holds the services that belong together: a database, apps, sites, functions and storage. Start with whichever you need now.
+        A project holds the services that belong together: a database, apps, sites and storage. Start with whichever you need now.
       </p>
       <ul className="grid gap-3 text-left sm:grid-cols-2">
         {addServiceOptions(projectId, services).map(({ label, detail, to, icon: Icon }) => (

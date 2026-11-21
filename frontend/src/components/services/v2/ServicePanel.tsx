@@ -8,7 +8,6 @@ import type { ServiceRef } from './panelState';
 import { SitePanel } from './SitePanel';
 
 const StoragePage = lazy(() => import('../../../pages/StoragePage').then((m) => ({ default: m.StoragePage })));
-const EdgeFunctionsPage = lazy(() => import('../../../pages/EdgeFunctionsPage').then((m) => ({ default: m.EdgeFunctionsPage })));
 
 interface ServicePanelProps {
   readonly projectId: string;
@@ -39,12 +38,6 @@ export function ServicePanel({ projectId, service, tab, database, onTab, onClose
         </PanelFrame>
       );
     case 'functions':
-      return (
-        <PanelFrame title="Functions" onClose={onClose} idPrefix="functions">
-          <Suspense fallback={<Spinner />}>
-            <EdgeFunctionsPage />
-          </Suspense>
-        </PanelFrame>
-      );
+      return null;
   }
 }

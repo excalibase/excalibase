@@ -1,5 +1,5 @@
 import { Link, type To } from 'react-router-dom';
-import { Box, Database, FolderOpen, Globe, Loader2, Zap, type LucideIcon } from 'lucide-react';
+import { Box, Database, FolderOpen, Globe, Loader2, type LucideIcon } from 'lucide-react';
 import { useDeploys, type App } from '../../../api/apps';
 import { useSiteDeploys, type Site } from '../../../api/sites';
 import { useTiers } from '../../../api/tiers';
@@ -100,16 +100,6 @@ export function ServiceList({ projectId, services, selected, to }: ServiceListPr
       {services.sites.map((site) => (
         <SiteCard key={site.id} site={site} projectId={projectId} selected={isSelected({ kind: 'site', id: site.id })} to={to} />
       ))}
-      {services.functionCount > 0 && (
-        <ServiceCard
-          icon={Zap}
-          name="Functions"
-          detail={`${services.functionCount} ${services.functionCount === 1 ? 'function' : 'functions'}`}
-          service={{ kind: 'functions' }}
-          selected={isSelected({ kind: 'functions' })}
-          to={to}
-        />
-      )}
       {services.buckets.map((bucket: Bucket) => (
         <ServiceCard
           key={bucket.id}

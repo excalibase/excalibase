@@ -73,13 +73,19 @@ function Deploys({ projectId, site, deploys }: SiteProps & { readonly deploys: r
   );
 }
 
+function siteVariablesNote(kind: Site['kind'], serverSitesOn: boolean): string {
+  if (kind !== 'server') return 'A static site has no variables: it serves the files you deploy.';
+  if (!serverSitesOn) return 'Server sites are turned off on this install, so their variables cannot be changed here.';
+  return 'Only a developer or an admin can change this site’s variables.';
+}
+
 function Variables({ projectId, site }: SiteProps) {
   const { enabled: serverSitesOn } = useFeatureEnabled('sitesserver');
   const { canDevelop } = useProjectRole(projectId);
   if (site.kind === 'server' && serverSitesOn && canDevelop) return <SiteServerEnv projectId={projectId} siteId={site.id} />;
   return (
     <p className="text-sm text-text-secondary">
-      {site.kind === 'server' ? 'Only a developer or an admin can change this site’s variables.' : 'A static site has no variables: it serves the files you deploy.'}
+      {siteVariablesNote(site.kind, serverSitesOn)}
     </p>
   );
 }

@@ -110,7 +110,9 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
   const busy = pause.isPending || resume.isPending;
   const failure = pause.error ?? resume.error;
   const settled = paused || project.status === 'ACTIVE';
-  const run = () => (paused ? resume.mutate(project.projectId) : pause.mutate({ projectId: project.projectId }));
+  const [asking, setAsking] = useState(false);
+  const run = () => (paused ? resume.mutate(project.projectId) : setAsking(true));
+  const confirmPause = () => { setAsking(false); pause.mutate({ projectId: project.projectId }); };
   const idleIcon = paused ? PlayCircle : PauseCircle;
   const Icon = busy ? Loader2 : idleIcon;
   return (
@@ -137,6 +139,14 @@ function PauseCard({ project }: { readonly project: DatabaseInstance }) {
       >
         <Icon className={busy ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} aria-hidden="true" /> {paused ? 'Resume database' : 'Pause database'}
       </button>
+      <ConfirmModal
+        open={asking}
+        onClose={() => setAsking(false)}
+        onConfirm={confirmPause}
+        title="Pause this database?"
+        message="Connections and the API stop until you resume. A backup is taken first and your data is kept."
+        confirmLabel="Yes, pause"
+      />
       {!canAdmin && !isLoading && <p className="text-xs text-text-tertiary">Only an admin of this organization can do this. Ask an admin.</p>}
       {autoPauseDays > 0 && (
         <p className="text-xs text-text-tertiary">On this plan a database with no activity for {autoPauseDays} days is paused automatically.</p>
