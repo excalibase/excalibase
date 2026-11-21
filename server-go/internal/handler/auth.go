@@ -20,6 +20,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// msgInternalError is the only detail a caller gets for an unexpected failure.
+const msgInternalError = "internal error"
+
 const errNotAuthenticated = "not authenticated"
 
 type AuthHandler struct {
@@ -150,7 +153,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// in CreateFirstAdmin decides who actually becomes admin (EXC-451).
 	allUsers, err := h.userStore.FindAllUsers(r.Context())
 	if err != nil {
-		httpError(w, "internal error", http.StatusInternalServerError)
+		httpError(w, msgInternalError, http.StatusInternalServerError)
 		return
 	}
 	isFirstUser := len(domain.HumanUsers(allUsers)) == 0
@@ -401,7 +404,7 @@ func writePasswordBusy(w http.ResponseWriter, err error) {
 		httpError(w, "server is busy; try again shortly", http.StatusServiceUnavailable)
 		return
 	}
-	httpError(w, "internal error", http.StatusInternalServerError)
+	httpError(w, msgInternalError, http.StatusInternalServerError)
 }
 
 const (
@@ -604,12 +607,20 @@ func writeEmailNotVerified(w http.ResponseWriter) {
 }
 
 // Logout revokes the caller's current PAT and clears the session cookie.
-// Returns 200 even if no token is present so client logout is idempotent.
+// Returns 200 even if no token is present so client logout is idempotent. If
+// the token cannot be deleted it is still alive, so the answer is a 500 (the
+// cookie is cleared either way).
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	var revokeErr error
 	if t := auth.GetToken(r.Context()); t != nil {
-		_ = h.tokenStore.DeleteToken(r.Context(), t.TokenHash)
+		revokeErr = h.tokenStore.DeleteToken(r.Context(), t.TokenHash)
 	}
 	clearSessionCookie(w)
+	if revokeErr != nil {
+		log.Printf("ERROR: logout could not revoke the session token: %v", revokeErr)
+		httpError(w, msgInternalError, http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
