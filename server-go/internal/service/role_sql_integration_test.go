@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/testutil/pgready"
 	"io"
 	"net/url"
@@ -214,4 +215,31 @@ func TestProjectRoleSQL_ResetAdminWithHostileName(t *testing.T) {
 
 	pg.assertNoInjectedEffects(t)
 	pg.assertLogin(t, "owner$$x", password)
+}
+
+// EXC-765: the runtime login's password is applied as a verifier, so a hostile
+// one is stored verbatim and runs nothing, at creation and at a reset.
+func TestProjectRoleSQL_RuntimeLoginTakesHostilePasswordsVerbatim(t *testing.T) {
+	pg := startRolePostgres(t)
+	first := hostilePasswords["dollar quote breakout"]
+	pg.psql(t, `CREATE ROLE shop_owner LOGIN PASSWORD 'old'`)
+	pg.psql(t, BuildProjectRoleSQL(first[0], first[1], first[2], "app", "cdc_watcher_pub"))
+	pg.psql(t, pgroles.CustomerRoleSQL("shop_owner")+pgroles.OwnerAccessSQL("shop_owner"))
+
+	for name, passwords := range hostilePasswords {
+		t.Run(name, func(t *testing.T) {
+			verifier, err := newScramVerifier(passwords[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The role is created once; a later run sets the password the platform filed.
+			pg.psql(t, pgroles.RuntimeRoleSQL("shop_owner", verifier)+
+				BuildProjectRoleResetSQL(mustRoleVerifiers(t, []RolePassword{{Role: roleRuntime, Password: passwords[0]}})))
+			pg.assertNoInjectedEffects(t)
+			pg.assertLogin(t, roleRuntime, passwords[0])
+			pg.psql(t, BuildProjectRoleResetSQL(mustRoleVerifiers(t, []RolePassword{{Role: roleRuntime, Password: passwords[1]}})))
+			pg.assertNoInjectedEffects(t)
+			pg.assertLogin(t, roleRuntime, passwords[1])
+		})
+	}
 }

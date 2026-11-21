@@ -76,7 +76,7 @@ type credentialRotationTarget struct {
 // the project and returns the owner credential.
 //
 // Roles are rotated one at a time, in a fixed order: auth_admin, then
-// excalibase_app, then excalibase_scheduler, then excalibase_reader, then the owner. The owner is last because it is the value
+// excalibase_app, then excalibase_scheduler, then excalibase_reader, then excalibase_runtime, then the owner. The owner is last because it is the value
 // the caller is handed — a caller is only told a rotation succeeded once every
 // role behind it has been replaced and proved. cdc_watcher is deliberately not rotated: its password is baked
 // into the deployed watcher workload's configuration, so changing it without
@@ -117,27 +117,7 @@ func (s *ProvisioningService) RotateCredentialsTo(ctx context.Context, projectID
 	if err != nil {
 		return nil, err
 	}
-	var rotated []string
-	var rotateErr error
-	for _, target := range rotationTargets(inst, filed) {
-		target.serverCA = serverCA
-		if target.role == roleAdmin {
-			target.password = ownerPassword
-		}
-		authenticatesByCertificate, err := s.authenticatesByCertificate(projectID, target.role)
-		if err != nil {
-			rotateErr = err
-			break
-		}
-		if authenticatesByCertificate {
-			continue
-		}
-		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
-			rotateErr = fmt.Errorf("rotate %s credential: %w", target.role, err)
-			break
-		}
-		rotated = append(rotated, target.username)
-	}
+	rotated, rotateErr := s.rotateTargets(ctx, inst, filed, serverCA, ownerPassword)
 	// Only once every password has changed, so a copy that cannot end its
 	// sessions never holds a role back on its old password; a later role
 	// failing still ends the sessions of those already rotated.
@@ -145,6 +125,32 @@ func (s *ProvisioningService) RotateCredentialsTo(ctx context.Context, projectID
 		return nil, err
 	}
 	return s.rotationAnswer(ctx, projectID)
+}
+
+// rotateTargets replaces each role's password in order and stops at the first
+// failure, returning the names of the roles it did change.
+func (s *ProvisioningService) rotateTargets(ctx context.Context, inst *domain.DatabaseInstance, filed map[string]bool,
+	serverCA, ownerPassword string) ([]string, error) {
+
+	var rotated []string
+	for _, target := range rotationTargets(inst, filed) {
+		target.serverCA = serverCA
+		if target.role == roleAdmin {
+			target.password = ownerPassword
+		}
+		authenticatesByCertificate, err := s.authenticatesByCertificate(inst.ProjectID, target.role)
+		if err != nil {
+			return rotated, err
+		}
+		if authenticatesByCertificate {
+			continue
+		}
+		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
+			return rotated, fmt.Errorf("rotate %s credential: %w", target.role, err)
+		}
+		rotated = append(rotated, target.username)
+	}
+	return rotated, nil
 }
 
 // rotationAnswer is what the caller of a rotation is told: the credentials,
@@ -194,7 +200,7 @@ func (s *ProvisioningService) authenticatesByCertificate(projectID, role string)
 // does not have would fail the whole rotation.
 func rotationTargets(inst *domain.DatabaseInstance, filed map[string]bool) []credentialRotationTarget {
 	targets := make([]credentialRotationTarget, 0, 4)
-	for _, role := range []string{roleAuthAdmin, roleApp, roleScheduler, roleReader} {
+	for _, role := range []string{roleAuthAdmin, roleApp, roleScheduler, roleReader, roleRuntime} {
 		if filed[vaultCredentialPath(inst.ProjectID, role)] {
 			targets = append(targets, credentialRotationTarget{role: role, username: role})
 		}
@@ -314,8 +320,14 @@ func (s *ProvisioningService) recordedCredentialStillOpensTheDatabase(ctx contex
 func (s *ProvisioningService) promoteCredential(ctx context.Context, inst *domain.DatabaseInstance,
 	target credentialRotationTarget, password, pendingPath string) error {
 
-	if err := s.vault.Put(vaultCredentialPath(inst.ProjectID, target.role),
-		roleCredentialRecord(inst, target.username, password, target.serverCA)); err != nil {
+	record := roleCredentialRecord(inst, target.username, password, target.serverCA)
+	// A rotation does not set the database's grants, so it keeps what the record said of them.
+	if current, err := s.vault.Get(vaultCredentialPath(inst.ProjectID, target.role)); err == nil {
+		if grants, ok := current[mysqlGrantsKey]; ok {
+			record[mysqlGrantsKey] = grants
+		}
+	}
+	if err := s.vault.Put(vaultCredentialPath(inst.ProjectID, target.role), record); err != nil {
 		return fmt.Errorf("promote credential: %w", err)
 	}
 	if err := s.vault.Delete(pendingPath); err != nil {

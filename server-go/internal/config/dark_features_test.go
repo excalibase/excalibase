@@ -213,6 +213,7 @@ func TestLoad_WALGuardsAreOnUnlessSwitchedOff(t *testing.T) {
 	for feature, env := range map[features.Feature]string{
 		features.WALArchiveAlert: "FEATURE_WALARCHIVEALERT",
 		features.FreeWALUpload:   "FEATURE_FREEWALUPLOAD",
+		features.AppRuntimeLogin: "FEATURE_APPRUNTIMELOGIN",
 	} {
 		t.Setenv(env, "")
 		if !Load().Features().Enabled(context.Background(), feature) {
