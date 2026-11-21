@@ -12,6 +12,7 @@ import {
 } from '../../api/siteDomains';
 import { useSiteCustomDomainsEnabled } from '../../hooks/useDeploymentMode';
 import { ConfirmModal } from '../ui/ConfirmModal';
+import { BareDomainWarning, SubdomainOnlyNotice } from '../domains/DomainHints';
 import { inputClass } from '../containers/EnvVarEditor';
 import { Spinner, ToneBadge, primaryButton, secondaryButton } from '../containers/ContainerBits';
 import type { Tone } from '../containers/appCopy';
@@ -146,6 +147,7 @@ function AddDomain({ projectId, siteId }: { readonly projectId: string; readonly
   };
   return (
     <form onSubmit={submit} className="space-y-2">
+      <SubdomainOnlyNotice testId="site-domain-subdomain-only" />
       <div className="flex gap-2">
         <input
           aria-label="Domain"
@@ -176,9 +178,7 @@ function AddDomain({ projectId, siteId }: { readonly projectId: string; readonly
           <option value="txt">TXT: issue the certificate before moving DNS</option>
         </select>
       </label>
-      <p className="text-xs text-text-tertiary">
-        A subdomain such as www.example.com, not a bare domain like example.com.
-      </p>
+      <BareDomainWarning hostname={hostname} onUse={setHostname} testId="site-domain-bare-warning" />
       {add.error && (
         <div role="alert" className="text-sm text-red-400">
           {apiErrorMessage(add.error, 'The domain could not be added')}

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { BareDomainWarning, SubdomainOnlyNotice } from '../domains/DomainHints';
 import { Globe } from 'lucide-react';
 import { apiErrorMessage } from '../../api/apps';
 import {
@@ -140,6 +141,7 @@ export function AppDomains({
           ))}
         </ul>
       )}
+      <SubdomainOnlyNotice testId="domain-subdomain-only" />
       <form onSubmit={submit} className="flex gap-2">
         <input
           aria-label="Domain"
@@ -158,9 +160,7 @@ export function AppDomains({
           Add
         </button>
       </form>
-      <p className="text-xs text-text-tertiary">
-        A subdomain such as shop.example.com, not a bare domain like example.com.
-      </p>
+      <BareDomainWarning hostname={hostname} onUse={setHostname} testId="domain-bare-warning" />
       {error && (
         <div role="alert" className="text-sm text-red-400">
           {apiErrorMessage(error, 'The domain could not be changed')}

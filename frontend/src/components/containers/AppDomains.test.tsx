@@ -68,9 +68,21 @@ describe('AppDomains', () => {
       'placeholder',
       'shop.example.com',
     );
-    expect(
-      screen.getByText('A subdomain such as shop.example.com, not a bare domain like example.com.'),
-    ).toBeInTheDocument();
+    const notice = screen.getByTestId('domain-subdomain-only');
+    expect(notice).toHaveTextContent(/only a subdomain/i);
+    expect(notice).toHaveTextContent(/bare domain/i);
+  });
+
+  test('a bare domain being typed is warned about, with its www form offered', async () => {
+    const user = renderDomains([]);
+    const input = await screen.findByTestId('domain-input');
+    await user.type(input, 'example.co.uk');
+    expect(await screen.findByTestId('domain-bare-warning')).toHaveTextContent(
+      /example\.co\.uk is a bare domain/i,
+    );
+    await user.click(screen.getByRole('button', { name: 'Use www.example.co.uk' }));
+    expect(input).toHaveValue('www.example.co.uk');
+    expect(screen.queryByTestId('domain-bare-warning')).not.toBeInTheDocument();
   });
 
   test('adding and verifying a domain', async () => {
