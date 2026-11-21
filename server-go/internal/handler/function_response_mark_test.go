@@ -17,7 +17,7 @@ func TestWriteRuntimeResponseMarksTheFunctionsAnswer(t *testing.T) {
 		Status:  http.StatusUnauthorized,
 		Headers: map[string]string{custommw.FunctionResponseHeader: "0"},
 		Body:    "nope",
-	})
+	}, true)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status %d, want the function's 401", rec.Code)
 	}

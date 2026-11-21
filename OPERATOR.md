@@ -1125,6 +1125,10 @@ Customer apps and functions connect with `excalibase_runtime`, not the project o
 - **Existing projects.** The start-up role reconcile (and every pass after it) creates and files the login for each running project without one. Nothing is redeployed: an app already running keeps the environment it was deployed with, owner login included, until its next deploy, which picks up the runtime login; a function picks it up on its next deploy. Until a project has the login, a deploy of an app that references the database is refused with "still being created, deploy again in a few minutes", and a function gets no `EXCALIBASE_DB_URL`; neither falls back to the owner's login. To cut an old app off, redeploy it and then rotate the credentials, which also ends its old sessions.
 - **Off.** Apps and functions get the owner's login as before, and a runtime login a restored copy brought is locked.
 
+## 6.5d. Function pages served as plain text (EXC-810)
+
+A function answer typed `text/html`, `application/xhtml+xml` or `image/svg+xml` is served as `text/plain` on the shared API origin (**on unless switched off**, `FEATURE_FUNCTIONHTMLGUARD=false`, on Kubernetes and on a single host), so a fake login page cannot be served from the platform's own host. Functions have no custom domain, so there is no pass-through. Details and the cases covered: `docs/functions-response-headers.md`. Customers host pages as apps or sites.
+
 ## 6.6. Project database credential rotation
 
 **Passwords are shown once (`FEATURE_ONETIMECREDENTIALS`, on by default, EXC-759).** With the

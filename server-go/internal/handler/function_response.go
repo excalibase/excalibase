@@ -101,11 +101,15 @@ func validCookieToken(name string) bool {
 // writeRuntimeResponse forwards a runtime InvokeResponse back to the caller
 // with the handler's original status and body. Headers pass through except
 // those that would let a function act on the shared origin: see
-// platformOwnedHeaders, sanitizeFunctionCookie and the sandbox policy below.
-func writeRuntimeResponse(w http.ResponseWriter, projectID string, resp *edgefn.InvokeResponse) {
+// platformOwnedHeaders, sanitizeFunctionCookie and the sandbox policy below;
+// guardHTML serves a page type as plain text (function_response_html.go).
+func writeRuntimeResponse(w http.ResponseWriter, projectID string, resp *edgefn.InvokeResponse, guardHTML bool) {
+	var contentTypes []string
 	for k, v := range resp.Headers {
 		lk := strings.ToLower(k)
 		switch {
+		case lk == "content-type":
+			contentTypes = append(contentTypes, v)
 		case hopByHopHeaders[lk], platformOwnedHeaders[lk], strings.HasPrefix(lk, "cross-origin-"):
 		case lk == "set-cookie":
 			if cookie, ok := sanitizeFunctionCookie(v, projectID); ok {
@@ -118,6 +122,11 @@ func writeRuntimeResponse(w http.ResponseWriter, projectID string, resp *edgefn.
 	// Set last so the function cannot clear it: Studio tells a function's own
 	// 401 from its session ending by this mark.
 	w.Header().Set(custommw.FunctionResponseHeader, "1")
+	if guardHTML {
+		w.Header().Set("Content-Type", guardedContentType(contentTypes, resp.Body))
+	} else if len(contentTypes) > 0 {
+		w.Header().Set("Content-Type", contentTypes[0])
+	}
 	// Whatever HTML a function serves runs in an opaque origin.
 	w.Header().Set("Content-Security-Policy", custommw.FunctionContentSecurityPolicy)
 	w.Header().Set("X-Content-Type-Options", "nosniff")

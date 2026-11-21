@@ -50,6 +50,7 @@ var featureEnv = map[features.Feature]string{
 	features.AppRuntimeLogin:    "FEATURE_APPRUNTIMELOGIN",
 	features.StudioV2:           "FEATURE_STUDIO_V2",
 	features.FunctionInvoke:     "FEATURE_FUNCTIONINVOKE",
+	features.FunctionHTMLGuard:  "FEATURE_FUNCTIONHTMLGUARD",
 }
 
 // defaultOn are the features that are on until their variable says "false":
@@ -63,6 +64,7 @@ var defaultOn = map[features.Feature]bool{
 	features.WALArchiveAlert:    true,
 	features.FreeWALUpload:      true,
 	features.AppRuntimeLogin:    true,
+	features.FunctionHTMLGuard:  true,
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns a

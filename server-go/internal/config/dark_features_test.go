@@ -211,9 +211,10 @@ func TestLoad_SignupsPerHour(t *testing.T) {
 func TestLoad_WALGuardsAreOnUnlessSwitchedOff(t *testing.T) {
 	t.Setenv("CORS_ORIGINS", "https://app.test")
 	for feature, env := range map[features.Feature]string{
-		features.WALArchiveAlert: "FEATURE_WALARCHIVEALERT",
-		features.FreeWALUpload:   "FEATURE_FREEWALUPLOAD",
-		features.AppRuntimeLogin: "FEATURE_APPRUNTIMELOGIN",
+		features.WALArchiveAlert:   "FEATURE_WALARCHIVEALERT",
+		features.FreeWALUpload:     "FEATURE_FREEWALUPLOAD",
+		features.AppRuntimeLogin:   "FEATURE_APPRUNTIMELOGIN",
+		features.FunctionHTMLGuard: "FEATURE_FUNCTIONHTMLGUARD",
 	} {
 		t.Setenv(env, "")
 		if !Load().Features().Enabled(context.Background(), feature) {
