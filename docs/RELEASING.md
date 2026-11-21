@@ -89,3 +89,12 @@ Engine (`excalibase-graphql`) and auth have their own CD, which is still
 main-only. Until they publish `release-<major>.<minor>-<sha7>` too, a patch to
 those images needs their CD extended the same way; unpatched ones are retagged
 in step 7.
+
+## One-database engine images
+
+When `excalibase-graphql` is released, *Release* also promotes its one-database images
+(`<source_tag>-postgres`, `-mysql`, `-postgres-native`, `-mysql-native`) to `<version>-<variant>`. All four go
+together or none do. A source tag that has none of them, from before they existed, is skipped with a notice,
+unless this major.minor released them before: then a missing one fails the release. The native ones are built
+nightly by the engine's *Slim Native Images* workflow, so before a release run it for the commit to release
+(Run workflow, `sha=<full sha>`) and wait for green.

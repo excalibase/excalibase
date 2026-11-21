@@ -127,29 +127,49 @@ jobs:
               esac
 
               # The one-database engine images (EXC-799) are promoted the same way, each from the same commit's
-              # <source_tag>-<variant>. A source tag from before they existed has none: that genuine not-found
-              # is skipped with a notice and the all-in-one tags above stay required. Any other error fails.
-              for variant in postgres mysql postgres-native mysql-native; do
+              # <source_tag>-<variant>. All four go together or none do: a release with only some of them would
+              # leave a user of the missing one on the previous version. A source tag from before the images
+              # existed has none, and that is skipped with a notice, unless this major.minor has released a
+              # slim image before, or the source has some of them: then a missing variant is an error.
+              # Any other registry error fails the job.
+              variants="postgres mysql postgres-native mysql-native"
+              present=""; found=""; missing=""; released_before=""
+              minor_line="${VERSION%%.*}.$(printf '%s' "${VERSION#*.}" | cut -d. -f1)"
+              for variant in $variants; do
                 status=0; slim=$(bash scripts/inspect-digest.sh "$repository:$SOURCE_TAG-$variant") || status=$?
                 case "$status" in
-                  0)
-                    slim_tags=$(bash scripts/release-slim-tags.sh "$VERSION" "$variant" "$MOVE_MAJOR_LATEST")
-                    first=${slim_tags%% *}
-                    status=0; bash scripts/inspect-digest.sh "$repository:$first" >/dev/null || status=$?
-                    case "$status" in
-                      0) echo "::error::$repository:$first already exists; cut a new version instead"; exit 1 ;;
-                      3) ;;
-                      *) echo "::error::could not check $repository:$first"; exit 1 ;;
-                    esac
-                    echo "$repository $slim $slim_tags" >> "$plan"
-                    ;;
-                  3)
-                    echo "::notice::$repository:$SOURCE_TAG-$variant does not exist (engine build without this image); $variant not released for $VERSION"
-                    echo "Image $variant: skipped, $repository:$SOURCE_TAG-$variant does not exist" >> "$GITHUB_STEP_SUMMARY"
-                    ;;
+                  0) present="$present $variant"; found="$found$variant=$slim"$'\n' ;;
+                  3) missing="$missing $variant" ;;
                   *) echo "::error::could not check $repository:$SOURCE_TAG-$variant"; exit 1 ;;
                 esac
+                status=0; bash scripts/inspect-digest.sh "$repository:$minor_line-$variant" >/dev/null || status=$?
+                case "$status" in
+                  0) released_before="$released_before $variant" ;;
+                  3) ;;
+                  *) echo "::error::could not check $repository:$minor_line-$variant"; exit 1 ;;
+                esac
               done
+              if [ -n "$present$released_before" ] && [ -n "$missing" ]; then
+                echo "::error::$repository:$SOURCE_TAG lacks the one-database image(s)${missing}, but they are released for this version line (source has:${present:- none}; $minor_line has:${released_before:- none}). Release all four or none."
+                exit 1
+              fi
+              if [ -z "$present" ]; then
+                echo "::notice::$repository:$SOURCE_TAG has no one-database images (engine build without them); not released for $VERSION"
+                echo "One-database images: skipped, $repository:$SOURCE_TAG-* do not exist" >> "$GITHUB_STEP_SUMMARY"
+              else
+                for variant in $present; do
+                  slim_tags=$(bash scripts/release-slim-tags.sh "$VERSION" "$variant" "$MOVE_MAJOR_LATEST")
+                  first=${slim_tags%% *}
+                  status=0; bash scripts/inspect-digest.sh "$repository:$first" >/dev/null || status=$?
+                  case "$status" in
+                    0) echo "::error::$repository:$first already exists; cut a new version instead"; exit 1 ;;
+                    3) ;;
+                    *) echo "::error::could not check $repository:$first"; exit 1 ;;
+                  esac
+                  slim_digest=$(printf '%s' "$found" | sed -n "s/^$variant=//p")
+                  echo "$repository $slim_digest $slim_tags" >> "$plan"
+                done
+              fi
             fi
           done
 
