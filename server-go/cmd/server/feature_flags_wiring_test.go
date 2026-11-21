@@ -171,6 +171,8 @@ var darkWork = map[features.Feature]string{
 	features.LogDeletion:      "TestLogDeletionStartsOnlyWithItsFeature",
 	// Off, credentials keep their old shape (internal/service, internal/handler).
 	features.OneTimeCredentials: "TestCredentialsStillCarryThePasswordWhileOneTimeIsOff",
+	// Only MCP's invoke_function reads it; no route is gated (internal/mcpserver).
+	features.FunctionInvoke: "TestDarkToolsFollowTheirFeature",
 	// Off, rotation leaves sessions alone, credentials carry no reader and the
 	// read address names the owner (internal/service).
 	features.DBReadRole: "TestRotationLeavesSessionsAloneWhileTheFlagIsOff",

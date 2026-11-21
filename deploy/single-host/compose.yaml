@@ -322,6 +322,8 @@ services:
       FEATURE_SIGNUPGUARD: ${FEATURE_SIGNUPGUARD:-true}
       # Database passwords are shown once and never read back (EXC-759); on by default.
       FEATURE_ONETIMECREDENTIALS: ${FEATURE_ONETIMECREDENTIALS:-true}
+      # MCP invoke_function, off until chosen. Not a safeguard: deployed function code can already read the project's function secrets; this only removes one way of running it (EXC-684).
+      FEATURE_FUNCTIONINVOKE: ${FEATURE_FUNCTIONINVOKE:-false}
       HOST_METRICS_CONTAINERS: *platform_containers
       HOST_METRICS_NET_DEV: /host/proc-net-dev
       # Stored project log search in the bundled Loki (EXC-672; init.sh --host-logs).

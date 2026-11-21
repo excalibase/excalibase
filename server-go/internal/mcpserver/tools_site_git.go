@@ -35,6 +35,12 @@ type buildView struct {
 	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
 }
 
+// buildLogView is one build read with its log, which build-visible secrets are redacted from.
+type buildLogView struct {
+	buildView
+	Log string `json:"log,omitempty"`
+}
+
 type secretVisibilityView struct {
 	Name         string `json:"name"`
 	BuildVisible bool   `json:"buildVisible"`
