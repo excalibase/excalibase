@@ -21,11 +21,12 @@ var hopByHopHeaders = map[string]bool{"transfer-encoding": true, "connection": t
 // cannot set, replace or clear them. Clear-Site-Data, Report-To, NEL and
 // Reporting-Endpoints would act on every tenant of the origin.
 var platformOwnedHeaders = map[string]bool{
-	"content-security-policy":             true,
+	"content-security-policy":             true, // also overwritten below; listed so the strip is explicit
 	"content-security-policy-report-only": true,
 	"x-frame-options":                     true,
 	"strict-transport-security":           true,
 	"permissions-policy":                  true,
+	"referrer-policy":                     true,
 	"clear-site-data":                     true,
 	"report-to":                           true,
 	"reporting-endpoints":                 true,
@@ -126,4 +127,17 @@ func writeRuntimeResponse(w http.ResponseWriter, projectID string, resp *edgefn.
 	}
 	w.WriteHeader(status)
 	_, _ = io.WriteString(w, resp.Body)
+}
+
+// refuseServiceWorkerScript answers 404 to a service-worker script fetch (the
+// browser marks it Service-Worker: script, both on register and on its update
+// checks). Function pages are sandboxed and cannot register workers now, and a
+// 404 on an update check makes the browser unregister a worker an unsandboxed
+// function page registered earlier on the shared origin.
+func refuseServiceWorkerScript(w http.ResponseWriter, r *http.Request) bool {
+	if !strings.EqualFold(r.Header.Get("Service-Worker"), "script") {
+		return false
+	}
+	httpError(w, errFunctionNotFound, http.StatusNotFound)
+	return true
 }

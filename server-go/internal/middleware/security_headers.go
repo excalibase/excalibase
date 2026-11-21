@@ -17,7 +17,7 @@ const ContentSecurityPolicy = "default-src 'self'; " +
 // page policy plus a sandbox without allow-same-origin, so HTML a function
 // serves runs in an opaque origin and cannot reach cookies or storage of the
 // shared API origin.
-const FunctionContentSecurityPolicy = ContentSecurityPolicy + "; sandbox allow-scripts allow-forms"
+const FunctionContentSecurityPolicy = ContentSecurityPolicy + "; sandbox allow-scripts"
 
 // SecurityHeaders sets standard security response headers on all responses.
 //

@@ -1321,6 +1321,9 @@ const (
 // Deno runtime via the RuntimeClient. The runtime's response is written back
 // to w with status, headers, and body intact.
 func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Request, fn *edgefn.Function, auth callerAuth) {
+	if refuseServiceWorkerScript(w, r) {
+		return
+	}
 	// Refuse oversized requests upfront via Content-Length before reading
 	// the body into memory. Protects against naive DoS via giant POSTs.
 	if cl := r.Header.Get("Content-Length"); cl != "" {

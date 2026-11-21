@@ -62,6 +62,19 @@ func TestRuntimeResponsePinsCookiePathToTheProjectsFunctions(t *testing.T) {
 	}
 }
 
+func TestRuntimeResponseKeepsSecureExpiresAndPartitioned(t *testing.T) {
+	raw := "k=v; Secure; Expires=Wed, 21 Oct 2037 07:28:00 GMT; Partitioned; HttpOnly"
+	got := relay(map[string]string{"set-cookie": raw}).Header().Values("Set-Cookie")
+	if len(got) != 1 {
+		t.Fatalf("Set-Cookie = %v", got)
+	}
+	for _, want := range []string{"Secure", "Expires=Wed, 21 Oct 2037 07:28:00 GMT", "Partitioned", "HttpOnly"} {
+		if !strings.Contains(got[0], want) {
+			t.Errorf("%q lost %q", got[0], want)
+		}
+	}
+}
+
 func TestRuntimeResponsePinsPathWhenTheFunctionGivesNone(t *testing.T) {
 	cookies := relay(map[string]string{"set-cookie": "a=b"}).Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Path != "/functions/v1/proj_abc/" {
@@ -88,11 +101,18 @@ func TestRuntimeResponseStripsSecurityPolicyHeaders(t *testing.T) {
 		"cross-origin-resource-policy":        "cross-origin",
 		"permissions-policy":                  "camera=*",
 		"clear-site-data":                     `"cookies"`,
+		"report-to":                           `{"group":"x"}`,
+		"reporting-endpoints":                 `x="https://e.test"`,
+		"nel":                                 `{"report_to":"x"}`,
+		"service-worker-allowed":              "/",
+		"set-cookie2":                         "a=b",
+		"referrer-policy":                     "unsafe-url",
 	})
 	for _, name := range []string{
 		"Content-Security-Policy-Report-Only", "X-Frame-Options", "Strict-Transport-Security",
 		"Cross-Origin-Opener-Policy", "Cross-Origin-Embedder-Policy", "Cross-Origin-Resource-Policy",
-		"Permissions-Policy", "Clear-Site-Data",
+		"Permissions-Policy", "Clear-Site-Data", "Report-To", "Reporting-Endpoints", "Nel",
+		"Service-Worker-Allowed", "Set-Cookie2", "Referrer-Policy",
 	} {
 		if got := rec.Header().Get(name); got != "" {
 			t.Errorf("%s = %q, want stripped", name, got)
@@ -108,6 +128,19 @@ func TestRuntimeResponseAlwaysCarriesTheSandboxPolicy(t *testing.T) {
 	}
 	if !strings.Contains(csp, "sandbox") || strings.Contains(csp, "allow-same-origin") {
 		t.Errorf("CSP %q must sandbox without allow-same-origin", csp)
+	}
+	for _, weaker := range []string{"allow-same-origin", "allow-top-navigation", "allow-popups", "allow-forms", "allow-modals", "allow-downloads"} {
+		if strings.Contains(csp, weaker) {
+			t.Errorf("CSP %q must not contain %s", csp, weaker)
+		}
+	}
+	for _, want := range []string{"sandbox allow-scripts", "frame-ancestors 'none'", "default-src 'self'", "script-src 'self'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP %q lacks %s", csp, want)
+		}
+	}
+	if !strings.HasSuffix(csp, "; sandbox allow-scripts") {
+		t.Errorf("CSP %q must end with the exact sandbox directive", csp)
 	}
 	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Errorf("X-Content-Type-Options = %q", got)
@@ -137,5 +170,23 @@ func TestRuntimeResponseLeavesAnOrdinaryJSONAnswerAlone(t *testing.T) {
 	}
 	if got := rec.Header().Values("Set-Cookie"); len(got) != 0 {
 		t.Errorf("unexpected cookie %v", got)
+	}
+}
+
+// A service worker a function page registered earlier is unregistered by the
+// browser when its update check gets a 404; the gateway answers it so.
+func TestFunctionServiceWorkerScriptFetchIsRefused(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/functions/v1/proj_abc/sw", nil)
+	req.Header.Set("Service-Worker", "script")
+	if !refuseServiceWorkerScript(httptest.NewRecorder(), req) {
+		t.Fatal("a Service-Worker: script fetch must be refused")
+	}
+	rec := httptest.NewRecorder()
+	refuseServiceWorkerScript(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status %d, want 404 so the browser unregisters the worker", rec.Code)
+	}
+	if refuseServiceWorkerScript(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/functions/v1/p/f", nil)) {
+		t.Error("an ordinary request was refused")
 	}
 }
