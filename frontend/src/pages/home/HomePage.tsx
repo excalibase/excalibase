@@ -110,7 +110,7 @@ export function HomePage() {
       )}
 
       <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))' }}>
-        {shown('recent') && <RecentlyVisitedWidget visits={recentVisits(isLoading ? undefined : projects)} />}
+        {shown('recent') && projectsReady && <RecentlyVisitedWidget visits={recentVisits(projects)} />}
         {shown('health') && !error && !isLoading && (
           <HealthWidget counts={healthCounts(projects)} failingApps={appsKnown ? apps.filter((a) => a.status === 'FAILED').length : null} />
         )}

@@ -147,6 +147,14 @@ describe('Home', () => {
     expect((await security.findByText('Databases open to the internet')).nextSibling).toHaveTextContent('—');
   });
 
+  test('visits remembered in this browser are not shown while the projects are still loading', async () => {
+    localStorage.setItem('studio.recentlyVisited.u1', JSON.stringify(['/account/tokens']));
+    mountWith({ projects: [], hangProjects: true }, <HomePage />);
+    await screen.findByRole('region', { name: 'Build something' });
+    expect(screen.queryByRole('region', { name: 'Recently visited' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Access keys')).not.toBeInTheDocument();
+  });
+
   test('with no projects at all the hint is shown once loading is over', async () => {
     mountWith({ projects: [] }, <HomePage />);
     expect(await screen.findByText(/create a project first/i)).toBeInTheDocument();

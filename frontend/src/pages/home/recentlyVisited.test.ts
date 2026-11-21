@@ -6,7 +6,7 @@ import type { DatabaseInstance } from '../../types';
 
 const projects = [{ projectId: 'p1', projectName: 'Reading list', databaseType: 'POSTGRESQL' }] as DatabaseInstance[];
 
-const signIn = (id: string) => useAuthStore.setState({ user: { id, username: id, email: `${id}@example.test`, role: 'user' }, isAuthenticated: true });
+const signIn = (id: string) => useAuthStore.getState().setAuth({ id, username: id, email: `${id}@example.test`, role: 'user' });
 
 beforeEach(() => {
   localStorage.clear();
@@ -23,6 +23,15 @@ describe('visits belong to the person signed in', () => {
     expect(Object.keys(localStorage).filter((key) => key.startsWith('studio.recentlyVisited'))).toEqual(['studio.recentlyVisited.u2']);
   });
 
+  test('a tab whose person is no longer the stored one leaves the stored person\'s list alone', () => {
+    signIn('u2');
+    recordVisit('/orgs');
+    useAuthStore.setState({ user: { id: 'u1', username: 'u1', email: 'u1@example.test', role: 'user' }, isAuthenticated: true });
+    recordVisit('/account/tokens');
+    expect(localStorage.getItem('studio.recentlyVisited.u2')).toBe('["/orgs"]');
+    expect(loadVisits()).toEqual(['/account/tokens']);
+  });
+
   test('the list kept before visits were stored per person is never shown and is removed', () => {
     localStorage.setItem('studio.recentlyVisited', JSON.stringify(['/account/tokens']));
     expect(loadVisits()).toEqual([]);
@@ -34,7 +43,7 @@ describe('visits belong to the person signed in', () => {
     useAuthStore.setState({ user: null, isAuthenticated: false });
     recordVisit('/orgs');
     expect(loadVisits()).toEqual([]);
-    expect(localStorage).toHaveLength(0);
+    expect(Object.keys(localStorage).filter((key) => key.startsWith('studio.recentlyVisited'))).toEqual([]);
   });
 
   test('clearVisits removes every list', () => {

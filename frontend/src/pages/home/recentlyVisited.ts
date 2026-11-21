@@ -13,6 +13,17 @@ const keyOfPersonSignedIn = (): string | null => {
   return id ? visitsKey(id) : null;
 };
 
+// A tab left open after someone else signed in elsewhere must not delete that person's list:
+// other lists are dropped only when the stored profile is the person this tab believes is signed in.
+function storedPersonIsThisOne(): boolean {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem('auth_user') ?? 'null');
+    return (stored as { id?: unknown } | null)?.id === useAuthStore.getState().user?.id;
+  } catch {
+    return false;
+  }
+}
+
 export function loadVisits(): string[] {
   const key = keyOfPersonSignedIn();
   if (!key) return [];
@@ -27,7 +38,7 @@ export function loadVisits(): string[] {
 export function recordVisit(path: string): void {
   const key = keyOfPersonSignedIn();
   if (!key || IGNORED.has(path)) return;
-  pruneVisits(key);
+  if (storedPersonIsThisOne()) pruneVisits(key);
   const next = [path, ...loadVisits().filter((p) => p !== path)].slice(0, MAX_VISITS);
   try {
     localStorage.setItem(key, JSON.stringify(next));
