@@ -52,13 +52,18 @@ export async function runBulk<T, A = unknown>(
 }
 
 // Words for the rows a bulk action leaves out, shown in its dialog.
-export const skippedNote = (skipped: readonly { name: string; why: string }[]): string =>
-  skipped.length === 0 ? '' : ` Left out: ${skipped.map((row) => `${row.name} (${row.why})`).join(', ')}.`;
+export function skippedNote(skipped: readonly { name: string; why: string }[]): string {
+  if (skipped.length === 0) return '';
+  const rows = skipped.map((row) => `${row.name} (${row.why})`);
+  return ` Left out: ${rows.join(', ')}.`;
+}
 
 // What a suspension could not stop, in words, or nothing when every app stopped.
 export function appsFailedNote(answer: unknown): string | undefined {
   const failed = (answer as { appsFailed?: { appName: string; reason: string }[] } | undefined)?.appsFailed ?? [];
-  return failed.length === 0 ? undefined : `apps not stopped: ${failed.map((app) => `${app.appName} (${app.reason})`).join(', ')}`;
+  if (failed.length === 0) return undefined;
+  const apps = failed.map((app) => `${app.appName} (${app.reason})`);
+  return `apps not stopped: ${apps.join(', ')}`;
 }
 
 // After a bulk action every admin table, the capacity card and the project lists are read again.

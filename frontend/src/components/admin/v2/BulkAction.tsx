@@ -38,8 +38,9 @@ export function BulkDialog<T>({ request, onFinished, onCancel }: BulkDialogProps
     const result: BulkResult<T> = await runBulk(request.items, (item) => request.act(item, reason), request.partialOf);
     setBusy(false);
     request.onSettled();
+    const partly = result.partial.length > 0 ? `, ${result.partial.length} only partly` : '';
     onFinished({
-      summary: `${request.verb} ${result.done} of ${request.items.length} ${request.noun}${result.partial.length ? `, ${result.partial.length} only partly` : ''}.`,
+      summary: `${request.verb} ${result.done} of ${request.items.length} ${request.noun}${partly}.`,
       failures: [...result.failed, ...result.partial].map((failure) => `${request.label(failure.item)}: ${failure.message}`),
     });
   };

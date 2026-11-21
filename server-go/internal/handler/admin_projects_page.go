@@ -112,13 +112,19 @@ func parseProjectQuery(rawQuery string) (q projectQuery, paged bool, err error) 
 	q.search = strings.ToLower(strings.TrimSpace(values.Get("q")))
 	q.status, q.plan = values.Get("status"), strings.ToUpper(values.Get("plan"))
 	q.owner, q.flag = values.Get("owner"), values.Get("flag")
-	if !projectStatuses[q.status] && q.status != "" || !projectPlans[q.plan] && q.plan != "" {
-		return q, true, errBadProjectQuery
-	}
-	if (q.owner != "" && q.owner != "active" && q.owner != "suspended") || (q.flag != "" && q.flag != "protected") {
+	if !q.filtersAllowed() {
 		return q, true, errBadProjectQuery
 	}
 	return q, true, nil
+}
+
+// filtersAllowed reports whether every filter holds a value the list offers; "" is no filter.
+func (q projectQuery) filtersAllowed() bool {
+	statusOK := q.status == "" || projectStatuses[q.status]
+	planOK := q.plan == "" || projectPlans[q.plan]
+	ownerOK := q.owner == "" || q.owner == "active" || q.owner == "suspended"
+	flagOK := q.flag == "" || q.flag == "protected"
+	return statusOK && planOK && ownerOK && flagOK
 }
 
 func positiveInt(value string) (int, error) {
