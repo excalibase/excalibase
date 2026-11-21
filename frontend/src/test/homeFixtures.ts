@@ -34,7 +34,7 @@ export function mountWith(backend: Backend, ui: ReactElement, route = '/') {
     const reply = (data: unknown) => Promise.resolve({ data });
     if (url === '/config') return reply({ deploymentMode: 'cloud', appHosting: true, sites: true, features: { studio_v2: true, dballowlist: true, mcp: true, ...backend.features } });
     if (url === '/orgs') return reply(ORGS);
-    if (url === '/provision') return backend.failProjects ? Promise.reject({ response: { status: 403 } }) : reply(backend.projects);
+    if (url === '/provision') return backend.failProjects ? Promise.reject(Object.assign(new Error('forbidden'), { response: { status: 403 } })) : reply(backend.projects);
     if (url === '/auth/tokens') return reply(backend.tokens ?? []);
     const scoped = /^\/projects\/([^/]+)\/(.*?)\/?$/.exec(url);
     if (scoped?.[2] === 'apps') return reply(backend.apps?.[scoped[1]] ?? []);

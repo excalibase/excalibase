@@ -86,6 +86,8 @@ const FILTERS: FilterDef<ProjectRow>[] = [
   },
 ];
 
+const renderRowAction = (row: ProjectRow) => <RowAction row={row} />;
+
 // The Projects page of the console layout (studio_v2): the projects of the org in the top bar.
 export function ProjectsPage() {
   useDocumentTitle('Projects');
@@ -114,7 +116,7 @@ export function ProjectsPage() {
         error={error}
         onRetry={refetch}
         filters={FILTERS}
-        rowActions={(row) => <RowAction row={row} />}
+        rowActions={renderRowAction}
         paging={{ mode: 'client', pageSize: 10 }}
         storageKey="projects-v2"
         emptyState={

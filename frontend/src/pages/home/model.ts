@@ -73,12 +73,14 @@ function tokenItem(token: TokenInfo, kind: 'token-expired' | 'token-expiring', e
 function pausedItem(project: DatabaseInstance): AttentionItem {
   const reason = PAUSE_REASON[project.pauseReason ?? ''];
   const since = project.lastActiveAt ?? project.updatedAt;
+  const pausedSince = since ? ` since ${formatDate(since)}` : '';
+  const pausedReason = reason ? ` (${reason})` : '';
   return {
     id: `project-paused:${project.projectId}`,
     kind: 'project-paused',
     before: '',
     subject: nameOf(project),
-    after: ` has been paused${since ? ` since ${formatDate(since)}` : ''}${reason ? ` (${reason})` : ''}.`,
+    after: ` has been paused${pausedSince}${pausedReason}.`,
     actions: [{ label: 'Resume', resumeProjectId: project.projectId }, { label: 'Delete', to: `/project/${project.projectId}/settings` }],
   };
 }

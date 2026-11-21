@@ -44,6 +44,8 @@ const DETAIL_SECTIONS = new Set(['containers', 'sites']);
 
 const engineName = (project: DatabaseInstance) => (project.databaseType === 'MYSQL' ? 'MySQL' : 'Postgres');
 
+const detailKind = (project: DatabaseInstance | undefined) => (project ? engineName(project) : 'Project');
+
 // null: nothing worth a link (an unknown page, or a project that no longer exists).
 // `projects` undefined means they have not loaded yet, so a project is kept by its id.
 export function describeVisit(path: string, projects: readonly DatabaseInstance[] | undefined): Visit | null {
@@ -55,10 +57,11 @@ export function describeVisit(path: string, projects: readonly DatabaseInstance[
   if (projects && !project) return null;
   const name = project?.projectName?.trim() || projectId;
   const segments = rest.split('/').filter(Boolean);
-  const section = segments.length === 0 ? null : humanize(DETAIL_SECTIONS.has(segments[0]) ? segments[0] : segments[segments.length - 1]);
+  const sectionSegment = DETAIL_SECTIONS.has(segments[0]) ? segments[0] : segments.at(-1);
+  const section = sectionSegment ? humanize(sectionSegment) : null;
   return {
     to: path,
     title: section ? `${name} › ${section}` : name,
-    kind: section ? (project ? engineName(project) : 'Project') : 'Overview',
+    kind: section ? detailKind(project) : 'Overview',
   };
 }

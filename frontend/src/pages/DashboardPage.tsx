@@ -1,5 +1,5 @@
 import { Navigate, useNavigate } from 'react-router-dom';
-import { useIsAdminHost } from '../hooks/useDeploymentMode';
+import { useIsAdminHost, useStudioV2 } from '../hooks/useDeploymentMode';
 import { useInstances } from '../hooks/useProvisioning';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { ProjectNameCell } from '../components/shared/ProjectNameCell';
@@ -8,7 +8,6 @@ import { Database, DatabaseZap, CheckCircle, Loader2, XCircle } from 'lucide-rea
 import { Button } from '../components/Button';
 import { engineIcon, engineLabel } from '../utils/engine';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { useStudioV2 } from '../hooks/useDeploymentMode';
 import { HomePage } from './home/HomePage';
 
 // With studio_v2 on, Home replaces this page.
