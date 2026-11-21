@@ -133,6 +133,7 @@ describe('SiteDomains', () => {
     renderDomains({ domains: [] });
     const input = await screen.findByTestId('site-domain-input');
     await user.type(input, 'https://Example.com/');
+    await user.tab();
     const warning = await screen.findByTestId('site-domain-bare-warning');
     expect(warning).toHaveTextContent(/example\.com is a bare domain/i);
     expect(warning).toHaveTextContent(/redirect/i);
@@ -141,10 +142,14 @@ describe('SiteDomains', () => {
     expect(screen.queryByTestId('site-domain-bare-warning')).not.toBeInTheDocument();
   });
 
-  test('a subdomain shows no bare-domain warning', async () => {
+  test('a subdomain, or one still being typed, shows no bare-domain warning', async () => {
     const user = userEvent.setup();
     renderDomains({ domains: [] });
-    await user.type(await screen.findByTestId('site-domain-input'), 'shop.example.co.uk');
+    const input = await screen.findByTestId('site-domain-input');
+    await user.type(input, 'shop.ex');
+    expect(screen.queryByTestId('site-domain-bare-warning')).not.toBeInTheDocument();
+    await user.type(input, 'ample.co.uk');
+    await user.tab();
     expect(screen.queryByTestId('site-domain-bare-warning')).not.toBeInTheDocument();
   });
 

@@ -114,10 +114,9 @@ function DomainRow({ domain, canDevelop, busy, onCheck, onRemove }: RowProps) {
       {domain.status !== 'ACTIVE' && (
         <>
           <p className="text-xs text-text-tertiary">
-            Add these records at your DNS provider. Nothing is set up until the TXT record is
-            seen; the domain then goes live once Cloudflare sees the CNAME and issues its
-            certificate. This is checked every few minutes, and a domain not live within seven
-            days is removed.
+            Add these records at your DNS provider. Nothing is set up until the TXT record is seen;
+            the domain then goes live once Cloudflare sees the CNAME and issues its certificate.
+            This is checked every few minutes, and a domain not live within seven days is removed.
           </p>
           <Records domain={domain} />
         </>
@@ -140,9 +139,12 @@ function DomainRow({ domain, canDevelop, busy, onCheck, onRemove }: RowProps) {
 function AddDomain({ projectId, siteId }: { readonly projectId: string; readonly siteId: string }) {
   const add = useAddSiteDomain(projectId, siteId);
   const [hostname, setHostname] = useState('');
+  // Checked only once the field is left or submitted, so a name half typed never warns.
+  const [checkedHost, setCheckedHost] = useState('');
   const [validation, setValidation] = useState<SiteDomainValidation>('http');
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    setCheckedHost(hostname);
     add.mutate({ hostname: hostname.trim(), validation }, { onSuccess: () => setHostname('') });
   };
   return (
@@ -153,7 +155,11 @@ function AddDomain({ projectId, siteId }: { readonly projectId: string; readonly
           aria-label="Domain"
           placeholder="www.example.com"
           value={hostname}
-          onChange={(event) => setHostname(event.target.value)}
+          onChange={(event) => {
+            setHostname(event.target.value);
+            setCheckedHost('');
+          }}
+          onBlur={() => setCheckedHost(hostname)}
           className={inputClass}
           data-testid="site-domain-input"
         />
@@ -178,7 +184,14 @@ function AddDomain({ projectId, siteId }: { readonly projectId: string; readonly
           <option value="txt">TXT: issue the certificate before moving DNS</option>
         </select>
       </label>
-      <BareDomainWarning hostname={hostname} onUse={setHostname} testId="site-domain-bare-warning" />
+      <BareDomainWarning
+        hostname={checkedHost}
+        onUse={(suggested) => {
+          setHostname(suggested);
+          setCheckedHost('');
+        }}
+        testId="site-domain-bare-warning"
+      />
       {add.error && (
         <div role="alert" className="text-sm text-red-400">
           {apiErrorMessage(add.error, 'The domain could not be added')}

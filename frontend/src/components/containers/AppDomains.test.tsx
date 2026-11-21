@@ -77,6 +77,8 @@ describe('AppDomains', () => {
     const user = renderDomains([]);
     const input = await screen.findByTestId('domain-input');
     await user.type(input, 'example.co.uk');
+    expect(screen.queryByTestId('domain-bare-warning')).not.toBeInTheDocument();
+    await user.tab();
     expect(await screen.findByTestId('domain-bare-warning')).toHaveTextContent(
       /example\.co\.uk is a bare domain/i,
     );
