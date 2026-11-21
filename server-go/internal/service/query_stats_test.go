@@ -122,11 +122,12 @@ func TestQueryStats_PostgresPinsTransactionTimeoutWhereTheServerHasIt(t *testing
 }
 
 // Platform logins and Postgres' own roles are never the project's queries;
-// excalibase_app is, because the API engine and Studio's SQL run as it.
+// excalibase_app is, because the API engine and Studio's SQL run as it, and so is
+// the runtime login apps and functions connect with (EXC-765).
 func TestQueryStats_PostgresFilterNamesEveryPlatformRoleButTheAppRole(t *testing.T) {
 	filter := projectStatementRoleFilter
 	for _, name := range pgroles.ReservedNames() {
-		if name == roleApp {
+		if name == roleApp || name == roleRuntime {
 			continue
 		}
 		if !strings.Contains(filter, "'"+name+"'") {
@@ -138,8 +139,8 @@ func TestQueryStats_PostgresFilterNamesEveryPlatformRoleButTheAppRole(t *testing
 			t.Errorf("filter does not name prefix %s", prefix)
 		}
 	}
-	if !strings.Contains(filter, "r.rolname = '"+roleApp+"'") {
-		t.Error("excalibase_app is not kept")
+	if !strings.Contains(filter, "r.rolname IN ('"+roleApp+"', '"+roleRuntime+"')") {
+		t.Error("excalibase_app and the runtime login are not kept")
 	}
 }
 

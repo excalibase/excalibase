@@ -198,7 +198,24 @@ for sql in "SELECT count(*) FROM auth.users" "CREATE TABLE excalibase.planted (i
   case "$out" in *"permission denied"*) ok "refused: $sql" ;; *) ko "allowed: $sql -> ${out:0:200}" ;; esac
 done
 out=$(as_app "CREATE FUNCTION public.app_steal() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN RETURN NEW; END \$\$; CREATE TRIGGER app_steal BEFORE INSERT ON notes FOR EACH ROW EXECUTE FUNCTION public.app_steal()")
-case "$out" in *"permission denied"*|*"must be owner"*) ok "the app cannot attach a trigger to a migrated table" ;; *) ko "trigger: ${out:0:300}" ;; esac
+# EXC-765: the app login is a member of excalibase_app, which owns Studio-made
+# tables, so DDL on customer tables is allowed (an app migration needs it). The
+# platform writes those tables as excalibase_app, which cannot manage roles, so a
+# trigger the app plants never runs with role rights. Platform schemas stay refused (above).
+case "$out" in "") ok "the app may attach a trigger to a customer table it can alter (EXC-765)" ;; *) ko "trigger: ${out:0:300}" ;; esac
+planted_trigger_cannot_mint() {
+  local label=$1 body=$2 out res
+  out=$(as_app "CREATE OR REPLACE FUNCTION public.app_steal() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN $body RETURN NEW; END \$\$")
+  [ -z "$out" ] || { ko "$label: replace trigger function: ${out:0:300}"; return; }
+  res=$(c -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' "https://studio.localhost:$PORT/api/schema/$PID/query" \
+    -d '{"query":"INSERT INTO notes (body) VALUES ('"'"'fires the trigger'"'"')"}' -w ' %{http_code}')
+  case "$res" in *"permission denied"*) ok "$label: the write through Studio runs the trigger as excalibase_app and the role attempt is refused" ;; *) ko "$label: expected permission denied, got ${res:0:300}" ;; esac
+  [ "$(as_app "SELECT count(*) FROM pg_roles WHERE rolname = 'planted_role'")" = 0 ] && ok "$label: no role was created" || ko "$label: a role was created"
+}
+planted_trigger_cannot_mint "trigger calls create_role" "PERFORM excalibase.create_role('planted_role', 'x', false);"
+planted_trigger_cannot_mint "trigger runs CREATE ROLE" "EXECUTE 'CREATE ROLE planted_role LOGIN';"
+out=$(as_app "DROP TRIGGER app_steal ON notes; DROP FUNCTION public.app_steal()")
+[ -z "$out" ] && ok "the app removed its trigger" || ko "drop trigger: ${out:0:300}"
 # The password is matched from a 0600 file, never passed as an argument.
 ( umask 077; sed 's/^DATABASE_URL=//' "$W/app-db.env" | python3 -c 'import sys,urllib.parse as u;print(u.urlparse(sys.stdin.read().strip()).password or "")' > "$W/app-db.secret" )
 leak=0
