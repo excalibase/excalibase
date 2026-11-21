@@ -68,7 +68,7 @@ func functionTools() []entry {
 	return []entry{
 		tool("list_functions", "List the project's edge functions.", readTool, listFunctions),
 		tool("deploy_function", "Create or update an edge function from its source files and deploy it. "+functionContract+
-			" Functions are for APIs and webhooks, not web pages: their answers carry Content-Security-Policy script-src 'self', so a page's inline scripts never run. Host a web page as a container app (create_app).", writeTool, deployFunction),
+			" "+functionSecretsWarning+" Functions are for APIs and webhooks, not web pages: their answers carry Content-Security-Policy script-src 'self', so a page's inline scripts never run. Host a web page as a container app (create_app).", writeTool, deployFunction),
 		tool("delete_function", "Delete one edge function: it stops answering at once.", writeTool, deleteFunction),
 		tool("set_function_outbound_hosts", "Allow or stop allowing outside hosts the project's edge functions may call (fetch); anything not listed is blocked. "+
 			"Hosts already on the list stay unless removed. The functions are redeployed with the new list.", writeTool, setFunctionOutboundHosts),

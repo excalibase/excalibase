@@ -100,6 +100,11 @@ const (
 	// SitePreviews is a preview per branch or pull request of a site connected
 	// to git, at its own unguessable hostname, removed with its branch or PR (EXC-660).
 	SitePreviews Feature = "sitepreviews"
+	// FunctionInvoke is MCP's invoke_function. It is not a safeguard: code deployed to
+	// a project's functions can already read that project's function secrets and
+	// database URL and return them through its error text or logs. The flag only
+	// removes one convenient way of running such code from the agent (EXC-684).
+	FunctionInvoke Feature = "functioninvoke"
 	// ProxyBlock refuses an app that is a proxy or VPN node at create, update
 	// and deploy (EXC-755). Unlike the features above it is on unless switched off.
 	ProxyBlock Feature = "proxyblock"
@@ -125,7 +130,7 @@ const (
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, StudioV2}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2}
 }
 
 type Flags interface {
