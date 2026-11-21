@@ -1321,6 +1321,9 @@ const (
 // Deno runtime via the RuntimeClient. The runtime's response is written back
 // to w with status, headers, and body intact.
 func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Request, fn *edgefn.Function, auth callerAuth) {
+	if refuseServiceWorkerScript(w, r) {
+		return
+	}
 	// Refuse oversized requests upfront via Content-Length before reading
 	// the body into memory. Protects against naive DoS via giant POSTs.
 	if cl := r.Header.Get("Content-Length"); cl != "" {
@@ -1366,29 +1369,7 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	writeRuntimeResponse(w, resp)
-}
-
-// writeRuntimeResponse forwards a runtime InvokeResponse back to the caller
-// with the handler's original status, headers, and body.
-func writeRuntimeResponse(w http.ResponseWriter, resp *edgefn.InvokeResponse) {
-	for k, v := range resp.Headers {
-		// Drop hop-by-hop headers.
-		lk := strings.ToLower(k)
-		if lk == "transfer-encoding" || lk == "connection" || lk == "content-length" {
-			continue
-		}
-		w.Header().Set(k, v)
-	}
-	// Set last so the function cannot clear it: Studio tells a function's own
-	// 401 from its session ending by this mark.
-	w.Header().Set(custommw.FunctionResponseHeader, "1")
-	status := resp.Status
-	if status == 0 {
-		status = 200
-	}
-	w.WriteHeader(status)
-	_, _ = io.WriteString(w, resp.Body)
+	writeRuntimeResponse(w, fn.ProjectID, resp)
 }
 
 // --- Secrets ---
