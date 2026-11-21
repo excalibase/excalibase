@@ -604,12 +604,20 @@ func writeEmailNotVerified(w http.ResponseWriter) {
 }
 
 // Logout revokes the caller's current PAT and clears the session cookie.
-// Returns 200 even if no token is present so client logout is idempotent.
+// Returns 200 even if no token is present so client logout is idempotent. If
+// the token cannot be deleted it is still alive, so the answer is a 500 (the
+// cookie is cleared either way).
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	var revokeErr error
 	if t := auth.GetToken(r.Context()); t != nil {
-		_ = h.tokenStore.DeleteToken(r.Context(), t.TokenHash)
+		revokeErr = h.tokenStore.DeleteToken(r.Context(), t.TokenHash)
 	}
 	clearSessionCookie(w)
+	if revokeErr != nil {
+		log.Printf("ERROR: logout could not revoke the session token: %v", revokeErr)
+		httpError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 

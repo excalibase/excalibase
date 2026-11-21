@@ -712,3 +712,32 @@ func TestAuthRevokeToken_RejectsForeign(t *testing.T) {
 		t.Error("foreign token must NOT be deleted on 403")
 	}
 }
+
+// A failed token delete leaves a live session token behind, so logout must say
+// so (and log it) while still clearing the browser's cookie (EXC-809 L1).
+func TestAuthLogout_FailedRevokeIsA5xxButStillClearsCookie(t *testing.T) {
+	us := newMockUserStore()
+	ts := newMockTokenStore()
+	now := time.Now()
+	user := &domain.User{ID: "u1", Username: testutil.FixtureToken("alice"), Active: true, Role: "user", CreatedAt: &now}
+	us.users["u1"] = user
+	r, tok := setupAuthRouterWithUser(t, us, ts, user)
+	ts.failDelete = true
+
+	w := doAuthRequest(r, "POST", "/api/auth/logout", tok, "")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("logout with a failing delete: got %d, want 500", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "db error") {
+		t.Errorf("internal detail leaked: %s", w.Body.String())
+	}
+	var clearing *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == auth.SessionCookieName {
+			clearing = c
+		}
+	}
+	if clearing == nil || clearing.Value != "" || clearing.MaxAge >= 0 {
+		t.Errorf("the session cookie must still be cleared, got %+v", clearing)
+	}
+}
