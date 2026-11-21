@@ -42,6 +42,35 @@ providers (it can read sign-in settings and providers, never their secrets), bac
 `create_publishable_key` makes only publishable SDK keys, which ship inside client
 apps and grant what the anon role grants.
 
+## Destructive tools ask twice
+
+Six tools destroy something that cannot be brought back: `delete_app`, `delete_function`,
+`delete_site`, `delete_function_secret`, `revoke_publishable_key` and `revoke_s3_key`. Each
+takes an optional `confirmation_token`.
+
+1. A call without it deletes nothing. It reads the target (so a target that is not there is refused here) and answers `confirmationRequired: true`, `wouldDelete` (what
+   would be destroyed), `confirmationToken` and `expiresInSeconds` (300).
+2. The same call with that token destroys it.
+
+A token is random and kept in the platform's memory as a hash. It is bound to the caller (the user and
+the personal access token of the connection), the tool and the exact target (project and object id),
+works once, and expires after five minutes. A token presented for another target, tool or project, or a
+second time, or after it expired, is refused and is spent; one presented by another caller is refused and
+left alone for its owner. A restart of the platform drops every token: ask again. The audit entry of the
+first call says `confirmation: requested`, the second `confirmed`; Studio's AI activity shows the first
+as "Waiting for confirmation".
+
+`FEATURE_MCPCONFIRM` is **on unless set to `false`**. Off, the six
+tools delete on the first call as before. The call still has to pass the route's own authorization
+(Developer, and the token's write scope) on the call that deletes.
+
+Not covered: `execute_sql` and `apply_migration` (a statement can drop a table; telling a destructive
+statement from a safe one is not reliable), `test_api_request` with `DELETE` (it deletes rows of the project's
+data API as the caller's end user), and tools that remove something a push, a deploy or a single call puts
+back (`remove_cors_origin`, `remove_app_domain`, `remove_site_domain`, `remove_site_preview`,
+`disconnect_app_repo`, `disconnect_site_repo`, `set_permission` with `remove`, `set_realtime`). Keep a client on
+`read_only=true` to stop the first group.
+
 ## Tools
 
 | Tool | Route |
@@ -59,7 +88,7 @@ apps and grant what the anon role grants.
 | `list_functions` / `deploy_function` / `set_function_secret` | `GET`/`POST /api/projects/{id}/functions/`, `POST .../functions/secrets` |
 | `list_apps` / `deploy_app` / `get_deploy_status` | `GET /api/projects/{id}/apps/` (+ `.../apps/{app}/deploys?limit=1` to report `NOT_DEPLOYED`); `POST .../apps/{app}/deploy` (a private-registry image needs its credential saved in Studio: a refusal names the registry and where to add it; where the pipeline flag is off, the image is stored with `PATCH` and the app deployed bodyless) with `{image, commitSha}` or empty to run the app's own image, pinned to its digest either way when the registry is public (the result's `unpinned` says when it is not); `GET .../apps/{app}/` + `.../deploys` or `.../deploys/{deployId}`; `state` is "rolling out" during a rollout and "succeeded" only once the app URL answers an HTTP probe (3 s), else "running, URL not answering yet" with the reason |
 | `create_app` | `POST /api/projects/{id}/apps/` (Studio's plan limits apply), then `GET`/`PUT /api/projects/{id}/cors/` to allow the app's own origin; deleting the app removes that origin again |
-| `update_app` / `delete_app` | `GET` then `PATCH /api/projects/{id}/apps/{app}/` at the version read (`If-Match`; env is merged by name, secrets kept as stored); `PUT /api/projects/{id}/app-network/` for the private-network switch (admin); `DELETE .../apps/{app}/` removes only that app and its CORS origin; an app with a disk is refused |
+| `update_app` / `delete_app` | `GET` then `PATCH /api/projects/{id}/apps/{app}/` at the version read (`If-Match`; env is merged by name, secrets kept as stored); `PUT /api/projects/{id}/app-network/` for the private-network switch (admin); `DELETE .../apps/{app}/` removes only that app and its CORS origin; an app with a disk is refused; asks twice (see above) |
 | `test_auth_flow` | `GET /api/projects/{id}/info/`, then one register or password sign-in against the project's own auth API with a test account the caller gives; reports status, outcome and the userId and role claims, never the password or a token; with `origin` the CORS preflight is checked first |
 | `get_logs` | database: `GET /api/provision/{id}/logs` (optional `query`, and `since` 1h/6h/24h/7d); app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs`. A log backend that does not answer gives "not available", never its address |
 | `get_slow_queries` | `GET /api/provision/{id}/slow-queries/?sort=total\|mean&limit=N`: the project's own normalized statements; the tool is offered only while `FEATURE_SLOWQUERIES` is on. Reset and turning statistics on stay in Studio |
@@ -82,7 +111,7 @@ apps and grant what the anon role grants.
 | `redeploy_app` | `POST .../apps/{app}/deploys/{deploy}/redeploy`: rolls an earlier deploy's frozen config out as a new deploy; the answer shows state and image, not the spec |
 | `list_app_domains` / `add_app_domain` / `verify_app_domain` / `remove_app_domain` | `.../apps/{app}/domains/`: the CNAME target to add, then a check that routes the domain once it points at the app. Mounted only where `APP_DOMAIN_ISSUER` is set; otherwise the tools say so |
 | `connect_app_repo` / `disconnect_app_repo` / `rebuild_app` / `list_app_builds` | `.../apps/{app}/git` and `.../builds`, `disconnect_app_repo` always (the route stays open with the flag off so a connection can be removed); the rest only while `FEATURE_APPGITBUILDS` is on. Build arguments are named, never echoed (their values can appear in build logs); the GitHub sign-in starts in Studio, never through MCP. Developer and above to change, build log Developer and above |
-| `revoke_publishable_key` | `GET .../sdk-keys/` to find the key, then `DELETE .../sdk-keys/{id}`; refuses any key that is not a listed publishable one, so a secret key is only ever revoked in Studio |
+| `revoke_publishable_key` | `GET .../sdk-keys/` to find the key, then `DELETE .../sdk-keys/{id}`; refuses any key that is not a listed publishable one, so a secret key is only ever revoked in Studio; asks twice (see above) |
 | `list_templates` | `GET .../app-templates/`: id, summary, apps, and the fit against the project's plan with refusals. Deploying one is not a tool, because its answer carries generated credentials readable once |
 | `invoke_function` | Only while `FEATURE_FUNCTIONINVOKE` is on (off by default). `POST .../functions/{fn}/invoke`: one real run with an optional JSON body and no Authorization or Cookie header; returns the function's own status and text answer (shortened at 64 KiB on a character boundary). The flag is not a safeguard: code deployed with `deploy_function` can already read the project's function secrets and `EXCALIBASE_DB_URL` from its environment and return them through its error text or `get_logs`, so anyone who may deploy a function can read them; the flag only removes one convenient way of running that code. Paced like the probes (10 at once, then one every 2 seconds). A platform refusal is an error |
 | `list_function_secrets` / `delete_function_secret` | `GET .../functions/secrets` (names only) and `DELETE .../functions/secrets/{key}`; the platform redeploys the functions but logs a failed redeploy without reporting it, so the answer also reads `.../functions/runtime/status` and warns when the runtime is not healthy. Setting one is `set_function_secret`. No secret-listing tool returns a value; deployed function code can read them (see `invoke_function`) |

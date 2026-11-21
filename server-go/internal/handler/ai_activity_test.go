@@ -87,6 +87,25 @@ func TestAIActivityListsCallsAndOffersRevokeOnlyForTheCallersLiveTokens(t *testi
 	}
 }
 
+// A destructive tool's first call only asks; the feed must not show it as a done deletion.
+func TestAIActivityCarriesWhetherADestructiveCallOnlyAsked(t *testing.T) {
+	at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	audit := &fakeProjectAudit{entries: []domain.AuditEntry{
+		{ID: 2, UserID: "me", ResourceID: "delete_app", Details: `{"tool":"delete_app","status":"ok","confirmation":"confirmed","tokenName":"laptop"}`, Timestamp: &at},
+		{ID: 1, UserID: "me", ResourceID: "delete_app", Details: `{"tool":"delete_app","status":"ok","confirmation":"requested","tokenName":"laptop"}`, Timestamp: &at},
+	}}
+	w := serveActivity(t, NewAIActivityHandler(audit, fakeTokenList{}), "/api/projects/proj-a/ai-activity/", "me")
+	var body struct {
+		Calls []aiActivityView `json:"calls"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Calls) != 2 {
+		t.Fatalf("decode: %v, %s", err, w.Body.String())
+	}
+	if body.Calls[0].Confirmation != "confirmed" || body.Calls[1].Confirmation != "requested" {
+		t.Errorf("calls = %+v", body.Calls)
+	}
+}
+
 func TestAIActivityLimit(t *testing.T) {
 	audit := &fakeProjectAudit{}
 	h := NewAIActivityHandler(audit, fakeTokenList{})

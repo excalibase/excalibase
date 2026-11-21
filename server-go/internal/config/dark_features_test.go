@@ -49,6 +49,17 @@ func TestLoad_OneTimeCredentialsAreOnUnlessSwitchedOff(t *testing.T) {
 	}
 }
 
+// MCP's destructive tools asking twice is a safety rail, so it is on unless an install says "false".
+func TestLoad_MCPConfirmIsOnUnlessSwitchedOff(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.test")
+	for value, want := range map[string]bool{"": true, "true": true, "yes": true, "false": false} {
+		t.Setenv("FEATURE_MCPCONFIRM", value)
+		if got := Load().Features().Enabled(context.Background(), features.MCPConfirm); got != want {
+			t.Errorf("FEATURE_MCPCONFIRM=%q: enabled=%v, want %v", value, got, want)
+		}
+	}
+}
+
 func TestLoad_EachDarkFeatureIsTurnedOnByItsOwnVariable(t *testing.T) {
 	t.Setenv("CORS_ORIGINS", "https://app.test")
 	for feature, env := range featureEnv {

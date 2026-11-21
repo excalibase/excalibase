@@ -107,4 +107,8 @@ describe('call result', () => {
     expect(callResult({ ...base, status: 'error', httpStatus: 409 })).toBe('Failed (409)');
     expect(callResult({ ...base, status: 'error' })).toBe('Failed');
   });
+  test('a delete that only asked is not shown as done', () => {
+    expect(callResult({ ...base, status: 'ok', confirmation: 'requested' })).toBe('Waiting for confirmation');
+    expect(callResult({ ...base, status: 'ok', confirmation: 'confirmed' })).toBe('OK');
+  });
 });

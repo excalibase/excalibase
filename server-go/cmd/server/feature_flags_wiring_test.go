@@ -184,6 +184,8 @@ var darkWork = map[features.Feature]string{
 	features.FreeWALUpload:   "TestTierConfig_GuardOffLeavesTheOperatorsInterval",
 	// On unless switched off: off, apps and functions keep the owner's login (internal/service).
 	features.AppRuntimeLogin: "TestAppRuntimeLogin_OffKeepsTheOwnerLogin",
+	// On unless switched off: only MCP's destructive tools read it; no route is gated (internal/mcpserver).
+	features.MCPConfirm: "TestTheSwitchedOffGuardDeletesAtOnce",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }
