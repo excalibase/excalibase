@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/root/.npm \
     rm -rf node_modules src test
 
 # ─── Stage 2 — Final Deno runtime image ─────────────────────────────────
-FROM denoland/deno:alpine-2.5.5
+FROM denoland/deno:alpine-2.9.8
 
 WORKDIR /app
 
