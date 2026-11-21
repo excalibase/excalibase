@@ -7,6 +7,7 @@ import { api } from '../api/client';
 import { Button } from '../components/Button';
 import { InviteLinkNotice } from '../components/InviteLinkNotice';
 import { useAuthStore } from '../stores/auth-store';
+import { useStudioV2 } from '../hooks/useDeploymentMode';
 
 interface DatabaseInstance {
   projectId: string;
@@ -35,9 +36,12 @@ export function OrgDetailPage() {
   // The console navigation opens the members and settings tabs by ?tab=.
   const [searchParams] = useSearchParams();
   const requestedTab = searchParams.get('tab');
-  const [tab, setTab] = useState<'projects' | 'members' | 'settings'>(
-    requestedTab === 'members' || requestedTab === 'settings' ? requestedTab : 'projects',
-  );
+  // Only with studio_v2 on; with it off the page opens on its projects as before.
+  const { enabled: studioV2 } = useStudioV2();
+  const [tab, setTab] = useState<'projects' | 'members' | 'settings'>('projects');
+  useEffect(() => {
+    if (studioV2 && (requestedTab === 'members' || requestedTab === 'settings')) setTab(requestedTab);
+  }, [studioV2, requestedTab]);
 
   // Invite state
   const [showInvite, setShowInvite] = useState(false);

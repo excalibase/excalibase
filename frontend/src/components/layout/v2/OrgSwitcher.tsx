@@ -11,7 +11,7 @@ export function OrgSwitcher() {
   const select = useOrgSelection((s) => s.select);
   const { open, setOpen, ref } = usePopup();
 
-  if (isLoading) return <span className={BUTTON} role="status">Loading organization</span>;
+  if (isLoading) return <output className={BUTTON}>Loading organization</output>;
   if (error) return <span className={BUTTON} role="alert">Organization unavailable</span>;
   if (!org) return <span className={BUTTON}>No organization</span>;
 

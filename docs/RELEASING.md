@@ -36,8 +36,10 @@ Rules that keep this safe:
    `main`: `.github/workflows/ci.yml`, `.github/workflows/cd.yml`,
    `.github/workflows/release.yml`, `scripts/guard-release-tag.sh`,
    `scripts/release-tags.sh`, `scripts/release-native-tags.sh`,
+   `scripts/release-slim-tags.sh`,
    `tests/cd-plan-test.sh`, `tests/cd-guard-test.sh`,
-   `tests/release-tags-test.sh` and `tests/release-native-tags-test.sh`.
+   `tests/release-tags-test.sh`, `tests/release-native-tags-test.sh` and
+   `tests/release-slim-tags-test.sh`.
    Check that CI is green on that PR before cherry-picking. Once per branch.
 3. **Cherry-pick** the fixes, merged to `main` first, as pull requests into
    `release/1.7` (CI runs on them). Bump the single-host bundle tag on the
@@ -87,3 +89,12 @@ Engine (`excalibase-graphql`) and auth have their own CD, which is still
 main-only. Until they publish `release-<major>.<minor>-<sha7>` too, a patch to
 those images needs their CD extended the same way; unpatched ones are retagged
 in step 7.
+
+## One-database engine images
+
+When `excalibase-graphql` is released, *Release* also promotes its one-database images
+(`<source_tag>-postgres`, `-mysql`, `-postgres-native`, `-mysql-native`) to `<version>-<variant>`. All four go
+together or none do. A source tag that has none of them, from before they existed, is skipped with a notice,
+unless this major.minor released them before: then a missing one fails the release. The native ones are built
+nightly by the engine's *Slim Native Images* workflow, so before a release run it for the commit to release
+(Run workflow, `sha=<full sha>`) and wait for green.

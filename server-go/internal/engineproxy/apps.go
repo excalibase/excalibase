@@ -1,6 +1,7 @@
 package engineproxy
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -436,6 +437,12 @@ func (h *Handler) checkMember(r *http.Request, network string, body []byte, disc
 // appNameLabel names an app on a container: its service name is that, under AppServiceDomain.
 const appNameLabel = "excalibase.app-name"
 
+// engineDefaultMode is the mode Podman's Docker-compatible API reports for a container on any network.
+const engineDefaultMode = "bridge"
+
+// projectLabel names the project a container or a network belongs to.
+const projectLabel = "excalibase.project"
+
 // checkAppRejoin admits a managed app back on the network it runs on, under its own service
 // name and no other, as a create admits it; a remade network takes every member off.
 func (h *Handler) checkAppRejoin(r *http.Request, network string, body []byte) (bool, error) {
@@ -460,10 +467,43 @@ func (h *Handler) checkAppRejoin(r *http.Request, network string, body []byte) (
 	}
 	aliases, _ := endpoint.(map[string]any)["Aliases"].([]any)
 	want := found.Config.Labels[appNameLabel] + "." + AppServiceDomain
-	if found.Config.Labels[h.policy.ManagedLabel] != "true" || found.Host.NetworkMode != network || aliases[0] != want {
+	if found.Config.Labels[h.policy.ManagedLabel] != "true" || aliases[0] != want {
+		return true, refuse("%s may rejoin only its own network under its own service name", name)
+	}
+	if network == h.policy.NetworkPrefix+BuildEgressNetwork {
+		return true, refuse("network %q is the builds' proxy's alone", network)
+	}
+	own, err := h.onItsOwnNetwork(r.Context(), found, network)
+	if err != nil {
+		return true, err
+	}
+	if !own {
 		return true, refuse("%s may rejoin only its own network under its own service name", name)
 	}
 	return true, nil
+}
+
+// onItsOwnNetwork reports whether an app's network is the one named. Docker reports the mode
+// an app was created with, its network's name. Podman's Docker-compatible API reports "bridge"
+// for any network, and an app a remake took off its network lists none; there the app's network
+// is the managed one that carries the app's own project. Behind the host firewall (Docker) an app
+// is on a bridge it was created on, so that mode names nothing and is not matched this way.
+func (h *Handler) onItsOwnNetwork(ctx context.Context, app guardedContainer, network string) (bool, error) {
+	if app.Host.NetworkMode == network {
+		return true, nil
+	}
+	if app.Host.NetworkMode != engineDefaultMode || h.policy.FenceProjectBridges {
+		return false, nil
+	}
+	project := app.Config.Labels[projectLabel]
+	if project == "" || !h.policy.underNetworkPrefix(network) {
+		return false, nil
+	}
+	var found struct{ Labels map[string]string }
+	if err := h.inspect(ctx, "/networks/"+url.PathEscape(network), &found); err != nil {
+		return false, err
+	}
+	return found.Labels[h.policy.ManagedLabel] == "true" && found.Labels[projectLabel] == project, nil
 }
 
 func methodOnly(r *http.Request, method string) error {

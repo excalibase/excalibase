@@ -54,10 +54,19 @@ describe('studio_v2 flag gate', () => {
     expect(screen.getByText('page')).toBeInTheDocument();
   });
 
-  test('until the server answers, the flag counts as off', () => {
+  test('until the server answers, a neutral loader and neither layout', () => {
     vi.mocked(api.get).mockReturnValue(new Promise(() => {}) as never);
     renderSwitch();
+    expect(screen.getByTestId('layout-loading')).toBeInTheDocument();
     expect(screen.queryByTestId('studio-shell')).not.toBeInTheDocument();
-    expect(screen.getByTestId('platform-nav')).toBeInTheDocument();
+    expect(screen.queryByTestId('platform-nav')).not.toBeInTheDocument();
+  });
+
+  test('when /api/config fails, the flag is off: the current layout', async () => {
+    vi.mocked(api.get).mockRejectedValue(new Error('network') as never);
+    renderSwitch();
+    expect(await screen.findByTestId('platform-nav')).toBeInTheDocument();
+    expect(screen.queryByTestId('studio-shell')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('layout-loading')).not.toBeInTheDocument();
   });
 });

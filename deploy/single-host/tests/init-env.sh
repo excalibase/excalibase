@@ -203,6 +203,17 @@ if sh "$DIR/../init.sh" --env-file "$WORK/apps3.env" --domain example.com --admi
   fail "an app domain that is not a DNS name was accepted"
 fi
 
+# EXC-682: per-app user ranges are auto unless chosen, and only three values are accepted.
+[ "$(value APP_USERNS)" = auto ] || fail "APP_USERNS is not auto by default"
+sh "$DIR/../init.sh" --env-file "$WORK/userns.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --apps --app-sandbox none --app-userns per-app >/dev/null \
+  || fail "--app-userns refused"
+grep -qx 'APP_USERNS=per-app' "$WORK/userns.env" || fail "--app-userns not written"
+if sh "$DIR/../init.sh" --env-file "$WORK/userns2.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --app-userns host >/dev/null 2>&1; then
+  fail "an unknown --app-userns was accepted"
+fi
+
 # DocumentDB (EXC-576): off unless asked.
 ! grep -q '^DOCUMENTDB_ENABLED' "$WORK/.env" || fail "DocumentDB turned on without --documentdb"
 sh "$DIR/../init.sh" --env-file "$WORK/docdb.env" --domain example.com --admin-email me@example.com \

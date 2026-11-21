@@ -108,6 +108,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
   const toggleSort = (id: string) => {
     const next: SortState = sort?.columnId !== id ? { columnId: id, direction: 'asc' } : { columnId: id, direction: sort.direction === 'asc' ? 'desc' : 'asc' };
     setSort(next);
+    selection.clear();
     if (server) paging.onSortChange?.(next);
   };
 
@@ -136,9 +137,9 @@ export function DataTable<T>(props: DataTableProps<T>) {
       )}
       <div className="bg-surface-card border border-border-primary rounded-xl overflow-x-auto">
         {isLoading ? (
-          <div role="status" className="flex items-center justify-center gap-2 py-16 text-sm text-text-secondary">
+          <output className="flex items-center justify-center gap-2 py-16 text-sm text-text-secondary">
             <Loader2 className="w-4 h-4 animate-spin" /> Loading {label.toLowerCase()}
-          </div>
+          </output>
         ) : (
           <Body label={label} visible={visible} shown={shown} getRowId={getRowId} selectable={selectable} selection={selection}
             sort={sort} onSort={toggleSort} empty={total === 0} filtering={filtering} emptyState={emptyState}
@@ -148,8 +149,8 @@ export function DataTable<T>(props: DataTableProps<T>) {
       {!isLoading && total > 0 && (
         <Pager range={pageRange(current, pageSize, total)} total={total} page={current} pageSize={pageSize}
           hasNext={current * pageSize < total} sizeChangeable={!server}
-          onPage={(next) => (server ? paging.onPageChange(next) : setPage(next))}
-          onSize={(size) => { setClientSize(size); setPage(1); }} />
+          onPage={(next) => { selection.clear(); if (server) paging.onPageChange(next); else setPage(next); }}
+          onSize={(size) => { setClientSize(size); setPage(1); selection.clear(); }} />
       )}
     </section>
   );
@@ -280,9 +281,15 @@ function rowName<T>(visible: readonly Column<T>[], row: T, fallback: string): st
   return visible[0]?.text?.(row) ?? fallback;
 }
 
+function ariaSortOf(direction: 'asc' | 'desc' | null, sortable: boolean): 'ascending' | 'descending' | 'none' | undefined {
+  if (direction === 'asc') return 'ascending';
+  if (direction === 'desc') return 'descending';
+  return sortable ? 'none' : undefined;
+}
+
 function HeaderCell<T>({ column, sort, onSort }: { readonly column: Column<T>; readonly sort: SortState | null; readonly onSort: (id: string) => void }) {
   const direction = sort?.columnId === column.id ? sort.direction : null;
-  const ariaSort = direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : column.sortValue ? 'none' : undefined;
+  const ariaSort = ariaSortOf(direction, Boolean(column.sortValue));
   return (
     <th scope="col" aria-sort={ariaSort} className="text-left px-4 py-3 font-medium">
       {column.sortValue ? (
@@ -299,13 +306,14 @@ function HeaderCell<T>({ column, sort, onSort }: { readonly column: Column<T>; r
 interface PagerProps { readonly range: { from: number; to: number }; readonly total: number; readonly page: number; readonly pageSize: number; readonly hasNext: boolean; readonly sizeChangeable: boolean; readonly onPage: (page: number) => void; readonly onSize: (size: number) => void }
 
 function Pager(p: PagerProps) {
+  const sizeId = useId();
   return (
     <div className="flex flex-wrap items-center gap-3 text-sm text-text-secondary">
       <span aria-live="polite">{p.range.from}–{p.range.to} of {p.total}</span>
       {p.sizeChangeable && (
-        <label className="flex items-center gap-1">
-          Rows per page
-          <select value={p.pageSize} onChange={(e) => p.onSize(Number(e.target.value))} className={cn(FIELD, 'px-1 py-0.5')}>
+        <label htmlFor={sizeId} className="flex items-center gap-1">
+          <span>Rows per page</span>
+          <select id={sizeId} value={p.pageSize} onChange={(e) => p.onSize(Number(e.target.value))} className={cn(FIELD, 'px-1 py-0.5')}>
             {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </label>

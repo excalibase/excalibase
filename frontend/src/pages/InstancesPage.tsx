@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { projectOperationMessage } from '../hooks/projectFollow';
 import { useInstances, useDeprovisionDatabase } from '../hooks/useProvisioning';
@@ -8,8 +9,9 @@ import { Database, DatabaseZap, Loader2, Trash2, Eye, Sprout, Star, Crown } from
 import { useAuthStore } from '../stores/auth-store';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { engineIcon, engineLabel } from '../utils/engine';
+import { LayoutLoading } from '../components/layout/v2/LayoutLoading';
 import { useStudioV2 } from '../hooks/useDeploymentMode';
-import { ProjectsPage } from './home/ProjectsPage';
+const ProjectsPage = lazy(() => import('./home/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
 
 const ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
 
@@ -20,7 +22,7 @@ function getInstanceCountLabel(count: number): string {
 // With studio_v2 on, the shared table replaces this page.
 export function InstancesPage() {
   const { enabled } = useStudioV2();
-  return enabled ? <ProjectsPage /> : <LegacyInstancesPage />;
+  return enabled ? <Suspense fallback={<LayoutLoading />}><ProjectsPage /></Suspense> : <LegacyInstancesPage />;
 }
 
 function LegacyInstancesPage() {

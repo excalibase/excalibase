@@ -41,7 +41,7 @@ func GetUser(ctx context.Context) *domain.User {
 // SessionCookieName is the cookie that holds the studio's session PAT.
 // Operators invoking the API from CI/scripts use the Authorization header
 // instead — both paths land on ExtractAuth.
-const SessionCookieName = "excali_session"
+const SessionCookieName = HostCookiePrefix + LegacySessionCookieName
 
 // extractRawToken returns the raw bearer token from either the
 // Authorization header (CI/scripts) or the session cookie (studio). Header
@@ -50,8 +50,8 @@ func extractRawToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimPrefix(h, "Bearer ")
 	}
-	if c, err := r.Cookie(SessionCookieName); err == nil && c.Value != "" {
-		return c.Value
+	if value, ok := ReadCookie(r, LegacySessionCookieName); ok {
+		return value
 	}
 	return ""
 }

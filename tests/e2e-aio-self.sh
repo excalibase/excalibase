@@ -71,24 +71,26 @@ LOGIN_RESP=$(curl -s -i -c "$COOKIE_JAR" -X POST "$API_PROV/api/auth/login" -H "
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}")
 
-echo "$LOGIN_RESP" | grep -qi 'Set-Cookie: excali_session' && pass "Set-Cookie excali_session" || fail "Set-Cookie" "missing"
+echo "$LOGIN_RESP" | grep -qi 'Set-Cookie: __Host-excali_session' && pass "Set-Cookie __Host-excali_session" || fail "Set-Cookie" "missing"
+echo "$LOGIN_RESP" | grep -i 'Set-Cookie: __Host-excali_session' | grep -qi 'Secure' && pass "session cookie Secure" || fail "Secure" "missing"
+echo "$LOGIN_RESP" | grep -qi 'Set-Cookie: excali_session=;.*Max-Age=0' && pass "login clears the legacy cookie" || fail "legacy cookie" "not cleared on login"
 echo "$LOGIN_RESP" | grep -qi 'HttpOnly' && pass "HttpOnly" || fail "HttpOnly" "missing"
 echo "$LOGIN_RESP" | grep -qi 'SameSite=Strict' && pass "SameSite=Strict" || fail "SameSite" "missing"
 echo "$LOGIN_RESP" | grep -qi 'Strict-Transport-Security' && pass "HSTS" || fail "HSTS" "missing"
 echo "$LOGIN_RESP" | grep -qi 'Content-Security-Policy' && pass "CSP" || fail "CSP" "missing"
 echo "$LOGIN_RESP" | grep -qi 'X-Frame-Options: DENY' && pass "X-Frame-Options DENY" || fail "X-Frame-Options" "missing"
 
-SESSION_TOKEN=$(grep excali_session "$COOKIE_JAR" | awk '{print $7}')
-curl -sf -b "excali_session=$SESSION_TOKEN" "$API_PROV/api/auth/me" | grep -q '"role":"platform_admin"' \
+SESSION_TOKEN=$(grep __Host-excali_session "$COOKIE_JAR" | awk '{print $7}')
+curl -sf -b "__Host-excali_session=$SESSION_TOKEN" "$API_PROV/api/auth/me" | grep -q '"role":"platform_admin"' \
   && pass "cookie-only /me works" || fail "cookie auth" "/me rejected"
 
 TOKENS=$(curl -sf -H "$PAT_HDR" "$API_PROV/api/auth/tokens" 2>/dev/null)
 echo "$TOKENS" | jq -e 'type == "array"' >/dev/null 2>&1 && pass "token list readable" || fail "token list" "$TOKENS"
 echo "$TOKENS" | jq -r '.[].scopes' 2>/dev/null | grep -q session && fail "token list" "a sign-in session is listed as an access token" || pass "sessions not listed as access tokens"
 
-LOGOUT=$(curl -s -i -b "excali_session=$SESSION_TOKEN" -X POST "$API_PROV/api/auth/logout" 2>/dev/null)
-echo "$LOGOUT" | grep -qi 'Set-Cookie: excali_session=;.*Max-Age=0' && pass "logout clears cookie" || fail "logout cookie clear" "no Max-Age=0"
-ME_AFTER=$(curl -s -o /dev/null -w "%{http_code}" -b "excali_session=$SESSION_TOKEN" "$API_PROV/api/auth/me")
+LOGOUT=$(curl -s -i -b "__Host-excali_session=$SESSION_TOKEN" -X POST "$API_PROV/api/auth/logout" 2>/dev/null)
+echo "$LOGOUT" | grep -qi 'Set-Cookie: __Host-excali_session=;.*Max-Age=0' && pass "logout clears cookie" || fail "logout cookie clear" "no Max-Age=0"
+ME_AFTER=$(curl -s -o /dev/null -w "%{http_code}" -b "__Host-excali_session=$SESSION_TOKEN" "$API_PROV/api/auth/me")
 [ "$ME_AFTER" = "401" ] && pass "revoked cookie 401" || fail "revoked cookie" "got $ME_AFTER"
 
 ###############################################################################
