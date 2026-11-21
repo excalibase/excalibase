@@ -38,4 +38,21 @@ describe('ProjectIndex', () => {
     expect(await screen.findByRole('status', { name: /loading/i })).toBeInTheDocument();
     expect(screen.queryByText('old overview')).not.toBeInTheDocument();
   });
+
+  test('a config request that failed once is not waited for again when the page mounts', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = () => (
+      <QueryClientProvider client={client}>
+        <MemoryRouter><Suspense fallback={<p>suspended</p>}><ProjectIndex /></Suspense></MemoryRouter>
+      </QueryClientProvider>
+    );
+    vi.mocked(api.get).mockRejectedValueOnce(new Error('down'));
+    const first = render(view());
+    expect(await screen.findByText('old overview')).toBeInTheDocument();
+    first.unmount();
+    vi.mocked(api.get).mockImplementation((() => new Promise(() => {})) as never);
+    render(view());
+    expect(await screen.findByText('old overview')).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: /loading/i })).not.toBeInTheDocument();
+  });
 });

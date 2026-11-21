@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { ToneBadge } from '../../containers/ContainerBits';
 import type { CardStatus } from './cardStatus';
@@ -23,20 +23,24 @@ interface PanelFrameProps {
 // no tabs shows its one view under the header.
 export function PanelFrame({ title, subtitle, status, onClose, tabsLabel = title, tabs = [], tab = '', onTab, idPrefix, children }: PanelFrameProps) {
   const panel = useRef<HTMLElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
   // Opening a panel moves focus into it, and brings it into view when it is
-  // stacked under the cards on a phone.
+  // stacked under the cards on a phone. Escape closes it when it came from
+  // inside it: not from a dialog opened over it, which handles its own.
   useEffect(() => {
-    panel.current?.focus({ preventScroll: true });
-    panel.current?.scrollIntoView?.({ block: 'nearest' });
+    const element = panel.current;
+    if (!element) return undefined;
+    element.focus({ preventScroll: true });
+    element.scrollIntoView?.({ block: 'nearest' });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) close.current();
+    };
+    element.addEventListener('keydown', onKeyDown);
+    return () => element.removeEventListener('keydown', onKeyDown);
   }, []);
-  // Escape closes the panel only when it came from inside it: not from a dialog
-  // opened over it, which handles its own.
-  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key !== 'Escape' || event.defaultPrevented) return;
-    if (event.target instanceof Node && event.currentTarget.contains(event.target)) onClose();
-  };
   return (
-    <section ref={panel} tabIndex={-1} onKeyDown={onKeyDown} aria-label={`${title} panel`} className="min-w-0 rounded-xl outline-none border border-border-primary bg-surface-card p-5" data-testid="service-panel">
+    <section ref={panel} tabIndex={-1} aria-label={`${title} panel`} className="min-w-0 rounded-xl outline-none border border-border-primary bg-surface-card p-5" data-testid="service-panel">
       <header className="mb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="truncate text-lg font-semibold text-text-primary">{title}</h2>
