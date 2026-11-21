@@ -52,7 +52,7 @@ services:
       APP_EGRESS_UNGUARDED: ${APP_EGRESS_UNGUARDED:-}
       HOST_RESOLV_CONF: ${HOST_RESOLV_CONF:-}
       ENGINE_SOCKET_UID: ${ENGINE_SOCKET_UID:-1000}
-      PLATFORM_TAG: ${TAG:-1.7.1}
+      PLATFORM_TAG: ${TAG:-1.7.2}
     command: ["sh", "/preflight.sh"]
     volumes:
       - ./preflight.sh:/preflight.sh:ro,z
@@ -199,7 +199,7 @@ services:
   # refuses any container that asks for host access (privileged, host paths,
   # devices, host namespaces, other networks).
   engine-proxy:
-    image: docker.io/excalibase/provisioning:${TAG:-1.7.1}
+    image: docker.io/excalibase/provisioning:${TAG:-1.7.2}
     container_name: excalibase-engine-proxy
     entrypoint: ["/bin/excalibase-engine-proxy"]
     # The socket's group on Docker (init.sh reads it); the owner on rootless Podman.
@@ -256,7 +256,7 @@ services:
     restart: unless-stopped
 
   provisioning:
-    image: docker.io/excalibase/provisioning:${TAG:-1.7.1}
+    image: docker.io/excalibase/provisioning:${TAG:-1.7.2}
     container_name: excalibase-provisioning
     environment:
       # PORT serves the other services and ignores X-Forwarded-For.
@@ -451,7 +451,7 @@ services:
       SITES_GITHUB_WEB_URL: ${SITES_GITHUB_WEB_URL:-https://github.com}
       SITES_BUILD_SLOTS: ${SITES_BUILD_SLOTS:-1}
       SITES_BUILD_NODE_IMAGE: ${SITES_BUILD_NODE_IMAGE:-}
-      SITES_BUILD_EGRESS_IMAGE: ${SITES_BUILD_EGRESS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.7.1}}
+      SITES_BUILD_EGRESS_IMAGE: ${SITES_BUILD_EGRESS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.7.2}}
       # host:port entries builds may reach although private, e.g. a git server on your LAN.
       SITES_BUILD_EGRESS_ALLOW: ${SITES_BUILD_EGRESS_ALLOW:-}
       # DocumentDB projects (EXC-576): off unless .env says "true" (init.sh --documentdb).
@@ -477,7 +477,7 @@ services:
       # Apps reach these names through the edge; the engine proxy admits exactly them (EXC-608).
       APP_EDGE_ALIASES: *edge_aliases
       # Sizes and copies app disks; provisioning's own image, already on the host.
-      APP_DISK_TOOLS_IMAGE: ${APP_DISK_TOOLS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.7.1}}
+      APP_DISK_TOOLS_IMAGE: ${APP_DISK_TOOLS_IMAGE:-docker.io/excalibase/provisioning:${TAG:-1.7.2}}
       # Where custom domains' CNAMEs are looked up; the host's resolver when unset.
       APP_DOMAIN_RESOLVER: ${APP_DOMAIN_RESOLVER:-}
       # Registries on this host (e.g. localhost:5000) that apps deploy from by digest; never dialled by the platform.
@@ -540,7 +540,7 @@ services:
   # table; list a public address the host is reached by but does not hold (NAT) in
   # LOG_FORWARDER_EXTRA_DENY_CIDRS.
   log-forwarder:
-    image: docker.io/excalibase/provisioning:${TAG:-1.7.1}
+    image: docker.io/excalibase/provisioning:${TAG:-1.7.2}
     container_name: excalibase-log-forwarder
     profiles: ["logdrains"]
     entrypoint: ["/bin/excalibase-log-forwarder"]
@@ -569,7 +569,7 @@ services:
     restart: unless-stopped
 
   studio:
-    image: docker.io/excalibase/studio:${TAG:-1.7.1}
+    image: docker.io/excalibase/studio:${TAG:-1.7.2}
     container_name: excalibase-studio
     depends_on:
       provisioning:
@@ -625,7 +625,7 @@ services:
     restart: "no"
 
   auth:
-    image: docker.io/excalibase/excalibase-auth:${TAG:-1.7.1}
+    image: docker.io/excalibase/excalibase-auth:${TAG:-1.7.2}
     container_name: excalibase-auth
     environment:
       PORT: "24000"
@@ -666,7 +666,7 @@ services:
   # /{projectId}/api/v1, with the project's database credentials and
   # permissions read from provisioning per request. No default database.
   graphql:
-    image: docker.io/excalibase/excalibase-graphql:${TAG:-1.7.1}
+    image: docker.io/excalibase/excalibase-graphql:${TAG:-1.7.2}
     container_name: excalibase-graphql
     environment:
       SERVER_PORT: "10000"
@@ -765,7 +765,7 @@ services:
   # The image is the release's own, iptables included: nothing downloaded at start.
   # Rootless Podman needs none: its bridges live in the user's own namespace.
   host-firewall:
-    image: docker.io/excalibase/provisioning:${TAG:-1.7.1}
+    image: docker.io/excalibase/provisioning:${TAG:-1.7.2}
     container_name: excalibase-host-firewall
     entrypoint: ["sh", "/host-firewall.sh"]
     user: "0:0"
