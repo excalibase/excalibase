@@ -1,0 +1,47 @@
+import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
+import App from './App';
+import { api } from './api/client';
+import { useAuthStore } from './stores/auth-store';
+
+vi.mock('./api/client', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
+
+function serve(features: object) {
+  vi.mocked(api.get).mockImplementation((url: string) => {
+    const bodies: Record<string, unknown> = {
+      '/config': { deploymentMode: 'cloud', features },
+      '/vault/status': { initialized: true, sealed: false },
+      '/auth/setup-status': { hasAdmin: true },
+    };
+    return Promise.resolve({ data: bodies[url] ?? [] }) as never;
+  });
+}
+
+function renderAt(path: string) {
+  useAuthStore.setState({ user: { id: 'u1', username: 'dev', email: 'dev@example.test', role: 'user' }, isAuthenticated: true });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[path]}><App /></MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe('/usage belongs to studio_v2', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('flag off: the page is not served', async () => {
+    serve({ studio_v2: false });
+    renderAt('/usage');
+    expect(await screen.findByTestId('feature-unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('usage-page')).not.toBeInTheDocument();
+  });
+
+  test('flag on: the page is served', async () => {
+    serve({ studio_v2: true });
+    renderAt('/usage');
+    expect(await screen.findByTestId('usage-page')).toBeInTheDocument();
+  });
+});

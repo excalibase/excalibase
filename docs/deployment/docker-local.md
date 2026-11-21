@@ -635,6 +635,7 @@ the code.
 | `.env` | Default | Meaning |
 |---|---|---|
 | `FEATURE_FUNCTIONINVOKE` | unset (off) | the MCP `invoke_function` tool |
+| `FEATURE_STUDIO_V2` | unset (off) | the cloud-console layout of Studio: new top bar, side navigation, command palette (⌘K) and shared table |
 
 ## Refusals you may see
 
