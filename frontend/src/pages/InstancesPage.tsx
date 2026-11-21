@@ -11,7 +11,7 @@ import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletio
 import { engineIcon, engineLabel } from '../utils/engine';
 import { LayoutLoading } from '../components/layout/v2/LayoutLoading';
 import { useStudioV2 } from '../hooks/useDeploymentMode';
-const ProjectsTable = lazy(() => import('./ProjectsTable').then((m) => ({ default: m.ProjectsTable })));
+const ProjectsPage = lazy(() => import('./home/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
 
 const ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
 
@@ -22,7 +22,7 @@ function getInstanceCountLabel(count: number): string {
 // With studio_v2 on, the shared table replaces this page.
 export function InstancesPage() {
   const { enabled } = useStudioV2();
-  return enabled ? <Suspense fallback={<LayoutLoading />}><ProjectsTable /></Suspense> : <LegacyInstancesPage />;
+  return enabled ? <Suspense fallback={<LayoutLoading />}><ProjectsPage /></Suspense> : <LegacyInstancesPage />;
 }
 
 function LegacyInstancesPage() {

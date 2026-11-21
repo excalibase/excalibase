@@ -35,7 +35,7 @@ function mount(flag: boolean, projects: unknown, failProjects = false) {
   );
 }
 
-describe('Projects list', () => {
+describe('Instances page with studio_v2', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useOrgSelection.setState({ orgId: null });
@@ -54,13 +54,13 @@ describe('Projects list', () => {
     await userEvent.type(screen.getByRole('searchbox'), 'beta');
     const rows = screen.getAllByRole('row').slice(1);
     expect(rows).toHaveLength(1);
-    expect(within(rows[0]).getByRole('link', { name: /beta/ })).toHaveAttribute('href', '/project/beta');
+    expect(within(rows[0]).getByRole('link', { name: /^beta/ })).toHaveAttribute('href', '/project/beta');
   });
 
   test('only projects of my orgs are listed', async () => {
     mount(true, [project('alpha'), project('foreign', { orgId: 'org-other' })]);
-    expect(await screen.findByRole('link', { name: /alpha/ })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /foreign/ })).not.toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /^alpha/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^foreign/ })).not.toBeInTheDocument();
   });
 
   test('a failed load is an error, not "no projects"', async () => {
