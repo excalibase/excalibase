@@ -101,6 +101,7 @@ var hostConfigFields = map[string]hostConfigCheck{
 	"LogConfig":         checkLogConfig,
 	"IpcMode":           privateOnly("IpcMode", "private", "none", "shareable"),
 	"CgroupnsMode":      privateOnly("CgroupnsMode", "private"),
+	"UsernsMode":        checkUsernsMode,
 	"DnsSearch":         exactly("DnsSearch", AppServiceDomain),
 	"DnsOptions":        exactly("DnsOptions", "ndots:1"),
 }

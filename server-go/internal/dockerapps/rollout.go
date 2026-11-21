@@ -27,6 +27,9 @@ func (r *Runtime) ApplyAppWorkload(ctx context.Context, namespace string, worklo
 	if err := r.ensureProjectNetwork(ctx, spec.Project, namespace, spec.Port != 0); err != nil {
 		return err
 	}
+	if spec.Userns, err = r.appUserns(ctx, spec.Project, spec.AppID); err != nil {
+		return err
+	}
 	if err := r.recordPending(spec); err != nil {
 		return err
 	}

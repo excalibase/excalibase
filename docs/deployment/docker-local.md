@@ -350,6 +350,7 @@ Apps' logs are the engine's (`docker logs`); rotate them with the daemon's
 | `APP_HOSTING_ENABLED` | `false` (`true` with `--apps`) | Containers on this host |
 | `APP_DOMAIN` | `apps.<domain>` | Parent of every app hostname |
 | `APP_SANDBOX_RUNTIME` | `runsc` | `none` runs apps without gVisor |
+| `APP_USERNS` | `auto` | Rootless Podman without a sandbox only: `per-app` gives each app its own user range, `shared` one for all; Docker and gVisor are unchanged, and `per-app` there refuses to start ([podman.md](podman.md#apps-containers)) |
 | `APP_EGRESS` | `none` | `internet` lets apps call out |
 | `APP_DOMAIN_RESOLVER` | the host's | `host:port` of the DNS server custom domains' CNAMEs are checked against |
 
