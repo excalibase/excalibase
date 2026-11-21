@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { API_BASE } from './base';
 
-// The httpOnly `excali_session` cookie set on /api/auth/login is Studio's only
+// The httpOnly `__Host-excali_session` cookie set on /api/auth/login is Studio's only
 // credential; no script can read it. withCredentials lets the browser send it
 // when the API is on another origin in development.
 export const api = axios.create({

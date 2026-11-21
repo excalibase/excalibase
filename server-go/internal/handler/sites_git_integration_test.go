@@ -63,7 +63,7 @@ func (a *gitAPI) signIn() {
 		a.t.Fatalf("sign-in start: %d %s", started.Code, started.Body.String())
 	}
 	cookies := started.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != siteGitBrowserCookie || !cookies[0].HttpOnly {
+	if len(cookies) != 1 || cookies[0].Name != auth.CookieName(siteGitBrowserCookie) || !cookies[0].HttpOnly {
 		a.t.Fatalf("cookies %+v", cookies)
 	}
 	link, err := url.Parse(decodeGit[map[string]string](a.t, started)["url"])
