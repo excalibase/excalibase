@@ -74,8 +74,11 @@ type AppConfig struct {
 	AdminAccessTeamDomain string
 	AdminAccessAud        string
 	StudioURL             string // Studio origin that emailed verification and reset links open
-	AuthInternalURL       string // excalibase-auth inside the platform network; SDK key management calls it
-	RegistrationMode      string // "open" (default) or "invite" — invite closes open studio signup
+	// InsecureCookies (STUDIO_INSECURE_COOKIES=true) drops the __Host- prefix and Secure flag
+	// from Studio's cookies so a plain-http install on a LAN address can sign in. Never on https.
+	InsecureCookies  bool
+	AuthInternalURL  string // excalibase-auth inside the platform network; SDK key management calls it
+	RegistrationMode string // "open" (default) or "invite" — invite closes open studio signup
 	// PublicPort serves the edge only; Port serves in-cluster callers and
 	// never believes X-Forwarded-For.
 	PublicPort string
@@ -528,6 +531,7 @@ func load() AppConfig {
 		AdminHost:                      strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_HOST"))),
 		AdminAccessTeamDomain:          strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_ACCESS_TEAM_DOMAIN"))),
 		AdminAccessAud:                 strings.TrimSpace(os.Getenv("ADMIN_ACCESS_AUD")),
+		InsecureCookies:                os.Getenv("STUDIO_INSECURE_COOKIES") == "true",
 		StudioURL:                      strings.TrimRight(strings.TrimSpace(os.Getenv("STUDIO_URL")), "/"),
 		AuthInternalURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_INTERNAL_URL")), "/"),
 		KubeconfigPath:                 envOr("KUBECONFIG_PATH", ""),
@@ -710,6 +714,7 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: "DOCKER_TLS_VERIFY", Field: "DockerTLSVerify", Enabled: c.DockerTLSVerify},
 		{Env: "APP_HOSTING_ENABLED", Field: "AppHostingEnabled", Enabled: c.AppHostingEnabled},
 		{Env: "SITES_ENABLED", Field: "SitesEnabled", Enabled: c.SitesEnabled},
+		{Env: "STUDIO_INSECURE_COOKIES", Field: "InsecureCookies", Enabled: c.InsecureCookies},
 		{Env: "SITES_GIT_BUILDS_ENABLED", Field: "SitesGitBuildsEnabled", Enabled: c.SitesGitBuildsEnabled},
 		{Env: "APP_WILDCARD_TLS", Field: "AppWildcardTLS", Enabled: c.AppWildcardTLS},
 		{Env: "DOCUMENTDB_ENABLED", Field: "DocumentDBEnabled", Enabled: c.DocumentDBEnabled},

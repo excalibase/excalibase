@@ -119,6 +119,14 @@ func runServer(cfg config.AppConfig) {
 	if err := cfg.CheckStudioURL(); err != nil {
 		log.Fatal(err)
 	}
+	warnings, err := cfg.CheckCookieIsolation()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, warning := range warnings {
+		log.Printf("WARN: %s", warning)
+	}
+	auth.UseInsecureCookies(cfg.InsecureCookies)
 	if err := cfg.CheckPublicListener(); err != nil {
 		log.Fatal(err)
 	}

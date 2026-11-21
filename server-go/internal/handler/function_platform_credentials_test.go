@@ -18,7 +18,7 @@ const platformPAT = "excb_0123456789abcdef0123456789abcdef"
 
 func TestPublicInvoke_StripsPlatformCookiesAndKeepsTheCustomersOwn(t *testing.T) {
 	r, seen, sign := newMarkerTestRouter(t)
-	cookie := auth.SessionCookieName + "=" + platformPAT + "; theme=dark; " + oauthStateCookie + "=s1; cart=42"
+	cookie := auth.SessionCookieName + "=" + platformPAT + "; theme=dark; " + auth.CookieName(oauthStateCookie) + "=s1; " + auth.LegacySessionCookieName + "=old; cart=42"
 
 	for _, call := range []struct{ fn, token string }{{"open", ""}, {"secure", sign(nil)}} {
 		invokeMarker(r, call.fn, call.token, map[string]string{"Cookie": cookie})
@@ -94,5 +94,17 @@ func TestRuntimeHeaders_StripPlatformCredentialsOnEveryAuthMode(t *testing.T) {
 		if got := headers[authVerifiedHeader]; (mode == authVerified) != (got == "1") {
 			t.Errorf("mode %d: %s=%q", mode, authVerifiedHeader, got)
 		}
+	}
+}
+
+func TestPublicInvoke_StripsEveryPrefixedStudioCookie(t *testing.T) {
+	r, seen, _ := newMarkerTestRouter(t)
+	cookie := auth.CookieName(oauthStateCookie) + "=s1; " + auth.CookieName(siteGitBrowserCookie) + "=k1; " +
+		siteGitBrowserCookie + "=k0; cart=42"
+
+	invokeMarker(r, "open", "", map[string]string{"Cookie": cookie})
+
+	if got := (*seen)["Cookie"]; got != "cart=42" {
+		t.Fatalf("customer cookies = %q, want only cart=42", got)
 	}
 }
