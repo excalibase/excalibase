@@ -327,6 +327,8 @@ services:
       # MCP's destructive tools ask twice: on unless set to false.
       FEATURE_MCPCONFIRM: ${FEATURE_MCPCONFIRM:-true}
       # Studio's cloud-console layout (EXC-762).
+      # Functions cannot serve HTML, XHTML or SVG pages from the shared API origin (EXC-810); on by default.
+      FEATURE_FUNCTIONHTMLGUARD: ${FEATURE_FUNCTIONHTMLGUARD:-true}
       FEATURE_STUDIO_V2: ${FEATURE_STUDIO_V2:-false}
       # MCP invoke_function, off until chosen. Not a safeguard: deployed function code can already read the project's function secrets; this only removes one way of running it (EXC-684).
       FEATURE_FUNCTIONINVOKE: ${FEATURE_FUNCTIONINVOKE:-false}

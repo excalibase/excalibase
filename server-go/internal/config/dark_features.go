@@ -51,6 +51,7 @@ var featureEnv = map[features.Feature]string{
 	features.MCPConfirm:         "FEATURE_MCPCONFIRM",
 	features.StudioV2:           "FEATURE_STUDIO_V2",
 	features.FunctionInvoke:     "FEATURE_FUNCTIONINVOKE",
+	features.FunctionHTMLGuard:  "FEATURE_FUNCTIONHTMLGUARD",
 }
 
 // defaultOn are the features that are on until their variable says "false":
@@ -64,6 +65,7 @@ var defaultOn = map[features.Feature]bool{
 	features.WALArchiveAlert:    true,
 	features.FreeWALUpload:      true,
 	features.AppRuntimeLogin:    true,
+	features.FunctionHTMLGuard:  true,
 	features.MCPConfirm:         true,
 }
 

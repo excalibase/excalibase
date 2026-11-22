@@ -1369,7 +1369,7 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	writeRuntimeResponse(w, fn.ProjectID, resp)
+	writeRuntimeResponse(w, fn.ProjectID, resp, h.htmlGuardOn(r.Context()))
 }
 
 // --- Secrets ---

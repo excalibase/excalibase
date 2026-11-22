@@ -127,6 +127,10 @@ const (
 	// own instead of the database owner's, which can create and change logins
 	// on Postgres 16 and later (EXC-765). On unless switched off.
 	AppRuntimeLogin Feature = "appruntimelogin"
+	// FunctionHTMLGuard serves a function's HTML, XHTML and SVG answers as plain
+	// text on the shared API origin, so no fake page is served from the
+	// platform's host (EXC-810). On unless switched off.
+	FunctionHTMLGuard Feature = "functionhtmlguard"
 	// MCPConfirm makes MCP's destructive tools (delete_app, delete_function,
 	// delete_site, delete_function_secret, revoke_publishable_key,
 	// revoke_s3_key) do nothing on the first call and answer with what would be
@@ -140,7 +144,7 @@ const (
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm}
+	return []Feature{MCP, Pipeline, AppStorage, MySQL, MySQLPITR, SlowQueries, RequestMetrics, Advisors, MetricsEndpoint, LogRetention, LogDrains, AuthOAuth, AuthOTP, AuthUser, AuthGuest, HostMetrics, SitesServer, AuthHooks, AuthMFA, DBAllowList, DBReadAddress, DBReadRole, DBCopy, MajorUpgrade, TemplateCatalog, HostLogs, SingleHostBuilds, AppGitBuilds, LogDeletion, S3, SitePreviews, ProxyBlock, SignupGuard, OneTimeCredentials, WALArchiveAlert, FreeWALUpload, FunctionInvoke, StudioV2, AppRuntimeLogin, MCPConfirm, FunctionHTMLGuard}
 }
 
 type Flags interface {
