@@ -58,6 +58,8 @@ jobs:
               - 'security/**'
             singlehost:
               - 'deploy/single-host/**'
+              - 'frontend/nginx.conf'
+              - 'frontend/docker-entrypoint.d/**'
             gatewayguard:
               - 'charts/documentdb-gateway/**'
               - 'server-go/internal/config/postgres_catalog.yaml'

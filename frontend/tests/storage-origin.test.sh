@@ -61,6 +61,7 @@ expect_refused 'https://files.example.com"'
 expect_refused "https://a.example.com https://b.example.com"
 expect_refused "https://user@files.example.com"
 expect_refused "https://files.example.com:99999x"
+expect_refused "https://files.example.com:0"
 expect_refused "https://"
 expect_refused "https://files.example.com
 frame-ancestors *"
@@ -74,6 +75,10 @@ else fail "second start: '$(connect_src)'"; fi
 env -u STORAGE_PUBLIC_ORIGIN NGINX_CONF="$CONF" sh "$SCRIPT" >/dev/null 2>&1
 if [ "$(connect_src)" = "connect-src 'self'" ]; then pass "unsetting it on a later start takes it back out"
 else fail "unset on restart: '$(connect_src)'"; fi
+
+# A policy without connect-src is a config this script cannot serve: it stops.
+CONF="$WORK/default.conf"; sed "s/connect-src 'self'; //" "$NGINX" > "$CONF"
+if STORAGE_PUBLIC_ORIGIN=https://one.example.com NGINX_CONF="$CONF" sh "$SCRIPT" >/dev/null 2>&1; then fail "a config without connect-src was served"; else pass "a config without connect-src stops the start"; fi
 
 # Everything else in the policy is untouched.
 run "https://files.example.com"

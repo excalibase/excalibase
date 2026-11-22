@@ -30,8 +30,10 @@ else
   case $origin in
     *[!A-Za-z0-9:/.-]*) refuse ;;
   esac
-  printf '%s\n' "$origin" | grep -Eq '^https?://[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*(:[0-9]{1,5})?$' || refuse
+  printf '%s\n' "$origin" | grep -Eq '^https?://[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*(:[1-9][0-9]{0,4})?$' || refuse
   extra=" $origin"
 fi
 
 sed -i "s|connect-src 'self'[^;]*;|connect-src 'self'${extra};|" "$CONF"
+# A reworded policy would leave the sed matching nothing; stop rather than serve it unchanged.
+grep -qF "connect-src 'self'${extra};" "$CONF" || { echo "20-storage-origin: connect-src not found in $CONF" >&2; exit 1; }
