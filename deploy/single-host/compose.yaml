@@ -583,6 +583,10 @@ services:
   studio:
     image: docker.io/excalibase/studio:${TAG:-1.5.0}
     container_name: excalibase-studio
+    environment:
+      # Studio uploads files straight to the signed URL, so its page policy must
+      # allow that origin: the same value provisioning signs for (EXC-809).
+      STORAGE_PUBLIC_ORIGIN: ${STORAGE_ENDPOINT:-${FILES_PUBLIC_URL:?run ./init.sh first}}
     depends_on:
       provisioning:
         condition: service_started
