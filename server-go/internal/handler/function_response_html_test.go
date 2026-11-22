@@ -123,7 +123,7 @@ func TestRuntimeResponseServesEveryXMLTypeAsPlainText(t *testing.T) {
 	}
 	for _, contentType := range []string{
 		"text/xml", "application/xml", "Application/XML; charset=utf-8", "text/xml; charset=utf-16le",
-		"text/xsl", "application/xslt+xml", "application/rss+xml", "application/atom+xml", "application/soap+xml",
+		"text/xsl", "text/rdf", "Text/RDF; charset=utf-8", "application/xslt+xml", "application/rss+xml", "application/atom+xml", "application/soap+xml",
 		"application/rdf+xml", "application/vnd.foo+xml", "image/svg+xml", "application/mathml+xml",
 	} {
 		for name, body := range bodies {
@@ -267,4 +267,21 @@ func TestHTMLGuardFailsClosedWithoutFlags(t *testing.T) {
 	if !h.htmlGuardOn(t.Context()) {
 		t.Error("a handler built without flags must keep the guard on")
 	}
+}
+
+// text/html;; is a malformed parameter list, not a second type: next to a JSON
+// type it stays JSON, while a separate text/html value still wins.
+func TestRuntimeResponseMalformedHTMLParametersNextToJSON(t *testing.T) {
+	got := relayBody(map[string]string{"content-type": "application/json; text/html;;"}, "{}", true).Header().Get("Content-Type")
+	if mediaTypeOfValue(got) != "application/json" {
+		t.Errorf("one value served as %q, want application/json", got)
+	}
+	if got := relayBody(map[string]string{"content-type": "application/json, text/html;;"}, "{}", true).Header().Get("Content-Type"); got != plainText {
+		t.Errorf("two values served as %q, want plain text", got)
+	}
+}
+
+func mediaTypeOfValue(value string) string {
+	mediaType, _ := parseMediaType(value)
+	return mediaType
 }

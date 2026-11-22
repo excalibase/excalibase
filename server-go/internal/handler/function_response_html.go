@@ -24,7 +24,7 @@ const plainTextType = "text/plain; charset=utf-8"
 // and multipart (Firefox renders a text/html part of x-mixed-replace).
 func blockedMediaType(mediaType string) bool {
 	switch mediaType {
-	case "text/html", "text/xml", "application/xml", "text/xsl":
+	case "text/html", "text/xml", "application/xml", "text/xsl", "text/rdf":
 		return true
 	}
 	return strings.HasSuffix(mediaType, "+xml") || strings.HasPrefix(mediaType, "multipart/")

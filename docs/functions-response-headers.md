@@ -37,7 +37,7 @@ Consequences to know:
 Functions return data, not pages. On the shared API origin a function answer
 is served as `text/plain; charset=utf-8`, body unchanged, when its
 `Content-Type` is `text/html`, `application/xhtml+xml`, `image/svg+xml`, any
-other XML type (`text/xml`, `application/xml`, `text/xsl`, anything ending in
+other XML type (`text/xml`, `application/xml`, `text/xsl`, `text/rdf`, anything ending in
 `+xml`, so RSS, Atom and sitemaps too) or any `multipart/*`. This stops a fake
 login page being served from the platform's own host (the same rule Supabase
 applies to functions without a custom domain). Case and parameters such as
