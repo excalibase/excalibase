@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"mime"
 	"net/http"
 	"strings"
@@ -16,16 +17,29 @@ import (
 
 const plainTextType = "text/plain; charset=utf-8"
 
-// pageMediaTypes are the types a browser renders as a document.
-var pageMediaTypes = map[string]bool{
-	"text/html":             true,
-	"application/xhtml+xml": true,
-	"image/svg+xml":         true,
+// blockedMediaType says whether a browser could render the type as a document
+// or as a stream of them: HTML and XHTML, every XML type (a browser reads XML as
+// XHTML or SVG through a namespace it can reach by a character reference, an
+// entity, a UTF-16 body or a stylesheet, so the body is never trusted), XSL
+// and multipart (Firefox renders a text/html part of x-mixed-replace).
+func blockedMediaType(mediaType string) bool {
+	switch mediaType {
+	case "text/html", "text/xml", "application/xml", "text/xsl":
+		return true
+	}
+	return strings.HasSuffix(mediaType, "+xml") || strings.HasPrefix(mediaType, "multipart/")
 }
 
-// pageNamespaces make an XML document an XHTML or SVG page when the document's root element is
-// in that namespace, whatever the type says about the content.
-var pageNamespaces = []string{"http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg"}
+// placeable says whether a media type names a real type. A wildcard, an
+// "unknown" or something that does not parse leaves the browser to guess from
+// the body, which the function controls, so it counts as no type at all.
+func placeable(mediaType string) bool {
+	switch mediaType {
+	case "", "*/*", "unknown/unknown", "application/unknown":
+		return false
+	}
+	return strings.Contains(mediaType, "/") && !strings.HasPrefix(mediaType, "*/") && !strings.HasSuffix(mediaType, "/*")
+}
 
 // htmlGuardOn is the EXC-810 switch. A handler built without flags keeps the
 // guard on: a missing wiring must not open the origin.
@@ -33,50 +47,50 @@ func (h *FunctionHandler) htmlGuardOn(ctx context.Context) bool {
 	return h.flags == nil || features.Enabled(ctx, h.flags, features.FunctionHTMLGuard)
 }
 
-// mediaTypeOf is the lower-case type/subtype of one Content-Type value.
-func mediaTypeOf(value string) string {
-	if mediaType, _, err := mime.ParseMediaType(value); err == nil {
-		return mediaType
+// parseMediaType is the lower-case type/subtype of one Content-Type value, and
+// false when the value is not a well-formed media type.
+func parseMediaType(value string) (string, bool) {
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(value))
+	if err != nil && !errors.Is(err, mime.ErrInvalidMediaParameter) {
+		return "", false
 	}
-	mediaType, _, _ := strings.Cut(value, ";")
-	return strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType, mediaType != ""
 }
 
-func isXMLMediaType(mediaType string) bool {
-	return mediaType == "text/xml" || mediaType == "application/xml" || strings.HasSuffix(mediaType, "+xml")
-}
-
-func inPageNamespace(body string) bool {
-	for _, namespace := range pageNamespaces {
-		if strings.Contains(body, namespace) {
-			return true
+// splitTypes separates the values the runtime joined with commas, leaving a
+// comma inside a quoted parameter alone.
+func splitTypes(value string) []string {
+	var parts []string
+	start, quoted := 0, false
+	for i := 0; i < len(value); i++ {
+		switch {
+		case value[i] == '\\' && quoted:
+			i++
+		case value[i] == '"':
+			quoted = !quoted
+		case value[i] == ',' && !quoted:
+			parts = append(parts, value[start:i])
+			start = i + 1
 		}
 	}
-	return false
-}
-
-// rendersAsPage says whether a browser would show body, served as mediaType, as a document.
-func rendersAsPage(mediaType, body string) bool {
-	return pageMediaTypes[mediaType] || (isXMLMediaType(mediaType) && inPageNamespace(body))
+	return append(parts, value[start:])
 }
 
 // guardedContentType decides the Content-Type of a function's answer from every
 // value it sent (the runtime joins repeated headers with commas, and a map may
-// hold the name in more than one case). A renderable value anywhere makes the
-// whole answer plain text. With no value the type is fixed here from the body,
-// exactly as Go would sniff it, so the browser has nothing left to sniff.
+// hold the name in more than one case). A blocked value anywhere makes the whole
+// answer plain text. With no usable value the type is fixed here from the body,
+// as Go would sniff it, so the browser has nothing left to sniff; a sniffed
+// blocked type is plain text too.
 func guardedContentType(values []string, body string) string {
 	var first string
 	for _, value := range values {
-		for _, part := range strings.Split(value, ",") {
-			mediaType := mediaTypeOf(part)
-			if mediaType == "" {
-				continue
-			}
-			if rendersAsPage(mediaType, body) {
+		for _, part := range splitTypes(value) {
+			mediaType, ok := parseMediaType(part)
+			if ok && blockedMediaType(mediaType) {
 				return plainTextType
 			}
-			if first == "" {
+			if first == "" && ok && placeable(mediaType) {
 				first = strings.TrimSpace(part)
 			}
 		}
@@ -85,7 +99,7 @@ func guardedContentType(values []string, body string) string {
 		return first
 	}
 	sniffed := http.DetectContentType([]byte(body))
-	if rendersAsPage(mediaTypeOf(sniffed), body) {
+	if mediaType, ok := parseMediaType(sniffed); ok && blockedMediaType(mediaType) {
 		return plainTextType
 	}
 	return sniffed

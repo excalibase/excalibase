@@ -110,27 +110,74 @@ func TestRuntimeResponseEmptyContentTypeCountsAsMissing(t *testing.T) {
 	}
 }
 
-// XML served as text/xml or application/xml renders as XHTML or SVG when its
-// root element is in that namespace, so those are held to the same rule.
-func TestRuntimeResponseXMLInAPageNamespaceIsServedAsPlainText(t *testing.T) {
-	xhtml := `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body>x</body></html>`
-	svg := `<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>`
-	for _, contentType := range []string{"text/xml", "application/xml", "Application/XML; charset=utf-8", "application/rss+xml", "application/atom+xml"} {
-		for _, body := range []string{xhtml, svg} {
+// Every XML type is plain text: a browser renders XML as XHTML or SVG from a
+// namespace it can reach by a character reference, an entity, a UTF-16 body or a
+// stylesheet, so the body is never trusted.
+func TestRuntimeResponseServesEveryXMLTypeAsPlainText(t *testing.T) {
+	bodies := map[string]string{
+		"plain xml":      `<?xml version="1.0"?><urlset><url/></urlset>`,
+		"char reference": `<html xmlns="http&#x3a;//www.w3.org/1999/xhtml"><body>x</body></html>`,
+		"entity":         `<!DOCTYPE html [<!ENTITY ns "http://www.w3.org/1999/xhtml">]><html xmlns="&ns;"/>`,
+		"utf-16 nuls":    "<\x00h\x00t\x00m\x00l\x00 \x00x\x00m\x00l\x00n\x00s\x00",
+		"stylesheet":     `<?xml-stylesheet type="text/xsl" href="/functions/v1/p/sheet"?><doc/>`,
+	}
+	for _, contentType := range []string{
+		"text/xml", "application/xml", "Application/XML; charset=utf-8", "text/xml; charset=utf-16le",
+		"text/xsl", "application/xslt+xml", "application/rss+xml", "application/atom+xml", "application/soap+xml",
+		"application/rdf+xml", "application/vnd.foo+xml", "image/svg+xml", "application/mathml+xml",
+	} {
+		for name, body := range bodies {
 			if got := relayBody(map[string]string{"content-type": contentType}, body, true).Header().Get("Content-Type"); got != plainText {
-				t.Errorf("%q with a page namespace served as %q", contentType, got)
+				t.Errorf("%q with %s served as %q", contentType, name, got)
 			}
 		}
 	}
-	if got := relayBody(nil, xhtml, true).Header().Get("Content-Type"); got != plainText {
-		t.Errorf("xhtml without a type served as %q", got)
+}
+
+func TestRuntimeResponseServesMultipartAsPlainText(t *testing.T) {
+	for _, contentType := range []string{
+		"multipart/x-mixed-replace; boundary=x", "Multipart/X-Mixed-Replace;boundary=\"a,b\"", "multipart/mixed; boundary=x", "multipart/form-data",
+	} {
+		body := "--x\r\nContent-Type: text/html\r\n\r\n<h1>login</h1>\r\n--x--"
+		if got := relayBody(map[string]string{"content-type": contentType}, body, true).Header().Get("Content-Type"); got != plainText {
+			t.Errorf("%q served as %q", contentType, got)
+		}
 	}
 }
 
-func TestRuntimeResponsePlainXMLKeepsItsType(t *testing.T) {
-	rec := relayBody(map[string]string{"content-type": "application/xml"}, `<?xml version="1.0"?><urlset><url/></urlset>`, true)
-	if got := rec.Header().Get("Content-Type"); got != "application/xml" {
-		t.Errorf("a sitemap changed to %q", got)
+// A type the browser cannot place is guessed from the body, which a function
+// controls; it is fixed here the way a missing type is.
+func TestRuntimeResponseTreatsAnUnplaceableTypeLikeAMissingOne(t *testing.T) {
+	for _, contentType := range []string{"*/*", "unknown/unknown", "application/unknown", "garbage", "text/", "/html", "text/html/x y", ";", "text/ht ml", "text/*", "*/html", "*/xml"} {
+		if got := relayBody(map[string]string{"content-type": contentType}, "<html><body>login</body></html>", true).Header().Get("Content-Type"); got != plainText {
+			t.Errorf("%q with an HTML body served as %q", contentType, got)
+		}
+		if got := relayBody(map[string]string{"content-type": contentType}, "<?xml version='1.0'?><doc/>", true).Header().Get("Content-Type"); got != plainText {
+			t.Errorf("%q with an XML body served as %q", contentType, got)
+		}
+		if got := relayBody(map[string]string{"content-type": contentType}, "hello", true).Header().Get("Content-Type"); got != plainText {
+			t.Errorf("%q with a text body served as %q", contentType, got)
+		}
+	}
+}
+
+func TestRuntimeResponseWithoutATypeAndAnXMLBodyIsPlainText(t *testing.T) {
+	if got := relayBody(nil, `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"/>`, true).Header().Get("Content-Type"); got != plainText {
+		t.Errorf("served as %q", got)
+	}
+}
+
+// A quoted parameter can hold a comma; only a comma outside quotes separates two types.
+func TestRuntimeResponseSplitsTypesOnlyOutsideQuotes(t *testing.T) {
+	for contentType, want := range map[string]string{
+		`application/json; note="a,b"`:          `application/json; note="a,b"`,
+		`application/json; note="a, text/html"`: `application/json; note="a, text/html"`,
+		`application/json; note="x", text/html`: plainText,
+		`text/plain; a="\"", text/html`:         plainText,
+	} {
+		if got := relayBody(map[string]string{"content-type": contentType}, "{}", true).Header().Get("Content-Type"); got != want {
+			t.Errorf("%q served as %q, want %q", contentType, got, want)
+		}
 	}
 }
 

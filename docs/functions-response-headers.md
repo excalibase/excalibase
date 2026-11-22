@@ -35,24 +35,28 @@ Consequences to know:
 ## Pages are served as plain text
 
 Functions return data, not pages. On the shared API origin a function answer
-whose `Content-Type` is `text/html`, `application/xhtml+xml` or `image/svg+xml`
-(any case, with or without parameters such as `; charset=utf-8`) is served as
-`text/plain; charset=utf-8`, body unchanged. This stops a fake login page being
-served from the platform's own host (the same rule Supabase applies to
-functions without a custom domain).
+is served as `text/plain; charset=utf-8`, body unchanged, when its
+`Content-Type` is `text/html`, `application/xhtml+xml`, `image/svg+xml`, any
+other XML type (`text/xml`, `application/xml`, `text/xsl`, anything ending in
+`+xml`, so RSS, Atom and sitemaps too) or any `multipart/*`. This stops a fake
+login page being served from the platform's own host (the same rule Supabase
+applies to functions without a custom domain). Case and parameters such as
+`; charset=utf-8` do not matter.
 
-* The rule reads every `Content-Type` the function sent (repeated headers are
-  joined by the runtime) and any one of them being a page type is enough.
-* An answer with no `Content-Type` gets one fixed by the gateway from its body,
-  so it cannot be sniffed into a page; HTML-looking bodies become plain text.
-* `text/xml`, `application/xml` and other `+xml` types are served plain only
-  when the body declares the XHTML or SVG namespace, because a browser renders
-  those as pages; ordinary XML (sitemaps, RSS, SOAP) keeps its type.
+* XML is not inspected: a browser reaches XHTML or SVG through character
+  references, entities, UTF-16 bodies and `xml-stylesheet`, so every XML type is
+  plain text. Serve a sitemap or feed from an app or a site.
+* Every `Content-Type` the function sent is read (the runtime joins repeated
+  headers); a blocked one anywhere is enough.
+* An answer with no `Content-Type`, or one a browser cannot place (`*/*`,
+  `unknown/unknown`, `application/unknown`, anything that does not parse), gets
+  one fixed by the gateway from its body, so it cannot be sniffed into a page.
 * It applies to every status, including redirects, and to `HEAD` as well as `GET`.
   `X-Content-Type-Options: nosniff` is always set.
 * Functions have no custom domain today (they are served only at
-  `/functions/v1/<project>/`), so there is no domain on which the page types are
-  passed through as written.
-* To serve a page, host it as a container app or a site. A function can still
-  return JSON, text, CSV and other data types, and `fetch` them from the page.
+  `/functions/v1/<project>/`), so there is no domain on which page types pass
+  through as written.
+* To serve a page, a sitemap or a feed, host it as a container app or a site. A
+  function can still return JSON, plain text, CSV and other data types, and the
+  page can `fetch` them.
 * Operators: `FEATURE_FUNCTIONHTMLGUARD` is on unless set to `false`.
