@@ -35,12 +35,16 @@ $ENGINE run -d --name "$NET-provisioning" --network "$NET" --network-alias provi
   docker.io/library/python:3.13-alpine python -c "$STUB" >/dev/null
 # The real nginx.conf and resolver script, as the Studio image runs them.
 # (copied in, not mounted: the entrypoint script edits the file in place)
-$ENGINE create --name "$NET-studio" --network "$NET" --network-alias studio "$NGINX_IMAGE" >/dev/null
+# STORAGE_PUBLIC_ORIGIN is what compose gives Studio: the origin file links are signed for.
+STORAGE_ORIGIN=https://files.example.test:8443
+$ENGINE create --name "$NET-studio" --network "$NET" --network-alias studio -e "STORAGE_PUBLIC_ORIGIN=$STORAGE_ORIGIN" "$NGINX_IMAGE" >/dev/null
 $ENGINE cp "$DIR/../../../frontend/nginx.conf" "$NET-studio:/etc/nginx/conf.d/default.conf"
 # The Dockerfile marks the resolver script executable; a checkout may not, so do the same on a copy.
 STAGE=$(mktemp -d)
-cp "$DIR/../../../frontend/docker-entrypoint.d/10-resolver.sh" "$STAGE/" && chmod +x "$STAGE/10-resolver.sh"
-$ENGINE cp "$STAGE/10-resolver.sh" "$NET-studio:/docker-entrypoint.d/10-resolver.sh"
+for script in 10-resolver.sh 20-storage-origin.sh; do
+  cp "$DIR/../../../frontend/docker-entrypoint.d/$script" "$STAGE/" && chmod +x "$STAGE/$script"
+  $ENGINE cp "$STAGE/$script" "$NET-studio:/docker-entrypoint.d/$script"
+done
 rm -rf "$STAGE"
 $ENGINE start "$NET-studio" >/dev/null
 $ENGINE run -d --name "$NET-edge" --network "$NET" -p 127.0.0.1::443 \
@@ -82,6 +86,8 @@ has_header() {
 }
 has_header "content-security-policy: default-src 'self'; script-src 'self'"
 has_header "frame-ancestors 'none'"
+# Studio PUTs file bytes to the signed URL, so the policy must name that origin (EXC-809).
+has_header "connect-src 'self' $STORAGE_ORIGIN;"
 has_header "x-frame-options: DENY"
 has_header "x-content-type-options: nosniff"
 has_header "referrer-policy: strict-origin-when-cross-origin"
