@@ -51,10 +51,11 @@ type env struct {
 	audit    AuditLogger
 	settings Settings
 	probes   *probeLimits
+	confirms *confirmations
 }
 
 func newEnv(router http.Handler, audit AuditLogger, settings Settings) *env {
-	return &env{router: router, audit: audit, settings: settings, probes: newProbeLimits()}
+	return &env{router: router, audit: audit, settings: settings, probes: newProbeLimits(), confirms: newConfirmations()}
 }
 
 type callerKey struct{}
@@ -119,9 +120,13 @@ func writeRefusal(w http.ResponseWriter, refused *refusal) {
 }
 
 // record writes the audit entry for one tool call. The call's arguments are
-// never kept: they can hold SQL, row values or a secret.
-func (e *env) record(ctx context.Context, caller Caller, tool, projectID string, callErr error) {
+// never kept: they can hold SQL, row values or a secret. confirmation says
+// whether a destructive tool only asked ("requested") or went ahead ("confirmed").
+func (e *env) record(ctx context.Context, caller Caller, tool, projectID, confirmation string, callErr error) {
 	outcome := map[string]any{"tool": tool, "status": "ok", "tokenName": caller.Token.Name}
+	if confirmation != "" {
+		outcome["confirmation"] = confirmation
+	}
 	if callErr != nil {
 		outcome["status"] = "error"
 		var routeErr *RouteError
