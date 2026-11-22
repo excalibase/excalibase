@@ -1,3 +1,6 @@
+# MCP confirmation tokens (server-go/internal/mcpserver/confirm.go) are held in this
+# process: more than one replica needs a shared store first, or a token issued by
+# one replica is unknown to the next.
 replicaCount: 1
 
 image:

@@ -69,14 +69,19 @@ func functionTools() []entry {
 		tool("list_functions", "List the project's edge functions.", readTool, listFunctions),
 		tool("deploy_function", "Create or update an edge function from its source files and deploy it. "+functionContract+
 			" "+functionSecretsWarning+" Functions are for APIs and webhooks, not web pages: an answer typed HTML, XHTML, SVG, any XML or multipart is served as text/plain, and every answer carries a sandboxing Content-Security-Policy (script-src 'self', no forms, no same-origin access), so a page's inline scripts never run and its forms cannot submit. Host a web page as a container app (create_app).", writeTool, deployFunction),
-		tool("delete_function", "Delete one edge function: it stops answering at once.", writeTool, deleteFunction),
+		tool("delete_function", "Delete one edge function: it stops answering at once."+confirmNote, writeTool, deleteFunction),
 		tool("set_function_outbound_hosts", "Allow or stop allowing outside hosts the project's edge functions may call (fetch); anything not listed is blocked. "+
 			"Hosts already on the list stay unless removed. The functions are redeployed with the new list.", writeTool, setFunctionOutboundHosts),
 		tool("set_function_secret", "Set a secret the project's edge functions read as an environment variable. The value is never returned. "+secretWarning, writeTool, setFunctionSecret),
 	}
 }
 
-func deleteFunction(ctx context.Context, c *call, in functionIDArgs) (any, error) {
+type deleteFunctionArgs struct {
+	functionIDArgs
+	confirmArg
+}
+
+func deleteFunction(ctx context.Context, c *call, in deleteFunctionArgs) (any, error) {
 	projectID, err := c.useProject(in.ProjectID)
 	if err != nil {
 		return nil, err
@@ -84,6 +89,25 @@ func deleteFunction(ctx context.Context, c *call, in functionIDArgs) (any, error
 	id, err := segment("id", in.ID)
 	if err != nil {
 		return nil, err
+	}
+	preview, err := c.guard(ctx, destruction{
+		tool: "delete_function", target: confirmTarget{projectID, in.ID}, token: in.ConfirmationToken,
+		describe: func(ctx context.Context) (string, error) {
+			functions := []functionView{}
+			if err := c.get(ctx, projectsAPI+projectID+functionsSegment, nil, &functions); err != nil {
+				return "", err
+			}
+			for _, function := range functions {
+				if function.ID == in.ID {
+					return fmt.Sprintf("the edge function %q (%s, version %d), with its source: it stops answering at once and its code cannot be brought back",
+						function.Name, function.ID, function.Version), nil
+				}
+			}
+			return "", fmt.Errorf("no function %q in this project: list_functions shows them", in.ID)
+		},
+	})
+	if preview != nil || err != nil {
+		return preview, err
 	}
 	if err := c.send(ctx, http.MethodDelete, projectsAPI+projectID+functionsSegment+id+"/", nil, nil, nil); err != nil {
 		return nil, err

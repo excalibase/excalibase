@@ -324,6 +324,8 @@ services:
       FEATURE_SIGNUPGUARD: ${FEATURE_SIGNUPGUARD:-true}
       # Database passwords are shown once and never read back (EXC-759); on by default.
       FEATURE_ONETIMECREDENTIALS: ${FEATURE_ONETIMECREDENTIALS:-true}
+      # MCP's destructive tools ask twice: on unless set to false.
+      FEATURE_MCPCONFIRM: ${FEATURE_MCPCONFIRM:-true}
       # Studio's cloud-console layout (EXC-762).
       # Functions cannot serve HTML, XHTML or SVG pages from the shared API origin (EXC-810); on by default.
       FEATURE_FUNCTIONHTMLGUARD: ${FEATURE_FUNCTIONHTMLGUARD:-true}

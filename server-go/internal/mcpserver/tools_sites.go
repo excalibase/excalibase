@@ -56,7 +56,7 @@ func siteTools() []entry {
 			"The archive is checked like any upload (paths, file count and sizes) before anything is published.", writeTool, deploySite),
 		tool("list_site_deploys", "A site's recent deploys, newest first; live marks the one it serves.", readTool, listSiteDeploys),
 		tool("rollback_site", "Make an earlier succeeded deploy of a site live again, with the routing it was published with.", writeTool, rollbackSite),
-		tool("delete_site", "Delete a site: its hostname stops serving at once and its deploy history is removed.", writeTool, deleteSite),
+		tool("delete_site", "Delete a site: its hostname stops serving at once and its deploy history is removed."+confirmNote, writeTool, deleteSite),
 	}
 }
 
@@ -200,10 +200,33 @@ func rollbackSite(ctx context.Context, c *call, in rollbackSiteArgs) (any, error
 	return map[string]any{"site": site}, nil
 }
 
-func deleteSite(ctx context.Context, c *call, in siteArgs) (any, error) {
+type deleteSiteArgs struct {
+	siteArgs
+	confirmArg
+}
+
+func deleteSite(ctx context.Context, c *call, in deleteSiteArgs) (any, error) {
 	path, err := sitePath(c, in.ProjectID, in.SiteID)
 	if err != nil {
 		return nil, err
+	}
+	preview, err := c.guard(ctx, destruction{
+		tool: "delete_site", target: confirmTarget{c.project, in.SiteID}, token: in.ConfirmationToken,
+		describe: func(ctx context.Context) (string, error) {
+			var site struct {
+				ID       string `json:"id"`
+				Name     string `json:"name"`
+				Hostname string `json:"hostname"`
+			}
+			if err := c.get(ctx, path+"/", nil, &site); err != nil {
+				return "", siteFailure(err)
+			}
+			return fmt.Sprintf("the site %q (%s) at %s: its hostname stops serving at once and its deploy history is removed",
+				site.Name, site.ID, orNone(site.Hostname)), nil
+		},
+	})
+	if preview != nil || err != nil {
+		return preview, err
 	}
 	if err := c.send(ctx, http.MethodDelete, path+"/", nil, nil, nil); err != nil {
 		return nil, siteFailure(err)

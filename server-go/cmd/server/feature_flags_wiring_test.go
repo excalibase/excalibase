@@ -186,6 +186,8 @@ var darkWork = map[features.Feature]string{
 	features.AppRuntimeLogin: "TestAppRuntimeLogin_OffKeepsTheOwnerLogin",
 	// On unless switched off: off, a function's HTML answer keeps its type (internal/handler).
 	features.FunctionHTMLGuard: "TestRuntimeResponseGuardOffKeepsTheFunctionsType",
+	// On unless switched off: only MCP's destructive tools read it; no route is gated (internal/mcpserver).
+	features.MCPConfirm: "TestTheSwitchedOffGuardDeletesAtOnce",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }

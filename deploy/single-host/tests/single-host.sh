@@ -185,6 +185,9 @@ render FEATURE_SITEPREVIEWS=true | grep -q 'FEATURE_SITEPREVIEWS: "true"' \
 # MCP invoke_function (EXC-684): the flag reaches provisioning.
 render FEATURE_FUNCTIONINVOKE=true | grep -q 'FEATURE_FUNCTIONINVOKE: "true"' \
   || { echo "FEATURE_FUNCTIONINVOKE=true does not reach provisioning" >&2; exit 1; }
+# MCP double confirmation: on by default, and "false" reaches provisioning.
+render FEATURE_MCPCONFIRM=false | grep -q 'FEATURE_MCPCONFIRM: "false"' \
+  || { echo "FEATURE_MCPCONFIRM=false does not reach provisioning" >&2; exit 1; }
 echo "single-host required settings ok"
 # Email through the operator's own relay (EXC-580) or SES: every setting in .env reaches provisioning.
 out=$(render EMAIL_PROVIDER=smtp SMTP_HOST=mail.example.test SMTP_PORT=2587 SMTP_TLS=starttls \

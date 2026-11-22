@@ -3,8 +3,10 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/features"
@@ -18,6 +20,7 @@ var s3KeyIDPattern = regexp.MustCompile(`^s3k_[0-9a-f]{32}$`)
 
 type s3KeyArgs struct {
 	projectArg
+	confirmArg
 	KeyID string `json:"key_id" jsonschema:"the key's id (s3k_...), from list_s3_keys; not its access key id"`
 }
 
@@ -53,8 +56,27 @@ func s3KeyTools() []entry {
 	return []entry{
 		dark(features.S3, tool("list_s3_keys", "The project's S3 access keys: names, access key ids, buckets, permissions and last use, "+
 			"with the endpoint and region S3 clients use. Never a secret.", readTool, listS3Keys)),
-		dark(features.S3, tool("revoke_s3_key", "Revoke one S3 access key at once; every client using it is refused from the next request.", writeTool, revokeS3Key)),
+		dark(features.S3, tool("revoke_s3_key", "Revoke one S3 access key at once; every client using it is refused from the next request."+confirmNote, writeTool, revokeS3Key)),
 	}
+}
+
+type storedS3Keys struct {
+	Keys     []storedS3Key `json:"keys"`
+	Endpoint string        `json:"endpoint"`
+	Region   string        `json:"region"`
+}
+
+func getS3Keys(ctx context.Context, c *call, projectID string) (storedS3Keys, error) {
+	var listed storedS3Keys
+	err := c.get(ctx, projectsAPI+projectID+"/storage/s3-keys", nil, &listed)
+	return listed, err
+}
+
+func bucketScope(buckets []string) string {
+	if len(buckets) == 0 {
+		return "every bucket"
+	}
+	return "buckets " + strings.Join(buckets, ", ")
 }
 
 func listS3Keys(ctx context.Context, c *call, in projectArg) (any, error) {
@@ -62,12 +84,8 @@ func listS3Keys(ctx context.Context, c *call, in projectArg) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var listed struct {
-		Keys     []storedS3Key `json:"keys"`
-		Endpoint string        `json:"endpoint"`
-		Region   string        `json:"region"`
-	}
-	if err := c.get(ctx, projectsAPI+projectID+"/storage/s3-keys", nil, &listed); err != nil {
+	listed, err := getS3Keys(ctx, c, projectID)
+	if err != nil {
 		return nil, err
 	}
 	keys := make([]listedS3Key, 0, len(listed.Keys))
@@ -87,6 +105,25 @@ func revokeS3Key(ctx context.Context, c *call, in s3KeyArgs) (any, error) {
 	}
 	if !s3KeyIDPattern.MatchString(in.KeyID) {
 		return nil, errors.New("key_id must be a key's id (s3k_ and 32 hex characters), as list_s3_keys shows it")
+	}
+	preview, err := c.guard(ctx, destruction{
+		tool: "revoke_s3_key", target: confirmTarget{projectID, in.KeyID}, token: in.ConfirmationToken,
+		describe: func(ctx context.Context) (string, error) {
+			listed, err := getS3Keys(ctx, c, projectID)
+			if err != nil {
+				return "", err
+			}
+			for _, key := range listed.Keys {
+				if key.ID == in.KeyID {
+					return fmt.Sprintf("the S3 access key %q (%s, %s): every client using it is refused from the next request, and a revoked key cannot be restored",
+						key.Name, key.AccessKeyID, bucketScope(key.Buckets)), nil
+				}
+			}
+			return "", fmt.Errorf("no S3 key %s in this project: list_s3_keys shows them", in.KeyID)
+		},
+	})
+	if preview != nil || err != nil {
+		return preview, err
 	}
 	if err := c.send(ctx, http.MethodDelete, projectsAPI+projectID+"/storage/s3-keys/"+in.KeyID, nil, nil, nil); err != nil {
 		return nil, err
