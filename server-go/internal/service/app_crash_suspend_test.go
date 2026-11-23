@@ -85,3 +85,16 @@ func TestSuspendForCrashLoop_APauseThatFailsRecordsNothing(t *testing.T) {
 		t.Errorf("suspension recorded for an app that was not stopped: %+v", stored.Suspension)
 	}
 }
+
+// A marker that cannot be written is reported, not dropped; the app stays stopped.
+func TestSuspendForCrashLoop_AMarkerWriteFailureSurfaces(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusRunning)
+	f.kube.AppSuspendErr = context.DeadlineExceeded
+	suspension, err := f.svc.SuspendForCrashLoop(context.Background(), f.app.ProjectID, f.app.ID, 11, time.Hour)
+	if err == nil || suspension == nil {
+		t.Fatalf("suspension %v err %v, want the stop reported with the error", suspension, err)
+	}
+	if f.status() != apphost.StatusStopped {
+		t.Errorf("status = %s, want the app stopped", f.status())
+	}
+}

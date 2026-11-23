@@ -343,3 +343,31 @@ func TestDeployApp_PinnedPrivateImageKeepsAlways(t *testing.T) {
 		t.Errorf("mode %q policy %q", deploy.Config.ImagePull, got.ImagePullPolicy)
 	}
 }
+
+// The platform's own registry isolates tenants by a per-project token, which a
+// node's cached copy would skip: its images stay pinned but are pulled Always.
+func TestDeployImage_FlagOnKeepsAnInternalRegistryImageOnAlways(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, kube := newDeployTestService(t, app)
+	resolver := &stubResolver{digest: resolvedDigest}
+	svc.SetImageResolver(resolver)
+	internal := testInternalRegistry(t)
+	svc.SetInternalRegistry(internal)
+	svc.SetFeatureFlags(features.NewStatic(features.AppImagePin))
+	image, err := internal.Image(app.ProjectID, app.Name, resolvedDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deploy, err := svc.DeployImage(context.Background(), app.ProjectID, app.ID, image, gitBuildOrigin())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := kube.AppWorkloads[rolloutKey(app, testDeployNamespace)].Deployment.Spec.Template.Spec.Containers[0]
+	if got.Image != image || got.ImagePullPolicy != corev1.PullAlways {
+		t.Errorf("container = %q %q, want the digest and Always", got.Image, got.ImagePullPolicy)
+	}
+	if deploy.Config.ImagePull != apphost.ImagePullCredentialed || len(resolver.asked) != 0 {
+		t.Errorf("mode %q, registry asked %v", deploy.Config.ImagePull, resolver.asked)
+	}
+}

@@ -151,3 +151,18 @@ func TestWindowWords(t *testing.T) {
 		t.Error("window wording")
 	}
 }
+
+// After a stop the app's count starts again: Start again, then one more crash, must not stop it a second time.
+func TestCrashGuard_AnAppStartedAgainIsCountedFromZero(t *testing.T) {
+	rig := newGuardRig(t)
+	rig.sweepAt(0, 0, "", 0)
+	rig.sweepAt(1, 10, "Error", 1)
+	if len(rig.stopper.calls) != 1 {
+		t.Fatalf("calls = %d, want the first stop", len(rig.stopper.calls))
+	}
+	rig.sweepAt(1, 0, "", 0) // a new pod after Start again: baseline
+	rig.sweepAt(1, 1, "Error", 1)
+	if len(rig.stopper.calls) != 1 {
+		t.Fatalf("one crash after Start again stopped the app again: %+v", rig.stopper.calls)
+	}
+}

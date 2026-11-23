@@ -175,6 +175,7 @@ type MockClient struct {
 	AppSuspended   map[string]string // the crash-loop marker, keyed "namespace/appID"
 	AppDeleted     map[string]bool
 	AppPauseErr    error
+	AppSuspendErr  error
 	AppResumeErr   error
 	AppPodsGoneErr error
 	AppDeleteErr   error
@@ -943,6 +944,9 @@ func (m *MockClient) SuspendAppWorkload(ctx context.Context, namespace, appID, k
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "SuspendAppWorkload:"+namespace+"/"+appID)
+	if m.AppSuspendErr != nil {
+		return m.AppSuspendErr
+	}
 	m.AppSuspended[namespace+"/"+appID] = kind
 	return nil
 }
