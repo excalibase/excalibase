@@ -69,8 +69,8 @@ func TestDeployAndRollback_APlatformAdminAndAnUnsuspendedOrgAreUnaffected(t *tes
 	if _, err := suspended.Rollback(admin, testProject, site.ID, first.ID); err != nil {
 		t.Fatalf("platform admin rollback: %v", err)
 	}
-	clear := guardedOver(t, h, false)
-	if _, err := clear.Deploy(context.Background(), sites.DeployRequest{ProjectID: testProject, SiteID: site.ID, Actor: testActor, Body: bytes.NewReader(viteDist(t))}); err != nil {
+	unsuspended := guardedOver(t, h, false)
+	if _, err := unsuspended.Deploy(context.Background(), sites.DeployRequest{ProjectID: testProject, SiteID: site.ID, Actor: testActor, Body: bytes.NewReader(viteDist(t))}); err != nil {
 		t.Fatalf("unsuspended deploy: %v", err)
 	}
 }
