@@ -234,7 +234,7 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	var rateErr *sites.RateLimitError
 	switch {
-	case errors.Is(err, orgguard.ErrOrgSuspended):
+	case orgguard.IsRefusal(err):
 		writeOrgGuardError(w, err)
 	case errors.Is(err, sites.ErrServerSitesOff):
 		// As an unmounted route answers (EXC-554), so a dark feature is not advertised.

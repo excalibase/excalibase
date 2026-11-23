@@ -17,6 +17,8 @@ type fakeSuspensions struct {
 	recorded  map[string][]SuspendedApp
 	reasons   map[string]string
 	suspended map[string]bool
+	// calls is the order the store was used in.
+	calls []string
 }
 
 func newFakeSuspensions() *fakeSuspensions {
@@ -42,7 +44,17 @@ func (f *fakeSuspensions) FindUser(_ context.Context, id string) (*UserRef, erro
 }
 
 func (f *fakeSuspensions) OwnedApps(_ context.Context, userID string) ([]OwnedApp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "owned")
 	return f.owned[userID], nil
+}
+
+func (f *fakeSuspensions) RecordSuspendedApps(_ context.Context, userID string, apps []SuspendedApp) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recorded[userID] = apps
+	return nil
 }
 
 func (f *fakeSuspensions) Suspend(_ context.Context, s Suspension, apps []SuspendedApp) error {
@@ -51,7 +63,7 @@ func (f *fakeSuspensions) Suspend(_ context.Context, s Suspension, apps []Suspen
 	f.users[s.UserID].Active = false
 	f.suspended[s.UserID] = true
 	f.reasons[s.UserID] = s.Reason
-	f.recorded[s.UserID] = apps
+	f.calls = append(f.calls, "suspend")
 	return nil
 }
 
@@ -149,6 +161,19 @@ func TestSuspendDeactivatesRecordsAndStopsRunningApps(t *testing.T) {
 	}
 	if len(audit.entries) != 1 || audit.entries[0].Action != AuditActionSuspend || audit.entries[0].ResourceID != "victim" || audit.entries[0].UserID != "boss" {
 		t.Fatalf("audit = %+v", audit.entries)
+	}
+}
+
+// The suspension row is what refuses other members; it must exist before the
+// apps are listed, or an app created in between is neither listed nor refused.
+func TestSuspendWritesTheSuspensionBeforeListingTheApps(t *testing.T) {
+	svc, store, _, _ := newSuspensionFixture()
+
+	if _, err := svc.Suspend(context.Background(), admin, "victim", "proxy abuse"); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	if len(store.calls) < 2 || store.calls[0] != "suspend" || store.calls[1] != "owned" {
+		t.Fatalf("store calls = %v, want the suspension first, then the app list", store.calls)
 	}
 }
 

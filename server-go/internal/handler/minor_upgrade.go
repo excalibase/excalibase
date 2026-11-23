@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -68,7 +67,7 @@ func (h *ProvisioningHandler) UpgradeMinorVersion(w http.ResponseWriter, r *http
 		if writeIfPoolBusy(w, err) {
 			return
 		}
-		if errors.Is(err, orgguard.ErrOrgSuspended) {
+		if orgguard.IsRefusal(err) {
 			writeOrgGuardError(w, err)
 			return
 		}
@@ -94,7 +93,7 @@ func (h *ProvisioningHandler) upgradeMySQLMinor(w http.ResponseWriter, r *http.R
 		if writeIfPoolBusy(w, err) {
 			return
 		}
-		if errors.Is(err, orgguard.ErrOrgSuspended) {
+		if orgguard.IsRefusal(err) {
 			writeOrgGuardError(w, err)
 			return
 		}

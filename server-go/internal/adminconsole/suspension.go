@@ -78,6 +78,8 @@ type SuspensionStore interface {
 	FindUser(ctx context.Context, id string) (*UserRef, error)
 	OwnedApps(ctx context.Context, userID string) ([]OwnedApp, error)
 	Suspend(ctx context.Context, suspension Suspension, apps []SuspendedApp) error
+	// RecordSuspendedApps keeps the apps a suspension stopped, for the unsuspend to resume.
+	RecordSuspendedApps(ctx context.Context, userID string, apps []SuspendedApp) error
 	Unsuspend(ctx context.Context, userID string) error
 	SuspendedApps(ctx context.Context, userID string) ([]SuspendedApp, error)
 	ForgetSuspendedApp(ctx context.Context, userID, projectID, appID string) error
@@ -142,14 +144,20 @@ func (s *SuspensionService) Suspend(ctx context.Context, actor Actor, userID, re
 	if user.ID == actor.ID || strings.HasPrefix(user.Role, platformRolePrefix) {
 		return nil, ErrProtectedAccount
 	}
+	// The suspension is written first: it is what refuses the org's other
+	// members, so an app created while the list is read is refused too. A
+	// failure after it leaves the account suspended; suspending again retries.
+	suspension := Suspension{UserID: userID, Email: user.Email, Reason: reason, At: s.now().UTC()}
+	if err := s.store.Suspend(ctx, suspension, nil); err != nil {
+		return nil, fmt.Errorf("suspend account: %w", err)
+	}
 	owned, err := s.store.OwnedApps(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list the account's apps: %w", err)
 	}
 	toStop := appsThatMayRun(owned)
-	suspension := Suspension{UserID: userID, Email: user.Email, Reason: reason, At: s.now().UTC()}
-	if err := s.store.Suspend(ctx, suspension, toStop); err != nil {
-		return nil, fmt.Errorf("suspend account: %w", err)
+	if err := s.store.RecordSuspendedApps(ctx, userID, toStop); err != nil {
+		return nil, fmt.Errorf("record the apps to stop: %w", err)
 	}
 	s.record(ctx, actor, AuditActionSuspend, userID, reason)
 

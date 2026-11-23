@@ -435,7 +435,7 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		return
 	}
 	switch {
-	case errors.Is(err, orgguard.ErrOrgSuspended):
+	case orgguard.IsRefusal(err):
 		writeOrgGuardError(w, err)
 	case errors.Is(err, abuse.ErrProxyApp), errors.Is(err, abuse.ErrBlockedRegistry):
 		httpError(w, err.Error(), http.StatusForbidden)

@@ -136,7 +136,7 @@ func writeTemplateError(w http.ResponseWriter, err error) {
 	var failed *service.TemplateFailedError
 	var incomplete *service.TemplateRollbackError
 	switch {
-	case errors.Is(err, orgguard.ErrOrgSuspended):
+	case orgguard.IsRefusal(err):
 		writeOrgGuardError(w, err)
 	case errors.As(err, &proxy):
 		httpError(w, proxy.Error(), http.StatusForbidden)

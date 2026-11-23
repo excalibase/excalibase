@@ -47,7 +47,8 @@ func suspendedRouter(t *testing.T, store *pgstore.Store) chi.Router {
 			Domain: "apps.example.com", IngressClass: "haproxy", IngressFromNamespace: "haproxy-controller"}})
 	deploys.SetPlanTiers(service.NewOrgPlanTiers(store, store))
 	deploys.SetNamespaceQuotaTiers(prov)
-	deploys.SetOrgGuard(orgguard.New(store, pgstore.NewAdminConsole(store.DB()).OwnerSuspendedOrgs))
+	console := pgstore.NewAdminConsole(store.DB())
+	deploys.SetOrgGuard(orgguard.New(store, console.OwnerSuspendedOrgs).WithSuspendedUsers(console.SuspendedUsers))
 	h := NewAppDeployHandler(deploys)
 	h.SetFeatures(features.NewStatic(features.All()...))
 
@@ -168,5 +169,43 @@ func TestResumeRoute_AnOrgWithoutASuspensionIsUnaffected(t *testing.T) {
 	}
 	if got := appStatus(t, store); got != apphost.StatusRunning {
 		t.Fatalf("app status = %q, want running", got)
+	}
+}
+
+// The suspension stops the apps of projects the account created, not only of
+// orgs it owns, so another member cannot start those either.
+func TestResumeRoute_AProjectCreatedByASuspendedMemberStaysStopped(t *testing.T) {
+	store := pgtest.New(t)
+	suspendedSeed(t, store)
+	ctx := context.Background()
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM abuse_suspensions`); err != nil {
+		t.Fatal(err)
+	}
+	// carol, a Developer in alice's org, created her own project there and is the one suspended.
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: "carol-proj", OrgID: e2eOrgA, OwnerID: carolID,
+		DBType: domain.PostgreSQL, Tier: domain.Free, Status: "ACTIVE", Namespace: "excalibase-carol-proj"}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	app := &apphost.App{ID: "carol-app", ProjectID: "carol-proj", Name: "web", Image: "ghcr.io/acme/web:v1",
+		Env: []apphost.EnvVar{}, Port: 8080, Replicas: 1, Tier: domain.Free, Status: apphost.StatusStopped}
+	if err := apphost.NewPostgresAppStore(store.DB()).Create(app, 2); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO abuse_suspensions (user_id, email, reason) VALUES ($1, 'e2e-carol@test.com', 'abuse')`, carolID); err != nil {
+		t.Fatal(err)
+	}
+	r := suspendedRouter(t, store)
+	// alice, the org's active owner, is another member.
+	if _, err := store.DB().ExecContext(ctx, `UPDATE users SET active = true WHERE id = $1`, testAliceID); err != nil {
+		t.Fatal(err)
+	}
+	token := e2eIssueToken(t, store, "alice-write", testAliceID, domain.AccessToken{Scopes: auth.ScopeWrite})
+
+	rec := ciCall(t, r, http.MethodPost, "/api/projects/carol-proj/apps/carol-app/resume", token, "")
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), orgguard.Message) {
+		t.Fatalf("resume: %d %s, want 403 with the suspension message", rec.Code, rec.Body.String())
+	}
+	if got, _ := apphost.NewPostgresAppStore(store.DB()).Get("carol-proj", "carol-app"); got.Status != apphost.StatusStopped {
+		t.Fatalf("status = %q, want stopped", got.Status)
 	}
 }

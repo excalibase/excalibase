@@ -103,14 +103,14 @@ func writeIfPoolBusy(w http.ResponseWriter, err error) bool {
 }
 
 // writeOrgGuardError answers a refusal from the suspended-owner check: 403 and
-// the plain message for a suspension, a generic 500 when it could not be read.
+// the plain message for a suspension, 503 when it could not be read.
 func writeOrgGuardError(w http.ResponseWriter, err error) {
 	if errors.Is(err, orgguard.ErrOrgSuspended) {
 		httpError(w, orgguard.Message, http.StatusForbidden)
 		return
 	}
 	log.Printf("ERROR: suspended-owner check: %v", err)
-	httpError(w, "the request could not be checked; try again", http.StatusInternalServerError)
+	httpError(w, orgguard.ErrCheckUnavailable.Error(), http.StatusServiceUnavailable)
 }
 
 func httpError(w http.ResponseWriter, msg string, code int) {
@@ -161,7 +161,7 @@ const errBackupsUnavailable = "backups cannot be set up right now; try again lat
 func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 	var limitErr *service.OrgProjectLimitError
 	switch {
-	case errors.Is(err, orgguard.ErrOrgSuspended):
+	case orgguard.IsRefusal(err):
 		writeOrgGuardError(w, err)
 	case errors.As(err, &limitErr):
 		httpError(w, limitErr.Error(), http.StatusConflict)

@@ -117,7 +117,7 @@ func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, project
 	if writeIfPoolBusy(w, err) {
 		return
 	}
-	if errors.Is(err, orgguard.ErrOrgSuspended) {
+	if orgguard.IsRefusal(err) {
 		writeOrgGuardError(w, err)
 		return
 	}

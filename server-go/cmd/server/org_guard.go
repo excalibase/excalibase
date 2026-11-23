@@ -13,5 +13,7 @@ import (
 func newOrgGuard(instances storage.InstanceStore, sqlStore storage.PlatformStore) *orgguard.Guard {
 	return orgguard.New(instances, func(ctx context.Context) (map[string]bool, error) {
 		return pgstore.NewAdminConsole(sqlStore.DB()).OwnerSuspendedOrgs(ctx)
+	}).WithSuspendedUsers(func(ctx context.Context) (map[string]bool, error) {
+		return pgstore.NewAdminConsole(sqlStore.DB()).SuspendedUsers(ctx)
 	})
 }

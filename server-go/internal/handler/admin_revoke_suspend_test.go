@@ -275,3 +275,7 @@ func (a *syncAudit) count() int {
 	defer a.mu.Unlock()
 	return len(a.entries)
 }
+
+func (deactivatingStore) RecordSuspendedApps(context.Context, string, []adminconsole.SuspendedApp) error {
+	return nil
+}

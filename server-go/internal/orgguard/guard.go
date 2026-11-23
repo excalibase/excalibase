@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -17,8 +18,22 @@ const Message = "This organisation is suspended. Contact support."
 // ErrOrgSuspended is returned for any action that would start or restart compute.
 var ErrOrgSuspended = errors.New(Message) //nolint:staticcheck // shown to the customer as a sentence
 
+// ErrCheckUnavailable means the suspension could not be read. The action is
+// refused: a suspension must not lapse because a read failed.
+var ErrCheckUnavailable = errors.New("the organisation's standing could not be checked; try again")
+
+// IsRefusal reports whether err is one of the guard's refusals.
+func IsRefusal(err error) bool {
+	return errors.Is(err, ErrOrgSuspended) || errors.Is(err, ErrCheckUnavailable)
+}
+
+const defaultLookupTimeout = 3 * time.Second
+
 // SuspendedOrgs lists the ids of orgs whose owner is abuse-suspended.
 type SuspendedOrgs func(ctx context.Context) (map[string]bool, error)
+
+// SuspendedUsers lists the ids of abuse-suspended accounts.
+type SuspendedUsers func(ctx context.Context) (map[string]bool, error)
 
 type overrideKey struct{}
 
@@ -33,31 +48,49 @@ func overridden(ctx context.Context) bool {
 	return v
 }
 
-// Guard answers whether an org's owner is suspended. A nil Guard allows everything.
+// Guard answers whether a project belongs to a suspended account. A nil Guard allows everything.
 type Guard struct {
 	instances storage.InstanceStore
-	suspended SuspendedOrgs
+	orgs      SuspendedOrgs
+	users     SuspendedUsers
+	timeout   time.Duration
 }
 
-func New(instances storage.InstanceStore, suspended SuspendedOrgs) *Guard {
-	return &Guard{instances: instances, suspended: suspended}
+func New(instances storage.InstanceStore, orgs SuspendedOrgs) *Guard {
+	return &Guard{instances: instances, orgs: orgs, timeout: defaultLookupTimeout}
 }
 
-// CheckProject refuses when the project's org owner is suspended. An unknown
-// project passes, so the caller's own not-found answer stands. A lookup that
-// fails refuses too: a suspension must not lapse because a read did.
+// WithSuspendedUsers also refuses projects an abuse-suspended account created
+// in someone else's org: the suspension stops those apps as well.
+func (g *Guard) WithSuspendedUsers(users SuspendedUsers) *Guard {
+	g.users = users
+	return g
+}
+
+// WithLookupTimeout bounds each suspension read.
+func (g *Guard) WithLookupTimeout(timeout time.Duration) *Guard {
+	g.timeout = timeout
+	return g
+}
+
+// CheckProject refuses when the project's org owner or creator is suspended.
+// An unknown project passes, so the caller's own not-found answer stands; a
+// read that fails refuses.
 func (g *Guard) CheckProject(ctx context.Context, projectID string) error {
 	if g == nil || overridden(ctx) {
 		return nil
 	}
 	inst, err := g.instances.FindByProjectID(projectID)
 	if err != nil {
-		return fmt.Errorf("check the organisation is not suspended: %w", err)
+		return fmt.Errorf("%w: read the project: %w", ErrCheckUnavailable, err)
 	}
 	if inst == nil {
 		return nil
 	}
-	return g.CheckOrg(ctx, inst.OrgID)
+	if err := g.CheckOrg(ctx, inst.OrgID); err != nil {
+		return err
+	}
+	return g.checkCreator(ctx, inst.OwnerID)
 }
 
 // CheckOrg refuses when the org's owner is suspended.
@@ -65,11 +98,29 @@ func (g *Guard) CheckOrg(ctx context.Context, orgID string) error {
 	if g == nil || overridden(ctx) || orgID == "" {
 		return nil
 	}
-	orgs, err := g.suspended(ctx)
+	lookupCtx, cancel := context.WithTimeout(ctx, g.timeout)
+	defer cancel()
+	orgs, err := g.orgs(lookupCtx)
 	if err != nil {
-		return fmt.Errorf("check the organisation is not suspended: %w", err)
+		return fmt.Errorf("%w: %w", ErrCheckUnavailable, err)
 	}
 	if orgs[orgID] {
+		return ErrOrgSuspended
+	}
+	return nil
+}
+
+func (g *Guard) checkCreator(ctx context.Context, ownerID string) error {
+	if g.users == nil || ownerID == "" {
+		return nil
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, g.timeout)
+	defer cancel()
+	users, err := g.users(lookupCtx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrCheckUnavailable, err)
+	}
+	if users[ownerID] {
 		return ErrOrgSuspended
 	}
 	return nil
