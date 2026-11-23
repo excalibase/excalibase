@@ -1,8 +1,12 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -119,5 +123,55 @@ func TestAuthSettings_FlagsOffPutRefusesNothingTheSwitchBreaks(t *testing.T) {
 	f.settings.err = errors.New("pq: connection reset")
 	if w := doJSON(f.router, http.MethodGet, testOAuthSettings, nil); w.Code != http.StatusInternalServerError {
 		t.Fatalf("GET: %d", w.Code)
+	}
+}
+
+func putAs(f oauthFixture, role string, body map[string]any) *httptest.ResponseRecorder {
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPut, testOAuthSettings, bytes.NewReader(raw))
+	req.Header.Set(testRoleHeader, role)
+	w := httptest.NewRecorder()
+	f.router.ServeHTTP(w, req)
+	return w
+}
+
+// With the flags off the route needs only Developer, so the switch carries its own Admin rule.
+func TestAuthSettings_ChangingAllowNewUsersNeedsAdminWhateverTheFlags(t *testing.T) {
+	for name, flags := range map[string][]features.Feature{"flags off": nil, "flags on": {features.AuthOAuth}} {
+		t.Run(name, func(t *testing.T) {
+			f := setupSignInHandler(t, flags...)
+			f.signIn.signIn[testOAuthProject] = domain.ProjectAuthSignIn{RedirectURLs: []string{}, AllowNewUsers: true}
+
+			if w := putAs(f, domain.OrgRoleDeveloper, map[string]any{"siteUrl": "", "allowNewUsers": false}); w.Code != http.StatusForbidden {
+				t.Fatalf("developer closing sign-ups: %d %s", w.Code, w.Body.String())
+			}
+			if !f.signIn.signIn[testOAuthProject].AllowNewUsers {
+				t.Fatal("a refused PUT changed the switch")
+			}
+			if w := putAs(f, domain.OrgRoleDeveloper, map[string]any{"siteUrl": "https://a.example.com", "allowNewUsers": true}); w.Code != http.StatusOK {
+				t.Fatalf("developer sending the stored value: %d %s", w.Code, w.Body.String())
+			}
+			if w := putAs(f, domain.OrgRoleDeveloper, map[string]any{"siteUrl": "https://b.example.com"}); w.Code != http.StatusOK {
+				t.Fatalf("developer omitting the switch: %d %s", w.Code, w.Body.String())
+			}
+			if w := putAs(f, domain.OrgRoleAdmin, map[string]any{"siteUrl": "", "allowNewUsers": false}); w.Code != http.StatusOK {
+				t.Fatalf("admin: %d %s", w.Code, w.Body.String())
+			}
+			if f.signIn.signIn[testOAuthProject].AllowNewUsers {
+				t.Fatal("the admin's change was not stored")
+			}
+			// Reopening is a change too.
+			if w := putAs(f, domain.OrgRoleDeveloper, map[string]any{"siteUrl": "", "allowNewUsers": true}); w.Code != http.StatusForbidden {
+				t.Fatalf("developer reopening sign-ups: %d", w.Code)
+			}
+		})
+	}
+}
+
+func TestAuthSettings_AllowNewUsersRoleCheckFailsClosedOnAnUnreadablePolicy(t *testing.T) {
+	f := setupSignInHandler(t)
+	f.signIn.err = errors.New("pq: connection reset")
+	if w := putAs(f, domain.OrgRoleDeveloper, map[string]any{"siteUrl": "", "allowNewUsers": false}); w.Code != http.StatusInternalServerError {
+		t.Fatalf("got %d", w.Code)
 	}
 }

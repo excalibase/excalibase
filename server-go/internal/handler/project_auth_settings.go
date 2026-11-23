@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -108,6 +109,9 @@ func (h *ProvisioningHandler) PutAuthSettings(w http.ResponseWriter, r *http.Req
 		httpError(w, domain.ErrSiteURLRequired.Error(), http.StatusBadRequest)
 		return
 	}
+	if !h.mayWriteAllowNewUsers(w, r, projectID, body.AllowNewUsers) {
+		return
+	}
 	settings := domain.ProjectAuthSettings{
 		RequireEmailVerification: body.RequireEmailVerification,
 		SiteURL:                  siteURL,
@@ -132,6 +136,30 @@ func (h *ProvisioningHandler) PutAuthSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, response)
+}
+
+// mayWriteAllowNewUsers is the registration switch's own write policy (EXC-457):
+// with the sign-in flags off the route needs only Developer, yet the switch
+// decides who may create accounts, so a change to it takes Admin whatever the
+// flags. Sending the stored value, or none, is not a change. It answers 403 or
+// 500 itself when it refuses.
+func (h *ProvisioningHandler) mayWriteAllowNewUsers(w http.ResponseWriter, r *http.Request, projectID string, requested *bool) bool {
+	if requested == nil {
+		return true
+	}
+	if access := custommw.ProjectAccessFromContext(r.Context()); access != nil && access.RoleAtLeast(domain.OrgRoleAdmin) {
+		return true
+	}
+	stored, err := h.signInForInfo(r.Context(), projectID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return false
+	}
+	if stored.AllowNewUsers == *requested {
+		return true
+	}
+	httpError(w, "changing who may sign up needs the admin role", http.StatusForbidden)
+	return false
 }
 
 // authSettingsRequestProject validates the path project and the store wiring
