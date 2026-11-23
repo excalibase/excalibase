@@ -3,6 +3,7 @@ package sitebuilds
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -111,4 +112,48 @@ func TestBuilds_AnUnsuspendedOrgAndAnUnreadableSuspensionList(t *testing.T) {
 		t.Fatalf("err = %v, want ErrCheckUnavailable", err)
 	}
 	unreadable.nothingStarted(t)
+}
+
+func (b *testBed) unreadableSuspensions() {
+	instances := fakestore.NewInstances()
+	instances.Items[testProject] = &domain.DatabaseInstance{ProjectID: testProject, OrgID: "org-1"}
+	b.service.options.OrgGuard = orgguard.New(instances, func(context.Context) (map[string]bool, error) { return nil, errors.New("db down") })
+}
+
+// D7: a blip reading the suspension list must not cost a legitimate build; it
+// goes back to the queue, never starts a Job, and fails only after the retries.
+func TestDispatcher_AnUnreadableSuspensionListRequeuesTheBuild(t *testing.T) {
+	for _, kind := range []string{KindSite, KindApp} {
+		bed := newTestBed(true)
+		queued := bed.queue(t, kind)
+		bed.unreadableSuspensions()
+
+		bed.nothingStarted(t)
+		waiting := bed.store.build(queued.ID)
+		if waiting.Status != StatusQueued || waiting.Requeues != 1 || waiting.WaitReason == "" {
+			t.Fatalf("%s: build %+v, want queued again with a reason", kind, waiting)
+		}
+
+		// The list is readable again: the same build runs.
+		suspended := false
+		bed.suspendOrg(&suspended)
+		bed.runAll()
+		if done := bed.store.build(queued.ID); done.Status != StatusSucceeded {
+			t.Fatalf("%s: after the blip the build is %+v, want it to run", kind, done)
+		}
+	}
+}
+
+func TestDispatcher_AListThatStaysUnreadableFailsTheBuildAfterTheRetries(t *testing.T) {
+	bed := newTestBed(true)
+	queued := bed.queue(t, KindSite)
+	bed.unreadableSuspensions()
+
+	for range MaxSpoolRequeues + 1 {
+		bed.runAll()
+	}
+	done := bed.store.build(queued.ID)
+	if done.Status != StatusFailed || !strings.Contains(done.FailureReason, "standing could not be checked") || len(bed.sites.started()) != 0 {
+		t.Fatalf("build %+v, want FAILED with no run", done)
+	}
 }

@@ -112,3 +112,16 @@ func TestCheckProject_AHangingLookupIsBounded(t *testing.T) {
 		t.Fatalf("err = %v after %v, want a bounded ErrCheckUnavailable", err, time.Since(start))
 	}
 }
+
+// Mutant D9: a failed read of the suspended-users list must refuse, not let the request through.
+func TestCheckProject_AFailedCreatorLookupRefuses(t *testing.T) {
+	instances := fakestore.NewInstances()
+	instances.Items["p1"] = &domain.DatabaseInstance{ProjectID: "p1", OrgID: "o1", OwnerID: "creator"}
+	g := orgguard.New(instances, func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil }).
+		WithSuspendedUsers(func(context.Context) (map[string]bool, error) { return nil, errors.New("db down") })
+
+	err := g.CheckProject(context.Background(), "p1")
+	if !errors.Is(err, orgguard.ErrCheckUnavailable) || errors.Is(err, orgguard.ErrOrgSuspended) {
+		t.Fatalf("err = %v, want ErrCheckUnavailable", err)
+	}
+}

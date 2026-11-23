@@ -107,7 +107,8 @@ func (e *execution) checkNotSuspended(ctx context.Context) *outcome {
 		return refuse(FailPlatform, orgguard.Message)
 	default:
 		log.Printf("%s build %s: check the organisation is not suspended: %v", e.build.Kind, e.build.ID, err)
-		return refuse(FailPlatform, orgguard.ErrCheckUnavailable.Error())
+		// A blip must not cost a legitimate build: it goes back to the queue.
+		return &outcome{requeue: true, waitReason: checkWaitReason, giveUpReason: checkFailReason}
 	}
 }
 

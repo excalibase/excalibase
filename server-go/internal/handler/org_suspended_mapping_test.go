@@ -89,3 +89,17 @@ func TestWriteGitBuildErrors_MapTheSuspensionRefusals(t *testing.T) {
 		}
 	}
 }
+
+// D8: a project that cannot be created because the suspension list was
+// unreadable is a 503, not a suspension and not a bad request.
+func TestWriteProjectCreationError_MapsTheSuspensionRefusals(t *testing.T) {
+	w := httptest.NewRecorder()
+	if !writeProjectCreationError(w, orgguard.ErrOrgSuspended) || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), orgguard.Message) {
+		t.Errorf("suspended: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	if !writeProjectCreationError(w, fmt.Errorf("%w: %w", orgguard.ErrCheckUnavailable, errors.New("db down"))) ||
+		w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), "suspended") || strings.Contains(w.Body.String(), "db down") {
+		t.Errorf("unreadable: %d %s", w.Code, w.Body.String())
+	}
+}
