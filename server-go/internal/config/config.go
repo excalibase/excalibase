@@ -352,6 +352,8 @@ type AppConfig struct {
 	DarkFeatures []features.Feature
 	// SignupsPerHour is how many accounts one network (a /24, or an IPv6 /64) may open per hour (EXC-755).
 	SignupsPerHour int
+	// CrashLoop is the crash-loop guard's threshold and exemptions (EXC-839).
+	CrashLoop CrashLoopConfig
 	// LogRetention is how long Loki keeps each plan's project logs (EXC-659).
 	LogRetention LogRetention
 	// AppRuntimeClass names the sandbox RuntimeClass every app pod runs under.
@@ -622,6 +624,7 @@ func load() AppConfig {
 		Sites:                          loadSites(),
 		DarkFeatures:                   loadDarkFeatures(),
 		SignupsPerHour:                 envInt("SIGNUPS_PER_NETWORK_PER_HOUR", 10),
+		CrashLoop:                      loadCrashLoop(),
 		LogRetention:                   loadLogRetention(),
 		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
 		MySQLEnabled:                   os.Getenv("MYSQL_ENABLED") == "true",

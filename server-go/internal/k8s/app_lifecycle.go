@@ -112,6 +112,7 @@ func (c *Client) resumeDeployment(ctx context.Context, namespace, name string, r
 	}
 	return c.updateAppDeployment(ctx, namespace, name, func(dep *appsv1.Deployment) error {
 		delete(dep.Annotations, appPausedReplicasAnnotation)
+		clearSuspension(dep)
 		return nil
 	})
 }

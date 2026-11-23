@@ -160,6 +160,7 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, acto
 		if err := s.restoreRoutes(ctx, namespace, app); err != nil {
 			return nil, err
 		}
+		s.clearSuspension(projectID, appID)
 		return s.apps.Transition(projectID, appID, []string{apphost.StatusResuming}, apphost.StatusRunning)
 	case errors.Is(err, k8s.ErrAppRollout):
 		if _, failErr := s.apps.Transition(projectID, appID, []string{apphost.StatusResuming}, apphost.StatusFailed); failErr != nil {

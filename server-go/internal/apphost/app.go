@@ -287,11 +287,42 @@ type App struct {
 	// LifecycleFailure is why the last pause, resume or deletion did not
 	// complete; a later one that completes clears it. Only the store writes it.
 	LifecycleFailure *LifecycleFailure `json:"lifecycleFailure,omitempty"`
+	// Suspension is why the platform stopped the app, set while it is stopped
+	// for that reason (EXC-839). Only RecordSuspension writes it.
+	Suspension *Suspension `json:"suspension,omitempty"`
 	// Version increments on every stored change, as the edge-function record
 	// does, so a caller can tell one revision of the record from another.
 	Version   int       `json:"version"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// SuspensionCrashLoop is the Suspension kind of an app stopped for crashing.
+const SuspensionCrashLoop = "crash-loop"
+
+// Suspension records that the platform stopped an app, in words safe to show
+// the app's developers. Start again (a resume) or a deploy clears it.
+type Suspension struct {
+	Kind string `json:"kind"`
+	// Reason reads as the end of "Stopped:", for example "kept crashing (11 restarts in the last hour)".
+	Reason        string    `json:"reason"`
+	Restarts      int       `json:"restarts"`
+	WindowMinutes int       `json:"windowMinutes"`
+	At            time.Time `json:"at"`
+}
+
+// SuspensionRecorder writes the stop a crash-loop guard recorded on an app.
+type SuspensionRecorder interface {
+	// RecordSuspension writes or, with nil, clears the stop. Observed state: it never moves the app's version.
+	RecordSuspension(projectID, id string, suspension *Suspension) error
+}
+
+// SuspensionStore is what the crash-loop guard reads and writes on apps.
+type SuspensionStore interface {
+	SuspensionRecorder
+	// ListSuspendable returns every app, across projects, the guard may stop:
+	// those running or failed, whose pods may still be restarting.
+	ListSuspendable() ([]*App, error)
 }
 
 // LifecycleFailure records a pause, resume or deletion that did not complete,

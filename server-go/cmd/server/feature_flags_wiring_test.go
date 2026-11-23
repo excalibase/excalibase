@@ -188,6 +188,10 @@ var darkWork = map[features.Feature]string{
 	features.FunctionHTMLGuard: "TestRuntimeResponseGuardOffKeepsTheFunctionsType",
 	// On unless switched off: only MCP's destructive tools read it; no route is gated (internal/mcpserver).
 	features.MCPConfirm: "TestTheSwitchedOffGuardDeletesAtOnce",
+	// Off, apps deploy by tag and are pulled always (internal/service, internal/k8s).
+	features.AppImagePin: "TestDeployApp_FlagOffLeavesTheDeployUnchanged",
+	// Off, no guard is started (cmd/server).
+	features.CrashLoopGuard: "TestCrashGuard_WantedOnlyWithHostingAndTheFlag",
 	// Studio's layout only: the server reports it through /api/config.
 	features.StudioV2: "TestConfig_ReportsEveryFeature",
 }
