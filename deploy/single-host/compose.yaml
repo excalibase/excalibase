@@ -225,7 +225,7 @@ services:
       # Project watchers alone reach NATS on the bus network (EXC-612).
       PROXY_CDC_NETWORK: excalibase-cdc
       PROXY_CDC_IMAGES: *watcher_image
-      PROXY_NETNS_JOIN_IMAGES: ${DOCUMENTDB_ENABLED:+ghcr.io/documentdb/documentdb-kubernetes-operator/gateway@sha256:8a5c7e533dc0fbed8ed780b22e31001a6b12ae0eb670f4aac62c1ded782742ed}
+      PROXY_NETNS_JOIN_IMAGES: ${DOCUMENTDB_ENABLED:+excalibase/documentdb-gateway:0.117.0@sha256:893e6085f202fa0c4b65f3205c84f9b343aa9defe978cf1650577040ef755e6c}
       PROXY_STATS_CONTAINERS: *platform_containers
       # Each platform network's real bridge, for the host firewall (EXC-683).
       PROXY_BRIDGE_NETWORKS: *bridge_networks

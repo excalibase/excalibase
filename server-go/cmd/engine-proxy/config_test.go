@@ -102,6 +102,17 @@ func TestLoadConfigReadsTheImagesThatMayJoinANetworkNamespace(t *testing.T) {
 	}
 }
 
+func TestLoadConfigReadsANetnsJoinImageWrittenAsTagAndDigest(t *testing.T) {
+	image := "excalibase/documentdb-gateway:0.117.0@sha256:" + strings.Repeat("ab", 32)
+	cfg, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_NETNS_JOIN_IMAGES": image}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.policy.NetnsJoinImages, []string{image}) {
+		t.Fatalf("images = %v", cfg.policy.NetnsJoinImages)
+	}
+}
+
 func TestLoadConfigRefusesANetnsJoinImageNotPinnedByDigest(t *testing.T) {
 	for _, image := range []string{
 		"ghcr.io/documentdb/documentdb-kubernetes-operator/gateway:0.117.0",

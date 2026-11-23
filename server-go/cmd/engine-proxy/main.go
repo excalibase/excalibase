@@ -336,8 +336,10 @@ func scopedPrefix(getenv func(string) string, key string) (string, error) {
 	return prefix, nil
 }
 
-// pinnedImage is a registry-qualified image reference fixed by its digest.
-var pinnedImage = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[^@\s:]+@sha256:[0-9a-f]{64}$`)
+// pinnedImage is a registry-qualified image reference fixed by its digest. A
+// tag may sit beside the digest, name:tag@sha256:..., for the reader's sake;
+// the digest alone decides what runs.
+var pinnedImage = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[^@\s:]+(:[^@\s:/]+)?@sha256:[0-9a-f]{64}$`)
 
 // digestPinned reads a list of images, each pinned by digest: a tag would let
 // the bits that are admitted change without the setting changing.
