@@ -149,3 +149,27 @@ func TestDeployApp_APlatformAdminAndAnUnsuspendedOrgMayDeploy(t *testing.T) {
 		t.Fatalf("unsuspended org deploy: %v", err)
 	}
 }
+
+// A crash-loop stop is a pause, which is always allowed; Start again is the
+// ordinary resume, so an abuse-suspended org cannot clear the stop with it.
+func TestCrashLoopStop_AStopIsAllowedButStartAgainIsRefusedInASuspendedOrg(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusRunning)
+	guardFor(t, f.svc, f.app.ProjectID, suspendedTestOrg)
+
+	suspendedApp(t, f) // the crash guard's own stop passes through the suspended org
+
+	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "another-developer"); !errors.Is(err, orgguard.ErrOrgSuspended) {
+		t.Fatalf("Start again err = %v, want ErrOrgSuspended", err)
+	}
+	stored, _ := f.apps.Get(f.app.ProjectID, f.app.ID)
+	if stored.Suspension == nil || f.status() != apphost.StatusStopped {
+		t.Fatalf("the refused Start again cleared the stop: status %s, suspension %+v", f.status(), stored.Suspension)
+	}
+
+	if _, err := f.svc.ResumeApp(orgguard.WithPlatformOverride(context.Background()), f.app.ProjectID, f.app.ID, "platform-admin"); err != nil {
+		t.Fatalf("platform admin Start again: %v", err)
+	}
+	if stored, _ := f.apps.Get(f.app.ProjectID, f.app.ID); stored.Suspension != nil {
+		t.Errorf("the stop survived the admin's resume: %+v", stored.Suspension)
+	}
+}
