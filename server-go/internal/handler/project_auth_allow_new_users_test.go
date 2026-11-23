@@ -82,3 +82,42 @@ func TestAuthSettings_FlagsOffPutWithoutSwitchKeepsIt(t *testing.T) {
 		t.Fatal("an older Studio's PUT reopened registration")
 	}
 }
+
+func TestAuthSettings_FlagsOffPolicyStoreFailuresAre500(t *testing.T) {
+	f := setupSignInHandler(t)
+	f.signIn.err = errors.New("pq: connection reset")
+	if w := doJSON(f.router, http.MethodGet, testOAuthSettings, nil); w.Code != http.StatusInternalServerError {
+		t.Fatalf("GET: %d", w.Code)
+	}
+	for name, body := range map[string]map[string]any{
+		"with the switch":    {"siteUrl": "", "allowNewUsers": false},
+		"without the switch": {"siteUrl": ""},
+	} {
+		if w := doJSON(f.router, http.MethodPut, testOAuthSettings, body); w.Code != http.StatusInternalServerError {
+			t.Fatalf("PUT %s: %d", name, w.Code)
+		}
+	}
+}
+
+func TestAuthSettings_FlagsOffWithoutSignInStoreReadsOpenAndKeepsToday(t *testing.T) {
+	f := setupSignInHandler(t)
+	f.handler.SetAuthOAuth(AuthOAuthDeps{Flags: f.handler.authOAuth.Flags, Providers: f.providers, Secrets: f.vault, PublicBaseURL: testOAuthBaseURL})
+	for _, path := range []string{testOAuthInfo, testOAuthSettings} {
+		w := doJSON(f.router, http.MethodGet, path, nil)
+		if w.Code != http.StatusOK || decodeObject(t, w.Body.Bytes())["allowNewUsers"] != true {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+		}
+	}
+	w := doJSON(f.router, http.MethodPut, testOAuthSettings, map[string]any{"siteUrl": "https://app.example.com", "allowNewUsers": false})
+	if w.Code != http.StatusOK || f.settings.settings[testOAuthProject].SiteURL != "https://app.example.com" {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAuthSettings_FlagsOffPutRefusesNothingTheSwitchBreaks(t *testing.T) {
+	f := setupSignInHandler(t)
+	f.settings.err = errors.New("pq: connection reset")
+	if w := doJSON(f.router, http.MethodGet, testOAuthSettings, nil); w.Code != http.StatusInternalServerError {
+		t.Fatalf("GET: %d", w.Code)
+	}
+}
