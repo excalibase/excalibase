@@ -25,6 +25,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
@@ -50,7 +51,9 @@ const sharedClientKey = "__shared__"
 //   - builds a per-project RuntimeClient pointing at the in-namespace service
 //   - caches clients per projectId
 type FunctionHandler struct {
-	store         edgefn.Store
+	store edgefn.Store
+	// orgGuard refuses deploys for an organisation whose owner is abuse-suspended (EXC-843).
+	orgGuard      *orgguard.Guard
 	secrets       *edgefn.SecretsStore
 	vault         vaultclient.VaultClient // optional, for reading DB_URL
 	instanceStore storage.InstanceStore
@@ -126,6 +129,9 @@ type FunctionHandler struct {
 }
 
 // SetFeatures gives the handler the dark-feature switches it consults.
+// SetOrgGuard makes function deploys refuse a suspended owner's organisation.
+func (h *FunctionHandler) SetOrgGuard(guard *orgguard.Guard) { h.orgGuard = guard }
+
 func (h *FunctionHandler) SetFeatures(flags features.Flags) { h.flags = flags }
 
 // SetExpectedJWTIssuer configures the iss claim the function handler will
@@ -319,6 +325,10 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	// Per-project path — need namespace and to ensure the runtime exists.
 	if h.k8sClient == nil {
 		return nil, fmt.Errorf("no runtime client available")
+	}
+	// Starting a project's runtime is starting compute (EXC-843).
+	if err := h.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
 	}
 	inst, err := h.instanceFor(projectID)
 	if err != nil {
@@ -612,6 +622,10 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	if err := edgefn.ValidateProjectID(projectID); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
+		writeOrgGuardError(w, err)
 		return
 	}
 	tenant, _ := custommw.TenantIDFromContext(r.Context())
@@ -1434,6 +1448,10 @@ func (h *FunctionHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 // latest env (user secrets + builtins) is picked up. Errors are logged and
 // not surfaced — secret write succeeded, so the admin UI should still 200.
 func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
+	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
+		log.Printf("WARN: redeploy of %s skipped: %v", projectID, err)
+		return
+	}
 	list, err := h.store.List(projectID)
 	if err != nil || len(list) == 0 {
 		return

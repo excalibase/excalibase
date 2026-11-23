@@ -16,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -114,6 +115,10 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 // a state that has not settled yet, and the same call repeated converges.
 func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, projectID string, err error) {
 	if writeIfPoolBusy(w, err) {
+		return
+	}
+	if errors.Is(err, orgguard.ErrOrgSuspended) {
+		writeOrgGuardError(w, err)
 		return
 	}
 	if errors.Is(err, service.ErrPauseUnsupported) {

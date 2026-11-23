@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/logsafe"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -101,6 +102,17 @@ func writeIfPoolBusy(w http.ResponseWriter, err error) bool {
 	return true
 }
 
+// writeOrgGuardError answers a refusal from the suspended-owner check: 403 and
+// the plain message for a suspension, a generic 500 when it could not be read.
+func writeOrgGuardError(w http.ResponseWriter, err error) {
+	if errors.Is(err, orgguard.ErrOrgSuspended) {
+		httpError(w, orgguard.Message, http.StatusForbidden)
+		return
+	}
+	log.Printf("ERROR: suspended-owner check: %v", err)
+	httpError(w, "the request could not be checked; try again", http.StatusInternalServerError)
+}
+
 func httpError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(code)
@@ -149,6 +161,8 @@ const errBackupsUnavailable = "backups cannot be set up right now; try again lat
 func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 	var limitErr *service.OrgProjectLimitError
 	switch {
+	case errors.Is(err, orgguard.ErrOrgSuspended):
+		writeOrgGuardError(w, err)
 	case errors.As(err, &limitErr):
 		httpError(w, limitErr.Error(), http.StatusConflict)
 	case errors.Is(err, storagebudget.ErrExceeded):

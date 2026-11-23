@@ -30,6 +30,9 @@ func (s *Service) Deploy(ctx context.Context, request DeployRequest) (*Deploy, e
 	if !s.Available() {
 		return nil, ErrSitesUnavailable
 	}
+	if err := s.options.OrgGuard.CheckProject(ctx, request.ProjectID); err != nil {
+		return nil, err
+	}
 	if err := ValidateLabel(request.Label); err != nil {
 		return nil, &InputError{Reason: err.Error()}
 	}
@@ -136,6 +139,9 @@ func (s *Service) pruneCode(ctx context.Context, deploy *Deploy, limits Limits) 
 func (s *Service) Rollback(ctx context.Context, projectID, siteID, deployID string) (*Site, error) {
 	if !s.Available() {
 		return nil, ErrSitesUnavailable
+	}
+	if err := s.options.OrgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
 	}
 	site, err := s.mustGet(ctx, projectID, siteID)
 	if err != nil {
