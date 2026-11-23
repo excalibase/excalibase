@@ -35,29 +35,44 @@ func crashGuardProtectedNamespaces(cfg config.AppConfig) []string {
 	return protected
 }
 
+// crashGuardDeps is what the guard is built from; fields left nil keep it off.
+type crashGuardDeps struct {
+	flags    features.Flags
+	sqlStore storage.PlatformStore
+	store    storage.InstanceStore
+	kube     any
+	deploys  *service.AppDeployService
+	alerts   *service.AlertingService
+	mail     email.Sender
+	members  service.OrgMemberLister
+}
+
 // startCrashGuard stops customer apps that keep crashing, and alerts on
 // databases that do, while FEATURE_CRASHLOOPGUARD is on (EXC-839).
 func startCrashGuard(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, kube any, deps *handlerDeps) func() {
-	return newCrashGuardStarter(cfg, cfg.Features(), sqlStore, store, kube, deps.appDeploySvc, deps.alerts, deps.emailSender, sqlStore)
+	return newCrashGuardStarter(cfg, crashGuardDeps{
+		flags: cfg.Features(), sqlStore: sqlStore, store: store, kube: kube,
+		deploys: deps.appDeploySvc, alerts: deps.alerts, mail: deps.emailSender, members: sqlStore,
+	})
 }
 
 // newCrashGuardStarter holds the decisions startCrashGuard makes, apart from the dependencies it is handed.
-func newCrashGuardStarter(cfg config.AppConfig, flags features.Flags, sqlStore storage.PlatformStore, store storage.InstanceStore,
-	kube any, deploys *service.AppDeployService, alerts *service.AlertingService, mail email.Sender, members ...service.OrgMemberLister) func() {
+func newCrashGuardStarter(cfg config.AppConfig, deps crashGuardDeps) func() {
 	idle := func() {
 		// guard off, or nothing here to read pods with
 	}
-	pods, canRead := kube.(service.ContainerCrashSource)
-	if !crashGuardWanted(context.Background(), cfg, flags) || sqlStore == nil || store == nil || deploys == nil || alerts == nil || !canRead {
+	pods, canRead := deps.kube.(service.ContainerCrashSource)
+	if !crashGuardWanted(context.Background(), cfg, deps.flags) || deps.sqlStore == nil || deps.store == nil ||
+		deps.deploys == nil || deps.alerts == nil || !canRead {
 		return idle
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		lock = standingLock(sqlStore, crashGuardLockID)
+		lock = standingLock(deps.sqlStore, crashGuardLockID)
 	}
 	guard := service.NewCrashGuard(service.CrashGuardConfig{
-		Apps: apphost.NewPostgresAppStore(sqlStore.DB()), Instances: store, Pods: pods, Stopper: deploys, Alerts: alerts,
-		Notifier:  crashStopNotifier(cfg, mail, members),
+		Apps: apphost.NewPostgresAppStore(deps.sqlStore.DB()), Instances: deps.store, Pods: pods, Stopper: deps.deploys, Alerts: deps.alerts,
+		Notifier:  crashStopNotifier(cfg, deps.mail, deps.members),
 		Threshold: cfg.CrashLoop.MaxPerHour, ExemptProjects: cfg.CrashLoop.ExemptProjects,
 		ProtectedNamespaces: crashGuardProtectedNamespaces(cfg),
 	})
@@ -67,10 +82,10 @@ func newCrashGuardStarter(cfg config.AppConfig, flags features.Flags, sqlStore s
 
 // crashStopNotifier mails the project's owners when a mail sender is
 // configured; without one the stop is still recorded and shown in Studio.
-func crashStopNotifier(cfg config.AppConfig, mail email.Sender, members []service.OrgMemberLister) service.CrashNotifier {
-	if !email.Configured(mail) || len(members) == 0 || members[0] == nil {
+func crashStopNotifier(cfg config.AppConfig, mail email.Sender, members service.OrgMemberLister) service.CrashNotifier {
+	if !email.Configured(mail) || members == nil {
 		log.Printf("crash guard: no mail sender configured, owners are not emailed when an app is stopped")
 		return nil
 	}
-	return service.NewCrashStopMail(members[0], mail, cfg.EmailFromAddress, cfg.EmailFromName, cfg.StudioURL)
+	return service.NewCrashStopMail(members, mail, cfg.EmailFromAddress, cfg.EmailFromName, cfg.StudioURL)
 }

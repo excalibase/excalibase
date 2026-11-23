@@ -52,7 +52,7 @@ func TestCrashGuard_NoGuardWithoutAKubernetesClient(t *testing.T) {
 	cfg := config.AppConfig{AppHostingEnabled: true}
 	deploys := service.NewAppDeployService(nil, nil, k8s.NewMockClient(), fakestore.NewInstances(), nil, k8s.AppRenderOptions{})
 	// A mock client reads no pods, so nothing is started and a stop function still comes back.
-	stop := newCrashGuardStarter(cfg, features.NewStatic(features.CrashLoopGuard), nil, nil, k8s.NewMockClient(), deploys, nil, nil)
+	stop := newCrashGuardStarter(cfg, crashGuardDeps{flags: features.NewStatic(features.CrashLoopGuard), kube: k8s.NewMockClient(), deploys: deploys})
 	if stop == nil {
 		t.Fatal("a stop function is always returned")
 	}
@@ -85,13 +85,13 @@ func (liveSender) Send(context.Context, email.Message) (string, error) { return 
 
 func TestCrashStopNotifier_NeedsAConfiguredSenderAndMembers(t *testing.T) {
 	cfg := config.AppConfig{}
-	if crashStopNotifier(cfg, email.NewNoopSender(), []service.OrgMemberLister{noMembers{}}) != nil {
+	if crashStopNotifier(cfg, email.NewNoopSender(), noMembers{}) != nil {
 		t.Error("a no-op sender must leave the owners unmailed")
 	}
 	if crashStopNotifier(cfg, liveSender{}, nil) != nil {
 		t.Error("no member source, no mail")
 	}
-	if crashStopNotifier(cfg, liveSender{}, []service.OrgMemberLister{noMembers{}}) == nil {
+	if crashStopNotifier(cfg, liveSender{}, noMembers{}) == nil {
 		t.Error("a configured sender must mail")
 	}
 }

@@ -19,9 +19,9 @@ type CrashLoopConfig struct {
 // loadCrashLoop reads APP_CRASH_LOOP_MAX_PER_HOUR (a value below 1 keeps the
 // default) and CRASH_GUARD_EXEMPT_PROJECTS (unset keeps the default; "none" empties it).
 func loadCrashLoop() CrashLoopConfig {
-	max := envInt("APP_CRASH_LOOP_MAX_PER_HOUR", defaultCrashLoopMaxPerHour)
-	if max < 1 {
-		max = defaultCrashLoopMaxPerHour
+	maxPerHour := envInt("APP_CRASH_LOOP_MAX_PER_HOUR", defaultCrashLoopMaxPerHour)
+	if maxPerHour < 1 {
+		maxPerHour = defaultCrashLoopMaxPerHour
 	}
 	exempt := []string{defaultCrashGuardExempt}
 	if raw := os.Getenv("CRASH_GUARD_EXEMPT_PROJECTS"); raw == "none" {
@@ -29,5 +29,5 @@ func loadCrashLoop() CrashLoopConfig {
 	} else if raw != "" {
 		exempt = envList("CRASH_GUARD_EXEMPT_PROJECTS")
 	}
-	return CrashLoopConfig{MaxPerHour: max, ExemptProjects: exempt}
+	return CrashLoopConfig{MaxPerHour: maxPerHour, ExemptProjects: exempt}
 }
