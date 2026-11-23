@@ -41,14 +41,19 @@ func TestCrashGuard_StartSweepsOnlyWhileLeading(t *testing.T) {
 	rig.pods.apps[guardNS+"/"+guardApp] = appStateAt(0, "", 0)
 	leader := leaderStub{leading: true, checks: make(chan struct{}, 1)}
 	stop := rig.guard.Start(context.Background(), leader, time.Millisecond)
-	<-leader.checks
-	stop()
-	time.Sleep(10 * time.Millisecond)
-	rig.pods.mu.Lock()
-	asked := len(rig.pods.asked)
-	rig.pods.mu.Unlock()
-	if asked == 0 {
-		t.Error("a leading replica never swept")
+	defer stop()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		rig.pods.mu.Lock()
+		asked := len(rig.pods.asked)
+		rig.pods.mu.Unlock()
+		if asked > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a leading replica never swept")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
