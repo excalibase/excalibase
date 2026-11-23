@@ -136,35 +136,43 @@ func putAs(f oauthFixture, role string, body map[string]any) *httptest.ResponseR
 }
 
 // With the flags off the route needs only Developer, so the switch carries its own Admin rule.
+type roleStep struct {
+	name      string
+	role      string
+	body      map[string]any
+	wantCode  int
+	wantAllow bool // the stored switch after the step
+}
+
+// The steps run in order against one project that starts open.
+var allowNewUsersRoleSteps = []roleStep{
+	{"developer closing sign-ups", domain.OrgRoleDeveloper, map[string]any{"siteUrl": "", "allowNewUsers": false}, http.StatusForbidden, true},
+	{"developer sending the stored value", domain.OrgRoleDeveloper, map[string]any{"siteUrl": "https://a.example.com", "allowNewUsers": true}, http.StatusOK, true},
+	{"developer omitting the switch", domain.OrgRoleDeveloper, map[string]any{"siteUrl": "https://b.example.com"}, http.StatusOK, true},
+	{"admin closing sign-ups", domain.OrgRoleAdmin, map[string]any{"siteUrl": "", "allowNewUsers": false}, http.StatusOK, false},
+	{"developer reopening sign-ups", domain.OrgRoleDeveloper, map[string]any{"siteUrl": "", "allowNewUsers": true}, http.StatusForbidden, false},
+}
+
 func TestAuthSettings_ChangingAllowNewUsersNeedsAdminWhateverTheFlags(t *testing.T) {
 	for name, flags := range map[string][]features.Feature{"flags off": nil, "flags on": {features.AuthOAuth}} {
 		t.Run(name, func(t *testing.T) {
 			f := setupSignInHandler(t, flags...)
 			f.signIn.signIn[testOAuthProject] = domain.ProjectAuthSignIn{RedirectURLs: []string{}, AllowNewUsers: true}
-
-			if w := putAs(f, domain.OrgRoleDeveloper, map[string]any{"siteUrl": "", "allowNewUsers": false}); w.Code != http.StatusForbidden {
-				t.Fatalf("developer closing sign-ups: %d %s", w.Code, w.Body.String())
-			}
-			if !f.signIn.signIn[testOAuthProject].AllowNewUsers {
-				t.Fatal("a refused PUT changed the switch")
-			}
-			if w := putAs(f, domain.OrgRoleDeveloper, map[string]any{"siteUrl": "https://a.example.com", "allowNewUsers": true}); w.Code != http.StatusOK {
-				t.Fatalf("developer sending the stored value: %d %s", w.Code, w.Body.String())
-			}
-			if w := putAs(f, domain.OrgRoleDeveloper, map[string]any{"siteUrl": "https://b.example.com"}); w.Code != http.StatusOK {
-				t.Fatalf("developer omitting the switch: %d %s", w.Code, w.Body.String())
-			}
-			if w := putAs(f, domain.OrgRoleAdmin, map[string]any{"siteUrl": "", "allowNewUsers": false}); w.Code != http.StatusOK {
-				t.Fatalf("admin: %d %s", w.Code, w.Body.String())
-			}
-			if f.signIn.signIn[testOAuthProject].AllowNewUsers {
-				t.Fatal("the admin's change was not stored")
-			}
-			// Reopening is a change too.
-			if w := putAs(f, domain.OrgRoleDeveloper, map[string]any{"siteUrl": "", "allowNewUsers": true}); w.Code != http.StatusForbidden {
-				t.Fatalf("developer reopening sign-ups: %d", w.Code)
+			for _, step := range allowNewUsersRoleSteps {
+				runRoleStep(t, f, step)
 			}
 		})
+	}
+}
+
+func runRoleStep(t *testing.T, f oauthFixture, step roleStep) {
+	t.Helper()
+	w := putAs(f, step.role, step.body)
+	if w.Code != step.wantCode {
+		t.Fatalf("%s: %d %s", step.name, w.Code, w.Body.String())
+	}
+	if got := f.signIn.signIn[testOAuthProject].AllowNewUsers; got != step.wantAllow {
+		t.Fatalf("%s: the stored switch is %v, want %v", step.name, got, step.wantAllow)
 	}
 }
 
