@@ -24,6 +24,7 @@ import {
 import { DeployHistory } from '../components/containers/DeployHistory';
 import { AppDomains, HostCertificateBadge } from '../components/containers/AppDomains';
 import { useCustomDomainsEnabled, useFeatureEnabled } from '../hooks/useDeploymentMode';
+import { CrashLoopNotice } from '../components/containers/CrashLoopNotice';
 import { LifecycleActions } from '../components/containers/LifecycleActions';
 import { AppLogs } from '../components/containers/AppLogs';
 import { AppDiskCard } from '../components/containers/AppDiskCard';
@@ -249,6 +250,7 @@ function Detail({
         </div>
       )}
       <DiskStopBanner reason={diskStopReason(app, newest)} />
+      <CrashLoopNotice app={app} canStart={canDevelop} onError={setLifecycleError} />
       <RestartsBanner app={app} />
       <CurrentDeploy deploy={newest} />
       <div className="grid gap-6 lg:grid-cols-2 mb-6">

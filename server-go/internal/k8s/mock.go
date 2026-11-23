@@ -172,6 +172,7 @@ type MockClient struct {
 
 	// Lifecycle, keyed "namespace/appID".
 	AppPaused      map[string]bool
+	AppSuspended   map[string]string // the crash-loop marker, keyed "namespace/appID"
 	AppDeleted     map[string]bool
 	AppPauseErr    error
 	AppResumeErr   error
@@ -272,6 +273,7 @@ func NewMockClient() *MockClient {
 		AppRolloutErr: make(map[string]error),
 		AppAvailable:  make(map[string]int32),
 		AppPaused:     make(map[string]bool),
+		AppSuspended:  make(map[string]string),
 		AppDeleted:    make(map[string]bool),
 
 		RuntimeClasses: make(map[string]bool),
@@ -937,6 +939,14 @@ func (m *MockClient) PauseAppWorkload(ctx context.Context, namespace, appID stri
 	return nil
 }
 
+func (m *MockClient) SuspendAppWorkload(ctx context.Context, namespace, appID, kind, reason string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "SuspendAppWorkload:"+namespace+"/"+appID)
+	m.AppSuspended[namespace+"/"+appID] = kind
+	return nil
+}
+
 func (m *MockClient) WithdrawProjectWorkloads(ctx context.Context, namespace string, opts WithdrawOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -982,6 +992,7 @@ func (m *MockClient) ResumeAppWorkload(ctx context.Context, namespace, appID, ap
 		return m.AppResumeErr
 	}
 	delete(m.AppPaused, namespace+"/"+appID)
+	delete(m.AppSuspended, namespace+"/"+appID)
 	if m.ResumedTier == nil {
 		m.ResumedTier = map[string]domain.TierType{}
 	}

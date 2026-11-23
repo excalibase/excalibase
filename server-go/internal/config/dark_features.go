@@ -52,6 +52,8 @@ var featureEnv = map[features.Feature]string{
 	features.StudioV2:           "FEATURE_STUDIO_V2",
 	features.FunctionInvoke:     "FEATURE_FUNCTIONINVOKE",
 	features.FunctionHTMLGuard:  "FEATURE_FUNCTIONHTMLGUARD",
+	features.AppImagePin:        "FEATURE_APPIMAGEPIN",
+	features.CrashLoopGuard:     "FEATURE_CRASHLOOPGUARD",
 }
 
 // defaultOn are the features that are on until their variable says "false":

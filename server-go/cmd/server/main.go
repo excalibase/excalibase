@@ -336,6 +336,8 @@ func runServer(cfg config.AppConfig) {
 	defer stopAppRollouts()
 	stopImageWatcher := startImageWatcher(cfg, deps.features, sqlStore, deps.appDeploySvc)
 	defer stopImageWatcher()
+	stopCrashGuard := startCrashGuard(cfg, sqlStore, store, k8sClient, deps)
+	defer stopCrashGuard()
 	stopRegistrySweep := startRegistrySweeper(cfg, sqlStore, deps.appRegistry)
 	defer stopRegistrySweep()
 	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc, deps.alerts, deps.emailSender)
@@ -1952,6 +1954,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 	appDeploySvc.SetImageResolver(imagedigest.NewResolver(cfg.ExtraDenyPrefixes()))
 	appDeploySvc.SetLocalRegistries(cfg.AppLocalRegistries)
+	appDeploySvc.SetFeatureFlags(cfg.Features())
 	appNetworkSvc := newAppNetworkService(sqlStore, store, appRuntime, a.claimer)
 	schemaHandler := newSchemaHandler(cfg, vc, store)
 	sitesSvc := newSitesService(cfg, sqlStore, service.NewSiteLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc), a.claimer, siteSecretReader(vc))
