@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { redirectUrlProblem, useSaveAuthSettings } from '../../api/authSettings';
 import type { AuthSettings } from '../../api/authSettings';
 import { AllowList } from '../AllowList';
+import { AllowNewUsersToggle } from './AllowNewUsersToggle';
 
 // RedirectUrlsCard edits where auth may send a user back after a provider
 // sign-in or an emailed link, and whether sign-in may create new users (EXC-662). Each change
@@ -10,16 +11,15 @@ export function RedirectUrlsCard({ projectId, settings }: { readonly projectId: 
   const save = useSaveAuthSettings(projectId);
   const [problem, setProblem] = useState<Error | null>(null);
   const redirectUrls = settings.redirectUrls ?? [];
-  const allowNewUsers = settings.allowNewUsers ?? true;
 
-  const saveWith = (change: Pick<AuthSettings, 'redirectUrls' | 'allowNewUsers'>, done?: () => void) => {
+  const saveWith = (change: Pick<AuthSettings, 'redirectUrls'>, done?: () => void) => {
     setProblem(null);
     save.mutate(
       {
         siteUrl: settings.siteUrl,
         requireEmailVerification: settings.requireEmailVerification,
         redirectUrls,
-        allowNewUsers,
+        allowNewUsers: settings.allowNewUsers ?? true,
         ...change,
       },
       { onSuccess: () => done?.() },
@@ -55,16 +55,7 @@ export function RedirectUrlsCard({ projectId, settings }: { readonly projectId: 
         onAdd={add}
         onRemove={(entry) => saveWith({ redirectUrls: redirectUrls.filter((item) => item !== entry) })}
       />
-      <label htmlFor="allow-new-users" className="flex items-start gap-2 text-sm text-text-primary">
-        <input id="allow-new-users" type="checkbox" className="mt-1" checked={allowNewUsers} disabled={save.isPending}
-          onChange={(e) => saveWith({ allowNewUsers: e.target.checked })} />
-        <span>
-          <span className="block">Allow new users</span>
-          <span className="block text-xs text-text-secondary">
-            Off: only people who already have an account can sign in; a first sign-in with a provider or an emailed link is refused.
-          </span>
-        </span>
-      </label>
+      <AllowNewUsersToggle projectId={projectId} settings={settings} extra={{ redirectUrls }} />
     </section>
   );
 }

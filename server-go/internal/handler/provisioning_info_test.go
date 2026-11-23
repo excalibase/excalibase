@@ -95,6 +95,7 @@ func TestGetProjectInfo_Success(t *testing.T) {
 		OrgName:            "Acme Corp",
 		RealtimeAutoEnable: true,
 		CorsAllowedOrigins: []string{},
+		AllowNewUsers:      true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("body mismatch:\n got=%+v\nwant=%+v", got, want)
