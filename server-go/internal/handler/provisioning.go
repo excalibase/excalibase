@@ -798,7 +798,11 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 	if err != nil {
 		return domain.ProjectInfo{}, "cors allowlist unavailable"
 	}
-	oauth, err := h.authOAuthForInfo(ctx, projectID, orgSlug)
+	signIn, err := h.signInForInfo(ctx, projectID)
+	if err != nil {
+		return domain.ProjectInfo{}, "auth sign-in settings unavailable"
+	}
+	oauth, err := h.authOAuthForInfo(ctx, signIn, projectID, orgSlug)
 	if err != nil {
 		return domain.ProjectInfo{}, "auth sign-in settings unavailable"
 	}
@@ -814,6 +818,7 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 		CorsAllowedOrigins:       corsOrigins,
 		RequireEmailVerification: authSettings.RequireEmailVerification,
 		SiteURL:                  authSettings.SiteURL,
+		AllowNewUsers:            signIn.AllowNewUsers,
 		ProjectOAuthInfo:         oauth,
 		UserAPIEnabled:           h.userAPIForInfo(ctx),
 		StableSubject:            h.stableSubjectForInfo(ctx),

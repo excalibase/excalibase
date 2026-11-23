@@ -19,15 +19,17 @@ const errAuthSettingsNotConfigured = "project auth settings not configured"
 type authSettingsResponse struct {
 	RequireEmailVerification bool   `json:"requireEmailVerification"`
 	SiteURL                  string `json:"siteUrl"`
-	// Present only while authoauth or authotp is on (EXC-662).
+	// AllowNewUsers is always answered: closing registration works with every
+	// sign-in flag off (EXC-457).
+	AllowNewUsers bool `json:"allowNewUsers"`
+	// Present only while a sign-in flag is on (EXC-662).
 	*authSignInResponse
 	// Present only while authmfa is on; the key itself is never answered.
 	MFAEnabled *bool `json:"mfaEnabled,omitempty"`
 }
 
 type authSignInResponse struct {
-	RedirectURLs  []string `json:"redirectUrls"`
-	AllowNewUsers bool     `json:"allowNewUsers"`
+	RedirectURLs []string `json:"redirectUrls"`
 	// Present only while authotp is on.
 	EmailOTPEnabled *bool `json:"emailOtpEnabled,omitempty"`
 	// Present only while authguest is on; the secret itself is write-only.
@@ -68,11 +70,12 @@ func (h *ProvisioningHandler) authSettingsView(ctx context.Context, projectID st
 		return authSettingsResponse{}, err
 	}
 	response := authSettingsResponseFor(settings)
+	signIn, err := h.signInForInfo(ctx, projectID)
+	if err != nil {
+		return authSettingsResponse{}, err
+	}
+	response.AllowNewUsers = signIn.AllowNewUsers
 	if h.signInPolicyOn(ctx) {
-		signIn, err := h.storedAuthSignIn(ctx, projectID)
-		if err != nil {
-			return authSettingsResponse{}, err
-		}
 		response.authSignInResponse = h.authSignInResponseFor(ctx, signIn)
 	}
 	if response.MFAEnabled, err = h.mfaView(ctx, projectID); err != nil {
@@ -109,7 +112,7 @@ func (h *ProvisioningHandler) PutAuthSettings(w http.ResponseWriter, r *http.Req
 		RequireEmailVerification: body.RequireEmailVerification,
 		SiteURL:                  siteURL,
 	}
-	if h.signInPolicyOn(r.Context()) {
+	if h.signInPolicyOn(r.Context()) || (body.AllowNewUsers != nil && h.authOAuth.SignIn != nil) {
 		h.putAuthSettingsWithSignIn(w, r, projectID, settings, body)
 		return
 	}
@@ -118,6 +121,12 @@ func (h *ProvisioningHandler) PutAuthSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 	response := authSettingsResponseFor(settings)
+	signIn, err := h.signInForInfo(r.Context(), projectID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	response.AllowNewUsers = signIn.AllowNewUsers
 	if response.MFAEnabled, err = h.mfaView(r.Context(), projectID); err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
@@ -156,7 +165,8 @@ func (h *ProvisioningHandler) authSettingsForInfo(ctx context.Context, projectID
 // sign-in policy in one upsert, absent policy fields keeping their stored value.
 func (h *ProvisioningHandler) putAuthSettingsWithSignIn(w http.ResponseWriter, r *http.Request, projectID string, settings domain.ProjectAuthSettings, body authSettingsRequest) {
 	var redirectURLs []string
-	if body.RedirectURLs != nil {
+	policyOn := h.signInPolicyOn(r.Context())
+	if body.RedirectURLs != nil && policyOn {
 		normalized, err := domain.NormalizeRedirectURLs(*body.RedirectURLs)
 		if err != nil {
 			httpError(w, safeError(err), http.StatusBadRequest)
@@ -169,7 +179,7 @@ func (h *ProvisioningHandler) putAuthSettingsWithSignIn(w http.ResponseWriter, r
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
-	if body.RedirectURLs != nil {
+	if body.RedirectURLs != nil && policyOn {
 		signIn.RedirectURLs = redirectURLs
 	}
 	if body.AllowNewUsers != nil {
@@ -187,7 +197,10 @@ func (h *ProvisioningHandler) putAuthSettingsWithSignIn(w http.ResponseWriter, r
 	}
 	h.recordAuthSignIn(r, projectID, settings, signIn)
 	response := authSettingsResponseFor(settings)
-	response.authSignInResponse = h.authSignInResponseFor(r.Context(), signIn)
+	response.AllowNewUsers = signIn.AllowNewUsers
+	if policyOn {
+		response.authSignInResponse = h.authSignInResponseFor(r.Context(), signIn)
+	}
 	if h.authMFAOn(r.Context()) {
 		response.MFAEnabled = &signIn.MFAEnabled
 	}
@@ -202,30 +215,33 @@ func (h *ProvisioningHandler) storedAuthSignIn(ctx context.Context, projectID st
 	return h.authOAuth.SignIn.GetAuthSignIn(ctx, projectID)
 }
 
-// authOAuthForInfo is the sign-in policy on /info: nil while both sign-in
-// flags are off, so none of its keys appear; providers only with authoauth,
-// the email switch only with authotp. A read failure is returned, never defaulted.
-func (h *ProvisioningHandler) authOAuthForInfo(ctx context.Context, projectID, orgSlug string) (*domain.ProjectOAuthInfo, error) {
+// signInForInfo reads the stored sign-in policy; without its store, or a row,
+// it is the default (registration open). A read failure is returned, never defaulted.
+func (h *ProvisioningHandler) signInForInfo(ctx context.Context, projectID string) (domain.ProjectAuthSignIn, error) {
+	if h.authOAuth.SignIn == nil {
+		return domain.DefaultAuthSignIn(), nil
+	}
+	return h.authOAuth.SignIn.GetAuthSignIn(ctx, projectID)
+}
+
+// authOAuthForInfo is the sign-in policy on /info: nil while every sign-in
+// flag is off, so none of its keys appear; providers only with authoauth,
+// the email switch only with authotp. The new-user switch is not here: it is
+// sent regardless of the flags.
+func (h *ProvisioningHandler) authOAuthForInfo(ctx context.Context, signIn domain.ProjectAuthSignIn, projectID, orgSlug string) (*domain.ProjectOAuthInfo, error) {
 	if !h.signInPolicyOn(ctx) {
 		return nil, nil
 	}
-	info := &domain.ProjectOAuthInfo{RedirectURLs: []string{}, AllowNewUsers: true, OAuthProviders: []domain.OAuthProviderInfo{}}
-	if h.authOAuth.SignIn != nil {
-		signIn, err := h.authOAuth.SignIn.GetAuthSignIn(ctx, projectID)
-		if err != nil {
-			return nil, err
-		}
-		info.AllowNewUsers = signIn.AllowNewUsers
-		if signIn.RedirectURLs != nil {
-			info.RedirectURLs = signIn.RedirectURLs
-		}
-		if h.authOTPOn(ctx) {
-			info.EmailOTPEnabled = &signIn.EmailOTPEnabled
-		}
-		if h.authGuestOn(ctx) {
-			info.GuestSignInEnabled = &signIn.GuestSignInEnabled
-			info.GuestCaptchaEnabled = signIn.GuestCaptchaSecretSet
-		}
+	info := &domain.ProjectOAuthInfo{RedirectURLs: []string{}, OAuthProviders: []domain.OAuthProviderInfo{}}
+	if signIn.RedirectURLs != nil {
+		info.RedirectURLs = signIn.RedirectURLs
+	}
+	if h.authOTPOn(ctx) {
+		info.EmailOTPEnabled = &signIn.EmailOTPEnabled
+	}
+	if h.authGuestOn(ctx) {
+		info.GuestSignInEnabled = &signIn.GuestSignInEnabled
+		info.GuestCaptchaEnabled = signIn.GuestCaptchaSecretSet
 	}
 	if h.authOAuth.Providers != nil && h.authOAuthOn(ctx) {
 		stored, err := h.authOAuth.Providers.ListAuthProviders(ctx, projectID)
@@ -242,7 +258,7 @@ func (h *ProvisioningHandler) authSignInResponseFor(ctx context.Context, signIn 
 	if urls == nil {
 		urls = []string{}
 	}
-	response := &authSignInResponse{RedirectURLs: urls, AllowNewUsers: signIn.AllowNewUsers}
+	response := &authSignInResponse{RedirectURLs: urls}
 	if h.authOTPOn(ctx) {
 		response.EmailOTPEnabled = &signIn.EmailOTPEnabled
 	}
