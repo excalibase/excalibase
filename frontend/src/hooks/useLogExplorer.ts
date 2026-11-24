@@ -34,7 +34,7 @@ export function useLogExplorer(projectId: string) {
   const [serverSearch, setServerSearch] = useState('');
   // The plan's retention (EXC-659) hides every range that reaches past it.
   const ranges = TIME_RANGES.filter((r, i) => i === 0 || !retentionHours || r.hours <= retentionHours);
-  const range = ranges.find((r) => r.label === rangeLabel) ?? ranges[ranges.length - 1];
+  const range = ranges.find((r) => r.label === rangeLabel) ?? ranges.at(-1) ?? TIME_RANGES[0];
 
   useEffect(() => {
     const term = search.trim();
