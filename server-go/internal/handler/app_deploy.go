@@ -18,6 +18,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/imagedigest"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/storagebudget"
@@ -434,12 +435,14 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		return
 	}
 	switch {
+	case orgguard.IsRefusal(err):
+		writeOrgGuardError(w, err)
 	case errors.Is(err, abuse.ErrProxyApp), errors.Is(err, abuse.ErrBlockedRegistry):
 		httpError(w, err.Error(), http.StatusForbidden)
 	case errors.Is(err, apphost.ErrInvalidImage), errors.Is(err, appregistry.ErrInternalImage):
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, imagedigest.ErrNotPublic):
-		httpError(w, err.Error()+"; push the image to a public registry, or set it as the app's image and deploy with no image, which runs it as the node pulls it, without a pinned digest", http.StatusUnprocessableEntity)
+		httpError(w, err.Error()+"; push the image to a public registry, or set it as the app's image and deploy with no image, which runs it as the node pulls it, without a pinned digest (with FEATURE_APPIMAGEPIN on that unpinned deploy is refused too: name the image by digest and list its registry in APP_LOCAL_REGISTRIES)", http.StatusUnprocessableEntity)
 	case errors.Is(err, imagedigest.ErrNotFound), errors.Is(err, imagedigest.ErrDenied),
 		errors.Is(err, apphost.ErrLocalRegistryNeedsDigest), errors.Is(err, service.ErrRollbackImageRemoved):
 		httpError(w, err.Error(), http.StatusUnprocessableEntity)

@@ -16,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -43,6 +44,8 @@ type ProvisioningHandler struct {
 	activity storage.ProjectActivityStore
 	// suspendedOrgs names the orgs whose owner is suspended (EXC-757); nil → no marker.
 	suspendedOrgs SuspendedOrgsLookup
+	// servingGuard refuses to serve a project whose owner is suspended (EXC-845); nil allows all.
+	servingGuard *orgguard.Guard
 	// corsStore backs /cors and the corsAllowedOrigins field on /info;
 	// nil → /cors returns 503 and /info reports no origins.
 	corsStore storage.ProjectCorsStore
@@ -112,8 +115,12 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 // An unobserved pause or resume is 409, not 500: the request was well formed
 // and nothing failed on the server's side of the contract; the project is in
 // a state that has not settled yet, and the same call repeated converges.
-func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, projectID string, err error) {
+func (h *ProvisioningHandler) writeLifecycleError(ctx context.Context, w http.ResponseWriter, projectID string, err error) {
 	if writeIfPoolBusy(w, err) {
+		return
+	}
+	if orgguard.IsRefusal(err) {
+		writeOrgGuardError(w, err)
 		return
 	}
 	if errors.Is(err, service.ErrPauseUnsupported) {
@@ -134,14 +141,19 @@ func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, project
 		errors.Is(err, storage.ErrProjectStatusChanged) {
 		status = http.StatusConflict
 	}
-	body := map[string]interface{}{"error": safeError(err), "status": status}
+	if status == http.StatusInternalServerError {
+		log.Printf("ERROR: pause or resume of %s: %v", projectID, err)
+	}
+	body := map[string]interface{}{"error": lifecycleMessage(err), "status": status}
 	if h.instances != nil {
 		if inst, _ := h.instances.FindByProjectID(projectID); inst != nil {
-			body["error"] = safeErrorIn(err, inst.Namespace)
 			body["projectId"] = inst.ProjectID
 			body["status"] = inst.Status
 			body["currentStep"] = inst.CurrentStep
-			body["failureReason"] = domain.ScrubClusterText(inst.FailureReason, inst.Namespace)
+			failure := failureForCaller(ctx, inst.FailureReason, "")
+			setIfNotEmpty(body, "failureKind", string(failure.Kind))
+			setIfNotEmpty(body, "failureMessage", failure.Message)
+			setIfNotEmpty(body, "failureReason", domain.ScrubClusterText(failure.Reason, inst.Namespace))
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -176,11 +188,11 @@ func (h *ProvisioningHandler) Pause(w http.ResponseWriter, r *http.Request) {
 	}
 	if prefersRespondAsync(r) {
 		started, err := h.pauseSvc.StartPause(r.Context(), projectID, body.Reason, nil)
-		h.writeLifecycleStarted(w, projectID, started, err)
+		h.writeLifecycleStarted(r.Context(), w, projectID, started, err)
 		return
 	}
 	if err := h.pauseSvc.Pause(r.Context(), projectID, body.Reason); err != nil {
-		h.writeLifecycleError(w, projectID, err)
+		h.writeLifecycleError(r.Context(), w, projectID, err)
 		return
 	}
 	if h.instances != nil {
@@ -209,11 +221,11 @@ func (h *ProvisioningHandler) Resume(w http.ResponseWriter, r *http.Request) {
 	}
 	if prefersRespondAsync(r) {
 		started, err := h.pauseSvc.StartResume(r.Context(), projectID, nil)
-		h.writeLifecycleStarted(w, projectID, started, err)
+		h.writeLifecycleStarted(r.Context(), w, projectID, started, err)
 		return
 	}
 	if err := h.pauseSvc.Resume(r.Context(), projectID); err != nil {
-		h.writeLifecycleError(w, projectID, err)
+		h.writeLifecycleError(r.Context(), w, projectID, err)
 		return
 	}
 	if h.instances != nil {
@@ -230,9 +242,9 @@ func (h *ProvisioningHandler) Resume(w http.ResponseWriter, r *http.Request) {
 // writeLifecycleStarted answers a pause or resume started without waiting
 // (RFC 7240 respond-async, EXC-473): 202 with the project PAUSING or RESUMING,
 // whose status then carries the outcome; 200 when there was nothing to do.
-func (h *ProvisioningHandler) writeLifecycleStarted(w http.ResponseWriter, projectID string, started bool, err error) {
+func (h *ProvisioningHandler) writeLifecycleStarted(ctx context.Context, w http.ResponseWriter, projectID string, started bool, err error) {
 	if err != nil {
-		h.writeLifecycleError(w, projectID, err)
+		h.writeLifecycleError(ctx, w, projectID, err)
 		return
 	}
 	body := map[string]interface{}{"projectId": projectID}
@@ -343,10 +355,10 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if async && resp.Status == domain.StatusProvisioning {
-		writeJSONStatus(w, http.StatusAccepted, shownOnce(resp, req.OwnerPassword))
+		writeJSONStatus(w, http.StatusAccepted, shownOnce(r.Context(), resp, req.OwnerPassword))
 		return
 	}
-	writeJSON(w, shownOnce(resp, req.OwnerPassword))
+	writeJSON(w, shownOnce(r.Context(), resp, req.OwnerPassword))
 }
 
 func prefersRespondAsync(r *http.Request) bool {
@@ -765,6 +777,12 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 		httpError(w, "project not found", http.StatusNotFound)
 		return
 	}
+	// A suspended owner's project reads as unknown too, so the auth service
+	// and the engine stop serving it instead of keeping their cached copy. A
+	// 404 is what they act on; a 403 would only be logged as a failed refresh.
+	if h.refuseSuspendedProject(w, r, inst.ProjectID) {
+		return
+	}
 
 	org, ok := h.resolveInfoOrg(w, r, inst.OrgID)
 	if !ok {
@@ -798,7 +816,11 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 	if err != nil {
 		return domain.ProjectInfo{}, "cors allowlist unavailable"
 	}
-	oauth, err := h.authOAuthForInfo(ctx, projectID, orgSlug)
+	signIn, err := h.signInForInfo(ctx, projectID)
+	if err != nil {
+		return domain.ProjectInfo{}, "auth sign-in settings unavailable"
+	}
+	oauth, err := h.authOAuthForInfo(ctx, signIn, projectID, orgSlug)
 	if err != nil {
 		return domain.ProjectInfo{}, "auth sign-in settings unavailable"
 	}
@@ -814,6 +836,7 @@ func (h *ProvisioningHandler) infoSettings(ctx context.Context, projectID, orgSl
 		CorsAllowedOrigins:       corsOrigins,
 		RequireEmailVerification: authSettings.RequireEmailVerification,
 		SiteURL:                  authSettings.SiteURL,
+		AllowNewUsers:            signIn.AllowNewUsers,
 		ProjectOAuthInfo:         oauth,
 		UserAPIEnabled:           h.userAPIForInfo(ctx),
 		StableSubject:            h.stableSubjectForInfo(ctx),
@@ -844,4 +867,32 @@ func (h *ProvisioningHandler) resolveInfoOrg(w http.ResponseWriter, r *http.Requ
 		return nil, false
 	}
 	return org, true
+}
+
+func setIfNotEmpty(body map[string]interface{}, key, value string) {
+	if value != "" {
+		body[key] = value
+	}
+}
+
+// lifecycleUnexpected is what a pause or resume that failed in a way we have
+// no sentence for tells the caller; the cause is in the server log.
+const lifecycleUnexpected = "the operation could not be completed; try again, and if it keeps failing tell us"
+
+// lifecycleSentinels are the pause and resume outcomes whose own words are
+// meant for the caller.
+var lifecycleSentinels = []error{
+	service.ErrProjectOperationRunning, service.ErrPauseNotObserved, service.ErrPauseBackupNotCompleted, service.ErrResumeNotObserved,
+	storage.ErrProjectBusy, storage.ErrProjectStatusChanged,
+}
+
+// lifecycleMessage is the caller's sentence for a pause or resume error:
+// the sentinel's own words, never text wrapped around it.
+func lifecycleMessage(err error) string {
+	for _, sentinel := range lifecycleSentinels {
+		if errors.Is(err, sentinel) {
+			return sentinel.Error()
+		}
+	}
+	return lifecycleUnexpected
 }

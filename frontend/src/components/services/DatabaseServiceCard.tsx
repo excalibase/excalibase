@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { ProvisionFailure } from '../shared/ProvisionFailure';
 import { Database, Loader2 } from 'lucide-react';
 import { useInstance } from '../../hooks/useProvisioning';
 import { useProjectEndpoint } from '../../api/projectEndpoint';
@@ -56,8 +57,8 @@ function NoDatabase({ project }: { readonly project: DatabaseInstance }) {
         GraphQL and REST API, sized by your organization&apos;s plan.
         {!project.canAddDatabase && ' Only an org admin or owner can add one.'}
       </p>
-      {project.failureReason && (
-        <p className="text-xs text-red-400 break-words">Last attempt failed: {project.failureReason}</p>
+      {(project.failureReason || project.failureKind) && (
+        <ProvisionFailure reason={project.failureReason} kind={project.failureKind} message={project.failureMessage} className="text-xs text-red-400 break-words" />
       )}
       {project.canAddDatabase && (
         <div>
@@ -141,8 +142,8 @@ export function DatabaseServiceCard({ projectId }: { readonly projectId: string 
               <dd className="text-text-primary">{project.tier}</dd>
             </div>
           </dl>
-          {project.failureReason && project.currentStage === 'FAILED' && (
-            <p className="text-xs text-red-400 break-words">{project.failureReason}</p>
+          {(project.failureReason || project.failureKind) && project.currentStage === 'FAILED' && (
+            <ProvisionFailure reason={project.failureReason} kind={project.failureKind} message={project.failureMessage} className="text-xs text-red-400 break-words" />
           )}
           {isMySQLProject(project) ? (
             <MySQLEndpoint project={project} />

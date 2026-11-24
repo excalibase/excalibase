@@ -185,4 +185,28 @@ describe('ProjectServicesPage', () => {
     expect(urls.some((url) => url.includes('/apps/'))).toBe(false);
     expect(urls.some((url) => url.includes('/sites/'))).toBe(false);
   });
+
+  describe('Sites unavailable hint', () => {
+    test('shows where the install has no static hosting, pointing at containers', async () => {
+      stub({ config: { sites: false }, apps: [app] });
+      renderAt('/project/p1');
+      const hint = await screen.findByTestId('sites-unavailable');
+      expect(hint).toHaveTextContent("Static frontend hosting isn't available on this install; deploy your frontend as a container.");
+      expect(within(hint).getByRole('link', { name: 'container' })).toHaveAttribute('href', '/project/p1/containers');
+    });
+
+    test('shows on an empty project too', async () => {
+      stub({ config: { sites: false }, project: project({ noDatabase: true, canAddDatabase: true }) });
+      renderAt('/project/p1');
+      await screen.findByTestId('services-empty');
+      expect(screen.getByTestId('sites-unavailable')).toBeInTheDocument();
+    });
+
+    test('is absent where sites are on', async () => {
+      stub({ apps: [app] });
+      renderAt('/project/p1');
+      await screen.findByTestId('project-services');
+      expect(screen.queryByTestId('sites-unavailable')).not.toBeInTheDocument();
+    });
+  });
 });

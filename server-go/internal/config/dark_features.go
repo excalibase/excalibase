@@ -48,13 +48,18 @@ var featureEnv = map[features.Feature]string{
 	features.WALArchiveAlert:    "FEATURE_WALARCHIVEALERT",
 	features.FreeWALUpload:      "FEATURE_FREEWALUPLOAD",
 	features.AppRuntimeLogin:    "FEATURE_APPRUNTIMELOGIN",
+	features.MCPConfirm:         "FEATURE_MCPCONFIRM",
 	features.StudioV2:           "FEATURE_STUDIO_V2",
 	features.FunctionInvoke:     "FEATURE_FUNCTIONINVOKE",
+	features.FunctionHTMLGuard:  "FEATURE_FUNCTIONHTMLGUARD",
+	features.AppImagePin:        "FEATURE_APPIMAGEPIN",
+	features.CrashLoopGuard:     "FEATURE_CRASHLOOPGUARD",
+	features.SuspensionEmails:   "FEATURE_SUSPENSIONEMAILS",
 }
 
 // defaultOn are the features that are on until their variable says "false":
 // security fixes that must hold on every install without anyone setting
-// anything (EXC-755, EXC-759, EXC-765) and the WAL guards that keep a failed upload from filling
+// anything (EXC-755, EXC-759, EXC-765, the MCP double confirmation) and the WAL guards that keep a failed upload from filling
 // a disk unseen (EXC-784).
 var defaultOn = map[features.Feature]bool{
 	features.ProxyBlock:         true,
@@ -63,6 +68,8 @@ var defaultOn = map[features.Feature]bool{
 	features.WALArchiveAlert:    true,
 	features.FreeWALUpload:      true,
 	features.AppRuntimeLogin:    true,
+	features.FunctionHTMLGuard:  true,
+	features.MCPConfirm:         true,
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns a

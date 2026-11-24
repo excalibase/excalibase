@@ -48,6 +48,9 @@ func (s *Service) claimPreview(ctx context.Context, store PreviewStore, preview 
 // at the preview's hostname. The site's live deploy, custom domains and CORS list stay untouched
 // unless APIAccess asks for the preview's origin.
 func (s *Service) DeployPreview(ctx context.Context, request PreviewDeployRequest) (*Preview, error) {
+	if err := s.options.OrgGuard.CheckProject(ctx, request.ProjectID); err != nil {
+		return nil, err
+	}
 	store, err := s.previewStore()
 	if err != nil {
 		return nil, err
@@ -117,6 +120,9 @@ func (s *Service) publishPreview(ctx context.Context, site *Site, preview *Previ
 	}
 	if err := s.publisher.PutScript(publishCtx, script, cfworkers.ScriptVersion{AssetsJWT: completion, Assets: assetConfig(site.SPAFallback)}); err != nil {
 		return publishFailure(site, stepPublish, err)
+	}
+	if err := s.options.OrgGuard.CheckServingFreshUnlessAdmin(ctx, site.ProjectID); err != nil {
+		return publishFailure(site, stepRoute, err)
 	}
 	if err := s.publisher.PutKV(publishCtx, preview.Hostname, script); err != nil {
 		return publishFailure(site, stepRoute, err)

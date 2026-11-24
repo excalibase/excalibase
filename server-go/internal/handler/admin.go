@@ -53,7 +53,10 @@ type ProjectFactsLookup func(ctx context.Context) (map[string]adminconsole.Proje
 // OwnerSuspender is the one suspend operation the console uses; revoking an
 // org goes through it so the owner's account is blocked the same way.
 type OwnerSuspender interface {
-	Suspend(ctx context.Context, actor adminconsole.Actor, userID, reason string) (*adminconsole.Result, error)
+	Suspend(ctx context.Context, actor adminconsole.Actor, userID string, reason adminconsole.Reason) (*adminconsole.Result, error)
+	// NotifyOrgClosed mails the owner that the org was closed; called only
+	// once every project of the org is gone. A send that failed is an error.
+	NotifyOrgClosed(ctx context.Context, userID, orgID string) error
 }
 
 // SetOwnerSuspender wires the suspension a revoke applies to the org's owner.
@@ -304,6 +307,18 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The owner is told once the projects are really gone, and before the org
+	// row goes: if some drops failed, nothing is sent and the mail stays owed
+	// for the revoke that finishes the job. If the mail fails the org row is
+	// kept: it is what lets a second revoke find the org, re-claim and send.
+	if len(failed) == 0 && org.OwnerID != "" && h.suspender != nil {
+		if err := h.suspender.NotifyOrgClosed(r.Context(), org.OwnerID, orgID); err != nil {
+			log.Printf("ERROR: revoke org %s: closure notice: %v", orgID, err)
+			h.writeClosureNoticePending(w, r, org, dropped, err)
+			return
+		}
+	}
+
 	// Delete org row last — only after all projects are gone, so org listing
 	// stays consistent if a project drop fails midway.
 	if len(failed) == 0 {
@@ -324,12 +339,34 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 	if len(failed) > 0 {
 		status = http.StatusMultiStatus
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSONStatus(w, status, map[string]interface{}{
 		"orgId":   orgID,
 		"dropped": dropped,
 		"failed":  failed,
+	})
+}
+
+// writeClosureNoticePending answers a revoke whose projects are gone but whose
+// owner is not yet told, either because the send failed or because another
+// revoke is sending it. The org is kept so revoking again finishes the job; the
+// revoke is audited, as the projects it dropped are gone.
+func (h *AdminHandler) writeClosureNoticePending(w http.ResponseWriter, r *http.Request, org *domain.Org, dropped int, cause error) {
+	note, message := "not_sent", "organisation closed but the notice email was not sent; revoke again to retry"
+	if errors.Is(cause, adminconsole.ErrClosureNoticeInFlight) {
+		note, message = "in_flight", "organisation closed; the notice email is being sent by another revoke, revoke again to finish"
+	}
+	h.auditFireAndForget(r, &domain.AuditEntry{
+		UserID:     extractUserID(r),
+		Action:     "admin.revoke_org",
+		Resource:   "org",
+		ResourceID: org.ID,
+		Details:    fmt.Sprintf("dropped=%d failed=0 slug=%s notice=%s", dropped, org.Slug, note),
+	})
+	writeJSONStatus(w, http.StatusMultiStatus, map[string]interface{}{
+		"orgId":   org.ID,
+		"dropped": dropped,
+		"failed":  []string{},
+		"message": message,
 	})
 }
 
@@ -344,7 +381,7 @@ func (h *AdminHandler) suspendOwner(w http.ResponseWriter, r *http.Request, org 
 		return false
 	}
 	actor := adminconsole.Actor{ID: extractUserID(r), IP: clientIP(r)}
-	if _, err := h.suspender.Suspend(r.Context(), actor, org.OwnerID, "org revoked: "+reason); err != nil {
+	if _, err := h.suspender.Suspend(r.Context(), actor, org.OwnerID, adminconsole.Reason{Code: adminconsole.ReasonOther, Text: "org revoked: " + reason, OrgClosed: true}); err != nil {
 		switch {
 		case errors.Is(err, adminconsole.ErrProtectedAccount):
 			httpError(w, "the org's owner is a platform account and cannot be suspended; nothing was deleted", http.StatusConflict)

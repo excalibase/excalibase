@@ -134,6 +134,7 @@ export function DatabaseInstanceCard({ instance }: DatabaseInstanceCardProps) {
                   <PipelineVisualizer
                     currentStage={instance.currentStage}
                     failureReason={instance.failureReason}
+                    failureKind={instance.failureKind}
                   />
                 </div>
 

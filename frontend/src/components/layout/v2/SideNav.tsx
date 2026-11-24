@@ -3,7 +3,8 @@ import { ExternalLink } from 'lucide-react';
 import { cn } from '../../../utils/cn';
 import { useAuthStore } from '../../../stores/auth-store';
 import { useCurrentOrg } from '../../../hooks/useMemberOrgs';
-import { ADMIN_CONSOLE, PLATFORM_ADMIN_ROLES, shellNav, type ShellNavItem } from './navV2';
+import { useAdminRouteRule, useFeatureEnabled } from '../../../hooks/useDeploymentMode';
+import { ADMIN_CONSOLE, ADMIN_HOST, PLATFORM_ADMIN_ROLES, shellNav, type ShellNavItem } from './navV2';
 
 const LINK = 'flex flex-shrink-0 items-center whitespace-nowrap gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors';
 
@@ -34,7 +35,10 @@ export function SideNav() {
   const role = useAuthStore((s) => s.user?.role);
   const { org } = useCurrentOrg();
   const { main, help } = shellNav(org?.id);
-  const isAdmin = role !== undefined && PLATFORM_ADMIN_ROLES.has(role);
+  // The console's links show only where its pages are served (EXC-757).
+  const adminHere = useAdminRouteRule() === 'allowed';
+  const isAdmin = role !== undefined && PLATFORM_ADMIN_ROLES.has(role) && adminHere;
+  const hostOn = useFeatureEnabled('hostmetrics').enabled;
   return (
     <nav aria-label="Main" className="flex w-full flex-shrink-0 flex-row items-center gap-0.5 overflow-x-auto border-b border-border-primary bg-surface-card px-2 py-2 md:w-56 md:flex-col md:items-stretch md:overflow-x-visible md:border-b-0 md:border-r md:py-3">
       {main.map((item) => <Item key={item.key} item={item} />)}
@@ -43,6 +47,7 @@ export function SideNav() {
       {isAdmin && (
         <div className="md:mt-auto md:pt-3">
           <Item item={ADMIN_CONSOLE} />
+          {hostOn && <Item item={ADMIN_HOST} />}
           <p className="hidden px-3 text-[11px] text-text-tertiary md:block">Platform admins only</p>
         </div>
       )}

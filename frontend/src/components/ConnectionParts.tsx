@@ -22,7 +22,7 @@ export function publicTarget(endpoint?: ProjectEndpoint): Target | null {
 
 // Where a string works.
 export function publicLabel(endpoint?: ProjectEndpoint): string {
-  return endpoint?.singleHost ? 'On the host — 127.0.0.1' : 'Public — from outside the cluster';
+  return endpoint?.singleHost ? 'On the host — 127.0.0.1' : 'Public — from outside the platform';
 }
 
 export const PASSWORD_PLACEHOLDER = '<password>';

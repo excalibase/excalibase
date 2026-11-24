@@ -1,24 +1,27 @@
 import { ProvisioningStage } from '../types';
 import { cn } from '../utils/cn';
+import { STAGE_LABELS } from '../utils/stageLabels';
+import { ProvisionFailure } from './shared/ProvisionFailure';
 import { CheckCircle, Circle, XCircle, Loader2 } from 'lucide-react';
 
 interface PipelineVisualizerProps {
   readonly currentStage: ProvisioningStage;
   readonly failureReason?: string;
+  readonly failureKind?: string;
 }
 
 const STAGES = [
-  { key: ProvisioningStage.VALIDATING, label: 'Validating' },
-  { key: ProvisioningStage.NAMESPACE_CREATION, label: 'Creating Namespace' },
-  { key: ProvisioningStage.CRD_DEPLOYMENT, label: 'Deploying CRD' },
-  { key: ProvisioningStage.WAITING_FOR_READY, label: 'Waiting for Ready' },
-  { key: ProvisioningStage.CREDENTIAL_GENERATION, label: 'Generating Credentials' },
-  { key: ProvisioningStage.BACKUP_CONFIGURATION, label: 'Configuring Backup' },
-  { key: ProvisioningStage.METRICS_SETUP, label: 'Setting up Metrics' },
-  { key: ProvisioningStage.COMPLETED, label: 'Completed' },
+  { key: ProvisioningStage.VALIDATING },
+  { key: ProvisioningStage.NAMESPACE_CREATION },
+  { key: ProvisioningStage.CRD_DEPLOYMENT },
+  { key: ProvisioningStage.WAITING_FOR_READY },
+  { key: ProvisioningStage.CREDENTIAL_GENERATION },
+  { key: ProvisioningStage.BACKUP_CONFIGURATION },
+  { key: ProvisioningStage.METRICS_SETUP },
+  { key: ProvisioningStage.COMPLETED },
 ];
 
-export function PipelineVisualizer({ currentStage, failureReason }: PipelineVisualizerProps) {
+export function PipelineVisualizer({ currentStage, failureReason, failureKind }: PipelineVisualizerProps) {
   const currentIndex = STAGES.findIndex((s) => s.key === currentStage);
   const isFailed = currentStage === ProvisioningStage.FAILED;
 
@@ -70,7 +73,7 @@ export function PipelineVisualizer({ currentStage, failureReason }: PipelineVisu
                     : 'text-text-tertiary'
                 )}
               >
-                {stage.label}
+                {STAGE_LABELS[stage.key]}
               </p>
             </div>
             {index < STAGES.length - 1 && (
@@ -87,10 +90,10 @@ export function PipelineVisualizer({ currentStage, failureReason }: PipelineVisu
         ))}
       </div>
 
-      {isFailed && failureReason && (
+      {isFailed && (
         <div className="bg-red-900/20 border border-color-error rounded-lg p-4">
-          <p className="text-color-error font-medium">Provisioning Failed</p>
-          <p className="text-text-secondary text-sm mt-1">{failureReason}</p>
+          <p className="text-color-error font-medium">Provisioning failed</p>
+          <ProvisionFailure reason={failureReason} kind={failureKind} className="text-text-secondary text-sm mt-1" />
         </div>
       )}
     </div>

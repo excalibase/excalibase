@@ -106,7 +106,7 @@ export function InstanceDetailPage() {
       {/* Stage timeline */}
       <div className="bg-surface-card border border-border-primary rounded-xl p-6">
         <h3 className="text-sm font-semibold text-text-primary mb-5">Provisioning Pipeline</h3>
-        <StageTimeline currentStage={instance.currentStage} failureReason={instance.failureReason} />
+        <StageTimeline currentStage={instance.currentStage} failureReason={instance.failureReason} failureKind={instance.failureKind} />
       </div>
 
       {/* Live metrics. A figure the platform could not measure says so. */}

@@ -42,16 +42,16 @@ func TestAuthSettings_FlagOffKeepsTodaysShape(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET: %d", w.Code)
 	}
-	assertNoSignInKeys(t, w.Body.Bytes(), "redirectUrls", "allowNewUsers")
+	assertNoSignInKeys(t, w.Body.Bytes(), "redirectUrls")
 
 	w = doJSON(f.router, http.MethodPut, testOAuthSettings, map[string]any{
-		"siteUrl": "https://app.example.com", "redirectUrls": []string{}, "allowNewUsers": true})
+		"siteUrl": "https://app.example.com", "redirectUrls": []string{}, "allowNewUsers": false})
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT: %d %s", w.Code, w.Body.String())
 	}
-	assertNoSignInKeys(t, w.Body.Bytes(), "redirectUrls", "allowNewUsers")
+	assertNoSignInKeys(t, w.Body.Bytes(), "redirectUrls")
 	if got := f.signIn.signIn[testOAuthProject]; got.AllowNewUsers || len(got.RedirectURLs) != 1 {
-		t.Fatalf("the flag-off PUT wrote the policy: %+v", got)
+		t.Fatalf("the flag-off PUT wrote more than the new-user switch: %+v", got)
 	}
 	if f.settings.settings[testOAuthProject].SiteURL != "https://app.example.com" {
 		t.Fatal("the flag-off PUT did not store the site URL")
@@ -150,7 +150,7 @@ func TestInfo_FlagOffCarriesNoOAuthKeys(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("info: %d %s", w.Code, w.Body.String())
 	}
-	assertNoSignInKeys(t, w.Body.Bytes(), "redirectUrls", "allowNewUsers", "oauthProviders")
+	assertNoSignInKeys(t, w.Body.Bytes(), "redirectUrls", "oauthProviders")
 }
 
 func TestInfo_FlagOnDefaultsWithoutRows(t *testing.T) {

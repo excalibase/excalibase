@@ -69,6 +69,8 @@ const ContainerPipelinePage = lazy(() => import('./pages/ContainerPipelinePage')
 const ConnectAiToolPage = lazy(() => import('./pages/ConnectAiToolPage').then(m => ({ default: m.ConnectAiToolPage })));
 const SdkKeysPage = lazy(() => import('./pages/SdkKeysPage').then(m => ({ default: m.SdkKeysPage })));
 const AccessTokensPage = lazy(() => import('./pages/AccessTokensPage').then(m => ({ default: m.AccessTokensPage })));
+const AccountPage = lazy(() => import('./pages/AccountPage').then(m => ({ default: m.AccountPage })));
+const ProjectVariablesPage = lazy(() => import('./pages/ProjectVariablesPage').then(m => ({ default: m.ProjectVariablesPage })));
 const UsagePage = lazy(() => import('./pages/UsagePage').then(m => ({ default: m.UsagePage })));
 const StoragePage = lazy(() => import('./pages/StoragePage').then(m => ({ default: m.StoragePage })));
 
@@ -109,8 +111,9 @@ export default function App() {
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/provision" element={<ProvisionPage />} />
             <Route path="/admin" element={<AdminRouteGuard><PlatformAdminPage /></AdminRouteGuard>} />
-            <Route path="/admin/host" element={<FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate>} />
+            <Route path="/admin/host" element={<AdminRouteGuard><FeatureGate feature="hostmetrics"><HostMonitoringPage /></FeatureGate></AdminRouteGuard>} />
             <Route path="/usage" element={<FeatureGate feature="studio_v2"><UsagePage /></FeatureGate>} />
+            <Route path="/account" element={<FeatureGate feature="studio_v2"><AccountPage /></FeatureGate>} />
             <Route path="/account/tokens" element={<AccessTokensPage />} />
           </Route>
 
@@ -185,6 +188,7 @@ export default function App() {
             <Route path="edge-functions" element={<EdgeFunctionsPage />} />
             {/* Storage */}
             <Route path="storage" element={<StoragePage />} />
+            <Route path="variables" element={<FeatureGate feature="studio_v2"><ProjectVariablesPage /></FeatureGate>} />
             <Route path="ai-tools" element={<FeatureGate feature="mcp"><ConnectAiToolPage /></FeatureGate>} />
             <Route path="monitoring/alerts" element={<AlertsPage />} />
             {/* Settings */}

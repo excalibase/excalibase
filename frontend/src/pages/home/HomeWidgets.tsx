@@ -3,6 +3,9 @@ import { Link } from 'react-router-dom';
 import { cn } from '../../utils/cn';
 import type { HealthCounts, SecuritySummary } from './model';
 import type { Visit } from './recentlyVisited';
+import { planLabel } from '../../hooks/useMemberOrgs';
+import type { OrgUsage } from '../usage/usageModel';
+import { projectsValue } from '../usage/UsageParts';
 
 export function Widget({ title, children }: { readonly title: string; readonly children: ReactNode }) {
   return (
@@ -59,11 +62,17 @@ export function HealthWidget({ counts, failingApps }: { readonly counts: HealthC
   );
 }
 
-// No credit or usage figures are served yet, so none are drawn.
-export function CreditsWidget() {
+export function CreditsWidget({ planName, projects, limitsKnown }: { readonly planName?: string; readonly projects?: OrgUsage['projects']; readonly limitsKnown: boolean }) {
   return (
     <Widget title="Credits & usage">
-      <p className="text-text-secondary">Credits left and spend by service are not shown on Home yet. The usage page has the details that exist today.</p>
+      {planName && projects ? (
+        <div>
+          <Row label="Plan" value={planLabel(planName)} />
+          <Row label="Projects" value={projectsValue(projects, limitsKnown)} />
+        </div>
+      ) : (
+        <p className="text-text-secondary">Your plan and usage appear once you have an organization.</p>
+      )}
       <Link to="/usage" className={MORE}>Usage details →</Link>
     </Widget>
   );

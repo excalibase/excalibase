@@ -15,7 +15,7 @@ const testFnProject = "proj_abc"
 func relay(headers map[string]string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	rec.Header().Set("Content-Security-Policy", "global-policy")
-	writeRuntimeResponse(rec, testFnProject, &edgefn.InvokeResponse{Status: 200, Headers: headers, Body: "ok"})
+	writeRuntimeResponse(rec, testFnProject, &edgefn.InvokeResponse{Status: 200, Headers: headers, Body: "ok"}, true)
 	return rec
 }
 
@@ -156,7 +156,7 @@ func TestRuntimeResponseLeavesAnOrdinaryJSONAnswerAlone(t *testing.T) {
 		Status:  201,
 		Headers: map[string]string{"content-type": "application/json", "x-request-id": "r1", "cache-control": "no-store", "content-length": "9", "connection": "close"},
 		Body:    `{"a":1}`,
-	})
+	}, true)
 	if rec.Code != 201 || rec.Body.String() != `{"a":1}` {
 		t.Fatalf("answer = %d %q", rec.Code, rec.Body.String())
 	}

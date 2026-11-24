@@ -25,6 +25,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
@@ -50,7 +51,9 @@ const sharedClientKey = "__shared__"
 //   - builds a per-project RuntimeClient pointing at the in-namespace service
 //   - caches clients per projectId
 type FunctionHandler struct {
-	store         edgefn.Store
+	store edgefn.Store
+	// orgGuard refuses deploys for an organisation whose owner is abuse-suspended (EXC-843).
+	orgGuard      *orgguard.Guard
 	secrets       *edgefn.SecretsStore
 	vault         vaultclient.VaultClient // optional, for reading DB_URL
 	instanceStore storage.InstanceStore
@@ -126,6 +129,9 @@ type FunctionHandler struct {
 }
 
 // SetFeatures gives the handler the dark-feature switches it consults.
+// SetOrgGuard makes function deploys refuse a suspended owner's organisation.
+func (h *FunctionHandler) SetOrgGuard(guard *orgguard.Guard) { h.orgGuard = guard }
+
 func (h *FunctionHandler) SetFeatures(flags features.Flags) { h.flags = flags }
 
 // SetExpectedJWTIssuer configures the iss claim the function handler will
@@ -296,6 +302,12 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if err := h.requireSandbox(ctx); err != nil {
 		return nil, err
 	}
+	// Serving, not only starting: a client cached before the suspension, and
+	// the shared runtime of a single host, would otherwise keep running a
+	// suspended owner's functions (EXC-845). The guard answers from a short cache.
+	if err := h.orgGuard.CheckServingUnlessAdmin(ctx, projectID); err != nil {
+		return nil, err
+	}
 	h.clientMu.Lock()
 	if c, ok := h.clients[projectID]; ok {
 		h.clientMu.Unlock()
@@ -320,6 +332,10 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if h.k8sClient == nil {
 		return nil, fmt.Errorf("no runtime client available")
 	}
+	// Serving an org in good standing starts its runtime when there is none
+	// (after a restart). The creator rule of EXC-843 is for deploys, which
+	// check it themselves: a suspended member who merely created the project
+	// must not take its functions and cron down.
 	inst, err := h.instanceFor(projectID)
 	if err != nil {
 		return nil, err
@@ -612,6 +628,10 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	if err := edgefn.ValidateProjectID(projectID); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
+		writeOrgGuardError(w, err)
 		return
 	}
 	tenant, _ := custommw.TenantIDFromContext(r.Context())
@@ -1369,7 +1389,7 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	writeRuntimeResponse(w, fn.ProjectID, resp)
+	writeRuntimeResponse(w, fn.ProjectID, resp, h.htmlGuardOn(r.Context()))
 }
 
 // --- Secrets ---
@@ -1434,6 +1454,10 @@ func (h *FunctionHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 // latest env (user secrets + builtins) is picked up. Errors are logged and
 // not surfaced — secret write succeeded, so the admin UI should still 200.
 func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
+	if err := h.orgGuard.CheckProject(r.Context(), projectID); err != nil {
+		log.Printf("WARN: redeploy of %s skipped: %v", projectID, err)
+		return
+	}
 	list, err := h.store.List(projectID)
 	if err != nil || len(list) == 0 {
 		return

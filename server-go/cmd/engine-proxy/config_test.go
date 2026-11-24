@@ -102,12 +102,29 @@ func TestLoadConfigReadsTheImagesThatMayJoinANetworkNamespace(t *testing.T) {
 	}
 }
 
+func TestLoadConfigReadsANetnsJoinImageWrittenAsTagAndDigest(t *testing.T) {
+	image := "excalibase/documentdb-gateway:0.117.0@sha256:" + strings.Repeat("ab", 32)
+	cfg, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_NETNS_JOIN_IMAGES": image}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.policy.NetnsJoinImages, []string{image}) {
+		t.Fatalf("images = %v", cfg.policy.NetnsJoinImages)
+	}
+}
+
 func TestLoadConfigRefusesANetnsJoinImageNotPinnedByDigest(t *testing.T) {
 	for _, image := range []string{
 		"ghcr.io/documentdb/documentdb-kubernetes-operator/gateway:0.117.0",
 		"ghcr.io/documentdb/documentdb-kubernetes-operator/gateway",
 		"ghcr.io/documentdb/gateway@sha256:abc",
 		"gateway@sha256:" + strings.Repeat("ab", 32),
+		"ghcr.io/documentdb/gateway@sha256:" + strings.Repeat("a", 63),
+		"ghcr.io/documentdb/gateway@sha256:" + strings.Repeat("a", 65),
+		"ghcr.io/documentdb/gateway@sha512:" + strings.Repeat("a", 128),
+		"ghcr.io/documentdb/gateway@sha256:" + strings.Repeat("a", 64) + "@sha256:" + strings.Repeat("a", 64),
+		"excalibase/documentdb-gateway:-bad@sha256:" + strings.Repeat("a", 64),
+		"excalibase/documentdb-gateway:" + strings.Repeat("a", 129) + "@sha256:" + strings.Repeat("a", 64),
 	} {
 		_, err := loadConfig(env(map[string]string{"PROXY_NETWORKS": "excalibase-tenants", "PROXY_NETNS_JOIN_IMAGES": image}))
 		if err == nil || !strings.Contains(err.Error(), "PROXY_NETNS_JOIN_IMAGES") {

@@ -28,6 +28,9 @@ func (s *ProvisioningService) SetQueryStats(on bool) { s.queryStats = on }
 // without them (EXC-654). A Postgres cluster gains the pg_stat_statements
 // settings and CloudNativePG restarts it once; MySQL needs only a grant.
 func (s *ProvisioningService) EnableQueryStats(ctx context.Context, projectID string) error {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return err
+	}
 	inst, release, err := s.holdProject(ctx, projectID, OperationQueryStats, requireActive)
 	if err != nil {
 		return err

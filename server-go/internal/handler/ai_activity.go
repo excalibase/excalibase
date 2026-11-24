@@ -61,10 +61,12 @@ func (h *AIActivityHandler) Routes(r chi.Router) {
 // the token exists and the caller may revoke it: their own, or any member's
 // for an org owner or admin.
 type aiActivityView struct {
-	ID           int64      `json:"id"`
-	Tool         string     `json:"tool"`
-	Status       string     `json:"status"`
-	HTTPStatus   int        `json:"httpStatus,omitempty"`
+	ID         int64  `json:"id"`
+	Tool       string `json:"tool"`
+	Status     string `json:"status"`
+	HTTPStatus int    `json:"httpStatus,omitempty"`
+	// Confirmation is "requested" for a destructive tool's first call, which deleted nothing, and "confirmed" for the call that did.
+	Confirmation string     `json:"confirmation,omitempty"`
 	TokenName    string     `json:"tokenName"`
 	UserID       string     `json:"userId"`
 	At           *time.Time `json:"at"`
@@ -252,16 +254,17 @@ func (h *AIActivityHandler) auditRevoke(r *http.Request, token *domain.AccessTok
 
 func activityView(entry domain.AuditEntry, callerID string, revokesAny bool, projectID string, live map[string]*domain.AccessToken) aiActivityView {
 	var details struct {
-		Tool       string `json:"tool"`
-		Status     string `json:"status"`
-		HTTPStatus int    `json:"httpStatus"`
-		TokenName  string `json:"tokenName"`
+		Tool         string `json:"tool"`
+		Status       string `json:"status"`
+		HTTPStatus   int    `json:"httpStatus"`
+		Confirmation string `json:"confirmation"`
+		TokenName    string `json:"tokenName"`
 	}
 	if err := json.Unmarshal([]byte(entry.Details), &details); err != nil {
 		log.Printf("ai activity: entry %d has unreadable details: %v", entry.ID, err)
 	}
 	view := aiActivityView{
-		ID: entry.ID, Tool: entry.ResourceID, Status: details.Status, HTTPStatus: details.HTTPStatus,
+		ID: entry.ID, Tool: entry.ResourceID, Status: details.Status, HTTPStatus: details.HTTPStatus, Confirmation: details.Confirmation,
 		TokenName: details.TokenName, UserID: entry.UserID, At: entry.Timestamp, Mine: entry.UserID == callerID,
 	}
 	if (!view.Mine && !revokesAny) || entry.TokenHash == "" {

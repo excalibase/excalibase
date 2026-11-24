@@ -9,13 +9,14 @@ import (
 
 type revokeKeyArgs struct {
 	projectArg
+	confirmArg
 	KeyID int64 `json:"key_id" jsonschema:"the key's id, from get_project_info (publishableKeys)"`
 }
 
 func sdkKeyTools() []entry {
 	return []entry{
 		tool("revoke_publishable_key", "Revoke one publishable SDK key: an app that ships it stops signing in with it at once. Needs Developer. "+
-			"A secret key is never revoked here; that is done in Studio.", writeTool, revokePublishableKey),
+			"A secret key is never revoked here; that is done in Studio."+confirmNote, writeTool, revokePublishableKey),
 		tool("list_templates", "The built-in app templates (and, while the service catalog is on, its services) with what each would use of this project's plan "+
 			"(fit, and refusals when it cannot be deployed now). Read-only: deploying one hands back generated credentials once, so that is done in Studio.", readTool, listTemplates),
 	}
@@ -36,6 +37,16 @@ func revokePublishableKey(ctx context.Context, c *call, in revokeKeyArgs) (any, 
 	for _, key := range keys {
 		if key.ID != in.KeyID {
 			continue
+		}
+		preview, err := c.guard(ctx, destruction{
+			tool: "revoke_publishable_key", target: confirmTarget{projectID, strconv.FormatInt(key.ID, 10)}, token: in.ConfirmationToken,
+			describe: func(context.Context) (string, error) {
+				return fmt.Sprintf("the publishable key %s (%q): every app that ships it stops signing in with it at once, and a revoked key cannot be restored",
+					key.KeyPrefix, key.Name), nil
+			},
+		})
+		if preview != nil || err != nil {
+			return preview, err
 		}
 		path := projectsAPI + projectID + "/sdk-keys/" + strconv.FormatInt(key.ID, 10)
 		if err := c.send(ctx, http.MethodDelete, path, nil, nil, nil); err != nil {

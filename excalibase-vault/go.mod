@@ -4,8 +4,8 @@ go 1.26.10
 
 require (
 	github.com/excalibase/provisioning-poc v0.0.0
-	github.com/go-chi/chi/v5 v5.2.5
-	github.com/lib/pq v1.10.9
+	github.com/go-chi/chi/v5 v5.5.0
+	github.com/lib/pq v1.12.3
 )
 
 require (

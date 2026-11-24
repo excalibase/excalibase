@@ -2,10 +2,13 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log"
+	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -110,15 +113,36 @@ func withActivity(inst *domain.DatabaseInstance, activity domain.ProjectActivity
 // addresses and namespace are for platform admins and the console; a customer
 // reaches the database through its public endpoint (EXC-759).
 func visibleTo(ctx context.Context, inst *domain.DatabaseInstance) *domain.DatabaseInstance {
+	shown := *inst
+	failure := failureForCaller(ctx, inst.FailureReason, inst.RollbackLog)
+	shown.FailureKind, shown.FailureMessage, shown.FailureReason, shown.RollbackLog = failure.Kind, failure.Message, failure.Reason, failure.RollbackLog
 	if user := auth.GetUser(ctx); user != nil && auth.HasPermission(user.Role, auth.PermManageUsers) {
-		return inst
+		return &shown
 	}
-	customer := *inst
-	customer.FailureReason = domain.ScrubClusterText(inst.FailureReason, inst.Namespace)
+	customer := shown
 	customer.FailureStep = domain.ScrubClusterText(inst.FailureStep, inst.Namespace)
-	customer.RollbackLog = domain.ScrubClusterText(inst.RollbackLog, inst.Namespace)
-	customer.DeletionError = domain.ScrubClusterText(inst.DeletionError, inst.Namespace)
+	customer.DeletionError = deletionErrorForCaller(ctx, inst.DeletionError, inst.Namespace)
 	customer.Host, customer.ReadOnlyHost, customer.Namespace = "", "", ""
 	customer.PoolerHost, customer.MetricsEndpoint = "", ""
 	return &customer
+}
+
+// SetServingGuard makes /info refuse a project whose owner is suspended (EXC-845).
+func (h *ProvisioningHandler) SetServingGuard(guard *orgguard.Guard) { h.servingGuard = guard }
+
+// refuseSuspendedProject answers 404 for a project the platform must stop
+// serving because its owner is suspended, and 503 when that could not be
+// checked, so a caller keeps its last good copy rather than a wrong one.
+func (h *ProvisioningHandler) refuseSuspendedProject(w http.ResponseWriter, r *http.Request, projectID string) bool {
+	err := h.servingGuard.CheckServing(r.Context(), projectID)
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, orgguard.ErrOrgSuspended):
+		httpError(w, "project not found", http.StatusNotFound)
+	default:
+		log.Printf("ERROR: suspension check for /info of %s: %v", projectID, err)
+		httpError(w, "project standing unavailable", http.StatusServiceUnavailable)
+	}
+	return true
 }
