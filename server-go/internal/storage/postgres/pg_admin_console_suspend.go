@@ -63,17 +63,28 @@ func (a *AdminConsole) Suspend(ctx context.Context, suspension adminconsole.Susp
 			suspension.UserID, suspension.Email, suspension.Reason, suspension.At); err != nil {
 			return fmt.Errorf("record suspension: %w", err)
 		}
-		for _, app := range apps {
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO abuse_suspension_apps (user_id, project_id, app_id, app_name, previous_replicas)
-				VALUES ($1, $2, $3, $4, $5)
-				ON CONFLICT (user_id, project_id, app_id) DO UPDATE SET previous_replicas = EXCLUDED.previous_replicas, app_name = EXCLUDED.app_name`,
-				suspension.UserID, app.ProjectID, app.AppID, app.AppName, app.PreviousReplicas); err != nil {
-				return fmt.Errorf("record app: %w", err)
-			}
-		}
-		return nil
+		return recordSuspendedApps(ctx, tx, suspension.UserID, apps)
 	})
+}
+
+// RecordSuspendedApps keeps the apps a suspension is about to stop, with their replicas.
+func (a *AdminConsole) RecordSuspendedApps(ctx context.Context, userID string, apps []adminconsole.SuspendedApp) error {
+	return a.inTx(ctx, func(tx *sql.Tx) error {
+		return recordSuspendedApps(ctx, tx, userID, apps)
+	})
+}
+
+func recordSuspendedApps(ctx context.Context, tx *sql.Tx, userID string, apps []adminconsole.SuspendedApp) error {
+	for _, app := range apps {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO abuse_suspension_apps (user_id, project_id, app_id, app_name, previous_replicas)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (user_id, project_id, app_id) DO UPDATE SET previous_replicas = EXCLUDED.previous_replicas, app_name = EXCLUDED.app_name`,
+			userID, app.ProjectID, app.AppID, app.AppName, app.PreviousReplicas); err != nil {
+			return fmt.Errorf("record app: %w", err)
+		}
+	}
+	return nil
 }
 
 // Unsuspend reactivates the account and removes the suspension. The app
@@ -118,6 +129,24 @@ func (a *AdminConsole) ForgetSuspendedApp(ctx context.Context, userID, projectID
 // project list can say "Suspended" instead of the database's own status.
 func (a *AdminConsole) OwnerSuspendedOrgs(ctx context.Context) (map[string]bool, error) {
 	rows, err := a.db.QueryContext(ctx, `SELECT o.id FROM orgs o JOIN abuse_suspensions s ON s.user_id = o.owner_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// SuspendedUsers returns the ids of every abuse-suspended account.
+func (a *AdminConsole) SuspendedUsers(ctx context.Context) (map[string]bool, error) {
+	rows, err := a.db.QueryContext(ctx, `SELECT user_id FROM abuse_suspensions`)
 	if err != nil {
 		return nil, err
 	}

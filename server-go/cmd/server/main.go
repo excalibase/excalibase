@@ -310,6 +310,7 @@ func runServer(cfg config.AppConfig) {
 		}
 		pauseSvc.AddStatusObserver(projectDB)
 		pauseSvc.AddStatusObserver(deps.schemaHandler)
+		pauseSvc.SetOrgGuard(newOrgGuard(store, sqlStore))
 		deps.provHandler.SetPauseService(pauseSvc)
 		deps.provHandler.SetInstanceStore(store)
 		// DELETE stops a project with the same pause before its grace period.
@@ -1274,6 +1275,7 @@ func buildFunctionHandler(
 	fnSecrets := edgefn.NewSecretsStore(vc)
 	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL, cfg.DenoRuntimeSecret)
 	fnHandler := handler.NewFunctionHandler(fnStore, fnSecrets, fnClient, store, sqlStore, cfg.PublicBaseURL)
+	fnHandler.SetOrgGuard(newOrgGuard(store, sqlStore))
 	if cfg.ProvisionerMode != "docker" {
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 		fnHandler.SetRuntimeProvisioningURL(cfg.DenoProvisioningURL)
@@ -1387,6 +1389,7 @@ func buildProvisioningService(
 ) (*service.ProvisioningService, service.ProjectOperationClaimer) {
 	var lifecycleClaimer service.ProjectOperationClaimer
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)
+	provSvc.SetOrgGuard(newOrgGuard(store, sqlStore))
 	provSvc.SetVault(vc)
 	// A rotated password is only good if the database accepts it, and the
 	// database is the only thing that can say so.
@@ -1768,6 +1771,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appRuntime, store, appEnv, appRenderOptions(cfg))
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
 	appDeploySvc.SetProxyGuard(newProxyGuard(cfg, sqlStore))
+	appDeploySvc.SetOrgGuard(newOrgGuard(store, sqlStore))
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
 	appDeploySvc.SetNamespaceQuotaTiers(provSvc)
 	provSvc.SetProjectQuotaSync(appDeploySvc.SyncProjectQuota)

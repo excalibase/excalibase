@@ -20,6 +20,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/metrics"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
@@ -29,6 +30,9 @@ import (
 const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
 type ProvisioningService struct {
+	// orgGuard refuses new projects and databases for an organisation whose
+	// owner is abuse-suspended (EXC-843); nil allows all.
+	orgGuard *orgguard.Guard
 	// singleHostLogs reads a single host's database container logs (EXC-670); nil refuses the search.
 	singleHostLogs SingleHostLogs
 	// hostLogStore is a single host's Loki (EXC-672); empty reads the engine log only.
@@ -414,7 +418,13 @@ func (s *ProvisioningService) CapacityHeadroom() int {
 	return s.capacityHeadroomPercent
 }
 
+// SetOrgGuard makes new projects and added databases refuse a suspended owner's organisation.
+func (s *ProvisioningService) SetOrgGuard(guard *orgguard.Guard) { s.orgGuard = guard }
+
 func (s *ProvisioningService) Provision(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
+	if err := s.orgGuard.CheckOrg(ctx, req.OrgID); err != nil {
+		return nil, err
+	}
 	if req.NoDatabase {
 		return s.provisionWithoutDatabase(ctx, req)
 	}
@@ -433,6 +443,9 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 // request, and its outcome — ACTIVE, or FAILED with the reason — is on the
 // project's status. A build takes longer than a browser waits for one request.
 func (s *ProvisioningService) ProvisionInBackground(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
+	if err := s.orgGuard.CheckOrg(ctx, req.OrgID); err != nil {
+		return nil, err
+	}
 	if req.NoDatabase {
 		return s.provisionWithoutDatabase(ctx, req)
 	}

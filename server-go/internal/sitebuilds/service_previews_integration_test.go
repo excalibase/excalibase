@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/gitprovider"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/sitebuilds"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 	"github.com/excalibase/provisioning-poc/internal/testutil/githubfake"
@@ -385,5 +387,36 @@ func TestPreviewsAreUnavailableWithoutTheFlag(t *testing.T) {
 	h := sitebuildstest.New(t, sitebuildstest.Options{})
 	if _, err := h.Service.Previews(context.Background(), h.Project, h.Site.ID); !errors.Is(err, sitebuilds.ErrPreviewsOff) {
 		t.Fatalf("err = %v, want ErrPreviewsOff", err)
+	}
+}
+
+// A refused preview posts a commit status anyone who reads a public repository
+// sees, so it says only that the preview could not be built, never why.
+func TestPreviewOfASuspendedOrgPostsNoSuspensionMessageOnTheCommit(t *testing.T) {
+	var suspended atomic.Bool
+	suspended.Store(true)
+	h := previewHarness(t, sitebuildstest.Options{OwnerSuspended: &suspended}, sitebuilds.PreviewModeBranches)
+	if _, err := h.Push("feat/a", featSHA, "d-susp-1"); err != nil {
+		t.Fatal(err)
+	}
+	h.RunAll()
+	if len(h.Runner.Specs()) != 0 {
+		t.Fatalf("a build ran in a suspended org: %d specs", len(h.Runner.Specs()))
+	}
+	var refused *sitebuilds.Build
+	for _, build := range h.Builds() {
+		if build.Trigger == sitebuilds.TriggerPreview {
+			refused = build
+		}
+	}
+	if refused == nil || refused.Status != sitebuilds.StatusFailed || refused.FailureReason != orgguard.Message {
+		t.Fatalf("the build record keeps the real reason for Studio: %+v", refused)
+	}
+	statuses := h.GitHub.Statuses(featSHA)
+	if len(statuses) != 1 || statuses[0].State != gitprovider.StatusFailure {
+		t.Fatalf("statuses = %+v", statuses)
+	}
+	if strings.Contains(strings.ToLower(statuses[0].Description), "suspend") {
+		t.Fatalf("the public commit status says %q", statuses[0].Description)
 	}
 }

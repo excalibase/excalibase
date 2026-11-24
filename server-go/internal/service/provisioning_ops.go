@@ -32,6 +32,9 @@ const (
 // UpgradeVersion re-pins the CNPG Cluster onto the catalogue's image for the
 // project's own major, which triggers a rolling restart onto the newest patch.
 func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, newVersion string) error {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return err
+	}
 	if inst, err := s.GetInstance(projectID); err == nil && inst.DBType == domain.MySQL {
 		return s.upgradeMySQL(ctx, projectID, newVersion)
 	}
