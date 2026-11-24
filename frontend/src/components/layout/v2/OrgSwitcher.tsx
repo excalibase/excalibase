@@ -1,9 +1,12 @@
-import { Check, ChevronDown } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Check, ChevronDown, Plus } from 'lucide-react';
 import { useCurrentOrg, planLabel } from '../../../hooks/useMemberOrgs';
 import { useOrgSelection } from '../../../stores/org-selection';
 import { usePopup } from './TopBar';
 
 const BUTTON = 'inline-flex items-center gap-1.5 rounded-lg border border-border-primary bg-bg-secondary px-3 min-h-9 text-sm text-text-primary';
+
+const MENU_LINK = 'flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover hover:text-text-primary';
 
 // Offers only the orgs the person belongs to (see memberOrgsOf).
 export function OrgSwitcher() {
@@ -13,7 +16,7 @@ export function OrgSwitcher() {
 
   if (isLoading) return <output className={BUTTON}>Loading organization</output>;
   if (error) return <span className={BUTTON} role="alert">Organization unavailable</span>;
-  if (!org) return <span className={BUTTON}>No organization</span>;
+  if (!org) return <Link to="/orgs?new=1" className={BUTTON}>No organization · Create one</Link>;
 
   return (
     <div ref={ref} className="relative">
@@ -23,7 +26,8 @@ export function OrgSwitcher() {
         <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />
       </button>
       {open && (
-        <ul role="listbox" aria-label="Organizations" className="absolute left-0 top-full z-30 mt-1 w-64 max-h-72 overflow-y-auto rounded-xl border border-border-primary bg-surface-card p-1 shadow-lg">
+        <div className="absolute left-0 top-full z-30 mt-1 w-64 rounded-xl border border-border-primary bg-surface-card p-1 shadow-lg">
+        <ul role="listbox" aria-label="Organizations" className="max-h-72 overflow-y-auto">
           {orgs.map((o) => (
             <li key={o.id} role="option" aria-selected={o.id === org.id} tabIndex={0}
               onClick={() => { select(o.id); setOpen(false); }}
@@ -35,6 +39,11 @@ export function OrgSwitcher() {
             </li>
           ))}
         </ul>
+        <div className="mt-1 border-t border-border-primary pt-1">
+          <Link to="/orgs" onClick={() => setOpen(false)} className={MENU_LINK}>All organizations</Link>
+          <Link to="/orgs?new=1" onClick={() => setOpen(false)} className={MENU_LINK}><Plus className="w-4 h-4" aria-hidden="true" /> Create organization</Link>
+        </div>
+        </div>
       )}
     </div>
   );

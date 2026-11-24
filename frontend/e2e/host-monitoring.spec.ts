@@ -144,7 +144,11 @@ test.describe('Host monitoring', () => {
     await mockHostMetricsFeature(page, true);
     const recorded = await mockMonitoring(page);
     await page.goto('/');
-    await page.getByTestId('platform-nav').getByRole('link', { name: 'Host', exact: true }).click();
+    // The current layout names its navigation by test id, the console layout by its label.
+    await page
+      .locator('[data-testid="platform-nav"], nav[aria-label="Main"]')
+      .getByRole('link', { name: 'Host', exact: true })
+      .click();
     await expect(page).toHaveURL(/\/admin\/host$/);
 
     const cards = page.getByTestId('host-cards');
@@ -202,12 +206,9 @@ test.describe('Host monitoring', () => {
     await mockHostMetricsFeature(page, false);
     const recorded = await mockMonitoring(page);
     await page.goto('/');
-    await expect(
-      page.getByTestId('platform-nav').getByRole('link', { name: 'Platform Admin' }),
-    ).toBeVisible();
-    await expect(
-      page.getByTestId('platform-nav').getByRole('link', { name: 'Host', exact: true }),
-    ).toHaveCount(0);
+    const nav = page.locator('[data-testid="platform-nav"], nav[aria-label="Main"]');
+    await expect(nav.getByRole('link', { name: /Platform Admin|Admin console/ })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Host', exact: true })).toHaveCount(0);
     await page.goto('/admin/host');
     await expect(page.getByTestId('feature-unavailable')).toBeVisible();
     expect(recorded.requests).toHaveLength(0);

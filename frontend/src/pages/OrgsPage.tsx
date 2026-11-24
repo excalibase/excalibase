@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Building2, Plus, Crown, ChevronRight } from 'lucide-react';
 import { listMyOrgs, createOrg, type Org } from '../api/orgs';
 import { Button } from '../components/Button';
@@ -18,11 +19,13 @@ const ORG_NAME_MAX = 64;
 export function OrgsPage() {
   useDocumentTitle('Organizations');
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   // ?new=1 (linked from the create-project form) opens the create form.
   const [searchParams] = useSearchParams();
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(searchParams.get('new') === '1');
+  const wantsCreate = searchParams.get('new') === '1';
+  const [showCreate, setShowCreate] = useState(wantsCreate);
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
   // Once the slug is typed by hand, a name change no longer replaces it.
@@ -40,6 +43,8 @@ export function OrgsPage() {
   };
 
   useEffect(() => { void fetchOrgs(); }, []);
+  // The link can be followed while this page is already open.
+  useEffect(() => { if (wantsCreate) setShowCreate(true); }, [wantsCreate]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,6 +53,8 @@ export function OrgsPage() {
     try {
       const org = await createOrg(newName.trim(), newSlug.trim());
       setOrgs((prev) => [...prev, org]);
+      // The shell's org switcher and the no-organization page read this cache.
+      await queryClient.invalidateQueries({ queryKey: ['orgs'] });
       setShowCreate(false);
       setNewName('');
       setNewSlug('');
