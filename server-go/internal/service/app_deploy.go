@@ -16,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/google/uuid"
 )
@@ -78,6 +79,8 @@ type AppDeployService struct {
 	proxyGuard *abuse.AppGuard
 	// flags decides the dark features this service reads; nil is everything off.
 	flags features.Flags
+	// orgGuard refuses an organisation whose owner is abuse-suspended (EXC-843); nil allows all.
+	orgGuard *orgguard.Guard
 
 	mu     sync.Mutex
 	active map[string]*activeRollout // keyed by app id
@@ -275,6 +278,9 @@ func (s *AppDeployService) GetDeploy(projectID, appID, deployID string) (*apphos
 // again to finish.
 func (s *AppDeployService) underLease(ctx context.Context, projectID, appID string,
 	apply func(*apphost.App) (*apphost.Deploy, func(), error)) (*apphost.Deploy, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	release, err := s.holdAppForDeploy(ctx, projectID, appID)
 	if err != nil {
 		return nil, err
@@ -732,3 +738,7 @@ func (s *AppDeployService) AppRestarts(ctx context.Context, projectID, appID str
 	}
 	return s.runtime.AppRestarts(ctx, namespace, appID)
 }
+
+// SetOrgGuard makes every action that starts the app's pods refuse an
+// organisation whose owner is abuse-suspended (EXC-843).
+func (s *AppDeployService) SetOrgGuard(guard *orgguard.Guard) { s.orgGuard = guard }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -77,6 +78,9 @@ type PauseService struct {
 	// podSlots reads the cluster's pod slots so a resume that would leave the
 	// database pods Pending is refused (EXC-747); nil on a single host.
 	podSlots PodSlotReader
+	// orgGuard refuses to start a project of an organisation whose owner is
+	// abuse-suspended (EXC-843); nil allows all.
+	orgGuard *orgguard.Guard
 
 	mu sync.Mutex
 }
@@ -577,7 +581,13 @@ func (s *PauseService) StartResume(ctx context.Context, projectID string, done f
 	return true, nil
 }
 
+// SetOrgGuard makes a resume refuse an organisation whose owner is suspended.
+func (s *PauseService) SetOrgGuard(guard *orgguard.Guard) { s.orgGuard = guard }
+
 func (s *PauseService) beginResume(ctx context.Context, projectID string) (func() error, error) {
+	if err := s.orgGuard.CheckProject(ctx, projectID); err != nil {
+		return nil, err
+	}
 	release, err := s.hold(ctx, projectID, OperationResume)
 	if err != nil {
 		return nil, err

@@ -1,6 +1,7 @@
 package sitebuilds
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,9 @@ const (
 	// spoolWaitReason is what a build sent back says while it waits: its retry number, then the bound.
 	spoolWaitReason = "the platform had no room to take in the finished image, so it was discarded; this commit builds again by itself (retry %d of %d)"
 	// spoolFailReason names the builds one push cost.
+	// checkWaitReason is what a build says while the organisation's standing cannot be read: its retry number, then the bound.
+	checkWaitReason = "the organisation's standing could not be checked; this build retries by itself (retry %d of %d)"
+	checkFailReason = "the organisation's standing could not be checked after %d tries; nothing was built. Push or build again later"
 	spoolFailReason = "the platform had no room to take in the finished image after %d builds of this commit; nothing was deployed. Push or build again later"
 )
 
@@ -274,12 +278,12 @@ func (d *Dispatcher) run(ctx context.Context, build *Build) {
 		return
 	}
 	if outcome.requeue && build.Requeues < MaxSpoolRequeues {
-		d.retryLater(ctx, build)
+		d.retryLater(ctx, build, outcome.waitReason)
 		return
 	}
 	if outcome.requeue {
-		log.Printf("%s build %s: no room on the publish spool after %d builds; failing it", build.Kind, build.ID, build.Requeues+1)
-		outcome = failedWith(FailPlatform, fmt.Sprintf(spoolFailReason, build.Requeues+1))
+		log.Printf("%s build %s: still waiting after %d tries; failing it", build.Kind, build.ID, build.Requeues+1)
+		outcome = failedWith(FailPlatform, fmt.Sprintf(cmp.Or(outcome.giveUpReason, spoolFailReason), build.Requeues+1))
 	}
 	build.Status, build.DeployID, build.FailureKind, build.FailureReason = outcome.status, outcome.deployID, outcome.kind, outcome.reason
 	build.Log = redact(execution.fullLog(), execution.secrets)
@@ -290,11 +294,11 @@ func (d *Dispatcher) run(ctx context.Context, build *Build) {
 }
 
 // retryLater frees the slot at once: the build waits in the queue, where the delay keeps it from meeting the same full spool.
-func (d *Dispatcher) retryLater(ctx context.Context, build *Build) {
+func (d *Dispatcher) retryLater(ctx context.Context, build *Build, waitReason string) {
 	retry := build.Requeues + 1
 	delay := d.options.RequeueDelay * time.Duration(retry)
 	log.Printf("%s build %s: no room on the publish spool; retry %d of %d in %s", build.Kind, build.ID, retry, MaxSpoolRequeues, delay)
-	reason := fmt.Sprintf(spoolWaitReason, retry, MaxSpoolRequeues)
+	reason := fmt.Sprintf(cmp.Or(waitReason, spoolWaitReason), retry, MaxSpoolRequeues)
 	if err := d.service.store.RetryBuildLater(context.WithoutCancel(ctx), build.ID, d.options.Holder, delay, reason); err != nil {
 		log.Printf("%s build %s: send back to the queue: %v", build.Kind, build.ID, err)
 	}
@@ -328,6 +332,8 @@ type outcome struct {
 	reason   string
 	// requeue hands the build back to the queue to run again, rather than recording an outcome.
 	requeue bool
+	// waitReason and giveUpReason word a requeue that is not the spool's; empty is the spool's.
+	waitReason, giveUpReason string
 	// previewURL is where a preview build was published.
 	previewURL string
 }

@@ -247,6 +247,26 @@ func TestOwnerSuspendedOrgsNamesOrgsOfSuspendedOwners(t *testing.T) {
 	}
 }
 
+func TestSuspendedUsersAndRecordSuspendedApps(t *testing.T) {
+	_, console := consoleFixture(t)
+	ctx := context.Background()
+	if err := console.Suspend(ctx, adminconsole.Suspension{UserID: "u-cust", Reason: "x", At: time.Now()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	users, err := console.SuspendedUsers(ctx)
+	if err != nil || !users["u-cust"] || users["u-other"] {
+		t.Fatalf("users = %v, %v", users, err)
+	}
+	stopped := []adminconsole.SuspendedApp{{ProjectID: "p", AppID: "a", AppName: "web", PreviousReplicas: 2}}
+	if err := console.RecordSuspendedApps(ctx, "u-cust", stopped); err != nil {
+		t.Fatal(err)
+	}
+	got, err := console.SuspendedApps(ctx, "u-cust")
+	if err != nil || len(got) != 1 || got[0].PreviousReplicas != 2 {
+		t.Fatalf("recorded = %+v, %v", got, err)
+	}
+}
+
 func store(t *testing.T, console *AdminConsole) *Store {
 	t.Helper()
 	return &Store{db: console.db}

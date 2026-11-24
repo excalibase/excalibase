@@ -17,6 +17,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/gitprovider"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/excalibase/provisioning-poc/internal/sites"
 )
 
@@ -60,6 +61,8 @@ type Options struct {
 	Members MembershipChecker
 	// Previews deploys branch and pull request previews (EXC-660); nil leaves them off.
 	Previews PreviewSites
+	// OrgGuard stops builds of an organisation whose owner is abuse-suspended (EXC-843); nil allows all.
+	OrgGuard *orgguard.Guard
 }
 
 // MembershipChecker answers who a project member is and whether they still hold the developer rung.
@@ -389,6 +392,9 @@ func (s *Service) enqueue(ctx context.Context, connection connected, commit gitp
 	if shape != nil {
 		shape(build)
 	}
+	if err := s.refuseSuspended(ctx, build); err != nil {
+		return nil, false, err
+	}
 	if build.Status == StatusQueued {
 		if err := s.admit(ctx, build); err != nil {
 			return nil, false, err
@@ -402,6 +408,21 @@ func (s *Service) enqueue(ctx context.Context, connection connected, commit gitp
 		s.nudge()
 	}
 	return build, created, nil
+}
+
+// refuseSuspended stops a build of an organisation whose owner is suspended
+// before it is queued, so no Job is made. A push or preview is recorded FAILED
+// with the reason, so it is not lost silently; anything else is refused.
+func (s *Service) refuseSuspended(ctx context.Context, build *Build) error {
+	err := s.options.OrgGuard.CheckProject(ctx, build.ProjectID)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, orgguard.ErrOrgSuspended) || (build.Trigger != TriggerPush && build.Trigger != TriggerPreview) {
+		return err
+	}
+	build.Status, build.FailureKind, build.FailureReason = StatusFailed, FailPlatform, orgguard.Message
+	return nil
 }
 
 // takeSlot counts a preview build against the previews' own budget, any other site build against the project's deploys.

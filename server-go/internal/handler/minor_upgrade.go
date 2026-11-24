@@ -5,6 +5,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/orgguard"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -66,6 +67,10 @@ func (h *ProvisioningHandler) UpgradeMinorVersion(w http.ResponseWriter, r *http
 		if writeIfPoolBusy(w, err) {
 			return
 		}
+		if orgguard.IsRefusal(err) {
+			writeOrgGuardError(w, err)
+			return
+		}
 		httpError(w, safeError(err), unsettledOr(err, http.StatusInternalServerError))
 		return
 	}
@@ -86,6 +91,10 @@ func (h *ProvisioningHandler) UpgradeMinorVersion(w http.ResponseWriter, r *http
 func (h *ProvisioningHandler) upgradeMySQLMinor(w http.ResponseWriter, r *http.Request, projectID string) {
 	if err := h.svc.UpgradeVersion(r.Context(), projectID, config.DefaultMySQLVersion()); err != nil {
 		if writeIfPoolBusy(w, err) {
+			return
+		}
+		if orgguard.IsRefusal(err) {
+			writeOrgGuardError(w, err)
 			return
 		}
 		httpError(w, safeError(err), unsettledOr(err, http.StatusInternalServerError))
