@@ -39,7 +39,13 @@ function UsageBar({ value, max, color }: UsageBarProps) {
 // The instance count is shown only when the server reported one.
 function instanceSuffix(count: number | null | undefined): string {
   if (count == null) return '';
-  return ` (${count} ${count === 1 ? 'instance' : 'instances'})`;
+  const noun = count === 1 ? 'instance' : 'instances';
+  return ` (${count} ${noun})`;
+}
+
+function cpuSubtitle(limitCores: number | null | undefined, instanceCount: number | null | undefined) {
+  if (limitCores == null) return undefined;
+  return `/ ${limitCores} limit${instanceSuffix(instanceCount)}`;
 }
 
 export function MetricsPage() {
@@ -119,11 +125,7 @@ export function MetricsPage() {
                   ? 'Not available'
                   : `${current.cpuUsageCores.toFixed(2)} cores`
               }
-              subtitle={
-                current.cpuLimitCores == null
-                  ? undefined
-                  : `/ ${current.cpuLimitCores} limit${instanceSuffix(current.instanceCount)}`
-              }
+              subtitle={cpuSubtitle(current.cpuLimitCores, current.instanceCount)}
               color="text-blue-400"
             />
             <MetricCard
