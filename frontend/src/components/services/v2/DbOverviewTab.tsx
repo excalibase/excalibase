@@ -15,19 +15,9 @@ import { formatWhen } from '../../containers/appCopy';
 import { ToneBadge } from '../../containers/ContainerBits';
 import { databaseServiceStatus } from '../serviceStatus';
 import { panelSearch } from './panelState';
+import { card, Fact } from './sections';
 
 const NOT_AVAILABLE = 'Not available';
-
-function Fact({ label, children }: { readonly label: string; readonly children: React.ReactNode }) {
-  return (
-    <div>
-      <dt className="text-xs text-text-tertiary">{label}</dt>
-      <dd className="text-sm text-text-primary">{children}</dd>
-    </div>
-  );
-}
-
-const card = 'space-y-3 rounded-lg border border-border-primary bg-bg-secondary p-4';
 
 function LiveState({ project }: { readonly project: DatabaseInstance }) {
   const { data: metrics, dataUpdatedAt } = useCurrentMetrics(project.projectId);
