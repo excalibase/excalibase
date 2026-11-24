@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
+import { GENERIC_PROVISION_FAILURE, PROVISION_FAILURE_MESSAGES, plainProvisionFailure } from './utils/provisionFailure';
 
 // EXC-850: a customer never sees Kubernetes words in Studio. This reads every
 // string literal and JSX text node of every non-admin source file, which is
@@ -88,5 +89,11 @@ describe('customer-facing text', () => {
     expect(offendersIn('pages/ProvisionPage.tsx', ['k8s pods in your cluster'])).toHaveLength(1);
     expect(offendersIn('components/sites/siteCiSnippets.ts', ['image: node:24'])).toEqual([]);
     expect(offendersIn('components/sites/siteCiSnippets.ts', ['image: node:24 on a pod'])).toHaveLength(1);
+  });
+
+  test('the provisioning failure wordings, as shown, name no Kubernetes word', () => {
+    const shown = [GENERIC_PROVISION_FAILURE, ...PROVISION_FAILURE_MESSAGES, plainProvisionFailure('pod x OOMKilled on node n1')];
+    expect(offendersIn('utils/provisionFailure.ts', shown)).toEqual([]);
+    expect(offendersIn('utils/provisionFailure.ts', ['a pod ran out of memory'])).toHaveLength(1);
   });
 });

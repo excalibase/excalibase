@@ -69,10 +69,11 @@ describe('ProjectOverviewPage — no database', () => {
     );
   });
 
-  test('names the last failed add', async () => {
+  test('names the last failed add in plain words, never the raw text', async () => {
     renderPage(noDatabaseProject({ failureReason: 'cluster rejected' }));
     const card = await screen.findByTestId('service-database');
-    expect(await within(card).findByText(/cluster rejected/)).toBeInTheDocument();
+    expect(await within(card).findByText('Provisioning failed. Try again or contact support.')).toBeInTheDocument();
+    expect(within(card).queryByText(/cluster rejected/)).not.toBeInTheDocument();
   });
 
   // EXC-426: the add answers before the database is built; the card follows it.

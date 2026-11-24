@@ -15,6 +15,12 @@ export const STAGE_LABELS: Readonly<Record<string, string>> = {
   [ProvisioningStage.COMPLETED]: 'Completed',
 };
 
-export function stageLabel(stage: string | undefined): string {
-  return (stage && STAGE_LABELS[stage]) || 'an unknown step';
+// Undefined for a stage with no product word, so a caller never prints a raw key.
+export function stageLabel(stage: string | undefined): string | undefined {
+  return stage && Object.hasOwn(STAGE_LABELS, stage) ? STAGE_LABELS[stage] : undefined;
+}
+
+export function failureHeadline(stage: string | undefined): string {
+  const label = stageLabel(stage);
+  return label ? `Provisioning failed at stage ${label}` : 'Provisioning failed';
 }

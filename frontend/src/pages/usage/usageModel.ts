@@ -34,7 +34,8 @@ export interface UsageOptions {
 }
 
 export function orgUsage(projects: readonly DatabaseInstance[], tier: TierConfig | undefined, services: ReadonlyMap<string, LoadedServices>, options: UsageOptions = {}): OrgUsage {
-  const { selfHosted = false, appsOn = true, ready = true } = options;
+  const { appsOn = true, ready = true } = options;
+  const selfHosted = ready && options.selfHosted === true;
   const plan = ready ? tier : undefined;
   const live = projects.filter((p) => !GONE.has(p.status));
   const perProject = live.map((p) => ({

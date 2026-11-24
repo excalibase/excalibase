@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { plainProvisionFailure } from '../utils/provisionFailure';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Database, Loader2 } from 'lucide-react';
 import { useAddDatabase, useInstance } from '../hooks/useProvisioning';
@@ -110,7 +111,7 @@ export function AddDatabasePage() {
     addDatabase.reset();
     setPassword('');
     if (result.noDatabase && result.status !== 'PROVISIONING') {
-      setFailure(result.failureReason || 'The database could not be created.');
+      setFailure(plainProvisionFailure(result.failureReason));
       return;
     }
     if (result.password) {

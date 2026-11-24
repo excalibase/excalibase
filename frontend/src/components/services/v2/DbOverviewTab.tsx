@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ProvisionFailure } from '../../shared/ProvisionFailure';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2, PauseCircle, PlayCircle } from 'lucide-react';
 import { useCurrentMetrics } from '../../../hooks/useMetrics';
@@ -43,7 +44,7 @@ function LiveState({ project }: { readonly project: DatabaseInstance }) {
         <Fact label="Last backup">{newest ? formatWhen(newest.timestamp) : 'None yet'}</Fact>
         <Fact label="Compute">{compute}</Fact>
       </dl>
-      {project.failureReason && project.currentStage === 'FAILED' && <p className="break-words text-xs text-red-400">{project.failureReason}</p>}
+      {project.failureReason && project.currentStage === 'FAILED' && <ProvisionFailure reason={project.failureReason} className="break-words text-xs text-red-400" />}
     </section>
   );
 }

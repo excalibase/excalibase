@@ -106,8 +106,23 @@ describe('AddDatabasePage', () => {
     renderAt('/project/proj-1/database/add');
     await user.click(await screen.findByTestId('pg-version-16'));
     await user.click(screen.getByTestId('add-database-submit'));
-    expect(await screen.findByRole('alert')).toHaveTextContent('cluster rejected');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Provisioning failed. Try again or contact support.');
+    expect(screen.queryByText(/cluster rejected/)).not.toBeInTheDocument();
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  test('a failed add with a known cause says it in plain words', async () => {
+    const user = userEvent.setup();
+    stubProject(withoutDatabase);
+    vi.mocked(api.post).mockResolvedValue({
+      data: { projectId: 'proj-1', status: 'ACTIVE', noDatabase: true, failureReason: 'pod db-1 OOMKilled' },
+    } as never);
+    renderAt('/project/proj-1/database/add');
+    await user.click(await screen.findByTestId('pg-version-16'));
+    await user.click(screen.getByTestId('add-database-submit'));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/ran out of memory/i);
+    expect(alert).not.toHaveTextContent('OOMKilled');
   });
 
   test('a refusal from the server is shown', async () => {

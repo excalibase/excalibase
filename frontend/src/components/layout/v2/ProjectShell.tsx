@@ -27,14 +27,19 @@ export function ProjectShell() {
   // Whichever way the drawer closes, focus lands on the menu button rather than on the page body.
   const wasShown = useRef(false);
   useEffect(() => {
-    if (wasShown.current && !drawerShown) menuButton.current?.focus();
+    if (wasShown.current && !drawerShown && !searching) menuButton.current?.focus();
     wasShown.current = drawerShown;
-  }, [drawerShown]);
+  }, [drawerShown, searching]);
   const closeDrawer = () => setDrawerOpen(false);
+  // The drawer makes everything behind it inert, the search included, so it closes first.
+  const changeSearching = (open: boolean) => {
+    if (open) setDrawerOpen(false);
+    setSearching(open);
+  };
   const showSubNav = section && PROJECT_NAV.find((s) => s.key === section)?.children;
   return (
     <div data-testid="studio-shell" className="flex h-screen flex-col overflow-hidden bg-bg-primary">
-      <TopBar left={<ProjectCrumb />} onSearch={() => setSearching(true)} />
+      <TopBar left={<ProjectCrumb />} onSearch={() => changeSearching(true)} />
       <ProjectTabs />
       {phone && (
         <MobileNavBar open={drawerShown} label={PROJECT_NAV.find((s) => s.key === section)?.label ?? 'Menu'}
@@ -51,7 +56,7 @@ export function ProjectShell() {
           {showSubNav && section && <SubNav drawer sectionKey={section} />}
         </NavDrawer>
       )}
-      <CommandPalette open={searching} onOpenChange={setSearching} />
+      <CommandPalette open={searching} onOpenChange={changeSearching} />
     </div>
   );
 }

@@ -197,6 +197,17 @@ describe('ProjectShell on a phone', () => {
     remove.mockRestore();
   });
 
+  test('opening the search with Ctrl+K closes the drawer first and focuses the search box', async () => {
+    renderShell('/project/p1');
+    const { menu } = await openDrawer();
+    await userEvent.keyboard('{Control>}k{/Control}');
+    const search = await screen.findByRole('dialog', { name: 'Search' });
+    expect(screen.queryByRole('dialog', { name: 'Project navigation' })).not.toBeInTheDocument();
+    expect(menu).toHaveAttribute('aria-expanded', 'false');
+    expect(within(search).getByRole('combobox')).toHaveFocus();
+    for (const child of screen.getByTestId('studio-shell').children) expect(child).not.toHaveAttribute('inert');
+  });
+
   test('the backdrop closes the drawer', async () => {
     renderShell('/project/p1');
     await openDrawer();
