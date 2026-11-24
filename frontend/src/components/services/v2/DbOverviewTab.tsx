@@ -44,7 +44,7 @@ function LiveState({ project }: { readonly project: DatabaseInstance }) {
         <Fact label="Last backup">{newest ? formatWhen(newest.timestamp) : 'None yet'}</Fact>
         <Fact label="Compute">{compute}</Fact>
       </dl>
-      {project.failureReason && project.currentStage === 'FAILED' && <ProvisionFailure reason={project.failureReason} className="break-words text-xs text-red-400" />}
+      {(project.failureReason || project.failureKind) && project.currentStage === 'FAILED' && <ProvisionFailure reason={project.failureReason} kind={project.failureKind} message={project.failureMessage} className="break-words text-xs text-red-400" />}
     </section>
   );
 }

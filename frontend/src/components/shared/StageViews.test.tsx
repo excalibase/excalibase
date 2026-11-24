@@ -30,6 +30,11 @@ describe.each(VIEWS)('%s', (_name, View) => {
     expect(screen.queryByText(/ImagePullBackOff/)).not.toBeInTheDocument();
   });
 
+  test('a failure with only a kind says it in plain words', () => {
+    render(<View currentStage={ProvisioningStage.FAILED} failureKind="no_capacity" />);
+    expect(screen.getByText(/no room to run it/i)).toBeInTheDocument();
+  });
+
   test('a failure without text still says so, in generic wording', () => {
     render(<View currentStage={ProvisioningStage.FAILED} />);
     expect(screen.getByText('Provisioning failed. Delete it and add it again. If it keeps failing, tell us.')).toBeInTheDocument();

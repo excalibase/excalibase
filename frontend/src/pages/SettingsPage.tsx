@@ -392,7 +392,7 @@ function ProvisionFailedBanner({ project }: { readonly project: DatabaseInstance
           <div className="text-sm font-medium text-red-400 mb-1">
             {failureHeadline(project.failureStage ?? project.currentStage)}
           </div>
-          <ProvisionFailure reason={project.failureReason} detail={rollbackResults.length > 0 ? <RollbackLog results={rollbackResults} /> : undefined} />
+          <ProvisionFailure reason={project.failureReason} kind={project.failureKind} message={project.failureMessage} detail={rollbackResults.length > 0 ? <RollbackLog results={rollbackResults} /> : undefined} />
         </div>
       </div>
     </div>

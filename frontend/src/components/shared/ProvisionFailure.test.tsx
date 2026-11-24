@@ -49,3 +49,13 @@ describe('ProvisionFailure', () => {
     expect(screen.queryByText('rollback line')).not.toBeInTheDocument();
   });
 });
+
+describe('ProvisionFailure with a kind and no text', () => {
+  beforeEach(() => signIn('user'));
+
+  test('a customer reads the wording of the kind and no technical block', () => {
+    render(<ProvisionFailure kind="out_of_memory" />);
+    expect(screen.getByText(/ran out of memory/i)).toBeInTheDocument();
+    expect(screen.queryByText('Technical details')).not.toBeInTheDocument();
+  });
+});

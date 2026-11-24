@@ -57,3 +57,10 @@ func IsValidPlatformRole(role string) bool {
 	_, ok := rolePermissions[role]
 	return ok
 }
+
+// SeesRawProvisioningText reports whether a platform role reads a project's
+// raw failure text and rollback log, which name pods, volumes and namespaces.
+// Everyone else reads the plain failure kind instead (EXC-869).
+func SeesRawProvisioningText(role string) bool {
+	return role == "platform_admin" || role == "platform_operator"
+}

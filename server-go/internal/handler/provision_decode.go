@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,22 +125,23 @@ type createdProject struct {
 
 // shownOnce adds the owner password to a create answer of a project that
 // exists; a failed build has no database for it to open.
-func shownOnce(resp *domain.ProvisioningResponse, password string) any {
-	resp = scrubbedCreateAnswer(resp)
+func shownOnce(ctx context.Context, resp *domain.ProvisioningResponse, password string) any {
+	resp = customerProvisioning(ctx, resp)
 	if resp == nil || password == "" || resp.Status == string(domain.StageFailed) {
 		return resp
 	}
 	return createdProject{ProvisioningResponse: resp, Password: password}
 }
 
-// scrubbedCreateAnswer is the create answer with the cluster's names taken out of its failure text.
-func scrubbedCreateAnswer(resp *domain.ProvisioningResponse) *domain.ProvisioningResponse {
+// customerProvisioning is a provisioning answer as the caller reads it: the
+// failure as a kind, and for a customer the cluster's names out of the step.
+func customerProvisioning(ctx context.Context, resp *domain.ProvisioningResponse) *domain.ProvisioningResponse {
 	if resp == nil {
 		return nil
 	}
-	scrubbed := *resp
-	scrubbed.FailureReason = domain.ScrubClusterText(resp.FailureReason, resp.Namespace)
-	scrubbed.FailureStep = domain.ScrubClusterText(resp.FailureStep, resp.Namespace)
-	scrubbed.RollbackLog = domain.ScrubClusterText(resp.RollbackLog, resp.Namespace)
-	return &scrubbed
+	shown := *resp
+	failure := failureForCaller(ctx, resp.FailureReason, resp.RollbackLog)
+	shown.FailureKind, shown.FailureMessage, shown.FailureReason, shown.RollbackLog = failure.Kind, failure.Message, failure.Reason, failure.RollbackLog
+	shown.FailureStep = domain.ScrubClusterText(resp.FailureStep, resp.Namespace)
+	return &shown
 }

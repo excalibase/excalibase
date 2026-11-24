@@ -111,7 +111,7 @@ export function AddDatabasePage() {
     addDatabase.reset();
     setPassword('');
     if (result.noDatabase && result.status !== 'PROVISIONING') {
-      setFailure(plainProvisionFailure(result.failureReason));
+      setFailure(result.failureMessage ?? plainProvisionFailure(result.failureReason, result.failureKind));
       return;
     }
     if (result.password) {

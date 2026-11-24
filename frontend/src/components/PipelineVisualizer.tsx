@@ -7,6 +7,7 @@ import { CheckCircle, Circle, XCircle, Loader2 } from 'lucide-react';
 interface PipelineVisualizerProps {
   readonly currentStage: ProvisioningStage;
   readonly failureReason?: string;
+  readonly failureKind?: string;
 }
 
 const STAGES = [
@@ -20,7 +21,7 @@ const STAGES = [
   { key: ProvisioningStage.COMPLETED },
 ];
 
-export function PipelineVisualizer({ currentStage, failureReason }: PipelineVisualizerProps) {
+export function PipelineVisualizer({ currentStage, failureReason, failureKind }: PipelineVisualizerProps) {
   const currentIndex = STAGES.findIndex((s) => s.key === currentStage);
   const isFailed = currentStage === ProvisioningStage.FAILED;
 
@@ -92,7 +93,7 @@ export function PipelineVisualizer({ currentStage, failureReason }: PipelineVisu
       {isFailed && (
         <div className="bg-red-900/20 border border-color-error rounded-lg p-4">
           <p className="text-color-error font-medium">Provisioning failed</p>
-          <ProvisionFailure reason={failureReason} className="text-text-secondary text-sm mt-1" />
+          <ProvisionFailure reason={failureReason} kind={failureKind} className="text-text-secondary text-sm mt-1" />
         </div>
       )}
     </div>

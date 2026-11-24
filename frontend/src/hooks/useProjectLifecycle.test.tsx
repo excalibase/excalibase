@@ -91,6 +91,24 @@ describe('project lifecycle follows the project', () => {
     expect((result.current.error as Error).message).toMatch(/not confirmed stopped/);
   });
 
+  test('a customer whose answer carries a failure kind and no text still sees the operation fail', async () => {
+    vi.mocked(api.delete).mockResolvedValueOnce({ status: 202, data: { projectId: 'p1', status: 'PAUSING' } } as never);
+    projectReads({ status: 'PAUSING', failureKind: 'unknown' });
+    const { result } = renderHook(() => useDeprovisionDatabase(1), { wrapper: wrapper() });
+    result.current.mutate('p1');
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect((result.current.error as Error).message).toMatch(/did not complete/);
+  });
+
+  test('a customer reads the server sentence for a stopped pause or resume', async () => {
+    vi.mocked(api.delete).mockResolvedValueOnce({ status: 202, data: { projectId: 'p1', status: 'PAUSING' } } as never);
+    projectReads({ status: 'PAUSING', failureKind: 'unknown', failureMessage: 'pause cancelled: the pre-pause backup did not complete; the project is still running' });
+    const { result } = renderHook(() => useDeprovisionDatabase(1), { wrapper: wrapper() });
+    result.current.mutate('p1');
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect((result.current.error as Error).message).toMatch(/project is still running/);
+  });
+
   test('a deletion torn down at once is followed until the project is gone', async () => {
     vi.mocked(api.delete).mockResolvedValueOnce({ status: 202, data: { projectId: 'p1', status: 'DELETING' } } as never);
     projectReads({ status: 'DELETING' });

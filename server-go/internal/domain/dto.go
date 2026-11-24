@@ -97,16 +97,18 @@ type ProvisioningResponse struct {
 	Status       string            `json:"status"`
 	CurrentStage ProvisioningStage `json:"currentStage"`
 	// Namespace and Host are cluster-internal and never in an answer.
-	Namespace     string            `json:"-"`
-	Host          string            `json:"-"`
-	Port          *int              `json:"port,omitempty"`
-	DatabaseName  string            `json:"databaseName,omitempty"`
-	FailureReason string            `json:"failureReason,omitempty"`
-	FailureStage  ProvisioningStage `json:"failureStage,omitempty"`
-	FailureStep   string            `json:"failureStep,omitempty"`
-	RollbackLog   string            `json:"rollbackLog,omitempty"`
-	CreatedAt     *FlexTime         `json:"createdAt,omitempty"`
-	NoDatabase    bool              `json:"noDatabase"`
+	Namespace      string            `json:"-"`
+	Host           string            `json:"-"`
+	Port           *int              `json:"port,omitempty"`
+	DatabaseName   string            `json:"databaseName,omitempty"`
+	FailureReason  string            `json:"failureReason,omitempty"`
+	FailureKind    FailureKind       `json:"failureKind,omitempty"`
+	FailureMessage string            `json:"failureMessage,omitempty"`
+	FailureStage   ProvisioningStage `json:"failureStage,omitempty"`
+	FailureStep    string            `json:"failureStep,omitempty"`
+	RollbackLog    string            `json:"rollbackLog,omitempty"`
+	CreatedAt      *FlexTime         `json:"createdAt,omitempty"`
+	NoDatabase     bool              `json:"noDatabase"`
 }
 
 // --- Credentials ---

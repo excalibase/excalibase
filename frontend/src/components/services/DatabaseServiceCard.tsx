@@ -57,8 +57,8 @@ function NoDatabase({ project }: { readonly project: DatabaseInstance }) {
         GraphQL and REST API, sized by your organization&apos;s plan.
         {!project.canAddDatabase && ' Only an org admin or owner can add one.'}
       </p>
-      {project.failureReason && (
-        <ProvisionFailure reason={project.failureReason} className="text-xs text-red-400 break-words" />
+      {(project.failureReason || project.failureKind) && (
+        <ProvisionFailure reason={project.failureReason} kind={project.failureKind} message={project.failureMessage} className="text-xs text-red-400 break-words" />
       )}
       {project.canAddDatabase && (
         <div>
@@ -142,8 +142,8 @@ export function DatabaseServiceCard({ projectId }: { readonly projectId: string 
               <dd className="text-text-primary">{project.tier}</dd>
             </div>
           </dl>
-          {project.failureReason && project.currentStage === 'FAILED' && (
-            <ProvisionFailure reason={project.failureReason} className="text-xs text-red-400 break-words" />
+          {(project.failureReason || project.failureKind) && project.currentStage === 'FAILED' && (
+            <ProvisionFailure reason={project.failureReason} kind={project.failureKind} message={project.failureMessage} className="text-xs text-red-400 break-words" />
           )}
           {isMySQLProject(project) ? (
             <MySQLEndpoint project={project} />

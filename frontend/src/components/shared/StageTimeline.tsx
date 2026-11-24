@@ -10,6 +10,7 @@ import {
 interface StageTimelineProps {
   readonly currentStage: ProvisioningStage;
   readonly failureReason?: string;
+  readonly failureKind?: string;
 }
 
 const STAGES = [
@@ -32,7 +33,7 @@ function getLabelClass(state: StageState): string {
   return 'text-text-tertiary';
 }
 
-export function StageTimeline({ currentStage, failureReason }: StageTimelineProps) {
+export function StageTimeline({ currentStage, failureReason, failureKind }: StageTimelineProps) {
   const currentIndex = STAGES.findIndex((s) => s.key === currentStage);
   const isFailed = currentStage === ProvisioningStage.FAILED;
 
@@ -84,7 +85,7 @@ export function StageTimeline({ currentStage, failureReason }: StageTimelineProp
       {isFailed && (
         <div className="bg-red-900/20 border border-color-error rounded-lg p-4 mt-2">
           <p className="text-color-error font-medium text-sm">Provisioning failed</p>
-          <ProvisionFailure reason={failureReason} className="text-text-secondary text-xs mt-1" />
+          <ProvisionFailure reason={failureReason} kind={failureKind} className="text-text-secondary text-xs mt-1" />
         </div>
       )}
     </div>

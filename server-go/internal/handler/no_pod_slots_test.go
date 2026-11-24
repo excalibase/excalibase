@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -23,7 +24,7 @@ func TestAProjectRefusedForPodSlotsIsAnsweredWith503(t *testing.T) {
 
 func TestAResumeRefusedForPodSlotsIsAnsweredWith503(t *testing.T) {
 	rec := httptest.NewRecorder()
-	(&ProvisioningHandler{}).writeLifecycleError(rec, "p1", fmt.Errorf("resume: %w", service.ErrNoPodSlots))
+	(&ProvisioningHandler{}).writeLifecycleError(context.Background(), rec, "p1", fmt.Errorf("resume: %w", service.ErrNoPodSlots))
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), service.ErrNoPodSlots.Error()) {
 		t.Errorf("status %d body %s", rec.Code, rec.Body.String())
 	}
