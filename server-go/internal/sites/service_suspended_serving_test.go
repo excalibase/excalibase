@@ -3,6 +3,7 @@ package sites_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -169,5 +170,29 @@ func TestReconcileServerSites_UnroutesARoutedServerSiteOfASuspendedOwner(t *test
 	}
 	if _, routed := h.publisher.Hosts[site.Hostname]; routed {
 		t.Fatal("the reconciler left a suspended owner's routed server site on the router")
+	}
+}
+
+// A standing that cannot be read is not a suspension: the timer must leave a
+// good project's routed site alone rather than unroute it on a database blip.
+func TestReconcile_KeepsASiteRoutedWhenTheStandingCannotBeRead(t *testing.T) {
+	h := newHarness(t)
+	site := h.createSite(t, "shop")
+	if _, err := h.deploy(t, site, viteDist(t)); err != nil {
+		t.Fatal(err)
+	}
+	instances := fakestore.NewInstances()
+	instances.Items[testProject] = &domain.DatabaseInstance{ProjectID: testProject, OrgID: "org-1"}
+	down := orgguard.New(instances, func(context.Context) (map[string]bool, error) { return nil, errors.New("db down") })
+	guarded, err := sites.NewService(h.store, h.publisher, h.origins, sites.Options{BaseDomain: testDomain, SpoolDir: t.TempDir(), OrgGuard: down})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = guarded.ReconcileServerSites(context.Background())
+	if _, routed := h.publisher.Hosts[site.Hostname]; !routed {
+		t.Fatal("the reconciler unrouted a good project's site because the suspension list could not be read")
+	}
+	if slices.Contains(h.publisher.Calls, "delete-host") {
+		t.Fatalf("calls = %v, want no unroute", h.publisher.Calls)
 	}
 }

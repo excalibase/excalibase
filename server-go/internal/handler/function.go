@@ -332,10 +332,10 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if h.k8sClient == nil {
 		return nil, fmt.Errorf("no runtime client available")
 	}
-	// Starting a project's runtime is starting compute (EXC-843).
-	if err := h.orgGuard.CheckProject(ctx, projectID); err != nil {
-		return nil, err
-	}
+	// Serving an org in good standing starts its runtime when there is none
+	// (after a restart). The creator rule of EXC-843 is for deploys, which
+	// check it themselves: a suspended member who merely created the project
+	// must not take its functions and cron down.
 	inst, err := h.instanceFor(projectID)
 	if err != nil {
 		return nil, err

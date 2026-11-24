@@ -1453,3 +1453,8 @@ project; a paused one comes back with its resume) and the apps the suspension
 stopped, but only for a project that may serve: one awaiting deletion, in
 teardown or restore, or in an org whose owner is still suspended stays down.
 Serving resumes within 5 seconds, the guard's cache.
+
+EXC-843's start rule still applies to starting compute: resuming an idle-paused
+project and the background app start refuse a project created by a suspended
+member, so an org in good standing cannot resume such a project until that
+member is unsuspended or the project is recreated.

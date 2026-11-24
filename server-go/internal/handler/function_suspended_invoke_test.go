@@ -37,6 +37,7 @@ func suspendedInvokeHandler(t *testing.T) (*FunctionHandler, *edgefn.RuntimeClie
 		t.Fatal(err)
 	}
 	h.SetOrgGuard(suspendedOwnerOf(instStore, "default"))
+	h.SetRuntimeURLFn(func(string) string { return runtime.URL })
 	return h, client
 }
 
@@ -99,4 +100,36 @@ func TestReplayDeploys_RefusedForASuspendedOrg(t *testing.T) {
 			t.Errorf("replay ensured the suspended org's runtime: %v", kube.Calls)
 		}
 	}
+}
+
+// A suspended account that only created the project must not take a
+// good-standing org's functions and cron down: after a restart there is no
+// cached client, and the cold path used the creator check.
+func TestRuntimeClientFor_ColdPathServesWhenOnlyTheCreatorIsSuspended(t *testing.T) {
+	h, instances := coldCreatorSuspendedHandler(t)
+	_ = instances
+	if _, err := h.runtimeClientFor(context.Background(), "proj_p1"); err != nil {
+		t.Fatalf("runtimeClientFor with no cached client = %v, want it served: the org owner is in good standing", err)
+	}
+}
+
+func TestSchedulerInvoker_ColdPathRunsWhenOnlyTheCreatorIsSuspended(t *testing.T) {
+	h, _ := coldCreatorSuspendedHandler(t)
+	err := h.SchedulerInvoker().Invoke(context.Background(), "proj_p1", "hello", "default", nil)
+	if errors.Is(err, scheduler.ErrNotServable) || errors.Is(err, orgguard.ErrOrgSuspended) {
+		t.Fatalf("a scheduled task of a good-standing org: %v, want it to run", err)
+	}
+}
+
+func coldCreatorSuspendedHandler(t *testing.T) (*FunctionHandler, *inMemoryInstanceStore) {
+	t.Helper()
+	h, _ := suspendedInvokeHandler(t)
+	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default", OwnerID: "bob", Namespace: "ns-1", Status: "ACTIVE"},
+	}}
+	h.instanceStore = instStore
+	h.SetOrgGuard(orgguard.New(instStore, func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil }).
+		WithSuspendedUsers(func(context.Context) (map[string]bool, error) { return map[string]bool{"bob": true}, nil }))
+	h.SetK8sClient(k8s.NewMockClient(), "deno:test", "secret")
+	return h, instStore
 }
