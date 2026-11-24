@@ -178,6 +178,11 @@ published=$($DOCKER ps --filter name=excalibase- --format '{{.Names}} {{.Ports}}
 [ "$published" = "excalibase-edge " ] && ok "only the edge is published" || ko "published: $published"
 mounts=$($DOCKER inspect excalibase-provisioning --format '{{range .Mounts}}{{.Source}} {{end}}')
 case "$mounts" in *sock*) ko "provisioning mounts a socket: $mounts" ;; *) ok "provisioning holds no engine socket" ;; esac
+# The api host answers a moment after the studio host (EXC-825): wait for any real reply, not a refused or bad-gateway one.
+for i in $(seq 60); do
+  code=$(c -o /dev/null -w '%{http_code}' https://api.localhost:$PORT/actuator/health 2>/dev/null)
+  case "$code" in 000|502|503|504) sleep 2 ;; *) break ;; esac
+done
 c -o /dev/null -w '%{http_code}' https://api.localhost:$PORT/actuator/health | grep -q 404 && ok "api host hides actuator" || ko "actuator reachable"
 
 echo "== studio sign-in"
