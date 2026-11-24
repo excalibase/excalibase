@@ -94,6 +94,8 @@ export interface DatabaseInstance {
   failureStep?: string;
   rollbackLog?: string;
   backupEnabled: boolean;
+  // The disk the project has now, as a quantity ("5Gi"); absent on older rows.
+  storageSize?: string;
   // Set on a project made as a copy of another: the source and the backup it came from.
   restoredFromProjectId?: string;
   restoredFromBackupId?: string;
