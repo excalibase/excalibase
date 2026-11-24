@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, SlidersHorizontal } from 'lucide-react';
 import { useTiers } from '../../api/tiers';
+import { useUsageOptions } from '../usage/useOrgUsage';
 import { orgUsage } from '../usage/usageModel';
 import { useAccessTokens } from '../../api/accessTokens';
 import { useAppHostingEnabled, useFeatureEnabled, useSitesEnabled } from '../../hooks/useDeploymentMode';
@@ -71,7 +72,8 @@ export function HomePage() {
   const { data, isLoading, error } = useMyProjects();
   const projects = org ? data.filter((p) => p.orgId === org.id) : data;
   const tiers = useTiers();
-  const plan = org ? orgUsage(projects, tiers.data?.find((t) => t.tier === org.tier), new Map()) : undefined;
+  const { ready, ...usageOptions } = useUsageOptions();
+  const plan = org ? orgUsage(projects, ready ? tiers.data?.find((t) => t.tier === org.tier) : undefined, new Map(), usageOptions) : undefined;
   const tokens = useAccessTokens();
   const { byProject } = useProjectServices(projects);
   const openDatabases = useOpenDatabases(projects);

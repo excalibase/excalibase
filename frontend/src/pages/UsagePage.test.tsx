@@ -55,4 +55,21 @@ describe('Usage page', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not load/i);
     expect(screen.queryByRole('region', { name: 'Usage' })).not.toBeInTheDocument();
   });
+
+  test('a self-hosted install reads "no limit" for projects, whatever the plan list says', async () => {
+    mountWith({ projects: [project('p1')], tiers: [FREE], config: { deploymentMode: 'selfhosted' } }, <UsagePage />);
+    const use = within(await screen.findByRole('region', { name: 'Usage' }));
+    expect(use.getByText('Projects').nextSibling).toHaveTextContent('1 (no limit)');
+  });
+
+  test('with app hosting off the Apps column shows a dash, not 0 of 2', async () => {
+    mountWith({ projects: [project('p1', { projectName: 'Solo' })], tiers: [FREE], config: { appHosting: false } }, <UsagePage />);
+    const row = within(await screen.findByRole('row', { name: /Solo/ }));
+    expect(row.queryByText(/of 2/)).not.toBeInTheDocument();
+  });
+
+  test('the disk total is marked partial when a project reports no size', async () => {
+    mountWith({ projects: [project('p1', { storageSize: '5Gi' }), project('p2')], tiers: [FREE] }, <UsagePage />);
+    expect(await screen.findByText('≥ 5 GiB (some unknown)')).toBeInTheDocument();
+  });
 });

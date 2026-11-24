@@ -27,7 +27,7 @@ export function UsagePage() {
         <Section title="Usage">
           <Line label="Projects" value={projectsValue(usage.projects, usage.limitsKnown)} />
           <Line label="Databases" value={usage.databases} />
-          {usage.storageGiB !== null && <Line label="Disk allocated" value={gib(usage.storageGiB)} />}
+          {usage.storageGiB !== null && <Line label="Disk allocated" value={usage.storagePartial ? `≥ ${gib(usage.storageGiB)} (some unknown)` : gib(usage.storageGiB)} />}
           {usage.perProject.length > 0 && (
             <table className="w-full text-text-primary">
               <thead className="text-text-secondary"><tr><th className={CELL}>Project</th><th className={CELL}>Apps</th><th className={CELL}>Disk</th></tr></thead>

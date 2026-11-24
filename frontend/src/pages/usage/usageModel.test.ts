@@ -47,4 +47,38 @@ describe('orgUsage', () => {
     expect(usage.projects).toEqual({ used: 1, limit: null });
     expect(usage.limitsKnown).toBe(false);
   });
+
+  test('self-hosted installs show no limit even though the plan list has one', () => {
+    const usage = orgUsage([proj('a')], tier({ maxProjects: 1 }), new Map(), { selfHosted: true });
+    expect(usage.projects).toEqual({ used: 1, limit: null });
+    expect(usage.limitsKnown).toBe(true);
+  });
+
+  test('a project without a database reports no disk, whatever size the row still holds', () => {
+    const usage = orgUsage([proj('a', { noDatabase: true, storageSize: '5Gi' })], tier(), new Map());
+    expect(usage.perProject[0].storageGiB).toBeNull();
+    expect(usage.storageGiB).toBeNull();
+  });
+
+  test('the disk total is partial when a project with a database reports no size', () => {
+    const usage = orgUsage([proj('a', { storageSize: '5Gi' }), proj('b')], tier(), new Map());
+    expect(usage.storageGiB).toBe(5);
+    expect(usage.storagePartial).toBe(true);
+    expect(orgUsage([proj('a', { storageSize: '5Gi' }), proj('b', { noDatabase: true })], tier(), new Map()).storagePartial).toBe(false);
+  });
+
+  test('apps stay unknown when app hosting is off, not 0', () => {
+    const usage = orgUsage([proj('a')], tier(), new Map([['a', { apps: [] }]]), { appsOn: false });
+    expect(usage.perProject[0].apps).toBeNull();
+  });
+});
+
+// Mirrors HoldsOrgProjectSlot / NonSlotStatuses in server-go/internal/storage/org_limit.go:29-41.
+describe('which statuses hold a project slot', () => {
+  test.each([
+    ['ACTIVE', 1], ['FAILED', 1], ['PAUSED', 1], ['PROVISIONING', 1],
+    ['PENDING_DELETION', 0], ['DELETING', 0], ['BACKUPS_PENDING_DELETE', 0],
+  ])('%s holds %i slot', (status, held) => {
+    expect(orgUsage([proj('a', { status })], tier(), new Map()).projects.used).toBe(held);
+  });
 });

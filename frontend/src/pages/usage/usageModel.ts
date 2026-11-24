@@ -2,7 +2,8 @@ import type { TierConfig } from '../../api/tiers';
 import type { DatabaseInstance } from '../../types';
 import type { LoadedServices } from '../home/useHomeData';
 
-const GONE = new Set(['PENDING_DELETION', 'DELETING', 'DEPROVISIONED', 'BACKUPS_PENDING_DELETE']);
+// The statuses that give a project slot back; mirrors NonSlotStatuses in server-go/internal/storage/org_limit.go.
+const GONE = new Set(['PENDING_DELETION', 'DELETING', 'BACKUPS_PENDING_DELETE']);
 const UNITS: Record<string, number> = { Mi: 1 / 1024, Gi: 1, Ti: 1024 };
 
 // A Kubernetes-style quantity ("5Gi", "512Mi") in gibibytes; null when absent or not one.
@@ -18,24 +19,34 @@ export interface OrgUsage {
   projects: { used: number; limit: number | null };
   databases: number;
   storageGiB: number | null;
+  // True when a project with a database reported no size, so the total is a floor.
+  storagePartial: boolean;
   perProject: ProjectUsage[];
   limitsKnown: boolean;
 }
 
-export function orgUsage(projects: readonly DatabaseInstance[], tier: TierConfig | undefined, services: ReadonlyMap<string, LoadedServices>): OrgUsage {
+export interface UsageOptions {
+  // Self-hosted installs are not metered: the server applies no project cap.
+  selfHosted?: boolean;
+  appsOn?: boolean;
+}
+
+export function orgUsage(projects: readonly DatabaseInstance[], tier: TierConfig | undefined, services: ReadonlyMap<string, LoadedServices>, options: UsageOptions = {}): OrgUsage {
+  const { selfHosted = false, appsOn = true } = options;
   const live = projects.filter((p) => !GONE.has(p.status));
   const perProject = live.map((p) => ({
     projectId: p.projectId,
     name: p.projectName || p.projectId,
-    apps: services.get(p.projectId)?.apps?.length ?? null,
-    storageGiB: parseGiB(p.storageSize),
+    apps: appsOn ? services.get(p.projectId)?.apps?.length ?? null : null,
+    storageGiB: p.noDatabase ? null : parseGiB(p.storageSize),
   }));
   const sizes = perProject.map((p) => p.storageGiB).filter((v): v is number => v !== null);
   return {
-    projects: { used: live.length, limit: tier && tier.maxProjects > 0 ? tier.maxProjects : null },
+    projects: { used: live.length, limit: !selfHosted && tier && tier.maxProjects > 0 ? tier.maxProjects : null },
     databases: live.filter((p) => p.noDatabase !== true).length,
     storageGiB: sizes.length > 0 ? sizes.reduce((a, b) => a + b, 0) : null,
+    storagePartial: live.some((p) => p.noDatabase !== true && parseGiB(p.storageSize) === null),
     perProject,
-    limitsKnown: tier !== undefined,
+    limitsKnown: selfHosted || tier !== undefined,
   };
 }
