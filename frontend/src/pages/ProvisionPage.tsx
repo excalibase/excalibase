@@ -27,7 +27,7 @@ function optionTileClass(disabled: boolean | undefined, selected: boolean): stri
 }
 
 const DEPLOY_MODES = [
-  { mode: 'k8s' as DeployMode, icon: Cloud, label: 'Managed Postgres', desc: 'Hosted by the platform' },
+  { mode: 'k8s' as DeployMode, icon: Cloud, label: 'Managed', desc: 'Runs on the platform' },
   { mode: 'docker' as DeployMode, icon: Server, label: 'Docker', desc: 'Docker container (coming soon)', disabled: true },
 ];
 

@@ -130,4 +130,16 @@ describe('MetricsPage containers', () => {
     expect(screen.queryByTestId('project-containers')).not.toBeInTheDocument();
     expect(containerCalls()).toHaveLength(0);
   });
+
+  test('prints no instance count when the server reports none', async () => {
+    serve(false);
+    const real = vi.mocked(api.get).getMockImplementation()!;
+    vi.mocked(api.get).mockImplementation(async (url: string) =>
+      url.includes('/metrics/current')
+        ? ({ data: { ...METRICS, instanceCount: null } } as never)
+        : real(url),
+    );
+    renderPage();
+    expect(await screen.findByText(/0\.5 limit/)).not.toHaveTextContent(/null|instance/);
+  });
 });

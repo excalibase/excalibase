@@ -1,3 +1,4 @@
+import { stageLabel } from '../utils/stageLabels';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Server, Database, Shield, Clock, Trash2, Check, AlertTriangle, PauseCircle, PlayCircle } from 'lucide-react';
@@ -388,8 +389,7 @@ function ProvisionFailedBanner({ project }: { readonly project: DatabaseInstance
         <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium text-red-400 mb-1">
-            Provisioning failed at stage {project.failureStage ?? project.currentStage}
-            {project.failureStep ? ` (${project.failureStep})` : ''}
+            Provisioning failed at stage {stageLabel(project.failureStage ?? project.currentStage)}
           </div>
           {project.failureReason && (
             <div className="text-xs text-text-secondary font-mono break-words">

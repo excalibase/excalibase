@@ -36,6 +36,12 @@ function UsageBar({ value, max, color }: UsageBarProps) {
   );
 }
 
+// The instance count is shown only when the server reported one.
+function instanceSuffix(count: number | null | undefined): string {
+  if (count == null) return '';
+  return ` (${count} ${count === 1 ? 'instance' : 'instances'})`;
+}
+
 export function MetricsPage() {
   const projectId = useRouteProjectId();
 
@@ -116,7 +122,7 @@ export function MetricsPage() {
               subtitle={
                 current.cpuLimitCores == null
                   ? undefined
-                  : `/ ${current.cpuLimitCores} limit (${current.instanceCount} ${current.instanceCount === 1 ? 'instance' : 'instances'})`
+                  : `/ ${current.cpuLimitCores} limit${instanceSuffix(current.instanceCount)}`
               }
               color="text-blue-400"
             />
