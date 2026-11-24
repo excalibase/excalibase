@@ -57,6 +57,7 @@ test.describe('Studio v2 account and variables', () => {
     await expect(page.getByTestId('variable-STRIPE_SECRET')).toContainText('Set');
     await expect(page.getByTestId('variable-STRIPE_SECRET').getByRole('button')).toHaveCount(0);
     await expect(page.getByText(SECRET_PLAIN)).toHaveCount(0);
+    expect(await page.content()).not.toContain(SECRET_PLAIN);
     await page.getByRole('button', { name: 'Reveal LEGACY_TOKEN' }).click();
     await expect(page.getByText(SECRET_PLAIN)).toBeVisible();
     await page.getByRole('button', { name: 'Copy API_BASE_URL' }).click();

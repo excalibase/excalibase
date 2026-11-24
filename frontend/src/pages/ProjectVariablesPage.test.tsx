@@ -33,9 +33,11 @@ const API_APP = app({
 });
 const WORKER = app({ id: 'a2', name: 'worker', env: [] });
 
-function renderPage(apps: unknown[] | Error = [API_APP, WORKER]) {
+function renderPage(apps: unknown[] | Error = [API_APP, WORKER], orgRole = 'developer') {
   answers.length = 0;
   vi.mocked(api.get).mockImplementation((url: string) => {
+    if (url === '/provision/p1') return Promise.resolve({ data: { projectId: 'p1', orgId: 'org-1' } }) as never;
+    if (url === '/orgs') return Promise.resolve({ data: [{ id: 'org-1', name: 'Acme', slug: 'a', tier: 'FREE', ownerId: 'x', role: orgRole }] }) as never;
     if (url !== '/projects/p1/apps/') return Promise.reject(new Error(`unexpected GET ${url}`));
     const answer = apps instanceof Error ? Promise.reject(apps) : Promise.resolve({ data: apps });
     answers.push(answer);
@@ -81,17 +83,22 @@ describe('ProjectVariablesPage', () => {
     expect(row).toHaveTextContent('Set');
     expect(within(row).queryByRole('button')).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/p1\/api/);
+    expect(document.body.innerHTML).not.toContain('p1/api');
   });
 
   test('a credential-shaped plain value is masked until Reveal is clicked', async () => {
     renderPage();
     await screen.findByTestId('variable-LEGACY_TOKEN');
     await settle();
-    expect(rowOf('LEGACY_TOKEN')).not.toHaveTextContent('plain-but-credential-shaped');
+    const VALUE = 'plain-but-credential-shaped';
+    // Text, title, aria-label: the value is nowhere in the markup while masked.
+    expect(rowOf('LEGACY_TOKEN')).not.toHaveTextContent(VALUE);
+    expect(document.body.innerHTML).not.toContain(VALUE);
     await userEvent.click(within(rowOf('LEGACY_TOKEN')).getByRole('button', { name: /reveal legacy_token/i }));
-    expect(rowOf('LEGACY_TOKEN')).toHaveTextContent('plain-but-credential-shaped');
+    expect(rowOf('LEGACY_TOKEN')).toHaveTextContent(VALUE);
     await userEvent.click(within(rowOf('LEGACY_TOKEN')).getByRole('button', { name: /hide legacy_token/i }));
-    expect(rowOf('LEGACY_TOKEN')).not.toHaveTextContent('plain-but-credential-shaped');
+    expect(rowOf('LEGACY_TOKEN')).not.toHaveTextContent(VALUE);
+    expect(document.body.innerHTML).not.toContain(VALUE);
   });
 
   test('nothing is copied until Copy is clicked, and then only that value', async () => {
@@ -117,6 +124,13 @@ describe('ProjectVariablesPage', () => {
     const row = rowOf('API_BASE_URL');
     expect(row).toHaveTextContent('Hidden for your role');
     expect(within(row).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  test('a Viewer gets no edit link once the data is in', async () => {
+    renderPage([API_APP], 'viewer');
+    await screen.findByRole('heading', { name: 'api' });
+    await settle();
+    expect(screen.queryByRole('link', { name: /edit variables/i })).not.toBeInTheDocument();
   });
 
   test('each service links to its own variables editor', async () => {

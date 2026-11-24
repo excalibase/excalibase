@@ -4,19 +4,22 @@ import { apiErrorMessage, useApps, type App } from '../api/apps';
 import { VariableRow } from '../components/variables/VariableRow';
 import { panelSearch } from '../components/services/v2/panelState';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { useProjectRole } from '../hooks/useProjectRole';
 
 function editLink(projectId: string, app: App): string {
   return `/project/${projectId}?${panelSearch(new URLSearchParams(), { kind: 'app', id: app.id }, 'variables').toString()}`;
 }
 
-function ServiceVariables({ projectId, app }: { readonly projectId: string; readonly app: App }) {
+function ServiceVariables({ projectId, app, canEdit }: { readonly projectId: string; readonly app: App; readonly canEdit: boolean }) {
   return (
     <section aria-label={app.name} className="space-y-2">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-[15px] font-semibold text-text-primary">{app.name}</h2>
-        <Link to={editLink(projectId, app)} aria-label={`Edit variables of ${app.name}`} className="text-sm text-purple-400 hover:underline">
-          Edit variables
-        </Link>
+        {canEdit && (
+          <Link to={editLink(projectId, app)} aria-label={`Edit variables of ${app.name}`} className="text-sm text-purple-400 hover:underline">
+            Edit variables
+          </Link>
+        )}
       </div>
       <ul className="divide-y divide-border-primary rounded-lg border border-border-primary bg-surface-card">
         {app.env.map((variable) => <VariableRow key={variable.name} variable={variable} />)}
@@ -31,6 +34,7 @@ export function ProjectVariablesPage() {
   useDocumentTitle('Variables');
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data, isLoading, error } = useApps(projectId);
+  const { canDevelop } = useProjectRole(projectId);
   const withVariables = (data ?? []).filter((app) => app.env.length > 0);
   return (
     <div className="mx-auto max-w-4xl space-y-4" data-testid="project-variables">
@@ -43,7 +47,7 @@ export function ProjectVariablesPage() {
       {!isLoading && !error && withVariables.length === 0 && (
         <p className="text-sm text-text-secondary">No services with variables yet.</p>
       )}
-      {withVariables.map((app) => <ServiceVariables key={app.id} projectId={projectId} app={app} />)}
+      {withVariables.map((app) => <ServiceVariables key={app.id} projectId={projectId} app={app} canEdit={canDevelop} />)}
     </div>
   );
 }
