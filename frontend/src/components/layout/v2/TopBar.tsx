@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, CircleHelp, LogOut, Moon, Search, Sun, KeyRound } from 'lucide-react';
+import { ChevronDown, CircleHelp, LogOut, Moon, Search, Sun, KeyRound, UserRound } from 'lucide-react';
 import { DOCS_URL } from './navV2';
 import { useAuthStore } from '../../../stores/auth-store';
 import { useDarkMode } from '../../../hooks/useDarkMode';
@@ -61,6 +61,7 @@ function AccountMenu() {
       {open && (
         <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-56 rounded-xl border border-border-primary bg-surface-card p-1 shadow-lg">
           {user?.email && <p className="px-3 py-2 text-xs text-text-tertiary truncate">{user.email}</p>}
+          <Link role="menuitem" to="/account" onClick={() => setOpen(false)} className={item}><UserRound className="w-4 h-4" /> Account</Link>
           <Link role="menuitem" to="/account/tokens" onClick={() => setOpen(false)} className={item}><KeyRound className="w-4 h-4" /> Access keys</Link>
           <button role="menuitem" type="button" onClick={toggle} className={item}>
             {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />} {dark ? 'Light theme' : 'Dark theme'}
