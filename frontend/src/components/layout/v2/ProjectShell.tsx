@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { IconRail } from '../IconRail';
 import { SubNav } from '../SubNav';
@@ -23,8 +23,14 @@ export function ProjectShell() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   const drawerShown = phone && drawerOpen;
-  useEffect(() => setDrawerOpen(false), [pathname, phone]);
-  const closeDrawer = () => { setDrawerOpen(false); menuButton.current?.focus(); };
+  useLayoutEffect(() => setDrawerOpen(false), [pathname, phone]);
+  // Whichever way the drawer closes, focus lands on the menu button rather than on the page body.
+  const wasShown = useRef(false);
+  useEffect(() => {
+    if (wasShown.current && !drawerShown) menuButton.current?.focus();
+    wasShown.current = drawerShown;
+  }, [drawerShown]);
+  const closeDrawer = () => setDrawerOpen(false);
   const showSubNav = section && PROJECT_NAV.find((s) => s.key === section)?.children;
   return (
     <div data-testid="studio-shell" className="flex h-screen flex-col overflow-hidden bg-bg-primary">

@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, act, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -34,6 +34,7 @@ function renderShell(path: string) {
             <Route index element={<p>services page</p>} />
             <Route path="settings" element={<p>settings page</p>} />
             <Route path="sql" element={<p>sql page</p>} />
+            <Route path="database/overview" element={<p>database page</p>} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -78,15 +79,35 @@ describe('ProjectShell', () => {
   });
 });
 
+const PHONE = '(max-width: 767.98px)';
+let phoneNow = false;
+const listeners = new Set<() => void>();
+
 function setPhone(matches: boolean) {
+  phoneNow = matches;
+  listeners.clear();
   Object.defineProperty(globalThis.window, 'matchMedia', {
     writable: true,
     configurable: true,
     value: (query: string) => ({
-      matches: matches && query === '(max-width: 768px)', media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      get matches() { return phoneNow && query === PHONE; },
+      media: query,
+      addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
     }),
   });
 }
+
+// The window crosses the breakpoint: the query changes and tells its listeners.
+function resizeTo(phone: boolean) {
+  act(() => { phoneNow = phone; listeners.forEach((listener) => listener()); });
+}
+
+const openDrawer = async () => {
+  const menu = await screen.findByRole('button', { name: 'Menu' });
+  await userEvent.click(menu);
+  return { menu, drawer: screen.getByRole('dialog', { name: 'Project navigation' }) };
+};
 
 describe('ProjectShell on a phone', () => {
   beforeEach(() => { vi.clearAllMocks(); setPhone(true); });
@@ -96,51 +117,103 @@ describe('ProjectShell on a phone', () => {
     renderShell('/project/p1');
     const menu = await screen.findByRole('button', { name: 'Menu' });
     expect(menu).toHaveAttribute('aria-expanded', 'false');
+    expect(menu).not.toHaveAttribute('aria-controls');
     expect(screen.queryByTestId('icon-rail')).not.toBeInTheDocument();
     expect(screen.queryByTestId('sub-nav')).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByText('services page')).toBeInTheDocument();
   });
 
-  test('the button opens a drawer with the rail and moves focus into it', async () => {
+  test('content gets phone padding, not the desktop one', async () => {
     renderShell('/project/p1');
-    const menu = await screen.findByRole('button', { name: 'Menu' });
-    await userEvent.click(menu);
-    const drawer = screen.getByRole('dialog', { name: 'Project navigation' });
+    await screen.findByRole('button', { name: 'Menu' });
+    expect(screen.getByRole('main')).toHaveClass('p-4');
+    expect(screen.getByRole('main')).not.toHaveClass('p-6');
+  });
+
+  test('the button opens a modal drawer with the rail and moves focus into it', async () => {
+    renderShell('/project/p1');
+    const { menu, drawer } = await openDrawer();
     expect(menu).toHaveAttribute('aria-expanded', 'true');
+    expect(menu).toHaveAttribute('aria-controls', drawer.id);
+    expect(drawer).toHaveAttribute('aria-modal', 'true');
     expect(within(drawer).getByTestId('icon-rail')).toBeInTheDocument();
+    expect(within(drawer).queryByTestId('sidebar-settings')).not.toBeInTheDocument();
     expect(drawer).toContainElement(document.activeElement as HTMLElement);
+  });
+
+  test('a page with a sub-navigation shows it inside the drawer only', async () => {
+    renderShell('/project/p1/database/overview');
+    const { drawer } = await openDrawer();
+    expect(within(drawer).getByTestId('sub-nav')).toBeInTheDocument();
+    expect(screen.getAllByTestId('sub-nav')).toHaveLength(1);
+  });
+
+  test('everything behind the drawer is inert while it is open', async () => {
+    renderShell('/project/p1');
+    const { drawer } = await openDrawer();
+    const shell = screen.getByTestId('studio-shell');
+    const behind = [...shell.children].filter((child) => !child.contains(drawer));
+    expect(behind.length).toBeGreaterThan(2);
+    for (const child of behind) expect(child).toHaveAttribute('inert');
+    await userEvent.keyboard('{Escape}');
+    for (const child of behind) expect(child).not.toHaveAttribute('inert');
   });
 
   test('Escape closes the drawer and returns focus to the button', async () => {
     renderShell('/project/p1');
-    const menu = await screen.findByRole('button', { name: 'Menu' });
-    await userEvent.click(menu);
+    const { menu } = await openDrawer();
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(menu).toHaveAttribute('aria-expanded', 'false');
     expect(menu).toHaveFocus();
   });
 
+  test('Escape works even when focus has left the drawer', async () => {
+    renderShell('/project/p1');
+    await openDrawer();
+    (document.activeElement as HTMLElement).blur();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  test('Tab with focus outside the drawer brings it back inside', async () => {
+    renderShell('/project/p1');
+    const { drawer } = await openDrawer();
+    (document.activeElement as HTMLElement).blur();
+    await userEvent.tab();
+    expect(drawer).toContainElement(document.activeElement as HTMLElement);
+  });
+
+  test('the drawer keeps the page behind it from scrolling and drops its key listener on close', async () => {
+    const remove = vi.spyOn(document, 'removeEventListener');
+    renderShell('/project/p1');
+    const { drawer } = await openDrawer();
+    expect(drawer).toHaveClass('overscroll-contain');
+    await userEvent.keyboard('{Escape}');
+    expect(remove).toHaveBeenCalledWith('keydown', expect.any(Function));
+    remove.mockRestore();
+  });
+
   test('the backdrop closes the drawer', async () => {
     renderShell('/project/p1');
-    await userEvent.click(await screen.findByRole('button', { name: 'Menu' }));
+    await openDrawer();
     await userEvent.click(screen.getByRole('button', { name: 'Close menu' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  test('navigating from the drawer closes it', async () => {
+  test('navigating from the drawer closes it and puts focus on the menu button', async () => {
     renderShell('/project/p1');
-    await userEvent.click(await screen.findByRole('button', { name: 'Menu' }));
-    await userEvent.click(within(screen.getByRole('dialog')).getByTestId('nav-sql'));
+    const { menu, drawer } = await openDrawer();
+    await userEvent.click(within(drawer).getByTestId('nav-sql'));
     expect(await screen.findByText('sql page')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(menu).toHaveFocus();
   });
 
   test('Tab wraps inside the drawer in both directions', async () => {
     renderShell('/project/p1');
-    await userEvent.click(await screen.findByRole('button', { name: 'Menu' }));
-    const drawer = screen.getByRole('dialog');
+    const { drawer } = await openDrawer();
     const focusable = [...drawer.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')];
     const last = focusable.at(-1) as HTMLElement;
     last.focus();
@@ -149,14 +222,40 @@ describe('ProjectShell on a phone', () => {
     await userEvent.tab({ shift: true });
     expect(last).toHaveFocus();
   });
+
+  test('widening the window past the breakpoint closes the drawer and brings the rail back', async () => {
+    renderShell('/project/p1');
+    await openDrawer();
+    resizeTo(false);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Menu' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('icon-rail')).toBeInTheDocument();
+    expect(screen.getByRole('main')).toHaveClass('p-6');
+  });
+
+  test('stops listening for window changes when the shell goes away', async () => {
+    renderShell('/project/p1');
+    await screen.findByRole('button', { name: 'Menu' });
+    expect(listeners.size).toBeGreaterThan(0);
+    cleanup();
+    expect(listeners.size).toBe(0);
+  });
 });
 
 describe('ProjectShell on a desktop', () => {
   beforeEach(() => { vi.clearAllMocks(); setPhone(false); });
 
-  test('keeps the rail and has no menu button', async () => {
+  test('keeps the rail, the mode control and the desktop padding, and has no menu button', async () => {
     renderShell('/project/p1');
     expect(await screen.findByTestId('icon-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-settings')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Menu' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('main')).toHaveClass('p-6');
+  });
+
+  test('shows the sub-navigation beside the content', async () => {
+    renderShell('/project/p1/database/overview');
+    expect(await screen.findByTestId('sub-nav')).toBeInTheDocument();
   });
 });

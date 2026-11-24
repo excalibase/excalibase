@@ -1,7 +1,7 @@
-import { useEffect, useRef, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { Menu, X } from 'lucide-react';
 
-export const PHONE_QUERY = '(max-width: 768px)';
+export const PHONE_QUERY = '(max-width: 767.98px)';
 
 function subscribe(onChange: () => void) {
   const query = globalThis.matchMedia(PHONE_QUERY);
@@ -14,6 +14,7 @@ export function useIsPhone() {
   return useSyncExternalStore(subscribe, () => globalThis.matchMedia(PHONE_QUERY).matches, () => false);
 }
 
+export const DRAWER_ID = 'project-nav-drawer';
 const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 interface MobileNavBarProps {
@@ -27,7 +28,7 @@ interface MobileNavBarProps {
 export function MobileNavBar({ open, label, onToggle, buttonRef }: MobileNavBarProps) {
   return (
     <div className="flex items-center gap-3 border-b border-border-primary bg-surface-card px-4 py-1 flex-shrink-0">
-      <button ref={buttonRef} type="button" aria-label="Menu" aria-expanded={open} aria-controls="project-nav-drawer" onClick={onToggle}
+      <button ref={buttonRef} type="button" aria-label="Menu" aria-expanded={open} aria-controls={open ? DRAWER_ID : undefined} onClick={onToggle}
         className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover hover:text-text-primary">
         <Menu className="w-5 h-5" aria-hidden="true" />
       </button>
@@ -41,27 +42,47 @@ interface DrawerProps {
   readonly children: ReactNode;
 }
 
-// A modal drawer: focus moves in, Tab stays inside, Escape and the backdrop close it.
+// Everything next to the drawer stops taking focus and clicks while it is open.
+function useInertBehind(drawer: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const root = drawer.current?.parentElement;
+    const behind = root ? [...root.children].filter((child) => !child.contains(drawer.current)) : [];
+    for (const child of behind) child.setAttribute('inert', '');
+    return () => { for (const child of behind) child.removeAttribute('inert'); };
+  }, [drawer]);
+}
+
+// A modal drawer: focus moves in and stays in, Escape and the backdrop close it.
 export function NavDrawer({ onClose, children }: DrawerProps) {
   const panel = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useInertBehind(frame);
   useEffect(() => { panel.current?.querySelector<HTMLElement>(FOCUSABLE)?.focus(); }, []);
 
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape') { e.stopPropagation(); onClose(); return; }
-    if (e.key !== 'Tab' || !panel.current) return;
-    const items = [...panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
-    const first = items[0];
-    const last = items.at(-1);
-    if (!first || !last) return;
-    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-  };
+  useEffect(() => {
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') { close.current(); return; }
+      if (e.key !== 'Tab' || !panel.current) return;
+      const items = [...panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      const first = items[0];
+      const last = items.at(-1);
+      if (!first || !last) return;
+      const active = document.activeElement;
+      const inside = panel.current.contains(active);
+      if (!inside || (e.shiftKey && active === first)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   return (
-    <div className="fixed inset-0 z-40" onKeyDown={onKeyDown}>
+    <div ref={frame} className="fixed inset-0 z-40">
       <button type="button" aria-label="Close menu" tabIndex={-1} onClick={onClose} className="absolute inset-0 bg-black/50" />
-      <div ref={panel} id="project-nav-drawer" role="dialog" aria-modal="true" aria-label="Project navigation"
-        className="relative flex h-full w-[85vw] max-w-xs flex-col overflow-y-auto bg-surface-card shadow-xl">
+      <div ref={panel} id={DRAWER_ID} role="dialog" aria-modal="true" aria-label="Project navigation" tabIndex={-1}
+        className="relative flex h-full w-[85vw] max-w-xs flex-col overflow-y-auto overscroll-contain bg-surface-card shadow-xl">
         <button type="button" aria-label="Close navigation" onClick={onClose}
           className="ml-auto mr-2 mt-2 inline-flex min-h-10 min-w-10 flex-shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover">
           <X className="w-5 h-5" aria-hidden="true" />

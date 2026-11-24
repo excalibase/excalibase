@@ -37,12 +37,19 @@ async function mockWorld(page: Page) {
   await at('**/api/provision/p1/metrics/current', { cpuUsagePercent: 12, memoryUsagePercent: 30, diskUsageGB: 1.2, activeConnections: 4, maxConnections: 100 });
 }
 
+// The shell clips the page and <main> scrolls on its own, so the page-level check alone cannot fail:
+// each scroll container that holds content is measured too.
 async function expectNoHorizontalScroll(page: Page) {
-  const { scroll, client } = await page.evaluate(() => ({
+  const pageWidth = await page.evaluate(() => ({
     scroll: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
     client: document.documentElement.clientWidth,
   }));
-  expect(scroll).toBeLessThanOrEqual(client);
+  expect(pageWidth.scroll).toBeLessThanOrEqual(pageWidth.client);
+  const containers = [page.locator('main'), page.locator('header').first(), page.getByRole('navigation', { name: 'Project' })];
+  for (const container of containers) {
+    const { scroll, client } = await container.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(scroll).toBeLessThanOrEqual(client);
+  }
 }
 
 async function contentWidth(page: Page) {
