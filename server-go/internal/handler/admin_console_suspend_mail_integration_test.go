@@ -295,3 +295,47 @@ func TestClosureMail_AClaimBeingSentIsInFlightUntilItIsSent(t *testing.T) {
 		t.Fatalf("got %v, mails = %d: already sent, nothing more is owed", err, len(box.sent))
 	}
 }
+
+// A claim is taken over only when it was never sent and has sat for over five
+// minutes; a sent claim is final however old.
+func TestClosureMail_StaleClaimTakeoverOnARealDatabase(t *testing.T) {
+	store, _, _ := suspendMailRig(t, true)
+	queries := pgstore.NewAdminConsole(store.DB())
+	ctx := context.Background()
+	age := func(org string) {
+		t.Helper()
+		if _, err := store.DB().Exec(`UPDATE abuse_org_closures SET claimed_at = NOW() - interval '6 minutes' WHERE user_id = $1 AND org_id = $2`, testAliceID, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim := func(org string) bool {
+		t.Helper()
+		ok, err := queries.ClaimClosureMail(ctx, testAliceID, org)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	if !claim("fresh") || claim("fresh") {
+		t.Fatal("a fresh claim must be held by its first caller and not taken over")
+	}
+
+	claim("stale")
+	age("stale")
+	if !claim("stale") {
+		t.Fatal("an unsent claim older than five minutes must be taken over")
+	}
+	if claim("stale") {
+		t.Fatal("the takeover is itself a fresh claim")
+	}
+
+	claim("sent")
+	if err := queries.MarkClosureMailSent(ctx, testAliceID, "sent"); err != nil {
+		t.Fatal(err)
+	}
+	age("sent")
+	if claim("sent") {
+		t.Fatal("a sent claim can never be taken over, however old")
+	}
+}
